@@ -1,0 +1,9 @@
+target/
+logs/
+*.log
+.DS_Store
+.idea/
+*.iml
+.claude/
+CLAUDE.md
+*.md

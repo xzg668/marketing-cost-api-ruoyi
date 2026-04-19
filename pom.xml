@@ -1,0 +1,73 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.sanhua</groupId>
+  <artifactId>marketing-cost-api</artifactId>
+  <version>0.0.1-SNAPSHOT</version>
+  <packaging>pom</packaging>
+  <name>marketing-cost-api</name>
+  <description>Marketing cost API</description>
+
+  <modules>
+    <module>yudao-framework</module>
+    <module>marketing-cost-biz</module>
+  </modules>
+
+  <properties>
+    <java.version>21</java.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <spring.boot.version>3.3.2</spring.boot.version>
+    <mybatis-plus.version>3.5.7</mybatis-plus.version>
+    <mysql.version>8.4.0</mysql.version>
+    <jjwt.version>0.12.6</jjwt.version>
+    <logstash-logback-encoder.version>8.0</logstash-logback-encoder.version>
+    <yudao.version>2026.01-SNAPSHOT</yudao.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>${spring.boot.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>cn.iocoder.boot</groupId>
+        <artifactId>yudao-common</artifactId>
+        <version>${yudao.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>cn.iocoder.boot</groupId>
+        <artifactId>yudao-spring-boot-starter-security</artifactId>
+        <version>${yudao.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-maven-plugin</artifactId>
+          <version>${spring.boot.version}</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.13.0</version>
+          <configuration>
+            <source>${java.version}</source>
+            <target>${java.version}</target>
+            <!-- Spring MVC 需用反射读取 @RequestParam 参数名，必须开启 -parameters -->
+            <parameters>true</parameters>
+          </configuration>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+</project>
