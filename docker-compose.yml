@@ -13,4 +13,3 @@ services:
       - "8081:8081"
     restart: unless-stopped
 
-&é"'(§è!çàà)--
