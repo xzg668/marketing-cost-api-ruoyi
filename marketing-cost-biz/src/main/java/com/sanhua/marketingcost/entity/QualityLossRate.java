@@ -20,6 +20,9 @@ public class QualityLossRate {
   private String customer;
   private String period;
   private String sourceBasis;
+  /** 业务单元租户口径：COMMERCIAL / HOUSEHOLD，区别于组织口径 businessUnit（V22 补齐） */
+  @TableField(fill = FieldFill.INSERT)
+  private String businessUnitType;
 
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
@@ -97,6 +100,14 @@ public class QualityLossRate {
 
   public void setSourceBasis(String sourceBasis) {
     this.sourceBasis = sourceBasis;
+  }
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
   }
 
   public LocalDateTime getCreatedAt() {

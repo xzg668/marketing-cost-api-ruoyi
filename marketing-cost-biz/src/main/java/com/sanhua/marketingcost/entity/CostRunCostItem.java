@@ -23,11 +23,23 @@ public class CostRunCostItem {
   private String sourceTable;
   private Long sourceId;
 
+  /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
+  @TableField(fill = FieldFill.INSERT)
+  private String businessUnitType;
+
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
 
   @TableField(fill = FieldFill.INSERT_UPDATE)
   private LocalDateTime updatedAt;
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
+  }
 
   public Long getId() {
     return id;

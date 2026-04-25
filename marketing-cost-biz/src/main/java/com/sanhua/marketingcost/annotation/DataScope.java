@@ -35,4 +35,16 @@ public @interface DataScope {
      * 业务单元过滤字段名，默认 {@code business_unit_type}。
      */
     String column() default "business_unit_type";
+
+    /**
+     * 是否允许访问跨 BU 共享行（即 business_unit_type IS NULL 的记录）。
+     * <p>
+     * 为 {@code true} 时，追加的条件变为
+     * {@code (column = '当前 BU' OR column IS NULL)}；
+     * 默认为 {@code false}，保持严格按 BU 过滤。
+     * <p>
+     * 用于公共维度数据（如 {@code lp_price_variable} 的全公司共享变量），
+     * 普通业务表请保持默认（false）。
+     */
+    boolean includeShared() default false;
 }

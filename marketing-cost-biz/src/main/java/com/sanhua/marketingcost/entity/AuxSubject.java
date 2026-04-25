@@ -22,6 +22,9 @@ public class AuxSubject {
   private BigDecimal unitPrice;
   private String period;
   private String source;
+  /** 业务单元租户口径：COMMERCIAL / HOUSEHOLD，用于多租户数据隔离（V22 补齐） */
+  @TableField(fill = FieldFill.INSERT)
+  private String businessUnitType;
 
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
@@ -115,6 +118,14 @@ public class AuxSubject {
 
   public void setSource(String source) {
     this.source = source;
+  }
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
   }
 
   public LocalDateTime getCreatedAt() {

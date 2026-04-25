@@ -30,6 +30,34 @@ public class PriceLinkedItemDto {
   private BigDecimal quota;
   private LocalDateTime updatedAt;
 
+  /**
+   * 公式是否能通过 FormulaNormalizer 规范化 —— 列表页前端据此标红错误行。
+   * 空公式视为 true（没东西可错）。
+   */
+  private Boolean formulaValid;
+
+  /**
+   * 公式规范化失败时的错误消息（FormulaSyntaxException.getMessage()）；
+   * 正常行 / 空公式为 null。
+   */
+  private String formulaError;
+
+  public Boolean getFormulaValid() {
+    return formulaValid;
+  }
+
+  public void setFormulaValid(Boolean formulaValid) {
+    this.formulaValid = formulaValid;
+  }
+
+  public String getFormulaError() {
+    return formulaError;
+  }
+
+  public void setFormulaError(String formulaError) {
+    this.formulaError = formulaError;
+  }
+
   public Long getId() {
     return id;
   }

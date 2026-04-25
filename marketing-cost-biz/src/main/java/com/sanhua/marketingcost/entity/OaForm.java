@@ -28,6 +28,10 @@ public class OaForm {
   private String saleLink;
   private String remark;
 
+  /** V21 业务单元数据隔离：COMMERCIAL 商用 / HOUSEHOLD 家用 */
+  @TableField(fill = FieldFill.INSERT)
+  private String businessUnitType;
+
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
 
@@ -36,6 +40,14 @@ public class OaForm {
 
   @TableLogic
   private Integer deleted;
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
+  }
 
   public Long getId() {
     return id;

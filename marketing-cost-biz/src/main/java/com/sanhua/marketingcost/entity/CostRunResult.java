@@ -27,11 +27,29 @@ public class CostRunResult {
   private LocalDateTime calcAt;
   private String productAttr;
 
+  /** V16 新增：试算时命中的产品属性系数（lp_product_property.coefficient 快照） */
+  private BigDecimal productAttrCoefficient;
+
+  /** V16 新增：调整后制造成本 = 制造成本 × 系数；用作三项费用基数 */
+  private BigDecimal adjustedManufactureCost;
+
+  /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD（区别于组织口径 businessUnit） */
+  @TableField(fill = FieldFill.INSERT)
+  private String businessUnitType;
+
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
 
   @TableField(fill = FieldFill.INSERT_UPDATE)
   private LocalDateTime updatedAt;
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
+  }
 
   public Long getId() {
     return id;
@@ -151,6 +169,22 @@ public class CostRunResult {
 
   public void setProductAttr(String productAttr) {
     this.productAttr = productAttr;
+  }
+
+  public BigDecimal getProductAttrCoefficient() {
+    return productAttrCoefficient;
+  }
+
+  public void setProductAttrCoefficient(BigDecimal productAttrCoefficient) {
+    this.productAttrCoefficient = productAttrCoefficient;
+  }
+
+  public BigDecimal getAdjustedManufactureCost() {
+    return adjustedManufactureCost;
+  }
+
+  public void setAdjustedManufactureCost(BigDecimal adjustedManufactureCost) {
+    this.adjustedManufactureCost = adjustedManufactureCost;
   }
 
   public LocalDateTime getCreatedAt() {

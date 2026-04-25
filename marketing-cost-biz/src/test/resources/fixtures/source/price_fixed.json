@@ -1,0 +1,138 @@
+[
+  {
+    "materialCode": "201800082",
+    "materialName": "滑碗",
+    "model": "SHF-000-042002",
+    "priceExclTax": 0.0564,
+    "supplier": "A",
+    "flowNo": "SC-SC-001-20250227-003"
+  },
+  {
+    "materialCode": "203240246",
+    "materialName": "扁平头铆钉",
+    "model": "SHF-000-088002（商用专用）",
+    "priceExclTax": 0.0103,
+    "supplier": "B",
+    "flowNo": "SC-SC-018-20250729-003"
+  },
+  {
+    "materialCode": "301280056",
+    "materialName": "不锈钢丝网",
+    "model": "1Cr18Ni9 平纹0.125/0.071 120目/in",
+    "priceExclTax": 0.795,
+    "supplier": "A",
+    "flowNo": "SC-SC-001-20250327-002"
+  },
+  {
+    "materialCode": "301240123",
+    "materialName": "不锈钢带",
+    "model": "SUS301,H,t0.15×21",
+    "priceExclTax": 9.8319,
+    "supplier": "B",
+    "flowNo": "SC-SC-018-20250718-019"
+  },
+  {
+    "materialCode": "301220046",
+    "materialName": "软磁不锈钢棒",
+    "model": "00Cr13Si2Φ10.2(-0.04/-0.07)",
+    "priceExclTax": 27.1858,
+    "supplier": "A",
+    "flowNo": "U9"
+  },
+  {
+    "materialCode": "203250373",
+    "materialName": "活塞部件",
+    "model": "SHF-H35-012002",
+    "priceExclTax": 1.39,
+    "supplier": "B",
+    "flowNo": "SC-SC-001-20250402-018"
+  },
+  {
+    "materialCode": "203240246",
+    "materialName": "扁平头铆钉",
+    "model": "SHF-000-088002（商用专用）",
+    "priceExclTax": 0.0103,
+    "supplier": "A",
+    "flowNo": "SC-SC-018-20250729-003"
+  },
+  {
+    "materialCode": "203250385",
+    "materialName": "活塞螺钉",
+    "model": "SHF-H35-010003",
+    "priceExclTax": 0.0519,
+    "supplier": "B",
+    "flowNo": "SC-SC-018-20251212-016"
+  },
+  {
+    "materialCode": "203240747",
+    "materialName": "回复弹簧",
+    "model": "SHF-000-048007(商用专用)",
+    "priceExclTax": 0.012,
+    "supplier": "A",
+    "flowNo": "SC-SC-018-20260227-016"
+  },
+  {
+    "materialCode": "1079000300144",
+    "materialName": "滑碗",
+    "model": "SHF-000-042002(商用专用)",
+    "priceExclTax": 0.044,
+    "supplier": "B",
+    "flowNo": "SC-SC-018-20260227-016"
+  },
+  {
+    "materialCode": "201802072",
+    "materialName": "防尘帽",
+    "model": "SHF-000-001010",
+    "priceExclTax": 0.0314,
+    "supplier": "A",
+    "flowNo": "SC-SC-018-20260227-016"
+  },
+  {
+    "materialCode": "201802073",
+    "materialName": "防尘帽",
+    "model": "SHF-000-001011",
+    "priceExclTax": 0.0676,
+    "supplier": "B",
+    "flowNo": "SC-SC-018-20260227-016"
+  },
+  {
+    "materialCode": "203250344",
+    "materialName": "滑块部件",
+    "model": "SHF-H35-002003",
+    "priceExclTax": 5.0123,
+    "supplier": "A",
+    "flowNo": "SC-SC-018-20260210-028"
+  },
+  {
+    "materialCode": "250030575",
+    "materialName": "垫板",
+    "model": "BZ-SHF-A35020-03",
+    "priceExclTax": 0.7897,
+    "supplier": "B",
+    "flowNo": "SC-SC-018-20260122-006"
+  },
+  {
+    "materialCode": "250050674",
+    "materialName": "隔板",
+    "model": "BZ-SHF-A35020-05",
+    "priceExclTax": 0.681,
+    "supplier": "A",
+    "flowNo": "SC-SC-018-20260122-006"
+  },
+  {
+    "materialCode": "250020958",
+    "materialName": "纸板隔档",
+    "model": "BZ-SHF-A35020-02",
+    "priceExclTax": 0.4564,
+    "supplier": "B",
+    "flowNo": "SC-SC-018-20260122-006"
+  },
+  {
+    "materialCode": "250011491",
+    "materialName": "瓦楞纸箱",
+    "model": "BZ-SHF-A35020-01",
+    "priceExclTax": 5.462,
+    "supplier": "A",
+    "flowNo": "SC-SC-018-20260122-006"
+  }
+]

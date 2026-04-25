@@ -19,6 +19,9 @@ public class OtherExpenseRate {
   private String customer;
   private String expenseType;
   private BigDecimal expenseAmount;
+  /** 业务单元租户口径：COMMERCIAL / HOUSEHOLD（V22 补齐） */
+  @TableField(fill = FieldFill.INSERT)
+  private String businessUnitType;
 
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
@@ -88,6 +91,14 @@ public class OtherExpenseRate {
 
   public void setExpenseAmount(BigDecimal expenseAmount) {
     this.expenseAmount = expenseAmount;
+  }
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
   }
 
   public LocalDateTime getCreatedAt() {

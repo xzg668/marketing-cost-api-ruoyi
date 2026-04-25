@@ -21,6 +21,17 @@ public class FinanceBasePrice {
   private BigDecimal price;
   private String unit;
   private String linkType;
+  /** 业务单元租户口径：COMMERCIAL / HOUSEHOLD（V22 补齐） */
+  @TableField(fill = FieldFill.INSERT)
+  private String businessUnitType;
+
+  /** V25：上期原价（影响因素 10 "价格-原价" 列），便于价格对比提示。 */
+  @TableField("price_original")
+  private BigDecimal priceOriginal;
+
+  /** V25：Excel 导入批次 ID（UUID），同一次 /import-excel 的所有行共享，支持按批次回滚。 */
+  @TableField("import_batch_id")
+  private String importBatchId;
 
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
@@ -106,6 +117,30 @@ public class FinanceBasePrice {
 
   public void setLinkType(String linkType) {
     this.linkType = linkType;
+  }
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
+  }
+
+  public BigDecimal getPriceOriginal() {
+    return priceOriginal;
+  }
+
+  public void setPriceOriginal(BigDecimal priceOriginal) {
+    this.priceOriginal = priceOriginal;
+  }
+
+  public String getImportBatchId() {
+    return importBatchId;
+  }
+
+  public void setImportBatchId(String importBatchId) {
+    this.importBatchId = importBatchId;
   }
 
   public LocalDateTime getCreatedAt() {

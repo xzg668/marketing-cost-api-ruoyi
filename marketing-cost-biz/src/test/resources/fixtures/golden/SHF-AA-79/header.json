@@ -1,0 +1,16 @@
+{
+  "oaNo": null,
+  "quoter": null,
+  "customerName": null,
+  "customerCode": null,
+  "productName": null,
+  "productCode": "1079900000536",
+  "productModel": "SHF-AA-79",
+  "basePrices": {
+    "316L": null,
+    "Al": null,
+    "304": null,
+    "Cu": 100000.0,
+    "Zn": 24662.0
+  }
+}

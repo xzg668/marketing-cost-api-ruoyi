@@ -22,12 +22,18 @@ public class PriceSettleItem {
   private BigDecimal linkedSettlePrice;
   private String remark;
 
+  /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
+  @TableField(fill = FieldFill.INSERT)
+  private String businessUnitType;
+
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
 
   @TableField(fill = FieldFill.INSERT_UPDATE)
   private LocalDateTime updatedAt;
 
+  public String getBusinessUnitType() { return businessUnitType; }
+  public void setBusinessUnitType(String businessUnitType) { this.businessUnitType = businessUnitType; }
   public Long getId() { return id; }
   public void setId(Long id) { this.id = id; }
   public Long getSettleId() { return settleId; }

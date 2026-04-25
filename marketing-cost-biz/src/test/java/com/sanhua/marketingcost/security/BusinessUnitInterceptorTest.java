@@ -69,6 +69,74 @@ class BusinessUnitInterceptorTest {
         assertEquals(2, count, "UNION 的两个子查询都应追加条件");
     }
 
+    /** includeShared=true → 生成 (bu = 'X' OR bu IS NULL) 形态，允许看跨 BU 共享行 */
+    @Test
+    void appendIncludeSharedBranchAddsOrIsNull() throws Exception {
+        String sql = "SELECT id FROM lp_price_variable";
+        String out = interceptor.appendBusinessUnitCondition(
+                sql, "", "business_unit_type", "COMMERCIAL", true);
+        assertTrue(out.contains("business_unit_type = 'COMMERCIAL'"),
+                "必须包含当前 BU 等值条件");
+        assertTrue(out.contains("business_unit_type IS NULL"),
+                "includeShared=true 时必须补上 IS NULL 分支");
+        assertTrue(out.contains(" OR "),
+                "两条件应以 OR 拼接");
+    }
+
+    /**
+     * v1.4 回归：派生子查询场景（SELECT COUNT(1) FROM (SELECT 1 FROM tbl ...) t）
+     * 不能把 WHERE 加到外层（派生表 t 里没有 business_unit_type 列，数据库会抛
+     * "Unknown column"）；必须穿透到子查询里加到真表上。
+     */
+    @Test
+    void appendDerivedSubquery_pushesFilterInside() throws Exception {
+        String sql = "SELECT COUNT(1) FROM ("
+                + "SELECT 1 FROM lp_bom_manual_item WHERE deleted = 0 GROUP BY bom_code"
+                + ") t";
+        String out = interceptor.appendBusinessUnitCondition(
+                sql, "", "business_unit_type", "COMMERCIAL");
+        // 条件落在子查询里（deleted = 0 附近），不是外层 t 的 WHERE
+        assertTrue(out.contains("business_unit_type = 'COMMERCIAL'"),
+                "应该追加 BU 条件：" + out);
+        // 关键：外层不应有 WHERE（因为派生表里没这列，加到外层会报错）
+        int idxFromT = out.lastIndexOf(") t");
+        assertTrue(idxFromT > 0, "派生表结构应保留：" + out);
+        String tail = out.substring(idxFromT);
+        assertFalse(tail.toUpperCase().contains("WHERE"),
+                "条件必须加到子查询，不能加到外层 t 的 WHERE：" + out);
+        // 子查询的 WHERE 应包含原 deleted=0 + 新 BU 条件
+        assertTrue(out.contains("deleted = 0"), "保留原 WHERE：" + out);
+    }
+
+    /**
+     * v1.4 回归：派生子查询 + 外层无 WHERE 场景。
+     * 和上面类似但子查询内部没有 WHERE（只有 GROUP BY）。
+     */
+    @Test
+    void appendDerivedSubquery_subqueryHadNoWhere() throws Exception {
+        String sql = "SELECT COUNT(1) FROM (SELECT 1 FROM lp_price_variable GROUP BY variable_code) t";
+        String out = interceptor.appendBusinessUnitCondition(
+                sql, "", "business_unit_type", "COMMERCIAL");
+        assertTrue(out.contains("business_unit_type = 'COMMERCIAL'"));
+        // 确保条件是加在子查询 FROM 后，不是外层
+        int derivedEnd = out.lastIndexOf(") t");
+        String tail = out.substring(derivedEnd);
+        assertFalse(tail.toUpperCase().contains("WHERE"),
+                "条件不能加到外层派生表 t 上：" + out);
+    }
+
+    /** includeShared=true + 已有 WHERE → 追加到现有条件后（用括号包 OR 避免歧义） */
+    @Test
+    void appendIncludeSharedWithExistingWhere() throws Exception {
+        String sql = "SELECT id FROM lp_price_variable WHERE status = 'active'";
+        String out = interceptor.appendBusinessUnitCondition(
+                sql, "", "business_unit_type", "COMMERCIAL", true);
+        assertTrue(out.contains("status = 'active'"));
+        // 断言 OR 被括号包裹，防止和外面的 AND 混算
+        assertTrue(out.contains("(business_unit_type = 'COMMERCIAL' OR business_unit_type IS NULL)"),
+                "OR 必须被括号包裹，避免与外层 AND 的优先级混淆：" + out);
+    }
+
     // ========== 上下文判断 ==========
 
     /** 未登录 → businessUnitType 为 null，isAdmin 为 false */

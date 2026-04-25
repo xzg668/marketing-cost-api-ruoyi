@@ -21,6 +21,9 @@ public class SalaryCost {
   private BigDecimal indirectLaborCost;
   private String source;
   private String businessUnit;
+  /** 业务单元租户口径：COMMERCIAL / HOUSEHOLD，区别于组织口径 businessUnit（V22 补齐） */
+  @TableField(fill = FieldFill.INSERT)
+  private String businessUnitType;
 
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
@@ -106,6 +109,14 @@ public class SalaryCost {
 
   public void setBusinessUnit(String businessUnit) {
     this.businessUnit = businessUnit;
+  }
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
   }
 
   public LocalDateTime getCreatedAt() {

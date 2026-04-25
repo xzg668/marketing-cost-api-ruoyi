@@ -1,80 +1,46 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.sanhua.marketingcost.dto.BomManageRefreshRequest;
-import com.sanhua.marketingcost.entity.BomManageItem;
-import com.sanhua.marketingcost.entity.BomManualItem;
-import com.sanhua.marketingcost.entity.OaForm;
-import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.mapper.BomManageItemMapper;
-import com.sanhua.marketingcost.mapper.BomManualItemMapper;
-import com.sanhua.marketingcost.mapper.OaFormItemMapper;
-import com.sanhua.marketingcost.mapper.OaFormMapper;
-import java.util.List;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
-import org.mockito.Mockito;
 
+/**
+ * BomManageItemServiceImpl 单测。
+ *
+ * <p>T5.5：老的"手工 BOM → 扁平表"refresh 写入路径已下线（被 T3 导入 + T4 层级构建 + T5
+ * 拍平三段流程取代），原回归测试 {@code refreshByOaNo_insertsLeafItemsWithOaFields} 删除。
+ * 现在 {@link BomManageItemServiceImpl#refresh} 是 no-op，仅打 WARN 并返 0。
+ */
 class BomManageItemServiceImplTest {
 
   @Test
-  void refreshByOaNo_insertsLeafItemsWithOaFields() {
-    BomManageItemMapper manageMapper = Mockito.mock(BomManageItemMapper.class);
-    BomManualItemMapper manualMapper = Mockito.mock(BomManualItemMapper.class);
-    OaFormMapper oaFormMapper = Mockito.mock(OaFormMapper.class);
-    OaFormItemMapper oaFormItemMapper = Mockito.mock(OaFormItemMapper.class);
-    BomManageItemServiceImpl service =
-        new BomManageItemServiceImpl(manageMapper, manualMapper, oaFormMapper, oaFormItemMapper);
-
-    OaForm form = new OaForm();
-    form.setId(1L);
-    form.setOaNo("FI-SR-005-0281");
-    form.setCustomer("客户A");
-
-    OaFormItem formItem = new OaFormItem();
-    formItem.setId(11L);
-    formItem.setMaterialNo("P001");
-    formItem.setProductName("产品A");
-    formItem.setSpec("S1");
-    formItem.setSunlModel("M1");
-
-    BomManualItem root = new BomManualItem();
-    root.setBomCode("BOM0001");
-    root.setItemCode("P001");
-    root.setBomLevel(1);
-
-    BomManualItem mid = new BomManualItem();
-    mid.setBomCode("BOM0001");
-    mid.setItemCode("C001");
-    mid.setParentCode("P001");
-
-    BomManualItem leaf = new BomManualItem();
-    leaf.setBomCode("BOM0001");
-    leaf.setItemCode("C002");
-    leaf.setParentCode("C001");
+  @DisplayName("T5.5：refresh 下线后 no-op —— 不调 mapper、返 0")
+  void refresh_deprecated_isNoop() {
+    // mapper 不应该被触达 —— 任何 insert/delete/selectOne 都算 regression
+    BomManageItemMapper manageMapper = mock(BomManageItemMapper.class);
+    BomManageItemServiceImpl service = new BomManageItemServiceImpl(manageMapper);
 
     BomManageRefreshRequest request = new BomManageRefreshRequest();
     request.setOaNo("FI-SR-005-0281");
 
-    when(oaFormMapper.selectOne(any())).thenReturn(form);
-    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(formItem));
-    when(manualMapper.selectList(any())).thenReturn(List.of(root), List.of(root, mid, leaf));
-
     int inserted = service.refresh(request);
 
-    assertEquals(1, inserted);
-    ArgumentCaptor<BomManageItem> captor = ArgumentCaptor.forClass(BomManageItem.class);
-    verify(manageMapper).insert(captor.capture());
-    BomManageItem insertedItem = captor.getValue();
-    assertEquals("FI-SR-005-0281", insertedItem.getOaNo());
-    assertEquals("BOM0001", insertedItem.getBomCode());
-    assertEquals("C002", insertedItem.getItemCode());
-    assertEquals("P001", insertedItem.getMaterialNo());
-    assertEquals("客户A", insertedItem.getCustomerName());
-    assertEquals("产品A", insertedItem.getProductName());
+    assertEquals(0, inserted, "no-op refresh 应返 0 —— 老写入逻辑已废弃");
+    verifyNoInteractions(manageMapper);
+  }
+
+  @Test
+  @DisplayName("T5.5：null request 也只 no-op，不炸")
+  void refresh_null_isNoop() {
+    BomManageItemMapper manageMapper = mock(BomManageItemMapper.class);
+    BomManageItemServiceImpl service = new BomManageItemServiceImpl(manageMapper);
+
+    assertEquals(0, service.refresh(null));
+    verifyNoInteractions(manageMapper);
   }
 }

@@ -34,7 +34,8 @@ class TransactionalAnnotationTest {
       new MethodRef(FinanceBasePriceServiceImpl.class, "importPrices"),
       new MethodRef(PriceSettleServiceImpl.class, "delete"),
       new MethodRef(PriceSettleServiceImpl.class, "importSettle"),
-      new MethodRef(BomManageItemServiceImpl.class, "refresh"),
+      // T5.5：BomManageItemServiceImpl.refresh 已整体下线为 no-op（见类注释），
+      // 不再涉及写库，@Transactional 没有语义，故从 REQUIRED 名单里移除。
       new MethodRef(PriceLinkedCalcServiceImpl.class, "refresh")
   );
 

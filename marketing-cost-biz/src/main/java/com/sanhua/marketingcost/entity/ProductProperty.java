@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @TableName("lp_product_property")
@@ -20,11 +21,26 @@ public class ProductProperty {
   private String period;
   private String productAttr;
 
+  /** V11 新增：产品属性系数 —— 调整后制造成本 = 制造成本 × 系数（标准品=1.0000） */
+  private BigDecimal coefficient;
+
+  /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
+  @TableField(fill = FieldFill.INSERT)
+  private String businessUnitType;
+
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
 
   @TableField(fill = FieldFill.INSERT_UPDATE)
   private LocalDateTime updatedAt;
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
+  }
 
   public Long getId() {
     return id;
@@ -96,6 +112,14 @@ public class ProductProperty {
 
   public void setProductAttr(String productAttr) {
     this.productAttr = productAttr;
+  }
+
+  public BigDecimal getCoefficient() {
+    return coefficient;
+  }
+
+  public void setCoefficient(BigDecimal coefficient) {
+    this.coefficient = coefficient;
   }
 
   public LocalDateTime getCreatedAt() {

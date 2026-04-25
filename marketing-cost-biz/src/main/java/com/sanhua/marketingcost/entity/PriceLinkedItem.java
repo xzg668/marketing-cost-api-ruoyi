@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.FieldFill;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -36,11 +37,42 @@ public class PriceLinkedItem {
   private String orderType;
   private BigDecimal quota;
 
+  /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
+  @TableField(fill = FieldFill.INSERT)
+  private String businessUnitType;
+
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
 
   @TableField(fill = FieldFill.INSERT_UPDATE)
   private LocalDateTime updatedAt;
+
+  /**
+   * 软删除标记 —— 与全局 @TableLogic 对齐（application.yml: logic-delete-field=deleted / value=1）。
+   *
+   * <p>BaseMapper.deleteById 会自动改写成 {@code UPDATE ... SET deleted=1}；
+   * select/selectList 自动带 {@code WHERE deleted=0}。
+   * 自定义 @Select SQL 不受 @TableLogic 影响，需手工带 deleted=0 条件。
+   */
+  @TableLogic
+  @TableField("deleted")
+  private Integer deleted;
+
+  public Integer getDeleted() {
+    return deleted;
+  }
+
+  public void setDeleted(Integer deleted) {
+    this.deleted = deleted;
+  }
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
+  }
 
   public Long getId() {
     return id;

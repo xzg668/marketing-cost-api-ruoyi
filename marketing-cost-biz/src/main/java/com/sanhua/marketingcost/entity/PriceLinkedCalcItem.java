@@ -19,11 +19,27 @@ public class PriceLinkedCalcItem {
   private BigDecimal partUnitPrice;
   private BigDecimal partAmount;
 
+  /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
+  @TableField(fill = FieldFill.INSERT)
+  private String businessUnitType;
+
+  /** V26 计算 trace JSON —— 存 {normalizedExpr, variables, steps, result/error} */
+  @TableField("trace_json")
+  private String traceJson;
+
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
 
   @TableField(fill = FieldFill.INSERT_UPDATE)
   private LocalDateTime updatedAt;
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
+  }
 
   public Long getId() {
     return id;
@@ -79,6 +95,14 @@ public class PriceLinkedCalcItem {
 
   public void setPartAmount(BigDecimal partAmount) {
     this.partAmount = partAmount;
+  }
+
+  public String getTraceJson() {
+    return traceJson;
+  }
+
+  public void setTraceJson(String traceJson) {
+    this.traceJson = traceJson;
   }
 
   public LocalDateTime getCreatedAt() {

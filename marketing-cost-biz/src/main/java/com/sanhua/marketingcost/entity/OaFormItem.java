@@ -31,6 +31,10 @@ public class OaFormItem {
   private BigDecimal managementCost;
   private LocalDate validDate;
 
+  /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
+  @TableField(fill = FieldFill.INSERT)
+  private String businessUnitType;
+
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
 
@@ -39,6 +43,14 @@ public class OaFormItem {
 
   @TableLogic
   private Integer deleted;
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
+  }
 
   public Long getId() {
     return id;

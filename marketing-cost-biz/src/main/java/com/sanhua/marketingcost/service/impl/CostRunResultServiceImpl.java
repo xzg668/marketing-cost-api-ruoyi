@@ -155,10 +155,14 @@ public class CostRunResultServiceImpl implements CostRunResultService {
                 .eq(CostRunResult::getProductCode, productCode.trim())
                 .last("LIMIT 1"));
     if (existing == null) {
+      // T7 修复：新建时要补齐 NOT NULL 字段（period / calc_status），否则 INSERT 失败。
+      // period 取当月（applyDate 缺失时兜底为今天），与 ensureResult 口径对齐。
       existing = new CostRunResult();
       existing.setOaNo(oaNo.trim());
       existing.setProductCode(productCode.trim());
       existing.setTotalCost(totalCost);
+      existing.setPeriod(LocalDate.now().format(PERIOD_FORMAT));
+      existing.setCalcStatus("未核算");
       costRunResultMapper.insert(existing);
       return;
     }

@@ -13,6 +13,12 @@
   <name>marketing-cost-biz</name>
   <description>Marketing cost business module</description>
 
+  <properties>
+    <!-- Surefire 测试分组：默认排除 integration（Testcontainers 较慢），不限定 groups -->
+    <surefire.excludedGroups>integration</surefire.excludedGroups>
+    <surefire.groups></surefire.groups>
+  </properties>
+
   <dependencies>
     <dependency>
       <groupId>cn.iocoder.boot</groupId>
@@ -99,6 +105,31 @@
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- Task #10：见机表 Excel 导出依赖（财务对账武器）。easyexcel 3.3.4 = POI 5.x 兼容 Java 21 -->
+    <dependency>
+      <groupId>com.alibaba</groupId>
+      <artifactId>easyexcel</artifactId>
+      <version>3.3.4</version>
+    </dependency>
+    <!-- Testcontainers：用 docker 临时拉 mysql:8.4 跑 DDL 迁移 / 集成测试 -->
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers</artifactId>
+      <version>1.20.4</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>mysql</artifactId>
+      <version>1.20.4</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>1.20.4</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
@@ -117,6 +148,17 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <!-- Surefire：默认排除 @Tag("integration") 标记的集成测试，避免本地 dev 拉镜像变慢
+             命令行覆盖：mvn test -DexcludedGroups= -Dgroups=integration -->
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+        <configuration>
+          <excludedGroups>${surefire.excludedGroups}</excludedGroups>
+          <groups>${surefire.groups}</groups>
+        </configuration>
       </plugin>
     </plugins>
   </build>

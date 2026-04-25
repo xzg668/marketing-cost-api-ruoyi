@@ -1,0 +1,18 @@
+{
+  "directLabor": {
+    "key": "SHF-AA-79工资",
+    "amount": 4.220988
+  },
+  "qualityLossRate": 0.0025,
+  "qualityLossAmount": 0.24428554226835503,
+  "manufactureRate": 0.12,
+  "manufactureAmount": 13.358,
+  "productAttr": "标准品",
+  "productAttrCoefficient": 1.0,
+  "managementRate": 0.1,
+  "managementAmount": 11.132,
+  "salesRate": 0.25,
+  "salesAmount": 27.829,
+  "financeRate": 0.02,
+  "financeAmount": 2.226
+}

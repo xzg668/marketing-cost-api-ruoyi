@@ -37,12 +37,18 @@ public class PriceRangeItem {
   private String orderType;
   private BigDecimal quota;
 
+  /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
+  @TableField(fill = FieldFill.INSERT)
+  private String businessUnitType;
+
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
 
   @TableField(fill = FieldFill.INSERT_UPDATE)
   private LocalDateTime updatedAt;
 
+  public String getBusinessUnitType() { return businessUnitType; }
+  public void setBusinessUnitType(String businessUnitType) { this.businessUnitType = businessUnitType; }
   public Long getId() { return id; }
   public void setId(Long id) { this.id = id; }
   public String getOrgCode() { return orgCode; }

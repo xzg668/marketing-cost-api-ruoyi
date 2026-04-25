@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @TableName("lp_material_price_type")
@@ -22,11 +23,35 @@ public class MaterialPriceType {
   private String period;
   private String source;
 
+  /** V10 新增：取价优先级（越小越优先），同物料登记多条价格类型时回退用 */
+  private Integer priority;
+
+  /** V10 新增：生效起始日期（含），NULL 表示不限早 */
+  private LocalDate effectiveFrom;
+
+  /** V10 新增：生效结束日期（含），NULL 表示长期有效 */
+  private LocalDate effectiveTo;
+
+  /** V10 新增：数据来源系统（srm/oa/u9/cms/manual），用于多源接入追溯 */
+  private String sourceSystem;
+
+  /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
+  @TableField(fill = FieldFill.INSERT)
+  private String businessUnitType;
+
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
 
   @TableField(fill = FieldFill.INSERT_UPDATE)
   private LocalDateTime updatedAt;
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
+  }
 
   public Long getId() {
     return id;
@@ -114,6 +139,38 @@ public class MaterialPriceType {
 
   public void setSource(String source) {
     this.source = source;
+  }
+
+  public Integer getPriority() {
+    return priority;
+  }
+
+  public void setPriority(Integer priority) {
+    this.priority = priority;
+  }
+
+  public LocalDate getEffectiveFrom() {
+    return effectiveFrom;
+  }
+
+  public void setEffectiveFrom(LocalDate effectiveFrom) {
+    this.effectiveFrom = effectiveFrom;
+  }
+
+  public LocalDate getEffectiveTo() {
+    return effectiveTo;
+  }
+
+  public void setEffectiveTo(LocalDate effectiveTo) {
+    this.effectiveTo = effectiveTo;
+  }
+
+  public String getSourceSystem() {
+    return sourceSystem;
+  }
+
+  public void setSourceSystem(String sourceSystem) {
+    this.sourceSystem = sourceSystem;
   }
 
   public LocalDateTime getCreatedAt() {

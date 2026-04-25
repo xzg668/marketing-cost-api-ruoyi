@@ -1,6 +1,8 @@
 package com.sanhua.marketingcost.mapper;
 
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.sanhua.marketingcost.annotation.DataScope;
 import com.sanhua.marketingcost.dto.BomManualSummaryRow;
 import com.sanhua.marketingcost.entity.BomManualItem;
 import java.util.List;
@@ -8,6 +10,13 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
 public interface BomManualItemMapper extends BaseMapper<BomManualItem> {
+
+  /** V21：selectList 走数据隔离 */
+  @DataScope
+  @Override
+  List<BomManualItem> selectList(@Param("ew") Wrapper<BomManualItem> queryWrapper);
+
+  // --- 下方自定义 @Select 方法，均查询 lp_bom_manual_item，V21 全部加 @DataScope ---
   @Select("""
       <script>
       SELECT COUNT(1) FROM (
@@ -35,6 +44,7 @@ public interface BomManualItemMapper extends BaseMapper<BomManualItem> {
       ) t
       </script>
       """)
+  @DataScope
   Long countSummaryRows(
       @Param("bomCode") String bomCode,
       @Param("itemCode") String itemCode,
@@ -72,6 +82,7 @@ public interface BomManualItemMapper extends BaseMapper<BomManualItem> {
       LIMIT #{offset}, #{pageSize}
       </script>
       """)
+  @DataScope
   List<BomManualSummaryRow> selectSummaryRows(
       @Param("bomCode") String bomCode,
       @Param("itemCode") String itemCode,
@@ -116,6 +127,7 @@ public interface BomManualItemMapper extends BaseMapper<BomManualItem> {
       ORDER BY bom_level ASC, id ASC
       </script>
       """)
+  @DataScope
   List<BomManualItem> selectByBomCodeWithFilters(
       @Param("bomCode") String bomCode,
       @Param("itemCode") String itemCode,

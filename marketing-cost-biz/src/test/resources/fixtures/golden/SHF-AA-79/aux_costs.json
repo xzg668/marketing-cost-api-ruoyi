@@ -1,0 +1,27 @@
+{
+  "pickling": {
+    "key": "SHF-AA-79酸洗",
+    "amount": 0.6732
+  },
+  "auxiliary": {
+    "key": "SHF-AA-79辅料",
+    "amount": 1.1495
+  },
+  "solder": {
+    "key": "客户编号",
+    "amount": 4.493860659823009,
+    "source": "原材料拆解"
+  },
+  "packaging": {
+    "amount": 1.113105
+  },
+  "tooling": {
+    "amount": 0.5376320794539893
+  },
+  "overhaul": {
+    "amount": 0.06010114709343376
+  },
+  "waterPower": {
+    "amount": 0.6490923886090847
+  }
+}

@@ -105,6 +105,18 @@ public class GlobalExceptionHandler {
         return CommonResult.error(GlobalErrorCodeConstants.FORBIDDEN.getCode(), "权限不足");
     }
 
+    /**
+     * 业务层参数非法 —— 服务层手抛 {@link IllegalArgumentException}（如唯一性冲突、schema 不符）。
+     * Plan B T9a 起使用：{@code PriceVariableService} 的 CRUD 校验失败走这条。
+     */
+    @ExceptionHandler(IllegalArgumentException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public CommonResult<Void> handleIllegalArgument(IllegalArgumentException ex) {
+        log.warn("业务参数非法: {}", ex.getMessage());
+        return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(),
+                ex.getMessage() == null ? "参数非法" : ex.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
     public CommonResult<Void> handleException(Exception ex) {

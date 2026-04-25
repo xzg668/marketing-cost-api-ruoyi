@@ -10,6 +10,7 @@ import com.sanhua.marketingcost.entity.ManufactureRate;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.OtherExpenseRate;
+import com.sanhua.marketingcost.entity.ProductProperty;
 import com.sanhua.marketingcost.entity.QualityLossRate;
 import com.sanhua.marketingcost.entity.SalaryCost;
 import com.sanhua.marketingcost.entity.ThreeExpenseRate;
@@ -21,10 +22,14 @@ import com.sanhua.marketingcost.mapper.ManufactureRateMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.OtherExpenseRateMapper;
+import com.sanhua.marketingcost.mapper.ProductPropertyMapper;
 import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
 import com.sanhua.marketingcost.mapper.SalaryCostMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -39,6 +44,7 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class CostRunCostItemServiceImpl implements CostRunCostItemService {
+  private static final Logger log = LoggerFactory.getLogger(CostRunCostItemServiceImpl.class);
   private static final int AMOUNT_SCALE = 6;
 
   private static final String DIRECT_LABOR = "DIRECT_LABOR";
@@ -47,6 +53,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private static final String LOSS = "LOSS";
   private static final String MANUFACTURE = "MANUFACTURE";
   private static final String MANUFACTURE_COST = "MANUFACTURE_COST";
+  /** Task #9：调整后制造成本 = 制造成本 × 产品属性系数；作为三项费用计提基数 */
+  private static final String ADJUSTED_MANUFACTURE_COST = "ADJUSTED_MANUFACTURE_COST";
   private static final String MGMT_EXP = "MGMT_EXP";
   private static final String SALES_EXP = "SALES_EXP";
   private static final String FIN_EXP = "FIN_EXP";
@@ -69,6 +77,17 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private final ManufactureRateMapper manufactureRateMapper;
   private final ThreeExpenseRateMapper threeExpenseRateMapper;
   private final OtherExpenseRateMapper otherExpenseRateMapper;
+  /** Task #9：产品属性系数来源（lp_product_property.coefficient） */
+  private final ProductPropertyMapper productPropertyMapper;
+
+  /**
+   * Task #9：是否把"水电费"计入材料费。
+   *
+   * <p>Excel 见机表3 的口径是「水电费独立列报，不进材料费」，故默认 false；老逻辑把 deptTotal
+   * （含 waterPower）整体加进 materialTotal，会高估材料费、低估制造成本基数。开关保留是为了
+   * 老用户/历史报表回溯时可以临时恢复 legacy 行为。
+   */
+  private final boolean includeWaterPowerInMaterial;
 
   public CostRunCostItemServiceImpl(
       CostRunCostItemMapper costRunCostItemMapper,
@@ -81,7 +100,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       QualityLossRateMapper qualityLossRateMapper,
       ManufactureRateMapper manufactureRateMapper,
       ThreeExpenseRateMapper threeExpenseRateMapper,
-      OtherExpenseRateMapper otherExpenseRateMapper) {
+      OtherExpenseRateMapper otherExpenseRateMapper,
+      ProductPropertyMapper productPropertyMapper,
+      @Value("${cost.material.includeWaterPower:false}") boolean includeWaterPowerInMaterial) {
     this.costRunCostItemMapper = costRunCostItemMapper;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
@@ -93,6 +114,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     this.manufactureRateMapper = manufactureRateMapper;
     this.threeExpenseRateMapper = threeExpenseRateMapper;
     this.otherExpenseRateMapper = otherExpenseRateMapper;
+    this.productPropertyMapper = productPropertyMapper;
+    this.includeWaterPowerInMaterial = includeWaterPowerInMaterial;
   }
 
   @Override
@@ -229,6 +252,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     costCodes.add(LOSS);
     costCodes.add(MANUFACTURE);
     costCodes.add(MANUFACTURE_COST);
+    costCodes.add(ADJUSTED_MANUFACTURE_COST);
     costCodes.add(MGMT_EXP);
     costCodes.add(SALES_EXP);
     costCodes.add(FIN_EXP);
@@ -262,12 +286,16 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     }
 
     // 3) 最后汇总材料费(部品+辅料+部门经费)
+    //    Task #9：水电费默认不计入材料费（与 Excel 见机表3 口径对齐），
+    //    通过 cost.material.includeWaterPower 开关保留 legacy 行为以便回溯。
     BigDecimal partTotal = sumPartAmount(oaNoValue, productCodeValue);
     BigDecimal deptTotal =
         feeResult.overhaul
             .add(feeResult.toolingRepair)
-            .add(feeResult.waterPower)
             .add(feeResult.other);
+    if (includeWaterPowerInMaterial) {
+      deptTotal = deptTotal.add(feeResult.waterPower);
+    }
     BigDecimal materialTotal =
         partTotal.add(auxTotal).add(deptTotal).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
     BigDecimal lossRate = findLossRate(laborByUnit);
@@ -291,25 +319,34 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
             manufactureCost.multiply(manufactureRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
       }
     }
+    // Task #9：产品属性系数 → 调整后制造成本 = 制造成本 × 系数；作为三项费用基数
+    BigDecimal coefficient = lookupProductCoefficient(productCodeValue);
+    BigDecimal adjustedManufactureCost =
+        manufactureCost == null
+            ? null
+            : manufactureCost.multiply(coefficient).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+
     ThreeExpenseRate threeExpenseRate = findThreeExpenseRate(laborByUnit);
     BigDecimal mgmtRate = threeExpenseRate == null ? null : threeExpenseRate.getManagementExpenseRate();
     BigDecimal salesRate = threeExpenseRate == null ? null : threeExpenseRate.getSalesExpenseRate();
     BigDecimal financeRate = threeExpenseRate == null ? null : threeExpenseRate.getFinanceExpenseRate();
+    // 三项费用基数从 manufactureCost 改成 adjustedManufactureCost（系数=1 时等价旧逻辑）
     BigDecimal mgmtAmount =
-        manufactureCost == null || mgmtRate == null
+        adjustedManufactureCost == null || mgmtRate == null
             ? null
-            : manufactureCost.multiply(mgmtRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+            : adjustedManufactureCost.multiply(mgmtRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
     BigDecimal salesAmount =
-        manufactureCost == null || salesRate == null
+        adjustedManufactureCost == null || salesRate == null
             ? null
-            : manufactureCost.multiply(salesRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+            : adjustedManufactureCost.multiply(salesRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
     BigDecimal financeAmount =
-        manufactureCost == null || financeRate == null
+        adjustedManufactureCost == null || financeRate == null
             ? null
-            : manufactureCost.multiply(financeRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+            : adjustedManufactureCost.multiply(financeRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
     BigDecimal totalAmount = null;
-    if (manufactureCost != null) {
-      totalAmount = manufactureCost;
+    if (adjustedManufactureCost != null) {
+      // 不含税总成本 = 调整后制造成本 + 三项费用 + 其他费用（与 Excel 一致）
+      totalAmount = adjustedManufactureCost;
       if (mgmtAmount != null) {
         totalAmount = totalAmount.add(mgmtAmount);
       }
@@ -333,9 +370,12 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     items.add(buildItem(LOSS, "净损失率", lossBase, lossRate, lossAmount));
     items.add(buildItem(MANUFACTURE, "制造费用", manufactureCost, manufactureRate, manufactureFee));
     items.add(buildItem(MANUFACTURE_COST, "制造成本", null, null, manufactureCost));
-    items.add(buildItem(MGMT_EXP, "管理费用", manufactureCost, mgmtRate, mgmtAmount));
-    items.add(buildItem(SALES_EXP, "销售费用", manufactureCost, salesRate, salesAmount));
-    items.add(buildItem(FIN_EXP, "财务费用", manufactureCost, financeRate, financeAmount));
+    // Task #9：调整后制造成本（baseAmount=制造成本，rate=系数）
+    items.add(buildItem(
+        ADJUSTED_MANUFACTURE_COST, "调整后制造成本", manufactureCost, coefficient, adjustedManufactureCost));
+    items.add(buildItem(MGMT_EXP, "管理费用", adjustedManufactureCost, mgmtRate, mgmtAmount));
+    items.add(buildItem(SALES_EXP, "销售费用", adjustedManufactureCost, salesRate, salesAmount));
+    items.add(buildItem(FIN_EXP, "财务费用", adjustedManufactureCost, financeRate, financeAmount));
     items.addAll(otherExpenseItems);
     items.add(buildItem(TOTAL, "不含税总成本", null, null, totalAmount));
     items.add(buildItem(OVERHAUL, "大修费", feeResult.baseAmount, feeResult.overhaulRate, feeResult.overhaul));
@@ -663,6 +703,29 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       return BigDecimal.ZERO;
     }
     return base.multiply(rate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+  }
+
+  /**
+   * Task #9：按产品料号查 lp_product_property.coefficient（标准品=1）。
+   *
+   * <p>口径：parentCode 命中即用其 coefficient；查多条按 id 倒序取最新；查不到时回落到 1
+   * （标准品语义，与 V11 DEFAULT 1.0000 对齐），同时打 debug 日志方便定位脏数据。包私有便于单测。
+   */
+  BigDecimal lookupProductCoefficient(String productCode) {
+    if (!StringUtils.hasText(productCode)) {
+      return BigDecimal.ONE;
+    }
+    ProductProperty property =
+        productPropertyMapper.selectOne(
+            Wrappers.lambdaQuery(ProductProperty.class)
+                .eq(ProductProperty::getParentCode, productCode.trim())
+                .orderByDesc(ProductProperty::getId)
+                .last("LIMIT 1"));
+    if (property == null || property.getCoefficient() == null) {
+      log.debug("产品属性系数未命中，回落=1: productCode={}", productCode);
+      return BigDecimal.ONE;
+    }
+    return property.getCoefficient();
   }
 
   private static class LaborSum {
