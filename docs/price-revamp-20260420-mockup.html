@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>价格改造前端原型（2026-04-20 财务沟通版）</title>
+<!-- Element Plus CDN，保证和现有 marketing-cost 前端栈一致 -->
+<link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://unpkg.com/element-plus"></script>
+<script src="https://unpkg.com/@element-plus/icons-vue"></script>
+<style>
+  body { margin: 0; font-family: -apple-system, 'PingFang SC', sans-serif; background: #f5f7fa; color: #303133; }
+  .shell { max-width: 1280px; margin: 24px auto; padding: 0 16px; }
+  .page-card { background: #fff; border-radius: 8px; padding: 24px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #909399; font-size: 13px; margin-bottom: 16px; }
+  .section-title { font-weight: 600; font-size: 15px; margin: 20px 0 12px; color: #303133; border-left: 3px solid #409eff; padding-left: 8px; }
+  .bad-row { background: #fef0f0 !important; }
+  .bad-row td { color: #f56c6c; }
+  .tag-illegal { color: #f56c6c; font-weight: 600; }
+  .tag-ok { color: #67c23a; font-weight: 600; }
+  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 12px; }
+  .summary-card { padding: 12px 16px; background: #f5f7fa; border-radius: 6px; }
+  .summary-card .label { color: #909399; font-size: 12px; }
+  .summary-card .value { font-size: 18px; font-weight: 600; margin-top: 4px; }
+  .summary-card.hit .value { color: #67c23a; }
+  .summary-card.miss .value { color: #f56c6c; }
+  .formula-preview { background: #f5f7fa; padding: 12px; border-radius: 6px; font-family: Menlo, monospace; font-size: 13px; line-height: 1.8; color: #606266; }
+  .formula-preview b { color: #409eff; }
+  .tip-warning { color: #e6a23c; font-size: 12px; }
+  .tip-error { color: #f56c6c; font-size: 12px; }
+  .tip-ok { color: #67c23a; font-size: 12px; }
+  .badge-new { background: #e1f3d8; color: #67c23a; padding: 1px 8px; border-radius: 10px; font-size: 11px; margin-left: 6px; }
+  .badge-mod { background: #fdf6ec; color: #e6a23c; padding: 1px 8px; border-radius: 10px; font-size: 11px; margin-left: 6px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="shell">
+    <div class="page-card">
+      <h1>价格改造前端原型 <span style="font-size:12px;color:#909399;">2026-04-20 财务沟通版</span></h1>
+      <div class="sub">把设计 / 实施文档里的前端改动渲染成可视化页面。以下 5 个 Tab 对应 5 个改造点。</div>
+      <el-tabs v-model="activeTab" type="border-card">
+        <!-- ============================================================ -->
+        <!-- 1. 试算结果页（改）                                            -->
+        <!-- ============================================================ -->
+        <el-tab-pane label="1. 试算结果页（改）" name="cost-run">
+          <div class="section-title">/cost/run — 试算结果 · OA-2026-0012 <span class="badge-mod">改</span></div>
+
+          <!-- T14 错误 banner -->
+          <el-alert
+            type="error"
+            :closable="false"
+            title="本次试算有 2 行物料未命中价格路由，需补录价格类型配置后重试">
+            <template #default>
+              <div style="margin-top:4px;">
+                ① 1079900000234 形态=制造件 期间=2026-03 &nbsp;&nbsp;
+                ② 1079900000567 形态=采购件 期间=2026-03
+              </div>
+              <el-button size="small" type="warning" style="margin-top:8px;">导出缺价清单</el-button>
+            </template>
+          </el-alert>
+
+          <div class="section-title" style="margin-top:24px;">成本拆解</div>
+          <div class="summary-grid">
+            <div class="summary-card hit"><div class="label">材料费</div><div class="value">93.493</div></div>
+            <div class="summary-card hit"><div class="label">制造成本</div><div class="value">111.316</div></div>
+            <div class="summary-card hit"><div class="label">合计</div><div class="value">152.503</div></div>
+            <div class="summary-card miss"><div class="label">缺价行数</div><div class="value">2</div></div>
+          </div>
+
+          <div class="section-title" style="margin-top:24px;">部品明细（节选）</div>
+          <el-table :data="costRows" border size="small" :row-class-name="rowClass">
+            <el-table-column prop="idx" label="#" width="50" />
+            <el-table-column prop="materialCode" label="物料号" width="140" />
+            <el-table-column label="形态" width="95">
+              <template #default="{ row }">
+                <el-tag size="small" :type="formTag(row.formAttr)">{{ row.formAttr }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="价格类型" width="100">
+              <template #default="{ row }">
+                <span v-if="row.priceType === '缺失'" class="tag-illegal">❌ 缺失</span>
+                <span v-else-if="row.priceType === '—'" style="color:#909399;">—</span>
+                <el-tag v-else size="small">{{ row.priceType }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="sourceTable" label="价格来源" width="135">
+              <template #default="{ row }">
+                <span style="font-family:Menlo,monospace;font-size:12px;">{{ row.sourceTable }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="price" label="单价" width="90" align="right">
+              <template #default="{ row }">
+                <span v-if="row.price === null" style="color:#f56c6c;">—</span>
+                <span v-else>{{ row.price }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="qty" label="用量" width="70" align="right" />
+            <el-table-column label="辅料×用量" width="90" align="center">
+              <template #default="{ row }">
+                <el-tag v-if="row.auxQtyFlag" size="small" type="warning">🔥 是</el-tag>
+                <span v-else style="color:#c0c4cc;">否</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="小计" width="90" align="right">
+              <template #default="{ row }">
+                <span v-if="row.subtotal === null" style="color:#f56c6c;">—</span>
+                <span v-else>{{ row.subtotal }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <div style="margin-top:12px; font-size:12px; color:#909399;">
+            <span class="tip-error">●</span> 红底行：未命中价格路由，需补录 <span class="tip-warning">●</span> 🔥 图标：BOM 行勾选了"辅料×用量"（焊料/毛细管口径）
+          </div>
+        </el-tab-pane>
+
+        <!-- ============================================================ -->
+        <!-- 2. 价格录入矩阵校验（改）                                     -->
+        <!-- ============================================================ -->
+        <el-tab-pane label="2. 价格录入矩阵校验（改）" name="price-entry">
+          <div class="section-title">/price/settle — 新增结算价 <span class="badge-mod">改</span></div>
+          <div class="sub">演示"形态 × 价格类型"合法矩阵的前端校验：违规组合直接禁止保存。</div>
+
+          <el-row :gutter="20">
+            <el-col :span="8">
+              <el-card shadow="hover">
+                <div class="section-title" style="margin-top:0;">场景 A · 合法</div>
+                <el-form label-width="90px" size="small">
+                  <el-form-item label="物料号"><el-input model-value="1008900031271" disabled /></el-form-item>
+                  <el-form-item label="物料形态">
+                    <el-select model-value="PURCHASED" disabled>
+                      <el-option label="采购件" value="PURCHASED" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="价格类型">
+                    <el-select model-value="SETTLE">
+                      <el-option label="结算价" value="SETTLE" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="价格"><el-input model-value="45.00" /></el-form-item>
+                  <div class="tip-ok">✅ 采购件 + 结算价 组合合法</div>
+                  <el-button type="primary" size="small" style="margin-top:12px;">保存</el-button>
+                </el-form>
+              </el-card>
+            </el-col>
+            <el-col :span="8">
+              <el-card shadow="hover">
+                <div class="section-title" style="margin-top:0; border-left-color:#e6a23c;">场景 B · 委外禁结算价</div>
+                <el-form label-width="90px" size="small">
+                  <el-form-item label="物料号"><el-input model-value="MAT-OUT-001" /></el-form-item>
+                  <el-form-item label="物料形态">
+                    <el-select model-value="OUTSOURCED" disabled>
+                      <el-option label="委外加工件" value="OUTSOURCED" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="价格类型">
+                    <el-select model-value="SETTLE">
+                      <el-option label="结算价" value="SETTLE" />
+                    </el-select>
+                  </el-form-item>
+                  <div class="tip-error">❌ 委外加工件禁止结算价（2026-04-20 会议口径）<br>允许的类型：{固定价, 联动价, 区间价}</div>
+                  <el-button type="primary" size="small" disabled style="margin-top:12px;">保存（已禁用）</el-button>
+                </el-form>
+              </el-card>
+            </el-col>
+            <el-col :span="8">
+              <el-card shadow="hover">
+                <div class="section-title" style="margin-top:0; border-left-color:#f56c6c;">场景 C · 制造件禁独立价</div>
+                <el-form label-width="90px" size="small">
+                  <el-form-item label="物料号"><el-input model-value="MAT-MAKE-001" /></el-form-item>
+                  <el-form-item label="物料形态">
+                    <el-select model-value="MANUFACTURED" disabled>
+                      <el-option label="制造件" value="MANUFACTURED" />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item label="价格类型">
+                    <el-select model-value="" disabled placeholder="— 无可选 —" />
+                  </el-form-item>
+                  <div class="tip-error">❌ 制造件无独立价格类型（由 BOM 下挂材料判定）</div>
+                  <el-button size="small" type="primary" plain style="margin-top:12px;">跳转 · 制造件工艺规格 →</el-button>
+                </el-form>
+              </el-card>
+            </el-col>
+          </el-row>
+
+          <div class="section-title" style="margin-top:24px;">合法矩阵参考</div>
+          <el-table :data="matrix" border size="small">
+            <el-table-column prop="form" label="形态" width="120">
+              <template #default="{ row }">
+                <el-tag :type="formTag(row.form)">{{ row.form }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="固定价" width="100" align="center"><template #default="{ row }"><span :class="row.fixed ? 'tag-ok':'tag-illegal'">{{ row.fixed ? '✅':'❌' }}</span></template></el-table-column>
+            <el-table-column label="联动价" width="100" align="center"><template #default="{ row }"><span :class="row.linked ? 'tag-ok':'tag-illegal'">{{ row.linked ? '✅':'❌' }}</span></template></el-table-column>
+            <el-table-column label="区间价" width="100" align="center"><template #default="{ row }"><span :class="row.range ? 'tag-ok':'tag-illegal'">{{ row.range ? '✅':'❌' }}</span></template></el-table-column>
+            <el-table-column label="结算价" width="100" align="center"><template #default="{ row }"><span :class="row.settle ? 'tag-ok':'tag-illegal'">{{ row.settle ? '✅':'❌' }}</span></template></el-table-column>
+            <el-table-column prop="note" label="说明" />
+          </el-table>
+        </el-tab-pane>
+
+        <!-- ============================================================ -->
+        <!-- 3. 制造件工艺规格（新）                                       -->
+        <!-- ============================================================ -->
+        <el-tab-pane label="3. 制造件工艺规格（新）" name="make-part">
+          <div class="section-title">/base/makePartSpec — 制造件工艺规格 <span class="badge-new">新</span></div>
+          <div class="sub">承载 V23 加的 material_category 字段。RAW_DIRECT / BLANK 切换后字段联动。</div>
+
+          <el-row :gutter="16">
+            <el-col :span="14">
+              <el-card shadow="hover">
+                <div style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                  <div>
+                    <el-button type="primary" size="small">+ 新增</el-button>
+                    <el-button size="small">批量导入</el-button>
+                    <el-button size="small">从 U9 同步</el-button>
+                  </div>
+                  <el-input placeholder="按物料搜索..." size="small" style="width:200px;" />
+                </div>
+                <el-table :data="makePartRows" size="small" border highlight-current-row @current-change="onPickPart">
+                  <el-table-column prop="code" label="物料号" width="130" />
+                  <el-table-column label="大类" width="140">
+                    <template #default="{ row }">
+                      <el-tag v-if="row.category==='RAW_DIRECT'" type="success" size="small">🟢 RAW_DIRECT</el-tag>
+                      <el-tag v-else type="warning" size="small">🟡 BLANK</el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="gross" label="毛重(g)" width="90" align="right" />
+                  <el-table-column prop="net" label="净重(g)" width="90" align="right" />
+                  <el-table-column prop="scrap" label="回收重(g)" width="100" align="right" />
+                  <el-table-column prop="scrapCode" label="废料码" width="100" />
+                  <el-table-column prop="fee" label="加工费(元)" width="100" align="right" />
+                </el-table>
+              </el-card>
+            </el-col>
+            <el-col :span="10">
+              <el-card shadow="hover">
+                <div class="section-title" style="margin-top:0;">编辑 · {{ picked.code }}</div>
+                <el-form label-width="90px" size="small">
+                  <el-form-item label="物料大类">
+                    <el-radio-group v-model="picked.category">
+                      <el-radio-button value="RAW_DIRECT">原材料直投</el-radio-button>
+                      <el-radio-button value="BLANK">毛坯件</el-radio-button>
+                    </el-radio-group>
+                  </el-form-item>
+
+                  <template v-if="picked.category === 'RAW_DIRECT'">
+                    <el-form-item label="毛重(g)"><el-input v-model="picked.gross" /></el-form-item>
+                    <el-form-item label="净重(g)"><el-input v-model="picked.net" /></el-form-item>
+                    <el-form-item label="回收重(g)"><el-input v-model="picked.scrap" /></el-form-item>
+                    <el-form-item label="废料代码">
+                      <el-select v-model="picked.scrapCode" style="width:100%;">
+                        <el-option value="SCR-Cu" label="SCR-Cu (铜废料)" />
+                        <el-option value="SCR-Al" label="SCR-Al (铝废料)" />
+                      </el-select>
+                    </el-form-item>
+                    <el-form-item label="加工费(元)"><el-input v-model="picked.fee" /></el-form-item>
+                  </template>
+
+                  <template v-else>
+                    <el-form-item label="毛坯价源">
+                      <el-select model-value="LINKED" disabled style="width:100%;">
+                        <el-option value="LINKED" label="联动价（lp_price_linked_calc_item）" />
+                      </el-select>
+                    </el-form-item>
+                    <el-form-item label="毛坯代码"><el-input v-model="picked.blankCode" placeholder="BLANK-Cu-001" /></el-form-item>
+                    <el-form-item label="废料代码">
+                      <el-select v-model="picked.scrapCode" style="width:100%;">
+                        <el-option value="SCR-Cu" label="SCR-Cu (铜废料)" />
+                        <el-option value="SCR-Al" label="SCR-Al (铝废料)" />
+                      </el-select>
+                    </el-form-item>
+                  </template>
+                </el-form>
+
+                <div class="section-title">公式预览</div>
+                <div class="formula-preview" v-if="picked.category === 'RAW_DIRECT'">
+                  材料成本 = <b>毛重</b> × 材料单价 − <b>回收重</b> × 回收价<br>
+                  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; = {{ picked.gross }} × 32.6497 − {{ picked.scrap }} × 8.50<br>
+                  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; = <b>{{ calcRaw() }}</b> 元
+                </div>
+                <div class="formula-preview" v-else>
+                  材料成本 = <b>毛坯价</b> − <b>回收价</b><br>
+                  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; = 18.20 − 3.50<br>
+                  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; = <b>14.70</b> 元
+                </div>
+              </el-card>
+            </el-col>
+          </el-row>
+        </el-tab-pane>
+
+        <!-- ============================================================ -->
+        <!-- 4. 废料价格表（新）                                           -->
+        <!-- ============================================================ -->
+        <el-tab-pane label="4. 废料价格表（新）" name="scrap">
+          <div class="section-title">/base/scrapPrice — 废料价格管理 <span class="badge-new">新</span></div>
+          <div class="sub">V24 新表 lp_scrap_price + lp_material_scrap_ref 的录入入口，CMS 未对接前允许手工维护。</div>
+
+          <el-row :gutter="16">
+            <el-col :span="14">
+              <el-card shadow="hover">
+                <div style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                  <div>
+                    <el-button type="primary" size="small">+ 新增</el-button>
+                    <el-button size="small">从 CMS 同步</el-button>
+                    <el-button size="small">导入 Excel</el-button>
+                  </div>
+                  <el-select model-value="2026-03" size="small" style="width:120px;">
+                    <el-option label="2026-03" value="2026-03" />
+                    <el-option label="2026-02" value="2026-02" />
+                  </el-select>
+                </div>
+                <el-table :data="scrapRows" border size="small">
+                  <el-table-column prop="code" label="废料代码" width="110" />
+                  <el-table-column prop="name" label="废料名称" width="110" />
+                  <el-table-column prop="price" label="回收价" width="90" align="right" />
+                  <el-table-column prop="unit" label="单位" width="90" />
+                  <el-table-column prop="period" label="期间" width="90" />
+                  <el-table-column label="数据来源" width="110">
+                    <template #default="{ row }">
+                      <el-tag size="small" :type="row.source==='CMS'?'success':'info'">{{ row.source }}</el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="租户" width="100">
+                    <template #default="{ row }"><el-tag size="small">{{ row.bu }}</el-tag></template>
+                  </el-table-column>
+                </el-table>
+              </el-card>
+            </el-col>
+            <el-col :span="10">
+              <el-card shadow="hover">
+                <div class="section-title" style="margin-top:0;">物料 ↔ 废料映射</div>
+                <div class="sub">承载 lp_material_scrap_ref，供 RAW_DIRECT / BLANK 取回收价。</div>
+                <el-table :data="mapRows" border size="small">
+                  <el-table-column prop="material" label="父件物料号" />
+                  <el-table-column prop="scrap" label="废料代码" width="110" />
+                </el-table>
+                <el-button type="primary" size="small" style="margin-top:12px;">+ 新增映射</el-button>
+              </el-card>
+            </el-col>
+          </el-row>
+        </el-tab-pane>
+
+        <!-- ============================================================ -->
+        <!-- 5. BOM 行辅料用量（改）                                       -->
+        <!-- ============================================================ -->
+        <el-tab-pane label="5. BOM 行辅料用量（改）" name="bom">
+          <div class="section-title">/ingest/addbom — BOM 补录 · aux_with_qty_flag <span class="badge-mod">改</span></div>
+          <div class="sub">焊料 / 毛细管按"采购件价格 × 用量"口径。制造件不允许勾选。</div>
+
+          <el-card shadow="hover">
+            <el-table :data="bomRows" border size="small" :row-class-name="bomRowClass">
+              <el-table-column prop="idx" label="#" width="50" />
+              <el-table-column prop="code" label="物料号" width="140" />
+              <el-table-column prop="name" label="物料名称" width="140" />
+              <el-table-column label="形态" width="100">
+                <template #default="{ row }"><el-tag :type="formTag(row.form)" size="small">{{ row.form }}</el-tag></template>
+              </el-table-column>
+              <el-table-column prop="qty" label="用量" width="90" align="right" />
+              <el-table-column label="辅料×用量" width="120" align="center">
+                <template #default="{ row }">
+                  <el-tooltip v-if="row.form==='制造件'" content="制造件不适用辅料×用量口径" placement="top">
+                    <el-switch disabled />
+                  </el-tooltip>
+                  <template v-else>
+                    <el-switch v-model="row.aux" size="small" />
+                    <span v-if="row.aux" style="margin-left:6px; color:#e6a23c;">🔥</span>
+                  </template>
+                </template>
+              </el-table-column>
+              <el-table-column label="预计单价来源" min-width="220">
+                <template #default="{ row }">
+                  <span v-if="row.form==='制造件'" style="color:#909399;">BOM 递归（MakePartResolver）</span>
+                  <span v-else-if="row.aux" style="color:#e6a23c;">AuxWithQtyResolver：单价 × {{ row.qty }}</span>
+                  <span v-else style="color:#909399;">MaterialPriceRouterService</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div style="margin-top:12px; font-size:12px; color:#909399;">
+              勾选"辅料×用量"后，该行走 <b>AuxWithQtyResolver</b>（T09）：先按采购件形态命中价格路由，再乘 qty。
+            </div>
+          </el-card>
+        </el-tab-pane>
+
+      </el-tabs>
+
+      <!-- 页面清单 -->
+      <div class="section-title" style="margin-top:28px;">改造清单（7 个页面）</div>
+      <el-table :data="pageChanges" border size="small">
+        <el-table-column prop="path" label="页面路径" width="280" />
+        <el-table-column label="类型" width="80">
+          <template #default="{ row }">
+            <el-tag :type="row.type === '新' ? 'success' : 'warning'" size="small">{{ row.type }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="change" label="改造内容" />
+        <el-table-column prop="task" label="任务" width="120" />
+      </el-table>
+    </div>
+
+    <div style="text-align:center; color:#c0c4cc; font-size:12px; padding:16px 0;">
+      配套文档：price-revamp-20260420-design.md / price-revamp-20260420-implementation.md
+    </div>
+  </div>
+</div>
+
+<script>
+const { createApp, ref, reactive, computed } = Vue
+
+const app = createApp({
+  setup() {
+    const activeTab = ref('cost-run')
+
+    const costRows = ref([
+      { idx: 1, materialCode: '1008900031271', formAttr: '采购件', priceType: '固定价', sourceTable: 'lp_price_fixed_item', price: 32.6497, qty: 1, auxQtyFlag: false, subtotal: 32.65 },
+      { idx: 2, materialCode: '1008900042281', formAttr: '制造件', priceType: '—', sourceTable: 'MakePartResolver', price: 6.658, qty: 1, auxQtyFlag: false, subtotal: 6.66 },
+      { idx: 3, materialCode: '1079900000234', formAttr: '制造件', priceType: '缺失', sourceTable: '—', price: null, qty: 1, auxQtyFlag: false, subtotal: null },
+      { idx: 4, materialCode: '203259319',     formAttr: '采购件', priceType: '联动价', sourceTable: 'lp_price_linked_calc_item', price: 2.94115, qty: 4, auxQtyFlag: true, subtotal: 11.76 },
+      { idx: 5, materialCode: '1032919100',    formAttr: '采购件', priceType: '固定价', sourceTable: 'lp_price_fixed_item', price: 18.50, qty: 0.8, auxQtyFlag: true, subtotal: 14.80 },
+      { idx: 6, materialCode: '1079900000567', formAttr: '采购件', priceType: '缺失', sourceTable: '—', price: null, qty: 2, auxQtyFlag: false, subtotal: null },
+    ])
+    const rowClass = ({ row }) => row.priceType === '缺失' ? 'bad-row' : ''
+    const formTag = (form) => {
+      if (form === '采购件') return 'primary'
+      if (form === '制造件') return 'success'
+      if (form === '委外加工件') return 'warning'
+      return 'info'
+    }
+
+    const matrix = ref([
+      { form: '采购件',     fixed: true,  linked: true,  range: true,  settle: true,  note: '4 桶全开' },
+      { form: '委外加工件', fixed: true,  linked: true,  range: true,  settle: false, note: '去结算价' },
+      { form: '制造件',     fixed: false, linked: false, range: false, settle: false, note: '无独立价格，由 BOM 下挂材料判定' },
+    ])
+
+    const makePartRows = ref([
+      { code: 'S接管-001',   category: 'RAW_DIRECT', gross: 12.5, net: 10.2, scrap: 2.3, scrapCode: 'SCR-Cu', fee: 1.20, blankCode: '' },
+      { code: 'EC接管-002',  category: 'RAW_DIRECT', gross: 8.3,  net: 7.8,  scrap: 0.5, scrapCode: 'SCR-Cu', fee: 0.80, blankCode: '' },
+      { code: 'BLANK-001',   category: 'BLANK',      gross: null, net: null, scrap: null,scrapCode: 'SCR-Al', fee: null, blankCode: 'BLANK-Al-101' },
+      { code: '封头-001',    category: 'RAW_DIRECT', gross: 15.0, net: 12.0, scrap: 3.0, scrapCode: 'SCR-Cu', fee: 2.00, blankCode: '' },
+    ])
+    const picked = reactive({ ...makePartRows.value[0] })
+    const onPickPart = (row) => { if (row) Object.assign(picked, row) }
+    const calcRaw = () => {
+      const g = Number(picked.gross) || 0
+      const s = Number(picked.scrap) || 0
+      return (g * 32.6497 - s * 8.50).toFixed(4)
+    }
+
+    const scrapRows = ref([
+      { code: 'SCR-Cu', name: '铜废料',  price: 8.50, unit: '元/公斤', period: '2026-03', source: 'CMS',    bu: 'COMMERCIAL' },
+      { code: 'SCR-Al', name: '铝废料',  price: 2.30, unit: '元/公斤', period: '2026-03', source: '手工',   bu: 'COMMERCIAL' },
+      { code: 'SCR-Zn', name: '锌废料',  price: 4.80, unit: '元/公斤', period: '2026-03', source: 'CMS',    bu: 'COMMERCIAL' },
+      { code: 'SCR-Fe', name: '黑色废料', price: 1.20, unit: '元/公斤', period: '2026-03', source: '手工',   bu: 'COMMERCIAL' },
+    ])
+    const mapRows = ref([
+      { material: '1008900042281', scrap: 'SCR-Cu' },
+      { material: '1008900031271', scrap: 'SCR-Cu' },
+      { material: 'BLANK-001',     scrap: 'SCR-Al' },
+    ])
+
+    const bomRows = ref([
+      { idx: 1, code: '203259319',   name: '黄铜棒',  form: '采购件', qty: 4,     aux: false },
+      { idx: 2, code: '1032919100',  name: '焊料环',  form: '采购件', qty: 0.8,   aux: true  },
+      { idx: 3, code: '1008800012',  name: '毛细管',  form: '采购件', qty: 0.15,  aux: true  },
+      { idx: 4, code: '4020051123',  name: 'S接管',   form: '制造件', qty: 1,     aux: false },
+      { idx: 5, code: '6001100034',  name: '焊点胶',  form: '委外加工件', qty: 2, aux: false },
+    ])
+    const bomRowClass = ({ row }) => row.aux ? 'bad-row' : ''
+
+    const pageChanges = ref([
+      { path: '/cost/run',                   type: '改', change: '错误 banner + 红色高亮 + 新增"价格类型/来源"列 + 🔥 辅料图标', task: 'T14' },
+      { path: '/price/fixed',                type: '改', change: '表单校验：形态×价格类型合法矩阵，违规禁止保存', task: 'T01' },
+      { path: '/price/linked',               type: '改', change: '同上', task: 'T01' },
+      { path: '/price/range',                type: '改', change: '同上', task: 'T01' },
+      { path: '/price/settle',               type: '改', change: '同上', task: 'T01' },
+      { path: '/price/outsource_*',          type: '改', change: '同上（委外去 SETTLE，加 LINKED/RANGE）', task: 'T01' },
+      { path: '/base/makePartSpec',          type: '新', change: 'material_category 单选 + RAW/BLANK 字段切换 + 公式预览', task: 'T04-T06' },
+      { path: '/base/scrapPrice',            type: '新', change: 'lp_scrap_price CRUD + CMS 同步 + 物料↔废料映射', task: 'V24 配套' },
+      { path: '/ingest/addbom',              type: '改', change: 'BOM 行新增"辅料×用量"toggle（制造件禁选）', task: 'T08-T09' },
+      { path: '/collaborate/BomSupplement',  type: '改', change: '同上', task: 'T08-T09' },
+    ])
+
+    return { activeTab, costRows, rowClass, formTag, matrix, makePartRows, picked, onPickPart, calcRaw, scrapRows, mapRows, bomRows, bomRowClass, pageChanges }
+  }
+})
+
+app.use(ElementPlus)
+app.mount('#app')
+</script>
+</body>
+</html>

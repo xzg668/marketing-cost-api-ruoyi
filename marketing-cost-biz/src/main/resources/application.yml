@@ -21,6 +21,11 @@ spring:
       connection-timeout: 30000
       idle-timeout: 600000
       max-lifetime: 1800000
+      # 修复时间不是北京时间：docker MySQL 容器系统时区是 UTC，导致 NOW() / CURRENT_TIMESTAMP
+      # 写入的 datetime 字面值比北京时间晚 8 小时。通过 connection-init-sql 让 marketing_cost
+      # 应用的每个 JDBC 连接初始化时把 session 时区设成 +08:00 —— 仅影响本应用连接，
+      # 不动 MySQL 全局（避免影响 docker 内其他业务库）
+      connection-init-sql: "SET time_zone = '+08:00'"
 
 mybatis-plus:
   configuration:

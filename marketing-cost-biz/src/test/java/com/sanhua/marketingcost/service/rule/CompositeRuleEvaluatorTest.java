@@ -3,7 +3,10 @@ package com.sanhua.marketingcost.service.rule;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.service.BomLeafRollupCodesProvider;
+import com.sanhua.marketingcost.service.BomRawMaterialCostElementsProvider;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -18,9 +21,109 @@ class CompositeRuleEvaluatorTest {
 
   private CompositeRuleEvaluator evaluator;
 
+  /** T11：测试用桩 Provider，按测试需要返回固定值集 */
+  private BomLeafRollupCodesProvider stubProvider;
+
+  /** T11 增强：测试用桩原材料 Provider；默认放 No101 让老测试用例（cost_element=No101）能命中 */
+  private BomRawMaterialCostElementsProvider stubRawProvider;
+
   @BeforeEach
   void setUp() {
-    evaluator = new CompositeRuleEvaluator(new ObjectMapper());
+    // 默认 stub 返回空集（绝大多数老测试用例不依赖 IN_DICT，行为不变）
+    stubProvider = new BomLeafRollupCodesProvider() {
+      @Override public Set<String> getCategoryCodes() { return Set.of(); }
+      @Override public Set<String> getNameKeywords() { return Set.of(); }
+      @Override public boolean matches(String c, String n) { return false; }
+    };
+    // 默认 stub：把 No101 当原材料；T11 增强后 IN_DICT 命中前置条件
+    stubRawProvider = new BomRawMaterialCostElementsProvider() {
+      @Override public Set<String> getCostElementCodes() { return Set.of("No101"); }
+      @Override public boolean isRawMaterial(String code) { return "No101".equals(code); }
+    };
+    evaluator = new CompositeRuleEvaluator(new ObjectMapper(), stubProvider, stubRawProvider);
+  }
+
+  // ============================ T11 IN_DICT op ============================
+
+  @Test
+  @DisplayName("T11 IN_DICT：编码命中（material_category_1 在编码白名单）")
+  void inDictHitByCode() {
+    String json =
+        "{\"nodeConditions\":[{\"field\":\"material_category_1\",\"op\":\"IN_DICT\","
+            + "\"value\":\"bom_leaf_rollup_codes\"}]}";
+    BomLeafRollupCodesProvider provider = new BomLeafRollupCodesProvider() {
+      @Override public Set<String> getCategoryCodes() { return Set.of("171711404"); }
+      @Override public Set<String> getNameKeywords() { return Set.of(); }
+      @Override public boolean matches(String c, String n) {
+        return "171711404".equals(c);
+      }
+    };
+    CompositeRuleEvaluator e = new CompositeRuleEvaluator(new ObjectMapper(), provider, stubRawProvider);
+    // T11 增强：cost_element_code=No101 才能进入 leafRollup 字典命中流程
+    BomNodeContext node = new BomNodeContext(
+        "M1", "拉制铜管 phi8", null, null, null, null, "No101", "171711404", null);
+    assertThat(e.evaluate(json, node, null, List.of())).isTrue();
+  }
+
+  @Test
+  @DisplayName("T11 IN_DICT：名称兜底命中（cat1=NULL，name contains 关键词）")
+  void inDictHitByName() {
+    String json =
+        "{\"nodeConditions\":[{\"field\":\"material_category_1\",\"op\":\"IN_DICT\","
+            + "\"value\":\"bom_leaf_rollup_codes\"}]}";
+    BomLeafRollupCodesProvider provider = new BomLeafRollupCodesProvider() {
+      @Override public Set<String> getCategoryCodes() { return Set.of(); }
+      @Override public Set<String> getNameKeywords() { return Set.of("拉制铜管"); }
+      @Override public boolean matches(String c, String n) {
+        return n != null && n.contains("拉制铜管");
+      }
+    };
+    CompositeRuleEvaluator e = new CompositeRuleEvaluator(new ObjectMapper(), provider, stubRawProvider);
+    // T11 增强：cost_element_code=No101 是前置硬条件
+    BomNodeContext node = new BomNodeContext(
+        "M1", "拉制铜管 D8x0.5", null, null, null, null, "No101", null, null);
+    assertThat(e.evaluate(json, node, null, List.of())).isTrue();
+  }
+
+  @Test
+  @DisplayName("T11 增强 IN_DICT：cost_element_code 不在原材料白名单则不命中（即使料号 / 名字命中）")
+  void inDictMissByNonRawMaterial() {
+    String json =
+        "{\"nodeConditions\":[{\"field\":\"material_category_1\",\"op\":\"IN_DICT\","
+            + "\"value\":\"bom_leaf_rollup_codes\"}]}";
+    BomLeafRollupCodesProvider provider = new BomLeafRollupCodesProvider() {
+      @Override public Set<String> getCategoryCodes() { return Set.of("171711404"); }
+      @Override public Set<String> getNameKeywords() { return Set.of("拉制铜管"); }
+      @Override public boolean matches(String c, String n) {
+        return "171711404".equals(c) || (n != null && n.contains("拉制铜管"));
+      }
+    };
+    CompositeRuleEvaluator e = new CompositeRuleEvaluator(new ObjectMapper(), provider, stubRawProvider);
+    // 名字含拉制铜管 + cat1 是 171711404，但 cost_element=No104（包装材料）→ 不命中
+    BomNodeContext node = new BomNodeContext(
+        "M1", "拉制铜管 装饰用", null, null, null, null, "No104", "171711404", null);
+    assertThat(e.evaluate(json, node, null, List.of())).isFalse();
+  }
+
+  @Test
+  @DisplayName("T11 IN_DICT：value 缺字典 key 视为不命中 + warn")
+  void inDictMissingKey() {
+    String json =
+        "{\"nodeConditions\":[{\"field\":\"material_category_1\",\"op\":\"IN_DICT\"}]}";
+    BomNodeContext node = new BomNodeContext(
+        "M1", "拉制铜管", null, null, null, null, null, "171711404", null);
+    assertThat(evaluator.evaluate(json, node, null, List.of())).isFalse();
+  }
+
+  @Test
+  @DisplayName("T11 IN_DICT：未识别的字典 key 视为不命中 + warn")
+  void inDictUnknownKey() {
+    String json =
+        "{\"nodeConditions\":[{\"field\":\"material_category_1\",\"op\":\"IN_DICT\","
+            + "\"value\":\"unknown_dict_key\"}]}";
+    BomNodeContext node = new BomNodeContext(
+        "M1", "拉制铜管", null, null, null, null, null, "171711404", null);
+    assertThat(evaluator.evaluate(json, node, null, List.of())).isFalse();
   }
 
   // ============================ 基本字段 + op ============================

@@ -3,6 +3,8 @@ package com.sanhua.marketingcost.service.rule;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.DrillRuleCondition;
 import com.sanhua.marketingcost.dto.DrillRuleCondition.Clause;
+import com.sanhua.marketingcost.service.BomLeafRollupCodesProvider;
+import com.sanhua.marketingcost.service.BomRawMaterialCostElementsProvider;
 import java.util.List;
 import java.util.Objects;
 import org.slf4j.Logger;
@@ -32,9 +34,31 @@ public class CompositeRuleEvaluator {
 
   private final ObjectMapper objectMapper;
 
+  /**
+   * T11 新增：IN_DICT op 需要按字典 key 拉值集做命中判断。
+   *
+   * <p>当前只接 {@link BomLeafRollupCodesProvider}（dict_type=bom_leaf_rollup_codes）。
+   * 未来如果有其他字典也想做 IN_DICT，再扩展成通用 DictDataProvider 路由即可。
+   * 现在故意只接一个，避免无谓的抽象层（YAGNI）。
+   */
+  private final BomLeafRollupCodesProvider leafRollupProvider;
+
+  /**
+   * T11 增强：作为 LEAF_ROLLUP_TO_PARENT 命中的<b>前置硬条件</b>。
+   *
+   * <p>规则改为 3 路与：cost_element_code ∈ 原材料字典 AND (cat1 命中 OR name 命中)。
+   * 防止"名字凑巧含拉制铜管但不是原材料 cost_element"的节点被误上卷。
+   */
+  private final BomRawMaterialCostElementsProvider rawMaterialProvider;
+
   @Autowired
-  public CompositeRuleEvaluator(ObjectMapper objectMapper) {
+  public CompositeRuleEvaluator(
+      ObjectMapper objectMapper,
+      BomLeafRollupCodesProvider leafRollupProvider,
+      BomRawMaterialCostElementsProvider rawMaterialProvider) {
     this.objectMapper = objectMapper;
+    this.leafRollupProvider = leafRollupProvider;
+    this.rawMaterialProvider = rawMaterialProvider;
   }
 
   /**
@@ -110,11 +134,45 @@ public class CompositeRuleEvaluator {
         yield c.getValues().contains(actual);
       }
       case "LIKE" -> actual != null && c.getValue() != null && actual.contains(c.getValue());
+      // T11 新增：IN_DICT —— c.value 是字典 key（如 bom_leaf_rollup_codes），
+      //   按 key 拉字典两路值集（编码白名单 + NAME: 名称关键词），与节点
+      //   "(material_category_1 编码命中) OR (material_name contains 关键词命中)" 双路判定。
+      //   故意把"业务面对的复杂度"压成 1 个字典 key —— 业务规则编辑器只填 value=字典 key。
+      case "IN_DICT" -> matchInDict(c.getValue(), ctx);
       default -> {
         log.warn("未知 op={} 视为不命中", op);
         yield false;
       }
     };
+  }
+
+  /**
+   * T11 · IN_DICT 双路命中实现。
+   *
+   * <p>注意：与 IN 不同，这里"在哪个字段上判定"是隐含约定 ——
+   * 当字典 key = bom_leaf_rollup_codes 时，固定用 {@code material_category_1 + material_name}
+   * 双路。这正是 LEAF_ROLLUP 业务的硬契约（设计文档 §6.2 / §6.3）。
+   *
+   * @param dictKey 字典类型 key（来自 Clause.value）；当前仅支持 "bom_leaf_rollup_codes"
+   * @param ctx 当前节点上下文
+   */
+  private boolean matchInDict(String dictKey, BomNodeContext ctx) {
+    if (!StringUtils.hasText(dictKey)) {
+      log.warn("IN_DICT op 缺 dictKey（Clause.value 为空），视为不命中");
+      return false;
+    }
+    if ("bom_leaf_rollup_codes".equals(dictKey)) {
+      // T11 增强：3 路与 —— cost_element_code 必须在原材料白名单（前置硬条件），
+      //   再做 (cat1 编码命中 OR name 关键词命中) 判定。
+      //   这条收紧防止"名字凑巧含拉制铜管但 cost_element 不是原材料"的节点被误上卷。
+      if (!rawMaterialProvider.isRawMaterial(ctx.costElementCode())) {
+        return false;
+      }
+      return leafRollupProvider.matches(ctx.materialCategory1(), ctx.materialName());
+    }
+    log.warn("IN_DICT 不识别的字典 key={}，视为不命中（如需新增请在 CompositeRuleEvaluator.matchInDict 加分支）",
+        dictKey);
+    return false;
   }
 
   /**

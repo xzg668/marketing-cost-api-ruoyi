@@ -103,6 +103,12 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V22__business_unit_type_isolation_extended.sql", "V22");
       runMigrationsViaJdbc(LATE_MIGRATION_SCRIPTS);
       runScriptViaMysqlCli("/db/V40__bom_three_layer_and_rules.sql", "V40");
+      // T8：V41 含 ALTER TABLE + DELIMITER 存储过程块 + 中文 INSERT，必须走 mysql CLI
+      runScriptViaMysqlCli("/db/V41__bom_rule_enhance_and_sub_ref.sql", "V41");
+      // T11：V43 字典种子 + 老规则停用，纯 INSERT/UPDATE 走 mysql CLI 简单可靠
+      runScriptViaMysqlCli("/db/V43__bom_leaf_rollup_dict.sql", "V43");
+      // T11 增强：V44 原材料 cost_element 白名单字典（IN_DICT 命中前置硬条件）
+      runScriptViaMysqlCli("/db/V44__bom_raw_material_cost_elements_dict.sql", "V44");
     } catch (Exception e) {
       // 把 root cause 的文字信息拼进 message，避免 surefire 只保留 Caused by 的短描述
       Throwable root = e;

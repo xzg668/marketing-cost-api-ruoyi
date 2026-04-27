@@ -4,9 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.entity.BomStopDrillRule;
+import com.sanhua.marketingcost.service.BomLeafRollupCodesProvider;
+import com.sanhua.marketingcost.service.BomRawMaterialCostElementsProvider;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -21,8 +24,23 @@ import org.junit.jupiter.api.Test;
 @DisplayName("StopDrillRuleMatcher · 5 种 match_type + 过滤条件")
 class StopDrillRuleMatcherTest {
 
+  /** T11：Provider 单测桩，本类老用例都不依赖 IN_DICT，全返空集即可 */
+  private static final BomLeafRollupCodesProvider STUB_PROVIDER =
+      new BomLeafRollupCodesProvider() {
+        @Override public Set<String> getCategoryCodes() { return Set.of(); }
+        @Override public Set<String> getNameKeywords() { return Set.of(); }
+        @Override public boolean matches(String c, String n) { return false; }
+      };
+
+  /** T11 增强：原材料 Provider 桩，老用例不依赖 IN_DICT，返空集即可（IN_DICT 永不命中）*/
+  private static final BomRawMaterialCostElementsProvider STUB_RAW_PROVIDER =
+      new BomRawMaterialCostElementsProvider() {
+        @Override public Set<String> getCostElementCodes() { return Set.of(); }
+        @Override public boolean isRawMaterial(String code) { return false; }
+      };
+
   private final StopDrillRuleMatcher matcher =
-      new StopDrillRuleMatcher(new CompositeRuleEvaluator(new ObjectMapper()));
+      new StopDrillRuleMatcher(new CompositeRuleEvaluator(new ObjectMapper(), STUB_PROVIDER, STUB_RAW_PROVIDER));
 
   @Test
   @DisplayName("testNameLike：NAME_LIKE '接管' → 节点名 'D接管' 命中，'阀座' 不命中")

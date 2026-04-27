@@ -49,7 +49,9 @@ import org.springframework.util.StringUtils;
  *       <li>未命中：叶子入 costing（is_costing_row=1 默认），中间节点跳过</li>
  *     </ul>
  *   </li>
- *   <li>batch upsert 写 lp_bom_costing_row（UK 命中就刷新，不 DELETE 历史）</li>
+ *   <li>写库前 DELETE WHERE oa+top+asOfDate（hotfix-2026-04-27），再 batch upsert lp_bom_costing_row：
+ *       让该 (oa, top, asOfDate) 下唯一权威快照，避免规则配置变更后老 path 残留"幽灵行"；
+ *       其他 asOfDate 的历史月度快照不受影响</li>
  *   <li>T8：反查 ROLLUP 父件的 costing_row.id，批量写 lp_bom_costing_row_sub_ref</li>
  * </ol>
  *
@@ -152,11 +154,25 @@ public class BomFlattenServiceImpl implements BomFlattenService {
     List<BomCostingRow> nonRolledOutput = new ArrayList<>();
     Map<String, BomCostingRow> rolledUpByParentPath = new LinkedHashMap<>();
     List<PendingSubRef> pendingSubRefs = new ArrayList<>();
+    // T11：LEAF_ROLLUP_TO_PARENT 专用 pending 容器
+    //   - 主循环里命中叶子先攒到 leafRollupBuckets（按"父 path"去重）+ 命中叶子 path 加 stoppedPaths 单点屏蔽
+    //   - 主循环结束后扫 buckets：每个父 path 入 1 行 costing（subtree_cost_required=1）+ 命中叶子写 sub_ref
+    //   - 关键：父 path **不**进 stoppedPaths（设计文档 §3.3 (a)），父的非命中兄弟叶子要继续作独立结算行
+    Map<String, LeafRollupBucket> leafRollupBuckets = new LinkedHashMap<>();
     List<String> stoppedPaths = new ArrayList<>();
+    // T11：单点屏蔽（exact match）—— 命中叶子 path 加这里，避免主循环把它当默认叶子重复处理；
+    //   不能加 stoppedPaths（那是子树前缀屏蔽，命中叶子的"子树"其实是它自己；
+    //   按 isUnderStoppedSubtree 的 strict 子树判定，加 stoppedPaths 不会影响该叶子本身的处理顺序）。
+    //   实际：因为我们在命中分支里 continue，加哪个集合都行；为可读性单独维护单点屏蔽集合。
+    java.util.Set<String> consumedLeafPaths = new java.util.HashSet<>();
     int subtreeRequiredCount = 0;
 
     for (BomRawHierarchy row : rawRows) {
       if (isUnderStoppedSubtree(row.getPath(), stoppedPaths)) {
+        continue;
+      }
+      // T11：被某个 LEAF_ROLLUP 命中的叶子 path 单点屏蔽 —— 防止下面的"未命中默认叶子"分支重复入 costing
+      if (consumedLeafPaths.contains(row.getPath())) {
         continue;
       }
 
@@ -220,6 +236,61 @@ public class BomFlattenServiceImpl implements BomFlattenService {
           }
           continue;
         }
+        if ("LEAF_ROLLUP_TO_PARENT".equalsIgnoreCase(action)) {
+          // T11 新分支语义（设计文档 §3.2 / §3.3）：
+          //   "命中叶子 → 叶子的直接父作结算行（subtree_cost_required=1）+ 仅命中叶子写 sub_ref"
+          // 与老 ROLLUP_TO_PARENT 的本质区别：
+          //   - 父 path **不**加 stoppedPaths（父的非命中兄弟叶子要照常作独立结算）
+          //   - sub_ref 仅写"命中叶子"（不写父的全部子件）
+          //   - 同一料号在不同 path 下可能多次出现 → 按"父 path"去重，不是按 material_code
+
+          // 强校验 is_leaf=1（即使规则 nodeConditions 没显式写 is_leaf=1）
+          if (row.getIsLeaf() == null || row.getIsLeaf() != 1) {
+            result.getWarnings().add(
+                "LEAF_ROLLUP_NOT_LEAF: 规则 id=" + rule.getId()
+                    + " 命中非叶子节点 " + row.getMaterialCode()
+                    + " path=" + row.getPath() + "，跳过该次命中（中间节点不入 costing，下钻照常）");
+            // 不加 stoppedPaths，主循环正常往下走（中间节点未命中分支会跳过它本身、其子继续）
+            continue;
+          }
+
+          // 顶层叶子（level=0 且 is_leaf=1）罕见但要兜：无父可上卷
+          // 注：变量名加 leaf 前缀，避免与上面 line 179 的 parentRaw 同名冲突
+          String leafParentPath = parentPathOf(row.getPath());
+          BomRawHierarchy leafParentRaw = leafParentPath == null ? null : rawByPath.get(leafParentPath);
+          if (leafParentRaw == null) {
+            result.getWarnings().add(
+                "LEAF_ROLLUP_TOP_LEAF: 规则 id=" + rule.getId()
+                    + " 命中顶层叶子 " + row.getMaterialCode()
+                    + " 无父可上卷，按默认叶子结算入 costing");
+            nonRolledOutput.add(
+                buildCostingRow(row, request, true, false, null,
+                    buildBatchId, builtAt, buType));
+            continue;
+          }
+
+          // 父若已被其他规则命中（STOP / EXCLUDE / ROLLUP）—— 父 path 已在 stoppedPaths
+          //   因为 stoppedPaths 是"严格子树前缀"判定，父 path 加进 stoppedPaths 后
+          //   它的子件（含本叶子）会在 isUnderStoppedSubtree 那里被剔除，
+          //   所以走到这里的叶子，父 path 一定不在 stoppedPaths。
+          //   但保险起见在这里再做一道兜底（设计文档 §3.3 (c)）。
+          if (stoppedPaths.contains(leafParentPath)) {
+            result.getWarnings().add(
+                "LEAF_ROLLUP_PARENT_STOPPED: 规则 id=" + rule.getId()
+                    + " 命中叶子 " + row.getMaterialCode()
+                    + " 但父 " + leafParentRaw.getMaterialCode() + " 已被其他规则停用，跳过");
+            consumedLeafPaths.add(row.getPath());
+            continue;
+          }
+
+          // 收集到 bucket（按"父 path"去重；同父多个铜管叶子只入 1 行父 costing）
+          leafRollupBuckets
+              .computeIfAbsent(leafParentPath, k -> new LeafRollupBucket(leafParentRaw, rule.getId()))
+              .addLeaf(row);
+          // 单点屏蔽该叶子，主循环不会再把它当默认叶子重复入 costing
+          consumedLeafPaths.add(row.getPath());
+          continue;
+        }
 
         // STOP_AND_COST_ROW（默认）
         boolean markSubtree = rule.getMarkSubtreeCostRequired() != null
@@ -239,25 +310,88 @@ public class BomFlattenServiceImpl implements BomFlattenService {
       }
     }
 
-    // 7) 合并：先 ROLLUP 父件行 + 后非 ROLLUP 行（顺序保证同一 batch 一次写入）
-    List<BomCostingRow> allCostingRows = new ArrayList<>(rolledUpByParentPath.size() + nonRolledOutput.size());
+    // 7) T11：处理 LEAF_ROLLUP buckets —— 每个父 path 入 1 行 costing（subtree_cost_required=1）
+    //    + 把命中叶子塞进 pendingSubRefs（与老 ROLLUP 共用 sub_ref 容器：写到同一张表，
+    //      下游通过 costing_row.matched_drill_rule_id 反查规则的 drill_action 区分两类
+    //      —— 见任务文档 §6 "常见坑" 末条；YAGNI，未来加 rollup_kind 列再分流）
+    Map<String, BomCostingRow> leafRolledParentByPath = new LinkedHashMap<>();
+    for (Map.Entry<String, LeafRollupBucket> e : leafRollupBuckets.entrySet()) {
+      LeafRollupBucket bucket = e.getValue();
+      // 安全：父 path 在主循环 LEAF_ROLLUP 分支已检查不在 stoppedPaths；这里再兜一道
+      if (stoppedPaths.contains(bucket.parentRaw.getPath())) {
+        result.getWarnings().add(
+            "LEAF_ROLLUP_PARENT_STOPPED: 父 " + bucket.parentRaw.getMaterialCode()
+                + " 在二次扫描时已被其他规则停用，跳过该 bucket（"
+                + bucket.leaves.size() + " 个叶子）");
+        continue;
+      }
+      // 父 path 若已被老 ROLLUP_TO_PARENT 命中（同时入 rolledUpByParentPath），优先老规则
+      //   —— 老 ROLLUP 父行是"它本身作结算"，新 LEAF_ROLLUP 也想让父作结算，二者目标同；
+      //   但老 ROLLUP 已经把整棵子树 stoppedPaths 了，叶子根本进不到 LEAF_ROLLUP 分支。
+      //   所以这种冲突理论上不会发生 —— 兜底处理：跳过 + warn。
+      if (rolledUpByParentPath.containsKey(bucket.parentRaw.getPath())) {
+        result.getWarnings().add(
+            "LEAF_ROLLUP_PARENT_STOPPED: 父 " + bucket.parentRaw.getMaterialCode()
+                + " 同时被老 ROLLUP_TO_PARENT 命中，跳过 LEAF_ROLLUP bucket");
+        continue;
+      }
+      BomCostingRow parentCosting = buildCostingRow(
+          bucket.parentRaw, request,
+          /* isCostingRow */ true,
+          /* subtreeRequired */ true,
+          bucket.matchedRuleId,
+          buildBatchId, builtAt, buType);
+      leafRolledParentByPath.put(bucket.parentRaw.getPath(), parentCosting);
+      subtreeRequiredCount++;
+      // 命中叶子写 sub_ref（仅命中叶子，不写父其他子件）
+      for (BomRawHierarchy leaf : bucket.leaves) {
+        pendingSubRefs.add(new PendingSubRef(bucket.parentRaw.getPath(), leaf, buType));
+      }
+    }
+
+    // 8) 合并：先老 ROLLUP 父件行 + LEAF_ROLLUP 父件行 + 后非 ROLLUP 行
+    List<BomCostingRow> allCostingRows = new ArrayList<>(
+        rolledUpByParentPath.size() + leafRolledParentByPath.size() + nonRolledOutput.size());
     allCostingRows.addAll(rolledUpByParentPath.values());
+    allCostingRows.addAll(leafRolledParentByPath.values());
     allCostingRows.addAll(nonRolledOutput);
+
+    // hotfix-2026-04-27：写之前先清掉本次 (oa+top+asOfDate) 已有的 costing_row。
+    //
+    // 原 batchUpsert（按 oa+top+asOfDate+path 五元组 UPSERT）只能覆盖"本次产生的同 path"
+    // 行；如果某条老 path 因为规则配置变更（如 T11 停用规则 #4）后不再产生 → 老行
+    // 既不会被覆盖也不会被删 → 残留为"幽灵行"。
+    //
+    // 改为 DELETE+INSERT：让本次拍平结果是该 (oa, top, asOfDate) 下唯一权威快照。
+    // sub_ref 由 fk_sub_ref_costing ON DELETE CASCADE 自动级联清，无需手工清。
+    //
+    // 锁 as_of_date：DELETE 范围只到本次 as_of_date 这一份月度快照，绝不动其他历史月度。
+    costingMapper.delete(
+        Wrappers.<BomCostingRow>lambdaQuery()
+            .eq(BomCostingRow::getOaNo, request.getOaNo())
+            .eq(BomCostingRow::getTopProductCode, request.getTopProductCode())
+            .eq(BomCostingRow::getAsOfDate, asOf));
     int written = writeInBatches(allCostingRows);
     result.setCostingRowsWritten(written);
     result.setSubtreeRequiredCount(subtreeRequiredCount);
 
-    // 8) T8：反查 ROLLUP 父件结算行的 id，批量写 sub_ref
+    // 9) T8 + T11：反查 ROLLUP/LEAF_ROLLUP 父件结算行的 id，批量写 sub_ref
+    //    parentPaths 合集 = 老 ROLLUP 父 ∪ LEAF_ROLLUP 父
     if (!pendingSubRefs.isEmpty()) {
-      int subRefCount = writeSubRefs(request, pendingSubRefs, rolledUpByParentPath.keySet());
-      log.info("flatten 写入 sub_ref {} 条 for {} 个父件",
-          subRefCount, rolledUpByParentPath.size());
+      java.util.Set<String> allParentPaths = new java.util.HashSet<>();
+      allParentPaths.addAll(rolledUpByParentPath.keySet());
+      allParentPaths.addAll(leafRolledParentByPath.keySet());
+      int subRefCount = writeSubRefs(request, pendingSubRefs, allParentPaths);
+      log.info("flatten 写入 sub_ref {} 条 for {} 老 ROLLUP 父 + {} LEAF_ROLLUP 父",
+          subRefCount, rolledUpByParentPath.size(), leafRolledParentByPath.size());
     }
 
     log.info(
-        "flatten 完成: oa={} top={} asOf={} written={} subtreeRequired={} rolledUpParents={} warnings={}",
+        "flatten 完成: oa={} top={} asOf={} written={} subtreeRequired={} rolledUpParents={} leafRollupParents={} warnings={}",
         request.getOaNo(), request.getTopProductCode(), asOf,
-        written, subtreeRequiredCount, rolledUpByParentPath.size(), result.getWarnings().size());
+        written, subtreeRequiredCount,
+        rolledUpByParentPath.size(), leafRolledParentByPath.size(),
+        result.getWarnings().size());
     return result;
   }
 
@@ -447,4 +581,32 @@ public class BomFlattenServiceImpl implements BomFlattenService {
 
   /** 暂存本次 flatten 里一条 ROLLUP 命中子件的信息，等父件 costing_row 落库后回填 id。 */
   private record PendingSubRef(String parentPath, BomRawHierarchy child, String buType) {}
+
+  /**
+   * T11 · LEAF_ROLLUP_TO_PARENT 命中桶。
+   *
+   * <p>主循环按 path 升序遍历时，命中铜管类叶子先攒到 bucket（按"父 path"去重），
+   * 主循环结束后扫 bucket 一次性写：
+   * <ul>
+   *   <li>父 path 入 1 行 costing_row（subtree_cost_required=1，matched_drill_rule_id=该规则 id）</li>
+   *   <li>所有命中叶子写 sub_ref（仅命中叶子，不含父其他兄弟子件）</li>
+   * </ul>
+   *
+   * <p>matchedRuleId 取首个命中该 bucket 的规则 id；同一父下多个叶子被不同规则命中
+   * 的场景在当前 bucket 模型里不区分（YAGNI；实际只有 1 条 LEAF_ROLLUP 规则）。
+   */
+  private static class LeafRollupBucket {
+    final BomRawHierarchy parentRaw;
+    final Long matchedRuleId;
+    final List<BomRawHierarchy> leaves = new ArrayList<>();
+
+    LeafRollupBucket(BomRawHierarchy parentRaw, Long matchedRuleId) {
+      this.parentRaw = parentRaw;
+      this.matchedRuleId = matchedRuleId;
+    }
+
+    void addLeaf(BomRawHierarchy leaf) {
+      leaves.add(leaf);
+    }
+  }
 }
