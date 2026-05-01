@@ -190,7 +190,9 @@ class DdlMigrationTest {
                  + "WHERE variable_code = 'blank_weight'")) {
       assertThat(rs.next()).isTrue();
       assertThat(rs.getString("aliases_json")).contains("下料重");
-      assertThat(rs.getString("context_binding_json")).contains("blank_weight");
+      // T13-A：context_binding_json 的 field 字段是 camelCase（V31 把 snake_case 改成了 camelCase），
+      // 老断言 "blank_weight" 落空。这里改成 "blankWeight" 与 V24/V31 后的实际数据保持一致。
+      assertThat(rs.getString("context_binding_json")).contains("blankWeight");
     }
 
     // (5) FINANCE_FACTOR 侧 Cu 应被补上 aliases_json（电解铜）

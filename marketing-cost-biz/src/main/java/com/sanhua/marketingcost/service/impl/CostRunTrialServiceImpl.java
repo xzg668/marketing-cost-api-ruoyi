@@ -14,6 +14,10 @@ import com.sanhua.marketingcost.service.CostRunPartItemService;
 import com.sanhua.marketingcost.service.CostRunProgressStore;
 import com.sanhua.marketingcost.service.CostRunResultService;
 import com.sanhua.marketingcost.service.CostRunTrialService;
+import com.sanhua.marketingcost.service.MaterialMasterSyncService;
+import com.sanhua.marketingcost.service.PriceLinkedCalcService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -31,7 +35,12 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class CostRunTrialServiceImpl implements CostRunTrialService {
+  private static final Logger log = LoggerFactory.getLogger(CostRunTrialServiceImpl.class);
   private static final long PROGRESS_CLEANUP_DELAY_MINUTES = 5;
+  /** T15：主档同步完成时的进度节点（同步失败卡这里 + 红字） */
+  private static final int PROGRESS_AFTER_SYNC = 5;
+  /** T23：联动价 refresh 完成时的进度节点 */
+  private static final int PROGRESS_AFTER_LINKED_REFRESH = 10;
 
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
@@ -40,6 +49,10 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
   private final CostRunResultService costRunResultService;
   private final CostRunProgressStore progressStore;
   private final TransactionTemplate transactionTemplate;
+  /** T15：主档同步入口，doRun 第一步调用 */
+  private final MaterialMasterSyncService materialMasterSyncService;
+  /** T23：联动价 refresh 入口，doRun 第二步调用，确保 calc_item 用当前 OA 表头锁价实算 */
+  private final PriceLinkedCalcService priceLinkedCalcService;
   private final ScheduledExecutorService cleanupScheduler =
       Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "progress-cleanup");
@@ -59,7 +72,9 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
       CostRunCostItemService costRunCostItemService,
       CostRunResultService costRunResultService,
       CostRunProgressStore progressStore,
-      TransactionTemplate transactionTemplate) {
+      TransactionTemplate transactionTemplate,
+      MaterialMasterSyncService materialMasterSyncService,
+      PriceLinkedCalcService priceLinkedCalcService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.costRunPartItemService = costRunPartItemService;
@@ -67,6 +82,8 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
     this.costRunResultService = costRunResultService;
     this.progressStore = progressStore;
     this.transactionTemplate = transactionTemplate;
+    this.materialMasterSyncService = materialMasterSyncService;
+    this.priceLinkedCalcService = priceLinkedCalcService;
   }
 
   @Override
@@ -76,11 +93,8 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
       return CompletableFuture.completedFuture(new CostRunTrialResponse());
     }
     String oaNoValue = oaNo.trim();
-    // 并发防重：同一 OA 单号正在试算中则拒绝
-    if (!progressStore.start(oaNoValue)) {
-      CostRunTrialResponse busy = new CostRunTrialResponse();
-      return CompletableFuture.completedFuture(busy);
-    }
+    // T17：worker 接到 task → QUEUED 改 RUNNING（防重已在 controller.enqueue 做过）
+    progressStore.markRunning(oaNoValue);
     try {
       CostRunTrialResponse response = transactionTemplate.execute(status -> doRun(oaNoValue));
       progressStore.complete(oaNoValue);
@@ -94,6 +108,31 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
   }
 
   private CostRunTrialResponse doRun(String oaNoValue) {
+    // T15：第一步同步主档（独立子事务），失败抛出由 run() 的 catch 落到 progressStore.fail
+    try {
+      MaterialMasterSyncService.SyncResult syncResult =
+          materialMasterSyncService.syncByOaNo(oaNoValue);
+      log.info(
+          "T15 sync done: oa={} codes={} stagingHits={} affected={}",
+          oaNoValue, syncResult.distinctCodes(), syncResult.stagingHits(), syncResult.affectedRows());
+      progressStore.update(oaNoValue, PROGRESS_AFTER_SYNC);
+    } catch (RuntimeException syncEx) {
+      log.error("T15 主档同步失败: oa={}", oaNoValue, syncEx);
+      throw new RuntimeException("主档同步失败: " + syncEx.getMessage(), syncEx);
+    }
+
+    // T23：第二步刷新联动价 calc_item，让 trial 用当前 OA 表头锁价 + 最新基价的实算结果，
+    //      避免取到历史 calc 快照（之前 OA 表头铜价改了但 calc_item 还是老值的 bug）。
+    //      跟 admin "联动价计算 -> 刷新" 按钮调的同一个 API，幂等。
+    try {
+      int refreshedRows = priceLinkedCalcService.refresh(oaNoValue);
+      log.info("T23 联动价 refresh done: oa={} refreshed={}", oaNoValue, refreshedRows);
+      progressStore.update(oaNoValue, PROGRESS_AFTER_LINKED_REFRESH);
+    } catch (RuntimeException refreshEx) {
+      log.error("T23 联动价 refresh 失败: oa={}", oaNoValue, refreshEx);
+      throw new RuntimeException("联动价刷新失败: " + refreshEx.getMessage(), refreshEx);
+    }
+
     OaForm form =
         oaFormMapper.selectOne(
             Wrappers.lambdaQuery(OaForm.class).eq(OaForm::getOaNo, oaNoValue).last("LIMIT 1"));
@@ -122,21 +161,42 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
       }
     }
 
-    int totalSteps = Math.max(1, 1 + productCodes.size());
-    int doneSteps = 0;
+    // T16/T23：进度切片
+    //   [0-5]    主档同步
+    //   [5-10]   联动价 refresh（T23）
+    //   [10-60]  部品取价（50% 跨度，子进度按部品 i/N 累加）
+    //   [60-95]  N 个产品的费用核算（35% 跨度，每产品 35/N）
+    //   [95-100] saveOrUpdate + OA 状态更新
+    final int PROGRESS_PARTS_END = 60;
+    final int PROGRESS_COSTS_END = 95;
+    int productCount = Math.max(1, productCodes.size());
+
     List<CostRunPartItemDto> partItems =
         productCodes.isEmpty()
             ? Collections.emptyList()
-            : costRunPartItemService.listByOaNo(oaNoValue);
-    doneSteps += 1;
-    progressStore.update(oaNoValue, calcPercent(doneSteps, totalSteps));
+            : costRunPartItemService.listByOaNo(
+                oaNoValue,
+                p -> progressStore.update(
+                    oaNoValue,
+                    PROGRESS_AFTER_LINKED_REFRESH
+                        + p * (PROGRESS_PARTS_END - PROGRESS_AFTER_LINKED_REFRESH) / 100));
+    progressStore.update(oaNoValue, PROGRESS_PARTS_END);
 
     int costItemCount = 0;
+    int productIndex = 0;
     for (String productCode : productCodes) {
+      final int idx = productIndex; // for lambda
+      int productStart =
+          PROGRESS_PARTS_END + idx * (PROGRESS_COSTS_END - PROGRESS_PARTS_END) / productCount;
+      int productEnd =
+          PROGRESS_PARTS_END + (idx + 1) * (PROGRESS_COSTS_END - PROGRESS_PARTS_END) / productCount;
       Set<String> materialCodes =
           materialCodesByProduct.getOrDefault(productCode, Collections.emptySet());
       List<CostRunCostItemDto> costItems =
-          costRunCostItemService.listByMaterialCodes(oaNoValue, productCode, materialCodes);
+          costRunCostItemService.listByMaterialCodes(
+              oaNoValue, productCode, materialCodes,
+              p -> progressStore.update(
+                  oaNoValue, productStart + p * (productEnd - productStart) / 100));
       costItemCount += costItems.size();
       java.math.BigDecimal totalCost = null;
       for (CostRunCostItemDto item : costItems) {
@@ -150,9 +210,9 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
       if (item != null) {
         costRunResultService.saveOrUpdate(form, item);
       }
-      doneSteps += 1;
-      progressStore.update(oaNoValue, calcPercent(doneSteps, totalSteps));
+      productIndex++;
     }
+    progressStore.update(oaNoValue, PROGRESS_COSTS_END);
 
     oaFormMapper.update(
         null,
@@ -168,14 +228,6 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
       return progressStore.get(null);
     }
     return progressStore.get(oaNo.trim());
-  }
-
-  private int calcPercent(int doneSteps, int totalSteps) {
-    if (totalSteps <= 0) {
-      return 100;
-    }
-    double ratio = (double) doneSteps / (double) totalSteps;
-    return Math.max(0, Math.min(100, (int) Math.round(ratio * 100)));
   }
 
   /** 延迟清理进度记录，给前端足够时间轮询到最终状态。 */

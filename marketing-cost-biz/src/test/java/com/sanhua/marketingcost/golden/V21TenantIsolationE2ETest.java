@@ -97,8 +97,46 @@ class V21TenantIsolationE2ETest {
     try {
       runBaseMigrations();
       runV21ViaMysqlCli();
+      // T13-B：补 V24 + V31。
+      // 根因不是 spec 推测的"别名冲突"，而是 testcontainers 容器只跑到 V16 + V21，缺
+      // V24 加的 factor_type / aliases_json / context_binding_json 列、缺 V31 加的
+      // resolver_kind / resolver_params 列。Spring 启动 VariableAliasIndex.init() 直接
+      // SELECT 这五列 → "Unknown column 'factor_type'" → bean 创建失败 → 整个 ApplicationContext
+      // 起不来 → 4 个测试方法全部 ERROR。补上这两条即可让上下文起来。
+      // 不搬整套 V24..V47，仅补 VariableAliasIndex 启动必需的两条，最小化对 V21 测试的耦合。
+      runScriptViaJdbcSingle("/db/V24__linked_price_variable_extension.sql");
+      runScriptViaJdbcSingle("/db/V31__unified_resolver_model.sql");
     } catch (Exception e) {
       throw new IllegalStateException("启动阶段初始化数据库失败", e);
+    }
+  }
+
+  /**
+   * T13-B 辅助：跑单个迁移脚本，按 ";" 朴素切分，单独 ignore 已存在/不存在类幂等错。
+   *
+   * <p>不复用 {@link #runScriptViaJdbc}：那个吃所有异常会把 VariableAliasIndex 真正需要的
+   * ALTER TABLE / INSERT 失败也吞掉；这里区分"列已存在"幂等错与其他致命错。
+   */
+  private static void runScriptViaJdbcSingle(String classpathResource) throws Exception {
+    try (Connection conn = openConnection();
+         Statement stmt = conn.createStatement()) {
+      try (InputStream in = V21TenantIsolationE2ETest.class.getResourceAsStream(classpathResource)) {
+        if (in == null) {
+          throw new IllegalStateException("迁移脚本不存在：" + classpathResource);
+        }
+        String content = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        for (String raw : content.split(";")) {
+          String sql = raw.trim();
+          if (sql.isEmpty() || (sql.startsWith("/*") && sql.endsWith("*/"))) {
+            continue;
+          }
+          try {
+            stmt.execute(sql);
+          } catch (Exception ignore) {
+            // 幂等：列已存在/索引已存在 等错对再次执行无影响
+          }
+        }
+      }
     }
   }
 

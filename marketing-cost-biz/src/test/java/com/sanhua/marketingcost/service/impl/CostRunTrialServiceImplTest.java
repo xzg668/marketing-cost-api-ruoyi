@@ -10,6 +10,8 @@ import com.sanhua.marketingcost.service.CostRunCostItemService;
 import com.sanhua.marketingcost.service.CostRunPartItemService;
 import com.sanhua.marketingcost.service.CostRunProgressStore;
 import com.sanhua.marketingcost.service.CostRunResultService;
+import com.sanhua.marketingcost.service.MaterialMasterSyncService;
+import com.sanhua.marketingcost.service.PriceLinkedCalcService;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import org.junit.jupiter.api.BeforeEach;
@@ -46,7 +48,9 @@ class CostRunTrialServiceImplTest {
     service = new CostRunTrialServiceImpl(
         oaFormMapper, oaFormItemMapper,
         partItemService, costItemService, resultService,
-        progressStore, transactionTemplate);
+        progressStore, transactionTemplate,
+        mock(MaterialMasterSyncService.class),
+        mock(PriceLinkedCalcService.class));
   }
 
   // ========== 参数校验 ==========
@@ -68,8 +72,8 @@ class CostRunTrialServiceImplTest {
   // ========== 并发防重 ==========
 
   @Test
-  @DisplayName("同一 OA 单号重复提交应被拒绝")
-  void testDuplicateRunRejected() throws Exception {
+  @DisplayName("T17：service.run 自身不再防重，两次提交都进入 doRun（防重移至 controller.enqueue）")
+  void testServiceRunNoLongerOwnsDedup() throws Exception {
     when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
       Thread.sleep(100);
       return new CostRunTrialResponse();
@@ -85,7 +89,8 @@ class CostRunTrialServiceImplTest {
     CostRunTrialResponse resp = secondRun.get();
     assertNotNull(resp);
     firstRun.join();
-    verify(transactionTemplate, times(1)).execute(any());
+    // T17 起：防重责任在 controller.enqueue，service.run 不再拦截，两次都执行
+    verify(transactionTemplate, times(2)).execute(any());
   }
 
   @Test

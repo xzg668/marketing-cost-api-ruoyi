@@ -12,11 +12,16 @@ spring:
       max-request-size: 200MB
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/marketing_cost?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true}
+    # T13+：MySQL server character_set_*=latin1（docker my.cnf 默认未配 utf8mb4），
+    # JDBC URL 不显式指定 charset 时新写入会被 server 当 latin1 解码再以 utf8mb4 存 → mojibake。
+    # 显式 useUnicode=true&characterEncoding=utf-8 强制连接走 utf8mb4，挡住后续新数据污染。
+    # （历史已 mojibake 数据由 fix_mojibake 脚本一次性修复。）
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/marketing_cost?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true&useUnicode=true&characterEncoding=utf-8&connectionCollation=utf8mb4_unicode_ci}
     username: ${SPRING_DATASOURCE_USERNAME:root}
     password: ${SPRING_DATASOURCE_PASSWORD:root123}
     hikari:
-      maximum-pool-size: 20
+      # T19：20 → 40 配合 costRunExecutor 16 + 主同步独立事务（REQUIRES_NEW）+ Async 子查询并发
+      maximum-pool-size: 40
       minimum-idle: 5
       connection-timeout: 30000
       idle-timeout: 600000
@@ -64,16 +69,10 @@ app:
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
 
-# 取价路由 Strangler 双跑配置
-#   mode = legacy: 仅走老 2 桶 (FIXED + LINKED)，回滚保险
-#   mode = dual:   两套并行算 → diff 写 WARN（>warnThreshold）+ 返回 legacy 结果（默认）
-#   mode = new:    仅走新 6 桶 Router，金标全绿后切换
+# V48 (T04) 起取价路径仅走 Router + 4 桶 Resolver（FIXED/LINKED/RANGE/MAKE）。
+# 老 Strangler 双跑配置（cost.router.mode = legacy/dual/new）已删除：legacy 老结果都是测试期造的数据，
+# 没有真实业务价值，保留双跑只是浪费 + 副作用（业务实际拿到 legacy 结果而非 v1 新功能）。
 cost:
-  router:
-    mode: ${COST_ROUTER_MODE:dual}
-    dual:
-      # 双跑差异告警阈值（元/件）；< 阈值不打 WARN，避免噪声
-      warnThreshold: ${COST_ROUTER_DUAL_WARN_THRESHOLD:0.01}
   # Task #9：水电费是否计入材料费
   #   false（默认）= 与 Excel 见机表3 口径一致：水电独立列报，不进材料费
   #   true          = 老逻辑兜底：把 deptTotal 全部（含水电）并入材料费，便于历史报表回溯
@@ -81,9 +80,10 @@ cost:
     includeWaterPower: ${COST_MATERIAL_INCLUDE_WATER_POWER:false}
   # 联动价 parser 模式灰度（T08 配置）
   #   legacy = 只走旧 evaluateExpression（保留 [中文] 包裹兼容）
-  #   dual（默认）= legacy 主、new 并跑；差异 > dual-warn-threshold 写 WARN，返回 legacy 值
-  #   new    = 只走新 FormulaNormalizer + VariableRegistry 管线；失败直接抛错
+  #   dual   = legacy 主、new 并跑；差异 > dual-warn-threshold 写 WARN，返回 legacy 值
+  #   new（默认）= 只走新 FormulaNormalizer + VariableRegistry 管线；失败直接抛错
+  # V48 业务确认老 parser 有口径问题（不做含税转换），全量切到 new；trace 弹窗不再有 legacy/diff
   linked:
     parser:
-      mode: ${COST_LINKED_PARSER_MODE:dual}
+      mode: ${COST_LINKED_PARSER_MODE:new}
       dual-warn-threshold: ${COST_LINKED_PARSER_DUAL_WARN_THRESHOLD:0.01}

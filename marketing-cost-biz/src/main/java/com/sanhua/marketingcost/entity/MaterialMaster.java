@@ -19,6 +19,11 @@ public class MaterialMaster {
   private String drawingNo;
   private String shapeAttr;
   private String material;
+  /**
+   * T11：成本要素分类（U9 cost_element），含 '主要材料-包装材料' / '主要材料-原材料' /
+   * '主要材料-焊料' / '主要材料-零部件(采购件)' 等。包装材料用于自动归集到 OTHER_EXP_PACKAGE。
+   */
+  private String costElement;
   private BigDecimal theoreticalWeightG;
   private BigDecimal netWeightKg;
   private String bizUnit;
@@ -97,6 +102,14 @@ public class MaterialMaster {
 
   public void setMaterial(String material) {
     this.material = material;
+  }
+
+  public String getCostElement() {
+    return costElement;
+  }
+
+  public void setCostElement(String costElement) {
+    this.costElement = costElement;
   }
 
   public BigDecimal getTheoreticalWeightG() {

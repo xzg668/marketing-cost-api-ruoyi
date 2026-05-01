@@ -22,6 +22,8 @@ public class CostRunCostItem {
   private BigDecimal amount;
   private String sourceTable;
   private Long sourceId;
+  /** T10：缺率/异常说明（V56 加列）；非空时表示费用项有"缺率"等数据缺失，前端可展示告警 */
+  private String remark;
 
   /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
   @TableField(fill = FieldFill.INSERT)
@@ -127,6 +129,14 @@ public class CostRunCostItem {
 
   public void setSourceId(Long sourceId) {
     this.sourceId = sourceId;
+  }
+
+  public String getRemark() {
+    return remark;
+  }
+
+  public void setRemark(String remark) {
+    this.remark = remark;
   }
 
   public LocalDateTime getCreatedAt() {

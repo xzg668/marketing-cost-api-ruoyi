@@ -10,6 +10,11 @@ public class CostRunDetailDto {
   private String productModel;
   private java.math.BigDecimal copperPrice;
   private java.math.BigDecimal zincPrice;
+  /**
+   * T12：不含税总成本快捷取值（= costItems 中 cost_code='TOTAL' 行的 amount）。
+   * 提供顶层字段是为了让前端不用扫数组。null 表示没算出（缺率导致 totalAmount=null）。
+   */
+  private java.math.BigDecimal total;
 
   public List<CostRunPartItemDto> getPartItems() {
     return partItems;
@@ -65,5 +70,13 @@ public class CostRunDetailDto {
 
   public void setZincPrice(java.math.BigDecimal zincPrice) {
     this.zincPrice = zincPrice;
+  }
+
+  public java.math.BigDecimal getTotal() {
+    return total;
+  }
+
+  public void setTotal(java.math.BigDecimal total) {
+    this.total = total;
   }
 }

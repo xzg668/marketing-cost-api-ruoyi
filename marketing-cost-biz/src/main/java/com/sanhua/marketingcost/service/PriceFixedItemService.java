@@ -7,7 +7,14 @@ import com.sanhua.marketingcost.entity.PriceFixedItem;
 import java.util.List;
 
 public interface PriceFixedItemService {
-  Page<PriceFixedItem> page(String materialCode, String supplierCode, int page, int pageSize);
+  /**
+   * 分页查询。
+   *
+   * @param sourceType    V46 新增：按来源类型筛选（PURCHASE/MAKE/SETTLE/SCRAP），null=全部
+   * @param pricingMonth  V46 新增：按结算期间筛选（YYYY-MM），null=全部
+   */
+  Page<PriceFixedItem> page(String materialCode, String supplierCode, String sourceType,
+      String pricingMonth, int page, int pageSize);
 
   PriceFixedItem create(PriceFixedItemUpdateRequest request);
 

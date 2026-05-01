@@ -36,6 +36,39 @@ public class PriceFixedItemImportRequest {
     private LocalDate effectiveTo;
     private String orderType;
     private BigDecimal quota;
+    /** V46 来源类型 */
+    private String sourceType;
+    /** V46 采购流程编号 */
+    private String processNo;
+    /** V46 计划价（SETTLE 来源）*/
+    private BigDecimal plannedPrice;
+    /** V46 上浮比例（SETTLE 来源）*/
+    private BigDecimal markupRatio;
+    /** V46 备注 */
+    private String remark;
+    /** V46 结算期间 YYYY-MM */
+    private String pricingMonth;
+    /** V47 基准结算价（C5）*/
+    private BigDecimal baseSettlePrice;
+    /** V47 联动结算价（C6）*/
+    private BigDecimal linkedSettlePrice;
+    public BigDecimal getBaseSettlePrice() { return baseSettlePrice; }
+    public void setBaseSettlePrice(BigDecimal v) { this.baseSettlePrice = v; }
+    public BigDecimal getLinkedSettlePrice() { return linkedSettlePrice; }
+    public void setLinkedSettlePrice(BigDecimal v) { this.linkedSettlePrice = v; }
+
+    public String getSourceType() { return sourceType; }
+    public void setSourceType(String sourceType) { this.sourceType = sourceType; }
+    public String getProcessNo() { return processNo; }
+    public void setProcessNo(String processNo) { this.processNo = processNo; }
+    public BigDecimal getPlannedPrice() { return plannedPrice; }
+    public void setPlannedPrice(BigDecimal plannedPrice) { this.plannedPrice = plannedPrice; }
+    public BigDecimal getMarkupRatio() { return markupRatio; }
+    public void setMarkupRatio(BigDecimal markupRatio) { this.markupRatio = markupRatio; }
+    public String getRemark() { return remark; }
+    public void setRemark(String remark) { this.remark = remark; }
+    public String getPricingMonth() { return pricingMonth; }
+    public void setPricingMonth(String pricingMonth) { this.pricingMonth = pricingMonth; }
 
     public String getOrgCode() {
       return orgCode;

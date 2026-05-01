@@ -33,6 +33,13 @@ public class CostRunPartItemDto {
   /** V10：数据来源系统（srm/oa/u9/cms/manual），用于审计追溯 */
   private String sourceSystem;
 
+  /**
+   * T12：成本要素分类（来自 lp_material_master.cost_element），如 '主要材料-包装材料' /
+   * '主要材料-原材料' / '主要材料-焊料' / '主要材料-零部件(采购件)'。
+   * 前端用它做分组 / 染色（如包装件标橙色提示纳入 OTHER_EXP_PACKAGE）。
+   */
+  private String costElement;
+
   public String getOaNo() {
     return oaNo;
   }
@@ -175,5 +182,13 @@ public class CostRunPartItemDto {
 
   public void setSourceSystem(String sourceSystem) {
     this.sourceSystem = sourceSystem;
+  }
+
+  public String getCostElement() {
+    return costElement;
+  }
+
+  public void setCostElement(String costElement) {
+    this.costElement = costElement;
   }
 }

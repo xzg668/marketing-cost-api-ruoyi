@@ -15,8 +15,13 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
 import com.sanhua.marketingcost.service.CostRunPartItemService;
 import com.sanhua.marketingcost.service.CostRunResultService;
+import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -71,11 +76,15 @@ public class CostRunDetailController {
         filteredParts.add(item);
       }
     }
+    // T12：批量查主档把 cost_element 灌进 partItems（前端 T13 用来分组/染色）
+    enrichPartsWithCostElement(filteredParts);
     List<CostRunCostItemDto> costItems =
         costRunCostItemService.listStoredByOaNo(oaNo, productCodeValue);
     CostRunDetailDto dto = new CostRunDetailDto();
     dto.setPartItems(filteredParts);
     dto.setCostItems(costItems);
+    // T12：从 costItems 抽 TOTAL 给顶层 total，省得前端扫数组
+    dto.setTotal(extractTotal(costItems));
     MaterialMaster materialMaster =
         materialMasterMapper.selectOne(
             Wrappers.lambdaQuery(MaterialMaster.class)
@@ -120,5 +129,52 @@ public class CostRunDetailController {
       return null;
     }
     return value.trim();
+  }
+
+  /**
+   * T12：批量给 partItems 灌 cost_element。一次 IN 查询代替逐行 N+1。
+   * 主档查不到的部品 cost_element 留 null（前端按"未分类"显示即可）。
+   */
+  private void enrichPartsWithCostElement(List<CostRunPartItemDto> parts) {
+    if (parts == null || parts.isEmpty()) {
+      return;
+    }
+    Set<String> partCodes = new LinkedHashSet<>();
+    for (CostRunPartItemDto p : parts) {
+      if (StringUtils.hasText(p.getPartCode())) {
+        partCodes.add(p.getPartCode().trim());
+      }
+    }
+    if (partCodes.isEmpty()) {
+      return;
+    }
+    List<MaterialMaster> rows =
+        materialMasterMapper.selectList(
+            Wrappers.lambdaQuery(MaterialMaster.class)
+                .in(MaterialMaster::getMaterialCode, partCodes));
+    Map<String, String> codeToElement = new HashMap<>();
+    for (MaterialMaster m : rows) {
+      if (m.getMaterialCode() != null) {
+        codeToElement.put(m.getMaterialCode(), m.getCostElement());
+      }
+    }
+    for (CostRunPartItemDto p : parts) {
+      if (StringUtils.hasText(p.getPartCode())) {
+        p.setCostElement(codeToElement.get(p.getPartCode().trim()));
+      }
+    }
+  }
+
+  /** T12：从 costItems 抽 cost_code='TOTAL' 行的 amount 作为顶层 total；找不到返 null。 */
+  private BigDecimal extractTotal(List<CostRunCostItemDto> costItems) {
+    if (costItems == null) {
+      return null;
+    }
+    for (CostRunCostItemDto c : costItems) {
+      if ("TOTAL".equals(c.getCostCode())) {
+        return c.getAmount();
+      }
+    }
+    return null;
   }
 }

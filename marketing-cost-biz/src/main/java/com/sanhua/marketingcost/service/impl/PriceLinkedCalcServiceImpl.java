@@ -124,39 +124,72 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
   @Override
   public Page<PriceLinkedCalcRow> page(
       String oaNo, String itemCode, String shapeAttr, int page, int pageSize) {
-    // T5.5：BOM 行源切换为 lp_bom_costing_row
-    var query = Wrappers.lambdaQuery(BomCostingRow.class);
-    if (StringUtils.hasText(oaNo)) {
-      query.like(BomCostingRow::getOaNo, oaNo.trim());
-    }
+    // V48 业务逻辑重写：
+    //   联动价计算 = 联动价主表 lp_price_linked_item 全展示（按料号去重，本表已是料号唯一）。
+    //   OA 单号只是上下文：从 BOM (lp_bom_costing_row) 聚合该料号的总用量（SUM(qty_per_top)）。
+    //   - 联动价主表 22 条 → 永远 22 行结果（按页切片）
+    //   - 该 OA 的 BOM 没用到的料号 → 部品用量 = NULL（前端展示空）
+    //   - 该 OA 的 BOM 多次用到的料号 → 部品用量 = 累计求和
+    //   shapeAttr 入参保留兼容前端契约，但联动价主表无该字段，仅在合成 BomCostingRow 时透传
+    //   shape 信息（用于 calc_item 主键 + trace）。
+    var liQuery = Wrappers.lambdaQuery(PriceLinkedItem.class)
+        .eq(PriceLinkedItem::getDeleted, 0);
     if (StringUtils.hasText(itemCode)) {
-      // 老字段 item_code → 新字段 material_code
-      query.like(BomCostingRow::getMaterialCode, itemCode.trim());
+      liQuery.like(PriceLinkedItem::getMaterialCode, itemCode.trim());
     }
-    if (StringUtils.hasText(shapeAttr)) {
-      query.eq(BomCostingRow::getShapeAttr, shapeAttr.trim());
+    liQuery.orderByAsc(PriceLinkedItem::getId);
+
+    Page<PriceLinkedItem> liPager = new Page<>(page, pageSize);
+    Page<PriceLinkedItem> liPage = priceLinkedItemMapper.selectPage(liPager, liQuery);
+    List<PriceLinkedItem> linkedItems = liPage.getRecords();
+
+    // 聚合该 OA 的 BOM 用量（按 material_code → SUM(qty_per_top)）
+    Map<String, BigDecimal> bomQtyMap = new HashMap<>();
+    Map<String, String> bomShapeMap = new HashMap<>();
+    if (StringUtils.hasText(oaNo) && !linkedItems.isEmpty()) {
+      List<String> codes = new ArrayList<>();
+      for (PriceLinkedItem li : linkedItems) {
+        if (StringUtils.hasText(li.getMaterialCode())) {
+          codes.add(li.getMaterialCode().trim());
+        }
+      }
+      if (!codes.isEmpty()) {
+        var bomQuery = Wrappers.lambdaQuery(BomCostingRow.class)
+            .eq(BomCostingRow::getOaNo, oaNo.trim())
+            .in(BomCostingRow::getMaterialCode, codes);
+        if (StringUtils.hasText(shapeAttr)) {
+          bomQuery.eq(BomCostingRow::getShapeAttr, shapeAttr.trim());
+        }
+        for (BomCostingRow b : bomCostingRowMapper.selectList(bomQuery)) {
+          BigDecimal qty = b.getQtyPerTop() == null ? BigDecimal.ZERO : b.getQtyPerTop();
+          bomQtyMap.merge(b.getMaterialCode(), qty, BigDecimal::add);
+          bomShapeMap.putIfAbsent(b.getMaterialCode(), b.getShapeAttr());
+        }
+      }
     }
-    // 子查询：联动价行必须在 lp_material_price_type 里有 price_type=联动价 的路由
-    // 表名 lp_bom_manage_item → lp_bom_costing_row，字段 item_code → material_code
-    query.apply(
-        "exists (select 1 from lp_material_price_type p "
-            + "where p.material_code = lp_bom_costing_row.material_code "
-            + "and p.material_shape = lp_bom_costing_row.shape_attr "
-            + "and p.price_type = {0})",
-        LINKED_PRICE_TYPE);
-    query.orderByAsc(BomCostingRow::getOaNo).orderByAsc(BomCostingRow::getId);
-    Page<BomCostingRow> pager = new Page<>(page, pageSize);
-    Page<BomCostingRow> bomPage = bomCostingRowMapper.selectPage(pager, query);
-    List<BomCostingRow> records = bomPage.getRecords();
+
+    // 合成 BomCostingRow 实例 —— 复用 fetchCalcItems / ensureCalcItems / fetchLinkedItems 等辅助方法
+    // 同步 oaNo（空 oaNo 用 ""）+ material_code + shape（BOM 取首条；BOM 没的料号默认"部品联动"）+ 聚合用量
+    String oaNoForKey = StringUtils.hasText(oaNo) ? oaNo.trim() : "";
+    List<BomCostingRow> records = new ArrayList<>();
+    for (PriceLinkedItem li : linkedItems) {
+      BomCostingRow synth = new BomCostingRow();
+      synth.setOaNo(oaNoForKey);
+      synth.setMaterialCode(li.getMaterialCode());
+      synth.setMaterialName(li.getMaterialName());
+      synth.setShapeAttr(bomShapeMap.getOrDefault(li.getMaterialCode(), "部品联动"));
+      synth.setQtyPerTop(bomQtyMap.get(li.getMaterialCode()));
+      records.add(synth);
+    }
+
     Map<String, PriceLinkedCalcItem> calcMap = fetchCalcItems(records, oaNo);
     ensureCalcItems(records, calcMap);
-    // 拉一次 linked_item，用于带回中文/规范化公式，给前端行级 trace 弹窗展示
     Map<String, PriceLinkedItem> linkedItemMap = fetchLinkedItems(records);
+
     List<PriceLinkedCalcRow> rows = new ArrayList<>();
     for (BomCostingRow item : records) {
       PriceLinkedCalcRow row = new PriceLinkedCalcRow();
       row.setOaNo(item.getOaNo());
-      // 输出 DTO 字段名沿用老的 itemCode / bomQty（前端契约不变），值来自新实体的 materialCode / qtyPerTop
       row.setItemCode(item.getMaterialCode());
       row.setShapeAttr(item.getShapeAttr());
       row.setBomQty(item.getQtyPerTop());
@@ -181,7 +214,7 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       rows.add(row);
     }
     Page<PriceLinkedCalcRow> result = new Page<>(page, pageSize);
-    result.setTotal(bomPage.getTotal());
+    result.setTotal(liPage.getTotal());
     result.setRecords(rows);
     return result;
   }
@@ -198,11 +231,10 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
         Wrappers.lambdaQuery(BomCostingRow.class)
             .eq(BomCostingRow::getOaNo, oaNoValue)
             .apply(
-                "exists (select 1 from lp_material_price_type p "
-                    + "where p.material_code = lp_bom_costing_row.material_code "
-                    + "and p.material_shape = lp_bom_costing_row.shape_attr "
-                    + "and p.price_type = {0})",
-                LINKED_PRICE_TYPE));
+                // V48 业务逻辑（与 page() 同步）：联动价 = 联动价主表里有定义的料号。
+                "exists (select 1 from lp_price_linked_item li "
+                    + "where li.material_code = lp_bom_costing_row.material_code "
+                    + "and li.deleted = 0)"));
     if (items.isEmpty()) {
       return 0;
     }
@@ -386,14 +418,11 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     if (items == null || items.isEmpty()) {
       return Map.of();
     }
+    // V48：buildKey 不再含 shape，对应 fetch 也不再按 shape 过滤
     Set<String> itemCodes = new HashSet<>();
-    Set<String> shapeAttrs = new HashSet<>();
     for (BomCostingRow item : items) {
       if (StringUtils.hasText(item.getMaterialCode())) {
         itemCodes.add(item.getMaterialCode().trim());
-      }
-      if (StringUtils.hasText(item.getShapeAttr())) {
-        shapeAttrs.add(item.getShapeAttr().trim());
       }
     }
     if (itemCodes.isEmpty()) {
@@ -404,9 +433,7 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       query.eq(PriceLinkedCalcItem::getOaNo, oaNo.trim());
     }
     query.in(PriceLinkedCalcItem::getItemCode, itemCodes);
-    if (!shapeAttrs.isEmpty()) {
-      query.in(PriceLinkedCalcItem::getShapeAttr, shapeAttrs);
-    }
+    // V48：去掉 shape_attr 过滤 —— 业务唯一性是 (oa, item)，shape 仅是元数据
     List<PriceLinkedCalcItem> calcItems = priceLinkedCalcItemMapper.selectList(query);
     Map<String, PriceLinkedCalcItem> calcMap = new HashMap<>();
 
@@ -418,10 +445,14 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
   }
 
   private String buildKey(String oaNo, String itemCode, String shapeAttr) {
-    return String.format("%s|%s|%s",
+    // V48 修正：业务唯一性 = (oa_no, item_code)，**不再包含 shape_attr**。
+    // 历史问题：BOM 模型变更（V21 旧 BOM shape='部品联动' → 新 BOM shape='采购件'）
+    // 导致同一料号在 calc_item 表里出现两份，每次刷新如果 shape 不一致就再生一条。
+    // shape_attr 仍作为元数据存在 calc_item 里给前端展示，但**不参与唯一性判断**。
+    // 入参 shapeAttr 保留只为调用方契约不变。
+    return String.format("%s|%s",
         oaNo == null ? "" : oaNo.trim(),
-        itemCode == null ? "" : itemCode.trim(),
-        shapeAttr == null ? "" : shapeAttr.trim());
+        itemCode == null ? "" : itemCode.trim());
   }
 
   private Map<String, PriceLinkedItem> fetchLinkedItems(List<BomCostingRow> items) {
@@ -666,6 +697,14 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       return new NewCalcOutcome(null, trace);
     }
     trace.put("result", resp.getResult());
+    // V48 新增：联动价主表 manual_price（Excel 金标）+ 主表对应月份，方便前端弹窗对比
+    // 跟 result 对照：同月份就该一致，不一致 = OA 用了别的月份基价（金属价波动了）
+    if (linkedItem.getManualPrice() != null) {
+      trace.put("manualPrice", linkedItem.getManualPrice());
+    }
+    if (StringUtils.hasText(linkedItem.getPricingMonth())) {
+      trace.put("manualPriceMonth", linkedItem.getPricingMonth());
+    }
     return new NewCalcOutcome(resp.getResult(), trace);
   }
 

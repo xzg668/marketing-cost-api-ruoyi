@@ -88,7 +88,8 @@ class PriceFixedItemServiceImplTest {
 
     when(mapper.selectPage(any(), any())).thenReturn(page);
 
-    Page<PriceFixedItem> result = service.page(null, null, 1, 20);
+    // V46：page 签名扩成 6 参（加 sourceType / pricingMonth），老测试传 null 不影响行为
+    Page<PriceFixedItem> result = service.page(null, null, null, null, 1, 20);
 
     assertEquals(1, result.getTotal());
     assertEquals(1, result.getRecords().size());

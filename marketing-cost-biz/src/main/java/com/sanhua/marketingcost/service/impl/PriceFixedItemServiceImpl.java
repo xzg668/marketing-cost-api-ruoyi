@@ -25,14 +25,21 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
   }
 
   @Override
-  public Page<PriceFixedItem> page(String materialCode, String supplierCode, int page,
-      int pageSize) {
+  public Page<PriceFixedItem> page(String materialCode, String supplierCode, String sourceType,
+      String pricingMonth, int page, int pageSize) {
     var query = Wrappers.lambdaQuery(PriceFixedItem.class);
     if (StringUtils.hasText(materialCode)) {
       query.like(PriceFixedItem::getMaterialCode, materialCode.trim());
     }
     if (StringUtils.hasText(supplierCode)) {
       query.like(PriceFixedItem::getSupplierCode, supplierCode.trim());
+    }
+    // V46：来源类型 + 结算期间精确匹配（前端 tab + 月份选择器联动）
+    if (StringUtils.hasText(sourceType)) {
+      query.eq(PriceFixedItem::getSourceType, sourceType.trim());
+    }
+    if (StringUtils.hasText(pricingMonth)) {
+      query.eq(PriceFixedItem::getPricingMonth, pricingMonth.trim());
     }
     query.orderByDesc(PriceFixedItem::getId);
     Page<PriceFixedItem> pager = new Page<>(page, pageSize);
@@ -103,6 +110,12 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     return imported;
   }
 
+  /**
+   * V46：去重锚点对齐新 UK = (material_code, supplier_code, business_unit_type, source_type, pricing_month)
+   *
+   * <p>导入时按 source_type + pricing_month 区分同料号不同来源 / 不同月份的行，避免 UK 冲突。
+   * 老 effective_from 字段保留但不再作为去重维度（由 pricing_month 替代）。
+   */
   private PriceFixedItem findExisting(PriceFixedItemImportRequest.PriceFixedItemImportRow row) {
     var query = Wrappers.lambdaQuery(PriceFixedItem.class)
         .eq(PriceFixedItem::getMaterialCode, row.getMaterialCode().trim());
@@ -112,18 +125,17 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     } else {
       query.eq(PriceFixedItem::getSupplierCode, supplierCode);
     }
-    String specModel = trimToNull(row.getSpecModel());
-    if (specModel == null) {
-      query.isNull(PriceFixedItem::getSpecModel);
-    } else {
-      query.eq(PriceFixedItem::getSpecModel, specModel);
+    // V46：去掉 spec_model + effective_from 的去重，改用 source_type + pricing_month
+    String sourceType = trimToNull(row.getSourceType());
+    if (sourceType == null) {
+      sourceType = "PURCHASE";   // 与 fillDefaults 默认值一致
     }
-    LocalDate effectiveFrom = row.getEffectiveFrom();
-    if (effectiveFrom == null) {
-      query.isNull(PriceFixedItem::getEffectiveFrom);
-    } else {
-      query.eq(PriceFixedItem::getEffectiveFrom, effectiveFrom);
+    query.eq(PriceFixedItem::getSourceType, sourceType);
+    String pricingMonth = trimToNull(row.getPricingMonth());
+    if (pricingMonth == null) {
+      pricingMonth = "2026-03";
     }
+    query.eq(PriceFixedItem::getPricingMonth, pricingMonth);
     return itemMapper.selectOne(query.last("LIMIT 1"));
   }
 
@@ -151,6 +163,16 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     item.setEffectiveTo(row.getEffectiveTo());
     item.setOrderType(row.getOrderType());
     item.setQuota(row.getQuota());
+    // V46 新字段
+    if (row.getSourceType() != null) item.setSourceType(row.getSourceType());
+    if (row.getProcessNo() != null) item.setProcessNo(row.getProcessNo());
+    if (row.getPlannedPrice() != null) item.setPlannedPrice(row.getPlannedPrice());
+    if (row.getMarkupRatio() != null) item.setMarkupRatio(row.getMarkupRatio());
+    if (row.getRemark() != null) item.setRemark(row.getRemark());
+    if (row.getPricingMonth() != null) item.setPricingMonth(row.getPricingMonth());
+    // V47 SETTLE 双口径
+    if (row.getBaseSettlePrice() != null) item.setBaseSettlePrice(row.getBaseSettlePrice());
+    if (row.getLinkedSettlePrice() != null) item.setLinkedSettlePrice(row.getLinkedSettlePrice());
   }
 
   private void merge(PriceFixedItem item, PriceFixedItemUpdateRequest request) {
@@ -217,6 +239,32 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     if (request.getQuota() != null) {
       item.setQuota(request.getQuota());
     }
+    // V46 新增字段
+    if (request.getSourceType() != null) {
+      item.setSourceType(request.getSourceType());
+    }
+    if (request.getProcessNo() != null) {
+      item.setProcessNo(request.getProcessNo());
+    }
+    if (request.getPlannedPrice() != null) {
+      item.setPlannedPrice(request.getPlannedPrice());
+    }
+    if (request.getMarkupRatio() != null) {
+      item.setMarkupRatio(request.getMarkupRatio());
+    }
+    if (request.getRemark() != null) {
+      item.setRemark(request.getRemark());
+    }
+    if (request.getPricingMonth() != null) {
+      item.setPricingMonth(request.getPricingMonth());
+    }
+    // V47 SETTLE 双口径
+    if (request.getBaseSettlePrice() != null) {
+      item.setBaseSettlePrice(request.getBaseSettlePrice());
+    }
+    if (request.getLinkedSettlePrice() != null) {
+      item.setLinkedSettlePrice(request.getLinkedSettlePrice());
+    }
   }
 
   private void fillDefaults(PriceFixedItem item) {
@@ -231,6 +279,13 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     }
     if (StringUtils.hasText(item.getSpecModel())) {
       item.setSpecModel(item.getSpecModel().trim());
+    }
+    // V46 默认 source_type=PURCHASE / pricing_month=2026-03（兜住前端没传的场景）
+    if (!StringUtils.hasText(item.getSourceType())) {
+      item.setSourceType("PURCHASE");
+    }
+    if (!StringUtils.hasText(item.getPricingMonth())) {
+      item.setPricingMonth("2026-03");
     }
   }
 

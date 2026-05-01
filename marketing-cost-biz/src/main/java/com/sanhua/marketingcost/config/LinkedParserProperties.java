@@ -21,8 +21,11 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "cost.linked.parser")
 public class LinkedParserProperties {
 
-  /** 模式：legacy / dual / new */
-  private String mode = "dual";
+  /** 模式：legacy / dual / new
+   *  V48：默认切到 new —— 业务确认老 parser 有口径问题（不做含税转换），不再保留双跑
+   *  数据；trace_json 只存 new 结果，前端弹窗不再展示 legacy/dual/diff。
+   */
+  private String mode = "new";
 
   /** 双跑差异阈值（元/件）；差值小于此值不打 WARN 避免噪声 */
   private BigDecimal dualWarnThreshold = new BigDecimal("0.01");

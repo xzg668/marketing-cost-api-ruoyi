@@ -1,0 +1,117 @@
+对账目标：OA=OA-GOLDEN-001  产品=1079900000536
+Excel:   /Users/xiexicheng/documents/sales_cost/产品成本计算表（3.29- 提供）.xls
+API:     http://localhost:8081
+
+[1/4] 读 Excel 见机表3...
+  Excel 部品 29 行 / 费用 18 项
+
+[2/4] 登录 + 触发试算...
+  试算 status=DONE  message=None
+
+[3/4] 拉系统 cost-run/detail...
+  系统 部品 45 行 / 费用 17 项 / TOTAL=None
+
+[4/4] 对账...
+
+======================================================================
+ 部品对账：Excel 29 行 vs 系统 45 行
+======================================================================
+  [一致 ✓] 12 行
+  [Excel 缺] 20 行（系统多出）
+  [系统缺] 6 行（Excel 多出）
+  [差异 ⚠/❌] 11 行
+
+  -- 系统多出（Excel 缺）--
+    E、C接管                   系统 amount=11.987913  source=自制件
+    软磁不锈钢棒                  系统 amount=0.21368  source=固定采购价
+    扁平头铆钉                   系统 amount=0.0103  source=固定采购价
+    不锈钢带                    系统 amount=0.00102  source=固定采购价
+    毛细管Ⅰ                    系统 amount=None  source=ERROR
+    焊环                      系统 amount=0.707893  source=联动价
+    铜基焊丝                    系统 amount=0.121183  source=联动价
+    不锈钢丝网                   系统 amount=0.0  source=自制件
+    银基焊环                    系统 amount=1.438298  source=联动价
+    银基焊丝                    系统 amount=0.176183  source=联动价
+    银基焊条                    系统 amount=0.701339  source=联动价
+    铜基焊环                    系统 amount=1.012712  source=联动价
+    铜基焊丝                    系统 amount=0.113954  source=联动价
+    铜基焊丝                    系统 amount=0.063355  source=联动价
+    主阀体标牌                   系统 amount=None  source=NO_ROUTE
+    艾利镜面铜板标签纸               系统 amount=None  source=NO_ROUTE
+    瓦楞纸箱                    系统 amount=5.462  source=固定采购价
+    纸板隔档                    系统 amount=2.7384  source=固定采购价
+    垫板                      系统 amount=3.1588  source=固定采购价
+    隔板                      系统 amount=1.362  source=固定采购价
+
+  -- Excel 多出（系统缺）--
+    EC接管                    Excel amount=11.98791327765664  drawing=SHF-H35-025009
+    毛细管I                    Excel amount=0.34583075522123896  drawing=SHF-H35-034002
+    过滤网                     Excel amount=0.00056795  drawing=SHF-000-039004
+    簧片                      Excel amount=0.0010215089999999999  drawing=SHF-000-047002
+    铆钉                      Excel amount=0.0103  drawing=SHF-000-088002（商用专用）
+    封头                      Excel amount=0.20899437599999998  drawing=SHF-000-050203
+
+  -- 双方都有但金额差 ≥ 0.01 --
+    活塞螺钉                    Excel=        0.2076  系统=        0.1038  ⚠ 差 -0.1038
+    端盖                      Excel=5.882300884955753  系统=      1.613804  ⚠ 差 -4.2685
+    活塞部件                    Excel=          2.78  系统=          1.39  ⚠ 差 -1.3900
+    阀座                      Excel=10.327699115044249  系统=      2.406154  ⚠ 差 -7.9215
+    小阀体                     Excel=1.2333628318584071  系统=       0.98134  ⚠ 差 -0.2520
+    毛细管Ⅱ                    Excel=0.16619232212389382  系统=          None  ❌ 系统缺
+        系统 priceSource=ERROR  remark=路由=[MAKE] 但桶内无该料号: lp_make_part_spec 无该料号: 203250625
+    小阀座                     Excel=0.28893805309734516  系统=      0.478645  ⚠ 差 +0.1897
+    毛细管Ⅲ                    Excel=0.2237687051327434  系统=          None  ❌ 系统缺
+        系统 priceSource=ERROR  remark=路由=[MAKE] 但桶内无该料号: lp_make_part_spec 无该料号: 203250633
+    滑碗                      Excel=        0.0564  系统=         0.044  ⚠ 差 -0.0124
+    拖动架                     Excel=0.1085840707964602  系统=      0.036052  ⚠ 差 -0.0725
+    阀体                      Excel=32.64973451327434  系统=      6.015547  ⚠ 差 -26.6342
+
+======================================================================
+ 费用对账：Excel 18 项 vs 系统 17 项
+======================================================================
+  [一致 ✓] 0 项
+  [差异 ⚠/❌] 15 项
+  [Excel-only 未映射] 3 项
+
+  -- 差异明细 --
+    包装             (OTHER_EXP_PACKAGE           )  Excel=  1.113105  系统=   12.7212  ⚠ 差 +11.6081
+    零星工装费用         (TOOLING_REPAIR              )  Excel=0.5376320794539893  系统=       0.0  ⚠ 差 -0.5376
+        系统 remark=无人工数据(lp_salary_cost 缺料号)，无法取部门经费率
+    大修费用           (OVERHAUL                    )  Excel=0.06010114709343376  系统=       0.0  ⚠ 差 -0.0601
+        系统 remark=无人工数据(lp_salary_cost 缺料号)，无法取部门经费率
+    水电             (WATER_POWER                 )  Excel=0.6490923886090847  系统=       0.0  ⚠ 差 -0.6491
+        系统 remark=无人工数据(lp_salary_cost 缺料号)，无法取部门经费率
+    材料费            (MATERIAL                    )  Excel=93.493228907342  系统= 50.097585  ⚠ 差 -43.3956
+    直接人工工资         (DIRECT_LABOR                )  Excel=  4.220988  系统=       0.0  ⚠ 差 -4.2210
+    净损失率           (LOSS                        )  Excel=0.24428554226835503  系统=      None  ❌ 系统缺
+        系统 remark=无人工数据(lp_salary_cost 缺料号)，无法取损失率
+    制造费用           (MANUFACTURE                 )  Excel=    13.358  系统=      None  ❌ 系统缺
+        系统 remark=无人工数据(lp_salary_cost 缺料号)，无法取制造费用率
+    制造成本           (MANUFACTURE_COST            )  Excel=   111.316  系统=      None  ❌ 系统缺
+        系统 remark=无人工数据(lp_salary_cost 缺料号)，无法取制造费用率
+    调整后制造成本        (ADJUSTED_MANUFACTURE_COST   )  Excel=   111.316  系统=      None  ❌ 系统缺
+        系统 remark=无人工数据(lp_salary_cost 缺料号)，无法取制造费用率
+    管理费用           (MGMT_EXP                    )  Excel=    11.132  系统=      None  ❌ 系统缺
+        系统 remark=无人工数据(lp_salary_cost 缺料号)，无法取三项费用率
+    营业费用           (SALES_EXP                   )  Excel=    27.829  系统=      None  ❌ 系统缺
+        系统 remark=无人工数据(lp_salary_cost 缺料号)，无法取三项费用率
+    财务费用           (FIN_EXP                     )  Excel=     2.226  系统=      None  ❌ 系统缺
+        系统 remark=无人工数据(lp_salary_cost 缺料号)，无法取三项费用率
+    运费             (OTHER_EXP_FREIGHT           )  Excel=      None  系统=       0.0  ❌ Excel 缺
+    不含税总成本         (TOTAL                       )  Excel=   152.503  系统=      None  ❌ 系统缺
+
+  -- Excel 项无对应系统 cost_code --
+    酸洗              Excel=0.6732
+    辅料              Excel=1.1495
+    焊料              Excel=4.493860659823009
+
+======================================================================
+ 总成本
+======================================================================
+  Excel: 152.503
+  系统:  None
+  对账:  ❌ 系统缺
+
+======================================================================
+ 报告完成。差异行需逐条人工分析（系统 bug / 业务待补 / 口径差异）。
+======================================================================

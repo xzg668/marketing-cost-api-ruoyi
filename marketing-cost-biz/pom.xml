@@ -14,9 +14,15 @@
   <description>Marketing cost business module</description>
 
   <properties>
-    <!-- Surefire 测试分组：默认排除 integration（Testcontainers 较慢），不限定 groups -->
-    <surefire.excludedGroups>integration</surefire.excludedGroups>
-    <surefire.groups></surefire.groups>
+    <!--
+      Surefire 测试分组：默认排除 @Tag("integration") 集成测试 + @Tag("slow") 慢用例。
+      关键修复（T13）：不要再像旧 pom 那样定义 <surefire.groups></surefire.groups> 占位—— surefire 3.2.5
+      在 batch 模式下把"空 groups"理解为"显式 include everything"，会盖掉 excludedGroups 的过滤效果，
+      导致 mvn test 误跑 integration 测试。这里仅定义 excludedGroups，groups 留 unset。
+      命令行覆盖：mvn test -DexcludedGroups= -Dgroups=integration
+              或：mvn test -DexcludedGroups= -Dgroups=slow -Dtest=U9SourceBuilderTest#testRealBomMaster1079
+    -->
+    <surefire.excludedGroups>integration,slow</surefire.excludedGroups>
   </properties>
 
   <dependencies>
@@ -150,14 +156,20 @@
         <artifactId>maven-compiler-plugin</artifactId>
       </plugin>
       <plugin>
-        <!-- Surefire：默认排除 @Tag("integration") 标记的集成测试，避免本地 dev 拉镜像变慢
-             命令行覆盖：mvn test -DexcludedGroups= -Dgroups=integration -->
+        <!--
+          Surefire：默认排除 @Tag("integration") / @Tag("slow") 标记的测试，避免本地 dev 拉镜像变慢。
+          整改原因（T13）：原写法多带了一个 <groups>${surefire.groups}</groups>，当 ${surefire.groups}
+          为空字符串时，surefire 3.2.5 batch 模式把"空 groups"理解为"显式 include everything"，
+          反而把 excludedGroups 的过滤效果覆盖掉了，导致 mvn test 误跑 integration 测试。
+          这里去掉空 <groups>，仅保留 <excludedGroups>，命令行可用 -Dgroups=integration 单独跑。
+          命令行覆盖：mvn test -DexcludedGroups= -Dgroups=integration
+                  或：mvn test -DexcludedGroups= -Dgroups=slow -Dtest=U9SourceBuilderTest#testRealBomMaster1079
+        -->
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.5</version>
         <configuration>
           <excludedGroups>${surefire.excludedGroups}</excludedGroups>
-          <groups>${surefire.groups}</groups>
         </configuration>
       </plugin>
     </plugins>

@@ -6,6 +6,7 @@ import java.util.List;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 
 /**
  * lp_bom_costing_row 访问层。
@@ -75,4 +76,8 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "  built_at = VALUES(built_at)"
           + "</script>")
   int batchUpsert(@Param("rows") List<BomCostingRow> rows);
+
+  /** T15：拿 OA 涉及的去重料号清单（主档同步入口用），不限 asOfDate / version。 */
+  @Select("SELECT DISTINCT material_code FROM lp_bom_costing_row WHERE oa_no=#{oaNo}")
+  List<String> selectDistinctMaterialCodesByOaNo(@Param("oaNo") String oaNo);
 }

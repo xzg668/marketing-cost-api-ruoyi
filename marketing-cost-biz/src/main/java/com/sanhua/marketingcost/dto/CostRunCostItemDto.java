@@ -8,6 +8,8 @@ public class CostRunCostItemDto {
   private BigDecimal baseAmount;
   private BigDecimal rate;
   private BigDecimal amount;
+  /** T10：缺率/异常说明，非空时前端展示告警提示，空表示正常 */
+  private String remark;
 
   public String getCostCode() {
     return costCode;
@@ -47,5 +49,13 @@ public class CostRunCostItemDto {
 
   public void setAmount(BigDecimal amount) {
     this.amount = amount;
+  }
+
+  public String getRemark() {
+    return remark;
+  }
+
+  public void setRemark(String remark) {
+    this.remark = remark;
   }
 }

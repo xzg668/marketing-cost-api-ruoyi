@@ -19,24 +19,21 @@ public interface CostRunPartItemMapper extends BaseMapper<CostRunPartItem> {
   List<CostRunPartItem> selectList(@Param("ew") Wrapper<CostRunPartItem> queryWrapper);
 
   /**
-   * 拉取试算所需的部品基础数据 + 当前生效的取价路由。
+   * 拉取试算所需的部品基础数据 —— 只查 BOM 结算行 + 物料主档，不预 JOIN 路由表。
    *
-   * <p>T5.5：从老表 {@code lp_bom_manage_item} 切到新表 {@code lp_bom_costing_row}。
-   * 字段映射一对一替换：
+   * <p>T06.5 重构：原本 LEFT JOIN {@code lp_material_price_type t3} 喂 6 个路由字段
+   * （priceType/materialShape/priority/effectiveFrom/To/sourceSystem）。
+   * 但 T03/T04 后 Router 服务自己查路由，JOIN 只剩"喂 priceType 给 JJB 导出"一个用途，
+   * 副作用是按候选路由数 fan-out 行数（一个料号 N 个路由 → 复制 N 行）。
+   * 现在 service 层 applyResults 用 Router 命中的 PriceTypeRoute 回填这 6 个字段，
+   * SQL 退回 BOM × 主档严格 1:1 关系。
+   *
+   * <p>表与字段：
    * <ul>
-   *   <li>{@code t1.material_no}       → {@code t1.top_product_code}（顶层产品料号）</li>
-   *   <li>{@code t1.item_code}         → {@code t1.material_code}（结算行料号 / JOIN 键）</li>
-   *   <li>{@code t1.bom_qty}           → {@code t1.qty_per_top}（累计到顶层用量）</li>
-   *   <li>{@code t1.shape_attr}        → 仍由 MaterialMaster {@code t2.shape_attr} 提供</li>
-   *   <li>{@code oa_no / business_unit_type} 字段语义不变</li>
+   *   <li>{@code lp_bom_costing_row t1}：BOM 结算行（每个 OA × 顶层产品 × 结算料号 1 行）</li>
+   *   <li>{@code lp_material_master t2}：物料主档（U9 ItemMaster），shape_attr 是权威源</li>
+   *   <li>{@code business_unit_type}：V21 数据隔离，{@code BusinessUnitInterceptor} 注入</li>
    * </ul>
-   *
-   * <p>V10 升级后 lp_material_price_type 多了 material_shape/priority/effective_from/to/source_system，
-   * 这里把 6 桶分发所需的字段全部 select 出来；Router 服务在 Java 层做最终命中（保证可单测）。
-   *
-   * <p>V21：主表 {@code lp_bom_costing_row} 别名 {@code t1}，{@code BusinessUnitInterceptor}
-   * 按 {@code t1.business_unit_type} 注入数据隔离条件（新表带 {@code business_unit_type} 列，
-   * 与老表语义一致）。
    */
   @Select(
       """
@@ -48,18 +45,10 @@ public interface CostRunPartItemMapper extends BaseMapper<CostRunPartItem> {
             t2.drawing_no AS partDrawingNo,
             t1.qty_per_top AS partQty,
             t2.shape_attr AS shapeAttr,
-            t2.material AS material,
-            t3.material_shape AS materialShape,
-            t3.price_type AS priceType,
-            t3.priority AS priority,
-            t3.effective_from AS effectiveFrom,
-            t3.effective_to AS effectiveTo,
-            t3.source_system AS sourceSystem
+            t2.material AS material
           FROM lp_bom_costing_row t1
           LEFT JOIN lp_material_master t2
             ON t1.material_code = t2.material_code
-          LEFT JOIN lp_material_price_type t3
-            ON t1.material_code = t3.material_code
           WHERE t1.oa_no = #{oaNo}
           ORDER BY t1.id
           """)

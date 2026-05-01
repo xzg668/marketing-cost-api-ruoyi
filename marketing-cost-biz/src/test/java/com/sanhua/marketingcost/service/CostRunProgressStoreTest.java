@@ -78,6 +78,28 @@ class CostRunProgressStoreTest {
   }
 
   @Test
+  @DisplayName("T18(c) fail 保留当前 percent，前端可卡在失败位置")
+  void testFailKeepsPercent() {
+    store.start("OA-FAIL");
+    store.update("OA-FAIL", 5);  // 模拟主档同步完成
+    store.fail("OA-FAIL", "主档同步失败");
+    CostRunProgressResponse resp = store.get("OA-FAIL");
+    assertEquals("ERROR", resp.getStatus());
+    assertEquals(5, resp.getPercent(), "fail 应保留 prev percent，不能回退到 0");
+  }
+
+  @Test
+  @DisplayName("T18(g) update 只推不退：percent 倒退被忽略")
+  void testUpdateMonotonic() {
+    store.start("OA-MONO");
+    store.update("OA-MONO", 60);
+    store.update("OA-MONO", 30); // 倒退，应被忽略
+    assertEquals(60, store.get("OA-MONO").getPercent());
+    store.update("OA-MONO", 80);
+    assertEquals(80, store.get("OA-MONO").getPercent());
+  }
+
+  @Test
   @DisplayName("remove 后状态应回到 IDLE")
   void testRemoveResetsToIdle() {
     store.start("OA-001");
@@ -195,6 +217,47 @@ class CostRunProgressStoreTest {
     CostRunProgressResponse resp = store.get("OA-RW");
     assertNotNull(resp.getStatus());
     assertTrue(resp.getPercent() >= 0 && resp.getPercent() <= 100);
+  }
+
+  // ========== T17 排队 ==========
+
+  @Test
+  @DisplayName("T17 enqueue：多 OA 入队后 queuePos 按入队顺序 1/2/3 递增；queueDepth=入队总数")
+  void testEnqueueQueuePos() {
+    assertTrue(store.enqueue("OA-A"));
+    assertTrue(store.enqueue("OA-B"));
+    assertTrue(store.enqueue("OA-C"));
+    assertEquals(1, store.getQueuePos("OA-A"));
+    assertEquals(2, store.getQueuePos("OA-B"));
+    assertEquals(3, store.getQueuePos("OA-C"));
+    assertEquals(3, store.getQueueDepth());
+    assertEquals("QUEUED", store.get("OA-A").getStatus());
+    assertEquals(1, store.get("OA-A").getQueuePos());
+  }
+
+  @Test
+  @DisplayName("T17 markRunning：QUEUED→RUNNING 后 queuePos=0；后续排队的位置前移")
+  void testMarkRunningShiftsQueue() {
+    store.enqueue("OA-A");
+    store.enqueue("OA-B");
+    store.enqueue("OA-C");
+    store.markRunning("OA-A");
+    assertEquals(0, store.getQueuePos("OA-A"));
+    // B 现在变成排队第 1，C 排队第 2
+    assertEquals(1, store.getQueuePos("OA-B"));
+    assertEquals(2, store.getQueuePos("OA-C"));
+    assertEquals(2, store.getQueueDepth());
+  }
+
+  @Test
+  @DisplayName("T17 enqueue 防重：已 QUEUED/RUNNING 的 OA 第二次 enqueue 返 false")
+  void testEnqueueDuplicate() {
+    assertTrue(store.enqueue("OA-A"));
+    assertFalse(store.enqueue("OA-A"));   // QUEUED 中
+    store.markRunning("OA-A");
+    assertFalse(store.enqueue("OA-A"));   // RUNNING 中
+    store.complete("OA-A");
+    assertTrue(store.enqueue("OA-A"));    // DONE 后可重入
   }
 
   @Test

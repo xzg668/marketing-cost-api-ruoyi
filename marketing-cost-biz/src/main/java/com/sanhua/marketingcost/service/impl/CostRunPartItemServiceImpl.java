@@ -4,83 +4,56 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
-import com.sanhua.marketingcost.entity.PriceFixedItem;
-import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
-import com.sanhua.marketingcost.mapper.PriceFixedItemMapper;
-import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.service.CostRunPartItemService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.pricing.PriceResolveResult;
 import com.sanhua.marketingcost.service.pricing.PriceResolver;
-import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * 部品试算服务 —— Strangler 双跑实现。
+ * 部品试算服务 —— v1.1 (T04) 起仅走 Router + 4 桶 Resolver。
  *
- * <p>三种模式（cost.router.mode）：
- * <ul>
- *   <li>legacy：仅老 2 桶（FIXED/LINKED），等价于改造前行为，回滚保险</li>
- *   <li>dual：  两套并行算 → diff > warnThreshold 写 WARN + 写入 legacy 结果（默认）</li>
- *   <li>new：   仅新 6 桶 Router 路径；金标全绿后切换</li>
- * </ul>
+ * <p>历史背景：原本是 Strangler 双跑（legacy 老 2 桶 / dual / new 4 桶 三种模式），
+ * 但老结果都是测试期造的数据，没有真实业务价值，v1.1 起**彻底删除 legacy/dual 路径**，
+ * 仅保留 new 路径作为唯一实现。
  *
- * <p>新路径总览：MaterialPriceRouterService 给出 (formAttr, priceType) 路由 → resolverMap 按桶分发
- * → 6 个 Resolver 中的对应实现给出 unitPrice + priceSource。Resolver 拿不到值时按 Router 候选
- * 列表 priority 升序回退；全部 fallthrough 仍未命中则标红。
+ * <p>取价流程：
+ * <ol>
+ *   <li>查 BOM 拍平结算行（按 oa_no）</li>
+ *   <li>对每行：MaterialPriceRouterService.listCandidates 给出按 priority 升序的候选路由</li>
+ *   <li>逐个候选尝试对应桶的 PriceResolver；首个 unitPrice != null 命中</li>
+ *   <li>全部 fallthrough 仍未命中 → priceSource 标 ERROR / NO_ROUTE，remark 写具体原因</li>
+ *   <li>写 lp_cost_run_part_item</li>
+ * </ol>
  */
 @Service
 public class CostRunPartItemServiceImpl implements CostRunPartItemService {
   private static final Logger log = LoggerFactory.getLogger(CostRunPartItemServiceImpl.class);
 
-  /** 老 2 桶常量（legacy 路径与 dual 模式 baseline 共用） */
-  private static final String FIXED_PRICE_TYPE = "固定价";
-
-  private static final String LINKED_PRICE_TYPE = "联动价";
-
   private final CostRunPartItemMapper costRunPartItemMapper;
-  private final PriceFixedItemMapper priceFixedItemMapper;
-  private final PriceLinkedCalcItemMapper priceLinkedCalcItemMapper;
   private final MaterialPriceRouterService materialPriceRouterService;
   /** 桶 → Resolver 的反查表（Spring 注入所有 PriceResolver Bean 后建索引） */
   private final Map<PriceTypeEnum, PriceResolver> resolverMap;
 
-  /** Strangler 模式：legacy / dual / new */
-  private final String routerMode;
-
-  /** 双跑 diff 告警阈值（元/件） */
-  private final BigDecimal dualWarnThreshold;
-
   public CostRunPartItemServiceImpl(
       CostRunPartItemMapper costRunPartItemMapper,
-      PriceFixedItemMapper priceFixedItemMapper,
-      PriceLinkedCalcItemMapper priceLinkedCalcItemMapper,
       MaterialPriceRouterService materialPriceRouterService,
-      List<PriceResolver> priceResolvers,
-      @Value("${cost.router.mode:dual}") String routerMode,
-      @Value("${cost.router.dual.warnThreshold:0.01}") BigDecimal dualWarnThreshold) {
+      List<PriceResolver> priceResolvers) {
     this.costRunPartItemMapper = costRunPartItemMapper;
-    this.priceFixedItemMapper = priceFixedItemMapper;
-    this.priceLinkedCalcItemMapper = priceLinkedCalcItemMapper;
     this.materialPriceRouterService = materialPriceRouterService;
-    this.routerMode = normalizeMode(routerMode);
-    this.dualWarnThreshold = dualWarnThreshold == null ? new BigDecimal("0.01") : dualWarnThreshold;
     Map<PriceTypeEnum, PriceResolver> map = new EnumMap<>(PriceTypeEnum.class);
     for (PriceResolver resolver : priceResolvers) {
       map.put(resolver.priceType(), resolver);
@@ -89,29 +62,26 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
   }
 
   @Override
-  public List<CostRunPartItemDto> listByOaNo(String oaNo) {
+  public List<CostRunPartItemDto> listByOaNo(String oaNo, java.util.function.IntConsumer progress) {
     if (!StringUtils.hasText(oaNo)) {
       return Collections.emptyList();
     }
     String oaNoValue = oaNo.trim();
     List<CostRunPartItemDto> items = costRunPartItemMapper.selectBaseByOaNo(oaNoValue);
     if (items.isEmpty()) {
+      progress.accept(100);
       return items;
     }
 
-    // 始终先算 legacy（dual 模式 baseline 也用它写库），new 模式再覆盖
-    legacyResolve(oaNoValue, items);
-    if ("dual".equals(routerMode) || "new".equals(routerMode)) {
-      // 拷贝出新算的结果，dual 模式不替换字段，仅 diff 比对；new 模式才覆盖到 items
-      Map<Integer, PriceResolveResult> newResults = newResolveAll(oaNoValue, items);
-      if ("dual".equals(routerMode)) {
-        logDualDiff(oaNoValue, items, newResults);
-      } else {
-        applyNewResults(items, newResults);
-      }
-    }
-
+    // 走 Router + 4 桶 Resolver 取价（v1.1 起唯一路径）
+    // 同时收集胜出 PriceTypeRoute（T06.5：mapper SQL 不再 JOIN 路由表，路由字段在这里回填）
+    // T16：resolveAll 内部按 part 索引上报进度（0-95%），剩 5% 给 applyResults+save
+    Map<Integer, PriceTypeRoute> winningRoutes = new HashMap<>();
+    Map<Integer, PriceResolveResult> results =
+        resolveAll(oaNoValue, items, winningRoutes, p -> progress.accept(p * 95 / 100));
+    applyResults(items, results, winningRoutes);
     saveCostRunItems(oaNoValue, items);
+    progress.accept(100);
     return items;
   }
 
@@ -147,131 +117,87 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     return items;
   }
 
-  // ============================ Legacy 路径（FIXED + LINKED） ============================
-
-  /** 旧 2 桶取价 —— 直接在 items 上写入 unitPrice / amount / priceSource。 */
-  private void legacyResolve(String oaNoValue, List<CostRunPartItemDto> items) {
-    Set<String> fixedCodes = new LinkedHashSet<>();
-    Set<String> linkedCodes = new LinkedHashSet<>();
-    for (CostRunPartItemDto item : items) {
-      String code = item.getPartCode();
-      if (!StringUtils.hasText(code)) {
-        continue;
-      }
-      String priceType = StringUtils.hasText(item.getPriceType())
-          ? item.getPriceType().trim()
-          : "";
-      if (FIXED_PRICE_TYPE.equals(priceType)) {
-        fixedCodes.add(code);
-      } else if (LINKED_PRICE_TYPE.equals(priceType)) {
-        linkedCodes.add(code);
-      }
-    }
-
-    Map<String, BigDecimal> fixedPriceMap = new HashMap<>();
-    if (!fixedCodes.isEmpty()) {
-      List<PriceFixedItem> fixedItems =
-          priceFixedItemMapper.selectList(
-              Wrappers.lambdaQuery(PriceFixedItem.class)
-                  .in(PriceFixedItem::getMaterialCode, fixedCodes)
-                  .orderByDesc(PriceFixedItem::getEffectiveFrom)
-                  .orderByDesc(PriceFixedItem::getId));
-      for (PriceFixedItem item : fixedItems) {
-        String code = item.getMaterialCode();
-        if (!fixedPriceMap.containsKey(code)) {
-          fixedPriceMap.put(code, item.getFixedPrice());
-        }
-      }
-    }
-
-    Map<String, BigDecimal> linkedPriceMap = new HashMap<>();
-    if (!linkedCodes.isEmpty()) {
-      List<PriceLinkedCalcItem> linkedItems =
-          priceLinkedCalcItemMapper.selectList(
-              Wrappers.lambdaQuery(PriceLinkedCalcItem.class)
-                  .eq(PriceLinkedCalcItem::getOaNo, oaNoValue)
-                  .in(PriceLinkedCalcItem::getItemCode, linkedCodes)
-                  .orderByDesc(PriceLinkedCalcItem::getId));
-      for (PriceLinkedCalcItem item : linkedItems) {
-        String code = item.getItemCode();
-        if (!linkedPriceMap.containsKey(code)) {
-          linkedPriceMap.put(code, item.getPartUnitPrice());
-        }
-      }
-    }
-
-    for (CostRunPartItemDto item : items) {
-      item.setPriceSource("");
-      item.setRemark("");
-      String code = item.getPartCode();
-      String priceType = StringUtils.hasText(item.getPriceType())
-          ? item.getPriceType().trim()
-          : "";
-      BigDecimal unitPrice = null;
-      if (StringUtils.hasText(code)) {
-        if (FIXED_PRICE_TYPE.equals(priceType)) {
-          unitPrice = fixedPriceMap.get(code);
-        } else if (LINKED_PRICE_TYPE.equals(priceType)) {
-          unitPrice = linkedPriceMap.get(code);
-        }
-      }
-      item.setUnitPrice(unitPrice);
-      if (unitPrice != null && item.getPartQty() != null) {
-        item.setAmount(unitPrice.multiply(item.getPartQty()));
-      }
-    }
-  }
-
-  // ============================ New 路径（6 桶 Router） ============================
+  // ============================ Router + Resolver 取价 ============================
 
   /**
-   * 用 Router + 6 桶 Resolver 算出每行的新结果。
+   * 用 Router + 4 桶 Resolver 算出每行的取价结果。
    *
-   * <p>不直接写到 items，让 dual 模式下保留 legacy 结果做 baseline 比对。
-   *
-   * @return 行索引 → 新算结果。未命中行 result.unitPrice() = null + remark 标红。
+   * @param winningRoutes 出参：行索引 → 实际命中的 PriceTypeRoute（HIT 时填，缺路由 / 全 miss
+   *                      不填）。供 applyResults 回填 priceType / priority / 生效期等字段，
+   *                      替代 mapper SQL 原本的 LEFT JOIN（T06.5 重构）。
+   * @return 行索引 → 取价结果。未命中行 result.unitPrice() = null + remark 标具体原因。
    */
-  private Map<Integer, PriceResolveResult> newResolveAll(
-      String oaNoValue, List<CostRunPartItemDto> items) {
+  private Map<Integer, PriceResolveResult> resolveAll(
+      String oaNoValue,
+      List<CostRunPartItemDto> items,
+      Map<Integer, PriceTypeRoute> winningRoutes,
+      java.util.function.IntConsumer progress) {
     Map<Integer, PriceResolveResult> results = new HashMap<>();
     LocalDate quoteDate = LocalDate.now(); // 试算日，用于 effective 窗口
     String period = inferPeriod(quoteDate);
+    int total = Math.max(1, items.size());
     for (int i = 0; i < items.size(); i++) {
       CostRunPartItemDto item = items.get(i);
       String code = item.getPartCode();
+      // partCode 缺失：直接标 ERROR，不查 Router 也不抛异常（继续下一行）
       if (!StringUtils.hasText(code)) {
-        results.put(i, PriceResolveResult.miss("partCode 为空"));
+        results.put(i, PriceResolveResult.error("partCode 为空"));
         continue;
       }
       // Router 给出全部候选；按 priority 升序逐桶尝试，直到首个 Resolver 成功
       List<PriceTypeRoute> candidates =
           materialPriceRouterService.listCandidates(code, period, quoteDate);
       if (candidates.isEmpty()) {
-        results.put(i, PriceResolveResult.miss("Router 无候选: " + code));
+        // 缺路由：业务侧需补价格类型表配置
+        results.put(i, PriceResolveResult.noRoute(code));
         continue;
       }
-      PriceResolveResult finalResult = null;
+      // 收集尝试过的桶名 + 最后一次 miss 原因，全 fallthrough 时拼成 ERROR remark
+      PriceResolveResult hit = null;
+      PriceTypeRoute hitRoute = null;
+      List<String> attemptedBuckets = new ArrayList<>(candidates.size());
+      String lastMissReason = null;
       for (PriceTypeRoute route : candidates) {
         PriceResolver resolver = resolverMap.get(route.priceType());
         if (resolver == null) {
+          // 路由桶 X 没注册 Resolver（理论不该发生，PriceTypeEnum 只有 4 桶）
+          attemptedBuckets.add(route.priceType().name() + "(无 Resolver)");
           continue;
         }
+        attemptedBuckets.add(route.priceType().name());
         PriceResolveResult result = resolver.resolve(oaNoValue, item, route);
         if (result.unitPrice() != null) {
-          finalResult = result;
+          hit = result;
+          hitRoute = route;
           break;
         }
-        // 记下最后一次 miss 原因，便于全 fallthrough 时输出
-        finalResult = result;
+        if (StringUtils.hasText(result.remark())) {
+          lastMissReason = result.remark();
+        }
       }
-      results.put(i, finalResult == null ? PriceResolveResult.miss("无可用 Resolver") : finalResult);
+      if (hit != null) {
+        results.put(i, hit);
+        winningRoutes.put(i, hitRoute);
+      } else {
+        String summary = "路由=" + attemptedBuckets + " 但桶内无该料号"
+            + (lastMissReason == null ? "" : ": " + lastMissReason);
+        results.put(i, PriceResolveResult.error(summary));
+      }
+      // T16：每完成 1 部品上报一次进度
+      progress.accept((i + 1) * 100 / total);
     }
     return results;
   }
 
-  /** new 模式：把新结果覆盖回 items（dual 模式不调用此方法）。 */
-  private void applyNewResults(
-      List<CostRunPartItemDto> items, Map<Integer, PriceResolveResult> results) {
+  /**
+   * 把取价结果覆盖回 items（含缺价时的 priceSource + remark）；命中行还回填 6 个路由字段
+   * （priceType / materialShape / priority / effectiveFrom / effectiveTo / sourceSystem），
+   * 替代 mapper SQL 原本的 LEFT JOIN（T06.5）。
+   */
+  private void applyResults(
+      List<CostRunPartItemDto> items,
+      Map<Integer, PriceResolveResult> results,
+      Map<Integer, PriceTypeRoute> winningRoutes) {
     for (int i = 0; i < items.size(); i++) {
       CostRunPartItemDto item = items.get(i);
       PriceResolveResult result = results.get(i);
@@ -286,55 +212,20 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       } else {
         item.setAmount(null);
       }
-    }
-  }
-
-  /** dual 模式 diff：两边都有值且差异 > 阈值 → WARN；只一边有值 → INFO 提示。 */
-  private void logDualDiff(
-      String oaNoValue, List<CostRunPartItemDto> items, Map<Integer, PriceResolveResult> newResults) {
-    int totalDiff = 0;
-    for (int i = 0; i < items.size(); i++) {
-      CostRunPartItemDto item = items.get(i);
-      PriceResolveResult newResult = newResults.get(i);
-      if (newResult == null) {
-        continue;
+      // 命中时回填路由审计字段（JJB 导出的"价格类型"列依赖 priceType）
+      PriceTypeRoute route = winningRoutes.get(i);
+      if (route != null) {
+        item.setPriceType(route.priceType().getDbText());
+        item.setMaterialShape(route.formAttr() == null ? null : route.formAttr().getDbText());
+        item.setPriority(route.priority());
+        item.setEffectiveFrom(route.effectiveFrom());
+        item.setEffectiveTo(route.effectiveTo());
+        item.setSourceSystem(route.sourceSystem());
       }
-      BigDecimal legacyPrice = item.getUnitPrice();
-      BigDecimal newPrice = newResult.unitPrice();
-      if (legacyPrice == null && newPrice == null) {
-        continue;
-      }
-      if (legacyPrice == null || newPrice == null) {
-        log.info(
-            "[router-dual] oa={} part={} 单边命中: legacy={} new={} ({})",
-            oaNoValue, item.getPartCode(), legacyPrice, newPrice, newResult.remark());
-        continue;
-      }
-      BigDecimal diff = legacyPrice.subtract(newPrice).abs();
-      if (diff.compareTo(dualWarnThreshold) > 0) {
-        totalDiff++;
-        log.warn(
-            "[router-dual] oa={} part={} 价差 {} > 阈值 {}: legacy={} new={}",
-            oaNoValue, item.getPartCode(), diff, dualWarnThreshold, legacyPrice, newPrice);
-      }
-    }
-    if (totalDiff > 0) {
-      log.warn("[router-dual] oa={} 双跑发现 {} 行价差超阈值，请人工核对", oaNoValue, totalDiff);
     }
   }
 
   // ============================ 工具 / 持久化 ============================
-
-  private static String normalizeMode(String mode) {
-    if (mode == null) {
-      return "dual";
-    }
-    String trimmed = mode.trim().toLowerCase();
-    return switch (trimmed) {
-      case "legacy", "dual", "new" -> trimmed;
-      default -> "dual";
-    };
-  }
 
   /** 用试算日推算 period（yyyy-MM）；未来可扩展按账期查找服务。 */
   private static String inferPeriod(LocalDate date) {

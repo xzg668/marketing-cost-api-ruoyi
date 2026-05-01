@@ -32,18 +32,25 @@ public class PriceFixedItemController {
     this.priceFixedItemService = priceFixedItemService;
   }
 
-  /** 查询固定价格列表 */
+  /**
+   * 查询固定价格列表。
+   *
+   * <p>V46 新增筛选：sourceType（PURCHASE/MAKE/SETTLE/SCRAP）+ pricingMonth（YYYY-MM）。
+   * 前端按 source_type tab 切换 + 月份选择器联动这俩参数。
+   */
   @PreAuthorize("@ss.hasPermi('price:fixed:list')")
   @GetMapping
   public CommonResult<PriceFixedItemPageResponse> list(
       @RequestParam(required = false) String materialCode,
       @RequestParam(required = false) String supplierCode,
+      @RequestParam(required = false) String sourceType,
+      @RequestParam(required = false) String pricingMonth,
       @RequestParam(required = false, defaultValue = "1") Integer page,
       @RequestParam(required = false, defaultValue = "20") Integer pageSize) {
     int current = page == null || page < 1 ? 1 : page;
     int size = pageSize == null || pageSize < 1 ? 20 : pageSize;
     Page<PriceFixedItem> pager =
-        priceFixedItemService.page(materialCode, supplierCode, current, size);
+        priceFixedItemService.page(materialCode, supplierCode, sourceType, pricingMonth, current, size);
     return CommonResult.success(new PriceFixedItemPageResponse(pager.getTotal(), pager.getRecords()));
   }
 

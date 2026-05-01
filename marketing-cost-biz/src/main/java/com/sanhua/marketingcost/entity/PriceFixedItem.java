@@ -34,6 +34,30 @@ public class PriceFixedItem {
   private String orderType;
   private BigDecimal quota;
 
+  /** V46 来源类型：PURCHASE 采购件 / MAKE 自制件 / SETTLE 结算价 / SCRAP 废料 */
+  private String sourceType;
+
+  /** V46 采购流程编号（PURCHASE 来源专用） */
+  private String processNo;
+
+  /** V46 计划价（SETTLE 来源专用；fixed_price = planned × markup） */
+  private BigDecimal plannedPrice;
+
+  /** V46 上浮比例（SETTLE 来源专用） */
+  private BigDecimal markupRatio;
+
+  /** V46 备注 */
+  private String remark;
+
+  /** V46 结算期间 YYYY-MM（按月切版本快照） */
+  private String pricingMonth;
+
+  /** V47 SETTLE 来源专用：基准结算价（家用结算价9 C5 = 计划价×上浮比例） */
+  private BigDecimal baseSettlePrice;
+
+  /** V47 SETTLE 来源专用：联动结算价（家用结算价9 C6 = 按金属价公式联动算出） */
+  private BigDecimal linkedSettlePrice;
+
   /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
@@ -219,6 +243,29 @@ public class PriceFixedItem {
   public void setQuota(BigDecimal quota) {
     this.quota = quota;
   }
+
+  public String getSourceType() { return sourceType; }
+  public void setSourceType(String sourceType) { this.sourceType = sourceType; }
+
+  public String getProcessNo() { return processNo; }
+  public void setProcessNo(String processNo) { this.processNo = processNo; }
+
+  public BigDecimal getPlannedPrice() { return plannedPrice; }
+  public void setPlannedPrice(BigDecimal plannedPrice) { this.plannedPrice = plannedPrice; }
+
+  public BigDecimal getMarkupRatio() { return markupRatio; }
+  public void setMarkupRatio(BigDecimal markupRatio) { this.markupRatio = markupRatio; }
+
+  public String getRemark() { return remark; }
+  public void setRemark(String remark) { this.remark = remark; }
+
+  public String getPricingMonth() { return pricingMonth; }
+  public void setPricingMonth(String pricingMonth) { this.pricingMonth = pricingMonth; }
+
+  public BigDecimal getBaseSettlePrice() { return baseSettlePrice; }
+  public void setBaseSettlePrice(BigDecimal baseSettlePrice) { this.baseSettlePrice = baseSettlePrice; }
+  public BigDecimal getLinkedSettlePrice() { return linkedSettlePrice; }
+  public void setLinkedSettlePrice(BigDecimal linkedSettlePrice) { this.linkedSettlePrice = linkedSettlePrice; }
 
   public LocalDateTime getCreatedAt() {
     return createdAt;
