@@ -69,13 +69,9 @@ public class CostRunDetailController {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(),"productCode is required");
     }
     String productCodeValue = productCode.trim();
-    List<CostRunPartItemDto> partItems = costRunPartItemService.listStoredByOaNo(oaNo);
-    List<CostRunPartItemDto> filteredParts = new ArrayList<>();
-    for (CostRunPartItemDto item : partItems) {
-      if (productCodeValue.equals(item.getProductCode())) {
-        filteredParts.add(item);
-      }
-    }
+    // T26：见机表展示用聚合视图（焊料/包装各合 1 行），DB 明细 listStoredByOaNo 仍可拉
+    List<CostRunPartItemDto> filteredParts =
+        costRunPartItemService.listAggregatedByOaNo(oaNo, productCodeValue);
     // T12：批量查主档把 cost_element 灌进 partItems（前端 T13 用来分组/染色）
     enrichPartsWithCostElement(filteredParts);
     List<CostRunCostItemDto> costItems =

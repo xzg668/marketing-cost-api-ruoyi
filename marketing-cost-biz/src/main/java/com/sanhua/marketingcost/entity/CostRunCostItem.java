@@ -25,6 +25,16 @@ public class CostRunCostItem {
   /** T10：缺率/异常说明（V56 加列）；非空时表示费用项有"缺率"等数据缺失，前端可展示告警 */
   private String remark;
 
+  /**
+   * T24（V57 加列）：分类标记，区分两类语义：
+   * <ul>
+   *   <li>{@code EXPENSE} — 传统费用项（14 个 cost_code，参与 totalAmount 累加）</li>
+   *   <li>{@code BOM_BUCKET} — 见机表原材料汇总（焊料/包装等，仅展示，不参与累加）</li>
+   * </ul>
+   * default='EXPENSE'，旧数据自动归类，行为零变化。
+   */
+  private String category;
+
   /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
@@ -137,6 +147,14 @@ public class CostRunCostItem {
 
   public void setRemark(String remark) {
     this.remark = remark;
+  }
+
+  public String getCategory() {
+    return category;
+  }
+
+  public void setCategory(String category) {
+    this.category = category;
   }
 
   public LocalDateTime getCreatedAt() {

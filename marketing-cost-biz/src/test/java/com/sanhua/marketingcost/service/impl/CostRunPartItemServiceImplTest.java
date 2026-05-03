@@ -6,15 +6,19 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
+import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.enums.MaterialFormAttrEnum;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
+import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.pricing.PriceResolveResult;
 import com.sanhua.marketingcost.service.pricing.PriceResolver;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -41,11 +45,17 @@ class CostRunPartItemServiceImplTest {
 
   private CostRunPartItemMapper costRunPartItemMapper;
   private MaterialPriceRouterService routerService;
+  private OaFormMapper oaFormMapper;
 
   @BeforeEach
   void setUp() {
     costRunPartItemMapper = Mockito.mock(CostRunPartItemMapper.class);
     routerService = Mockito.mock(MaterialPriceRouterService.class);
+    oaFormMapper = Mockito.mock(OaFormMapper.class);
+    // T25：默认所有 OA 都返回 apply_date=2026-04-20，让 listCandidates 收到 period=2026-04
+    OaForm form = new OaForm();
+    form.setApplyDate(LocalDate.of(2026, 4, 20));
+    when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(form);
   }
 
   @Test
@@ -144,10 +154,48 @@ class CostRunPartItemServiceImplTest {
     assertThat(items.get(0).getAmount()).isEqualByComparingTo("29.97");  // 9.99 × 3
   }
 
+  // ============================ T25 resolveQuoteDate ============================
+
+  @Test
+  @DisplayName("T25 resolveQuoteDate：OA.apply_date 非空 → 用 apply_date（修跨月 NO_ROUTE）")
+  void resolveQuoteDate_useOaApplyDate() {
+    OaForm form = new OaForm();
+    form.setApplyDate(LocalDate.of(2026, 4, 20));
+    when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(form);
+
+    CostRunPartItemServiceImpl svc = build(List.of());
+    assertThat(svc.resolveQuoteDate("OA-X")).isEqualTo(LocalDate.of(2026, 4, 20));
+  }
+
+  @Test
+  @DisplayName("T25 resolveQuoteDate：OA.apply_date 为空 → fallback today（兼容老用例）")
+  void resolveQuoteDate_fallbackToday() {
+    OaForm form = new OaForm();
+    form.setApplyDate(null);
+    when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(form);
+
+    CostRunPartItemServiceImpl svc = build(List.of());
+    assertThat(svc.resolveQuoteDate("OA-NULL-DATE")).isEqualTo(LocalDate.now());
+  }
+
+  @Test
+  @DisplayName("T25 resolveQuoteDate：OA 不存在 → fallback today（不抛错）")
+  void resolveQuoteDate_oaNotFound() {
+    when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+
+    CostRunPartItemServiceImpl svc = build(List.of());
+    assertThat(svc.resolveQuoteDate("OA-MISSING")).isEqualTo(LocalDate.now());
+  }
+
   // ============================ 辅助构造 ============================
 
   private CostRunPartItemServiceImpl build(List<PriceResolver> resolvers) {
-    return new CostRunPartItemServiceImpl(costRunPartItemMapper, routerService, resolvers);
+    return new CostRunPartItemServiceImpl(
+        costRunPartItemMapper, routerService, oaFormMapper,
+        Mockito.mock(com.sanhua.marketingcost.mapper.MaterialMasterMapper.class),
+        Mockito.mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class),
+        Mockito.mock(com.sanhua.marketingcost.mapper.BomRawHierarchyMapper.class),
+        resolvers);
   }
 
   private static CostRunPartItemDto part(String code) {

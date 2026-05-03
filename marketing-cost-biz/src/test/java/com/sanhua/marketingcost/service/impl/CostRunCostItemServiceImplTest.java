@@ -6,17 +6,21 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
 import com.sanhua.marketingcost.entity.MaterialMaster;
+import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.ProductProperty;
 import com.sanhua.marketingcost.mapper.AuxCostItemMapper;
+import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.CostRunCostItemMapper;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
 import com.sanhua.marketingcost.mapper.DepartmentFundRateMapper;
 import com.sanhua.marketingcost.mapper.ManufactureRateMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
+import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.service.CostRunCacheLookupService;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
@@ -174,6 +178,115 @@ class CostRunCostItemServiceImplTest {
     assertThat(svc.lookupFreight("OA-MISSING", "P-1")).isEqualByComparingTo(BigDecimal.ZERO);
   }
 
+  // -------- T24 BOM_BUCKET 焊料 / 包装聚合 --------
+
+  @Test
+  @DisplayName("T24 焊料聚合：part 7 行命中焊料子件 → SUM amount")
+  void bucketWeld_happyPath() {
+    CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
+    MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
+
+    // mock part_item：3 行焊料 + 1 行非焊料
+    CostRunPartItem p1 = newPart("301010012", new BigDecimal("1.625677"));
+    CostRunPartItem p2 = newPart("301020895", new BigDecimal("1.101030"));
+    CostRunPartItem p3 = newPart("301030001", new BigDecimal("0.200252"));
+    CostRunPartItem pOther = newPart("203250606", new BigDecimal("0.788363"));
+    when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of(p1, p2, p3, pOther));
+
+    // mock material_master：只返焊料 3 行（master 已经被 cost_element=焊料 过滤）
+    when(masterMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(newWeldMaster("301010012"), newWeldMaster("301020895"), newWeldMaster("301030001")));
+
+    CostRunCostItemServiceImpl svc = buildWith(partMapper, masterMapper, mock(OaFormMapper.class), mock(OaFormItemMapper.class));
+    BigDecimal sum = svc.sumPartByCostElement("OA-1", "P-1", "主要材料-焊料");
+
+    // 1.625677 + 1.101030 + 0.200252 = 2.926959；非焊料 part 不计入
+    assertThat(sum).isEqualByComparingTo(new BigDecimal("2.926959"));
+  }
+
+  @Test
+  @DisplayName("T24 焊料聚合：part 没有焊料子件 → 返 0（buildBucketItems 跳过此行）")
+  void bucketWeld_emptyMaster() {
+    CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
+    MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
+
+    when(partMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(newPart("RAW-001", new BigDecimal("5.000000"))));
+    // 主档查无焊料命中
+    when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+
+    CostRunCostItemServiceImpl svc = buildWith(partMapper, masterMapper, mock(OaFormMapper.class), mock(OaFormItemMapper.class));
+    assertThat(svc.sumPartByCostElement("OA-1", "P-1", "主要材料-焊料"))
+        .isEqualByComparingTo(BigDecimal.ZERO);
+  }
+
+  @Test
+  @DisplayName("T24 包装聚合：BOM 父件命中包装组件 → 子件 SUM × 1.05 / 12 = 1.113105")
+  void bucketPackage_happyPath() {
+    // 用 OA-001 实测 4 行包装数据 mock（瓦楞纸箱/垫板/纸板隔档/隔板）
+    CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
+
+    // 1) raw 主档返 1 行 main_category=包装组件 的虚拟父件
+    when(rawMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(newRawMaster("9830000026238", "包装组件")));
+    // 2) BOM 返该父件下 4 个子件
+    when(bomMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(
+            newBomChild("250011491"), newBomChild("250030575"),
+            newBomChild("250020958"), newBomChild("250050674")));
+    // 3) part_item 返 4 行子件 amount（与 OA-001 实测一致）
+    when(partMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(
+            newPart("250011491", new BigDecimal("5.4620")),
+            newPart("250030575", new BigDecimal("3.1588")),
+            newPart("250020958", new BigDecimal("2.7384")),
+            newPart("250050674", new BigDecimal("1.3620"))));
+
+    CostRunCostItemServiceImpl svc = buildBucketSvc(partMapper, rawMapper, bomMapper);
+    BigDecimal childSum = svc.sumPartByBomParentMainCategory("OA-1", "1079900000536", "包装组件");
+
+    // 子件 SUM = 12.7212；包装算法 = SUM × 1.05 / 12 = 1.113105（与 Excel 见机表 r45 严格一致）
+    assertThat(childSum).isEqualByComparingTo(new BigDecimal("12.721200"));
+    BigDecimal pkgAmount = childSum.multiply(new BigDecimal("1.05"))
+        .divide(new BigDecimal("12"), 6, java.math.RoundingMode.HALF_UP);
+    assertThat(pkgAmount).isEqualByComparingTo(new BigDecimal("1.113105"));
+    assertThat(svc.calculatePackageBucketAmount("OA-1", "1079900000536"))
+        .isEqualByComparingTo(new BigDecimal("1.113105"));
+  }
+
+  @Test
+  @DisplayName("T24 包装聚合：BOM 找不到包装组件父件 → 返 0（buildBucketItems 跳过此行）")
+  void bucketPackage_noParent() {
+    CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
+
+    // raw 主档无包装组件
+    when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+
+    CostRunCostItemServiceImpl svc = buildBucketSvc(partMapper, rawMapper, bomMapper);
+    assertThat(svc.sumPartByBomParentMainCategory("OA-1", "P-1", "包装组件"))
+        .isEqualByComparingTo(BigDecimal.ZERO);
+  }
+
+  @Test
+  @DisplayName("T24 包装聚合：BOM 父件命中但下面没子件 → 返 0")
+  void bucketPackage_noBomChildren() {
+    CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
+
+    when(rawMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(newRawMaster("9830000026238", "包装组件")));
+    when(bomMapper.selectList(any(Wrapper.class))).thenReturn(List.of()); // BOM 没子件
+
+    CostRunCostItemServiceImpl svc = buildBucketSvc(partMapper, rawMapper, bomMapper);
+    assertThat(svc.sumPartByBomParentMainCategory("OA-1", "P-1", "包装组件"))
+        .isEqualByComparingTo(BigDecimal.ZERO);
+  }
+
   // ---------- 辅助 ----------
 
   private static CostRunPartItem newPart(String code, BigDecimal amount) {
@@ -188,6 +301,54 @@ class CostRunCostItemServiceImplTest {
     m.setMaterialCode(code);
     m.setCostElement("主要材料-包装材料");
     return m;
+  }
+
+  /** T24：焊料 master mock — cost_element=主要材料-焊料 */
+  private static MaterialMaster newWeldMaster(String code) {
+    MaterialMaster m = new MaterialMaster();
+    m.setMaterialCode(code);
+    m.setCostElement("主要材料-焊料");
+    return m;
+  }
+
+  /** T24：raw 主档 mock — main_category_name=指定值（用于包装组件父件） */
+  private static MaterialMasterRaw newRawMaster(String code, String mainCategoryName) {
+    MaterialMasterRaw m = new MaterialMasterRaw();
+    m.setMaterialCode(code);
+    m.setMainCategoryName(mainCategoryName);
+    return m;
+  }
+
+  /** T24：BOM hierarchy mock — material_code=指定值（视为父件下挂的子件） */
+  private static BomRawHierarchy newBomChild(String materialCode) {
+    BomRawHierarchy h = new BomRawHierarchy();
+    h.setMaterialCode(materialCode);
+    return h;
+  }
+
+  /** T24 单测专用：注入 part / raw / bom 3 个 mapper（包装聚合用），其余 mock 兜底 */
+  private CostRunCostItemServiceImpl buildBucketSvc(
+      CostRunPartItemMapper partMapper,
+      MaterialMasterRawMapper rawMapper,
+      BomRawHierarchyMapper bomMapper) {
+    return new CostRunCostItemServiceImpl(
+        mock(CostRunCostItemMapper.class),
+        mock(OaFormMapper.class),
+        mock(OaFormItemMapper.class),
+        mock(SalaryCostMapper.class),
+        mock(DepartmentFundRateMapper.class),
+        mock(AuxCostItemMapper.class),
+        partMapper,
+        mock(QualityLossRateMapper.class),
+        mock(ManufactureRateMapper.class),
+        mock(ThreeExpenseRateMapper.class),
+        mock(OtherExpenseRateMapper.class),
+        mock(ProductPropertyMapper.class),
+        mock(MaterialMasterMapper.class),
+        rawMapper,
+        bomMapper,
+        mock(CostRunCacheLookupService.class),
+        false);
   }
 
   /** T19：T19 之前的 4 个 coefficient test 走这个 helper（直接 mock cacheLookup） */
@@ -206,6 +367,8 @@ class CostRunCostItemServiceImplTest {
         mock(OtherExpenseRateMapper.class),
         mock(ProductPropertyMapper.class),
         mock(MaterialMasterMapper.class),
+        mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class),
+        mock(com.sanhua.marketingcost.mapper.BomRawHierarchyMapper.class),
         lookup,
         false);
   }
@@ -230,6 +393,8 @@ class CostRunCostItemServiceImplTest {
         mock(OtherExpenseRateMapper.class),
         mock(ProductPropertyMapper.class),
         masterMapper,
+        mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class),
+        mock(com.sanhua.marketingcost.mapper.BomRawHierarchyMapper.class),
         mock(CostRunCacheLookupService.class),
         false);
   }

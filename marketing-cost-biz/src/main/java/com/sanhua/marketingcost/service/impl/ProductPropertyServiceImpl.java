@@ -107,6 +107,9 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
     entity.setParentModel(row.getParentModel());
     entity.setPeriod(row.getPeriod());
     entity.setProductAttr(row.getProductAttr());
+    // 系数：Excel 没填 → null → 落库走 schema DEFAULT 1.0000（标准品语义）
+    //       Excel 填了 → 显式覆盖（非标品 1.20 等）
+    entity.setCoefficient(row.getCoefficient());
   }
 
   private void merge(ProductProperty target, ProductProperty source) {
@@ -133,6 +136,10 @@ public class ProductPropertyServiceImpl implements ProductPropertyService {
     }
     if (source.getProductAttr() != null) {
       target.setProductAttr(source.getProductAttr());
+    }
+    // 系数：source.coefficient 非 null 才覆盖；null 保留 target 旧值（避免重导漏填把已配的非标系数抹回 1.0）
+    if (source.getCoefficient() != null) {
+      target.setCoefficient(source.getCoefficient());
     }
   }
 

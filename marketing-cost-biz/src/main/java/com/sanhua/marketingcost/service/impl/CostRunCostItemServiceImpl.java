@@ -7,7 +7,9 @@ import com.sanhua.marketingcost.entity.CostRunCostItem;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
 import com.sanhua.marketingcost.entity.DepartmentFundRate;
 import com.sanhua.marketingcost.entity.ManufactureRate;
+import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.MaterialMaster;
+import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.OtherExpenseRate;
@@ -16,11 +18,13 @@ import com.sanhua.marketingcost.entity.QualityLossRate;
 import com.sanhua.marketingcost.entity.SalaryCost;
 import com.sanhua.marketingcost.entity.ThreeExpenseRate;
 import com.sanhua.marketingcost.mapper.AuxCostItemMapper;
+import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.CostRunCostItemMapper;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
 import com.sanhua.marketingcost.mapper.DepartmentFundRateMapper;
 import com.sanhua.marketingcost.mapper.ManufactureRateMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
+import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.OtherExpenseRateMapper;
@@ -28,6 +32,7 @@ import com.sanhua.marketingcost.mapper.ProductPropertyMapper;
 import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
 import com.sanhua.marketingcost.mapper.SalaryCostMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
+import com.sanhua.marketingcost.enums.CostItemCategory;
 import com.sanhua.marketingcost.service.CostRunCacheLookupService;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
 import org.slf4j.Logger;
@@ -75,6 +80,32 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   /** T11：lp_material_master.cost_element 表示包装材料的固定文本（U9 同步上来的中文枚举值） */
   private static final String COST_ELEMENT_PACKAGE = "主要材料-包装材料";
 
+  // ==================== T24：见机表汇总行（BOM_BUCKET）相关常量 ====================
+  /** T24：焊料桶 cost_code，对应 Excel 见机表 r44 "焊料" 1 行汇总 */
+  private static final String BUCKET_WELD = "BOM_BUCKET_WELD";
+  /** T24：焊料桶判定字段 — lp_material_master.cost_element 的固定文本（U9 同步上来）*/
+  private static final String COST_ELEMENT_WELD = "主要材料-焊料";
+  /** T24：包装桶 cost_code，对应 Excel 见机表 r45 "包装" 1 行汇总 */
+  private static final String BUCKET_PACKAGE = "BOM_BUCKET_PACKAGE";
+  /** T24：包装桶判定字段 — 找 BOM 父件 lp_material_master_raw.main_category_name='包装组件'（虚拟件） */
+  private static final String MAIN_CATEGORY_PACKAGE = "包装组件";
+  /**
+   * T24：包装算法系数（硬编码，业务方后续确认来源）。
+   *
+   * <p>反算自 OA-001 实测：12.7212(子件SUM) × 1.05 ÷ 12 = 1.113105 = Excel 见机表 r45。
+   * 可能是包装管理费率 5%、Excel 硬编码 magic number、或别的业务规则。
+   * <b>TODO</b> 业务方拍板后改为从 lp_product_property / 配置表读取（v1-business-followup #T24）。
+   */
+  private static final BigDecimal PACKAGE_COEFFICIENT = new BigDecimal("1.05");
+  /**
+   * T24：包装数量（1 套包装管 N 台机），MVP 阶段硬编码 12（OA-001 实测值）。
+   *
+   * <p><b>风险</b>：多产品上线前必须接入数据源（候选：新建 lp_packaging_count 表 / 主档某字段 /
+   * U9 同步带过来）。当前算法对所有产品统一用 12，跑非 OA-001 产品会出错。
+   * <b>TODO</b> 业务方提供数据源后实现（v1-business-followup #T24）。
+   */
+  private static final BigDecimal PACKAGE_COUNT = new BigDecimal("12");
+
   private final CostRunCostItemMapper costRunCostItemMapper;
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
@@ -90,6 +121,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private final ProductPropertyMapper productPropertyMapper;
   /** T11：用主档 cost_element 区分包装材料部品 → OTHER_EXP_PACKAGE */
   private final MaterialMasterMapper materialMasterMapper;
+  /** T24：包装组件父件查 raw 主档（虚拟件 9830000026238 不在同步表 lp_material_master 里）*/
+  private final MaterialMasterRawMapper materialMasterRawMapper;
+  /** T24：包装算法需要 BOM 父子关系（找虚拟父件 main_category=包装组件 → 子件 part_code 集合）*/
+  private final BomRawHierarchyMapper bomRawHierarchyMapper;
   /** T19：试算路径专用 cached lookup（5 个 rate + ProductProperty），避免重复 SQL */
   private final CostRunCacheLookupService cacheLookup;
 
@@ -116,6 +151,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       OtherExpenseRateMapper otherExpenseRateMapper,
       ProductPropertyMapper productPropertyMapper,
       MaterialMasterMapper materialMasterMapper,
+      MaterialMasterRawMapper materialMasterRawMapper,
+      BomRawHierarchyMapper bomRawHierarchyMapper,
       CostRunCacheLookupService cacheLookup,
       @Value("${cost.material.includeWaterPower:false}") boolean includeWaterPowerInMaterial) {
     this.costRunCostItemMapper = costRunCostItemMapper;
@@ -131,6 +168,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     this.otherExpenseRateMapper = otherExpenseRateMapper;
     this.productPropertyMapper = productPropertyMapper;
     this.materialMasterMapper = materialMasterMapper;
+    this.materialMasterRawMapper = materialMasterRawMapper;
+    this.bomRawHierarchyMapper = bomRawHierarchyMapper;
     this.cacheLookup = cacheLookup;
     this.includeWaterPowerInMaterial = includeWaterPowerInMaterial;
   }
@@ -196,16 +235,26 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
   @Override
   public List<CostRunCostItemDto> listStoredByOaNo(String oaNo, String productCode) {
+    // T24：单参签名 = 兼容旧调用，默认只返 EXPENSE（传统费用项），不暴露 BOM_BUCKET 行
+    return listStoredByOaNo(oaNo, productCode, CostItemCategory.EXPENSE);
+  }
+
+  @Override
+  public List<CostRunCostItemDto> listStoredByOaNo(
+      String oaNo, String productCode, String category) {
     if (!StringUtils.hasText(oaNo) || !StringUtils.hasText(productCode)) {
       return Collections.emptyList();
     }
     String oaNoValue = oaNo.trim();
     String productCodeValue = productCode.trim();
+    // T24：传 null/空字符串 = 拉全量（EXPENSE + BOM_BUCKET）；明确传一个值就按值过滤
+    String catFilter = StringUtils.hasText(category) ? category.trim() : null;
     List<CostRunCostItem> stored =
         costRunCostItemMapper.selectList(
             Wrappers.lambdaQuery(CostRunCostItem.class)
                 .eq(CostRunCostItem::getOaNo, oaNoValue)
                 .eq(CostRunCostItem::getProductCode, productCodeValue)
+                .eq(catFilter != null, CostRunCostItem::getCategory, catFilter)
                 .orderByAsc(CostRunCostItem::getLineNo));
     if (stored.isEmpty()) {
       return Collections.emptyList();
@@ -220,6 +269,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       dto.setAmount(item.getAmount());
       // T10：把落库的缺率说明回传给前端
       dto.setRemark(item.getRemark());
+      // T24：把 category 也回传，前端/对账脚本可识别行类别
+      dto.setCategory(item.getCategory());
       items.add(dto);
     }
     return items;
@@ -310,16 +361,20 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       }
     }
 
-    // 3) 最后汇总材料费(部品+辅料+部门经费)
+    // 3) 最后汇总材料费(部品+辅料+部门经费+见机表包装)
     //    Task #9：水电费默认不计入材料费（与 Excel 见机表3 口径对齐），
     //    通过 cost.material.includeWaterPower 开关保留 legacy 行为以便回溯。
-    //    T11：拆 part 为 (非包装/包装)，包装件单独成 OTHER_EXP_PACKAGE 不进 materialTotal，避免双计。
+    //    T24：包装材料不能按原始子件 SUM 进材料费，需按见机表口径 SUM × 1.05 ÷ 12。
     PartTotalSplit partSplit = splitPartAmount(oaNoValue, productCodeValue);
     BigDecimal partTotal = partSplit.nonPackageTotal();
-    BigDecimal packageAmount = partSplit.packageTotal();
+    BigDecimal rawPackageAmount = partSplit.packageTotal();
+    BigDecimal packageBucketAmount = calculatePackageBucketAmount(oaNoValue, productCodeValue);
+    BigDecimal packageAmount =
+        packageBucketAmount.signum() > 0 ? packageBucketAmount : rawPackageAmount;
     BigDecimal freightAmount = lookupFreight(oaNoValue, productCodeValue);
-    // T11：包装/运费纳入 otherExpenseTotal，让 totalAmount 自然累加（不漏不重）
-    otherExpenseTotal = otherExpenseTotal.add(packageAmount).add(freightAmount);
+    // T24：包装进 materialTotal；优先用见机表包装汇总，取不到包装组件数据时退回原始包装子件金额。
+    //      totalAmount 只额外累加运费等真正价外项，避免重复。
+    otherExpenseTotal = otherExpenseTotal.add(freightAmount);
     costCodes.add(OTHER_EXP_PACKAGE);
     costCodes.add(OTHER_EXP_FREIGHT);
     BigDecimal deptTotal =
@@ -330,7 +385,11 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       deptTotal = deptTotal.add(feeResult.waterPower);
     }
     BigDecimal materialTotal =
-        partTotal.add(auxTotal).add(deptTotal).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        partTotal
+            .add(auxTotal)
+            .add(deptTotal)
+            .add(packageAmount)
+            .setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
     // T10：把 5 处 rate 缺失原因带回，组装 buildItem 时塞 remark
     RateLookup lossLookup = findLossRate(laborByUnit);
     BigDecimal lossRate = lossLookup.rate();
@@ -433,7 +492,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         FIN_EXP, "财务费用", adjustedManufactureCost, financeRate, financeAmount, threeExpRemark));
     items.addAll(otherExpenseItems);
     // T11：包装费/运费固定项，紧跟 lp_other_expense_rate 系列
-    items.add(buildItem(OTHER_EXP_PACKAGE, "包装费", null, null, packageAmount));
+    items.add(buildItem(OTHER_EXP_PACKAGE, "包装费", rawPackageAmount, null, packageAmount));
     items.add(buildItem(OTHER_EXP_FREIGHT, "运费", null, null, freightAmount));
     items.add(buildItem(TOTAL, "不含税总成本", null, null, totalAmount));
     // T10：4 项部门经费共享 feeResult.remark
@@ -451,8 +510,185 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     items.add(buildItem(
         DEPT_OTHER, "其他费用", feeResult.baseAmount, feeResult.otherRate, feeResult.other, feeResult.remark));
 
+    // T24：见机表原材料汇总（不参与 totalAmount 累加；category=BOM_BUCKET 与上面 EXPENSE 行严格隔离）
+    //   - 焊料 BUCKET_WELD: Σ(part 子件 cost_element=主要材料-焊料)
+    //   - 包装 BUCKET_PACKAGE: Σ(BOM 父件 main_category=包装组件 子件 amount) × 1.05 ÷ 12
+    List<CostRunCostItemDto> bucketItems = buildBucketItems(oaNoValue, productCodeValue);
+    for (CostRunCostItemDto b : bucketItems) {
+      items.add(b);
+      if (StringUtils.hasText(b.getCostCode())) {
+        costCodes.add(b.getCostCode());
+      }
+    }
+
     saveCostRunItems(oaNoValue, productCodeValue, items, costCodes);
     return items;
+  }
+
+  /**
+   * T24：构建见机表原材料汇总行（BOM_BUCKET）。
+   *
+   * <p>本期范围：焊料 + 包装两类。其他 cost_element 桶后续迭代再加。
+   *
+   * <p>设计文档：docs/cost-bucket-aggregation-20260501-design.md
+   */
+  private List<CostRunCostItemDto> buildBucketItems(String oaNoValue, String productCodeValue) {
+    List<CostRunCostItemDto> result = new ArrayList<>();
+
+    // 焊料：从 part_item join material_master 按 cost_element 聚合
+    BigDecimal weldSum = sumPartByCostElement(oaNoValue, productCodeValue, COST_ELEMENT_WELD);
+    if (weldSum != null && weldSum.signum() > 0) {
+      result.add(buildBucketItem(BUCKET_WELD, "焊料", weldSum));
+    }
+
+    BigDecimal pkgAmount = calculatePackageBucketAmount(oaNoValue, productCodeValue);
+    if (pkgAmount != null && pkgAmount.signum() > 0) {
+      result.add(buildBucketItem(BUCKET_PACKAGE, "包装", pkgAmount));
+    }
+
+    return result;
+  }
+
+  /** T24：见机表包装金额 = 包装组件子件 SUM × 1.05 ÷ 12，用于材料费和 BOM_BUCKET_PACKAGE。 */
+  BigDecimal calculatePackageBucketAmount(String oaNoValue, String productCodeValue) {
+    BigDecimal pkgChildSum =
+        sumPartByBomParentMainCategory(oaNoValue, productCodeValue, MAIN_CATEGORY_PACKAGE);
+    if (pkgChildSum == null || pkgChildSum.signum() <= 0) {
+      return BigDecimal.ZERO;
+    }
+    return pkgChildSum
+        .multiply(PACKAGE_COEFFICIENT)
+        .divide(PACKAGE_COUNT, AMOUNT_SCALE, RoundingMode.HALF_UP);
+  }
+
+  /**
+   * T24：按 BOM 父件 main_category_name 聚合 part_item.amount。
+   *
+   * <p>用于"包装"这种"通过虚拟父件归集"的场景：包装子件本身的 main_category 是叶子分类
+   * （纸箱 / 纸质内附件），无法直接命中"包装组件"，必须先在 BOM 里找虚拟父件
+   * （main_category=包装组件 的 9830000026238 等）→ 取下挂子件 → SUM amount。
+   *
+   * <p>注意：包装组件父件可能是虚拟件，不在同步表 lp_material_master，必须查 raw 表。
+   *
+   * <p>包私有以便单测覆盖。
+   */
+  BigDecimal sumPartByBomParentMainCategory(
+      String oaNo, String productCode, String parentMainCategory) {
+    // 1) 从 raw 主档拿到所有 main_category=parentMainCategory 的 material_code（候选父件集合）
+    List<MaterialMasterRaw> parentMasters =
+        materialMasterRawMapper.selectList(
+            Wrappers.lambdaQuery(MaterialMasterRaw.class)
+                .eq(MaterialMasterRaw::getMainCategoryName, parentMainCategory));
+    if (parentMasters == null || parentMasters.isEmpty()) {
+      return BigDecimal.ZERO;
+    }
+    Set<String> parentCodes = new LinkedHashSet<>();
+    for (MaterialMasterRaw m : parentMasters) {
+      if (StringUtils.hasText(m.getMaterialCode())) {
+        parentCodes.add(m.getMaterialCode());
+      }
+    }
+    if (parentCodes.isEmpty()) {
+      return BigDecimal.ZERO;
+    }
+    // 2) 在 BOM hierarchy 找 top_product_code=本产品 + parent_code 命中候选集合的所有子件
+    List<BomRawHierarchy> bomChildren =
+        bomRawHierarchyMapper.selectList(
+            Wrappers.lambdaQuery(BomRawHierarchy.class)
+                .eq(BomRawHierarchy::getTopProductCode, productCode)
+                .in(BomRawHierarchy::getParentCode, parentCodes));
+    if (bomChildren == null || bomChildren.isEmpty()) {
+      return BigDecimal.ZERO;
+    }
+    Set<String> targetChildCodes = new LinkedHashSet<>();
+    for (BomRawHierarchy c : bomChildren) {
+      if (StringUtils.hasText(c.getMaterialCode())) {
+        targetChildCodes.add(c.getMaterialCode());
+      }
+    }
+    if (targetChildCodes.isEmpty()) {
+      return BigDecimal.ZERO;
+    }
+    // 3) 在 part_item 里 SUM 命中子件的 amount
+    List<CostRunPartItem> parts =
+        costRunPartItemMapper.selectList(
+            Wrappers.lambdaQuery(CostRunPartItem.class)
+                .eq(CostRunPartItem::getOaNo, oaNo)
+                .eq(CostRunPartItem::getProductCode, productCode)
+                .in(CostRunPartItem::getPartCode, targetChildCodes));
+    if (parts == null || parts.isEmpty()) {
+      return BigDecimal.ZERO;
+    }
+    BigDecimal sum = BigDecimal.ZERO;
+    for (CostRunPartItem p : parts) {
+      if (p.getAmount() != null) {
+        sum = sum.add(p.getAmount());
+      }
+    }
+    return sum.setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+  }
+
+  /**
+   * T24：按子件 cost_element 聚合 part_item.amount。
+   *
+   * <p>实现：先从 lp_cost_run_part_item 取该 OA 该产品的所有 part_code + amount，
+   * 再批量查 lp_material_master 取每个 part_code 的 cost_element，
+   * 命中 targetCostElement 的累加 amount。
+   *
+   * <p>主档查不到的 part_code 不计入（保守：缺主档不归桶）。
+   *
+   * <p>包私有以便单测覆盖。
+   */
+  BigDecimal sumPartByCostElement(String oaNo, String productCode, String targetCostElement) {
+    List<CostRunPartItem> parts =
+        costRunPartItemMapper.selectList(
+            Wrappers.lambdaQuery(CostRunPartItem.class)
+                .eq(CostRunPartItem::getOaNo, oaNo)
+                .eq(CostRunPartItem::getProductCode, productCode));
+    if (parts == null || parts.isEmpty()) {
+      return BigDecimal.ZERO;
+    }
+    Set<String> partCodes = new LinkedHashSet<>();
+    for (CostRunPartItem p : parts) {
+      if (StringUtils.hasText(p.getPartCode())) {
+        partCodes.add(p.getPartCode().trim());
+      }
+    }
+    if (partCodes.isEmpty()) {
+      return BigDecimal.ZERO;
+    }
+    List<MaterialMaster> masters =
+        materialMasterMapper.selectList(
+            Wrappers.lambdaQuery(MaterialMaster.class)
+                .in(MaterialMaster::getMaterialCode, partCodes)
+                .eq(MaterialMaster::getCostElement, targetCostElement));
+    if (masters == null || masters.isEmpty()) {
+      return BigDecimal.ZERO;
+    }
+    Set<String> targetCodes = new LinkedHashSet<>();
+    for (MaterialMaster m : masters) {
+      if (StringUtils.hasText(m.getMaterialCode())) {
+        targetCodes.add(m.getMaterialCode());
+      }
+    }
+    BigDecimal sum = BigDecimal.ZERO;
+    for (CostRunPartItem p : parts) {
+      String code = p.getPartCode() == null ? null : p.getPartCode().trim();
+      if (code != null && targetCodes.contains(code) && p.getAmount() != null) {
+        sum = sum.add(p.getAmount());
+      }
+    }
+    return sum.setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+  }
+
+  /** T24：构造一行 BOM_BUCKET 汇总 DTO（rate/baseAmount 留空，只填金额 + category 标记） */
+  private CostRunCostItemDto buildBucketItem(String code, String name, BigDecimal amount) {
+    CostRunCostItemDto dto = new CostRunCostItemDto();
+    dto.setCostCode(code);
+    dto.setCostName(name);
+    dto.setAmount(amount);
+    dto.setCategory(CostItemCategory.BOM_BUCKET);
+    return dto;
   }
 
   private List<CostRunCostItemDto> loadStoredItems(String oaNo, String productCode) {
@@ -664,6 +900,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       entity.setAmount(item.getAmount());
       // T10：把缺率说明落库，便于复算 / 对账时直接看历史
       entity.setRemark(item.getRemark());
+      // T24：未显式标 category 时默认 EXPENSE（传统费用项），buildBucketItems 写入时会主动标 BOM_BUCKET
+      entity.setCategory(
+          StringUtils.hasText(item.getCategory()) ? item.getCategory() : CostItemCategory.EXPENSE);
       entities.add(entity);
     }
     batchInsert(entities);

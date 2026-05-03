@@ -10,6 +10,16 @@ public interface CostRunCostItemService {
 
   List<CostRunCostItemDto> listStoredByOaNo(String oaNo, String productCode);
 
+  /**
+   * T24：带 category 过滤的查询。
+   * <ul>
+   *   <li>category="EXPENSE" — 只拉传统费用项（旧行为）</li>
+   *   <li>category="BOM_BUCKET" — 只拉见机表汇总行（焊料/包装等）</li>
+   *   <li>category=null/空 — 拉全量</li>
+   * </ul>
+   */
+  List<CostRunCostItemDto> listStoredByOaNo(String oaNo, String productCode, String category);
+
   /** 兼容旧 caller，不上报进度 */
   default List<CostRunCostItemDto> listByMaterialCodes(
       String oaNo, String productCode, Set<String> materialCodes) {

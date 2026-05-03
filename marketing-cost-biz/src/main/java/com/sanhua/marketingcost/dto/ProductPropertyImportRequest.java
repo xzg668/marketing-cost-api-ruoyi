@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.dto;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 public class ProductPropertyImportRequest {
@@ -22,6 +23,8 @@ public class ProductPropertyImportRequest {
     private String parentModel;
     private String period;
     private String productAttr;
+    /** 系数：null = 走 schema DEFAULT 1.0000；非 null 业务方显式控制 */
+    private BigDecimal coefficient;
 
     public String getLevel1Code() {
       return level1Code;
@@ -85,6 +88,14 @@ public class ProductPropertyImportRequest {
 
     public void setProductAttr(String productAttr) {
       this.productAttr = productAttr;
+    }
+
+    public BigDecimal getCoefficient() {
+      return coefficient;
+    }
+
+    public void setCoefficient(BigDecimal coefficient) {
+      this.coefficient = coefficient;
     }
   }
 }

@@ -35,17 +35,31 @@ public class CostRunCostItemController {
     return CommonResult.success(costRunCostItemService.listByOaNo(oaNo, productCode));
   }
 
-  /** 查询费用项结果列表 */
+  /**
+   * 查询费用项结果列表
+   *
+   * <p>T24：新增可选 category 参数：
+   * <ul>
+   *   <li>不传 / 传 EXPENSE → 返回传统费用项（旧行为，14 个 cost_code）</li>
+   *   <li>传 BOM_BUCKET → 返回见机表汇总行（焊料 / 包装 等）</li>
+   * </ul>
+   */
   @PreAuthorize("@ss.hasPermi('cost:run:list')")
   @GetMapping("/cost-items/result")
   public CommonResult<List<CostRunCostItemDto>> listResult(
-      @RequestParam String oaNo, @RequestParam String productCode) {
+      @RequestParam String oaNo,
+      @RequestParam String productCode,
+      @RequestParam(required = false) String category) {
     if (!StringUtils.hasText(oaNo)) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(),"oaNo is required");
     }
     if (!StringUtils.hasText(productCode)) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(),"productCode is required");
     }
-    return CommonResult.success(costRunCostItemService.listStoredByOaNo(oaNo, productCode));
+    // T24：传 category 走 3 参签名（按 EXPENSE/BOM_BUCKET 过滤）；不传走 2 参兼容签名（默认 EXPENSE）
+    List<CostRunCostItemDto> data = StringUtils.hasText(category)
+        ? costRunCostItemService.listStoredByOaNo(oaNo, productCode, category)
+        : costRunCostItemService.listStoredByOaNo(oaNo, productCode);
+    return CommonResult.success(data);
   }
 }
