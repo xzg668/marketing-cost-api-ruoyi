@@ -75,8 +75,8 @@ VALUES
 (304, '部门经费率对照表',    300, 4, 'fixed',             'base/fixed/index',             'C', '0', '0', 'base:fixed:list',             'peoples',      'admin', NOW(), '', NOW(), '', NULL),
 -- 辅料管理（二级目录）
 (305, '辅料管理',            300, 5, 'aux', NULL, 'M', '0', '0', NULL, 'slider', 'admin', NOW(), '', NOW(), '辅料管理（含辅料价格表/辅料上浮比率表）', NULL),
-(3051, '辅料价格表',         305, 1, 'subject',           'base/aux/subject/index',       'C', '0', '0', 'base:aux:subject:list',       'money',        'admin', NOW(), '', NOW(), '', NULL),
-(3052, '辅料上浮比率表',      305, 2, 'item',              'base/aux/item/index',          'C', '0', '0', 'base:aux:item:list',          'rate',         'admin', NOW(), '', NOW(), '', NULL),
+(3051, '辅料价格表',         305, 1, 'subject',           'base/auxiliary/subject/index', 'C', '0', '0', 'base:aux:subject:list',       'money',        'admin', NOW(), '', NOW(), '', NULL),
+(3052, '辅料上浮比率表',      305, 2, 'item',              'base/auxiliary/item/index',    'C', '0', '0', 'base:aux:item:list',          'rate',         'admin', NOW(), '', NOW(), '', NULL),
 (306, '物料表',              300, 6, 'materweight',       'base/materweight/index',       'C', '0', '0', 'base:materweight:list',       'component',    'admin', NOW(), '', NOW(), '', NULL),
 (307, '工资表',              300, 7, 'salary',            'base/salary/index',            'C', '0', '0', 'base:salary:list',            'money',        'admin', NOW(), '', NOW(), '', NULL),
 (308, '质量损失率对照表',    300, 8, 'quantityLoss',      'base/quantityLoss/index',      'C', '0', '0', 'base:quantityLoss:list',      'bug',          'admin', NOW(), '', NOW(), '', NULL),
