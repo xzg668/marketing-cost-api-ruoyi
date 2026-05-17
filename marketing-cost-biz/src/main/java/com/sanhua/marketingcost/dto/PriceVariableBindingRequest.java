@@ -32,6 +32,27 @@ public class PriceVariableBindingRequest {
   /** 价源：平均价/出厂价/招标价/... null 时由被指变量决定 */
   private String priceSource;
 
+  /** V75：稳定影响因素身份；手工绑定可为空 */
+  private Long factorIdentityId;
+
+  /** V75：导入当时解析到的月度价格，仅审计快照 */
+  private Long factorMonthlyPriceId;
+
+  /** V75：来源影响因素上传批次 */
+  private Long factorUploadBatchId;
+
+  /** V76：料号历史校验关系 id */
+  private Long standardBindingId;
+
+  /** V75：Excel 公式引用 sheet */
+  private String excelSourceSheetName;
+
+  /** V75：Excel 公式引用单元格，如 E64 */
+  private String excelSourceCellRef;
+
+  /** V75：识别来源单价列公式 */
+  private String excelFormula;
+
   /** 是否按 BU 隔离查询；null 时默认 1 */
   private Integer buScoped;
 
@@ -77,6 +98,62 @@ public class PriceVariableBindingRequest {
 
   public void setPriceSource(String priceSource) {
     this.priceSource = priceSource;
+  }
+
+  public Long getFactorIdentityId() {
+    return factorIdentityId;
+  }
+
+  public void setFactorIdentityId(Long factorIdentityId) {
+    this.factorIdentityId = factorIdentityId;
+  }
+
+  public Long getFactorMonthlyPriceId() {
+    return factorMonthlyPriceId;
+  }
+
+  public void setFactorMonthlyPriceId(Long factorMonthlyPriceId) {
+    this.factorMonthlyPriceId = factorMonthlyPriceId;
+  }
+
+  public Long getFactorUploadBatchId() {
+    return factorUploadBatchId;
+  }
+
+  public void setFactorUploadBatchId(Long factorUploadBatchId) {
+    this.factorUploadBatchId = factorUploadBatchId;
+  }
+
+  public Long getStandardBindingId() {
+    return standardBindingId;
+  }
+
+  public void setStandardBindingId(Long standardBindingId) {
+    this.standardBindingId = standardBindingId;
+  }
+
+  public String getExcelSourceSheetName() {
+    return excelSourceSheetName;
+  }
+
+  public void setExcelSourceSheetName(String excelSourceSheetName) {
+    this.excelSourceSheetName = excelSourceSheetName;
+  }
+
+  public String getExcelSourceCellRef() {
+    return excelSourceCellRef;
+  }
+
+  public void setExcelSourceCellRef(String excelSourceCellRef) {
+    this.excelSourceCellRef = excelSourceCellRef;
+  }
+
+  public String getExcelFormula() {
+    return excelFormula;
+  }
+
+  public void setExcelFormula(String excelFormula) {
+    this.excelFormula = excelFormula;
   }
 
   public Integer getBuScoped() {

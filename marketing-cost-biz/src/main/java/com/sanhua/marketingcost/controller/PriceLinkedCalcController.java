@@ -33,14 +33,29 @@ public class PriceLinkedCalcController {
   @GetMapping("/calc")
   public CommonResult<PriceLinkedCalcPageResponse> list(
       @RequestParam(required = false) String oaNo,
+      @RequestParam(required = false) String customer,
+      @RequestParam(required = false) String businessUnitType,
       @RequestParam(required = false) String itemCode,
+      @RequestParam(required = false) String pricingMonth,
+      @RequestParam(required = false) String calcStatus,
+      @RequestParam(required = false) String variableSource,
       @RequestParam(required = false) String shapeAttr,
       @RequestParam(required = false, defaultValue = "1") Integer page,
       @RequestParam(required = false, defaultValue = "20") Integer pageSize) {
     int current = page == null || page < 1 ? 1 : page;
     int size = pageSize == null || pageSize < 1 ? 20 : pageSize;
     Page<com.sanhua.marketingcost.dto.PriceLinkedCalcRow> pager =
-        priceLinkedCalcService.page(oaNo, itemCode, shapeAttr, current, size);
+        priceLinkedCalcService.page(
+            oaNo,
+            customer,
+            businessUnitType,
+            itemCode,
+            pricingMonth,
+            calcStatus,
+            variableSource,
+            shapeAttr,
+            current,
+            size);
     return CommonResult.success(new PriceLinkedCalcPageResponse(pager.getTotal(), pager.getRecords()));
   }
 

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -13,10 +14,12 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.entity.FactorMonthlyPrice;
 import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.entity.PriceVariableBinding;
+import com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper;
 import com.sanhua.marketingcost.mapper.FinanceBasePriceMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableBindingMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
@@ -55,6 +58,7 @@ class FactorVariableRegistryRowLocalTokenTest {
   private PriceVariableMapper priceVariableMapper;
   private FinanceBasePriceMapper financeBasePriceMapper;
   private PriceVariableBindingMapper bindingMapper;
+  private FactorMonthlyPriceMapper factorMonthlyPriceMapper;
   private FinanceBasePriceQuery financeBasePriceQuery;
   private FactorVariableRegistryImpl registry;
 
@@ -71,11 +75,13 @@ class FactorVariableRegistryRowLocalTokenTest {
     priceVariableMapper = mock(PriceVariableMapper.class);
     financeBasePriceMapper = mock(FinanceBasePriceMapper.class);
     bindingMapper = mock(PriceVariableBindingMapper.class);
+    factorMonthlyPriceMapper = mock(FactorMonthlyPriceMapper.class);
     financeBasePriceQuery = new FinanceBasePriceQuery(financeBasePriceMapper);
     registry = new FactorVariableRegistryImpl(
         priceVariableMapper, financeBasePriceQuery, new ObjectMapper(),
         stubRowLocalRegistry());
     registry.setPriceVariableBindingMapper(bindingMapper);
+    registry.setFactorMonthlyPriceMapper(factorMonthlyPriceMapper);
   }
 
   /** 测试用 stub：V36 前硬编码的两个占位符，保持历史行为 */
@@ -125,6 +131,30 @@ class FactorVariableRegistryRowLocalTokenTest {
     return b;
   }
 
+  private static PriceVariableBinding monthlyBinding(
+      Long id,
+      Long linkedItemId,
+      String tokenName,
+      String source,
+      Long factorIdentityId,
+      Long factorMonthlyPriceId) {
+    PriceVariableBinding b = binding(id, linkedItemId, tokenName, "legacy_factor_code");
+    b.setSource(source);
+    b.setFactorIdentityId(factorIdentityId);
+    b.setFactorMonthlyPriceId(factorMonthlyPriceId);
+    return b;
+  }
+
+  private static FactorMonthlyPrice monthlyPrice(Long id, Long identityId, String month, String price) {
+    FactorMonthlyPrice p = new FactorMonthlyPrice();
+    p.setId(id);
+    p.setFactorIdentityId(identityId);
+    p.setPriceMonth(month);
+    p.setPrice(new BigDecimal(price));
+    p.setStatus("ACTIVE");
+    return p;
+  }
+
   /** 造一个带 id 的 linkedItem，避免 resolveRowLocalToken 里 id==null 提前抛 */
   private static PriceLinkedItem linkedItem(Long id) {
     PriceLinkedItem item = new PriceLinkedItem();
@@ -155,6 +185,95 @@ class FactorVariableRegistryRowLocalTokenTest {
 
     Optional<BigDecimal> result = registry.resolve("__material", ctx);
     assertThat(result).contains(new BigDecimal("17.20"));
+  }
+
+  @Test
+  @DisplayName("自动绑定和手工绑定：同一影响因素身份计算结果一致")
+  void automaticAndManualBindingsResolveSameMonthlyPrice() {
+    when(bindingMapper.findCurrentByLinkedItemId(1201L))
+        .thenReturn(List.of(monthlyBinding(
+            1L, 1201L, "材料含税价格", "EXCEL_FORMULA", 64L, 6401L)));
+    when(bindingMapper.findCurrentByLinkedItemId(1202L))
+        .thenReturn(List.of(monthlyBinding(
+            2L, 1202L, "材料含税价格", "MANUAL", 64L, 6401L)));
+
+    when(factorMonthlyPriceMapper.selectOne(any()))
+        .thenReturn(monthlyPrice(6401L, 64L, "2026-05", "16.40"));
+
+    VariableContext autoCtx = new VariableContext()
+        .linkedItem(linkedItem(1201L))
+        .pricingMonth("2026-05");
+    VariableContext manualCtx = new VariableContext()
+        .linkedItem(linkedItem(1202L))
+        .pricingMonth("2026-05");
+
+    assertThat(registry.resolve("__material", autoCtx)).contains(new BigDecimal("16.40"));
+    assertThat(registry.resolve("__material", manualCtx)).contains(new BigDecimal("16.40"));
+    verify(financeBasePriceMapper, never()).selectOne(any());
+  }
+
+  @Test
+  @DisplayName("调价回归：binding 不变，lp_factor_monthly_price 价格更新后重新计算取新价")
+  void priceAdjustmentKeepsBindingAndUsesNewMonthlyPrice() {
+    when(bindingMapper.findCurrentByLinkedItemId(1301L))
+        .thenReturn(List.of(monthlyBinding(
+            1L, 1301L, "材料含税价格", "EXCEL_FORMULA", 64L, 6401L)));
+    when(factorMonthlyPriceMapper.selectOne(any()))
+        .thenReturn(
+            monthlyPrice(6401L, 64L, "2026-05", "16.40"),
+            monthlyPrice(6401L, 64L, "2026-05", "17.00"));
+
+    VariableContext ctx = new VariableContext()
+        .linkedItem(linkedItem(1301L))
+        .pricingMonth("2026-05");
+
+    assertThat(registry.resolve("__material", ctx)).contains(new BigDecimal("16.40"));
+    assertThat(registry.resolve("__material", ctx)).contains(new BigDecimal("17.00"));
+    verify(bindingMapper, times(1)).findCurrentByLinkedItemId(1301L);
+    verify(factorMonthlyPriceMapper, times(2)).selectOne(any());
+  }
+
+  @Test
+  @DisplayName("月度价格 ID 回退时不允许跨月误取")
+  void monthlyPriceIdFallbackDoesNotCrossPricingMonth() {
+    seedVariables(financeVar("Cu"));
+    PriceVariableBinding binding =
+        monthlyBinding(1L, 1351L, "材料含税价格", "EXCEL_FORMULA", null, 6401L);
+    binding.setFactorCode("Cu");
+    when(bindingMapper.findCurrentByLinkedItemId(1351L))
+        .thenReturn(List.of(binding));
+    when(factorMonthlyPriceMapper.selectById(6401L))
+        .thenReturn(monthlyPrice(6401L, 64L, "2026-04", "16.40"));
+
+    FinanceBasePrice row = new FinanceBasePrice();
+    row.setPrice(new BigDecimal("90.00"));
+    when(financeBasePriceMapper.selectOne(any())).thenReturn(row);
+
+    VariableContext ctx = new VariableContext()
+        .linkedItem(linkedItem(1351L))
+        .pricingMonth("2026-05");
+
+    assertThat(registry.resolve("__material", ctx)).contains(new BigDecimal("90.00"));
+    verify(financeBasePriceMapper).selectOne(any());
+  }
+
+  @Test
+  @DisplayName("老数据没有 factor_identity_id 时仍回退 factor_code 老逻辑")
+  void legacyBindingWithoutIdentityFallsBackToFinanceResolver() {
+    seedVariables(financeVar("Cu"));
+    when(bindingMapper.findCurrentByLinkedItemId(1401L))
+        .thenReturn(List.of(binding(1L, 1401L, "材料含税价格", "Cu")));
+
+    FinanceBasePrice row = new FinanceBasePrice();
+    row.setPrice(new BigDecimal("90.00"));
+    when(financeBasePriceMapper.selectOne(any())).thenReturn(row);
+
+    VariableContext ctx = new VariableContext()
+        .linkedItem(linkedItem(1401L))
+        .pricingMonth("2026-05");
+
+    assertThat(registry.resolve("__material", ctx)).contains(new BigDecimal("90.00"));
+    verify(financeBasePriceMapper).selectOne(any());
   }
 
   @Test

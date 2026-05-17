@@ -1,15 +1,29 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.sanhua.marketingcost.dto.MakePartSpecCmsScrapItem;
 import com.sanhua.marketingcost.dto.MakePartSpecImportRequest;
 import com.sanhua.marketingcost.dto.MakePartSpecUpdateRequest;
 import com.sanhua.marketingcost.entity.MakePartSpec;
+import com.sanhua.marketingcost.entity.MaterialScrapRef;
+import com.sanhua.marketingcost.entity.PriceScrap;
 import com.sanhua.marketingcost.mapper.MakePartSpecMapper;
+import com.sanhua.marketingcost.mapper.MaterialScrapRefMapper;
+import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.MakePartSpecService;
+import com.sanhua.marketingcost.service.PriceScrapService;
+import com.sanhua.marketingcost.util.CmsFieldNormalizeUtils;
 import java.time.YearMonth;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -24,9 +38,16 @@ public class MakePartSpecServiceImpl implements MakePartSpecService {
   }
 
   private final MakePartSpecMapper specMapper;
+  private final MaterialScrapRefMapper materialScrapRefMapper;
+  private final PriceScrapService priceScrapService;
 
-  public MakePartSpecServiceImpl(MakePartSpecMapper specMapper) {
+  public MakePartSpecServiceImpl(
+      MakePartSpecMapper specMapper,
+      MaterialScrapRefMapper materialScrapRefMapper,
+      PriceScrapService priceScrapService) {
     this.specMapper = specMapper;
+    this.materialScrapRefMapper = materialScrapRefMapper;
+    this.priceScrapService = priceScrapService;
   }
 
   @Override
@@ -40,7 +61,9 @@ public class MakePartSpecServiceImpl implements MakePartSpecService {
     }
     query.orderByDesc(MakePartSpec::getId);
     Page<MakePartSpec> pager = new Page<>(page, pageSize);
-    return specMapper.selectPage(pager, query);
+    Page<MakePartSpec> result = specMapper.selectPage(pager, query);
+    enrichCmsScrapStatus(result.getRecords());
+    return result;
   }
 
   @Override
@@ -118,9 +141,6 @@ public class MakePartSpecServiceImpl implements MakePartSpecService {
     item.setRawMaterialCode(row.getRawMaterialCode());
     item.setRawMaterialSpec(row.getRawMaterialSpec());
     item.setRawUnitPrice(row.getRawUnitPrice());
-    item.setRecycleCode(row.getRecycleCode());
-    item.setRecycleUnitPrice(row.getRecycleUnitPrice());
-    item.setRecycleRatio(row.getRecycleRatio());
     item.setProcessFee(row.getProcessFee());
     item.setOutsourceFee(row.getOutsourceFee());
     item.setFormulaId(row.getFormulaId());
@@ -141,9 +161,6 @@ public class MakePartSpecServiceImpl implements MakePartSpecService {
     if (request.getRawMaterialCode() != null) item.setRawMaterialCode(request.getRawMaterialCode());
     if (request.getRawMaterialSpec() != null) item.setRawMaterialSpec(request.getRawMaterialSpec());
     if (request.getRawUnitPrice() != null) item.setRawUnitPrice(request.getRawUnitPrice());
-    if (request.getRecycleCode() != null) item.setRecycleCode(request.getRecycleCode());
-    if (request.getRecycleUnitPrice() != null) item.setRecycleUnitPrice(request.getRecycleUnitPrice());
-    if (request.getRecycleRatio() != null) item.setRecycleRatio(request.getRecycleRatio());
     if (request.getProcessFee() != null) item.setProcessFee(request.getProcessFee());
     if (request.getOutsourceFee() != null) item.setOutsourceFee(request.getOutsourceFee());
     if (request.getFormulaId() != null) item.setFormulaId(request.getFormulaId());
@@ -154,6 +171,142 @@ public class MakePartSpecServiceImpl implements MakePartSpecService {
 
   private void fillDefaults(MakePartSpec item) {
     if (StringUtils.hasText(item.getMaterialCode())) item.setMaterialCode(item.getMaterialCode().trim());
+    if (StringUtils.hasText(item.getRawMaterialCode())) {
+      item.setRawMaterialCode(CmsFieldNormalizeUtils.normalize(item.getRawMaterialCode()));
+    }
     if (!StringUtils.hasText(item.getPeriod())) item.setPeriod(defaultPeriod());
+  }
+
+  private void enrichCmsScrapStatus(List<MakePartSpec> specs) {
+    if (specs == null || specs.isEmpty()) {
+      return;
+    }
+    Set<String> rawMaterialCodes =
+        specs.stream()
+            .map(MakePartSpec::getRawMaterialCode)
+            .map(CmsFieldNormalizeUtils::normalize)
+            .filter(StringUtils::hasText)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+    Map<String, List<MaterialScrapRef>> mappingsByMaterial = findMappings(rawMaterialCodes);
+    Set<String> scrapCodes = collectScrapCodes(mappingsByMaterial.values());
+    Map<String, PriceScrap> currentPrices = priceScrapService.getCurrentByScrapCodes(scrapCodes);
+    if (currentPrices == null) {
+      currentPrices = Map.of();
+    }
+
+    for (MakePartSpec spec : specs) {
+      String rawMaterialCode = CmsFieldNormalizeUtils.normalize(spec.getRawMaterialCode());
+      if (!StringUtils.hasText(rawMaterialCode)) {
+        spec.setCmsMappingStatus("NO_RAW_MATERIAL");
+        spec.setCmsScraps(List.of());
+        continue;
+      }
+      List<MaterialScrapRef> mappings = mappingsByMaterial.getOrDefault(rawMaterialCode, List.of());
+      if (mappings.isEmpty()) {
+        spec.setCmsMappingStatus("MISSING_MAPPING");
+        spec.setCmsScraps(List.of());
+        continue;
+      }
+      List<MakePartSpecCmsScrapItem> cmsScraps = toCmsScrapItems(mappings, currentPrices);
+      spec.setCmsScraps(cmsScraps);
+      spec.setCmsMappingStatus(rowStatus(cmsScraps));
+    }
+  }
+
+  private Map<String, List<MaterialScrapRef>> findMappings(Set<String> rawMaterialCodes) {
+    if (rawMaterialCodes.isEmpty()) {
+      return Map.of();
+    }
+    QueryWrapper<MaterialScrapRef> query =
+        new QueryWrapper<MaterialScrapRef>()
+            .in("material_code", rawMaterialCodes)
+            .orderByAsc("material_code")
+            .orderByAsc("scrap_code")
+            .orderByDesc("id");
+    String businessUnitType = BusinessUnitContext.getCurrentBusinessUnitType();
+    if (StringUtils.hasText(businessUnitType)) {
+      query.eq("business_unit_type", businessUnitType.trim());
+    }
+    List<MaterialScrapRef> rows = materialScrapRefMapper.selectList(query);
+    if (rows == null || rows.isEmpty()) {
+      return Map.of();
+    }
+    Map<String, Map<String, MaterialScrapRef>> distinct = new LinkedHashMap<>();
+    for (MaterialScrapRef row : rows) {
+      String materialCode = CmsFieldNormalizeUtils.normalize(row.getMaterialCode());
+      String scrapCode = CmsFieldNormalizeUtils.normalize(row.getScrapCode());
+      if (!StringUtils.hasText(materialCode) || !StringUtils.hasText(scrapCode)) {
+        continue;
+      }
+      distinct.computeIfAbsent(materialCode, key -> new LinkedHashMap<>()).putIfAbsent(scrapCode, row);
+    }
+    Map<String, List<MaterialScrapRef>> result = new LinkedHashMap<>();
+    for (Map.Entry<String, Map<String, MaterialScrapRef>> entry : distinct.entrySet()) {
+      result.put(entry.getKey(), new ArrayList<>(entry.getValue().values()));
+    }
+    return result;
+  }
+
+  private Set<String> collectScrapCodes(Collection<List<MaterialScrapRef>> groupedMappings) {
+    Set<String> scrapCodes = new LinkedHashSet<>();
+    for (List<MaterialScrapRef> mappings : groupedMappings) {
+      for (MaterialScrapRef mapping : mappings) {
+        String scrapCode = CmsFieldNormalizeUtils.normalize(mapping.getScrapCode());
+        if (StringUtils.hasText(scrapCode)) {
+          scrapCodes.add(scrapCode);
+        }
+      }
+    }
+    return scrapCodes;
+  }
+
+  private List<MakePartSpecCmsScrapItem> toCmsScrapItems(
+      List<MaterialScrapRef> mappings, Map<String, PriceScrap> currentPrices) {
+    List<MakePartSpecCmsScrapItem> items = new ArrayList<>();
+    for (MaterialScrapRef mapping : mappings) {
+      String scrapCode = CmsFieldNormalizeUtils.normalize(mapping.getScrapCode());
+      if (!StringUtils.hasText(scrapCode)) {
+        continue;
+      }
+      PriceScrap price = currentPrices.get(scrapCode);
+      MakePartSpecCmsScrapItem item = new MakePartSpecCmsScrapItem();
+      item.setScrapCode(scrapCode);
+      item.setScrapName(firstText(mapping.getScrapName(), price == null ? null : price.getScrapName()));
+      item.setScrapUnit(firstText(mapping.getScrapUnit(), price == null ? null : price.getUnit()));
+      item.setMappingRatio(mapping.getRatio());
+      if (price == null || price.getRecyclePrice() == null) {
+        item.setStatus("MISSING_PRICE");
+      } else {
+        item.setCurrentRecyclePrice(price.getRecyclePrice());
+        item.setCurrentPriceUnit(price.getUnit());
+        item.setCurrentPriceMonth(price.getPricingMonth());
+        item.setStatus("OK");
+      }
+      items.add(item);
+    }
+    return items;
+  }
+
+  private String rowStatus(List<MakePartSpecCmsScrapItem> cmsScraps) {
+    boolean multi = cmsScraps.size() > 1;
+    boolean missingPrice =
+        cmsScraps.stream().anyMatch(item -> "MISSING_PRICE".equals(item.getStatus()));
+    if (multi && missingPrice) {
+      return "MULTI_SCRAP_MISSING_PRICE";
+    }
+    if (missingPrice) {
+      return "MISSING_PRICE";
+    }
+    if (multi) {
+      return "MULTI_SCRAP";
+    }
+    return "MAPPED";
+  }
+
+  private String firstText(String first, String second) {
+    if (StringUtils.hasText(first)) {
+      return first;
+    }
+    return StringUtils.hasText(second) ? second : null;
   }
 }

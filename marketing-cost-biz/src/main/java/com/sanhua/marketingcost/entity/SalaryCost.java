@@ -21,6 +21,14 @@ public class SalaryCost {
   private BigDecimal indirectLaborCost;
   private String source;
   private String businessUnit;
+  @TableField(exist = false)
+  private String period;
+  @TableField(exist = false)
+  private Long sourceImportBatchId;
+  @TableField(exist = false)
+  private String lockStatus;
+  @TableField(exist = false)
+  private String lockReason;
   /** 业务单元租户口径：COMMERCIAL / HOUSEHOLD，区别于组织口径 businessUnit（V22 补齐） */
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
@@ -109,6 +117,38 @@ public class SalaryCost {
 
   public void setBusinessUnit(String businessUnit) {
     this.businessUnit = businessUnit;
+  }
+
+  public String getPeriod() {
+    return period;
+  }
+
+  public void setPeriod(String period) {
+    this.period = period;
+  }
+
+  public Long getSourceImportBatchId() {
+    return sourceImportBatchId;
+  }
+
+  public void setSourceImportBatchId(Long sourceImportBatchId) {
+    this.sourceImportBatchId = sourceImportBatchId;
+  }
+
+  public String getLockStatus() {
+    return lockStatus;
+  }
+
+  public void setLockStatus(String lockStatus) {
+    this.lockStatus = lockStatus;
+  }
+
+  public String getLockReason() {
+    return lockReason;
+  }
+
+  public void setLockReason(String lockReason) {
+    this.lockReason = lockReason;
   }
 
   public String getBusinessUnitType() {

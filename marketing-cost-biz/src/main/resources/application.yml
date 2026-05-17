@@ -84,6 +84,11 @@ cost:
   #   new（默认）= 只走新 FormulaNormalizer + VariableRegistry 管线；失败直接抛错
   # V48 业务确认老 parser 有口径问题（不做含税转换），全量切到 new；trace 弹窗不再有 legacy/diff
   linked:
+    # 月度联动价与影响因素 Excel 自动绑定灰度开关
+    #   true（默认） = 导入时解析影响因素 sheet、单价列公式并自动写行级绑定
+    #   false        = 只导入联动价/固定价行，不自动写绑定，保留老流程可用
+    excel-auto-binding:
+      enabled: ${COST_LINKED_EXCEL_AUTO_BINDING_ENABLED:true}
     parser:
       mode: ${COST_LINKED_PARSER_MODE:new}
       dual-warn-threshold: ${COST_LINKED_PARSER_DUAL_WARN_THRESHOLD:0.01}

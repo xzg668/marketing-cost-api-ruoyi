@@ -123,7 +123,16 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
 
   @Override
   public Page<PriceLinkedCalcRow> page(
-      String oaNo, String itemCode, String shapeAttr, int page, int pageSize) {
+      String oaNo,
+      String customer,
+      String businessUnitType,
+      String itemCode,
+      String pricingMonth,
+      String calcStatus,
+      String variableSource,
+      String shapeAttr,
+      int page,
+      int pageSize) {
     // V48 业务逻辑重写：
     //   联动价计算 = 联动价主表 lp_price_linked_item 全展示（按料号去重，本表已是料号唯一）。
     //   OA 单号只是上下文：从 BOM (lp_bom_costing_row) 聚合该料号的总用量（SUM(qty_per_top)）。
@@ -132,10 +141,26 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     //   - 该 OA 的 BOM 多次用到的料号 → 部品用量 = 累计求和
     //   shapeAttr 入参保留兼容前端契约，但联动价主表无该字段，仅在合成 BomCostingRow 时透传
     //   shape 信息（用于 calc_item 主键 + trace）。
+    OaForm oaForm = findOaForm(oaNo);
+    if (!matchesTextFilter(oaForm == null ? null : oaForm.getCustomer(), customer)
+        || !matchesExactFilter(
+            oaForm == null ? null : oaForm.getBusinessUnitType(), businessUnitType)) {
+      Page<PriceLinkedCalcRow> empty = new Page<>(page, pageSize);
+      empty.setTotal(0);
+      empty.setRecords(List.of());
+      return empty;
+    }
+
     var liQuery = Wrappers.lambdaQuery(PriceLinkedItem.class)
         .eq(PriceLinkedItem::getDeleted, 0);
     if (StringUtils.hasText(itemCode)) {
       liQuery.like(PriceLinkedItem::getMaterialCode, itemCode.trim());
+    }
+    if (StringUtils.hasText(pricingMonth)) {
+      liQuery.eq(PriceLinkedItem::getPricingMonth, pricingMonth.trim());
+    }
+    if (StringUtils.hasText(businessUnitType)) {
+      liQuery.eq(PriceLinkedItem::getBusinessUnitType, businessUnitType.trim());
     }
     liQuery.orderByAsc(PriceLinkedItem::getId);
 
@@ -190,6 +215,7 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     for (BomCostingRow item : records) {
       PriceLinkedCalcRow row = new PriceLinkedCalcRow();
       row.setOaNo(item.getOaNo());
+      row.setCustomer(oaForm == null ? null : oaForm.getCustomer());
       row.setItemCode(item.getMaterialCode());
       row.setShapeAttr(item.getShapeAttr());
       row.setBomQty(item.getQtyPerTop());
@@ -199,22 +225,39 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
         row.setCalcId(calcItem.getId());
         row.setPartUnitPrice(calcItem.getPartUnitPrice());
         row.setPartAmount(calcItem.getPartAmount());
+        row.setHasTrace(StringUtils.hasText(calcItem.getTraceJson()));
+        row.setCalcStatus(resolveCalcStatus(calcItem));
+        row.setVariableSourceSummary(countVariableSources(calcItem.getTraceJson()));
+        row.setUpdatedAt(calcItem.getUpdatedAt());
         if (row.getBomQty() == null) {
           row.setBomQty(calcItem.getBomQty());
         }
+      } else {
+        row.setHasTrace(false);
+        row.setCalcStatus("PENDING");
+        row.setVariableSourceSummary(Map.of());
       }
       String normalizedItemCode =
           item.getMaterialCode() == null ? null : item.getMaterialCode().trim();
       PriceLinkedItem linkedItem = normalizedItemCode == null
           ? null : linkedItemMap.get(normalizedItemCode);
       if (linkedItem != null) {
+        row.setMaterialName(linkedItem.getMaterialName());
+        row.setSupplierName(linkedItem.getSupplierName());
+        row.setPricingMonth(linkedItem.getPricingMonth());
+        row.setBusinessUnitType(linkedItem.getBusinessUnitType());
         row.setFormulaExpr(linkedItem.getFormulaExpr());
         row.setFormulaExprCn(linkedItem.getFormulaExprCn());
       }
-      rows.add(row);
+      if (matchesExactFilter(row.getCalcStatus(), calcStatus)
+          && matchesTraceSource(calcItem == null ? null : calcItem.getTraceJson(), variableSource)) {
+        rows.add(row);
+      }
     }
     Page<PriceLinkedCalcRow> result = new Page<>(page, pageSize);
-    result.setTotal(liPage.getTotal());
+    result.setTotal(StringUtils.hasText(calcStatus) || StringUtils.hasText(variableSource)
+        ? rows.size()
+        : liPage.getTotal());
     result.setRecords(rows);
     return result;
   }
@@ -346,6 +389,7 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       }
     }
     flat.put("variables", variables);
+    putVariableDetails(flat, preview.getVariables());
     flat.put("result", preview.getResult());
     if (StringUtils.hasText(preview.getError())) {
       flat.put("error", preview.getError());
@@ -379,6 +423,102 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     // trace_json 可能为 null（legacy-only 模式或从未 refresh），
     // 这里原样透传；由前端决定展示空状态提示
     return new PriceLinkedCalcTraceResponse(calcItem.getId(), calcItem.getTraceJson());
+  }
+
+  private OaForm findOaForm(String oaNo) {
+    if (!StringUtils.hasText(oaNo)) {
+      return null;
+    }
+    return oaFormMapper.selectOne(
+        Wrappers.lambdaQuery(OaForm.class).eq(OaForm::getOaNo, oaNo.trim()).last("LIMIT 1"));
+  }
+
+  private boolean matchesTextFilter(String actual, String expected) {
+    if (!StringUtils.hasText(expected)) {
+      return true;
+    }
+    return actual != null && actual.contains(expected.trim());
+  }
+
+  private boolean matchesExactFilter(String actual, String expected) {
+    if (!StringUtils.hasText(expected)) {
+      return true;
+    }
+    return actual != null && actual.trim().equalsIgnoreCase(expected.trim());
+  }
+
+  private boolean matchesTraceSource(String traceJson, String variableSource) {
+    if (!StringUtils.hasText(variableSource)) {
+      return true;
+    }
+    if (!StringUtils.hasText(traceJson)) {
+      return false;
+    }
+    return traceJson.contains("\"source\":\"" + variableSource.trim() + "\"")
+        || traceJson.contains("\"source\": \"" + variableSource.trim() + "\"");
+  }
+
+  private String resolveCalcStatus(PriceLinkedCalcItem calcItem) {
+    if (calcItem == null) {
+      return "PENDING";
+    }
+    String traceJson = calcItem.getTraceJson();
+    if (StringUtils.hasText(traceJson) && traceJson.contains("\"error\"")) {
+      return "FAILED";
+    }
+    return calcItem.getPartUnitPrice() == null ? "PENDING" : "SUCCESS";
+  }
+
+  @SuppressWarnings("unchecked")
+  private Map<String, Integer> countVariableSources(String traceJson) {
+    if (!StringUtils.hasText(traceJson)) {
+      return Map.of();
+    }
+    try {
+      Map<String, Object> trace = objectMapper.readValue(traceJson, Map.class);
+      Object details = trace.get("variableDetails");
+      if (!(details instanceof List<?> rows)) {
+        return Map.of();
+      }
+      Map<String, Integer> summary = new LinkedHashMap<>();
+      for (Object rowObj : rows) {
+        if (!(rowObj instanceof Map<?, ?> row)) {
+          continue;
+        }
+        Object sourceObj = row.get("source");
+        if (sourceObj == null || !StringUtils.hasText(sourceObj.toString())) {
+          continue;
+        }
+        String source = sourceObj.toString();
+        summary.put(source, summary.getOrDefault(source, 0) + 1);
+      }
+      return summary;
+    } catch (JsonProcessingException e) {
+      log.debug("trace JSON 变量来源统计失败: {}", e.getMessage());
+      return Map.of();
+    }
+  }
+
+  private void putVariableDetails(Map<String, Object> trace, List<VariableDetail> details) {
+    if (trace == null || details == null || details.isEmpty()) {
+      return;
+    }
+    List<Map<String, Object>> rows = new ArrayList<>();
+    for (VariableDetail detail : details) {
+      if (detail == null || !StringUtils.hasText(detail.getCode())) {
+        continue;
+      }
+      Map<String, Object> row = new LinkedHashMap<>();
+      row.put("code", detail.getCode());
+      row.put("name", detail.getName());
+      row.put("value", detail.getValue());
+      row.put("source", detail.getSource());
+      rows.add(row);
+    }
+    if (!rows.isEmpty()) {
+      // V3-11：保留 variables 扁平 map 兼容老前端，同时新增明细数组承载变量名和来源。
+      trace.put("variableDetails", rows);
+    }
   }
 
   private int ensureCalcItems(List<BomCostingRow> items, Map<String, PriceLinkedCalcItem> calcMap) {
@@ -667,7 +807,7 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     Map<String, BigDecimal> overrides = buildOaLockOverrides(oaForm);
 
     PriceLinkedFormulaPreviewResponse resp =
-        previewService.previewForRefresh(linkedItem, overrides);
+        previewService.previewForRefresh(linkedItem, overrides, oaForm);
 
     // 防御：preview 生产实现永远返 non-null，但 Mockito 默认 stub 会返 null，
     // 这里兜底防止单测场景下 NPE；同时也是针对未来 preview 改动的健壮性
@@ -688,6 +828,7 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
         }
       }
       trace.put("variables", values);
+      putVariableDetails(trace, resp.getVariables());
     }
     // preview 有 error → 走失败分支：result=null，trace.error 记下原因（含 vat_rate 硬错等）
     if (StringUtils.hasText(resp.getError())) {

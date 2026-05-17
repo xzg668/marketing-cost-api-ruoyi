@@ -3,7 +3,13 @@ package com.sanhua.marketingcost.service.impl;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.sanhua.marketingcost.dto.CostRunCostItemDto;
+import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.CostRunTrialResponse;
+import com.sanhua.marketingcost.entity.OaForm;
+import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
@@ -12,11 +18,18 @@ import com.sanhua.marketingcost.service.CostRunProgressStore;
 import com.sanhua.marketingcost.service.CostRunResultService;
 import com.sanhua.marketingcost.service.MaterialMasterSyncService;
 import com.sanhua.marketingcost.service.PriceLinkedCalcService;
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
+import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
@@ -34,7 +47,17 @@ class CostRunTrialServiceImplTest {
   private CostRunResultService resultService;
   private CostRunProgressStore progressStore;
   private TransactionTemplate transactionTemplate;
+  private MaterialMasterSyncService materialMasterSyncService;
+  private PriceLinkedCalcService priceLinkedCalcService;
   private CostRunTrialServiceImpl service;
+
+  @BeforeAll
+  static void initTableInfo() {
+    MapperBuilderAssistant assistant =
+        new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    TableInfoHelper.initTableInfo(assistant, OaForm.class);
+    TableInfoHelper.initTableInfo(assistant, OaFormItem.class);
+  }
 
   @BeforeEach
   void setUp() {
@@ -45,12 +68,14 @@ class CostRunTrialServiceImplTest {
     resultService = mock(CostRunResultService.class);
     progressStore = new CostRunProgressStore();
     transactionTemplate = mock(TransactionTemplate.class);
+    materialMasterSyncService = mock(MaterialMasterSyncService.class);
+    priceLinkedCalcService = mock(PriceLinkedCalcService.class);
     service = new CostRunTrialServiceImpl(
         oaFormMapper, oaFormItemMapper,
         partItemService, costItemService, resultService,
         progressStore, transactionTemplate,
-        mock(MaterialMasterSyncService.class),
-        mock(PriceLinkedCalcService.class));
+        materialMasterSyncService,
+        priceLinkedCalcService);
   }
 
   // ========== 参数校验 ==========
@@ -152,5 +177,53 @@ class CostRunTrialServiceImplTest {
     ExecutionException ex = assertThrows(ExecutionException.class, () -> service.run("  OA-TRIM  ").get());
     assertInstanceOf(RuntimeException.class, ex.getCause());
     assertEquals("ERROR", progressStore.get("OA-TRIM").getStatus());
+  }
+
+  @Test
+  @DisplayName("V3-10：成本试算先自动刷新本 OA 联动价，再用同一 oaNo 计算部品明细")
+  void costTrialRefreshesLinkedCalcBeforePartPricing() throws Exception {
+    when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+      TransactionCallback<?> callback = invocation.getArgument(0);
+      return callback.doInTransaction(null);
+    });
+    when(materialMasterSyncService.syncByOaNo("OA-V3"))
+        .thenReturn(new MaterialMasterSyncService.SyncResult(1, 1, 1, "BATCH-1"));
+    when(priceLinkedCalcService.refresh("OA-V3")).thenReturn(1);
+
+    OaForm form = new OaForm();
+    form.setId(100L);
+    form.setOaNo("OA-V3");
+    when(oaFormMapper.selectOne(any())).thenReturn(form);
+
+    OaFormItem formItem = new OaFormItem();
+    formItem.setId(200L);
+    formItem.setMaterialNo("MAT-LINKED");
+    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(formItem));
+
+    CostRunPartItemDto part = new CostRunPartItemDto();
+    part.setOaNo("OA-V3");
+    part.setProductCode("MAT-LINKED");
+    part.setPartCode("MAT-LINKED");
+    part.setPartQty(BigDecimal.ONE);
+    part.setUnitPrice(new BigDecimal("72.000000"));
+    part.setPriceSource("联动价");
+    when(partItemService.listByOaNo(eq("OA-V3"), any(java.util.function.IntConsumer.class)))
+        .thenReturn(List.of(part));
+    when(costItemService.listByMaterialCodes(
+        eq("OA-V3"),
+        eq("MAT-LINKED"),
+        eq(Set.of("MAT-LINKED")),
+        any(java.util.function.IntConsumer.class)))
+        .thenReturn(List.<CostRunCostItemDto>of());
+
+    CostRunTrialResponse response = service.run("OA-V3").get();
+
+    assertEquals(1, response.getProductCount());
+    assertEquals(1, response.getPartCount());
+    InOrder inOrder = inOrder(materialMasterSyncService, priceLinkedCalcService, partItemService);
+    inOrder.verify(materialMasterSyncService).syncByOaNo("OA-V3");
+    inOrder.verify(priceLinkedCalcService).refresh("OA-V3");
+    inOrder.verify(partItemService)
+        .listByOaNo(eq("OA-V3"), any(java.util.function.IntConsumer.class));
   }
 }

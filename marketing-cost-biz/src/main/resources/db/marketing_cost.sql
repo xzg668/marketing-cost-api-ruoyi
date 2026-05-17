@@ -239,7 +239,7 @@ CREATE TABLE `lp_cost_run_part_item` (
   `unit_price` decimal(18,6) DEFAULT NULL,
   `qty` decimal(18,6) DEFAULT NULL,
   `amount` decimal(18,6) DEFAULT NULL,
-  `remark` varchar(200) DEFAULT NULL,
+  `remark` text DEFAULT NULL COMMENT '备注/取价说明',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),

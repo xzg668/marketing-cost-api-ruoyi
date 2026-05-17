@@ -1,7 +1,6 @@
 package com.sanhua.marketingcost.formula.normalize;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -15,7 +14,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * 变量别名索引单元测试 —— 覆盖最长匹配、中文别名、冲突 fail-fast。
+ * 变量别名索引单元测试 —— 覆盖最长匹配、中文别名、冲突兼容。
  */
 class VariableAliasIndexTest {
 
@@ -89,18 +88,18 @@ class VariableAliasIndexTest {
     assertThat(idx.match("Cu", 10)).isEmpty();
   }
 
-  /** (5) 别名冲突：同一别名指向不同 code 启动失败 */
+  /** (5) 别名冲突：同一别名指向不同 code 时保留先加载者，避免生产脏数据导致启动失败 */
   @Test
-  @DisplayName("别名冲突 fail-fast：'铜' 同时指向 Cu 与 Cu2")
-  void conflictFailsFast() {
-    PriceVariableMapper mapper = mock(PriceVariableMapper.class);
-    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(
+  @DisplayName("别名冲突兼容：'铜' 同时指向 Cu 与 Cu2 时保留 Cu")
+  void conflictKeepsFirstAliasOwner() {
+    VariableAliasIndex idx = build(List.of(
         variable("Cu", "[\"铜\"]"),
         variable("Cu2", "[\"铜\"]")));
-    VariableAliasIndex idx = new VariableAliasIndex(mapper);
-    assertThatThrownBy(idx::init)
-        .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("别名冲突");
+
+    Optional<VariableAliasIndex.Match> m = idx.match("铜*0.5", 0);
+
+    assertThat(m).isPresent();
+    assertThat(m.get().variableCode()).isEqualTo("Cu");
   }
 
   /** (6) variable_code 自身即别名：公式直接写 Cu 也能命中 */

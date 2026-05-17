@@ -117,6 +117,9 @@ public class FormulaDisplayRenderer {
     List<PriceVariable> rows = priceVariableMapper.selectList(
         Wrappers.lambdaQuery(PriceVariable.class).eq(PriceVariable::getStatus, "active"));
     Map<String, String> map = new HashMap<>();
+    if (rows == null) {
+      rows = List.of();
+    }
     for (PriceVariable row : rows) {
       String code = row.getVariableCode();
       if (code == null || code.isBlank()) {
@@ -128,6 +131,12 @@ public class FormulaDisplayRenderer {
         // fallback 1：variable_name（多数变量会有）
         display = row.getVariableName();
       }
+      if ((display == null || display.isBlank() || display.equals(code))
+          && code.startsWith("factor_identity_")) {
+        // Excel 自动绑定生成的影响因素变量早期可能只写了 variable_code。
+        // 老数据兼容：从 resolver_params.shortName 补可读名，避免列表仍显示 factor_identity_xxx。
+        display = resolverParamText(row.getResolverParams(), "shortName");
+      }
       if (display == null || display.isBlank()) {
         // fallback 2：variable_code 本身（保证渲染结果总是可读的英文/拼音）
         display = code;
@@ -137,7 +146,10 @@ public class FormulaDisplayRenderer {
     // V36：行局部占位符的显示名从 lp_row_local_placeholder 注册表取，而非硬编码。
     // 用 putIfAbsent 保证：如果运维同时把 __material 也登记到了 lp_price_variable
     // （不推荐，但合法），变量表的显示名优先 —— 避免两个源头同时配置出现矛盾。
-    rowLocalPlaceholderRegistry.displayNames().forEach(map::putIfAbsent);
+    Map<String, String> rowLocalDisplayNames = rowLocalPlaceholderRegistry.displayNames();
+    if (rowLocalDisplayNames != null) {
+      rowLocalDisplayNames.forEach(map::putIfAbsent);
+    }
     log.info("FormulaDisplayRenderer 加载 {} 条 code→display 映射", map.size());
     return map;
   }
@@ -159,5 +171,20 @@ public class FormulaDisplayRenderer {
       log.warn("aliases_json 解析失败: {} err={}", aliasesJson, e.getMessage());
     }
     return null;
+  }
+
+  /** 取 resolver_params 中的简单字符串字段；解析失败返回 null。 */
+  private String resolverParamText(String resolverParams, String fieldName) {
+    if (resolverParams == null || resolverParams.isBlank()) {
+      return null;
+    }
+    try {
+      JsonNode node = objectMapper.readTree(resolverParams);
+      JsonNode value = node.get(fieldName);
+      return value != null && value.isTextual() ? value.asText() : null;
+    } catch (Exception e) {
+      log.warn("resolver_params 解析失败: {} err={}", resolverParams, e.getMessage());
+      return null;
+    }
   }
 }

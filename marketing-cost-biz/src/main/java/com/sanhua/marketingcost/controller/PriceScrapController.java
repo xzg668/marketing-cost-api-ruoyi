@@ -31,7 +31,7 @@ public class PriceScrapController {
     this.priceScrapService = priceScrapService;
   }
 
-  /** 查询：可按 scrapCode / pricingMonth 过滤 */
+  /** 查询：pricingMonth 仅用于页面筛选展示，不参与自制件废料取价。 */
   @PreAuthorize("@ss.hasPermi('price:scrap:list')")
   @GetMapping
   public CommonResult<PriceScrapPageResponse> list(
@@ -43,6 +43,17 @@ public class PriceScrapController {
     int size = pageSize == null || pageSize < 1 ? 20 : pageSize;
     Page<PriceScrap> pager = priceScrapService.page(scrapCode, pricingMonth, current, size);
     return CommonResult.success(new PriceScrapPageResponse(pager.getTotal(), pager.getRecords()));
+  }
+
+  /** 按 CMS 回收料号取当前废料价，不按月份过滤。 */
+  @PreAuthorize("@ss.hasPermi('price:scrap:list')")
+  @GetMapping("/current")
+  public CommonResult<PriceScrap> current(@RequestParam String scrapCode) {
+    PriceScrap current = priceScrapService.getCurrentByScrapCode(scrapCode);
+    if (current == null) {
+      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "scrap current price not found");
+    }
+    return CommonResult.success(current);
   }
 
   @PreAuthorize("@ss.hasPermi('price:scrap:add')")

@@ -101,6 +101,34 @@ class CostRunPartItemServiceImplTest {
   }
 
   @Test
+  @DisplayName("自制件 raw_unit_price 缺失 → 部品明细标 ERROR，单价/金额为空")
+  void missingMakeRawUnitPriceShowsMissingPriceInPartItem() {
+    CostRunPartItemDto p = part("MAKE-MISS-RAW");
+    p.setPartQty(new BigDecimal("2"));
+    when(costRunPartItemMapper.selectBaseByOaNo("OA-MAKE-MISS"))
+        .thenReturn(new ArrayList<>(List.of(p)));
+    when(routerService.listCandidates(eqIgnoreCaseSafe("MAKE-MISS-RAW"), anyString(), any()))
+        .thenReturn(List.of(route(PriceTypeEnum.MAKE)));
+
+    PriceResolver makeResolver =
+        stubResolver(
+            PriceTypeEnum.MAKE,
+            PriceResolveResult.miss(
+                "自制件原料单价缺失(raw_unit_price为空, material_code=MAKE-MISS-RAW)，未按0计算"));
+    CostRunPartItemServiceImpl service = build(List.of(makeResolver));
+
+    List<CostRunPartItemDto> items = service.listByOaNo("OA-MAKE-MISS");
+
+    assertThat(items.get(0).getUnitPrice()).isNull();
+    assertThat(items.get(0).getAmount()).isNull();
+    assertThat(items.get(0).getPriceSource()).isEqualTo("ERROR");
+    assertThat(items.get(0).getRemark())
+        .contains("MAKE")
+        .contains("raw_unit_price为空")
+        .contains("未按0计算");
+  }
+
+  @Test
   @DisplayName("Router 无候选 → priceSource=NO_ROUTE + remark 提示去配路由")
   void noRouteAvailable() {
     when(costRunPartItemMapper.selectBaseByOaNo("OA-003"))

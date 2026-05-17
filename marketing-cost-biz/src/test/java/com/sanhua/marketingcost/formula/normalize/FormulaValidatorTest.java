@@ -11,6 +11,7 @@ import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -154,6 +155,27 @@ class FormulaValidatorTest {
   void rowLocalPlaceholdersAllowed() {
     assertThat(validator).isNotNull();
     assertThatCode(() -> validator.validate("[blank_weight]*[__material]-[__scrap]*[net_weight]"))
+        .doesNotThrowAnyException();
+  }
+
+  @Test
+  @DisplayName("运行时新增变量：首次未知时刷新白名单后放行")
+  void reloadWhitelistWhenRuntimeVariableCreated() {
+    AtomicReference<List<PriceVariable>> rows = new AtomicReference<>(
+        List.of(variable("Cu"), variable("process_fee")));
+    PriceVariableMapper mapper = mock(PriceVariableMapper.class);
+    when(mapper.selectList(any(Wrapper.class))).thenAnswer(invocation -> rows.get());
+    FormulaValidator runtimeValidator = new FormulaValidator(
+        mapper,
+        com.sanhua.marketingcost.formula.registry.RowLocalPlaceholderTestSupport.defaultRegistry());
+    runtimeValidator.init();
+
+    rows.set(List.of(
+        variable("Cu"),
+        variable("process_fee"),
+        variable("factor_identity_191")));
+
+    assertThatCode(() -> runtimeValidator.validate("[factor_identity_191]+[process_fee]"))
         .doesNotThrowAnyException();
   }
 

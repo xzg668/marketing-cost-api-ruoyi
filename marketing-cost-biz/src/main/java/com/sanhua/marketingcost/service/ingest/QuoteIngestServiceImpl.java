@@ -1,0 +1,420 @@
+package com.sanhua.marketingcost.service.ingest;
+
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.dto.ingest.QuoteIngestRequest;
+import com.sanhua.marketingcost.dto.ingest.QuoteIngestResponse;
+import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedDocument;
+import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedExtraFee;
+import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedExtraField;
+import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedHeader;
+import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedItem;
+import com.sanhua.marketingcost.dto.ingest.QuoteValidationError;
+import com.sanhua.marketingcost.entity.OaForm;
+import com.sanhua.marketingcost.entity.OaFormExtraFee;
+import com.sanhua.marketingcost.entity.OaFormExtraField;
+import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.entity.QuoteBomStatus;
+import com.sanhua.marketingcost.entity.QuoteIngestLog;
+import com.sanhua.marketingcost.enums.QuoteBomStatusCode;
+import com.sanhua.marketingcost.enums.QuoteIngestStatus;
+import com.sanhua.marketingcost.mapper.OaFormExtraFeeMapper;
+import com.sanhua.marketingcost.mapper.OaFormExtraFieldMapper;
+import com.sanhua.marketingcost.mapper.OaFormItemMapper;
+import com.sanhua.marketingcost.mapper.OaFormMapper;
+import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.HexFormat;
+import java.util.Map;
+import java.util.UUID;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+
+@Service
+public class QuoteIngestServiceImpl implements QuoteIngestService {
+  private final QuoteNormalizeService quoteNormalizeService;
+  private final QuoteIngestLogService quoteIngestLogService;
+  private final OaFormMapper oaFormMapper;
+  private final OaFormItemMapper oaFormItemMapper;
+  private final OaFormExtraFeeMapper oaFormExtraFeeMapper;
+  private final OaFormExtraFieldMapper oaFormExtraFieldMapper;
+  private final QuoteBomStatusMapper quoteBomStatusMapper;
+  private final ObjectMapper objectMapper;
+
+  public QuoteIngestServiceImpl(
+      QuoteNormalizeService quoteNormalizeService,
+      QuoteIngestLogService quoteIngestLogService,
+      OaFormMapper oaFormMapper,
+      OaFormItemMapper oaFormItemMapper,
+      OaFormExtraFeeMapper oaFormExtraFeeMapper,
+      OaFormExtraFieldMapper oaFormExtraFieldMapper,
+      QuoteBomStatusMapper quoteBomStatusMapper,
+      ObjectMapper objectMapper) {
+    this.quoteNormalizeService = quoteNormalizeService;
+    this.quoteIngestLogService = quoteIngestLogService;
+    this.oaFormMapper = oaFormMapper;
+    this.oaFormItemMapper = oaFormItemMapper;
+    this.oaFormExtraFeeMapper = oaFormExtraFeeMapper;
+    this.oaFormExtraFieldMapper = oaFormExtraFieldMapper;
+    this.quoteBomStatusMapper = quoteBomStatusMapper;
+    this.objectMapper = objectMapper;
+  }
+
+  @Override
+  @Transactional
+  public QuoteIngestResponse ingest(QuoteIngestRequest request) {
+    String requestId = resolveRequestId(request);
+    String idempotencyKey = resolveIdempotencyKey(request);
+    String payloadJson = toJson(request);
+    String payloadHash = sha256(payloadJson);
+    QuoteNormalizedDocument normalized = quoteNormalizeService.normalize(request);
+    String normalizedJson = toJson(normalized);
+
+    QuoteIngestLog existingLog = quoteIngestLogService.findByIdempotencyKey(idempotencyKey);
+    if (existingLog != null && payloadHash.equals(existingLog.getPayloadHash())) {
+      return duplicateResponse(existingLog, normalized);
+    }
+
+    QuoteIngestLog log =
+        existingLog == null
+            ? quoteIngestLogService.createReceived(
+                request, normalized, requestId, idempotencyKey, payloadHash, payloadJson, normalizedJson)
+            : existingLog;
+    if (existingLog != null) {
+      quoteIngestLogService.refreshReceived(
+          log, request, normalized, requestId, payloadHash, payloadJson, normalizedJson);
+    }
+
+    if (normalized.getErrors() != null && !normalized.getErrors().isEmpty()) {
+      quoteIngestLogService.markRejected(log, normalized, "接入校验失败");
+      return rejectedResponse(log, normalized, "接入校验失败");
+    }
+
+    String oaNo = resolveOaNo(normalized.getHeader(), request);
+    OaForm existingForm = findExistingForm(oaNo, request);
+    if (isCalculated(existingForm)) {
+      normalized
+          .getErrors()
+          .add(
+              new QuoteValidationError(
+                  "oaNo", "CALCULATED_FORM_LOCKED", "单据已核算，默认禁止通过接入覆盖关键字段"));
+      quoteIngestLogService.markRejected(log, normalized, "单据已核算，拒绝覆盖");
+      return rejectedResponse(log, normalized, "单据已核算，拒绝覆盖");
+    }
+
+    OaForm form = upsertOaForm(existingForm, normalized.getHeader(), request, oaNo, log.getId());
+    Map<String, Long> itemIdMap = replaceItems(form, normalized);
+    replaceExtraFees(form, normalized, itemIdMap, log.getId());
+    replaceExtraFields(form, normalized, itemIdMap, log.getId());
+    replaceBomStatuses(form, normalized, itemIdMap);
+
+    quoteIngestLogService.markImported(log, normalized, form.getId(), form.getOaNo());
+    return importedResponse(log, normalized, form);
+  }
+
+  private OaForm upsertOaForm(
+      OaForm existing, QuoteNormalizedHeader header, QuoteIngestRequest request, String oaNo, Long logId) {
+    OaForm form = existing == null ? new OaForm() : existing;
+    form.setOaNo(oaNo);
+    form.setSourceType(header.getSourceType());
+    form.setSourceSystem(header.getSourceSystem());
+    form.setExternalFormNo(header.getExternalFormNo());
+    form.setProcessCode(header.getProcessCode());
+    form.setProcessName(header.getProcessName());
+    form.setQuoteScenario(header.getQuoteScenario());
+    form.setClassificationStatus(header.getClassificationStatus());
+    form.setBusinessUnitType(header.getBusinessUnitType());
+    form.setFormType(header.getFormType());
+    form.setApplyDate(header.getApplyDate());
+    form.setCustomer(header.getCustomer());
+    form.setApplicantDept(header.getApplicantDept());
+    form.setApplicantOffice(header.getApplicantOffice());
+    form.setApplicantName(header.getApplicantName());
+    form.setUrgency(header.getUrgency());
+    form.setProductAttr(header.getProductAttr());
+    form.setPriceLinkMode(header.getPriceLinkMode());
+    form.setOverseasSalesMode(header.getOverseasSalesMode());
+    form.setCopperPrice(header.getCopperPrice());
+    form.setZincPrice(header.getZincPrice());
+    form.setAluminumPrice(header.getAluminumPrice());
+    form.setSteelPrice(header.getSteelPrice());
+    form.setSilverPrice(header.getSilverPrice());
+    form.setGoldPrice(header.getGoldPrice());
+    form.setSus304Price(header.getSus304Price());
+    form.setSus316lPrice(header.getSus316lPrice());
+    form.setOtherMaterial(header.getOtherMaterial());
+    form.setBaseShipping(header.getBaseShipping());
+    form.setSaleLink(header.getSaleLink());
+    form.setRemark(header.getRemark());
+    form.setIngestLogId(logId);
+    if (!StringUtils.hasText(form.getCalcStatus())) {
+      form.setCalcStatus("未核算");
+    }
+    form.setUpdatedAt(LocalDateTime.now());
+    if (existing == null) {
+      form.setCreatedAt(LocalDateTime.now());
+      oaFormMapper.insert(form);
+    } else {
+      oaFormMapper.updateById(form);
+    }
+    return form;
+  }
+
+  private Map<String, Long> replaceItems(OaForm form, QuoteNormalizedDocument normalized) {
+    oaFormItemMapper.delete(
+        Wrappers.lambdaQuery(OaFormItem.class).eq(OaFormItem::getOaFormId, form.getId()));
+    Map<String, Long> itemIdMap = new HashMap<>();
+    for (QuoteNormalizedItem source : normalized.getItems()) {
+      OaFormItem item = new OaFormItem();
+      item.setOaFormId(form.getId());
+      item.setExternalLineId(source.getExternalLineId());
+      item.setSeq(source.getSeq());
+      item.setProductName(source.getProductName());
+      item.setCustomerDrawing(source.getCustomerDrawing());
+      item.setCustomerCode(source.getCustomerCode());
+      item.setMaterialNo(source.getMaterialNo());
+      item.setSunlModel(source.getSunlModel());
+      item.setSpec(source.getSpec());
+      item.setProductAttr(source.getProductAttr());
+      item.setBusinessType(source.getBusinessType());
+      item.setFirstQuoteFlag(booleanToTinyint(source.getFirstQuoteFlag()));
+      item.setCertificationRequired(booleanToTinyint(source.getCertificationRequired()));
+      item.setOriginCountry(source.getOriginCountry());
+      item.setTechnicianName(source.getTechnicianName());
+      item.setPackageType(source.getPackageType());
+      item.setPackageMethod(source.getPackageMethod());
+      item.setPackageComponentCode(source.getPackageComponentCode());
+      item.setPackageQty(source.getPackageQty());
+      item.setShippingFee(source.getShippingFee());
+      item.setSupportQty(source.getSupportQty());
+      item.setAnnualVolume(source.getAnnualVolume());
+      item.setProjectNo(source.getProjectNo());
+      item.setProductStatus(source.getProductStatus());
+      item.setScrapRate(source.getScrapRate());
+      item.setUnitLaborCost(source.getUnitLaborCost());
+      item.setClassificationStatus(source.getClassificationStatus());
+      item.setBusinessUnitType(source.getBusinessUnitType());
+      item.setValidDate(source.getValidDate());
+      item.setCreatedAt(LocalDateTime.now());
+      item.setUpdatedAt(LocalDateTime.now());
+      oaFormItemMapper.insert(item);
+      itemIdMap.put(itemKey(source.getExternalLineId(), source.getSeq()), item.getId());
+    }
+    return itemIdMap;
+  }
+
+  private void replaceExtraFees(
+      OaForm form, QuoteNormalizedDocument normalized, Map<String, Long> itemIdMap, Long logId) {
+    oaFormExtraFeeMapper.delete(
+        Wrappers.lambdaQuery(OaFormExtraFee.class).eq(OaFormExtraFee::getOaFormId, form.getId()));
+    int fallback = 1;
+    for (QuoteNormalizedExtraFee source : normalized.getExtraFees()) {
+      OaFormExtraFee fee = new OaFormExtraFee();
+      fee.setOaFormId(form.getId());
+      fee.setOaFormItemId(itemIdMap.get(itemKey(source.getExternalLineId(), source.getItemSeq())));
+      fee.setFeeCode(defaultCode(source.getFeeCode(), "FEE_" + fallback++));
+      fee.setFeeName(defaultCode(source.getFeeName(), fee.getFeeCode()));
+      fee.setFeeCategory(source.getFeeCategory());
+      fee.setAmount(source.getAmount());
+      fee.setUnit(source.getUnit());
+      fee.setRemark(source.getRemark());
+      fee.setSourceType("INGEST");
+      fee.setSourceFieldName(source.getSourceFieldName());
+      fee.setIngestLogId(logId);
+      fee.setCreatedAt(LocalDateTime.now());
+      fee.setUpdatedAt(LocalDateTime.now());
+      oaFormExtraFeeMapper.insert(fee);
+    }
+  }
+
+  private void replaceExtraFields(
+      OaForm form, QuoteNormalizedDocument normalized, Map<String, Long> itemIdMap, Long logId) {
+    oaFormExtraFieldMapper.delete(
+        Wrappers.lambdaQuery(OaFormExtraField.class).eq(OaFormExtraField::getOaFormId, form.getId()));
+    int fallback = 1;
+    for (QuoteNormalizedExtraField source : normalized.getExtraFields()) {
+      OaFormExtraField field = new OaFormExtraField();
+      field.setOaFormId(form.getId());
+      field.setOaFormItemId(itemIdMap.get(itemKey(source.getExternalLineId(), source.getItemSeq())));
+      field.setFieldCode(defaultCode(source.getFieldCode(), "FIELD_" + fallback++));
+      field.setFieldName(defaultCode(source.getFieldName(), field.getFieldCode()));
+      field.setFieldValue(source.getFieldValue());
+      field.setFieldValueNumber(source.getFieldValueNumber());
+      field.setFieldValueDate(source.getFieldValueDate());
+      field.setValueType(defaultCode(source.getValueType(), "TEXT"));
+      field.setSourceFieldName(source.getSourceFieldName());
+      field.setSourceFieldPath(source.getSourceFieldPath());
+      field.setIngestLogId(logId);
+      field.setCreatedAt(LocalDateTime.now());
+      field.setUpdatedAt(LocalDateTime.now());
+      oaFormExtraFieldMapper.insert(field);
+    }
+  }
+
+  private void replaceBomStatuses(
+      OaForm form, QuoteNormalizedDocument normalized, Map<String, Long> itemIdMap) {
+    quoteBomStatusMapper.delete(
+        Wrappers.lambdaQuery(QuoteBomStatus.class).eq(QuoteBomStatus::getOaFormId, form.getId()));
+    for (QuoteNormalizedItem source : normalized.getItems()) {
+      QuoteBomStatus status = new QuoteBomStatus();
+      status.setOaFormId(form.getId());
+      status.setOaFormItemId(itemIdMap.get(itemKey(source.getExternalLineId(), source.getSeq())));
+      status.setOaNo(form.getOaNo());
+      status.setProductCode(source.getMaterialNo());
+      status.setProductModel(source.getSunlModel());
+      status.setCustomerCode(source.getCustomerCode());
+      status.setPackageType(source.getPackageType());
+      status.setPackageMethod(source.getPackageMethod());
+      status.setTechnicianName(source.getTechnicianName());
+      status.setBomStatus(
+          StringUtils.hasText(source.getMaterialNo())
+              ? QuoteBomStatusCode.NOT_CHECKED.getCode()
+              : QuoteBomStatusCode.NO_BOM.getCode());
+      status.setCreatedAt(LocalDateTime.now());
+      status.setUpdatedAt(LocalDateTime.now());
+      quoteBomStatusMapper.insert(status);
+    }
+  }
+
+  private OaForm findExistingForm(String oaNo, QuoteIngestRequest request) {
+    if (StringUtils.hasText(oaNo)) {
+      OaForm byOaNo =
+          oaFormMapper.selectOne(
+              Wrappers.lambdaQuery(OaForm.class).eq(OaForm::getOaNo, oaNo.trim()));
+      if (byOaNo != null) {
+        return byOaNo;
+      }
+    }
+    if (request != null
+        && StringUtils.hasText(request.getSourceType())
+        && StringUtils.hasText(request.getExternalFormNo())) {
+      return oaFormMapper.selectOne(
+          Wrappers.lambdaQuery(OaForm.class)
+              .eq(OaForm::getSourceType, request.getSourceType().trim())
+              .eq(OaForm::getExternalFormNo, request.getExternalFormNo().trim()));
+    }
+    return null;
+  }
+
+  private QuoteIngestResponse importedResponse(
+      QuoteIngestLog log, QuoteNormalizedDocument normalized, OaForm form) {
+    QuoteIngestResponse response = baseResponse(log, normalized);
+    response.setAccepted(true);
+    response.setOaFormId(form.getId());
+    response.setOaNo(form.getOaNo());
+    response.setIngestStatus(log.getIngestStatus());
+    return response;
+  }
+
+  private QuoteIngestResponse duplicateResponse(
+      QuoteIngestLog log, QuoteNormalizedDocument normalized) {
+    QuoteIngestResponse response = baseResponse(log, normalized);
+    response.setAccepted(true);
+    response.setOaNo(log.getOaNo());
+    response.setIngestStatus(log.getIngestStatus());
+    return response;
+  }
+
+  private QuoteIngestResponse rejectedResponse(
+      QuoteIngestLog log, QuoteNormalizedDocument normalized, String message) {
+    QuoteIngestResponse response = baseResponse(log, normalized);
+    response.setAccepted(false);
+    response.setIngestStatus(QuoteIngestStatus.REJECTED.getCode());
+    if (response.getErrors().isEmpty()) {
+      response.getErrors().add(new QuoteValidationError("$", "INGEST_REJECTED", message));
+    }
+    return response;
+  }
+
+  private QuoteIngestResponse baseResponse(QuoteIngestLog log, QuoteNormalizedDocument normalized) {
+    QuoteNormalizedHeader header = normalized == null ? null : normalized.getHeader();
+    QuoteIngestResponse response = new QuoteIngestResponse();
+    response.setIngestLogId(log == null ? null : log.getId());
+    response.setRequestId(log == null ? null : log.getRequestId());
+    response.setIdempotencyKey(log == null ? null : log.getIdempotencyKey());
+    response.setSourceType(header == null ? null : header.getSourceType());
+    response.setExternalFormNo(header == null ? null : header.getExternalFormNo());
+    response.setOaNo(header == null ? null : header.getOaNo());
+    response.setProcessCode(header == null ? null : header.getProcessCode());
+    response.setQuoteScenario(header == null ? null : header.getQuoteScenario());
+    response.setClassificationStatus(header == null ? null : header.getClassificationStatus());
+    response.setItemCount(normalized == null || normalized.getItems() == null ? 0 : normalized.getItems().size());
+    response.setErrors(normalized == null ? java.util.List.of() : normalized.getErrors());
+    response.setWarnings(normalized == null ? java.util.List.of() : normalized.getWarnings());
+    return response;
+  }
+
+  private String resolveRequestId(QuoteIngestRequest request) {
+    if (request != null && StringUtils.hasText(request.getRequestId())) {
+      return request.getRequestId().trim();
+    }
+    return "QI-" + UUID.randomUUID();
+  }
+
+  private String resolveIdempotencyKey(QuoteIngestRequest request) {
+    if (request != null && StringUtils.hasText(request.getIdempotencyKey())) {
+      return request.getIdempotencyKey().trim();
+    }
+    String sourceType = request == null ? "UNKNOWN" : defaultCode(request.getSourceType(), "UNKNOWN");
+    String formNo =
+        request == null
+            ? "UNKNOWN"
+            : defaultCode(coalesce(request.getExternalFormNo(), request.getOaNo()), "UNKNOWN");
+    String version = request == null ? "1" : defaultCode(request.getVersion(), "1");
+    return sourceType + ":" + formNo + ":" + version;
+  }
+
+  private String resolveOaNo(QuoteNormalizedHeader header, QuoteIngestRequest request) {
+    String oaNo = header == null ? null : header.getOaNo();
+    if (StringUtils.hasText(oaNo)) {
+      return oaNo.trim();
+    }
+    if (request != null && StringUtils.hasText(request.getExternalFormNo())) {
+      return request.getExternalFormNo().trim();
+    }
+    return "QI-" + UUID.randomUUID();
+  }
+
+  private boolean isCalculated(OaForm form) {
+    return form != null && "已核算".equals(form.getCalcStatus());
+  }
+
+  private String toJson(Object value) {
+    try {
+      return objectMapper.writeValueAsString(value);
+    } catch (JsonProcessingException ex) {
+      throw new QuoteIngestException("接入报文 JSON 序列化失败");
+    }
+  }
+
+  private String sha256(String text) {
+    try {
+      MessageDigest digest = MessageDigest.getInstance("SHA-256");
+      return HexFormat.of().formatHex(digest.digest(text.getBytes(StandardCharsets.UTF_8)));
+    } catch (NoSuchAlgorithmException ex) {
+      throw new QuoteIngestException("当前 JDK 不支持 SHA-256");
+    }
+  }
+
+  private Integer booleanToTinyint(Boolean value) {
+    return value == null ? null : (value ? 1 : 0);
+  }
+
+  private String itemKey(String externalLineId, Integer seq) {
+    return StringUtils.hasText(externalLineId) ? "E:" + externalLineId.trim() : "S:" + seq;
+  }
+
+  private String defaultCode(String value, String defaultValue) {
+    return StringUtils.hasText(value) ? value.trim() : defaultValue;
+  }
+
+  private String coalesce(String first, String second) {
+    return StringUtils.hasText(first) ? first.trim() : second;
+  }
+}

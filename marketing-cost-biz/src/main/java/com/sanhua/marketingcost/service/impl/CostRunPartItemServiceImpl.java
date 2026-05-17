@@ -107,6 +107,7 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     String oaNoValue = oaNo.trim();
     List<CostRunPartItemDto> items = costRunPartItemMapper.selectBaseByOaNo(oaNoValue);
     if (items.isEmpty()) {
+      saveCostRunItems(oaNoValue, items);
       progress.accept(100);
       return items;
     }
@@ -451,11 +452,14 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
   }
 
   private void saveCostRunItems(String oaNo, List<CostRunPartItemDto> items) {
-    if (!StringUtils.hasText(oaNo) || items == null || items.isEmpty()) {
+    if (!StringUtils.hasText(oaNo) || items == null) {
       return;
     }
     costRunPartItemMapper.delete(
         Wrappers.lambdaQuery(CostRunPartItem.class).eq(CostRunPartItem::getOaNo, oaNo));
+    if (items.isEmpty()) {
+      return;
+    }
     List<CostRunPartItem> entities = new ArrayList<>(items.size());
     for (CostRunPartItemDto item : items) {
       CostRunPartItem entity = new CostRunPartItem();

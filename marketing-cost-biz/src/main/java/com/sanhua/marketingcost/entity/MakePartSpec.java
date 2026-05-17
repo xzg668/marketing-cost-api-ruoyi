@@ -5,9 +5,12 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.sanhua.marketingcost.dto.MakePartSpecCmsScrapItem;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 制造件工艺规格 entity (Task #8) —— 对应 lp_make_part_spec 表。
@@ -37,6 +40,12 @@ public class MakePartSpec {
   private LocalDate effectiveFrom;
   private LocalDate effectiveTo;
   private String remark;
+
+  @TableField(exist = false)
+  private String cmsMappingStatus;
+
+  @TableField(exist = false)
+  private List<MakePartSpecCmsScrapItem> cmsScraps = new ArrayList<>();
 
   /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
   @TableField(fill = FieldFill.INSERT)
@@ -173,6 +182,18 @@ public class MakePartSpec {
   }
   public void setRemark(String remark) {
     this.remark = remark;
+  }
+  public String getCmsMappingStatus() {
+    return cmsMappingStatus;
+  }
+  public void setCmsMappingStatus(String cmsMappingStatus) {
+    this.cmsMappingStatus = cmsMappingStatus;
+  }
+  public List<MakePartSpecCmsScrapItem> getCmsScraps() {
+    return cmsScraps;
+  }
+  public void setCmsScraps(List<MakePartSpecCmsScrapItem> cmsScraps) {
+    this.cmsScraps = cmsScraps == null ? new ArrayList<>() : cmsScraps;
   }
   public LocalDateTime getCreatedAt() {
     return createdAt;

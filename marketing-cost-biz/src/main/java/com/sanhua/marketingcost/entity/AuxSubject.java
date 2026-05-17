@@ -22,6 +22,12 @@ public class AuxSubject {
   private BigDecimal unitPrice;
   private String period;
   private String source;
+  @TableField(exist = false)
+  private Long sourceImportBatchId;
+  @TableField(exist = false)
+  private String lockStatus;
+  @TableField(exist = false)
+  private String amountCalcMode;
   /** 业务单元租户口径：COMMERCIAL / HOUSEHOLD，用于多租户数据隔离（V22 补齐） */
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
@@ -118,6 +124,30 @@ public class AuxSubject {
 
   public void setSource(String source) {
     this.source = source;
+  }
+
+  public Long getSourceImportBatchId() {
+    return sourceImportBatchId;
+  }
+
+  public void setSourceImportBatchId(Long sourceImportBatchId) {
+    this.sourceImportBatchId = sourceImportBatchId;
+  }
+
+  public String getLockStatus() {
+    return lockStatus;
+  }
+
+  public void setLockStatus(String lockStatus) {
+    this.lockStatus = lockStatus;
+  }
+
+  public String getAmountCalcMode() {
+    return amountCalcMode;
+  }
+
+  public void setAmountCalcMode(String amountCalcMode) {
+    this.amountCalcMode = amountCalcMode;
   }
 
   public String getBusinessUnitType() {

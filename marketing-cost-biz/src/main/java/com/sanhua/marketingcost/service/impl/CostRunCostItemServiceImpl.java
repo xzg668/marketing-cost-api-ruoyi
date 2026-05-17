@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.impl;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.AuxCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
+import com.sanhua.marketingcost.entity.CmsCostSourceEffective;
 import com.sanhua.marketingcost.entity.CostRunCostItem;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
 import com.sanhua.marketingcost.entity.DepartmentFundRate;
@@ -19,6 +20,7 @@ import com.sanhua.marketingcost.entity.SalaryCost;
 import com.sanhua.marketingcost.entity.ThreeExpenseRate;
 import com.sanhua.marketingcost.mapper.AuxCostItemMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
+import com.sanhua.marketingcost.mapper.CmsCostSourceEffectiveMapper;
 import com.sanhua.marketingcost.mapper.CostRunCostItemMapper;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
 import com.sanhua.marketingcost.mapper.DepartmentFundRateMapper;
@@ -35,6 +37,7 @@ import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
 import com.sanhua.marketingcost.enums.CostItemCategory;
 import com.sanhua.marketingcost.service.CostRunCacheLookupService;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
+import com.sanhua.marketingcost.service.CmsCostEffectiveSourceEnsureService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,6 +45,8 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -57,6 +62,11 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
   private static final String DIRECT_LABOR = "DIRECT_LABOR";
   private static final String INDIRECT_LABOR = "INDIRECT_LABOR";
+  private static final String CMS_SOURCE = "CMS";
+  private static final String CMS_SOURCE_EFFECTIVE = "CMS_EFFECTIVE";
+  private static final String CMS_SOURCE_TYPE_SALARY_DIRECT = "SALARY_DIRECT";
+  private static final String CMS_SOURCE_TYPE_SALARY_INDIRECT = "SALARY_INDIRECT";
+  private static final String CMS_AUTO_OPERATOR = "SYSTEM_AUTO";
   private static final String MATERIAL = "MATERIAL";
   private static final String LOSS = "LOSS";
   private static final String MANUFACTURE = "MANUFACTURE";
@@ -72,6 +82,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private static final String WATER_POWER = "WATER_POWER";
   private static final String DEPT_OTHER = "DEPT_OTHER";
   private static final String AUX_PREFIX = "AUX_";
+  private static final String AUX_AMOUNT_MODE_DIRECT = "DIRECT";
+  private static final String EXCLUDED_AUX_SUBJECT_PACKAGING = "包装辅料";
   private static final String OTHER_EXP_PREFIX = "OTHER_EXP_";
   /** T11：包装费固定 cost_code，区别于 lp_other_expense_rate 的 OTHER_EXP_<id> 系列 */
   private static final String OTHER_EXP_PACKAGE = "OTHER_EXP_PACKAGE";
@@ -110,6 +122,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
   private final SalaryCostMapper salaryCostMapper;
+  private final CmsCostSourceEffectiveMapper cmsCostSourceEffectiveMapper;
+  private final CmsCostEffectiveSourceEnsureService cmsCostEffectiveSourceEnsureService;
   private final DepartmentFundRateMapper departmentFundRateMapper;
   private final AuxCostItemMapper auxCostItemMapper;
   private final CostRunPartItemMapper costRunPartItemMapper;
@@ -142,6 +156,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       OaFormMapper oaFormMapper,
       OaFormItemMapper oaFormItemMapper,
       SalaryCostMapper salaryCostMapper,
+      CmsCostSourceEffectiveMapper cmsCostSourceEffectiveMapper,
+      CmsCostEffectiveSourceEnsureService cmsCostEffectiveSourceEnsureService,
       DepartmentFundRateMapper departmentFundRateMapper,
       AuxCostItemMapper auxCostItemMapper,
       CostRunPartItemMapper costRunPartItemMapper,
@@ -159,6 +175,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.salaryCostMapper = salaryCostMapper;
+    this.cmsCostSourceEffectiveMapper = cmsCostSourceEffectiveMapper;
+    this.cmsCostEffectiveSourceEnsureService = cmsCostEffectiveSourceEnsureService;
     this.departmentFundRateMapper = departmentFundRateMapper;
     this.auxCostItemMapper = auxCostItemMapper;
     this.costRunPartItemMapper = costRunPartItemMapper;
@@ -230,7 +248,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       return Collections.emptyList();
     }
 
-    return calculateItems(oaNoValue, productCodeValue, materialCodes);
+    CostSourceContext costSourceContext = resolveCostSourceContext(form, formItems, productCodeValue);
+    return calculateItems(oaNoValue, productCodeValue, materialCodes, costSourceContext);
   }
 
   @Override
@@ -289,35 +308,31 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     }
     // T16：calculateItems 是原子计算，开始/结束各报一次进度（中途无明确切片节点）
     progress.accept(0);
-    List<CostRunCostItemDto> result = calculateItems(oaNo.trim(), productCode.trim(), materialCodes);
+    List<CostRunCostItemDto> result =
+        calculateItems(
+            oaNo.trim(),
+            productCode.trim(),
+            materialCodes,
+            resolveCostSourceContext(oaNo.trim(), productCode.trim()));
     progress.accept(100);
     return result;
   }
 
   private List<CostRunCostItemDto> calculateItems(
-      String oaNoValue, String productCodeValue, Set<String> materialCodes) {
+      String oaNoValue,
+      String productCodeValue,
+      Set<String> materialCodes,
+      CostSourceContext costSourceContext) {
+    ensureCmsCostSources(costSourceContext);
     List<SalaryCost> salaryCosts =
         salaryCostMapper.selectList(
             Wrappers.lambdaQuery(SalaryCost.class).in(SalaryCost::getMaterialCode, materialCodes));
 
-    // 1) 先算人工 -> 部门经费
-    BigDecimal directTotal = BigDecimal.ZERO;
-    BigDecimal indirectTotal = BigDecimal.ZERO;
-    Map<String, LaborSum> laborByUnit = new LinkedHashMap<>();
-    for (SalaryCost cost : salaryCosts) {
-      BigDecimal direct = nullToZero(cost.getDirectLaborCost());
-      BigDecimal indirect = nullToZero(cost.getIndirectLaborCost());
-      directTotal = directTotal.add(direct);
-      indirectTotal = indirectTotal.add(indirect);
-
-      String businessUnit = trimToNull(cost.getBusinessUnit());
-      if (businessUnit == null) {
-        continue;
-      }
-      LaborSum sum = laborByUnit.computeIfAbsent(businessUnit, (key) -> new LaborSum());
-      sum.direct = sum.direct.add(direct);
-      sum.indirect = sum.indirect.add(indirect);
-    }
+    // 1) 先算人工 -> 部门经费。正式核算有成本年度时，工资金额只取 CMS 公共生效来源。
+    LaborCostResult laborResult = buildLaborCostResult(materialCodes, salaryCosts, costSourceContext);
+    BigDecimal directTotal = laborResult.directTotal;
+    BigDecimal indirectTotal = laborResult.indirectTotal;
+    Map<String, LaborSum> laborByUnit = laborResult.laborByUnit;
 
     DepartmentFeeResult feeResult = calculateDepartmentFees(laborByUnit);
 
@@ -339,7 +354,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     costCodes.add(DEPT_OTHER);
 
     // 2) 再算辅料
-    List<CostRunCostItemDto> auxItems = buildAuxItems(materialCodes);
+    List<CostRunCostItemDto> auxItems = buildAuxItems(materialCodes, costSourceContext);
     BigDecimal auxTotal = BigDecimal.ZERO;
     for (CostRunCostItemDto auxItem : auxItems) {
       if (auxItem.getAmount() != null) {
@@ -468,8 +483,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     List<CostRunCostItemDto> items = new ArrayList<>();
     items.add(buildItem(MATERIAL, "材料费", null, null, materialTotal));
     items.addAll(auxItems);
-    items.add(buildItem(DIRECT_LABOR, "直接人工工资", null, null, directTotal));
-    items.add(buildItem(INDIRECT_LABOR, "辅助人工工资", null, null, indirectTotal));
+    items.add(buildItem(DIRECT_LABOR, "直接人工工资", null, null, directTotal, laborResult.directRemark));
+    items.add(buildItem(INDIRECT_LABOR, "辅助人工工资", null, null, indirectTotal, laborResult.indirectRemark));
     items.add(buildItem(LOSS, "净损失率", lossBase, lossRate, lossAmount, lossRemark));
     // T10：MANUFACTURE / MANUFACTURE_COST / ADJUSTED_MANUFACTURE_COST 共享同一份 remark
     items.add(buildItem(
@@ -734,6 +749,68 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return items;
   }
 
+  private CostSourceContext resolveCostSourceContext(String oaNo, String productCode) {
+    if (!StringUtils.hasText(oaNo)) {
+      return new CostSourceContext(null, "");
+    }
+    OaForm form =
+        oaFormMapper.selectOne(
+            Wrappers.lambdaQuery(OaForm.class)
+                .eq(OaForm::getOaNo, oaNo)
+                .last("LIMIT 1"));
+    if (form == null) {
+      return new CostSourceContext(null, "");
+    }
+    List<OaFormItem> rows =
+        oaFormItemMapper.selectList(
+            Wrappers.lambdaQuery(OaFormItem.class)
+                .eq(OaFormItem::getOaFormId, form.getId())
+                .eq(StringUtils.hasText(productCode), OaFormItem::getMaterialNo, productCode));
+    return resolveCostSourceContext(form, rows, productCode);
+  }
+
+  private CostSourceContext resolveCostSourceContext(
+      OaForm form, List<OaFormItem> formItems, String productCode) {
+    Integer costYear = null;
+    String businessUnitType = null;
+    if (formItems != null) {
+      for (OaFormItem item : formItems) {
+        if (item == null) {
+          continue;
+        }
+        if (StringUtils.hasText(productCode)
+            && StringUtils.hasText(item.getMaterialNo())
+            && !productCode.trim().equals(item.getMaterialNo().trim())) {
+          continue;
+        }
+        if (costYear == null && item.getValidDate() != null) {
+          costYear = item.getValidDate().getYear();
+        }
+        if (businessUnitType == null) {
+          businessUnitType = trimToNull(item.getBusinessUnitType());
+        }
+        if (costYear != null && businessUnitType != null) {
+          break;
+        }
+      }
+    }
+    if (costYear == null && form != null && form.getApplyDate() != null) {
+      costYear = form.getApplyDate().getYear();
+    }
+    if (businessUnitType == null && form != null) {
+      businessUnitType = trimToNull(form.getBusinessUnitType());
+    }
+    return new CostSourceContext(costYear, normalizeBusinessUnit(businessUnitType));
+  }
+
+  private void ensureCmsCostSources(CostSourceContext costSourceContext) {
+    if (costSourceContext == null || costSourceContext.costYear == null) {
+      return;
+    }
+    cmsCostEffectiveSourceEnsureService.ensureDefaultSources(
+        costSourceContext.costYear, CMS_AUTO_OPERATOR, costSourceContext.businessUnitType);
+  }
+
   private DepartmentFeeResult calculateDepartmentFees(Map<String, LaborSum> laborByUnit) {
     DepartmentFeeResult result = new DepartmentFeeResult();
     if (laborByUnit.isEmpty()) {
@@ -876,16 +953,16 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       String oaNo, String productCode, List<CostRunCostItemDto> items, List<String> costCodes) {
     if (!StringUtils.hasText(oaNo)
         || !StringUtils.hasText(productCode)
-        || items == null
-        || costCodes == null
-        || costCodes.isEmpty()) {
+        || items == null) {
       return;
     }
     costRunCostItemMapper.delete(
         Wrappers.lambdaQuery(CostRunCostItem.class)
             .eq(CostRunCostItem::getOaNo, oaNo)
-            .eq(CostRunCostItem::getProductCode, productCode)
-            .in(CostRunCostItem::getCostCode, costCodes));
+            .eq(CostRunCostItem::getProductCode, productCode));
+    if (items.isEmpty()) {
+      return;
+    }
     List<CostRunCostItem> entities = new ArrayList<>(items.size());
     int lineNo = 1;
     for (CostRunCostItemDto item : items) {
@@ -950,14 +1027,60 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return items;
   }
 
-  private List<CostRunCostItemDto> buildAuxItems(Set<String> materialCodes) {
+  List<CostRunCostItemDto> buildAuxItems(Set<String> materialCodes) {
+    return buildAuxItems(materialCodes, null);
+  }
+
+  List<CostRunCostItemDto> buildAuxItems(
+      Set<String> materialCodes, Integer costYear, String businessUnitType) {
+    return buildAuxItems(
+        materialCodes, new CostSourceContext(costYear, normalizeBusinessUnit(businessUnitType)));
+  }
+
+  private List<CostRunCostItemDto> buildAuxItems(
+      Set<String> materialCodes, CostSourceContext costSourceContext) {
     if (materialCodes == null || materialCodes.isEmpty()) {
       return Collections.emptyList();
     }
-    List<AuxCostItemDto> auxSubjects = auxCostItemMapper.selectByMaterialCodes(materialCodes);
-    if (auxSubjects == null || auxSubjects.isEmpty()) {
+    boolean useCmsEffectiveOnly = hasCostSourceContext(costSourceContext);
+    List<AuxCostItemDto> auxSubjects = new ArrayList<>();
+    if (useCmsEffectiveOnly) {
+      if (costSourceContext.costYear != null) {
+        List<AuxCostItemDto> cmsItems =
+            auxCostItemMapper.selectEffectiveAuxCostItems(
+                costSourceContext.costYear, materialCodes, costSourceContext.businessUnitType);
+        if (cmsItems != null) {
+          for (AuxCostItemDto cmsItem : cmsItems) {
+            if (isExcludedAuxSubject(cmsItem)) {
+              continue;
+            }
+            auxSubjects.add(cmsItem);
+          }
+        }
+      }
+    } else {
+      List<AuxCostItemDto> legacySubjects = auxCostItemMapper.selectByMaterialCodes(materialCodes);
+      if (legacySubjects != null) {
+        for (AuxCostItemDto subject : legacySubjects) {
+          if (isExcludedAuxSubject(subject)) {
+            continue;
+          }
+          auxSubjects.add(subject);
+        }
+      }
+    }
+    if (auxSubjects.isEmpty()) {
       return Collections.emptyList();
     }
+    auxSubjects.sort(
+        Comparator.comparing(
+                (AuxCostItemDto subject) ->
+                    subject.getDisplayOrder() == null ? Integer.MAX_VALUE : subject.getDisplayOrder())
+            .thenComparing(
+                subject -> {
+                  String code = trimToNull(subject.getAuxSubjectCode());
+                  return code == null ? "" : code;
+                }));
     List<CostRunCostItemDto> items = new ArrayList<>();
     for (AuxCostItemDto subject : auxSubjects) {
       String code = trimToNull(subject.getAuxSubjectCode());
@@ -967,13 +1090,222 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       if (code == null || name == null) {
         continue;
       }
+      String amountCalcMode = trimToNull(subject.getAmountCalcMode());
+      BigDecimal rateForDisplay = floatRate;
       BigDecimal amount = BigDecimal.ZERO;
-      if (unitPrice != null && floatRate != null) {
+      if (AUX_AMOUNT_MODE_DIRECT.equalsIgnoreCase(amountCalcMode)) {
+        amount =
+            unitPrice == null
+                ? BigDecimal.ZERO
+                : unitPrice.setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        rateForDisplay = null;
+      } else if (unitPrice != null && floatRate != null) {
         amount = unitPrice.multiply(floatRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
       }
-      items.add(buildItem(AUX_PREFIX + code, name, unitPrice, floatRate, amount));
+      items.add(buildItem(AUX_PREFIX + code, name, unitPrice, rateForDisplay, amount));
     }
     return items;
+  }
+
+  private LaborCostResult buildLaborCostResult(
+      Set<String> materialCodes, List<SalaryCost> salaryCosts, CostSourceContext costSourceContext) {
+    LaborCostResult result = new LaborCostResult();
+    boolean useCmsEffectiveOnly = hasCostSourceContext(costSourceContext);
+    Map<String, List<SalaryCost>> salaryByMaterial = groupSalaryCostsByMaterial(salaryCosts);
+    Map<String, String> refMaterialByMaterial =
+        useCmsEffectiveOnly
+            ? Collections.emptyMap()
+            : resolveSalaryRefMaterials(salaryCosts, materialCodes);
+    Map<String, CmsCostSourceEffective> effectiveByTypeAndParent =
+        loadSalaryEffectiveSources(materialCodes, refMaterialByMaterial, costSourceContext);
+
+    for (String materialCode : materialCodes) {
+      List<SalaryCost> costs = salaryByMaterial.getOrDefault(materialCode, Collections.emptyList());
+      String lookupParentCode = refMaterialByMaterial.getOrDefault(materialCode, materialCode);
+      CmsCostSourceEffective directEffective =
+          effectiveByTypeAndParent.get(effectiveKey(CMS_SOURCE_TYPE_SALARY_DIRECT, lookupParentCode));
+      CmsCostSourceEffective indirectEffective =
+          effectiveByTypeAndParent.get(effectiveKey(CMS_SOURCE_TYPE_SALARY_INDIRECT, lookupParentCode));
+
+      if (directEffective != null) {
+        BigDecimal amount = nullToZero(directEffective.getAmountYuan());
+        result.directTotal = result.directTotal.add(amount);
+        addLaborMetadata(result.laborByUnit, costs, amount, BigDecimal.ZERO);
+      } else if (useCmsEffectiveOnly) {
+        result.missingDirectCodes.add(materialCode);
+      } else {
+        BigDecimal manualAmount = sumManualSalary(costs, true);
+        result.directTotal = result.directTotal.add(manualAmount);
+        addManualLaborByUnit(result.laborByUnit, costs, true);
+        if (costSourceContext != null
+            && costSourceContext.costYear != null
+            && manualAmount.signum() == 0) {
+          result.missingDirectCodes.add(materialCode);
+        }
+      }
+
+      if (indirectEffective != null) {
+        BigDecimal amount = nullToZero(indirectEffective.getAmountYuan());
+        result.indirectTotal = result.indirectTotal.add(amount);
+        addLaborMetadata(result.laborByUnit, costs, BigDecimal.ZERO, amount);
+      } else if (useCmsEffectiveOnly) {
+        result.missingIndirectCodes.add(materialCode);
+      } else {
+        BigDecimal manualAmount = sumManualSalary(costs, false);
+        result.indirectTotal = result.indirectTotal.add(manualAmount);
+        addManualLaborByUnit(result.laborByUnit, costs, false);
+        if (costSourceContext != null
+            && costSourceContext.costYear != null
+            && manualAmount.signum() == 0) {
+          result.missingIndirectCodes.add(materialCode);
+        }
+      }
+    }
+
+    if (!result.missingDirectCodes.isEmpty()) {
+      result.directRemark =
+          missingEffectiveRemark(costSourceContext.costYear, "直接人工工资", result.missingDirectCodes);
+    }
+    if (!result.missingIndirectCodes.isEmpty()) {
+      result.indirectRemark =
+          missingEffectiveRemark(costSourceContext.costYear, "辅助员工工资", result.missingIndirectCodes);
+    }
+    return result;
+  }
+
+  private Map<String, String> resolveSalaryRefMaterials(
+      List<SalaryCost> salaryCosts, Set<String> materialCodes) {
+    Map<String, String> result = new HashMap<>();
+    if (salaryCosts == null || materialCodes == null || materialCodes.isEmpty()) {
+      return result;
+    }
+    for (SalaryCost cost : salaryCosts) {
+      String materialCode = trimToNull(cost.getMaterialCode());
+      String refMaterialCode = trimToNull(cost.getRefMaterialCode());
+      if (materialCode != null && refMaterialCode != null && materialCodes.contains(materialCode)) {
+        result.putIfAbsent(materialCode, refMaterialCode);
+      }
+    }
+    return result;
+  }
+
+  private Map<String, List<SalaryCost>> groupSalaryCostsByMaterial(List<SalaryCost> salaryCosts) {
+    Map<String, List<SalaryCost>> result = new HashMap<>();
+    if (salaryCosts == null) {
+      return result;
+    }
+    for (SalaryCost cost : salaryCosts) {
+      String materialCode = trimToNull(cost.getMaterialCode());
+      if (materialCode == null) {
+        continue;
+      }
+      result.computeIfAbsent(materialCode, ignored -> new ArrayList<>()).add(cost);
+    }
+    return result;
+  }
+
+  private Map<String, CmsCostSourceEffective> loadSalaryEffectiveSources(
+      Set<String> materialCodes,
+      Map<String, String> refMaterialByMaterial,
+      CostSourceContext costSourceContext) {
+    if (costSourceContext == null
+        || costSourceContext.costYear == null
+        || materialCodes == null
+        || materialCodes.isEmpty()) {
+      return Collections.emptyMap();
+    }
+    Set<String> lookupCodes = new LinkedHashSet<>(materialCodes);
+    if (refMaterialByMaterial != null) {
+      lookupCodes.addAll(refMaterialByMaterial.values());
+    }
+    List<CmsCostSourceEffective> rows =
+        cmsCostSourceEffectiveMapper.selectList(
+            Wrappers.lambdaQuery(CmsCostSourceEffective.class)
+                .eq(CmsCostSourceEffective::getCostYear, costSourceContext.costYear)
+                .in(
+                    CmsCostSourceEffective::getSourceType,
+                    CMS_SOURCE_TYPE_SALARY_DIRECT,
+                    CMS_SOURCE_TYPE_SALARY_INDIRECT)
+                .in(CmsCostSourceEffective::getParentCode, lookupCodes)
+                .eq(CmsCostSourceEffective::getBusinessUnitType, costSourceContext.businessUnitType));
+    if (rows == null || rows.isEmpty()) {
+      return Collections.emptyMap();
+    }
+    Map<String, CmsCostSourceEffective> result = new HashMap<>();
+    for (CmsCostSourceEffective row : rows) {
+      String sourceType = trimToNull(row.getSourceType());
+      String parentCode = trimToNull(row.getParentCode());
+      if (sourceType != null && parentCode != null) {
+        result.put(effectiveKey(sourceType, parentCode), row);
+      }
+    }
+    return result;
+  }
+
+  private BigDecimal sumManualSalary(List<SalaryCost> costs, boolean direct) {
+    BigDecimal sum = BigDecimal.ZERO;
+    for (SalaryCost cost : costs) {
+      if (isCmsSource(cost.getSource())) {
+        continue;
+      }
+      sum = sum.add(nullToZero(direct ? cost.getDirectLaborCost() : cost.getIndirectLaborCost()));
+    }
+    return sum;
+  }
+
+  private void addManualLaborByUnit(
+      Map<String, LaborSum> laborByUnit, List<SalaryCost> costs, boolean direct) {
+    for (SalaryCost cost : costs) {
+      if (isCmsSource(cost.getSource())) {
+        continue;
+      }
+      String businessUnit = trimToNull(cost.getBusinessUnit());
+      if (businessUnit == null) {
+        continue;
+      }
+      LaborSum sum = laborByUnit.computeIfAbsent(businessUnit, ignored -> new LaborSum());
+      if (direct) {
+        sum.direct = sum.direct.add(nullToZero(cost.getDirectLaborCost()));
+      } else {
+        sum.indirect = sum.indirect.add(nullToZero(cost.getIndirectLaborCost()));
+      }
+    }
+  }
+
+  private void addLaborMetadata(
+      Map<String, LaborSum> laborByUnit,
+      List<SalaryCost> costs,
+      BigDecimal directAmount,
+      BigDecimal indirectAmount) {
+    String businessUnit = null;
+    for (SalaryCost cost : costs) {
+      businessUnit = trimToNull(cost.getBusinessUnit());
+      if (businessUnit != null) {
+        break;
+      }
+    }
+    if (businessUnit == null) {
+      return;
+    }
+    LaborSum sum = laborByUnit.computeIfAbsent(businessUnit, ignored -> new LaborSum());
+    sum.direct = sum.direct.add(nullToZero(directAmount));
+    sum.indirect = sum.indirect.add(nullToZero(indirectAmount));
+  }
+
+  private String missingEffectiveRemark(
+      Integer costYear, String costName, List<String> materialCodes) {
+    String yearText = costYear == null ? "当前成本年度" : costYear + " 年";
+    return "未找到 "
+        + yearText
+        + " "
+        + materialCodes
+        + " 的 CMS 公共生效"
+        + costName
+        + "，请检查 CMS 已审批数据或刷新公共生效来源";
+  }
+
+  private String effectiveKey(String sourceType, String parentCode) {
+    return sourceType + "|" + parentCode;
   }
 
   /**
@@ -1115,6 +1447,25 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return value.trim();
   }
 
+  private String normalizeBusinessUnit(String businessUnitType) {
+    String value = trimToNull(businessUnitType);
+    return value == null ? "" : value;
+  }
+
+  private boolean isCmsSource(String source) {
+    return CMS_SOURCE.equalsIgnoreCase(trimToNull(source))
+        || CMS_SOURCE_EFFECTIVE.equalsIgnoreCase(trimToNull(source));
+  }
+
+  private boolean hasCostSourceContext(CostSourceContext costSourceContext) {
+    return costSourceContext != null;
+  }
+
+  private boolean isExcludedAuxSubject(AuxCostItemDto subject) {
+    return EXCLUDED_AUX_SUBJECT_PACKAGING.equals(
+        trimToNull(subject == null ? null : subject.getAuxSubjectName()));
+  }
+
   private boolean isPositive(BigDecimal value) {
     return value != null && value.compareTo(BigDecimal.ZERO) > 0;
   }
@@ -1165,6 +1516,26 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private static class LaborSum {
     private BigDecimal direct = BigDecimal.ZERO;
     private BigDecimal indirect = BigDecimal.ZERO;
+  }
+
+  private static class LaborCostResult {
+    private BigDecimal directTotal = BigDecimal.ZERO;
+    private BigDecimal indirectTotal = BigDecimal.ZERO;
+    private final Map<String, LaborSum> laborByUnit = new LinkedHashMap<>();
+    private final List<String> missingDirectCodes = new ArrayList<>();
+    private final List<String> missingIndirectCodes = new ArrayList<>();
+    private String directRemark;
+    private String indirectRemark;
+  }
+
+  private static class CostSourceContext {
+    private final Integer costYear;
+    private final String businessUnitType;
+
+    private CostSourceContext(Integer costYear, String businessUnitType) {
+      this.costYear = costYear;
+      this.businessUnitType = businessUnitType == null ? "" : businessUnitType;
+    }
   }
 
   private static class DepartmentFeeResult {

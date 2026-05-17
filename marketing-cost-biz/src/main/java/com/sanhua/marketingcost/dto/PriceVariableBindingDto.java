@@ -19,6 +19,13 @@ public class PriceVariableBindingDto {
   /** factorCode 对应的中文显示名；Service 层从 PriceVariable.variableName 回填 */
   private String factorName;
   private String priceSource;
+  private Long factorIdentityId;
+  private Long factorMonthlyPriceId;
+  private Long factorUploadBatchId;
+  private Long standardBindingId;
+  private String excelSourceSheetName;
+  private String excelSourceCellRef;
+  private String excelFormula;
   private Integer buScoped;
   private LocalDate effectiveDate;
   private LocalDate expiryDate;
@@ -39,6 +46,13 @@ public class PriceVariableBindingDto {
     d.tokenName = e.getTokenName();
     d.factorCode = e.getFactorCode();
     d.priceSource = e.getPriceSource();
+    d.factorIdentityId = e.getFactorIdentityId();
+    d.factorMonthlyPriceId = e.getFactorMonthlyPriceId();
+    d.factorUploadBatchId = e.getFactorUploadBatchId();
+    d.standardBindingId = e.getStandardBindingId();
+    d.excelSourceSheetName = e.getExcelSourceSheetName();
+    d.excelSourceCellRef = e.getExcelSourceCellRef();
+    d.excelFormula = e.getExcelFormula();
     d.buScoped = e.getBuScoped();
     d.effectiveDate = e.getEffectiveDate();
     d.expiryDate = e.getExpiryDate();
@@ -99,6 +113,62 @@ public class PriceVariableBindingDto {
 
   public void setPriceSource(String priceSource) {
     this.priceSource = priceSource;
+  }
+
+  public Long getFactorIdentityId() {
+    return factorIdentityId;
+  }
+
+  public void setFactorIdentityId(Long factorIdentityId) {
+    this.factorIdentityId = factorIdentityId;
+  }
+
+  public Long getFactorMonthlyPriceId() {
+    return factorMonthlyPriceId;
+  }
+
+  public void setFactorMonthlyPriceId(Long factorMonthlyPriceId) {
+    this.factorMonthlyPriceId = factorMonthlyPriceId;
+  }
+
+  public Long getFactorUploadBatchId() {
+    return factorUploadBatchId;
+  }
+
+  public void setFactorUploadBatchId(Long factorUploadBatchId) {
+    this.factorUploadBatchId = factorUploadBatchId;
+  }
+
+  public Long getStandardBindingId() {
+    return standardBindingId;
+  }
+
+  public void setStandardBindingId(Long standardBindingId) {
+    this.standardBindingId = standardBindingId;
+  }
+
+  public String getExcelSourceSheetName() {
+    return excelSourceSheetName;
+  }
+
+  public void setExcelSourceSheetName(String excelSourceSheetName) {
+    this.excelSourceSheetName = excelSourceSheetName;
+  }
+
+  public String getExcelSourceCellRef() {
+    return excelSourceCellRef;
+  }
+
+  public void setExcelSourceCellRef(String excelSourceCellRef) {
+    this.excelSourceCellRef = excelSourceCellRef;
+  }
+
+  public String getExcelFormula() {
+    return excelFormula;
+  }
+
+  public void setExcelFormula(String excelFormula) {
+    this.excelFormula = excelFormula;
   }
 
   public Integer getBuScoped() {

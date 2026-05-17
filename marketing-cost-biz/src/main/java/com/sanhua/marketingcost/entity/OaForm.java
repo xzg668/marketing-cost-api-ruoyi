@@ -14,17 +14,37 @@ import java.time.LocalDateTime;
 public class OaForm {
   @TableId(type = IdType.AUTO)
   private Long id;
+  private String sourceType;
+  private String sourceSystem;
+  private String externalFormNo;
+  private String processCode;
+  private String processName;
+  private String quoteScenario;
   private String oaNo;
   private String formType;
   private LocalDate applyDate;
   private String customer;
+  private String applicantDept;
+  private String applicantOffice;
+  private String applicantName;
+  private String urgency;
+  private String productAttr;
+  private String priceLinkMode;
+  private String overseasSalesMode;
   private BigDecimal copperPrice;
   private BigDecimal zincPrice;
   private BigDecimal aluminumPrice;
   private BigDecimal steelPrice;
+  private BigDecimal silverPrice;
+  private BigDecimal goldPrice;
+  private BigDecimal sus304Price;
+  private BigDecimal sus316lPrice;
   private BigDecimal otherMaterial;
   private BigDecimal baseShipping;
   private String calcStatus;
+  private LocalDateTime calcAt;
+  private String classificationStatus;
+  private Long ingestLogId;
   private String saleLink;
   private String remark;
 
@@ -55,6 +75,54 @@ public class OaForm {
 
   public void setId(Long id) {
     this.id = id;
+  }
+
+  public String getSourceType() {
+    return sourceType;
+  }
+
+  public void setSourceType(String sourceType) {
+    this.sourceType = sourceType;
+  }
+
+  public String getSourceSystem() {
+    return sourceSystem;
+  }
+
+  public void setSourceSystem(String sourceSystem) {
+    this.sourceSystem = sourceSystem;
+  }
+
+  public String getExternalFormNo() {
+    return externalFormNo;
+  }
+
+  public void setExternalFormNo(String externalFormNo) {
+    this.externalFormNo = externalFormNo;
+  }
+
+  public String getProcessCode() {
+    return processCode;
+  }
+
+  public void setProcessCode(String processCode) {
+    this.processCode = processCode;
+  }
+
+  public String getProcessName() {
+    return processName;
+  }
+
+  public void setProcessName(String processName) {
+    this.processName = processName;
+  }
+
+  public String getQuoteScenario() {
+    return quoteScenario;
+  }
+
+  public void setQuoteScenario(String quoteScenario) {
+    this.quoteScenario = quoteScenario;
   }
 
   public String getOaNo() {
@@ -89,6 +157,62 @@ public class OaForm {
     this.customer = customer;
   }
 
+  public String getApplicantDept() {
+    return applicantDept;
+  }
+
+  public void setApplicantDept(String applicantDept) {
+    this.applicantDept = applicantDept;
+  }
+
+  public String getApplicantOffice() {
+    return applicantOffice;
+  }
+
+  public void setApplicantOffice(String applicantOffice) {
+    this.applicantOffice = applicantOffice;
+  }
+
+  public String getApplicantName() {
+    return applicantName;
+  }
+
+  public void setApplicantName(String applicantName) {
+    this.applicantName = applicantName;
+  }
+
+  public String getUrgency() {
+    return urgency;
+  }
+
+  public void setUrgency(String urgency) {
+    this.urgency = urgency;
+  }
+
+  public String getProductAttr() {
+    return productAttr;
+  }
+
+  public void setProductAttr(String productAttr) {
+    this.productAttr = productAttr;
+  }
+
+  public String getPriceLinkMode() {
+    return priceLinkMode;
+  }
+
+  public void setPriceLinkMode(String priceLinkMode) {
+    this.priceLinkMode = priceLinkMode;
+  }
+
+  public String getOverseasSalesMode() {
+    return overseasSalesMode;
+  }
+
+  public void setOverseasSalesMode(String overseasSalesMode) {
+    this.overseasSalesMode = overseasSalesMode;
+  }
+
   public BigDecimal getCopperPrice() {
     return copperPrice;
   }
@@ -121,6 +245,38 @@ public class OaForm {
     this.steelPrice = steelPrice;
   }
 
+  public BigDecimal getSilverPrice() {
+    return silverPrice;
+  }
+
+  public void setSilverPrice(BigDecimal silverPrice) {
+    this.silverPrice = silverPrice;
+  }
+
+  public BigDecimal getGoldPrice() {
+    return goldPrice;
+  }
+
+  public void setGoldPrice(BigDecimal goldPrice) {
+    this.goldPrice = goldPrice;
+  }
+
+  public BigDecimal getSus304Price() {
+    return sus304Price;
+  }
+
+  public void setSus304Price(BigDecimal sus304Price) {
+    this.sus304Price = sus304Price;
+  }
+
+  public BigDecimal getSus316lPrice() {
+    return sus316lPrice;
+  }
+
+  public void setSus316lPrice(BigDecimal sus316lPrice) {
+    this.sus316lPrice = sus316lPrice;
+  }
+
   public BigDecimal getOtherMaterial() {
     return otherMaterial;
   }
@@ -143,6 +299,30 @@ public class OaForm {
 
   public void setCalcStatus(String calcStatus) {
     this.calcStatus = calcStatus;
+  }
+
+  public LocalDateTime getCalcAt() {
+    return calcAt;
+  }
+
+  public void setCalcAt(LocalDateTime calcAt) {
+    this.calcAt = calcAt;
+  }
+
+  public String getClassificationStatus() {
+    return classificationStatus;
+  }
+
+  public void setClassificationStatus(String classificationStatus) {
+    this.classificationStatus = classificationStatus;
+  }
+
+  public Long getIngestLogId() {
+    return ingestLogId;
+  }
+
+  public void setIngestLogId(Long ingestLogId) {
+    this.ingestLogId = ingestLogId;
   }
 
   public String getSaleLink() {

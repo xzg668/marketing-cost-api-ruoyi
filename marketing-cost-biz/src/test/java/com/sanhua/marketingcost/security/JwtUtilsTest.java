@@ -85,8 +85,11 @@ class JwtUtilsTest {
     @DisplayName("验证被篡改的 Token 返回 false")
     void validateToken_tamperedToken_returnsFalse() {
         String token = jwtUtils.generateToken("admin");
-        // 篡改 Token 的最后一个字符
-        String tampered = token.substring(0, token.length() - 1) + (token.charAt(token.length() - 1) == 'a' ? 'b' : 'a');
+        // 修改签名段首字符。JWT base64url 最后一个字符可能只承载填充位，改最后一位存在偶发等价。
+        String[] parts = token.split("\\.");
+        char firstSignatureChar = parts[2].charAt(0);
+        parts[2] = (firstSignatureChar == 'a' ? 'b' : 'a') + parts[2].substring(1);
+        String tampered = String.join(".", parts);
         assertFalse(jwtUtils.validateToken(tampered));
     }
 

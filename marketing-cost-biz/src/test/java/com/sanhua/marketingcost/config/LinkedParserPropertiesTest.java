@@ -34,10 +34,10 @@ class LinkedParserPropertiesTest {
   }
 
   @Test
-  @DisplayName("默认值：未提供配置时 mode=dual, threshold=0.01")
+  @DisplayName("默认值：未提供配置时 mode=new, threshold=0.01")
   void defaultsWhenEmpty() {
     LinkedParserProperties p = new LinkedParserProperties();
-    assertThat(p.getMode()).isEqualTo("dual");
+    assertThat(p.getMode()).isEqualTo("new");
     assertThat(p.getDualWarnThreshold())
         .isEqualByComparingTo(new BigDecimal("0.01"));
   }

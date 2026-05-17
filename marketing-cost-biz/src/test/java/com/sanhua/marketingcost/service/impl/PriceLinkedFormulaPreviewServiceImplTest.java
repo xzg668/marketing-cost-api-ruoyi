@@ -12,8 +12,10 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewRequest;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewResponse;
+import com.sanhua.marketingcost.entity.FactorQuoteBaseMapping;
 import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.MaterialScrapRef;
+import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.formula.normalize.FormulaNormalizer;
@@ -23,6 +25,7 @@ import com.sanhua.marketingcost.formula.registry.FactorVariableRegistry;
 import com.sanhua.marketingcost.formula.registry.FactorVariableRegistryImpl;
 import com.sanhua.marketingcost.formula.registry.FinanceBasePriceQuery;
 import com.sanhua.marketingcost.formula.registry.RowLocalPlaceholderRegistry;
+import com.sanhua.marketingcost.mapper.FactorQuoteBaseMappingMapper;
 import com.sanhua.marketingcost.mapper.FinanceBasePriceMapper;
 import com.sanhua.marketingcost.mapper.MaterialScrapRefMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
@@ -56,6 +59,7 @@ class PriceLinkedFormulaPreviewServiceImplTest {
   private FinanceBasePriceMapper financeBasePriceMapper;
   private MaterialScrapRefMapper materialScrapRefMapper;
   private PriceLinkedItemMapper priceLinkedItemMapper;
+  private FactorQuoteBaseMappingMapper factorQuoteBaseMappingMapper;
   private PriceLinkedFormulaPreviewServiceImpl service;
 
   /** finance 仓库：shortName → price */
@@ -77,6 +81,7 @@ class PriceLinkedFormulaPreviewServiceImplTest {
     financeBasePriceMapper = mock(FinanceBasePriceMapper.class);
     materialScrapRefMapper = mock(MaterialScrapRefMapper.class);
     priceLinkedItemMapper = mock(PriceLinkedItemMapper.class);
+    factorQuoteBaseMappingMapper = mock(FactorQuoteBaseMappingMapper.class);
     financeRepo.clear();
 
     when(priceVariableMapper.selectList(any(Wrapper.class)))
@@ -103,11 +108,14 @@ class PriceLinkedFormulaPreviewServiceImplTest {
         priceVariableMapper, financeQuery, new ObjectMapper(), rowLocal);
     registry.setDerivedContextResolver(
         new DerivedResolver(financeBasePriceMapper, materialScrapRefMapper));
+    registry.setFactorQuoteBaseMappingMapper(factorQuoteBaseMappingMapper);
 
     service = new PriceLinkedFormulaPreviewServiceImpl(
         normalizer, (FactorVariableRegistry) registry,
         priceVariableMapper, priceLinkedItemMapper,
-        new com.sanhua.marketingcost.formula.normalize.FormulaUnitConsistencyChecker());
+        new com.sanhua.marketingcost.formula.normalize.FormulaUnitConsistencyChecker(),
+        new ObjectMapper(),
+        factorQuoteBaseMappingMapper);
   }
 
   // =========================================================================
@@ -139,6 +147,35 @@ class PriceLinkedFormulaPreviewServiceImplTest {
     assertThat(resp.getVariables())
         .filteredOn(v -> "Cu".equals(v.getCode()))
         .extracting("source").containsOnly("FINANCE_FACTOR");
+  }
+
+  @Test
+  @DisplayName("OA 刷新：factor_identity 命中报价单铜基价时 trace source 标 QUOTE_BASE")
+  void previewForRefreshMarksQuoteBaseSource() {
+    FactorQuoteBaseMapping mapping = new FactorQuoteBaseMapping();
+    mapping.setFactorIdentityId(191L);
+    mapping.setQuoteFieldCode("copper_price");
+    mapping.setQuoteFieldName("铜基价");
+    mapping.setVariableCode("Cu");
+    mapping.setEnabled(1);
+    when(factorQuoteBaseMappingMapper.selectList(any())).thenReturn(List.of(mapping));
+
+    PriceLinkedItem linked = new PriceLinkedItem();
+    linked.setMaterialCode("TP2Y2");
+    linked.setFormulaExpr("factor_identity_191");
+    linked.setPricingMonth("2026-05");
+
+    OaForm oaForm = new OaForm();
+    oaForm.setCopperPrice(new BigDecimal("90000"));
+
+    PriceLinkedFormulaPreviewResponse resp =
+        service.previewForRefresh(linked, Map.of(), oaForm);
+
+    assertThat(resp.getError()).isNull();
+    assertThat(resp.getResult()).isEqualByComparingTo("90");
+    assertThat(resp.getVariables())
+        .filteredOn(v -> "factor_identity_191".equals(v.getCode()))
+        .extracting("source").containsOnly("QUOTE_BASE");
   }
 
   @Test
@@ -305,6 +342,9 @@ class PriceLinkedFormulaPreviewServiceImplTest {
     List<PriceVariable> vars = new ArrayList<>();
     vars.add(financeVar("Cu", "电解铜", "[\"Cu\",\"电解铜\",\"电解铜价格\"]"));
     vars.add(financeVar("Zn", "锌价格", "[\"Zn\",\"锌\",\"锌价格\"]"));
+    vars.add(financeIdentityVar(
+        "factor_identity_191", "1#Cu", 191L,
+        "[\"factor_identity_191\",\"1#Cu\",\"1#电解铜\"]"));
     vars.add(partEntity("process_fee", "加工费",
         "[\"加工费\",\"含税加工费\"]", "processFee"));
     // vat_rate：税率常量，供不含税结算路径的 /(1+vat_rate) 计算用
@@ -323,6 +363,17 @@ class PriceLinkedFormulaPreviewServiceImplTest {
     v.setResolverKind("FINANCE");
     v.setResolverParams(String.format(
         "{\"shortName\":\"%s\",\"priceSource\":\"平均价\",\"buScoped\":false}", shortName));
+    return v;
+  }
+
+  private PriceVariable financeIdentityVar(
+      String code, String shortName, Long factorIdentityId, String aliases) {
+    PriceVariable v = financeVar(code, shortName, aliases);
+    v.setResolverParams(String.format(
+        "{\"shortName\":\"%s\",\"priceSource\":\"平均价\",\"buScoped\":false,"
+            + "\"factorIdentityId\":%d}",
+        shortName,
+        factorIdentityId));
     return v;
   }
 

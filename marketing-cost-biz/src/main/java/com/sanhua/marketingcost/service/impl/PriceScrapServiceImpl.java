@@ -6,9 +6,15 @@ import com.sanhua.marketingcost.dto.PriceScrapImportRequest;
 import com.sanhua.marketingcost.dto.PriceScrapUpdateRequest;
 import com.sanhua.marketingcost.entity.PriceScrap;
 import com.sanhua.marketingcost.mapper.PriceScrapMapper;
+import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.PriceScrapService;
+import com.sanhua.marketingcost.util.CmsFieldNormalizeUtils;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -18,7 +24,7 @@ import org.springframework.util.StringUtils;
 public class PriceScrapServiceImpl implements PriceScrapService {
 
   private static final int DEFAULT_TAX_INCLUDED = 1;
-  private static final String DEFAULT_PRICING_MONTH = "2026-03";
+  private static final String DEFAULT_PRICING_MONTH = "CURRENT";
 
   private final PriceScrapMapper scrapMapper;
 
@@ -41,14 +47,66 @@ public class PriceScrapServiceImpl implements PriceScrapService {
   }
 
   @Override
-  public PriceScrap create(PriceScrapUpdateRequest request) {
-    if (request == null || !StringUtils.hasText(request.getScrapCode())) {
+  public PriceScrap getCurrentByScrapCode(String scrapCode) {
+    if (!isValidCmsScrapCode(scrapCode)) {
       return null;
     }
-    PriceScrap item = new PriceScrap();
+    return findCurrentByScrapCode(scrapCode);
+  }
+
+  @Override
+  public Map<String, PriceScrap> getCurrentByScrapCodes(Collection<String> scrapCodes) {
+    if (scrapCodes == null || scrapCodes.isEmpty()) {
+      return Map.of();
+    }
+    LinkedHashSet<String> normalizedCodes = new LinkedHashSet<>();
+    for (String scrapCode : scrapCodes) {
+      if (isValidCmsScrapCode(scrapCode)) {
+        normalizedCodes.add(normalizeScrapCode(scrapCode));
+      }
+    }
+    if (normalizedCodes.isEmpty()) {
+      return Map.of();
+    }
+    var query = Wrappers.lambdaQuery(PriceScrap.class)
+        .in(PriceScrap::getScrapCode, normalizedCodes)
+        .eq(PriceScrap::getDeleted, 0)
+        .orderByDesc(PriceScrap::getId);
+    String businessUnitType = currentBusinessUnitType();
+    if (StringUtils.hasText(businessUnitType)) {
+      query.eq(PriceScrap::getBusinessUnitType, businessUnitType);
+    }
+    List<PriceScrap> rows = scrapMapper.selectList(query);
+    if (rows == null || rows.isEmpty()) {
+      return Map.of();
+    }
+    Map<String, PriceScrap> currentByCode = new LinkedHashMap<>();
+    for (PriceScrap row : rows) {
+      String normalizedCode = normalizeScrapCode(row.getScrapCode());
+      if (StringUtils.hasText(normalizedCode)) {
+        currentByCode.putIfAbsent(normalizedCode, row);
+      }
+    }
+    return currentByCode;
+  }
+
+  @Override
+  public PriceScrap create(PriceScrapUpdateRequest request) {
+    if (request == null || !isValidCmsScrapCode(request.getScrapCode())) {
+      return null;
+    }
+    PriceScrap item = findCurrentByScrapCode(request.getScrapCode());
+    boolean insert = item == null;
+    if (insert) {
+      item = new PriceScrap();
+    }
     merge(item, request);
     fillDefaults(item);
-    scrapMapper.insert(item);
+    if (insert) {
+      scrapMapper.insert(item);
+    } else {
+      scrapMapper.updateById(item);
+    }
     return item;
   }
 
@@ -80,10 +138,10 @@ public class PriceScrapServiceImpl implements PriceScrapService {
     }
     List<PriceScrap> imported = new ArrayList<>();
     for (var row : request.getRows()) {
-      if (row == null || !StringUtils.hasText(row.getScrapCode())) {
+      if (row == null || !isValidCmsScrapCode(row.getScrapCode())) {
         continue;
       }
-      PriceScrap existing = findExisting(row);
+      PriceScrap existing = findCurrentByScrapCode(row.getScrapCode());
       if (existing == null) {
         PriceScrap item = new PriceScrap();
         fillFromRow(item, row);
@@ -100,16 +158,18 @@ public class PriceScrapServiceImpl implements PriceScrapService {
     return imported;
   }
 
-  /** 去重锚点：(scrap_code, pricing_month) —— BU 由全局拦截器自动注入 */
-  private PriceScrap findExisting(PriceScrapImportRequest.PriceScrapImportRow row) {
-    String pricingMonth = StringUtils.hasText(row.getPricingMonth())
-        ? row.getPricingMonth().trim()
-        : DEFAULT_PRICING_MONTH;
+  /** 当前废料价去重锚点是 CMS 回收料号；pricingMonth 不参与取价和去重。 */
+  private PriceScrap findCurrentByScrapCode(String scrapCode) {
     var query = Wrappers.lambdaQuery(PriceScrap.class)
-        .eq(PriceScrap::getScrapCode, row.getScrapCode().trim())
-        .eq(PriceScrap::getPricingMonth, pricingMonth)
-        .last("LIMIT 1");
-    return scrapMapper.selectOne(query);
+        .eq(PriceScrap::getScrapCode, normalizeScrapCode(scrapCode))
+        .eq(PriceScrap::getDeleted, 0)
+        .orderByDesc(PriceScrap::getId);
+    String businessUnitType = currentBusinessUnitType();
+    if (StringUtils.hasText(businessUnitType)) {
+      query.eq(PriceScrap::getBusinessUnitType, businessUnitType);
+    }
+    List<PriceScrap> rows = scrapMapper.selectList(query);
+    return rows == null || rows.isEmpty() ? null : rows.get(0);
   }
 
   private void fillFromRow(PriceScrap item, PriceScrapImportRequest.PriceScrapImportRow row) {
@@ -143,7 +203,25 @@ public class PriceScrapServiceImpl implements PriceScrapService {
 
   private void fillDefaults(PriceScrap item) {
     if (item.getTaxIncluded() == null) item.setTaxIncluded(DEFAULT_TAX_INCLUDED);
-    if (StringUtils.hasText(item.getScrapCode())) item.setScrapCode(item.getScrapCode().trim());
+    if (StringUtils.hasText(item.getScrapCode())) item.setScrapCode(normalizeScrapCode(item.getScrapCode()));
     if (!StringUtils.hasText(item.getPricingMonth())) item.setPricingMonth(DEFAULT_PRICING_MONTH);
+  }
+
+  private boolean isValidCmsScrapCode(String scrapCode) {
+    String normalized = normalizeScrapCode(scrapCode);
+    if (!StringUtils.hasText(normalized)) {
+      return false;
+    }
+    // 新废料价必须使用 CMS 回收料号；A/B/C/D 历史等级不再进入新取价链路。
+    return !normalized.matches("[A-D]");
+  }
+
+  private String normalizeScrapCode(String scrapCode) {
+    return CmsFieldNormalizeUtils.normalize(scrapCode);
+  }
+
+  private String currentBusinessUnitType() {
+    String businessUnitType = BusinessUnitContext.getCurrentBusinessUnitType();
+    return StringUtils.hasText(businessUnitType) ? businessUnitType.trim() : null;
   }
 }

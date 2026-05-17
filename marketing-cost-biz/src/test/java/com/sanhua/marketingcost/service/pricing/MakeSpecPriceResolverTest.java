@@ -3,64 +3,56 @@ package com.sanhua.marketingcost.service.pricing;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.entity.MakePartSpec;
+import com.sanhua.marketingcost.entity.MaterialScrapRef;
 import com.sanhua.marketingcost.entity.PriceScrap;
 import com.sanhua.marketingcost.enums.MaterialFormAttrEnum;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.MakePartSpecMapper;
-import com.sanhua.marketingcost.mapper.PriceScrapMapper;
-import com.sanhua.marketingcost.service.MaterialPriceRouterService;
+import com.sanhua.marketingcost.mapper.MaterialScrapRefMapper;
+import com.sanhua.marketingcost.service.PriceScrapService;
 import java.math.BigDecimal;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 /**
- * MakeSpecPriceResolver 单测 —— T07 骨架 + T08 原料递归。
+ * MakeSpecPriceResolver 单测。
  *
- * <p>T08 覆盖：
+ * <p>覆盖：
  * <ul>
- *   <li>spec.raw_unit_price 已填 → 直接用，不走递归</li>
- *   <li>spec.raw_material_code 非空 → 走 Router + 子 Resolver 递归取价</li>
- *   <li>raw_material_code / raw_unit_price 都为空 → material_cost = 0（HIT）</li>
- *   <li>循环依赖 A→B→A → miss('自制件递归循环')</li>
- *   <li>深度 > 5 → miss('递归深度超限')</li>
+ *   <li>spec.raw_unit_price 已填 → 直接用</li>
+ *   <li>spec.raw_unit_price 明确为 0 → 按 0 价命中</li>
+ *   <li>spec.raw_unit_price 为空 → 缺价，不按 0 兜底，不用 raw_material_code 递归取价</li>
  * </ul>
  */
 class MakeSpecPriceResolverTest {
 
   private MakePartSpecMapper specMapper;
-  private PriceScrapMapper scrapMapper;
-  private MaterialPriceRouterService routerService;
+  private MaterialScrapRefMapper materialScrapRefMapper;
+  private PriceScrapService priceScrapService;
   private MakeSpecPriceResolver resolver;
-  /** 子 Resolver mock：把 raw 物料的 Router 命中桶映射到结果 */
-  private PriceResolver linkedStub;
 
   @BeforeEach
   void setUp() {
+    TableInfoHelper.initTableInfo(
+        new MapperBuilderAssistant(new MybatisConfiguration(), ""), MaterialScrapRef.class);
     specMapper = Mockito.mock(MakePartSpecMapper.class);
-    scrapMapper = Mockito.mock(PriceScrapMapper.class);
-    routerService = Mockito.mock(MaterialPriceRouterService.class);
-    linkedStub = Mockito.mock(PriceResolver.class);
-    when(linkedStub.priceType()).thenReturn(PriceTypeEnum.LINKED);
-
-    // resolver 自身也要在 list 里，模拟 Spring @Lazy 注入；需可被自递归用例查到
-    List<PriceResolver> resolvers = new ArrayList<>();
-    resolvers.add(linkedStub);
-    // 用一个间接持有列表，构造完成后 add self（避免 ctor 时 self 还没创建）
-    resolver = new MakeSpecPriceResolver(specMapper, scrapMapper, routerService, resolvers);
-    resolvers.add(resolver);
+    materialScrapRefMapper = Mockito.mock(MaterialScrapRefMapper.class);
+    priceScrapService = Mockito.mock(PriceScrapService.class);
+    resolver = new MakeSpecPriceResolver(specMapper, materialScrapRefMapper, priceScrapService);
   }
 
   // ---------- T07 基础 ----------
@@ -78,6 +70,7 @@ class MakeSpecPriceResolverTest {
     s.setProcessFee(new BigDecimal("3.20"));
     s.setOutsourceFee(new BigDecimal("1.50"));
     s.setBlankWeight(null);
+    s.setRawUnitPrice(new BigDecimal("99")); // raw 价已维护；毛重为空时材料成本自然为 0
     when(specMapper.selectList(any(Wrapper.class))).thenReturn(List.of(s));
 
     PriceResolveResult r = resolver.resolve("OA-1", part("M-A"), route());
@@ -104,13 +97,13 @@ class MakeSpecPriceResolverTest {
 
     assertThat(r.unitPrice()).isNull();
     assertThat(r.remark()).isEqualTo("partCode 为空");
-    Mockito.verifyNoInteractions(specMapper, routerService);
+    Mockito.verifyNoInteractions(specMapper);
   }
 
-  // ---------- T08 递归 ----------
+  // ---------- 原料单价 ----------
 
   @Test
-  @DisplayName("raw_unit_price 已填 → 直接用，不走 Router")
+  @DisplayName("raw_unit_price 已填 → 直接用，不查 raw_material_code")
   void rawUnitPriceShortCircuit() {
     MakePartSpec s = spec("M-B");
     s.setBlankWeight(new BigDecimal("100")); // 100g
@@ -123,100 +116,63 @@ class MakeSpecPriceResolverTest {
 
     // material = 100 × 60 / 1000 = 6；总 = 6 + 0.5 = 6.5
     assertThat(r.unitPrice()).isEqualByComparingTo("6.5");
-    Mockito.verifyNoInteractions(routerService);
+    Mockito.verifyNoInteractions(materialScrapRefMapper, priceScrapService);
   }
 
   @Test
-  @DisplayName("raw 走 Router 递归取价：blank × raw_price/1000 + fee")
-  void recursiveRawPriceLookup() {
+  @DisplayName("raw_unit_price 为空但 raw_material_code 有值 → 缺价，不递归查价")
+  void rawMaterialCodeDoesNotTriggerRecursiveLookup() {
     MakePartSpec s = spec("S-PIPE");
     s.setBlankWeight(new BigDecimal("83.05"));   // 83.05g
     s.setRawMaterialCode("TP2-301050081");
     s.setProcessFee(new BigDecimal("1.50"));
     when(specMapper.selectList(any(Wrapper.class))).thenReturn(List.of(s));
 
-    // Router: raw 命中 LINKED 桶
-    PriceTypeRoute linkedRoute = new PriceTypeRoute(
-        "TP2-301050081", MaterialFormAttrEnum.PURCHASED, PriceTypeEnum.LINKED,
-        1, null, null, "manual");
-    when(routerService.listCandidates(eq("TP2-301050081"), anyString(), any()))
-        .thenReturn(List.of(linkedRoute));
-    // 子 Resolver：返 60 元/kg
-    when(linkedStub.resolve(anyString(), any(), any()))
-        .thenReturn(PriceResolveResult.hit(new BigDecimal("60"), "联动价"));
-
     PriceResolveResult r = resolver.resolve("OA-1", part("S-PIPE"), route());
-
-    // material = 83.05 × 60 / 1000 = 4.983；总 = 4.983 + 1.5 = 6.483
-    assertThat(r.unitPrice()).isEqualByComparingTo("6.483");
-    assertThat(r.priceSource()).isEqualTo("自制件");
-  }
-
-  @Test
-  @DisplayName("raw 无路由 → miss('自制件原料取价失败')")
-  void recursiveRawNoRoute() {
-    MakePartSpec s = spec("M-C");
-    s.setBlankWeight(new BigDecimal("100"));
-    s.setRawMaterialCode("RAW-MISSING");
-    when(specMapper.selectList(any(Wrapper.class))).thenReturn(List.of(s));
-    when(routerService.listCandidates(eq("RAW-MISSING"), anyString(), any()))
-        .thenReturn(Collections.emptyList());
-
-    PriceResolveResult r = resolver.resolve("OA-1", part("M-C"), route());
 
     assertThat(r.unitPrice()).isNull();
     assertThat(r.remark())
-        .contains("自制件原料取价失败")
-        .contains("RAW-MISSING");
+        .contains("raw_unit_price为空")
+        .contains("raw_material_code=TP2-301050081")
+        .contains("未按0计算")
+        .contains("未递归查raw_material_code");
+    Mockito.verifyNoInteractions(materialScrapRefMapper, priceScrapService);
   }
 
   @Test
-  @DisplayName("循环依赖 A→B→A → miss('自制件递归循环')")
-  void recursiveCycleDetection() {
-    // spec A 的 raw 是 B；spec B 的 raw 是 A
-    MakePartSpec a = spec("CYC-A");
-    a.setBlankWeight(new BigDecimal("10"));
-    a.setRawMaterialCode("CYC-B");
-    MakePartSpec b = spec("CYC-B");
-    b.setBlankWeight(new BigDecimal("10"));
-    b.setRawMaterialCode("CYC-A");
-    when(specMapper.selectList(any(Wrapper.class))).thenAnswer(inv -> {
-      // 简单按当前正在 lookup 的料号返回（近似匹配最新 selectList 调用）
-      // 这里 mock 不区分 wrapper，靠测试控制：先返 a 再返 b 再返 a 再返 b...
-      return List.of(a);
-    });
-    // 第一次 selectList 返 a；递归调时 mock 仍返 a — 所以模拟更精准点：
-    when(specMapper.selectList(any(Wrapper.class))).thenReturn(List.of(a), List.of(b), List.of(a));
+  @DisplayName("raw_unit_price 明确为 0 → 按 0 价命中，不查 raw_material_code")
+  void rawUnitPriceZeroIsHit() {
+    MakePartSpec s = spec("M-ZERO");
+    s.setBlankWeight(new BigDecimal("100"));
+    s.setRawUnitPrice(BigDecimal.ZERO);
+    s.setRawMaterialCode("RAW-IGNORED");
+    s.setProcessFee(new BigDecimal("2.5"));
+    when(specMapper.selectList(any(Wrapper.class))).thenReturn(List.of(s));
 
-    // Router 给 raw 命中 MAKE 桶（让递归走回 self）
-    PriceTypeRoute makeRoute = new PriceTypeRoute(
-        "CYC-B", MaterialFormAttrEnum.MANUFACTURED, PriceTypeEnum.MAKE,
-        1, null, null, "manual");
-    when(routerService.listCandidates(anyString(), anyString(), any()))
-        .thenReturn(List.of(makeRoute));
+    PriceResolveResult r = resolver.resolve("OA-1", part("M-ZERO"), route());
 
-    PriceResolveResult r = resolver.resolve("OA-1", part("CYC-A"), route());
-
-    assertThat(r.unitPrice()).isNull();
-    // 循环命中后底层返 null → 上层包成 "原料取价失败"；要么是 "递归循环"，依栈深度而定
-    assertThat(r.remark()).containsAnyOf("循环", "原料取价失败");
+    assertThat(r.unitPrice()).isEqualByComparingTo("2.5");
+    assertThat(r.priceSource()).isEqualTo("自制件");
+    Mockito.verifyNoInteractions(materialScrapRefMapper, priceScrapService);
   }
 
-  // ---------- T09 废料抵扣 ----------
+  // ---------- T6 CMS 废料抵扣 ----------
 
   @Test
-  @DisplayName("T09: 废料表命中 → 抵扣 = (blank-net) × scrap / 1000")
-  void scrapDeductionFromTable() {
+  @DisplayName("T6: 单废料 CMS 映射命中 → 结果与旧手工同价口径一致")
+  void scrapDeductionFromCmsMapping() {
     MakePartSpec s = spec("S-PIPE");
     s.setBlankWeight(new BigDecimal("83.053885"));
     s.setNetWeight(new BigDecimal("80"));
     s.setRawUnitPrice(new BigDecimal("82.946903"));
+    s.setRawMaterialCode(" 301 050066 ");
     s.setRecycleCode("A");
+    s.setRecycleUnitPrice(new BigDecimal("999999")); // 历史字段不应参与新取价。
     when(specMapper.selectList(any(Wrapper.class))).thenReturn(List.of(s));
-    PriceScrap row = new PriceScrap();
-    row.setScrapCode("A");
-    row.setRecyclePrice(new BigDecimal("75.663717"));
-    when(scrapMapper.selectOne(any(Wrapper.class))).thenReturn(row);
+    when(materialScrapRefMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(mapping("301050066", "301990317")));
+    when(priceScrapService.getCurrentByScrapCodes(any()))
+        .thenReturn(Map.of("301990317", scrap("301990317", "75.663717")));
 
     PriceResolveResult r = resolver.resolve("OA-1", part("S-PIPE"), route());
 
@@ -226,68 +182,119 @@ class MakeSpecPriceResolverTest {
     assertThat(r.unitPrice()).isCloseTo(
         new BigDecimal("6.6580"), within(new BigDecimal("0.001")));
     assertThat(r.priceSource()).isEqualTo("自制件");
-    assertThat(r.remark()).isEmpty();
+    assertThat(r.remark())
+        .contains("CMS废料")
+        .contains("raw=301050066")
+        .contains("scrap=301990317")
+        .contains("price=75.663717")
+        .contains("weight=3.053885")
+        .contains("deduct=");
   }
 
   @Test
-  @DisplayName("T09: 废料表 miss → fallback spec.recycle_unit_price，结果一致")
-  void scrapDeductionFallbackToSpec() {
+  @DisplayName("T6: 多废料 CMS 映射 → 每条分别算 material-scrap 后求和")
+  void multiScrapDeductionSumsEachMaterialMinusDeduction() {
+    MakePartSpec s = spec("S-PIPE");
+    s.setBlankWeight(new BigDecimal("100"));
+    s.setNetWeight(new BigDecimal("80"));
+    s.setRawUnitPrice(new BigDecimal("50"));
+    s.setRawMaterialCode("301050066");
+    when(specMapper.selectList(any(Wrapper.class))).thenReturn(List.of(s));
+    when(materialScrapRefMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(
+            mapping("301050066", "301990317"),
+            mapping("301050066", "301990999")));
+    when(priceScrapService.getCurrentByScrapCodes(any()))
+        .thenReturn(Map.of(
+            "301990317", scrap("301990317", "10"),
+            "301990999", scrap("301990999", "20")));
+
+    PriceResolveResult r = resolver.resolve("OA-1", part("S-PIPE"), route());
+
+    // material=100*50/1000=5；deduction1=20*10/1000=0.2；deduction2=20*20/1000=0.4；
+    // 多废料口径=(5-0.2)+(5-0.4)=9.4。
+    assertThat(r.unitPrice()).isEqualByComparingTo("9.40000000");
+    assertThat(r.remark())
+        .contains("CMS废料(raw=301050066,scrap=301990317")
+        .contains("price=10")
+        .contains("weight=20")
+        .contains("deduct=0.2")
+        .contains("CMS废料(raw=301050066,scrap=301990999")
+        .contains("price=20")
+        .contains("deduct=0.4");
+    assertThat(r.remark()).hasSizeLessThan(200);
+  }
+
+  @Test
+  @DisplayName("T6: 缺 CMS 映射 → 不用历史 recycle_unit_price，保留材料成本并写 remark")
+  void missingCmsMappingAddsRemarkWithoutHistoricalFallback() {
     MakePartSpec s = spec("S-PIPE");
     s.setBlankWeight(new BigDecimal("83.053885"));
     s.setNetWeight(new BigDecimal("80"));
     s.setRawUnitPrice(new BigDecimal("82.946903"));
+    s.setRawMaterialCode("301050066");
     s.setRecycleCode("A");
-    s.setRecycleUnitPrice(new BigDecimal("75.663717")); // spec 手填值
+    s.setRecycleUnitPrice(new BigDecimal("75.663717")); // 历史字段废弃，不兜底。
     when(specMapper.selectList(any(Wrapper.class))).thenReturn(List.of(s));
-    when(scrapMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    when(materialScrapRefMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
     PriceResolveResult r = resolver.resolve("OA-1", part("S-PIPE"), route());
 
-    assertThat(r.unitPrice()).isCloseTo(
-        new BigDecimal("6.6580"), within(new BigDecimal("0.001")));
-    assertThat(r.remark()).isEmpty(); // fallback 静默不噪 remark
-  }
-
-  @Test
-  @DisplayName("T09: 废料表 + spec 都缺 → 抵扣 0 + remark='缺废料价(recycle_code=A)'")
-  void scrapDeductionMissAddsRemark() {
-    MakePartSpec s = spec("S-PIPE");
-    s.setBlankWeight(new BigDecimal("83.053885"));
-    s.setNetWeight(new BigDecimal("80"));
-    s.setRawUnitPrice(new BigDecimal("82.946903"));
-    s.setRecycleCode("A");
-    s.setRecycleUnitPrice(null); // spec 也缺
-    when(specMapper.selectList(any(Wrapper.class))).thenReturn(List.of(s));
-    when(scrapMapper.selectOne(any(Wrapper.class))).thenReturn(null);
-
-    PriceResolveResult r = resolver.resolve("OA-1", part("S-PIPE"), route());
-
-    // 不抵扣 → 6.8891（T08 同值）
+    // 缺映射时不扣废料，不能静默；也不能回退到 spec.recycle_unit_price。
     assertThat(r.unitPrice()).isCloseTo(
         new BigDecimal("6.8891"), within(new BigDecimal("0.001")));
-    assertThat(r.remark()).isEqualTo("缺废料价(recycle_code=A)");
+    assertThat(r.remark()).isEqualTo("缺CMS废料映射(raw_material_code=301050066)");
+    Mockito.verifyNoInteractions(priceScrapService);
   }
 
   @Test
-  @DisplayName("T09: blank == net（无废料）→ 不查 scrap 表，抵扣 0")
+  @DisplayName("T6: CMS 映射有、当前废料价缺 → 不用历史 recycle_unit_price，写缺价 remark")
+  void missingCurrentScrapPriceAddsRemark() {
+    MakePartSpec s = spec("S-PIPE");
+    s.setBlankWeight(new BigDecimal("83.053885"));
+    s.setNetWeight(new BigDecimal("80"));
+    s.setRawUnitPrice(new BigDecimal("82.946903"));
+    s.setRawMaterialCode("301050066");
+    s.setRecycleCode("A");
+    s.setRecycleUnitPrice(new BigDecimal("75.663717")); // 历史字段废弃，不兜底。
+    when(specMapper.selectList(any(Wrapper.class))).thenReturn(List.of(s));
+    when(materialScrapRefMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(mapping("301050066", "301990317")));
+    when(priceScrapService.getCurrentByScrapCodes(any())).thenReturn(Map.of());
+
+    PriceResolveResult r = resolver.resolve("OA-1", part("S-PIPE"), route());
+
+    // 缺价时本条废料抵扣按 0 处理，但必须显式提示。
+    assertThat(r.unitPrice()).isCloseTo(
+        new BigDecimal("6.8891"), within(new BigDecimal("0.001")));
+    assertThat(r.remark())
+        .contains("CMS废料")
+        .contains("scrap=301990317")
+        .contains("price=缺失")
+        .contains("deduct=0")
+        .contains("缺废料价(scrap_code=301990317)");
+  }
+
+  @Test
+  @DisplayName("T6: blank <= net（无废料或负废料重量）→ 不查 CMS 映射和废料价，抵扣 0")
   void noScrapWhenBlankEqualsNet() {
     MakePartSpec s = spec("M-X");
     s.setBlankWeight(new BigDecimal("50"));
-    s.setNetWeight(new BigDecimal("50"));
+    s.setNetWeight(new BigDecimal("60"));
     s.setRawUnitPrice(new BigDecimal("100"));
-    s.setRecycleCode("A");
+    s.setRawMaterialCode("301050066");
     when(specMapper.selectList(any(Wrapper.class))).thenReturn(List.of(s));
 
     PriceResolveResult r = resolver.resolve("OA-1", part("M-X"), route());
 
     // material = 50 × 100 / 1000 = 5；不抵扣
     assertThat(r.unitPrice()).isEqualByComparingTo("5");
-    Mockito.verifyNoInteractions(scrapMapper);
+    Mockito.verifyNoInteractions(materialScrapRefMapper, priceScrapService);
   }
 
   @Test
-  @DisplayName("raw_material_code 与 raw_unit_price 都空 → material 0，HIT 仅含 fee")
-  void neitherRawNorPriceTreatsAsPureFee() {
+  @DisplayName("raw_material_code 与 raw_unit_price 都空 → 缺价，不用加工费兜底")
+  void neitherRawNorPriceMarksMissingPrice() {
     MakePartSpec s = spec("M-D");
     s.setBlankWeight(new BigDecimal("100"));
     s.setRawUnitPrice(null);
@@ -297,9 +304,12 @@ class MakeSpecPriceResolverTest {
 
     PriceResolveResult r = resolver.resolve("OA-1", part("M-D"), route());
 
-    // material = 0；总 = 2.5
-    assertThat(r.unitPrice()).isEqualByComparingTo("2.5");
-    Mockito.verifyNoInteractions(routerService);
+    assertThat(r.unitPrice()).isNull();
+    assertThat(r.remark())
+        .contains("raw_unit_price为空")
+        .contains("raw_material_code=空")
+        .contains("未按0计算");
+    Mockito.verifyNoInteractions(materialScrapRefMapper, priceScrapService);
   }
 
   // ============================ 辅助构造 ============================
@@ -321,5 +331,21 @@ class MakeSpecPriceResolverTest {
     MakePartSpec s = new MakePartSpec();
     s.setMaterialCode(code);
     return s;
+  }
+
+  private static MaterialScrapRef mapping(String materialCode, String scrapCode) {
+    MaterialScrapRef ref = new MaterialScrapRef();
+    ref.setMaterialCode(materialCode);
+    ref.setScrapCode(scrapCode);
+    ref.setSourceDocNo("SEQ-100");
+    ref.setCmsPostingPeriod("2025-09");
+    return ref;
+  }
+
+  private static PriceScrap scrap(String scrapCode, String price) {
+    PriceScrap scrap = new PriceScrap();
+    scrap.setScrapCode(scrapCode);
+    scrap.setRecyclePrice(new BigDecimal(price));
+    return scrap;
   }
 }

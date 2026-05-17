@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.sanhua.marketingcost.dto.FactorLinkedItemReferenceDto;
 import com.sanhua.marketingcost.entity.PriceVariableBinding;
 import java.time.LocalDate;
 import java.util.List;
@@ -24,7 +25,9 @@ public interface PriceVariableBindingMapper extends BaseMapper<PriceVariableBind
    * <p>当前生效 = {@code expiry_date IS NULL AND deleted=0}。
    * evaluator 缓存按 linked_item_id 缓存这个列表。
    */
-  @Select("SELECT id, linked_item_id, token_name, factor_code, price_source, bu_scoped,"
+  @Select("SELECT id, linked_item_id, token_name, factor_code, price_source,"
+      + " factor_identity_id, factor_monthly_price_id, factor_upload_batch_id, standard_binding_id,"
+      + " excel_source_sheet_name, excel_source_cell_ref, excel_formula, bu_scoped,"
       + " effective_date, expiry_date, source, confirmed_by, confirmed_at, remark,"
       + " created_by, created_at, updated_by, updated_at, deleted"
       + " FROM lp_price_variable_binding"
@@ -38,7 +41,9 @@ public interface PriceVariableBindingMapper extends BaseMapper<PriceVariableBind
    *
    * <p>用于"变量绑定历史"抽屉展示修改轨迹，不走 @TableLogic 过滤。
    */
-  @Select("SELECT id, linked_item_id, token_name, factor_code, price_source, bu_scoped,"
+  @Select("SELECT id, linked_item_id, token_name, factor_code, price_source,"
+      + " factor_identity_id, factor_monthly_price_id, factor_upload_batch_id, standard_binding_id,"
+      + " excel_source_sheet_name, excel_source_cell_ref, excel_formula, bu_scoped,"
       + " effective_date, expiry_date, source, confirmed_by, confirmed_at, remark,"
       + " created_by, created_at, updated_by, updated_at, deleted"
       + " FROM lp_price_variable_binding"
@@ -55,7 +60,9 @@ public interface PriceVariableBindingMapper extends BaseMapper<PriceVariableBind
    * <p>命中 0 条 → 首次绑定；命中 1 条且 effective_date 相同 → 原地更新；
    * 命中 1 条但 effective_date 不同 → 版本切换（旧行 expiry_date = new - 1d）。
    */
-  @Select("SELECT id, linked_item_id, token_name, factor_code, price_source, bu_scoped,"
+  @Select("SELECT id, linked_item_id, token_name, factor_code, price_source,"
+      + " factor_identity_id, factor_monthly_price_id, factor_upload_batch_id, standard_binding_id,"
+      + " excel_source_sheet_name, excel_source_cell_ref, excel_formula, bu_scoped,"
       + " effective_date, expiry_date, source, confirmed_by, confirmed_at, remark,"
       + " created_by, created_at, updated_by, updated_at, deleted"
       + " FROM lp_price_variable_binding"
@@ -67,6 +74,43 @@ public interface PriceVariableBindingMapper extends BaseMapper<PriceVariableBind
   PriceVariableBinding findCurrentByLinkedItemIdAndToken(
       @Param("linkedItemId") Long linkedItemId,
       @Param("tokenName") String tokenName);
+
+  /**
+   * 反查某个影响因素身份当前影响哪些联动价行。
+   *
+   * <p>页面会传当前月份和业务单元；这里仍允许为空，方便后续审计场景看全量。
+   */
+  @Select("SELECT"
+      + " b.id AS bindingId,"
+      + " b.linked_item_id AS linkedItemId,"
+      + " b.factor_identity_id AS factorIdentityId,"
+      + " li.pricing_month AS pricingMonth,"
+      + " li.business_unit_type AS businessUnitType,"
+      + " li.material_code AS materialCode,"
+      + " li.material_name AS materialName,"
+      + " li.supplier_name AS supplierName,"
+      + " li.supplier_code AS supplierCode,"
+      + " li.formula_expr AS formulaExpr,"
+      + " li.formula_expr_cn AS formulaExprCn,"
+      + " b.token_name AS tokenName,"
+      + " b.source AS bindingSource"
+      + " FROM lp_price_variable_binding b"
+      + " JOIN lp_price_linked_item li ON li.id = b.linked_item_id"
+      + " WHERE b.factor_identity_id = #{factorIdentityId}"
+      + "   AND b.expiry_date IS NULL"
+      + "   AND b.deleted = 0"
+      + "   AND li.deleted = 0"
+      + "   AND li.effective_to IS NULL"
+      + "   AND (#{pricingMonth} IS NULL OR #{pricingMonth} = ''"
+      + "        OR li.pricing_month = #{pricingMonth})"
+      + "   AND (#{businessUnitType} IS NULL OR #{businessUnitType} = ''"
+      + "        OR li.business_unit_type = #{businessUnitType})"
+      + " ORDER BY li.pricing_month DESC, li.business_unit_type ASC,"
+      + "          li.material_code ASC, b.token_name ASC, b.id ASC")
+  List<FactorLinkedItemReferenceDto> findLinkedItemReferencesByFactorIdentity(
+      @Param("factorIdentityId") Long factorIdentityId,
+      @Param("pricingMonth") String pricingMonth,
+      @Param("businessUnitType") String businessUnitType);
 
   /**
    * 把旧版本的 {@code expiry_date} 设为指定日期（版本切换时调）。

@@ -23,10 +23,17 @@ import java.util.Map;
  */
 public class VariableContext {
 
+  public enum PriceContextType {
+    DAILY_QUOTE,
+    MONTHLY_REPRICE
+  }
+
   private String oaNo;
   private String materialCode;
   private LocalDate quoteDate;
   private String pricingMonth;
+  private PriceContextType priceContextType = PriceContextType.DAILY_QUOTE;
+  private Long adjustBatchId;
   private OaForm oaForm;
   private PriceLinkedItem linkedItem;
 
@@ -66,6 +73,29 @@ public class VariableContext {
 
   public VariableContext pricingMonth(String pricingMonth) {
     this.pricingMonth = pricingMonth;
+    return this;
+  }
+
+  public PriceContextType getPriceContextType() {
+    return priceContextType;
+  }
+
+  public VariableContext priceContextType(PriceContextType priceContextType) {
+    this.priceContextType =
+        priceContextType == null ? PriceContextType.DAILY_QUOTE : priceContextType;
+    return this;
+  }
+
+  public boolean isMonthlyReprice() {
+    return PriceContextType.MONTHLY_REPRICE.equals(priceContextType);
+  }
+
+  public Long getAdjustBatchId() {
+    return adjustBatchId;
+  }
+
+  public VariableContext adjustBatchId(Long adjustBatchId) {
+    this.adjustBatchId = adjustBatchId;
     return this;
   }
 

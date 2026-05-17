@@ -80,7 +80,9 @@ public abstract class BomMapperTestBase {
       "/db/V34__price_variable_binding.sql",
       "/db/V35__price_linked_item_soft_delete.sql",
       "/db/V36__row_local_placeholder.sql",
-      "/db/V37__fix_blank_net_weight_unit_scale.sql");
+      "/db/V37__fix_blank_net_weight_unit_scale.sql",
+      "/db/V57__cost_run_cost_item_add_category.sql",
+      "/db/V58__aux_subject_unit_price_precision.sql");
 
   @SuppressWarnings("resource")
   protected static final MySQLContainer<?> MYSQL =

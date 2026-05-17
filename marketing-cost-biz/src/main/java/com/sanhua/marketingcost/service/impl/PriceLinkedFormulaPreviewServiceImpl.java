@@ -1,10 +1,14 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewRequest;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewResponse;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewResponse.TraceEntry;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewResponse.VariableDetail;
+import com.sanhua.marketingcost.entity.FactorQuoteBaseMapping;
+import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.formula.normalize.FormulaNormalizer;
@@ -13,6 +17,7 @@ import com.sanhua.marketingcost.formula.normalize.FormulaUnitConsistencyChecker;
 import com.sanhua.marketingcost.formula.registry.ExpressionEvaluator;
 import com.sanhua.marketingcost.formula.registry.FactorVariableRegistry;
 import com.sanhua.marketingcost.formula.registry.VariableContext;
+import com.sanhua.marketingcost.mapper.FactorQuoteBaseMappingMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
 import com.sanhua.marketingcost.service.PriceLinkedFormulaPreviewService;
@@ -27,6 +32,8 @@ import java.util.Map;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.BeanWrapperImpl;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -53,6 +60,8 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
   private final PriceVariableMapper priceVariableMapper;
   private final PriceLinkedItemMapper priceLinkedItemMapper;
   private final FormulaUnitConsistencyChecker unitConsistencyChecker;
+  private final ObjectMapper objectMapper;
+  private final FactorQuoteBaseMappingMapper factorQuoteBaseMappingMapper;
 
   public PriceLinkedFormulaPreviewServiceImpl(
       FormulaNormalizer formulaNormalizer,
@@ -60,11 +69,32 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
       PriceVariableMapper priceVariableMapper,
       PriceLinkedItemMapper priceLinkedItemMapper,
       FormulaUnitConsistencyChecker unitConsistencyChecker) {
+    this(
+        formulaNormalizer,
+        factorVariableRegistry,
+        priceVariableMapper,
+        priceLinkedItemMapper,
+        unitConsistencyChecker,
+        new ObjectMapper(),
+        null);
+  }
+
+  @Autowired
+  public PriceLinkedFormulaPreviewServiceImpl(
+      FormulaNormalizer formulaNormalizer,
+      FactorVariableRegistry factorVariableRegistry,
+      PriceVariableMapper priceVariableMapper,
+      PriceLinkedItemMapper priceLinkedItemMapper,
+      FormulaUnitConsistencyChecker unitConsistencyChecker,
+      ObjectMapper objectMapper,
+      FactorQuoteBaseMappingMapper factorQuoteBaseMappingMapper) {
     this.formulaNormalizer = formulaNormalizer;
     this.factorVariableRegistry = factorVariableRegistry;
     this.priceVariableMapper = priceVariableMapper;
     this.priceLinkedItemMapper = priceLinkedItemMapper;
     this.unitConsistencyChecker = unitConsistencyChecker;
+    this.objectMapper = objectMapper;
+    this.factorQuoteBaseMappingMapper = factorQuoteBaseMappingMapper;
   }
 
   @Override
@@ -82,12 +112,21 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
         request.getPricingMonth(),
         request.getTaxIncluded(),
         null,
+        null,
         null);
   }
 
   @Override
   public PriceLinkedFormulaPreviewResponse previewForRefresh(
       PriceLinkedItem linkedItem, Map<String, BigDecimal> variableOverrides) {
+    return previewForRefresh(linkedItem, variableOverrides, null);
+  }
+
+  @Override
+  public PriceLinkedFormulaPreviewResponse previewForRefresh(
+      PriceLinkedItem linkedItem,
+      Map<String, BigDecimal> variableOverrides,
+      OaForm oaForm) {
     PriceLinkedFormulaPreviewResponse response = new PriceLinkedFormulaPreviewResponse();
     if (linkedItem == null || !StringUtils.hasText(linkedItem.getFormulaExpr())) {
       response.setError("公式不能为空");
@@ -101,6 +140,7 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
         linkedItem.getPricingMonth(),
         linkedItem.getTaxIncluded(),
         linkedItem,
+        oaForm,
         variableOverrides);
   }
 
@@ -118,6 +158,7 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
       String pricingMonth,
       Integer taxIncluded,
       PriceLinkedItem preloadedItem,
+      OaForm oaForm,
       Map<String, BigDecimal> overrides) {
     PriceLinkedFormulaPreviewResponse response = new PriceLinkedFormulaPreviewResponse();
 
@@ -161,6 +202,7 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
     VariableContext ctx = new VariableContext()
         .materialCode(materialCode)
         .pricingMonth(pricingMonth)
+        .oaForm(oaForm)
         .linkedItem(linkedItem);
     // OA 锁价等 overrides 在变量解析之前灌进 ctx，让 registry 在查 finance 基价前先看 overrides
     if (overrides != null) {
@@ -194,9 +236,7 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
       detail.setCode(token);
       detail.setName(meta == null ? token : safeName(meta));
       detail.setValue(value);
-      detail.setSource(resolved.isPresent()
-          ? (meta == null ? "UNKNOWN" : meta.getFactorType())
-          : "MISSING");
+      detail.setSource(resolveVariableSource(meta, resolved, ctx));
       response.getVariables().add(detail);
     }
     response.getTrace().add(new TraceEntry("resolve", values.toString()));
@@ -254,6 +294,113 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
     }
 
     return response;
+  }
+
+  private String resolveVariableSource(
+      PriceVariable meta, Optional<BigDecimal> resolved, VariableContext ctx) {
+    if (resolved.isEmpty()) {
+      return "MISSING";
+    }
+    if (meta == null) {
+      return "UNKNOWN";
+    }
+    if (usesQuoteBaseOverride(meta, ctx)) {
+      return "QUOTE_BASE";
+    }
+    return meta.getFactorType();
+  }
+
+  /**
+   * trace 展示用来源判定：实际计算在 FactorVariableRegistryImpl 里已经优先取 OA 表头锁价，
+   * 这里只补充可追溯标识，避免页面把报价单基价覆盖误显示成普通月度影响因素价。
+   */
+  private boolean usesQuoteBaseOverride(PriceVariable meta, VariableContext ctx) {
+    if (meta == null
+        || ctx == null
+        || ctx.getOaForm() == null
+        || ctx.isMonthlyReprice()
+        || factorQuoteBaseMappingMapper == null
+        || !"FINANCE_FACTOR".equalsIgnoreCase(String.valueOf(meta.getFactorType()))) {
+      return false;
+    }
+    Long factorIdentityId = resolverParamLong(meta, "factorIdentityId");
+    if (factorIdentityId == null) {
+      return false;
+    }
+    List<FactorQuoteBaseMapping> mappings = factorQuoteBaseMappingMapper.selectList(
+        Wrappers.lambdaQuery(FactorQuoteBaseMapping.class)
+            .eq(FactorQuoteBaseMapping::getFactorIdentityId, factorIdentityId)
+            .eq(FactorQuoteBaseMapping::getEnabled, 1)
+            .eq(FactorQuoteBaseMapping::getDeleted, 0)
+            .orderByAsc(FactorQuoteBaseMapping::getId));
+    for (FactorQuoteBaseMapping mapping : mappings) {
+      if (readOaQuoteBasePrice(ctx.getOaForm(), mapping.getQuoteFieldCode()) != null) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private Long resolverParamLong(PriceVariable meta, String fieldName) {
+    if (meta == null || !StringUtils.hasText(meta.getResolverParams())) {
+      return null;
+    }
+    try {
+      JsonNode node = objectMapper.readTree(meta.getResolverParams());
+      JsonNode value = node.get(fieldName);
+      if (value == null || value.isNull()) {
+        return null;
+      }
+      if (value.isNumber()) {
+        return value.longValue();
+      }
+      String text = value.asText();
+      return StringUtils.hasText(text) ? Long.valueOf(text.trim()) : null;
+    } catch (Exception e) {
+      log.debug("resolver_params 读取 {} 失败: {}", fieldName, e.getMessage());
+      return null;
+    }
+  }
+
+  private BigDecimal readOaQuoteBasePrice(OaForm oaForm, String quoteFieldCode) {
+    if (oaForm == null || !StringUtils.hasText(quoteFieldCode)) {
+      return null;
+    }
+    try {
+      Object value = new BeanWrapperImpl(oaForm).getPropertyValue(snakeToCamel(quoteFieldCode.trim()));
+      if (value == null) {
+        return null;
+      }
+      if (value instanceof BigDecimal bd) {
+        return bd;
+      }
+      if (value instanceof Number n) {
+        return new BigDecimal(n.toString());
+      }
+      return new BigDecimal(value.toString());
+    } catch (RuntimeException e) {
+      log.debug("读取 OA 报价单基价字段 {} 失败: {}", quoteFieldCode, e.getMessage());
+      return null;
+    }
+  }
+
+  private String snakeToCamel(String value) {
+    StringBuilder builder = new StringBuilder();
+    boolean upperNext = false;
+    for (int i = 0; i < value.length(); i++) {
+      char ch = value.charAt(i);
+      if (ch == '_') {
+        upperNext = true;
+        continue;
+      }
+      if (upperNext) {
+        builder.append(Character.toUpperCase(ch));
+        upperNext = false;
+      } else {
+        builder.append(ch);
+      }
+    }
+    return builder.toString();
   }
 
   /** 取最接近 {@code pricingMonth} 的一条 linkedItem；无精确匹配则按 materialCode 取最新一条。 */

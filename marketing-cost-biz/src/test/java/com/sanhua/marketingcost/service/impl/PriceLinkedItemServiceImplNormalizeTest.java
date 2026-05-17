@@ -14,6 +14,7 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.dto.PriceLinkedItemDto;
 import com.sanhua.marketingcost.dto.PriceLinkedItemUpdateRequest;
 import com.sanhua.marketingcost.entity.PriceFixedItem;
+import com.sanhua.marketingcost.entity.PriceLinkedFormulaChangeLog;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.formula.normalize.FormulaDisplayRenderer;
@@ -21,10 +22,14 @@ import com.sanhua.marketingcost.formula.normalize.FormulaNormalizer;
 import com.sanhua.marketingcost.formula.normalize.FormulaSyntaxException;
 import com.sanhua.marketingcost.formula.normalize.FormulaValidator;
 import com.sanhua.marketingcost.formula.normalize.VariableAliasIndex;
+import com.sanhua.marketingcost.formula.registry.FactorVariableRegistryImpl;
 import com.sanhua.marketingcost.formula.registry.RowLocalPlaceholderRegistry;
+import com.sanhua.marketingcost.mapper.FinanceBasePriceMapper;
 import com.sanhua.marketingcost.mapper.PriceFixedItemMapper;
+import com.sanhua.marketingcost.mapper.PriceLinkedFormulaChangeLogMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
+import com.sanhua.marketingcost.service.PriceVariableBindingService;
 import java.util.List;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
@@ -50,6 +55,7 @@ class PriceLinkedItemServiceImplNormalizeTest {
 
   private PriceLinkedItemMapper itemMapper;
   private PriceFixedItemMapper fixedItemMapper;
+  private PriceLinkedFormulaChangeLogMapper formulaChangeLogMapper;
   private PriceVariableMapper priceVariableMapper;
   private FormulaNormalizer normalizer;
   private FormulaDisplayRenderer renderer;
@@ -63,12 +69,14 @@ class PriceLinkedItemServiceImplNormalizeTest {
     TableInfoHelper.initTableInfo(assistant, PriceLinkedItem.class);
     TableInfoHelper.initTableInfo(assistant, PriceFixedItem.class);
     TableInfoHelper.initTableInfo(assistant, PriceVariable.class);
+    TableInfoHelper.initTableInfo(assistant, PriceLinkedFormulaChangeLog.class);
   }
 
   @BeforeEach
   void setUp() {
     itemMapper = mock(PriceLinkedItemMapper.class);
     fixedItemMapper = mock(PriceFixedItemMapper.class);
+    formulaChangeLogMapper = mock(PriceLinkedFormulaChangeLogMapper.class);
     priceVariableMapper = mock(PriceVariableMapper.class);
 
     // Renderer 读同一份 priceVariableMapper —— 保证写回读取语义一致
@@ -89,7 +97,16 @@ class PriceLinkedItemServiceImplNormalizeTest {
     validator.init();
 
     service = new PriceLinkedItemServiceImpl(
-        itemMapper, fixedItemMapper, normalizer, renderer, validator);
+        itemMapper,
+        fixedItemMapper,
+        mock(FinanceBasePriceMapper.class),
+        priceVariableMapper,
+        mock(PriceVariableBindingService.class),
+        mock(FactorVariableRegistryImpl.class),
+        normalizer,
+        renderer,
+        validator);
+    service.setFormulaChangeLogMapper(formulaChangeLogMapper);
   }
 
   @Test
@@ -125,6 +142,32 @@ class PriceLinkedItemServiceImplNormalizeTest {
     verify(itemMapper).updateById(captor.capture());
     assertThat(captor.getValue().getFormulaExpr())
         .isEqualTo("[blank_weight]*0.001");
+  }
+
+  @Test
+  @DisplayName("update：公式变化后写入修改日志")
+  void updateFormulaWritesChangeLog() {
+    PriceLinkedItem existing = new PriceLinkedItem();
+    existing.setId(43L);
+    existing.setMaterialCode("MAT-043");
+    existing.setFormulaExpr("[Cu]*1");
+    existing.setFormulaExprCn("电解铜*1");
+    when(itemMapper.selectById(43L)).thenReturn(existing);
+
+    PriceLinkedItemUpdateRequest req = new PriceLinkedItemUpdateRequest();
+    req.setFormulaExpr("电解铜*2");
+
+    service.update(43L, req);
+
+    ArgumentCaptor<PriceLinkedFormulaChangeLog> logCaptor =
+        ArgumentCaptor.forClass(PriceLinkedFormulaChangeLog.class);
+    verify(formulaChangeLogMapper).insert(logCaptor.capture());
+    PriceLinkedFormulaChangeLog changeLog = logCaptor.getValue();
+    assertThat(changeLog.getLinkedItemId()).isEqualTo(43L);
+    assertThat(changeLog.getMaterialCode()).isEqualTo("MAT-043");
+    assertThat(changeLog.getOldFormulaExpr()).isEqualTo("[Cu]*1");
+    assertThat(changeLog.getNewFormulaExpr()).isEqualTo("[Cu]*2");
+    assertThat(changeLog.getChangeSource()).isEqualTo("SYSTEM_UI");
   }
 
   @Test

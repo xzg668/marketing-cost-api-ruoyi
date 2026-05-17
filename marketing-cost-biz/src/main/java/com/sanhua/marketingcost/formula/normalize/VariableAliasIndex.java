@@ -30,8 +30,8 @@ import org.springframework.stereotype.Component;
  *   <li>O(n) 时间复杂度，与变量数无关。</li>
  * </ul>
  *
- * <p>冲突处理：同一别名串指向不同 variable_code 则启动时抛 {@link IllegalStateException}，
- * 避免生产期"铜"有时指 Cu 有时指 1#Cu。
+ * <p>冲突处理：同一别名串指向不同 variable_code 时保留先加载的映射并打 WARN。
+ * 生产库可能存在 Excel 自动登记变量带来的重复别名，启动阶段不能因为脏数据直接不可用。
  */
 @Component
 public class VariableAliasIndex {
@@ -145,11 +145,9 @@ public class VariableAliasIndex {
     alias = alias.trim();
     String existingOwner = aliasOwner.get(alias);
     if (existingOwner != null && !existingOwner.equals(code)) {
-      String msg = String.format(
-          "别名冲突：'%s' 同时映射到 [%s] 和 [%s]，请拆分或改名 (fail-fast)",
-          alias, existingOwner, code);
-      log.warn(msg);
-      throw new IllegalStateException(msg);
+      log.warn("别名冲突：'{}' 同时映射到 [{}] 和 [{}]，保留先加载的 [{}]",
+          alias, existingOwner, code, existingOwner);
+      return;
     }
     aliasOwner.put(alias, code);
     TrieNode node = root;

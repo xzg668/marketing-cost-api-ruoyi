@@ -41,7 +41,7 @@ class PriceLinkedCalcServiceImplTest {
 
   @Test
   void page_returnsPagedRecords() {
-    // T5.5：数据源切到 BomCostingRowMapper，条目也变成 BomCostingRow
+    // V48：分页数据源切到联动价主表，OA BOM 仅作为用量上下文。
     BomCostingRowMapper mapper = Mockito.mock(BomCostingRowMapper.class);
     PriceLinkedCalcItemMapper calcMapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
     PriceLinkedItemMapper linkedItemMapper = Mockito.mock(PriceLinkedItemMapper.class);
@@ -64,21 +64,22 @@ class PriceLinkedCalcServiceImplTest {
             new ObjectMapper(),
             Mockito.mock(PriceLinkedFormulaPreviewService.class));
 
-    BomCostingRow record = new BomCostingRow();
-    record.setOaNo("OA-001");
+    PriceLinkedItem record = new PriceLinkedItem();
     record.setMaterialCode("MAT-1");
+    record.setMaterialName("联动价物料");
 
-    Page<BomCostingRow> page = new Page<>(1, 20);
+    Page<PriceLinkedItem> page = new Page<>(1, 20);
     page.setRecords(List.of(record));
     page.setTotal(1);
 
-    when(mapper.selectPage(any(), any())).thenReturn(page);
+    when(linkedItemMapper.selectPage(any(), any())).thenReturn(page);
+    when(mapper.selectList(any())).thenReturn(List.of());
     when(calcMapper.selectList(any())).thenReturn(List.of());
 
-    var result = service.page("OA-001", null, null, 1, 20);
+    var result = service.page("OA-001", null, null, null, null, null, null, null, 1, 20);
 
     assertEquals(1, result.getTotal());
-    assertEquals("OA-001", result.getRecords().get(0).getOaNo());
+    assertEquals("MAT-1", result.getRecords().get(0).getItemCode());
   }
 
   @Test
@@ -186,10 +187,14 @@ class PriceLinkedCalcServiceImplTest {
     previewResp.setResult(new BigDecimal("93.73"));
     VariableDetail cu = new VariableDetail();
     cu.setCode("Cu");
+    cu.setName("铜基价");
     cu.setValue(new BigDecimal("88.73"));
+    cu.setSource("FINANCE");
     VariableDetail fee = new VariableDetail();
     fee.setCode("process_fee");
+    fee.setName("加工费");
     fee.setValue(new BigDecimal("5.00"));
+    fee.setSource("PART_CONTEXT");
     previewResp.setVariables(List.of(cu, fee));
     when(previewService.preview(any(PriceLinkedFormulaPreviewRequest.class)))
         .thenReturn(previewResp);
@@ -201,6 +206,9 @@ class PriceLinkedCalcServiceImplTest {
     assertThat(trace.getTraceJson()).contains("\"rawExpr\":\"Cu+process_fee\"");
     assertThat(trace.getTraceJson()).contains("\"normalizedExpr\":\"[Cu]+[process_fee]\"");
     assertThat(trace.getTraceJson()).contains("\"Cu\":88.73");
+    assertThat(trace.getTraceJson()).contains("\"variableDetails\"");
+    assertThat(trace.getTraceJson()).contains("\"name\":\"铜基价\"");
+    assertThat(trace.getTraceJson()).contains("\"source\":\"FINANCE\"");
     assertThat(trace.getTraceJson()).contains("\"result\":93.73");
   }
 

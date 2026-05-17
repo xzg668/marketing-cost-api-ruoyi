@@ -6,14 +6,15 @@ import java.time.LocalDate;
 /**
  * 自制件工艺规格 创建/修改请求体 (V48 暴露 UI)
  *
- * <p>对应 lp_make_part_spec 表。承载自制件取价所需的全部输入：
+ * <p>对应 lp_make_part_spec 表。承载自制件取价所需的输入：
  * <ul>
  *   <li>毛重 / 净重 / 废料率</li>
  *   <li>原材料代号 + 规格 + 单价</li>
- *   <li>回收（边角料）代号 + 单价 + 比例</li>
  *   <li>加工费 / 外发费</li>
  *   <li>公式 ID（可选关联 lp_price_variable 里的派生公式）</li>
  * </ul>
+ *
+ * <p>recycleCode/recycleUnitPrice 是历史字段，T10 起保存接口忽略这些字段。
  */
 public class MakePartSpecUpdateRequest {
   private String materialCode;

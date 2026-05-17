@@ -1,6 +1,8 @@
 package com.sanhua.marketingcost.service;
 
 import com.sanhua.marketingcost.dto.PriceItemImportResponse;
+import com.sanhua.marketingcost.dto.FactorUploadBatchDto;
+import com.sanhua.marketingcost.dto.PriceLinkedImportBatchDetailDto;
 import com.sanhua.marketingcost.dto.PriceLinkedItemDto;
 import com.sanhua.marketingcost.dto.PriceLinkedItemImportRequest;
 import com.sanhua.marketingcost.dto.PriceLinkedItemUpdateRequest;
@@ -27,10 +29,49 @@ public interface PriceLinkedItemService {
    * </ul>
    * 联动行的公式会先过 {@code FormulaNormalizer}，非法公式记入 errors 不入库。
    *
-   * @param input        .xlsx 二进制流
-   * @param pricingMonth 价期月（如 "2026-02"），必填
+   * @param input           .xlsx 二进制流
+   * @param pricingMonth    价期月（如 "2026-02"），必填
+   * @param overwriteManual 是否允许覆盖 MANUAL 行级绑定
    */
-  PriceItemImportResponse importExcel(InputStream input, String pricingMonth);
+  PriceItemImportResponse importExcel(
+      InputStream input, String pricingMonth, boolean overwriteManual);
+
+  default PriceItemImportResponse importExcel(
+      InputStream input,
+      String pricingMonth,
+      boolean overwriteManual,
+      String businessUnitType,
+      String sourceFileName) {
+    return importExcel(input, pricingMonth, overwriteManual);
+  }
+
+  default PriceItemImportResponse importExcel(
+      InputStream input,
+      String pricingMonth,
+      boolean overwriteManual,
+      String businessUnitType,
+      String sourceFileName,
+      String effectiveStrategy) {
+    return importExcel(input, pricingMonth, overwriteManual, businessUnitType, sourceFileName);
+  }
+
+  default List<FactorUploadBatchDto> listImportHistory(
+      String pricingMonth, String businessUnitType, Integer limit) {
+    return List.of();
+  }
+
+  default List<FactorUploadBatchDto> listImportHistory(
+      String pricingMonth,
+      String businessUnitType,
+      String uploadedBy,
+      Boolean includeAllUploaders,
+      Integer limit) {
+    return listImportHistory(pricingMonth, businessUnitType, limit);
+  }
+
+  default PriceLinkedImportBatchDetailDto getImportBatchDetail(Long factorUploadBatchId) {
+    return null;
+  }
 
   boolean delete(Long id);
 }

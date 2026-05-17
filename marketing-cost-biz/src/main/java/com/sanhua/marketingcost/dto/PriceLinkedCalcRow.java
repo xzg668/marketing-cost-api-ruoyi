@@ -1,6 +1,8 @@
 package com.sanhua.marketingcost.dto;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.Map;
 
 /**
  * 联动价计算结果行（BOM 部品页展示口径）。
@@ -15,13 +17,22 @@ import java.math.BigDecimal;
 public class PriceLinkedCalcRow {
   private Long calcId;
   private String oaNo;
+  private String customer;
+  private String businessUnitType;
   private String itemCode;
+  private String materialName;
+  private String supplierName;
+  private String pricingMonth;
   private String shapeAttr;
   private BigDecimal bomQty;
   private BigDecimal partUnitPrice;
   private BigDecimal partAmount;
   private String formulaExpr;
   private String formulaExprCn;
+  private Boolean hasTrace;
+  private String calcStatus;
+  private Map<String, Integer> variableSourceSummary;
+  private LocalDateTime updatedAt;
 
   public Long getCalcId() {
     return calcId;
@@ -39,12 +50,52 @@ public class PriceLinkedCalcRow {
     this.oaNo = oaNo;
   }
 
+  public String getCustomer() {
+    return customer;
+  }
+
+  public void setCustomer(String customer) {
+    this.customer = customer;
+  }
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
+  }
+
   public String getItemCode() {
     return itemCode;
   }
 
   public void setItemCode(String itemCode) {
     this.itemCode = itemCode;
+  }
+
+  public String getMaterialName() {
+    return materialName;
+  }
+
+  public void setMaterialName(String materialName) {
+    this.materialName = materialName;
+  }
+
+  public String getSupplierName() {
+    return supplierName;
+  }
+
+  public void setSupplierName(String supplierName) {
+    this.supplierName = supplierName;
+  }
+
+  public String getPricingMonth() {
+    return pricingMonth;
+  }
+
+  public void setPricingMonth(String pricingMonth) {
+    this.pricingMonth = pricingMonth;
   }
 
   public String getShapeAttr() {
@@ -93,5 +144,37 @@ public class PriceLinkedCalcRow {
 
   public void setFormulaExprCn(String formulaExprCn) {
     this.formulaExprCn = formulaExprCn;
+  }
+
+  public Boolean getHasTrace() {
+    return hasTrace;
+  }
+
+  public void setHasTrace(Boolean hasTrace) {
+    this.hasTrace = hasTrace;
+  }
+
+  public String getCalcStatus() {
+    return calcStatus;
+  }
+
+  public void setCalcStatus(String calcStatus) {
+    this.calcStatus = calcStatus;
+  }
+
+  public Map<String, Integer> getVariableSourceSummary() {
+    return variableSourceSummary;
+  }
+
+  public void setVariableSourceSummary(Map<String, Integer> variableSourceSummary) {
+    this.variableSourceSummary = variableSourceSummary;
+  }
+
+  public LocalDateTime getUpdatedAt() {
+    return updatedAt;
+  }
+
+  public void setUpdatedAt(LocalDateTime updatedAt) {
+    this.updatedAt = updatedAt;
   }
 }

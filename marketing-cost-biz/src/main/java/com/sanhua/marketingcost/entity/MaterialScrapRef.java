@@ -8,13 +8,17 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import lombok.Getter;
+import lombok.Setter;
 
 /**
- * 部品-废料映射（V25 引入）—— 联动价派生变量 {@code scrap_price_incl} 取值依据。
+ * 部品/原材料-废料映射（V25 引入，V69 扩展）—— 联动价派生变量和自制件 CMS 废料取价的映射依据。
  *
- * <p>业务语义：一个部品在加工后会产生废料（铜/铝/锌等），废料按比例折算回收价抵减原材料成本；
- * 本表维护 {@code materialCode → scrapCode + ratio} 的映射，废料价格走财务基价表。
+ * <p>业务语义：本表维护当前有效的 {@code materialCode -> scrapCode} 映射。同一个原材料可以对应多个
+ * CMS 回收废料料号，CMS 期间字段只做追溯，不参与自制件匹配。
  */
+@Getter
+@Setter
 @TableName("lp_material_scrap_ref")
 public class MaterialScrapRef {
   @TableId(type = IdType.AUTO)
@@ -24,9 +28,19 @@ public class MaterialScrapRef {
   @TableField("material_code")
   private String materialCode;
 
-  /** 对应废料代码（CMS 体系）—— 财务基价表 short_name/factor_code 命中键 */
+  /** 原材料展示字段，来自 CMS 映射源行；计算匹配仍只认 materialCode。 */
+  private String materialName;
+  private String materialSpec;
+  private String materialUnit;
+
+  /** 对应废料代码（CMS 体系）—— 后续废料当前价按这个编码取。 */
   @TableField("scrap_code")
   private String scrapCode;
+
+  /** 回收废料展示字段，来自 CMS 映射源行；价格维护仍以 scrapCode 为唯一键。 */
+  private String scrapName;
+  private String scrapSpec;
+  private String scrapUnit;
 
   /** 抵减比例（如铜沫 0.92），派生结果 = 废料 finance 价 × ratio */
   private BigDecimal ratio;
@@ -37,6 +51,17 @@ public class MaterialScrapRef {
   /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
+
+  /** CMS 映射来源追溯字段；期间字段只追溯，不参与自制件取价匹配。 */
+  private String sourceType;
+  private String sourceDocNo;
+  private String cmsRecordId;
+  private String linkDetailId;
+  private String cmsPostingPeriod;
+  private LocalDate cmsEffectiveDate;
+  private LocalDate approvalTime;
+  private LocalDate syncTime;
+  private String remark;
 
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;

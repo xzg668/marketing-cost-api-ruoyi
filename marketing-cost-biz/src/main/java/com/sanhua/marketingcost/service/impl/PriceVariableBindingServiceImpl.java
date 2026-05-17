@@ -8,8 +8,10 @@ import com.sanhua.marketingcost.dto.PriceVariableBindingRequest;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.entity.PriceVariableBinding;
+import com.sanhua.marketingcost.entity.PriceVariableBindingChangeLog;
 import com.sanhua.marketingcost.formula.registry.FactorVariableRegistryImpl;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
+import com.sanhua.marketingcost.mapper.PriceVariableBindingChangeLogMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableBindingMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
 import com.sanhua.marketingcost.service.PriceVariableBindingService;
@@ -19,6 +21,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -28,6 +31,7 @@ import java.util.Map;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -61,6 +65,8 @@ public class PriceVariableBindingServiceImpl implements PriceVariableBindingServ
   private final PriceVariableMapper priceVariableMapper;
   private final PriceLinkedItemMapper priceLinkedItemMapper;
   private final FactorVariableRegistryImpl factorVariableRegistry;
+  @Autowired(required = false)
+  private PriceVariableBindingChangeLogMapper bindingChangeLogMapper;
 
   public PriceVariableBindingServiceImpl(
       PriceVariableBindingMapper bindingMapper,
@@ -71,6 +77,10 @@ public class PriceVariableBindingServiceImpl implements PriceVariableBindingServ
     this.priceVariableMapper = priceVariableMapper;
     this.priceLinkedItemMapper = priceLinkedItemMapper;
     this.factorVariableRegistry = factorVariableRegistry;
+  }
+
+  void setBindingChangeLogMapper(PriceVariableBindingChangeLogMapper bindingChangeLogMapper) {
+    this.bindingChangeLogMapper = bindingChangeLogMapper;
   }
 
   // ============================ 查询 ============================
@@ -125,15 +135,24 @@ public class PriceVariableBindingServiceImpl implements PriceVariableBindingServ
         bindingMapper.findCurrentByLinkedItemIdAndToken(itemId, tokenName);
 
     Long resultId;
+    PriceVariableBinding oldBinding = snapshot(current);
+    PriceVariableBinding newBinding;
+    String action;
     if (current == null) {
-      resultId = doInsert(request, variable, effective);
+      newBinding = doInsert(request, variable, effective);
+      resultId = newBinding.getId();
+      action = "INSERT";
     } else if (effective.equals(current.getEffectiveDate())) {
       doUpdateInPlace(current, request, variable);
       resultId = current.getId();
+      newBinding = current;
+      action = "UPDATE";
     } else if (effective.isAfter(current.getEffectiveDate())) {
       // 版本切换：旧行失效 + 新行插入
       bindingMapper.expireById(current.getId(), effective.minusDays(1));
-      resultId = doInsert(request, variable, effective);
+      newBinding = doInsert(request, variable, effective);
+      resultId = newBinding.getId();
+      action = "VERSION_SWITCH";
     } else {
       // 新 effective 早于当前生效 —— 业务上不合理（回溯），直接拒
       throw new IllegalArgumentException(
@@ -142,21 +161,29 @@ public class PriceVariableBindingServiceImpl implements PriceVariableBindingServ
               effective, current.getEffectiveDate()));
     }
 
+    logBindingChange(action, oldBinding, newBinding, request, "保存行级变量绑定");
     factorVariableRegistry.invalidateBinding(itemId);
     return resultId;
   }
 
-  private Long doInsert(
+  private PriceVariableBinding doInsert(
       PriceVariableBindingRequest req, PriceVariable variable, LocalDate effective) {
     PriceVariableBinding entity = new PriceVariableBinding();
     entity.setLinkedItemId(req.getLinkedItemId());
     entity.setTokenName(req.getTokenName().trim());
     entity.setFactorCode(variable.getVariableCode());
     entity.setPriceSource(req.getPriceSource());
+    entity.setFactorIdentityId(req.getFactorIdentityId());
+    entity.setFactorMonthlyPriceId(req.getFactorMonthlyPriceId());
+    entity.setFactorUploadBatchId(req.getFactorUploadBatchId());
+    entity.setStandardBindingId(req.getStandardBindingId());
+    entity.setExcelSourceSheetName(req.getExcelSourceSheetName());
+    entity.setExcelSourceCellRef(req.getExcelSourceCellRef());
+    entity.setExcelFormula(req.getExcelFormula());
     entity.setBuScoped(req.getBuScoped() == null ? 1 : req.getBuScoped());
     entity.setEffectiveDate(effective);
     entity.setExpiryDate(null);
-    entity.setSource(StringUtils.hasText(req.getSource()) ? req.getSource() : "MANUAL");
+    entity.setSource(resolvedSource(req));
     entity.setConfirmedBy(req.getConfirmedBy());
     entity.setRemark(req.getRemark());
     entity.setDeleted(0);
@@ -164,17 +191,22 @@ public class PriceVariableBindingServiceImpl implements PriceVariableBindingServ
     log.info("新增行局部绑定：linkedItemId={} token={} factor={} effective={}",
         entity.getLinkedItemId(), entity.getTokenName(),
         entity.getFactorCode(), entity.getEffectiveDate());
-    return entity.getId();
+    return entity;
   }
 
   private void doUpdateInPlace(
       PriceVariableBinding current, PriceVariableBindingRequest req, PriceVariable variable) {
     current.setFactorCode(variable.getVariableCode());
     current.setPriceSource(req.getPriceSource());
+    current.setFactorIdentityId(req.getFactorIdentityId());
+    current.setFactorMonthlyPriceId(req.getFactorMonthlyPriceId());
+    current.setFactorUploadBatchId(req.getFactorUploadBatchId());
+    current.setStandardBindingId(req.getStandardBindingId());
+    current.setExcelSourceSheetName(req.getExcelSourceSheetName());
+    current.setExcelSourceCellRef(req.getExcelSourceCellRef());
+    current.setExcelFormula(req.getExcelFormula());
     current.setBuScoped(req.getBuScoped() == null ? 1 : req.getBuScoped());
-    if (StringUtils.hasText(req.getSource())) {
-      current.setSource(req.getSource());
-    }
+    current.setSource(resolvedSource(req));
     if (StringUtils.hasText(req.getConfirmedBy())) {
       current.setConfirmedBy(req.getConfirmedBy());
     }
@@ -194,6 +226,7 @@ public class PriceVariableBindingServiceImpl implements PriceVariableBindingServ
     }
     // BaseMapper.deleteById + @TableLogic = UPDATE deleted=1
     bindingMapper.deleteById(id);
+    logBindingChange("DELETE", existing, null, null, "软删行级变量绑定");
     factorVariableRegistry.invalidateBinding(existing.getLinkedItemId());
     log.info("软删行局部绑定：id={} linkedItemId={}", id, existing.getLinkedItemId());
   }
@@ -361,6 +394,68 @@ public class PriceVariableBindingServiceImpl implements PriceVariableBindingServ
     }
     String s = cols[i];
     return s == null ? "" : s.trim();
+  }
+
+  private String resolvedSource(PriceVariableBindingRequest req) {
+    return req != null && StringUtils.hasText(req.getSource())
+        ? req.getSource().trim()
+        : "MANUAL";
+  }
+
+  private PriceVariableBinding snapshot(PriceVariableBinding source) {
+    if (source == null) {
+      return null;
+    }
+    PriceVariableBinding copy = new PriceVariableBinding();
+    copy.setId(source.getId());
+    copy.setLinkedItemId(source.getLinkedItemId());
+    copy.setTokenName(source.getTokenName());
+    copy.setFactorCode(source.getFactorCode());
+    copy.setPriceSource(source.getPriceSource());
+    copy.setFactorIdentityId(source.getFactorIdentityId());
+    copy.setFactorMonthlyPriceId(source.getFactorMonthlyPriceId());
+    copy.setExcelFormula(source.getExcelFormula());
+    copy.setSource(source.getSource());
+    return copy;
+  }
+
+  private void logBindingChange(
+      String action,
+      PriceVariableBinding oldBinding,
+      PriceVariableBinding newBinding,
+      PriceVariableBindingRequest request,
+      String message) {
+    if (bindingChangeLogMapper == null) {
+      return;
+    }
+    PriceVariableBindingChangeLog changeLog = new PriceVariableBindingChangeLog();
+    changeLog.setBindingId(newBinding != null ? newBinding.getId()
+        : oldBinding == null ? null : oldBinding.getId());
+    changeLog.setLinkedItemId(newBinding != null ? newBinding.getLinkedItemId()
+        : oldBinding == null ? null : oldBinding.getLinkedItemId());
+    changeLog.setTokenName(newBinding != null ? newBinding.getTokenName()
+        : oldBinding == null ? null : oldBinding.getTokenName());
+    changeLog.setAction(action);
+    changeLog.setOldSource(oldBinding == null ? null : oldBinding.getSource());
+    changeLog.setNewSource(newBinding == null ? null : newBinding.getSource());
+    changeLog.setOldFactorCode(oldBinding == null ? null : oldBinding.getFactorCode());
+    changeLog.setNewFactorCode(newBinding == null ? null : newBinding.getFactorCode());
+    changeLog.setOldFactorIdentityId(oldBinding == null ? null : oldBinding.getFactorIdentityId());
+    changeLog.setNewFactorIdentityId(newBinding == null ? null : newBinding.getFactorIdentityId());
+    changeLog.setOldFactorMonthlyPriceId(
+        oldBinding == null ? null : oldBinding.getFactorMonthlyPriceId());
+    changeLog.setNewFactorMonthlyPriceId(
+        newBinding == null ? null : newBinding.getFactorMonthlyPriceId());
+    changeLog.setOldPriceSource(oldBinding == null ? null : oldBinding.getPriceSource());
+    changeLog.setNewPriceSource(newBinding == null ? null : newBinding.getPriceSource());
+    changeLog.setOldExcelFormula(oldBinding == null ? null : oldBinding.getExcelFormula());
+    changeLog.setNewExcelFormula(newBinding == null ? null : newBinding.getExcelFormula());
+    changeLog.setChangeSource(newBinding != null && StringUtils.hasText(newBinding.getSource())
+        ? newBinding.getSource() : "SYSTEM");
+    changeLog.setChangedBy(request == null ? null : request.getConfirmedBy());
+    changeLog.setMessage(message);
+    changeLog.setCreatedAt(LocalDateTime.now());
+    bindingChangeLogMapper.insert(changeLog);
   }
 
   // ============================ 私有工具 ============================

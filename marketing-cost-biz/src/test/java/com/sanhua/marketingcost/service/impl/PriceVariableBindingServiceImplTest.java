@@ -22,11 +22,13 @@ import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.entity.PriceVariableBinding;
+import com.sanhua.marketingcost.entity.PriceVariableBindingChangeLog;
 import com.sanhua.marketingcost.formula.registry.FactorVariableRegistryImpl;
 import com.sanhua.marketingcost.formula.registry.FinanceBasePriceQuery;
 import com.sanhua.marketingcost.formula.registry.RowLocalPlaceholderRegistry;
 import com.sanhua.marketingcost.mapper.FinanceBasePriceMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
+import com.sanhua.marketingcost.mapper.PriceVariableBindingChangeLogMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableBindingMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
 import java.io.ByteArrayInputStream;
@@ -58,6 +60,7 @@ import org.mockito.ArgumentCaptor;
 class PriceVariableBindingServiceImplTest {
 
   private PriceVariableBindingMapper bindingMapper;
+  private PriceVariableBindingChangeLogMapper bindingChangeLogMapper;
   private PriceVariableMapper priceVariableMapper;
   private PriceLinkedItemMapper priceLinkedItemMapper;
   private FactorVariableRegistryImpl registry;
@@ -70,12 +73,14 @@ class PriceVariableBindingServiceImplTest {
     TableInfoHelper.initTableInfo(assistant, PriceVariable.class);
     TableInfoHelper.initTableInfo(assistant, PriceLinkedItem.class);
     TableInfoHelper.initTableInfo(assistant, PriceVariableBinding.class);
+    TableInfoHelper.initTableInfo(assistant, PriceVariableBindingChangeLog.class);
     TableInfoHelper.initTableInfo(assistant, FinanceBasePrice.class);
   }
 
   @BeforeEach
   void setUp() {
     bindingMapper = mock(PriceVariableBindingMapper.class);
+    bindingChangeLogMapper = mock(PriceVariableBindingChangeLogMapper.class);
     priceVariableMapper = mock(PriceVariableMapper.class);
     priceLinkedItemMapper = mock(PriceLinkedItemMapper.class);
     FinanceBasePriceMapper financeBasePriceMapper = mock(FinanceBasePriceMapper.class);
@@ -87,6 +92,7 @@ class PriceVariableBindingServiceImplTest {
 
     service = new PriceVariableBindingServiceImpl(
         bindingMapper, priceVariableMapper, priceLinkedItemMapper, registry);
+    service.setBindingChangeLogMapper(bindingChangeLogMapper);
   }
 
   // ============================ 通用 fixture ============================
@@ -149,6 +155,11 @@ class PriceVariableBindingServiceImplTest {
     verify(bindingMapper).insert(any(PriceVariableBinding.class));
     verify(bindingMapper, never()).updateById(any(PriceVariableBinding.class));
     verify(bindingMapper, never()).expireById(any(), any());
+    ArgumentCaptor<PriceVariableBindingChangeLog> logCaptor =
+        ArgumentCaptor.forClass(PriceVariableBindingChangeLog.class);
+    verify(bindingChangeLogMapper).insert(logCaptor.capture());
+    assertThat(logCaptor.getValue().getAction()).isEqualTo("INSERT");
+    assertThat(logCaptor.getValue().getNewSource()).isEqualTo("MANUAL");
   }
 
   @Test
@@ -168,6 +179,39 @@ class PriceVariableBindingServiceImplTest {
     verify(bindingMapper).updateById(any(PriceVariableBinding.class));
     verify(bindingMapper, never()).insert(any(PriceVariableBinding.class));
     verify(bindingMapper, never()).expireById(any(), any());
+  }
+
+  @Test
+  @DisplayName("save 人工原地修改：默认 source 转 MANUAL，并记录旧新绑定")
+  void manualUpdateSetsSourceManualAndWritesChangeLog() {
+    when(priceLinkedItemMapper.selectById(112L))
+        .thenReturn(linkedItem(112L, "MAT12", "SPEC12"));
+    when(priceVariableMapper.selectOne(any()))
+        .thenReturn(variable("Cu", "电解铜"));
+    PriceVariableBinding current = binding(19L, 112L, "材料价格", "Zn", LocalDate.of(2026, 5, 1));
+    current.setSource("EXCEL_FORMULA");
+    current.setFactorIdentityId(3001L);
+    current.setFactorMonthlyPriceId(4001L);
+    current.setExcelFormula("影响因素!$E$44");
+    when(bindingMapper.findCurrentByLinkedItemIdAndToken(112L, "材料价格"))
+        .thenReturn(current);
+
+    PriceVariableBindingRequest request = req(112L, "材料价格", "Cu", LocalDate.of(2026, 5, 1));
+    request.setConfirmedBy("quoteA");
+
+    service.save(request);
+
+    assertThat(current.getSource()).isEqualTo("MANUAL");
+    ArgumentCaptor<PriceVariableBindingChangeLog> logCaptor =
+        ArgumentCaptor.forClass(PriceVariableBindingChangeLog.class);
+    verify(bindingChangeLogMapper).insert(logCaptor.capture());
+    PriceVariableBindingChangeLog changeLog = logCaptor.getValue();
+    assertThat(changeLog.getAction()).isEqualTo("UPDATE");
+    assertThat(changeLog.getOldSource()).isEqualTo("EXCEL_FORMULA");
+    assertThat(changeLog.getNewSource()).isEqualTo("MANUAL");
+    assertThat(changeLog.getOldFactorCode()).isEqualTo("Zn");
+    assertThat(changeLog.getNewFactorCode()).isEqualTo("Cu");
+    assertThat(changeLog.getChangedBy()).isEqualTo("quoteA");
   }
 
   @Test

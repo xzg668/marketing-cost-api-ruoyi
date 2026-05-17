@@ -1,0 +1,54 @@
+package com.sanhua.marketingcost.dto.ingest;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import lombok.Data;
+
+@Data
+public class QuoteRequestDetailResponse {
+  private Long id;
+  private String oaNo;
+  private String sourceType;
+  private String sourceSystem;
+  private String externalFormNo;
+  private String processCode;
+  private String processName;
+  private String quoteScenario;
+  private String formType;
+  private LocalDate applyDate;
+  private String customer;
+  private String applicantDept;
+  private String applicantOffice;
+  private String applicantName;
+  private String urgency;
+  private String productAttr;
+  private String priceLinkMode;
+  private String overseasSalesMode;
+  private BigDecimal copperPrice;
+  private BigDecimal zincPrice;
+  private BigDecimal aluminumPrice;
+  private BigDecimal steelPrice;
+  private BigDecimal silverPrice;
+  private BigDecimal goldPrice;
+  private BigDecimal sus304Price;
+  private BigDecimal sus316lPrice;
+  private BigDecimal otherMaterial;
+  private BigDecimal baseShipping;
+  private String calcStatus;
+  private LocalDateTime calcAt;
+  private String classificationStatus;
+  private String bomAggregateStatus;
+  private Boolean calculable;
+  private String saleLink;
+  private String remark;
+  private String businessUnitType;
+  private LocalDateTime createdAt;
+  private LocalDateTime updatedAt;
+  private List<QuoteRequestItemResponse> items = new ArrayList<>();
+  private List<QuoteRequestExtraFeeResponse> extraFees = new ArrayList<>();
+  private List<QuoteRequestExtraFieldResponse> extraFields = new ArrayList<>();
+  private QuoteRequestIngestSummaryResponse ingestLog;
+}

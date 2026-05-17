@@ -2,25 +2,33 @@ package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.sanhua.marketingcost.dto.AuxCostItemDto;
+import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
+import com.sanhua.marketingcost.entity.CmsCostSourceEffective;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
 import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.ProductProperty;
+import com.sanhua.marketingcost.entity.SalaryCost;
 import com.sanhua.marketingcost.mapper.AuxCostItemMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
+import com.sanhua.marketingcost.mapper.CmsCostSourceEffectiveMapper;
 import com.sanhua.marketingcost.mapper.CostRunCostItemMapper;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
 import com.sanhua.marketingcost.mapper.DepartmentFundRateMapper;
 import com.sanhua.marketingcost.mapper.ManufactureRateMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
+import com.sanhua.marketingcost.service.CmsCostEffectiveSourceEnsureService;
 import com.sanhua.marketingcost.service.CostRunCacheLookupService;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
@@ -30,7 +38,9 @@ import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
 import com.sanhua.marketingcost.mapper.SalaryCostMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -42,6 +52,264 @@ import org.junit.jupiter.api.Test;
  * 整链路（含 calculateItems 12 个 mapper）的金标断言由 GoldenSampleRegressionTest 兜底。
  */
 class CostRunCostItemServiceImplTest {
+
+  @Test
+  @DisplayName("T9 辅料 DIRECT 模式：金额直接取 unit_price，不乘上浮率")
+  void auxDirectAmountUsesUnitPrice() {
+    AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
+    AuxCostItemDto direct = newAuxCost("0201", "辅助焊料类", "12.345678", "9.9900", "DIRECT");
+    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of(direct));
+
+    CostRunCostItemServiceImpl svc = buildWithAuxMapper(auxMapper);
+    List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-1"));
+
+    assertThat(items).hasSize(1);
+    assertThat(items.get(0).getCostCode()).isEqualTo("AUX_0201");
+    assertThat(items.get(0).getCostName()).isEqualTo("辅助焊料类");
+    assertThat(items.get(0).getBaseAmount()).isEqualByComparingTo("12.345678");
+    assertThat(items.get(0).getRate()).isNull();
+    assertThat(items.get(0).getAmount()).isEqualByComparingTo("12.345678");
+  }
+
+  @Test
+  @DisplayName("T9 辅料 RATE 模式：保持 unit_price × float_rate 原行为")
+  void auxRateAmountKeepsLegacyFormula() {
+    AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
+    AuxCostItemDto rate = newAuxCost("1004", "清洗费", "4.000000", "0.0400", "RATE");
+    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of(rate));
+
+    CostRunCostItemServiceImpl svc = buildWithAuxMapper(auxMapper);
+    List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-1"));
+
+    assertThat(items).hasSize(1);
+    assertThat(items.get(0).getCostCode()).isEqualTo("AUX_1004");
+    assertThat(items.get(0).getBaseAmount()).isEqualByComparingTo("4.000000");
+    assertThat(items.get(0).getRate()).isEqualByComparingTo("0.0400");
+    assertThat(items.get(0).getAmount()).isEqualByComparingTo("0.160000");
+  }
+
+  @Test
+  @DisplayName("T9 辅料兼容：amount_calc_mode 为空时按历史 RATE 口径计算")
+  void auxBlankModeFallsBackToRateFormula() {
+    AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
+    AuxCostItemDto legacy = newAuxCost("1001", "气体", "3.000000", "0.0100", null);
+    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of(legacy));
+
+    CostRunCostItemServiceImpl svc = buildWithAuxMapper(auxMapper);
+    List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-1"));
+
+    assertThat(items).hasSize(1);
+    assertThat(items.get(0).getRate()).isEqualByComparingTo("0.0100");
+    assertThat(items.get(0).getAmount()).isEqualByComparingTo("0.030000");
+  }
+
+  @Test
+  @DisplayName("T9 CMS 公共生效辅料：正式核算只取公共生效来源，不混入旧辅料配置")
+  void auxCmsEffectiveUsesEffectiveAmountAndDisplayOrder() {
+    AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
+    AuxCostItemDto cmsSecond = newAuxCost("0202", "表面处理类", "0.600000", "9.9900", "DIRECT");
+    cmsSecond.setMaterialCode("P-1");
+    cmsSecond.setSource("CMS_EFFECTIVE");
+    cmsSecond.setDisplayOrder(20);
+    AuxCostItemDto cmsFirst = newAuxCost("0201", "辅助焊料类", "0.400000", "9.9900", "DIRECT");
+    cmsFirst.setMaterialCode("P-1");
+    cmsFirst.setSource("CMS_EFFECTIVE");
+    cmsFirst.setDisplayOrder(10);
+    AuxCostItemDto oldCmsDerived = newAuxCost("0201", "旧CMS派生", "99.000000", "9.9900", "DIRECT");
+    oldCmsDerived.setMaterialCode("P-1");
+    oldCmsDerived.setSource("CMS");
+    AuxCostItemDto manual = newAuxCost("1004", "清洗费", "4.000000", "0.0400", "RATE");
+    manual.setMaterialCode("P-1");
+    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-1"), "COMMERCIAL"))
+        .thenReturn(List.of(cmsSecond, cmsFirst));
+    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of(oldCmsDerived, manual));
+
+    CostRunCostItemServiceImpl svc = buildWithAuxMapper(auxMapper);
+    List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-1"), 2026, "COMMERCIAL");
+
+    assertThat(items).extracting(CostRunCostItemDto::getCostCode)
+        .containsExactly("AUX_0201", "AUX_0202");
+    assertThat(items.get(0).getRate()).isNull();
+    assertThat(items.get(0).getAmount()).isEqualByComparingTo("0.400000");
+    assertThat(items.get(1).getRate()).isNull();
+    assertThat(items.get(1).getAmount()).isEqualByComparingTo("0.600000");
+  }
+
+  @Test
+  @DisplayName("T9 包装辅料不进入成本计算辅料项")
+  void packagingAuxSubjectExcludedFromCostItems() {
+    AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
+    AuxCostItemDto packagingCms = newAuxCost("0215", "包装辅料", "0.020000", "9.9900", "DIRECT");
+    packagingCms.setMaterialCode("P-1");
+    packagingCms.setSource("CMS_EFFECTIVE");
+    AuxCostItemDto normalCms = newAuxCost("0201", "辅助焊料类", "0.400000", "9.9900", "DIRECT");
+    normalCms.setMaterialCode("P-1");
+    normalCms.setSource("CMS_EFFECTIVE");
+    AuxCostItemDto packagingLegacy = newAuxCost("0215", "包装辅料", "10.000000", "0.1000", "RATE");
+    packagingLegacy.setMaterialCode("P-1");
+    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-1"), "COMMERCIAL"))
+        .thenReturn(List.of(packagingCms, normalCms));
+    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of(packagingLegacy));
+
+    CostRunCostItemServiceImpl svc = buildWithAuxMapper(auxMapper);
+    List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-1"), 2026, "COMMERCIAL");
+
+    assertThat(items).extracting(CostRunCostItemDto::getCostName)
+        .containsExactly("辅助焊料类")
+        .doesNotContain("包装辅料");
+    assertThat(items.get(0).getCostCode()).isEqualTo("AUX_0201");
+  }
+
+  @Test
+  @DisplayName("T15 核算工资优先读取 CMS 公共生效来源，不使用旧 CMS 派生工资")
+  void calculationUsesCmsEffectiveSalarySources() {
+    OaFormMapper formMapper = mock(OaFormMapper.class);
+    OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
+    SalaryCostMapper salaryMapper = mock(SalaryCostMapper.class);
+    CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
+    AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
+    CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
+    MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
+
+    OaForm form = new OaForm();
+    form.setId(1L);
+    form.setOaNo("OA-1");
+    form.setApplyDate(LocalDate.of(2026, 5, 1));
+    form.setBusinessUnitType("COMMERCIAL");
+    OaFormItem item = new OaFormItem();
+    item.setOaFormId(1L);
+    item.setMaterialNo("P-1");
+    item.setValidDate(LocalDate.of(2026, 6, 1));
+    item.setBusinessUnitType("COMMERCIAL");
+    when(formMapper.selectOne(any())).thenReturn(form);
+    when(formItemMapper.selectList(any())).thenReturn(List.of(item));
+
+    SalaryCost oldCms = new SalaryCost();
+    oldCms.setMaterialCode("P-1");
+    oldCms.setSource("CMS");
+    oldCms.setBusinessUnit("商用部品事业部");
+    oldCms.setDirectLaborCost(new BigDecimal("99.000000"));
+    oldCms.setIndirectLaborCost(new BigDecimal("88.000000"));
+    when(salaryMapper.selectList(any())).thenReturn(List.of(oldCms));
+
+    CmsCostSourceEffective direct = effective("SALARY_DIRECT", "P-1", "0301", "4.000000");
+    CmsCostSourceEffective indirect = effective("SALARY_INDIRECT", "P-1", "0302", "0.220000");
+    when(effectiveMapper.selectList(any())).thenReturn(List.of(direct, indirect));
+    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-1"), "COMMERCIAL")).thenReturn(List.of());
+    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of());
+    when(partMapper.selectList(any())).thenReturn(List.of());
+    when(masterMapper.selectList(any())).thenReturn(List.of());
+    when(rawMapper.selectList(any())).thenReturn(List.of());
+    when(bomMapper.selectList(any())).thenReturn(List.of());
+    CmsCostEffectiveSourceEnsureService ensureService = mock(CmsCostEffectiveSourceEnsureService.class);
+
+    CostRunCostItemServiceImpl svc =
+        buildForCalculation(
+            formMapper,
+            formItemMapper,
+            salaryMapper,
+            effectiveMapper,
+            ensureService,
+            auxMapper,
+            partMapper,
+            masterMapper,
+            rawMapper,
+            bomMapper);
+    List<CostRunCostItemDto> items = svc.listByMaterialCodes("OA-1", "P-1", Set.of("P-1"), ignored -> {});
+
+    CostRunCostItemDto directItem = findItem(items, "DIRECT_LABOR");
+    CostRunCostItemDto indirectItem = findItem(items, "INDIRECT_LABOR");
+    assertThat(directItem.getAmount()).isEqualByComparingTo("4.000000");
+    assertThat(directItem.getRemark()).isNull();
+    assertThat(indirectItem.getAmount()).isEqualByComparingTo("0.220000");
+    assertThat(indirectItem.getRemark()).isNull();
+    verify(ensureService).ensureDefaultSources(eq(2026), eq("SYSTEM_AUTO"), eq("COMMERCIAL"));
+  }
+
+  @Test
+  @DisplayName("T15 工资正式核算：只取当前料号公共生效来源，不用 lp_salary_cost 参考料号兜底")
+  void calculationDoesNotFallbackToSalaryReferenceMaterial() {
+    OaFormMapper formMapper = mock(OaFormMapper.class);
+    OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
+    SalaryCostMapper salaryMapper = mock(SalaryCostMapper.class);
+    CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
+    AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
+    CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
+    MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
+
+    OaForm form = new OaForm();
+    form.setId(1L);
+    form.setOaNo("OA-REF");
+    form.setApplyDate(LocalDate.of(2026, 5, 1));
+    form.setBusinessUnitType("COMMERCIAL");
+    OaFormItem item = new OaFormItem();
+    item.setOaFormId(1L);
+    item.setMaterialNo("P-NEW");
+    item.setValidDate(LocalDate.of(2026, 6, 1));
+    item.setBusinessUnitType("COMMERCIAL");
+    when(formMapper.selectOne(any())).thenReturn(form);
+    when(formItemMapper.selectList(any())).thenReturn(List.of(item));
+
+    SalaryCost referenceSelection = new SalaryCost();
+    referenceSelection.setMaterialCode("P-NEW");
+    referenceSelection.setRefMaterialCode("P-REF");
+    referenceSelection.setBusinessUnit("商用部品事业部");
+    referenceSelection.setDirectLaborCost(new BigDecimal("99.000000"));
+    referenceSelection.setIndirectLaborCost(new BigDecimal("88.000000"));
+    when(salaryMapper.selectList(any())).thenReturn(List.of(referenceSelection));
+
+    CmsCostSourceEffective direct = effective("SALARY_DIRECT", "P-REF", "0301", "4.000000");
+    CmsCostSourceEffective indirect = effective("SALARY_INDIRECT", "P-REF", "0302", "0.220000");
+    when(effectiveMapper.selectList(any())).thenReturn(List.of(direct, indirect));
+    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-NEW"), "COMMERCIAL")).thenReturn(List.of());
+    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of());
+    when(partMapper.selectList(any())).thenReturn(List.of());
+    when(masterMapper.selectList(any())).thenReturn(List.of());
+    when(rawMapper.selectList(any())).thenReturn(List.of());
+    when(bomMapper.selectList(any())).thenReturn(List.of());
+
+    CostRunCostItemServiceImpl svc =
+        buildForCalculation(
+            formMapper,
+            formItemMapper,
+            salaryMapper,
+            effectiveMapper,
+            auxMapper,
+            partMapper,
+            masterMapper,
+            rawMapper,
+            bomMapper);
+    List<CostRunCostItemDto> items = svc.listByMaterialCodes("OA-REF", "P-NEW", Set.of("P-NEW"), ignored -> {});
+
+    CostRunCostItemDto directItem = findItem(items, "DIRECT_LABOR");
+    CostRunCostItemDto indirectItem = findItem(items, "INDIRECT_LABOR");
+    assertThat(directItem.getAmount()).isEqualByComparingTo("0.000000");
+    assertThat(indirectItem.getAmount()).isEqualByComparingTo("0.000000");
+    assertThat(directItem.getRemark()).contains("CMS 公共生效直接人工工资");
+    assertThat(indirectItem.getRemark()).contains("CMS 公共生效辅助员工工资");
+  }
+
+  @Test
+  @DisplayName("T15 辅料正式核算：只取当前料号公共生效来源，不用 lp_aux_subject 参考料号兜底")
+  void auxCmsEffectiveDoesNotFallbackToReferenceMaterial() {
+    AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
+    AuxCostItemDto referenceSelection = newAuxCost("0201", "旧复制辅料", "99.000000", "0.1000", "RATE");
+    referenceSelection.setMaterialCode("P-NEW");
+    referenceSelection.setRefMaterialCode("P-REF");
+    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of(referenceSelection));
+    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-NEW"), "COMMERCIAL"))
+        .thenReturn(List.of());
+
+    CostRunCostItemServiceImpl svc = buildWithAuxMapper(auxMapper);
+    List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-NEW"), 2026, "COMMERCIAL");
+
+    assertThat(items).isEmpty();
+    verify(auxMapper).selectEffectiveAuxCostItems(2026, Set.of("P-NEW"), "COMMERCIAL");
+  }
 
   @Test
   @DisplayName("产品属性系数：命中 lp_product_property → 返回 coefficient")
@@ -336,6 +604,8 @@ class CostRunCostItemServiceImplTest {
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
         mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(CmsCostEffectiveSourceEnsureService.class),
         mock(DepartmentFundRateMapper.class),
         mock(AuxCostItemMapper.class),
         partMapper,
@@ -358,6 +628,8 @@ class CostRunCostItemServiceImplTest {
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
         mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(CmsCostEffectiveSourceEnsureService.class),
         mock(DepartmentFundRateMapper.class),
         mock(AuxCostItemMapper.class),
         mock(CostRunPartItemMapper.class),
@@ -373,6 +645,116 @@ class CostRunCostItemServiceImplTest {
         false);
   }
 
+  private CostRunCostItemServiceImpl buildWithAuxMapper(AuxCostItemMapper auxMapper) {
+    return new CostRunCostItemServiceImpl(
+        mock(CostRunCostItemMapper.class),
+        mock(OaFormMapper.class),
+        mock(OaFormItemMapper.class),
+        mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(CmsCostEffectiveSourceEnsureService.class),
+        mock(DepartmentFundRateMapper.class),
+        auxMapper,
+        mock(CostRunPartItemMapper.class),
+        mock(QualityLossRateMapper.class),
+        mock(ManufactureRateMapper.class),
+        mock(ThreeExpenseRateMapper.class),
+        mock(OtherExpenseRateMapper.class),
+        mock(ProductPropertyMapper.class),
+        mock(MaterialMasterMapper.class),
+        mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class),
+        mock(com.sanhua.marketingcost.mapper.BomRawHierarchyMapper.class),
+        mock(CostRunCacheLookupService.class),
+        false);
+  }
+
+  private static AuxCostItemDto newAuxCost(
+      String code, String name, String unitPrice, String floatRate, String amountCalcMode) {
+    AuxCostItemDto dto = new AuxCostItemDto();
+    dto.setAuxSubjectCode(code);
+    dto.setAuxSubjectName(name);
+    dto.setUnitPrice(new BigDecimal(unitPrice));
+    dto.setFloatRate(new BigDecimal(floatRate));
+    dto.setAmountCalcMode(amountCalcMode);
+    return dto;
+  }
+
+  private static CmsCostSourceEffective effective(
+      String sourceType, String parentCode, String subjectCode, String amount) {
+    CmsCostSourceEffective effective = new CmsCostSourceEffective();
+    effective.setCostYear(2026);
+    effective.setSourceType(sourceType);
+    effective.setParentCode(parentCode);
+    effective.setSubjectCode(subjectCode);
+    effective.setAmountYuan(new BigDecimal(amount));
+    effective.setBusinessUnitType("COMMERCIAL");
+    return effective;
+  }
+
+  private static CostRunCostItemDto findItem(List<CostRunCostItemDto> items, String costCode) {
+    return items.stream()
+        .filter(item -> costCode.equals(item.getCostCode()))
+        .findFirst()
+        .orElseThrow();
+  }
+
+  private CostRunCostItemServiceImpl buildForCalculation(
+      OaFormMapper formMapper,
+      OaFormItemMapper formItemMapper,
+      SalaryCostMapper salaryMapper,
+      CmsCostSourceEffectiveMapper effectiveMapper,
+      AuxCostItemMapper auxMapper,
+      CostRunPartItemMapper partMapper,
+      MaterialMasterMapper masterMapper,
+      MaterialMasterRawMapper rawMapper,
+      BomRawHierarchyMapper bomMapper) {
+    return buildForCalculation(
+        formMapper,
+        formItemMapper,
+        salaryMapper,
+        effectiveMapper,
+        mock(CmsCostEffectiveSourceEnsureService.class),
+        auxMapper,
+        partMapper,
+        masterMapper,
+        rawMapper,
+        bomMapper);
+  }
+
+  private CostRunCostItemServiceImpl buildForCalculation(
+      OaFormMapper formMapper,
+      OaFormItemMapper formItemMapper,
+      SalaryCostMapper salaryMapper,
+      CmsCostSourceEffectiveMapper effectiveMapper,
+      CmsCostEffectiveSourceEnsureService ensureService,
+      AuxCostItemMapper auxMapper,
+      CostRunPartItemMapper partMapper,
+      MaterialMasterMapper masterMapper,
+      MaterialMasterRawMapper rawMapper,
+      BomRawHierarchyMapper bomMapper) {
+    CostRunCacheLookupService lookup = mock(CostRunCacheLookupService.class);
+    return new CostRunCostItemServiceImpl(
+        mock(CostRunCostItemMapper.class),
+        formMapper,
+        formItemMapper,
+        salaryMapper,
+        effectiveMapper,
+        ensureService,
+        mock(DepartmentFundRateMapper.class),
+        auxMapper,
+        partMapper,
+        mock(QualityLossRateMapper.class),
+        mock(ManufactureRateMapper.class),
+        mock(ThreeExpenseRateMapper.class),
+        mock(OtherExpenseRateMapper.class),
+        mock(ProductPropertyMapper.class),
+        masterMapper,
+        rawMapper,
+        bomMapper,
+        lookup,
+        false);
+  }
+
   /** T11 单测专用：只关心 part / master / oaForm* 4 个 mapper，其余 mock 兜底 */
   private CostRunCostItemServiceImpl buildWith(
       CostRunPartItemMapper partMapper,
@@ -384,6 +766,8 @@ class CostRunCostItemServiceImplTest {
         formMapper,
         formItemMapper,
         mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(CmsCostEffectiveSourceEnsureService.class),
         mock(DepartmentFundRateMapper.class),
         mock(AuxCostItemMapper.class),
         partMapper,

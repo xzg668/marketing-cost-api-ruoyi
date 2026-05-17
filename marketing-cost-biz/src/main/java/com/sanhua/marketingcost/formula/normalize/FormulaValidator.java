@@ -53,11 +53,22 @@ public class FormulaValidator {
 
   @PostConstruct
   public void init() {
+    reloadWhitelist();
+  }
+
+  /**
+   * 重新加载 active variable_code 白名单。
+   *
+   * <p>月度联动价 Excel 导入会在运行时自动生成 {@code factor_identity_xxx} 变量。
+   * Validator 不能只依赖启动快照，否则公式已经能计算，列表页仍会误报"未知变量"。
+   */
+  public synchronized void reloadWhitelist() {
     Set<String> s = new HashSet<>();
     priceVariableMapper
         .selectList(new QueryWrapper<PriceVariable>().eq("status", "active"))
         .stream()
         .map(PriceVariable::getVariableCode)
+        .filter(code -> code != null && !code.isBlank())
         .forEach(s::add);
     this.codeWhitelist = Set.copyOf(s);
     log.info("FormulaValidator 加载 {} 条 code 白名单（行局部占位符运行时查 registry）",
@@ -219,13 +230,22 @@ public class FormulaValidator {
         continue;
       }
       // 白名单：正规 variable_code 或已登记的行局部占位符（后者支持运行时扩展）
-      if (codeWhitelist.contains(t.text)
-          || rowLocalPlaceholderRegistry.isKnown(t.text)) {
+      if (isKnownCode(t.text) || rowLocalPlaceholderRegistry.isKnown(t.text)) {
         continue;
       }
       throw new FormulaSyntaxException(
           "未知变量 [" + t.text + "]（位置=" + t.pos + "）：" + src);
     }
+  }
+
+  private boolean isKnownCode(String code) {
+    Set<String> snapshot = codeWhitelist;
+    if (snapshot != null && snapshot.contains(code)) {
+      return true;
+    }
+    reloadWhitelist();
+    Set<String> refreshed = codeWhitelist;
+    return refreshed != null && refreshed.contains(code);
   }
 
   private enum State {

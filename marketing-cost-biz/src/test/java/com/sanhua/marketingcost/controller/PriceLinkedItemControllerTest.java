@@ -9,9 +9,13 @@ import static org.mockito.Mockito.when;
 
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
+import com.sanhua.marketingcost.dto.FactorUploadBatchDto;
 import com.sanhua.marketingcost.dto.PriceItemImportResponse;
+import com.sanhua.marketingcost.dto.PriceLinkedImportBatchDetailDto;
+import com.sanhua.marketingcost.service.FactorMonthlyPriceAdjustmentService;
 import com.sanhua.marketingcost.service.PriceLinkedItemService;
 import java.io.InputStream;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,12 +34,15 @@ import org.springframework.mock.web.MockMultipartFile;
 class PriceLinkedItemControllerTest {
 
   private PriceLinkedItemService priceLinkedItemService;
+  private FactorMonthlyPriceAdjustmentService factorMonthlyPriceAdjustmentService;
   private PriceLinkedItemController controller;
 
   @BeforeEach
   void setUp() {
     priceLinkedItemService = mock(PriceLinkedItemService.class);
-    controller = new PriceLinkedItemController(priceLinkedItemService);
+    factorMonthlyPriceAdjustmentService = mock(FactorMonthlyPriceAdjustmentService.class);
+    controller = new PriceLinkedItemController(
+        priceLinkedItemService, factorMonthlyPriceAdjustmentService);
   }
 
   @Test
@@ -45,7 +52,8 @@ class PriceLinkedItemControllerTest {
     mocked.setBatchId("batch-uuid-lp-1");
     mocked.setLinkedCount(2);
     mocked.setFixedCount(1);
-    when(priceLinkedItemService.importExcel(any(InputStream.class), eq("2026-02")))
+    when(priceLinkedItemService.importExcel(
+        any(InputStream.class), eq("2026-02"), eq(false), eq("COMMERCIAL"), eq("linked.xlsx"), eq(null)))
         .thenReturn(mocked);
 
     MockMultipartFile file = new MockMultipartFile(
@@ -53,13 +61,15 @@ class PriceLinkedItemControllerTest {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         new byte[]{1, 2, 3});
 
-    CommonResult<PriceItemImportResponse> result = controller.importExcel(file, "2026-02");
+    CommonResult<PriceItemImportResponse> result =
+        controller.importExcel(file, "2026-02", "COMMERCIAL", false, null);
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getBatchId()).isEqualTo("batch-uuid-lp-1");
     assertThat(result.getData().getLinkedCount()).isEqualTo(2);
     assertThat(result.getData().getFixedCount()).isEqualTo(1);
-    verify(priceLinkedItemService).importExcel(any(InputStream.class), eq("2026-02"));
+    verify(priceLinkedItemService).importExcel(
+        any(InputStream.class), eq("2026-02"), eq(false), eq("COMMERCIAL"), eq("linked.xlsx"), eq(null));
   }
 
   @Test
@@ -72,7 +82,8 @@ class PriceLinkedItemControllerTest {
     mocked.getErrors().add(new PriceItemImportResponse.ErrorRow(
         3, "203250445", "联动",
         "联动公式非法或无法解析: (Cu*0.59+Zn*0.41"));
-    when(priceLinkedItemService.importExcel(any(InputStream.class), eq("2026-02")))
+    when(priceLinkedItemService.importExcel(
+        any(InputStream.class), eq("2026-02"), eq(true), eq("COMMERCIAL"), eq("linked.xlsx"), eq("OVERRIDE_EFFECTIVE")))
         .thenReturn(mocked);
 
     MockMultipartFile file = new MockMultipartFile(
@@ -80,7 +91,8 @@ class PriceLinkedItemControllerTest {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         new byte[]{9});
 
-    CommonResult<PriceItemImportResponse> result = controller.importExcel(file, "2026-02");
+    CommonResult<PriceItemImportResponse> result =
+        controller.importExcel(file, "2026-02", "COMMERCIAL", true, "OVERRIDE_EFFECTIVE");
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getSkipped()).isEqualTo(1);
@@ -96,11 +108,50 @@ class PriceLinkedItemControllerTest {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         new byte[0]);
 
-    CommonResult<PriceItemImportResponse> result = controller.importExcel(empty, "2026-02");
+    CommonResult<PriceItemImportResponse> result =
+        controller.importExcel(empty, "2026-02", "COMMERCIAL", false, null);
 
     assertThat(result.isSuccess()).isFalse();
     assertThat(result.getCode()).isEqualTo(GlobalErrorCodeConstants.BAD_REQUEST.getCode());
     verify(priceLinkedItemService, org.mockito.Mockito.never())
-        .importExcel(any(), any());
+        .importExcel(any(), any(), eq(false), any(), any(), any());
+  }
+
+  @Test
+  @DisplayName("/factors/import-batches：影响因素菜单批次列表复用后端持久化批次")
+  void listFactorImportBatches_delegatesToService() {
+    FactorUploadBatchDto batch = new FactorUploadBatchDto();
+    batch.setId(77L);
+    batch.setPriceMonth("2026-05");
+    batch.setBusinessUnitType("COMMERCIAL");
+    batch.setUploadedBy("alice");
+    when(priceLinkedItemService.listImportHistory(
+        eq("2026-05"), eq("COMMERCIAL"), eq("alice"), eq(false), eq(10)))
+        .thenReturn(List.of(batch));
+
+    CommonResult<List<FactorUploadBatchDto>> result =
+        controller.listFactorImportBatches("2026-05", "COMMERCIAL", "alice", false, 10);
+
+    assertThat(result.isSuccess()).isTrue();
+    assertThat(result.getData()).hasSize(1);
+    assertThat(result.getData().getFirst().getId()).isEqualTo(77L);
+    verify(priceLinkedItemService)
+        .listImportHistory("2026-05", "COMMERCIAL", "alice", false, 10);
+  }
+
+  @Test
+  @DisplayName("/factors/import-batches/{id}：影响因素菜单批次明细复用持久化行级来源")
+  void getFactorImportBatchDetail_delegatesToService() {
+    PriceLinkedImportBatchDetailDto detail = new PriceLinkedImportBatchDetailDto();
+    detail.setFactorUploadBatchId(77L);
+    detail.setBatchId("77");
+    when(priceLinkedItemService.getImportBatchDetail(77L)).thenReturn(detail);
+
+    CommonResult<PriceLinkedImportBatchDetailDto> result =
+        controller.getFactorImportBatchDetail(77L);
+
+    assertThat(result.isSuccess()).isTrue();
+    assertThat(result.getData().getFactorUploadBatchId()).isEqualTo(77L);
+    verify(priceLinkedItemService).getImportBatchDetail(77L);
   }
 }

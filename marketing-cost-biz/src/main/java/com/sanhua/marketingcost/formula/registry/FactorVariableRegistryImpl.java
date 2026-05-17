@@ -3,14 +3,22 @@ package com.sanhua.marketingcost.formula.registry;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.entity.FactorAdjustPrice;
+import com.sanhua.marketingcost.entity.FactorQuoteBaseMapping;
 import com.sanhua.marketingcost.entity.FinanceBasePrice;
+import com.sanhua.marketingcost.entity.FactorMonthlyPrice;
+import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.entity.PriceVariableBinding;
+import com.sanhua.marketingcost.mapper.FactorAdjustPriceMapper;
+import com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper;
+import com.sanhua.marketingcost.mapper.FactorQuoteBaseMappingMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableBindingMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -56,6 +64,7 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
   private static final String KIND_DERIVED = "DERIVED";
   private static final String KIND_FORMULA = "FORMULA";
   private static final String KIND_CONST = "CONST";
+  private static final BigDecimal TON_TO_KG_DIVISOR = new BigDecimal("1000");
 
   private static final TypeReference<Map<String, Object>> PARAMS_TYPE = new TypeReference<>() {};
 
@@ -75,6 +84,15 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
    * {@link #resolveRowLocalToken} 会抛 {@link IllegalStateException}。
    */
   private PriceVariableBindingMapper priceVariableBindingMapper;
+
+  /** V2-15：新行级绑定优先按影响因素身份读取月度价格；未注入时自动回退老逻辑。 */
+  private FactorMonthlyPriceMapper factorMonthlyPriceMapper;
+
+  /** V3-06：factor_identity_xxx 日常报价可由 OA 表头基价锁价覆盖。 */
+  private FactorQuoteBaseMappingMapper factorQuoteBaseMappingMapper;
+
+  /** V3-06：月度调价重算指定批次时，优先读取批次调价价。 */
+  private FactorAdjustPriceMapper factorAdjustPriceMapper;
 
   /**
    * linked_item_id → (token_name → 当前生效 binding) 二级缓存。
@@ -115,6 +133,21 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
   @Autowired(required = false)
   public void setPriceVariableBindingMapper(PriceVariableBindingMapper mapper) {
     this.priceVariableBindingMapper = mapper;
+  }
+
+  @Autowired(required = false)
+  public void setFactorMonthlyPriceMapper(FactorMonthlyPriceMapper mapper) {
+    this.factorMonthlyPriceMapper = mapper;
+  }
+
+  @Autowired(required = false)
+  public void setFactorQuoteBaseMappingMapper(FactorQuoteBaseMappingMapper mapper) {
+    this.factorQuoteBaseMappingMapper = mapper;
+  }
+
+  @Autowired(required = false)
+  public void setFactorAdjustPriceMapper(FactorAdjustPriceMapper mapper) {
+    this.factorAdjustPriceMapper = mapper;
   }
 
   @Override
@@ -221,14 +254,103 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     String factorCode = asString(params.get("factorCode"));
     String shortName = asString(params.get("shortName"));
     String priceSource = asString(params.get("priceSource"));
+    Long factorIdentityId = asLong(params.get("factorIdentityId"));
+    Long factorMonthlyPriceId = asLong(params.get("factorMonthlyPriceId"));
     boolean buScoped = asBoolean(params.get("buScoped"), false);
     String pricingMonth = ctx == null ? null : ctx.getPricingMonth();
     String bu = BusinessUnitContext.getCurrentBusinessUnitType();
+
+    if (ctx != null && ctx.isMonthlyReprice()) {
+      Optional<BigDecimal> adjustedPrice =
+          resolveAdjustBatchPrice(factorIdentityId, ctx.getAdjustBatchId());
+      if (adjustedPrice.isPresent()) {
+        return adjustedPrice;
+      }
+    } else {
+      Optional<BigDecimal> quoteBasePrice = resolveQuoteBaseLockPrice(factorIdentityId, ctx);
+      if (quoteBasePrice.isPresent()) {
+        return quoteBasePrice;
+      }
+    }
+
+    Optional<BigDecimal> monthlyPrice =
+        resolveMonthlyFactorPrice(factorIdentityId, factorMonthlyPriceId, pricingMonth);
+    if (monthlyPrice.isPresent()) {
+      return monthlyPrice;
+    }
 
     Optional<FinanceBasePrice> row = financeBasePriceQuery.queryLatestBasePrice(
         factorCode, shortName, priceSource, buScoped, pricingMonth, bu,
         variable.getVariableCode());
     return row.map(FinanceBasePrice::getPrice);
+  }
+
+  private Optional<BigDecimal> resolveQuoteBaseLockPrice(
+      Long factorIdentityId, VariableContext ctx) {
+    if (factorIdentityId == null || ctx == null || ctx.getOaForm() == null
+        || factorQuoteBaseMappingMapper == null) {
+      return Optional.empty();
+    }
+    List<FactorQuoteBaseMapping> mappings = factorQuoteBaseMappingMapper.selectList(
+        Wrappers.lambdaQuery(FactorQuoteBaseMapping.class)
+            .eq(FactorQuoteBaseMapping::getFactorIdentityId, factorIdentityId)
+            .eq(FactorQuoteBaseMapping::getEnabled, 1)
+            .eq(FactorQuoteBaseMapping::getDeleted, 0)
+            .orderByAsc(FactorQuoteBaseMapping::getId));
+    for (FactorQuoteBaseMapping mapping : mappings) {
+      BigDecimal tonPrice = readOaQuoteBasePrice(ctx.getOaForm(), mapping.getQuoteFieldCode());
+      if (tonPrice != null) {
+        // OA 表头基价按元/吨存储；公式变量沿用老 Cu/Zn/Al 口径，统一转成元/kg。
+        return Optional.of(tonPrice.divide(TON_TO_KG_DIVISOR, 6, RoundingMode.HALF_UP));
+      }
+    }
+    return Optional.empty();
+  }
+
+  private Optional<BigDecimal> resolveAdjustBatchPrice(
+      Long factorIdentityId, Long adjustBatchId) {
+    if (factorIdentityId == null || adjustBatchId == null || factorAdjustPriceMapper == null) {
+      return Optional.empty();
+    }
+    FactorAdjustPrice price = factorAdjustPriceMapper.selectOne(
+        Wrappers.lambdaQuery(FactorAdjustPrice.class)
+            .eq(FactorAdjustPrice::getAdjustBatchId, adjustBatchId)
+            .eq(FactorAdjustPrice::getFactorIdentityId, factorIdentityId)
+            .ne(FactorAdjustPrice::getStatus, "FAILED")
+            .eq(FactorAdjustPrice::getDeleted, 0)
+            .orderByDesc(FactorAdjustPrice::getId)
+            .last("LIMIT 1"));
+    return price == null ? Optional.empty() : Optional.ofNullable(price.getAdjustedPrice());
+  }
+
+  private Optional<BigDecimal> resolveMonthlyFactorPrice(
+      Long factorIdentityId,
+      Long factorMonthlyPriceId,
+      String pricingMonth) {
+    if (factorMonthlyPriceMapper == null) {
+      return Optional.empty();
+    }
+    if (factorIdentityId != null && pricingMonth != null && !pricingMonth.isBlank()) {
+      FactorMonthlyPrice monthlyPrice = factorMonthlyPriceMapper.selectOne(
+          Wrappers.lambdaQuery(FactorMonthlyPrice.class)
+              .eq(FactorMonthlyPrice::getFactorIdentityId, factorIdentityId)
+              .eq(FactorMonthlyPrice::getPriceMonth, pricingMonth.trim())
+              .eq(FactorMonthlyPrice::getStatus, "ACTIVE")
+              .orderByDesc(FactorMonthlyPrice::getId)
+              .last("LIMIT 1"));
+      if (monthlyPrice != null && monthlyPrice.getPrice() != null) {
+        return Optional.of(monthlyPrice.getPrice());
+      }
+    }
+    if (factorMonthlyPriceId != null) {
+      FactorMonthlyPrice monthlyPrice = factorMonthlyPriceMapper.selectById(factorMonthlyPriceId);
+      if (monthlyPrice != null
+          && monthlyPrice.getPrice() != null
+          && matchesPricingMonth(monthlyPrice, pricingMonth)) {
+        return Optional.of(monthlyPrice.getPrice());
+      }
+    }
+    return Optional.empty();
   }
 
   /**
@@ -455,6 +577,11 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
                   + "价格变量维护页 -> 变量绑定 tab 配置，或提交供管部 CSV。",
               itemId, code, candidateTokenNames));
     }
+    Optional<BigDecimal> monthlyPrice = resolveBoundMonthlyPrice(hit, ctx);
+    if (monthlyPrice.isPresent()) {
+      return monthlyPrice;
+    }
+
     String factorCode = hit.getFactorCode();
     if (factorCode == null || factorCode.isBlank()) {
       throw new UnboundRowLocalTokenException(
@@ -477,6 +604,50 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     }
     // 递归：factor_code 走主路径（可能是 FINANCE/DERIVED/FORMULA/CONST 任一种）
     return resolveInternal(factorCode, ctx, visiting, cache);
+  }
+
+  /**
+   * V2-15：自动绑定保存的是影响因素身份，不是当时价格值。
+   *
+   * <p>因此成本计算优先通过 binding.factor_identity_id + ctx.pricingMonth 去读
+   * {@code lp_factor_monthly_price.price}。财务调价只更新这张表的 price，binding 行保持不变，
+   * 下次重新计算自然取到新价格。若老数据没有新字段，则回退后面的 factor_code 老逻辑。
+   */
+  private Optional<BigDecimal> resolveBoundMonthlyPrice(
+      PriceVariableBinding binding, VariableContext ctx) {
+    if (factorMonthlyPriceMapper == null || binding == null) {
+      return Optional.empty();
+    }
+    String pricingMonth = ctx == null ? null : ctx.getPricingMonth();
+    if (binding.getFactorIdentityId() != null && pricingMonth != null && !pricingMonth.isBlank()) {
+      FactorMonthlyPrice monthlyPrice = factorMonthlyPriceMapper.selectOne(
+          Wrappers.lambdaQuery(FactorMonthlyPrice.class)
+              .eq(FactorMonthlyPrice::getFactorIdentityId, binding.getFactorIdentityId())
+              .eq(FactorMonthlyPrice::getPriceMonth, pricingMonth.trim())
+              .eq(FactorMonthlyPrice::getStatus, "ACTIVE")
+              .orderByDesc(FactorMonthlyPrice::getId)
+              .last("LIMIT 1"));
+      if (monthlyPrice != null && monthlyPrice.getPrice() != null) {
+        return Optional.of(monthlyPrice.getPrice());
+      }
+    }
+    if (binding.getFactorMonthlyPriceId() != null) {
+      FactorMonthlyPrice monthlyPrice =
+          factorMonthlyPriceMapper.selectById(binding.getFactorMonthlyPriceId());
+      if (monthlyPrice != null
+          && monthlyPrice.getPrice() != null
+          && matchesPricingMonth(monthlyPrice, pricingMonth)) {
+        return Optional.of(monthlyPrice.getPrice());
+      }
+    }
+    return Optional.empty();
+  }
+
+  private boolean matchesPricingMonth(FactorMonthlyPrice monthlyPrice, String pricingMonth) {
+    if (pricingMonth == null || pricingMonth.isBlank()) {
+      return true;
+    }
+    return pricingMonth.trim().equals(monthlyPrice.getPriceMonth());
   }
 
   /**
@@ -530,6 +701,32 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     }
   }
 
+  private static BigDecimal readOaQuoteBasePrice(OaForm oaForm, String quoteFieldCode) {
+    if (oaForm == null || quoteFieldCode == null || quoteFieldCode.isBlank()) {
+      return null;
+    }
+    return readDecimalByGetter(oaForm, snakeToCamel(quoteFieldCode.trim()));
+  }
+
+  private static String snakeToCamel(String value) {
+    StringBuilder builder = new StringBuilder();
+    boolean upperNext = false;
+    for (int i = 0; i < value.length(); i++) {
+      char ch = value.charAt(i);
+      if (ch == '_') {
+        upperNext = true;
+        continue;
+      }
+      if (upperNext) {
+        builder.append(Character.toUpperCase(ch));
+        upperNext = false;
+      } else {
+        builder.append(ch);
+      }
+    }
+    return builder.toString();
+  }
+
   private static String asString(Object o) {
     return o == null ? null : o.toString();
   }
@@ -546,6 +743,20 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     }
     try {
       return new BigDecimal(o.toString());
+    } catch (NumberFormatException e) {
+      return null;
+    }
+  }
+
+  private static Long asLong(Object o) {
+    if (o == null) {
+      return null;
+    }
+    if (o instanceof Number n) {
+      return n.longValue();
+    }
+    try {
+      return Long.parseLong(o.toString());
     } catch (NumberFormatException e) {
       return null;
     }

@@ -162,6 +162,18 @@ class FormulaDisplayRendererTest {
     assertThat(renderer.renderCn("[Cu]")).isEqualTo("1#Cu");
   }
 
+  @Test
+  @DisplayName("老影响因素变量：aliases 缺失且 name 等于 code 时，从 resolver_params.shortName 回显")
+  void factorIdentityFallsBackToResolverShortName() {
+    PriceVariable variable = variable("factor_identity_191", "factor_identity_191", null);
+    variable.setResolverParams("{\"factorIdentityId\":191,\"shortName\":\"1#Mn\",\"buScoped\":true}");
+    when(mapper.selectList(any())).thenReturn(List.of(variable));
+
+    String out = renderer.renderCn("[blank_weight]*[factor_identity_191]+[process_fee]");
+
+    assertThat(out).isEqualTo("[blank_weight]*1#Mn+[process_fee]");
+  }
+
   private static PriceVariable variable(String code, String name, String aliasesJson) {
     PriceVariable v = new PriceVariable();
     v.setVariableCode(code);

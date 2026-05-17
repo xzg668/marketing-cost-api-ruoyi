@@ -10,8 +10,17 @@ import com.sanhua.marketingcost.dto.PriceLinkedCalcTraceResponse;
 public interface PriceLinkedCalcService {
 
   /** 分页查询计算结果。 */
-  Page<PriceLinkedCalcRow> page(String oaNo, String itemCode, String shapeAttr,
-      int page, int pageSize);
+  Page<PriceLinkedCalcRow> page(
+      String oaNo,
+      String customer,
+      String businessUnitType,
+      String itemCode,
+      String pricingMonth,
+      String calcStatus,
+      String variableSource,
+      String shapeAttr,
+      int page,
+      int pageSize);
 
   /** 按 oaNo 批量重算并写回 trace_json。返回新增/更新行数。 */
   int refresh(String oaNo);

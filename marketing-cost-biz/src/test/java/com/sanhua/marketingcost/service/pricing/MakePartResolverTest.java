@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 /**
- * 制造件递归取价测试 (Task #8)。
+ * 制造件取价测试 (Task #8 historical skeleton)。
  *
  * <p>金标对照：S接管 (203250749) 期望 6.658 ± 0.01；本测试用真实参数验证默认骨架。
  */
@@ -53,8 +53,8 @@ class MakePartResolverTest {
   }
 
   @Test
-  @DisplayName("递归：父件 raw_unit_price 缺失时取上游 spec")
-  void recursiveLookup() {
+  @DisplayName("raw_unit_price 缺失时不拿 raw_material_code 递归取价")
+  void rawMaterialCodeDoesNotTriggerRecursiveLookup() {
     // 子件 X2 有 raw price
     MakePartSpec child = newSpec("X2",
         new BigDecimal("50"), new BigDecimal("48"),
@@ -66,40 +66,21 @@ class MakePartResolverTest {
     parent.setRawMaterialCode("X2");
     MakePartResolver resolver = build(List.of(parent, child));
     BigDecimal price = resolver.resolve("X1", null);
-    // X2 单价 = (50×70 - 2×30)/1000 = 3.44
-    // X1 单价 = (100×3.44 - 5×20×1)/1000 = (344 - 100)/1000 = 0.244
-    assertThat(price).isCloseTo(new BigDecimal("0.244"), within(TOLERANCE));
+    assertThat(price).isNull();
   }
 
   @Test
-  @DisplayName("循环检测：A → B → A 返回 null（不抛异常）")
-  void cycleReturnsNull() {
-    MakePartSpec a = newSpec("A", new BigDecimal("10"), new BigDecimal("9"), null,
-        new BigDecimal("1"));
-    a.setRawMaterialCode("B");
-    MakePartSpec b = newSpec("B", new BigDecimal("10"), new BigDecimal("9"), null,
-        new BigDecimal("1"));
-    b.setRawMaterialCode("A");
-    MakePartResolver resolver = build(List.of(a, b));
-    assertThat(resolver.resolve("A", null)).isNull();
-  }
-
-  @Test
-  @DisplayName("深度上限：>10 层返回 null")
-  void depthLimitReturnsNull() {
-    // 构造 12 个互相串联的 spec：N1 → N2 → ... → N12（终点无 raw price）
-    int n = 12;
-    MakePartSpec[] all = new MakePartSpec[n];
-    for (int i = 0; i < n; i++) {
-      all[i] = newSpec("N" + i,
-          new BigDecimal("100"), new BigDecimal("99"),
-          null, new BigDecimal("1"));
-      if (i < n - 1) {
-        all[i].setRawMaterialCode("N" + (i + 1));
-      }
-    }
-    MakePartResolver resolver = build(List.of(all));
-    assertThat(resolver.resolve("N0", null)).isNull();
+  @DisplayName("raw_unit_price 明确为 0 时按 0 价命中")
+  void zeroRawUnitPriceIsHit() {
+    MakePartSpec spec = newSpec("ZERO",
+        new BigDecimal("100"), new BigDecimal("90"),
+        BigDecimal.ZERO, new BigDecimal("30"));
+    spec.setRawMaterialCode("RAW-IGNORED");
+    spec.setProcessFee(new BigDecimal("0.5"));
+    MakePartResolver resolver = build(List.of(spec));
+    BigDecimal price = resolver.resolve("ZERO", null);
+    // (100×0 - 10×30×1)/1000 + 0.5 = 0.2
+    assertThat(price).isCloseTo(new BigDecimal("0.2"), within(TOLERANCE));
   }
 
   @Test
