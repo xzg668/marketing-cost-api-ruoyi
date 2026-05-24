@@ -37,6 +37,9 @@ class MaterialPriceTypeServiceImplTest {
     row.setRowNo(1);
     row.setBillNo("JG202601010001");
     row.setMaterialCode("1008000300944");
+    row.setMaterialName("阀体部件");
+    row.setMaterialModel("MODEL-A");
+    row.setMaterialShape("采购件");
     row.setPriceType("联动价");
     row.setPeriod("2026-02");
 
@@ -67,6 +70,8 @@ class MaterialPriceTypeServiceImplTest {
     row.setBillNo("JG202601010001");
     row.setMaterialCode("1008000300944");
     row.setMaterialName("阀体部件");
+    row.setMaterialModel("MODEL-A");
+    row.setMaterialShape("采购件");
     row.setPriceType("固定价");
     row.setPeriod("2026-02");
 

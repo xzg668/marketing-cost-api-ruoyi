@@ -31,15 +31,18 @@ class QuoteRequestControllerTest {
   void pageReturnsServiceResponse() {
     QuoteRequestListItemResponse row = new QuoteRequestListItemResponse();
     row.setOaNo("OA-T8-001");
-    when(quoteRequestQueryService.pageRequests(1, 20, "OA-T8", "FI-SC-020", "CONFIRMED"))
+    row.setSourceType("EXCEL");
+    row.setApplicantUnit("申请单位A");
+    when(quoteRequestQueryService.pageRequests(1, 20, "OA-T8", "FI-SC-020", "EXCEL", "CONFIRMED"))
         .thenReturn(new PageResult<>(List.of(row), 1L));
 
     CommonResult<PageResult<QuoteRequestListItemResponse>> result =
-        controller.page(1, 20, "OA-T8", "FI-SC-020", "CONFIRMED");
+        controller.page(1, 20, "OA-T8", "FI-SC-020", "EXCEL", "CONFIRMED");
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getTotal()).isEqualTo(1);
     assertThat(result.getData().getList().get(0).getOaNo()).isEqualTo("OA-T8-001");
+    assertThat(result.getData().getList().get(0).getSourceType()).isEqualTo("EXCEL");
   }
 
   @Test

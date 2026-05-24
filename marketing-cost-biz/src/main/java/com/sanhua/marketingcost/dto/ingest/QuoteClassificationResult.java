@@ -5,6 +5,7 @@ import java.util.List;
 
 public class QuoteClassificationResult {
   private String businessUnitType;
+  private String expenseProductCategory;
   private String quoteScenario;
   private String classificationStatus;
   private String ruleCode;
@@ -17,6 +18,14 @@ public class QuoteClassificationResult {
 
   public void setBusinessUnitType(String businessUnitType) {
     this.businessUnitType = businessUnitType;
+  }
+
+  public String getExpenseProductCategory() {
+    return expenseProductCategory;
+  }
+
+  public void setExpenseProductCategory(String expenseProductCategory) {
+    this.expenseProductCategory = expenseProductCategory;
   }
 
   public String getQuoteScenario() {

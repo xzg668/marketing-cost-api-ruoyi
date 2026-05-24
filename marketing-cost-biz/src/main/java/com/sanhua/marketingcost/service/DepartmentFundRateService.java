@@ -1,12 +1,13 @@
 package com.sanhua.marketingcost.service;
 
 import com.sanhua.marketingcost.dto.DepartmentFundRateImportRequest;
+import com.sanhua.marketingcost.dto.DepartmentFundRateImportResponse;
 import com.sanhua.marketingcost.dto.DepartmentFundRateRequest;
 import com.sanhua.marketingcost.entity.DepartmentFundRate;
 import java.util.List;
 
 public interface DepartmentFundRateService {
-  List<DepartmentFundRate> list(String businessUnit);
+  List<DepartmentFundRate> list(String businessUnit, Integer rateYear, String expenseSubject);
 
   DepartmentFundRate create(DepartmentFundRateRequest request);
 
@@ -14,5 +15,5 @@ public interface DepartmentFundRateService {
 
   boolean delete(Long id);
 
-  List<DepartmentFundRate> importItems(DepartmentFundRateImportRequest request);
+  DepartmentFundRateImportResponse importItems(DepartmentFundRateImportRequest request);
 }

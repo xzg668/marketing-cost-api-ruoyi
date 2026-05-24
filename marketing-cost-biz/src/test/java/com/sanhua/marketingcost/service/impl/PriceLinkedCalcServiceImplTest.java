@@ -4,11 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.config.LinkedParserProperties;
+import com.sanhua.marketingcost.dto.PriceLinkedCalcRow;
 import com.sanhua.marketingcost.dto.PriceLinkedCalcTraceResponse;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewRequest;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewResponse;
@@ -83,6 +85,85 @@ class PriceLinkedCalcServiceImplTest {
   }
 
   @Test
+  void resultPage_returnsPersistedRowsWithoutCreatingCalcItems() {
+    BomCostingRowMapper mapper = Mockito.mock(BomCostingRowMapper.class);
+    PriceLinkedCalcItemMapper calcMapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
+    PriceLinkedItemMapper linkedItemMapper = Mockito.mock(PriceLinkedItemMapper.class);
+    PriceVariableMapper variableMapper = Mockito.mock(PriceVariableMapper.class);
+    OaFormMapper oaFormMapper = Mockito.mock(OaFormMapper.class);
+    FinanceBasePriceMapper financeBasePriceMapper = Mockito.mock(FinanceBasePriceMapper.class);
+    DynamicValueMapper dynamicValueMapper = Mockito.mock(DynamicValueMapper.class);
+    PriceLinkedCalcServiceImpl service =
+        new PriceLinkedCalcServiceImpl(
+            mapper,
+            calcMapper,
+            linkedItemMapper,
+            variableMapper,
+            oaFormMapper,
+            financeBasePriceMapper,
+            dynamicValueMapper,
+            new LinkedParserProperties(),
+            Mockito.mock(FormulaNormalizer.class),
+            Mockito.mock(FactorVariableRegistry.class),
+            new ObjectMapper(),
+            Mockito.mock(PriceLinkedFormulaPreviewService.class));
+
+    PriceLinkedCalcItem quote = new PriceLinkedCalcItem();
+    quote.setId(1L);
+    quote.setOaNo("OA-001");
+    quote.setBusinessUnitType("COMMERCIAL");
+    quote.setItemCode("MAT-1");
+    quote.setCalcScene("QUOTE");
+    quote.setPricingMonth("2026-05");
+    quote.setFactorSource("OA_LOCKED");
+    quote.setCalcStatus("OK");
+    quote.setTraceJson("{\"variableDetails\":[{\"code\":\"Cu\",\"source\":\"OA_LOCKED\"}]}");
+
+    PriceLinkedCalcItem monthly = new PriceLinkedCalcItem();
+    monthly.setId(2L);
+    monthly.setOaNo("OA-001");
+    monthly.setBusinessUnitType("COMMERCIAL");
+    monthly.setItemCode("MAT-1");
+    monthly.setCalcScene("MONTHLY_ADJUST");
+    monthly.setPricingMonth("2026-05");
+    monthly.setAdjustBatchId(88L);
+    monthly.setFactorSource("ADJUST_BATCH");
+    monthly.setCalcStatus("FAILED");
+    monthly.setCalcMessage("影响因素缺失");
+
+    Page<PriceLinkedCalcItem> calcPage = new Page<>(1, 20);
+    calcPage.setTotal(2);
+    calcPage.setRecords(List.of(quote, monthly));
+    when(calcMapper.selectPage(any(), any())).thenReturn(calcPage);
+
+    OaForm form = new OaForm();
+    form.setOaNo("OA-001");
+    form.setCustomer("客户A");
+    when(oaFormMapper.selectList(any())).thenReturn(List.of(form));
+
+    PriceLinkedItem linkedItem = new PriceLinkedItem();
+    linkedItem.setMaterialCode("MAT-1");
+    linkedItem.setMaterialName("联动价物料");
+    linkedItem.setBusinessUnitType("COMMERCIAL");
+    linkedItem.setPricingMonth("2026-05");
+    when(linkedItemMapper.selectList(any())).thenReturn(List.of(linkedItem));
+
+    Page<PriceLinkedCalcRow> result =
+        service.resultPage(null, null, null, "MAT-1", null, null, null, null, null, 1, 20);
+
+    assertEquals(2, result.getTotal());
+    assertEquals("QUOTE", result.getRecords().get(0).getCalcScene());
+    assertEquals("OA_LOCKED", result.getRecords().get(0).getFactorSource());
+    assertEquals(1, result.getRecords().get(0).getVariableSourceSummary().get("OA_LOCKED"));
+    assertEquals("MONTHLY_ADJUST", result.getRecords().get(1).getCalcScene());
+    assertEquals(88L, result.getRecords().get(1).getAdjustBatchId());
+    assertEquals("影响因素缺失", result.getRecords().get(1).getCalcMessage());
+    Mockito.verify(calcMapper, never()).insert(any(PriceLinkedCalcItem.class));
+    Mockito.verify(calcMapper, never()).updateById(any(PriceLinkedCalcItem.class));
+    Mockito.verifyNoInteractions(mapper);
+  }
+
+  @Test
   void refresh_insertsCalculatedItems() {
     // T5.5：数据源切到 BomCostingRowMapper；bomQty 映射到 qtyPerTop
     BomCostingRowMapper mapper = Mockito.mock(BomCostingRowMapper.class);
@@ -128,6 +209,9 @@ class PriceLinkedCalcServiceImplTest {
     Mockito.verify(calcMapper).insert(captor.capture());
     var saved = captor.getValue();
     assertEquals(new BigDecimal("2.5"), saved.getBomQty());
+    assertEquals("QUOTE", saved.getCalcScene());
+    assertEquals("OA_LOCKED", saved.getFactorSource());
+    assertEquals("OK", saved.getCalcStatus());
     assertEquals(null, saved.getPartUnitPrice());
     assertEquals(null, saved.getPartAmount());
   }
@@ -265,6 +349,7 @@ class PriceLinkedCalcServiceImplTest {
 
     assertThat(ctx.getOverrides()).containsKey("Cu");
     assertThat(ctx.getOverrides().get("Cu")).isEqualByComparingTo(new BigDecimal("72"));
+    assertThat(ctx.getOverrideSource("Cu")).isEqualTo("OA_LOCKED");
     // 未填字段不应出现在 overrides，让 FinanceBaseResolver 走基价回落
     assertThat(ctx.getOverrides()).doesNotContainKeys("Zn", "Al");
   }
@@ -323,6 +408,78 @@ class PriceLinkedCalcServiceImplTest {
     PriceLinkedItem linkedItem = new PriceLinkedItem();
 
     assertNull(invokeResolveFinanceFallback(service, variable, linkedItem));
+  }
+
+  @Test
+  void quoteSceneRecalculateChangesWhenOaCopperChanges() throws Exception {
+    FactorVariableRegistry registry = Mockito.mock(FactorVariableRegistry.class);
+    FormulaNormalizer normalizer = Mockito.mock(FormulaNormalizer.class);
+    when(normalizer.normalize(any())).thenReturn("[Cu]");
+    when(registry.resolve(any(String.class), any(VariableContext.class)))
+        .thenAnswer(inv -> {
+          String code = inv.getArgument(0);
+          VariableContext ctx = inv.getArgument(1);
+          if (ctx.getOverrides().containsKey(code)) {
+            return java.util.Optional.of(ctx.getOverrides().get(code));
+          }
+          return java.util.Optional.of(new BigDecimal("999"));
+        });
+
+    LinkedParserProperties props = new LinkedParserProperties();
+    props.setMode("new");
+    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(props, normalizer, registry);
+
+    PriceLinkedItem linkedItem = new PriceLinkedItem();
+    linkedItem.setFormulaExpr("[Cu]");
+    linkedItem.setMaterialCode("MAT-CU");
+
+    OaForm firstOa = new OaForm();
+    firstOa.setCopperPrice(new BigDecimal("90000"));
+    BigDecimal first = invokeCalculatePartUnitPrice(
+        service, linkedItem, new PriceLinkedCalcItem(), firstOa);
+
+    OaForm secondOa = new OaForm();
+    secondOa.setCopperPrice(new BigDecimal("92000"));
+    BigDecimal second = invokeCalculatePartUnitPrice(
+        service, linkedItem, new PriceLinkedCalcItem(), secondOa);
+
+    assertThat(first).isEqualByComparingTo("90.000000");
+    assertThat(second).isEqualByComparingTo("92.000000");
+  }
+
+  @Test
+  void quoteSceneIgnoresMonthlyFactorWhenOaLockExistsAndTraceMarksSource() throws Exception {
+    FactorVariableRegistry registry = Mockito.mock(FactorVariableRegistry.class);
+    FormulaNormalizer normalizer = Mockito.mock(FormulaNormalizer.class);
+    when(normalizer.normalize(any())).thenReturn("[Cu]");
+    when(registry.resolve(any(String.class), any(VariableContext.class)))
+        .thenAnswer(inv -> {
+          String code = inv.getArgument(0);
+          VariableContext ctx = inv.getArgument(1);
+          if (ctx.getOverrides().containsKey(code)) {
+            return java.util.Optional.of(ctx.getOverrides().get(code));
+          }
+          // 模拟同月影响因素价已变化；QUOTE 有 OA 锁价时不应读到这里的值。
+          return java.util.Optional.of(new BigDecimal("999"));
+        });
+
+    LinkedParserProperties props = new LinkedParserProperties();
+    props.setMode("new");
+    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(props, normalizer, registry);
+
+    PriceLinkedItem linkedItem = new PriceLinkedItem();
+    linkedItem.setFormulaExpr("[Cu]");
+    linkedItem.setMaterialCode("MAT-CU");
+    linkedItem.setPricingMonth("2026-05");
+    PriceLinkedCalcItem calcItem = new PriceLinkedCalcItem();
+    OaForm oaForm = new OaForm();
+    oaForm.setCopperPrice(new BigDecimal("90000"));
+
+    BigDecimal result = invokeCalculatePartUnitPrice(service, linkedItem, calcItem, oaForm);
+
+    assertThat(result).isEqualByComparingTo("90.000000");
+    assertThat(calcItem.getTraceJson()).contains("\"source\":\"OA_LOCKED\"");
+    assertThat(calcItem.getTraceJson()).doesNotContain("999");
   }
 
   // ==================== 风险 2：vat_rate 缺失时 newCalculate 硬错 ====================

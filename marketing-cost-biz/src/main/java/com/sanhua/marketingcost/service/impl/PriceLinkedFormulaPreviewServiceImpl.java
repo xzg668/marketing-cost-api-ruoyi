@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.impl;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.dto.LinkedPriceVariableContext;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewRequest;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewResponse;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewResponse.TraceEntry;
@@ -11,6 +12,7 @@ import com.sanhua.marketingcost.entity.FactorQuoteBaseMapping;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
+import com.sanhua.marketingcost.enums.LinkedPriceCalcScene;
 import com.sanhua.marketingcost.formula.normalize.FormulaNormalizer;
 import com.sanhua.marketingcost.formula.normalize.FormulaSyntaxException;
 import com.sanhua.marketingcost.formula.normalize.FormulaUnitConsistencyChecker;
@@ -113,6 +115,7 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
         request.getTaxIncluded(),
         null,
         null,
+        null,
         null);
   }
 
@@ -141,7 +144,31 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
         linkedItem.getTaxIncluded(),
         linkedItem,
         oaForm,
-        variableOverrides);
+        variableOverrides,
+        null);
+  }
+
+  @Override
+  public PriceLinkedFormulaPreviewResponse previewForRefresh(
+      PriceLinkedItem linkedItem,
+      LinkedPriceVariableContext variableContext,
+      OaForm oaForm) {
+    PriceLinkedFormulaPreviewResponse response = new PriceLinkedFormulaPreviewResponse();
+    if (linkedItem == null || !StringUtils.hasText(linkedItem.getFormulaExpr())) {
+      response.setError("公式不能为空");
+      response.getTrace().add(new TraceEntry("validate", "linkedItem 或 formulaExpr 为空"));
+      return response;
+    }
+    return doCompute(
+        linkedItem.getFormulaExpr(),
+        linkedItem.getMaterialCode(),
+        linkedItem.getPricingMonth(),
+        linkedItem.getTaxIncluded(),
+        linkedItem,
+        oaForm,
+        variableContext == null ? null : variableContext.getVariableValues(),
+        variableContext == null ? null : variableContext.getVariableSources(),
+        variableContext);
   }
 
   /**
@@ -159,7 +186,30 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
       Integer taxIncluded,
       PriceLinkedItem preloadedItem,
       OaForm oaForm,
-      Map<String, BigDecimal> overrides) {
+      Map<String, BigDecimal> overrides,
+      Map<String, String> overrideSources) {
+    return doCompute(
+        rawExpr,
+        materialCode,
+        pricingMonth,
+        taxIncluded,
+        preloadedItem,
+        oaForm,
+        overrides,
+        overrideSources,
+        null);
+  }
+
+  private PriceLinkedFormulaPreviewResponse doCompute(
+      String rawExpr,
+      String materialCode,
+      String pricingMonth,
+      Integer taxIncluded,
+      PriceLinkedItem preloadedItem,
+      OaForm oaForm,
+      Map<String, BigDecimal> overrides,
+      Map<String, String> overrideSources,
+      LinkedPriceVariableContext variableContext) {
     PriceLinkedFormulaPreviewResponse response = new PriceLinkedFormulaPreviewResponse();
 
     // 阶段 1：规范化
@@ -204,11 +254,18 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
         .pricingMonth(pricingMonth)
         .oaForm(oaForm)
         .linkedItem(linkedItem);
+    if (variableContext != null
+        && variableContext.getCalcScene() == LinkedPriceCalcScene.MONTHLY_ADJUST) {
+      // 月度调价场景必须只读影响因素月度价或指定调价批次价，不能读取 OA 表头锁价。
+      ctx.priceContextType(VariableContext.PriceContextType.MONTHLY_REPRICE)
+          .adjustBatchId(variableContext.getAdjustBatchId());
+    }
     // OA 锁价等 overrides 在变量解析之前灌进 ctx，让 registry 在查 finance 基价前先看 overrides
     if (overrides != null) {
       overrides.forEach((code, value) -> {
         if (code != null && value != null) {
-          ctx.override(code, value);
+          String source = overrideSources == null ? null : overrideSources.get(code);
+          ctx.override(code, value, source);
         }
       });
     }
@@ -236,7 +293,7 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
       detail.setCode(token);
       detail.setName(meta == null ? token : safeName(meta));
       detail.setValue(value);
-      detail.setSource(resolveVariableSource(meta, resolved, ctx));
+      detail.setSource(resolveVariableSource(token, meta, resolved, ctx));
       response.getVariables().add(detail);
     }
     response.getTrace().add(new TraceEntry("resolve", values.toString()));
@@ -297,15 +354,21 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
   }
 
   private String resolveVariableSource(
-      PriceVariable meta, Optional<BigDecimal> resolved, VariableContext ctx) {
+      String token, PriceVariable meta, Optional<BigDecimal> resolved, VariableContext ctx) {
     if (resolved.isEmpty()) {
       return "MISSING";
+    }
+    if (ctx != null && StringUtils.hasText(ctx.getOverrideSource(token))) {
+      return ctx.getOverrideSource(token);
+    }
+    if (ctx != null && StringUtils.hasText(ctx.getResolvedSource(token))) {
+      return ctx.getResolvedSource(token);
     }
     if (meta == null) {
       return "UNKNOWN";
     }
     if (usesQuoteBaseOverride(meta, ctx)) {
-      return "QUOTE_BASE";
+      return "OA_LOCKED";
     }
     return meta.getFactorType();
   }

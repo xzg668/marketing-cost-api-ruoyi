@@ -39,6 +39,8 @@ public class VariableContext {
 
   /** 显式覆盖某变量值（优先级最高） */
   private final Map<String, BigDecimal> overrides = new HashMap<>();
+  private final Map<String, String> overrideSources = new HashMap<>();
+  private final Map<String, String> resolvedSources = new HashMap<>();
 
   public String getOaNo() {
     return oaNo;
@@ -121,9 +123,40 @@ public class VariableContext {
     return overrides;
   }
 
+  public Map<String, String> getOverrideSources() {
+    return overrideSources;
+  }
+
+  public String getOverrideSource(String code) {
+    return code == null ? null : overrideSources.get(code);
+  }
+
+  public Map<String, String> getResolvedSources() {
+    return resolvedSources;
+  }
+
+  public String getResolvedSource(String code) {
+    return code == null ? null : resolvedSources.get(code);
+  }
+
+  public VariableContext resolvedSource(String code, String source) {
+    if (code != null && source != null && !source.isBlank()) {
+      resolvedSources.put(code, source);
+    }
+    return this;
+  }
+
   public VariableContext override(String code, BigDecimal value) {
     if (code != null) {
       overrides.put(code, value);
+    }
+    return this;
+  }
+
+  public VariableContext override(String code, BigDecimal value, String source) {
+    override(code, value);
+    if (code != null && source != null && !source.isBlank()) {
+      overrideSources.put(code, source);
     }
     return this;
   }

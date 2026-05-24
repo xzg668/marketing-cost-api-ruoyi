@@ -13,9 +13,14 @@ public class QuoteNormalizedHeader {
   private String quoteScenario;
   private String classificationStatus;
   private String businessUnitType;
+  private String accountingPeriodMonth;
   private String formType;
   private LocalDate applyDate;
   private String customer;
+  private String applicantUnit;
+  private String sourceCompany;
+  private String sourceBusinessDivision;
+  private String expenseProductCategory;
   private String applicantDept;
   private String applicantOffice;
   private String applicantName;
@@ -23,6 +28,8 @@ public class QuoteNormalizedHeader {
   private String productAttr;
   private String priceLinkMode;
   private String overseasSalesMode;
+  private String tradeTerms;
+  private BigDecimal exchangeRate;
   private BigDecimal copperPrice;
   private BigDecimal zincPrice;
   private BigDecimal aluminumPrice;
@@ -108,6 +115,14 @@ public class QuoteNormalizedHeader {
     this.businessUnitType = businessUnitType;
   }
 
+  public String getAccountingPeriodMonth() {
+    return accountingPeriodMonth;
+  }
+
+  public void setAccountingPeriodMonth(String accountingPeriodMonth) {
+    this.accountingPeriodMonth = accountingPeriodMonth;
+  }
+
   public String getFormType() {
     return formType;
   }
@@ -130,6 +145,38 @@ public class QuoteNormalizedHeader {
 
   public void setCustomer(String customer) {
     this.customer = customer;
+  }
+
+  public String getApplicantUnit() {
+    return applicantUnit;
+  }
+
+  public void setApplicantUnit(String applicantUnit) {
+    this.applicantUnit = applicantUnit;
+  }
+
+  public String getSourceCompany() {
+    return sourceCompany;
+  }
+
+  public void setSourceCompany(String sourceCompany) {
+    this.sourceCompany = sourceCompany;
+  }
+
+  public String getSourceBusinessDivision() {
+    return sourceBusinessDivision;
+  }
+
+  public void setSourceBusinessDivision(String sourceBusinessDivision) {
+    this.sourceBusinessDivision = sourceBusinessDivision;
+  }
+
+  public String getExpenseProductCategory() {
+    return expenseProductCategory;
+  }
+
+  public void setExpenseProductCategory(String expenseProductCategory) {
+    this.expenseProductCategory = expenseProductCategory;
   }
 
   public String getApplicantDept() {
@@ -186,6 +233,22 @@ public class QuoteNormalizedHeader {
 
   public void setOverseasSalesMode(String overseasSalesMode) {
     this.overseasSalesMode = overseasSalesMode;
+  }
+
+  public String getTradeTerms() {
+    return tradeTerms;
+  }
+
+  public void setTradeTerms(String tradeTerms) {
+    this.tradeTerms = tradeTerms;
+  }
+
+  public BigDecimal getExchangeRate() {
+    return exchangeRate;
+  }
+
+  public void setExchangeRate(BigDecimal exchangeRate) {
+    this.exchangeRate = exchangeRate;
   }
 
   public BigDecimal getCopperPrice() {

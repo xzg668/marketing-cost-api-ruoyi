@@ -14,12 +14,16 @@ import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusCheckRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteExcelImportCommitResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteExcelImportPreviewResponse;
+import com.sanhua.marketingcost.dto.ingest.QuoteExcelTemplateInfoResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestLogDetailResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestLogListItemResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestResponse;
+import com.sanhua.marketingcost.enums.QuoteExcelTemplateType;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.QuoteExcelImportService;
+import com.sanhua.marketingcost.service.ingest.QuoteExcelTemplateFile;
+import com.sanhua.marketingcost.service.ingest.QuoteExcelTemplateService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestService;
 import com.sanhua.marketingcost.service.ingest.QuoteRequestQueryService;
@@ -27,11 +31,13 @@ import java.io.InputStream;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.mock.web.MockMultipartFile;
 
 class QuoteIngestControllerTest {
   private QuoteIngestService quoteIngestService;
   private QuoteExcelImportService quoteExcelImportService;
+  private QuoteExcelTemplateService quoteExcelTemplateService;
   private QuoteBomStatusService quoteBomStatusService;
   private QuoteRequestQueryService quoteRequestQueryService;
   private QuoteIngestController controller;
@@ -40,12 +46,14 @@ class QuoteIngestControllerTest {
   void setUp() {
     quoteIngestService = mock(QuoteIngestService.class);
     quoteExcelImportService = mock(QuoteExcelImportService.class);
+    quoteExcelTemplateService = mock(QuoteExcelTemplateService.class);
     quoteBomStatusService = mock(QuoteBomStatusService.class);
     quoteRequestQueryService = mock(QuoteRequestQueryService.class);
     controller =
         new QuoteIngestController(
             quoteIngestService,
             quoteExcelImportService,
+            quoteExcelTemplateService,
             quoteBomStatusService,
             quoteRequestQueryService);
   }
@@ -93,6 +101,20 @@ class QuoteIngestControllerTest {
   }
 
   @Test
+  void previewExcelExceptionReturnsBadRequest() {
+    MockMultipartFile file =
+        new MockMultipartFile("file", "broken.txt", "text/plain", new byte[] {1});
+    when(quoteExcelImportService.preview(any(InputStream.class), eq("broken.txt")))
+        .thenThrow(new QuoteIngestException("Excel 解析失败"));
+
+    CommonResult<QuoteExcelImportPreviewResponse> result = controller.previewExcel(file);
+
+    assertThat(result.isSuccess()).isFalse();
+    assertThat(result.getCode()).isEqualTo(GlobalErrorCodeConstants.BAD_REQUEST.getCode());
+    assertThat(result.getMsg()).contains("Excel 解析失败");
+  }
+
+  @Test
   void commitExcelReturnsServiceResponse() {
     MockMultipartFile file =
         new MockMultipartFile("file", "quote.xlsx", "application/vnd.ms-excel", new byte[] {1});
@@ -104,6 +126,63 @@ class QuoteIngestControllerTest {
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().isCommitted()).isTrue();
+  }
+
+  @Test
+  void commitExcelExceptionReturnsBadRequest() {
+    MockMultipartFile file =
+        new MockMultipartFile("file", "broken.txt", "text/plain", new byte[] {1});
+    when(quoteExcelImportService.commit(any(InputStream.class), eq("broken.txt")))
+        .thenThrow(new QuoteIngestException("Excel 解析失败"));
+
+    CommonResult<QuoteExcelImportCommitResponse> result = controller.commitExcel(file);
+
+    assertThat(result.isSuccess()).isFalse();
+    assertThat(result.getCode()).isEqualTo(GlobalErrorCodeConstants.BAD_REQUEST.getCode());
+    assertThat(result.getMsg()).contains("Excel 解析失败");
+  }
+
+  @Test
+  void listExcelTemplatesReturnsServiceResponse() {
+    QuoteExcelTemplateInfoResponse row = new QuoteExcelTemplateInfoResponse();
+    row.setTemplateType("FI-SC-020");
+    row.setFileName("quote.xlsx");
+    when(quoteExcelTemplateService.listTemplates()).thenReturn(List.of(row));
+
+    CommonResult<List<QuoteExcelTemplateInfoResponse>> result = controller.listExcelTemplates();
+
+    assertThat(result.isSuccess()).isTrue();
+    assertThat(result.getData()).hasSize(1);
+    assertThat(result.getData().get(0).getTemplateType()).isEqualTo("FI-SC-020");
+  }
+
+  @Test
+  void downloadExcelTemplateWritesXlsxResponse() throws Exception {
+    byte[] bytes = new byte[] {1, 2, 3};
+    when(quoteExcelTemplateService.getTemplate("FI-SC-020"))
+        .thenReturn(new QuoteExcelTemplateFile(QuoteExcelTemplateType.FI_SC_020, bytes));
+    MockHttpServletResponse response = new MockHttpServletResponse();
+
+    controller.downloadExcelTemplate("FI-SC-020", response);
+
+    assertThat(response.getStatus()).isEqualTo(200);
+    assertThat(response.getContentType())
+        .startsWith("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    assertThat(response.getHeader("Content-Disposition")).contains("attachment; filename*=UTF-8''");
+    assertThat(response.getHeader("Content-Disposition")).contains(".xlsx");
+    assertThat(response.getContentAsByteArray()).containsExactly(bytes);
+  }
+
+  @Test
+  void downloadExcelTemplateBadRequest() throws Exception {
+    when(quoteExcelTemplateService.getTemplate("UNKNOWN"))
+        .thenThrow(new QuoteIngestException("未知报价单模板类型"));
+    MockHttpServletResponse response = new MockHttpServletResponse();
+
+    controller.downloadExcelTemplate("UNKNOWN", response);
+
+    assertThat(response.getStatus()).isEqualTo(400);
+    assertThat(response.getErrorMessage()).contains("未知报价单模板类型");
   }
 
   @Test

@@ -13,6 +13,7 @@ import com.sanhua.marketingcost.mapper.ProductPropertyMapper;
 import com.sanhua.marketingcost.service.CostRunResultService;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.Year;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import org.springframework.stereotype.Service;
@@ -134,7 +135,11 @@ public class CostRunResultServiceImpl implements CostRunResultService {
     existing.setCalcStatus(calcStatus == null ? "未核算" : calcStatus);
     existing.setCalcAt(LocalDateTime.now());
     existing.setPeriod(buildPeriod(form.getApplyDate()));
-    existing.setProductAttr(findProductAttr(productCodeValue));
+    existing.setProductAttr(
+        findProductAttr(
+            productCodeValue,
+            resolveQuoteYear(form, item),
+            firstText(item.getBusinessUnitType(), form.getBusinessUnitType())));
 
     if (existing.getId() == null) {
       costRunResultMapper.insert(existing);
@@ -175,19 +180,51 @@ public class CostRunResultServiceImpl implements CostRunResultService {
     return date.format(PERIOD_FORMAT);
   }
 
-  private String findProductAttr(String productCode) {
+  private Integer resolveQuoteYear(OaForm form, OaFormItem item) {
+    if (item != null && item.getValidDate() != null) {
+      return item.getValidDate().getYear();
+    }
+    if (form != null && form.getApplyDate() != null) {
+      return form.getApplyDate().getYear();
+    }
+    return Year.now().getValue();
+  }
+
+  private String findProductAttr(String productCode, Integer propertyYear, String businessUnitType) {
     if (!StringUtils.hasText(productCode)) {
       return null;
     }
-    String period = LocalDate.now().format(PERIOD_FORMAT);
+    String code = productCode.trim();
+    String businessUnit = trimToNull(businessUnitType);
     ProductProperty property =
         productPropertyMapper.selectOne(
             Wrappers.lambdaQuery(ProductProperty.class)
-                .eq(ProductProperty::getParentCode, productCode.trim())
-                .eq(ProductProperty::getPeriod, period)
+                .eq(StringUtils.hasText(businessUnit), ProductProperty::getBusinessUnitType, businessUnit)
+                .eq(propertyYear != null, ProductProperty::getPropertyYear, propertyYear)
+                .eq(ProductProperty::getProductCode, code)
                 .orderByDesc(ProductProperty::getId)
                 .last("LIMIT 1"));
+    if (property == null) {
+      property =
+          productPropertyMapper.selectOne(
+              Wrappers.lambdaQuery(ProductProperty.class)
+                  .eq(StringUtils.hasText(businessUnit), ProductProperty::getBusinessUnitType, businessUnit)
+                  .eq(propertyYear != null, ProductProperty::getPropertyYear, propertyYear)
+                  .eq(ProductProperty::getParentCode, code)
+                  .orderByDesc(ProductProperty::getId)
+                  .last("LIMIT 1"));
+    }
     return property == null ? null : property.getProductAttr();
+  }
+
+  private String firstText(String first, String second) {
+    if (StringUtils.hasText(first)) {
+      return first.trim();
+    }
+    if (StringUtils.hasText(second)) {
+      return second.trim();
+    }
+    return null;
   }
 
   private MaterialMaster findMaterialMaster(String productCode) {

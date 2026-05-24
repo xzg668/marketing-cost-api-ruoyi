@@ -58,6 +58,123 @@ public class PriceFixedItem {
   /** V47 SETTLE 来源专用：联动结算价（家用结算价9 C6 = 按金属价公式联动算出） */
   private BigDecimal linkedSettlePrice;
 
+  /** 来源系统：OA/SRM/U9/EXCEL/MANUAL，用于固定采购价和结算固定价强隔离 */
+  private String sourceSystem;
+
+  /** 来源 Excel sheet 名 */
+  private String sourceSheetName;
+
+  /** 来源 Excel 原始行号，便于定位导入问题 */
+  private Integer sourceRowNo;
+
+  /** 导入批次号，同一文件多次导入时用于追溯，不作为取价条件 */
+  private String sourceBatchNo;
+
+  /** 导入文件名 */
+  private String importFileName;
+
+  /** 导入人 */
+  private String importedBy;
+
+  /** 导入时间 */
+  private LocalDateTime importedAt;
+
+  /** 外部行 id；固定采购价非 U9 行按该字段幂等更新 */
+  private String externalRowId;
+
+  /** 固定采购价流程状态 */
+  private String processStatus;
+
+  /** SRM 单据编号 */
+  private String srmDocNo;
+
+  /** 固定采购价物料类别 */
+  private String materialCategory;
+
+  /** 税率 */
+  private BigDecimal taxRate;
+
+  /** 原不含税加工费 */
+  private BigDecimal originalProcessFee;
+
+  /** 原含税加工费 */
+  private BigDecimal originalProcessFeeTaxIncluded;
+
+  /** 原不含税价格 */
+  private BigDecimal originalTaxExcludedPrice;
+
+  /** 原含税价格 */
+  private BigDecimal originalTaxIncludedPrice;
+
+  /** 原供方名称 */
+  private String originalSupplierName;
+
+  /** 现不含税加工费 */
+  private BigDecimal currentProcessFee;
+
+  /** 现含税加工费 */
+  private BigDecimal currentProcessFeeTaxIncluded;
+
+  /** 现不含税价格；固定采购价主价格来源，对齐 fixed_price */
+  private BigDecimal currentTaxExcludedPrice;
+
+  /** 现含税价格 */
+  private BigDecimal currentTaxIncludedPrice;
+
+  /** 现供方名称 */
+  private String currentSupplierName;
+
+  /** 上涨额 */
+  private BigDecimal changeAmount;
+
+  /** 幅度 */
+  private BigDecimal changeRate;
+
+  /** 执行日期原始文本 */
+  private String executionPeriodText;
+
+  /** 预计年用量原始文本 */
+  private String annualUsageText;
+
+  /** 申请人 */
+  private String applicant;
+
+  /** 申请部门 */
+  private String applyDept;
+
+  /** 市场行情 */
+  private String marketSituation;
+
+  /** 类似物比较 */
+  private String similarCompare;
+
+  /** 结论 */
+  private String approvalConclusion;
+
+  /** 审批表类型 */
+  private String approvalType;
+
+  /** 涉及事业部 */
+  private String businessDivision;
+
+  /** 总经理批准时间 */
+  private LocalDateTime generalManagerApprovedAt;
+
+  /** 板分法跟踪日期 */
+  private LocalDate trackingDate;
+
+  /** 是否打印 */
+  private String printFlag;
+
+  /** 结算固定价最后一列表头 */
+  private String settleReferenceHeader;
+
+  /** 结算固定价最后一列非数字备注，例如“不用提供”；这类行 fixed_price 为空，不参与取价 */
+  private String settleReferenceText;
+
+  /** 结算固定价最后一列数字价格，和 fixed_price 保持一致用于追溯 */
+  private BigDecimal settleReferencePrice;
+
   /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
@@ -266,6 +383,123 @@ public class PriceFixedItem {
   public void setBaseSettlePrice(BigDecimal baseSettlePrice) { this.baseSettlePrice = baseSettlePrice; }
   public BigDecimal getLinkedSettlePrice() { return linkedSettlePrice; }
   public void setLinkedSettlePrice(BigDecimal linkedSettlePrice) { this.linkedSettlePrice = linkedSettlePrice; }
+
+  public String getSourceSystem() { return sourceSystem; }
+  public void setSourceSystem(String sourceSystem) { this.sourceSystem = sourceSystem; }
+
+  public String getSourceSheetName() { return sourceSheetName; }
+  public void setSourceSheetName(String sourceSheetName) { this.sourceSheetName = sourceSheetName; }
+
+  public Integer getSourceRowNo() { return sourceRowNo; }
+  public void setSourceRowNo(Integer sourceRowNo) { this.sourceRowNo = sourceRowNo; }
+
+  public String getSourceBatchNo() { return sourceBatchNo; }
+  public void setSourceBatchNo(String sourceBatchNo) { this.sourceBatchNo = sourceBatchNo; }
+
+  public String getImportFileName() { return importFileName; }
+  public void setImportFileName(String importFileName) { this.importFileName = importFileName; }
+
+  public String getImportedBy() { return importedBy; }
+  public void setImportedBy(String importedBy) { this.importedBy = importedBy; }
+
+  public LocalDateTime getImportedAt() { return importedAt; }
+  public void setImportedAt(LocalDateTime importedAt) { this.importedAt = importedAt; }
+
+  public String getExternalRowId() { return externalRowId; }
+  public void setExternalRowId(String externalRowId) { this.externalRowId = externalRowId; }
+
+  public String getProcessStatus() { return processStatus; }
+  public void setProcessStatus(String processStatus) { this.processStatus = processStatus; }
+
+  public String getSrmDocNo() { return srmDocNo; }
+  public void setSrmDocNo(String srmDocNo) { this.srmDocNo = srmDocNo; }
+
+  public String getMaterialCategory() { return materialCategory; }
+  public void setMaterialCategory(String materialCategory) { this.materialCategory = materialCategory; }
+
+  public BigDecimal getTaxRate() { return taxRate; }
+  public void setTaxRate(BigDecimal taxRate) { this.taxRate = taxRate; }
+
+  public BigDecimal getOriginalProcessFee() { return originalProcessFee; }
+  public void setOriginalProcessFee(BigDecimal originalProcessFee) { this.originalProcessFee = originalProcessFee; }
+
+  public BigDecimal getOriginalProcessFeeTaxIncluded() { return originalProcessFeeTaxIncluded; }
+  public void setOriginalProcessFeeTaxIncluded(BigDecimal originalProcessFeeTaxIncluded) { this.originalProcessFeeTaxIncluded = originalProcessFeeTaxIncluded; }
+
+  public BigDecimal getOriginalTaxExcludedPrice() { return originalTaxExcludedPrice; }
+  public void setOriginalTaxExcludedPrice(BigDecimal originalTaxExcludedPrice) { this.originalTaxExcludedPrice = originalTaxExcludedPrice; }
+
+  public BigDecimal getOriginalTaxIncludedPrice() { return originalTaxIncludedPrice; }
+  public void setOriginalTaxIncludedPrice(BigDecimal originalTaxIncludedPrice) { this.originalTaxIncludedPrice = originalTaxIncludedPrice; }
+
+  public String getOriginalSupplierName() { return originalSupplierName; }
+  public void setOriginalSupplierName(String originalSupplierName) { this.originalSupplierName = originalSupplierName; }
+
+  public BigDecimal getCurrentProcessFee() { return currentProcessFee; }
+  public void setCurrentProcessFee(BigDecimal currentProcessFee) { this.currentProcessFee = currentProcessFee; }
+
+  public BigDecimal getCurrentProcessFeeTaxIncluded() { return currentProcessFeeTaxIncluded; }
+  public void setCurrentProcessFeeTaxIncluded(BigDecimal currentProcessFeeTaxIncluded) { this.currentProcessFeeTaxIncluded = currentProcessFeeTaxIncluded; }
+
+  public BigDecimal getCurrentTaxExcludedPrice() { return currentTaxExcludedPrice; }
+  public void setCurrentTaxExcludedPrice(BigDecimal currentTaxExcludedPrice) { this.currentTaxExcludedPrice = currentTaxExcludedPrice; }
+
+  public BigDecimal getCurrentTaxIncludedPrice() { return currentTaxIncludedPrice; }
+  public void setCurrentTaxIncludedPrice(BigDecimal currentTaxIncludedPrice) { this.currentTaxIncludedPrice = currentTaxIncludedPrice; }
+
+  public String getCurrentSupplierName() { return currentSupplierName; }
+  public void setCurrentSupplierName(String currentSupplierName) { this.currentSupplierName = currentSupplierName; }
+
+  public BigDecimal getChangeAmount() { return changeAmount; }
+  public void setChangeAmount(BigDecimal changeAmount) { this.changeAmount = changeAmount; }
+
+  public BigDecimal getChangeRate() { return changeRate; }
+  public void setChangeRate(BigDecimal changeRate) { this.changeRate = changeRate; }
+
+  public String getExecutionPeriodText() { return executionPeriodText; }
+  public void setExecutionPeriodText(String executionPeriodText) { this.executionPeriodText = executionPeriodText; }
+
+  public String getAnnualUsageText() { return annualUsageText; }
+  public void setAnnualUsageText(String annualUsageText) { this.annualUsageText = annualUsageText; }
+
+  public String getApplicant() { return applicant; }
+  public void setApplicant(String applicant) { this.applicant = applicant; }
+
+  public String getApplyDept() { return applyDept; }
+  public void setApplyDept(String applyDept) { this.applyDept = applyDept; }
+
+  public String getMarketSituation() { return marketSituation; }
+  public void setMarketSituation(String marketSituation) { this.marketSituation = marketSituation; }
+
+  public String getSimilarCompare() { return similarCompare; }
+  public void setSimilarCompare(String similarCompare) { this.similarCompare = similarCompare; }
+
+  public String getApprovalConclusion() { return approvalConclusion; }
+  public void setApprovalConclusion(String approvalConclusion) { this.approvalConclusion = approvalConclusion; }
+
+  public String getApprovalType() { return approvalType; }
+  public void setApprovalType(String approvalType) { this.approvalType = approvalType; }
+
+  public String getBusinessDivision() { return businessDivision; }
+  public void setBusinessDivision(String businessDivision) { this.businessDivision = businessDivision; }
+
+  public LocalDateTime getGeneralManagerApprovedAt() { return generalManagerApprovedAt; }
+  public void setGeneralManagerApprovedAt(LocalDateTime generalManagerApprovedAt) { this.generalManagerApprovedAt = generalManagerApprovedAt; }
+
+  public LocalDate getTrackingDate() { return trackingDate; }
+  public void setTrackingDate(LocalDate trackingDate) { this.trackingDate = trackingDate; }
+
+  public String getPrintFlag() { return printFlag; }
+  public void setPrintFlag(String printFlag) { this.printFlag = printFlag; }
+
+  public String getSettleReferenceHeader() { return settleReferenceHeader; }
+  public void setSettleReferenceHeader(String settleReferenceHeader) { this.settleReferenceHeader = settleReferenceHeader; }
+
+  public String getSettleReferenceText() { return settleReferenceText; }
+  public void setSettleReferenceText(String settleReferenceText) { this.settleReferenceText = settleReferenceText; }
+
+  public BigDecimal getSettleReferencePrice() { return settleReferencePrice; }
+  public void setSettleReferencePrice(BigDecimal settleReferencePrice) { this.settleReferencePrice = settleReferencePrice; }
 
   public LocalDateTime getCreatedAt() {
     return createdAt;

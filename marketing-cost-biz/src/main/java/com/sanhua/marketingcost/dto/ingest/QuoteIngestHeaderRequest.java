@@ -7,6 +7,10 @@ public class QuoteIngestHeaderRequest {
   private String formType;
   private String applyDate;
   private String customer;
+  private String applicantUnit;
+  private String sourceCompany;
+  private String sourceBusinessDivision;
+  private String expenseProductCategory;
   private String applicantDept;
   private String applicantOffice;
   private String applicantName;
@@ -14,6 +18,8 @@ public class QuoteIngestHeaderRequest {
   private String productAttr;
   private String priceLinkMode;
   private String overseasSalesMode;
+  private String tradeTerms;
+  private String exchangeRate;
   private String copperPrice;
   private String zincPrice;
   private String aluminumPrice;
@@ -76,6 +82,38 @@ public class QuoteIngestHeaderRequest {
     this.customer = customer;
   }
 
+  public String getApplicantUnit() {
+    return applicantUnit;
+  }
+
+  public void setApplicantUnit(String applicantUnit) {
+    this.applicantUnit = applicantUnit;
+  }
+
+  public String getSourceCompany() {
+    return sourceCompany;
+  }
+
+  public void setSourceCompany(String sourceCompany) {
+    this.sourceCompany = sourceCompany;
+  }
+
+  public String getSourceBusinessDivision() {
+    return sourceBusinessDivision;
+  }
+
+  public void setSourceBusinessDivision(String sourceBusinessDivision) {
+    this.sourceBusinessDivision = sourceBusinessDivision;
+  }
+
+  public String getExpenseProductCategory() {
+    return expenseProductCategory;
+  }
+
+  public void setExpenseProductCategory(String expenseProductCategory) {
+    this.expenseProductCategory = expenseProductCategory;
+  }
+
   public String getApplicantDept() {
     return applicantDept;
   }
@@ -130,6 +168,22 @@ public class QuoteIngestHeaderRequest {
 
   public void setOverseasSalesMode(String overseasSalesMode) {
     this.overseasSalesMode = overseasSalesMode;
+  }
+
+  public String getTradeTerms() {
+    return tradeTerms;
+  }
+
+  public void setTradeTerms(String tradeTerms) {
+    this.tradeTerms = tradeTerms;
+  }
+
+  public String getExchangeRate() {
+    return exchangeRate;
+  }
+
+  public void setExchangeRate(String exchangeRate) {
+    this.exchangeRate = exchangeRate;
   }
 
   public String getCopperPrice() {

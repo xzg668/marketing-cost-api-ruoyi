@@ -5,19 +5,29 @@ import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.CostRunProgressResponse;
 import com.sanhua.marketingcost.dto.CostRunTrialResponse;
+import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
+import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
+import com.sanhua.marketingcost.dto.PriceTypeRoute;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.enums.PriceTypeEnum;
+import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
 import com.sanhua.marketingcost.service.CostRunPartItemService;
 import com.sanhua.marketingcost.service.CostRunProgressStore;
 import com.sanhua.marketingcost.service.CostRunResultService;
+import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
+import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.CostRunTrialService;
 import com.sanhua.marketingcost.service.MaterialMasterSyncService;
-import com.sanhua.marketingcost.service.PriceLinkedCalcService;
+import com.sanhua.marketingcost.service.PricePrepareReadinessService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -39,11 +49,12 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
   private static final long PROGRESS_CLEANUP_DELAY_MINUTES = 5;
   /** T15：主档同步完成时的进度节点（同步失败卡这里 + 红字） */
   private static final int PROGRESS_AFTER_SYNC = 5;
-  /** T23：联动价 refresh 完成时的进度节点 */
-  private static final int PROGRESS_AFTER_LINKED_REFRESH = 10;
+  /** LPE-08：联动价按需确保完成时的进度节点 */
+  private static final int PROGRESS_AFTER_LINKED_ENSURE = 10;
 
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
+  private final CostRunPartItemMapper costRunPartItemMapper;
   private final CostRunPartItemService costRunPartItemService;
   private final CostRunCostItemService costRunCostItemService;
   private final CostRunResultService costRunResultService;
@@ -51,8 +62,10 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
   private final TransactionTemplate transactionTemplate;
   /** T15：主档同步入口，doRun 第一步调用 */
   private final MaterialMasterSyncService materialMasterSyncService;
-  /** T23：联动价 refresh 入口，doRun 第二步调用，确保 calc_item 用当前 OA 表头锁价实算 */
-  private final PriceLinkedCalcService priceLinkedCalcService;
+  private final MaterialPriceRouterService materialPriceRouterService;
+  /** LPE-08：实时成本只是 ensure 调用方，不拥有联动价准备能力。 */
+  private final LinkedPriceEnsureService linkedPriceEnsureService;
+  private final PricePrepareReadinessService pricePrepareReadinessService;
   private final ScheduledExecutorService cleanupScheduler =
       Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "progress-cleanup");
@@ -68,22 +81,28 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
   public CostRunTrialServiceImpl(
       OaFormMapper oaFormMapper,
       OaFormItemMapper oaFormItemMapper,
+      CostRunPartItemMapper costRunPartItemMapper,
       CostRunPartItemService costRunPartItemService,
       CostRunCostItemService costRunCostItemService,
       CostRunResultService costRunResultService,
       CostRunProgressStore progressStore,
       TransactionTemplate transactionTemplate,
       MaterialMasterSyncService materialMasterSyncService,
-      PriceLinkedCalcService priceLinkedCalcService) {
+      MaterialPriceRouterService materialPriceRouterService,
+      LinkedPriceEnsureService linkedPriceEnsureService,
+      PricePrepareReadinessService pricePrepareReadinessService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
+    this.costRunPartItemMapper = costRunPartItemMapper;
     this.costRunPartItemService = costRunPartItemService;
     this.costRunCostItemService = costRunCostItemService;
     this.costRunResultService = costRunResultService;
     this.progressStore = progressStore;
     this.transactionTemplate = transactionTemplate;
     this.materialMasterSyncService = materialMasterSyncService;
-    this.priceLinkedCalcService = priceLinkedCalcService;
+    this.materialPriceRouterService = materialPriceRouterService;
+    this.linkedPriceEnsureService = linkedPriceEnsureService;
+    this.pricePrepareReadinessService = pricePrepareReadinessService;
   }
 
   @Override
@@ -121,18 +140,6 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
       throw new RuntimeException("主档同步失败: " + syncEx.getMessage(), syncEx);
     }
 
-    // T23：第二步刷新联动价 calc_item，让 trial 用当前 OA 表头锁价 + 最新基价的实算结果，
-    //      避免取到历史 calc 快照（之前 OA 表头铜价改了但 calc_item 还是老值的 bug）。
-    //      跟 admin "联动价计算 -> 刷新" 按钮调的同一个 API，幂等。
-    try {
-      int refreshedRows = priceLinkedCalcService.refresh(oaNoValue);
-      log.info("T23 联动价 refresh done: oa={} refreshed={}", oaNoValue, refreshedRows);
-      progressStore.update(oaNoValue, PROGRESS_AFTER_LINKED_REFRESH);
-    } catch (RuntimeException refreshEx) {
-      log.error("T23 联动价 refresh 失败: oa={}", oaNoValue, refreshEx);
-      throw new RuntimeException("联动价刷新失败: " + refreshEx.getMessage(), refreshEx);
-    }
-
     OaForm form =
         oaFormMapper.selectOne(
             Wrappers.lambdaQuery(OaForm.class).eq(OaForm::getOaNo, oaNoValue).last("LIMIT 1"));
@@ -146,6 +153,10 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
     if (formItems.isEmpty()) {
       throw new RuntimeException("OA单号未关联产品明细");
     }
+
+    PricePrepareReadinessResult pricePrepareReadiness =
+        checkPricePrepareReadiness(oaNoValue, inferPeriod(LocalDate.now()));
+    ensureLinkedPricesForTrial(oaNoValue, form);
 
     Set<String> productCodes = new LinkedHashSet<>();
     Map<String, OaFormItem> productItems = new LinkedHashMap<>();
@@ -163,7 +174,7 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
 
     // T16/T23：进度切片
     //   [0-5]    主档同步
-    //   [5-10]   联动价 refresh（T23）
+    //   [5-10]   联动价 ensure（LPE-08）
     //   [10-60]  部品取价（50% 跨度，子进度按部品 i/N 累加）
     //   [60-95]  N 个产品的费用核算（35% 跨度，每产品 35/N）
     //   [95-100] saveOrUpdate + OA 状态更新
@@ -178,8 +189,8 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
                 oaNoValue,
                 p -> progressStore.update(
                     oaNoValue,
-                    PROGRESS_AFTER_LINKED_REFRESH
-                        + p * (PROGRESS_PARTS_END - PROGRESS_AFTER_LINKED_REFRESH) / 100));
+                    PROGRESS_AFTER_LINKED_ENSURE
+                        + p * (PROGRESS_PARTS_END - PROGRESS_AFTER_LINKED_ENSURE) / 100));
     progressStore.update(oaNoValue, PROGRESS_PARTS_END);
 
     int costItemCount = 0;
@@ -214,12 +225,115 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
     }
     progressStore.update(oaNoValue, PROGRESS_COSTS_END);
 
+    LocalDateTime calculatedAt = LocalDateTime.now();
     oaFormMapper.update(
         null,
         Wrappers.lambdaUpdate(OaForm.class)
             .set(OaForm::getCalcStatus, "已核算")
+            .set(OaForm::getCalcAt, calculatedAt)
+            .set(OaForm::getUpdatedAt, calculatedAt)
             .eq(OaForm::getId, form.getId()));
-    return new CostRunTrialResponse(productCodes.size(), partItems.size(), costItemCount);
+    CostRunTrialResponse response =
+        new CostRunTrialResponse(productCodes.size(), partItems.size(), costItemCount);
+    response.setPricePrepareReadiness(pricePrepareReadiness);
+    return response;
+  }
+
+  private PricePrepareReadinessResult checkPricePrepareReadiness(String oaNo, String periodMonth) {
+    PricePrepareReadinessResult readiness = pricePrepareReadinessService.check(oaNo, periodMonth);
+    if (readiness != null && readiness.isWarning() && StringUtils.hasText(readiness.getMessage())) {
+      progressStore.updateMessage(oaNo, readiness.getMessage());
+      log.warn(
+          "PPR-09 price prepare readiness warning: oa={} period={} status={} message={}",
+          oaNo,
+          periodMonth,
+          readiness.getStatus(),
+          readiness.getMessage());
+    }
+    if (readiness != null && !readiness.isAllowContinue()) {
+      throw new RuntimeException(readiness.getMessage());
+    }
+    return readiness;
+  }
+
+  private void ensureLinkedPricesForTrial(String oaNo, OaForm form) {
+    // 实时成本试算按当前月份取价，不按 OA.apply_date 回看历史月份。
+    // 后续若固化试算基准日期，只需要把这里替换为统一日期来源。
+    LocalDate quoteDate = LocalDate.now();
+    String pricingMonth = inferPeriod(quoteDate);
+    Set<String> linkedItemCodes = collectLinkedItemCodes(oaNo, quoteDate, pricingMonth);
+    if (linkedItemCodes.isEmpty()) {
+      log.info("LPE-08 realtime cost linked ensure skipped: oa={} no linked route", oaNo);
+      progressStore.update(oaNo, PROGRESS_AFTER_LINKED_ENSURE);
+      return;
+    }
+
+    try {
+      LinkedPriceEnsureResult result =
+          linkedPriceEnsureService.ensure(
+              LinkedPriceEnsureRequest.quote(
+                  oaNo, form.getBusinessUnitType(), pricingMonth, linkedItemCodes));
+      if (result.getFailedCount() > 0) {
+        throw new RuntimeException(formatEnsureFailures(result));
+      }
+      log.info(
+          "LPE-08 realtime cost linked ensure done: oa={} requested={} created={} updated={} skipped={}",
+          oaNo,
+          result.getRequestedCount(),
+          result.getCreatedCount(),
+          result.getUpdatedCount(),
+          result.getSkippedCount());
+      progressStore.update(oaNo, PROGRESS_AFTER_LINKED_ENSURE);
+    } catch (RuntimeException ensureEx) {
+      log.error("LPE-08 实时成本联动价 ensure 失败: oa={}", oaNo, ensureEx);
+      throw new RuntimeException("联动价按需确保失败: " + ensureEx.getMessage(), ensureEx);
+    }
+  }
+
+  private Set<String> collectLinkedItemCodes(String oaNo, LocalDate quoteDate, String pricingMonth) {
+    List<CostRunPartItemDto> baseItems = costRunPartItemMapper.selectBaseByOaNo(oaNo);
+    if (baseItems == null || baseItems.isEmpty()) {
+      return Collections.emptySet();
+    }
+    Set<String> linkedItemCodes = new LinkedHashSet<>();
+    for (CostRunPartItemDto item : baseItems) {
+      if (item == null || !StringUtils.hasText(item.getPartCode())) {
+        continue;
+      }
+      String partCode = item.getPartCode().trim();
+      List<PriceTypeRoute> candidates =
+          materialPriceRouterService.listCandidates(partCode, pricingMonth, quoteDate);
+      if (candidates == null || candidates.isEmpty()) {
+        continue;
+      }
+      for (PriceTypeRoute route : candidates) {
+        if (route != null && route.priceType() == PriceTypeEnum.LINKED) {
+          linkedItemCodes.add(partCode);
+          break;
+        }
+      }
+    }
+    return linkedItemCodes;
+  }
+
+  private String formatEnsureFailures(LinkedPriceEnsureResult result) {
+    if (result.getFailedItems() == null || result.getFailedItems().isEmpty()) {
+      return "存在联动价计算失败";
+    }
+    List<String> messages = new java.util.ArrayList<>();
+    for (LinkedPriceEnsureResult.FailedItem failedItem : result.getFailedItems()) {
+      if (failedItem == null) {
+        continue;
+      }
+      String code = StringUtils.hasText(failedItem.getItemCode())
+          ? failedItem.getItemCode().trim()
+          : "-";
+      String reason = StringUtils.hasText(failedItem.getReason())
+          ? failedItem.getReason().trim()
+          : "未知原因";
+      messages.add(code + ": " + reason);
+    }
+    return messages.isEmpty() ? "存在联动价计算失败" : String.join("; ", messages);
   }
 
   @Override
@@ -236,5 +350,9 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
         () -> progressStore.remove(oaNo),
         PROGRESS_CLEANUP_DELAY_MINUTES,
         TimeUnit.MINUTES);
+  }
+
+  private static String inferPeriod(LocalDate date) {
+    return date.toString().substring(0, 7);
   }
 }

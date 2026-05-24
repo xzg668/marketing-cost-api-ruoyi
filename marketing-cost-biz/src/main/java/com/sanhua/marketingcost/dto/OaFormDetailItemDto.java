@@ -18,6 +18,10 @@ public class OaFormDetailItemDto {
   private BigDecimal laborCost;
   private BigDecimal manufacturingCost;
   private BigDecimal managementCost;
+  private Integer validMonth;
+  private BigDecimal sus304WeightG;
+  private BigDecimal sus316WeightG;
+  private BigDecimal copperWeightG;
   private LocalDate validDate;
   private BigDecimal unitCost;
   private BigDecimal costAmount;
@@ -132,6 +136,38 @@ public class OaFormDetailItemDto {
 
   public void setManagementCost(BigDecimal managementCost) {
     this.managementCost = managementCost;
+  }
+
+  public Integer getValidMonth() {
+    return validMonth;
+  }
+
+  public void setValidMonth(Integer validMonth) {
+    this.validMonth = validMonth;
+  }
+
+  public BigDecimal getSus304WeightG() {
+    return sus304WeightG;
+  }
+
+  public void setSus304WeightG(BigDecimal sus304WeightG) {
+    this.sus304WeightG = sus304WeightG;
+  }
+
+  public BigDecimal getSus316WeightG() {
+    return sus316WeightG;
+  }
+
+  public void setSus316WeightG(BigDecimal sus316WeightG) {
+    this.sus316WeightG = sus316WeightG;
+  }
+
+  public BigDecimal getCopperWeightG() {
+    return copperWeightG;
+  }
+
+  public void setCopperWeightG(BigDecimal copperWeightG) {
+    this.copperWeightG = copperWeightG;
   }
 
   public LocalDate getValidDate() {

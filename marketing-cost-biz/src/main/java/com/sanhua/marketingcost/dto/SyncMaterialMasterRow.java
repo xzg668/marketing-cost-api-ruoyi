@@ -9,7 +9,7 @@ import java.math.BigDecimal;
  * 不在它身上加 33 个新字段。同步路径专用一个独立 POJO 喂 UPSERT mapper 即可。
  *
  * <p>Service 层负责把 staging {@code lp_material_master_raw} 的 VARCHAR 字段类型转换
- * （g→kg / VARCHAR→DECIMAL/INT，转换失败置 null）、推断 business_unit_type，再喂这个对象。
+ * （VARCHAR→DECIMAL/INT，转换失败置 null）、推断 business_unit_type，再喂这个对象。
  */
 public class SyncMaterialMasterRow {
   private String materialCode;

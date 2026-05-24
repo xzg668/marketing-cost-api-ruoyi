@@ -11,8 +11,6 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
-import com.sanhua.marketingcost.dto.PriceScrapImportRequest;
-import com.sanhua.marketingcost.dto.PriceScrapUpdateRequest;
 import com.sanhua.marketingcost.entity.PriceScrap;
 import com.sanhua.marketingcost.mapper.PriceScrapMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
@@ -77,57 +75,6 @@ class PriceScrapServiceImplTest {
   }
 
   @Test
-  @DisplayName("T5 新增：同一 CMS 回收料号已有当前价时执行更新，不新增并行记录")
-  void createUpdatesExistingCurrentScrapCode() {
-    PriceScrap existing = scrap(12L, "301990317", "2026-03", "75.66");
-    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(existing));
-    PriceScrapUpdateRequest request = updateRequest("301 990317", "2026-05", "80.12");
-
-    PriceScrap result = service.create(request);
-
-    assertThat(result.getId()).isEqualTo(12L);
-    assertThat(result.getScrapCode()).isEqualTo("301990317");
-    assertThat(result.getPricingMonth()).isEqualTo("2026-05");
-    assertThat(result.getRecyclePrice()).isEqualByComparingTo("80.12");
-    verify(mapper, never()).insert(any(PriceScrap.class));
-    verify(mapper).updateById(existing);
-    assertThat(capturedSelectListWrapper().getCustomSqlSegment()).doesNotContain("pricing_month");
-  }
-
-  @Test
-  @DisplayName("T5 导入：重复 CMS 回收料号跨月份导入只更新同一条当前价")
-  void importItemsUpsertsSameCmsScrapCodeAcrossMonths() {
-    List<PriceScrap> repo = new ArrayList<>();
-    when(mapper.selectList(any(Wrapper.class)))
-        .thenAnswer(
-            invocation -> repo.isEmpty() ? List.of() : List.of(repo.get(0)));
-    when(mapper.insert(any(PriceScrap.class)))
-        .thenAnswer(
-            invocation -> {
-              PriceScrap row = invocation.getArgument(0);
-              row.setId(100L + repo.size());
-              repo.add(row);
-              return 1;
-            });
-
-    PriceScrapImportRequest request = new PriceScrapImportRequest();
-    request.setRows(
-        List.of(
-            importRow("301990317", "2026-03", "75.66"),
-            importRow("301 990317", "2026-05", "80.12")));
-
-    List<PriceScrap> imported = service.importItems(request);
-
-    assertThat(imported).hasSize(2);
-    assertThat(repo).hasSize(1);
-    assertThat(repo.get(0).getScrapCode()).isEqualTo("301990317");
-    assertThat(repo.get(0).getPricingMonth()).isEqualTo("2026-05");
-    assertThat(repo.get(0).getRecyclePrice()).isEqualByComparingTo("80.12");
-    verify(mapper).insert(any(PriceScrap.class));
-    verify(mapper).updateById(repo.get(0));
-  }
-
-  @Test
   @DisplayName("T5 批量当前价：返回 key 为标准化 CMS 回收料号的当前价 Map")
   void getCurrentByScrapCodesReturnsNormalizedKeyMap() {
     PriceScrap newer = scrap(12L, "301990317", "2026-05", "80.12");
@@ -152,28 +99,6 @@ class PriceScrapServiceImplTest {
     scrap.setDeleted(0);
     scrap.setBusinessUnitType("COMMERCIAL");
     return scrap;
-  }
-
-  private PriceScrapUpdateRequest updateRequest(String scrapCode, String pricingMonth, String price) {
-    PriceScrapUpdateRequest request = new PriceScrapUpdateRequest();
-    request.setScrapCode(scrapCode);
-    request.setPricingMonth(pricingMonth);
-    request.setScrapName("废紫铜沫（干净）");
-    request.setUnit("千克");
-    request.setRecyclePrice(new BigDecimal(price));
-    return request;
-  }
-
-  private PriceScrapImportRequest.PriceScrapImportRow importRow(
-      String scrapCode, String pricingMonth, String price) {
-    PriceScrapImportRequest.PriceScrapImportRow row =
-        new PriceScrapImportRequest.PriceScrapImportRow();
-    row.setScrapCode(scrapCode);
-    row.setPricingMonth(pricingMonth);
-    row.setScrapName("废紫铜沫（干净）");
-    row.setUnit("千克");
-    row.setRecyclePrice(new BigDecimal(price));
-    return row;
   }
 
   @SuppressWarnings({"unchecked", "rawtypes"})

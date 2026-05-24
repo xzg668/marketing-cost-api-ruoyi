@@ -7,6 +7,9 @@ import static org.mockito.Mockito.when;
 
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.sanhua.marketingcost.dto.PriceLinkedCalcPageResponse;
+import com.sanhua.marketingcost.dto.PriceLinkedCalcRow;
 import com.sanhua.marketingcost.dto.PriceLinkedCalcTraceResponse;
 import com.sanhua.marketingcost.service.PriceLinkedCalcService;
 import org.junit.jupiter.api.BeforeEach;
@@ -60,5 +63,58 @@ class PriceLinkedCalcControllerTest {
     assertThat(result.getCode()).isEqualTo(GlobalErrorCodeConstants.NOT_FOUND.getCode());
     assertThat(result.getMsg()).contains("not found");
     assertThat(result.getData()).isNull();
+  }
+
+  @Test
+  @DisplayName("/calc/results：只读结果查询透传场景、批次和来源过滤条件")
+  void results_passesFiltersToService() {
+    PriceLinkedCalcRow row = new PriceLinkedCalcRow();
+    row.setCalcId(7L);
+    row.setCalcScene("MONTHLY_ADJUST");
+    Page<PriceLinkedCalcRow> page = new Page<>(2, 50);
+    page.setTotal(1);
+    page.setRecords(java.util.List.of(row));
+    when(priceLinkedCalcService.resultPage(
+        "OA-001",
+        "客户A",
+        "COMMERCIAL",
+        "MAT",
+        "MONTHLY_ADJUST",
+        "2026-05",
+        88L,
+        "FAILED",
+        "ADJUST_BATCH",
+        2,
+        50))
+        .thenReturn(page);
+
+    CommonResult<PriceLinkedCalcPageResponse> result = controller.results(
+        "OA-001",
+        "客户A",
+        "COMMERCIAL",
+        "MAT",
+        "MONTHLY_ADJUST",
+        "2026-05",
+        88L,
+        "FAILED",
+        "ADJUST_BATCH",
+        2,
+        50);
+
+    assertThat(result.isSuccess()).isTrue();
+    assertThat(result.getData().getTotal()).isEqualTo(1);
+    assertThat(result.getData().getList().get(0).getCalcScene()).isEqualTo("MONTHLY_ADJUST");
+    verify(priceLinkedCalcService).resultPage(
+        "OA-001",
+        "客户A",
+        "COMMERCIAL",
+        "MAT",
+        "MONTHLY_ADJUST",
+        "2026-05",
+        88L,
+        "FAILED",
+        "ADJUST_BATCH",
+        2,
+        50);
   }
 }

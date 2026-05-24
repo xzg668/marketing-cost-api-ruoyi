@@ -20,7 +20,6 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Service;
 
 /**
  * 自制件取价 Resolver。
@@ -45,7 +44,7 @@ import org.springframework.stereotype.Service;
  * </ol>
  * 抵扣额：{@code (blank - net) × scrap_price / 1000}（g→kg 换算）
  */
-@Service
+@Deprecated
 public class MakeSpecPriceResolver implements PriceResolver {
 
   private static final Logger log = LoggerFactory.getLogger(MakeSpecPriceResolver.class);

@@ -12,6 +12,8 @@ public class OaFormExtraFee {
   private Long id;
   private Long oaFormId;
   private Long oaFormItemId;
+  private String feeScope;
+  private String businessUnitType;
   private String feeCode;
   private String feeName;
   private String feeCategory;
@@ -24,6 +26,7 @@ public class OaFormExtraFee {
   private String projectNo;
   private String sourceType;
   private String sourceFieldName;
+  private String sourceFieldPath;
   private String remark;
   private Long ingestLogId;
   private LocalDateTime createdAt;
@@ -51,6 +54,22 @@ public class OaFormExtraFee {
 
   public void setOaFormItemId(Long oaFormItemId) {
     this.oaFormItemId = oaFormItemId;
+  }
+
+  public String getFeeScope() {
+    return feeScope;
+  }
+
+  public void setFeeScope(String feeScope) {
+    this.feeScope = feeScope;
+  }
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
   }
 
   public String getFeeCode() {
@@ -147,6 +166,14 @@ public class OaFormExtraFee {
 
   public void setSourceFieldName(String sourceFieldName) {
     this.sourceFieldName = sourceFieldName;
+  }
+
+  public String getSourceFieldPath() {
+    return sourceFieldPath;
+  }
+
+  public void setSourceFieldPath(String sourceFieldPath) {
+    this.sourceFieldPath = sourceFieldPath;
   }
 
   public String getRemark() {

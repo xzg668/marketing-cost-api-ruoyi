@@ -17,6 +17,7 @@ import com.sanhua.marketingcost.entity.OtherExpenseRate;
 import com.sanhua.marketingcost.entity.ProductProperty;
 import com.sanhua.marketingcost.entity.QualityLossRate;
 import com.sanhua.marketingcost.entity.SalaryCost;
+import com.sanhua.marketingcost.entity.ThreeExpenseDimensionMapping;
 import com.sanhua.marketingcost.entity.ThreeExpenseRate;
 import com.sanhua.marketingcost.mapper.AuxCostItemMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
@@ -43,6 +44,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.format.DateTimeFormatter;
+import java.time.Year;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -91,6 +94,31 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private static final String OTHER_EXP_FREIGHT = "OTHER_EXP_FREIGHT";
   /** T11：lp_material_master.cost_element 表示包装材料的固定文本（U9 同步上来的中文枚举值） */
   private static final String COST_ELEMENT_PACKAGE = "主要材料-包装材料";
+  /** 报价净损失率匹配层级：产品料号。 */
+  private static final String LOSS_MATCH_LEVEL_MATERIAL_CODE = "MATERIAL_CODE";
+  /** 报价净损失率匹配层级：产品型号。 */
+  private static final String LOSS_MATCH_LEVEL_MATERIAL_MODEL = "MATERIAL_MODEL";
+  /** 制造费用率匹配层级：料号。 */
+  private static final String MANUFACTURE_MATCH_LEVEL_MATERIAL_CODE = "MATERIAL_CODE";
+  /** 制造费用率匹配层级：产品型号。 */
+  private static final String MANUFACTURE_MATCH_LEVEL_MATERIAL_MODEL = "MATERIAL_MODEL";
+  /** 制造费用率匹配层级：事业部 + 产品名称。 */
+  private static final String MANUFACTURE_MATCH_LEVEL_DIVISION_PRODUCT_NAME = "DIVISION_PRODUCT_NAME";
+  /** 制造费用率匹配层级：事业部。 */
+  private static final String MANUFACTURE_MATCH_LEVEL_DIVISION = "DIVISION";
+  private static final String MANUFACTURE_MATCH_KEY_SEPARATOR = "::";
+  private static final List<String> DEPARTMENT_SUBJECT_OVERHAUL = List.of("大修费用", "大修费");
+  private static final List<String> DEPARTMENT_SUBJECT_TOOLING =
+      List.of("工装零星费用", "工装零星修理费", "零星工装费用", "零星工装费");
+  private static final List<String> DEPARTMENT_SUBJECT_WATER = List.of("水电费用", "水电费", "水电");
+  private static final List<String> DEPARTMENT_SUBJECT_OTHER = List.of("其他费用");
+  private static final String THREE_EXPENSE_DIM_COMPANY = "COMPANY";
+  private static final String THREE_EXPENSE_DIM_DIVISION = "PRODUCTION_DIVISION";
+  private static final String THREE_EXPENSE_DIM_DEPARTMENT = "DEPARTMENT";
+  private static final String THREE_EXPENSE_DIM_OFFICE = "OFFICE";
+  private static final String THREE_EXPENSE_SOURCE_SYSTEM_OA = "OA";
+  private static final DateTimeFormatter ACCOUNTING_MONTH_FORMATTER =
+      DateTimeFormatter.ofPattern("yyyy-MM");
 
   // ==================== T24：见机表汇总行（BOM_BUCKET）相关常量 ====================
   /** T24：焊料桶 cost_code，对应 Excel 见机表 r44 "焊料" 1 行汇总 */
@@ -104,20 +132,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   /**
    * T24：包装算法系数（硬编码，业务方后续确认来源）。
    *
-   * <p>反算自 OA-001 实测：12.7212(子件SUM) × 1.05 ÷ 12 = 1.113105 = Excel 见机表 r45。
-   * 可能是包装管理费率 5%、Excel 硬编码 magic number、或别的业务规则。
+   * <p>包装组件父件金额已经由包装价格服务按子件价和 U9 母件底数折算完成；见机表只叠加 5%。
    * <b>TODO</b> 业务方拍板后改为从 lp_product_property / 配置表读取（v1-business-followup #T24）。
    */
   private static final BigDecimal PACKAGE_COEFFICIENT = new BigDecimal("1.05");
-  /**
-   * T24：包装数量（1 套包装管 N 台机），MVP 阶段硬编码 12（OA-001 实测值）。
-   *
-   * <p><b>风险</b>：多产品上线前必须接入数据源（候选：新建 lp_packaging_count 表 / 主档某字段 /
-   * U9 同步带过来）。当前算法对所有产品统一用 12，跑非 OA-001 产品会出错。
-   * <b>TODO</b> 业务方提供数据源后实现（v1-business-followup #T24）。
-   */
-  private static final BigDecimal PACKAGE_COUNT = new BigDecimal("12");
-
   private final CostRunCostItemMapper costRunCostItemMapper;
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
@@ -334,7 +352,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     BigDecimal indirectTotal = laborResult.indirectTotal;
     Map<String, LaborSum> laborByUnit = laborResult.laborByUnit;
 
-    DepartmentFeeResult feeResult = calculateDepartmentFees(laborByUnit);
+    DepartmentFeeResult feeResult =
+        calculateDepartmentFees(productCodeValue, laborByUnit, costSourceContext);
 
     List<String> costCodes = new ArrayList<>();
     costCodes.add(MATERIAL);
@@ -379,7 +398,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     // 3) 最后汇总材料费(部品+辅料+部门经费+见机表包装)
     //    Task #9：水电费默认不计入材料费（与 Excel 见机表3 口径对齐），
     //    通过 cost.material.includeWaterPower 开关保留 legacy 行为以便回溯。
-    //    T24：包装材料不能按原始子件 SUM 进材料费，需按见机表口径 SUM × 1.05 ÷ 12。
+    //    包装组件已在部品取价阶段按子件汇总价 / 母件底数折算成父件金额；
+    //    见机表只需对该包装父件金额乘 1.05。
     PartTotalSplit partSplit = splitPartAmount(oaNoValue, productCodeValue);
     BigDecimal partTotal = partSplit.nonPackageTotal();
     BigDecimal rawPackageAmount = partSplit.packageTotal();
@@ -387,7 +407,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     BigDecimal packageAmount =
         packageBucketAmount.signum() > 0 ? packageBucketAmount : rawPackageAmount;
     BigDecimal freightAmount = lookupFreight(oaNoValue, productCodeValue);
-    // T24：包装进 materialTotal；优先用见机表包装汇总，取不到包装组件数据时退回原始包装子件金额。
+    // 包装进 materialTotal；优先用包装组件父件新口径，取不到包装组件数据时退回原始包装件金额。
     //      totalAmount 只额外累加运费等真正价外项，避免重复。
     otherExpenseTotal = otherExpenseTotal.add(freightAmount);
     costCodes.add(OTHER_EXP_PACKAGE);
@@ -406,7 +426,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
             .add(packageAmount)
             .setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
     // T10：把 5 处 rate 缺失原因带回，组装 buildItem 时塞 remark
-    RateLookup lossLookup = findLossRate(laborByUnit);
+    RateLookup lossLookup = findLossRate(productCodeValue, costSourceContext);
     BigDecimal lossRate = lossLookup.rate();
     String lossRemark = lossLookup.remark();
     BigDecimal lossBase = materialTotal.add(directTotal).add(indirectTotal);
@@ -414,7 +434,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         lossRate == null
             ? null
             : lossBase.multiply(lossRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
-    RateLookup manufactureLookup = findManufactureRate(laborByUnit);
+    RateLookup manufactureLookup =
+        findManufactureRate(productCodeValue, materialCodes, costSourceContext);
     BigDecimal manufactureRate = manufactureLookup.rate();
     String manufactureRemark = manufactureLookup.remark();
     BigDecimal lossAmountValue = lossAmount == null ? BigDecimal.ZERO : lossAmount;
@@ -436,13 +457,17 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       }
     }
     // Task #9：产品属性系数 → 调整后制造成本 = 制造成本 × 系数；作为三项费用基数
-    BigDecimal coefficient = lookupProductCoefficient(productCodeValue);
+    ProductCoefficientLookup coefficientLookup =
+        lookupProductCoefficient(productCodeValue, costSourceContext);
+    BigDecimal coefficient = coefficientLookup.coefficient();
+    String adjustedManufactureRemark =
+        joinRemarks(manufactureRemark, coefficientLookup.remark());
     BigDecimal adjustedManufactureCost =
         manufactureCost == null
             ? null
             : manufactureCost.multiply(coefficient).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
 
-    ThreeExpenseLookup threeExpLookup = findThreeExpenseRate(laborByUnit);
+    ThreeExpenseLookup threeExpLookup = findThreeExpenseRate(costSourceContext);
     ThreeExpenseRate threeExpenseRate = threeExpLookup.rate();
     String threeExpRemark = threeExpLookup.remark();
     BigDecimal mgmtRate = threeExpenseRate == null ? null : threeExpenseRate.getManagementExpenseRate();
@@ -497,7 +522,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         manufactureCost,
         coefficient,
         adjustedManufactureCost,
-        manufactureRemark));
+        adjustedManufactureRemark));
     // T10：MGMT/SALES/FIN 三项共享 threeExpRemark
     items.add(buildItem(
         MGMT_EXP, "管理费用", adjustedManufactureCost, mgmtRate, mgmtAmount, threeExpRemark));
@@ -527,7 +552,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
     // T24：见机表原材料汇总（不参与 totalAmount 累加；category=BOM_BUCKET 与上面 EXPENSE 行严格隔离）
     //   - 焊料 BUCKET_WELD: Σ(part 子件 cost_element=主要材料-焊料)
-    //   - 包装 BUCKET_PACKAGE: Σ(BOM 父件 main_category=包装组件 子件 amount) × 1.05 ÷ 12
+    //   - 包装 BUCKET_PACKAGE: Σ(包装组件父件 amount) × 1.05
     List<CostRunCostItemDto> bucketItems = buildBucketItems(oaNoValue, productCodeValue);
     for (CostRunCostItemDto b : bucketItems) {
       items.add(b);
@@ -564,79 +589,47 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return result;
   }
 
-  /** T24：见机表包装金额 = 包装组件子件 SUM × 1.05 ÷ 12，用于材料费和 BOM_BUCKET_PACKAGE。 */
+  /** 见机表包装金额 = 包装组件父件金额 × 1.05，用于材料费和 BOM_BUCKET_PACKAGE。 */
   BigDecimal calculatePackageBucketAmount(String oaNoValue, String productCodeValue) {
-    BigDecimal pkgChildSum =
-        sumPartByBomParentMainCategory(oaNoValue, productCodeValue, MAIN_CATEGORY_PACKAGE);
-    if (pkgChildSum == null || pkgChildSum.signum() <= 0) {
+    BigDecimal packageParentAmount = sumPackageComponentParentAmount(oaNoValue, productCodeValue);
+    if (packageParentAmount == null || packageParentAmount.signum() <= 0) {
       return BigDecimal.ZERO;
     }
-    return pkgChildSum
-        .multiply(PACKAGE_COEFFICIENT)
-        .divide(PACKAGE_COUNT, AMOUNT_SCALE, RoundingMode.HALF_UP);
+    return packageParentAmount.multiply(PACKAGE_COEFFICIENT).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
   }
 
   /**
-   * T24：按 BOM 父件 main_category_name 聚合 part_item.amount。
+   * 按包装组件父件聚合 part_item.amount。
    *
-   * <p>用于"包装"这种"通过虚拟父件归集"的场景：包装子件本身的 main_category 是叶子分类
-   * （纸箱 / 纸质内附件），无法直接命中"包装组件"，必须先在 BOM 里找虚拟父件
-   * （main_category=包装组件 的 9830000026238 等）→ 取下挂子件 → SUM amount。
-   *
-   * <p>注意：包装组件父件可能是虚拟件，不在同步表 lp_material_master，必须查 raw 表。
-   *
-   * <p>包私有以便单测覆盖。
+   * <p>包装父件自身的 unit_price 已由 PackageComponentPriceService 按子件价、子件用量和
+   * U9 母件底数折算完成；这里不再展开子件，也不再硬编码 /12。
    */
-  BigDecimal sumPartByBomParentMainCategory(
-      String oaNo, String productCode, String parentMainCategory) {
-    // 1) 从 raw 主档拿到所有 main_category=parentMainCategory 的 material_code（候选父件集合）
-    List<MaterialMasterRaw> parentMasters =
-        materialMasterRawMapper.selectList(
-            Wrappers.lambdaQuery(MaterialMasterRaw.class)
-                .eq(MaterialMasterRaw::getMainCategoryName, parentMainCategory));
-    if (parentMasters == null || parentMasters.isEmpty()) {
+  BigDecimal sumPackageComponentParentAmount(String oaNo, String productCode) {
+    if (!StringUtils.hasText(oaNo) || !StringUtils.hasText(productCode)) {
       return BigDecimal.ZERO;
     }
-    Set<String> parentCodes = new LinkedHashSet<>();
-    for (MaterialMasterRaw m : parentMasters) {
-      if (StringUtils.hasText(m.getMaterialCode())) {
-        parentCodes.add(m.getMaterialCode());
-      }
-    }
-    if (parentCodes.isEmpty()) {
-      return BigDecimal.ZERO;
-    }
-    // 2) 在 BOM hierarchy 找 top_product_code=本产品 + parent_code 命中候选集合的所有子件
-    List<BomRawHierarchy> bomChildren =
-        bomRawHierarchyMapper.selectList(
-            Wrappers.lambdaQuery(BomRawHierarchy.class)
-                .eq(BomRawHierarchy::getTopProductCode, productCode)
-                .in(BomRawHierarchy::getParentCode, parentCodes));
-    if (bomChildren == null || bomChildren.isEmpty()) {
-      return BigDecimal.ZERO;
-    }
-    Set<String> targetChildCodes = new LinkedHashSet<>();
-    for (BomRawHierarchy c : bomChildren) {
-      if (StringUtils.hasText(c.getMaterialCode())) {
-        targetChildCodes.add(c.getMaterialCode());
-      }
-    }
-    if (targetChildCodes.isEmpty()) {
-      return BigDecimal.ZERO;
-    }
-    // 3) 在 part_item 里 SUM 命中子件的 amount
     List<CostRunPartItem> parts =
         costRunPartItemMapper.selectList(
             Wrappers.lambdaQuery(CostRunPartItem.class)
                 .eq(CostRunPartItem::getOaNo, oaNo)
-                .eq(CostRunPartItem::getProductCode, productCode)
-                .in(CostRunPartItem::getPartCode, targetChildCodes));
+                .eq(CostRunPartItem::getProductCode, productCode));
     if (parts == null || parts.isEmpty()) {
+      return BigDecimal.ZERO;
+    }
+    Set<String> partCodes = new LinkedHashSet<>();
+    for (CostRunPartItem p : parts) {
+      if (StringUtils.hasText(p.getPartCode())) {
+        partCodes.add(p.getPartCode().trim());
+      }
+    }
+    Set<String> packageParentCodes = lookupPackageComponentParentCodes(partCodes);
+    if (packageParentCodes.isEmpty()) {
       return BigDecimal.ZERO;
     }
     BigDecimal sum = BigDecimal.ZERO;
     for (CostRunPartItem p : parts) {
-      if (p.getAmount() != null) {
+      String code = p.getPartCode() == null ? null : p.getPartCode().trim();
+      if (code != null && packageParentCodes.contains(code) && p.getAmount() != null) {
         sum = sum.add(p.getAmount());
       }
     }
@@ -751,7 +744,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
   private CostSourceContext resolveCostSourceContext(String oaNo, String productCode) {
     if (!StringUtils.hasText(oaNo)) {
-      return new CostSourceContext(null, "");
+      return new CostSourceContext(Year.now().getValue(), "");
     }
     OaForm form =
         oaFormMapper.selectOne(
@@ -759,7 +752,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
                 .eq(OaForm::getOaNo, oaNo)
                 .last("LIMIT 1"));
     if (form == null) {
-      return new CostSourceContext(null, "");
+      return new CostSourceContext(Year.now().getValue(), "");
     }
     List<OaFormItem> rows =
         oaFormItemMapper.selectList(
@@ -771,7 +764,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
   private CostSourceContext resolveCostSourceContext(
       OaForm form, List<OaFormItem> formItems, String productCode) {
-    Integer costYear = null;
+    Integer costYear = form != null && form.getApplyDate() != null
+        ? form.getApplyDate().getYear()
+        : Year.now().getValue();
     String businessUnitType = null;
     if (formItems != null) {
       for (OaFormItem item : formItems) {
@@ -783,24 +778,46 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
             && !productCode.trim().equals(item.getMaterialNo().trim())) {
           continue;
         }
-        if (costYear == null && item.getValidDate() != null) {
-          costYear = item.getValidDate().getYear();
-        }
         if (businessUnitType == null) {
           businessUnitType = trimToNull(item.getBusinessUnitType());
         }
-        if (costYear != null && businessUnitType != null) {
+        if (businessUnitType != null) {
           break;
         }
       }
     }
-    if (costYear == null && form != null && form.getApplyDate() != null) {
-      costYear = form.getApplyDate().getYear();
-    }
     if (businessUnitType == null && form != null) {
       businessUnitType = trimToNull(form.getBusinessUnitType());
     }
-    return new CostSourceContext(costYear, normalizeBusinessUnit(businessUnitType));
+    String accountingPeriodMonth = null;
+    String sourceSystem = null;
+    String sourceCompany = null;
+    String sourceBusinessDivision = null;
+    String applicantDept = null;
+    String applicantOffice = null;
+    String expenseProductCategory = null;
+    if (form != null) {
+      accountingPeriodMonth = trimToNull(form.getAccountingPeriodMonth());
+      if (accountingPeriodMonth == null && form.getApplyDate() != null) {
+        accountingPeriodMonth = ACCOUNTING_MONTH_FORMATTER.format(form.getApplyDate());
+      }
+      sourceSystem = trimToNull(form.getSourceSystem());
+      sourceCompany = trimToNull(form.getSourceCompany());
+      sourceBusinessDivision = trimToNull(form.getSourceBusinessDivision());
+      applicantDept = trimToNull(form.getApplicantDept());
+      applicantOffice = trimToNull(form.getApplicantOffice());
+      expenseProductCategory = trimToNull(form.getExpenseProductCategory());
+    }
+    return new CostSourceContext(
+        costYear,
+        normalizeBusinessUnit(businessUnitType),
+        accountingPeriodMonth,
+        sourceSystem,
+        sourceCompany,
+        sourceBusinessDivision,
+        applicantDept,
+        applicantOffice,
+        expenseProductCategory);
   }
 
   private void ensureCmsCostSources(CostSourceContext costSourceContext) {
@@ -811,7 +828,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         costSourceContext.costYear, CMS_AUTO_OPERATOR, costSourceContext.businessUnitType);
   }
 
-  private DepartmentFeeResult calculateDepartmentFees(Map<String, LaborSum> laborByUnit) {
+  private DepartmentFeeResult calculateDepartmentFees(
+      String finishedProductCode, Map<String, LaborSum> laborByUnit, CostSourceContext costSourceContext) {
     DepartmentFeeResult result = new DepartmentFeeResult();
     if (laborByUnit.isEmpty()) {
       // T10：无人工数据 → 4 项部门费率项都不会算出来
@@ -819,128 +837,493 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       return result;
     }
 
-    boolean singleUnit = laborByUnit.size() == 1;
-    for (Map.Entry<String, LaborSum> entry : laborByUnit.entrySet()) {
-      String businessUnit = entry.getKey();
-      LaborSum sum = entry.getValue();
-      // T19：走 cached lookup
-      DepartmentFundRate fundRate = cacheLookup.findDepartmentFundRate(businessUnit);
-      if (fundRate == null) {
-        // T10：单事业部缺率 → 4 项费率都缺；记 remark；多事业部下不覆盖（避免互相覆盖丢信息）
-        if (singleUnit) {
-          result.remark =
-              "lp_department_fund_rate 无 businessUnit=" + businessUnit + " 配置";
-        }
-        continue;
-      }
-
-      BigDecimal manhourRate = fundRate.getManhourRate();
-      if (!isPositive(manhourRate)) {
-        if (singleUnit) {
-          result.remark =
-              "lp_department_fund_rate.manhour_rate 非正数, businessUnit=" + businessUnit;
-        }
-        continue;
-      }
-
-      BigDecimal laborTotal = sum.direct.add(sum.indirect);
-      BigDecimal manhourCost = divide(laborTotal, manhourRate);
-      BigDecimal upliftRate = fundRate.getUpliftRate() == null ? BigDecimal.ONE : fundRate.getUpliftRate();
-
-      BigDecimal overhaulRate = multiplyRate(fundRate.getOverhaulRate(), upliftRate);
-      BigDecimal toolingRate = multiplyRate(fundRate.getToolingRepairRate(), upliftRate);
-      BigDecimal waterRate = multiplyRate(fundRate.getWaterPowerRate(), upliftRate);
-      BigDecimal otherRate = multiplyRate(fundRate.getOtherRate(), upliftRate);
-
-      result.overhaul = result.overhaul.add(multiplyAmount(manhourCost, overhaulRate));
-      result.toolingRepair = result.toolingRepair.add(multiplyAmount(manhourCost, toolingRate));
-      result.waterPower = result.waterPower.add(multiplyAmount(manhourCost, waterRate));
-      result.other = result.other.add(multiplyAmount(manhourCost, otherRate));
-
-      if (singleUnit) {
-        result.baseAmount = manhourCost;
-        result.overhaulRate = overhaulRate;
-        result.toolingRepairRate = toolingRate;
-        result.waterPowerRate = waterRate;
-        result.otherRate = otherRate;
-      }
+    BigDecimal laborTotal = BigDecimal.ZERO;
+    for (LaborSum sum : laborByUnit.values()) {
+      laborTotal = laborTotal.add(sum.direct).add(sum.indirect);
     }
+    String businessUnitType =
+        costSourceContext == null ? "" : normalizeBusinessUnit(costSourceContext.businessUnitType);
+    Integer rateYear =
+        costSourceContext == null || costSourceContext.costYear == null
+            ? null
+            : costSourceContext.costYear;
 
-    if (!singleUnit) {
-      result.baseAmount = null;
-      result.overhaulRate = null;
-      result.toolingRepairRate = null;
-      result.waterPowerRate = null;
-      result.otherRate = null;
-    }
+    DepartmentSubjectAmount overhaul =
+        calculateDepartmentSubjectAmount(
+            finishedProductCode, rateYear, businessUnitType, DEPARTMENT_SUBJECT_OVERHAUL, laborTotal);
+    DepartmentSubjectAmount tooling =
+        calculateDepartmentSubjectAmount(
+            finishedProductCode, rateYear, businessUnitType, DEPARTMENT_SUBJECT_TOOLING, laborTotal);
+    DepartmentSubjectAmount water =
+        calculateDepartmentSubjectAmount(
+            finishedProductCode, rateYear, businessUnitType, DEPARTMENT_SUBJECT_WATER, laborTotal);
+    DepartmentSubjectAmount other =
+        calculateDepartmentSubjectAmount(
+            finishedProductCode, rateYear, businessUnitType, DEPARTMENT_SUBJECT_OTHER, laborTotal);
+
+    result.overhaul = amountOrZero(overhaul.amount());
+    result.toolingRepair = amountOrZero(tooling.amount());
+    result.waterPower = amountOrZero(water.amount());
+    result.other = amountOrZero(other.amount());
+    result.baseAmount = firstNonNull(overhaul.baseAmount(), tooling.baseAmount(), water.baseAmount(), other.baseAmount());
+    result.overhaulRate = overhaul.rate();
+    result.toolingRepairRate = tooling.rate();
+    result.waterPowerRate = water.rate();
+    result.otherRate = other.rate();
+    result.remark =
+        joinRemarks(overhaul.remark(), tooling.remark(), water.remark(), other.remark());
     return result;
   }
 
-  /**
-   * T10：查损失率，把"缺率"原因带回去；正常命中 remark=null。
-   *
-   * <p>多事业部 / 事业部为空 / 表里查不到 都给独立 remark 文案，便于前端定位是配置缺失还是数据异常。
-   */
-  private RateLookup findLossRate(Map<String, LaborSum> laborByUnit) {
-    if (laborByUnit == null || laborByUnit.isEmpty()) {
-      return new RateLookup(null, "无人工数据(lp_salary_cost 缺料号)，无法取损失率");
-    }
-    if (laborByUnit.size() > 1) {
-      return new RateLookup(null, "OA 含多事业部" + laborByUnit.keySet() + "，未取损失率");
-    }
-    String businessUnit = laborByUnit.keySet().iterator().next();
-    if (!StringUtils.hasText(businessUnit)) {
-      return new RateLookup(null, "事业部为空，未取损失率");
-    }
-    // T19：走 cached lookup（5min TTL）
-    QualityLossRate rate = cacheLookup.findQualityLossRate(businessUnit);
+  private DepartmentSubjectAmount calculateDepartmentSubjectAmount(
+      String finishedProductCode,
+      Integer rateYear,
+      String businessUnitType,
+      List<String> expenseSubjects,
+      BigDecimal laborTotal) {
+    DepartmentFundLookup lookup =
+        findDepartmentFundRate(finishedProductCode, rateYear, businessUnitType, expenseSubjects);
+    DepartmentFundRate rate = lookup.rate();
     if (rate == null) {
-      return new RateLookup(null, "lp_quality_loss_rate 无 businessUnit=" + businessUnit + " 配置");
+      return new DepartmentSubjectAmount(null, null, null, lookup.remark());
+    }
+    BigDecimal manhourRate = rate.getManhourRate();
+    if (!isPositive(manhourRate)) {
+      return new DepartmentSubjectAmount(
+          null,
+          null,
+          null,
+          "lp_department_fund_rate.manhour_rate 非正数, id=" + rate.getId());
+    }
+    BigDecimal quoteRatio = rate.getQuoteRatio();
+    if (quoteRatio == null) {
+      return new DepartmentSubjectAmount(
+          null,
+          null,
+          null,
+          "lp_department_fund_rate.quote_ratio 为空, id=" + rate.getId());
+    }
+    BigDecimal manhourCost = divide(laborTotal, manhourRate);
+    return new DepartmentSubjectAmount(
+        manhourCost, quoteRatio, multiplyAmount(manhourCost, quoteRatio), null);
+  }
+
+  private DepartmentFundLookup findDepartmentFundRate(
+      String finishedProductCode,
+      Integer rateYear,
+      String businessUnitType,
+      List<String> expenseSubjects) {
+    String code = trimToNull(finishedProductCode);
+    if (rateYear == null) {
+      return new DepartmentFundLookup(null, "部门经费率未命中：报价时间为空，无法确定年度");
+    }
+    if (code == null) {
+      return new DepartmentFundLookup(null, "部门经费率未命中：报价单产品料号为空");
+    }
+    MaterialMasterRaw raw = lookupMaterialByCode(code);
+    String productionDivision = trimToNull(raw == null ? null : raw.getProductionDivision());
+    if (productionDivision == null) {
+      return new DepartmentFundLookup(
+          null, "部门经费率未命中：报价料号 " + code + " 在 lp_material_master_raw 未找到 production_division");
+    }
+    for (String subject : expenseSubjects) {
+      DepartmentFundRate rate =
+          findDepartmentFundRateBySubject(productionDivision, subject, rateYear, businessUnitType);
+      if (rate != null) {
+        return new DepartmentFundLookup(rate, null);
+      }
+    }
+    return new DepartmentFundLookup(
+        null,
+        "部门经费率未命中：报价料号 "
+            + code
+            + " 主档事业部 "
+            + productionDivision
+            + "，"
+            + rateYear
+            + " 年费用科目 "
+            + String.join("/", expenseSubjects)
+            + " 无配置");
+  }
+
+  private DepartmentFundRate findDepartmentFundRateBySubject(
+      String businessDivision, String expenseSubject, Integer rateYear, String businessUnitType) {
+    if (!StringUtils.hasText(businessDivision)
+        || !StringUtils.hasText(expenseSubject)
+        || rateYear == null) {
+      return null;
+    }
+    var query =
+        Wrappers.lambdaQuery(DepartmentFundRate.class)
+            .eq(DepartmentFundRate::getRateYear, rateYear)
+            .eq(DepartmentFundRate::getBusinessDivision, businessDivision.trim())
+            .eq(DepartmentFundRate::getExpenseSubject, expenseSubject.trim())
+            .eq(
+                StringUtils.hasText(businessUnitType),
+                DepartmentFundRate::getBusinessUnitType,
+                businessUnitType.trim())
+            .orderByDesc(DepartmentFundRate::getId)
+            .last("LIMIT 1");
+    return departmentFundRateMapper.selectOne(query);
+  }
+
+  /**
+   * 报价净损失率：先按当前报价产品料号匹配；料号未命中，再用该料号查 raw 主档 material_model 按型号匹配。
+   */
+  private RateLookup findLossRate(String productCode, CostSourceContext costSourceContext) {
+    String code = trimToNull(productCode);
+    if (code == null) {
+      return new RateLookup(null, "产品料号为空，无法匹配报价净损失率");
+    }
+    Integer rateYear =
+        costSourceContext == null || costSourceContext.costYear == null
+            ? Year.now().getValue()
+            : costSourceContext.costYear;
+    String businessUnitType =
+        costSourceContext == null ? "" : normalizeBusinessUnit(costSourceContext.businessUnitType);
+
+    QualityLossRate codeRate =
+        findQualityLossRateByMatch(
+            LOSS_MATCH_LEVEL_MATERIAL_CODE, code, rateYear, businessUnitType);
+    RateLookup codeLookup = toLossLookup(codeRate);
+    if (codeLookup != null) {
+      return codeLookup;
+    }
+
+    String materialModel = lookupMaterialModelByCode(code);
+    if (materialModel == null) {
+      return new RateLookup(
+          null,
+          "lp_quality_loss_rate 无产品料号="
+              + code
+              + "、rateYear="
+              + rateYear
+              + " 配置；且 lp_material_master_raw 未找到 material_model");
+    }
+    QualityLossRate modelRate =
+        findQualityLossRateByMatch(
+            LOSS_MATCH_LEVEL_MATERIAL_MODEL, materialModel, rateYear, businessUnitType);
+    RateLookup modelLookup = toLossLookup(modelRate);
+    if (modelLookup != null) {
+      return modelLookup;
+    }
+    return new RateLookup(
+        null,
+        "lp_quality_loss_rate 无产品料号="
+            + code
+            + " 或产品型号="
+            + materialModel
+            + "、rateYear="
+            + rateYear
+            + " 配置");
+  }
+
+  private QualityLossRate findQualityLossRateByMatch(
+      String matchLevel, String matchKey, Integer rateYear, String businessUnitType) {
+    if (!StringUtils.hasText(matchLevel) || !StringUtils.hasText(matchKey) || rateYear == null) {
+      return null;
+    }
+    var query =
+        Wrappers.lambdaQuery(QualityLossRate.class)
+            .eq(QualityLossRate::getRateYear, rateYear)
+            .eq(QualityLossRate::getMatchLevel, matchLevel.trim())
+            .eq(QualityLossRate::getMatchKey, matchKey.trim())
+            .eq(
+                StringUtils.hasText(businessUnitType),
+                QualityLossRate::getBusinessUnitType,
+                businessUnitType.trim())
+            .orderByDesc(QualityLossRate::getId)
+            .last("LIMIT 1");
+    return qualityLossRateMapper.selectOne(query);
+  }
+
+  private RateLookup toLossLookup(QualityLossRate rate) {
+    if (rate == null) {
+      return null;
+    }
+    if (rate.getLossRate() == null) {
+      return new RateLookup(null, "lp_quality_loss_rate.loss_rate 为空 (id=" + rate.getId() + ")");
     }
     return new RateLookup(rate.getLossRate(), null);
   }
 
-  /** T10：查制造费用率，缺率原因随返回；同 findLossRate 文案规则。 */
-  private RateLookup findManufactureRate(Map<String, LaborSum> laborByUnit) {
-    if (laborByUnit == null || laborByUnit.isEmpty()) {
-      return new RateLookup(null, "无人工数据(lp_salary_cost 缺料号)，无法取制造费用率");
+  private String lookupMaterialModelByCode(String productCode) {
+    MaterialMasterRaw row = lookupMaterialByCode(productCode);
+    return trimToNull(row == null ? null : row.getMaterialModel());
+  }
+
+  private MaterialMasterRaw lookupMaterialByCode(String materialCode) {
+    if (!StringUtils.hasText(materialCode)) {
+      return null;
     }
-    if (laborByUnit.size() > 1) {
-      return new RateLookup(null, "OA 含多事业部" + laborByUnit.keySet() + "，未取制造费用率");
+    List<MaterialMasterRaw> rows =
+        materialMasterRawMapper.selectByLatestBatchAndCodes(List.of(materialCode.trim()), null);
+    if (rows == null || rows.isEmpty()) {
+      return null;
     }
-    String businessUnit = laborByUnit.keySet().iterator().next();
-    if (!StringUtils.hasText(businessUnit)) {
-      return new RateLookup(null, "事业部为空，未取制造费用率");
+    return rows.get(0);
+  }
+
+  /** 制造费用率：成品料号优先；未命中时按成本料号查 U9 型号、名称+事业部；最后按成品料号事业部兜底。 */
+  private RateLookup findManufactureRate(
+      String finishedProductCode, Set<String> costMaterialCodes, CostSourceContext costSourceContext) {
+    String finishedCode = trimToNull(finishedProductCode);
+    Integer rateYear =
+        costSourceContext == null || costSourceContext.costYear == null
+            ? Year.now().getValue()
+            : costSourceContext.costYear;
+    String businessUnitType =
+        costSourceContext == null ? "" : normalizeBusinessUnit(costSourceContext.businessUnitType);
+    List<String> missReasons = new ArrayList<>();
+
+    if (finishedCode != null) {
+      ManufactureRate codeRate =
+          findManufactureRateByMatch(
+              MANUFACTURE_MATCH_LEVEL_MATERIAL_CODE, finishedCode, rateYear, businessUnitType);
+      RateLookup codeLookup = toManufactureLookup(codeRate);
+      if (codeLookup != null) {
+        return codeLookup;
+      }
+      missReasons.add("成品料号 " + finishedCode + " 无料号级配置");
+    } else {
+      missReasons.add("成品料号为空，无法做料号级和事业部级匹配");
     }
-    // T19：走 cached lookup
-    ManufactureRate rate = cacheLookup.findManufactureRate(businessUnit);
+
+    for (String costCodeValue : normalizeCostMaterialCodes(costMaterialCodes, finishedCode)) {
+      MaterialMasterRaw raw = lookupMaterialByCode(costCodeValue);
+      if (raw == null) {
+        missReasons.add("成本料号 " + costCodeValue + " 未找到 U9 主档");
+        continue;
+      }
+      String materialModel = trimToNull(raw.getMaterialModel());
+      if (materialModel != null) {
+        ManufactureRate modelRate =
+            findManufactureRateByMatch(
+                MANUFACTURE_MATCH_LEVEL_MATERIAL_MODEL, materialModel, rateYear, businessUnitType);
+        RateLookup modelLookup = toManufactureLookup(modelRate);
+        if (modelLookup != null) {
+          return modelLookup;
+        }
+        missReasons.add("成本料号 " + costCodeValue + " 主档型号 " + materialModel + " 无型号级配置");
+      } else {
+        missReasons.add("成本料号 " + costCodeValue + " 主档 product_model 为空");
+      }
+
+      String materialName = trimToNull(raw.getMaterialName());
+      String division = trimToNull(raw.getProductionDivision());
+      if (materialName != null && division != null) {
+        String matchKey = buildManufactureDivisionProductKey(division, materialName);
+        ManufactureRate nameRate =
+            findManufactureRateByMatch(
+                MANUFACTURE_MATCH_LEVEL_DIVISION_PRODUCT_NAME, matchKey, rateYear, businessUnitType);
+        RateLookup nameLookup = toManufactureLookup(nameRate);
+        if (nameLookup != null) {
+          return nameLookup;
+        }
+        missReasons.add(
+            "成本料号 " + costCodeValue + " 主档名称/事业部 " + materialName + "/" + division
+                + " 无产品名称+事业部配置");
+      } else {
+        missReasons.add("成本料号 " + costCodeValue + " 主档 material_name 或 production_division 为空");
+      }
+    }
+
+    if (finishedCode != null) {
+      MaterialMasterRaw finishedRaw = lookupMaterialByCode(finishedCode);
+      String finishedDivision =
+          trimToNull(finishedRaw == null ? null : finishedRaw.getProductionDivision());
+      if (finishedDivision != null) {
+        ManufactureRate divisionRate =
+            findManufactureRateByMatch(
+                MANUFACTURE_MATCH_LEVEL_DIVISION, finishedDivision, rateYear, businessUnitType);
+        RateLookup divisionLookup = toManufactureLookup(divisionRate);
+        if (divisionLookup != null) {
+          return divisionLookup;
+        }
+        missReasons.add("成品料号 " + finishedCode + " 主档事业部 " + finishedDivision + " 无事业部级配置");
+      } else {
+        missReasons.add("成品料号 " + finishedCode + " 未找到 U9 主档事业部");
+      }
+    }
+
+    return new RateLookup(
+        null,
+        "制造费用率未命中：rateYear="
+            + rateYear
+            + "，businessUnitType="
+            + (StringUtils.hasText(businessUnitType) ? businessUnitType : "空")
+            + "；"
+            + String.join("；", missReasons));
+  }
+
+  private List<String> normalizeCostMaterialCodes(Set<String> costMaterialCodes, String fallbackCode) {
+    LinkedHashSet<String> codes = new LinkedHashSet<>();
+    if (costMaterialCodes != null) {
+      for (String code : costMaterialCodes) {
+        String value = trimToNull(code);
+        if (value != null) {
+          codes.add(value);
+        }
+      }
+    }
+    if (codes.isEmpty() && StringUtils.hasText(fallbackCode)) {
+      codes.add(fallbackCode.trim());
+    }
+    return new ArrayList<>(codes);
+  }
+
+  private ManufactureRate findManufactureRateByMatch(
+      String matchLevel, String matchKey, Integer rateYear, String businessUnitType) {
+    if (!StringUtils.hasText(matchLevel) || !StringUtils.hasText(matchKey) || rateYear == null) {
+      return null;
+    }
+    var query =
+        Wrappers.lambdaQuery(ManufactureRate.class)
+            .eq(ManufactureRate::getRateYear, rateYear)
+            .eq(ManufactureRate::getMatchLevel, matchLevel.trim())
+            .eq(ManufactureRate::getMatchKey, matchKey.trim())
+            .eq(
+                StringUtils.hasText(businessUnitType),
+                ManufactureRate::getBusinessUnitType,
+                businessUnitType.trim())
+            .orderByDesc(ManufactureRate::getId)
+            .last("LIMIT 1");
+    return manufactureRateMapper.selectOne(query);
+  }
+
+  private RateLookup toManufactureLookup(ManufactureRate rate) {
     if (rate == null) {
-      return new RateLookup(null, "lp_manufacture_rate 无 businessUnit=" + businessUnit + " 配置");
+      return null;
+    }
+    if (rate.getFeeRate() == null) {
+      return new RateLookup(null, "lp_manufacture_rate.fee_rate 为空 (id=" + rate.getId() + ")");
     }
     return new RateLookup(rate.getFeeRate(), null);
+  }
+
+  private String buildManufactureDivisionProductKey(String division, String productName) {
+    return division + MANUFACTURE_MATCH_KEY_SEPARATOR + productName;
   }
 
   /**
    * T10：查三项费用率，包成 (rate, remark)；MGMT/SALES/FIN 三项共用同一 remark。
    * 缺率时 rate=null；命中正常时 remark=null。
    */
-  private ThreeExpenseLookup findThreeExpenseRate(Map<String, LaborSum> laborByUnit) {
-    if (laborByUnit == null || laborByUnit.isEmpty()) {
-      return new ThreeExpenseLookup(null, "无人工数据(lp_salary_cost 缺料号)，无法取三项费用率");
+  private ThreeExpenseLookup findThreeExpenseRate(CostSourceContext context) {
+    if (context == null) {
+      return new ThreeExpenseLookup(null, "三项费用未命中：报价单核算维度上下文为空");
     }
-    if (laborByUnit.size() > 1) {
-      return new ThreeExpenseLookup(null, "OA 含多事业部" + laborByUnit.keySet() + "，未取三项费用率");
+    String missing = firstMissingDimension(context);
+    if (missing != null) {
+      return new ThreeExpenseLookup(null, "三项费用未命中：报价单核算维度缺失 " + missing);
     }
-    String businessUnit = laborByUnit.keySet().iterator().next();
-    if (!StringUtils.hasText(businessUnit)) {
-      return new ThreeExpenseLookup(null, "事业部为空，未取三项费用率");
+    DimensionLookup company =
+        resolveThreeExpenseDimension(
+            context, THREE_EXPENSE_DIM_COMPANY, context.sourceCompany, "company");
+    if (company.missingRemark() != null) {
+      return new ThreeExpenseLookup(null, company.missingRemark());
     }
-    // T19：走 cached lookup
-    ThreeExpenseRate rate = cacheLookup.findThreeExpenseRate(businessUnit);
+    DimensionLookup division =
+        resolveThreeExpenseDimension(
+            context, THREE_EXPENSE_DIM_DIVISION, context.sourceBusinessDivision, "productionDivision");
+    if (division.missingRemark() != null) {
+      return new ThreeExpenseLookup(null, division.missingRemark());
+    }
+    DimensionLookup department =
+        resolveThreeExpenseDimension(
+            context, THREE_EXPENSE_DIM_DEPARTMENT, context.applicantDept, "department");
+    if (department.missingRemark() != null) {
+      return new ThreeExpenseLookup(null, department.missingRemark());
+    }
+    DimensionLookup office =
+        resolveThreeExpenseDimension(
+            context, THREE_EXPENSE_DIM_OFFICE, context.applicantOffice, "office");
+    if (office.missingRemark() != null) {
+      return new ThreeExpenseLookup(null, office.missingRemark());
+    }
+    String productCategory = "";
+    String productLine = "";
+    ThreeExpenseRate rate =
+        cacheLookup.findThreeExpenseRate(
+            context.businessUnitType,
+            context.accountingPeriodMonth,
+            company.standardValue(),
+            division.standardValue(),
+            department.standardValue(),
+            office.standardValue(),
+            productCategory,
+            productLine);
     if (rate == null) {
-      return new ThreeExpenseLookup(null, "lp_three_expense_rate 无 businessUnit=" + businessUnit + " 配置");
+      return new ThreeExpenseLookup(
+          null,
+          "三项费用未命中：periodMonth="
+              + context.accountingPeriodMonth
+              + "，businessUnitType="
+              + context.businessUnitType
+              + "，company: "
+              + context.sourceCompany
+              + " -> "
+              + company.standardValue()
+              + "，productionDivision: "
+              + context.sourceBusinessDivision
+              + " -> "
+              + division.standardValue()
+              + "，department: "
+              + context.applicantDept
+              + " -> "
+              + department.standardValue()
+              + "，office: "
+              + context.applicantOffice
+              + " -> "
+              + office.standardValue()
+              + "，expenseProductCategory="
+              + valueOrEmpty(context.expenseProductCategory));
     }
     return new ThreeExpenseLookup(rate, null);
+  }
+
+  private String firstMissingDimension(CostSourceContext context) {
+    if (!StringUtils.hasText(context.businessUnitType)) {
+      return "businessUnitType";
+    }
+    if (!StringUtils.hasText(context.accountingPeriodMonth)) {
+      return "accountingPeriodMonth";
+    }
+    if (!StringUtils.hasText(context.sourceCompany)) {
+      return "sourceCompany";
+    }
+    if (!StringUtils.hasText(context.sourceBusinessDivision)) {
+      return "sourceBusinessDivision";
+    }
+    if (!StringUtils.hasText(context.applicantDept)) {
+      return "applicantDept";
+    }
+    if (!StringUtils.hasText(context.applicantOffice)) {
+      return "applicantOffice";
+    }
+    return null;
+  }
+
+  private DimensionLookup resolveThreeExpenseDimension(
+      CostSourceContext context, String dimensionType, String sourceValue, String label) {
+    String sourceSystem =
+        StringUtils.hasText(context.sourceSystem) ? context.sourceSystem : THREE_EXPENSE_SOURCE_SYSTEM_OA;
+    ThreeExpenseDimensionMapping mapping =
+        cacheLookup.findThreeExpenseDimensionMapping(
+            context.businessUnitType, dimensionType, sourceSystem, sourceValue);
+    if (mapping == null || !StringUtils.hasText(mapping.getStandardValue())) {
+      return new DimensionLookup(
+          null,
+          "三项费用未命中："
+              + dimensionType
+              + " 未配置映射，sourceValue="
+              + sourceValue
+              + "，sourceSystem="
+              + sourceSystem
+              + "，businessUnitType="
+              + context.businessUnitType);
+    }
+    return new DimensionLookup(mapping.getStandardValue().trim(), null);
   }
 
   /** T10：单事业部 → rate 元组；多事业部场景 rate=null+remark 由调用侧组装。 */
@@ -948,6 +1331,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
   /** T10：三项费用率元组，命中时 rate 为整行 ThreeExpenseRate，缺时 null+remark。 */
   private record ThreeExpenseLookup(ThreeExpenseRate rate, String remark) {}
+
+  private record DimensionLookup(String standardValue, String missingRemark) {}
 
   private void saveCostRunItems(
       String oaNo, String productCode, List<CostRunCostItemDto> items, List<String> costCodes) {
@@ -1338,6 +1723,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       }
     }
     Set<String> packageCodes = lookupPackageCodes(partCodes);
+    packageCodes.addAll(lookupPackageComponentParentCodes(partCodes));
     BigDecimal pkg = BigDecimal.ZERO;
     BigDecimal nonPkg = BigDecimal.ZERO;
     for (CostRunPartItem item : items) {
@@ -1371,6 +1757,26 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     for (MaterialMaster m : rows) {
       if (m.getMaterialCode() != null) {
         result.add(m.getMaterialCode());
+      }
+    }
+    return result;
+  }
+
+  /** 从 raw 主档识别包装组件父件料号；父件通常是虚拟件，不一定在同步主档。 */
+  private Set<String> lookupPackageComponentParentCodes(Set<String> partCodes) {
+    if (partCodes == null || partCodes.isEmpty()) {
+      return Collections.emptySet();
+    }
+    List<MaterialMasterRaw> rows =
+        materialMasterRawMapper.selectPackageComponentParentsByLatestBatch(MAIN_CATEGORY_PACKAGE, null);
+    if (rows == null || rows.isEmpty()) {
+      return Collections.emptySet();
+    }
+    Set<String> result = new LinkedHashSet<>();
+    for (MaterialMasterRaw row : rows) {
+      String code = row.getMaterialCode() == null ? null : row.getMaterialCode().trim();
+      if (code != null && partCodes.contains(code)) {
+        result.add(code);
       }
     }
     return result;
@@ -1447,9 +1853,51 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return value.trim();
   }
 
+  private String valueOrEmpty(String value) {
+    String trimmed = trimToNull(value);
+    return trimmed == null ? "" : trimmed;
+  }
+
   private String normalizeBusinessUnit(String businessUnitType) {
     String value = trimToNull(businessUnitType);
     return value == null ? "" : value;
+  }
+
+  private String joinRemarks(String first, String second) {
+    if (!StringUtils.hasText(first)) {
+      return trimToNull(second);
+    }
+    if (!StringUtils.hasText(second)) {
+      return trimToNull(first);
+    }
+    return first.trim() + "；" + second.trim();
+  }
+
+  private String joinRemarks(String... remarks) {
+    String result = null;
+    if (remarks == null) {
+      return null;
+    }
+    for (String remark : remarks) {
+      result = joinRemarks(result, remark);
+    }
+    return result;
+  }
+
+  private BigDecimal amountOrZero(BigDecimal amount) {
+    return amount == null ? BigDecimal.ZERO : amount;
+  }
+
+  private BigDecimal firstNonNull(BigDecimal... values) {
+    if (values == null) {
+      return null;
+    }
+    for (BigDecimal value : values) {
+      if (value != null) {
+        return value;
+      }
+    }
+    return null;
   }
 
   private boolean isCmsSource(String source) {
@@ -1513,6 +1961,41 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return property.getCoefficient();
   }
 
+  ProductCoefficientLookup lookupProductCoefficient(
+      String productCode, CostSourceContext costSourceContext) {
+    Integer propertyYear = costSourceContext == null ? Year.now().getValue() : costSourceContext.costYear;
+    String businessUnitType = costSourceContext == null ? "" : costSourceContext.businessUnitType;
+    return lookupProductCoefficient(productCode, propertyYear, businessUnitType);
+  }
+
+  ProductCoefficientLookup lookupProductCoefficient(
+      String productCode, Integer propertyYear, String businessUnitType) {
+    if (!StringUtils.hasText(productCode)) {
+      return new ProductCoefficientLookup(BigDecimal.ONE, "产品料号为空，产品属性系数回落=1");
+    }
+    ProductProperty property =
+        cacheLookup.findProductProperty(productCode, propertyYear, businessUnitType);
+    if (property == null || property.getCoefficient() == null) {
+      String remark =
+          "产品属性系数未命中，回落=1：productCode="
+              + productCode.trim()
+              + "，propertyYear="
+              + propertyYear
+              + "，businessUnitType="
+              + (StringUtils.hasText(businessUnitType) ? businessUnitType : "空");
+      log.debug(remark);
+      return new ProductCoefficientLookup(BigDecimal.ONE, remark);
+    }
+    return new ProductCoefficientLookup(property.getCoefficient(), null);
+  }
+
+  record ProductCoefficientLookup(BigDecimal coefficient, String remark) {}
+
+  private record DepartmentFundLookup(DepartmentFundRate rate, String remark) {}
+
+  private record DepartmentSubjectAmount(
+      BigDecimal baseAmount, BigDecimal rate, BigDecimal amount, String remark) {}
+
   private static class LaborSum {
     private BigDecimal direct = BigDecimal.ZERO;
     private BigDecimal indirect = BigDecimal.ZERO;
@@ -1531,10 +2014,37 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private static class CostSourceContext {
     private final Integer costYear;
     private final String businessUnitType;
+    private final String accountingPeriodMonth;
+    private final String sourceSystem;
+    private final String sourceCompany;
+    private final String sourceBusinessDivision;
+    private final String applicantDept;
+    private final String applicantOffice;
+    private final String expenseProductCategory;
 
     private CostSourceContext(Integer costYear, String businessUnitType) {
+      this(costYear, businessUnitType, null, null, null, null, null, null, null);
+    }
+
+    private CostSourceContext(
+        Integer costYear,
+        String businessUnitType,
+        String accountingPeriodMonth,
+        String sourceSystem,
+        String sourceCompany,
+        String sourceBusinessDivision,
+        String applicantDept,
+        String applicantOffice,
+        String expenseProductCategory) {
       this.costYear = costYear;
       this.businessUnitType = businessUnitType == null ? "" : businessUnitType;
+      this.accountingPeriodMonth = accountingPeriodMonth;
+      this.sourceSystem = sourceSystem;
+      this.sourceCompany = sourceCompany;
+      this.sourceBusinessDivision = sourceBusinessDivision;
+      this.applicantDept = applicantDept;
+      this.applicantOffice = applicantOffice;
+      this.expenseProductCategory = expenseProductCategory;
     }
   }
 

@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service;
 
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewRequest;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewResponse;
+import com.sanhua.marketingcost.dto.LinkedPriceVariableContext;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import java.math.BigDecimal;
@@ -50,5 +51,15 @@ public interface PriceLinkedFormulaPreviewService {
       Map<String, BigDecimal> variableOverrides,
       OaForm oaForm) {
     return previewForRefresh(linkedItem, variableOverrides);
+  }
+
+  default PriceLinkedFormulaPreviewResponse previewForRefresh(
+      PriceLinkedItem linkedItem,
+      LinkedPriceVariableContext variableContext,
+      OaForm oaForm) {
+    return previewForRefresh(
+        linkedItem,
+        variableContext == null ? Map.of() : variableContext.getVariableValues(),
+        oaForm);
   }
 }

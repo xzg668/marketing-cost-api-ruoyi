@@ -229,7 +229,7 @@ class CmsMaterialScrapRefT11ReconciliationTest {
 
   private static PriceTypeRoute route() {
     return new PriceTypeRoute(
-        "M", MaterialFormAttrEnum.MANUFACTURED, PriceTypeEnum.MAKE, 1, null, null, "T11");
+        "M", MaterialFormAttrEnum.MANUFACTURED, PriceTypeEnum.MAKE, 1, null, null, "T11", "自制件");
   }
 
   private static PriceScrap price(String scrapCode, String recyclePrice) {

@@ -26,10 +26,28 @@ public class MaterialMaster {
   private String costElement;
   private BigDecimal theoreticalWeightG;
   private BigDecimal netWeightKg;
+  private BigDecimal grossWeightG;
   private String bizUnit;
   private String productionDept;
   private String productionWorkshop;
   private String source;
+  private String financeCategory;
+  private String purchaseCategory;
+  private String productionCategory;
+  private String salesCategory;
+  private String mainCategoryCode;
+  private String mainCategoryName;
+  private String productPropertyClass;
+  private BigDecimal productProperty;
+  private BigDecimal lossRate;
+  private BigDecimal dailyCapacity;
+  private Integer leadTimeDays;
+  private String packageSize;
+  private String defaultSupplier;
+  private String defaultBuyer;
+  private String defaultPlanner;
+  private String legacyU9Code;
+  private String importBatchId;
   /** 业务单元租户口径：COMMERCIAL / HOUSEHOLD（V22 补齐） */
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
@@ -128,6 +146,14 @@ public class MaterialMaster {
     this.netWeightKg = netWeightKg;
   }
 
+  public BigDecimal getGrossWeightG() {
+    return grossWeightG;
+  }
+
+  public void setGrossWeightG(BigDecimal grossWeightG) {
+    this.grossWeightG = grossWeightG;
+  }
+
   public String getBizUnit() {
     return bizUnit;
   }
@@ -158,6 +184,142 @@ public class MaterialMaster {
 
   public void setSource(String source) {
     this.source = source;
+  }
+
+  public String getFinanceCategory() {
+    return financeCategory;
+  }
+
+  public void setFinanceCategory(String financeCategory) {
+    this.financeCategory = financeCategory;
+  }
+
+  public String getPurchaseCategory() {
+    return purchaseCategory;
+  }
+
+  public void setPurchaseCategory(String purchaseCategory) {
+    this.purchaseCategory = purchaseCategory;
+  }
+
+  public String getProductionCategory() {
+    return productionCategory;
+  }
+
+  public void setProductionCategory(String productionCategory) {
+    this.productionCategory = productionCategory;
+  }
+
+  public String getSalesCategory() {
+    return salesCategory;
+  }
+
+  public void setSalesCategory(String salesCategory) {
+    this.salesCategory = salesCategory;
+  }
+
+  public String getMainCategoryCode() {
+    return mainCategoryCode;
+  }
+
+  public void setMainCategoryCode(String mainCategoryCode) {
+    this.mainCategoryCode = mainCategoryCode;
+  }
+
+  public String getMainCategoryName() {
+    return mainCategoryName;
+  }
+
+  public void setMainCategoryName(String mainCategoryName) {
+    this.mainCategoryName = mainCategoryName;
+  }
+
+  public String getProductPropertyClass() {
+    return productPropertyClass;
+  }
+
+  public void setProductPropertyClass(String productPropertyClass) {
+    this.productPropertyClass = productPropertyClass;
+  }
+
+  public BigDecimal getProductProperty() {
+    return productProperty;
+  }
+
+  public void setProductProperty(BigDecimal productProperty) {
+    this.productProperty = productProperty;
+  }
+
+  public BigDecimal getLossRate() {
+    return lossRate;
+  }
+
+  public void setLossRate(BigDecimal lossRate) {
+    this.lossRate = lossRate;
+  }
+
+  public BigDecimal getDailyCapacity() {
+    return dailyCapacity;
+  }
+
+  public void setDailyCapacity(BigDecimal dailyCapacity) {
+    this.dailyCapacity = dailyCapacity;
+  }
+
+  public Integer getLeadTimeDays() {
+    return leadTimeDays;
+  }
+
+  public void setLeadTimeDays(Integer leadTimeDays) {
+    this.leadTimeDays = leadTimeDays;
+  }
+
+  public String getPackageSize() {
+    return packageSize;
+  }
+
+  public void setPackageSize(String packageSize) {
+    this.packageSize = packageSize;
+  }
+
+  public String getDefaultSupplier() {
+    return defaultSupplier;
+  }
+
+  public void setDefaultSupplier(String defaultSupplier) {
+    this.defaultSupplier = defaultSupplier;
+  }
+
+  public String getDefaultBuyer() {
+    return defaultBuyer;
+  }
+
+  public void setDefaultBuyer(String defaultBuyer) {
+    this.defaultBuyer = defaultBuyer;
+  }
+
+  public String getDefaultPlanner() {
+    return defaultPlanner;
+  }
+
+  public void setDefaultPlanner(String defaultPlanner) {
+    this.defaultPlanner = defaultPlanner;
+  }
+
+  public String getLegacyU9Code() {
+    return legacyU9Code;
+  }
+
+  public void setLegacyU9Code(String legacyU9Code) {
+    this.legacyU9Code = legacyU9Code;
+  }
+
+  public String getImportBatchId() {
+    return importBatchId;
+  }
+
+  public void setImportBatchId(String importBatchId) {
+    this.importBatchId = importBatchId;
   }
 
   public String getBusinessUnitType() {

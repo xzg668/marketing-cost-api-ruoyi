@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.controller;
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.DepartmentFundRateImportRequest;
+import com.sanhua.marketingcost.dto.DepartmentFundRateImportResponse;
 import com.sanhua.marketingcost.dto.DepartmentFundRatePageResponse;
 import com.sanhua.marketingcost.dto.DepartmentFundRateRequest;
 import com.sanhua.marketingcost.entity.DepartmentFundRate;
@@ -35,8 +36,10 @@ public class DepartmentFundRateController {
   @PreAuthorize("@ss.hasPermi('base:dept-fund:list')")
   @GetMapping
   public CommonResult<DepartmentFundRatePageResponse> list(
-      @RequestParam(required = false) String businessUnit) {
-    List<DepartmentFundRate> list = departmentFundRateService.list(businessUnit);
+      @RequestParam(required = false) String businessUnit,
+      @RequestParam(required = false) Integer rateYear,
+      @RequestParam(required = false) String expenseSubject) {
+    List<DepartmentFundRate> list = departmentFundRateService.list(businessUnit, rateYear, expenseSubject);
     return CommonResult.success(new DepartmentFundRatePageResponse(list.size(), list));
   }
 
@@ -74,7 +77,7 @@ public class DepartmentFundRateController {
   /** 导入部门经费率数据 */
   @PreAuthorize("@ss.hasPermi('base:dept-fund:import')")
   @PostMapping("/import")
-  public CommonResult<List<DepartmentFundRate>> importItems(
+  public CommonResult<DepartmentFundRateImportResponse> importItems(
       @RequestBody DepartmentFundRateImportRequest request) {
     return CommonResult.success(departmentFundRateService.importItems(request));
   }

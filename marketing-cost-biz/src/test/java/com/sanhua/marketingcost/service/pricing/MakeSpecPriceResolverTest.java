@@ -324,7 +324,7 @@ class MakeSpecPriceResolverTest {
   private static PriceTypeRoute route() {
     return new PriceTypeRoute(
         "M", MaterialFormAttrEnum.MANUFACTURED, PriceTypeEnum.MAKE,
-        1, null, null, "manual");
+        1, null, null, "manual", "自制件");
   }
 
   private static MakePartSpec spec(String code) {

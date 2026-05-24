@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.config.LinkedParserProperties;
+import com.sanhua.marketingcost.dto.LinkedPriceVariableContext;
 import com.sanhua.marketingcost.dto.PriceLinkedCalcRow;
 import com.sanhua.marketingcost.dto.PriceLinkedCalcTraceResponse;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewRequest;
@@ -17,6 +18,8 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
+import com.sanhua.marketingcost.enums.LinkedPriceCalcScene;
+import com.sanhua.marketingcost.enums.LinkedPriceFactorSource;
 import com.sanhua.marketingcost.formula.normalize.FormulaNormalizer;
 import com.sanhua.marketingcost.formula.registry.ExpressionEvaluator;
 import com.sanhua.marketingcost.formula.registry.FactorVariableRegistry;
@@ -42,6 +45,7 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -73,6 +77,7 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
   private static final Pattern SAFE_IDENTIFIER = Pattern.compile("^[A-Za-z0-9_]+$");
   private static final String FINANCE_PRICE_LATEST = "__latest__";
   private static final BigDecimal WEIGHT_DIVISOR = new BigDecimal("1000");
+  private static final String DEFAULT_CALC_STATUS_OK = "OK";
 
   private final BomCostingRowMapper bomCostingRowMapper;
   private final PriceLinkedCalcItemMapper priceLinkedCalcItemMapper;
@@ -263,6 +268,110 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
   }
 
   @Override
+  public Page<PriceLinkedCalcRow> resultPage(
+      String oaNo,
+      String customer,
+      String businessUnitType,
+      String itemCode,
+      String calcScene,
+      String pricingMonth,
+      Long adjustBatchId,
+      String calcStatus,
+      String factorSource,
+      int page,
+      int pageSize) {
+    // LPE-10：结果查询页只追溯已落库的 calc_item，不能像旧 calc 列表一样合成/补写记录。
+    var query = Wrappers.lambdaQuery(PriceLinkedCalcItem.class);
+    if (StringUtils.hasText(oaNo)) {
+      query.eq(PriceLinkedCalcItem::getOaNo, oaNo.trim());
+    }
+    if (StringUtils.hasText(businessUnitType)) {
+      query.eq(PriceLinkedCalcItem::getBusinessUnitType, businessUnitType.trim());
+    }
+    if (StringUtils.hasText(itemCode)) {
+      query.like(PriceLinkedCalcItem::getItemCode, itemCode.trim());
+    }
+    if (StringUtils.hasText(calcScene)) {
+      query.eq(PriceLinkedCalcItem::getCalcScene, calcScene.trim());
+    }
+    if (StringUtils.hasText(pricingMonth)) {
+      query.eq(PriceLinkedCalcItem::getPricingMonth, pricingMonth.trim());
+    }
+    if (adjustBatchId != null) {
+      query.eq(PriceLinkedCalcItem::getAdjustBatchId, adjustBatchId);
+    }
+    if (StringUtils.hasText(calcStatus)) {
+      query.eq(PriceLinkedCalcItem::getCalcStatus, calcStatus.trim());
+    }
+    if (StringUtils.hasText(factorSource)) {
+      query.eq(PriceLinkedCalcItem::getFactorSource, factorSource.trim());
+    }
+
+    Set<String> customerOaNos = findOaNosByCustomer(customer);
+    if (customerOaNos != null) {
+      if (customerOaNos.isEmpty()) {
+        Page<PriceLinkedCalcRow> empty = new Page<>(page, pageSize);
+        empty.setTotal(0);
+        empty.setRecords(List.of());
+        return empty;
+      }
+      query.in(PriceLinkedCalcItem::getOaNo, customerOaNos);
+    }
+    query.orderByDesc(PriceLinkedCalcItem::getUpdatedAt)
+        .orderByDesc(PriceLinkedCalcItem::getId);
+
+    Page<PriceLinkedCalcItem> calcPage =
+        priceLinkedCalcItemMapper.selectPage(new Page<>(page, pageSize), query);
+    List<PriceLinkedCalcItem> calcItems = calcPage.getRecords();
+    Map<String, OaForm> oaMap = fetchOaMap(calcItems);
+    Map<String, PriceLinkedItem> linkedItemMap = fetchLinkedItemMapForResults(calcItems);
+
+    List<PriceLinkedCalcRow> rows = new ArrayList<>(calcItems.size());
+    for (PriceLinkedCalcItem calcItem : calcItems) {
+      PriceLinkedCalcRow row = new PriceLinkedCalcRow();
+      row.setCalcId(calcItem.getId());
+      row.setOaNo(calcItem.getOaNo());
+      row.setBusinessUnitType(calcItem.getBusinessUnitType());
+      row.setItemCode(calcItem.getItemCode());
+      row.setShapeAttr(calcItem.getShapeAttr());
+      row.setBomQty(calcItem.getBomQty());
+      row.setPartUnitPrice(calcItem.getPartUnitPrice());
+      row.setPartAmount(calcItem.getPartAmount());
+      row.setCalcScene(calcItem.getCalcScene());
+      row.setPricingMonth(calcItem.getPricingMonth());
+      row.setAdjustBatchId(calcItem.getAdjustBatchId());
+      row.setFactorSource(calcItem.getFactorSource());
+      row.setCalcStatus(calcItem.getCalcStatus());
+      row.setCalcMessage(calcItem.getCalcMessage());
+      row.setHasTrace(StringUtils.hasText(calcItem.getTraceJson()));
+      row.setVariableSourceSummary(countVariableSources(calcItem.getTraceJson()));
+      row.setUpdatedAt(calcItem.getUpdatedAt());
+
+      OaForm oaForm = oaMap.get(trimToEmpty(calcItem.getOaNo()));
+      if (oaForm != null) {
+        row.setCustomer(oaForm.getCustomer());
+      }
+      PriceLinkedItem linkedItem = linkedItemMap.get(resultLinkedItemKey(
+          calcItem.getBusinessUnitType(), calcItem.getPricingMonth(), calcItem.getItemCode()));
+      if (linkedItem == null) {
+        linkedItem = linkedItemMap.get(resultLinkedItemKey(null, null, calcItem.getItemCode()));
+      }
+      if (linkedItem != null) {
+        row.setMaterialName(linkedItem.getMaterialName());
+        row.setSupplierName(linkedItem.getSupplierName());
+        row.setFormulaExpr(linkedItem.getFormulaExpr());
+        row.setFormulaExprCn(linkedItem.getFormulaExprCn());
+      }
+      rows.add(row);
+    }
+
+    Page<PriceLinkedCalcRow> result = new Page<>(page, pageSize);
+    result.setTotal(calcPage.getTotal());
+    result.setRecords(rows);
+    return result;
+  }
+
+  @Override
   @Transactional(rollbackFor = Exception.class)
   public int refresh(String oaNo) {
     if (!StringUtils.hasText(oaNo)) {
@@ -433,6 +542,91 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
         Wrappers.lambdaQuery(OaForm.class).eq(OaForm::getOaNo, oaNo.trim()).last("LIMIT 1"));
   }
 
+  private Set<String> findOaNosByCustomer(String customer) {
+    if (!StringUtils.hasText(customer)) {
+      return null;
+    }
+    List<OaForm> forms =
+        oaFormMapper.selectList(
+            Wrappers.lambdaQuery(OaForm.class).like(OaForm::getCustomer, customer.trim()));
+    if (forms == null || forms.isEmpty()) {
+      return Set.of();
+    }
+    Set<String> oaNos = new LinkedHashSet<>();
+    for (OaForm form : forms) {
+      if (form != null && StringUtils.hasText(form.getOaNo())) {
+        oaNos.add(form.getOaNo().trim());
+      }
+    }
+    return oaNos;
+  }
+
+  private Map<String, OaForm> fetchOaMap(List<PriceLinkedCalcItem> calcItems) {
+    if (calcItems == null || calcItems.isEmpty()) {
+      return Map.of();
+    }
+    Set<String> oaNos = new LinkedHashSet<>();
+    for (PriceLinkedCalcItem item : calcItems) {
+      if (item != null && StringUtils.hasText(item.getOaNo())) {
+        oaNos.add(item.getOaNo().trim());
+      }
+    }
+    if (oaNos.isEmpty()) {
+      return Map.of();
+    }
+    List<OaForm> forms =
+        oaFormMapper.selectList(Wrappers.lambdaQuery(OaForm.class).in(OaForm::getOaNo, oaNos));
+    Map<String, OaForm> map = new HashMap<>();
+    for (OaForm form : forms) {
+      if (form != null && StringUtils.hasText(form.getOaNo())) {
+        map.put(form.getOaNo().trim(), form);
+      }
+    }
+    return map;
+  }
+
+  private Map<String, PriceLinkedItem> fetchLinkedItemMapForResults(
+      List<PriceLinkedCalcItem> calcItems) {
+    if (calcItems == null || calcItems.isEmpty()) {
+      return Map.of();
+    }
+    Set<String> itemCodes = new LinkedHashSet<>();
+    for (PriceLinkedCalcItem item : calcItems) {
+      if (item != null && StringUtils.hasText(item.getItemCode())) {
+        itemCodes.add(item.getItemCode().trim());
+      }
+    }
+    if (itemCodes.isEmpty()) {
+      return Map.of();
+    }
+    List<PriceLinkedItem> linkedItems =
+        priceLinkedItemMapper.selectList(
+            Wrappers.lambdaQuery(PriceLinkedItem.class)
+                .eq(PriceLinkedItem::getDeleted, 0)
+                .in(PriceLinkedItem::getMaterialCode, itemCodes)
+                .orderByDesc(PriceLinkedItem::getId));
+    Map<String, PriceLinkedItem> map = new HashMap<>();
+    for (PriceLinkedItem linkedItem : linkedItems) {
+      if (linkedItem == null || !StringUtils.hasText(linkedItem.getMaterialCode())) {
+        continue;
+      }
+      String exactKey = resultLinkedItemKey(
+          linkedItem.getBusinessUnitType(), linkedItem.getPricingMonth(), linkedItem.getMaterialCode());
+      map.putIfAbsent(exactKey, linkedItem);
+      map.putIfAbsent(resultLinkedItemKey(null, null, linkedItem.getMaterialCode()), linkedItem);
+    }
+    return map;
+  }
+
+  private String resultLinkedItemKey(String businessUnitType, String pricingMonth, String itemCode) {
+    return trimToEmpty(businessUnitType) + "|" + trimToEmpty(pricingMonth) + "|"
+        + trimToEmpty(itemCode);
+  }
+
+  private String trimToEmpty(String value) {
+    return StringUtils.hasText(value) ? value.trim() : "";
+  }
+
   private boolean matchesTextFilter(String actual, String expected) {
     if (!StringUtils.hasText(expected)) {
       return true;
@@ -540,6 +734,10 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
         calc.setItemCode(item.getMaterialCode());
         calc.setShapeAttr(item.getShapeAttr());
         calc.setBomQty(qty);
+        // 历史 refresh 属于正常报价链路，变量来源仍是 OA 单头锁价；后续月度调价由 ensure 显式传场景。
+        calc.setCalcScene(LinkedPriceCalcScene.QUOTE.getCode());
+        calc.setFactorSource(LinkedPriceFactorSource.OA_LOCKED.getCode());
+        calc.setCalcStatus(DEFAULT_CALC_STATUS_OK);
         priceLinkedCalcItemMapper.insert(calc);
         changed += 1;
       } else if (qty != null
@@ -572,6 +770,8 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     if (StringUtils.hasText(oaNo)) {
       query.eq(PriceLinkedCalcItem::getOaNo, oaNo.trim());
     }
+    // LPE-02 先把旧 refresh 固定在 QUOTE，避免后续同 OA/料号的月度调价结果被现有页面误读。
+    query.eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.QUOTE.getCode());
     query.in(PriceLinkedCalcItem::getItemCode, itemCodes);
     // V48：去掉 shape_attr 过滤 —— 业务唯一性是 (oa, item)，shape 仅是元数据
     List<PriceLinkedCalcItem> calcItems = priceLinkedCalcItemMapper.selectList(query);
@@ -623,6 +823,43 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       }
     }
     return map;
+  }
+
+  PriceLinkedCalcItem calculateQuoteItemForEnsure(
+      PriceLinkedCalcItem calcItem, PriceLinkedItem linkedItem, OaForm oaForm) {
+    if (calcItem == null) {
+      throw new IllegalArgumentException("calcItem 不能为空");
+    }
+    calcItem.setCalcScene(LinkedPriceCalcScene.QUOTE.getCode());
+    calcItem.setFactorSource(LinkedPriceCalcScene.QUOTE.getDefaultFactorSource().getCode());
+    calcItem.setAdjustBatchId(null);
+    if (linkedItem == null || !StringUtils.hasText(linkedItem.getFormulaExpr())) {
+      calcItem.setPartUnitPrice(null);
+      calcItem.setPartAmount(null);
+      calcItem.setTraceJson(null);
+      calcItem.setCalcStatus("FAILED");
+      calcItem.setCalcMessage("联动价公式不存在或为空");
+      return calcItem;
+    }
+    Map<String, PriceVariable> variableMap = fetchVariableMap();
+    Map<String, Map<String, BigDecimal>> financePriceMap = buildFinancePriceMap(variableMap);
+    BigDecimal partUnitPrice = calculatePartUnitPrice(
+        linkedItem, calcItem, oaForm, variableMap, financePriceMap);
+    BigDecimal partAmount = calculatePartAmount(partUnitPrice, calcItem.getBomQty());
+    calcItem.setPartUnitPrice(partUnitPrice);
+    calcItem.setPartAmount(partAmount);
+    String error = extractTraceError(calcItem.getTraceJson());
+    if (StringUtils.hasText(error)) {
+      calcItem.setCalcStatus("FAILED");
+      calcItem.setCalcMessage(error);
+    } else if (partUnitPrice == null) {
+      calcItem.setCalcStatus("FAILED");
+      calcItem.setCalcMessage("联动价计算结果为空");
+    } else {
+      calcItem.setCalcStatus(DEFAULT_CALC_STATUS_OK);
+      calcItem.setCalcMessage(null);
+    }
+    return calcItem;
   }
 
   private boolean isLater(PriceLinkedItem candidate, PriceLinkedItem existing) {
@@ -783,7 +1020,7 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
    *
    * <p>本方法现在只做 3 件事：
    * <ol>
-   *   <li>把 OA 金属锁价收成 Map 作为 overrides 传给 preview</li>
+   *   <li>把 OA 金属锁价收成 LinkedPriceVariableContext 作为 QUOTE 变量上下文传给 preview</li>
    *   <li>调 {@code previewForRefresh(linkedItem, overrides)} 走统一流水线</li>
    *   <li>把 preview 的结构化响应翻译成老的 trace Map（适配 calc_item.trace_json 存储 schema，
    *       前端 UI 依赖这个 schema 展示）</li>
@@ -803,11 +1040,11 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     }
     trace.put("rawExpr", linkedItem.getFormulaExpr());
 
-    // OA 锁价 → overrides；非空字段按吨转千克（兼容 OA_form.copper_price 的元/吨存储口径）
-    Map<String, BigDecimal> overrides = buildOaLockOverrides(oaForm);
+    // QUOTE 场景变量上下文：正常报价必须优先使用 OA 表头锁价，不能误读月度调价影响因素价。
+    LinkedPriceVariableContext variableContext = LinkedPriceVariableContext.quote(oaForm);
 
     PriceLinkedFormulaPreviewResponse resp =
-        previewService.previewForRefresh(linkedItem, overrides, oaForm);
+        previewService.previewForRefresh(linkedItem, variableContext, oaForm);
 
     // 防御：preview 生产实现永远返 non-null，但 Mockito 默认 stub 会返 null，
     // 这里兜底防止单测场景下 NPE；同时也是针对未来 preview 改动的健壮性
@@ -849,29 +1086,6 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     return new NewCalcOutcome(resp.getResult(), trace);
   }
 
-  /**
-   * 把 OA 单的金属锁价收成 {@code code → 元/kg} 的 Map（NULL 字段不 put，
-   * 对应的变量走 FinanceBaseResolver 回落）。OA 字段存"元/吨"，这里 /1000 转"元/kg"。
-   */
-  private Map<String, BigDecimal> buildOaLockOverrides(OaForm oaForm) {
-    Map<String, BigDecimal> overrides = new LinkedHashMap<>();
-    if (oaForm == null) {
-      return overrides;
-    }
-    putKgOverride(overrides, "Cu", oaForm.getCopperPrice());
-    putKgOverride(overrides, "Zn", oaForm.getZincPrice());
-    putKgOverride(overrides, "Al", oaForm.getAluminumPrice());
-    // 注：oa_form.steel_price 暂无对应 variable_code 绑定，后续若需要 Fe/SUS 锁价再扩展
-    return overrides;
-  }
-
-  private void putKgOverride(Map<String, BigDecimal> overrides, String code, BigDecimal tonPrice) {
-    if (tonPrice == null) {
-      return;
-    }
-    overrides.put(code, tonPrice.divide(WEIGHT_DIVISOR, 6, RoundingMode.HALF_UP));
-  }
-
   /** 绝对差；任一为空返 null（表示不可比较，不触发 WARN） */
   private static BigDecimal diffAbs(BigDecimal a, BigDecimal b) {
     if (a == null || b == null) {
@@ -886,6 +1100,20 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       calcItem.setTraceJson(objectMapper.writeValueAsString(trace));
     } catch (JsonProcessingException e) {
       log.debug("trace JSON 序列化失败: {}", e.getMessage());
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private String extractTraceError(String traceJson) {
+    if (!StringUtils.hasText(traceJson)) {
+      return null;
+    }
+    try {
+      Map<String, Object> trace = objectMapper.readValue(traceJson, Map.class);
+      Object error = trace.get("error");
+      return error == null ? null : error.toString();
+    } catch (JsonProcessingException e) {
+      return traceJson.contains("\"error\"") ? "联动价计算失败" : null;
     }
   }
 
@@ -916,7 +1144,9 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       return;
     }
     ctx.override(
-        code, tonPrice.divide(WEIGHT_DIVISOR, 6, RoundingMode.HALF_UP));
+        code,
+        tonPrice.divide(WEIGHT_DIVISOR, 6, RoundingMode.HALF_UP),
+        LinkedPriceCalcScene.QUOTE.getDefaultFactorSource().getCode());
   }
 
   private Map<String, BigDecimal> resolveVariables(

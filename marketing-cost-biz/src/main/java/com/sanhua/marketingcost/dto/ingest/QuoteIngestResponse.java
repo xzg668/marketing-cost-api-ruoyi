@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.dto.ingest;
 
+import com.sanhua.marketingcost.dto.ProductPropertyAnnualSyncResult;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -17,6 +18,7 @@ public class QuoteIngestResponse {
   private String ingestStatus;
   private String classificationStatus;
   private int itemCount;
+  private ProductPropertyAnnualSyncResult annualUsageSyncResult;
   private List<QuoteValidationError> errors = new ArrayList<>();
   private List<QuoteValidationWarning> warnings = new ArrayList<>();
 
@@ -122,6 +124,14 @@ public class QuoteIngestResponse {
 
   public void setItemCount(int itemCount) {
     this.itemCount = itemCount;
+  }
+
+  public ProductPropertyAnnualSyncResult getAnnualUsageSyncResult() {
+    return annualUsageSyncResult;
+  }
+
+  public void setAnnualUsageSyncResult(ProductPropertyAnnualSyncResult annualUsageSyncResult) {
+    this.annualUsageSyncResult = annualUsageSyncResult;
   }
 
   public List<QuoteValidationError> getErrors() {

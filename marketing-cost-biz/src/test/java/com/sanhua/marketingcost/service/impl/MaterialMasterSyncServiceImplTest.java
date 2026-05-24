@@ -9,8 +9,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.sanhua.marketingcost.dto.SyncMaterialMasterRow;
+import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
@@ -36,11 +36,11 @@ class MaterialMasterSyncServiceImplTest {
 
     when(bomMapper.selectDistinctMaterialCodesByOaNo("OA-1"))
         .thenReturn(List.of("M-001", "M-002"));
-    when(rawMapper.selectLatestBatchId()).thenReturn("u9-batch-x");
+    when(rawMapper.selectLatestActiveBatchId(null)).thenReturn("u9-batch-x");
 
     MaterialMasterRaw r1 = newRaw("M-001", "净重克=1500", "5%", "30", "商用部品");
     MaterialMasterRaw r2 = newRaw("M-002", "1500", "0.05", "30", "家用部品");
-    when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of(r1, r2));
+    when(rawMapper.selectByLatestBatchAndCodes(any(), any())).thenReturn(List.of(r1, r2));
 
     when(masterMapper.upsertBatch(anyList())).thenReturn(2);
 
@@ -52,6 +52,8 @@ class MaterialMasterSyncServiceImplTest {
     assertThat(res.stagingHits()).isEqualTo(2);
     assertThat(res.affectedRows()).isEqualTo(2);
     assertThat(res.batchId()).isEqualTo("u9-batch-x");
+    verify(rawMapper).selectLatestActiveBatchId(null);
+    verify(rawMapper).selectByLatestBatchAndCodes(any(), any());
 
     // 验证 upsertBatch 拿到的 row 字段映射正确
     @SuppressWarnings("unchecked")
@@ -62,9 +64,75 @@ class MaterialMasterSyncServiceImplTest {
     // r1: net_weight 字段非数字 "净重克=1500" → null
     assertThat(rows.get(0).getNetWeightKg()).isNull();
     assertThat(rows.get(0).getBusinessUnitType()).isEqualTo("COMMERCIAL");
-    // r2: net_weight "1500" → 1.500000 kg；BU = HOUSEHOLD（含"家用"）
-    assertThat(rows.get(1).getNetWeightKg()).isEqualByComparingTo(new BigDecimal("1.500000"));
+    // r2: 当前 U9 文件净重按 kg 口径，不再除以 1000；BU = HOUSEHOLD（含"家用"）
+    assertThat(rows.get(1).getNetWeightKg()).isEqualByComparingTo(new BigDecimal("1500"));
     assertThat(rows.get(1).getBusinessUnitType()).isEqualTo("HOUSEHOLD");
+  }
+
+  @Test
+  @DisplayName("U9 空值、主表非空值 → 同步保留主表历史值")
+  void sync_preservesExistingWhenU9Blank() {
+    BomCostingRowMapper bomMapper = mock(BomCostingRowMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
+
+    when(bomMapper.selectDistinctMaterialCodesByOaNo("OA-KEEP")).thenReturn(List.of("M-KEEP"));
+    when(rawMapper.selectLatestActiveBatchId(null)).thenReturn("u9-batch-x");
+    MaterialMasterRaw raw = new MaterialMasterRaw();
+    raw.setMaterialCode("M-KEEP");
+    raw.setMaterialName("");
+    raw.setGlobalSeg5NetWeight("");
+    raw.setProductionDivision("");
+    raw.setImportBatchId("u9-batch-x");
+    when(rawMapper.selectByLatestBatchAndCodes(any(), any())).thenReturn(List.of(raw));
+
+    MaterialMaster existing = new MaterialMaster();
+    existing.setMaterialCode("M-KEEP");
+    existing.setMaterialName("历史名称");
+    existing.setNetWeightKg(new BigDecimal("3.25"));
+    existing.setBusinessUnitType("HOUSEHOLD");
+    when(masterMapper.selectList(any())).thenReturn(List.of(existing));
+    when(masterMapper.upsertBatch(anyList())).thenReturn(1);
+
+    MaterialMasterSyncServiceImpl svc =
+        new MaterialMasterSyncServiceImpl(bomMapper, rawMapper, masterMapper);
+    svc.syncByOaNo("OA-KEEP");
+
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<SyncMaterialMasterRow>> captor = ArgumentCaptor.forClass(List.class);
+    verify(masterMapper).upsertBatch(captor.capture());
+    SyncMaterialMasterRow row = captor.getValue().get(0);
+    assertThat(row.getMaterialName()).isEqualTo("历史名称");
+    assertThat(row.getNetWeightKg()).isEqualByComparingTo(new BigDecimal("3.25"));
+    assertThat(row.getBusinessUnitType()).isEqualTo("HOUSEHOLD");
+  }
+
+  @Test
+  @DisplayName("U9 非空、主表空值 → 同步写入 U9 值")
+  void sync_writesU9WhenMasterEmpty() {
+    BomCostingRowMapper bomMapper = mock(BomCostingRowMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
+
+    when(bomMapper.selectDistinctMaterialCodesByOaNo("OA-FILL")).thenReturn(List.of("M-FILL"));
+    when(rawMapper.selectLatestActiveBatchId(null)).thenReturn("u9-batch-x");
+    MaterialMasterRaw raw = newRaw("M-FILL", "2.75", null, null, "商用部品");
+    raw.setMainCategoryCode("101001001");
+    when(rawMapper.selectByLatestBatchAndCodes(any(), any())).thenReturn(List.of(raw));
+    when(masterMapper.selectList(any())).thenReturn(List.of());
+    when(masterMapper.upsertBatch(anyList())).thenReturn(1);
+
+    MaterialMasterSyncServiceImpl svc =
+        new MaterialMasterSyncServiceImpl(bomMapper, rawMapper, masterMapper);
+    svc.syncByOaNo("OA-FILL");
+
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<SyncMaterialMasterRow>> captor = ArgumentCaptor.forClass(List.class);
+    verify(masterMapper).upsertBatch(captor.capture());
+    SyncMaterialMasterRow row = captor.getValue().get(0);
+    assertThat(row.getMaterialName()).isEqualTo("name-M-FILL");
+    assertThat(row.getNetWeightKg()).isEqualByComparingTo(new BigDecimal("2.75"));
+    assertThat(row.getMainCategoryCode()).isEqualTo("101001001");
   }
 
   @Test
@@ -96,7 +164,7 @@ class MaterialMasterSyncServiceImplTest {
 
     when(bomMapper.selectDistinctMaterialCodesByOaNo("OA-X"))
         .thenReturn(List.of("M-001"));
-    when(rawMapper.selectLatestBatchId()).thenReturn(null);
+    when(rawMapper.selectLatestActiveBatchId(null)).thenReturn(null);
 
     MaterialMasterSyncServiceImpl svc =
         new MaterialMasterSyncServiceImpl(bomMapper, rawMapper, masterMapper);

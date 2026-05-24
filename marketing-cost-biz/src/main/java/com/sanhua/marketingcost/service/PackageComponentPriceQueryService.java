@@ -1,0 +1,17 @@
+package com.sanhua.marketingcost.service;
+
+import com.sanhua.marketingcost.dto.packagecomponent.PackageComponentGapPageResponse;
+import com.sanhua.marketingcost.dto.packagecomponent.PackageComponentGapQueryRequest;
+import com.sanhua.marketingcost.dto.packagecomponent.PackageComponentPricePageResponse;
+import com.sanhua.marketingcost.dto.packagecomponent.PackageComponentPriceQueryRequest;
+import com.sanhua.marketingcost.dto.packagecomponent.PackageComponentSnapshotPageResponse;
+import com.sanhua.marketingcost.dto.packagecomponent.PackageComponentSnapshotQueryRequest;
+
+public interface PackageComponentPriceQueryService {
+
+  PackageComponentPricePageResponse pagePrices(PackageComponentPriceQueryRequest request);
+
+  PackageComponentSnapshotPageResponse pageSnapshots(PackageComponentSnapshotQueryRequest request);
+
+  PackageComponentGapPageResponse pageGaps(PackageComponentGapQueryRequest request);
+}

@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.ingest;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.dto.ProductPropertyAnnualSyncResult;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedDocument;
@@ -11,25 +12,31 @@ import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedExtraField;
 import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedHeader;
 import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedItem;
 import com.sanhua.marketingcost.dto.ingest.QuoteValidationError;
+import com.sanhua.marketingcost.dto.ingest.QuoteValidationWarning;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormExtraFee;
-import com.sanhua.marketingcost.entity.OaFormExtraField;
+import com.sanhua.marketingcost.entity.OaFormHeaderExtraField;
 import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.entity.OaFormItemExtraField;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuoteIngestLog;
 import com.sanhua.marketingcost.enums.QuoteBomStatusCode;
 import com.sanhua.marketingcost.enums.QuoteIngestStatus;
 import com.sanhua.marketingcost.mapper.OaFormExtraFeeMapper;
-import com.sanhua.marketingcost.mapper.OaFormExtraFieldMapper;
+import com.sanhua.marketingcost.mapper.OaFormHeaderExtraFieldMapper;
+import com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
+import com.sanhua.marketingcost.service.ProductPropertyAnnualUsageService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -38,13 +45,17 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class QuoteIngestServiceImpl implements QuoteIngestService {
+  private static final String SCOPE_ITEM = "ITEM";
+
   private final QuoteNormalizeService quoteNormalizeService;
   private final QuoteIngestLogService quoteIngestLogService;
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
   private final OaFormExtraFeeMapper oaFormExtraFeeMapper;
-  private final OaFormExtraFieldMapper oaFormExtraFieldMapper;
+  private final OaFormHeaderExtraFieldMapper oaFormHeaderExtraFieldMapper;
+  private final OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper;
   private final QuoteBomStatusMapper quoteBomStatusMapper;
+  private final ProductPropertyAnnualUsageService productPropertyAnnualUsageService;
   private final ObjectMapper objectMapper;
 
   public QuoteIngestServiceImpl(
@@ -53,16 +64,20 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       OaFormMapper oaFormMapper,
       OaFormItemMapper oaFormItemMapper,
       OaFormExtraFeeMapper oaFormExtraFeeMapper,
-      OaFormExtraFieldMapper oaFormExtraFieldMapper,
+      OaFormHeaderExtraFieldMapper oaFormHeaderExtraFieldMapper,
+      OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper,
       QuoteBomStatusMapper quoteBomStatusMapper,
+      ProductPropertyAnnualUsageService productPropertyAnnualUsageService,
       ObjectMapper objectMapper) {
     this.quoteNormalizeService = quoteNormalizeService;
     this.quoteIngestLogService = quoteIngestLogService;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.oaFormExtraFeeMapper = oaFormExtraFeeMapper;
-    this.oaFormExtraFieldMapper = oaFormExtraFieldMapper;
+    this.oaFormHeaderExtraFieldMapper = oaFormHeaderExtraFieldMapper;
+    this.oaFormItemExtraFieldMapper = oaFormItemExtraFieldMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
+    this.productPropertyAnnualUsageService = productPropertyAnnualUsageService;
     this.objectMapper = objectMapper;
   }
 
@@ -98,6 +113,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
 
     String oaNo = resolveOaNo(normalized.getHeader(), request);
     OaForm existingForm = findExistingForm(oaNo, request);
+    // 已核算单据已经进入成本核算链路，重新接入会改写核算上下文，所以默认拒绝覆盖关键字段。
     if (isCalculated(existingForm)) {
       normalized
           .getErrors()
@@ -113,9 +129,11 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     replaceExtraFees(form, normalized, itemIdMap, log.getId());
     replaceExtraFields(form, normalized, itemIdMap, log.getId());
     replaceBomStatuses(form, normalized, itemIdMap);
+    ProductPropertyAnnualSyncResult annualUsageSyncResult =
+        productPropertyAnnualUsageService.syncFromOaForm(form, listItems(form.getId()));
 
     quoteIngestLogService.markImported(log, normalized, form.getId(), form.getOaNo());
-    return importedResponse(log, normalized, form);
+    return importedResponse(log, normalized, form, annualUsageSyncResult);
   }
 
   private OaForm upsertOaForm(
@@ -130,9 +148,14 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     form.setQuoteScenario(header.getQuoteScenario());
     form.setClassificationStatus(header.getClassificationStatus());
     form.setBusinessUnitType(header.getBusinessUnitType());
+    form.setAccountingPeriodMonth(header.getAccountingPeriodMonth());
     form.setFormType(header.getFormType());
     form.setApplyDate(header.getApplyDate());
     form.setCustomer(header.getCustomer());
+    form.setApplicantUnit(header.getApplicantUnit());
+    form.setSourceCompany(header.getSourceCompany());
+    form.setSourceBusinessDivision(header.getSourceBusinessDivision());
+    form.setExpenseProductCategory(header.getExpenseProductCategory());
     form.setApplicantDept(header.getApplicantDept());
     form.setApplicantOffice(header.getApplicantOffice());
     form.setApplicantName(header.getApplicantName());
@@ -140,6 +163,8 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     form.setProductAttr(header.getProductAttr());
     form.setPriceLinkMode(header.getPriceLinkMode());
     form.setOverseasSalesMode(header.getOverseasSalesMode());
+    form.setTradeTerms(header.getTradeTerms());
+    form.setExchangeRate(header.getExchangeRate());
     form.setCopperPrice(header.getCopperPrice());
     form.setZincPrice(header.getZincPrice());
     form.setAluminumPrice(header.getAluminumPrice());
@@ -198,6 +223,16 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       item.setProductStatus(source.getProductStatus());
       item.setScrapRate(source.getScrapRate());
       item.setUnitLaborCost(source.getUnitLaborCost());
+      item.setTotalWithShip(source.getTotalWithShip());
+      item.setTotalNoShip(source.getTotalNoShip());
+      item.setMaterialCost(source.getMaterialCost());
+      item.setLaborCost(source.getLaborCost());
+      item.setManufacturingCost(source.getManufacturingCost());
+      item.setManagementCost(source.getManagementCost());
+      item.setValidMonth(source.getValidMonth());
+      item.setSus304WeightG(source.getSus304WeightG());
+      item.setSus316WeightG(source.getSus316WeightG());
+      item.setCopperWeightG(source.getCopperWeightG());
       item.setClassificationStatus(source.getClassificationStatus());
       item.setBusinessUnitType(source.getBusinessUnitType());
       item.setValidDate(source.getValidDate());
@@ -218,6 +253,8 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       OaFormExtraFee fee = new OaFormExtraFee();
       fee.setOaFormId(form.getId());
       fee.setOaFormItemId(itemIdMap.get(itemKey(source.getExternalLineId(), source.getItemSeq())));
+      fee.setFeeScope(source.getScope());
+      fee.setBusinessUnitType(form.getBusinessUnitType());
       fee.setFeeCode(defaultCode(source.getFeeCode(), "FEE_" + fallback++));
       fee.setFeeName(defaultCode(source.getFeeName(), fee.getFeeCode()));
       fee.setFeeCategory(source.getFeeCategory());
@@ -226,6 +263,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       fee.setRemark(source.getRemark());
       fee.setSourceType("INGEST");
       fee.setSourceFieldName(source.getSourceFieldName());
+      fee.setSourceFieldPath(source.getSourceFieldPath());
       fee.setIngestLogId(logId);
       fee.setCreatedAt(LocalDateTime.now());
       fee.setUpdatedAt(LocalDateTime.now());
@@ -235,26 +273,77 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
 
   private void replaceExtraFields(
       OaForm form, QuoteNormalizedDocument normalized, Map<String, Long> itemIdMap, Long logId) {
-    oaFormExtraFieldMapper.delete(
-        Wrappers.lambdaQuery(OaFormExtraField.class).eq(OaFormExtraField::getOaFormId, form.getId()));
+    // OA 原始表单扩展字段按 HEADER/ITEM 粒度分表落库，旧混合表仅保留历史兼容。
+    oaFormHeaderExtraFieldMapper.delete(
+        Wrappers.lambdaQuery(OaFormHeaderExtraField.class)
+            .eq(OaFormHeaderExtraField::getOaFormId, form.getId()));
+    oaFormItemExtraFieldMapper.delete(
+        Wrappers.lambdaQuery(OaFormItemExtraField.class)
+            .eq(OaFormItemExtraField::getOaFormId, form.getId()));
     int fallback = 1;
     for (QuoteNormalizedExtraField source : normalized.getExtraFields()) {
-      OaFormExtraField field = new OaFormExtraField();
-      field.setOaFormId(form.getId());
-      field.setOaFormItemId(itemIdMap.get(itemKey(source.getExternalLineId(), source.getItemSeq())));
-      field.setFieldCode(defaultCode(source.getFieldCode(), "FIELD_" + fallback++));
-      field.setFieldName(defaultCode(source.getFieldName(), field.getFieldCode()));
-      field.setFieldValue(source.getFieldValue());
-      field.setFieldValueNumber(source.getFieldValueNumber());
-      field.setFieldValueDate(source.getFieldValueDate());
-      field.setValueType(defaultCode(source.getValueType(), "TEXT"));
-      field.setSourceFieldName(source.getSourceFieldName());
-      field.setSourceFieldPath(source.getSourceFieldPath());
-      field.setIngestLogId(logId);
-      field.setCreatedAt(LocalDateTime.now());
-      field.setUpdatedAt(LocalDateTime.now());
-      oaFormExtraFieldMapper.insert(field);
+      String fieldCode = defaultCode(source.getFieldCode(), "FIELD_" + fallback++);
+      if (SCOPE_ITEM.equals(source.getScope())) {
+        insertItemExtraField(form, source, itemIdMap, logId, fieldCode);
+      } else {
+        insertHeaderExtraField(form, source, logId, fieldCode);
+      }
     }
+  }
+
+  private void insertHeaderExtraField(
+      OaForm form, QuoteNormalizedExtraField source, Long logId, String fieldCode) {
+    OaFormHeaderExtraField field = new OaFormHeaderExtraField();
+    field.setOaFormId(form.getId());
+    field.setBusinessUnitType(defaultCode(form.getBusinessUnitType(), ""));
+    field.setFieldCode(fieldCode);
+    field.setFieldName(defaultCode(source.getFieldName(), field.getFieldCode()));
+    applyExtraFieldValue(field, source);
+    field.setSourceFieldName(source.getSourceFieldName());
+    field.setSourceFieldPath(source.getSourceFieldPath());
+    field.setIngestLogId(logId);
+    field.setCreatedAt(LocalDateTime.now());
+    field.setUpdatedAt(LocalDateTime.now());
+    oaFormHeaderExtraFieldMapper.insert(field);
+  }
+
+  private void insertItemExtraField(
+      OaForm form,
+      QuoteNormalizedExtraField source,
+      Map<String, Long> itemIdMap,
+      Long logId,
+      String fieldCode) {
+    Long itemId = itemIdMap.get(itemKey(source.getExternalLineId(), source.getItemSeq()));
+    if (itemId == null) {
+      throw new QuoteIngestException("产品行扩展字段无法匹配产品行: " + fieldCode);
+    }
+    OaFormItemExtraField field = new OaFormItemExtraField();
+    field.setOaFormId(form.getId());
+    field.setOaFormItemId(itemId);
+    field.setBusinessUnitType(defaultCode(form.getBusinessUnitType(), ""));
+    field.setFieldCode(fieldCode);
+    field.setFieldName(defaultCode(source.getFieldName(), field.getFieldCode()));
+    applyExtraFieldValue(field, source);
+    field.setSourceFieldName(source.getSourceFieldName());
+    field.setSourceFieldPath(source.getSourceFieldPath());
+    field.setIngestLogId(logId);
+    field.setCreatedAt(LocalDateTime.now());
+    field.setUpdatedAt(LocalDateTime.now());
+    oaFormItemExtraFieldMapper.insert(field);
+  }
+
+  private void applyExtraFieldValue(OaFormHeaderExtraField field, QuoteNormalizedExtraField source) {
+    field.setFieldValue(source.getFieldValue());
+    field.setFieldValueNumber(source.getFieldValueNumber());
+    field.setFieldValueDate(source.getFieldValueDate());
+    field.setValueType(defaultCode(source.getValueType(), "TEXT"));
+  }
+
+  private void applyExtraFieldValue(OaFormItemExtraField field, QuoteNormalizedExtraField source) {
+    field.setFieldValue(source.getFieldValue());
+    field.setFieldValueNumber(source.getFieldValueNumber());
+    field.setFieldValueDate(source.getFieldValueDate());
+    field.setValueType(defaultCode(source.getValueType(), "TEXT"));
   }
 
   private void replaceBomStatuses(
@@ -282,6 +371,14 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     }
   }
 
+  private List<OaFormItem> listItems(Long oaFormId) {
+    return oaFormItemMapper.selectList(
+        Wrappers.lambdaQuery(OaFormItem.class)
+            .eq(OaFormItem::getOaFormId, oaFormId)
+            .orderByAsc(OaFormItem::getSeq)
+            .orderByAsc(OaFormItem::getId));
+  }
+
   private OaForm findExistingForm(String oaNo, QuoteIngestRequest request) {
     if (StringUtils.hasText(oaNo)) {
       OaForm byOaNo =
@@ -303,12 +400,16 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
   }
 
   private QuoteIngestResponse importedResponse(
-      QuoteIngestLog log, QuoteNormalizedDocument normalized, OaForm form) {
+      QuoteIngestLog log,
+      QuoteNormalizedDocument normalized,
+      OaForm form,
+      ProductPropertyAnnualSyncResult annualUsageSyncResult) {
     QuoteIngestResponse response = baseResponse(log, normalized);
     response.setAccepted(true);
     response.setOaFormId(form.getId());
     response.setOaNo(form.getOaNo());
     response.setIngestStatus(log.getIngestStatus());
+    attachAnnualUsageSyncResult(response, annualUsageSyncResult);
     return response;
   }
 
@@ -345,9 +446,40 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     response.setQuoteScenario(header == null ? null : header.getQuoteScenario());
     response.setClassificationStatus(header == null ? null : header.getClassificationStatus());
     response.setItemCount(normalized == null || normalized.getItems() == null ? 0 : normalized.getItems().size());
-    response.setErrors(normalized == null ? java.util.List.of() : normalized.getErrors());
-    response.setWarnings(normalized == null ? java.util.List.of() : normalized.getWarnings());
+    response.setErrors(
+        normalized == null || normalized.getErrors() == null
+            ? new ArrayList<>()
+            : new ArrayList<>(normalized.getErrors()));
+    response.setWarnings(
+        normalized == null || normalized.getWarnings() == null
+            ? new ArrayList<>()
+            : new ArrayList<>(normalized.getWarnings()));
     return response;
+  }
+
+  private void attachAnnualUsageSyncResult(
+      QuoteIngestResponse response, ProductPropertyAnnualSyncResult result) {
+    response.setAnnualUsageSyncResult(result);
+    if (result == null) {
+      return;
+    }
+    List<QuoteValidationWarning> warnings =
+        response.getWarnings() == null ? new ArrayList<>() : new ArrayList<>(response.getWarnings());
+    for (String message : result.getErrorMessages()) {
+      warnings.add(
+          new QuoteValidationWarning(
+              "annualUsageSync",
+              "PRODUCT_PROPERTY_ANNUAL_USAGE_SYNC_ERROR",
+              message));
+    }
+    for (String message : result.getWarnings()) {
+      warnings.add(
+          new QuoteValidationWarning(
+              "annualUsageSync",
+              "PRODUCT_PROPERTY_ANNUAL_USAGE_SYNC_WARNING",
+              message));
+    }
+    response.setWarnings(warnings);
   }
 
   private String resolveRequestId(QuoteIngestRequest request) {
@@ -361,6 +493,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     if (request != null && StringUtils.hasText(request.getIdempotencyKey())) {
       return request.getIdempotencyKey().trim();
     }
+    // 幂等键使用来源 + 外部单号 + 版本；Excel 与未来泛微都会适配成同一 DTO，避免同一外部单据重复入库。
     String sourceType = request == null ? "UNKNOWN" : defaultCode(request.getSourceType(), "UNKNOWN");
     String formNo =
         request == null

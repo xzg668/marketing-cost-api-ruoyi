@@ -4,7 +4,34 @@ import java.math.BigDecimal;
 import java.util.List;
 
 public class DepartmentFundRateImportRequest {
+  private Integer rateYear;
+  private String businessUnitType;
+  private String sourceBatchNo;
   private List<DepartmentFundRateRow> rows;
+
+  public Integer getRateYear() {
+    return rateYear;
+  }
+
+  public void setRateYear(Integer rateYear) {
+    this.rateYear = rateYear;
+  }
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
+  }
+
+  public String getSourceBatchNo() {
+    return sourceBatchNo;
+  }
+
+  public void setSourceBatchNo(String sourceBatchNo) {
+    this.sourceBatchNo = sourceBatchNo;
+  }
 
   public List<DepartmentFundRateRow> getRows() {
     return rows;
@@ -15,7 +42,17 @@ public class DepartmentFundRateImportRequest {
   }
 
   public static class DepartmentFundRateRow {
+    private Integer rowNo;
     private String businessUnit;
+    private String businessDivision;
+    private String expenseSubject;
+    private BigDecimal budgetAmount;
+    private BigDecimal totalWorkMinutes;
+    private BigDecimal planRate;
+    private BigDecimal upliftRatio;
+    private BigDecimal quoteRatio;
+    private Integer rateYear;
+    private String remark;
     private BigDecimal overhaulRate;
     private BigDecimal toolingRepairRate;
     private BigDecimal waterPowerRate;
@@ -23,12 +60,92 @@ public class DepartmentFundRateImportRequest {
     private BigDecimal upliftRate;
     private BigDecimal manhourRate;
 
+    public Integer getRowNo() {
+      return rowNo;
+    }
+
+    public void setRowNo(Integer rowNo) {
+      this.rowNo = rowNo;
+    }
+
     public String getBusinessUnit() {
       return businessUnit;
     }
 
     public void setBusinessUnit(String businessUnit) {
       this.businessUnit = businessUnit;
+    }
+
+    public String getBusinessDivision() {
+      return businessDivision;
+    }
+
+    public void setBusinessDivision(String businessDivision) {
+      this.businessDivision = businessDivision;
+    }
+
+    public String getExpenseSubject() {
+      return expenseSubject;
+    }
+
+    public void setExpenseSubject(String expenseSubject) {
+      this.expenseSubject = expenseSubject;
+    }
+
+    public BigDecimal getBudgetAmount() {
+      return budgetAmount;
+    }
+
+    public void setBudgetAmount(BigDecimal budgetAmount) {
+      this.budgetAmount = budgetAmount;
+    }
+
+    public BigDecimal getTotalWorkMinutes() {
+      return totalWorkMinutes;
+    }
+
+    public void setTotalWorkMinutes(BigDecimal totalWorkMinutes) {
+      this.totalWorkMinutes = totalWorkMinutes;
+    }
+
+    public BigDecimal getPlanRate() {
+      return planRate;
+    }
+
+    public void setPlanRate(BigDecimal planRate) {
+      this.planRate = planRate;
+    }
+
+    public BigDecimal getUpliftRatio() {
+      return upliftRatio;
+    }
+
+    public void setUpliftRatio(BigDecimal upliftRatio) {
+      this.upliftRatio = upliftRatio;
+    }
+
+    public BigDecimal getQuoteRatio() {
+      return quoteRatio;
+    }
+
+    public void setQuoteRatio(BigDecimal quoteRatio) {
+      this.quoteRatio = quoteRatio;
+    }
+
+    public Integer getRateYear() {
+      return rateYear;
+    }
+
+    public void setRateYear(Integer rateYear) {
+      this.rateYear = rateYear;
+    }
+
+    public String getRemark() {
+      return remark;
+    }
+
+    public void setRemark(String remark) {
+      this.remark = remark;
     }
 
     public BigDecimal getOverhaulRate() {

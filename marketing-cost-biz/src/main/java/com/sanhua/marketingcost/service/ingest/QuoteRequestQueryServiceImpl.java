@@ -17,15 +17,17 @@ import com.sanhua.marketingcost.dto.ingest.QuoteRequestItemResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteRequestListItemResponse;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormExtraFee;
-import com.sanhua.marketingcost.entity.OaFormExtraField;
+import com.sanhua.marketingcost.entity.OaFormHeaderExtraField;
 import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.entity.OaFormItemExtraField;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuoteIngestLog;
 import com.sanhua.marketingcost.enums.QuoteBomStatusCode;
 import com.sanhua.marketingcost.enums.QuoteClassificationStatus;
 import com.sanhua.marketingcost.enums.QuoteIngestStatus;
 import com.sanhua.marketingcost.mapper.OaFormExtraFeeMapper;
-import com.sanhua.marketingcost.mapper.OaFormExtraFieldMapper;
+import com.sanhua.marketingcost.mapper.OaFormHeaderExtraFieldMapper;
+import com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
@@ -49,23 +51,29 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
   private final OaFormExtraFeeMapper oaFormExtraFeeMapper;
-  private final OaFormExtraFieldMapper oaFormExtraFieldMapper;
+  private final OaFormHeaderExtraFieldMapper oaFormHeaderExtraFieldMapper;
+  private final OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper;
   private final QuoteBomStatusMapper quoteBomStatusMapper;
   private final QuoteIngestLogMapper quoteIngestLogMapper;
+  private final U9ProductPackagingTypeResolver productPackagingTypeResolver;
 
   public QuoteRequestQueryServiceImpl(
       OaFormMapper oaFormMapper,
       OaFormItemMapper oaFormItemMapper,
       OaFormExtraFeeMapper oaFormExtraFeeMapper,
-      OaFormExtraFieldMapper oaFormExtraFieldMapper,
+      OaFormHeaderExtraFieldMapper oaFormHeaderExtraFieldMapper,
+      OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper,
       QuoteBomStatusMapper quoteBomStatusMapper,
-      QuoteIngestLogMapper quoteIngestLogMapper) {
+      QuoteIngestLogMapper quoteIngestLogMapper,
+      U9ProductPackagingTypeResolver productPackagingTypeResolver) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.oaFormExtraFeeMapper = oaFormExtraFeeMapper;
-    this.oaFormExtraFieldMapper = oaFormExtraFieldMapper;
+    this.oaFormHeaderExtraFieldMapper = oaFormHeaderExtraFieldMapper;
+    this.oaFormItemExtraFieldMapper = oaFormItemExtraFieldMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
     this.quoteIngestLogMapper = quoteIngestLogMapper;
+    this.productPackagingTypeResolver = productPackagingTypeResolver;
   }
 
   @Override
@@ -74,11 +82,13 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
       Integer pageSize,
       String oaNo,
       String processCode,
+      String sourceType,
       String classificationStatus) {
     LambdaQueryWrapper<OaForm> query =
         Wrappers.lambdaQuery(OaForm.class)
             .like(StringUtils.hasText(oaNo), OaForm::getOaNo, trimToNull(oaNo))
             .eq(StringUtils.hasText(processCode), OaForm::getProcessCode, trimToNull(processCode))
+            .eq(StringUtils.hasText(sourceType), OaForm::getSourceType, trimToNull(sourceType))
             .eq(
                 StringUtils.hasText(classificationStatus),
                 OaForm::getClassificationStatus,
@@ -193,15 +203,21 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     row.setOaNo(form.getOaNo());
     row.setProcessCode(form.getProcessCode());
     row.setProcessName(form.getProcessName());
+    row.setSourceType(form.getSourceType());
+    row.setSourceSystem(form.getSourceSystem());
     row.setQuoteScenario(form.getQuoteScenario());
     row.setCustomer(form.getCustomer());
     row.setApplyDate(form.getApplyDate());
+    row.setApplicantUnit(form.getApplicantUnit());
+    row.setApplicantDept(form.getApplicantDept());
+    row.setApplicantOffice(form.getApplicantOffice());
     row.setProductCount(items.size());
     row.setIngestStatus(log == null ? null : log.getIngestStatus());
     row.setClassificationStatus(form.getClassificationStatus());
     row.setBomAggregateStatus(bomAggregateStatus);
     row.setCalcStatus(form.getCalcStatus());
     row.setCalculable(isCalculable(form, items.size(), bomAggregateStatus));
+    row.setIngestAt(log == null ? form.getCreatedAt() : log.getReceivedAt());
     return row;
   }
 
@@ -220,7 +236,10 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     for (OaFormExtraFee fee : listExtraFees(form.getId())) {
       response.getExtraFees().add(toExtraFee(fee));
     }
-    for (OaFormExtraField field : listExtraFields(form.getId())) {
+    for (OaFormHeaderExtraField field : listHeaderExtraFields(form.getId())) {
+      response.getExtraFields().add(toExtraField(field));
+    }
+    for (OaFormItemExtraField field : listItemExtraFields(form.getId())) {
       response.getExtraFields().add(toExtraField(field));
     }
     response.setIngestLog(toIngestSummary(findIngestLog(form)));
@@ -237,16 +256,22 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setProcessCode(form.getProcessCode());
     response.setProcessName(form.getProcessName());
     response.setQuoteScenario(form.getQuoteScenario());
+    response.setExpenseProductCategory(form.getExpenseProductCategory());
     response.setFormType(form.getFormType());
     response.setApplyDate(form.getApplyDate());
     response.setCustomer(form.getCustomer());
+    response.setSourceCompany(form.getSourceCompany());
+    response.setSourceBusinessDivision(form.getSourceBusinessDivision());
     response.setApplicantDept(form.getApplicantDept());
     response.setApplicantOffice(form.getApplicantOffice());
     response.setApplicantName(form.getApplicantName());
+    response.setApplicantUnit(form.getApplicantUnit());
     response.setUrgency(form.getUrgency());
     response.setProductAttr(form.getProductAttr());
     response.setPriceLinkMode(form.getPriceLinkMode());
     response.setOverseasSalesMode(form.getOverseasSalesMode());
+    response.setTradeTerms(form.getTradeTerms());
+    response.setExchangeRate(form.getExchangeRate());
     response.setCopperPrice(form.getCopperPrice());
     response.setZincPrice(form.getZincPrice());
     response.setAluminumPrice(form.getAluminumPrice());
@@ -263,6 +288,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setSaleLink(form.getSaleLink());
     response.setRemark(form.getRemark());
     response.setBusinessUnitType(form.getBusinessUnitType());
+    response.setAccountingPeriodMonth(form.getAccountingPeriodMonth());
     response.setCreatedAt(form.getCreatedAt());
     response.setUpdatedAt(form.getUpdatedAt());
     return response;
@@ -281,10 +307,32 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setSpec(item.getSpec());
     response.setProductAttr(item.getProductAttr());
     response.setBusinessType(item.getBusinessType());
+    response.setFirstQuoteFlag(item.getFirstQuoteFlag());
+    response.setCertificationRequired(item.getCertificationRequired());
+    response.setOriginCountry(item.getOriginCountry());
+    response.setPackageType(item.getPackageType());
+    response.setPackageMethod(item.getPackageMethod());
+    response.setPackageComponentCode(item.getPackageComponentCode());
+    response.setPackageQty(item.getPackageQty());
+    response.setShippingFee(item.getShippingFee());
+    response.setSupportQty(item.getSupportQty());
     response.setAnnualVolume(item.getAnnualVolume());
     response.setProjectNo(item.getProjectNo());
+    response.setProductStatus(item.getProductStatus());
+    response.setScrapRate(item.getScrapRate());
+    response.setUnitLaborCost(item.getUnitLaborCost());
     response.setTechnicianName(item.getTechnicianName());
     response.setClassificationStatus(item.getClassificationStatus());
+    response.setTotalWithShip(item.getTotalWithShip());
+    response.setTotalNoShip(item.getTotalNoShip());
+    response.setMaterialCost(item.getMaterialCost());
+    response.setLaborCost(item.getLaborCost());
+    response.setManufacturingCost(item.getManufacturingCost());
+    response.setManagementCost(item.getManagementCost());
+    response.setValidMonth(item.getValidMonth());
+    response.setSus304WeightG(item.getSus304WeightG());
+    response.setSus316WeightG(item.getSus316WeightG());
+    response.setCopperWeightG(item.getCopperWeightG());
     response.setBusinessUnitType(item.getBusinessUnitType());
     response.setValidDate(item.getValidDate());
     response.setBomStatus(toBomStatusResponse(item, status));
@@ -298,6 +346,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setProductCode(item.getMaterialNo());
     response.setProductModel(item.getSunlModel());
     if (status == null) {
+      applyProductPackagingType(response);
       response.setBomStatus(
           StringUtils.hasText(item.getMaterialNo())
               ? QuoteBomStatusCode.NOT_CHECKED.getCode()
@@ -309,6 +358,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setId(status.getId());
     response.setProductCode(status.getProductCode());
     response.setProductModel(status.getProductModel());
+    applyProductPackagingType(response);
     response.setBomStatus(status.getBomStatus());
     response.setBomSource(status.getBomSource());
     response.setBomPurpose(status.getBomPurpose());
@@ -323,10 +373,19 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     return response;
   }
 
+  private void applyProductPackagingType(QuoteBomStatusItemResponse response) {
+    U9ProductPackagingTypeResolver.Result result =
+        productPackagingTypeResolver.resolve(response.getProductCode());
+    response.setProductPackagingType(result.productPackagingType());
+    response.setMainCategoryCode(result.mainCategoryCode());
+  }
+
   private QuoteRequestExtraFeeResponse toExtraFee(OaFormExtraFee fee) {
     QuoteRequestExtraFeeResponse response = new QuoteRequestExtraFeeResponse();
     response.setId(fee.getId());
     response.setOaFormItemId(fee.getOaFormItemId());
+    response.setFeeScope(fee.getFeeScope());
+    response.setBusinessUnitType(fee.getBusinessUnitType());
     response.setFeeCode(fee.getFeeCode());
     response.setFeeName(fee.getFeeName());
     response.setFeeCategory(fee.getFeeCategory());
@@ -339,11 +398,26 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setProjectNo(fee.getProjectNo());
     response.setSourceType(fee.getSourceType());
     response.setSourceFieldName(fee.getSourceFieldName());
+    response.setSourceFieldPath(fee.getSourceFieldPath());
     response.setRemark(fee.getRemark());
     return response;
   }
 
-  private QuoteRequestExtraFieldResponse toExtraField(OaFormExtraField field) {
+  private QuoteRequestExtraFieldResponse toExtraField(OaFormHeaderExtraField field) {
+    QuoteRequestExtraFieldResponse response = new QuoteRequestExtraFieldResponse();
+    response.setId(field.getId());
+    response.setFieldCode(field.getFieldCode());
+    response.setFieldName(field.getFieldName());
+    response.setFieldValue(field.getFieldValue());
+    response.setFieldValueNumber(field.getFieldValueNumber());
+    response.setFieldValueDate(field.getFieldValueDate());
+    response.setValueType(field.getValueType());
+    response.setSourceFieldName(field.getSourceFieldName());
+    response.setSourceFieldPath(field.getSourceFieldPath());
+    return response;
+  }
+
+  private QuoteRequestExtraFieldResponse toExtraField(OaFormItemExtraField field) {
     QuoteRequestExtraFieldResponse response = new QuoteRequestExtraFieldResponse();
     response.setId(field.getId());
     response.setOaFormItemId(field.getOaFormItemId());
@@ -458,12 +532,19 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
             .orderByAsc(OaFormExtraFee::getId));
   }
 
-  private List<OaFormExtraField> listExtraFields(Long oaFormId) {
-    return oaFormExtraFieldMapper.selectList(
-        Wrappers.lambdaQuery(OaFormExtraField.class)
-            .eq(OaFormExtraField::getOaFormId, oaFormId)
-            .orderByAsc(OaFormExtraField::getOaFormItemId)
-            .orderByAsc(OaFormExtraField::getId));
+  private List<OaFormHeaderExtraField> listHeaderExtraFields(Long oaFormId) {
+    return oaFormHeaderExtraFieldMapper.selectList(
+        Wrappers.lambdaQuery(OaFormHeaderExtraField.class)
+            .eq(OaFormHeaderExtraField::getOaFormId, oaFormId)
+            .orderByAsc(OaFormHeaderExtraField::getId));
+  }
+
+  private List<OaFormItemExtraField> listItemExtraFields(Long oaFormId) {
+    return oaFormItemExtraFieldMapper.selectList(
+        Wrappers.lambdaQuery(OaFormItemExtraField.class)
+            .eq(OaFormItemExtraField::getOaFormId, oaFormId)
+            .orderByAsc(OaFormItemExtraField::getOaFormItemId)
+            .orderByAsc(OaFormItemExtraField::getId));
   }
 
   private List<QuoteBomStatus> listBomStatus(String oaNo) {

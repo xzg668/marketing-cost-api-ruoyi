@@ -37,7 +37,7 @@ class QuoteRequestControllerSecurityTest {
               new UsernamePasswordAuthenticationToken(
                   "staff", null, List.of(new SimpleGrantedAuthority("other:permission"))));
 
-      assertThatThrownBy(() -> controller.page(1, 20, null, null, null))
+      assertThatThrownBy(() -> controller.page(1, 20, null, null, null, null))
           .isInstanceOf(AccessDeniedException.class);
     }
   }
@@ -47,7 +47,7 @@ class QuoteRequestControllerSecurityTest {
     try (AnnotationConfigApplicationContext context =
         new AnnotationConfigApplicationContext(TestSecurityConfig.class)) {
       QuoteRequestQueryService service = context.getBean(QuoteRequestQueryService.class);
-      when(service.pageRequests(1, 20, null, null, null))
+      when(service.pageRequests(1, 20, null, null, null, null))
           .thenReturn(new PageResult<>(List.of(new QuoteRequestListItemResponse()), 1L));
       QuoteRequestController controller = context.getBean(QuoteRequestController.class);
       SecurityContextHolder.getContext()
@@ -57,7 +57,7 @@ class QuoteRequestControllerSecurityTest {
                   null,
                   List.of(new SimpleGrantedAuthority("ingest:quote:list"))));
 
-      assertThat(controller.page(1, 20, null, null, null).getData().getTotal()).isEqualTo(1);
+      assertThat(controller.page(1, 20, null, null, null, null).getData().getTotal()).isEqualTo(1);
     }
   }
 

@@ -1,10 +1,29 @@
 package com.sanhua.marketingcost.dto;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 public class ProductPropertyImportRequest {
+  private Integer propertyYear;
+  private String businessUnitType;
   private List<ProductPropertyRow> rows;
+
+  public Integer getPropertyYear() {
+    return propertyYear;
+  }
+
+  public void setPropertyYear(Integer propertyYear) {
+    this.propertyYear = propertyYear;
+  }
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
+  }
 
   public List<ProductPropertyRow> getRows() {
     return rows;
@@ -23,7 +42,25 @@ public class ProductPropertyImportRequest {
     private String parentModel;
     private String period;
     private String productAttr;
-    /** 系数：null = 走 schema DEFAULT 1.0000；非 null 业务方显式控制 */
+    private Integer propertyYear;
+    private String businessDivision;
+    private String productCode;
+    private String productName;
+    private String productModel;
+    private String productSpec;
+    private BigDecimal annualUsage;
+    private String remark;
+    private String attrSourceType;
+    private String attrSourceBatchNo;
+    private String annualUsageSourceType;
+    private String annualUsageSourceBatchNo;
+    private String annualUsageOaNo;
+    private String annualUsageOaLineId;
+    private LocalDate effectiveFrom;
+    private LocalDate effectiveTo;
+    private Integer matchRiskFlag;
+    private String matchRiskReason;
+    /** 兼容历史导入字段；当前系数由后端按产品属性和预计年用量自动推导。 */
     private BigDecimal coefficient;
 
     public String getLevel1Code() {
@@ -88,6 +125,150 @@ public class ProductPropertyImportRequest {
 
     public void setProductAttr(String productAttr) {
       this.productAttr = productAttr;
+    }
+
+    public Integer getPropertyYear() {
+      return propertyYear;
+    }
+
+    public void setPropertyYear(Integer propertyYear) {
+      this.propertyYear = propertyYear;
+    }
+
+    public String getBusinessDivision() {
+      return businessDivision;
+    }
+
+    public void setBusinessDivision(String businessDivision) {
+      this.businessDivision = businessDivision;
+    }
+
+    public String getProductCode() {
+      return productCode;
+    }
+
+    public void setProductCode(String productCode) {
+      this.productCode = productCode;
+    }
+
+    public String getProductName() {
+      return productName;
+    }
+
+    public void setProductName(String productName) {
+      this.productName = productName;
+    }
+
+    public String getProductModel() {
+      return productModel;
+    }
+
+    public void setProductModel(String productModel) {
+      this.productModel = productModel;
+    }
+
+    public String getProductSpec() {
+      return productSpec;
+    }
+
+    public void setProductSpec(String productSpec) {
+      this.productSpec = productSpec;
+    }
+
+    public BigDecimal getAnnualUsage() {
+      return annualUsage;
+    }
+
+    public void setAnnualUsage(BigDecimal annualUsage) {
+      this.annualUsage = annualUsage;
+    }
+
+    public String getRemark() {
+      return remark;
+    }
+
+    public void setRemark(String remark) {
+      this.remark = remark;
+    }
+
+    public String getAttrSourceType() {
+      return attrSourceType;
+    }
+
+    public void setAttrSourceType(String attrSourceType) {
+      this.attrSourceType = attrSourceType;
+    }
+
+    public String getAttrSourceBatchNo() {
+      return attrSourceBatchNo;
+    }
+
+    public void setAttrSourceBatchNo(String attrSourceBatchNo) {
+      this.attrSourceBatchNo = attrSourceBatchNo;
+    }
+
+    public String getAnnualUsageSourceType() {
+      return annualUsageSourceType;
+    }
+
+    public void setAnnualUsageSourceType(String annualUsageSourceType) {
+      this.annualUsageSourceType = annualUsageSourceType;
+    }
+
+    public String getAnnualUsageSourceBatchNo() {
+      return annualUsageSourceBatchNo;
+    }
+
+    public void setAnnualUsageSourceBatchNo(String annualUsageSourceBatchNo) {
+      this.annualUsageSourceBatchNo = annualUsageSourceBatchNo;
+    }
+
+    public String getAnnualUsageOaNo() {
+      return annualUsageOaNo;
+    }
+
+    public void setAnnualUsageOaNo(String annualUsageOaNo) {
+      this.annualUsageOaNo = annualUsageOaNo;
+    }
+
+    public String getAnnualUsageOaLineId() {
+      return annualUsageOaLineId;
+    }
+
+    public void setAnnualUsageOaLineId(String annualUsageOaLineId) {
+      this.annualUsageOaLineId = annualUsageOaLineId;
+    }
+
+    public LocalDate getEffectiveFrom() {
+      return effectiveFrom;
+    }
+
+    public void setEffectiveFrom(LocalDate effectiveFrom) {
+      this.effectiveFrom = effectiveFrom;
+    }
+
+    public LocalDate getEffectiveTo() {
+      return effectiveTo;
+    }
+
+    public void setEffectiveTo(LocalDate effectiveTo) {
+      this.effectiveTo = effectiveTo;
+    }
+
+    public Integer getMatchRiskFlag() {
+      return matchRiskFlag;
+    }
+
+    public void setMatchRiskFlag(Integer matchRiskFlag) {
+      this.matchRiskFlag = matchRiskFlag;
+    }
+
+    public String getMatchRiskReason() {
+      return matchRiskReason;
+    }
+
+    public void setMatchRiskReason(String matchRiskReason) {
+      this.matchRiskReason = matchRiskReason;
     }
 
     public BigDecimal getCoefficient() {

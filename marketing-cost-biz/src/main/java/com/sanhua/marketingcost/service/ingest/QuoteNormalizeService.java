@@ -13,6 +13,7 @@ import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedExtraField;
 import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedHeader;
 import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedItem;
 import com.sanhua.marketingcost.enums.QuoteExtraFeeCategory;
+import com.sanhua.marketingcost.enums.QuoteSourceType;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -25,6 +26,8 @@ import org.springframework.stereotype.Service;
 public class QuoteNormalizeService {
   private static final String SCOPE_HEADER = "HEADER";
   private static final String SCOPE_ITEM = "ITEM";
+  private static final String SOURCE_SYSTEM_EXCEL_TEMPLATE = "EXCEL_TEMPLATE";
+  private static final String SOURCE_SYSTEM_WEAVER_ECOLOGY = "WEAVER_ECOLOGY";
   private static final List<DateTimeFormatter> DATE_FORMATTERS =
       Arrays.asList(
           DateTimeFormatter.ISO_LOCAL_DATE,
@@ -63,8 +66,9 @@ public class QuoteNormalizeService {
       QuoteClassificationResult classification) {
     QuoteNormalizedHeader header = new QuoteNormalizedHeader();
     if (request != null) {
-      header.setSourceType(trimToNull(request.getSourceType()));
-      header.setSourceSystem(trimToNull(request.getSourceSystem()));
+      String sourceType = trimToNull(request.getSourceType());
+      header.setSourceType(sourceType);
+      header.setSourceSystem(resolveSourceSystem(sourceType, request.getSourceSystem()));
       header.setExternalFormNo(trimToNull(request.getExternalFormNo()));
       header.setOaNo(trimToNull(request.getOaNo()));
     }
@@ -77,8 +81,15 @@ public class QuoteNormalizeService {
     header.setProcessCode(trimToNull(headerRequest.getProcessCode()));
     header.setProcessName(trimToNull(headerRequest.getProcessName()));
     header.setFormType(trimToNull(headerRequest.getFormType()));
-    header.setApplyDate(parseDate(headerRequest.getApplyDate()));
+    LocalDate applyDate = parseDate(headerRequest.getApplyDate());
+    header.setApplyDate(applyDate);
+    header.setAccountingPeriodMonth(toAccountingPeriodMonth(applyDate));
     header.setCustomer(trimToNull(headerRequest.getCustomer()));
+    header.setApplicantUnit(trimToNull(headerRequest.getApplicantUnit()));
+    header.setSourceCompany(trimToNull(headerRequest.getSourceCompany()));
+    header.setSourceBusinessDivision(trimToNull(headerRequest.getSourceBusinessDivision()));
+    header.setExpenseProductCategory(
+        coalesce(classification.getExpenseProductCategory(), headerRequest.getExpenseProductCategory()));
     header.setApplicantDept(trimToNull(headerRequest.getApplicantDept()));
     header.setApplicantOffice(trimToNull(headerRequest.getApplicantOffice()));
     header.setApplicantName(trimToNull(headerRequest.getApplicantName()));
@@ -86,6 +97,8 @@ public class QuoteNormalizeService {
     header.setProductAttr(trimToNull(headerRequest.getProductAttr()));
     header.setPriceLinkMode(trimToNull(headerRequest.getPriceLinkMode()));
     header.setOverseasSalesMode(trimToNull(headerRequest.getOverseasSalesMode()));
+    header.setTradeTerms(trimToNull(headerRequest.getTradeTerms()));
+    header.setExchangeRate(parseNumber(headerRequest.getExchangeRate()));
     header.setCopperPrice(parseNumber(headerRequest.getCopperPrice()));
     header.setZincPrice(parseNumber(headerRequest.getZincPrice()));
     header.setAluminumPrice(parseNumber(headerRequest.getAluminumPrice()));
@@ -99,6 +112,27 @@ public class QuoteNormalizeService {
     header.setSaleLink(trimToNull(headerRequest.getSaleLink()));
     header.setRemark(trimToNull(headerRequest.getRemark()));
     return header;
+  }
+
+  private String resolveSourceSystem(String sourceType, String sourceSystem) {
+    String value = trimToNull(sourceSystem);
+    if (value != null) {
+      return value;
+    }
+    if (QuoteSourceType.EXCEL.getCode().equalsIgnoreCase(sourceType)) {
+      return SOURCE_SYSTEM_EXCEL_TEMPLATE;
+    }
+    if (QuoteSourceType.WEAVER_OA.getCode().equalsIgnoreCase(sourceType)) {
+      return SOURCE_SYSTEM_WEAVER_ECOLOGY;
+    }
+    return null;
+  }
+
+  private String toAccountingPeriodMonth(LocalDate applyDate) {
+    if (applyDate == null) {
+      return null;
+    }
+    return String.format("%04d-%02d", applyDate.getYear(), applyDate.getMonthValue());
   }
 
   private void normalizeHeaderExtras(QuoteNormalizedDocument document, QuoteIngestRequest request) {
@@ -181,6 +215,16 @@ public class QuoteNormalizeService {
     item.setProductStatus(trimToNull(source.getProductStatus()));
     item.setScrapRate(parseNumber(source.getScrapRate()));
     item.setUnitLaborCost(parseNumber(source.getUnitLaborCost()));
+    item.setTotalWithShip(parseNumber(source.getTotalWithShip()));
+    item.setTotalNoShip(parseNumber(source.getTotalNoShip()));
+    item.setMaterialCost(parseNumber(source.getMaterialCost()));
+    item.setLaborCost(parseNumber(source.getLaborCost()));
+    item.setManufacturingCost(parseNumber(source.getManufacturingCost()));
+    item.setManagementCost(parseNumber(source.getManagementCost()));
+    item.setValidMonth(parseInteger(source.getValidMonth()));
+    item.setSus304WeightG(parseNumber(source.getSus304WeightG()));
+    item.setSus316WeightG(parseNumber(source.getSus316WeightG()));
+    item.setCopperWeightG(parseNumber(source.getCopperWeightG()));
     item.setValidDate(parseDate(source.getValidDate()));
     item.setBusinessUnitType(classification.getBusinessUnitType());
     item.setQuoteScenario(classification.getQuoteScenario());
@@ -281,10 +325,27 @@ public class QuoteNormalizeService {
       return null;
     }
     try {
+      if (normalized.endsWith("%")) {
+        return new BigDecimal(normalized.substring(0, normalized.length() - 1).replace(",", ""))
+            .movePointLeft(2);
+      }
       return new BigDecimal(normalized.replace(",", ""));
     } catch (NumberFormatException ex) {
       return null;
     }
+  }
+
+  private Integer parseInteger(String value) {
+    BigDecimal decimal = parseNumber(normalizeMonth(value));
+    return decimal == null ? null : decimal.intValue();
+  }
+
+  private String normalizeMonth(String value) {
+    String normalized = trimToNull(value);
+    if (normalized == null) {
+      return null;
+    }
+    return normalized.replace("个月", "").replace("月", "").trim();
   }
 
   private LocalDate parseDate(String value) {

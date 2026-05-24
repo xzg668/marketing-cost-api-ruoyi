@@ -9,16 +9,23 @@ import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusCheckRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteExcelImportCommitResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteExcelImportPreviewResponse;
+import com.sanhua.marketingcost.dto.ingest.QuoteExcelTemplateInfoResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestLogDetailResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestLogListItemResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestResponse;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.QuoteExcelImportService;
+import com.sanhua.marketingcost.service.ingest.QuoteExcelTemplateFile;
+import com.sanhua.marketingcost.service.ingest.QuoteExcelTemplateService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestService;
 import com.sanhua.marketingcost.service.ingest.QuoteRequestQueryService;
 import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -32,18 +39,24 @@ import org.springframework.web.multipart.MultipartFile;
 @RestController
 @RequestMapping("/api/v1/quote-ingest")
 public class QuoteIngestController {
+  private static final String CONTENT_TYPE_XLSX =
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
   private final QuoteIngestService quoteIngestService;
   private final QuoteExcelImportService quoteExcelImportService;
+  private final QuoteExcelTemplateService quoteExcelTemplateService;
   private final QuoteBomStatusService quoteBomStatusService;
   private final QuoteRequestQueryService quoteRequestQueryService;
 
   public QuoteIngestController(
       QuoteIngestService quoteIngestService,
       QuoteExcelImportService quoteExcelImportService,
+      QuoteExcelTemplateService quoteExcelTemplateService,
       QuoteBomStatusService quoteBomStatusService,
       QuoteRequestQueryService quoteRequestQueryService) {
     this.quoteIngestService = quoteIngestService;
     this.quoteExcelImportService = quoteExcelImportService;
+    this.quoteExcelTemplateService = quoteExcelTemplateService;
     this.quoteBomStatusService = quoteBomStatusService;
     this.quoteRequestQueryService = quoteRequestQueryService;
   }
@@ -79,6 +92,29 @@ public class QuoteIngestController {
           quoteExcelImportService.commit(file.getInputStream(), file.getOriginalFilename()));
     } catch (IOException | QuoteIngestException ex) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
+    }
+  }
+
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:import')")
+  @GetMapping("/excel/templates")
+  public CommonResult<List<QuoteExcelTemplateInfoResponse>> listExcelTemplates() {
+    return CommonResult.success(quoteExcelTemplateService.listTemplates());
+  }
+
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:import')")
+  @GetMapping("/excel/templates/{templateType}/download")
+  public void downloadExcelTemplate(
+      @PathVariable("templateType") String templateType, HttpServletResponse response)
+      throws IOException {
+    try {
+      QuoteExcelTemplateFile file = quoteExcelTemplateService.getTemplate(templateType);
+      String encoded = URLEncoder.encode(file.getFileName(), StandardCharsets.UTF_8).replace("+", "%20");
+      response.setContentType(CONTENT_TYPE_XLSX);
+      response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+      response.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + encoded);
+      response.getOutputStream().write(file.getContent());
+    } catch (QuoteIngestException ex) {
+      response.sendError(HttpServletResponse.SC_BAD_REQUEST, ex.getMessage());
     }
   }
 

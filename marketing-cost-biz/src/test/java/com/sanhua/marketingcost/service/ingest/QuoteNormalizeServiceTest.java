@@ -26,6 +26,14 @@ class QuoteNormalizeServiceTest {
     assertThat(document.getHeader().getQuoteScenario()).isEqualTo("DIRECT_SALE");
     assertThat(document.getHeader().getClassificationStatus()).isEqualTo("CONFIRMED");
     assertThat(document.getHeader().getApplyDate()).isEqualTo(LocalDate.of(2026, 5, 11));
+    assertThat(document.getHeader().getAccountingPeriodMonth()).isEqualTo("2026-05");
+    assertThat(document.getHeader().getSourceSystem()).isEqualTo("EXCEL_TEMPLATE");
+    assertThat(document.getHeader().getApplicantUnit()).isEqualTo("申请单位A");
+    assertThat(document.getHeader().getSourceCompany()).isEqualTo("来源公司A");
+    assertThat(document.getHeader().getSourceBusinessDivision()).isEqualTo("商用事业部");
+    assertThat(document.getHeader().getExpenseProductCategory()).isEqualTo("商用直销产品");
+    assertThat(document.getHeader().getTradeTerms()).isEqualTo("FOB");
+    assertThat(document.getHeader().getExchangeRate()).isEqualByComparingTo("7.12");
     assertThat(document.getHeader().getCopperPrice()).isEqualByComparingTo("78000.50");
     assertThat(document.getItems()).hasSize(2);
     assertThat(document.getItems().get(0).getSeq()).isEqualTo(1);
@@ -71,7 +79,13 @@ class QuoteNormalizeServiceTest {
     header.setProcessCode("FI-SC-020");
     header.setApplyDate("2026/5/11");
     header.setCustomer("客户A");
+    header.setApplicantUnit("申请单位A");
+    header.setSourceCompany("来源公司A");
+    header.setSourceBusinessDivision("商用事业部");
+    header.setExpenseProductCategory("控制器");
     header.setProductAttr("表头属性");
+    header.setTradeTerms("FOB");
+    header.setExchangeRate("7.12");
     header.setCopperPrice("78,000.50");
 
     QuoteIngestItemRequest first = new QuoteIngestItemRequest();

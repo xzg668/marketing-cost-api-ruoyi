@@ -12,9 +12,11 @@ import com.sanhua.marketingcost.dto.FlattenResult;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.BomStopDrillRule;
+import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.BomStopDrillRuleMapper;
+import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
 import com.sanhua.marketingcost.service.BomFlattenService;
 import com.sanhua.marketingcost.service.BomHierarchyBuildService;
@@ -50,6 +52,7 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
   @Autowired private BomRawHierarchyMapper rawMapper;
   @Autowired private BomCostingRowMapper costingMapper;
   @Autowired private BomStopDrillRuleMapper ruleMapper;
+  @Autowired private MaterialMasterRawMapper materialMasterRawMapper;
   @Autowired private BomImportService bomImportService;
   @Autowired private BomHierarchyBuildService buildService;
 
@@ -63,6 +66,7 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
       stmt.executeUpdate("DELETE FROM lp_bom_costing_row WHERE oa_no = '" + oaNo + "'");
       // raw_hierarchy：按本测试产生的 build_batch_id 前缀 'rawtest_' 清（见 seedRaw）
       stmt.executeUpdate("DELETE FROM lp_bom_raw_hierarchy WHERE build_batch_id LIKE 'rawtest_%'");
+      stmt.executeUpdate("DELETE FROM lp_material_master_raw WHERE import_batch_id LIKE 'rawtest_material_%'");
       // 自定义规则（非 V40 种子）按 match_value 前缀 'TEST_' 清
       stmt.executeUpdate(
           "DELETE FROM bom_stop_drill_rule WHERE match_value LIKE 'TEST\\_%' ESCAPE '\\\\'");
@@ -93,16 +97,16 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
   }
 
   @Test
-  @DisplayName("testStopAndCostRow_SubtreeNotIncluded：NAME_LIKE 接管 命中 → 子孙不入 costing")
+  @DisplayName("testStopAndCostRow_SubtreeNotIncluded：NAME_LIKE 自定义规则命中 → 子孙不入 costing")
   void testStopAndCostRow_SubtreeNotIncluded() {
-    // T → T1(name='D接管')→T1A(拉制铜管)；T1 被"接管"规则命中 STOP_AND_COST_ROW
+    // T → T1(name='TEST_接管')→T1A(拉制铜管)；T1 被自定义规则命中 STOP_AND_COST_ROW
     seedTop("T", "主制造", "2026-01-01", 0);
     seedChildAt("T", "T1", "/T/T1/", 1, 1, "1", "主制造", "2026-01-01",
-        "D接管", null, "采购件", /*isLeaf=*/0);
+        "TEST_接管", null, "采购件", /*isLeaf=*/0);
     seedChildAt("T1", "T1A", "/T/T1/T1A/", 2, 1, "1", "主制造", "2026-01-01",
         "拉制铜管", null, "采购件", 1);
 
-    // V40 种子已含 NAME_LIKE '接管' 规则，priority=10, mark_subtree=1
+    insertRule("NAME_LIKE", "TEST_接管", "STOP_AND_COST_ROW", 1, 5);
     FlattenResult r = flattenService.flatten(req("T", "主制造", LocalDate.of(2026, 6, 1)));
 
     List<BomCostingRow> rows = loadCostingByOa();
@@ -153,6 +157,28 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
     List<BomCostingRow> rows = loadCostingByOa();
     assertThat(rows).hasSize(1);
     assertThat(rows.get(0).getMaterialCode()).as("只有叶子 T1A 入 costing").isEqualTo("T1A");
+  }
+
+  @Test
+  @DisplayName("testPackageComponentParentIsCostingBoundary：包装组件父件入 costing，子件不入 BOM 明细")
+  void testPackageComponentParentIsCostingBoundary() {
+    seedMaterialMasterRaw("PKG_PARENT", "151551519", "虚拟");
+    seedTop("T", "主制造", "2026-01-01", 0);
+    seedChildAt("T", "PKG_PARENT", "/T/PKG_PARENT/", 1, 1, "1", "主制造", "2026-01-01",
+        "包装组件", "虚拟", "制造件", 0);
+    seedChildAt("PKG_PARENT", "BOX", "/T/PKG_PARENT/BOX/", 2, 1, "2", "主制造", "2026-01-01",
+        "瓦楞纸箱", null, "采购件", 1);
+    seedChildAt("PKG_PARENT", "FOAM", "/T/PKG_PARENT/FOAM/", 2, 2, "3", "主制造", "2026-01-01",
+        "泡沫隔档", null, "采购件", 1);
+
+    flattenService.flatten(req("T", "主制造", LocalDate.of(2026, 6, 1)));
+
+    List<BomCostingRow> rows = loadCostingByOa();
+    assertThat(rows).hasSize(1);
+    assertThat(rows.get(0).getMaterialCode()).isEqualTo("PKG_PARENT");
+    assertThat(rows.get(0).getSubtreeCostRequired()).isEqualTo(0);
+    assertThat(rows.stream().map(BomCostingRow::getMaterialCode))
+        .doesNotContain("BOX", "FOAM");
   }
 
   @Test
@@ -231,6 +257,34 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
     List<BomCostingRow> second = loadCostingByOa();
     assertThat(second.size()).as("重跑行数稳定").isEqualTo((int) firstCount);
     assertThat(second.get(0).getBuiltAt()).as("built_at 已刷新").isAfter(built1);
+  }
+
+  @Test
+  @DisplayName("testSamePeriodMonthRerun：同 OA + 产品 + 月份换 asOfDate 重跑 → 旧日快照被覆盖")
+  void testSamePeriodMonthRerun() {
+    seedRawVersioned("T", "T", "T", "/T/", 0, null, "1",
+        "主制造", "2026-06-01", "2026-06-14", "T_name", null, null, 0);
+    seedRawVersioned("T", "T", "C1", "/T/C1/", 1, "1", "1",
+        "主制造", "2026-06-01", "2026-06-14", "C1_name", null, "采购件", 1);
+    seedRawVersioned("T", "T", "T", "/T/", 0, null, "1",
+        "主制造", "2026-06-15", "9999-12-31", "T_name", null, null, 0);
+    seedRawVersioned("T", "T", "C1", "/T/C1/", 1, "1", "1",
+        "主制造", "2026-06-15", "9999-12-31", "C1_name", null, "采购件", 1);
+    seedRawVersioned("T", "T", "C2", "/T/C2/", 2, "1", "1",
+        "主制造", "2026-06-15", "9999-12-31", "C2_name", null, "采购件", 1);
+
+    flattenService.flatten(req("T", "主制造", LocalDate.of(2026, 6, 5)));
+    assertThat(loadCostingByOa()).hasSize(1);
+
+    flattenService.flatten(req("T", "主制造", LocalDate.of(2026, 6, 20)));
+    List<BomCostingRow> rows = loadCostingByOa();
+    assertThat(rows).hasSize(2);
+    assertThat(rows).allSatisfy(c -> {
+      assertThat(c.getPeriodMonth()).isEqualTo("2026-06");
+      assertThat(c.getAsOfDate()).isEqualTo(LocalDate.of(2026, 6, 20));
+    });
+    assertThat(rows.stream().map(BomCostingRow::getMaterialCode))
+        .containsExactlyInAnyOrder("C1", "C2");
   }
 
   @Test
@@ -448,5 +502,19 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
     rule.setPriority(priority);
     rule.setEnabled(1);
     ruleMapper.insert(rule);
+  }
+
+  private void seedMaterialMasterRaw(String materialCode, String mainCategoryCode, String shapeAttr) {
+    MaterialMasterRaw row = new MaterialMasterRaw();
+    row.setMaterialCode(materialCode);
+    row.setMaterialName(materialCode + "_name");
+    row.setMainCategoryCode(mainCategoryCode);
+    row.setShapeAttr(shapeAttr);
+    row.setImportBatchId("rawtest_material_" + UUID.randomUUID().toString().substring(0, 8));
+    row.setSourceType("EXCEL");
+    row.setSourceBatchNo(row.getImportBatchId());
+    row.setMappingVersion("TEST");
+    row.setActiveFlag(1);
+    materialMasterRawMapper.insert(row);
   }
 }

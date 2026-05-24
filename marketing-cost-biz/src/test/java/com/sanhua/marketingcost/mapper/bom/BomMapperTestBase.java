@@ -81,6 +81,7 @@ public abstract class BomMapperTestBase {
       "/db/V35__price_linked_item_soft_delete.sql",
       "/db/V36__row_local_placeholder.sql",
       "/db/V37__fix_blank_net_weight_unit_scale.sql",
+      "/db/V53__material_master_raw_staging.sql",
       "/db/V57__cost_run_cost_item_add_category.sql",
       "/db/V58__aux_subject_unit_price_precision.sql");
 
@@ -104,9 +105,11 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V21__business_unit_type_isolation.sql", "V21");
       runScriptViaMysqlCli("/db/V22__business_unit_type_isolation_extended.sql", "V22");
       runMigrationsViaJdbc(LATE_MIGRATION_SCRIPTS);
+      runScriptViaMysqlCli("/db/V95__u9_material_master_raw_20260519.sql", "V95");
       runScriptViaMysqlCli("/db/V40__bom_three_layer_and_rules.sql", "V40");
       // T8：V41 含 ALTER TABLE + DELIMITER 存储过程块 + 中文 INSERT，必须走 mysql CLI
       runScriptViaMysqlCli("/db/V41__bom_rule_enhance_and_sub_ref.sql", "V41");
+      runScriptViaMysqlCli("/db/V113__bom_costing_row_period_month.sql", "V113");
       // T11：V43 字典种子 + 老规则停用，纯 INSERT/UPDATE 走 mysql CLI 简单可靠
       runScriptViaMysqlCli("/db/V43__bom_leaf_rollup_dict.sql", "V43");
       // T11 增强：V44 原材料 cost_element 白名单字典（IN_DICT 命中前置硬条件）

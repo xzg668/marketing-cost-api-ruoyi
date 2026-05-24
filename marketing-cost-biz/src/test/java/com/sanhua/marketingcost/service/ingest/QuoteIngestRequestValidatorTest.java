@@ -66,6 +66,7 @@ class QuoteIngestRequestValidatorTest {
   void invalidNumberFailsWithStructuredError() {
     QuoteIngestRequest request = minimalRequest();
     request.getHeader().setCopperPrice("abc");
+    request.getHeader().setExchangeRate("x7");
     QuoteExtraFeeRequest fee = new QuoteExtraFeeRequest();
     fee.setAmount("12x");
     request.setExtraFees(List.of(fee));
@@ -76,7 +77,19 @@ class QuoteIngestRequestValidatorTest {
     assertThat(response.getErrors()).extracting("code").contains("NUMBER_INVALID");
     assertThat(response.getErrors())
         .extracting("fieldPath")
-        .contains("header.copperPrice", "extraFees[0].amount");
+        .contains("header.copperPrice", "header.exchangeRate", "extraFees[0].amount");
+  }
+
+  @Test
+  void missingApplyDateFails() {
+    QuoteIngestRequest request = minimalRequest();
+    request.getHeader().setApplyDate(" ");
+
+    QuoteIngestPreviewResponse response = validator.validate(request);
+
+    assertThat(response.isValid()).isFalse();
+    assertThat(response.getErrors()).extracting("code").contains("APPLY_DATE_REQUIRED");
+    assertThat(response.getErrors()).extracting("fieldPath").contains("header.applyDate");
   }
 
   @Test
@@ -89,6 +102,17 @@ class QuoteIngestRequestValidatorTest {
     assertThat(response.isValid()).isFalse();
     assertThat(response.getErrors()).extracting("code").contains("DATE_INVALID");
     assertThat(response.getErrors()).extracting("fieldPath").contains("header.applyDate");
+  }
+
+  @Test
+  void weaverOaSourceTypePasses() {
+    QuoteIngestRequest request = minimalRequest();
+    request.setSourceType("WEAVER_OA");
+
+    QuoteIngestPreviewResponse response = validator.validate(request);
+
+    assertThat(response.isValid()).isTrue();
+    assertThat(response.getErrors()).isEmpty();
   }
 
   @Test

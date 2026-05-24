@@ -22,6 +22,24 @@ public interface PriceLinkedCalcService {
       int page,
       int pageSize);
 
+  /**
+   * 只读查询已落库的联动价计算结果。
+   *
+   * <p>查询页用于追溯核对，不能在列表查询时补写 calc_item，也不能触发联动价重算。
+   */
+  Page<PriceLinkedCalcRow> resultPage(
+      String oaNo,
+      String customer,
+      String businessUnitType,
+      String itemCode,
+      String calcScene,
+      String pricingMonth,
+      Long adjustBatchId,
+      String calcStatus,
+      String factorSource,
+      int page,
+      int pageSize);
+
   /** 按 oaNo 批量重算并写回 trace_json。返回新增/更新行数。 */
   int refresh(String oaNo);
 

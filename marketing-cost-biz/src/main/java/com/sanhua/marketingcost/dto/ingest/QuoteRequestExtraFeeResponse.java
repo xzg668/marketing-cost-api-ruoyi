@@ -7,6 +7,8 @@ import lombok.Data;
 public class QuoteRequestExtraFeeResponse {
   private Long id;
   private Long oaFormItemId;
+  private String feeScope;
+  private String businessUnitType;
   private String feeCode;
   private String feeName;
   private String feeCategory;
@@ -19,5 +21,6 @@ public class QuoteRequestExtraFeeResponse {
   private String projectNo;
   private String sourceType;
   private String sourceFieldName;
+  private String sourceFieldPath;
   private String remark;
 }

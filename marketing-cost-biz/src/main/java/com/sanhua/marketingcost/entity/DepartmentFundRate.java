@@ -22,6 +22,17 @@ public class DepartmentFundRate {
   /** 业务单元租户口径：COMMERCIAL / HOUSEHOLD，区别于组织口径 businessUnit（V22 补齐） */
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
+  private Integer rateYear;
+  private String businessDivision;
+  private String expenseSubject;
+  private BigDecimal budgetAmount;
+  private BigDecimal totalWorkMinutes;
+  private BigDecimal planRate;
+  private BigDecimal upliftRatio;
+  private BigDecimal quoteRatio;
+  private String sourceType;
+  private String sourceBatchNo;
+  private String remark;
 
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
@@ -99,6 +110,94 @@ public class DepartmentFundRate {
 
   public void setBusinessUnitType(String businessUnitType) {
     this.businessUnitType = businessUnitType;
+  }
+
+  public Integer getRateYear() {
+    return rateYear;
+  }
+
+  public void setRateYear(Integer rateYear) {
+    this.rateYear = rateYear;
+  }
+
+  public String getBusinessDivision() {
+    return businessDivision;
+  }
+
+  public void setBusinessDivision(String businessDivision) {
+    this.businessDivision = businessDivision;
+  }
+
+  public String getExpenseSubject() {
+    return expenseSubject;
+  }
+
+  public void setExpenseSubject(String expenseSubject) {
+    this.expenseSubject = expenseSubject;
+  }
+
+  public BigDecimal getBudgetAmount() {
+    return budgetAmount;
+  }
+
+  public void setBudgetAmount(BigDecimal budgetAmount) {
+    this.budgetAmount = budgetAmount;
+  }
+
+  public BigDecimal getTotalWorkMinutes() {
+    return totalWorkMinutes;
+  }
+
+  public void setTotalWorkMinutes(BigDecimal totalWorkMinutes) {
+    this.totalWorkMinutes = totalWorkMinutes;
+  }
+
+  public BigDecimal getPlanRate() {
+    return planRate;
+  }
+
+  public void setPlanRate(BigDecimal planRate) {
+    this.planRate = planRate;
+  }
+
+  public BigDecimal getUpliftRatio() {
+    return upliftRatio;
+  }
+
+  public void setUpliftRatio(BigDecimal upliftRatio) {
+    this.upliftRatio = upliftRatio;
+  }
+
+  public BigDecimal getQuoteRatio() {
+    return quoteRatio;
+  }
+
+  public void setQuoteRatio(BigDecimal quoteRatio) {
+    this.quoteRatio = quoteRatio;
+  }
+
+  public String getSourceType() {
+    return sourceType;
+  }
+
+  public void setSourceType(String sourceType) {
+    this.sourceType = sourceType;
+  }
+
+  public String getSourceBatchNo() {
+    return sourceBatchNo;
+  }
+
+  public void setSourceBatchNo(String sourceBatchNo) {
+    this.sourceBatchNo = sourceBatchNo;
+  }
+
+  public String getRemark() {
+    return remark;
+  }
+
+  public void setRemark(String remark) {
+    this.remark = remark;
   }
 
   public LocalDateTime getCreatedAt() {

@@ -63,6 +63,19 @@ public interface BomManageItemMapper extends BaseMapper<BomManageItem> {
           <if test="shapeAttr != null and shapeAttr != ''">
             AND t1.shape_attr = #{shapeAttr}
           </if>
+          AND NOT EXISTS (
+            SELECT 1
+            FROM lp_material_master_raw pkg_parent
+            WHERE pkg_parent.material_code = t1.parent_code
+              AND pkg_parent.active_flag = 1
+              AND pkg_parent.import_batch_id = (
+                SELECT MAX(pkg_latest.import_batch_id)
+                FROM lp_material_master_raw pkg_latest
+                WHERE pkg_latest.active_flag = 1
+              )
+              AND pkg_parent.main_category_code LIKE '15155%'
+              AND pkg_parent.shape_attr = '虚拟'
+          )
         </where>
         GROUP BY t1.oa_no, t1.top_product_code
       ) t
@@ -121,6 +134,19 @@ public interface BomManageItemMapper extends BaseMapper<BomManageItem> {
         <if test="shapeAttr != null and shapeAttr != ''">
           AND t1.shape_attr = #{shapeAttr}
         </if>
+        AND NOT EXISTS (
+          SELECT 1
+          FROM lp_material_master_raw pkg_parent
+          WHERE pkg_parent.material_code = t1.parent_code
+            AND pkg_parent.active_flag = 1
+            AND pkg_parent.import_batch_id = (
+              SELECT MAX(pkg_latest.import_batch_id)
+              FROM lp_material_master_raw pkg_latest
+              WHERE pkg_latest.active_flag = 1
+            )
+            AND pkg_parent.main_category_code LIKE '15155%'
+            AND pkg_parent.shape_attr = '虚拟'
+        )
       </where>
       GROUP BY t1.oa_no, t1.top_product_code
       ORDER BY t1.top_product_code ASC, t1.oa_no ASC
@@ -185,6 +211,19 @@ public interface BomManageItemMapper extends BaseMapper<BomManageItem> {
        AND t3.deleted = 0
       WHERE t1.oa_no = #{oaNo}
         AND t1.top_product_code = #{rootItemCode}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM lp_material_master_raw pkg_parent
+          WHERE pkg_parent.material_code = t1.parent_code
+            AND pkg_parent.active_flag = 1
+            AND pkg_parent.import_batch_id = (
+              SELECT MAX(pkg_latest.import_batch_id)
+              FROM lp_material_master_raw pkg_latest
+              WHERE pkg_latest.active_flag = 1
+            )
+            AND pkg_parent.main_category_code LIKE '15155%'
+            AND pkg_parent.shape_attr = '虚拟'
+        )
       <if test="shapeAttr != null and shapeAttr != ''">
         AND t1.shape_attr = #{shapeAttr}
       </if>

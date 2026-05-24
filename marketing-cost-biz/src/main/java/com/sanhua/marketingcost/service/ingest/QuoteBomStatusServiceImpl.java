@@ -32,18 +32,21 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
   private final QuoteBomStatusMapper quoteBomStatusMapper;
   private final BomAvailabilityAdapter bomAvailabilityAdapter;
   private final BomU9SourceMapper bomU9SourceMapper;
+  private final U9ProductPackagingTypeResolver productPackagingTypeResolver;
 
   public QuoteBomStatusServiceImpl(
       OaFormMapper oaFormMapper,
       OaFormItemMapper oaFormItemMapper,
       QuoteBomStatusMapper quoteBomStatusMapper,
       BomAvailabilityAdapter bomAvailabilityAdapter,
-      BomU9SourceMapper bomU9SourceMapper) {
+      BomU9SourceMapper bomU9SourceMapper,
+      U9ProductPackagingTypeResolver productPackagingTypeResolver) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
     this.bomAvailabilityAdapter = bomAvailabilityAdapter;
     this.bomU9SourceMapper = bomU9SourceMapper;
+    this.productPackagingTypeResolver = productPackagingTypeResolver;
   }
 
   @Override
@@ -356,6 +359,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     row.setProductCode(trimToNull(item.getMaterialNo()));
     row.setProductModel(trimToNull(item.getSunlModel()));
     if (status == null) {
+      applyProductPackagingType(row);
       row.setBomStatus(
           StringUtils.hasText(item.getMaterialNo())
               ? QuoteBomStatusCode.NOT_CHECKED.getCode()
@@ -367,6 +371,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     row.setId(status.getId());
     row.setProductCode(status.getProductCode());
     row.setProductModel(status.getProductModel());
+    applyProductPackagingType(row);
     row.setBomStatus(status.getBomStatus());
     row.setBomSource(status.getBomSource());
     row.setBomPurpose(status.getBomPurpose());
@@ -379,6 +384,13 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     row.setSupplementTaskId(status.getSupplementTaskId());
     row.setErrorMessage(status.getErrorMessage());
     return row;
+  }
+
+  private void applyProductPackagingType(QuoteBomStatusItemResponse row) {
+    U9ProductPackagingTypeResolver.Result result =
+        productPackagingTypeResolver.resolve(row.getProductCode());
+    row.setProductPackagingType(result.productPackagingType());
+    row.setMainCategoryCode(result.mainCategoryCode());
   }
 
   private String trimToNull(String value) {

@@ -77,10 +77,15 @@ public class QuoteIngestRequestValidator {
       addError(response, "header.processCode", "PROCESS_CODE_REQUIRED", "OA/Excel 接入必须提供流程编号");
     }
     if (header == null) {
+      addError(response, "header.applyDate", "APPLY_DATE_REQUIRED", "申请日期不能为空");
       return;
     }
 
+    if (trimToNull(header.getApplyDate()) == null) {
+      addError(response, "header.applyDate", "APPLY_DATE_REQUIRED", "申请日期不能为空");
+    }
     validateDate(response, "header.applyDate", header.getApplyDate(), null);
+    validateNumber(response, "header.exchangeRate", header.getExchangeRate(), null);
     validateNumber(response, "header.copperPrice", header.getCopperPrice(), null);
     validateNumber(response, "header.zincPrice", header.getZincPrice(), null);
     validateNumber(response, "header.aluminumPrice", header.getAluminumPrice(), null);
@@ -118,6 +123,10 @@ public class QuoteIngestRequestValidator {
       validateNumber(response, path + ".annualVolume", item.getAnnualVolume(), rowNo);
       validateNumber(response, path + ".scrapRate", item.getScrapRate(), rowNo);
       validateNumber(response, path + ".unitLaborCost", item.getUnitLaborCost(), rowNo);
+      validateNumber(response, path + ".validMonth", normalizeMonth(item.getValidMonth()), rowNo);
+      validateNumber(response, path + ".sus304WeightG", item.getSus304WeightG(), rowNo);
+      validateNumber(response, path + ".sus316WeightG", item.getSus316WeightG(), rowNo);
+      validateNumber(response, path + ".copperWeightG", item.getCopperWeightG(), rowNo);
       validateExtraFees(response, path + ".extraFees", item.getExtraFees(), rowNo);
     }
   }
@@ -185,6 +194,7 @@ public class QuoteIngestRequestValidator {
 
   private boolean requiresProcessCode(String sourceType) {
     return QuoteSourceType.OA.getCode().equalsIgnoreCase(sourceType)
+        || QuoteSourceType.WEAVER_OA.getCode().equalsIgnoreCase(sourceType)
         || QuoteSourceType.MOCK_OA.getCode().equalsIgnoreCase(sourceType)
         || QuoteSourceType.EXCEL.getCode().equalsIgnoreCase(sourceType);
   }
@@ -205,7 +215,11 @@ public class QuoteIngestRequestValidator {
       return;
     }
     try {
-      new BigDecimal(normalized.replace(",", ""));
+      if (normalized.endsWith("%")) {
+        new BigDecimal(normalized.substring(0, normalized.length() - 1).replace(",", ""));
+      } else {
+        new BigDecimal(normalized.replace(",", ""));
+      }
     } catch (NumberFormatException ex) {
       addError(response, fieldPath, "NUMBER_INVALID", "金额或数量字段必须是可解析数字", rowNo);
     }
@@ -240,6 +254,14 @@ public class QuoteIngestRequestValidator {
       String message,
       Integer rowNo) {
     response.getErrors().add(new QuoteValidationError(fieldPath, code, message, rowNo));
+  }
+
+  private String normalizeMonth(String value) {
+    String normalized = trimToNull(value);
+    if (normalized == null) {
+      return null;
+    }
+    return normalized.replace("个月", "").replace("月", "").trim();
   }
 
   private String trimToNull(String value) {

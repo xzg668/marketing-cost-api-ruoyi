@@ -13,6 +13,7 @@ public interface QuoteRequestQueryService {
       Integer pageSize,
       String oaNo,
       String processCode,
+      String sourceType,
       String classificationStatus);
 
   QuoteRequestDetailResponse getRequestDetail(String oaNo);

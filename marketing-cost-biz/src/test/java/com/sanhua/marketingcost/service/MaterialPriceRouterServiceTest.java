@@ -123,12 +123,14 @@ class MaterialPriceRouterServiceTest {
   }
 
   @Test
-  @DisplayName("materialCode 或 period 缺失时直接返回空，不查库")
+  @DisplayName("materialCode 缺失时直接返回空；period 缺失时查询全局路由")
   void blankInputShortCircuits() {
     assertThat(router.resolve(null, "2026-04", null)).isEmpty();
     assertThat(router.resolve("", "2026-04", null)).isEmpty();
-    assertThat(router.resolve("MAT", null, null)).isEmpty();
     Mockito.verifyNoInteractions(mapper, masterMapper);
+
+    assertThat(router.resolve("MAT", null, null)).isEmpty();
+    Mockito.verify(mapper).selectList(any(Wrapper.class));
   }
 
   @Test

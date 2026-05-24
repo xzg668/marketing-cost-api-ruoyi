@@ -23,6 +23,27 @@ public class PriceLinkedCalcItem {
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
 
+  /** LPE-02：联动价结果计算场景；历史 refresh 固定写 QUOTE，月度调价后续独立写 MONTHLY_ADJUST。 */
+  private String calcScene;
+
+  /** LPE-02：价格月份参与结果隔离，避免同一 OA/料号跨月份误读。 */
+  private String pricingMonth;
+
+  /** LPE-02：月度调价批次上下文，QUOTE 场景为空。 */
+  private Long adjustBatchId;
+
+  /** LPE-02：变量来源，QUOTE 默认为 OA_LOCKED，月度调价默认为 ADJUST_BATCH。 */
+  private String factorSource;
+
+  /** LPE-02：输入指纹，后续 ensure 用于判断结果是否过期。 */
+  private String calcFingerprint;
+
+  /** LPE-02：计算状态，OK / FAILED。 */
+  private String calcStatus;
+
+  /** LPE-02：计算失败或跳过说明。 */
+  private String calcMessage;
+
   /** V26 计算 trace JSON —— 存 {normalizedExpr, variables, steps, result/error} */
   @TableField("trace_json")
   private String traceJson;
@@ -39,6 +60,62 @@ public class PriceLinkedCalcItem {
 
   public void setBusinessUnitType(String businessUnitType) {
     this.businessUnitType = businessUnitType;
+  }
+
+  public String getCalcScene() {
+    return calcScene;
+  }
+
+  public void setCalcScene(String calcScene) {
+    this.calcScene = calcScene;
+  }
+
+  public String getPricingMonth() {
+    return pricingMonth;
+  }
+
+  public void setPricingMonth(String pricingMonth) {
+    this.pricingMonth = pricingMonth;
+  }
+
+  public Long getAdjustBatchId() {
+    return adjustBatchId;
+  }
+
+  public void setAdjustBatchId(Long adjustBatchId) {
+    this.adjustBatchId = adjustBatchId;
+  }
+
+  public String getFactorSource() {
+    return factorSource;
+  }
+
+  public void setFactorSource(String factorSource) {
+    this.factorSource = factorSource;
+  }
+
+  public String getCalcFingerprint() {
+    return calcFingerprint;
+  }
+
+  public void setCalcFingerprint(String calcFingerprint) {
+    this.calcFingerprint = calcFingerprint;
+  }
+
+  public String getCalcStatus() {
+    return calcStatus;
+  }
+
+  public void setCalcStatus(String calcStatus) {
+    this.calcStatus = calcStatus;
+  }
+
+  public String getCalcMessage() {
+    return calcMessage;
+  }
+
+  public void setCalcMessage(String calcMessage) {
+    this.calcMessage = calcMessage;
   }
 
   public Long getId() {

@@ -13,17 +13,21 @@ import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.BomStopDrillRuleMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.BomFlattenService;
+import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
 import com.sanhua.marketingcost.service.rule.BomNodeContext;
 import com.sanhua.marketingcost.service.rule.StopDrillRuleMatcher;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,9 +53,8 @@ import org.springframework.util.StringUtils;
  *       <li>未命中：叶子入 costing（is_costing_row=1 默认），中间节点跳过</li>
  *     </ul>
  *   </li>
- *   <li>写库前 DELETE WHERE oa+top+asOfDate（hotfix-2026-04-27），再 batch upsert lp_bom_costing_row：
- *       让该 (oa, top, asOfDate) 下唯一权威快照，避免规则配置变更后老 path 残留"幽灵行"；
- *       其他 asOfDate 的历史月度快照不受影响</li>
+ *   <li>写库前 DELETE WHERE oa+top+periodMonth，再 batch upsert lp_bom_costing_row：
+ *       让该 (oa, top, periodMonth) 下唯一权威快照，避免同月多次刷新叠加明细</li>
  *   <li>T8：反查 ROLLUP 父件的 costing_row.id，批量写 lp_bom_costing_row_sub_ref</li>
  * </ol>
  *
@@ -70,6 +73,7 @@ public class BomFlattenServiceImpl implements BomFlattenService {
   private final BomCostingRowMapper costingMapper;
   private final BomCostingRowSubRefMapper subRefMapper;
   private final BomStopDrillRuleMapper ruleMapper;
+  private final PackageComponentIdentifyService packageComponentIdentifyService;
   /** T8：直接注入具体类而不是 RuleMatcher 接口 —— 要用它的 4 参数 match 方法 */
   private final StopDrillRuleMatcher ruleMatcher;
 
@@ -78,11 +82,13 @@ public class BomFlattenServiceImpl implements BomFlattenService {
       BomCostingRowMapper costingMapper,
       BomCostingRowSubRefMapper subRefMapper,
       BomStopDrillRuleMapper ruleMapper,
+      PackageComponentIdentifyService packageComponentIdentifyService,
       StopDrillRuleMatcher ruleMatcher) {
     this.rawMapper = rawMapper;
     this.costingMapper = costingMapper;
     this.subRefMapper = subRefMapper;
     this.ruleMapper = ruleMapper;
+    this.packageComponentIdentifyService = packageComponentIdentifyService;
     this.ruleMatcher = ruleMatcher;
   }
 
@@ -103,6 +109,7 @@ public class BomFlattenServiceImpl implements BomFlattenService {
 
     // 1) 拉取 asOfDate 有效的 raw_hierarchy 快照
     LocalDate asOf = request.getAsOfDate();
+    String periodMonth = YearMonth.from(asOf).toString();
     String purpose = request.getBomPurpose();
     List<BomRawHierarchy> rawRows =
         rawMapper.selectList(
@@ -143,6 +150,14 @@ public class BomFlattenServiceImpl implements BomFlattenService {
     List<BomStopDrillRule> rules =
         ruleMapper.selectList(
             Wrappers.<BomStopDrillRule>lambdaQuery().eq(BomStopDrillRule::getEnabled, 1));
+    Set<String> materialCodes = new LinkedHashSet<>();
+    for (BomRawHierarchy row : rawRows) {
+      if (StringUtils.hasText(row.getMaterialCode())) {
+        materialCodes.add(row.getMaterialCode().trim());
+      }
+    }
+    Map<String, Boolean> packageComponentFlags =
+        packageComponentIdentifyService.batchIdentify(materialCodes);
 
     // 5) 单次构建批次 ID + 时间戳（所有行共用，便于追溯）
     String buildBatchId = generateFlattenBatchId();
@@ -173,6 +188,15 @@ public class BomFlattenServiceImpl implements BomFlattenService {
       }
       // T11：被某个 LEAF_ROLLUP 命中的叶子 path 单点屏蔽 —— 防止下面的"未命中默认叶子"分支重复入 costing
       if (consumedLeafPaths.contains(row.getPath())) {
+        continue;
+      }
+
+      String materialCode = row.getMaterialCode() == null ? null : row.getMaterialCode().trim();
+      if (Boolean.TRUE.equals(packageComponentFlags.get(materialCode))) {
+        // 包装组件父料号是结算行边界；子件只用于包装价格汇总，不进入 BOM 结算明细。
+        nonRolledOutput.add(
+            buildCostingRow(row, request, true, false, null, buildBatchId, builtAt, buType));
+        stoppedPaths.add(row.getPath());
         continue;
       }
 
@@ -356,21 +380,19 @@ public class BomFlattenServiceImpl implements BomFlattenService {
     allCostingRows.addAll(leafRolledParentByPath.values());
     allCostingRows.addAll(nonRolledOutput);
 
-    // hotfix-2026-04-27：写之前先清掉本次 (oa+top+asOfDate) 已有的 costing_row。
+    // 写之前先清掉本次 (oa+top+periodMonth) 已有的 costing_row。
     //
     // 原 batchUpsert（按 oa+top+asOfDate+path 五元组 UPSERT）只能覆盖"本次产生的同 path"
     // 行；如果某条老 path 因为规则配置变更（如 T11 停用规则 #4）后不再产生 → 老行
     // 既不会被覆盖也不会被删 → 残留为"幽灵行"。
     //
-    // 改为 DELETE+INSERT：让本次拍平结果是该 (oa, top, asOfDate) 下唯一权威快照。
+    // 改为 DELETE+INSERT：让本次拍平结果是该 (oa, top, periodMonth) 下唯一权威快照。
     // sub_ref 由 fk_sub_ref_costing ON DELETE CASCADE 自动级联清，无需手工清。
-    //
-    // 锁 as_of_date：DELETE 范围只到本次 as_of_date 这一份月度快照，绝不动其他历史月度。
     costingMapper.delete(
         Wrappers.<BomCostingRow>lambdaQuery()
             .eq(BomCostingRow::getOaNo, request.getOaNo())
             .eq(BomCostingRow::getTopProductCode, request.getTopProductCode())
-            .eq(BomCostingRow::getAsOfDate, asOf));
+            .eq(BomCostingRow::getPeriodMonth, periodMonth));
     int written = writeInBatches(allCostingRows);
     result.setCostingRowsWritten(written);
     result.setSubtreeRequiredCount(subtreeRequiredCount);
@@ -493,6 +515,7 @@ public class BomFlattenServiceImpl implements BomFlattenService {
     c.setEffectiveTo(raw.getEffectiveTo());
     c.setBuildBatchId(buildBatchId);
     c.setBuiltAt(builtAt);
+    c.setPeriodMonth(YearMonth.from(req.getAsOfDate()).toString());
     c.setAsOfDate(req.getAsOfDate());
     // 冻住 raw 行的 effective_from 作为版本锁定（即便 raw effective_from=NULL 也冻它）
     c.setRawVersionEffectiveFrom(

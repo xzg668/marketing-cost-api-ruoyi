@@ -20,9 +20,18 @@ public class ManufactureRate {
   private String productModel;
   private BigDecimal feeRate;
   private String period;
+  private Integer rateYear;
   /** 业务单元租户口径：COMMERCIAL / HOUSEHOLD，区别于组织口径 businessUnit（V22 补齐） */
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
+  private String businessDivision;
+  private String productCode;
+  private String productName;
+  private String remark;
+  private String sourceType;
+  private String sourceBatchNo;
+  private String matchLevel;
+  private String matchKey;
 
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
@@ -102,12 +111,84 @@ public class ManufactureRate {
     this.period = period;
   }
 
+  public Integer getRateYear() {
+    return rateYear;
+  }
+
+  public void setRateYear(Integer rateYear) {
+    this.rateYear = rateYear;
+  }
+
   public String getBusinessUnitType() {
     return businessUnitType;
   }
 
   public void setBusinessUnitType(String businessUnitType) {
     this.businessUnitType = businessUnitType;
+  }
+
+  public String getBusinessDivision() {
+    return businessDivision;
+  }
+
+  public void setBusinessDivision(String businessDivision) {
+    this.businessDivision = businessDivision;
+  }
+
+  public String getProductCode() {
+    return productCode;
+  }
+
+  public void setProductCode(String productCode) {
+    this.productCode = productCode;
+  }
+
+  public String getProductName() {
+    return productName;
+  }
+
+  public void setProductName(String productName) {
+    this.productName = productName;
+  }
+
+  public String getRemark() {
+    return remark;
+  }
+
+  public void setRemark(String remark) {
+    this.remark = remark;
+  }
+
+  public String getSourceType() {
+    return sourceType;
+  }
+
+  public void setSourceType(String sourceType) {
+    this.sourceType = sourceType;
+  }
+
+  public String getSourceBatchNo() {
+    return sourceBatchNo;
+  }
+
+  public void setSourceBatchNo(String sourceBatchNo) {
+    this.sourceBatchNo = sourceBatchNo;
+  }
+
+  public String getMatchLevel() {
+    return matchLevel;
+  }
+
+  public void setMatchLevel(String matchLevel) {
+    this.matchLevel = matchLevel;
+  }
+
+  public String getMatchKey() {
+    return matchKey;
+  }
+
+  public void setMatchKey(String matchKey) {
+    this.matchKey = matchKey;
   }
 
   public LocalDateTime getCreatedAt() {

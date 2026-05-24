@@ -33,10 +33,11 @@ public class QuoteRequestController {
       @RequestParam(value = "pageSize", required = false) Integer pageSize,
       @RequestParam(value = "oaNo", required = false) String oaNo,
       @RequestParam(value = "processCode", required = false) String processCode,
+      @RequestParam(value = "sourceType", required = false) String sourceType,
       @RequestParam(value = "classificationStatus", required = false) String classificationStatus) {
     return CommonResult.success(
         quoteRequestQueryService.pageRequests(
-            pageNo, pageSize, oaNo, processCode, classificationStatus));
+            pageNo, pageSize, oaNo, processCode, sourceType, classificationStatus));
   }
 
   @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")

@@ -20,17 +20,23 @@ public class OaForm {
   private String processCode;
   private String processName;
   private String quoteScenario;
+  private String expenseProductCategory;
   private String oaNo;
   private String formType;
   private LocalDate applyDate;
   private String customer;
+  private String sourceCompany;
+  private String sourceBusinessDivision;
   private String applicantDept;
   private String applicantOffice;
   private String applicantName;
+  private String applicantUnit;
   private String urgency;
   private String productAttr;
   private String priceLinkMode;
   private String overseasSalesMode;
+  private String tradeTerms;
+  private BigDecimal exchangeRate;
   private BigDecimal copperPrice;
   private BigDecimal zincPrice;
   private BigDecimal aluminumPrice;
@@ -51,6 +57,8 @@ public class OaForm {
   /** V21 业务单元数据隔离：COMMERCIAL 商用 / HOUSEHOLD 家用 */
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
+  /** 申请日期所属月份，格式 YYYY-MM，用于三项费用等按月匹配。 */
+  private String accountingPeriodMonth;
 
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
@@ -67,6 +75,14 @@ public class OaForm {
 
   public void setBusinessUnitType(String businessUnitType) {
     this.businessUnitType = businessUnitType;
+  }
+
+  public String getAccountingPeriodMonth() {
+    return accountingPeriodMonth;
+  }
+
+  public void setAccountingPeriodMonth(String accountingPeriodMonth) {
+    this.accountingPeriodMonth = accountingPeriodMonth;
   }
 
   public Long getId() {
@@ -125,6 +141,14 @@ public class OaForm {
     this.quoteScenario = quoteScenario;
   }
 
+  public String getExpenseProductCategory() {
+    return expenseProductCategory;
+  }
+
+  public void setExpenseProductCategory(String expenseProductCategory) {
+    this.expenseProductCategory = expenseProductCategory;
+  }
+
   public String getOaNo() {
     return oaNo;
   }
@@ -157,6 +181,22 @@ public class OaForm {
     this.customer = customer;
   }
 
+  public String getSourceCompany() {
+    return sourceCompany;
+  }
+
+  public void setSourceCompany(String sourceCompany) {
+    this.sourceCompany = sourceCompany;
+  }
+
+  public String getSourceBusinessDivision() {
+    return sourceBusinessDivision;
+  }
+
+  public void setSourceBusinessDivision(String sourceBusinessDivision) {
+    this.sourceBusinessDivision = sourceBusinessDivision;
+  }
+
   public String getApplicantDept() {
     return applicantDept;
   }
@@ -179,6 +219,14 @@ public class OaForm {
 
   public void setApplicantName(String applicantName) {
     this.applicantName = applicantName;
+  }
+
+  public String getApplicantUnit() {
+    return applicantUnit;
+  }
+
+  public void setApplicantUnit(String applicantUnit) {
+    this.applicantUnit = applicantUnit;
   }
 
   public String getUrgency() {
@@ -211,6 +259,22 @@ public class OaForm {
 
   public void setOverseasSalesMode(String overseasSalesMode) {
     this.overseasSalesMode = overseasSalesMode;
+  }
+
+  public String getTradeTerms() {
+    return tradeTerms;
+  }
+
+  public void setTradeTerms(String tradeTerms) {
+    this.tradeTerms = tradeTerms;
+  }
+
+  public BigDecimal getExchangeRate() {
+    return exchangeRate;
+  }
+
+  public void setExchangeRate(BigDecimal exchangeRate) {
+    this.exchangeRate = exchangeRate;
   }
 
   public BigDecimal getCopperPrice() {

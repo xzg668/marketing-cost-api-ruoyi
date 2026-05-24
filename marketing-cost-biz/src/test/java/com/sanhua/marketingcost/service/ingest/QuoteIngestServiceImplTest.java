@@ -9,24 +9,31 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.dto.ingest.QuoteExtraFieldRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestHeaderRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestItemRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestResponse;
 import com.sanhua.marketingcost.entity.OaForm;
+import com.sanhua.marketingcost.entity.OaFormHeaderExtraField;
 import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.entity.OaFormItemExtraField;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuoteIngestLog;
 import com.sanhua.marketingcost.enums.QuoteIngestStatus;
 import com.sanhua.marketingcost.mapper.OaFormExtraFeeMapper;
-import com.sanhua.marketingcost.mapper.OaFormExtraFieldMapper;
+import com.sanhua.marketingcost.mapper.OaFormHeaderExtraFieldMapper;
+import com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
+import com.sanhua.marketingcost.service.ProductPropertyAnnualUsageService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.LinkedHashMap;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,8 +45,10 @@ class QuoteIngestServiceImplTest {
   private OaFormMapper oaFormMapper;
   private OaFormItemMapper oaFormItemMapper;
   private OaFormExtraFeeMapper oaFormExtraFeeMapper;
-  private OaFormExtraFieldMapper oaFormExtraFieldMapper;
+  private OaFormHeaderExtraFieldMapper oaFormHeaderExtraFieldMapper;
+  private OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper;
   private QuoteBomStatusMapper quoteBomStatusMapper;
+  private ProductPropertyAnnualUsageService productPropertyAnnualUsageService;
   private QuoteIngestServiceImpl service;
 
   @BeforeEach
@@ -48,8 +57,10 @@ class QuoteIngestServiceImplTest {
     oaFormMapper = mock(OaFormMapper.class);
     oaFormItemMapper = mock(OaFormItemMapper.class);
     oaFormExtraFeeMapper = mock(OaFormExtraFeeMapper.class);
-    oaFormExtraFieldMapper = mock(OaFormExtraFieldMapper.class);
+    oaFormHeaderExtraFieldMapper = mock(OaFormHeaderExtraFieldMapper.class);
+    oaFormItemExtraFieldMapper = mock(OaFormItemExtraFieldMapper.class);
     quoteBomStatusMapper = mock(QuoteBomStatusMapper.class);
+    productPropertyAnnualUsageService = mock(ProductPropertyAnnualUsageService.class);
     service =
         new QuoteIngestServiceImpl(
             new QuoteNormalizeService(new QuoteIngestRequestValidator(), new QuoteClassifyService()),
@@ -57,8 +68,10 @@ class QuoteIngestServiceImplTest {
             oaFormMapper,
             oaFormItemMapper,
             oaFormExtraFeeMapper,
-            oaFormExtraFieldMapper,
+            oaFormHeaderExtraFieldMapper,
+            oaFormItemExtraFieldMapper,
             quoteBomStatusMapper,
+            productPropertyAnnualUsageService,
             objectMapper);
     stubInsertIds();
   }
@@ -83,6 +96,14 @@ class QuoteIngestServiceImplTest {
     verify(oaFormMapper).insert(formCaptor.capture());
     assertThat(formCaptor.getValue().getProcessCode()).isEqualTo("FI-SC-006");
     assertThat(formCaptor.getValue().getBusinessUnitType()).isEqualTo("COMMERCIAL");
+    assertThat(formCaptor.getValue().getAccountingPeriodMonth()).isEqualTo("2026-05");
+    assertThat(formCaptor.getValue().getSourceSystem()).isEqualTo("EXCEL_TEMPLATE");
+    assertThat(formCaptor.getValue().getApplicantUnit()).isEqualTo("申请单位A");
+    assertThat(formCaptor.getValue().getSourceCompany()).isEqualTo("来源公司A");
+    assertThat(formCaptor.getValue().getSourceBusinessDivision()).isEqualTo("商用事业部");
+    assertThat(formCaptor.getValue().getExpenseProductCategory()).isEqualTo("商用直销产品");
+    assertThat(formCaptor.getValue().getTradeTerms()).isEqualTo("FOB");
+    assertThat(formCaptor.getValue().getExchangeRate()).isEqualByComparingTo("7.12");
 
     ArgumentCaptor<OaFormItem> itemCaptor = ArgumentCaptor.forClass(OaFormItem.class);
     verify(oaFormItemMapper).insert(itemCaptor.capture());
@@ -93,6 +114,44 @@ class QuoteIngestServiceImplTest {
     verify(quoteBomStatusMapper).insert(bomCaptor.capture());
     assertThat(bomCaptor.getValue().getBomStatus()).isEqualTo("NOT_CHECKED");
     verify(quoteIngestLogService).markImported(any(), any(), any(), any());
+  }
+
+  @Test
+  void extraFieldsPersistToHeaderAndItemTables() {
+    QuoteIngestRequest request = request("FI-SC-006", "EXT-T5-EXTRA", "1001", "批量品");
+    request.setExtraFields(
+        List.of(extraField("applyDateTime", "申请时间", "2026-05-11 08:30:00", "DATE", "OA原始表单!B4")));
+    request
+        .getItems()
+        .get(0)
+        .setExtraFields(
+            List.of(extraField("customerColor", "客户颜色", "蓝色", "TEXT", "OA原始表单!Z12")));
+    QuoteIngestLog log = log(15L, "EXCEL:EXT-T5-EXTRA:1", "old");
+    when(quoteIngestLogService.findByIdempotencyKey("EXCEL:EXT-T5-EXTRA:1")).thenReturn(null);
+    when(quoteIngestLogService.createReceived(any(), any(), any(), any(), any(), any(), any()))
+        .thenReturn(log);
+
+    QuoteIngestResponse response = service.ingest(request);
+
+    assertThat(response.isAccepted()).isTrue();
+    ArgumentCaptor<OaFormHeaderExtraField> headerCaptor =
+        ArgumentCaptor.forClass(OaFormHeaderExtraField.class);
+    verify(oaFormHeaderExtraFieldMapper).insert(headerCaptor.capture());
+    assertThat(headerCaptor.getValue().getOaFormId()).isEqualTo(100L);
+    assertThat(headerCaptor.getValue().getBusinessUnitType()).isEqualTo("COMMERCIAL");
+    assertThat(headerCaptor.getValue().getFieldCode()).isEqualTo("applyDateTime");
+    assertThat(headerCaptor.getValue().getSourceFieldPath()).isEqualTo("OA原始表单!B4");
+    assertThat(headerCaptor.getValue().getIngestLogId()).isEqualTo(15L);
+
+    ArgumentCaptor<OaFormItemExtraField> itemCaptor =
+        ArgumentCaptor.forClass(OaFormItemExtraField.class);
+    verify(oaFormItemExtraFieldMapper).insert(itemCaptor.capture());
+    assertThat(itemCaptor.getValue().getOaFormId()).isEqualTo(100L);
+    assertThat(itemCaptor.getValue().getOaFormItemId()).isEqualTo(1001L);
+    assertThat(itemCaptor.getValue().getBusinessUnitType()).isEqualTo("COMMERCIAL");
+    assertThat(itemCaptor.getValue().getFieldCode()).isEqualTo("customerColor");
+    assertThat(itemCaptor.getValue().getSourceFieldPath()).isEqualTo("OA原始表单!Z12");
+    assertThat(itemCaptor.getValue().getIngestLogId()).isEqualTo(15L);
   }
 
   @Test
@@ -174,12 +233,43 @@ class QuoteIngestServiceImplTest {
     verify(quoteBomStatusMapper, never()).insert(any(QuoteBomStatus.class));
   }
 
+  @Test
+  void adaptedWeaverPayloadCanUseIngestService() {
+    QuoteIngestRequest request = new WeaverQuotePayloadAdapterImpl().adapt(weaverPayload());
+    QuoteIngestLog log = log(16L, "WEAVER_OA:OA-W-INGEST:1", "old");
+    when(quoteIngestLogService.findByIdempotencyKey("WEAVER_OA:OA-W-INGEST:1")).thenReturn(null);
+    when(quoteIngestLogService.createReceived(any(), any(), any(), any(), any(), any(), any()))
+        .thenReturn(log);
+
+    QuoteIngestResponse response = service.ingest(request);
+
+    assertThat(response.isAccepted()).isTrue();
+    assertThat(response.getOaNo()).isEqualTo("OA-W-INGEST");
+    ArgumentCaptor<OaForm> formCaptor = ArgumentCaptor.forClass(OaForm.class);
+    verify(oaFormMapper).insert(formCaptor.capture());
+    assertThat(formCaptor.getValue().getSourceType()).isEqualTo("WEAVER_OA");
+    assertThat(formCaptor.getValue().getSourceSystem()).isEqualTo("WEAVER_ECOLOGY");
+    assertThat(formCaptor.getValue().getAccountingPeriodMonth()).isEqualTo("2026-03");
+    assertThat(formCaptor.getValue().getBusinessUnitType()).isEqualTo("COMMERCIAL");
+    assertThat(formCaptor.getValue().getApplicantDept()).isEqualTo("欧洲业务管理部");
+    assertThat(formCaptor.getValue().getApplicantOffice()).isEqualTo("欧洲业务一处");
+    assertThat(formCaptor.getValue().getSourceCompany()).isEqualTo("三花商用");
+    assertThat(formCaptor.getValue().getSourceBusinessDivision()).isEqualTo("商用事业部");
+    verify(quoteIngestLogService).markImported(any(), any(), any(), any());
+  }
+
   private QuoteIngestRequest request(
       String processCode, String externalFormNo, String materialNo, String businessType) {
     QuoteIngestHeaderRequest header = new QuoteIngestHeaderRequest();
     header.setProcessCode(processCode);
     header.setApplyDate("2026-05-11");
     header.setCustomer("客户A");
+    header.setApplicantUnit("申请单位A");
+    header.setSourceCompany("来源公司A");
+    header.setSourceBusinessDivision("商用事业部");
+    header.setExpenseProductCategory("控制器");
+    header.setTradeTerms("FOB");
+    header.setExchangeRate("7.12");
 
     QuoteIngestItemRequest item = new QuoteIngestItemRequest();
     item.setSeq(1);
@@ -193,6 +283,43 @@ class QuoteIngestServiceImplTest {
     request.setHeader(header);
     request.setItems(List.of(item));
     return request;
+  }
+
+  private QuoteExtraFieldRequest extraField(
+      String fieldCode, String fieldName, String value, String valueType, String sourceFieldPath) {
+    QuoteExtraFieldRequest field = new QuoteExtraFieldRequest();
+    field.setFieldCode(fieldCode);
+    field.setFieldName(fieldName);
+    field.setFieldValue(value);
+    field.setValueType(valueType);
+    field.setSourceFieldName(fieldName);
+    field.setSourceFieldPath(sourceFieldPath);
+    return field;
+  }
+
+  private Map<String, Object> weaverPayload() {
+    Map<String, Object> main = new LinkedHashMap<>();
+    main.put("processCode", "FI-SC-006");
+    main.put("applyDateTime", "2026-03-27 10:20:30");
+    main.put("customer", "客户A");
+    main.put("applicantUnit", "商用制冷");
+    main.put("sourceCompany", "三花商用");
+    main.put("sourceBusinessDivision", "商用事业部");
+    main.put("applicantDept", "欧洲业务管理部");
+    main.put("applicantOffice", "欧洲业务一处");
+
+    Map<String, Object> item = new LinkedHashMap<>();
+    item.put("seq", "1");
+    item.put("materialNo", "1001");
+    item.put("sunlModel", "SHF-A");
+    item.put("businessType", "批量品");
+
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("requestId", "WR-INGEST");
+    payload.put("formNo", "OA-W-INGEST");
+    payload.put("main", main);
+    payload.put("items", List.of(item));
+    return payload;
   }
 
   private QuoteIngestLog log(Long id, String idempotencyKey, String payloadHash) {

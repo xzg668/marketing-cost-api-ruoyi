@@ -7,7 +7,10 @@ public class MaterialPriceTypeRequest {
   private String materialName;
   private String materialSpec;
   private String materialModel;
+  private String unit;
   private String materialShape;
+  private String categoryCode;
+  private String categoryName;
   private String priceType;
   private String period;
   private String source;
@@ -60,12 +63,36 @@ public class MaterialPriceTypeRequest {
     this.materialModel = materialModel;
   }
 
+  public String getUnit() {
+    return unit;
+  }
+
+  public void setUnit(String unit) {
+    this.unit = unit;
+  }
+
   public String getMaterialShape() {
     return materialShape;
   }
 
   public void setMaterialShape(String materialShape) {
     this.materialShape = materialShape;
+  }
+
+  public String getCategoryCode() {
+    return categoryCode;
+  }
+
+  public void setCategoryCode(String categoryCode) {
+    this.categoryCode = categoryCode;
+  }
+
+  public String getCategoryName() {
+    return categoryName;
+  }
+
+  public void setCategoryName(String categoryName) {
+    this.categoryName = categoryName;
   }
 
   public String getPriceType() {

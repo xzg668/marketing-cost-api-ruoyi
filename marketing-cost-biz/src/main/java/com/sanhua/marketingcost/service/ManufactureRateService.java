@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service;
 
 import com.sanhua.marketingcost.dto.ManufactureRateImportRequest;
+import com.sanhua.marketingcost.dto.ManufactureRateImportResponse;
 import com.sanhua.marketingcost.dto.ManufactureRateRequest;
 import com.sanhua.marketingcost.entity.ManufactureRate;
 import java.util.List;
@@ -14,5 +15,5 @@ public interface ManufactureRateService {
 
   boolean delete(Long id);
 
-  List<ManufactureRate> importItems(ManufactureRateImportRequest request);
+  ManufactureRateImportResponse importItems(ManufactureRateImportRequest request);
 }

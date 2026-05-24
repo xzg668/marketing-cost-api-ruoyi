@@ -91,6 +91,43 @@ class JjbExportServiceTest {
   }
 
   @Test
+  @DisplayName("制造件取价结果导出：价格来源和备注完整保留")
+  void exportsMakePartPriceSourceAndRemark() {
+    CostRunPartItemDto make = newPart(
+        "SHF-H35-024001",
+        "S接管",
+        new BigDecimal("2"),
+        new BigDecimal("6.642274"),
+        new BigDecimal("13.284548"),
+        "TP2 Y2 φ23.5x1.3",
+        "制造件",
+        "自制件");
+    make.setPartCode("203250749");
+    make.setPriceSource("自制件");
+    make.setRemark("取自制造件价格生成结果：批次=MPPG-001，价格月份=2026-05");
+
+    CostRunPartItemService partSvc = mock(CostRunPartItemService.class);
+    CostRunCostItemService costSvc = mock(CostRunCostItemService.class);
+    when(partSvc.listStoredByOaNo("OA-MAKE")).thenReturn(List.of(make));
+    when(costSvc.listStoredByOaNo(eq("OA-MAKE"), eq("PROD-A"))).thenReturn(List.of());
+
+    JjbExportService svc = new JjbExportService(partSvc, costSvc);
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    assertThat(svc.export("OA-MAKE", "PROD-A", out)).isEqualTo(1);
+
+    List<Map<Integer, Object>> partRows = readSheet(out.toByteArray(), 0);
+    assertThat(partRows).hasSize(1);
+    Map<Integer, Object> row = partRows.get(0);
+    assertThat(row.get(2)).hasToString("203250749");
+    assertThat(row.get(4).toString()).isEqualTo("6.642274");
+    assertThat(row.get(5).toString()).isEqualTo("13.284548");
+    assertThat(row.get(7)).hasToString("制造件");
+    assertThat(row.get(8)).hasToString("自制件");
+    assertThat(row.get(9)).hasToString("自制件");
+    assertThat(row.get(10)).hasToString("取自制造件价格生成结果：批次=MPPG-001，价格月份=2026-05");
+  }
+
+  @Test
   @DisplayName("oaNo 或 productCode 缺失抛 IllegalArgumentException")
   void rejectsBlankParams() {
     JjbExportService svc =

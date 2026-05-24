@@ -54,7 +54,7 @@ class LinkedPriceResolverTest {
     ArgumentCaptor<Wrapper<PriceLinkedCalcItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(mapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment())
-        .contains("oa_no", "item_code")
+        .contains("oa_no", "item_code", "calc_scene")
         .contains("ORDER BY", "id", "DESC")
         .contains("LIMIT 1");
   }

@@ -2,9 +2,9 @@ package com.sanhua.marketingcost.service;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.QualityLossRateImportRequest;
+import com.sanhua.marketingcost.dto.QualityLossRateImportResponse;
 import com.sanhua.marketingcost.dto.QualityLossRateRequest;
 import com.sanhua.marketingcost.entity.QualityLossRate;
-import java.util.List;
 
 public interface QualityLossRateService {
   Page<QualityLossRate> page(
@@ -14,6 +14,11 @@ public interface QualityLossRateService {
       String productSubcategory,
       String customer,
       String period,
+      Integer rateYear,
+      String businessDivision,
+      String productCode,
+      String productName,
+      String productModel,
       int page,
       int pageSize);
 
@@ -23,5 +28,5 @@ public interface QualityLossRateService {
 
   boolean delete(Long id);
 
-  List<QualityLossRate> importItems(QualityLossRateImportRequest request);
+  QualityLossRateImportResponse importItems(QualityLossRateImportRequest request);
 }

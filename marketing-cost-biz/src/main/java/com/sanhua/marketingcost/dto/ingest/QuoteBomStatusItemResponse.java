@@ -9,6 +9,8 @@ public class QuoteBomStatusItemResponse {
   private Integer seq;
   private String productCode;
   private String productModel;
+  private String productPackagingType;
+  private String mainCategoryCode;
   private String bomStatus;
   private String bomSource;
   private String bomPurpose;
@@ -59,6 +61,22 @@ public class QuoteBomStatusItemResponse {
 
   public void setProductModel(String productModel) {
     this.productModel = productModel;
+  }
+
+  public String getProductPackagingType() {
+    return productPackagingType;
+  }
+
+  public void setProductPackagingType(String productPackagingType) {
+    this.productPackagingType = productPackagingType;
+  }
+
+  public String getMainCategoryCode() {
+    return mainCategoryCode;
+  }
+
+  public void setMainCategoryCode(String mainCategoryCode) {
+    this.mainCategoryCode = mainCategoryCode;
   }
 
   public String getBomStatus() {

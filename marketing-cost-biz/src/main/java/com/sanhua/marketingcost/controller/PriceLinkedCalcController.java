@@ -59,6 +59,43 @@ public class PriceLinkedCalcController {
     return CommonResult.success(new PriceLinkedCalcPageResponse(pager.getTotal(), pager.getRecords()));
   }
 
+  /**
+   * 查询已落库联动价计算结果。
+   *
+   * <p>LPE-10：本接口只做追溯查询，不在查询时触发计算或补写 calc_item。
+   */
+  @PreAuthorize("@ss.hasPermi('price:linked-calc:list')")
+  @GetMapping("/calc/results")
+  public CommonResult<PriceLinkedCalcPageResponse> results(
+      @RequestParam(required = false) String oaNo,
+      @RequestParam(required = false) String customer,
+      @RequestParam(required = false) String businessUnitType,
+      @RequestParam(required = false) String itemCode,
+      @RequestParam(required = false) String calcScene,
+      @RequestParam(required = false) String pricingMonth,
+      @RequestParam(required = false) Long adjustBatchId,
+      @RequestParam(required = false) String calcStatus,
+      @RequestParam(required = false) String factorSource,
+      @RequestParam(required = false, defaultValue = "1") Integer page,
+      @RequestParam(required = false, defaultValue = "20") Integer pageSize) {
+    int current = page == null || page < 1 ? 1 : page;
+    int size = pageSize == null || pageSize < 1 ? 20 : pageSize;
+    Page<com.sanhua.marketingcost.dto.PriceLinkedCalcRow> pager =
+        priceLinkedCalcService.resultPage(
+            oaNo,
+            customer,
+            businessUnitType,
+            itemCode,
+            calcScene,
+            pricingMonth,
+            adjustBatchId,
+            calcStatus,
+            factorSource,
+            current,
+            size);
+    return CommonResult.success(new PriceLinkedCalcPageResponse(pager.getTotal(), pager.getRecords()));
+  }
+
   /** 刷新联动价格计算数据 */
   @PreAuthorize("@ss.hasPermi('price:linked-calc:edit')")
   @PostMapping("/calc/refresh")

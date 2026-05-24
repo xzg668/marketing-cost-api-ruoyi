@@ -4,11 +4,11 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.PriceFixedItemImportRequest;
+import com.sanhua.marketingcost.dto.PriceFixedItemImportResponse;
 import com.sanhua.marketingcost.dto.PriceFixedItemPageResponse;
 import com.sanhua.marketingcost.dto.PriceFixedItemUpdateRequest;
 import com.sanhua.marketingcost.entity.PriceFixedItem;
 import com.sanhua.marketingcost.service.PriceFixedItemService;
-import java.util.List;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -88,7 +88,7 @@ public class PriceFixedItemController {
   /** 导入固定价格数据 */
   @PreAuthorize("@ss.hasPermi('price:fixed:import')")
   @PostMapping("/import")
-  public CommonResult<List<PriceFixedItem>> importItems(
+  public CommonResult<PriceFixedItemImportResponse> importItems(
       @RequestBody PriceFixedItemImportRequest request) {
     return CommonResult.success(priceFixedItemService.importItems(request));
   }

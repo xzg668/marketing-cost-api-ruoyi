@@ -1,9 +1,12 @@
 package com.sanhua.marketingcost.dto;
 
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
+
 public class CostRunTrialResponse {
   private int productCount;
   private int partCount;
   private int costItemCount;
+  private PricePrepareReadinessResult pricePrepareReadiness;
 
   public CostRunTrialResponse() {
   }
@@ -36,5 +39,13 @@ public class CostRunTrialResponse {
 
   public void setCostItemCount(int costItemCount) {
     this.costItemCount = costItemCount;
+  }
+
+  public PricePrepareReadinessResult getPricePrepareReadiness() {
+    return pricePrepareReadiness;
+  }
+
+  public void setPricePrepareReadiness(PricePrepareReadinessResult pricePrepareReadiness) {
+    this.pricePrepareReadiness = pricePrepareReadiness;
   }
 }

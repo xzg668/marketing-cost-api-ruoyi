@@ -2,10 +2,14 @@ package com.sanhua.marketingcost.dto;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 public class PriceFixedItemImportRequest {
   private List<PriceFixedItemImportRow> rows;
+  private String sourceBatchNo;
+  private String importFileName;
+  private String importedBy;
 
   public List<PriceFixedItemImportRow> getRows() {
     return rows;
@@ -13,6 +17,30 @@ public class PriceFixedItemImportRequest {
 
   public void setRows(List<PriceFixedItemImportRow> rows) {
     this.rows = rows;
+  }
+
+  public String getSourceBatchNo() {
+    return sourceBatchNo;
+  }
+
+  public void setSourceBatchNo(String sourceBatchNo) {
+    this.sourceBatchNo = sourceBatchNo;
+  }
+
+  public String getImportFileName() {
+    return importFileName;
+  }
+
+  public void setImportFileName(String importFileName) {
+    this.importFileName = importFileName;
+  }
+
+  public String getImportedBy() {
+    return importedBy;
+  }
+
+  public void setImportedBy(String importedBy) {
+    this.importedBy = importedBy;
   }
 
   public static class PriceFixedItemImportRow {
@@ -52,10 +80,145 @@ public class PriceFixedItemImportRequest {
     private BigDecimal baseSettlePrice;
     /** V47 联动结算价（C6）*/
     private BigDecimal linkedSettlePrice;
+
+    /** 来源系统：OA/SRM/U9/EXCEL/MANUAL */
+    private String sourceSystem;
+    /** 来源 sheet 名 */
+    private String sourceSheetName;
+    /** Excel 原始行号 */
+    private Integer sourceRowNo;
+    /** 行级导入批次号；为空时使用请求级批次号 */
+    private String sourceBatchNo;
+    /** 行级导入文件名；为空时使用请求级文件名 */
+    private String importFileName;
+    /** 行级导入人；为空时使用请求级导入人 */
+    private String importedBy;
+    /** 导入时间 */
+    private LocalDateTime importedAt;
+
+    /** 固定采购价5 的 id；非 U9 行后续按该字段幂等 */
+    private String externalRowId;
+    private String processStatus;
+    private String srmDocNo;
+    private String materialCategory;
+    private BigDecimal taxRate;
+    private BigDecimal originalProcessFee;
+    private BigDecimal originalProcessFeeTaxIncluded;
+    private BigDecimal originalTaxExcludedPrice;
+    private BigDecimal originalTaxIncludedPrice;
+    private String originalSupplierName;
+    private BigDecimal currentProcessFee;
+    private BigDecimal currentProcessFeeTaxIncluded;
+    /** 固定采购价主价格来源：现不含税价格，导入时应和 fixedPrice 对齐 */
+    private BigDecimal currentTaxExcludedPrice;
+    private BigDecimal currentTaxIncludedPrice;
+    private String currentSupplierName;
+    private BigDecimal changeAmount;
+    private BigDecimal changeRate;
+    private String executionPeriodText;
+    private String annualUsageText;
+    private String applicant;
+    private String applyDept;
+    private String marketSituation;
+    private String similarCompare;
+    private String approvalConclusion;
+    private String approvalType;
+    private String businessDivision;
+    private LocalDateTime generalManagerApprovedAt;
+    private LocalDate trackingDate;
+    private String printFlag;
+
+    /** 结算固定价最后一列表头 */
+    private String settleReferenceHeader;
+    /** 最后一列是“价格或备注”混合列：非数字如“不用提供”写这里，不写 fixedPrice。 */
+    private String settleReferenceText;
+    /** 最后一列是数字时写这里，并同步到 fixedPrice 参与取价。 */
+    private BigDecimal settleReferencePrice;
+
     public BigDecimal getBaseSettlePrice() { return baseSettlePrice; }
     public void setBaseSettlePrice(BigDecimal v) { this.baseSettlePrice = v; }
     public BigDecimal getLinkedSettlePrice() { return linkedSettlePrice; }
     public void setLinkedSettlePrice(BigDecimal v) { this.linkedSettlePrice = v; }
+
+    public String getSourceSystem() { return sourceSystem; }
+    public void setSourceSystem(String sourceSystem) { this.sourceSystem = sourceSystem; }
+    public String getSourceSheetName() { return sourceSheetName; }
+    public void setSourceSheetName(String sourceSheetName) { this.sourceSheetName = sourceSheetName; }
+    public Integer getSourceRowNo() { return sourceRowNo; }
+    public void setSourceRowNo(Integer sourceRowNo) { this.sourceRowNo = sourceRowNo; }
+    public String getSourceBatchNo() { return sourceBatchNo; }
+    public void setSourceBatchNo(String sourceBatchNo) { this.sourceBatchNo = sourceBatchNo; }
+    public String getImportFileName() { return importFileName; }
+    public void setImportFileName(String importFileName) { this.importFileName = importFileName; }
+    public String getImportedBy() { return importedBy; }
+    public void setImportedBy(String importedBy) { this.importedBy = importedBy; }
+    public LocalDateTime getImportedAt() { return importedAt; }
+    public void setImportedAt(LocalDateTime importedAt) { this.importedAt = importedAt; }
+
+    public String getExternalRowId() { return externalRowId; }
+    public void setExternalRowId(String externalRowId) { this.externalRowId = externalRowId; }
+    public String getProcessStatus() { return processStatus; }
+    public void setProcessStatus(String processStatus) { this.processStatus = processStatus; }
+    public String getSrmDocNo() { return srmDocNo; }
+    public void setSrmDocNo(String srmDocNo) { this.srmDocNo = srmDocNo; }
+    public String getMaterialCategory() { return materialCategory; }
+    public void setMaterialCategory(String materialCategory) { this.materialCategory = materialCategory; }
+    public BigDecimal getTaxRate() { return taxRate; }
+    public void setTaxRate(BigDecimal taxRate) { this.taxRate = taxRate; }
+    public BigDecimal getOriginalProcessFee() { return originalProcessFee; }
+    public void setOriginalProcessFee(BigDecimal originalProcessFee) { this.originalProcessFee = originalProcessFee; }
+    public BigDecimal getOriginalProcessFeeTaxIncluded() { return originalProcessFeeTaxIncluded; }
+    public void setOriginalProcessFeeTaxIncluded(BigDecimal originalProcessFeeTaxIncluded) { this.originalProcessFeeTaxIncluded = originalProcessFeeTaxIncluded; }
+    public BigDecimal getOriginalTaxExcludedPrice() { return originalTaxExcludedPrice; }
+    public void setOriginalTaxExcludedPrice(BigDecimal originalTaxExcludedPrice) { this.originalTaxExcludedPrice = originalTaxExcludedPrice; }
+    public BigDecimal getOriginalTaxIncludedPrice() { return originalTaxIncludedPrice; }
+    public void setOriginalTaxIncludedPrice(BigDecimal originalTaxIncludedPrice) { this.originalTaxIncludedPrice = originalTaxIncludedPrice; }
+    public String getOriginalSupplierName() { return originalSupplierName; }
+    public void setOriginalSupplierName(String originalSupplierName) { this.originalSupplierName = originalSupplierName; }
+    public BigDecimal getCurrentProcessFee() { return currentProcessFee; }
+    public void setCurrentProcessFee(BigDecimal currentProcessFee) { this.currentProcessFee = currentProcessFee; }
+    public BigDecimal getCurrentProcessFeeTaxIncluded() { return currentProcessFeeTaxIncluded; }
+    public void setCurrentProcessFeeTaxIncluded(BigDecimal currentProcessFeeTaxIncluded) { this.currentProcessFeeTaxIncluded = currentProcessFeeTaxIncluded; }
+    public BigDecimal getCurrentTaxExcludedPrice() { return currentTaxExcludedPrice; }
+    public void setCurrentTaxExcludedPrice(BigDecimal currentTaxExcludedPrice) { this.currentTaxExcludedPrice = currentTaxExcludedPrice; }
+    public BigDecimal getCurrentTaxIncludedPrice() { return currentTaxIncludedPrice; }
+    public void setCurrentTaxIncludedPrice(BigDecimal currentTaxIncludedPrice) { this.currentTaxIncludedPrice = currentTaxIncludedPrice; }
+    public String getCurrentSupplierName() { return currentSupplierName; }
+    public void setCurrentSupplierName(String currentSupplierName) { this.currentSupplierName = currentSupplierName; }
+    public BigDecimal getChangeAmount() { return changeAmount; }
+    public void setChangeAmount(BigDecimal changeAmount) { this.changeAmount = changeAmount; }
+    public BigDecimal getChangeRate() { return changeRate; }
+    public void setChangeRate(BigDecimal changeRate) { this.changeRate = changeRate; }
+    public String getExecutionPeriodText() { return executionPeriodText; }
+    public void setExecutionPeriodText(String executionPeriodText) { this.executionPeriodText = executionPeriodText; }
+    public String getAnnualUsageText() { return annualUsageText; }
+    public void setAnnualUsageText(String annualUsageText) { this.annualUsageText = annualUsageText; }
+    public String getApplicant() { return applicant; }
+    public void setApplicant(String applicant) { this.applicant = applicant; }
+    public String getApplyDept() { return applyDept; }
+    public void setApplyDept(String applyDept) { this.applyDept = applyDept; }
+    public String getMarketSituation() { return marketSituation; }
+    public void setMarketSituation(String marketSituation) { this.marketSituation = marketSituation; }
+    public String getSimilarCompare() { return similarCompare; }
+    public void setSimilarCompare(String similarCompare) { this.similarCompare = similarCompare; }
+    public String getApprovalConclusion() { return approvalConclusion; }
+    public void setApprovalConclusion(String approvalConclusion) { this.approvalConclusion = approvalConclusion; }
+    public String getApprovalType() { return approvalType; }
+    public void setApprovalType(String approvalType) { this.approvalType = approvalType; }
+    public String getBusinessDivision() { return businessDivision; }
+    public void setBusinessDivision(String businessDivision) { this.businessDivision = businessDivision; }
+    public LocalDateTime getGeneralManagerApprovedAt() { return generalManagerApprovedAt; }
+    public void setGeneralManagerApprovedAt(LocalDateTime generalManagerApprovedAt) { this.generalManagerApprovedAt = generalManagerApprovedAt; }
+    public LocalDate getTrackingDate() { return trackingDate; }
+    public void setTrackingDate(LocalDate trackingDate) { this.trackingDate = trackingDate; }
+    public String getPrintFlag() { return printFlag; }
+    public void setPrintFlag(String printFlag) { this.printFlag = printFlag; }
+    public String getSettleReferenceHeader() { return settleReferenceHeader; }
+    public void setSettleReferenceHeader(String settleReferenceHeader) { this.settleReferenceHeader = settleReferenceHeader; }
+    public String getSettleReferenceText() { return settleReferenceText; }
+    public void setSettleReferenceText(String settleReferenceText) { this.settleReferenceText = settleReferenceText; }
+    public BigDecimal getSettleReferencePrice() { return settleReferencePrice; }
+    public void setSettleReferencePrice(BigDecimal settleReferencePrice) { this.settleReferencePrice = settleReferencePrice; }
 
     public String getSourceType() { return sourceType; }
     public void setSourceType(String sourceType) { this.sourceType = sourceType; }

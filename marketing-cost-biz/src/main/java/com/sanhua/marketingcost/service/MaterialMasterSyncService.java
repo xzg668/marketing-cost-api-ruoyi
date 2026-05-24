@@ -1,12 +1,14 @@
 package com.sanhua.marketingcost.service;
 
+import java.util.List;
+
 /**
  * T15：按 OA 同步主档（staging → 主表）。
  *
  * <p>逻辑等价于 Python {@code scripts/sync_material_master.py}：
  * <ol>
  *   <li>取 OA 涉及的去重料号（lp_bom_costing_row）</li>
- *   <li>拿 staging 最新批次（lp_material_master_raw.import_batch_id）</li>
+ *   <li>拿 staging 最新有效批次（lp_material_master_raw.active_flag=1 的 import_batch_id）</li>
  *   <li>从 staging 拉这些料号的行，做字段映射 + 类型转换 + BU 推断</li>
  *   <li>UPSERT 到 lp_material_master（ON DUPLICATE KEY UPDATE 刷字段）</li>
  * </ol>
@@ -21,6 +23,19 @@ public interface MaterialMasterSyncService {
    */
   SyncResult syncByOaNo(String oaNo);
 
+  /** 由 raw 表聚合出的批次摘要；U9MM-06 页面接口可直接复用。 */
+  List<BatchSummary> listBatchSummaries();
+
   /** 同步结果汇总。staging 命中 < 涉及料号说明部分料号 staging 缺数据，调用侧可记日志。 */
   record SyncResult(int distinctCodes, int stagingHits, int affectedRows, String batchId) {}
+
+  record BatchSummary(
+      String batchNo,
+      String datasetCode,
+      String sourceType,
+      String mappingVersion,
+      int totalCount,
+      int successCount,
+      int failCount,
+      String status) {}
 }

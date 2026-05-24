@@ -29,6 +29,16 @@ public class QuoteNormalizedItem {
   private String productStatus;
   private BigDecimal scrapRate;
   private BigDecimal unitLaborCost;
+  private BigDecimal totalWithShip;
+  private BigDecimal totalNoShip;
+  private BigDecimal materialCost;
+  private BigDecimal laborCost;
+  private BigDecimal manufacturingCost;
+  private BigDecimal managementCost;
+  private Integer validMonth;
+  private BigDecimal sus304WeightG;
+  private BigDecimal sus316WeightG;
+  private BigDecimal copperWeightG;
   private String classificationStatus;
   private String quoteScenario;
   private String businessUnitType;
@@ -232,6 +242,86 @@ public class QuoteNormalizedItem {
 
   public void setUnitLaborCost(BigDecimal unitLaborCost) {
     this.unitLaborCost = unitLaborCost;
+  }
+
+  public BigDecimal getTotalWithShip() {
+    return totalWithShip;
+  }
+
+  public void setTotalWithShip(BigDecimal totalWithShip) {
+    this.totalWithShip = totalWithShip;
+  }
+
+  public BigDecimal getTotalNoShip() {
+    return totalNoShip;
+  }
+
+  public void setTotalNoShip(BigDecimal totalNoShip) {
+    this.totalNoShip = totalNoShip;
+  }
+
+  public BigDecimal getMaterialCost() {
+    return materialCost;
+  }
+
+  public void setMaterialCost(BigDecimal materialCost) {
+    this.materialCost = materialCost;
+  }
+
+  public BigDecimal getLaborCost() {
+    return laborCost;
+  }
+
+  public void setLaborCost(BigDecimal laborCost) {
+    this.laborCost = laborCost;
+  }
+
+  public BigDecimal getManufacturingCost() {
+    return manufacturingCost;
+  }
+
+  public void setManufacturingCost(BigDecimal manufacturingCost) {
+    this.manufacturingCost = manufacturingCost;
+  }
+
+  public BigDecimal getManagementCost() {
+    return managementCost;
+  }
+
+  public void setManagementCost(BigDecimal managementCost) {
+    this.managementCost = managementCost;
+  }
+
+  public Integer getValidMonth() {
+    return validMonth;
+  }
+
+  public void setValidMonth(Integer validMonth) {
+    this.validMonth = validMonth;
+  }
+
+  public BigDecimal getSus304WeightG() {
+    return sus304WeightG;
+  }
+
+  public void setSus304WeightG(BigDecimal sus304WeightG) {
+    this.sus304WeightG = sus304WeightG;
+  }
+
+  public BigDecimal getSus316WeightG() {
+    return sus316WeightG;
+  }
+
+  public void setSus316WeightG(BigDecimal sus316WeightG) {
+    this.sus316WeightG = sus316WeightG;
+  }
+
+  public BigDecimal getCopperWeightG() {
+    return copperWeightG;
+  }
+
+  public void setCopperWeightG(BigDecimal copperWeightG) {
+    this.copperWeightG = copperWeightG;
   }
 
   public String getClassificationStatus() {

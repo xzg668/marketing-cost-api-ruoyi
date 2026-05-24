@@ -3,11 +3,14 @@ package com.sanhua.marketingcost.controller;
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.ProductPropertyImportRequest;
+import com.sanhua.marketingcost.dto.ProductPropertyAnnualSyncResult;
 import com.sanhua.marketingcost.dto.ProductPropertyPageResponse;
 import com.sanhua.marketingcost.dto.ProductPropertyRequest;
 import com.sanhua.marketingcost.entity.ProductProperty;
 import com.sanhua.marketingcost.service.ProductPropertyService;
+import java.io.IOException;
 import java.util.List;
+import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -17,7 +20,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
  * 产品属性控制器 - 管理产品属性的增删改查与导入
@@ -36,8 +41,25 @@ public class ProductPropertyController {
   @GetMapping
   public CommonResult<ProductPropertyPageResponse> list(
       @RequestParam(required = false) String level1Name,
-      @RequestParam(required = false) String parentCode) {
-    List<ProductProperty> list = productPropertyService.list(level1Name, parentCode);
+      @RequestParam(required = false) String parentCode,
+      @RequestParam(required = false) Integer propertyYear,
+      @RequestParam(required = false) String businessDivision,
+      @RequestParam(required = false) String productCode,
+      @RequestParam(required = false) String productName,
+      @RequestParam(required = false) String productAttr,
+      @RequestParam(required = false) String attrSourceType,
+      @RequestParam(required = false) String annualUsageSourceType) {
+    List<ProductProperty> list =
+        productPropertyService.list(
+            level1Name,
+            parentCode,
+            propertyYear,
+            businessDivision,
+            productCode,
+            productName,
+            productAttr,
+            attrSourceType,
+            annualUsageSourceType);
     return CommonResult.success(new ProductPropertyPageResponse(list.size(), list));
   }
 
@@ -74,9 +96,21 @@ public class ProductPropertyController {
 
   /** 导入产品属性数据 */
   @PreAuthorize("@ss.hasPermi('base:product-property:import')")
-  @PostMapping("/import")
-  public CommonResult<List<ProductProperty>> importItems(
+  @PostMapping(path = "/import", consumes = MediaType.APPLICATION_JSON_VALUE)
+  public CommonResult<ProductPropertyAnnualSyncResult> importItems(
       @RequestBody ProductPropertyImportRequest request) {
     return CommonResult.success(productPropertyService.importItems(request));
+  }
+
+  /** 导入产品属性 Excel，兼容新旧模板表头别名。 */
+  @PreAuthorize("@ss.hasPermi('base:product-property:import')")
+  @PostMapping(path = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+  public CommonResult<ProductPropertyAnnualSyncResult> importExcel(
+      @RequestPart("file") MultipartFile file,
+      @RequestParam(required = false) Integer propertyYear,
+      @RequestParam(required = false) String businessUnitType)
+      throws IOException {
+    return CommonResult.success(
+        productPropertyService.importExcel(file.getInputStream(), propertyYear, businessUnitType));
   }
 }

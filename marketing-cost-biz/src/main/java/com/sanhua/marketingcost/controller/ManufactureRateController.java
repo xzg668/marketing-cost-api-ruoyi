@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.controller;
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.ManufactureRateImportRequest;
+import com.sanhua.marketingcost.dto.ManufactureRateImportResponse;
 import com.sanhua.marketingcost.dto.ManufactureRatePageResponse;
 import com.sanhua.marketingcost.dto.ManufactureRateRequest;
 import com.sanhua.marketingcost.entity.ManufactureRate;
@@ -74,7 +75,7 @@ public class ManufactureRateController {
   /** 导入制造费率数据 */
   @PreAuthorize("@ss.hasPermi('base:manufacture-rate:import')")
   @PostMapping("/import")
-  public CommonResult<List<ManufactureRate>> importItems(
+  public CommonResult<ManufactureRateImportResponse> importItems(
       @RequestBody ManufactureRateImportRequest request) {
     return CommonResult.success(manufactureRateService.importItems(request));
   }

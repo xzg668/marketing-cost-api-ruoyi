@@ -2,20 +2,23 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
+import com.sanhua.marketingcost.dto.PackagePriceRequest;
+import com.sanhua.marketingcost.dto.PackagePriceResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
-import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
 import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.OaForm;
+import com.sanhua.marketingcost.enums.MaterialFormAttrEnum;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
-import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.service.CostRunPartItemService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
+import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
+import com.sanhua.marketingcost.service.PackageComponentPriceService;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.LinkedHashSet;
@@ -29,7 +32,6 @@ import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -57,14 +59,14 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
 
   private final CostRunPartItemMapper costRunPartItemMapper;
   private final MaterialPriceRouterService materialPriceRouterService;
-  /** T25：取 OA.apply_date 推 period（解掉历史 LocalDate.now() 跨月失效 bug） */
+  private final PackageComponentIdentifyService packageComponentIdentifyService;
+  private final PackageComponentPriceService packageComponentPriceService;
+  /** 保留依赖用于历史构造兼容；成本试算取价月份不再读取 OA.apply_date。 */
   private final OaFormMapper oaFormMapper;
   /** T26：聚合视图判定焊料子件用 — 同步主档查 cost_element */
   private final MaterialMasterMapper materialMasterMapper;
   /** T26：聚合视图查包装组件父件用 — raw 主档（虚拟件 9830000026238 不在同步表） */
   private final MaterialMasterRawMapper materialMasterRawMapper;
-  /** T26：聚合视图查 BOM 父子关系用（找包装组件父件下挂的子件） */
-  private final BomRawHierarchyMapper bomRawHierarchyMapper;
   /** 桶 → Resolver 的反查表（Spring 注入所有 PriceResolver Bean 后建索引） */
   private final Map<PriceTypeEnum, PriceResolver> resolverMap;
 
@@ -75,23 +77,26 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
   private static final String MAIN_CATEGORY_PACKAGE = "包装组件";
   /** T26：包装算法系数 — 硬编码 1.05（业务来源待确认，TODO #T24.9） */
   private static final BigDecimal PACKAGE_COEFFICIENT = new BigDecimal("1.05");
-  /** T26：包装数量 — MVP 阶段硬编码 12（OA-001 实测，TODO #T24.9） */
-  private static final BigDecimal PACKAGE_COUNT = new BigDecimal("12");
+  private static final String SOURCE_TYPE_U9 = "U9";
+  private static final String PRICE_SOURCE_PACKAGE_COMPONENT = "包装组件价格";
 
   public CostRunPartItemServiceImpl(
       CostRunPartItemMapper costRunPartItemMapper,
       MaterialPriceRouterService materialPriceRouterService,
+      PackageComponentIdentifyService packageComponentIdentifyService,
+      PackageComponentPriceService packageComponentPriceService,
       OaFormMapper oaFormMapper,
       MaterialMasterMapper materialMasterMapper,
       MaterialMasterRawMapper materialMasterRawMapper,
-      BomRawHierarchyMapper bomRawHierarchyMapper,
+      com.sanhua.marketingcost.mapper.BomRawHierarchyMapper bomRawHierarchyMapper,
       List<PriceResolver> priceResolvers) {
     this.costRunPartItemMapper = costRunPartItemMapper;
     this.materialPriceRouterService = materialPriceRouterService;
+    this.packageComponentIdentifyService = packageComponentIdentifyService;
+    this.packageComponentPriceService = packageComponentPriceService;
     this.oaFormMapper = oaFormMapper;
     this.materialMasterMapper = materialMasterMapper;
     this.materialMasterRawMapper = materialMasterRawMapper;
-    this.bomRawHierarchyMapper = bomRawHierarchyMapper;
     Map<PriceTypeEnum, PriceResolver> map = new EnumMap<>(PriceTypeEnum.class);
     for (PriceResolver resolver : priceResolvers) {
       map.put(resolver.priceType(), resolver);
@@ -112,8 +117,7 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       return items;
     }
 
-    // T25：用 OA.apply_date 推 period（OA 报价单是历史单，路由匹配应按"申请那时点"，跟今天解耦）
-    //   apply_date 为空时 fallback 到 LocalDate.now()，老用例零回归
+    // 成本试算按当前月份取价，避免历史 OA.apply_date 把路由和联动价结果带到旧月份。
     LocalDate quoteDate = resolveQuoteDate(oaNoValue);
 
     // 走 Router + 4 桶 Resolver 取价（v1.1 起唯一路径）
@@ -169,9 +173,9 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
    * <ol>
    *   <li>拉 raw 部品 → filter by productCode</li>
    *   <li>查焊料子件集合（主档 cost_element=主要材料-焊料）</li>
-   *   <li>查包装子件集合（BOM 父件 main_category=包装组件 → 取下挂子件）</li>
-   *   <li>遍历部品：焊料归 weldSum，包装归 pkgChildSum，其他原样追加 result</li>
-   *   <li>追加 1 行焊料汇总（amount=Σ）+ 1 行包装汇总（amount=Σ × 1.05 ÷ 12）</li>
+   *   <li>查包装组件父件集合</li>
+   *   <li>遍历部品：焊料归 weldSum，包装父件归 packageParentSum，其他原样追加 result</li>
+   *   <li>追加 1 行焊料汇总（amount=Σ）+ 1 行包装汇总（amount=Σ包装父件 × 1.05）</li>
    * </ol>
    */
   @Override
@@ -197,13 +201,14 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     }
     // 2) 查焊料子件集合
     Set<String> weldCodes = lookupCodesByCostElement(partCodes, COST_ELEMENT_WELD);
-    // 3) 查包装子件集合
-    Set<String> packageChildCodes = lookupPackageChildCodes(productCodeValue);
+    // 3) 查包装组件父件集合
+    Set<String> packageParentCodes = lookupPackageParentCodes(partCodes);
 
     // 4) 分桶聚合
     List<CostRunPartItemDto> result = new ArrayList<>();
     BigDecimal weldSum = BigDecimal.ZERO;
-    BigDecimal pkgChildSum = BigDecimal.ZERO;
+    BigDecimal packageParentSum = BigDecimal.ZERO;
+    List<CostRunPartItemDto> packageRows = new ArrayList<>();
     for (CostRunPartItemDto p : filtered) {
       String code = p.getPartCode() == null ? null : p.getPartCode().trim();
       BigDecimal amt = p.getAmount();
@@ -211,15 +216,16 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
         if (amt != null) {
           weldSum = weldSum.add(amt);
         }
-      } else if (code != null && packageChildCodes.contains(code)) {
+      } else if (code != null && packageParentCodes.contains(code)) {
         if (amt != null) {
-          pkgChildSum = pkgChildSum.add(amt);
+          packageParentSum = packageParentSum.add(amt);
         }
+        packageRows.add(p);
       } else {
         result.add(p); // 普通部品原样追加
       }
     }
-    // 5) 追加聚合行（T26.1：partCode 留空，跟 Excel 见机表 r44/r45 显示一致）
+    // 5) 追加聚合行（焊料仍按 Excel 见机表 r44/r45 留空料号；包装需保留父件信息便于追溯）
     if (weldSum.signum() > 0) {
       result.add(buildAggregatedRow(
           oaNo, productCodeValue,
@@ -227,15 +233,13 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
           weldSum.setScale(6, RoundingMode.HALF_UP),
           "焊料汇总（cost_element=主要材料-焊料 子件 SUM）"));
     }
-    if (pkgChildSum.signum() > 0) {
-      BigDecimal pkgAmount = pkgChildSum
+    if (packageParentSum.signum() > 0) {
+      BigDecimal pkgAmount = packageParentSum
           .multiply(PACKAGE_COEFFICIENT)
-          .divide(PACKAGE_COUNT, 6, RoundingMode.HALF_UP);
-      result.add(buildAggregatedRow(
-          oaNo, productCodeValue,
-          "包装",
-          pkgAmount,
-          "包装汇总（BOM 父件 main_category=包装组件 子件 SUM × 1.05 ÷ 12）"));
+          .setScale(6, RoundingMode.HALF_UP);
+      result.add(buildPackageAggregatedRow(
+          oaNo, productCodeValue, packageRows, pkgAmount,
+          "包装汇总（包装组件父件金额 × 1.05）"));
     }
     return result;
   }
@@ -262,41 +266,24 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     return result;
   }
 
-  /** T26：找产品 BOM 里 main_category=包装组件 父件下挂的所有子件 material_code */
-  private Set<String> lookupPackageChildCodes(String productCode) {
-    // 1) raw 主档拿到所有 main_category='包装组件' 的料号集合（虚拟父件候选）
+  /** T26：找当前部品列表中的包装组件父件 material_code。 */
+  private Set<String> lookupPackageParentCodes(Set<String> partCodes) {
+    if (partCodes == null || partCodes.isEmpty()) {
+      return Collections.emptySet();
+    }
     List<MaterialMasterRaw> parents =
-        materialMasterRawMapper.selectList(
-            Wrappers.lambdaQuery(MaterialMasterRaw.class)
-                .eq(MaterialMasterRaw::getMainCategoryName, MAIN_CATEGORY_PACKAGE));
+        materialMasterRawMapper.selectPackageComponentParentsByLatestBatch(MAIN_CATEGORY_PACKAGE, null);
     if (parents == null || parents.isEmpty()) {
       return Collections.emptySet();
     }
     Set<String> parentCodes = new LinkedHashSet<>();
     for (MaterialMasterRaw m : parents) {
-      if (StringUtils.hasText(m.getMaterialCode())) {
-        parentCodes.add(m.getMaterialCode());
+      String code = m.getMaterialCode() == null ? null : m.getMaterialCode().trim();
+      if (code != null && partCodes.contains(code)) {
+        parentCodes.add(code);
       }
     }
-    if (parentCodes.isEmpty()) {
-      return Collections.emptySet();
-    }
-    // 2) BOM 拿 top_product_code=本产品 + parent_code in 父件集合 的子件 material_code
-    List<BomRawHierarchy> children =
-        bomRawHierarchyMapper.selectList(
-            Wrappers.lambdaQuery(BomRawHierarchy.class)
-                .eq(BomRawHierarchy::getTopProductCode, productCode)
-                .in(BomRawHierarchy::getParentCode, parentCodes));
-    if (children == null || children.isEmpty()) {
-      return Collections.emptySet();
-    }
-    Set<String> result = new LinkedHashSet<>();
-    for (BomRawHierarchy c : children) {
-      if (StringUtils.hasText(c.getMaterialCode())) {
-        result.add(c.getMaterialCode());
-      }
-    }
-    return result;
+    return parentCodes;
   }
 
   /** T26：构造 1 行聚合行 DTO（partCode 留空，跟 Excel 见机表 r44/r45 显示一致） */
@@ -311,6 +298,44 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     dto.setPriceSource("汇总");
     dto.setRemark(remark);
     return dto;
+  }
+
+  /** T26：包装汇总行保留包装父件料号/图号/单价；金额仍为包装父件金额 × 1.05。 */
+  private CostRunPartItemDto buildPackageAggregatedRow(
+      String oaNo,
+      String productCode,
+      List<CostRunPartItemDto> packageRows,
+      BigDecimal amount,
+      String remark) {
+    CostRunPartItemDto dto = buildAggregatedRow(oaNo, productCode, "包装", amount, remark);
+    if (packageRows == null || packageRows.isEmpty()) {
+      return dto;
+    }
+    CostRunPartItemDto first = packageRows.get(0);
+    dto.setPartCode(first.getPartCode());
+    dto.setPartDrawingNo(first.getPartDrawingNo());
+    dto.setPartQty(first.getPartQty());
+    dto.setShapeAttr(first.getShapeAttr());
+    dto.setMaterial(first.getMaterial());
+    dto.setPriceType(first.getPriceType());
+    dto.setSourceSystem(first.getSourceSystem());
+    dto.setCostElement(first.getCostElement());
+    dto.setUnitPrice(calculateDisplayUnitPrice(first, amount));
+    return dto;
+  }
+
+  private BigDecimal calculateDisplayUnitPrice(CostRunPartItemDto row, BigDecimal amount) {
+    if (row == null || amount == null) {
+      return null;
+    }
+    BigDecimal qty = row.getPartQty();
+    if (qty != null && qty.signum() != 0) {
+      return amount.divide(qty, 6, RoundingMode.HALF_UP);
+    }
+    BigDecimal unitPrice = row.getUnitPrice();
+    return unitPrice == null
+        ? null
+        : unitPrice.multiply(PACKAGE_COEFFICIENT).setScale(6, RoundingMode.HALF_UP);
   }
 
   // ============================ Router + Resolver 取价 ============================
@@ -330,8 +355,9 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       Map<Integer, PriceTypeRoute> winningRoutes,
       java.util.function.IntConsumer progress) {
     Map<Integer, PriceResolveResult> results = new HashMap<>();
-    // T25：quoteDate 由调用方决定（OA.apply_date 优先 / fallback today），不再强行 LocalDate.now()
+    // quoteDate 由试算口径统一决定，当前固定为系统当前日期。
     String period = inferPeriod(quoteDate);
+    Map<String, Boolean> packageFlags = identifyPackageComponents(items);
     int total = Math.max(1, items.size());
     for (int i = 0; i < items.size(); i++) {
       CostRunPartItemDto item = items.get(i);
@@ -341,13 +367,24 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
         results.put(i, PriceResolveResult.error("partCode 为空"));
         continue;
       }
+      if (Boolean.TRUE.equals(packageFlags.get(code.trim()))) {
+        results.put(i, resolvePackageComponentPrice(oaNoValue, quoteDate, period, item));
+        progress.accept((i + 1) * 100 / total);
+        continue;
+      }
       // Router 给出全部候选；按 priority 升序逐桶尝试，直到首个 Resolver 成功
       List<PriceTypeRoute> candidates =
           materialPriceRouterService.listCandidates(code, period, quoteDate);
       if (candidates.isEmpty()) {
-        // 缺路由：业务侧需补价格类型表配置
-        results.put(i, PriceResolveResult.noRoute(code));
-        continue;
+        if (isManufacturedItem(item)) {
+          // 制造件价格源来自“制造件价格生成”结果表；缺价格类型路由不能阻断制造件取价。
+          // 成本试算只消费已生成结果，不在这里触发制造件价格生成。
+          candidates = List.of(syntheticMakeRoute(code));
+        } else {
+          // 缺路由：非制造件仍要求业务侧补价格类型表配置
+          results.put(i, PriceResolveResult.noRoute(code));
+          continue;
+        }
       }
       // 收集尝试过的桶名 + 最后一次 miss 原因，全 fallthrough 时拼成 ERROR remark
       PriceResolveResult hit = null;
@@ -384,6 +421,83 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       progress.accept((i + 1) * 100 / total);
     }
     return results;
+  }
+
+  private Map<String, Boolean> identifyPackageComponents(List<CostRunPartItemDto> items) {
+    Set<String> codes = new LinkedHashSet<>();
+    for (CostRunPartItemDto item : items) {
+      if (item != null && StringUtils.hasText(item.getPartCode())) {
+        codes.add(item.getPartCode().trim());
+      }
+    }
+    if (codes.isEmpty()) {
+      return Collections.emptyMap();
+    }
+    Map<String, Boolean> flags = packageComponentIdentifyService.batchIdentify(codes);
+    return flags == null ? Collections.emptyMap() : flags;
+  }
+
+  private PriceResolveResult resolvePackageComponentPrice(
+      String oaNoValue, LocalDate quoteDate, String period, CostRunPartItemDto item) {
+    PackagePriceRequest request = new PackagePriceRequest();
+    request.setPackageMaterialCode(item.getPartCode().trim());
+    request.setPeriodMonth(period);
+    request.setOaNo(oaNoValue);
+    request.setTopProductCode(normalizeBlankToNull(item.getProductCode()));
+    request.setSourceType(SOURCE_TYPE_U9);
+    request.setAsOfDate(quoteDate);
+
+    PackagePriceResult packageResult = packageComponentPriceService.ensurePrice(request);
+    if (packageResult != null
+        && packageResult.isComplete()
+        && packageResult.getPrice() != null
+        && packageResult.getPrice().getTotalPrice() != null) {
+      return new PriceResolveResult(
+          packageResult.getPrice().getTotalPrice(), PRICE_SOURCE_PACKAGE_COMPONENT, "");
+    }
+    return PriceResolveResult.error(buildPackageComponentMissingRemark(packageResult));
+  }
+
+  private String buildPackageComponentMissingRemark(PackagePriceResult packageResult) {
+    if (packageResult == null) {
+      return "包装组件价格生成失败：无返回结果，当前阶段不阻断";
+    }
+    String status = StringUtils.hasText(packageResult.getStatus()) ? packageResult.getStatus() : "UNKNOWN";
+    String warningText =
+        packageResult.getWarnings() == null || packageResult.getWarnings().isEmpty()
+            ? ""
+            : "，" + String.join("；", packageResult.getWarnings());
+    return "包装组件价格未完整：status=" + status + warningText + "，当前阶段不阻断";
+  }
+
+  private static String normalizeBlankToNull(String value) {
+    return StringUtils.hasText(value) ? value.trim() : null;
+  }
+
+  private boolean isManufacturedItem(CostRunPartItemDto item) {
+    return isManufacturedText(item.getShapeAttr()) || isManufacturedText(item.getMaterialShape());
+  }
+
+  private boolean isManufacturedText(String value) {
+    if (!StringUtils.hasText(value)) {
+      return false;
+    }
+    String normalized = value.trim();
+    return MaterialFormAttrEnum.fromDbText(normalized)
+        .map(MaterialFormAttrEnum.MANUFACTURED::equals)
+        .orElse("自制".equals(normalized) || "原材料联动".equals(normalized));
+  }
+
+  private PriceTypeRoute syntheticMakeRoute(String code) {
+    return new PriceTypeRoute(
+        code,
+        MaterialFormAttrEnum.MANUFACTURED,
+        PriceTypeEnum.MAKE,
+        1,
+        null,
+        null,
+        "cost-run-synthetic",
+        PriceTypeEnum.MAKE.getDbText());
   }
 
   /**
@@ -425,30 +539,17 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
   // ============================ 工具 / 持久化 ============================
 
   /**
-   * T25：决定取价用的 quoteDate（影响 period + effective 窗口）。
+   * 决定成本试算取价日（影响 period + effective 窗口）。
    *
-   * <p>OA 报价单本质是"申请那一时刻的快照"，路由表/价格表/财务基价都按月份分账期，
-   * 因此应该按 OA.apply_date 而不是"今天"去匹配 — 否则跨月就 NO_ROUTE。
-   *
-   * <p>fallback 顺序：apply_date → LocalDate.now()（保 OA 没填日期时不抛错）。
-   *
-   * <p>包私有以便单测覆盖。
+   * <p>当前试算按系统当前月份取价；OA.apply_date 只表示单据申请时间，不作为试算价格月份。
    */
   LocalDate resolveQuoteDate(String oaNo) {
-    OaForm form =
-        oaFormMapper.selectOne(
-            Wrappers.lambdaQuery(OaForm.class).eq(OaForm::getOaNo, oaNo).last("LIMIT 1"));
-    if (form != null && form.getApplyDate() != null) {
-      return form.getApplyDate();
-    }
-    log.warn("T25 resolveQuoteDate: OA {} 缺 apply_date，fallback to today", oaNo);
     return LocalDate.now();
   }
 
-  /** 用试算日推算 period（yyyy-MM）；未来可扩展按账期查找服务。 */
+  /** 用试算取价日推算 period（yyyy-MM）；未来可扩展按账期查找服务。 */
   private static String inferPeriod(LocalDate date) {
-    return Optional.ofNullable(date).orElse(LocalDate.now())
-        .toString().substring(0, 7);
+    return date.toString().substring(0, 7);
   }
 
   private void saveCostRunItems(String oaNo, List<CostRunPartItemDto> items) {

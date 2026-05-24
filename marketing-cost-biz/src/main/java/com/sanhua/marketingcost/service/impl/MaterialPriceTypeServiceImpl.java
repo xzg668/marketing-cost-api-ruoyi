@@ -39,7 +39,9 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     if (StringUtils.hasText(period)) {
       query.eq(MaterialPriceType::getPeriod, period.trim());
     }
-    query.orderByDesc(MaterialPriceType::getPeriod).orderByDesc(MaterialPriceType::getId);
+    query.orderByAsc(MaterialPriceType::getMaterialCode)
+        .orderByAsc(MaterialPriceType::getPriceType)
+        .orderByDesc(MaterialPriceType::getId);
     Page<MaterialPriceType> pager = new Page<>(page, pageSize);
     return materialPriceTypeMapper.selectPage(pager, query);
   }
@@ -52,10 +54,7 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     MaterialPriceType entity = new MaterialPriceType();
     merge(entity, request);
     fillDefaults(entity);
-    if (!StringUtils.hasText(entity.getBillNo())
-        || !StringUtils.hasText(entity.getMaterialCode())
-        || !StringUtils.hasText(entity.getPriceType())
-        || !StringUtils.hasText(entity.getPeriod())) {
+    if (!hasRequiredBusinessFields(entity)) {
       return null;
     }
     materialPriceTypeMapper.insert(entity);
@@ -91,25 +90,33 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     List<MaterialPriceType> imported = new ArrayList<>();
     for (var row : request.getRows()) {
       if (row == null
-          || !StringUtils.hasText(row.getBillNo())
           || !StringUtils.hasText(row.getMaterialCode())
-          || !StringUtils.hasText(row.getPriceType())
-          || !StringUtils.hasText(row.getPeriod())) {
+          || !StringUtils.hasText(row.getMaterialName())
+          || !StringUtils.hasText(row.getMaterialModel())
+          || !StringUtils.hasText(row.getMaterialShape())
+          || !StringUtils.hasText(row.getPriceType())) {
         continue;
       }
       MaterialPriceType entity = new MaterialPriceType();
       fillFromRow(entity, row);
       fillDefaults(entity);
-      if (!StringUtils.hasText(entity.getBillNo())
-          || !StringUtils.hasText(entity.getMaterialCode())
-          || !StringUtils.hasText(entity.getPeriod())) {
+      if (!hasRequiredBusinessFields(entity)) {
         continue;
       }
+      // 价格类型表按“物料代码+型号+形态属性+价格类型+期间”去重；期间为空时按全局路由处理。
       materialPriceTypeMapper.delete(
           Wrappers.lambdaQuery(MaterialPriceType.class)
-              .eq(MaterialPriceType::getBillNo, entity.getBillNo())
               .eq(MaterialPriceType::getMaterialCode, entity.getMaterialCode())
-              .eq(MaterialPriceType::getPeriod, entity.getPeriod()));
+              .eq(MaterialPriceType::getMaterialModel, entity.getMaterialModel())
+              .eq(MaterialPriceType::getMaterialShape, entity.getMaterialShape())
+              .eq(MaterialPriceType::getPriceType, entity.getPriceType())
+              .and(q -> {
+                if (StringUtils.hasText(entity.getPeriod())) {
+                  q.eq(MaterialPriceType::getPeriod, entity.getPeriod());
+                } else {
+                  q.isNull(MaterialPriceType::getPeriod).or().eq(MaterialPriceType::getPeriod, "");
+                }
+              }));
       materialPriceTypeMapper.insert(entity);
       imported.add(entity);
     }
@@ -124,7 +131,10 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     entity.setMaterialName(row.getMaterialName());
     entity.setMaterialSpec(row.getMaterialSpec());
     entity.setMaterialModel(row.getMaterialModel());
+    entity.setUnit(row.getUnit());
     entity.setMaterialShape(row.getMaterialShape());
+    entity.setCategoryCode(row.getCategoryCode());
+    entity.setCategoryName(row.getCategoryName());
     entity.setPriceType(row.getPriceType());
     entity.setPeriod(row.getPeriod());
     entity.setSource(row.getSource());
@@ -152,8 +162,17 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     if (request.getMaterialModel() != null) {
       entity.setMaterialModel(request.getMaterialModel());
     }
+    if (request.getUnit() != null) {
+      entity.setUnit(request.getUnit());
+    }
     if (request.getMaterialShape() != null) {
       entity.setMaterialShape(request.getMaterialShape());
+    }
+    if (request.getCategoryCode() != null) {
+      entity.setCategoryCode(request.getCategoryCode());
+    }
+    if (request.getCategoryName() != null) {
+      entity.setCategoryName(request.getCategoryName());
     }
     if (request.getPriceType() != null) {
       entity.setPriceType(request.getPriceType());
@@ -170,20 +189,32 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     if (!StringUtils.hasText(entity.getSource())) {
       entity.setSource(DEFAULT_SOURCE);
     }
-    if (StringUtils.hasText(entity.getBillNo())) {
-      entity.setBillNo(entity.getBillNo().trim());
+    entity.setBillNo(trimToNull(entity.getBillNo()));
+    entity.setMaterialCode(trimToNull(entity.getMaterialCode()));
+    entity.setMaterialName(trimToNull(entity.getMaterialName()));
+    entity.setMaterialSpec(trimToNull(entity.getMaterialSpec()));
+    entity.setMaterialModel(trimToNull(entity.getMaterialModel()));
+    entity.setUnit(trimToNull(entity.getUnit()));
+    entity.setMaterialShape(trimToNull(entity.getMaterialShape()));
+    entity.setCategoryCode(trimToNull(entity.getCategoryCode()));
+    entity.setCategoryName(trimToNull(entity.getCategoryName()));
+    entity.setPriceType(trimToNull(entity.getPriceType()));
+    entity.setPeriod(trimToNull(entity.getPeriod()));
+  }
+
+  private boolean hasRequiredBusinessFields(MaterialPriceType entity) {
+    return entity != null
+        && StringUtils.hasText(entity.getMaterialCode())
+        && StringUtils.hasText(entity.getMaterialName())
+        && StringUtils.hasText(entity.getMaterialModel())
+        && StringUtils.hasText(entity.getMaterialShape())
+        && StringUtils.hasText(entity.getPriceType());
+  }
+
+  private String trimToNull(String value) {
+    if (!StringUtils.hasText(value)) {
+      return null;
     }
-    if (StringUtils.hasText(entity.getMaterialCode())) {
-      entity.setMaterialCode(entity.getMaterialCode().trim());
-    }
-    if (StringUtils.hasText(entity.getPriceType())) {
-      entity.setPriceType(entity.getPriceType().trim());
-    }
-    if (StringUtils.hasText(entity.getPeriod())) {
-      entity.setPeriod(entity.getPeriod().trim());
-    }
-    if (StringUtils.hasText(entity.getMaterialShape())) {
-      entity.setMaterialShape(entity.getMaterialShape().trim());
-    }
+    return value.trim();
   }
 }

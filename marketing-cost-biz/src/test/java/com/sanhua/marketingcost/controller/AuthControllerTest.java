@@ -501,6 +501,27 @@ class AuthControllerTest {
     }
 
     @Test
+    @DisplayName("buildRouterTree — U9基础数据/料品主档多级菜单")
+    void buildRouterTree_u9MaterialMaster() {
+        SysMenu base = buildMenu(40159L, "基础数据", 0L, "base", "M");
+        SysMenu u9 = buildMenu(40435L, "U9基础数据", 40159L, "/base/u9", "M");
+        SysMenu material = buildMenu(40436L, "料品主档", 40435L, "/base/u9/material-master", "C");
+        material.setComponent("pages:U9MaterialMasterPage");
+
+        List<RouterVO> tree = authController.buildRouterTree(List.of(base, u9, material));
+
+        assertEquals(1, tree.size());
+        RouterVO root = tree.get(0);
+        assertEquals("基础数据", root.getMeta().getTitle());
+        RouterVO u9Node = root.getChildren().get(0);
+        assertEquals("U9基础数据", u9Node.getMeta().getTitle());
+        RouterVO materialNode = u9Node.getChildren().get(0);
+        assertEquals("料品主档", materialNode.getMeta().getTitle());
+        assertEquals("/base/u9/material-master", materialNode.getPath());
+        assertEquals("pages:U9MaterialMasterPage", materialNode.getComponent());
+    }
+
+    @Test
     @DisplayName("buildRouterTree — 空列表返回空结果")
     void buildRouterTree_empty() {
         assertTrue(authController.buildRouterTree(null).isEmpty());

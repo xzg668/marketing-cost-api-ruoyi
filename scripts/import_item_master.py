@@ -1,21 +1,41 @@
 #!/usr/bin/env python3
 """
-物料主档 (U9 ItemMaster Excel) 批量导入到 lp_material_master_raw
+物料主档 (U9 ItemMaster Excel) 批量导入到 lp_material_master_raw。
 
 用法：
-    python3 scripts/import_item_master.py /path/to/ItemMaster20260427.xlsx
+    python3 scripts/import_item_master.py /path/to/料品档案20260519.xlsx
 
 特点：
-- 流式读 Excel（16 万行不爆内存）
-- 1000 行一批 INSERT IGNORE + commit（断电不丢前面）
-- 每批失败只丢该批，不影响其他
-- 报告：成功/跳过/失败 计数
+- 按第 2 行表头映射字段，支持模板版本 U9_ITEM_MASTER_20260519
+- 支持旧 U9 表头别名
+- 流式读 Excel，1000 行一批 INSERT IGNORE + commit
+- 失败行写入 <Excel 文件名>.failed.csv，包含 Excel 行号、料号、失败原因
 """
-import sys, os, time, datetime, warnings
+import csv
+import datetime
+import os
+import sys
+import time
+import warnings
+
 warnings.filterwarnings("ignore")
 
 import openpyxl
 import pymysql
+
+from u9_item_master_contract import DATA_START_ROW, MAPPING_VERSION, SHEET_NAME
+from u9_item_master_import_mapping import (
+    FIELD_NAMES,
+    IMPORT_FIELD_NAMES,
+    HeaderMappingError,
+    MaterialCodeDeduplicator,
+    build_header_field_index,
+    build_import_row,
+    describe_headers,
+    material_code_from_import_row,
+    read_header_values,
+)
+
 
 # ───────── 配置 ─────────
 DB_HOST = "localhost"
@@ -25,163 +45,143 @@ DB_PASS = "root123"
 DB_NAME = "marketing_cost"
 BATCH_SIZE = 1000
 
-# Excel 列号 → 表字段名（按 V53 定义对齐 62 列）
-COL_TO_FIELD = [
-    "finance_category",                   # C0
-    "purchase_category",                  # C1
-    "production_category",                # C2
-    "sales_category",                     # C3
-    "bare_code",                          # C4
-    "material_code",                      # C5 ← 必填
-    "material_name",                      # C6
-    "material_spec",                      # C7
-    "material_model",                     # C8
-    "drawing_no",                         # C9
-    "main_category_code",                 # C10
-    "main_category_name",                 # C11
-    "unit",                               # C12
-    "shape_attr",                         # C13
-    "min_eco_batch",                      # C14
-    "department_code",                    # C15
-    "department_name",                    # C16
-    "production_division",                # C17
-    "purchase_lead_time",                 # C18
-    "purchase_post_lead_time",            # C19
-    "legacy_u9_code",                     # C20
-    "global_seg_14_customs_unit",         # C21
-    "global_seg_15_package_size",         # C22
-    "global_seg_17_replace_strategy",     # C23
-    "global_seg_18_purchase_type",        # C24
-    "global_seg_19_in_out_ratio",         # C25
-    "global_seg_2_logistics_type",        # C26
-    "global_seg_20_internal_threshold",   # C27
-    "private_seg_21_customs_name",        # C28
-    "private_seg_22_customs_code",        # C29
-    "private_seg_23_customs_desc",        # C30
-    "private_seg_24_product_property",    # C31
-    "private_seg_25_daily_capacity",      # C32
-    "private_seg_26_lead_time",           # C33
-    "global_seg_3_status",                # C34
-    "global_seg_4_material",              # C35
-    "global_seg_5_net_weight",            # C36
-    "global_seg_6_valid_period",          # C37
-    "global_seg_7_product_property_class",# C38
-    "global_seg_8_loss_rate",             # C39
-    "global_seg_9_gross_weight",          # C40
-    "purchase_multiple",                  # C41
-    "min_order_qty",                      # C42
-    "default_supplier",                   # C43
-    "default_buyer",                      # C44
-    "plan_method",                        # C45
-    "forecast_control_type",              # C46
-    "demand_trace",                       # C47
-    "demand_category_control",            # C48
-    "demand_category_compare_rule",       # C49
-    "default_planner",                    # C50
-    "engineering_change_control",         # C51
-    "allow_over_pick",                    # C52
-    "prepare_over_type",                  # C53
-    "over_complete_type",                 # C54
-    "over_complete_ratio",                # C55
-    "inventory_planning_method",          # C56
-    "code_inventory_account",             # C57
-    "cost_element",                       # C58
-    "producible",                         # C59
-    "purchase_receive_principle",         # C60
-    "mrp_purchase_pre_lead_time",         # C61
-]
-MATERIAL_CODE_IDX = 5  # C5 是 material_code，必填
+
+def fail(message):
+    print(f"ERROR: {message}", file=sys.stderr)
+    sys.exit(1)
 
 
-def to_str_or_none(v):
-    """单元格值 → 字符串或 None；空字符串视作 None"""
-    if v is None:
-        return None
-    s = str(v).strip()
-    return s if s else None
+def open_sheet(xlsx_path):
+    print("打开 Excel ...")
+    workbook = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
+    if SHEET_NAME not in workbook.sheetnames:
+        workbook.close()
+        fail(f"Sheet '{SHEET_NAME}' 不存在，可用：{workbook.sheetnames}")
+    return workbook, workbook[SHEET_NAME]
+
+
+def build_insert_sql():
+    cols = list(IMPORT_FIELD_NAMES)
+    placeholders = ",".join(["%s"] * len(cols))
+    cols_sql = ",".join(f"`{col}`" for col in cols)
+    return f"INSERT IGNORE INTO lp_material_master_raw ({cols_sql}) VALUES ({placeholders})"
 
 
 def main(xlsx_path):
     if not os.path.exists(xlsx_path):
-        print(f"❌ 文件不存在: {xlsx_path}")
-        sys.exit(1)
+        fail(f"文件不存在: {xlsx_path}")
 
-    batch_id = f"u9-{datetime.datetime.now():%Y%m%d-%H%M%S}"
+    batch_id = f"u9-item-master-{datetime.datetime.now():%Y%m%d-%H%M%S}"
+    failed_csv = f"{os.path.splitext(xlsx_path)[0]}.failed.csv"
     print(f"导入批次: {batch_id}")
+    print(f"映射版本: {MAPPING_VERSION}")
 
-    print("打开 Excel ...")
     t0 = time.time()
-    wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
-    ws = wb["物料主档"]
-    print(f"  sheet: {ws.title}, 总行数: {ws.max_row}")
+    workbook, sheet = open_sheet(xlsx_path)
+    print(f"  sheet: {sheet.title}, 总行数: {sheet.max_row}")
 
-    # 第 1 行是 "物料主档" 标题占位，第 2 行是表头，从第 3 行开始是数据
-    rows_iter = ws.iter_rows(min_row=3, values_only=True)
+    try:
+        # 业务导入必须按表头匹配，避免 U9 导出列顺序变化导致字段错位。
+        header_index = build_header_field_index(read_header_values(sheet))
+    except HeaderMappingError as exc:
+        workbook.close()
+        fail(str(exc))
+
+    header_desc = describe_headers(header_index)
+    print(f"  已映射表头: {header_desc['mapped']} / {len(FIELD_NAMES)}")
+    if header_desc["missing_optional"]:
+        print(f"  可选表头缺失: {', '.join(header_desc['missing_optional'])}")
 
     conn = pymysql.connect(
-        host=DB_HOST, port=DB_PORT, user=DB_USER, password=DB_PASS,
-        database=DB_NAME, charset="utf8mb4", autocommit=False,
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASS,
+        database=DB_NAME,
+        charset="utf8mb4",
+        autocommit=False,
     )
     cursor = conn.cursor()
-
-    # 构造 INSERT IGNORE SQL
-    cols = COL_TO_FIELD + ["import_batch_id"]
-    placeholders = ",".join(["%s"] * len(cols))
-    cols_sql = ",".join(f"`{c}`" for c in cols)
-    sql = f"INSERT IGNORE INTO lp_material_master_raw ({cols_sql}) VALUES ({placeholders})"
+    sql = build_insert_sql()
 
     total_read = 0
     total_inserted = 0
-    total_skipped = 0  # material_code 空 / UK 冲突 / 异常
+    total_skipped = 0
+    total_duplicated = 0
     total_failed = 0
     batch = []
+    deduplicator = MaterialCodeDeduplicator()
+
+    failed_file = open(failed_csv, "w", newline="", encoding="utf-8")
+    failed_writer = csv.writer(failed_file)
+    failed_writer.writerow(["excel_row", "material_code", "reason"])
 
     def flush(batch_data):
         nonlocal total_inserted, total_failed
         if not batch_data:
             return
+        rows = [item[1] for item in batch_data]
         try:
-            n = cursor.executemany(sql, batch_data)
+            total_inserted += cursor.executemany(sql, rows)
             conn.commit()
-            total_inserted += n
-        except Exception as e:
+            return
+        except Exception:
             conn.rollback()
-            total_failed += len(batch_data)
-            print(f"  ⚠️ 批次提交失败: {e}")
+
+        for excel_row, values in batch_data:
+            try:
+                total_inserted += cursor.execute(sql, values)
+            except Exception as exc:
+                total_failed += 1
+                material_code = material_code_from_import_row(values)
+                failed_writer.writerow([excel_row, material_code, str(exc)[:300]])
+        conn.commit()
 
     print("开始流式读取 + 批量入库 ...")
-    for row in rows_iter:
+    for excel_row, row in enumerate(sheet.iter_rows(min_row=DATA_START_ROW, values_only=True), start=DATA_START_ROW):
         total_read += 1
-        # 取前 62 列
-        cells = list(row[:len(COL_TO_FIELD)])
-        material_code = to_str_or_none(cells[MATERIAL_CODE_IDX])
-        if not material_code:
+        values = build_import_row(row, header_index, batch_id)
+        if values is None:
             total_skipped += 1
             continue
-        # 全列转 str/None
-        values = tuple(to_str_or_none(c) for c in cells) + (batch_id,)
-        batch.append(values)
+
+        material_code = material_code_from_import_row(values)
+        first_row = deduplicator.accept(material_code, excel_row)
+        if first_row is not None:
+            total_duplicated += 1
+            failed_writer.writerow([excel_row, material_code, f"重复物料代码，已使用第 {first_row} 行"])
+            continue
+
+        batch.append((excel_row, values))
         if len(batch) >= BATCH_SIZE:
             flush(batch)
             batch = []
             if total_read % 10000 == 0:
-                print(f"  进度: 已读 {total_read} / 已入库 {total_inserted} / 跳过 {total_skipped}")
+                print(
+                    f"  进度: 已读 {total_read} / 已入库 {total_inserted} "
+                    f"/ 空料号 {total_skipped} / 重复料号 {total_duplicated} / 失败 {total_failed}"
+                )
 
     flush(batch)
 
+    failed_file.close()
     cursor.close()
     conn.close()
+    workbook.close()
+
     elapsed = time.time() - t0
-    print(f"\n✅ 导入完成 (耗时 {elapsed:.1f}s)")
+    print(f"\n导入完成 (耗时 {elapsed:.1f}s)")
     print(f"  总读取行数:   {total_read}")
     print(f"  成功入库:     {total_inserted}")
     print(f"  跳过(空料号): {total_skipped}")
+    print(f"  跳过(重复料号): {total_duplicated}")
     print(f"  失败行数:     {total_failed}")
+    print(f"  失败明细:     {failed_csv}")
     print(f"  批次 ID:      {batch_id}")
 
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("用法: python3 import_item_master.py <ItemMaster.xlsx>")
+        print("用法: python3 scripts/import_item_master.py <ItemMaster.xlsx>")
         sys.exit(1)
     main(sys.argv[1])

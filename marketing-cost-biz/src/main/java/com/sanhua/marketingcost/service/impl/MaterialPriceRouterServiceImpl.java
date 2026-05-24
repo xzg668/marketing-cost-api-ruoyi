@@ -70,13 +70,14 @@ public class MaterialPriceRouterServiceImpl implements MaterialPriceRouterServic
   @Override
   public List<PriceTypeRoute> listCandidates(
       String materialCode, String period, LocalDate quoteDate) {
-    if (!StringUtils.hasText(materialCode) || !StringUtils.hasText(period)) {
+    if (!StringUtils.hasText(materialCode)) {
       return Collections.emptyList();
     }
     String code = materialCode.trim();
-    String periodValue = period.trim();
+    String periodValue = StringUtils.hasText(period) ? period.trim() : null;
 
     // 一次性按 winner-first 排序：
+    //   先取当前报价期间的精确路由；没有期间的 Excel 路由作为全局兜底
     //   priority ASC（业务约定：数值小者优先级高，1 是最高），null 视为最低排最后
     //   effective_from DESC（生效日期新者优先，null 视为最旧）
     //   id DESC（同优先级同生效日时最新写入的赢，作为 tiebreaker）
@@ -85,8 +86,21 @@ public class MaterialPriceRouterServiceImpl implements MaterialPriceRouterServic
         materialPriceTypeMapper.selectList(
             Wrappers.lambdaQuery(MaterialPriceType.class)
                 .eq(MaterialPriceType::getMaterialCode, code)
-                .eq(MaterialPriceType::getPeriod, periodValue)
-                .last("ORDER BY IFNULL(priority, 999999) ASC, "
+                .and(q -> {
+                  if (StringUtils.hasText(periodValue)) {
+                    q.eq(MaterialPriceType::getPeriod, periodValue)
+                        .or()
+                        .isNull(MaterialPriceType::getPeriod)
+                        .or()
+                        .eq(MaterialPriceType::getPeriod, "");
+                  } else {
+                    q.isNull(MaterialPriceType::getPeriod)
+                        .or()
+                        .eq(MaterialPriceType::getPeriod, "");
+                  }
+                })
+                .last("ORDER BY CASE WHEN period = '" + escapeSqlLiteral(periodValue) + "' THEN 0 ELSE 1 END, "
+                    + "IFNULL(priority, 999999) ASC, "
                     + "IFNULL(effective_from, '1970-01-01') DESC, id DESC"));
     if (rows.isEmpty()) {
       return Collections.emptyList();
@@ -130,7 +144,8 @@ public class MaterialPriceRouterServiceImpl implements MaterialPriceRouterServic
               row.getPriority(),
               row.getEffectiveFrom(),
               row.getEffectiveTo(),
-              row.getSourceSystem()));
+              row.getSourceSystem(),
+              row.getPriceType()));
     }
     return candidates;
   }
@@ -143,5 +158,9 @@ public class MaterialPriceRouterServiceImpl implements MaterialPriceRouterServic
                 .eq(MaterialMaster::getMaterialCode, materialCode)
                 .last("LIMIT 1"));
     return master == null ? null : master.getShapeAttr();
+  }
+
+  private String escapeSqlLiteral(String value) {
+    return value == null ? "" : value.replace("'", "''");
   }
 }

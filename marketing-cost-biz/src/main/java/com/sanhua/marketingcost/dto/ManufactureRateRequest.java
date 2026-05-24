@@ -5,12 +5,18 @@ import java.math.BigDecimal;
 public class ManufactureRateRequest {
   private String company;
   private String businessUnit;
+  private String businessDivision;
   private String productCategory;
   private String productSubcategory;
+  private String productCode;
+  private String productName;
   private String productSpec;
   private String productModel;
   private BigDecimal feeRate;
   private String period;
+  private Integer rateYear;
+  private String businessUnitType;
+  private String remark;
 
   public String getCompany() {
     return company;
@@ -28,6 +34,14 @@ public class ManufactureRateRequest {
     this.businessUnit = businessUnit;
   }
 
+  public String getBusinessDivision() {
+    return businessDivision;
+  }
+
+  public void setBusinessDivision(String businessDivision) {
+    this.businessDivision = businessDivision;
+  }
+
   public String getProductCategory() {
     return productCategory;
   }
@@ -42,6 +56,22 @@ public class ManufactureRateRequest {
 
   public void setProductSubcategory(String productSubcategory) {
     this.productSubcategory = productSubcategory;
+  }
+
+  public String getProductCode() {
+    return productCode;
+  }
+
+  public void setProductCode(String productCode) {
+    this.productCode = productCode;
+  }
+
+  public String getProductName() {
+    return productName;
+  }
+
+  public void setProductName(String productName) {
+    this.productName = productName;
   }
 
   public String getProductSpec() {
@@ -74,5 +104,29 @@ public class ManufactureRateRequest {
 
   public void setPeriod(String period) {
     this.period = period;
+  }
+
+  public Integer getRateYear() {
+    return rateYear;
+  }
+
+  public void setRateYear(Integer rateYear) {
+    this.rateYear = rateYear;
+  }
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
+  }
+
+  public String getRemark() {
+    return remark;
+  }
+
+  public void setRemark(String remark) {
+    this.remark = remark;
   }
 }

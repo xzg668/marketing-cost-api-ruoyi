@@ -6,17 +6,22 @@ import com.sanhua.marketingcost.dto.ingest.QuoteExtraFeeRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestHeaderRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestItemRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestPreviewResponse;
+import com.sanhua.marketingcost.dto.ingest.QuoteIngestPreviewResponse.AccountingContext;
+import com.sanhua.marketingcost.dto.ingest.QuoteIngestPreviewResponse.FeeSummary;
+import com.sanhua.marketingcost.dto.ingest.QuoteIngestPreviewResponse.HeaderSummary;
+import com.sanhua.marketingcost.dto.ingest.QuoteIngestPreviewResponse.ItemSummary;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedDocument;
+import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedExtraFee;
 import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedHeader;
+import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedItem;
 import com.sanhua.marketingcost.dto.ingest.QuoteValidationError;
 import com.sanhua.marketingcost.dto.ingest.QuoteValidationWarning;
 import com.sanhua.marketingcost.enums.QuoteClassificationStatus;
 import com.sanhua.marketingcost.enums.QuoteIngestStatus;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -39,22 +44,24 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
 
   private final QuoteNormalizeService quoteNormalizeService;
   private final QuoteIngestService quoteIngestService;
+  private final QuoteOaFormExcelParser oaFormExcelParser;
 
   public QuoteExcelImportServiceImpl(
       QuoteNormalizeService quoteNormalizeService, QuoteIngestService quoteIngestService) {
     this.quoteNormalizeService = quoteNormalizeService;
     this.quoteIngestService = quoteIngestService;
+    this.oaFormExcelParser = new QuoteOaFormExcelParser(new QuoteOaFormMappingReader());
   }
 
   @Override
   public QuoteExcelImportPreviewResponse preview(InputStream inputStream, String fileName) {
-    ParsedExcel parsed = parse(inputStream, fileName);
+    QuoteParsedExcel parsed = parse(inputStream, fileName);
     return buildPreview(parsed);
   }
 
   @Override
   public QuoteExcelImportCommitResponse commit(InputStream inputStream, String fileName) {
-    ParsedExcel parsed = parse(inputStream, fileName);
+    QuoteParsedExcel parsed = parse(inputStream, fileName);
     QuoteExcelImportPreviewResponse preview = buildPreview(parsed);
     QuoteExcelImportCommitResponse response = new QuoteExcelImportCommitResponse();
     response.setPreview(preview);
@@ -70,14 +77,18 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
     return response;
   }
 
-  private ParsedExcel parse(InputStream inputStream, String fileName) {
+  private QuoteParsedExcel parse(InputStream inputStream, String fileName) {
     if (inputStream == null) {
       throw new QuoteIngestException("Excel 文件不能为空");
     }
-    ParsedExcel parsed = new ParsedExcel(fileName);
+    QuoteParsedExcel parsed = new QuoteParsedExcel(fileName);
     try (Workbook workbook = WorkbookFactory.create(inputStream)) {
       DataFormatter formatter = new DataFormatter(Locale.CHINA);
       FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
+      // 当前阶段 Excel 模板模拟泛微 OA 原始表单，解析时以隐藏映射为准，不按中文标题猜字段。
+      if (oaFormExcelParser.supports(workbook)) {
+        return oaFormExcelParser.parse(workbook, fileName, formatter, evaluator);
+      }
       readHeaders(workbook.getSheet(HEADER_SHEET), formatter, evaluator, parsed);
       readItems(workbook.getSheet(ITEM_SHEET), formatter, evaluator, parsed);
       readFees(workbook.getSheet(FEE_SHEET), formatter, evaluator, parsed);
@@ -89,7 +100,7 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
   }
 
   private void readHeaders(
-      Sheet sheet, DataFormatter formatter, FormulaEvaluator evaluator, ParsedExcel parsed) {
+      Sheet sheet, DataFormatter formatter, FormulaEvaluator evaluator, QuoteParsedExcel parsed) {
     if (sheet == null) {
       parsed.errors.add(new QuoteValidationError(HEADER_SHEET, "SHEET_REQUIRED", "缺少报价单表头 Sheet"));
       return;
@@ -103,7 +114,7 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
       String oaNo = cell(row, columns, "报价单号", formatter, evaluator);
       QuoteIngestRequest request = new QuoteIngestRequest();
       request.setSourceType(defaultValue(cell(row, columns, "来源类型", formatter, evaluator), "EXCEL"));
-      request.setSourceSystem("EXCEL_IMPORT");
+      request.setSourceSystem("EXCEL_TEMPLATE");
       request.setOaNo(oaNo);
       request.setExternalFormNo(oaNo);
       request.setVersion("1");
@@ -124,6 +135,10 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
     header.setProcessName(cell(row, columns, "流程名称", formatter, evaluator));
     header.setApplyDate(cell(row, columns, "申请日期", formatter, evaluator));
     header.setCustomer(cell(row, columns, "客户名称", formatter, evaluator));
+    header.setApplicantUnit(cell(row, columns, "申请单位", formatter, evaluator));
+    header.setSourceCompany(cell(row, columns, "所属公司", formatter, evaluator));
+    header.setSourceBusinessDivision(cell(row, columns, "所属事业部", formatter, evaluator));
+    header.setExpenseProductCategory(cell(row, columns, "费用产品大类", formatter, evaluator));
     header.setApplicantDept(cell(row, columns, "申请部门", formatter, evaluator));
     header.setApplicantOffice(cell(row, columns, "申请处室", formatter, evaluator));
     header.setApplicantName(cell(row, columns, "申请人", formatter, evaluator));
@@ -131,6 +146,8 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
     header.setProductAttr(cell(row, columns, "产品属性", formatter, evaluator));
     header.setPriceLinkMode(cell(row, columns, "销售价格联动情况", formatter, evaluator));
     header.setOverseasSalesMode(cell(row, columns, "是否海外销售", formatter, evaluator));
+    header.setTradeTerms(cell(row, columns, "贸易条款", formatter, evaluator));
+    header.setExchangeRate(cell(row, columns, "汇率", formatter, evaluator));
     header.setCopperPrice(cell(row, columns, "铜基价", formatter, evaluator));
     header.setZincPrice(cell(row, columns, "锌基价", formatter, evaluator));
     header.setAluminumPrice(cell(row, columns, "铝基价", formatter, evaluator));
@@ -144,7 +161,7 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
   }
 
   private void readItems(
-      Sheet sheet, DataFormatter formatter, FormulaEvaluator evaluator, ParsedExcel parsed) {
+      Sheet sheet, DataFormatter formatter, FormulaEvaluator evaluator, QuoteParsedExcel parsed) {
     if (sheet == null) {
       parsed.errors.add(new QuoteValidationError(ITEM_SHEET, "SHEET_REQUIRED", "缺少产品明细 Sheet"));
       return;
@@ -190,12 +207,22 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
     item.setProductStatus(cell(row, columns, "产品状态", formatter, evaluator));
     item.setScrapRate(cell(row, columns, "报废率", formatter, evaluator));
     item.setUnitLaborCost(cell(row, columns, "单件工资", formatter, evaluator));
-    item.setValidDate(cell(row, columns, "成本有效期", formatter, evaluator));
+    item.setTotalWithShip(cell(row, columns, "含运输费总成本", formatter, evaluator));
+    item.setTotalNoShip(cell(row, columns, "不含运输费总成本", formatter, evaluator));
+    item.setMaterialCost(cell(row, columns, "直接材料费", formatter, evaluator));
+    item.setLaborCost(cell(row, columns, "直接人工费", formatter, evaluator));
+    item.setManufacturingCost(cell(row, columns, "制造费用", formatter, evaluator));
+    item.setManagementCost(cell(row, columns, "企业管理费", formatter, evaluator));
+    item.setValidMonth(firstCell(row, columns, formatter, evaluator, "成本有效期(月)"));
+    item.setValidDate(firstCell(row, columns, formatter, evaluator, "成本失效日期", "失效日期", "有效期至", "成本有效期"));
+    item.setSus304WeightG(firstCell(row, columns, formatter, evaluator, "不锈钢SUS304(克)", "SUS304(克)"));
+    item.setSus316WeightG(firstCell(row, columns, formatter, evaluator, "不锈钢SUS316(克)", "SUS316(克)"));
+    item.setCopperWeightG(firstCell(row, columns, formatter, evaluator, "铜重(克)", "铜重量(克)"));
     return item;
   }
 
   private void readFees(
-      Sheet sheet, DataFormatter formatter, FormulaEvaluator evaluator, ParsedExcel parsed) {
+      Sheet sheet, DataFormatter formatter, FormulaEvaluator evaluator, QuoteParsedExcel parsed) {
     if (sheet == null) {
       return;
     }
@@ -246,7 +273,7 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
     return fee;
   }
 
-  private QuoteExcelImportPreviewResponse buildPreview(ParsedExcel parsed) {
+  private QuoteExcelImportPreviewResponse buildPreview(QuoteParsedExcel parsed) {
     QuoteExcelImportPreviewResponse response = new QuoteExcelImportPreviewResponse();
     response.setFileName(parsed.fileName);
     response.setFormCount(parsed.formCount);
@@ -279,7 +306,11 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
     response.setItemCount(normalized.getItems().size());
     response.setErrors(normalized.getErrors());
     response.setWarnings(normalized.getWarnings());
-    if (header != null && !StringUtils.hasText(request.getHeader().getGoldPrice())) {
+    response.setAccountingContext(toAccountingContext(normalized));
+    response.setHeaderSummary(toHeaderSummary(header));
+    response.setItems(normalized.getItems().stream().map(this::toItemSummary).toList());
+    response.setExtraFees(normalized.getExtraFees().stream().map(this::toFeeSummary).toList());
+    if (header != null && (request.getHeader() == null || !StringUtils.hasText(request.getHeader().getGoldPrice()))) {
       response
           .getWarnings()
           .add(
@@ -300,8 +331,117 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
     return response;
   }
 
+  private AccountingContext toAccountingContext(QuoteNormalizedDocument normalized) {
+    AccountingContext context = new AccountingContext();
+    QuoteNormalizedHeader header = normalized.getHeader();
+    if (header != null) {
+      context.setBusinessUnitType(header.getBusinessUnitType());
+      context.setAccountingPeriodMonth(header.getAccountingPeriodMonth());
+      context.setExpenseProductCategory(header.getExpenseProductCategory());
+      context.setSourceCompany(header.getSourceCompany());
+      context.setSourceBusinessDivision(header.getSourceBusinessDivision());
+      context.setCustomer(header.getCustomer());
+      context.setProductAttr(header.getProductAttr());
+      context.setQuoteScenario(header.getQuoteScenario());
+      context.setClassificationStatus(header.getClassificationStatus());
+    }
+    if (normalized.getClassification() != null) {
+      context.setRuleCode(normalized.getClassification().getRuleCode());
+      context.setConfidence(normalized.getClassification().getConfidence());
+    }
+    return context;
+  }
+
+  private HeaderSummary toHeaderSummary(QuoteNormalizedHeader header) {
+    if (header == null) {
+      return null;
+    }
+    HeaderSummary summary = new HeaderSummary();
+    summary.setSourceType(header.getSourceType());
+    summary.setSourceSystem(header.getSourceSystem());
+    summary.setExternalFormNo(header.getExternalFormNo());
+    summary.setOaNo(header.getOaNo());
+    summary.setProcessCode(header.getProcessCode());
+    summary.setProcessName(header.getProcessName());
+    summary.setFormType(header.getFormType());
+    summary.setApplyDate(header.getApplyDate());
+    summary.setCustomer(header.getCustomer());
+    summary.setApplicantUnit(header.getApplicantUnit());
+    summary.setSourceCompany(header.getSourceCompany());
+    summary.setSourceBusinessDivision(header.getSourceBusinessDivision());
+    summary.setExpenseProductCategory(header.getExpenseProductCategory());
+    summary.setApplicantDept(header.getApplicantDept());
+    summary.setApplicantOffice(header.getApplicantOffice());
+    summary.setApplicantName(header.getApplicantName());
+    summary.setUrgency(header.getUrgency());
+    summary.setProductAttr(header.getProductAttr());
+    summary.setPriceLinkMode(header.getPriceLinkMode());
+    summary.setOverseasSalesMode(header.getOverseasSalesMode());
+    summary.setTradeTerms(header.getTradeTerms());
+    summary.setExchangeRate(header.getExchangeRate());
+    summary.setCopperPrice(header.getCopperPrice());
+    summary.setZincPrice(header.getZincPrice());
+    summary.setAluminumPrice(header.getAluminumPrice());
+    summary.setSteelPrice(header.getSteelPrice());
+    summary.setSus304Price(header.getSus304Price());
+    summary.setSus316lPrice(header.getSus316lPrice());
+    summary.setSilverPrice(header.getSilverPrice());
+    summary.setGoldPrice(header.getGoldPrice());
+    summary.setRemark(header.getRemark());
+    return summary;
+  }
+
+  private ItemSummary toItemSummary(QuoteNormalizedItem item) {
+    ItemSummary summary = new ItemSummary();
+    summary.setExternalLineId(item.getExternalLineId());
+    summary.setSeq(item.getSeq());
+    summary.setProductName(item.getProductName());
+    summary.setCustomerDrawing(item.getCustomerDrawing());
+    summary.setCustomerCode(item.getCustomerCode());
+    summary.setMaterialNo(item.getMaterialNo());
+    summary.setSunlModel(item.getSunlModel());
+    summary.setSpec(item.getSpec());
+    summary.setProductAttr(item.getProductAttr());
+    summary.setBusinessType(item.getBusinessType());
+    summary.setSupportQty(item.getSupportQty());
+    summary.setAnnualVolume(item.getAnnualVolume());
+    summary.setScrapRate(item.getScrapRate());
+    summary.setUnitLaborCost(item.getUnitLaborCost());
+    summary.setTotalWithShip(item.getTotalWithShip());
+    summary.setTotalNoShip(item.getTotalNoShip());
+    summary.setMaterialCost(item.getMaterialCost());
+    summary.setLaborCost(item.getLaborCost());
+    summary.setManufacturingCost(item.getManufacturingCost());
+    summary.setManagementCost(item.getManagementCost());
+    summary.setValidMonth(item.getValidMonth());
+    summary.setSus304WeightG(item.getSus304WeightG());
+    summary.setSus316WeightG(item.getSus316WeightG());
+    summary.setCopperWeightG(item.getCopperWeightG());
+    summary.setClassificationStatus(item.getClassificationStatus());
+    summary.setQuoteScenario(item.getQuoteScenario());
+    summary.setBusinessUnitType(item.getBusinessUnitType());
+    summary.setValidDate(item.getValidDate());
+    return summary;
+  }
+
+  private FeeSummary toFeeSummary(QuoteNormalizedExtraFee fee) {
+    FeeSummary summary = new FeeSummary();
+    summary.setScope(fee.getScope());
+    summary.setItemSeq(fee.getItemSeq());
+    summary.setExternalLineId(fee.getExternalLineId());
+    summary.setFeeCode(fee.getFeeCode());
+    summary.setFeeName(fee.getFeeName());
+    summary.setFeeCategory(fee.getFeeCategory());
+    summary.setAmount(fee.getAmount());
+    summary.setUnit(fee.getUnit());
+    summary.setRemark(fee.getRemark());
+    summary.setSourceFieldName(fee.getSourceFieldName());
+    summary.setSourceFieldPath(fee.getSourceFieldPath());
+    return summary;
+  }
+
   private QuoteIngestRequest findRequest(
-      ParsedExcel parsed, String oaNo, int rowNo, String sheetName) {
+      QuoteParsedExcel parsed, String oaNo, int rowNo, String sheetName) {
     if (!StringUtils.hasText(oaNo)) {
       parsed
           .errors
@@ -366,6 +506,24 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
     return cellValue(row.getCell(column), formatter, evaluator);
   }
 
+  private String firstCell(
+      Row row,
+      Map<String, Integer> columns,
+      DataFormatter formatter,
+      FormulaEvaluator evaluator,
+      String... columnNames) {
+    if (columnNames == null) {
+      return null;
+    }
+    for (String columnName : columnNames) {
+      String value = cell(row, columns, columnName, formatter, evaluator);
+      if (StringUtils.hasText(value)) {
+        return value;
+      }
+    }
+    return null;
+  }
+
   private String cellValue(Cell cell, DataFormatter formatter, FormulaEvaluator evaluator) {
     if (cell == null) {
       return null;
@@ -419,16 +577,4 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
     return StringUtils.hasText(oaNo) ? oaNo.trim() : "$ROW_" + rowIndex;
   }
 
-  private static final class ParsedExcel {
-    private final String fileName;
-    private final Map<String, QuoteIngestRequest> requests = new LinkedHashMap<>();
-    private final List<QuoteValidationError> errors = new ArrayList<>();
-    private int formCount;
-    private int itemCount;
-    private int feeCount;
-
-    private ParsedExcel(String fileName) {
-      this.fileName = fileName;
-    }
-  }
 }

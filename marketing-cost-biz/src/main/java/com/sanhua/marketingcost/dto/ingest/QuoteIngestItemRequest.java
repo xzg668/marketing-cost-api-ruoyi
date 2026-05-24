@@ -29,7 +29,17 @@ public class QuoteIngestItemRequest {
   private String productStatus;
   private String scrapRate;
   private String unitLaborCost;
+  private String totalWithShip;
+  private String totalNoShip;
+  private String materialCost;
+  private String laborCost;
+  private String manufacturingCost;
+  private String managementCost;
+  private String validMonth;
   private String validDate;
+  private String sus304WeightG;
+  private String sus316WeightG;
+  private String copperWeightG;
   private List<QuoteExtraFieldRequest> extraFields = new ArrayList<>();
   private List<QuoteExtraFeeRequest> extraFees = new ArrayList<>();
 
@@ -233,12 +243,92 @@ public class QuoteIngestItemRequest {
     this.unitLaborCost = unitLaborCost;
   }
 
+  public String getTotalWithShip() {
+    return totalWithShip;
+  }
+
+  public void setTotalWithShip(String totalWithShip) {
+    this.totalWithShip = totalWithShip;
+  }
+
+  public String getTotalNoShip() {
+    return totalNoShip;
+  }
+
+  public void setTotalNoShip(String totalNoShip) {
+    this.totalNoShip = totalNoShip;
+  }
+
+  public String getMaterialCost() {
+    return materialCost;
+  }
+
+  public void setMaterialCost(String materialCost) {
+    this.materialCost = materialCost;
+  }
+
+  public String getLaborCost() {
+    return laborCost;
+  }
+
+  public void setLaborCost(String laborCost) {
+    this.laborCost = laborCost;
+  }
+
+  public String getManufacturingCost() {
+    return manufacturingCost;
+  }
+
+  public void setManufacturingCost(String manufacturingCost) {
+    this.manufacturingCost = manufacturingCost;
+  }
+
+  public String getManagementCost() {
+    return managementCost;
+  }
+
+  public void setManagementCost(String managementCost) {
+    this.managementCost = managementCost;
+  }
+
+  public String getValidMonth() {
+    return validMonth;
+  }
+
+  public void setValidMonth(String validMonth) {
+    this.validMonth = validMonth;
+  }
+
   public String getValidDate() {
     return validDate;
   }
 
   public void setValidDate(String validDate) {
     this.validDate = validDate;
+  }
+
+  public String getSus304WeightG() {
+    return sus304WeightG;
+  }
+
+  public void setSus304WeightG(String sus304WeightG) {
+    this.sus304WeightG = sus304WeightG;
+  }
+
+  public String getSus316WeightG() {
+    return sus316WeightG;
+  }
+
+  public void setSus316WeightG(String sus316WeightG) {
+    this.sus316WeightG = sus316WeightG;
+  }
+
+  public String getCopperWeightG() {
+    return copperWeightG;
+  }
+
+  public void setCopperWeightG(String copperWeightG) {
+    this.copperWeightG = copperWeightG;
   }
 
   public List<QuoteExtraFieldRequest> getExtraFields() {

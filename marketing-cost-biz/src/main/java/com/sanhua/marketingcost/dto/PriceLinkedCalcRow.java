@@ -23,6 +23,9 @@ public class PriceLinkedCalcRow {
   private String materialName;
   private String supplierName;
   private String pricingMonth;
+  private String calcScene;
+  private Long adjustBatchId;
+  private String factorSource;
   private String shapeAttr;
   private BigDecimal bomQty;
   private BigDecimal partUnitPrice;
@@ -31,6 +34,7 @@ public class PriceLinkedCalcRow {
   private String formulaExprCn;
   private Boolean hasTrace;
   private String calcStatus;
+  private String calcMessage;
   private Map<String, Integer> variableSourceSummary;
   private LocalDateTime updatedAt;
 
@@ -98,6 +102,30 @@ public class PriceLinkedCalcRow {
     this.pricingMonth = pricingMonth;
   }
 
+  public String getCalcScene() {
+    return calcScene;
+  }
+
+  public void setCalcScene(String calcScene) {
+    this.calcScene = calcScene;
+  }
+
+  public Long getAdjustBatchId() {
+    return adjustBatchId;
+  }
+
+  public void setAdjustBatchId(Long adjustBatchId) {
+    this.adjustBatchId = adjustBatchId;
+  }
+
+  public String getFactorSource() {
+    return factorSource;
+  }
+
+  public void setFactorSource(String factorSource) {
+    this.factorSource = factorSource;
+  }
+
   public String getShapeAttr() {
     return shapeAttr;
   }
@@ -160,6 +188,14 @@ public class PriceLinkedCalcRow {
 
   public void setCalcStatus(String calcStatus) {
     this.calcStatus = calcStatus;
+  }
+
+  public String getCalcMessage() {
+    return calcMessage;
+  }
+
+  public void setCalcMessage(String calcMessage) {
+    this.calcMessage = calcMessage;
   }
 
   public Map<String, Integer> getVariableSourceSummary() {

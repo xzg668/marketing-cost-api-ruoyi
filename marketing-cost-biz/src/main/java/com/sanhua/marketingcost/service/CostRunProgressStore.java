@@ -56,7 +56,9 @@ public class CostRunProgressStore {
     if (oaNo == null) {
       return;
     }
-    progressByOaNo.put(oaNo, new ProgressState(0, RUNNING, null));
+    progressByOaNo.compute(
+        oaNo,
+        (key, prev) -> new ProgressState(0, RUNNING, prev == null ? null : prev.message));
   }
 
   /**
@@ -92,7 +94,21 @@ public class CostRunProgressStore {
           if (RUNNING.equals(prev.status) && neu.percent < prev.percent) {
             return prev; // 防退
           }
-          return neu;
+          return new ProgressState(neu.percent, neu.status, prev.message);
+        });
+  }
+
+  public void updateMessage(String oaNo, String message) {
+    if (oaNo == null || message == null || message.isBlank()) {
+      return;
+    }
+    progressByOaNo.compute(
+        oaNo,
+        (key, prev) -> {
+          if (prev == null) {
+            return new ProgressState(0, RUNNING, message);
+          }
+          return new ProgressState(prev.percent, prev.status, message);
         });
   }
 
@@ -100,7 +116,9 @@ public class CostRunProgressStore {
     if (oaNo == null) {
       return;
     }
-    progressByOaNo.put(oaNo, new ProgressState(100, DONE, null));
+    progressByOaNo.compute(
+        oaNo,
+        (key, prev) -> new ProgressState(100, DONE, prev == null ? null : prev.message));
   }
 
   /**

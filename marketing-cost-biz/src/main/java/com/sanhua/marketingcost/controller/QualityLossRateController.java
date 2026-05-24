@@ -4,11 +4,11 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.QualityLossRateImportRequest;
+import com.sanhua.marketingcost.dto.QualityLossRateImportResponse;
 import com.sanhua.marketingcost.dto.QualityLossRatePageResponse;
 import com.sanhua.marketingcost.dto.QualityLossRateRequest;
 import com.sanhua.marketingcost.entity.QualityLossRate;
 import com.sanhua.marketingcost.service.QualityLossRateService;
-import java.util.List;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -42,6 +42,11 @@ public class QualityLossRateController {
       @RequestParam(required = false) String productSubcategory,
       @RequestParam(required = false) String customer,
       @RequestParam(required = false) String period,
+      @RequestParam(required = false) Integer rateYear,
+      @RequestParam(required = false) String businessDivision,
+      @RequestParam(required = false) String productCode,
+      @RequestParam(required = false) String productName,
+      @RequestParam(required = false) String productModel,
       @RequestParam(required = false, defaultValue = "1") Integer page,
       @RequestParam(required = false, defaultValue = "20") Integer pageSize) {
     int current = page == null || page < 1 ? 1 : page;
@@ -53,6 +58,11 @@ public class QualityLossRateController {
         productSubcategory,
         customer,
         period,
+        rateYear,
+        businessDivision,
+        productCode,
+        productName,
+        productModel,
         current,
         size);
     return CommonResult.success(new QualityLossRatePageResponse(pager.getTotal(), pager.getRecords()));
@@ -92,7 +102,7 @@ public class QualityLossRateController {
   /** 导入质量损失率数据 */
   @PreAuthorize("@ss.hasPermi('base:quality-loss:import')")
   @PostMapping("/import")
-  public CommonResult<List<QualityLossRate>> importItems(
+  public CommonResult<QualityLossRateImportResponse> importItems(
       @RequestBody QualityLossRateImportRequest request) {
     return CommonResult.success(qualityLossRateService.importItems(request));
   }

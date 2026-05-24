@@ -12,8 +12,8 @@ import java.time.LocalDateTime;
 /**
  * BOM 三层架构 · 第 3 层 DWS 业务视图层：lp_bom_costing_row。
  *
- * <p>拍平后的结算行，新表替代老表 lp_bom_manage_item。绑定 OA + as_of_date 锁版本，
- * 支持月度冻结复算（见 project memory "BOM 版本 append-only 多版本并存"）。
+ * <p>拍平后的结算行，新表替代老表 lp_bom_manage_item。绑定 OA + period_month 锁当前月唯一结果，
+ * as_of_date 只负责定位该月使用的 BOM 有效版本。
  *
  * <p>字段分工：
  * <ul>
@@ -118,6 +118,9 @@ public class BomCostingRow {
   private LocalDateTime builtAt;
 
   // ============================ 版本锁定（锁月核心） ============================
+
+  /** 结算期间，格式 yyyy-MM；同 OA + 顶层产品 + 期间刷新时覆盖 */
+  private String periodMonth;
 
   /** 本次拍平使用的 BOM 版本基准日期 */
   private LocalDate asOfDate;
@@ -345,6 +348,14 @@ public class BomCostingRow {
 
   public LocalDate getAsOfDate() {
     return asOfDate;
+  }
+
+  public String getPeriodMonth() {
+    return periodMonth;
+  }
+
+  public void setPeriodMonth(String periodMonth) {
+    this.periodMonth = periodMonth;
   }
 
   public void setAsOfDate(LocalDate asOfDate) {

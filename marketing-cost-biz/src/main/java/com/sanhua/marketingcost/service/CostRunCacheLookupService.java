@@ -5,6 +5,7 @@ import com.sanhua.marketingcost.entity.ManufactureRate;
 import com.sanhua.marketingcost.entity.OtherExpenseRate;
 import com.sanhua.marketingcost.entity.ProductProperty;
 import com.sanhua.marketingcost.entity.QualityLossRate;
+import com.sanhua.marketingcost.entity.ThreeExpenseDimensionMapping;
 import com.sanhua.marketingcost.entity.ThreeExpenseRate;
 import java.util.List;
 
@@ -29,12 +30,30 @@ public interface CostRunCacheLookupService {
   /** 按 businessUnit 精确取最新 1 条 three_expense_rate；无返 null */
   ThreeExpenseRate findThreeExpenseRate(String businessUnit);
 
+  /** 按报价单标准化后的核算维度精确取三项费用率；无返 null */
+  ThreeExpenseRate findThreeExpenseRate(
+      String businessUnitType,
+      String periodMonth,
+      String standardCompany,
+      String productionDivision,
+      String applicantDepartment,
+      String applicantOffice,
+      String productCategory,
+      String productLine);
+
+  /** 查询 OA 原始维度到三项费用标准维度的映射；无返 null */
+  ThreeExpenseDimensionMapping findThreeExpenseDimensionMapping(
+      String businessUnitType, String dimensionType, String sourceSystem, String sourceValue);
+
   /** 按 businessUnit 精确取最新 1 条 department_fund_rate；无返 null */
   DepartmentFundRate findDepartmentFundRate(String businessUnit);
 
   /** 按 productCode 取该料号所有 other_expense_rate（id ASC）；无返空 list */
   List<OtherExpenseRate> findOtherExpenseRates(String productCode);
 
-  /** 按 parentCode 取最新 1 条 product_property；无返 null */
+  /** 按 parentCode 取最新 1 条 product_property；无返 null。保留给旧调用和单测兼容。 */
   ProductProperty findProductProperty(String parentCode);
+
+  /** 按年度 + 业务单元 + 产品料号取 product_property；优先 product_code，兼容 parent_code；无返 null。 */
+  ProductProperty findProductProperty(String productCode, Integer propertyYear, String businessUnitType);
 }

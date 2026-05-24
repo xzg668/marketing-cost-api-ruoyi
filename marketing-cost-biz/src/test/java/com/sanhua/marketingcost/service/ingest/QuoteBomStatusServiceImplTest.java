@@ -32,6 +32,7 @@ class QuoteBomStatusServiceImplTest {
   private QuoteBomStatusMapper quoteBomStatusMapper;
   private BomAvailabilityAdapter bomAvailabilityAdapter;
   private BomU9SourceMapper bomU9SourceMapper;
+  private U9ProductPackagingTypeResolver productPackagingTypeResolver;
   private QuoteBomStatusServiceImpl service;
 
   @BeforeEach
@@ -41,9 +42,17 @@ class QuoteBomStatusServiceImplTest {
     quoteBomStatusMapper = mock(QuoteBomStatusMapper.class);
     bomAvailabilityAdapter = mock(BomAvailabilityAdapter.class);
     bomU9SourceMapper = mock(BomU9SourceMapper.class);
+    productPackagingTypeResolver = mock(U9ProductPackagingTypeResolver.class);
+    when(productPackagingTypeResolver.resolve(any()))
+        .thenReturn(U9ProductPackagingTypeResolver.Result.unknown(null));
     service =
         new QuoteBomStatusServiceImpl(
-            oaFormMapper, oaFormItemMapper, quoteBomStatusMapper, bomAvailabilityAdapter, bomU9SourceMapper);
+            oaFormMapper,
+            oaFormItemMapper,
+            quoteBomStatusMapper,
+            bomAvailabilityAdapter,
+            bomU9SourceMapper,
+            productPackagingTypeResolver);
   }
 
   @Test
@@ -51,11 +60,16 @@ class QuoteBomStatusServiceImplTest {
     stubFormAndItems(List.of(item(10L, 1, "MAT-1001", "SHF-A")), List.of());
     BomAvailability availability = available("U9");
     when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-1001")).thenReturn(availability);
+    when(productPackagingTypeResolver.resolve("MAT-1001"))
+        .thenReturn(new U9ProductPackagingTypeResolver.Result(
+            U9ProductPackagingTypeResolver.NAKED_PRODUCT, "110101"));
 
     QuoteBomStatusResponse response = service.checkByOaNo("OA-T7-001");
 
     assertThat(response.getSyncedCount()).isEqualTo(1);
     assertThat(response.getItems().get(0).getBomStatus()).isEqualTo("SYNCED");
+    assertThat(response.getItems().get(0).getProductPackagingType()).isEqualTo("NAKED_PRODUCT");
+    assertThat(response.getItems().get(0).getMainCategoryCode()).isEqualTo("110101");
     ArgumentCaptor<QuoteBomStatus> captor = ArgumentCaptor.forClass(QuoteBomStatus.class);
     verify(quoteBomStatusMapper).insert(any(QuoteBomStatus.class));
     verify(quoteBomStatusMapper).updateById(captor.capture());

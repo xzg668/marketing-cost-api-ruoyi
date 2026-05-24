@@ -48,8 +48,8 @@ public class QuoteIngestLogServiceImpl implements QuoteIngestLogService {
     log.setRequestId(requestId);
     log.setIdempotencyKey(idempotencyKey);
     log.setPayloadHash(payloadHash);
-    log.setSourceType(request == null ? null : trimToNull(request.getSourceType()));
-    log.setSourceSystem(request == null ? null : trimToNull(request.getSourceSystem()));
+    log.setSourceType(header == null ? requestSourceType(request) : header.getSourceType());
+    log.setSourceSystem(header == null ? requestSourceSystem(request) : header.getSourceSystem());
     log.setExternalFormNo(request == null ? null : trimToNull(request.getExternalFormNo()));
     log.setOaNo(header == null ? null : header.getOaNo());
     log.setProcessCode(header == null ? null : header.getProcessCode());
@@ -83,8 +83,8 @@ public class QuoteIngestLogServiceImpl implements QuoteIngestLogService {
     QuoteNormalizedHeader header = normalized == null ? null : normalized.getHeader();
     log.setRequestId(requestId);
     log.setPayloadHash(payloadHash);
-    log.setSourceType(request == null ? null : trimToNull(request.getSourceType()));
-    log.setSourceSystem(request == null ? null : trimToNull(request.getSourceSystem()));
+    log.setSourceType(header == null ? requestSourceType(request) : header.getSourceType());
+    log.setSourceSystem(header == null ? requestSourceSystem(request) : header.getSourceSystem());
     log.setExternalFormNo(request == null ? null : trimToNull(request.getExternalFormNo()));
     log.setOaNo(header == null ? null : header.getOaNo());
     log.setProcessCode(header == null ? null : header.getProcessCode());
@@ -162,5 +162,13 @@ public class QuoteIngestLogServiceImpl implements QuoteIngestLogService {
       return value;
     }
     return value.substring(0, maxLength);
+  }
+
+  private String requestSourceType(QuoteIngestRequest request) {
+    return request == null ? null : trimToNull(request.getSourceType());
+  }
+
+  private String requestSourceSystem(QuoteIngestRequest request) {
+    return request == null ? null : trimToNull(request.getSourceSystem());
   }
 }

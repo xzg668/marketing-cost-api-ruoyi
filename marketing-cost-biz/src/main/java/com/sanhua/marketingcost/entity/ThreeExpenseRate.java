@@ -24,6 +24,18 @@ public class ThreeExpenseRate {
   private BigDecimal threeExpenseRate2026;
   private String overseasSales;
   private String period;
+  private String periodMonth;
+  private String rawPeriod;
+  private String standardCompany;
+  private String productionDivision;
+  private String applicantDepartment;
+  private String applicantOffice;
+  private String productCategory;
+  private String productLine;
+  private BigDecimal threeExpenseTotalRate;
+  private BigDecimal oemExpenseRate;
+  private String sourceType;
+  private String importBatchNo;
   /** 业务单元租户口径：COMMERCIAL / HOUSEHOLD，区别于组织口径 businessUnit（V22 补齐） */
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
@@ -120,6 +132,102 @@ public class ThreeExpenseRate {
 
   public void setPeriod(String period) {
     this.period = period;
+  }
+
+  public String getPeriodMonth() {
+    return periodMonth;
+  }
+
+  public void setPeriodMonth(String periodMonth) {
+    this.periodMonth = periodMonth;
+  }
+
+  public String getRawPeriod() {
+    return rawPeriod;
+  }
+
+  public void setRawPeriod(String rawPeriod) {
+    this.rawPeriod = rawPeriod;
+  }
+
+  public String getStandardCompany() {
+    return standardCompany;
+  }
+
+  public void setStandardCompany(String standardCompany) {
+    this.standardCompany = standardCompany;
+  }
+
+  public String getProductionDivision() {
+    return productionDivision;
+  }
+
+  public void setProductionDivision(String productionDivision) {
+    this.productionDivision = productionDivision;
+  }
+
+  public String getApplicantDepartment() {
+    return applicantDepartment;
+  }
+
+  public void setApplicantDepartment(String applicantDepartment) {
+    this.applicantDepartment = applicantDepartment;
+  }
+
+  public String getApplicantOffice() {
+    return applicantOffice;
+  }
+
+  public void setApplicantOffice(String applicantOffice) {
+    this.applicantOffice = applicantOffice;
+  }
+
+  public String getProductCategory() {
+    return productCategory;
+  }
+
+  public void setProductCategory(String productCategory) {
+    this.productCategory = productCategory;
+  }
+
+  public String getProductLine() {
+    return productLine;
+  }
+
+  public void setProductLine(String productLine) {
+    this.productLine = productLine;
+  }
+
+  public BigDecimal getThreeExpenseTotalRate() {
+    return threeExpenseTotalRate;
+  }
+
+  public void setThreeExpenseTotalRate(BigDecimal threeExpenseTotalRate) {
+    this.threeExpenseTotalRate = threeExpenseTotalRate;
+  }
+
+  public BigDecimal getOemExpenseRate() {
+    return oemExpenseRate;
+  }
+
+  public void setOemExpenseRate(BigDecimal oemExpenseRate) {
+    this.oemExpenseRate = oemExpenseRate;
+  }
+
+  public String getSourceType() {
+    return sourceType;
+  }
+
+  public void setSourceType(String sourceType) {
+    this.sourceType = sourceType;
+  }
+
+  public String getImportBatchNo() {
+    return importBatchNo;
+  }
+
+  public void setImportBatchNo(String importBatchNo) {
+    this.importBatchNo = importBatchNo;
   }
 
   public String getBusinessUnitType() {

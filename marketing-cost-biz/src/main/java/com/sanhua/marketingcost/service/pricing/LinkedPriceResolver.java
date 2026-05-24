@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
+import com.sanhua.marketingcost.enums.LinkedPriceCalcScene;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import java.util.List;
@@ -11,7 +12,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
- * 联动价 Resolver —— 查 lp_price_linked_calc_item，按 oaNo + itemCode 取最新已计算结果。
+ * 联动价 Resolver —— 查 lp_price_linked_calc_item，按 QUOTE + oaNo + itemCode 取最新已计算结果。
  *
  * <p>对应 Excel"价格来源 = 联动价"。当前阶段沿用现有 PriceLinkedCalcServiceImpl 已写入的结果，
  * 公式引擎升级（任务 #6/#7）完成后再切到 TemplateEngine。
@@ -41,6 +42,8 @@ public class LinkedPriceResolver implements PriceResolver {
             Wrappers.lambdaQuery(PriceLinkedCalcItem.class)
                 .eq(PriceLinkedCalcItem::getOaNo, oaNo)
                 .eq(PriceLinkedCalcItem::getItemCode, code)
+                // LPE-02：现有单料号 Resolver 只读正常报价结果；场景化读取由后续入口传上下文。
+                .eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.QUOTE.getCode())
                 .orderByDesc(PriceLinkedCalcItem::getId)
                 .last("LIMIT 1"));
     if (rows.isEmpty() || rows.get(0).getPartUnitPrice() == null) {

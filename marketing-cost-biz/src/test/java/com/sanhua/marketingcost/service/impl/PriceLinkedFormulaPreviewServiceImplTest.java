@@ -150,8 +150,8 @@ class PriceLinkedFormulaPreviewServiceImplTest {
   }
 
   @Test
-  @DisplayName("OA 刷新：factor_identity 命中报价单铜基价时 trace source 标 QUOTE_BASE")
-  void previewForRefreshMarksQuoteBaseSource() {
+  @DisplayName("OA 刷新：factor_identity 命中报价单铜基价时 trace source 标 OA_LOCKED")
+  void previewForRefreshMarksOaLockedSource() {
     FactorQuoteBaseMapping mapping = new FactorQuoteBaseMapping();
     mapping.setFactorIdentityId(191L);
     mapping.setQuoteFieldCode("copper_price");
@@ -175,7 +175,7 @@ class PriceLinkedFormulaPreviewServiceImplTest {
     assertThat(resp.getResult()).isEqualByComparingTo("90");
     assertThat(resp.getVariables())
         .filteredOn(v -> "factor_identity_191".equals(v.getCode()))
-        .extracting("source").containsOnly("QUOTE_BASE");
+        .extracting("source").containsOnly("OA_LOCKED");
   }
 
   @Test

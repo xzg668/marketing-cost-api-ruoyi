@@ -11,6 +11,7 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.entity.PriceVariableBinding;
+import com.sanhua.marketingcost.enums.LinkedPriceFactorSource;
 import com.sanhua.marketingcost.mapper.FactorAdjustPriceMapper;
 import com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper;
 import com.sanhua.marketingcost.mapper.FactorQuoteBaseMappingMapper;
@@ -264,11 +265,13 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
       Optional<BigDecimal> adjustedPrice =
           resolveAdjustBatchPrice(factorIdentityId, ctx.getAdjustBatchId());
       if (adjustedPrice.isPresent()) {
+        ctx.resolvedSource(variable.getVariableCode(), LinkedPriceFactorSource.ADJUST_BATCH.getCode());
         return adjustedPrice;
       }
     } else {
       Optional<BigDecimal> quoteBasePrice = resolveQuoteBaseLockPrice(factorIdentityId, ctx);
       if (quoteBasePrice.isPresent()) {
+        ctx.resolvedSource(variable.getVariableCode(), LinkedPriceFactorSource.OA_LOCKED.getCode());
         return quoteBasePrice;
       }
     }
@@ -276,6 +279,9 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     Optional<BigDecimal> monthlyPrice =
         resolveMonthlyFactorPrice(factorIdentityId, factorMonthlyPriceId, pricingMonth);
     if (monthlyPrice.isPresent()) {
+      if (ctx != null && ctx.isMonthlyReprice()) {
+        ctx.resolvedSource(variable.getVariableCode(), LinkedPriceFactorSource.MONTHLY_FACTOR.getCode());
+      }
       return monthlyPrice;
     }
 

@@ -16,7 +16,7 @@ public record PriceTypeRoute(
     String materialCode,
     /* 物料形态（采购/制造/委外） */
     MaterialFormAttrEnum formAttr,
-    /* 价格类型（6 桶之一） */
+    /* 价格类型（4 桶之一） */
     PriceTypeEnum priceType,
     /* 优先级；priority=1 为本次命中，>1 表示是降级候选 */
     Integer priority,
@@ -25,5 +25,7 @@ public record PriceTypeRoute(
     /* 生效结束（含），可为 null */
     LocalDate effectiveTo,
     /* 数据来源系统（srm/oa/u9/cms/manual），用于日志追溯 */
-    String sourceSystem) {
+    String sourceSystem,
+    /* 路由表原始价格类型文案；FIXED 桶用它区分固定采购价和结算固定价 */
+    String rawPriceType) {
 }

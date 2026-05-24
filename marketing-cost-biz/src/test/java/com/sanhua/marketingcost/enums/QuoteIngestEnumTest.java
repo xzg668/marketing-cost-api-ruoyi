@@ -10,7 +10,7 @@ class QuoteIngestEnumTest {
   @Test
   void sourceTypesMatchIngestSchema() {
     assertThat(Arrays.stream(QuoteSourceType.values()).map(QuoteSourceType::getCode))
-        .containsExactly("OA", "MOCK_OA", "MANUAL", "EXCEL", "TECH", "LEGACY");
+        .containsExactly("OA", "WEAVER_OA", "MOCK_OA", "MANUAL", "EXCEL", "TECH", "LEGACY");
   }
 
   @Test

@@ -10,7 +10,17 @@ public class QualityLossRateRequest {
   private BigDecimal lossRate;
   private String customer;
   private String period;
+  private Integer rateYear;
   private String sourceBasis;
+  private String businessUnitType;
+  private String businessDivision;
+  private String productCode;
+  private String productName;
+  private String productModel;
+  private String productSpec;
+  private String remark;
+  private String sourceType;
+  private String sourceBatchNo;
 
   public String getCompany() {
     return company;
@@ -68,11 +78,91 @@ public class QualityLossRateRequest {
     this.period = period;
   }
 
+  public Integer getRateYear() {
+    return rateYear;
+  }
+
+  public void setRateYear(Integer rateYear) {
+    this.rateYear = rateYear;
+  }
+
   public String getSourceBasis() {
     return sourceBasis;
   }
 
   public void setSourceBasis(String sourceBasis) {
     this.sourceBasis = sourceBasis;
+  }
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
+  }
+
+  public String getBusinessDivision() {
+    return businessDivision;
+  }
+
+  public void setBusinessDivision(String businessDivision) {
+    this.businessDivision = businessDivision;
+  }
+
+  public String getProductCode() {
+    return productCode;
+  }
+
+  public void setProductCode(String productCode) {
+    this.productCode = productCode;
+  }
+
+  public String getProductName() {
+    return productName;
+  }
+
+  public void setProductName(String productName) {
+    this.productName = productName;
+  }
+
+  public String getProductModel() {
+    return productModel;
+  }
+
+  public void setProductModel(String productModel) {
+    this.productModel = productModel;
+  }
+
+  public String getProductSpec() {
+    return productSpec;
+  }
+
+  public void setProductSpec(String productSpec) {
+    this.productSpec = productSpec;
+  }
+
+  public String getRemark() {
+    return remark;
+  }
+
+  public void setRemark(String remark) {
+    this.remark = remark;
+  }
+
+  public String getSourceType() {
+    return sourceType;
+  }
+
+  public void setSourceType(String sourceType) {
+    this.sourceType = sourceType;
+  }
+
+  public String getSourceBatchNo() {
+    return sourceBatchNo;
+  }
+
+  public void setSourceBatchNo(String sourceBatchNo) {
+    this.sourceBatchNo = sourceBatchNo;
   }
 }

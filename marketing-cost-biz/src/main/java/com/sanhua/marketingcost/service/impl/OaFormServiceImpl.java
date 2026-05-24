@@ -169,6 +169,10 @@ public class OaFormServiceImpl implements OaFormService {
     dto.setLaborCost(item.getLaborCost());
     dto.setManufacturingCost(item.getManufacturingCost());
     dto.setManagementCost(item.getManagementCost());
+    dto.setValidMonth(item.getValidMonth());
+    dto.setSus304WeightG(item.getSus304WeightG());
+    dto.setSus316WeightG(item.getSus316WeightG());
+    dto.setCopperWeightG(item.getCopperWeightG());
     dto.setValidDate(item.getValidDate());
     if (item.getMaterialNo() != null && resultMap != null) {
       CostRunResult result = resultMap.get(item.getMaterialNo());
