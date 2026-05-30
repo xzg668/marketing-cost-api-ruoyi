@@ -50,8 +50,11 @@ public class PriceLinkedItemController {
   @GetMapping("/items")
   public CommonResult<List<PriceLinkedItemDto>> list(
       @RequestParam(required = false) String pricingMonth,
-      @RequestParam(required = false) String materialCode) {
-    return CommonResult.success(priceLinkedItemService.list(pricingMonth, materialCode));
+      @RequestParam(required = false) String materialCode,
+      @RequestParam(required = false, defaultValue = "false") Boolean includeHistory) {
+    return CommonResult.success(
+        priceLinkedItemService.list(
+            pricingMonth, materialCode, Boolean.TRUE.equals(includeHistory)));
   }
 
   /** 修改联动价格明细 */
@@ -89,7 +92,10 @@ public class PriceLinkedItemController {
       @RequestParam("pricingMonth") String pricingMonth,
       @RequestParam(value = "businessUnitType", required = false) String businessUnitType,
       @RequestParam(value = "overwriteManual", defaultValue = "false") boolean overwriteManual,
-      @RequestParam(value = "effectiveStrategy", required = false) String effectiveStrategy) {
+      @RequestParam(value = "effectiveStrategy", required = false) String effectiveStrategy,
+      @RequestParam(value = "formulaEffectiveDate", required = false) String formulaEffectiveDate,
+      @RequestParam(value = "factorPriceConflictStrategy", required = false)
+          String factorPriceConflictStrategy) {
     if (file == null || file.isEmpty()) {
       return CommonResult.error(
           GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "file is required");
@@ -98,7 +104,11 @@ public class PriceLinkedItemController {
       return CommonResult.success(
           priceLinkedItemService.importExcel(
               file.getInputStream(), pricingMonth, overwriteManual,
-              businessUnitType, file.getOriginalFilename(), effectiveStrategy));
+              businessUnitType, file.getOriginalFilename(), effectiveStrategy,
+              formulaEffectiveDate, factorPriceConflictStrategy));
+    } catch (IllegalArgumentException e) {
+      return CommonResult.error(
+          GlobalErrorCodeConstants.BAD_REQUEST.getCode(), e.getMessage());
     } catch (IOException e) {
       return CommonResult.error(
           GlobalErrorCodeConstants.BAD_REQUEST.getCode(),

@@ -12,6 +12,8 @@ public class FactorMonthlyPriceUpsertResult {
   private int monthlyPriceUpdatedCount;
   private int monthlyPriceUnchangedCount;
   private int monthlyPriceSkippedCount;
+  private int monthlyPriceConflictCount;
+  private int monthlyPriceOverwriteCount;
   private int quoteBaseRecognizedCount;
   private int quoteBaseUnrecognizedCount;
   private int quoteBaseConflictCount;
@@ -64,6 +66,22 @@ public class FactorMonthlyPriceUpsertResult {
 
   public void setMonthlyPriceSkippedCount(int monthlyPriceSkippedCount) {
     this.monthlyPriceSkippedCount = monthlyPriceSkippedCount;
+  }
+
+  public int getMonthlyPriceConflictCount() {
+    return monthlyPriceConflictCount;
+  }
+
+  public void setMonthlyPriceConflictCount(int monthlyPriceConflictCount) {
+    this.monthlyPriceConflictCount = monthlyPriceConflictCount;
+  }
+
+  public int getMonthlyPriceOverwriteCount() {
+    return monthlyPriceOverwriteCount;
+  }
+
+  public void setMonthlyPriceOverwriteCount(int monthlyPriceOverwriteCount) {
+    this.monthlyPriceOverwriteCount = monthlyPriceOverwriteCount;
   }
 
   public int getQuoteBaseRecognizedCount() {

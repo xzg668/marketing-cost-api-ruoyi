@@ -33,6 +33,7 @@ import com.sanhua.marketingcost.service.MakePartWeightService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -96,10 +97,29 @@ class MakePartPriceGenerationServiceImplTest {
     MakePartPriceCalcRow row = captor.getValue();
     assertThat(row.getCalcBatchId()).startsWith("MPPG-");
     assertThat(row.getPricingMonth()).isEqualTo("2026-05");
+    assertThat(row.getPriceAsOfTime()).isEqualTo(LocalDateTime.of(2026, 5, 31, 23, 59, 59));
     assertThat(row.getPriceComplete()).isTrue();
     assertThat(row.getParentMaterialNo()).isEqualTo("MAKE-001");
     assertThat(row.getCostPrice()).isEqualByComparingTo("4.74450000");
     verify(gapItemMapper, never()).insert(any(MakePartPriceGapItem.class));
+  }
+
+  @Test
+  @DisplayName("T21：自制件月度生成固化并传递 price_as_of_time")
+  void monthlyGeneratePassesPriceAsOfTimeToChildPricing() {
+    LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 26, 10, 30);
+    stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-001")));
+
+    service.generateByMaterial("MAKE-001", "COMMERCIAL", "2026-05", priceAsOfTime);
+
+    ArgumentCaptor<MakePartPriceCalcRow> captor = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    verify(calcRowMapper).insert(captor.capture());
+    assertThat(captor.getValue().getPricingMonth()).isEqualTo("2026-05");
+    assertThat(captor.getValue().getPriceAsOfTime()).isEqualTo(priceAsOfTime);
+    verify(priceResolveService).resolveMaterialUnitPrice(
+        "RAW-001", "2026-05", LocalDate.parse("2026-05-26"), priceAsOfTime, "OA-001", "COMMERCIAL");
+    verify(priceResolveService).resolveMaterialUnitPrice(
+        "SCRAP-001", "2026-05", LocalDate.parse("2026-05-26"), priceAsOfTime, "OA-001", "COMMERCIAL");
   }
 
   @Test
@@ -143,7 +163,7 @@ class MakePartPriceGenerationServiceImplTest {
         .thenReturn(List.of(scrap("SCRAP-A1"), scrap("SCRAP-A2")));
     when(scrapMappingService.listMappings("RAW-B", "COMMERCIAL"))
         .thenReturn(List.of(scrap("SCRAP-B1")));
-    when(priceResolveService.resolveMaterialUnitPrice(any(), any(), any(), any(), any()))
+    when(priceResolveService.resolveMaterialUnitPrice(any(), any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
 
     MakePartPriceGenerateResponse response =
@@ -185,7 +205,7 @@ class MakePartPriceGenerationServiceImplTest {
   void missingRawPriceWritesRawGapItem() {
     stubHappyPath("MAKE-001", List.of(child("RAW-MISS", "kg")), List.of(scrap("SCRAP-001")));
     when(priceResolveService.resolveMaterialUnitPrice("RAW-MISS", "2026-05",
-            LocalDate.parse("2026-05-31"), "OA-001", "COMMERCIAL"))
+            LocalDate.parse("2026-05-31"), priceAsOf(), "OA-001", "COMMERCIAL"))
         .thenReturn(MakePartMaterialPriceResolveResult.miss(
             "RAW-MISS", "MISSING_PRICE", "缺原材料价格", "固定价"));
 
@@ -216,7 +236,7 @@ class MakePartPriceGenerationServiceImplTest {
   void missingScrapPriceWritesScrapGapItem() {
     stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-MISS")));
     when(priceResolveService.resolveMaterialUnitPrice("SCRAP-MISS", "2026-05",
-            LocalDate.parse("2026-05-31"), "OA-001", "COMMERCIAL"))
+            LocalDate.parse("2026-05-31"), priceAsOf(), "OA-001", "COMMERCIAL"))
         .thenReturn(MakePartMaterialPriceResolveResult.miss(
             "SCRAP-MISS", "MISSING_PRICE", "缺废料价格", "固定价"));
 
@@ -244,11 +264,11 @@ class MakePartPriceGenerationServiceImplTest {
   void missingRawAndScrapPriceWritesTwoGapItems() {
     stubHappyPath("MAKE-001", List.of(child("RAW-MISS", "kg")), List.of(scrap("SCRAP-MISS")));
     when(priceResolveService.resolveMaterialUnitPrice("RAW-MISS", "2026-05",
-            LocalDate.parse("2026-05-31"), "OA-001", "COMMERCIAL"))
+            LocalDate.parse("2026-05-31"), priceAsOf(), "OA-001", "COMMERCIAL"))
         .thenReturn(MakePartMaterialPriceResolveResult.miss(
             "RAW-MISS", "MISSING_PRICE", "缺原材料价格", null));
     when(priceResolveService.resolveMaterialUnitPrice("SCRAP-MISS", "2026-05",
-            LocalDate.parse("2026-05-31"), "OA-001", "COMMERCIAL"))
+            LocalDate.parse("2026-05-31"), priceAsOf(), "OA-001", "COMMERCIAL"))
         .thenReturn(MakePartMaterialPriceResolveResult.miss(
             "SCRAP-MISS", "MISSING_PRICE", "缺废料价格", null));
 
@@ -275,7 +295,7 @@ class MakePartPriceGenerationServiceImplTest {
     ArgumentCaptor<MakePartPriceCalcRow> rowCaptor = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
     verify(calcRowMapper).insert(rowCaptor.capture());
     assertThat(rowCaptor.getValue().getChildMaterialNo()).isEqualTo("RAW-001");
-    assertThat(rowCaptor.getValue().getScrapCode()).isNull();
+    assertThat(rowCaptor.getValue().getScrapCode()).isEmpty();
     assertThat(rowCaptor.getValue().getStatus())
         .isEqualTo(MakePartPriceCalculator.STATUS_MISSING_SCRAP_MAPPING);
     verify(gapItemMapper, never()).insert(any(MakePartPriceGapItem.class));
@@ -320,7 +340,7 @@ class MakePartPriceGenerationServiceImplTest {
     InOrder inOrder = Mockito.inOrder(linkedPriceEnsureService, priceResolveService);
     inOrder.verify(linkedPriceEnsureService).ensure(any(LinkedPriceEnsureRequest.class));
     inOrder.verify(priceResolveService).resolveMaterialUnitPrice(
-        "RAW-001", "2026-05", LocalDate.parse("2026-05-31"), "OA-001", "COMMERCIAL");
+        "RAW-001", "2026-05", LocalDate.parse("2026-05-31"), priceAsOf(), "OA-001", "COMMERCIAL");
   }
 
   @Test
@@ -391,7 +411,7 @@ class MakePartPriceGenerationServiceImplTest {
       when(scrapMappingService.listMappings(child.getChildMaterialNo(), "COMMERCIAL"))
           .thenReturn(scraps);
     }
-    when(priceResolveService.resolveMaterialUnitPrice(any(), any(), any(), any(), any()))
+    when(priceResolveService.resolveMaterialUnitPrice(any(), any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
   }
 
@@ -444,6 +464,10 @@ class MakePartPriceGenerationServiceImplTest {
   private MakePartMaterialPriceResolveResult okPriceByCode(String materialCode) {
     String price = materialCode != null && materialCode.startsWith("SCRAP") ? "75.66" : "82.95";
     return okPrice(materialCode, price);
+  }
+
+  private LocalDateTime priceAsOf() {
+    return LocalDateTime.of(2026, 5, 31, 23, 59, 59);
   }
 
   private PriceTypeRoute linkedRoute(String materialCode) {

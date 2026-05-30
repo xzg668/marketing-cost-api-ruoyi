@@ -8,3 +8,8 @@ logs/
 CLAUDE.md
 *.md
 /docs/marketing_cost.sql
+
+docs/
+*.jar
+*.war
+*.ear

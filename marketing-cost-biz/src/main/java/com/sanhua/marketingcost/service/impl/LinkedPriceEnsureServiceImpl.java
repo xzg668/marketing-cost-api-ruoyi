@@ -8,12 +8,14 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.enums.LinkedPriceCalcScene;
+import com.sanhua.marketingcost.enums.LinkedPriceFactorSource;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -64,17 +66,30 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
     if (!errors.isEmpty()) {
       throw new IllegalArgumentException(String.join("；", errors));
     }
-    if (request.getCalcScene() != LinkedPriceCalcScene.QUOTE) {
-      throw new IllegalArgumentException("LPE-03 阶段仅支持 QUOTE 场景 ensure");
+    if (request.getCalcScene() == LinkedPriceCalcScene.MONTHLY_ADJUST) {
+      return ensureMonthlyAdjust(request, itemCodes, result);
     }
+    if (request.getCalcScene() != LinkedPriceCalcScene.QUOTE) {
+      throw new IllegalArgumentException("不支持的联动价计算场景：" + request.getCalcScene());
+    }
+    return ensureQuote(request, itemCodes, result);
+  }
 
+  private LinkedPriceEnsureResult ensureQuote(
+      LinkedPriceEnsureRequest request,
+      Set<String> itemCodes,
+      LinkedPriceEnsureResult result) {
     String oaNo = request.getOaNo().trim();
     String businessUnitType = request.getBusinessUnitType().trim();
     String pricingMonth = request.getPricingMonth().trim();
     Map<String, PriceLinkedCalcItem> existingMap =
         fetchExistingQuoteResults(oaNo, businessUnitType, pricingMonth, itemCodes);
     Map<String, PriceLinkedItem> linkedItemMap =
-        fetchLinkedItems(businessUnitType, pricingMonth, itemCodes);
+        fetchLinkedItems(
+            businessUnitType,
+            pricingMonth,
+            itemCodes,
+            request.getPriceAsOfTime() == null ? null : request.getPriceAsOfTime().toLocalDate());
     Map<String, BomSnapshot> bomMap = fetchBomSnapshots(oaNo, businessUnitType, itemCodes);
     OaForm oaForm = fetchOaForm(oaNo);
 
@@ -92,6 +107,55 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
       PriceLinkedItem linkedItem = linkedItemMap.get(itemCode);
       try {
         priceLinkedCalcService.calculateQuoteItemForEnsure(calcItem, linkedItem, oaForm);
+      } catch (RuntimeException ex) {
+        calcItem.setPartUnitPrice(null);
+        calcItem.setPartAmount(null);
+        calcItem.setCalcStatus(CALC_STATUS_FAILED);
+        calcItem.setCalcMessage(ex.getMessage());
+      }
+      persist(calcItem, created);
+      if (created) {
+        result.setCreatedCount(result.getCreatedCount() + 1);
+      } else {
+        result.setUpdatedCount(result.getUpdatedCount() + 1);
+      }
+      if (CALC_STATUS_FAILED.equalsIgnoreCase(calcItem.getCalcStatus())) {
+        result.addFailedItem(itemCode, calcItem.getCalcMessage());
+      }
+    }
+    return result;
+  }
+
+  private LinkedPriceEnsureResult ensureMonthlyAdjust(
+      LinkedPriceEnsureRequest request,
+      Set<String> itemCodes,
+      LinkedPriceEnsureResult result) {
+    Long adjustBatchId = request.getAdjustBatchId();
+    String businessUnitType = request.getBusinessUnitType().trim();
+    String pricingMonth = request.getPricingMonth().trim();
+    Map<String, PriceLinkedCalcItem> existingMap =
+        fetchExistingMonthlyAdjustResults(adjustBatchId, businessUnitType, pricingMonth, itemCodes);
+    Map<String, PriceLinkedItem> linkedItemMap =
+        fetchLinkedItems(
+            businessUnitType,
+            pricingMonth,
+            itemCodes,
+            request.getPriceAsOfTime() == null ? null : request.getPriceAsOfTime().toLocalDate());
+
+    for (String itemCode : itemCodes) {
+      PriceLinkedCalcItem existing = existingMap.get(itemCode);
+      if (canSkip(existing, request.isForceRefresh())) {
+        result.setSkippedCount(result.getSkippedCount() + 1);
+        continue;
+      }
+      boolean created = existing == null;
+      PriceLinkedCalcItem calcItem = created
+          ? new PriceLinkedCalcItem()
+          : existing;
+      populateMonthlyAdjustContext(calcItem, adjustBatchId, businessUnitType, pricingMonth, itemCode);
+      PriceLinkedItem linkedItem = linkedItemMap.get(itemCode);
+      try {
+        priceLinkedCalcService.calculateMonthlyAdjustItemForEnsure(calcItem, linkedItem);
       } catch (RuntimeException ex) {
         calcItem.setPartUnitPrice(null);
         calcItem.setPartAmount(null);
@@ -129,14 +193,47 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
     return map;
   }
 
+  private Map<String, PriceLinkedCalcItem> fetchExistingMonthlyAdjustResults(
+      Long adjustBatchId, String businessUnitType, String pricingMonth, Set<String> itemCodes) {
+    var query = Wrappers.lambdaQuery(PriceLinkedCalcItem.class)
+        .eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.MONTHLY_ADJUST.getCode())
+        .eq(PriceLinkedCalcItem::getBusinessUnitType, businessUnitType)
+        .eq(PriceLinkedCalcItem::getPricingMonth, pricingMonth)
+        .in(PriceLinkedCalcItem::getItemCode, itemCodes);
+    if (adjustBatchId == null) {
+      query.isNull(PriceLinkedCalcItem::getAdjustBatchId);
+    } else {
+      query.eq(PriceLinkedCalcItem::getAdjustBatchId, adjustBatchId);
+    }
+    List<PriceLinkedCalcItem> rows = priceLinkedCalcItemMapper.selectList(query);
+    Map<String, PriceLinkedCalcItem> map = new LinkedHashMap<>();
+    for (PriceLinkedCalcItem row : rows) {
+      if (StringUtils.hasText(row.getItemCode())) {
+        map.put(row.getItemCode().trim(), row);
+      }
+    }
+    return map;
+  }
+
   private Map<String, PriceLinkedItem> fetchLinkedItems(
-      String businessUnitType, String pricingMonth, Set<String> itemCodes) {
+      String businessUnitType, String pricingMonth, Set<String> itemCodes, LocalDate priceDate) {
+    var query = Wrappers.lambdaQuery(PriceLinkedItem.class)
+        .eq(PriceLinkedItem::getDeleted, 0)
+        .eq(PriceLinkedItem::getBusinessUnitType, businessUnitType)
+        .eq(PriceLinkedItem::getPricingMonth, pricingMonth)
+        .in(PriceLinkedItem::getMaterialCode, itemCodes);
+    if (priceDate != null) {
+      query.and(q -> q.le(PriceLinkedItem::getEffectiveFrom, priceDate)
+          .or()
+          .isNull(PriceLinkedItem::getEffectiveFrom));
+      query.and(q -> q.ge(PriceLinkedItem::getEffectiveTo, priceDate)
+          .or()
+          .isNull(PriceLinkedItem::getEffectiveTo));
+    } else {
+      query.isNull(PriceLinkedItem::getEffectiveTo);
+    }
     List<PriceLinkedItem> rows = priceLinkedItemMapper.selectList(
-        Wrappers.lambdaQuery(PriceLinkedItem.class)
-            .eq(PriceLinkedItem::getDeleted, 0)
-            .eq(PriceLinkedItem::getBusinessUnitType, businessUnitType)
-            .eq(PriceLinkedItem::getPricingMonth, pricingMonth)
-            .in(PriceLinkedItem::getMaterialCode, itemCodes)
+        query.orderByDesc(PriceLinkedItem::getEffectiveFrom)
             .orderByDesc(PriceLinkedItem::getUpdatedAt)
             .orderByDesc(PriceLinkedItem::getId));
     Map<String, PriceLinkedItem> map = new LinkedHashMap<>();
@@ -207,12 +304,36 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
     calcItem.setBomQty(bom == null ? null : bom.bomQty);
   }
 
+  private void populateMonthlyAdjustContext(
+      PriceLinkedCalcItem calcItem,
+      Long adjustBatchId,
+      String businessUnitType,
+      String pricingMonth,
+      String itemCode) {
+    // 月度调价联动价按“调价批次 + 月份 + 料号”固化，不绑定具体 OA 单。
+    calcItem.setOaNo(null);
+    calcItem.setBusinessUnitType(businessUnitType);
+    calcItem.setPricingMonth(pricingMonth);
+    calcItem.setCalcScene(LinkedPriceCalcScene.MONTHLY_ADJUST.getCode());
+    calcItem.setFactorSource(monthlyFactorSource(adjustBatchId));
+    calcItem.setAdjustBatchId(adjustBatchId);
+    calcItem.setItemCode(itemCode);
+    calcItem.setShapeAttr(null);
+    calcItem.setBomQty(null);
+  }
+
   private void persist(PriceLinkedCalcItem calcItem, boolean created) {
     if (created) {
       priceLinkedCalcItemMapper.insert(calcItem);
     } else {
       priceLinkedCalcItemMapper.updateById(calcItem);
     }
+  }
+
+  private String monthlyFactorSource(Long adjustBatchId) {
+    return adjustBatchId == null
+        ? LinkedPriceFactorSource.MONTHLY_FACTOR.getCode()
+        : LinkedPriceFactorSource.ADJUST_BATCH.getCode();
   }
 
   private static class BomSnapshot {

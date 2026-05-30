@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.PackagePriceRequest;
 import com.sanhua.marketingcost.dto.PackagePriceResult;
@@ -32,12 +33,15 @@ import com.sanhua.marketingcost.service.pricing.PriceResolveResult;
 import com.sanhua.marketingcost.service.pricing.PriceResolver;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DuplicateKeyException;
 
 @DisplayName("PackageComponentPriceServiceImpl")
 class PackageComponentPriceServiceImplTest {
@@ -66,7 +70,7 @@ class PackageComponentPriceServiceImplTest {
         "B", PriceResolveResult.hit(new BigDecimal("1.500000"), "固定采购价"))));
     when(snapshotService.ensureSnapshot(any(PackageSnapshotRequest.class)))
         .thenReturn(snapshotResult(List.of(detail(101L, 1, "A", "2.000000"), detail(102L, 2, "B", "4.000000"))));
-    when(priceMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    when(priceMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(priceMapper.insert(any(PackageComponentPrice.class))).thenAnswer(invocation -> {
       PackageComponentPrice price = invocation.getArgument(0);
       price.setId(500L);
@@ -94,12 +98,51 @@ class PackageComponentPriceServiceImplTest {
   }
 
   @Test
+  @DisplayName("T22：月度包装件按 price_as_of_time 传递给子件取价上下文")
+  void monthlyPriceAsOfTimePassedToChildResolver() {
+    LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 26, 10, 30);
+    AtomicReference<CostRunContext> capturedContext = new AtomicReference<>();
+    service = serviceWith(contextAwareResolver(
+        "A",
+        PriceResolveResult.hit(new BigDecimal("3.000000"), "固定采购价"),
+        capturedContext));
+    when(snapshotService.ensureSnapshot(any(PackageSnapshotRequest.class)))
+        .thenReturn(snapshotResult(List.of(detail(101L, 1, "A", "2.000000"))));
+    when(priceMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(priceMapper.insert(any(PackageComponentPrice.class))).thenAnswer(invocation -> {
+      PackageComponentPrice price = invocation.getArgument(0);
+      price.setId(510L);
+      return 1;
+    });
+    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), eq(LocalDate.parse("2026-05-26"))))
+        .thenReturn(List.of(route("A")));
+    PackagePriceRequest request = request();
+    request.setAsOfDate(null);
+    request.setPriceAsOfTime(priceAsOfTime);
+
+    PackagePriceResult result = service.ensurePrice(request);
+
+    assertThat(result.getStatus()).isEqualTo("PRICED");
+    assertThat(capturedContext.get()).isNotNull();
+    assertThat(capturedContext.get().getPricingMonth()).isEqualTo("2026-05");
+    assertThat(capturedContext.get().getPriceAsOfTime()).isEqualTo(priceAsOfTime);
+    ArgumentCaptor<PackageSnapshotRequest> snapshotCaptor =
+        ArgumentCaptor.forClass(PackageSnapshotRequest.class);
+    verify(snapshotService).ensureSnapshot(snapshotCaptor.capture());
+    assertThat(snapshotCaptor.getValue().getAsOfDate()).isEqualTo(LocalDate.parse("2026-05-26"));
+    ArgumentCaptor<PackageComponentPrice> priceCaptor =
+        ArgumentCaptor.forClass(PackageComponentPrice.class);
+    verify(priceMapper).insert(priceCaptor.capture());
+    assertThat(priceCaptor.getValue().getPriceAsOfTime()).isEqualTo(priceAsOfTime);
+  }
+
+  @Test
   @DisplayName("缺价格类型：明细标 MISSING_ROUTE，主表不完整并写 gap")
   void marksMissingRoute() {
     service = serviceWith(resolver(Map.of()));
     when(snapshotService.ensureSnapshot(any(PackageSnapshotRequest.class)))
         .thenReturn(snapshotResult(List.of(detail(101L, 1, "A", "2.000000"))));
-    when(priceMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    when(priceMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(priceMapper.insert(any(PackageComponentPrice.class))).thenAnswer(invocation -> {
       PackageComponentPrice price = invocation.getArgument(0);
       price.setId(501L);
@@ -145,7 +188,7 @@ class PackageComponentPriceServiceImplTest {
     service = serviceWith(resolver(Map.of("A", PriceResolveResult.miss("固定价无记录"))));
     when(snapshotService.ensureSnapshot(any(PackageSnapshotRequest.class)))
         .thenReturn(snapshotResult(List.of(detail(101L, 1, "A", "2.000000"))));
-    when(priceMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    when(priceMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(priceMapper.insert(any(PackageComponentPrice.class))).thenAnswer(invocation -> {
       PackageComponentPrice price = invocation.getArgument(0);
       price.setId(502L);
@@ -185,7 +228,7 @@ class PackageComponentPriceServiceImplTest {
     service = serviceWith(resolver(Map.of()));
     when(snapshotService.ensureSnapshot(any(PackageSnapshotRequest.class)))
         .thenReturn(snapshotResult(List.of(detail(101L, 1, "A", "2.000000"))));
-    when(priceMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    when(priceMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(priceMapper.insert(any(PackageComponentPrice.class))).thenAnswer(invocation -> {
       PackageComponentPrice price = invocation.getArgument(0);
       price.setId(505L);
@@ -225,7 +268,7 @@ class PackageComponentPriceServiceImplTest {
     existing.setSourceTopProductCode("1079900000536");
     existing.setPriceStatus("MISSING_CHILD_PRICE");
     existing.setPriceComplete(false);
-    when(priceMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    when(priceMapper.selectList(any(Wrapper.class))).thenReturn(List.of(existing));
     when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), eq(LocalDate.parse("2026-05-21"))))
         .thenReturn(List.of(route("A")));
 
@@ -256,7 +299,7 @@ class PackageComponentPriceServiceImplTest {
     existingDetail.setLineNo(1);
     existingDetail.setChildMaterialCode("A");
     existingDetail.setPriceStatus("PRICED");
-    when(priceMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    when(priceMapper.selectList(any(Wrapper.class))).thenReturn(List.of(existing));
     when(priceDetailMapper.selectList(any(Wrapper.class))).thenReturn(List.of(existingDetail));
 
     PackagePriceRequest request = request();
@@ -277,12 +320,51 @@ class PackageComponentPriceServiceImplTest {
   }
 
   @Test
+  @DisplayName("并发生成撞唯一键：重查到完整包装价后直接复用，不删明细重算")
+  void reusesConcurrentCompletePriceAfterDuplicateKey() {
+    service = serviceWith(resolver(Map.of("A", PriceResolveResult.hit(new BigDecimal("2.000000"), "固定采购价"))));
+    when(snapshotService.ensureSnapshot(any(PackageSnapshotRequest.class)))
+        .thenReturn(snapshotResult(List.of(detail(101L, 1, "A", "2.000000"))));
+    PackageComponentPrice concurrent = new PackageComponentPrice();
+    concurrent.setId(508L);
+    concurrent.setPackageMaterialCode("9830000026238");
+    concurrent.setPeriodMonth("2026-05");
+    concurrent.setSourceTopProductCode("1079900000536");
+    concurrent.setPriceAsOfTime(LocalDateTime.of(2026, 5, 26, 10, 30));
+    concurrent.setPriceStatus("PRICED");
+    concurrent.setPriceComplete(true);
+    concurrent.setTotalPrice(new BigDecimal("1.23000000"));
+    PackageComponentPriceDetail existingDetail = new PackageComponentPriceDetail();
+    existingDetail.setPriceId(508L);
+    existingDetail.setLineNo(1);
+    existingDetail.setChildMaterialCode("A");
+    existingDetail.setPriceStatus("PRICED");
+    when(priceMapper.selectList(any(Wrapper.class))).thenReturn(List.of(), List.of(), List.of(concurrent));
+    when(priceMapper.insert(any(PackageComponentPrice.class)))
+        .thenThrow(new DuplicateKeyException("duplicate package price"));
+    when(priceDetailMapper.selectList(any(Wrapper.class))).thenReturn(List.of(existingDetail));
+
+    PackagePriceRequest request = request();
+    request.setAsOfDate(null);
+    request.setPriceAsOfTime(LocalDateTime.of(2026, 5, 26, 10, 30));
+    PackagePriceResult result = service.ensurePrice(request);
+
+    assertThat(result.getStatus()).isEqualTo("PRICED");
+    assertThat(result.isComplete()).isTrue();
+    assertThat(result.getPrice().getId()).isEqualTo(508L);
+    assertThat(result.getDetails()).hasSize(1);
+    verify(priceDetailMapper, never()).delete(any(Wrapper.class));
+    verify(priceDetailMapper, never()).insert(any(PackageComponentPriceDetail.class));
+    verify(priceMapper, never()).updateById(any(PackageComponentPrice.class));
+  }
+
+  @Test
   @DisplayName("重复子件：不合并，按两行分别计算金额")
   void keepsDuplicateChildRowsWhenPricing() {
     service = serviceWith(resolver(Map.of("A", PriceResolveResult.hit(new BigDecimal("2.000000"), "固定采购价"))));
     when(snapshotService.ensureSnapshot(any(PackageSnapshotRequest.class)))
         .thenReturn(snapshotResult(List.of(detail(101L, 1, "A", "1.000000"), detail(102L, 2, "A", "3.000000"))));
-    when(priceMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    when(priceMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(priceMapper.insert(any(PackageComponentPrice.class))).thenAnswer(invocation -> {
       PackageComponentPrice price = invocation.getArgument(0);
       price.setId(503L);
@@ -315,7 +397,7 @@ class PackageComponentPriceServiceImplTest {
         "B", PriceResolveResult.miss("固定价无记录"))));
     when(snapshotService.ensureSnapshot(any(PackageSnapshotRequest.class)))
         .thenReturn(snapshotResult(List.of(detail(101L, 1, "A", "2.000000"), detail(102L, 2, "B", "4.000000"))));
-    when(priceMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    when(priceMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(priceMapper.insert(any(PackageComponentPrice.class))).thenAnswer(invocation -> {
       PackageComponentPrice price = invocation.getArgument(0);
       price.setId(504L);
@@ -360,6 +442,30 @@ class PackageComponentPriceServiceImplTest {
       @Override
       public PriceResolveResult resolve(String oaNo, CostRunPartItemDto item, PriceTypeRoute route) {
         return results.getOrDefault(item.getPartCode(), PriceResolveResult.miss("无测试价格"));
+      }
+    };
+  }
+
+  private PriceResolver contextAwareResolver(
+      String materialCode,
+      PriceResolveResult result,
+      AtomicReference<CostRunContext> capturedContext) {
+    return new PriceResolver() {
+      @Override
+      public PriceTypeEnum priceType() {
+        return PriceTypeEnum.FIXED;
+      }
+
+      @Override
+      public PriceResolveResult resolve(String oaNo, CostRunPartItemDto item, PriceTypeRoute route) {
+        return PriceResolveResult.miss("必须走带上下文的取价入口");
+      }
+
+      @Override
+      public PriceResolveResult resolve(
+          String oaNo, CostRunPartItemDto item, PriceTypeRoute route, CostRunContext context) {
+        capturedContext.set(context);
+        return materialCode.equals(item.getPartCode()) ? result : PriceResolveResult.miss("无测试价格");
       }
     };
   }

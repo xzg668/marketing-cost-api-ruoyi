@@ -78,12 +78,10 @@ class MaterialPriceTypeServiceImplTest {
     MaterialPriceTypeImportRequest request = new MaterialPriceTypeImportRequest();
     request.setRows(List.of(row));
 
-    // importItems 现在采用 delete+insert 策略，不再 selectOne+updateById
-    when(mapper.delete(any())).thenReturn(1);
+    when(mapper.selectList(any())).thenReturn(List.of());
 
     service.importItems(request);
 
-    verify(mapper).delete(any());
     ArgumentCaptor<MaterialPriceType> captor = ArgumentCaptor.forClass(MaterialPriceType.class);
     verify(mapper).insert(captor.capture());
     MaterialPriceType inserted = captor.getValue();

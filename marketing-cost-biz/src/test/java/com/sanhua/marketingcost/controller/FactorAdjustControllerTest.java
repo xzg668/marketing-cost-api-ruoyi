@@ -57,7 +57,7 @@ class FactorAdjustControllerTest {
 
     CommonResult<FactorAdjustImportResponse> result =
         controller.importAdjustExcel(file, "2026-05", "COMMERCIAL",
-            "REPRICE_AND_DAILY", "5月调价", auth);
+            "MONTHLY", "REPRICE_AND_DAILY", "5月调价", auth);
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData()).isSameAs(mocked);
@@ -70,6 +70,7 @@ class FactorAdjustControllerTest {
         eq("alice"));
     assertThat(captor.getValue().getPricingMonth()).isEqualTo("2026-05");
     assertThat(captor.getValue().getBusinessUnitType()).isEqualTo("COMMERCIAL");
+    assertThat(captor.getValue().getAdjustType()).isEqualTo("MONTHLY");
     assertThat(captor.getValue().getUsageScope()).isEqualTo("REPRICE_AND_DAILY");
     assertThat(captor.getValue().getRemark()).isEqualTo("5月调价");
   }
@@ -114,7 +115,7 @@ class FactorAdjustControllerTest {
     when(queryService.pageBatches(org.mockito.ArgumentMatchers.any())).thenReturn(mocked);
 
     CommonResult<FactorAdjustBatchPageResponse> result = controller.listBatches(
-        "2026-05", "COMMERCIAL", "FAB", "REPRICE_ONLY", "SUCCESS",
+        "2026-05", "COMMERCIAL", "FAB", "MONTHLY", "REPRICE_ONLY", "SUCCESS",
         "alice", true, null, 2, 30);
 
     assertThat(result.isSuccess()).isTrue();
@@ -125,6 +126,7 @@ class FactorAdjustControllerTest {
     assertThat(captor.getValue().getPricingMonth()).isEqualTo("2026-05");
     assertThat(captor.getValue().getBusinessUnitType()).isEqualTo("COMMERCIAL");
     assertThat(captor.getValue().getAdjustBatchNo()).isEqualTo("FAB");
+    assertThat(captor.getValue().getAdjustType()).isEqualTo("MONTHLY");
     assertThat(captor.getValue().getUsageScope()).isEqualTo("REPRICE_ONLY");
     assertThat(captor.getValue().getStatus()).isEqualTo("SUCCESS");
     assertThat(captor.getValue().getUploadedBy()).isEqualTo("alice");

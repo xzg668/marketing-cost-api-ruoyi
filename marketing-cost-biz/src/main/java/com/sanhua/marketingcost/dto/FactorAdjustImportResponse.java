@@ -12,6 +12,7 @@ public class FactorAdjustImportResponse {
   private String adjustBatchNo;
   private String pricingMonth;
   private String businessUnitType;
+  private String adjustType;
   private String usageScope;
   private Integer totalCount;
   private Integer changedCount;

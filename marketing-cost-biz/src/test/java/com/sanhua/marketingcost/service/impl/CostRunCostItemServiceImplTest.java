@@ -42,6 +42,7 @@ import com.sanhua.marketingcost.mapper.SalaryCostMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.Year;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
@@ -232,6 +233,63 @@ class CostRunCostItemServiceImplTest {
   }
 
   @Test
+  @DisplayName("成本核算年度：按核算当天年份，不按 OA 申请日期年份")
+  void calculationCostYearUsesCurrentYearInsteadOfApplyDateYear() {
+    int currentYear = java.time.Year.now().getValue();
+    OaFormMapper formMapper = mock(OaFormMapper.class);
+    OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
+    SalaryCostMapper salaryMapper = mock(SalaryCostMapper.class);
+    CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
+    AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
+    CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
+    MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
+    CmsCostEffectiveSourceEnsureService ensureService = mock(CmsCostEffectiveSourceEnsureService.class);
+
+    OaForm form = new OaForm();
+    form.setId(1L);
+    form.setOaNo("OA-OLD-APPLY");
+    form.setApplyDate(LocalDate.of(currentYear - 1, 12, 31));
+    form.setBusinessUnitType("COMMERCIAL");
+    OaFormItem item = new OaFormItem();
+    item.setOaFormId(1L);
+    item.setMaterialNo("P-CURRENT-YEAR");
+    item.setBusinessUnitType("COMMERCIAL");
+    when(formMapper.selectOne(any(Wrapper.class))).thenReturn(form);
+    when(formItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(item));
+    when(salaryMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(effectiveMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(auxMapper.selectEffectiveAuxCostItems(currentYear, Set.of("P-CURRENT-YEAR"), "COMMERCIAL"))
+        .thenReturn(List.of());
+    when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any()))
+        .thenReturn(List.of());
+    when(bomMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+
+    CostRunCostItemServiceImpl svc =
+        buildForCalculation(
+            formMapper,
+            formItemMapper,
+            salaryMapper,
+            effectiveMapper,
+            ensureService,
+            auxMapper,
+            partMapper,
+            masterMapper,
+            rawMapper,
+            bomMapper);
+
+    svc.listByMaterialCodes(
+        "OA-OLD-APPLY", "P-CURRENT-YEAR", Set.of("P-CURRENT-YEAR"), ignored -> {});
+
+    verify(ensureService).ensureDefaultSources(eq(currentYear), eq("SYSTEM_AUTO"), eq("COMMERCIAL"));
+    verify(auxMapper).selectEffectiveAuxCostItems(currentYear, Set.of("P-CURRENT-YEAR"), "COMMERCIAL");
+  }
+
+  @Test
   @DisplayName("T15 工资正式核算：只取当前料号公共生效来源，不用 lp_salary_cost 参考料号兜底")
   void calculationDoesNotFallbackToSalaryReferenceMaterial() {
     OaFormMapper formMapper = mock(OaFormMapper.class);
@@ -379,6 +437,7 @@ class CostRunCostItemServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
     CostRunCacheLookupService lookup = mock(CostRunCacheLookupService.class);
+    ThreeExpenseRateMapper threeExpenseRateMapper = mock(ThreeExpenseRateMapper.class);
 
     OaForm form = quoteFormWithAccountingContext();
     OaFormItem item = new OaFormItem();
@@ -399,33 +458,24 @@ class CostRunCostItemServiceImplTest {
     when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any()))
         .thenReturn(List.of());
     when(bomMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(lookup.findThreeExpenseDimensionMapping("COMMERCIAL", "COMPANY", "OA", "浙江三花商用制冷有限公司"))
-        .thenReturn(mapping("商用制冷"));
-    when(lookup.findThreeExpenseDimensionMapping("COMMERCIAL", "PRODUCTION_DIVISION", "OA", "商用四通阀事业部"))
-        .thenReturn(mapping("四通阀事业部"));
-    when(lookup.findThreeExpenseDimensionMapping("COMMERCIAL", "DEPARTMENT", "OA", "欧美业务管理部"))
-        .thenReturn(mapping("欧美业务部"));
-    when(lookup.findThreeExpenseDimensionMapping("COMMERCIAL", "OFFICE", "OA", "欧洲业务管理部"))
-        .thenReturn(mapping("欧洲业务部"));
+    form.setProcessCode("FI-SC-006");
+    form.setOverseasSalesMode("否");
     ThreeExpenseRate rate = new ThreeExpenseRate();
+    rate.setPeriodYear(2026);
+    rate.setProductCategory("商用直销产品");
+    rate.setProductLine("国内产线");
+    rate.setApplicantDepartment("欧洲业务管理部（直销）");
+    rate.setApplicantOffice("");
     rate.setManagementExpenseRate(new BigDecimal("0.080000"));
     rate.setFinanceExpenseRate(new BigDecimal("0.020000"));
     rate.setSalesExpenseRate(new BigDecimal("0.200000"));
-    when(lookup.findThreeExpenseRate(
-            "COMMERCIAL",
-            "2026-03",
-            "商用制冷",
-            "四通阀事业部",
-            "欧美业务部",
-            "欧洲业务部",
-            "",
-            ""))
-        .thenReturn(rate);
+    when(threeExpenseRateMapper.selectList(any(Wrapper.class))).thenReturn(List.of(rate));
 
     CostRunCostItemServiceImpl svc =
         buildForCalculation(
             formMapper, formItemMapper, salaryMapper, effectiveMapper, auxMapper, partMapper,
-            masterMapper, rawMapper, bomMapper, mock(QualityLossRateMapper.class), lookup);
+            masterMapper, rawMapper, bomMapper, mock(QualityLossRateMapper.class), lookup,
+            threeExpenseRateMapper);
     List<CostRunCostItemDto> items =
         svc.listByMaterialCodes("OA-Q10", "P-Q10", Set.of("P-Q10"), ignored -> {});
 
@@ -433,9 +483,73 @@ class CostRunCostItemServiceImplTest {
     assertThat(findItem(items, "SALES_EXP").getRate()).isEqualByComparingTo("0.200000");
     assertThat(findItem(items, "FIN_EXP").getRate()).isEqualByComparingTo("0.020000");
     assertThat(findItem(items, "MGMT_EXP").getRemark()).isNull();
-    verify(lookup)
-        .findThreeExpenseRate(
-            "COMMERCIAL", "2026-03", "商用制冷", "四通阀事业部", "欧美业务部", "欧洲业务部", "", "");
+    verify(threeExpenseRateMapper).selectList(any(Wrapper.class));
+  }
+
+  @Test
+  @DisplayName("真实 FI-SC-006：海外仓终端客户命中商用国内产线海外部门费率")
+  void realFiSc006OverseasWarehouseMatchesCommercialDomesticOverseasRate() {
+    OaFormMapper formMapper = mock(OaFormMapper.class);
+    OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
+    SalaryCostMapper salaryMapper = mock(SalaryCostMapper.class);
+    CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
+    AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
+    CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
+    MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
+    CostRunCacheLookupService lookup = mock(CostRunCacheLookupService.class);
+    ThreeExpenseRateMapper threeExpenseRateMapper = mock(ThreeExpenseRateMapper.class);
+
+    OaForm form = quoteFormWithAccountingContext();
+    form.setOaNo("FI-SC-006-20260327-037");
+    form.setProcessCode("FI-SC-006");
+    form.setSourceBusinessDivision("商用压缩事业部");
+    form.setOverseasSalesMode("是");
+    OaFormItem item = new OaFormItem();
+    item.setOaFormId(1L);
+    item.setMaterialNo("1079900000536");
+    item.setValidDate(LocalDate.of(2026, 6, 1));
+    item.setBusinessUnitType("COMMERCIAL");
+    when(formMapper.selectOne(any(Wrapper.class))).thenReturn(form);
+    when(formItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(item));
+    when(salaryMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(effectiveMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("1079900000536"), "COMMERCIAL"))
+        .thenReturn(List.of());
+    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of());
+    when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any()))
+        .thenReturn(List.of());
+    when(bomMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    ThreeExpenseRate rate = new ThreeExpenseRate();
+    rate.setPeriodYear(2026);
+    rate.setBusinessUnitType("COMMERCIAL");
+    rate.setProductCategory("商用直销产品");
+    rate.setProductLine("国内产线");
+    rate.setApplicantDepartment("欧洲业务管理部（海外）");
+    rate.setApplicantOffice("/");
+    rate.setManagementExpenseRate(new BigDecimal("0.100000"));
+    rate.setFinanceExpenseRate(new BigDecimal("0.020000"));
+    rate.setSalesExpenseRate(new BigDecimal("0.250000"));
+    rate.setThreeExpenseTotalRate(new BigDecimal("0.370000"));
+    when(threeExpenseRateMapper.selectList(any(Wrapper.class))).thenReturn(List.of(rate));
+
+    CostRunCostItemServiceImpl svc =
+        buildForCalculation(
+            formMapper, formItemMapper, salaryMapper, effectiveMapper, auxMapper, partMapper,
+            masterMapper, rawMapper, bomMapper, mock(QualityLossRateMapper.class), lookup,
+            threeExpenseRateMapper);
+    List<CostRunCostItemDto> items =
+        svc.listByMaterialCodes("FI-SC-006-20260327-037", "1079900000536", Set.of("1079900000536"), ignored -> {});
+
+    assertThat(findItem(items, "MGMT_EXP").getRate()).isEqualByComparingTo("0.100000");
+    assertThat(findItem(items, "SALES_EXP").getRate()).isEqualByComparingTo("0.250000");
+    assertThat(findItem(items, "FIN_EXP").getRate()).isEqualByComparingTo("0.020000");
+    assertThat(findItem(items, "MGMT_EXP").getRemark()).isNull();
+    verify(threeExpenseRateMapper).selectList(any(Wrapper.class));
   }
 
   @Test
@@ -482,7 +596,153 @@ class CostRunCostItemServiceImplTest {
     assertThat(findItem(items, "MGMT_EXP").getRate()).isNull();
     assertThat(findItem(items, "MGMT_EXP").getRemark())
         .contains("三项费用未命中")
-        .contains("applicantOffice");
+        .contains("periodYear")
+        .contains("sourceOffice");
+  }
+
+  @Test
+  @DisplayName("TER-06 三项费用上下文：FI-SC-020/FI-SC-006 按事业部推导国内产线和商用后缀")
+  void threeExpenseMatchContextCommercialDirectAndOverseas() {
+    CostRunCostItemServiceImpl svc = buildForCalculation(
+        mock(OaFormMapper.class),
+        mock(OaFormItemMapper.class),
+        mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(AuxCostItemMapper.class),
+        mock(CostRunPartItemMapper.class),
+        mock(MaterialMasterMapper.class),
+        mock(MaterialMasterRawMapper.class),
+        mock(BomRawHierarchyMapper.class));
+
+    CostRunCostItemServiceImpl.ThreeExpenseMatchContext sc020 =
+        svc.buildThreeExpenseMatchContext(threeExpenseForm("FI-SC-020", "商用四通阀事业部", "是"));
+    assertThat(sc020.periodYear).isEqualTo(Year.now().getValue());
+    assertThat(sc020.productCategory).isEqualTo("商用直销产品");
+    assertThat(sc020.productLine).isEqualTo("国内产线");
+    assertThat(sc020.commercialOverseasFlag).isEqualTo("是");
+    assertThat(sc020.matchedDepartment).isEqualTo("欧美业务管理部（海外）");
+
+    CostRunCostItemServiceImpl.ThreeExpenseMatchContext sc006 =
+        svc.buildThreeExpenseMatchContext(threeExpenseForm("FI-SC-006", "商用四通阀事业部", "否"));
+    assertThat(sc006.productCategory).isEqualTo("商用直销产品");
+    assertThat(sc006.productLine).isEqualTo("国内产线");
+    assertThat(sc006.commercialOverseasFlag).isEqualTo("否");
+    assertThat(sc006.matchedDepartment).isEqualTo("欧美业务管理部（直销）");
+  }
+
+  @Test
+  @DisplayName("TER-06 三项费用上下文：FI-SC-005 产品事业部越南推导为越南事业部")
+  void threeExpenseMatchContextCommercialVietnamProductDivision() {
+    CostRunCostItemServiceImpl svc = buildForCalculation(
+        mock(OaFormMapper.class),
+        mock(OaFormItemMapper.class),
+        mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(AuxCostItemMapper.class),
+        mock(CostRunPartItemMapper.class),
+        mock(MaterialMasterMapper.class),
+        mock(MaterialMasterRawMapper.class),
+        mock(BomRawHierarchyMapper.class));
+
+    CostRunCostItemServiceImpl.ThreeExpenseMatchContext context =
+        svc.buildThreeExpenseMatchContext(threeExpenseForm("FI-SC-005", "越南产品事业部", "否"));
+
+    assertThat(context.productCategory).isEqualTo("商用直销产品");
+    assertThat(context.productLine).isEqualTo("越南事业部");
+  }
+
+  @Test
+  @DisplayName("TER-06 三项费用上下文：家用单据所属事业部推导墨西哥产线，按代销/直销后缀")
+  void threeExpenseMatchContextHouseholdMexicoSalesMode() {
+    CostRunCostItemServiceImpl svc = buildForCalculation(
+        mock(OaFormMapper.class),
+        mock(OaFormItemMapper.class),
+        mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(AuxCostItemMapper.class),
+        mock(CostRunPartItemMapper.class),
+        mock(MaterialMasterMapper.class),
+        mock(MaterialMasterRawMapper.class),
+        mock(BomRawHierarchyMapper.class));
+
+    CostRunCostItemServiceImpl.ThreeExpenseMatchContext context =
+        svc.buildThreeExpenseMatchContext(threeExpenseForm("FI-SR-005", "墨西哥所属事业部", "是"));
+
+    assertThat(context.productCategory).isEqualTo("家代商代销产品");
+    assertThat(context.productLine).isEqualTo("墨西哥产线");
+    assertThat(context.homeApplianceSalesModeFlag).isEqualTo("是");
+    assertThat(context.matchedDepartment).isEqualTo("欧美业务管理部（代销）");
+    assertThat(context.commercialOverseasFlag).isNull();
+  }
+
+  @Test
+  @DisplayName("TER-06 三项费用上下文：缺关键字段时返回明确原因")
+  void threeExpenseMatchContextMissingDivisionHasReason() {
+    CostRunCostItemServiceImpl svc = buildForCalculation(
+        mock(OaFormMapper.class),
+        mock(OaFormItemMapper.class),
+        mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(AuxCostItemMapper.class),
+        mock(CostRunPartItemMapper.class),
+        mock(MaterialMasterMapper.class),
+        mock(MaterialMasterRawMapper.class),
+        mock(BomRawHierarchyMapper.class));
+    OaForm form = threeExpenseForm("FI-SC-006", null, "否");
+
+    CostRunCostItemServiceImpl.ThreeExpenseMatchContext context =
+        svc.buildThreeExpenseMatchContext(form);
+
+    assertThat(context.missingReason).contains("缺少事业部字段");
+  }
+
+  @Test
+  @DisplayName("TER-07 三项费用匹配：配置处室有具体值时优先按 OA 申请处室命中")
+  void threeExpenseCandidatePrefersOfficeMatch() {
+    CostRunCostItemServiceImpl svc = buildForCalculation(
+        mock(OaFormMapper.class),
+        mock(OaFormItemMapper.class),
+        mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(AuxCostItemMapper.class),
+        mock(CostRunPartItemMapper.class),
+        mock(MaterialMasterMapper.class),
+        mock(MaterialMasterRawMapper.class),
+        mock(BomRawHierarchyMapper.class));
+    OaForm form = threeExpenseForm("FI-SC-006", "商用四通阀事业部", "否");
+    form.setApplicantOffice("欧洲业务管理部");
+    CostRunCostItemServiceImpl.ThreeExpenseMatchContext context =
+        svc.buildThreeExpenseMatchContext(form);
+
+    ThreeExpenseRate departmentRate = threeExpenseCandidate("", "欧美业务管理部（直销）", "0.080000");
+    ThreeExpenseRate officeRate = threeExpenseCandidate("欧洲业务管理部", "其他部门（直销）", "0.090000");
+
+    ThreeExpenseRate matched = svc.matchThreeExpenseRateCandidate(context, List.of(departmentRate, officeRate));
+
+    assertThat(matched).isSameAs(officeRate);
+  }
+
+  @Test
+  @DisplayName("TER-07 三项费用匹配：配置处室为空或 / 时按申请部门后缀命中")
+  void threeExpenseCandidateFallsBackToMatchedDepartment() {
+    CostRunCostItemServiceImpl svc = buildForCalculation(
+        mock(OaFormMapper.class),
+        mock(OaFormItemMapper.class),
+        mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(AuxCostItemMapper.class),
+        mock(CostRunPartItemMapper.class),
+        mock(MaterialMasterMapper.class),
+        mock(MaterialMasterRawMapper.class),
+        mock(BomRawHierarchyMapper.class));
+    CostRunCostItemServiceImpl.ThreeExpenseMatchContext context =
+        svc.buildThreeExpenseMatchContext(threeExpenseForm("FI-SC-006", "商用四通阀事业部", "否"));
+
+    ThreeExpenseRate slashOfficeRate = threeExpenseCandidate("/", "欧美业务管理部（直销）", "0.080000");
+
+    ThreeExpenseRate matched = svc.matchThreeExpenseRateCandidate(context, List.of(slashOfficeRate));
+
+    assertThat(matched).isSameAs(slashOfficeRate);
   }
 
   @Test
@@ -952,6 +1212,30 @@ class CostRunCostItemServiceImplTest {
     return mapping;
   }
 
+  private static OaForm threeExpenseForm(String processCode, String division, String overseasSalesMode) {
+    OaForm form = new OaForm();
+    form.setOaNo(processCode + "-20260525-001");
+    form.setProcessCode(processCode);
+    form.setBusinessUnitType(processCode.startsWith("FI-SC") ? "COMMERCIAL" : "HOUSEHOLD");
+    form.setSourceBusinessDivision(division);
+    form.setApplicantDept("欧美业务管理部");
+    form.setApplicantOffice("/");
+    form.setOverseasSalesMode(overseasSalesMode);
+    return form;
+  }
+
+  private static ThreeExpenseRate threeExpenseCandidate(
+      String applicantOffice, String applicantDepartment, String managementRate) {
+    ThreeExpenseRate rate = new ThreeExpenseRate();
+    rate.setApplicantOffice(applicantOffice);
+    rate.setApplicantDepartment(applicantDepartment);
+    rate.setManagementExpenseRate(new BigDecimal(managementRate));
+    rate.setFinanceExpenseRate(new BigDecimal("0.020000"));
+    rate.setSalesExpenseRate(new BigDecimal("0.030000"));
+    rate.setOemExpenseRate(new BigDecimal("0.990000"));
+    return rate;
+  }
+
   private CostRunCostItemServiceImpl buildForCalculation(
       OaFormMapper formMapper,
       OaFormItemMapper formItemMapper,
@@ -1092,6 +1376,65 @@ class CostRunCostItemServiceImplTest {
       BomRawHierarchyMapper bomMapper,
       QualityLossRateMapper qualityMapper,
       CostRunCacheLookupService lookup) {
+    return buildForCalculation(
+        formMapper,
+        formItemMapper,
+        salaryMapper,
+        effectiveMapper,
+        ensureService,
+        auxMapper,
+        partMapper,
+        masterMapper,
+        rawMapper,
+        bomMapper,
+        qualityMapper,
+        lookup,
+        mock(ThreeExpenseRateMapper.class));
+  }
+
+  private CostRunCostItemServiceImpl buildForCalculation(
+      OaFormMapper formMapper,
+      OaFormItemMapper formItemMapper,
+      SalaryCostMapper salaryMapper,
+      CmsCostSourceEffectiveMapper effectiveMapper,
+      AuxCostItemMapper auxMapper,
+      CostRunPartItemMapper partMapper,
+      MaterialMasterMapper masterMapper,
+      MaterialMasterRawMapper rawMapper,
+      BomRawHierarchyMapper bomMapper,
+      QualityLossRateMapper qualityMapper,
+      CostRunCacheLookupService lookup,
+      ThreeExpenseRateMapper threeExpenseRateMapper) {
+    return buildForCalculation(
+        formMapper,
+        formItemMapper,
+        salaryMapper,
+        effectiveMapper,
+        mock(CmsCostEffectiveSourceEnsureService.class),
+        auxMapper,
+        partMapper,
+        masterMapper,
+        rawMapper,
+        bomMapper,
+        qualityMapper,
+        lookup,
+        threeExpenseRateMapper);
+  }
+
+  private CostRunCostItemServiceImpl buildForCalculation(
+      OaFormMapper formMapper,
+      OaFormItemMapper formItemMapper,
+      SalaryCostMapper salaryMapper,
+      CmsCostSourceEffectiveMapper effectiveMapper,
+      CmsCostEffectiveSourceEnsureService ensureService,
+      AuxCostItemMapper auxMapper,
+      CostRunPartItemMapper partMapper,
+      MaterialMasterMapper masterMapper,
+      MaterialMasterRawMapper rawMapper,
+      BomRawHierarchyMapper bomMapper,
+      QualityLossRateMapper qualityMapper,
+      CostRunCacheLookupService lookup,
+      ThreeExpenseRateMapper threeExpenseRateMapper) {
     return new CostRunCostItemServiceImpl(
         mock(CostRunCostItemMapper.class),
         formMapper,
@@ -1104,7 +1447,7 @@ class CostRunCostItemServiceImplTest {
         partMapper,
         qualityMapper,
         mock(ManufactureRateMapper.class),
-        mock(ThreeExpenseRateMapper.class),
+        threeExpenseRateMapper,
         mock(OtherExpenseRateMapper.class),
         mock(ProductPropertyMapper.class),
         masterMapper,

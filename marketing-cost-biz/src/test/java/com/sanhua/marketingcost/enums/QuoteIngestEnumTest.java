@@ -38,13 +38,17 @@ class QuoteIngestEnumTest {
     assertThat(Arrays.stream(QuoteBomStatusCode.values()).map(QuoteBomStatusCode::getCode))
         .containsExactly(
             "NOT_CHECKED",
+            "SYNCING",
             "SYNCED",
+            "REUSED_CURRENT_MONTH",
             "NO_BOM",
             "ENTRY_PENDING",
             "ENTRY_IN_PROGRESS",
             "MANUAL_ENTERED",
             "EXPIRED",
             "CHECK_FAILED");
+    assertThat(QuoteBomStatusCode.REUSED_CURRENT_MONTH.getLabel()).isEqualTo("已沿用");
+    assertThat(QuoteBomStatusCode.SYNCING.getLabel()).isEqualTo("同步中");
     assertThat(Arrays.stream(QuoteWritebackStatus.values()).map(QuoteWritebackStatus::getCode))
         .containsExactly("PENDING", "SUCCESS", "FAILED", "SKIPPED");
   }

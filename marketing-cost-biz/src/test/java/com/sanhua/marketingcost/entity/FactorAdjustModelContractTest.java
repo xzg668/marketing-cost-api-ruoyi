@@ -56,6 +56,7 @@ class FactorAdjustModelContractTest {
     FactorAdjustBatch batch = new FactorAdjustBatch();
     batch.setId(1001L);
     batch.setAdjustBatchNo("FAB202605160001");
+    batch.setAdjustType("MONTHLY");
     batch.setPricingMonth("2026-05");
     batch.setBusinessUnitType("COMMERCIAL");
     batch.setUsageScope("REPRICE_ONLY");
@@ -64,6 +65,7 @@ class FactorAdjustModelContractTest {
 
     assertThat(batchDto.getId()).isEqualTo(1001L);
     assertThat(batchDto.getAdjustBatchNo()).isEqualTo("FAB202605160001");
+    assertThat(batchDto.getAdjustType()).isEqualTo("MONTHLY");
     assertThat(batchDto.getUsageScope()).isEqualTo("REPRICE_ONLY");
     assertThat(batchDto.getChangedCount()).isEqualTo(2);
 

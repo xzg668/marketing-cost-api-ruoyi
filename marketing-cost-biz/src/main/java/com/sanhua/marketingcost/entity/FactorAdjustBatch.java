@@ -14,6 +14,8 @@ public class FactorAdjustBatch {
   @TableId(type = IdType.AUTO)
   private Long id;
   private String adjustBatchNo;
+  /** 调整类型：NORMAL 普通维护；MONTHLY 月度调价。 */
+  private String adjustType;
   private String pricingMonth;
   private String businessUnitType;
   /** 月度调价用途：只重算历史报价，或同时同步为日常报价生效价。 */

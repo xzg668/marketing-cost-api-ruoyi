@@ -66,12 +66,33 @@ class PriceLinkedImportResultClassifierImplTest {
     PriceItemImportResponse.BindingError error = response.getBindingErrors().getFirst();
     assertThat(error.getExcelRowNumber()).isEqualTo(3);
     assertThat(error.getMaterialCode()).isEqualTo("MAT-1001");
+    assertThat(error.getTokenName()).isEqualTo("材料含税价格");
     assertThat(error.getFormula()).contains("影响因素!$E$64");
     assertThat(error.getRefSheet()).isEqualTo("影响因素");
     assertThat(error.getRefRow()).isEqualTo(64);
     assertThat(error.getExistingFactorIdentity()).isEqualTo(1001L);
     assertThat(error.getNewFactorIdentity()).isEqualTo(9999L);
     assertThat(error.getReason()).contains("不一致");
+  }
+
+  @Test
+  @DisplayName("append：冲突写入跳过不重复生成绑定错误")
+  void appendConflictWriteSkipDoesNotDuplicateBindingError() {
+    PriceItemImportResponse response = new PriceItemImportResponse();
+    PriceLinkedImportResultClassifyRequest request = baseRequest();
+    request.getStandardDecisions().add(decision(
+        PriceLinkedStandardBindingServiceImpl.ACTION_CONFLICT, 501L, 1001L, 9999L));
+    PriceLinkedAutoBindingWriteResult writeResult = new PriceLinkedAutoBindingWriteResult();
+    writeResult.addConflictSkipped("材料含税价格",
+        "本次公式识别结果与历史标准关系不一致，默认不覆盖，请人工确认");
+    request.setWriteResult(writeResult);
+
+    classifier.append(response, request);
+
+    assertThat(response.getConflictBindingCount()).isEqualTo(1);
+    assertThat(response.getBindingErrorCount()).isEqualTo(1);
+    assertThat(response.getBindingErrors()).hasSize(1);
+    assertThat(response.getBindingErrors().getFirst().getReason()).contains("不一致");
   }
 
   @Test
@@ -120,6 +141,7 @@ class PriceLinkedImportResultClassifierImplTest {
 
     assertThat(response.getManualSkippedCount()).isEqualTo(1);
     assertThat(response.getBindingErrorCount()).isEqualTo(1);
+    assertThat(response.getBindingErrors().getFirst().getTokenName()).isEqualTo("材料含税价格");
     assertThat(response.getBindingErrors().getFirst().getReason()).contains("MANUAL");
   }
 

@@ -26,7 +26,7 @@ class LinkedPriceEnsureRequestTest {
   }
 
   @Test
-  void monthlyAdjustFactory_should_require_adjust_batch_and_pass_validation() {
+  void monthlyAdjustFactory_should_allow_optional_adjust_batch_and_pass_validation() {
     LinkedPriceEnsureRequest request =
         LinkedPriceEnsureRequest.monthlyAdjust(
             18L,
@@ -65,7 +65,7 @@ class LinkedPriceEnsureRequestTest {
   }
 
   @Test
-  void validate_monthlyAdjust_should_require_adjust_batch_id() {
+  void validate_monthlyAdjust_should_allow_missing_adjust_batch_id() {
     LinkedPriceEnsureRequest request =
         LinkedPriceEnsureRequest.monthlyAdjust(
             null,
@@ -73,6 +73,6 @@ class LinkedPriceEnsureRequestTest {
             "2026-05",
             new LinkedHashSet<>(List.of("MAT-1")));
 
-    assertEquals(List.of("MONTHLY_ADJUST 场景 adjustBatchId 不能为空"), request.validate());
+    assertTrue(request.validate().isEmpty());
   }
 }

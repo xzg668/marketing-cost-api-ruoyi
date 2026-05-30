@@ -162,7 +162,7 @@ class MakePartPriceCalcServiceImplTest {
     MakePartPriceGenerateResponse expected =
         new MakePartPriceGenerateResponse("MPPG-1", 1, 2, 2, 0, 0);
     expected.setStatusSummary(Map.of("OK", 2));
-    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05")).thenReturn(expected);
+    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(expected);
 
     MakePartPriceGenerateResponse response = service.generate(request);
 
@@ -181,13 +181,13 @@ class MakePartPriceCalcServiceImplTest {
     SecurityContextHolder.getContext().setAuthentication(auth);
     MakePartPriceGenerateResponse expected =
         new MakePartPriceGenerateResponse("MPPG-1", 1, 1, 1, 0, 0);
-    when(generationService.generateByOa("OA-001", "COMMERCIAL", YearMonth.now().toString()))
+    when(generationService.generateByOa("OA-001", "COMMERCIAL", YearMonth.now().toString(), null))
         .thenReturn(expected);
 
     MakePartPriceGenerateResponse response = service.generate(request);
 
     assertThat(response.getCalcBatchId()).isEqualTo("MPPG-1");
-    verify(generationService).generateByOa("OA-001", "COMMERCIAL", YearMonth.now().toString());
+    verify(generationService).generateByOa("OA-001", "COMMERCIAL", YearMonth.now().toString(), null);
   }
 
   @Test
@@ -218,7 +218,7 @@ class MakePartPriceCalcServiceImplTest {
   void exportHeadersMatchDesignAndExcludeDeprecatedFields() {
     assertThat(service.exportHeaders())
         .containsExactly(
-            "价格月份", "生成时间", "OA单号", "料号", "名称", "图号", "料件类型", "毛重(g)", "净重(g)", "零件价格", "原材料代码",
+            "价格月份", "取价时点", "生成时间", "OA单号", "料号", "名称", "图号", "料件类型", "毛重(g)", "净重(g)", "零件价格", "原材料代码",
             "原材料/毛坯", "原材料价格", "回收代码", "回收名称", "回收单价", "委外加工费", "是否完整取价", "状态", "备注")
         .doesNotContain("外径", "壁厚", "净长1", "净长2");
   }

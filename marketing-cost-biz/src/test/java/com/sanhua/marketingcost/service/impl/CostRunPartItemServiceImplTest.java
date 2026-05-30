@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.PackagePriceRequest;
 import com.sanhua.marketingcost.dto.PackagePriceResult;
@@ -32,6 +33,7 @@ import com.sanhua.marketingcost.service.pricing.PriceResolveResult;
 import com.sanhua.marketingcost.service.pricing.PriceResolver;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -97,6 +99,32 @@ class CostRunPartItemServiceImplTest {
     assertThat(items.get(0).getPriceSource()).isEqualTo("固定采购价");
     // hit 后 remark 应为空字符串（PriceResolveResult.hit 工厂约定），不应残留 NO_ROUTE / ERROR
     assertThat(items.get(0).getRemark()).isEmpty();
+  }
+
+  @Test
+  @DisplayName("T7：月度调价部品取价只返回内存明细，不写日常部品表")
+  void monthlyRepricePartItemsDoNotPersistDailyTable() {
+    when(costRunPartItemMapper.selectBaseByOaNo("OA-MRP"))
+        .thenReturn(new ArrayList<>(List.of(part("MAT-A"))));
+    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-A"), anyString(), any()))
+        .thenReturn(List.of(route(PriceTypeEnum.FIXED)));
+    PriceResolver fixedResolver =
+        stubResolver(PriceTypeEnum.FIXED, PriceResolveResult.hit(new BigDecimal("8.88"), "固定采购价"));
+    CostRunPartItemServiceImpl service = build(List.of(fixedResolver));
+
+    List<CostRunPartItemDto> items =
+        service.listByOaNo(
+            "OA-MRP",
+            LocalDate.of(2026, 5, 1),
+            CostRunContext.monthlyReprice(
+                "2026-05", 88L, "MRP-001", "COMMERCIAL", "OA-MRP", 1L, "P-001", null, null, "OBJ"),
+            false,
+            ignored -> {});
+
+    assertThat(items).hasSize(1);
+    assertThat(items.get(0).getUnitPrice()).isEqualByComparingTo("8.88");
+    verify(costRunPartItemMapper, never()).delete(any());
+    verify(costRunPartItemMapper, never()).insert(any(CostRunPartItem.class));
   }
 
   @Test
@@ -204,6 +232,47 @@ class CostRunPartItemServiceImplTest {
     assertThat(requestCaptor.getValue().getOaNo()).isEqualTo("OA-PKG");
     assertThat(requestCaptor.getValue().getTopProductCode()).isEqualTo("TOP-001");
     assertThat(requestCaptor.getValue().getSourceType()).isEqualTo("U9");
+  }
+
+  @Test
+  @DisplayName("T22：月度调价包装件请求使用 context.pricingMonth 和 price_as_of_time")
+  void monthlyPackageComponentUsesContextPriceAsOfTime() {
+    LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 26, 10, 30);
+    CostRunPartItemDto p = part("PKG-PARENT");
+    p.setProductCode("TOP-001");
+    when(costRunPartItemMapper.selectBaseByOaNo("OA-PKG-M"))
+        .thenReturn(new ArrayList<>(List.of(p)));
+    when(packageComponentIdentifyService.batchIdentify(any()))
+        .thenReturn(Map.of("PKG-PARENT", true));
+    when(packageComponentPriceService.ensurePrice(any(PackagePriceRequest.class)))
+        .thenReturn(packagePrice("PRICED", true, "12.345678", List.of()));
+    CostRunPartItemServiceImpl service = build(List.of());
+
+    service.listByOaNo(
+        "OA-PKG-M",
+        LocalDate.of(2026, 5, 26),
+        CostRunContext.monthlyReprice(
+            "2026-04",
+            88L,
+            "MRP-001",
+            "COMMERCIAL",
+            priceAsOfTime,
+            CostRunContext.BOM_SOURCE_POLICY_HISTORICAL_OA_BOM,
+            "OA-PKG-M",
+            1L,
+            "TOP-001",
+            null,
+            null,
+            "OBJ"),
+        false,
+        ignored -> {});
+
+    ArgumentCaptor<PackagePriceRequest> requestCaptor =
+        ArgumentCaptor.forClass(PackagePriceRequest.class);
+    verify(packageComponentPriceService).ensurePrice(requestCaptor.capture());
+    assertThat(requestCaptor.getValue().getPeriodMonth()).isEqualTo("2026-04");
+    assertThat(requestCaptor.getValue().getAsOfDate()).isEqualTo(LocalDate.parse("2026-05-26"));
+    assertThat(requestCaptor.getValue().getPriceAsOfTime()).isEqualTo(priceAsOfTime);
   }
 
   @Test

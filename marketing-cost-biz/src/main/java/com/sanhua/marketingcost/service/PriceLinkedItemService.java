@@ -13,6 +13,11 @@ import java.util.List;
 public interface PriceLinkedItemService {
   List<PriceLinkedItemDto> list(String pricingMonth, String materialCode);
 
+  default List<PriceLinkedItemDto> list(
+      String pricingMonth, String materialCode, boolean includeHistory) {
+    return list(pricingMonth, materialCode);
+  }
+
   PriceLinkedItemDto create(PriceLinkedItemUpdateRequest request);
 
   PriceLinkedItemDto update(Long id, PriceLinkedItemUpdateRequest request);
@@ -53,6 +58,19 @@ public interface PriceLinkedItemService {
       String sourceFileName,
       String effectiveStrategy) {
     return importExcel(input, pricingMonth, overwriteManual, businessUnitType, sourceFileName);
+  }
+
+  default PriceItemImportResponse importExcel(
+      InputStream input,
+      String pricingMonth,
+      boolean overwriteManual,
+      String businessUnitType,
+      String sourceFileName,
+      String effectiveStrategy,
+      String formulaEffectiveDate,
+      String factorPriceConflictStrategy) {
+    return importExcel(
+        input, pricingMonth, overwriteManual, businessUnitType, sourceFileName, effectiveStrategy);
   }
 
   default List<FactorUploadBatchDto> listImportHistory(

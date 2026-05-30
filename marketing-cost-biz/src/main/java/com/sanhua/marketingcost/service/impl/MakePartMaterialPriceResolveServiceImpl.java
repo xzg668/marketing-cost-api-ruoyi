@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
+import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.MakePartMaterialPriceResolveResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
@@ -10,6 +11,7 @@ import com.sanhua.marketingcost.service.pricing.PriceResolveResult;
 import com.sanhua.marketingcost.service.pricing.PriceResolver;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
@@ -47,6 +49,17 @@ public class MakePartMaterialPriceResolveServiceImpl implements MakePartMaterial
       LocalDate quoteDate,
       String oaNo,
       String businessUnitType) {
+    return resolveMaterialUnitPrice(materialCode, period, quoteDate, null, oaNo, businessUnitType);
+  }
+
+  @Override
+  public MakePartMaterialPriceResolveResult resolveMaterialUnitPrice(
+      String materialCode,
+      String period,
+      LocalDate quoteDate,
+      LocalDateTime priceAsOfTime,
+      String oaNo,
+      String businessUnitType) {
     String code = trimToNull(materialCode);
     if (code == null) {
       return MakePartMaterialPriceResolveResult.miss(
@@ -79,7 +92,8 @@ public class MakePartMaterialPriceResolveServiceImpl implements MakePartMaterial
         lastMissReason = "价格类型无 Resolver(price_type=" + priceTypeText + ")";
         continue;
       }
-      PriceResolveResult resolved = resolver.resolve(oaNo, item, route);
+      PriceResolveResult resolved =
+          resolver.resolve(oaNo, item, route, priceContext(period, quoteDate, priceAsOfTime, oaNo, businessUnitType));
       if (resolved.unitPrice() != null) {
         return MakePartMaterialPriceResolveResult.ok(
             code,
@@ -107,6 +121,27 @@ public class MakePartMaterialPriceResolveServiceImpl implements MakePartMaterial
     return priceTypeText(route)
         + "(priority=" + route.priority()
         + ",source=" + nullToDash(route.sourceSystem()) + ")";
+  }
+
+  private CostRunContext priceContext(
+      String period,
+      LocalDate quoteDate,
+      LocalDateTime priceAsOfTime,
+      String oaNo,
+      String businessUnitType) {
+    LocalDateTime resolvedPriceAsOfTime = priceAsOfTime == null && quoteDate != null
+        ? quoteDate.atStartOfDay()
+        : priceAsOfTime;
+    return CostRunContext.quote(
+        oaNo,
+        null,
+        null,
+        null,
+        null,
+        businessUnitType,
+        trimToNull(period),
+        resolvedPriceAsOfTime,
+        null);
   }
 
   private String priceTypeText(PriceTypeRoute route) {

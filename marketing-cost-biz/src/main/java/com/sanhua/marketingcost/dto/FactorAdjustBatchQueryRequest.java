@@ -9,6 +9,7 @@ public class FactorAdjustBatchQueryRequest {
   private String pricingMonth;
   private String businessUnitType;
   private String adjustBatchNo;
+  private String adjustType;
   private String usageScope;
   private String status;
   private String uploadedBy;

@@ -12,6 +12,7 @@ import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.FactorUploadBatchDto;
 import com.sanhua.marketingcost.dto.PriceItemImportResponse;
 import com.sanhua.marketingcost.dto.PriceLinkedImportBatchDetailDto;
+import com.sanhua.marketingcost.dto.PriceLinkedItemDto;
 import com.sanhua.marketingcost.service.FactorMonthlyPriceAdjustmentService;
 import com.sanhua.marketingcost.service.PriceLinkedItemService;
 import java.io.InputStream;
@@ -46,6 +47,22 @@ class PriceLinkedItemControllerTest {
   }
 
   @Test
+  @DisplayName("/items：includeHistory=true 透传给 Service 以展示历史版本")
+  void list_includeHistory_delegatesToService() {
+    PriceLinkedItemDto row = new PriceLinkedItemDto();
+    row.setId(11L);
+    when(priceLinkedItemService.list(eq("2026-05"), eq("M001"), eq(true)))
+        .thenReturn(List.of(row));
+
+    CommonResult<List<PriceLinkedItemDto>> result =
+        controller.list("2026-05", "M001", true);
+
+    assertThat(result.isSuccess()).isTrue();
+    assertThat(result.getData()).hasSize(1);
+    verify(priceLinkedItemService).list("2026-05", "M001", true);
+  }
+
+  @Test
   @DisplayName("/items/import-excel：正常透传 Service 结果")
   void importExcel_ok_delegatesToService() {
     PriceItemImportResponse mocked = new PriceItemImportResponse();
@@ -53,7 +70,8 @@ class PriceLinkedItemControllerTest {
     mocked.setLinkedCount(2);
     mocked.setFixedCount(1);
     when(priceLinkedItemService.importExcel(
-        any(InputStream.class), eq("2026-02"), eq(false), eq("COMMERCIAL"), eq("linked.xlsx"), eq(null)))
+        any(InputStream.class), eq("2026-02"), eq(false), eq("COMMERCIAL"), eq("linked.xlsx"),
+        eq(null), eq("2026-02-01"), eq("KEEP_EXISTING")))
         .thenReturn(mocked);
 
     MockMultipartFile file = new MockMultipartFile(
@@ -62,14 +80,43 @@ class PriceLinkedItemControllerTest {
         new byte[]{1, 2, 3});
 
     CommonResult<PriceItemImportResponse> result =
-        controller.importExcel(file, "2026-02", "COMMERCIAL", false, null);
+        controller.importExcel(
+            file, "2026-02", "COMMERCIAL", false, null, "2026-02-01", "KEEP_EXISTING");
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getBatchId()).isEqualTo("batch-uuid-lp-1");
     assertThat(result.getData().getLinkedCount()).isEqualTo(2);
     assertThat(result.getData().getFixedCount()).isEqualTo(1);
     verify(priceLinkedItemService).importExcel(
-        any(InputStream.class), eq("2026-02"), eq(false), eq("COMMERCIAL"), eq("linked.xlsx"), eq(null));
+        any(InputStream.class), eq("2026-02"), eq(false), eq("COMMERCIAL"), eq("linked.xlsx"),
+        eq(null), eq("2026-02-01"), eq("KEEP_EXISTING"));
+  }
+
+  @Test
+  @DisplayName("/items/import-excel：新参数为空时仍透传给 Service，由 Service 做默认值")
+  void importExcel_missingNewParams_delegatesForServiceDefaults() {
+    PriceItemImportResponse mocked = new PriceItemImportResponse();
+    mocked.setFormulaEffectiveDate("2026-02-01");
+    mocked.setFactorPriceConflictStrategy("KEEP_EXISTING");
+    when(priceLinkedItemService.importExcel(
+        any(InputStream.class), eq("2026-02"), eq(false), eq("COMMERCIAL"), eq("linked.xlsx"),
+        eq("APPEND_ONLY"), eq(null), eq(null)))
+        .thenReturn(mocked);
+
+    MockMultipartFile file = new MockMultipartFile(
+        "file", "linked.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        new byte[]{1, 2, 3});
+
+    CommonResult<PriceItemImportResponse> result =
+        controller.importExcel(file, "2026-02", "COMMERCIAL", false, "APPEND_ONLY", null, null);
+
+    assertThat(result.isSuccess()).isTrue();
+    assertThat(result.getData().getFormulaEffectiveDate()).isEqualTo("2026-02-01");
+    assertThat(result.getData().getFactorPriceConflictStrategy()).isEqualTo("KEEP_EXISTING");
+    verify(priceLinkedItemService).importExcel(
+        any(InputStream.class), eq("2026-02"), eq(false), eq("COMMERCIAL"), eq("linked.xlsx"),
+        eq("APPEND_ONLY"), eq(null), eq(null));
   }
 
   @Test
@@ -83,7 +130,8 @@ class PriceLinkedItemControllerTest {
         3, "203250445", "联动",
         "联动公式非法或无法解析: (Cu*0.59+Zn*0.41"));
     when(priceLinkedItemService.importExcel(
-        any(InputStream.class), eq("2026-02"), eq(true), eq("COMMERCIAL"), eq("linked.xlsx"), eq("OVERRIDE_EFFECTIVE")))
+        any(InputStream.class), eq("2026-02"), eq(true), eq("COMMERCIAL"), eq("linked.xlsx"),
+        eq("OVERRIDE_EFFECTIVE"), eq("2026-02-01"), eq("OVERWRITE")))
         .thenReturn(mocked);
 
     MockMultipartFile file = new MockMultipartFile(
@@ -92,7 +140,8 @@ class PriceLinkedItemControllerTest {
         new byte[]{9});
 
     CommonResult<PriceItemImportResponse> result =
-        controller.importExcel(file, "2026-02", "COMMERCIAL", true, "OVERRIDE_EFFECTIVE");
+        controller.importExcel(
+            file, "2026-02", "COMMERCIAL", true, "OVERRIDE_EFFECTIVE", "2026-02-01", "OVERWRITE");
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getSkipped()).isEqualTo(1);
@@ -109,12 +158,34 @@ class PriceLinkedItemControllerTest {
         new byte[0]);
 
     CommonResult<PriceItemImportResponse> result =
-        controller.importExcel(empty, "2026-02", "COMMERCIAL", false, null);
+        controller.importExcel(empty, "2026-02", "COMMERCIAL", false, null, null, null);
 
     assertThat(result.isSuccess()).isFalse();
     assertThat(result.getCode()).isEqualTo(GlobalErrorCodeConstants.BAD_REQUEST.getCode());
     verify(priceLinkedItemService, org.mockito.Mockito.never())
-        .importExcel(any(), any(), eq(false), any(), any(), any());
+        .importExcel(any(), any(), eq(false), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  @DisplayName("/items/import-excel：Service 报非法新参数时返回 BAD_REQUEST")
+  void importExcel_invalidNewParam_returnsBadRequest() {
+    when(priceLinkedItemService.importExcel(
+        any(InputStream.class), eq("2026-02"), eq(false), eq("COMMERCIAL"), eq("linked.xlsx"),
+        eq(null), eq("bad-date"), eq("KEEP_EXISTING")))
+        .thenThrow(new IllegalArgumentException("formulaEffectiveDate 格式错误，应为 yyyy-MM-dd: bad-date"));
+
+    MockMultipartFile file = new MockMultipartFile(
+        "file", "linked.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        new byte[]{1, 2, 3});
+
+    CommonResult<PriceItemImportResponse> result =
+        controller.importExcel(
+            file, "2026-02", "COMMERCIAL", false, null, "bad-date", "KEEP_EXISTING");
+
+    assertThat(result.isSuccess()).isFalse();
+    assertThat(result.getCode()).isEqualTo(GlobalErrorCodeConstants.BAD_REQUEST.getCode());
+    assertThat(result.getMsg()).contains("formulaEffectiveDate 格式错误");
   }
 
   @Test

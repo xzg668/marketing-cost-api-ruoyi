@@ -28,7 +28,7 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "INSERT INTO lp_bom_costing_row ("
           + "  oa_no, top_product_code, parent_code, material_code, level, path,"
           + "  qty_per_parent, qty_per_top, is_costing_row, subtree_cost_required,"
-          + "  raw_hierarchy_node_id, matched_drill_rule_id,"
+          + "  raw_hierarchy_node_id, matched_settlement_rule_id, settlement_row_type,"
           + "  material_name, material_spec, shape_attr, source_category, cost_element_code,"
           + "  bom_purpose, bom_version, u9_is_cost_flag, effective_from, effective_to,"
           + "  build_batch_id, built_at, period_month, as_of_date, raw_version_effective_from, business_unit_type"
@@ -36,7 +36,7 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "<foreach collection='rows' item='e' separator=','>"
           + "  (#{e.oaNo}, #{e.topProductCode}, #{e.parentCode}, #{e.materialCode}, #{e.level}, #{e.path},"
           + "   #{e.qtyPerParent}, #{e.qtyPerTop}, #{e.isCostingRow}, #{e.subtreeCostRequired},"
-          + "   #{e.rawHierarchyNodeId}, #{e.matchedDrillRuleId},"
+          + "   #{e.rawHierarchyNodeId}, #{e.matchedSettlementRuleId}, #{e.settlementRowType},"
           + "   #{e.materialName}, #{e.materialSpec}, #{e.shapeAttr}, #{e.sourceCategory}, #{e.costElementCode},"
           + "   #{e.bomPurpose}, #{e.bomVersion}, #{e.u9IsCostFlag}, #{e.effectiveFrom}, #{e.effectiveTo},"
           + "   #{e.buildBatchId}, #{e.builtAt}, #{e.periodMonth}, #{e.asOfDate}, #{e.rawVersionEffectiveFrom}, #{e.businessUnitType})"
@@ -50,7 +50,8 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "  is_costing_row = VALUES(is_costing_row),"
           + "  subtree_cost_required = VALUES(subtree_cost_required),"
           + "  raw_hierarchy_node_id = VALUES(raw_hierarchy_node_id),"
-          + "  matched_drill_rule_id = VALUES(matched_drill_rule_id),"
+          + "  matched_settlement_rule_id = VALUES(matched_settlement_rule_id),"
+          + "  settlement_row_type = VALUES(settlement_row_type),"
           + "  material_name = VALUES(material_name),"
           + "  material_spec = VALUES(material_spec),"
           + "  shape_attr = VALUES(shape_attr),"
@@ -70,4 +71,16 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
   /** T15：拿 OA 涉及的去重料号清单（主档同步入口用），不限 asOfDate / version。 */
   @Select("SELECT DISTINCT material_code FROM lp_bom_costing_row WHERE oa_no=#{oaNo}")
   List<String> selectDistinctMaterialCodesByOaNo(@Param("oaNo") String oaNo);
+
+  /**
+   * BOM 可用性检查只需要快照头信息，显式列出字段，避免旧库缺少新结算规则字段时
+   * MyBatis-Plus 默认 SELECT 全实体列导致检查失败。
+   */
+  @Select(
+      "SELECT bom_purpose, bom_version, effective_from, effective_to, build_batch_id "
+          + "FROM lp_bom_costing_row "
+          + "WHERE oa_no=#{oaNo} AND top_product_code=#{topProductCode} "
+          + "LIMIT 1")
+  BomCostingRow selectAvailabilitySnapshot(
+      @Param("oaNo") String oaNo, @Param("topProductCode") String topProductCode);
 }

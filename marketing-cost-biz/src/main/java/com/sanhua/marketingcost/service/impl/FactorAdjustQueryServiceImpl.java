@@ -55,6 +55,7 @@ public class FactorAdjustQueryServiceImpl implements FactorAdjustQueryService {
     eqText(query, FactorAdjustBatch::getPricingMonth, req.getPricingMonth());
     eqText(query, FactorAdjustBatch::getBusinessUnitType, req.getBusinessUnitType());
     likeText(query, FactorAdjustBatch::getAdjustBatchNo, req.getAdjustBatchNo());
+    eqText(query, FactorAdjustBatch::getAdjustType, req.getAdjustType());
     eqText(query, FactorAdjustBatch::getUsageScope, req.getUsageScope());
     eqText(query, FactorAdjustBatch::getStatus, req.getStatus());
     if (!Boolean.TRUE.equals(req.getIncludeAllUploaders())) {

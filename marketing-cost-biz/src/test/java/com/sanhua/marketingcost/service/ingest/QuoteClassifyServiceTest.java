@@ -20,6 +20,19 @@ class QuoteClassifyServiceTest {
   }
 
   @Test
+  void derivesProcessCodeFromFullOaFlowNumber() {
+    QuoteIngestRequest request = request(null, "批量品");
+    request.setOaNo("FI-SC-006-20260327-037");
+    request.setExternalFormNo(request.getOaNo());
+
+    QuoteClassificationResult result = service.classify(request);
+
+    assertThat(result.getBusinessUnitType()).isEqualTo("COMMERCIAL");
+    assertThat(result.getQuoteScenario()).isEqualTo("STANDARD_BATCH");
+    assertThat(result.getClassificationStatus()).isEqualTo("CONFIRMED");
+  }
+
+  @Test
   void fiSr005ClassifiesByBusinessType() {
     assertClassification("FI-SR-005", "新品", "COMMERCIAL", "家代商代销产品", "NEW_PRODUCT", "CONFIRMED");
     assertClassification("FI-SR-005", "批量品", "COMMERCIAL", "家代商代销产品", "MASS_PRODUCT", "CONFIRMED");

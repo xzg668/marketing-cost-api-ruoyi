@@ -9,6 +9,7 @@ import com.sanhua.marketingcost.dto.QuoteBasePriceDetectResult;
 import com.sanhua.marketingcost.entity.FactorIdentity;
 import com.sanhua.marketingcost.entity.FactorMonthlyPrice;
 import com.sanhua.marketingcost.entity.FactorMonthlyPriceChangeLog;
+import com.sanhua.marketingcost.enums.FactorPriceConflictStrategy;
 import com.sanhua.marketingcost.enums.PriceLinkedImportEffectiveStrategy;
 import com.sanhua.marketingcost.mapper.FactorIdentityMapper;
 import com.sanhua.marketingcost.mapper.FactorMonthlyPriceChangeLogMapper;
@@ -61,7 +62,7 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
       String operator,
       Long sourceUploadBatchId) {
     return upsert(parseResult, priceMonth, businessUnitType, operator, sourceUploadBatchId,
-        PriceLinkedImportEffectiveStrategy.OVERRIDE_EFFECTIVE.getCode());
+        FactorPriceConflictStrategy.KEEP_EXISTING.getCode());
   }
 
   @Override
@@ -72,7 +73,7 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
       String businessUnitType,
       String operator,
       Long sourceUploadBatchId,
-      String effectiveStrategy) {
+      String factorPriceConflictStrategy) {
     FactorMonthlyPriceUpsertResult result = new FactorMonthlyPriceUpsertResult();
     if (!StringUtils.hasText(priceMonth)) {
       result.getErrors().add(new FactorMonthlyPriceUpsertResult.RowError(
@@ -91,7 +92,7 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
     String normalizedMonth = normalize(priceMonth);
     String normalizedBu = normalize(businessUnitType);
     String normalizedOperator = normalize(operator);
-    String strategy = normalizeEffectiveStrategy(effectiveStrategy);
+    String strategy = normalizeFactorPriceConflictStrategy(factorPriceConflictStrategy);
     Map<String, FactorIdentity> identityCache = new HashMap<>();
     Map<String, FactorMonthlyPrice> priceCache = new HashMap<>();
 
@@ -110,7 +111,7 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
       String businessUnitType,
       String operator,
       Long sourceUploadBatchId,
-      String effectiveStrategy,
+      String factorPriceConflictStrategy,
       Map<String, FactorIdentity> identityCache,
       Map<String, FactorMonthlyPrice> priceCache,
       FactorMonthlyPriceUpsertResult result) {
@@ -133,7 +134,8 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
     }
 
     PriceUpsertOutcome priceOutcome = upsertMonthlyPrice(
-        identity, row, priceMonth, operator, sourceUploadBatchId, effectiveStrategy, priceCache, result);
+        identity, row, priceMonth, operator, sourceUploadBatchId,
+        factorPriceConflictStrategy, priceCache, result);
 
     FactorMonthlyPriceUpsertResult.RowResult rowResult =
         new FactorMonthlyPriceUpsertResult.RowResult();
@@ -235,7 +237,7 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
       String priceMonth,
       String operator,
       Long sourceUploadBatchId,
-      String effectiveStrategy,
+      String factorPriceConflictStrategy,
       Map<String, FactorMonthlyPrice> priceCache,
       FactorMonthlyPriceUpsertResult result) {
     String key = identity.getId() + "|" + priceMonth;
@@ -243,7 +245,7 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
     if (cached != null) {
       return handleExistingMonthlyPrice(
           cached, identity.getId(), row.getPrice(), priceMonth, operator,
-          sourceUploadBatchId, effectiveStrategy, priceCache, result, key);
+          sourceUploadBatchId, factorPriceConflictStrategy, priceCache, result, key);
     }
 
     FactorMonthlyPrice existing = factorMonthlyPriceMapper.selectOne(
@@ -255,7 +257,7 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
       priceCache.put(key, existing);
       return handleExistingMonthlyPrice(
           existing, identity.getId(), row.getPrice(), priceMonth, operator,
-          sourceUploadBatchId, effectiveStrategy, priceCache, result, key);
+          sourceUploadBatchId, factorPriceConflictStrategy, priceCache, result, key);
     }
 
     LocalDateTime now = LocalDateTime.now();
@@ -285,7 +287,7 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
       String priceMonth,
       String operator,
       Long sourceUploadBatchId,
-      String effectiveStrategy,
+      String factorPriceConflictStrategy,
       Map<String, FactorMonthlyPrice> priceCache,
       FactorMonthlyPriceUpsertResult result,
       String cacheKey) {
@@ -295,9 +297,10 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
       result.setMonthlyPriceUnchangedCount(result.getMonthlyPriceUnchangedCount() + 1);
       return new PriceUpsertOutcome(existing, "NO_CHANGE", oldPrice);
     }
-    if (PriceLinkedImportEffectiveStrategy.APPEND_ONLY.getCode().equals(effectiveStrategy)) {
+    if (FactorPriceConflictStrategy.KEEP_EXISTING.getCode().equals(factorPriceConflictStrategy)) {
       result.setMonthlyPriceSkippedCount(result.getMonthlyPriceSkippedCount() + 1);
-      return new PriceUpsertOutcome(existing, "SKIP_EXISTING", oldPrice);
+      result.setMonthlyPriceConflictCount(result.getMonthlyPriceConflictCount() + 1);
+      return new PriceUpsertOutcome(existing, "CONFLICT_KEEP_EXISTING", oldPrice);
     }
     existing.setPrice(newPrice);
     existing.setSourceUploadBatchId(sourceUploadBatchId);
@@ -306,17 +309,29 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
     factorMonthlyPriceMapper.updateById(existing);
     priceCache.put(cacheKey, existing);
     result.setMonthlyPriceUpdatedCount(result.getMonthlyPriceUpdatedCount() + 1);
+    result.setMonthlyPriceOverwriteCount(result.getMonthlyPriceOverwriteCount() + 1);
     insertChangeLog(existing.getId(), factorIdentityId, priceMonth, oldPrice,
         newPrice, "UPDATE", sourceUploadBatchId, operator);
     return new PriceUpsertOutcome(existing, "UPDATE", oldPrice);
   }
 
-  private String normalizeEffectiveStrategy(String effectiveStrategy) {
-    String normalized = normalize(effectiveStrategy);
-    if (PriceLinkedImportEffectiveStrategy.APPEND_ONLY.getCode().equals(normalized)) {
-      return normalized;
+  private String normalizeFactorPriceConflictStrategy(String factorPriceConflictStrategy) {
+    String normalized = normalize(factorPriceConflictStrategy);
+    if (!StringUtils.hasText(normalized)) {
+      return FactorPriceConflictStrategy.KEEP_EXISTING.getCode();
     }
-    return PriceLinkedImportEffectiveStrategy.OVERRIDE_EFFECTIVE.getCode();
+    String upper = normalized.toUpperCase(java.util.Locale.ROOT);
+    if (FactorPriceConflictStrategy.KEEP_EXISTING.getCode().equals(upper)
+        || PriceLinkedImportEffectiveStrategy.APPEND_ONLY.getCode().equals(upper)) {
+      return FactorPriceConflictStrategy.KEEP_EXISTING.getCode();
+    }
+    if (FactorPriceConflictStrategy.OVERWRITE.getCode().equals(upper)
+        || PriceLinkedImportEffectiveStrategy.OVERRIDE_EFFECTIVE.getCode().equals(upper)) {
+      return FactorPriceConflictStrategy.OVERWRITE.getCode();
+    }
+    throw new IllegalArgumentException(
+        "factorPriceConflictStrategy 非法，仅支持 KEEP_EXISTING / OVERWRITE: "
+            + factorPriceConflictStrategy);
   }
 
   private void insertChangeLog(

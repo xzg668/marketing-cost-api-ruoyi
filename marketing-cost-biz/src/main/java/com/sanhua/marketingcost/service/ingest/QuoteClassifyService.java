@@ -128,7 +128,10 @@ public class QuoteClassifyService {
       return null;
     }
     QuoteIngestHeaderRequest header = request.getHeader();
-    return header == null ? null : trimToNull(header.getProcessCode());
+    return QuoteProcessCodeResolver.resolve(
+        header == null ? null : header.getProcessCode(),
+        request.getOaNo(),
+        request.getExternalFormNo());
   }
 
   private boolean hasClassificationContext(QuoteIngestRequest request) {

@@ -17,7 +17,7 @@ public interface FactorMonthlyPriceUpsertService {
       String businessUnitType,
       String operator,
       Long sourceUploadBatchId,
-      String effectiveStrategy) {
+      String factorPriceConflictStrategy) {
     return upsert(parseResult, priceMonth, businessUnitType, operator, sourceUploadBatchId);
   }
 }

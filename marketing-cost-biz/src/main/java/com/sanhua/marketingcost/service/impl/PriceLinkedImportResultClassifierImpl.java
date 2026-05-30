@@ -87,9 +87,15 @@ public class PriceLinkedImportResultClassifierImpl implements PriceLinkedImportR
         continue;
       }
       if ("SKIPPED_MANUAL".equals(row.getAction())) {
-        addError(response, baseError(request, row.getReason()));
+        BindingError error = baseError(request, row.getReason());
+        error.setTokenName(row.getTokenName());
+        addError(response, error);
+      } else if ("SKIPPED_CONFLICT".equals(row.getAction())) {
+        // 历史关系冲突已由 StandardBindingDecision 生成冲突明细，避免重复展示。
       } else if ("ERROR".equals(row.getAction())) {
-        addError(response, baseError(request, row.getReason()));
+        BindingError error = baseError(request, row.getReason());
+        error.setTokenName(row.getTokenName());
+        addError(response, error);
       }
     }
   }
@@ -98,6 +104,7 @@ public class PriceLinkedImportResultClassifierImpl implements PriceLinkedImportR
       PriceLinkedImportResultClassifyRequest request,
       StandardBindingDecision decision) {
     BindingError error = baseError(request, decision.getReason());
+    error.setTokenName(decision.getTokenName());
     error.setExistingFactorIdentity(decision.getOldFactorIdentityId());
     error.setNewFactorIdentity(decision.getNewFactorIdentityId());
     BindingCandidate candidate = decision.getCandidate();

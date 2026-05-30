@@ -3,8 +3,6 @@ package com.sanhua.marketingcost.controller;
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
-import com.sanhua.marketingcost.dto.ingest.QuoteBomBatchSyncRequest;
-import com.sanhua.marketingcost.dto.ingest.QuoteBomBatchSyncResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusCheckRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteExcelImportCommitResponse;
@@ -20,6 +18,7 @@ import com.sanhua.marketingcost.service.ingest.QuoteExcelTemplateFile;
 import com.sanhua.marketingcost.service.ingest.QuoteExcelTemplateService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestService;
+import com.sanhua.marketingcost.service.ingest.QuotePdfImportService;
 import com.sanhua.marketingcost.service.ingest.QuoteRequestQueryService;
 import java.io.IOException;
 import java.net.URLEncoder;
@@ -44,6 +43,7 @@ public class QuoteIngestController {
 
   private final QuoteIngestService quoteIngestService;
   private final QuoteExcelImportService quoteExcelImportService;
+  private final QuotePdfImportService quotePdfImportService;
   private final QuoteExcelTemplateService quoteExcelTemplateService;
   private final QuoteBomStatusService quoteBomStatusService;
   private final QuoteRequestQueryService quoteRequestQueryService;
@@ -51,11 +51,13 @@ public class QuoteIngestController {
   public QuoteIngestController(
       QuoteIngestService quoteIngestService,
       QuoteExcelImportService quoteExcelImportService,
+      QuotePdfImportService quotePdfImportService,
       QuoteExcelTemplateService quoteExcelTemplateService,
       QuoteBomStatusService quoteBomStatusService,
       QuoteRequestQueryService quoteRequestQueryService) {
     this.quoteIngestService = quoteIngestService;
     this.quoteExcelImportService = quoteExcelImportService;
+    this.quotePdfImportService = quotePdfImportService;
     this.quoteExcelTemplateService = quoteExcelTemplateService;
     this.quoteBomStatusService = quoteBomStatusService;
     this.quoteRequestQueryService = quoteRequestQueryService;
@@ -90,6 +92,30 @@ public class QuoteIngestController {
     try {
       return CommonResult.success(
           quoteExcelImportService.commit(file.getInputStream(), file.getOriginalFilename()));
+    } catch (IOException | QuoteIngestException ex) {
+      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
+    }
+  }
+
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:import')")
+  @PostMapping("/pdf/preview")
+  public CommonResult<QuoteExcelImportPreviewResponse> previewPdf(
+      @RequestParam("file") MultipartFile file) {
+    try {
+      return CommonResult.success(
+          quotePdfImportService.preview(file.getInputStream(), file.getOriginalFilename()));
+    } catch (IOException | QuoteIngestException ex) {
+      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
+    }
+  }
+
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:import')")
+  @PostMapping("/pdf/commit")
+  public CommonResult<QuoteExcelImportCommitResponse> commitPdf(
+      @RequestParam("file") MultipartFile file) {
+    try {
+      return CommonResult.success(
+          quotePdfImportService.commit(file.getInputStream(), file.getOriginalFilename()));
     } catch (IOException | QuoteIngestException ex) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
     }
@@ -141,13 +167,12 @@ public class QuoteIngestController {
   }
 
   @PreAuthorize("@ss.hasAnyPermi('ingest:quote:bom-check')")
-  @PostMapping("/bom-status/batch-sync")
-  public CommonResult<QuoteBomBatchSyncResponse> batchSyncBomStatus(
-      @RequestBody QuoteBomBatchSyncRequest request) {
+  @PostMapping("/bom-status/check-for-cost-run")
+  public CommonResult<QuoteBomStatusResponse> checkBomStatusForCostRun(
+      @RequestBody QuoteBomStatusCheckRequest request) {
     try {
       return CommonResult.success(
-          quoteBomStatusService.batchSyncFromU9Source(
-              request == null ? null : request.getOaFormItemIds()));
+          quoteBomStatusService.checkForCostRun(request == null ? null : request.getOaNo()));
     } catch (QuoteIngestException ex) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
     }

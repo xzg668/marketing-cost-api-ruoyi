@@ -28,6 +28,7 @@ import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -83,18 +84,36 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
   @Override
   public MakePartPriceGenerateResponse generateByOa(
       String oaNo, String businessUnitType, String period) {
-    return generate(trim(oaNo), trim(businessUnitType), trim(period), null);
+    return generateByOa(oaNo, businessUnitType, period, null);
+  }
+
+  @Override
+  public MakePartPriceGenerateResponse generateByOa(
+      String oaNo, String businessUnitType, String period, LocalDateTime priceAsOfTime) {
+    return generate(trim(oaNo), trim(businessUnitType), trim(period), priceAsOfTime, null);
   }
 
   @Override
   public MakePartPriceGenerateResponse generateByMaterial(
       String parentMaterialNo, String businessUnitType, String period) {
-    return generate(null, trim(businessUnitType), trim(period), trim(parentMaterialNo));
+    return generateByMaterial(parentMaterialNo, businessUnitType, period, null);
+  }
+
+  @Override
+  public MakePartPriceGenerateResponse generateByMaterial(
+      String parentMaterialNo, String businessUnitType, String period, LocalDateTime priceAsOfTime) {
+    return generate(null, trim(businessUnitType), trim(period), priceAsOfTime, trim(parentMaterialNo));
   }
 
   @Override
   public MakePartPriceGenerateResponse generateAllLatest(String businessUnitType, String period) {
-    return generate(null, trim(businessUnitType), trim(period), null);
+    return generateAllLatest(businessUnitType, period, null);
+  }
+
+  @Override
+  public MakePartPriceGenerateResponse generateAllLatest(
+      String businessUnitType, String period, LocalDateTime priceAsOfTime) {
+    return generate(null, trim(businessUnitType), trim(period), priceAsOfTime, null);
   }
 
   @Override
@@ -103,10 +122,15 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
   }
 
   private MakePartPriceGenerateResponse generate(
-      String oaNo, String businessUnitType, String period, String parentMaterialNo) {
+      String oaNo,
+      String businessUnitType,
+      String period,
+      LocalDateTime requestedPriceAsOfTime,
+      String parentMaterialNo) {
     String calcBatchId = newCalcBatchId();
     String pricingPeriod = pricingPeriod(period);
-    LocalDate quoteDate = quoteDate(pricingPeriod);
+    LocalDateTime priceAsOfTime = priceAsOfTime(pricingPeriod, requestedPriceAsOfTime);
+    LocalDate quoteDate = priceAsOfTime.toLocalDate();
     List<BomCostingRow> parents =
         sourceDataService.listManufacturedParents(oaNo, businessUnitType, null).stream()
             .filter(parent -> parentMaterialNo == null
@@ -114,10 +138,11 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
             .toList();
     MakePartGenerationPlan plan =
         buildGenerationPlan(parents, businessUnitType, pricingPeriod, quoteDate);
+    plan.priceAsOfTime = priceAsOfTime;
     List<MakePartPriceCalcRow> rows = new ArrayList<>();
     for (BomCostingRow parent : parents) {
       rows.addAll(buildRowsForParent(
-          calcBatchId, parent, businessUnitType, pricingPeriod, quoteDate, plan));
+          calcBatchId, parent, businessUnitType, pricingPeriod, quoteDate, priceAsOfTime, plan));
     }
     List<MakePartPriceCalcRow> calculatedRows = calculator.calculate(rows);
     upsertRows(calculatedRows);
@@ -142,14 +167,17 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     if (row == null || !StringUtils.hasText(row.getParentMaterialNo())) {
       return null;
     }
-    // PPR-11 当前最终价口径：同一 OA + 父件 + 子件只保留一条。
+    // 月度调价必须按取价时点保留快照；普通生成使用期间月末哨兵值，仍保持重复生成覆盖当前结果。
     var query = Wrappers.lambdaQuery(MakePartPriceCalcRow.class)
         .eq(MakePartPriceCalcRow::getOaNo, blankIfNull(row.getOaNo()))
+        .eq(MakePartPriceCalcRow::getPricingMonth, blankIfNull(row.getPricingMonth()))
+        .eq(MakePartPriceCalcRow::getPriceAsOfTime, row.getPriceAsOfTime())
         .eq(MakePartPriceCalcRow::getParentMaterialNo, trim(row.getParentMaterialNo()))
         .orderByDesc(MakePartPriceCalcRow::getId)
         .last("LIMIT 1");
     eqOrBlank(query, MakePartPriceCalcRow::getBusinessUnitType, row.getBusinessUnitType());
     eqOrBlank(query, MakePartPriceCalcRow::getChildMaterialNo, row.getChildMaterialNo());
+    eqOrBlank(query, MakePartPriceCalcRow::getScrapCode, row.getScrapCode());
     List<MakePartPriceCalcRow> existingRows = calcRowMapper.selectList(query);
     if (existingRows == null || existingRows.isEmpty()) {
       return null;
@@ -221,12 +249,14 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       String businessUnitType,
       String period,
       LocalDate quoteDate,
+      LocalDateTime priceAsOfTime,
       MakePartGenerationPlan plan) {
     String parentCode = trim(parent.getMaterialCode());
     List<BomU9Source> children = plan.children(parentCode);
     if (children.isEmpty()) {
       MakePartPriceCalcRow missingBom = baseRow(calcBatchId, parent, businessUnitType);
       missingBom.setPricingMonth(period);
+      missingBom.setPriceAsOfTime(priceAsOfTime);
       missingBom.setStatus(STATUS_MISSING_BOM);
       missingBom.setRemark("缺 U9 直接子项(parent_material_no=" + parentCode + ")");
       return List.of(missingBom);
@@ -234,7 +264,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     List<MakePartPriceCalcRow> rows = new ArrayList<>();
     for (BomU9Source child : children) {
       rows.addAll(buildRowsForChild(
-          calcBatchId, parent, child, businessUnitType, period, quoteDate, plan));
+          calcBatchId, parent, child, businessUnitType, period, quoteDate, priceAsOfTime, plan));
     }
     return rows;
   }
@@ -246,13 +276,19 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       String businessUnitType,
       String period,
       LocalDate quoteDate,
+      LocalDateTime priceAsOfTime,
       MakePartGenerationPlan plan) {
     MakePartProcessTypeResult processType = processTypePolicy.resolve(child.getStockUnit());
     MakePartWeightResult weight =
         weightService.resolveWeights(parent.getMaterialCode(), child, processType.getItemProcessType());
     MakePartMaterialPriceResolveResult rawPrice =
         priceResolveService.resolveMaterialUnitPrice(
-            child.getChildMaterialNo(), period, quoteDate, parent.getOaNo(), businessUnitType);
+            child.getChildMaterialNo(),
+            period,
+            quoteDate,
+            priceAsOfTime,
+            parent.getOaNo(),
+            businessUnitType);
     List<MaterialScrapRef> scraps = plan.scraps(child.getChildMaterialNo());
     if (scraps.isEmpty()) {
       MakePartPriceCalcRow row =
@@ -269,7 +305,12 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     for (MaterialScrapRef scrap : scraps) {
       MakePartMaterialPriceResolveResult scrapPrice =
           priceResolveService.resolveMaterialUnitPrice(
-              scrap.getScrapCode(), period, quoteDate, parent.getOaNo(), businessUnitType);
+              scrap.getScrapCode(),
+              period,
+              quoteDate,
+              priceAsOfTime,
+              parent.getOaNo(),
+              businessUnitType);
       MakePartPriceCalcRow row =
           childBaseRow(calcBatchId, parent, child, businessUnitType, processType, weight, rawPrice, plan);
       row.setScrapCode(trim(scrap.getScrapCode()));
@@ -295,6 +336,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       MakePartGenerationPlan plan) {
     MakePartPriceCalcRow row = baseRow(calcBatchId, parent, businessUnitType);
     row.setPricingMonth(plan.period);
+    row.setPriceAsOfTime(plan.priceAsOfTime);
     row.setItemProcessType(processType.getItemProcessType());
     row.setChildMaterialNo(trim(child.getChildMaterialNo()));
     row.setChildMaterialName(trim(child.getChildMaterialName()));
@@ -378,6 +420,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     row.setParentMaterialName(trim(parent.getMaterialName()));
     row.setDrawingNo(trim(parent.getMaterialSpec()));
     row.setChildMaterialNo("");
+    row.setScrapCode("");
     row.setOutsourceFee(BigDecimal.ZERO);
     return row;
   }
@@ -540,6 +583,14 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     return LocalDate.now();
   }
 
+  private LocalDateTime priceAsOfTime(String period, LocalDateTime requestedPriceAsOfTime) {
+    if (requestedPriceAsOfTime != null) {
+      return requestedPriceAsOfTime;
+    }
+    // 普通价格准备没有批次取价时点，使用期间月末作为稳定哨兵值，避免重复生成随系统时间漂移。
+    return quoteDate(period).atTime(LocalTime.of(23, 59, 59));
+  }
+
   private String pricingPeriod(String period) {
     return StringUtils.hasText(period) ? period.trim() : YearMonth.now().toString();
   }
@@ -570,6 +621,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
 
   private static class MakePartGenerationPlan {
     private String period;
+    private LocalDateTime priceAsOfTime;
     private final Map<String, List<BomU9Source>> childrenByParent = new LinkedHashMap<>();
     private final Map<String, List<MaterialScrapRef>> scrapsByChild = new LinkedHashMap<>();
     private final Map<String, Set<String>> linkedCodesByOa = new LinkedHashMap<>();

@@ -12,7 +12,9 @@
 
   <modules>
     <module>yudao-framework</module>
+    <module>marketing-cost-core</module>
     <module>marketing-cost-biz</module>
+    <module>sales-cost-worker</module>
   </modules>
 
   <properties>

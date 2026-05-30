@@ -1,45 +1,40 @@
 package com.sanhua.marketingcost.service.ingest;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.sanhua.marketingcost.entity.MaterialMasterRaw;
-import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
-import java.util.List;
+import com.sanhua.marketingcost.dto.quotebom.QuoteProductTypeResolveResult;
+import com.sanhua.marketingcost.enums.QuoteProductType;
+import com.sanhua.marketingcost.service.QuoteProductTypeResolveService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-@DisplayName("U9 裸品 / 非裸品判定")
+@DisplayName("U9 裸品 / 非裸品判定兼容适配")
 class U9ProductPackagingTypeResolverTest {
 
   @Test
-  @DisplayName("main_category_code 前两位为 11 判定为裸品")
+  @DisplayName("新产品形态 BARE 适配为旧 NAKED_PRODUCT")
   void resolvesNakedProductByMainCategoryPrefix11() {
-    MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
-    when(mapper.selectByLatestBatchAndCodes(any(), isNull()))
-        .thenReturn(List.of(raw("MAT-NAKED", "110101")));
+    QuoteProductTypeResolveService service = mock(QuoteProductTypeResolveService.class);
+    when(service.resolve(" MAT-NAKED "))
+        .thenReturn(result("MAT-NAKED", QuoteProductType.BARE, "110101"));
 
-    U9ProductPackagingTypeResolver resolver = new U9ProductPackagingTypeResolver(mapper);
+    U9ProductPackagingTypeResolver resolver = new U9ProductPackagingTypeResolver(service);
     U9ProductPackagingTypeResolver.Result result = resolver.resolve(" MAT-NAKED ");
 
     assertThat(result.productPackagingType()).isEqualTo(U9ProductPackagingTypeResolver.NAKED_PRODUCT);
     assertThat(result.mainCategoryCode()).isEqualTo("110101");
-    verify(mapper).selectByLatestBatchAndCodes(List.of("MAT-NAKED"), null);
   }
 
   @Test
-  @DisplayName("main_category_code 前两位不是 11 判定为非裸品")
+  @DisplayName("新产品形态 NON_BARE 适配为旧 PACKAGED_PRODUCT")
   void resolvesPackagedProductWhenMainCategoryDoesNotStartWith11() {
-    MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
-    when(mapper.selectByLatestBatchAndCodes(any(), isNull()))
-        .thenReturn(List.of(raw("MAT-PACKAGED", "120101")));
+    QuoteProductTypeResolveService service = mock(QuoteProductTypeResolveService.class);
+    when(service.resolve("MAT-PACKAGED"))
+        .thenReturn(result("MAT-PACKAGED", QuoteProductType.NON_BARE, "120101"));
 
-    U9ProductPackagingTypeResolver resolver = new U9ProductPackagingTypeResolver(mapper);
+    U9ProductPackagingTypeResolver resolver = new U9ProductPackagingTypeResolver(service);
     U9ProductPackagingTypeResolver.Result result = resolver.resolve("MAT-PACKAGED");
 
     assertThat(result.productPackagingType()).isEqualTo(U9ProductPackagingTypeResolver.PACKAGED_PRODUCT);
@@ -47,14 +42,17 @@ class U9ProductPackagingTypeResolverTest {
   }
 
   @Test
-  @DisplayName("查不到 raw 或 main_category_code 为空时保持 UNKNOWN")
+  @DisplayName("新产品形态 DATA_MISSING / UNKNOWN 适配为旧 UNKNOWN")
   void keepsUnknownWhenRawMissingOrMainCategoryBlank() {
-    MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
-    when(mapper.selectByLatestBatchAndCodes(List.of("MAT-MISSING"), null)).thenReturn(List.of());
-    when(mapper.selectByLatestBatchAndCodes(List.of("MAT-BLANK"), null))
-        .thenReturn(List.of(raw("MAT-BLANK", " ")));
+    QuoteProductTypeResolveService service = mock(QuoteProductTypeResolveService.class);
+    when(service.resolve("MAT-MISSING"))
+        .thenReturn(result("MAT-MISSING", QuoteProductType.DATA_MISSING, null));
+    when(service.resolve("MAT-BLANK"))
+        .thenReturn(result("MAT-BLANK", QuoteProductType.UNKNOWN, null));
+    when(service.resolve(" "))
+        .thenReturn(result(null, QuoteProductType.UNKNOWN, null));
 
-    U9ProductPackagingTypeResolver resolver = new U9ProductPackagingTypeResolver(mapper);
+    U9ProductPackagingTypeResolver resolver = new U9ProductPackagingTypeResolver(service);
 
     assertThat(resolver.resolve("MAT-MISSING").productPackagingType())
         .isEqualTo(U9ProductPackagingTypeResolver.UNKNOWN);
@@ -62,15 +60,11 @@ class U9ProductPackagingTypeResolverTest {
         .isEqualTo(U9ProductPackagingTypeResolver.UNKNOWN);
     assertThat(resolver.resolve(" ").productPackagingType())
         .isEqualTo(U9ProductPackagingTypeResolver.UNKNOWN);
-    verify(mapper, never()).selectByLatestBatchAndCodes(List.of(""), null);
   }
 
-  private static MaterialMasterRaw raw(String materialCode, String mainCategoryCode) {
-    MaterialMasterRaw raw = new MaterialMasterRaw();
-    raw.setMaterialCode(materialCode);
-    raw.setMainCategoryCode(mainCategoryCode);
-    raw.setImportBatchId("u9-latest");
-    raw.setActiveFlag(1);
-    return raw;
+  private static QuoteProductTypeResolveResult result(
+      String quoteProductCode, QuoteProductType productType, String mainCategoryCode) {
+    return new QuoteProductTypeResolveResult(
+        quoteProductCode, productType, mainCategoryCode, null, null, null, null);
   }
 }

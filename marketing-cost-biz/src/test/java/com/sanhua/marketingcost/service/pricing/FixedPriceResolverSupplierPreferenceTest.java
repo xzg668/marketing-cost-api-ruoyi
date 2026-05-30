@@ -156,8 +156,7 @@ class FixedPriceResolverSupplierPreferenceTest {
     verify(mapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment())
         .contains("material_code", "source_type", "IN", "fixed_price", "IS NOT NULL",
-            "ORDER BY", "pricing_month", "id")
-        .doesNotContain("effective_from");
+            "effective_from", "effective_to", "ORDER BY", "pricing_month", "id");
   }
 
   @Test

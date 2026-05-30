@@ -128,6 +128,33 @@ class QuoteRequestQueryServiceImplTest {
   }
 
   @Test
+  void reusedCurrentMonthIsCostReadyAndSyncingBlocksCalculation() {
+    stubRequestPage(form("OA-T8-REUSED", "FI-SC-020", "CONFIRMED"));
+    stubListAggregates(
+        List.of(item(15L, "MAT-1006"), item(16L, "MAT-1007")),
+        List.of(status(15L, "REUSED_CURRENT_MONTH"), status(16L, "MANUAL_ENTERED")),
+        log(11L));
+
+    PageResult<QuoteRequestListItemResponse> reusedResult =
+        service.pageRequests(1, 20, "OA-T8-REUSED", null, null, null);
+
+    assertThat(reusedResult.getList().get(0).getBomAggregateStatus()).isEqualTo("SYNCED");
+    assertThat(reusedResult.getList().get(0).getCalculable()).isTrue();
+
+    stubRequestPage(form("OA-T8-SYNCING", "FI-SC-020", "CONFIRMED"));
+    stubListAggregates(
+        List.of(item(17L, "MAT-1008")),
+        List.of(status(17L, "SYNCING")),
+        log(12L));
+
+    PageResult<QuoteRequestListItemResponse> syncingResult =
+        service.pageRequests(1, 20, "OA-T8-SYNCING", null, null, null);
+
+    assertThat(syncingResult.getList().get(0).getBomAggregateStatus()).isEqualTo("SYNCING");
+    assertThat(syncingResult.getList().get(0).getCalculable()).isFalse();
+  }
+
+  @Test
   void detailReturnsHeaderItemsFeesBomStatusAndIngestSummary() {
     OaForm form = form("OA-T8-004", "FI-SC-020", "CONFIRMED");
     when(oaFormMapper.selectOne(any())).thenReturn(form);

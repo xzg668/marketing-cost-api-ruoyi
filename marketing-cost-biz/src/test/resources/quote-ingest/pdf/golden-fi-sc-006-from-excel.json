@@ -1,0 +1,176 @@
+{
+  "valid": true,
+  "formCount": 1,
+  "itemCount": 1,
+  "feeCount": 0,
+  "warnings": [
+    {
+      "fieldPath": "header.goldPrice",
+      "code": "GOLD_PRICE_EMPTY"
+    }
+  ],
+  "forms": [
+    {
+      "valid": true,
+      "accepted": true,
+      "ingestStatus": "RECEIVED",
+      "sourceType": "EXCEL",
+      "externalFormNo": "FI-SC-006-20260327-037",
+      "oaNo": "FI-SC-006-20260327-037",
+      "processCode": "FI-SC-006",
+      "quoteScenario": "STANDARD_BATCH",
+      "classificationStatus": "CONFIRMED",
+      "classificationPending": false,
+      "itemCount": 1,
+      "accountingContext": {
+        "businessUnitType": "COMMERCIAL",
+        "accountingPeriodMonth": "2026-03",
+        "expenseProductCategory": "商用直销产品",
+        "sourceCompany": "浙江三花商用制冷有限公司",
+        "sourceBusinessDivision": "商用压缩事业部",
+        "customer": "DTN group, s.r.o.",
+        "productAttr": "商用产品",
+        "quoteScenario": "STANDARD_BATCH",
+        "classificationStatus": "CONFIRMED",
+        "ruleCode": "RULE_FI_SC_006",
+        "confidence": 100
+      },
+      "header": {
+        "sourceType": "EXCEL",
+        "sourceSystem": "EXCEL_TEMPLATE",
+        "externalFormNo": "FI-SC-006-20260327-037",
+        "oaNo": "FI-SC-006-20260327-037",
+        "processCode": "FI-SC-006",
+        "processName": "标准品/批量品成本核算流程",
+        "applyDate": "2026-03-27",
+        "customer": "DTN group, s.r.o.",
+        "applicantUnit": "商用制冷业务单元",
+        "sourceCompany": "浙江三花商用制冷有限公司",
+        "sourceBusinessDivision": "商用压缩事业部",
+        "expenseProductCategory": "商用直销产品",
+        "applicantDept": "欧美业务管理部",
+        "applicantOffice": "欧洲业务管理部",
+        "applicantName": "何之美",
+        "urgency": "正常",
+        "productAttr": "商用产品",
+        "priceLinkMode": "固定",
+        "overseasSalesMode": "是",
+        "tradeTerms": "DDP LEDZINY",
+        "exchangeRate": "7.2000",
+        "copperPrice": "90000.00",
+        "sus304Price": "20000.00",
+        "sus316lPrice": "32500.00"
+      },
+      "items": [
+        {
+          "externalLineId": "OA原始表单!R30",
+          "seq": 1,
+          "productName": "四通换向阀阀体",
+          "customerDrawing": "SHF-AA-79",
+          "materialNo": "1079900000536",
+          "productAttr": "商用产品",
+          "businessType": "批量品",
+          "annualVolume": "1",
+          "validMonth": 1,
+          "classificationStatus": "CONFIRMED",
+          "quoteScenario": "STANDARD_BATCH",
+          "businessUnitType": "COMMERCIAL"
+        }
+      ],
+      "extraFees": []
+    }
+  ],
+  "extraFields": [
+    {
+      "fieldCode": "owner1",
+      "fieldName": "流程OWNER1",
+      "fieldValue": "部晶",
+      "valueType": "TEXT",
+      "sourceFieldName": "流程OWNER1",
+      "sourceFieldPath": "'OA原始表单'!E3"
+    },
+    {
+      "fieldCode": "owner2",
+      "fieldName": "流程OWNER2",
+      "fieldValue": "陈春君",
+      "valueType": "TEXT",
+      "sourceFieldName": "流程OWNER2",
+      "sourceFieldPath": "'OA原始表单'!Q3"
+    },
+    {
+      "fieldCode": "authorizedApprover",
+      "fieldName": "授权审批人",
+      "fieldValue": "陈雨忠",
+      "valueType": "TEXT",
+      "sourceFieldName": "授权审批人",
+      "sourceFieldPath": "'OA原始表单'!E4"
+    },
+    {
+      "fieldCode": "processTitle",
+      "fieldName": "流程标题",
+      "fieldValue": "FI-SC-006.标准品/批量品成本核算流程-何之美-2026-03-27",
+      "valueType": "TEXT",
+      "sourceFieldName": "流程标题",
+      "sourceFieldPath": "'OA原始表单'!E6"
+    },
+    {
+      "fieldCode": "applyDateTime",
+      "fieldName": "申请时间",
+      "fieldValue": "2026-03-27 14:38",
+      "valueType": "DATE",
+      "sourceFieldName": "申请时间",
+      "sourceFieldPath": "'OA原始表单'!Q8"
+    },
+    {
+      "fieldCode": "employeeNo",
+      "fieldName": "工号",
+      "fieldValue": "12310607",
+      "valueType": "NUMBER",
+      "sourceFieldName": "工号",
+      "sourceFieldPath": "'OA原始表单'!E9"
+    },
+    {
+      "fieldCode": "customerCode",
+      "fieldName": "客户编码",
+      "fieldValue": "IT003348",
+      "valueType": "TEXT",
+      "sourceFieldName": "客户编码",
+      "sourceFieldPath": "'OA原始表单'!M13"
+    },
+    {
+      "fieldCode": "customerType",
+      "fieldName": "客户类型",
+      "fieldValue": "国际客户",
+      "valueType": "TEXT",
+      "sourceFieldName": "客户类型",
+      "sourceFieldPath": "'OA原始表单'!E14"
+    },
+    {
+      "fieldCode": "businessType",
+      "fieldName": "业务类型",
+      "fieldValue": "批量品",
+      "valueType": "TEXT",
+      "sourceFieldName": "业务类型",
+      "sourceFieldPath": "'OA原始表单'!E15"
+    },
+    {
+      "fieldCode": "replyDateRequiredBySales",
+      "fieldName": "销售部门要求回复日期",
+      "fieldValue": "2026-03-27",
+      "valueType": "DATE",
+      "sourceFieldName": "销售部门要求回复日期",
+      "sourceFieldPath": "'OA原始表单'!E16"
+    }
+  ],
+  "itemExtraFields": [
+    {
+      "seq": 1,
+      "fieldCode": "differenceRate",
+      "fieldName": "差异率",
+      "fieldValue": "0.00%",
+      "valueType": "TEXT",
+      "sourceFieldName": "差异率",
+      "sourceFieldPath": "OA原始表单!U30"
+    }
+  ]
+}

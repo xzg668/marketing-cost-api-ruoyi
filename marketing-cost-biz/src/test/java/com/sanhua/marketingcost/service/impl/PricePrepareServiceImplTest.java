@@ -88,10 +88,12 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any()))
         .thenReturn(PackageComponentPricePrepareResult.ready(
             new BigDecimal("9.00"), new BigDecimal("22.500"), 900L, "包装组件价格准备完成"));
     when(makePartPricePrepareStrategy.prepare(
+            org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
@@ -474,6 +476,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("OA-PKG"),
             org.mockito.ArgumentMatchers.eq("2026-05"),
+            org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("主制造"),
             org.mockito.ArgumentMatchers.eq("U9"),
             org.mockito.ArgumentMatchers.eq(planItem));
@@ -492,6 +495,7 @@ class PricePrepareServiceImplTest {
     when(packageComponentPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("OA-PKG-STRUCTURE"),
+            org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
@@ -526,6 +530,7 @@ class PricePrepareServiceImplTest {
     when(packageComponentPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("OA-PKG-PRICE"),
+            org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
@@ -572,6 +577,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.eq("OA-MAKE"),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("2026-05"),
+            org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(planItem));
   }
 
@@ -589,6 +595,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.eq("OA-MAKE-MISS"),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("2026-05"),
+            org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(planItem)))
         .thenReturn(MakePartPricePrepareResult.notReady(
             "MISSING_PRICE",
@@ -636,6 +643,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("OA-STRATEGY-FAIL"),
             org.mockito.ArgumentMatchers.eq("2026-05"),
+            org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(packageItem)))

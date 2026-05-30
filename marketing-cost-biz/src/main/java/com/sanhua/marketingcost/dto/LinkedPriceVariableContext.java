@@ -38,9 +38,6 @@ public class LinkedPriceVariableContext {
   }
 
   public static LinkedPriceVariableContext monthlyAdjust(Long adjustBatchId) {
-    if (adjustBatchId == null) {
-      throw new IllegalArgumentException("MONTHLY_ADJUST 场景 adjustBatchId 不能为空");
-    }
     LinkedPriceVariableContext context =
         new LinkedPriceVariableContext(LinkedPriceCalcScene.MONTHLY_ADJUST);
     context.adjustBatchId = adjustBatchId;

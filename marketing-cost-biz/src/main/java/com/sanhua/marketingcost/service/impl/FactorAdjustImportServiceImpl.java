@@ -41,6 +41,8 @@ public class FactorAdjustImportServiceImpl implements FactorAdjustImportService 
 
   private static final DateTimeFormatter BATCH_TIME_FORMAT =
       DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS");
+  private static final String ADJUST_TYPE_NORMAL = "NORMAL";
+  private static final String ADJUST_TYPE_MONTHLY = "MONTHLY";
 
   private final FactorAdjustExcelParseService parseService;
   private final FactorAdjustBatchMapper adjustBatchMapper;
@@ -69,6 +71,7 @@ public class FactorAdjustImportServiceImpl implements FactorAdjustImportService 
     byte[] bytes = readAllBytes(input);
     String pricingMonth = normalize(request.getPricingMonth());
     String businessUnitType = normalize(request.getBusinessUnitType());
+    String adjustType = normalizeAdjustType(request.getAdjustType());
     String usageScope = normalizeUsageScope(request.getUsageScope());
     String normalizedOperator = normalizeOperator(operator);
 
@@ -77,7 +80,7 @@ public class FactorAdjustImportServiceImpl implements FactorAdjustImportService 
 
     FactorAdjustBatch batch = createBatch(
         parseResult, sourceFileName, bytes, pricingMonth, businessUnitType,
-        usageScope, request.getRemark(), normalizedOperator);
+        adjustType, usageScope, request.getRemark(), normalizedOperator);
     adjustBatchMapper.insert(batch);
 
     ImportCounters counters = new ImportCounters();
@@ -86,6 +89,7 @@ public class FactorAdjustImportServiceImpl implements FactorAdjustImportService 
     response.setAdjustBatchNo(batch.getAdjustBatchNo());
     response.setPricingMonth(pricingMonth);
     response.setBusinessUnitType(businessUnitType);
+    response.setAdjustType(adjustType);
     response.setUsageScope(usageScope);
 
     for (FactorAdjustExcelParseRow row : parseResult.getRows()) {
@@ -253,19 +257,21 @@ public class FactorAdjustImportServiceImpl implements FactorAdjustImportService 
       byte[] bytes,
       String pricingMonth,
       String businessUnitType,
+      String adjustType,
       String usageScope,
       String remark,
       String operator) {
     LocalDateTime now = LocalDateTime.now();
     FactorAdjustBatch batch = new FactorAdjustBatch();
     batch.setAdjustBatchNo(nextBatchNo());
+    batch.setAdjustType(adjustType);
     batch.setPricingMonth(pricingMonth);
     batch.setBusinessUnitType(businessUnitType);
     batch.setUsageScope(usageScope);
     batch.setSourceType(FactorAdjustSourceType.ADJUST_EXCEL_IMPORT.getCode());
     batch.setSourceFileName(normalize(sourceFileName));
     batch.setFileSha256(sha256(bytes));
-    batch.setContentHash(contentHash(parseResult, usageScope));
+    batch.setContentHash(contentHash(parseResult, adjustType, usageScope));
     batch.setStatus("PENDING");
     batch.setUploadedBy(operator);
     batch.setUploadedAt(now);
@@ -334,6 +340,17 @@ public class FactorAdjustImportServiceImpl implements FactorAdjustImportService 
     throw new IllegalArgumentException("usageScope 必须是 REPRICE_ONLY 或 REPRICE_AND_DAILY");
   }
 
+  private String normalizeAdjustType(String adjustType) {
+    String normalized = normalize(adjustType);
+    if (!StringUtils.hasText(normalized)) {
+      return ADJUST_TYPE_NORMAL;
+    }
+    if (ADJUST_TYPE_NORMAL.equals(normalized) || ADJUST_TYPE_MONTHLY.equals(normalized)) {
+      return normalized;
+    }
+    throw new IllegalArgumentException("adjustType 必须是 NORMAL 或 MONTHLY");
+  }
+
   private void validateRequest(InputStream input, FactorAdjustImportRequest request) {
     if (input == null) {
       throw new IllegalArgumentException("file 必填");
@@ -347,6 +364,7 @@ public class FactorAdjustImportServiceImpl implements FactorAdjustImportService 
     if (!StringUtils.hasText(request.getBusinessUnitType())) {
       throw new IllegalArgumentException("businessUnitType 必填");
     }
+    normalizeAdjustType(request.getAdjustType());
     normalizeUsageScope(request.getUsageScope());
   }
 
@@ -387,9 +405,10 @@ public class FactorAdjustImportServiceImpl implements FactorAdjustImportService 
     return "FAB" + LocalDateTime.now().format(BATCH_TIME_FORMAT) + suffix;
   }
 
-  private String contentHash(FactorAdjustExcelParseResult parseResult, String usageScope) {
+  private String contentHash(
+      FactorAdjustExcelParseResult parseResult, String adjustType, String usageScope) {
     StringBuilder builder = new StringBuilder();
-    builder.append(usageScope).append('\n');
+    builder.append(adjustType).append('|').append(usageScope).append('\n');
     if (parseResult != null) {
       builder.append(parseResult.getPricingMonth()).append('|')
           .append(parseResult.getBusinessUnitType()).append('\n');

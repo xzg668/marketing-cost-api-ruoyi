@@ -64,6 +64,7 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
     if (item.getPriceExclTax() == null && item.getPriceInclTax() == null) {
       return null;
     }
+    closePreviousVersions(item);
     itemMapper.insert(item);
     return item;
   }
@@ -110,6 +111,7 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
         item = new PriceRangeItem();
         fillItem(item, row);
         fillDefaults(item);
+        closePreviousVersions(item);
         itemMapper.insert(item);
       } else {
         fillItem(item, row);
@@ -215,6 +217,41 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
     }
     if (StringUtils.hasText(item.getSpecModel())) {
       item.setSpecModel(item.getSpecModel().trim());
+    }
+    if (item.getEffectiveFrom() == null) {
+      item.setEffectiveFrom(LocalDate.now());
+    }
+  }
+
+  private void closePreviousVersions(PriceRangeItem item) {
+    if (item == null || item.getEffectiveFrom() == null || !StringUtils.hasText(item.getMaterialCode())) {
+      return;
+    }
+    var query = Wrappers.lambdaQuery(PriceRangeItem.class)
+        .eq(PriceRangeItem::getMaterialCode, item.getMaterialCode())
+        .eq(PriceRangeItem::getRangeLow, item.getRangeLow())
+        .eq(PriceRangeItem::getRangeHigh, item.getRangeHigh())
+        .and(q -> q.isNull(PriceRangeItem::getEffectiveTo)
+            .or()
+            .gt(PriceRangeItem::getEffectiveTo, item.getEffectiveFrom()));
+    String supplierCode = trimToNull(item.getSupplierCode());
+    if (supplierCode == null) {
+      query.isNull(PriceRangeItem::getSupplierCode);
+    } else {
+      query.eq(PriceRangeItem::getSupplierCode, supplierCode);
+    }
+    String specModel = trimToNull(item.getSpecModel());
+    if (specModel == null) {
+      query.isNull(PriceRangeItem::getSpecModel);
+    } else {
+      query.eq(PriceRangeItem::getSpecModel, specModel);
+    }
+    for (PriceRangeItem row : itemMapper.selectList(query)) {
+      if (item.getId() != null && item.getId().equals(row.getId())) {
+        continue;
+      }
+      row.setEffectiveTo(item.getEffectiveFrom());
+      itemMapper.updateById(row);
     }
   }
 

@@ -10,6 +10,7 @@ import com.sanhua.marketingcost.service.MakePartPriceCalculator;
 import com.sanhua.marketingcost.service.MakePartPriceGenerationService;
 import com.sanhua.marketingcost.service.MakePartPricePrepareStrategy;
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -45,6 +46,16 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
       String businessUnitType,
       String periodMonth,
       PricePreparePlanItem planItem) {
+    return prepare(oaNo, businessUnitType, periodMonth, null, planItem);
+  }
+
+  @Override
+  public MakePartPricePrepareResult prepare(
+      String oaNo,
+      String businessUnitType,
+      String periodMonth,
+      LocalDateTime priceAsOfTime,
+      PricePreparePlanItem planItem) {
     String parentMaterialNo = planItem == null ? null : trimToNull(planItem.getMaterialCode());
     String normalizedOaNo = trimToNull(oaNo);
     String normalizedBusinessUnitType = trimToNull(businessUnitType);
@@ -68,13 +79,24 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
     }
 
     MakePartPriceCalcRow ready =
-        selectLatestReady(parentMaterialNo, normalizedOaNo, normalizedBusinessUnitType, normalizedPeriod);
+        selectLatestReady(
+            parentMaterialNo,
+            normalizedOaNo,
+            normalizedBusinessUnitType,
+            normalizedPeriod,
+            priceAsOfTime);
     if (ready != null) {
       return readyResult(ready, planItem, "自制件价格准备复用当期已有生成结果");
     }
 
-    generationService.generateByOa(normalizedOaNo, normalizedBusinessUnitType, normalizedPeriod);
-    ready = selectLatestReady(parentMaterialNo, normalizedOaNo, normalizedBusinessUnitType, normalizedPeriod);
+    generationService.generateByOa(
+        normalizedOaNo, normalizedBusinessUnitType, normalizedPeriod, priceAsOfTime);
+    ready = selectLatestReady(
+        parentMaterialNo,
+        normalizedOaNo,
+        normalizedBusinessUnitType,
+        normalizedPeriod,
+        priceAsOfTime);
     if (ready != null) {
       return readyResult(ready, planItem, "自制件价格准备已触发生成并取得价格");
     }
@@ -83,7 +105,8 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
         parentMaterialNo,
         normalizedOaNo,
         normalizedBusinessUnitType,
-        normalizedPeriod);
+        normalizedPeriod,
+        priceAsOfTime);
     List<MakePartPricePrepareResult.Gap> gaps = buildGaps(parentMaterialNo, rows);
     String status = hasOnlyStructureGaps(gaps) ? STATUS_MISSING_STRUCTURE : STATUS_MISSING_PRICE;
     String message = rows.isEmpty()
@@ -108,9 +131,10 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
       String parentMaterialNo,
       String oaNo,
       String businessUnitType,
-      String periodMonth) {
+      String periodMonth,
+      LocalDateTime priceAsOfTime) {
     List<MakePartPriceCalcRow> rows = calcRowMapper.selectList(baseQuery(
-            parentMaterialNo, oaNo, businessUnitType, periodMonth)
+            parentMaterialNo, oaNo, businessUnitType, periodMonth, priceAsOfTime)
         .eq(MakePartPriceCalcRow::getStatus, STATUS_OK)
         .eq(MakePartPriceCalcRow::getPriceComplete, true)
         .isNotNull(MakePartPriceCalcRow::getParentTotalCostPrice)
@@ -124,9 +148,10 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
       String parentMaterialNo,
       String oaNo,
       String businessUnitType,
-      String periodMonth) {
+      String periodMonth,
+      LocalDateTime priceAsOfTime) {
     LambdaQueryWrapper<MakePartPriceCalcRow> query =
-        baseQuery(parentMaterialNo, oaNo, businessUnitType, periodMonth);
+        baseQuery(parentMaterialNo, oaNo, businessUnitType, periodMonth, priceAsOfTime);
     List<MakePartPriceCalcRow> rows = calcRowMapper.selectList(
         query.orderByDesc(MakePartPriceCalcRow::getCreatedAt)
             .orderByDesc(MakePartPriceCalcRow::getId));
@@ -137,12 +162,18 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
       String parentMaterialNo,
       String oaNo,
       String businessUnitType,
-      String periodMonth) {
-    return Wrappers.lambdaQuery(MakePartPriceCalcRow.class)
+      String periodMonth,
+      LocalDateTime priceAsOfTime) {
+    LambdaQueryWrapper<MakePartPriceCalcRow> query = Wrappers.lambdaQuery(MakePartPriceCalcRow.class)
         .eq(MakePartPriceCalcRow::getParentMaterialNo, parentMaterialNo)
         .eq(MakePartPriceCalcRow::getOaNo, oaNo)
         .eq(MakePartPriceCalcRow::getBusinessUnitType, businessUnitType)
         .eq(MakePartPriceCalcRow::getPricingMonth, periodMonth);
+    if (priceAsOfTime != null) {
+      // 月度调价必须严格复用批次取价时点，不能把其他时间生成的当前结果混进来。
+      query.eq(MakePartPriceCalcRow::getPriceAsOfTime, priceAsOfTime);
+    }
+    return query;
   }
 
   private List<MakePartPricePrepareResult.Gap> buildGaps(

@@ -56,6 +56,7 @@ public class FactorAdjustController {
       @RequestPart("file") MultipartFile file,
       @RequestParam("pricingMonth") String pricingMonth,
       @RequestParam("businessUnitType") String businessUnitType,
+      @RequestParam(required = false, defaultValue = "NORMAL") String adjustType,
       @RequestParam("usageScope") String usageScope,
       @RequestParam(required = false) String remark,
       Authentication authentication) {
@@ -66,6 +67,7 @@ public class FactorAdjustController {
     FactorAdjustImportRequest request = new FactorAdjustImportRequest();
     request.setPricingMonth(pricingMonth);
     request.setBusinessUnitType(businessUnitType);
+    request.setAdjustType(adjustType);
     request.setUsageScope(usageScope);
     request.setRemark(remark);
     try {
@@ -90,6 +92,7 @@ public class FactorAdjustController {
       @RequestParam(required = false) String pricingMonth,
       @RequestParam(required = false) String businessUnitType,
       @RequestParam(required = false) String adjustBatchNo,
+      @RequestParam(required = false) String adjustType,
       @RequestParam(required = false) String usageScope,
       @RequestParam(required = false) String status,
       @RequestParam(required = false) String uploadedBy,
@@ -101,6 +104,7 @@ public class FactorAdjustController {
     request.setPricingMonth(pricingMonth);
     request.setBusinessUnitType(businessUnitType);
     request.setAdjustBatchNo(adjustBatchNo);
+    request.setAdjustType(adjustType);
     request.setUsageScope(usageScope);
     request.setStatus(status);
     request.setUploadedBy(uploadedBy);

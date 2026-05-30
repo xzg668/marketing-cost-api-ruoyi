@@ -8,11 +8,11 @@ import com.sanhua.marketingcost.dto.FlattenResult;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
-import com.sanhua.marketingcost.entity.BomStopDrillRule;
+import com.sanhua.marketingcost.entity.BomSettlementRule;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
-import com.sanhua.marketingcost.mapper.BomStopDrillRuleMapper;
+import com.sanhua.marketingcost.mapper.BomSettlementRuleMapper;
 import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
 import com.sanhua.marketingcost.service.BomFlattenService;
 import java.math.BigDecimal;
@@ -45,7 +45,7 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
   @Autowired private BomRawHierarchyMapper rawMapper;
   @Autowired private BomCostingRowMapper costingMapper;
   @Autowired private BomCostingRowSubRefMapper subRefMapper;
-  @Autowired private BomStopDrillRuleMapper ruleMapper;
+  @Autowired private BomSettlementRuleMapper settlementRuleMapper;
 
   private final String oaNo = "OA_T11_" + UUID.randomUUID().toString().substring(0, 6);
 
@@ -61,9 +61,9 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
       stmt.executeUpdate("DELETE FROM lp_bom_costing_row WHERE oa_no='" + oaNo + "'");
       stmt.executeUpdate(
           "DELETE FROM lp_bom_raw_hierarchy WHERE build_batch_id LIKE 'rawt11_%'");
-      // 本测试自定义规则按 match_value 前缀 'T11_' 清
+      // 本测试自定义新结算规则按 rule_code 前缀 'T11_' 清
       stmt.executeUpdate(
-          "DELETE FROM bom_stop_drill_rule WHERE match_value LIKE 'T11\\_%' ESCAPE '\\\\'");
+          "DELETE FROM lp_bom_settlement_rule WHERE rule_code LIKE 'T11\\_%' ESCAPE '\\\\'");
     }
   }
 
@@ -86,12 +86,12 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
 
     BomCostingRow parent = findByCode(rows, "P");
     assertThat(parent.getSubtreeCostRequired()).as("父结算行 subtree=1").isEqualTo(1);
-    assertThat(parent.getMatchedDrillRuleId()).as("父行回填 LEAF_ROLLUP 规则 id").isNotNull();
+    assertThat(parent.getMatchedSettlementRuleId()).as("父行回填新结算规则 id").isNotNull();
     assertThat(parent.getIsCostingRow()).isEqualTo(1);
 
     BomCostingRow x1 = findByCode(rows, "X1");
     assertThat(x1.getSubtreeCostRequired()).isEqualTo(0);
-    assertThat(x1.getMatchedDrillRuleId()).isNull();
+    assertThat(x1.getMatchedSettlementRuleId()).isNull();
 
     // 命中铜管叶子 Cu1 不在 costing
     assertThat(rows.stream().noneMatch(r -> "Cu1".equals(r.getMaterialCode()))).isTrue();
@@ -172,6 +172,7 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
     top.setIsLeaf(1);  // 顶层直接是叶子
     top.setMaterialName("拉制铜管 单根");
     top.setMaterialCategory1("171711404");
+    top.setCostElementCode("No101");
     top.setSourceImportBatchId("rawt11_imp_" + UUID.randomUUID().toString().substring(0, 4));
     top.setBuildBatchId("rawt11_" + UUID.randomUUID().toString().substring(0, 6));
     top.setBuiltAt(LocalDateTime.now());
@@ -187,14 +188,15 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
     assertThat(rows.get(0).getSubtreeCostRequired()).isZero();
     // sub_ref 应为 0
     assertThat(loadSubRefForOa()).isEmpty();
-    // 应有 LEAF_ROLLUP_TOP_LEAF warning
-    assertThat(r.getWarnings()).anyMatch(w -> w.contains("LEAF_ROLLUP_TOP_LEAF"));
+    // 顶层单节点没有父件可上卷，会降级为默认叶子并给出结构 warning。
+    assertThat(r.getWarnings()).anyMatch(w -> w.contains("TOP_SINGLE_NODE")
+        || w.contains("SPECIAL_PURCHASE_ROLLUP_NOT_PURCHASE_LEAF"));
   }
 
   @Test
-  @DisplayName("testParentAlreadyStopped：父被 NAME_LIKE STOP 命中 → 铜管叶子在 stoppedSubtree 下也跳过")
+  @DisplayName("testParentAlreadyStopped：父被 NAME_LIKE 结算边界命中 → 铜管叶子在 stoppedSubtree 下也跳过")
   void testParentAlreadyStopped() {
-    // T → T1（name='D接管' 被 V40 内置 NAME_LIKE 接管 STOP_AND_COST_ROW 命中）
+    // T → T1（name='D接管' 被本测试显式插入的 NAME_LIKE 结算边界规则命中）
     //  → T1A（拉制铜管）
     seedTop("T", "主制造", "2026-01-01", 0);
     seedChildAt("T", "T1", "/T/T1/", 1, 1, "1", "主制造", "2026-01-01",
@@ -202,6 +204,7 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
     seedChildAt("T1", "Cu", "/T/T1/Cu/", 2, 1, "1", "主制造", "2026-01-01",
         "拉制铜管 X", "171711404", "采购件", 1);
 
+    insertRule("NAME_LIKE", "接管", "STOP_AS_PACKAGE", 1, 1);
     insertLeafRollupRule();
     FlattenResult r = flattenService.flatten(req("T", "主制造", LocalDate.of(2026, 6, 1)));
 
@@ -212,8 +215,8 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
     assertThat(rows.get(0).getSubtreeCostRequired()).isEqualTo(1);
     // sub_ref 0（铜管叶子根本没进 LEAF_ROLLUP 分支，因为父先 STOP 把整子树屏蔽）
     assertThat(loadSubRefForOa()).isEmpty();
-    // 此场景下 LEAF_ROLLUP 没真触发 → 不产生 LEAF_ROLLUP warning
-    assertThat(r.getWarnings()).noneMatch(w -> w.contains("LEAF_ROLLUP"));
+    // 此场景下特殊采购上卷没真触发。
+    assertThat(r.getWarnings()).noneMatch(w -> w.contains("SPECIAL_PURCHASE_ROLLUP"));
   }
 
   @Test
@@ -234,7 +237,7 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
     //   其子件 Leaf1 默认叶子入 costing
     assertThat(rows).hasSize(1);
     assertThat(rows.get(0).getMaterialCode()).isEqualTo("Leaf1");
-    assertThat(r.getWarnings()).anyMatch(w -> w.contains("LEAF_ROLLUP_NOT_LEAF"));
+    assertThat(r.getWarnings()).anyMatch(w -> w.contains("SPECIAL_PURCHASE_ROLLUP_NOT_PURCHASE_LEAF"));
     assertThat(loadSubRefForOa()).isEmpty();
   }
 
@@ -279,10 +282,10 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
     seedChildAt("B", "Cu", "/T/B/Cu/", 2, 1, "1", "主制造", "2026-01-01",
         "拉制铜管 z", "171711404", "采购件", 1);
     seedChildAt("B", "BX", "/T/B/BX/", 3, 1, "1", "主制造", "2026-01-01",
-        "B非铜管子件", null, "采购件", 1);
+        "B普通子件", null, "采购件", 1);
 
     // 老 ROLLUP 规则（NAME_LIKE 命中 A）
-    insertRule("NAME_LIKE", "T11_RollupTrigger", "ROLLUP_TO_PARENT", 1, 4);
+    insertRule("NAME_LIKE", "T11_RollupTrigger", "STOP_AS_PACKAGE", 1, 4);
     // LEAF_ROLLUP 规则
     insertLeafRollupRule();
 
@@ -302,10 +305,10 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
     assertThat(findByCode(rows, "B").getSubtreeCostRequired()).isEqualTo(1);
     assertThat(findByCode(rows, "BX").getSubtreeCostRequired()).isZero();
 
-    // sub_ref：老 ROLLUP 把 A 的所有直接子件（AC）都写进去 + LEAF_ROLLUP 只写 Cu
+    // sub_ref：新特殊采购上卷只写 Cu；A 是 STOP_AS_PACKAGE 边界，不产生 sub_ref。
     List<BomCostingRowSubRef> refs = loadSubRefForOa();
     assertThat(refs).extracting(BomCostingRowSubRef::getSubMaterialCode)
-        .containsExactlyInAnyOrder("AC", "Cu");
+        .containsExactlyInAnyOrder("Cu");
   }
 
   @Test
@@ -415,18 +418,18 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
   @Autowired private org.springframework.context.ApplicationContext applicationContext;
 
   @Test
-  @DisplayName("testSubtreeReqAndRuleIdSet：父行 subtree_cost_required=1 + matched_drill_rule_id=该规则 id")
+  @DisplayName("testSubtreeReqAndRuleIdSet：父行 subtree_cost_required=1 + matched_settlement_rule_id=该规则 id")
   void testSubtreeReqAndRuleIdSet() {
     seedTop("P", "主制造", "2026-01-01", 0);
     seedLeaf("P", "Cu1", 1, "拉制铜管", "171711404");
 
-    BomStopDrillRule rule = insertLeafRollupRule();
+    BomSettlementRule rule = insertLeafRollupRule();
     flattenService.flatten(req("P", "主制造", LocalDate.of(2026, 6, 1)));
 
     List<BomCostingRow> rows = loadCostingByOa();
     BomCostingRow parent = findByCode(rows, "P");
     assertThat(parent.getSubtreeCostRequired()).isEqualTo(1);
-    assertThat(parent.getMatchedDrillRuleId()).isEqualTo(rule.getId());
+    assertThat(parent.getMatchedSettlementRuleId()).isEqualTo(rule.getId());
   }
 
   // ============================ 辅助 ============================
@@ -523,32 +526,48 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
   }
 
   /** 通用规则插入 */
-  private BomStopDrillRule insertRule(
+  private BomSettlementRule insertRule(
       String type, String value, String action, int markSubtree, int priority) {
-    BomStopDrillRule rule = new BomStopDrillRule();
-    rule.setMatchType(type);
-    rule.setMatchValue(value);
-    rule.setDrillAction(action);
+    BomSettlementRule rule = new BomSettlementRule();
+    rule.setRuleCode("T11_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8));
+    rule.setRuleName("T11_" + value);
+    rule.setRuleCategory("TEST_BOUNDARY");
+    rule.setSettlementAction(action);
+    rule.setSettlementRowType("DEFAULT_LEAF");
+    rule.setMatchConditionJson(conditionJson(type, value));
     rule.setMarkSubtreeCostRequired(markSubtree);
     rule.setPriority(priority);
     rule.setEnabled(1);
-    ruleMapper.insert(rule);
+    settlementRuleMapper.insert(rule);
     return rule;
   }
 
-  /** T11 标准 LEAF_ROLLUP 规则：COMPOSITE + nodeConditions IN_DICT bom_leaf_rollup_codes */
-  private BomStopDrillRule insertLeafRollupRule() {
-    BomStopDrillRule rule = new BomStopDrillRule();
-    rule.setMatchType("COMPOSITE");
-    rule.setMatchValue("T11_LeafRollup_" + UUID.randomUUID().toString().substring(0, 4));
+  /** T11 标准特殊采购上卷规则：命中铜管类采购叶子后输出直接父件。 */
+  private BomSettlementRule insertLeafRollupRule() {
+    BomSettlementRule rule = new BomSettlementRule();
+    rule.setRuleCode("T11_LeafRollup_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8));
+    rule.setRuleName("T11_LeafRollup");
+    rule.setRuleCategory("SPECIAL_PURCHASE_ROLLUP");
+    rule.setSettlementAction("ROLLUP_TO_PARENT");
+    rule.setSettlementRowType("SPECIAL_ROLLUP_PARENT");
+    rule.setSubRefType("SPECIAL_ROLLUP_CHILD");
     rule.setMatchConditionJson(
-        "{\"nodeConditions\":[{\"field\":\"material_category_1\",\"op\":\"IN_DICT\","
-            + "\"value\":\"bom_leaf_rollup_codes\"}]}");
-    rule.setDrillAction("LEAF_ROLLUP_TO_PARENT");
+        "{\"nodeConditions\":[{\"field\":\"material_name\",\"op\":\"LIKE\",\"value\":\"铜\"}]}");
     rule.setMarkSubtreeCostRequired(1);
     rule.setPriority(3);
     rule.setEnabled(1);
-    ruleMapper.insert(rule);
+    settlementRuleMapper.insert(rule);
     return rule;
+  }
+
+  private String conditionJson(String type, String value) {
+    String field = "material_name";
+    String op = "LIKE";
+    if ("MATERIAL_CODE_EQ".equals(type)) {
+      field = "material_code";
+      op = "EQ";
+    }
+    return "{\"nodeConditions\":[{\"field\":\"" + field + "\",\"op\":\"" + op
+        + "\",\"value\":\"" + value + "\"}]}";
   }
 }

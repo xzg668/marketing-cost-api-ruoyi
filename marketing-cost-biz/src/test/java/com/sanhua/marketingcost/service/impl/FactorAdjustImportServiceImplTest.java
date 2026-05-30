@@ -96,6 +96,7 @@ class FactorAdjustImportServiceImplTest {
         request("REPRICE_ONLY"), "alice");
 
     assertThat(response.getAdjustBatchId()).isEqualTo(9001L);
+    assertThat(response.getAdjustType()).isEqualTo("NORMAL");
     assertThat(response.getUsageScope()).isEqualTo("REPRICE_ONLY");
     assertThat(response.getChangedCount()).isEqualTo(1);
     assertThat(response.getFailedCount()).isZero();
@@ -108,6 +109,31 @@ class FactorAdjustImportServiceImplTest {
     verify(monthlyPriceMapper, never()).updateById(any(FactorMonthlyPrice.class));
     verify(monthlyPriceMapper, never()).insert(any(FactorMonthlyPrice.class));
     verify(changeLogMapper, never()).insert(any(FactorMonthlyPriceChangeLog.class));
+
+    ArgumentCaptor<FactorAdjustBatch> batchCaptor =
+        ArgumentCaptor.forClass(FactorAdjustBatch.class);
+    verify(batchMapper).insert(batchCaptor.capture());
+    assertThat(batchCaptor.getValue().getAdjustType()).isEqualTo("NORMAL");
+  }
+
+  @Test
+  @DisplayName("MONTHLY：导入时写入月度调价类型，供月度重算批次引用")
+  void monthlyAdjustTypePersistsOnBatch() {
+    FactorAdjustExcelParseResult parseResult = parseResult(matchedRow(191L, 501L, "19.10"));
+    when(parseService.parse(any(), eq("adjust.xlsx"), eq("2026-05"), eq("COMMERCIAL")))
+        .thenReturn(parseResult);
+    when(monthlyPriceMapper.selectById(501L)).thenReturn(monthlyPrice(501L, 191L, "2026-05", "18.79"));
+    FactorAdjustImportRequest request = request("REPRICE_ONLY");
+    request.setAdjustType("MONTHLY");
+
+    FactorAdjustImportResponse response = service.importAdjustExcel(
+        new ByteArrayInputStream("fake".getBytes()), "adjust.xlsx", request, "alice");
+
+    assertThat(response.getAdjustType()).isEqualTo("MONTHLY");
+    ArgumentCaptor<FactorAdjustBatch> batchCaptor =
+        ArgumentCaptor.forClass(FactorAdjustBatch.class);
+    verify(batchMapper).insert(batchCaptor.capture());
+    assertThat(batchCaptor.getValue().getAdjustType()).isEqualTo("MONTHLY");
   }
 
   @Test
@@ -205,6 +231,7 @@ class FactorAdjustImportServiceImplTest {
     FactorAdjustImportRequest request = new FactorAdjustImportRequest();
     request.setPricingMonth("2026-05");
     request.setBusinessUnitType("COMMERCIAL");
+    request.setAdjustType("NORMAL");
     request.setUsageScope(usageScope);
     request.setRemark("5月调价");
     return request;

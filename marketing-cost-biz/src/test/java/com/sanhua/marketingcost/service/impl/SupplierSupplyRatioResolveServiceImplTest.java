@@ -62,7 +62,7 @@ class SupplierSupplyRatioResolveServiceImplTest {
 
     assertThat(result.isMatched()).isTrue();
     assertThat(result.getSupplierName()).isEqualTo("供应商最新");
-    assertThat(result.getTraceMessage()).contains("严格匹配");
+    assertThat(result.getTraceMessage()).contains("匹配 material_code");
     assertThat(capturedQuery().getSqlSegment()).contains(
         "ORDER BY supply_ratio DESC",
         "IFNULL(updated_at",
@@ -97,18 +97,19 @@ class SupplierSupplyRatioResolveServiceImplTest {
   }
 
   @Test
-  @DisplayName("materialName 为空时降级为 material_code + spec_model，并在 trace 说明")
-  void fallbackWhenMaterialNameMissing() {
+  @DisplayName("物料名称和型号不参与主供匹配，只按物料代码取供货比例最大供应商")
+  void ignoresMaterialNameAndSpecWhenResolvingMainSupplier() {
     when(mapper.selectOne(any(Wrapper.class))).thenReturn(row(3L, "供应商A", "1", null));
 
     SupplierSupplyRatioResolveResult result = service.resolve(
-        "COMMERCIAL", "203240251", " ", "SHF-000-036003", null);
+        "COMMERCIAL", "203240251", "页面名称可不一致", "页面型号可不一致", null);
 
     assertThat(result.isMatched()).isTrue();
-    assertThat(result.getTraceMessage()).contains("降级匹配");
+    assertThat(result.getTraceMessage()).contains("匹配 material_code");
     assertThat(capturedQuery().getSqlSegment())
-        .contains("material_code", "spec_model")
-        .doesNotContain("material_name");
+        .contains("material_code")
+        .doesNotContain("material_name")
+        .doesNotContain("spec_model");
   }
 
   @Test

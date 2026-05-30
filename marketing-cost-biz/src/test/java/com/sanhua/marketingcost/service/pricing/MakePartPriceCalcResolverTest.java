@@ -10,6 +10,7 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
@@ -177,6 +178,39 @@ class MakePartPriceCalcResolverTest {
     verify(mapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment()).contains("business_unit_type");
     assertThat(paramValues(captor.getValue())).contains("COMMERCIAL");
+  }
+
+  @Test
+  @DisplayName("T21：月度调价制造件结果按 price_as_of_time 严格命中")
+  void monthlyResolveUsesPriceAsOfTime() {
+    LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 26, 10, 30);
+    MakePartPriceCalcRowMapper mapper = Mockito.mock(MakePartPriceCalcRowMapper.class);
+    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper);
+    MakePartPriceCalcRow row = row("BATCH-MONTHLY", "MAKE-001", "OK", true, "18.88000000", null);
+    row.setPriceAsOfTime(priceAsOfTime);
+    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(row));
+    CostRunContext context = CostRunContext.monthlyReprice(
+        "2026-05",
+        7L,
+        "MR-001",
+        "COMMERCIAL",
+        priceAsOfTime,
+        CostRunContext.BOM_SOURCE_POLICY_HISTORICAL_OA_BOM,
+        "OA-MAKE",
+        null,
+        "TOP-001",
+        null,
+        null,
+        "OBJ-1");
+
+    PriceResolveResult result = resolver.resolve("OA-MAKE", part("MAKE-001"), null, context);
+
+    assertThat(result.unitPrice()).isEqualByComparingTo("18.88000000");
+    assertThat(result.remark()).contains("取价时点=2026-05-26T10:30");
+    ArgumentCaptor<Wrapper<MakePartPriceCalcRow>> captor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(mapper).selectList(captor.capture());
+    assertThat(captor.getValue().getCustomSqlSegment()).contains("price_as_of_time");
+    assertThat(paramValues(captor.getValue())).contains("2026-05", "COMMERCIAL", priceAsOfTime);
   }
 
   @Test

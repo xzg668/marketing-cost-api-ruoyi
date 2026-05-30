@@ -218,6 +218,38 @@ class PricePrepareQueryServiceImplTest {
   }
 
   @Test
+  @DisplayName("候选查询：全量范围不默认限定未核算，已核算 OA 也能查询")
+  void pageCandidatesAllWithoutCalcStatusDoesNotFilterCalculatedForms() {
+    OaForm form = oaForm(1L, "OA-CALCED", "客户A", "已核算");
+    OaFormItem item = oaFormItem(10L, 1L, "TOP-CALCED", "产品A");
+    when(oaFormMapper.selectList(any())).thenReturn(List.of(form));
+    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(item));
+    when(itemMapper.selectMaps(any())).thenReturn(List.of(
+        Map.of(
+            "oa_no", "OA-CALCED",
+            "top_product_code", "TOP-CALCED",
+            "total_count", 2,
+            "ready_count", 1,
+            "failed_count", 0,
+            "updated_at", LocalDateTime.of(2026, 5, 21, 10, 0))));
+    when(gapMapper.selectMaps(any())).thenReturn(List.of(
+        Map.of("oa_no", "OA-CALCED", "top_product_code", "TOP-CALCED", "gap_count", 1)));
+    PricePrepareCandidateQueryRequest request = new PricePrepareCandidateQueryRequest();
+    request.setOwnerScope("ALL");
+    request.setCalcStatus("");
+
+    PricePrepareCandidatePageResponse response = service.pageCandidates(request);
+
+    assertThat(response.getTotal()).isEqualTo(1);
+    assertThat(response.getRecords().get(0).getOaNo()).isEqualTo("OA-CALCED");
+    ArgumentCaptor<LambdaQueryWrapper<OaForm>> queryCaptor =
+        ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+    verify(oaFormMapper).selectList(queryCaptor.capture());
+    assertThat(((AbstractWrapper<?, ?, ?>) queryCaptor.getValue()).getSqlSegment())
+        .doesNotContain("calc_status");
+  }
+
+  @Test
   @DisplayName("候选查询：默认 onlyPending 不返回 READY 行")
   void pageCandidatesDefaultOnlyPendingFiltersReadyRows() {
     OaForm form = oaForm(1L, "OA-READY", "客户A", "未核算");

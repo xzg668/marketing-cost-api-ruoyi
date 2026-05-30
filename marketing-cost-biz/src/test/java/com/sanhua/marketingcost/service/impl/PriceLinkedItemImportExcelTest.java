@@ -1,7 +1,9 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doAnswer;
@@ -28,6 +30,7 @@ import com.sanhua.marketingcost.dto.LinkedFormulaWorkbookParseResult;
 import com.sanhua.marketingcost.dto.PriceLinkedAutoBindingWriteRequest;
 import com.sanhua.marketingcost.dto.PriceLinkedAutoBindingWriteResult;
 import com.sanhua.marketingcost.dto.ResolvedFactorRef;
+import com.sanhua.marketingcost.dto.StandardBindingCheckRequest;
 import com.sanhua.marketingcost.dto.StandardBindingDecision;
 import com.sanhua.marketingcost.entity.FactorUploadBatch;
 import com.sanhua.marketingcost.entity.PriceFixedItem;
@@ -56,11 +59,23 @@ import com.sanhua.marketingcost.service.PriceLinkedStandardBindingService;
 import com.sanhua.marketingcost.service.PriceVariableBindingService;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.math.BigDecimal;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -80,6 +95,9 @@ import org.mockito.ArgumentCaptor;
  * <p>MP LambdaQuery 依赖 TableInfo 缓存，故 {@code @BeforeAll} 手工预热两个实体。
  */
 class PriceLinkedItemImportExcelTest {
+
+  private static final Path QUASI_REAL_IMPORT_SAMPLE = Path.of(
+      "/Users/xiexicheng/Documents/sales_cost/generated/月度联动价与影响因素-导入验证样例-2026-05.xlsx");
 
   private PriceLinkedItemMapper itemMapper;
   private PriceFixedItemMapper fixedItemMapper;
@@ -154,11 +172,20 @@ class PriceLinkedItemImportExcelTest {
         new ByteArrayInputStream(xlsx), "2026-02", false);
 
     assertThat(resp.getBatchId()).isNotBlank();
+    assertThat(resp.getFormulaEffectiveDate()).isEqualTo("2026-02-01");
+    assertThat(resp.getFactorPriceConflictStrategy()).isEqualTo("KEEP_EXISTING");
     assertThat(resp.getLinkedCount()).isEqualTo(2);
     assertThat(resp.getFixedCount()).isEqualTo(1);
     assertThat(resp.getSkipped()).isZero();
     assertThat(resp.getErrors()).isEmpty();
-    verify(itemMapper, times(2)).insert(any(PriceLinkedItem.class));
+    ArgumentCaptor<PriceLinkedItem> linkedCaptor = ArgumentCaptor.forClass(PriceLinkedItem.class);
+    verify(itemMapper, times(2)).insert(linkedCaptor.capture());
+    assertThat(linkedCaptor.getAllValues())
+        .extracting(PriceLinkedItem::getEffectiveFrom)
+        .containsOnly(LocalDate.of(2026, 2, 1));
+    assertThat(linkedCaptor.getAllValues())
+        .extracting(PriceLinkedItem::getEffectiveTo)
+        .containsOnlyNulls();
     verify(fixedItemMapper).insert(any(PriceFixedItem.class));
   }
 
@@ -184,6 +211,85 @@ class PriceLinkedItemImportExcelTest {
     assertThat(resp.getErrors().get(0).getMessage()).contains("公式非法");
     verify(itemMapper, times(1)).insert(any(PriceLinkedItem.class));
     verify(fixedItemMapper, never()).insert(any(PriceFixedItem.class));
+  }
+
+  @Test
+  @DisplayName("importExcel：新参数解析进响应，旧响应统计同步到版本化字段")
+  void importExcel_newLifecycleParamsAreResolvedInResponse() throws Exception {
+    when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    doAnswer(invocation -> {
+      PriceLinkedItem item = invocation.getArgument(0);
+      item.setId(88L);
+      return 1;
+    }).when(itemMapper).insert(any(PriceLinkedItem.class));
+    V2Mocks mocks = configureV2Pipeline();
+    FactorMonthlyPriceUpsertResult upsertResult = upsertResult();
+    upsertResult.setMonthlyPriceCreatedCount(0);
+    upsertResult.setMonthlyPriceUpdatedCount(2);
+    upsertResult.setMonthlyPriceSkippedCount(3);
+    when(mocks.monthlyPriceService().upsert(any(), any(), any(), any(), any(), any()))
+        .thenReturn(upsertResult);
+
+    byte[] xlsx = buildXlsxWithFactorSheetFirst(new Object[][] {
+        {"210", "供管处", "供应商A", "S001", "部品联动", "物料A", "M001", "SPEC-A", "千克",
+            "下料重量*材料含税价格", 0.0, 0.0, 12.8, null, 91.0, "0", null, null, "联动"}
+    });
+
+    PriceItemImportResponse resp = service.importExcel(
+        new ByteArrayInputStream(xlsx), "2026-05", false,
+        "COMMERCIAL", "monthly.xlsx", null, "2026-04-15", "OVERWRITE");
+
+    assertThat(resp.getFormulaEffectiveDate()).isEqualTo("2026-04-15");
+    assertThat(resp.getFactorPriceConflictStrategy()).isEqualTo("OVERWRITE");
+    assertThat(resp.getMonthlyPriceConflictCount()).isEqualTo(3);
+    assertThat(resp.getMonthlyPriceOverwriteCount()).isEqualTo(2);
+    assertThat(resp.getLinkedVersionCreatedCount()).isEqualTo(1);
+    assertThat(resp.getLinkedUnchangedSkippedCount()).isZero();
+    assertThat(resp.getLinkedExpiredCount()).isZero();
+    ArgumentCaptor<String> factorStrategyCaptor = ArgumentCaptor.forClass(String.class);
+    verify(mocks.monthlyPriceService())
+        .upsert(any(), any(), any(), any(), any(), factorStrategyCaptor.capture());
+    assertThat(factorStrategyCaptor.getValue()).isEqualTo("OVERWRITE");
+  }
+
+  @Test
+  @DisplayName("importExcel：旧调用方式仍可用，新参数默认 pricingMonth 首日与 KEEP_EXISTING")
+  void importExcel_legacyOverloadUsesNewDefaults() throws Exception {
+    when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+
+    byte[] xlsx = buildXlsx(new Object[][] {
+        {"210", "供管处", "供应商A", "S001", "部品联动", "物料A", "M001", "SPEC-A", "千克",
+            "电解铜+加工费", 0.0, 0.0, 12.8, null, 91.0, "0", null, null, "联动"}
+    });
+
+    PriceItemImportResponse resp = service.importExcel(
+        new ByteArrayInputStream(xlsx), "2026-05", false,
+        "COMMERCIAL", "monthly.xlsx", "APPEND_ONLY");
+
+    assertThat(resp.getEffectiveStrategy()).isEqualTo("APPEND_ONLY");
+    assertThat(resp.getFormulaEffectiveDate()).isEqualTo("2026-05-01");
+    assertThat(resp.getFactorPriceConflictStrategy()).isEqualTo("KEEP_EXISTING");
+    assertThat(resp.getLinkedVersionCreatedCount()).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("importExcel：formulaEffectiveDate 格式非法时给出明确错误")
+  void importExcel_invalidFormulaEffectiveDateFailsFast() {
+    assertThatThrownBy(() -> service.importExcel(
+        new ByteArrayInputStream(new byte[]{1}), "2026-05", false,
+        "COMMERCIAL", "monthly.xlsx", null, "2026/05/01", "KEEP_EXISTING"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("formulaEffectiveDate 格式错误");
+  }
+
+  @Test
+  @DisplayName("importExcel：factorPriceConflictStrategy 非法时给出明确错误")
+  void importExcel_invalidFactorConflictStrategyFailsFast() {
+    assertThatThrownBy(() -> service.importExcel(
+        new ByteArrayInputStream(new byte[]{1}), "2026-05", false,
+        "COMMERCIAL", "monthly.xlsx", null, "2026-05-01", "BAD"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("factorPriceConflictStrategy 非法");
   }
 
   @Test
@@ -443,9 +549,9 @@ class PriceLinkedItemImportExcelTest {
   }
 
   @Test
-  @DisplayName("importExcel：APPEND_ONLY 遇到已有联动料号时跳过，不覆盖公式和绑定")
-  void importExcel_appendOnlySkipsExistingLinkedItemAndBindings() throws Exception {
-    PriceLinkedItem existing = existingLinkedItem();
+  @DisplayName("importExcel：当前版本内容一致时跳过，不新增版本也不重写绑定")
+  void importExcel_sameCurrentFormulaVersionSkipsLinkedItemAndBindings() throws Exception {
+    PriceLinkedItem existing = sameDerivedFormulaLinkedItem();
     when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
     V2Mocks mocks = configureV2Pipeline();
 
@@ -464,6 +570,9 @@ class PriceLinkedItemImportExcelTest {
     assertThat(resp.getLinkedCreatedCount()).isZero();
     assertThat(resp.getLinkedUpdatedCount()).isZero();
     assertThat(resp.getLinkedSkippedCount()).isEqualTo(1);
+    assertThat(resp.getLinkedVersionCreatedCount()).isZero();
+    assertThat(resp.getLinkedUnchangedSkippedCount()).isEqualTo(1);
+    assertThat(resp.getLinkedExpiredCount()).isZero();
     verify(itemMapper, never()).insert(any(PriceLinkedItem.class));
     verify(itemMapper, never()).updateById(any(PriceLinkedItem.class));
     verify(mocks.writeService(), never()).write(any());
@@ -501,14 +610,24 @@ class PriceLinkedItemImportExcelTest {
     verify(mocks.batchService()).createFactorBatch(batchCaptor.capture());
     assertThat(batchCaptor.getValue().getImportPurpose()).isEqualTo("LINKED_APPEND_ONLY");
     assertThat(batchCaptor.getValue().getEffectiveStrategy()).isEqualTo("APPEND_ONLY");
-    verify(mocks.monthlyPriceService()).upsert(any(), any(), any(), any(), any(), any());
+    ArgumentCaptor<String> factorStrategyCaptor = ArgumentCaptor.forClass(String.class);
+    verify(mocks.monthlyPriceService())
+        .upsert(any(), any(), any(), any(), any(), factorStrategyCaptor.capture());
+    assertThat(factorStrategyCaptor.getValue()).isEqualTo("KEEP_EXISTING");
   }
 
   @Test
-  @DisplayName("importExcel：OVERRIDE_EFFECTIVE 覆盖已有料号公式并允许覆盖绑定")
-  void importExcel_overrideEffectiveUpdatesExistingLinkedItemAndBindings() throws Exception {
+  @DisplayName("importExcel：当前公式变化时旧版本失效，新版本插入并用新 linked_item_id 写绑定")
+  void importExcel_formulaChangeExpiresOldVersionAndBindsNewVersion() throws Exception {
     PriceLinkedItem existing = existingLinkedItem();
     when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    AtomicReference<PriceLinkedItem> inserted = new AtomicReference<>();
+    doAnswer(invocation -> {
+      PriceLinkedItem item = invocation.getArgument(0);
+      item.setId(99L);
+      inserted.set(item);
+      return 1;
+    }).when(itemMapper).insert(any(PriceLinkedItem.class));
     V2Mocks mocks = configureV2Pipeline();
 
     byte[] xlsx = buildXlsxWithFactorSheetFirst(new Object[][] {
@@ -518,21 +637,26 @@ class PriceLinkedItemImportExcelTest {
 
     PriceItemImportResponse resp = service.importExcel(
         new ByteArrayInputStream(xlsx), "2026-05", false,
-        "COMMERCIAL", "monthly.xlsx", "OVERRIDE_EFFECTIVE");
+        "COMMERCIAL", "monthly.xlsx", "OVERRIDE_EFFECTIVE", "2026-06-01", "KEEP_EXISTING");
 
     assertThat(resp.getEffectiveStrategy()).isEqualTo("OVERRIDE_EFFECTIVE");
     assertThat(resp.getImportPurpose()).isEqualTo("LINKED_OVERRIDE_EFFECTIVE");
     assertThat(resp.getLinkedCount()).isEqualTo(1);
-    assertThat(resp.getLinkedCreatedCount()).isZero();
+    assertThat(resp.getLinkedCreatedCount()).isEqualTo(1);
     assertThat(resp.getLinkedUpdatedCount()).isEqualTo(1);
     ArgumentCaptor<PriceLinkedItem> itemCaptor = ArgumentCaptor.forClass(PriceLinkedItem.class);
     verify(itemMapper).updateById(itemCaptor.capture());
     assertThat(itemCaptor.getValue().getId()).isEqualTo(88L);
-    assertThat(itemCaptor.getValue().getFormulaExpr()).contains("[NORMALIZED]");
+    assertThat(itemCaptor.getValue().getEffectiveTo()).isEqualTo(LocalDate.of(2026, 5, 31));
+    assertThat(inserted.get().getId()).isEqualTo(99L);
+    assertThat(inserted.get().getEffectiveFrom()).isEqualTo(LocalDate.of(2026, 6, 1));
+    assertThat(inserted.get().getEffectiveTo()).isNull();
+    assertThat(inserted.get().getFormulaExpr()).contains("[NORMALIZED]");
 
     ArgumentCaptor<PriceLinkedAutoBindingWriteRequest> writeCaptor =
         ArgumentCaptor.forClass(PriceLinkedAutoBindingWriteRequest.class);
     verify(mocks.writeService()).write(writeCaptor.capture());
+    assertThat(writeCaptor.getValue().getLinkedItemId()).isEqualTo(99L);
     assertThat(writeCaptor.getValue().getOverwriteManualBinding()).isTrue();
 
     ArgumentCaptor<FactorUploadBatchCreateRequest> batchCaptor =
@@ -540,6 +664,165 @@ class PriceLinkedItemImportExcelTest {
     verify(mocks.batchService()).createFactorBatch(batchCaptor.capture());
     assertThat(batchCaptor.getValue().getImportPurpose()).isEqualTo("LINKED_OVERRIDE_EFFECTIVE");
     assertThat(batchCaptor.getValue().getEffectiveStrategy()).isEqualTo("OVERRIDE_EFFECTIVE");
+  }
+
+  @Test
+  @DisplayName("importExcel：Excel 行级生效/失效日期不控制联动公式生命周期")
+  void importExcel_ignoresRowEffectiveDatesForLinkedFormulaVersion() throws Exception {
+    AtomicReference<PriceLinkedItem> inserted = new AtomicReference<>();
+    when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    doAnswer(invocation -> {
+      PriceLinkedItem item = invocation.getArgument(0);
+      item.setId(91L);
+      inserted.set(item);
+      return 1;
+    }).when(itemMapper).insert(any(PriceLinkedItem.class));
+
+    byte[] xlsx = buildXlsx(new Object[][] {
+        {"210", "供管处", "供应商A", "S001", "部品联动", "物料A", "M001", "SPEC-A", "千克",
+            "电解铜+加工费", 0.0, 0.0, 12.8, null, 91.0, "0",
+            "2026-03-01", "2026-03-31", "联动"}
+    });
+
+    PriceItemImportResponse resp = service.importExcel(
+        new ByteArrayInputStream(xlsx), "2026-05", false,
+        "COMMERCIAL", "monthly.xlsx", null, "2026-02-01", "KEEP_EXISTING");
+
+    assertThat(resp.getLinkedCount()).isEqualTo(1);
+    assertThat(inserted.get().getEffectiveFrom()).isEqualTo(LocalDate.of(2026, 2, 1));
+    assertThat(inserted.get().getEffectiveTo()).isNull();
+  }
+
+  @Test
+  @DisplayName("importExcel：formulaEffectiveDate 不晚于旧版本 effective_from 时记录倒挂失败行")
+  void importExcel_rejectsFormulaEffectiveDateOverlap() throws Exception {
+    PriceLinkedItem existing = existingLinkedItem();
+    when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+
+    byte[] xlsx = buildXlsx(new Object[][] {
+        {"210", "供管处", "供应商A", "S001", "部品联动", "物料A", "M001", "SPEC-A", "千克",
+            "电解铜+加工费", 0.0, 0.0, 12.8, null, 91.0, "0", null, null, "联动"}
+    });
+
+    PriceItemImportResponse resp = service.importExcel(
+        new ByteArrayInputStream(xlsx), "2026-05", false,
+        "COMMERCIAL", "monthly.xlsx", null, "2026-05-01", "KEEP_EXISTING");
+
+    assertThat(resp.getLinkedCount()).isZero();
+    assertThat(resp.getSkipped()).isEqualTo(1);
+    assertThat(resp.getErrors()).hasSize(1);
+    assertThat(resp.getErrors().getFirst().getMaterialCode()).isEqualTo("M001");
+    assertThat(resp.getErrors().getFirst().getMessage()).contains("生命周期倒挂");
+    verify(itemMapper, never()).insert(any(PriceLinkedItem.class));
+    verify(itemMapper, never()).updateById(any(PriceLinkedItem.class));
+  }
+
+  @Test
+  @DisplayName("T8 准真实 Excel 重复导入：未改公式不新增版本且对账快照不变")
+  void importExcel_quasiRealWorkbookRepeatImportKeepsCurrentDataStable() throws Exception {
+    Assumptions.assumeTrue(
+        Files.exists(QUASI_REAL_IMPORT_SAMPLE),
+        "准真实 Excel 不存在，跳过本地回归: " + QUASI_REAL_IMPORT_SAMPLE);
+    byte[] xlsx = Files.readAllBytes(QUASI_REAL_IMPORT_SAMPLE);
+    List<PriceLinkedItem> currentItems = new ArrayList<>();
+    AtomicLong linkedItemId = new AtomicLong(100L);
+    when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    doAnswer(invocation -> {
+      PriceLinkedItem item = invocation.getArgument(0);
+      item.setId(linkedItemId.incrementAndGet());
+      currentItems.add(item);
+      return 1;
+    }).when(itemMapper).insert(any(PriceLinkedItem.class));
+
+    InMemoryLifecycleStore lifecycleStore = new InMemoryLifecycleStore();
+    QuasiRealV2Mocks mocks = configureQuasiRealV2Pipeline(lifecycleStore);
+
+    PriceItemImportResponse first = service.importExcel(
+        new ByteArrayInputStream(xlsx), "2026-05", false,
+        "COMMERCIAL", QUASI_REAL_IMPORT_SAMPLE.getFileName().toString(),
+        null, "2026-05-01", "KEEP_EXISTING");
+
+    assertThat(first.getFactorRecognizedCount()).isEqualTo(6);
+    assertThat(first.getMonthlyPriceCreatedCount()).isEqualTo(6);
+    assertThat(first.getMonthlyPriceConflictCount()).isZero();
+    assertThat(first.getMonthlyPriceOverwriteCount()).isZero();
+    assertThat(first.getLinkedCount()).isEqualTo(3);
+    assertThat(first.getLinkedVersionCreatedCount()).isEqualTo(3);
+    assertThat(first.getLinkedUnchangedSkippedCount()).isZero();
+    assertThat(first.getAutoBindingCount()).isEqualTo(5);
+    assertThat(currentItems).hasSize(3);
+    assertThat(lifecycleStore.identityCount()).isEqualTo(6);
+    assertThat(lifecycleStore.monthlyPriceCount()).isEqualTo(6);
+
+    String beforeRepeatSnapshot = lifecycleSnapshot(currentItems, lifecycleStore);
+    clearInvocations(itemMapper, mocks.standardService(), mocks.writeService());
+    when(itemMapper.selectOne(any(Wrapper.class)))
+        .thenReturn(currentItems.get(0), currentItems.get(1), currentItems.get(2));
+
+    PriceItemImportResponse second = service.importExcel(
+        new ByteArrayInputStream(xlsx), "2026-05", false,
+        "COMMERCIAL", QUASI_REAL_IMPORT_SAMPLE.getFileName().toString(),
+        null, "2026-05-01", "KEEP_EXISTING");
+
+    assertThat(second.getFactorRecognizedCount()).isEqualTo(6);
+    assertThat(second.getMonthlyPriceCreatedCount()).isZero();
+    assertThat(second.getMonthlyPriceUnchangedCount()).isEqualTo(6);
+    assertThat(second.getMonthlyPriceConflictCount()).isZero();
+    assertThat(second.getMonthlyPriceOverwriteCount()).isZero();
+    assertThat(second.getLinkedCount()).isZero();
+    assertThat(second.getLinkedVersionCreatedCount()).isZero();
+    assertThat(second.getLinkedUnchangedSkippedCount()).isEqualTo(3);
+    assertThat(second.getAutoBindingCount()).isZero();
+    assertThat(second.getBindingErrors()).isEmpty();
+    assertThat(lifecycleStore.identityCount()).isEqualTo(6);
+    assertThat(lifecycleStore.monthlyPriceCount()).isEqualTo(6);
+    assertThat(lifecycleSnapshot(currentItems, lifecycleStore))
+        .isEqualTo(beforeRepeatSnapshot);
+    verify(itemMapper, never()).insert(any(PriceLinkedItem.class));
+    verify(itemMapper, never()).updateById(any(PriceLinkedItem.class));
+    verify(mocks.standardService(), never()).checkAndRecord(any());
+    verify(mocks.writeService(), never()).write(any());
+  }
+
+  @Test
+  @DisplayName("list：默认只查询 effective_to 为空的当前版本")
+  void list_filtersCurrentLinkedVersionsByDefault() {
+    when(itemMapper.selectList(any(Wrapper.class))).thenReturn(java.util.List.of());
+
+    service.list("2026-05", null);
+
+    ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(itemMapper).selectList(queryCaptor.capture());
+    assertThat(queryCaptor.getValue().getSqlSegment()).contains("effective_to IS NULL");
+  }
+
+  @Test
+  @DisplayName("list：includeHistory=true 时可显式查询历史失效版本")
+  void list_includesExpiredLinkedVersionsWhenRequested() {
+    PriceLinkedItem oldVersion = new PriceLinkedItem();
+    oldVersion.setId(10L);
+    oldVersion.setMaterialCode("M001");
+    oldVersion.setEffectiveFrom(LocalDate.of(2026, 5, 1));
+    oldVersion.setEffectiveTo(LocalDate.of(2026, 5, 31));
+    PriceLinkedItem currentVersion = new PriceLinkedItem();
+    currentVersion.setId(11L);
+    currentVersion.setMaterialCode("M001");
+    currentVersion.setEffectiveFrom(LocalDate.of(2026, 6, 1));
+    currentVersion.setEffectiveTo(null);
+    when(itemMapper.selectList(any(Wrapper.class)))
+        .thenReturn(java.util.List.of(oldVersion, currentVersion));
+
+    var list = service.list("2026-05", null, true);
+
+    assertThat(list).hasSize(2);
+    var effectiveToValues = list.stream()
+        .map(com.sanhua.marketingcost.dto.PriceLinkedItemDto::getEffectiveTo)
+        .toList();
+    assertThat(effectiveToValues).contains(LocalDate.of(2026, 5, 31));
+    assertThat(effectiveToValues).containsNull();
+    ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(itemMapper).selectList(queryCaptor.capture());
+    assertThat(queryCaptor.getValue().getSqlSegment()).doesNotContain("effective_to IS NULL");
   }
 
   @Test
@@ -646,11 +929,24 @@ class PriceLinkedItemImportExcelTest {
     PriceLinkedItem item = new PriceLinkedItem();
     item.setId(88L);
     item.setPricingMonth("2026-05");
+    item.setBusinessUnitType("COMMERCIAL");
     item.setMaterialCode("M001");
     item.setSupplierCode("S001");
     item.setSpecModel("SPEC-A");
     item.setFormulaExpr("[old_formula]");
+    item.setEffectiveFrom(LocalDate.of(2026, 5, 1));
     item.setOrderType("联动");
+    return item;
+  }
+
+  private PriceLinkedItem sameDerivedFormulaLinkedItem() {
+    PriceLinkedItem item = existingLinkedItem();
+    item.setFormulaExpr("[NORMALIZED][blank_weight]*[__material]");
+    item.setBlankWeight(BigDecimal.ZERO);
+    item.setNetWeight(BigDecimal.ZERO);
+    item.setProcessFee(new BigDecimal("12.8"));
+    item.setManualPrice(new BigDecimal("91.0"));
+    item.setTaxIncluded(0);
     return item;
   }
 
@@ -844,6 +1140,334 @@ class PriceLinkedItemImportExcelTest {
       wb.write(out);
       return out.toByteArray();
     }
+  }
+
+  private QuasiRealV2Mocks configureQuasiRealV2Pipeline(
+      InMemoryLifecycleStore lifecycleStore) throws Exception {
+    PriceLinkedFactorWorkbookParser factorParser = new PriceLinkedFactorWorkbookParserImpl();
+    FactorUploadBatchService batchService = mock(FactorUploadBatchService.class);
+    FactorMonthlyPriceUpsertService monthlyPriceService = mock(FactorMonthlyPriceUpsertService.class);
+    PriceLinkedFormulaWorkbookParser formulaWorkbookParser = new PriceLinkedFormulaWorkbookParserImpl();
+    PriceLinkedFormulaFactorRefParser refParser = new PriceLinkedFormulaFactorRefParserImpl();
+    PriceLinkedFormulaFactorRefResolver refResolver = mock(PriceLinkedFormulaFactorRefResolver.class);
+    PriceLinkedBindingCandidateBuilder candidateBuilder = new PriceLinkedBindingCandidateBuilderImpl();
+    PriceLinkedStandardBindingService standardService = mock(PriceLinkedStandardBindingService.class);
+    PriceLinkedAutoBindingWriteService writeService = mock(PriceLinkedAutoBindingWriteService.class);
+    AtomicLong batchId = new AtomicLong(7700L);
+
+    when(batchService.createFactorBatch(any())).thenAnswer(invocation -> {
+      FactorUploadBatch batch = new FactorUploadBatch();
+      batch.setId(batchId.incrementAndGet());
+      return batch;
+    });
+    when(monthlyPriceService.upsert(any(), any(), any(), any(), any(), any()))
+        .thenAnswer(invocation -> lifecycleStore.upsert(
+            invocation.getArgument(0),
+            invocation.getArgument(1),
+            invocation.getArgument(2),
+            invocation.getArgument(4),
+            invocation.getArgument(5)));
+    when(batchService.saveRowRefs(any(), any(), any())).thenAnswer(invocation -> {
+      FactorRowRefSaveResult result = new FactorRowRefSaveResult();
+      result.setFactorUploadBatchId(invocation.getArgument(0));
+      FactorMonthlyPriceUpsertResult upsertResult = invocation.getArgument(2);
+      result.setInsertedCount(upsertResult == null ? 0 : upsertResult.getRows().size());
+      return result;
+    });
+    when(refResolver.resolve(any(), any())).thenAnswer(invocation -> lifecycleStore.resolve(
+        invocation.getArgument(0), invocation.getArgument(1)));
+    when(standardService.checkAndRecord(any())).thenAnswer(invocation ->
+        standardDecisions(invocation.getArgument(0)));
+    when(writeService.write(any())).thenAnswer(invocation ->
+        writeAllDecisions(invocation.getArgument(0)));
+
+    injectV2Service("factorWorkbookParser", factorParser);
+    injectV2Service("factorUploadBatchService", batchService);
+    injectV2Service("factorMonthlyPriceUpsertService", monthlyPriceService);
+    injectV2Service("formulaWorkbookParser", formulaWorkbookParser);
+    injectV2Service("formulaFactorRefParser", refParser);
+    injectV2Service("formulaFactorRefResolver", refResolver);
+    injectV2Service("bindingCandidateBuilder", candidateBuilder);
+    injectV2Service("standardBindingService", standardService);
+    injectV2Service("autoBindingWriteService", writeService);
+    injectV2Service("importResultClassifier", new PriceLinkedImportResultClassifierImpl());
+    return new QuasiRealV2Mocks(standardService, writeService);
+  }
+
+  private List<StandardBindingDecision> standardDecisions(StandardBindingCheckRequest request) {
+    if (request == null || request.getCandidates() == null) {
+      return List.of();
+    }
+    AtomicLong standardBindingId = new AtomicLong(5000L);
+    List<StandardBindingDecision> decisions = new ArrayList<>();
+    for (BindingCandidate candidate : request.getCandidates()) {
+      StandardBindingDecision decision = new StandardBindingDecision();
+      decision.setMaterialCode(candidate.getMaterialCode());
+      decision.setTokenName(candidate.getTokenName());
+      decision.setAction(PriceLinkedStandardBindingServiceImpl.ACTION_CREATE_HISTORY);
+      decision.setStandardBindingId(standardBindingId.incrementAndGet());
+      decision.setNewFactorIdentityId(candidate.getFactorIdentityId());
+      decision.setReason("T8 准真实回归：历史关系一致，允许自动绑定");
+      decision.setCandidate(candidate);
+      decisions.add(decision);
+    }
+    return decisions;
+  }
+
+  private PriceLinkedAutoBindingWriteResult writeAllDecisions(
+      PriceLinkedAutoBindingWriteRequest request) {
+    PriceLinkedAutoBindingWriteResult result = new PriceLinkedAutoBindingWriteResult();
+    if (request == null || request.getDecisions() == null) {
+      return result;
+    }
+    long bindingId = 9000L;
+    for (StandardBindingDecision decision : request.getDecisions()) {
+      if (decision != null) {
+        result.addWritten(decision.getTokenName(), ++bindingId);
+      }
+    }
+    return result;
+  }
+
+  private String lifecycleSnapshot(
+      List<PriceLinkedItem> items, InMemoryLifecycleStore lifecycleStore) {
+    List<String> itemRows = items.stream()
+        .sorted(Comparator.comparing(item -> text(item.getMaterialCode())))
+        .map(item -> String.join("|",
+            text(item.getMaterialCode()),
+            text(item.getSupplierCode()),
+            text(item.getSpecModel()),
+            text(item.getFormulaExpr()),
+            text(item.getFormulaExprCn()),
+            text(item.getBlankWeight()),
+            text(item.getNetWeight()),
+            text(item.getProcessFee()),
+            text(item.getAgentFee()),
+            text(item.getManualPrice()),
+            text(item.getTaxIncluded()),
+            text(item.getEffectiveFrom()),
+            text(item.getEffectiveTo())))
+        .toList();
+    return String.join("\n", itemRows) + "\n" + lifecycleStore.snapshot();
+  }
+
+  private String text(Object value) {
+    return Objects.toString(value, "");
+  }
+
+  private static final class InMemoryLifecycleStore {
+    private final Map<String, IdentityRecord> identities = new LinkedHashMap<>();
+    private final Map<String, MonthlyPriceRecord> monthlyPrices = new LinkedHashMap<>();
+    private final Map<String, FactorMonthlyPriceUpsertResult.RowResult> rowRefs =
+        new LinkedHashMap<>();
+    private long nextIdentityId = 1000L;
+    private long nextMonthlyPriceId = 2000L;
+
+    FactorMonthlyPriceUpsertResult upsert(
+        FactorWorkbookParseResult parseResult,
+        String priceMonth,
+        String businessUnitType,
+        Long sourceUploadBatchId,
+        String factorPriceConflictStrategy) {
+      FactorMonthlyPriceUpsertResult result = new FactorMonthlyPriceUpsertResult();
+      if (parseResult == null) {
+        return result;
+      }
+      for (FactorSheetParseResult sheet : parseResult.getSheets()) {
+        for (FactorRowParseResult row : sheet.getRows()) {
+          upsertRow(row, priceMonth, businessUnitType, sourceUploadBatchId,
+              factorPriceConflictStrategy, result);
+        }
+      }
+      return result;
+    }
+
+    List<ResolvedFactorRef> resolve(Long factorUploadBatchId, List<FormulaFactorRef> refs) {
+      if (refs == null) {
+        return List.of();
+      }
+      List<ResolvedFactorRef> resolved = new ArrayList<>();
+      for (FormulaFactorRef ref : refs) {
+        ResolvedFactorRef out = copyRef(ref);
+        FactorMonthlyPriceUpsertResult.RowResult rowRef =
+            ref == null ? null : rowRefs.get(cellKey(ref.getSheetName(), ref.getRowNumber()));
+        if (rowRef == null) {
+          out.setErrorMessage("T8 准真实回归未找到影响因素行号映射");
+        } else {
+          out.setFactorIdentityId(rowRef.getFactorIdentityId());
+          out.setFactorMonthlyPriceId(rowRef.getFactorMonthlyPriceId());
+          out.setFactorSeqNo(rowRef.getFactorSeqNo());
+          out.setShortName(rowRef.getShortName());
+          out.setPriceSource(rowRef.getPriceSource());
+          out.setPrice(rowRef.getNewPrice());
+        }
+        resolved.add(out);
+      }
+      return resolved;
+    }
+
+    int identityCount() {
+      return identities.size();
+    }
+
+    int monthlyPriceCount() {
+      return monthlyPrices.size();
+    }
+
+    String snapshot() {
+      List<String> monthlyRows = monthlyPrices.entrySet().stream()
+          .sorted(Map.Entry.comparingByKey())
+          .map(entry -> entry.getKey() + "=" + normalizePrice(entry.getValue().price()))
+          .toList();
+      return "identityCount=" + identityCount()
+          + ";monthlyPriceCount=" + monthlyPriceCount()
+          + ";monthly=" + String.join(",", monthlyRows);
+    }
+
+    private void upsertRow(
+        FactorRowParseResult row,
+        String priceMonth,
+        String businessUnitType,
+        Long sourceUploadBatchId,
+        String factorPriceConflictStrategy,
+        FactorMonthlyPriceUpsertResult result) {
+      String identityKey = identityKey(row, businessUnitType);
+      IdentityRecord identity = identities.get(identityKey);
+      String identityAction;
+      if (identity == null) {
+        identity = new IdentityRecord(
+            ++nextIdentityId,
+            normalize(row.getFactorSeqNo()),
+            normalize(row.getFactorName()),
+            normalize(row.getShortName()),
+            normalize(row.getPriceSource()));
+        identities.put(identityKey, identity);
+        result.setIdentityCreatedCount(result.getIdentityCreatedCount() + 1);
+        identityAction = "CREATE";
+      } else {
+        result.setIdentityReusedCount(result.getIdentityReusedCount() + 1);
+        identityAction = "REUSE";
+      }
+
+      String monthlyKey = identity.id() + "|" + normalize(priceMonth);
+      MonthlyPriceRecord monthlyPrice = monthlyPrices.get(monthlyKey);
+      BigDecimal oldPrice = monthlyPrice == null ? null : monthlyPrice.price();
+      BigDecimal incomingPrice = normalizePrice(row.getPrice());
+      String monthlyAction;
+      if (monthlyPrice == null) {
+        monthlyPrice = new MonthlyPriceRecord(++nextMonthlyPriceId, incomingPrice);
+        monthlyPrices.put(monthlyKey, monthlyPrice);
+        result.setMonthlyPriceCreatedCount(result.getMonthlyPriceCreatedCount() + 1);
+        monthlyAction = "CREATE";
+      } else if (samePrice(monthlyPrice.price(), incomingPrice)) {
+        result.setMonthlyPriceUnchangedCount(result.getMonthlyPriceUnchangedCount() + 1);
+        monthlyAction = "NO_CHANGE";
+      } else if ("KEEP_EXISTING".equalsIgnoreCase(factorPriceConflictStrategy)) {
+        result.setMonthlyPriceSkippedCount(result.getMonthlyPriceSkippedCount() + 1);
+        result.setMonthlyPriceConflictCount(result.getMonthlyPriceConflictCount() + 1);
+        monthlyAction = "CONFLICT_KEEP_EXISTING";
+      } else {
+        monthlyPrice.setPrice(incomingPrice);
+        result.setMonthlyPriceUpdatedCount(result.getMonthlyPriceUpdatedCount() + 1);
+        result.setMonthlyPriceOverwriteCount(result.getMonthlyPriceOverwriteCount() + 1);
+        monthlyAction = "UPDATE";
+      }
+
+      FactorMonthlyPriceUpsertResult.RowResult rowResult =
+          new FactorMonthlyPriceUpsertResult.RowResult();
+      rowResult.setSourceSheetName(row.getSourceSheetName());
+      rowResult.setSourceRowNumber(row.getSourceRowNumber());
+      rowResult.setFactorIdentityId(identity.id());
+      rowResult.setFactorMonthlyPriceId(monthlyPrice.id());
+      rowResult.setFactorSeqNo(identity.factorSeqNo());
+      rowResult.setFactorName(identity.factorName());
+      rowResult.setShortName(identity.shortName());
+      rowResult.setPriceSource(identity.priceSource());
+      rowResult.setIdentityAction(identityAction);
+      rowResult.setMonthlyPriceAction(monthlyAction);
+      rowResult.setOldPrice(oldPrice);
+      rowResult.setNewPrice(monthlyPrice.price());
+      rowResult.setOriginalPrice(normalizePrice(row.getOriginalPrice()));
+      rowResult.setUnit(normalize(row.getUnit()));
+      result.getRows().add(rowResult);
+      rowRefs.put(cellKey(row.getSourceSheetName(), row.getSourceRowNumber()), rowResult);
+    }
+
+    private ResolvedFactorRef copyRef(FormulaFactorRef ref) {
+      ResolvedFactorRef out = new ResolvedFactorRef();
+      if (ref == null) {
+        return out;
+      }
+      out.setWorkbookName(ref.getWorkbookName());
+      out.setSheetName(ref.getSheetName());
+      out.setColumnName(ref.getColumnName());
+      out.setRowNumber(ref.getRowNumber());
+      out.setRawRef(ref.getRawRef());
+      return out;
+    }
+
+    private String identityKey(FactorRowParseResult row, String businessUnitType) {
+      return String.join("|",
+          normalize(businessUnitType),
+          normalize(row.getFactorSeqNo()),
+          normalize(row.getFactorName()),
+          normalize(row.getShortName()),
+          normalize(row.getPriceSource()));
+    }
+
+    private static String cellKey(String sheetName, Integer rowNumber) {
+      return normalize(sheetName) + "#" + rowNumber;
+    }
+
+    private static String normalize(String raw) {
+      return raw == null ? "" : raw.replace('\u00A0', ' ').replaceAll("\\s+", " ").trim();
+    }
+
+    private static BigDecimal normalizePrice(BigDecimal value) {
+      return value == null ? null : value.stripTrailingZeros();
+    }
+
+    private static boolean samePrice(BigDecimal left, BigDecimal right) {
+      if (left == null || right == null) {
+        return left == right;
+      }
+      return left.compareTo(right) == 0;
+    }
+
+    private record IdentityRecord(
+        Long id,
+        String factorSeqNo,
+        String factorName,
+        String shortName,
+        String priceSource) {
+    }
+
+    private static final class MonthlyPriceRecord {
+      private final Long id;
+      private BigDecimal price;
+
+      private MonthlyPriceRecord(Long id, BigDecimal price) {
+        this.id = id;
+        this.price = price;
+      }
+
+      private Long id() {
+        return id;
+      }
+
+      private BigDecimal price() {
+        return price;
+      }
+
+      private void setPrice(BigDecimal price) {
+        this.price = price;
+      }
+    }
+  }
+
+  private record QuasiRealV2Mocks(
+      PriceLinkedStandardBindingService standardService,
+      PriceLinkedAutoBindingWriteService writeService) {
   }
 
   private record V2Mocks(

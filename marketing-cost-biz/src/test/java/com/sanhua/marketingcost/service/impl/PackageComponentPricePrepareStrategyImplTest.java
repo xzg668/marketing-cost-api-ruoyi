@@ -19,6 +19,7 @@ import com.sanhua.marketingcost.entity.PackageComponentSnapshot;
 import com.sanhua.marketingcost.service.PackageComponentPriceService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -61,6 +62,23 @@ class PackageComponentPricePrepareStrategyImplTest {
     assertThat(captor.getValue().getCalcBatchId()).isEqualTo("PPR-001");
     assertThat(captor.getValue().getAsOfDate()).isEqualTo(LocalDate.now());
     assertThat(captor.getValue().isForceRefresh()).isTrue();
+  }
+
+  @Test
+  @DisplayName("T22：月度准备传递 price_as_of_time 并派生 asOfDate")
+  void monthlyPreparePassesPriceAsOfTime() {
+    LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 26, 10, 30);
+    when(packageComponentPriceService.ensurePrice(any(PackagePriceRequest.class)))
+        .thenReturn(priceResult("PRICED", true, new BigDecimal("4.50"), 703L, List.of()));
+
+    PackageComponentPricePrepareResult result =
+        strategy.prepare("MR-001", "OA-001", "2026-05", priceAsOfTime, "主制造", "U9", planItem());
+
+    assertThat(result.getStatus()).isEqualTo("READY");
+    ArgumentCaptor<PackagePriceRequest> captor = ArgumentCaptor.forClass(PackagePriceRequest.class);
+    verify(packageComponentPriceService).ensurePrice(captor.capture());
+    assertThat(captor.getValue().getPriceAsOfTime()).isEqualTo(priceAsOfTime);
+    assertThat(captor.getValue().getAsOfDate()).isEqualTo(LocalDate.parse("2026-05-26"));
   }
 
   @Test

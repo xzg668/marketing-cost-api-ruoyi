@@ -70,6 +70,7 @@ class FactorAdjustQueryServiceImplTest {
     request.setPricingMonth("2026-05");
     request.setBusinessUnitType("COMMERCIAL");
     request.setAdjustBatchNo("FAB202605");
+    request.setAdjustType("MONTHLY");
     request.setUsageScope("REPRICE_ONLY");
     request.setStatus("SUCCESS");
     request.setUploadedBy("alice");
@@ -83,7 +84,7 @@ class FactorAdjustQueryServiceImplTest {
     String sql = capturedBatchSql();
     assertThat(sql).contains(
         "pricing_month", "business_unit_type", "adjust_batch_no",
-        "usage_scope", "status", "uploaded_by");
+        "adjust_type", "usage_scope", "status", "uploaded_by");
   }
 
   @Test
@@ -179,6 +180,7 @@ class FactorAdjustQueryServiceImplTest {
     FactorAdjustBatch batch = new FactorAdjustBatch();
     batch.setId(id);
     batch.setAdjustBatchNo("FAB202605160001");
+    batch.setAdjustType("MONTHLY");
     batch.setPricingMonth("2026-05");
     batch.setBusinessUnitType("COMMERCIAL");
     batch.setUsageScope("REPRICE_ONLY");

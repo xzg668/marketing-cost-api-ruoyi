@@ -9,5 +9,7 @@ public interface QuoteBomStatusService {
 
   QuoteBomStatusResponse checkByOaNo(String oaNo);
 
+  QuoteBomStatusResponse checkForCostRun(String oaNo);
+
   QuoteBomBatchSyncResponse batchSyncFromU9Source(List<Long> oaFormItemIds);
 }

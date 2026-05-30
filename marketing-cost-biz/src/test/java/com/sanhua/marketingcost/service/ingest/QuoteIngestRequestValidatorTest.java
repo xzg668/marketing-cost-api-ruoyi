@@ -93,6 +93,20 @@ class QuoteIngestRequestValidatorTest {
   }
 
   @Test
+  void processCodeCanBeDerivedFromOaNo() {
+    QuoteIngestRequest request = minimalRequest();
+    request.setOaNo("FI-SC-006-20260327-037");
+    request.setExternalFormNo(request.getOaNo());
+    request.getHeader().setProcessCode(null);
+
+    QuoteIngestPreviewResponse response = validator.validate(request);
+
+    assertThat(response.isValid()).isTrue();
+    assertThat(response.getProcessCode()).isEqualTo("FI-SC-006");
+    assertThat(response.getErrors()).extracting("code").doesNotContain("PROCESS_CODE_REQUIRED");
+  }
+
+  @Test
   void invalidDateFailsWithStructuredError() {
     QuoteIngestRequest request = minimalRequest();
     request.getHeader().setApplyDate("2026-99-99");

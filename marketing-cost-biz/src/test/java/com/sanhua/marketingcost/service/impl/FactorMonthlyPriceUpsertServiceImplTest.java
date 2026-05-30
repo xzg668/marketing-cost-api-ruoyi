@@ -20,12 +20,14 @@ import com.sanhua.marketingcost.dto.QuoteBasePriceDetectResult;
 import com.sanhua.marketingcost.entity.FactorIdentity;
 import com.sanhua.marketingcost.entity.FactorMonthlyPrice;
 import com.sanhua.marketingcost.entity.FactorMonthlyPriceChangeLog;
+import com.sanhua.marketingcost.enums.FactorPriceConflictStrategy;
 import com.sanhua.marketingcost.mapper.FactorIdentityMapper;
 import com.sanhua.marketingcost.mapper.FactorMonthlyPriceChangeLogMapper;
 import com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper;
 import com.sanhua.marketingcost.service.QuoteBasePriceMappingService;
 import java.math.BigDecimal;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -168,8 +170,8 @@ class FactorMonthlyPriceUpsertServiceImplTest {
   }
 
   @Test
-  @DisplayName("upsert：同身份同月份价格变化，更新当前价格并写 UPDATE 日志")
-  void upsertUpdatesMonthlyPriceAndWritesChangeLogWhenPriceChanged() {
+  @DisplayName("upsert：同身份同月份异价且 OVERWRITE，更新当前价格并写 UPDATE 日志")
+  void upsertOverwritesMonthlyPriceAndWritesChangeLogWhenPriceChanged() {
     FactorIdentity existingIdentity = identity(100L);
     FactorMonthlyPrice existingPrice = monthlyPrice(200L, "16.4");
     when(identityMapper.selectOne(any(Wrapper.class))).thenReturn(existingIdentity);
@@ -177,9 +179,12 @@ class FactorMonthlyPriceUpsertServiceImplTest {
 
     FactorMonthlyPriceUpsertResult result = service.upsert(
         workbook(row("64", "SUS304全名", "SUS304/2Bδ0.6-900", "出厂价", "16.8")),
-        "2026-05", "COMMERCIAL", "alice", 9003L);
+        "2026-05", "COMMERCIAL", "alice", 9003L,
+        FactorPriceConflictStrategy.OVERWRITE.getCode());
 
     assertThat(result.getMonthlyPriceUpdatedCount()).isEqualTo(1);
+    assertThat(result.getMonthlyPriceOverwriteCount()).isEqualTo(1);
+    assertThat(result.getMonthlyPriceConflictCount()).isZero();
     assertThat(result.getRows().getFirst().getMonthlyPriceAction()).isEqualTo("UPDATE");
     assertThat(result.getRows().getFirst().getOldPrice()).isEqualByComparingTo("16.4");
 
@@ -201,8 +206,8 @@ class FactorMonthlyPriceUpsertServiceImplTest {
   }
 
   @Test
-  @DisplayName("upsert：APPEND_ONLY 遇到已有月度价变化时复用旧价，不覆盖日常报价生效价")
-  void upsertAppendOnlySkipsExistingMonthlyPriceUpdate() {
+  @DisplayName("upsert：同身份同月份异价且 KEEP_EXISTING，不更新并记冲突")
+  void upsertKeepExistingMarksConflictWhenMonthlyPriceChanged() {
     FactorIdentity existingIdentity = identity(100L);
     FactorMonthlyPrice existingPrice = monthlyPrice(200L, "16.4");
     when(identityMapper.selectOne(any(Wrapper.class))).thenReturn(existingIdentity);
@@ -210,17 +215,62 @@ class FactorMonthlyPriceUpsertServiceImplTest {
 
     FactorMonthlyPriceUpsertResult result = service.upsert(
         workbook(row("64", "SUS304全名", "SUS304/2Bδ0.6-900", "出厂价", "16.8")),
-        "2026-05", "COMMERCIAL", "alice", 9003L, "APPEND_ONLY");
+        "2026-05", "COMMERCIAL", "alice", 9003L,
+        FactorPriceConflictStrategy.KEEP_EXISTING.getCode());
 
     assertThat(result.getMonthlyPriceUpdatedCount()).isZero();
+    assertThat(result.getMonthlyPriceOverwriteCount()).isZero();
     assertThat(result.getMonthlyPriceSkippedCount()).isEqualTo(1);
+    assertThat(result.getMonthlyPriceConflictCount()).isEqualTo(1);
     assertThat(result.getRows()).hasSize(1);
     assertThat(result.getRows().getFirst().getFactorMonthlyPriceId()).isEqualTo(200L);
-    assertThat(result.getRows().getFirst().getMonthlyPriceAction()).isEqualTo("SKIP_EXISTING");
+    assertThat(result.getRows().getFirst().getMonthlyPriceAction()).isEqualTo("CONFLICT_KEEP_EXISTING");
     assertThat(result.getRows().getFirst().getOldPrice()).isEqualByComparingTo("16.4");
     assertThat(result.getRows().getFirst().getNewPrice()).isEqualByComparingTo("16.4");
     verify(monthlyPriceMapper, never()).updateById(any(FactorMonthlyPrice.class));
     verify(changeLogMapper, never()).insert(any(FactorMonthlyPriceChangeLog.class));
+  }
+
+  @Test
+  @DisplayName("upsert：多报价员重复导入同一影响因素表，不重复新增身份和月度价格")
+  void upsertAcrossOperatorsReusesExistingIdentityAndMonthlyPrice() {
+    AtomicReference<FactorIdentity> persistedIdentity = new AtomicReference<>();
+    AtomicReference<FactorMonthlyPrice> persistedMonthlyPrice = new AtomicReference<>();
+    doAnswer(invocation -> {
+      FactorIdentity identity = invocation.getArgument(0);
+      identity.setId(100L);
+      persistedIdentity.set(identity);
+      return 1;
+    }).when(identityMapper).insert(any(FactorIdentity.class));
+    doAnswer(invocation -> {
+      FactorMonthlyPrice price = invocation.getArgument(0);
+      price.setId(200L);
+      persistedMonthlyPrice.set(price);
+      return 1;
+    }).when(monthlyPriceMapper).insert(any(FactorMonthlyPrice.class));
+    when(identityMapper.selectOne(any(Wrapper.class)))
+        .thenAnswer(invocation -> persistedIdentity.get());
+    when(monthlyPriceMapper.selectOne(any(Wrapper.class)))
+        .thenAnswer(invocation -> persistedMonthlyPrice.get());
+
+    FactorWorkbookParseResult workbook =
+        workbook(row("64", "SUS304全名", "SUS304/2Bδ0.6-900", "出厂价", "16.4"));
+
+    FactorMonthlyPriceUpsertResult first = service.upsert(
+        workbook, "2026-05", "COMMERCIAL", "alice", 9003L);
+    FactorMonthlyPriceUpsertResult second = service.upsert(
+        workbook, "2026-05", "COMMERCIAL", "bob", 9004L);
+
+    assertThat(first.getIdentityCreatedCount()).isEqualTo(1);
+    assertThat(first.getMonthlyPriceCreatedCount()).isEqualTo(1);
+    assertThat(second.getIdentityReusedCount()).isEqualTo(1);
+    assertThat(second.getMonthlyPriceUnchangedCount()).isEqualTo(1);
+    assertThat(second.getRows().getFirst().getFactorIdentityId()).isEqualTo(100L);
+    assertThat(second.getRows().getFirst().getFactorMonthlyPriceId()).isEqualTo(200L);
+    verify(identityMapper, times(1)).insert(any(FactorIdentity.class));
+    verify(monthlyPriceMapper, times(1)).insert(any(FactorMonthlyPrice.class));
+    verify(monthlyPriceMapper, never()).updateById(any(FactorMonthlyPrice.class));
+    verify(changeLogMapper, times(1)).insert(any(FactorMonthlyPriceChangeLog.class));
   }
 
   @Test

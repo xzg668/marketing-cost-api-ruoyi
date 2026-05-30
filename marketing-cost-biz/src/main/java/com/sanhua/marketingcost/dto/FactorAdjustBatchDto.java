@@ -10,6 +10,7 @@ import lombok.Setter;
 public class FactorAdjustBatchDto {
   private Long id;
   private String adjustBatchNo;
+  private String adjustType;
   private String pricingMonth;
   private String businessUnitType;
   private String usageScope;
@@ -36,6 +37,7 @@ public class FactorAdjustBatchDto {
     }
     dto.setId(e.getId());
     dto.setAdjustBatchNo(e.getAdjustBatchNo());
+    dto.setAdjustType(e.getAdjustType());
     dto.setPricingMonth(e.getPricingMonth());
     dto.setBusinessUnitType(e.getBusinessUnitType());
     dto.setUsageScope(e.getUsageScope());

@@ -6,7 +6,6 @@ import com.sanhua.marketingcost.dto.ingest.QuoteIngestHeaderRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestItemRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteValidationError;
-import com.sanhua.marketingcost.enums.QuoteExtraFeeCategory;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -117,7 +116,7 @@ public class QuoteOaFormExcelParser {
         continue;
       }
 
-      if (isFeeField(mapping.getFieldCode(), mapping.getFieldName())) {
+      if (QuoteIngestFeeFieldClassifier.isFeeField(mapping.getFieldCode(), mapping.getFieldName())) {
         request.getExtraFees().add(toFee(mapping, value, mapping.getSourceRange()));
       } else if (!QuoteIngestFieldBinder.applyRequestField(request, mapping.getFieldCode(), value)
           && !QuoteIngestFieldBinder.applyHeaderField(request.getHeader(), mapping.getFieldCode(), value)) {
@@ -176,7 +175,7 @@ public class QuoteOaFormExcelParser {
           continue;
         }
         hasValue = true;
-        if (isFeeField(column.mapping.getFieldCode(), column.mapping.getFieldName())) {
+        if (QuoteIngestFeeFieldClassifier.isFeeField(column.mapping.getFieldCode(), column.mapping.getFieldName())) {
           item.getExtraFees().add(toFee(column.mapping, value, sourcePath));
         } else if (!QuoteIngestFieldBinder.applyItemField(item, column.mapping.getFieldCode(), value)) {
           item.getExtraFields().add(toExtraField(column.mapping, value, sourcePath));
@@ -248,61 +247,12 @@ public class QuoteOaFormExcelParser {
     QuoteExtraFeeRequest fee = new QuoteExtraFeeRequest();
     fee.setFeeCode(mapping.getFieldCode());
     fee.setFeeName(mapping.getFieldName());
-    fee.setFeeCategory(feeCategory(mapping.getFieldCode(), mapping.getFieldName()));
+    fee.setFeeCategory(QuoteIngestFeeFieldClassifier.feeCategory(mapping.getFieldCode(), mapping.getFieldName()));
     fee.setAmount(value);
-    fee.setUnit(unit(mapping.getFieldName()));
+    fee.setUnit(QuoteIngestFeeFieldClassifier.unit(mapping.getFieldName()));
     fee.setSourceFieldName(mapping.getFieldName());
     fee.setSourceFieldPath(sourcePath);
     return fee;
-  }
-
-  private boolean isFeeField(String fieldCode, String fieldName) {
-    String code = nullToEmpty(fieldCode).toLowerCase(Locale.ROOT);
-    String name = nullToEmpty(fieldName);
-    if (code.contains("bearer") || name.contains("承担")) {
-      return false;
-    }
-    return code.contains("fixture")
-        || code.contains("mold")
-        || code.contains("toolcost")
-        || code.contains("tooling")
-        || code.contains("certificationfee")
-        || code.contains("equipmentfee")
-        || name.contains("工装")
-        || name.contains("模具")
-        || name.contains("刀具")
-        || name.contains("认证费")
-        || name.contains("设备费");
-  }
-
-  private String feeCategory(String fieldCode, String fieldName) {
-    String text = nullToEmpty(fieldCode) + " " + nullToEmpty(fieldName);
-    if (text.contains("认证")) {
-      return QuoteExtraFeeCategory.CERTIFICATION.getCode();
-    }
-    if (text.contains("设备")) {
-      return QuoteExtraFeeCategory.EQUIPMENT.getCode();
-    }
-    if (text.contains("刀具") || text.toLowerCase(Locale.ROOT).contains("toolcost")) {
-      return QuoteExtraFeeCategory.CUTTER.getCode();
-    }
-    if (text.contains("模具") || text.toLowerCase(Locale.ROOT).contains("mold")) {
-      return QuoteExtraFeeCategory.MOLD.getCode();
-    }
-    if (text.contains("工装") || text.toLowerCase(Locale.ROOT).contains("fixture")) {
-      return QuoteExtraFeeCategory.TOOLING.getCode();
-    }
-    return QuoteExtraFeeCategory.OTHER.getCode();
-  }
-
-  private String unit(String fieldName) {
-    if (StringUtils.hasText(fieldName) && fieldName.contains("万元")) {
-      return "万元";
-    }
-    if (StringUtils.hasText(fieldName) && fieldName.contains("元/只")) {
-      return "元/只";
-    }
-    return "元";
   }
 
   private String cellValue(

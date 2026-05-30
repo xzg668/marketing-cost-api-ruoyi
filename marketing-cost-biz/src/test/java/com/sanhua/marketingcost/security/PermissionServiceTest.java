@@ -79,6 +79,13 @@ class PermissionServiceTest {
         assertTrue(permissionService.hasRole("ROLE_BU_DIRECTOR"));
     }
 
+    /** 数据库角色编码为 bu_director 时，UserDetailsService 会生成 ROLE_bu_director。 */
+    @Test
+    void hasRoleAcceptsLowercaseStoredRoleKey() {
+        authenticate("ROLE_bu_director");
+        assertTrue(permissionService.hasRole("BU_DIRECTOR"));
+    }
+
     /** 将指定 authority 字符串放入 SecurityContext */
     private void authenticate(String... authorities) {
         List<SimpleGrantedAuthority> list = java.util.Arrays.stream(authorities)

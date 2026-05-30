@@ -26,11 +26,7 @@ public class BomAvailabilityAdapterImpl implements BomAvailabilityAdapter {
     }
 
     BomCostingRow snapshot =
-        bomCostingRowMapper.selectOne(
-            Wrappers.lambdaQuery(BomCostingRow.class)
-                .eq(BomCostingRow::getOaNo, oaNo)
-                .eq(BomCostingRow::getTopProductCode, productCode.trim())
-                .last("LIMIT 1"));
+        bomCostingRowMapper.selectAvailabilitySnapshot(oaNo, productCode.trim());
     if (snapshot != null) {
       BomAvailability availability = new BomAvailability();
       availability.setAvailable(true);

@@ -26,6 +26,7 @@ import com.sanhua.marketingcost.service.ingest.QuoteExcelTemplateFile;
 import com.sanhua.marketingcost.service.ingest.QuoteExcelTemplateService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestService;
+import com.sanhua.marketingcost.service.ingest.QuotePdfImportService;
 import com.sanhua.marketingcost.service.ingest.QuoteRequestQueryService;
 import java.io.InputStream;
 import java.util.List;
@@ -37,6 +38,7 @@ import org.springframework.mock.web.MockMultipartFile;
 class QuoteIngestControllerTest {
   private QuoteIngestService quoteIngestService;
   private QuoteExcelImportService quoteExcelImportService;
+  private QuotePdfImportService quotePdfImportService;
   private QuoteExcelTemplateService quoteExcelTemplateService;
   private QuoteBomStatusService quoteBomStatusService;
   private QuoteRequestQueryService quoteRequestQueryService;
@@ -46,6 +48,7 @@ class QuoteIngestControllerTest {
   void setUp() {
     quoteIngestService = mock(QuoteIngestService.class);
     quoteExcelImportService = mock(QuoteExcelImportService.class);
+    quotePdfImportService = mock(QuotePdfImportService.class);
     quoteExcelTemplateService = mock(QuoteExcelTemplateService.class);
     quoteBomStatusService = mock(QuoteBomStatusService.class);
     quoteRequestQueryService = mock(QuoteRequestQueryService.class);
@@ -53,6 +56,7 @@ class QuoteIngestControllerTest {
         new QuoteIngestController(
             quoteIngestService,
             quoteExcelImportService,
+            quotePdfImportService,
             quoteExcelTemplateService,
             quoteBomStatusService,
             quoteRequestQueryService);
@@ -143,6 +147,64 @@ class QuoteIngestControllerTest {
   }
 
   @Test
+  void previewPdfReturnsServiceResponse() {
+    MockMultipartFile file =
+        new MockMultipartFile("file", "quote.pdf", "application/pdf", new byte[] {1});
+    QuoteExcelImportPreviewResponse response = new QuoteExcelImportPreviewResponse();
+    response.setValid(true);
+    when(quotePdfImportService.preview(any(InputStream.class), eq("quote.pdf"))).thenReturn(response);
+
+    CommonResult<QuoteExcelImportPreviewResponse> result = controller.previewPdf(file);
+
+    assertThat(result.isSuccess()).isTrue();
+    assertThat(result.getData().isValid()).isTrue();
+    verify(quotePdfImportService).preview(any(InputStream.class), eq("quote.pdf"));
+  }
+
+  @Test
+  void previewPdfExceptionReturnsBadRequest() {
+    MockMultipartFile file =
+        new MockMultipartFile("file", "broken.pdf", "application/pdf", new byte[] {1});
+    when(quotePdfImportService.preview(any(InputStream.class), eq("broken.pdf")))
+        .thenThrow(new QuoteIngestException("PDF 解析失败"));
+
+    CommonResult<QuoteExcelImportPreviewResponse> result = controller.previewPdf(file);
+
+    assertThat(result.isSuccess()).isFalse();
+    assertThat(result.getCode()).isEqualTo(GlobalErrorCodeConstants.BAD_REQUEST.getCode());
+    assertThat(result.getMsg()).contains("PDF 解析失败");
+  }
+
+  @Test
+  void commitPdfReturnsServiceResponse() {
+    MockMultipartFile file =
+        new MockMultipartFile("file", "quote.pdf", "application/pdf", new byte[] {1});
+    QuoteExcelImportCommitResponse response = new QuoteExcelImportCommitResponse();
+    response.setCommitted(true);
+    when(quotePdfImportService.commit(any(InputStream.class), eq("quote.pdf"))).thenReturn(response);
+
+    CommonResult<QuoteExcelImportCommitResponse> result = controller.commitPdf(file);
+
+    assertThat(result.isSuccess()).isTrue();
+    assertThat(result.getData().isCommitted()).isTrue();
+    verify(quotePdfImportService).commit(any(InputStream.class), eq("quote.pdf"));
+  }
+
+  @Test
+  void commitPdfExceptionReturnsBadRequest() {
+    MockMultipartFile file =
+        new MockMultipartFile("file", "broken.pdf", "application/pdf", new byte[] {1});
+    when(quotePdfImportService.commit(any(InputStream.class), eq("broken.pdf")))
+        .thenThrow(new QuoteIngestException("PDF 解析失败"));
+
+    CommonResult<QuoteExcelImportCommitResponse> result = controller.commitPdf(file);
+
+    assertThat(result.isSuccess()).isFalse();
+    assertThat(result.getCode()).isEqualTo(GlobalErrorCodeConstants.BAD_REQUEST.getCode());
+    assertThat(result.getMsg()).contains("PDF 解析失败");
+  }
+
+  @Test
   void listExcelTemplatesReturnsServiceResponse() {
     QuoteExcelTemplateInfoResponse row = new QuoteExcelTemplateInfoResponse();
     row.setTemplateType("FI-SC-020");
@@ -211,6 +273,21 @@ class QuoteIngestControllerTest {
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getSyncedCount()).isEqualTo(1);
     verify(quoteBomStatusService).checkByOaNo("OA-T7-001");
+  }
+
+  @Test
+  void checkBomStatusForCostRunReturnsServiceResponse() {
+    QuoteBomStatusCheckRequest request = new QuoteBomStatusCheckRequest();
+    request.setOaNo("OA-T7-001");
+    QuoteBomStatusResponse response = new QuoteBomStatusResponse();
+    response.setSyncedCount(1);
+    when(quoteBomStatusService.checkForCostRun("OA-T7-001")).thenReturn(response);
+
+    CommonResult<QuoteBomStatusResponse> result = controller.checkBomStatusForCostRun(request);
+
+    assertThat(result.isSuccess()).isTrue();
+    assertThat(result.getData().getSyncedCount()).isEqualTo(1);
+    verify(quoteBomStatusService).checkForCostRun("OA-T7-001");
   }
 
   @Test

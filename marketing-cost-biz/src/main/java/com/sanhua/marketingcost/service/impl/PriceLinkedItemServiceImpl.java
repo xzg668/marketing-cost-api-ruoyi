@@ -41,6 +41,7 @@ import com.sanhua.marketingcost.entity.PriceLinkedFormulaChangeLog;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.enums.FactorUploadImportPurpose;
+import com.sanhua.marketingcost.enums.FactorPriceConflictStrategy;
 import com.sanhua.marketingcost.enums.PriceLinkedImportEffectiveStrategy;
 import com.sanhua.marketingcost.formula.registry.FactorVariableRegistryImpl;
 import com.sanhua.marketingcost.formula.normalize.FormulaDisplayRenderer;
@@ -76,7 +77,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.HashMap;
@@ -189,6 +192,12 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
 
   @Override
   public List<PriceLinkedItemDto> list(String pricingMonth, String materialCode) {
+    return list(pricingMonth, materialCode, false);
+  }
+
+  @Override
+  public List<PriceLinkedItemDto> list(
+      String pricingMonth, String materialCode, boolean includeHistory) {
     String resolvedMonth = resolvePricingMonth(pricingMonth);
     var query = Wrappers.lambdaQuery(PriceLinkedItem.class);
     if (StringUtils.hasText(resolvedMonth)) {
@@ -196,6 +205,9 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     }
     if (StringUtils.hasText(materialCode)) {
       query.like(PriceLinkedItem::getMaterialCode, materialCode.trim());
+    }
+    if (!includeHistory) {
+      query.isNull(PriceLinkedItem::getEffectiveTo);
     }
     query.orderByAsc(PriceLinkedItem::getId);
     return itemMapper.selectList(query).stream()
@@ -354,7 +366,10 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     detail.setImportPurpose(batch.getImportPurpose());
     detail.setFactorRecognizedCount(nullToZero(batch.getFactorRowCount()));
     detail.setEffectiveStrategy(batch.getEffectiveStrategy());
+    detail.setFormulaEffectiveDate(defaultFormulaEffectiveDateText(batch.getPriceMonth()));
+    detail.setFactorPriceConflictStrategy(FactorPriceConflictStrategy.KEEP_EXISTING.getCode());
     detail.setLinkedCount(nullToZero(batch.getLinkedRowCount()));
+    detail.setLinkedVersionCreatedCount(detail.getLinkedCount());
     detail.setAutoBindingCount(nullToZero(batch.getAutoBindingCount()));
     detail.setBindingErrorCount(nullToZero(batch.getErrorCount()));
     detail.getFactorRows().addAll(loadPersistedFactorRows(batch));
@@ -409,22 +424,46 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       String businessUnitType,
       String sourceFileName,
       String effectiveStrategy) {
+    return importExcel(
+        input, pricingMonth, overwriteManual, businessUnitType, sourceFileName, effectiveStrategy,
+        null, null);
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public PriceItemImportResponse importExcel(
+      InputStream input,
+      String pricingMonth,
+      boolean overwriteManual,
+      String businessUnitType,
+      String sourceFileName,
+      String effectiveStrategy,
+      String formulaEffectiveDate,
+      String factorPriceConflictStrategy) {
     PriceItemImportResponse response = new PriceItemImportResponse();
     response.setBatchId(UUID.randomUUID().toString());
     String strategy = normalizeEffectiveStrategy(effectiveStrategy);
     response.setEffectiveStrategy(strategy);
     response.setImportPurpose(importPurposeForStrategy(strategy));
     if (!StringUtils.hasText(pricingMonth)) {
+      response.setFactorPriceConflictStrategy(
+          FactorPriceConflictStrategy.KEEP_EXISTING.getCode());
       response.getErrors().add(new ErrorRow(null, null, null, "pricingMonth 必填"));
       response.setSkipped(1);
       return response;
     }
+    String month = pricingMonth.trim();
+    LocalDate resolvedFormulaEffectiveDate =
+        resolveFormulaEffectiveDate(month, formulaEffectiveDate);
+    String resolvedFactorConflictStrategy =
+        normalizeFactorPriceConflictStrategy(factorPriceConflictStrategy);
+    response.setFormulaEffectiveDate(resolvedFormulaEffectiveDate.toString());
+    response.setFactorPriceConflictStrategy(resolvedFactorConflictStrategy);
     if (input == null) {
       response.getErrors().add(new ErrorRow(null, null, null, "Excel 流为空"));
       response.setSkipped(1);
       return response;
     }
-    String month = pricingMonth.trim();
     byte[] excelBytes;
     try {
       excelBytes = input.readAllBytes();
@@ -436,7 +475,8 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     String resolvedBusinessUnitType = resolveBusinessUnitType(businessUnitType);
     V2ImportContext v2Context = excelAutoBindingEnabled
         ? prepareV2ImportContext(
-            excelBytes, month, resolvedBusinessUnitType, sourceFileName, strategy, response)
+            excelBytes, month, resolvedBusinessUnitType, sourceFileName, strategy,
+            resolvedFactorConflictStrategy, response)
         : V2ImportContext.disabled();
     Map<Integer, AutoBindingPlan> autoBindingPlans = !excelAutoBindingEnabled || v2Context.enabled()
         ? Map.of()
@@ -496,7 +536,16 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
           continue;
         }
         applyExcelGoldenPrice(row, v2Plan);
-        LinkedImportOutcome linkedOutcome = upsertLinked(row, month, normalizedFormula, strategy);
+        LinkedImportOutcome linkedOutcome;
+        try {
+          linkedOutcome = upsertLinked(
+              row, month, normalizedFormula, resolvedFormulaEffectiveDate, resolvedBusinessUnitType);
+        } catch (IllegalArgumentException ex) {
+          response.getErrors().add(new ErrorRow(
+              excelRow, row.getMaterialCode(), row.getOrderType(), ex.getMessage()));
+          response.setSkipped(response.getSkipped() + 1);
+          continue;
+        }
         if (linkedOutcome.skipped()) {
           response.setLinkedSkippedCount(response.getLinkedSkippedCount() + 1);
           continue;
@@ -504,7 +553,8 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
         PriceLinkedItem item = linkedOutcome.item();
         if (linkedOutcome.created()) {
           response.setLinkedCreatedCount(response.getLinkedCreatedCount() + 1);
-        } else if (linkedOutcome.updated()) {
+        }
+        if (linkedOutcome.updated()) {
           response.setLinkedUpdatedCount(response.getLinkedUpdatedCount() + 1);
         }
         if (v2Context.enabled()) {
@@ -523,6 +573,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       response.setSkipped(response.getSkipped() + parseErrors.size());
     }
     finalizeImportBatch(v2Context.factorUploadBatchId(), response);
+    applyVersionedSummaryAliases(response);
     return response;
   }
 
@@ -553,6 +604,60 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       return normalized;
     }
     return PriceLinkedImportEffectiveStrategy.OVERRIDE_EFFECTIVE.getCode();
+  }
+
+  private LocalDate resolveFormulaEffectiveDate(
+      String pricingMonth, String formulaEffectiveDate) {
+    String raw = StringUtils.hasText(formulaEffectiveDate)
+        ? formulaEffectiveDate.trim()
+        : pricingMonth.trim() + "-01";
+    try {
+      return LocalDate.parse(raw);
+    } catch (DateTimeParseException ex) {
+      throw new IllegalArgumentException(
+          "formulaEffectiveDate 格式错误，应为 yyyy-MM-dd: " + raw);
+    }
+  }
+
+  private String defaultFormulaEffectiveDateText(String pricingMonth) {
+    if (!StringUtils.hasText(pricingMonth)) {
+      return null;
+    }
+    try {
+      return resolveFormulaEffectiveDate(pricingMonth.trim(), null).toString();
+    } catch (IllegalArgumentException ex) {
+      return null;
+    }
+  }
+
+  private String normalizeFactorPriceConflictStrategy(String factorPriceConflictStrategy) {
+    String normalized = trim(factorPriceConflictStrategy);
+    if (!StringUtils.hasText(normalized)) {
+      return FactorPriceConflictStrategy.KEEP_EXISTING.getCode();
+    }
+    String upper = normalized.toUpperCase(java.util.Locale.ROOT);
+    if (FactorPriceConflictStrategy.KEEP_EXISTING.getCode().equals(upper)
+        || FactorPriceConflictStrategy.OVERWRITE.getCode().equals(upper)) {
+      return upper;
+    }
+    throw new IllegalArgumentException(
+        "factorPriceConflictStrategy 非法，仅支持 KEEP_EXISTING / OVERWRITE: "
+            + factorPriceConflictStrategy);
+  }
+
+  private void applyVersionedSummaryAliases(PriceItemImportResponse response) {
+    if (response == null) {
+      return;
+    }
+    if (response.getMonthlyPriceConflictCount() == 0) {
+      response.setMonthlyPriceConflictCount(response.getMonthlyPriceSkippedCount());
+    }
+    if (response.getMonthlyPriceOverwriteCount() == 0) {
+      response.setMonthlyPriceOverwriteCount(response.getMonthlyPriceUpdatedCount());
+    }
+    response.setLinkedVersionCreatedCount(response.getLinkedCreatedCount());
+    response.setLinkedUnchangedSkippedCount(response.getLinkedSkippedCount());
+    response.setLinkedExpiredCount(response.getLinkedUpdatedCount());
   }
 
   private boolean overwriteManualForStrategy(String effectiveStrategy, boolean overwriteManual) {
@@ -858,6 +963,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       String businessUnitType,
       String sourceFileName,
       String effectiveStrategy,
+      String factorPriceConflictStrategy,
       PriceItemImportResponse response) {
     if (!v2AutoBindingReady() || excelBytes == null || excelBytes.length == 0) {
       return V2ImportContext.disabled();
@@ -880,12 +986,14 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
 
     FactorMonthlyPriceUpsertResult upsertResult = factorMonthlyPriceUpsertService.upsert(
         factorParseResult, priceMonth, businessUnitType, currentOperator(),
-        factorUploadBatchId, effectiveStrategy);
+        factorUploadBatchId, factorPriceConflictStrategy);
     response.setFactorRecognizedCount(upsertResult.getRows().size());
     response.setMonthlyPriceCreatedCount(upsertResult.getMonthlyPriceCreatedCount());
     response.setMonthlyPriceUpdatedCount(upsertResult.getMonthlyPriceUpdatedCount());
     response.setMonthlyPriceUnchangedCount(upsertResult.getMonthlyPriceUnchangedCount());
     response.setMonthlyPriceSkippedCount(upsertResult.getMonthlyPriceSkippedCount());
+    response.setMonthlyPriceConflictCount(upsertResult.getMonthlyPriceConflictCount());
+    response.setMonthlyPriceOverwriteCount(upsertResult.getMonthlyPriceOverwriteCount());
     response.setQuoteBaseRecognizedCount(upsertResult.getQuoteBaseRecognizedCount());
     response.setQuoteBaseUnrecognizedCount(upsertResult.getQuoteBaseUnrecognizedCount());
     response.setQuoteBaseConflictCount(upsertResult.getQuoteBaseConflictCount());
@@ -1684,20 +1792,23 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
   private PriceLinkedItem upsertLinked(PriceItemExcelImportRow row, String pricingMonth,
       String normalizedFormula) {
     return upsertLinked(row, pricingMonth, normalizedFormula,
-        PriceLinkedImportEffectiveStrategy.OVERRIDE_EFFECTIVE.getCode()).item();
+        parseMonthStart(pricingMonth), resolveBusinessUnitType(null)).item();
   }
 
   private LinkedImportOutcome upsertLinked(
       PriceItemExcelImportRow row,
       String pricingMonth,
       String normalizedFormula,
-      String effectiveStrategy) {
-    PriceLinkedItem existing = findExistingLinked(pricingMonth, row);
-    if (existing != null
-        && PriceLinkedImportEffectiveStrategy.APPEND_ONLY.getCode().equals(effectiveStrategy)) {
+      LocalDate formulaEffectiveDate,
+      String businessUnitType) {
+    PriceLinkedItem existing = findCurrentLinkedVersion(pricingMonth, businessUnitType, row);
+    if (existing != null && sameLinkedFormulaVersion(existing, row, normalizedFormula)) {
       return new LinkedImportOutcome(existing, false, false, true);
     }
-    PriceLinkedItem item = existing != null ? existing : new PriceLinkedItem();
+    if (existing != null) {
+      expireOldVersion(existing, formulaEffectiveDate);
+    }
+    PriceLinkedItem item = new PriceLinkedItem();
     item.setPricingMonth(pricingMonth);
     item.setOrgCode(row.getOrgCode());
     item.setSourceName(row.getSourceName());
@@ -1720,19 +1831,17 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     item.setAgentFee(row.getAgentFee());
     item.setManualPrice(row.getUnitPrice());
     item.setTaxIncluded(parseTaxIncluded(row.getTaxIncluded()));
-    item.setEffectiveFrom(row.getEffectiveFrom());
-    item.setEffectiveTo(row.getEffectiveTo());
+    item.setEffectiveFrom(formulaEffectiveDate);
+    item.setEffectiveTo(null);
     // 保底填 "联动"，方便后续按 orderType 过滤
     item.setOrderType(StringUtils.hasText(row.getOrderType()) ? row.getOrderType().trim() : "联动");
+    if (StringUtils.hasText(businessUnitType)) {
+      item.setBusinessUnitType(businessUnitType.trim());
+    }
     // 写入前显式注入当前登录账号的 BU，和 importItems 走同一路径，避免 NULL 行被 selectList 过滤掉
     applyCurrentBusinessUnit(item);
-    if (existing == null) {
-      itemMapper.insert(item);
-      return new LinkedImportOutcome(item, true, false, false);
-    } else {
-      itemMapper.updateById(item);
-      return new LinkedImportOutcome(item, false, true, false);
-    }
+    itemMapper.insert(item);
+    return new LinkedImportOutcome(item, true, existing != null, false);
   }
 
   private void upsertFixed(PriceItemExcelImportRow row, PriceItemImportResponse response) {
@@ -1766,17 +1875,69 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     }
   }
 
-  private PriceLinkedItem findExistingLinked(String pricingMonth, PriceItemExcelImportRow row) {
+  private PriceLinkedItem findCurrentLinkedVersion(
+      String pricingMonth, String businessUnitType, PriceItemExcelImportRow row) {
     var query = Wrappers.lambdaQuery(PriceLinkedItem.class)
         .eq(PriceLinkedItem::getPricingMonth, pricingMonth)
-        .eq(PriceLinkedItem::getMaterialCode, trim(row.getMaterialCode()));
-    if (StringUtils.hasText(row.getSupplierCode())) {
-      query.eq(PriceLinkedItem::getSupplierCode, row.getSupplierCode().trim());
+        .eq(PriceLinkedItem::getMaterialCode, trim(row.getMaterialCode()))
+        .isNull(PriceLinkedItem::getEffectiveTo)
+        .eq(PriceLinkedItem::getDeleted, 0);
+    if (StringUtils.hasText(businessUnitType)) {
+      query.eq(PriceLinkedItem::getBusinessUnitType, businessUnitType.trim());
+    } else {
+      query.isNull(PriceLinkedItem::getBusinessUnitType);
     }
-    if (StringUtils.hasText(row.getSpecModel())) {
-      query.eq(PriceLinkedItem::getSpecModel, row.getSpecModel().trim());
+    String supplierCode = trim(row.getSupplierCode());
+    if (supplierCode == null) {
+      query.isNull(PriceLinkedItem::getSupplierCode);
+    } else {
+      query.eq(PriceLinkedItem::getSupplierCode, supplierCode);
     }
-    return itemMapper.selectOne(query.last("LIMIT 1"));
+    String specModel = trim(row.getSpecModel());
+    if (specModel == null) {
+      query.isNull(PriceLinkedItem::getSpecModel);
+    } else {
+      query.eq(PriceLinkedItem::getSpecModel, specModel);
+    }
+    return itemMapper.selectOne(query.orderByDesc(PriceLinkedItem::getId).last("LIMIT 1"));
+  }
+
+  private boolean sameLinkedFormulaVersion(
+      PriceLinkedItem existing, PriceItemExcelImportRow row, String normalizedFormula) {
+    if (existing == null || row == null) {
+      return false;
+    }
+    return Objects.equals(existing.getFormulaExpr(), normalizedFormula)
+        && sameDecimal(existing.getBlankWeight(), row.getBlankWeight())
+        && sameDecimal(existing.getNetWeight(), row.getNetWeight())
+        && sameDecimal(existing.getProcessFee(), row.getProcessFee())
+        && sameDecimal(existing.getAgentFee(), row.getAgentFee())
+        && sameDecimal(existing.getManualPrice(), row.getUnitPrice())
+        && Objects.equals(existing.getTaxIncluded(), parseTaxIncluded(row.getTaxIncluded()))
+        && Objects.equals(trim(existing.getSupplierCode()), trim(row.getSupplierCode()))
+        && Objects.equals(trim(existing.getSpecModel()), trim(row.getSpecModel()));
+  }
+
+  private boolean sameDecimal(java.math.BigDecimal left, java.math.BigDecimal right) {
+    if (left == null || right == null) {
+      return left == right;
+    }
+    return left.compareTo(right) == 0;
+  }
+
+  private void expireOldVersion(PriceLinkedItem existing, LocalDate formulaEffectiveDate) {
+    if (existing == null) {
+      return;
+    }
+    LocalDate oldEffectiveFrom = existing.getEffectiveFrom();
+    if (oldEffectiveFrom != null && !formulaEffectiveDate.isAfter(oldEffectiveFrom)) {
+      throw new IllegalArgumentException(
+          "formulaEffectiveDate 必须晚于当前公式版本 effective_from，避免生命周期倒挂: "
+              + formulaEffectiveDate + " <= " + oldEffectiveFrom);
+    }
+    existing.setEffectiveTo(formulaEffectiveDate.minusDays(1));
+    existing.setUpdatedAt(LocalDateTime.now());
+    itemMapper.updateById(existing);
   }
 
   private PriceFixedItem findExistingFixed(PriceItemExcelImportRow row) {

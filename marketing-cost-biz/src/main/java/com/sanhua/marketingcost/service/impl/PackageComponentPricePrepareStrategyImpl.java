@@ -10,6 +10,7 @@ import com.sanhua.marketingcost.service.PackageComponentPricePrepareStrategy;
 import com.sanhua.marketingcost.service.PackageComponentPriceService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import org.springframework.stereotype.Service;
@@ -43,6 +44,18 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
       String bomPurpose,
       String sourceType,
       PricePreparePlanItem planItem) {
+    return prepare(prepareNo, oaNo, periodMonth, null, bomPurpose, sourceType, planItem);
+  }
+
+  @Override
+  public PackageComponentPricePrepareResult prepare(
+      String prepareNo,
+      String oaNo,
+      String periodMonth,
+      LocalDateTime priceAsOfTime,
+      String bomPurpose,
+      String sourceType,
+      PricePreparePlanItem planItem) {
     String packageMaterialCode = planItem == null ? null : trimToNull(planItem.getMaterialCode());
     String topProductCode = planItem == null ? null : trimToNull(planItem.getTopProductCode());
     if (packageMaterialCode == null || topProductCode == null) {
@@ -63,7 +76,9 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
     request.setTopProductCode(topProductCode);
     request.setBomPurpose(bomPurpose);
     request.setSourceType(sourceType);
-    request.setAsOfDate(LocalDate.now());
+    // 月度调价由批次固化 price_as_of_time；普通价格准备未传时继续沿用当前日期。
+    request.setAsOfDate(priceAsOfTime == null ? LocalDate.now() : priceAsOfTime.toLocalDate());
+    request.setPriceAsOfTime(priceAsOfTime);
     request.setCalcBatchId(prepareNo);
     request.setForceRefresh(true);
 

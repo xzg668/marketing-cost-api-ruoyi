@@ -49,6 +49,21 @@ class QuoteNormalizeServiceTest {
   }
 
   @Test
+  void derivesProcessCodeFromOaNoWhenOnlyFlowNumberIsProvided() {
+    QuoteIngestRequest request = sampleRequest();
+    request.setOaNo("FI-SC-006-20260327-037");
+    request.setExternalFormNo(request.getOaNo());
+    request.getHeader().setProcessCode(null);
+
+    QuoteNormalizedDocument document = service.normalize(request);
+
+    assertThat(document.getErrors()).isEmpty();
+    assertThat(document.getHeader().getOaNo()).isEqualTo("FI-SC-006-20260327-037");
+    assertThat(document.getHeader().getProcessCode()).isEqualTo("FI-SC-006");
+    assertThat(document.getHeader().getQuoteScenario()).isEqualTo("STANDARD_BATCH");
+  }
+
+  @Test
   void extraFeesNormalizeToStandardFeeItems() {
     QuoteNormalizedDocument document = service.normalize(sampleRequest());
 

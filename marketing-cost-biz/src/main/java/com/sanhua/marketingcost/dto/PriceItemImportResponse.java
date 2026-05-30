@@ -20,11 +20,15 @@ public class PriceItemImportResponse {
   private Long factorUploadBatchId;
   private String importPurpose;
   private String effectiveStrategy;
+  private String formulaEffectiveDate;
+  private String factorPriceConflictStrategy;
   private int factorRecognizedCount;
   private int monthlyPriceCreatedCount;
   private int monthlyPriceUpdatedCount;
   private int monthlyPriceUnchangedCount;
   private int monthlyPriceSkippedCount;
+  private int monthlyPriceConflictCount;
+  private int monthlyPriceOverwriteCount;
   private int quoteBaseRecognizedCount;
   private int quoteBaseUnrecognizedCount;
   private int quoteBaseConflictCount;
@@ -32,6 +36,9 @@ public class PriceItemImportResponse {
   private int linkedCreatedCount;
   private int linkedUpdatedCount;
   private int linkedSkippedCount;
+  private int linkedVersionCreatedCount;
+  private int linkedUnchangedSkippedCount;
+  private int linkedExpiredCount;
   private int fixedCount;
   /** 根据 Excel 单价列真实公式自动生成 / 更新的行局部变量绑定数。 */
   private int autoBindingCount;
@@ -77,6 +84,22 @@ public class PriceItemImportResponse {
     this.effectiveStrategy = effectiveStrategy;
   }
 
+  public String getFormulaEffectiveDate() {
+    return formulaEffectiveDate;
+  }
+
+  public void setFormulaEffectiveDate(String formulaEffectiveDate) {
+    this.formulaEffectiveDate = formulaEffectiveDate;
+  }
+
+  public String getFactorPriceConflictStrategy() {
+    return factorPriceConflictStrategy;
+  }
+
+  public void setFactorPriceConflictStrategy(String factorPriceConflictStrategy) {
+    this.factorPriceConflictStrategy = factorPriceConflictStrategy;
+  }
+
   public int getFactorRecognizedCount() {
     return factorRecognizedCount;
   }
@@ -115,6 +138,22 @@ public class PriceItemImportResponse {
 
   public void setMonthlyPriceSkippedCount(int monthlyPriceSkippedCount) {
     this.monthlyPriceSkippedCount = monthlyPriceSkippedCount;
+  }
+
+  public int getMonthlyPriceConflictCount() {
+    return monthlyPriceConflictCount;
+  }
+
+  public void setMonthlyPriceConflictCount(int monthlyPriceConflictCount) {
+    this.monthlyPriceConflictCount = monthlyPriceConflictCount;
+  }
+
+  public int getMonthlyPriceOverwriteCount() {
+    return monthlyPriceOverwriteCount;
+  }
+
+  public void setMonthlyPriceOverwriteCount(int monthlyPriceOverwriteCount) {
+    this.monthlyPriceOverwriteCount = monthlyPriceOverwriteCount;
   }
 
   public int getQuoteBaseRecognizedCount() {
@@ -171,6 +210,30 @@ public class PriceItemImportResponse {
 
   public void setLinkedSkippedCount(int linkedSkippedCount) {
     this.linkedSkippedCount = linkedSkippedCount;
+  }
+
+  public int getLinkedVersionCreatedCount() {
+    return linkedVersionCreatedCount;
+  }
+
+  public void setLinkedVersionCreatedCount(int linkedVersionCreatedCount) {
+    this.linkedVersionCreatedCount = linkedVersionCreatedCount;
+  }
+
+  public int getLinkedUnchangedSkippedCount() {
+    return linkedUnchangedSkippedCount;
+  }
+
+  public void setLinkedUnchangedSkippedCount(int linkedUnchangedSkippedCount) {
+    this.linkedUnchangedSkippedCount = linkedUnchangedSkippedCount;
+  }
+
+  public int getLinkedExpiredCount() {
+    return linkedExpiredCount;
+  }
+
+  public void setLinkedExpiredCount(int linkedExpiredCount) {
+    this.linkedExpiredCount = linkedExpiredCount;
   }
 
   public int getFixedCount() {

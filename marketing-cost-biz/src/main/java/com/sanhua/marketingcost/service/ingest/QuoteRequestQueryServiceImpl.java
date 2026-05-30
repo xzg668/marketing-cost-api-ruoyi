@@ -582,6 +582,9 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     if (hasStatus(statuses, QuoteBomStatusCode.CHECK_FAILED.getCode())) {
       return QuoteBomStatusCode.CHECK_FAILED.getCode();
     }
+    if (hasStatus(statuses, QuoteBomStatusCode.SYNCING.getCode())) {
+      return QuoteBomStatusCode.SYNCING.getCode();
+    }
     if (hasStatus(statuses, QuoteBomStatusCode.ENTRY_IN_PROGRESS.getCode())) {
       return QuoteBomStatusCode.ENTRY_IN_PROGRESS.getCode();
     }
@@ -600,6 +603,9 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     if (allStatus(statuses, QuoteBomStatusCode.SYNCED.getCode())) {
       return QuoteBomStatusCode.SYNCED.getCode();
     }
+    if (allStatus(statuses, QuoteBomStatusCode.REUSED_CURRENT_MONTH.getCode())) {
+      return QuoteBomStatusCode.REUSED_CURRENT_MONTH.getCode();
+    }
     if (allStatus(statuses, QuoteBomStatusCode.MANUAL_ENTERED.getCode())) {
       return QuoteBomStatusCode.MANUAL_ENTERED.getCode();
     }
@@ -612,8 +618,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   private boolean isCalculable(OaForm form, int itemCount, String bomAggregateStatus) {
     return itemCount > 0
         && QuoteClassificationStatus.CONFIRMED.getCode().equals(form.getClassificationStatus())
-        && (QuoteBomStatusCode.SYNCED.getCode().equals(bomAggregateStatus)
-            || QuoteBomStatusCode.MANUAL_ENTERED.getCode().equals(bomAggregateStatus));
+        && isCostReadyBomStatus(bomAggregateStatus);
   }
 
   private boolean hasStatus(List<QuoteBomStatus> statuses, String code) {
@@ -636,12 +641,18 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
 
   private boolean allCostReadyStatus(List<QuoteBomStatus> statuses) {
     for (QuoteBomStatus status : statuses) {
-      if (!QuoteBomStatusCode.SYNCED.getCode().equals(status.getBomStatus())
-          && !QuoteBomStatusCode.MANUAL_ENTERED.getCode().equals(status.getBomStatus())) {
+      if (!isCostReadyBomStatus(status.getBomStatus())) {
         return false;
       }
     }
     return true;
+  }
+
+  private boolean isCostReadyBomStatus(String bomStatus) {
+    // 成本试算只认这三个状态；历史补录中、过期、无 BOM 等状态必须继续阻断。
+    return QuoteBomStatusCode.SYNCED.getCode().equals(bomStatus)
+        || QuoteBomStatusCode.REUSED_CURRENT_MONTH.getCode().equals(bomStatus)
+        || QuoteBomStatusCode.MANUAL_ENTERED.getCode().equals(bomStatus);
   }
 
   private long normalizePageNo(Integer pageNo) {

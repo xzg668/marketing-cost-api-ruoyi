@@ -157,7 +157,8 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     }
 
     var liQuery = Wrappers.lambdaQuery(PriceLinkedItem.class)
-        .eq(PriceLinkedItem::getDeleted, 0);
+        .eq(PriceLinkedItem::getDeleted, 0)
+        .isNull(PriceLinkedItem::getEffectiveTo);
     if (StringUtils.hasText(itemCode)) {
       liQuery.like(PriceLinkedItem::getMaterialCode, itemCode.trim());
     }
@@ -386,7 +387,8 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
                 // V48 业务逻辑（与 page() 同步）：联动价 = 联动价主表里有定义的料号。
                 "exists (select 1 from lp_price_linked_item li "
                     + "where li.material_code = lp_bom_costing_row.material_code "
-                    + "and li.deleted = 0)"));
+                    + "and li.deleted = 0 "
+                    + "and li.effective_to is null)"));
     if (items.isEmpty()) {
       return 0;
     }
@@ -604,6 +606,9 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
             Wrappers.lambdaQuery(PriceLinkedItem.class)
                 .eq(PriceLinkedItem::getDeleted, 0)
                 .in(PriceLinkedItem::getMaterialCode, itemCodes)
+                .isNull(PriceLinkedItem::getEffectiveTo)
+                .orderByDesc(PriceLinkedItem::getEffectiveFrom)
+                .orderByDesc(PriceLinkedItem::getUpdatedAt)
                 .orderByDesc(PriceLinkedItem::getId));
     Map<String, PriceLinkedItem> map = new HashMap<>();
     for (PriceLinkedItem linkedItem : linkedItems) {
@@ -810,7 +815,9 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     }
     List<PriceLinkedItem> linkedItems = priceLinkedItemMapper.selectList(
         Wrappers.lambdaQuery(PriceLinkedItem.class)
-            .in(PriceLinkedItem::getMaterialCode, itemCodes));
+            .eq(PriceLinkedItem::getDeleted, 0)
+            .in(PriceLinkedItem::getMaterialCode, itemCodes)
+            .isNull(PriceLinkedItem::getEffectiveTo));
     Map<String, PriceLinkedItem> map = new HashMap<>();
     for (PriceLinkedItem item : linkedItems) {
       if (!StringUtils.hasText(item.getMaterialCode())) {
@@ -862,9 +869,61 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     return calcItem;
   }
 
+  PriceLinkedCalcItem calculateMonthlyAdjustItemForEnsure(
+      PriceLinkedCalcItem calcItem, PriceLinkedItem linkedItem) {
+    if (calcItem == null) {
+      throw new IllegalArgumentException("calcItem 不能为空");
+    }
+    calcItem.setCalcScene(LinkedPriceCalcScene.MONTHLY_ADJUST.getCode());
+    calcItem.setFactorSource(monthlyFactorSource(calcItem.getAdjustBatchId()));
+    if (linkedItem == null || !StringUtils.hasText(linkedItem.getFormulaExpr())) {
+      calcItem.setPartUnitPrice(null);
+      calcItem.setPartAmount(null);
+      calcItem.setTraceJson(null);
+      calcItem.setCalcStatus("FAILED");
+      calcItem.setCalcMessage("联动价公式不存在或为空");
+      return calcItem;
+    }
+
+    // 月度调价复用统一公式引擎；未指定影响因素批次时按月份价/全价格源时点口径解析变量。
+    NewCalcOutcome outcome = newCalculate(linkedItem, calcItem, null);
+    if (outcome.trace != null) {
+      writeTraceJson(calcItem, outcome.trace);
+    }
+    BigDecimal partUnitPrice =
+        outcome.value == null ? null : outcome.value.setScale(6, RoundingMode.HALF_UP);
+    BigDecimal partAmount = calculatePartAmount(partUnitPrice, calcItem.getBomQty());
+    calcItem.setPartUnitPrice(partUnitPrice);
+    calcItem.setPartAmount(partAmount);
+    String error = extractTraceError(calcItem.getTraceJson());
+    if (StringUtils.hasText(error)) {
+      calcItem.setCalcStatus("FAILED");
+      calcItem.setCalcMessage(error);
+    } else if (partUnitPrice == null) {
+      calcItem.setCalcStatus("FAILED");
+      calcItem.setCalcMessage("联动价计算结果为空");
+    } else {
+      calcItem.setCalcStatus(DEFAULT_CALC_STATUS_OK);
+      calcItem.setCalcMessage(null);
+    }
+    return calcItem;
+  }
+
   private boolean isLater(PriceLinkedItem candidate, PriceLinkedItem existing) {
     if (existing == null) {
       return true;
+    }
+    if (candidate.getEffectiveFrom() != null && existing.getEffectiveFrom() != null) {
+      int compare = candidate.getEffectiveFrom().compareTo(existing.getEffectiveFrom());
+      if (compare != 0) {
+        return compare > 0;
+      }
+    }
+    if (candidate.getEffectiveFrom() != null) {
+      return true;
+    }
+    if (existing.getEffectiveFrom() != null) {
+      return false;
     }
     if (candidate.getUpdatedAt() != null && existing.getUpdatedAt() != null) {
       return candidate.getUpdatedAt().isAfter(existing.getUpdatedAt());
@@ -1040,11 +1099,12 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     }
     trace.put("rawExpr", linkedItem.getFormulaExpr());
 
-    // QUOTE 场景变量上下文：正常报价必须优先使用 OA 表头锁价，不能误读月度调价影响因素价。
-    LinkedPriceVariableContext variableContext = LinkedPriceVariableContext.quote(oaForm);
+    LinkedPriceVariableContext variableContext = buildVariableContext(calcItem, oaForm, trace);
+    OaForm contextOaForm =
+        variableContext.getCalcScene() == LinkedPriceCalcScene.MONTHLY_ADJUST ? null : oaForm;
 
     PriceLinkedFormulaPreviewResponse resp =
-        previewService.previewForRefresh(linkedItem, variableContext, oaForm);
+        previewService.previewForRefresh(linkedItem, variableContext, contextOaForm);
 
     // 防御：preview 生产实现永远返 non-null，但 Mockito 默认 stub 会返 null，
     // 这里兜底防止单测场景下 NPE；同时也是针对未来 preview 改动的健壮性
@@ -1084,6 +1144,28 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       trace.put("manualPriceMonth", linkedItem.getPricingMonth());
     }
     return new NewCalcOutcome(resp.getResult(), trace);
+  }
+
+  private LinkedPriceVariableContext buildVariableContext(
+      PriceLinkedCalcItem calcItem, OaForm oaForm, Map<String, Object> trace) {
+    String calcScene = calcItem == null ? null : calcItem.getCalcScene();
+    if (LinkedPriceCalcScene.MONTHLY_ADJUST.getCode().equalsIgnoreCase(calcScene)) {
+      Long adjustBatchId = calcItem.getAdjustBatchId();
+      trace.put("calcScene", LinkedPriceCalcScene.MONTHLY_ADJUST.getCode());
+      trace.put("adjustBatchId", adjustBatchId);
+      trace.put("factorSource", monthlyFactorSource(adjustBatchId));
+      return LinkedPriceVariableContext.monthlyAdjust(adjustBatchId);
+    }
+    // QUOTE 场景变量上下文：正常报价必须优先使用 OA 表头锁价，不能误读月度调价影响因素价。
+    trace.put("calcScene", LinkedPriceCalcScene.QUOTE.getCode());
+    trace.put("factorSource", LinkedPriceCalcScene.QUOTE.getDefaultFactorSource().getCode());
+    return LinkedPriceVariableContext.quote(oaForm);
+  }
+
+  private String monthlyFactorSource(Long adjustBatchId) {
+    return adjustBatchId == null
+        ? LinkedPriceFactorSource.MONTHLY_FACTOR.getCode()
+        : LinkedPriceFactorSource.ADJUST_BATCH.getCode();
   }
 
   /** 绝对差；任一为空返 null（表示不可比较，不触发 WARN） */

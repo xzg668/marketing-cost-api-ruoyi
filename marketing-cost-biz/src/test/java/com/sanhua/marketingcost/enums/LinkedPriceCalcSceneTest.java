@@ -19,14 +19,14 @@ class LinkedPriceCalcSceneTest {
   }
 
   @Test
-  void monthlyAdjust_should_require_adjust_batch() {
+  void monthlyAdjust_should_use_monthly_factor_by_default() {
     assertEquals("MONTHLY_ADJUST", LinkedPriceCalcScene.MONTHLY_ADJUST.getCode());
     assertEquals("月度调价", LinkedPriceCalcScene.MONTHLY_ADJUST.getLabel());
     assertEquals(
-        LinkedPriceFactorSource.ADJUST_BATCH,
+        LinkedPriceFactorSource.MONTHLY_FACTOR,
         LinkedPriceCalcScene.MONTHLY_ADJUST.getDefaultFactorSource());
     assertFalse(LinkedPriceCalcScene.MONTHLY_ADJUST.requiresOaNo());
-    assertTrue(LinkedPriceCalcScene.MONTHLY_ADJUST.requiresAdjustBatchId());
+    assertFalse(LinkedPriceCalcScene.MONTHLY_ADJUST.requiresAdjustBatchId());
   }
 
   @Test

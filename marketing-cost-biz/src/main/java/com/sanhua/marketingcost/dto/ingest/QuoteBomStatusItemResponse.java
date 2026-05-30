@@ -19,6 +19,10 @@ public class QuoteBomStatusItemResponse {
   private LocalDate effectiveTo;
   private LocalDateTime checkedAt;
   private String syncBatchId;
+  private String costPeriodMonth;
+  private Long syncRecordId;
+  private Long reusedFromRecordId;
+  private LocalDateTime syncAt;
   private String manualTaskNo;
   private Long supplementTaskId;
   private String errorMessage;
@@ -141,6 +145,38 @@ public class QuoteBomStatusItemResponse {
 
   public void setSyncBatchId(String syncBatchId) {
     this.syncBatchId = syncBatchId;
+  }
+
+  public String getCostPeriodMonth() {
+    return costPeriodMonth;
+  }
+
+  public void setCostPeriodMonth(String costPeriodMonth) {
+    this.costPeriodMonth = costPeriodMonth;
+  }
+
+  public Long getSyncRecordId() {
+    return syncRecordId;
+  }
+
+  public void setSyncRecordId(Long syncRecordId) {
+    this.syncRecordId = syncRecordId;
+  }
+
+  public Long getReusedFromRecordId() {
+    return reusedFromRecordId;
+  }
+
+  public void setReusedFromRecordId(Long reusedFromRecordId) {
+    this.reusedFromRecordId = reusedFromRecordId;
+  }
+
+  public LocalDateTime getSyncAt() {
+    return syncAt;
+  }
+
+  public void setSyncAt(LocalDateTime syncAt) {
+    this.syncAt = syncAt;
   }
 
   public String getManualTaskNo() {

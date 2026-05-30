@@ -7,6 +7,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.OaForm;
@@ -18,8 +21,11 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -32,6 +38,14 @@ class LinkedPriceEnsureServiceImplTest {
   private OaFormMapper oaFormMapper;
   private PriceLinkedCalcServiceImpl calcService;
   private LinkedPriceEnsureServiceImpl service;
+
+  @BeforeAll
+  static void initTableInfo() {
+    MapperBuilderAssistant assistant =
+        new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    TableInfoHelper.initTableInfo(assistant, PriceLinkedCalcItem.class);
+    TableInfoHelper.initTableInfo(assistant, PriceLinkedItem.class);
+  }
 
   @BeforeEach
   void setUp() {
@@ -114,6 +128,85 @@ class LinkedPriceEnsureServiceImplTest {
     assertThat(saved.getPricingMonth()).isEqualTo("2026-05");
     assertThat(saved.getBusinessUnitType()).isEqualTo("COMMERCIAL");
     assertThat(saved.getBomQty()).isEqualByComparingTo("2.5");
+  }
+
+  @Test
+  void ensureQuoteDefaultsToCurrentFormulaVersion() {
+    when(calcItemMapper.selectList(any())).thenReturn(List.of());
+    when(linkedItemMapper.selectList(any())).thenReturn(List.of(linkedItem("MAT-1")));
+    when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("MAT-1")));
+    when(oaFormMapper.selectOne(any())).thenReturn(null);
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+        .thenAnswer(invocation -> {
+          PriceLinkedCalcItem calcItem = invocation.getArgument(0);
+          calcItem.setPartUnitPrice(new BigDecimal("10.000000"));
+          calcItem.setCalcStatus("OK");
+          return calcItem;
+        });
+
+    service.ensure(LinkedPriceEnsureRequest.quote(
+        "OA-001", "COMMERCIAL", "2026-05", Set.of("MAT-1")));
+
+    ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(linkedItemMapper).selectList(queryCaptor.capture());
+    assertThat(queryCaptor.getValue().getSqlSegment()).contains("effective_to IS NULL");
+  }
+
+  @Test
+  void ensureCreatesMonthlyAdjustResultWithoutOaContext() {
+    when(calcItemMapper.selectList(any())).thenReturn(List.of());
+    when(linkedItemMapper.selectList(any())).thenReturn(List.of(linkedItem("MAT-1")));
+    when(calcService.calculateMonthlyAdjustItemForEnsure(any(), any()))
+        .thenAnswer(invocation -> {
+          PriceLinkedCalcItem calcItem = invocation.getArgument(0);
+          calcItem.setPartUnitPrice(new BigDecimal("11.000000"));
+          calcItem.setCalcStatus("OK");
+          return calcItem;
+        });
+
+    var result = service.ensure(LinkedPriceEnsureRequest.monthlyAdjust(
+        null, "COMMERCIAL", "2026-05", Set.of("MAT-1")));
+
+    assertThat(result.getCreatedCount()).isEqualTo(1);
+    assertThat(result.getFailedCount()).isZero();
+    ArgumentCaptor<PriceLinkedCalcItem> captor =
+        ArgumentCaptor.forClass(PriceLinkedCalcItem.class);
+    verify(calcItemMapper).insert(captor.capture());
+    PriceLinkedCalcItem saved = captor.getValue();
+    assertThat(saved.getOaNo()).isNull();
+    assertThat(saved.getCalcScene()).isEqualTo("MONTHLY_ADJUST");
+    assertThat(saved.getFactorSource()).isEqualTo("MONTHLY_FACTOR");
+    assertThat(saved.getAdjustBatchId()).isNull();
+    assertThat(saved.getPricingMonth()).isEqualTo("2026-05");
+    assertThat(saved.getBusinessUnitType()).isEqualTo("COMMERCIAL");
+    verify(bomCostingRowMapper, never()).selectList(any());
+    verify(oaFormMapper, never()).selectOne(any());
+  }
+
+  @Test
+  void ensureMonthlyAdjustAsOfDateUsesInclusiveEffectiveWindow() {
+    when(calcItemMapper.selectList(any())).thenReturn(List.of());
+    when(linkedItemMapper.selectList(any())).thenReturn(List.of(linkedItem("MAT-1")));
+    when(calcService.calculateMonthlyAdjustItemForEnsure(any(), any()))
+        .thenAnswer(invocation -> {
+          PriceLinkedCalcItem calcItem = invocation.getArgument(0);
+          calcItem.setPartUnitPrice(new BigDecimal("11.000000"));
+          calcItem.setCalcStatus("OK");
+          return calcItem;
+        });
+
+    var request = LinkedPriceEnsureRequest.monthlyAdjust(
+        null,
+        "COMMERCIAL",
+        "2026-05",
+        Set.of("MAT-1"),
+        false,
+        LocalDateTime.of(2026, 5, 31, 12, 0));
+    service.ensure(request);
+
+    ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(linkedItemMapper).selectList(queryCaptor.capture());
+    assertThat(queryCaptor.getValue().getSqlSegment()).contains("effective_to >=");
   }
 
   @Test

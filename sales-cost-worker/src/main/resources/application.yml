@@ -1,0 +1,62 @@
+spring:
+  application:
+    name: sales-cost-worker
+  main:
+    web-application-type: none
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/marketing_cost?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true&useUnicode=true&characterEncoding=utf-8&connectionCollation=utf8mb4_unicode_ci}
+    username: ${SPRING_DATASOURCE_USERNAME:root}
+    password: ${SPRING_DATASOURCE_PASSWORD:root123}
+    hikari:
+      maximum-pool-size: ${WORKER_DATASOURCE_MAX_POOL_SIZE:20}
+      minimum-idle: ${WORKER_DATASOURCE_MIN_IDLE:2}
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      connection-init-sql: "SET time_zone = '+08:00'"
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+logging:
+  level:
+    com.sanhua.marketingcost: info
+  file:
+    path: ${LOG_PATH:./logs}
+
+monthly:
+  reprice:
+    enabled: ${MONTHLY_REPRICE_ENABLED:false}
+    execution-backend: ${MONTHLY_REPRICE_EXECUTION_BACKEND:LOCAL_WORKER}
+
+cost:
+  run:
+    engine:
+      enabled: ${COST_RUN_ENGINE_ENABLED:true}
+    execution:
+      mode: ${COST_RUN_EXECUTION_MODE:TASK_WORKER}
+    worker:
+      enabled: ${COST_RUN_WORKER_ENABLED:true}
+      id: ${COST_RUN_WORKER_ID:${WORKER_ID:}}
+      threads: ${COST_RUN_WORKER_THREADS:4}
+      claim-batch-size: ${COST_RUN_WORKER_CLAIM_BATCH_SIZE:20}
+      write-batch-size: ${COST_RUN_WORKER_WRITE_BATCH_SIZE:100}
+      poll-interval-ms: ${COST_RUN_WORKER_POLL_INTERVAL_MS:5000}
+      lock-timeout-minutes: ${COST_RUN_WORKER_LOCK_TIMEOUT_MINUTES:10}
+      max-retry-count: ${COST_RUN_WORKER_MAX_RETRY_COUNT:3}
+      scenes: ${COST_RUN_WORKER_SCENES:QUOTE,MONTHLY_REPRICE}
+  material:
+    includeWaterPower: ${COST_MATERIAL_INCLUDE_WATER_POWER:false}
+  linked:
+    excel-auto-binding:
+      enabled: ${COST_LINKED_EXCEL_AUTO_BINDING_ENABLED:true}
+    parser:
+      mode: ${COST_LINKED_PARSER_MODE:new}
+      dual-warn-threshold: ${COST_LINKED_PARSER_DUAL_WARN_THRESHOLD:0.01}

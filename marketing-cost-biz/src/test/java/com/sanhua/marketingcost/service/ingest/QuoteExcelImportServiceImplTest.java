@@ -317,6 +317,30 @@ class QuoteExcelImportServiceImplTest {
     }
   }
 
+  @Test
+  void desktopFiSc006TemplateProducesGoldenCostDimensionsWhenAvailable() throws Exception {
+    Path file = Path.of("/Users/xiexicheng/Desktop/demo3/报价单导入模板_02_FI-SC-006_标准品批量品.xlsx");
+    Assumptions.assumeTrue(Files.exists(file));
+
+    try (InputStream inputStream = new FileInputStream(file.toFile())) {
+      QuoteExcelImportPreviewResponse response = service.preview(inputStream, file.getFileName().toString());
+
+      assertThat(response.isValid()).isTrue();
+      assertThat(response.getFormCount()).isEqualTo(1);
+      QuoteIngestPreviewResponse form = response.getForms().get(0);
+      assertThat(form.getOaNo()).isEqualTo("FI-SC-006-20260327-037");
+      assertThat(form.getQuoteScenario()).isEqualTo("STANDARD_BATCH");
+      assertThat(form.getAccountingContext().getBusinessUnitType()).isEqualTo("COMMERCIAL");
+      assertThat(form.getAccountingContext().getExpenseProductCategory()).isEqualTo("商用直销产品");
+      assertThat(form.getAccountingContext().getSourceBusinessDivision()).isEqualTo("商用压缩事业部");
+      assertThat(form.getHeaderSummary().getProcessCode()).isEqualTo("FI-SC-006");
+      assertThat(form.getHeaderSummary().getApplicantDept()).isEqualTo("欧美业务管理部");
+      assertThat(form.getHeaderSummary().getApplicantOffice()).isEqualTo("欧洲业务管理部");
+      assertThat(form.getHeaderSummary().getOverseasSalesMode()).isEqualTo("是");
+      assertThat(form.getItems()).extracting("materialNo").contains("1079900000536");
+    }
+  }
+
   private InputStream excel(List<List<String>> headers, List<List<String>> items) {
     return excel(headers, items, List.of());
   }

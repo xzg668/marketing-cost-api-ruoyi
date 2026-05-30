@@ -7,6 +7,10 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.dto.MakePartPriceGenerateResponse;
 import com.sanhua.marketingcost.dto.priceprepare.MakePartPricePrepareResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePreparePlanItem;
@@ -18,16 +22,27 @@ import com.sanhua.marketingcost.service.MakePartPriceGenerationService;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
 import java.util.List;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+
+import org.mockito.ArgumentCaptor;
 
 class MakePartPricePrepareStrategyImplTest {
 
   private MakePartPriceGenerationService generationService;
   private MakePartPriceCalcRowMapper calcRowMapper;
   private MakePartPricePrepareStrategyImpl strategy;
+
+  @BeforeAll
+  static void initTableInfo() {
+    TableInfoHelper.initTableInfo(
+        new MapperBuilderAssistant(new MybatisConfiguration(), ""), MakePartPriceCalcRow.class);
+  }
 
   @BeforeEach
   void setUp() {
@@ -50,7 +65,7 @@ class MakePartPricePrepareStrategyImplTest {
     assertThat(result.getPriceSource()).isEqualTo("自制件价格生成");
     assertThat(result.getResultRefType()).isEqualTo("MAKE_PART_PRICE");
     assertThat(result.getResultRefId()).isEqualTo(501L);
-    verify(generationService, never()).generateByOa(any(), any(), any());
+    verify(generationService, never()).generateByOa(any(), any(), any(), any());
   }
 
   @Test
@@ -58,7 +73,7 @@ class MakePartPricePrepareStrategyImplTest {
   void missingResultTriggersGeneration() {
     MakePartPriceGenerateResponse response =
         new MakePartPriceGenerateResponse("BATCH-GEN", 1, 1, 1, 0, 0);
-    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05")).thenReturn(response);
+    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(response);
     when(calcRowMapper.selectList(any()))
         .thenReturn(List.of())
         .thenReturn(List.of(okRow(502L, "BATCH-GEN")));
@@ -69,7 +84,34 @@ class MakePartPricePrepareStrategyImplTest {
     assertThat(result.getStatus()).isEqualTo("READY");
     assertThat(result.getResultRefId()).isEqualTo(502L);
     assertThat(result.getMessage()).contains("已触发生成");
-    verify(generationService).generateByOa("OA-001", "COMMERCIAL", "2026-05");
+    verify(generationService).generateByOa("OA-001", "COMMERCIAL", "2026-05", null);
+  }
+
+  @Test
+  @DisplayName("自制件：月度调价准备按 price_as_of_time 查询并触发生成")
+  void monthlyPrepareUsesPriceAsOfTime() {
+    LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 26, 10, 30);
+    MakePartPriceGenerateResponse response =
+        new MakePartPriceGenerateResponse("BATCH-GEN", 1, 1, 1, 0, 0);
+    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", priceAsOfTime))
+        .thenReturn(response);
+    MakePartPriceCalcRow ready = okRow(503L, "BATCH-GEN");
+    ready.setPriceAsOfTime(priceAsOfTime);
+    when(calcRowMapper.selectList(any()))
+        .thenReturn(List.of())
+        .thenReturn(List.of(ready));
+
+    MakePartPricePrepareResult result =
+        strategy.prepare("OA-001", "COMMERCIAL", "2026-05", priceAsOfTime, planItem("MAKE-001"));
+
+    assertThat(result.getStatus()).isEqualTo("READY");
+    assertThat(result.getResultRefId()).isEqualTo(503L);
+    verify(generationService).generateByOa("OA-001", "COMMERCIAL", "2026-05", priceAsOfTime);
+    ArgumentCaptor<Wrapper<MakePartPriceCalcRow>> captor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(calcRowMapper, org.mockito.Mockito.times(2)).selectList(captor.capture());
+    Wrapper<MakePartPriceCalcRow> firstQuery = captor.getAllValues().get(0);
+    assertThat(firstQuery.getCustomSqlSegment()).contains("price_as_of_time");
+    assertThat(paramValues(firstQuery)).contains(priceAsOfTime);
   }
 
   @Test
@@ -77,7 +119,7 @@ class MakePartPricePrepareStrategyImplTest {
   void missingRawPriceWritesGap() {
     MakePartPriceGenerateResponse response =
         new MakePartPriceGenerateResponse("BATCH-MISS", 1, 1, 0, 0, 1);
-    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05")).thenReturn(response);
+    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(response);
     when(calcRowMapper.selectList(any()))
         .thenReturn(List.of())
         .thenReturn(List.of())
@@ -99,7 +141,7 @@ class MakePartPricePrepareStrategyImplTest {
   void missingScrapPriceWritesGap() {
     MakePartPriceGenerateResponse response =
         new MakePartPriceGenerateResponse("BATCH-MISS", 1, 1, 0, 0, 1);
-    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05")).thenReturn(response);
+    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(response);
     when(calcRowMapper.selectList(any()))
         .thenReturn(List.of())
         .thenReturn(List.of())
@@ -120,7 +162,7 @@ class MakePartPricePrepareStrategyImplTest {
   void missingBomWritesStructureGap() {
     MakePartPriceGenerateResponse response =
         new MakePartPriceGenerateResponse("BATCH-BOM", 1, 1, 0, 0, 1);
-    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05")).thenReturn(response);
+    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(response);
     when(calcRowMapper.selectList(any()))
         .thenReturn(List.of())
         .thenReturn(List.of())
@@ -187,5 +229,10 @@ class MakePartPricePrepareStrategyImplTest {
     row.setRemark(remark);
     row.setPriceComplete(false);
     return row;
+  }
+
+  private static List<Object> paramValues(Wrapper<MakePartPriceCalcRow> wrapper) {
+    AbstractWrapper<?, ?, ?> abstractWrapper = (AbstractWrapper<?, ?, ?>) wrapper;
+    return List.copyOf(abstractWrapper.getParamNameValuePairs().values());
   }
 }

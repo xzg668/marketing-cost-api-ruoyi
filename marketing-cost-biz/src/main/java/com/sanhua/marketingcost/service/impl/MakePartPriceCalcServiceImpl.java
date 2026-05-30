@@ -36,6 +36,7 @@ public class MakePartPriceCalcServiceImpl implements MakePartPriceCalcService {
   private static final int MAX_EXPORT_ROWS = 10000;
   private static final List<String> EXPORT_HEADERS = List.of(
       "价格月份",
+      "取价时点",
       "生成时间",
       "OA单号",
       "料号",
@@ -120,23 +121,24 @@ public class MakePartPriceCalcServiceImpl implements MakePartPriceCalcService {
     MakePartPriceGenerateRequest safe =
         request == null ? new MakePartPriceGenerateRequest() : request;
     String businessUnitType = BusinessUnitContext.getCurrentBusinessUnitType();
+    LocalDateTime priceAsOfTime = safe.getPriceAsOfTime();
     if (safe.getParentMaterialNos() != null && safe.getParentMaterialNos().size() == 1) {
       return generationService.generateByMaterial(
-          safe.getParentMaterialNos().get(0), businessUnitType, period(safe));
+          safe.getParentMaterialNos().get(0), businessUnitType, period(safe), priceAsOfTime);
     }
     if (StringUtils.hasText(safe.getOaNo())) {
-      return generationService.generateByOa(safe.getOaNo(), businessUnitType, period(safe));
+      return generationService.generateByOa(safe.getOaNo(), businessUnitType, period(safe), priceAsOfTime);
     }
     if (safe.getParentMaterialNos() != null && !safe.getParentMaterialNos().isEmpty()) {
       MakePartPriceGenerateResponse total = null;
       for (String parentMaterialNo : safe.getParentMaterialNos()) {
         MakePartPriceGenerateResponse one =
-            generationService.generateByMaterial(parentMaterialNo, businessUnitType, period(safe));
+            generationService.generateByMaterial(parentMaterialNo, businessUnitType, period(safe), priceAsOfTime);
         total = merge(total, one);
       }
       return total == null ? new MakePartPriceGenerateResponse() : total;
     }
-    return generationService.generateAllLatest(businessUnitType, period(safe));
+    return generationService.generateAllLatest(businessUnitType, period(safe), priceAsOfTime);
   }
 
   @Override
@@ -266,6 +268,7 @@ public class MakePartPriceCalcServiceImpl implements MakePartPriceCalcService {
     for (MakePartPriceCalcRow row : rows) {
       List<Object> line = new ArrayList<>();
       line.add(nz(row.getPricingMonth()));
+      line.add(dt(row.getPriceAsOfTime()));
       line.add(dt(row.getCreatedAt()));
       line.add(nz(row.getOaNo()));
       line.add(nz(row.getParentMaterialNo()));
@@ -342,7 +345,7 @@ public class MakePartPriceCalcServiceImpl implements MakePartPriceCalcService {
   }
 
   private String period(MakePartPriceGenerateRequest request) {
-    // 当前阶段没有月度调价模块，制造件生成统一取系统当前日期对应月份作为价格月份。
+    // 手工入口未指定期间时仍按当前月生成；月度调价必须由上游显式传入 pricing_month。
     return StringUtils.hasText(request.getPeriod()) ? request.getPeriod().trim() : YearMonth.now().toString();
   }
 

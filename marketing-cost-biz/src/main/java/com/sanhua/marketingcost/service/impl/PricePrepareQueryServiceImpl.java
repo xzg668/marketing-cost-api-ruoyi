@@ -57,7 +57,6 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
   private static final String SUMMARY_FAILED = "FAILED";
   private static final String SUMMARY_NOT_PREPARED = "NOT_PREPARED";
   private static final String OWNER_SCOPE_ALL = "ALL";
-  private static final String DEFAULT_CALC_STATUS = "未核算";
   private static final Set<String> PENDING_SUMMARY_STATUSES =
       Set.of(SUMMARY_NOT_PREPARED, SUMMARY_PARTIAL, SUMMARY_FAILED);
 
@@ -340,11 +339,8 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
 
   private List<OaForm> loadCandidateForms(PricePrepareCandidateQueryRequest request, String keyword) {
     LambdaQueryWrapper<OaForm> query = Wrappers.lambdaQuery();
-    String calcStatus = StringUtils.hasText(request.getCalcStatus())
-        ? request.getCalcStatus().trim()
-        : DEFAULT_CALC_STATUS;
-    if (StringUtils.hasText(calcStatus)) {
-      query.eq(OaForm::getCalcStatus, calcStatus);
+    if (StringUtils.hasText(request.getCalcStatus())) {
+      query.eq(OaForm::getCalcStatus, request.getCalcStatus().trim());
     }
     if (keyword != null) {
       query.and(q -> q.like(OaForm::getOaNo, keyword).or().like(OaForm::getCustomer, keyword));

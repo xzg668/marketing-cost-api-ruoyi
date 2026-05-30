@@ -74,8 +74,11 @@ public class BomCostingRow {
   /** 指向 lp_bom_raw_hierarchy.id（软引用，未建外键） */
   private Long rawHierarchyNodeId;
 
-  /** 命中的过滤规则 id（未建外键） */
-  private Long matchedDrillRuleId;
+  /** 命中的 BOM 树节点结算规则 id */
+  private Long matchedSettlementRuleId;
+
+  /** 结算行类型：DEFAULT_LEAF / PACKAGE_PARENT / SPECIAL_ROLLUP_PARENT / BYPRODUCT_EXTRA 等 */
+  private String settlementRowType;
 
   // ============================ 业务属性（拍平时从 raw_hierarchy 拷贝） ============================
 
@@ -242,12 +245,20 @@ public class BomCostingRow {
     this.rawHierarchyNodeId = rawHierarchyNodeId;
   }
 
-  public Long getMatchedDrillRuleId() {
-    return matchedDrillRuleId;
+  public Long getMatchedSettlementRuleId() {
+    return matchedSettlementRuleId;
   }
 
-  public void setMatchedDrillRuleId(Long matchedDrillRuleId) {
-    this.matchedDrillRuleId = matchedDrillRuleId;
+  public void setMatchedSettlementRuleId(Long matchedSettlementRuleId) {
+    this.matchedSettlementRuleId = matchedSettlementRuleId;
+  }
+
+  public String getSettlementRowType() {
+    return settlementRowType;
+  }
+
+  public void setSettlementRowType(String settlementRowType) {
+    this.settlementRowType = settlementRowType;
   }
 
   public String getMaterialName() {

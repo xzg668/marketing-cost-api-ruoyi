@@ -44,6 +44,7 @@ public class QuoteNormalizeService {
   }
 
   public QuoteNormalizedDocument normalize(QuoteIngestRequest request) {
+    applyDerivedProcessCode(request);
     QuoteIngestPreviewResponse validation = validator.validate(request);
     QuoteClassificationResult classification = classifyService.classify(request);
 
@@ -58,6 +59,16 @@ public class QuoteNormalizeService {
     normalizeHeaderExtras(document, request);
     normalizeItems(document, request, headerRequest, classification);
     return document;
+  }
+
+  private void applyDerivedProcessCode(QuoteIngestRequest request) {
+    if (request == null || request.getHeader() == null) {
+      return;
+    }
+    String processCode =
+        QuoteProcessCodeResolver.resolve(
+            request.getHeader().getProcessCode(), request.getOaNo(), request.getExternalFormNo());
+    request.getHeader().setProcessCode(processCode);
   }
 
   private QuoteNormalizedHeader normalizeHeader(

@@ -6,6 +6,7 @@ import java.util.List;
 public class PriceLinkedAutoBindingWriteResult {
   private int writtenCount;
   private int manualSkippedCount;
+  private int conflictSkippedCount;
   private int errorCount;
   private final List<RowResult> rows = new ArrayList<>();
 
@@ -23,6 +24,14 @@ public class PriceLinkedAutoBindingWriteResult {
 
   public void setManualSkippedCount(int manualSkippedCount) {
     this.manualSkippedCount = manualSkippedCount;
+  }
+
+  public int getConflictSkippedCount() {
+    return conflictSkippedCount;
+  }
+
+  public void setConflictSkippedCount(int conflictSkippedCount) {
+    this.conflictSkippedCount = conflictSkippedCount;
   }
 
   public int getErrorCount() {
@@ -45,6 +54,11 @@ public class PriceLinkedAutoBindingWriteResult {
   public void addManualSkipped(String tokenName, String reason) {
     manualSkippedCount++;
     rows.add(new RowResult(tokenName, "SKIPPED_MANUAL", null, reason));
+  }
+
+  public void addConflictSkipped(String tokenName, String reason) {
+    conflictSkippedCount++;
+    rows.add(new RowResult(tokenName, "SKIPPED_CONFLICT", null, reason));
   }
 
   public void addError(String tokenName, String reason) {

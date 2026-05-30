@@ -11,11 +11,11 @@ import com.sanhua.marketingcost.dto.FlattenRequest;
 import com.sanhua.marketingcost.dto.FlattenResult;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
-import com.sanhua.marketingcost.entity.BomStopDrillRule;
+import com.sanhua.marketingcost.entity.BomSettlementRule;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
-import com.sanhua.marketingcost.mapper.BomStopDrillRuleMapper;
+import com.sanhua.marketingcost.mapper.BomSettlementRuleMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
 import com.sanhua.marketingcost.service.BomFlattenService;
@@ -51,7 +51,7 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
   @Autowired private BomFlattenService flattenService;
   @Autowired private BomRawHierarchyMapper rawMapper;
   @Autowired private BomCostingRowMapper costingMapper;
-  @Autowired private BomStopDrillRuleMapper ruleMapper;
+  @Autowired private BomSettlementRuleMapper settlementRuleMapper;
   @Autowired private MaterialMasterRawMapper materialMasterRawMapper;
   @Autowired private BomImportService bomImportService;
   @Autowired private BomHierarchyBuildService buildService;
@@ -67,9 +67,9 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
       // raw_hierarchy：按本测试产生的 build_batch_id 前缀 'rawtest_' 清（见 seedRaw）
       stmt.executeUpdate("DELETE FROM lp_bom_raw_hierarchy WHERE build_batch_id LIKE 'rawtest_%'");
       stmt.executeUpdate("DELETE FROM lp_material_master_raw WHERE import_batch_id LIKE 'rawtest_material_%'");
-      // 自定义规则（非 V40 种子）按 match_value 前缀 'TEST_' 清
+      // 自定义新结算规则按 rule_code 前缀 'TEST_' 清
       stmt.executeUpdate(
-          "DELETE FROM bom_stop_drill_rule WHERE match_value LIKE 'TEST\\_%' ESCAPE '\\\\'");
+          "DELETE FROM lp_bom_settlement_rule WHERE rule_code LIKE 'TEST\\_%' ESCAPE '\\\\'");
     }
   }
 
@@ -90,23 +90,23 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
     assertThat(rows).allSatisfy(c -> {
       assertThat(c.getIsCostingRow()).isEqualTo(1);
       assertThat(c.getSubtreeCostRequired()).isEqualTo(0);
-      assertThat(c.getMatchedDrillRuleId()).isNull();
+      assertThat(c.getMatchedSettlementRuleId()).isNull();
     });
     assertThat(r.getCostingRowsWritten()).isGreaterThan(0);
     assertThat(r.getSubtreeRequiredCount()).isZero();
   }
 
   @Test
-  @DisplayName("testStopAndCostRow_SubtreeNotIncluded：NAME_LIKE 自定义规则命中 → 子孙不入 costing")
+  @DisplayName("testStopAsPackage_SubtreeNotIncluded：NAME_LIKE 自定义规则命中 → 子孙不入 costing")
   void testStopAndCostRow_SubtreeNotIncluded() {
-    // T → T1(name='TEST_接管')→T1A(拉制铜管)；T1 被自定义规则命中 STOP_AND_COST_ROW
+    // T → T1(name='TEST_接管')→T1A(拉制铜管)；T1 被自定义结算规则命中后作为结算边界。
     seedTop("T", "主制造", "2026-01-01", 0);
     seedChildAt("T", "T1", "/T/T1/", 1, 1, "1", "主制造", "2026-01-01",
         "TEST_接管", null, "采购件", /*isLeaf=*/0);
     seedChildAt("T1", "T1A", "/T/T1/T1A/", 2, 1, "1", "主制造", "2026-01-01",
         "拉制铜管", null, "采购件", 1);
 
-    insertRule("NAME_LIKE", "TEST_接管", "STOP_AND_COST_ROW", 1, 5);
+    insertRule("NAME_LIKE", "TEST_接管", "STOP_AS_PACKAGE", 1, 5);
     FlattenResult r = flattenService.flatten(req("T", "主制造", LocalDate.of(2026, 6, 1)));
 
     List<BomCostingRow> rows = loadCostingByOa();
@@ -115,7 +115,7 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
     assertThat(t1.getMaterialCode()).isEqualTo("T1");
     assertThat(t1.getIsCostingRow()).isEqualTo(1);
     assertThat(t1.getSubtreeCostRequired()).as("接管规则 mark_subtree=1").isEqualTo(1);
-    assertThat(t1.getMatchedDrillRuleId()).isNotNull();
+    assertThat(t1.getMatchedSettlementRuleId()).isNotNull();
     // 拉制铜管不在 costing_row
     assertThat(rows.stream().noneMatch(c -> "T1A".equals(c.getMaterialCode()))).isTrue();
     assertThat(r.getSubtreeRequiredCount()).isEqualTo(1);
@@ -126,7 +126,7 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
   // 该 seed 规则和对应测试同时移除，避免误导后来者
 
   @Test
-  @DisplayName("testExclude：规则 drill_action=EXCLUDE → 该节点不入 costing，子树也不下钻")
+  @DisplayName("testExclude：结算规则 EXCLUDE → 该节点不入 costing，子树也不下钻")
   void testExclude() {
     seedTop("T", "主制造", "2026-01-01", 0);
     seedChildAt("T", "T1", "/T/T1/", 1, 1, "1", "主制造", "2026-01-01",
@@ -370,9 +370,9 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
           assertThat(c.getPath()).endsWith("/" + c.getMaterialCode() + "/");
         }
       });
-      // 若命中 V40 种子规则（NAME_LIKE 接管 / SHAPE_ATTR_EQ 部品联动），matched_drill_rule_id 非空
+      // 若命中新结算规则，matched_settlement_rule_id 非空
       long matched =
-          rows.stream().filter(c -> c.getMatchedDrillRuleId() != null).count();
+          rows.stream().filter(c -> c.getMatchedSettlementRuleId() != null).count();
       System.out.printf("[REAL-BOM-FLATTEN] 命中规则的行数=%d%n", matched);
     } finally {
       // 清理：本次真实链路的 costing / raw / u9 行
@@ -494,14 +494,28 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
 
   private void insertRule(
       String type, String value, String action, int markSubtree, int priority) {
-    BomStopDrillRule rule = new BomStopDrillRule();
-    rule.setMatchType(type);
-    rule.setMatchValue(value);
-    rule.setDrillAction(action);
+    BomSettlementRule rule = new BomSettlementRule();
+    rule.setRuleCode("TEST_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8));
+    rule.setRuleName("TEST_" + value);
+    rule.setRuleCategory("EXCLUDE".equals(action) ? "TEST_EXCLUDE" : "TEST_STOP");
+    rule.setSettlementAction(action);
+    rule.setSettlementRowType("EXCLUDE".equals(action) ? "EXCLUDED" : "DEFAULT_LEAF");
+    rule.setMatchConditionJson(conditionJson(type, value));
     rule.setMarkSubtreeCostRequired(markSubtree);
     rule.setPriority(priority);
     rule.setEnabled(1);
-    ruleMapper.insert(rule);
+    settlementRuleMapper.insert(rule);
+  }
+
+  private String conditionJson(String type, String value) {
+    String field = "material_name";
+    String op = "LIKE";
+    if ("MATERIAL_CODE_EQ".equals(type)) {
+      field = "material_code";
+      op = "EQ";
+    }
+    return "{\"nodeConditions\":[{\"field\":\"" + field + "\",\"op\":\"" + op
+        + "\",\"value\":\"" + value + "\"}]}";
   }
 
   private void seedMaterialMasterRaw(String materialCode, String mainCategoryCode, String shapeAttr) {

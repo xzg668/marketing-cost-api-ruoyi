@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.controller;
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.ThreeExpenseRateImportRequest;
+import com.sanhua.marketingcost.dto.ThreeExpenseRateImportResponse;
 import com.sanhua.marketingcost.dto.ThreeExpenseRatePageResponse;
 import com.sanhua.marketingcost.dto.ThreeExpenseRateRequest;
 import com.sanhua.marketingcost.entity.ThreeExpenseRate;
@@ -35,8 +36,16 @@ public class ThreeExpenseRateController {
   @PreAuthorize("@ss.hasPermi('base:three-expense:list')")
   @GetMapping
   public CommonResult<ThreeExpenseRatePageResponse> list(
-      @RequestParam(required = false) String department) {
-    List<ThreeExpenseRate> list = threeExpenseRateService.list(department);
+      @RequestParam(required = false) String department,
+      @RequestParam(required = false) Integer periodYear,
+      @RequestParam(required = false) String productCategory,
+      @RequestParam(required = false) String productLine,
+      @RequestParam(required = false) String applicantDepartment,
+      @RequestParam(required = false) String applicantOffice) {
+    List<ThreeExpenseRate> list =
+        threeExpenseRateService.list(
+            department, periodYear, productCategory, productLine, applicantDepartment,
+            applicantOffice);
     return CommonResult.success(new ThreeExpenseRatePageResponse(list.size(), list));
   }
 
@@ -74,7 +83,7 @@ public class ThreeExpenseRateController {
   /** 导入三项费用率数据 */
   @PreAuthorize("@ss.hasPermi('base:three-expense:import')")
   @PostMapping("/import")
-  public CommonResult<List<ThreeExpenseRate>> importItems(
+  public CommonResult<ThreeExpenseRateImportResponse> importItems(
       @RequestBody ThreeExpenseRateImportRequest request) {
     return CommonResult.success(threeExpenseRateService.importItems(request));
   }

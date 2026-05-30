@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.dto;
 
 import com.sanhua.marketingcost.enums.LinkedPriceCalcScene;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -20,6 +21,7 @@ public class LinkedPriceEnsureRequest {
   private Long adjustBatchId;
   private Set<String> itemCodes = new LinkedHashSet<>();
   private boolean forceRefresh;
+  private LocalDateTime priceAsOfTime;
 
   public LinkedPriceEnsureRequest() {
   }
@@ -49,14 +51,35 @@ public class LinkedPriceEnsureRequest {
 
   public static LinkedPriceEnsureRequest monthlyAdjust(
       Long adjustBatchId, String businessUnitType, String pricingMonth, Set<String> itemCodes) {
-    return new LinkedPriceEnsureRequest(
+    return monthlyAdjust(adjustBatchId, businessUnitType, pricingMonth, itemCodes, false, null);
+  }
+
+  public static LinkedPriceEnsureRequest monthlyAdjust(
+      Long adjustBatchId,
+      String businessUnitType,
+      String pricingMonth,
+      Set<String> itemCodes,
+      boolean forceRefresh) {
+    return monthlyAdjust(adjustBatchId, businessUnitType, pricingMonth, itemCodes, forceRefresh, null);
+  }
+
+  public static LinkedPriceEnsureRequest monthlyAdjust(
+      Long adjustBatchId,
+      String businessUnitType,
+      String pricingMonth,
+      Set<String> itemCodes,
+      boolean forceRefresh,
+      LocalDateTime priceAsOfTime) {
+    LinkedPriceEnsureRequest request = new LinkedPriceEnsureRequest(
         LinkedPriceCalcScene.MONTHLY_ADJUST,
         null,
         businessUnitType,
         pricingMonth,
         adjustBatchId,
         itemCodes,
-        false);
+        forceRefresh);
+    request.setPriceAsOfTime(priceAsOfTime);
+    return request;
   }
 
   public void setItemCodes(Set<String> itemCodes) {
@@ -83,9 +106,6 @@ public class LinkedPriceEnsureRequest {
     }
     if (calcScene != null && calcScene.requiresOaNo() && !StringUtils.hasText(oaNo)) {
       errors.add("QUOTE 场景 oaNo 不能为空");
-    }
-    if (calcScene != null && calcScene.requiresAdjustBatchId() && adjustBatchId == null) {
-      errors.add("MONTHLY_ADJUST 场景 adjustBatchId 不能为空");
     }
     return errors;
   }

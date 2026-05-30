@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
@@ -76,5 +77,45 @@ class LinkedPriceResolverTest {
         .contains("lp_price_linked_calc_item 无记录")
         .contains("OA-V3")
         .contains("MAT-MISSING");
+  }
+
+  @Test
+  @DisplayName("T7：月度调价联动价按 MONTHLY_ADJUST + 调价批次读取，不读 OA QUOTE 结果")
+  void monthlyRepriceResolvesByAdjustBatchContext() {
+    PriceLinkedCalcItemMapper mapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
+    LinkedPriceResolver resolver = new LinkedPriceResolver(mapper);
+
+    PriceLinkedCalcItem calc = new PriceLinkedCalcItem();
+    calc.setItemCode("MAT-LINKED");
+    calc.setPartUnitPrice(new BigDecimal("88.000000"));
+    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(calc));
+
+    CostRunPartItemDto item = new CostRunPartItemDto();
+    item.setPartCode("MAT-LINKED");
+
+    PriceResolveResult result =
+        resolver.resolve(
+            "OA-V3",
+            item,
+            null,
+            CostRunContext.monthlyReprice(
+                "2026-05",
+                77L,
+                "MRP-001",
+                "COMMERCIAL",
+                "OA-V3",
+                9L,
+                "P-001",
+                "箱装",
+                "客户A",
+                "OBJ-001"));
+
+    assertThat(result.unitPrice()).isEqualByComparingTo("88.000000");
+    assertThat(result.priceSource()).isEqualTo("月度调价联动价");
+    ArgumentCaptor<Wrapper<PriceLinkedCalcItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(mapper).selectList(captor.capture());
+    assertThat(captor.getValue().getCustomSqlSegment())
+        .contains("calc_scene", "adjust_batch_id", "business_unit_type", "pricing_month", "item_code")
+        .doesNotContain("oa_no");
   }
 }

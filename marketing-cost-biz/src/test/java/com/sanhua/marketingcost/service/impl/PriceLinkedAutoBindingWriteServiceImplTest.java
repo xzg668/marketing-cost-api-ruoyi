@@ -173,9 +173,16 @@ class PriceLinkedAutoBindingWriteServiceImplTest {
         decision(PriceLinkedStandardBindingServiceImpl.ACTION_CONFLICT, "材料含税价格", 501L)));
 
     assertThat(result.getWrittenCount()).isZero();
-    assertThat(result.getErrorCount()).isEqualTo(1);
-    assertThat(result.getRows().getFirst().getReason()).contains("校验未通过");
+    assertThat(result.getConflictSkippedCount()).isEqualTo(1);
+    assertThat(result.getErrorCount()).isZero();
+    assertThat(result.getRows().getFirst().getAction()).isEqualTo("SKIPPED_CONFLICT");
+    assertThat(result.getRows().getFirst().getReason()).contains("不一致");
     verify(priceVariableBindingService, never()).save(any());
+    ArgumentCaptor<ExcelAutoBindingImportLog> logCaptor =
+        ArgumentCaptor.forClass(ExcelAutoBindingImportLog.class);
+    verify(autoBindingImportLogMapper).insert(logCaptor.capture());
+    assertThat(logCaptor.getValue().getAction()).isEqualTo("SKIPPED_CONFLICT");
+    assertThat(logCaptor.getValue().getStatus()).isEqualTo("WARNING");
   }
 
   @Test
@@ -223,7 +230,12 @@ class PriceLinkedAutoBindingWriteServiceImplTest {
     decision.setTokenName(tokenName);
     decision.setAction(action);
     decision.setStandardBindingId(standardBindingId);
+    decision.setOldFactorIdentityId(9999L);
     decision.setNewFactorIdentityId(1001L);
+    decision.setReason(
+        PriceLinkedStandardBindingServiceImpl.ACTION_CONFLICT.equals(action)
+            ? "本次公式识别结果与历史标准关系不一致，默认不覆盖，请人工确认"
+            : "本次公式识别结果与历史标准关系一致");
     decision.setCandidate(candidate);
     return decision;
   }

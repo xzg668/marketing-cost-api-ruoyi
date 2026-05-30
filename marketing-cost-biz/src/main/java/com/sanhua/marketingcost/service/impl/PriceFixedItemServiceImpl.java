@@ -8,7 +8,9 @@ import com.sanhua.marketingcost.dto.PriceFixedItemUpdateRequest;
 import com.sanhua.marketingcost.entity.PriceFixedItem;
 import com.sanhua.marketingcost.mapper.PriceFixedItemMapper;
 import com.sanhua.marketingcost.service.PriceFixedItemService;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.transaction.annotation.Transactional;
@@ -60,6 +62,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     if (!StringUtils.hasText(item.getMaterialCode()) || item.getFixedPrice() == null) {
       return null;
     }
+    closePreviousVersions(item);
     itemMapper.insert(item);
     return item;
   }
@@ -126,6 +129,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
         item = new PriceFixedItem();
         fillItem(item, row, request);
         fillDefaults(item);
+        closePreviousVersions(item);
         itemMapper.insert(item);
         response.incrementCreatedCount();
       } else {
@@ -385,6 +389,53 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     if (!StringUtils.hasText(item.getPricingMonth())) {
       item.setPricingMonth("2026-03");
     }
+    if (item.getEffectiveFrom() == null) {
+      item.setEffectiveFrom(defaultEffectiveFrom(item.getPricingMonth()));
+    }
+  }
+
+  private void closePreviousVersions(PriceFixedItem item) {
+    if (item == null || item.getEffectiveFrom() == null || !StringUtils.hasText(item.getMaterialCode())) {
+      return;
+    }
+    var query = Wrappers.lambdaQuery(PriceFixedItem.class)
+        .eq(PriceFixedItem::getMaterialCode, item.getMaterialCode())
+        .eq(PriceFixedItem::getSourceType, item.getSourceType())
+        .and(q -> q.isNull(PriceFixedItem::getEffectiveTo)
+            .or()
+            .gt(PriceFixedItem::getEffectiveTo, item.getEffectiveFrom()));
+    String supplierCode = trimToNull(item.getSupplierCode());
+    if (supplierCode == null) {
+      query.isNull(PriceFixedItem::getSupplierCode);
+    } else {
+      query.eq(PriceFixedItem::getSupplierCode, supplierCode);
+    }
+    String businessUnitType = trimToNull(item.getBusinessUnitType());
+    if (businessUnitType == null) {
+      query.and(q -> q.isNull(PriceFixedItem::getBusinessUnitType)
+          .or()
+          .eq(PriceFixedItem::getBusinessUnitType, ""));
+    } else {
+      query.eq(PriceFixedItem::getBusinessUnitType, businessUnitType);
+    }
+    for (PriceFixedItem row : itemMapper.selectList(query)) {
+      if (item.getId() != null && item.getId().equals(row.getId())) {
+        continue;
+      }
+      row.setEffectiveTo(item.getEffectiveFrom());
+      itemMapper.updateById(row);
+    }
+  }
+
+  private LocalDate defaultEffectiveFrom(String pricingMonth) {
+    if (StringUtils.hasText(pricingMonth)) {
+      try {
+        return YearMonth.parse(pricingMonth.trim()).atDay(1);
+      } catch (java.time.format.DateTimeParseException ignored) {
+        // fall through
+      }
+    }
+    return LocalDate.now();
   }
 
   private String trimToNull(String value) {

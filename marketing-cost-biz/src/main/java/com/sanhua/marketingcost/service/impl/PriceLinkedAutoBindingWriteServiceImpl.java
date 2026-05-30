@@ -72,10 +72,24 @@ public class PriceLinkedAutoBindingWriteServiceImpl implements PriceLinkedAutoBi
       LocalDate effectiveDate,
       PriceLinkedAutoBindingWriteResult result) {
     String tokenName = decision == null ? null : decision.getTokenName();
-    if (decision == null || !WRITABLE_DECISIONS.contains(decision.getAction())) {
+    if (decision == null) {
       insertImportLog(request, decision, null, "SKIPPED", "FAILED",
           "历史关系校验未通过，不能写入行级绑定");
       result.addError(tokenName, "历史关系校验未通过，不能写入行级绑定");
+      return;
+    }
+    if (PriceLinkedStandardBindingServiceImpl.ACTION_CONFLICT.equals(decision.getAction())) {
+      insertImportLog(request, decision, decision.getCandidate(), "SKIPPED_CONFLICT", "WARNING",
+          decision.getReason());
+      result.addConflictSkipped(tokenName, decision.getReason());
+      return;
+    }
+    if (!WRITABLE_DECISIONS.contains(decision.getAction())) {
+      String reason = StringUtils.hasText(decision.getReason())
+          ? decision.getReason()
+          : "历史关系校验未通过，不能写入行级绑定";
+      insertImportLog(request, decision, decision.getCandidate(), "SKIPPED", "FAILED", reason);
+      result.addError(tokenName, reason);
       return;
     }
     BindingCandidate candidate = decision.getCandidate();

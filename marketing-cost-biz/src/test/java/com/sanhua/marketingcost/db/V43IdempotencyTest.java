@@ -88,31 +88,4 @@ class V43IdempotencyTest extends BomMapperTestBase {
     }
   }
 
-  @Test
-  @DisplayName("V43 内嵌的 UPDATE 老规则 #4 在测试环境无该规则时 affected=0 不报错")
-  void testV43RuleUpdateNoMatch() throws Exception {
-    // testBase 没跑 V41 之前的环境是没 'copper-tube-assembly' 这条规则的；
-    //   现在 testBase 跑了 V41 + V43，V41 INSERT 该规则、V43 UPDATE 它停用 →
-    //   再跑一遍 V43 时该规则 enabled 已是 0，UPDATE 命中条件 enabled=1 不再命中。
-    MYSQL.copyFileToContainer(
-        MountableFile.forClasspathResource("/db/V43__bom_leaf_rollup_dict.sql"),
-        "/tmp/V43_rerun2.sql");
-    var execResult = MYSQL.execInContainer(
-        "sh", "-c",
-        "mysql --default-character-set=utf8mb4 -uroot -p" + MYSQL.getPassword()
-            + " " + MYSQL.getDatabaseName() + " < /tmp/V43_rerun2.sql");
-    assertThat(execResult.getExitCode()).isZero();
-
-    // 校验：规则 enabled=0（被 V43 停用）；remark 含 [T11停用-业务废弃-2026-04-27]
-    try (Connection conn = openConnection();
-        Statement stmt = conn.createStatement();
-        ResultSet rs = stmt.executeQuery(
-            "SELECT enabled, remark FROM bom_stop_drill_rule "
-                + "WHERE match_value='copper-tube-assembly' AND drill_action='ROLLUP_TO_PARENT' "
-                + "  AND deleted=0")) {
-      assertThat(rs.next()).as("V41 应已 INSERT 该规则").isTrue();
-      assertThat(rs.getInt("enabled")).as("V43 应将其停用 enabled=0").isZero();
-      assertThat(rs.getString("remark")).contains("T11停用-业务废弃-2026-04-27");
-    }
-  }
 }

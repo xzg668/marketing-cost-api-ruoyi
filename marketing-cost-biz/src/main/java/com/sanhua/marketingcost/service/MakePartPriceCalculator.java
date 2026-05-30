@@ -160,6 +160,7 @@ public class MakePartPriceCalculator {
     row.setOaNo(source.getOaNo());
     row.setBusinessUnitType(source.getBusinessUnitType());
     row.setPricingMonth(source.getPricingMonth());
+    row.setPriceAsOfTime(source.getPriceAsOfTime());
     row.setParentMaterialNo(source.getParentMaterialNo());
     row.setParentMaterialName(source.getParentMaterialName());
     row.setDrawingNo(source.getDrawingNo());

@@ -4,11 +4,13 @@ WORKDIR /app
 COPY pom.xml ./
 COPY yudao-framework ./yudao-framework
 COPY marketing-cost-biz/pom.xml ./marketing-cost-biz/pom.xml
+COPY sales-cost-worker/pom.xml ./sales-cost-worker/pom.xml
 COPY maven-settings.xml /root/.m2/settings.xml
 COPY marketing-cost-biz/src ./marketing-cost-biz/src
+COPY sales-cost-worker/src ./sales-cost-worker/src
 
 RUN mvn -s /root/.m2/settings.xml -B -DskipTests package \
-  && JAR_PATH=$(ls -1 marketing-cost-biz/target/*.jar | grep -v "original" | head -n 1) \
+  && JAR_PATH=$(ls -1 marketing-cost-biz/target/*-exec.jar | head -n 1) \
   && cp "$JAR_PATH" /app/app.jar
 
 FROM eclipse-temurin:21-jre

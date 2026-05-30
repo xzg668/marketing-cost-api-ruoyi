@@ -55,7 +55,9 @@ public class QuoteIngestRequestValidator {
     response.setOaNo(trimToNull(request.getOaNo()));
     response.setItemCount(request.getItems() == null ? 0 : request.getItems().size());
     if (request.getHeader() != null) {
-      response.setProcessCode(trimToNull(request.getHeader().getProcessCode()));
+      response.setProcessCode(
+          QuoteProcessCodeResolver.resolve(
+              request.getHeader().getProcessCode(), request.getOaNo(), request.getExternalFormNo()));
       response.setQuoteScenario(trimToNull(request.getHeader().getQuoteScenario()));
     }
   }
@@ -73,8 +75,13 @@ public class QuoteIngestRequestValidator {
     }
 
     QuoteIngestHeaderRequest header = request.getHeader();
-    if (requiresProcessCode(sourceType) && (header == null || trimToNull(header.getProcessCode()) == null)) {
-      addError(response, "header.processCode", "PROCESS_CODE_REQUIRED", "OA/Excel 接入必须提供流程编号");
+    String processCode =
+        header == null
+            ? null
+            : QuoteProcessCodeResolver.resolve(
+                header.getProcessCode(), request.getOaNo(), request.getExternalFormNo());
+    if (requiresProcessCode(sourceType) && processCode == null) {
+      addError(response, "header.processCode", "PROCESS_CODE_REQUIRED", "OA/Excel 接入必须提供流程类型编码");
     }
     if (header == null) {
       addError(response, "header.applyDate", "APPLY_DATE_REQUIRED", "申请日期不能为空");

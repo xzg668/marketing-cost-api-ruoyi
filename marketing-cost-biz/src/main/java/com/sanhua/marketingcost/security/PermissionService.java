@@ -89,7 +89,7 @@ public class PermissionService {
         }
         String target = role.startsWith(ROLE_PREFIX) ? role : ROLE_PREFIX + role;
         for (GrantedAuthority authority : authorities) {
-            if (target.equals(authority.getAuthority())) {
+            if (target.equalsIgnoreCase(authority.getAuthority())) {
                 return true;
             }
         }

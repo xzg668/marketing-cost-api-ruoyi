@@ -13,14 +13,20 @@ public class BomSupplementTodo {
   private Long taskId;
   private String taskNo;
   private String todoNo;
+  private String oaTodoId;
   private String todoStatus;
+  private String pushStatus;
+  private String pushErrorMessage;
   private String todoKind;
   private String recipientRole;
   private String assigneeName;
   private String title;
   private String todoUrl;
+  private String oaTodoUrl;
   private String payloadJson;
   private LocalDateTime pushedAt;
+  private LocalDateTime lastPushAt;
+  private LocalDateTime closedAt;
   private LocalDateTime createdAt;
   private LocalDateTime updatedAt;
 
@@ -56,12 +62,36 @@ public class BomSupplementTodo {
     this.todoNo = todoNo;
   }
 
+  public String getOaTodoId() {
+    return oaTodoId;
+  }
+
+  public void setOaTodoId(String oaTodoId) {
+    this.oaTodoId = oaTodoId;
+  }
+
   public String getTodoStatus() {
     return todoStatus;
   }
 
   public void setTodoStatus(String todoStatus) {
     this.todoStatus = todoStatus;
+  }
+
+  public String getPushStatus() {
+    return pushStatus;
+  }
+
+  public void setPushStatus(String pushStatus) {
+    this.pushStatus = pushStatus;
+  }
+
+  public String getPushErrorMessage() {
+    return pushErrorMessage;
+  }
+
+  public void setPushErrorMessage(String pushErrorMessage) {
+    this.pushErrorMessage = pushErrorMessage;
   }
 
   public String getTodoKind() {
@@ -104,6 +134,14 @@ public class BomSupplementTodo {
     this.todoUrl = todoUrl;
   }
 
+  public String getOaTodoUrl() {
+    return oaTodoUrl;
+  }
+
+  public void setOaTodoUrl(String oaTodoUrl) {
+    this.oaTodoUrl = oaTodoUrl;
+  }
+
   public String getPayloadJson() {
     return payloadJson;
   }
@@ -118,6 +156,22 @@ public class BomSupplementTodo {
 
   public void setPushedAt(LocalDateTime pushedAt) {
     this.pushedAt = pushedAt;
+  }
+
+  public LocalDateTime getLastPushAt() {
+    return lastPushAt;
+  }
+
+  public void setLastPushAt(LocalDateTime lastPushAt) {
+    this.lastPushAt = lastPushAt;
+  }
+
+  public LocalDateTime getClosedAt() {
+    return closedAt;
+  }
+
+  public void setClosedAt(LocalDateTime closedAt) {
+    this.closedAt = closedAt;
   }
 
   public LocalDateTime getCreatedAt() {

@@ -5,27 +5,38 @@ import static org.mockito.Mockito.*;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.sanhua.marketingcost.config.CostRunExecutionProperties;
+import com.sanhua.marketingcost.dto.CostRunBatchProgressSnapshot;
+import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
+import com.sanhua.marketingcost.dto.CostRunObjectResult;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
+import com.sanhua.marketingcost.dto.CostRunTaskSubmissionResult;
 import com.sanhua.marketingcost.dto.CostRunTrialResponse;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
+import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse;
+import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
+import com.sanhua.marketingcost.entity.CostRunBatch;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
+import com.sanhua.marketingcost.mapper.CostRunBatchMapper;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
-import com.sanhua.marketingcost.service.CostRunCostItemService;
-import com.sanhua.marketingcost.service.CostRunPartItemService;
+import com.sanhua.marketingcost.service.CostRunEngine;
 import com.sanhua.marketingcost.service.CostRunProgressStore;
-import com.sanhua.marketingcost.service.CostRunResultService;
+import com.sanhua.marketingcost.service.CostRunResultWriter;
+import com.sanhua.marketingcost.service.CostRunTaskProgressService;
+import com.sanhua.marketingcost.service.CostRunTaskSubmissionService;
 import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MaterialMasterSyncService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
+import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -52,16 +63,20 @@ class CostRunTrialServiceImplTest {
 
   private OaFormMapper oaFormMapper;
   private OaFormItemMapper oaFormItemMapper;
+  private CostRunBatchMapper costRunBatchMapper;
   private CostRunPartItemMapper costRunPartItemMapper;
-  private CostRunPartItemService partItemService;
-  private CostRunCostItemService costItemService;
-  private CostRunResultService resultService;
+  private CostRunEngine costRunEngine;
+  private CostRunResultWriter costRunResultWriter;
   private CostRunProgressStore progressStore;
+  private CostRunTaskSubmissionService taskSubmissionService;
+  private CostRunTaskProgressService taskProgressService;
   private TransactionTemplate transactionTemplate;
   private MaterialMasterSyncService materialMasterSyncService;
   private MaterialPriceRouterService materialPriceRouterService;
   private LinkedPriceEnsureService linkedPriceEnsureService;
   private PricePrepareReadinessService pricePrepareReadinessService;
+  private QuoteBomStatusService quoteBomStatusService;
+  private CostRunExecutionProperties executionProperties;
   private CostRunTrialServiceImpl service;
 
   @BeforeAll
@@ -76,26 +91,34 @@ class CostRunTrialServiceImplTest {
   void setUp() {
     oaFormMapper = mock(OaFormMapper.class);
     oaFormItemMapper = mock(OaFormItemMapper.class);
+    costRunBatchMapper = mock(CostRunBatchMapper.class);
     costRunPartItemMapper = mock(CostRunPartItemMapper.class);
-    partItemService = mock(CostRunPartItemService.class);
-    costItemService = mock(CostRunCostItemService.class);
-    resultService = mock(CostRunResultService.class);
+    costRunEngine = mock(CostRunEngine.class);
+    costRunResultWriter = mock(CostRunResultWriter.class);
     progressStore = new CostRunProgressStore();
+    taskSubmissionService = mock(CostRunTaskSubmissionService.class);
+    taskProgressService = mock(CostRunTaskProgressService.class);
     transactionTemplate = mock(TransactionTemplate.class);
     materialMasterSyncService = mock(MaterialMasterSyncService.class);
     materialPriceRouterService = mock(MaterialPriceRouterService.class);
     linkedPriceEnsureService = mock(LinkedPriceEnsureService.class);
     pricePrepareReadinessService = mock(PricePrepareReadinessService.class);
+    quoteBomStatusService = mock(QuoteBomStatusService.class);
+    executionProperties = new CostRunExecutionProperties();
+    executionProperties.setMode("API_SYNC");
     when(pricePrepareReadinessService.check(anyString(), anyString()))
         .thenReturn(PricePrepareReadinessResult.ready("PPR-OK", LocalDate.now().toString().substring(0, 7), "SUCCESS"));
+    when(quoteBomStatusService.checkForCostRun(anyString())).thenReturn(bomResponse("MAT-READY", "SYNCED"));
     service = new CostRunTrialServiceImpl(
-        oaFormMapper, oaFormItemMapper, costRunPartItemMapper,
-        partItemService, costItemService, resultService,
-        progressStore, transactionTemplate,
+        oaFormMapper, oaFormItemMapper, costRunBatchMapper, costRunPartItemMapper,
+        costRunEngine, costRunResultWriter,
+        progressStore, taskSubmissionService, taskProgressService, transactionTemplate,
         materialMasterSyncService,
         materialPriceRouterService,
         linkedPriceEnsureService,
-        pricePrepareReadinessService);
+        pricePrepareReadinessService,
+        quoteBomStatusService,
+        executionProperties);
   }
 
   // ========== 参数校验 ==========
@@ -112,6 +135,143 @@ class CostRunTrialServiceImplTest {
   void testNullOaNoReturnsEmpty() throws Exception {
     CompletableFuture<CostRunTrialResponse> future = service.run(null);
     assertNotNull(future.get());
+  }
+
+  @Test
+  @DisplayName("T24：默认执行模式为 API_SYNC，仍进入当前事务链路")
+  void defaultExecutionModeKeepsApiSync() throws Exception {
+    when(transactionTemplate.execute(any())).thenReturn(new CostRunTrialResponse(1, 0, 0));
+
+    CostRunTrialResponse response = service.run("OA-API-SYNC").get();
+
+    assertEquals(1, response.getProductCount());
+    verify(transactionTemplate).execute(any());
+  }
+
+  @Test
+  @DisplayName("T31：TASK_WORKER 只提交 QUOTE 任务，不在 API 进程直接跑 CostRunEngine")
+  void taskWorkerModeSubmitsQuoteTaskWithoutRunningEngine() throws Exception {
+    executionProperties.setMode("TASK_WORKER");
+    when(taskSubmissionService.submitQuote("OA-TASK"))
+        .thenReturn(CostRunTaskSubmissionResult.of(
+            "CRQ-001", "QUOTE", "OA-TASK", "PENDING", 2, 2, 0, false));
+
+    CostRunTrialResponse response = service.run("OA-TASK").get();
+
+    assertEquals("CRQ-001", response.getBatchNo());
+    assertEquals("TASK_WORKER", response.getExecutionMode());
+    assertEquals(2, response.getProductCount());
+    assertEquals(2, response.getTaskCount());
+    assertEquals("QUEUED", progressStore.get("OA-TASK").getStatus());
+    verify(taskSubmissionService).submitQuote("OA-TASK");
+    verify(transactionTemplate, never()).execute(any());
+    verify(costRunEngine, never()).run(any());
+  }
+
+  @Test
+  @DisplayName("T37：TASK_WORKER 带灰度业务单元时，未命中业务单元回退 API_SYNC")
+  void taskWorkerGrayBusinessUnitFallsBackToApiSyncWhenNotMatched() throws Exception {
+    executionProperties.setMode("TASK_WORKER");
+    executionProperties.setGrayBusinessUnits(Set.of("COMMERCIAL"));
+    when(transactionTemplate.execute(any())).thenReturn(new CostRunTrialResponse(1, 0, 0));
+
+    CostRunTrialResponse response =
+        service.run("OA-GRAY-BU-MISS", "alice", "HOUSEHOLD").get();
+
+    assertEquals(1, response.getProductCount());
+    verify(transactionTemplate).execute(any());
+    verify(taskSubmissionService, never()).submitQuote(anyString());
+  }
+
+  @Test
+  @DisplayName("T37：TASK_WORKER 带灰度业务单元时，命中业务单元提交 QUOTE 任务")
+  void taskWorkerGrayBusinessUnitSubmitsQuoteTaskWhenMatched() throws Exception {
+    executionProperties.setMode("TASK_WORKER");
+    executionProperties.setGrayBusinessUnits(Set.of("COMMERCIAL"));
+    when(taskSubmissionService.submitQuote("OA-GRAY-BU-HIT"))
+        .thenReturn(CostRunTaskSubmissionResult.of(
+            "CRQ-GRAY-BU", "QUOTE", "OA-GRAY-BU-HIT", "PENDING", 1, 1, 0, false));
+
+    CostRunTrialResponse response =
+        service.run("OA-GRAY-BU-HIT", "alice", "COMMERCIAL").get();
+
+    assertEquals("CRQ-GRAY-BU", response.getBatchNo());
+    assertEquals("TASK_WORKER", response.getExecutionMode());
+    verify(taskSubmissionService).submitQuote("OA-GRAY-BU-HIT");
+    verify(transactionTemplate, never()).execute(any());
+  }
+
+  @Test
+  @DisplayName("T37：TASK_WORKER 带灰度用户时，命中用户提交 QUOTE 任务")
+  void taskWorkerGrayUserSubmitsQuoteTaskWhenMatched() throws Exception {
+    executionProperties.setMode("TASK_WORKER");
+    executionProperties.setGrayUsers(Set.of("alice"));
+    when(taskSubmissionService.submitQuote("OA-GRAY-USER"))
+        .thenReturn(CostRunTaskSubmissionResult.of(
+            "CRQ-GRAY-USER", "QUOTE", "OA-GRAY-USER", "PENDING", 1, 1, 0, false));
+
+    CostRunTrialResponse response =
+        service.run("OA-GRAY-USER", "ALICE", "HOUSEHOLD").get();
+
+    assertEquals("CRQ-GRAY-USER", response.getBatchNo());
+    assertEquals("TASK_WORKER", response.getExecutionMode());
+    verify(taskSubmissionService).submitQuote("OA-GRAY-USER");
+    verify(transactionTemplate, never()).execute(any());
+  }
+
+  @Test
+  @DisplayName("T31：TASK_WORKER 进度查询按 oaNo 映射到最新 QUOTE 批次")
+  void taskWorkerProgressUsesLatestQuoteBatch() {
+    executionProperties.setMode("TASK_WORKER");
+    CostRunBatch batch = new CostRunBatch();
+    batch.setBatchNo("CRQ-001");
+    when(costRunBatchMapper.selectOne(any())).thenReturn(batch);
+    CostRunBatchProgressSnapshot snapshot = new CostRunBatchProgressSnapshot();
+    snapshot.setBatchNo("CRQ-001");
+    snapshot.setStatus("SUCCESS");
+    snapshot.setProgress(100);
+    when(taskProgressService.refreshBatchProgress("CRQ-001")).thenReturn(snapshot);
+
+    var response = service.progress(" OA-TASK ");
+
+    assertEquals("DONE", response.getStatus());
+    assertEquals(100, response.getPercent());
+    verify(taskProgressService).refreshBatchProgress("CRQ-001");
+  }
+
+  @Test
+  @DisplayName("T37：TASK_WORKER 灰度未命中时，进度仍读 API_SYNC 内存进度")
+  void progressUsesApiSyncStoreWhenTaskWorkerGrayFilterMisses() {
+    executionProperties.setMode("TASK_WORKER");
+    executionProperties.setGrayUsers(Set.of("alice"));
+    progressStore.enqueue("OA-GRAY-PROGRESS");
+
+    var response = service.progress("OA-GRAY-PROGRESS", "bob", "HOUSEHOLD");
+
+    assertEquals("QUEUED", response.getStatus());
+    verify(costRunBatchMapper, never()).selectOne(any());
+    verify(taskProgressService, never()).refreshBatchProgress(anyString());
+  }
+
+  @Test
+  @DisplayName("T31：DUAL_COMPARE 先执行旧链路写正式结果，再提交 QUOTE 影子任务")
+  void dualCompareRunsApiSyncThenSubmitsShadowTask() throws Exception {
+    executionProperties.setMode("DUAL_COMPARE");
+    when(transactionTemplate.execute(any())).thenReturn(new CostRunTrialResponse(1, 5, 10));
+    when(taskSubmissionService.submitQuote("OA-DUAL"))
+        .thenReturn(CostRunTaskSubmissionResult.of(
+            "CRQ-DUAL", "QUOTE", "OA-DUAL", "PENDING", 1, 1, 0, false));
+
+    CostRunTrialResponse response = service.run("OA-DUAL").get();
+
+    assertEquals(1, response.getProductCount());
+    assertEquals(5, response.getPartCount());
+    assertEquals(10, response.getCostItemCount());
+    assertEquals("CRQ-DUAL", response.getBatchNo());
+    assertEquals("DUAL_COMPARE", response.getExecutionMode());
+    InOrder inOrder = inOrder(transactionTemplate, taskSubmissionService);
+    inOrder.verify(transactionTemplate).execute(any());
+    inOrder.verify(taskSubmissionService).submitQuote("OA-DUAL");
   }
 
   // ========== 并发防重 ==========
@@ -241,24 +401,17 @@ class CostRunTrialServiceImplTest {
     part.setPartQty(BigDecimal.ONE);
     part.setUnitPrice(new BigDecimal("72.000000"));
     part.setPriceSource("联动价");
-    when(partItemService.listByOaNo(eq("OA-V3"), any(java.util.function.IntConsumer.class)))
-        .thenReturn(List.of(part));
-    when(costItemService.listByMaterialCodes(
-        eq("OA-V3"),
-        eq("MAT-LINKED"),
-        eq(Set.of("MAT-LINKED")),
-        any(java.util.function.IntConsumer.class)))
-        .thenReturn(List.<CostRunCostItemDto>of());
+    when(costRunEngine.run(any(CostRunContext.class)))
+        .thenReturn(engineResult("OA-V3", "MAT-LINKED", List.of(part), List.of()));
 
     CostRunTrialResponse response = service.run("OA-V3").get();
 
     assertEquals(1, response.getProductCount());
     assertEquals(1, response.getPartCount());
-    InOrder inOrder = inOrder(materialMasterSyncService, linkedPriceEnsureService, partItemService);
+    InOrder inOrder = inOrder(materialMasterSyncService, linkedPriceEnsureService, costRunEngine);
     inOrder.verify(materialMasterSyncService).syncByOaNo("OA-V3");
     inOrder.verify(linkedPriceEnsureService).ensure(any());
-    inOrder.verify(partItemService)
-        .listByOaNo(eq("OA-V3"), any(java.util.function.IntConsumer.class));
+    inOrder.verify(costRunEngine).run(any(CostRunContext.class));
 
     ArgumentCaptor<LinkedPriceEnsureRequest> requestCaptor =
         ArgumentCaptor.forClass(LinkedPriceEnsureRequest.class);
@@ -298,21 +451,14 @@ class CostRunTrialServiceImplTest {
     when(materialPriceRouterService.listCandidates(
         eq("MAT-FIXED"), eq(currentPeriod), eq(currentDate)))
         .thenReturn(List.of(route("MAT-FIXED", PriceTypeEnum.FIXED)));
-    when(partItemService.listByOaNo(eq("OA-NO-LINKED"), any(java.util.function.IntConsumer.class)))
-        .thenReturn(List.of(part("MAT-FIXED")));
-    when(costItemService.listByMaterialCodes(
-        eq("OA-NO-LINKED"),
-        eq("MAT-FIXED"),
-        eq(Set.of("MAT-FIXED")),
-        any(java.util.function.IntConsumer.class)))
-        .thenReturn(List.<CostRunCostItemDto>of());
+    when(costRunEngine.run(any(CostRunContext.class)))
+        .thenReturn(engineResult("OA-NO-LINKED", "MAT-FIXED", List.of(part("MAT-FIXED")), List.of()));
 
     CostRunTrialResponse response = service.run("OA-NO-LINKED").get();
 
     assertEquals(1, response.getProductCount());
     verify(linkedPriceEnsureService, never()).ensure(any());
-    verify(partItemService)
-        .listByOaNo(eq("OA-NO-LINKED"), any(java.util.function.IntConsumer.class));
+    verify(costRunEngine).run(any(CostRunContext.class));
   }
 
   @Test
@@ -353,14 +499,8 @@ class CostRunTrialServiceImplTest {
     when(materialPriceRouterService.listCandidates(
         eq("MAT-FIXED"), eq(currentPeriod), eq(currentDate)))
         .thenReturn(List.of(route("MAT-FIXED", PriceTypeEnum.FIXED)));
-    when(partItemService.listByOaNo(eq("OA-PPR-WARN"), any(java.util.function.IntConsumer.class)))
-        .thenReturn(List.of(part("MAT-FIXED")));
-    when(costItemService.listByMaterialCodes(
-        eq("OA-PPR-WARN"),
-        eq("MAT-FIXED"),
-        eq(Set.of("MAT-FIXED")),
-        any(java.util.function.IntConsumer.class)))
-        .thenReturn(List.<CostRunCostItemDto>of());
+    when(costRunEngine.run(any(CostRunContext.class)))
+        .thenReturn(engineResult("OA-PPR-WARN", "MAT-FIXED", List.of(part("MAT-FIXED")), List.of()));
 
     CostRunTrialResponse response = service.run("OA-PPR-WARN").get();
 
@@ -368,8 +508,7 @@ class CostRunTrialServiceImplTest {
     assertEquals("NOT_PREPARED", response.getPricePrepareReadiness().getStatus());
     assertEquals("DONE", progressStore.get("OA-PPR-WARN").getStatus());
     assertTrue(progressStore.get("OA-PPR-WARN").getMessage().contains("尚未执行价格准备"));
-    verify(partItemService)
-        .listByOaNo(eq("OA-PPR-WARN"), any(java.util.function.IntConsumer.class));
+    verify(costRunEngine).run(any(CostRunContext.class));
   }
 
   @Test
@@ -412,7 +551,89 @@ class CostRunTrialServiceImplTest {
     assertTrue(ex.getCause().getMessage().contains("已阻断实时成本"));
     assertEquals("ERROR", progressStore.get("OA-PPR-BLOCK").getStatus());
     verify(linkedPriceEnsureService, never()).ensure(any());
-    verify(partItemService, never()).listByOaNo(any(), any());
+    verify(costRunEngine, never()).run(any());
+  }
+
+  @Test
+  @DisplayName("T7：已沿用 BOM 可以进入成本试算")
+  void reusedCurrentMonthBomAllowsCostTrial() throws Exception {
+    LocalDate currentDate = LocalDate.now();
+    String currentPeriod = currentDate.toString().substring(0, 7);
+    when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+      TransactionCallback<?> callback = invocation.getArgument(0);
+      return callback.doInTransaction(null);
+    });
+    when(materialMasterSyncService.syncByOaNo("OA-BOM-REUSED"))
+        .thenReturn(new MaterialMasterSyncService.SyncResult(1, 1, 1, "BATCH-1"));
+    when(quoteBomStatusService.checkForCostRun("OA-BOM-REUSED"))
+        .thenReturn(bomResponse("MAT-REUSED", "REUSED_CURRENT_MONTH"));
+
+    OaForm form = new OaForm();
+    form.setId(105L);
+    form.setOaNo("OA-BOM-REUSED");
+    form.setBusinessUnitType("COMMERCIAL");
+    when(oaFormMapper.selectOne(any())).thenReturn(form);
+
+    OaFormItem formItem = new OaFormItem();
+    formItem.setId(205L);
+    formItem.setMaterialNo("MAT-REUSED");
+    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(formItem));
+    when(costRunPartItemMapper.selectBaseByOaNo("OA-BOM-REUSED"))
+        .thenReturn(List.of(part("MAT-REUSED")));
+    when(materialPriceRouterService.listCandidates(
+        eq("MAT-REUSED"), eq(currentPeriod), eq(currentDate)))
+        .thenReturn(List.of(route("MAT-REUSED", PriceTypeEnum.FIXED)));
+    when(costRunEngine.run(any(CostRunContext.class)))
+        .thenReturn(engineResult("OA-BOM-REUSED", "MAT-REUSED", List.of(part("MAT-REUSED")), List.of()));
+
+    CostRunTrialResponse response = service.run("OA-BOM-REUSED").get();
+
+    assertEquals(1, response.getProductCount());
+    verify(quoteBomStatusService).checkForCostRun("OA-BOM-REUSED");
+    verify(costRunEngine).run(any(CostRunContext.class));
+  }
+
+  @Test
+  @DisplayName("T7：无 BOM 阻断成本试算")
+  void noBomBlocksCostTrial() {
+    when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+      TransactionCallback<?> callback = invocation.getArgument(0);
+      return callback.doInTransaction(null);
+    });
+    when(materialMasterSyncService.syncByOaNo("OA-BOM-NO"))
+        .thenReturn(new MaterialMasterSyncService.SyncResult(1, 1, 1, "BATCH-1"));
+    when(quoteBomStatusService.checkForCostRun("OA-BOM-NO"))
+        .thenReturn(bomResponse("1079900000536", "NO_BOM"));
+
+    ExecutionException ex =
+        assertThrows(ExecutionException.class, () -> service.run("OA-BOM-NO").get());
+
+    assertInstanceOf(RuntimeException.class, ex.getCause());
+    assertTrue(ex.getCause().getMessage().contains("产品 BOM 未准备完成"));
+    assertTrue(ex.getCause().getMessage().contains("1079900000536"));
+    assertTrue(ex.getCause().getMessage().contains("无BOM"));
+    verify(costRunEngine, never()).run(any());
+    verify(oaFormMapper, never()).selectOne(any());
+  }
+
+  @Test
+  @DisplayName("T7：检查异常阻断成本试算")
+  void checkFailedBlocksCostTrial() {
+    when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+      TransactionCallback<?> callback = invocation.getArgument(0);
+      return callback.doInTransaction(null);
+    });
+    when(materialMasterSyncService.syncByOaNo("OA-BOM-FAILED"))
+        .thenReturn(new MaterialMasterSyncService.SyncResult(1, 1, 1, "BATCH-1"));
+    when(quoteBomStatusService.checkForCostRun("OA-BOM-FAILED"))
+        .thenReturn(bomResponse("MAT-FAILED", "CHECK_FAILED"));
+
+    ExecutionException ex =
+        assertThrows(ExecutionException.class, () -> service.run("OA-BOM-FAILED").get());
+
+    assertInstanceOf(RuntimeException.class, ex.getCause());
+    assertTrue(ex.getCause().getMessage().contains("检查异常"));
+    verify(costRunEngine, never()).run(any());
   }
 
   @Test
@@ -453,7 +674,7 @@ class CostRunTrialServiceImplTest {
     assertInstanceOf(RuntimeException.class, ex.getCause());
     assertTrue(ex.getCause().getMessage().contains("联动价按需确保失败"));
     assertTrue(progressStore.get("OA-ENSURE-FAIL").getMessage().contains("公式变量缺失"));
-    verify(partItemService, never()).listByOaNo(any(), any());
+    verify(costRunEngine, never()).run(any());
   }
 
   private static CostRunPartItemDto part(String partCode) {
@@ -462,6 +683,28 @@ class CostRunTrialServiceImplTest {
     dto.setProductCode(partCode);
     dto.setPartQty(BigDecimal.ONE);
     return dto;
+  }
+
+  private static QuoteBomStatusResponse bomResponse(String productCode, String bomStatus) {
+    QuoteBomStatusItemResponse item = new QuoteBomStatusItemResponse();
+    item.setProductCode(productCode);
+    item.setBomStatus(bomStatus);
+    QuoteBomStatusResponse response = new QuoteBomStatusResponse();
+    response.setItems(List.of(item));
+    return response;
+  }
+
+  private static CostRunObjectResult engineResult(
+      String oaNo,
+      String productCode,
+      List<CostRunPartItemDto> partItems,
+      List<CostRunCostItemDto> costItems) {
+    return CostRunObjectResult.of(
+        CostRunContext.quote(oaNo, 1L, productCode, null, "客户A", "COMMERCIAL", "2026-05", oaNo + ":" + productCode),
+        null,
+        null,
+        partItems,
+        costItems);
   }
 
   private static PriceTypeRoute route(String materialCode, PriceTypeEnum priceType) {

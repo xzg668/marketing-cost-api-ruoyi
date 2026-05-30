@@ -14,11 +14,18 @@ public class QuoteBomStatus {
   private Long oaFormItemId;
   private String oaNo;
   private String productCode;
+  private String productType;
+  private String bareProductCode;
+  private Integer needPackage;
+  private String referenceFinishedCode;
+  private String sourceTopProductCode;
   private String productModel;
   private String customerCode;
   private String packageType;
   private String packageMethod;
+  private String costPeriodMonth;
   private String bomStatus;
+  private String reviewStatus;
   private String bomSource;
   private String bomPurpose;
   private String bomVersion;
@@ -26,9 +33,17 @@ public class QuoteBomStatus {
   private LocalDate effectiveTo;
   private LocalDateTime checkedAt;
   private String syncBatchId;
+  private String costingBuildBatchId;
+  private Long syncRecordId;
+  private Long reusedFromRecordId;
+  private LocalDateTime syncAt;
   private String manualTaskNo;
   private Long supplementTaskId;
+  private Long preparationRecordId;
   private String technicianName;
+  private Long reviewerUserId;
+  private String reviewerName;
+  private LocalDateTime reviewedAt;
   private String lockOwner;
   private LocalDateTime lockUntil;
   private String errorMessage;
@@ -75,6 +90,46 @@ public class QuoteBomStatus {
     this.productCode = productCode;
   }
 
+  public String getProductType() {
+    return productType;
+  }
+
+  public void setProductType(String productType) {
+    this.productType = productType;
+  }
+
+  public String getBareProductCode() {
+    return bareProductCode;
+  }
+
+  public void setBareProductCode(String bareProductCode) {
+    this.bareProductCode = bareProductCode;
+  }
+
+  public Integer getNeedPackage() {
+    return needPackage;
+  }
+
+  public void setNeedPackage(Integer needPackage) {
+    this.needPackage = needPackage;
+  }
+
+  public String getReferenceFinishedCode() {
+    return referenceFinishedCode;
+  }
+
+  public void setReferenceFinishedCode(String referenceFinishedCode) {
+    this.referenceFinishedCode = referenceFinishedCode;
+  }
+
+  public String getSourceTopProductCode() {
+    return sourceTopProductCode;
+  }
+
+  public void setSourceTopProductCode(String sourceTopProductCode) {
+    this.sourceTopProductCode = sourceTopProductCode;
+  }
+
   public String getProductModel() {
     return productModel;
   }
@@ -107,12 +162,28 @@ public class QuoteBomStatus {
     this.packageMethod = packageMethod;
   }
 
+  public String getCostPeriodMonth() {
+    return costPeriodMonth;
+  }
+
+  public void setCostPeriodMonth(String costPeriodMonth) {
+    this.costPeriodMonth = costPeriodMonth;
+  }
+
   public String getBomStatus() {
     return bomStatus;
   }
 
   public void setBomStatus(String bomStatus) {
     this.bomStatus = bomStatus;
+  }
+
+  public String getReviewStatus() {
+    return reviewStatus;
+  }
+
+  public void setReviewStatus(String reviewStatus) {
+    this.reviewStatus = reviewStatus;
   }
 
   public String getBomSource() {
@@ -171,6 +242,38 @@ public class QuoteBomStatus {
     this.syncBatchId = syncBatchId;
   }
 
+  public String getCostingBuildBatchId() {
+    return costingBuildBatchId;
+  }
+
+  public void setCostingBuildBatchId(String costingBuildBatchId) {
+    this.costingBuildBatchId = costingBuildBatchId;
+  }
+
+  public Long getSyncRecordId() {
+    return syncRecordId;
+  }
+
+  public void setSyncRecordId(Long syncRecordId) {
+    this.syncRecordId = syncRecordId;
+  }
+
+  public Long getReusedFromRecordId() {
+    return reusedFromRecordId;
+  }
+
+  public void setReusedFromRecordId(Long reusedFromRecordId) {
+    this.reusedFromRecordId = reusedFromRecordId;
+  }
+
+  public LocalDateTime getSyncAt() {
+    return syncAt;
+  }
+
+  public void setSyncAt(LocalDateTime syncAt) {
+    this.syncAt = syncAt;
+  }
+
   public String getManualTaskNo() {
     return manualTaskNo;
   }
@@ -187,12 +290,44 @@ public class QuoteBomStatus {
     this.supplementTaskId = supplementTaskId;
   }
 
+  public Long getPreparationRecordId() {
+    return preparationRecordId;
+  }
+
+  public void setPreparationRecordId(Long preparationRecordId) {
+    this.preparationRecordId = preparationRecordId;
+  }
+
   public String getTechnicianName() {
     return technicianName;
   }
 
   public void setTechnicianName(String technicianName) {
     this.technicianName = technicianName;
+  }
+
+  public Long getReviewerUserId() {
+    return reviewerUserId;
+  }
+
+  public void setReviewerUserId(Long reviewerUserId) {
+    this.reviewerUserId = reviewerUserId;
+  }
+
+  public String getReviewerName() {
+    return reviewerName;
+  }
+
+  public void setReviewerName(String reviewerName) {
+    this.reviewerName = reviewerName;
+  }
+
+  public LocalDateTime getReviewedAt() {
+    return reviewedAt;
+  }
+
+  public void setReviewedAt(LocalDateTime reviewedAt) {
+    this.reviewedAt = reviewedAt;
   }
 
   public String getLockOwner() {

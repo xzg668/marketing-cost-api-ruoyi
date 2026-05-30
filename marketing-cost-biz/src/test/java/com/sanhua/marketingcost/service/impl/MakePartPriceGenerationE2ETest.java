@@ -158,7 +158,6 @@ class MakePartPriceGenerationE2ETest {
     List<Path> sourceFiles = List.of(
         Path.of("src/main/java/com/sanhua/marketingcost/service/impl/MakePartPriceGenerationServiceImpl.java"),
         Path.of("src/main/java/com/sanhua/marketingcost/service/MakePartPriceCalculator.java"),
-        Path.of("src/main/java/com/sanhua/marketingcost/service/pricing/MakePartPriceCalcResolver.java"),
         Path.of("src/main/java/com/sanhua/marketingcost/service/impl/MakePartScrapMappingServiceImpl.java"));
     for (Path sourceFile : sourceFiles) {
       String content = Files.readString(sourceFile, StandardCharsets.UTF_8);
@@ -220,7 +219,7 @@ class MakePartPriceGenerationE2ETest {
     when(scrapMappingService.listMappings("RAW-MISSING-SCRAP-PRICE", BU))
         .thenReturn(List.of(scrap("SCRAP-MISSING-PRICE")));
 
-    when(priceResolveService.resolveMaterialUnitPrice(anyString(), eq(PERIOD), any(), eq(OA_NO), eq(BU)))
+    when(priceResolveService.resolveMaterialUnitPrice(anyString(), eq(PERIOD), any(), any(), eq(OA_NO), eq(BU)))
         .thenAnswer(invocation -> priceFor(invocation.getArgument(0)));
 
     return new MakePartPriceGenerationServiceImpl(

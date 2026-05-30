@@ -48,6 +48,14 @@ logging:
   file:
     path: ${LOG_PATH:./logs}
 
+monthly:
+  reprice:
+    # 月度调价入口开关；本地默认开启，生产可按业务单元灰度。
+    enabled: ${MONTHLY_REPRICE_ENABLED:true}
+    execution-backend: ${MONTHLY_REPRICE_EXECUTION_BACKEND:LOCAL_WORKER}
+    # 逗号分隔；为空表示不限制业务单元。灰度期建议显式配置测试业务单元。
+    allowed-business-units: ${MONTHLY_REPRICE_ALLOWED_BUSINESS_UNITS:}
+
 # T34: Actuator 运维端点（health/info 公开；其他端点仅 ADMIN —— 见 ActuatorSecurityConfig）
 management:
   endpoints:
@@ -73,6 +81,16 @@ app:
 # 老 Strangler 双跑配置（cost.router.mode = legacy/dual/new）已删除：legacy 老结果都是测试期造的数据，
 # 没有真实业务价值，保留双跑只是浪费 + 副作用（业务实际拿到 legacy 结果而非 v1 新功能）。
 cost:
+  run:
+    engine:
+      # 当前版本统一 CostRunEngine 已是唯一核算核心；开关保留给上线检查和异常兜底策略识别。
+      enabled: ${COST_RUN_ENGINE_ENABLED:true}
+    execution:
+      # 默认提交通用任务；回退只需设置 COST_RUN_EXECUTION_MODE=API_SYNC，灰度名单可保留。
+      mode: ${COST_RUN_EXECUTION_MODE:TASK_WORKER}
+      # 逗号分隔；为空表示当前 mode 对全部请求生效。生产灰度建议先显式配置小范围名单。
+      gray-business-units: ${COST_RUN_EXECUTION_GRAY_BUSINESS_UNITS:}
+      gray-users: ${COST_RUN_EXECUTION_GRAY_USERS:}
   # Task #9：水电费是否计入材料费
   #   false（默认）= 与 Excel 见机表3 口径一致：水电独立列报，不进材料费
   #   true          = 老逻辑兜底：把 deptTotal 全部（含水电）并入材料费，便于历史报表回溯

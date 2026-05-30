@@ -7,9 +7,13 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.config.LinkedParserProperties;
+import com.sanhua.marketingcost.dto.LinkedPriceVariableContext;
 import com.sanhua.marketingcost.dto.PriceLinkedCalcRow;
 import com.sanhua.marketingcost.dto.PriceLinkedCalcTraceResponse;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewRequest;
@@ -34,12 +38,23 @@ import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 class PriceLinkedCalcServiceImplTest {
+
+  @BeforeAll
+  static void initTableInfo() {
+    MapperBuilderAssistant assistant =
+        new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    TableInfoHelper.initTableInfo(assistant, PriceLinkedItem.class);
+  }
 
   @Test
   void page_returnsPagedRecords() {
@@ -82,6 +97,55 @@ class PriceLinkedCalcServiceImplTest {
 
     assertEquals(1, result.getTotal());
     assertEquals("MAT-1", result.getRecords().get(0).getItemCode());
+    ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
+    Mockito.verify(linkedItemMapper).selectPage(any(), queryCaptor.capture());
+    assertThat(queryCaptor.getValue().getSqlSegment()).contains("effective_to IS NULL");
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void fetchLinkedItemsDefaultsToCurrentVersionAndPrefersNewestEffectiveFrom() throws Exception {
+    BomCostingRowMapper mapper = Mockito.mock(BomCostingRowMapper.class);
+    PriceLinkedCalcItemMapper calcMapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
+    PriceLinkedItemMapper linkedItemMapper = Mockito.mock(PriceLinkedItemMapper.class);
+    PriceLinkedCalcServiceImpl service =
+        new PriceLinkedCalcServiceImpl(
+            mapper,
+            calcMapper,
+            linkedItemMapper,
+            Mockito.mock(PriceVariableMapper.class),
+            Mockito.mock(OaFormMapper.class),
+            Mockito.mock(FinanceBasePriceMapper.class),
+            Mockito.mock(DynamicValueMapper.class),
+            new LinkedParserProperties(),
+            Mockito.mock(FormulaNormalizer.class),
+            Mockito.mock(FactorVariableRegistry.class),
+            new ObjectMapper(),
+            Mockito.mock(PriceLinkedFormulaPreviewService.class));
+
+    PriceLinkedItem oldVersion = new PriceLinkedItem();
+    oldVersion.setId(1L);
+    oldVersion.setMaterialCode("MAT-1");
+    oldVersion.setEffectiveFrom(LocalDate.of(2026, 5, 1));
+    PriceLinkedItem newVersion = new PriceLinkedItem();
+    newVersion.setId(2L);
+    newVersion.setMaterialCode("MAT-1");
+    newVersion.setEffectiveFrom(LocalDate.of(2026, 6, 1));
+    when(linkedItemMapper.selectList(any())).thenReturn(List.of(oldVersion, newVersion));
+
+    BomCostingRow bomRow = new BomCostingRow();
+    bomRow.setMaterialCode("MAT-1");
+    Method method = PriceLinkedCalcServiceImpl.class
+        .getDeclaredMethod("fetchLinkedItems", List.class);
+    method.setAccessible(true);
+
+    Map<String, PriceLinkedItem> result =
+        (Map<String, PriceLinkedItem>) method.invoke(service, List.of(bomRow));
+
+    assertThat(result.get("MAT-1").getId()).isEqualTo(2L);
+    ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
+    Mockito.verify(linkedItemMapper).selectList(queryCaptor.capture());
+    assertThat(queryCaptor.getValue().getSqlSegment()).contains("effective_to IS NULL");
   }
 
   @Test
@@ -161,6 +225,57 @@ class PriceLinkedCalcServiceImplTest {
     Mockito.verify(calcMapper, never()).insert(any(PriceLinkedCalcItem.class));
     Mockito.verify(calcMapper, never()).updateById(any(PriceLinkedCalcItem.class));
     Mockito.verifyNoInteractions(mapper);
+  }
+
+  @Test
+  void calculateMonthlyAdjustItemForEnsureUsesMonthlyAdjustVariableContext() {
+    PriceLinkedFormulaPreviewService previewService =
+        Mockito.mock(PriceLinkedFormulaPreviewService.class);
+    PriceLinkedCalcServiceImpl service =
+        new PriceLinkedCalcServiceImpl(
+            Mockito.mock(BomCostingRowMapper.class),
+            Mockito.mock(PriceLinkedCalcItemMapper.class),
+            Mockito.mock(PriceLinkedItemMapper.class),
+            Mockito.mock(PriceVariableMapper.class),
+            Mockito.mock(OaFormMapper.class),
+            Mockito.mock(FinanceBasePriceMapper.class),
+            Mockito.mock(DynamicValueMapper.class),
+            new LinkedParserProperties(),
+            Mockito.mock(FormulaNormalizer.class),
+            Mockito.mock(FactorVariableRegistry.class),
+            new ObjectMapper(),
+            previewService);
+    PriceLinkedItem linkedItem = new PriceLinkedItem();
+    linkedItem.setMaterialCode("MAT-1");
+    linkedItem.setPricingMonth("2026-05");
+    linkedItem.setFormulaExpr("[Cu]+1");
+
+    PriceLinkedFormulaPreviewResponse response = new PriceLinkedFormulaPreviewResponse();
+    response.setResult(new BigDecimal("12.3456784"));
+    when(previewService.previewForRefresh(
+        any(PriceLinkedItem.class),
+        any(LinkedPriceVariableContext.class),
+        Mockito.isNull())).thenReturn(response);
+
+    PriceLinkedCalcItem calcItem = new PriceLinkedCalcItem();
+    calcItem.setAdjustBatchId(88L);
+    calcItem.setBusinessUnitType("COMMERCIAL");
+    calcItem.setPricingMonth("2026-05");
+    calcItem.setItemCode("MAT-1");
+    calcItem.setCalcScene("MONTHLY_ADJUST");
+
+    service.calculateMonthlyAdjustItemForEnsure(calcItem, linkedItem);
+
+    ArgumentCaptor<LinkedPriceVariableContext> contextCaptor =
+        ArgumentCaptor.forClass(LinkedPriceVariableContext.class);
+    Mockito.verify(previewService).previewForRefresh(
+        any(PriceLinkedItem.class), contextCaptor.capture(), Mockito.isNull());
+    LinkedPriceVariableContext context = contextCaptor.getValue();
+    assertEquals("MONTHLY_ADJUST", context.getCalcScene().getCode());
+    assertEquals(88L, context.getAdjustBatchId());
+    assertEquals("ADJUST_BATCH", calcItem.getFactorSource());
+    assertEquals("OK", calcItem.getCalcStatus());
+    assertThat(calcItem.getPartUnitPrice()).isEqualByComparingTo("12.345678");
   }
 
   @Test

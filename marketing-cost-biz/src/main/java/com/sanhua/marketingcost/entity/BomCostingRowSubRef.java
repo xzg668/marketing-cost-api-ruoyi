@@ -29,6 +29,12 @@ public class BomCostingRowSubRef {
   /** 指向父件的 lp_bom_costing_row.id */
   private Long costingRowId;
 
+  /** 子件引用类型：SPECIAL_ROLLUP_CHILD 等，用于区分不同上卷来源 */
+  private String refType;
+
+  /** 产生该子件引用的新 BOM 树节点结算规则 id */
+  private Long matchedSettlementRuleId;
+
   /** 命中子件的料号（T9 取价用这个去查价） */
   private String subMaterialCode;
 
@@ -74,6 +80,22 @@ public class BomCostingRowSubRef {
 
   public void setCostingRowId(Long costingRowId) {
     this.costingRowId = costingRowId;
+  }
+
+  public String getRefType() {
+    return refType;
+  }
+
+  public void setRefType(String refType) {
+    this.refType = refType;
+  }
+
+  public Long getMatchedSettlementRuleId() {
+    return matchedSettlementRuleId;
+  }
+
+  public void setMatchedSettlementRuleId(Long matchedSettlementRuleId) {
+    this.matchedSettlementRuleId = matchedSettlementRuleId;
   }
 
   public String getSubMaterialCode() {

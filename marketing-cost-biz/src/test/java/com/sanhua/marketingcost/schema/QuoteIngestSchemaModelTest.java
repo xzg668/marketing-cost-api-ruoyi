@@ -15,6 +15,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
 import org.junit.jupiter.api.Test;
 
 class QuoteIngestSchemaModelTest {
@@ -29,6 +30,22 @@ class QuoteIngestSchemaModelTest {
     assertThat(tableName(OaFormExtraFee.class)).isEqualTo("lp_oa_form_extra_fee");
     assertThat(tableName(QuoteBomStatus.class)).isEqualTo("lp_quote_bom_status");
     assertThat(tableName(QuoteWritebackTask.class)).isEqualTo("lp_quote_writeback_task");
+  }
+
+  @Test
+  void quoteBomStatusModelContainsMonthlyReuseTraceFields() {
+    QuoteBomStatus status = new QuoteBomStatus();
+    LocalDateTime syncAt = LocalDateTime.of(2026, 5, 27, 20, 0);
+
+    status.setCostPeriodMonth("2026-05");
+    status.setSyncRecordId(10L);
+    status.setReusedFromRecordId(9L);
+    status.setSyncAt(syncAt);
+
+    assertThat(status.getCostPeriodMonth()).isEqualTo("2026-05");
+    assertThat(status.getSyncRecordId()).isEqualTo(10L);
+    assertThat(status.getReusedFromRecordId()).isEqualTo(9L);
+    assertThat(status.getSyncAt()).isEqualTo(syncAt);
   }
 
   @Test

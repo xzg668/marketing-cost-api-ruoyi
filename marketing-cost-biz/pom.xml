@@ -27,6 +27,11 @@
 
   <dependencies>
     <dependency>
+      <groupId>com.sanhua</groupId>
+      <artifactId>marketing-cost-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
       <groupId>cn.iocoder.boot</groupId>
       <artifactId>yudao-common</artifactId>
     </dependency>
@@ -117,6 +122,11 @@
       <artifactId>easyexcel</artifactId>
       <version>3.3.4</version>
     </dependency>
+    <dependency>
+      <groupId>org.apache.pdfbox</groupId>
+      <artifactId>pdfbox</artifactId>
+      <version>3.0.3</version>
+    </dependency>
     <!-- Testcontainers：用 docker 临时拉 mysql:8.4 跑 DDL 迁移 / 集成测试 -->
     <dependency>
       <groupId>org.testcontainers</groupId>
@@ -143,6 +153,10 @@
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+          <!-- T5：主 jar 保持普通依赖包，给 sales-cost-worker 复用业务代码；API 可执行包改为 -exec.jar。 -->
+          <classifier>exec</classifier>
+        </configuration>
         <executions>
           <execution>
             <goals>

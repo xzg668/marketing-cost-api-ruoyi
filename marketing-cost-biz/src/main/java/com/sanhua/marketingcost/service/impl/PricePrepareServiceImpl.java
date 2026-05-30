@@ -50,6 +50,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   private static final String GAP_TYPE_MISSING_MASTER = "MISSING_MASTER";
   private static final String GAP_TYPE_MISSING_PRICE = "MISSING_PRICE";
   private static final String GAP_PUSH_PENDING = "PENDING";
+  private static final int DB_MESSAGE_MAX_LENGTH = 1000;
 
   private final PricePrepareBatchMapper batchMapper;
   private final PricePrepareItemMapper itemMapper;
@@ -212,8 +213,8 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     batch.setStartedAt(now);
     batch.setFinishedAt(null);
     // 价格准备必须在实时成本前显式执行；自制件只消费制造件价格生成结果，不回退旧人工价。
-    batch.setMessage("准备读取BOM结算明细");
-    batch.setBusinessUnitType(BusinessUnitContext.getCurrentBusinessUnitType());
+    batch.setMessage(dbMessage("准备读取BOM结算明细"));
+    batch.setBusinessUnitType(req.businessUnitType());
     if (exists) {
       batchMapper.updateById(batch);
     } else {
@@ -276,6 +277,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
           batch.getPrepareNo(),
           req.oaNo(),
           req.periodMonth(),
+          req.priceAsOfTime(),
           req.bomPurpose(),
           req.sourceType(),
           planItem);
@@ -310,7 +312,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       PricePrepareBatch batch, NormalizedGenerateRequest req, PricePreparePlanItem planItem) {
     try {
       return makePartPricePrepareStrategy.prepare(
-          req.oaNo(), batch.getBusinessUnitType(), req.periodMonth(), planItem);
+          req.oaNo(), batch.getBusinessUnitType(), req.periodMonth(), req.priceAsOfTime(), planItem);
     } catch (RuntimeException ex) {
       MakePartPricePrepareResult.Gap gap =
           new MakePartPricePrepareResult.Gap(
@@ -491,7 +493,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     batch.setWarningCount(warningCount);
     batch.setGapCount(gapCount);
     batch.setStatus(status);
-    batch.setMessage(message);
+    batch.setMessage(dbMessage(message));
     batch.setFinishedAt(LocalDateTime.now());
   }
 
@@ -516,6 +518,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   }
 
   private void upsertItem(PricePrepareItem item) {
+    normalizeItemForDb(item);
     Long existingId = findExistingItemId(item);
     if (existingId == null) {
       itemMapper.insert(item);
@@ -538,6 +541,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   }
 
   private void upsertGap(PricePrepareGap gap) {
+    normalizeGapForDb(gap);
     Long existingId = findExistingGapId(gap);
     if (existingId == null) {
       gapMapper.insert(gap);
@@ -566,12 +570,39 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     return StringUtils.hasText(ex.getMessage()) ? ex.getMessage() : ex.getClass().getSimpleName();
   }
 
+  private void normalizeItemForDb(PricePrepareItem item) {
+    if (item != null) {
+      item.setMessage(dbMessage(item.getMessage()));
+    }
+  }
+
+  private void normalizeGapForDb(PricePrepareGap gap) {
+    if (gap != null) {
+      gap.setMessage(dbMessage(gap.getMessage()));
+    }
+  }
+
+  private String dbMessage(String message) {
+    if (message == null || message.length() <= DB_MESSAGE_MAX_LENGTH) {
+      return message;
+    }
+    String suffix = "...(已截断)";
+    return message.substring(0, DB_MESSAGE_MAX_LENGTH - suffix.length()) + suffix;
+  }
+
   private BigDecimal quantity(BomCostingRow row) {
     return row == null ? null : row.getQtyPerTop();
   }
 
   private String blankIfNull(String value) {
     return value == null ? "" : value;
+  }
+
+  private String firstText(String first, String second) {
+    if (StringUtils.hasText(first)) {
+      return first.trim();
+    }
+    return StringUtils.hasText(second) ? second.trim() : null;
   }
 
   private NormalizedGenerateRequest normalize(PricePrepareGenerateRequest request) {
@@ -584,11 +615,16 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     String sourceType = StringUtils.hasText(request.getSourceType())
         ? request.getSourceType().trim()
         : DEFAULT_SOURCE_TYPE;
+    String businessUnitType = firstText(
+        request.getBusinessUnitType(),
+        BusinessUnitContext.getCurrentBusinessUnitType());
     // BOM 目的按已冻结口径固定主制造，忽略前端或调用方传入值，避免准备结果和结算行口径漂移。
     return new NormalizedGenerateRequest(
         request.getOaNo().trim(),
         normalizeTopProductCodes(request.getTopProductCodes()),
         periodMonth,
+        request.getPriceAsOfTime(),
+        businessUnitType,
         DEFAULT_BOM_PURPOSE,
         sourceType);
   }
@@ -642,6 +678,8 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       String oaNo,
       List<String> topProductCodes,
       String periodMonth,
+      LocalDateTime priceAsOfTime,
+      String businessUnitType,
       String bomPurpose,
       String sourceType) {}
 }

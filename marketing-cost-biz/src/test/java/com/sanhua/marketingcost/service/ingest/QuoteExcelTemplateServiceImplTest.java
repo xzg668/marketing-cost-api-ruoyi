@@ -119,11 +119,11 @@ class QuoteExcelTemplateServiceImplTest {
     assertThat(cell(sheet, 0, 0, formatter, evaluator)).isEqualTo("FI-SC-006.标准品/批量品成本核算流程");
     assertThat(cell(sheet, 0, 0, formatter, evaluator)).isNotEqualTo("sourceType");
     assertThat(cell(sheet, 6, 12, formatter, evaluator)).isEqualTo("流程编号");
-    assertThat(cell(sheet, 6, 16, formatter, evaluator)).isEqualTo("FI-SC-006-20260421-007");
+    assertThat(cell(sheet, 6, 16, formatter, evaluator)).isEqualTo("FI-SC-006-20260327-037");
     assertThat(cell(sheet, 28, 2, formatter, evaluator)).isEqualTo("产品名称");
     assertThat(cell(sheet, 28, 12, formatter, evaluator)).isEqualTo("直接材料费");
     assertThat(cell(sheet, 28, 21, formatter, evaluator)).contains("工装");
-    assertThat(cell(sheet, 29, 2, formatter, evaluator)).contains("板式");
+    assertThat(cell(sheet, 29, 2, formatter, evaluator)).contains("四通换向阀阀体");
   }
 
   private String cell(Sheet sheet, int rowIndex, int columnIndex, DataFormatter formatter, FormulaEvaluator evaluator) {
