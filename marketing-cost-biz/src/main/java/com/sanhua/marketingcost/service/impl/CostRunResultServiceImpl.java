@@ -131,8 +131,8 @@ public class CostRunResultServiceImpl implements CostRunResultService {
     existing.setProductName(productName);
     existing.setProductModel(productModel);
     existing.setCustomerName(trimToNull(form.getCustomer()));
-    String calcStatus = trimToNull(form.getCalcStatus());
-    existing.setCalcStatus(calcStatus == null ? "未核算" : calcStatus);
+    existing.setBusinessUnitType(firstText(item.getBusinessUnitType(), form.getBusinessUnitType()));
+    existing.setCalcStatus("已核算");
     existing.setCalcAt(LocalDateTime.now());
     existing.setPeriod(buildPeriod(form.getApplyDate()));
     existing.setProductAttr(

@@ -88,6 +88,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private static final String DEPT_OTHER = "DEPT_OTHER";
   private static final String AUX_PREFIX = "AUX_";
   private static final String AUX_AMOUNT_MODE_DIRECT = "DIRECT";
+  private static final BigDecimal CMS_AUX_UPLIFT_RATE = new BigDecimal("1.05");
   private static final String EXCLUDED_AUX_SUBJECT_PACKAGING = "包装辅料";
   private static final String OTHER_EXP_PREFIX = "OTHER_EXP_";
   /** T11：包装费固定 cost_code，区别于 lp_other_expense_rate 的 OTHER_EXP_<id> 系列 */
@@ -165,9 +166,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   /**
    * Task #9：是否把"水电费"计入材料费。
    *
-   * <p>Excel 见机表3 的口径是「水电费独立列报，不进材料费」，故默认 false；老逻辑把 deptTotal
-   * （含 waterPower）整体加进 materialTotal，会高估材料费、低估制造成本基数。开关保留是为了
-   * 老用户/历史报表回溯时可以临时恢复 legacy 行为。
+   * <p>Excel 见机表3 的口径是「水电费独立列报，同时进入材料费基数」，故默认 true。开关保留是为了
+   * 历史报表回溯时可以临时恢复「水电不进材料费」口径。
    */
   private final boolean includeWaterPowerInMaterial;
 
@@ -190,7 +190,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       MaterialMasterRawMapper materialMasterRawMapper,
       BomRawHierarchyMapper bomRawHierarchyMapper,
       CostRunCacheLookupService cacheLookup,
-      @Value("${cost.material.includeWaterPower:false}") boolean includeWaterPowerInMaterial) {
+      @Value("${cost.material.includeWaterPower:true}") boolean includeWaterPowerInMaterial) {
     this.costRunCostItemMapper = costRunCostItemMapper;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
@@ -380,10 +380,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     LaborCostResult laborResult = buildLaborCostResult(materialCodes, salaryCosts, costSourceContext);
     BigDecimal directTotal = laborResult.directTotal;
     BigDecimal indirectTotal = laborResult.indirectTotal;
-    Map<String, LaborSum> laborByUnit = laborResult.laborByUnit;
 
     DepartmentFeeResult feeResult =
-        calculateDepartmentFees(productCodeValue, laborByUnit, costSourceContext);
+        calculateDepartmentFees(productCodeValue, directTotal.add(indirectTotal), costSourceContext);
 
     List<String> costCodes = new ArrayList<>();
     costCodes.add(MATERIAL);
@@ -426,8 +425,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     }
 
     // 3) 最后汇总材料费(部品+辅料+部门经费+见机表包装)
-    //    Task #9：水电费默认不计入材料费（与 Excel 见机表3 口径对齐），
-    //    通过 cost.material.includeWaterPower 开关保留 legacy 行为以便回溯。
+    //    Task #9：水电费默认计入材料费（与 Excel 见机表3 口径对齐），
+    //    通过 cost.material.includeWaterPower=false 保留历史口径回溯能力。
     //    包装组件已在部品取价阶段按子件汇总价 / 母件底数折算成父件金额；
     //    见机表只需对该包装父件金额乘 1.05。
     PartTotalSplit partSplit = splitPartAmount(oaNoValue, productCodeValue, currentPartItems);
@@ -986,11 +985,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       boolean flag = yesFlag(form.getOverseasSalesMode());
       if ("商用直销产品".equals(productCategory)) {
         commercialOverseasFlag = flag ? "是" : "否";
-        matchedDepartment = departmentMatchBase + (flag ? "（海外）" : "（直销）");
+        matchedDepartment = departmentMatchBase + (flag ? "-海外" : "-直销");
       } else {
-        // 家代根据“是否通过海外三花销售”拼“代销/直销”，不是“海外/直销”。
         homeApplianceSalesModeFlag = flag ? "是" : "否";
-        matchedDepartment = departmentMatchBase + (flag ? "（代销）" : "（直销）");
+        matchedDepartment = departmentMatchBase + (flag ? "-代销" : "-直销");
       }
     }
     String missingReason = null;
@@ -1087,18 +1085,14 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   }
 
   private DepartmentFeeResult calculateDepartmentFees(
-      String finishedProductCode, Map<String, LaborSum> laborByUnit, CostSourceContext costSourceContext) {
+      String finishedProductCode, BigDecimal laborTotal, CostSourceContext costSourceContext) {
     DepartmentFeeResult result = new DepartmentFeeResult();
-    if (laborByUnit.isEmpty()) {
+    if (laborTotal == null || laborTotal.signum() == 0) {
       // T10：无人工数据 → 4 项部门费率项都不会算出来
-      result.remark = "无人工数据(lp_salary_cost 缺料号)，无法取部门经费率";
+      result.remark = "无人工数据，无法取部门经费率";
       return result;
     }
 
-    BigDecimal laborTotal = BigDecimal.ZERO;
-    for (LaborSum sum : laborByUnit.values()) {
-      laborTotal = laborTotal.add(sum.direct).add(sum.indirect);
-    }
     String businessUnitType =
         costSourceContext == null ? "" : normalizeBusinessUnit(costSourceContext.businessUnitType);
     Integer rateYear =
@@ -1161,9 +1155,12 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
           null,
           "lp_department_fund_rate.quote_ratio 为空, id=" + rate.getId());
     }
+    BigDecimal upliftRatio =
+        rate.getUpliftRatio() == null ? BigDecimal.ONE : rate.getUpliftRatio();
+    BigDecimal effectiveRate = quoteRatio.multiply(upliftRatio);
     BigDecimal manhourCost = divide(laborTotal, manhourRate);
     return new DepartmentSubjectAmount(
-        manhourCost, quoteRatio, multiplyAmount(manhourCost, quoteRatio), null);
+        manhourCost, effectiveRate, multiplyAmount(manhourCost, effectiveRate), null);
   }
 
   private DepartmentFundLookup findDepartmentFundRate(
@@ -1745,11 +1742,15 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       BigDecimal rateForDisplay = floatRate;
       BigDecimal amount = BigDecimal.ZERO;
       if (AUX_AMOUNT_MODE_DIRECT.equalsIgnoreCase(amountCalcMode)) {
-        amount =
-            unitPrice == null
-                ? BigDecimal.ZERO
-                : unitPrice.setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
-        rateForDisplay = null;
+        BigDecimal baseAmount =
+            unitPrice == null ? BigDecimal.ZERO : unitPrice.setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+        if (isCmsEffectiveAuxSubject(subject)) {
+          amount = baseAmount.multiply(CMS_AUX_UPLIFT_RATE).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+          rateForDisplay = CMS_AUX_UPLIFT_RATE;
+        } else {
+          amount = baseAmount;
+          rateForDisplay = null;
+        }
       } else if (unitPrice != null && floatRate != null) {
         amount = unitPrice.multiply(floatRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
       }
@@ -1996,7 +1997,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         partCodes.add(item.getPartCode().trim());
       }
     }
-    Set<String> packageCodes = lookupPackageCodes(partCodes);
+    Set<String> packageCodes = new LinkedHashSet<>(lookupPackageCodes(partCodes));
     packageCodes.addAll(lookupPackageComponentParentCodes(partCodes));
     BigDecimal pkg = BigDecimal.ZERO;
     BigDecimal nonPkg = BigDecimal.ZERO;
@@ -2019,7 +2020,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       return new PartTotalSplit(BigDecimal.ZERO, BigDecimal.ZERO);
     }
     Set<String> partCodes = collectPartCodes(currentPartItems);
-    Set<String> packageCodes = lookupPackageCodes(partCodes);
+    Set<String> packageCodes = new LinkedHashSet<>(lookupPackageCodes(partCodes));
     packageCodes.addAll(lookupPackageComponentParentCodes(partCodes));
     BigDecimal pkg = BigDecimal.ZERO;
     BigDecimal nonPkg = BigDecimal.ZERO;
@@ -2209,6 +2210,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private boolean isExcludedAuxSubject(AuxCostItemDto subject) {
     return EXCLUDED_AUX_SUBJECT_PACKAGING.equals(
         trimToNull(subject == null ? null : subject.getAuxSubjectName()));
+  }
+
+  private boolean isCmsEffectiveAuxSubject(AuxCostItemDto subject) {
+    return subject != null && CMS_SOURCE_EFFECTIVE.equalsIgnoreCase(trimToNull(subject.getSource()));
   }
 
   private boolean isPositive(BigDecimal value) {

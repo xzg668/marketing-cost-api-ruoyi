@@ -89,6 +89,36 @@ class MakePartPriceCalculatorTest {
   }
 
   @Test
+  @DisplayName("人工确认无废料：scrap_code 为空但标记已确认时，废料单价 0 可正常计算")
+  void noScrapConfirmedAllowsBlankScrapCodeWithZeroDeduction() {
+    MakePartPriceCalcRow row = baseRow(null);
+    row.setNoScrapConfirmed(true);
+    row.setNoScrapConfirmationId(1001L);
+    row.setScrapName("人工确认无废料");
+    row.setScrapUnitPrice(BigDecimal.ZERO);
+    row.setRemark("人工确认无废料，废料抵扣按0处理");
+
+    MakePartPriceCalcRow result = calculator.calculate(List.of(row)).getFirst();
+
+    assertThat(result.getStatus()).isEqualTo("OK");
+    assertThat(result.getPriceComplete()).isTrue();
+    assertThat(result.getCostPrice()).isEqualByComparingTo("6.63600000");
+    assertThat(result.getRemark()).contains("人工确认无废料", "scrap_unit_price=0");
+  }
+
+  @Test
+  @DisplayName("未人工确认无废料时，scrap_code 为空仍返回缺废料映射")
+  void blankScrapCodeWithoutNoScrapConfirmationStillMissingMapping() {
+    MakePartPriceCalcRow row = baseRow(null);
+    row.setNoScrapConfirmed(false);
+
+    MakePartPriceCalcRow result = calculator.calculate(List.of(row)).getFirst();
+
+    assertThat(result.getStatus()).isEqualTo("MISSING_SCRAP_MAPPING");
+    assertThat(result.getRemark()).contains("缺废料映射");
+  }
+
+  @Test
   @DisplayName("委外加工费第一版不影响 cost_price")
   void outsourceFeeDoesNotAffectCostPrice() {
     MakePartPriceCalcRow withoutOutsource = baseRow("SCRAP-001");
@@ -129,6 +159,7 @@ class MakePartPriceCalculatorTest {
     row.setRawUnitPrice(new BigDecimal("82.95"));
     row.setScrapCode(scrapCode);
     row.setScrapUnitPrice(new BigDecimal("75.66"));
+    row.setNoScrapConfirmed(false);
     row.setOutsourceFee(new BigDecimal("99"));
     row.setItemProcessType(MakePartProcessTypePolicy.PROCESS_TYPE_RAW);
     return row;

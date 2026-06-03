@@ -481,7 +481,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     Map<Integer, AutoBindingPlan> autoBindingPlans = !excelAutoBindingEnabled || v2Context.enabled()
         ? Map.of()
         : extractAutoBindingPlans(excelBytes, month);
-    List<PriceItemExcelImportRow> rows = new ArrayList<>();
+    List<CollectedImportRow> rows = new ArrayList<>();
     List<ErrorRow> parseErrors = new ArrayList<>();
     Integer linkedSheetNo = findLinkedImportSheetNo(excelBytes);
     try {
@@ -497,9 +497,9 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       return response;
     }
 
-    for (int idx = 0; idx < rows.size(); idx++) {
-      PriceItemExcelImportRow row = rows.get(idx);
-      int excelRow = EXCEL_ROW_OFFSET + idx;
+    for (CollectedImportRow collected : rows) {
+      PriceItemExcelImportRow row = collected.row();
+      int excelRow = collected.rowNumber();
       String validateError = validateRow(row);
       if (validateError != null) {
         response.getErrors().add(new ErrorRow(
@@ -517,7 +517,8 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       } else {
         V2BindingPlan v2Plan = v2Context.enabled() ? v2Context.plansByExcelRow().get(excelRow) : null;
         // 联动分支：公式不合法则跳过，不入库
-        String formulaSource = formulaSourceForNormalize(row, v2Plan);
+        String formulaSource = formulaSourceForNormalize(
+            row, v2Plan, v2Context.importedFactorVariableByAlias());
         FormulaTaxNormalization taxNormalization = normalizeExcelFormulaTax(formulaSource);
         formulaSource = taxNormalization.formula();
         if (taxNormalization.finalVatDivisorStripped()) {
@@ -1012,9 +1013,12 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       response.setSkipped(response.getSkipped() + 1);
     }
 
+    Map<String, ResolvedFactorRef> importedFactorByAlias =
+        buildImportedFactorAliasMap(upsertResult);
     Map<Integer, V2BindingPlan> plansByExcelRow = buildV2BindingPlans(
         excelBytes, fileName, factorUploadBatchId);
-    return new V2ImportContext(true, factorUploadBatchId, plansByExcelRow);
+    return new V2ImportContext(
+        true, factorUploadBatchId, plansByExcelRow, importedFactorByAlias);
   }
 
   private Integer findLinkedImportSheetNo(byte[] excelBytes) {
@@ -1164,12 +1168,108 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
         : row.getFormulaText();
   }
 
-  private String formulaSourceForNormalize(PriceItemExcelImportRow row, V2BindingPlan plan) {
+  private String formulaSourceForNormalize(
+      PriceItemExcelImportRow row,
+      V2BindingPlan plan,
+      Map<String, ResolvedFactorRef> importedFactorByAlias) {
     String excelDerived = excelDerivedFormulaForNormalize(plan);
-    if (StringUtils.hasText(excelDerived)) {
-      return excelDerived;
+    String source = StringUtils.hasText(excelDerived)
+        ? excelDerived
+        : row == null ? null : row.getFormulaExpr();
+    return applyImportedFactorPriority(source, importedFactorByAlias);
+  }
+
+  private Map<String, ResolvedFactorRef> buildImportedFactorAliasMap(
+      FactorMonthlyPriceUpsertResult upsertResult) {
+    if (upsertResult == null || upsertResult.getRows().isEmpty()) {
+      return Map.of();
     }
-    return row == null ? null : row.getFormulaExpr();
+    Map<String, ResolvedFactorRef> map = new LinkedHashMap<>();
+    for (FactorMonthlyPriceUpsertResult.RowResult row : upsertResult.getRows()) {
+      if (row == null || row.getFactorIdentityId() == null) {
+        continue;
+      }
+      ResolvedFactorRef ref = resolvedRefFromImportRow(row);
+      putImportedFactorAlias(map, row.getShortName(), ref);
+      if (StringUtils.hasText(row.getFactorSeqNo()) && StringUtils.hasText(row.getShortName())) {
+        putImportedFactorAlias(
+            map, row.getFactorSeqNo().trim() + "#" + row.getShortName().trim(), ref);
+      }
+      putImportedFactorAlias(map, row.getFactorName(), ref);
+    }
+    return map;
+  }
+
+  private ResolvedFactorRef resolvedRefFromImportRow(FactorMonthlyPriceUpsertResult.RowResult row) {
+    ResolvedFactorRef ref = new ResolvedFactorRef();
+    ref.setFactorIdentityId(row.getFactorIdentityId());
+    ref.setFactorMonthlyPriceId(row.getFactorMonthlyPriceId());
+    ref.setFactorSeqNo(row.getFactorSeqNo());
+    ref.setShortName(row.getShortName());
+    ref.setPriceSource(row.getPriceSource());
+    ref.setPrice(row.getNewPrice());
+    ref.setSheetName(row.getSourceSheetName());
+    ref.setRowNumber(row.getSourceRowNumber());
+    return ref;
+  }
+
+  private void putImportedFactorAlias(
+      Map<String, ResolvedFactorRef> aliases, String alias, ResolvedFactorRef ref) {
+    if (!StringUtils.hasText(alias) || ref == null || ref.getFactorIdentityId() == null) {
+      return;
+    }
+    String key = alias.trim();
+    ResolvedFactorRef existing = aliases.get(key);
+    if (existing != null && !Objects.equals(existing.getFactorIdentityId(), ref.getFactorIdentityId())) {
+      log.warn("本次导入影响因素别名冲突，跳过 alias={} existingFactorIdentityId={} newFactorIdentityId={}",
+          key, existing.getFactorIdentityId(), ref.getFactorIdentityId());
+      return;
+    }
+    aliases.putIfAbsent(key, ref);
+  }
+
+  private String applyImportedFactorPriority(
+      String formula, Map<String, ResolvedFactorRef> importedFactorByAlias) {
+    if (!StringUtils.hasText(formula)
+        || importedFactorByAlias == null
+        || importedFactorByAlias.isEmpty()) {
+      return formula;
+    }
+    String result = formula;
+    List<Map.Entry<String, ResolvedFactorRef>> entries =
+        new ArrayList<>(importedFactorByAlias.entrySet());
+    entries.sort((left, right) -> Integer.compare(right.getKey().length(), left.getKey().length()));
+    for (Map.Entry<String, ResolvedFactorRef> entry : entries) {
+      if (!containsFormulaToken(result, entry.getKey())) {
+        continue;
+      }
+      String replacement = factorReplacement(entry.getValue());
+      result = replaceFormulaToken(result, entry.getKey(), replacement);
+    }
+    return result;
+  }
+
+  private String replaceFormulaToken(String formula, String token, String replacement) {
+    if (!StringUtils.hasText(formula)
+        || !StringUtils.hasText(token)
+        || !StringUtils.hasText(replacement)) {
+      return formula;
+    }
+    Matcher matcher = formulaTokenPattern(token).matcher(formula);
+    return matcher.replaceAll(Matcher.quoteReplacement(replacement));
+  }
+
+  private boolean containsFormulaToken(String formula, String token) {
+    return StringUtils.hasText(formula)
+        && StringUtils.hasText(token)
+        && formulaTokenPattern(token).matcher(formula).find();
+  }
+
+  private Pattern formulaTokenPattern(String token) {
+    return Pattern.compile(
+        "(?<![\\p{L}\\p{N}_\\[])"
+            + Pattern.quote(token)
+            + "(?![\\p{L}\\p{N}_\\]])");
   }
 
   private void applyExcelGoldenPrice(PriceItemExcelImportRow row, V2BindingPlan plan) {
@@ -1887,17 +1987,11 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     } else {
       query.isNull(PriceLinkedItem::getBusinessUnitType);
     }
+    // 联动价导入身份：有供应商时按“供应商 + 料号 + 业务单元”匹配；
+    // Excel 供应商为空时退化为“料号 + 业务单元”。规格型号只是行属性，不参与判重。
     String supplierCode = trim(row.getSupplierCode());
-    if (supplierCode == null) {
-      query.isNull(PriceLinkedItem::getSupplierCode);
-    } else {
+    if (supplierCode != null) {
       query.eq(PriceLinkedItem::getSupplierCode, supplierCode);
-    }
-    String specModel = trim(row.getSpecModel());
-    if (specModel == null) {
-      query.isNull(PriceLinkedItem::getSpecModel);
-    } else {
-      query.eq(PriceLinkedItem::getSpecModel, specModel);
     }
     return itemMapper.selectOne(query.orderByDesc(PriceLinkedItem::getId).last("LIMIT 1"));
   }
@@ -1913,9 +2007,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
         && sameDecimal(existing.getProcessFee(), row.getProcessFee())
         && sameDecimal(existing.getAgentFee(), row.getAgentFee())
         && sameDecimal(existing.getManualPrice(), row.getUnitPrice())
-        && Objects.equals(existing.getTaxIncluded(), parseTaxIncluded(row.getTaxIncluded()))
-        && Objects.equals(trim(existing.getSupplierCode()), trim(row.getSupplierCode()))
-        && Objects.equals(trim(existing.getSpecModel()), trim(row.getSpecModel()));
+        && Objects.equals(existing.getTaxIncluded(), parseTaxIncluded(row.getTaxIncluded()));
   }
 
   private boolean sameDecimal(java.math.BigDecimal left, java.math.BigDecimal right) {
@@ -2021,9 +2113,10 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
   private record V2ImportContext(
       boolean enabled,
       Long factorUploadBatchId,
-      Map<Integer, V2BindingPlan> plansByExcelRow) {
+      Map<Integer, V2BindingPlan> plansByExcelRow,
+      Map<String, ResolvedFactorRef> importedFactorVariableByAlias) {
     private static V2ImportContext disabled() {
-      return new V2ImportContext(false, null, Map.of());
+      return new V2ImportContext(false, null, Map.of(), Map.of());
     }
   }
 
@@ -2058,17 +2151,19 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
   private static final class CollectingListener
       extends AnalysisEventListener<PriceItemExcelImportRow> {
 
-    private final List<PriceItemExcelImportRow> sink;
+    private final List<CollectedImportRow> sink;
     private final List<ErrorRow> errors;
 
-    CollectingListener(List<PriceItemExcelImportRow> sink, List<ErrorRow> errors) {
+    CollectingListener(List<CollectedImportRow> sink, List<ErrorRow> errors) {
       this.sink = sink;
       this.errors = errors;
     }
 
     @Override
     public void invoke(PriceItemExcelImportRow data, AnalysisContext context) {
-      sink.add(data);
+      Integer rowIndex = context == null || context.readRowHolder() == null
+          ? null : context.readRowHolder().getRowIndex() + 1;
+      sink.add(new CollectedImportRow(rowIndex == null ? 0 : rowIndex, data));
     }
 
     @Override
@@ -2084,6 +2179,8 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
           "Excel 解析失败: " + exception.getMessage()));
     }
   }
+
+  private record CollectedImportRow(int rowNumber, PriceItemExcelImportRow row) {}
 
   private String resolvePricingMonth(String pricingMonth) {
     if (StringUtils.hasText(pricingMonth)) {

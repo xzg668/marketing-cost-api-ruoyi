@@ -2,7 +2,4 @@ FROM eclipse-temurin:21-jre
 WORKDIR /app
 COPY marketing-cost-biz/target/marketing-cost-biz-0.0.1-SNAPSHOT-exec.jar /app/app.jar
 EXPOSE 8081
-ENTRYPOINT ["java", \
-  "-Xms6g", "-Xmx6g", \
-  "-XX:+UseG1GC", \
-  "-jar", "/app/app.jar"]
+ENTRYPOINT ["sh", "-c", "java ${JAVA_OPTS:--Xms512m -Xmx2g -XX:+UseG1GC} -jar /app/app.jar"]

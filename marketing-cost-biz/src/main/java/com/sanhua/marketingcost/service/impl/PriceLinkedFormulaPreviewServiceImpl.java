@@ -162,13 +162,21 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
     return doCompute(
         linkedItem.getFormulaExpr(),
         linkedItem.getMaterialCode(),
-        linkedItem.getPricingMonth(),
+        calculationPricingMonth(linkedItem, variableContext),
         linkedItem.getTaxIncluded(),
         linkedItem,
         oaForm,
         variableContext == null ? null : variableContext.getVariableValues(),
         variableContext == null ? null : variableContext.getVariableSources(),
         variableContext);
+  }
+
+  private String calculationPricingMonth(
+      PriceLinkedItem linkedItem, LinkedPriceVariableContext variableContext) {
+    if (variableContext != null && StringUtils.hasText(variableContext.getPricingMonth())) {
+      return variableContext.getPricingMonth().trim();
+    }
+    return linkedItem == null ? null : linkedItem.getPricingMonth();
   }
 
   /**

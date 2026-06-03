@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.sanhua.marketingcost.dto.priceprepare.NoScrapConfirmResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBatchPageResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBatchQueryRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareCandidatePageResponse;
@@ -29,7 +30,9 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
+import com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -57,6 +60,10 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
   private static final String SUMMARY_FAILED = "FAILED";
   private static final String SUMMARY_NOT_PREPARED = "NOT_PREPARED";
   private static final String OWNER_SCOPE_ALL = "ALL";
+  private static final String SOURCE_MATERIAL_SCRAP_REF = "lp_material_scrap_ref";
+  private static final String ACTION_SUPPLEMENT_SCRAP_MAPPING = "SUPPLEMENT_SCRAP_MAPPING";
+  private static final String ACTION_CONFIRM_NO_SCRAP = "CONFIRM_NO_SCRAP";
+  private static final String NO_SCRAP_STATUS_ACTIVE = "ACTIVE";
   private static final Set<String> PENDING_SUMMARY_STATUSES =
       Set.of(SUMMARY_NOT_PREPARED, SUMMARY_PARTIAL, SUMMARY_FAILED);
 
@@ -65,18 +72,21 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
   private final PricePrepareBatchMapper batchMapper;
   private final PricePrepareItemMapper itemMapper;
   private final PricePrepareGapMapper gapMapper;
+  private final MakePartNoScrapConfirmationService noScrapConfirmationService;
 
   public PricePrepareQueryServiceImpl(
       OaFormMapper oaFormMapper,
       OaFormItemMapper oaFormItemMapper,
       PricePrepareBatchMapper batchMapper,
       PricePrepareItemMapper itemMapper,
-      PricePrepareGapMapper gapMapper) {
+      PricePrepareGapMapper gapMapper,
+      MakePartNoScrapConfirmationService noScrapConfirmationService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.batchMapper = batchMapper;
     this.itemMapper = itemMapper;
     this.gapMapper = gapMapper;
+    this.noScrapConfirmationService = noScrapConfirmationService;
   }
 
   @Override
@@ -97,12 +107,14 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
       PricePrepareOaSummaryQueryRequest request) {
     PricePrepareOaSummaryQueryRequest safe =
         request == null ? new PricePrepareOaSummaryQueryRequest() : request;
+    String periodMonth = CostPricingPeriodUtils.normalizePricingMonth(safe.getPeriodMonth());
     List<PricePrepareTopProductSummaryResponse> topSummaries =
-        loadTopProductSummaries(safe.getOaNo(), null);
+        loadTopProductSummaries(safe.getOaNo(), null, periodMonth);
     Map<String, PricePrepareOaSummaryResponse> byOa = new LinkedHashMap<>();
     for (PricePrepareTopProductSummaryResponse topSummary : topSummaries) {
       PricePrepareOaSummaryResponse oaSummary =
           byOa.computeIfAbsent(topSummary.getOaNo(), this::emptyOaSummary);
+      oaSummary.setPeriodMonth(periodMonth);
       oaSummary.setTopProductCount(oaSummary.getTopProductCount() + 1);
       oaSummary.setTotalCount(oaSummary.getTotalCount() + topSummary.getTotalCount());
       oaSummary.setReadyCount(oaSummary.getReadyCount() + topSummary.getReadyCount());
@@ -118,6 +130,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
     }
     if (summaries.isEmpty() && StringUtils.hasText(safe.getOaNo())) {
       PricePrepareOaSummaryResponse notPrepared = emptyOaSummary(safe.getOaNo().trim());
+      notPrepared.setPeriodMonth(periodMonth);
       notPrepared.setStatus(SUMMARY_NOT_PREPARED);
       summaries.add(notPrepared);
     }
@@ -135,14 +148,16 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
       PricePrepareTopProductSummaryQueryRequest request) {
     PricePrepareTopProductSummaryQueryRequest safe =
         request == null ? new PricePrepareTopProductSummaryQueryRequest() : request;
+    String periodMonth = CostPricingPeriodUtils.normalizePricingMonth(safe.getPeriodMonth());
     List<PricePrepareTopProductSummaryResponse> summaries =
-        loadTopProductSummaries(safe.getOaNo(), safe.getTopProductCode());
+        loadTopProductSummaries(safe.getOaNo(), safe.getTopProductCode(), periodMonth);
     if (summaries.isEmpty()
         && StringUtils.hasText(safe.getOaNo())
         && StringUtils.hasText(safe.getTopProductCode())) {
       PricePrepareTopProductSummaryResponse notPrepared = new PricePrepareTopProductSummaryResponse();
       notPrepared.setOaNo(safe.getOaNo().trim());
       notPrepared.setTopProductCode(safe.getTopProductCode().trim());
+      notPrepared.setPeriodMonth(periodMonth);
       notPrepared.setStatus(SUMMARY_NOT_PREPARED);
       summaries.add(notPrepared);
     }
@@ -162,6 +177,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
   public PricePrepareCandidatePageResponse pageCandidates(PricePrepareCandidateQueryRequest request) {
     PricePrepareCandidateQueryRequest safe =
         request == null ? new PricePrepareCandidateQueryRequest() : request;
+    String periodMonth = CostPricingPeriodUtils.normalizePricingMonth(safe.getPeriodMonth());
     String ownerScope = StringUtils.hasText(safe.getOwnerScope())
         ? safe.getOwnerScope().trim()
         : "MINE";
@@ -225,10 +241,10 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
     }
 
     Map<String, PricePrepareTopProductSummaryResponse> summaries =
-        loadTopProductSummaryMap(oaNos, topProductCodes);
+        loadTopProductSummaryMap(oaNos, topProductCodes, periodMonth);
     List<PricePrepareCandidateResponse> candidates = new ArrayList<>();
     for (CandidateSeed seed : seeds) {
-      PricePrepareCandidateResponse candidate = toCandidate(seed, summaries.get(seed.key()));
+      PricePrepareCandidateResponse candidate = toCandidate(seed, summaries.get(seed.key()), periodMonth);
       if (matchesPrepareStatus(candidate, safe.getPrepareStatus())
           && matchesPending(candidate, safe.getOnlyPending())) {
         candidates.add(candidate);
@@ -251,6 +267,9 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
   public PricePrepareItemPageResponse pageItems(PricePrepareItemQueryRequest request) {
     PricePrepareItemQueryRequest safe =
         request == null ? new PricePrepareItemQueryRequest() : request;
+    if (!StringUtils.hasText(safe.getPrepareNo())) {
+      safe.setPeriodMonth(CostPricingPeriodUtils.normalizePricingMonth(safe.getPeriodMonth()));
+    }
     Page<PricePrepareItem> page =
         itemMapper.selectPage(
             new Page<>(pageNo(safe.getPage()), pageSize(safe.getPageSize())),
@@ -264,21 +283,101 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
   public PricePrepareGapPageResponse pageGaps(PricePrepareGapQueryRequest request) {
     PricePrepareGapQueryRequest safe =
         request == null ? new PricePrepareGapQueryRequest() : request;
+    if (!StringUtils.hasText(safe.getPrepareNo())) {
+      safe.setPeriodMonth(CostPricingPeriodUtils.normalizePricingMonth(safe.getPeriodMonth()));
+    }
     Page<PricePrepareGap> page =
         gapMapper.selectPage(
             new Page<>(pageNo(safe.getPage()), pageSize(safe.getPageSize())),
             buildGapQuery(safe)
                 .orderByDesc(PricePrepareGap::getCreatedAt)
                 .orderByDesc(PricePrepareGap::getId));
+    enrichNoScrapConfirmations(page.getRecords());
     return new PricePrepareGapPageResponse(page.getTotal(), page.getRecords());
   }
 
+  private void enrichNoScrapConfirmations(List<PricePrepareGap> gaps) {
+    if (gaps == null || gaps.isEmpty()) {
+      return;
+    }
+    Map<String, String> periodByPrepareNo = loadPeriodByPrepareNo(gaps);
+    for (PricePrepareGap gap : gaps) {
+      if (!isScrapMappingGap(gap)) {
+        continue;
+      }
+      String materialNo = trimToNull(gap.getGapMaterialCode());
+      String businessUnitType = trimToNull(gap.getBusinessUnitType());
+      String periodMonth = firstText(gap.getPeriodMonth(), periodByPrepareNo.get(trimToNull(gap.getPrepareNo())));
+      gap.setActionType(ACTION_CONFIRM_NO_SCRAP);
+      gap.setActionMaterialNo(materialNo);
+      gap.setCanConfirmNoScrap(true);
+      if (materialNo == null || businessUnitType == null || periodMonth == null) {
+        continue;
+      }
+      // 确认记录针对“料号在生效期间无废料”，不是某次缺口行；重新生成后 gap_id 会变化，
+      // 因此缺口清单必须按 业务单元 + 缺口料号 + 价格月份 回填有效确认。
+      NoScrapConfirmResponse confirmation =
+          noScrapConfirmationService.findEffective(materialNo, periodMonth, businessUnitType);
+      if (confirmation != null) {
+        gap.setNoScrapConfirmationId(confirmation.getId());
+        gap.setNoScrapConfirmationStatus(
+            StringUtils.hasText(confirmation.getStatus())
+                ? confirmation.getStatus()
+                : NO_SCRAP_STATUS_ACTIVE);
+        gap.setNoScrapConfirmation(confirmation);
+        gap.setConfirmedBy(confirmation.getConfirmedBy());
+        gap.setConfirmedAt(confirmation.getConfirmedAt());
+        gap.setConfirmReason(confirmation.getConfirmReason());
+        gap.setCanConfirmNoScrap(false);
+      }
+    }
+  }
+
+  private Map<String, String> loadPeriodByPrepareNo(List<PricePrepareGap> gaps) {
+    Set<String> prepareNos = new LinkedHashSet<>();
+    for (PricePrepareGap gap : gaps) {
+      String prepareNo = trimToNull(gap.getPrepareNo());
+      if (prepareNo != null) {
+        prepareNos.add(prepareNo);
+      }
+    }
+    if (prepareNos.isEmpty()) {
+      return Map.of();
+    }
+    List<PricePrepareBatch> batches =
+        batchMapper.selectList(
+            Wrappers.<PricePrepareBatch>lambdaQuery()
+                .in(PricePrepareBatch::getPrepareNo, prepareNos));
+    Map<String, String> result = new HashMap<>();
+    if (batches == null) {
+      return result;
+    }
+    for (PricePrepareBatch batch : batches) {
+      String prepareNo = trimToNull(batch.getPrepareNo());
+      String periodMonth = trimToNull(batch.getPeriodMonth());
+      if (prepareNo != null && periodMonth != null) {
+        result.put(prepareNo, periodMonth);
+      }
+    }
+    return result;
+  }
+
+  private boolean isScrapMappingGap(PricePrepareGap gap) {
+    if (gap == null) {
+      return false;
+    }
+    return SOURCE_MATERIAL_SCRAP_REF.equals(gap.getSourceTable())
+        || containsText(gap.getMessage(), "缺废料映射")
+        || containsText(gap.getMessage(), "MISSING_SCRAP_MAPPING");
+  }
+
   List<PricePrepareTopProductSummaryResponse> loadTopProductSummaries(
-      String oaNo, String topProductCode) {
+      String oaNo, String topProductCode, String periodMonth) {
     QueryWrapper<PricePrepareItem> itemQuery =
         Wrappers.<PricePrepareItem>query()
             .select(
                 "oa_no",
+                "period_month",
                 "top_product_code",
                 "COUNT(*) AS total_count",
                 "SUM(CASE WHEN status = '" + ITEM_STATUS_READY + "' THEN 1 ELSE 0 END) AS ready_count",
@@ -286,16 +385,19 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
                 "MAX(updated_at) AS updated_at");
     eqIfText(itemQuery, "oa_no", oaNo);
     eqIfText(itemQuery, "top_product_code", topProductCode);
-    itemQuery.groupBy("oa_no", "top_product_code");
+    eqIfText(itemQuery, "period_month", periodMonth);
+    itemQuery.groupBy("oa_no", "period_month", "top_product_code");
 
     Map<String, PricePrepareTopProductSummaryResponse> summaries = new LinkedHashMap<>();
     List<Map<String, Object>> itemMaps = itemMapper.selectMaps(itemQuery);
     if (itemMaps != null) {
       for (Map<String, Object> row : itemMaps) {
         String rowOaNo = text(row, "oa_no");
+        String rowPeriodMonth = text(row, "period_month");
         String rowTopProductCode = text(row, "top_product_code");
         PricePrepareTopProductSummaryResponse summary = new PricePrepareTopProductSummaryResponse();
         summary.setOaNo(rowOaNo);
+        summary.setPeriodMonth(rowPeriodMonth);
         summary.setTopProductCode(rowTopProductCode);
         summary.setTotalCount(number(row, "total_count"));
         summary.setReadyCount(number(row, "ready_count"));
@@ -306,7 +408,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
       }
     }
 
-    Map<String, Integer> gapCounts = loadGapCounts(oaNo, topProductCode);
+    Map<String, Integer> gapCounts = loadGapCounts(oaNo, topProductCode, periodMonth);
     for (Map.Entry<String, Integer> entry : gapCounts.entrySet()) {
       PricePrepareTopProductSummaryResponse summary = summaries.get(entry.getKey());
       if (summary != null) {
@@ -319,12 +421,13 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
     return new ArrayList<>(summaries.values());
   }
 
-  private Map<String, Integer> loadGapCounts(String oaNo, String topProductCode) {
+  private Map<String, Integer> loadGapCounts(String oaNo, String topProductCode, String periodMonth) {
     QueryWrapper<PricePrepareGap> gapQuery =
         Wrappers.<PricePrepareGap>query()
             .select("oa_no", "top_product_code", "COUNT(*) AS gap_count");
     eqIfText(gapQuery, "oa_no", oaNo);
     eqIfText(gapQuery, "top_product_code", topProductCode);
+    eqIfText(gapQuery, "period_month", periodMonth);
     gapQuery.groupBy("oa_no", "top_product_code");
     Map<String, Integer> gapCounts = new HashMap<>();
     List<Map<String, Object>> gapMaps = gapMapper.selectMaps(gapQuery);
@@ -351,7 +454,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
   }
 
   private Map<String, PricePrepareTopProductSummaryResponse> loadTopProductSummaryMap(
-      Set<String> oaNos, Set<String> topProductCodes) {
+      Set<String> oaNos, Set<String> topProductCodes, String periodMonth) {
     if (oaNos == null || oaNos.isEmpty() || topProductCodes == null || topProductCodes.isEmpty()) {
       return Map.of();
     }
@@ -359,6 +462,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
         Wrappers.<PricePrepareItem>query()
             .select(
                 "oa_no",
+                "period_month",
                 "top_product_code",
                 "COUNT(*) AS total_count",
                 "SUM(CASE WHEN status = '" + ITEM_STATUS_READY + "' THEN 1 ELSE 0 END) AS ready_count",
@@ -366,16 +470,19 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
                 "MAX(updated_at) AS updated_at")
             .in("oa_no", oaNos)
             .in("top_product_code", topProductCodes)
-            .groupBy("oa_no", "top_product_code");
+            .eq("period_month", periodMonth)
+            .groupBy("oa_no", "period_month", "top_product_code");
 
     Map<String, PricePrepareTopProductSummaryResponse> summaries = new LinkedHashMap<>();
     List<Map<String, Object>> itemMaps = itemMapper.selectMaps(itemQuery);
     if (itemMaps != null) {
       for (Map<String, Object> row : itemMaps) {
         String rowOaNo = text(row, "oa_no");
+        String rowPeriodMonth = text(row, "period_month");
         String rowTopProductCode = text(row, "top_product_code");
         PricePrepareTopProductSummaryResponse summary = new PricePrepareTopProductSummaryResponse();
         summary.setOaNo(rowOaNo);
+        summary.setPeriodMonth(rowPeriodMonth);
         summary.setTopProductCode(rowTopProductCode);
         summary.setTotalCount(number(row, "total_count"));
         summary.setReadyCount(number(row, "ready_count"));
@@ -385,7 +492,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
       }
     }
 
-    Map<String, Integer> gapCounts = loadGapCounts(oaNos, topProductCodes);
+    Map<String, Integer> gapCounts = loadGapCounts(oaNos, topProductCodes, periodMonth);
     for (Map.Entry<String, Integer> entry : gapCounts.entrySet()) {
       PricePrepareTopProductSummaryResponse summary = summaries.get(entry.getKey());
       if (summary == null) {
@@ -399,12 +506,14 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
     return summaries;
   }
 
-  private Map<String, Integer> loadGapCounts(Set<String> oaNos, Set<String> topProductCodes) {
+  private Map<String, Integer> loadGapCounts(
+      Set<String> oaNos, Set<String> topProductCodes, String periodMonth) {
     QueryWrapper<PricePrepareGap> gapQuery =
         Wrappers.<PricePrepareGap>query()
             .select("oa_no", "top_product_code", "COUNT(*) AS gap_count")
             .in("oa_no", oaNos)
             .in("top_product_code", topProductCodes)
+            .eq("period_month", periodMonth)
             .groupBy("oa_no", "top_product_code");
     Map<String, Integer> gapCounts = new HashMap<>();
     List<Map<String, Object>> gapMaps = gapMapper.selectMaps(gapQuery);
@@ -434,7 +543,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
   }
 
   private PricePrepareCandidateResponse toCandidate(
-      CandidateSeed seed, PricePrepareTopProductSummaryResponse summary) {
+      CandidateSeed seed, PricePrepareTopProductSummaryResponse summary, String periodMonth) {
     PricePrepareCandidateResponse candidate = new PricePrepareCandidateResponse();
     candidate.setOaNo(seed.oaNo());
     candidate.setTopProductCode(seed.topProductCode());
@@ -445,10 +554,12 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
     candidate.setCalcStatus(seed.form().getCalcStatus());
     candidate.setOwnerName(firstText(seed.form().getSaleLink(), seed.form().getApplicantName()));
     if (summary == null) {
+      candidate.setPeriodMonth(periodMonth);
       candidate.setPrepareStatus(SUMMARY_NOT_PREPARED);
       candidate.setUpdatedAt(maxTime(seed.form().getUpdatedAt(), seed.item().getUpdatedAt()));
       return candidate;
     }
+    candidate.setPeriodMonth(summary.getPeriodMonth());
     candidate.setPrepareStatus(summary.getStatus());
     candidate.setTotalCount(summary.getTotalCount());
     candidate.setReadyCount(summary.getReadyCount());
@@ -480,6 +591,10 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
     return StringUtils.hasText(value) ? value.trim() : null;
   }
 
+  private boolean containsText(String value, String expected) {
+    return StringUtils.hasText(value) && value.contains(expected);
+  }
+
   private record CandidateSeed(OaForm form, OaFormItem item, String oaNo, String topProductCode) {
     private String key() {
       return String.valueOf(oaNo) + "|" + String.valueOf(topProductCode);
@@ -500,6 +615,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
       PricePrepareItemQueryRequest request) {
     LambdaQueryWrapper<PricePrepareItem> query = Wrappers.lambdaQuery();
     eqIfText(query, PricePrepareItem::getPrepareNo, request.getPrepareNo());
+    eqIfText(query, PricePrepareItem::getPeriodMonth, request.getPeriodMonth());
     eqIfText(query, PricePrepareItem::getOaNo, request.getOaNo());
     eqIfText(query, PricePrepareItem::getTopProductCode, request.getTopProductCode());
     eqIfText(query, PricePrepareItem::getMaterialCode, request.getMaterialCode());
@@ -511,6 +627,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
   private LambdaQueryWrapper<PricePrepareGap> buildGapQuery(PricePrepareGapQueryRequest request) {
     LambdaQueryWrapper<PricePrepareGap> query = Wrappers.lambdaQuery();
     eqIfText(query, PricePrepareGap::getPrepareNo, request.getPrepareNo());
+    eqIfText(query, PricePrepareGap::getPeriodMonth, request.getPeriodMonth());
     eqIfText(query, PricePrepareGap::getOaNo, request.getOaNo());
     eqIfText(query, PricePrepareGap::getTopProductCode, request.getTopProductCode());
     eqIfText(query, PricePrepareGap::getMaterialCode, request.getMaterialCode());

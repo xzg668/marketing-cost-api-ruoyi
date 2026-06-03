@@ -9,6 +9,7 @@ import lombok.Setter;
 @Setter
 public class PricePrepareCandidateResponse {
   private String oaNo;
+  private String periodMonth;
   private String topProductCode;
   private String productName;
   private String productModel;

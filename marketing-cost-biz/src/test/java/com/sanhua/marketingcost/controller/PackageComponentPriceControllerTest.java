@@ -6,19 +6,24 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.PackagePriceDetailResult;
 import com.sanhua.marketingcost.dto.PackagePriceRequest;
 import com.sanhua.marketingcost.dto.PackagePriceResult;
 import com.sanhua.marketingcost.dto.PackageSnapshotDetailResult;
+import com.sanhua.marketingcost.dto.packagecomponent.PackageComponentBulkGenerateRequest;
+import com.sanhua.marketingcost.dto.packagecomponent.PackageComponentBulkGenerateResponse;
 import com.sanhua.marketingcost.dto.packagecomponent.PackageComponentGapPageResponse;
 import com.sanhua.marketingcost.dto.packagecomponent.PackageComponentGapQueryRequest;
 import com.sanhua.marketingcost.dto.packagecomponent.PackageComponentPricePageResponse;
 import com.sanhua.marketingcost.dto.packagecomponent.PackageComponentPriceQueryRequest;
 import com.sanhua.marketingcost.dto.packagecomponent.PackageComponentSnapshotPageResponse;
 import com.sanhua.marketingcost.dto.packagecomponent.PackageComponentSnapshotQueryRequest;
+import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.PackageComponentPrice;
 import com.sanhua.marketingcost.entity.PackageComponentSnapshot;
+import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.service.PackageComponentPriceQueryService;
 import com.sanhua.marketingcost.service.PackageComponentPriceService;
 import com.sanhua.marketingcost.service.PackageComponentSnapshotService;
@@ -33,6 +38,7 @@ class PackageComponentPriceControllerTest {
   private PackageComponentPriceQueryService queryService;
   private PackageComponentPriceService priceService;
   private PackageComponentSnapshotService snapshotService;
+  private BomCostingRowMapper bomCostingRowMapper;
   private PackageComponentPriceController controller;
 
   @BeforeEach
@@ -40,7 +46,10 @@ class PackageComponentPriceControllerTest {
     queryService = mock(PackageComponentPriceQueryService.class);
     priceService = mock(PackageComponentPriceService.class);
     snapshotService = mock(PackageComponentSnapshotService.class);
-    controller = new PackageComponentPriceController(queryService, priceService, snapshotService);
+    bomCostingRowMapper = mock(BomCostingRowMapper.class);
+    controller =
+        new PackageComponentPriceController(
+            queryService, priceService, snapshotService, bomCostingRowMapper);
   }
 
   @Test
@@ -120,6 +129,45 @@ class PackageComponentPriceControllerTest {
   }
 
   @Test
+  @DisplayName("/package-components/prices/generate-by-oa：按 OA+成品解析包装父料号并去重生成")
+  void generateByOaFindsPackageParentsAndDelegatesPackagePrice() {
+    PackageComponentBulkGenerateRequest request = new PackageComponentBulkGenerateRequest();
+    request.setOaNo("OA-001");
+    request.setTopProductCode("TOP-A");
+    request.setPeriodMonth("2026-06");
+    when(bomCostingRowMapper.selectList(any(Wrapper.class)))
+        .thenReturn(
+            List.of(
+                packageRow("OA-001", "TOP-A", "PKG-1", "包装组件一"),
+                packageRow("OA-001", "TOP-A", "PKG-1", "包装组件一"),
+                packageRow("OA-001", "TOP-A", "PKG-2", "包装组件二")));
+    when(priceService.ensurePrice(any())).thenAnswer(invocation -> {
+      PackagePriceRequest priceRequest = invocation.getArgument(0);
+      PackageComponentPrice price = new PackageComponentPrice();
+      price.setPackageMaterialCode(priceRequest.getPackageMaterialCode());
+      price.setSourceTopProductCode(priceRequest.getTopProductCode());
+      price.setPeriodMonth(priceRequest.getPeriodMonth());
+      price.setPriceStatus("PRICED");
+      price.setPriceComplete(true);
+      return PackagePriceResult.of(price, List.of(), null);
+    });
+
+    CommonResult<PackageComponentBulkGenerateResponse> result = controller.generateByOa(request);
+
+    assertThat(result.isSuccess()).isTrue();
+    assertThat(result.getData().getTotalCount()).isEqualTo(2);
+    assertThat(result.getData().getSuccessCount()).isEqualTo(2);
+    ArgumentCaptor<PackagePriceRequest> captor = ArgumentCaptor.forClass(PackagePriceRequest.class);
+    verify(priceService, org.mockito.Mockito.times(2)).ensurePrice(captor.capture());
+    assertThat(captor.getAllValues()).extracting(PackagePriceRequest::getPackageMaterialCode)
+        .containsExactly("PKG-1", "PKG-2");
+    assertThat(captor.getAllValues()).extracting(PackagePriceRequest::getTopProductCode)
+        .containsExactly("TOP-A", "TOP-A");
+    assertThat(captor.getAllValues()).extracting(PackagePriceRequest::getOaNo)
+        .containsExactly("OA-001", "OA-001");
+  }
+
+  @Test
   @DisplayName("/package-components/snapshots：透传结构快照查询条件")
   void listSnapshotsDelegatesQuery() {
     PackageComponentSnapshotPageResponse mocked =
@@ -170,5 +218,17 @@ class PackageComponentPriceControllerTest {
     assertThat(captor.getValue().getPackageMaterialCode()).isEqualTo("9830000026238");
     assertThat(captor.getValue().getGapType()).isEqualTo("MISSING_PRICE");
     assertThat(captor.getValue().getOaPushStatus()).isEqualTo("NOT_PUSHED");
+  }
+
+  private BomCostingRow packageRow(
+      String oaNo, String topProductCode, String packageMaterialCode, String packageMaterialName) {
+    BomCostingRow row = new BomCostingRow();
+    row.setOaNo(oaNo);
+    row.setTopProductCode(topProductCode);
+    row.setMaterialCode(packageMaterialCode);
+    row.setMaterialName(packageMaterialName);
+    row.setSettlementRowType("PACKAGE_PARENT");
+    row.setPeriodMonth("2026-06");
+    return row;
   }
 }

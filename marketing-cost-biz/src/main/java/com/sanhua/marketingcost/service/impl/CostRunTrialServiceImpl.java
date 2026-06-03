@@ -37,12 +37,12 @@ import com.sanhua.marketingcost.service.CostRunTrialService;
 import com.sanhua.marketingcost.service.MaterialMasterSyncService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -133,33 +133,49 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
   @Override
   @Async("costRunExecutor")
   public CompletableFuture<CostRunTrialResponse> run(String oaNo) {
-    return run(oaNo, null, null);
+    return run(oaNo, null, null, null);
+  }
+
+  @Override
+  @Async("costRunExecutor")
+  public CompletableFuture<CostRunTrialResponse> run(String oaNo, List<Long> oaFormItemIds) {
+    return run(oaNo, oaFormItemIds, null, null);
   }
 
   @Override
   @Async("costRunExecutor")
   public CompletableFuture<CostRunTrialResponse> run(
       String oaNo, String username, String businessUnitType) {
+    return run(oaNo, null, username, businessUnitType);
+  }
+
+  @Override
+  @Async("costRunExecutor")
+  public CompletableFuture<CostRunTrialResponse> run(
+      String oaNo, List<Long> oaFormItemIds, String username, String businessUnitType) {
     if (!StringUtils.hasText(oaNo)) {
       return CompletableFuture.completedFuture(new CostRunTrialResponse());
     }
     String oaNoValue = oaNo.trim();
+    List<Long> selectedItemIds = normalizeItemIds(oaFormItemIds);
     CostRunExecutionMode executionMode =
         resolveExecutionMode(oaNoValue, username, businessUnitType, true);
     if (executionMode == CostRunExecutionMode.TASK_WORKER) {
-      return submitQuoteTask(oaNoValue, executionMode);
+      return submitQuoteTask(oaNoValue, selectedItemIds, executionMode);
     }
     if (executionMode == CostRunExecutionMode.DUAL_COMPARE) {
-      return runDualCompare(oaNoValue, executionMode);
+      return runDualCompare(oaNoValue, selectedItemIds, executionMode);
     }
-    return runApiSync(oaNoValue);
+    return runApiSync(oaNoValue, selectedItemIds);
   }
 
-  private CompletableFuture<CostRunTrialResponse> runApiSync(String oaNoValue) {
+  private CompletableFuture<CostRunTrialResponse> runApiSync(
+      String oaNoValue, List<Long> selectedItemIds) {
     // T17：worker 接到 task → QUEUED 改 RUNNING（防重已在 controller.enqueue 做过）
     progressStore.markRunning(oaNoValue);
     try {
-      CostRunTrialResponse response = transactionTemplate.execute(status -> doRun(oaNoValue));
+      CostRunTrialResponse response =
+          transactionTemplate.execute(status -> doRun(oaNoValue, selectedItemIds));
       progressStore.complete(oaNoValue);
       scheduleCleanup(oaNoValue);
       return CompletableFuture.completedFuture(response);
@@ -171,11 +187,11 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
   }
 
   private CompletableFuture<CostRunTrialResponse> submitQuoteTask(
-      String oaNoValue, CostRunExecutionMode executionMode) {
+      String oaNoValue, List<Long> selectedItemIds, CostRunExecutionMode executionMode) {
     progressStore.enqueue(oaNoValue);
     try {
-      ensureBomReadyForCostRun(oaNoValue);
-      CostRunTaskSubmissionResult submission = taskSubmissionService.submitQuote(oaNoValue);
+      ensureBomReadyForCostRun(oaNoValue, selectedItemIds);
+      CostRunTaskSubmissionResult submission = submitQuoteTasks(oaNoValue, selectedItemIds);
       CostRunTrialResponse response = responseFromSubmission(submission, executionMode);
       return CompletableFuture.completedFuture(response);
     } catch (RuntimeException ex) {
@@ -186,11 +202,12 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
   }
 
   private CompletableFuture<CostRunTrialResponse> runDualCompare(
-      String oaNoValue, CostRunExecutionMode executionMode) {
+      String oaNoValue, List<Long> selectedItemIds, CostRunExecutionMode executionMode) {
     progressStore.markRunning(oaNoValue);
     try {
-      CostRunTrialResponse response = transactionTemplate.execute(status -> doRun(oaNoValue));
-      CostRunTaskSubmissionResult submission = taskSubmissionService.submitQuote(oaNoValue);
+      CostRunTrialResponse response =
+          transactionTemplate.execute(status -> doRun(oaNoValue, selectedItemIds));
+      CostRunTaskSubmissionResult submission = submitQuoteTasks(oaNoValue, selectedItemIds);
       mergeSubmission(response, submission, executionMode);
       progressStore.complete(oaNoValue);
       scheduleCleanup(oaNoValue);
@@ -202,7 +219,14 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
     }
   }
 
-  private CostRunTrialResponse doRun(String oaNoValue) {
+  private CostRunTaskSubmissionResult submitQuoteTasks(String oaNoValue, List<Long> selectedItemIds) {
+    if (selectedItemIds == null || selectedItemIds.isEmpty()) {
+      return taskSubmissionService.submitQuote(oaNoValue);
+    }
+    return taskSubmissionService.submitQuote(oaNoValue, selectedItemIds);
+  }
+
+  private CostRunTrialResponse doRun(String oaNoValue, List<Long> selectedItemIds) {
     // T15：第一步同步主档（独立子事务），失败抛出由 run() 的 catch 落到 progressStore.fail
     try {
       MaterialMasterSyncService.SyncResult syncResult =
@@ -216,7 +240,7 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
       throw new RuntimeException("主档同步失败: " + syncEx.getMessage(), syncEx);
     }
 
-    ensureBomReadyForCostRun(oaNoValue);
+    ensureBomReadyForCostRun(oaNoValue, selectedItemIds);
 
     OaForm form =
         oaFormMapper.selectOne(
@@ -231,20 +255,27 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
     if (formItems.isEmpty()) {
       throw new RuntimeException("OA单号未关联产品明细");
     }
+    List<OaFormItem> selectedItems = filterSelectedItems(formItems, selectedItemIds);
+    if (!selectedItemIds.isEmpty() && selectedItems.size() != selectedItemIds.size()) {
+      throw new RuntimeException("存在不属于该 OA 的产品明细行");
+    }
+    if (selectedItems.isEmpty()) {
+      throw new RuntimeException("未选择可试算的产品明细行");
+    }
 
+    String pricingMonth = CostPricingPeriodUtils.currentPricingMonth();
     PricePrepareReadinessResult pricePrepareReadiness =
-        checkPricePrepareReadiness(oaNoValue, inferPeriod(LocalDate.now()));
+        checkPricePrepareReadiness(oaNoValue, pricingMonth);
     ensureLinkedPricesForTrial(oaNoValue, form);
 
-    Set<String> productCodes = new LinkedHashSet<>();
-    Map<String, OaFormItem> productItems = new LinkedHashMap<>();
-    for (OaFormItem item : formItems) {
-      if (StringUtils.hasText(item.getMaterialNo())) {
-        String code = item.getMaterialNo().trim();
-        productCodes.add(code);
-        productItems.putIfAbsent(code, item);
-      }
+    List<OaFormItem> runnableItems =
+        selectedItems.stream()
+            .filter(item -> item != null && StringUtils.hasText(item.getMaterialNo()))
+            .toList();
+    if (runnableItems.isEmpty()) {
+      throw new RuntimeException("所选产品明细行没有产品料号");
     }
+    boolean fullOaRun = isFullOaRun(formItems, runnableItems, selectedItemIds);
 
     // T16/T23：进度切片
     //   [0-5]    主档同步
@@ -253,12 +284,13 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
     //   [60-95]  N 个产品的费用核算（35% 跨度，每产品 35/N）
     //   [95-100] saveOrUpdate + OA 状态更新
     final int PROGRESS_COSTS_END = 95;
-    int productCount = Math.max(1, productCodes.size());
+    int productCount = Math.max(1, runnableItems.size());
 
     int costItemCount = 0;
     int partItemCount = 0;
     int productIndex = 0;
-    for (String productCode : productCodes) {
+    for (OaFormItem item : runnableItems) {
+      String productCode = item.getMaterialNo().trim();
       final int idx = productIndex; // for lambda
       int productStart =
           PROGRESS_AFTER_LINKED_ENSURE
@@ -266,52 +298,53 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
       int productEnd =
           PROGRESS_AFTER_LINKED_ENSURE
               + (idx + 1) * (PROGRESS_COSTS_END - PROGRESS_AFTER_LINKED_ENSURE) / productCount;
-      OaFormItem item = productItems.get(productCode);
-      if (item != null) {
-        CostRunContext context =
-            CostRunContext.quote(
-                oaNoValue,
-                item.getId(),
-                productCode,
-                item.getPackageMethod(),
-                form.getCustomer(),
-                firstText(item.getBusinessUnitType(), form.getBusinessUnitType()),
-                inferPeriod(LocalDate.now()),
-                oaNoValue + ":" + productCode);
-        // 普通 OA 的上传、主档同步、BOM 刷新和联动价准备仍在外层流程完成；
-        // 这里开始只进入统一计算器，确保后续月度调价和日常报价复用同一套成本公式。
-        context.setProgress(
-            p -> progressStore.update(
-                oaNoValue, productStart + p * (productEnd - productStart) / 100));
-        CostRunObjectResult result = costRunEngine.run(context);
-        costRunResultWriter.writeQuoteResult(result, form, item);
-        partItemCount += result.getPartItems().size();
-        costItemCount += result.getCostItems().size();
-      }
+      CostRunContext context =
+          CostRunContext.quote(
+              oaNoValue,
+              item.getId(),
+              productCode,
+              item.getPackageMethod(),
+              form.getCustomer(),
+              firstText(item.getBusinessUnitType(), form.getBusinessUnitType()),
+              pricingMonth,
+              oaNoValue + ":" + item.getId());
+      // 普通 OA 的上传、主档同步、BOM 刷新和联动价准备仍在外层流程完成；
+      // 这里开始只进入统一计算器，确保后续月度调价和日常报价复用同一套成本公式。
+      context.setProgress(
+          p -> progressStore.update(
+              oaNoValue, productStart + p * (productEnd - productStart) / 100));
+      CostRunObjectResult result = costRunEngine.run(context);
+      costRunResultWriter.writeQuoteResult(result, form, item);
+      markItemCalculated(item);
+      partItemCount += result.getPartItems().size();
+      costItemCount += result.getCostItems().size();
       productIndex++;
     }
     progressStore.update(oaNoValue, PROGRESS_COSTS_END);
 
-    LocalDateTime calculatedAt = LocalDateTime.now();
-    oaFormMapper.update(
-        null,
-        Wrappers.lambdaUpdate(OaForm.class)
-            .set(OaForm::getCalcStatus, "已核算")
-            .set(OaForm::getCalcAt, calculatedAt)
-            .set(OaForm::getUpdatedAt, calculatedAt)
-            .eq(OaForm::getId, form.getId()));
+    updateOaCalculatedIfAllItemsDone(form, fullOaRun);
     CostRunTrialResponse response =
-        new CostRunTrialResponse(productCodes.size(), partItemCount, costItemCount);
+        new CostRunTrialResponse(runnableItems.size(), partItemCount, costItemCount);
     response.setPricePrepareReadiness(pricePrepareReadiness);
     return response;
   }
 
   private void ensureBomReadyForCostRun(String oaNoValue) {
+    ensureBomReadyForCostRun(oaNoValue, List.of());
+  }
+
+  private void ensureBomReadyForCostRun(String oaNoValue, List<Long> selectedItemIds) {
     QuoteBomStatusResponse response = quoteBomStatusService.checkForCostRun(oaNoValue);
     if (response == null || response.getItems() == null) {
       return;
     }
+    Set<Long> selected = new LinkedHashSet<>(selectedItemIds == null ? List.of() : selectedItemIds);
     for (QuoteBomStatusItemResponse item : response.getItems()) {
+      if (!selected.isEmpty()
+          && (item == null || item.getOaFormItemId() == null
+              || !selected.contains(item.getOaFormItemId()))) {
+        continue;
+      }
       if (item == null || isCostReadyBomStatus(item.getBomStatus())) {
         continue;
       }
@@ -352,6 +385,73 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
     return StringUtils.hasText(bomStatus) ? bomStatus : "未知";
   }
 
+  private List<Long> normalizeItemIds(List<Long> itemIds) {
+    if (itemIds == null || itemIds.isEmpty()) {
+      return List.of();
+    }
+    return itemIds.stream()
+        .filter(id -> id != null && id > 0)
+        .distinct()
+        .toList();
+  }
+
+  private List<OaFormItem> filterSelectedItems(List<OaFormItem> items, List<Long> selectedItemIds) {
+    if (items == null || items.isEmpty()) {
+      return List.of();
+    }
+    if (selectedItemIds == null || selectedItemIds.isEmpty()) {
+      return items;
+    }
+    Set<Long> selected = new LinkedHashSet<>(selectedItemIds);
+    return items.stream()
+        .filter(item -> item != null && selected.contains(item.getId()))
+        .toList();
+  }
+
+  private boolean isFullOaRun(
+      List<OaFormItem> formItems, List<OaFormItem> runnableItems, List<Long> selectedItemIds) {
+    if (selectedItemIds == null || selectedItemIds.isEmpty()) {
+      return true;
+    }
+    long runnableCount =
+        formItems == null
+            ? 0
+            : formItems.stream()
+                .filter(item -> item != null && StringUtils.hasText(item.getMaterialNo()))
+                .count();
+    return runnableCount > 0 && runnableItems != null && runnableItems.size() == runnableCount;
+  }
+
+  private void markItemCalculated(OaFormItem item) {
+    if (item == null || item.getId() == null) {
+      return;
+    }
+    oaFormItemMapper.markCalculated(item.getId(), LocalDateTime.now());
+  }
+
+  private void updateOaCalculatedIfAllItemsDone(OaForm form, boolean fullOaRun) {
+    if (form == null || form.getId() == null) {
+      return;
+    }
+    boolean allDone = fullOaRun;
+    if (!allDone) {
+      long runnableCount = oaFormItemMapper.countRunnableItems(form.getId());
+      long calculatedCount = oaFormItemMapper.countCalculatedRunnableItems(form.getId());
+      allDone = runnableCount > 0 && calculatedCount >= runnableCount;
+    }
+    if (!allDone) {
+      return;
+    }
+    LocalDateTime calculatedAt = LocalDateTime.now();
+    oaFormMapper.update(
+        null,
+        Wrappers.lambdaUpdate(OaForm.class)
+            .set(OaForm::getCalcStatus, "已核算")
+            .set(OaForm::getCalcAt, calculatedAt)
+            .set(OaForm::getUpdatedAt, calculatedAt)
+            .eq(OaForm::getId, form.getId()));
+  }
+
   private PricePrepareReadinessResult checkPricePrepareReadiness(String oaNo, String periodMonth) {
     PricePrepareReadinessResult readiness = pricePrepareReadinessService.check(oaNo, periodMonth);
     if (readiness != null && readiness.isWarning() && StringUtils.hasText(readiness.getMessage())) {
@@ -363,8 +463,8 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
           readiness.getStatus(),
           readiness.getMessage());
     }
-    if (readiness != null && !readiness.isAllowContinue()) {
-      throw new RuntimeException(readiness.getMessage());
+    if (readiness != null && readiness.isWarning()) {
+      throw new RuntimeException(blockingReadinessMessage(readiness.getMessage()));
     }
     return readiness;
   }
@@ -372,8 +472,8 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
   private void ensureLinkedPricesForTrial(String oaNo, OaForm form) {
     // 实时成本试算按当前月份取价，不按 OA.apply_date 回看历史月份。
     // 后续若固化试算基准日期，只需要把这里替换为统一日期来源。
-    LocalDate quoteDate = LocalDate.now();
-    String pricingMonth = inferPeriod(quoteDate);
+    LocalDate quoteDate = CostPricingPeriodUtils.currentPricingDate();
+    String pricingMonth = CostPricingPeriodUtils.currentPricingMonth();
     Set<String> linkedItemCodes = collectLinkedItemCodes(oaNo, quoteDate, pricingMonth);
     if (linkedItemCodes.isEmpty()) {
       log.info("LPE-08 realtime cost linked ensure skipped: oa={} no linked route", oaNo);
@@ -387,7 +487,17 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
               LinkedPriceEnsureRequest.quote(
                   oaNo, form.getBusinessUnitType(), pricingMonth, linkedItemCodes));
       if (result.getFailedCount() > 0) {
-        throw new RuntimeException(formatEnsureFailures(result));
+        String failureMessage = "联动价按需确保失败：" + formatEnsureFailures(result)
+            + "；已继续进入部品取价，缺价部品将在行内显示 ERROR 和原因";
+        progressStore.updateMessage(oaNo, failureMessage);
+        log.warn(
+            "LPE-08 realtime cost linked ensure failed but continue: oa={} requested={} failed={} message={}",
+            oaNo,
+            result.getRequestedCount(),
+            result.getFailedCount(),
+            failureMessage);
+        progressStore.update(oaNo, PROGRESS_AFTER_LINKED_ENSURE);
+        return;
       }
       log.info(
           "LPE-08 realtime cost linked ensure done: oa={} requested={} created={} updated={} skipped={}",
@@ -398,9 +508,21 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
           result.getSkippedCount());
       progressStore.update(oaNo, PROGRESS_AFTER_LINKED_ENSURE);
     } catch (RuntimeException ensureEx) {
-      log.error("LPE-08 实时成本联动价 ensure 失败: oa={}", oaNo, ensureEx);
-      throw new RuntimeException("联动价按需确保失败: " + ensureEx.getMessage(), ensureEx);
+      String failureMessage = "联动价按需确保异常：" + ensureEx.getMessage()
+          + "；已继续进入部品取价，缺价部品将在行内显示 ERROR 和原因";
+      progressStore.updateMessage(oaNo, failureMessage);
+      log.warn("LPE-08 实时成本联动价 ensure 异常但继续部品取价: oa={}", oaNo, ensureEx);
+      progressStore.update(oaNo, PROGRESS_AFTER_LINKED_ENSURE);
     }
+  }
+
+  private String blockingReadinessMessage(String message) {
+    if (!StringUtils.hasText(message)) {
+      return "当前月价格准备未完成，请先处理缺口后再重算";
+    }
+    return message
+        .replace("实时成本将继续，", "已阻断实时成本，")
+        + "；请先处理当前月价格准备缺口后再重算";
   }
 
   private Set<String> collectLinkedItemCodes(String oaNo, LocalDate quoteDate, String pricingMonth) {

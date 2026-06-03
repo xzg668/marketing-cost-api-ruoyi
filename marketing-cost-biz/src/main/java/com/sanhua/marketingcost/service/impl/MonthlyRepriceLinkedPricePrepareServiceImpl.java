@@ -131,12 +131,12 @@ public class MonthlyRepriceLinkedPricePrepareServiceImpl
     var query = Wrappers.lambdaQuery(PriceLinkedItem.class)
         .eq(PriceLinkedItem::getDeleted, 0)
         .eq(PriceLinkedItem::getBusinessUnitType, batch.getBusinessUnitType())
-        .eq(PriceLinkedItem::getPricingMonth, batch.getPricingMonth());
+        .le(PriceLinkedItem::getPricingMonth, batch.getPricingMonth());
     if (priceDate != null) {
       query.and(q -> q.le(PriceLinkedItem::getEffectiveFrom, priceDate)
           .or()
           .isNull(PriceLinkedItem::getEffectiveFrom));
-      query.and(q -> q.gt(PriceLinkedItem::getEffectiveTo, priceDate)
+      query.and(q -> q.ge(PriceLinkedItem::getEffectiveTo, priceDate)
           .or()
           .isNull(PriceLinkedItem::getEffectiveTo));
     }

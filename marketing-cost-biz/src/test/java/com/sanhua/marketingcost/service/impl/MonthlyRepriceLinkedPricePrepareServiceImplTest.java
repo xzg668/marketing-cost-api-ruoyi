@@ -7,6 +7,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
@@ -22,6 +25,8 @@ import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MonthlyRepriceAuditService;
 import java.time.LocalDateTime;
 import java.util.List;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -36,6 +41,13 @@ class MonthlyRepriceLinkedPricePrepareServiceImplTest {
   private MonthlyRepriceAuditLogMapper auditLogMapper;
   private MonthlyRepriceAuditService auditService;
   private MonthlyRepriceLinkedPricePrepareServiceImpl service;
+
+  @BeforeAll
+  static void initTableInfo() {
+    MapperBuilderAssistant assistant =
+        new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    TableInfoHelper.initTableInfo(assistant, PriceLinkedItem.class);
+  }
 
   @BeforeEach
   void setUp() {
@@ -83,6 +95,11 @@ class MonthlyRepriceLinkedPricePrepareServiceImplTest {
     assertThat(request.getPricingMonth()).isEqualTo("2026-05");
     assertThat(request.getPriceAsOfTime()).isEqualTo(LocalDateTime.of(2026, 5, 27, 10, 30));
     assertThat(request.normalizedItemCodes()).containsExactly("MAT-2", "MAT-1");
+    ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(priceLinkedItemMapper).selectList(queryCaptor.capture());
+    assertThat(queryCaptor.getValue().getSqlSegment())
+        .contains("pricing_month <=")
+        .contains("effective_to >=");
     verify(factorAdjustBatchMapper, never()).selectById(any());
 
     ArgumentCaptor<MonthlyRepriceBatch> batchCaptor =

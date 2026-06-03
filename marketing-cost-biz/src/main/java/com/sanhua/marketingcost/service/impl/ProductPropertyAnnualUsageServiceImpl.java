@@ -6,32 +6,41 @@ import com.sanhua.marketingcost.dto.OaProductPropertyUsageSyncRow;
 import com.sanhua.marketingcost.dto.ProductPropertyAnnualSyncRequest;
 import com.sanhua.marketingcost.dto.ProductPropertyAnnualSyncResult;
 import com.sanhua.marketingcost.dto.ProductPropertyAnnualSyncRow;
+import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.service.ProductPropertyAnnualSyncService;
 import com.sanhua.marketingcost.service.ProductPropertyAnnualUsageService;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.Year;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 @Service
 public class ProductPropertyAnnualUsageServiceImpl implements ProductPropertyAnnualUsageService {
+  private static final BigDecimal OA_ANNUAL_USAGE_UNIT = new BigDecimal("10000");
+
   private final ProductPropertyAnnualSyncService annualSyncService;
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
+  private final MaterialMasterRawMapper materialMasterRawMapper;
 
   public ProductPropertyAnnualUsageServiceImpl(
       ProductPropertyAnnualSyncService annualSyncService,
       OaFormMapper oaFormMapper,
-      OaFormItemMapper oaFormItemMapper) {
+      OaFormItemMapper oaFormItemMapper,
+      MaterialMasterRawMapper materialMasterRawMapper) {
     this.annualSyncService = annualSyncService;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
+    this.materialMasterRawMapper = materialMasterRawMapper;
   }
 
   @Override
@@ -114,11 +123,16 @@ public class ProductPropertyAnnualUsageServiceImpl implements ProductPropertyAnn
             item == null ? null : item.getBusinessUnitType(),
             form == null ? null : form.getBusinessUnitType()));
     row.setPropertyYear(quoteYear == null ? resolveQuoteYear(form, item) : quoteYear);
-    row.setProductCode(item == null ? null : item.getMaterialNo());
-    row.setProductName(item == null ? null : item.getProductName());
+    String productCode = item == null ? null : item.getMaterialNo();
+    MaterialMasterRaw material = lookupLatestMaterial(productCode);
+    String division = resolveBusinessDivision(form);
+    row.setBusinessDivision(division);
+    row.setLevel1Name(division);
+    row.setProductCode(productCode);
+    row.setProductName(resolveProductName(item == null ? null : item.getProductName(), material));
     row.setProductModel(item == null ? null : item.getSunlModel());
     row.setProductSpec(item == null ? null : item.getSpec());
-    row.setAnnualUsage(item == null ? null : item.getAnnualVolume());
+    row.setAnnualUsage(toActualAnnualUsage(item == null ? null : item.getAnnualVolume()));
     row.setAnnualUsageOaNo(form == null ? null : form.getOaNo());
     row.setAnnualUsageOaLineId(resolveLineId(item));
     return row;
@@ -130,11 +144,78 @@ public class ProductPropertyAnnualUsageServiceImpl implements ProductPropertyAnn
     row.setRowNo(item == null ? null : item.getSeq());
     row.setBusinessUnitType(source == null ? null : source.getBusinessUnitType());
     row.setPropertyYear(source == null ? null : source.getQuoteYear());
-    row.setProductCode(item == null ? null : item.getProductCode());
-    row.setAnnualUsage(item == null ? null : item.getAnnualUsage());
+    String productCode = item == null ? null : item.getProductCode();
+    MaterialMasterRaw material = lookupLatestMaterial(productCode);
+    row.setProductCode(productCode);
+    row.setProductName(resolveProductName(null, material));
+    row.setAnnualUsage(toActualAnnualUsage(item == null ? null : item.getAnnualUsage()));
     row.setAnnualUsageOaNo(source == null ? null : source.getOaNo());
     row.setAnnualUsageOaLineId(resolveLineId(item));
     return row;
+  }
+
+  private String resolveBusinessDivision(OaForm form) {
+    if (form == null) {
+      return null;
+    }
+    return firstText(
+        sanitizeBusinessDivision(form.getSourceBusinessDivision()),
+        sanitizeBusinessDivision(form.getApplicantUnit()));
+  }
+
+  private String resolveProductName(String oaProductName, MaterialMasterRaw material) {
+    return firstText(oaProductName, material == null ? null : material.getMaterialName());
+  }
+
+  private BigDecimal toActualAnnualUsage(BigDecimal oaAnnualUsage) {
+    return oaAnnualUsage == null ? null : oaAnnualUsage.multiply(OA_ANNUAL_USAGE_UNIT);
+  }
+
+  private String sanitizeBusinessDivision(String value) {
+    String trimmed = trimToNull(value);
+    if (trimmed == null) {
+      return null;
+    }
+    String cleaned = removeLeadingLabel(trimmed, "事业部");
+    cleaned = removeLeadingParentheticalNotes(cleaned);
+    return trimToNull(removeLeadingLabel(cleaned, "事业部"));
+  }
+
+  private String removeLeadingLabel(String value, String label) {
+    String trimmed = trimToNull(value);
+    if (trimmed == null || !trimmed.startsWith(label)) {
+      return trimmed;
+    }
+    return trimToNull(trimmed.substring(label.length()));
+  }
+
+  private String removeLeadingParentheticalNotes(String value) {
+    String result = trimToNull(value);
+    while (result != null && (result.startsWith("（") || result.startsWith("("))) {
+      char close = result.startsWith("（") ? '）' : ')';
+      int closeIndex = result.indexOf(close);
+      if (closeIndex < 0) {
+        return null;
+      }
+      result = trimToNull(result.substring(closeIndex + 1));
+    }
+    return result;
+  }
+
+  private MaterialMasterRaw lookupLatestMaterial(String productCode) {
+    if (!StringUtils.hasText(productCode)) {
+      return null;
+    }
+    List<MaterialMasterRaw> rows =
+        materialMasterRawMapper.selectByLatestBatchAndCodes(List.of(productCode.trim()), null);
+    return first(rows);
+  }
+
+  private MaterialMasterRaw first(Collection<MaterialMasterRaw> rows) {
+    if (rows == null || rows.isEmpty()) {
+      return null;
+    }
+    return rows.iterator().next();
   }
 
   private Integer resolveQuoteYear(OaForm form, OaFormItem item) {
@@ -182,5 +263,13 @@ public class ProductPropertyAnnualUsageServiceImpl implements ProductPropertyAnn
       }
     }
     return null;
+  }
+
+  private String trimToNull(String value) {
+    if (value == null) {
+      return null;
+    }
+    String trimmed = value.trim();
+    return trimmed.isEmpty() ? null : trimmed;
   }
 }

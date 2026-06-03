@@ -59,7 +59,14 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     if (!hasRequiredBusinessFields(entity)) {
       return null;
     }
-    closePreviousVersions(entity);
+    List<MaterialPriceType> currentVersions = findCurrentVersions(entity);
+    MaterialPriceType samePriceType = findSamePriceType(currentVersions, entity.getPriceType());
+    if (samePriceType != null) {
+      overwriteExisting(samePriceType, entity);
+      materialPriceTypeMapper.updateById(samePriceType);
+      return samePriceType;
+    }
+    closePreviousVersions(currentVersions, entity.getEffectiveFrom());
     materialPriceTypeMapper.insert(entity);
     return entity;
   }
@@ -80,9 +87,9 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     next.setEffectiveTo(null);
     fillDefaults(next);
     LocalDate effectiveFrom = next.getEffectiveFrom();
-    existing.setEffectiveTo(effectiveFrom);
+    existing.setEffectiveTo(effectiveFrom.minusDays(1));
     materialPriceTypeMapper.updateById(existing);
-    closePreviousVersions(next);
+    closePreviousVersions(findCurrentVersions(next), effectiveFrom, existing.getId());
     materialPriceTypeMapper.insert(next);
     return next;
   }
@@ -102,9 +109,6 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     for (var row : request.getRows()) {
       if (row == null
           || !StringUtils.hasText(row.getMaterialCode())
-          || !StringUtils.hasText(row.getMaterialName())
-          || !StringUtils.hasText(row.getMaterialModel())
-          || !StringUtils.hasText(row.getMaterialShape())
           || !StringUtils.hasText(row.getPriceType())) {
         continue;
       }
@@ -114,7 +118,15 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
       if (!hasRequiredBusinessFields(entity)) {
         continue;
       }
-      closePreviousVersions(entity);
+      List<MaterialPriceType> currentVersions = findCurrentVersions(entity);
+      MaterialPriceType samePriceType = findSamePriceType(currentVersions, entity.getPriceType());
+      if (samePriceType != null) {
+        overwriteExisting(samePriceType, entity);
+        materialPriceTypeMapper.updateById(samePriceType);
+        imported.add(samePriceType);
+        continue;
+      }
+      closePreviousVersions(currentVersions, entity.getEffectiveFrom());
       materialPriceTypeMapper.insert(entity);
       imported.add(entity);
     }
@@ -133,7 +145,7 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     entity.setMaterialShape(row.getMaterialShape());
     entity.setCategoryCode(row.getCategoryCode());
     entity.setCategoryName(row.getCategoryName());
-    entity.setPriceType(row.getPriceType());
+    entity.setPriceType(normalizePriceType(row.getPriceType()));
     entity.setPeriod(row.getPeriod());
     entity.setSource(row.getSource());
   }
@@ -173,7 +185,7 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
       entity.setCategoryName(request.getCategoryName());
     }
     if (request.getPriceType() != null) {
-      entity.setPriceType(request.getPriceType());
+      entity.setPriceType(normalizePriceType(request.getPriceType()));
     }
     if (request.getPeriod() != null) {
       entity.setPeriod(request.getPeriod());
@@ -206,9 +218,9 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     }
   }
 
-  private void closePreviousVersions(MaterialPriceType entity) {
+  private List<MaterialPriceType> findCurrentVersions(MaterialPriceType entity) {
     if (entity == null || entity.getEffectiveFrom() == null || !StringUtils.hasText(entity.getMaterialCode())) {
-      return;
+      return List.of();
     }
     var query = Wrappers.lambdaQuery(MaterialPriceType.class)
         .eq(MaterialPriceType::getMaterialCode, entity.getMaterialCode())
@@ -216,24 +228,85 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
         .and(q -> q.isNull(MaterialPriceType::getEffectiveTo)
             .or()
             .gt(MaterialPriceType::getEffectiveTo, entity.getEffectiveFrom()));
-    if (StringUtils.hasText(entity.getMaterialModel())) {
-      query.eq(MaterialPriceType::getMaterialModel, entity.getMaterialModel());
-    } else {
-      query.and(q -> q.isNull(MaterialPriceType::getMaterialModel)
-          .or()
-          .eq(MaterialPriceType::getMaterialModel, ""));
+    return materialPriceTypeMapper.selectList(query);
+  }
+
+  private MaterialPriceType findSamePriceType(List<MaterialPriceType> rows, String priceType) {
+    if (rows == null || !StringUtils.hasText(priceType)) {
+      return null;
     }
-    if (StringUtils.hasText(entity.getPeriod())) {
-      query.eq(MaterialPriceType::getPeriod, entity.getPeriod());
-    } else {
-      query.and(q -> q.isNull(MaterialPriceType::getPeriod).or().eq(MaterialPriceType::getPeriod, ""));
-    }
-    List<MaterialPriceType> rows = materialPriceTypeMapper.selectList(query);
     for (MaterialPriceType row : rows) {
-      if (entity.getId() != null && entity.getId().equals(row.getId())) {
+      if (priceType.equals(normalizePriceType(row.getPriceType()))) {
+        return row;
+      }
+    }
+    return null;
+  }
+
+  private void overwriteExisting(MaterialPriceType target, MaterialPriceType source) {
+    Long id = target.getId();
+    LocalDate effectiveFrom = target.getEffectiveFrom();
+    LocalDate effectiveTo = target.getEffectiveTo();
+    fillImportFields(target, source);
+    target.setId(id);
+    target.setEffectiveFrom(effectiveFrom != null ? effectiveFrom : source.getEffectiveFrom());
+    target.setEffectiveTo(effectiveTo);
+  }
+
+  private void fillImportFields(MaterialPriceType target, MaterialPriceType source) {
+    if (source.getRowNo() != null) {
+      target.setRowNo(source.getRowNo());
+    }
+    if (source.getBillNo() != null) {
+      target.setBillNo(source.getBillNo());
+    }
+    target.setMaterialCode(source.getMaterialCode());
+    if (source.getMaterialName() != null) {
+      target.setMaterialName(source.getMaterialName());
+    }
+    if (source.getMaterialSpec() != null) {
+      target.setMaterialSpec(source.getMaterialSpec());
+    }
+    if (source.getMaterialModel() != null) {
+      target.setMaterialModel(source.getMaterialModel());
+    }
+    if (source.getUnit() != null) {
+      target.setUnit(source.getUnit());
+    }
+    if (source.getMaterialShape() != null) {
+      target.setMaterialShape(source.getMaterialShape());
+    }
+    if (source.getCategoryCode() != null) {
+      target.setCategoryCode(source.getCategoryCode());
+    }
+    if (source.getCategoryName() != null) {
+      target.setCategoryName(source.getCategoryName());
+    }
+    target.setPriceType(source.getPriceType());
+    if (source.getPeriod() != null) {
+      target.setPeriod(source.getPeriod());
+    }
+    if (source.getSource() != null) {
+      target.setSource(source.getSource());
+    }
+    if (source.getPriority() != null) {
+      target.setPriority(source.getPriority());
+    }
+  }
+
+  private void closePreviousVersions(List<MaterialPriceType> rows, LocalDate effectiveFrom) {
+    closePreviousVersions(rows, effectiveFrom, null);
+  }
+
+  private void closePreviousVersions(List<MaterialPriceType> rows, LocalDate effectiveFrom, Long excludedId) {
+    if (rows == null || rows.isEmpty() || effectiveFrom == null) {
+      return;
+    }
+    for (MaterialPriceType row : rows) {
+      if (excludedId != null && excludedId.equals(row.getId())) {
         continue;
       }
-      row.setEffectiveTo(entity.getEffectiveFrom());
+      row.setEffectiveTo(effectiveFrom.minusDays(1));
       materialPriceTypeMapper.updateById(row);
     }
   }
@@ -275,10 +348,18 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
   private boolean hasRequiredBusinessFields(MaterialPriceType entity) {
     return entity != null
         && StringUtils.hasText(entity.getMaterialCode())
-        && StringUtils.hasText(entity.getMaterialName())
-        && StringUtils.hasText(entity.getMaterialModel())
-        && StringUtils.hasText(entity.getMaterialShape())
         && StringUtils.hasText(entity.getPriceType());
+  }
+
+  private String normalizePriceType(String value) {
+    if (!StringUtils.hasText(value)) {
+      return value;
+    }
+    String text = value.trim();
+    if ("固定采购价".equals(text) || "采购固定价".equals(text)) {
+      return "固定价";
+    }
+    return text;
   }
 
   private String trimToNull(String value) {

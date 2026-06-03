@@ -64,6 +64,19 @@ class QuoteNormalizeServiceTest {
   }
 
   @Test
+  void sanitizesBusinessDivisionHintText() {
+    QuoteIngestRequest request = sampleRequest();
+    request
+        .getHeader()
+        .setSourceBusinessDivision("事业部（当涉及到多事业部时，请选择型号多的事业部）商用部品事业部");
+
+    QuoteNormalizedDocument document = service.normalize(request);
+
+    assertThat(document.getErrors()).isEmpty();
+    assertThat(document.getHeader().getSourceBusinessDivision()).isEqualTo("商用部品事业部");
+  }
+
+  @Test
   void extraFeesNormalizeToStandardFeeItems() {
     QuoteNormalizedDocument document = service.normalize(sampleRequest());
 

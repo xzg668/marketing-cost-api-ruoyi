@@ -128,11 +128,9 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
         new QueryWrapper<SupplierSupplyRatio>()
             .eq("business_unit_type", businessUnitType)
             .eq("material_code", normalized(row.getMaterialCode()))
-            .eq("material_name", normalized(row.getMaterialName()))
             .eq("supplier_name", normalized(row.getSupplierName()))
-            .eq("spec_model", normalized(row.getSpecModel()))
             .eq("deleted", 0)
-            .last("LIMIT 1"));
+            .last("ORDER BY IFNULL(updated_at, '1970-01-01 00:00:00') DESC, id DESC LIMIT 1"));
   }
 
   private void applyFields(
@@ -147,12 +145,12 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
     entity.setBusinessUnitType(businessUnitType);
     entity.setMaterialCode(normalized(row.getMaterialCode()));
     entity.setMaterialName(normalized(row.getMaterialName()));
-    entity.setSpecModel(normalized(row.getSpecModel()));
+    entity.setSpecModel(normalizedOrBlank(row.getSpecModel()));
     entity.setUnit(trimToNull(row.getUnit()));
     entity.setMaterialShape(trimToNull(row.getMaterialShape()));
     entity.setSupplierName(normalized(row.getSupplierName()));
     entity.setSupplierCode(trimToNull(row.getSupplierCode()));
-    entity.setSupplyRatio(row.getSupplyRatio());
+    entity.setSupplyRatio(row.getSupplyRatio() == null ? BigDecimal.ZERO : row.getSupplyRatio());
     entity.setSourceType(sourceType.getCode());
     entity.setSourceBatchNo(batchNo);
     entity.setImportFileName(trimToNull(sourceFileName));
@@ -177,10 +175,7 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
     if (!StringUtils.hasText(normalized(row.getSupplierName()))) {
       return "供应商不能为空";
     }
-    if (row.getSupplyRatio() == null) {
-      return "供货比例不能为空或格式不正确";
-    }
-    if (row.getSupplyRatio().compareTo(BigDecimal.ZERO) < 0) {
+    if (row.getSupplyRatio() != null && row.getSupplyRatio().compareTo(BigDecimal.ZERO) < 0) {
       return "供货比例不能小于 0";
     }
     return null;
@@ -262,6 +257,11 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
 
   private String normalized(String value) {
     return SupplierSupplyRatioNormalizeUtils.normalizeToNull(value);
+  }
+
+  private String normalizedOrBlank(String value) {
+    String normalized = SupplierSupplyRatioNormalizeUtils.normalizeKeyPart(value);
+    return StringUtils.hasText(normalized) ? normalized : "";
   }
 
   private String trimToNull(String value) {

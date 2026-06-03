@@ -7,6 +7,11 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBatchQueryRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBulkGenerateRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBulkGenerateResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBulkGenerateResult;
+import com.sanhua.marketingcost.dto.priceprepare.NoScrapConfirmRequest;
+import com.sanhua.marketingcost.dto.priceprepare.NoScrapConfirmResponse;
+import com.sanhua.marketingcost.dto.priceprepare.NoScrapConfirmationPageRequest;
+import com.sanhua.marketingcost.dto.priceprepare.NoScrapConfirmationPageResponse;
+import com.sanhua.marketingcost.dto.priceprepare.NoScrapRevokeRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareCandidatePageResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareCandidateQueryRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGapPageResponse;
@@ -22,6 +27,7 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePrepareOaSummaryResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareTopProductSummaryPageResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareTopProductSummaryQueryRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareTopProductSummaryResponse;
+import com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
 import com.sanhua.marketingcost.service.PricePrepareService;
 import java.util.ArrayList;
@@ -30,11 +36,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -43,11 +52,15 @@ public class PricePrepareController {
 
   private final PricePrepareService pricePrepareService;
   private final PricePrepareQueryService queryService;
+  private final MakePartNoScrapConfirmationService noScrapConfirmationService;
 
   public PricePrepareController(
-      PricePrepareService pricePrepareService, PricePrepareQueryService queryService) {
+      PricePrepareService pricePrepareService,
+      PricePrepareQueryService queryService,
+      MakePartNoScrapConfirmationService noScrapConfirmationService) {
     this.pricePrepareService = pricePrepareService;
     this.queryService = queryService;
+    this.noScrapConfirmationService = noScrapConfirmationService;
   }
 
   @PreAuthorize("@ss.hasPermi('cost:price-prepare:generate')")
@@ -149,6 +162,53 @@ public class PricePrepareController {
     return CommonResult.success(queryService.pageGaps(request));
   }
 
+  @PreAuthorize("@ss.hasPermi('cost:price-prepare:no-scrap-confirm')")
+  @PostMapping("/no-scrap-confirmations")
+  public CommonResult<NoScrapConfirmResponse> confirmNoScrap(
+      @RequestBody NoScrapConfirmRequest request, Authentication authentication) {
+    try {
+      return CommonResult.success(
+          noScrapConfirmationService.confirm(request, currentUsername(authentication)));
+    } catch (IllegalArgumentException ex) {
+      return badRequest(ex);
+    }
+  }
+
+  @PreAuthorize("@ss.hasPermi('cost:price-prepare:no-scrap-revoke')")
+  @PostMapping("/no-scrap-confirmations/{id}/revoke")
+  public CommonResult<NoScrapConfirmResponse> revokeNoScrap(
+      @PathVariable Long id,
+      @RequestBody(required = false) NoScrapRevokeRequest request,
+      Authentication authentication) {
+    try {
+      return CommonResult.success(
+          noScrapConfirmationService.revoke(id, request, currentUsername(authentication)));
+    } catch (IllegalArgumentException ex) {
+      return badRequest(ex);
+    }
+  }
+
+  @PreAuthorize("@ss.hasPermi('cost:price-prepare:gap')")
+  @GetMapping("/no-scrap-confirmations")
+  public CommonResult<NoScrapConfirmationPageResponse> noScrapConfirmations(
+      @ModelAttribute NoScrapConfirmationPageRequest request) {
+    return CommonResult.success(noScrapConfirmationService.page(request));
+  }
+
+  @PreAuthorize("@ss.hasPermi('cost:price-prepare:gap')")
+  @GetMapping("/no-scrap-confirmations/effective")
+  public CommonResult<NoScrapConfirmResponse> effectiveNoScrapConfirmation(
+      @RequestParam String materialNo,
+      @RequestParam String periodMonth,
+      @RequestParam(required = false) String businessUnitType) {
+    try {
+      return CommonResult.success(
+          noScrapConfirmationService.findEffective(materialNo, periodMonth, businessUnitType));
+    } catch (IllegalArgumentException ex) {
+      return badRequest(ex);
+    }
+  }
+
   private List<String> normalizeOaNos(PricePrepareBulkGenerateRequest request) {
     if (request == null || request.getOaNos() == null) {
       return List.of();
@@ -196,6 +256,14 @@ public class PricePrepareController {
 
   private boolean isBlank(String value) {
     return value == null || value.trim().isEmpty();
+  }
+
+  private String currentUsername(Authentication authentication) {
+    return authentication == null ? "system" : authentication.getName();
+  }
+
+  private <T> CommonResult<T> badRequest(IllegalArgumentException ex) {
+    return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
   }
 
   private void fillBulkRow(PricePrepareBulkGenerateResult row, PricePrepareGenerateResult generated) {

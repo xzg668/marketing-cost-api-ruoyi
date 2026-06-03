@@ -359,18 +359,52 @@ public class ProductPropertyAnnualSyncServiceImpl implements ProductPropertyAnnu
   }
 
   private void copyBlankProductFields(ProductProperty target, ProductProperty source) {
-    if (!StringUtils.hasText(target.getProductName())) {
+    if (isBlankOrPlaceholder(target.getLevel1Code())) {
+      target.setLevel1Code(source.getLevel1Code());
+    }
+    if (isBlankOrPlaceholder(target.getLevel1Name())) {
+      target.setLevel1Name(source.getLevel1Name());
+    }
+    if (isBlankOrPlaceholder(target.getBusinessDivision())) {
+      target.setBusinessDivision(source.getBusinessDivision());
+    }
+    if (isBlankOrPlaceholder(target.getProductName())) {
       target.setProductName(source.getProductName());
       target.setParentName(source.getParentName());
     }
-    if (!StringUtils.hasText(target.getProductModel())) {
+    if (isBlankOrPlaceholder(target.getParentName())) {
+      target.setParentName(source.getParentName());
+    }
+    if (isBlankOrPlaceholder(target.getProductModel())) {
       target.setProductModel(source.getProductModel());
       target.setParentModel(source.getParentModel());
     }
-    if (!StringUtils.hasText(target.getProductSpec())) {
+    if (isBlankOrPlaceholder(target.getParentModel())) {
+      target.setParentModel(source.getParentModel());
+    }
+    if (isBlankOrPlaceholder(target.getProductSpec())) {
       target.setProductSpec(source.getProductSpec());
       target.setParentSpec(source.getParentSpec());
     }
+    if (isBlankOrPlaceholder(target.getParentSpec())) {
+      target.setParentSpec(source.getParentSpec());
+    }
+  }
+
+  private boolean isBlankOrPlaceholder(String value) {
+    String trimmed = value == null ? null : value.trim();
+    return !StringUtils.hasText(value)
+        || PLACEHOLDER_TEXT.equals(trimmed)
+        || PLACEHOLDER_LEVEL1_CODE.equals(trimmed)
+        || isUnclosedLeadingParenthetical(trimmed);
+  }
+
+  private boolean isUnclosedLeadingParenthetical(String value) {
+    if (!StringUtils.hasText(value)) {
+      return false;
+    }
+    return (value.startsWith("（") && !value.contains("）"))
+        || (value.startsWith("(") && !value.contains(")"));
   }
 
   private void copyIfPresent(String value, java.util.function.Consumer<String> setter) {

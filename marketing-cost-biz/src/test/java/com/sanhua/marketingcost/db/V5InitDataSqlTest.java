@@ -71,28 +71,28 @@ class V5InitDataSqlTest {
 
     // ========== 菜单 ==========
 
-    /** 菜单总数应为 50（v1.3 与 menu.js 1:1 对齐） */
+    /** 菜单总数应为 47（数据分析菜单先下线） */
     @Test
-    void menuTotalCountIs50() {
+    void menuTotalCountIs47() {
         MenuStats stats = parseMenus();
-        assertEquals(50, stats.all.size(),
-                "菜单总数应为 50（9 目录 + 37 菜单 + 4 按钮）");
+        assertEquals(47, stats.all.size(),
+                "菜单总数应为 47（8 目录 + 35 菜单 + 4 按钮）");
     }
 
-    /** 目录数 9：系统管理/数据接入/基础数据/辅料管理(二级)/价格源管理/联动价(二级)/成本核算/数据分析/结账 */
+    /** 目录数 8：系统管理/数据接入/基础数据/辅料管理(二级)/价格源管理/联动价(二级)/成本核算/结账 */
     @Test
-    void directoryCountIs9() {
+    void directoryCountIs8() {
         MenuStats stats = parseMenus();
-        assertEquals(9, stats.byType("M"),
-                "目录（menu_type='M'）应为 9 个");
+        assertEquals(8, stats.byType("M"),
+                "目录（menu_type='M'）应为 8 个");
     }
 
-    /** 菜单数 37 */
+    /** 菜单数 35 */
     @Test
-    void menuItemCountIs37() {
+    void menuItemCountIs35() {
         MenuStats stats = parseMenus();
-        assertEquals(37, stats.byType("C"),
-                "菜单项（menu_type='C'）应为 37 个");
+        assertEquals(35, stats.byType("C"),
+                "菜单项（menu_type='C'）应为 35 个");
     }
 
     /** 按钮数 4（用户管理 4 个 CRUD 按钮） */
@@ -140,7 +140,6 @@ class V5InitDataSqlTest {
         assertMenu(stats, 300, "基础数据", 0, "M");
         assertMenu(stats, 400, "价格源管理", 0, "M");
         assertMenu(stats, 500, "成本核算", 0, "M");
-        assertMenu(stats, 600, "数据分析", 0, "M");
         assertMenu(stats, 700, "结账", 0, "M");
     }
 

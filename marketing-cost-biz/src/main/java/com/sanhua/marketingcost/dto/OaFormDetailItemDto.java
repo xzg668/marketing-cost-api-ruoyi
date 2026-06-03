@@ -2,14 +2,20 @@ package com.sanhua.marketingcost.dto;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 public class OaFormDetailItemDto {
+  private Long id;
   private Integer seq;
   private String productName;
   private String customerDrawing;
+  private String customerCode;
   private String materialNo;
   private String sunlModel;
   private String spec;
+  private String packageType;
+  private String packageMethod;
+  private String packageComponentCode;
   private BigDecimal shippingFee;
   private BigDecimal supportQty;
   private BigDecimal totalWithShip;
@@ -23,8 +29,18 @@ public class OaFormDetailItemDto {
   private BigDecimal sus316WeightG;
   private BigDecimal copperWeightG;
   private LocalDate validDate;
+  private String calcStatus;
+  private LocalDateTime calcAt;
   private BigDecimal unitCost;
   private BigDecimal costAmount;
+
+  public Long getId() {
+    return id;
+  }
+
+  public void setId(Long id) {
+    this.id = id;
+  }
 
   public Integer getSeq() {
     return seq;
@@ -50,6 +66,14 @@ public class OaFormDetailItemDto {
     this.customerDrawing = customerDrawing;
   }
 
+  public String getCustomerCode() {
+    return customerCode;
+  }
+
+  public void setCustomerCode(String customerCode) {
+    this.customerCode = customerCode;
+  }
+
   public String getMaterialNo() {
     return materialNo;
   }
@@ -72,6 +96,30 @@ public class OaFormDetailItemDto {
 
   public void setSpec(String spec) {
     this.spec = spec;
+  }
+
+  public String getPackageType() {
+    return packageType;
+  }
+
+  public void setPackageType(String packageType) {
+    this.packageType = packageType;
+  }
+
+  public String getPackageMethod() {
+    return packageMethod;
+  }
+
+  public void setPackageMethod(String packageMethod) {
+    this.packageMethod = packageMethod;
+  }
+
+  public String getPackageComponentCode() {
+    return packageComponentCode;
+  }
+
+  public void setPackageComponentCode(String packageComponentCode) {
+    this.packageComponentCode = packageComponentCode;
   }
 
   public BigDecimal getShippingFee() {
@@ -176,6 +224,22 @@ public class OaFormDetailItemDto {
 
   public void setValidDate(LocalDate validDate) {
     this.validDate = validDate;
+  }
+
+  public String getCalcStatus() {
+    return calcStatus;
+  }
+
+  public void setCalcStatus(String calcStatus) {
+    this.calcStatus = calcStatus;
+  }
+
+  public LocalDateTime getCalcAt() {
+    return calcAt;
+  }
+
+  public void setCalcAt(LocalDateTime calcAt) {
+    this.calcAt = calcAt;
   }
 
   public BigDecimal getUnitCost() {

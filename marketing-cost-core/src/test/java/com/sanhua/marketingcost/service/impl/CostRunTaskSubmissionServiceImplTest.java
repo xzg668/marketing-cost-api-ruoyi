@@ -15,6 +15,7 @@ import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import java.lang.reflect.Proxy;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -40,16 +41,39 @@ class CostRunTaskSubmissionServiceImplTest {
     assertThat(result.getTaskCount()).isEqualTo(2);
     assertThat(result.isExistingBatch()).isFalse();
     assertThat(batchMapper.inserted).hasSize(1);
-    assertThat(batchMapper.inserted.get(0).getPricingMonth()).isEqualTo("2026-05");
+    assertThat(batchMapper.inserted.get(0).getPricingMonth()).isEqualTo(YearMonth.now().toString());
     assertThat(batchMapper.inserted.get(0).getBusinessUnitType()).isEqualTo("COMMERCIAL");
     assertThat(taskMapper.inserted)
         .extracting(CostRunTask::getCalcObjectKey)
         .containsExactly("QUOTE:11", "QUOTE:12");
+    assertThat(taskMapper.inserted)
+        .extracting(CostRunTask::getPricingMonth)
+        .containsOnly(YearMonth.now().toString());
   }
 
   @Test
-  void submitQuoteReturnsExistingBatchWithoutCreatingAnotherBatch() {
+  void submitQuoteUsesCurrentMonthInsteadOfOaHistoricalPeriods() {
+    FakeBatchMapper batchMapper = new FakeBatchMapper(null);
+    FakeTaskMapper taskMapper = new FakeTaskMapper();
+    FakeOaFormMapper oaFormMapper = new FakeOaFormMapper(oaFormWithHistoricalPeriods());
+    FakeOaFormItemMapper oaFormItemMapper =
+        new FakeOaFormItemMapper(List.of(item(11L, "P-001", "BOX")));
+    CostRunTaskSubmissionServiceImpl service =
+        new CostRunTaskSubmissionServiceImpl(
+            batchMapper.proxy(), taskMapper.proxy(), oaFormMapper.proxy(), oaFormItemMapper.proxy());
+
+    service.submitQuote("OA-001");
+
+    assertThat(batchMapper.inserted).hasSize(1);
+    assertThat(batchMapper.inserted.get(0).getPricingMonth()).isEqualTo(YearMonth.now().toString());
+    assertThat(taskMapper.inserted).hasSize(1);
+    assertThat(taskMapper.inserted.get(0).getPricingMonth()).isEqualTo(YearMonth.now().toString());
+  }
+
+  @Test
+  void submitQuoteRerunsExistingBatchTasks() {
     CostRunBatch existing = existingBatch("BATCH-EXISTING", "QUOTE", "OA-001");
+    existing.setStatus("SUCCESS");
     FakeBatchMapper batchMapper = new FakeBatchMapper(existing);
     FakeTaskMapper taskMapper = new FakeTaskMapper();
     FakeOaFormMapper oaFormMapper = new FakeOaFormMapper(oaForm());
@@ -64,7 +88,41 @@ class CostRunTaskSubmissionServiceImplTest {
     assertThat(result.getBatchNo()).isEqualTo("BATCH-EXISTING");
     assertThat(result.isExistingBatch()).isTrue();
     assertThat(batchMapper.inserted).isEmpty();
+    assertThat(batchMapper.resetBatchNos).isEmpty();
+    assertThat(batchMapper.quoteRerunBatchNos).containsExactly("BATCH-EXISTING");
+    assertThat(taskMapper.resetBatchNos).isEmpty();
+    assertThat(taskMapper.quoteRerunBatchNos).containsExactly("BATCH-EXISTING");
+    assertThat(taskMapper.quoteRerunKeys).containsExactly(List.of("QUOTE:11"));
     assertThat(taskMapper.inserted).hasSize(1);
+  }
+
+  @Test
+  void submitQuoteRerunsOnlySelectedTasksForFailedExistingBatch() {
+    CostRunBatch existing = existingBatch("BATCH-FAILED", "QUOTE", "OA-001");
+    existing.setStatus("FAILED");
+    FakeBatchMapper batchMapper = new FakeBatchMapper(existing);
+    FakeTaskMapper taskMapper = new FakeTaskMapper();
+    FakeOaFormMapper oaFormMapper = new FakeOaFormMapper(oaForm());
+    FakeOaFormItemMapper oaFormItemMapper =
+        new FakeOaFormItemMapper(List.of(item(11L, "P-001", "BOX"), item(12L, "P-002", "BAG")));
+    CostRunTaskSubmissionServiceImpl service =
+        new CostRunTaskSubmissionServiceImpl(
+            batchMapper.proxy(), taskMapper.proxy(), oaFormMapper.proxy(), oaFormItemMapper.proxy());
+
+    CostRunTaskSubmissionResult result = service.submitQuote("OA-001", List.of(11L));
+
+    assertThat(result.getBatchNo()).isEqualTo("BATCH-FAILED");
+    assertThat(result.isExistingBatch()).isTrue();
+    assertThat(result.getTotalCount()).isEqualTo(1);
+    assertThat(batchMapper.inserted).isEmpty();
+    assertThat(batchMapper.resetBatchNos).isEmpty();
+    assertThat(batchMapper.quoteRerunBatchNos).containsExactly("BATCH-FAILED");
+    assertThat(taskMapper.resetBatchNos).isEmpty();
+    assertThat(taskMapper.quoteRerunBatchNos).containsExactly("BATCH-FAILED");
+    assertThat(taskMapper.quoteRerunKeys).containsExactly(List.of("QUOTE:11"));
+    assertThat(taskMapper.inserted)
+        .extracting(CostRunTask::getCalcObjectKey)
+        .containsExactly("QUOTE:11");
   }
 
   @Test
@@ -110,6 +168,13 @@ class CostRunTaskSubmissionServiceImplTest {
     return form;
   }
 
+  private OaForm oaFormWithHistoricalPeriods() {
+    OaForm form = oaForm();
+    form.setAccountingPeriodMonth("2026-01");
+    form.setApplyDate(LocalDate.of(2026, 1, 8));
+    return form;
+  }
+
   private OaFormItem item(Long id, String materialNo, String packageMethod) {
     OaFormItem item = new OaFormItem();
     item.setId(id);
@@ -144,6 +209,8 @@ class CostRunTaskSubmissionServiceImplTest {
   private static class FakeBatchMapper {
     private final CostRunBatch existing;
     private final List<CostRunBatch> inserted = new ArrayList<>();
+    private final List<String> resetBatchNos = new ArrayList<>();
+    private final List<String> quoteRerunBatchNos = new ArrayList<>();
 
     FakeBatchMapper(CostRunBatch existing) {
       this.existing = existing;
@@ -161,6 +228,14 @@ class CostRunTaskSubmissionServiceImplTest {
                       inserted.add((CostRunBatch) args[0]);
                       yield 1;
                     }
+                    case "resetFailedBatchForRetry" -> {
+                      resetBatchNos.add((String) args[0]);
+                      yield 1;
+                    }
+                    case "resetQuoteBatchForRerun" -> {
+                      quoteRerunBatchNos.add((String) args[0]);
+                      yield 1;
+                    }
                     case "toString" -> "FakeCostRunBatchMapper";
                     default -> throw new UnsupportedOperationException(method.toString());
                   });
@@ -169,6 +244,9 @@ class CostRunTaskSubmissionServiceImplTest {
 
   private static class FakeTaskMapper {
     private final List<CostRunTask> inserted = new ArrayList<>();
+    private final List<String> resetBatchNos = new ArrayList<>();
+    private final List<String> quoteRerunBatchNos = new ArrayList<>();
+    private final List<List<String>> quoteRerunKeys = new ArrayList<>();
 
     CostRunTaskMapper proxy() {
       return (CostRunTaskMapper)
@@ -179,6 +257,15 @@ class CostRunTaskSubmissionServiceImplTest {
                   switch (method.getName()) {
                     case "insertIgnore" -> {
                       inserted.add((CostRunTask) args[0]);
+                      yield 1;
+                    }
+                    case "resetBatchTasksForRetry" -> {
+                      resetBatchNos.add((String) args[0]);
+                      yield 1;
+                    }
+                    case "resetQuoteTasksForRerun" -> {
+                      quoteRerunBatchNos.add((String) args[0]);
+                      quoteRerunKeys.add((List<String>) args[1]);
                       yield 1;
                     }
                     case "toString" -> "FakeCostRunTaskMapper";

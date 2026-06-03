@@ -4,6 +4,7 @@ import com.sanhua.marketingcost.dto.ingest.QuoteExtraFeeRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteExtraFieldRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestItemRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestRequest;
+import com.sanhua.marketingcost.enums.QuoteExcelTemplateType;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -35,6 +36,7 @@ public class QuoteOaPdfDetailTableParser {
 
     List<Column> columns = inferColumns(lines.subList(range.startIndex() + 1, range.endIndex()), fields);
     if (columns.isEmpty()) {
+      applyDenseFiSc006Fallback(context, request, lines, range);
       return;
     }
 
@@ -47,6 +49,7 @@ public class QuoteOaPdfDetailTableParser {
       }
       request.getItems().add(item);
     }
+    applyDenseFiSc006Fallback(context, request, lines, range);
   }
 
   private List<QuoteOaPdfFieldDefinition> tableFields(QuoteOaPdfTemplateDefinition template) {
@@ -211,6 +214,360 @@ public class QuoteOaPdfDetailTableParser {
       item.setExternalLineId("PDF:item:" + item.getSeq());
     }
     return isBlankItem(item) ? null : item;
+  }
+
+  private List<QuoteIngestItemRequest> readDenseFiSc006Rows(
+      QuotePdfParseContext context, List<TableLine> lines, TableRange range) {
+    if (context.getTemplateDefinition().getTemplateType() != QuoteExcelTemplateType.FI_SC_006) {
+      return List.of();
+    }
+    DenseLayout layout = inferDenseLayout(lines, range);
+    if (layout == null || !layout.hasRequiredColumns()) {
+      return List.of();
+    }
+    List<RowStart> starts = denseRowStarts(lines, range, layout);
+    if (starts.isEmpty()) {
+      return List.of();
+    }
+    List<QuoteIngestItemRequest> items = new ArrayList<>();
+    for (int i = 0; i < starts.size(); i++) {
+      RowStart start = starts.get(i);
+      float fromY = start.y() - 32.0f;
+      boolean nextRowOnSamePage = i + 1 < starts.size() && starts.get(i + 1).pageIndex() == start.pageIndex();
+      float toY = nextRowOnSamePage ? starts.get(i + 1).y() - 18.0f : start.y() + 28.0f;
+      List<QuotePdfToken> rowTokens = denseRowTokens(lines, range, start.pageIndex(), fromY, toY);
+      QuoteIngestItemRequest item =
+          toDenseFiSc006Item(rowTokens, context.getTemplateDefinition(), layout, start.seq());
+      if (item != null) {
+        items.add(item);
+      }
+    }
+    return normalizeDenseFiSc006Items(items);
+  }
+
+  private List<QuoteIngestItemRequest> normalizeDenseFiSc006Items(List<QuoteIngestItemRequest> items) {
+    List<QuoteIngestItemRequest> filtered = new ArrayList<>();
+    for (QuoteIngestItemRequest item : items) {
+      if (hasDenseProductIdentity(item)) {
+        filtered.add(item);
+      }
+    }
+    for (int i = 0; i < filtered.size(); i++) {
+      QuoteIngestItemRequest item = filtered.get(i);
+      item.setSeq(i + 1);
+      item.setExternalLineId("PDF:item:" + item.getSeq());
+    }
+    return filtered;
+  }
+
+  private boolean hasDenseProductIdentity(QuoteIngestItemRequest item) {
+    if (item == null) {
+      return false;
+    }
+    if (isLikelyMaterialCode(item.getMaterialNo())) {
+      return true;
+    }
+    return !StringUtils.hasText(item.getMaterialNo())
+        && StringUtils.hasText(item.getSunlModel())
+        && (StringUtils.hasText(item.getSpec())
+            || StringUtils.hasText(item.getAnnualVolume())
+            || StringUtils.hasText(item.getTotalNoShip())
+            || StringUtils.hasText(item.getTotalWithShip()));
+  }
+
+  private boolean isLikelyMaterialCode(String value) {
+    String normalized = trimToNull(value);
+    if (normalized == null) {
+      return false;
+    }
+    String compact = normalized.replaceAll("\\s+", "");
+    return compact.length() >= 8 && compact.matches(".*\\d.*") && compact.matches("[A-Za-z0-9\\-]+");
+  }
+
+  private void applyDenseFiSc006Fallback(
+      QuotePdfParseContext context, QuoteIngestRequest request, List<TableLine> lines, TableRange range) {
+    List<QuoteIngestItemRequest> denseItems = readDenseFiSc006Rows(context, lines, range);
+    if (denseItems.isEmpty()) {
+      return;
+    }
+    if (!request.getItems().isEmpty()
+        && request.getItems().stream().allMatch(this::hasProductKey)
+        && request.getItems().stream().allMatch(this::hasProductIdentity)
+        && request.getItems().size() >= denseItems.size()) {
+      return;
+    }
+    request.getItems().clear();
+    request.getItems().addAll(denseItems);
+  }
+
+  private boolean hasMaterialNo(QuoteIngestItemRequest item) {
+    return item != null && StringUtils.hasText(item.getMaterialNo());
+  }
+
+  private boolean hasProductKey(QuoteIngestItemRequest item) {
+    return item != null && (StringUtils.hasText(item.getMaterialNo()) || StringUtils.hasText(item.getSunlModel()));
+  }
+
+  private boolean hasProductIdentity(QuoteIngestItemRequest item) {
+    return item != null
+        && StringUtils.hasText(item.getProductName())
+        && StringUtils.hasText(item.getMaterialNo())
+        && StringUtils.hasText(item.getSunlModel());
+  }
+
+  private DenseLayout inferDenseLayout(List<TableLine> lines, TableRange range) {
+    Map<Float, List<QuotePdfToken>> tokensByColumn = new LinkedHashMap<>();
+    for (int i = range.startIndex() + 1; i < range.endIndex(); i++) {
+      for (QuotePdfToken token : lines.get(i).tokens()) {
+        if (!isLikelyHeaderToken(token.getText())) {
+          continue;
+        }
+        float x = nearestColumnX(tokensByColumn.keySet(), token.getX());
+        tokensByColumn.computeIfAbsent(x, ignored -> new ArrayList<>()).add(token);
+      }
+    }
+    DenseLayout layout = new DenseLayout();
+    for (Map.Entry<Float, List<QuotePdfToken>> entry : tokensByColumn.entrySet()) {
+      layout.addColumnX(entry.getKey());
+      List<QuotePdfToken> tokens = new ArrayList<>(entry.getValue());
+      tokens.sort(Comparator.comparing(QuotePdfToken::getY));
+      String label = normalizeLabel(joinRaw(tokens));
+      String fieldCode = denseFieldCode(label);
+      if (fieldCode != null && !layout.columnsByFieldCode().containsKey(fieldCode)) {
+        layout.put(fieldCode, entry.getKey());
+      }
+    }
+    layout.finish();
+    return layout;
+  }
+
+  private float nearestColumnX(Set<Float> existingColumns, float x) {
+    for (Float existing : existingColumns) {
+      if (Math.abs(existing - x) <= 4.0f) {
+        return existing;
+      }
+    }
+    return x;
+  }
+
+  private boolean isLikelyHeaderToken(String value) {
+    String normalized = trimToNull(value);
+    if (normalized == null) {
+      return false;
+    }
+    if (isNumberLike(normalized)) {
+      return false;
+    }
+    return normalized.matches(".*[\\u4e00-\\u9fa5A-Za-z].*");
+  }
+
+  private String denseFieldCode(String normalizedLabel) {
+    if (!StringUtils.hasText(normalizedLabel)) {
+      return null;
+    }
+    if (normalizedLabel.contains("序号")
+        || normalizedLabel.contains("序产品")
+        || "序".equals(normalizedLabel)) {
+      return "seq";
+    }
+    if (normalizedLabel.contains("产品名称") || normalizedLabel.contains("产品")) {
+      return "productName";
+    }
+    if (normalizedLabel.contains("客户图号")) {
+      return "customerDrawing";
+    }
+    if (normalizedLabel.contains("u11位码") || normalizedLabel.contains("客户编码")) {
+      return "customerCode";
+    }
+    if (normalizedLabel.contains("料号")) {
+      return "materialNo";
+    }
+    if (normalizedLabel.contains("三花型号") || normalizedLabel.contains("三花型")) {
+      return "sunlModel";
+    }
+    if (normalizedLabel.contains("规格")) {
+      return "spec";
+    }
+    if (normalizedLabel.contains("不含运输费总成本")
+        || normalizedLabel.contains("不含运费总成本")
+        || normalizedLabel.contains("不含运费总价")) {
+      return "totalNoShip";
+    }
+    if (normalizedLabel.contains("含运输费总成本")
+        || normalizedLabel.contains("含运费总成本")
+        || normalizedLabel.contains("含运费总价")) {
+      return "totalWithShip";
+    }
+    if (normalizedLabel.contains("运输费") || normalizedLabel.contains("运费")) {
+      return "shippingFee";
+    }
+    if (normalizedLabel.contains("年用量")) {
+      return "annualVolume";
+    }
+    if (normalizedLabel.contains("包装方式")) {
+      return "packageMethod";
+    }
+    if (normalizedLabel.contains("成本有效期") || normalizedLabel.contains("有效期")) {
+      return "validMonth";
+    }
+    return null;
+  }
+
+  private List<RowStart> denseRowStarts(List<TableLine> lines, TableRange range, DenseLayout layout) {
+    List<RowStart> starts = new ArrayList<>();
+    Set<String> seen = new LinkedHashSet<>();
+    DenseColumn seqColumn = layout.column("seq");
+    for (int i = range.startIndex() + 1; i < range.endIndex(); i++) {
+      TableLine line = lines.get(i);
+      for (QuotePdfToken token : line.tokens()) {
+        if (!seqColumn.contains(token)) {
+          continue;
+        }
+        Integer seq = parseSeq(token.getText());
+        if (seq == null) {
+          continue;
+        }
+        String key = line.pageIndex() + ":" + seq + ":" + Math.round(token.getY());
+        if (seen.add(key)) {
+          starts.add(new RowStart(line.pageIndex(), token.getY(), seq));
+        }
+      }
+    }
+    starts.sort(Comparator.comparing(RowStart::pageIndex).thenComparing(RowStart::y));
+    return starts;
+  }
+
+  private List<QuotePdfToken> denseRowTokens(
+      List<TableLine> lines, TableRange range, int pageIndex, float fromY, float toY) {
+    List<QuotePdfToken> tokens = new ArrayList<>();
+    for (int i = range.startIndex() + 1; i < range.endIndex(); i++) {
+      TableLine line = lines.get(i);
+      if (line.pageIndex() != pageIndex) {
+        continue;
+      }
+      for (QuotePdfToken token : line.tokens()) {
+        if (token.getY() >= fromY && token.getY() < toY) {
+          tokens.add(token);
+        }
+      }
+    }
+    tokens.sort(Comparator.comparing(QuotePdfToken::getY).thenComparing(QuotePdfToken::getX));
+    return tokens;
+  }
+
+  private QuoteIngestItemRequest toDenseFiSc006Item(
+      List<QuotePdfToken> tokens, QuoteOaPdfTemplateDefinition template, DenseLayout layout, Integer seq) {
+    QuoteIngestItemRequest item = new QuoteIngestItemRequest();
+    item.setSeq(seq);
+    item.setExternalLineId("PDF:item:" + seq);
+    item.setProductName(joinDenseColumn(tokens, layout.column("productName"), false));
+    if (!StringUtils.hasText(item.getProductName())) {
+      item.setProductName(joinDenseTextColumn(tokens, layout.column("seq")));
+    }
+    item.setCustomerDrawing(joinDenseColumn(tokens, layout.column("customerDrawing"), false));
+    item.setCustomerCode(joinDenseColumn(tokens, layout.column("customerCode"), false));
+    item.setMaterialNo(joinDenseColumn(tokens, layout.column("materialNo"), false));
+    item.setSunlModel(joinDenseColumn(tokens, layout.column("sunlModel"), false));
+    item.setSpec(joinDenseColumn(tokens, layout.column("spec"), false));
+    item.setShippingFee(joinDenseColumn(tokens, layout.column("shippingFee"), true));
+    item.setAnnualVolume(joinDenseColumn(tokens, layout.column("annualVolume"), true));
+    item.setTotalWithShip(joinDenseColumn(tokens, layout.column("totalWithShip"), true));
+    item.setTotalNoShip(joinDenseColumn(tokens, layout.column("totalNoShip"), true));
+    item.setValidMonth(joinDenseColumn(tokens, layout.column("validMonth"), true));
+    item.setPackageMethod(joinDenseColumn(tokens, layout.column("packageMethod"), false));
+    if (!StringUtils.hasText(item.getBusinessType()) && StringUtils.hasText(template.getDefaultBusinessType())) {
+      item.setBusinessType(template.getDefaultBusinessType());
+    }
+    return hasMaterialNo(item) || StringUtils.hasText(item.getSunlModel()) ? item : null;
+  }
+
+  private String joinDenseColumn(List<QuotePdfToken> tokens, DenseColumn column, boolean numberOnly) {
+    if (column == null) {
+      return null;
+    }
+    StringBuilder value = new StringBuilder();
+    for (QuotePdfToken token : tokens) {
+      if (!column.contains(token) || isDenseHeaderFragment(token.getText())) {
+        continue;
+      }
+      String text = trimToNull(token.getText());
+      if (text == null) {
+        continue;
+      }
+      if (numberOnly && !isNumberLike(text)) {
+        continue;
+      }
+      value.append(text);
+    }
+    return trimToNull(value.toString());
+  }
+
+  private String joinDenseTextColumn(List<QuotePdfToken> tokens, DenseColumn column) {
+    if (column == null) {
+      return null;
+    }
+    StringBuilder value = new StringBuilder();
+    for (QuotePdfToken token : tokens) {
+      if (!column.contains(token) || isDenseHeaderFragment(token.getText())) {
+        continue;
+      }
+      String text = trimToNull(token.getText());
+      if (text == null || isNumberLike(text)) {
+        continue;
+      }
+      value.append(text);
+    }
+    return trimToNull(value.toString());
+  }
+
+  private String joinRaw(List<QuotePdfToken> tokens) {
+    StringBuilder value = new StringBuilder();
+    for (QuotePdfToken token : tokens) {
+      if (StringUtils.hasText(token.getText())) {
+        value.append(token.getText());
+      }
+    }
+    return value.toString();
+  }
+
+  private boolean isNumberLike(String value) {
+    String normalized = trimToNull(value);
+    if (normalized == null) {
+      return false;
+    }
+    return normalized.matches("-?\\d+(,\\d{3})*(\\.\\d*)?%?");
+  }
+
+  private boolean isDenseHeaderFragment(String value) {
+    String normalized = trimToNull(value);
+    if (normalized == null) {
+      return false;
+    }
+    return Set.of(
+            "序",
+            "号",
+            "产品",
+            "名称",
+            "客户",
+            "图号",
+            "U11",
+            "位码",
+            "料号",
+            "三花型",
+            "三花型号",
+            "规格",
+            "运",
+            "输",
+            "费",
+            "预",
+            "计",
+            "年",
+            "用",
+            "量",
+            "成本",
+            "有效",
+            "期")
+        .contains(normalized);
   }
 
   private boolean isFeeField(QuoteOaPdfFieldDefinition field) {
@@ -415,6 +772,56 @@ public class QuoteOaPdfDetailTableParser {
   private record Column(QuoteOaPdfFieldDefinition field, float x, float width, int lineIndex) {}
 
   private record CellValue(QuoteOaPdfFieldDefinition field, String value, String sourcePath) {}
+
+  private record RowStart(int pageIndex, float y, Integer seq) {}
+
+  private static final class DenseLayout {
+    private final Set<Float> columnXs = new LinkedHashSet<>();
+    private final Map<String, Float> xByFieldCode = new LinkedHashMap<>();
+    private final Map<String, DenseColumn> columnsByFieldCode = new LinkedHashMap<>();
+
+    private void addColumnX(float x) {
+      columnXs.add(x);
+    }
+
+    private void put(String fieldCode, float x) {
+      xByFieldCode.put(fieldCode, x);
+    }
+
+    private void finish() {
+      List<Float> sorted = new ArrayList<>(columnXs);
+      sorted.sort(Float::compare);
+      for (Map.Entry<String, Float> entry : xByFieldCode.entrySet()) {
+        int index = sorted.indexOf(entry.getValue());
+        if (index < 0) {
+          continue;
+        }
+        float left = index == 0 ? Float.NEGATIVE_INFINITY : (sorted.get(index - 1) + sorted.get(index)) / 2f;
+        float right =
+            index == sorted.size() - 1 ? Float.POSITIVE_INFINITY : (sorted.get(index) + sorted.get(index + 1)) / 2f;
+        columnsByFieldCode.put(entry.getKey(), new DenseColumn(left, right));
+      }
+    }
+
+    private boolean hasRequiredColumns() {
+      return columnsByFieldCode.containsKey("seq")
+          && (columnsByFieldCode.containsKey("materialNo") || columnsByFieldCode.containsKey("sunlModel"));
+    }
+
+    private DenseColumn column(String fieldCode) {
+      return columnsByFieldCode.get(fieldCode);
+    }
+
+    private Map<String, DenseColumn> columnsByFieldCode() {
+      return columnsByFieldCode;
+    }
+  }
+
+  private record DenseColumn(float leftInclusive, float rightExclusive) {
+    private boolean contains(QuotePdfToken token) {
+      return token != null && token.getX() >= leftInclusive && token.getX() < rightExclusive;
+    }
+  }
 
   private static final class RowDraft {
     private final Map<String, CellValue> valuesByFieldCode = new LinkedHashMap<>();

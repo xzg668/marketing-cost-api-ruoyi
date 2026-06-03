@@ -11,6 +11,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.MaterialPriceTypeImportRequest;
 import com.sanhua.marketingcost.entity.MaterialPriceType;
 import com.sanhua.marketingcost.mapper.MaterialPriceTypeMapper;
+import java.time.LocalDate;
 import java.util.List;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
@@ -60,7 +61,7 @@ class MaterialPriceTypeServiceImplTest {
   }
 
   @Test
-  void importItems_updatesExistingRow() {
+  void importItems_updatesExistingSamePriceTypeRow() {
     MaterialPriceTypeMapper mapper = Mockito.mock(MaterialPriceTypeMapper.class);
     MaterialPriceTypeServiceImpl service = new MaterialPriceTypeServiceImpl(mapper);
 
@@ -78,6 +79,115 @@ class MaterialPriceTypeServiceImplTest {
     MaterialPriceTypeImportRequest request = new MaterialPriceTypeImportRequest();
     request.setRows(List.of(row));
 
+    MaterialPriceType existing = new MaterialPriceType();
+    existing.setId(10L);
+    existing.setMaterialCode("1008000300944");
+    existing.setMaterialName("旧名称");
+    existing.setMaterialModel("MODEL-A");
+    existing.setPriceType("固定价");
+    existing.setPeriod("2026-02");
+    existing.setPriority(1);
+    existing.setEffectiveFrom(LocalDate.of(2026, 1, 1));
+    when(mapper.selectList(any())).thenReturn(List.of(existing));
+
+    service.importItems(request);
+
+    ArgumentCaptor<MaterialPriceType> captor = ArgumentCaptor.forClass(MaterialPriceType.class);
+    verify(mapper).updateById(captor.capture());
+    Mockito.verify(mapper, Mockito.never()).insert(any(MaterialPriceType.class));
+    MaterialPriceType updated = captor.getValue();
+    assertEquals(10L, updated.getId());
+    assertEquals("阀体部件", updated.getMaterialName());
+    assertEquals("固定价", updated.getPriceType());
+    assertEquals(LocalDate.of(2026, 1, 1), updated.getEffectiveFrom());
+  }
+
+  @Test
+  void importItems_updatesSameMaterialAndPriceTypeEvenWhenModelDiffers() {
+    MaterialPriceTypeMapper mapper = Mockito.mock(MaterialPriceTypeMapper.class);
+    MaterialPriceTypeServiceImpl service = new MaterialPriceTypeServiceImpl(mapper);
+
+    MaterialPriceTypeImportRequest.MaterialPriceTypeRow row =
+        new MaterialPriceTypeImportRequest.MaterialPriceTypeRow();
+    row.setMaterialCode("301240123");
+    row.setMaterialName("新名称");
+    row.setPriceType("联动价");
+
+    MaterialPriceTypeImportRequest request = new MaterialPriceTypeImportRequest();
+    request.setRows(List.of(row));
+
+    MaterialPriceType existing = new MaterialPriceType();
+    existing.setId(301240123L);
+    existing.setMaterialCode("301240123");
+    existing.setMaterialName("旧名称");
+    existing.setMaterialModel("OLD-MODEL");
+    existing.setPriceType("联动价");
+    existing.setPriority(1);
+    existing.setEffectiveFrom(LocalDate.of(2026, 1, 1));
+    when(mapper.selectList(any())).thenReturn(List.of(existing));
+
+    service.importItems(request);
+
+    ArgumentCaptor<MaterialPriceType> captor = ArgumentCaptor.forClass(MaterialPriceType.class);
+    verify(mapper).updateById(captor.capture());
+    Mockito.verify(mapper, Mockito.never()).insert(any(MaterialPriceType.class));
+    MaterialPriceType updated = captor.getValue();
+    assertEquals(301240123L, updated.getId());
+    assertEquals("新名称", updated.getMaterialName());
+    assertEquals("OLD-MODEL", updated.getMaterialModel());
+    assertEquals("联动价", updated.getPriceType());
+  }
+
+  @Test
+  void importItems_expiresOldPriceTypeBeforeNewEffectiveDate() {
+    MaterialPriceTypeMapper mapper = Mockito.mock(MaterialPriceTypeMapper.class);
+    MaterialPriceTypeServiceImpl service = new MaterialPriceTypeServiceImpl(mapper);
+
+    MaterialPriceTypeImportRequest.MaterialPriceTypeRow row =
+        new MaterialPriceTypeImportRequest.MaterialPriceTypeRow();
+    row.setMaterialCode("301990444");
+    row.setMaterialName("废不锈钢沫和丝网");
+    row.setPriceType("联动价");
+    row.setPeriod("2026-06");
+
+    MaterialPriceTypeImportRequest request = new MaterialPriceTypeImportRequest();
+    request.setRows(List.of(row));
+
+    MaterialPriceType old = new MaterialPriceType();
+    old.setId(184L);
+    old.setMaterialCode("301990444");
+    old.setMaterialName("废不锈钢沫和丝网");
+    old.setPriceType("固定价");
+    old.setPeriod("2026-06");
+    old.setPriority(1);
+    old.setEffectiveFrom(LocalDate.of(2026, 1, 1));
+    when(mapper.selectList(any())).thenReturn(List.of(old));
+
+    service.importItems(request);
+
+    ArgumentCaptor<MaterialPriceType> updateCaptor = ArgumentCaptor.forClass(MaterialPriceType.class);
+    verify(mapper).updateById(updateCaptor.capture());
+    assertEquals(LocalDate.of(2026, 5, 31), updateCaptor.getValue().getEffectiveTo());
+
+    ArgumentCaptor<MaterialPriceType> insertCaptor = ArgumentCaptor.forClass(MaterialPriceType.class);
+    verify(mapper).insert(insertCaptor.capture());
+    assertEquals("联动价", insertCaptor.getValue().getPriceType());
+    assertEquals(LocalDate.of(2026, 6, 1), insertCaptor.getValue().getEffectiveFrom());
+  }
+
+  @Test
+  void importItems_requiresOnlyMaterialCodeAndPriceType() {
+    MaterialPriceTypeMapper mapper = Mockito.mock(MaterialPriceTypeMapper.class);
+    MaterialPriceTypeServiceImpl service = new MaterialPriceTypeServiceImpl(mapper);
+
+    MaterialPriceTypeImportRequest.MaterialPriceTypeRow row =
+        new MaterialPriceTypeImportRequest.MaterialPriceTypeRow();
+    row.setMaterialCode("301050057");
+    row.setPriceType("联动价");
+
+    MaterialPriceTypeImportRequest request = new MaterialPriceTypeImportRequest();
+    request.setRows(List.of(row));
+
     when(mapper.selectList(any())).thenReturn(List.of());
 
     service.importItems(request);
@@ -85,8 +195,30 @@ class MaterialPriceTypeServiceImplTest {
     ArgumentCaptor<MaterialPriceType> captor = ArgumentCaptor.forClass(MaterialPriceType.class);
     verify(mapper).insert(captor.capture());
     MaterialPriceType inserted = captor.getValue();
-    assertEquals("阀体部件", inserted.getMaterialName());
-    assertEquals("固定价", inserted.getPriceType());
+    assertEquals("301050057", inserted.getMaterialCode());
+    assertEquals("联动价", inserted.getPriceType());
+  }
+
+  @Test
+  void importItems_normalizesPurchaseFixedPriceType() {
+    MaterialPriceTypeMapper mapper = Mockito.mock(MaterialPriceTypeMapper.class);
+    MaterialPriceTypeServiceImpl service = new MaterialPriceTypeServiceImpl(mapper);
+
+    MaterialPriceTypeImportRequest.MaterialPriceTypeRow row =
+        new MaterialPriceTypeImportRequest.MaterialPriceTypeRow();
+    row.setMaterialCode("202850035");
+    row.setPriceType("固定采购价");
+
+    MaterialPriceTypeImportRequest request = new MaterialPriceTypeImportRequest();
+    request.setRows(List.of(row));
+
+    when(mapper.selectList(any())).thenReturn(List.of());
+
+    service.importItems(request);
+
+    ArgumentCaptor<MaterialPriceType> captor = ArgumentCaptor.forClass(MaterialPriceType.class);
+    verify(mapper).insert(captor.capture());
+    assertEquals("固定价", captor.getValue().getPriceType());
   }
 
   @Test

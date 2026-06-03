@@ -53,7 +53,7 @@ cost:
       max-retry-count: ${COST_RUN_WORKER_MAX_RETRY_COUNT:3}
       scenes: ${COST_RUN_WORKER_SCENES:QUOTE,MONTHLY_REPRICE}
   material:
-    includeWaterPower: ${COST_MATERIAL_INCLUDE_WATER_POWER:false}
+    includeWaterPower: ${COST_MATERIAL_INCLUDE_WATER_POWER:true}
   linked:
     excel-auto-binding:
       enabled: ${COST_LINKED_EXCEL_AUTO_BINDING_ENABLED:true}

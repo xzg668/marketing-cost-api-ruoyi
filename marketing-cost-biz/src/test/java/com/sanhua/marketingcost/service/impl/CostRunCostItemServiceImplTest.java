@@ -13,6 +13,7 @@ import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.CmsCostSourceEffective;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
+import com.sanhua.marketingcost.entity.DepartmentFundRate;
 import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.OaForm;
@@ -108,7 +109,7 @@ class CostRunCostItemServiceImplTest {
   }
 
   @Test
-  @DisplayName("T9 CMS 公共生效辅料：正式核算只取公共生效来源，不混入旧辅料配置")
+  @DisplayName("T9 CMS 公共生效辅料：正式核算只取公共生效来源并乘 1.05")
   void auxCmsEffectiveUsesEffectiveAmountAndDisplayOrder() {
     AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
     AuxCostItemDto cmsSecond = newAuxCost("0202", "表面处理类", "0.600000", "9.9900", "DIRECT");
@@ -133,10 +134,12 @@ class CostRunCostItemServiceImplTest {
 
     assertThat(items).extracting(CostRunCostItemDto::getCostCode)
         .containsExactly("AUX_0201", "AUX_0202");
-    assertThat(items.get(0).getRate()).isNull();
-    assertThat(items.get(0).getAmount()).isEqualByComparingTo("0.400000");
-    assertThat(items.get(1).getRate()).isNull();
-    assertThat(items.get(1).getAmount()).isEqualByComparingTo("0.600000");
+    assertThat(items.get(0).getBaseAmount()).isEqualByComparingTo("0.400000");
+    assertThat(items.get(0).getRate()).isEqualByComparingTo("1.05");
+    assertThat(items.get(0).getAmount()).isEqualByComparingTo("0.420000");
+    assertThat(items.get(1).getBaseAmount()).isEqualByComparingTo("0.600000");
+    assertThat(items.get(1).getRate()).isEqualByComparingTo("1.05");
+    assertThat(items.get(1).getAmount()).isEqualByComparingTo("0.630000");
   }
 
   @Test
@@ -230,6 +233,89 @@ class CostRunCostItemServiceImplTest {
     assertThat(indirectItem.getAmount()).isEqualByComparingTo("0.220000");
     assertThat(indirectItem.getRemark()).isNull();
     verify(ensureService).ensureDefaultSources(eq(2026), eq("SYSTEM_AUTO"), eq("COMMERCIAL"));
+  }
+
+  @Test
+  @DisplayName("部门经费：CMS 生效工资金额可作为大修/工装/水电计算基数")
+  void departmentFeesUseCmsEffectiveSalaryTotals() {
+    OaFormMapper formMapper = mock(OaFormMapper.class);
+    OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
+    SalaryCostMapper salaryMapper = mock(SalaryCostMapper.class);
+    CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
+    DepartmentFundRateMapper departmentMapper = mock(DepartmentFundRateMapper.class);
+    AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
+    CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
+    MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
+
+    OaForm form = new OaForm();
+    form.setId(1L);
+    form.setOaNo("OA-DEPT");
+    form.setApplyDate(LocalDate.of(2026, 5, 1));
+    form.setBusinessUnitType("COMMERCIAL");
+    OaFormItem item = new OaFormItem();
+    item.setOaFormId(1L);
+    item.setMaterialNo("1001900001090");
+    item.setValidDate(LocalDate.of(2026, 6, 1));
+    item.setBusinessUnitType("COMMERCIAL");
+    when(formMapper.selectOne(any())).thenReturn(form);
+    when(formItemMapper.selectList(any())).thenReturn(List.of(item));
+    when(salaryMapper.selectList(any())).thenReturn(List.of());
+
+    CmsCostSourceEffective direct =
+        effective("SALARY_DIRECT", "1001900001090", "0301", "12.491320");
+    CmsCostSourceEffective indirect =
+        effective("SALARY_INDIRECT", "1001900001090", "0302", "0.322200");
+    when(effectiveMapper.selectList(any())).thenReturn(List.of(direct, indirect));
+
+    MaterialMasterRaw raw = new MaterialMasterRaw();
+    raw.setMaterialCode("1001900001090");
+    raw.setProductionDivision("商用部品事业部");
+    when(rawMapper.selectByLatestBatchAndCodes(any(), any())).thenReturn(List.of(raw));
+    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("1001900001090"), "COMMERCIAL"))
+        .thenReturn(List.of());
+    when(partMapper.selectList(any())).thenReturn(List.of());
+    when(masterMapper.selectList(any())).thenReturn(List.of());
+    when(bomMapper.selectList(any())).thenReturn(List.of());
+    when(departmentMapper.selectOne(any()))
+        .thenReturn(
+            departmentRate("0.005100", "1.100000"),
+            departmentRate("0.028300", "1.100000"),
+            departmentRate("0.053000", "1.100000"),
+            null);
+
+    CostRunCostItemServiceImpl svc =
+        buildForCalculation(
+            formMapper,
+            formItemMapper,
+            salaryMapper,
+            effectiveMapper,
+            mock(CmsCostEffectiveSourceEnsureService.class),
+            auxMapper,
+            partMapper,
+            masterMapper,
+            rawMapper,
+            bomMapper,
+            mock(QualityLossRateMapper.class),
+            mock(CostRunCacheLookupService.class),
+            mock(ThreeExpenseRateMapper.class),
+            departmentMapper);
+
+    List<CostRunCostItemDto> items =
+        svc.listByMaterialCodes("OA-DEPT", "1001900001090", Set.of("1001900001090"), ignored -> {});
+
+    CostRunCostItemDto overhaul = findItem(items, "OVERHAUL");
+    CostRunCostItemDto tooling = findItem(items, "TOOLING_REPAIR");
+    CostRunCostItemDto water = findItem(items, "WATER_POWER");
+    assertThat(overhaul.getBaseAmount()).isEqualByComparingTo("30.156554");
+    assertThat(overhaul.getRate()).isEqualByComparingTo("0.005610");
+    assertThat(overhaul.getAmount()).isEqualByComparingTo("0.169178");
+    assertThat(tooling.getRate()).isEqualByComparingTo("0.031130");
+    assertThat(tooling.getAmount()).isEqualByComparingTo("0.938774");
+    assertThat(water.getRate()).isEqualByComparingTo("0.058300");
+    assertThat(water.getAmount()).isEqualByComparingTo("1.758127");
+    assertThat(water.getRemark()).isNull();
   }
 
   @Test
@@ -464,7 +550,7 @@ class CostRunCostItemServiceImplTest {
     rate.setPeriodYear(2026);
     rate.setProductCategory("商用直销产品");
     rate.setProductLine("国内产线");
-    rate.setApplicantDepartment("欧洲业务管理部（直销）");
+    rate.setApplicantDepartment("欧洲业务管理部-直销");
     rate.setApplicantOffice("");
     rate.setManagementExpenseRate(new BigDecimal("0.080000"));
     rate.setFinanceExpenseRate(new BigDecimal("0.020000"));
@@ -529,7 +615,7 @@ class CostRunCostItemServiceImplTest {
     rate.setBusinessUnitType("COMMERCIAL");
     rate.setProductCategory("商用直销产品");
     rate.setProductLine("国内产线");
-    rate.setApplicantDepartment("欧洲业务管理部（海外）");
+    rate.setApplicantDepartment("欧洲业务管理部-海外");
     rate.setApplicantOffice("/");
     rate.setManagementExpenseRate(new BigDecimal("0.100000"));
     rate.setFinanceExpenseRate(new BigDecimal("0.020000"));
@@ -620,14 +706,14 @@ class CostRunCostItemServiceImplTest {
     assertThat(sc020.productCategory).isEqualTo("商用直销产品");
     assertThat(sc020.productLine).isEqualTo("国内产线");
     assertThat(sc020.commercialOverseasFlag).isEqualTo("是");
-    assertThat(sc020.matchedDepartment).isEqualTo("欧美业务管理部（海外）");
+    assertThat(sc020.matchedDepartment).isEqualTo("欧美业务管理部-海外");
 
     CostRunCostItemServiceImpl.ThreeExpenseMatchContext sc006 =
         svc.buildThreeExpenseMatchContext(threeExpenseForm("FI-SC-006", "商用四通阀事业部", "否"));
     assertThat(sc006.productCategory).isEqualTo("商用直销产品");
     assertThat(sc006.productLine).isEqualTo("国内产线");
     assertThat(sc006.commercialOverseasFlag).isEqualTo("否");
-    assertThat(sc006.matchedDepartment).isEqualTo("欧美业务管理部（直销）");
+    assertThat(sc006.matchedDepartment).isEqualTo("欧美业务管理部-直销");
   }
 
   @Test
@@ -671,7 +757,7 @@ class CostRunCostItemServiceImplTest {
     assertThat(context.productCategory).isEqualTo("家代商代销产品");
     assertThat(context.productLine).isEqualTo("墨西哥产线");
     assertThat(context.homeApplianceSalesModeFlag).isEqualTo("是");
-    assertThat(context.matchedDepartment).isEqualTo("欧美业务管理部（代销）");
+    assertThat(context.matchedDepartment).isEqualTo("欧美业务管理部-代销");
     assertThat(context.commercialOverseasFlag).isNull();
   }
 
@@ -714,8 +800,8 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemServiceImpl.ThreeExpenseMatchContext context =
         svc.buildThreeExpenseMatchContext(form);
 
-    ThreeExpenseRate departmentRate = threeExpenseCandidate("", "欧美业务管理部（直销）", "0.080000");
-    ThreeExpenseRate officeRate = threeExpenseCandidate("欧洲业务管理部", "其他部门（直销）", "0.090000");
+    ThreeExpenseRate departmentRate = threeExpenseCandidate("", "欧美业务管理部-直销", "0.080000");
+    ThreeExpenseRate officeRate = threeExpenseCandidate("欧洲业务管理部", "其他部门-直销", "0.090000");
 
     ThreeExpenseRate matched = svc.matchThreeExpenseRateCandidate(context, List.of(departmentRate, officeRate));
 
@@ -738,7 +824,7 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemServiceImpl.ThreeExpenseMatchContext context =
         svc.buildThreeExpenseMatchContext(threeExpenseForm("FI-SC-006", "商用四通阀事业部", "否"));
 
-    ThreeExpenseRate slashOfficeRate = threeExpenseCandidate("/", "欧美业务管理部（直销）", "0.080000");
+    ThreeExpenseRate slashOfficeRate = threeExpenseCandidate("/", "欧美业务管理部-直销", "0.080000");
 
     ThreeExpenseRate matched = svc.matchThreeExpenseRateCandidate(context, List.of(slashOfficeRate));
 
@@ -1184,6 +1270,14 @@ class CostRunCostItemServiceImplTest {
     return effective;
   }
 
+  private static DepartmentFundRate departmentRate(String quoteRatio, String upliftRatio) {
+    DepartmentFundRate rate = new DepartmentFundRate();
+    rate.setManhourRate(new BigDecimal("0.424900"));
+    rate.setQuoteRatio(new BigDecimal(quoteRatio));
+    rate.setUpliftRatio(new BigDecimal(upliftRatio));
+    return rate;
+  }
+
   private static CostRunCostItemDto findItem(List<CostRunCostItemDto> items, String costCode) {
     return items.stream()
         .filter(item -> costCode.equals(item.getCostCode()))
@@ -1435,6 +1529,38 @@ class CostRunCostItemServiceImplTest {
       QualityLossRateMapper qualityMapper,
       CostRunCacheLookupService lookup,
       ThreeExpenseRateMapper threeExpenseRateMapper) {
+    return buildForCalculation(
+        formMapper,
+        formItemMapper,
+        salaryMapper,
+        effectiveMapper,
+        ensureService,
+        auxMapper,
+        partMapper,
+        masterMapper,
+        rawMapper,
+        bomMapper,
+        qualityMapper,
+        lookup,
+        threeExpenseRateMapper,
+        mock(DepartmentFundRateMapper.class));
+  }
+
+  private CostRunCostItemServiceImpl buildForCalculation(
+      OaFormMapper formMapper,
+      OaFormItemMapper formItemMapper,
+      SalaryCostMapper salaryMapper,
+      CmsCostSourceEffectiveMapper effectiveMapper,
+      CmsCostEffectiveSourceEnsureService ensureService,
+      AuxCostItemMapper auxMapper,
+      CostRunPartItemMapper partMapper,
+      MaterialMasterMapper masterMapper,
+      MaterialMasterRawMapper rawMapper,
+      BomRawHierarchyMapper bomMapper,
+      QualityLossRateMapper qualityMapper,
+      CostRunCacheLookupService lookup,
+      ThreeExpenseRateMapper threeExpenseRateMapper,
+      DepartmentFundRateMapper departmentFundRateMapper) {
     return new CostRunCostItemServiceImpl(
         mock(CostRunCostItemMapper.class),
         formMapper,
@@ -1442,7 +1568,7 @@ class CostRunCostItemServiceImplTest {
         salaryMapper,
         effectiveMapper,
         ensureService,
-        mock(DepartmentFundRateMapper.class),
+        departmentFundRateMapper,
         auxMapper,
         partMapper,
         qualityMapper,

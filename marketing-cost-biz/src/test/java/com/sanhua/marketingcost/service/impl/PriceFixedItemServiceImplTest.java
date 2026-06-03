@@ -212,6 +212,40 @@ class PriceFixedItemServiceImplTest {
   }
 
   @Test
+  void importItems_u9PurchaseFixedMissingExternalRowIdUpdatesByMaterial() {
+    PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
+    PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper);
+
+    PriceFixedItem existing = new PriceFixedItem();
+    existing.setId(13L);
+    existing.setMaterialCode("201290406");
+    existing.setSourceType("PURCHASE_FIXED");
+    existing.setSourceSystem("U9");
+    existing.setFixedPrice(new BigDecimal("2.000000"));
+
+    PriceFixedItemImportRequest.PriceFixedItemImportRow row =
+        purchaseFixedRow("201290406", null);
+    row.setSourceSystem(null);
+    row.setProcessNo("U9C-应付单列表");
+    row.setFixedPrice(new BigDecimal("2.158499"));
+
+    PriceFixedItemImportRequest request = new PriceFixedItemImportRequest();
+    request.setRows(List.of(row));
+
+    when(mapper.selectOne(any())).thenReturn(existing);
+
+    PriceFixedItemImportResponse result = service.importItems(request);
+
+    ArgumentCaptor<PriceFixedItem> captor = ArgumentCaptor.forClass(PriceFixedItem.class);
+    verify(mapper).updateById(captor.capture());
+    assertEquals("U9", captor.getValue().getSourceSystem());
+    assertEquals(new BigDecimal("2.158499"), captor.getValue().getFixedPrice());
+    assertEquals(0, result.getCreatedCount());
+    assertEquals(1, result.getUpdatedCount());
+    assertEquals(0, result.getSkippedCount());
+  }
+
+  @Test
   void importItems_u9SettleFixedSameMaterialUpdates() {
     PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
     PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper);

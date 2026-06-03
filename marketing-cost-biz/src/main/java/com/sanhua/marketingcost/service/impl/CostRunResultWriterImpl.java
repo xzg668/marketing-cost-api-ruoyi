@@ -48,8 +48,9 @@ public class CostRunResultWriterImpl implements CostRunResultWriter {
       return;
     }
     // 日常 OA 结果表仍沿用老 Service 写法，保证前端查询和 lp_cost_run_result 口径不变。
-    costRunResultService.updateTotalCost(oaNo.trim(), productCode.trim(), totalCost(result));
+    // 先补齐主表元数据和业务单元，再写总成本，避免新建行 business_unit_type 为空导致数据权限不可见。
     costRunResultService.saveOrUpdate(form, item);
+    costRunResultService.updateTotalCost(oaNo.trim(), productCode.trim(), totalCost(result));
     overwritePartItems(result, oaNo.trim(), productCode.trim());
     overwriteCostItems(result, oaNo.trim(), productCode.trim());
   }

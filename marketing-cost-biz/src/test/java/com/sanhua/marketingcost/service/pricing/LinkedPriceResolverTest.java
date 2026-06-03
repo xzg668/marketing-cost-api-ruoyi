@@ -31,8 +31,8 @@ class LinkedPriceResolverTest {
   }
 
   @Test
-  @DisplayName("V3-10：联动价取价按 oaNo + partCode 读取最新 calc_item 单价")
-  void resolvesLatestCalcItemByOaNoAndPartCode() {
+  @DisplayName("QUOTE 联动价按 oaNo + partCode + pricingMonth 读取最新 OK calc_item 单价")
+  void resolvesLatestOkCalcItemByOaNoPartCodeAndPricingMonth() {
     PriceLinkedCalcItemMapper mapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
     LinkedPriceResolver resolver = new LinkedPriceResolver(mapper);
 
@@ -40,6 +40,8 @@ class LinkedPriceResolverTest {
     calc.setId(9001L);
     calc.setOaNo("OA-V3");
     calc.setItemCode("MAT-LINKED");
+    calc.setPricingMonth("2026-06");
+    calc.setCalcStatus("OK");
     calc.setPartUnitPrice(new BigDecimal("72.000000"));
     calc.setTraceJson("{\"variables\":{\"factor_identity_191\":72.000000},\"result\":72.000000}");
     when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(calc));
@@ -47,7 +49,21 @@ class LinkedPriceResolverTest {
     CostRunPartItemDto item = new CostRunPartItemDto();
     item.setPartCode("MAT-LINKED");
 
-    PriceResolveResult result = resolver.resolve("OA-V3", item, null);
+    PriceResolveResult result =
+        resolver.resolve(
+            "OA-V3",
+            item,
+            null,
+            CostRunContext.quote(
+                "OA-V3",
+                9L,
+                "P-001",
+                "箱装",
+                "客户A",
+                "COMMERCIAL",
+                "2026-06",
+                null,
+                "QUOTE:9"));
 
     assertThat(result.unitPrice()).isEqualByComparingTo("72.000000");
     assertThat(result.priceSource()).isEqualTo("联动价");
@@ -55,7 +71,8 @@ class LinkedPriceResolverTest {
     ArgumentCaptor<Wrapper<PriceLinkedCalcItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(mapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment())
-        .contains("oa_no", "item_code", "calc_scene")
+        .contains("oa_no", "item_code", "calc_scene", "pricing_month", "calc_status")
+        .contains("part_unit_price IS NOT NULL")
         .contains("ORDER BY", "id", "DESC")
         .contains("LIMIT 1");
   }
@@ -74,7 +91,7 @@ class LinkedPriceResolverTest {
 
     assertThat(result.unitPrice()).isNull();
     assertThat(result.remark())
-        .contains("lp_price_linked_calc_item 无记录")
+        .contains("lp_price_linked_calc_item 无可用 OK 记录")
         .contains("OA-V3")
         .contains("MAT-MISSING");
   }

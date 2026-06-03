@@ -71,7 +71,7 @@ public class SupplierSupplyRatioServiceImpl implements SupplierSupplyRatioServic
     }
     SupplierSupplyRatio existing = requireActive(id);
 
-    // 物料代码、物料名称、供应商、型号是 Excel 导入幂等键，不能在普通编辑里变更。
+    // 物料代码、供应商是 Excel 导入幂等键，不能在普通编辑里变更。
     existing.setUnit(trimToNull(request.getUnit()));
     existing.setMaterialShape(trimToNull(request.getMaterialShape()));
     existing.setSupplierCode(trimToNull(request.getSupplierCode()));

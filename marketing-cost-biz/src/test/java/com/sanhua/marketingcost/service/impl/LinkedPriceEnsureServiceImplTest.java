@@ -21,6 +21,7 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
@@ -150,6 +151,160 @@ class LinkedPriceEnsureServiceImplTest {
     ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
     verify(linkedItemMapper).selectList(queryCaptor.capture());
     assertThat(queryCaptor.getValue().getSqlSegment()).contains("effective_to IS NULL");
+  }
+
+  @Test
+  void ensureQuotePrefersCurrentMonthBeforeHigherQuotaPriorMonth() {
+    when(calcItemMapper.selectList(any())).thenReturn(List.of());
+    PriceLinkedItem currentLowQuota = linkedItem("MAT-1");
+    currentLowQuota.setPricingMonth("2026-06");
+    currentLowQuota.setSupplierCode("S1");
+    currentLowQuota.setQuota(new BigDecimal("0.20"));
+    PriceLinkedItem priorHighQuota = linkedItem("MAT-1");
+    priorHighQuota.setPricingMonth("2026-05");
+    priorHighQuota.setSupplierCode("S2");
+    priorHighQuota.setQuota(new BigDecimal("0.90"));
+    when(linkedItemMapper.selectList(any())).thenReturn(List.of(currentLowQuota, priorHighQuota));
+    when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("MAT-1")));
+    when(oaFormMapper.selectOne(any())).thenReturn(null);
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+        .thenAnswer(invocation -> {
+          PriceLinkedCalcItem calcItem = invocation.getArgument(0);
+          calcItem.setPartUnitPrice(new BigDecimal("10.000000"));
+          calcItem.setCalcStatus("OK");
+          return calcItem;
+        });
+
+    service.ensure(LinkedPriceEnsureRequest.quote(
+        "OA-001", "COMMERCIAL", "2026-06", Set.of("MAT-1")));
+
+    ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(linkedItemMapper).selectList(queryCaptor.capture());
+    assertThat(queryCaptor.getValue().getSqlSegment())
+        .contains("pricing_month <=")
+        .contains("ORDER BY pricing_month DESC,quota DESC");
+
+    ArgumentCaptor<PriceLinkedCalcItem> calcItemCaptor =
+        ArgumentCaptor.forClass(PriceLinkedCalcItem.class);
+    ArgumentCaptor<PriceLinkedItem> linkedItemCaptor =
+        ArgumentCaptor.forClass(PriceLinkedItem.class);
+    verify(calcService).calculateQuoteItemForEnsure(
+        calcItemCaptor.capture(), linkedItemCaptor.capture(), any());
+    assertThat(calcItemCaptor.getValue().getPricingMonth()).isEqualTo("2026-06");
+    assertThat(linkedItemCaptor.getValue().getPricingMonth()).isEqualTo("2026-06");
+    assertThat(linkedItemCaptor.getValue().getSupplierCode()).isEqualTo("S1");
+  }
+
+  @Test
+  void ensureQuoteSameMonthOrdersByHighestSupplierQuota() {
+    when(calcItemMapper.selectList(any())).thenReturn(List.of());
+    PriceLinkedItem highQuota = linkedItem("MAT-1");
+    highQuota.setPricingMonth("2026-06");
+    highQuota.setSupplierCode("S2");
+    highQuota.setQuota(new BigDecimal("0.70"));
+    PriceLinkedItem lowQuota = linkedItem("MAT-1");
+    lowQuota.setPricingMonth("2026-06");
+    lowQuota.setSupplierCode("S1");
+    lowQuota.setQuota(new BigDecimal("0.30"));
+    when(linkedItemMapper.selectList(any())).thenReturn(List.of(highQuota, lowQuota));
+    when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("MAT-1")));
+    when(oaFormMapper.selectOne(any())).thenReturn(null);
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+        .thenAnswer(invocation -> {
+          PriceLinkedCalcItem calcItem = invocation.getArgument(0);
+          calcItem.setPartUnitPrice(new BigDecimal("10.000000"));
+          calcItem.setCalcStatus("OK");
+          return calcItem;
+        });
+
+    service.ensure(LinkedPriceEnsureRequest.quote(
+        "OA-001", "COMMERCIAL", "2026-06", Set.of("MAT-1")));
+
+    ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(linkedItemMapper).selectList(queryCaptor.capture());
+    assertThat(queryCaptor.getValue().getSqlSegment())
+        .contains("ORDER BY pricing_month DESC,quota DESC");
+
+    ArgumentCaptor<PriceLinkedItem> linkedItemCaptor =
+        ArgumentCaptor.forClass(PriceLinkedItem.class);
+    verify(calcService).calculateQuoteItemForEnsure(any(), linkedItemCaptor.capture(), any());
+    assertThat(linkedItemCaptor.getValue().getSupplierCode()).isEqualTo("S2");
+  }
+
+  @Test
+  void ensureQuoteUsesPriorFormulaWhenCurrentMonthMissingAndKeepsQuoteMonth() {
+    when(calcItemMapper.selectList(any())).thenReturn(List.of());
+    PriceLinkedItem priorFormula = linkedItem("MAT-1");
+    priorFormula.setPricingMonth("2026-05");
+    priorFormula.setSupplierCode("S2");
+    priorFormula.setQuota(new BigDecimal("0.90"));
+    when(linkedItemMapper.selectList(any())).thenReturn(List.of(priorFormula));
+    when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("MAT-1")));
+    when(oaFormMapper.selectOne(any())).thenReturn(null);
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+        .thenAnswer(invocation -> {
+          PriceLinkedCalcItem calcItem = invocation.getArgument(0);
+          calcItem.setPartUnitPrice(new BigDecimal("10.000000"));
+          calcItem.setCalcStatus("OK");
+          return calcItem;
+        });
+
+    service.ensure(LinkedPriceEnsureRequest.quote(
+        "OA-001", "COMMERCIAL", "2026-06", Set.of("MAT-1")));
+
+    ArgumentCaptor<PriceLinkedCalcItem> calcItemCaptor =
+        ArgumentCaptor.forClass(PriceLinkedCalcItem.class);
+    ArgumentCaptor<PriceLinkedItem> linkedItemCaptor =
+        ArgumentCaptor.forClass(PriceLinkedItem.class);
+    verify(calcService).calculateQuoteItemForEnsure(
+        calcItemCaptor.capture(), linkedItemCaptor.capture(), any());
+    assertThat(calcItemCaptor.getValue().getPricingMonth()).isEqualTo("2026-06");
+    assertThat(linkedItemCaptor.getValue().getPricingMonth()).isEqualTo("2026-05");
+  }
+
+  @Test
+  void ensureQuoteAsOfDateUsesEffectiveVersionInSameMonth() {
+    when(calcItemMapper.selectList(any())).thenReturn(List.of());
+    PriceLinkedItem laterVersion = linkedItem("MAT-1");
+    laterVersion.setPricingMonth("2026-06");
+    laterVersion.setEffectiveFrom(LocalDate.of(2026, 6, 16));
+    laterVersion.setEffectiveTo(null);
+    laterVersion.setSupplierCode("S2");
+    laterVersion.setQuota(new BigDecimal("0.50"));
+    PriceLinkedItem earlierVersion = linkedItem("MAT-1");
+    earlierVersion.setPricingMonth("2026-06");
+    earlierVersion.setEffectiveFrom(LocalDate.of(2026, 6, 1));
+    earlierVersion.setEffectiveTo(LocalDate.of(2026, 6, 15));
+    earlierVersion.setSupplierCode("S1");
+    earlierVersion.setQuota(new BigDecimal("0.50"));
+    when(linkedItemMapper.selectList(any())).thenReturn(List.of(earlierVersion, laterVersion));
+    when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("MAT-1")));
+    when(oaFormMapper.selectOne(any())).thenReturn(null);
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+        .thenAnswer(invocation -> {
+          PriceLinkedCalcItem calcItem = invocation.getArgument(0);
+          calcItem.setPartUnitPrice(new BigDecimal("10.000000"));
+          calcItem.setCalcStatus("OK");
+          return calcItem;
+        });
+    LinkedPriceEnsureRequest request = LinkedPriceEnsureRequest.quote(
+        "OA-001", "COMMERCIAL", "2026-06", Set.of("MAT-1"));
+    request.setPriceAsOfTime(LocalDateTime.of(2026, 6, 10, 12, 0));
+
+    service.ensure(request);
+
+    ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(linkedItemMapper).selectList(queryCaptor.capture());
+    assertThat(queryCaptor.getValue().getSqlSegment())
+        .contains("effective_from <=")
+        .contains("effective_to >=");
+
+    ArgumentCaptor<PriceLinkedItem> linkedItemCaptor =
+        ArgumentCaptor.forClass(PriceLinkedItem.class);
+    verify(calcService).calculateQuoteItemForEnsure(any(), linkedItemCaptor.capture(), any());
+    assertThat(linkedItemCaptor.getValue().getSupplierCode()).isEqualTo("S1");
+    assertThat(linkedItemCaptor.getValue().getEffectiveTo())
+        .isEqualTo(LocalDate.of(2026, 6, 15));
   }
 
   @Test

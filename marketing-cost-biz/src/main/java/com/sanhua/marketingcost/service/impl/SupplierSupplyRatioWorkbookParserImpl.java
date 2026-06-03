@@ -129,7 +129,7 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
     for (int col = 0; col < last; col++) {
       String text = canonicalHeader(cellText(row.getCell(col), formatter));
       if (ORDERED_HEADERS.contains(text)) {
-        columns.put(text, col);
+        columns.putIfAbsent(text, col);
       }
     }
     return columns;
@@ -168,7 +168,7 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
     parsed.setMaterialShape(text(row, columns.get(HEADER_MATERIAL_SHAPE), formatter));
     parsed.setSupplierName(supplierName);
     parsed.setSupplyRatio(supplyRatio);
-    // SSR-01 基线：导入幂等键固定为 物料代码 + 物料名称 + 供应商 + 型号。
+    // 导入幂等键固定为 物料代码 + 供应商；物料名称/型号作为展示字段随最后一次导入更新。
     parsed.setDedupeKey(
         SupplierSupplyRatioNormalizeUtils.buildDedupeKey(
             materialCode, materialName, supplierName, specModel));
@@ -200,9 +200,7 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
       int rowNo) {
     String text = text(row, col, formatter);
     if (!StringUtils.hasText(text)) {
-      result.getErrors().add(new SupplierSupplyRatioWorkbookParseResult.ParseError(rowNo, HEADER_SUPPLY_RATIO,
-          "供货比例不能为空"));
-      return null;
+      return BigDecimal.ZERO;
     }
     String normalized = text.replace(",", "").trim();
     boolean percent = normalized.endsWith("%");
@@ -244,7 +242,16 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
   }
 
   private String canonicalHeader(String text) {
-    return SupplierSupplyRatioNormalizeUtils.normalizeKeyPart(text);
+    String normalized = SupplierSupplyRatioNormalizeUtils.normalizeKeyPart(text);
+    if (normalized.endsWith("*")) {
+      normalized = normalized.substring(0, normalized.length() - 1);
+    }
+    return switch (normalized) {
+      case "物料型号", "物料规格" -> HEADER_SPEC_MODEL;
+      case "计量单位" -> HEADER_UNIT;
+      case "U9物料形态属性" -> HEADER_MATERIAL_SHAPE;
+      default -> normalized;
+    };
   }
 
   private record HeaderMatch(int rowIndex, int rowNumber, Map<String, Integer> columns) {

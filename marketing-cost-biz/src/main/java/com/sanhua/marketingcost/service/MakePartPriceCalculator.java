@@ -105,7 +105,7 @@ public class MakePartPriceCalculator {
       missingRemarks.add("缺原材料价格(child_material_no=" + row.getChildMaterialNo() + ")");
       return STATUS_MISSING_RAW_PRICE;
     }
-    if (!StringUtils.hasText(row.getScrapCode())) {
+    if (!StringUtils.hasText(row.getScrapCode()) && !Boolean.TRUE.equals(row.getNoScrapConfirmed())) {
       missingRemarks.add("缺废料映射(child_material_no=" + row.getChildMaterialNo() + ")");
       return STATUS_MISSING_SCRAP_MAPPING;
     }
@@ -178,6 +178,8 @@ public class MakePartPriceCalculator {
     row.setScrapName(source.getScrapName());
     row.setScrapPriceType(source.getScrapPriceType());
     row.setScrapUnitPrice(source.getScrapUnitPrice());
+    row.setNoScrapConfirmed(source.getNoScrapConfirmed());
+    row.setNoScrapConfirmationId(source.getNoScrapConfirmationId());
     row.setOutsourceFee(source.getOutsourceFee());
     row.setCostPrice(source.getCostPrice());
     row.setParentTotalCostPrice(source.getParentTotalCostPrice());

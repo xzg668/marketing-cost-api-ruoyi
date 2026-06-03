@@ -20,6 +20,7 @@ public class PricePrepareItem {
   private Long id;
 
   private String prepareNo;
+  private String periodMonth;
   private String oaNo;
   private String topProductCode;
   private Long bomRowId;

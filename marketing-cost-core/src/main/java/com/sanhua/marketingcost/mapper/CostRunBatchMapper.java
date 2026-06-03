@@ -79,4 +79,37 @@ public interface CostRunBatchMapper extends BaseMapper<CostRunBatch> {
       @Param("startedAt") LocalDateTime startedAt,
       @Param("finishedAt") LocalDateTime finishedAt,
       @Param("updatedAt") LocalDateTime updatedAt);
+
+  @Update("""
+      UPDATE lp_cost_run_batch
+         SET status = 'PENDING',
+             success_count = 0,
+             failed_count = 0,
+             skipped_count = 0,
+             progress = 0,
+             started_at = NULL,
+             finished_at = NULL,
+             updated_at = #{updatedAt}
+       WHERE batch_no = #{batchNo}
+         AND status IN ('FAILED', 'PARTIAL_FAILED', 'CANCELED')
+      """)
+  int resetFailedBatchForRetry(
+      @Param("batchNo") String batchNo,
+      @Param("updatedAt") LocalDateTime updatedAt);
+
+  @Update("""
+      UPDATE lp_cost_run_batch
+         SET status = 'PENDING',
+             success_count = 0,
+             failed_count = 0,
+             skipped_count = 0,
+             progress = 0,
+             started_at = NULL,
+             finished_at = NULL,
+             updated_at = #{updatedAt}
+       WHERE batch_no = #{batchNo}
+      """)
+  int resetQuoteBatchForRerun(
+      @Param("batchNo") String batchNo,
+      @Param("updatedAt") LocalDateTime updatedAt);
 }

@@ -8,6 +8,7 @@ import lombok.Setter;
 public class PricePrepareTopProductSummaryQueryRequest {
   private String oaNo;
   private String topProductCode;
+  private String periodMonth;
   private String status;
   private Integer page;
   private Integer pageSize;

@@ -21,9 +21,9 @@ import com.sanhua.marketingcost.service.PackageComponentPricePrepareStrategy;
 import com.sanhua.marketingcost.service.PricePrepareBomItemLoader;
 import com.sanhua.marketingcost.service.PricePrepareItemClassifier;
 import com.sanhua.marketingcost.service.PricePrepareService;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
@@ -86,8 +86,8 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     LocalDateTime now = LocalDateTime.now();
 
     PricePrepareBatch batch = initBatch(req, now);
-    deleteCurrentItems(req.oaNo(), req.topProductCodes());
-    deleteCurrentGaps(req.oaNo(), req.topProductCodes());
+    deleteCurrentItems(req.oaNo(), req.periodMonth(), req.topProductCodes());
+    deleteCurrentGaps(req.oaNo(), req.periodMonth(), req.topProductCodes());
 
     List<BomCostingRow> bomRows;
     try {
@@ -239,6 +239,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   private PricePrepareItem buildPrepareItem(PricePrepareBatch batch, PricePreparePlanItem planItem) {
     PricePrepareItem item = new PricePrepareItem();
     item.setPrepareNo(batch.getPrepareNo());
+    item.setPeriodMonth(batch.getPeriodMonth());
     item.setOaNo(batch.getOaNo());
     item.setTopProductCode(planItem.getTopProductCode());
     item.setBomRowId(planItem.getBomRowId());
@@ -371,6 +372,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   private void insertMissingBomGap(PricePrepareBatch batch, String topProductCode) {
     PricePrepareGap gap = new PricePrepareGap();
     gap.setPrepareNo(batch.getPrepareNo());
+    gap.setPeriodMonth(batch.getPeriodMonth());
     gap.setOaNo(batch.getOaNo());
     gap.setTopProductCode(blankIfNull(topProductCode));
     gap.setMaterialCode("");
@@ -389,6 +391,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       NormalMaterialPricePrepareResult normalResult) {
     PricePrepareGap gap = new PricePrepareGap();
     gap.setPrepareNo(batch.getPrepareNo());
+    gap.setPeriodMonth(batch.getPeriodMonth());
     gap.setOaNo(batch.getOaNo());
     gap.setTopProductCode(planItem.getTopProductCode());
     gap.setMaterialCode(blankIfNull(planItem.getMaterialCode()));
@@ -418,6 +421,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     for (PackageComponentPricePrepareResult.Gap packageGap : gaps) {
       PricePrepareGap gap = new PricePrepareGap();
       gap.setPrepareNo(batch.getPrepareNo());
+      gap.setPeriodMonth(batch.getPeriodMonth());
       gap.setOaNo(batch.getOaNo());
       gap.setTopProductCode(planItem.getTopProductCode());
       gap.setMaterialCode(blankIfNull(planItem.getMaterialCode()));
@@ -449,6 +453,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     for (MakePartPricePrepareResult.Gap makePartGap : gaps) {
       PricePrepareGap gap = new PricePrepareGap();
       gap.setPrepareNo(batch.getPrepareNo());
+      gap.setPeriodMonth(batch.getPeriodMonth());
       gap.setOaNo(batch.getOaNo());
       gap.setTopProductCode(planItem.getTopProductCode());
       gap.setMaterialCode(blankIfNull(planItem.getMaterialCode()));
@@ -467,6 +472,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   private void insertMissingMasterGap(PricePrepareBatch batch, PricePreparePlanItem planItem) {
     PricePrepareGap gap = new PricePrepareGap();
     gap.setPrepareNo(batch.getPrepareNo());
+    gap.setPeriodMonth(batch.getPeriodMonth());
     gap.setOaNo(batch.getOaNo());
     gap.setTopProductCode(planItem.getTopProductCode());
     gap.setMaterialCode(blankIfNull(planItem.getMaterialCode()));
@@ -497,20 +503,22 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     batch.setFinishedAt(LocalDateTime.now());
   }
 
-  private void deleteCurrentGaps(String oaNo, List<String> topProductCodes) {
+  private void deleteCurrentGaps(String oaNo, String periodMonth, List<String> topProductCodes) {
     var query =
         Wrappers.<PricePrepareGap>lambdaQuery()
-            .eq(PricePrepareGap::getOaNo, blankIfNull(oaNo));
+            .eq(PricePrepareGap::getOaNo, blankIfNull(oaNo))
+            .eq(PricePrepareGap::getPeriodMonth, blankIfNull(periodMonth));
     if (topProductCodes != null && !topProductCodes.isEmpty()) {
       query.in(PricePrepareGap::getTopProductCode, topProductCodes);
     }
     gapMapper.delete(query);
   }
 
-  private void deleteCurrentItems(String oaNo, List<String> topProductCodes) {
+  private void deleteCurrentItems(String oaNo, String periodMonth, List<String> topProductCodes) {
     var query =
         Wrappers.<PricePrepareItem>lambdaQuery()
-            .eq(PricePrepareItem::getOaNo, blankIfNull(oaNo));
+            .eq(PricePrepareItem::getOaNo, blankIfNull(oaNo))
+            .eq(PricePrepareItem::getPeriodMonth, blankIfNull(periodMonth));
     if (topProductCodes != null && !topProductCodes.isEmpty()) {
       query.in(PricePrepareItem::getTopProductCode, topProductCodes);
     }
@@ -533,6 +541,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
         itemMapper.selectList(
             Wrappers.<PricePrepareItem>lambdaQuery()
                 .eq(PricePrepareItem::getOaNo, blankIfNull(item.getOaNo()))
+                .eq(PricePrepareItem::getPeriodMonth, blankIfNull(item.getPeriodMonth()))
                 .eq(PricePrepareItem::getTopProductCode, blankIfNull(item.getTopProductCode()))
                 .eq(PricePrepareItem::getMaterialCode, blankIfNull(item.getMaterialCode()))
                 .orderByDesc(PricePrepareItem::getId)
@@ -556,6 +565,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
         gapMapper.selectList(
             Wrappers.<PricePrepareGap>lambdaQuery()
                 .eq(PricePrepareGap::getOaNo, blankIfNull(gap.getOaNo()))
+                .eq(PricePrepareGap::getPeriodMonth, blankIfNull(gap.getPeriodMonth()))
                 .eq(PricePrepareGap::getTopProductCode, blankIfNull(gap.getTopProductCode()))
                 .eq(PricePrepareGap::getMaterialCode, blankIfNull(gap.getMaterialCode()))
                 .eq(PricePrepareGap::getGapMaterialCode, blankIfNull(gap.getGapMaterialCode()))
@@ -572,12 +582,14 @@ public class PricePrepareServiceImpl implements PricePrepareService {
 
   private void normalizeItemForDb(PricePrepareItem item) {
     if (item != null) {
+      item.setPeriodMonth(blankIfNull(item.getPeriodMonth()));
       item.setMessage(dbMessage(item.getMessage()));
     }
   }
 
   private void normalizeGapForDb(PricePrepareGap gap) {
     if (gap != null) {
+      gap.setPeriodMonth(blankIfNull(gap.getPeriodMonth()));
       gap.setMessage(dbMessage(gap.getMessage()));
     }
   }
@@ -609,9 +621,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     if (request == null || !StringUtils.hasText(request.getOaNo())) {
       throw new IllegalArgumentException("oaNo is required");
     }
-    String periodMonth = StringUtils.hasText(request.getPeriodMonth())
-        ? request.getPeriodMonth().trim()
-        : YearMonth.now().toString();
+    String periodMonth = CostPricingPeriodUtils.requireCurrentPricingMonth(request.getPeriodMonth());
     String sourceType = StringUtils.hasText(request.getSourceType())
         ? request.getSourceType().trim()
         : DEFAULT_SOURCE_TYPE;

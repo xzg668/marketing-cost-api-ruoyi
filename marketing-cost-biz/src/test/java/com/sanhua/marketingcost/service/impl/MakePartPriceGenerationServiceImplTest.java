@@ -14,6 +14,7 @@ import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
 import com.sanhua.marketingcost.dto.MakePartMaterialPriceResolveResult;
 import com.sanhua.marketingcost.dto.MakePartPriceGenerateResponse;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
+import com.sanhua.marketingcost.dto.priceprepare.NoScrapConfirmResponse;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomU9Source;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
@@ -25,6 +26,7 @@ import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceGapItemMapper;
 import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService;
+import com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService;
 import com.sanhua.marketingcost.service.MakePartPriceCalculator;
 import com.sanhua.marketingcost.service.MakePartProcessTypePolicy;
 import com.sanhua.marketingcost.service.MakePartScrapMappingService;
@@ -51,6 +53,7 @@ class MakePartPriceGenerationServiceImplTest {
   private MaterialPriceRouterService materialPriceRouterService;
   private LinkedPriceEnsureService linkedPriceEnsureService;
   private MakePartMaterialPriceResolveService priceResolveService;
+  private MakePartNoScrapConfirmationService noScrapConfirmationService;
   private MakePartPriceCalcRowMapper calcRowMapper;
   private MakePartPriceGapItemMapper gapItemMapper;
   private MakePartPriceGenerationServiceImpl service;
@@ -63,10 +66,12 @@ class MakePartPriceGenerationServiceImplTest {
     materialPriceRouterService = mock(MaterialPriceRouterService.class);
     linkedPriceEnsureService = mock(LinkedPriceEnsureService.class);
     priceResolveService = mock(MakePartMaterialPriceResolveService.class);
+    noScrapConfirmationService = mock(MakePartNoScrapConfirmationService.class);
     calcRowMapper = mock(MakePartPriceCalcRowMapper.class);
     gapItemMapper = mock(MakePartPriceGapItemMapper.class);
     when(materialPriceRouterService.listCandidates(any(), any(), any())).thenReturn(List.of());
     when(linkedPriceEnsureService.ensure(any())).thenReturn(new LinkedPriceEnsureResult());
+    when(noScrapConfirmationService.findEffective(any(), any(), any())).thenReturn(null);
     service =
         new MakePartPriceGenerationServiceImpl(
             sourceDataService,
@@ -77,6 +82,7 @@ class MakePartPriceGenerationServiceImplTest {
             linkedPriceEnsureService,
             priceResolveService,
             new MakePartPriceCalculator(),
+            noScrapConfirmationService,
             calcRowMapper,
             gapItemMapper);
   }
@@ -302,6 +308,64 @@ class MakePartPriceGenerationServiceImplTest {
   }
 
   @Test
+  @DisplayName("301300339 无映射但有有效无废料确认：生成 OK 明细并按0抵扣")
+  void noScrapConfirmedGeneratesOkRow() {
+    stubHappyPath("MAKE-001", List.of(child("301300339", "kg")), List.of());
+    when(noScrapConfirmationService.findEffective("301300339", "2026-05", "COMMERCIAL"))
+        .thenReturn(noScrapConfirmation());
+
+    MakePartPriceGenerateResponse response =
+        service.generateByMaterial("MAKE-001", "COMMERCIAL", "2026-05");
+
+    assertThat(response.getOkCount()).isEqualTo(1);
+    ArgumentCaptor<MakePartPriceCalcRow> rowCaptor =
+        ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    verify(calcRowMapper).insert(rowCaptor.capture());
+    MakePartPriceCalcRow row = rowCaptor.getValue();
+    assertThat(row.getChildMaterialNo()).isEqualTo("301300339");
+    assertThat(row.getScrapCode()).isEmpty();
+    assertThat(row.getScrapName()).isEqualTo("人工确认无废料");
+    assertThat(row.getScrapUnitPrice()).isEqualByComparingTo("0");
+    assertThat(row.getNoScrapConfirmed()).isTrue();
+    assertThat(row.getNoScrapConfirmationId()).isEqualTo(1001L);
+    assertThat(row.getStatus()).isEqualTo(MakePartPriceCalculator.STATUS_OK);
+    assertThat(row.getRemark()).contains("人工确认无废料", "confirmation_id=1001", "confirmed_by=alice");
+    verify(gapItemMapper, never()).insert(any(MakePartPriceGapItem.class));
+  }
+
+  @Test
+  @DisplayName("有无废料确认但价格月份不在有效期：服务不命中时仍返回缺废料映射")
+  void noScrapConfirmationOutOfPeriodStillMissingMapping() {
+    stubHappyPath("MAKE-001", List.of(child("301300339", "kg")), List.of());
+    when(noScrapConfirmationService.findEffective("301300339", "2026-04", "COMMERCIAL"))
+        .thenReturn(null);
+
+    service.generateByMaterial("MAKE-001", "COMMERCIAL", "2026-04");
+
+    ArgumentCaptor<MakePartPriceCalcRow> rowCaptor =
+        ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    verify(calcRowMapper).insert(rowCaptor.capture());
+    assertThat(rowCaptor.getValue().getStatus())
+        .isEqualTo(MakePartPriceCalculator.STATUS_MISSING_SCRAP_MAPPING);
+    assertThat(rowCaptor.getValue().getRemark()).contains("缺废料映射");
+  }
+
+  @Test
+  @DisplayName("有正常 CMS 废料映射时优先走映射，不读取无废料确认")
+  void normalScrapMappingDoesNotReadNoScrapConfirmation() {
+    stubHappyPath("MAKE-001", List.of(child("301300339", "kg")), List.of(scrap("SCRAP-001")));
+
+    service.generateByMaterial("MAKE-001", "COMMERCIAL", "2026-05");
+
+    ArgumentCaptor<MakePartPriceCalcRow> rowCaptor =
+        ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    verify(calcRowMapper).insert(rowCaptor.capture());
+    assertThat(rowCaptor.getValue().getScrapCode()).isEqualTo("SCRAP-001");
+    assertThat(rowCaptor.getValue().getNoScrapConfirmed()).isFalse();
+    verify(noScrapConfirmationService, never()).findEffective(any(), any(), any());
+  }
+
+  @Test
   @DisplayName("同料号和回收代码重复生成：存在则更新，不存在才新增")
   void repeatedGenerationUpdatesExistingRowsByParentAndScrapCode() {
     stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-001")));
@@ -464,6 +528,19 @@ class MakePartPriceGenerationServiceImplTest {
   private MakePartMaterialPriceResolveResult okPriceByCode(String materialCode) {
     String price = materialCode != null && materialCode.startsWith("SCRAP") ? "75.66" : "82.95";
     return okPrice(materialCode, price);
+  }
+
+  private NoScrapConfirmResponse noScrapConfirmation() {
+    NoScrapConfirmResponse response = new NoScrapConfirmResponse();
+    response.setId(1001L);
+    response.setBusinessUnitType("COMMERCIAL");
+    response.setMaterialNo("301300339");
+    response.setEffectiveFromMonth("2026-05");
+    response.setStatus("ACTIVE");
+    response.setConfirmedBy("alice");
+    response.setConfirmedAt(LocalDateTime.of(2026, 5, 20, 10, 0));
+    response.setConfirmReason("确认该料号确实无废料产生");
+    return response;
   }
 
   private LocalDateTime priceAsOf() {

@@ -7,6 +7,7 @@ import lombok.Setter;
 @Setter
 public class PricePrepareGapQueryRequest {
   private String prepareNo;
+  private String periodMonth;
   private String oaNo;
   private String topProductCode;
   private String materialCode;

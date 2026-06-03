@@ -1098,6 +1098,8 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       return new NewCalcOutcome(null, trace);
     }
     trace.put("rawExpr", linkedItem.getFormulaExpr());
+    trace.put("formulaPriceMonth", linkedItem.getPricingMonth());
+    trace.put("calculationPriceMonth", calculationPricingMonth(calcItem, linkedItem));
 
     LinkedPriceVariableContext variableContext = buildVariableContext(calcItem, oaForm, trace);
     OaForm contextOaForm =
@@ -1154,12 +1156,21 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       trace.put("calcScene", LinkedPriceCalcScene.MONTHLY_ADJUST.getCode());
       trace.put("adjustBatchId", adjustBatchId);
       trace.put("factorSource", monthlyFactorSource(adjustBatchId));
-      return LinkedPriceVariableContext.monthlyAdjust(adjustBatchId);
+      return LinkedPriceVariableContext.monthlyAdjust(adjustBatchId)
+          .pricingMonth(calcItem == null ? null : calcItem.getPricingMonth());
     }
     // QUOTE 场景变量上下文：正常报价必须优先使用 OA 表头锁价，不能误读月度调价影响因素价。
     trace.put("calcScene", LinkedPriceCalcScene.QUOTE.getCode());
     trace.put("factorSource", LinkedPriceCalcScene.QUOTE.getDefaultFactorSource().getCode());
-    return LinkedPriceVariableContext.quote(oaForm);
+    return LinkedPriceVariableContext.quote(oaForm)
+        .pricingMonth(calcItem == null ? null : calcItem.getPricingMonth());
+  }
+
+  private String calculationPricingMonth(PriceLinkedCalcItem calcItem, PriceLinkedItem linkedItem) {
+    if (calcItem != null && StringUtils.hasText(calcItem.getPricingMonth())) {
+      return calcItem.getPricingMonth().trim();
+    }
+    return linkedItem == null ? null : linkedItem.getPricingMonth();
   }
 
   private String monthlyFactorSource(Long adjustBatchId) {
@@ -1289,12 +1300,12 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       }
       // OA NULL：回落到基价表按 variable_code 当月"长江现货平均价"查，
       // 与 V28 新引擎语义保持一致（见 V28 迁移注释）
-      return resolveFinanceFallback(variable, linkedItem);
+      return resolveFinanceFallback(variable, linkedItem, calculationPricingMonth(calcItem, linkedItem));
     }
     if ("lp_finance_base_price".equalsIgnoreCase(sourceTable)) {
       return resolveFinanceValue(
           variable.getVariableName(),
-          linkedItem == null ? null : linkedItem.getPricingMonth(),
+          calculationPricingMonth(calcItem, linkedItem),
           financePriceMap);
     }
     if ("lp_price_linked_item".equalsIgnoreCase(sourceTable)) {
@@ -1343,12 +1354,12 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
    * <p>返回：查到 → 该月价；查不到 → null（公式里该变量会进 MISSING，由调用方暴露给业务）
    */
   private BigDecimal resolveFinanceFallback(
-      PriceVariable variable, PriceLinkedItem linkedItem) {
+      PriceVariable variable, PriceLinkedItem linkedItem, String calculationPricingMonth) {
     if (variable == null || linkedItem == null) {
       return null;
     }
     String factorCode = variable.getVariableCode();
-    String month = linkedItem.getPricingMonth();
+    String month = calculationPricingMonth;
     if (!StringUtils.hasText(factorCode) || !StringUtils.hasText(month)) {
       return null;
     }
@@ -1362,6 +1373,12 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     query.last("LIMIT 1");
     FinanceBasePrice row = financeBasePriceMapper.selectOne(query);
     return row == null ? null : row.getPrice();
+  }
+
+  private BigDecimal resolveFinanceFallback(
+      PriceVariable variable, PriceLinkedItem linkedItem) {
+    return resolveFinanceFallback(
+        variable, linkedItem, linkedItem == null ? null : linkedItem.getPricingMonth());
   }
 
   private BigDecimal resolveDynamicValue(String table, String field, String itemCode) {

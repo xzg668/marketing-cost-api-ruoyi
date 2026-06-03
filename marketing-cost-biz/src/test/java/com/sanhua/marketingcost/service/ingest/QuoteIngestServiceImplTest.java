@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -114,6 +115,31 @@ class QuoteIngestServiceImplTest {
     verify(quoteBomStatusMapper).insert(bomCaptor.capture());
     assertThat(bomCaptor.getValue().getBomStatus()).isEqualTo("NOT_CHECKED");
     verify(quoteIngestLogService).markImported(any(), any(), any(), any());
+  }
+
+  @Test
+  void duplicateItemKeysStillCreateBomStatusForEachInsertedItem() {
+    QuoteIngestRequest request = request("FI-SC-006", "EXT-T5-DUP-ITEM", "1001", "批量品");
+    QuoteIngestItemRequest second = new QuoteIngestItemRequest();
+    second.setSeq(1);
+    second.setExternalLineId(request.getItems().get(0).getExternalLineId());
+    second.setMaterialNo("1002");
+    second.setSunlModel("SHF-B");
+    second.setBusinessType("批量品");
+    request.setItems(List.of(request.getItems().get(0), second));
+    QuoteIngestLog log = log(17L, "EXCEL:EXT-T5-DUP-ITEM:1", "old");
+    when(quoteIngestLogService.findByIdempotencyKey("EXCEL:EXT-T5-DUP-ITEM:1")).thenReturn(null);
+    when(quoteIngestLogService.createReceived(any(), any(), any(), any(), any(), any(), any()))
+        .thenReturn(log);
+
+    QuoteIngestResponse response = service.ingest(request);
+
+    assertThat(response.isAccepted()).isTrue();
+    ArgumentCaptor<QuoteBomStatus> bomCaptor = ArgumentCaptor.forClass(QuoteBomStatus.class);
+    verify(quoteBomStatusMapper, times(2)).insert(bomCaptor.capture());
+    assertThat(bomCaptor.getAllValues())
+        .extracting(QuoteBomStatus::getOaFormItemId)
+        .containsExactly(1001L, 1002L);
   }
 
   @Test

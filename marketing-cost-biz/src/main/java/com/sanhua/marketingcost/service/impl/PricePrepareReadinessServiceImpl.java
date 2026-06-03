@@ -49,7 +49,8 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
       return warning("NOT_PREPARED", "缺少 OA 单号，无法检查价格准备状态", null, periodValue, null, 0, List.of());
     }
 
-    List<PricePrepareTopProductSummaryResponse> topSummaries = loadTopSummaries(oaNoValue);
+    List<PricePrepareTopProductSummaryResponse> topSummaries =
+        loadTopSummaries(oaNoValue, periodValue);
     if (topSummaries.isEmpty()) {
       String message =
           StringUtils.hasText(periodValue)
@@ -85,7 +86,7 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
       return result;
     }
 
-    List<String> gapSummaries = loadGapSummaries(oaNoValue);
+    List<String> gapSummaries = loadGapSummaries(oaNoValue, periodValue);
     if (gapSummaries.isEmpty()) {
       gapSummaries = notReadyTopSummaries.stream().limit(5).toList();
     }
@@ -135,7 +136,7 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
         gapSummaries);
   }
 
-  private List<String> loadGapSummaries(String oaNo) {
+  private List<String> loadGapSummaries(String oaNo, String periodMonth) {
     if (!StringUtils.hasText(oaNo)) {
       return List.of();
     }
@@ -143,6 +144,8 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
         gapMapper.selectList(
             Wrappers.lambdaQuery(PricePrepareGap.class)
                 .eq(PricePrepareGap::getOaNo, oaNo.trim())
+                .eq(StringUtils.hasText(periodMonth), PricePrepareGap::getPeriodMonth,
+                    periodMonth == null ? null : periodMonth.trim())
                 .orderByDesc(PricePrepareGap::getCreatedAt)
                 .orderByDesc(PricePrepareGap::getId)
                 .last("LIMIT 5"));
@@ -161,9 +164,10 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
     return summaries;
   }
 
-  private List<PricePrepareTopProductSummaryResponse> loadTopSummaries(String oaNo) {
+  private List<PricePrepareTopProductSummaryResponse> loadTopSummaries(String oaNo, String periodMonth) {
     PricePrepareTopProductSummaryQueryRequest request = new PricePrepareTopProductSummaryQueryRequest();
     request.setOaNo(oaNo);
+    request.setPeriodMonth(periodMonth);
     request.setPage(1);
     request.setPageSize(500);
     PricePrepareTopProductSummaryPageResponse page = queryService.pageTopProductSummaries(request);

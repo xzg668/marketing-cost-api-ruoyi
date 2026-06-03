@@ -52,6 +52,8 @@ public class OaFormItem {
   private BigDecimal sus316WeightG;
   private BigDecimal copperWeightG;
   private LocalDate validDate;
+  private String calcStatus;
+  private LocalDateTime calcAt;
 
   /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
   @TableField(fill = FieldFill.INSERT)
@@ -384,6 +386,22 @@ public class OaFormItem {
 
   public void setValidDate(LocalDate validDate) {
     this.validDate = validDate;
+  }
+
+  public String getCalcStatus() {
+    return calcStatus;
+  }
+
+  public void setCalcStatus(String calcStatus) {
+    this.calcStatus = calcStatus;
+  }
+
+  public LocalDateTime getCalcAt() {
+    return calcAt;
+  }
+
+  public void setCalcAt(LocalDateTime calcAt) {
+    this.calcAt = calcAt;
   }
 
   public LocalDateTime getCreatedAt() {

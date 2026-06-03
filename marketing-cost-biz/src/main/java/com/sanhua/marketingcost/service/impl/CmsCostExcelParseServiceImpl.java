@@ -39,8 +39,14 @@ public class CmsCostExcelParseServiceImpl implements CmsCostExcelParseService {
   private static final int PLAN_HEADER_ROW = 0;
   private static final int PLAN_DATA_START_ROW = 1;
   private static final int CMS_EXPORT_EN_HEADER_ROW = 0;
+  private static final int CMS_EXPORT_CN_HEADER_ROW = 1;
+  private static final int CMS_EXPORT_CN_HEADER_REPEAT_ROW = 2;
   private static final int CMS_EXPORT_DATA_START_ROW = 3;
   private static final BigDecimal CENT_TO_YUAN = new BigDecimal("100");
+  private static final Map<String, String> WORKSHOP_HEADER_ALIASES = workshopHeaderAliases();
+  private static final Map<String, String> SUBJECT_HEADER_ALIASES = subjectHeaderAliases();
+  private static final Map<String, String> SUBJECT_SETTING_HEADER_ALIASES = subjectSettingHeaderAliases();
+  private static final Map<String, String> MATERIAL_SCRAP_HEADER_ALIASES = materialScrapHeaderAliases();
   private static final List<DateTimeFormatter> DATE_FORMATTERS =
       List.of(
           DateTimeFormatter.ISO_LOCAL_DATE,
@@ -134,7 +140,7 @@ public class CmsCostExcelParseServiceImpl implements CmsCostExcelParseService {
       DataFormatter formatter = new DataFormatter(Locale.CHINA);
       FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
       Map<String, Integer> columns =
-          readColumns(sheet.getRow(CMS_EXPORT_EN_HEADER_ROW), formatter, evaluator);
+          readCmsExportColumns(sheet, WORKSHOP_HEADER_ALIASES, formatter, evaluator);
       requireColumns(result, columns, "period", "parentCode", "workingCost", "id");
       for (int rowIndex = CMS_EXPORT_DATA_START_ROW; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
         Row row = sheet.getRow(rowIndex);
@@ -209,7 +215,7 @@ public class CmsCostExcelParseServiceImpl implements CmsCostExcelParseService {
       DataFormatter formatter = new DataFormatter(Locale.CHINA);
       FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
       Map<String, Integer> columns =
-          readColumns(sheet.getRow(CMS_EXPORT_EN_HEADER_ROW), formatter, evaluator);
+          readCmsExportColumns(sheet, SUBJECT_HEADER_ALIASES, formatter, evaluator);
       requireColumns(result, columns, "period", "parentCode", "materialPrice", "firstSubjectName", "secondSubjectName", "id");
       for (int rowIndex = CMS_EXPORT_DATA_START_ROW; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
         Row row = sheet.getRow(rowIndex);
@@ -278,7 +284,7 @@ public class CmsCostExcelParseServiceImpl implements CmsCostExcelParseService {
       DataFormatter formatter = new DataFormatter(Locale.CHINA);
       FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
       Map<String, Integer> columns =
-          readColumns(sheet.getRow(CMS_EXPORT_EN_HEADER_ROW), formatter, evaluator);
+          readCmsExportColumns(sheet, SUBJECT_SETTING_HEADER_ALIASES, formatter, evaluator);
       requireColumns(
           result,
           columns,
@@ -340,7 +346,7 @@ public class CmsCostExcelParseServiceImpl implements CmsCostExcelParseService {
       DataFormatter formatter = new DataFormatter(Locale.CHINA);
       FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
       Map<String, Integer> columns =
-          readColumns(sheet.getRow(CMS_EXPORT_EN_HEADER_ROW), formatter, evaluator);
+          readCmsExportColumns(sheet, MATERIAL_SCRAP_HEADER_ALIASES, formatter, evaluator);
       requireColumns(result, columns, "materialCode", "recycleMaterialCode");
       if (result.hasErrors()) {
         return result;
@@ -430,9 +436,288 @@ public class CmsCostExcelParseServiceImpl implements CmsCostExcelParseService {
     return columns;
   }
 
+  private Map<String, Integer> readCmsExportColumns(
+      Sheet sheet,
+      Map<String, String> headerAliases,
+      DataFormatter formatter,
+      FormulaEvaluator evaluator) {
+    Map<String, Integer> columns = new LinkedHashMap<>();
+    mergeHeaderColumns(
+        columns, sheet.getRow(CMS_EXPORT_EN_HEADER_ROW), headerAliases, formatter, evaluator);
+    mergeHeaderColumns(
+        columns, sheet.getRow(CMS_EXPORT_CN_HEADER_ROW), headerAliases, formatter, evaluator);
+    mergeHeaderColumns(
+        columns, sheet.getRow(CMS_EXPORT_CN_HEADER_REPEAT_ROW), headerAliases, formatter, evaluator);
+    return columns;
+  }
+
+  private void mergeHeaderColumns(
+      Map<String, Integer> columns,
+      Row row,
+      Map<String, String> headerAliases,
+      DataFormatter formatter,
+      FormulaEvaluator evaluator) {
+    if (row == null) {
+      return;
+    }
+    for (Cell cell : row) {
+      String value = cellValue(cell, formatter, evaluator);
+      if (!StringUtils.hasText(value)) {
+        continue;
+      }
+      String header = value.trim();
+      columns.putIfAbsent(headerAliases.getOrDefault(header, header), cell.getColumnIndex());
+    }
+  }
+
   private Sheet getSheet0(Workbook workbook) {
     Sheet sheet0 = workbook.getSheet("Sheet0");
     return sheet0 == null ? workbook.getSheetAt(0) : sheet0;
+  }
+
+  private static Map<String, String> workshopHeaderAliases() {
+    return aliases(
+        "期间",
+        "period",
+        "一级生产单元编码",
+        "firstUnitCode",
+        "一级生产单元名称",
+        "firstUnitName",
+        "父件编码",
+        "parentCode",
+        "父件名称",
+        "parentName",
+        "父件规格",
+        "parentSpec",
+        "父件型号",
+        "parentType",
+        "末级生产单元名称",
+        "lastUnitName",
+        "末级生产单元编码",
+        "lastUnitCode",
+        "工时",
+        "workingHours",
+        "经费",
+        "funding",
+        "材料计价",
+        "materialPrice",
+        "工资",
+        "workingCost",
+        "构建标记",
+        "buildFlag",
+        "核算路径",
+        "path",
+        "一级科目编码",
+        "firstSubjectCode",
+        "一级科目名称",
+        "firstSubjectName",
+        "二级科目编码",
+        "secondSubjectCode",
+        "二级科目名称",
+        "secondSubjectName",
+        "三级科目编码",
+        "thirdSubjectCode",
+        "三级级科目编码",
+        "thirdSubjectCode",
+        "三级科目名称",
+        "thirdSubjectName",
+        "三级级科目名称",
+        "thirdSubjectName",
+        "创建时间",
+        "createdTime",
+        "id",
+        "id",
+        "数据标题",
+        "name",
+        "创建人",
+        "creater",
+        "创建人部门",
+        "createdDeptId",
+        "拥有者",
+        "owner",
+        "拥有者部门",
+        "ownerDeptId",
+        "修改人",
+        "modifier",
+        "修改时间",
+        "modifiedTime",
+        "流程实例ID",
+        "workflowInstanceId",
+        "单据号",
+        "sequenceNo",
+        "单据状态",
+        "sequenceStatus");
+  }
+
+  private static Map<String, String> subjectHeaderAliases() {
+    return aliases(
+        "期间",
+        "period",
+        "一级生产单元编码",
+        "firstUnitCode",
+        "一级生产单元名称",
+        "firstUnitName",
+        "父件编码",
+        "parentCode",
+        "父件名称",
+        "parentName",
+        "父件规格",
+        "parentSpec",
+        "父件型号",
+        "parentType",
+        "末级科目编码",
+        "lastSubjectCode",
+        "末级科目名称",
+        "lastSubjectName",
+        "末级科目层级",
+        "lastSubjectLevel",
+        "材料计价",
+        "materialPrice",
+        "构建标记",
+        "buildFlag",
+        "核算路径",
+        "path",
+        "一级科目编码",
+        "firstSubjectCode",
+        "一级科目名称",
+        "firstSubjectName",
+        "二级科目编码",
+        "secondSubjectCode",
+        "二级科目名称",
+        "secondSubjectName",
+        "三级科目编码",
+        "thirdSubjectCode",
+        "三级级科目编码",
+        "thirdSubjectCode",
+        "三级科目名称",
+        "thirdSubjectName",
+        "三级级科目名称",
+        "thirdSubjectName",
+        "id",
+        "id",
+        "数据标题",
+        "name",
+        "创建人",
+        "creater",
+        "创建人部门",
+        "createdDeptId",
+        "拥有者",
+        "owner",
+        "拥有者部门",
+        "ownerDeptId",
+        "创建时间",
+        "createdTime",
+        "修改人",
+        "modifier",
+        "修改时间",
+        "modifiedTime",
+        "流程实例ID",
+        "workflowInstanceId",
+        "单据号",
+        "sequenceNo",
+        "单据状态",
+        "sequenceStatus");
+  }
+
+  private static Map<String, String> subjectSettingHeaderAliases() {
+    return aliases(
+        "一级科目编号",
+        "firstLevelSubjectCode",
+        "一级科目编码",
+        "firstLevelSubjectCode",
+        "一级科目名称",
+        "firstLevelSubjectName",
+        "二级科目编号",
+        "secondLevelSubjectCode",
+        "二级科目编码",
+        "secondLevelSubjectCode",
+        "二级科目名称",
+        "secondLevelSubjectName",
+        "三级科目编号",
+        "thirdLevelSubjectCode",
+        "三级科目编码",
+        "thirdLevelSubjectCode",
+        "三级科目名称",
+        "thirdLevelSubjectName");
+  }
+
+  private static Map<String, String> materialScrapHeaderAliases() {
+    return aliases(
+        "物料料号",
+        "materialCode",
+        "物料品名",
+        "materialName",
+        "物料规格",
+        "materialSpecifications",
+        "物料型号",
+        "materialModel",
+        "物料单位",
+        "materialUnit",
+        "回收料号",
+        "recycleMaterialCode",
+        "回收料品名",
+        "recycleMaterialName",
+        "回收料规格",
+        "recycleMaterialSpecification",
+        "回收料型号",
+        "recycleMaterialModel",
+        "回收料单位",
+        "recycleMaterialUnit",
+        "同步版本",
+        "RecycleMaterialInfoVersion",
+        "成本组名称",
+        "costGroupName",
+        "创建人",
+        "creater",
+        "创建人部门",
+        "createdDeptId",
+        "拥有者",
+        "owner",
+        "拥有者部门",
+        "ownerDeptId",
+        "创建时间",
+        "createdTime",
+        "修改人",
+        "modifier",
+        "修改时间",
+        "modifiedTime",
+        "单据号",
+        "sequenceNo",
+        "id",
+        "id",
+        "数据标题",
+        "name",
+        "流程实例ID",
+        "workflowInstanceId",
+        "单据状态",
+        "sequenceStatus",
+        "关联明细id",
+        "linkDetailId",
+        "审核人",
+        "approvalPerson",
+        "同步时间",
+        "syncTime",
+        "审核时间",
+        "approvalTime",
+        "成本组编码",
+        "costGroupCode",
+        "成本组关联Id",
+        "costGroup",
+        "生效时间",
+        "effectiveDate",
+        "期间",
+        "postingPeriod");
+  }
+
+  private static Map<String, String> aliases(String... pairs) {
+    if (pairs.length % 2 != 0) {
+      throw new IllegalArgumentException("Header alias pairs must be even");
+    }
+    Map<String, String> aliases = new LinkedHashMap<>();
+    for (int index = 0; index < pairs.length; index += 2) {
+      aliases.put(pairs[index], pairs[index + 1]);
+    }
+    return aliases;
   }
 
   private <T> void requireColumns(

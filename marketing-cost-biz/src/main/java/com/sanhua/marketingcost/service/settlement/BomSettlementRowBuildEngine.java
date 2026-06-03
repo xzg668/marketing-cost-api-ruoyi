@@ -164,7 +164,17 @@ public class BomSettlementRowBuildEngine {
 
     List<BomCostingRow> costingRows = new ArrayList<>();
     List<BomSettlementSubRefCandidate> subRefs = new ArrayList<>();
-    materializeRollupBuckets(request, rollupBuckets, stoppedPaths, costingRows, subRefs, sourceRefs, warnings);
+    materializeRollupBuckets(
+        request,
+        rollupBuckets,
+        nodeByPath,
+        stoppedPaths,
+        costingRows,
+        extraRows,
+        subRefs,
+        sourceRefs,
+        emittedProcessFeePaths,
+        warnings);
     costingRows.addAll(extraRows);
     costingRows.addAll(normalRows);
 
@@ -299,10 +309,13 @@ public class BomSettlementRowBuildEngine {
   private static void materializeRollupBuckets(
       BomSettlementBuildRequest request,
       Map<String, RollupBucket> rollupBuckets,
+      Map<String, BomSettlementNode> nodeByPath,
       Set<String> stoppedPaths,
       List<BomCostingRow> costingRows,
+      List<BomCostingRow> extraRows,
       List<BomSettlementSubRefCandidate> subRefs,
       List<BomSettlementSourceRefCandidate> sourceRefs,
+      Set<String> emittedProcessFeePaths,
       List<String> warnings) {
     for (RollupBucket bucket : rollupBuckets.values()) {
       if (stoppedPaths.contains(bucket.parent.path())
@@ -323,6 +336,8 @@ public class BomSettlementRowBuildEngine {
         subRefs.add(new BomSettlementSubRefCandidate(
             parentRow.getPath(), toSubRef(child, bucket.rule)));
       }
+      appendRollupParentOutsourcedFee(
+          request, bucket.parent, nodeByPath, extraRows, sourceRefs, emittedProcessFeePaths);
     }
   }
 
@@ -384,6 +399,23 @@ public class BomSettlementRowBuildEngine {
       List<BomSettlementSourceRefCandidate> sourceRefs,
       Set<String> emittedProcessFeePaths) {
     if (!isTerminalPurchasedNode(leaf) || parent == null || !isOutsourcedNode(parent)) {
+      return;
+    }
+    appendProcessFeeRow(request, parent, null, extraRows, sourceRefs, emittedProcessFeePaths);
+  }
+
+  private static void appendRollupParentOutsourcedFee(
+      BomSettlementBuildRequest request,
+      BomSettlementNode rollupParent,
+      Map<String, BomSettlementNode> nodeByPath,
+      List<BomCostingRow> extraRows,
+      List<BomSettlementSourceRefCandidate> sourceRefs,
+      Set<String> emittedProcessFeePaths) {
+    if (rollupParent == null || nodeByPath == null) {
+      return;
+    }
+    BomSettlementNode parent = nodeByPath.get(parentPathOf(rollupParent.path()));
+    if (parent == null || !isOutsourcedNode(parent)) {
       return;
     }
     appendProcessFeeRow(request, parent, null, extraRows, sourceRefs, emittedProcessFeePaths);

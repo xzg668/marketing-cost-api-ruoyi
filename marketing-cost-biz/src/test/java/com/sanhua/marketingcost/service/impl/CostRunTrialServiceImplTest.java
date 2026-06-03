@@ -462,6 +462,64 @@ class CostRunTrialServiceImplTest {
   }
 
   @Test
+  @DisplayName("按 OA 明细行选择试算时只核算选中产品")
+  void costTrialRunsOnlySelectedOaFormItems() throws Exception {
+    LocalDate currentDate = LocalDate.now();
+    String currentPeriod = currentDate.toString().substring(0, 7);
+    when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+      TransactionCallback<?> callback = invocation.getArgument(0);
+      return callback.doInTransaction(null);
+    });
+    when(materialMasterSyncService.syncByOaNo("OA-SELECT"))
+        .thenReturn(new MaterialMasterSyncService.SyncResult(1, 1, 1, "BATCH-1"));
+    QuoteBomStatusItemResponse unselectedNoBom = new QuoteBomStatusItemResponse();
+    unselectedNoBom.setOaFormItemId(301L);
+    unselectedNoBom.setProductCode("MAT-UNSELECTED");
+    unselectedNoBom.setBomStatus("NO_BOM");
+    QuoteBomStatusItemResponse selectedReady = new QuoteBomStatusItemResponse();
+    selectedReady.setOaFormItemId(302L);
+    selectedReady.setProductCode("MAT-SELECTED");
+    selectedReady.setBomStatus("SYNCED");
+    QuoteBomStatusResponse statusResponse = new QuoteBomStatusResponse();
+    statusResponse.setItems(List.of(unselectedNoBom, selectedReady));
+    when(quoteBomStatusService.checkForCostRun("OA-SELECT")).thenReturn(statusResponse);
+
+    OaForm form = new OaForm();
+    form.setId(300L);
+    form.setOaNo("OA-SELECT");
+    form.setBusinessUnitType("COMMERCIAL");
+    when(oaFormMapper.selectOne(any())).thenReturn(form);
+
+    OaFormItem first = new OaFormItem();
+    first.setId(301L);
+    first.setMaterialNo("MAT-UNSELECTED");
+    OaFormItem second = new OaFormItem();
+    second.setId(302L);
+    second.setMaterialNo("MAT-SELECTED");
+    second.setPackageMethod("BOX");
+    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(first, second));
+    when(costRunPartItemMapper.selectBaseByOaNo("OA-SELECT"))
+        .thenReturn(List.of(part("MAT-SELECTED")));
+    when(materialPriceRouterService.listCandidates(
+        eq("MAT-SELECTED"), eq(currentPeriod), eq(currentDate)))
+        .thenReturn(List.of(route("MAT-SELECTED", PriceTypeEnum.FIXED)));
+    when(costRunEngine.run(any(CostRunContext.class)))
+        .thenReturn(engineResult("OA-SELECT", "MAT-SELECTED", List.of(part("MAT-SELECTED")), List.of()));
+
+    CostRunTrialResponse response = service.run("OA-SELECT", List.of(302L)).get();
+
+    assertEquals(1, response.getProductCount());
+    ArgumentCaptor<CostRunContext> contextCaptor = ArgumentCaptor.forClass(CostRunContext.class);
+    verify(costRunEngine).run(contextCaptor.capture());
+    CostRunContext context = contextCaptor.getValue();
+    assertEquals(302L, context.getOaFormItemId());
+    assertEquals("MAT-SELECTED", context.getProductCode());
+    assertEquals("BOX", context.getPackageMethod());
+    verify(costRunResultWriter).writeQuoteResult(any(), eq(form), eq(second));
+    verify(oaFormMapper, never()).update(any(), any());
+  }
+
+  @Test
   @DisplayName("PPR-09：价格准备未完成时当前阶段只写进度提示并继续实时成本")
   void costTrialContinuesWithPricePrepareWarning() throws Exception {
     LocalDate currentDate = LocalDate.now();
@@ -637,8 +695,8 @@ class CostRunTrialServiceImplTest {
   }
 
   @Test
-  @DisplayName("LPE-08：ensure 返回失败项时实时成本进入失败状态并停止后续取价")
-  void costTrialFailsWhenEnsureReturnsFailedItems() {
+  @DisplayName("LPE-08：ensure 返回失败项时实时成本提示失败并继续部品取价")
+  void costTrialContinuesWhenEnsureReturnsFailedItems() throws Exception {
     LocalDate currentDate = LocalDate.now();
     String currentPeriod = currentDate.toString().substring(0, 7);
     when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
@@ -668,13 +726,26 @@ class CostRunTrialServiceImplTest {
     failed.addFailedItem("MAT-LINKED", "公式变量缺失");
     when(linkedPriceEnsureService.ensure(any())).thenReturn(failed);
 
-    ExecutionException ex =
-        assertThrows(ExecutionException.class, () -> service.run("OA-ENSURE-FAIL").get());
+    CostRunPartItemDto errorPart = part("MAT-LINKED");
+    errorPart.setPriceSource("ERROR");
+    errorPart.setRemark("联动价按需确保失败：MAT-LINKED: 公式变量缺失");
+    when(costRunEngine.run(any(CostRunContext.class)))
+        .thenReturn(engineResult("OA-ENSURE-FAIL", "MAT-LINKED", List.of(errorPart), List.of()));
 
-    assertInstanceOf(RuntimeException.class, ex.getCause());
-    assertTrue(ex.getCause().getMessage().contains("联动价按需确保失败"));
+    CostRunTrialResponse response = service.run("OA-ENSURE-FAIL").get();
+
+    assertEquals(1, response.getProductCount());
+    assertEquals(1, response.getPartCount());
+    assertEquals("DONE", progressStore.get("OA-ENSURE-FAIL").getStatus());
     assertTrue(progressStore.get("OA-ENSURE-FAIL").getMessage().contains("公式变量缺失"));
-    verify(costRunEngine, never()).run(any());
+    assertTrue(progressStore.get("OA-ENSURE-FAIL").getMessage().contains("继续进入部品取价"));
+    verify(costRunEngine).run(any(CostRunContext.class));
+    ArgumentCaptor<CostRunObjectResult> resultCaptor =
+        ArgumentCaptor.forClass(CostRunObjectResult.class);
+    verify(costRunResultWriter).writeQuoteResult(resultCaptor.capture(), eq(form), eq(formItem));
+    CostRunPartItemDto writtenPart = resultCaptor.getValue().getPartItems().get(0);
+    assertEquals("ERROR", writtenPart.getPriceSource());
+    assertTrue(writtenPart.getRemark().contains("公式变量缺失"));
   }
 
   private static CostRunPartItemDto part(String partCode) {

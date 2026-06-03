@@ -15,6 +15,7 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBatchPageResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBatchQueryRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareCandidatePageResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareCandidateQueryRequest;
+import com.sanhua.marketingcost.dto.priceprepare.NoScrapConfirmResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGapPageResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGapQueryRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareItemPageResponse;
@@ -33,6 +34,7 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
+import com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -51,6 +53,7 @@ class PricePrepareQueryServiceImplTest {
   private OaFormItemMapper oaFormItemMapper;
   private PricePrepareItemMapper itemMapper;
   private PricePrepareGapMapper gapMapper;
+  private MakePartNoScrapConfirmationService noScrapConfirmationService;
   private PricePrepareQueryServiceImpl service;
 
   @BeforeAll
@@ -71,9 +74,11 @@ class PricePrepareQueryServiceImplTest {
     oaFormItemMapper = mock(OaFormItemMapper.class);
     itemMapper = mock(PricePrepareItemMapper.class);
     gapMapper = mock(PricePrepareGapMapper.class);
+    noScrapConfirmationService = mock(MakePartNoScrapConfirmationService.class);
     service =
         new PricePrepareQueryServiceImpl(
-            oaFormMapper, oaFormItemMapper, batchMapper, itemMapper, gapMapper);
+            oaFormMapper, oaFormItemMapper, batchMapper, itemMapper, gapMapper,
+            noScrapConfirmationService);
   }
 
   @Test
@@ -298,6 +303,47 @@ class PricePrepareQueryServiceImplTest {
     verify(gapMapper).selectPage(any(Page.class), queryCaptor.capture());
     assertThat(((AbstractWrapper<?, ?, ?>) queryCaptor.getValue()).getSqlSegment())
         .contains("oa_no", "gap_material_code", "gap_type", "item_type", "oa_push_status", "ORDER BY");
+  }
+
+  @Test
+  @DisplayName("缺废料映射缺口：按料号和价格月份回填有效无废料确认")
+  void pageGapsEnrichesEffectiveNoScrapConfirmation() {
+    PricePrepareGap gap = new PricePrepareGap();
+    gap.setId(187L);
+    gap.setPrepareNo("PPR-1");
+    gap.setBusinessUnitType("COMMERCIAL");
+    gap.setSourceTable("lp_material_scrap_ref");
+    gap.setGapMaterialCode("301300339");
+    gap.setMessage("缺废料映射(child_material_no=301300339)");
+    when(gapMapper.selectPage(any(), any())).thenAnswer(invocation -> {
+      Page<PricePrepareGap> page = invocation.getArgument(0);
+      page.setTotal(1);
+      page.setRecords(List.of(gap));
+      return page;
+    });
+    PricePrepareBatch batch = new PricePrepareBatch();
+    batch.setPrepareNo("PPR-1");
+    batch.setPeriodMonth("2026-06");
+    when(batchMapper.selectList(any())).thenReturn(List.of(batch));
+    NoScrapConfirmResponse confirmation = new NoScrapConfirmResponse();
+    confirmation.setId(1L);
+    confirmation.setStatus("ACTIVE");
+    confirmation.setConfirmedBy("admin");
+    confirmation.setConfirmedAt(LocalDateTime.of(2026, 6, 2, 20, 6, 54));
+    confirmation.setConfirmReason("testtest");
+    when(noScrapConfirmationService.findEffective("301300339", "2026-06", "COMMERCIAL"))
+        .thenReturn(confirmation);
+
+    PricePrepareGapPageResponse response = service.pageGaps(new PricePrepareGapQueryRequest());
+
+    PricePrepareGap row = response.getRecords().get(0);
+    assertThat(row.getActionType()).isEqualTo("CONFIRM_NO_SCRAP");
+    assertThat(row.getActionMaterialNo()).isEqualTo("301300339");
+    assertThat(row.getCanConfirmNoScrap()).isFalse();
+    assertThat(row.getNoScrapConfirmationId()).isEqualTo(1L);
+    assertThat(row.getNoScrapConfirmationStatus()).isEqualTo("ACTIVE");
+    assertThat(row.getConfirmedBy()).isEqualTo("admin");
+    assertThat(row.getConfirmReason()).isEqualTo("testtest");
   }
 
   private OaForm oaForm(Long id, String oaNo, String customer, String calcStatus) {

@@ -27,8 +27,8 @@ import com.sanhua.marketingcost.service.NormalMaterialPricePrepareStrategy;
 import com.sanhua.marketingcost.service.PackageComponentPricePrepareStrategy;
 import com.sanhua.marketingcost.service.PricePrepareBomItemLoader;
 import com.sanhua.marketingcost.service.PricePrepareItemClassifier;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
-import java.time.YearMonth;
 import java.util.List;
 import java.util.Map;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -42,6 +42,8 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.transaction.annotation.Transactional;
 
 class PricePrepareServiceImplTest {
+
+  private static final String CURRENT_PERIOD = CostPricingPeriodUtils.currentPricingMonth();
 
   private PricePrepareBatchMapper batchMapper;
   private PricePrepareItemMapper itemMapper;
@@ -130,10 +132,22 @@ class PricePrepareServiceImplTest {
 
     PricePrepareGenerateResult result = service.generate(request);
 
-    assertThat(result.getPeriodMonth()).isEqualTo(YearMonth.now().toString());
+    assertThat(result.getPeriodMonth()).isEqualTo(CURRENT_PERIOD);
     assertThat(result.getPrepareNo()).startsWith("PPR-");
     verify(batchMapper).insert(any(PricePrepareBatch.class));
     verify(batchMapper).updateById(any(PricePrepareBatch.class));
+  }
+
+  @Test
+  @DisplayName("生成骨架：非当前核算月直接拒绝")
+  void generateRejectsNonCurrentPeriod() {
+    PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
+    request.setOaNo("OA-001");
+    request.setPeriodMonth("2026-05");
+
+    assertThatThrownBy(() -> service.generate(request))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("当前重算核算月为", "请按当前月执行价格准备");
   }
 
   @Test
@@ -141,7 +155,7 @@ class PricePrepareServiceImplTest {
   void generateForcesMainManufacturingPurpose() {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-001");
-    request.setPeriodMonth("2026-05");
+    request.setPeriodMonth(CURRENT_PERIOD);
     request.setBomPurpose("工程BOM");
     request.setSourceType(" U9 ");
     BomCostingRow row = bomRow(1L, "1079900000536", "MAT-001", "采购件");
@@ -151,7 +165,7 @@ class PricePrepareServiceImplTest {
     when(normalMaterialPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.eq("OA-001"),
             org.mockito.ArgumentMatchers.eq("COMMERCIAL"),
-            org.mockito.ArgumentMatchers.eq("2026-05"),
+            org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(planItem)))
         .thenReturn(NormalMaterialPricePrepareResult.ready(
             new BigDecimal("12.30"), new BigDecimal("30.750"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
@@ -202,7 +216,7 @@ class PricePrepareServiceImplTest {
   void generateMarksBatchFailedWhenBomLoadFails() {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-BOM-FAIL");
-    request.setPeriodMonth("2026-05");
+    request.setPeriodMonth(CURRENT_PERIOD);
     when(bomItemLoader.loadByOaNo("OA-BOM-FAIL"))
         .thenThrow(new IllegalStateException("U9明细读取失败"));
 
@@ -225,7 +239,7 @@ class PricePrepareServiceImplTest {
   void generateMarksBatchFailedWhenClassifierFails() {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-CLASSIFY-FAIL");
-    request.setPeriodMonth("2026-05");
+    request.setPeriodMonth(CURRENT_PERIOD);
     BomCostingRow row = bomRow(1L, "TOP-A", "MAT-A", "采购件");
     when(bomItemLoader.loadByOaNo("OA-CLASSIFY-FAIL")).thenReturn(List.of(row));
     when(itemClassifier.classify(List.of(row)))
@@ -244,12 +258,12 @@ class PricePrepareServiceImplTest {
   void generateSameOaAndPeriodReusesCurrentBatch() {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-RERUN");
-    request.setPeriodMonth("2026-05");
+    request.setPeriodMonth(CURRENT_PERIOD);
     PricePrepareBatch existing = new PricePrepareBatch();
     existing.setId(10L);
     existing.setPrepareNo("PPR-EXISTING");
     existing.setOaNo("OA-RERUN");
-    existing.setPeriodMonth("2026-05");
+    existing.setPeriodMonth(CURRENT_PERIOD);
     when(batchMapper.selectOne(org.mockito.ArgumentMatchers.any())).thenReturn(existing);
     when(bomItemLoader.loadByOaNo("OA-RERUN")).thenReturn(List.of());
 
@@ -308,7 +322,7 @@ class PricePrepareServiceImplTest {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-LINE");
     request.setTopProductCodes(List.of("TOP-A", "TOP-A", " TOP-B "));
-    request.setPeriodMonth("2026-05");
+    request.setPeriodMonth(CURRENT_PERIOD);
     BomCostingRow row = bomRow(1L, "TOP-A", "MAT-A", "采购件");
     PricePreparePlanItem planItem = planItem(row, "NORMAL", "READY");
     when(bomItemLoader.loadByOaNoAndTopProducts("OA-LINE", List.of("TOP-A", "TOP-B")))
@@ -317,7 +331,7 @@ class PricePrepareServiceImplTest {
     when(normalMaterialPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.eq("OA-LINE"),
             org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.eq("2026-05"),
+            org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(planItem)))
         .thenReturn(NormalMaterialPricePrepareResult.ready(
             new BigDecimal("1.20"), new BigDecimal("3.000"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
@@ -353,7 +367,7 @@ class PricePrepareServiceImplTest {
   void generateAllStrategySuccessBatch() {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-ALL-SUCCESS");
-    request.setPeriodMonth("2026-05");
+    request.setPeriodMonth(CURRENT_PERIOD);
     BomCostingRow normalRow = bomRow(1L, "TOP-A", "MAT-A", "采购件");
     BomCostingRow packageRow = bomRow(2L, "TOP-A", "PKG-A", "虚拟");
     BomCostingRow makeRow = bomRow(3L, "TOP-A", "MAKE-A", "制造件");
@@ -367,7 +381,7 @@ class PricePrepareServiceImplTest {
     when(normalMaterialPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.eq("OA-ALL-SUCCESS"),
             org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.eq("2026-05"),
+            org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(normalItem)))
         .thenReturn(NormalMaterialPricePrepareResult.ready(
             new BigDecimal("1.20"), new BigDecimal("3.000"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
@@ -415,7 +429,7 @@ class PricePrepareServiceImplTest {
   void normalMissingPriceDoesNotBlockWholeBatch() {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-NORMAL-GAP");
-    request.setPeriodMonth("2026-05");
+    request.setPeriodMonth(CURRENT_PERIOD);
     BomCostingRow row1 = bomRow(1L, "TOP-A", "MAT-MISS", "采购件");
     BomCostingRow row2 = bomRow(2L, "TOP-A", "PKG-001", "虚拟");
     BomCostingRow row3 = bomRow(3L, "TOP-A", "MAKE-001", "制造件");
@@ -427,7 +441,7 @@ class PricePrepareServiceImplTest {
     when(normalMaterialPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.eq("OA-NORMAL-GAP"),
             org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.eq("2026-05"),
+            org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(item1)))
         .thenReturn(NormalMaterialPricePrepareResult.gap(
             "MISSING_PRICE", "MISSING_PRICE", "ERROR", "PriceResolver", "路由=[FIXED] 但桶内无该料号"));
@@ -454,7 +468,7 @@ class PricePrepareServiceImplTest {
   void packageComponentUsesPackageStrategyInsteadOfNormalRoute() {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-PKG");
-    request.setPeriodMonth("2026-05");
+    request.setPeriodMonth(CURRENT_PERIOD);
     BomCostingRow row = bomRow(1L, "TOP-PKG", "PKG-001", "虚拟");
     PricePreparePlanItem planItem = planItem(row, "PACKAGE_COMPONENT", "READY");
     when(bomItemLoader.loadByOaNo("OA-PKG")).thenReturn(List.of(row));
@@ -475,7 +489,7 @@ class PricePrepareServiceImplTest {
         .prepare(
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("OA-PKG"),
-            org.mockito.ArgumentMatchers.eq("2026-05"),
+            org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("主制造"),
             org.mockito.ArgumentMatchers.eq("U9"),
@@ -487,7 +501,7 @@ class PricePrepareServiceImplTest {
   void packageComponentMissingStructureWritesGap() {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-PKG-STRUCTURE");
-    request.setPeriodMonth("2026-05");
+    request.setPeriodMonth(CURRENT_PERIOD);
     BomCostingRow row = bomRow(1L, "TOP-PKG", "PKG-001", "虚拟");
     PricePreparePlanItem planItem = planItem(row, "PACKAGE_COMPONENT", "READY");
     when(bomItemLoader.loadByOaNo("OA-PKG-STRUCTURE")).thenReturn(List.of(row));
@@ -522,7 +536,7 @@ class PricePrepareServiceImplTest {
   void packageComponentMissingChildPriceWritesGap() {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-PKG-PRICE");
-    request.setPeriodMonth("2026-05");
+    request.setPeriodMonth(CURRENT_PERIOD);
     BomCostingRow row = bomRow(1L, "TOP-PKG", "PKG-001", "虚拟");
     PricePreparePlanItem planItem = planItem(row, "PACKAGE_COMPONENT", "READY");
     when(bomItemLoader.loadByOaNo("OA-PKG-PRICE")).thenReturn(List.of(row));
@@ -556,7 +570,7 @@ class PricePrepareServiceImplTest {
   void makePartUsesMakePartStrategyInsteadOfNormalRoute() {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-MAKE");
-    request.setPeriodMonth("2026-05");
+    request.setPeriodMonth(CURRENT_PERIOD);
     BomCostingRow row = bomRow(1L, "TOP-MAKE", "MAKE-001", "制造件");
     PricePreparePlanItem planItem = planItem(row, "MAKE_PART", "READY");
     when(bomItemLoader.loadByOaNo("OA-MAKE")).thenReturn(List.of(row));
@@ -576,7 +590,7 @@ class PricePrepareServiceImplTest {
         .prepare(
             org.mockito.ArgumentMatchers.eq("OA-MAKE"),
             org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.eq("2026-05"),
+            org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(planItem));
   }
@@ -586,7 +600,7 @@ class PricePrepareServiceImplTest {
   void makePartMissingPriceWritesGap() {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-MAKE-MISS");
-    request.setPeriodMonth("2026-05");
+    request.setPeriodMonth(CURRENT_PERIOD);
     BomCostingRow row = bomRow(1L, "TOP-MAKE", "MAKE-001", "制造件");
     PricePreparePlanItem planItem = planItem(row, "MAKE_PART", "READY");
     when(bomItemLoader.loadByOaNo("OA-MAKE-MISS")).thenReturn(List.of(row));
@@ -594,7 +608,7 @@ class PricePrepareServiceImplTest {
     when(makePartPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.eq("OA-MAKE-MISS"),
             org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.eq("2026-05"),
+            org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(planItem)))
         .thenReturn(MakePartPricePrepareResult.notReady(
@@ -621,7 +635,7 @@ class PricePrepareServiceImplTest {
   void singleStrategyFailureDoesNotBlockOtherRows() {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-STRATEGY-FAIL");
-    request.setPeriodMonth("2026-05");
+    request.setPeriodMonth(CURRENT_PERIOD);
     BomCostingRow normalRow = bomRow(1L, "TOP-A", "MAT-A", "采购件");
     BomCostingRow packageRow = bomRow(2L, "TOP-A", "PKG-A", "虚拟");
     BomCostingRow makeRow = bomRow(3L, "TOP-A", "MAKE-A", "制造件");
@@ -635,14 +649,14 @@ class PricePrepareServiceImplTest {
     when(normalMaterialPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.eq("OA-STRATEGY-FAIL"),
             org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.eq("2026-05"),
+            org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(normalItem)))
         .thenReturn(NormalMaterialPricePrepareResult.ready(
             new BigDecimal("1.20"), new BigDecimal("3.000"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
     when(packageComponentPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("OA-STRATEGY-FAIL"),
-            org.mockito.ArgumentMatchers.eq("2026-05"),
+            org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),

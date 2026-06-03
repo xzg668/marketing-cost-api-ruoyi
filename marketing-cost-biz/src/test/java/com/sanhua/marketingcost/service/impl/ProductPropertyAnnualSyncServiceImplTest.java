@@ -120,6 +120,51 @@ class ProductPropertyAnnualSyncServiceImplTest {
     assertThat(captor.getValue().getCoefficient()).isEqualByComparingTo("1.0000");
   }
 
+  @Test
+  @DisplayName("OA年用量同步：已有占位记录的待维护字段可被后续OA信息补齐")
+  void usageOnlySyncFillsExistingPlaceholderFields() {
+    ProductProperty existing = new ProductProperty();
+    existing.setId(2L);
+    existing.setBusinessUnitType("COMMERCIAL");
+    existing.setPropertyYear(2026);
+    existing.setProductCode("P-OA-PLACEHOLDER");
+    existing.setParentCode("P-OA-PLACEHOLDER");
+    existing.setLevel1Code("OA_PLACEHOLDER");
+    existing.setLevel1Name("待维护");
+    existing.setBusinessDivision("待维护");
+    existing.setProductName("待维护");
+    existing.setParentName("待维护");
+    existing.setProductAttr("待维护");
+
+    ProductPropertyMapper mapper = mock(ProductPropertyMapper.class);
+    when(mapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    when(mapper.updateById(any(ProductProperty.class))).thenReturn(1);
+
+    ProductPropertyAnnualSyncRequest request = new ProductPropertyAnnualSyncRequest();
+    request.setPropertyYear(2026);
+    request.setBusinessUnitType("COMMERCIAL");
+    request.setUsageOnly(true);
+    request.setRequireProductCode(true);
+    ProductPropertyAnnualSyncRow row = new ProductPropertyAnnualSyncRow();
+    row.setProductCode("P-OA-PLACEHOLDER");
+    row.setBusinessDivision("商用部品事业部");
+    row.setLevel1Name("商用部品事业部");
+    row.setProductName("料品档案产品名称");
+    row.setAnnualUsage(new BigDecimal("12300"));
+    request.setRows(List.of(row));
+
+    ProductPropertyAnnualSyncServiceImpl service = new ProductPropertyAnnualSyncServiceImpl(mapper);
+    ProductPropertyAnnualSyncResult result = service.sync(request);
+
+    assertThat(result.getUpdated()).isEqualTo(1);
+    ArgumentCaptor<ProductProperty> captor = ArgumentCaptor.forClass(ProductProperty.class);
+    verify(mapper).updateById(captor.capture());
+    assertThat(captor.getValue().getBusinessDivision()).isEqualTo("商用部品事业部");
+    assertThat(captor.getValue().getLevel1Name()).isEqualTo("商用部品事业部");
+    assertThat(captor.getValue().getProductName()).isEqualTo("料品档案产品名称");
+    assertThat(captor.getValue().getAnnualUsage()).isEqualByComparingTo("12300");
+  }
+
   private ProductPropertyAnnualSyncRequest request(ProductPropertyAnnualSyncRow row) {
     ProductPropertyAnnualSyncRequest request = new ProductPropertyAnnualSyncRequest();
     request.setPropertyYear(2026);

@@ -31,6 +31,8 @@ class CmsCostExcelParseServiceImplTest {
       Path.of("/Users/xiexicheng/Desktop/cms/产品计划成本汇总-空值-2026-05-13-09-43.xlsx");
   private static final Path WORKSHOP_SAMPLE =
       Path.of("/Users/xiexicheng/Desktop/cms/产品车间料工费汇总_商用导出20260512150458.xlsx");
+  private static final Path WORKSHOP_REORDERED_SAMPLE =
+      Path.of("/Users/xiexicheng/Desktop/demo4/cms/产品车间料工费汇总_商用导出20260529153518.xlsx");
   private static final Path SUBJECT_SAMPLE =
       Path.of("/Users/xiexicheng/Desktop/cms/产品科目成本汇总_商用导出20260512150308.xlsx");
   private static final Path SUBJECT_SETTING_SAMPLE =
@@ -156,6 +158,30 @@ class CmsCostExcelParseServiceImplTest {
     assertThat(row.getWorkingCostCent()).isEqualByComparingTo("80");
     assertThat(row.getWorkingCostYuan()).isEqualByComparingTo("0.8");
     assertThat(row.getMaterialPriceYuan()).isEqualByComparingTo("30.844862");
+  }
+
+  @Test
+  void parsesWorkshopLaborWhenEnglishPeriodHeaderMissingAndColumnsReordered() {
+    CmsCostExcelParseResult<CmsWorkshopLaborExcelRow> result =
+        service.parseWorkshopLabor(
+            workbook(
+                List.of(
+                    workshopReorderedHeaderWithMissingPeriod(),
+                    workshopReorderedChineseHeader(),
+                    workshopReorderedChineseHeader(),
+                    workshopReorderedRow())));
+
+    assertThat(result.getErrors()).isEmpty();
+    assertThat(result.getRows()).hasSize(1);
+    CmsWorkshopLaborExcelRow row = result.getRows().get(0);
+    assertThat(row.getPeriod()).isEqualTo("2026-04");
+    assertThat(row.getParentCode()).isEqualTo("1001900001090");
+    assertThat(row.getSourceRowId()).isEqualTo("raw-id-new");
+    assertThat(row.getWorkingCostCent()).isEqualByComparingTo("113.729166");
+    assertThat(row.getWorkingCostYuan()).isEqualByComparingTo("1.137292");
+    assertThat(row.getMaterialPrice()).isEqualByComparingTo("4349.26");
+    assertThat(row.getFirstSubjectCode()).isEqualTo("02");
+    assertThat(row.getSecondSubjectName()).isEqualTo("包装辅料");
   }
 
   @Test
@@ -523,6 +549,28 @@ class CmsCostExcelParseServiceImplTest {
         .contains("辅助人员工资", "包装辅料");
   }
 
+  @Test
+  void parsesProvidedReorderedWorkshopSampleWhenAvailable() throws IOException {
+    assumeTrue(Files.exists(WORKSHOP_REORDERED_SAMPLE));
+
+    CmsCostExcelParseResult<CmsWorkshopLaborExcelRow> result;
+    try (InputStream input = Files.newInputStream(WORKSHOP_REORDERED_SAMPLE)) {
+      result = service.parseWorkshopLabor(input);
+    }
+
+    assertThat(result.getErrors()).isEmpty();
+    assertThat(result.getRows()).isNotEmpty();
+    assertThat(result.getRows()).extracting(CmsWorkshopLaborExcelRow::getPeriod).contains("2026-04");
+    assertThat(result.getRows()).extracting(CmsWorkshopLaborExcelRow::getParentCode)
+        .contains("1001900001090");
+    assertThat(result.getRows()).extracting(CmsWorkshopLaborExcelRow::getSourceRowId)
+        .contains("f341cd8091f209d362a817fd61e3f27b");
+    assertThat(result.getRows()).extracting(CmsWorkshopLaborExcelRow::getMaterialPrice)
+        .anySatisfy(value -> assertThat(value).isEqualByComparingTo("4349.26"));
+    assertThat(result.getRows()).extracting(CmsWorkshopLaborExcelRow::getWorkingCostCent)
+        .anySatisfy(value -> assertThat(value).isEqualByComparingTo("113.729166"));
+  }
+
   private InputStream workbook(List<List<String>> rows) {
     try (XSSFWorkbook workbook = new XSSFWorkbook()) {
       Sheet sheet = workbook.createSheet("Sheet0");
@@ -613,6 +661,117 @@ class CmsCostExcelParseServiceImplTest {
         "二级科目名称",
         "三级级科目编码",
         "三级级科目名称");
+  }
+
+  private List<String> workshopReorderedHeaderWithMissingPeriod() {
+    return List.of(
+        "",
+        "firstUnitCode",
+        "firstUnitName",
+        "parentCode",
+        "parentName",
+        "parentSpec",
+        "parentType",
+        "lastUnitName",
+        "lastUnitCode",
+        "workingHours",
+        "funding",
+        "materialPrice",
+        "workingCost",
+        "buildFlag",
+        "path",
+        "firstSubjectCode",
+        "firstSubjectName",
+        "secondSubjectCode",
+        "secondSubjectName",
+        "thirdSubjectCode",
+        "thirdSubjectName",
+        "createdTime",
+        "id",
+        "name",
+        "creater",
+        "createdDeptId",
+        "owner",
+        "ownerDeptId",
+        "modifier",
+        "modifiedTime",
+        "workflowInstanceId",
+        "sequenceNo",
+        "sequenceStatus");
+  }
+
+  private List<String> workshopReorderedChineseHeader() {
+    return List.of(
+        "期间",
+        "一级生产单元编码",
+        "一级生产单元名称",
+        "父件编码",
+        "父件名称",
+        "父件规格",
+        "父件型号",
+        "末级生产单元名称",
+        "末级生产单元编码",
+        "工时",
+        "经费",
+        "材料计价",
+        "工资",
+        "构建标记",
+        "核算路径",
+        "一级科目编码",
+        "一级科目名称",
+        "二级科目编码",
+        "二级科目名称",
+        "三级级科目编码",
+        "三级级科目名称",
+        "创建时间",
+        "id",
+        "数据标题",
+        "创建人",
+        "创建人部门",
+        "拥有者",
+        "拥有者部门",
+        "修改人",
+        "修改时间",
+        "流程实例ID",
+        "单据号",
+        "单据状态");
+  }
+
+  private List<String> workshopReorderedRow() {
+    return List.of(
+        "2026-04",
+        "55",
+        "商用部品事业部",
+        "1001900001090",
+        "电磁阀阀体",
+        "HDF25H51K",
+        "HDF25H51K",
+        "商用部品金加工一车间-科玛特KT420-21刀",
+        "550101-029",
+        "150",
+        "21.006357",
+        "4349.26",
+        "113.729166",
+        "自算",
+        "path-new",
+        "02",
+        "辅助材料",
+        "0215",
+        "包装辅料",
+        "",
+        "",
+        "2026-04-30 20:15:27",
+        "raw-id-new",
+        "1001900001090-产品车间料工费汇总550101-029",
+        "admin",
+        "",
+        "admin",
+        "",
+        "",
+        "",
+        "",
+        "SEQ-NEW",
+        "已完成");
   }
 
   private List<String> subjectHeader() {

@@ -58,7 +58,7 @@ public class CostRunTrialController {
       return CommonResult.success("该 OA 已在试算中，请查询 progress 接口");
     }
     try {
-      costRunTrialService.run(oaNo, username, businessUnitType)
+      costRunTrialService.run(oaNo, request.getOaFormItemIds(), username, businessUnitType)
           .exceptionally(ex -> {
             log.error("试算异步执行失败, oaNo={}", oaNo, ex);
             return null;

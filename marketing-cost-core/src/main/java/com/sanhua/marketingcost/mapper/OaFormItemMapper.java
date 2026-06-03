@@ -5,10 +5,12 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.sanhua.marketingcost.annotation.DataScope;
 import com.sanhua.marketingcost.dto.MonthlyRepriceCalcObject;
 import com.sanhua.marketingcost.entity.OaFormItem;
+import java.time.LocalDateTime;
 import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 @Mapper
 public interface OaFormItemMapper extends BaseMapper<OaFormItem> {
@@ -43,4 +45,35 @@ public interface OaFormItemMapper extends BaseMapper<OaFormItem> {
   List<MonthlyRepriceCalcObject> selectMonthlyRepriceCalcObjects(
       @Param("businessUnitType") String businessUnitType,
       @Param("calcStatus") String calcStatus);
+
+  @Update("""
+      UPDATE oa_form_item
+         SET calc_status = '已核算',
+             calc_at = #{calcAt},
+             updated_at = #{calcAt}
+       WHERE id = #{itemId}
+         AND COALESCE(deleted, 0) = 0
+      """)
+  int markCalculated(@Param("itemId") Long itemId, @Param("calcAt") LocalDateTime calcAt);
+
+  @Select("""
+      SELECT COUNT(*)
+        FROM oa_form_item
+       WHERE oa_form_id = #{oaFormId}
+         AND COALESCE(deleted, 0) = 0
+         AND material_no IS NOT NULL
+         AND TRIM(material_no) <> ''
+      """)
+  long countRunnableItems(@Param("oaFormId") Long oaFormId);
+
+  @Select("""
+      SELECT COUNT(*)
+        FROM oa_form_item
+       WHERE oa_form_id = #{oaFormId}
+         AND COALESCE(deleted, 0) = 0
+         AND material_no IS NOT NULL
+         AND TRIM(material_no) <> ''
+         AND calc_status = '已核算'
+      """)
+  long countCalculatedRunnableItems(@Param("oaFormId") Long oaFormId);
 }

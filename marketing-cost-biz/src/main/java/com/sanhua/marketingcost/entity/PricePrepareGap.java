@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.sanhua.marketingcost.dto.priceprepare.NoScrapConfirmResponse;
 import java.time.LocalDateTime;
 import lombok.Getter;
 import lombok.Setter;
@@ -19,6 +20,7 @@ public class PricePrepareGap {
   private Long id;
 
   private String prepareNo;
+  private String periodMonth;
   private String oaNo;
   private String topProductCode;
   private String materialCode;
@@ -37,4 +39,31 @@ public class PricePrepareGap {
 
   @TableField(fill = FieldFill.INSERT_UPDATE)
   private LocalDateTime updatedAt;
+
+  @TableField(exist = false)
+  private String actionType;
+
+  @TableField(exist = false)
+  private String actionMaterialNo;
+
+  @TableField(exist = false)
+  private Boolean canConfirmNoScrap;
+
+  @TableField(exist = false)
+  private Long noScrapConfirmationId;
+
+  @TableField(exist = false)
+  private String noScrapConfirmationStatus;
+
+  @TableField(exist = false)
+  private NoScrapConfirmResponse noScrapConfirmation;
+
+  @TableField(exist = false)
+  private String confirmedBy;
+
+  @TableField(exist = false)
+  private LocalDateTime confirmedAt;
+
+  @TableField(exist = false)
+  private String confirmReason;
 }

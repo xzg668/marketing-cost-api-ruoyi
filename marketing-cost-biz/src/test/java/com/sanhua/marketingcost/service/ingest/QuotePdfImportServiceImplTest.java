@@ -158,6 +158,36 @@ class QuotePdfImportServiceImplTest {
     }
   }
 
+  @Test
+  void realFiSc006SanhuaPdfPreviewParsesHeaderNumbersAndDenseItemWhenAvailable() throws Exception {
+    Path file = Path.of("/Users/xiexicheng/Desktop/demo4/打印 - SANHUA三花.pdf");
+    Assumptions.assumeTrue(Files.exists(file), "real FI-SC-006 SANHUA desktop PDF sample is required");
+    QuotePdfImportServiceImpl service =
+        new QuotePdfImportServiceImpl(
+            new QuoteNormalizeService(new QuoteIngestRequestValidator(), new QuoteClassifyService()),
+            quoteIngestService,
+            new PdfBoxQuotePdfTextExtractor());
+
+    QuoteExcelImportPreviewResponse response;
+    try (InputStream inputStream = Files.newInputStream(file)) {
+      response = service.preview(inputStream, file.getFileName().toString());
+    }
+
+    assertThat(response.getErrors())
+        .extracting("code")
+        .doesNotContain("NUMBER_INVALID", "ITEMS_REQUIRED", "PRODUCT_KEY_REQUIRED");
+    assertThat(response.getForms()).hasSize(1);
+    assertThat(response.getForms().get(0).getItems()).hasSize(2);
+    assertThat(response.getForms().get(0).getHeaderSummary().getOaNo()).isEqualTo("FI-SC-006-20260529-038");
+    assertThat(response.getForms().get(0).getHeaderSummary().getCopperPrice()).isEqualByComparingTo("100000.00");
+    assertThat(response.getForms().get(0).getHeaderSummary().getZincPrice()).isEqualByComparingTo("23714.00");
+    assertThat(response.getForms().get(0).getHeaderSummary().getSus316lPrice()).isEqualByComparingTo("32500.00");
+    assertThat(response.getForms().get(0).getHeaderSummary().getSus304Price()).isEqualByComparingTo("20000.00");
+    assertThat(response.getForms().get(0).getItems())
+        .extracting("materialNo")
+        .contains("1001900000237", "1001900000261");
+  }
+
   private QuotePdfDocument document(String fileName, List<String> lines) {
     QuotePdfDocument document = new QuotePdfDocument();
     document.setFileName(fileName);

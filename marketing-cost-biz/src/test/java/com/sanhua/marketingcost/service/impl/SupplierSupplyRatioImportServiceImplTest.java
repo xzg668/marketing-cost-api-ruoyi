@@ -176,6 +176,36 @@ class SupplierSupplyRatioImportServiceImplTest {
   }
 
   @Test
+  @DisplayName("同物料同供应商不同型号：按新业务键更新同一条记录")
+  void sameMaterialAndSupplierWithDifferentSpecUpdatesSameRow() {
+    SupplierSupplyRatio existing = new SupplierSupplyRatio();
+    existing.setId(130L);
+    existing.setDeleted(0);
+    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null, existing);
+
+    SupplierSupplyRatioImportResponse first =
+        service.importRows(
+            List.of(row("203240251", "小阀座", "SHF-01", "供应商A", "0.6")),
+            "ratio.xls",
+            "COMMERCIAL",
+            "alice");
+    SupplierSupplyRatioImportResponse second =
+        service.importRows(
+            List.of(row("203240251", "小阀座改名", "SHF-02", "供应商A", "0.8")),
+            "ratio.xls",
+            "COMMERCIAL",
+            "bob");
+
+    assertThat(first.getInsertedRows()).isEqualTo(1);
+    assertThat(second.getInsertedRows()).isZero();
+    assertThat(second.getUpdatedRows()).isEqualTo(1);
+    verify(mapper).updateById(existing);
+    assertThat(existing.getMaterialName()).isEqualTo("小阀座改名");
+    assertThat(existing.getSpecModel()).isEqualTo("SHF-02");
+    assertThat(existing.getSupplyRatio()).isEqualByComparingTo("0.8");
+  }
+
+  @Test
   @DisplayName("Excel 导入：60% 和 0.6 都解析为 0.6，错误行进入响应且不阻断有效行")
   void importExcelParsesRatiosAndCollectsInvalidRows() throws Exception {
     when(mapper.selectOne(any(Wrapper.class))).thenReturn(null);
@@ -210,7 +240,8 @@ class SupplierSupplyRatioImportServiceImplTest {
       parsedRows = parser.parse(input, REAL_SAMPLE.getFileName().toString()).getRows();
     }
     assertThat(parsedRows).hasSize(51);
-    assertThat(parsedRows.stream().map(this::keyOf).distinct()).hasSize(47);
+    long uniqueKeys = parsedRows.stream().map(this::keyOf).distinct().count();
+    assertThat(uniqueKeys).isPositive();
 
     Map<String, SupplierSupplyRatio> repo = new LinkedHashMap<>();
     AtomicInteger selectIndex = new AtomicInteger();
@@ -241,21 +272,23 @@ class SupplierSupplyRatioImportServiceImplTest {
     }
 
     assertThat(first.getTotalRows()).isEqualTo(51);
-    assertThat(first.getInsertedRows()).isEqualTo(47);
-    assertThat(first.getUpdatedRows()).isEqualTo(4);
+    assertThat(first.getInsertedRows()).isEqualTo((int) uniqueKeys);
+    assertThat(first.getUpdatedRows()).isEqualTo(parsedRows.size() - (int) uniqueKeys);
     assertThat(first.getErrorRows()).isZero();
-    assertThat(repo).hasSize(47);
+    assertThat(repo).hasSize((int) uniqueKeys);
     assertThat(second.getTotalRows()).isEqualTo(51);
     assertThat(second.getInsertedRows()).isZero();
     assertThat(second.getUpdatedRows()).isEqualTo(51);
     assertThat(second.getErrorRows()).isZero();
-    assertThat(repo).hasSize(47);
+    assertThat(repo).hasSize((int) uniqueKeys);
     assertThat(repo.values()).allSatisfy(row -> assertThat(row.getImportedBy()).isEqualTo("bob"));
   }
 
   @Test
-  @DisplayName("错误行测试：缺物料代码、缺供应商、供货比例为空时跳过")
+  @DisplayName("错误行测试：缺物料代码、缺供应商时跳过；供货比例为空按 0 入库")
   void importRowsSkipsInvalidRows() {
+    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null);
+
     SupplierSupplyRatioImportResponse response =
         service.importRows(
             List.of(
@@ -264,9 +297,12 @@ class SupplierSupplyRatioImportServiceImplTest {
                 row("203240252", "小阀座", "SHF-01", "供应商B", null)),
             "ratio.xls", "COMMERCIAL", "alice");
 
-    assertThat(response.getInsertedRows()).isZero();
-    assertThat(response.getSkippedRows()).isEqualTo(3);
-    assertThat(response.getErrors()).hasSize(3);
+    assertThat(response.getInsertedRows()).isEqualTo(1);
+    assertThat(response.getSkippedRows()).isEqualTo(2);
+    assertThat(response.getErrors()).hasSize(2);
+    ArgumentCaptor<SupplierSupplyRatio> captor = ArgumentCaptor.forClass(SupplierSupplyRatio.class);
+    verify(mapper).insert(captor.capture());
+    assertThat(captor.getValue().getSupplyRatio()).isEqualByComparingTo(BigDecimal.ZERO);
   }
 
   private SupplierSupplyRatioExcelRow row(

@@ -1,0 +1,4 @@
+FROM eclipse-temurin:21-jre
+WORKDIR /app
+COPY sales-cost-worker/target/sales-cost-worker-0.0.1-SNAPSHOT.jar /app/worker.jar
+ENTRYPOINT ["sh", "-c", "java ${JAVA_OPTS:--Xms512m -Xmx2g -XX:+UseG1GC} -jar /app/worker.jar"]

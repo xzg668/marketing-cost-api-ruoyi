@@ -26,10 +26,6 @@ public final class SupplierSupplyRatioNormalizeUtils {
       String materialCode, String materialName, String supplierName, String specModel) {
     return normalizeKeyPart(materialCode)
         + KEY_SEPARATOR
-        + normalizeKeyPart(materialName)
-        + KEY_SEPARATOR
-        + normalizeKeyPart(supplierName)
-        + KEY_SEPARATOR
-        + normalizeKeyPart(specModel);
+        + normalizeKeyPart(supplierName);
   }
 }

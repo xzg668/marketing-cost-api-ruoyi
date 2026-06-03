@@ -231,6 +231,7 @@ class MakePartPriceGenerationE2ETest {
         mock(LinkedPriceEnsureService.class),
         priceResolveService,
         new MakePartPriceCalculator(),
+        mock(com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService.class),
         calcRowMapper,
         mock(MakePartPriceGapItemMapper.class));
   }

@@ -14,6 +14,7 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.CostRunResultMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
 import com.sanhua.marketingcost.service.OaFormService;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -92,12 +93,12 @@ public class OaFormServiceImpl implements OaFormService {
         .orderByAsc(OaFormItem::getSeq)
         .orderByAsc(OaFormItem::getId));
 
-    Map<String, CostRunResult> resultMap = buildCostRunResultMap(form.getOaNo());
+    Map<String, BigDecimal> costTotalMap = buildCostRunTotalMap(form.getOaNo());
     Map<String, MaterialMaster> materialMasterMap = buildMaterialMasterMap(items);
     OaFormDetailDto detail = new OaFormDetailDto();
     detail.setKey(toKeyDto(form));
     detail.setItems(items.stream()
-        .map((item) -> toItemDto(item, resultMap, materialMasterMap))
+        .map((item) -> toItemDto(item, costTotalMap, materialMasterMap))
         .collect(Collectors.toList()));
     return detail;
   }
@@ -138,9 +139,10 @@ public class OaFormServiceImpl implements OaFormService {
 
   private OaFormDetailItemDto toItemDto(
       OaFormItem item,
-      Map<String, CostRunResult> resultMap,
+      Map<String, BigDecimal> costTotalMap,
       Map<String, MaterialMaster> materialMasterMap) {
     OaFormDetailItemDto dto = new OaFormDetailItemDto();
+    dto.setId(item.getId());
     dto.setSeq(item.getSeq());
     MaterialMaster materialMaster = null;
     if (materialMasterMap != null && StringUtils.hasText(item.getMaterialNo())) {
@@ -158,9 +160,13 @@ public class OaFormServiceImpl implements OaFormService {
     }
     dto.setProductName(productName);
     dto.setCustomerDrawing(item.getCustomerDrawing());
+    dto.setCustomerCode(item.getCustomerCode());
     dto.setMaterialNo(item.getMaterialNo());
     dto.setSunlModel(productModel);
     dto.setSpec(item.getSpec());
+    dto.setPackageType(item.getPackageType());
+    dto.setPackageMethod(item.getPackageMethod());
+    dto.setPackageComponentCode(item.getPackageComponentCode());
     dto.setShippingFee(item.getShippingFee());
     dto.setSupportQty(item.getSupportQty());
     dto.setTotalWithShip(item.getTotalWithShip());
@@ -174,35 +180,40 @@ public class OaFormServiceImpl implements OaFormService {
     dto.setSus316WeightG(item.getSus316WeightG());
     dto.setCopperWeightG(item.getCopperWeightG());
     dto.setValidDate(item.getValidDate());
-    if (item.getMaterialNo() != null && resultMap != null) {
-      CostRunResult result = resultMap.get(item.getMaterialNo());
-      if (result != null) {
-        dto.setUnitCost(result.getTotalCost());
-        if (result.getTotalCost() != null && item.getSupportQty() != null) {
-          dto.setCostAmount(result.getTotalCost().multiply(item.getSupportQty()));
+    dto.setCalcStatus(item.getCalcStatus());
+    dto.setCalcAt(item.getCalcAt());
+    if (StringUtils.hasText(item.getMaterialNo()) && costTotalMap != null) {
+      BigDecimal totalCost = costTotalMap.get(item.getMaterialNo().trim());
+      if (totalCost != null) {
+        dto.setUnitCost(totalCost);
+        if (item.getSupportQty() != null) {
+          dto.setCostAmount(totalCost.multiply(item.getSupportQty()));
         }
       }
     }
     return dto;
   }
 
-  private Map<String, CostRunResult> buildCostRunResultMap(String oaNo) {
+  private Map<String, BigDecimal> buildCostRunTotalMap(String oaNo) {
     if (!StringUtils.hasText(oaNo)) {
       return Map.of();
     }
+    Map<String, BigDecimal> map = new HashMap<>();
     List<CostRunResult> results =
         costRunResultMapper.selectList(
             Wrappers.lambdaQuery(CostRunResult.class)
-                .eq(CostRunResult::getOaNo, oaNo.trim()));
-    if (results == null || results.isEmpty()) {
-      return Map.of();
-    }
-    Map<String, CostRunResult> map = new HashMap<>();
-    for (CostRunResult result : results) {
-      if (result.getProductCode() != null && !map.containsKey(result.getProductCode())) {
-        map.put(result.getProductCode(), result);
+                .eq(CostRunResult::getOaNo, oaNo.trim())
+                .orderByDesc(CostRunResult::getCalcAt)
+                .orderByDesc(CostRunResult::getId));
+    if (results != null) {
+      for (CostRunResult result : results) {
+        String productCode = result.getProductCode() == null ? null : result.getProductCode().trim();
+        if (StringUtils.hasText(productCode) && result.getTotalCost() != null && !map.containsKey(productCode)) {
+          map.put(productCode, result.getTotalCost());
+        }
       }
     }
+
     return map;
   }
 

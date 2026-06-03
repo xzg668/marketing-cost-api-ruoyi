@@ -202,6 +202,55 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
       @Param("errorStack") String errorStack,
       @Param("finishedAt") LocalDateTime finishedAt);
 
+  @Update("""
+      UPDATE lp_cost_run_task
+         SET status = 'PENDING',
+             progress = 0,
+             worker_id = NULL,
+             locked_at = NULL,
+             lock_expire_time = NULL,
+             retry_count = 0,
+             error_message = NULL,
+             error_stack = NULL,
+             result_summary_json = NULL,
+             started_at = NULL,
+             finished_at = NULL,
+             updated_at = #{updatedAt}
+       WHERE batch_no = #{batchNo}
+         AND status IN ('FAILED', 'PARTIAL_FAILED', 'CANCELED', 'RETRYABLE', 'SUCCESS')
+      """)
+  int resetBatchTasksForRetry(
+      @Param("batchNo") String batchNo,
+      @Param("updatedAt") LocalDateTime updatedAt);
+
+  @Update("""
+      <script>
+      UPDATE lp_cost_run_task
+         SET status = 'PENDING',
+             progress = 0,
+             worker_id = NULL,
+             locked_at = NULL,
+             lock_expire_time = NULL,
+             retry_count = 0,
+             error_message = NULL,
+             error_stack = NULL,
+             result_summary_json = NULL,
+             started_at = NULL,
+             finished_at = NULL,
+             updated_at = #{updatedAt}
+       WHERE batch_no = #{batchNo}
+         AND calc_object_key IN
+        <foreach collection="calcObjectKeys" item="key" open="(" separator="," close=")">
+          #{key}
+        </foreach>
+         AND status IN ('PENDING', 'SUCCESS', 'FAILED', 'CANCELED', 'RETRYABLE')
+      </script>
+      """)
+  int resetQuoteTasksForRerun(
+      @Param("batchNo") String batchNo,
+      @Param("calcObjectKeys") List<String> calcObjectKeys,
+      @Param("updatedAt") LocalDateTime updatedAt);
+
   @Select("""
       SELECT status AS status, COUNT(*) AS count
         FROM lp_cost_run_task

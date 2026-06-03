@@ -49,6 +49,8 @@ public class MakePartPriceCalcRow {
   private String scrapName;
   private String scrapPriceType;
   private BigDecimal scrapUnitPrice;
+  private Boolean noScrapConfirmed;
+  private Long noScrapConfirmationId;
   private BigDecimal outsourceFee;
   private BigDecimal costPrice;
   private BigDecimal parentTotalCostPrice;

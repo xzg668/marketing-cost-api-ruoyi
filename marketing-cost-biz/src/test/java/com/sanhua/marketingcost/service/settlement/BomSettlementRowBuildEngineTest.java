@@ -294,8 +294,8 @@ class BomSettlementRowBuildEngineTest {
   }
 
   @Test
-  @DisplayName("末级采购件上卷成功后，不再为同支委外加工件补委外加工费行")
-  void rolledUpLeafSuppressesOutsourcedProcessingFee() {
+  @DisplayName("末级采购件上卷成功后，保留上卷父件并补上一级委外加工费行")
+  void rolledUpLeafWithOutsourcedParentAddsProcessingFee() {
     BomSettlementRowBuildResult result = engine.build(request(List.of(
         node("P", "P", null, 0, "/P/", 0, "组件", null),
         fullNode(
@@ -312,12 +312,14 @@ class BomSettlementRowBuildEngineTest {
     ), List.of(rollupRule("SPECIAL_PURCHASE_ROLLUP_AL_BAR", "铝棒", 10))));
 
     assertThat(result.costingRows()).extracting(BomCostingRow::getMaterialCode)
-        .containsExactly("MACHINED-PISTON");
+        .containsExactly("MACHINED-PISTON", "OUT-PISTON");
     assertThat(result.costingRows().getFirst().getSettlementRowType()).isEqualTo("SPECIAL_ROLLUP_PARENT");
-    assertThat(result.costingRows()).noneMatch(row -> "OUTSOURCED_PROCESS_FEE".equals(row.getSettlementRowType()));
+    BomCostingRow feeRow = result.costingRows().get(1);
+    assertThat(feeRow.getSettlementRowType()).isEqualTo("OUTSOURCED_PROCESS_FEE");
+    assertThat(feeRow.getMaterialName()).isEqualTo("活塞-委外加工费");
     assertThat(result.subRefs()).extracting(ref -> ref.subRef().getSubMaterialCode())
         .containsExactly("AL-BAR");
-    assertThat(result.stats().extraRowBucketCount()).isZero();
+    assertThat(result.stats().extraRowBucketCount()).isEqualTo(1);
   }
 
   @Test

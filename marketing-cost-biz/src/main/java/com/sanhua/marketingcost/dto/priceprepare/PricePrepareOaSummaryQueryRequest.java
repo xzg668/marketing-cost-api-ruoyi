@@ -7,6 +7,7 @@ import lombok.Setter;
 @Setter
 public class PricePrepareOaSummaryQueryRequest {
   private String oaNo;
+  private String periodMonth;
   private String status;
   private Integer page;
   private Integer pageSize;

@@ -98,7 +98,7 @@ public class QuoteNormalizeService {
     header.setCustomer(trimToNull(headerRequest.getCustomer()));
     header.setApplicantUnit(trimToNull(headerRequest.getApplicantUnit()));
     header.setSourceCompany(trimToNull(headerRequest.getSourceCompany()));
-    header.setSourceBusinessDivision(trimToNull(headerRequest.getSourceBusinessDivision()));
+    header.setSourceBusinessDivision(sanitizeBusinessDivision(headerRequest.getSourceBusinessDivision()));
     header.setExpenseProductCategory(
         coalesce(classification.getExpenseProductCategory(), headerRequest.getExpenseProductCategory()));
     header.setApplicantDept(trimToNull(headerRequest.getApplicantDept()));
@@ -390,5 +390,36 @@ public class QuoteNormalizeService {
     }
     String trimmed = value.trim();
     return trimmed.isEmpty() ? null : trimmed;
+  }
+
+  private String sanitizeBusinessDivision(String value) {
+    String trimmed = trimToNull(value);
+    if (trimmed == null) {
+      return null;
+    }
+    String cleaned = removeLeadingLabel(trimmed, "事业部");
+    cleaned = removeLeadingParentheticalNotes(cleaned);
+    return trimToNull(removeLeadingLabel(cleaned, "事业部"));
+  }
+
+  private String removeLeadingLabel(String value, String label) {
+    String trimmed = trimToNull(value);
+    if (trimmed == null || !trimmed.startsWith(label)) {
+      return trimmed;
+    }
+    return trimToNull(trimmed.substring(label.length()));
+  }
+
+  private String removeLeadingParentheticalNotes(String value) {
+    String result = trimToNull(value);
+    while (result != null && (result.startsWith("（") || result.startsWith("("))) {
+      char close = result.startsWith("（") ? '）' : ')';
+      int closeIndex = result.indexOf(close);
+      if (closeIndex < 0) {
+        return null;
+      }
+      result = trimToNull(result.substring(closeIndex + 1));
+    }
+    return result;
   }
 }

@@ -16,16 +16,17 @@ import com.sanhua.marketingcost.mapper.CostRunTaskMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.service.CostRunTaskSubmissionService;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.YearMonth;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,14 +57,21 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
   @Override
   @Transactional
   public CostRunTaskSubmissionResult submitQuote(String oaNo) {
+    return submitQuote(oaNo, null);
+  }
+
+  @Override
+  @Transactional
+  public CostRunTaskSubmissionResult submitQuote(String oaNo, List<Long> oaFormItemIds) {
     String normalizedOaNo = required("oaNo", oaNo);
+    Set<Long> selectedIds = normalizeIds(oaFormItemIds);
     OaForm oaForm =
         oaFormMapper.selectOne(
             new LambdaQueryWrapper<OaForm>().eq(OaForm::getOaNo, normalizedOaNo));
     if (oaForm == null) {
       throw new IllegalArgumentException("OA 单不存在：" + normalizedOaNo);
     }
-    String pricingMonth = resolveQuotePricingMonth(oaForm);
+    String pricingMonth = resolveQuotePricingMonth();
     String businessUnitType = required("businessUnitType", oaForm.getBusinessUnitType());
     CostRunBatch existing =
         findBatch(CostRunTaskScene.QUOTE, normalizedOaNo, pricingMonth, businessUnitType);
@@ -86,7 +94,11 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
                 .eq(OaFormItem::getOaFormId, oaForm.getId())
                 .orderByAsc(OaFormItem::getSeq)
                 .orderByAsc(OaFormItem::getId));
-    TaskBuildResult tasks = buildQuoteTasks(batch, oaForm, items);
+    List<OaFormItem> selectedItems = filterSelectedItems(items, selectedIds);
+    if (!selectedIds.isEmpty() && selectedItems.size() != selectedIds.size()) {
+      throw new IllegalArgumentException("存在不属于该 OA 的产品明细行");
+    }
+    TaskBuildResult tasks = buildQuoteTasks(batch, oaForm, selectedItems);
     boolean existingBatch = existing != null;
     if (existing == null) {
       batch.setTotalCount(tasks.taskCount());
@@ -95,8 +107,11 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
       batch = insertOrLoadExisting(batch);
       if (!draftBatchNo.equals(batch.getBatchNo())) {
         existingBatch = true;
-        tasks = buildQuoteTasks(batch, oaForm, items);
+        tasks = buildQuoteTasks(batch, oaForm, selectedItems);
       }
+    }
+    if (existingBatch) {
+      resetExistingQuoteBatchForRerun(batch.getBatchNo(), tasks.tasks());
     }
     insertTasks(tasks.tasks());
     return CostRunTaskSubmissionResult.of(
@@ -104,7 +119,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
         batch.getScene(),
         batch.getSourceNo(),
         batch.getStatus(),
-        items.size(),
+        selectedItems.size(),
         tasks.taskCount(),
         tasks.skippedCount(),
         existingBatch);
@@ -121,6 +136,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     String businessUnitType = required("businessUnitType", request.getBusinessUnitType());
     CostRunBatch existing =
         findBatch(CostRunTaskScene.MONTHLY_REPRICE, repriceNo, pricingMonth, businessUnitType);
+    boolean retryExistingBatch = isRetryableTerminalBatch(existing);
     CostRunBatch batch =
         existing == null
             ? buildBatch(
@@ -144,6 +160,9 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
         existingBatch = true;
         tasks = buildMonthlyRepriceTasks(batch, request);
       }
+    }
+    if (retryExistingBatch) {
+      resetFailedBatchForRetry(batch.getBatchNo());
     }
     insertTasks(tasks.tasks());
     List<MonthlyRepriceCalcObject> objects =
@@ -199,6 +218,40 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
       wrapper.isNull(CostRunBatch::getBusinessUnitType);
     }
     return batchMapper.selectOne(wrapper);
+  }
+
+  private boolean isRetryableTerminalBatch(CostRunBatch batch) {
+    if (batch == null || !StringUtils.hasText(batch.getStatus())) {
+      return false;
+    }
+    CostRunBatchStatus status = CostRunBatchStatus.fromCode(batch.getStatus());
+    return status == CostRunBatchStatus.FAILED
+        || status == CostRunBatchStatus.PARTIAL_FAILED
+        || status == CostRunBatchStatus.CANCELED;
+  }
+
+  private void resetFailedBatchForRetry(String batchNo) {
+    LocalDateTime now = LocalDateTime.now();
+    batchMapper.resetFailedBatchForRetry(batchNo, now);
+    taskMapper.resetBatchTasksForRetry(batchNo, now);
+  }
+
+  private void resetExistingQuoteBatchForRerun(String batchNo, List<CostRunTask> tasks) {
+    if (!StringUtils.hasText(batchNo) || tasks == null || tasks.isEmpty()) {
+      return;
+    }
+    List<String> calcObjectKeys =
+        tasks.stream()
+            .map(CostRunTask::getCalcObjectKey)
+            .filter(StringUtils::hasText)
+            .distinct()
+            .toList();
+    if (calcObjectKeys.isEmpty()) {
+      return;
+    }
+    LocalDateTime now = LocalDateTime.now();
+    batchMapper.resetQuoteBatchForRerun(batchNo, now);
+    taskMapper.resetQuoteTasksForRerun(batchNo, calcObjectKeys, now);
   }
 
   private CostRunBatch buildBatch(
@@ -323,28 +376,19 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     return task;
   }
 
-  private String resolveQuotePricingMonth(OaForm oaForm) {
-    if (StringUtils.hasText(oaForm.getAccountingPeriodMonth())) {
-      return normalizePricingMonth(oaForm.getAccountingPeriodMonth());
-    }
-    LocalDate applyDate = oaForm.getApplyDate();
-    if (applyDate != null) {
-      return YearMonth.from(applyDate).toString();
-    }
-    return YearMonth.now().toString();
+  private String resolveQuotePricingMonth() {
+    // 报价实时核算按任务提交时的当前核算月份取价，不再沿用 OA 申请月或表头核算期间。
+    return CostPricingPeriodUtils.currentPricingMonth();
   }
 
   private String normalizePricingMonth(String pricingMonth) {
-    try {
-      return YearMonth.parse(pricingMonth.trim()).toString();
-    } catch (RuntimeException ex) {
-      throw new IllegalArgumentException("pricingMonth 格式必须是 YYYY-MM", ex);
-    }
+    return CostPricingPeriodUtils.normalizePricingMonth(pricingMonth);
   }
 
   private String newBatchNo(CostRunTaskScene scene) {
     String prefix = scene == CostRunTaskScene.QUOTE ? "CRQ" : "CRM";
-    return prefix + "-" + YearMonth.now() + "-" + UUID.randomUUID().toString().replace("-", "");
+    return prefix + "-" + CostPricingPeriodUtils.currentPricingMonth() + "-"
+        + UUID.randomUUID().toString().replace("-", "");
   }
 
   private String calcObjectKey(
@@ -369,6 +413,31 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
       throw new IllegalArgumentException(field + " 不能为空");
     }
     return value.trim();
+  }
+
+  private Set<Long> normalizeIds(List<Long> ids) {
+    if (ids == null || ids.isEmpty()) {
+      return Set.of();
+    }
+    Set<Long> normalized = new LinkedHashSet<>();
+    for (Long id : ids) {
+      if (id != null && id > 0) {
+        normalized.add(id);
+      }
+    }
+    return normalized;
+  }
+
+  private List<OaFormItem> filterSelectedItems(List<OaFormItem> items, Set<Long> selectedIds) {
+    if (items == null || items.isEmpty()) {
+      return List.of();
+    }
+    if (selectedIds == null || selectedIds.isEmpty()) {
+      return items;
+    }
+    return items.stream()
+        .filter(item -> item != null && selectedIds.contains(item.getId()))
+        .toList();
   }
 
   private String normalizeToNull(String value) {

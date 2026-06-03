@@ -7,6 +7,7 @@ import lombok.Setter;
 @Setter
 public class PricePrepareCandidateQueryRequest {
   private String keyword;
+  private String periodMonth;
   private String ownerScope;
   private String calcStatus;
   private String prepareStatus;

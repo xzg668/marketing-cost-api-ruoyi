@@ -23,6 +23,7 @@ import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MaterialMasterSyncService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -110,8 +111,9 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
             + boundedProgress(p) * (PROGRESS_COSTS_END - PROGRESS_AFTER_LINKED_ENSURE) / 100));
     CostRunObjectResult result = costRunEngine.run(context);
     costRunResultWriter.writeQuoteResult(result, form, item);
+    markItemCalculated(item);
     updateTaskProgress(task, workerId, PROGRESS_COSTS_END);
-    updateOaCalculated(form);
+    updateOaCalculatedIfAllItemsDone(form);
     return new CostRunTaskExecutionResult(resultSummaryJson(result));
   }
 
@@ -167,7 +169,7 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
     if (StringUtils.hasText(task.getPricingMonth())) {
       return task.getPricingMonth().trim();
     }
-    return inferPeriod(LocalDate.now());
+    return CostPricingPeriodUtils.currentPricingMonth();
   }
 
   private String productCode(CostRunTask task, OaFormItem item) {
@@ -184,14 +186,14 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
           readiness.getStatus(),
           readiness.getMessage());
     }
-    if (readiness != null && !readiness.isAllowContinue()) {
-      throw new RuntimeException(readiness.getMessage());
+    if (readiness != null && readiness.isWarning()) {
+      throw new RuntimeException(blockingReadinessMessage(readiness.getMessage()));
     }
   }
 
   private void ensureLinkedPricesForTrial(
       String oaNo, OaForm form, String pricingMonth, CostRunTask task, String workerId) {
-    LocalDate quoteDate = LocalDate.now();
+    LocalDate quoteDate = CostPricingPeriodUtils.currentPricingDate();
     Set<String> linkedItemCodes = collectLinkedItemCodes(oaNo, quoteDate, pricingMonth);
     if (linkedItemCodes.isEmpty()) {
       log.info("quote worker linked ensure skipped: taskId={} oa={} no linked route", task.getId(), oaNo);
@@ -204,7 +206,15 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
               LinkedPriceEnsureRequest.quote(
                   oaNo, form.getBusinessUnitType(), pricingMonth, linkedItemCodes));
       if (result.getFailedCount() > 0) {
-        throw new RuntimeException(formatEnsureFailures(result));
+        log.warn(
+            "quote worker linked ensure failed but continue: taskId={} oa={} requested={} failed={} message={}",
+            task.getId(),
+            oaNo,
+            result.getRequestedCount(),
+            result.getFailedCount(),
+            formatEnsureFailures(result));
+        updateTaskProgress(task, workerId, PROGRESS_AFTER_LINKED_ENSURE);
+        return;
       }
       log.info(
           "quote worker linked ensure done: taskId={} oa={} requested={} created={} updated={} skipped={}",
@@ -216,7 +226,12 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
           result.getSkippedCount());
       updateTaskProgress(task, workerId, PROGRESS_AFTER_LINKED_ENSURE);
     } catch (RuntimeException ex) {
-      throw new RuntimeException("联动价按需确保失败: " + ex.getMessage(), ex);
+      log.warn(
+          "quote worker linked ensure exception but continue: taskId={} oa={}",
+          task.getId(),
+          oaNo,
+          ex);
+      updateTaskProgress(task, workerId, PROGRESS_AFTER_LINKED_ENSURE);
     }
   }
 
@@ -264,7 +279,31 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
     return messages.isEmpty() ? "存在联动价计算失败" : String.join("; ", messages);
   }
 
-  private void updateOaCalculated(OaForm form) {
+  private String blockingReadinessMessage(String message) {
+    if (!StringUtils.hasText(message)) {
+      return "当前月价格准备未完成，请先处理缺口后再重算";
+    }
+    return message
+        .replace("实时成本将继续，", "已阻断实时成本，")
+        + "；请先处理当前月价格准备缺口后再重算";
+  }
+
+  private void markItemCalculated(OaFormItem item) {
+    if (item == null || item.getId() == null) {
+      return;
+    }
+    oaFormItemMapper.markCalculated(item.getId(), LocalDateTime.now());
+  }
+
+  private void updateOaCalculatedIfAllItemsDone(OaForm form) {
+    if (form == null || form.getId() == null) {
+      return;
+    }
+    long runnableCount = oaFormItemMapper.countRunnableItems(form.getId());
+    long calculatedCount = oaFormItemMapper.countCalculatedRunnableItems(form.getId());
+    if (runnableCount <= 0 || calculatedCount < runnableCount) {
+      return;
+    }
     LocalDateTime calculatedAt = LocalDateTime.now();
     oaFormMapper.update(
         null,

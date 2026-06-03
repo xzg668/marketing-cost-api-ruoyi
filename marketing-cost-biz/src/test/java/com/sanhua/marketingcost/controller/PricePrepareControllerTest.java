@@ -26,6 +26,7 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePrepareOaSummaryResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareTopProductSummaryPageResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareTopProductSummaryQueryRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareTopProductSummaryResponse;
+import com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
 import com.sanhua.marketingcost.service.PricePrepareService;
 import java.util.List;
@@ -38,13 +39,16 @@ class PricePrepareControllerTest {
 
   private PricePrepareService pricePrepareService;
   private PricePrepareQueryService queryService;
+  private MakePartNoScrapConfirmationService noScrapConfirmationService;
   private PricePrepareController controller;
 
   @BeforeEach
   void setUp() {
     pricePrepareService = mock(PricePrepareService.class);
     queryService = mock(PricePrepareQueryService.class);
-    controller = new PricePrepareController(pricePrepareService, queryService);
+    noScrapConfirmationService = mock(MakePartNoScrapConfirmationService.class);
+    controller =
+        new PricePrepareController(pricePrepareService, queryService, noScrapConfirmationService);
   }
 
   @Test

@@ -13,7 +13,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
- * 联动价 Resolver —— 查 lp_price_linked_calc_item，按 QUOTE + oaNo + itemCode 取最新已计算结果。
+ * 联动价 Resolver —— 查 lp_price_linked_calc_item，按 QUOTE + oaNo + itemCode + pricingMonth
+ * 取最新成功计算结果。
  *
  * <p>对应 Excel"价格来源 = 联动价"。当前阶段沿用现有 PriceLinkedCalcServiceImpl 已写入的结果，
  * 公式引擎升级（任务 #6/#7）完成后再切到 TemplateEngine。
@@ -34,7 +35,7 @@ public class LinkedPriceResolver implements PriceResolver {
 
   @Override
   public PriceResolveResult resolve(String oaNo, CostRunPartItemDto item, PriceTypeRoute route) {
-    return resolveQuote(oaNo, item);
+    return resolveQuote(oaNo, item, null);
   }
 
   @Override
@@ -43,25 +44,36 @@ public class LinkedPriceResolver implements PriceResolver {
     if (context != null && CostRunContext.SCENE_MONTHLY_REPRICE.equals(context.getScene())) {
       return resolveMonthlyAdjust(item, context);
     }
-    return resolveQuote(oaNo, item);
+    return resolveQuote(oaNo, item, context);
   }
 
-  private PriceResolveResult resolveQuote(String oaNo, CostRunPartItemDto item) {
-    String code = item.getPartCode();
+  private PriceResolveResult resolveQuote(String oaNo, CostRunPartItemDto item, CostRunContext context) {
+    String code = item == null ? null : item.getPartCode();
     if (!StringUtils.hasText(oaNo) || !StringUtils.hasText(code)) {
       return PriceResolveResult.miss("oaNo 或 partCode 为空，无法查联动价");
     }
+    String pricingMonth = context == null ? null : context.getPricingMonth();
+    var query =
+        Wrappers.lambdaQuery(PriceLinkedCalcItem.class)
+            .eq(PriceLinkedCalcItem::getOaNo, oaNo.trim())
+            .eq(PriceLinkedCalcItem::getItemCode, code.trim())
+            // 普通报价只读 QUOTE 场景的联动价结果；月调结果必须由 MONTHLY_ADJUST 分支读取。
+            .eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.QUOTE.getCode())
+            .eq(StringUtils.hasText(pricingMonth), PriceLinkedCalcItem::getPricingMonth,
+                pricingMonth == null ? null : pricingMonth.trim())
+            .eq(PriceLinkedCalcItem::getCalcStatus, "OK")
+            .isNotNull(PriceLinkedCalcItem::getPartUnitPrice)
+            .orderByDesc(PriceLinkedCalcItem::getId)
+            .last("LIMIT 1");
     List<PriceLinkedCalcItem> rows =
-        priceLinkedCalcItemMapper.selectList(
-            Wrappers.lambdaQuery(PriceLinkedCalcItem.class)
-                .eq(PriceLinkedCalcItem::getOaNo, oaNo)
-                .eq(PriceLinkedCalcItem::getItemCode, code)
-                // LPE-02：现有单料号 Resolver 只读正常报价结果；场景化读取由后续入口传上下文。
-                .eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.QUOTE.getCode())
-                .orderByDesc(PriceLinkedCalcItem::getId)
-                .last("LIMIT 1"));
+        priceLinkedCalcItemMapper.selectList(query);
     if (rows.isEmpty() || rows.get(0).getPartUnitPrice() == null) {
-      return PriceResolveResult.miss("lp_price_linked_calc_item 无记录: oa=" + oaNo + " code=" + code);
+      return PriceResolveResult.miss(
+          "lp_price_linked_calc_item 无可用 OK 记录: oa="
+              + oaNo.trim()
+              + " code="
+              + code.trim()
+              + (StringUtils.hasText(pricingMonth) ? " pricingMonth=" + pricingMonth.trim() : ""));
     }
     return PriceResolveResult.hit(rows.get(0).getPartUnitPrice(), "联动价");
   }

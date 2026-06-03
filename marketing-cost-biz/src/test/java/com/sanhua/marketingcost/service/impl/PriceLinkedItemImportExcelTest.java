@@ -457,6 +457,74 @@ class PriceLinkedItemImportExcelTest {
   }
 
   @Test
+  @DisplayName("importExcel：本次导入影响因素短名优先于系统老别名")
+  void importExcel_prefersImportedFactorAliasOverGlobalAlias() throws Exception {
+    AtomicReference<PriceLinkedItem> inserted = new AtomicReference<>();
+    when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    doAnswer(invocation -> {
+      PriceLinkedItem item = invocation.getArgument(0);
+      item.setId(90L);
+      inserted.set(item);
+      return 1;
+    }).when(itemMapper).insert(any(PriceLinkedItem.class));
+
+    PriceLinkedFactorWorkbookParser factorParser = mock(PriceLinkedFactorWorkbookParser.class);
+    FactorUploadBatchService batchService = mock(FactorUploadBatchService.class);
+    FactorMonthlyPriceUpsertService monthlyPriceService = mock(FactorMonthlyPriceUpsertService.class);
+    PriceLinkedFormulaWorkbookParser formulaWorkbookParser = mock(PriceLinkedFormulaWorkbookParser.class);
+    PriceLinkedFormulaFactorRefParser refParser = mock(PriceLinkedFormulaFactorRefParser.class);
+    PriceLinkedFormulaFactorRefResolver refResolver = mock(PriceLinkedFormulaFactorRefResolver.class);
+    PriceLinkedBindingCandidateBuilder candidateBuilder = mock(PriceLinkedBindingCandidateBuilder.class);
+    PriceLinkedStandardBindingService standardService = mock(PriceLinkedStandardBindingService.class);
+    PriceLinkedAutoBindingWriteService writeService = mock(PriceLinkedAutoBindingWriteService.class);
+
+    when(factorParser.parse(any(), any())).thenReturn(factorWorkbook(a00RowResultSource()));
+    FactorUploadBatch batch = new FactorUploadBatch();
+    batch.setId(77L);
+    when(batchService.createFactorBatch(any())).thenReturn(batch);
+    when(monthlyPriceService.upsert(any(), any(), any(), any(), any(), any()))
+        .thenReturn(a00UpsertResult());
+    FactorRowRefSaveResult rowRefSaveResult = new FactorRowRefSaveResult();
+    rowRefSaveResult.setFactorUploadBatchId(77L);
+    when(batchService.saveRowRefs(any(), any(), any())).thenReturn(rowRefSaveResult);
+    when(formulaWorkbookParser.parse(any(), any())).thenReturn(formulaWorkbookWithoutPriceCellFormula());
+    when(refParser.parse(any())).thenReturn(java.util.List.of());
+    when(refResolver.resolve(any(), any())).thenReturn(java.util.List.of());
+    when(candidateBuilder.build(any(), any(), any(), any())).thenReturn(new BindingCandidateBuildResult());
+    when(standardService.checkAndRecord(any())).thenReturn(java.util.List.of());
+
+    injectV2Service("factorWorkbookParser", factorParser);
+    injectV2Service("factorUploadBatchService", batchService);
+    injectV2Service("factorMonthlyPriceUpsertService", monthlyPriceService);
+    injectV2Service("formulaWorkbookParser", formulaWorkbookParser);
+    injectV2Service("formulaFactorRefParser", refParser);
+    injectV2Service("formulaFactorRefResolver", refResolver);
+    injectV2Service("bindingCandidateBuilder", candidateBuilder);
+    injectV2Service("standardBindingService", standardService);
+    injectV2Service("autoBindingWriteService", writeService);
+    injectV2Service("importResultClassifier", new PriceLinkedImportResultClassifierImpl());
+
+    byte[] xlsx = buildXlsxWithFactorSheetFirst(new Object[][] {
+        {"210", "供管处", "联动表无自行添加", null, "部品联动", "铝棒", "301160037",
+            "6061-T6 Φ48", "千克", "A00+加工费", null, null, null, null,
+            24.899115, "0", null, null, "联动"}
+    });
+
+    PriceItemImportResponse resp = service.importExcel(
+        new ByteArrayInputStream(xlsx), "2026-06", false, "COMMERCIAL", "monthly.xlsx");
+
+    assertThat(resp.getLinkedCount()).isEqualTo(1);
+    assertThat(resp.getSkipped()).isZero();
+    assertThat(inserted.get().getFormulaExpr())
+        .isEqualTo("[NORMALIZED][factor_identity_195]+加工费");
+    ArgumentCaptor<PriceVariable> variableCaptor = ArgumentCaptor.forClass(PriceVariable.class);
+    verify(priceVariableMapper).insert(variableCaptor.capture());
+    assertThat(variableCaptor.getValue().getVariableCode()).isEqualTo("factor_identity_195");
+    assertThat(variableCaptor.getValue().getAliasesJson())
+        .isEqualTo("[\"A00\",\"9#A00\",\"factor_identity_195\"]");
+  }
+
+  @Test
   @DisplayName("importExcel：Excel 原始公式尾部 /1.13 转成 taxIncluded=0，避免系统二次除税")
   void importExcel_movesFinalVatDivisorToTaxIncludedFlag() throws Exception {
     AtomicReference<PriceLinkedItem> inserted = new AtomicReference<>();
@@ -576,6 +644,65 @@ class PriceLinkedItemImportExcelTest {
     verify(itemMapper, never()).insert(any(PriceLinkedItem.class));
     verify(itemMapper, never()).updateById(any(PriceLinkedItem.class));
     verify(mocks.writeService(), never()).write(any());
+  }
+
+  @Test
+  @DisplayName("importExcel：有供应商时按供应商+料号+业务单元匹配，规格不参与判重")
+  void importExcel_currentVersionLookupUsesSupplierMaterialBusinessUnitAndIgnoresSpec() throws Exception {
+    PriceLinkedItem existing = sameDerivedFormulaLinkedItem();
+    existing.setSpecModel("OLD-SPEC");
+    when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    V2Mocks mocks = configureV2Pipeline();
+
+    byte[] xlsx = buildXlsxWithFactorSheetFirst(new Object[][] {
+        {"210", "供管处", "供应商A", "S001", "部品联动", "物料A", "M001", "NEW-SPEC", "千克",
+            "下料重量*材料含税价格", 0.0, 0.0, 12.8, null, 91.0, "0", null, null, "联动"}
+    });
+
+    PriceItemImportResponse resp = service.importExcel(
+        new ByteArrayInputStream(xlsx), "2026-05", false,
+        "COMMERCIAL", "monthly.xlsx", "APPEND_ONLY");
+
+    assertThat(resp.getLinkedSkippedCount()).isEqualTo(1);
+    verify(itemMapper, never()).insert(any(PriceLinkedItem.class));
+    verify(mocks.writeService(), never()).write(any());
+    ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(itemMapper).selectOne(queryCaptor.capture());
+    assertThat(queryCaptor.getValue().getSqlSegment())
+        .contains("material_code")
+        .contains("business_unit_type")
+        .contains("supplier_code")
+        .doesNotContain("spec_model");
+  }
+
+  @Test
+  @DisplayName("importExcel：供应商为空时按料号+业务单元匹配，供应商和规格都不参与判重")
+  void importExcel_blankSupplierLookupUsesMaterialBusinessUnitOnly() throws Exception {
+    PriceLinkedItem existing = sameDerivedFormulaLinkedItem();
+    existing.setSupplierCode("OLD-SUPPLIER");
+    existing.setSpecModel("OLD-SPEC");
+    when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    V2Mocks mocks = configureV2Pipeline();
+
+    byte[] xlsx = buildXlsxWithFactorSheetFirst(new Object[][] {
+        {"210", "供管处", "供应商A", " ", "部品联动", "物料A", "M001", "NEW-SPEC", "千克",
+            "下料重量*材料含税价格", 0.0, 0.0, 12.8, null, 91.0, "0", null, null, "联动"}
+    });
+
+    PriceItemImportResponse resp = service.importExcel(
+        new ByteArrayInputStream(xlsx), "2026-05", false,
+        "COMMERCIAL", "monthly.xlsx", "APPEND_ONLY");
+
+    assertThat(resp.getLinkedSkippedCount()).isEqualTo(1);
+    verify(itemMapper, never()).insert(any(PriceLinkedItem.class));
+    verify(mocks.writeService(), never()).write(any());
+    ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(itemMapper).selectOne(queryCaptor.capture());
+    assertThat(queryCaptor.getValue().getSqlSegment())
+        .contains("material_code")
+        .contains("business_unit_type")
+        .doesNotContain("supplier_code")
+        .doesNotContain("spec_model");
   }
 
   @Test
@@ -964,6 +1091,20 @@ class PriceLinkedItemImportExcelTest {
     return row;
   }
 
+  private FactorRowParseResult a00RowResultSource() {
+    FactorRowParseResult row = new FactorRowParseResult();
+    row.setSourceSheetName("影响因素");
+    row.setSourceRowNumber(9);
+    row.setFactorSeqNo("9");
+    row.setFactorName("长江现货市场AOO铝");
+    row.setShortName("A00");
+    row.setPriceSource("平均价");
+    row.setPrice(new java.math.BigDecimal("23.386"));
+    row.setOriginalPrice(new java.math.BigDecimal("21.52"));
+    row.setUnit("公斤");
+    return row;
+  }
+
   private FactorWorkbookParseResult factorWorkbook(FactorRowParseResult row) {
     FactorWorkbookParseResult workbook = new FactorWorkbookParseResult();
     workbook.setSourceFileName("monthly.xlsx");
@@ -995,6 +1136,27 @@ class PriceLinkedItemImportExcelTest {
     return result;
   }
 
+  private FactorMonthlyPriceUpsertResult a00UpsertResult() {
+    FactorMonthlyPriceUpsertResult result = new FactorMonthlyPriceUpsertResult();
+    result.setMonthlyPriceCreatedCount(1);
+    FactorMonthlyPriceUpsertResult.RowResult row = new FactorMonthlyPriceUpsertResult.RowResult();
+    row.setSourceSheetName("影响因素");
+    row.setSourceRowNumber(9);
+    row.setFactorIdentityId(195L);
+    row.setFactorMonthlyPriceId(257L);
+    row.setFactorSeqNo("9");
+    row.setFactorName("长江现货市场AOO铝");
+    row.setShortName("A00");
+    row.setPriceSource("平均价");
+    row.setIdentityAction("UPDATE");
+    row.setMonthlyPriceAction("CREATE");
+    row.setNewPrice(new java.math.BigDecimal("23.386"));
+    row.setOriginalPrice(new java.math.BigDecimal("21.52"));
+    row.setUnit("公斤");
+    result.getRows().add(row);
+    return result;
+  }
+
   private LinkedFormulaWorkbookParseResult formulaWorkbook() {
     LinkedFormulaWorkbookParseResult workbook = new LinkedFormulaWorkbookParseResult();
     workbook.setSourceFileName("monthly.xlsx");
@@ -1014,6 +1176,24 @@ class PriceLinkedItemImportExcelTest {
     row.setFormulaText("!!INVALID!!");
     row.setPriceCellValue(new java.math.BigDecimal("88.88"));
     row.setExcelDerivedFormulaText("[blank_weight]*影响因素!$E$64/1000+[process_fee]");
+    sheet.getRows().add(row);
+    workbook.getSheets().add(sheet);
+    return workbook;
+  }
+
+  private LinkedFormulaWorkbookParseResult formulaWorkbookWithoutPriceCellFormula() {
+    LinkedFormulaWorkbookParseResult workbook = new LinkedFormulaWorkbookParseResult();
+    workbook.setSourceFileName("monthly.xlsx");
+    LinkedFormulaSheetParseResult sheet = new LinkedFormulaSheetParseResult();
+    sheet.setSheetName("联动公式");
+    LinkedFormulaRow row = formulaRow();
+    row.setMaterialCode("301160037");
+    row.setLinkedItemImportKey("301160037||6061-T6 Φ48");
+    row.setFormulaText("A00+加工费");
+    row.setPriceCellFormula(null);
+    row.setExcelDerivedFormulaText(null);
+    row.setPriceCellValue(new java.math.BigDecimal("24.899115"));
+    row.setHasFormula(false);
     sheet.getRows().add(row);
     workbook.getSheets().add(sheet);
     return workbook;

@@ -14,6 +14,7 @@ public class LinkedPriceVariableContext {
 
   private final LinkedPriceCalcScene calcScene;
   private Long adjustBatchId;
+  private String pricingMonth;
   private final Map<String, BigDecimal> variableValues = new LinkedHashMap<>();
   private final Map<String, String> variableSources = new LinkedHashMap<>();
 
@@ -50,6 +51,15 @@ public class LinkedPriceVariableContext {
 
   public Long getAdjustBatchId() {
     return adjustBatchId;
+  }
+
+  public String getPricingMonth() {
+    return pricingMonth;
+  }
+
+  public LinkedPriceVariableContext pricingMonth(String pricingMonth) {
+    this.pricingMonth = pricingMonth;
+    return this;
   }
 
   public Map<String, BigDecimal> getVariableValues() {

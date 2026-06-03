@@ -260,7 +260,7 @@ class PriceLinkedCalcServiceImplTest {
     PriceLinkedCalcItem calcItem = new PriceLinkedCalcItem();
     calcItem.setAdjustBatchId(88L);
     calcItem.setBusinessUnitType("COMMERCIAL");
-    calcItem.setPricingMonth("2026-05");
+    calcItem.setPricingMonth("2026-06");
     calcItem.setItemCode("MAT-1");
     calcItem.setCalcScene("MONTHLY_ADJUST");
 
@@ -273,8 +273,94 @@ class PriceLinkedCalcServiceImplTest {
     LinkedPriceVariableContext context = contextCaptor.getValue();
     assertEquals("MONTHLY_ADJUST", context.getCalcScene().getCode());
     assertEquals(88L, context.getAdjustBatchId());
+    assertEquals("2026-06", context.getPricingMonth());
     assertEquals("ADJUST_BATCH", calcItem.getFactorSource());
     assertEquals("OK", calcItem.getCalcStatus());
+    assertThat(calcItem.getPartUnitPrice()).isEqualByComparingTo("12.345678");
+  }
+
+  @Test
+  void calculateQuoteItemForEnsureUsesCalcItemPricingMonthForVariables() {
+    PriceLinkedFormulaPreviewService previewService =
+        Mockito.mock(PriceLinkedFormulaPreviewService.class);
+    PriceLinkedCalcServiceImpl service =
+        new PriceLinkedCalcServiceImpl(
+            Mockito.mock(BomCostingRowMapper.class),
+            Mockito.mock(PriceLinkedCalcItemMapper.class),
+            Mockito.mock(PriceLinkedItemMapper.class),
+            Mockito.mock(PriceVariableMapper.class),
+            Mockito.mock(OaFormMapper.class),
+            Mockito.mock(FinanceBasePriceMapper.class),
+            Mockito.mock(DynamicValueMapper.class),
+            new LinkedParserProperties(),
+            Mockito.mock(FormulaNormalizer.class),
+            Mockito.mock(FactorVariableRegistry.class),
+            new ObjectMapper(),
+            previewService);
+    PriceLinkedItem linkedItem = new PriceLinkedItem();
+    linkedItem.setMaterialCode("MAT-1");
+    linkedItem.setPricingMonth("2026-05");
+    linkedItem.setFormulaExpr("[Cu]+1");
+
+    PriceLinkedFormulaPreviewResponse response = new PriceLinkedFormulaPreviewResponse();
+    response.setResult(new BigDecimal("12.3456784"));
+    when(previewService.previewForRefresh(
+        any(PriceLinkedItem.class),
+        any(LinkedPriceVariableContext.class),
+        Mockito.any())).thenReturn(response);
+
+    PriceLinkedCalcItem calcItem = new PriceLinkedCalcItem();
+    calcItem.setBusinessUnitType("COMMERCIAL");
+    calcItem.setPricingMonth("2026-06");
+    calcItem.setItemCode("MAT-1");
+
+    OaForm oaForm = new OaForm();
+    service.calculateQuoteItemForEnsure(calcItem, linkedItem, oaForm);
+
+    ArgumentCaptor<LinkedPriceVariableContext> contextCaptor =
+        ArgumentCaptor.forClass(LinkedPriceVariableContext.class);
+    Mockito.verify(previewService).previewForRefresh(
+        any(PriceLinkedItem.class), contextCaptor.capture(), Mockito.same(oaForm));
+    LinkedPriceVariableContext context = contextCaptor.getValue();
+    assertEquals("QUOTE", context.getCalcScene().getCode());
+    assertEquals("2026-06", context.getPricingMonth());
+    assertEquals("OK", calcItem.getCalcStatus());
+    assertThat(calcItem.getPartUnitPrice()).isEqualByComparingTo("12.345678");
+  }
+
+  @Test
+  void quoteCalculationWithPriorFormulaResolvesVariablesByQuoteMonth() {
+    FactorVariableRegistry registry = Mockito.mock(FactorVariableRegistry.class);
+    FormulaNormalizer normalizer = Mockito.mock(FormulaNormalizer.class);
+    VariableContext[] capturedContext = new VariableContext[1];
+    when(normalizer.normalize(any())).thenReturn("[Cu]");
+    when(registry.resolve(any(String.class), any(VariableContext.class)))
+        .thenAnswer(invocation -> {
+          capturedContext[0] = invocation.getArgument(1);
+          return java.util.Optional.of(new BigDecimal("12.3456784"));
+        });
+
+    LinkedParserProperties props = new LinkedParserProperties();
+    props.setMode("new");
+    PriceLinkedCalcServiceImpl service =
+        buildServiceWithRealPreview(props, normalizer, registry);
+
+    PriceLinkedItem linkedItem = new PriceLinkedItem();
+    linkedItem.setMaterialCode("MAT-1");
+    linkedItem.setPricingMonth("2026-05");
+    linkedItem.setFormulaExpr("[Cu]");
+
+    PriceLinkedCalcItem calcItem = new PriceLinkedCalcItem();
+    calcItem.setBusinessUnitType("COMMERCIAL");
+    calcItem.setPricingMonth("2026-06");
+    calcItem.setItemCode("MAT-1");
+
+    service.calculateQuoteItemForEnsure(calcItem, linkedItem, new OaForm());
+
+    assertThat(capturedContext[0]).isNotNull();
+    assertThat(capturedContext[0].getPricingMonth()).isEqualTo("2026-06");
+    assertThat(calcItem.getTraceJson()).contains("\"formulaPriceMonth\":\"2026-05\"");
+    assertThat(calcItem.getTraceJson()).contains("\"calculationPriceMonth\":\"2026-06\"");
     assertThat(calcItem.getPartUnitPrice()).isEqualByComparingTo("12.345678");
   }
 

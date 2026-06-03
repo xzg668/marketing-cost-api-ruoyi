@@ -19,7 +19,7 @@ class V89SupplierSupplyRatioSchemaSqlTest {
         "CREATE TABLE IF NOT EXISTS lp_supplier_supply_ratio",
         "material_code VARCHAR(64) NOT NULL",
         "material_name VARCHAR(180) NOT NULL",
-        "spec_model VARCHAR(255) NOT NULL",
+        "spec_model VARCHAR(255) NOT NULL DEFAULT ''",
         "supplier_name VARCHAR(180) NOT NULL",
         "supply_ratio DECIMAL(18,6) NOT NULL DEFAULT 0.000000");
   }
@@ -28,12 +28,10 @@ class V89SupplierSupplyRatioSchemaSqlTest {
   @DisplayName("唯一键按用户确认业务键支撑多人多次导入去重")
   void definesBusinessUniqueKeyForImportIdempotency() {
     assertThat(SQL).contains(
-        "uk_supplier_ratio_biz",
+        "UNIQUE KEY uk_supplier_ratio_biz",
         "business_unit_type",
         "material_code",
-        "material_name",
         "supplier_name",
-        "spec_model",
         "deleted");
   }
 

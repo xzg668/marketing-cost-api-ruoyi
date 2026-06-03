@@ -220,7 +220,7 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
     var query = Wrappers.lambdaQuery(PriceLinkedItem.class)
         .eq(PriceLinkedItem::getDeleted, 0)
         .eq(PriceLinkedItem::getBusinessUnitType, businessUnitType)
-        .eq(PriceLinkedItem::getPricingMonth, pricingMonth)
+        .le(PriceLinkedItem::getPricingMonth, pricingMonth)
         .in(PriceLinkedItem::getMaterialCode, itemCodes);
     if (priceDate != null) {
       query.and(q -> q.le(PriceLinkedItem::getEffectiveFrom, priceDate)
@@ -233,7 +233,9 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
       query.isNull(PriceLinkedItem::getEffectiveTo);
     }
     List<PriceLinkedItem> rows = priceLinkedItemMapper.selectList(
-        query.orderByDesc(PriceLinkedItem::getEffectiveFrom)
+        query.orderByDesc(PriceLinkedItem::getPricingMonth)
+            .orderByDesc(PriceLinkedItem::getQuota)
+            .orderByDesc(PriceLinkedItem::getEffectiveFrom)
             .orderByDesc(PriceLinkedItem::getUpdatedAt)
             .orderByDesc(PriceLinkedItem::getId));
     Map<String, PriceLinkedItem> map = new LinkedHashMap<>();

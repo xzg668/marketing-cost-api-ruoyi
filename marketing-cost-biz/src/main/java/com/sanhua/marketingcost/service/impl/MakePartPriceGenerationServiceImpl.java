@@ -7,6 +7,7 @@ import com.sanhua.marketingcost.dto.MakePartMaterialPriceResolveResult;
 import com.sanhua.marketingcost.dto.MakePartPriceGenerateResponse;
 import com.sanhua.marketingcost.dto.MakePartProcessTypeResult;
 import com.sanhua.marketingcost.dto.MakePartWeightResult;
+import com.sanhua.marketingcost.dto.priceprepare.NoScrapConfirmResponse;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomU9Source;
@@ -18,6 +19,7 @@ import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceGapItemMapper;
 import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService;
+import com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService;
 import com.sanhua.marketingcost.service.MakePartPriceCalculator;
 import com.sanhua.marketingcost.service.MakePartPriceGenerationService;
 import com.sanhua.marketingcost.service.MakePartProcessTypePolicy;
@@ -55,6 +57,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
   private final LinkedPriceEnsureService linkedPriceEnsureService;
   private final MakePartMaterialPriceResolveService priceResolveService;
   private final MakePartPriceCalculator calculator;
+  private final MakePartNoScrapConfirmationService noScrapConfirmationService;
   private final MakePartPriceCalcRowMapper calcRowMapper;
   private final MakePartPriceGapItemMapper gapItemMapper;
 
@@ -67,6 +70,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       LinkedPriceEnsureService linkedPriceEnsureService,
       MakePartMaterialPriceResolveService priceResolveService,
       MakePartPriceCalculator calculator,
+      MakePartNoScrapConfirmationService noScrapConfirmationService,
       MakePartPriceCalcRowMapper calcRowMapper,
       MakePartPriceGapItemMapper gapItemMapper) {
     this.sourceDataService = sourceDataService;
@@ -77,6 +81,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     this.linkedPriceEnsureService = linkedPriceEnsureService;
     this.priceResolveService = priceResolveService;
     this.calculator = calculator;
+    this.noScrapConfirmationService = noScrapConfirmationService;
     this.calcRowMapper = calcRowMapper;
     this.gapItemMapper = gapItemMapper;
   }
@@ -293,6 +298,20 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     if (scraps.isEmpty()) {
       MakePartPriceCalcRow row =
           childBaseRow(calcBatchId, parent, child, businessUnitType, processType, weight, rawPrice, plan);
+      NoScrapConfirmResponse noScrapConfirmation =
+          noScrapConfirmationService.findEffective(
+              child.getChildMaterialNo(), period, businessUnitType);
+      if (noScrapConfirmation != null) {
+        row.setScrapCode("");
+        row.setScrapName("人工确认无废料");
+        row.setScrapPriceType("人工确认无废料");
+        row.setScrapUnitPrice(BigDecimal.ZERO);
+        row.setNoScrapConfirmed(true);
+        row.setNoScrapConfirmationId(noScrapConfirmation.getId());
+        row.setStatus(firstNonOk(processType.getStatus(), weight.getStatus()));
+        row.setRemark(appendRemark(row.getRemark(), noScrapRemark(noScrapConfirmation)));
+        return List.of(row);
+      }
       row.setStatus(firstNonOk(processType.getStatus(), weight.getStatus()));
       if (!StringUtils.hasText(row.getStatus())) {
         row.setStatus(MakePartPriceCalculator.STATUS_MISSING_SCRAP_MAPPING);
@@ -317,12 +336,25 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       row.setScrapName(trim(scrap.getScrapName()));
       row.setScrapPriceType(scrapPrice == null ? null : scrapPrice.getPriceType());
       row.setScrapUnitPrice(scrapPrice == null ? null : scrapPrice.getUnitPrice());
+      row.setNoScrapConfirmed(false);
+      row.setNoScrapConfirmationId(null);
       row.setStatus(firstNonOk(processType.getStatus(), weight.getStatus()));
       row.setRemark(appendRemark(row.getRemark(), priceRemark("废料", scrapPrice)));
       row.setRemark(appendRemark(row.getRemark(), linkedEnsureRemark("废料", scrap.getScrapCode(), plan)));
       rows.add(row);
     }
     return rows;
+  }
+
+  private String noScrapRemark(NoScrapConfirmResponse confirmation) {
+    if (confirmation == null) {
+      return null;
+    }
+    return "人工确认无废料，废料抵扣按0处理"
+        + "(confirmation_id=" + confirmation.getId()
+        + ", confirmed_by=" + blankIfNull(confirmation.getConfirmedBy())
+        + ", confirmed_at=" + (confirmation.getConfirmedAt() == null ? "" : confirmation.getConfirmedAt())
+        + ")";
   }
 
   private MakePartPriceCalcRow childBaseRow(

@@ -125,10 +125,10 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     }
 
     OaForm form = upsertOaForm(existingForm, normalized.getHeader(), request, oaNo, log.getId());
-    Map<String, Long> itemIdMap = replaceItems(form, normalized);
-    replaceExtraFees(form, normalized, itemIdMap, log.getId());
-    replaceExtraFields(form, normalized, itemIdMap, log.getId());
-    replaceBomStatuses(form, normalized, itemIdMap);
+    ItemInsertResult itemInsertResult = replaceItems(form, normalized);
+    replaceExtraFees(form, normalized, itemInsertResult.itemIdMap(), log.getId());
+    replaceExtraFields(form, normalized, itemInsertResult.itemIdMap(), log.getId());
+    replaceBomStatuses(form, normalized, itemInsertResult.itemIdsByPosition());
     ProductPropertyAnnualSyncResult annualUsageSyncResult =
         productPropertyAnnualUsageService.syncFromOaForm(form, listItems(form.getId()));
 
@@ -191,10 +191,11 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     return form;
   }
 
-  private Map<String, Long> replaceItems(OaForm form, QuoteNormalizedDocument normalized) {
+  private ItemInsertResult replaceItems(OaForm form, QuoteNormalizedDocument normalized) {
     oaFormItemMapper.delete(
         Wrappers.lambdaQuery(OaFormItem.class).eq(OaFormItem::getOaFormId, form.getId()));
     Map<String, Long> itemIdMap = new HashMap<>();
+    List<Long> itemIdsByPosition = new ArrayList<>();
     for (QuoteNormalizedItem source : normalized.getItems()) {
       OaFormItem item = new OaFormItem();
       item.setOaFormId(form.getId());
@@ -240,8 +241,9 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       item.setUpdatedAt(LocalDateTime.now());
       oaFormItemMapper.insert(item);
       itemIdMap.put(itemKey(source.getExternalLineId(), source.getSeq()), item.getId());
+      itemIdsByPosition.add(item.getId());
     }
-    return itemIdMap;
+    return new ItemInsertResult(itemIdMap, itemIdsByPosition);
   }
 
   private void replaceExtraFees(
@@ -347,13 +349,14 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
   }
 
   private void replaceBomStatuses(
-      OaForm form, QuoteNormalizedDocument normalized, Map<String, Long> itemIdMap) {
+      OaForm form, QuoteNormalizedDocument normalized, List<Long> itemIdsByPosition) {
     quoteBomStatusMapper.delete(
         Wrappers.lambdaQuery(QuoteBomStatus.class).eq(QuoteBomStatus::getOaFormId, form.getId()));
-    for (QuoteNormalizedItem source : normalized.getItems()) {
+    for (int index = 0; index < normalized.getItems().size(); index++) {
+      QuoteNormalizedItem source = normalized.getItems().get(index);
       QuoteBomStatus status = new QuoteBomStatus();
       status.setOaFormId(form.getId());
-      status.setOaFormItemId(itemIdMap.get(itemKey(source.getExternalLineId(), source.getSeq())));
+      status.setOaFormItemId(itemIdsByPosition.get(index));
       status.setOaNo(form.getOaNo());
       status.setProductCode(source.getMaterialNo());
       status.setProductModel(source.getSunlModel());
@@ -370,6 +373,8 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       quoteBomStatusMapper.insert(status);
     }
   }
+
+  private record ItemInsertResult(Map<String, Long> itemIdMap, List<Long> itemIdsByPosition) {}
 
   private List<OaFormItem> listItems(Long oaFormId) {
     return oaFormItemMapper.selectList(

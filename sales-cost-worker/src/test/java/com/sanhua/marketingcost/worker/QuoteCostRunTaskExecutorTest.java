@@ -27,6 +27,7 @@ import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MaterialMasterSyncService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.lang.reflect.Proxy;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -71,7 +72,7 @@ class QuoteCostRunTaskExecutorTest {
     assertThat(harness.writtenItem).isSameAs(harness.item);
     assertThat(harness.progressValues).containsExactly(5, 10, 52, 95);
     assertThat(harness.calls)
-        .containsExactly("sync", "readiness", "ensure", "engine", "writer", "oaUpdate");
+        .containsExactly("sync", "readiness", "ensure", "engine", "writer", "itemUpdate", "oaUpdate");
   }
 
   @Test
@@ -88,6 +89,39 @@ class QuoteCostRunTaskExecutorTest {
     assertThat(harness.calls).containsExactly("sync", "readiness");
   }
 
+  @Test
+  @DisplayName("LPE-08：QUOTE worker ensure 返回失败项时提示并继续部品取价")
+  void quoteWorkerContinuesWhenEnsureReturnsFailedItems() {
+    Harness harness = new Harness();
+    harness.ensureResult.addFailedItem("PART-LINK", "联动价公式不存在或为空");
+
+    CostRunTaskExecutionResult executionResult =
+        harness.executor.execute(quoteTask(), "worker-1");
+
+    assertThat(executionResult.resultSummaryJson())
+        .isEqualTo("{\"partItemCount\":1,\"costItemCount\":0,\"totalCost\":\"123.45\"}");
+    assertThat(harness.calls)
+        .containsExactly("sync", "readiness", "ensure", "engine", "writer", "itemUpdate", "oaUpdate");
+    assertThat(harness.progressValues).containsExactly(5, 10, 52, 95);
+    assertThat(harness.writtenResult).isSameAs(harness.engineResult);
+  }
+
+  @Test
+  @DisplayName("T32：QUOTE worker 未带核算月时按当前月执行")
+  void quoteWorkerUsesCurrentPeriodWhenTaskHasNoPricingMonth() {
+    Harness harness = new Harness();
+    CostRunTask task = quoteTask();
+    task.setPricingMonth(null);
+
+    harness.executor.execute(task, "worker-1");
+
+    assertThat(harness.readinessPeriod).isEqualTo(CostPricingPeriodUtils.currentPricingMonth());
+    assertThat(harness.engineContext.getPricingMonth())
+        .isEqualTo(CostPricingPeriodUtils.currentPricingMonth());
+    assertThat(harness.ensureRequest.getPricingMonth())
+        .isEqualTo(CostPricingPeriodUtils.currentPricingMonth());
+  }
+
   private static class Harness {
     private final List<String> calls = new ArrayList<>();
     private final List<Integer> progressValues = new ArrayList<>();
@@ -97,8 +131,10 @@ class QuoteCostRunTaskExecutorTest {
     private final QuoteCostRunTaskExecutor executor;
     private PricePrepareReadinessResult readiness =
         PricePrepareReadinessResult.ready("PPR-1", "2026-05", "SUCCESS");
+    private String readinessPeriod;
     private CostRunContext engineContext;
     private LinkedPriceEnsureRequest ensureRequest;
+    private LinkedPriceEnsureResult ensureResult = new LinkedPriceEnsureResult();
     private CostRunObjectResult writtenResult;
     private OaForm writtenForm;
     private OaFormItem writtenItem;
@@ -120,9 +156,22 @@ class QuoteCostRunTaskExecutorTest {
       OaFormItemMapper oaFormItemMapper =
           mapperProxy(
               OaFormItemMapper.class,
-              (proxy, method, args) -> "selectById".equals(method.getName())
-                  ? item
-                  : defaultValue(method.getReturnType()));
+              (proxy, method, args) -> {
+                if ("selectById".equals(method.getName())) {
+                  return item;
+                }
+                if ("markCalculated".equals(method.getName())) {
+                  calls.add("itemUpdate");
+                  return 1;
+                }
+                if ("countRunnableItems".equals(method.getName())) {
+                  return 1L;
+                }
+                if ("countCalculatedRunnableItems".equals(method.getName())) {
+                  return 1L;
+                }
+                return defaultValue(method.getReturnType());
+              });
       CostRunPartItemMapper costRunPartItemMapper =
           mapperProxy(
               CostRunPartItemMapper.class,
@@ -155,6 +204,7 @@ class QuoteCostRunTaskExecutorTest {
       PricePrepareReadinessService pricePrepareReadinessService =
           (oaNo, periodMonth) -> {
             calls.add("readiness");
+            readinessPeriod = periodMonth;
             return readiness;
           };
       MaterialPriceRouterService materialPriceRouterService =
@@ -177,7 +227,7 @@ class QuoteCostRunTaskExecutorTest {
           request -> {
             calls.add("ensure");
             ensureRequest = request;
-            return new LinkedPriceEnsureResult();
+            return ensureResult;
           };
       CostRunEngine costRunEngine =
           context -> {

@@ -154,6 +154,14 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
    * 旧 PURCHASE/SETTLE 请求暂保留 V46 兼容查找，等前端全量切到新菜单后再清理。
    */
   private PriceFixedItem findExisting(PriceFixedItemImportRequest.PriceFixedItemImportRow row) {
+    if (isPurchaseFixed(row) && isU9Source(row)) {
+      return itemMapper.selectOne(
+          Wrappers.lambdaQuery(PriceFixedItem.class)
+              .eq(PriceFixedItem::getSourceType, row.getSourceType())
+              .eq(PriceFixedItem::getSourceSystem, row.getSourceSystem())
+              .eq(PriceFixedItem::getMaterialCode, row.getMaterialCode().trim())
+              .last("LIMIT 1"));
+    }
     if (isPurchaseFixed(row) && !isU9Source(row)) {
       return itemMapper.selectOne(
           Wrappers.lambdaQuery(PriceFixedItem.class)
@@ -418,6 +426,12 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     } else {
       query.eq(PriceFixedItem::getBusinessUnitType, businessUnitType);
     }
+    String sourceSystem = trimToNull(item.getSourceSystem());
+    if (sourceSystem == null) {
+      query.isNull(PriceFixedItem::getSourceSystem);
+    } else {
+      query.eq(PriceFixedItem::getSourceSystem, sourceSystem);
+    }
     for (PriceFixedItem row : itemMapper.selectList(query)) {
       if (item.getId() != null && item.getId().equals(row.getId())) {
         continue;
@@ -468,6 +482,9 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
       row.setSourceType(sourceType);
     }
     String sourceSystem = upperTrim(row.getSourceSystem());
+    if (sourceSystem == null && isU9ProcessNo(row.getProcessNo())) {
+      sourceSystem = SOURCE_SYSTEM_U9;
+    }
     if (sourceSystem == null && (SOURCE_TYPE_PURCHASE_FIXED.equals(sourceType)
         || SOURCE_TYPE_SETTLE_FIXED.equals(sourceType))) {
       sourceSystem = SOURCE_SYSTEM_EXCEL;
@@ -490,6 +507,11 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
 
   private boolean isU9Source(PriceFixedItemImportRequest.PriceFixedItemImportRow row) {
     return SOURCE_SYSTEM_U9.equals(row.getSourceSystem());
+  }
+
+  private boolean isU9ProcessNo(String processNo) {
+    String normalized = upperTrim(processNo);
+    return normalized != null && normalized.startsWith("U9");
   }
 
   private String upperTrim(String value) {

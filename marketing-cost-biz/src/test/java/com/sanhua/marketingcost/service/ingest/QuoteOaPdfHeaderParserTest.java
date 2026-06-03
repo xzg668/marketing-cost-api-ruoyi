@@ -1,5 +1,8 @@
 package com.sanhua.marketingcost.service.ingest;
 
+import static com.sanhua.marketingcost.service.ingest.QuoteOaPdfDetailTableParserTestSupport.cell;
+import static com.sanhua.marketingcost.service.ingest.QuoteOaPdfDetailTableParserTestSupport.document;
+import static com.sanhua.marketingcost.service.ingest.QuoteOaPdfDetailTableParserTestSupport.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestHeaderRequest;
@@ -81,6 +84,43 @@ class QuoteOaPdfHeaderParserTest {
   }
 
   @Test
+  void parsesBusinessDivisionValueAfterParentheticalFieldDescription() {
+    QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SC_006);
+    parser.parse(
+        context(
+            QuoteExcelTemplateType.FI_SC_006,
+            List.of(
+                ">>基础信息",
+                "流程编号 FI-SC-006-20260108-109",
+                "申请日期 2026-01-08",
+                ">>业务信息",
+                "事业部（当涉及到多事业部时，请选择型号多的事业部） 商用部品事业部 产品属性 商用产品")),
+        request);
+
+    assertThat(request.getHeader().getSourceBusinessDivision()).isEqualTo("商用部品事业部");
+  }
+
+  @Test
+  void parsesBusinessDivisionValueFromNearbyTextLinesWhenDescriptionWraps() {
+    QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SC_006);
+    parser.parse(
+        context(
+            QuoteExcelTemplateType.FI_SC_006,
+            List.of(
+                ">>基础信息",
+                "流程编号 FI-SC-006-20260108-109",
+                "申请日期 2026-01-08",
+                ">>业务信息",
+                "事业部（当涉及到多事业部时，请",
+                "销售部门要求回复日期 2026-01-09 商用部品事业部",
+                "选择型号多的事业部）",
+                "产品属性 商用产品")),
+        request);
+
+    assertThat(request.getHeader().getSourceBusinessDivision()).isEqualTo("商用部品事业部");
+  }
+
+  @Test
   void parsesFiSr005BusinessTypeIntoHeaderExtraField() {
     QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SR_005_DERIVED);
     parser.parse(
@@ -102,6 +142,37 @@ class QuoteOaPdfHeaderParserTest {
         .filteredOn(field -> "businessType".equals(field.getFieldCode()))
         .extracting("fieldValue")
         .containsExactly("衍生品");
+  }
+
+  @Test
+  void parsesWrappedMaterialPricesByCoordinateAndIgnoresBlankMaterialPrice() {
+    QuotePdfDocument document =
+        document(
+            "打印 - SANHUA三花.pdf",
+            row(cell(">>业务信息", 40)),
+            row(cell("贸易条款", 40), cell("汇率", 120), cell("1.0000", 150)),
+            row(
+                cell("销售价格是否联动", 40),
+                cell("固定", 150),
+                cell("核算时铜基价（含税，元/吨）", 300),
+                cell("100,000.00", 405)),
+            row(
+                cell("核算时锌基价（含税，元/吨）", 40),
+                cell("23,714.00", 145),
+                cell("核算时铝基价（含税，元/吨）", 300)),
+            row(cell("核算时SUS316基价（含税，元/", 40), cell("核算时SUS304基价（含税，元/", 300)),
+            row(cell("32,500.00", 145), cell("20,000.00", 405)),
+            row(cell("吨）", 40), cell("吨）", 300)));
+    QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SC_006);
+
+    parser.parse(context(QuoteExcelTemplateType.FI_SC_006, document), request);
+
+    assertThat(request.getHeader().getExchangeRate()).isEqualTo("1.0000");
+    assertThat(request.getHeader().getCopperPrice()).isEqualTo("100,000.00");
+    assertThat(request.getHeader().getZincPrice()).isEqualTo("23,714.00");
+    assertThat(request.getHeader().getAluminumPrice()).isNull();
+    assertThat(request.getHeader().getSus316lPrice()).isEqualTo("32,500.00");
+    assertThat(request.getHeader().getSus304Price()).isEqualTo("20,000.00");
   }
 
   @Test

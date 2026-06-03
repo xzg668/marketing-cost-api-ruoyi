@@ -546,9 +546,9 @@ class GoldenSampleRegressionTest {
   class L2Subtotals {
 
     @Test
-    @DisplayName("[待启用] materialTotal = 93.493（水电不计入）")
-    void materialTotalExcludesWaterPower() {
-      // 启用条件：任务 #9 把水电从材料费剔除
+    @DisplayName("[待启用] materialTotal = 93.493（水电计入）")
+    void materialTotalIncludesWaterPower() {
+      // 启用条件：任务 #9 把水电计入材料费
       goldenAssertion("L2.materialTotal");
     }
 
