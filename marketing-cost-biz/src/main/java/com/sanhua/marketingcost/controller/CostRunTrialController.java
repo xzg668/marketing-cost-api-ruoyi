@@ -54,7 +54,7 @@ public class CostRunTrialController {
     String businessUnitType = BusinessUnitContext.getCurrentBusinessUnitType();
     repriceLockGuard.assertCostRunAllowed(oaNo);
     // T17：先 enqueue（防重 + 立即标 QUEUED），让前端立刻能查到排队状态
-    if (!progressStore.enqueue(oaNo)) {
+    if (!enqueueForRun(oaNo, username, businessUnitType)) {
       return CommonResult.success("该 OA 已在试算中，请查询 progress 接口");
     }
     try {
@@ -69,6 +69,34 @@ public class CostRunTrialController {
       throw ex;
     }
     return CommonResult.success("试算已提交，请通过 progress 接口查询进度");
+  }
+
+  /**
+   * Worker 模式下 progress 接口优先读取数据库批次状态，而防重状态保存在 API 进程内存。
+   * 当 worker 已把批次推进到 DONE/ERROR，但 API 内存仍残留 QUEUED/RUNNING 时，允许清理内存后重算。
+   */
+  private boolean enqueueForRun(String oaNo, String username, String businessUnitType) {
+    if (progressStore.enqueue(oaNo)) {
+      return true;
+    }
+    CostRunProgressResponse latest = costRunTrialService.progress(oaNo, username, businessUnitType);
+    if (!isTerminalProgress(latest)) {
+      return false;
+    }
+    log.info(
+        "清理成本核算终态残留进度并允许重算, oaNo={}, latestStatus={}",
+        oaNo,
+        latest.getStatus());
+    progressStore.remove(oaNo);
+    return progressStore.enqueue(oaNo);
+  }
+
+  private boolean isTerminalProgress(CostRunProgressResponse progress) {
+    if (progress == null || !StringUtils.hasText(progress.getStatus())) {
+      return false;
+    }
+    String status = progress.getStatus().trim();
+    return "DONE".equals(status) || "ERROR".equals(status);
   }
 
   /** 查询试算进度 */

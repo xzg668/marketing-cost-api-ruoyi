@@ -61,7 +61,7 @@ public interface QuoteRequestProductBomMapper {
         <if test="bomStatuses != null and bomStatuses.size() > 0">
           AND COALESCE(
             s.bom_status,
-            CASE WHEN i.material_no IS NULL OR TRIM(i.material_no) = '' THEN 'NO_BOM' ELSE 'NOT_CHECKED' END
+            CASE WHEN i.material_no IS NULL OR CHAR_LENGTH(TRIM(i.material_no)) = 0 THEN 'NO_BOM' ELSE 'NOT_CHECKED' END
           ) IN
           <foreach collection="bomStatuses" item="status" open="(" separator="," close=")">
             #{status}
@@ -92,7 +92,12 @@ public interface QuoteRequestProductBomMapper {
         COALESCE(s.product_code, i.material_no) AS productCode,
         i.product_name AS productName,
         i.spec AS productSpec,
-        COALESCE(NULLIF(TRIM(s.customer_code), ''), NULLIF(TRIM(i.customer_code), ''), f.customer, '') AS customerCode,
+        COALESCE(
+          CASE WHEN s.customer_code IS NOT NULL AND CHAR_LENGTH(TRIM(s.customer_code)) > 0 THEN TRIM(s.customer_code) END,
+          CASE WHEN i.customer_code IS NOT NULL AND CHAR_LENGTH(TRIM(i.customer_code)) > 0 THEN TRIM(i.customer_code) END,
+          f.customer,
+          ''
+        ) AS customerCode,
         f.customer AS customerName,
         COALESCE(r.product_type, s.product_type, 'UNKNOWN') AS productType,
         COALESCE(r.bare_product_code, s.bare_product_code) AS bareProductCode,
@@ -107,7 +112,7 @@ public interface QuoteRequestProductBomMapper {
         END AS bodyBomReady,
         COALESCE(r.need_package, s.need_package, 0) AS needPackage,
         CASE
-          WHEN COALESCE(r.reference_finished_code, s.reference_finished_code, '') != '' THEN 1
+          WHEN CHAR_LENGTH(TRIM(COALESCE(r.reference_finished_code, s.reference_finished_code, ''))) > 0 THEN 1
           ELSE 0
         END AS packageReferenceReady,
         CASE
@@ -121,7 +126,7 @@ public interface QuoteRequestProductBomMapper {
         COALESCE(r.review_status, s.review_status, 'NOT_SUBMITTED') AS reviewStatus,
         COALESCE(
           s.bom_status,
-          CASE WHEN i.material_no IS NULL OR TRIM(i.material_no) = '' THEN 'NO_BOM' ELSE 'NOT_CHECKED' END
+          CASE WHEN i.material_no IS NULL OR CHAR_LENGTH(TRIM(i.material_no)) = 0 THEN 'NO_BOM' ELSE 'NOT_CHECKED' END
         ) AS bomStatus,
         COALESCE(s.sync_at, s.checked_at) AS syncAt,
         COALESCE(r.updated_at, t.updated_at, s.sync_at, s.checked_at) AS lastHandledAt,
@@ -187,7 +192,7 @@ public interface QuoteRequestProductBomMapper {
         <if test="bomStatuses != null and bomStatuses.size() > 0">
           AND COALESCE(
             s.bom_status,
-            CASE WHEN i.material_no IS NULL OR TRIM(i.material_no) = '' THEN 'NO_BOM' ELSE 'NOT_CHECKED' END
+            CASE WHEN i.material_no IS NULL OR CHAR_LENGTH(TRIM(i.material_no)) = 0 THEN 'NO_BOM' ELSE 'NOT_CHECKED' END
           ) IN
           <foreach collection="bomStatuses" item="status" open="(" separator="," close=")">
             #{status}

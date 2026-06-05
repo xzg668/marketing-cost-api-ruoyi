@@ -4,7 +4,7 @@
 -- 说明：
 --   1. lp_supplier_supply_ratio 是供应关系主数据，不是价格源表。
 --   2. Excel 当前只是一种来源，后续 SRM 同步也写入同一张业务表。
---   3. 唯一键按用户确认口径去重：物料代码 + 物料名称 + 供应商 + 型号。
+--   3. 唯一键按用户确认口径去重：业务单元 + 物料代码 + 供应商 + deleted。
 -- =============================================================================
 
 SET NAMES utf8mb4;
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS lp_supplier_supply_ratio (
   business_unit_type VARCHAR(32) NOT NULL DEFAULT 'COMMERCIAL' COMMENT '业务单元类型',
   material_code VARCHAR(64) NOT NULL COMMENT '物料代码',
   material_name VARCHAR(180) NOT NULL COMMENT '物料名称',
-  spec_model VARCHAR(255) NOT NULL COMMENT '型号/规格型号',
+  spec_model VARCHAR(255) NOT NULL DEFAULT '' COMMENT '型号/规格型号',
   unit VARCHAR(32) DEFAULT NULL COMMENT '单位',
   material_shape VARCHAR(64) DEFAULT NULL COMMENT '物料形态属性',
   supplier_name VARCHAR(180) NOT NULL COMMENT '供应商名称',
@@ -36,9 +36,7 @@ CREATE TABLE IF NOT EXISTS lp_supplier_supply_ratio (
   UNIQUE KEY uk_supplier_ratio_biz (
     business_unit_type,
     material_code,
-    material_name,
     supplier_name,
-    spec_model,
     deleted
   ),
   KEY idx_supplier_ratio_material (

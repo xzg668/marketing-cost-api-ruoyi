@@ -43,7 +43,7 @@ VALUES
   (40427, '供应商供货比例', 40426, 1, '/base/supplier-relation/supply-ratio',
    'pages:SupplierSupplyRatioPage', 1, '0', 'C',
    '0', '0', 'base:supplier-supply-ratio:list', 'PieChart', 'admin', NOW(), '', NOW(),
-   '维护供应商供货比例；导入时按物料代码、物料名称、供应商、型号去重', NULL),
+   '维护供应商供货比例；导入时按业务单元、物料代码、供应商去重', NULL),
   (40428, '供应商供货比例查看', 40427, 1, '', NULL, 1, '0', 'F',
    '0', '0', 'base:supplier-supply-ratio:list', '#', 'admin', NOW(), '', NOW(),
    '供应商供货比例查询权限', NULL),

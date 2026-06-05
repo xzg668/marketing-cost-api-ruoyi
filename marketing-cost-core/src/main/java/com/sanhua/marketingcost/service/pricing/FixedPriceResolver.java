@@ -97,7 +97,7 @@ public class FixedPriceResolver implements PriceResolver {
       query.and(q -> q.le(PriceFixedItem::getEffectiveFrom, priceDate)
           .or()
           .isNull(PriceFixedItem::getEffectiveFrom));
-      query.and(q -> q.gt(PriceFixedItem::getEffectiveTo, priceDate)
+      query.and(q -> q.ge(PriceFixedItem::getEffectiveTo, priceDate)
           .or()
           .isNull(PriceFixedItem::getEffectiveTo));
     }

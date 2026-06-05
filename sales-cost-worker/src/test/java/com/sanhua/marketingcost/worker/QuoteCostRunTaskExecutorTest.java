@@ -90,6 +90,31 @@ class QuoteCostRunTaskExecutorTest {
   }
 
   @Test
+  @DisplayName("PPR-09：价格准备未完成但允许继续时 worker 不阻断")
+  void nonBlockingPriceReadinessWarningContinuesWorkerTask() {
+    Harness harness = new Harness();
+    harness.readiness =
+        PricePrepareReadinessResult.notReady(
+            "PARTIAL",
+            true,
+            false,
+            "价格准备未完成，实时成本将继续，结果可能缺价",
+            "PPR-1",
+            "2026-05",
+            "PARTIAL",
+            1,
+            List.of("PART-1: 缺价"));
+
+    CostRunTaskExecutionResult executionResult =
+        harness.executor.execute(quoteTask(), "worker-1");
+
+    assertThat(executionResult.resultSummaryJson())
+        .isEqualTo("{\"partItemCount\":1,\"costItemCount\":0,\"totalCost\":\"123.45\"}");
+    assertThat(harness.calls)
+        .containsExactly("sync", "readiness", "ensure", "engine", "writer", "itemUpdate", "oaUpdate");
+  }
+
+  @Test
   @DisplayName("LPE-08：QUOTE worker ensure 返回失败项时提示并继续部品取价")
   void quoteWorkerContinuesWhenEnsureReturnsFailedItems() {
     Harness harness = new Harness();

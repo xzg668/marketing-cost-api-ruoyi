@@ -6,11 +6,13 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.sanhua.marketingcost.dto.CostRunProgressResponse;
 import com.sanhua.marketingcost.dto.CostRunTrialRequest;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.BusinessUnitRepriceLockGuard;
 import com.sanhua.marketingcost.service.CostRunProgressStore;
 import com.sanhua.marketingcost.service.CostRunTrialService;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.AfterEach;
@@ -47,7 +49,11 @@ class CostRunTrialControllerTest {
   @DisplayName("trial：先做月度调价锁校验，再入队和提交异步核算")
   void runChecksMonthlyRepriceLockBeforeEnqueue() {
     Authentication authentication = authentication("alice", "COMMERCIAL");
-    when(costRunTrialService.run("OA-001", "alice", "COMMERCIAL"))
+    when(costRunTrialService.run(
+            Mockito.eq("OA-001"),
+            Mockito.<List<Long>>isNull(),
+            Mockito.eq("alice"),
+            Mockito.eq("COMMERCIAL")))
         .thenReturn(CompletableFuture.completedFuture(null));
     CostRunTrialRequest request = new CostRunTrialRequest();
     request.setOaNo(" OA-001 ");
@@ -55,7 +61,11 @@ class CostRunTrialControllerTest {
     controller.run(request, authentication);
 
     verify(repriceLockGuard).assertCostRunAllowed("OA-001");
-    verify(costRunTrialService).run("OA-001", "alice", "COMMERCIAL");
+    verify(costRunTrialService).run(
+        Mockito.eq("OA-001"),
+        Mockito.<List<Long>>isNull(),
+        Mockito.eq("alice"),
+        Mockito.eq("COMMERCIAL"));
   }
 
   @Test
@@ -72,7 +82,11 @@ class CostRunTrialControllerTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("月度调价");
 
-    verify(costRunTrialService, never()).run("OA-LOCKED", "alice", "COMMERCIAL");
+    verify(costRunTrialService, never()).run(
+        Mockito.eq("OA-LOCKED"),
+        Mockito.<List<Long>>isNull(),
+        Mockito.eq("alice"),
+        Mockito.eq("COMMERCIAL"));
     assertThat(progressStore.get("OA-LOCKED").getStatus()).isEqualTo("IDLE");
     assertThat(progressStore.getQueueDepth()).isZero();
   }
@@ -81,7 +95,11 @@ class CostRunTrialControllerTest {
   @DisplayName("T31：重复点击同一个 OA 时只提交一次，第二次不创建新的运行任务")
   void duplicateRunDoesNotSubmitAnotherTask() {
     Authentication authentication = authentication("alice", "COMMERCIAL");
-    when(costRunTrialService.run("OA-DUP", "alice", "COMMERCIAL"))
+    when(costRunTrialService.run(
+            Mockito.eq("OA-DUP"),
+            Mockito.<List<Long>>isNull(),
+            Mockito.eq("alice"),
+            Mockito.eq("COMMERCIAL")))
         .thenReturn(new CompletableFuture<>());
     CostRunTrialRequest request = new CostRunTrialRequest();
     request.setOaNo("OA-DUP");
@@ -90,8 +108,42 @@ class CostRunTrialControllerTest {
     var second = controller.run(request, authentication);
 
     assertThat(second.getData()).contains("已在试算中");
-    verify(costRunTrialService, Mockito.times(1)).run("OA-DUP", "alice", "COMMERCIAL");
+    verify(costRunTrialService, Mockito.times(1)).run(
+        Mockito.eq("OA-DUP"),
+        Mockito.<List<Long>>isNull(),
+        Mockito.eq("alice"),
+        Mockito.eq("COMMERCIAL"));
     assertThat(progressStore.get("OA-DUP").getStatus()).isEqualTo("QUEUED");
+  }
+
+  @Test
+  @DisplayName("worker 终态：DB 进度已 DONE 时清理 API 内存残留并允许重新提交")
+  void terminalWorkerProgressClearsStaleMemoryAndAllowsRerun() {
+    Authentication authentication = authentication("alice", "COMMERCIAL");
+    progressStore.enqueue("OA-DONE");
+    CostRunProgressResponse done = new CostRunProgressResponse();
+    done.setStatus("DONE");
+    done.setPercent(100);
+    when(costRunTrialService.progress("OA-DONE", "alice", "COMMERCIAL")).thenReturn(done);
+    when(costRunTrialService.run(
+            Mockito.eq("OA-DONE"),
+            Mockito.<List<Long>>isNull(),
+            Mockito.eq("alice"),
+            Mockito.eq("COMMERCIAL")))
+        .thenReturn(CompletableFuture.completedFuture(null));
+    CostRunTrialRequest request = new CostRunTrialRequest();
+    request.setOaNo("OA-DONE");
+
+    var response = controller.run(request, authentication);
+
+    assertThat(response.getData()).contains("试算已提交");
+    verify(costRunTrialService).progress("OA-DONE", "alice", "COMMERCIAL");
+    verify(costRunTrialService).run(
+        Mockito.eq("OA-DONE"),
+        Mockito.<List<Long>>isNull(),
+        Mockito.eq("alice"),
+        Mockito.eq("COMMERCIAL"));
+    assertThat(progressStore.get("OA-DONE").getStatus()).isEqualTo("QUEUED");
   }
 
   private Authentication authentication(String username, String businessUnitType) {

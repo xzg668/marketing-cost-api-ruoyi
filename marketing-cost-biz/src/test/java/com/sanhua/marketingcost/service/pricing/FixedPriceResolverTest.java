@@ -61,6 +61,30 @@ class FixedPriceResolverTest {
   }
 
   @Test
+  @DisplayName("T23：固定采购价结束日当天仍然有效")
+  void fixedPriceEffectiveToIsInclusive() {
+    PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);
+    FixedPriceResolver resolver = resolver(mapper);
+    PriceFixedItem row = fixed("7.256637", "PURCHASE_FIXED");
+    row.setEffectiveTo(LocalDate.of(2026, 6, 30));
+    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(row));
+
+    PriceResolveResult result =
+        resolver.resolve(
+            "OA-001",
+            part("301990444"),
+            route("固定价"),
+            monthlyContext(LocalDateTime.of(2026, 6, 30, 23, 59, 59)));
+
+    assertThat(result.unitPrice()).isEqualByComparingTo("7.256637");
+    ArgumentCaptor<Wrapper<PriceFixedItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(mapper).selectList(captor.capture());
+    assertThat(captor.getValue().getCustomSqlSegment())
+        .contains("effective_to", ">=");
+    assertThat(paramValues(captor.getValue())).contains(LocalDate.of(2026, 6, 30));
+  }
+
+  @Test
   @DisplayName("T23：结算价使用 SETTLE 来源并按 price_as_of_time 过滤，不能直接取最新")
   void monthlySettleFixedUsesSettleSourceAndContextPriceAsOfTime() {
     PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);

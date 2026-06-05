@@ -37,7 +37,7 @@ VALUES
 -- 2. 菜单数据
 -- menu_type: M=目录, C=菜单, F=按钮
 -- business_unit_type: NULL=通用（当前全部置 NULL，后续按业务再细分）
--- menu_id 分段：100系统 / 200数据接入 / 300基础数据 / 400价格源 / 500成本核算 / 600数据分析 / 700结账
+-- menu_id 分段：100系统 / 200数据接入 / 300基础数据 / 400价格源 / 500成本核算 / 700结账
 -- --------------------------------------------------------
 
 -- ==================== 系统管理（新增目录） ====================
@@ -108,17 +108,10 @@ VALUES
 (501, '实时成本计算',   500, 1, 'run',           'cost/run/index',           'C', '0', '0', 'cost:run:list',           'play',      'admin', NOW(), '', NOW(), '', NULL),
 (502, '已核算成本明细', 500, 2, 'run/completed', 'cost/run/completed/index', 'C', '0', '0', 'cost:run:completed:list', 'clipboard', 'admin', NOW(), '', NOW(), '', NULL);
 
--- ==================== 数据分析（对应 menu.js 的 analysis 分组） ====================
-INSERT IGNORE INTO sys_menu (menu_id, menu_name, parent_id, order_num, path, component, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark, business_unit_type)
-VALUES
-(600, '数据分析', 0, 5, 'analysis', NULL, 'M', '0', '0', NULL, 'chart', 'admin', NOW(), '', NOW(), '数据分析目录', NULL),
-(601, '成本分析', 600, 1, 'cost',   'analysis/cost/index',   'C', '0', '0', 'analysis:cost:list',   'chart', 'admin', NOW(), '', NOW(), '', NULL),
-(602, '报表',     600, 2, 'report', 'analysis/report/index', 'C', '0', '0', 'analysis:report:list', 'list',  'admin', NOW(), '', NOW(), '', NULL);
-
 -- ==================== 结账（对应 menu.js 的 settlement 分组） ====================
 INSERT IGNORE INTO sys_menu (menu_id, menu_name, parent_id, order_num, path, component, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark, business_unit_type)
 VALUES
-(700, '结账', 0, 6, 'settlement', NULL, 'M', '0', '0', NULL, 'lock', 'admin', NOW(), '', NOW(), '结账目录', NULL),
+(700, '结账', 0, 5, 'settlement', NULL, 'M', '0', '0', NULL, 'lock', 'admin', NOW(), '', NOW(), '结账目录', NULL),
 (701, '月度调价', 700, 1, 'monthly-adjustment', 'settlement/monthly-adjustment/index', 'C', '0', '0', 'settlement:monthly-adjustment:list', 'money', 'admin', NOW(), '', NOW(), '', NULL);
 
 -- --------------------------------------------------------

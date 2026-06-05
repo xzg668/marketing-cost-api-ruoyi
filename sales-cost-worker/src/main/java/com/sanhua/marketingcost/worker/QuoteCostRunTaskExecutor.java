@@ -186,7 +186,7 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
           readiness.getStatus(),
           readiness.getMessage());
     }
-    if (readiness != null && readiness.isWarning()) {
+    if (readiness != null && readiness.isBlocking()) {
       throw new RuntimeException(blockingReadinessMessage(readiness.getMessage()));
     }
   }

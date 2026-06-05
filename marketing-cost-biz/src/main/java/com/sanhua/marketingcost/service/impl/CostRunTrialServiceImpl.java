@@ -463,7 +463,7 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
           readiness.getStatus(),
           readiness.getMessage());
     }
-    if (readiness != null && readiness.isWarning()) {
+    if (readiness != null && readiness.isBlocking()) {
       throw new RuntimeException(blockingReadinessMessage(readiness.getMessage()));
     }
     return readiness;
