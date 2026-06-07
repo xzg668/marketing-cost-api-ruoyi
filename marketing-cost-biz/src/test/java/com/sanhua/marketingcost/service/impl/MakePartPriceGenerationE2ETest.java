@@ -180,13 +180,13 @@ class MakePartPriceGenerationE2ETest {
             parent("MAKE-MISSING-WEIGHT"),
             parent("MAKE-MISSING-ROUTE"),
             parent("MAKE-MISSING-SCRAP-PRICE")));
-    when(sourceDataService.listDedupedChildren(SAMPLE_PARENT))
+    when(sourceDataService.listDedupedChildren(eq(SAMPLE_PARENT), any()))
         .thenReturn(List.of(rawChild(SAMPLE_PARENT, "RAW-203250582-A"), blankChild(SAMPLE_PARENT)));
-    when(sourceDataService.listDedupedChildren("MAKE-MISSING-WEIGHT"))
+    when(sourceDataService.listDedupedChildren(eq("MAKE-MISSING-WEIGHT"), any()))
         .thenReturn(List.of(rawChild("MAKE-MISSING-WEIGHT", "RAW-MISSING-WEIGHT")));
-    when(sourceDataService.listDedupedChildren("MAKE-MISSING-ROUTE"))
+    when(sourceDataService.listDedupedChildren(eq("MAKE-MISSING-ROUTE"), any()))
         .thenReturn(List.of(rawChild("MAKE-MISSING-ROUTE", "RAW-MISSING-ROUTE")));
-    when(sourceDataService.listDedupedChildren("MAKE-MISSING-SCRAP-PRICE"))
+    when(sourceDataService.listDedupedChildren(eq("MAKE-MISSING-SCRAP-PRICE"), any()))
         .thenReturn(List.of(rawChild("MAKE-MISSING-SCRAP-PRICE", "RAW-MISSING-SCRAP-PRICE")));
 
     when(weightService.resolveWeights(anyString(), any(BomU9Source.class), anyString()))
@@ -246,7 +246,7 @@ class MakePartPriceGenerationE2ETest {
     when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(form);
     when(partMapper.selectBaseByOaNo(OA_NO))
         .thenReturn(List.of(costRunPart(SAMPLE_PARENT, "2")));
-    when(routerService.listCandidates(eq(SAMPLE_PARENT), eq(PERIOD), eq(currentDate)))
+    when(routerService.listCandidates(eq(SAMPLE_PARENT), any(), eq(currentDate)))
         .thenReturn(List.of(new PriceTypeRoute(
             SAMPLE_PARENT,
             MaterialFormAttrEnum.MANUFACTURED,

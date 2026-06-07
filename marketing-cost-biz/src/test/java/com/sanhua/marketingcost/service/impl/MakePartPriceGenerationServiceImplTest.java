@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -162,7 +163,7 @@ class MakePartPriceGenerationServiceImplTest {
     BomU9Source rawB = child("RAW-B", "千克");
     when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
         .thenReturn(List.of(parent));
-    when(sourceDataService.listDedupedChildren("MAKE-001")).thenReturn(List.of(rawA, rawB));
+    when(sourceDataService.listDedupedChildren(eq("MAKE-001"), any())).thenReturn(List.of(rawA, rawB));
     when(weightService.resolveWeights(any(), any(), any()))
         .thenReturn(weight("RAW-A"), weight("RAW-B"));
     when(scrapMappingService.listMappings("RAW-A", "COMMERCIAL"))
@@ -191,7 +192,7 @@ class MakePartPriceGenerationServiceImplTest {
     BomCostingRow parent = parent("MAKE-ERR");
     when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
         .thenReturn(List.of(parent));
-    when(sourceDataService.listDedupedChildren("MAKE-ERR")).thenReturn(List.of());
+    when(sourceDataService.listDedupedChildren(eq("MAKE-ERR"), any())).thenReturn(List.of());
 
     MakePartPriceGenerateResponse response =
         service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
@@ -468,7 +469,7 @@ class MakePartPriceGenerationServiceImplTest {
         .thenReturn(List.of(parent));
     when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
         .thenReturn(List.of(parent));
-    when(sourceDataService.listDedupedChildren(parentCode)).thenReturn(children);
+    when(sourceDataService.listDedupedChildren(eq(parentCode), any())).thenReturn(children);
     for (BomU9Source child : children) {
       when(weightService.resolveWeights(parentCode, child, "原材料加工"))
           .thenReturn(weight(child.getChildMaterialNo()));

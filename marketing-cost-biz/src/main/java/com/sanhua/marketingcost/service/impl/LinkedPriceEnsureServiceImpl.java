@@ -14,8 +14,11 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
+import com.sanhua.marketingcost.service.pricing.SupplierPreferredPriceSelection;
+import com.sanhua.marketingcost.service.pricing.SupplierPreferredPriceSelector;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,18 +38,21 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
   private final BomCostingRowMapper bomCostingRowMapper;
   private final OaFormMapper oaFormMapper;
   private final PriceLinkedCalcServiceImpl priceLinkedCalcService;
+  private final SupplierPreferredPriceSelector supplierPreferredPriceSelector;
 
   public LinkedPriceEnsureServiceImpl(
       PriceLinkedCalcItemMapper priceLinkedCalcItemMapper,
       PriceLinkedItemMapper priceLinkedItemMapper,
       BomCostingRowMapper bomCostingRowMapper,
       OaFormMapper oaFormMapper,
-      PriceLinkedCalcServiceImpl priceLinkedCalcService) {
+      PriceLinkedCalcServiceImpl priceLinkedCalcService,
+      SupplierPreferredPriceSelector supplierPreferredPriceSelector) {
     this.priceLinkedCalcItemMapper = priceLinkedCalcItemMapper;
     this.priceLinkedItemMapper = priceLinkedItemMapper;
     this.bomCostingRowMapper = bomCostingRowMapper;
     this.oaFormMapper = oaFormMapper;
     this.priceLinkedCalcService = priceLinkedCalcService;
+    this.supplierPreferredPriceSelector = supplierPreferredPriceSelector;
   }
 
   @Override
@@ -238,10 +244,29 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
             .orderByDesc(PriceLinkedItem::getEffectiveFrom)
             .orderByDesc(PriceLinkedItem::getUpdatedAt)
             .orderByDesc(PriceLinkedItem::getId));
-    Map<String, PriceLinkedItem> map = new LinkedHashMap<>();
+    Map<String, List<PriceLinkedItem>> candidatesByMaterial = new LinkedHashMap<>();
     for (PriceLinkedItem row : rows) {
       if (StringUtils.hasText(row.getMaterialCode())) {
-        map.putIfAbsent(row.getMaterialCode().trim(), row);
+        candidatesByMaterial.computeIfAbsent(row.getMaterialCode().trim(), key -> new ArrayList<>())
+            .add(row);
+      }
+    }
+    Map<String, PriceLinkedItem> map = new LinkedHashMap<>();
+    for (Map.Entry<String, List<PriceLinkedItem>> entry : candidatesByMaterial.entrySet()) {
+      List<PriceLinkedItem> candidates = entry.getValue();
+      PriceLinkedItem fallback = candidates.isEmpty() ? null : candidates.get(0);
+      SupplierPreferredPriceSelection<PriceLinkedItem> selection =
+          supplierPreferredPriceSelector.select(
+              candidates,
+              businessUnitType,
+              entry.getKey(),
+              fallback == null ? null : fallback.getMaterialName(),
+              fallback == null ? null : fallback.getSpecModel(),
+              priceDate,
+              PriceLinkedItem::getSupplierName,
+              PriceLinkedItem::getSupplierCode);
+      if (selection.row() != null) {
+        map.put(entry.getKey(), selection.row());
       }
     }
     return map;

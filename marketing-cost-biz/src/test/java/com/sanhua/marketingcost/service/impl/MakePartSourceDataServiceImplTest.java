@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -18,6 +19,7 @@ import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class MakePartSourceDataServiceImplTest {
 
@@ -45,8 +47,8 @@ class MakePartSourceDataServiceImplTest {
   }
 
   @Test
-  @DisplayName("U9 子项按 parent + child 去重，多个不同 child 全部保留")
-  void listDedupedChildrenKeepsDistinctChildren() {
+  @DisplayName("U9 子项只查主制造有效期内记录，再按 parent + child 去重")
+  void listDedupedChildrenKeepsMainPurposeEffectiveChildren() {
     BomCostingRowMapper costingMapper = mock(BomCostingRowMapper.class);
     BomU9SourceMapper u9Mapper = mock(BomU9SourceMapper.class);
     MakePartSourceDataServiceImpl service =
@@ -54,17 +56,22 @@ class MakePartSourceDataServiceImplTest {
     when(u9Mapper.selectList(any(Wrapper.class)))
         .thenReturn(
             List.of(
-                child("P-001", "RAW-A", 2, 10L, "普机", LocalDate.parse("2026-12-31")),
                 child("P-001", "RAW-B", 3, 11L, "主制造", LocalDate.parse("9999-12-31")),
                 child("P-001", "RAW-A", 1, 12L, "主制造", LocalDate.parse("9999-12-31"))));
 
-    List<BomU9Source> result = service.listDedupedChildren("P-001");
+    List<BomU9Source> result = service.listDedupedChildren("P-001", LocalDate.parse("2026-05-31"));
 
     assertThat(result).hasSize(2);
     assertThat(result).extracting(BomU9Source::getChildMaterialNo).containsExactly("RAW-A", "RAW-B");
     BomU9Source rawA =
         result.stream().filter(row -> "RAW-A".equals(row.getChildMaterialNo())).findFirst().orElseThrow();
     assertThat(rawA.getId()).isEqualTo(12L);
+
+    ArgumentCaptor<Wrapper<BomU9Source>> captor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(u9Mapper).selectList(captor.capture());
+    String sqlSegment = captor.getValue().getSqlSegment();
+    assertThat(sqlSegment)
+        .contains("parent_material_no", "bom_purpose", "effective_from", "effective_to");
   }
 
   private BomCostingRow costingRow(String materialCode, String shapeAttr) {

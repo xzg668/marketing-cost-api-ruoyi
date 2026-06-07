@@ -11,6 +11,7 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
+import com.sanhua.marketingcost.dto.SupplierSupplyRatioResolveResult;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
@@ -20,6 +21,8 @@ import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
+import com.sanhua.marketingcost.service.SupplierSupplyRatioResolveService;
+import com.sanhua.marketingcost.service.pricing.SupplierPreferredPriceSelector;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -38,6 +41,7 @@ class LinkedPriceEnsureServiceImplTest {
   private BomCostingRowMapper bomCostingRowMapper;
   private OaFormMapper oaFormMapper;
   private PriceLinkedCalcServiceImpl calcService;
+  private SupplierSupplyRatioResolveService supplyRatioResolveService;
   private LinkedPriceEnsureServiceImpl service;
 
   @BeforeAll
@@ -55,8 +59,16 @@ class LinkedPriceEnsureServiceImplTest {
     bomCostingRowMapper = Mockito.mock(BomCostingRowMapper.class);
     oaFormMapper = Mockito.mock(OaFormMapper.class);
     calcService = Mockito.mock(PriceLinkedCalcServiceImpl.class);
+    supplyRatioResolveService = Mockito.mock(SupplierSupplyRatioResolveService.class);
+    when(supplyRatioResolveService.resolve(any(), any(), any(), any(), any()))
+        .thenReturn(SupplierSupplyRatioResolveResult.miss("未命中供货比例"));
     service = new LinkedPriceEnsureServiceImpl(
-        calcItemMapper, linkedItemMapper, bomCostingRowMapper, oaFormMapper, calcService);
+        calcItemMapper,
+        linkedItemMapper,
+        bomCostingRowMapper,
+        oaFormMapper,
+        calcService,
+        new SupplierPreferredPriceSelector(supplyRatioResolveService));
   }
 
   @Test
@@ -196,19 +208,23 @@ class LinkedPriceEnsureServiceImplTest {
   }
 
   @Test
-  void ensureQuoteSameMonthOrdersByHighestSupplierQuota() {
+  void ensureQuoteSameMonthPrefersSupplierSupplyRatioMainSupplier() {
     when(calcItemMapper.selectList(any())).thenReturn(List.of());
     PriceLinkedItem highQuota = linkedItem("MAT-1");
     highQuota.setPricingMonth("2026-06");
     highQuota.setSupplierCode("S2");
+    highQuota.setSupplierName("供应商2");
     highQuota.setQuota(new BigDecimal("0.70"));
     PriceLinkedItem lowQuota = linkedItem("MAT-1");
     lowQuota.setPricingMonth("2026-06");
     lowQuota.setSupplierCode("S1");
+    lowQuota.setSupplierName("供应商1");
     lowQuota.setQuota(new BigDecimal("0.30"));
     when(linkedItemMapper.selectList(any())).thenReturn(List.of(highQuota, lowQuota));
     when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("MAT-1")));
     when(oaFormMapper.selectOne(any())).thenReturn(null);
+    when(supplyRatioResolveService.resolve(any(), any(), any(), any(), any()))
+        .thenReturn(mainSupplier("S1", "供应商1", "0.80"));
     when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
         .thenAnswer(invocation -> {
           PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -224,6 +240,39 @@ class LinkedPriceEnsureServiceImplTest {
     verify(linkedItemMapper).selectList(queryCaptor.capture());
     assertThat(queryCaptor.getValue().getSqlSegment())
         .contains("ORDER BY pricing_month DESC,quota DESC");
+
+    ArgumentCaptor<PriceLinkedItem> linkedItemCaptor =
+        ArgumentCaptor.forClass(PriceLinkedItem.class);
+    verify(calcService).calculateQuoteItemForEnsure(any(), linkedItemCaptor.capture(), any());
+    assertThat(linkedItemCaptor.getValue().getSupplierCode()).isEqualTo("S1");
+  }
+
+  @Test
+  void ensureQuoteFallsBackWhenMainSupplierHasNoLinkedFormula() {
+    when(calcItemMapper.selectList(any())).thenReturn(List.of());
+    PriceLinkedItem firstByDefault = linkedItem("MAT-1");
+    firstByDefault.setPricingMonth("2026-06");
+    firstByDefault.setSupplierCode("S2");
+    firstByDefault.setSupplierName("供应商2");
+    PriceLinkedItem secondByDefault = linkedItem("MAT-1");
+    secondByDefault.setPricingMonth("2026-06");
+    secondByDefault.setSupplierCode("S1");
+    secondByDefault.setSupplierName("供应商1");
+    when(linkedItemMapper.selectList(any())).thenReturn(List.of(firstByDefault, secondByDefault));
+    when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("MAT-1")));
+    when(oaFormMapper.selectOne(any())).thenReturn(null);
+    when(supplyRatioResolveService.resolve(any(), any(), any(), any(), any()))
+        .thenReturn(mainSupplier("S9", "供应商9", "0.90"));
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+        .thenAnswer(invocation -> {
+          PriceLinkedCalcItem calcItem = invocation.getArgument(0);
+          calcItem.setPartUnitPrice(new BigDecimal("10.000000"));
+          calcItem.setCalcStatus("OK");
+          return calcItem;
+        });
+
+    service.ensure(LinkedPriceEnsureRequest.quote(
+        "OA-001", "COMMERCIAL", "2026-06", Set.of("MAT-1")));
 
     ArgumentCaptor<PriceLinkedItem> linkedItemCaptor =
         ArgumentCaptor.forClass(PriceLinkedItem.class);
@@ -395,6 +444,16 @@ class LinkedPriceEnsureServiceImplTest {
     item.setBusinessUnitType("COMMERCIAL");
     item.setFormulaExpr("[Cu]+1");
     return item;
+  }
+
+  private SupplierSupplyRatioResolveResult mainSupplier(
+      String supplierCode, String supplierName, String ratio) {
+    SupplierSupplyRatioResolveResult result = new SupplierSupplyRatioResolveResult();
+    result.setMatched(true);
+    result.setSupplierCode(supplierCode);
+    result.setSupplierName(supplierName);
+    result.setSupplyRatio(new BigDecimal(ratio));
+    return result;
   }
 
   private BomCostingRow bomRow(String materialCode) {

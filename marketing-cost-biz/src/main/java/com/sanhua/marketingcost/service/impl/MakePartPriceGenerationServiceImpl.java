@@ -469,7 +469,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     }
     for (BomCostingRow parent : parents) {
       String parentCode = trim(parent.getMaterialCode());
-      List<BomU9Source> children = sourceDataService.listDedupedChildren(parentCode);
+      List<BomU9Source> children = sourceDataService.listDedupedChildren(parentCode, quoteDate);
       plan.childrenByParent.put(parentCode, children == null ? List.of() : children);
       for (BomU9Source child : plan.children(parentCode)) {
         String childCode = trim(child.getChildMaterialNo());

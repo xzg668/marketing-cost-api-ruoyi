@@ -19,8 +19,6 @@ public class MakePartSourceDataServiceImpl implements MakePartSourceDataService 
 
   private static final String MANUFACTURED_SHAPE = "制造件";
   private static final String MAIN_BOM_PURPOSE = "主制造";
-  private static final LocalDate OPEN_END_DATE = LocalDate.of(9999, 12, 31);
-
   private final BomCostingRowMapper bomCostingRowMapper;
   private final BomU9SourceMapper bomU9SourceMapper;
 
@@ -58,15 +56,24 @@ public class MakePartSourceDataServiceImpl implements MakePartSourceDataService 
   }
 
   @Override
-  public List<BomU9Source> listDedupedChildren(String parentMaterialNo) {
+  public List<BomU9Source> listDedupedChildren(String parentMaterialNo, LocalDate asOfDate) {
     if (!StringUtils.hasText(parentMaterialNo)) {
       return List.of();
     }
+    var query = Wrappers.lambdaQuery(BomU9Source.class)
+        .eq(BomU9Source::getParentMaterialNo, parentMaterialNo.trim())
+        .eq(BomU9Source::getBomPurpose, MAIN_BOM_PURPOSE);
+    if (asOfDate != null) {
+      query.and(q -> q.le(BomU9Source::getEffectiveFrom, asOfDate)
+          .or()
+          .isNull(BomU9Source::getEffectiveFrom));
+      query.and(q -> q.ge(BomU9Source::getEffectiveTo, asOfDate)
+          .or()
+          .isNull(BomU9Source::getEffectiveTo));
+    }
     List<BomU9Source> rows =
         bomU9SourceMapper.selectList(
-            Wrappers.lambdaQuery(BomU9Source.class)
-                .eq(BomU9Source::getParentMaterialNo, parentMaterialNo.trim())
-                .orderByAsc(BomU9Source::getChildSeq)
+            query.orderByAsc(BomU9Source::getChildSeq)
                 .orderByDesc(BomU9Source::getId));
     return dedupeChildren(rows);
   }
@@ -91,27 +98,11 @@ public class MakePartSourceDataServiceImpl implements MakePartSourceDataService 
   }
 
   private int compareChildPriority(BomU9Source left, BomU9Source right) {
-    int mainCompare = Boolean.compare(isMainPurpose(right), isMainPurpose(left));
-    if (mainCompare != 0) {
-      return mainCompare;
-    }
-    int openCompare = Boolean.compare(isOpenEnded(right), isOpenEnded(left));
-    if (openCompare != 0) {
-      return openCompare;
-    }
     int seqCompare = nullLast(left.getChildSeq(), right.getChildSeq());
     if (seqCompare != 0) {
       return seqCompare;
     }
     return nullLastDesc(left.getId(), right.getId());
-  }
-
-  private boolean isMainPurpose(BomU9Source row) {
-    return MAIN_BOM_PURPOSE.equals(trim(row.getBomPurpose()));
-  }
-
-  private boolean isOpenEnded(BomU9Source row) {
-    return OPEN_END_DATE.equals(row.getEffectiveTo());
   }
 
   private int nullLast(Integer left, Integer right) {
