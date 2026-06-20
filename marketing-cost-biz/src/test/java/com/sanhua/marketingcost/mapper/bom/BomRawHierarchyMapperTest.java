@@ -115,6 +115,7 @@ class BomRawHierarchyMapperTest extends BomMapperTestBase {
     row.setMaterialCode(topProductCode);
     row.setLevel(0);
     row.setPath("/" + topProductCode + "/");
+    row.setSourceLineKey("__TOP__|" + topProductCode + "|主制造");
     row.setBomPurpose("主制造");
     row.setEffectiveFrom(LocalDate.of(2026, 1, 1));
     row.setEffectiveTo(LocalDate.of(9999, 12, 31));

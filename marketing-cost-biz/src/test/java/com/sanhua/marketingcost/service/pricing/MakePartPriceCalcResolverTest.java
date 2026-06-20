@@ -214,6 +214,38 @@ class MakePartPriceCalcResolverTest {
   }
 
   @Test
+  @DisplayName("普通报价制造件不按 price_as_of_time 严格过滤")
+  void quoteResolveIgnoresPriceAsOfTime() {
+    LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 6, 17, 16, 0);
+    MakePartPriceCalcRowMapper mapper = Mockito.mock(MakePartPriceCalcRowMapper.class);
+    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper);
+    MakePartPriceCalcRow row = row("BATCH-QUOTE", "MAKE-001", "OK", true, "13.77000000", null);
+    row.setPriceAsOfTime(LocalDateTime.of(2026, 6, 30, 23, 59, 59));
+    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(row));
+    CostRunContext context =
+        CostRunContext.quote(
+            "OA-MAKE",
+            10L,
+            "TOP-001",
+            null,
+            null,
+            "COMMERCIAL",
+            "2026-06",
+            priceAsOfTime,
+            "OBJ-1");
+
+    PriceResolveResult result = resolver.resolve("OA-MAKE", part("MAKE-001"), null, context);
+
+    assertThat(result.unitPrice()).isEqualByComparingTo("13.77000000");
+    assertThat(result.remark()).doesNotContain("取价时点");
+    ArgumentCaptor<Wrapper<MakePartPriceCalcRow>> captor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(mapper).selectList(captor.capture());
+    assertThat(captor.getValue().getCustomSqlSegment()).doesNotContain("price_as_of_time");
+    assertThat(paramValues(captor.getValue())).contains("2026-06", "COMMERCIAL");
+    assertThat(paramValues(captor.getValue())).doesNotContain(priceAsOfTime);
+  }
+
+  @Test
   @DisplayName("MPPG-07：旧 MakeSpecPriceResolver 不再作为 Spring Resolver 注入")
   void oldMakeSpecResolverIsNotSpringService() {
     assertThat(MakeSpecPriceResolver.class.getAnnotation(Service.class)).isNull();

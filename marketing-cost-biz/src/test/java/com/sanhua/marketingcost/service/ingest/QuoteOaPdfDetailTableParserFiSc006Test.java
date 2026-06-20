@@ -166,4 +166,21 @@ class QuoteOaPdfDetailTableParserFiSc006Test {
         .doesNotContain("71001", "1001", "31001", "01001", "1003", "1108")
         .contains("1001900001202", "1108900000163");
   }
+
+  @Test
+  void desktopPlateFiSc006PdfKeepsActualEightyOneProductRows() throws Exception {
+    Path path = Path.of("/Users/xiexicheng/Desktop/板换/FI-SC-006-20260605-008.pdf");
+    Assumptions.assumeTrue(Files.exists(path), "desktop plate FI-SC-006 PDF sample is required");
+
+    PdfBoxQuotePdfTextExtractor extractor = new PdfBoxQuotePdfTextExtractor();
+    QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SC_006);
+    try (InputStream inputStream = Files.newInputStream(path)) {
+      QuotePdfDocument document = extractor.extract(inputStream, path.getFileName().toString());
+      parser.parse(context(QuoteExcelTemplateType.FI_SC_006, document), request);
+    }
+
+    assertThat(request.getItems()).hasSize(81);
+    assertThat(request.getItems()).extracting(QuoteIngestItemRequest::getSeq)
+        .containsExactlyElementsOf(java.util.stream.IntStream.rangeClosed(1, 81).boxed().toList());
+  }
 }

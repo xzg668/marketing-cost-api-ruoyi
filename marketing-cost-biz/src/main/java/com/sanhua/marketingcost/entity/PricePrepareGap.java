@@ -21,7 +21,12 @@ public class PricePrepareGap {
 
   private String prepareNo;
   private String periodMonth;
+  private String priceTypeConfirmNo;
+  private Long priceTypeConfirmItemId;
+  private String actionType;
+  private String actionTarget;
   private String oaNo;
+  private Long oaFormItemId;
   private String topProductCode;
   private String materialCode;
   private String gapMaterialCode;
@@ -39,9 +44,6 @@ public class PricePrepareGap {
 
   @TableField(fill = FieldFill.INSERT_UPDATE)
   private LocalDateTime updatedAt;
-
-  @TableField(exist = false)
-  private String actionType;
 
   @TableField(exist = false)
   private String actionMaterialNo;

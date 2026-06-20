@@ -26,6 +26,11 @@ public class CostRunContext {
   private String packageMethod;
   private String customerName;
   private String calcObjectKey;
+  private Long costRunVersionId;
+  private String costRunNo;
+  private String pricePrepareNo;
+  private String priceTypeConfirmNo;
+  private String bomConfirmNo;
   /**
    * 核算引擎内部进度回调。
    *

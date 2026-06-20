@@ -91,6 +91,8 @@ public class QuoteRequestProductBomQueryServiceImpl implements QuoteRequestProdu
   private boolean isCostReadyBomStatus(String bomStatus) {
     return QuoteBomStatusCode.SYNCED.getCode().equals(bomStatus)
         || QuoteBomStatusCode.REUSED_CURRENT_MONTH.getCode().equals(bomStatus)
+        || QuoteBomStatusCode.CURRENT_MONTH_QUOTED.getCode().equals(bomStatus)
+        || QuoteBomStatusCode.U9_BOM_EXISTS.getCode().equals(bomStatus)
         || QuoteBomStatusCode.MANUAL_ENTERED.getCode().equals(bomStatus);
   }
 

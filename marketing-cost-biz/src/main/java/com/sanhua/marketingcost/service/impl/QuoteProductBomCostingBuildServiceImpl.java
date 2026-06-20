@@ -16,6 +16,8 @@ import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuoteBomSupplementDetail;
 import com.sanhua.marketingcost.entity.QuoteBomSupplementVersion;
+import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowSourceRefMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
@@ -26,6 +28,7 @@ import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
+import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.BomFlattenService;
 import com.sanhua.marketingcost.service.BomByproductCostRuleQueryService;
@@ -96,6 +99,7 @@ public class QuoteProductBomCostingBuildServiceImpl
   private final BomCostingRowMapper costingRowMapper;
   private final BomCostingRowSourceRefMapper sourceRefMapper;
   private final BomCostingRowSubRefMapper subRefMapper;
+  private final OaFormItemMapper oaFormItemMapper;
 
   public QuoteProductBomCostingBuildServiceImpl(
       QuoteProductBomPreparationService preparationService,
@@ -114,7 +118,8 @@ public class QuoteProductBomCostingBuildServiceImpl
       QuoteBomPackageReferenceDetailMapper packageReferenceDetailMapper,
       BomCostingRowMapper costingRowMapper,
       BomCostingRowSourceRefMapper sourceRefMapper,
-      BomCostingRowSubRefMapper subRefMapper) {
+      BomCostingRowSubRefMapper subRefMapper,
+      OaFormItemMapper oaFormItemMapper) {
     this.preparationService = preparationService;
     this.flattenService = flattenService;
     this.formalBomReadService = formalBomReadService;
@@ -132,23 +137,38 @@ public class QuoteProductBomCostingBuildServiceImpl
     this.costingRowMapper = costingRowMapper;
     this.sourceRefMapper = sourceRefMapper;
     this.subRefMapper = subRefMapper;
+    this.oaFormItemMapper = oaFormItemMapper;
   }
 
   @Override
   @Transactional(rollbackFor = Exception.class)
   public QuoteBomCostingBuildResponse buildByOaFormItem(Long oaFormItemId) {
+    return buildByOaFormItem(oaFormItemId, null);
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public QuoteBomCostingBuildResponse buildByOaFormItem(Long oaFormItemId, String periodMonth) {
+    return buildByOaFormItem(oaFormItemId, periodMonth, LocalDate.now());
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public QuoteBomCostingBuildResponse buildByOaFormItem(
+      Long oaFormItemId, String periodMonth, LocalDate quoteDate) {
     if (oaFormItemId == null) {
       throw new QuoteIngestException("报价产品行 ID 不能为空");
     }
     QuoteBomPreparationRecord record = loadActiveRecordByItem(oaFormItemId);
-    if (record == null) {
-      preparationService.prepareByOaFormItem(oaFormItemId);
+    LocalDate buildQuoteDate = resolveQuoteDate(quoteDate);
+    if (record == null || !PREPARATION_READY.equals(record.getPreparationStatus())) {
+      preparationService.prepareByOaFormItem(oaFormItemId, buildQuoteDate);
       record = loadActiveRecordByItem(oaFormItemId);
     }
     if (record == null) {
       throw new QuoteIngestException("报价产品行尚未完成 BOM 准备");
     }
-    return build(record, null, false);
+    return build(record, null, false, periodMonth, buildQuoteDate);
   }
 
   @Override
@@ -159,37 +179,47 @@ public class QuoteProductBomCostingBuildServiceImpl
     if (record == null) {
       throw new QuoteIngestException("补录任务未关联 BOM 准备记录");
     }
-    return build(record, task, true);
+    return build(record, task, true, null, LocalDate.now());
   }
 
   private QuoteBomCostingBuildResponse build(
-      QuoteBomPreparationRecord record, BomSupplementTask task, boolean requireApprovedTask) {
+      QuoteBomPreparationRecord record,
+      BomSupplementTask task,
+      boolean requireApprovedTask,
+      String requestedPeriodMonth,
+      LocalDate requestedQuoteDate) {
     requireBuildable(record, task, requireApprovedTask);
-    YearMonth period = YearMonth.parse(record.getCostPeriodMonth());
-    LocalDate asOfDate = period.atEndOfMonth();
+    LocalDate quoteDate = resolveQuoteDate(requestedQuoteDate);
+    String periodMonth = resolveBuildPeriod(record, requestedPeriodMonth, quoteDate).toString();
     QuoteBomSupplementVersion approvedVersion = latestApprovedSupplementVersion(record);
     QuoteBomPackageReference approvedReference = latestApprovedPackageReference(record);
     if (PRODUCT_TYPE_NON_BARE.equals(record.getProductType())
         && approvedVersion == null
         && approvedReference == null) {
-      return buildFormalOnly(record, asOfDate, SOURCE_RAW_PRODUCT_BOM);
+      return buildFormalOnly(record, quoteDate, periodMonth, SOURCE_RAW_PRODUCT_BOM);
     }
-    return buildPreparedRows(record, asOfDate, approvedVersion, approvedReference);
+    return buildPreparedRows(record, quoteDate, periodMonth, approvedVersion, approvedReference);
   }
 
   private QuoteBomCostingBuildResponse buildFormalOnly(
-      QuoteBomPreparationRecord record, LocalDate asOfDate, String sourceType) {
-    cleanupExisting(record);
+      QuoteBomPreparationRecord record,
+      LocalDate quoteDate,
+      String periodMonth,
+      String sourceType) {
+    cleanupExisting(record, periodMonth);
     FlattenRequest request = new FlattenRequest();
     request.setMode("BY_OA");
     request.setOaNo(record.getOaNo());
+    request.setOaFormItemId(record.getOaFormItemId());
     request.setTopProductCode(record.getQuoteProductCode());
-    request.setAsOfDate(asOfDate);
+    request.setPeriodMonth(periodMonth);
+    request.setAsOfDate(quoteDate);
     FlattenResult flattened = flattenService.flatten(request);
-    List<BomCostingRow> rows = loadCurrentCostingRows(record);
+    List<BomCostingRow> rows = loadCurrentCostingRows(record, periodMonth);
+    attachRowsToQuoteItem(record, rows);
     int refs = writeFormalSourceRefs(record, rows, sourceType);
     String batchId = rows.isEmpty() ? null : rows.get(0).getBuildBatchId();
-    updateBuildBatch(record, batchId);
+    updateBuildBatch(record, batchId, periodMonth);
     return response(
         record,
         batchId,
@@ -197,12 +227,14 @@ public class QuoteProductBomCostingBuildServiceImpl
         refs,
         flattened.getSubtreeRequiredCount(),
         countSourceTypes(sourceType, refs),
-        flattened.getWarnings());
+        flattened.getWarnings(),
+        periodMonth);
   }
 
   private QuoteBomCostingBuildResponse buildPreparedRows(
       QuoteBomPreparationRecord record,
-      LocalDate asOfDate,
+      LocalDate quoteDate,
+      String periodMonth,
       QuoteBomSupplementVersion approvedVersion,
       QuoteBomPackageReference approvedReference) {
     List<PreparedLine> lines = new ArrayList<>();
@@ -213,7 +245,7 @@ public class QuoteProductBomCostingBuildServiceImpl
           PRODUCT_TYPE_NON_BARE.equals(record.getProductType())
               ? SOURCE_RAW_PRODUCT_BOM
               : SOURCE_BARE_PRODUCT_BOM;
-      lines.addAll(loadFormalLines(record, bodySourceType));
+      lines.addAll(loadFormalLines(record, bodySourceType, periodMonth, quoteDate));
     }
     if (!PRODUCT_TYPE_NON_BARE.equals(record.getProductType())) {
       if (approvedReference == null) {
@@ -224,9 +256,9 @@ public class QuoteProductBomCostingBuildServiceImpl
     if (lines.isEmpty()) {
       throw new QuoteIngestException("完整 BOM 准备结果为空，不能生成结算行");
     }
-    cleanupExisting(record);
-    DirectBuildResult built = applyRulesAndWrite(record, asOfDate, lines);
-    updateBuildBatch(record, built.buildBatchId());
+    cleanupExisting(record, periodMonth);
+    DirectBuildResult built = applyRulesAndWrite(record, quoteDate, periodMonth, lines);
+    updateBuildBatch(record, built.buildBatchId(), periodMonth);
     return response(
         record,
         built.buildBatchId(),
@@ -234,12 +266,20 @@ public class QuoteProductBomCostingBuildServiceImpl
         built.sourceRefsWritten(),
         built.subtreeRequiredCount(),
         built.sourceTypeCounts(),
-        built.warnings());
+        built.warnings(),
+        periodMonth);
   }
 
-  private List<PreparedLine> loadFormalLines(QuoteBomPreparationRecord record, String sourceType) {
+  private List<PreparedLine> loadFormalLines(
+      QuoteBomPreparationRecord record, String sourceType, String periodMonth, LocalDate quoteDate) {
+    String organizationCode =
+        MaterialOrganization.forQuoteProcess(
+            null, record.getOaNo(), resolveProductName(record.getOaFormItemId()));
     FormalBomReadResult formal =
-        formalBomReadService.read(record.getQuoteProductCode(), record.getCostPeriodMonth(), null);
+        MaterialOrganization.COMMERCIAL.getCode().equals(organizationCode)
+            ? formalBomReadService.read(record.getQuoteProductCode(), periodMonth, null, quoteDate)
+            : formalBomReadService.read(
+                record.getQuoteProductCode(), periodMonth, null, quoteDate, organizationCode);
     if (!formal.found()) {
       throw new QuoteIngestException("正式 BOM 不可用: " + formal.gapMessage());
     }
@@ -277,6 +317,14 @@ public class QuoteProductBomCostingBuildServiceImpl
               line.path()));
     }
     return lines;
+  }
+
+  private String resolveProductName(Long oaFormItemId) {
+    if (oaFormItemId == null) {
+      return null;
+    }
+    OaFormItem item = oaFormItemMapper.selectById(oaFormItemId);
+    return item == null ? null : item.getProductName();
   }
 
   private List<PreparedLine> loadSupplementLines(
@@ -379,7 +427,10 @@ public class QuoteProductBomCostingBuildServiceImpl
   }
 
   private DirectBuildResult applyRulesAndWrite(
-      QuoteBomPreparationRecord record, LocalDate asOfDate, List<PreparedLine> inputLines) {
+      QuoteBomPreparationRecord record,
+      LocalDate quoteDate,
+      String periodMonth,
+      List<PreparedLine> inputLines) {
     List<PreparedLine> lines =
         inputLines.stream()
             .filter(line -> trimToNull(line.materialCode()) != null)
@@ -395,7 +446,6 @@ public class QuoteProductBomCostingBuildServiceImpl
 
     String buildBatchId = generateBuildBatchId();
     LocalDateTime builtAt = LocalDateTime.now();
-    String periodMonth = YearMonth.from(asOfDate).toString();
     String buType = BusinessUnitContext.getCurrentBusinessUnitType();
 
     // 报价 BOM 入口只负责把正式 BOM / 补录 BOM / 包装参考归一成标准节点；
@@ -406,12 +456,12 @@ public class QuoteProductBomCostingBuildServiceImpl
           childrenByParentPath.getOrDefault(line.path(), List.of()).isEmpty()));
     }
     BomByproductSettlementReadResult byproductRead =
-        byproductSettlementAdapter.read(nodes, asOfDate, buType, "主制造");
+        byproductSettlementAdapter.read(nodes, quoteDate, buType, "主制造");
     BomSettlementRowBuildResult built = buildEngine.build(
         new BomSettlementBuildRequest(
             record.getOaNo(),
             record.getQuoteProductCode(),
-            asOfDate,
+            quoteDate,
             periodMonth,
             buildBatchId,
             builtAt,
@@ -423,8 +473,11 @@ public class QuoteProductBomCostingBuildServiceImpl
             byproductRead.scrapRefs(),
             byproductRuleQueryService.listEnabledCandidates()));
 
+    List<BomCostingRow> costingRows = stampRowsForQuoteItem(record, built.costingRows());
+    BomCostingRowAggregation.Result aggregatedRows = BomCostingRowAggregation.aggregate(costingRows);
     Map<String, Long> costingRowIdByPath = new HashMap<>();
-    int rowsWritten = writeBuiltRows(built.costingRows(), costingRowIdByPath);
+    int rowsWritten = writeBuiltRows(aggregatedRows.rows(), costingRowIdByPath);
+    aliasCostingRowIds(aggregatedRows.pathAliases(), costingRowIdByPath);
     int subRefsWritten = writeBuiltSubRefs(built.subRefs(), costingRowIdByPath);
     SourceRefWriteResult sourceRefResult =
         writeBuiltSourceRefs(built.sourceRefs(), costingRowIdByPath);
@@ -436,9 +489,40 @@ public class QuoteProductBomCostingBuildServiceImpl
         buildBatchId,
         rowsWritten,
         sourceRefResult.sourceRefsWritten(),
-        countSubtreeRequired(built.costingRows()),
+        countSubtreeRequired(aggregatedRows.rows()),
         sourceRefResult.sourceTypeCounts(),
         warnings);
+  }
+
+  private List<BomCostingRow> stampRowsForQuoteItem(
+      QuoteBomPreparationRecord record, List<BomCostingRow> rows) {
+    if (rows == null || rows.isEmpty()) {
+      return List.of();
+    }
+    for (BomCostingRow row : rows) {
+      row.setOaFormItemId(record.getOaFormItemId());
+      if (row.getManualModified() == null) {
+        row.setManualModified(0);
+      }
+    }
+    return rows;
+  }
+
+  private void attachRowsToQuoteItem(QuoteBomPreparationRecord record, List<BomCostingRow> rows) {
+    if (rows == null || rows.isEmpty()) {
+      return;
+    }
+    for (BomCostingRow row : rows) {
+      row.setOaFormItemId(record.getOaFormItemId());
+      if (row.getManualModified() == null) {
+        row.setManualModified(0);
+      }
+      BomCostingRow patch = new BomCostingRow();
+      patch.setId(row.getId());
+      patch.setOaFormItemId(record.getOaFormItemId());
+      patch.setManualModified(row.getManualModified());
+      costingRowMapper.updateById(patch);
+    }
   }
 
   private BomSettlementNode toSettlementNode(
@@ -503,6 +587,19 @@ public class QuoteProductBomCostingBuildServiceImpl
       costingRowIdByPath.put(row.getPath(), row.getId());
     }
     return rowsWritten;
+  }
+
+  private static void aliasCostingRowIds(
+      Map<String, String> pathAliases, Map<String, Long> costingRowIdByPath) {
+    if (pathAliases == null || pathAliases.isEmpty() || costingRowIdByPath == null) {
+      return;
+    }
+    for (Map.Entry<String, String> alias : pathAliases.entrySet()) {
+      Long id = costingRowIdByPath.get(alias.getValue());
+      if (id != null) {
+        costingRowIdByPath.put(alias.getKey(), id);
+      }
+    }
   }
 
   private int writeBuiltSubRefs(
@@ -588,7 +685,26 @@ public class QuoteProductBomCostingBuildServiceImpl
     }
   }
 
-  private void cleanupExisting(QuoteBomPreparationRecord record) {
+  private void cleanupExisting(QuoteBomPreparationRecord record, String periodMonth) {
+    List<BomCostingRow> existingRows =
+        costingRowMapper.selectList(
+            Wrappers.<BomCostingRow>lambdaQuery()
+                .select(BomCostingRow::getId)
+                .eq(BomCostingRow::getOaNo, record.getOaNo())
+                .eq(BomCostingRow::getOaFormItemId, record.getOaFormItemId())
+                .eq(BomCostingRow::getTopProductCode, record.getQuoteProductCode())
+                .eq(BomCostingRow::getPeriodMonth, periodMonth));
+    List<Long> existingRowIds = new ArrayList<>();
+    for (BomCostingRow row : existingRows == null ? List.<BomCostingRow>of() : existingRows) {
+      if (row.getId() != null) {
+        existingRowIds.add(row.getId());
+      }
+    }
+    if (!existingRowIds.isEmpty()) {
+      subRefMapper.delete(
+          Wrappers.<BomCostingRowSubRef>lambdaQuery()
+              .in(BomCostingRowSubRef::getCostingRowId, existingRowIds));
+    }
     sourceRefMapper.delete(
         Wrappers.<BomCostingRowSourceRef>lambdaQuery()
             .eq(BomCostingRowSourceRef::getOaNo, record.getOaNo())
@@ -597,16 +713,19 @@ public class QuoteProductBomCostingBuildServiceImpl
     costingRowMapper.delete(
         Wrappers.<BomCostingRow>lambdaQuery()
             .eq(BomCostingRow::getOaNo, record.getOaNo())
+            .eq(BomCostingRow::getOaFormItemId, record.getOaFormItemId())
             .eq(BomCostingRow::getTopProductCode, record.getQuoteProductCode())
-            .eq(BomCostingRow::getPeriodMonth, record.getCostPeriodMonth()));
+            .eq(BomCostingRow::getPeriodMonth, periodMonth));
   }
 
-  private List<BomCostingRow> loadCurrentCostingRows(QuoteBomPreparationRecord record) {
+  private List<BomCostingRow> loadCurrentCostingRows(
+      QuoteBomPreparationRecord record, String periodMonth) {
     return costingRowMapper.selectList(
         Wrappers.<BomCostingRow>lambdaQuery()
             .eq(BomCostingRow::getOaNo, record.getOaNo())
+            .eq(BomCostingRow::getOaFormItemId, record.getOaFormItemId())
             .eq(BomCostingRow::getTopProductCode, record.getQuoteProductCode())
-            .eq(BomCostingRow::getPeriodMonth, record.getCostPeriodMonth())
+            .eq(BomCostingRow::getPeriodMonth, periodMonth)
             .orderByAsc(BomCostingRow::getPath)
             .orderByAsc(BomCostingRow::getId));
   }
@@ -672,14 +791,17 @@ public class QuoteProductBomCostingBuildServiceImpl
             .last("LIMIT 1"));
   }
 
-  private void updateBuildBatch(QuoteBomPreparationRecord record, String buildBatchId) {
+  private void updateBuildBatch(
+      QuoteBomPreparationRecord record, String buildBatchId, String periodMonth) {
     record.setCostingBuildBatchId(buildBatchId);
+    record.setCostPeriodMonth(periodMonth);
     record.setUpdatedAt(LocalDateTime.now());
     preparationRecordMapper.updateById(record);
     if (record.getQuoteBomStatusId() != null) {
       QuoteBomStatus status = statusMapper.selectById(record.getQuoteBomStatusId());
       if (status != null) {
         status.setCostingBuildBatchId(buildBatchId);
+        status.setCostPeriodMonth(periodMonth);
         status.setUpdatedAt(LocalDateTime.now());
         statusMapper.updateById(status);
       }
@@ -693,7 +815,8 @@ public class QuoteProductBomCostingBuildServiceImpl
       int sourceRefsWritten,
       int subtreeRequiredCount,
       Map<String, Integer> sourceTypeCounts,
-      List<String> warnings) {
+      List<String> warnings,
+      String periodMonth) {
     return new QuoteBomCostingBuildResponse(
         record.getId(),
         record.getTaskId(),
@@ -701,7 +824,7 @@ public class QuoteProductBomCostingBuildServiceImpl
         record.getOaNo(),
         record.getQuoteProductCode(),
         record.getProductType(),
-        record.getCostPeriodMonth(),
+        periodMonth,
         buildBatchId,
         rowsWritten,
         sourceRefsWritten,
@@ -709,6 +832,19 @@ public class QuoteProductBomCostingBuildServiceImpl
         sourceTypeCounts == null ? Map.of() : Map.copyOf(sourceTypeCounts),
         warnings == null ? List.of() : List.copyOf(warnings),
         LocalDateTime.now());
+  }
+
+  private YearMonth resolveBuildPeriod(
+      QuoteBomPreparationRecord record, String requestedPeriodMonth, LocalDate quoteDate) {
+    String value = trimToNull(requestedPeriodMonth);
+    if (value == null) {
+      return YearMonth.from(quoteDate);
+    }
+    return YearMonth.parse(value);
+  }
+
+  private LocalDate resolveQuoteDate(LocalDate requestedQuoteDate) {
+    return requestedQuoteDate == null ? LocalDate.now() : requestedQuoteDate;
   }
 
   private Map<String, Integer> countSourceTypes(String sourceType, int count) {

@@ -5,6 +5,7 @@ import com.sanhua.marketingcost.dto.quotebom.FormalBomReadResult;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomSourceLineDto;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.service.FormalBomReadService;
@@ -32,7 +33,23 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
   }
 
   @Override
-  public FormalBomReadResult read(String productCode, String periodMonth, String bomPurpose) {
+  public FormalBomReadResult read(
+      String productCode, String periodMonth, String bomPurpose, LocalDate quoteDate) {
+    return read(
+        productCode,
+        periodMonth,
+        bomPurpose,
+        quoteDate,
+        MaterialOrganization.COMMERCIAL.getCode());
+  }
+
+  @Override
+  public FormalBomReadResult read(
+      String productCode,
+      String periodMonth,
+      String bomPurpose,
+      LocalDate quoteDate,
+      String organizationCode) {
     String normalizedProductCode = trimToNull(productCode);
     String normalizedPeriodMonth = normalizePeriodMonth(periodMonth);
     String normalizedBomPurpose = trimToNull(bomPurpose);
@@ -40,9 +57,7 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
       return new FormalBomReadResult(
           null, normalizedPeriodMonth, normalizedBomPurpose, false, List.of(), "产品料号为空");
     }
-    YearMonth month = YearMonth.parse(normalizedPeriodMonth);
-    LocalDate periodStart = month.atDay(1);
-    LocalDate periodEnd = month.atEndOfMonth();
+    LocalDate effectiveDate = quoteDate == null ? LocalDate.now() : quoteDate;
 
     List<BomRawHierarchy> rows =
         bomRawHierarchyMapper.selectList(
@@ -52,12 +67,12 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
                     normalizedBomPurpose != null,
                     BomRawHierarchy::getBomPurpose,
                     normalizedBomPurpose)
-                .le(BomRawHierarchy::getEffectiveFrom, periodEnd)
+                .le(BomRawHierarchy::getEffectiveFrom, effectiveDate)
                 .and(
                     w ->
                         w.isNull(BomRawHierarchy::getEffectiveTo)
                             .or()
-                            .ge(BomRawHierarchy::getEffectiveTo, periodStart))
+                            .ge(BomRawHierarchy::getEffectiveTo, effectiveDate))
                 .orderByAsc(BomRawHierarchy::getLevel)
                 .orderByAsc(BomRawHierarchy::getPath)
                 .orderByAsc(BomRawHierarchy::getSortSeq)
@@ -72,9 +87,21 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
           "未在 lp_bom_raw_hierarchy 找到正式 BOM");
     }
 
+    rows = BomEffectiveTreePruner.prune(rows, normalizedProductCode);
+    if (rows.isEmpty()) {
+      return new FormalBomReadResult(
+          normalizedProductCode,
+          normalizedPeriodMonth,
+          normalizedBomPurpose,
+          false,
+          List.of(),
+          "未在 lp_bom_raw_hierarchy 找到有效连通 BOM");
+    }
+
     List<BomRawHierarchy> sorted = rows.stream().sorted(rowComparator()).toList();
     Map<String, MaterialMasterRaw> masterByCode = selectMasterByCode(
-        sorted.stream().map(BomRawHierarchy::getMaterialCode).collect(Collectors.toCollection(LinkedHashSet::new)));
+        sorted.stream().map(BomRawHierarchy::getMaterialCode).collect(Collectors.toCollection(LinkedHashSet::new)),
+        organizationCode);
     List<QuoteBomSourceLineDto> lines = new java.util.ArrayList<>(sorted.size());
     int lineNo = 1;
     for (BomRawHierarchy row : sorted) {
@@ -114,12 +141,18 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
         0);
   }
 
-  private Map<String, MaterialMasterRaw> selectMasterByCode(LinkedHashSet<String> codes) {
+  private Map<String, MaterialMasterRaw> selectMasterByCode(
+      LinkedHashSet<String> codes, String organizationCode) {
     codes.removeIf(code -> trimToNull(code) == null);
     if (codes.isEmpty()) {
       return Map.of();
     }
-    return materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null).stream()
+    String organization = MaterialOrganization.normalize(organizationCode);
+    List<MaterialMasterRaw> rows =
+        MaterialOrganization.COMMERCIAL.getCode().equals(organization)
+            ? materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null)
+            : materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null, organization);
+    return rows.stream()
         .filter(row -> trimToNull(row.getMaterialCode()) != null)
         .collect(
             Collectors.toMap(

@@ -155,6 +155,35 @@ class QuoteRequestQueryServiceImplTest {
   }
 
   @Test
+  void calcStatusUsesItemAggregateInsteadOfFormHeader() {
+    OaForm form = form("OA-T8-CALC", "FI-SC-020", "CONFIRMED");
+    form.setCalcStatus("已核算");
+    OaFormItem calculated = item(21L, "MAT-DONE");
+    calculated.setCalcStatus("已核算");
+    OaFormItem pending = item(22L, "MAT-PENDING");
+    pending.setCalcStatus("未核算");
+    stubRequestPage(form);
+    stubListAggregates(
+        List.of(calculated, pending),
+        List.of(status(21L, "SYNCED"), status(22L, "SYNCED")),
+        log(13L));
+
+    PageResult<QuoteRequestListItemResponse> page =
+        service.pageRequests(1, 20, "OA-T8-CALC", null, null, null);
+
+    assertThat(page.getList().get(0).getCalcStatus()).isEqualTo("未核算");
+
+    when(oaFormMapper.selectOne(any())).thenReturn(form);
+    when(oaFormExtraFeeMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormHeaderExtraFieldMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormItemExtraFieldMapper.selectList(any())).thenReturn(List.of());
+
+    QuoteRequestDetailResponse detail = service.getRequestDetail("OA-T8-CALC");
+
+    assertThat(detail.getCalcStatus()).isEqualTo("未核算");
+  }
+
+  @Test
   void detailReturnsHeaderItemsFeesBomStatusAndIngestSummary() {
     OaForm form = form("OA-T8-004", "FI-SC-020", "CONFIRMED");
     when(oaFormMapper.selectOne(any())).thenReturn(form);

@@ -32,6 +32,7 @@ import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
+import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.service.BomByproductCostRuleQueryService;
 import com.sanhua.marketingcost.service.BomFlattenService;
 import com.sanhua.marketingcost.service.BomSettlementRuleQueryService;
@@ -73,6 +74,7 @@ class QuoteProductBomCostingBuildServiceImplTest {
   private BomCostingRowMapper costingRowMapper;
   private BomCostingRowSourceRefMapper sourceRefMapper;
   private BomCostingRowSubRefMapper subRefMapper;
+  private OaFormItemMapper oaFormItemMapper;
   private QuoteProductBomCostingBuildServiceImpl service;
 
   @BeforeEach
@@ -99,6 +101,7 @@ class QuoteProductBomCostingBuildServiceImplTest {
     costingRowMapper = mock(BomCostingRowMapper.class);
     sourceRefMapper = mock(BomCostingRowSourceRefMapper.class);
     subRefMapper = mock(BomCostingRowSubRefMapper.class);
+    oaFormItemMapper = mock(OaFormItemMapper.class);
     service =
         new QuoteProductBomCostingBuildServiceImpl(
             preparationService,
@@ -117,7 +120,8 @@ class QuoteProductBomCostingBuildServiceImplTest {
             packageReferenceDetailMapper,
             costingRowMapper,
             sourceRefMapper,
-            subRefMapper);
+            subRefMapper,
+            oaFormItemMapper);
     when(settlementRuleQueryService.listEnabledCandidates()).thenReturn(List.of());
     when(byproductRuleQueryService.listEnabledCandidates()).thenReturn(List.of());
     when(byproductSettlementAdapter.read(any(), any(), any(), any()))
@@ -143,10 +147,38 @@ class QuoteProductBomCostingBuildServiceImplTest {
 
     assertThat(response.costingRowsWritten()).isEqualTo(2);
     assertThat(response.sourceTypeCounts()).containsEntry("RAW_PRODUCT_BOM", 2);
-    verify(flattenService).flatten(any(FlattenRequest.class));
+    ArgumentCaptor<FlattenRequest> flattenCaptor = ArgumentCaptor.forClass(FlattenRequest.class);
+    verify(flattenService).flatten(flattenCaptor.capture());
+    assertThat(flattenCaptor.getValue().getAsOfDate()).isEqualTo(LocalDate.now());
+    assertThat(flattenCaptor.getValue().getPeriodMonth()).isEqualTo("2026-05");
     ArgumentCaptor<BomCostingRowSourceRef> refCaptor = ArgumentCaptor.forClass(BomCostingRowSourceRef.class);
     verify(sourceRefMapper, org.mockito.Mockito.times(2)).insert(refCaptor.capture());
     assertThat(refCaptor.getAllValues()).allSatisfy(ref -> assertThat(ref.getSourcePartType()).isEqualTo("RAW_PRODUCT_BOM"));
+    ArgumentCaptor<BomCostingRow> rowPatchCaptor = ArgumentCaptor.forClass(BomCostingRow.class);
+    verify(costingRowMapper, org.mockito.Mockito.times(2)).updateById(rowPatchCaptor.capture());
+    assertThat(rowPatchCaptor.getAllValues())
+        .allSatisfy(row -> {
+          assertThat(row.getOaFormItemId()).isEqualTo(10L);
+          assertThat(row.getManualModified()).isEqualTo(0);
+        });
+  }
+
+  @Test
+  void staleNonReadyPreparationIsRefreshedBeforeBuild() {
+    QuoteBomPreparationRecord stale = record("NON_BARE", null);
+    stale.setPreparationStatus("NEED_TECH");
+    QuoteBomPreparationRecord refreshed = record("NON_BARE", null);
+    when(preparationRecordMapper.selectOne(any())).thenReturn(stale, refreshed);
+    FlattenResult flattenResult = new FlattenResult();
+    flattenResult.setCostingRowsWritten(1);
+    when(flattenService.flatten(any(FlattenRequest.class))).thenReturn(flattenResult);
+    when(costingRowMapper.selectList(any())).thenReturn(List.of(costingRow("RAW-1")));
+
+    QuoteBomCostingBuildResponse response = service.buildByOaFormItem(10L);
+
+    assertThat(response.costingRowsWritten()).isEqualTo(1);
+    verify(preparationService).prepareByOaFormItem(10L, LocalDate.now());
+    verify(flattenService).flatten(any(FlattenRequest.class));
   }
 
   @Test
@@ -165,6 +197,10 @@ class QuoteProductBomCostingBuildServiceImplTest {
     assertThat(response.sourceTypeCounts()).containsEntry("MANUAL_SUPPLEMENT", 1);
     verify(flattenService, never()).flatten(any());
     verify(settlementRuleQueryService).listEnabledCandidates();
+    ArgumentCaptor<BomCostingRow> rowCaptor = ArgumentCaptor.forClass(BomCostingRow.class);
+    verify(costingRowMapper).insert(rowCaptor.capture());
+    assertThat(rowCaptor.getValue().getOaFormItemId()).isEqualTo(10L);
+    assertThat(rowCaptor.getValue().getManualModified()).isEqualTo(0);
   }
 
   @Test
@@ -175,7 +211,8 @@ class QuoteProductBomCostingBuildServiceImplTest {
     when(preparationRecordMapper.selectOne(any())).thenReturn(record);
     when(supplementVersionMapper.selectOne(any())).thenReturn(null);
     when(packageReferenceMapper.selectOne(any())).thenReturn(packageReference());
-    when(formalBomReadService.read("FIN-001", "2026-05", null)).thenReturn(formalFound());
+    when(formalBomReadService.read("FIN-001", "2026-05", null, LocalDate.now()))
+        .thenReturn(formalFound());
     when(packageReferenceDetailMapper.selectList(any())).thenReturn(List.of(packageDetail("BOX-1")));
 
     QuoteBomCostingBuildResponse response = service.buildByTask(501L);

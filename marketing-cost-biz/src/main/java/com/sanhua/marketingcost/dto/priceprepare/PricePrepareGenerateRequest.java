@@ -8,7 +8,10 @@ import lombok.Setter;
 @Setter
 public class PricePrepareGenerateRequest {
   private String oaNo;
+  private Long oaFormItemId;
+  private String topProductCode;
   private java.util.List<String> topProductCodes;
+  private String priceTypeConfirmNo;
   private String periodMonth;
   private LocalDateTime priceAsOfTime;
   private String businessUnitType;

@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
 import java.util.Collection;
@@ -36,6 +37,11 @@ public class PackageComponentIdentifyServiceImpl implements PackageComponentIden
 
   @Override
   public Map<String, Boolean> batchIdentify(Collection<String> materialCodes) {
+    return batchIdentify(materialCodes, MaterialOrganization.COMMERCIAL.getCode());
+  }
+
+  @Override
+  public Map<String, Boolean> batchIdentify(Collection<String> materialCodes, String organizationCode) {
     Map<String, Boolean> result = new LinkedHashMap<>();
     Set<String> codes = new LinkedHashSet<>();
     if (materialCodes != null) {
@@ -52,7 +58,7 @@ public class PackageComponentIdentifyServiceImpl implements PackageComponentIden
     }
 
     List<MaterialMasterRaw> rows =
-        materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null);
+        selectRawRows(codes, organizationCode);
     if (rows == null || rows.isEmpty()) {
       return result;
     }
@@ -69,6 +75,14 @@ public class PackageComponentIdentifyServiceImpl implements PackageComponentIden
       }
     }
     return result;
+  }
+
+  private List<MaterialMasterRaw> selectRawRows(Set<String> codes, String organizationCode) {
+    String organization = MaterialOrganization.normalize(organizationCode);
+    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
+      return materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null);
+    }
+    return materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null, organization);
   }
 
   private boolean matchesPackageComponentRule(MaterialMasterRaw row) {

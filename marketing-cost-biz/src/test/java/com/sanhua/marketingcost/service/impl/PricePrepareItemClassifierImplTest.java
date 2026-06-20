@@ -13,6 +13,7 @@ import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
+import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
 import java.math.BigDecimal;
 import java.util.List;
@@ -28,6 +29,7 @@ class PricePrepareItemClassifierImplTest {
   private PackageComponentIdentifyService packageComponentIdentifyService;
   private MaterialMasterMapper materialMasterMapper;
   private MaterialMasterRawMapper materialMasterRawMapper;
+  private OaFormItemMapper oaFormItemMapper;
   private PricePrepareItemClassifierImpl classifier;
 
   @BeforeAll
@@ -43,9 +45,13 @@ class PricePrepareItemClassifierImplTest {
     packageComponentIdentifyService = mock(PackageComponentIdentifyService.class);
     materialMasterMapper = mock(MaterialMasterMapper.class);
     materialMasterRawMapper = mock(MaterialMasterRawMapper.class);
+    oaFormItemMapper = mock(OaFormItemMapper.class);
     classifier =
         new PricePrepareItemClassifierImpl(
-            packageComponentIdentifyService, materialMasterMapper, materialMasterRawMapper);
+            packageComponentIdentifyService,
+            materialMasterMapper,
+            materialMasterRawMapper,
+            oaFormItemMapper);
   }
 
   @Test

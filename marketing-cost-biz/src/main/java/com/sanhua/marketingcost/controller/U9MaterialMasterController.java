@@ -6,8 +6,8 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.U9MaterialImportResponse;
 import com.sanhua.marketingcost.dto.U9MaterialRawPageResponse;
 import com.sanhua.marketingcost.dto.U9MaterialTemplateMappingItem;
+import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingMaterialOptionResponse;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
-import com.sanhua.marketingcost.service.MaterialMasterSyncService.BatchSummary;
 import com.sanhua.marketingcost.service.U9MaterialMasterService;
 import java.io.IOException;
 import java.util.List;
@@ -33,16 +33,11 @@ public class U9MaterialMasterController {
     this.service = service;
   }
 
-  @PreAuthorize("@ss.hasPermi('base:u9-material:list')")
-  @GetMapping("/batches")
-  public CommonResult<List<BatchSummary>> batches() {
-    return CommonResult.success(service.listBatches());
-  }
-
   @PreAuthorize("@ss.hasPermi('base:u9-material:import')")
   @PostMapping(path = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
   public CommonResult<U9MaterialImportResponse> importExcel(
       @RequestPart("file") MultipartFile file,
+      @RequestParam(required = false) String organizationCode,
       Authentication authentication) {
     if (file == null || file.isEmpty()) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "请上传 U9 物料主档 Excel");
@@ -54,7 +49,8 @@ public class U9MaterialMasterController {
     }
     String importedBy = authentication == null ? null : authentication.getName();
     try {
-      return CommonResult.success(service.importExcel(file.getInputStream(), file.getOriginalFilename(), importedBy));
+      return CommonResult.success(service.importExcel(
+          file.getInputStream(), file.getOriginalFilename(), importedBy, organizationCode));
     } catch (IOException e) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "读取上传文件失败: " + e.getMessage());
     } catch (RuntimeException e) {
@@ -75,15 +71,25 @@ public class U9MaterialMasterController {
       @RequestParam(required = false) String costElement,
       @RequestParam(required = false) String bizUnit,
       @RequestParam(required = false) String dept,
-      @RequestParam(required = false) String batch,
+      @RequestParam(required = false) String organizationCode,
       @RequestParam(required = false, defaultValue = "1") Integer page,
       @RequestParam(required = false, defaultValue = "20") Integer pageSize) {
     int current = page == null || page < 1 ? 1 : page;
     int size = pageSize == null || pageSize < 1 ? 20 : pageSize;
     Page<MaterialMasterRaw> pager = service.pageRaw(
         materialCode, materialName, spec, model, drawingNo, shapeAttr, mainCategory,
-        costElement, bizUnit, dept, batch, current, size);
+        costElement, bizUnit, dept, organizationCode, current, size);
     return CommonResult.success(new U9MaterialRawPageResponse(pager.getTotal(), pager.getRecords()));
+  }
+
+  @PreAuthorize("@ss.hasPermi('base:u9-material:list')")
+  @GetMapping("/options")
+  public CommonResult<List<QuoteCostingMaterialOptionResponse>> options(
+      @RequestParam(required = false) String keyword,
+      @RequestParam(required = false) String organizationCode,
+      @RequestParam(required = false, defaultValue = "20") Integer limit) {
+    int size = limit == null || limit < 1 ? 20 : limit;
+    return CommonResult.success(service.options(keyword, organizationCode, size));
   }
 
   @PreAuthorize("@ss.hasPermi('base:u9-material:export')")

@@ -12,6 +12,7 @@ import java.time.LocalDate;
  *   <li>{@link #oaNo}：mode=BY_OA 时必填；costing_row.oa_no 的来源</li>
  *   <li>{@link #topProductCode}：mode=BY_PRODUCT 时必填</li>
  *   <li>{@link #asOfDate}：<b>必填</b>——锁月复现核心；决定用哪个 effective 版本的 raw_hierarchy</li>
+ *   <li>{@link #periodMonth}：可选，写入 costing_row.period_month；空时按 asOfDate 所在月份</li>
  * </ul>
  */
 public class FlattenRequest {
@@ -19,7 +20,9 @@ public class FlattenRequest {
   private String bomPurpose;
   private String mode;
   private String oaNo;
+  private Long oaFormItemId;
   private String topProductCode;
+  private String periodMonth;
   private LocalDate asOfDate;
 
   public String getBomPurpose() {
@@ -46,12 +49,28 @@ public class FlattenRequest {
     this.oaNo = oaNo;
   }
 
+  public Long getOaFormItemId() {
+    return oaFormItemId;
+  }
+
+  public void setOaFormItemId(Long oaFormItemId) {
+    this.oaFormItemId = oaFormItemId;
+  }
+
   public String getTopProductCode() {
     return topProductCode;
   }
 
   public void setTopProductCode(String topProductCode) {
     this.topProductCode = topProductCode;
+  }
+
+  public String getPeriodMonth() {
+    return periodMonth;
+  }
+
+  public void setPeriodMonth(String periodMonth) {
+    this.periodMonth = periodMonth;
   }
 
   public LocalDate getAsOfDate() {

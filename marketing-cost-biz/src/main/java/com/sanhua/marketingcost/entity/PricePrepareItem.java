@@ -21,7 +21,10 @@ public class PricePrepareItem {
 
   private String prepareNo;
   private String periodMonth;
+  private String priceTypeConfirmNo;
+  private Long priceTypeConfirmItemId;
   private String oaNo;
+  private Long oaFormItemId;
   private String topProductCode;
   private Long bomRowId;
   private String materialCode;

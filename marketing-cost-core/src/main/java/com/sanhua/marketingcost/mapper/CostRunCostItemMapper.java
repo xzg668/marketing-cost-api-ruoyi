@@ -24,4 +24,11 @@ public interface CostRunCostItemMapper extends BaseMapper<CostRunCostItem> {
             AND product_code = #{productCode}
           """)
   int deleteQuoteItems(@Param("oaNo") String oaNo, @Param("productCode") String productCode);
+
+  @Delete(
+      """
+          DELETE FROM lp_cost_run_cost_item
+          WHERE cost_run_no = #{costRunNo}
+          """)
+  int deleteQuoteItemsByCostRunNo(@Param("costRunNo") String costRunNo);
 }

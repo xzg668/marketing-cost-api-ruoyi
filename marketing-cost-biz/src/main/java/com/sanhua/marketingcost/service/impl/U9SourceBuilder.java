@@ -11,10 +11,14 @@ import com.sanhua.marketingcost.mapper.BomU9SourceMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.BomHierarchyBuildService;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -118,34 +122,34 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
     int totalWritten = 0;
     int successProducts = 0;
 
-    Map<GroupKey, List<BomU9Source>> byGroup =
-        allRows.stream().collect(Collectors.groupingBy(U9SourceBuilder::groupKeyOf));
+    List<GroupContext> groupContexts =
+        allRows.stream()
+            .collect(Collectors.groupingBy(U9SourceBuilder::groupKeyOf))
+            .entrySet()
+            .stream()
+            .map(e -> new GroupContext(e.getKey(), buildChildrenByParent(e.getValue())))
+            .toList();
 
     for (String topCode : targets) {
-      boolean anyGroupSucceeded = false;
-      for (Map.Entry<GroupKey, List<BomU9Source>> grp : byGroup.entrySet()) {
-        List<BomU9Source> rowsInGroup = grp.getValue();
-        // 跳过本组里不包含 topCode 作为 parent 的场景
-        boolean topInGroup = rowsInGroup.stream()
-            .anyMatch(r -> topCode.equals(r.getParentMaterialNo()));
-        if (!topInGroup) {
+      List<BomRawHierarchy> producedForTop = new ArrayList<>();
+      for (GroupContext grp : groupContexts) {
+        if (!grp.childrenByParent.containsKey(topCode)) {
           continue;
         }
 
         try {
           List<BomRawHierarchy> produced = buildOneGroup(
-              topCode, grp.getKey(), rowsInGroup, request.getImportBatchId(),
+              topCode, grp.key, grp.childrenByParent, request.getImportBatchId(),
               buildBatchId, builtAt, buType);
-          int upserted = writeInBatches(produced);
-          totalWritten += upserted;
-          anyGroupSucceeded = true;
+          producedForTop.addAll(produced);
         } catch (CycleDetectedException e) {
           log.warn("BOM 环检测失败: top={} purpose={} from={} cycle={}",
-              topCode, grp.getKey().bomPurpose, grp.getKey().effectiveFrom, e.getMessage());
+              topCode, grp.key.bomPurpose, grp.key.effectiveFrom, e.getMessage());
           result.getFailedProducts().add(topCode);
         }
       }
-      if (anyGroupSucceeded) {
+      if (!producedForTop.isEmpty()) {
+        totalWritten += writeInBatches(producedForTop);
         successProducts++;
       }
     }
@@ -176,6 +180,10 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
                 .and(w -> w.ge(BomRawHierarchy::getEffectiveTo, d)
                     .or()
                     .isNull(BomRawHierarchy::getEffectiveTo)));
+    if (rows.isEmpty()) {
+      return null;
+    }
+    rows = BomEffectiveTreePruner.prune(rows, topProductCode);
     if (rows.isEmpty()) {
       return null;
     }
@@ -213,15 +221,11 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
   private List<BomRawHierarchy> buildOneGroup(
       String topCode,
       GroupKey key,
-      List<BomU9Source> rowsInGroup,
+      Map<String, List<BomU9Source>> childrenByParent,
       String importBatchId,
       String buildBatchId,
       LocalDateTime builtAt,
       String buType) {
-    // 邻接表：parent → 子行列表
-    Map<String, List<BomU9Source>> childrenByParent = rowsInGroup.stream()
-        .collect(Collectors.groupingBy(BomU9Source::getParentMaterialNo));
-
     List<BomRawHierarchy> output = new ArrayList<>();
     LinkedHashSet<String> visiting = new LinkedHashSet<>();
 
@@ -238,6 +242,19 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
     return output;
   }
 
+  private static Map<String, List<BomU9Source>> buildChildrenByParent(List<BomU9Source> rows) {
+    Map<String, List<BomU9Source>> childrenByParent = rows.stream()
+        .collect(Collectors.groupingBy(BomU9Source::getParentMaterialNo));
+    for (List<BomU9Source> children : childrenByParent.values()) {
+      children.sort(
+          Comparator
+              .comparing(BomU9Source::getChildSeq, Comparator.nullsLast(Comparator.naturalOrder()))
+              .thenComparing(BomU9Source::getProcessSeq, Comparator.nullsLast(Comparator.naturalOrder()))
+              .thenComparing(BomU9Source::getId, Comparator.nullsLast(Comparator.naturalOrder())));
+    }
+    return childrenByParent;
+  }
+
   private BomRawHierarchy buildTopRow(
       String topCode,
       GroupKey key,
@@ -252,6 +269,7 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
     row.setMaterialCode(topCode);
     row.setLevel(0);
     row.setPath("/" + topCode + "/");
+    row.setSourceLineKey(topSourceLineKey(topCode, key));
     row.setQtyPerParent(null);
     row.setQtyPerTop(BigDecimal.ONE);
     row.setIsLeaf(isLeaf);
@@ -298,15 +316,10 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
     visiting.add(node);
     try {
       List<BomU9Source> children = childrenByParent.getOrDefault(node, List.of());
-      // 按 child_seq 排序，让 path 稳定可预测
-      List<BomU9Source> sorted = new ArrayList<>(children);
-      sorted.sort(Comparator.comparing(
-          BomU9Source::getChildSeq, Comparator.nullsLast(Comparator.naturalOrder())));
-
-      for (BomU9Source c : sorted) {
+      for (BomU9Source c : children) {
         BigDecimal childQtyPerParent = nvl(c.getQtyPerParent(), BigDecimal.ONE);
         BigDecimal childQtyPerTop = qtyPerTop.multiply(childQtyPerParent);
-        String childPath = path + c.getChildMaterialNo() + "/";
+        String childPath = path + pathSegment(c) + "/";
         int childLevel = level + 1;
 
         // 先写自己（在递归进 c 的子件之前判断是否 leaf）
@@ -350,6 +363,9 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
     row.setLevel(level);
     row.setPath(path);
     row.setSortSeq(src.getChildSeq());
+    row.setSourceU9RowId(src.getId());
+    row.setSourceLineKey(sourceLineKey(src, path));
+    row.setProcessSeq(src.getProcessSeq());
     row.setQtyPerParent(src.getQtyPerParent());
     row.setQtyPerTop(qtyPerTop);
     row.setMaterialName(src.getChildMaterialName());
@@ -401,23 +417,19 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
   // ============================ 私有：树组装（供 /hierarchy/{top}） ============================
 
   private BomHierarchyTreeDto assembleTree(List<BomRawHierarchy> rows, String topProductCode) {
-    // materialCode → Dto（同一节点可能在不同路径下出现多次：走单个 materialCode 的第一个命中；
-    // 层级树展示不强求多路径，按 parent_code 组装即可）
-    Map<String, BomHierarchyTreeDto> byCode = new HashMap<>();
+    Map<String, BomHierarchyTreeDto> byPath = new HashMap<>();
     for (BomRawHierarchy r : rows) {
-      byCode.putIfAbsent(r.getMaterialCode(), toDto(r));
+      byPath.putIfAbsent(normalizePath(r.getPath()), toDto(r));
     }
-    // 二次遍历：按 parent_code 挂接 children
     for (BomRawHierarchy r : rows) {
-      // 顶层自己 parent_code 等于自己，别挂回自己
       if (r.getLevel() != null && r.getLevel() == 0) continue;
-      BomHierarchyTreeDto child = byCode.get(r.getMaterialCode());
-      BomHierarchyTreeDto parent = byCode.get(r.getParentCode());
+      BomHierarchyTreeDto child = byPath.get(normalizePath(r.getPath()));
+      BomHierarchyTreeDto parent = byPath.get(parentPathOf(r.getPath()));
       if (parent != null && child != null && !parent.getChildren().contains(child)) {
         parent.getChildren().add(child);
       }
     }
-    return byCode.get(topProductCode);
+    return byPath.get("/" + topProductCode + "/");
   }
 
   private BomHierarchyTreeDto toDto(BomRawHierarchy r) {
@@ -451,6 +463,73 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
     return v == null ? dft : v;
   }
 
+  private static String pathSegment(BomU9Source row) {
+    String code = trimToEmpty(row.getChildMaterialNo());
+    String seq = row.getChildSeq() == null ? "" : String.valueOf(row.getChildSeq());
+    String process = trimToEmpty(row.getProcessSeq());
+    String fallback = row.getId() == null ? "" : String.valueOf(row.getId());
+    String discriminator =
+        StringUtils.hasText(seq) && StringUtils.hasText(process)
+            ? seq + "@" + process
+            : (StringUtils.hasText(seq) ? seq : (StringUtils.hasText(process) ? process : fallback));
+    return StringUtils.hasText(discriminator) ? code + "@" + discriminator : code;
+  }
+
+  private static String sourceLineKey(BomU9Source row, String path) {
+    return String.join("|",
+        parentPathFingerprint(path),
+        trimToEmpty(row.getParentMaterialNo()),
+        trimToEmpty(row.getChildMaterialNo()),
+        trimToEmpty(row.getBomPurpose()),
+        row.getChildSeq() == null ? "" : String.valueOf(row.getChildSeq()),
+        trimToEmpty(row.getProcessSeq()),
+        trimToEmpty(row.getBomVersion()),
+        row.getEffectiveFrom() == null ? "" : row.getEffectiveFrom().toString(),
+        row.getEffectiveTo() == null ? "" : row.getEffectiveTo().toString());
+  }
+
+  private static String parentPathFingerprint(String path) {
+    String parentPath = parentPathOf(path);
+    if (parentPath == null) {
+      return "";
+    }
+    try {
+      byte[] digest = MessageDigest.getInstance("SHA-256")
+          .digest(parentPath.getBytes(StandardCharsets.UTF_8));
+      return HexFormat.of().formatHex(digest, 0, 16);
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 digest is unavailable", e);
+    }
+  }
+
+  private static String topSourceLineKey(String topCode, GroupKey key) {
+    return "__TOP__|" + trimToEmpty(topCode) + "|" + trimToEmpty(key.bomPurpose);
+  }
+
+  private static String normalizePath(String path) {
+    if (!StringUtils.hasText(path)) {
+      return null;
+    }
+    return path.endsWith("/") ? path : path + "/";
+  }
+
+  private static String parentPathOf(String path) {
+    String normalized = normalizePath(path);
+    if (normalized == null || normalized.length() < 2) {
+      return null;
+    }
+    String trimmed = normalized.substring(0, normalized.length() - 1);
+    int lastSlash = trimmed.lastIndexOf('/');
+    if (lastSlash <= 0) {
+      return null;
+    }
+    return trimmed.substring(0, lastSlash + 1);
+  }
+
+  private static String trimToEmpty(String value) {
+    return StringUtils.hasText(value) ? value.trim() : "";
+  }
+
   /** 按 bomPurpose 分组的 key（T7 修复：原先按 purpose+from+to 三元组分组，
    *  导致不同 effective 的父子边被切成孤岛，DFS 走不通；
    *  effective_from/to 放到 fromU9Row 从边本身读，顶层行保留一个代表值）。 */
@@ -481,6 +560,16 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
     @Override
     public int hashCode() {
       return java.util.Objects.hash(bomPurpose, effectiveFrom, effectiveTo);
+    }
+  }
+
+  private static final class GroupContext {
+    final GroupKey key;
+    final Map<String, List<BomU9Source>> childrenByParent;
+
+    GroupContext(GroupKey key, Map<String, List<BomU9Source>> childrenByParent) {
+      this.key = key;
+      this.childrenByParent = childrenByParent;
     }
   }
 

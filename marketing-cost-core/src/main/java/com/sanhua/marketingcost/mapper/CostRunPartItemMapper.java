@@ -27,6 +27,13 @@ public interface CostRunPartItemMapper extends BaseMapper<CostRunPartItem> {
           """)
   int deleteQuoteItems(@Param("oaNo") String oaNo, @Param("productCode") String productCode);
 
+  @Delete(
+      """
+          DELETE FROM lp_cost_run_part_item
+          WHERE cost_run_no = #{costRunNo}
+          """)
+  int deleteQuoteItemsByCostRunNo(@Param("costRunNo") String costRunNo);
+
   /**
    * 拉取试算所需的部品基础数据 —— 只查 BOM 结算行 + 物料主档，不预 JOIN 路由表。
    *
@@ -47,6 +54,7 @@ public interface CostRunPartItemMapper extends BaseMapper<CostRunPartItem> {
   @Select(
       """
           SELECT
+            t1.id AS bomRowId,
             t1.oa_no AS oaNo,
             t2.material_name AS partName,
             t1.material_code AS partCode,
@@ -63,4 +71,32 @@ public interface CostRunPartItemMapper extends BaseMapper<CostRunPartItem> {
           """)
   @DataScope(alias = "t1")
   List<CostRunPartItemDto> selectBaseByOaNo(@Param("oaNo") String oaNo);
+
+  @Select(
+      """
+          SELECT
+            t1.id AS bomRowId,
+            t1.oa_no AS oaNo,
+            t2.material_name AS partName,
+            t1.material_code AS partCode,
+            t1.top_product_code AS productCode,
+            t2.drawing_no AS partDrawingNo,
+            t1.qty_per_top AS partQty,
+            t2.shape_attr AS shapeAttr,
+            t2.material AS material
+          FROM lp_bom_costing_row t1
+          LEFT JOIN lp_material_master t2
+            ON t1.material_code = t2.material_code
+          WHERE t1.oa_no = #{oaNo}
+            AND t1.oa_form_item_id = #{oaFormItemId}
+            AND t1.top_product_code = #{productCode}
+            AND t1.period_month = #{periodMonth}
+          ORDER BY t1.id
+          """)
+  @DataScope(alias = "t1")
+  List<CostRunPartItemDto> selectBaseByQuoteScope(
+      @Param("oaNo") String oaNo,
+      @Param("oaFormItemId") Long oaFormItemId,
+      @Param("productCode") String productCode,
+      @Param("periodMonth") String periodMonth);
 }

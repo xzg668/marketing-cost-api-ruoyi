@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.config.CostRunExecutionProperties;
 import com.sanhua.marketingcost.dto.CostRunBatchProgressSnapshot;
 import com.sanhua.marketingcost.dto.CostRunContext;
+import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunObjectResult;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.CostRunProgressResponse;
@@ -14,8 +15,11 @@ import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusResponse;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
 import com.sanhua.marketingcost.entity.CostRunBatch;
+import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.enums.CostRunBatchStatus;
@@ -36,6 +40,9 @@ import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.CostRunTrialService;
 import com.sanhua.marketingcost.service.MaterialMasterSyncService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
+import com.sanhua.marketingcost.service.PricePrepareService;
+import com.sanhua.marketingcost.service.QuoteCostRunVersionService;
+import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import org.slf4j.Logger;
@@ -43,6 +50,7 @@ import org.slf4j.LoggerFactory;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -81,8 +89,11 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
   /** LPE-08：实时成本只是 ensure 调用方，不拥有联动价准备能力。 */
   private final LinkedPriceEnsureService linkedPriceEnsureService;
   private final PricePrepareReadinessService pricePrepareReadinessService;
+  private final QuoteProductBomCostingBuildService costingBuildService;
+  private final PricePrepareService pricePrepareService;
   private final QuoteBomStatusService quoteBomStatusService;
   private final CostRunExecutionProperties executionProperties;
+  private final QuoteCostRunVersionService quoteCostRunVersionService;
   private final ScheduledExecutorService cleanupScheduler =
       Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "progress-cleanup");
@@ -110,8 +121,11 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
       MaterialPriceRouterService materialPriceRouterService,
       LinkedPriceEnsureService linkedPriceEnsureService,
       PricePrepareReadinessService pricePrepareReadinessService,
+      QuoteProductBomCostingBuildService costingBuildService,
+      PricePrepareService pricePrepareService,
       QuoteBomStatusService quoteBomStatusService,
-      CostRunExecutionProperties executionProperties) {
+      CostRunExecutionProperties executionProperties,
+      QuoteCostRunVersionService quoteCostRunVersionService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.costRunBatchMapper = costRunBatchMapper;
@@ -126,8 +140,11 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
     this.materialPriceRouterService = materialPriceRouterService;
     this.linkedPriceEnsureService = linkedPriceEnsureService;
     this.pricePrepareReadinessService = pricePrepareReadinessService;
+    this.costingBuildService = costingBuildService;
+    this.pricePrepareService = pricePrepareService;
     this.quoteBomStatusService = quoteBomStatusService;
     this.executionProperties = executionProperties;
+    this.quoteCostRunVersionService = quoteCostRunVersionService;
   }
 
   @Override
@@ -191,6 +208,7 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
     progressStore.enqueue(oaNoValue);
     try {
       ensureBomReadyForCostRun(oaNoValue, selectedItemIds);
+      refreshSelectedCostingInputs(oaNoValue, selectedItemIds);
       CostRunTaskSubmissionResult submission = submitQuoteTasks(oaNoValue, selectedItemIds);
       CostRunTrialResponse response = responseFromSubmission(submission, executionMode);
       return CompletableFuture.completedFuture(response);
@@ -264,6 +282,8 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
     }
 
     String pricingMonth = CostPricingPeriodUtils.currentPricingMonth();
+    Map<Long, PricePrepareGenerateResult> generatedPrepareByItem =
+        refreshCostingInputs(oaNoValue, form, selectedItems, pricingMonth);
     PricePrepareReadinessResult pricePrepareReadiness =
         checkPricePrepareReadiness(oaNoValue, pricingMonth);
     ensureLinkedPricesForTrial(oaNoValue, form);
@@ -275,7 +295,6 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
     if (runnableItems.isEmpty()) {
       throw new RuntimeException("所选产品明细行没有产品料号");
     }
-    boolean fullOaRun = isFullOaRun(formItems, runnableItems, selectedItemIds);
 
     // T16/T23：进度切片
     //   [0-5]    主档同步
@@ -291,6 +310,26 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
     int productIndex = 0;
     for (OaFormItem item : runnableItems) {
       String productCode = item.getMaterialNo().trim();
+      PricePrepareGenerateResult generatedPrepare = generatedPrepareByItem.get(item.getId());
+      PricePrepareReadinessResult itemReadiness =
+          pricePrepareReadinessService.check(oaNoValue, item.getId(), productCode, pricingMonth);
+      if (itemReadiness != null && itemReadiness.isBlocking()) {
+        throw new RuntimeException(blockingReadinessMessage(itemReadiness.getMessage()));
+      }
+      QuoteCostRunVersion version =
+          quoteCostRunVersionService.createTrial(
+              oaNoValue,
+              item.getId(),
+              productCode,
+              pricingMonth,
+              pricingMonth,
+              firstText(
+                  generatedPrepare == null ? null : generatedPrepare.getPrepareNo(),
+                  itemReadiness == null ? null : itemReadiness.getPrepareNo(),
+                  pricePrepareReadiness == null ? null : pricePrepareReadiness.getPrepareNo()),
+              null,
+              null,
+              firstText(item.getBusinessUnitType(), form.getBusinessUnitType()));
       final int idx = productIndex; // for lambda
       int productStart =
           PROGRESS_AFTER_LINKED_ENSURE
@@ -308,6 +347,11 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
               firstText(item.getBusinessUnitType(), form.getBusinessUnitType()),
               pricingMonth,
               oaNoValue + ":" + item.getId());
+      context.setCostRunVersionId(version.getId());
+      context.setCostRunNo(version.getCostRunNo());
+      context.setPricePrepareNo(version.getPricePrepareNo());
+      context.setPriceTypeConfirmNo(version.getPriceTypeConfirmNo());
+      context.setBomConfirmNo(version.getBomConfirmNo());
       // 普通 OA 的上传、主档同步、BOM 刷新和联动价准备仍在外层流程完成；
       // 这里开始只进入统一计算器，确保后续月度调价和日常报价复用同一套成本公式。
       context.setProgress(
@@ -315,6 +359,11 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
               oaNoValue, productStart + p * (productEnd - productStart) / 100));
       CostRunObjectResult result = costRunEngine.run(context);
       costRunResultWriter.writeQuoteResult(result, form, item);
+      quoteCostRunVersionService.finishTrial(
+          version.getId(),
+          totalCost(result),
+          result.getPartItems().size(),
+          result.getCostItems().size());
       markItemCalculated(item);
       partItemCount += result.getPartItems().size();
       costItemCount += result.getCostItems().size();
@@ -322,7 +371,7 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
     }
     progressStore.update(oaNoValue, PROGRESS_COSTS_END);
 
-    updateOaCalculatedIfAllItemsDone(form, fullOaRun);
+    updateOaCalculatedIfAllItemsDone(form);
     CostRunTrialResponse response =
         new CostRunTrialResponse(runnableItems.size(), partItemCount, costItemCount);
     response.setPricePrepareReadiness(pricePrepareReadiness);
@@ -363,10 +412,18 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
   private boolean isCostReadyBomStatus(String bomStatus) {
     return "SYNCED".equals(bomStatus)
         || "REUSED_CURRENT_MONTH".equals(bomStatus)
+        || "CURRENT_MONTH_QUOTED".equals(bomStatus)
+        || "U9_BOM_EXISTS".equals(bomStatus)
         || "MANUAL_ENTERED".equals(bomStatus);
   }
 
   private String bomStatusLabel(String bomStatus) {
+    if ("CURRENT_MONTH_QUOTED".equals(bomStatus)) {
+      return "BOM 当月发起过报价";
+    }
+    if ("U9_BOM_EXISTS".equals(bomStatus)) {
+      return "U9 有此 BOM";
+    }
     if ("SYNCING".equals(bomStatus)) {
       return "同步中";
     }
@@ -408,20 +465,6 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
         .toList();
   }
 
-  private boolean isFullOaRun(
-      List<OaFormItem> formItems, List<OaFormItem> runnableItems, List<Long> selectedItemIds) {
-    if (selectedItemIds == null || selectedItemIds.isEmpty()) {
-      return true;
-    }
-    long runnableCount =
-        formItems == null
-            ? 0
-            : formItems.stream()
-                .filter(item -> item != null && StringUtils.hasText(item.getMaterialNo()))
-                .count();
-    return runnableCount > 0 && runnableItems != null && runnableItems.size() == runnableCount;
-  }
-
   private void markItemCalculated(OaFormItem item) {
     if (item == null || item.getId() == null) {
       return;
@@ -429,16 +472,13 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
     oaFormItemMapper.markCalculated(item.getId(), LocalDateTime.now());
   }
 
-  private void updateOaCalculatedIfAllItemsDone(OaForm form, boolean fullOaRun) {
+  private void updateOaCalculatedIfAllItemsDone(OaForm form) {
     if (form == null || form.getId() == null) {
       return;
     }
-    boolean allDone = fullOaRun;
-    if (!allDone) {
-      long runnableCount = oaFormItemMapper.countRunnableItems(form.getId());
-      long calculatedCount = oaFormItemMapper.countCalculatedRunnableItems(form.getId());
-      allDone = runnableCount > 0 && calculatedCount >= runnableCount;
-    }
+    long runnableCount = oaFormItemMapper.countRunnableItems(form.getId());
+    long calculatedCount = oaFormItemMapper.countCalculatedRunnableItems(form.getId());
+    boolean allDone = runnableCount > 0 && calculatedCount >= runnableCount;
     if (!allDone) {
       return;
     }
@@ -467,6 +507,56 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
       throw new RuntimeException(blockingReadinessMessage(readiness.getMessage()));
     }
     return readiness;
+  }
+
+  private Map<Long, PricePrepareGenerateResult> refreshSelectedCostingInputs(
+      String oaNoValue, List<Long> selectedItemIds) {
+    OaForm form =
+        oaFormMapper.selectOne(
+            Wrappers.lambdaQuery(OaForm.class).eq(OaForm::getOaNo, oaNoValue).last("LIMIT 1"));
+    if (form == null) {
+      throw new RuntimeException("OA单号不存在");
+    }
+    List<OaFormItem> formItems =
+        oaFormItemMapper.selectList(
+            Wrappers.lambdaQuery(OaFormItem.class).eq(OaFormItem::getOaFormId, form.getId()));
+    List<OaFormItem> selectedItems = filterSelectedItems(formItems, selectedItemIds);
+    return refreshCostingInputs(
+        oaNoValue, form, selectedItems, CostPricingPeriodUtils.currentPricingMonth());
+  }
+
+  private Map<Long, PricePrepareGenerateResult> refreshCostingInputs(
+      String oaNoValue, OaForm form, List<OaFormItem> selectedItems, String pricingMonth) {
+    Map<Long, PricePrepareGenerateResult> results = new HashMap<>();
+    if (selectedItems == null || selectedItems.isEmpty()) {
+      return results;
+    }
+    for (OaFormItem item : selectedItems) {
+      if (item == null || item.getId() == null || !StringUtils.hasText(item.getMaterialNo())) {
+        continue;
+      }
+      String productCode = item.getMaterialNo().trim();
+      costingBuildService.buildByOaFormItem(item.getId(), pricingMonth);
+
+      PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
+      request.setOaNo(oaNoValue);
+      request.setOaFormItemId(item.getId());
+      request.setTopProductCode(productCode);
+      request.setPeriodMonth(pricingMonth);
+      request.setBusinessUnitType(firstText(item.getBusinessUnitType(), form.getBusinessUnitType()));
+      request.setSourceType("QUOTE");
+      PricePrepareGenerateResult result = pricePrepareService.generate(request);
+      results.put(item.getId(), result);
+      log.info(
+          "cost trial refreshed quote costing inputs: oa={} itemId={} product={} period={} prepareNo={} status={}",
+          oaNoValue,
+          item.getId(),
+          productCode,
+          pricingMonth,
+          result == null ? null : result.getPrepareNo(),
+          result == null ? null : result.getStatus());
+    }
+    return results;
   }
 
   private void ensureLinkedPricesForTrial(String oaNo, OaForm form) {
@@ -569,6 +659,25 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
       messages.add(code + ": " + reason);
     }
     return messages.isEmpty() ? "存在联动价计算失败" : String.join("; ", messages);
+  }
+
+  private java.math.BigDecimal totalCost(CostRunObjectResult result) {
+    if (result != null && result.getResult() != null && result.getResult().getTotalCost() != null) {
+      return result.getResult().getTotalCost();
+    }
+    if (result == null || result.getCostItems() == null) {
+      return null;
+    }
+    for (CostRunCostItemDto item : result.getCostItems()) {
+      if (item != null && "TOTAL".equals(trimToEmpty(item.getCostCode()))) {
+        return item.getAmount();
+      }
+    }
+    return null;
+  }
+
+  private String trimToEmpty(String value) {
+    return StringUtils.hasText(value) ? value.trim() : "";
   }
 
   @Override
@@ -697,5 +806,10 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
       return first.trim();
     }
     return StringUtils.hasText(second) ? second.trim() : null;
+  }
+
+  private String firstText(String first, String second, String third) {
+    String value = firstText(first, second);
+    return StringUtils.hasText(value) ? value : firstText(third, null);
   }
 }

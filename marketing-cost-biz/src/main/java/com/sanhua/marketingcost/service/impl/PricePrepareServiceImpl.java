@@ -11,9 +11,11 @@ import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
+import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmItem;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
+import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmItemMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.MakePartPricePrepareStrategy;
 import com.sanhua.marketingcost.service.NormalMaterialPricePrepareStrategy;
@@ -49,12 +51,15 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   private static final String GAP_TYPE_MISSING_STRUCTURE = "MISSING_STRUCTURE";
   private static final String GAP_TYPE_MISSING_MASTER = "MISSING_MASTER";
   private static final String GAP_TYPE_MISSING_PRICE = "MISSING_PRICE";
+  private static final String ACTION_MAINTAIN_STRUCTURE = "MAINTAIN_STRUCTURE";
+  private static final String ACTION_MAINTAIN_PRICE = "MAINTAIN_PRICE";
   private static final String GAP_PUSH_PENDING = "PENDING";
   private static final int DB_MESSAGE_MAX_LENGTH = 1000;
 
   private final PricePrepareBatchMapper batchMapper;
   private final PricePrepareItemMapper itemMapper;
   private final PricePrepareGapMapper gapMapper;
+  private final QuotePriceTypeConfirmItemMapper priceTypeConfirmItemMapper;
   private final PricePrepareBomItemLoader bomItemLoader;
   private final PricePrepareItemClassifier itemClassifier;
   private final NormalMaterialPricePrepareStrategy normalMaterialPricePrepareStrategy;
@@ -65,6 +70,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       PricePrepareBatchMapper batchMapper,
       PricePrepareItemMapper itemMapper,
       PricePrepareGapMapper gapMapper,
+      QuotePriceTypeConfirmItemMapper priceTypeConfirmItemMapper,
       PricePrepareBomItemLoader bomItemLoader,
       PricePrepareItemClassifier itemClassifier,
       NormalMaterialPricePrepareStrategy normalMaterialPricePrepareStrategy,
@@ -73,6 +79,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     this.batchMapper = batchMapper;
     this.itemMapper = itemMapper;
     this.gapMapper = gapMapper;
+    this.priceTypeConfirmItemMapper = priceTypeConfirmItemMapper;
     this.bomItemLoader = bomItemLoader;
     this.itemClassifier = itemClassifier;
     this.normalMaterialPricePrepareStrategy = normalMaterialPricePrepareStrategy;
@@ -86,14 +93,15 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     LocalDateTime now = LocalDateTime.now();
 
     PricePrepareBatch batch = initBatch(req, now);
-    deleteCurrentItems(req.oaNo(), req.periodMonth(), req.topProductCodes());
-    deleteCurrentGaps(req.oaNo(), req.periodMonth(), req.topProductCodes());
+    deleteCurrentItems(req);
+    deleteCurrentGaps(req);
 
     List<BomCostingRow> bomRows;
     try {
-      bomRows = req.topProductCodes().isEmpty()
-          ? bomItemLoader.loadByOaNo(req.oaNo())
-          : bomItemLoader.loadByOaNoAndTopProducts(req.oaNo(), req.topProductCodes());
+      bomRows = req.oaFormItemId() == null
+          ? loadLegacyBomRows(req)
+          : bomItemLoader.loadByQuoteItem(
+              req.oaNo(), req.oaFormItemId(), req.topProductCode(), req.periodMonth());
     } catch (RuntimeException ex) {
       setBatchSummary(batch, 0, 0, 0, 0, STATUS_FAILED, "读取BOM结算明细失败：" + exceptionMessage(ex));
       return finishBatchAndResult(batch);
@@ -193,7 +201,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   }
 
   private PricePrepareBatch initBatch(NormalizedGenerateRequest req, LocalDateTime now) {
-    PricePrepareBatch batch = findCurrentBatch(req.oaNo(), req.periodMonth());
+    PricePrepareBatch batch = findCurrentBatch(req);
     boolean exists = batch != null;
     if (!exists) {
       batch = new PricePrepareBatch();
@@ -203,6 +211,9 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     } else if (!StringUtils.hasText(batch.getPrepareNo())) {
       batch.setPrepareNo(newPrepareNo(now));
     }
+    batch.setOaFormItemId(req.oaFormItemId());
+    batch.setTopProductCode(req.topProductCode());
+    batch.setPriceTypeConfirmNo(req.priceTypeConfirmNo());
     batch.setBomPurpose(req.bomPurpose());
     batch.setSourceType(req.sourceType());
     batch.setStatus(STATUS_RUNNING);
@@ -223,24 +234,35 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     return batch;
   }
 
-  private PricePrepareBatch findCurrentBatch(String oaNo, String periodMonth) {
-    return batchMapper.selectOne(
+  private PricePrepareBatch findCurrentBatch(NormalizedGenerateRequest req) {
+    var query =
         Wrappers.<PricePrepareBatch>lambdaQuery()
-            .eq(PricePrepareBatch::getOaNo, blankIfNull(oaNo))
-            .eq(PricePrepareBatch::getPeriodMonth, blankIfNull(periodMonth))
-            .orderByDesc(PricePrepareBatch::getId)
-            .last("LIMIT 1"));
+            .eq(PricePrepareBatch::getOaNo, blankIfNull(req.oaNo()))
+            .eq(PricePrepareBatch::getPeriodMonth, blankIfNull(req.periodMonth()));
+    if (req.oaFormItemId() != null) {
+      query.eq(PricePrepareBatch::getOaFormItemId, req.oaFormItemId())
+          .eq(PricePrepareBatch::getTopProductCode, blankIfNull(req.topProductCode()));
+    }
+    return batchMapper.selectOne(query.orderByDesc(PricePrepareBatch::getId).last("LIMIT 1"));
   }
 
   private String currentItemKey(PricePreparePlanItem planItem) {
-    return blankIfNull(planItem.getTopProductCode()) + "|" + blankIfNull(planItem.getMaterialCode());
+    Long oaFormItemId =
+        planItem.getBomRow() == null ? null : planItem.getBomRow().getOaFormItemId();
+    return (oaFormItemId == null ? "" : oaFormItemId)
+        + "|"
+        + blankIfNull(planItem.getTopProductCode())
+        + "|"
+        + blankIfNull(planItem.getMaterialCode());
   }
 
   private PricePrepareItem buildPrepareItem(PricePrepareBatch batch, PricePreparePlanItem planItem) {
     PricePrepareItem item = new PricePrepareItem();
     item.setPrepareNo(batch.getPrepareNo());
     item.setPeriodMonth(batch.getPeriodMonth());
+    item.setPriceTypeConfirmNo(batch.getPriceTypeConfirmNo());
     item.setOaNo(batch.getOaNo());
+    item.setOaFormItemId(batch.getOaFormItemId());
     item.setTopProductCode(planItem.getTopProductCode());
     item.setBomRowId(planItem.getBomRowId());
     item.setMaterialCode(planItem.getMaterialCode());
@@ -250,6 +272,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     item.setStatus(planItem.getStatus());
     item.setMessage(planItem.getMessage());
     item.setBusinessUnitType(batch.getBusinessUnitType());
+    item.setPriceTypeConfirmItemId(findPriceTypeConfirmItemId(batch, planItem));
     return item;
   }
 
@@ -371,9 +394,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
 
   private void insertMissingBomGap(PricePrepareBatch batch, String topProductCode) {
     PricePrepareGap gap = new PricePrepareGap();
-    gap.setPrepareNo(batch.getPrepareNo());
-    gap.setPeriodMonth(batch.getPeriodMonth());
-    gap.setOaNo(batch.getOaNo());
+    applyBatchScope(gap, batch);
     gap.setTopProductCode(blankIfNull(topProductCode));
     gap.setMaterialCode("");
     gap.setGapType(GAP_TYPE_MISSING_STRUCTURE);
@@ -382,6 +403,8 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     gap.setMessage("OA无BOM结算明细，请先生成BOM结算明细");
     gap.setOaPushStatus(GAP_PUSH_PENDING);
     gap.setBusinessUnitType(batch.getBusinessUnitType());
+    gap.setActionType(ACTION_MAINTAIN_STRUCTURE);
+    gap.setActionTarget(blankIfNull(topProductCode));
     upsertGap(gap);
   }
 
@@ -390,9 +413,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       PricePreparePlanItem planItem,
       NormalMaterialPricePrepareResult normalResult) {
     PricePrepareGap gap = new PricePrepareGap();
-    gap.setPrepareNo(batch.getPrepareNo());
-    gap.setPeriodMonth(batch.getPeriodMonth());
-    gap.setOaNo(batch.getOaNo());
+    applyBatchScope(gap, batch);
     gap.setTopProductCode(planItem.getTopProductCode());
     gap.setMaterialCode(blankIfNull(planItem.getMaterialCode()));
     gap.setGapMaterialCode(planItem.getMaterialCode());
@@ -402,6 +423,9 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     gap.setMessage(normalResult.getMessage());
     gap.setOaPushStatus(GAP_PUSH_PENDING);
     gap.setBusinessUnitType(batch.getBusinessUnitType());
+    gap.setPriceTypeConfirmItemId(findPriceTypeConfirmItemId(batch, planItem));
+    gap.setActionType(actionTypeForGap(normalResult.getGapType()));
+    gap.setActionTarget(blankIfNull(planItem.getMaterialCode()));
     upsertGap(gap);
   }
 
@@ -420,9 +444,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     }
     for (PackageComponentPricePrepareResult.Gap packageGap : gaps) {
       PricePrepareGap gap = new PricePrepareGap();
-      gap.setPrepareNo(batch.getPrepareNo());
-      gap.setPeriodMonth(batch.getPeriodMonth());
-      gap.setOaNo(batch.getOaNo());
+      applyBatchScope(gap, batch);
       gap.setTopProductCode(planItem.getTopProductCode());
       gap.setMaterialCode(blankIfNull(planItem.getMaterialCode()));
       gap.setGapMaterialCode(packageGap.getGapMaterialCode());
@@ -432,6 +454,9 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       gap.setMessage(packageGap.getMessage());
       gap.setOaPushStatus(GAP_PUSH_PENDING);
       gap.setBusinessUnitType(batch.getBusinessUnitType());
+      gap.setPriceTypeConfirmItemId(findPriceTypeConfirmItemId(batch, planItem));
+      gap.setActionType(actionTypeForGap(packageGap.getGapType()));
+      gap.setActionTarget(firstText(packageGap.getGapMaterialCode(), planItem.getMaterialCode()));
       upsertGap(gap);
     }
     return gaps.size();
@@ -452,9 +477,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     }
     for (MakePartPricePrepareResult.Gap makePartGap : gaps) {
       PricePrepareGap gap = new PricePrepareGap();
-      gap.setPrepareNo(batch.getPrepareNo());
-      gap.setPeriodMonth(batch.getPeriodMonth());
-      gap.setOaNo(batch.getOaNo());
+      applyBatchScope(gap, batch);
       gap.setTopProductCode(planItem.getTopProductCode());
       gap.setMaterialCode(blankIfNull(planItem.getMaterialCode()));
       gap.setGapMaterialCode(makePartGap.getGapMaterialCode());
@@ -464,6 +487,9 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       gap.setMessage(makePartGap.getMessage());
       gap.setOaPushStatus(GAP_PUSH_PENDING);
       gap.setBusinessUnitType(batch.getBusinessUnitType());
+      gap.setPriceTypeConfirmItemId(findPriceTypeConfirmItemId(batch, planItem));
+      gap.setActionType(actionTypeForGap(makePartGap.getGapType()));
+      gap.setActionTarget(firstText(makePartGap.getGapMaterialCode(), planItem.getMaterialCode()));
       upsertGap(gap);
     }
     return gaps.size();
@@ -471,9 +497,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
 
   private void insertMissingMasterGap(PricePrepareBatch batch, PricePreparePlanItem planItem) {
     PricePrepareGap gap = new PricePrepareGap();
-    gap.setPrepareNo(batch.getPrepareNo());
-    gap.setPeriodMonth(batch.getPeriodMonth());
-    gap.setOaNo(batch.getOaNo());
+    applyBatchScope(gap, batch);
     gap.setTopProductCode(planItem.getTopProductCode());
     gap.setMaterialCode(blankIfNull(planItem.getMaterialCode()));
     gap.setGapMaterialCode(planItem.getMaterialCode());
@@ -483,6 +507,9 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     gap.setMessage(planItem.getMessage());
     gap.setOaPushStatus(GAP_PUSH_PENDING);
     gap.setBusinessUnitType(batch.getBusinessUnitType());
+    gap.setPriceTypeConfirmItemId(findPriceTypeConfirmItemId(batch, planItem));
+    gap.setActionType(ACTION_MAINTAIN_STRUCTURE);
+    gap.setActionTarget(blankIfNull(planItem.getMaterialCode()));
     upsertGap(gap);
   }
 
@@ -503,24 +530,30 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     batch.setFinishedAt(LocalDateTime.now());
   }
 
-  private void deleteCurrentGaps(String oaNo, String periodMonth, List<String> topProductCodes) {
+  private void deleteCurrentGaps(NormalizedGenerateRequest req) {
     var query =
         Wrappers.<PricePrepareGap>lambdaQuery()
-            .eq(PricePrepareGap::getOaNo, blankIfNull(oaNo))
-            .eq(PricePrepareGap::getPeriodMonth, blankIfNull(periodMonth));
-    if (topProductCodes != null && !topProductCodes.isEmpty()) {
-      query.in(PricePrepareGap::getTopProductCode, topProductCodes);
+            .eq(PricePrepareGap::getOaNo, blankIfNull(req.oaNo()))
+            .eq(PricePrepareGap::getPeriodMonth, blankIfNull(req.periodMonth()));
+    if (req.oaFormItemId() != null) {
+      query.eq(PricePrepareGap::getOaFormItemId, req.oaFormItemId())
+          .eq(PricePrepareGap::getTopProductCode, blankIfNull(req.topProductCode()));
+    } else if (req.topProductCodes() != null && !req.topProductCodes().isEmpty()) {
+      query.in(PricePrepareGap::getTopProductCode, req.topProductCodes());
     }
     gapMapper.delete(query);
   }
 
-  private void deleteCurrentItems(String oaNo, String periodMonth, List<String> topProductCodes) {
+  private void deleteCurrentItems(NormalizedGenerateRequest req) {
     var query =
         Wrappers.<PricePrepareItem>lambdaQuery()
-            .eq(PricePrepareItem::getOaNo, blankIfNull(oaNo))
-            .eq(PricePrepareItem::getPeriodMonth, blankIfNull(periodMonth));
-    if (topProductCodes != null && !topProductCodes.isEmpty()) {
-      query.in(PricePrepareItem::getTopProductCode, topProductCodes);
+            .eq(PricePrepareItem::getOaNo, blankIfNull(req.oaNo()))
+            .eq(PricePrepareItem::getPeriodMonth, blankIfNull(req.periodMonth()));
+    if (req.oaFormItemId() != null) {
+      query.eq(PricePrepareItem::getOaFormItemId, req.oaFormItemId())
+          .eq(PricePrepareItem::getTopProductCode, blankIfNull(req.topProductCode()));
+    } else if (req.topProductCodes() != null && !req.topProductCodes().isEmpty()) {
+      query.in(PricePrepareItem::getTopProductCode, req.topProductCodes());
     }
     itemMapper.delete(query);
   }
@@ -537,15 +570,17 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   }
 
   private Long findExistingItemId(PricePrepareItem item) {
+    var query =
+        Wrappers.<PricePrepareItem>lambdaQuery()
+            .eq(PricePrepareItem::getOaNo, blankIfNull(item.getOaNo()))
+            .eq(PricePrepareItem::getPeriodMonth, blankIfNull(item.getPeriodMonth()))
+            .eq(PricePrepareItem::getTopProductCode, blankIfNull(item.getTopProductCode()))
+            .eq(PricePrepareItem::getMaterialCode, blankIfNull(item.getMaterialCode()));
+    if (item.getOaFormItemId() != null) {
+      query.eq(PricePrepareItem::getOaFormItemId, item.getOaFormItemId());
+    }
     List<PricePrepareItem> existingRows =
-        itemMapper.selectList(
-            Wrappers.<PricePrepareItem>lambdaQuery()
-                .eq(PricePrepareItem::getOaNo, blankIfNull(item.getOaNo()))
-                .eq(PricePrepareItem::getPeriodMonth, blankIfNull(item.getPeriodMonth()))
-                .eq(PricePrepareItem::getTopProductCode, blankIfNull(item.getTopProductCode()))
-                .eq(PricePrepareItem::getMaterialCode, blankIfNull(item.getMaterialCode()))
-                .orderByDesc(PricePrepareItem::getId)
-                .last("LIMIT 1"));
+        itemMapper.selectList(query.orderByDesc(PricePrepareItem::getId).last("LIMIT 1"));
     return existingRows == null || existingRows.isEmpty() ? null : existingRows.get(0).getId();
   }
 
@@ -561,18 +596,20 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   }
 
   private Long findExistingGapId(PricePrepareGap gap) {
+    var query =
+        Wrappers.<PricePrepareGap>lambdaQuery()
+            .eq(PricePrepareGap::getOaNo, blankIfNull(gap.getOaNo()))
+            .eq(PricePrepareGap::getPeriodMonth, blankIfNull(gap.getPeriodMonth()))
+            .eq(PricePrepareGap::getTopProductCode, blankIfNull(gap.getTopProductCode()))
+            .eq(PricePrepareGap::getMaterialCode, blankIfNull(gap.getMaterialCode()))
+            .eq(PricePrepareGap::getGapMaterialCode, blankIfNull(gap.getGapMaterialCode()))
+            .eq(PricePrepareGap::getGapType, blankIfNull(gap.getGapType()))
+            .eq(PricePrepareGap::getItemType, blankIfNull(gap.getItemType()));
+    if (gap.getOaFormItemId() != null) {
+      query.eq(PricePrepareGap::getOaFormItemId, gap.getOaFormItemId());
+    }
     List<PricePrepareGap> existingRows =
-        gapMapper.selectList(
-            Wrappers.<PricePrepareGap>lambdaQuery()
-                .eq(PricePrepareGap::getOaNo, blankIfNull(gap.getOaNo()))
-                .eq(PricePrepareGap::getPeriodMonth, blankIfNull(gap.getPeriodMonth()))
-                .eq(PricePrepareGap::getTopProductCode, blankIfNull(gap.getTopProductCode()))
-                .eq(PricePrepareGap::getMaterialCode, blankIfNull(gap.getMaterialCode()))
-                .eq(PricePrepareGap::getGapMaterialCode, blankIfNull(gap.getGapMaterialCode()))
-                .eq(PricePrepareGap::getGapType, blankIfNull(gap.getGapType()))
-                .eq(PricePrepareGap::getItemType, blankIfNull(gap.getItemType()))
-                .orderByDesc(PricePrepareGap::getId)
-                .last("LIMIT 1"));
+        gapMapper.selectList(query.orderByDesc(PricePrepareGap::getId).last("LIMIT 1"));
     return existingRows == null || existingRows.isEmpty() ? null : existingRows.get(0).getId();
   }
 
@@ -606,6 +643,47 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     return row == null ? null : row.getQtyPerTop();
   }
 
+  private List<BomCostingRow> loadLegacyBomRows(NormalizedGenerateRequest req) {
+    return req.topProductCodes().isEmpty()
+        ? bomItemLoader.loadByOaNo(req.oaNo())
+        : bomItemLoader.loadByOaNoAndTopProducts(req.oaNo(), req.topProductCodes());
+  }
+
+  private void applyBatchScope(PricePrepareGap gap, PricePrepareBatch batch) {
+    gap.setPrepareNo(batch.getPrepareNo());
+    gap.setPeriodMonth(batch.getPeriodMonth());
+    gap.setPriceTypeConfirmNo(batch.getPriceTypeConfirmNo());
+    gap.setOaNo(batch.getOaNo());
+    gap.setOaFormItemId(batch.getOaFormItemId());
+  }
+
+  private Long findPriceTypeConfirmItemId(PricePrepareBatch batch, PricePreparePlanItem planItem) {
+    if (batch == null
+        || planItem == null
+        || !StringUtils.hasText(batch.getPriceTypeConfirmNo())) {
+      return null;
+    }
+    var query =
+        Wrappers.<QuotePriceTypeConfirmItem>lambdaQuery()
+            .eq(QuotePriceTypeConfirmItem::getConfirmNo, batch.getPriceTypeConfirmNo().trim())
+            .eq(QuotePriceTypeConfirmItem::getMaterialCode, blankIfNull(planItem.getMaterialCode()))
+            .eq(QuotePriceTypeConfirmItem::getProductCode, blankIfNull(planItem.getTopProductCode()));
+    if (batch.getOaFormItemId() != null) {
+      query.eq(QuotePriceTypeConfirmItem::getOaFormItemId, batch.getOaFormItemId());
+    }
+    if (planItem.getBomRowId() != null) {
+      query.eq(QuotePriceTypeConfirmItem::getBomRowId, planItem.getBomRowId());
+    }
+    List<QuotePriceTypeConfirmItem> items =
+        priceTypeConfirmItemMapper.selectList(
+            query.orderByDesc(QuotePriceTypeConfirmItem::getId).last("LIMIT 1"));
+    return items == null || items.isEmpty() ? null : items.get(0).getId();
+  }
+
+  private String actionTypeForGap(String gapType) {
+    return GAP_TYPE_MISSING_PRICE.equals(gapType) ? ACTION_MAINTAIN_PRICE : ACTION_MAINTAIN_STRUCTURE;
+  }
+
   private String blankIfNull(String value) {
     return value == null ? "" : value;
   }
@@ -628,10 +706,23 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     String businessUnitType = firstText(
         request.getBusinessUnitType(),
         BusinessUnitContext.getCurrentBusinessUnitType());
+    String topProductCode = firstText(request.getTopProductCode(), onlyTopProductCode(request));
+    List<String> topProductCodes = StringUtils.hasText(topProductCode)
+        ? List.of(topProductCode)
+        : normalizeTopProductCodes(request.getTopProductCodes());
+    Long oaFormItemId = request.getOaFormItemId();
+    if (oaFormItemId != null && !StringUtils.hasText(topProductCode)) {
+      throw new IllegalArgumentException("topProductCode is required when oaFormItemId is provided");
+    }
     // BOM 目的按已冻结口径固定主制造，忽略前端或调用方传入值，避免准备结果和结算行口径漂移。
     return new NormalizedGenerateRequest(
         request.getOaNo().trim(),
-        normalizeTopProductCodes(request.getTopProductCodes()),
+        oaFormItemId,
+        topProductCode,
+        StringUtils.hasText(request.getPriceTypeConfirmNo())
+            ? request.getPriceTypeConfirmNo().trim()
+            : null,
+        topProductCodes,
         periodMonth,
         request.getPriceAsOfTime(),
         businessUnitType,
@@ -652,10 +743,18 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     return List.copyOf(codes);
   }
 
+  private String onlyTopProductCode(PricePrepareGenerateRequest request) {
+    List<String> topProductCodes = normalizeTopProductCodes(request.getTopProductCodes());
+    return topProductCodes.size() == 1 ? topProductCodes.get(0) : null;
+  }
+
   private PricePrepareGenerateResult toResult(PricePrepareBatch batch) {
     PricePrepareGenerateResult result = new PricePrepareGenerateResult();
     result.setPrepareNo(batch.getPrepareNo());
     result.setOaNo(batch.getOaNo());
+    result.setOaFormItemId(batch.getOaFormItemId());
+    result.setTopProductCode(batch.getTopProductCode());
+    result.setPriceTypeConfirmNo(batch.getPriceTypeConfirmNo());
     result.setPeriodMonth(batch.getPeriodMonth());
     result.setBomPurpose(batch.getBomPurpose());
     result.setSourceType(batch.getSourceType());
@@ -686,6 +785,9 @@ public class PricePrepareServiceImpl implements PricePrepareService {
 
   private record NormalizedGenerateRequest(
       String oaNo,
+      Long oaFormItemId,
+      String topProductCode,
+      String priceTypeConfirmNo,
       List<String> topProductCodes,
       String periodMonth,
       LocalDateTime priceAsOfTime,

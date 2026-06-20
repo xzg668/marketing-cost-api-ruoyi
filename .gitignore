@@ -13,3 +13,5 @@ docs/
 *.jar
 *.war
 *.ear
+__pycache__/
+*.py[cod]

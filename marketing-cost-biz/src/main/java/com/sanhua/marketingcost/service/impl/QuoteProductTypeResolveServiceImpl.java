@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.sanhua.marketingcost.dto.quotebom.QuoteProductTypeResolveResult;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.QuoteProductType;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.service.QuoteProductTypeResolveService;
@@ -29,13 +30,24 @@ public class QuoteProductTypeResolveServiceImpl implements QuoteProductTypeResol
 
   @Override
   public QuoteProductTypeResolveResult resolve(String quoteProductCode) {
+    return resolve(quoteProductCode, MaterialOrganization.COMMERCIAL.getCode());
+  }
+
+  @Override
+  public QuoteProductTypeResolveResult resolve(String quoteProductCode, String organizationCode) {
     List<QuoteProductTypeResolveResult> results =
-        batchResolve(Collections.singletonList(quoteProductCode));
+        batchResolve(Collections.singletonList(quoteProductCode), organizationCode);
     return results.isEmpty() ? missingInput(null) : results.get(0);
   }
 
   @Override
   public List<QuoteProductTypeResolveResult> batchResolve(Collection<String> quoteProductCodes) {
+    return batchResolve(quoteProductCodes, MaterialOrganization.COMMERCIAL.getCode());
+  }
+
+  @Override
+  public List<QuoteProductTypeResolveResult> batchResolve(
+      Collection<String> quoteProductCodes, String organizationCode) {
     if (quoteProductCodes == null || quoteProductCodes.isEmpty()) {
       return Collections.emptyList();
     }
@@ -50,7 +62,8 @@ public class QuoteProductTypeResolveServiceImpl implements QuoteProductTypeResol
       }
     }
 
-    Map<String, QuoteProductTypeResolveResult> resolvedByCode = resolveUniqueCodes(uniqueCodes);
+    Map<String, QuoteProductTypeResolveResult> resolvedByCode =
+        resolveUniqueCodes(uniqueCodes, organizationCode);
     List<QuoteProductTypeResolveResult> results = new ArrayList<>(requestedCodes.size());
     for (String code : requestedCodes) {
       if (code == null) {
@@ -62,7 +75,8 @@ public class QuoteProductTypeResolveServiceImpl implements QuoteProductTypeResol
     return results;
   }
 
-  private Map<String, QuoteProductTypeResolveResult> resolveUniqueCodes(Set<String> uniqueCodes) {
+  private Map<String, QuoteProductTypeResolveResult> resolveUniqueCodes(
+      Set<String> uniqueCodes, String organizationCode) {
     Map<String, QuoteProductTypeResolveResult> result = new LinkedHashMap<>();
     if (uniqueCodes.isEmpty()) {
       return result;
@@ -72,7 +86,7 @@ public class QuoteProductTypeResolveServiceImpl implements QuoteProductTypeResol
     }
 
     List<MaterialMasterRaw> rows =
-        materialMasterRawMapper.selectByLatestBatchAndCodes(uniqueCodes, null);
+        selectRawRows(uniqueCodes, organizationCode);
     if (rows == null || rows.isEmpty()) {
       return result;
     }
@@ -84,6 +98,14 @@ public class QuoteProductTypeResolveServiceImpl implements QuoteProductTypeResol
       result.put(code, resolveFromRaw(code, row));
     }
     return result;
+  }
+
+  private List<MaterialMasterRaw> selectRawRows(Set<String> uniqueCodes, String organizationCode) {
+    String organization = MaterialOrganization.normalize(organizationCode);
+    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
+      return materialMasterRawMapper.selectByLatestBatchAndCodes(uniqueCodes, null);
+    }
+    return materialMasterRawMapper.selectByLatestBatchAndCodes(uniqueCodes, null, organization);
   }
 
   private QuoteProductTypeResolveResult resolveFromRaw(String quoteProductCode, MaterialMasterRaw row) {

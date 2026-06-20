@@ -132,6 +132,52 @@ class CostRunObjectCalcServiceImplTest {
             any());
   }
 
+  @Test
+  void quoteObjectUsesCostRunStartedDateAsPartPriceDate() {
+    CostRunResultMapper resultMapper = mock(CostRunResultMapper.class);
+    CostRunPartItemService partItemService = mock(CostRunPartItemService.class);
+    CostRunCostItemService costItemService = mock(CostRunCostItemService.class);
+    CostRunObjectCalcServiceImpl service =
+        new CostRunObjectCalcServiceImpl(resultMapper, partItemService, costItemService);
+    CostRunContext context =
+        CostRunContext.quote(
+            "OA-001",
+            7L,
+            "P-001",
+            "箱装",
+            "客户A",
+            "COMMERCIAL",
+            "2026-05",
+            LocalDateTime.of(2026, 6, 16, 16, 41, 50),
+            "OA-001:P-001");
+    when(partItemService.listByOaNo(
+            eq("OA-001"),
+            eq(LocalDate.of(2026, 6, 16)),
+            any(CostRunContext.class),
+            eq(false),
+            any()))
+        .thenReturn(List.of(part("P-001", "PART-1")));
+    when(costItemService.listByMaterialCodes(
+            eq("OA-001"),
+            eq("P-001"),
+            eq(Set.of("P-001")),
+            any(CostRunContext.class),
+            any(),
+            eq(false),
+            any()))
+        .thenReturn(List.of(cost("TOTAL", "总成本", "130.000000")));
+
+    service.calculate(context);
+
+    verify(partItemService)
+        .listByOaNo(
+            eq("OA-001"),
+            eq(LocalDate.of(2026, 6, 16)),
+            any(CostRunContext.class),
+            eq(false),
+            any());
+  }
+
   private CostRunContext monthlyContext() {
     return CostRunContext.monthlyReprice(
         "2026-05",

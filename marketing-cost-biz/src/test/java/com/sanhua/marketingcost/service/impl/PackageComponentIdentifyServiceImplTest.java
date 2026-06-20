@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -87,6 +88,18 @@ class PackageComponentIdentifyServiceImplTest {
         .containsEntry("NORMAL-001", false)
         .containsEntry("MISS-001", false)
         .hasSize(3);
+  }
+
+  @Test
+  @DisplayName("指定板换组织时按 PLATE 查询包装组件")
+  void batchIdentifyUsesPlateOrganization() {
+    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("PLATE")))
+        .thenReturn(List.of(raw("PKG-PLATE", "1515500", "虚拟")));
+
+    Map<String, Boolean> result = service.batchIdentify(List.of("PKG-PLATE"), "PLATE");
+
+    assertThat(result).containsEntry("PKG-PLATE", true);
+    verify(materialMasterRawMapper).selectByLatestBatchAndCodes(any(), isNull(), eq("PLATE"));
   }
 
   @Test

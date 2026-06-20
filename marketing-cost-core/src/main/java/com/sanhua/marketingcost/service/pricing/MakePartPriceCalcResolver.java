@@ -64,7 +64,7 @@ public class MakePartPriceCalcResolver implements PriceResolver {
       return PriceResolveResult.miss("缺当前业务单元上下文，无法严格匹配制造件价格生成结果：" + parentCode);
     }
 
-    LocalDateTime priceAsOfTime = context == null ? null : context.getPriceAsOfTime();
+    LocalDateTime priceAsOfTime = monthlyRepricePriceAsOfTime(context);
     MakePartPriceCalcRow latest =
         selectLatestComplete(parentCode, oaNoValue, pricingMonth, businessUnitType, priceAsOfTime);
     if (latest == null) {
@@ -110,6 +110,13 @@ public class MakePartPriceCalcResolver implements PriceResolver {
                 .orderByDesc(MakePartPriceCalcRow::getId)
                 .last("LIMIT 1"));
     return rows.isEmpty() ? null : rows.get(0);
+  }
+
+  private LocalDateTime monthlyRepricePriceAsOfTime(CostRunContext context) {
+    if (context == null || !CostRunContext.SCENE_MONTHLY_REPRICE.equals(context.getScene())) {
+      return null;
+    }
+    return context.getPriceAsOfTime();
   }
 
   private String missingResultRemark(String oaNo, String pricingMonth, String parentCode) {

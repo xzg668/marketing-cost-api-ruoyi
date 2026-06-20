@@ -218,7 +218,7 @@ public class QuoteOaPdfDetailTableParser {
 
   private List<QuoteIngestItemRequest> readDenseFiSc006Rows(
       QuotePdfParseContext context, List<TableLine> lines, TableRange range) {
-    if (context.getTemplateDefinition().getTemplateType() != QuoteExcelTemplateType.FI_SC_006) {
+    if (!supportsDenseDetailFallback(context.getTemplateDefinition().getTemplateType())) {
       return List.of();
     }
     DenseLayout layout = inferDenseLayout(lines, range);
@@ -232,9 +232,9 @@ public class QuoteOaPdfDetailTableParser {
     List<QuoteIngestItemRequest> items = new ArrayList<>();
     for (int i = 0; i < starts.size(); i++) {
       RowStart start = starts.get(i);
-      float fromY = start.y() - 32.0f;
+      float fromY = start.y() - 24.0f;
       boolean nextRowOnSamePage = i + 1 < starts.size() && starts.get(i + 1).pageIndex() == start.pageIndex();
-      float toY = nextRowOnSamePage ? starts.get(i + 1).y() - 18.0f : start.y() + 28.0f;
+      float toY = nextRowOnSamePage ? starts.get(i + 1).y() - 18.0f : start.y() + 48.0f;
       List<QuotePdfToken> rowTokens = denseRowTokens(lines, range, start.pageIndex(), fromY, toY);
       QuoteIngestItemRequest item =
           toDenseFiSc006Item(rowTokens, context.getTemplateDefinition(), layout, start.seq());
@@ -243,6 +243,11 @@ public class QuoteOaPdfDetailTableParser {
       }
     }
     return normalizeDenseFiSc006Items(items);
+  }
+
+  private boolean supportsDenseDetailFallback(QuoteExcelTemplateType templateType) {
+    return templateType == QuoteExcelTemplateType.FI_SC_006
+        || templateType == QuoteExcelTemplateType.FI_SC_020;
   }
 
   private List<QuoteIngestItemRequest> normalizeDenseFiSc006Items(List<QuoteIngestItemRequest> items) {
@@ -267,7 +272,7 @@ public class QuoteOaPdfDetailTableParser {
     if (isLikelyMaterialCode(item.getMaterialNo())) {
       return true;
     }
-    return !StringUtils.hasText(item.getMaterialNo())
+    return StringUtils.hasText(item.getProductName())
         && StringUtils.hasText(item.getSunlModel())
         && (StringUtils.hasText(item.getSpec())
             || StringUtils.hasText(item.getAnnualVolume())
@@ -290,10 +295,14 @@ public class QuoteOaPdfDetailTableParser {
     if (denseItems.isEmpty()) {
       return;
     }
+    boolean denseHasIdentity = denseItems.stream().allMatch(this::hasProductIdentity);
+    if (!request.getItems().isEmpty() && !denseHasIdentity) {
+      return;
+    }
     if (!request.getItems().isEmpty()
         && request.getItems().stream().allMatch(this::hasProductKey)
         && request.getItems().stream().allMatch(this::hasProductIdentity)
-        && request.getItems().size() >= denseItems.size()) {
+        && request.getItems().size() > denseItems.size()) {
       return;
     }
     request.getItems().clear();
@@ -319,7 +328,7 @@ public class QuoteOaPdfDetailTableParser {
     Map<Float, List<QuotePdfToken>> tokensByColumn = new LinkedHashMap<>();
     for (int i = range.startIndex() + 1; i < range.endIndex(); i++) {
       for (QuotePdfToken token : lines.get(i).tokens()) {
-        if (!isLikelyHeaderToken(token.getText())) {
+        if (!isLikelyDenseHeaderToken(token.getText())) {
           continue;
         }
         float x = nearestColumnX(tokensByColumn.keySet(), token.getX());
@@ -333,7 +342,7 @@ public class QuoteOaPdfDetailTableParser {
       tokens.sort(Comparator.comparing(QuotePdfToken::getY));
       String label = normalizeLabel(joinRaw(tokens));
       String fieldCode = denseFieldCode(label);
-      if (fieldCode != null && !layout.columnsByFieldCode().containsKey(fieldCode)) {
+      if (fieldCode != null && !layout.hasField(fieldCode)) {
         layout.put(fieldCode, entry.getKey());
       }
     }
@@ -350,7 +359,7 @@ public class QuoteOaPdfDetailTableParser {
     return x;
   }
 
-  private boolean isLikelyHeaderToken(String value) {
+  private boolean isLikelyDenseHeaderToken(String value) {
     String normalized = trimToNull(value);
     if (normalized == null) {
       return false;
@@ -358,7 +367,30 @@ public class QuoteOaPdfDetailTableParser {
     if (isNumberLike(normalized)) {
       return false;
     }
-    return normalized.matches(".*[\\u4e00-\\u9fa5A-Za-z].*");
+    String compact = normalizeLabel(normalized);
+    if (isDenseHeaderFragment(normalized)) {
+      return true;
+    }
+    return compact.contains("序产品")
+        || compact.contains("号名称")
+        || compact.contains("产品名称")
+        || compact.contains("客户")
+        || compact.contains("图号")
+        || compact.contains("u11")
+        || compact.contains("位码")
+        || compact.contains("料号")
+        || compact.contains("三花型")
+        || compact.contains("规格")
+        || compact.contains("运输")
+        || compact.contains("年用量")
+        || compact.contains("总成本")
+        || compact.contains("总价")
+        || compact.contains("成本有效")
+        || compact.contains("有效期")
+        || compact.contains("包装")
+        || compact.contains("备注")
+        || compact.contains("认证")
+        || compact.contains("模具");
   }
 
   private String denseFieldCode(String normalizedLabel) {
@@ -370,7 +402,9 @@ public class QuoteOaPdfDetailTableParser {
         || "序".equals(normalizedLabel)) {
       return "seq";
     }
-    if (normalizedLabel.contains("产品名称") || normalizedLabel.contains("产品")) {
+    if (normalizedLabel.contains("产品名称")
+        || normalizedLabel.contains("产品")
+        || normalizedLabel.contains("品名")) {
       return "productName";
     }
     if (normalizedLabel.contains("客户图号")) {
@@ -389,11 +423,13 @@ public class QuoteOaPdfDetailTableParser {
       return "spec";
     }
     if (normalizedLabel.contains("不含运输费总成本")
+        || normalizedLabel.contains("不含运输费总成")
         || normalizedLabel.contains("不含运费总成本")
         || normalizedLabel.contains("不含运费总价")) {
       return "totalNoShip";
     }
     if (normalizedLabel.contains("含运输费总成本")
+        || normalizedLabel.contains("含运输费总成")
         || normalizedLabel.contains("含运费总成本")
         || normalizedLabel.contains("含运费总价")) {
       return "totalWithShip";
@@ -407,34 +443,67 @@ public class QuoteOaPdfDetailTableParser {
     if (normalizedLabel.contains("包装方式")) {
       return "packageMethod";
     }
-    if (normalizedLabel.contains("成本有效期") || normalizedLabel.contains("有效期")) {
+    if (normalizedLabel.contains("成本有效期")
+        || normalizedLabel.contains("有效期")
+        || (normalizedLabel.contains("有效") && normalizedLabel.contains("月"))) {
       return "validMonth";
     }
     return null;
   }
 
   private List<RowStart> denseRowStarts(List<TableLine> lines, TableRange range, DenseLayout layout) {
-    List<RowStart> starts = new ArrayList<>();
-    Set<String> seen = new LinkedHashSet<>();
     DenseColumn seqColumn = layout.column("seq");
+    List<SeqFragment> fragments = new ArrayList<>();
     for (int i = range.startIndex() + 1; i < range.endIndex(); i++) {
       TableLine line = lines.get(i);
       for (QuotePdfToken token : line.tokens()) {
         if (!seqColumn.contains(token)) {
           continue;
         }
-        Integer seq = parseSeq(token.getText());
-        if (seq == null) {
+        if (parseSeqFragment(token.getText()) == null) {
           continue;
         }
-        String key = line.pageIndex() + ":" + seq + ":" + Math.round(token.getY());
-        if (seen.add(key)) {
-          starts.add(new RowStart(line.pageIndex(), token.getY(), seq));
-        }
+        fragments.add(new SeqFragment(line.pageIndex(), token.getX(), token.getY(), token.getText()));
       }
     }
+    fragments.sort(Comparator.comparing(SeqFragment::pageIndex).thenComparing(SeqFragment::y));
+
+    List<RowStart> starts = new ArrayList<>();
+    Set<String> seen = new LinkedHashSet<>();
+    SeqCluster cluster = null;
+    for (SeqFragment fragment : fragments) {
+      if (cluster == null || !cluster.canAppend(fragment)) {
+        addSeqClusterStart(starts, seen, cluster);
+        cluster = new SeqCluster(fragment);
+      } else {
+        cluster.append(fragment);
+      }
+    }
+    addSeqClusterStart(starts, seen, cluster);
     starts.sort(Comparator.comparing(RowStart::pageIndex).thenComparing(RowStart::y));
     return starts;
+  }
+
+  private void addSeqClusterStart(List<RowStart> starts, Set<String> seen, SeqCluster cluster) {
+    if (cluster == null) {
+      return;
+    }
+    Integer seq = parseSeq(cluster.text());
+    if (seq == null || seq <= 0) {
+      return;
+    }
+    String key = cluster.pageIndex() + ":" + seq + ":" + Math.round(cluster.startY());
+    if (seen.add(key)) {
+      starts.add(new RowStart(cluster.pageIndex(), cluster.startY(), seq));
+    }
+  }
+
+  private String parseSeqFragment(String value) {
+    String normalized = trimToNull(value);
+    if (normalized == null || !normalized.matches("\\d+")) {
+      return null;
+    }
+    return normalized;
   }
 
   private List<QuotePdfToken> denseRowTokens(
@@ -542,6 +611,28 @@ public class QuoteOaPdfDetailTableParser {
     String normalized = trimToNull(value);
     if (normalized == null) {
       return false;
+    }
+    String compact = normalizeLabel(normalized);
+    if (Set.of(
+            "客户图号",
+            "客户编码",
+            "u11位码",
+            "物料选择",
+            "产品名称",
+            "品名",
+            "包装方式",
+            "运输费",
+            "预计年用量",
+            "年用量",
+            "含运输费总成本",
+            "不含运输费总成本",
+            "含运费总价",
+            "不含运费总价",
+            "成本有效期",
+            "有效期",
+            "备注")
+        .contains(compact)) {
+      return true;
     }
     return Set.of(
             "序",
@@ -775,6 +866,50 @@ public class QuoteOaPdfDetailTableParser {
 
   private record RowStart(int pageIndex, float y, Integer seq) {}
 
+  private record SeqFragment(int pageIndex, float x, float y, String text) {}
+
+  private static final class SeqCluster {
+    private static final float SAME_SEQ_X_TOLERANCE = 4.0f;
+    private static final float SAME_SEQ_Y_GAP = 14.0f;
+
+    private final int pageIndex;
+    private final float x;
+    private final float startY;
+    private float endY;
+    private final StringBuilder text = new StringBuilder();
+
+    private SeqCluster(SeqFragment fragment) {
+      this.pageIndex = fragment.pageIndex();
+      this.x = fragment.x();
+      this.startY = fragment.y();
+      this.endY = fragment.y();
+      this.text.append(fragment.text());
+    }
+
+    private boolean canAppend(SeqFragment fragment) {
+      return fragment.pageIndex() == pageIndex
+          && Math.abs(fragment.x() - x) <= SAME_SEQ_X_TOLERANCE
+          && fragment.y() - endY <= SAME_SEQ_Y_GAP;
+    }
+
+    private void append(SeqFragment fragment) {
+      text.append(fragment.text());
+      endY = fragment.y();
+    }
+
+    private int pageIndex() {
+      return pageIndex;
+    }
+
+    private float startY() {
+      return startY;
+    }
+
+    private String text() {
+      return text.toString();
+    }
+  }
+
   private static final class DenseLayout {
     private final Set<Float> columnXs = new LinkedHashSet<>();
     private final Map<String, Float> xByFieldCode = new LinkedHashMap<>();
@@ -786,6 +921,10 @@ public class QuoteOaPdfDetailTableParser {
 
     private void put(String fieldCode, float x) {
       xByFieldCode.put(fieldCode, x);
+    }
+
+    private boolean hasField(String fieldCode) {
+      return xByFieldCode.containsKey(fieldCode);
     }
 
     private void finish() {

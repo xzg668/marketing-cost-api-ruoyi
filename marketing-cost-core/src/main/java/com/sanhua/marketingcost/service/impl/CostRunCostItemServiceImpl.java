@@ -38,6 +38,7 @@ import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
 import com.sanhua.marketingcost.mapper.SalaryCostMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
 import com.sanhua.marketingcost.enums.CostItemCategory;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.service.CostRunCacheLookupService;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
 import com.sanhua.marketingcost.service.CmsCostEffectiveSourceEnsureService;
@@ -279,6 +280,11 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   }
 
   @Override
+  public List<CostRunCostItemDto> listStoredByCostRunNo(String costRunNo) {
+    return listStoredByCostRunNo(costRunNo, CostItemCategory.EXPENSE);
+  }
+
+  @Override
   public List<CostRunCostItemDto> listStoredByOaNo(
       String oaNo, String productCode, String category) {
     if (!StringUtils.hasText(oaNo) || !StringUtils.hasText(productCode)) {
@@ -295,12 +301,32 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
                 .eq(CostRunCostItem::getProductCode, productCodeValue)
                 .eq(catFilter != null, CostRunCostItem::getCategory, catFilter)
                 .orderByAsc(CostRunCostItem::getLineNo));
+    return toDtos(stored);
+  }
+
+  @Override
+  public List<CostRunCostItemDto> listStoredByCostRunNo(String costRunNo, String category) {
+    if (!StringUtils.hasText(costRunNo)) {
+      return Collections.emptyList();
+    }
+    String catFilter = StringUtils.hasText(category) ? category.trim() : null;
+    List<CostRunCostItem> stored =
+        costRunCostItemMapper.selectList(
+            Wrappers.lambdaQuery(CostRunCostItem.class)
+                .eq(CostRunCostItem::getCostRunNo, costRunNo.trim())
+                .eq(catFilter != null, CostRunCostItem::getCategory, catFilter)
+                .orderByAsc(CostRunCostItem::getLineNo));
+    return toDtos(stored);
+  }
+
+  private List<CostRunCostItemDto> toDtos(List<CostRunCostItem> stored) {
     if (stored.isEmpty()) {
       return Collections.emptyList();
     }
     List<CostRunCostItemDto> items = new ArrayList<>();
     for (CostRunCostItem item : stored) {
       CostRunCostItemDto dto = new CostRunCostItemDto();
+      dto.setId(item.getId());
       dto.setCostCode(item.getCostCode());
       dto.setCostName(item.getCostName());
       dto.setBaseAmount(item.getBaseAmount());
@@ -903,6 +929,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     // 成本核算年度按核算执行时间取，不按 OA 申请日期取。
     Integer costYear = resolveCostYear(context);
     String businessUnitType = null;
+    String productName = null;
     if (formItems != null) {
       for (OaFormItem item : formItems) {
         if (item == null) {
@@ -916,7 +943,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         if (businessUnitType == null) {
           businessUnitType = trimToNull(item.getBusinessUnitType());
         }
-        if (businessUnitType != null) {
+        if (productName == null) {
+          productName = trimToNull(item.getProductName());
+        }
+        if (businessUnitType != null && productName != null) {
           break;
         }
       }
@@ -947,6 +977,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return new CostSourceContext(
         costYear,
         normalizeBusinessUnit(businessUnitType),
+        MaterialOrganization.forQuoteProcess(
+            form == null ? null : form.getProcessCode(),
+            form == null ? null : form.getOaNo(),
+            productName),
         accountingPeriodMonth,
         sourceSystem,
         sourceCompany,
@@ -1102,16 +1136,36 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
     DepartmentSubjectAmount overhaul =
         calculateDepartmentSubjectAmount(
-            finishedProductCode, rateYear, businessUnitType, DEPARTMENT_SUBJECT_OVERHAUL, laborTotal);
+            finishedProductCode,
+            rateYear,
+            businessUnitType,
+            costSourceContext,
+            DEPARTMENT_SUBJECT_OVERHAUL,
+            laborTotal);
     DepartmentSubjectAmount tooling =
         calculateDepartmentSubjectAmount(
-            finishedProductCode, rateYear, businessUnitType, DEPARTMENT_SUBJECT_TOOLING, laborTotal);
+            finishedProductCode,
+            rateYear,
+            businessUnitType,
+            costSourceContext,
+            DEPARTMENT_SUBJECT_TOOLING,
+            laborTotal);
     DepartmentSubjectAmount water =
         calculateDepartmentSubjectAmount(
-            finishedProductCode, rateYear, businessUnitType, DEPARTMENT_SUBJECT_WATER, laborTotal);
+            finishedProductCode,
+            rateYear,
+            businessUnitType,
+            costSourceContext,
+            DEPARTMENT_SUBJECT_WATER,
+            laborTotal);
     DepartmentSubjectAmount other =
         calculateDepartmentSubjectAmount(
-            finishedProductCode, rateYear, businessUnitType, DEPARTMENT_SUBJECT_OTHER, laborTotal);
+            finishedProductCode,
+            rateYear,
+            businessUnitType,
+            costSourceContext,
+            DEPARTMENT_SUBJECT_OTHER,
+            laborTotal);
 
     result.overhaul = amountOrZero(overhaul.amount());
     result.toolingRepair = amountOrZero(tooling.amount());
@@ -1131,10 +1185,12 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       String finishedProductCode,
       Integer rateYear,
       String businessUnitType,
+      CostSourceContext costSourceContext,
       List<String> expenseSubjects,
       BigDecimal laborTotal) {
     DepartmentFundLookup lookup =
-        findDepartmentFundRate(finishedProductCode, rateYear, businessUnitType, expenseSubjects);
+        findDepartmentFundRate(
+            finishedProductCode, rateYear, businessUnitType, costSourceContext, expenseSubjects);
     DepartmentFundRate rate = lookup.rate();
     if (rate == null) {
       return new DepartmentSubjectAmount(null, null, null, lookup.remark());
@@ -1167,6 +1223,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       String finishedProductCode,
       Integer rateYear,
       String businessUnitType,
+      CostSourceContext costSourceContext,
       List<String> expenseSubjects) {
     String code = trimToNull(finishedProductCode);
     if (rateYear == null) {
@@ -1175,7 +1232,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     if (code == null) {
       return new DepartmentFundLookup(null, "部门经费率未命中：报价单产品料号为空");
     }
-    MaterialMasterRaw raw = lookupMaterialByCode(code);
+    MaterialMasterRaw raw = lookupMaterialByCode(code, costSourceContext);
     String productionDivision = trimToNull(raw == null ? null : raw.getProductionDivision());
     if (productionDivision == null) {
       return new DepartmentFundLookup(
@@ -1245,7 +1302,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       return codeLookup;
     }
 
-    String materialModel = lookupMaterialModelByCode(code);
+    String materialModel = lookupMaterialModelByCode(code, costSourceContext);
     if (materialModel == null) {
       return new RateLookup(
           null,
@@ -1302,21 +1359,33 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return new RateLookup(rate.getLossRate(), null);
   }
 
-  private String lookupMaterialModelByCode(String productCode) {
-    MaterialMasterRaw row = lookupMaterialByCode(productCode);
+  private String lookupMaterialModelByCode(String productCode, CostSourceContext costSourceContext) {
+    MaterialMasterRaw row = lookupMaterialByCode(productCode, costSourceContext);
     return trimToNull(row == null ? null : row.getMaterialModel());
   }
 
-  private MaterialMasterRaw lookupMaterialByCode(String materialCode) {
+  private MaterialMasterRaw lookupMaterialByCode(String materialCode, CostSourceContext costSourceContext) {
     if (!StringUtils.hasText(materialCode)) {
       return null;
     }
     List<MaterialMasterRaw> rows =
-        materialMasterRawMapper.selectByLatestBatchAndCodes(List.of(materialCode.trim()), null);
+        selectRawRows(List.of(materialCode.trim()), costSourceContext);
     if (rows == null || rows.isEmpty()) {
       return null;
     }
     return rows.get(0);
+  }
+
+  private List<MaterialMasterRaw> selectRawRows(
+      List<String> materialCodes, CostSourceContext costSourceContext) {
+    String organization =
+        costSourceContext == null
+            ? MaterialOrganization.COMMERCIAL.getCode()
+            : MaterialOrganization.normalize(costSourceContext.materialOrganizationCode);
+    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
+      return materialMasterRawMapper.selectByLatestBatchAndCodes(materialCodes, null);
+    }
+    return materialMasterRawMapper.selectByLatestBatchAndCodes(materialCodes, null, organization);
   }
 
   /** 制造费用率：成品料号优先；未命中时按成本料号查 U9 型号、名称+事业部；最后按成品料号事业部兜底。 */
@@ -1345,7 +1414,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     }
 
     for (String costCodeValue : normalizeCostMaterialCodes(costMaterialCodes, finishedCode)) {
-      MaterialMasterRaw raw = lookupMaterialByCode(costCodeValue);
+      MaterialMasterRaw raw = lookupMaterialByCode(costCodeValue, costSourceContext);
       if (raw == null) {
         missReasons.add("成本料号 " + costCodeValue + " 未找到 U9 主档");
         continue;
@@ -1384,7 +1453,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     }
 
     if (finishedCode != null) {
-      MaterialMasterRaw finishedRaw = lookupMaterialByCode(finishedCode);
+      MaterialMasterRaw finishedRaw = lookupMaterialByCode(finishedCode, costSourceContext);
       String finishedDivision =
           trimToNull(finishedRaw == null ? null : finishedRaw.getProductionDivision());
       if (finishedDivision != null) {
@@ -2316,6 +2385,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private static class CostSourceContext {
     private final Integer costYear;
     private final String businessUnitType;
+    private final String materialOrganizationCode;
     private final String accountingPeriodMonth;
     private final String sourceSystem;
     private final String sourceCompany;
@@ -2326,12 +2396,24 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     private final ThreeExpenseMatchContext threeExpenseMatchContext;
 
     private CostSourceContext(Integer costYear, String businessUnitType) {
-      this(costYear, businessUnitType, null, null, null, null, null, null, null, null);
+      this(
+          costYear,
+          businessUnitType,
+          MaterialOrganization.COMMERCIAL.getCode(),
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null);
     }
 
     private CostSourceContext(
         Integer costYear,
         String businessUnitType,
+        String materialOrganizationCode,
         String accountingPeriodMonth,
         String sourceSystem,
         String sourceCompany,
@@ -2342,6 +2424,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         ThreeExpenseMatchContext threeExpenseMatchContext) {
       this.costYear = costYear;
       this.businessUnitType = businessUnitType == null ? "" : businessUnitType;
+      this.materialOrganizationCode = MaterialOrganization.normalize(materialOrganizationCode);
       this.accountingPeriodMonth = accountingPeriodMonth;
       this.sourceSystem = sourceSystem;
       this.sourceCompany = sourceCompany;

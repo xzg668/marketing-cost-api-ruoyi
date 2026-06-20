@@ -9,6 +9,7 @@ import com.sanhua.marketingcost.dto.ProductPropertyAnnualSyncRow;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
@@ -124,7 +125,13 @@ public class ProductPropertyAnnualUsageServiceImpl implements ProductPropertyAnn
             form == null ? null : form.getBusinessUnitType()));
     row.setPropertyYear(quoteYear == null ? resolveQuoteYear(form, item) : quoteYear);
     String productCode = item == null ? null : item.getMaterialNo();
-    MaterialMasterRaw material = lookupLatestMaterial(productCode);
+    MaterialMasterRaw material =
+        lookupLatestMaterial(
+            productCode,
+            MaterialOrganization.forQuoteProcess(
+                form == null ? null : form.getProcessCode(),
+                form == null ? null : form.getOaNo(),
+                item == null ? null : item.getProductName()));
     String division = resolveBusinessDivision(form);
     row.setBusinessDivision(division);
     row.setLevel1Name(division);
@@ -145,7 +152,10 @@ public class ProductPropertyAnnualUsageServiceImpl implements ProductPropertyAnn
     row.setBusinessUnitType(source == null ? null : source.getBusinessUnitType());
     row.setPropertyYear(source == null ? null : source.getQuoteYear());
     String productCode = item == null ? null : item.getProductCode();
-    MaterialMasterRaw material = lookupLatestMaterial(productCode);
+    MaterialMasterRaw material =
+        lookupLatestMaterial(
+            productCode,
+            MaterialOrganization.forQuoteProcess(null, source == null ? null : source.getOaNo()));
     row.setProductCode(productCode);
     row.setProductName(resolveProductName(null, material));
     row.setAnnualUsage(toActualAnnualUsage(item == null ? null : item.getAnnualUsage()));
@@ -202,12 +212,16 @@ public class ProductPropertyAnnualUsageServiceImpl implements ProductPropertyAnn
     return result;
   }
 
-  private MaterialMasterRaw lookupLatestMaterial(String productCode) {
+  private MaterialMasterRaw lookupLatestMaterial(String productCode, String organizationCode) {
     if (!StringUtils.hasText(productCode)) {
       return null;
     }
+    String organization = MaterialOrganization.normalize(organizationCode);
     List<MaterialMasterRaw> rows =
-        materialMasterRawMapper.selectByLatestBatchAndCodes(List.of(productCode.trim()), null);
+        MaterialOrganization.COMMERCIAL.getCode().equals(organization)
+            ? materialMasterRawMapper.selectByLatestBatchAndCodes(List.of(productCode.trim()), null)
+            : materialMasterRawMapper.selectByLatestBatchAndCodes(
+                List.of(productCode.trim()), null, organization);
     return first(rows);
   }
 

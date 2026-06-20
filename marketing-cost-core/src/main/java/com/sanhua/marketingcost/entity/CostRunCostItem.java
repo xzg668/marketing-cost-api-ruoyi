@@ -13,6 +13,9 @@ public class CostRunCostItem {
   @TableId(type = IdType.AUTO)
   private Long id;
   private String oaNo;
+  private Long oaFormItemId;
+  private Long costRunVersionId;
+  private String costRunNo;
   private String productCode;
   private Integer lineNo;
   private String costCode;
@@ -67,6 +70,30 @@ public class CostRunCostItem {
 
   public void setOaNo(String oaNo) {
     this.oaNo = oaNo;
+  }
+
+  public Long getOaFormItemId() {
+    return oaFormItemId;
+  }
+
+  public void setOaFormItemId(Long oaFormItemId) {
+    this.oaFormItemId = oaFormItemId;
+  }
+
+  public Long getCostRunVersionId() {
+    return costRunVersionId;
+  }
+
+  public void setCostRunVersionId(Long costRunVersionId) {
+    this.costRunVersionId = costRunVersionId;
+  }
+
+  public String getCostRunNo() {
+    return costRunNo;
+  }
+
+  public void setCostRunNo(String costRunNo) {
+    this.costRunNo = costRunNo;
   }
 
   public String getProductCode() {

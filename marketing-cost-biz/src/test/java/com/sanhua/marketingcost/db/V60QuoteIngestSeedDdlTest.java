@@ -78,7 +78,7 @@ class V60QuoteIngestSeedDdlTest {
             + "'quote_source_type','quote_scenario','quote_ingest_status',"
             + "'quote_classification_status','quote_bom_status','quote_fee_category',"
             + "'quote_writeback_status')"))
-        .isEqualTo(42);
+        .isEqualTo(44);
     assertThat(count("SELECT COUNT(*) FROM lp_quote_ingest_type_rule"))
         .isEqualTo(7);
 
@@ -181,7 +181,7 @@ class V60QuoteIngestSeedDdlTest {
     stmt.execute(
         "INSERT INTO sys_menu (menu_id, menu_name, parent_id, order_num, path, component, "
             + "menu_type, visible, status, perms, icon) VALUES "
-            + "(200, '数据接入', 0, 1, 'ingest', NULL, 'M', '0', '0', NULL, 'upload'),"
+            + "(200, '报价需求', 0, 1, 'ingest', NULL, 'M', '0', '0', NULL, 'upload'),"
             + "(201, 'OA报价单', 200, 1, 'oa-form', 'ingest/oa-form/index', 'C', '0', '0', "
             + "'ingest:oa-form:list', 'form'),"
             + "(202, 'U9 BOM明细', 200, 2, 'u9Bom', 'ingest/u9Bom/index', 'C', '0', '0', "

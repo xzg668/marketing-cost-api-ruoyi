@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -11,6 +12,7 @@ import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
+import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
 import java.math.BigDecimal;
 import java.util.List;
@@ -25,6 +27,7 @@ class PricePrepareBomItemLoaderImplTest {
 
   private BomCostingRowMapper costingRowMapper;
   private BomRawHierarchyMapper rawHierarchyMapper;
+  private OaFormItemMapper oaFormItemMapper;
   private PackageComponentIdentifyService packageComponentIdentifyService;
   private PricePrepareBomItemLoaderImpl loader;
 
@@ -40,10 +43,14 @@ class PricePrepareBomItemLoaderImplTest {
   void setUp() {
     costingRowMapper = mock(BomCostingRowMapper.class);
     rawHierarchyMapper = mock(BomRawHierarchyMapper.class);
+    oaFormItemMapper = mock(OaFormItemMapper.class);
     packageComponentIdentifyService = mock(PackageComponentIdentifyService.class);
     loader =
         new PricePrepareBomItemLoaderImpl(
-            costingRowMapper, rawHierarchyMapper, packageComponentIdentifyService);
+            costingRowMapper,
+            rawHierarchyMapper,
+            oaFormItemMapper,
+            packageComponentIdentifyService);
   }
 
   @Test
@@ -52,7 +59,7 @@ class PricePrepareBomItemLoaderImplTest {
     BomCostingRow childA = costingRow("OA-GOLDEN-001", "1079900000536", "9830000026238", "250011491", "1");
     BomCostingRow childB = costingRow("OA-GOLDEN-001", "1079900000536", "9830000026238", "250020958", "6");
     when(costingRowMapper.selectList(any())).thenReturn(List.of(childA, childB));
-    when(packageComponentIdentifyService.batchIdentify(any()))
+    when(packageComponentIdentifyService.batchIdentify(any(), anyString()))
         .thenReturn(Map.of("9830000026238", true));
     when(rawHierarchyMapper.selectList(any()))
         .thenReturn(List.of(rawPackageParent("1079900000536", "9830000026238")));
@@ -77,7 +84,7 @@ class PricePrepareBomItemLoaderImplTest {
     BomCostingRow child =
         costingRow("OA-GOLDEN-001", "1079900000536", "9830000026238", "250011491", "1");
     when(costingRowMapper.selectList(any())).thenReturn(List.of(packageParent, child));
-    when(packageComponentIdentifyService.batchIdentify(any()))
+    when(packageComponentIdentifyService.batchIdentify(any(), anyString()))
         .thenReturn(Map.of("1079900000536", false, "9830000026238", true));
     when(rawHierarchyMapper.selectList(any()))
         .thenReturn(List.of(rawPackageParent("1079900000536", "9830000026238")));

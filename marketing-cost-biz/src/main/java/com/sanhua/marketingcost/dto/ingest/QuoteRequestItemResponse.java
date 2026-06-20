@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.dto.ingest;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import lombok.Data;
 
 @Data
@@ -45,5 +46,8 @@ public class QuoteRequestItemResponse {
   private BigDecimal copperWeightG;
   private String businessUnitType;
   private LocalDate validDate;
+  private String calcStatus;
+  private LocalDateTime calcAt;
+  private Long confirmedCostVersionId;
   private QuoteBomStatusItemResponse bomStatus;
 }

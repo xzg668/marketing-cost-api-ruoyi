@@ -9,9 +9,11 @@ import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
+import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
 import com.sanhua.marketingcost.service.CostRunPartItemService;
 import com.sanhua.marketingcost.service.CostRunResultService;
@@ -41,6 +43,7 @@ public class CostRunDetailController {
   private final MaterialMasterMapper materialMasterMapper;
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
+  private final QuoteCostRunVersionMapper quoteCostRunVersionMapper;
 
   public CostRunDetailController(
       CostRunPartItemService costRunPartItemService,
@@ -48,20 +51,24 @@ public class CostRunDetailController {
       CostRunResultService costRunResultService,
       MaterialMasterMapper materialMasterMapper,
       OaFormMapper oaFormMapper,
-      OaFormItemMapper oaFormItemMapper) {
+      OaFormItemMapper oaFormItemMapper,
+      QuoteCostRunVersionMapper quoteCostRunVersionMapper) {
     this.costRunPartItemService = costRunPartItemService;
     this.costRunCostItemService = costRunCostItemService;
     this.costRunResultService = costRunResultService;
     this.materialMasterMapper = materialMasterMapper;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
+    this.quoteCostRunVersionMapper = quoteCostRunVersionMapper;
   }
 
   /** 查询试算明细列表 */
   @PreAuthorize("@ss.hasPermi('cost:run:list')")
   @GetMapping("/detail")
   public CommonResult<CostRunDetailDto> getDetail(
-      @RequestParam String oaNo, @RequestParam String productCode) {
+      @RequestParam String oaNo,
+      @RequestParam String productCode,
+      @RequestParam(required = false) String costRunNo) {
     if (!StringUtils.hasText(oaNo)) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(),"oaNo is required");
     }
@@ -69,14 +76,22 @@ public class CostRunDetailController {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(),"productCode is required");
     }
     String productCodeValue = productCode.trim();
+    QuoteCostRunVersion version = resolveVersion(oaNo.trim(), productCodeValue, costRunNo);
+    String effectiveCostRunNo = version == null ? trimToNull(costRunNo) : trimToNull(version.getCostRunNo());
     // T26：见机表展示用聚合视图（焊料/包装各合 1 行），DB 明细 listStoredByOaNo 仍可拉
     List<CostRunPartItemDto> filteredParts =
-        costRunPartItemService.listAggregatedByOaNo(oaNo, productCodeValue);
+        StringUtils.hasText(effectiveCostRunNo)
+            ? costRunPartItemService.listAggregatedByCostRunNo(effectiveCostRunNo, productCodeValue)
+            : costRunPartItemService.listAggregatedByOaNo(oaNo, productCodeValue);
     // T12：批量查主档把 cost_element 灌进 partItems（前端 T13 用来分组/染色）
     enrichPartsWithCostElement(filteredParts);
     List<CostRunCostItemDto> costItems =
-        costRunCostItemService.listStoredByOaNo(oaNo, productCodeValue);
+        StringUtils.hasText(effectiveCostRunNo)
+            ? costRunCostItemService.listStoredByCostRunNo(effectiveCostRunNo)
+            : costRunCostItemService.listStoredByOaNo(oaNo, productCodeValue);
     CostRunDetailDto dto = new CostRunDetailDto();
+    dto.setCostRunNo(effectiveCostRunNo);
+    dto.setVersionNo(version == null ? null : trimToNull(version.getVersionNo()));
     dto.setPartItems(filteredParts);
     dto.setCostItems(costItems);
     // T12：从 costItems 抽 TOTAL 给顶层 total，省得前端扫数组
@@ -118,6 +133,23 @@ public class CostRunDetailController {
     dto.setProductName(productName);
     dto.setProductModel(productModel);
     return CommonResult.success(dto);
+  }
+
+  private QuoteCostRunVersion resolveVersion(String oaNo, String productCode, String costRunNo) {
+    if (StringUtils.hasText(costRunNo)) {
+      return quoteCostRunVersionMapper.selectOne(
+          Wrappers.lambdaQuery(QuoteCostRunVersion.class)
+              .eq(QuoteCostRunVersion::getCostRunNo, costRunNo.trim())
+              .eq(QuoteCostRunVersion::getOaNo, oaNo)
+              .eq(QuoteCostRunVersion::getProductCode, productCode)
+              .last("LIMIT 1"));
+    }
+    return quoteCostRunVersionMapper.selectOne(
+        Wrappers.lambdaQuery(QuoteCostRunVersion.class)
+            .eq(QuoteCostRunVersion::getOaNo, oaNo)
+            .eq(QuoteCostRunVersion::getProductCode, productCode)
+            .orderByDesc(QuoteCostRunVersion::getId)
+            .last("LIMIT 1"));
   }
 
   private String trimToNull(String value) {

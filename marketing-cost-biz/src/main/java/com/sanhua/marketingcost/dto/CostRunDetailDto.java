@@ -8,6 +8,8 @@ public class CostRunDetailDto {
   private String productAttr;
   private String productName;
   private String productModel;
+  private String costRunNo;
+  private String versionNo;
   private java.math.BigDecimal copperPrice;
   private java.math.BigDecimal zincPrice;
   /**
@@ -54,6 +56,22 @@ public class CostRunDetailDto {
 
   public void setProductModel(String productModel) {
     this.productModel = productModel;
+  }
+
+  public String getCostRunNo() {
+    return costRunNo;
+  }
+
+  public void setCostRunNo(String costRunNo) {
+    this.costRunNo = costRunNo;
+  }
+
+  public String getVersionNo() {
+    return versionNo;
+  }
+
+  public void setVersionNo(String versionNo) {
+    this.versionNo = versionNo;
   }
 
   public java.math.BigDecimal getCopperPrice() {

@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -114,6 +115,21 @@ class QuoteProductTypeResolveServiceImplTest {
     ArgumentCaptor<Collection<String>> captor = ArgumentCaptor.forClass(Collection.class);
     verify(mapper).selectByLatestBatchAndCodes(captor.capture(), isNull());
     assertThat(captor.getValue()).containsExactly("MAT-BARE", "MAT-FINISHED", "MAT-MISS");
+  }
+
+  @Test
+  @DisplayName("指定板换组织时按 PLATE 读取料品主档")
+  void resolvesWithPlateOrganization() {
+    MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
+    when(mapper.selectByLatestBatchAndCodes(any(), isNull(), eq("PLATE")))
+        .thenReturn(List.of(raw("PLATE-FINISHED", "120101", "成品", "板换成品", "规格P")));
+
+    QuoteProductTypeResolveServiceImpl service = new QuoteProductTypeResolveServiceImpl(mapper);
+    QuoteProductTypeResolveResult result = service.resolve("PLATE-FINISHED", "PLATE");
+
+    assertThat(result.productType()).isEqualTo(QuoteProductType.NON_BARE);
+    assertThat(result.materialName()).isEqualTo("板换成品");
+    verify(mapper).selectByLatestBatchAndCodes(any(), isNull(), eq("PLATE"));
   }
 
   private static MaterialMasterRaw raw(

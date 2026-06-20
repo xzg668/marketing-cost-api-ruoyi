@@ -215,7 +215,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     row.setIngestStatus(log == null ? null : log.getIngestStatus());
     row.setClassificationStatus(form.getClassificationStatus());
     row.setBomAggregateStatus(bomAggregateStatus);
-    row.setCalcStatus(form.getCalcStatus());
+    row.setCalcStatus(aggregateCalcStatus(items));
     row.setCalculable(isCalculable(form, items.size(), bomAggregateStatus));
     row.setIngestAt(log == null ? form.getCreatedAt() : log.getReceivedAt());
     return row;
@@ -228,6 +228,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     String bomAggregateStatus = aggregateBomStatus(items.size(), statuses);
 
     QuoteRequestDetailResponse response = toDetailHeader(form);
+    response.setCalcStatus(aggregateCalcStatus(items));
     response.setBomAggregateStatus(bomAggregateStatus);
     response.setCalculable(isCalculable(form, items.size(), bomAggregateStatus));
     for (OaFormItem item : items) {
@@ -335,6 +336,9 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setCopperWeightG(item.getCopperWeightG());
     response.setBusinessUnitType(item.getBusinessUnitType());
     response.setValidDate(item.getValidDate());
+    response.setCalcStatus(normalizeCalcStatus(item.getCalcStatus(), item.getCalcAt() != null || item.getConfirmedCostVersionId() != null));
+    response.setCalcAt(item.getCalcAt());
+    response.setConfirmedCostVersionId(item.getConfirmedCostVersionId());
     response.setBomStatus(toBomStatusResponse(item, status));
     return response;
   }
@@ -606,6 +610,12 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     if (allStatus(statuses, QuoteBomStatusCode.REUSED_CURRENT_MONTH.getCode())) {
       return QuoteBomStatusCode.REUSED_CURRENT_MONTH.getCode();
     }
+    if (allStatus(statuses, QuoteBomStatusCode.CURRENT_MONTH_QUOTED.getCode())) {
+      return QuoteBomStatusCode.CURRENT_MONTH_QUOTED.getCode();
+    }
+    if (allStatus(statuses, QuoteBomStatusCode.U9_BOM_EXISTS.getCode())) {
+      return QuoteBomStatusCode.U9_BOM_EXISTS.getCode();
+    }
     if (allStatus(statuses, QuoteBomStatusCode.MANUAL_ENTERED.getCode())) {
       return QuoteBomStatusCode.MANUAL_ENTERED.getCode();
     }
@@ -619,6 +629,33 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     return itemCount > 0
         && QuoteClassificationStatus.CONFIRMED.getCode().equals(form.getClassificationStatus())
         && isCostReadyBomStatus(bomAggregateStatus);
+  }
+
+  private String aggregateCalcStatus(List<OaFormItem> items) {
+    if (items == null || items.isEmpty()) {
+      return "未核算";
+    }
+    for (OaFormItem item : items) {
+      if (item == null || !"已核算".equals(normalizeCalcStatus(item.getCalcStatus(), item.getCalcAt() != null || item.getConfirmedCostVersionId() != null))) {
+        return "未核算";
+      }
+    }
+    return "已核算";
+  }
+
+  private String normalizeCalcStatus(String calcStatus, boolean hasConfirmedCost) {
+    String text = calcStatus == null ? "" : calcStatus.trim();
+    if ("CALCULATING".equals(text) || "RUNNING".equals(text) || "试算中".equals(text)) {
+      return "试算中";
+    }
+    if (hasConfirmedCost
+        || "CALCULATED".equals(text)
+        || "DONE".equals(text)
+        || "SUCCESS".equals(text)
+        || "已核算".equals(text)) {
+      return "已核算";
+    }
+    return "未核算";
   }
 
   private boolean hasStatus(List<QuoteBomStatus> statuses, String code) {
@@ -649,9 +686,11 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   }
 
   private boolean isCostReadyBomStatus(String bomStatus) {
-    // 成本试算只认这三个状态；历史补录中、过期、无 BOM 等状态必须继续阻断。
+    // 成本试算只认已经确认有可用 BOM 的状态；历史补录中、过期、无 BOM 等状态必须继续阻断。
     return QuoteBomStatusCode.SYNCED.getCode().equals(bomStatus)
         || QuoteBomStatusCode.REUSED_CURRENT_MONTH.getCode().equals(bomStatus)
+        || QuoteBomStatusCode.CURRENT_MONTH_QUOTED.getCode().equals(bomStatus)
+        || QuoteBomStatusCode.U9_BOM_EXISTS.getCode().equals(bomStatus)
         || QuoteBomStatusCode.MANUAL_ENTERED.getCode().equals(bomStatus);
   }
 

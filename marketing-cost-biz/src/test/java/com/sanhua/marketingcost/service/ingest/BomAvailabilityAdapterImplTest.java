@@ -34,9 +34,9 @@ class BomAvailabilityAdapterImplTest {
     row.setBomVersion("V1");
     row.setEffectiveFrom(LocalDate.of(2026, 5, 1));
     row.setBuildBatchId("costing-batch");
-    when(bomCostingRowMapper.selectAvailabilitySnapshot("OA-T7-001", "MAT-1001")).thenReturn(row);
+    when(bomCostingRowMapper.selectAvailabilitySnapshot("MAT-1001", "2026-06")).thenReturn(row);
 
-    BomAvailability availability = adapter.findAvailableBom("OA-T7-001", "MAT-1001");
+    BomAvailability availability = adapter.findAvailableBom("OA-T7-001", "MAT-1001", "2026-06");
 
     assertThat(availability.isAvailable()).isTrue();
     assertThat(availability.getSource()).isEqualTo("COSTING_SNAPSHOT");
@@ -52,10 +52,10 @@ class BomAvailabilityAdapterImplTest {
     row.setBomVersion("V2");
     row.setEffectiveFrom(LocalDate.of(2026, 5, 1));
     row.setBuildBatchId("raw-batch");
-    when(bomCostingRowMapper.selectAvailabilitySnapshot("OA-T7-001", "MAT-1001")).thenReturn(null);
+    when(bomCostingRowMapper.selectAvailabilitySnapshot("MAT-1001", "2026-06")).thenReturn(null);
     when(bomRawHierarchyMapper.selectOne(any())).thenReturn(row);
 
-    BomAvailability availability = adapter.findAvailableBom("OA-T7-001", "MAT-1001");
+    BomAvailability availability = adapter.findAvailableBom("OA-T7-001", "MAT-1001", "2026-06");
 
     assertThat(availability.isAvailable()).isTrue();
     assertThat(availability.getSource()).isEqualTo("U9");

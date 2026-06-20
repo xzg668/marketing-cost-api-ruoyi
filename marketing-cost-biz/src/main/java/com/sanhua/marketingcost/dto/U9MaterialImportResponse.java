@@ -8,7 +8,6 @@ import lombok.Setter;
 @Getter
 @Setter
 public class U9MaterialImportResponse {
-  private String batchNo;
   private String datasetCode;
   private String sourceType;
   private String mappingVersion;

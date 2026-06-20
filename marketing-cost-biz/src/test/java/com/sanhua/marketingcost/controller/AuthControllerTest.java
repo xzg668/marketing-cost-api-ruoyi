@@ -437,11 +437,11 @@ class AuthControllerTest {
         user.setUserId(1L);
         when(sysUserService.findByUsername("admin")).thenReturn(user);
 
-        // 构造菜单：100=系统管理(目录) / 101=用户管理(菜单,父100) / 200=数据接入(目录)
+        // 构造菜单：100=系统管理(目录) / 101=用户管理(菜单,父100) / 200=报价需求(目录)
         SysMenu dir1 = buildMenu(100L, "系统管理", 0L, "system", "M");
         SysMenu sub1 = buildMenu(101L, "用户管理", 100L, "user", "C");
         sub1.setComponent("system/user/index");
-        SysMenu dir2 = buildMenu(200L, "数据接入", 0L, "data-import", "M");
+        SysMenu dir2 = buildMenu(200L, "报价需求", 0L, "data-import", "M");
         when(sysUserService.findVisibleMenus(1L, "COMMERCIAL"))
                 .thenReturn(List.of(dir1, sub1, dir2));
 

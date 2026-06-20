@@ -128,6 +128,44 @@ class CostRunPartItemServiceImplTest {
   }
 
   @Test
+  @DisplayName("报价核算按产品行和核算月份读取 BOM 结算行，避免同 OA 历史批次重复累计")
+  void quoteContextLoadsScopedBomRowsOnly() {
+    CostRunPartItemDto current = part("MAT-CURRENT");
+    current.setProductCode("TOP-001");
+    when(costRunPartItemMapper.selectBaseByQuoteScope("OA-QUOTE", 180L, "TOP-001", "2026-06"))
+        .thenReturn(new ArrayList<>(List.of(current)));
+    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-CURRENT"), anyString(), any()))
+        .thenReturn(List.of(route(PriceTypeEnum.FIXED)));
+    PriceResolver fixedResolver =
+        stubResolver(PriceTypeEnum.FIXED, PriceResolveResult.hit(new BigDecimal("5.00"), "固定采购价"));
+    CostRunPartItemServiceImpl service = build(List.of(fixedResolver));
+
+    List<CostRunPartItemDto> items =
+        service.listByOaNo(
+            "OA-QUOTE",
+            LocalDate.of(2026, 6, 15),
+            CostRunContext.quote(
+                "OA-QUOTE",
+                180L,
+                "TOP-001",
+                null,
+                null,
+                "COMMERCIAL",
+                "2026-06",
+                "QUOTE:180"),
+            false,
+            ignored -> {});
+
+    assertThat(items).hasSize(1);
+    assertThat(items.get(0).getPartCode()).isEqualTo("MAT-CURRENT");
+    assertThat(items.get(0).getUnitPrice()).isEqualByComparingTo("5.00");
+    verify(costRunPartItemMapper)
+        .selectBaseByQuoteScope("OA-QUOTE", 180L, "TOP-001", "2026-06");
+    verify(costRunPartItemMapper, never()).selectBaseByOaNo("OA-QUOTE");
+    verify(costRunPartItemMapper, never()).insert(any(CostRunPartItem.class));
+  }
+
+  @Test
   @DisplayName("所有 Resolver 都 miss → priceSource=ERROR + remark 含桶名 + 子 miss 原因")
   void allResolversMissMarksRed() {
     when(costRunPartItemMapper.selectBaseByOaNo("OA-002"))

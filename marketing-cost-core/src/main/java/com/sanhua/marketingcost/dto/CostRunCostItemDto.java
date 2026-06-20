@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.dto;
 import java.math.BigDecimal;
 
 public class CostRunCostItemDto {
+  private Long id;
   private String costCode;
   private String costName;
   private BigDecimal baseAmount;
@@ -17,6 +18,14 @@ public class CostRunCostItemDto {
    * 默认 EXPENSE，新增见机表汇总行时显式设 BOM_BUCKET。
    */
   private String category;
+
+  public Long getId() {
+    return id;
+  }
+
+  public void setId(Long id) {
+    this.id = id;
+  }
 
   public String getCostCode() {
     return costCode;

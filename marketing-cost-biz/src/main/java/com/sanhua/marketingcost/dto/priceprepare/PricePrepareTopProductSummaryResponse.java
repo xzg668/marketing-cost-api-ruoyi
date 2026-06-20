@@ -8,6 +8,7 @@ import lombok.Setter;
 @Setter
 public class PricePrepareTopProductSummaryResponse {
   private String oaNo;
+  private Long oaFormItemId;
   private String periodMonth;
   private String topProductCode;
   private int totalCount;

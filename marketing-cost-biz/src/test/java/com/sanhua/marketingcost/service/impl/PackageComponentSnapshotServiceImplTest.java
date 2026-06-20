@@ -114,6 +114,36 @@ class PackageComponentSnapshotServiceImplTest {
   }
 
   @Test
+  @DisplayName("旧缺结构快照：BOM 已有子件时恢复为正常快照")
+  void rebuildsStaleMissingStructureSnapshotWhenChildrenExist() {
+    PackageComponentSnapshot existing = snapshot(23L, "MISSING_STRUCTURE");
+    when(snapshotMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    when(snapshotDetailMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(bomRawHierarchyMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(parent()), List.of(child(201L, "A", 1, "1.000000", "/107/pkg/A/")));
+
+    PackageSnapshotResult result = service.ensureSnapshot(request());
+
+    assertThat(result.isCreated()).isTrue();
+    assertThat(result.getStatus()).isEqualTo("NORMAL");
+    assertThat(result.getSnapshot().getId()).isEqualTo(23L);
+    assertThat(result.getDetails()).singleElement()
+        .extracting(PackageComponentSnapshotDetail::getChildMaterialCode)
+        .isEqualTo("A");
+
+    ArgumentCaptor<PackageComponentSnapshot> snapshotCaptor =
+        ArgumentCaptor.forClass(PackageComponentSnapshot.class);
+    verify(snapshotMapper).updateById(snapshotCaptor.capture());
+    assertThat(snapshotCaptor.getValue().getId()).isEqualTo(23L);
+    assertThat(snapshotCaptor.getValue().getStatus()).isEqualTo("NORMAL");
+    assertThat(snapshotCaptor.getValue().getSourceBomSourceType()).isEqualTo("U9");
+    verify(snapshotDetailMapper).delete(any(Wrapper.class));
+    verify(snapshotMapper, never()).insert(any(PackageComponentSnapshot.class));
+    verify(snapshotDetailMapper).insert(any(PackageComponentSnapshotDetail.class));
+    verifyNoInteractions(gapItemMapper);
+  }
+
+  @Test
   @DisplayName("BOM 目的为空：默认按主制造取结构")
   void blankBomPurposeDefaultsToMainManufacturing() {
     when(snapshotMapper.selectOne(any(Wrapper.class))).thenReturn(null);

@@ -6,8 +6,10 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 /**
  * BOM 三层架构 · 第 2 层 DWD 事实层：lp_bom_raw_hierarchy。
@@ -43,6 +45,15 @@ public class BomRawHierarchy {
 
   /** U9 子件项次 */
   private Integer sortSeq;
+
+  /** 来源 U9/Excel 原始行 ID（lp_bom_u9_source.id），用于追溯同父同子多行 BOM。 */
+  private Long sourceU9RowId;
+
+  /** 来源 BOM 行业务实例 key，按源表业务唯一字段生成，保证重导入后仍稳定。 */
+  private String sourceLineKey;
+
+  /** U9 工序号（如 030/040），用于区分和追溯同父同子多行 BOM。 */
+  private String processSeq;
 
   // ============================ 用量双口径 ============================
 
@@ -181,6 +192,49 @@ public class BomRawHierarchy {
 
   public void setSortSeq(Integer sortSeq) {
     this.sortSeq = sortSeq;
+  }
+
+  public Long getSourceU9RowId() {
+    return sourceU9RowId;
+  }
+
+  public void setSourceU9RowId(Long sourceU9RowId) {
+    this.sourceU9RowId = sourceU9RowId;
+  }
+
+  public String getSourceLineKey() {
+    if (hasText(sourceLineKey)) {
+      return sourceLineKey;
+    }
+    String identity = String.join("|",
+        blankToEmpty(sourceType),
+        blankToEmpty(topProductCode),
+        blankToEmpty(bomPurpose),
+        effectiveFrom == null ? "" : effectiveFrom.toString(),
+        blankToEmpty(path),
+        blankToEmpty(materialCode),
+        sortSeq == null ? "" : String.valueOf(sortSeq));
+    return "__RAW__|" + UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8));
+  }
+
+  public void setSourceLineKey(String sourceLineKey) {
+    this.sourceLineKey = sourceLineKey;
+  }
+
+  private static boolean hasText(String value) {
+    return value != null && !value.trim().isEmpty();
+  }
+
+  private static String blankToEmpty(String value) {
+    return hasText(value) ? value.trim() : "";
+  }
+
+  public String getProcessSeq() {
+    return processSeq;
+  }
+
+  public void setProcessSeq(String processSeq) {
+    this.processSeq = processSeq;
   }
 
   public BigDecimal getQtyPerParent() {

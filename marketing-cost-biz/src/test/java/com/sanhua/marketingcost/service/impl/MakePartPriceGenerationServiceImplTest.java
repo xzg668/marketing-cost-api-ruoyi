@@ -144,6 +144,41 @@ class MakePartPriceGenerationServiceImplTest {
   }
 
   @Test
+  @DisplayName("按 OA 生成时只取当前月份父项且同父项去重，避免历史 BOM 批次重复累计")
+  void generateByOaScopesAndDeduplicatesManufacturedParents() {
+    BomCostingRow oldParent = parent("MAKE-001");
+    oldParent.setPeriodMonth("2026-04");
+    BomCostingRow currentParent = parent("MAKE-001");
+    currentParent.setPeriodMonth("2026-05");
+    BomCostingRow duplicateCurrentParent = parent("MAKE-001");
+    duplicateCurrentParent.setPeriodMonth("2026-05");
+    when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
+        .thenReturn(List.of(oldParent, currentParent, duplicateCurrentParent));
+    BomU9Source child = child("RAW-001", "kg");
+    when(sourceDataService.listDedupedChildren(eq("MAKE-001"), any())).thenReturn(List.of(child));
+    when(weightService.resolveWeights("MAKE-001", child, "原材料加工"))
+        .thenReturn(weight("RAW-001"));
+    when(scrapMappingService.listMappings("RAW-001", "COMMERCIAL"))
+        .thenReturn(List.of(scrap("SCRAP-001")));
+    when(priceResolveService.resolveMaterialUnitPrice(any(), any(), any(), any(), any(), any()))
+        .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
+
+    MakePartPriceGenerateResponse response =
+        service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
+
+    assertThat(response.getParentCount()).isEqualTo(1);
+    assertThat(response.getRowCount()).isEqualTo(1);
+    ArgumentCaptor<MakePartPriceCalcRow> captor = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    verify(calcRowMapper).insert(captor.capture());
+    MakePartPriceCalcRow row = captor.getValue();
+    assertThat(row.getPricingMonth()).isEqualTo("2026-05");
+    assertThat(row.getParentMaterialNo()).isEqualTo("MAKE-001");
+    assertThat(row.getCostPrice()).isEqualByComparingTo("4.74450000");
+    assertThat(row.getParentTotalCostPrice()).isEqualByComparingTo("4.74450000");
+    verify(sourceDataService, times(1)).listDedupedChildren(eq("MAKE-001"), any());
+  }
+
+  @Test
   @DisplayName("期间为空时按当前 yyyy-MM 写入价格月份")
   void blankPeriodUsesCurrentMonth() {
     stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-001")));
@@ -202,6 +237,7 @@ class MakePartPriceGenerationServiceImplTest {
     ArgumentCaptor<MakePartPriceCalcRow> captor = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
     verify(calcRowMapper).insert(captor.capture());
     assertThat(captor.getValue().getStatus()).isEqualTo("MISSING_BOM");
+    assertThat(captor.getValue().getItemProcessType()).isEqualTo("UNKNOWN");
     assertThat(captor.getValue().getPriceComplete()).isFalse();
     assertThat(captor.getValue().getRemark()).contains("缺 U9 直接子项", "上游异常");
     verify(gapItemMapper, never()).insert(any(MakePartPriceGapItem.class));
@@ -484,6 +520,7 @@ class MakePartPriceGenerationServiceImplTest {
     BomCostingRow row = new BomCostingRow();
     row.setOaNo("OA-001");
     row.setBusinessUnitType("COMMERCIAL");
+    row.setPeriodMonth("2026-05");
     row.setMaterialCode(code);
     row.setMaterialName("制造件");
     row.setMaterialSpec("DRW-001");

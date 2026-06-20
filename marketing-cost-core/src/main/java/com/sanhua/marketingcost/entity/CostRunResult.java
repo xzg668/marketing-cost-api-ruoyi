@@ -13,6 +13,9 @@ public class CostRunResult {
   @TableId(type = IdType.AUTO)
   private Long id;
   private String oaNo;
+  private Long oaFormItemId;
+  private Long costRunVersionId;
+  private String costRunNo;
   private String productCode;
   private String productName;
   private String productModel;
@@ -20,6 +23,10 @@ public class CostRunResult {
   private String businessUnit;
   private String department;
   private String period;
+  private String pricingMonth;
+  private String pricePrepareNo;
+  private String priceTypeConfirmNo;
+  private String resultStatus;
   private String currency;
   private String unit;
   private BigDecimal totalCost;
@@ -65,6 +72,30 @@ public class CostRunResult {
 
   public void setOaNo(String oaNo) {
     this.oaNo = oaNo;
+  }
+
+  public Long getOaFormItemId() {
+    return oaFormItemId;
+  }
+
+  public void setOaFormItemId(Long oaFormItemId) {
+    this.oaFormItemId = oaFormItemId;
+  }
+
+  public Long getCostRunVersionId() {
+    return costRunVersionId;
+  }
+
+  public void setCostRunVersionId(Long costRunVersionId) {
+    this.costRunVersionId = costRunVersionId;
+  }
+
+  public String getCostRunNo() {
+    return costRunNo;
+  }
+
+  public void setCostRunNo(String costRunNo) {
+    this.costRunNo = costRunNo;
   }
 
   public String getProductCode() {
@@ -121,6 +152,38 @@ public class CostRunResult {
 
   public void setPeriod(String period) {
     this.period = period;
+  }
+
+  public String getPricingMonth() {
+    return pricingMonth;
+  }
+
+  public void setPricingMonth(String pricingMonth) {
+    this.pricingMonth = pricingMonth;
+  }
+
+  public String getPricePrepareNo() {
+    return pricePrepareNo;
+  }
+
+  public void setPricePrepareNo(String pricePrepareNo) {
+    this.pricePrepareNo = pricePrepareNo;
+  }
+
+  public String getPriceTypeConfirmNo() {
+    return priceTypeConfirmNo;
+  }
+
+  public void setPriceTypeConfirmNo(String priceTypeConfirmNo) {
+    this.priceTypeConfirmNo = priceTypeConfirmNo;
+  }
+
+  public String getResultStatus() {
+    return resultStatus;
+  }
+
+  public void setResultStatus(String resultStatus) {
+    this.resultStatus = resultStatus;
   }
 
   public String getCurrency() {

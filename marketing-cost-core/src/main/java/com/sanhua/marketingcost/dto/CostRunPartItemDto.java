@@ -4,6 +4,9 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 
 public class CostRunPartItemDto {
+  private Long id;
+  private Long bomRowId;
+  private Long pricePrepareItemId;
   private String oaNo;
   private String partName;
   private String partCode;
@@ -39,6 +42,30 @@ public class CostRunPartItemDto {
    * 前端用它做分组 / 染色（如包装件标橙色提示纳入 OTHER_EXP_PACKAGE）。
    */
   private String costElement;
+
+  public Long getId() {
+    return id;
+  }
+
+  public void setId(Long id) {
+    this.id = id;
+  }
+
+  public Long getBomRowId() {
+    return bomRowId;
+  }
+
+  public void setBomRowId(Long bomRowId) {
+    this.bomRowId = bomRowId;
+  }
+
+  public Long getPricePrepareItemId() {
+    return pricePrepareItemId;
+  }
+
+  public void setPricePrepareItemId(Long pricePrepareItemId) {
+    this.pricePrepareItemId = pricePrepareItemId;
+  }
 
   public String getOaNo() {
     return oaNo;

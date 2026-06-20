@@ -6,9 +6,12 @@ import com.sanhua.marketingcost.dto.FlattenResult;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
+import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
+import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.BomByproductCostRuleQueryService;
 import com.sanhua.marketingcost.service.BomFlattenService;
@@ -56,6 +59,7 @@ public class BomFlattenServiceImpl implements BomFlattenService {
   private final BomRawHierarchyMapper rawMapper;
   private final BomCostingRowMapper costingMapper;
   private final BomCostingRowSubRefMapper subRefMapper;
+  private final OaFormItemMapper oaFormItemMapper;
   private final PackageComponentIdentifyService packageComponentIdentifyService;
   private final BomSettlementRuleQueryService settlementRuleQueryService;
   private final BomByproductCostRuleQueryService byproductRuleQueryService;
@@ -66,6 +70,7 @@ public class BomFlattenServiceImpl implements BomFlattenService {
       BomRawHierarchyMapper rawMapper,
       BomCostingRowMapper costingMapper,
       BomCostingRowSubRefMapper subRefMapper,
+      OaFormItemMapper oaFormItemMapper,
       PackageComponentIdentifyService packageComponentIdentifyService,
       BomSettlementRuleQueryService settlementRuleQueryService,
       BomByproductCostRuleQueryService byproductRuleQueryService,
@@ -74,6 +79,7 @@ public class BomFlattenServiceImpl implements BomFlattenService {
     this.rawMapper = rawMapper;
     this.costingMapper = costingMapper;
     this.subRefMapper = subRefMapper;
+    this.oaFormItemMapper = oaFormItemMapper;
     this.packageComponentIdentifyService = packageComponentIdentifyService;
     this.settlementRuleQueryService = settlementRuleQueryService;
     this.byproductRuleQueryService = byproductRuleQueryService;
@@ -93,7 +99,7 @@ public class BomFlattenServiceImpl implements BomFlattenService {
 
     FlattenResult result = new FlattenResult();
     LocalDate asOf = request.getAsOfDate();
-    String periodMonth = YearMonth.from(asOf).toString();
+    String periodMonth = resolvePeriodMonth(request.getPeriodMonth(), asOf);
     String purpose = request.getBomPurpose();
     List<BomRawHierarchy> rawRows = loadRawRows(request, asOf, purpose);
     if (rawRows.isEmpty()) {
@@ -104,7 +110,11 @@ public class BomFlattenServiceImpl implements BomFlattenService {
 
     rawRows.sort(Comparator.comparing(BomRawHierarchy::getPath));
     String buType = BusinessUnitContext.getCurrentBusinessUnitType();
-    Map<String, Boolean> packageFlags = identifyPackageComponents(rawRows);
+    Map<String, Boolean> packageFlags =
+        identifyPackageComponents(
+            rawRows,
+            MaterialOrganization.forQuoteProcess(
+                null, request.getOaNo(), resolveProductName(request.getOaFormItemId())));
     List<BomSettlementNode> nodes = rawRows.stream()
         .map(row -> toSettlementNode(row, buType, packageFlags))
         .toList();
@@ -128,6 +138,9 @@ public class BomFlattenServiceImpl implements BomFlattenService {
             byproductRead.byproducts(),
             byproductRead.scrapRefs(),
             byproductRuleQueryService.listEnabledCandidates()));
+    stampRowsForQuoteItem(request, built.costingRows());
+    BomCostingRowAggregation.Result aggregatedRows =
+        BomCostingRowAggregation.aggregate(built.costingRows());
 
     result.getWarnings().addAll(byproductRead.warnings());
     result.getWarnings().addAll(built.warnings());
@@ -136,13 +149,17 @@ public class BomFlattenServiceImpl implements BomFlattenService {
     costingMapper.delete(
         Wrappers.<BomCostingRow>lambdaQuery()
             .eq(BomCostingRow::getOaNo, request.getOaNo())
+            .eq(
+                request.getOaFormItemId() != null,
+                BomCostingRow::getOaFormItemId,
+                request.getOaFormItemId())
             .eq(BomCostingRow::getTopProductCode, request.getTopProductCode())
             .eq(BomCostingRow::getPeriodMonth, periodMonth));
-    int written = writeInBatches(built.costingRows());
-    int subRefCount = writeSubRefs(request, built.subRefs());
+    int written = writeInBatches(aggregatedRows.rows());
+    int subRefCount = writeSubRefs(request, built.subRefs(), aggregatedRows.pathAliases());
 
     result.setCostingRowsWritten(written);
-    result.setSubtreeRequiredCount(countSubtreeRequired(built.costingRows()));
+    result.setSubtreeRequiredCount(countSubtreeRequired(aggregatedRows.rows()));
     log.info(
         "flatten 完成: oa={} top={} asOf={} written={} subRefs={} warnings={} stats={}",
         request.getOaNo(), request.getTopProductCode(), asOf,
@@ -152,7 +169,7 @@ public class BomFlattenServiceImpl implements BomFlattenService {
 
   private List<BomRawHierarchy> loadRawRows(
       FlattenRequest request, LocalDate asOf, String purpose) {
-    return rawMapper.selectList(
+    List<BomRawHierarchy> rows = rawMapper.selectList(
         Wrappers.<BomRawHierarchy>lambdaQuery()
             .eq(BomRawHierarchy::getTopProductCode, request.getTopProductCode())
             .eq(BomRawHierarchy::getSourceType, "U9")
@@ -161,9 +178,11 @@ public class BomFlattenServiceImpl implements BomFlattenService {
             .and(w -> w.ge(BomRawHierarchy::getEffectiveTo, asOf)
                 .or()
                 .isNull(BomRawHierarchy::getEffectiveTo)));
+    return BomEffectiveTreePruner.prune(rows, request.getTopProductCode());
   }
 
-  private Map<String, Boolean> identifyPackageComponents(List<BomRawHierarchy> rows) {
+  private Map<String, Boolean> identifyPackageComponents(
+      List<BomRawHierarchy> rows, String organizationCode) {
     Set<String> materialCodes = new LinkedHashSet<>();
     for (BomRawHierarchy row : rows) {
       if (StringUtils.hasText(row.getMaterialCode())) {
@@ -172,7 +191,7 @@ public class BomFlattenServiceImpl implements BomFlattenService {
     }
     return materialCodes.isEmpty()
         ? Map.of()
-        : packageComponentIdentifyService.batchIdentify(materialCodes);
+        : packageComponentIdentifyService.batchIdentify(materialCodes, organizationCode);
   }
 
   private static BomSettlementNode toSettlementNode(
@@ -223,14 +242,31 @@ public class BomFlattenServiceImpl implements BomFlattenService {
     return total;
   }
 
-  private int writeSubRefs(FlattenRequest request, List<BomSettlementSubRefCandidate> candidates) {
+  private void stampRowsForQuoteItem(FlattenRequest request, List<BomCostingRow> rows) {
+    if (request.getOaFormItemId() == null || rows == null || rows.isEmpty()) {
+      return;
+    }
+    for (BomCostingRow row : rows) {
+      row.setOaFormItemId(request.getOaFormItemId());
+      if (row.getManualModified() == null) {
+        row.setManualModified(0);
+      }
+    }
+  }
+
+  private int writeSubRefs(
+      FlattenRequest request,
+      List<BomSettlementSubRefCandidate> candidates,
+      Map<String, String> pathAliases) {
     if (candidates == null || candidates.isEmpty()) {
       return 0;
     }
     Set<String> parentPaths = new LinkedHashSet<>();
     for (BomSettlementSubRefCandidate candidate : candidates) {
-      if (StringUtils.hasText(candidate.costingRowPath())) {
-        parentPaths.add(candidate.costingRowPath());
+      String costingRowPath =
+          BomCostingRowAggregation.resolvePath(pathAliases, candidate.costingRowPath());
+      if (StringUtils.hasText(costingRowPath)) {
+        parentPaths.add(costingRowPath);
       }
     }
     if (parentPaths.isEmpty()) {
@@ -240,6 +276,10 @@ public class BomFlattenServiceImpl implements BomFlattenService {
     List<BomCostingRow> parentRows = costingMapper.selectList(
         Wrappers.<BomCostingRow>lambdaQuery()
             .eq(BomCostingRow::getOaNo, request.getOaNo())
+            .eq(
+                request.getOaFormItemId() != null,
+                BomCostingRow::getOaFormItemId,
+                request.getOaFormItemId())
             .eq(BomCostingRow::getTopProductCode, request.getTopProductCode())
             .eq(BomCostingRow::getAsOfDate, request.getAsOfDate())
             .in(BomCostingRow::getPath, parentPaths));
@@ -257,9 +297,11 @@ public class BomFlattenServiceImpl implements BomFlattenService {
 
     int inserted = 0;
     for (BomSettlementSubRefCandidate candidate : candidates) {
-      Long costingRowId = parentPathToId.get(candidate.costingRowPath());
+      String costingRowPath =
+          BomCostingRowAggregation.resolvePath(pathAliases, candidate.costingRowPath());
+      Long costingRowId = parentPathToId.get(costingRowPath);
       if (costingRowId == null || candidate.subRef() == null) {
-        log.warn("sub_ref 写入跳过：父件 costing_row 未反查到 id，parentPath={}", candidate.costingRowPath());
+        log.warn("sub_ref 写入跳过：父件 costing_row 未反查到 id，parentPath={}", costingRowPath);
         continue;
       }
       candidate.subRef().setCostingRowId(costingRowId);
@@ -292,6 +334,21 @@ public class BomFlattenServiceImpl implements BomFlattenService {
     if (!StringUtils.hasText(req.getTopProductCode())) {
       throw new IllegalArgumentException("topProductCode 必填");
     }
+  }
+
+  private static String resolvePeriodMonth(String requestedPeriodMonth, LocalDate asOf) {
+    String normalized = trimToNull(requestedPeriodMonth);
+    return normalized == null
+        ? YearMonth.from(asOf).toString()
+        : YearMonth.parse(normalized).toString();
+  }
+
+  private String resolveProductName(Long oaFormItemId) {
+    if (oaFormItemId == null) {
+      return null;
+    }
+    OaFormItem item = oaFormItemMapper.selectById(oaFormItemId);
+    return item == null ? null : item.getProductName();
   }
 
   private static boolean startsWithPackagePrefix(String value) {

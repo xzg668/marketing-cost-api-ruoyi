@@ -12,6 +12,8 @@ public interface CostRunCostItemService {
 
   List<CostRunCostItemDto> listStoredByOaNo(String oaNo, String productCode);
 
+  List<CostRunCostItemDto> listStoredByCostRunNo(String costRunNo);
+
   /**
    * T24：带 category 过滤的查询。
    * <ul>
@@ -21,6 +23,8 @@ public interface CostRunCostItemService {
    * </ul>
    */
   List<CostRunCostItemDto> listStoredByOaNo(String oaNo, String productCode, String category);
+
+  List<CostRunCostItemDto> listStoredByCostRunNo(String costRunNo, String category);
 
   /** 兼容旧 caller，不上报进度 */
   default List<CostRunCostItemDto> listByMaterialCodes(

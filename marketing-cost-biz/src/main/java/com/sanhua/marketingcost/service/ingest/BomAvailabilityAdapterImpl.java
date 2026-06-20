@@ -20,13 +20,13 @@ public class BomAvailabilityAdapterImpl implements BomAvailabilityAdapter {
   }
 
   @Override
-  public BomAvailability findAvailableBom(String oaNo, String productCode) {
+  public BomAvailability findAvailableBom(String oaNo, String productCode, String periodMonth) {
     if (!StringUtils.hasText(productCode)) {
       return BomAvailability.unavailable("产品料号为空，无法自动匹配 BOM");
     }
 
     BomCostingRow snapshot =
-        bomCostingRowMapper.selectAvailabilitySnapshot(oaNo, productCode.trim());
+        bomCostingRowMapper.selectAvailabilitySnapshot(productCode.trim(), trimToNull(periodMonth));
     if (snapshot != null) {
       BomAvailability availability = new BomAvailability();
       availability.setAvailable(true);
@@ -58,6 +58,14 @@ public class BomAvailabilityAdapterImpl implements BomAvailabilityAdapter {
     }
 
     return BomAvailability.unavailable("未匹配到本地正式 BOM 或有效补录 BOM");
+  }
+
+  private String trimToNull(String value) {
+    if (!StringUtils.hasText(value)) {
+      return null;
+    }
+    String trimmed = value.trim();
+    return trimmed.isEmpty() ? null : trimmed;
   }
 
   private String defaultSource(String sourceType) {

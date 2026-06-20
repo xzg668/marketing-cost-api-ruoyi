@@ -18,8 +18,11 @@ import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusResponse;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
 import com.sanhua.marketingcost.entity.CostRunBatch;
+import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
@@ -36,6 +39,9 @@ import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MaterialMasterSyncService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
+import com.sanhua.marketingcost.service.PricePrepareService;
+import com.sanhua.marketingcost.service.QuoteCostRunVersionService;
+import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -75,8 +81,11 @@ class CostRunTrialServiceImplTest {
   private MaterialPriceRouterService materialPriceRouterService;
   private LinkedPriceEnsureService linkedPriceEnsureService;
   private PricePrepareReadinessService pricePrepareReadinessService;
+  private QuoteProductBomCostingBuildService costingBuildService;
+  private PricePrepareService pricePrepareService;
   private QuoteBomStatusService quoteBomStatusService;
   private CostRunExecutionProperties executionProperties;
+  private QuoteCostRunVersionService quoteCostRunVersionService;
   private CostRunTrialServiceImpl service;
 
   @BeforeAll
@@ -103,12 +112,41 @@ class CostRunTrialServiceImplTest {
     materialPriceRouterService = mock(MaterialPriceRouterService.class);
     linkedPriceEnsureService = mock(LinkedPriceEnsureService.class);
     pricePrepareReadinessService = mock(PricePrepareReadinessService.class);
+    costingBuildService = mock(QuoteProductBomCostingBuildService.class);
+    pricePrepareService = mock(PricePrepareService.class);
     quoteBomStatusService = mock(QuoteBomStatusService.class);
     executionProperties = new CostRunExecutionProperties();
+    quoteCostRunVersionService = mock(QuoteCostRunVersionService.class);
     executionProperties.setMode("API_SYNC");
     when(pricePrepareReadinessService.check(anyString(), anyString()))
         .thenReturn(PricePrepareReadinessResult.ready("PPR-OK", LocalDate.now().toString().substring(0, 7), "SUCCESS"));
+    OaForm defaultForm = new OaForm();
+    defaultForm.setId(1L);
+    defaultForm.setOaNo("OA-DEFAULT");
+    defaultForm.setBusinessUnitType("COMMERCIAL");
+    when(oaFormMapper.selectOne(any())).thenReturn(defaultForm);
+    when(oaFormItemMapper.selectList(any())).thenReturn(List.of());
+    PricePrepareGenerateResult prepareResult = new PricePrepareGenerateResult();
+    prepareResult.setPrepareNo("PPR-GENERATED");
+    prepareResult.setStatus("SUCCESS");
+    when(pricePrepareService.generate(any())).thenReturn(prepareResult);
     when(quoteBomStatusService.checkForCostRun(anyString())).thenReturn(bomResponse("MAT-READY", "SYNCED"));
+    when(quoteCostRunVersionService.createTrial(anyString(), any(), anyString(), anyString(), anyString(), any(), any(), any(), any()))
+        .thenAnswer(invocation -> {
+          QuoteCostRunVersion version = new QuoteCostRunVersion();
+          version.setId(9000L + ((Long) invocation.getArgument(1)));
+          version.setCostRunNo("TRIAL-" + invocation.getArgument(1));
+          version.setOaNo(invocation.getArgument(0));
+          version.setOaFormItemId(invocation.getArgument(1));
+          version.setProductCode(invocation.getArgument(2));
+          version.setPricingMonth(invocation.getArgument(3));
+          version.setResultPeriod(invocation.getArgument(4));
+          version.setPricePrepareNo((String) invocation.getArgument(5));
+          version.setPriceTypeConfirmNo((String) invocation.getArgument(6));
+          version.setBomConfirmNo((String) invocation.getArgument(7));
+          version.setBusinessUnitType((String) invocation.getArgument(8));
+          return version;
+        });
     service = new CostRunTrialServiceImpl(
         oaFormMapper, oaFormItemMapper, costRunBatchMapper, costRunPartItemMapper,
         costRunEngine, costRunResultWriter,
@@ -117,8 +155,11 @@ class CostRunTrialServiceImplTest {
         materialPriceRouterService,
         linkedPriceEnsureService,
         pricePrepareReadinessService,
+        costingBuildService,
+        pricePrepareService,
         quoteBomStatusService,
-        executionProperties);
+        executionProperties,
+        quoteCostRunVersionService);
   }
 
   // ========== 参数校验 ==========
@@ -515,7 +556,67 @@ class CostRunTrialServiceImplTest {
     assertEquals(302L, context.getOaFormItemId());
     assertEquals("MAT-SELECTED", context.getProductCode());
     assertEquals("BOX", context.getPackageMethod());
+    assertEquals("TRIAL-302", context.getCostRunNo());
+    assertEquals(9302L, context.getCostRunVersionId());
+    verify(costingBuildService).buildByOaFormItem(302L, currentPeriod);
+    verify(costingBuildService, never()).buildByOaFormItem(eq(301L), anyString());
+    ArgumentCaptor<PricePrepareGenerateRequest> prepareRequestCaptor =
+        ArgumentCaptor.forClass(PricePrepareGenerateRequest.class);
+    verify(pricePrepareService).generate(prepareRequestCaptor.capture());
+    PricePrepareGenerateRequest prepareRequest = prepareRequestCaptor.getValue();
+    assertEquals("OA-SELECT", prepareRequest.getOaNo());
+    assertEquals(302L, prepareRequest.getOaFormItemId());
+    assertEquals("MAT-SELECTED", prepareRequest.getTopProductCode());
+    assertEquals(currentPeriod, prepareRequest.getPeriodMonth());
+    assertEquals("QUOTE", prepareRequest.getSourceType());
+    verify(quoteCostRunVersionService).createTrial(
+        eq("OA-SELECT"),
+        eq(302L),
+        eq("MAT-SELECTED"),
+        eq(currentPeriod),
+        eq(currentPeriod),
+        any(),
+        isNull(),
+        isNull(),
+        any());
     verify(costRunResultWriter).writeQuoteResult(any(), eq(form), eq(second));
+    verify(oaFormMapper, never()).update(any(), any());
+  }
+
+  @Test
+  @DisplayName("整单入口也必须等所有产品行都已核算后才更新 OA 表头状态")
+  void fullOaRunDoesNotMarkFormCalculatedWhenItemAggregateIsIncomplete() throws Exception {
+    when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+      TransactionCallback<?> callback = invocation.getArgument(0);
+      return callback.doInTransaction(null);
+    });
+    when(materialMasterSyncService.syncByOaNo("OA-PARTIAL"))
+        .thenReturn(new MaterialMasterSyncService.SyncResult(2, 2, 2, "BATCH-1"));
+
+    OaForm form = new OaForm();
+    form.setId(400L);
+    form.setOaNo("OA-PARTIAL");
+    form.setBusinessUnitType("COMMERCIAL");
+    when(oaFormMapper.selectOne(any())).thenReturn(form);
+
+    OaFormItem first = new OaFormItem();
+    first.setId(401L);
+    first.setMaterialNo("MAT-401");
+    OaFormItem second = new OaFormItem();
+    second.setId(402L);
+    second.setMaterialNo("MAT-402");
+    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(first, second));
+    when(costRunPartItemMapper.selectBaseByOaNo("OA-PARTIAL")).thenReturn(List.of());
+    when(costRunEngine.run(any(CostRunContext.class)))
+        .thenReturn(engineResult("OA-PARTIAL", "MAT-401", List.of(), List.of()));
+    when(oaFormItemMapper.countRunnableItems(400L)).thenReturn(2L);
+    when(oaFormItemMapper.countCalculatedRunnableItems(400L)).thenReturn(1L);
+
+    CostRunTrialResponse response = service.run("OA-PARTIAL").get();
+
+    assertEquals(2, response.getProductCount());
+    verify(oaFormItemMapper).markCalculated(eq(401L), any());
+    verify(oaFormItemMapper).markCalculated(eq(402L), any());
     verify(oaFormMapper, never()).update(any(), any());
   }
 

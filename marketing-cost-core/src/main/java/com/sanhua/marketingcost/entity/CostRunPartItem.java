@@ -13,6 +13,11 @@ public class CostRunPartItem {
   @TableId(type = IdType.AUTO)
   private Long id;
   private String oaNo;
+  private Long oaFormItemId;
+  private Long costRunVersionId;
+  private String costRunNo;
+  private Long bomRowId;
+  private Long pricePrepareItemId;
   private String productCode;
   private String partCode;
   private String partName;
@@ -57,6 +62,46 @@ public class CostRunPartItem {
 
   public void setOaNo(String oaNo) {
     this.oaNo = oaNo;
+  }
+
+  public Long getOaFormItemId() {
+    return oaFormItemId;
+  }
+
+  public void setOaFormItemId(Long oaFormItemId) {
+    this.oaFormItemId = oaFormItemId;
+  }
+
+  public Long getCostRunVersionId() {
+    return costRunVersionId;
+  }
+
+  public void setCostRunVersionId(Long costRunVersionId) {
+    this.costRunVersionId = costRunVersionId;
+  }
+
+  public String getCostRunNo() {
+    return costRunNo;
+  }
+
+  public void setCostRunNo(String costRunNo) {
+    this.costRunNo = costRunNo;
+  }
+
+  public Long getBomRowId() {
+    return bomRowId;
+  }
+
+  public void setBomRowId(Long bomRowId) {
+    this.bomRowId = bomRowId;
+  }
+
+  public Long getPricePrepareItemId() {
+    return pricePrepareItemId;
+  }
+
+  public void setPricePrepareItemId(Long pricePrepareItemId) {
+    this.pricePrepareItemId = pricePrepareItemId;
   }
 
   public String getProductCode() {

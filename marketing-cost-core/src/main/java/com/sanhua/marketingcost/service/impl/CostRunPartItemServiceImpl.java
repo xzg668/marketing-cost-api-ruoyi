@@ -11,6 +11,7 @@ import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.enums.MaterialFormAttrEnum;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
@@ -127,7 +128,7 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       return Collections.emptyList();
     }
     String oaNoValue = oaNo.trim();
-    List<CostRunPartItemDto> items = costRunPartItemMapper.selectBaseByOaNo(oaNoValue);
+    List<CostRunPartItemDto> items = selectBaseItems(oaNoValue, context);
     if (items.isEmpty()) {
       if (persistDailyResult) {
         saveCostRunItems(oaNoValue, items);
@@ -143,12 +144,14 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     // 同时收集胜出 PriceTypeRoute（T06.5：mapper SQL 不再 JOIN 路由表，路由字段在这里回填）
     // T16：resolveAll 内部按 part 索引上报进度（0-95%），剩 5% 给 applyResults+save
     Map<Integer, PriceTypeRoute> winningRoutes = new HashMap<>();
+    String organizationCode = resolveMaterialOrganization(oaNoValue);
     Map<Integer, PriceResolveResult> results =
         resolveAll(
             oaNoValue,
             priceDate,
             items,
             context,
+            organizationCode,
             winningRoutes,
             p -> progress.accept(p * 95 / 100));
     applyResults(items, results, winningRoutes);
@@ -157,6 +160,21 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     }
     progress.accept(100);
     return items;
+  }
+
+  private List<CostRunPartItemDto> selectBaseItems(String oaNo, CostRunContext context) {
+    if (context != null
+        && CostRunContext.SCENE_QUOTE.equals(context.getScene())
+        && context.getOaFormItemId() != null
+        && StringUtils.hasText(context.getProductCode())
+        && StringUtils.hasText(context.getPricingMonth())) {
+      return costRunPartItemMapper.selectBaseByQuoteScope(
+          oaNo,
+          context.getOaFormItemId(),
+          context.getProductCode().trim(),
+          context.getPricingMonth().trim());
+    }
+    return costRunPartItemMapper.selectBaseByOaNo(oaNo);
   }
 
   @Override
@@ -168,12 +186,32 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     List<CostRunPartItem> stored =
         costRunPartItemMapper.selectList(
             Wrappers.lambdaQuery(CostRunPartItem.class).eq(CostRunPartItem::getOaNo, oaNoValue));
+    return toDtos(stored);
+  }
+
+  @Override
+  public List<CostRunPartItemDto> listStoredByCostRunNo(String costRunNo) {
+    if (!StringUtils.hasText(costRunNo)) {
+      return Collections.emptyList();
+    }
+    List<CostRunPartItem> stored =
+        costRunPartItemMapper.selectList(
+            Wrappers.lambdaQuery(CostRunPartItem.class)
+                .eq(CostRunPartItem::getCostRunNo, costRunNo.trim())
+                .orderByAsc(CostRunPartItem::getId));
+    return toDtos(stored);
+  }
+
+  private List<CostRunPartItemDto> toDtos(List<CostRunPartItem> stored) {
     if (stored.isEmpty()) {
       return Collections.emptyList();
     }
     List<CostRunPartItemDto> items = new ArrayList<>();
     for (CostRunPartItem item : stored) {
       CostRunPartItemDto dto = new CostRunPartItemDto();
+      dto.setId(item.getId());
+      dto.setBomRowId(item.getBomRowId());
+      dto.setPricePrepareItemId(item.getPricePrepareItemId());
       dto.setOaNo(item.getOaNo());
       dto.setProductCode(item.getProductCode());
       dto.setPartCode(item.getPartCode());
@@ -210,9 +248,23 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     if (!StringUtils.hasText(oaNo) || !StringUtils.hasText(productCode)) {
       return Collections.emptyList();
     }
+    return aggregateStoredRows(oaNo.trim(), productCode.trim(), listStoredByOaNo(oaNo));
+  }
+
+  @Override
+  public List<CostRunPartItemDto> listAggregatedByCostRunNo(String costRunNo, String productCode) {
+    if (!StringUtils.hasText(costRunNo) || !StringUtils.hasText(productCode)) {
+      return Collections.emptyList();
+    }
+    List<CostRunPartItemDto> storedRows = listStoredByCostRunNo(costRunNo);
+    String oaNo = storedRows.isEmpty() ? null : storedRows.get(0).getOaNo();
+    return aggregateStoredRows(oaNo, productCode.trim(), storedRows);
+  }
+
+  private List<CostRunPartItemDto> aggregateStoredRows(
+      String oaNo, String productCode, List<CostRunPartItemDto> raw) {
     String productCodeValue = productCode.trim();
     // 1) 拉 raw 部品并按 productCode 过滤
-    List<CostRunPartItemDto> raw = listStoredByOaNo(oaNo);
     List<CostRunPartItemDto> filtered = new ArrayList<>();
     Set<String> partCodes = new LinkedHashSet<>();
     for (CostRunPartItemDto p : raw) {
@@ -229,7 +281,8 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     // 2) 查焊料子件集合
     Set<String> weldCodes = lookupCodesByCostElement(partCodes, COST_ELEMENT_WELD);
     // 3) 查包装组件父件集合
-    Set<String> packageParentCodes = lookupPackageParentCodes(partCodes);
+    Set<String> packageParentCodes =
+        lookupPackageParentCodes(partCodes, resolveMaterialOrganization(oaNo));
 
     // 4) 分桶聚合
     List<CostRunPartItemDto> result = new ArrayList<>();
@@ -294,12 +347,11 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
   }
 
   /** T26：找当前部品列表中的包装组件父件 material_code。 */
-  private Set<String> lookupPackageParentCodes(Set<String> partCodes) {
+  private Set<String> lookupPackageParentCodes(Set<String> partCodes, String organizationCode) {
     if (partCodes == null || partCodes.isEmpty()) {
       return Collections.emptySet();
     }
-    List<MaterialMasterRaw> parents =
-        materialMasterRawMapper.selectPackageComponentParentsByLatestBatch(MAIN_CATEGORY_PACKAGE, null);
+    List<MaterialMasterRaw> parents = selectPackageComponentParents(organizationCode);
     if (parents == null || parents.isEmpty()) {
       return Collections.emptySet();
     }
@@ -311,6 +363,23 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       }
     }
     return parentCodes;
+  }
+
+  private List<MaterialMasterRaw> selectPackageComponentParents(String organizationCode) {
+    String organization = MaterialOrganization.normalize(organizationCode);
+    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
+      return materialMasterRawMapper.selectPackageComponentParentsByLatestBatch(MAIN_CATEGORY_PACKAGE, null);
+    }
+    return materialMasterRawMapper.selectPackageComponentParentsByLatestBatch(
+        MAIN_CATEGORY_PACKAGE, null, organization);
+  }
+
+  private String resolveMaterialOrganization(String oaNo) {
+    String normalizedOaNo = normalizeBlankToNull(oaNo);
+    if (normalizedOaNo == null) {
+      return MaterialOrganization.COMMERCIAL.getCode();
+    }
+    return MaterialOrganization.forQuoteProcess(null, normalizedOaNo);
   }
 
   /** T26：构造 1 行聚合行 DTO（partCode 留空，跟 Excel 见机表 r44/r45 显示一致） */
@@ -380,12 +449,13 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       LocalDate quoteDate,
       List<CostRunPartItemDto> items,
       CostRunContext context,
+      String organizationCode,
       Map<Integer, PriceTypeRoute> winningRoutes,
       java.util.function.IntConsumer progress) {
     Map<Integer, PriceResolveResult> results = new HashMap<>();
     // 月度调价必须使用批次 pricing_month；普通报价未传 context 时才从取价日推导月份。
     String period = resolvePricingMonth(context, quoteDate);
-    Map<String, Boolean> packageFlags = identifyPackageComponents(items);
+    Map<String, Boolean> packageFlags = identifyPackageComponents(items, organizationCode);
     int total = Math.max(1, items.size());
     for (int i = 0; i < items.size(); i++) {
       CostRunPartItemDto item = items.get(i);
@@ -454,7 +524,8 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     return results;
   }
 
-  private Map<String, Boolean> identifyPackageComponents(List<CostRunPartItemDto> items) {
+  private Map<String, Boolean> identifyPackageComponents(
+      List<CostRunPartItemDto> items, String organizationCode) {
     Set<String> codes = new LinkedHashSet<>();
     for (CostRunPartItemDto item : items) {
       if (item != null && StringUtils.hasText(item.getPartCode())) {
@@ -464,7 +535,11 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     if (codes.isEmpty()) {
       return Collections.emptyMap();
     }
-    Map<String, Boolean> flags = packageComponentIdentifyService.batchIdentify(codes);
+    String organization = MaterialOrganization.normalize(organizationCode);
+    Map<String, Boolean> flags =
+        MaterialOrganization.COMMERCIAL.getCode().equals(organization)
+            ? packageComponentIdentifyService.batchIdentify(codes)
+            : packageComponentIdentifyService.batchIdentify(codes, organization);
     return flags == null ? Collections.emptyMap() : flags;
   }
 

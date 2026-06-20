@@ -17,6 +17,8 @@ import com.sanhua.marketingcost.mapper.QuoteBomMonthlySnapshotMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -37,6 +39,8 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
   private static final String SNAPSHOT_STATUS_SUCCESS = "SUCCESS";
   private static final String SNAPSHOT_SYNC_TYPE_AUTO = "AUTO";
   private static final String SNAPSHOT_SYNC_TYPE_MANUAL = "MANUAL";
+  private static final String SOURCE_COSTING_SNAPSHOT = "COSTING_SNAPSHOT";
+  private static final DateTimeFormatter PERIOD_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM");
 
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
@@ -239,7 +243,8 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     }
 
     BomAvailability availability =
-        bomAvailabilityAdapter.findAvailableBom(form.getOaNo(), key.getProductCode());
+        bomAvailabilityAdapter.findAvailableBom(
+            form.getOaNo(), key.getProductCode(), key.getCostPeriodMonth());
     if (!availability.isAvailable()) {
       applyNoBomStatus(status, availability, now);
       return;
@@ -369,7 +374,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       BomAvailability availability,
       QuoteBomMonthlySnapshot snapshot,
       LocalDateTime now) {
-    status.setBomStatus(QuoteBomStatusCode.SYNCED.getCode());
+    status.setBomStatus(statusForAvailability(availability));
     status.setBomSource(availability.getSource());
     status.setBomPurpose(availability.getBomPurpose());
     status.setBomVersion(availability.getBomVersion());
@@ -458,13 +463,15 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     status.setPackageType(trimToNull(item.getPackageType()));
     status.setPackageMethod(trimToNull(item.getPackageMethod()));
     status.setTechnicianName(trimToNull(item.getTechnicianName()));
+    status.setCostPeriodMonth(currentPeriodMonth());
     status.setCheckedAt(LocalDateTime.now());
     status.setUpdatedAt(LocalDateTime.now());
 
     BomAvailability availability =
-        bomAvailabilityAdapter.findAvailableBom(status.getOaNo(), item.getMaterialNo());
+        bomAvailabilityAdapter.findAvailableBom(
+            status.getOaNo(), item.getMaterialNo(), status.getCostPeriodMonth());
     if (availability.isAvailable()) {
-      status.setBomStatus(QuoteBomStatusCode.SYNCED.getCode());
+      status.setBomStatus(statusForAvailability(availability));
       status.setBomSource(availability.getSource());
       status.setBomPurpose(availability.getBomPurpose());
       status.setBomVersion(availability.getBomVersion());
@@ -687,10 +694,24 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
   }
 
   private boolean isCostReadyBomStatus(String bomStatus) {
-    // 统计口径跟成本准入保持一致：已同步、已沿用、已手工录入都算 BOM 已准备。
+    // 统计口径跟成本准入保持一致：检查确认有可用 BOM 的状态都算 BOM 已准备。
     return QuoteBomStatusCode.SYNCED.getCode().equals(bomStatus)
         || QuoteBomStatusCode.REUSED_CURRENT_MONTH.getCode().equals(bomStatus)
+        || QuoteBomStatusCode.CURRENT_MONTH_QUOTED.getCode().equals(bomStatus)
+        || QuoteBomStatusCode.U9_BOM_EXISTS.getCode().equals(bomStatus)
         || QuoteBomStatusCode.MANUAL_ENTERED.getCode().equals(bomStatus);
+  }
+
+  private String statusForAvailability(BomAvailability availability) {
+    String source = availability == null ? null : trimToNull(availability.getSource());
+    if (SOURCE_COSTING_SNAPSHOT.equalsIgnoreCase(source)) {
+      return QuoteBomStatusCode.CURRENT_MONTH_QUOTED.getCode();
+    }
+    return QuoteBomStatusCode.U9_BOM_EXISTS.getCode();
+  }
+
+  private String currentPeriodMonth() {
+    return PERIOD_FORMATTER.format(YearMonth.now(clock == null ? Clock.systemDefaultZone() : clock));
   }
 
   private String trimToNull(String value) {

@@ -16,6 +16,7 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.QuoteBomStatusCode;
 import com.sanhua.marketingcost.enums.QuoteProductType;
 import com.sanhua.marketingcost.mapper.BomSupplementTaskMapper;
@@ -29,6 +30,7 @@ import com.sanhua.marketingcost.service.PackageComponentStructureReadService;
 import com.sanhua.marketingcost.service.QuoteProductBomPreparationService;
 import com.sanhua.marketingcost.service.QuoteProductTypeResolveService;
 import com.sanhua.marketingcost.service.SupplementBomReadService;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
@@ -99,10 +101,20 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   @Override
   @Transactional
   public QuoteProductBomPreparationPreview prepareByOaFormItem(Long itemId) {
+    return prepareByOaFormItem(itemId, LocalDate.now());
+  }
+
+  @Override
+  @Transactional
+  public QuoteProductBomPreparationPreview prepareByOaFormItem(Long itemId, LocalDate quoteDate) {
     QuoteContext context = loadContext(itemId);
     String productCode = trimToNull(context.item().getMaterialNo());
     String periodMonth = resolvePeriodMonth(context.form());
-    QuoteProductTypeResolveResult typeResult = productTypeResolveService.resolve(productCode);
+    String organizationCode =
+        MaterialOrganization.forQuoteProcess(
+            context.form().getProcessCode(), context.form().getOaNo(), context.item().getProductName());
+    QuoteProductTypeResolveResult typeResult =
+        resolveProductType(productCode, organizationCode);
     if (typeResult.productType() == QuoteProductType.DATA_MISSING
         || typeResult.productType() == QuoteProductType.UNKNOWN) {
       String error = firstText(typeResult.errorMessage(), "产品形态无法判断");
@@ -192,9 +204,9 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     }
 
     if (typeResult.productType() == QuoteProductType.NON_BARE) {
-      return prepareNonBare(context, typeResult, periodMonth);
+      return prepareNonBare(context, typeResult, periodMonth, organizationCode, resolveQuoteDate(quoteDate));
     }
-    return prepareBare(context, typeResult, periodMonth);
+    return prepareBare(context, typeResult, periodMonth, organizationCode, resolveQuoteDate(quoteDate));
   }
 
   @Override
@@ -307,9 +319,14 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   }
 
   private QuoteProductBomPreparationPreview prepareNonBare(
-      QuoteContext context, QuoteProductTypeResolveResult typeResult, String periodMonth) {
+      QuoteContext context,
+      QuoteProductTypeResolveResult typeResult,
+      String periodMonth,
+      String organizationCode,
+      LocalDate quoteDate) {
     String productCode = trimToNull(context.item().getMaterialNo());
-    FormalBomReadResult formal = formalBomReadService.read(productCode, periodMonth, null);
+    FormalBomReadResult formal =
+        readFormalBom(productCode, periodMonth, quoteDate, organizationCode);
     if (formal.found()) {
       QuoteBomStatus status = upsertStatus(context, productCode, periodMonth, typeResult, null, null);
       QuoteBomPreparationRecord record =
@@ -412,9 +429,14 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   }
 
   private QuoteProductBomPreparationPreview prepareBare(
-      QuoteContext context, QuoteProductTypeResolveResult typeResult, String periodMonth) {
+      QuoteContext context,
+      QuoteProductTypeResolveResult typeResult,
+      String periodMonth,
+      String organizationCode,
+      LocalDate quoteDate) {
     String productCode = trimToNull(context.item().getMaterialNo());
-    FormalBomReadResult formal = formalBomReadService.read(productCode, periodMonth, null);
+    FormalBomReadResult formal =
+        readFormalBom(productCode, periodMonth, quoteDate, organizationCode);
     boolean bodyReady = formal.found();
     String bodySource = bodyReady ? BODY_SOURCE_FORMAL : null;
     List<QuoteBomSourceLineDto> bodyLines = bodyReady ? formal.lines() : List.of();
@@ -506,6 +528,24 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
       throw new IllegalArgumentException("报价单不存在: " + item.getOaFormId());
     }
     return new QuoteContext(form, item);
+  }
+
+  private QuoteProductTypeResolveResult resolveProductType(
+      String productCode, String organizationCode) {
+    String organization = MaterialOrganization.normalize(organizationCode);
+    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
+      return productTypeResolveService.resolve(productCode);
+    }
+    return productTypeResolveService.resolve(productCode, organization);
+  }
+
+  private FormalBomReadResult readFormalBom(
+      String productCode, String periodMonth, LocalDate quoteDate, String organizationCode) {
+    String organization = MaterialOrganization.normalize(organizationCode);
+    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
+      return formalBomReadService.read(productCode, periodMonth, null, quoteDate);
+    }
+    return formalBomReadService.read(productCode, periodMonth, null, quoteDate, organization);
   }
 
   private QuoteBomStatus upsertStatus(
@@ -818,6 +858,10 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
       return YearMonth.from(form.getApplyDate()).toString();
     }
     return YearMonth.now().toString();
+  }
+
+  private LocalDate resolveQuoteDate(LocalDate quoteDate) {
+    return quoteDate == null ? LocalDate.now() : quoteDate;
   }
 
   private List<String> compact(String... values) {

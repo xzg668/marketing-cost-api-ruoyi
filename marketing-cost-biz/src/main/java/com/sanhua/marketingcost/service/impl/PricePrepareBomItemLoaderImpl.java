@@ -3,8 +3,11 @@ package com.sanhua.marketingcost.service.impl;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
+import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
+import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
 import com.sanhua.marketingcost.service.PricePrepareBomItemLoader;
 import java.util.ArrayList;
@@ -22,14 +25,17 @@ public class PricePrepareBomItemLoaderImpl implements PricePrepareBomItemLoader 
 
   private final BomCostingRowMapper bomCostingRowMapper;
   private final BomRawHierarchyMapper bomRawHierarchyMapper;
+  private final OaFormItemMapper oaFormItemMapper;
   private final PackageComponentIdentifyService packageComponentIdentifyService;
 
   public PricePrepareBomItemLoaderImpl(
       BomCostingRowMapper bomCostingRowMapper,
       BomRawHierarchyMapper bomRawHierarchyMapper,
+      OaFormItemMapper oaFormItemMapper,
       PackageComponentIdentifyService packageComponentIdentifyService) {
     this.bomCostingRowMapper = bomCostingRowMapper;
     this.bomRawHierarchyMapper = bomRawHierarchyMapper;
+    this.oaFormItemMapper = oaFormItemMapper;
     this.packageComponentIdentifyService = packageComponentIdentifyService;
   }
 
@@ -67,6 +73,29 @@ public class PricePrepareBomItemLoaderImpl implements PricePrepareBomItemLoader 
         .toList();
   }
 
+  @Override
+  public List<BomCostingRow> loadByQuoteItem(
+      String oaNo, Long oaFormItemId, String topProductCode, String periodMonth) {
+    if (!StringUtils.hasText(oaNo)
+        || oaFormItemId == null
+        || !StringUtils.hasText(topProductCode)
+        || !StringUtils.hasText(periodMonth)) {
+      return Collections.emptyList();
+    }
+    String oaNoValue = oaNo.trim();
+    String topProductCodeValue = topProductCode.trim();
+    String periodMonthValue = periodMonth.trim();
+    List<BomCostingRow> costingRows =
+        bomCostingRowMapper.selectQuoteCostingSnapshot(
+            oaNoValue, oaFormItemId, topProductCodeValue, periodMonthValue);
+    if (costingRows == null || costingRows.isEmpty()) {
+      return Collections.emptyList();
+    }
+    List<BomCostingRow> rows = new ArrayList<>(costingRows);
+    rows.addAll(loadSyntheticPackageParents(oaNoValue, costingRows));
+    return rows;
+  }
+
   private List<BomCostingRow> loadSyntheticPackageParents(String oaNo, List<BomCostingRow> costingRows) {
     Set<String> parentCodes = new LinkedHashSet<>();
     Set<String> topProductCodes = new LinkedHashSet<>();
@@ -92,7 +121,9 @@ public class PricePrepareBomItemLoaderImpl implements PricePrepareBomItemLoader 
       return Collections.emptyList();
     }
 
-    Map<String, Boolean> packageFlags = packageComponentIdentifyService.batchIdentify(parentCodes);
+    Map<String, Boolean> packageFlags =
+        packageComponentIdentifyService.batchIdentify(
+            parentCodes, resolveMaterialOrganization(oaNo, costingRows));
     Set<String> packageCodes = new LinkedHashSet<>();
     for (Map.Entry<String, Boolean> entry : packageFlags.entrySet()) {
       if (Boolean.TRUE.equals(entry.getValue())) {
@@ -145,10 +176,45 @@ public class PricePrepareBomItemLoaderImpl implements PricePrepareBomItemLoader 
       if (raw == null) {
         continue;
       }
-      syntheticRows.add(toSyntheticCostingRow(oaNo, raw));
+      BomCostingRow syntheticRow = toSyntheticCostingRow(oaNo, raw);
+      syntheticRow.setOaFormItemId(childRow.getOaFormItemId());
+      syntheticRow.setPeriodMonth(childRow.getPeriodMonth());
+      syntheticRows.add(syntheticRow);
       addedKeys.add(syntheticKey);
     }
     return syntheticRows;
+  }
+
+  private String resolveMaterialOrganization(String oaNo, List<BomCostingRow> costingRows) {
+    if (costingRows == null || costingRows.isEmpty()) {
+      return MaterialOrganization.forQuoteProcess(null, oaNo);
+    }
+    Map<Long, String> productNames = new LinkedHashMap<>();
+    for (BomCostingRow row : costingRows) {
+      if (row == null) {
+        continue;
+      }
+      String organization =
+          MaterialOrganization.forQuoteProcess(
+              null, row.getOaNo(), resolveProductName(row.getOaFormItemId(), productNames));
+      if (MaterialOrganization.PLATE.getCode().equals(organization)) {
+        return organization;
+      }
+    }
+    return MaterialOrganization.forQuoteProcess(null, oaNo);
+  }
+
+  private String resolveProductName(Long oaFormItemId, Map<Long, String> productNames) {
+    if (oaFormItemId == null) {
+      return null;
+    }
+    if (productNames.containsKey(oaFormItemId)) {
+      return productNames.get(oaFormItemId);
+    }
+    OaFormItem item = oaFormItemMapper.selectById(oaFormItemId);
+    String productName = item == null ? null : item.getProductName();
+    productNames.put(oaFormItemId, productName);
+    return productName;
   }
 
   private BomCostingRow toSyntheticCostingRow(String oaNo, BomRawHierarchy raw) {

@@ -6,4 +6,5 @@ public record U9MaterialMasterIngestRequest(
     InputStream input,
     String sourceFileName,
     String importedBy,
+    String organizationCode,
     String sourceBatchNo) {}

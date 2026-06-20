@@ -16,9 +16,11 @@ import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
+import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmItem;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
+import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmItemMapper;
 import com.sanhua.marketingcost.dto.priceprepare.MakePartPricePrepareResult;
 import com.sanhua.marketingcost.dto.priceprepare.NormalMaterialPricePrepareResult;
 import com.sanhua.marketingcost.dto.priceprepare.PackageComponentPricePrepareResult;
@@ -48,6 +50,7 @@ class PricePrepareServiceImplTest {
   private PricePrepareBatchMapper batchMapper;
   private PricePrepareItemMapper itemMapper;
   private PricePrepareGapMapper gapMapper;
+  private QuotePriceTypeConfirmItemMapper priceTypeConfirmItemMapper;
   private PricePrepareBomItemLoader bomItemLoader;
   private PricePrepareItemClassifier itemClassifier;
   private NormalMaterialPricePrepareStrategy normalMaterialPricePrepareStrategy;
@@ -62,6 +65,7 @@ class PricePrepareServiceImplTest {
     TableInfoHelper.initTableInfo(assistant, PricePrepareBatch.class);
     TableInfoHelper.initTableInfo(assistant, PricePrepareItem.class);
     TableInfoHelper.initTableInfo(assistant, PricePrepareGap.class);
+    TableInfoHelper.initTableInfo(assistant, QuotePriceTypeConfirmItem.class);
   }
 
   @BeforeEach
@@ -70,6 +74,7 @@ class PricePrepareServiceImplTest {
     batchMapper = mock(PricePrepareBatchMapper.class);
     itemMapper = mock(PricePrepareItemMapper.class);
     gapMapper = mock(PricePrepareGapMapper.class);
+    priceTypeConfirmItemMapper = mock(QuotePriceTypeConfirmItemMapper.class);
     bomItemLoader = mock(PricePrepareBomItemLoader.class);
     itemClassifier = mock(PricePrepareItemClassifier.class);
     normalMaterialPricePrepareStrategy = mock(NormalMaterialPricePrepareStrategy.class);
@@ -79,6 +84,7 @@ class PricePrepareServiceImplTest {
         batchMapper,
         itemMapper,
         gapMapper,
+        priceTypeConfirmItemMapper,
         bomItemLoader,
         itemClassifier,
         normalMaterialPricePrepareStrategy,
@@ -360,6 +366,73 @@ class PricePrepareServiceImplTest {
                     gapDeleteCaptor.getValue())
                 .getSqlSegment())
         .contains("oa_no", "top_product_code");
+  }
+
+  @Test
+  @DisplayName("工作台行级生成：按 OA 产品行读取快照并写入价格类型确认批次")
+  void generateByQuoteItemWritesItemScopeAndPriceTypeConfirmRefs() {
+    PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
+    request.setOaNo(" OA-LINE ");
+    request.setOaFormItemId(101L);
+    request.setTopProductCode("TOP-SAME");
+    request.setPriceTypeConfirmNo(" QPTC-101 ");
+    request.setPeriodMonth(CURRENT_PERIOD);
+    request.setBusinessUnitType("COMMERCIAL");
+    BomCostingRow row = bomRow(1L, "TOP-SAME", "MAT-A", "采购件");
+    row.setOaNo("OA-LINE");
+    row.setOaFormItemId(101L);
+    PricePreparePlanItem planItem = planItem(row, "NORMAL", "READY");
+    QuotePriceTypeConfirmItem confirmItem = new QuotePriceTypeConfirmItem();
+    confirmItem.setId(9001L);
+    when(bomItemLoader.loadByQuoteItem("OA-LINE", 101L, "TOP-SAME", CURRENT_PERIOD))
+        .thenReturn(List.of(row));
+    when(itemClassifier.classify(List.of(row))).thenReturn(List.of(planItem));
+    when(priceTypeConfirmItemMapper.selectList(any())).thenReturn(List.of(confirmItem));
+    when(normalMaterialPricePrepareStrategy.prepare(
+            org.mockito.ArgumentMatchers.eq("OA-LINE"),
+            org.mockito.ArgumentMatchers.eq("COMMERCIAL"),
+            org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
+            org.mockito.ArgumentMatchers.eq(planItem)))
+        .thenReturn(NormalMaterialPricePrepareResult.ready(
+            new BigDecimal("1.20"), new BigDecimal("3.000"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
+
+    PricePrepareGenerateResult result = service.generate(request);
+
+    assertThat(result.getStatus()).isEqualTo("SUCCESS");
+    assertThat(result.getOaFormItemId()).isEqualTo(101L);
+    assertThat(result.getTopProductCode()).isEqualTo("TOP-SAME");
+    assertThat(result.getPriceTypeConfirmNo()).isEqualTo("QPTC-101");
+    verify(bomItemLoader).loadByQuoteItem("OA-LINE", 101L, "TOP-SAME", CURRENT_PERIOD);
+    verify(bomItemLoader, org.mockito.Mockito.never()).loadByOaNo("OA-LINE");
+    ArgumentCaptor<PricePrepareBatch> batchCaptor = ArgumentCaptor.forClass(PricePrepareBatch.class);
+    verify(batchMapper).insert(batchCaptor.capture());
+    assertThat(batchCaptor.getValue().getOaFormItemId()).isEqualTo(101L);
+    assertThat(batchCaptor.getValue().getTopProductCode()).isEqualTo("TOP-SAME");
+    assertThat(batchCaptor.getValue().getPriceTypeConfirmNo()).isEqualTo("QPTC-101");
+    ArgumentCaptor<PricePrepareItem> itemCaptor = ArgumentCaptor.forClass(PricePrepareItem.class);
+    verify(itemMapper).insert(itemCaptor.capture());
+    assertThat(itemCaptor.getValue().getOaFormItemId()).isEqualTo(101L);
+    assertThat(itemCaptor.getValue().getTopProductCode()).isEqualTo("TOP-SAME");
+    assertThat(itemCaptor.getValue().getPriceTypeConfirmNo()).isEqualTo("QPTC-101");
+    assertThat(itemCaptor.getValue().getPriceTypeConfirmItemId()).isEqualTo(9001L);
+    ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PricePrepareItem>>
+        itemDeleteCaptor = ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper.class);
+    ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PricePrepareGap>>
+        gapDeleteCaptor = ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper.class);
+    verify(itemMapper).delete(itemDeleteCaptor.capture());
+    verify(gapMapper).delete(gapDeleteCaptor.capture());
+    assertThat(
+            ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>)
+                    itemDeleteCaptor.getValue())
+                .getSqlSegment())
+        .contains("oa_form_item_id", "top_product_code");
+    assertThat(itemDeleteCaptor.getValue().getParamNameValuePairs().values())
+        .contains("OA-LINE", 101L, "TOP-SAME", CURRENT_PERIOD);
+    assertThat(
+            ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>)
+                    gapDeleteCaptor.getValue())
+                .getSqlSegment())
+        .contains("oa_form_item_id", "top_product_code");
   }
 
   @Test

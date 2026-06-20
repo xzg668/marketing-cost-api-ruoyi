@@ -48,6 +48,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
 
   private static final String STATUS_OK = MakePartPriceCalculator.STATUS_OK;
   private static final String STATUS_MISSING_BOM = "MISSING_BOM";
+  private static final String PROCESS_TYPE_UNKNOWN = "UNKNOWN";
 
   private final MakePartSourceDataService sourceDataService;
   private final MakePartProcessTypePolicy processTypePolicy;
@@ -137,10 +138,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     LocalDateTime priceAsOfTime = priceAsOfTime(pricingPeriod, requestedPriceAsOfTime);
     LocalDate quoteDate = priceAsOfTime.toLocalDate();
     List<BomCostingRow> parents =
-        sourceDataService.listManufacturedParents(oaNo, businessUnitType, null).stream()
-            .filter(parent -> parentMaterialNo == null
-                || parentMaterialNo.equals(trim(parent.getMaterialCode())))
-            .toList();
+        scopedManufacturedParents(oaNo, businessUnitType, pricingPeriod, parentMaterialNo);
     MakePartGenerationPlan plan =
         buildGenerationPlan(parents, businessUnitType, pricingPeriod, quoteDate);
     plan.priceAsOfTime = priceAsOfTime;
@@ -153,6 +151,31 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     upsertRows(calculatedRows);
     upsertGapItems(buildGapItems(calculatedRows, LocalDateTime.now()));
     return summarize(calcBatchId, parents.size(), calculatedRows);
+  }
+
+  private List<BomCostingRow> scopedManufacturedParents(
+      String oaNo, String businessUnitType, String pricingPeriod, String parentMaterialNo) {
+    List<BomCostingRow> sourceParents =
+        sourceDataService.listManufacturedParents(oaNo, businessUnitType, null);
+    if (sourceParents == null || sourceParents.isEmpty()) {
+      return List.of();
+    }
+    boolean quotePeriodScoped = StringUtils.hasText(oaNo) && StringUtils.hasText(pricingPeriod);
+    Map<String, BomCostingRow> parentsByCode = new LinkedHashMap<>();
+    for (BomCostingRow parent : sourceParents) {
+      String parentCode = parent == null ? null : trim(parent.getMaterialCode());
+      if (parentCode == null) {
+        continue;
+      }
+      if (parentMaterialNo != null && !parentMaterialNo.equals(parentCode)) {
+        continue;
+      }
+      if (quotePeriodScoped && !pricingPeriod.equals(trim(parent.getPeriodMonth()))) {
+        continue;
+      }
+      parentsByCode.putIfAbsent(parentCode, parent);
+    }
+    return new ArrayList<>(parentsByCode.values());
   }
 
   private void upsertRows(List<MakePartPriceCalcRow> rows) {
@@ -262,6 +285,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       MakePartPriceCalcRow missingBom = baseRow(calcBatchId, parent, businessUnitType);
       missingBom.setPricingMonth(period);
       missingBom.setPriceAsOfTime(priceAsOfTime);
+      missingBom.setItemProcessType(PROCESS_TYPE_UNKNOWN);
       missingBom.setStatus(STATUS_MISSING_BOM);
       missingBom.setRemark("缺 U9 直接子项(parent_material_no=" + parentCode + ")");
       return List.of(missingBom);

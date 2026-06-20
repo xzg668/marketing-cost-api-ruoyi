@@ -23,6 +23,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class PricePrepareReadinessServiceImplTest {
 
@@ -122,6 +123,44 @@ class PricePrepareReadinessServiceImplTest {
     assertThat(result.isAllowContinue()).isFalse();
     assertThat(result.isBlocking()).isTrue();
     assertThat(result.getMessage()).contains("已阻断实时成本");
+  }
+
+  @Test
+  @DisplayName("产品行维度检查：同 OA 相同成品料号只读取当前 oaFormItemId")
+  void checkQuoteItemScopeIgnoresOtherSameProductRows() {
+    PricePrepareItem item = new PricePrepareItem();
+    item.setPrepareNo("PPR-B");
+    item.setOaNo("OA-001");
+    item.setOaFormItemId(202L);
+    item.setTopProductCode("TOP-SAME");
+    item.setPeriodMonth("2026-05");
+    item.setStatus("READY");
+    when(itemMapper.selectList(any())).thenReturn(List.of(item));
+    when(gapMapper.selectList(any())).thenReturn(List.of());
+
+    PricePrepareReadinessResult result =
+        service.check("OA-001", 202L, "TOP-SAME", "2026-05");
+
+    assertThat(result.getStatus()).isEqualTo("READY");
+    assertThat(result.getPrepareNo()).isEqualTo("PPR-B");
+    ArgumentCaptor<LambdaQueryWrapper<PricePrepareItem>> itemQueryCaptor =
+        ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+    ArgumentCaptor<LambdaQueryWrapper<PricePrepareGap>> gapQueryCaptor =
+        ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+    verify(itemMapper).selectList(itemQueryCaptor.capture());
+    verify(gapMapper).selectList(gapQueryCaptor.capture());
+    assertThat(
+            ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>)
+                    itemQueryCaptor.getValue())
+                .getSqlSegment())
+        .contains("oa_form_item_id", "top_product_code");
+    assertThat(itemQueryCaptor.getValue().getParamNameValuePairs().values())
+        .contains("OA-001", 202L, "TOP-SAME", "2026-05");
+    assertThat(
+            ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>)
+                    gapQueryCaptor.getValue())
+                .getSqlSegment())
+        .contains("oa_form_item_id", "top_product_code");
   }
 
   private PricePrepareTopProductSummaryPageResponse topPage(PricePrepareTopProductSummaryResponse... records) {

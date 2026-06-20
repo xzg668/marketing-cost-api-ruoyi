@@ -4,7 +4,7 @@ import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.context.AnalysisContext;
 import com.alibaba.excel.event.AnalysisEventListener;
 import com.alibaba.excel.metadata.data.ReadCellData;
-import com.baomidou.mybatisplus.extension.toolkit.Db;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.BomBatchSummary;
 import com.sanhua.marketingcost.dto.BomImportError;
 import com.sanhua.marketingcost.dto.BomImportResult;
@@ -71,6 +71,9 @@ public class BomImportServiceImpl implements BomImportService {
   /** 预期 Excel sheet 名（首选），找不到时退回 sheetAt(0） */
   private static final String EXPECTED_SHEET_NAME = "BOM母项";
 
+  /** 当前报价核算冻结口径：只展开 U9 主制造 BOM。 */
+  private static final String QUOTE_BOM_PURPOSE = "主制造";
+
   private final BomU9SourceMapper bomU9SourceMapper;
   private final BomHierarchyBuildService buildService;
 
@@ -105,7 +108,8 @@ public class BomImportServiceImpl implements BomImportService {
     String buType = BusinessUnitContext.getCurrentBusinessUnitType();
 
     BomRowListener listener =
-        new BomRowListener(batchId, sourceFileName, importedAt, importedBy, buType, result);
+        new BomRowListener(
+            bomU9SourceMapper, batchId, sourceFileName, importedAt, importedBy, buType, result);
 
     try {
       EasyExcel.read(input, listener)
@@ -131,10 +135,14 @@ public class BomImportServiceImpl implements BomImportService {
   }
 
   /**
-   * 财务一键端点：导入成功后按 batch 里出现过的每个 bomPurpose 循环跑 build ALL。
+   * 财务一键端点：导入成功后只按当前报价核算口径构建 {@value #QUOTE_BOM_PURPOSE}。
    *
    * <p>非 {@code @Transactional}：导入和构建是两个独立事务，避免一次长事务锁死连接池。
-   * 导入已持久化的情况下构建任一 purpose 失败都不回滚导入结果（调用方可重试构建）。
+   * 导入已持久化的情况下构建失败不回滚导入结果（调用方可重试构建）。
+   *
+   * <p>注意：Excel / U9 接口可能包含精益、半自动、自动等完整 BOM 主数据；这些行会保留在
+   * {@code lp_bom_u9_source} 作为源数据，但当前报价核算只消费主制造，避免一键入口构建出全用途
+   * 80w+ 层级行并和报价准备口径不一致。
    */
   @Override
   public ImportAndBuildResult importAndBuild(
@@ -152,39 +160,67 @@ public class BomImportServiceImpl implements BomImportService {
       return merged;
     }
     merged.setImportResult(importResult);
+    if (!importResult.getErrors().isEmpty()) {
+      merged.setStatus("IMPORT_FAILED");
+      merged.setErrorMessage("导入存在错误，未触发层级构建");
+      return merged;
+    }
+    cleanupPreviousSourceSnapshots(sourceFileName, importResult.getImportBatchId());
 
-    // 阶段 B：查 distinct purpose，对每个 purpose 跑一次 ALL 构建
+    // 阶段 B：当前报价核算只构建主制造；完整多用途构建保留给高级流水线/未来主数据同步任务
     String batchId = importResult.getImportBatchId();
     List<String> purposes = bomU9SourceMapper.findDistinctPurposes(batchId);
-    log.info("importAndBuild 阶段 B 开始: batch={} purposes={}", batchId, purposes);
+    log.info("importAndBuild 阶段 B 开始: batch={} quotePurpose={} sourcePurposes={}",
+        batchId, QUOTE_BOM_PURPOSE, purposes);
+
+    if (!purposes.contains(QUOTE_BOM_PURPOSE)) {
+      merged.setStatus("PARTIAL_BUILD_FAILED");
+      merged.setErrorMessage("导入成功，但未找到 BOM生产目的=" + QUOTE_BOM_PURPOSE + " 的数据，未构建层级");
+      log.warn("importAndBuild 跳过构建: batch={} 缺少 quotePurpose={} sourcePurposes={}",
+          batchId, QUOTE_BOM_PURPOSE, purposes);
+      return merged;
+    }
 
     int totalRows = 0;
     boolean anyFailed = false;
-    for (String purpose : purposes) {
-      BuildHierarchyRequest req = new BuildHierarchyRequest();
-      req.setImportBatchId(batchId);
-      req.setBomPurpose(purpose);
-      req.setMode("ALL");
-      try {
-        BuildHierarchyResult br = buildService.build(req);
-        merged.getBuilds().add(br);
-        totalRows += br.getRowsWritten();
-        merged.getPurposesBuilt().add(purpose);
-        if (!br.getFailedProducts().isEmpty()) {
-          // 某些产品 BOM 环 / 孤儿等局部失败 —— 整体标 PARTIAL，继续下一个 purpose
-          anyFailed = true;
-        }
-      } catch (Exception e) {
-        log.warn("importAndBuild 阶段 B purpose={} 构建异常: {}", purpose, e.getMessage());
+    BuildHierarchyRequest req = new BuildHierarchyRequest();
+    req.setImportBatchId(batchId);
+    req.setBomPurpose(QUOTE_BOM_PURPOSE);
+    req.setMode("ALL");
+    try {
+      BuildHierarchyResult br = buildService.build(req);
+      merged.getBuilds().add(br);
+      totalRows += br.getRowsWritten();
+      merged.getPurposesBuilt().add(QUOTE_BOM_PURPOSE);
+      if (!br.getFailedProducts().isEmpty()) {
         anyFailed = true;
-        // 单个 purpose 失败不中断，继续尝试其他 purpose
       }
+    } catch (Exception e) {
+      log.warn("importAndBuild 阶段 B purpose={} 构建异常: {}", QUOTE_BOM_PURPOSE, e.getMessage());
+      anyFailed = true;
+      merged.setErrorMessage(e.getMessage());
     }
     merged.setTotalRawRowsWritten(totalRows);
     merged.setStatus(anyFailed ? "PARTIAL_BUILD_FAILED" : "SUCCESS");
     log.info("importAndBuild 完成: batch={} status={} totalRawRows={}",
         batchId, merged.getStatus(), totalRows);
     return merged;
+  }
+
+  private void cleanupPreviousSourceSnapshots(String sourceFileName, String currentBatchId) {
+    if (!StringUtils.hasText(sourceFileName) || !StringUtils.hasText(currentBatchId)) {
+      return;
+    }
+    int deleted =
+        bomU9SourceMapper.delete(
+            Wrappers.<BomU9Source>lambdaQuery()
+                .eq(BomU9Source::getSourceType, "EXCEL")
+                .eq(BomU9Source::getSourceFileName, sourceFileName)
+                .ne(BomU9Source::getImportBatchId, currentBatchId));
+    if (deleted > 0) {
+      log.info("清理同文件旧 U9 源数据: file={} currentBatch={} deleted={}",
+          sourceFileName, currentBatchId, deleted);
+    }
   }
 
   @Override
@@ -255,11 +291,11 @@ public class BomImportServiceImpl implements BomImportService {
   /**
    * 逐行读 Excel 到 BomU9Source；每 {@link #BATCH_SIZE} 行 flush 一次。
    *
-   * <p>不是 Spring bean —— 通过构造器持有依赖（BomU9SourceMapper 走外层方法闭包引用；
-   * 这里直接用 {@code Db.saveBatch} 静态工具省去该引用）。
+   * <p>不是 Spring bean —— 通过构造器持有 mapper，批量 upsert 到源表业务唯一键。
    */
   private static final class BomRowListener extends AnalysisEventListener<Map<Integer, Object>> {
 
+    private final BomU9SourceMapper bomU9SourceMapper;
     private final String batchId;
     private final String sourceFileName;
     private final LocalDateTime importedAt;
@@ -274,12 +310,14 @@ public class BomImportServiceImpl implements BomImportService {
     private final List<BomU9Source> buffer = new ArrayList<>(BATCH_SIZE);
 
     BomRowListener(
+        BomU9SourceMapper bomU9SourceMapper,
         String batchId,
         String sourceFileName,
         LocalDateTime importedAt,
         String importedBy,
         String buType,
         BomImportResult result) {
+      this.bomU9SourceMapper = bomU9SourceMapper;
       this.batchId = batchId;
       this.sourceFileName = sourceFileName;
       this.importedAt = importedAt;
@@ -365,7 +403,7 @@ public class BomImportServiceImpl implements BomImportService {
       result.getErrors().add(new BomImportError(excelRow, "Excel 解析异常: " + exception.getMessage()));
     }
 
-    /** flush buffer 到 DB，清空后继续。MP saveBatch 走 JDBC BATCH，比 loop insert 快 ~10× */
+    /** flush buffer 到 DB，清空后继续；重复业务键行更新为本次导入批次，不插第二份。 */
     private void flushBuffer() {
       if (StringUtils.hasText(buType)) {
         for (BomU9Source row : buffer) {
@@ -374,7 +412,7 @@ public class BomImportServiceImpl implements BomImportService {
           // （例如将来要按 bu 统计批次时，可在此注入标记到其他关联表）
         }
       }
-      Db.saveBatch(buffer);
+      bomU9SourceMapper.batchUpsert(buffer);
       result.setSuccessRows(result.getSuccessRows() + buffer.size());
       buffer.clear();
     }

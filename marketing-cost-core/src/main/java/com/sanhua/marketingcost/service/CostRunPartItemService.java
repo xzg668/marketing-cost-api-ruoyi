@@ -40,6 +40,8 @@ public interface CostRunPartItemService {
 
   List<CostRunPartItemDto> listStoredByOaNo(String oaNo);
 
+  List<CostRunPartItemDto> listStoredByCostRunNo(String costRunNo);
+
   /**
    * T26：见机表聚合视图 — 在 raw 部品列表基础上把焊料 N 行 + 包装 N 行各自合并成 1 行。
    *
@@ -58,4 +60,6 @@ public interface CostRunPartItemService {
    * @return 聚合后的部品列表，焊料和包装各 1 行，其他原样
    */
   List<CostRunPartItemDto> listAggregatedByOaNo(String oaNo, String productCode);
+
+  List<CostRunPartItemDto> listAggregatedByCostRunNo(String costRunNo, String productCode);
 }

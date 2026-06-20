@@ -106,11 +106,11 @@ class U9SourceBuilderTest extends BomMapperTestBase {
     assertThat(a.getQtyPerTop()).isEqualByComparingTo("1");
     assertThat(a.getIsLeaf()).isEqualTo(0);
     assertThat(b.getLevel()).isEqualTo(1);
-    assertThat(b.getPath()).isEqualTo("/A/B/");
+    assertThat(b.getPath()).isEqualTo("/A/B@1/");
     assertThat(b.getQtyPerTop()).isEqualByComparingTo("2");
     assertThat(b.getIsLeaf()).isEqualTo(0);
     assertThat(c.getLevel()).isEqualTo(2);
-    assertThat(c.getPath()).isEqualTo("/A/B/C/");
+    assertThat(c.getPath()).isEqualTo("/A/B@1/C@1/");
     assertThat(c.getQtyPerTop()).isEqualByComparingTo("6"); // 2 * 3
     assertThat(c.getIsLeaf()).isEqualTo(1);
   }
@@ -292,6 +292,32 @@ class U9SourceBuilderTest extends BomMapperTestBase {
   }
 
   @Test
+  @DisplayName("同一子件挂在同料号不同父路径下时 raw_hierarchy 不互相覆盖")
+  void sameChildUnderRepeatedParentMaterialKeepsBothParentPaths() {
+    seedRow("P", "MID", 1, "1", "主制造", "2026-01-01");
+    seedRowWithProcess("MID", "M", 90, "030", "2", "主制造", "2026-01-01");
+    seedRowWithProcess("MID", "M", 100, "040", "2", "主制造", "2026-01-01");
+    seedRowWithProcess("M", "R", 10, "210", "0.0053", "主制造", "2026-01-01");
+
+    buildService.build(byProduct("P", "主制造"));
+
+    List<BomRawHierarchy> rawChildren =
+        rawMapper.selectList(
+            Wrappers.<BomRawHierarchy>lambdaQuery()
+                .eq(BomRawHierarchy::getTopProductCode, "P")
+                .eq(BomRawHierarchy::getMaterialCode, "R")
+                .orderByAsc(BomRawHierarchy::getPath));
+
+    assertThat(rawChildren).hasSize(2);
+    assertThat(rawChildren).extracting(BomRawHierarchy::getPath)
+        .containsExactlyInAnyOrder(
+            "/P/MID@1/M@90@030/R@10@210/",
+            "/P/MID@1/M@100@040/R@10@210/");
+    assertThat(rawChildren)
+        .allSatisfy(row -> assertThat(row.getQtyPerTop()).isEqualByComparingTo("0.0106"));
+  }
+
+  @Test
   @DisplayName("build：importBatchId 空或 BY_PRODUCT 缺 top → IllegalArgumentException")
   void testInvalidRequest() {
     assertThatThrownBy(() -> buildService.build(new BuildHierarchyRequest()))
@@ -367,12 +393,13 @@ class U9SourceBuilderTest extends BomMapperTestBase {
     assertThat(top.getPath()).isEqualTo("/1079900000536/");
     assertThat(top.getQtyPerTop()).isEqualByComparingTo("1");
 
-    // 所有非顶层 path 必须以 /1079900000536/ 开头且以 materialCode/ 结尾
+    // 所有非顶层 path 必须以 /1079900000536/ 开头，末段以 materialCode 开头；
+    // 末段允许带 @child_seq/@process_seq 以区分同料号在不同父路径下的真实行。
     rows.stream().filter(r -> r.getLevel() > 0).forEach(r -> {
       assertThat(r.getPath())
           .as("path 应以顶层料号开头: " + r.getPath())
           .startsWith("/1079900000536/");
-      assertThat(r.getPath()).endsWith("/" + r.getMaterialCode() + "/");
+      assertThat(lastPathSegment(r.getPath())).startsWith(r.getMaterialCode());
     });
 
     // 4) 树查询接口也能拿到非空结果
@@ -417,6 +444,36 @@ class U9SourceBuilderTest extends BomMapperTestBase {
   private void seedRow(
       String parent, String child, int seq, String qty, String purpose, String effFrom) {
     seedRowInto(importBatchId, parent, child, seq, qty, purpose, effFrom);
+  }
+
+  private void seedRowWithProcess(
+      String parent,
+      String child,
+      int seq,
+      String processSeq,
+      String qty,
+      String purpose,
+      String effFrom) {
+    BomU9Source row = new BomU9Source();
+    row.setImportBatchId(importBatchId);
+    row.setSourceType("EXCEL");
+    row.setImportedAt(LocalDateTime.now());
+    row.setParentMaterialNo(parent);
+    row.setChildMaterialNo(child);
+    row.setChildSeq(seq);
+    row.setProcessSeq(processSeq);
+    row.setQtyPerParent(new BigDecimal(qty));
+    row.setBomPurpose(purpose);
+    row.setEffectiveFrom(LocalDate.parse(effFrom));
+    row.setEffectiveTo(LocalDate.of(9999, 12, 31));
+    row.setChildMaterialName(child + "_name");
+    u9Mapper.insert(row);
+  }
+
+  private static String lastPathSegment(String path) {
+    String normalized = path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
+    int lastSlash = normalized.lastIndexOf('/');
+    return lastSlash < 0 ? normalized : normalized.substring(lastSlash + 1);
   }
 
   /** 插入一行 u9_source 到指定批次（append-only 测试用，模拟多次独立导入） */

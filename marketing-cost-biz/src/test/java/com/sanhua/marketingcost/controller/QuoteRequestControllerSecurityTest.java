@@ -8,6 +8,11 @@ import static org.mockito.Mockito.when;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import com.sanhua.marketingcost.dto.ingest.QuoteRequestListItemResponse;
 import com.sanhua.marketingcost.security.PermissionService;
+import com.sanhua.marketingcost.service.QuoteBomConfirmationService;
+import com.sanhua.marketingcost.service.QuoteCostRunWorkbenchService;
+import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
+import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
+import com.sanhua.marketingcost.service.QuotePriceTypeConfirmationService;
 import com.sanhua.marketingcost.service.ingest.QuoteRequestQueryService;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
@@ -75,8 +80,45 @@ class QuoteRequestControllerSecurityTest {
     }
 
     @Bean
-    QuoteRequestController quoteRequestController(QuoteRequestQueryService service) {
-      return new QuoteRequestController(service);
+    QuoteCostingWorkbenchService quoteCostingWorkbenchService() {
+      return mock(QuoteCostingWorkbenchService.class);
+    }
+
+    @Bean
+    QuoteBomConfirmationService quoteBomConfirmationService() {
+      return mock(QuoteBomConfirmationService.class);
+    }
+
+    @Bean
+    QuotePriceTypeConfirmationService quotePriceTypeConfirmationService() {
+      return mock(QuotePriceTypeConfirmationService.class);
+    }
+
+    @Bean
+    QuotePricePrepareWorkbenchService quotePricePrepareWorkbenchService() {
+      return mock(QuotePricePrepareWorkbenchService.class);
+    }
+
+    @Bean
+    QuoteCostRunWorkbenchService quoteCostRunWorkbenchService() {
+      return mock(QuoteCostRunWorkbenchService.class);
+    }
+
+    @Bean
+    QuoteRequestController quoteRequestController(
+        QuoteRequestQueryService service,
+        QuoteCostingWorkbenchService workbenchService,
+        QuoteBomConfirmationService confirmationService,
+        QuotePriceTypeConfirmationService priceTypeConfirmationService,
+        QuotePricePrepareWorkbenchService pricePrepareWorkbenchService,
+        QuoteCostRunWorkbenchService costRunWorkbenchService) {
+      return new QuoteRequestController(
+          service,
+          workbenchService,
+          confirmationService,
+          priceTypeConfirmationService,
+          pricePrepareWorkbenchService,
+          costRunWorkbenchService);
     }
   }
 }

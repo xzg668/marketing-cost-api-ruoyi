@@ -65,7 +65,10 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
     PackageComponentSnapshot existing =
         selectByPackagePeriodAndTop(req.packageMaterialCode, req.periodMonth, req.topProductCode);
     if (existing != null) {
-      return PackageSnapshotResult.of(existing, selectDetails(existing.getId()), false);
+      List<PackageComponentSnapshotDetail> existingDetails = selectDetails(existing.getId());
+      if (SNAPSHOT_STATUS_NORMAL.equals(existing.getStatus()) || !existingDetails.isEmpty()) {
+        return PackageSnapshotResult.of(existing, existingDetails, false);
+      }
     }
     if (!StringUtils.hasText(req.topProductCode)) {
       throw new IllegalArgumentException("topProductCode 必填：包装组件取结构必须指定来源顶层产品");
@@ -82,15 +85,23 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
     }
 
     PackageComponentSnapshot snapshot = buildNormalSnapshot(req, parent);
-    try {
-      snapshotMapper.insert(snapshot);
-    } catch (DuplicateKeyException ex) {
-      PackageComponentSnapshot concurrent =
-          selectByPackagePeriodAndTop(req.packageMaterialCode, req.periodMonth, req.topProductCode);
-      if (concurrent != null) {
-        return PackageSnapshotResult.of(concurrent, selectDetails(concurrent.getId()), false);
+    if (existing != null) {
+      snapshot.setId(existing.getId());
+      snapshotDetailMapper.delete(
+          Wrappers.<PackageComponentSnapshotDetail>lambdaQuery()
+              .eq(PackageComponentSnapshotDetail::getSnapshotId, existing.getId()));
+      snapshotMapper.updateById(snapshot);
+    } else {
+      try {
+        snapshotMapper.insert(snapshot);
+      } catch (DuplicateKeyException ex) {
+        PackageComponentSnapshot concurrent =
+            selectByPackagePeriodAndTop(req.packageMaterialCode, req.periodMonth, req.topProductCode);
+        if (concurrent != null) {
+          return PackageSnapshotResult.of(concurrent, selectDetails(concurrent.getId()), false);
+        }
+        throw ex;
       }
-      throw ex;
     }
 
     List<PackageComponentSnapshotDetail> details = buildDetails(snapshot, children);
@@ -162,6 +173,7 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
     snapshot.setPackageQtyPerParent(parent.getQtyPerParent());
     snapshot.setPackageQtyPerTop(parent.getQtyPerTop());
     snapshot.setPackageParentBaseQty(resolveParentBaseQty(parent));
+    snapshot.setMissingReason("");
     snapshot.setLockedAt(LocalDateTime.now());
     return snapshot;
   }

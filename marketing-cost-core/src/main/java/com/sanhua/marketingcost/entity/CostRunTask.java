@@ -17,6 +17,8 @@ public class CostRunTask {
   private Long id;
 
   private String batchNo;
+  private Long costRunVersionId;
+  private String costRunNo;
   private String scene;
   private String sourceNo;
   private String calcObjectKey;

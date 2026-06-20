@@ -116,6 +116,7 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V44__bom_raw_material_cost_elements_dict.sql", "V44");
       // BSR-01：新 BOM 结算规则表与 costing/sub_ref 新追溯字段，保证旧集成测试 schema 跟实体同步
       runScriptViaMysqlCli("/db/V146__bom_settlement_rule_schema.sql", "V146");
+      runScriptViaMysqlCli("/db/V172__bom_raw_hierarchy_source_line_key.sql", "V172");
     } catch (Exception e) {
       // 把 root cause 的文字信息拼进 message，避免 surefire 只保留 Caused by 的短描述
       Throwable root = e;

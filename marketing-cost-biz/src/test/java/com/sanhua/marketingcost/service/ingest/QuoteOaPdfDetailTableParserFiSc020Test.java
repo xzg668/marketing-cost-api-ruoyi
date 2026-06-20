@@ -61,6 +61,89 @@ class QuoteOaPdfDetailTableParserFiSc020Test {
   }
 
   @Test
+  void parsesFragmentedDirectSaleDetailRowFromWeaverPdfLayout() {
+    QuotePdfDocument document =
+        document(
+            "FI-SC-020-20260611-2.pdf",
+            row(cell("成本明细表", 48)),
+            row(cell("成本", 421)),
+            row(
+                cell("含运输费", 360),
+                cell("不含运输", 390),
+                cell("有效", 421),
+                cell("不锈钢", 441),
+                cell("不锈钢", 469),
+                cell("铜重", 498)),
+            row(
+                cell("序", 52),
+                cell("运输", 292),
+                cell("预计年用", 311),
+                cell("包装", 340)),
+            row(
+                cell("物料选择", 62),
+                cell("客户编码", 99),
+                cell("U11位码", 130),
+                cell("料号", 161),
+                cell("三花型号", 186),
+                cell("品名", 230),
+                cell("规格", 254),
+                cell("总成", 360),
+                cell("本", 375),
+                cell("费总成", 390),
+                cell("本期", 412),
+                cell("备注", 518)),
+            row(
+                cell("号", 52),
+                cell("费", 292),
+                cell("量（只）", 311),
+                cell("方式", 340)),
+            row(
+                cell("(不含税)", 360),
+                cell("(不含税)", 390),
+                cell("（月", 421)),
+            row(cell("）", 421)),
+            row(cell("105390", 161), cell("钎焊板", 230)),
+            row(cell("1053900", 62), cell("J20BH-50H-", 186)),
+            row(
+                cell("1", 54),
+                cell("3314801", 99),
+                cell("003055", 161),
+                cell("式换热", 230),
+                cell("1000", 311),
+                cell("213.854", 360),
+                cell("213.854", 390),
+                cell("1", 421)),
+            row(cell("030554", 62), cell("01", 186)),
+            row(cell("4", 161), cell("器", 230)),
+            row(cell(">>辅助信息", 30)));
+    QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SC_020);
+
+    parser.parse(context(QuoteExcelTemplateType.FI_SC_020, document), request);
+
+    assertThat(request.getItems()).hasSize(1);
+    QuoteIngestItemRequest item = request.getItems().get(0);
+    assertThat(item.getSeq()).isEqualTo(1);
+    assertThat(item.getCustomerCode())
+        .as(
+            "material=%s, model=%s, product=%s, annual=%s, withShip=%s, noShip=%s, valid=%s",
+            item.getMaterialNo(),
+            item.getSunlModel(),
+            item.getProductName(),
+            item.getAnnualVolume(),
+            item.getTotalWithShip(),
+            item.getTotalNoShip(),
+            item.getValidMonth())
+        .isEqualTo("3314801");
+    assertThat(item.getMaterialNo()).isEqualTo("1053900030554");
+    assertThat(item.getSunlModel()).isEqualTo("J20BH-50H-01");
+    assertThat(item.getProductName()).isEqualTo("钎焊板式换热器");
+    assertThat(item.getAnnualVolume()).isEqualTo("1000");
+    assertThat(item.getTotalWithShip()).isEqualTo("213.854");
+    assertThat(item.getTotalNoShip()).isEqualTo("213.854");
+    assertThat(item.getValidMonth()).isEqualTo("1");
+  }
+
+  @Test
   void desktopPdfSamplesContainLocateableDetailTableWhenAvailable() throws Exception {
     List<Path> samples =
         List.of(
@@ -92,6 +175,44 @@ class QuoteOaPdfDetailTableParserFiSc020Test {
               assertThat(item.getMaterialNo() != null || item.getSunlModel() != null).isTrue());
         }
       }
+    }
+  }
+
+  @Test
+  void parsesRealFiSc020DirectSalePdfWhenAvailable() throws Exception {
+    Path sample = Path.of("/Users/xiexicheng/Desktop/板换/FI-SC-020-20260611-2.pdf");
+    Assumptions.assumeTrue(Files.exists(sample), "real FI-SC-020 desktop PDF is required");
+
+    PdfBoxQuotePdfTextExtractor extractor = new PdfBoxQuotePdfTextExtractor();
+    try (InputStream inputStream = Files.newInputStream(sample)) {
+      QuotePdfDocument document = extractor.extract(inputStream, sample.getFileName().toString());
+      QuoteExcelTemplateType templateType =
+          new QuoteOaPdfTemplateResolver().resolve(sample.getFileName().toString(), document.getFullText());
+      QuoteIngestRequest request = request(templateType);
+
+      parser.parse(context(templateType, document), request);
+
+      assertThat(templateType).isEqualTo(QuoteExcelTemplateType.FI_SC_020);
+      assertThat(request.getItems()).hasSize(1);
+      QuoteIngestItemRequest item = request.getItems().get(0);
+      assertThat(item.getCustomerCode())
+          .as(
+              "material=%s, model=%s, product=%s, annual=%s, withShip=%s, noShip=%s, valid=%s",
+              item.getMaterialNo(),
+              item.getSunlModel(),
+              item.getProductName(),
+              item.getAnnualVolume(),
+              item.getTotalWithShip(),
+              item.getTotalNoShip(),
+              item.getValidMonth())
+          .isEqualTo("3314801");
+      assertThat(item.getMaterialNo()).isEqualTo("1053900030554");
+      assertThat(item.getSunlModel()).isEqualTo("J20BH-50H-01");
+      assertThat(item.getProductName()).isEqualTo("钎焊板式换热器");
+      assertThat(item.getAnnualVolume()).isEqualTo("1000");
+      assertThat(item.getTotalWithShip()).isEqualTo("213.854");
+      assertThat(item.getTotalNoShip()).isEqualTo("213.854");
+      assertThat(item.getValidMonth()).isEqualTo("1");
     }
   }
 }

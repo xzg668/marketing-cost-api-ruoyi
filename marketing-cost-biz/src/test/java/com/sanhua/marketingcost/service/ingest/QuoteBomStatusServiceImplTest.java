@@ -68,10 +68,11 @@ class QuoteBomStatusServiceImplTest {
   }
 
   @Test
-  void productWithLocalBomUpdatesStatusToSynced() {
+  void productWithCurrentMonthCostingRowsUpdatesStatusToCurrentMonthQuoted() {
     stubFormAndItems(List.of(item(10L, 1, "MAT-1001", "SHF-A")), List.of());
-    BomAvailability availability = available("U9");
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-1001")).thenReturn(availability);
+    BomAvailability availability = available("COSTING_SNAPSHOT");
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-1001", "2026-06"))
+        .thenReturn(availability);
     when(productPackagingTypeResolver.resolve("MAT-1001"))
         .thenReturn(new U9ProductPackagingTypeResolver.Result(
             U9ProductPackagingTypeResolver.NAKED_PRODUCT, "110101"));
@@ -79,21 +80,33 @@ class QuoteBomStatusServiceImplTest {
     QuoteBomStatusResponse response = service.checkByOaNo("OA-T7-001");
 
     assertThat(response.getSyncedCount()).isEqualTo(1);
-    assertThat(response.getItems().get(0).getBomStatus()).isEqualTo("SYNCED");
+    assertThat(response.getItems().get(0).getBomStatus()).isEqualTo("CURRENT_MONTH_QUOTED");
     assertThat(response.getItems().get(0).getProductPackagingType()).isEqualTo("NAKED_PRODUCT");
     assertThat(response.getItems().get(0).getMainCategoryCode()).isEqualTo("110101");
     ArgumentCaptor<QuoteBomStatus> captor = ArgumentCaptor.forClass(QuoteBomStatus.class);
     verify(quoteBomStatusMapper).insert(any(QuoteBomStatus.class));
     verify(quoteBomStatusMapper).updateById(captor.capture());
-    assertThat(captor.getValue().getBomStatus()).isEqualTo("SYNCED");
-    assertThat(captor.getValue().getBomSource()).isEqualTo("U9");
+    assertThat(captor.getValue().getBomStatus()).isEqualTo("CURRENT_MONTH_QUOTED");
+    assertThat(captor.getValue().getBomSource()).isEqualTo("COSTING_SNAPSHOT");
     assertThat(captor.getValue().getBomVersion()).isEqualTo("V1");
+  }
+
+  @Test
+  void productWithRawHierarchyUpdatesStatusToU9BomExists() {
+    stubFormAndItems(List.of(item(15L, 1, "MAT-U9-1", "SHF-U9")), List.of());
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-U9-1", "2026-06"))
+        .thenReturn(available("U9"));
+
+    QuoteBomStatusResponse response = service.checkByOaNo("OA-T7-001");
+
+    assertThat(response.getSyncedCount()).isEqualTo(1);
+    assertThat(response.getItems().get(0).getBomStatus()).isEqualTo("U9_BOM_EXISTS");
   }
 
   @Test
   void productWithoutLocalBomUpdatesStatusToNoBom() {
     stubFormAndItems(List.of(item(11L, 1, "MAT-MISSING", "SHF-B")), List.of());
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-MISSING"))
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-MISSING", "2026-06"))
         .thenReturn(BomAvailability.unavailable("未匹配到本地正式 BOM 或有效补录 BOM"));
 
     QuoteBomStatusResponse response = service.checkByOaNo("OA-T7-001");
@@ -106,7 +119,7 @@ class QuoteBomStatusServiceImplTest {
   @Test
   void productWithoutMaterialNoIsNoBomWithClearError() {
     stubFormAndItems(List.of(item(12L, 1, null, "SHF-C")), List.of());
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", null))
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", null, "2026-06"))
         .thenReturn(BomAvailability.unavailable("产品料号为空，无法自动匹配 BOM"));
 
     QuoteBomStatusResponse response = service.checkByOaNo("OA-T7-001");
@@ -124,7 +137,8 @@ class QuoteBomStatusServiceImplTest {
     existing.setOaNo("OA-T7-001");
     existing.setBomStatus("NOT_CHECKED");
     stubFormAndItems(List.of(item(13L, 1, "MAT-1002", "SHF-D")), List.of(existing));
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-1002")).thenReturn(available("U9"));
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-1002", "2026-06"))
+        .thenReturn(available("U9"));
 
     QuoteBomStatusResponse response = service.checkByOaNo("OA-T7-001");
 
@@ -257,12 +271,13 @@ class QuoteBomStatusServiceImplTest {
             })
         .when(quoteBomMonthlySnapshotMapper)
         .insert(any(QuoteBomMonthlySnapshot.class));
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2001")).thenReturn(available("U9"));
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2001", "2026-06"))
+        .thenReturn(available("U9"));
 
     QuoteBomStatusResponse response = service.checkForCostRun("OA-T7-001");
 
     assertThat(response.getSyncedCount()).isEqualTo(1);
-    assertThat(response.getItems().get(0).getBomStatus()).isEqualTo("SYNCED");
+    assertThat(response.getItems().get(0).getBomStatus()).isEqualTo("U9_BOM_EXISTS");
     assertThat(response.getItems().get(0).getCostPeriodMonth()).isEqualTo("2026-06");
     assertThat(response.getItems().get(0).getSyncRecordId()).isEqualTo(7001L);
     ArgumentCaptor<QuoteBomMonthlySnapshot> snapshotCaptor =
@@ -293,7 +308,7 @@ class QuoteBomStatusServiceImplTest {
     assertThat(response.getItems().get(0).getBomStatus()).isEqualTo("REUSED_CURRENT_MONTH");
     assertThat(response.getItems().get(0).getReusedFromRecordId()).isEqualTo(8001L);
     assertThat(response.getItems().get(0).getSyncAt()).isEqualTo(snapshot.getSyncAt());
-    verify(bomAvailabilityAdapter, never()).findAvailableBom(any(), any());
+    verify(bomAvailabilityAdapter, never()).findAvailableBom(any(), any(), any());
   }
 
   @Test
@@ -303,11 +318,12 @@ class QuoteBomStatusServiceImplTest {
     item.setPackageMethod("BOX");
     stubFormAndItems(List.of(item), List.of());
     when(quoteBomMonthlySnapshotMapper.selectList(any())).thenReturn(List.of());
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2003")).thenReturn(available("U9"));
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2003", "2026-06"))
+        .thenReturn(available("U9"));
 
     service.checkForCostRun("OA-T7-001");
 
-    verify(bomAvailabilityAdapter).findAvailableBom("OA-T7-001", "MAT-2003");
+    verify(bomAvailabilityAdapter).findAvailableBom("OA-T7-001", "MAT-2003", "2026-06");
   }
 
   @Test
@@ -317,11 +333,12 @@ class QuoteBomStatusServiceImplTest {
     item.setPackageMethod("PALLET");
     stubFormAndItems(List.of(item), List.of());
     when(quoteBomMonthlySnapshotMapper.selectList(any())).thenReturn(List.of());
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2004")).thenReturn(available("U9"));
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2004", "2026-06"))
+        .thenReturn(available("U9"));
 
     service.checkForCostRun("OA-T7-001");
 
-    verify(bomAvailabilityAdapter).findAvailableBom("OA-T7-001", "MAT-2004");
+    verify(bomAvailabilityAdapter).findAvailableBom("OA-T7-001", "MAT-2004", "2026-06");
   }
 
   @Test
@@ -331,11 +348,12 @@ class QuoteBomStatusServiceImplTest {
     item.setPackageMethod("BOX");
     stubFormAndItems(List.of(item), List.of());
     when(quoteBomMonthlySnapshotMapper.selectList(any())).thenReturn(List.of());
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2005")).thenReturn(available("U9"));
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2005", "2026-06"))
+        .thenReturn(available("U9"));
 
     service.checkForCostRun("OA-T7-001");
 
-    verify(bomAvailabilityAdapter).findAvailableBom("OA-T7-001", "MAT-2005");
+    verify(bomAvailabilityAdapter).findAvailableBom("OA-T7-001", "MAT-2005", "2026-06");
   }
 
   @Test
@@ -345,7 +363,7 @@ class QuoteBomStatusServiceImplTest {
     item.setPackageMethod("BOX");
     stubFormAndItems(List.of(item), List.of());
     when(quoteBomMonthlySnapshotMapper.selectList(any())).thenReturn(List.of());
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-MISSING"))
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-MISSING", "2026-06"))
         .thenReturn(BomAvailability.unavailable("未匹配到本地正式 BOM 或有效补录 BOM"));
 
     QuoteBomStatusResponse response = service.checkForCostRun("OA-T7-001");
@@ -377,12 +395,13 @@ class QuoteBomStatusServiceImplTest {
             })
         .when(quoteBomMonthlySnapshotMapper)
         .insert(any(QuoteBomMonthlySnapshot.class));
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-LEGACY")).thenReturn(available("U9"));
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-LEGACY", "2026-06"))
+        .thenReturn(available("U9"));
 
     QuoteBomStatusResponse response = service.checkForCostRun("OA-T7-001");
 
     assertThat(response.getSyncedCount()).isEqualTo(1);
-    assertThat(response.getItems().get(0).getBomStatus()).isEqualTo("SYNCED");
+    assertThat(response.getItems().get(0).getBomStatus()).isEqualTo("U9_BOM_EXISTS");
     assertThat(response.getItems().get(0).getCostPeriodMonth()).isEqualTo("2026-06");
     assertThat(response.getItems().get(0).getSyncRecordId()).isEqualTo(7300L);
     verify(quoteBomStatusMapper, never()).insert(any(QuoteBomStatus.class));

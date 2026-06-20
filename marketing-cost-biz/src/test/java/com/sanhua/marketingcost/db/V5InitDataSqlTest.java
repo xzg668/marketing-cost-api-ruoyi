@@ -79,7 +79,7 @@ class V5InitDataSqlTest {
                 "菜单总数应为 47（8 目录 + 35 菜单 + 4 按钮）");
     }
 
-    /** 目录数 8：系统管理/数据接入/基础数据/辅料管理(二级)/价格源管理/联动价(二级)/成本核算/结账 */
+    /** 目录数 8：系统管理/报价需求/基础数据/辅料管理(二级)/价格源管理/联动价(二级)/成本核算/结账 */
     @Test
     void directoryCountIs8() {
         MenuStats stats = parseMenus();
@@ -136,7 +136,7 @@ class V5InitDataSqlTest {
     void topLevelDirectoriesAligned() {
         MenuStats stats = parseMenus();
         assertMenu(stats, 100, "系统管理", 0, "M");
-        assertMenu(stats, 200, "数据接入", 0, "M");
+        assertMenu(stats, 200, "报价需求", 0, "M");
         assertMenu(stats, 300, "基础数据", 0, "M");
         assertMenu(stats, 400, "价格源管理", 0, "M");
         assertMenu(stats, 500, "成本核算", 0, "M");

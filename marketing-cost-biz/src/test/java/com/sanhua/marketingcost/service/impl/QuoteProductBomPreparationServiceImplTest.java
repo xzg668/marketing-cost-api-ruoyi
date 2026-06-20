@@ -96,7 +96,7 @@ class QuoteProductBomPreparationServiceImplTest {
   void prepareNonBareWhenFormalBomExists() {
     stubQuoteLine("FIN-001", "2026-05");
     when(productTypeResolveService.resolve("FIN-001")).thenReturn(type("FIN-001", QuoteProductType.NON_BARE));
-    when(formalBomReadService.read("FIN-001", "2026-05", null))
+    when(formalBomReadService.read("FIN-001", "2026-05", null, LocalDate.now()))
         .thenReturn(formalFound("FIN-001", "2026-05"));
 
     QuoteProductBomPreparationPreview preview = service.prepareByOaFormItem(10L);
@@ -115,7 +115,7 @@ class QuoteProductBomPreparationServiceImplTest {
     stubQuoteLine("FIN-MISSING", "2026-05");
     when(productTypeResolveService.resolve("FIN-MISSING"))
         .thenReturn(type("FIN-MISSING", QuoteProductType.NON_BARE));
-    when(formalBomReadService.read("FIN-MISSING", "2026-05", null))
+    when(formalBomReadService.read("FIN-MISSING", "2026-05", null, LocalDate.now()))
         .thenReturn(formalMissing("FIN-MISSING", "2026-05"));
     when(supplementBomReadService.readApproved(
             "FIN-MISSING", "NON_BARE", "NON_BARE_FULL_BOM", "2026-05"))
@@ -135,7 +135,7 @@ class QuoteProductBomPreparationServiceImplTest {
     stubQuoteLine("FIN-CROSS", "2026-06");
     when(productTypeResolveService.resolve("FIN-CROSS"))
         .thenReturn(type("FIN-CROSS", QuoteProductType.NON_BARE));
-    when(formalBomReadService.read("FIN-CROSS", "2026-06", null))
+    when(formalBomReadService.read("FIN-CROSS", "2026-06", null, LocalDate.now()))
         .thenReturn(formalFound("FIN-CROSS", "2026-06"));
 
     QuoteProductBomPreparationPreview preview = service.prepareByOaFormItem(10L);
@@ -151,7 +151,7 @@ class QuoteProductBomPreparationServiceImplTest {
     stubQuoteLine("FIN-EXPIRED", "2026-05");
     when(productTypeResolveService.resolve("FIN-EXPIRED"))
         .thenReturn(type("FIN-EXPIRED", QuoteProductType.NON_BARE));
-    when(formalBomReadService.read("FIN-EXPIRED", "2026-05", null))
+    when(formalBomReadService.read("FIN-EXPIRED", "2026-05", null, LocalDate.now()))
         .thenReturn(formalMissing("FIN-EXPIRED", "2026-05"));
     when(supplementBomReadService.readApproved(
             "FIN-EXPIRED", "NON_BARE", "NON_BARE_FULL_BOM", "2026-05"))
@@ -182,7 +182,7 @@ class QuoteProductBomPreparationServiceImplTest {
   void prepareBareWithBodyBomButMissingPackageReference() {
     stubQuoteLine("BARE-001", "2026-05");
     when(productTypeResolveService.resolve("BARE-001")).thenReturn(type("BARE-001", QuoteProductType.BARE));
-    when(formalBomReadService.read("BARE-001", "2026-05", null))
+    when(formalBomReadService.read("BARE-001", "2026-05", null, LocalDate.now()))
         .thenReturn(formalFound("BARE-001", "2026-05"));
     when(packageReadService.readApprovedReferenceForBareProduct("BARE-001"))
         .thenReturn(packageMissing("BARE-001"));
@@ -202,7 +202,7 @@ class QuoteProductBomPreparationServiceImplTest {
     stubQuoteLine("BARE-MISSING", "2026-05");
     when(productTypeResolveService.resolve("BARE-MISSING"))
         .thenReturn(type("BARE-MISSING", QuoteProductType.BARE));
-    when(formalBomReadService.read("BARE-MISSING", "2026-05", null))
+    when(formalBomReadService.read("BARE-MISSING", "2026-05", null, LocalDate.now()))
         .thenReturn(formalMissing("BARE-MISSING", "2026-05"));
     when(supplementBomReadService.readApproved("BARE-MISSING", "BARE", "BARE_BODY_BOM", "2026-05"))
         .thenReturn(supplementMissing("BARE-MISSING", "BARE", "BARE_BODY_BOM", "2026-05"));
@@ -222,7 +222,7 @@ class QuoteProductBomPreparationServiceImplTest {
   void prepareBareReusesApprovedPackageReferenceLongTerm() {
     stubQuoteLine("BARE-PKG", "2026-05");
     when(productTypeResolveService.resolve("BARE-PKG")).thenReturn(type("BARE-PKG", QuoteProductType.BARE));
-    when(formalBomReadService.read("BARE-PKG", "2026-05", null))
+    when(formalBomReadService.read("BARE-PKG", "2026-05", null, LocalDate.now()))
         .thenReturn(formalFound("BARE-PKG", "2026-05"));
     when(packageReadService.readApprovedReferenceForBareProduct("BARE-PKG"))
         .thenReturn(packageFound("REF-2025", "2025-01"));
@@ -272,6 +272,7 @@ class QuoteProductBomPreparationServiceImplTest {
     OaForm form = new OaForm();
     form.setId(20L);
     form.setOaNo("OA-QBP-05");
+    form.setApplyDate(LocalDate.parse(periodMonth + "-16"));
     form.setAccountingPeriodMonth(periodMonth);
     when(itemMapper.selectById(10L)).thenReturn(item);
     when(formMapper.selectById(20L)).thenReturn(form);

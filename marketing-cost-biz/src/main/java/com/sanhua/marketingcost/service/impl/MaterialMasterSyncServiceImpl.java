@@ -4,10 +4,12 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.SyncMaterialMasterRow;
 import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
+import com.sanhua.marketingcost.entity.OaForm;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
-import com.sanhua.marketingcost.service.MaterialMasterSyncService.BatchSummary;
+import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.service.MaterialMasterSyncService;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -17,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,14 +42,25 @@ public class MaterialMasterSyncServiceImpl implements MaterialMasterSyncService 
   private final BomCostingRowMapper bomCostingRowMapper;
   private final MaterialMasterRawMapper rawMapper;
   private final MaterialMasterMapper masterMapper;
+  private final OaFormMapper oaFormMapper;
+
+  @Autowired
+  public MaterialMasterSyncServiceImpl(
+      BomCostingRowMapper bomCostingRowMapper,
+      MaterialMasterRawMapper rawMapper,
+      MaterialMasterMapper masterMapper,
+      OaFormMapper oaFormMapper) {
+    this.bomCostingRowMapper = bomCostingRowMapper;
+    this.rawMapper = rawMapper;
+    this.masterMapper = masterMapper;
+    this.oaFormMapper = oaFormMapper;
+  }
 
   public MaterialMasterSyncServiceImpl(
       BomCostingRowMapper bomCostingRowMapper,
       MaterialMasterRawMapper rawMapper,
       MaterialMasterMapper masterMapper) {
-    this.bomCostingRowMapper = bomCostingRowMapper;
-    this.rawMapper = rawMapper;
-    this.masterMapper = masterMapper;
+    this(bomCostingRowMapper, rawMapper, masterMapper, null);
   }
 
   @Override
@@ -66,13 +80,14 @@ public class MaterialMasterSyncServiceImpl implements MaterialMasterSyncService 
 
     // 2) staging 最新有效批次。raw 表会保留历史批次，后续 U9 接口接入也会继续写 raw，
     //    同步主表时必须固定到一个 active batch，避免同一批同步混入新旧数据。
-    String batchId = rawMapper.selectLatestActiveBatchId(null);
+    String organizationCode = resolveMaterialOrganization(oa);
+    String batchId = selectLatestActiveImportId(organizationCode);
     if (!StringUtils.hasText(batchId)) {
       throw new RuntimeException("staging 表 lp_material_master_raw 无数据");
     }
 
     // 3) 拉这些料号在最新有效批次的 staging 行
-    List<MaterialMasterRaw> raws = rawMapper.selectByLatestBatchAndCodes(codes, null);
+    List<MaterialMasterRaw> raws = selectRawRows(codes, organizationCode);
     if (raws == null || raws.isEmpty()) {
       log.warn("OA {} 涉及 {} 料号，staging 命中 0 行（批次 {}）", oa, codes.size(), batchId);
       return new SyncResult(codes.size(), 0, 0, batchId);
@@ -89,14 +104,41 @@ public class MaterialMasterSyncServiceImpl implements MaterialMasterSyncService 
     // 5) 批量 UPSERT
     int affected = masterMapper.upsertBatch(rows);
     log.info(
-        "T15 主档同步: oa={} codes={} stagingHits={} affected={} batch={}",
-        oa, codes.size(), raws.size(), affected, batchId);
+        "T15 主档同步: oa={} materialOrg={} codes={} stagingHits={} affected={} importTrace={}",
+        oa, organizationCode, codes.size(), raws.size(), affected, batchId);
     return new SyncResult(codes.size(), raws.size(), affected, batchId);
   }
 
-  @Override
-  public List<BatchSummary> listBatchSummaries() {
-    return rawMapper.listBatchSummaries();
+  private String resolveMaterialOrganization(String oaNo) {
+    if (oaFormMapper == null) {
+      return MaterialOrganization.forQuoteProcess(null, oaNo);
+    }
+    OaForm form =
+        oaFormMapper.selectOne(
+            Wrappers.<OaForm>lambdaQuery()
+                .select(OaForm::getProcessCode, OaForm::getOaNo)
+                .eq(OaForm::getOaNo, oaNo)
+                .last("LIMIT 1"));
+    if (form == null) {
+      return MaterialOrganization.forQuoteProcess(null, oaNo);
+    }
+    return MaterialOrganization.forQuoteProcess(form.getProcessCode(), form.getOaNo());
+  }
+
+  private String selectLatestActiveImportId(String organizationCode) {
+    String organization = MaterialOrganization.normalize(organizationCode);
+    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
+      return rawMapper.selectLatestActiveBatchId(null);
+    }
+    return rawMapper.selectLatestActiveBatchId(null, organization);
+  }
+
+  private List<MaterialMasterRaw> selectRawRows(List<String> codes, String organizationCode) {
+    String organization = MaterialOrganization.normalize(organizationCode);
+    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
+      return rawMapper.selectByLatestBatchAndCodes(codes, null);
+    }
+    return rawMapper.selectByLatestBatchAndCodes(codes, null, organization);
   }
 
   /** staging 行 → 同步行：类型转换（VARCHAR → DECIMAL/INT，失败 null）+ BU 推断 + 主表非空兜底 */

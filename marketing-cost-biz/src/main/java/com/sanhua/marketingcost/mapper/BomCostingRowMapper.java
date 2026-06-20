@@ -11,8 +11,8 @@ import org.apache.ibatis.annotations.Select;
 /**
  * lp_bom_costing_row 访问层。
  *
- * <p>当前业务层写入前会按 {@code oa_no + top_product_code + period_month} 删除旧行，
- * 确保同一 OA、同一产品、同一月份只有一份 BOM 结算明细。
+ * <p>报价产品核算入口按 {@code oa_no + oa_form_item_id + top_product_code + period_month}
+ * 隔离快照；旧正式拍平入口没有产品行上下文时 {@code oa_form_item_id} 可为空。
  */
 @Mapper
 public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
@@ -26,22 +26,25 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
   @Insert(
       "<script>"
           + "INSERT INTO lp_bom_costing_row ("
-          + "  oa_no, top_product_code, parent_code, material_code, level, path,"
+          + "  oa_no, oa_form_item_id, top_product_code, parent_code, material_code, level, path,"
           + "  qty_per_parent, qty_per_top, is_costing_row, subtree_cost_required,"
           + "  raw_hierarchy_node_id, matched_settlement_rule_id, settlement_row_type,"
-          + "  material_name, material_spec, shape_attr, source_category, cost_element_code,"
+          + "  material_name, material_spec, unit, material_attribute, shape_attr, source_category, cost_element_code,"
           + "  bom_purpose, bom_version, u9_is_cost_flag, effective_from, effective_to,"
-          + "  build_batch_id, built_at, period_month, as_of_date, raw_version_effective_from, business_unit_type"
+          + "  build_batch_id, built_at, period_month, as_of_date, raw_version_effective_from,"
+          + "  manual_modified, modified_by, modified_at, business_unit_type"
           + ") VALUES "
           + "<foreach collection='rows' item='e' separator=','>"
-          + "  (#{e.oaNo}, #{e.topProductCode}, #{e.parentCode}, #{e.materialCode}, #{e.level}, #{e.path},"
+          + "  (#{e.oaNo}, #{e.oaFormItemId}, #{e.topProductCode}, #{e.parentCode}, #{e.materialCode}, #{e.level}, #{e.path},"
           + "   #{e.qtyPerParent}, #{e.qtyPerTop}, #{e.isCostingRow}, #{e.subtreeCostRequired},"
           + "   #{e.rawHierarchyNodeId}, #{e.matchedSettlementRuleId}, #{e.settlementRowType},"
-          + "   #{e.materialName}, #{e.materialSpec}, #{e.shapeAttr}, #{e.sourceCategory}, #{e.costElementCode},"
+          + "   #{e.materialName}, #{e.materialSpec}, #{e.unit}, #{e.materialAttribute}, #{e.shapeAttr}, #{e.sourceCategory}, #{e.costElementCode},"
           + "   #{e.bomPurpose}, #{e.bomVersion}, #{e.u9IsCostFlag}, #{e.effectiveFrom}, #{e.effectiveTo},"
-          + "   #{e.buildBatchId}, #{e.builtAt}, #{e.periodMonth}, #{e.asOfDate}, #{e.rawVersionEffectiveFrom}, #{e.businessUnitType})"
+          + "   #{e.buildBatchId}, #{e.builtAt}, #{e.periodMonth}, #{e.asOfDate}, #{e.rawVersionEffectiveFrom},"
+          + "   COALESCE(#{e.manualModified}, 0), #{e.modifiedBy}, #{e.modifiedAt}, #{e.businessUnitType})"
           + "</foreach>"
           + " ON DUPLICATE KEY UPDATE"
+          + "  oa_form_item_id = VALUES(oa_form_item_id),"
           + "  parent_code = VALUES(parent_code),"
           + "  level = VALUES(level),"
           + "  path = VALUES(path),"
@@ -54,6 +57,8 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "  settlement_row_type = VALUES(settlement_row_type),"
           + "  material_name = VALUES(material_name),"
           + "  material_spec = VALUES(material_spec),"
+          + "  unit = VALUES(unit),"
+          + "  material_attribute = VALUES(material_attribute),"
           + "  shape_attr = VALUES(shape_attr),"
           + "  source_category = VALUES(source_category),"
           + "  cost_element_code = VALUES(cost_element_code),"
@@ -64,7 +69,10 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "  effective_to = VALUES(effective_to),"
           + "  build_batch_id = VALUES(build_batch_id),"
           + "  built_at = VALUES(built_at),"
-          + "  period_month = VALUES(period_month)"
+          + "  period_month = VALUES(period_month),"
+          + "  manual_modified = VALUES(manual_modified),"
+          + "  modified_by = VALUES(modified_by),"
+          + "  modified_at = VALUES(modified_at)"
           + "</script>")
   int batchUpsert(@Param("rows") List<BomCostingRow> rows);
 
@@ -77,10 +85,39 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
    * MyBatis-Plus 默认 SELECT 全实体列导致检查失败。
    */
   @Select(
-      "SELECT bom_purpose, bom_version, effective_from, effective_to, build_batch_id "
+      "SELECT bom_purpose, bom_version, effective_from, effective_to, build_batch_id, period_month "
           + "FROM lp_bom_costing_row "
-          + "WHERE oa_no=#{oaNo} AND top_product_code=#{topProductCode} "
+          + "WHERE top_product_code=#{topProductCode} "
+          + "AND (#{periodMonth} IS NULL OR period_month=#{periodMonth}) "
+          + "ORDER BY built_at DESC, id DESC "
           + "LIMIT 1")
   BomCostingRow selectAvailabilitySnapshot(
-      @Param("oaNo") String oaNo, @Param("topProductCode") String topProductCode);
+      @Param("topProductCode") String topProductCode, @Param("periodMonth") String periodMonth);
+
+  @Select(
+      "SELECT period_month "
+          + "FROM lp_bom_costing_row "
+          + "WHERE oa_no=#{oaNo} "
+          + "AND oa_form_item_id=#{oaFormItemId} "
+          + "AND top_product_code=#{topProductCode} "
+          + "ORDER BY built_at DESC, id DESC "
+          + "LIMIT 1")
+  String selectLatestQuoteCostingPeriod(
+      @Param("oaNo") String oaNo,
+      @Param("oaFormItemId") Long oaFormItemId,
+      @Param("topProductCode") String topProductCode);
+
+  @Select(
+      "SELECT * "
+          + "FROM lp_bom_costing_row "
+          + "WHERE oa_no=#{oaNo} "
+          + "AND oa_form_item_id=#{oaFormItemId} "
+          + "AND top_product_code=#{topProductCode} "
+          + "AND period_month=#{periodMonth} "
+          + "ORDER BY path ASC, id ASC")
+  List<BomCostingRow> selectQuoteCostingSnapshot(
+      @Param("oaNo") String oaNo,
+      @Param("oaFormItemId") Long oaFormItemId,
+      @Param("topProductCode") String topProductCode,
+      @Param("periodMonth") String periodMonth);
 }

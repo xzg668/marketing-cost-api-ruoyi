@@ -23,11 +23,15 @@ class U9MaterialMasterIngestServiceImplTest {
         new ApiU9MaterialMasterAdapter()));
 
     U9MaterialImportResponse response =
-        service.ingest(U9MaterialMasterSourceType.EXCEL, new U9MaterialMasterIngestRequest(null, null, null, null));
+        service.ingest(
+            U9MaterialMasterSourceType.EXCEL,
+            new U9MaterialMasterIngestRequest(null, null, null, "COMMERCIAL", null));
 
     assertThat(response.getSourceType()).isEqualTo("EXCEL");
     assertThatThrownBy(() ->
-        service.ingest(U9MaterialMasterSourceType.API, new U9MaterialMasterIngestRequest(null, null, null, null)))
+        service.ingest(
+            U9MaterialMasterSourceType.API,
+            new U9MaterialMasterIngestRequest(null, null, null, "COMMERCIAL", null)))
         .isInstanceOf(UnsupportedOperationException.class)
         .hasMessageContaining("API 接入尚未实现");
   }

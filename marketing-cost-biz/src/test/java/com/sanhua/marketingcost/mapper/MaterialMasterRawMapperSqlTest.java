@@ -7,57 +7,66 @@ import org.apache.ibatis.annotations.Select;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-@DisplayName("MaterialMasterRawMapper 最新有效批次 SQL")
+@DisplayName("MaterialMasterRawMapper 组织当前料品 SQL")
 class MaterialMasterRawMapperSqlTest {
 
   @Test
-  @DisplayName("最新有效批次查询限定 active_flag，并预留 source_type")
+  @DisplayName("内部导入流水查询限定 active_flag、组织，并预留 source_type")
   void latestActiveBatchFiltersActiveFlagAndSourceType() throws Exception {
-    String sql = selectSql("selectLatestActiveBatchId", String.class);
+    String sql = selectSql("selectLatestActiveBatchId", String.class, String.class);
 
     assertThat(sql).contains(
         "MAX(import_batch_id)",
         "active_flag = 1",
+        "organization_code = #{organizationCode}",
         "source_type = #{sourceType}");
   }
 
   @Test
-  @DisplayName("按料号读取 raw 时只取最新有效批次，避免多批次混查")
+  @DisplayName("按料号读取 raw 时限定组织当前有效行，避免跨组织混查")
   void selectByLatestBatchAndCodesUsesLatestActiveSubquery() throws Exception {
-    String sql = selectSql("selectByLatestBatchAndCodes", java.util.Collection.class, String.class);
+    String sql = selectSql(
+        "selectByLatestBatchAndCodes", java.util.Collection.class, String.class, String.class);
 
     assertThat(sql).contains(
         "FROM lp_material_master_raw",
         "active_flag = 1",
-        "SELECT MAX(import_batch_id)",
+        "organization_code = #{organizationCode}",
         "material_code IN",
         "<foreach collection='codes'");
+    assertThat(sql).doesNotContain("SELECT MAX(import_batch_id)");
   }
 
   @Test
-  @DisplayName("包装组件父件查询限定最新有效批次")
+  @DisplayName("报价核算选择器限定组织当前有效 raw，并按料号、品名、型号模糊搜索")
+  void optionsQueryUsesLatestActiveBatchAndKeywordFields() throws Exception {
+    String sql = selectSql(
+        "selectOptionsByLatestBatchKeyword", String.class, String.class, String.class, int.class);
+
+    assertThat(sql).contains(
+        "FROM lp_material_master_raw",
+        "active_flag = 1",
+        "organization_code = #{organizationCode}",
+        "source_type = #{sourceType}",
+        "material_code LIKE CONCAT('%', #{keyword}, '%')",
+        "material_name LIKE CONCAT('%', #{keyword}, '%')",
+        "material_model LIKE CONCAT('%', #{keyword}, '%')",
+        "ORDER BY material_code ASC",
+        "LIMIT #{limit}");
+    assertThat(sql).doesNotContain("SELECT MAX(import_batch_id)");
+  }
+
+  @Test
+  @DisplayName("包装组件父件查询限定组织当前有效 raw")
   void packageComponentParentQueryUsesLatestActiveBatch() throws Exception {
-    String sql = selectSql("selectPackageComponentParentsByLatestBatch", String.class, String.class);
+    String sql = selectSql(
+        "selectPackageComponentParentsByLatestBatch", String.class, String.class, String.class);
 
     assertThat(sql).contains(
         "active_flag = 1",
-        "SELECT MAX(import_batch_id)",
+        "organization_code = #{organizationCode}",
         "main_category_name = #{mainCategoryName}");
-  }
-
-  @Test
-  @DisplayName("批次摘要由 raw 表聚合出 MATERIAL_MASTER 批次记录")
-  void batchSummaryAggregatesRawRows() throws Exception {
-    String sql = selectSql("listBatchSummaries");
-
-    assertThat(sql).contains(
-        "import_batch_id AS batchNo",
-        "'MATERIAL_MASTER' AS datasetCode",
-        "COALESCE(source_type, 'EXCEL') AS sourceType",
-        "COUNT(*) AS totalCount",
-        "COUNT(*) AS successCount",
-        "0 AS failCount",
-        "GROUP BY import_batch_id, source_type, mapping_version");
+    assertThat(sql).doesNotContain("SELECT MAX(import_batch_id)");
   }
 
   private static String selectSql(String methodName, Class<?>... parameterTypes) throws Exception {

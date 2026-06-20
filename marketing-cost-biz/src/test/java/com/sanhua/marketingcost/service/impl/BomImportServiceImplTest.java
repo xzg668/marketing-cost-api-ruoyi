@@ -6,7 +6,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.BomBatchSummary;
 import com.sanhua.marketingcost.dto.BomImportResult;
+import com.sanhua.marketingcost.dto.ImportAndBuildResult;
+import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.BomU9Source;
+import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.BomU9SourceMapper;
 import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
 import com.sanhua.marketingcost.service.BomImportService;
@@ -49,12 +52,14 @@ class BomImportServiceImplTest extends BomMapperTestBase {
 
   @Autowired private BomImportService bomImportService;
   @Autowired private BomU9SourceMapper bomU9SourceMapper;
+  @Autowired private BomRawHierarchyMapper bomRawHierarchyMapper;
 
   @AfterEach
   void cleanUp() throws Exception {
     // 每个测试单独清表，避免互相污染（不同测试生成的 batchId 都唯一，但行数断言会受影响）
     try (Connection conn = openConnection();
         Statement stmt = conn.createStatement()) {
+      stmt.executeUpdate("DELETE FROM lp_bom_raw_hierarchy");
       stmt.executeUpdate("DELETE FROM lp_bom_u9_source");
     }
   }
@@ -175,6 +180,59 @@ class BomImportServiceImplTest extends BomMapperTestBase {
             Wrappers.<BomU9Source>lambdaQuery()
                 .eq(BomU9Source::getImportBatchId, second.getImportBatchId()));
     assertThat(cntSecond).isEqualTo(10L);
+  }
+
+  @Test
+  @DisplayName("testU9MultiVersionRows：同父子关系不同版本/生效日可在同批次并存")
+  void testU9MultiVersionRows() throws Exception {
+    byte[] xlsx = buildVersionedXlsx(new String[][] {
+        {"P-V", "C-V", "主制造", "10", "F001", "2025-07-18", "2025-07-30"},
+        {"P-V", "C-V", "主制造", "10", "F002", "2025-07-31", "9999-12-31"},
+    });
+
+    BomImportResult result =
+        bomImportService.importExcel(new ByteArrayInputStream(xlsx), "versioned.xlsx", "tester");
+
+    assertThat(result.getTotalRows()).isEqualTo(2);
+    assertThat(result.getSuccessRows()).isEqualTo(2);
+    assertThat(result.getErrors()).isEmpty();
+    List<BomU9Source> rows =
+        bomU9SourceMapper.selectList(
+            Wrappers.<BomU9Source>lambdaQuery()
+                .eq(BomU9Source::getImportBatchId, result.getImportBatchId())
+                .eq(BomU9Source::getParentMaterialNo, "P-V")
+                .orderByAsc(BomU9Source::getEffectiveFrom));
+    assertThat(rows).hasSize(2);
+    assertThat(rows).extracting(BomU9Source::getBomVersion).containsExactly("F001", "F002");
+  }
+
+  @Test
+  @DisplayName("importAndBuild：财务一键入口只构建当前报价口径主制造")
+  void testImportAndBuildOnlyMainManufacturing() throws Exception {
+    byte[] xlsx = buildVersionedXlsx(new String[][] {
+        {"P-MAIN", "C-MAIN", "主制造", "10", "F001", "2026-01-01", "9999-12-31"},
+        {"P-LEAN", "C-LEAN", "精益", "10", "F001", "2026-01-01", "9999-12-31"},
+    });
+
+    ImportAndBuildResult result =
+        bomImportService.importAndBuild(new ByteArrayInputStream(xlsx), "mixed-purpose.xlsx", "tester");
+
+    assertThat(result.getStatus()).isEqualTo("SUCCESS");
+    assertThat(result.getPurposesBuilt()).containsExactly("主制造");
+    assertThat(result.getBuilds()).hasSize(1);
+
+    Long mainRows =
+        bomRawHierarchyMapper.selectCount(
+            Wrappers.<BomRawHierarchy>lambdaQuery()
+                .eq(BomRawHierarchy::getTopProductCode, "P-MAIN")
+                .eq(BomRawHierarchy::getBomPurpose, "主制造"));
+    Long leanRows =
+        bomRawHierarchyMapper.selectCount(
+            Wrappers.<BomRawHierarchy>lambdaQuery()
+                .eq(BomRawHierarchy::getTopProductCode, "P-LEAN")
+                .eq(BomRawHierarchy::getBomPurpose, "精益"));
+    assertThat(mainRows).isEqualTo(2L);
+    assertThat(leanRows).isZero();
   }
 
   @Test
@@ -327,6 +385,54 @@ class BomImportServiceImplTest extends BomMapperTestBase {
         Cell to = dr.createCell(32);
         to.setCellValue(new Date());
         to.setCellStyle(dateStyle);
+      }
+      wb.write(out);
+      return out.toByteArray();
+    }
+  }
+
+  /**
+   * 构造可控版本信息的最小 BOM Excel。
+   *
+   * <p>每条数据行格式：
+   * [parentNo, childNo, bomPurpose, childSeq, bomVersion, effectiveFrom, effectiveTo]
+   */
+  private static byte[] buildVersionedXlsx(String[][] rows) throws Exception {
+    try (Workbook wb = new XSSFWorkbook();
+        ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+      Sheet sheet = wb.createSheet("BOM母项");
+
+      Row r1 = sheet.createRow(0);
+      r1.createCell(0).setCellValue("BOM母项");
+
+      String[] headers = new String[] {
+          "母件料品_料号", "母件料品_品名", "生产单位", "BOM生产目的", "版本号", "状态",
+          "子件项次", "子项类型", "子件.料号", "子项_品名", "子项规格",
+          "BOM子项.成本要素.成本要素编码", "BOM子项.成本要素.名称", "BOM子项.委托加工备料来源",
+          "BOM子项.是否计算成本", "工程变更单编码", "发料单位", "BOM子项.子件料品.库存主单位",
+          "子项_用量", "工序号", "子件.主分类", "子件.主分类",
+          "子件.生产分类", "子件料品.形态属性", "子件.生产部门", "发料方式",
+          "是否虚拟", "母件底数", "子项.段3(替代策略)", "子项.段4(工序编号)",
+          "BOM子项.订单完工", "生效日期", "失效日期"
+      };
+      Row r2 = sheet.createRow(1);
+      for (int i = 0; i < headers.length; i++) {
+        r2.createCell(i).setCellValue(headers[i]);
+      }
+
+      for (int i = 0; i < rows.length; i++) {
+        Row dr = sheet.createRow(2 + i);
+        String[] row = rows[i];
+        dr.createCell(0).setCellValue(row[0]);
+        dr.createCell(3).setCellValue(row[2]);
+        dr.createCell(4).setCellValue(row[4]);
+        dr.createCell(5).setCellValue("已核准");
+        dr.createCell(6).setCellValue(row[3]);
+        dr.createCell(7).setCellValue("标准");
+        dr.createCell(8).setCellValue(row[1]);
+        dr.createCell(18).setCellValue("1");
+        dr.createCell(31).setCellValue(row[5]);
+        dr.createCell(32).setCellValue(row[6]);
       }
       wb.write(out);
       return out.toByteArray();

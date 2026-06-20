@@ -36,6 +36,9 @@ public class BomCostingRow {
   /** 所属 OA 单号 */
   private String oaNo;
 
+  /** 所属 OA 产品明细行 ID */
+  private Long oaFormItemId;
+
   // ============================ 结构定位 ============================
 
   /** 顶层产品料号 */
@@ -88,6 +91,12 @@ public class BomCostingRow {
   /** 规格 */
   private String materialSpec;
 
+  /** 计量单位 */
+  private String unit;
+
+  /** 材料属性 */
+  private String materialAttribute;
+
   /** 形态属性 */
   private String shapeAttr;
 
@@ -131,6 +140,17 @@ public class BomCostingRow {
   /** 冻住 raw_hierarchy 行的 effective_from，用于复算时精确定位到哪一版 */
   private LocalDate rawVersionEffectiveFrom;
 
+  // ============================ 报价核算 BOM 编辑审计 ============================
+
+  /** 是否人工修改 */
+  private Integer manualModified;
+
+  /** 修改人 */
+  private String modifiedBy;
+
+  /** 修改时间 */
+  private LocalDateTime modifiedAt;
+
   // ============================ 业务单元隔离（V21） ============================
 
   /** insert 时由 MetaObjectHandler 自动回填 */
@@ -163,6 +183,14 @@ public class BomCostingRow {
 
   public void setOaNo(String oaNo) {
     this.oaNo = oaNo;
+  }
+
+  public Long getOaFormItemId() {
+    return oaFormItemId;
+  }
+
+  public void setOaFormItemId(Long oaFormItemId) {
+    this.oaFormItemId = oaFormItemId;
   }
 
   public String getTopProductCode() {
@@ -277,6 +305,22 @@ public class BomCostingRow {
     this.materialSpec = materialSpec;
   }
 
+  public String getUnit() {
+    return unit;
+  }
+
+  public void setUnit(String unit) {
+    this.unit = unit;
+  }
+
+  public String getMaterialAttribute() {
+    return materialAttribute;
+  }
+
+  public void setMaterialAttribute(String materialAttribute) {
+    this.materialAttribute = materialAttribute;
+  }
+
   public String getShapeAttr() {
     return shapeAttr;
   }
@@ -379,6 +423,30 @@ public class BomCostingRow {
 
   public void setRawVersionEffectiveFrom(LocalDate rawVersionEffectiveFrom) {
     this.rawVersionEffectiveFrom = rawVersionEffectiveFrom;
+  }
+
+  public Integer getManualModified() {
+    return manualModified;
+  }
+
+  public void setManualModified(Integer manualModified) {
+    this.manualModified = manualModified;
+  }
+
+  public String getModifiedBy() {
+    return modifiedBy;
+  }
+
+  public void setModifiedBy(String modifiedBy) {
+    this.modifiedBy = modifiedBy;
+  }
+
+  public LocalDateTime getModifiedAt() {
+    return modifiedAt;
+  }
+
+  public void setModifiedAt(LocalDateTime modifiedAt) {
+    this.modifiedAt = modifiedAt;
   }
 
   public String getBusinessUnitType() {

@@ -9,10 +9,15 @@ public interface QuoteProductTypeResolveService {
 
   QuoteProductTypeResolveResult resolve(String quoteProductCode);
 
+  QuoteProductTypeResolveResult resolve(String quoteProductCode, String organizationCode);
+
   /**
    * 批量识别报价产品形态。
    *
    * <p>返回列表和入参顺序一致，重复料号会复用同一次主档查询结果并按原顺序回填。
    */
   List<QuoteProductTypeResolveResult> batchResolve(Collection<String> quoteProductCodes);
+
+  List<QuoteProductTypeResolveResult> batchResolve(
+      Collection<String> quoteProductCodes, String organizationCode);
 }

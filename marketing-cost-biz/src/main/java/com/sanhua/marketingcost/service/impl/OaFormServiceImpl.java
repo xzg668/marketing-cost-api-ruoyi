@@ -93,12 +93,12 @@ public class OaFormServiceImpl implements OaFormService {
         .orderByAsc(OaFormItem::getSeq)
         .orderByAsc(OaFormItem::getId));
 
-    Map<String, BigDecimal> costTotalMap = buildCostRunTotalMap(form.getOaNo());
+    CostRunTotalIndex costTotalIndex = buildCostRunTotalIndex(form.getOaNo());
     Map<String, MaterialMaster> materialMasterMap = buildMaterialMasterMap(items);
     OaFormDetailDto detail = new OaFormDetailDto();
     detail.setKey(toKeyDto(form));
     detail.setItems(items.stream()
-        .map((item) -> toItemDto(item, costTotalMap, materialMasterMap))
+        .map((item) -> toItemDto(item, costTotalIndex, materialMasterMap))
         .collect(Collectors.toList()));
     return detail;
   }
@@ -115,7 +115,7 @@ public class OaFormServiceImpl implements OaFormService {
     dto.setSteelPrice(form.getSteelPrice());
     dto.setOtherMaterial(form.getOtherMaterial());
     dto.setBaseShipping(form.getBaseShipping());
-    dto.setCalcStatus(form.getCalcStatus());
+    dto.setCalcStatus(normalizeCalcStatus(form.getCalcStatus(), form.getCalcAt() != null));
     return dto;
   }
 
@@ -131,7 +131,7 @@ public class OaFormServiceImpl implements OaFormService {
     dto.setSteelPrice(form.getSteelPrice());
     dto.setOtherMaterial(form.getOtherMaterial());
     dto.setBaseShipping(form.getBaseShipping());
-    dto.setCalcStatus(form.getCalcStatus());
+    dto.setCalcStatus(normalizeCalcStatus(form.getCalcStatus(), form.getCalcAt() != null));
     dto.setSaleLink(form.getSaleLink());
     dto.setRemark(form.getRemark());
     return dto;
@@ -139,7 +139,7 @@ public class OaFormServiceImpl implements OaFormService {
 
   private OaFormDetailItemDto toItemDto(
       OaFormItem item,
-      Map<String, BigDecimal> costTotalMap,
+      CostRunTotalIndex costTotalIndex,
       Map<String, MaterialMaster> materialMasterMap) {
     OaFormDetailItemDto dto = new OaFormDetailItemDto();
     dto.setId(item.getId());
@@ -180,25 +180,24 @@ public class OaFormServiceImpl implements OaFormService {
     dto.setSus316WeightG(item.getSus316WeightG());
     dto.setCopperWeightG(item.getCopperWeightG());
     dto.setValidDate(item.getValidDate());
-    dto.setCalcStatus(item.getCalcStatus());
     dto.setCalcAt(item.getCalcAt());
-    if (StringUtils.hasText(item.getMaterialNo()) && costTotalMap != null) {
-      BigDecimal totalCost = costTotalMap.get(item.getMaterialNo().trim());
-      if (totalCost != null) {
-        dto.setUnitCost(totalCost);
-        if (item.getSupportQty() != null) {
-          dto.setCostAmount(totalCost.multiply(item.getSupportQty()));
-        }
+    BigDecimal totalCost = costTotalIndex == null ? null : costTotalIndex.totalCostOf(item);
+    if (totalCost != null) {
+      dto.setUnitCost(totalCost);
+      if (item.getSupportQty() != null) {
+        dto.setCostAmount(totalCost.multiply(item.getSupportQty()));
       }
     }
+    dto.setCalcStatus(normalizeCalcStatus(item.getCalcStatus(), item.getCalcAt() != null || totalCost != null));
     return dto;
   }
 
-  private Map<String, BigDecimal> buildCostRunTotalMap(String oaNo) {
+  private CostRunTotalIndex buildCostRunTotalIndex(String oaNo) {
     if (!StringUtils.hasText(oaNo)) {
-      return Map.of();
+      return CostRunTotalIndex.empty();
     }
-    Map<String, BigDecimal> map = new HashMap<>();
+    Map<Long, BigDecimal> totalByItemId = new HashMap<>();
+    Map<String, BigDecimal> legacyTotalByProductCode = new HashMap<>();
     List<CostRunResult> results =
         costRunResultMapper.selectList(
             Wrappers.lambdaQuery(CostRunResult.class)
@@ -207,14 +206,57 @@ public class OaFormServiceImpl implements OaFormService {
                 .orderByDesc(CostRunResult::getId));
     if (results != null) {
       for (CostRunResult result : results) {
+        if (result.getTotalCost() == null) {
+          continue;
+        }
+        if (result.getOaFormItemId() != null) {
+          totalByItemId.putIfAbsent(result.getOaFormItemId(), result.getTotalCost());
+          continue;
+        }
         String productCode = result.getProductCode() == null ? null : result.getProductCode().trim();
-        if (StringUtils.hasText(productCode) && result.getTotalCost() != null && !map.containsKey(productCode)) {
-          map.put(productCode, result.getTotalCost());
+        if (StringUtils.hasText(productCode)) {
+          legacyTotalByProductCode.putIfAbsent(productCode, result.getTotalCost());
         }
       }
     }
 
-    return map;
+    return new CostRunTotalIndex(totalByItemId, legacyTotalByProductCode);
+  }
+
+  private String normalizeCalcStatus(String calcStatus, boolean hasCostResult) {
+    String text = calcStatus == null ? "" : calcStatus.trim();
+    if ("CALCULATING".equals(text) || "RUNNING".equals(text) || "试算中".equals(text)) {
+      return "试算中";
+    }
+    if (hasCostResult || "CALCULATED".equals(text) || "DONE".equals(text) || "SUCCESS".equals(text) || "已核算".equals(text)) {
+      return "已核算";
+    }
+    return "未核算";
+  }
+
+  private record CostRunTotalIndex(
+      Map<Long, BigDecimal> totalByItemId,
+      Map<String, BigDecimal> legacyTotalByProductCode) {
+
+    static CostRunTotalIndex empty() {
+      return new CostRunTotalIndex(Map.of(), Map.of());
+    }
+
+    BigDecimal totalCostOf(OaFormItem item) {
+      if (item == null) {
+        return null;
+      }
+      if (item.getId() != null) {
+        BigDecimal byItemId = totalByItemId.get(item.getId());
+        if (byItemId != null) {
+          return byItemId;
+        }
+      }
+      if (!StringUtils.hasText(item.getMaterialNo())) {
+        return null;
+      }
+      return legacyTotalByProductCode.get(item.getMaterialNo().trim());
+    }
   }
 
   private Map<String, MaterialMaster> buildMaterialMasterMap(List<OaFormItem> items) {

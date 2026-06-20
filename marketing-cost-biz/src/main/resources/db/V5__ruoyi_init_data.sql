@@ -37,7 +37,7 @@ VALUES
 -- 2. 菜单数据
 -- menu_type: M=目录, C=菜单, F=按钮
 -- business_unit_type: NULL=通用（当前全部置 NULL，后续按业务再细分）
--- menu_id 分段：100系统 / 200数据接入 / 300基础数据 / 400价格源 / 500成本核算 / 700结账
+-- menu_id 分段：100系统 / 200报价需求 / 300基础数据 / 400价格源 / 500成本核算 / 700结账
 -- --------------------------------------------------------
 
 -- ==================== 系统管理（新增目录） ====================
@@ -56,10 +56,10 @@ VALUES
 (1013, '用户修改', 101, 3, '', NULL, 'F', '0', '0', 'system:user:edit',     '#', 'admin', NOW(), '', NOW(), '', NULL),
 (1014, '用户删除', 101, 4, '', NULL, 'F', '0', '0', 'system:user:remove',   '#', 'admin', NOW(), '', NOW(), '', NULL);
 
--- ==================== 数据接入（对应 menu.js 的 ingest 分组） ====================
+-- ==================== 报价需求（对应 menu.js 的 ingest 分组） ====================
 INSERT IGNORE INTO sys_menu (menu_id, menu_name, parent_id, order_num, path, component, menu_type, visible, status, perms, icon, create_by, create_time, update_by, update_time, remark, business_unit_type)
 VALUES
-(200, '数据接入', 0, 1, 'ingest', NULL, 'M', '0', '0', NULL, 'upload', 'admin', NOW(), '', NOW(), '数据接入目录', NULL),
+(200, '报价需求', 0, 1, 'ingest', NULL, 'M', '0', '0', NULL, 'upload', 'admin', NOW(), '', NOW(), '报价需求目录', NULL),
 (201, 'OA报价单',         200, 1, 'oa-form', 'ingest/oa-form/index', 'C', '0', '0', 'ingest:oa-form:list',  'form',      'admin', NOW(), '', NOW(), '', NULL),
 (202, 'U9 BOM明细',       200, 2, 'u9Bom',   'ingest/u9Bom/index',   'C', '0', '0', 'ingest:u9-bom:list',   'component', 'admin', NOW(), '', NOW(), '', NULL),
 (203, '电子图库BOM明细',   200, 3, 'eleDraw', 'ingest/eleDraw/index', 'C', '0', '0', 'ingest:ele-draw:list', 'component', 'admin', NOW(), '', NOW(), '', NULL),

@@ -7,6 +7,7 @@ import lombok.Setter;
 @Setter
 public class PricePrepareTopProductSummaryQueryRequest {
   private String oaNo;
+  private Long oaFormItemId;
   private String topProductCode;
   private String periodMonth;
   private String status;

@@ -307,7 +307,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
 
   private PackageComponentPrice ensurePriceRow(NormalizedRequest req, PackageComponentSnapshot snapshot) {
     PackageComponentPrice existing =
-        selectByPeriodPackageAndTop(req);
+        selectByUniqueKey(req);
     if (existing != null) {
       existing.setSnapshotId(snapshot == null ? null : snapshot.getId());
       existing.setPackageMaterialName(snapshot == null ? existing.getPackageMaterialName() : snapshot.getPackageMaterialName());
@@ -342,7 +342,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
       return price;
     } catch (DuplicateKeyException ex) {
       PackageComponentPrice concurrent =
-          selectByPeriodPackageAndTop(req);
+          selectByUniqueKey(req);
       if (concurrent != null) {
         if (!req.forceRefresh && isReusableCompletePrice(concurrent)) {
           return concurrent;
@@ -545,6 +545,18 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     }
     List<PackageComponentPrice> rows = priceMapper.selectList(
         query.orderByDesc(PackageComponentPrice::getGeneratedAt)
+            .orderByDesc(PackageComponentPrice::getId)
+            .last("LIMIT 1"));
+    return rows == null || rows.isEmpty() ? null : rows.get(0);
+  }
+
+  private PackageComponentPrice selectByUniqueKey(NormalizedRequest req) {
+    List<PackageComponentPrice> rows = priceMapper.selectList(
+        Wrappers.<PackageComponentPrice>lambdaQuery()
+            .eq(PackageComponentPrice::getPeriodMonth, req.periodMonth)
+            .eq(PackageComponentPrice::getPackageMaterialCode, req.packageMaterialCode)
+            .eq(PackageComponentPrice::getSourceTopProductCode, req.topProductCode)
+            .eq(PackageComponentPrice::getPriceAsOfTime, req.priceAsOfTime)
             .orderByDesc(PackageComponentPrice::getId)
             .last("LIMIT 1"));
     return rows == null || rows.isEmpty() ? null : rows.get(0);

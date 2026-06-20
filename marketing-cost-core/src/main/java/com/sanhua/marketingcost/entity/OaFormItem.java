@@ -54,6 +54,7 @@ public class OaFormItem {
   private LocalDate validDate;
   private String calcStatus;
   private LocalDateTime calcAt;
+  private Long confirmedCostVersionId;
 
   /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
   @TableField(fill = FieldFill.INSERT)
@@ -402,6 +403,14 @@ public class OaFormItem {
 
   public void setCalcAt(LocalDateTime calcAt) {
     this.calcAt = calcAt;
+  }
+
+  public Long getConfirmedCostVersionId() {
+    return confirmedCostVersionId;
+  }
+
+  public void setConfirmedCostVersionId(Long confirmedCostVersionId) {
+    this.confirmedCostVersionId = confirmedCostVersionId;
   }
 
   public LocalDateTime getCreatedAt() {

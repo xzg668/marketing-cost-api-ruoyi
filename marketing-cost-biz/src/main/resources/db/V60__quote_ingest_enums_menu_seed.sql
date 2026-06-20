@@ -3,7 +3,7 @@
 --
 -- 本脚本只固化 T2 基础数据：
 --   1) 接入模块统一枚举字典
---   2) 数据接入下的 报价单导入 / 报价单接入 / 报价单产品 BOM 处理 / 接入流水 菜单
+--   2) 报价需求下的 报价单导入 / 报价单接入 / 报价单产品 BOM 处理 / 接入流水 菜单
 --   3) 按钮权限点
 --   4) 分类规则兜底重放
 --
@@ -137,22 +137,28 @@ INSERT INTO sys_dict_data (dict_sort, dict_label, dict_value, dict_type, status,
   SELECT 2, '已同步', 'SYNCED', 'quote_bom_status', '0', '已从本地正式 BOM 或有效补录 BOM 匹配'
   FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_dict_data WHERE dict_type='quote_bom_status' AND dict_value='SYNCED');
 INSERT INTO sys_dict_data (dict_sort, dict_label, dict_value, dict_type, status, remark)
-  SELECT 3, '无 BOM', 'NO_BOM', 'quote_bom_status', '0', '无可用 BOM，待发起补录'
+  SELECT 3, 'BOM 当月发起过报价', 'CURRENT_MONTH_QUOTED', 'quote_bom_status', '0', '当月 lp_bom_costing_row 已存在该产品料号报价核算数据'
+  FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_dict_data WHERE dict_type='quote_bom_status' AND dict_value='CURRENT_MONTH_QUOTED');
+INSERT INTO sys_dict_data (dict_sort, dict_label, dict_value, dict_type, status, remark)
+  SELECT 4, 'U9 有此 BOM', 'U9_BOM_EXISTS', 'quote_bom_status', '0', 'lp_bom_raw_hierarchy 已存在该产品料号 BOM'
+  FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_dict_data WHERE dict_type='quote_bom_status' AND dict_value='U9_BOM_EXISTS');
+INSERT INTO sys_dict_data (dict_sort, dict_label, dict_value, dict_type, status, remark)
+  SELECT 5, '无 BOM', 'NO_BOM', 'quote_bom_status', '0', '无可用 BOM，待发起补录'
   FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_dict_data WHERE dict_type='quote_bom_status' AND dict_value='NO_BOM');
 INSERT INTO sys_dict_data (dict_sort, dict_label, dict_value, dict_type, status, remark)
-  SELECT 4, '待技术补录', 'ENTRY_PENDING', 'quote_bom_status', '0', NULL
+  SELECT 6, '待技术补录', 'ENTRY_PENDING', 'quote_bom_status', '0', NULL
   FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_dict_data WHERE dict_type='quote_bom_status' AND dict_value='ENTRY_PENDING');
 INSERT INTO sys_dict_data (dict_sort, dict_label, dict_value, dict_type, status, remark)
-  SELECT 5, '技术录入中', 'ENTRY_IN_PROGRESS', 'quote_bom_status', '0', NULL
+  SELECT 7, '技术录入中', 'ENTRY_IN_PROGRESS', 'quote_bom_status', '0', NULL
   FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_dict_data WHERE dict_type='quote_bom_status' AND dict_value='ENTRY_IN_PROGRESS');
 INSERT INTO sys_dict_data (dict_sort, dict_label, dict_value, dict_type, status, remark)
-  SELECT 6, '已手工录入', 'MANUAL_ENTERED', 'quote_bom_status', '0', NULL
+  SELECT 8, '已手工录入', 'MANUAL_ENTERED', 'quote_bom_status', '0', NULL
   FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_dict_data WHERE dict_type='quote_bom_status' AND dict_value='MANUAL_ENTERED');
 INSERT INTO sys_dict_data (dict_sort, dict_label, dict_value, dict_type, status, remark)
-  SELECT 7, '手工 BOM 已过期', 'EXPIRED', 'quote_bom_status', '0', NULL
+  SELECT 9, '手工 BOM 已过期', 'EXPIRED', 'quote_bom_status', '0', NULL
   FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_dict_data WHERE dict_type='quote_bom_status' AND dict_value='EXPIRED');
 INSERT INTO sys_dict_data (dict_sort, dict_label, dict_value, dict_type, status, remark)
-  SELECT 8, '检查异常', 'CHECK_FAILED', 'quote_bom_status', '0', NULL
+  SELECT 10, '检查异常', 'CHECK_FAILED', 'quote_bom_status', '0', NULL
   FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_dict_data WHERE dict_type='quote_bom_status' AND dict_value='CHECK_FAILED');
 
 INSERT INTO sys_dict_data (dict_sort, dict_label, dict_value, dict_type, status, remark)
@@ -194,19 +200,19 @@ INSERT INTO sys_dict_data (dict_sort, dict_label, dict_value, dict_type, status,
   FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM sys_dict_data WHERE dict_type='quote_writeback_status' AND dict_value='SKIPPED');
 
 -- -----------------------------------------------------------------------------
--- 2) 数据接入菜单与权限点
+-- 2) 报价需求菜单与权限点
 -- -----------------------------------------------------------------------------
 
 INSERT INTO sys_menu
   (menu_id, menu_name, parent_id, order_num, path, component, menu_type, visible, status,
    perms, icon, create_by, create_time, update_by, update_time, remark)
 VALUES
-  (200, '数据接入', 0, 1, 'ingest', NULL, 'M', '0', '0',
-   NULL, 'upload', 'admin', NOW(), '', NOW(), '数据接入目录')
+  (200, '报价需求', 0, 1, 'ingest', NULL, 'M', '0', '0',
+   NULL, 'upload', 'admin', NOW(), '', NOW(), '报价需求目录')
 ON DUPLICATE KEY UPDATE
-  menu_name='数据接入', parent_id=0, order_num=1, path='ingest',
+  menu_name='报价需求', parent_id=0, order_num=1, path='ingest',
   component=NULL, menu_type='M', visible='0', status='0', perms=NULL,
-  icon='upload', update_time=NOW(), remark='数据接入目录';
+  icon='upload', update_time=NOW(), remark='报价需求目录';
 
 -- 旧入口保留，但排到新报价单接入菜单之后，T9 再统一处理跳转或收敛。
 UPDATE sys_menu

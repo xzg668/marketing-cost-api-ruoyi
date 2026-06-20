@@ -9,7 +9,9 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.PackagePriceRequest;
@@ -37,6 +39,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -52,6 +56,12 @@ class PackageComponentPriceServiceImplTest {
   private PackageComponentPriceDetailMapper priceDetailMapper;
   private PackageComponentGapItemMapper gapItemMapper;
   private PackageComponentPriceServiceImpl service;
+
+  @BeforeAll
+  static void initTableInfo() {
+    TableInfoHelper.initTableInfo(
+        new MapperBuilderAssistant(new MybatisConfiguration(), ""), PackageComponentPrice.class);
+  }
 
   @BeforeEach
   void setUp() {
@@ -356,6 +366,43 @@ class PackageComponentPriceServiceImplTest {
     verify(priceDetailMapper, never()).delete(any(Wrapper.class));
     verify(priceDetailMapper, never()).insert(any(PackageComponentPriceDetail.class));
     verify(priceMapper, never()).updateById(any(PackageComponentPrice.class));
+  }
+
+  @Test
+  @DisplayName("报价包装重算：只更新同一取价时点的包装价行，不能改写其他时点行")
+  void forceRefreshDoesNotUpdateDifferentPriceAsOfRow() {
+    service = serviceWith(resolver(Map.of("A", PriceResolveResult.hit(new BigDecimal("2.000000"), "固定采购价"))));
+    when(snapshotService.ensureSnapshot(any(PackageSnapshotRequest.class)))
+        .thenReturn(snapshotResult(List.of(detail(101L, 1, "A", "2.000000"))));
+    PackageComponentPrice otherAsOf = new PackageComponentPrice();
+    otherAsOf.setId(509L);
+    otherAsOf.setPackageMaterialCode("9830000026238");
+    otherAsOf.setPeriodMonth("2026-05");
+    otherAsOf.setSourceTopProductCode("1079900000536");
+    otherAsOf.setPriceAsOfTime(LocalDateTime.of(2026, 5, 20, 0, 0));
+    otherAsOf.setPriceStatus("PRICED");
+    otherAsOf.setPriceComplete(true);
+    otherAsOf.setTotalPrice(new BigDecimal("9.99000000"));
+    when(priceMapper.selectList(any(Wrapper.class))).thenAnswer(invocation -> {
+      Wrapper<?> wrapper = invocation.getArgument(0);
+      String sql = wrapper == null ? "" : wrapper.getCustomSqlSegment();
+      return sql.contains("price_as_of_time") ? List.of() : List.of(otherAsOf);
+    });
+    when(priceMapper.insert(any(PackageComponentPrice.class))).thenAnswer(invocation -> {
+      PackageComponentPrice price = invocation.getArgument(0);
+      price.setId(510L);
+      return 1;
+    });
+    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), eq(LocalDate.parse("2026-05-21"))))
+        .thenReturn(List.of(route("A")));
+    PackagePriceRequest request = request();
+    request.setForceRefresh(true);
+
+    PackagePriceResult result = service.ensurePrice(request);
+
+    assertThat(result.getStatus()).isEqualTo("PRICED");
+    assertThat(result.getPrice().getId()).isEqualTo(510L);
+    verify(priceMapper).insert(any(PackageComponentPrice.class));
   }
 
   @Test

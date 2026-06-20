@@ -3,10 +3,12 @@ package com.sanhua.marketingcost.service.impl;
 import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.context.AnalysisContext;
 import com.alibaba.excel.event.AnalysisEventListener;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.toolkit.Db;
 import com.sanhua.marketingcost.dto.U9MaterialImportResponse;
 import com.sanhua.marketingcost.dto.U9MaterialMasterIngestRequest;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.U9MaterialMasterSourceType;
 import com.sanhua.marketingcost.service.U9MaterialMasterIngestAdapter;
 import java.time.LocalDateTime;
@@ -42,13 +44,13 @@ public class ExcelU9MaterialMasterAdapter implements U9MaterialMasterIngestAdapt
     }
     U9MaterialImportResponse response = new U9MaterialImportResponse();
     String batchNo = resolveBatchNo(request.sourceBatchNo());
-    response.setBatchNo(batchNo);
+    String organizationCode = MaterialOrganization.normalize(request.organizationCode());
     response.setDatasetCode(U9MaterialMasterFieldContract.DATASET_CODE);
     response.setSourceType(sourceType().getCode());
     response.setMappingVersion(U9MaterialMasterFieldContract.MAPPING_VERSION);
     response.setStatus("PARSING");
 
-    U9MaterialRowListener listener = new U9MaterialRowListener(batchNo, response);
+    U9MaterialRowListener listener = new U9MaterialRowListener(batchNo, organizationCode, response);
     EasyExcel.read(request.input(), listener)
         .sheet(U9MaterialMasterFieldContract.SHEET_NAME)
         .headRowNumber(0)
@@ -83,14 +85,16 @@ public class ExcelU9MaterialMasterAdapter implements U9MaterialMasterIngestAdapt
 
   private final class U9MaterialRowListener extends AnalysisEventListener<Map<Integer, Object>> {
     private final String batchNo;
+    private final String organizationCode;
     private final U9MaterialImportResponse response;
     private final Map<Integer, String> columnToField = new HashMap<>();
     private final Set<String> seenMaterialCodes = new HashSet<>();
     private final List<MaterialMasterRaw> buffer = new ArrayList<>(BATCH_SIZE);
     private boolean headerParsed;
 
-    private U9MaterialRowListener(String batchNo, U9MaterialImportResponse response) {
+    private U9MaterialRowListener(String batchNo, String organizationCode, U9MaterialImportResponse response) {
       this.batchNo = batchNo;
+      this.organizationCode = organizationCode;
       this.response = response;
     }
 
@@ -157,6 +161,7 @@ public class ExcelU9MaterialMasterAdapter implements U9MaterialMasterIngestAdapt
         return;
       }
       row.setImportBatchId(batchNo);
+      row.setOrganizationCode(organizationCode);
       row.setSourceType(sourceType().getCode());
       row.setSourceBatchNo(batchNo);
       row.setMappingVersion(U9MaterialMasterFieldContract.MAPPING_VERSION);
@@ -195,6 +200,15 @@ public class ExcelU9MaterialMasterAdapter implements U9MaterialMasterIngestAdapt
     private void flush() {
       if (buffer.isEmpty()) {
         return;
+      }
+      List<String> materialCodes = buffer.stream()
+          .map(MaterialMasterRaw::getMaterialCode)
+          .filter(StringUtils::hasText)
+          .toList();
+      if (!materialCodes.isEmpty()) {
+        Db.remove(Wrappers.lambdaQuery(MaterialMasterRaw.class)
+            .eq(MaterialMasterRaw::getOrganizationCode, organizationCode)
+            .in(MaterialMasterRaw::getMaterialCode, materialCodes));
       }
       Db.saveBatch(buffer);
       response.setSuccessCount(response.getSuccessCount() + buffer.size());

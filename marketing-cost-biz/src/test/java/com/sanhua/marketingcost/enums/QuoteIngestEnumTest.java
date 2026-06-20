@@ -41,12 +41,17 @@ class QuoteIngestEnumTest {
             "SYNCING",
             "SYNCED",
             "REUSED_CURRENT_MONTH",
+            "CURRENT_MONTH_QUOTED",
+            "U9_BOM_EXISTS",
             "NO_BOM",
             "ENTRY_PENDING",
             "ENTRY_IN_PROGRESS",
             "MANUAL_ENTERED",
             "EXPIRED",
             "CHECK_FAILED");
+    assertThat(QuoteBomStatusCode.CURRENT_MONTH_QUOTED.getLabel())
+        .isEqualTo("BOM 当月发起过报价");
+    assertThat(QuoteBomStatusCode.U9_BOM_EXISTS.getLabel()).isEqualTo("U9 有此 BOM");
     assertThat(QuoteBomStatusCode.REUSED_CURRENT_MONTH.getLabel()).isEqualTo("已沿用");
     assertThat(QuoteBomStatusCode.SYNCING.getLabel()).isEqualTo("同步中");
     assertThat(Arrays.stream(QuoteWritebackStatus.values()).map(QuoteWritebackStatus::getCode))

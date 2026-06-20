@@ -6,6 +6,7 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePrepareTopProductSummaryQu
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareTopProductSummaryResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
+import com.sanhua.marketingcost.entity.PricePrepareItem;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
@@ -110,6 +111,90 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
         gapSummaries);
   }
 
+  @Override
+  public PricePrepareReadinessResult check(
+      String oaNo, Long oaFormItemId, String topProductCode, String periodMonth) {
+    return check(oaNo, oaFormItemId, topProductCode, periodMonth, null);
+  }
+
+  @Override
+  public PricePrepareReadinessResult check(
+      String oaNo,
+      Long oaFormItemId,
+      String topProductCode,
+      String periodMonth,
+      String priceTypeConfirmNo) {
+    String oaNoValue = StringUtils.hasText(oaNo) ? oaNo.trim() : "";
+    String topProductCodeValue = StringUtils.hasText(topProductCode) ? topProductCode.trim() : "";
+    String periodValue = StringUtils.hasText(periodMonth) ? periodMonth.trim() : "";
+    String confirmNoValue = StringUtils.hasText(priceTypeConfirmNo) ? priceTypeConfirmNo.trim() : "";
+    if (!StringUtils.hasText(oaNoValue)) {
+      return warning("NOT_PREPARED", "缺少 OA 单号，无法检查价格准备状态", null, periodValue, null, 0, List.of());
+    }
+    if (oaFormItemId == null || !StringUtils.hasText(topProductCodeValue)) {
+      return check(oaNoValue, periodValue);
+    }
+
+    List<PricePrepareItem> items =
+        itemMapper.selectList(
+            Wrappers.lambdaQuery(PricePrepareItem.class)
+                .eq(PricePrepareItem::getOaNo, oaNoValue)
+                .eq(PricePrepareItem::getOaFormItemId, oaFormItemId)
+                .eq(PricePrepareItem::getTopProductCode, topProductCodeValue)
+                .eq(StringUtils.hasText(periodValue), PricePrepareItem::getPeriodMonth, periodValue)
+                .eq(StringUtils.hasText(confirmNoValue), PricePrepareItem::getPriceTypeConfirmNo, confirmNoValue)
+                .orderByDesc(PricePrepareItem::getId));
+    List<PricePrepareGap> gaps =
+        loadScopedGaps(oaNoValue, oaFormItemId, topProductCodeValue, periodValue, confirmNoValue);
+    if (items == null || items.isEmpty()) {
+      String message =
+          StringUtils.hasText(periodValue)
+              ? "当前产品行 " + topProductCodeValue + " 在期间 " + periodValue + " 尚未执行价格准备，实时成本将继续，结果可能缺价"
+              : "当前产品行 " + topProductCodeValue + " 尚未执行价格准备，实时成本将继续，结果可能缺价";
+      return warning("NOT_PREPARED", message, null, periodValue, null, gaps.size(), scopedGapSummaries(gaps));
+    }
+
+    int readyCount = 0;
+    boolean hasFailed = false;
+    String prepareNo = null;
+    String batchStatus = STATUS_SUCCESS;
+    for (PricePrepareItem item : items) {
+      if (item == null) {
+        continue;
+      }
+      prepareNo = firstText(prepareNo, item.getPrepareNo(), prepareNo);
+      if (SUMMARY_READY.equals(item.getStatus())) {
+        readyCount++;
+      } else {
+        hasFailed = hasFailed || SUMMARY_FAILED.equals(item.getStatus());
+      }
+    }
+    if (readyCount == items.size() && gaps.isEmpty()) {
+      PricePrepareReadinessResult result = PricePrepareReadinessResult.ready(prepareNo, periodValue, STATUS_SUCCESS);
+      result.setMessage("价格准备已完成");
+      return result;
+    }
+    batchStatus = hasFailed ? STATUS_FAILED : STATUS_PARTIAL;
+    List<String> gapSummaries = scopedGapSummaries(gaps);
+    return warning(
+        batchStatus,
+        "产品行 "
+            + topProductCodeValue
+            + " 价格准备未完成：已准备 "
+            + readyCount
+            + "/"
+            + items.size()
+            + "，缺口 "
+            + gaps.size()
+            + " 项；实时成本将继续，结果可能缺价"
+            + suffix(gapSummaries),
+        prepareNo,
+        periodValue,
+        batchStatus,
+        gaps.size(),
+        gapSummaries);
+  }
+
   void setBlockOnNotReady(boolean blockOnNotReady) {
     this.blockOnNotReady = blockOnNotReady;
   }
@@ -158,6 +243,49 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
         continue;
       }
       String code = firstText(gap.getTopProductCode(), gap.getGapMaterialCode(), gap.getMaterialCode());
+      String message = StringUtils.hasText(gap.getMessage()) ? gap.getMessage().trim() : "未说明";
+      summaries.add(code + ": " + message);
+    }
+    return summaries;
+  }
+
+  private List<PricePrepareGap> loadScopedGaps(
+      String oaNo, Long oaFormItemId, String topProductCode, String periodMonth) {
+    return loadScopedGaps(oaNo, oaFormItemId, topProductCode, periodMonth, null);
+  }
+
+  private List<PricePrepareGap> loadScopedGaps(
+      String oaNo,
+      Long oaFormItemId,
+      String topProductCode,
+      String periodMonth,
+      String priceTypeConfirmNo) {
+    List<PricePrepareGap> gaps =
+        gapMapper.selectList(
+            Wrappers.lambdaQuery(PricePrepareGap.class)
+                .eq(PricePrepareGap::getOaNo, oaNo)
+                .eq(PricePrepareGap::getOaFormItemId, oaFormItemId)
+                .eq(PricePrepareGap::getTopProductCode, topProductCode)
+                .eq(StringUtils.hasText(periodMonth), PricePrepareGap::getPeriodMonth, periodMonth)
+                .eq(
+                    StringUtils.hasText(priceTypeConfirmNo),
+                    PricePrepareGap::getPriceTypeConfirmNo,
+                    priceTypeConfirmNo)
+                .orderByDesc(PricePrepareGap::getCreatedAt)
+                .orderByDesc(PricePrepareGap::getId));
+    return gaps == null ? List.of() : gaps;
+  }
+
+  private List<String> scopedGapSummaries(List<PricePrepareGap> gaps) {
+    if (gaps == null || gaps.isEmpty()) {
+      return List.of();
+    }
+    List<String> summaries = new ArrayList<>();
+    for (PricePrepareGap gap : gaps.stream().limit(5).toList()) {
+      if (gap == null) {
+        continue;
+      }
+      String code = firstText(gap.getGapMaterialCode(), gap.getMaterialCode(), gap.getTopProductCode());
       String message = StringUtils.hasText(gap.getMessage()) ? gap.getMessage().trim() : "未说明";
       summaries.add(code + ": " + message);
     }

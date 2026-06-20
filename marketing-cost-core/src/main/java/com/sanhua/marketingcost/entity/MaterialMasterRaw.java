@@ -18,6 +18,7 @@ public class MaterialMasterRaw {
   private Long id;
 
   private String materialCode;
+  private String organizationCode;
   private String materialName;
   private String materialSpec;
   private String materialModel;
@@ -117,6 +118,8 @@ public class MaterialMasterRaw {
   public void setId(Long id) { this.id = id; }
   public String getMaterialCode() { return materialCode; }
   public void setMaterialCode(String v) { this.materialCode = v; }
+  public String getOrganizationCode() { return organizationCode; }
+  public void setOrganizationCode(String v) { this.organizationCode = v; }
   public String getMaterialName() { return materialName; }
   public void setMaterialName(String v) { this.materialName = v; }
   public String getMaterialSpec() { return materialSpec; }

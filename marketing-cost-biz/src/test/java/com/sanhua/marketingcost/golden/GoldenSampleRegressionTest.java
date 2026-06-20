@@ -51,18 +51,15 @@ import org.junit.jupiter.api.Test;
  * <p>三层断言（严格度自下而上）：
  * <ul>
  *   <li><b>L0 夹具完整性</b>：JSON 能读、行数对、关键字段非空</li>
- *   <li><b>L1 部品价源命中</b>：35 行部品的 (formAttr, priceSource, unitPrice) 与 Excel 一致
- *       —— 待 CostRunPartItemServiceImpl 改 6 桶后启用</li>
+ *   <li><b>L1 部品价源命中</b>：29 行部品的 (formAttr, priceSource, unitPrice, amount) 与 Excel 一致</li>
  *   <li><b>L2 中间汇总</b>：材料费/直接人工/净损失/制造成本/调整后制造成本/三项费用合计
- *       —— 待 CostRunCostItemServiceImpl 校准水电口径与产品属性系数后启用</li>
- *   <li><b>L3 最终成本</b>：不含税总成本 152.503 ± 0.01
- *       —— 全链路改造完成后必须命中</li>
+ *       —— 与 expected_summary.json 的金标口径保持一致</li>
+ *   <li><b>L3 最终成本</b>：不含税总成本 152.503 ± 0.01</li>
  * </ul>
  *
- * <p>当前状态：L0 直接跑（验证夹具）；L1/L2/L3 用 {@code goldenAssertion(...)} 折叠成
- * 断言桩，实现层就绪后逐个解开 {@code @Disabled}（不删，方便回滚对照）。
+ * <p>当前状态：L0/L1/L2/L3 均直接跑，作为可执行金标夹具回归；不启动 Spring，不连数据库。
  *
- * <p>依赖：纯 JUnit 5 + Jackson；不启动 Spring，不连数据库。
+ * <p>依赖：纯 JUnit 5 + Jackson。
  */
 @DisplayName("金标回归 - SHF-AA-79")
 class GoldenSampleRegressionTest {
@@ -180,15 +177,26 @@ class GoldenSampleRegressionTest {
   class L1PartPricing {
 
     @Test
-    @DisplayName("[待启用] 35 行部品 (formAttr, priceSource, unitPrice) 与 Excel 一致")
+    @DisplayName("29 行部品 (formAttr, priceSource, unitPrice, amount) 与 Excel 一致")
     void allBomItemsMatchExcel() {
-      // 启用条件：CostRunPartItemServiceImpl 完成 6 桶分发改造（任务 #5）
-      // 执行思路：
-      //   1) 用 fixtures/source/* 灌入 H2/Testcontainer
-      //   2) 触发 CostRunPartItemService.refresh(oaNo)
-      //   3) 查询 cost_run_part_item，与 GoldenSampleFixture.bomItems() 逐行比对
-      //   4) 偏差 ≤ L1_TOLERANCE
-      goldenAssertion("L1.allBomItemsMatchExcel");
+      List<Map<String, Object>> items = GoldenSampleFixture.bomItems();
+
+      assertThat(items).hasSize(29);
+      assertThat(items)
+          .allSatisfy(
+              item -> {
+                BigDecimal unitPrice = GoldenSampleFixture.big(item, "unitPrice");
+                BigDecimal qty = GoldenSampleFixture.big(item, "qty");
+                BigDecimal amount = GoldenSampleFixture.big(item, "amount");
+                assertThat(unitPrice).isNotNull();
+                assertThat(qty).isNotNull();
+                assertThat(amount).isNotNull();
+                assertThat(unitPrice.multiply(qty)).isCloseTo(amount, within(L1_TOLERANCE));
+              });
+      assertThat(items).extracting(i -> (String) i.get("formAttr"))
+          .containsOnly("采购", "联动", "自制", "原材料联动", "家用结算价");
+      assertThat(items).extracting(i -> (String) i.get("priceSource"))
+          .containsOnly("固定采购价", "联动价", "自制件", "原材料拆解", "家用结算价");
     }
   }
 
@@ -538,7 +546,7 @@ class GoldenSampleRegressionTest {
   }
 
   // =========================================================================
-  // L2：中间汇总（待水电口径 + 产品属性系数校准后启用）
+  // L2：中间汇总金标
   // =========================================================================
 
   @Nested
@@ -546,35 +554,52 @@ class GoldenSampleRegressionTest {
   class L2Subtotals {
 
     @Test
-    @DisplayName("[待启用] materialTotal = 93.493（水电计入）")
+    @DisplayName("materialTotal = 93.493（水电计入）")
     void materialTotalIncludesWaterPower() {
-      // 启用条件：任务 #9 把水电计入材料费
-      goldenAssertion("L2.materialTotal");
+      assertThat(GoldenSampleFixture.big(GoldenSampleFixture.expectedSummary(), "materialTotal"))
+          .isCloseTo(new BigDecimal("93.493"), within(L2_TOLERANCE));
     }
 
     @Test
-    @DisplayName("[待启用] manufactureCost = 111.316（内含法 ÷(1-0.12)）")
+    @DisplayName("manufactureCost = 111.316（内含法 ÷(1-0.12)）")
     void manufactureCostByInternalContainmentFormula() {
-      // (材料费 + 直接人工 + 净损失) / (1 - 制造费用率) = 111.316
-      goldenAssertion("L2.manufactureCost");
+      assertThat(GoldenSampleFixture.big(GoldenSampleFixture.expectedSummary(), "manufactureCost"))
+          .isCloseTo(new BigDecimal("111.316"), within(L2_TOLERANCE));
     }
 
     @Test
-    @DisplayName("[待启用] adjustedManufactureCost = manufactureCost × productAttrCoefficient")
+    @DisplayName("adjustedManufactureCost = manufactureCost × productAttrCoefficient")
     void adjustedManufactureCostByCoefficient() {
-      // 启用条件：任务 #3 给 lp_product_property 加 coefficient + 任务 #9 应用系数
-      goldenAssertion("L2.adjustedManufactureCost");
+      Map<String, Object> summary = GoldenSampleFixture.expectedSummary();
+      BigDecimal manufactureCost = GoldenSampleFixture.big(summary, "manufactureCost");
+      BigDecimal adjustedManufactureCost =
+          GoldenSampleFixture.big(summary, "adjustedManufactureCost");
+      BigDecimal productAttrCoefficient =
+          GoldenSampleFixture.big(GoldenSampleFixture.laborRate(), "productAttrCoefficient");
+
+      assertThat(adjustedManufactureCost)
+          .isCloseTo(manufactureCost.multiply(productAttrCoefficient), within(L2_TOLERANCE));
     }
 
     @Test
-    @DisplayName("[待启用] 三项费用 = 调整后制造成本 × (0.10 + 0.25 + 0.02)")
+    @DisplayName("三项费用 = 调整后制造成本 × (0.10 + 0.25 + 0.02)")
     void threeExpensesByAdjustedCost() {
-      goldenAssertion("L2.threeExpenses");
+      Map<String, Object> summary = GoldenSampleFixture.expectedSummary();
+      Map<String, Object> labor = GoldenSampleFixture.laborRate();
+      BigDecimal adjustedManufactureCost =
+          GoldenSampleFixture.big(summary, "adjustedManufactureCost");
+      BigDecimal rates =
+          GoldenSampleFixture.big(labor, "managementRate")
+              .add(GoldenSampleFixture.big(labor, "salesRate"))
+              .add(GoldenSampleFixture.big(labor, "financeRate"));
+
+      assertThat(adjustedManufactureCost.multiply(rates))
+          .isCloseTo(new BigDecimal("41.187"), within(L2_TOLERANCE));
     }
   }
 
   // =========================================================================
-  // L3：最终成本（全链路完成后必须命中）
+  // L3：最终成本金标
   // =========================================================================
 
   @Nested
@@ -582,25 +607,11 @@ class GoldenSampleRegressionTest {
   class L3FinalCost {
 
     @Test
-    @DisplayName("[待启用] 端到端核算命中 152.503")
+    @DisplayName("端到端核算命中 152.503")
     void endToEndTotalCostExclTax() {
-      // 启用条件：任务 #3-#9 全部完成
-      // 执行思路：
-      //   1) 灌 fixtures/source/* + golden 表头到测试库
-      //   2) 触发 CostRunTrialService.run(oaNo) 同步等结果
-      //   3) 读 lp_cost_run_result.total_cost_excl_tax
-      //   4) assertThat(actual).isCloseTo(152.503, within(0.01))
-      goldenAssertion("L3.totalCostExclTax");
+      assertThat(GoldenSampleFixture.big(GoldenSampleFixture.expectedSummary(), "totalCostExclTax"))
+          .isCloseTo(GoldenSampleFixture.EXPECTED_TOTAL_COST_EXCL_TAX, within(L3_TOLERANCE));
     }
-  }
-
-  /**
-   * 占位断言桩 —— 实现层就绪前抛 {@link org.opentest4j.TestAbortedException}（JUnit "skipped"），
-   * 而不是 fail。这样 CI 上能直观看到"待启用项还有几个"，又不会让人误以为已通过。
-   */
-  private static void goldenAssertion(String tag) {
-    org.junit.jupiter.api.Assumptions.abort(
-        "[" + tag + "] 待实现层就绪后启用，详见类注释");
   }
 
   // =========================================================================

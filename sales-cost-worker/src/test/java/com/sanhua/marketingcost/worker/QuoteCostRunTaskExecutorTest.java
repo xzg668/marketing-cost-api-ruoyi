@@ -16,6 +16,7 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
 import com.sanhua.marketingcost.entity.CostRunTask;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
 import com.sanhua.marketingcost.mapper.CostRunTaskMapper;
@@ -27,6 +28,7 @@ import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MaterialMasterSyncService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
+import com.sanhua.marketingcost.service.QuoteCostRunVersionService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.lang.reflect.Proxy;
 import java.math.BigDecimal;
@@ -66,6 +68,9 @@ class QuoteCostRunTaskExecutorTest {
     assertThat(harness.engineContext.getCustomerName()).isEqualTo("ACME");
     assertThat(harness.engineContext.getBusinessUnitType()).isEqualTo("COMMERCIAL");
     assertThat(harness.engineContext.getPricingMonth()).isEqualTo("2026-05");
+    assertThat(harness.engineContext.getCostRunVersionId()).isEqualTo(9011L);
+    assertThat(harness.engineContext.getCostRunNo()).isEqualTo("TRIAL-11");
+    assertThat(harness.engineContext.getPricePrepareNo()).isEqualTo("PPR-1");
     assertThat(harness.ensureRequest.getItemCodes()).containsExactly("PART-LINK");
     assertThat(harness.writtenResult).isSameAs(harness.engineResult);
     assertThat(harness.writtenForm).isSameAs(harness.form);
@@ -220,17 +225,23 @@ class QuoteCostRunTaskExecutorTest {
               calls.add("sync");
               return new SyncResult(2, 2, 2, "MM-1");
             }
-
-            @Override
-            public List<BatchSummary> listBatchSummaries() {
-              return List.of();
-            }
           };
       PricePrepareReadinessService pricePrepareReadinessService =
-          (oaNo, periodMonth) -> {
-            calls.add("readiness");
-            readinessPeriod = periodMonth;
-            return readiness;
+          new PricePrepareReadinessService() {
+            @Override
+            public PricePrepareReadinessResult check(String oaNo, String periodMonth) {
+              calls.add("readiness");
+              readinessPeriod = periodMonth;
+              return readiness;
+            }
+
+            @Override
+            public PricePrepareReadinessResult check(
+                String oaNo, Long oaFormItemId, String topProductCode, String periodMonth) {
+              calls.add("readiness");
+              readinessPeriod = periodMonth;
+              return readiness;
+            }
           };
       MaterialPriceRouterService materialPriceRouterService =
           new MaterialPriceRouterService() {
@@ -269,6 +280,33 @@ class QuoteCostRunTaskExecutorTest {
             writtenForm = form;
             writtenItem = item;
           };
+      QuoteCostRunVersionService quoteCostRunVersionService =
+          new QuoteCostRunVersionService() {
+            @Override
+            public QuoteCostRunVersion createTrial(
+                String oaNo,
+                Long oaFormItemId,
+                String productCode,
+                String pricingMonth,
+                String resultPeriod,
+                String pricePrepareNo,
+                String priceTypeConfirmNo,
+                String bomConfirmNo,
+                String businessUnitType) {
+              QuoteCostRunVersion version = new QuoteCostRunVersion();
+              version.setId(9000L + oaFormItemId);
+              version.setCostRunNo("TRIAL-" + oaFormItemId);
+              version.setPricePrepareNo(pricePrepareNo);
+              return version;
+            }
+
+            @Override
+            public void finishTrial(
+                Long versionId,
+                BigDecimal totalCost,
+                int partItemCount,
+                int costItemCount) {}
+          };
 
       executor =
           new QuoteCostRunTaskExecutor(
@@ -281,7 +319,8 @@ class QuoteCostRunTaskExecutorTest {
               materialPriceRouterService,
               linkedPriceEnsureService,
               costRunEngine,
-              costRunResultWriter);
+              costRunResultWriter,
+              quoteCostRunVersionService);
     }
   }
 

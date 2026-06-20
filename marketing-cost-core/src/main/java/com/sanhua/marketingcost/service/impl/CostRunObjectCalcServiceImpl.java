@@ -133,10 +133,10 @@ public class CostRunObjectCalcServiceImpl implements CostRunObjectCalcService {
   }
 
   private LocalDate resolveQuoteDate(CostRunContext context) {
+    if (context.getPriceAsOfTime() != null) {
+      return context.getPriceAsOfTime().toLocalDate();
+    }
     if (CostRunContext.SCENE_MONTHLY_REPRICE.equals(context.getScene())) {
-      if (context.getPriceAsOfTime() != null) {
-        return context.getPriceAsOfTime().toLocalDate();
-      }
       if (StringUtils.hasText(context.getPricingMonth())) {
         return LocalDate.parse(context.getPricingMonth().trim() + "-01");
       }

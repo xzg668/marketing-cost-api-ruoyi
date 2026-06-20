@@ -5,9 +5,12 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePreparePlanItem;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
+import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.MaterialFormAttrEnum;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
+import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
 import com.sanhua.marketingcost.service.PricePrepareItemClassifier;
 import java.util.ArrayList;
@@ -32,14 +35,17 @@ public class PricePrepareItemClassifierImpl implements PricePrepareItemClassifie
   private final PackageComponentIdentifyService packageComponentIdentifyService;
   private final MaterialMasterMapper materialMasterMapper;
   private final MaterialMasterRawMapper materialMasterRawMapper;
+  private final OaFormItemMapper oaFormItemMapper;
 
   public PricePrepareItemClassifierImpl(
       PackageComponentIdentifyService packageComponentIdentifyService,
       MaterialMasterMapper materialMasterMapper,
-      MaterialMasterRawMapper materialMasterRawMapper) {
+      MaterialMasterRawMapper materialMasterRawMapper,
+      OaFormItemMapper oaFormItemMapper) {
     this.packageComponentIdentifyService = packageComponentIdentifyService;
     this.materialMasterMapper = materialMasterMapper;
     this.materialMasterRawMapper = materialMasterRawMapper;
+    this.oaFormItemMapper = oaFormItemMapper;
   }
 
   @Override
@@ -48,9 +54,10 @@ public class PricePrepareItemClassifierImpl implements PricePrepareItemClassifie
       return Collections.emptyList();
     }
     Set<String> codes = collectMaterialCodes(rows);
-    Map<String, Boolean> packageFlags = packageComponentIdentifyService.batchIdentify(codes);
+    String organizationCode = resolveMaterialOrganization(rows);
+    Map<String, Boolean> packageFlags = identifyPackageComponents(codes, organizationCode);
     Map<String, MaterialMaster> masters = loadMasters(codes);
-    Map<String, MaterialMasterRaw> rawMasters = loadRawMasters(codes);
+    Map<String, MaterialMasterRaw> rawMasters = loadRawMasters(codes, organizationCode);
 
     List<PricePreparePlanItem> result = new ArrayList<>(rows.size());
     for (BomCostingRow row : rows) {
@@ -142,11 +149,11 @@ public class PricePrepareItemClassifierImpl implements PricePrepareItemClassifie
     return result;
   }
 
-  private Map<String, MaterialMasterRaw> loadRawMasters(Set<String> codes) {
+  private Map<String, MaterialMasterRaw> loadRawMasters(Set<String> codes, String organizationCode) {
     if (codes.isEmpty()) {
       return Collections.emptyMap();
     }
-    List<MaterialMasterRaw> rows = materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null);
+    List<MaterialMasterRaw> rows = selectRawRows(codes, organizationCode);
     Map<String, MaterialMasterRaw> result = new LinkedHashMap<>();
     if (rows == null) {
       return result;
@@ -158,6 +165,53 @@ public class PricePrepareItemClassifierImpl implements PricePrepareItemClassifie
       }
     }
     return result;
+  }
+
+  private List<MaterialMasterRaw> selectRawRows(Set<String> codes, String organizationCode) {
+    String organization = MaterialOrganization.normalize(organizationCode);
+    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
+      return materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null);
+    }
+    return materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null, organization);
+  }
+
+  private Map<String, Boolean> identifyPackageComponents(Set<String> codes, String organizationCode) {
+    String organization = MaterialOrganization.normalize(organizationCode);
+    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
+      return packageComponentIdentifyService.batchIdentify(codes);
+    }
+    return packageComponentIdentifyService.batchIdentify(codes, organization);
+  }
+
+  private String resolveMaterialOrganization(List<BomCostingRow> rows) {
+    if (rows == null) {
+      return MaterialOrganization.COMMERCIAL.getCode();
+    }
+    Map<Long, String> productNames = new LinkedHashMap<>();
+    for (BomCostingRow row : rows) {
+      if (row != null) {
+        String organization =
+            MaterialOrganization.forQuoteProcess(
+                null, row.getOaNo(), resolveProductName(row.getOaFormItemId(), productNames));
+        if (MaterialOrganization.PLATE.getCode().equals(organization)) {
+          return organization;
+        }
+      }
+    }
+    return MaterialOrganization.COMMERCIAL.getCode();
+  }
+
+  private String resolveProductName(Long oaFormItemId, Map<Long, String> productNames) {
+    if (oaFormItemId == null) {
+      return null;
+    }
+    if (productNames.containsKey(oaFormItemId)) {
+      return productNames.get(oaFormItemId);
+    }
+    OaFormItem item = oaFormItemMapper.selectById(oaFormItemId);
+    String productName = item == null ? null : item.getProductName();
+    productNames.put(oaFormItemId, productName);
+    return productName;
   }
 
   private String resolveMaterialName(BomCostingRow row, MaterialMaster master, MaterialMasterRaw raw) {
