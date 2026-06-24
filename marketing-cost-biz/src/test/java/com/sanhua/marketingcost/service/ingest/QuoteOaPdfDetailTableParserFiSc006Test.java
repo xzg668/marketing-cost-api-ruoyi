@@ -127,6 +127,7 @@ class QuoteOaPdfDetailTableParserFiSc006Test {
                 cell("小", 332),
                 cell("包", 332),
                 cell("装", 332)),
+            row(cell("成本核算员", 58), cell("刘秋月", 138), cell("崔俊仪", 162)),
             row(cell(">>辅助信息", 40)));
     QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SC_006);
 
@@ -165,6 +166,14 @@ class QuoteOaPdfDetailTableParserFiSc006Test {
     assertThat(request.getItems()).extracting(QuoteIngestItemRequest::getMaterialNo)
         .doesNotContain("71001", "1001", "31001", "01001", "1003", "1108")
         .contains("1001900001202", "1108900000163");
+    QuoteIngestItemRequest twentieth =
+        request.getItems().stream()
+            .filter(item -> "1108900000163".equals(item.getMaterialNo()))
+            .findFirst()
+            .orElseThrow();
+    assertThat(twentieth.getProductName()).isNotEqualTo("成本核算员");
+    assertThat(twentieth.getSunlModel()).isEqualTo("HQ1G11");
+    assertThat(twentieth.getSpec()).isEqualTo("HQ1G11");
     QuoteIngestItemRequest target =
         request.getItems().stream()
             .filter(item -> "1001900001090".equals(item.getMaterialNo()))

@@ -33,7 +33,14 @@ public final class QuoteOaPdfTemplateDefinitions {
     QuoteOaPdfTableDefinition itemTable =
         new QuoteOaPdfTableDefinition(
             List.of("明细表", "成本明细表", "产品明细"),
-            List.of(">>辅助信息", ">>技术员", ">>资料员", ">>审批信息", ">>流程日志"),
+            List.of(
+                ">>辅助信息",
+                ">>技术员",
+                ">>资料员",
+                ">>审批信息",
+                ">>流程日志",
+                "成本核算员",
+                "接收人"),
             itemFields);
     List<String> sectionAnchors = List.of(">>基础信息", ">>业务信息", ">>明细表", ">>辅助信息");
 
