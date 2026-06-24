@@ -229,10 +229,15 @@ public class QuoteOaPdfDetailTableParser {
     if (starts.isEmpty()) {
       return List.of();
     }
+    boolean wideRowBand = context.getTemplateDefinition().getTemplateType() == QuoteExcelTemplateType.FI_SC_020;
     List<QuoteIngestItemRequest> items = new ArrayList<>();
     for (int i = 0; i < starts.size(); i++) {
       RowStart start = starts.get(i);
-      float fromY = start.y() - 24.0f;
+      float fromY = start.y() - (wideRowBand ? 42.0f : 24.0f);
+      boolean previousRowOnSamePage = i > 0 && starts.get(i - 1).pageIndex() == start.pageIndex();
+      if (wideRowBand && previousRowOnSamePage) {
+        fromY = Math.max(fromY, starts.get(i - 1).y() + 18.0f);
+      }
       boolean nextRowOnSamePage = i + 1 < starts.size() && starts.get(i + 1).pageIndex() == start.pageIndex();
       float toY = nextRowOnSamePage ? starts.get(i + 1).y() - 18.0f : start.y() + 48.0f;
       List<QuotePdfToken> rowTokens = denseRowTokens(lines, range, start.pageIndex(), fromY, toY);
@@ -342,8 +347,8 @@ public class QuoteOaPdfDetailTableParser {
       tokens.sort(Comparator.comparing(QuotePdfToken::getY));
       String label = normalizeLabel(joinRaw(tokens));
       String fieldCode = denseFieldCode(label);
-      if (fieldCode != null && !layout.hasField(fieldCode)) {
-        layout.put(fieldCode, entry.getKey());
+      if (fieldCode != null) {
+        layout.putCandidate(fieldCode, entry.getKey());
       }
     }
     layout.finish();
@@ -413,7 +418,7 @@ public class QuoteOaPdfDetailTableParser {
     if (normalizedLabel.contains("u11位码") || normalizedLabel.contains("客户编码")) {
       return "customerCode";
     }
-    if (normalizedLabel.contains("料号")) {
+    if (normalizedLabel.contains("物料选择") || normalizedLabel.contains("料号")) {
       return "materialNo";
     }
     if (normalizedLabel.contains("三花型号") || normalizedLabel.contains("三花型")) {
@@ -421,6 +426,16 @@ public class QuoteOaPdfDetailTableParser {
     }
     if (normalizedLabel.contains("规格")) {
       return "spec";
+    }
+    // 部品 FI-SC-006 PDF 的单只费用列有时只抽出“费/[元/只]”，这里仅识别带单位的费用列。
+    if (!normalizedLabel.contains("分摊")
+        && (normalizedLabel.startsWith("费用元只") || normalizedLabel.startsWith("费元只"))) {
+      return "shippingFee";
+    }
+    if (normalizedLabel.contains("总成本")
+        && normalizedLabel.contains("不含税")
+        && !normalizedLabel.contains("材料")) {
+      return "totalNoShip";
     }
     if (normalizedLabel.contains("不含运输费总成本")
         || normalizedLabel.contains("不含运输费总成")
@@ -437,7 +452,8 @@ public class QuoteOaPdfDetailTableParser {
     if (normalizedLabel.contains("运输费") || normalizedLabel.contains("运费")) {
       return "shippingFee";
     }
-    if (normalizedLabel.contains("年用量")) {
+    if (normalizedLabel.contains("年用量")
+        || (normalizedLabel.contains("年用") && normalizedLabel.contains("量"))) {
       return "annualVolume";
     }
     if (normalizedLabel.contains("包装方式")) {
@@ -613,6 +629,15 @@ public class QuoteOaPdfDetailTableParser {
       return false;
     }
     String compact = normalizeLabel(normalized);
+    if ("期月".equals(compact) || "月".equals(compact)) {
+      return true;
+    }
+    if (compact.contains("预计年用")
+        || compact.contains("量只")
+        || compact.contains("总成")
+        || compact.contains("费总成")) {
+      return true;
+    }
     if (Set.of(
             "客户图号",
             "客户编码",
@@ -650,6 +675,8 @@ public class QuoteOaPdfDetailTableParser {
             "运",
             "输",
             "费",
+            "含",
+            "不含",
             "预",
             "计",
             "年",
@@ -657,7 +684,8 @@ public class QuoteOaPdfDetailTableParser {
             "量",
             "成本",
             "有效",
-            "期")
+            "期",
+            "方式")
         .contains(normalized);
   }
 
@@ -923,8 +951,17 @@ public class QuoteOaPdfDetailTableParser {
       xByFieldCode.put(fieldCode, x);
     }
 
-    private boolean hasField(String fieldCode) {
-      return xByFieldCode.containsKey(fieldCode);
+    private void putCandidate(String fieldCode, float x) {
+      if ("shippingFee".equals(fieldCode)) {
+        Float current = xByFieldCode.get(fieldCode);
+        if (current == null || x < current) {
+          put(fieldCode, x);
+        }
+        return;
+      }
+      if (!xByFieldCode.containsKey(fieldCode)) {
+        put(fieldCode, x);
+      }
     }
 
     private void finish() {

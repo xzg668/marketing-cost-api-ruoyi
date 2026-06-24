@@ -375,8 +375,8 @@ class QuoteCostRunWorkbenchServiceImplTest {
     QuoteCostRunVersion confirmed = version(88L, "TRIAL-2", "CONFIRMED", "TOP-A");
     confirmed.setVersionNo("COST-20260609-0001-V1");
     confirmed.setTotalCost(new BigDecimal("123.45"));
-    when(versionMapper.selectList(any(Wrapper.class))).thenReturn(List.of(trial), List.of(confirmed));
-    when(versionMapper.selectOne(any(Wrapper.class))).thenReturn(confirmed);
+    when(versionMapper.selectList(any(Wrapper.class))).thenReturn(List.of(confirmed));
+    when(versionMapper.selectOne(any(Wrapper.class))).thenReturn(null, confirmed);
     when(resultMapper.selectOne(any(Wrapper.class))).thenReturn(result("123.45"));
     CostRunPartItem part = new CostRunPartItem();
     part.setPartCode("PART-1");
@@ -397,11 +397,10 @@ class QuoteCostRunWorkbenchServiceImplTest {
     assertThat(response.getCostItems()).hasSize(1);
     assertThat(response.isCanStartTrial()).isTrue();
     assertThat(response.isCanConfirm()).isFalse();
-    verify(versionMapper).delete(any(Wrapper.class));
   }
 
   @Test
-  @DisplayName("查询只返回当前已确认、历史版本列表且历史版本保留入口")
+  @DisplayName("查询返回最新试算、当前已确认和历史版本，旧试算被清理")
   void getCostRunReturnsSortedVersionRows() {
     OaFormItem currentItem = item(101L, "TOP-A");
     currentItem.setConfirmedCostVersionId(99L);
@@ -426,45 +425,54 @@ class QuoteCostRunWorkbenchServiceImplTest {
     history.setTrialFinishedAt(LocalDateTime.of(2026, 6, 15, 15, 15, 23));
     history.setConfirmedAt(LocalDateTime.of(2026, 6, 15, 15, 36, 2));
     history.setConfirmedBy("alice");
-    when(versionMapper.selectOne(any(Wrapper.class))).thenReturn(current);
+    when(versionMapper.selectOne(any(Wrapper.class))).thenReturn(trial, current);
     when(versionMapper.selectList(any(Wrapper.class)))
-        .thenReturn(List.of(oldTrial, trial), List.of(history, current));
-    when(resultMapper.selectOne(any(Wrapper.class))).thenReturn(result("139.00"));
+        .thenReturn(List.of(oldTrial), List.of(history, current, trial));
+    when(resultMapper.selectOne(any(Wrapper.class))).thenReturn(result("138.00"));
     when(partItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(costItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
     var response = service.getCostRun("OA-001", 101L, "2026-06");
 
+    assertThat(response.getLatestTrial().getId()).isEqualTo(77L);
+    assertThat(response.getCurrentDisplayVersion().getId()).isEqualTo(77L);
+    assertThat(response.isCanConfirm()).isTrue();
     assertThat(response.getVersions())
         .extracting("id")
-        .containsExactly(99L, 88L);
-    assertThat(response.getVersions().get(0).getDisplayStatus()).isEqualTo("当前已确认");
-    assertThat(response.getVersions().get(0).isCurrentConfirmed()).isTrue();
-    assertThat(response.getVersions().get(1).getDisplayStatus()).isEqualTo("历史版本");
-    assertThat(response.getVersions().get(1).isStale()).isTrue();
-    assertThat(response.getVersions().get(1).isCanViewSheet()).isTrue();
-    assertThat(response.getVersions().get(1).isCanViewTrace()).isTrue();
+        .containsExactly(77L, 99L, 88L);
+    assertThat(response.getVersions().get(0).getDisplayStatus()).isEqualTo("待确认");
+    assertThat(response.getVersions().get(0).isCanConfirm()).isTrue();
+    assertThat(response.getVersions().get(1).getDisplayStatus()).isEqualTo("当前已确认");
+    assertThat(response.getVersions().get(1).isCurrentConfirmed()).isTrue();
+    assertThat(response.getVersions().get(2).getDisplayStatus()).isEqualTo("历史版本");
+    assertThat(response.getVersions().get(2).isStale()).isTrue();
+    assertThat(response.getVersions().get(2).isCanViewSheet()).isTrue();
+    assertThat(response.getVersions().get(2).isCanViewTrace()).isTrue();
     verify(versionMapper).delete(any(Wrapper.class));
   }
 
   @Test
-  @DisplayName("查询时清理未确认试算，没有 CONFIRMED 时不展示版本明细")
-  void getCostRunDeletesLatestTrialWhenNoConfirmed() {
+  @DisplayName("查询时保留最新试算，没有 CONFIRMED 时也展示待确认版本")
+  void getCostRunDisplaysLatestTrialWhenNoConfirmed() {
     QuoteCostRunVersion trial = version(77L, "TRIAL-1", "TRIAL", "TOP-A");
     trial.setTotalCost(new BigDecimal("137.806"));
-    when(versionMapper.selectList(any(Wrapper.class))).thenReturn(List.of(trial), List.of());
-    when(versionMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    trial.setPartItemCount(26);
+    trial.setCostItemCount(24);
+    trial.setTrialFinishedAt(LocalDateTime.of(2026, 6, 18, 9, 6, 37));
+    when(versionMapper.selectList(any(Wrapper.class))).thenReturn(List.of(), List.of(trial));
+    when(versionMapper.selectOne(any(Wrapper.class))).thenReturn(trial, null);
+    when(partItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(costItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
     var response = service.getCostRun("OA-001", 101L, "2026-06");
 
-    assertThat(response.getLatestTrial()).isNull();
+    assertThat(response.getLatestTrial().getId()).isEqualTo(77L);
     assertThat(response.getLatestConfirmed()).isNull();
-    assertThat(response.getCurrentDisplayVersion()).isNull();
-    assertThat(response.getVersions()).isEmpty();
+    assertThat(response.getCurrentDisplayVersion().getId()).isEqualTo(77L);
+    assertThat(response.getVersions()).extracting("id").containsExactly(77L);
     assertThat(response.getPartItems()).isEmpty();
     assertThat(response.getCostItems()).isEmpty();
-    assertThat(response.isCanConfirm()).isFalse();
-    verify(versionMapper).delete(any(Wrapper.class));
+    assertThat(response.isCanConfirm()).isTrue();
   }
 
   @Test

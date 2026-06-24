@@ -78,20 +78,9 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
               "自制件价格准备缺 OA、业务单元或期间上下文")));
     }
 
-    MakePartPriceCalcRow ready =
-        selectLatestReady(
-            parentMaterialNo,
-            normalizedOaNo,
-            normalizedBusinessUnitType,
-            normalizedPeriod,
-            priceAsOfTime);
-    if (ready != null) {
-      return readyResult(ready, planItem, "自制件价格准备复用当期已有生成结果");
-    }
-
     generationService.generateByOa(
         normalizedOaNo, normalizedBusinessUnitType, normalizedPeriod, priceAsOfTime);
-    ready = selectLatestReady(
+    MakePartPriceCalcRow ready = selectLatestReady(
         parentMaterialNo,
         normalizedOaNo,
         normalizedBusinessUnitType,

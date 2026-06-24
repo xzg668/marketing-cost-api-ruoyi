@@ -120,11 +120,13 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   @Transactional(rollbackFor = Exception.class)
   public QuoteCostRunWorkbenchResponse getCostRun(String oaNo, Long oaFormItemId, String periodMonth) {
     Scope scope = requireScope(oaNo, oaFormItemId, periodMonth);
-    cleanupTrialVersions(scope, null);
-    QuoteCostRunSummaryResponse latestTrial = null;
+    QuoteCostRunSummaryResponse latestTrial = latestVersion(scope, STATUS_TRIAL);
+    if (latestTrial != null) {
+      cleanupTrialVersions(scope, latestTrial.getId());
+    }
     QuoteCostRunSummaryResponse latestConfirmed = latestVersion(scope, STATUS_CONFIRMED);
     QuoteCostRunWorkbenchResponse response = baseResponse(scope, latestTrial, latestConfirmed);
-    QuoteCostRunSummaryResponse displayVersion = latestConfirmed;
+    QuoteCostRunSummaryResponse displayVersion = latestTrial != null ? latestTrial : latestConfirmed;
     response.setCurrentDisplayVersion(displayVersion);
     if (displayVersion != null) {
       fillResultRows(response, displayVersion.getId());

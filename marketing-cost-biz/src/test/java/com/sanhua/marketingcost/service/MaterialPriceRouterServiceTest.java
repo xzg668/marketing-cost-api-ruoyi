@@ -93,16 +93,16 @@ class MaterialPriceRouterServiceTest {
         .thenReturn(
             List.of(
                 row("MAT-003", "未知形态", "固定价", 1, null, null, "manual"),
-                row("MAT-003", "采购件", "结算价", 2, null, null, "manual")));
+                row("MAT-003", "采购件", "结算固定价", 2, null, null, "manual")));
 
     List<PriceTypeRoute> all = router.listCandidates("MAT-003", "2026-04", null);
 
     // 两条都保留：第 1 条 priceType 合法（FIXED），shape 不识别 formAttr=null
-    // 第 2 条 priceType="结算价" 通过双别名映射为 FIXED，shape="采购件" → PURCHASED
+    // 第 2 条 priceType="结算固定价" 通过双别名映射为 FIXED，shape="采购件" → PURCHASED
     assertThat(all).hasSize(2);
     assertThat(all.get(0).priceType()).isEqualTo(PriceTypeEnum.FIXED);
     assertThat(all.get(0).formAttr()).isNull();  // 未识别 shape
-    assertThat(all.get(1).priceType()).isEqualTo(PriceTypeEnum.FIXED);  // "结算价" 双别名 → FIXED
+    assertThat(all.get(1).priceType()).isEqualTo(PriceTypeEnum.FIXED);  // "结算固定价" 双别名 → FIXED
     assertThat(all.get(1).formAttr()).isEqualTo(MaterialFormAttrEnum.PURCHASED);
   }
 

@@ -25,11 +25,13 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
+import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmItem;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
+import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmItemMapper;
 import com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
@@ -72,6 +74,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
   private final PricePrepareBatchMapper batchMapper;
   private final PricePrepareItemMapper itemMapper;
   private final PricePrepareGapMapper gapMapper;
+  private final QuotePriceTypeConfirmItemMapper priceTypeConfirmItemMapper;
   private final MakePartNoScrapConfirmationService noScrapConfirmationService;
 
   public PricePrepareQueryServiceImpl(
@@ -80,12 +83,14 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
       PricePrepareBatchMapper batchMapper,
       PricePrepareItemMapper itemMapper,
       PricePrepareGapMapper gapMapper,
+      QuotePriceTypeConfirmItemMapper priceTypeConfirmItemMapper,
       MakePartNoScrapConfirmationService noScrapConfirmationService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.batchMapper = batchMapper;
     this.itemMapper = itemMapper;
     this.gapMapper = gapMapper;
+    this.priceTypeConfirmItemMapper = priceTypeConfirmItemMapper;
     this.noScrapConfirmationService = noScrapConfirmationService;
   }
 
@@ -293,8 +298,96 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
             buildGapQuery(safe)
                 .orderByDesc(PricePrepareGap::getCreatedAt)
                 .orderByDesc(PricePrepareGap::getId));
+    enrichPriceTypes(page.getRecords());
     enrichNoScrapConfirmations(page.getRecords());
     return new PricePrepareGapPageResponse(page.getTotal(), page.getRecords());
+  }
+
+  private void enrichPriceTypes(List<PricePrepareGap> gaps) {
+    if (gaps == null || gaps.isEmpty()) {
+      return;
+    }
+    Map<Long, QuotePriceTypeConfirmItem> confirmItemById = loadConfirmItemsById(gaps);
+    for (PricePrepareGap gap : gaps) {
+      Long itemId = gap == null ? null : gap.getPriceTypeConfirmItemId();
+      QuotePriceTypeConfirmItem confirmItem = itemId == null ? null : confirmItemById.get(itemId);
+      String targetMaterialCode =
+          firstText(gap == null ? null : gap.getGapMaterialCode(), gap == null ? null : gap.getMaterialCode());
+      if (confirmItem != null
+          && sameText(confirmItem.getMaterialCode(), targetMaterialCode)
+          && StringUtils.hasText(confirmItem.getPriceType())) {
+        gap.setPriceType(normalizePriceTypeText(confirmItem.getPriceType()));
+      }
+    }
+    for (PricePrepareGap gap : gaps) {
+      if (gap == null || StringUtils.hasText(gap.getPriceType())) {
+        continue;
+      }
+      QuotePriceTypeConfirmItem confirmItem =
+          findPriceTypeConfirmItem(gap, firstText(gap.getGapMaterialCode(), gap.getMaterialCode()));
+      if (confirmItem == null) {
+        confirmItem = findPriceTypeConfirmItem(gap, gap.getMaterialCode());
+      }
+      if (confirmItem != null) {
+        gap.setPriceTypeConfirmItemId(confirmItem.getId());
+        if (StringUtils.hasText(confirmItem.getPriceType())) {
+          gap.setPriceType(normalizePriceTypeText(confirmItem.getPriceType()));
+        }
+      }
+    }
+  }
+
+  private Map<Long, QuotePriceTypeConfirmItem> loadConfirmItemsById(List<PricePrepareGap> gaps) {
+    Set<Long> ids = new LinkedHashSet<>();
+    for (PricePrepareGap gap : gaps) {
+      if (gap != null && gap.getPriceTypeConfirmItemId() != null) {
+        ids.add(gap.getPriceTypeConfirmItemId());
+      }
+    }
+    if (ids.isEmpty()) {
+      return Map.of();
+    }
+    List<QuotePriceTypeConfirmItem> items =
+        priceTypeConfirmItemMapper.selectList(
+            Wrappers.<QuotePriceTypeConfirmItem>lambdaQuery()
+                .in(QuotePriceTypeConfirmItem::getId, ids));
+    Map<Long, QuotePriceTypeConfirmItem> result = new HashMap<>();
+    if (items == null) {
+      return result;
+    }
+    for (QuotePriceTypeConfirmItem item : items) {
+      if (item != null && item.getId() != null) {
+        result.put(item.getId(), item);
+      }
+    }
+    return result;
+  }
+
+  private QuotePriceTypeConfirmItem findPriceTypeConfirmItem(
+      PricePrepareGap gap, String materialCode) {
+    String confirmNo = trimToNull(gap == null ? null : gap.getPriceTypeConfirmNo());
+    String targetMaterialCode = trimToNull(materialCode);
+    if (confirmNo == null || targetMaterialCode == null) {
+      return null;
+    }
+    LambdaQueryWrapper<QuotePriceTypeConfirmItem> query =
+        Wrappers.<QuotePriceTypeConfirmItem>lambdaQuery()
+            .eq(QuotePriceTypeConfirmItem::getConfirmNo, confirmNo)
+            .eq(QuotePriceTypeConfirmItem::getMaterialCode, targetMaterialCode);
+    String productCode = trimToNull(gap.getTopProductCode());
+    if (productCode != null) {
+      query.eq(QuotePriceTypeConfirmItem::getProductCode, productCode);
+    }
+    if (gap.getOaFormItemId() != null) {
+      query.eq(QuotePriceTypeConfirmItem::getOaFormItemId, gap.getOaFormItemId());
+    }
+    List<QuotePriceTypeConfirmItem> items =
+        priceTypeConfirmItemMapper.selectList(
+            query
+                .orderByDesc(QuotePriceTypeConfirmItem::getTypeEffectiveFrom)
+                .orderByDesc(QuotePriceTypeConfirmItem::getId)
+                .last("LIMIT 1"));
+    return items == null || items.isEmpty() ? null : items.get(0);
   }
 
   private void enrichNoScrapConfirmations(List<PricePrepareGap> gaps) {
@@ -609,13 +702,38 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
     return StringUtils.hasText(value) ? value.trim() : null;
   }
 
+  private boolean sameText(String left, String right) {
+    String a = trimToNull(left);
+    String b = trimToNull(right);
+    return a != null && a.equals(b);
+  }
+
+  private String normalizePriceTypeText(String value) {
+    String text = trimToNull(value);
+    if (text == null) {
+      return null;
+    }
+    return switch (text.toUpperCase()) {
+      case "FIXED" -> "固定价";
+      case "SETTLE_FIXED" -> "结算固定价";
+      case "LINKED" -> "联动价";
+      case "RANGE" -> "区间价";
+      case "MAKE", "MAKE_PART" -> "自制件";
+      default -> switch (text) {
+        case "固定采购价", "采购固定价" -> "固定价";
+        case "结算价", "结算固定价", "家用结算价" -> "结算固定价";
+        default -> text;
+      };
+    };
+  }
+
   private boolean containsText(String value, String expected) {
     return StringUtils.hasText(value) && value.contains(expected);
   }
 
   private record CandidateSeed(OaForm form, OaFormItem item, String oaNo, String topProductCode) {
     private String key() {
-      return String.valueOf(oaNo) + "|" + String.valueOf(topProductCode);
+      return String.valueOf(oaNo) + "||" + String.valueOf(topProductCode);
     }
   }
 

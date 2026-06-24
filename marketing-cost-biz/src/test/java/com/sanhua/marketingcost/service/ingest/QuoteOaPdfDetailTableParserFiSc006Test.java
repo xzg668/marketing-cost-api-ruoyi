@@ -165,6 +165,20 @@ class QuoteOaPdfDetailTableParserFiSc006Test {
     assertThat(request.getItems()).extracting(QuoteIngestItemRequest::getMaterialNo)
         .doesNotContain("71001", "1001", "31001", "01001", "1003", "1108")
         .contains("1001900001202", "1108900000163");
+    QuoteIngestItemRequest target =
+        request.getItems().stream()
+            .filter(item -> "1001900001090".equals(item.getMaterialNo()))
+            .findFirst()
+            .orElseThrow();
+    assertThat(target.getShippingFee())
+        .as(
+            "shipping=%s totalWithShip=%s totalNoShip=%s annualVolume=%s validMonth=%s",
+            target.getShippingFee(),
+            target.getTotalWithShip(),
+            target.getTotalNoShip(),
+            target.getAnnualVolume(),
+            target.getValidMonth())
+        .isEqualTo("0.0000");
   }
 
   @Test

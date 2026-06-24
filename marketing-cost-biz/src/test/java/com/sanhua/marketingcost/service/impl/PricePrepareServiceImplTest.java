@@ -610,8 +610,12 @@ class PricePrepareServiceImplTest {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-PKG-PRICE");
     request.setPeriodMonth(CURRENT_PERIOD);
+    request.setPriceTypeConfirmNo("PT-CF-PKG");
     BomCostingRow row = bomRow(1L, "TOP-PKG", "PKG-001", "虚拟");
     PricePreparePlanItem planItem = planItem(row, "PACKAGE_COMPONENT", "READY");
+    QuotePriceTypeConfirmItem confirmItem = new QuotePriceTypeConfirmItem();
+    confirmItem.setId(901L);
+    when(priceTypeConfirmItemMapper.selectList(any())).thenReturn(List.of(confirmItem));
     when(bomItemLoader.loadByOaNo("OA-PKG-PRICE")).thenReturn(List.of(row));
     when(itemClassifier.classify(List.of(row))).thenReturn(List.of(planItem));
     when(packageComponentPricePrepareStrategy.prepare(
@@ -636,6 +640,13 @@ class PricePrepareServiceImplTest {
     assertThat(gapCaptor.getValue().getGapType()).isEqualTo("MISSING_PRICE");
     assertThat(gapCaptor.getValue().getMaterialCode()).isEqualTo("PKG-001");
     assertThat(gapCaptor.getValue().getGapMaterialCode()).isEqualTo("CHILD-001");
+    ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<QuotePriceTypeConfirmItem>>
+        confirmQueryCaptor = ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper.class);
+    verify(priceTypeConfirmItemMapper, org.mockito.Mockito.times(2)).selectList(confirmQueryCaptor.capture());
+    com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<QuotePriceTypeConfirmItem> childQuery =
+        confirmQueryCaptor.getAllValues().get(confirmQueryCaptor.getAllValues().size() - 1);
+    assertThat(((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>) childQuery).getSqlSegment())
+        .doesNotContain("bom_row_id");
   }
 
   @Test

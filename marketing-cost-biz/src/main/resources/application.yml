@@ -8,8 +8,8 @@ spring:
   # 放宽到 200MB 留足头部余量；max-request-size 覆盖整个 multipart 请求体（含多字段开销）
   servlet:
     multipart:
-      max-file-size: 200MB
-      max-request-size: 200MB
+      max-file-size: ${SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE:200MB}
+      max-request-size: ${SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE:200MB}
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     # T13+：MySQL server character_set_*=latin1（docker my.cnf 默认未配 utf8mb4），

@@ -54,6 +54,7 @@ class PriceTypeEnumTest {
     // FIXED 的双别名兼容（V46/V47 历史数据 + Excel 业务标签）
     assertEquals(Optional.of(PriceTypeEnum.FIXED), PriceTypeEnum.fromDbText("固定采购价"));
     assertEquals(Optional.of(PriceTypeEnum.FIXED), PriceTypeEnum.fromDbText("结算价"));
+    assertEquals(Optional.of(PriceTypeEnum.FIXED), PriceTypeEnum.fromDbText("结算固定价"));
     assertEquals(Optional.of(PriceTypeEnum.FIXED), PriceTypeEnum.fromDbText("家用结算价"));
   }
 

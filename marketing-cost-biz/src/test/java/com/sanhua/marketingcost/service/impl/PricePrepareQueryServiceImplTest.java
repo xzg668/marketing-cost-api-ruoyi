@@ -29,11 +29,13 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
+import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmItem;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
+import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmItemMapper;
 import com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -53,6 +55,7 @@ class PricePrepareQueryServiceImplTest {
   private OaFormItemMapper oaFormItemMapper;
   private PricePrepareItemMapper itemMapper;
   private PricePrepareGapMapper gapMapper;
+  private QuotePriceTypeConfirmItemMapper priceTypeConfirmItemMapper;
   private MakePartNoScrapConfirmationService noScrapConfirmationService;
   private PricePrepareQueryServiceImpl service;
 
@@ -63,6 +66,7 @@ class PricePrepareQueryServiceImplTest {
     TableInfoHelper.initTableInfo(assistant, PricePrepareBatch.class);
     TableInfoHelper.initTableInfo(assistant, PricePrepareItem.class);
     TableInfoHelper.initTableInfo(assistant, PricePrepareGap.class);
+    TableInfoHelper.initTableInfo(assistant, QuotePriceTypeConfirmItem.class);
     TableInfoHelper.initTableInfo(assistant, OaForm.class);
     TableInfoHelper.initTableInfo(assistant, OaFormItem.class);
   }
@@ -74,11 +78,12 @@ class PricePrepareQueryServiceImplTest {
     oaFormItemMapper = mock(OaFormItemMapper.class);
     itemMapper = mock(PricePrepareItemMapper.class);
     gapMapper = mock(PricePrepareGapMapper.class);
+    priceTypeConfirmItemMapper = mock(QuotePriceTypeConfirmItemMapper.class);
     noScrapConfirmationService = mock(MakePartNoScrapConfirmationService.class);
     service =
         new PricePrepareQueryServiceImpl(
             oaFormMapper, oaFormItemMapper, batchMapper, itemMapper, gapMapper,
-            noScrapConfirmationService);
+            priceTypeConfirmItemMapper, noScrapConfirmationService);
   }
 
   @Test
@@ -303,6 +308,42 @@ class PricePrepareQueryServiceImplTest {
     verify(gapMapper).selectPage(any(Page.class), queryCaptor.capture());
     assertThat(((AbstractWrapper<?, ?, ?>) queryCaptor.getValue()).getSqlSegment())
         .contains("oa_no", "gap_material_code", "gap_type", "item_type", "oa_push_status", "ORDER BY");
+  }
+
+  @Test
+  @DisplayName("缺口分页：按缺价料号回填已确认价格类型")
+  void pageGapsEnrichesConfirmedPriceTypeByGapMaterialCode() {
+    PricePrepareGap gap = new PricePrepareGap();
+    gap.setPriceTypeConfirmNo("PT-CF-1");
+    gap.setPriceTypeConfirmItemId(9L);
+    gap.setOaNo("OA-001");
+    gap.setOaFormItemId(10L);
+    gap.setTopProductCode("TOP-1");
+    gap.setMaterialCode("PKG-PARENT");
+    gap.setGapMaterialCode("PKG-CHILD");
+    when(gapMapper.selectPage(any(), any())).thenAnswer(invocation -> {
+      Page<PricePrepareGap> page = invocation.getArgument(0);
+      page.setTotal(1);
+      page.setRecords(List.of(gap));
+      return page;
+    });
+    QuotePriceTypeConfirmItem parentItem = new QuotePriceTypeConfirmItem();
+    parentItem.setId(9L);
+    parentItem.setMaterialCode("PKG-PARENT");
+    parentItem.setPriceType("固定价");
+    QuotePriceTypeConfirmItem childItem = new QuotePriceTypeConfirmItem();
+    childItem.setId(10L);
+    childItem.setMaterialCode("PKG-CHILD");
+    childItem.setPriceType("结算价");
+    when(priceTypeConfirmItemMapper.selectList(any()))
+        .thenReturn(List.of(parentItem))
+        .thenReturn(List.of(childItem));
+
+    PricePrepareGapPageResponse response = service.pageGaps(new PricePrepareGapQueryRequest());
+
+    PricePrepareGap row = response.getRecords().get(0);
+    assertThat(row.getPriceType()).isEqualTo("结算固定价");
+    assertThat(row.getPriceTypeConfirmItemId()).isEqualTo(10L);
   }
 
   @Test

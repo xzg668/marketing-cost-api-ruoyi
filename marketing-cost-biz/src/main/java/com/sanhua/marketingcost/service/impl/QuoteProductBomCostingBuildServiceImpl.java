@@ -272,16 +272,18 @@ public class QuoteProductBomCostingBuildServiceImpl
 
   private List<PreparedLine> loadFormalLines(
       QuoteBomPreparationRecord record, String sourceType, String periodMonth, LocalDate quoteDate) {
+    String formalProductCode = formalProductCode(record);
     String organizationCode =
         MaterialOrganization.forQuoteProcess(
             null, record.getOaNo(), resolveProductName(record.getOaFormItemId()));
     FormalBomReadResult formal =
         MaterialOrganization.COMMERCIAL.getCode().equals(organizationCode)
-            ? formalBomReadService.read(record.getQuoteProductCode(), periodMonth, null, quoteDate)
+            ? formalBomReadService.read(formalProductCode, periodMonth, null, quoteDate)
             : formalBomReadService.read(
-                record.getQuoteProductCode(), periodMonth, null, quoteDate, organizationCode);
-    if (!formal.found()) {
-      throw new QuoteIngestException("正式 BOM 不可用: " + formal.gapMessage());
+                formalProductCode, periodMonth, null, quoteDate, organizationCode);
+    if (formal == null || !formal.found()) {
+      throw new QuoteIngestException(
+          "正式 BOM 不可用: " + (formal == null ? formalProductCode + " 未返回读取结果" : formal.gapMessage()));
     }
     List<PreparedLine> lines = new ArrayList<>();
     for (QuoteBomSourceLineDto line : formal.lines()) {
@@ -317,6 +319,18 @@ public class QuoteProductBomCostingBuildServiceImpl
               line.path()));
     }
     return lines;
+  }
+
+  private String formalProductCode(QuoteBomPreparationRecord record) {
+    if (record == null) {
+      return null;
+    }
+    if (PRODUCT_TYPE_NON_BARE.equals(record.getProductType())) {
+      return trimToNull(record.getQuoteProductCode());
+    }
+    return firstText(
+        firstText(record.getSourceTopProductCode(), record.getReferenceFinishedCode()),
+        record.getQuoteProductCode());
   }
 
   private String resolveProductName(Long oaFormItemId) {
@@ -837,6 +851,9 @@ public class QuoteProductBomCostingBuildServiceImpl
   private YearMonth resolveBuildPeriod(
       QuoteBomPreparationRecord record, String requestedPeriodMonth, LocalDate quoteDate) {
     String value = trimToNull(requestedPeriodMonth);
+    if (value == null && record != null) {
+      value = trimToNull(record.getCostPeriodMonth());
+    }
     if (value == null) {
       return YearMonth.from(quoteDate);
     }

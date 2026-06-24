@@ -3,6 +3,9 @@ package com.sanhua.marketingcost.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -16,6 +19,7 @@ import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomSourceLineDto;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomCostingRowSourceRef;
+import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
 import com.sanhua.marketingcost.entity.BomSupplementTask;
 import com.sanhua.marketingcost.entity.QuoteBomPackageReference;
 import com.sanhua.marketingcost.entity.QuoteBomPackageReferenceDetail;
@@ -47,10 +51,14 @@ import com.sanhua.marketingcost.service.settlement.BomByproductSettlementAdapter
 import com.sanhua.marketingcost.service.settlement.BomByproductSettlementReadResult;
 import com.sanhua.marketingcost.service.settlement.BomSettlementRowBuildEngine;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -76,6 +84,14 @@ class QuoteProductBomCostingBuildServiceImplTest {
   private BomCostingRowSubRefMapper subRefMapper;
   private OaFormItemMapper oaFormItemMapper;
   private QuoteProductBomCostingBuildServiceImpl service;
+
+  @BeforeAll
+  static void initTableInfo() {
+    MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    TableInfoHelper.initTableInfo(assistant, BomCostingRow.class);
+    TableInfoHelper.initTableInfo(assistant, BomCostingRowSourceRef.class);
+    TableInfoHelper.initTableInfo(assistant, BomCostingRowSubRef.class);
+  }
 
   @BeforeEach
   void setUp() {
@@ -211,7 +227,15 @@ class QuoteProductBomCostingBuildServiceImplTest {
     when(preparationRecordMapper.selectOne(any())).thenReturn(record);
     when(supplementVersionMapper.selectOne(any())).thenReturn(null);
     when(packageReferenceMapper.selectOne(any())).thenReturn(packageReference());
-    when(formalBomReadService.read("FIN-001", "2026-05", null, LocalDate.now()))
+    when(formalBomReadService.read(
+            eq("REF-001"), eq("2026-05"), isNull(), nullable(LocalDate.class)))
+        .thenReturn(formalFound());
+    when(formalBomReadService.read(
+            eq("REF-001"), eq("2026-05"), isNull(), nullable(LocalDate.class), any()))
+        .thenReturn(formalFound());
+    when(formalBomReadService.read(any(), any(), any(), any()))
+        .thenReturn(formalFound());
+    when(formalBomReadService.read(any(), any(), any(), any(), any()))
         .thenReturn(formalFound());
     when(packageReferenceDetailMapper.selectList(any())).thenReturn(List.of(packageDetail("BOX-1")));
 
@@ -335,7 +359,7 @@ class QuoteProductBomCostingBuildServiceImplTest {
 
   private FormalBomReadResult formalFound() {
     return new FormalBomReadResult(
-        "FIN-001",
+        "REF-001",
         "2026-05",
         null,
         true,

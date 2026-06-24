@@ -87,6 +87,7 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
   private final MakePartPriceCalcRowMapper makePartPriceCalcRowMapper;
   private final QuotePriceTypeConfirmBatchMapper batchMapper;
   private final QuotePriceTypeConfirmItemMapper itemMapper;
+  private final QuotePriceTypeConfirmationInvalidationService priceTypeInvalidationService;
 
   public QuotePriceTypeConfirmationServiceImpl(
       OaFormMapper oaFormMapper,
@@ -101,7 +102,8 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
       MakePartPriceGenerationService makePartPriceGenerationService,
       MakePartPriceCalcRowMapper makePartPriceCalcRowMapper,
       QuotePriceTypeConfirmBatchMapper batchMapper,
-      QuotePriceTypeConfirmItemMapper itemMapper) {
+      QuotePriceTypeConfirmItemMapper itemMapper,
+      QuotePriceTypeConfirmationInvalidationService priceTypeInvalidationService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
@@ -115,6 +117,7 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     this.makePartPriceCalcRowMapper = makePartPriceCalcRowMapper;
     this.batchMapper = batchMapper;
     this.itemMapper = itemMapper;
+    this.priceTypeInvalidationService = priceTypeInvalidationService;
   }
 
   @Override
@@ -161,7 +164,7 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     QuotePriceTypeConfirmationActionResponse.RowResult result = adjustOne(scope, request);
     response.getResults().add(result);
     if ("SUCCESS".equalsIgnoreCase(result.getStatus())) {
-      markActiveConfirmationsStale(scope, LocalDateTime.now());
+      markActiveConfirmationsStale(scope);
     }
     response.setSummary(getConfirmation(oaNo, oaFormItemId, scope.periodMonth()).getSummary());
     return response;
@@ -232,7 +235,7 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
       return QuotePriceTypeConfirmationActionResponse.RowResult.of(
           materialCode, "FAILED", "父项不允许直接维护价格类型");
     }
-    PriceTypeEnum priceType = requirePriceType(item.getPriceType());
+    String priceType = requirePersistedPriceType(item.getPriceType());
     LocalDate effectiveFrom = parseMonth(firstText(item.getEffectiveFrom(), scope.periodMonth()));
     MaterialPriceType existing = findEffectiveType(materialCode, scope.periodMonth(), effectiveFrom);
     if (existing != null) {
@@ -242,7 +245,7 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     MaterialPriceType entity = new MaterialPriceType();
     entity.setMaterialCode(materialCode);
     entity.setMaterialName(trimToNull(item.getMaterialName()));
-    entity.setPriceType(priceType.getDbText());
+    entity.setPriceType(priceType);
     entity.setPeriod(scope.periodMonth());
     entity.setPriority(1);
     entity.setEffectiveFrom(effectiveFrom);
@@ -262,14 +265,14 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     if (isParentObject(request.getObjectType())) {
       throw new QuoteIngestException("父项不允许直接调整价格类型");
     }
-    PriceTypeEnum newType = requirePriceType(request.getPriceType());
+    String newPriceType = requirePersistedPriceType(request.getPriceType());
     LocalDate effectiveFrom = parseMonth(firstText(request.getEffectiveFrom(), scope.periodMonth()));
     MaterialPriceType existing = findEffectiveType(materialCode, scope.periodMonth(), effectiveFrom);
     if (existing == null) {
       throw new QuoteIngestException("当前有效价格类型不存在，请先走导入缺失");
     }
-    Optional<PriceTypeEnum> oldType = PriceTypeEnum.fromDbText(existing.getPriceType());
-    if (oldType.isPresent() && oldType.get() == newType) {
+    String oldPriceType = normalizePersistedPriceType(existing.getPriceType());
+    if (newPriceType.equals(oldPriceType)) {
       return QuotePriceTypeConfirmationActionResponse.RowResult.of(
           materialCode, "UNCHANGED", "新旧价格类型一致，未新增版本");
     }
@@ -282,27 +285,25 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     MaterialPriceType next = copyType(existing);
     next.setId(null);
     next.setMaterialName(firstText(request.getMaterialName(), existing.getMaterialName()));
-    next.setPriceType(newType.getDbText());
+    next.setPriceType(newPriceType);
     next.setPeriod(scope.periodMonth());
     next.setEffectiveFrom(effectiveFrom);
     next.setEffectiveTo(null);
     next.setSource("quote_price_type_confirmation_adjust");
     next.setSourceSystem("manual");
     materialPriceTypeMapper.insert(next);
+    if (priceTypeInvalidationService != null) {
+      priceTypeInvalidationService.invalidateByMaterialPriceTypeChanges(List.of(next));
+    }
     return QuotePriceTypeConfirmationActionResponse.RowResult.of(materialCode, "SUCCESS", "调整成功");
   }
 
-  private void markActiveConfirmationsStale(Scope scope, LocalDateTime now) {
-    batchMapper.update(
-        null,
-        Wrappers.<QuotePriceTypeConfirmBatch>update()
-            .set("status", QuotePriceTypeConfirmBatch.STATUS_STALE)
-            .set("updated_at", now)
-            .eq("oa_no", scope.oaNo())
-            .eq("oa_form_item_id", scope.oaFormItemId())
-            .eq("product_code", scope.productCode())
-            .eq("period_month", scope.periodMonth())
-            .eq("status", QuotePriceTypeConfirmBatch.STATUS_CONFIRMED));
+  private void markActiveConfirmationsStale(Scope scope) {
+    if (priceTypeInvalidationService == null) {
+      return;
+    }
+    priceTypeInvalidationService.invalidateScope(
+        scope.oaNo(), scope.oaFormItemId(), scope.productCode(), scope.periodMonth());
   }
 
   private Scope requireScope(String oaNo, Long oaFormItemId, String requestedPeriodMonth) {
@@ -584,10 +585,10 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     dto.setSourceText(objectType);
     dto.setQuantity(quantityOverride == null ? (row == null ? null : row.getQtyPerParent()) : quantityOverride);
     Optional<PriceTypeRoute> route =
-        materialPriceRouterService.resolve(materialCode, scope.periodMonth(), firstDay(scope.periodMonth()));
+        materialPriceRouterService.resolve(materialCode, scope.periodMonth(), LocalDate.now());
     if (route.isPresent()) {
       PriceTypeRoute hit = route.get();
-      dto.setPriceType(hit.priceType().getDbText());
+      dto.setPriceType(normalizePersistedPriceType(firstText(hit.rawPriceType(), hit.priceType().getDbText())));
       dto.setPriceTypeSource("MATERIAL_PRICE_TYPE");
       dto.setTypeStatus(STATUS_CONFIRMED);
       dto.setEffectiveFrom(hit.effectiveFrom());
@@ -785,20 +786,31 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     return item;
   }
 
-  private PriceTypeEnum requirePriceType(String value) {
+  private String requirePersistedPriceType(String value) {
+    String normalized = normalizePersistedPriceType(value);
+    PriceTypeEnum.fromDbText(normalized)
+        .orElseThrow(() -> new QuoteIngestException("非法价格类型: " + value));
+    return normalized;
+  }
+
+  private String normalizePersistedPriceType(String value) {
     String normalized = trimToNull(value);
     if (normalized != null) {
       normalized =
           switch (normalized.toUpperCase()) {
-            case "FIXED", "SETTLE_FIXED" -> "固定价";
+            case "FIXED" -> "固定价";
+            case "SETTLE_FIXED" -> "结算固定价";
             case "LINKED" -> "联动价";
             case "RANGE" -> "区间价";
             case "MAKE", "MAKE_PART" -> "自制件";
-            default -> normalized;
+            default -> switch (normalized) {
+              case "固定采购价", "采购固定价" -> "固定价";
+              case "结算价", "结算固定价", "家用结算价" -> "结算固定价";
+              default -> normalized;
+            };
           };
     }
-    return PriceTypeEnum.fromDbText(normalized)
-        .orElseThrow(() -> new QuoteIngestException("非法价格类型: " + value));
+    return normalized;
   }
 
   private LocalDate parseMonth(String value) {

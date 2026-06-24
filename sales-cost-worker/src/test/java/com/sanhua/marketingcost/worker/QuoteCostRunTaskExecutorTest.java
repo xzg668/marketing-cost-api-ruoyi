@@ -242,6 +242,18 @@ class QuoteCostRunTaskExecutorTest {
               readinessPeriod = periodMonth;
               return readiness;
             }
+
+            @Override
+            public PricePrepareReadinessResult check(
+                String oaNo,
+                Long oaFormItemId,
+                String topProductCode,
+                String periodMonth,
+                String priceTypeConfirmNo) {
+              calls.add("readiness");
+              readinessPeriod = periodMonth;
+              return readiness;
+            }
           };
       MaterialPriceRouterService materialPriceRouterService =
           new MaterialPriceRouterService() {

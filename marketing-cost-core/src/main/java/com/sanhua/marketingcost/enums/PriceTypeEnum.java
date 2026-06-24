@@ -55,7 +55,7 @@ public enum PriceTypeEnum {
    *
    * <p>支持双别名兼容（V48 起 lp_material_price_type 实际可能仍含历史值，需平滑过渡）：
    * <ul>
-   *   <li>"固定价" / "固定采购价" / "结算价" / "家用结算价" → FIXED</li>
+   *   <li>"固定价" / "固定采购价" / "结算价" / "结算固定价" / "家用结算价" → FIXED</li>
    *   <li>"联动价" → LINKED</li>
    *   <li>"区间价" → RANGE</li>
    *   <li>"自制件" / "BOM计算" / "原材料联动" / "原材料拆解" → MAKE</li>
@@ -72,7 +72,7 @@ public enum PriceTypeEnum {
       return Optional.empty();
     }
     return switch (s) {
-      case "固定价", "固定采购价", "结算价", "家用结算价" -> Optional.of(FIXED);
+      case "固定价", "固定采购价", "结算价", "结算固定价", "家用结算价" -> Optional.of(FIXED);
       case "联动价" -> Optional.of(LINKED);
       case "区间价" -> Optional.of(RANGE);
       case "自制件", "BOM计算", "原材料联动", "原材料拆解" -> Optional.of(MAKE);

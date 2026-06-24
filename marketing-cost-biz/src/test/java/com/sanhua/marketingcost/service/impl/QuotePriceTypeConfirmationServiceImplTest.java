@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -66,6 +67,7 @@ class QuotePriceTypeConfirmationServiceImplTest {
   private MakePartPriceCalcRowMapper makePartPriceCalcRowMapper;
   private QuotePriceTypeConfirmBatchMapper batchMapper;
   private QuotePriceTypeConfirmItemMapper itemMapper;
+  private QuotePriceTypeConfirmationInvalidationService priceTypeInvalidationService;
   private QuotePriceTypeConfirmationServiceImpl service;
 
   @BeforeEach
@@ -83,6 +85,7 @@ class QuotePriceTypeConfirmationServiceImplTest {
     makePartPriceCalcRowMapper = mock(MakePartPriceCalcRowMapper.class);
     batchMapper = mock(QuotePriceTypeConfirmBatchMapper.class);
     itemMapper = mock(QuotePriceTypeConfirmItemMapper.class);
+    priceTypeInvalidationService = mock(QuotePriceTypeConfirmationInvalidationService.class);
     service =
         new QuotePriceTypeConfirmationServiceImpl(
             oaFormMapper,
@@ -97,7 +100,8 @@ class QuotePriceTypeConfirmationServiceImplTest {
             makePartPriceGenerationService,
             makePartPriceCalcRowMapper,
             batchMapper,
-            itemMapper);
+            itemMapper,
+            priceTypeInvalidationService);
   }
 
   @Test
@@ -120,9 +124,9 @@ class QuotePriceTypeConfirmationServiceImplTest {
     when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
         .thenReturn(List.of(ok, missing));
     when(itemClassifier.classify(any())).thenReturn(List.of(normalPlan(ok), normalPlan(missing)));
-    when(materialPriceRouterService.resolve("MAT-OK", "2026-06", LocalDate.parse("2026-06-01")))
+    when(materialPriceRouterService.resolve(eq("MAT-OK"), eq("2026-06"), any(LocalDate.class)))
         .thenReturn(Optional.of(route(PriceTypeEnum.FIXED)));
-    when(materialPriceRouterService.resolve("MAT-MISS", "2026-06", LocalDate.parse("2026-06-01")))
+    when(materialPriceRouterService.resolve(eq("MAT-MISS"), eq("2026-06"), any(LocalDate.class)))
         .thenReturn(Optional.empty());
 
     QuotePriceTypeConfirmationResponse response =
@@ -144,9 +148,9 @@ class QuotePriceTypeConfirmationServiceImplTest {
         .thenReturn(List.of(parent));
     when(itemClassifier.classify(any())).thenReturn(List.of(makePlan(parent)));
     when(makePartPriceCalcRowMapper.selectList(any())).thenReturn(List.of(makeCalcRow()));
-    when(materialPriceRouterService.resolve("RAW-1", "2026-06", LocalDate.parse("2026-06-01")))
+    when(materialPriceRouterService.resolve(eq("RAW-1"), eq("2026-06"), any(LocalDate.class)))
         .thenReturn(Optional.empty());
-    when(materialPriceRouterService.resolve("SCRAP-1", "2026-06", LocalDate.parse("2026-06-01")))
+    when(materialPriceRouterService.resolve(eq("SCRAP-1"), eq("2026-06"), any(LocalDate.class)))
         .thenReturn(Optional.of(route(PriceTypeEnum.LINKED)));
 
     QuotePriceTypeConfirmationResponse response =
@@ -169,7 +173,7 @@ class QuotePriceTypeConfirmationServiceImplTest {
         .thenReturn(List.of(parent));
     when(itemClassifier.classify(any())).thenReturn(List.of(packagePlan(parent)));
     when(packageSnapshotService.ensureSnapshot(any())).thenReturn(packageSnapshot());
-    when(materialPriceRouterService.resolve("PKG-CHILD-1", "2026-06", LocalDate.parse("2026-06-01")))
+    when(materialPriceRouterService.resolve(eq("PKG-CHILD-1"), eq("2026-06"), any(LocalDate.class)))
         .thenReturn(Optional.empty());
 
     QuotePriceTypeConfirmationResponse response =
@@ -193,7 +197,7 @@ class QuotePriceTypeConfirmationServiceImplTest {
     when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
         .thenReturn(List.of(row));
     when(itemClassifier.classify(any())).thenReturn(List.of(normalPlan(row)));
-    when(materialPriceRouterService.resolve("MAT-MISS", "2026-06", LocalDate.parse("2026-06-01")))
+    when(materialPriceRouterService.resolve(eq("MAT-MISS"), eq("2026-06"), any(LocalDate.class)))
         .thenReturn(Optional.empty());
     when(materialPriceTypeMapper.selectList(any())).thenReturn(List.of());
 
@@ -224,7 +228,7 @@ class QuotePriceTypeConfirmationServiceImplTest {
     when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
         .thenReturn(List.of(row));
     when(itemClassifier.classify(any())).thenReturn(List.of(normalPlan(row)));
-    when(materialPriceRouterService.resolve("MAT-MISS", "2026-06", LocalDate.parse("2026-06-01")))
+    when(materialPriceRouterService.resolve(eq("MAT-MISS"), eq("2026-06"), any(LocalDate.class)))
         .thenReturn(Optional.empty());
     when(materialPriceTypeMapper.selectList(any())).thenReturn(List.of());
 
@@ -247,13 +251,42 @@ class QuotePriceTypeConfirmationServiceImplTest {
   }
 
   @Test
+  void importMissingNormalizesSettlePriceType() {
+    mockScope();
+    BomCostingRow row = row(301L, "721250136");
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+        .thenReturn(List.of(row));
+    when(itemClassifier.classify(any())).thenReturn(List.of(normalPlan(row)));
+    when(materialPriceRouterService.resolve(eq("721250136"), eq("2026-06"), any(LocalDate.class)))
+        .thenReturn(Optional.empty());
+    when(materialPriceTypeMapper.selectList(any())).thenReturn(List.of());
+
+    QuotePriceTypeImportMissingRequest request = new QuotePriceTypeImportMissingRequest();
+    QuotePriceTypeImportMissingRequest.Item item = new QuotePriceTypeImportMissingRequest.Item();
+    item.setMaterialCode("721250136");
+    item.setObjectType("NORMAL");
+    item.setPriceType("结算价");
+    item.setEffectiveFrom("2026-06");
+    request.setItems(List.of(item));
+
+    QuotePriceTypeConfirmationActionResponse response =
+        service.importMissing("OA-001", 10L, request);
+
+    assertThat(response.getResults().get(0).getStatus()).isEqualTo("SUCCESS");
+    ArgumentCaptor<MaterialPriceType> captor = ArgumentCaptor.forClass(MaterialPriceType.class);
+    verify(materialPriceTypeMapper).insert(captor.capture());
+    assertThat(captor.getValue().getPriceType()).isEqualTo("结算固定价");
+    assertThat(captor.getValue().getEffectiveFrom()).isEqualTo(LocalDate.parse("2026-06-01"));
+  }
+
+  @Test
   void importMissingRejectsExistingEffectiveTypeWithoutOverride() {
     mockScope();
     BomCostingRow row = row(301L, "MAT-OK");
     when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
         .thenReturn(List.of(row));
     when(itemClassifier.classify(any())).thenReturn(List.of(normalPlan(row)));
-    when(materialPriceRouterService.resolve("MAT-OK", "2026-06", LocalDate.parse("2026-06-01")))
+    when(materialPriceRouterService.resolve(eq("MAT-OK"), eq("2026-06"), any(LocalDate.class)))
         .thenReturn(Optional.empty());
     when(materialPriceTypeMapper.selectList(any())).thenReturn(List.of(existingType("MAT-OK", "固定价")));
 
@@ -296,6 +329,8 @@ class QuotePriceTypeConfirmationServiceImplTest {
     verify(materialPriceTypeMapper).insert(captor.capture());
     assertThat(captor.getValue().getPriceType()).isEqualTo("联动价");
     assertThat(captor.getValue().getEffectiveFrom()).isEqualTo(LocalDate.parse("2026-07-01"));
+    verify(priceTypeInvalidationService).invalidateByMaterialPriceTypeChanges(any());
+    verify(priceTypeInvalidationService).invalidateScope("OA-001", 10L, "FIN-001", "2026-06");
   }
 
   @Test
@@ -305,7 +340,7 @@ class QuotePriceTypeConfirmationServiceImplTest {
     when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
         .thenReturn(List.of(row));
     when(itemClassifier.classify(any())).thenReturn(List.of(normalPlan(row)));
-    when(materialPriceRouterService.resolve("MAT-MISS", "2026-06", LocalDate.parse("2026-06-01")))
+    when(materialPriceRouterService.resolve(eq("MAT-MISS"), eq("2026-06"), any(LocalDate.class)))
         .thenReturn(Optional.empty());
 
     assertThatThrownBy(() -> service.confirm("OA-001", 10L, new QuotePriceTypeConfirmRequest()))
@@ -321,7 +356,7 @@ class QuotePriceTypeConfirmationServiceImplTest {
     when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
         .thenReturn(List.of(row));
     when(itemClassifier.classify(any())).thenReturn(List.of(normalPlan(row)));
-    when(materialPriceRouterService.resolve("MAT-OK", "2026-06", LocalDate.parse("2026-06-01")))
+    when(materialPriceRouterService.resolve(eq("MAT-OK"), eq("2026-06"), any(LocalDate.class)))
         .thenReturn(Optional.of(route(PriceTypeEnum.FIXED)));
     when(batchMapper.selectList(any())).thenReturn(List.of());
     when(batchMapper.insert(any(QuotePriceTypeConfirmBatch.class))).thenReturn(1);
@@ -346,7 +381,7 @@ class QuotePriceTypeConfirmationServiceImplTest {
     when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
         .thenReturn(List.of(row));
     when(itemClassifier.classify(any())).thenReturn(List.of(normalPlan(row)));
-    when(materialPriceRouterService.resolve("MAT-OK", "2026-06", LocalDate.parse("2026-06-01")))
+    when(materialPriceRouterService.resolve(eq("MAT-OK"), eq("2026-06"), any(LocalDate.class)))
         .thenReturn(Optional.of(route(PriceTypeEnum.FIXED)));
     QuotePriceTypeConfirmBatch old = new QuotePriceTypeConfirmBatch();
     old.setConfirmNo("PT-CF-OLD");

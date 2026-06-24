@@ -3,7 +3,6 @@ package com.sanhua.marketingcost.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -52,8 +51,11 @@ class MakePartPricePrepareStrategyImplTest {
   }
 
   @Test
-  @DisplayName("自制件：已有当期生成结果时直接写 READY")
-  void existingGeneratedResultWritesReady() {
+  @DisplayName("自制件：每次价格准备都先触发生成，避免复用旧重量/旧价格结果")
+  void prepareRegeneratesBeforeReadingReadyResult() {
+    MakePartPriceGenerateResponse response =
+        new MakePartPriceGenerateResponse("BATCH-GEN", 1, 1, 1, 0, 0);
+    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(response);
     when(calcRowMapper.selectList(any())).thenReturn(List.of(okRow(501L, "BATCH-OLD")));
 
     MakePartPricePrepareResult result =
@@ -65,7 +67,7 @@ class MakePartPricePrepareStrategyImplTest {
     assertThat(result.getPriceSource()).isEqualTo("自制件价格生成");
     assertThat(result.getResultRefType()).isEqualTo("MAKE_PART_PRICE");
     assertThat(result.getResultRefId()).isEqualTo(501L);
-    verify(generationService, never()).generateByOa(any(), any(), any(), any());
+    verify(generationService).generateByOa("OA-001", "COMMERCIAL", "2026-05", null);
   }
 
   @Test
@@ -74,9 +76,7 @@ class MakePartPricePrepareStrategyImplTest {
     MakePartPriceGenerateResponse response =
         new MakePartPriceGenerateResponse("BATCH-GEN", 1, 1, 1, 0, 0);
     when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(response);
-    when(calcRowMapper.selectList(any()))
-        .thenReturn(List.of())
-        .thenReturn(List.of(okRow(502L, "BATCH-GEN")));
+    when(calcRowMapper.selectList(any())).thenReturn(List.of(okRow(502L, "BATCH-GEN")));
 
     MakePartPricePrepareResult result =
         strategy.prepare("OA-001", "COMMERCIAL", "2026-05", planItem("MAKE-001"));
@@ -97,9 +97,7 @@ class MakePartPricePrepareStrategyImplTest {
         .thenReturn(response);
     MakePartPriceCalcRow ready = okRow(503L, "BATCH-GEN");
     ready.setPriceAsOfTime(priceAsOfTime);
-    when(calcRowMapper.selectList(any()))
-        .thenReturn(List.of())
-        .thenReturn(List.of(ready));
+    when(calcRowMapper.selectList(any())).thenReturn(List.of(ready));
 
     MakePartPricePrepareResult result =
         strategy.prepare("OA-001", "COMMERCIAL", "2026-05", priceAsOfTime, planItem("MAKE-001"));
@@ -108,7 +106,7 @@ class MakePartPricePrepareStrategyImplTest {
     assertThat(result.getResultRefId()).isEqualTo(503L);
     verify(generationService).generateByOa("OA-001", "COMMERCIAL", "2026-05", priceAsOfTime);
     ArgumentCaptor<Wrapper<MakePartPriceCalcRow>> captor = ArgumentCaptor.forClass(Wrapper.class);
-    verify(calcRowMapper, org.mockito.Mockito.times(2)).selectList(captor.capture());
+    verify(calcRowMapper).selectList(captor.capture());
     Wrapper<MakePartPriceCalcRow> firstQuery = captor.getAllValues().get(0);
     assertThat(firstQuery.getCustomSqlSegment()).contains("price_as_of_time");
     assertThat(paramValues(firstQuery)).contains(priceAsOfTime);
@@ -121,7 +119,6 @@ class MakePartPricePrepareStrategyImplTest {
         new MakePartPriceGenerateResponse("BATCH-MISS", 1, 1, 0, 0, 1);
     when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(response);
     when(calcRowMapper.selectList(any()))
-        .thenReturn(List.of())
         .thenReturn(List.of())
         .thenReturn(List.of(row("BATCH-MISS", MakePartPriceCalculator.STATUS_MISSING_RAW_PRICE,
             "RAW-001", null, "缺原材料价格")));
@@ -144,7 +141,6 @@ class MakePartPricePrepareStrategyImplTest {
     when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(response);
     when(calcRowMapper.selectList(any()))
         .thenReturn(List.of())
-        .thenReturn(List.of())
         .thenReturn(List.of(row("BATCH-MISS", MakePartPriceCalculator.STATUS_MISSING_SCRAP_PRICE,
             "RAW-001", "SCRAP-001", "缺回收价格")));
 
@@ -164,7 +160,6 @@ class MakePartPricePrepareStrategyImplTest {
         new MakePartPriceGenerateResponse("BATCH-BOM", 1, 1, 0, 0, 1);
     when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(response);
     when(calcRowMapper.selectList(any()))
-        .thenReturn(List.of())
         .thenReturn(List.of())
         .thenReturn(List.of(row("BATCH-BOM", "MISSING_BOM", null, null, "缺 U9 直接子项")));
 

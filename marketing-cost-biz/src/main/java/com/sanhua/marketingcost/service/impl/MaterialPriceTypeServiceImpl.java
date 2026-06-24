@@ -11,6 +11,7 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,9 +21,18 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
   private static final String DEFAULT_SOURCE = "import";
 
   private final MaterialPriceTypeMapper materialPriceTypeMapper;
+  private final QuotePriceTypeConfirmationInvalidationService priceTypeInvalidationService;
 
   public MaterialPriceTypeServiceImpl(MaterialPriceTypeMapper materialPriceTypeMapper) {
+    this(materialPriceTypeMapper, null);
+  }
+
+  @Autowired
+  public MaterialPriceTypeServiceImpl(
+      MaterialPriceTypeMapper materialPriceTypeMapper,
+      QuotePriceTypeConfirmationInvalidationService priceTypeInvalidationService) {
     this.materialPriceTypeMapper = materialPriceTypeMapper;
+    this.priceTypeInvalidationService = priceTypeInvalidationService;
   }
 
   @Override
@@ -49,6 +59,7 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
   }
 
   @Override
+  @Transactional(rollbackFor = Exception.class)
   public MaterialPriceType create(MaterialPriceTypeRequest request) {
     if (request == null) {
       return null;
@@ -62,16 +73,20 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     List<MaterialPriceType> currentVersions = findCurrentVersions(entity);
     MaterialPriceType samePriceType = findSamePriceType(currentVersions, entity.getPriceType());
     if (samePriceType != null) {
+      MaterialPriceType before = copyOf(samePriceType);
       overwriteExisting(samePriceType, entity);
       materialPriceTypeMapper.updateById(samePriceType);
+      invalidateIfMatchingRuleChanged(before, samePriceType);
       return samePriceType;
     }
     closePreviousVersions(currentVersions, entity.getEffectiveFrom());
     materialPriceTypeMapper.insert(entity);
+    invalidateConfirmations(List.of(entity));
     return entity;
   }
 
   @Override
+  @Transactional(rollbackFor = Exception.class)
   public MaterialPriceType update(Long id, MaterialPriceTypeRequest request) {
     if (id == null) {
       return null;
@@ -80,6 +95,7 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     if (existing == null) {
       return null;
     }
+    MaterialPriceType before = copyOf(existing);
     MaterialPriceType next = copyOf(existing);
     next.setId(null);
     merge(next, request);
@@ -91,12 +107,31 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     materialPriceTypeMapper.updateById(existing);
     closePreviousVersions(findCurrentVersions(next), effectiveFrom, existing.getId());
     materialPriceTypeMapper.insert(next);
+    if (affectsPriceTypeConfirmation(before, next)) {
+      List<MaterialPriceType> changedRows = new ArrayList<>();
+      changedRows.add(next);
+      if (!sameText(before.getMaterialCode(), next.getMaterialCode())
+          || !sameText(before.getPeriod(), next.getPeriod())
+          || !sameText(before.getBusinessUnitType(), next.getBusinessUnitType())) {
+        changedRows.add(before);
+      }
+      invalidateConfirmations(changedRows);
+    }
     return next;
   }
 
   @Override
+  @Transactional(rollbackFor = Exception.class)
   public boolean delete(Long id) {
-    return id != null && materialPriceTypeMapper.deleteById(id) > 0;
+    if (id == null) {
+      return false;
+    }
+    MaterialPriceType existing = materialPriceTypeMapper.selectById(id);
+    boolean deleted = materialPriceTypeMapper.deleteById(id) > 0;
+    if (deleted && existing != null) {
+      invalidateConfirmations(List.of(existing));
+    }
+    return deleted;
   }
 
   @Override
@@ -106,6 +141,7 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
       return List.of();
     }
     List<MaterialPriceType> imported = new ArrayList<>();
+    List<MaterialPriceType> changedRows = new ArrayList<>();
     for (var row : request.getRows()) {
       if (row == null
           || !StringUtils.hasText(row.getMaterialCode())
@@ -121,15 +157,19 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
       List<MaterialPriceType> currentVersions = findCurrentVersions(entity);
       MaterialPriceType samePriceType = findSamePriceType(currentVersions, entity.getPriceType());
       if (samePriceType != null) {
+        MaterialPriceType before = copyOf(samePriceType);
         overwriteExisting(samePriceType, entity);
         materialPriceTypeMapper.updateById(samePriceType);
         imported.add(samePriceType);
+        invalidateIfMatchingRuleChanged(before, samePriceType);
         continue;
       }
       closePreviousVersions(currentVersions, entity.getEffectiveFrom());
       materialPriceTypeMapper.insert(entity);
       imported.add(entity);
+      changedRows.add(entity);
     }
+    invalidateConfirmations(changedRows);
     return imported;
   }
 
@@ -351,15 +391,53 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
         && StringUtils.hasText(entity.getPriceType());
   }
 
+  private boolean affectsPriceTypeConfirmation(MaterialPriceType before, MaterialPriceType after) {
+    if (before == null || after == null) {
+      return false;
+    }
+    return !sameText(before.getMaterialCode(), after.getMaterialCode())
+        || !sameText(normalizePriceType(before.getPriceType()), normalizePriceType(after.getPriceType()))
+        || !sameText(before.getPeriod(), after.getPeriod())
+        || !sameText(before.getBusinessUnitType(), after.getBusinessUnitType());
+  }
+
+  private void invalidateConfirmations(List<MaterialPriceType> changedRows) {
+    if (priceTypeInvalidationService != null && changedRows != null && !changedRows.isEmpty()) {
+      priceTypeInvalidationService.invalidateByMaterialPriceTypeChanges(changedRows);
+    }
+  }
+
+  private void invalidateIfMatchingRuleChanged(MaterialPriceType before, MaterialPriceType after) {
+    if (!affectsPriceTypeConfirmation(before, after)) {
+      return;
+    }
+    List<MaterialPriceType> changedRows = new ArrayList<>();
+    changedRows.add(after);
+    changedRows.add(before);
+    invalidateConfirmations(changedRows);
+  }
+
   private String normalizePriceType(String value) {
     if (!StringUtils.hasText(value)) {
       return value;
     }
     String text = value.trim();
-    if ("固定采购价".equals(text) || "采购固定价".equals(text)) {
-      return "固定价";
-    }
-    return text;
+    return switch (text.toUpperCase()) {
+      case "FIXED" -> "固定价";
+      case "SETTLE_FIXED" -> "结算固定价";
+      case "LINKED" -> "联动价";
+      case "RANGE" -> "区间价";
+      case "MAKE", "MAKE_PART" -> "自制件";
+      default -> {
+        if ("固定采购价".equals(text) || "采购固定价".equals(text)) {
+          yield "固定价";
+        }
+        if ("结算价".equals(text) || "结算固定价".equals(text) || "家用结算价".equals(text)) {
+          yield "结算固定价";
+        }
+        yield text;
+      }
+    };
   }
 
   private String trimToNull(String value) {
@@ -367,5 +445,14 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
       return null;
     }
     return value.trim();
+  }
+
+  private boolean sameText(String left, String right) {
+    String normalizedLeft = trimToNull(left);
+    String normalizedRight = trimToNull(right);
+    if (normalizedLeft == null) {
+      return normalizedRight == null;
+    }
+    return normalizedLeft.equals(normalizedRight);
   }
 }

@@ -423,7 +423,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     gap.setMessage(normalResult.getMessage());
     gap.setOaPushStatus(GAP_PUSH_PENDING);
     gap.setBusinessUnitType(batch.getBusinessUnitType());
-    gap.setPriceTypeConfirmItemId(findPriceTypeConfirmItemId(batch, planItem));
+    gap.setPriceTypeConfirmItemId(findPriceTypeConfirmItemId(batch, planItem, planItem.getMaterialCode()));
     gap.setActionType(actionTypeForGap(normalResult.getGapType()));
     gap.setActionTarget(blankIfNull(planItem.getMaterialCode()));
     upsertGap(gap);
@@ -454,7 +454,8 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       gap.setMessage(packageGap.getMessage());
       gap.setOaPushStatus(GAP_PUSH_PENDING);
       gap.setBusinessUnitType(batch.getBusinessUnitType());
-      gap.setPriceTypeConfirmItemId(findPriceTypeConfirmItemId(batch, planItem));
+      gap.setPriceTypeConfirmItemId(
+          findPriceTypeConfirmItemId(batch, planItem, packageGap.getGapMaterialCode()));
       gap.setActionType(actionTypeForGap(packageGap.getGapType()));
       gap.setActionTarget(firstText(packageGap.getGapMaterialCode(), planItem.getMaterialCode()));
       upsertGap(gap);
@@ -487,7 +488,8 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       gap.setMessage(makePartGap.getMessage());
       gap.setOaPushStatus(GAP_PUSH_PENDING);
       gap.setBusinessUnitType(batch.getBusinessUnitType());
-      gap.setPriceTypeConfirmItemId(findPriceTypeConfirmItemId(batch, planItem));
+      gap.setPriceTypeConfirmItemId(
+          findPriceTypeConfirmItemId(batch, planItem, makePartGap.getGapMaterialCode()));
       gap.setActionType(actionTypeForGap(makePartGap.getGapType()));
       gap.setActionTarget(firstText(makePartGap.getGapMaterialCode(), planItem.getMaterialCode()));
       upsertGap(gap);
@@ -507,7 +509,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     gap.setMessage(planItem.getMessage());
     gap.setOaPushStatus(GAP_PUSH_PENDING);
     gap.setBusinessUnitType(batch.getBusinessUnitType());
-    gap.setPriceTypeConfirmItemId(findPriceTypeConfirmItemId(batch, planItem));
+    gap.setPriceTypeConfirmItemId(findPriceTypeConfirmItemId(batch, planItem, planItem.getMaterialCode()));
     gap.setActionType(ACTION_MAINTAIN_STRUCTURE);
     gap.setActionTarget(blankIfNull(planItem.getMaterialCode()));
     upsertGap(gap);
@@ -658,20 +660,27 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   }
 
   private Long findPriceTypeConfirmItemId(PricePrepareBatch batch, PricePreparePlanItem planItem) {
+    return findPriceTypeConfirmItemId(
+        batch, planItem, planItem == null ? null : planItem.getMaterialCode());
+  }
+
+  private Long findPriceTypeConfirmItemId(
+      PricePrepareBatch batch, PricePreparePlanItem planItem, String gapMaterialCode) {
     if (batch == null
         || planItem == null
         || !StringUtils.hasText(batch.getPriceTypeConfirmNo())) {
       return null;
     }
+    String materialCode = firstText(gapMaterialCode, planItem.getMaterialCode());
     var query =
         Wrappers.<QuotePriceTypeConfirmItem>lambdaQuery()
             .eq(QuotePriceTypeConfirmItem::getConfirmNo, batch.getPriceTypeConfirmNo().trim())
-            .eq(QuotePriceTypeConfirmItem::getMaterialCode, blankIfNull(planItem.getMaterialCode()))
+            .eq(QuotePriceTypeConfirmItem::getMaterialCode, blankIfNull(materialCode))
             .eq(QuotePriceTypeConfirmItem::getProductCode, blankIfNull(planItem.getTopProductCode()));
     if (batch.getOaFormItemId() != null) {
       query.eq(QuotePriceTypeConfirmItem::getOaFormItemId, batch.getOaFormItemId());
     }
-    if (planItem.getBomRowId() != null) {
+    if (planItem.getBomRowId() != null && sameText(materialCode, planItem.getMaterialCode())) {
       query.eq(QuotePriceTypeConfirmItem::getBomRowId, planItem.getBomRowId());
     }
     List<QuotePriceTypeConfirmItem> items =
@@ -693,6 +702,12 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       return first.trim();
     }
     return StringUtils.hasText(second) ? second.trim() : null;
+  }
+
+  private boolean sameText(String left, String right) {
+    String a = firstText(left, null);
+    String b = firstText(right, null);
+    return a != null && a.equals(b);
   }
 
   private NormalizedGenerateRequest normalize(PricePrepareGenerateRequest request) {

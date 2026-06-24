@@ -1,11 +1,13 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -17,6 +19,7 @@ import com.sanhua.marketingcost.entity.CostRunResult;
 import com.sanhua.marketingcost.mapper.CostRunResultMapper;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
 import com.sanhua.marketingcost.service.CostRunPartItemService;
+import com.sanhua.marketingcost.service.CostRunPreparedPartItemProvider;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -40,7 +43,7 @@ class CostRunObjectCalcServiceImplTest {
     CostRunPartItemService partItemService = mock(CostRunPartItemService.class);
     CostRunCostItemService costItemService = mock(CostRunCostItemService.class);
     CostRunObjectCalcServiceImpl service =
-        new CostRunObjectCalcServiceImpl(resultMapper, partItemService, costItemService);
+        new CostRunObjectCalcServiceImpl(resultMapper, partItemService, costItemService, List.of());
     when(resultMapper.selectOne(any())).thenReturn(sourceResult());
     when(partItemService.listByOaNo(
             eq("OA-001"), any(LocalDate.class), any(CostRunContext.class), eq(false), any()))
@@ -74,7 +77,7 @@ class CostRunObjectCalcServiceImplTest {
     CostRunPartItemService partItemService = mock(CostRunPartItemService.class);
     CostRunCostItemService costItemService = mock(CostRunCostItemService.class);
     CostRunObjectCalcServiceImpl service =
-        new CostRunObjectCalcServiceImpl(resultMapper, partItemService, costItemService);
+        new CostRunObjectCalcServiceImpl(resultMapper, partItemService, costItemService, List.of());
     when(partItemService.listByOaNo(
             eq("OA-001"), any(LocalDate.class), any(CostRunContext.class), eq(false), any()))
         .thenReturn(List.of(part("P-001", "PART-1")));
@@ -103,7 +106,7 @@ class CostRunObjectCalcServiceImplTest {
     CostRunPartItemService partItemService = mock(CostRunPartItemService.class);
     CostRunCostItemService costItemService = mock(CostRunCostItemService.class);
     CostRunObjectCalcServiceImpl service =
-        new CostRunObjectCalcServiceImpl(resultMapper, partItemService, costItemService);
+        new CostRunObjectCalcServiceImpl(resultMapper, partItemService, costItemService, List.of());
     when(partItemService.listByOaNo(
             eq("OA-001"),
             eq(LocalDate.of(2026, 5, 1)),
@@ -138,7 +141,7 @@ class CostRunObjectCalcServiceImplTest {
     CostRunPartItemService partItemService = mock(CostRunPartItemService.class);
     CostRunCostItemService costItemService = mock(CostRunCostItemService.class);
     CostRunObjectCalcServiceImpl service =
-        new CostRunObjectCalcServiceImpl(resultMapper, partItemService, costItemService);
+        new CostRunObjectCalcServiceImpl(resultMapper, partItemService, costItemService, List.of());
     CostRunContext context =
         CostRunContext.quote(
             "OA-001",
@@ -176,6 +179,64 @@ class CostRunObjectCalcServiceImplTest {
             any(CostRunContext.class),
             eq(false),
             any());
+  }
+
+  @Test
+  void quoteObjectUsesPreparedPriceSnapshotWhenPrepareNoExists() {
+    CostRunResultMapper resultMapper = mock(CostRunResultMapper.class);
+    CostRunPartItemService partItemService = mock(CostRunPartItemService.class);
+    CostRunCostItemService costItemService = mock(CostRunCostItemService.class);
+    CostRunPreparedPartItemProvider preparedProvider =
+        mock(CostRunPreparedPartItemProvider.class);
+    CostRunObjectCalcServiceImpl service =
+        new CostRunObjectCalcServiceImpl(
+            resultMapper, partItemService, costItemService, List.of(preparedProvider));
+    CostRunContext context = quoteContext();
+    context.setPricePrepareNo("PPR-001");
+    CostRunPartItemDto preparedPart = part("P-001", "PART-PREPARED");
+    preparedPart.setPricePrepareItemId(808L);
+    preparedPart.setPriceSource("结算固定价");
+    preparedPart.setAmount(new BigDecimal("100.000000"));
+    when(resultMapper.selectOne(any())).thenReturn(sourceResult());
+    when(preparedProvider.supports(context)).thenReturn(true);
+    when(preparedProvider.listPreparedPartItems(context)).thenReturn(List.of(preparedPart));
+    when(costItemService.listByMaterialCodes(
+            eq("OA-001"),
+            eq("P-001"),
+            eq(Set.of("P-001")),
+            any(CostRunContext.class),
+            any(),
+            eq(false),
+            any()))
+        .thenReturn(List.of(cost("TOTAL", "总成本", "137.806000")));
+
+    var result = service.calculate(context);
+
+    assertThat(result.getPartItems()).hasSize(1);
+    assertThat(result.getPartItems().get(0).getPartCode()).isEqualTo("PART-PREPARED");
+    assertThat(result.getPartItems().get(0).getPriceSource()).isEqualTo("结算固定价");
+    assertThat(result.getResult().getTotalCost()).isEqualByComparingTo("137.806000");
+    verify(preparedProvider).listPreparedPartItems(context);
+    verify(partItemService, never())
+        .listByOaNo(any(), any(LocalDate.class), any(CostRunContext.class), eq(false), any());
+  }
+
+  @Test
+  void quoteObjectFailsFastWhenPrepareNoExistsButNoPreparedProvider() {
+    CostRunResultMapper resultMapper = mock(CostRunResultMapper.class);
+    CostRunPartItemService partItemService = mock(CostRunPartItemService.class);
+    CostRunCostItemService costItemService = mock(CostRunCostItemService.class);
+    CostRunObjectCalcServiceImpl service =
+        new CostRunObjectCalcServiceImpl(resultMapper, partItemService, costItemService, List.of());
+    CostRunContext context = quoteContext();
+    context.setPricePrepareNo("PPR-MISSING");
+
+    assertThatThrownBy(() -> service.calculate(context))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("缺少价格源快照读取器")
+        .hasMessageContaining("PPR-MISSING");
+    verifyNoInteractions(partItemService);
+    verifyNoInteractions(costItemService);
   }
 
   private CostRunContext monthlyContext() {
