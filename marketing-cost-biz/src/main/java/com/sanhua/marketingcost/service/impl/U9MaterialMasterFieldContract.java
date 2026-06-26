@@ -15,7 +15,8 @@ public final class U9MaterialMasterFieldContract {
   private static final Map<String, String> HEADER_TO_FIELD = buildHeaderToField();
   private static final Map<String, String> HEADER_ALIASES = Map.of(
       "料品采购相关信息.收货原则", "收货原则",
-      "料品MRP相关信息.采购预处理提前期(天)", "采购预处理提前期(天)");
+      "料品MRP相关信息.采购预处理提前期(天)", "采购预处理提前期(天)",
+      "料品采购相关信息.描述性弹性域.全局段3(理论净重)", "全局段3(理论净重)");
 
   private U9MaterialMasterFieldContract() {}
 

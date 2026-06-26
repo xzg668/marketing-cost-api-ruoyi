@@ -58,8 +58,9 @@ class U9ItemMasterImportMappingTest(unittest.TestCase):
             "物料名称*",
             "料品采购相关信息.收货原则",
             "料品MRP相关信息.采购预处理提前期(天)",
+            "料品采购相关信息.描述性弹性域.全局段3(理论净重)",
         ]
-        row = ["MAT-002", "料品B", "按订单收货", "3"]
+        row = ["MAT-002", "料品B", "按订单收货", "3", "47.8"]
 
         header_index = build_header_field_index(headers)
         values = build_import_row(row, header_index, "batch-002")
@@ -67,6 +68,7 @@ class U9ItemMasterImportMappingTest(unittest.TestCase):
 
         self.assertEqual(by_field["purchase_receive_principle"], "按订单收货")
         self.assertEqual(by_field["mrp_purchase_pre_lead_time"], "3")
+        self.assertEqual(by_field["global_seg_3_theoretical_net_weight"], "47.8")
 
     def test_missing_required_header_blocks_import(self):
         with self.assertRaisesRegex(HeaderMappingError, "缺少必填表头: 物料代码"):
