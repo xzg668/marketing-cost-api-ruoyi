@@ -115,6 +115,28 @@ class PriceLinkedFactorWorkbookParserImplTest {
   }
 
   @Test
+  @DisplayName("parse：隐藏影响因素 sheet 不参与解析")
+  void parseSkipsHiddenFactorSheets() throws Exception {
+    try (XSSFWorkbook wb = new XSSFWorkbook();
+        ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+      createFactorSheet(wb, "隐藏影响因素", "HIDDEN");
+      wb.setSheetHidden(0, true);
+      createFactorSheet(wb, "影响因素10", "VISIBLE");
+      wb.write(out);
+
+      FactorWorkbookParseResult result =
+          parser.parse(new ByteArrayInputStream(out.toByteArray()), "monthly.xlsx");
+
+      assertThat(result.getSheets())
+          .extracting(FactorSheetParseResult::getSheetName)
+          .containsExactly("影响因素10");
+      assertThat(result.getSheets().getFirst().getRows()).hasSize(1);
+      assertThat(result.getSheets().getFirst().getRows().getFirst().getShortName())
+          .isEqualTo("VISIBLE");
+    }
+  }
+
+  @Test
   @DisplayName("parse：当前样例影响因素 Excel 能解析出有效行")
   void parseRealDecryptedFactorWorkbook() throws Exception {
     Path sample = findSampleFactorWorkbook();
@@ -133,6 +155,28 @@ class PriceLinkedFactorWorkbookParserImplTest {
                 assertThat(row.getPriceSource()).isNotBlank();
                 assertThat(row.getPrice()).isNotNull();
               }));
+    }
+  }
+
+  @Test
+  @DisplayName("parse：用户 demo4 联动价 xls 能识别影响因素10")
+  void parseUserDemo4LinkedWorkbookFactorRows() throws Exception {
+    Path sample = Path.of("/Users/xiexicheng/Desktop/demo4/联动价.xls");
+    Assumptions.assumeTrue(Files.exists(sample), "用户 demo4 联动价 xls 不存在，跳过本地回归");
+
+    try (InputStream input = Files.newInputStream(sample)) {
+      FactorWorkbookParseResult result = parser.parse(input, sample.getFileName().toString());
+
+      assertThat(result.getSheets())
+          .extracting(FactorSheetParseResult::getSheetName)
+          .contains("影响因素10");
+      assertThat(result.getValidRowCount()).isEqualTo(63);
+      assertThat(result.getSheets())
+          .anySatisfy(sheet -> {
+            assertThat(sheet.getSheetName()).isEqualTo("影响因素10");
+            assertThat(sheet.getRows()).hasSize(63);
+            assertThat(sheet.getErrors()).isEmpty();
+          });
     }
   }
 
@@ -180,5 +224,21 @@ class PriceLinkedFactorWorkbookParserImplTest {
       return fromWorkspace;
     }
     return Path.of("../../decrypted-sheets/影响因素.xlsx");
+  }
+
+  private void createFactorSheet(XSSFWorkbook wb, String sheetName, String shortName) {
+    Sheet sheet = wb.createSheet(sheetName);
+    Row header = sheet.createRow(0);
+    header.createCell(0).setCellValue("序号");
+    header.createCell(1).setCellValue("价表影响因素名称");
+    header.createCell(2).setCellValue("简称");
+    header.createCell(3).setCellValue("取价来源");
+    header.createCell(4).setCellValue("价格");
+    Row row = sheet.createRow(1);
+    row.createCell(0).setCellValue(64);
+    row.createCell(1).setCellValue("上月宁波宝新SUS304S/Bδ0.6出厂价-900元");
+    row.createCell(2).setCellValue(shortName);
+    row.createCell(3).setCellValue("出厂价");
+    row.createCell(4).setCellValue(16.4);
   }
 }

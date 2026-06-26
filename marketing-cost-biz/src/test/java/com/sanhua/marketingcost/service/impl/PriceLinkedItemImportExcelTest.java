@@ -59,6 +59,7 @@ import com.sanhua.marketingcost.service.PriceLinkedStandardBindingService;
 import com.sanhua.marketingcost.service.PriceVariableBindingService;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -383,6 +384,33 @@ class PriceLinkedItemImportExcelTest {
     verify(batchService).saveRowRefs(any(), any(), any());
     verify(standardService).checkAndRecord(any());
     verify(writeService).write(any());
+  }
+
+  @Test
+  @DisplayName("importExcel：用户 demo4 联动价 xls 导入响应保留影响因素识别条数")
+  void importExcel_userDemo4LinkedWorkbookKeepsFactorRecognizedCount() throws Exception {
+    Path sample = Path.of("/Users/xiexicheng/Desktop/demo4/联动价.xls");
+    Assumptions.assumeTrue(Files.exists(sample), "用户 demo4 联动价 xls 不存在，跳过本地回归");
+    when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    AtomicLong linkedId = new AtomicLong(8800L);
+    doAnswer(invocation -> {
+      PriceLinkedItem item = invocation.getArgument(0);
+      item.setId(linkedId.incrementAndGet());
+      return 1;
+    }).when(itemMapper).insert(any(PriceLinkedItem.class));
+    configureQuasiRealV2Pipeline(new InMemoryLifecycleStore());
+
+    PriceItemImportResponse resp;
+    try (InputStream input = Files.newInputStream(sample)) {
+      resp = service.importExcel(
+          input, "2026-06", false, "COMMERCIAL", sample.getFileName().toString());
+    }
+
+    assertThat(resp.getFactorRecognizedCount()).isEqualTo(63);
+    assertThat(resp.getFactorRows()).hasSize(63);
+    assertThat(resp.getLinkedCount()).isEqualTo(12);
+    assertThat(resp.getSkipped()).isZero();
+    assertThat(resp.getErrors()).isEmpty();
   }
 
   @Test

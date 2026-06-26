@@ -46,6 +46,9 @@ public class PriceLinkedFormulaWorkbookParserImpl implements PriceLinkedFormulaW
       DataFormatter formatter = new DataFormatter();
       FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
       for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
+        if (workbook.isSheetHidden(i) || workbook.isSheetVeryHidden(i)) {
+          continue;
+        }
         LinkedFormulaSheetParseResult sheet = parseSheet(
             workbook.getSheetAt(i), formatter, evaluator);
         if (sheet != null) {

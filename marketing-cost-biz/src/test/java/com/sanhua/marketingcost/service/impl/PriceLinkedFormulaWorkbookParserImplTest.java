@@ -7,9 +7,13 @@ import com.sanhua.marketingcost.dto.LinkedFormulaSheetParseResult;
 import com.sanhua.marketingcost.dto.LinkedFormulaWorkbookParseResult;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -174,6 +178,51 @@ class PriceLinkedFormulaWorkbookParserImplTest {
     assertThat(result.getRowCount()).isZero();
   }
 
+  @Test
+  @DisplayName("parse：隐藏联动公式 sheet 不参与解析")
+  void parseSkipsHiddenLinkedFormulaSheets() throws Exception {
+    try (XSSFWorkbook wb = new XSSFWorkbook();
+        ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+      createLinkedFormulaSheet(wb, "隐藏联动公式", "MAT-HIDDEN");
+      wb.setSheetHidden(0, true);
+      createLinkedFormulaSheet(wb, "联动价-部品6", "MAT-VISIBLE");
+      wb.write(out);
+
+      LinkedFormulaWorkbookParseResult result =
+          parser.parse(new ByteArrayInputStream(out.toByteArray()), "monthly.xlsx");
+
+      assertThat(result.getSheets())
+          .extracting(LinkedFormulaSheetParseResult::getSheetName)
+          .containsExactly("联动价-部品6");
+      LinkedFormulaSheetParseResult sheet = result.getSheets().getFirst();
+      assertThat(sheet.getRows()).hasSize(1);
+      assertThat(sheet.getRows().getFirst().getMaterialCode()).isEqualTo("MAT-VISIBLE");
+    }
+  }
+
+  @Test
+  @DisplayName("parse：用户 demo4 联动价 xls 只解析可见联动公式 sheet")
+  void parseUserDemo4LinkedWorkbookIgnoresHiddenFormulaSheets() throws Exception {
+    Path sample = Path.of("/Users/xiexicheng/Desktop/demo4/联动价.xls");
+    Assumptions.assumeTrue(Files.exists(sample), "用户 demo4 联动价 xls 不存在，跳过本地回归");
+
+    try (InputStream input = Files.newInputStream(sample)) {
+      LinkedFormulaWorkbookParseResult result =
+          parser.parse(input, sample.getFileName().toString());
+
+      assertThat(result.getErrors()).isEmpty();
+      assertThat(result.getSheets())
+          .extracting(LinkedFormulaSheetParseResult::getSheetName)
+          .containsExactly("联动价-部品6");
+      LinkedFormulaSheetParseResult sheet = result.getSheets().getFirst();
+      assertThat(sheet.getRows()).hasSize(12);
+      assertThat(sheet.getRows())
+          .extracting(LinkedFormulaRow::getExcelRowNumber)
+          .containsExactly(2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14);
+      assertThat(sheet.getRows()).allSatisfy(row -> assertThat(row.getHasFormula()).isTrue());
+    }
+  }
+
   private byte[] buildWorkbook(boolean includeFactorSheet, boolean formulaPrice, boolean fixedRow)
       throws Exception {
     try (XSSFWorkbook wb = new XSSFWorkbook();
@@ -232,5 +281,25 @@ class PriceLinkedFormulaWorkbookParserImplTest {
     row.createCell(2).setCellValue("SUS304/2Bδ0.6-900");
     row.createCell(3).setCellValue("出厂价");
     row.createCell(4).setCellValue(16.4);
+  }
+
+  private void createLinkedFormulaSheet(
+      XSSFWorkbook wb, String sheetName, String materialCode) {
+    Sheet sheet = wb.createSheet(sheetName);
+    Row header = sheet.createRow(0);
+    String[] headers = {
+        "组织", "供应商代码", "物料代码", "规格型号", "联动公式", "单价", "订单类型"
+    };
+    for (int i = 0; i < headers.length; i++) {
+      header.createCell(i).setCellValue(headers[i]);
+    }
+    Row row = sheet.createRow(1);
+    row.createCell(0).setCellValue("210");
+    row.createCell(1).setCellValue("S0001");
+    row.createCell(2).setCellValue(materialCode);
+    row.createCell(3).setCellValue("SPEC-A");
+    row.createCell(4).setCellValue("材料含税价格*下料重量+加工费");
+    row.createCell(5).setCellFormula("ROUND($I$2*影响因素!$E$64/1000+K2,4)/1.13");
+    row.createCell(6).setCellValue("联动");
   }
 }

@@ -1055,7 +1055,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     Map<String, ResolvedFactorRef> importedFactorByAlias =
         buildImportedFactorAliasMap(upsertResult);
     Map<Integer, V2BindingPlan> plansByExcelRow = buildV2BindingPlans(
-        excelBytes, fileName, factorUploadBatchId);
+        excelBytes, fileName, factorUploadBatchId, findLinkedImportSheetName(excelBytes));
     return new V2ImportContext(
         true, factorUploadBatchId, plansByExcelRow, importedFactorByAlias);
   }
@@ -1066,6 +1066,9 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     }
     try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(excelBytes))) {
       for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
+        if (isHiddenSheet(workbook, i)) {
+          continue;
+        }
         Sheet sheet = workbook.getSheetAt(i);
         int headerRowIndex = findHeaderRow(sheet);
         if (headerRowIndex < 0) {
@@ -1080,6 +1083,27 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       log.warn("定位联动价 Excel sheet 失败，回退读取第一个 sheet: {}", e.getMessage());
     }
     return null;
+  }
+
+  private String findLinkedImportSheetName(byte[] excelBytes) {
+    Integer sheetNo = findLinkedImportSheetNo(excelBytes);
+    if (sheetNo == null) {
+      return null;
+    }
+    try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(excelBytes))) {
+      Sheet sheet = workbook.getSheetAt(sheetNo);
+      return sheet == null ? null : sheet.getSheetName();
+    } catch (Exception e) {
+      log.warn("定位联动价 Excel sheet 名失败: {}", e.getMessage());
+      return null;
+    }
+  }
+
+  private boolean isHiddenSheet(Workbook workbook, int sheetIndex) {
+    return workbook != null
+        && sheetIndex >= 0
+        && sheetIndex < workbook.getNumberOfSheets()
+        && (workbook.isSheetHidden(sheetIndex) || workbook.isSheetVeryHidden(sheetIndex));
   }
 
   private boolean v2AutoBindingReady() {
@@ -1118,11 +1142,16 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
   private Map<Integer, V2BindingPlan> buildV2BindingPlans(
       byte[] excelBytes,
       String fileName,
-      Long factorUploadBatchId) {
+      Long factorUploadBatchId,
+      String linkedSheetName) {
     Map<Integer, V2BindingPlan> plans = new HashMap<>();
     LinkedFormulaWorkbookParseResult formulaWorkbook =
         formulaWorkbookParser.parse(new ByteArrayInputStream(excelBytes), fileName);
     for (var sheet : formulaWorkbook.getSheets()) {
+      if (StringUtils.hasText(linkedSheetName)
+          && !linkedSheetName.equals(sheet.getSheetName())) {
+        continue;
+      }
       for (LinkedFormulaRow formulaRow : sheet.getRows()) {
         V2BindingPlan plan = new V2BindingPlan(factorUploadBatchId, formulaRow);
         if (Boolean.TRUE.equals(formulaRow.getHasFormula())) {
@@ -1582,7 +1611,8 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     }
     try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(excelBytes))) {
       Map<String, Map<Integer, InfluenceFactorRef>> influenceIndex = buildInfluenceIndex(workbook);
-      Sheet linkedSheet = workbook.getNumberOfSheets() == 0 ? null : workbook.getSheetAt(0);
+      Integer linkedSheetNo = findLinkedImportSheetNo(excelBytes);
+      Sheet linkedSheet = linkedSheetNo == null ? null : workbook.getSheetAt(linkedSheetNo);
       if (linkedSheet == null) {
         return plans;
       }
@@ -1625,6 +1655,9 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
   private Map<String, Map<Integer, InfluenceFactorRef>> buildInfluenceIndex(Workbook workbook) {
     Map<String, Map<Integer, InfluenceFactorRef>> index = new HashMap<>();
     for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
+      if (isHiddenSheet(workbook, i)) {
+        continue;
+      }
       Sheet sheet = workbook.getSheetAt(i);
       if (sheet == null || sheet.getSheetName() == null
           || !sheet.getSheetName().contains("影响因素")) {
