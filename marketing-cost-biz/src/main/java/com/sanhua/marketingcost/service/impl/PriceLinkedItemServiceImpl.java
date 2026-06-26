@@ -9,6 +9,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.PriceItemExcelImportRow;
 import com.sanhua.marketingcost.dto.PriceItemImportResponse;
 import com.sanhua.marketingcost.dto.PriceItemImportResponse.ErrorRow;
+import com.sanhua.marketingcost.dto.BindingCandidate;
 import com.sanhua.marketingcost.dto.BindingCandidateBuildResult;
 import com.sanhua.marketingcost.dto.ExcelAutoBindingImportLogDto;
 import com.sanhua.marketingcost.dto.FactorMonthlyPriceUpsertResult;
@@ -120,6 +121,11 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
   /** Excel 数据行 1-based 行号 = 表头行数 + 偏移；源表只有 1 行表头。 */
   private static final int HEADER_ROW_NUMBER = 1;
   private static final int EXCEL_ROW_OFFSET = HEADER_ROW_NUMBER + 1;
+
+  private static final Set<String> MATERIAL_TOKEN_NAMES =
+      Set.of("材料含税价格", "材料价格");
+  private static final Set<String> SCRAP_TOKEN_NAMES =
+      Set.of("废料含税价格", "废料价格");
 
   private static final Pattern SHEET_REF_PATTERN =
       Pattern.compile("(?:'([^']+)'|([^'!+\\-*/(),]+))!\\$?([A-Z]+)\\$?(\\d+)");
@@ -587,6 +593,12 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
           continue;
         }
         if (linkedOutcome.skipped()) {
+          PriceLinkedItem item = linkedOutcome.item();
+          if (v2Context.enabled() && missingCurrentV2Bindings(item, v2Plan)) {
+            applyV2AutoBindings(item, v2Plan, month,
+                resolvedBusinessUnitType, excelRow,
+                overwriteManualForStrategy(strategy, overwriteManual), response);
+          }
           response.setLinkedSkippedCount(response.getLinkedSkippedCount() + 1);
           continue;
         }
@@ -1207,6 +1219,59 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       classifyRequest.setWriteResult(writeResult);
     }
     importResultClassifier.append(response, classifyRequest);
+  }
+
+  private boolean missingCurrentV2Bindings(PriceLinkedItem item, V2BindingPlan plan) {
+    if (item == null || item.getId() == null || plan == null || plan.candidates().isEmpty()) {
+      return false;
+    }
+    List<PriceVariableBindingDto> currentBindings =
+        priceVariableBindingService.listByLinkedItem(item.getId());
+    if (currentBindings == null) {
+      return false;
+    }
+    Set<String> currentTokenNames = new HashSet<>();
+    for (PriceVariableBindingDto binding : currentBindings) {
+      if (binding != null && StringUtils.hasText(binding.getTokenName())) {
+        currentTokenNames.add(binding.getTokenName().trim());
+      }
+    }
+    for (BindingCandidate candidate : plan.candidates()) {
+      if (candidate == null || !StringUtils.hasText(candidate.getTokenName())) {
+        continue;
+      }
+      if (!hasAnyCurrentToken(currentTokenNames, equivalentTokenNames(candidate.getTokenName()))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private boolean hasAnyCurrentToken(Set<String> currentTokenNames, Set<String> acceptedTokenNames) {
+    if (currentTokenNames == null || currentTokenNames.isEmpty()
+        || acceptedTokenNames == null || acceptedTokenNames.isEmpty()) {
+      return false;
+    }
+    for (String tokenName : acceptedTokenNames) {
+      if (currentTokenNames.contains(tokenName)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private Set<String> equivalentTokenNames(String tokenName) {
+    if (!StringUtils.hasText(tokenName)) {
+      return Set.of();
+    }
+    String normalized = tokenName.trim();
+    if (MATERIAL_TOKEN_NAMES.contains(normalized)) {
+      return MATERIAL_TOKEN_NAMES;
+    }
+    if (SCRAP_TOKEN_NAMES.contains(normalized)) {
+      return SCRAP_TOKEN_NAMES;
+    }
+    return Set.of(normalized);
   }
 
   private StandardBindingCheckRequest standardBindingRequest(
@@ -2196,7 +2261,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       Long factorUploadBatchId,
       LinkedFormulaRow formulaRow,
       List<ResolvedFactorRef> resolvedRefs,
-      List<com.sanhua.marketingcost.dto.BindingCandidate> candidates) {
+      List<BindingCandidate> candidates) {
     private V2BindingPlan(Long factorUploadBatchId, LinkedFormulaRow formulaRow) {
       this(factorUploadBatchId, formulaRow, new ArrayList<>(), new ArrayList<>());
     }

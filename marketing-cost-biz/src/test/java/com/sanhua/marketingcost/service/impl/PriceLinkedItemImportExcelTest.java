@@ -29,6 +29,7 @@ import com.sanhua.marketingcost.dto.LinkedFormulaSheetParseResult;
 import com.sanhua.marketingcost.dto.LinkedFormulaWorkbookParseResult;
 import com.sanhua.marketingcost.dto.PriceLinkedAutoBindingWriteRequest;
 import com.sanhua.marketingcost.dto.PriceLinkedAutoBindingWriteResult;
+import com.sanhua.marketingcost.dto.PriceVariableBindingDto;
 import com.sanhua.marketingcost.dto.ResolvedFactorRef;
 import com.sanhua.marketingcost.dto.StandardBindingCheckRequest;
 import com.sanhua.marketingcost.dto.StandardBindingDecision;
@@ -103,6 +104,7 @@ class PriceLinkedItemImportExcelTest {
   private PriceLinkedItemMapper itemMapper;
   private PriceFixedItemMapper fixedItemMapper;
   private PriceVariableMapper priceVariableMapper;
+  private PriceVariableBindingService priceVariableBindingService;
   private FormulaNormalizer formulaNormalizer;
   private PriceLinkedItemServiceImpl service;
 
@@ -119,6 +121,7 @@ class PriceLinkedItemImportExcelTest {
     itemMapper = mock(PriceLinkedItemMapper.class);
     fixedItemMapper = mock(PriceFixedItemMapper.class);
     priceVariableMapper = mock(PriceVariableMapper.class);
+    priceVariableBindingService = mock(PriceVariableBindingService.class);
     // 用 stub 的 Normalizer 避开真实 VariableAliasIndex 依赖：非空即通过，空串抛语法异常
     formulaNormalizer = new FormulaNormalizer(
         mock(VariableAliasIndex.class), mock(RowLocalPlaceholderRegistry.class)) {
@@ -147,7 +150,7 @@ class PriceLinkedItemImportExcelTest {
         fixedItemMapper,
         mock(FinanceBasePriceMapper.class),
         priceVariableMapper,
-        mock(PriceVariableBindingService.class),
+        priceVariableBindingService,
         mock(FactorVariableRegistryImpl.class),
         formulaNormalizer,
         renderer,
@@ -393,12 +396,14 @@ class PriceLinkedItemImportExcelTest {
     Assumptions.assumeTrue(Files.exists(sample), "用户 demo4 联动价 xls 不存在，跳过本地回归");
     when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(null);
     AtomicLong linkedId = new AtomicLong(8800L);
+    List<PriceLinkedItem> insertedItems = new ArrayList<>();
     doAnswer(invocation -> {
       PriceLinkedItem item = invocation.getArgument(0);
       item.setId(linkedId.incrementAndGet());
+      insertedItems.add(item);
       return 1;
     }).when(itemMapper).insert(any(PriceLinkedItem.class));
-    configureQuasiRealV2Pipeline(new InMemoryLifecycleStore());
+    QuasiRealV2Mocks mocks = configureQuasiRealV2Pipeline(new InMemoryLifecycleStore());
 
     PriceItemImportResponse resp;
     try (InputStream input = Files.newInputStream(sample)) {
@@ -411,6 +416,25 @@ class PriceLinkedItemImportExcelTest {
     assertThat(resp.getLinkedCount()).isEqualTo(12);
     assertThat(resp.getSkipped()).isZero();
     assertThat(resp.getErrors()).isEmpty();
+    PriceLinkedItem material721250208 = insertedItems.stream()
+        .filter(item -> "721250208".equals(item.getMaterialCode()))
+        .findFirst()
+        .orElseThrow();
+    assertThat(material721250208.getFormulaExpr())
+        .contains("[__material]")
+        .contains("[__scrap]");
+
+    ArgumentCaptor<PriceLinkedAutoBindingWriteRequest> writeCaptor =
+        ArgumentCaptor.forClass(PriceLinkedAutoBindingWriteRequest.class);
+    verify(mocks.writeService(), times(resp.getLinkedCount())).write(writeCaptor.capture());
+    List<String> material721250208Tokens = writeCaptor.getAllValues().stream()
+        .filter(request -> request.getDecisions().stream()
+            .anyMatch(decision -> "721250208".equals(decision.getMaterialCode())))
+        .flatMap(request -> request.getDecisions().stream())
+        .map(StandardBindingDecision::getTokenName)
+        .toList();
+    assertThat(material721250208Tokens)
+        .contains("材料价格", "废料价格");
   }
 
   @Test
@@ -645,10 +669,12 @@ class PriceLinkedItemImportExcelTest {
   }
 
   @Test
-  @DisplayName("importExcel：当前版本内容一致时跳过，不新增版本也不重写绑定")
+  @DisplayName("importExcel：当前版本内容一致且已有等价绑定时跳过，不新增版本也不重写绑定")
   void importExcel_sameCurrentFormulaVersionSkipsLinkedItemAndBindings() throws Exception {
     PriceLinkedItem existing = sameDerivedFormulaLinkedItem();
     when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    when(priceVariableBindingService.listByLinkedItem(88L))
+        .thenReturn(List.of(currentBinding("材料含税价格")));
     V2Mocks mocks = configureV2Pipeline();
 
     byte[] xlsx = buildXlsxWithFactorSheetFirst(new Object[][] {
@@ -675,11 +701,48 @@ class PriceLinkedItemImportExcelTest {
   }
 
   @Test
+  @DisplayName("importExcel：当前版本内容一致但缺少行内变量绑定时补写绑定，不新增公式版本")
+  void importExcel_sameCurrentFormulaVersionRepairsMissingAutoBindings() throws Exception {
+    PriceLinkedItem existing = sameDerivedFormulaLinkedItem();
+    when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    when(priceVariableBindingService.listByLinkedItem(88L)).thenReturn(List.of());
+    V2Mocks mocks = configureV2Pipeline();
+
+    byte[] xlsx = buildXlsxWithFactorSheetFirst(new Object[][] {
+        {"210", "供管处", "供应商A", "S001", "部品联动", "物料A", "M001", "SPEC-A", "千克",
+            "下料重量*材料含税价格", 0.0, 0.0, 12.8, null, 91.0, "0", null, null, "联动"}
+    });
+
+    PriceItemImportResponse resp = service.importExcel(
+        new ByteArrayInputStream(xlsx), "2026-05", false,
+        "COMMERCIAL", "monthly.xlsx", "APPEND_ONLY");
+
+    assertThat(resp.getLinkedCount()).isZero();
+    assertThat(resp.getLinkedCreatedCount()).isZero();
+    assertThat(resp.getLinkedUpdatedCount()).isZero();
+    assertThat(resp.getLinkedSkippedCount()).isEqualTo(1);
+    assertThat(resp.getLinkedUnchangedSkippedCount()).isEqualTo(1);
+    assertThat(resp.getAutoBindingCount()).isEqualTo(1);
+    assertThat(resp.getNewHistoryBindingCount()).isEqualTo(1);
+    verify(itemMapper, never()).insert(any(PriceLinkedItem.class));
+    verify(itemMapper, never()).updateById(any(PriceLinkedItem.class));
+    ArgumentCaptor<PriceLinkedAutoBindingWriteRequest> writeCaptor =
+        ArgumentCaptor.forClass(PriceLinkedAutoBindingWriteRequest.class);
+    verify(mocks.writeService()).write(writeCaptor.capture());
+    assertThat(writeCaptor.getValue().getLinkedItemId()).isEqualTo(88L);
+    assertThat(writeCaptor.getValue().getDecisions())
+        .extracting(StandardBindingDecision::getTokenName)
+        .containsExactly("材料含税价格");
+  }
+
+  @Test
   @DisplayName("importExcel：有供应商时按供应商+料号+业务单元匹配，规格不参与判重")
   void importExcel_currentVersionLookupUsesSupplierMaterialBusinessUnitAndIgnoresSpec() throws Exception {
     PriceLinkedItem existing = sameDerivedFormulaLinkedItem();
     existing.setSpecModel("OLD-SPEC");
     when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    when(priceVariableBindingService.listByLinkedItem(88L))
+        .thenReturn(List.of(currentBinding("材料含税价格")));
     V2Mocks mocks = configureV2Pipeline();
 
     byte[] xlsx = buildXlsxWithFactorSheetFirst(new Object[][] {
@@ -710,6 +773,8 @@ class PriceLinkedItemImportExcelTest {
     existing.setSupplierCode("OLD-SUPPLIER");
     existing.setSpecModel("OLD-SPEC");
     when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    when(priceVariableBindingService.listByLinkedItem(88L))
+        .thenReturn(List.of(currentBinding("材料含税价格")));
     V2Mocks mocks = configureV2Pipeline();
 
     byte[] xlsx = buildXlsxWithFactorSheetFirst(new Object[][] {
@@ -910,6 +975,13 @@ class PriceLinkedItemImportExcelTest {
     assertThat(lifecycleStore.monthlyPriceCount()).isEqualTo(6);
 
     String beforeRepeatSnapshot = lifecycleSnapshot(currentItems, lifecycleStore);
+    ArgumentCaptor<PriceLinkedAutoBindingWriteRequest> firstWriteCaptor =
+        ArgumentCaptor.forClass(PriceLinkedAutoBindingWriteRequest.class);
+    verify(mocks.writeService(), times(first.getLinkedCount())).write(firstWriteCaptor.capture());
+    Map<Long, List<PriceVariableBindingDto>> currentBindings =
+        currentBindingsFromWriteRequests(firstWriteCaptor.getAllValues());
+    when(priceVariableBindingService.listByLinkedItem(any())).thenAnswer(invocation ->
+        currentBindings.getOrDefault(invocation.getArgument(0), List.of()));
     clearInvocations(itemMapper, mocks.standardService(), mocks.writeService());
     when(itemMapper.selectOne(any(Wrapper.class)))
         .thenReturn(currentItems.get(0), currentItems.get(1), currentItems.get(2));
@@ -1103,6 +1175,41 @@ class PriceLinkedItemImportExcelTest {
     item.setManualPrice(new BigDecimal("91.0"));
     item.setTaxIncluded(0);
     return item;
+  }
+
+  private PriceVariableBindingDto currentBinding(String tokenName) {
+    return currentBinding(88L, tokenName);
+  }
+
+  private PriceVariableBindingDto currentBinding(Long linkedItemId, String tokenName) {
+    PriceVariableBindingDto binding = new PriceVariableBindingDto();
+    binding.setId(7001L);
+    binding.setLinkedItemId(linkedItemId);
+    binding.setTokenName(tokenName);
+    binding.setFactorCode("SUS304/2Bδ0.6-900");
+    binding.setSource("EXCEL_FORMULA");
+    return binding;
+  }
+
+  private Map<Long, List<PriceVariableBindingDto>> currentBindingsFromWriteRequests(
+      List<PriceLinkedAutoBindingWriteRequest> requests) {
+    Map<Long, List<PriceVariableBindingDto>> bindings = new LinkedHashMap<>();
+    if (requests == null) {
+      return bindings;
+    }
+    for (PriceLinkedAutoBindingWriteRequest request : requests) {
+      if (request == null || request.getLinkedItemId() == null) {
+        continue;
+      }
+      List<PriceVariableBindingDto> itemBindings =
+          bindings.computeIfAbsent(request.getLinkedItemId(), key -> new ArrayList<>());
+      for (StandardBindingDecision decision : request.getDecisions()) {
+        if (decision != null && decision.getTokenName() != null) {
+          itemBindings.add(currentBinding(request.getLinkedItemId(), decision.getTokenName()));
+        }
+      }
+    }
+    return bindings;
   }
 
   private FactorRowParseResult rowResultSource() {
