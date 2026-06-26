@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.controller;
 
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
+import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import com.sanhua.marketingcost.dto.FactorUploadBatchDto;
 import com.sanhua.marketingcost.dto.FactorMonthlyPriceAdjustRequest;
 import com.sanhua.marketingcost.dto.FactorMonthlyPriceAdjustmentResponse;
@@ -55,6 +56,24 @@ public class PriceLinkedItemController {
     return CommonResult.success(
         priceLinkedItemService.list(
             pricingMonth, materialCode, Boolean.TRUE.equals(includeHistory)));
+  }
+
+  /** 分页查询联动价格明细列表，供料号较多的月度导入结果页使用。 */
+  @PreAuthorize("@ss.hasPermi('price:linked-item:list')")
+  @GetMapping("/items/page")
+  public CommonResult<PageResult<PriceLinkedItemDto>> page(
+      @RequestParam(required = false) String pricingMonth,
+      @RequestParam(required = false) String materialCode,
+      @RequestParam(required = false, defaultValue = "false") Boolean includeHistory,
+      @RequestParam(required = false, defaultValue = "1") Integer page,
+      @RequestParam(required = false, defaultValue = "20") Integer pageSize) {
+    return CommonResult.success(
+        priceLinkedItemService.page(
+            pricingMonth,
+            materialCode,
+            Boolean.TRUE.equals(includeHistory),
+            page == null ? 1 : page,
+            pageSize == null ? 20 : pageSize));
   }
 
   /** 修改联动价格明细 */

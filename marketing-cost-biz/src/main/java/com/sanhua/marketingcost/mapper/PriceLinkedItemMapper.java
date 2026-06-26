@@ -2,6 +2,8 @@ package com.sanhua.marketingcost.mapper;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.core.toolkit.Constants;
 import com.sanhua.marketingcost.annotation.DataScope;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import java.util.List;
@@ -15,4 +17,10 @@ public interface PriceLinkedItemMapper extends BaseMapper<PriceLinkedItem> {
   @DataScope
   @Override
   List<PriceLinkedItem> selectList(@Param("ew") Wrapper<PriceLinkedItem> queryWrapper);
+
+  /** V21：分页查询最终走 BaseMapper.selectPage -> selectList(page, wrapper)，这里加数据隔离。 */
+  @DataScope
+  @Override
+  List<PriceLinkedItem> selectList(
+      IPage<PriceLinkedItem> page, @Param(Constants.WRAPPER) Wrapper<PriceLinkedItem> queryWrapper);
 }

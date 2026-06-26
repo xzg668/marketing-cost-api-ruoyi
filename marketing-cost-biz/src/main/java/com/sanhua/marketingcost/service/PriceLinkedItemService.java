@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service;
 
+import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import com.sanhua.marketingcost.dto.PriceItemImportResponse;
 import com.sanhua.marketingcost.dto.FactorUploadBatchDto;
 import com.sanhua.marketingcost.dto.PriceLinkedImportBatchDetailDto;
@@ -16,6 +17,16 @@ public interface PriceLinkedItemService {
   default List<PriceLinkedItemDto> list(
       String pricingMonth, String materialCode, boolean includeHistory) {
     return list(pricingMonth, materialCode);
+  }
+
+  default PageResult<PriceLinkedItemDto> page(
+      String pricingMonth,
+      String materialCode,
+      boolean includeHistory,
+      int page,
+      int pageSize) {
+    List<PriceLinkedItemDto> rows = list(pricingMonth, materialCode, includeHistory);
+    return new PageResult<>(rows, (long) rows.size());
   }
 
   PriceLinkedItemDto create(PriceLinkedItemUpdateRequest request);

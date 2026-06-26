@@ -3,7 +3,9 @@ package com.sanhua.marketingcost.service.impl;
 import com.alibaba.excel.EasyExcel;
 import com.alibaba.excel.context.AnalysisContext;
 import com.alibaba.excel.event.AnalysisEventListener;
+import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.PriceItemExcelImportRow;
 import com.sanhua.marketingcost.dto.PriceItemImportResponse;
 import com.sanhua.marketingcost.dto.PriceItemImportResponse.ErrorRow;
@@ -213,6 +215,43 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     return itemMapper.selectList(query).stream()
         .map(this::toDto)
         .toList();
+  }
+
+  @Override
+  public PageResult<PriceLinkedItemDto> page(
+      String pricingMonth,
+      String materialCode,
+      boolean includeHistory,
+      int page,
+      int pageSize) {
+    String resolvedMonth = resolvePricingMonth(pricingMonth);
+    var query = Wrappers.lambdaQuery(PriceLinkedItem.class);
+    if (StringUtils.hasText(resolvedMonth)) {
+      query.eq(PriceLinkedItem::getPricingMonth, resolvedMonth);
+    }
+    if (StringUtils.hasText(materialCode)) {
+      query.like(PriceLinkedItem::getMaterialCode, materialCode.trim());
+    }
+    if (!includeHistory) {
+      query.isNull(PriceLinkedItem::getEffectiveTo);
+    }
+    query.orderByAsc(PriceLinkedItem::getId);
+    Page<PriceLinkedItem> result =
+        itemMapper.selectPage(new Page<>(normalizePage(page), normalizePageSize(pageSize)), query);
+    return new PageResult<>(
+        result.getRecords().stream().map(this::toDto).toList(),
+        result.getTotal());
+  }
+
+  private long normalizePage(int page) {
+    return page < 1 ? 1L : page;
+  }
+
+  private long normalizePageSize(int pageSize) {
+    if (pageSize < 1) {
+      return 20L;
+    }
+    return Math.min(pageSize, 200);
   }
 
   @Override

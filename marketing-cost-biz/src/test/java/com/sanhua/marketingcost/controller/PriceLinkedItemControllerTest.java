@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
+import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import com.sanhua.marketingcost.dto.FactorUploadBatchDto;
 import com.sanhua.marketingcost.dto.PriceItemImportResponse;
 import com.sanhua.marketingcost.dto.PriceLinkedImportBatchDetailDto;
@@ -60,6 +61,23 @@ class PriceLinkedItemControllerTest {
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData()).hasSize(1);
     verify(priceLinkedItemService).list("2026-05", "M001", true);
+  }
+
+  @Test
+  @DisplayName("/items/page：分页参数透传给 Service")
+  void page_delegatesToService() {
+    PriceLinkedItemDto row = new PriceLinkedItemDto();
+    row.setId(12L);
+    when(priceLinkedItemService.page(eq("2026-05"), eq("M001"), eq(false), eq(2), eq(50)))
+        .thenReturn(new PageResult<>(List.of(row), 101L));
+
+    CommonResult<PageResult<PriceLinkedItemDto>> result =
+        controller.page("2026-05", "M001", false, 2, 50);
+
+    assertThat(result.isSuccess()).isTrue();
+    assertThat(result.getData().getTotal()).isEqualTo(101L);
+    assertThat(result.getData().getList()).hasSize(1);
+    verify(priceLinkedItemService).page("2026-05", "M001", false, 2, 50);
   }
 
   @Test

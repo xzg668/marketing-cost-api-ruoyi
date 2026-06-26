@@ -8,6 +8,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import cn.iocoder.yudao.framework.common.pojo.PageResult;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
@@ -198,6 +200,25 @@ class PriceLinkedItemServiceImplNormalizeTest {
     assertThat(list).hasSize(1);
     // Renderer 读 aliases_json[0] 回显 —— 电解铜 / 下料重量 是测试 seed 的第一项
     assertThat(list.get(0).getFormulaExprCn()).isEqualTo("电解铜*2+下料重量");
+  }
+
+  @Test
+  @DisplayName("page：走数据库分页并保留 total")
+  void pageUsesSelectPageAndKeepsTotal() {
+    PriceLinkedItem item = new PriceLinkedItem();
+    item.setId(17L);
+    item.setFormulaExpr("[Cu]*2");
+    Page<PriceLinkedItem> mapperPage = new Page<>(2, 50);
+    mapperPage.setRecords(List.of(item));
+    mapperPage.setTotal(88L);
+    when(itemMapper.selectPage(any(Page.class), any(Wrapper.class))).thenReturn(mapperPage);
+
+    PageResult<PriceLinkedItemDto> result = service.page("2026-04", "MAT", false, 2, 50);
+
+    assertThat(result.getTotal()).isEqualTo(88L);
+    assertThat(result.getList()).hasSize(1);
+    assertThat(result.getList().get(0).getId()).isEqualTo(17L);
+    verify(itemMapper).selectPage(any(Page.class), any(Wrapper.class));
   }
 
   @Test
