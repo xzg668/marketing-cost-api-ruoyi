@@ -139,6 +139,21 @@ class QuoteRequestControllerTest {
   }
 
   @Test
+  void launchCostingWorkbenchReturnsServiceResponse() {
+    QuoteCostingWorkbenchResponse response = new QuoteCostingWorkbenchResponse();
+    response.setPeriodMonth("2026-06");
+    response.setSnapshotGenerated(true);
+    when(quoteCostingWorkbenchService.launchWorkbench("OA-T8-001", 101L)).thenReturn(response);
+
+    CommonResult<QuoteCostingWorkbenchResponse> result =
+        controller.launchCostingWorkbench("OA-T8-001", 101L);
+
+    assertThat(result.isSuccess()).isTrue();
+    assertThat(result.getData().getSnapshotGenerated()).isTrue();
+    verify(quoteCostingWorkbenchService).launchWorkbench("OA-T8-001", 101L);
+  }
+
+  @Test
   void costRunReturnsServiceResponse() {
     QuoteCostRunWorkbenchResponse response = new QuoteCostRunWorkbenchResponse();
     response.setProductCode("TOP-A");

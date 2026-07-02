@@ -8,6 +8,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteBomConfirmationSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunSummaryResponse;
@@ -21,7 +23,10 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomConfirmation;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
+import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmBatch;
+import com.sanhua.marketingcost.mapper.BomByproductCostRuleMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
+import com.sanhua.marketingcost.mapper.BomSettlementRuleMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
@@ -35,6 +40,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -52,11 +59,25 @@ class QuoteCostingWorkbenchServiceImplTest {
   private OaFormItemMapper oaFormItemMapper;
   private QuoteBomStatusMapper quoteBomStatusMapper;
   private BomCostingRowMapper bomCostingRowMapper;
+  private BomSettlementRuleMapper settlementRuleMapper;
+  private BomByproductCostRuleMapper byproductCostRuleMapper;
   private QuoteBomConfirmationMapper quoteBomConfirmationMapper;
   private QuoteCostingWorkbenchSummaryMapper workbenchSummaryMapper;
   private QuotePriceTypeConfirmBatchMapper priceTypeConfirmBatchMapper;
   private QuoteProductBomCostingBuildService costingBuildService;
   private QuoteCostingWorkbenchServiceImpl service;
+
+  @BeforeAll
+  static void initTableInfo() {
+    MapperBuilderAssistant assistant =
+        new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    TableInfoHelper.initTableInfo(assistant, OaForm.class);
+    TableInfoHelper.initTableInfo(assistant, OaFormItem.class);
+    TableInfoHelper.initTableInfo(assistant, QuoteBomStatus.class);
+    TableInfoHelper.initTableInfo(assistant, BomCostingRow.class);
+    TableInfoHelper.initTableInfo(assistant, QuoteBomConfirmation.class);
+    TableInfoHelper.initTableInfo(assistant, QuotePriceTypeConfirmBatch.class);
+  }
 
   @BeforeEach
   void setUp() {
@@ -64,6 +85,8 @@ class QuoteCostingWorkbenchServiceImplTest {
     oaFormItemMapper = mock(OaFormItemMapper.class);
     quoteBomStatusMapper = mock(QuoteBomStatusMapper.class);
     bomCostingRowMapper = mock(BomCostingRowMapper.class);
+    settlementRuleMapper = mock(BomSettlementRuleMapper.class);
+    byproductCostRuleMapper = mock(BomByproductCostRuleMapper.class);
     quoteBomConfirmationMapper = mock(QuoteBomConfirmationMapper.class);
     workbenchSummaryMapper = mock(QuoteCostingWorkbenchSummaryMapper.class);
     priceTypeConfirmBatchMapper = mock(QuotePriceTypeConfirmBatchMapper.class);
@@ -74,6 +97,8 @@ class QuoteCostingWorkbenchServiceImplTest {
             oaFormItemMapper,
             quoteBomStatusMapper,
             bomCostingRowMapper,
+            settlementRuleMapper,
+            byproductCostRuleMapper,
             quoteBomConfirmationMapper,
             workbenchSummaryMapper,
             priceTypeConfirmBatchMapper,
@@ -103,6 +128,76 @@ class QuoteCostingWorkbenchServiceImplTest {
     assertThat(response.getWorkflowStatus().getCurrentBlockedStep())
         .isEqualTo("PRICE_TYPE_CONFIRMATION");
     verify(costingBuildService, never()).buildByOaFormItem(any());
+  }
+
+  @Test
+  void launchWorkbenchReusesExistingSnapshotWhenRulesAreNotNewer() {
+    BomCostingRow existing = row(10L, "FIN-001", "MAT-1");
+    existing.setBuiltAt(LocalDateTime.of(2026, 6, 30, 10, 0));
+    when(oaFormMapper.selectOne(any())).thenReturn(form());
+    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+        .thenReturn(List.of(existing));
+    when(settlementRuleMapper.selectLatestRuleChangeTime())
+        .thenReturn(LocalDateTime.of(2026, 6, 30, 9, 0));
+    when(byproductCostRuleMapper.selectLatestRuleChangeTime())
+        .thenReturn(LocalDateTime.of(2026, 6, 30, 9, 30));
+
+    QuoteCostingWorkbenchResponse response = service.launchWorkbench("OA-001", 10L);
+
+    assertThat(response.getSnapshotGenerated()).isFalse();
+    assertThat(response.getBomRows()).hasSize(1);
+    assertThat(response.getBomRows().get(0).getChildCode()).isEqualTo("MAT-1");
+    verify(costingBuildService, never()).buildByOaFormItem(any());
+    verify(quoteBomConfirmationMapper, never()).update(any(), any());
+    verify(priceTypeConfirmBatchMapper, never()).update(any(), any());
+  }
+
+  @Test
+  void launchWorkbenchRebuildsWhenSettlementRulesAreNewerThanSnapshot() {
+    BomCostingRow oldRow = row(10L, "FIN-001", "MAT-OLD");
+    oldRow.setBuiltAt(LocalDateTime.of(2026, 6, 30, 9, 0));
+    BomCostingRow newRow = row(10L, "FIN-001", "MAT-NEW");
+    newRow.setBuiltAt(LocalDateTime.of(2026, 6, 30, 10, 0));
+    newRow.setBuildBatchId("new_batch");
+    when(oaFormMapper.selectOne(any())).thenReturn(form());
+    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+        .thenReturn(List.of(oldRow))
+        .thenReturn(List.of(newRow));
+    when(settlementRuleMapper.selectLatestRuleChangeTime())
+        .thenReturn(LocalDateTime.of(2026, 6, 30, 9, 30));
+    when(byproductCostRuleMapper.selectLatestRuleChangeTime())
+        .thenReturn(LocalDateTime.of(2026, 6, 30, 8, 0));
+    when(costingBuildService.buildByOaFormItem(10L, "2026-06", LocalDate.now()))
+        .thenReturn(
+            new QuoteBomCostingBuildResponse(
+                201L,
+                null,
+                10L,
+                "OA-001",
+                "FIN-001",
+                "NON_BARE",
+                "2026-06",
+                "new_batch",
+                1,
+                1,
+                0,
+                Map.of("RAW_PRODUCT_BOM", 1),
+                List.of(),
+                LocalDateTime.of(2026, 6, 30, 10, 0)));
+
+    QuoteCostingWorkbenchResponse response = service.launchWorkbench("OA-001", 10L);
+
+    assertThat(response.getSnapshotGenerated()).isTrue();
+    assertThat(response.getBuildBatchId()).isEqualTo("new_batch");
+    assertThat(response.getBomRows()).hasSize(1);
+    assertThat(response.getBomRows().get(0).getChildCode()).isEqualTo("MAT-NEW");
+    verify(costingBuildService).buildByOaFormItem(10L, "2026-06", LocalDate.now());
+    verify(quoteBomConfirmationMapper).update(any(), any());
+    verify(priceTypeConfirmBatchMapper).update(any(), any());
   }
 
   @Test
@@ -169,7 +264,7 @@ class QuoteCostingWorkbenchServiceImplTest {
   }
 
   @Test
-  void trialCostRunKeepsCostRunPartialWhenPrepareStillHasWarnings() {
+  void trialCostRunStaysBlockedWhenPrepareStillHasWarnings() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
     when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
@@ -189,9 +284,9 @@ class QuoteCostingWorkbenchServiceImplTest {
     QuoteCostingWorkbenchResponse response = service.getWorkbench("OA-001", 10L);
 
     assertThat(response.getWorkflowStatus().getPricePrepareStatus()).isEqualTo("PARTIAL");
-    assertThat(response.getWorkflowStatus().getCostRunStatus()).isEqualTo("PARTIAL");
-    assertThat(response.getWorkflowStatus().getOverallStatus()).isEqualTo("PARTIAL");
-    assertThat(response.getWorkflowStatus().getCurrentBlockedStep()).isNull();
+    assertThat(response.getWorkflowStatus().getCostRunStatus()).isEqualTo("BLOCKED");
+    assertThat(response.getWorkflowStatus().getOverallStatus()).isEqualTo("BLOCKED");
+    assertThat(response.getWorkflowStatus().getCurrentBlockedStep()).isEqualTo("COST_RUN");
   }
 
   @Test
@@ -537,6 +632,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     response.setOaNo("OA-001");
     response.setOaFormItemId(10L);
     response.setTopProductCode("FIN-001");
+    response.setPriceTypeConfirmNo("PT-CF-001");
     response.setPeriodMonth("2026-06");
     response.setStatus(status);
     response.setGapCount(gaps);
@@ -552,6 +648,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     response.setOaFormItemId(10L);
     response.setProductCode("FIN-001");
     response.setResultPeriod("2026-06");
+    response.setPricePrepareNo("PP-001");
     response.setStatus(status);
     response.setTotalCost(new BigDecimal("12.345678"));
     return response;

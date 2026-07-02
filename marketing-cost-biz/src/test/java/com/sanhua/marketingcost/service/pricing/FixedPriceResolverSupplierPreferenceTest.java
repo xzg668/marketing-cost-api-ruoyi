@@ -113,6 +113,54 @@ class FixedPriceResolverSupplierPreferenceTest {
   }
 
   @Test
+  @DisplayName("同料号同供应商：价格审批单优先于 U9C 应付单")
+  void sameSupplierPrefersApprovalProcessOverU9Payable() {
+    PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);
+    SupplierSupplyRatioResolveService ratioService = mock(SupplierSupplyRatioResolveService.class);
+    FixedPriceResolver resolver = resolver(mapper, ratioService);
+    PriceFixedItem u9 = row(9L, "供应商A", "SA", "66.00");
+    u9.setProcessNo("U9C-应付单列表");
+    u9.setSourceSystem("U9");
+    u9.setEffectiveFrom(LocalDate.parse("2026-06-01"));
+    PriceFixedItem approval = row(1L, "供应商A", "SA", "88.00");
+    approval.setProcessNo("SC-SC-018-20260227-016");
+    approval.setSourceSystem("SRM");
+    approval.setEffectiveFrom(LocalDate.parse("2026-05-01"));
+    when(mapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(u9, approval));
+
+    PriceResolveResult result = resolver.resolve("OA-1", item("MAT-1"), route());
+
+    assertThat(result.unitPrice()).isEqualByComparingTo("88.00");
+    assertThat(result.remark()).isEmpty();
+    org.mockito.Mockito.verifyNoInteractions(ratioService);
+  }
+
+  @Test
+  @DisplayName("多供应商固定价：U9C 供货比例更大时，仍只在价格审批单里按比例取价")
+  void approvalRowsWinBeforeSupplierRatioSelection() {
+    PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);
+    SupplierSupplyRatioResolveService ratioService = mock(SupplierSupplyRatioResolveService.class);
+    FixedPriceResolver resolver = resolver(mapper, ratioService);
+    PriceFixedItem u9 = row(9L, "供应商B", "SB", "66.00");
+    u9.setProcessNo("U9C-应付单列表");
+    u9.setSourceSystem("U9");
+    PriceFixedItem approvalA = row(1L, "供应商A", "SA", "88.00");
+    approvalA.setProcessNo("SC-SC-018-20260227-016");
+    PriceFixedItem approvalC = row(2L, "供应商C", "SC", "77.00");
+    approvalC.setProcessNo("SC-SC-018-20260418-026");
+    when(mapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(u9, approvalA, approvalC));
+    when(ratioService.resolveAmongSuppliers(any(), any(), any(), any(), any(), any()))
+        .thenReturn(hit("供应商C", "SC", "0.40"));
+
+    PriceResolveResult result = resolver.resolve("OA-1", item("MAT-1"), route());
+
+    assertThat(result.unitPrice()).isEqualByComparingTo("77.00");
+    assertThat(result.remark()).isEqualTo("按主供应商供货比例匹配价格");
+  }
+
+  @Test
   @DisplayName("固定采购价路由：只查询 PURCHASE_FIXED/PURCHASE，避免取到结算固定价")
   void purchaseRouteQueriesPurchaseSourceTypesOnly() {
     PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);

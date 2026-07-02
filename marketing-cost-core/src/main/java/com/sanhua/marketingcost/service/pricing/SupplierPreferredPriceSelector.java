@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.pricing;
 
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioResolveResult;
+import com.sanhua.marketingcost.dto.SupplierSupplyRatioCandidate;
 import com.sanhua.marketingcost.service.SupplierSupplyRatioResolveService;
 import com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils;
 import java.time.LocalDate;
@@ -36,8 +37,18 @@ public class SupplierPreferredPriceSelector {
       return new SupplierPreferredPriceSelection<>(fallback, "");
     }
 
-    SupplierSupplyRatioResolveResult mainSupplier = resolveService.resolve(
-        businessUnitType, materialCode, materialName, specModel, pricingDate);
+    SupplierSupplyRatioResolveResult mainSupplier =
+        resolveService.resolveAmongSuppliers(
+            businessUnitType,
+            materialCode,
+            materialName,
+            specModel,
+            pricingDate,
+            supplierCandidates(candidates, supplierNameGetter, supplierCodeGetter));
+    if (mainSupplier == null) {
+      mainSupplier = resolveService.resolve(
+          businessUnitType, materialCode, materialName, specModel, pricingDate);
+    }
     if (!mainSupplier.isMatched()) {
       // 供应关系缺失不能阻断报价；保留原价格源排序的第一条，并把原因写入 trace。
       return new SupplierPreferredPriceSelection<>(
@@ -68,6 +79,17 @@ public class SupplierPreferredPriceSelector {
         .filter(StringUtils::hasText)
         .distinct()
         .count();
+  }
+
+  private <T> List<SupplierSupplyRatioCandidate> supplierCandidates(
+      List<T> candidates,
+      Function<T, String> supplierNameGetter,
+      Function<T, String> supplierCodeGetter) {
+    return candidates.stream()
+        .map(candidate -> new SupplierSupplyRatioCandidate(
+            supplierNameGetter.apply(candidate),
+            supplierCodeGetter.apply(candidate)))
+        .toList();
   }
 
   private <T> boolean sameSupplier(

@@ -25,6 +25,8 @@ public class FixedPriceResolver implements PriceResolver {
       List.of("PURCHASE_FIXED", "PURCHASE");
   private static final List<String> SETTLE_FIXED_SOURCE_TYPES =
       List.of("SETTLE_FIXED", "SETTLE");
+  private static final String U9_PAYABLE_PROCESS_NO = "U9C-应付单列表";
+  private static final String U9_SOURCE_SYSTEM = "U9";
 
   private final PriceFixedItemMapper priceFixedItemMapper;
   private final SupplierPreferredPriceSelector supplierPreferredPriceSelector;
@@ -66,6 +68,7 @@ public class FixedPriceResolver implements PriceResolver {
       PriceFixedItem row = rows.get(0);
       return new PriceResolveResult(row.getFixedPrice(), "结算固定价", settleTrace(row));
     }
+    rows = preferApprovalRows(rows);
     SupplierPreferredPriceSelection<PriceFixedItem> selected =
         supplierPreferredPriceSelector.select(
             rows,
@@ -110,6 +113,30 @@ public class FixedPriceResolver implements PriceResolver {
           .orderByDesc(PriceFixedItem::getId);
     }
     return priceFixedItemMapper.selectList(query);
+  }
+
+  private List<PriceFixedItem> preferApprovalRows(List<PriceFixedItem> rows) {
+    boolean hasApprovalRow = rows.stream().anyMatch(row -> !isU9PayableRow(row));
+    if (!hasApprovalRow) {
+      return rows;
+    }
+    return rows.stream()
+        .filter(row -> !isU9PayableRow(row))
+        .toList();
+  }
+
+  private boolean isU9PayableRow(PriceFixedItem row) {
+    if (row == null) {
+      return false;
+    }
+    String processNo = row.getProcessNo();
+    if (StringUtils.hasText(processNo)
+        && U9_PAYABLE_PROCESS_NO.equals(processNo.trim())) {
+      return true;
+    }
+    String sourceSystem = row.getSourceSystem();
+    return StringUtils.hasText(sourceSystem)
+        && U9_SOURCE_SYSTEM.equalsIgnoreCase(sourceSystem.trim());
   }
 
   private List<String> sourceTypes(FixedSourceKind sourceKind) {

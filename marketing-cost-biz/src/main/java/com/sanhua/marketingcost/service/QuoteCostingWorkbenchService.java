@@ -8,6 +8,8 @@ public interface QuoteCostingWorkbenchService {
 
   QuoteCostingWorkbenchResponse getWorkbench(String oaNo, Long oaFormItemId);
 
+  QuoteCostingWorkbenchResponse launchWorkbench(String oaNo, Long oaFormItemId);
+
   QuoteCostingWorkbenchBomRowResponse updateBomRow(
       String oaNo, Long oaFormItemId, Long rowId, QuoteCostingBomRowUpdateRequest request);
 }

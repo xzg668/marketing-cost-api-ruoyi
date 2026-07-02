@@ -20,7 +20,9 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomConfirmation;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmBatch;
+import com.sanhua.marketingcost.mapper.BomByproductCostRuleMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
+import com.sanhua.marketingcost.mapper.BomSettlementRuleMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
@@ -57,6 +59,8 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   private final OaFormItemMapper oaFormItemMapper;
   private final QuoteBomStatusMapper quoteBomStatusMapper;
   private final BomCostingRowMapper bomCostingRowMapper;
+  private final BomSettlementRuleMapper settlementRuleMapper;
+  private final BomByproductCostRuleMapper byproductCostRuleMapper;
   private final QuoteBomConfirmationMapper quoteBomConfirmationMapper;
   private final QuoteCostingWorkbenchSummaryMapper workbenchSummaryMapper;
   private final QuotePriceTypeConfirmBatchMapper priceTypeConfirmBatchMapper;
@@ -67,6 +71,8 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       OaFormItemMapper oaFormItemMapper,
       QuoteBomStatusMapper quoteBomStatusMapper,
       BomCostingRowMapper bomCostingRowMapper,
+      BomSettlementRuleMapper settlementRuleMapper,
+      BomByproductCostRuleMapper byproductCostRuleMapper,
       QuoteBomConfirmationMapper quoteBomConfirmationMapper,
       QuoteCostingWorkbenchSummaryMapper workbenchSummaryMapper,
       QuotePriceTypeConfirmBatchMapper priceTypeConfirmBatchMapper,
@@ -75,6 +81,8 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
     this.bomCostingRowMapper = bomCostingRowMapper;
+    this.settlementRuleMapper = settlementRuleMapper;
+    this.byproductCostRuleMapper = byproductCostRuleMapper;
     this.quoteBomConfirmationMapper = quoteBomConfirmationMapper;
     this.workbenchSummaryMapper = workbenchSummaryMapper;
     this.priceTypeConfirmBatchMapper = priceTypeConfirmBatchMapper;
@@ -102,11 +110,59 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       QuoteBomCostingBuildResponse build =
           costingBuildService.buildByOaFormItem(item.getId(), periodMonth, costRunLaunchDate);
       generated = true;
-      periodMonth = firstText(build.periodMonth(), periodMonth);
-      buildBatchId = build.buildBatchId();
+      periodMonth = firstText(build == null ? null : build.periodMonth(), periodMonth);
+      buildBatchId = build == null ? null : build.buildBatchId();
       rows = loadSnapshot(form.getOaNo(), item.getId(), productCode, periodMonth);
     }
 
+    return buildWorkbenchResponse(
+        form, item, status, productCode, periodMonth, rows, generated, buildBatchId);
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public QuoteCostingWorkbenchResponse launchWorkbench(String oaNo, Long oaFormItemId) {
+    OaForm form = requireForm(oaNo);
+    OaFormItem item = requireItem(form, oaFormItemId);
+    String productCode = trimToNull(item.getMaterialNo());
+    if (productCode == null) {
+      throw new QuoteIngestException("当前产品行料号为空，无法发起核算");
+    }
+
+    QuoteBomStatus status = latestBomStatus(form.getOaNo(), item.getId());
+    String periodMonth = resolvePeriodMonth(form, status, item.getId(), productCode);
+    List<BomCostingRow> rows = loadSnapshot(form.getOaNo(), item.getId(), productCode, periodMonth);
+    boolean shouldBuild = rows.isEmpty() || settlementRulesChangedSince(rows);
+    boolean generated = false;
+    String buildBatchId = latestBuildBatchId(rows);
+
+    if (shouldBuild) {
+      QuoteBomCostingBuildResponse build =
+          costingBuildService.buildByOaFormItem(item.getId(), periodMonth, LocalDate.now());
+      generated = true;
+      if (!rows.isEmpty()) {
+        LocalDateTime now = LocalDateTime.now();
+        markBomConfirmationStale(form.getOaNo(), item.getId(), productCode, periodMonth, now);
+        markPriceTypeConfirmationStale(form.getOaNo(), item.getId(), productCode, periodMonth, now);
+      }
+      periodMonth = firstText(build == null ? null : build.periodMonth(), periodMonth);
+      buildBatchId = build == null ? null : build.buildBatchId();
+      rows = loadSnapshot(form.getOaNo(), item.getId(), productCode, periodMonth);
+    }
+
+    return buildWorkbenchResponse(
+        form, item, status, productCode, periodMonth, rows, generated, buildBatchId);
+  }
+
+  private QuoteCostingWorkbenchResponse buildWorkbenchResponse(
+      OaForm form,
+      OaFormItem item,
+      QuoteBomStatus status,
+      String productCode,
+      String periodMonth,
+      List<BomCostingRow> rows,
+      boolean generated,
+      String buildBatchId) {
     QuoteBomConfirmationSummaryResponse latestBomConfirmation =
         workbenchSummaryMapper.selectLatestBomConfirmation(
             form.getOaNo(), item.getId(), productCode, periodMonth);
@@ -199,6 +255,58 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     existing.setModifiedBy(patch.getModifiedBy());
     existing.setModifiedAt(patch.getModifiedAt());
     return toBomRow(existing);
+  }
+
+  private boolean settlementRulesChangedSince(List<BomCostingRow> rows) {
+    LocalDateTime builtAt = latestBuiltAt(rows);
+    if (builtAt == null) {
+      return true;
+    }
+    LocalDateTime latestRuleChangedAt = latestRuleChangedAt();
+    return latestRuleChangedAt != null && latestRuleChangedAt.isAfter(builtAt);
+  }
+
+  private LocalDateTime latestBuiltAt(List<BomCostingRow> rows) {
+    LocalDateTime latest = null;
+    for (BomCostingRow row : rows == null ? List.<BomCostingRow>of() : rows) {
+      if (row == null || row.getBuiltAt() == null) {
+        continue;
+      }
+      if (latest == null || row.getBuiltAt().isAfter(latest)) {
+        latest = row.getBuiltAt();
+      }
+    }
+    return latest;
+  }
+
+  private LocalDateTime latestRuleChangedAt() {
+    return maxTime(
+        settlementRuleMapper.selectLatestRuleChangeTime(),
+        byproductCostRuleMapper.selectLatestRuleChangeTime());
+  }
+
+  private LocalDateTime maxTime(LocalDateTime first, LocalDateTime second) {
+    if (first == null) {
+      return second;
+    }
+    if (second == null) {
+      return first;
+    }
+    return first.isAfter(second) ? first : second;
+  }
+
+  private void markBomConfirmationStale(
+      String oaNo, Long oaFormItemId, String productCode, String periodMonth, LocalDateTime now) {
+    quoteBomConfirmationMapper.update(
+        null,
+        Wrappers.<QuoteBomConfirmation>lambdaUpdate()
+            .set(QuoteBomConfirmation::getConfirmStatus, QuoteBomConfirmation.STATUS_STALE)
+            .set(QuoteBomConfirmation::getUpdatedAt, now)
+            .eq(QuoteBomConfirmation::getOaNo, oaNo)
+            .eq(QuoteBomConfirmation::getOaFormItemId, oaFormItemId)
+            .eq(QuoteBomConfirmation::getTopProductCode, productCode)
+            .eq(QuoteBomConfirmation::getPeriodMonth, periodMonth)
+            .eq(QuoteBomConfirmation::getConfirmStatus, QuoteBomConfirmation.STATUS_CONFIRMED));
   }
 
   private void markPriceTypeConfirmationStale(

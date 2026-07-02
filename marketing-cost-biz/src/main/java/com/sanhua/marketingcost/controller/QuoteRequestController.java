@@ -170,6 +170,18 @@ public class QuoteRequestController {
   }
 
   @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
+  @PostMapping("/{oaNo}/items/{oaFormItemId}/costing-workbench/launch")
+  public CommonResult<QuoteCostingWorkbenchResponse> launchCostingWorkbench(
+      @PathVariable("oaNo") String oaNo,
+      @PathVariable("oaFormItemId") Long oaFormItemId) {
+    try {
+      return CommonResult.success(quoteCostingWorkbenchService.launchWorkbench(oaNo, oaFormItemId));
+    } catch (QuoteIngestException | IllegalArgumentException ex) {
+      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
+    }
+  }
+
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
   @PutMapping("/{oaNo}/items/{oaFormItemId}/costing-bom/rows/{rowId}")
   public CommonResult<QuoteCostingWorkbenchBomRowResponse> updateCostingBomRow(
       @PathVariable("oaNo") String oaNo,
