@@ -6,6 +6,7 @@ import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunObjectResult;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.CostRunResultDto;
+import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
@@ -26,6 +27,7 @@ import com.sanhua.marketingcost.entity.CostRunTraceSnapshot;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.CostRunCostItemMapper;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
 import com.sanhua.marketingcost.mapper.CostRunResultMapper;
@@ -191,6 +193,11 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
             scope.periodMonth(),
             costRunStartedAt,
             "QUOTE:" + scope.oaFormItemId());
+    QuoteDataOrganization organization =
+        MaterialOrganization.quoteDataForQuoteProcess(
+            scope.form().getProcessCode(), scope.form().getOaNo(), scope.item().getBusinessUnitType());
+    context.setPriceOrgCode(organization.priceOrgCode());
+    context.setMaterialOrganizationCode(organization.materialOrganizationCode());
     context.setCostRunVersionId(version.getId());
     context.setCostRunNo(version.getCostRunNo());
     context.setPricePrepareNo(version.getPricePrepareNo());

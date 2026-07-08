@@ -356,6 +356,7 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
       com.sanhua.marketingcost.dto.BuildHierarchyRequest br =
           new com.sanhua.marketingcost.dto.BuildHierarchyRequest();
       br.setImportBatchId(ir.getImportBatchId());
+      br.setPriceOrgCode("210");
       br.setBomPurpose("主制造");
       br.setMode("BY_PRODUCT");
       br.setTopProductCode("1079900000536");
@@ -368,6 +369,8 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
       fr.setBomPurpose("主制造");
       fr.setMode("BY_OA");
       fr.setAsOfDate(LocalDate.of(2026, 4, 27));
+      fr.setPriceOrgCode("210");
+      fr.setMaterialOrganizationCode("COMMERCIAL");
       FlattenResult fResult = flattenService.flatten(fr);
 
       // 4) 报告关键统计
@@ -441,6 +444,8 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
     r.setBomPurpose(purpose);
     r.setMode("BY_OA");
     r.setAsOfDate(asOf);
+    r.setPriceOrgCode("210");
+    r.setMaterialOrganizationCode("COMMERCIAL");
     return r;
   }
 

@@ -152,7 +152,9 @@ public class SupplementBomReadServiceImpl implements SupplementBomReadService {
         detail.getSortSeq(),
         detail.getSourceRawHierarchyId(),
         detail.getSourceU9BomId(),
-        detail.getManualFlag());
+        detail.getManualFlag(),
+        null,
+        null);
   }
 
   private SupplementBomReadResult empty(

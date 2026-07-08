@@ -356,7 +356,12 @@ public class QuoteBomSupplementCollaborationServiceImpl
     if (record == null || record.getNeedPackage() == null || record.getNeedPackage() != 1) {
       throw new QuoteIngestException("当前任务不允许选择包装参考");
     }
-    return packageReadService.readByReference(referenceFinishedCode, sourceTopProductCode, periodMonth);
+    return packageReadService.readByReference(
+        referenceFinishedCode,
+        sourceTopProductCode,
+        periodMonth,
+        record.getPriceOrgCode(),
+        record.getMaterialOrganizationCode());
   }
 
   @Override
@@ -613,7 +618,9 @@ public class QuoteBomSupplementCollaborationServiceImpl
         packageReadService.readByReference(
             selection.referenceFinishedCode(),
             selection.sourceTopProductCode(),
-            firstText(selection.periodMonth(), record.getCostPeriodMonth()));
+            firstText(selection.periodMonth(), record.getCostPeriodMonth()),
+            record.getPriceOrgCode(),
+            record.getMaterialOrganizationCode());
     if (!source.found()) {
       throw new QuoteIngestException("包装组件结构不可用: " + String.join("；", source.gaps()));
     }

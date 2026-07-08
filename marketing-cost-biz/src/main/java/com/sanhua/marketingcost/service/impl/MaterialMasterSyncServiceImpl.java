@@ -2,9 +2,9 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.SyncMaterialMasterRow;
+import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
-import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
@@ -15,6 +15,8 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -42,7 +44,6 @@ public class MaterialMasterSyncServiceImpl implements MaterialMasterSyncService 
   private final BomCostingRowMapper bomCostingRowMapper;
   private final MaterialMasterRawMapper rawMapper;
   private final MaterialMasterMapper masterMapper;
-  private final OaFormMapper oaFormMapper;
 
   @Autowired
   public MaterialMasterSyncServiceImpl(
@@ -53,7 +54,6 @@ public class MaterialMasterSyncServiceImpl implements MaterialMasterSyncService 
     this.bomCostingRowMapper = bomCostingRowMapper;
     this.rawMapper = rawMapper;
     this.masterMapper = masterMapper;
-    this.oaFormMapper = oaFormMapper;
   }
 
   public MaterialMasterSyncServiceImpl(
@@ -71,73 +71,94 @@ public class MaterialMasterSyncServiceImpl implements MaterialMasterSyncService 
     }
     String oa = oaNo.trim();
 
-    // 1) OA 涉及的去重料号
-    List<String> codes = bomCostingRowMapper.selectDistinctMaterialCodesByOaNo(oa);
-    if (codes == null || codes.isEmpty()) {
+    // 1) OA 涉及的去重料号，按成本行已落表的 U9 料品组织分组。
+    List<BomCostingRow> costingScopes =
+        bomCostingRowMapper.selectDistinctMaterialCodesWithOrgByOaNo(oa);
+    if (costingScopes == null || costingScopes.isEmpty()) {
       log.warn("OA {} 在 lp_bom_costing_row 无 BOM 行，跳过同步", oa);
       return new SyncResult(0, 0, 0, null);
+    }
+    Map<String, List<String>> codesByOrganization = groupCodesByOrganization(costingScopes);
+    LinkedHashSet<String> distinctCodes = new LinkedHashSet<>();
+    for (List<String> scopedCodes : codesByOrganization.values()) {
+      distinctCodes.addAll(scopedCodes);
     }
 
     // 2) staging 最新有效批次。raw 表会保留历史批次，后续 U9 接口接入也会继续写 raw，
     //    同步主表时必须固定到一个 active batch，避免同一批同步混入新旧数据。
-    String organizationCode = resolveMaterialOrganization(oa);
-    String batchId = selectLatestActiveImportId(organizationCode);
-    if (!StringUtils.hasText(batchId)) {
-      throw new RuntimeException("staging 表 lp_material_master_raw 无数据");
+    Map<String, MaterialMaster> existingByCode = loadExistingByCode(distinctCodes);
+    int stagingHits = 0;
+    int affected = 0;
+    List<String> batchTraces = new ArrayList<>();
+    for (Map.Entry<String, List<String>> entry : codesByOrganization.entrySet()) {
+      String organizationCode = entry.getKey();
+      List<String> codes = entry.getValue();
+      String batchId = selectLatestActiveImportId(organizationCode);
+      if (!StringUtils.hasText(batchId)) {
+        throw new RuntimeException(
+            "staging 表 lp_material_master_raw 无数据，organizationCode=" + organizationCode);
+      }
+      batchTraces.add(organizationCode + ":" + batchId);
+
+      // 3) 拉这些料号在最新有效批次的 staging 行
+      List<MaterialMasterRaw> raws = selectRawRows(codes, organizationCode);
+      if (raws == null || raws.isEmpty()) {
+        log.warn(
+            "OA {} 涉及 {} 料号，staging 命中 0 行（组织 {}，批次 {}）",
+            oa, codes.size(), organizationCode, batchId);
+        continue;
+      }
+      stagingHits += raws.size();
+
+      // 4) 类型转换 + BU 推断 → SyncMaterialMasterRow
+      List<SyncMaterialMasterRow> rows = new ArrayList<>(raws.size());
+      for (MaterialMasterRaw r : raws) {
+        rows.add(toSyncRow(r, existingByCode.get(r.getMaterialCode())));
+      }
+
+      // 5) 批量 UPSERT
+      affected += masterMapper.upsertBatch(rows);
     }
-
-    // 3) 拉这些料号在最新有效批次的 staging 行
-    List<MaterialMasterRaw> raws = selectRawRows(codes, organizationCode);
-    if (raws == null || raws.isEmpty()) {
-      log.warn("OA {} 涉及 {} 料号，staging 命中 0 行（批次 {}）", oa, codes.size(), batchId);
-      return new SyncResult(codes.size(), 0, 0, batchId);
-    }
-
-    Map<String, MaterialMaster> existingByCode = loadExistingByCode(codes);
-
-    // 4) 类型转换 + BU 推断 → SyncMaterialMasterRow
-    List<SyncMaterialMasterRow> rows = new ArrayList<>(raws.size());
-    for (MaterialMasterRaw r : raws) {
-      rows.add(toSyncRow(r, existingByCode.get(r.getMaterialCode())));
-    }
-
-    // 5) 批量 UPSERT
-    int affected = masterMapper.upsertBatch(rows);
     log.info(
-        "T15 主档同步: oa={} materialOrg={} codes={} stagingHits={} affected={} importTrace={}",
-        oa, organizationCode, codes.size(), raws.size(), affected, batchId);
-    return new SyncResult(codes.size(), raws.size(), affected, batchId);
+        "T15 主档同步: oa={} materialOrgs={} codes={} stagingHits={} affected={} importTrace={}",
+        oa, codesByOrganization.keySet(), distinctCodes.size(), stagingHits, affected, batchTraces);
+    return new SyncResult(distinctCodes.size(), stagingHits, affected, String.join(",", batchTraces));
   }
 
-  private String resolveMaterialOrganization(String oaNo) {
-    if (oaFormMapper == null) {
-      return MaterialOrganization.forQuoteProcess(null, oaNo);
+  private Map<String, List<String>> groupCodesByOrganization(List<BomCostingRow> costingScopes) {
+    Map<String, LinkedHashSet<String>> scoped = new LinkedHashMap<>();
+    for (BomCostingRow row : costingScopes) {
+      String code = text(row == null ? null : row.getMaterialCode());
+      if (code == null) {
+        continue;
+      }
+      String organization = requiredMaterialOrganization(row.getMaterialOrganizationCode(), code);
+      scoped.computeIfAbsent(organization, ignored -> new LinkedHashSet<>()).add(code);
     }
-    OaForm form =
-        oaFormMapper.selectOne(
-            Wrappers.<OaForm>lambdaQuery()
-                .select(OaForm::getProcessCode, OaForm::getOaNo)
-                .eq(OaForm::getOaNo, oaNo)
-                .last("LIMIT 1"));
-    if (form == null) {
-      return MaterialOrganization.forQuoteProcess(null, oaNo);
+    if (scoped.isEmpty()) {
+      throw new RuntimeException("OA BOM 成本行没有可同步的料号");
     }
-    return MaterialOrganization.forQuoteProcess(form.getProcessCode(), form.getOaNo());
+    Map<String, List<String>> result = new LinkedHashMap<>();
+    for (Map.Entry<String, LinkedHashSet<String>> entry : scoped.entrySet()) {
+      result.put(entry.getKey(), new ArrayList<>(entry.getValue()));
+    }
+    return result;
+  }
+
+  private String requiredMaterialOrganization(String organizationCode, String materialCode) {
+    if (!StringUtils.hasText(organizationCode)) {
+      throw new RuntimeException("BOM 成本行缺少 materialOrganizationCode，materialCode=" + materialCode);
+    }
+    return MaterialOrganization.fromCode(organizationCode).getCode();
   }
 
   private String selectLatestActiveImportId(String organizationCode) {
-    String organization = MaterialOrganization.normalize(organizationCode);
-    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
-      return rawMapper.selectLatestActiveBatchId(null);
-    }
+    String organization = MaterialOrganization.fromCode(organizationCode).getCode();
     return rawMapper.selectLatestActiveBatchId(null, organization);
   }
 
   private List<MaterialMasterRaw> selectRawRows(List<String> codes, String organizationCode) {
-    String organization = MaterialOrganization.normalize(organizationCode);
-    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
-      return rawMapper.selectByLatestBatchAndCodes(codes, null);
-    }
+    String organization = MaterialOrganization.fromCode(organizationCode).getCode();
     return rawMapper.selectByLatestBatchAndCodes(codes, null, organization);
   }
 

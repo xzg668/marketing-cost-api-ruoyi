@@ -63,11 +63,17 @@ public class QuoteBomDetailQueryServiceImpl implements QuoteBomDetailQueryServic
       String sourceTopProductCode,
       String packageParentCode,
       String periodMonth,
+      String priceOrgCode,
+      String materialOrganizationCode,
       Integer page,
       Integer pageSize) {
     PackageComponentStructureReadResult result =
         packageStructureReadService.readByReference(
-            trimToNull(referenceFinishedCode), trimToNull(sourceTopProductCode), periodMonth);
+            trimToNull(referenceFinishedCode),
+            trimToNull(sourceTopProductCode),
+            periodMonth,
+            priceOrgCode,
+            materialOrganizationCode);
     String parentCode = trimToNull(packageParentCode);
     List<PackageComponentStructureLineDto> filtered =
         result.lines() == null

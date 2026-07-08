@@ -9,6 +9,9 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomBatchSyncResponse;
 import com.sanhua.marketingcost.entity.BomU9Source;
@@ -28,6 +31,8 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -43,6 +48,12 @@ class QuoteBomStatusServiceImplTest {
   private QuoteBomStatusServiceImpl service;
   private Clock clock;
 
+  @BeforeAll
+  static void initTableInfo() {
+    TableInfoHelper.initTableInfo(
+        new MapperBuilderAssistant(new MybatisConfiguration(), ""), BomU9Source.class);
+  }
+
   @BeforeEach
   void setUp() {
     oaFormMapper = mock(OaFormMapper.class);
@@ -53,7 +64,7 @@ class QuoteBomStatusServiceImplTest {
     bomU9SourceMapper = mock(BomU9SourceMapper.class);
     productPackagingTypeResolver = mock(U9ProductPackagingTypeResolver.class);
     clock = Clock.fixed(Instant.parse("2026-06-01T00:01:00Z"), ZoneId.of("UTC"));
-    when(productPackagingTypeResolver.resolve(any()))
+    when(productPackagingTypeResolver.resolve(any(), any()))
         .thenReturn(U9ProductPackagingTypeResolver.Result.unknown(null));
     service =
         new QuoteBomStatusServiceImpl(
@@ -71,9 +82,9 @@ class QuoteBomStatusServiceImplTest {
   void productWithCurrentMonthCostingRowsUpdatesStatusToCurrentMonthQuoted() {
     stubFormAndItems(List.of(item(10L, 1, "MAT-1001", "SHF-A")), List.of());
     BomAvailability availability = available("COSTING_SNAPSHOT");
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-1001", "2026-06"))
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-1001", "2026-06", "210"))
         .thenReturn(availability);
-    when(productPackagingTypeResolver.resolve("MAT-1001"))
+    when(productPackagingTypeResolver.resolve("MAT-1001", "COMMERCIAL"))
         .thenReturn(new U9ProductPackagingTypeResolver.Result(
             U9ProductPackagingTypeResolver.NAKED_PRODUCT, "110101"));
 
@@ -94,7 +105,7 @@ class QuoteBomStatusServiceImplTest {
   @Test
   void productWithRawHierarchyUpdatesStatusToU9BomExists() {
     stubFormAndItems(List.of(item(15L, 1, "MAT-U9-1", "SHF-U9")), List.of());
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-U9-1", "2026-06"))
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-U9-1", "2026-06", "210"))
         .thenReturn(available("U9"));
 
     QuoteBomStatusResponse response = service.checkByOaNo("OA-T7-001");
@@ -106,7 +117,7 @@ class QuoteBomStatusServiceImplTest {
   @Test
   void productWithoutLocalBomUpdatesStatusToNoBom() {
     stubFormAndItems(List.of(item(11L, 1, "MAT-MISSING", "SHF-B")), List.of());
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-MISSING", "2026-06"))
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-MISSING", "2026-06", "210"))
         .thenReturn(BomAvailability.unavailable("未匹配到本地正式 BOM 或有效补录 BOM"));
 
     QuoteBomStatusResponse response = service.checkByOaNo("OA-T7-001");
@@ -119,7 +130,7 @@ class QuoteBomStatusServiceImplTest {
   @Test
   void productWithoutMaterialNoIsNoBomWithClearError() {
     stubFormAndItems(List.of(item(12L, 1, null, "SHF-C")), List.of());
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", null, "2026-06"))
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", null, "2026-06", "210"))
         .thenReturn(BomAvailability.unavailable("产品料号为空，无法自动匹配 BOM"));
 
     QuoteBomStatusResponse response = service.checkByOaNo("OA-T7-001");
@@ -137,7 +148,7 @@ class QuoteBomStatusServiceImplTest {
     existing.setOaNo("OA-T7-001");
     existing.setBomStatus("NOT_CHECKED");
     stubFormAndItems(List.of(item(13L, 1, "MAT-1002", "SHF-D")), List.of(existing));
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-1002", "2026-06"))
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-1002", "2026-06", "210"))
         .thenReturn(available("U9"));
 
     QuoteBomStatusResponse response = service.checkByOaNo("OA-T7-001");
@@ -257,6 +268,41 @@ class QuoteBomStatusServiceImplTest {
   }
 
   @Test
+  void batchSyncFromU9SourceUsesPriceOrganization() {
+    OaForm form = new OaForm();
+    form.setId(1L);
+    form.setOaNo("FI-SC-020-20260707-001");
+    OaFormItem item = item(25L, 1, "MAT-PLATE", "SHF-P");
+    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(item));
+    when(oaFormMapper.selectBatchIds(any())).thenReturn(List.of(form));
+    when(quoteBomStatusMapper.selectList(any())).thenReturn(new ArrayList<>());
+    when(bomU9SourceMapper.selectList(any()))
+        .thenAnswer(
+            invocation -> {
+              AbstractWrapper<?, ?, ?> wrapper = invocation.getArgument(0);
+              assertThat(hasParamValue(wrapper, "220")).isTrue();
+              return List.of(u9("MAT-PLATE", "BATCH-220", "220"));
+            });
+    doAnswer(
+            invocation -> {
+              QuoteBomMonthlySnapshot snapshot = invocation.getArgument(0);
+              snapshot.setId(7250L);
+              return 1;
+            })
+        .when(quoteBomMonthlySnapshotMapper)
+        .insert(any(QuoteBomMonthlySnapshot.class));
+
+    QuoteBomBatchSyncResponse response = service.batchSyncFromU9Source(List.of(25L));
+
+    assertThat(response.getSyncedRowCount()).isEqualTo(1);
+    ArgumentCaptor<QuoteBomMonthlySnapshot> snapshotCaptor =
+        ArgumentCaptor.forClass(QuoteBomMonthlySnapshot.class);
+    verify(quoteBomMonthlySnapshotMapper).insert(snapshotCaptor.capture());
+    assertThat(snapshotCaptor.getValue().getPriceOrgCode()).isEqualTo("220");
+    assertThat(snapshotCaptor.getValue().getBomBatchId()).isEqualTo("BATCH-220");
+  }
+
+  @Test
   void checkForCostRunFirstSuccessCreatesActiveSnapshotAndSyncedStatus() {
     OaFormItem item = item(31L, 1, "MAT-2001", "SHF-F");
     item.setCustomerCode(" ITEM-CUST ");
@@ -271,7 +317,7 @@ class QuoteBomStatusServiceImplTest {
             })
         .when(quoteBomMonthlySnapshotMapper)
         .insert(any(QuoteBomMonthlySnapshot.class));
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2001", "2026-06"))
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2001", "2026-06", "210"))
         .thenReturn(available("U9"));
 
     QuoteBomStatusResponse response = service.checkForCostRun("OA-T7-001");
@@ -308,7 +354,46 @@ class QuoteBomStatusServiceImplTest {
     assertThat(response.getItems().get(0).getBomStatus()).isEqualTo("REUSED_CURRENT_MONTH");
     assertThat(response.getItems().get(0).getReusedFromRecordId()).isEqualTo(8001L);
     assertThat(response.getItems().get(0).getSyncAt()).isEqualTo(snapshot.getSyncAt());
-    verify(bomAvailabilityAdapter, never()).findAvailableBom(any(), any(), any());
+    verify(bomAvailabilityAdapter, never()).findAvailableBom(any(), any(), any(), any());
+  }
+
+  @Test
+  void plateCostRunDoesNotReuseCommercialMonthlySnapshot() {
+    QuoteBomMonthlySnapshot commercialSnapshot =
+        snapshot("MAT-220", "CUST-A", "BOX", "2026-06", 8101L);
+    OaFormItem item = item(38L, 1, "MAT-220", "SHF-P");
+    item.setCustomerCode("CUST-A");
+    item.setPackageMethod("BOX");
+    stubFormAndItems("FI-SC-020-20260707-001", List.of(item), List.of());
+    when(quoteBomMonthlySnapshotMapper.selectList(any()))
+        .thenAnswer(
+            invocation -> {
+              AbstractWrapper<?, ?, ?> wrapper = invocation.getArgument(0);
+              boolean plateQuery = hasParamValue(wrapper, "220");
+              return plateQuery ? List.of() : List.of(commercialSnapshot);
+            });
+    doAnswer(
+            invocation -> {
+              QuoteBomMonthlySnapshot snapshot = invocation.getArgument(0);
+              snapshot.setId(8102L);
+              return 1;
+            })
+        .when(quoteBomMonthlySnapshotMapper)
+        .insert(any(QuoteBomMonthlySnapshot.class));
+    when(bomAvailabilityAdapter.findAvailableBom(
+            "FI-SC-020-20260707-001", "MAT-220", "2026-06", "220"))
+        .thenReturn(available("U9"));
+
+    QuoteBomStatusResponse response = service.checkForCostRun("FI-SC-020-20260707-001");
+
+    assertThat(response.getSyncedCount()).isEqualTo(1);
+    assertThat(response.getItems().get(0).getBomStatus()).isEqualTo("U9_BOM_EXISTS");
+    verify(bomAvailabilityAdapter)
+        .findAvailableBom("FI-SC-020-20260707-001", "MAT-220", "2026-06", "220");
+    ArgumentCaptor<QuoteBomMonthlySnapshot> snapshotCaptor =
+        ArgumentCaptor.forClass(QuoteBomMonthlySnapshot.class);
+    verify(quoteBomMonthlySnapshotMapper).insert(snapshotCaptor.capture());
+    assertThat(snapshotCaptor.getValue().getPriceOrgCode()).isEqualTo("220");
   }
 
   @Test
@@ -318,12 +403,12 @@ class QuoteBomStatusServiceImplTest {
     item.setPackageMethod("BOX");
     stubFormAndItems(List.of(item), List.of());
     when(quoteBomMonthlySnapshotMapper.selectList(any())).thenReturn(List.of());
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2003", "2026-06"))
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2003", "2026-06", "210"))
         .thenReturn(available("U9"));
 
     service.checkForCostRun("OA-T7-001");
 
-    verify(bomAvailabilityAdapter).findAvailableBom("OA-T7-001", "MAT-2003", "2026-06");
+    verify(bomAvailabilityAdapter).findAvailableBom("OA-T7-001", "MAT-2003", "2026-06", "210");
   }
 
   @Test
@@ -333,12 +418,12 @@ class QuoteBomStatusServiceImplTest {
     item.setPackageMethod("PALLET");
     stubFormAndItems(List.of(item), List.of());
     when(quoteBomMonthlySnapshotMapper.selectList(any())).thenReturn(List.of());
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2004", "2026-06"))
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2004", "2026-06", "210"))
         .thenReturn(available("U9"));
 
     service.checkForCostRun("OA-T7-001");
 
-    verify(bomAvailabilityAdapter).findAvailableBom("OA-T7-001", "MAT-2004", "2026-06");
+    verify(bomAvailabilityAdapter).findAvailableBom("OA-T7-001", "MAT-2004", "2026-06", "210");
   }
 
   @Test
@@ -348,12 +433,12 @@ class QuoteBomStatusServiceImplTest {
     item.setPackageMethod("BOX");
     stubFormAndItems(List.of(item), List.of());
     when(quoteBomMonthlySnapshotMapper.selectList(any())).thenReturn(List.of());
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2005", "2026-06"))
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2005", "2026-06", "210"))
         .thenReturn(available("U9"));
 
     service.checkForCostRun("OA-T7-001");
 
-    verify(bomAvailabilityAdapter).findAvailableBom("OA-T7-001", "MAT-2005", "2026-06");
+    verify(bomAvailabilityAdapter).findAvailableBom("OA-T7-001", "MAT-2005", "2026-06", "210");
   }
 
   @Test
@@ -363,7 +448,7 @@ class QuoteBomStatusServiceImplTest {
     item.setPackageMethod("BOX");
     stubFormAndItems(List.of(item), List.of());
     when(quoteBomMonthlySnapshotMapper.selectList(any())).thenReturn(List.of());
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-MISSING", "2026-06"))
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-MISSING", "2026-06", "210"))
         .thenReturn(BomAvailability.unavailable("未匹配到本地正式 BOM 或有效补录 BOM"));
 
     QuoteBomStatusResponse response = service.checkForCostRun("OA-T7-001");
@@ -395,7 +480,7 @@ class QuoteBomStatusServiceImplTest {
             })
         .when(quoteBomMonthlySnapshotMapper)
         .insert(any(QuoteBomMonthlySnapshot.class));
-    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-LEGACY", "2026-06"))
+    when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-LEGACY", "2026-06", "210"))
         .thenReturn(available("U9"));
 
     QuoteBomStatusResponse response = service.checkForCostRun("OA-T7-001");
@@ -409,9 +494,24 @@ class QuoteBomStatusServiceImplTest {
   }
 
   private void stubFormAndItems(List<OaFormItem> items, List<QuoteBomStatus> statuses) {
+    stubFormAndItems("OA-T7-001", items, statuses);
+  }
+
+  private boolean hasParamValue(AbstractWrapper<?, ?, ?> wrapper, String expectedValue) {
+    if (wrapper == null) {
+      return false;
+    }
+    wrapper.getSqlSegment();
+    return wrapper.getParamNameValuePairs().values().stream()
+        .map(String::valueOf)
+        .anyMatch(expectedValue::equals);
+  }
+
+  private void stubFormAndItems(
+      String oaNo, List<OaFormItem> items, List<QuoteBomStatus> statuses) {
     OaForm form = new OaForm();
     form.setId(1L);
-    form.setOaNo("OA-T7-001");
+    form.setOaNo(oaNo);
     when(oaFormMapper.selectOne(any())).thenReturn(form);
     when(oaFormItemMapper.selectList(any())).thenReturn(items);
     when(quoteBomStatusMapper.selectList(any())).thenReturn(new ArrayList<>(statuses));
@@ -424,6 +524,7 @@ class QuoteBomStatusServiceImplTest {
     item.setSeq(seq);
     item.setMaterialNo(materialNo);
     item.setSunlModel(model);
+    item.setBusinessUnitType("COMMERCIAL");
     return item;
   }
 
@@ -443,6 +544,7 @@ class QuoteBomStatusServiceImplTest {
     snapshot.setSyncAt(LocalDateTime.of(2026, 6, 1, 0, 0));
     snapshot.setBomBatchId("batch-source");
     snapshot.setActiveFlag(1);
+    snapshot.setPriceOrgCode("210");
     return snapshot;
   }
 
@@ -459,7 +561,12 @@ class QuoteBomStatusServiceImplTest {
   }
 
   private BomU9Source u9(String parentMaterialNo, String batchId) {
+    return u9(parentMaterialNo, batchId, "210");
+  }
+
+  private BomU9Source u9(String parentMaterialNo, String batchId, String priceOrgCode) {
     BomU9Source source = new BomU9Source();
+    source.setPriceOrgCode(priceOrgCode);
     source.setParentMaterialNo(parentMaterialNo);
     source.setSourceType("EXCEL");
     source.setImportBatchId(batchId);

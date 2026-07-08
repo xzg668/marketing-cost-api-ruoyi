@@ -11,13 +11,13 @@ public interface U9BomByproductMasterMapper extends BaseMapper<U9BomByproductMas
 
   @Insert(
       "INSERT INTO lp_u9_bom_byproduct_master ("
-          + "parent_material_no, parent_material_name, parent_material_spec, bom_purpose,"
+          + "price_org_code, parent_material_no, parent_material_name, parent_material_spec, bom_purpose,"
           + "version_no, output_type, byproduct_material_no, byproduct_material_name,"
           + "operation_no, output_qty, unit, status, production_dept_code, production_dept_name,"
           + "effective_from, effective_to, u9_created_by, u9_created_time,"
           + "source_type, source_file_name, imported_by, imported_at"
           + ") VALUES ("
-          + "#{parentMaterialNo}, #{parentMaterialName}, #{parentMaterialSpec}, #{bomPurpose},"
+          + "NULLIF(TRIM(#{priceOrgCode}), ''), #{parentMaterialNo}, #{parentMaterialName}, #{parentMaterialSpec}, #{bomPurpose},"
           + "#{versionNo}, #{outputType}, #{byproductMaterialNo}, #{byproductMaterialName},"
           + "#{operationNo}, #{outputQty}, #{unit}, #{status}, #{productionDeptCode}, #{productionDeptName},"
           + "#{effectiveFrom}, #{effectiveTo}, #{u9CreatedBy}, #{u9CreatedTime},"

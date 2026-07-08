@@ -16,6 +16,8 @@ public class U9BomByproductMaster {
   @TableId(type = IdType.AUTO)
   private Long id;
 
+  private String priceOrgCode;
+
   private String parentMaterialNo;
   private String parentMaterialName;
   private String parentMaterialSpec;

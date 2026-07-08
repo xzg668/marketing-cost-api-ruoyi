@@ -4,11 +4,11 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.PriceRangeItemImportRequest;
+import com.sanhua.marketingcost.dto.PriceRangeItemImportResult;
 import com.sanhua.marketingcost.dto.PriceRangeItemPageResponse;
 import com.sanhua.marketingcost.dto.PriceRangeItemUpdateRequest;
 import com.sanhua.marketingcost.entity.PriceRangeItem;
 import com.sanhua.marketingcost.service.PriceRangeItemService;
-import java.util.List;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -83,8 +83,8 @@ public class PriceRangeItemController {
   /** 导入区间价格数据 */
   @PreAuthorize("@ss.hasPermi('price:range:import')")
   @PostMapping("/import")
-  public CommonResult<List<PriceRangeItem>> importItems(
+  public CommonResult<PriceRangeItemImportResult> importItems(
       @RequestBody PriceRangeItemImportRequest request) {
-    return CommonResult.success(priceRangeItemService.importItems(request));
+    return CommonResult.success(priceRangeItemService.importItemsWithResult(request));
   }
 }

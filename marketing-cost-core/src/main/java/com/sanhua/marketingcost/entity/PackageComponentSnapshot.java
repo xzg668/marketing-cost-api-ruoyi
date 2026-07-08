@@ -25,6 +25,7 @@ public class PackageComponentSnapshot {
   private Long id;
 
   private String packageMaterialCode;
+  private String priceOrgCode;
   private String packageMaterialName;
   private String periodMonth;
   private String status;

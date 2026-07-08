@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -25,11 +26,11 @@ class QuoteProductTypeResolveServiceImplTest {
   @DisplayName("main_category_code 以 11 开头判定为裸品，并返回主档字段")
   void resolvesBareProductByMainCategoryPrefix11() {
     MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
-    when(mapper.selectByLatestBatchAndCodes(any(), isNull()))
+    when(mapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
         .thenReturn(List.of(raw("MAT-BARE", "110101", "自制", "裸品A", "规格A")));
 
     QuoteProductTypeResolveServiceImpl service = new QuoteProductTypeResolveServiceImpl(mapper);
-    QuoteProductTypeResolveResult result = service.resolve(" MAT-BARE ");
+    QuoteProductTypeResolveResult result = service.resolve(" MAT-BARE ", "COMMERCIAL");
 
     assertThat(result.quoteProductCode()).isEqualTo("MAT-BARE");
     assertThat(result.productType()).isEqualTo(QuoteProductType.BARE);
@@ -45,11 +46,11 @@ class QuoteProductTypeResolveServiceImplTest {
   @DisplayName("main_category_code 非 11 开头判定为非裸品")
   void resolvesNonBareProductWhenMainCategoryDoesNotStartWith11() {
     MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
-    when(mapper.selectByLatestBatchAndCodes(any(), isNull()))
+    when(mapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
         .thenReturn(List.of(raw("MAT-FINISHED", "120101", "成品", "成品A", "规格B")));
 
     QuoteProductTypeResolveServiceImpl service = new QuoteProductTypeResolveServiceImpl(mapper);
-    QuoteProductTypeResolveResult result = service.resolve("MAT-FINISHED");
+    QuoteProductTypeResolveResult result = service.resolve("MAT-FINISHED", "COMMERCIAL");
 
     assertThat(result.productType()).isEqualTo(QuoteProductType.NON_BARE);
     assertThat(result.productTypeCode()).isEqualTo("NON_BARE");
@@ -61,10 +62,10 @@ class QuoteProductTypeResolveServiceImplTest {
   @DisplayName("查不到主档时返回 DATA_MISSING")
   void returnsDataMissingWhenMaterialMasterRawMissing() {
     MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
-    when(mapper.selectByLatestBatchAndCodes(any(), isNull())).thenReturn(List.of());
+    when(mapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL"))).thenReturn(List.of());
 
     QuoteProductTypeResolveServiceImpl service = new QuoteProductTypeResolveServiceImpl(mapper);
-    QuoteProductTypeResolveResult result = service.resolve("MAT-MISSING");
+    QuoteProductTypeResolveResult result = service.resolve("MAT-MISSING", "COMMERCIAL");
 
     assertThat(result.quoteProductCode()).isEqualTo("MAT-MISSING");
     assertThat(result.productType()).isEqualTo(QuoteProductType.DATA_MISSING);
@@ -75,11 +76,11 @@ class QuoteProductTypeResolveServiceImplTest {
   @DisplayName("main_category_code 为空时返回 UNKNOWN，并保留可展示主档字段")
   void returnsUnknownWhenMainCategoryBlank() {
     MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
-    when(mapper.selectByLatestBatchAndCodes(any(), isNull()))
+    when(mapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
         .thenReturn(List.of(raw("MAT-BLANK", " ", "采购", "料品B", "规格B")));
 
     QuoteProductTypeResolveServiceImpl service = new QuoteProductTypeResolveServiceImpl(mapper);
-    QuoteProductTypeResolveResult result = service.resolve("MAT-BLANK");
+    QuoteProductTypeResolveResult result = service.resolve("MAT-BLANK", "COMMERCIAL");
 
     assertThat(result.productType()).isEqualTo(QuoteProductType.UNKNOWN);
     assertThat(result.mainCategoryCode()).isNull();
@@ -92,14 +93,16 @@ class QuoteProductTypeResolveServiceImplTest {
   @DisplayName("批量查询去重访问主档，并按入参顺序回填重复料号和空料号")
   void batchResolveDeduplicatesLookupAndBackfillsByInputOrder() {
     MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
-    when(mapper.selectByLatestBatchAndCodes(any(), isNull()))
+    when(mapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
         .thenReturn(List.of(
             raw("MAT-BARE", "110101", "自制", "裸品A", "规格A"),
             raw("MAT-FINISHED", "120101", "成品", "成品A", "规格B")));
 
     QuoteProductTypeResolveServiceImpl service = new QuoteProductTypeResolveServiceImpl(mapper);
     List<QuoteProductTypeResolveResult> results =
-        service.batchResolve(List.of(" MAT-BARE ", "MAT-FINISHED", "MAT-BARE", " ", "MAT-MISS"));
+        service.batchResolve(
+            List.of(" MAT-BARE ", "MAT-FINISHED", "MAT-BARE", " ", "MAT-MISS"),
+            "COMMERCIAL");
 
     assertThat(results).extracting(QuoteProductTypeResolveResult::quoteProductCode)
         .containsExactly("MAT-BARE", "MAT-FINISHED", "MAT-BARE", null, "MAT-MISS");
@@ -113,7 +116,7 @@ class QuoteProductTypeResolveServiceImplTest {
 
     @SuppressWarnings("unchecked")
     ArgumentCaptor<Collection<String>> captor = ArgumentCaptor.forClass(Collection.class);
-    verify(mapper).selectByLatestBatchAndCodes(captor.capture(), isNull());
+    verify(mapper).selectByLatestBatchAndCodes(captor.capture(), isNull(), eq("COMMERCIAL"));
     assertThat(captor.getValue()).containsExactly("MAT-BARE", "MAT-FINISHED", "MAT-MISS");
   }
 
@@ -130,6 +133,20 @@ class QuoteProductTypeResolveServiceImplTest {
     assertThat(result.productType()).isEqualTo(QuoteProductType.NON_BARE);
     assertThat(result.materialName()).isEqualTo("板换成品");
     verify(mapper).selectByLatestBatchAndCodes(any(), isNull(), eq("PLATE"));
+  }
+
+  @Test
+  @DisplayName("缺组织时直接报错，不默认读取商用料品主档")
+  void missingOrganizationFailsFast() {
+    QuoteProductTypeResolveServiceImpl service =
+        new QuoteProductTypeResolveServiceImpl(mock(MaterialMasterRawMapper.class));
+
+    assertThatThrownBy(() -> service.resolve("MAT-001"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("显式传入料品组织");
+    assertThatThrownBy(() -> service.batchResolve(List.of("MAT-001")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("显式传入料品组织");
   }
 
   private static MaterialMasterRaw raw(

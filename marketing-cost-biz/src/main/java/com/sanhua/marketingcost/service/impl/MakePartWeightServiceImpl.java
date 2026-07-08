@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.impl;
 import com.sanhua.marketingcost.dto.MakePartWeightResult;
 import com.sanhua.marketingcost.entity.BomU9Source;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.service.MakePartProcessTypePolicy;
 import com.sanhua.marketingcost.service.MakePartWeightService;
@@ -34,7 +35,9 @@ public class MakePartWeightServiceImpl implements MakePartWeightService {
       return MakePartWeightResult.of(
           parentCode, childCode, itemProcessType, null, null, "MISSING_WEIGHT", "parent 或 child 料号为空");
     }
-    Map<String, MaterialMasterRaw> rawByCode = loadLatestRawRows(List.of(parentCode, childCode));
+    String organizationCode = requiredMaterialOrganization(child.getPriceOrgCode());
+    Map<String, MaterialMasterRaw> rawByCode =
+        loadLatestRawRows(List.of(parentCode, childCode), organizationCode);
     BigDecimal netWeightG = theoreticalNetWeightG(rawByCode.get(parentCode));
     BigDecimal grossWeightG;
     String remark = "";
@@ -59,8 +62,10 @@ public class MakePartWeightServiceImpl implements MakePartWeightService {
         parentCode, childCode, itemProcessType, grossWeightG, netWeightG, status, remark);
   }
 
-  private Map<String, MaterialMasterRaw> loadLatestRawRows(Collection<String> codes) {
-    List<MaterialMasterRaw> rows = materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null);
+  private Map<String, MaterialMasterRaw> loadLatestRawRows(
+      Collection<String> codes, String organizationCode) {
+    List<MaterialMasterRaw> rows =
+        materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null, organizationCode);
     if (rows == null || rows.isEmpty()) {
       return Map.of();
     }
@@ -72,6 +77,13 @@ public class MakePartWeightServiceImpl implements MakePartWeightService {
       }
     }
     return result;
+  }
+
+  private String requiredMaterialOrganization(String priceOrgCode) {
+    if (!StringUtils.hasText(priceOrgCode)) {
+      throw new IllegalArgumentException("自制件重量计算缺少上游 priceOrgCode");
+    }
+    return MaterialOrganization.fromPriceOrgCode(priceOrgCode).getCode();
   }
 
   private BigDecimal theoreticalNetWeightG(MaterialMasterRaw row) {

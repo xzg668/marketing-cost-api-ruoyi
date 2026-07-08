@@ -15,6 +15,7 @@ import com.sanhua.marketingcost.dto.ingest.QuoteRequestExtraFieldResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteRequestIngestSummaryResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteRequestItemResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteRequestListItemResponse;
+import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormExtraFee;
 import com.sanhua.marketingcost.entity.OaFormHeaderExtraField;
@@ -22,6 +23,7 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.OaFormItemExtraField;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuoteIngestLog;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.QuoteBomStatusCode;
 import com.sanhua.marketingcost.enums.QuoteClassificationStatus;
 import com.sanhua.marketingcost.enums.QuoteIngestStatus;
@@ -232,7 +234,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setBomAggregateStatus(bomAggregateStatus);
     response.setCalculable(isCalculable(form, items.size(), bomAggregateStatus));
     for (OaFormItem item : items) {
-      response.getItems().add(toItemResponse(item, statusByItemId.get(item.getId())));
+      response.getItems().add(toItemResponse(form, item, statusByItemId.get(item.getId())));
     }
     for (OaFormExtraFee fee : listExtraFees(form.getId())) {
       response.getExtraFees().add(toExtraFee(fee));
@@ -295,7 +297,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     return response;
   }
 
-  private QuoteRequestItemResponse toItemResponse(OaFormItem item, QuoteBomStatus status) {
+  private QuoteRequestItemResponse toItemResponse(OaForm form, OaFormItem item, QuoteBomStatus status) {
     QuoteRequestItemResponse response = new QuoteRequestItemResponse();
     response.setId(item.getId());
     response.setSeq(item.getSeq());
@@ -339,18 +341,18 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setCalcStatus(normalizeCalcStatus(item.getCalcStatus(), item.getCalcAt() != null || item.getConfirmedCostVersionId() != null));
     response.setCalcAt(item.getCalcAt());
     response.setConfirmedCostVersionId(item.getConfirmedCostVersionId());
-    response.setBomStatus(toBomStatusResponse(item, status));
+    response.setBomStatus(toBomStatusResponse(form, item, status));
     return response;
   }
 
-  private QuoteBomStatusItemResponse toBomStatusResponse(OaFormItem item, QuoteBomStatus status) {
+  private QuoteBomStatusItemResponse toBomStatusResponse(OaForm form, OaFormItem item, QuoteBomStatus status) {
     QuoteBomStatusItemResponse response = new QuoteBomStatusItemResponse();
     response.setSeq(item.getSeq());
     response.setOaFormItemId(item.getId());
     response.setProductCode(item.getMaterialNo());
     response.setProductModel(item.getSunlModel());
     if (status == null) {
-      applyProductPackagingType(response);
+      applyProductPackagingType(response, form, item);
       response.setBomStatus(
           StringUtils.hasText(item.getMaterialNo())
               ? QuoteBomStatusCode.NOT_CHECKED.getCode()
@@ -362,7 +364,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setId(status.getId());
     response.setProductCode(status.getProductCode());
     response.setProductModel(status.getProductModel());
-    applyProductPackagingType(response);
+    applyProductPackagingType(response, form, item);
     response.setBomStatus(status.getBomStatus());
     response.setBomSource(status.getBomSource());
     response.setBomPurpose(status.getBomPurpose());
@@ -377,9 +379,16 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     return response;
   }
 
-  private void applyProductPackagingType(QuoteBomStatusItemResponse response) {
+  private void applyProductPackagingType(
+      QuoteBomStatusItemResponse response, OaForm form, OaFormItem item) {
+    QuoteDataOrganization organization =
+        MaterialOrganization.quoteDataForQuoteProcess(
+            form == null ? null : form.getProcessCode(),
+            form == null ? null : form.getOaNo(),
+            item == null ? null : item.getBusinessUnitType());
     U9ProductPackagingTypeResolver.Result result =
-        productPackagingTypeResolver.resolve(response.getProductCode());
+        productPackagingTypeResolver.resolve(
+            response.getProductCode(), organization.materialOrganizationCode());
     response.setProductPackagingType(result.productPackagingType());
     response.setMainCategoryCode(result.mainCategoryCode());
   }

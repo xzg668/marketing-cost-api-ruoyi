@@ -144,6 +144,24 @@ class MakePartPriceGenerationServiceImplTest {
   }
 
   @Test
+  @DisplayName("自制件直接子项按成本行上游 U9 组织查询，不按业务单元猜组织")
+  void generateByOaPassesParentPriceOrgToU9ChildrenQuery() {
+    BomCostingRow plateParent = parent("MAKE-PLATE");
+    plateParent.setPriceOrgCode("220");
+    plateParent.setMaterialOrganizationCode("PLATE");
+    when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
+        .thenReturn(List.of(plateParent));
+    when(sourceDataService.listDedupedChildren(eq("MAKE-PLATE"), any(), eq("220")))
+        .thenReturn(List.of());
+
+    MakePartPriceGenerateResponse response =
+        service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
+
+    assertThat(response.getStatusSummary()).containsEntry("MISSING_BOM", 1);
+    verify(sourceDataService).listDedupedChildren(eq("MAKE-PLATE"), any(), eq("220"));
+  }
+
+  @Test
   @DisplayName("按 OA 生成时只取当前月份父项且同父项去重，避免历史 BOM 批次重复累计")
   void generateByOaScopesAndDeduplicatesManufacturedParents() {
     BomCostingRow oldParent = parent("MAKE-001");
@@ -155,7 +173,8 @@ class MakePartPriceGenerationServiceImplTest {
     when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
         .thenReturn(List.of(oldParent, currentParent, duplicateCurrentParent));
     BomU9Source child = child("RAW-001", "kg");
-    when(sourceDataService.listDedupedChildren(eq("MAKE-001"), any())).thenReturn(List.of(child));
+    when(sourceDataService.listDedupedChildren(eq("MAKE-001"), any(), eq("210")))
+        .thenReturn(List.of(child));
     when(weightService.resolveWeights("MAKE-001", child, "原材料加工"))
         .thenReturn(weight("RAW-001"));
     when(scrapMappingService.listMappings("RAW-001", "COMMERCIAL"))
@@ -175,7 +194,7 @@ class MakePartPriceGenerationServiceImplTest {
     assertThat(row.getParentMaterialNo()).isEqualTo("MAKE-001");
     assertThat(row.getCostPrice()).isEqualByComparingTo("4.74450000");
     assertThat(row.getParentTotalCostPrice()).isEqualByComparingTo("4.74450000");
-    verify(sourceDataService, times(1)).listDedupedChildren(eq("MAKE-001"), any());
+    verify(sourceDataService, times(1)).listDedupedChildren(eq("MAKE-001"), any(), eq("210"));
   }
 
   @Test
@@ -198,7 +217,8 @@ class MakePartPriceGenerationServiceImplTest {
     BomU9Source rawB = child("RAW-B", "千克");
     when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
         .thenReturn(List.of(parent));
-    when(sourceDataService.listDedupedChildren(eq("MAKE-001"), any())).thenReturn(List.of(rawA, rawB));
+    when(sourceDataService.listDedupedChildren(eq("MAKE-001"), any(), eq("210")))
+        .thenReturn(List.of(rawA, rawB));
     when(weightService.resolveWeights(any(), any(), any()))
         .thenReturn(weight("RAW-A"), weight("RAW-B"));
     when(scrapMappingService.listMappings("RAW-A", "COMMERCIAL"))
@@ -227,7 +247,7 @@ class MakePartPriceGenerationServiceImplTest {
     BomCostingRow parent = parent("MAKE-ERR");
     when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
         .thenReturn(List.of(parent));
-    when(sourceDataService.listDedupedChildren(eq("MAKE-ERR"), any())).thenReturn(List.of());
+    when(sourceDataService.listDedupedChildren(eq("MAKE-ERR"), any(), eq("210"))).thenReturn(List.of());
 
     MakePartPriceGenerateResponse response =
         service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
@@ -505,7 +525,7 @@ class MakePartPriceGenerationServiceImplTest {
         .thenReturn(List.of(parent));
     when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
         .thenReturn(List.of(parent));
-    when(sourceDataService.listDedupedChildren(eq(parentCode), any())).thenReturn(children);
+    when(sourceDataService.listDedupedChildren(eq(parentCode), any(), eq("210"))).thenReturn(children);
     for (BomU9Source child : children) {
       when(weightService.resolveWeights(parentCode, child, "原材料加工"))
           .thenReturn(weight(child.getChildMaterialNo()));
@@ -520,6 +540,8 @@ class MakePartPriceGenerationServiceImplTest {
     BomCostingRow row = new BomCostingRow();
     row.setOaNo("OA-001");
     row.setBusinessUnitType("COMMERCIAL");
+    row.setPriceOrgCode("210");
+    row.setMaterialOrganizationCode("COMMERCIAL");
     row.setPeriodMonth("2026-05");
     row.setMaterialCode(code);
     row.setMaterialName("制造件");

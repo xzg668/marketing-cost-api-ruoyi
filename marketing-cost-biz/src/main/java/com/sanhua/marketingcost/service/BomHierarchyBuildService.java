@@ -39,4 +39,14 @@ public interface BomHierarchyBuildService {
    */
   BomHierarchyTreeDto getHierarchyTree(
       String topProductCode, String bomPurpose, LocalDate asOfDate, String sourceType);
+
+  /** 按组织查嵌套树；priceOrgCode 必须由调用方显式传入。 */
+  default BomHierarchyTreeDto getHierarchyTree(
+      String topProductCode,
+      String bomPurpose,
+      LocalDate asOfDate,
+      String sourceType,
+      String priceOrgCode) {
+    throw new UnsupportedOperationException("getHierarchyTree 必须由实现类按 priceOrgCode 显式实现");
+  }
 }

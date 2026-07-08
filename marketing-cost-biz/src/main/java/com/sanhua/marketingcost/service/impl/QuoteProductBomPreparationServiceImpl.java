@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.quotebom.FormalBomReadResult;
 import com.sanhua.marketingcost.dto.quotebom.PackageComponentStructureLineDto;
 import com.sanhua.marketingcost.dto.quotebom.PackageComponentStructureReadResult;
@@ -110,11 +111,13 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     QuoteContext context = loadContext(itemId);
     String productCode = trimToNull(context.item().getMaterialNo());
     String periodMonth = resolvePeriodMonth(context.form());
-    String organizationCode =
-        MaterialOrganization.forQuoteProcess(
-            context.form().getProcessCode(), context.form().getOaNo(), context.item().getProductName());
+    QuoteDataOrganization organization =
+        MaterialOrganization.quoteDataForQuoteProcess(
+            context.form().getProcessCode(),
+            context.form().getOaNo(),
+            context.item().getBusinessUnitType());
     QuoteProductTypeResolveResult typeResult =
-        resolveProductType(productCode, organizationCode);
+        resolveProductType(productCode, organization.materialOrganizationCode());
     if (typeResult.productType() == QuoteProductType.DATA_MISSING
         || typeResult.productType() == QuoteProductType.UNKNOWN) {
       String error = firstText(typeResult.errorMessage(), "产品形态无法判断");
@@ -132,6 +135,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
               null,
               null,
               null,
+              organization,
               error);
       return toPreview(
           record,
@@ -149,7 +153,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
           List.of(error));
     }
 
-    QuoteBomPreparationRecord locked = findMonthlyLockedRecord(productCode, periodMonth);
+    QuoteBomPreparationRecord locked = findMonthlyLockedRecord(productCode, periodMonth, organization);
     if (locked != null && Objects.equals(locked.getOaFormItemId(), itemId)) {
       QuoteBomStatus status =
           locked.getQuoteBomStatusId() == null
@@ -186,6 +190,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
               locked.getTaskId(),
               firstText(locked.getReuseType(), BODY_SOURCE_MONTHLY_LOCK),
               locked,
+              organization,
               null);
       return toPreview(
           record,
@@ -204,9 +209,9 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     }
 
     if (typeResult.productType() == QuoteProductType.NON_BARE) {
-      return prepareNonBare(context, typeResult, periodMonth, organizationCode, resolveQuoteDate(quoteDate));
+      return prepareNonBare(context, typeResult, periodMonth, organization, resolveQuoteDate(quoteDate));
     }
-    return prepareBare(context, typeResult, periodMonth, organizationCode, resolveQuoteDate(quoteDate));
+    return prepareBare(context, typeResult, periodMonth, organization, resolveQuoteDate(quoteDate));
   }
 
   @Override
@@ -322,11 +327,11 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
       QuoteContext context,
       QuoteProductTypeResolveResult typeResult,
       String periodMonth,
-      String organizationCode,
+      QuoteDataOrganization organization,
       LocalDate quoteDate) {
     String productCode = trimToNull(context.item().getMaterialNo());
     FormalBomReadResult formal =
-        readFormalBom(productCode, periodMonth, quoteDate, organizationCode);
+        readFormalBom(productCode, periodMonth, quoteDate, organization);
     if (formal.found()) {
       QuoteBomStatus status = upsertStatus(context, productCode, periodMonth, typeResult, null, null);
       QuoteBomPreparationRecord record =
@@ -342,6 +347,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
               null,
               null,
               null,
+              organization,
               null);
       return toPreview(
           record,
@@ -379,6 +385,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
               supplement.taskId(),
               REUSE_TYPE_MANUAL_BOM,
               supplement,
+              organization,
               null);
       return toPreview(
           record,
@@ -411,6 +418,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
             null,
             null,
             null,
+            organization,
             String.join("；", gaps));
     return toPreview(
         record,
@@ -432,11 +440,11 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
       QuoteContext context,
       QuoteProductTypeResolveResult typeResult,
       String periodMonth,
-      String organizationCode,
+      QuoteDataOrganization organization,
       LocalDate quoteDate) {
     String productCode = trimToNull(context.item().getMaterialNo());
     FormalBomReadResult formal =
-        readFormalBom(productCode, periodMonth, quoteDate, organizationCode);
+        readFormalBom(productCode, periodMonth, quoteDate, organization);
     boolean bodyReady = formal.found();
     String bodySource = bodyReady ? BODY_SOURCE_FORMAL : null;
     List<QuoteBomSourceLineDto> bodyLines = bodyReady ? formal.lines() : List.of();
@@ -451,7 +459,8 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     }
 
     PackageComponentStructureReadResult packageResult =
-        packageComponentStructureReadService.readApprovedReferenceForBareProduct(productCode);
+        packageComponentStructureReadService.readApprovedReferenceForBareProduct(
+            productCode, organization.priceOrgCode(), organization.materialOrganizationCode());
     boolean packageReady = packageResult.found();
     List<PackageComponentStructureLineDto> packageLines = packageReady ? packageResult.lines() : List.of();
     boolean ready = bodyReady && packageReady;
@@ -494,6 +503,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
             supplement == null ? null : supplement.taskId(),
             supplement != null && supplement.found() ? REUSE_TYPE_MANUAL_BOM : null,
             supplement != null && supplement.found() ? supplement : null,
+            organization,
             ready ? null : String.join("；", gaps));
     if (packageReady && record.getReuseType() == null) {
       record.setReuseType(REUSE_TYPE_PACKAGE_REFERENCE);
@@ -533,18 +543,14 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   private QuoteProductTypeResolveResult resolveProductType(
       String productCode, String organizationCode) {
     String organization = MaterialOrganization.normalize(organizationCode);
-    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
-      return productTypeResolveService.resolve(productCode);
-    }
     return productTypeResolveService.resolve(productCode, organization);
   }
 
   private FormalBomReadResult readFormalBom(
-      String productCode, String periodMonth, LocalDate quoteDate, String organizationCode) {
-    String organization = MaterialOrganization.normalize(organizationCode);
-    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
-      return formalBomReadService.read(productCode, periodMonth, null, quoteDate);
-    }
+      String productCode,
+      String periodMonth,
+      LocalDate quoteDate,
+      QuoteDataOrganization organization) {
     return formalBomReadService.read(productCode, periodMonth, null, quoteDate, organization);
   }
 
@@ -613,12 +619,19 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
       Long taskId,
       String reuseType,
       Object reuseSource,
+      QuoteDataOrganization quoteDataOrganization,
       String errorMessage) {
+    QuoteDataOrganization organization =
+        MaterialOrganization.normalizeQuoteDataOrganization(quoteDataOrganization);
     QuoteBomPreparationRecord record =
         preparationRecordMapper.selectOne(
             Wrappers.<QuoteBomPreparationRecord>lambdaQuery()
                 .eq(QuoteBomPreparationRecord::getOaFormItemId, context.item().getId())
                 .eq(QuoteBomPreparationRecord::getCostPeriodMonth, periodMonth)
+                .eq(QuoteBomPreparationRecord::getPriceOrgCode, organization.priceOrgCode())
+                .eq(
+                    QuoteBomPreparationRecord::getMaterialOrganizationCode,
+                    organization.materialOrganizationCode())
                 .eq(QuoteBomPreparationRecord::getActiveFlag, ACTIVE)
                 .last("LIMIT 1"));
     boolean inserting = record == null;
@@ -632,6 +645,8 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     record.setOaFormItemId(context.item().getId());
     record.setOaNo(context.form().getOaNo());
     record.setQuoteProductCode(trimToNull(context.item().getMaterialNo()));
+    record.setPriceOrgCode(organization.priceOrgCode());
+    record.setMaterialOrganizationCode(organization.materialOrganizationCode());
     record.setProductType(typeResult.productTypeCode());
     record.setBareProductCode(typeResult.productType() == QuoteProductType.BARE ? trimToNull(context.item().getMaterialNo()) : null);
     record.setNeedPackage(needPackage ? 1 : 0);
@@ -674,7 +689,10 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     }
   }
 
-  private QuoteBomPreparationRecord findMonthlyLockedRecord(String productCode, String periodMonth) {
+  private QuoteBomPreparationRecord findMonthlyLockedRecord(
+      String productCode, String periodMonth, QuoteDataOrganization quoteDataOrganization) {
+    QuoteDataOrganization organization =
+        MaterialOrganization.normalizeQuoteDataOrganization(quoteDataOrganization);
     if (trimToNull(productCode) == null || trimToNull(periodMonth) == null) {
       return null;
     }
@@ -682,6 +700,10 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
         Wrappers.<QuoteBomPreparationRecord>lambdaQuery()
             .eq(QuoteBomPreparationRecord::getQuoteProductCode, productCode)
             .eq(QuoteBomPreparationRecord::getCostPeriodMonth, periodMonth)
+            .eq(QuoteBomPreparationRecord::getPriceOrgCode, organization.priceOrgCode())
+            .eq(
+                QuoteBomPreparationRecord::getMaterialOrganizationCode,
+                organization.materialOrganizationCode())
             .eq(QuoteBomPreparationRecord::getActiveFlag, ACTIVE)
             .in(
                 QuoteBomPreparationRecord::getPreparationStatus,

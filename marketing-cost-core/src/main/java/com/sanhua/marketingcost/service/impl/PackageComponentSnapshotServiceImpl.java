@@ -9,6 +9,7 @@ import com.sanhua.marketingcost.entity.BomU9Source;
 import com.sanhua.marketingcost.entity.PackageComponentGapItem;
 import com.sanhua.marketingcost.entity.PackageComponentSnapshot;
 import com.sanhua.marketingcost.entity.PackageComponentSnapshotDetail;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.BomU9SourceMapper;
 import com.sanhua.marketingcost.mapper.PackageComponentGapItemMapper;
@@ -63,7 +64,8 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
   public PackageSnapshotResult ensureSnapshot(PackageSnapshotRequest request) {
     NormalizedRequest req = normalize(request);
     PackageComponentSnapshot existing =
-        selectByPackagePeriodAndTop(req.packageMaterialCode, req.periodMonth, req.topProductCode);
+        selectByPackagePeriodAndTop(
+            req.packageMaterialCode, req.periodMonth, req.topProductCode, req.priceOrgCode);
     if (existing != null) {
       List<PackageComponentSnapshotDetail> existingDetails = selectDetails(existing.getId());
       if (SNAPSHOT_STATUS_NORMAL.equals(existing.getStatus()) || !existingDetails.isEmpty()) {
@@ -96,7 +98,8 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
         snapshotMapper.insert(snapshot);
       } catch (DuplicateKeyException ex) {
         PackageComponentSnapshot concurrent =
-            selectByPackagePeriodAndTop(req.packageMaterialCode, req.periodMonth, req.topProductCode);
+            selectByPackagePeriodAndTop(
+                req.packageMaterialCode, req.periodMonth, req.topProductCode, req.priceOrgCode);
         if (concurrent != null) {
           return PackageSnapshotResult.of(concurrent, selectDetails(concurrent.getId()), false);
         }
@@ -126,6 +129,7 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
   private PackageSnapshotResult createMissingSnapshot(NormalizedRequest req, String reason) {
     PackageComponentSnapshot snapshot = new PackageComponentSnapshot();
     snapshot.setPackageMaterialCode(req.packageMaterialCode);
+    snapshot.setPriceOrgCode(req.priceOrgCode);
     snapshot.setPeriodMonth(req.periodMonth);
     snapshot.setStatus(SNAPSHOT_STATUS_MISSING_STRUCTURE);
     snapshot.setSourceType(SNAPSHOT_SOURCE_BOM);
@@ -141,7 +145,8 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
       snapshotMapper.insert(snapshot);
     } catch (DuplicateKeyException ex) {
       PackageComponentSnapshot concurrent =
-          selectByPackagePeriodAndTop(req.packageMaterialCode, req.periodMonth, req.topProductCode);
+          selectByPackagePeriodAndTop(
+              req.packageMaterialCode, req.periodMonth, req.topProductCode, req.priceOrgCode);
       if (concurrent != null) {
         return PackageSnapshotResult.of(concurrent, selectDetails(concurrent.getId()), false);
       }
@@ -158,6 +163,7 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
   private PackageComponentSnapshot buildNormalSnapshot(NormalizedRequest req, BomRawHierarchy parent) {
     PackageComponentSnapshot snapshot = new PackageComponentSnapshot();
     snapshot.setPackageMaterialCode(req.packageMaterialCode);
+    snapshot.setPriceOrgCode(req.priceOrgCode);
     snapshot.setPackageMaterialName(parent.getMaterialName());
     snapshot.setPeriodMonth(req.periodMonth);
     snapshot.setStatus(SNAPSHOT_STATUS_NORMAL);
@@ -282,6 +288,7 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
         bomRawHierarchyMapper.selectList(
             Wrappers.<BomRawHierarchy>lambdaQuery()
                 .eq(BomRawHierarchy::getMaterialCode, req.packageMaterialCode)
+                .eq(BomRawHierarchy::getPriceOrgCode, req.priceOrgCode)
                 .eq(BomRawHierarchy::getSourceType, req.sourceType)
                 .eq(StringUtils.hasText(req.topProductCode),
                     BomRawHierarchy::getTopProductCode, req.topProductCode)
@@ -308,6 +315,7 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
         bomRawHierarchyMapper.selectList(
             Wrappers.<BomRawHierarchy>lambdaQuery()
                 .eq(BomRawHierarchy::getTopProductCode, parent.getTopProductCode())
+                .eq(BomRawHierarchy::getPriceOrgCode, req.priceOrgCode)
                 .eq(BomRawHierarchy::getSourceType, parent.getSourceType())
                 .eq(StringUtils.hasText(parent.getBomPurpose()),
                     BomRawHierarchy::getBomPurpose, parent.getBomPurpose())
@@ -343,6 +351,7 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
         bomU9SourceMapper.selectList(
             Wrappers.<BomU9Source>lambdaQuery()
                 .eq(BomU9Source::getImportBatchId, row.getSourceImportBatchId())
+                .eq(BomU9Source::getPriceOrgCode, requiredPriceOrgCode(row.getPriceOrgCode()))
                 .eq(BomU9Source::getParentMaterialNo, row.getParentCode())
                 .eq(BomU9Source::getChildMaterialNo, row.getMaterialCode())
                 .eq(StringUtils.hasText(row.getBomPurpose()), BomU9Source::getBomPurpose, row.getBomPurpose())
@@ -357,10 +366,11 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
   }
 
   private PackageComponentSnapshot selectByPackagePeriodAndTop(
-      String packageMaterialCode, String periodMonth, String topProductCode) {
+      String packageMaterialCode, String periodMonth, String topProductCode, String priceOrgCode) {
     return snapshotMapper.selectOne(
         Wrappers.<PackageComponentSnapshot>lambdaQuery()
             .eq(PackageComponentSnapshot::getPackageMaterialCode, packageMaterialCode)
+            .eq(PackageComponentSnapshot::getPriceOrgCode, priceOrgCode)
             .eq(PackageComponentSnapshot::getPeriodMonth, periodMonth)
             .eq(PackageComponentSnapshot::getSourceTopProductCode, topProductCode)
             .last("LIMIT 1"));
@@ -394,9 +404,17 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
         trimToNull(request.getQuoteNo()),
         trimToNull(request.getOaNo()),
         trimToNull(request.getTopProductCode()),
+        requiredPriceOrgCode(request.getPriceOrgCode()),
         DEFAULT_BOM_PURPOSE,
         trimToNull(request.getSourceType()) == null ? DEFAULT_BOM_SOURCE_TYPE : trimToNull(request.getSourceType()),
         request.getAsOfDate());
+  }
+
+  private String requiredPriceOrgCode(String priceOrgCode) {
+    if (!StringUtils.hasText(priceOrgCode)) {
+      throw new IllegalArgumentException("priceOrgCode 必须由上游报价产品行传入");
+    }
+    return MaterialOrganization.fromPriceOrgCode(priceOrgCode).getPriceOrgCode();
   }
 
   private String trimToNull(String value) {
@@ -409,6 +427,7 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
       String quoteNo,
       String oaNo,
       String topProductCode,
+      String priceOrgCode,
       String bomPurpose,
       String sourceType,
       LocalDate asOfDate) {}

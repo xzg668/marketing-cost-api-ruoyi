@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
@@ -71,8 +72,10 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
       int costYear, String operator, String businessUnitType, boolean updateExistingDefault) {
     CmsEffectiveSourceGenerateResponse response = new CmsEffectiveSourceGenerateResponse();
     response.setCostYear(costYear);
+    Map<String, Aggregate> aggregates = aggregateAux(costYear, businessUnitType);
+    Map<String, PlanEligibility> eligibilityByKey = eligibilityMap(aggregates.values(), businessUnitType);
     Map<String, List<Aggregate>> byParentSubject = new LinkedHashMap<>();
-    for (Aggregate aggregate : aggregateAux(costYear, businessUnitType).values()) {
+    for (Aggregate aggregate : aggregates.values()) {
       byParentSubject.computeIfAbsent(aggregate.parentCode + "|" + aggregate.subjectCode, ignored -> new ArrayList<>()).add(aggregate);
     }
     for (List<Aggregate> candidates : byParentSubject.values()) {
@@ -81,7 +84,10 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
       Aggregate selected = null;
       PlanEligibility selectedEligibility = null;
       for (Aggregate candidate : candidates) {
-        PlanEligibility eligibility = eligibility(candidate.parentCode, candidate.period, businessUnitType);
+        PlanEligibility eligibility =
+            eligibilityByKey.getOrDefault(
+                candidate.parentCode + "|" + candidate.period,
+                PlanEligibility.allowed(candidate.parentCode, candidate.period, "允许生效"));
         if (eligibility.isAuxSubjectAllowed()) {
           selected = candidate;
           selectedEligibility = eligibility;
@@ -111,6 +117,22 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
       insertLog(saved.getId(), costYear, selected, oldSnapshot, "DEFAULT", selectedEligibility.getReason(), operator, businessUnitType);
     }
     return response;
+  }
+
+  private Map<String, PlanEligibility> eligibilityMap(
+      Collection<Aggregate> aggregates, String businessUnitType) {
+    LinkedHashSet<String> parentCodes = new LinkedHashSet<>();
+    LinkedHashSet<String> periods = new LinkedHashSet<>();
+    for (Aggregate aggregate : aggregates) {
+      if (StringUtils.hasText(aggregate.parentCode) && StringUtils.hasText(aggregate.period)) {
+        parentCodes.add(aggregate.parentCode);
+        periods.add(aggregate.period);
+      }
+    }
+    if (parentCodes.isEmpty() || periods.isEmpty()) {
+      return new LinkedHashMap<>();
+    }
+    return planEligibilityService.checkEligibility(parentCodes, periods, normalizeBusinessUnit(businessUnitType));
   }
 
   @Override

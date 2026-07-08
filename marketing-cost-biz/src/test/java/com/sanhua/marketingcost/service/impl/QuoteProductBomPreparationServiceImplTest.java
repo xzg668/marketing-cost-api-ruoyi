@@ -2,13 +2,21 @@ package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.quotebom.FormalBomReadResult;
 import com.sanhua.marketingcost.dto.quotebom.PackageComponentStructureLineDto;
 import com.sanhua.marketingcost.dto.quotebom.PackageComponentStructureReadResult;
@@ -34,11 +42,20 @@ import com.sanhua.marketingcost.service.SupplementBomReadService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class QuoteProductBomPreparationServiceImplTest {
+
+  @BeforeAll
+  static void initTableInfo() {
+    TableInfoHelper.initTableInfo(
+        new MapperBuilderAssistant(new MybatisConfiguration(), ""), QuoteBomPreparationRecord.class);
+  }
 
   private OaFormItemMapper itemMapper;
   private OaFormMapper formMapper;
@@ -95,9 +112,9 @@ class QuoteProductBomPreparationServiceImplTest {
   @DisplayName("非裸品正式 BOM 存在：直接准备完成")
   void prepareNonBareWhenFormalBomExists() {
     stubQuoteLine("FIN-001", "2026-05");
-    when(productTypeResolveService.resolve("FIN-001")).thenReturn(type("FIN-001", QuoteProductType.NON_BARE));
-    when(formalBomReadService.read("FIN-001", "2026-05", null, LocalDate.now()))
-        .thenReturn(formalFound("FIN-001", "2026-05"));
+    when(productTypeResolveService.resolve("FIN-001", "COMMERCIAL"))
+        .thenReturn(type("FIN-001", QuoteProductType.NON_BARE));
+    stubFormalRead("FIN-001", "2026-05", formalFound("FIN-001", "2026-05"));
 
     QuoteProductBomPreparationPreview preview = service.prepareByOaFormItem(10L);
 
@@ -113,10 +130,9 @@ class QuoteProductBomPreparationServiceImplTest {
   @DisplayName("非裸品正式 BOM 缺失且无可复用补录：需要补录")
   void prepareNonBareWhenBomMissingNeedsSupplement() {
     stubQuoteLine("FIN-MISSING", "2026-05");
-    when(productTypeResolveService.resolve("FIN-MISSING"))
+    when(productTypeResolveService.resolve("FIN-MISSING", "COMMERCIAL"))
         .thenReturn(type("FIN-MISSING", QuoteProductType.NON_BARE));
-    when(formalBomReadService.read("FIN-MISSING", "2026-05", null, LocalDate.now()))
-        .thenReturn(formalMissing("FIN-MISSING", "2026-05"));
+    stubFormalRead("FIN-MISSING", "2026-05", formalMissing("FIN-MISSING", "2026-05"));
     when(supplementBomReadService.readApproved(
             "FIN-MISSING", "NON_BARE", "NON_BARE_FULL_BOM", "2026-05"))
         .thenReturn(supplementMissing("FIN-MISSING", "NON_BARE", "NON_BARE_FULL_BOM", "2026-05"));
@@ -133,10 +149,9 @@ class QuoteProductBomPreparationServiceImplTest {
   @DisplayName("非裸品跨月优先读取正式 BOM：有正式 BOM 时不复用补录")
   void prepareNonBareCrossMonthPrefersFormalBom() {
     stubQuoteLine("FIN-CROSS", "2026-06");
-    when(productTypeResolveService.resolve("FIN-CROSS"))
+    when(productTypeResolveService.resolve("FIN-CROSS", "COMMERCIAL"))
         .thenReturn(type("FIN-CROSS", QuoteProductType.NON_BARE));
-    when(formalBomReadService.read("FIN-CROSS", "2026-06", null, LocalDate.now()))
-        .thenReturn(formalFound("FIN-CROSS", "2026-06"));
+    stubFormalRead("FIN-CROSS", "2026-06", formalFound("FIN-CROSS", "2026-06"));
 
     QuoteProductBomPreparationPreview preview = service.prepareByOaFormItem(10L);
 
@@ -149,10 +164,9 @@ class QuoteProductBomPreparationServiceImplTest {
   @DisplayName("非裸品补录 6 个月过期：不能复用，进入技术补录缺口")
   void prepareNonBareExpiredSupplementNeedsTask() {
     stubQuoteLine("FIN-EXPIRED", "2026-05");
-    when(productTypeResolveService.resolve("FIN-EXPIRED"))
+    when(productTypeResolveService.resolve("FIN-EXPIRED", "COMMERCIAL"))
         .thenReturn(type("FIN-EXPIRED", QuoteProductType.NON_BARE));
-    when(formalBomReadService.read("FIN-EXPIRED", "2026-05", null, LocalDate.now()))
-        .thenReturn(formalMissing("FIN-EXPIRED", "2026-05"));
+    stubFormalRead("FIN-EXPIRED", "2026-05", formalMissing("FIN-EXPIRED", "2026-05"));
     when(supplementBomReadService.readApproved(
             "FIN-EXPIRED", "NON_BARE", "NON_BARE_FULL_BOM", "2026-05"))
         .thenReturn(
@@ -181,10 +195,10 @@ class QuoteProductBomPreparationServiceImplTest {
   @DisplayName("裸品本体正式 BOM 存在但缺包装参考：只生成包装参考缺口")
   void prepareBareWithBodyBomButMissingPackageReference() {
     stubQuoteLine("BARE-001", "2026-05");
-    when(productTypeResolveService.resolve("BARE-001")).thenReturn(type("BARE-001", QuoteProductType.BARE));
-    when(formalBomReadService.read("BARE-001", "2026-05", null, LocalDate.now()))
-        .thenReturn(formalFound("BARE-001", "2026-05"));
-    when(packageReadService.readApprovedReferenceForBareProduct("BARE-001"))
+    when(productTypeResolveService.resolve("BARE-001", "COMMERCIAL"))
+        .thenReturn(type("BARE-001", QuoteProductType.BARE));
+    stubFormalRead("BARE-001", "2026-05", formalFound("BARE-001", "2026-05"));
+    when(packageReadService.readApprovedReferenceForBareProduct("BARE-001", "210", "COMMERCIAL"))
         .thenReturn(packageMissing("BARE-001"));
 
     QuoteProductBomPreparationPreview preview = service.prepareByOaFormItem(10L);
@@ -200,13 +214,12 @@ class QuoteProductBomPreparationServiceImplTest {
   @DisplayName("裸品本体 BOM 缺失且缺包装参考：同时生成两个缺口")
   void prepareBareMissingBodyBomAndPackageReference() {
     stubQuoteLine("BARE-MISSING", "2026-05");
-    when(productTypeResolveService.resolve("BARE-MISSING"))
+    when(productTypeResolveService.resolve("BARE-MISSING", "COMMERCIAL"))
         .thenReturn(type("BARE-MISSING", QuoteProductType.BARE));
-    when(formalBomReadService.read("BARE-MISSING", "2026-05", null, LocalDate.now()))
-        .thenReturn(formalMissing("BARE-MISSING", "2026-05"));
+    stubFormalRead("BARE-MISSING", "2026-05", formalMissing("BARE-MISSING", "2026-05"));
     when(supplementBomReadService.readApproved("BARE-MISSING", "BARE", "BARE_BODY_BOM", "2026-05"))
         .thenReturn(supplementMissing("BARE-MISSING", "BARE", "BARE_BODY_BOM", "2026-05"));
-    when(packageReadService.readApprovedReferenceForBareProduct("BARE-MISSING"))
+    when(packageReadService.readApprovedReferenceForBareProduct("BARE-MISSING", "210", "COMMERCIAL"))
         .thenReturn(packageMissing("BARE-MISSING"));
 
     QuoteProductBomPreparationPreview preview = service.prepareByOaFormItem(10L);
@@ -221,10 +234,10 @@ class QuoteProductBomPreparationServiceImplTest {
   @DisplayName("裸品包装参考长期复用：不按 6 个月失效处理")
   void prepareBareReusesApprovedPackageReferenceLongTerm() {
     stubQuoteLine("BARE-PKG", "2026-05");
-    when(productTypeResolveService.resolve("BARE-PKG")).thenReturn(type("BARE-PKG", QuoteProductType.BARE));
-    when(formalBomReadService.read("BARE-PKG", "2026-05", null, LocalDate.now()))
-        .thenReturn(formalFound("BARE-PKG", "2026-05"));
-    when(packageReadService.readApprovedReferenceForBareProduct("BARE-PKG"))
+    when(productTypeResolveService.resolve("BARE-PKG", "COMMERCIAL"))
+        .thenReturn(type("BARE-PKG", QuoteProductType.BARE));
+    stubFormalRead("BARE-PKG", "2026-05", formalFound("BARE-PKG", "2026-05"));
+    when(packageReadService.readApprovedReferenceForBareProduct("BARE-PKG", "210", "COMMERCIAL"))
         .thenReturn(packageFound("REF-2025", "2025-01"));
 
     QuoteProductBomPreparationPreview preview = service.prepareByOaFormItem(10L);
@@ -240,7 +253,7 @@ class QuoteProductBomPreparationServiceImplTest {
   @DisplayName("主档缺失：进入异常，不误判为缺 BOM")
   void prepareWhenMasterMissingReturnsAbnormal() {
     stubQuoteLine("MASTER-MISSING", "2026-05");
-    when(productTypeResolveService.resolve("MASTER-MISSING"))
+    when(productTypeResolveService.resolve("MASTER-MISSING", "COMMERCIAL"))
         .thenReturn(
             new QuoteProductTypeResolveResult(
                 "MASTER-MISSING",
@@ -259,27 +272,90 @@ class QuoteProductBomPreparationServiceImplTest {
     verifyNoInteractions(formalBomReadService, supplementBomReadService, packageReadService);
   }
 
+  @Test
+  @DisplayName("板换报价准备入口向正式 BOM 读取传递统一组织对象")
+  void preparePassesQuoteDataOrganizationToFormalBomRead() {
+    stubQuoteLine("PLATE-001", "2026-05", "FI-SC-020", "FI-SC-020-20260707-001", "板换组件");
+    when(productTypeResolveService.resolve("PLATE-001", "PLATE"))
+        .thenReturn(type("PLATE-001", QuoteProductType.NON_BARE));
+    stubFormalRead("PLATE-001", "2026-05", formalFound("PLATE-001", "2026-05"));
+
+    QuoteProductBomPreparationPreview preview = service.prepareByOaFormItem(10L);
+
+    assertThat(preview.ready()).isTrue();
+    ArgumentCaptor<QuoteDataOrganization> captor =
+        ArgumentCaptor.forClass(QuoteDataOrganization.class);
+    verify(formalBomReadService)
+        .read(eq("PLATE-001"), eq("2026-05"), isNull(), any(LocalDate.class), captor.capture());
+    assertThat(captor.getValue().priceOrgCode()).isEqualTo("220");
+    assertThat(captor.getValue().materialOrganizationCode()).isEqualTo("PLATE");
+    assertMonthlyLockLookupUsesOrganization("220", "PLATE");
+    ArgumentCaptor<QuoteBomPreparationRecord> recordCaptor =
+        ArgumentCaptor.forClass(QuoteBomPreparationRecord.class);
+    verify(preparationRecordMapper).insert(recordCaptor.capture());
+    assertThat(recordCaptor.getValue().getPriceOrgCode()).isEqualTo("220");
+    assertThat(recordCaptor.getValue().getMaterialOrganizationCode()).isEqualTo("PLATE");
+  }
+
   private void stubQuoteLine(String productCode, String periodMonth) {
+    stubQuoteLine(productCode, periodMonth, null, "OA-QBP-05", "产品");
+  }
+
+  private void stubQuoteLine(
+      String productCode, String periodMonth, String processCode, String oaNo, String productName) {
     OaFormItem item = new OaFormItem();
     item.setId(10L);
     item.setOaFormId(20L);
     item.setMaterialNo(productCode);
-    item.setProductName("产品");
+    item.setProductName(productName);
+    item.setBusinessUnitType("COMMERCIAL");
     item.setSunlModel("MODEL");
     item.setCustomerCode("CUST");
     item.setPackageMethod("纸箱");
     item.setTechnicianName("技术员A");
     OaForm form = new OaForm();
     form.setId(20L);
-    form.setOaNo("OA-QBP-05");
+    form.setOaNo(oaNo);
+    form.setProcessCode(processCode);
     form.setApplyDate(LocalDate.parse(periodMonth + "-16"));
     form.setAccountingPeriodMonth(periodMonth);
     when(itemMapper.selectById(10L)).thenReturn(item);
     when(formMapper.selectById(20L)).thenReturn(form);
   }
 
+  private void stubFormalRead(String productCode, String periodMonth, FormalBomReadResult result) {
+    when(formalBomReadService.read(
+            eq(productCode),
+            eq(periodMonth),
+            isNull(),
+            any(LocalDate.class),
+            any(QuoteDataOrganization.class)))
+        .thenReturn(result);
+  }
+
   private QuoteProductTypeResolveResult type(String code, QuoteProductType type) {
     return new QuoteProductTypeResolveResult(code, type, type == QuoteProductType.BARE ? "1101" : "1201", null, null, null, null);
+  }
+
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  private void assertMonthlyLockLookupUsesOrganization(
+      String expectedPriceOrgCode, String expectedMaterialOrganizationCode) {
+    ArgumentCaptor<Wrapper> captor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(preparationRecordMapper, atLeastOnce()).selectOne(captor.capture());
+    List<Wrapper> monthlyLockQueries =
+        captor.getAllValues().stream()
+            .filter(wrapper -> wrapper.getSqlSegment().contains("quote_product_code"))
+            .toList();
+    assertThat(monthlyLockQueries).isNotEmpty();
+    assertThat(monthlyLockQueries)
+        .allSatisfy(
+            wrapper -> {
+              assertThat(wrapper.getSqlSegment())
+                  .contains("price_org_code", "material_organization_code");
+              assertThat(((AbstractWrapper<?, ?, ?>) wrapper).getParamNameValuePairs())
+                  .containsValue(expectedPriceOrgCode)
+                  .containsValue(expectedMaterialOrganizationCode);
+            });
   }
 
   private FormalBomReadResult formalFound(String code, String periodMonth) {
@@ -343,7 +419,9 @@ class QuoteProductBomPreparationServiceImplTest {
         1,
         1L,
         null,
-        manualFlag);
+        manualFlag,
+        null,
+        null);
   }
 
   private PackageComponentStructureLineDto packageLine(String referenceCode) {

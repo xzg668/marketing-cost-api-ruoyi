@@ -65,6 +65,9 @@ public final class U9BomByproductFieldContract {
         map.put(canonical, mapping.field());
       }
     }
+    map.put(canonicalHeader("price_org_code"), "price_org_code");
+    map.put(canonicalHeader("报价组织"), "price_org_code");
+    map.put(canonicalHeader("U9报价组织"), "price_org_code");
     return map;
   }
 

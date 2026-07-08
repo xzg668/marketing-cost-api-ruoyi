@@ -2,7 +2,6 @@ package com.sanhua.marketingcost.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
-import com.sanhua.marketingcost.enums.MaterialOrganization;
 import java.util.Collection;
 import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
@@ -29,14 +28,14 @@ public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
       @Param("sourceType") String sourceType,
       @Param("organizationCode") String organizationCode);
 
-  /** 兼容旧调用；默认读取商用组织。 */
+  /** 兼容旧调用入口已废弃；必须显式传 organizationCode。 */
   default String selectLatestActiveBatchId(String sourceType) {
-    return selectLatestActiveBatchId(sourceType, MaterialOrganization.COMMERCIAL.getCode());
+    throw new IllegalArgumentException("读取 U9 料品档案必须显式传入 organizationCode");
   }
 
-  /** 兼容旧调用；默认读取商用组织最近一次导入流水。 */
+  /** 兼容旧调用入口已废弃；必须显式传 organizationCode。 */
   default String selectLatestBatchId() {
-    return selectLatestActiveBatchId(null, MaterialOrganization.COMMERCIAL.getCode());
+    throw new IllegalArgumentException("读取 U9 料品档案必须显式传入 organizationCode");
   }
 
   /**
@@ -64,10 +63,10 @@ public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
       @Param("sourceType") String sourceType,
       @Param("organizationCode") String organizationCode);
 
-  /** 兼容旧调用；默认读取商用组织。 */
+  /** 兼容旧调用入口已废弃；必须显式传 organizationCode。 */
   default List<MaterialMasterRaw> selectByLatestBatchAndCodes(
       Collection<String> codes, String sourceType) {
-    return selectByLatestBatchAndCodes(codes, sourceType, MaterialOrganization.COMMERCIAL.getCode());
+    throw new IllegalArgumentException("读取 U9 料品档案必须显式传入 organizationCode");
   }
 
   /**
@@ -101,11 +100,10 @@ public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
       @Param("organizationCode") String organizationCode,
       @Param("limit") int limit);
 
-  /** 兼容旧调用；默认读取商用组织。 */
+  /** 兼容旧调用入口已废弃；必须显式传 organizationCode。 */
   default List<MaterialMasterRaw> selectOptionsByLatestBatchKeyword(
       String keyword, String sourceType, int limit) {
-    return selectOptionsByLatestBatchKeyword(
-        keyword, sourceType, MaterialOrganization.COMMERCIAL.getCode(), limit);
+    throw new IllegalArgumentException("读取 U9 料品档案必须显式传入 organizationCode");
   }
 
   /**
@@ -130,10 +128,9 @@ public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
       @Param("sourceType") String sourceType,
       @Param("organizationCode") String organizationCode);
 
-  /** 兼容旧调用；默认读取商用组织。 */
+  /** 兼容旧调用入口已废弃；必须显式传 organizationCode。 */
   default List<MaterialMasterRaw> selectPackageComponentParentsByLatestBatch(
       String mainCategoryName, String sourceType) {
-    return selectPackageComponentParentsByLatestBatch(
-        mainCategoryName, sourceType, MaterialOrganization.COMMERCIAL.getCode());
+    throw new IllegalArgumentException("读取 U9 料品档案必须显式传入 organizationCode");
   }
 }

@@ -4,6 +4,7 @@ import com.sanhua.marketingcost.dto.PackagePriceRequest;
 import com.sanhua.marketingcost.dto.PackagePriceResult;
 import com.sanhua.marketingcost.dto.priceprepare.PackageComponentPricePrepareResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePreparePlanItem;
+import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.PackageComponentPrice;
 import com.sanhua.marketingcost.entity.PackageComponentPriceDetail;
 import com.sanhua.marketingcost.service.PackageComponentPricePrepareStrategy;
@@ -71,6 +72,7 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
 
     PackagePriceRequest request = new PackagePriceRequest();
     request.setPackageMaterialCode(packageMaterialCode);
+    request.setPriceOrgCode(requiredPriceOrgCode(planItem));
     request.setPeriodMonth(periodMonth);
     request.setOaNo(oaNo);
     request.setTopProductCode(topProductCode);
@@ -174,6 +176,15 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
 
   private BigDecimal quantity(PricePreparePlanItem planItem) {
     return planItem == null || planItem.getBomRow() == null ? null : planItem.getBomRow().getQtyPerTop();
+  }
+
+  private String requiredPriceOrgCode(PricePreparePlanItem planItem) {
+    BomCostingRow row = planItem == null ? null : planItem.getBomRow();
+    String priceOrgCode = trimToNull(row == null ? null : row.getPriceOrgCode());
+    if (priceOrgCode == null) {
+      throw new IllegalStateException("包装组件价格准备缺少上游 priceOrgCode");
+    }
+    return priceOrgCode;
   }
 
   private String trimToNull(String value) {

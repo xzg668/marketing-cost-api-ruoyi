@@ -185,6 +185,7 @@ class U9SourceBuilderTest extends BomMapperTestBase {
 
     BuildHierarchyRequest reqV1 = new BuildHierarchyRequest();
     reqV1.setImportBatchId(batchV1);
+    reqV1.setPriceOrgCode("210");
     reqV1.setBomPurpose("主制造");
     reqV1.setMode("BY_PRODUCT");
     reqV1.setTopProductCode("X");
@@ -210,6 +211,7 @@ class U9SourceBuilderTest extends BomMapperTestBase {
 
     BuildHierarchyRequest reqV2 = new BuildHierarchyRequest();
     reqV2.setImportBatchId(batchV2);
+    reqV2.setPriceOrgCode("210");
     reqV2.setBomPurpose("主制造");
     reqV2.setMode("BY_PRODUCT");
     reqV2.setTopProductCode("X");
@@ -280,7 +282,7 @@ class U9SourceBuilderTest extends BomMapperTestBase {
     buildService.build(byProduct("T", "主制造"));
 
     BomHierarchyTreeDto tree =
-        buildService.getHierarchyTree("T", "主制造", LocalDate.of(2026, 6, 1), "U9");
+        buildService.getHierarchyTree("T", "主制造", LocalDate.of(2026, 6, 1), "U9", "210");
 
     assertThat(tree).isNotNull();
     assertThat(tree.getMaterialCode()).isEqualTo("T");
@@ -289,6 +291,46 @@ class U9SourceBuilderTest extends BomMapperTestBase {
         .filter(c -> "T1".equals(c.getMaterialCode())).findFirst().orElseThrow();
     assertThat(t1.getChildren()).hasSize(1);
     assertThat(t1.getChildren().get(0).getMaterialCode()).isEqualTo("T1A");
+  }
+
+  @Test
+  @DisplayName("build/getHierarchyTree 按 priceOrgCode 隔离同批次同顶层")
+  void buildAndTreePreviewUsePriceOrgCode() {
+    seedRowWithOrg("ORG-T", "C210", 1, "1", "主制造", "2026-01-01", "210");
+    seedRowWithOrg("ORG-T", "C220", 1, "1", "主制造", "2026-01-01", "220");
+
+    BuildHierarchyRequest commercial = byProduct("ORG-T", "主制造");
+    commercial.setPriceOrgCode("210");
+    BuildHierarchyRequest plate = byProduct("ORG-T", "主制造");
+    plate.setPriceOrgCode("220");
+
+    buildService.build(commercial);
+    buildService.build(plate);
+
+    List<BomRawHierarchy> commercialRows =
+        rawMapper.selectList(
+            Wrappers.<BomRawHierarchy>lambdaQuery()
+                .eq(BomRawHierarchy::getTopProductCode, "ORG-T")
+                .eq(BomRawHierarchy::getPriceOrgCode, "210")
+                .orderByAsc(BomRawHierarchy::getLevel));
+    List<BomRawHierarchy> plateRows =
+        rawMapper.selectList(
+            Wrappers.<BomRawHierarchy>lambdaQuery()
+                .eq(BomRawHierarchy::getTopProductCode, "ORG-T")
+                .eq(BomRawHierarchy::getPriceOrgCode, "220")
+                .orderByAsc(BomRawHierarchy::getLevel));
+
+    assertThat(commercialRows).extracting(BomRawHierarchy::getMaterialCode)
+        .containsExactly("ORG-T", "C210");
+    assertThat(plateRows).extracting(BomRawHierarchy::getMaterialCode)
+        .containsExactly("ORG-T", "C220");
+
+    BomHierarchyTreeDto plateTree =
+        buildService.getHierarchyTree("ORG-T", "主制造", LocalDate.of(2026, 6, 1), "U9", "220");
+    assertThat(plateTree).isNotNull();
+    assertThat(plateTree.getChildren()).singleElement()
+        .extracting(BomHierarchyTreeDto::getMaterialCode)
+        .isEqualTo("C220");
   }
 
   @Test
@@ -329,6 +371,12 @@ class U9SourceBuilderTest extends BomMapperTestBase {
     assertThatThrownBy(() -> buildService.build(req))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("topProductCode");
+
+    BuildHierarchyRequest missingOrg = new BuildHierarchyRequest();
+    missingOrg.setImportBatchId("x");
+    assertThatThrownBy(() -> buildService.build(missingOrg))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("priceOrgCode");
   }
 
   /**
@@ -361,6 +409,7 @@ class U9SourceBuilderTest extends BomMapperTestBase {
     // 2) 构建 1079900000536（T4 链路），按主制造
     BuildHierarchyRequest req = new BuildHierarchyRequest();
     req.setImportBatchId(importResult.getImportBatchId());
+    req.setPriceOrgCode("210");
     req.setBomPurpose("主制造");
     req.setMode("BY_PRODUCT");
     req.setTopProductCode("1079900000536");
@@ -404,7 +453,8 @@ class U9SourceBuilderTest extends BomMapperTestBase {
 
     // 4) 树查询接口也能拿到非空结果
     BomHierarchyTreeDto tree =
-        buildService.getHierarchyTree("1079900000536", "主制造", LocalDate.of(2026, 6, 1), "U9");
+        buildService.getHierarchyTree(
+            "1079900000536", "主制造", LocalDate.of(2026, 6, 1), "U9", "210");
     assertThat(tree).isNotNull();
     assertThat(tree.getMaterialCode()).isEqualTo("1079900000536");
     assertThat(tree.getChildren()).isNotEmpty();
@@ -426,6 +476,7 @@ class U9SourceBuilderTest extends BomMapperTestBase {
   private BuildHierarchyRequest all(String purpose) {
     BuildHierarchyRequest req = new BuildHierarchyRequest();
     req.setImportBatchId(importBatchId);
+    req.setPriceOrgCode("210");
     req.setBomPurpose(purpose);
     req.setMode("ALL");
     return req;
@@ -434,6 +485,7 @@ class U9SourceBuilderTest extends BomMapperTestBase {
   private BuildHierarchyRequest byProduct(String top, String purpose) {
     BuildHierarchyRequest req = new BuildHierarchyRequest();
     req.setImportBatchId(importBatchId);
+    req.setPriceOrgCode("210");
     req.setBomPurpose(purpose);
     req.setMode("BY_PRODUCT");
     req.setTopProductCode(top);
@@ -456,6 +508,7 @@ class U9SourceBuilderTest extends BomMapperTestBase {
       String effFrom) {
     BomU9Source row = new BomU9Source();
     row.setImportBatchId(importBatchId);
+    row.setPriceOrgCode("210");
     row.setSourceType("EXCEL");
     row.setImportedAt(LocalDateTime.now());
     row.setParentMaterialNo(parent);
@@ -479,8 +532,32 @@ class U9SourceBuilderTest extends BomMapperTestBase {
   /** 插入一行 u9_source 到指定批次（append-only 测试用，模拟多次独立导入） */
   private void seedRowInto(
       String batch, String parent, String child, int seq, String qty, String purpose, String effFrom) {
+    seedRowInto(batch, parent, child, seq, qty, purpose, effFrom, "210");
+  }
+
+  private void seedRowWithOrg(
+      String parent,
+      String child,
+      int seq,
+      String qty,
+      String purpose,
+      String effFrom,
+      String priceOrgCode) {
+    seedRowInto(importBatchId, parent, child, seq, qty, purpose, effFrom, priceOrgCode);
+  }
+
+  private void seedRowInto(
+      String batch,
+      String parent,
+      String child,
+      int seq,
+      String qty,
+      String purpose,
+      String effFrom,
+      String priceOrgCode) {
     BomU9Source row = new BomU9Source();
     row.setImportBatchId(batch);
+    row.setPriceOrgCode(priceOrgCode);
     row.setSourceType("EXCEL");
     row.setImportedAt(LocalDateTime.now());
     row.setParentMaterialNo(parent);

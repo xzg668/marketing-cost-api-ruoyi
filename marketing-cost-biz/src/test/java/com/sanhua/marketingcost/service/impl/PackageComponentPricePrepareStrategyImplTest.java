@@ -59,9 +59,25 @@ class PackageComponentPricePrepareStrategyImplTest {
     assertThat(captor.getValue().getBomPurpose()).isEqualTo("主制造");
     assertThat(captor.getValue().getSourceType()).isEqualTo("U9");
     assertThat(captor.getValue().getOaNo()).isEqualTo("OA-001");
+    assertThat(captor.getValue().getPriceOrgCode()).isEqualTo("210");
     assertThat(captor.getValue().getCalcBatchId()).isEqualTo("PPR-001");
     assertThat(captor.getValue().getAsOfDate()).isEqualTo(LocalDate.now());
     assertThat(captor.getValue().isForceRefresh()).isTrue();
+  }
+
+  @Test
+  @DisplayName("包装组件：价格准备按 BOM 行业务线传递组织")
+  void usesBomRowBusinessUnitForPriceOrganization() {
+    when(packageComponentPriceService.ensurePrice(any(PackagePriceRequest.class)))
+        .thenReturn(priceResult("PRICED", true, new BigDecimal("4.50"), 704L, List.of()));
+    PricePreparePlanItem item = planItem();
+    item.getBomRow().setPriceOrgCode("220");
+
+    strategy.prepare("PPR-PLATE", "OA-001", "2026-05", "主制造", "U9", item);
+
+    ArgumentCaptor<PackagePriceRequest> captor = ArgumentCaptor.forClass(PackagePriceRequest.class);
+    verify(packageComponentPriceService).ensurePrice(captor.capture());
+    assertThat(captor.getValue().getPriceOrgCode()).isEqualTo("220");
   }
 
   @Test
@@ -139,6 +155,8 @@ class PackageComponentPricePrepareStrategyImplTest {
     row.setMaterialCode("PKG-001");
     row.setMaterialName("包装组件");
     row.setQtyPerTop(new BigDecimal("2.5"));
+    row.setBusinessUnitType("COMMERCIAL");
+    row.setPriceOrgCode("210");
     PricePreparePlanItem item = new PricePreparePlanItem();
     item.setBomRow(row);
     item.setTopProductCode(row.getTopProductCode());

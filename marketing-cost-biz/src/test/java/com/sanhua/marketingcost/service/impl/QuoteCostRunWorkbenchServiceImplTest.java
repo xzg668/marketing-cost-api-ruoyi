@@ -50,6 +50,7 @@ import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionService;
 import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -64,6 +65,8 @@ import org.mockito.ArgumentCaptor;
 
 @DisplayName("QWB-07 成本核算 tab service")
 class QuoteCostRunWorkbenchServiceImplTest {
+
+  private static final String CURRENT_PERIOD = CostPricingPeriodUtils.currentPricingMonth();
 
   private OaFormMapper oaFormMapper;
   private OaFormItemMapper oaFormItemMapper;
@@ -118,12 +121,12 @@ class QuoteCostRunWorkbenchServiceImplTest {
     when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(form());
     when(oaFormItemMapper.selectById(101L)).thenReturn(item(101L, "TOP-A"));
     when(readinessService.check(anyString(), anyLong(), anyString(), anyString()))
-        .thenReturn(PricePrepareReadinessResult.ready("PPR-1", "2026-06", "SUCCESS"));
+        .thenReturn(PricePrepareReadinessResult.ready("PPR-1", CURRENT_PERIOD, "SUCCESS"));
     when(readinessService.check(anyString(), anyLong(), anyString(), anyString(), anyString()))
-        .thenReturn(PricePrepareReadinessResult.ready("PPR-1", "2026-06", "SUCCESS"));
-    when(summaryMapper.selectLatestPriceTypeConfirmation("OA-001", 101L, "TOP-A", "2026-06"))
+        .thenReturn(PricePrepareReadinessResult.ready("PPR-1", CURRENT_PERIOD, "SUCCESS"));
+    when(summaryMapper.selectLatestPriceTypeConfirmation("OA-001", 101L, "TOP-A", CURRENT_PERIOD))
         .thenReturn(confirmedPriceType());
-    when(costingBuildService.buildByOaFormItem(101L, "2026-06"))
+    when(costingBuildService.buildByOaFormItem(101L, CURRENT_PERIOD))
         .thenReturn(
             new QuoteBomCostingBuildResponse(
                 201L,
@@ -132,7 +135,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
                 "OA-001",
                 "TOP-A",
                 "NON_BARE",
-                "2026-06",
+                CURRENT_PERIOD,
                 "qbp-test",
                 1,
                 1,
@@ -145,7 +148,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     prepareResult.setOaNo("OA-001");
     prepareResult.setOaFormItemId(101L);
     prepareResult.setTopProductCode("TOP-A");
-    prepareResult.setPeriodMonth("2026-06");
+    prepareResult.setPeriodMonth(CURRENT_PERIOD);
     prepareResult.setStatus("SUCCESS");
     when(pricePrepareService.generate(any())).thenReturn(prepareResult);
     service =
@@ -171,7 +174,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
   @Test
   @DisplayName("价格准备阻断时试算失败")
   void trialFailsWhenPricePrepareBlocks() {
-    when(readinessService.check("OA-001", 101L, "TOP-A", "2026-06", "PTC-1"))
+    when(readinessService.check("OA-001", 101L, "TOP-A", CURRENT_PERIOD, "PTC-1"))
         .thenReturn(
             PricePrepareReadinessResult.notReady(
                 "PARTIAL",
@@ -179,7 +182,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
                 true,
                 "价格准备存在缺口",
                 "PPR-1",
-                "2026-06",
+                CURRENT_PERIOD,
                 "PARTIAL",
                 1,
                 List.of("MAT-1 缺价")));
@@ -192,7 +195,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
   @Test
   @DisplayName("价格准备有可继续缺口时试算继续")
   void trialContinuesWhenPricePrepareAllowsContinue() {
-    when(readinessService.check("OA-001", 101L, "TOP-A", "2026-06", "PTC-1"))
+    when(readinessService.check("OA-001", 101L, "TOP-A", CURRENT_PERIOD, "PTC-1"))
         .thenReturn(
             PricePrepareReadinessResult.notReady(
                 "PARTIAL",
@@ -200,7 +203,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
                 false,
                 "价格准备未完成，实时成本将继续，结果可能缺价",
                 "PPR-1",
-                "2026-06",
+                CURRENT_PERIOD,
                 "PARTIAL",
                 1,
                 List.of("MAT-1 缺价")));
@@ -230,7 +233,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
   @Test
   @DisplayName("价格准备允许继续时查询页仍允许发起核算")
   void getCostRunAllowsStartTrialWhenPricePrepareAllowsContinue() {
-    when(readinessService.check("OA-001", 101L, "TOP-A", "2026-06", "PTC-1"))
+    when(readinessService.check("OA-001", 101L, "TOP-A", CURRENT_PERIOD, "PTC-1"))
         .thenReturn(
             PricePrepareReadinessResult.notReady(
                 "PARTIAL",
@@ -238,12 +241,12 @@ class QuoteCostRunWorkbenchServiceImplTest {
                 false,
                 "价格准备未完成，实时成本将继续，结果可能缺价",
                 "PPR-1",
-                "2026-06",
+                CURRENT_PERIOD,
                 "PARTIAL",
                 1,
                 List.of("MAT-1 缺价")));
 
-    var response = service.getCostRun("OA-001", 101L, "2026-06");
+    var response = service.getCostRun("OA-001", 101L, CURRENT_PERIOD);
 
     assertThat(response.isCanStartTrial()).isTrue();
     assertThat(response.getBlockingReasons()).isEmpty();
@@ -280,7 +283,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     verify(resultWriter).writeQuoteResult(resultCaptor.capture(), any(), any());
     assertThat(resultCaptor.getValue().getContext().getCostRunVersionId()).isEqualTo(88L);
     assertThat(resultCaptor.getValue().getContext().getPriceAsOfTime()).isEqualTo(trialStartedAt);
-    verify(costingBuildService).buildByOaFormItem(101L, "2026-06");
+    verify(costingBuildService).buildByOaFormItem(101L, CURRENT_PERIOD);
     verify(pricePrepareService).generate(any());
     verify(versionService).finishTrial(88L, new BigDecimal("123.450000"), 1, 1);
   }
@@ -387,7 +390,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     cost.setAmount(new BigDecimal("123.45"));
     when(costItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(cost));
 
-    var response = service.getCostRun("OA-001", 101L, "2026-06");
+    var response = service.getCostRun("OA-001", 101L, CURRENT_PERIOD);
 
     assertThat(response.getLatestTrial()).isNull();
     assertThat(response.getLatestConfirmed().getVersionNo()).isEqualTo("COST-20260609-0001-V1");
@@ -432,7 +435,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     when(partItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(costItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
-    var response = service.getCostRun("OA-001", 101L, "2026-06");
+    var response = service.getCostRun("OA-001", 101L, CURRENT_PERIOD);
 
     assertThat(response.getLatestTrial().getId()).isEqualTo(77L);
     assertThat(response.getCurrentDisplayVersion().getId()).isEqualTo(77L);
@@ -464,7 +467,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     when(partItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(costItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
-    var response = service.getCostRun("OA-001", 101L, "2026-06");
+    var response = service.getCostRun("OA-001", 101L, CURRENT_PERIOD);
 
     assertThat(response.getLatestTrial().getId()).isEqualTo(77L);
     assertThat(response.getLatestConfirmed()).isNull();
@@ -507,7 +510,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     form.setOaNo("OA-001");
     form.setCustomer("客户A");
     form.setBusinessUnitType("COMMERCIAL");
-    form.setAccountingPeriodMonth("2026-06");
+    form.setAccountingPeriodMonth(CURRENT_PERIOD);
     return form;
   }
 
@@ -518,7 +521,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     response.setOaNo("OA-001");
     response.setOaFormItemId(101L);
     response.setProductCode("TOP-A");
-    response.setPeriodMonth("2026-06");
+    response.setPeriodMonth(CURRENT_PERIOD);
     response.setStatus("CONFIRMED");
     return response;
   }
@@ -540,8 +543,8 @@ class QuoteCostRunWorkbenchServiceImplTest {
     version.setOaNo("OA-001");
     version.setOaFormItemId(101L);
     version.setProductCode(productCode);
-    version.setPricingMonth("2026-06");
-    version.setResultPeriod("2026-06");
+    version.setPricingMonth(CURRENT_PERIOD);
+    version.setResultPeriod(CURRENT_PERIOD);
     version.setStatus(status);
     return version;
   }
@@ -550,7 +553,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     CostRunResult result = new CostRunResult();
     result.setOaNo("OA-001");
     result.setProductCode("TOP-A");
-    result.setPeriod("2026-06");
+    result.setPeriod(CURRENT_PERIOD);
     result.setTotalCost(new BigDecimal(totalCost));
     result.setCalcStatus("SUCCESS");
     return result;

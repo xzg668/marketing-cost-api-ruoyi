@@ -30,15 +30,18 @@ class QuoteBomDetailQueryControllerTest {
     QuoteBomPackageStructurePageResponse response =
         new QuoteBomPackageStructurePageResponse(
             "REF-001", "REF-001", "2026-05", null, true, 0, List.of(), List.of());
-    when(service.pagePackageStructures("REF-001", "REF-001", "PKG-A", "2026-05", 1, 20))
+    when(service.pagePackageStructures(
+            "REF-001", "REF-001", "PKG-A", "2026-05", "210", "COMMERCIAL", 1, 20))
         .thenReturn(response);
 
     CommonResult<QuoteBomPackageStructurePageResponse> result =
-        controller.packageStructures("REF-001", "REF-001", "PKG-A", "2026-05", 1, 20);
+        controller.packageStructures(
+            "REF-001", "REF-001", "PKG-A", "2026-05", "210", "COMMERCIAL", 1, 20);
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().referenceFinishedCode()).isEqualTo("REF-001");
-    verify(service).pagePackageStructures("REF-001", "REF-001", "PKG-A", "2026-05", 1, 20);
+    verify(service)
+        .pagePackageStructures("REF-001", "REF-001", "PKG-A", "2026-05", "210", "COMMERCIAL", 1, 20);
   }
 
   @Test

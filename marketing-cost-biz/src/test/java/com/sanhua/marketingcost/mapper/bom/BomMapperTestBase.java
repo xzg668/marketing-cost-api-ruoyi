@@ -106,6 +106,7 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V22__business_unit_type_isolation_extended.sql", "V22");
       runMigrationsViaJdbc(LATE_MIGRATION_SCRIPTS);
       runScriptViaMysqlCli("/db/V95__u9_material_master_raw_20260519.sql", "V95");
+      runScriptViaMysqlCli("/db/V170__material_master_raw_organization.sql", "V170");
       runScriptViaMysqlCli("/db/V40__bom_three_layer_and_rules.sql", "V40");
       // T8：V41 含 ALTER TABLE + DELIMITER 存储过程块 + 中文 INSERT，必须走 mysql CLI
       runScriptViaMysqlCli("/db/V41__bom_rule_enhance_and_sub_ref.sql", "V41");
@@ -115,8 +116,16 @@ public abstract class BomMapperTestBase {
       // T11 增强：V44 原材料 cost_element 白名单字典（IN_DICT 命中前置硬条件）
       runScriptViaMysqlCli("/db/V44__bom_raw_material_cost_elements_dict.sql", "V44");
       // BSR-01：新 BOM 结算规则表与 costing/sub_ref 新追溯字段，保证旧集成测试 schema 跟实体同步
+      ensureSysMenuBusinessUnitTypeColumn();
+      runScriptViaMysqlCli("/db/V145__u9_bom_byproduct_master.sql", "V145");
       runScriptViaMysqlCli("/db/V146__bom_settlement_rule_schema.sql", "V146");
+      runScriptViaMysqlCli("/db/V162__quote_costing_row_item_scope.sql", "V162");
       runScriptViaMysqlCli("/db/V172__bom_raw_hierarchy_source_line_key.sql", "V172");
+      runScriptViaMysqlCli("/db/V179__easydata_u9_org_base_tables.sql", "V179");
+      runScriptViaMysqlCli("/db/V180__quote_bom_preparation_record_org_scope.sql", "V180");
+      runScriptViaMysqlCli("/db/V181__bom_snapshot_package_price_org_scope.sql", "V181");
+      runScriptViaMysqlCli("/db/V182__bom_costing_row_org_scope.sql", "V182");
+      runScriptViaMysqlCli("/db/V183__cost_run_part_item_org_scope.sql", "V183");
     } catch (Exception e) {
       // 把 root cause 的文字信息拼进 message，避免 surefire 只保留 Caused by 的短描述
       Throwable root = e;
@@ -216,5 +225,18 @@ public abstract class BomMapperTestBase {
         + "?allowMultiQueries=true&useUnicode=true&characterEncoding=utf8"
         + "&allowPublicKeyRetrieval=true&useSSL=false";
     return DriverManager.getConnection(url, MYSQL.getUsername(), MYSQL.getPassword());
+  }
+
+  private static void ensureSysMenuBusinessUnitTypeColumn() throws Exception {
+    try (Connection conn = openConnection();
+        Statement stmt = conn.createStatement()) {
+      try {
+        stmt.execute(
+            "ALTER TABLE sys_menu ADD COLUMN business_unit_type VARCHAR(20) NULL "
+                + "COMMENT '业务单元' AFTER remark");
+      } catch (Exception ignore) {
+        // V4 的 DELIMITER 块在部分测试基线里会被 JDBC 朴素切分跳过；已存在时忽略。
+      }
+    }
   }
 }

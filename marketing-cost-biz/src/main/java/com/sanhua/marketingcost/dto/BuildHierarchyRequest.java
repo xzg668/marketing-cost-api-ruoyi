@@ -6,6 +6,7 @@ package com.sanhua.marketingcost.dto;
  * <p>字段语义（见 BOM 三层架构设计文档 §E.2）：
  * <ul>
  *   <li>{@link #importBatchId}：T3 产生的批次 ID；Builder 从该批次的 u9_source 行读取</li>
+ *   <li>{@link #priceOrgCode}：U9 报价组织；必填，210=商用，220=板换</li>
  *   <li>{@link #bomPurpose}：过滤目的（普机/主制造/精益）；空=全部 purpose 都构建</li>
  *   <li>{@link #mode}：{@code ALL}=该批次全部顶层 / {@code BY_PRODUCT}=只构建一个顶层</li>
  *   <li>{@link #topProductCode}：mode=BY_PRODUCT 时必填；mode=ALL 时忽略</li>
@@ -14,6 +15,7 @@ package com.sanhua.marketingcost.dto;
 public class BuildHierarchyRequest {
 
   private String importBatchId;
+  private String priceOrgCode;
   private String bomPurpose;
 
   /** ALL / BY_PRODUCT */
@@ -27,6 +29,14 @@ public class BuildHierarchyRequest {
 
   public void setImportBatchId(String importBatchId) {
     this.importBatchId = importBatchId;
+  }
+
+  public String getPriceOrgCode() {
+    return priceOrgCode;
+  }
+
+  public void setPriceOrgCode(String priceOrgCode) {
+    this.priceOrgCode = priceOrgCode;
   }
 
   public String getBomPurpose() {

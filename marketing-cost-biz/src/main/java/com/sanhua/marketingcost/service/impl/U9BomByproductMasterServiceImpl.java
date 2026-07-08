@@ -8,6 +8,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.U9BomByproductImportResponse;
 import com.sanhua.marketingcost.dto.U9MaterialTemplateMappingItem;
 import com.sanhua.marketingcost.entity.U9BomByproductMaster;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.U9BomByproductMasterMapper;
 import com.sanhua.marketingcost.service.U9BomByproductMasterService;
 import java.math.BigDecimal;
@@ -70,6 +71,7 @@ public class U9BomByproductMasterServiceImpl implements U9BomByproductMasterServ
 
   @Override
   public Page<U9BomByproductMaster> page(
+      String priceOrgCode,
       String parentMaterialNo,
       String parentMaterialName,
       String byproductMaterialNo,
@@ -80,6 +82,10 @@ public class U9BomByproductMasterServiceImpl implements U9BomByproductMasterServ
       int page,
       int pageSize) {
     QueryWrapper<U9BomByproductMaster> query = new QueryWrapper<>();
+    String normalizedPriceOrgCode = normalizePriceOrgCode(priceOrgCode);
+    if (StringUtils.hasText(normalizedPriceOrgCode)) {
+      query.eq("price_org_code", normalizedPriceOrgCode);
+    }
     like(query, "parent_material_no", parentMaterialNo);
     like(query, "parent_material_name", parentMaterialName);
     like(query, "byproduct_material_no", byproductMaterialNo);
@@ -208,6 +214,7 @@ public class U9BomByproductMasterServiceImpl implements U9BomByproductMasterServ
 
   private static String rowKey(U9BomByproductMaster row) {
     return String.join("|",
+        row.getPriceOrgCode(),
         row.getBomPurpose(),
         row.getParentMaterialNo(),
         row.getByproductMaterialNo(),
@@ -254,6 +261,7 @@ public class U9BomByproductMasterServiceImpl implements U9BomByproductMasterServ
             assign(row, field, cell.getValue());
           }
         }
+        row.setPriceOrgCode(importedPriceOrgCode(row.getPriceOrgCode()));
         validate(row);
         String key = rowKey(row);
         if (!seenKeys.add(key)) {
@@ -385,9 +393,24 @@ public class U9BomByproductMasterServiceImpl implements U9BomByproductMasterServ
         case "effective_to" -> row.setEffectiveTo(parseDate(rawValue));
         case "u9_created_by" -> row.setU9CreatedBy(trimMax(value, 128));
         case "u9_created_time" -> row.setU9CreatedTime(parseDateTime(rawValue));
+        case "price_org_code" -> row.setPriceOrgCode(trimMax(value, 32));
         default -> {
         }
       }
     }
+  }
+
+  private static String normalizePriceOrgCode(String value) {
+    if (!StringUtils.hasText(value)) {
+      return null;
+    }
+    return MaterialOrganization.fromPriceOrgCode(value).getPriceOrgCode();
+  }
+
+  private static String importedPriceOrgCode(String value) {
+    if (!StringUtils.hasText(value)) {
+      return MaterialOrganization.COMMERCIAL.getPriceOrgCode();
+    }
+    return MaterialOrganization.fromPriceOrgCode(value).getPriceOrgCode();
   }
 }

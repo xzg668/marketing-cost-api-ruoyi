@@ -14,6 +14,9 @@ class U9BomByproductMasterMapperSqlTest {
   @Test
   @DisplayName("upsert 按五字段自然键冲突更新，不依赖批次")
   void upsertUsesNaturalKeyAndNoBatch() throws Exception {
+    assertThat(U9BomByproductMaster.class.getDeclaredField("priceOrgCode").getType())
+        .isEqualTo(String.class);
+
     Method method = U9BomByproductMasterMapper.class.getMethod("upsert", U9BomByproductMaster.class);
     Insert insert = method.getAnnotation(Insert.class);
     assertThat(insert).isNotNull();
@@ -21,6 +24,8 @@ class U9BomByproductMasterMapperSqlTest {
 
     assertThat(sql).contains(
         "INSERT INTO lp_u9_bom_byproduct_master",
+        "price_org_code",
+        "NULLIF(TRIM(#{priceOrgCode}), '')",
         "parent_material_no",
         "bom_purpose",
         "byproduct_material_no",
@@ -28,6 +33,9 @@ class U9BomByproductMasterMapperSqlTest {
         "effective_to",
         "ON DUPLICATE KEY UPDATE",
         "updated_at = CURRENT_TIMESTAMP");
-    assertThat(sql).doesNotContain("import_batch_id");
+    assertThat(sql)
+        .doesNotContain("COALESCE(NULLIF(TRIM(#{priceOrgCode}), ''), '210')")
+        .doesNotContain("import_batch_id")
+        .doesNotContain("price_org_code = VALUES(price_org_code)");
   }
 }

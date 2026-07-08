@@ -13,6 +13,7 @@ import com.sanhua.marketingcost.dto.CostRunTrialResponse;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
+import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest;
@@ -25,6 +26,7 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.enums.CostRunBatchStatus;
 import com.sanhua.marketingcost.enums.CostRunExecutionMode;
 import com.sanhua.marketingcost.enums.CostRunTaskScene;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.CostRunBatchMapper;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
@@ -347,6 +349,11 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
               firstText(item.getBusinessUnitType(), form.getBusinessUnitType()),
               pricingMonth,
               oaNoValue + ":" + item.getId());
+      QuoteDataOrganization organization =
+          MaterialOrganization.quoteDataForQuoteProcess(
+              form.getProcessCode(), form.getOaNo(), item.getBusinessUnitType());
+      context.setPriceOrgCode(organization.priceOrgCode());
+      context.setMaterialOrganizationCode(organization.materialOrganizationCode());
       context.setCostRunVersionId(version.getId());
       context.setCostRunNo(version.getCostRunNo());
       context.setPricePrepareNo(version.getPricePrepareNo());

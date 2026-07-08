@@ -512,6 +512,7 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
         parentRow(row, OBJECT_PACKAGE_PARENT, plan.getMaterialCode(), plan.getMaterialName());
     PackageSnapshotRequest request = new PackageSnapshotRequest();
     request.setPackageMaterialCode(plan.getMaterialCode());
+    request.setPriceOrgCode(requiredPriceOrgCode(row));
     request.setPeriodMonth(scope.periodMonth());
     request.setOaNo(scope.oaNo());
     request.setTopProductCode(scope.productCode());
@@ -537,6 +538,14 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     }
     aggregateParent(parent);
     return parent;
+  }
+
+  private String requiredPriceOrgCode(BomCostingRow row) {
+    String priceOrgCode = trimToNull(row == null ? null : row.getPriceOrgCode());
+    if (priceOrgCode == null) {
+      throw new QuoteIngestException("包装组件结构快照缺少上游 priceOrgCode");
+    }
+    return priceOrgCode;
   }
 
   private QuotePriceTypeConfirmationRow parentRow(

@@ -40,6 +40,9 @@ public class BomU9Source {
   /** 导入人用户名 */
   private String importedBy;
 
+  /** U9 报价组织：210=商用，220=板换。 */
+  private String priceOrgCode;
+
   // ============================ U9 原样字段（33 列） ============================
 
   /** 母件料品_料号 */
@@ -201,6 +204,14 @@ public class BomU9Source {
 
   public void setImportedBy(String importedBy) {
     this.importedBy = importedBy;
+  }
+
+  public String getPriceOrgCode() {
+    return priceOrgCode;
+  }
+
+  public void setPriceOrgCode(String priceOrgCode) {
+    this.priceOrgCode = priceOrgCode;
   }
 
   public String getParentMaterialNo() {

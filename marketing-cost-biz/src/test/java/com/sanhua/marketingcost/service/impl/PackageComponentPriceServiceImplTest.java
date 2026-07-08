@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.dto.CostRunContext;
@@ -59,8 +60,10 @@ class PackageComponentPriceServiceImplTest {
 
   @BeforeAll
   static void initTableInfo() {
-    TableInfoHelper.initTableInfo(
-        new MapperBuilderAssistant(new MybatisConfiguration(), ""), PackageComponentPrice.class);
+    MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    TableInfoHelper.initTableInfo(assistant, PackageComponentPrice.class);
+    TableInfoHelper.initTableInfo(assistant, PackageComponentPriceDetail.class);
+    TableInfoHelper.initTableInfo(assistant, PackageComponentGapItem.class);
   }
 
   @BeforeEach
@@ -330,6 +333,56 @@ class PackageComponentPriceServiceImplTest {
   }
 
   @Test
+  @DisplayName("不同组织已有完整包装价时不能跨组织复用")
+  void plateRequestDoesNotReuseCommercialCompletePrice() {
+    service = serviceWith(resolver(Map.of(
+        "A", PriceResolveResult.hit(new BigDecimal("2.000000"), "固定采购价"))));
+    PackageComponentPrice commercial = new PackageComponentPrice();
+    commercial.setId(517L);
+    commercial.setPriceOrgCode("210");
+    commercial.setPackageMaterialCode("9830000026238");
+    commercial.setPeriodMonth("2026-05");
+    commercial.setSourceTopProductCode("1079900000536");
+    commercial.setPriceStatus("PRICED");
+    commercial.setPriceComplete(true);
+    commercial.setTotalPrice(new BigDecimal("1.23000000"));
+    when(priceMapper.selectList(any(Wrapper.class)))
+        .thenAnswer(
+            invocation -> {
+              AbstractWrapper<?, ?, ?> wrapper = invocation.getArgument(0);
+              boolean plateQuery = hasParamValue(wrapper, "220");
+              return plateQuery ? List.of() : List.of(commercial);
+            });
+    PackageComponentSnapshot plateSnapshot = snapshot();
+    plateSnapshot.setPriceOrgCode("220");
+    when(snapshotService.ensureSnapshot(any(PackageSnapshotRequest.class)))
+        .thenReturn(PackageSnapshotResult.of(
+            plateSnapshot, List.of(detail(101L, 1, "A", "2.000000")), true));
+    when(priceMapper.insert(any(PackageComponentPrice.class))).thenAnswer(invocation -> {
+      PackageComponentPrice price = invocation.getArgument(0);
+      price.setId(518L);
+      return 1;
+    });
+    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), eq(LocalDate.parse("2026-05-21"))))
+        .thenReturn(List.of(route("A")));
+    PackagePriceRequest request = request();
+    request.setPriceOrgCode("220");
+
+    PackagePriceResult result = service.ensurePrice(request);
+
+    assertThat(result.getStatus()).isEqualTo("PRICED");
+    assertThat(result.getPrice().getId()).isEqualTo(518L);
+    ArgumentCaptor<PackageSnapshotRequest> snapshotCaptor =
+        ArgumentCaptor.forClass(PackageSnapshotRequest.class);
+    verify(snapshotService).ensureSnapshot(snapshotCaptor.capture());
+    assertThat(snapshotCaptor.getValue().getPriceOrgCode()).isEqualTo("220");
+    ArgumentCaptor<PackageComponentPrice> priceCaptor =
+        ArgumentCaptor.forClass(PackageComponentPrice.class);
+    verify(priceMapper).insert(priceCaptor.capture());
+    assertThat(priceCaptor.getValue().getPriceOrgCode()).isEqualTo("220");
+  }
+
+  @Test
   @DisplayName("并发生成撞唯一键：重查到完整包装价后直接复用，不删明细重算")
   void reusesConcurrentCompletePriceAfterDuplicateKey() {
     service = serviceWith(resolver(Map.of("A", PriceResolveResult.hit(new BigDecimal("2.000000"), "固定采购价"))));
@@ -524,11 +577,22 @@ class PackageComponentPriceServiceImplTest {
     request.setQuoteNo("Q-001");
     request.setOaNo("OA-001");
     request.setTopProductCode("1079900000536");
+    request.setPriceOrgCode("210");
     request.setBomPurpose("生产");
     request.setSourceType("U9");
     request.setAsOfDate(LocalDate.parse("2026-05-21"));
     request.setCalcBatchId("BATCH-001");
     return request;
+  }
+
+  private boolean hasParamValue(AbstractWrapper<?, ?, ?> wrapper, String expectedValue) {
+    if (wrapper == null) {
+      return false;
+    }
+    wrapper.getSqlSegment();
+    return wrapper.getParamNameValuePairs().values().stream()
+        .map(String::valueOf)
+        .anyMatch(expectedValue::equals);
   }
 
   private PackageSnapshotResult snapshotResult(List<PackageComponentSnapshotDetail> details) {
@@ -538,6 +602,7 @@ class PackageComponentPriceServiceImplTest {
   private PackageComponentSnapshot snapshot() {
     PackageComponentSnapshot snapshot = new PackageComponentSnapshot();
     snapshot.setId(20L);
+    snapshot.setPriceOrgCode("210");
     snapshot.setPackageMaterialCode("9830000026238");
     snapshot.setPackageMaterialName("包装组件");
     snapshot.setPeriodMonth("2026-05");

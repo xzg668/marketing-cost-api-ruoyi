@@ -20,7 +20,7 @@ public interface BomU9SourceMapper extends BaseMapper<BomU9Source> {
   @Insert(
       "<script>"
           + "INSERT INTO lp_bom_u9_source ("
-          + " import_batch_id, source_type, source_file_name, imported_at, imported_by,"
+          + " import_batch_id, source_type, source_file_name, imported_at, imported_by, price_org_code,"
           + " parent_material_no, parent_material_name, production_unit, bom_purpose, bom_version,"
           + " bom_status, child_seq, child_type, child_material_no, child_material_name,"
           + " child_material_spec, cost_element_code, cost_element_name, consign_source,"
@@ -31,6 +31,7 @@ public interface BomU9SourceMapper extends BaseMapper<BomU9Source> {
           + ") VALUES "
           + "<foreach collection='rows' item='e' separator=','>"
           + " (#{e.importBatchId}, #{e.sourceType}, #{e.sourceFileName}, #{e.importedAt}, #{e.importedBy},"
+          + "  NULLIF(TRIM(#{e.priceOrgCode}), ''),"
           + "  #{e.parentMaterialNo}, #{e.parentMaterialName}, #{e.productionUnit}, #{e.bomPurpose}, #{e.bomVersion},"
           + "  #{e.bomStatus}, #{e.childSeq}, #{e.childType}, #{e.childMaterialNo}, #{e.childMaterialName},"
           + "  #{e.childMaterialSpec}, #{e.costElementCode}, #{e.costElementName}, #{e.consignSource},"

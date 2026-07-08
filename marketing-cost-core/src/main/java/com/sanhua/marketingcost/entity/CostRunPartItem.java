@@ -29,6 +29,8 @@ public class CostRunPartItem {
   private BigDecimal unitPrice;
   private BigDecimal amount;
   private String remark;
+  private String priceOrgCode;
+  private String materialOrganizationCode;
 
   /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
   @TableField(fill = FieldFill.INSERT)
@@ -190,6 +192,22 @@ public class CostRunPartItem {
 
   public void setRemark(String remark) {
     this.remark = remark;
+  }
+
+  public String getPriceOrgCode() {
+    return priceOrgCode;
+  }
+
+  public void setPriceOrgCode(String priceOrgCode) {
+    this.priceOrgCode = priceOrgCode;
+  }
+
+  public String getMaterialOrganizationCode() {
+    return materialOrganizationCode;
+  }
+
+  public void setMaterialOrganizationCode(String materialOrganizationCode) {
+    this.materialOrganizationCode = materialOrganizationCode;
   }
 
   public LocalDateTime getCreatedAt() {

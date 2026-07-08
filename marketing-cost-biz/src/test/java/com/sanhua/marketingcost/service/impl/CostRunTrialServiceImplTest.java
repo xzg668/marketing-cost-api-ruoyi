@@ -422,6 +422,7 @@ class CostRunTrialServiceImplTest {
     OaFormItem formItem = new OaFormItem();
     formItem.setId(200L);
     formItem.setMaterialNo("MAT-LINKED");
+    formItem.setBusinessUnitType("COMMERCIAL");
     when(oaFormItemMapper.selectList(any())).thenReturn(List.of(formItem));
 
     CostRunPartItemDto linkedBase = part("MAT-LINKED");
@@ -486,6 +487,7 @@ class CostRunTrialServiceImplTest {
     OaFormItem formItem = new OaFormItem();
     formItem.setId(201L);
     formItem.setMaterialNo("MAT-FIXED");
+    formItem.setBusinessUnitType("COMMERCIAL");
     when(oaFormItemMapper.selectList(any())).thenReturn(List.of(formItem));
     when(costRunPartItemMapper.selectBaseByOaNo("OA-NO-LINKED"))
         .thenReturn(List.of(part("MAT-FIXED")));
@@ -534,9 +536,11 @@ class CostRunTrialServiceImplTest {
     OaFormItem first = new OaFormItem();
     first.setId(301L);
     first.setMaterialNo("MAT-UNSELECTED");
+    first.setBusinessUnitType("COMMERCIAL");
     OaFormItem second = new OaFormItem();
     second.setId(302L);
     second.setMaterialNo("MAT-SELECTED");
+    second.setBusinessUnitType("COMMERCIAL");
     second.setPackageMethod("BOX");
     when(oaFormItemMapper.selectList(any())).thenReturn(List.of(first, second));
     when(costRunPartItemMapper.selectBaseByOaNo("OA-SELECT"))
@@ -602,9 +606,11 @@ class CostRunTrialServiceImplTest {
     OaFormItem first = new OaFormItem();
     first.setId(401L);
     first.setMaterialNo("MAT-401");
+    first.setBusinessUnitType("COMMERCIAL");
     OaFormItem second = new OaFormItem();
     second.setId(402L);
     second.setMaterialNo("MAT-402");
+    second.setBusinessUnitType("COMMERCIAL");
     when(oaFormItemMapper.selectList(any())).thenReturn(List.of(first, second));
     when(costRunPartItemMapper.selectBaseByOaNo("OA-PARTIAL")).thenReturn(List.of());
     when(costRunEngine.run(any(CostRunContext.class)))
@@ -652,6 +658,7 @@ class CostRunTrialServiceImplTest {
     OaFormItem formItem = new OaFormItem();
     formItem.setId(203L);
     formItem.setMaterialNo("MAT-FIXED");
+    formItem.setBusinessUnitType("COMMERCIAL");
     when(oaFormItemMapper.selectList(any())).thenReturn(List.of(formItem));
     when(costRunPartItemMapper.selectBaseByOaNo("OA-PPR-WARN"))
         .thenReturn(List.of(part("MAT-FIXED")));
@@ -701,6 +708,7 @@ class CostRunTrialServiceImplTest {
     OaFormItem formItem = new OaFormItem();
     formItem.setId(204L);
     formItem.setMaterialNo("MAT-FIXED");
+    formItem.setBusinessUnitType("COMMERCIAL");
     when(oaFormItemMapper.selectList(any())).thenReturn(List.of(formItem));
 
     ExecutionException ex =
@@ -736,6 +744,7 @@ class CostRunTrialServiceImplTest {
     OaFormItem formItem = new OaFormItem();
     formItem.setId(205L);
     formItem.setMaterialNo("MAT-REUSED");
+    formItem.setBusinessUnitType("COMMERCIAL");
     when(oaFormItemMapper.selectList(any())).thenReturn(List.of(formItem));
     when(costRunPartItemMapper.selectBaseByOaNo("OA-BOM-REUSED"))
         .thenReturn(List.of(part("MAT-REUSED")));
@@ -817,6 +826,7 @@ class CostRunTrialServiceImplTest {
     OaFormItem formItem = new OaFormItem();
     formItem.setId(202L);
     formItem.setMaterialNo("MAT-LINKED");
+    formItem.setBusinessUnitType("COMMERCIAL");
     when(oaFormItemMapper.selectList(any())).thenReturn(List.of(formItem));
     when(costRunPartItemMapper.selectBaseByOaNo("OA-ENSURE-FAIL"))
         .thenReturn(List.of(part("MAT-LINKED")));

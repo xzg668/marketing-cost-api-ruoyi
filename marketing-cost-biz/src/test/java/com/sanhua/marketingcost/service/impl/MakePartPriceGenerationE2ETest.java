@@ -180,13 +180,13 @@ class MakePartPriceGenerationE2ETest {
             parent("MAKE-MISSING-WEIGHT"),
             parent("MAKE-MISSING-ROUTE"),
             parent("MAKE-MISSING-SCRAP-PRICE")));
-    when(sourceDataService.listDedupedChildren(eq(SAMPLE_PARENT), any()))
+    when(sourceDataService.listDedupedChildren(eq(SAMPLE_PARENT), any(), eq("210")))
         .thenReturn(List.of(rawChild(SAMPLE_PARENT, "RAW-203250582-A"), blankChild(SAMPLE_PARENT)));
-    when(sourceDataService.listDedupedChildren(eq("MAKE-MISSING-WEIGHT"), any()))
+    when(sourceDataService.listDedupedChildren(eq("MAKE-MISSING-WEIGHT"), any(), eq("210")))
         .thenReturn(List.of(rawChild("MAKE-MISSING-WEIGHT", "RAW-MISSING-WEIGHT")));
-    when(sourceDataService.listDedupedChildren(eq("MAKE-MISSING-ROUTE"), any()))
+    when(sourceDataService.listDedupedChildren(eq("MAKE-MISSING-ROUTE"), any(), eq("210")))
         .thenReturn(List.of(rawChild("MAKE-MISSING-ROUTE", "RAW-MISSING-ROUTE")));
-    when(sourceDataService.listDedupedChildren(eq("MAKE-MISSING-SCRAP-PRICE"), any()))
+    when(sourceDataService.listDedupedChildren(eq("MAKE-MISSING-SCRAP-PRICE"), any(), eq("210")))
         .thenReturn(List.of(rawChild("MAKE-MISSING-SCRAP-PRICE", "RAW-MISSING-SCRAP-PRICE")));
 
     when(weightService.resolveWeights(anyString(), any(BomU9Source.class), anyString()))
@@ -322,6 +322,9 @@ class MakePartPriceGenerationE2ETest {
     BomCostingRow row = new BomCostingRow();
     row.setOaNo(OA_NO);
     row.setBusinessUnitType(BU);
+    row.setPeriodMonth(PERIOD);
+    row.setPriceOrgCode("210");
+    row.setMaterialOrganizationCode(BU);
     row.setMaterialCode(code);
     row.setMaterialName("制造件" + code);
     row.setMaterialSpec("DRW-" + code);
@@ -378,6 +381,8 @@ class MakePartPriceGenerationE2ETest {
     CostRunPartItemDto dto = new CostRunPartItemDto();
     dto.setOaNo(OA_NO);
     dto.setProductCode("PRODUCT-E2E");
+    dto.setPriceOrgCode("210");
+    dto.setMaterialOrganizationCode(BU);
     dto.setPartCode(code);
     dto.setPartName("样例制造件");
     dto.setPartQty(new BigDecimal(partQty));

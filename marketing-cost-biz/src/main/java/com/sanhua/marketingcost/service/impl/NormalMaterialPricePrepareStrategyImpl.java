@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
+import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
@@ -88,6 +89,7 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
     }
 
     CostRunPartItemDto resolveItem = toResolveItem(oaNo, planItem);
+    CostRunContext resolveContext = toResolveContext(oaNo, businessUnitType, periodMonth, planItem);
     List<String> attemptedBuckets = new ArrayList<>(candidates.size());
     String lastMissReason = null;
     for (PriceTypeRoute route : candidates) {
@@ -100,7 +102,7 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
         continue;
       }
       attemptedBuckets.add(route.priceType().name());
-      PriceResolveResult result = resolver.resolve(oaNo, resolveItem, route);
+      PriceResolveResult result = resolver.resolve(oaNo, resolveItem, route, resolveContext);
       if (result != null && result.unitPrice() != null) {
         BigDecimal amount = quantity(planItem) == null ? null : result.unitPrice().multiply(quantity(planItem));
         return NormalMaterialPricePrepareResult.ready(
@@ -108,7 +110,7 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
             amount,
             result.priceSource(),
             resultRefType(route.priceType()),
-            null,
+            result.resultRefId(),
             StringUtils.hasText(result.remark()) ? result.remark() : "普通料号价格准备完成");
       }
       if (result != null && StringUtils.hasText(result.remark())) {
@@ -195,6 +197,22 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       item.setMaterial(planItem.getBomRow().getMaterialSpec());
     }
     return item;
+  }
+
+  private CostRunContext toResolveContext(
+      String oaNo,
+      String businessUnitType,
+      String periodMonth,
+      PricePreparePlanItem planItem) {
+    return CostRunContext.quote(
+        oaNo,
+        null,
+        planItem == null ? null : planItem.getTopProductCode(),
+        null,
+        null,
+        businessUnitType,
+        periodMonth,
+        "PRICE_PREPARE:" + (planItem == null ? "" : trimToNull(planItem.getMaterialCode())));
   }
 
   private BigDecimal quantity(PricePreparePlanItem planItem) {

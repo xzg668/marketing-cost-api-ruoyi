@@ -14,7 +14,12 @@ import java.math.BigDecimal;
  *
  * <p>用 record 保证不可变；调用方请勿在算后修改。
  */
-public record PriceResolveResult(BigDecimal unitPrice, String priceSource, String remark) {
+public record PriceResolveResult(
+    BigDecimal unitPrice, String priceSource, String remark, Long resultRefId) {
+
+  public PriceResolveResult(BigDecimal unitPrice, String priceSource, String remark) {
+    this(unitPrice, priceSource, remark, null);
+  }
 
   /** 缺价标红：未配价格类型路由（路由表无该料号 × period 行）。 */
   public static final String SOURCE_NO_ROUTE = "NO_ROUTE";
@@ -23,7 +28,12 @@ public record PriceResolveResult(BigDecimal unitPrice, String priceSource, Strin
 
   /** 工厂：构造命中结果。 */
   public static PriceResolveResult hit(BigDecimal unitPrice, String priceSource) {
-    return new PriceResolveResult(unitPrice, priceSource, "");
+    return hit(unitPrice, priceSource, null);
+  }
+
+  /** 工厂：构造带来源行 ID 的命中结果。 */
+  public static PriceResolveResult hit(BigDecimal unitPrice, String priceSource, Long resultRefId) {
+    return new PriceResolveResult(unitPrice, priceSource, "", resultRefId);
   }
 
   /**

@@ -28,11 +28,20 @@ public class QuoteBomDetailQueryController {
       @RequestParam(required = false) String sourceTopProductCode,
       @RequestParam(required = false) String packageParentCode,
       @RequestParam(required = false) String periodMonth,
+      @RequestParam String priceOrgCode,
+      @RequestParam String materialOrganizationCode,
       @RequestParam(required = false, defaultValue = "1") Integer page,
       @RequestParam(required = false, defaultValue = "20") Integer pageSize) {
     return CommonResult.success(
         queryService.pagePackageStructures(
-            referenceFinishedCode, sourceTopProductCode, packageParentCode, periodMonth, page, pageSize));
+            referenceFinishedCode,
+            sourceTopProductCode,
+            packageParentCode,
+            periodMonth,
+            priceOrgCode,
+            materialOrganizationCode,
+            page,
+            pageSize));
   }
 
   @PreAuthorize("@ss.hasAnyPermi('bom-data:costing-row:list','base:bom:list','ingest:quote-product-bom:list')")

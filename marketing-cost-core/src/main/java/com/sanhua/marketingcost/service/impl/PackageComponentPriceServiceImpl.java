@@ -14,6 +14,7 @@ import com.sanhua.marketingcost.entity.PackageComponentPrice;
 import com.sanhua.marketingcost.entity.PackageComponentPriceDetail;
 import com.sanhua.marketingcost.entity.PackageComponentSnapshot;
 import com.sanhua.marketingcost.entity.PackageComponentSnapshotDetail;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.PackageComponentGapItemMapper;
 import com.sanhua.marketingcost.mapper.PackageComponentPriceDetailMapper;
@@ -293,7 +294,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
   }
 
   private CostRunContext priceContext(NormalizedRequest req) {
-    return CostRunContext.quote(
+    CostRunContext context = CostRunContext.quote(
         req.oaNo,
         null,
         req.topProductCode,
@@ -303,6 +304,10 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
         req.periodMonth,
         req.priceAsOfTime,
         null);
+    context.setPriceOrgCode(req.priceOrgCode);
+    context.setMaterialOrganizationCode(
+        MaterialOrganization.fromPriceOrgCode(req.priceOrgCode).getCode());
+    return context;
   }
 
   private PackageComponentPrice ensurePriceRow(NormalizedRequest req, PackageComponentSnapshot snapshot) {
@@ -310,6 +315,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
         selectByUniqueKey(req);
     if (existing != null) {
       existing.setSnapshotId(snapshot == null ? null : snapshot.getId());
+      existing.setPriceOrgCode(req.priceOrgCode);
       existing.setPackageMaterialName(snapshot == null ? existing.getPackageMaterialName() : snapshot.getPackageMaterialName());
       applyPackageUsage(existing, snapshot);
       applySourceContext(existing, snapshot, req);
@@ -326,6 +332,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     PackageComponentPrice price = new PackageComponentPrice();
     price.setSnapshotId(snapshot == null ? null : snapshot.getId());
     price.setPackageMaterialCode(req.packageMaterialCode);
+    price.setPriceOrgCode(req.priceOrgCode);
     price.setPackageMaterialName(snapshot == null ? null : snapshot.getPackageMaterialName());
     price.setPeriodMonth(req.periodMonth);
     price.setOaNo(blankIfNull(req.oaNo));
@@ -348,6 +355,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
           return concurrent;
         }
         concurrent.setSnapshotId(snapshot == null ? null : snapshot.getId());
+        concurrent.setPriceOrgCode(req.priceOrgCode);
         concurrent.setPackageMaterialName(snapshot == null ? concurrent.getPackageMaterialName() : snapshot.getPackageMaterialName());
         applyPackageUsage(concurrent, snapshot);
         applySourceContext(concurrent, snapshot, req);
@@ -396,12 +404,14 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
       return;
     }
     if (snapshot != null) {
+      price.setPriceOrgCode(snapshot.getPriceOrgCode());
       price.setSourceTopProductCode(snapshot.getSourceTopProductCode());
       price.setSourceBomPurpose(snapshot.getSourceBomPurpose());
       price.setSourceBomSourceType(snapshot.getSourceBomSourceType());
       return;
     }
     if (req != null) {
+      price.setPriceOrgCode(req.priceOrgCode);
       price.setSourceTopProductCode(req.topProductCode);
       price.setSourceBomPurpose(req.bomPurpose);
       price.setSourceBomSourceType(req.sourceType);
@@ -538,6 +548,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     var query = Wrappers.<PackageComponentPrice>lambdaQuery()
         .eq(PackageComponentPrice::getPeriodMonth, req.periodMonth)
         .eq(PackageComponentPrice::getPackageMaterialCode, req.packageMaterialCode)
+        .eq(PackageComponentPrice::getPriceOrgCode, req.priceOrgCode)
         .eq(PackageComponentPrice::getSourceTopProductCode, req.topProductCode);
     if (req.explicitPriceAsOfTime) {
       // 月度调价重试只复用同一 price_as_of_time 的包装价，不能读到后续刷新出的当前价。
@@ -555,6 +566,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
         Wrappers.<PackageComponentPrice>lambdaQuery()
             .eq(PackageComponentPrice::getPeriodMonth, req.periodMonth)
             .eq(PackageComponentPrice::getPackageMaterialCode, req.packageMaterialCode)
+            .eq(PackageComponentPrice::getPriceOrgCode, req.priceOrgCode)
             .eq(PackageComponentPrice::getSourceTopProductCode, req.topProductCode)
             .eq(PackageComponentPrice::getPriceAsOfTime, req.priceAsOfTime)
             .orderByDesc(PackageComponentPrice::getId)
@@ -565,6 +577,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
   private PackageSnapshotRequest toSnapshotRequest(NormalizedRequest req) {
     PackageSnapshotRequest snapshotRequest = new PackageSnapshotRequest();
     snapshotRequest.setPackageMaterialCode(req.packageMaterialCode);
+    snapshotRequest.setPriceOrgCode(req.priceOrgCode);
     snapshotRequest.setPeriodMonth(req.periodMonth);
     snapshotRequest.setQuoteNo(req.quoteNo);
     snapshotRequest.setOaNo(req.oaNo);
@@ -598,8 +611,10 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     LocalDateTime priceAsOfTime = explicitPriceAsOfTime
         ? request.getPriceAsOfTime()
         : quoteDate.atStartOfDay();
+    String priceOrgCode = requiredPriceOrgCode(request.getPriceOrgCode());
     return new NormalizedRequest(
         packageMaterialCode,
+        priceOrgCode,
         periodMonth,
         trimToNull(request.getQuoteNo()),
         trimToNull(request.getOaNo()),
@@ -612,6 +627,13 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
         explicitPriceAsOfTime,
         trimToNull(request.getCalcBatchId()),
         request.isForceRefresh());
+  }
+
+  private String requiredPriceOrgCode(String priceOrgCode) {
+    if (!StringUtils.hasText(priceOrgCode)) {
+      throw new IllegalArgumentException("priceOrgCode 必须由上游报价产品行传入");
+    }
+    return MaterialOrganization.fromPriceOrgCode(priceOrgCode).getPriceOrgCode();
   }
 
   private String routeLabel(PriceTypeRoute route) {
@@ -639,6 +661,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
 
   private record NormalizedRequest(
       String packageMaterialCode,
+      String priceOrgCode,
       String periodMonth,
       String quoteNo,
       String oaNo,

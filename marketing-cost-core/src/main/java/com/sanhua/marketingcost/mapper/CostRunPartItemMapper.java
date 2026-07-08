@@ -62,7 +62,9 @@ public interface CostRunPartItemMapper extends BaseMapper<CostRunPartItem> {
             t2.drawing_no AS partDrawingNo,
             t1.qty_per_top AS partQty,
             t2.shape_attr AS shapeAttr,
-            t2.material AS material
+            t2.material AS material,
+            t1.price_org_code AS priceOrgCode,
+            t1.material_organization_code AS materialOrganizationCode
           FROM lp_bom_costing_row t1
           LEFT JOIN lp_material_master t2
             ON t1.material_code = t2.material_code
@@ -83,7 +85,9 @@ public interface CostRunPartItemMapper extends BaseMapper<CostRunPartItem> {
             t2.drawing_no AS partDrawingNo,
             t1.qty_per_top AS partQty,
             t2.shape_attr AS shapeAttr,
-            t2.material AS material
+            t2.material AS material,
+            t1.price_org_code AS priceOrgCode,
+            t1.material_organization_code AS materialOrganizationCode
           FROM lp_bom_costing_row t1
           LEFT JOIN lp_material_master t2
             ON t1.material_code = t2.material_code

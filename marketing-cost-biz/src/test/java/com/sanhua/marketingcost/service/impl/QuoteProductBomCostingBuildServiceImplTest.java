@@ -14,6 +14,7 @@ import static org.mockito.Mockito.when;
 
 import com.sanhua.marketingcost.dto.FlattenRequest;
 import com.sanhua.marketingcost.dto.FlattenResult;
+import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.quotebom.FormalBomReadResult;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomSourceLineDto;
@@ -37,6 +38,7 @@ import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
+import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.BomByproductCostRuleQueryService;
 import com.sanhua.marketingcost.service.BomFlattenService;
 import com.sanhua.marketingcost.service.BomSettlementRuleQueryService;
@@ -57,11 +59,15 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 class QuoteProductBomCostingBuildServiceImplTest {
 
@@ -95,6 +101,7 @@ class QuoteProductBomCostingBuildServiceImplTest {
 
   @BeforeEach
   void setUp() {
+    setBusinessUnit("COMMERCIAL");
     preparationService = mock(QuoteProductBomPreparationService.class);
     flattenService = mock(BomFlattenService.class);
     formalBomReadService = mock(FormalBomReadService.class);
@@ -140,7 +147,7 @@ class QuoteProductBomCostingBuildServiceImplTest {
             oaFormItemMapper);
     when(settlementRuleQueryService.listEnabledCandidates()).thenReturn(List.of());
     when(byproductRuleQueryService.listEnabledCandidates()).thenReturn(List.of());
-    when(byproductSettlementAdapter.read(any(), any(), any(), any()))
+    when(byproductSettlementAdapter.read(any(), any(), any(), any(), any()))
         .thenReturn(new BomByproductSettlementReadResult(List.of(), List.of(), List.of()));
     doAnswer(invocation -> {
       BomCostingRow row = invocation.getArgument(0, BomCostingRow.class);
@@ -148,6 +155,11 @@ class QuoteProductBomCostingBuildServiceImplTest {
       return 1;
     }).when(costingRowMapper).insert(any(BomCostingRow.class));
     when(sourceRefMapper.insert(any(BomCostingRowSourceRef.class))).thenReturn(1);
+  }
+
+  @AfterEach
+  void tearDown() {
+    SecurityContextHolder.clearContext();
   }
 
   @Test
@@ -167,6 +179,8 @@ class QuoteProductBomCostingBuildServiceImplTest {
     verify(flattenService).flatten(flattenCaptor.capture());
     assertThat(flattenCaptor.getValue().getAsOfDate()).isEqualTo(LocalDate.now());
     assertThat(flattenCaptor.getValue().getPeriodMonth()).isEqualTo("2026-05");
+    assertThat(flattenCaptor.getValue().getPriceOrgCode()).isEqualTo("210");
+    assertThat(flattenCaptor.getValue().getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
     ArgumentCaptor<BomCostingRowSourceRef> refCaptor = ArgumentCaptor.forClass(BomCostingRowSourceRef.class);
     verify(sourceRefMapper, org.mockito.Mockito.times(2)).insert(refCaptor.capture());
     assertThat(refCaptor.getAllValues()).allSatisfy(ref -> assertThat(ref.getSourcePartType()).isEqualTo("RAW_PRODUCT_BOM"));
@@ -217,12 +231,17 @@ class QuoteProductBomCostingBuildServiceImplTest {
     verify(costingRowMapper).insert(rowCaptor.capture());
     assertThat(rowCaptor.getValue().getOaFormItemId()).isEqualTo(10L);
     assertThat(rowCaptor.getValue().getManualModified()).isEqualTo(0);
+    assertThat(rowCaptor.getValue().getPriceOrgCode()).isEqualTo("210");
+    assertThat(rowCaptor.getValue().getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
   }
 
   @Test
   void bareFormalBodyAndApprovedPackageBuildsCombinedSources() {
     QuoteBomPreparationRecord record = record("BARE", 501L);
     record.setReviewStatus("APPROVED");
+    record.setOaNo("FI-SC-020-20260707-001");
+    record.setPriceOrgCode("220");
+    record.setMaterialOrganizationCode("PLATE");
     when(taskMapper.selectById(501L)).thenReturn(task("APPROVED"));
     when(preparationRecordMapper.selectOne(any())).thenReturn(record);
     when(supplementVersionMapper.selectOne(any())).thenReturn(null);
@@ -231,11 +250,15 @@ class QuoteProductBomCostingBuildServiceImplTest {
             eq("REF-001"), eq("2026-05"), isNull(), nullable(LocalDate.class)))
         .thenReturn(formalFound());
     when(formalBomReadService.read(
-            eq("REF-001"), eq("2026-05"), isNull(), nullable(LocalDate.class), any()))
+            eq("REF-001"),
+            eq("2026-05"),
+            isNull(),
+            nullable(LocalDate.class),
+            any(QuoteDataOrganization.class)))
         .thenReturn(formalFound());
     when(formalBomReadService.read(any(), any(), any(), any()))
         .thenReturn(formalFound());
-    when(formalBomReadService.read(any(), any(), any(), any(), any()))
+    when(formalBomReadService.read(any(), any(), any(), any(), any(QuoteDataOrganization.class)))
         .thenReturn(formalFound());
     when(packageReferenceDetailMapper.selectList(any())).thenReturn(List.of(packageDetail("BOX-1")));
 
@@ -244,6 +267,64 @@ class QuoteProductBomCostingBuildServiceImplTest {
     assertThat(response.costingRowsWritten()).isEqualTo(2);
     assertThat(response.sourceTypeCounts()).containsEntry("BARE_PRODUCT_BOM", 1);
     assertThat(response.sourceTypeCounts()).containsEntry("REFERENCED_PACKAGE", 1);
+    ArgumentCaptor<QuoteDataOrganization> organizationCaptor =
+        ArgumentCaptor.forClass(QuoteDataOrganization.class);
+    verify(formalBomReadService)
+        .read(
+            eq("REF-001"),
+            eq("2026-05"),
+            isNull(),
+            nullable(LocalDate.class),
+            organizationCaptor.capture());
+    assertThat(organizationCaptor.getValue().priceOrgCode()).isEqualTo("220");
+    assertThat(organizationCaptor.getValue().materialOrganizationCode()).isEqualTo("PLATE");
+  }
+
+  @Test
+  void preparedFormalBodyUsesRecordOrganizationEvenWhenOaDoesNotInferPlate() {
+    QuoteBomPreparationRecord record = record("BARE", 501L);
+    record.setReviewStatus("APPROVED");
+    record.setOaNo("OA-001");
+    record.setPriceOrgCode("220");
+    record.setMaterialOrganizationCode("PLATE");
+    when(taskMapper.selectById(501L)).thenReturn(task("APPROVED"));
+    when(preparationRecordMapper.selectOne(any())).thenReturn(record);
+    when(supplementVersionMapper.selectOne(any())).thenReturn(null);
+    when(packageReferenceMapper.selectOne(any())).thenReturn(packageReference());
+    when(formalBomReadService.read(any(), any(), any(), any(), any(QuoteDataOrganization.class)))
+        .thenReturn(formalFound());
+    when(packageReferenceDetailMapper.selectList(any())).thenReturn(List.of(packageDetail("BOX-1")));
+
+    service.buildByTask(501L);
+
+    ArgumentCaptor<QuoteDataOrganization> organizationCaptor =
+        ArgumentCaptor.forClass(QuoteDataOrganization.class);
+    verify(formalBomReadService)
+        .read(
+            eq("REF-001"),
+            eq("2026-05"),
+            isNull(),
+            nullable(LocalDate.class),
+            organizationCaptor.capture());
+    assertThat(organizationCaptor.getValue().priceOrgCode()).isEqualTo("220");
+    assertThat(organizationCaptor.getValue().materialOrganizationCode()).isEqualTo("PLATE");
+  }
+
+  @Test
+  void preparedRowsPassRecordPriceOrgToByproductRead() {
+    QuoteBomPreparationRecord record = record("NON_BARE", 501L);
+    record.setReviewStatus("APPROVED");
+    record.setPriceOrgCode("220");
+    record.setMaterialOrganizationCode("PLATE");
+    when(taskMapper.selectById(501L)).thenReturn(task("APPROVED"));
+    when(preparationRecordMapper.selectOne(any())).thenReturn(record);
+    when(supplementVersionMapper.selectOne(any())).thenReturn(version("NON_BARE_FULL_BOM"));
+    when(supplementDetailMapper.selectList(any())).thenReturn(List.of(supplementDetail("BODY-1")));
+
+    service.buildByTask(501L);
+
+    verify(byproductSettlementAdapter)
+        .read(any(), any(), eq("220"), eq("COMMERCIAL"), eq("主制造"));
   }
 
   @Test
@@ -262,6 +343,31 @@ class QuoteProductBomCostingBuildServiceImplTest {
     assertThat(response.costingRowsWritten()).isEqualTo(2);
     assertThat(response.sourceTypeCounts()).containsEntry("MANUAL_SUPPLEMENT", 1);
     assertThat(response.sourceTypeCounts()).containsEntry("REFERENCED_PACKAGE", 1);
+    ArgumentCaptor<BomCostingRow> rowCaptor = ArgumentCaptor.forClass(BomCostingRow.class);
+    verify(costingRowMapper, org.mockito.Mockito.times(2)).insert(rowCaptor.capture());
+    assertThat(rowCaptor.getAllValues())
+        .allSatisfy(
+            row -> {
+              assertThat(row.getPriceOrgCode()).isEqualTo("210");
+              assertThat(row.getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
+            });
+  }
+
+  @Test
+  void preparedRowsFailWhenPreparationRecordMissingOrganization() {
+    QuoteBomPreparationRecord record = record("NON_BARE", 501L);
+    record.setReviewStatus("APPROVED");
+    record.setPriceOrgCode(null);
+    record.setMaterialOrganizationCode(null);
+    when(taskMapper.selectById(501L)).thenReturn(task("APPROVED"));
+    when(preparationRecordMapper.selectOne(any())).thenReturn(record);
+    when(supplementVersionMapper.selectOne(any())).thenReturn(version("NON_BARE_FULL_BOM"));
+    when(supplementDetailMapper.selectList(any())).thenReturn(List.of(supplementDetail("MAT-1")));
+
+    assertThatThrownBy(() -> service.buildByTask(501L))
+        .isInstanceOf(QuoteIngestException.class)
+        .hasMessageContaining("缺少上游组织");
+    verify(costingRowMapper, never()).insert(any(BomCostingRow.class));
   }
 
   @Test
@@ -285,6 +391,8 @@ class QuoteProductBomCostingBuildServiceImplTest {
     record.setOaFormItemId(10L);
     record.setOaNo("OA-001");
     record.setQuoteProductCode("FIN-001");
+    record.setPriceOrgCode("210");
+    record.setMaterialOrganizationCode("COMMERCIAL");
     record.setProductType(productType);
     record.setNeedPackage("BARE".equals(productType) ? 1 : 0);
     record.setReferenceFinishedCode("BARE".equals(productType) ? "REF-001" : null);
@@ -295,6 +403,13 @@ class QuoteProductBomCostingBuildServiceImplTest {
     record.setTaskId(taskId);
     record.setActiveFlag(1);
     return record;
+  }
+
+  private void setBusinessUnit(String businessUnitType) {
+    UsernamePasswordAuthenticationToken auth =
+        new UsernamePasswordAuthenticationToken("tester", "N/A", List.of());
+    auth.setDetails(Map.of(BusinessUnitContext.KEY_BUSINESS_UNIT_TYPE, businessUnitType));
+    SecurityContextHolder.getContext().setAuthentication(auth);
   }
 
   private BomSupplementTask task(String status) {
@@ -389,7 +504,9 @@ class QuoteProductBomCostingBuildServiceImplTest {
                 1,
                 301L,
                 null,
-                0)),
+                0,
+                "210",
+                "COMMERCIAL")),
         null);
   }
 

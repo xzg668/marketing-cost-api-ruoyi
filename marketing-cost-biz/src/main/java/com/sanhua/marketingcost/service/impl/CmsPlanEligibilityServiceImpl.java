@@ -59,6 +59,7 @@ public class CmsPlanEligibilityServiceImpl implements CmsPlanEligibilityService 
         planCostRawMapper.selectList(
             new QueryWrapper<CmsPlanCostRaw>()
                 .eq(importBatchId != null, "import_batch_id", importBatchId)
+                .eq(StringUtils.hasText(businessUnitType), "business_unit_type", businessUnitType)
                 .in("parent_code", normalizedParentCodes)
                 .in("effective_period", normalizedPeriods));
     Map<String, List<CmsPlanCostRaw>> grouped = new LinkedHashMap<>();

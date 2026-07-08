@@ -1,18 +1,22 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
-import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
 import java.math.BigDecimal;
 import java.util.List;
@@ -22,12 +26,12 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class PricePrepareBomItemLoaderImplTest {
 
   private BomCostingRowMapper costingRowMapper;
   private BomRawHierarchyMapper rawHierarchyMapper;
-  private OaFormItemMapper oaFormItemMapper;
   private PackageComponentIdentifyService packageComponentIdentifyService;
   private PricePrepareBomItemLoaderImpl loader;
 
@@ -43,13 +47,11 @@ class PricePrepareBomItemLoaderImplTest {
   void setUp() {
     costingRowMapper = mock(BomCostingRowMapper.class);
     rawHierarchyMapper = mock(BomRawHierarchyMapper.class);
-    oaFormItemMapper = mock(OaFormItemMapper.class);
     packageComponentIdentifyService = mock(PackageComponentIdentifyService.class);
     loader =
         new PricePrepareBomItemLoaderImpl(
             costingRowMapper,
             rawHierarchyMapper,
-            oaFormItemMapper,
             packageComponentIdentifyService);
   }
 
@@ -74,6 +76,33 @@ class PricePrepareBomItemLoaderImplTest {
     assertThat(packageParent.getParentCode()).isEqualTo("1079900000536");
     assertThat(packageParent.getMaterialName()).isEqualTo("包装组件");
     assertThat(packageParent.getQtyPerTop()).isEqualByComparingTo("1.00000000");
+    assertThat(packageParent.getPriceOrgCode()).isEqualTo("210");
+    assertThat(packageParent.getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
+    verify(packageComponentIdentifyService).batchIdentify(any(), eq("COMMERCIAL"));
+    assertRawHierarchyQueryUsesPriceOrg("210");
+  }
+
+  @Test
+  @DisplayName("板换 OA 补包装父节点时只回查 220 raw hierarchy")
+  void appendsSyntheticPackageParentRowsFromPlateOrganizationOnly() {
+    BomCostingRow child =
+        costingRow("FI-SC-020-20260707-001", "PLATE-TOP", "PLATE-PKG", "PLATE-CHILD", "1");
+    child.setPriceOrgCode("220");
+    child.setMaterialOrganizationCode("PLATE");
+    when(costingRowMapper.selectList(any())).thenReturn(List.of(child));
+    when(packageComponentIdentifyService.batchIdentify(any(), anyString()))
+        .thenReturn(Map.of("PLATE-PKG", true));
+    when(rawHierarchyMapper.selectList(any()))
+        .thenReturn(List.of(rawPackageParent("PLATE-TOP", "PLATE-PKG")));
+
+    List<BomCostingRow> rows = loader.loadByOaNo("FI-SC-020-20260707-001");
+
+    assertThat(rows).hasSize(2);
+    assertThat(rows.get(1).getMaterialCode()).isEqualTo("PLATE-PKG");
+    assertThat(rows.get(1).getPriceOrgCode()).isEqualTo("220");
+    assertThat(rows.get(1).getMaterialOrganizationCode()).isEqualTo("PLATE");
+    verify(packageComponentIdentifyService).batchIdentify(any(), eq("PLATE"));
+    assertRawHierarchyQueryUsesPriceOrg("220");
   }
 
   @Test
@@ -97,6 +126,29 @@ class PricePrepareBomItemLoaderImplTest {
         .hasSize(1);
   }
 
+  @Test
+  @DisplayName("成本行缺上游组织时不按 OA 或产品名重猜")
+  void failsWhenCostingRowMissingOrganization() {
+    BomCostingRow child = costingRow("FI-SC-020-20260707-001", "PLATE-TOP", "PLATE-PKG", "PLATE-CHILD", "1");
+    child.setPriceOrgCode(null);
+    child.setMaterialOrganizationCode(null);
+    when(costingRowMapper.selectList(any())).thenReturn(List.of(child));
+
+    assertThatThrownBy(() -> loader.loadByOaNo("FI-SC-020-20260707-001"))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("缺少上游组织");
+  }
+
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  private void assertRawHierarchyQueryUsesPriceOrg(String expectedPriceOrgCode) {
+    ArgumentCaptor<Wrapper> captor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(rawHierarchyMapper).selectList(captor.capture());
+    Wrapper wrapper = captor.getValue();
+    assertThat(wrapper.getSqlSegment()).contains("price_org_code");
+    assertThat(((AbstractWrapper<?, ?, ?>) wrapper).getParamNameValuePairs())
+        .containsValue(expectedPriceOrgCode);
+  }
+
   private BomCostingRow costingRow(
       String oaNo, String topProductCode, String parentCode, String materialCode, String qty) {
     BomCostingRow row = new BomCostingRow();
@@ -107,6 +159,8 @@ class PricePrepareBomItemLoaderImplTest {
     row.setMaterialName(materialCode + "-name");
     row.setQtyPerParent(new BigDecimal(qty));
     row.setQtyPerTop(new BigDecimal(qty));
+    row.setPriceOrgCode("210");
+    row.setMaterialOrganizationCode("COMMERCIAL");
     return row;
   }
 

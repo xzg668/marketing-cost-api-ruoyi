@@ -1,13 +1,12 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
-import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
-import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
 import com.sanhua.marketingcost.service.PricePrepareBomItemLoader;
 import java.util.ArrayList;
@@ -25,17 +24,14 @@ public class PricePrepareBomItemLoaderImpl implements PricePrepareBomItemLoader 
 
   private final BomCostingRowMapper bomCostingRowMapper;
   private final BomRawHierarchyMapper bomRawHierarchyMapper;
-  private final OaFormItemMapper oaFormItemMapper;
   private final PackageComponentIdentifyService packageComponentIdentifyService;
 
   public PricePrepareBomItemLoaderImpl(
       BomCostingRowMapper bomCostingRowMapper,
       BomRawHierarchyMapper bomRawHierarchyMapper,
-      OaFormItemMapper oaFormItemMapper,
       PackageComponentIdentifyService packageComponentIdentifyService) {
     this.bomCostingRowMapper = bomCostingRowMapper;
     this.bomRawHierarchyMapper = bomRawHierarchyMapper;
-    this.oaFormItemMapper = oaFormItemMapper;
     this.packageComponentIdentifyService = packageComponentIdentifyService;
   }
 
@@ -97,33 +93,55 @@ public class PricePrepareBomItemLoaderImpl implements PricePrepareBomItemLoader 
   }
 
   private List<BomCostingRow> loadSyntheticPackageParents(String oaNo, List<BomCostingRow> costingRows) {
-    Set<String> parentCodes = new LinkedHashSet<>();
-    Set<String> topProductCodes = new LinkedHashSet<>();
-    Set<String> existingKeys = new LinkedHashSet<>();
+    Map<String, OrgScopedRows> scopes = new LinkedHashMap<>();
     for (BomCostingRow row : costingRows) {
       if (row == null) {
         continue;
       }
+      QuoteDataOrganization organization = requiredOrganization(row);
+      OrgScopedRows scope =
+          scopes.computeIfAbsent(
+              organization.priceOrgCode(),
+              ignored ->
+                  new OrgScopedRows(
+                      organization,
+                      new ArrayList<>(),
+                      new LinkedHashSet<>(),
+                      new LinkedHashSet<>(),
+                      new LinkedHashSet<>()));
+      scope.rows().add(row);
       String top = trimToNull(row.getTopProductCode());
       String material = trimToNull(row.getMaterialCode());
       if (top != null) {
-        topProductCodes.add(top);
+        scope.topProductCodes().add(top);
       }
       if (top != null && material != null) {
-        existingKeys.add(key(top, material));
+        scope.existingKeys().add(key(top, material));
       }
       String parent = trimToNull(row.getParentCode());
       if (parent != null) {
-        parentCodes.add(parent);
+        scope.parentCodes().add(parent);
       }
     }
-    if (parentCodes.isEmpty() || topProductCodes.isEmpty()) {
+    if (scopes.isEmpty()) {
+      return List.of();
+    }
+
+    List<BomCostingRow> syntheticRows = new ArrayList<>();
+    for (OrgScopedRows scope : scopes.values()) {
+      syntheticRows.addAll(loadSyntheticPackageParentsForScope(oaNo, scope));
+    }
+    return syntheticRows;
+  }
+
+  private List<BomCostingRow> loadSyntheticPackageParentsForScope(String oaNo, OrgScopedRows scope) {
+    if (scope.parentCodes().isEmpty() || scope.topProductCodes().isEmpty()) {
       return Collections.emptyList();
     }
 
     Map<String, Boolean> packageFlags =
         packageComponentIdentifyService.batchIdentify(
-            parentCodes, resolveMaterialOrganization(oaNo, costingRows));
+            scope.parentCodes(), scope.organization().materialOrganizationCode());
     Set<String> packageCodes = new LinkedHashSet<>();
     for (Map.Entry<String, Boolean> entry : packageFlags.entrySet()) {
       if (Boolean.TRUE.equals(entry.getValue())) {
@@ -137,7 +155,8 @@ public class PricePrepareBomItemLoaderImpl implements PricePrepareBomItemLoader 
     List<BomRawHierarchy> rawParents =
         bomRawHierarchyMapper.selectList(
             Wrappers.lambdaQuery(BomRawHierarchy.class)
-                .in(BomRawHierarchy::getTopProductCode, topProductCodes)
+                .eq(BomRawHierarchy::getPriceOrgCode, scope.organization().priceOrgCode())
+                .in(BomRawHierarchy::getTopProductCode, scope.topProductCodes())
                 .in(BomRawHierarchy::getMaterialCode, packageCodes)
                 .orderByAsc(BomRawHierarchy::getTopProductCode)
                 .orderByAsc(BomRawHierarchy::getLevel)
@@ -159,7 +178,7 @@ public class PricePrepareBomItemLoaderImpl implements PricePrepareBomItemLoader 
 
     List<BomCostingRow> syntheticRows = new ArrayList<>();
     Set<String> addedKeys = new LinkedHashSet<>();
-    for (BomCostingRow childRow : costingRows) {
+    for (BomCostingRow childRow : scope.rows()) {
       if (childRow == null) {
         continue;
       }
@@ -169,14 +188,14 @@ public class PricePrepareBomItemLoaderImpl implements PricePrepareBomItemLoader 
         continue;
       }
       String syntheticKey = key(top, parent);
-      if (existingKeys.contains(syntheticKey) || addedKeys.contains(syntheticKey)) {
+      if (scope.existingKeys().contains(syntheticKey) || addedKeys.contains(syntheticKey)) {
         continue;
       }
       BomRawHierarchy raw = rawByTopAndMaterial.get(syntheticKey);
       if (raw == null) {
         continue;
       }
-      BomCostingRow syntheticRow = toSyntheticCostingRow(oaNo, raw);
+      BomCostingRow syntheticRow = toSyntheticCostingRow(oaNo, raw, scope.organization());
       syntheticRow.setOaFormItemId(childRow.getOaFormItemId());
       syntheticRow.setPeriodMonth(childRow.getPeriodMonth());
       syntheticRows.add(syntheticRow);
@@ -185,41 +204,23 @@ public class PricePrepareBomItemLoaderImpl implements PricePrepareBomItemLoader 
     return syntheticRows;
   }
 
-  private String resolveMaterialOrganization(String oaNo, List<BomCostingRow> costingRows) {
-    if (costingRows == null || costingRows.isEmpty()) {
-      return MaterialOrganization.forQuoteProcess(null, oaNo);
+  private QuoteDataOrganization requiredOrganization(BomCostingRow row) {
+    String priceOrgCode = row == null ? null : trimToNull(row.getPriceOrgCode());
+    String materialOrganizationCode =
+        row == null ? null : trimToNull(row.getMaterialOrganizationCode());
+    if (!StringUtils.hasText(priceOrgCode) || !StringUtils.hasText(materialOrganizationCode)) {
+      throw new IllegalStateException("价格准备 BOM 行缺少上游组织");
     }
-    Map<Long, String> productNames = new LinkedHashMap<>();
-    for (BomCostingRow row : costingRows) {
-      if (row == null) {
-        continue;
-      }
-      String organization =
-          MaterialOrganization.forQuoteProcess(
-              null, row.getOaNo(), resolveProductName(row.getOaFormItemId(), productNames));
-      if (MaterialOrganization.PLATE.getCode().equals(organization)) {
-        return organization;
-      }
-    }
-    return MaterialOrganization.forQuoteProcess(null, oaNo);
+    return MaterialOrganization.normalizeQuoteDataOrganization(
+        new QuoteDataOrganization(priceOrgCode, materialOrganizationCode));
   }
 
-  private String resolveProductName(Long oaFormItemId, Map<Long, String> productNames) {
-    if (oaFormItemId == null) {
-      return null;
-    }
-    if (productNames.containsKey(oaFormItemId)) {
-      return productNames.get(oaFormItemId);
-    }
-    OaFormItem item = oaFormItemMapper.selectById(oaFormItemId);
-    String productName = item == null ? null : item.getProductName();
-    productNames.put(oaFormItemId, productName);
-    return productName;
-  }
-
-  private BomCostingRow toSyntheticCostingRow(String oaNo, BomRawHierarchy raw) {
+  private BomCostingRow toSyntheticCostingRow(
+      String oaNo, BomRawHierarchy raw, QuoteDataOrganization organization) {
     BomCostingRow row = new BomCostingRow();
     row.setOaNo(oaNo);
+    row.setPriceOrgCode(organization.priceOrgCode());
+    row.setMaterialOrganizationCode(organization.materialOrganizationCode());
     row.setTopProductCode(raw.getTopProductCode());
     row.setParentCode(raw.getParentCode());
     row.setMaterialCode(raw.getMaterialCode());
@@ -267,4 +268,11 @@ public class PricePrepareBomItemLoaderImpl implements PricePrepareBomItemLoader 
     }
     return codes;
   }
+
+  private record OrgScopedRows(
+      QuoteDataOrganization organization,
+      List<BomCostingRow> rows,
+      Set<String> parentCodes,
+      Set<String> topProductCodes,
+      Set<String> existingKeys) {}
 }

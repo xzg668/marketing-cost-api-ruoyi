@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.sanhua.marketingcost.dto.AuxCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
+import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.CmsCostSourceEffective;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
@@ -224,7 +225,10 @@ class CostRunCostItemServiceImplTest {
             masterMapper,
             rawMapper,
             bomMapper);
-    List<CostRunCostItemDto> items = svc.listByMaterialCodes("OA-1", "P-1", Set.of("P-1"), ignored -> {});
+    List<CostRunCostItemDto> items =
+        svc.listByMaterialCodes(
+            "OA-1", "P-1", Set.of("P-1"), commercialContext("OA-1", "P-1"), null, true,
+            ignored -> {});
 
     CostRunCostItemDto directItem = findItem(items, "DIRECT_LABOR");
     CostRunCostItemDto indirectItem = findItem(items, "INDIRECT_LABOR");
@@ -272,7 +276,8 @@ class CostRunCostItemServiceImplTest {
     MaterialMasterRaw raw = new MaterialMasterRaw();
     raw.setMaterialCode("1001900001090");
     raw.setProductionDivision("商用部品事业部");
-    when(rawMapper.selectByLatestBatchAndCodes(any(), any())).thenReturn(List.of(raw));
+    when(rawMapper.selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL")))
+        .thenReturn(List.of(raw));
     when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("1001900001090"), "COMMERCIAL"))
         .thenReturn(List.of());
     when(partMapper.selectList(any())).thenReturn(List.of());
@@ -283,6 +288,7 @@ class CostRunCostItemServiceImplTest {
             departmentRate("0.005100", "1.100000"),
             departmentRate("0.028300", "1.100000"),
             departmentRate("0.053000", "1.100000"),
+            departmentRate("0.000000", "1.000000"),
             null);
 
     CostRunCostItemServiceImpl svc =
@@ -303,7 +309,14 @@ class CostRunCostItemServiceImplTest {
             departmentMapper);
 
     List<CostRunCostItemDto> items =
-        svc.listByMaterialCodes("OA-DEPT", "1001900001090", Set.of("1001900001090"), ignored -> {});
+        svc.listByMaterialCodes(
+            "OA-DEPT",
+            "1001900001090",
+            Set.of("1001900001090"),
+            commercialContext("OA-DEPT", "1001900001090"),
+            null,
+            true,
+            ignored -> {});
 
     CostRunCostItemDto overhaul = findItem(items, "OVERHAUL");
     CostRunCostItemDto tooling = findItem(items, "TOOLING_REPAIR");
@@ -351,7 +364,7 @@ class CostRunCostItemServiceImplTest {
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any()))
+    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of());
     when(bomMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
@@ -369,7 +382,13 @@ class CostRunCostItemServiceImplTest {
             bomMapper);
 
     svc.listByMaterialCodes(
-        "OA-OLD-APPLY", "P-CURRENT-YEAR", Set.of("P-CURRENT-YEAR"), ignored -> {});
+        "OA-OLD-APPLY",
+        "P-CURRENT-YEAR",
+        Set.of("P-CURRENT-YEAR"),
+        commercialContext("OA-OLD-APPLY", "P-CURRENT-YEAR"),
+        null,
+        true,
+        ignored -> {});
 
     verify(ensureService).ensureDefaultSources(eq(currentYear), eq("SYSTEM_AUTO"), eq("COMMERCIAL"));
     verify(auxMapper).selectEffectiveAuxCostItems(currentYear, Set.of("P-CURRENT-YEAR"), "COMMERCIAL");
@@ -430,7 +449,10 @@ class CostRunCostItemServiceImplTest {
             masterMapper,
             rawMapper,
             bomMapper);
-    List<CostRunCostItemDto> items = svc.listByMaterialCodes("OA-REF", "P-NEW", Set.of("P-NEW"), ignored -> {});
+    List<CostRunCostItemDto> items =
+        svc.listByMaterialCodes(
+            "OA-REF", "P-NEW", Set.of("P-NEW"), commercialContext("OA-REF", "P-NEW"), null, true,
+            ignored -> {});
 
     CostRunCostItemDto directItem = findItem(items, "DIRECT_LABOR");
     CostRunCostItemDto indirectItem = findItem(items, "INDIRECT_LABOR");
@@ -466,7 +488,14 @@ class CostRunCostItemServiceImplTest {
             formMapper, formItemMapper, salaryMapper, effectiveMapper, auxMapper, partMapper,
             masterMapper, rawMapper, bomMapper, qualityMapper);
     List<CostRunCostItemDto> items =
-        svc.listByMaterialCodes("OA-LOSS", "P-LOSS", Set.of("P-LOSS"), ignored -> {});
+        svc.listByMaterialCodes(
+            "OA-LOSS",
+            "P-LOSS",
+            Set.of("P-LOSS"),
+            commercialContext("OA-LOSS", "P-LOSS"),
+            null,
+            true,
+            ignored -> {});
 
     CostRunCostItemDto lossItem = findItem(items, "LOSS");
     assertThat(lossItem.getRate()).isEqualByComparingTo("0.010000");
@@ -492,7 +521,8 @@ class CostRunCostItemServiceImplTest {
     MaterialMasterRaw raw = new MaterialMasterRaw();
     raw.setMaterialCode("P-MODEL");
     raw.setMaterialModel("MODEL-X");
-    when(rawMapper.selectByLatestBatchAndCodes(any(), any())).thenReturn(List.of(raw));
+    when(rawMapper.selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL")))
+        .thenReturn(List.of(raw));
     QualityLossRate modelRate = new QualityLossRate();
     modelRate.setId(11L);
     modelRate.setLossRate(new BigDecimal("0.020000"));
@@ -503,7 +533,14 @@ class CostRunCostItemServiceImplTest {
             formMapper, formItemMapper, salaryMapper, effectiveMapper, auxMapper, partMapper,
             masterMapper, rawMapper, bomMapper, qualityMapper);
     List<CostRunCostItemDto> items =
-        svc.listByMaterialCodes("OA-LOSS", "P-MODEL", Set.of("P-MODEL"), ignored -> {});
+        svc.listByMaterialCodes(
+            "OA-LOSS",
+            "P-MODEL",
+            Set.of("P-MODEL"),
+            commercialContext("OA-LOSS", "P-MODEL"),
+            null,
+            true,
+            ignored -> {});
 
     CostRunCostItemDto lossItem = findItem(items, "LOSS");
     assertThat(lossItem.getRate()).isEqualByComparingTo("0.020000");
@@ -541,7 +578,7 @@ class CostRunCostItemServiceImplTest {
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any()))
+    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of());
     when(bomMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     form.setProcessCode("FI-SC-006");
@@ -563,7 +600,14 @@ class CostRunCostItemServiceImplTest {
             masterMapper, rawMapper, bomMapper, mock(QualityLossRateMapper.class), lookup,
             threeExpenseRateMapper);
     List<CostRunCostItemDto> items =
-        svc.listByMaterialCodes("OA-Q10", "P-Q10", Set.of("P-Q10"), ignored -> {});
+        svc.listByMaterialCodes(
+            "OA-Q10",
+            "P-Q10",
+            Set.of("P-Q10"),
+            commercialContext("OA-Q10", "P-Q10"),
+            null,
+            true,
+            ignored -> {});
 
     assertThat(findItem(items, "MGMT_EXP").getRate()).isEqualByComparingTo("0.080000");
     assertThat(findItem(items, "SALES_EXP").getRate()).isEqualByComparingTo("0.200000");
@@ -607,7 +651,7 @@ class CostRunCostItemServiceImplTest {
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any()))
+    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of());
     when(bomMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     ThreeExpenseRate rate = new ThreeExpenseRate();
@@ -629,7 +673,14 @@ class CostRunCostItemServiceImplTest {
             masterMapper, rawMapper, bomMapper, mock(QualityLossRateMapper.class), lookup,
             threeExpenseRateMapper);
     List<CostRunCostItemDto> items =
-        svc.listByMaterialCodes("FI-SC-006-20260327-037", "1079900000536", Set.of("1079900000536"), ignored -> {});
+        svc.listByMaterialCodes(
+            "FI-SC-006-20260327-037",
+            "1079900000536",
+            Set.of("1079900000536"),
+            commercialContext("FI-SC-006-20260327-037", "1079900000536"),
+            null,
+            true,
+            ignored -> {});
 
     assertThat(findItem(items, "MGMT_EXP").getRate()).isEqualByComparingTo("0.100000");
     assertThat(findItem(items, "SALES_EXP").getRate()).isEqualByComparingTo("0.250000");
@@ -668,7 +719,7 @@ class CostRunCostItemServiceImplTest {
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any()))
+    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of());
     when(bomMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
@@ -677,7 +728,14 @@ class CostRunCostItemServiceImplTest {
             formMapper, formItemMapper, salaryMapper, effectiveMapper, auxMapper, partMapper,
             masterMapper, rawMapper, bomMapper, mock(QualityLossRateMapper.class), lookup);
     List<CostRunCostItemDto> items =
-        svc.listByMaterialCodes("OA-Q10", "P-Q10", Set.of("P-Q10"), ignored -> {});
+        svc.listByMaterialCodes(
+            "OA-Q10",
+            "P-Q10",
+            Set.of("P-Q10"),
+            commercialContext("OA-Q10", "P-Q10"),
+            null,
+            true,
+            ignored -> {});
 
     assertThat(findItem(items, "MGMT_EXP").getRate()).isNull();
     assertThat(findItem(items, "MGMT_EXP").getRemark())
@@ -1053,7 +1111,7 @@ class CostRunCostItemServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
 
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any()))
+    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of(newRawMaster("9830000026238", "包装组件")));
     when(partMapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(
@@ -1068,6 +1126,25 @@ class CostRunCostItemServiceImplTest {
   }
 
   @Test
+  @DisplayName("T24 包装聚合：板换部品按 PLATE 组织识别包装组件父件")
+  void bucketPackageUsesPlateOrganization() {
+    CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
+
+    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("PLATE")))
+        .thenReturn(List.of(newRawMaster("9830000026238", "包装组件")));
+    when(partMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(newPart("9830000026238", new BigDecimal("2.000000"), "220", "PLATE")));
+
+    CostRunCostItemServiceImpl svc = buildBucketSvc(partMapper, rawMapper, bomMapper);
+
+    assertThat(svc.sumPackageComponentParentAmount("OA-1", "1079900000536"))
+        .isEqualByComparingTo(new BigDecimal("2.000000"));
+    verify(rawMapper).selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("PLATE"));
+  }
+
+  @Test
   @DisplayName("T24 包装聚合：BOM 找不到包装组件父件 → 返 0（buildBucketItems 跳过此行）")
   void bucketPackage_noParent() {
     CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
@@ -1075,7 +1152,8 @@ class CostRunCostItemServiceImplTest {
     BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
 
     // raw 主档无包装组件
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any())).thenReturn(List.of());
+    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
+        .thenReturn(List.of());
 
     CostRunCostItemServiceImpl svc = buildBucketSvc(partMapper, rawMapper, bomMapper);
     assertThat(svc.sumPackageComponentParentAmount("OA-1", "P-1"))
@@ -1089,7 +1167,7 @@ class CostRunCostItemServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
 
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any()))
+    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of(newRawMaster("9830000026238", "包装组件")));
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of(newPart("NORMAL", BigDecimal.ONE)));
 
@@ -1101,9 +1179,24 @@ class CostRunCostItemServiceImplTest {
   // ---------- 辅助 ----------
 
   private static CostRunPartItem newPart(String code, BigDecimal amount) {
+    return newPart(code, amount, "210", "COMMERCIAL");
+  }
+
+  private static CostRunContext commercialContext(String oaNo, String productCode) {
+    CostRunContext context =
+        CostRunContext.quote(oaNo, 1L, productCode, null, null, "COMMERCIAL", "2026-06", "OBJ");
+    context.setPriceOrgCode("210");
+    context.setMaterialOrganizationCode("COMMERCIAL");
+    return context;
+  }
+
+  private static CostRunPartItem newPart(
+      String code, BigDecimal amount, String priceOrgCode, String materialOrganizationCode) {
     CostRunPartItem p = new CostRunPartItem();
     p.setPartCode(code);
     p.setAmount(amount);
+    p.setPriceOrgCode(priceOrgCode);
+    p.setMaterialOrganizationCode(materialOrganizationCode);
     return p;
   }
 
@@ -1168,7 +1261,7 @@ class CostRunCostItemServiceImplTest {
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any()))
+    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of());
     when(bomMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
   }

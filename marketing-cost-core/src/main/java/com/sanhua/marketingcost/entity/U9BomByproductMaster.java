@@ -11,6 +11,7 @@ import java.time.LocalDateTime;
 public class U9BomByproductMaster {
   @TableId(type = IdType.AUTO)
   private Long id;
+  private String priceOrgCode;
   private String parentMaterialNo;
   private String parentMaterialName;
   private String parentMaterialSpec;
@@ -38,6 +39,8 @@ public class U9BomByproductMaster {
 
   public Long getId() { return id; }
   public void setId(Long id) { this.id = id; }
+  public String getPriceOrgCode() { return priceOrgCode; }
+  public void setPriceOrgCode(String priceOrgCode) { this.priceOrgCode = priceOrgCode; }
   public String getParentMaterialNo() { return parentMaterialNo; }
   public void setParentMaterialNo(String parentMaterialNo) { this.parentMaterialNo = parentMaterialNo; }
   public String getParentMaterialName() { return parentMaterialName; }

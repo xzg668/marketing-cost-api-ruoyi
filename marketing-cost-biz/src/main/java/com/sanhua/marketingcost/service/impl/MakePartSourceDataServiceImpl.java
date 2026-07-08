@@ -56,11 +56,16 @@ public class MakePartSourceDataServiceImpl implements MakePartSourceDataService 
   }
 
   @Override
-  public List<BomU9Source> listDedupedChildren(String parentMaterialNo, LocalDate asOfDate) {
+  public List<BomU9Source> listDedupedChildren(
+      String parentMaterialNo, LocalDate asOfDate, String priceOrgCode) {
     if (!StringUtils.hasText(parentMaterialNo)) {
       return List.of();
     }
+    if (!StringUtils.hasText(priceOrgCode)) {
+      throw new IllegalArgumentException("读取制造件 U9 直接子项必须显式传入 priceOrgCode");
+    }
     var query = Wrappers.lambdaQuery(BomU9Source.class)
+        .eq(BomU9Source::getPriceOrgCode, priceOrgCode.trim())
         .eq(BomU9Source::getParentMaterialNo, parentMaterialNo.trim())
         .eq(BomU9Source::getBomPurpose, MAIN_BOM_PURPOSE);
     if (asOfDate != null) {

@@ -10,6 +10,7 @@ public class QuoteBomMonthlySnapshot {
   @TableId(type = IdType.AUTO)
   private Long id;
   private String productCode;
+  private String priceOrgCode;
   private String customerCode;
   private String packageMethod;
   private String costPeriodMonth;
@@ -42,6 +43,14 @@ public class QuoteBomMonthlySnapshot {
 
   public void setProductCode(String productCode) {
     this.productCode = productCode;
+  }
+
+  public String getPriceOrgCode() {
+    return priceOrgCode;
+  }
+
+  public void setPriceOrgCode(String priceOrgCode) {
+    this.priceOrgCode = priceOrgCode;
   }
 
   public String getCustomerCode() {

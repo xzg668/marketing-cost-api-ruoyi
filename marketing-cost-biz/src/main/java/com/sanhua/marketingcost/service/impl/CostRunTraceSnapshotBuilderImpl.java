@@ -51,6 +51,8 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
   private static final String SOURCE_TYPE_FIXED_PRICE = "FIXED_PRICE";
   private static final String SOURCE_TYPE_SETTLE_FIXED_PRICE = "SETTLE_FIXED_PRICE";
   private static final String SOURCE_TYPE_RANGE_PRICE = "RANGE_PRICE";
+  private static final String RANGE_BASIS_FACTOR = "FACTOR";
+  private static final String RANGE_BASIS_QTY = "QTY";
   private static final String COST_TOTAL = "TOTAL";
   private static final String COST_MATERIAL = "MATERIAL";
   private static final String COST_DIRECT_LABOR = "DIRECT_LABOR";
@@ -73,6 +75,23 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
   private static final int AMOUNT_SCALE = 8;
   private static final int JSON_MAX_LENGTH = 65535;
   private static final Pattern VARIABLE_TOKEN = Pattern.compile("\\[([^\\]]+)]");
+  private static final Pattern FACTOR_VALUE_TOKEN =
+      Pattern.compile("([A-Za-z][A-Za-z0-9_]*)\\s*=\\s*(-?\\d+(?:\\.\\d+)?)");
+
+  private record RangeTraceContext(
+      PriceRangeItem item,
+      String rangeBasis,
+      String rangeType,
+      String factorCode,
+      BigDecimal factorValue,
+      String matchRange,
+      BigDecimal rangeUnitPrice,
+      String priceField) {
+
+    boolean factorRange() {
+      return RANGE_BASIS_FACTOR.equals(rangeBasis);
+    }
+  }
 
   private final CostRunPartItemMapper partItemMapper;
   private final CostRunCostItemMapper costItemMapper;
@@ -201,10 +220,11 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
       if (rangeItem != null && rangeItem.getId() != null) {
         snapshot.setSourceRefId(rangeItem.getId());
       }
-      snapshot.setSourceSnapshotJson(json(rangeSourceSnapshot(part, prepareItem, rangeItem)));
-      snapshot.setFormulaSnapshotJson(json(rangeFormula(part, rangeItem)));
-      snapshot.setVariablesJson(json(rangeVariables(part, rangeItem)));
-      snapshot.setStepsJson(json(rangeSteps(part, rangeItem)));
+      RangeTraceContext rangeTrace = rangeTraceContext(part, prepareItem, rangeItem);
+      snapshot.setSourceSnapshotJson(json(rangeSourceSnapshot(part, prepareItem, rangeTrace)));
+      snapshot.setFormulaSnapshotJson(json(rangeFormula(part, rangeTrace)));
+      snapshot.setVariablesJson(json(rangeVariables(part, rangeTrace)));
+      snapshot.setStepsJson(json(rangeSteps(part, rangeTrace)));
     } else if (SOURCE_TYPE_MAKE_PART.equals(sourceType)) {
       List<MakePartPriceCalcRow> rows = loadMakePartCalcRows(version, part, prepareItem);
       snapshot.setSourceSnapshotJson(json(makePartSourceSnapshot(part, prepareItem, rows)));
@@ -588,8 +608,9 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
   }
 
   private Map<String, Object> rangeSourceSnapshot(
-      CostRunPartItem part, PricePrepareItem prepareItem, PriceRangeItem rangeItem) {
+      CostRunPartItem part, PricePrepareItem prepareItem, RangeTraceContext rangeTrace) {
     Map<String, Object> payload = partSourceSnapshot(part, prepareItem);
+    PriceRangeItem rangeItem = rangeTrace.item();
     if (rangeItem != null) {
       payload.put("rangePriceItem", mapOf(
           "id", rangeItem.getId(),
@@ -600,8 +621,19 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
           "materialName", rangeItem.getMaterialName(),
           "specModel", rangeItem.getSpecModel(),
           "unit", rangeItem.getUnit(),
+          "rangeBasis", rangeTrace.rangeBasis(),
+          "range_basis", rangeTrace.rangeBasis(),
+          "rangeType", rangeTrace.rangeType(),
+          "range_type", rangeTrace.rangeType(),
+          "factorRuleId", rangeItem.getFactorRuleId(),
+          "factorCode", rangeTrace.factorCode(),
+          "factor_code", rangeTrace.factorCode(),
+          "factorValue", rangeTrace.factorValue(),
+          "factor_value", rangeTrace.factorValue(),
           "rangeLow", rangeItem.getRangeLow(),
+          "range_low", rangeItem.getRangeLow(),
           "rangeHigh", rangeItem.getRangeHigh(),
+          "range_high", rangeItem.getRangeHigh(),
           "priceExclTax", rangeItem.getPriceExclTax(),
           "priceInclTax", rangeItem.getPriceInclTax(),
           "taxIncluded", rangeItem.getTaxIncluded(),
@@ -610,54 +642,111 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     }
     payload.put("priceConclusion", mapOf(
         "priceKind", "区间价",
+        "priceType", "区间价",
+        "rangeBasis", rangeTrace.rangeBasis(),
+        "range_basis", rangeTrace.rangeBasis(),
+        "rangeType", rangeTrace.rangeType(),
+        "range_type", rangeTrace.rangeType(),
+        "factorCode", rangeTrace.factorCode(),
+        "factor_code", rangeTrace.factorCode(),
+        "factorValue", rangeTrace.factorValue(),
+        "factor_value", rangeTrace.factorValue(),
         "matchQuantity", part.getQty(),
+        "bomQuantity", part.getQty(),
+        "matchedRange", rangeTrace.matchRange(),
+        "rangeLow", rangeItem == null ? null : rangeItem.getRangeLow(),
+        "range_low", rangeItem == null ? null : rangeItem.getRangeLow(),
+        "rangeHigh", rangeItem == null ? null : rangeItem.getRangeHigh(),
+        "range_high", rangeItem == null ? null : rangeItem.getRangeHigh(),
+        "matchedUnitPrice", firstNonNull(rangeTrace.rangeUnitPrice(), part.getUnitPrice()),
+        "formula", "命中单价 × BOM 用量",
         "unitPrice", part.getUnitPrice(),
         "amount", part.getAmount()));
     return payload;
   }
 
-  private Map<String, Object> rangeFormula(CostRunPartItem part, PriceRangeItem rangeItem) {
+  private Map<String, Object> rangeFormula(CostRunPartItem part, RangeTraceContext rangeTrace) {
     return mapOf(
-        "formula", "amount = rangeUnitPrice * quantity",
-        "displayFormula", "区间价金额 = 命中区间单价 × BOM 用量",
+        "formula", "amount = matchedUnitPrice * bomQuantity",
+        "displayFormula", "区间价金额 = 命中单价 × BOM 用量",
+        "formulaText", "命中单价 × BOM 用量",
+        "priceKind", "区间价",
         "priceTable", "lp_price_range_item",
-        "matchRange", rangeText(rangeItem),
-        "priceField", rangeItem != null && rangeItem.getPriceInclTax() != null
-            ? "price_incl_tax"
-            : "price_excl_tax",
-        "rangeUnitPrice", rangeUnitPrice(rangeItem),
+        "rangeBasis", rangeTrace.rangeBasis(),
+        "rangeType", rangeTrace.rangeType(),
+        "factorCode", rangeTrace.factorCode(),
+        "factorValue", rangeTrace.factorValue(),
+        "matchRange", rangeTrace.matchRange(),
+        "matchedRange", rangeTrace.matchRange(),
+        "priceField", rangeTrace.priceField(),
+        "rangeUnitPrice", rangeTrace.rangeUnitPrice(),
+        "matchedUnitPrice", firstNonNull(rangeTrace.rangeUnitPrice(), part.getUnitPrice()),
+        "bomQuantity", part.getQty(),
         "quantity", part.getQty(),
         "amount", part.getAmount());
   }
 
-  private Map<String, Object> rangeVariables(CostRunPartItem part, PriceRangeItem rangeItem) {
+  private Map<String, Object> rangeVariables(CostRunPartItem part, RangeTraceContext rangeTrace) {
+    PriceRangeItem rangeItem = rangeTrace.item();
     return mapOf(
         "priceKind", "区间价",
         "materialCode", part.getPartCode(),
+        "rangeBasis", rangeTrace.rangeBasis(),
+        "range_basis", rangeTrace.rangeBasis(),
+        "rangeType", rangeTrace.rangeType(),
+        "range_type", rangeTrace.rangeType(),
+        "factorCode", rangeTrace.factorCode(),
+        "factor_code", rangeTrace.factorCode(),
+        "factorValue", rangeTrace.factorValue(),
+        "factor_value", rangeTrace.factorValue(),
         "matchQuantity", part.getQty(),
+        "bomQuantity", part.getQty(),
         "rangeLow", rangeItem == null ? null : rangeItem.getRangeLow(),
+        "range_low", rangeItem == null ? null : rangeItem.getRangeLow(),
         "rangeHigh", rangeItem == null ? null : rangeItem.getRangeHigh(),
+        "range_high", rangeItem == null ? null : rangeItem.getRangeHigh(),
+        "matchedRange", rangeTrace.matchRange(),
         "priceExclTax", rangeItem == null ? null : rangeItem.getPriceExclTax(),
         "priceInclTax", rangeItem == null ? null : rangeItem.getPriceInclTax(),
-        "rangeUnitPrice", firstNonNull(rangeUnitPrice(rangeItem), part.getUnitPrice()),
+        "rangeUnitPrice", firstNonNull(rangeTrace.rangeUnitPrice(), part.getUnitPrice()),
+        "matchedUnitPrice", firstNonNull(rangeTrace.rangeUnitPrice(), part.getUnitPrice()),
         "quantity", part.getQty(),
         "amount", part.getAmount());
   }
 
-  private List<Map<String, Object>> rangeSteps(CostRunPartItem part, PriceRangeItem rangeItem) {
-    return List.of(
-        mapOf(
+  private List<Map<String, Object>> rangeSteps(CostRunPartItem part, RangeTraceContext rangeTrace) {
+    PriceRangeItem rangeItem = rangeTrace.item();
+    Map<String, Object> matchStep = rangeTrace.factorRange()
+        ? mapOf(
+            "step", "FACTOR_RANGE_PRICE_ROW",
+            "formula", "rangeLow <= factorValue <= rangeHigh",
+            "displayFormula", "按报价单" + factorDisplayName(rangeTrace.factorCode()) + "命中区间",
+            "priceTable", "lp_price_range_item",
+            "priceRowId", rangeItem == null ? null : rangeItem.getId(),
+            "rangeBasis", rangeTrace.rangeBasis(),
+            "rangeType", rangeTrace.rangeType(),
+            "factorCode", rangeTrace.factorCode(),
+            "factorValue", rangeTrace.factorValue(),
+            "matchRange", rangeTrace.matchRange(),
+            "amount", firstNonNull(rangeTrace.rangeUnitPrice(), part.getUnitPrice()))
+        : mapOf(
             "step", "RANGE_PRICE_ROW",
             "formula", "rangeLow <= quantity <= rangeHigh",
+            "displayFormula", "按 BOM 用量命中区间",
             "priceTable", "lp_price_range_item",
             "priceRowId", rangeItem == null ? null : rangeItem.getId(),
             "matchQuantity", part.getQty(),
-            "matchRange", rangeText(rangeItem),
-            "amount", firstNonNull(rangeUnitPrice(rangeItem), part.getUnitPrice())),
+            "matchRange", rangeTrace.matchRange(),
+            "amount", firstNonNull(rangeTrace.rangeUnitPrice(), part.getUnitPrice()));
+    return List.of(
+        matchStep,
         mapOf(
             "step", "PART_AMOUNT",
-            "formula", "unitPrice * quantity",
+            "formula", "matchedUnitPrice * bomQuantity",
+            "displayFormula", "命中单价 × BOM 用量",
             "unitPrice", part.getUnitPrice(),
+            "matchedUnitPrice", firstNonNull(rangeTrace.rangeUnitPrice(), part.getUnitPrice()),
+            "bomQuantity", part.getQty(),
             "quantity", part.getQty(),
             "amount", part.getAmount()));
   }
@@ -1577,6 +1666,78 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     return LocalDate.parse(month + "-01");
   }
 
+  private RangeTraceContext rangeTraceContext(
+      CostRunPartItem part, PricePrepareItem prepareItem, PriceRangeItem rangeItem) {
+    boolean factorRange = isFactorRange(rangeItem);
+    String factorCode = rangeItem == null ? null : trimToNull(rangeItem.getFactorCode());
+    return new RangeTraceContext(
+        rangeItem,
+        factorRange ? RANGE_BASIS_FACTOR : RANGE_BASIS_QTY,
+        factorRange ? factorRangeType(factorCode) : "数量区间",
+        factorCode,
+        factorRange ? parseFactorValue(factorCode, part, prepareItem) : null,
+        rangeText(rangeItem),
+        rangeUnitPrice(rangeItem),
+        rangePriceField(rangeItem));
+  }
+
+  private boolean isFactorRange(PriceRangeItem row) {
+    if (row == null) {
+      return false;
+    }
+    return RANGE_BASIS_FACTOR.equalsIgnoreCase(trimToNull(row.getRangeBasis()))
+        || StringUtils.hasText(row.getFactorCode())
+        || row.getFactorRuleId() != null;
+  }
+
+  private BigDecimal parseFactorValue(
+      String factorCode, CostRunPartItem part, PricePrepareItem prepareItem) {
+    String[] messages = {
+        prepareItem == null ? null : prepareItem.getMessage(),
+        part == null ? null : part.getRemark()
+    };
+    if (StringUtils.hasText(factorCode)) {
+      Pattern codePattern = Pattern.compile(
+          "(?:^|[^A-Za-z0-9_])" + Pattern.quote(factorCode.trim())
+              + "\\s*=\\s*(-?\\d+(?:\\.\\d+)?)",
+          Pattern.CASE_INSENSITIVE);
+      for (String message : messages) {
+        if (!StringUtils.hasText(message)) {
+          continue;
+        }
+        Matcher matcher = codePattern.matcher(message);
+        if (matcher.find()) {
+          return decimalValue(matcher.group(1));
+        }
+      }
+    }
+    for (String message : messages) {
+      if (!StringUtils.hasText(message)) {
+        continue;
+      }
+      Matcher matcher = FACTOR_VALUE_TOKEN.matcher(message);
+      while (matcher.find()) {
+        String key = matcher.group(1).toLowerCase();
+        if ("range".equals(key) || "qty".equals(key) || "value".equals(key)) {
+          continue;
+        }
+        return decimalValue(matcher.group(2));
+      }
+    }
+    return null;
+  }
+
+  private BigDecimal decimalValue(String value) {
+    if (!StringUtils.hasText(value)) {
+      return null;
+    }
+    try {
+      return new BigDecimal(value.trim());
+    } catch (NumberFormatException ex) {
+      return null;
+    }
+  }
+
   private boolean sameAmount(BigDecimal left, BigDecimal right) {
     return left != null && right != null && left.compareTo(right) == 0;
   }
@@ -1598,6 +1759,10 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     return row.getPriceInclTax() != null ? row.getPriceInclTax() : row.getPriceExclTax();
   }
 
+  private String rangePriceField(PriceRangeItem row) {
+    return row != null && row.getPriceInclTax() != null ? "price_incl_tax" : "price_excl_tax";
+  }
+
   private String rangeText(PriceRangeItem row) {
     if (row == null) {
       return null;
@@ -1605,6 +1770,25 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     String low = row.getRangeLow() == null ? "-∞" : row.getRangeLow().stripTrailingZeros().toPlainString();
     String high = row.getRangeHigh() == null ? "+∞" : row.getRangeHigh().stripTrailingZeros().toPlainString();
     return low + " - " + high;
+  }
+
+  private String factorRangeType(String factorCode) {
+    String name = factorDisplayName(factorCode);
+    return "行情".equals(name) ? "行情区间" : name + "区间";
+  }
+
+  private String factorDisplayName(String factorCode) {
+    String code = factorCode == null ? "" : factorCode.trim().toUpperCase();
+    return switch (code) {
+      case "CU" -> "铜价";
+      case "ZN" -> "锌价";
+      case "AL" -> "铝价";
+      case "GOLD" -> "黄金";
+      case "SILVER" -> "白银";
+      case "SUS304" -> "不锈钢304";
+      case "SUS316L" -> "不锈钢316L";
+      default -> "行情";
+    };
   }
 
   private String json(Object value) {
