@@ -165,6 +165,37 @@ class PackageComponentPriceControllerTest {
         .containsExactly("TOP-A", "TOP-A");
     assertThat(captor.getAllValues()).extracting(PackagePriceRequest::getOaNo)
         .containsExactly("OA-001", "OA-001");
+    assertThat(captor.getAllValues()).extracting(PackagePriceRequest::getPriceOrgCode)
+        .containsExactly("210", "210");
+  }
+
+  @Test
+  @DisplayName("/package-components/prices/generate-by-oa：按成本行 priceOrgCode 传递组织")
+  void generateByOaUsesCostingRowPriceOrg() {
+    PackageComponentBulkGenerateRequest request = new PackageComponentBulkGenerateRequest();
+    request.setOaNo("OA-001");
+    request.setTopProductCode("TOP-A");
+    request.setPeriodMonth("2026-06");
+    BomCostingRow row = packageRow("OA-001", "TOP-A", "PKG-1", "普通包装组件");
+    row.setPriceOrgCode("220");
+    when(bomCostingRowMapper.selectList(any(Wrapper.class))).thenReturn(List.of(row));
+    when(priceService.ensurePrice(any())).thenAnswer(invocation -> {
+      PackagePriceRequest priceRequest = invocation.getArgument(0);
+      PackageComponentPrice price = new PackageComponentPrice();
+      price.setPackageMaterialCode(priceRequest.getPackageMaterialCode());
+      price.setSourceTopProductCode(priceRequest.getTopProductCode());
+      price.setPeriodMonth(priceRequest.getPeriodMonth());
+      price.setPriceStatus("PRICED");
+      price.setPriceComplete(true);
+      return PackagePriceResult.of(price, List.of(), null);
+    });
+
+    CommonResult<PackageComponentBulkGenerateResponse> result = controller.generateByOa(request);
+
+    assertThat(result.isSuccess()).isTrue();
+    ArgumentCaptor<PackagePriceRequest> captor = ArgumentCaptor.forClass(PackagePriceRequest.class);
+    verify(priceService).ensurePrice(captor.capture());
+    assertThat(captor.getValue().getPriceOrgCode()).isEqualTo("220");
   }
 
   @Test
@@ -229,6 +260,8 @@ class PackageComponentPriceControllerTest {
     row.setMaterialName(packageMaterialName);
     row.setSettlementRowType("PACKAGE_PARENT");
     row.setPeriodMonth("2026-06");
+    row.setBusinessUnitType("COMMERCIAL");
+    row.setPriceOrgCode("210");
     return row;
   }
 }

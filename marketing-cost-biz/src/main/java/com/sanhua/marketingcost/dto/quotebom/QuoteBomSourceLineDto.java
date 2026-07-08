@@ -27,4 +27,6 @@ public record QuoteBomSourceLineDto(
     Integer sortSeq,
     Long sourceRawHierarchyId,
     Long sourceU9BomId,
-    Integer manualFlag) {}
+    Integer manualFlag,
+    String priceOrgCode,
+    String materialOrganizationCode) {}

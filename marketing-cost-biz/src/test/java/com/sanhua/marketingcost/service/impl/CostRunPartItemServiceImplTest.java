@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -242,7 +243,7 @@ class CostRunPartItemServiceImplTest {
     p.setPartQty(new BigDecimal("3"));
     when(costRunPartItemMapper.selectBaseByOaNo("OA-PKG"))
         .thenReturn(new ArrayList<>(List.of(p)));
-    when(packageComponentIdentifyService.batchIdentify(any()))
+    when(packageComponentIdentifyService.batchIdentify(any(), eq("COMMERCIAL")))
         .thenReturn(Map.of("PKG-PARENT", true));
     when(routerService.listCandidates(eqIgnoreCaseSafe("PKG-PARENT"), anyString(), any()))
         .thenReturn(List.of(route(PriceTypeEnum.FIXED)));
@@ -270,6 +271,32 @@ class CostRunPartItemServiceImplTest {
     assertThat(requestCaptor.getValue().getOaNo()).isEqualTo("OA-PKG");
     assertThat(requestCaptor.getValue().getTopProductCode()).isEqualTo("TOP-001");
     assertThat(requestCaptor.getValue().getSourceType()).isEqualTo("U9");
+    assertThat(requestCaptor.getValue().getPriceOrgCode()).isEqualTo("210");
+  }
+
+  @Test
+  @DisplayName("板换包装组件：按成本行 PLATE 组织识别，并向包装价格请求传 220")
+  void platePackageComponentUsesCostingRowOrganization() {
+    CostRunPartItemDto p = part("PKG-PLATE");
+    p.setProductCode("TOP-PLATE");
+    p.setPriceOrgCode("220");
+    p.setMaterialOrganizationCode("PLATE");
+    when(costRunPartItemMapper.selectBaseByOaNo("OA-MIX"))
+        .thenReturn(new ArrayList<>(List.of(p)));
+    when(packageComponentIdentifyService.batchIdentify(any(), eq("PLATE")))
+        .thenReturn(Map.of("PKG-PLATE", true));
+    when(packageComponentPriceService.ensurePrice(any(PackagePriceRequest.class)))
+        .thenReturn(packagePrice("PRICED", true, "20.000000", List.of()));
+
+    CostRunPartItemServiceImpl service = build(List.of());
+
+    service.listByOaNo("OA-MIX");
+
+    verify(packageComponentIdentifyService).batchIdentify(any(), eq("PLATE"));
+    ArgumentCaptor<PackagePriceRequest> requestCaptor =
+        ArgumentCaptor.forClass(PackagePriceRequest.class);
+    verify(packageComponentPriceService).ensurePrice(requestCaptor.capture());
+    assertThat(requestCaptor.getValue().getPriceOrgCode()).isEqualTo("220");
   }
 
   @Test
@@ -280,7 +307,7 @@ class CostRunPartItemServiceImplTest {
     p.setProductCode("TOP-001");
     when(costRunPartItemMapper.selectBaseByOaNo("OA-PKG-M"))
         .thenReturn(new ArrayList<>(List.of(p)));
-    when(packageComponentIdentifyService.batchIdentify(any()))
+    when(packageComponentIdentifyService.batchIdentify(any(), eq("COMMERCIAL")))
         .thenReturn(Map.of("PKG-PARENT", true));
     when(packageComponentPriceService.ensurePrice(any(PackagePriceRequest.class)))
         .thenReturn(packagePrice("PRICED", true, "12.345678", List.of()));
@@ -320,7 +347,7 @@ class CostRunPartItemServiceImplTest {
     p.setPartQty(new BigDecimal("2"));
     when(costRunPartItemMapper.selectBaseByOaNo("OA-NORMAL"))
         .thenReturn(new ArrayList<>(List.of(p)));
-    when(packageComponentIdentifyService.batchIdentify(any()))
+    when(packageComponentIdentifyService.batchIdentify(any(), eq("COMMERCIAL")))
         .thenReturn(Map.of("NORMAL-MAT", false));
     when(routerService.listCandidates(eqIgnoreCaseSafe("NORMAL-MAT"), anyString(), any()))
         .thenReturn(List.of(route(PriceTypeEnum.FIXED)));
@@ -345,7 +372,7 @@ class CostRunPartItemServiceImplTest {
     p.setPartQty(new BigDecimal("2"));
     when(costRunPartItemMapper.selectBaseByOaNo("OA-PKG-MISS"))
         .thenReturn(new ArrayList<>(List.of(p)));
-    when(packageComponentIdentifyService.batchIdentify(any()))
+    when(packageComponentIdentifyService.batchIdentify(any(), eq("COMMERCIAL")))
         .thenReturn(Map.of("PKG-MISSING", true));
     when(packageComponentPriceService.ensurePrice(any(PackagePriceRequest.class)))
         .thenReturn(packagePrice("MISSING_CHILD_PRICE", false, null, List.of("包装组件存在子件缺价")));
@@ -362,6 +389,23 @@ class CostRunPartItemServiceImplTest {
         .contains("MISSING_CHILD_PRICE")
         .contains("当前阶段不阻断");
     verify(routerService, never()).listCandidates(eqIgnoreCaseSafe("PKG-MISSING"), anyString(), any());
+  }
+
+  @Test
+  @DisplayName("包装组件识别缺少上游组织时直接失败，不按 OA 或业务单元兜底")
+  void packageIdentifyFailsWhenOrganizationMissing() {
+    CostRunPartItemDto p = part("PKG-NO-ORG");
+    p.setPriceOrgCode(null);
+    p.setMaterialOrganizationCode(null);
+    when(costRunPartItemMapper.selectBaseByOaNo("OA-NO-ORG"))
+        .thenReturn(new ArrayList<>(List.of(p)));
+    CostRunPartItemServiceImpl service = build(List.of());
+
+    assertThatThrownBy(() -> service.listByOaNo("OA-NO-ORG"))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("包装组件识别缺少上游组织");
+
+    verify(packageComponentIdentifyService, never()).batchIdentify(any(), anyString());
   }
 
   @Test
@@ -452,6 +496,34 @@ class CostRunPartItemServiceImplTest {
   }
 
   @Test
+  @DisplayName("MFRP-00：区间价部品金额 = 区间单价 × BOM用量")
+  void rangePriceAmountCalculationUsesBomQuantity() {
+    CostRunPartItemDto p = part("RANGE-MAT");
+    p.setPartQty(new BigDecimal("0.655"));
+    when(costRunPartItemMapper.selectBaseByOaNo("OA-RANGE-AMOUNT"))
+        .thenReturn(new ArrayList<>(List.of(p)));
+    when(routerService.listCandidates(eqIgnoreCaseSafe("RANGE-MAT"), anyString(), any()))
+        .thenReturn(List.of(route(PriceTypeEnum.RANGE)));
+
+    PriceResolver rangeResolver =
+        stubResolver(
+            PriceTypeEnum.RANGE,
+            new PriceResolveResult(
+                new BigDecimal("0.3920353982300885"),
+                "区间价",
+                "区间命中(0-1,qty=0.655,field=price_incl_tax)"));
+    CostRunPartItemServiceImpl service = build(List.of(rangeResolver));
+
+    List<CostRunPartItemDto> items = service.listByOaNo("OA-RANGE-AMOUNT");
+
+    assertThat(items.get(0).getPriceType()).isEqualTo("区间价");
+    assertThat(items.get(0).getPriceSource()).isEqualTo("区间价");
+    assertThat(items.get(0).getUnitPrice()).isEqualByComparingTo("0.3920353982300885");
+    assertThat(items.get(0).getAmount()).isEqualByComparingTo("0.2567831858407079675");
+    assertThat(items.get(0).getRemark()).contains("区间命中", "qty=0.655");
+  }
+
+  @Test
   @DisplayName("成本试算部品路由按当前日期和当前月份取价，忽略 OA.apply_date")
   void listByOaNoUsesCurrentDateForRouter() {
     LocalDate currentDate = LocalDate.now();
@@ -487,7 +559,7 @@ class CostRunPartItemServiceImplTest {
             storedPart("OA-1", "P-1", "PKG-PARENT", "包装组件", "12.000000"),
             storedPart("OA-1", "P-1", "NORMAL", "普通子件", "2.000000")));
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any()))
+    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
         .thenReturn(List.of(rawParent("PKG-PARENT")));
 
     CostRunPartItemServiceImpl svc =
@@ -514,7 +586,7 @@ class CostRunPartItemServiceImplTest {
     assertThat(packageRow.getUnitPrice()).isEqualByComparingTo("12.600000");
     assertThat(items).anyMatch(item -> "NORMAL".equals(item.getPartCode()));
     assertThat(items).filteredOn(item -> "PKG-PARENT".equals(item.getPartCode())).hasSize(1);
-    verify(rawMapper).selectPackageComponentParentsByLatestBatch(eq("包装组件"), any());
+    verify(rawMapper).selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL"));
   }
 
   // ============================ resolveQuoteDate ============================
@@ -587,6 +659,8 @@ class CostRunPartItemServiceImplTest {
     dto.setPartCode(code);
     dto.setPartName(code);
     dto.setPartQty(BigDecimal.ONE);
+    dto.setPriceOrgCode("210");
+    dto.setMaterialOrganizationCode("COMMERCIAL");
     return dto;
   }
 
@@ -601,6 +675,8 @@ class CostRunPartItemServiceImplTest {
     item.setQty(BigDecimal.ONE);
     item.setUnitPrice(new BigDecimal(amount));
     item.setAmount(new BigDecimal(amount));
+    item.setPriceOrgCode("210");
+    item.setMaterialOrganizationCode("COMMERCIAL");
     return item;
   }
 

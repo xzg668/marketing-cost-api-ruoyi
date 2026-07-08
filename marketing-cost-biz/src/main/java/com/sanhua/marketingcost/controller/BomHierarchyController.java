@@ -53,8 +53,9 @@ public class BomHierarchyController {
       @PathVariable String topProductCode,
       @RequestParam(required = false) String bomPurpose,
       @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate asOfDate,
-      @RequestParam(required = false, defaultValue = "U9") String sourceType) {
+      @RequestParam(required = false, defaultValue = "U9") String sourceType,
+      @RequestParam String priceOrgCode) {
     return CommonResult.success(
-        buildService.getHierarchyTree(topProductCode, bomPurpose, asOfDate, sourceType));
+        buildService.getHierarchyTree(topProductCode, bomPurpose, asOfDate, sourceType, priceOrgCode));
   }
 }

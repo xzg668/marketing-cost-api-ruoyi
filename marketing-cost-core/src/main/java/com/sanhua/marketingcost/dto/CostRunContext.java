@@ -20,6 +20,8 @@ public class CostRunContext {
   private Long adjustBatchId;
   private String repriceNo;
   private String businessUnitType;
+  private String priceOrgCode;
+  private String materialOrganizationCode;
   private String oaNo;
   private Long oaFormItemId;
   private String productCode;

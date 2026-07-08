@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.settlement;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.entity.MaterialScrapRef;
 import com.sanhua.marketingcost.entity.U9BomByproductMaster;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.MaterialScrapRefMapper;
 import com.sanhua.marketingcost.mapper.U9BomByproductMasterMapper;
 import java.time.LocalDate;
@@ -42,6 +43,7 @@ public class BomByproductSettlementAdapterImpl implements BomByproductSettlement
   public BomByproductSettlementReadResult read(
       List<BomSettlementNode> nodes,
       LocalDate asOfDate,
+      String priceOrgCode,
       String businessUnitType,
       String bomPurpose) {
     List<String> warnings = new ArrayList<>();
@@ -53,11 +55,13 @@ public class BomByproductSettlementAdapterImpl implements BomByproductSettlement
     if (manufacturedCodes.isEmpty()) {
       return new BomByproductSettlementReadResult(List.of(), List.of(), warnings);
     }
+    String normalizedPriceOrgCode = requiredPriceOrgCode(priceOrgCode);
 
     List<U9BomByproductMaster> byproductRows;
     try {
       byproductRows = byproductMapper.selectList(
           Wrappers.<U9BomByproductMaster>lambdaQuery()
+              .eq(U9BomByproductMaster::getPriceOrgCode, normalizedPriceOrgCode)
               .in(U9BomByproductMaster::getParentMaterialNo, manufacturedCodes)
               .eq(U9BomByproductMaster::getBomPurpose, requestedPurpose)
               .le(U9BomByproductMaster::getEffectiveFrom, effectiveDate)
@@ -167,5 +171,12 @@ public class BomByproductSettlementAdapterImpl implements BomByproductSettlement
         row.getEffectiveFrom(),
         row.getEffectiveTo(),
         null);
+  }
+
+  private static String requiredPriceOrgCode(String value) {
+    if (!StringUtils.hasText(value)) {
+      throw new IllegalArgumentException("副产品读取缺少 priceOrgCode");
+    }
+    return MaterialOrganization.fromPriceOrgCode(value).getPriceOrgCode();
   }
 }

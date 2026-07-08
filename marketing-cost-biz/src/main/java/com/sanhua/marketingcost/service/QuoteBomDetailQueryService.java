@@ -11,6 +11,8 @@ public interface QuoteBomDetailQueryService {
       String sourceTopProductCode,
       String packageParentCode,
       String periodMonth,
+      String priceOrgCode,
+      String materialOrganizationCode,
       Integer page,
       Integer pageSize);
 

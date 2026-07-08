@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.quotebom.FormalBomReadResult;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomSourceLineDto;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
@@ -35,12 +36,7 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
   @Override
   public FormalBomReadResult read(
       String productCode, String periodMonth, String bomPurpose, LocalDate quoteDate) {
-    return read(
-        productCode,
-        periodMonth,
-        bomPurpose,
-        quoteDate,
-        MaterialOrganization.COMMERCIAL.getCode());
+    throw new IllegalArgumentException("读取正式 BOM 必须显式传入报价组织和料品组织");
   }
 
   @Override
@@ -49,7 +45,9 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
       String periodMonth,
       String bomPurpose,
       LocalDate quoteDate,
-      String organizationCode) {
+      QuoteDataOrganization quoteDataOrganization) {
+    QuoteDataOrganization organization =
+        MaterialOrganization.normalizeQuoteDataOrganization(quoteDataOrganization);
     String normalizedProductCode = trimToNull(productCode);
     String normalizedPeriodMonth = normalizePeriodMonth(periodMonth);
     String normalizedBomPurpose = trimToNull(bomPurpose);
@@ -62,6 +60,7 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
     List<BomRawHierarchy> rows =
         bomRawHierarchyMapper.selectList(
             Wrappers.<BomRawHierarchy>lambdaQuery()
+                .eq(BomRawHierarchy::getPriceOrgCode, organization.priceOrgCode())
                 .eq(BomRawHierarchy::getTopProductCode, normalizedProductCode)
                 .eq(
                     normalizedBomPurpose != null,
@@ -101,18 +100,22 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
     List<BomRawHierarchy> sorted = rows.stream().sorted(rowComparator()).toList();
     Map<String, MaterialMasterRaw> masterByCode = selectMasterByCode(
         sorted.stream().map(BomRawHierarchy::getMaterialCode).collect(Collectors.toCollection(LinkedHashSet::new)),
-        organizationCode);
+        organization.materialOrganizationCode());
     List<QuoteBomSourceLineDto> lines = new java.util.ArrayList<>(sorted.size());
     int lineNo = 1;
     for (BomRawHierarchy row : sorted) {
       MaterialMasterRaw master = masterByCode.get(trimToNull(row.getMaterialCode()));
-      lines.add(toLine(row, master, lineNo++));
+      lines.add(toLine(row, master, lineNo++, organization));
     }
     return new FormalBomReadResult(
         normalizedProductCode, normalizedPeriodMonth, normalizedBomPurpose, true, lines, null);
   }
 
-  private QuoteBomSourceLineDto toLine(BomRawHierarchy row, MaterialMasterRaw master, int lineNo) {
+  private QuoteBomSourceLineDto toLine(
+      BomRawHierarchy row,
+      MaterialMasterRaw master,
+      int lineNo,
+      QuoteDataOrganization organization) {
     return new QuoteBomSourceLineDto(
         row.getId(),
         lineNo,
@@ -138,7 +141,9 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
         row.getSortSeq(),
         row.getId(),
         null,
-        0);
+        0,
+        firstText(row.getPriceOrgCode(), organization.priceOrgCode()),
+        organization.materialOrganizationCode());
   }
 
   private Map<String, MaterialMasterRaw> selectMasterByCode(
@@ -149,9 +154,7 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
     }
     String organization = MaterialOrganization.normalize(organizationCode);
     List<MaterialMasterRaw> rows =
-        MaterialOrganization.COMMERCIAL.getCode().equals(organization)
-            ? materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null)
-            : materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null, organization);
+        materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null, organization);
     return rows.stream()
         .filter(row -> trimToNull(row.getMaterialCode()) != null)
         .collect(

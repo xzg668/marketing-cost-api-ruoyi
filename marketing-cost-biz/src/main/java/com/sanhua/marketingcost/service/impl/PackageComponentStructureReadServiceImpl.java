@@ -7,6 +7,7 @@ import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.PackageComponentSnapshot;
 import com.sanhua.marketingcost.entity.PackageComponentSnapshotDetail;
 import com.sanhua.marketingcost.entity.QuoteBomPackageReference;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.PackageComponentSnapshotDetailMapper;
 import com.sanhua.marketingcost.mapper.PackageComponentSnapshotMapper;
@@ -51,12 +52,34 @@ public class PackageComponentStructureReadServiceImpl
   @Override
   public PackageComponentStructureReadResult readByReference(
       String referenceFinishedCode, String sourceTopProductCode, String periodMonth) {
-    return readSnapshots(referenceFinishedCode, sourceTopProductCode, periodMonth, null);
+    return readByReference(referenceFinishedCode, sourceTopProductCode, periodMonth, null, null);
+  }
+
+  @Override
+  public PackageComponentStructureReadResult readByReference(
+      String referenceFinishedCode,
+      String sourceTopProductCode,
+      String periodMonth,
+      String priceOrgCode,
+      String materialOrganizationCode) {
+    return readSnapshots(
+        referenceFinishedCode,
+        sourceTopProductCode,
+        periodMonth,
+        null,
+        priceOrgCode,
+        materialOrganizationCode);
   }
 
   @Override
   public PackageComponentStructureReadResult readApprovedReferenceForBareProduct(
       String bareProductCode) {
+    return readApprovedReferenceForBareProduct(bareProductCode, null, null);
+  }
+
+  @Override
+  public PackageComponentStructureReadResult readApprovedReferenceForBareProduct(
+      String bareProductCode, String priceOrgCode, String materialOrganizationCode) {
     String normalizedBareCode = trimToNull(bareProductCode);
     if (normalizedBareCode == null) {
       return new PackageComponentStructureReadResult(
@@ -89,14 +112,20 @@ public class PackageComponentStructureReadServiceImpl
         selected.getReferenceFinishedCode(),
         selected.getSourceTopProductCode(),
         selected.getPeriodMonth(),
-        selected.getId());
+        selected.getId(),
+        priceOrgCode,
+        materialOrganizationCode);
   }
 
   private PackageComponentStructureReadResult readSnapshots(
       String referenceFinishedCode,
       String sourceTopProductCode,
       String periodMonth,
-      Long packageReferenceId) {
+      Long packageReferenceId,
+      String priceOrgCode,
+      String materialOrganizationCode) {
+    String normalizedPriceOrgCode = requiredPriceOrgCode(priceOrgCode);
+    String normalizedMaterialOrganization = requiredMaterialOrganization(materialOrganizationCode);
     String normalizedReferenceCode = trimToNull(referenceFinishedCode);
     String normalizedSourceTopCode = trimToNull(sourceTopProductCode);
     if (normalizedSourceTopCode == null) {
@@ -118,6 +147,7 @@ public class PackageComponentStructureReadServiceImpl
         snapshotMapper.selectList(
             Wrappers.<PackageComponentSnapshot>lambdaQuery()
                 .eq(PackageComponentSnapshot::getSourceTopProductCode, normalizedSourceTopCode)
+                .eq(PackageComponentSnapshot::getPriceOrgCode, normalizedPriceOrgCode)
                 .eq(PackageComponentSnapshot::getPeriodMonth, normalizedPeriodMonth)
                 .orderByAsc(PackageComponentSnapshot::getPackageMaterialCode)
                 .orderByAsc(PackageComponentSnapshot::getId));
@@ -157,7 +187,8 @@ public class PackageComponentStructureReadServiceImpl
       groups.add(new SnapshotWithDetails(snapshot, details));
     }
 
-    Map<String, MaterialMasterRaw> masterByCode = selectMasterByCode(materialCodes);
+    Map<String, MaterialMasterRaw> masterByCode =
+        selectMasterByCode(materialCodes, normalizedMaterialOrganization);
     List<PackageComponentStructureLineDto> lines = new ArrayList<>();
     for (SnapshotWithDetails group : groups) {
       MaterialMasterRaw parentMaster =
@@ -294,12 +325,15 @@ public class PackageComponentStructureReadServiceImpl
     }
   }
 
-  private Map<String, MaterialMasterRaw> selectMasterByCode(LinkedHashSet<String> codes) {
+  private Map<String, MaterialMasterRaw> selectMasterByCode(
+      LinkedHashSet<String> codes, String materialOrganizationCode) {
     codes.removeIf(code -> trimToNull(code) == null);
     if (codes.isEmpty()) {
       return Map.of();
     }
-    List<MaterialMasterRaw> rows = materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null);
+    List<MaterialMasterRaw> rows =
+        materialMasterRawMapper.selectByLatestBatchAndCodes(
+            codes, null, requiredMaterialOrganization(materialOrganizationCode));
     if (rows == null || rows.isEmpty()) {
       return Map.of();
     }
@@ -338,6 +372,20 @@ public class PackageComponentStructureReadServiceImpl
 
   private String trimToNull(String value) {
     return StringUtils.hasText(value) ? value.trim() : null;
+  }
+
+  private String requiredPriceOrgCode(String value) {
+    if (!StringUtils.hasText(value)) {
+      throw new IllegalArgumentException("包装结构读取缺少 priceOrgCode");
+    }
+    return MaterialOrganization.fromPriceOrgCode(value).getPriceOrgCode();
+  }
+
+  private String requiredMaterialOrganization(String value) {
+    if (!StringUtils.hasText(value)) {
+      throw new IllegalArgumentException("包装结构读取缺少 materialOrganizationCode");
+    }
+    return MaterialOrganization.fromCode(value).getCode();
   }
 
   private record SnapshotWithDetails(

@@ -66,6 +66,7 @@ class QuoteBomPreparationMapperTest extends BomMapperTestBase {
     }
     runV142ViaMysqlCli("V142_QBP_MAPPER_FIRST");
     runV142ViaMysqlCli("V142_QBP_MAPPER_SECOND");
+    runV180ViaMysqlCli("V180_QBP_MAPPER");
   }
 
   @AfterEach
@@ -93,6 +94,8 @@ class QuoteBomPreparationMapperTest extends BomMapperTestBase {
 
     QuoteBomPreparationRecord loaded = preparationMapper.selectById(record.getId());
     assertThat(loaded.getQuoteProductCode()).isEqualTo("110000000001");
+    assertThat(loaded.getPriceOrgCode()).isEqualTo("210");
+    assertThat(loaded.getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
     assertThat(loaded.getProductType()).isEqualTo("BARE");
     assertThat(loaded.getBareProductCode()).isEqualTo("110000000001");
     assertThat(loaded.getReferenceFinishedCode()).isEqualTo("1079900000538");
@@ -331,6 +334,24 @@ class QuoteBomPreparationMapperTest extends BomMapperTestBase {
   private static void runV142ViaMysqlCli(String logTag) throws Exception {
     MYSQL.copyFileToContainer(
         MountableFile.forClasspathResource("/db/V142__quote_bom_preparation_schema.sql"),
+        "/tmp/" + logTag + ".sql");
+    ExecResult result =
+        MYSQL.execInContainer(
+            "sh",
+            "-c",
+            "mysql --default-character-set=utf8mb4 -uroot -p" + MYSQL.getPassword()
+                + " " + MYSQL.getDatabaseName() + " < /tmp/" + logTag + ".sql");
+    if (result.getExitCode() != 0) {
+      throw new IllegalStateException(
+          logTag + " mysql CLI 执行失败: exit=" + result.getExitCode()
+              + "\nstdout:\n" + result.getStdout()
+              + "\nstderr:\n" + result.getStderr());
+    }
+  }
+
+  private static void runV180ViaMysqlCli(String logTag) throws Exception {
+    MYSQL.copyFileToContainer(
+        MountableFile.forClasspathResource("/db/V180__quote_bom_preparation_record_org_scope.sql"),
         "/tmp/" + logTag + ".sql");
     ExecResult result =
         MYSQL.execInContainer(

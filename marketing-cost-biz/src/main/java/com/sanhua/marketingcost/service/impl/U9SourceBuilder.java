@@ -6,6 +6,7 @@ import com.sanhua.marketingcost.dto.BuildHierarchyRequest;
 import com.sanhua.marketingcost.dto.BuildHierarchyResult;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.BomU9Source;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.BomU9SourceMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
@@ -88,16 +89,18 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
     if ("BY_PRODUCT".equals(mode) && !StringUtils.hasText(request.getTopProductCode())) {
       throw new IllegalArgumentException("mode=BY_PRODUCT 时 topProductCode 必填");
     }
+    String priceOrgCode = requiredPriceOrgCode(request.getPriceOrgCode());
 
     BuildHierarchyResult result = new BuildHierarchyResult();
     String buildBatchId = generateBuildBatchId();
     result.setBuildBatchId(buildBatchId);
 
     // 1) 加载该 importBatch 下所有 U9 行（按可选 bomPurpose 过滤）
-    List<BomU9Source> allRows = loadSourceRows(request.getImportBatchId(), request.getBomPurpose());
+    List<BomU9Source> allRows =
+        loadSourceRows(request.getImportBatchId(), request.getBomPurpose(), priceOrgCode);
     if (allRows.isEmpty()) {
-      log.warn("build-hierarchy 无 u9_source 行：importBatch={} purpose={}",
-          request.getImportBatchId(), request.getBomPurpose());
+      log.warn("build-hierarchy 无 u9_source 行：importBatch={} priceOrg={} purpose={}",
+          request.getImportBatchId(), priceOrgCode, request.getBomPurpose());
       return result;
     }
 
@@ -140,7 +143,7 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
         try {
           List<BomRawHierarchy> produced = buildOneGroup(
               topCode, grp.key, grp.childrenByParent, request.getImportBatchId(),
-              buildBatchId, builtAt, buType);
+              buildBatchId, builtAt, buType, priceOrgCode);
           producedForTop.addAll(produced);
         } catch (CycleDetectedException e) {
           log.warn("BOM 环检测失败: top={} purpose={} from={} cycle={}",
@@ -163,15 +166,27 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
   @Override
   public BomHierarchyTreeDto getHierarchyTree(
       String topProductCode, String bomPurpose, LocalDate asOfDate, String sourceType) {
+    return getHierarchyTree(topProductCode, bomPurpose, asOfDate, sourceType, null);
+  }
+
+  @Override
+  public BomHierarchyTreeDto getHierarchyTree(
+      String topProductCode,
+      String bomPurpose,
+      LocalDate asOfDate,
+      String sourceType,
+      String priceOrgCode) {
     if (!StringUtils.hasText(topProductCode)) {
       throw new IllegalArgumentException("topProductCode 必填");
     }
     LocalDate d = asOfDate != null ? asOfDate : LocalDate.now();
     String st = StringUtils.hasText(sourceType) ? sourceType : "U9";
+    String org = requiredPriceOrgCode(priceOrgCode);
 
     List<BomRawHierarchy> rows =
         bomRawHierarchyMapper.selectList(
             Wrappers.<BomRawHierarchy>lambdaQuery()
+                .eq(BomRawHierarchy::getPriceOrgCode, org)
                 .eq(BomRawHierarchy::getTopProductCode, topProductCode)
                 .eq(BomRawHierarchy::getSourceType, st)
                 .eq(StringUtils.hasText(bomPurpose), BomRawHierarchy::getBomPurpose, bomPurpose)
@@ -193,11 +208,20 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
   // ============================ 私有：DFS 构建 ============================
 
   /** 加载该 importBatch 的 U9 行；可选按 bomPurpose 过滤 */
-  private List<BomU9Source> loadSourceRows(String importBatchId, String bomPurpose) {
+  private List<BomU9Source> loadSourceRows(
+      String importBatchId, String bomPurpose, String priceOrgCode) {
     return bomU9SourceMapper.selectList(
         Wrappers.<BomU9Source>lambdaQuery()
+            .eq(BomU9Source::getPriceOrgCode, priceOrgCode)
             .eq(BomU9Source::getImportBatchId, importBatchId)
             .eq(StringUtils.hasText(bomPurpose), BomU9Source::getBomPurpose, bomPurpose));
+  }
+
+  private static String requiredPriceOrgCode(String value) {
+    if (!StringUtils.hasText(value)) {
+      throw new IllegalArgumentException("priceOrgCode 必须由上游显式传入");
+    }
+    return MaterialOrganization.fromPriceOrgCode(value).getPriceOrgCode();
   }
 
   /** 识别顶层：出现在 parent 集合但不出现在 child 集合里的料号 */
@@ -225,19 +249,21 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
       String importBatchId,
       String buildBatchId,
       LocalDateTime builtAt,
-      String buType) {
+      String buType,
+      String priceOrgCode) {
     List<BomRawHierarchy> output = new ArrayList<>();
     LinkedHashSet<String> visiting = new LinkedHashSet<>();
 
     // 顶层节点自己单独补一行（DFS 从顶层的子件开始）
     BomRawHierarchy topRow = buildTopRow(
         topCode, key, importBatchId, buildBatchId, builtAt, buType,
-        childrenByParent.getOrDefault(topCode, List.of()).isEmpty() ? 1 : 0);
+        childrenByParent.getOrDefault(topCode, List.of()).isEmpty() ? 1 : 0,
+        priceOrgCode);
     output.add(topRow);
 
     dfs(topCode, topCode, 0, "/" + topCode + "/", BigDecimal.ONE,
         key, childrenByParent, visiting, output,
-        importBatchId, buildBatchId, builtAt, buType);
+        importBatchId, buildBatchId, builtAt, buType, priceOrgCode);
 
     return output;
   }
@@ -262,8 +288,10 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
       String buildBatchId,
       LocalDateTime builtAt,
       String buType,
-      int isLeaf) {
+      int isLeaf,
+      String priceOrgCode) {
     BomRawHierarchy row = new BomRawHierarchy();
+    row.setPriceOrgCode(priceOrgCode);
     row.setTopProductCode(topCode);
     row.setParentCode(topCode); // 顶层 parent 填自己（DDL NOT NULL；设计文档 §附录 D）
     row.setMaterialCode(topCode);
@@ -308,7 +336,8 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
       String importBatchId,
       String buildBatchId,
       LocalDateTime builtAt,
-      String buType) {
+      String buType,
+      String priceOrgCode) {
     if (visiting.contains(node)) {
       throw new CycleDetectedException(
           "BOM 环: " + String.join("→", visiting) + "→" + node);
@@ -326,13 +355,13 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
         boolean childIsLeaf =
             childrenByParent.getOrDefault(c.getChildMaterialNo(), List.of()).isEmpty();
         BomRawHierarchy row = fromU9Row(c, node, childLevel, childPath, childQtyPerTop,
-            childIsLeaf, key, importBatchId, buildBatchId, builtAt, buType);
+            childIsLeaf, key, importBatchId, buildBatchId, builtAt, buType, priceOrgCode);
         output.add(row);
 
         // 再递归下去
         dfs(c.getChildMaterialNo(), node, childLevel, childPath, childQtyPerTop,
             key, childrenByParent, visiting, output,
-            importBatchId, buildBatchId, builtAt, buType);
+            importBatchId, buildBatchId, builtAt, buType, priceOrgCode);
       }
     } finally {
       visiting.remove(node);
@@ -355,8 +384,10 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
       String importBatchId,
       String buildBatchId,
       LocalDateTime builtAt,
-      String buType) {
+      String buType,
+      String priceOrgCode) {
     BomRawHierarchy row = new BomRawHierarchy();
+    row.setPriceOrgCode(priceOrgCode);
     row.setTopProductCode(pathTop(path));
     row.setParentCode(parentCode);
     row.setMaterialCode(src.getChildMaterialNo());

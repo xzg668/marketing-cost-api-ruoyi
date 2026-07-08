@@ -1,7 +1,9 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -23,7 +25,7 @@ class MakePartWeightServiceImplTest {
   void rawProcessGrossWeightUsesQtyPerParentKgConvertedToGram() {
     MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
     MakePartWeightServiceImpl service = new MakePartWeightServiceImpl(mapper);
-    when(mapper.selectByLatestBatchAndCodes(any(), isNull()))
+    when(mapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
         .thenReturn(List.of(raw("P-001", "55"), raw("RAW-001", "80")));
 
     MakePartWeightResult result =
@@ -39,7 +41,7 @@ class MakePartWeightServiceImplTest {
   void blankProcessGrossWeightUsesChildTheoreticalNetWeight() {
     MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
     MakePartWeightServiceImpl service = new MakePartWeightServiceImpl(mapper);
-    when(mapper.selectByLatestBatchAndCodes(any(), isNull()))
+    when(mapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
         .thenReturn(List.of(raw("P-001", "55"), raw("BLANK-001", "80")));
 
     MakePartWeightResult result =
@@ -56,7 +58,7 @@ class MakePartWeightServiceImplTest {
   void missingWeightReturnsMissingStatus() {
     MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
     MakePartWeightServiceImpl service = new MakePartWeightServiceImpl(mapper);
-    when(mapper.selectByLatestBatchAndCodes(any(), isNull()))
+    when(mapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
         .thenReturn(List.of(raw("P-001", ""), raw("RAW-001", "80")));
 
     MakePartWeightResult result =
@@ -68,9 +70,23 @@ class MakePartWeightServiceImplTest {
     assertThat(result.getRemark()).contains("缺 qty_per_parent", "缺 parent 理论净重");
   }
 
+  @Test
+  @DisplayName("BOM 子行缺 priceOrgCode 时直接报错，不默认读商用料品档案")
+  void missingPriceOrgCodeFailsFast() {
+    MaterialMasterRawMapper mapper = mock(MaterialMasterRawMapper.class);
+    MakePartWeightServiceImpl service = new MakePartWeightServiceImpl(mapper);
+    BomU9Source child = child("RAW-001", "0.080");
+    child.setPriceOrgCode(null);
+
+    assertThatThrownBy(() -> service.resolveWeights("P-001", child, "原材料加工"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("priceOrgCode");
+  }
+
   private BomU9Source child(String childCode, String qtyPerParent) {
     BomU9Source child = new BomU9Source();
     child.setChildMaterialNo(childCode);
+    child.setPriceOrgCode("210");
     if (qtyPerParent != null) {
       child.setQtyPerParent(new BigDecimal(qtyPerParent));
     }

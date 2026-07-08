@@ -21,7 +21,6 @@ import com.sanhua.marketingcost.mapper.CmsPlanCostRawMapper;
 import com.sanhua.marketingcost.mapper.CmsProductSubjectCostRawMapper;
 import com.sanhua.marketingcost.mapper.CmsSubjectSettingRawMapper;
 import com.sanhua.marketingcost.mapper.CmsWorkshopLaborRawMapper;
-import com.sanhua.marketingcost.service.CmsCostEffectiveSourceEnsureService;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -37,7 +36,6 @@ class CmsCostQueryServiceImplTest {
   private CmsSubjectSettingRawMapper subjectSettingMapper;
   private CmsCostSourceEffectiveMapper effectiveMapper;
   private CmsCostSourceEffectiveLogMapper effectiveLogMapper;
-  private CmsCostEffectiveSourceEnsureService ensureService;
   private CmsCostQueryServiceImpl service;
 
   @BeforeEach
@@ -49,7 +47,6 @@ class CmsCostQueryServiceImplTest {
     subjectSettingMapper = mock(CmsSubjectSettingRawMapper.class);
     effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
     effectiveLogMapper = mock(CmsCostSourceEffectiveLogMapper.class);
-    ensureService = mock(CmsCostEffectiveSourceEnsureService.class);
     service =
         new CmsCostQueryServiceImpl(
             batchMapper,
@@ -58,8 +55,7 @@ class CmsCostQueryServiceImplTest {
             subjectMapper,
             subjectSettingMapper,
             effectiveMapper,
-            effectiveLogMapper,
-            ensureService);
+            effectiveLogMapper);
   }
 
   @Test
@@ -211,7 +207,6 @@ class CmsCostQueryServiceImplTest {
         .contains("source_type")
         .contains("subject_code")
         .contains("business_unit_type");
-    verify(ensureService).ensureDefaultSources(2026, "SYSTEM_AUTO", "COMMERCIAL");
   }
 
   @Test

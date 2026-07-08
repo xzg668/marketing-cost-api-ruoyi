@@ -9,6 +9,7 @@ public interface BomByproductSettlementAdapter {
   BomByproductSettlementReadResult read(
       List<BomSettlementNode> nodes,
       LocalDate asOfDate,
+      String priceOrgCode,
       String businessUnitType,
       String bomPurpose);
 }

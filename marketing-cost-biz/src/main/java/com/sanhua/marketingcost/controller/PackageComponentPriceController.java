@@ -215,6 +215,7 @@ public class PackageComponentPriceController {
       PackageComponentBulkGenerateRequest request, BomCostingRow row) {
     PackagePriceRequest priceRequest = new PackagePriceRequest();
     priceRequest.setPackageMaterialCode(row.getMaterialCode());
+    priceRequest.setPriceOrgCode(priceOrgCodeFor(row));
     priceRequest.setPeriodMonth(effectivePeriodMonth(request, row));
     priceRequest.setOaNo(row.getOaNo());
     priceRequest.setTopProductCode(row.getTopProductCode());
@@ -233,6 +234,14 @@ public class PackageComponentPriceController {
       return trim(request.getPeriodMonth());
     }
     return row == null ? null : row.getPeriodMonth();
+  }
+
+  private String priceOrgCodeFor(BomCostingRow row) {
+    String value = trim(row == null ? null : row.getPriceOrgCode());
+    if (!StringUtils.hasText(value)) {
+      throw new IllegalStateException("包装组件批量生成缺少上游 priceOrgCode");
+    }
+    return value;
   }
 
   private void fillBulkGenerateRecord(

@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.ingest;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import org.springframework.stereotype.Component;
@@ -21,12 +22,20 @@ public class BomAvailabilityAdapterImpl implements BomAvailabilityAdapter {
 
   @Override
   public BomAvailability findAvailableBom(String oaNo, String productCode, String periodMonth) {
+    return findAvailableBom(oaNo, productCode, periodMonth, null);
+  }
+
+  @Override
+  public BomAvailability findAvailableBom(
+      String oaNo, String productCode, String periodMonth, String priceOrgCode) {
     if (!StringUtils.hasText(productCode)) {
       return BomAvailability.unavailable("产品料号为空，无法自动匹配 BOM");
     }
+    String org = requiredPriceOrgCode(priceOrgCode);
 
     BomCostingRow snapshot =
-        bomCostingRowMapper.selectAvailabilitySnapshot(productCode.trim(), trimToNull(periodMonth));
+        bomCostingRowMapper.selectAvailabilitySnapshot(
+            trimToNull(oaNo), productCode.trim(), trimToNull(periodMonth), org);
     if (snapshot != null) {
       BomAvailability availability = new BomAvailability();
       availability.setAvailable(true);
@@ -42,6 +51,7 @@ public class BomAvailabilityAdapterImpl implements BomAvailabilityAdapter {
     BomRawHierarchy raw =
         bomRawHierarchyMapper.selectOne(
             Wrappers.lambdaQuery(BomRawHierarchy.class)
+                .eq(BomRawHierarchy::getPriceOrgCode, org)
                 .eq(BomRawHierarchy::getTopProductCode, productCode.trim())
                 .eq(BomRawHierarchy::getLevel, 0)
                 .last("LIMIT 1"));
@@ -58,6 +68,13 @@ public class BomAvailabilityAdapterImpl implements BomAvailabilityAdapter {
     }
 
     return BomAvailability.unavailable("未匹配到本地正式 BOM 或有效补录 BOM");
+  }
+
+  private String requiredPriceOrgCode(String value) {
+    if (!StringUtils.hasText(value)) {
+      throw new IllegalArgumentException("BOM 可用性检查缺少 priceOrgCode");
+    }
+    return MaterialOrganization.fromPriceOrgCode(value).getPriceOrgCode();
   }
 
   private String trimToNull(String value) {

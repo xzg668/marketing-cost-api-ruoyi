@@ -4,12 +4,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.sanhua.marketingcost.dto.SyncMaterialMasterRow;
+import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
@@ -34,13 +37,16 @@ class MaterialMasterSyncServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
 
-    when(bomMapper.selectDistinctMaterialCodesByOaNo("OA-1"))
-        .thenReturn(List.of("M-001", "M-002"));
-    when(rawMapper.selectLatestActiveBatchId(null)).thenReturn("u9-batch-x");
+    when(bomMapper.selectDistinctMaterialCodesWithOrgByOaNo("OA-1"))
+        .thenReturn(List.of(costingRow("M-001", "COMMERCIAL"), costingRow("M-002", "COMMERCIAL")));
+    when(rawMapper.selectLatestActiveBatchId(null, "COMMERCIAL")).thenReturn("u9-batch-x");
 
     MaterialMasterRaw r1 = newRaw("M-001", "净重克=1500", "5%", "30", "商用部品");
+    r1.setSourceType("EASYDATA_U9");
     MaterialMasterRaw r2 = newRaw("M-002", "1500", "0.05", "30", "家用部品");
-    when(rawMapper.selectByLatestBatchAndCodes(any(), any())).thenReturn(List.of(r1, r2));
+    r2.setSourceType("EASYDATA_U9");
+    when(rawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
+        .thenReturn(List.of(r1, r2));
 
     when(masterMapper.upsertBatch(anyList())).thenReturn(2);
 
@@ -51,9 +57,9 @@ class MaterialMasterSyncServiceImplTest {
     assertThat(res.distinctCodes()).isEqualTo(2);
     assertThat(res.stagingHits()).isEqualTo(2);
     assertThat(res.affectedRows()).isEqualTo(2);
-    assertThat(res.batchId()).isEqualTo("u9-batch-x");
-    verify(rawMapper).selectLatestActiveBatchId(null);
-    verify(rawMapper).selectByLatestBatchAndCodes(any(), any());
+    assertThat(res.batchId()).isEqualTo("COMMERCIAL:u9-batch-x");
+    verify(rawMapper).selectLatestActiveBatchId(null, "COMMERCIAL");
+    verify(rawMapper).selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL"));
 
     // 验证 upsertBatch 拿到的 row 字段映射正确
     @SuppressWarnings("unchecked")
@@ -76,15 +82,16 @@ class MaterialMasterSyncServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
 
-    when(bomMapper.selectDistinctMaterialCodesByOaNo("OA-KEEP")).thenReturn(List.of("M-KEEP"));
-    when(rawMapper.selectLatestActiveBatchId(null)).thenReturn("u9-batch-x");
+    when(bomMapper.selectDistinctMaterialCodesWithOrgByOaNo("OA-KEEP"))
+        .thenReturn(List.of(costingRow("M-KEEP", "COMMERCIAL")));
+    when(rawMapper.selectLatestActiveBatchId(null, "COMMERCIAL")).thenReturn("u9-batch-x");
     MaterialMasterRaw raw = new MaterialMasterRaw();
     raw.setMaterialCode("M-KEEP");
     raw.setMaterialName("");
     raw.setGlobalSeg5NetWeight("");
     raw.setProductionDivision("");
     raw.setImportBatchId("u9-batch-x");
-    when(rawMapper.selectByLatestBatchAndCodes(any(), any())).thenReturn(List.of(raw));
+    when(rawMapper.selectByLatestBatchAndCodes(any(), any(), any())).thenReturn(List.of(raw));
 
     MaterialMaster existing = new MaterialMaster();
     existing.setMaterialCode("M-KEEP");
@@ -114,11 +121,12 @@ class MaterialMasterSyncServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
 
-    when(bomMapper.selectDistinctMaterialCodesByOaNo("OA-FILL")).thenReturn(List.of("M-FILL"));
-    when(rawMapper.selectLatestActiveBatchId(null)).thenReturn("u9-batch-x");
+    when(bomMapper.selectDistinctMaterialCodesWithOrgByOaNo("OA-FILL"))
+        .thenReturn(List.of(costingRow("M-FILL", "COMMERCIAL")));
+    when(rawMapper.selectLatestActiveBatchId(null, "COMMERCIAL")).thenReturn("u9-batch-x");
     MaterialMasterRaw raw = newRaw("M-FILL", "2.75", null, null, "商用部品");
     raw.setMainCategoryCode("101001001");
-    when(rawMapper.selectByLatestBatchAndCodes(any(), any())).thenReturn(List.of(raw));
+    when(rawMapper.selectByLatestBatchAndCodes(any(), any(), any())).thenReturn(List.of(raw));
     when(masterMapper.selectList(any())).thenReturn(List.of());
     when(masterMapper.upsertBatch(anyList())).thenReturn(1);
 
@@ -142,7 +150,7 @@ class MaterialMasterSyncServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
 
-    when(bomMapper.selectDistinctMaterialCodesByOaNo("OA-EMPTY"))
+    when(bomMapper.selectDistinctMaterialCodesWithOrgByOaNo("OA-EMPTY"))
         .thenReturn(List.of());
 
     MaterialMasterSyncServiceImpl svc =
@@ -162,15 +170,34 @@ class MaterialMasterSyncServiceImplTest {
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
 
-    when(bomMapper.selectDistinctMaterialCodesByOaNo("OA-X"))
-        .thenReturn(List.of("M-001"));
-    when(rawMapper.selectLatestActiveBatchId(null)).thenReturn(null);
+    when(bomMapper.selectDistinctMaterialCodesWithOrgByOaNo("OA-X"))
+        .thenReturn(List.of(costingRow("M-001", "COMMERCIAL")));
+    when(rawMapper.selectLatestActiveBatchId(null, "COMMERCIAL")).thenReturn(null);
 
     MaterialMasterSyncServiceImpl svc =
         new MaterialMasterSyncServiceImpl(bomMapper, rawMapper, masterMapper);
     assertThatThrownBy(() -> svc.syncByOaNo("OA-X"))
         .isInstanceOf(RuntimeException.class)
         .hasMessageContaining("staging");
+  }
+
+  @Test
+  @DisplayName("BOM 成本行缺组织 → 直接报错，不按 OA 兜底")
+  void sync_missingOrganizationFailsFast() {
+    BomCostingRowMapper bomMapper = mock(BomCostingRowMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
+
+    when(bomMapper.selectDistinctMaterialCodesWithOrgByOaNo("OA-NO-ORG"))
+        .thenReturn(List.of(costingRow("M-001", null)));
+
+    MaterialMasterSyncServiceImpl svc =
+        new MaterialMasterSyncServiceImpl(bomMapper, rawMapper, masterMapper);
+    assertThatThrownBy(() -> svc.syncByOaNo("OA-NO-ORG"))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessageContaining("materialOrganizationCode");
+    verify(rawMapper, never()).selectLatestActiveBatchId(any(), any());
+    verify(masterMapper, never()).upsertBatch(anyList());
   }
 
   // ============== 工具方法 ==============
@@ -199,6 +226,13 @@ class MaterialMasterSyncServiceImplTest {
   }
 
   // ============== 辅助 ==============
+
+  private static BomCostingRow costingRow(String materialCode, String organizationCode) {
+    BomCostingRow row = new BomCostingRow();
+    row.setMaterialCode(materialCode);
+    row.setMaterialOrganizationCode(organizationCode);
+    return row;
+  }
 
   private static MaterialMasterRaw newRaw(
       String code, String netWeight, String lossRate, String leadTime, String division) {

@@ -29,6 +29,11 @@ public class PriceRangeItem {
   private BigDecimal agentFee;
   private BigDecimal rangeLow;
   private BigDecimal rangeHigh;
+  private String rangeBasis;
+  private Long factorRuleId;
+  private String factorCode;
+  private String importBatchNo;
+  private Integer currentFlag;
   private BigDecimal priceExclTax;
   private BigDecimal priceInclTax;
   private Integer taxIncluded;
@@ -83,6 +88,16 @@ public class PriceRangeItem {
   public void setRangeLow(BigDecimal rangeLow) { this.rangeLow = rangeLow; }
   public BigDecimal getRangeHigh() { return rangeHigh; }
   public void setRangeHigh(BigDecimal rangeHigh) { this.rangeHigh = rangeHigh; }
+  public String getRangeBasis() { return rangeBasis; }
+  public void setRangeBasis(String rangeBasis) { this.rangeBasis = rangeBasis; }
+  public Long getFactorRuleId() { return factorRuleId; }
+  public void setFactorRuleId(Long factorRuleId) { this.factorRuleId = factorRuleId; }
+  public String getFactorCode() { return factorCode; }
+  public void setFactorCode(String factorCode) { this.factorCode = factorCode; }
+  public String getImportBatchNo() { return importBatchNo; }
+  public void setImportBatchNo(String importBatchNo) { this.importBatchNo = importBatchNo; }
+  public Integer getCurrentFlag() { return currentFlag; }
+  public void setCurrentFlag(Integer currentFlag) { this.currentFlag = currentFlag; }
   public BigDecimal getPriceExclTax() { return priceExclTax; }
   public void setPriceExclTax(BigDecimal priceExclTax) { this.priceExclTax = priceExclTax; }
   public BigDecimal getPriceInclTax() { return priceInclTax; }

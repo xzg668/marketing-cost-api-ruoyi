@@ -131,7 +131,7 @@ public class ProductPropertyAnnualUsageServiceImpl implements ProductPropertyAnn
             MaterialOrganization.forQuoteProcess(
                 form == null ? null : form.getProcessCode(),
                 form == null ? null : form.getOaNo(),
-                item == null ? null : item.getProductName()));
+                item == null ? null : item.getBusinessUnitType()));
     String division = resolveBusinessDivision(form);
     row.setBusinessDivision(division);
     row.setLevel1Name(division);
@@ -155,7 +155,10 @@ public class ProductPropertyAnnualUsageServiceImpl implements ProductPropertyAnn
     MaterialMasterRaw material =
         lookupLatestMaterial(
             productCode,
-            MaterialOrganization.forQuoteProcess(null, source == null ? null : source.getOaNo()));
+            MaterialOrganization.forQuoteProcess(
+                null,
+                source == null ? null : source.getOaNo(),
+                source == null ? null : source.getBusinessUnitType()));
     row.setProductCode(productCode);
     row.setProductName(resolveProductName(null, material));
     row.setAnnualUsage(toActualAnnualUsage(item == null ? null : item.getAnnualUsage()));
@@ -218,10 +221,8 @@ public class ProductPropertyAnnualUsageServiceImpl implements ProductPropertyAnn
     }
     String organization = MaterialOrganization.normalize(organizationCode);
     List<MaterialMasterRaw> rows =
-        MaterialOrganization.COMMERCIAL.getCode().equals(organization)
-            ? materialMasterRawMapper.selectByLatestBatchAndCodes(List.of(productCode.trim()), null)
-            : materialMasterRawMapper.selectByLatestBatchAndCodes(
-                List.of(productCode.trim()), null, organization);
+        materialMasterRawMapper.selectByLatestBatchAndCodes(
+            List.of(productCode.trim()), null, organization);
     return first(rows);
   }
 

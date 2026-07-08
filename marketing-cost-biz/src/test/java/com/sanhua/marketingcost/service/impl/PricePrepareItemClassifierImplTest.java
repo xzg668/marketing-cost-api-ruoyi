@@ -1,7 +1,9 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -13,7 +15,6 @@ import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
-import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
 import java.math.BigDecimal;
 import java.util.List;
@@ -29,7 +30,6 @@ class PricePrepareItemClassifierImplTest {
   private PackageComponentIdentifyService packageComponentIdentifyService;
   private MaterialMasterMapper materialMasterMapper;
   private MaterialMasterRawMapper materialMasterRawMapper;
-  private OaFormItemMapper oaFormItemMapper;
   private PricePrepareItemClassifierImpl classifier;
 
   @BeforeAll
@@ -45,22 +45,22 @@ class PricePrepareItemClassifierImplTest {
     packageComponentIdentifyService = mock(PackageComponentIdentifyService.class);
     materialMasterMapper = mock(MaterialMasterMapper.class);
     materialMasterRawMapper = mock(MaterialMasterRawMapper.class);
-    oaFormItemMapper = mock(OaFormItemMapper.class);
     classifier =
         new PricePrepareItemClassifierImpl(
             packageComponentIdentifyService,
             materialMasterMapper,
-            materialMasterRawMapper,
-            oaFormItemMapper);
+            materialMasterRawMapper);
   }
 
   @Test
   @DisplayName("普通料号分类为 NORMAL")
   void classifiesNormalMaterial() {
     BomCostingRow row = bomRow("TOP-A", "MAT-001", "采购件");
-    when(packageComponentIdentifyService.batchIdentify(any())).thenReturn(Map.of("MAT-001", false));
+    when(packageComponentIdentifyService.batchIdentify(any(), eq("COMMERCIAL")))
+        .thenReturn(Map.of("MAT-001", false));
     when(materialMasterMapper.selectList(any())).thenReturn(List.of(master("MAT-001", "采购件")));
-    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), any())).thenReturn(List.of());
+    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL")))
+        .thenReturn(List.of());
 
     List<PricePreparePlanItem> items = classifier.classify(List.of(row));
 
@@ -73,10 +73,10 @@ class PricePrepareItemClassifierImplTest {
   @DisplayName("包装组件按 15155% + 虚拟 识别结果分类")
   void classifiesPackageComponent() {
     BomCostingRow row = bomRow("1079900000536", "9830000026238", "虚拟");
-    when(packageComponentIdentifyService.batchIdentify(any()))
+    when(packageComponentIdentifyService.batchIdentify(any(), eq("COMMERCIAL")))
         .thenReturn(Map.of("9830000026238", true));
     when(materialMasterMapper.selectList(any())).thenReturn(List.of());
-    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), any()))
+    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL")))
         .thenReturn(List.of(raw("9830000026238", "虚拟", "1515501")));
 
     List<PricePreparePlanItem> items = classifier.classify(List.of(row));
@@ -91,9 +91,11 @@ class PricePrepareItemClassifierImplTest {
   @DisplayName("自制件分类为 MAKE_PART")
   void classifiesMakePart() {
     BomCostingRow row = bomRow("TOP-A", "MAKE-001", null);
-    when(packageComponentIdentifyService.batchIdentify(any())).thenReturn(Map.of("MAKE-001", false));
+    when(packageComponentIdentifyService.batchIdentify(any(), eq("COMMERCIAL")))
+        .thenReturn(Map.of("MAKE-001", false));
     when(materialMasterMapper.selectList(any())).thenReturn(List.of(master("MAKE-001", "制造件")));
-    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), any())).thenReturn(List.of());
+    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL")))
+        .thenReturn(List.of());
 
     List<PricePreparePlanItem> items = classifier.classify(List.of(row));
 
@@ -107,9 +109,11 @@ class PricePrepareItemClassifierImplTest {
   void classifiesMissingMaster() {
     BomCostingRow row = bomRow("TOP-A", "MISS-001", null);
     row.setMaterialName(null);
-    when(packageComponentIdentifyService.batchIdentify(any())).thenReturn(Map.of("MISS-001", false));
+    when(packageComponentIdentifyService.batchIdentify(any(), eq("COMMERCIAL")))
+        .thenReturn(Map.of("MISS-001", false));
     when(materialMasterMapper.selectList(any())).thenReturn(List.of());
-    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), any())).thenReturn(List.of());
+    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL")))
+        .thenReturn(List.of());
 
     List<PricePreparePlanItem> items = classifier.classify(List.of(row));
 
@@ -124,11 +128,12 @@ class PricePrepareItemClassifierImplTest {
   void keepsMultipleTopProductContext() {
     BomCostingRow row1 = bomRow("TOP-A", "MAT-A", "采购件");
     BomCostingRow row2 = bomRow("TOP-B", "MAKE-B", "自制");
-    when(packageComponentIdentifyService.batchIdentify(any()))
+    when(packageComponentIdentifyService.batchIdentify(any(), eq("COMMERCIAL")))
         .thenReturn(Map.of("MAT-A", false, "MAKE-B", false));
     when(materialMasterMapper.selectList(any()))
         .thenReturn(List.of(master("MAT-A", "采购件"), master("MAKE-B", "制造件")));
-    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), any())).thenReturn(List.of());
+    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL")))
+        .thenReturn(List.of());
 
     List<PricePreparePlanItem> items = classifier.classify(List.of(row1, row2));
 
@@ -136,6 +141,41 @@ class PricePrepareItemClassifierImplTest {
         .containsExactly("TOP-A", "TOP-B");
     assertThat(items).extracting(PricePreparePlanItem::getItemType)
         .containsExactly("NORMAL", "MAKE_PART");
+  }
+
+  @Test
+  @DisplayName("混合商用/板换 BOM 行按各自行组织识别包装组件")
+  void classifiesMixedOrganizationsPerBomRow() {
+    BomCostingRow commercial = bomRow("TOP-C", "PKG-C", "虚拟");
+    BomCostingRow plate = bomRow("TOP-P", "PKG-P", "虚拟");
+    plate.setPriceOrgCode("220");
+    plate.setMaterialOrganizationCode("PLATE");
+    when(packageComponentIdentifyService.batchIdentify(any(), eq("COMMERCIAL")))
+        .thenReturn(Map.of("PKG-C", false));
+    when(packageComponentIdentifyService.batchIdentify(any(), eq("PLATE")))
+        .thenReturn(Map.of("PKG-P", true));
+    when(materialMasterMapper.selectList(any())).thenReturn(List.of());
+    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL")))
+        .thenReturn(List.of(raw("PKG-C", "虚拟", "1515501")));
+    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), any(), eq("PLATE")))
+        .thenReturn(List.of(raw("PKG-P", "虚拟", "1515501")));
+
+    List<PricePreparePlanItem> items = classifier.classify(List.of(commercial, plate));
+
+    assertThat(items).extracting(PricePreparePlanItem::getItemType)
+        .containsExactly("NORMAL", "PACKAGE_COMPONENT");
+  }
+
+  @Test
+  @DisplayName("BOM 行缺少组织时直接失败")
+  void failsWhenBomRowMissingOrganization() {
+    BomCostingRow row = bomRow("TOP-A", "MAT-001", "采购件");
+    row.setPriceOrgCode(null);
+    row.setMaterialOrganizationCode(null);
+
+    assertThatThrownBy(() -> classifier.classify(List.of(row)))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("价格准备 BOM 行缺少上游组织");
   }
 
   private BomCostingRow bomRow(String topProductCode, String materialCode, String shapeAttr) {
@@ -146,6 +186,8 @@ class PricePrepareItemClassifierImplTest {
     row.setMaterialName(materialCode + "-name");
     row.setShapeAttr(shapeAttr);
     row.setQtyPerTop(BigDecimal.ONE);
+    row.setPriceOrgCode("210");
+    row.setMaterialOrganizationCode("COMMERCIAL");
     return row;
   }
 

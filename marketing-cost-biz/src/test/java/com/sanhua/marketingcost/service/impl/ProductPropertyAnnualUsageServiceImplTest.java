@@ -37,7 +37,7 @@ class ProductPropertyAnnualUsageServiceImplTest {
     MaterialMasterRaw material = new MaterialMasterRaw();
     material.setMaterialCode("P-001");
     material.setMaterialName("料品档案产品名称");
-    when(materialMasterRawMapper.selectByLatestBatchAndCodes(List.of("P-001"), null))
+    when(materialMasterRawMapper.selectByLatestBatchAndCodes(List.of("P-001"), null, "COMMERCIAL"))
         .thenReturn(List.of(material));
 
     OaForm form = new OaForm();
@@ -49,6 +49,7 @@ class ProductPropertyAnnualUsageServiceImplTest {
     OaFormItem item = new OaFormItem();
     item.setSeq(1);
     item.setMaterialNo("P-001");
+    item.setBusinessUnitType("COMMERCIAL");
     item.setAnnualVolume(new BigDecimal("1.23"));
 
     ProductPropertyAnnualUsageServiceImpl service =

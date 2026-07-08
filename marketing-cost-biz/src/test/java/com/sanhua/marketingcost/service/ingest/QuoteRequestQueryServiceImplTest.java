@@ -57,7 +57,7 @@ class QuoteRequestQueryServiceImplTest {
     quoteBomStatusMapper = mock(QuoteBomStatusMapper.class);
     quoteIngestLogMapper = mock(QuoteIngestLogMapper.class);
     productPackagingTypeResolver = mock(U9ProductPackagingTypeResolver.class);
-    when(productPackagingTypeResolver.resolve(any()))
+    when(productPackagingTypeResolver.resolve(any(), any()))
         .thenReturn(U9ProductPackagingTypeResolver.Result.unknown(null));
     service =
         new QuoteRequestQueryServiceImpl(
@@ -193,7 +193,7 @@ class QuoteRequestQueryServiceImplTest {
     when(oaFormHeaderExtraFieldMapper.selectList(any())).thenReturn(List.of(headerExtraField()));
     when(oaFormItemExtraFieldMapper.selectList(any())).thenReturn(List.of(itemExtraField(13L)));
     when(quoteIngestLogMapper.selectById(8L)).thenReturn(log(8L));
-    when(productPackagingTypeResolver.resolve("MAT-1001"))
+    when(productPackagingTypeResolver.resolve("MAT-1001", "PLATE"))
         .thenReturn(new U9ProductPackagingTypeResolver.Result(
             U9ProductPackagingTypeResolver.PACKAGED_PRODUCT, "120101"));
 

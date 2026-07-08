@@ -26,6 +26,9 @@ public class BomRawHierarchy {
   @TableId(type = IdType.AUTO)
   private Long id;
 
+  /** U9 报价组织：210=商用，220=板换。 */
+  private String priceOrgCode;
+
   // ============================ 层级定位 ============================
 
   /** 顶层产品料号 */
@@ -144,6 +147,14 @@ public class BomRawHierarchy {
 
   public void setId(Long id) {
     this.id = id;
+  }
+
+  public String getPriceOrgCode() {
+    return priceOrgCode;
+  }
+
+  public void setPriceOrgCode(String priceOrgCode) {
+    this.priceOrgCode = priceOrgCode;
   }
 
   public String getTopProductCode() {

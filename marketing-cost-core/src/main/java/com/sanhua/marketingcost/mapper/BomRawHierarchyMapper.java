@@ -20,7 +20,7 @@ public interface BomRawHierarchyMapper extends BaseMapper<BomRawHierarchy> {
   /**
    * 批量 upsert 构建出的层级行。
    *
-   * <p>UK = {@code (top_product_code, source_type, bom_purpose, effective_from, source_line_key)}；
+   * <p>UK = {@code (top_product_code, price_org_code, source_type, bom_purpose, effective_from, source_line_key)}；
    * 命中时只刷新非身份字段（见 ON DUPLICATE KEY UPDATE 子句）。
    *
    * <p>为什么不走 MP 的 {@code saveBatch}：
@@ -36,7 +36,7 @@ public interface BomRawHierarchyMapper extends BaseMapper<BomRawHierarchy> {
   @Insert(
       "<script>"
           + "INSERT INTO lp_bom_raw_hierarchy ("
-          + "  top_product_code, parent_code, material_code, level, path, sort_seq,"
+          + "  price_org_code, top_product_code, parent_code, material_code, level, path, sort_seq,"
           + "  source_u9_row_id, source_line_key, process_seq,"
           + "  qty_per_parent, qty_per_top, material_name, material_spec, shape_attr,"
           + "  source_category, cost_element_code, material_category_1, material_category_2,"
@@ -45,7 +45,8 @@ public interface BomRawHierarchyMapper extends BaseMapper<BomRawHierarchy> {
           + "  source_type, source_import_batch_id, build_batch_id, built_at, business_unit_type"
           + ") VALUES "
           + "<foreach collection='rows' item='e' separator=','>"
-          + "  (#{e.topProductCode}, #{e.parentCode}, #{e.materialCode}, #{e.level}, #{e.path}, #{e.sortSeq},"
+          + "  (NULLIF(TRIM(#{e.priceOrgCode}), ''), #{e.topProductCode}, #{e.parentCode},"
+          + "   #{e.materialCode}, #{e.level}, #{e.path}, #{e.sortSeq},"
           + "   #{e.sourceU9RowId}, #{e.sourceLineKey}, #{e.processSeq},"
           + "   #{e.qtyPerParent}, #{e.qtyPerTop}, #{e.materialName}, #{e.materialSpec}, #{e.shapeAttr},"
           + "   #{e.sourceCategory}, #{e.costElementCode}, #{e.materialCategory1}, #{e.materialCategory2},"

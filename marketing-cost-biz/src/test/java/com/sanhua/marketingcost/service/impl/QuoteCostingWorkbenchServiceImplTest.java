@@ -35,6 +35,7 @@ import com.sanhua.marketingcost.mapper.QuoteCostingWorkbenchSummaryMapper;
 import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmBatchMapper;
 import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -51,9 +52,9 @@ class QuoteCostingWorkbenchServiceImplTest {
   private static final String SAMPLE_OA_NO = "FI-SC-006-20260108-109";
   private static final Long SAMPLE_OA_FORM_ITEM_ID = 180L;
   private static final String SAMPLE_PRODUCT_CODE = "1001900001090";
-  private static final String SAMPLE_PERIOD_MONTH = "2026-06";
+  private static final String SAMPLE_PERIOD_MONTH = CostPricingPeriodUtils.currentPricingMonth();
   private static final String SAMPLE_BUILD_BATCH_ID = "f_20260609_12fe06";
-  private static final BigDecimal SAMPLE_TOTAL_COST = new BigDecimal("137.807919");
+  private static final BigDecimal SAMPLE_TOTAL_COST = new BigDecimal("137.806217");
 
   private OaFormMapper oaFormMapper;
   private OaFormItemMapper oaFormItemMapper;
@@ -109,14 +110,14 @@ class QuoteCostingWorkbenchServiceImplTest {
   void existingSnapshotDoesNotBuildAgain() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
-    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(List.of(row(10L, "FIN-001", "MAT-1")));
 
     QuoteCostingWorkbenchResponse response = service.getWorkbench("OA-001", 10L);
 
     assertThat(response.getSnapshotGenerated()).isFalse();
-    assertThat(response.getPeriodMonth()).isEqualTo("2026-06");
+    assertThat(response.getPeriodMonth()).isEqualTo(SAMPLE_PERIOD_MONTH);
     assertThat(response.getBomRows()).hasSize(1);
     assertThat(response.getBomRows().get(0).getOaFormItemId()).isEqualTo(10L);
     assertThat(response.getBomRows().get(0).getChildCode()).isEqualTo("MAT-1");
@@ -131,13 +132,44 @@ class QuoteCostingWorkbenchServiceImplTest {
   }
 
   @Test
+  void existingSnapshotRendersRowsWhenRawHierarchyIdIsStaleAfterCutover() {
+    BomCostingRow staleRawIdRow = row(10L, "FIN-001", "HISTORY-MAT");
+    staleRawIdRow.setRawHierarchyNodeId(9_999_999L);
+    staleRawIdRow.setParentCode("HISTORY-PARENT");
+    staleRawIdRow.setMaterialName("历史快照子件");
+    staleRawIdRow.setMaterialSpec("HISTORY-SPEC");
+    staleRawIdRow.setQtyPerParent(new BigDecimal("2.50000000"));
+    staleRawIdRow.setQtyPerTop(new BigDecimal("5.00000000"));
+    staleRawIdRow.setPath("/FIN-001/HISTORY-PARENT/HISTORY-MAT/");
+    when(oaFormMapper.selectOne(any())).thenReturn(form());
+    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
+        .thenReturn(List.of(staleRawIdRow));
+
+    QuoteCostingWorkbenchResponse response = service.getWorkbench("OA-001", 10L);
+
+    assertThat(response.getSnapshotGenerated()).isFalse();
+    assertThat(response.getBomRows()).singleElement().satisfies(row -> {
+      assertThat(row.getParentCode()).isEqualTo("HISTORY-PARENT");
+      assertThat(row.getChildCode()).isEqualTo("HISTORY-MAT");
+      assertThat(row.getChildName()).isEqualTo("历史快照子件");
+      assertThat(row.getChildModel()).isEqualTo("HISTORY-SPEC");
+      assertThat(row.getUsageQty()).isEqualByComparingTo("2.50000000");
+      assertThat(row.getQtyPerTop()).isEqualByComparingTo("5.00000000");
+      assertThat(row.getPath()).isEqualTo("/FIN-001/HISTORY-PARENT/HISTORY-MAT/");
+    });
+    verify(costingBuildService, never()).buildByOaFormItem(any());
+  }
+
+  @Test
   void launchWorkbenchReusesExistingSnapshotWhenRulesAreNotNewer() {
     BomCostingRow existing = row(10L, "FIN-001", "MAT-1");
     existing.setBuiltAt(LocalDateTime.of(2026, 6, 30, 10, 0));
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
-    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(List.of(existing));
     when(settlementRuleMapper.selectLatestRuleChangeTime())
         .thenReturn(LocalDateTime.of(2026, 6, 30, 9, 0));
@@ -163,15 +195,15 @@ class QuoteCostingWorkbenchServiceImplTest {
     newRow.setBuildBatchId("new_batch");
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
-    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(List.of(oldRow))
         .thenReturn(List.of(newRow));
     when(settlementRuleMapper.selectLatestRuleChangeTime())
         .thenReturn(LocalDateTime.of(2026, 6, 30, 9, 30));
     when(byproductCostRuleMapper.selectLatestRuleChangeTime())
         .thenReturn(LocalDateTime.of(2026, 6, 30, 8, 0));
-    when(costingBuildService.buildByOaFormItem(10L, "2026-06", LocalDate.now()))
+    when(costingBuildService.buildByOaFormItem(10L, SAMPLE_PERIOD_MONTH, LocalDate.now()))
         .thenReturn(
             new QuoteBomCostingBuildResponse(
                 201L,
@@ -180,7 +212,7 @@ class QuoteCostingWorkbenchServiceImplTest {
                 "OA-001",
                 "FIN-001",
                 "NON_BARE",
-                "2026-06",
+                SAMPLE_PERIOD_MONTH,
                 "new_batch",
                 1,
                 1,
@@ -195,7 +227,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     assertThat(response.getBuildBatchId()).isEqualTo("new_batch");
     assertThat(response.getBomRows()).hasSize(1);
     assertThat(response.getBomRows().get(0).getChildCode()).isEqualTo("MAT-NEW");
-    verify(costingBuildService).buildByOaFormItem(10L, "2026-06", LocalDate.now());
+    verify(costingBuildService).buildByOaFormItem(10L, SAMPLE_PERIOD_MONTH, LocalDate.now());
     verify(quoteBomConfirmationMapper).update(any(), any());
     verify(priceTypeConfirmBatchMapper).update(any(), any());
   }
@@ -204,10 +236,10 @@ class QuoteCostingWorkbenchServiceImplTest {
   void bomConfirmedMakesQuoteBomDoneAndPriceTypePending() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
-    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(List.of(row(10L, "FIN-001", "MAT-1")));
-    when(workbenchSummaryMapper.selectLatestBomConfirmation("OA-001", 10L, "FIN-001", "2026-06"))
+    when(workbenchSummaryMapper.selectLatestBomConfirmation("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(bomConfirmation("CONFIRMED"));
 
     QuoteCostingWorkbenchResponse response = service.getWorkbench("OA-001", 10L);
@@ -225,14 +257,14 @@ class QuoteCostingWorkbenchServiceImplTest {
   void priceTypeGapMakesPriceTypePartial() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
-    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(List.of(row(10L, "FIN-001", "MAT-1")));
-    when(workbenchSummaryMapper.selectLatestBomConfirmation("OA-001", 10L, "FIN-001", "2026-06"))
+    when(workbenchSummaryMapper.selectLatestBomConfirmation("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(bomConfirmation("CONFIRMED"));
     when(
             workbenchSummaryMapper.selectLatestPriceTypeConfirmation(
-                "OA-001", 10L, "FIN-001", "2026-06"))
+                "OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(priceTypeConfirmation("DRAFT", 2));
 
     QuoteCostingWorkbenchResponse response = service.getWorkbench("OA-001", 10L);
@@ -245,16 +277,16 @@ class QuoteCostingWorkbenchServiceImplTest {
   void pricePrepareGapMakesPreparePartial() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
-    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(List.of(row(10L, "FIN-001", "MAT-1")));
-    when(workbenchSummaryMapper.selectLatestBomConfirmation("OA-001", 10L, "FIN-001", "2026-06"))
+    when(workbenchSummaryMapper.selectLatestBomConfirmation("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(bomConfirmation("CONFIRMED"));
     when(
             workbenchSummaryMapper.selectLatestPriceTypeConfirmation(
-                "OA-001", 10L, "FIN-001", "2026-06"))
+                "OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(priceTypeConfirmation("CONFIRMED", 0));
-    when(workbenchSummaryMapper.selectLatestPricePrepare("OA-001", 10L, "FIN-001", "2026-06"))
+    when(workbenchSummaryMapper.selectLatestPricePrepare("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(pricePrepare("PARTIAL", 1));
 
     QuoteCostingWorkbenchResponse response = service.getWorkbench("OA-001", 10L);
@@ -267,18 +299,18 @@ class QuoteCostingWorkbenchServiceImplTest {
   void trialCostRunStaysBlockedWhenPrepareStillHasWarnings() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
-    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(List.of(row(10L, "FIN-001", "MAT-1")));
-    when(workbenchSummaryMapper.selectLatestBomConfirmation("OA-001", 10L, "FIN-001", "2026-06"))
+    when(workbenchSummaryMapper.selectLatestBomConfirmation("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(bomConfirmation("CONFIRMED"));
     when(
             workbenchSummaryMapper.selectLatestPriceTypeConfirmation(
-                "OA-001", 10L, "FIN-001", "2026-06"))
+                "OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(priceTypeConfirmation("CONFIRMED", 0));
-    when(workbenchSummaryMapper.selectLatestPricePrepare("OA-001", 10L, "FIN-001", "2026-06"))
+    when(workbenchSummaryMapper.selectLatestPricePrepare("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(pricePrepare("PARTIAL", 1));
-    when(workbenchSummaryMapper.selectLatestCostRun("OA-001", 10L, "FIN-001", "2026-06"))
+    when(workbenchSummaryMapper.selectLatestCostRun("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(costRun("TRIAL"));
 
     QuoteCostingWorkbenchResponse response = service.getWorkbench("OA-001", 10L);
@@ -293,18 +325,18 @@ class QuoteCostingWorkbenchServiceImplTest {
   void confirmedCostRunMakesCostRunDone() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
-    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(List.of(row(10L, "FIN-001", "MAT-1")));
-    when(workbenchSummaryMapper.selectLatestBomConfirmation("OA-001", 10L, "FIN-001", "2026-06"))
+    when(workbenchSummaryMapper.selectLatestBomConfirmation("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(bomConfirmation("CONFIRMED"));
     when(
             workbenchSummaryMapper.selectLatestPriceTypeConfirmation(
-                "OA-001", 10L, "FIN-001", "2026-06"))
+                "OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(priceTypeConfirmation("CONFIRMED", 0));
-    when(workbenchSummaryMapper.selectLatestPricePrepare("OA-001", 10L, "FIN-001", "2026-06"))
+    when(workbenchSummaryMapper.selectLatestPricePrepare("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(pricePrepare("SUCCESS", 0));
-    when(workbenchSummaryMapper.selectLatestCostRun("OA-001", 10L, "FIN-001", "2026-06"))
+    when(workbenchSummaryMapper.selectLatestCostRun("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(costRun("CONFIRMED"));
 
     QuoteCostingWorkbenchResponse response = service.getWorkbench("OA-001", 10L);
@@ -318,11 +350,11 @@ class QuoteCostingWorkbenchServiceImplTest {
   void missingSnapshotBuildsThenReturnsRows() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
-    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
         .thenReturn(List.of())
         .thenReturn(List.of(row(10L, "FIN-001", "MAT-1")));
-    when(costingBuildService.buildByOaFormItem(10L, "2026-06", LocalDate.now()))
+    when(costingBuildService.buildByOaFormItem(10L, SAMPLE_PERIOD_MONTH, LocalDate.now()))
         .thenReturn(
             new QuoteBomCostingBuildResponse(
                 201L,
@@ -331,7 +363,7 @@ class QuoteCostingWorkbenchServiceImplTest {
                 "OA-001",
                 "FIN-001",
                 "NON_BARE",
-                "2026-06",
+                SAMPLE_PERIOD_MONTH,
                 "qbp_20260608_abcd1234",
                 1,
                 1,
@@ -345,26 +377,26 @@ class QuoteCostingWorkbenchServiceImplTest {
     assertThat(response.getSnapshotGenerated()).isTrue();
     assertThat(response.getBuildBatchId()).isEqualTo("qbp_20260608_abcd1234");
     assertThat(response.getBomRows()).extracting("childCode").containsExactly("MAT-1");
-    verify(costingBuildService).buildByOaFormItem(10L, "2026-06", LocalDate.now());
+    verify(costingBuildService).buildByOaFormItem(10L, SAMPLE_PERIOD_MONTH, LocalDate.now());
   }
 
   @Test
   void snapshotQueryUsesQuoteItemProductAndPeriodScope() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(20L)).thenReturn(item(20L, "FIN-002"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
-    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 20L, "FIN-002", "2026-06"))
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 20L, "FIN-002", SAMPLE_PERIOD_MONTH))
         .thenReturn(List.of(row(20L, "FIN-002", "MAT-2")));
 
     service.getWorkbench("OA-001", 20L);
 
     verify(bomCostingRowMapper)
-        .selectQuoteCostingSnapshot("OA-001", 20L, "FIN-002", "2026-06");
+        .selectQuoteCostingSnapshot("OA-001", 20L, "FIN-002", SAMPLE_PERIOD_MONTH);
   }
 
   @Test
   void goldenSampleWorkbenchUsesProductLineScopeBeforeWorkbenchRemodel() {
-    // QWB-00 基线：真实库当前成本结果为 137.807919，工作台必须按产品行读取成本版本摘要。
+    // QWB-00 基线：真实库当前成本结果为 137.806217，工作台必须按产品行读取成本版本摘要。
     when(oaFormMapper.selectOne(any())).thenReturn(sampleForm());
     when(oaFormItemMapper.selectById(SAMPLE_OA_FORM_ITEM_ID))
         .thenReturn(sampleItem());
@@ -412,7 +444,7 @@ class QuoteCostingWorkbenchServiceImplTest {
   void updateBomRowSavesAllowedFieldsAndAuditOnly() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
     when(bomCostingRowMapper.selectById(300L)).thenReturn(row(10L, "FIN-001", "MAT-OLD"));
     when(bomCostingRowMapper.updateById(any(BomCostingRow.class))).thenReturn(1);
     QuoteCostingBomRowUpdateRequest request = updateRequest();
@@ -455,7 +487,7 @@ class QuoteCostingWorkbenchServiceImplTest {
   void updateBomRowRejectsCrossOaRow() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
     BomCostingRow row = row(10L, "FIN-001", "MAT-1");
     row.setOaNo("OA-OTHER");
     when(bomCostingRowMapper.selectById(300L)).thenReturn(row);
@@ -470,7 +502,7 @@ class QuoteCostingWorkbenchServiceImplTest {
   void updateBomRowRejectsCrossQuoteItemRow() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
     BomCostingRow row = row(99L, "FIN-001", "MAT-1");
     when(bomCostingRowMapper.selectById(300L)).thenReturn(row);
 
@@ -484,7 +516,7 @@ class QuoteCostingWorkbenchServiceImplTest {
   void updateBomRowRejectsCrossPeriodRow() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
     BomCostingRow row = row(10L, "FIN-001", "MAT-1");
     row.setPeriodMonth("2026-05");
     when(bomCostingRowMapper.selectById(300L)).thenReturn(row);
@@ -499,7 +531,7 @@ class QuoteCostingWorkbenchServiceImplTest {
   void updateBomRowRejectsWhenBomAlreadyConfirmed() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
     when(bomCostingRowMapper.selectById(300L)).thenReturn(row(10L, "FIN-001", "MAT-1"));
     when(quoteBomConfirmationMapper.selectOne(any())).thenReturn(activeBomConfirmation());
 
@@ -513,7 +545,7 @@ class QuoteCostingWorkbenchServiceImplTest {
   void updateBomRowAllowsAfterBomConfirmationCancelled() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status("2026-06"));
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
     when(bomCostingRowMapper.selectById(300L)).thenReturn(row(10L, "FIN-001", "MAT-OLD"));
     when(quoteBomConfirmationMapper.selectOne(any())).thenReturn(null);
     when(bomCostingRowMapper.updateById(any(BomCostingRow.class))).thenReturn(1);
@@ -529,7 +561,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     OaForm form = new OaForm();
     form.setId(1L);
     form.setOaNo("OA-001");
-    form.setAccountingPeriodMonth("2026-06");
+    form.setAccountingPeriodMonth(SAMPLE_PERIOD_MONTH);
     form.setCustomer("客户A");
     return form;
   }
@@ -592,7 +624,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     response.setOaNo("OA-001");
     response.setOaFormItemId(10L);
     response.setTopProductCode("FIN-001");
-    response.setPeriodMonth("2026-06");
+    response.setPeriodMonth(SAMPLE_PERIOD_MONTH);
     response.setConfirmStatus(status);
     response.setRowCount(1);
     return response;
@@ -605,7 +637,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     confirmation.setOaNo("OA-001");
     confirmation.setOaFormItemId(10L);
     confirmation.setTopProductCode("FIN-001");
-    confirmation.setPeriodMonth("2026-06");
+    confirmation.setPeriodMonth(SAMPLE_PERIOD_MONTH);
     confirmation.setConfirmStatus(QuoteBomConfirmation.STATUS_CONFIRMED);
     confirmation.setConfirmVersion(1);
     return confirmation;
@@ -618,7 +650,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     response.setOaNo("OA-001");
     response.setOaFormItemId(10L);
     response.setProductCode("FIN-001");
-    response.setPeriodMonth("2026-06");
+    response.setPeriodMonth(SAMPLE_PERIOD_MONTH);
     response.setBomConfirmNo("BOM-CF-001");
     response.setStatus(status);
     response.setGapCount(gaps);
@@ -633,7 +665,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     response.setOaFormItemId(10L);
     response.setTopProductCode("FIN-001");
     response.setPriceTypeConfirmNo("PT-CF-001");
-    response.setPeriodMonth("2026-06");
+    response.setPeriodMonth(SAMPLE_PERIOD_MONTH);
     response.setStatus(status);
     response.setGapCount(gaps);
     return response;
@@ -647,7 +679,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     response.setOaNo("OA-001");
     response.setOaFormItemId(10L);
     response.setProductCode("FIN-001");
-    response.setResultPeriod("2026-06");
+    response.setResultPeriod(SAMPLE_PERIOD_MONTH);
     response.setPricePrepareNo("PP-001");
     response.setStatus(status);
     response.setTotalCost(new BigDecimal("12.345678"));
@@ -680,7 +712,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     row.setMaterialSpec("SPEC");
     row.setQtyPerParent(BigDecimal.ONE);
     row.setQtyPerTop(BigDecimal.ONE);
-    row.setPeriodMonth("2026-06");
+    row.setPeriodMonth(SAMPLE_PERIOD_MONTH);
     row.setBuildBatchId("existing_batch");
     row.setPath("/" + topProductCode + "/" + materialCode + "/");
     row.setManualModified(0);

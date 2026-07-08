@@ -5,12 +5,41 @@ import java.time.LocalDate;
 import java.util.List;
 
 public class PriceRangeItemImportRequest {
+  private String businessUnitType;
+  private String rangeBasis;
+  private String factorCode;
+  private String factorName;
+  private String factorUnit;
+  private String priceUnit;
+  private String sourceFile;
+  private String sourceSheet;
+  private String importBatchNo;
   private List<PriceRangeItemImportRow> rows;
 
+  public String getBusinessUnitType() { return businessUnitType; }
+  public void setBusinessUnitType(String businessUnitType) { this.businessUnitType = businessUnitType; }
+  public String getRangeBasis() { return rangeBasis; }
+  public void setRangeBasis(String rangeBasis) { this.rangeBasis = rangeBasis; }
+  public String getFactorCode() { return factorCode; }
+  public void setFactorCode(String factorCode) { this.factorCode = factorCode; }
+  public String getFactorName() { return factorName; }
+  public void setFactorName(String factorName) { this.factorName = factorName; }
+  public String getFactorUnit() { return factorUnit; }
+  public void setFactorUnit(String factorUnit) { this.factorUnit = factorUnit; }
+  public String getPriceUnit() { return priceUnit; }
+  public void setPriceUnit(String priceUnit) { this.priceUnit = priceUnit; }
+  public String getSourceFile() { return sourceFile; }
+  public void setSourceFile(String sourceFile) { this.sourceFile = sourceFile; }
+  public String getSourceSheet() { return sourceSheet; }
+  public void setSourceSheet(String sourceSheet) { this.sourceSheet = sourceSheet; }
+  public String getImportBatchNo() { return importBatchNo; }
+  public void setImportBatchNo(String importBatchNo) { this.importBatchNo = importBatchNo; }
   public List<PriceRangeItemImportRow> getRows() { return rows; }
   public void setRows(List<PriceRangeItemImportRow> rows) { this.rows = rows; }
 
   public static class PriceRangeItemImportRow {
+    private String rangeBasis;
+    private String factorCode;
     private String orgCode;
     private String sourceName;
     private String supplierName;
@@ -35,6 +64,10 @@ public class PriceRangeItemImportRequest {
     private String orderType;
     private BigDecimal quota;
 
+    public String getRangeBasis() { return rangeBasis; }
+    public void setRangeBasis(String rangeBasis) { this.rangeBasis = rangeBasis; }
+    public String getFactorCode() { return factorCode; }
+    public void setFactorCode(String factorCode) { this.factorCode = factorCode; }
     public String getOrgCode() { return orgCode; }
     public void setOrgCode(String orgCode) { this.orgCode = orgCode; }
     public String getSourceName() { return sourceName; }

@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.impl;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.FlattenRequest;
 import com.sanhua.marketingcost.dto.FlattenResult;
+import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.quotebom.FormalBomReadResult;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomSourceLineDto;
@@ -212,6 +213,9 @@ public class QuoteProductBomCostingBuildServiceImpl
     request.setOaNo(record.getOaNo());
     request.setOaFormItemId(record.getOaFormItemId());
     request.setTopProductCode(record.getQuoteProductCode());
+    QuoteDataOrganization organization = requiredOrganization(record);
+    request.setPriceOrgCode(organization.priceOrgCode());
+    request.setMaterialOrganizationCode(organization.materialOrganizationCode());
     request.setPeriodMonth(periodMonth);
     request.setAsOfDate(quoteDate);
     FlattenResult flattened = flattenService.flatten(request);
@@ -273,14 +277,9 @@ public class QuoteProductBomCostingBuildServiceImpl
   private List<PreparedLine> loadFormalLines(
       QuoteBomPreparationRecord record, String sourceType, String periodMonth, LocalDate quoteDate) {
     String formalProductCode = formalProductCode(record);
-    String organizationCode =
-        MaterialOrganization.forQuoteProcess(
-            null, record.getOaNo(), resolveProductName(record.getOaFormItemId()));
+    QuoteDataOrganization organization = requiredOrganization(record);
     FormalBomReadResult formal =
-        MaterialOrganization.COMMERCIAL.getCode().equals(organizationCode)
-            ? formalBomReadService.read(formalProductCode, periodMonth, null, quoteDate)
-            : formalBomReadService.read(
-                formalProductCode, periodMonth, null, quoteDate, organizationCode);
+        formalBomReadService.read(formalProductCode, periodMonth, null, quoteDate, organization);
     if (formal == null || !formal.found()) {
       throw new QuoteIngestException(
           "正式 BOM 不可用: " + (formal == null ? formalProductCode + " 未返回读取结果" : formal.gapMessage()));
@@ -460,6 +459,7 @@ public class QuoteProductBomCostingBuildServiceImpl
 
     String buildBatchId = generateBuildBatchId();
     LocalDateTime builtAt = LocalDateTime.now();
+    QuoteDataOrganization organization = requiredOrganization(record);
     String buType = BusinessUnitContext.getCurrentBusinessUnitType();
 
     // 报价 BOM 入口只负责把正式 BOM / 补录 BOM / 包装参考归一成标准节点；
@@ -470,7 +470,7 @@ public class QuoteProductBomCostingBuildServiceImpl
           childrenByParentPath.getOrDefault(line.path(), List.of()).isEmpty()));
     }
     BomByproductSettlementReadResult byproductRead =
-        byproductSettlementAdapter.read(nodes, quoteDate, buType, "主制造");
+        byproductSettlementAdapter.read(nodes, quoteDate, organization.priceOrgCode(), buType, "主制造");
     BomSettlementRowBuildResult built = buildEngine.build(
         new BomSettlementBuildRequest(
             record.getOaNo(),
@@ -513,8 +513,11 @@ public class QuoteProductBomCostingBuildServiceImpl
     if (rows == null || rows.isEmpty()) {
       return List.of();
     }
+    QuoteDataOrganization organization = requiredOrganization(record);
     for (BomCostingRow row : rows) {
       row.setOaFormItemId(record.getOaFormItemId());
+      row.setPriceOrgCode(organization.priceOrgCode());
+      row.setMaterialOrganizationCode(organization.materialOrganizationCode());
       if (row.getManualModified() == null) {
         row.setManualModified(0);
       }
@@ -526,17 +529,33 @@ public class QuoteProductBomCostingBuildServiceImpl
     if (rows == null || rows.isEmpty()) {
       return;
     }
+    QuoteDataOrganization organization = requiredOrganization(record);
     for (BomCostingRow row : rows) {
       row.setOaFormItemId(record.getOaFormItemId());
+      row.setPriceOrgCode(organization.priceOrgCode());
+      row.setMaterialOrganizationCode(organization.materialOrganizationCode());
       if (row.getManualModified() == null) {
         row.setManualModified(0);
       }
       BomCostingRow patch = new BomCostingRow();
       patch.setId(row.getId());
       patch.setOaFormItemId(record.getOaFormItemId());
+      patch.setPriceOrgCode(organization.priceOrgCode());
+      patch.setMaterialOrganizationCode(organization.materialOrganizationCode());
       patch.setManualModified(row.getManualModified());
       costingRowMapper.updateById(patch);
     }
+  }
+
+  private QuoteDataOrganization requiredOrganization(QuoteBomPreparationRecord record) {
+    String priceOrgCode = record == null ? null : trimToNull(record.getPriceOrgCode());
+    String materialOrganizationCode =
+        record == null ? null : trimToNull(record.getMaterialOrganizationCode());
+    if (!StringUtils.hasText(priceOrgCode) || !StringUtils.hasText(materialOrganizationCode)) {
+      throw new QuoteIngestException("BOM 准备记录缺少上游组织，不能生成结算行");
+    }
+    return MaterialOrganization.normalizeQuoteDataOrganization(
+        new QuoteDataOrganization(priceOrgCode, materialOrganizationCode));
   }
 
   private BomSettlementNode toSettlementNode(

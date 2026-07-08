@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -49,11 +50,11 @@ class PackageComponentStructureReadServiceImplTest {
         .thenReturn(List.of(snapshot(10L, "PKG-PARENT", "FIN-A", "2026-05")));
     when(snapshotDetailMapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(detail(100L, 10L, 1, "PKG-CHILD-A", "1.00000000")));
-    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), isNull()))
+    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
         .thenReturn(List.of(master("PKG-PARENT"), master("PKG-CHILD-A")));
 
     PackageComponentStructureReadResult result =
-        service.readByReference("FIN-A", "FIN-A", "2026-05");
+        service.readByReference("FIN-A", "FIN-A", "2026-05", "210", "COMMERCIAL");
 
     assertThat(result.found()).isTrue();
     assertThat(result.sourceTopProductCode()).isEqualTo("FIN-A");
@@ -77,15 +78,15 @@ class PackageComponentStructureReadServiceImplTest {
         .thenReturn(
             List.of(detail(101L, 11L, 1, "PKG-CHILD-A", "1.00000000")),
             List.of(detail(102L, 12L, 1, "PKG-CHILD-B", "3.00000000")));
-    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), isNull()))
+    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
         .thenReturn(
             List.of(master("PKG-PARENT"), master("PKG-CHILD-A")),
             List.of(master("PKG-PARENT"), master("PKG-CHILD-B")));
 
     PackageComponentStructureReadResult a =
-        service.readByReference("FIN-A", "FIN-A", "2026-05");
+        service.readByReference("FIN-A", "FIN-A", "2026-05", "210", "COMMERCIAL");
     PackageComponentStructureReadResult b =
-        service.readByReference("FIN-B", "FIN-B", "2026-05");
+        service.readByReference("FIN-B", "FIN-B", "2026-05", "210", "COMMERCIAL");
 
     assertThat(a.found()).isTrue();
     assertThat(b.found()).isTrue();
@@ -105,11 +106,11 @@ class PackageComponentStructureReadServiceImplTest {
             List.of(
                 detail(201L, 20L, 1, "PKG-CHILD-A", "1.00000000"),
                 detail(202L, 20L, 2, "PKG-CHILD-A", "2.50000000")));
-    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), isNull()))
+    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
         .thenReturn(List.of(master("PKG-PARENT"), master("PKG-CHILD-A")));
 
     PackageComponentStructureReadResult result =
-        service.readByReference("FIN-A", "FIN-A", "2026-05");
+        service.readByReference("FIN-A", "FIN-A", "2026-05", "210", "COMMERCIAL");
 
     assertThat(result.found()).isTrue();
     assertThat(result.lines()).hasSize(2);
@@ -129,11 +130,11 @@ class PackageComponentStructureReadServiceImplTest {
         .thenReturn(List.of(snapshot(30L, "PKG-PARENT", "FIN-OLD", "2025-01")));
     when(snapshotDetailMapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(detail(301L, 30L, 1, "PKG-CHILD-A", "1.00000000")));
-    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), isNull()))
+    when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
         .thenReturn(List.of(master("PKG-PARENT"), master("PKG-CHILD-A")));
 
     PackageComponentStructureReadResult result =
-        service.readApprovedReferenceForBareProduct("BARE-001");
+        service.readApprovedReferenceForBareProduct("BARE-001", "210", "COMMERCIAL");
 
     assertThat(result.found()).isTrue();
     assertThat(result.packageReferenceId()).isEqualTo(900L);
@@ -149,7 +150,7 @@ class PackageComponentStructureReadServiceImplTest {
     when(snapshotMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
     PackageComponentStructureReadResult result =
-        service.readByReference("FIN-MISSING", "FIN-MISSING", "2026-05");
+        service.readByReference("FIN-MISSING", "FIN-MISSING", "2026-05", "210", "COMMERCIAL");
 
     assertThat(result.found()).isFalse();
     assertThat(result.lines()).isEmpty();
@@ -160,7 +161,7 @@ class PackageComponentStructureReadServiceImplTest {
   @DisplayName("缺少查询料号时返回业务可读提示")
   void returnsBusinessMessageWhenReferenceCodeMissing() {
     PackageComponentStructureReadResult result =
-        service.readByReference(null, null, "2026-05");
+        service.readByReference(null, null, "2026-05", "210", "COMMERCIAL");
 
     assertThat(result.found()).isFalse();
     assertThat(result.lines()).isEmpty();

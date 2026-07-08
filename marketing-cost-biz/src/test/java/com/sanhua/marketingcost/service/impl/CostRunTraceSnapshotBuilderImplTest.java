@@ -160,6 +160,70 @@ class CostRunTraceSnapshotBuilderImplTest {
   }
 
   @Test
+  @DisplayName("行情区间价底稿展示行情值、命中区间和 BOM 用量公式")
+  void buildsFactorRangeTraceSnapshot() {
+    CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
+    CostRunCostItemMapper costMapper = mock(CostRunCostItemMapper.class);
+    PricePrepareItemMapper prepareMapper = mock(PricePrepareItemMapper.class);
+    MakePartPriceCalcRowMapper makePartMapper = mock(MakePartPriceCalcRowMapper.class);
+    PriceLinkedCalcItemMapper linkedCalcMapper = mock(PriceLinkedCalcItemMapper.class);
+    PriceLinkedItemMapper linkedItemMapper = mock(PriceLinkedItemMapper.class);
+    PriceFixedItemMapper fixedMapper = mock(PriceFixedItemMapper.class);
+    PriceRangeItemMapper rangeMapper = mock(PriceRangeItemMapper.class);
+    CostRunTraceSnapshotBuilderImpl builder =
+        new CostRunTraceSnapshotBuilderImpl(
+            partMapper, costMapper, prepareMapper, makePartMapper, linkedCalcMapper, linkedItemMapper,
+            fixedMapper, rangeMapper,
+            new ObjectMapper());
+
+    CostRunPartItem rangePart = part(14L, 104L, "区间价", "MAT-CU", "铜管");
+    rangePart.setQty(new BigDecimal("0.655"));
+    rangePart.setUnitPrice(new BigDecimal("0.392035"));
+    rangePart.setAmount(new BigDecimal("0.256783"));
+    PricePrepareItem prepare = prepare(104L, "RANGE", "区间价", 9101L);
+    prepare.setMaterialCode("MAT-CU");
+    prepare.setMaterialName("铜管");
+    prepare.setQuantity(new BigDecimal("0.655"));
+    prepare.setUnitPrice(new BigDecimal("0.392035"));
+    prepare.setAmount(new BigDecimal("0.256783"));
+    prepare.setMessage("行情区间命中(CU=90000,range=87501-92500,field=price_excl_tax)");
+    when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of(rangePart));
+    when(costMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(prepareMapper.selectList(any(Wrapper.class))).thenReturn(List.of(prepare));
+    when(rangeMapper.selectById(9101L)).thenReturn(factorRangeItem());
+
+    List<CostRunTraceSnapshot> snapshots = builder.build(version());
+
+    assertThat(snapshots).hasSize(1);
+    CostRunTraceSnapshot row = snapshot(snapshots, "PART:14");
+    assertThat(row.getSourceType()).isEqualTo("RANGE_PRICE");
+    assertThat(row.getSourceRefId()).isEqualTo(9101L);
+    assertThat(row.getUnitPrice()).isEqualByComparingTo("0.392035");
+    assertThat(row.getQuantity()).isEqualByComparingTo("0.655");
+    assertThat(row.getAmount()).isEqualByComparingTo("0.256783");
+    assertThat(row.getSourceSnapshotJson())
+        .contains(
+            "\"priceKind\":\"区间价\"",
+            "\"range_type\":\"铜价区间\"",
+            "\"factor_code\":\"CU\"",
+            "\"factor_value\":90000",
+            "\"range_low\":87501",
+            "\"range_high\":92500",
+            "\"matchedUnitPrice\":0.392035");
+    assertThat(row.getFormulaSnapshotJson())
+        .contains("命中单价 × BOM 用量", "0.392035", "0.655", "0.256783");
+    assertThat(row.getVariablesJson())
+        .contains(
+            "\"factor_code\":\"CU\"",
+            "\"factor_value\":90000",
+            "\"range_low\":87501",
+            "\"range_high\":92500",
+            "\"bomQuantity\":0.655");
+    assertThat(row.getStepsJson())
+        .contains("FACTOR_RANGE_PRICE_ROW", "按报价单铜价命中区间", "PART_AMOUNT");
+  }
+
+  @Test
   @DisplayName("费用项底稿覆盖重点费用公式、来源和汇总组成项")
   void buildsCostItemTraceForExpenseCodes() {
     CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
@@ -440,6 +504,29 @@ class CostRunTraceSnapshotBuilderImplTest {
     item.setEffectiveFrom(LocalDate.of(2026, 6, 1));
     item.setEffectiveTo(LocalDate.of(2026, 6, 30));
     item.setDeleted(0);
+    return item;
+  }
+
+  private PriceRangeItem factorRangeItem() {
+    PriceRangeItem item = new PriceRangeItem();
+    item.setId(9101L);
+    item.setSourceName("区间价导入");
+    item.setSupplierName("行情供应商");
+    item.setSupplierCode("SUP-CU");
+    item.setMaterialCode("MAT-CU");
+    item.setMaterialName("铜管");
+    item.setSpecModel("CU-SPEC");
+    item.setUnit("M");
+    item.setRangeBasis("FACTOR");
+    item.setFactorRuleId(8101L);
+    item.setFactorCode("CU");
+    item.setRangeLow(new BigDecimal("87501"));
+    item.setRangeHigh(new BigDecimal("92500"));
+    item.setPriceExclTax(new BigDecimal("0.392035"));
+    item.setTaxIncluded(0);
+    item.setEffectiveFrom(LocalDate.of(2026, 6, 1));
+    item.setEffectiveTo(LocalDate.of(2026, 6, 30));
+    item.setBusinessUnitType("COMMERCIAL");
     return item;
   }
 

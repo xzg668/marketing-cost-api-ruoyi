@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -59,7 +60,8 @@ class MakePartSourceDataServiceImplTest {
                 child("P-001", "RAW-B", 3, 11L, "主制造", LocalDate.parse("9999-12-31")),
                 child("P-001", "RAW-A", 1, 12L, "主制造", LocalDate.parse("9999-12-31"))));
 
-    List<BomU9Source> result = service.listDedupedChildren("P-001", LocalDate.parse("2026-05-31"));
+    List<BomU9Source> result =
+        service.listDedupedChildren("P-001", LocalDate.parse("2026-05-31"), "210");
 
     assertThat(result).hasSize(2);
     assertThat(result).extracting(BomU9Source::getChildMaterialNo).containsExactly("RAW-A", "RAW-B");
@@ -71,7 +73,20 @@ class MakePartSourceDataServiceImplTest {
     verify(u9Mapper).selectList(captor.capture());
     String sqlSegment = captor.getValue().getSqlSegment();
     assertThat(sqlSegment)
-        .contains("parent_material_no", "bom_purpose", "effective_from", "effective_to");
+        .contains("price_org_code", "parent_material_no", "bom_purpose", "effective_from", "effective_to");
+  }
+
+  @Test
+  @DisplayName("U9 子项查询缺 price_org_code 时直接失败")
+  void listDedupedChildrenRequiresPriceOrgCode() {
+    BomCostingRowMapper costingMapper = mock(BomCostingRowMapper.class);
+    BomU9SourceMapper u9Mapper = mock(BomU9SourceMapper.class);
+    MakePartSourceDataServiceImpl service =
+        new MakePartSourceDataServiceImpl(costingMapper, u9Mapper);
+
+    assertThatThrownBy(() -> service.listDedupedChildren("P-001", LocalDate.parse("2026-05-31"), null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("priceOrgCode");
   }
 
   private BomCostingRow costingRow(String materialCode, String shapeAttr) {

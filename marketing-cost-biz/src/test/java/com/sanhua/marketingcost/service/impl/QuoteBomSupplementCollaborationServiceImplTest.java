@@ -157,7 +157,7 @@ class QuoteBomSupplementCollaborationServiceImplTest {
     when(supplementVersionMapper.selectOne(any())).thenReturn(null);
     when(packageReferenceMapper.selectOne(any())).thenReturn(null);
     when(statusMapper.selectById(101L)).thenReturn(status());
-    when(packageReadService.readByReference("REF-001", "REF-001", "2026-05"))
+    when(packageReadService.readByReference("REF-001", "REF-001", "2026-05", "210", "COMMERCIAL"))
         .thenReturn(packageFound("REF-001"));
 
     BomSupplementCollaborationSaveResponse response = service.submit("tok-501", 501L, bareRequest(BigDecimal.TEN));
@@ -179,7 +179,7 @@ class QuoteBomSupplementCollaborationServiceImplTest {
     when(supplementVersionMapper.selectOne(any())).thenReturn(null);
     when(packageReferenceMapper.selectOne(any())).thenReturn(null);
     when(statusMapper.selectById(101L)).thenReturn(status());
-    when(packageReadService.readByReference("REF-001", "REF-001", "2026-05"))
+    when(packageReadService.readByReference("REF-001", "REF-001", "2026-05", "210", "COMMERCIAL"))
         .thenReturn(packageFound("REF-001"));
 
     BomSupplementCollaborationSaveResponse response = service.submit("tok-501", 501L, bareRequest(BigDecimal.ONE));
@@ -339,6 +339,8 @@ class QuoteBomSupplementCollaborationServiceImplTest {
     record.setOaFormItemId(10L);
     record.setOaNo("OA-001");
     record.setQuoteProductCode("BARE".equals(productType) ? "BARE-001" : "FIN-001");
+    record.setPriceOrgCode("210");
+    record.setMaterialOrganizationCode("COMMERCIAL");
     record.setProductType(productType);
     record.setBareProductCode("BARE".equals(productType) ? "BARE-001" : null);
     record.setNeedPackage(needPackage);

@@ -5,6 +5,7 @@ import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstant
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.MaterialPriceTypeImportRequest;
 import com.sanhua.marketingcost.dto.MaterialPriceTypePageResponse;
+import com.sanhua.marketingcost.dto.MaterialPriceTypeRangeApplyRequest;
 import com.sanhua.marketingcost.dto.MaterialPriceTypeRequest;
 import com.sanhua.marketingcost.entity.MaterialPriceType;
 import com.sanhua.marketingcost.service.MaterialPriceTypeService;
@@ -86,5 +87,13 @@ public class MaterialPriceTypeController {
   public CommonResult<List<MaterialPriceType>> importItems(
       @RequestBody MaterialPriceTypeImportRequest request) {
     return CommonResult.success(materialPriceTypeService.importItems(request));
+  }
+
+  /** 将区间价导入冲突物料确认改为区间价 */
+  @PreAuthorize("@ss.hasPermi('base:material-price-type:edit')")
+  @PostMapping("/range-price-type/apply")
+  public CommonResult<List<MaterialPriceType>> applyRangePriceType(
+      @RequestBody MaterialPriceTypeRangeApplyRequest request) {
+    return CommonResult.success(materialPriceTypeService.applyRangePriceType(request));
   }
 }

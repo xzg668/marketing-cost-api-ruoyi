@@ -53,7 +53,7 @@ class U9MaterialMasterServiceImplTest {
   }
 
   @Test
-  @DisplayName("pageRaw：限定组织当前有效料品并应用页面过滤条件")
+  @DisplayName("pageRaw：限定组织当前有效料品并兼容 EasyData/Excel 来源")
   void pageRawUsesLatestActiveBatchAndFilters() {
     when(rawMapper.selectPage(any(Page.class), any(Wrapper.class))).thenAnswer(invocation -> {
       Page<MaterialMasterRaw> page = invocation.getArgument(0);
@@ -76,17 +76,19 @@ class U9MaterialMasterServiceImplTest {
     verify(rawMapper).selectPage(any(Page.class), captor.capture());
     String sql = captor.getValue().getCustomSqlSegment();
     assertThat(sql).contains(
-        "organization_code", "active_flag", "source_type", "material_code", "material_name");
+        "organization_code", "active_flag", "material_code", "material_name");
     assertThat(sql).contains("material_spec", "material_model", "drawing_no", "shape_attr");
     assertThat(sql).contains("main_category_name", "cost_element", "production_division", "department_name");
+    assertThat(sql).doesNotContain("source_type");
     assertThat(sql).doesNotContain("SELECT MAX(import_batch_id)");
   }
 
   @Test
-  @DisplayName("options：按组织当前有效 raw 搜索并带出 BOM 编辑字段")
-  void optionsSearchesLatestRawAndMapsFields() {
+  @DisplayName("options：按组织当前有效 raw 搜索并带出 EasyData 料品字段")
+  void optionsSearchesCurrentRawAndMapsEasyDataFields() {
     MaterialMasterRaw row = new MaterialMasterRaw();
     row.setId(9L);
+    row.setSourceType("EASYDATA_U9");
     row.setMaterialCode("MAT-001");
     row.setMaterialName("紫铜直管");
     row.setMaterialSpec("SPEC-1");
@@ -95,7 +97,7 @@ class U9MaterialMasterServiceImplTest {
     row.setGlobalSeg4Material("铜");
     row.setShapeAttr("采购件");
     when(rawMapper.selectOptionsByLatestBatchKeyword(
-            "铜管", U9MaterialMasterServiceImpl.SOURCE_TYPE_EXCEL, "PLATE", 50))
+            "铜管", null, "PLATE", 50))
         .thenReturn(List.of(row));
 
     var options = service.options(" 铜管 ", "PLATE", 200);
@@ -112,16 +114,17 @@ class U9MaterialMasterServiceImplTest {
   }
 
   @Test
-  @DisplayName("options：型号为空时 childModel 用规格兜底")
-  void optionsUsesSpecAsChildModelFallback() {
+  @DisplayName("options：旧 Excel raw 仍可兼容，型号为空时 childModel 用规格兜底")
+  void optionsKeepsExcelRawCompatibleAndUsesSpecFallback() {
     MaterialMasterRaw row = new MaterialMasterRaw();
+    row.setSourceType("EXCEL");
     row.setMaterialCode("MAT-002");
     row.setMaterialSpec("SPEC-2");
     when(rawMapper.selectOptionsByLatestBatchKeyword(
-            null, U9MaterialMasterServiceImpl.SOURCE_TYPE_EXCEL, "COMMERCIAL", 20))
+            null, null, "COMMERCIAL", 20))
         .thenReturn(List.of(row));
 
-    var options = service.options(" ", null, 0);
+    var options = service.options(" ", "COMMERCIAL", 0);
 
     assertThat(options).hasSize(1);
     assertThat(options.get(0).getChildModel()).isEqualTo("SPEC-2");

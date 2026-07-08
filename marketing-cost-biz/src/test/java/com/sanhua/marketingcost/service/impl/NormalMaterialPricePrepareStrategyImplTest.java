@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
+import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
@@ -35,6 +36,7 @@ class NormalMaterialPricePrepareStrategyImplTest {
   private LinkedPriceEnsureService linkedPriceEnsureService;
   private PriceResolver fixedResolver;
   private PriceResolver linkedResolver;
+  private PriceResolver rangeResolver;
   private NormalMaterialPricePrepareStrategyImpl strategy;
 
   @BeforeEach
@@ -43,10 +45,12 @@ class NormalMaterialPricePrepareStrategyImplTest {
     linkedPriceEnsureService = mock(LinkedPriceEnsureService.class);
     fixedResolver = mock(PriceResolver.class);
     linkedResolver = mock(PriceResolver.class);
+    rangeResolver = mock(PriceResolver.class);
     when(fixedResolver.priceType()).thenReturn(PriceTypeEnum.FIXED);
     when(linkedResolver.priceType()).thenReturn(PriceTypeEnum.LINKED);
+    when(rangeResolver.priceType()).thenReturn(PriceTypeEnum.RANGE);
     strategy = new NormalMaterialPricePrepareStrategyImpl(
-        routerService, linkedPriceEnsureService, List.of(fixedResolver, linkedResolver));
+        routerService, linkedPriceEnsureService, List.of(fixedResolver, linkedResolver, rangeResolver));
   }
 
   @Test
@@ -56,7 +60,8 @@ class NormalMaterialPricePrepareStrategyImplTest {
     PriceTypeRoute route = route("MAT-FIX", PriceTypeEnum.FIXED);
     when(routerService.listCandidates(eq("MAT-FIX"), eq("2026-05"), any(LocalDate.class)))
         .thenReturn(List.of(route));
-    when(fixedResolver.resolve(eq("OA-001"), any(CostRunPartItemDto.class), eq(route)))
+    when(fixedResolver.resolve(
+            eq("OA-001"), any(CostRunPartItemDto.class), eq(route), any(CostRunContext.class)))
         .thenReturn(PriceResolveResult.hit(new BigDecimal("12.30"), "固定采购价"));
 
     NormalMaterialPricePrepareResult result =
@@ -79,7 +84,8 @@ class NormalMaterialPricePrepareStrategyImplTest {
         .thenReturn(List.of(route));
     when(linkedPriceEnsureService.ensure(any(LinkedPriceEnsureRequest.class)))
         .thenReturn(new LinkedPriceEnsureResult());
-    when(linkedResolver.resolve(eq("OA-001"), any(CostRunPartItemDto.class), eq(route)))
+    when(linkedResolver.resolve(
+            eq("OA-001"), any(CostRunPartItemDto.class), eq(route), any(CostRunContext.class)))
         .thenReturn(PriceResolveResult.hit(new BigDecimal("7.00"), "联动价"));
 
     NormalMaterialPricePrepareResult result =
@@ -119,7 +125,8 @@ class NormalMaterialPricePrepareStrategyImplTest {
     PriceTypeRoute route = route("MAT-MISS", PriceTypeEnum.FIXED);
     when(routerService.listCandidates(eq("MAT-MISS"), eq("2026-05"), any(LocalDate.class)))
         .thenReturn(List.of(route));
-    when(fixedResolver.resolve(eq("OA-001"), any(CostRunPartItemDto.class), eq(route)))
+    when(fixedResolver.resolve(
+            eq("OA-001"), any(CostRunPartItemDto.class), eq(route), any(CostRunContext.class)))
         .thenReturn(PriceResolveResult.miss("固定价表无该料号"));
 
     NormalMaterialPricePrepareResult result =
@@ -129,6 +136,40 @@ class NormalMaterialPricePrepareStrategyImplTest {
     assertThat(result.getGapType()).isEqualTo("MISSING_PRICE");
     assertThat(result.getSourceTable()).isEqualTo("PriceResolver");
     assertThat(result.getMessage()).contains("固定价表无该料号");
+  }
+
+  @Test
+  @DisplayName("MFRP-06：区间价价格准备传递报价上下文并写入命中区间明细 ID")
+  void rangePricePreparePassesQuoteContextAndKeepsRangeItemRef() {
+    PricePreparePlanItem planItem = planItem("201850160", new BigDecimal("0.655"));
+    PriceTypeRoute route = route("201850160", PriceTypeEnum.RANGE);
+    when(routerService.listCandidates(eq("201850160"), eq("2026-05"), any(LocalDate.class)))
+        .thenReturn(List.of(route));
+    when(rangeResolver.resolve(
+            eq("OA-001"), any(CostRunPartItemDto.class), eq(route), any(CostRunContext.class)))
+        .thenReturn(new PriceResolveResult(
+            new BigDecimal("0.3920353982300885"),
+            "区间价",
+            "行情区间命中(CU=90000,range=87501-92500,field=price_excl_tax)",
+            701L));
+
+    NormalMaterialPricePrepareResult result =
+        strategy.prepare("OA-001", "COMMERCIAL", "2026-05", planItem);
+
+    assertThat(result.getStatus()).isEqualTo("READY");
+    assertThat(result.getUnitPrice()).isEqualByComparingTo("0.3920353982300885");
+    assertThat(result.getAmount()).isEqualByComparingTo("0.2567831858407079675");
+    assertThat(result.getResultRefType()).isEqualTo("RANGE_PRICE");
+    assertThat(result.getResultRefId()).isEqualTo(701L);
+    assertThat(result.getMessage()).contains("CU=90000", "87501-92500");
+    ArgumentCaptor<CostRunContext> contextCaptor = ArgumentCaptor.forClass(CostRunContext.class);
+    verify(rangeResolver).resolve(
+        eq("OA-001"), any(CostRunPartItemDto.class), eq(route), contextCaptor.capture());
+    assertThat(contextCaptor.getValue().getScene()).isEqualTo(CostRunContext.SCENE_QUOTE);
+    assertThat(contextCaptor.getValue().getOaNo()).isEqualTo("OA-001");
+    assertThat(contextCaptor.getValue().getBusinessUnitType()).isEqualTo("COMMERCIAL");
+    assertThat(contextCaptor.getValue().getPricingMonth()).isEqualTo("2026-05");
+    assertThat(contextCaptor.getValue().getProductCode()).isEqualTo("TOP-001");
   }
 
   private PricePreparePlanItem planItem(String materialCode, BigDecimal quantity) {

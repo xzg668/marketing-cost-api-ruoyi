@@ -28,16 +28,21 @@ public class PackageComponentIdentifyServiceImpl implements PackageComponentIden
 
   @Override
   public boolean isPackageComponent(String materialCode) {
+    throw new IllegalArgumentException("包装组件识别必须由上游显式传入料品组织");
+  }
+
+  @Override
+  public boolean isPackageComponent(String materialCode, String organizationCode) {
     String code = trimToNull(materialCode);
     if (code == null) {
       return false;
     }
-    return Boolean.TRUE.equals(batchIdentify(List.of(code)).get(code));
+    return Boolean.TRUE.equals(batchIdentify(List.of(code), organizationCode).get(code));
   }
 
   @Override
   public Map<String, Boolean> batchIdentify(Collection<String> materialCodes) {
-    return batchIdentify(materialCodes, MaterialOrganization.COMMERCIAL.getCode());
+    throw new IllegalArgumentException("包装组件识别必须由上游显式传入料品组织");
   }
 
   @Override
@@ -79,9 +84,6 @@ public class PackageComponentIdentifyServiceImpl implements PackageComponentIden
 
   private List<MaterialMasterRaw> selectRawRows(Set<String> codes, String organizationCode) {
     String organization = MaterialOrganization.normalize(organizationCode);
-    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
-      return materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null);
-    }
     return materialMasterRawMapper.selectByLatestBatchAndCodes(codes, null, organization);
   }
 

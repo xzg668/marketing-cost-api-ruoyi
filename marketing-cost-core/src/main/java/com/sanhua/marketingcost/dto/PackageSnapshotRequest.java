@@ -12,6 +12,7 @@ public class PackageSnapshotRequest {
   private String quoteNo;
   private String oaNo;
   private String topProductCode;
+  private String priceOrgCode;
   private String bomPurpose;
   private String sourceType;
   private LocalDate asOfDate;

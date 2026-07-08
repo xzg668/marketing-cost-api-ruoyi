@@ -63,7 +63,7 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
   void cleanUp() throws Exception {
     try (Connection conn = openConnection();
         Statement stmt = conn.createStatement()) {
-      stmt.executeUpdate("DELETE FROM lp_bom_costing_row WHERE oa_no = '" + oaNo + "'");
+      stmt.executeUpdate("DELETE FROM lp_bom_costing_row WHERE oa_no IN ('" + oaNo + "', 'FI-SC-020-" + oaNo + "')");
       // raw_hierarchy：按本测试产生的 build_batch_id 前缀 'rawtest_' 清（见 seedRaw）
       stmt.executeUpdate("DELETE FROM lp_bom_raw_hierarchy WHERE build_batch_id LIKE 'rawtest_%'");
       stmt.executeUpdate("DELETE FROM lp_material_master_raw WHERE import_batch_id LIKE 'rawtest_material_%'");
@@ -94,6 +94,28 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
     });
     assertThat(r.getCostingRowsWritten()).isGreaterThan(0);
     assertThat(r.getSubtreeRequiredCount()).isZero();
+  }
+
+  @Test
+  @DisplayName("同一 top 同时存在 210/220 时，板换 flatten 只使用 220 节点")
+  void flattenUsesRequestedPriceOrganizationOnly() {
+    seedTopWithOrg("ORG-T", "主制造", "2026-01-01", 0, "210");
+    seedChildAtWithOrg("ORG-T", "C210", "/ORG-T/C210/", 1, 1, "1", "主制造",
+        "2026-01-01", "商用子件", null, "采购件", 1, "210");
+    seedTopWithOrg("ORG-T", "主制造", "2026-01-01", 0, "220");
+    seedChildAtWithOrg("ORG-T", "C220", "/ORG-T/C220/", 1, 1, "1", "主制造",
+        "2026-01-01", "板换子件", null, "采购件", 1, "220");
+    FlattenRequest request = req("ORG-T", "主制造", LocalDate.of(2026, 6, 1));
+    request.setOaNo("FI-SC-020-" + oaNo);
+    request.setPriceOrgCode("220");
+    request.setMaterialOrganizationCode("PLATE");
+
+    flattenService.flatten(request);
+
+    List<BomCostingRow> rows = loadCostingByOa(request.getOaNo());
+    assertThat(rows).hasSize(1);
+    assertThat(rows.get(0).getMaterialCode()).isEqualTo("C220");
+    assertThat(rows).extracting(BomCostingRow::getMaterialCode).doesNotContain("C210");
   }
 
   @Test
@@ -330,6 +352,7 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
       // 2) 构建 1079900000536 主制造（T4）
       BuildHierarchyRequest br = new BuildHierarchyRequest();
       br.setImportBatchId(ir.getImportBatchId());
+      br.setPriceOrgCode("210");
       br.setBomPurpose("主制造");
       br.setMode("BY_PRODUCT");
       br.setTopProductCode("1079900000536");
@@ -343,6 +366,8 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
       fr.setBomPurpose("主制造");
       fr.setMode("BY_OA");
       fr.setAsOfDate(LocalDate.of(2026, 4, 23));
+      fr.setPriceOrgCode("210");
+      fr.setMaterialOrganizationCode("COMMERCIAL");
       long t0 = System.currentTimeMillis();
       FlattenResult fResult = flattenService.flatten(fr);
       long elapsedMs = System.currentTimeMillis() - t0;
@@ -364,10 +389,10 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
         assertThat(c.getTopProductCode()).isEqualTo("1079900000536");
         assertThat(c.getAsOfDate()).isEqualTo(LocalDate.of(2026, 4, 23));
         assertThat(c.getIsCostingRow()).isEqualTo(1);
-        // 非顶层：path 必须以 /1079900000536/ 开头且以 /{materialCode}/ 结尾
+        // 非顶层：path 必须以顶层开头，末段去掉 @项次/@工序 后等于 materialCode
         if (c.getLevel() != null && c.getLevel() > 0) {
           assertThat(c.getPath()).startsWith("/1079900000536/");
-          assertThat(c.getPath()).endsWith("/" + c.getMaterialCode() + "/");
+          assertThat(materialCodeFromLastPathSegment(c.getPath())).isEqualTo(c.getMaterialCode());
         }
       });
       // 若命中新结算规则，matched_settlement_rule_id 非空
@@ -395,19 +420,49 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
     r.setBomPurpose(purpose);
     r.setMode("BY_OA");
     r.setAsOfDate(asOf);
+    r.setPriceOrgCode("210");
+    r.setMaterialOrganizationCode("COMMERCIAL");
     return r;
   }
 
   private List<BomCostingRow> loadCostingByOa() {
+    return loadCostingByOa(oaNo);
+  }
+
+  private List<BomCostingRow> loadCostingByOa(String queryOaNo) {
     return costingMapper.selectList(
         Wrappers.<BomCostingRow>lambdaQuery()
-            .eq(BomCostingRow::getOaNo, oaNo)
+            .eq(BomCostingRow::getOaNo, queryOaNo)
             .orderByAsc(BomCostingRow::getLevel));
+  }
+
+  private static String materialCodeFromLastPathSegment(String path) {
+    String segment = lastPathSegment(path);
+    if (segment == null) {
+      return null;
+    }
+    int discriminator = segment.indexOf('@');
+    return discriminator < 0 ? segment : segment.substring(0, discriminator);
+  }
+
+  private static String lastPathSegment(String path) {
+    if (path == null || path.isBlank()) {
+      return null;
+    }
+    String normalized = path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
+    int lastSlash = normalized.lastIndexOf('/');
+    return lastSlash < 0 ? normalized : normalized.substring(lastSlash + 1);
   }
 
   /** 插入顶层 raw 行（level=0, path=/top/） */
   private void seedTop(String top, String purpose, String effFrom, int isLeaf) {
+    seedTopWithOrg(top, purpose, effFrom, isLeaf, "210");
+  }
+
+  private void seedTopWithOrg(
+      String top, String purpose, String effFrom, int isLeaf, String priceOrgCode) {
     BomRawHierarchy row = new BomRawHierarchy();
+    row.setPriceOrgCode(priceOrgCode);
     row.setTopProductCode(top);
     row.setParentCode(top);
     row.setMaterialCode(top);
@@ -439,9 +494,19 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
       String parent, String child, String path, int level, int sortSeq, String qty,
       String purpose, String effFrom, String name, String shapeAttr,
       String sourceCategory, int isLeaf) {
+    seedChildAtWithOrg(
+        parent, child, path, level, sortSeq, qty, purpose, effFrom, name, shapeAttr,
+        sourceCategory, isLeaf, "210");
+  }
+
+  private void seedChildAtWithOrg(
+      String parent, String child, String path, int level, int sortSeq, String qty,
+      String purpose, String effFrom, String name, String shapeAttr,
+      String sourceCategory, int isLeaf, String priceOrgCode) {
     BomRawHierarchy row = new BomRawHierarchy();
     // 从 path 里推顶层：/T/.../ → T
     String top = path.substring(1, path.indexOf('/', 1));
+    row.setPriceOrgCode(priceOrgCode);
     row.setTopProductCode(top);
     row.setParentCode(parent);
     row.setMaterialCode(child);

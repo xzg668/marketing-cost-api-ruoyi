@@ -54,7 +54,8 @@ class QuoteBomDetailQueryServiceImplTest {
 
   @Test
   void packageStructureQueryFiltersByPackageParentAndKeepsGaps() {
-    when(packageStructureReadService.readByReference("REF-001", "TOP-001", "2026-05"))
+    when(packageStructureReadService.readByReference(
+            "REF-001", "TOP-001", "2026-05", "210", "COMMERCIAL"))
         .thenReturn(
             new PackageComponentStructureReadResult(
                 "REF-001",
@@ -66,7 +67,8 @@ class QuoteBomDetailQueryServiceImplTest {
                 List.of("快照 1 字段不完整: 子件图号")));
 
     QuoteBomPackageStructurePageResponse response =
-        service.pagePackageStructures(" REF-001 ", "TOP-001", "PKG-A", "2026-05", 1, 20);
+        service.pagePackageStructures(
+            " REF-001 ", "TOP-001", "PKG-A", "2026-05", "210", "COMMERCIAL", 1, 20);
 
     assertThat(response.found()).isFalse();
     assertThat(response.total()).isEqualTo(1);
@@ -125,6 +127,38 @@ class QuoteBomDetailQueryServiceImplTest {
       assertThat(dto.matchedRuleAction()).isNull();
       assertThat(dto.matchedRuleRemark()).isNull();
       assertThat(dto.sourceRefs()).isEmpty();
+    });
+  }
+
+  @Test
+  void costingRowQueryUsesSnapshotFieldsWhenRawHierarchyIdIsStale() {
+    BomCostingRow row = costingRow();
+    row.setRawHierarchyNodeId(9_999_999L);
+    row.setParentCode("HISTORY-PARENT");
+    row.setMaterialCode("HISTORY-MAT");
+    row.setMaterialName("历史快照子件");
+    row.setMaterialSpec("HISTORY-SPEC");
+    row.setPath("/FIN-001/HISTORY-PARENT/HISTORY-MAT/");
+    row.setMatchedSettlementRuleId(null);
+    Page<BomCostingRow> page = new Page<>(1, 20);
+    page.setTotal(1);
+    page.setRecords(List.of(row));
+    when(costingRowMapper.selectPage(any(Page.class), any(Wrapper.class))).thenReturn(page);
+    when(sourceRefMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+
+    QuoteBomCostingRowPageResponse response =
+        service.pageCostingRows("OA-001", "FIN-001", "HISTORY-MAT", "2026-05", 1, 20);
+
+    assertThat(response.total()).isEqualTo(1);
+    assertThat(response.list()).singleElement().satisfies(dto -> {
+      assertThat(dto.rawHierarchyNodeId()).isEqualTo(9_999_999L);
+      assertThat(dto.parentCode()).isEqualTo("HISTORY-PARENT");
+      assertThat(dto.materialCode()).isEqualTo("HISTORY-MAT");
+      assertThat(dto.materialName()).isEqualTo("历史快照子件");
+      assertThat(dto.materialSpec()).isEqualTo("HISTORY-SPEC");
+      assertThat(dto.path()).isEqualTo("/FIN-001/HISTORY-PARENT/HISTORY-MAT/");
+      assertThat(dto.sourceSummary()).isEqualTo("未写入来源追溯");
+      assertThat(dto.matchedRuleAction()).isNull();
     });
   }
 

@@ -21,6 +21,7 @@ public class PackageComponentPrice {
 
   private Long snapshotId;
   private String packageMaterialCode;
+  private String priceOrgCode;
   private String packageMaterialName;
   private String periodMonth;
   /** 兼容旧库：部分环境未执行补 oa_no 迁移；该字段仅做请求上下文追溯，不参与价格唯一口径。 */

@@ -269,7 +269,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       return Collections.emptyList();
     }
 
-    CostSourceContext costSourceContext = resolveCostSourceContext(form, formItems, productCodeValue);
+    String materialOrganizationCode =
+        resolveCostSourceMaterialOrganizationCode(null, null, oaNoValue, productCodeValue);
+    CostSourceContext costSourceContext =
+        resolveCostSourceContext(form, formItems, productCodeValue, null, materialOrganizationCode);
     return calculateItems(oaNoValue, productCodeValue, materialCodes, costSourceContext, null, true);
   }
 
@@ -383,7 +386,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
             oaNo.trim(),
             productCode.trim(),
             materialCodes,
-            resolveCostSourceContext(oaNo.trim(), productCode.trim(), context),
+            resolveCostSourceContext(oaNo.trim(), productCode.trim(), context, currentPartItems),
             currentPartItems,
             persistDailyResult);
     progress.accept(100);
@@ -692,20 +695,16 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     if (parts == null || parts.isEmpty()) {
       return BigDecimal.ZERO;
     }
-    Set<String> partCodes = new LinkedHashSet<>();
-    for (CostRunPartItem p : parts) {
-      if (StringUtils.hasText(p.getPartCode())) {
-        partCodes.add(p.getPartCode().trim());
-      }
-    }
-    Set<String> packageParentCodes = lookupPackageComponentParentCodes(partCodes);
-    if (packageParentCodes.isEmpty()) {
+    Set<String> packageParentKeys = lookupPackageComponentParentKeysForEntities(parts);
+    if (packageParentKeys.isEmpty()) {
       return BigDecimal.ZERO;
     }
     BigDecimal sum = BigDecimal.ZERO;
     for (CostRunPartItem p : parts) {
       String code = p.getPartCode() == null ? null : p.getPartCode().trim();
-      if (code != null && packageParentCodes.contains(code) && p.getAmount() != null) {
+      if (code != null
+          && packageParentKeys.contains(scopedMaterialKey(requiredMaterialOrganizationCode(p), code))
+          && p.getAmount() != null) {
         sum = sum.add(p.getAmount());
       }
     }
@@ -780,15 +779,16 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     if (currentPartItems == null || currentPartItems.isEmpty()) {
       return BigDecimal.ZERO;
     }
-    Set<String> partCodes = collectPartCodes(currentPartItems);
-    Set<String> packageParentCodes = lookupPackageComponentParentCodes(partCodes);
-    if (packageParentCodes.isEmpty()) {
+    Set<String> packageParentKeys = lookupPackageComponentParentKeysForDtos(currentPartItems);
+    if (packageParentKeys.isEmpty()) {
       return BigDecimal.ZERO;
     }
     BigDecimal sum = BigDecimal.ZERO;
     for (CostRunPartItemDto item : currentPartItems) {
       String code = item.getPartCode() == null ? null : item.getPartCode().trim();
-      if (code != null && packageParentCodes.contains(code) && item.getAmount() != null) {
+      if (code != null
+          && packageParentKeys.contains(scopedMaterialKey(requiredMaterialOrganizationCode(item), code))
+          && item.getAmount() != null) {
         sum = sum.add(item.getAmount());
       }
     }
@@ -894,14 +894,15 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return items;
   }
 
-  private CostSourceContext resolveCostSourceContext(String oaNo, String productCode) {
-    return resolveCostSourceContext(oaNo, productCode, null);
-  }
-
   private CostSourceContext resolveCostSourceContext(
-      String oaNo, String productCode, CostRunContext context) {
+      String oaNo,
+      String productCode,
+      CostRunContext context,
+      List<CostRunPartItemDto> currentPartItems) {
+    String materialOrganizationCode =
+        resolveCostSourceMaterialOrganizationCode(context, currentPartItems, oaNo, productCode);
     if (!StringUtils.hasText(oaNo)) {
-      return new CostSourceContext(resolveCostYear(context), "");
+      return new CostSourceContext(resolveCostYear(context), "", materialOrganizationCode);
     }
     OaForm form =
         oaFormMapper.selectOne(
@@ -909,23 +910,22 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
                 .eq(OaForm::getOaNo, oaNo)
                 .last("LIMIT 1"));
     if (form == null) {
-      return new CostSourceContext(resolveCostYear(context), "");
+      return new CostSourceContext(resolveCostYear(context), "", materialOrganizationCode);
     }
     List<OaFormItem> rows =
         oaFormItemMapper.selectList(
             Wrappers.lambdaQuery(OaFormItem.class)
                 .eq(OaFormItem::getOaFormId, form.getId())
                 .eq(StringUtils.hasText(productCode), OaFormItem::getMaterialNo, productCode));
-    return resolveCostSourceContext(form, rows, productCode, context);
+    return resolveCostSourceContext(form, rows, productCode, context, materialOrganizationCode);
   }
 
   private CostSourceContext resolveCostSourceContext(
-      OaForm form, List<OaFormItem> formItems, String productCode) {
-    return resolveCostSourceContext(form, formItems, productCode, null);
-  }
-
-  private CostSourceContext resolveCostSourceContext(
-      OaForm form, List<OaFormItem> formItems, String productCode, CostRunContext context) {
+      OaForm form,
+      List<OaFormItem> formItems,
+      String productCode,
+      CostRunContext context,
+      String materialOrganizationCode) {
     // 成本核算年度按核算执行时间取，不按 OA 申请日期取。
     Integer costYear = resolveCostYear(context);
     String businessUnitType = null;
@@ -977,10 +977,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return new CostSourceContext(
         costYear,
         normalizeBusinessUnit(businessUnitType),
-        MaterialOrganization.forQuoteProcess(
-            form == null ? null : form.getProcessCode(),
-            form == null ? null : form.getOaNo(),
-            productName),
+        materialOrganizationCode,
         accountingPeriodMonth,
         sourceSystem,
         sourceCompany,
@@ -1378,13 +1375,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
   private List<MaterialMasterRaw> selectRawRows(
       List<String> materialCodes, CostSourceContext costSourceContext) {
-    String organization =
-        costSourceContext == null
-            ? MaterialOrganization.COMMERCIAL.getCode()
-            : MaterialOrganization.normalize(costSourceContext.materialOrganizationCode);
-    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
-      return materialMasterRawMapper.selectByLatestBatchAndCodes(materialCodes, null);
-    }
+    String organization = requiredCostSourceMaterialOrganizationCode(costSourceContext);
     return materialMasterRawMapper.selectByLatestBatchAndCodes(materialCodes, null, organization);
   }
 
@@ -2067,7 +2058,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       }
     }
     Set<String> packageCodes = new LinkedHashSet<>(lookupPackageCodes(partCodes));
-    packageCodes.addAll(lookupPackageComponentParentCodes(partCodes));
+    Set<String> packageComponentParentKeys = lookupPackageComponentParentKeysForEntities(items);
     BigDecimal pkg = BigDecimal.ZERO;
     BigDecimal nonPkg = BigDecimal.ZERO;
     for (CostRunPartItem item : items) {
@@ -2075,7 +2066,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         continue;
       }
       String code = item.getPartCode() == null ? null : item.getPartCode().trim();
-      if (code != null && packageCodes.contains(code)) {
+      if (code != null
+          && (packageCodes.contains(code)
+              || packageComponentParentKeys.contains(
+                  scopedMaterialKey(requiredMaterialOrganizationCode(item), code)))) {
         pkg = pkg.add(item.getAmount());
       } else {
         nonPkg = nonPkg.add(item.getAmount());
@@ -2090,7 +2084,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     }
     Set<String> partCodes = collectPartCodes(currentPartItems);
     Set<String> packageCodes = new LinkedHashSet<>(lookupPackageCodes(partCodes));
-    packageCodes.addAll(lookupPackageComponentParentCodes(partCodes));
+    Set<String> packageComponentParentKeys = lookupPackageComponentParentKeysForDtos(currentPartItems);
     BigDecimal pkg = BigDecimal.ZERO;
     BigDecimal nonPkg = BigDecimal.ZERO;
     for (CostRunPartItemDto item : currentPartItems) {
@@ -2098,7 +2092,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         continue;
       }
       String code = item.getPartCode() == null ? null : item.getPartCode().trim();
-      if (code != null && packageCodes.contains(code)) {
+      if (code != null
+          && (packageCodes.contains(code)
+              || packageComponentParentKeys.contains(
+                  scopedMaterialKey(requiredMaterialOrganizationCode(item), code)))) {
         pkg = pkg.add(item.getAmount());
       } else {
         nonPkg = nonPkg.add(item.getAmount());
@@ -2129,24 +2126,82 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return result;
   }
 
-  /** 从 raw 主档识别包装组件父件料号；父件通常是虚拟件，不一定在同步主档。 */
-  private Set<String> lookupPackageComponentParentCodes(Set<String> partCodes) {
-    if (partCodes == null || partCodes.isEmpty()) {
+  /** 从 raw 主档按组织识别包装组件父件料号；父件通常是虚拟件，不一定在同步主档。 */
+  private Set<String> lookupPackageComponentParentKeysForEntities(List<CostRunPartItem> items) {
+    if (items == null || items.isEmpty()) {
       return Collections.emptySet();
     }
-    List<MaterialMasterRaw> rows =
-        materialMasterRawMapper.selectPackageComponentParentsByLatestBatch(MAIN_CATEGORY_PACKAGE, null);
-    if (rows == null || rows.isEmpty()) {
+    Map<String, Set<String>> codesByOrganization = new LinkedHashMap<>();
+    for (CostRunPartItem item : items) {
+      if (item != null && StringUtils.hasText(item.getPartCode())) {
+        codesByOrganization
+            .computeIfAbsent(requiredMaterialOrganizationCode(item), ignored -> new LinkedHashSet<>())
+            .add(item.getPartCode().trim());
+      }
+    }
+    return lookupPackageComponentParentKeys(codesByOrganization);
+  }
+
+  private Set<String> lookupPackageComponentParentKeysForDtos(List<CostRunPartItemDto> items) {
+    if (items == null || items.isEmpty()) {
+      return Collections.emptySet();
+    }
+    Map<String, Set<String>> codesByOrganization = new LinkedHashMap<>();
+    for (CostRunPartItemDto item : items) {
+      if (item != null && StringUtils.hasText(item.getPartCode())) {
+        codesByOrganization
+            .computeIfAbsent(requiredMaterialOrganizationCode(item), ignored -> new LinkedHashSet<>())
+            .add(item.getPartCode().trim());
+      }
+    }
+    return lookupPackageComponentParentKeys(codesByOrganization);
+  }
+
+  private Set<String> lookupPackageComponentParentKeys(Map<String, Set<String>> codesByOrganization) {
+    if (codesByOrganization == null || codesByOrganization.isEmpty()) {
       return Collections.emptySet();
     }
     Set<String> result = new LinkedHashSet<>();
-    for (MaterialMasterRaw row : rows) {
-      String code = row.getMaterialCode() == null ? null : row.getMaterialCode().trim();
-      if (code != null && partCodes.contains(code)) {
-        result.add(code);
+    for (Map.Entry<String, Set<String>> entry : codesByOrganization.entrySet()) {
+      String organizationCode = requiredMaterialOrganizationCode(entry.getKey());
+      List<MaterialMasterRaw> rows =
+          materialMasterRawMapper.selectPackageComponentParentsByLatestBatch(
+              MAIN_CATEGORY_PACKAGE, null, organizationCode);
+      if (rows == null || rows.isEmpty()) {
+        continue;
+      }
+      Set<String> partCodes = entry.getValue();
+      for (MaterialMasterRaw row : rows) {
+        String code = row.getMaterialCode() == null ? null : row.getMaterialCode().trim();
+        if (code != null && partCodes.contains(code)) {
+          result.add(scopedMaterialKey(organizationCode, code));
+        }
       }
     }
     return result;
+  }
+
+  private String requiredMaterialOrganizationCode(CostRunPartItem item) {
+    String value = item == null ? null : item.getMaterialOrganizationCode();
+    return requiredMaterialOrganizationCode(value);
+  }
+
+  private String requiredMaterialOrganizationCode(CostRunPartItemDto item) {
+    String value = item == null ? null : item.getMaterialOrganizationCode();
+    return requiredMaterialOrganizationCode(value);
+  }
+
+  private String requiredMaterialOrganizationCode(String organizationCode) {
+    if (!StringUtils.hasText(organizationCode)) {
+      throw new IllegalStateException("成本费用包装聚合缺少上游 materialOrganizationCode");
+    }
+    return MaterialOrganization.fromCode(organizationCode.trim()).getCode();
+  }
+
+  private String scopedMaterialKey(String organizationCode, String materialCode) {
+    return requiredMaterialOrganizationCode(organizationCode)
+        + "|"
+        + (materialCode == null ? "" : materialCode.trim());
   }
 
   /**
@@ -2218,6 +2273,88 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       return null;
     }
     return value.trim();
+  }
+
+  private String resolveCostSourceMaterialOrganizationCode(
+      CostRunContext context,
+      List<CostRunPartItemDto> currentPartItems,
+      String oaNo,
+      String productCode) {
+    String fromContext =
+        context == null ? null : trimToNull(context.getMaterialOrganizationCode());
+    if (fromContext != null) {
+      return requiredMaterialOrganizationCode(fromContext);
+    }
+    String fromCurrentRows = singleMaterialOrganizationCode(currentPartItems);
+    if (fromCurrentRows != null) {
+      return fromCurrentRows;
+    }
+    String fromStoredRows = singleStoredMaterialOrganizationCode(oaNo, productCode);
+    if (fromStoredRows != null) {
+      return fromStoredRows;
+    }
+    throw new IllegalStateException("成本费用计算缺少上游 materialOrganizationCode");
+  }
+
+  private String singleMaterialOrganizationCode(List<CostRunPartItemDto> rows) {
+    if (rows == null || rows.isEmpty()) {
+      return null;
+    }
+    Set<String> organizations = new LinkedHashSet<>();
+    for (CostRunPartItemDto row : rows) {
+      if (row == null) {
+        continue;
+      }
+      String organization = trimToNull(row.getMaterialOrganizationCode());
+      if (organization != null) {
+        organizations.add(requiredMaterialOrganizationCode(organization));
+      }
+    }
+    return singleOrganizationOrNull(organizations);
+  }
+
+  private String singleStoredMaterialOrganizationCode(String oaNo, String productCode) {
+    if (!StringUtils.hasText(oaNo) || !StringUtils.hasText(productCode)) {
+      return null;
+    }
+    List<CostRunPartItem> rows =
+        costRunPartItemMapper.selectList(
+            Wrappers.lambdaQuery(CostRunPartItem.class)
+                .eq(CostRunPartItem::getOaNo, oaNo)
+                .eq(CostRunPartItem::getProductCode, productCode));
+    if (rows == null || rows.isEmpty()) {
+      return null;
+    }
+    Set<String> organizations = new LinkedHashSet<>();
+    for (CostRunPartItem row : rows) {
+      if (row == null) {
+        continue;
+      }
+      String organization = trimToNull(row.getMaterialOrganizationCode());
+      if (organization != null) {
+        organizations.add(requiredMaterialOrganizationCode(organization));
+      }
+    }
+    return singleOrganizationOrNull(organizations);
+  }
+
+  private String singleOrganizationOrNull(Set<String> organizations) {
+    if (organizations == null || organizations.isEmpty()) {
+      return null;
+    }
+    if (organizations.size() > 1) {
+      throw new IllegalStateException("成本费用计算存在多个上游 materialOrganizationCode");
+    }
+    return organizations.iterator().next();
+  }
+
+  private String requiredCostSourceMaterialOrganizationCode(CostSourceContext costSourceContext) {
+    String organization =
+        costSourceContext == null ? null : trimToNull(costSourceContext.materialOrganizationCode);
+    if (organization == null) {
+      throw new IllegalStateException("成本费用计算缺少上游 materialOrganizationCode");
+    }
+    return requiredMaterialOrganizationCode(organization);
   }
 
   private String valueOrEmpty(String value) {
@@ -2396,10 +2533,15 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     private final ThreeExpenseMatchContext threeExpenseMatchContext;
 
     private CostSourceContext(Integer costYear, String businessUnitType) {
+      this(costYear, businessUnitType, null);
+    }
+
+    private CostSourceContext(
+        Integer costYear, String businessUnitType, String materialOrganizationCode) {
       this(
           costYear,
           businessUnitType,
-          MaterialOrganization.COMMERCIAL.getCode(),
+          materialOrganizationCode,
           null,
           null,
           null,
@@ -2424,7 +2566,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         ThreeExpenseMatchContext threeExpenseMatchContext) {
       this.costYear = costYear;
       this.businessUnitType = businessUnitType == null ? "" : businessUnitType;
-      this.materialOrganizationCode = MaterialOrganization.normalize(materialOrganizationCode);
+      this.materialOrganizationCode =
+          StringUtils.hasText(materialOrganizationCode)
+              ? MaterialOrganization.fromCode(materialOrganizationCode.trim()).getCode()
+              : null;
       this.accountingPeriodMonth = accountingPeriodMonth;
       this.sourceSystem = sourceSystem;
       this.sourceCompany = sourceCompany;

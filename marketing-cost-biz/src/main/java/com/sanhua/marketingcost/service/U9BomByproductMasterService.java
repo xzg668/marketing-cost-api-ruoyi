@@ -13,6 +13,7 @@ public interface U9BomByproductMasterService {
   U9BomByproductImportResponse importExcel(InputStream input, String sourceFileName, String importedBy);
 
   Page<U9BomByproductMaster> page(
+      String priceOrgCode,
       String parentMaterialNo,
       String parentMaterialName,
       String byproductMaterialNo,

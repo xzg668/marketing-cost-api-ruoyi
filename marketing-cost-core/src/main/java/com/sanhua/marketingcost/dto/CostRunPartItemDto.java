@@ -20,6 +20,8 @@ public class CostRunPartItemDto {
   private String remark;
   private BigDecimal unitPrice;
   private BigDecimal amount;
+  private String priceOrgCode;
+  private String materialOrganizationCode;
 
   /** V10：物料形态（采购件/制造件/委外加工件），用于 6 桶分发 */
   private String materialShape;
@@ -169,6 +171,22 @@ public class CostRunPartItemDto {
 
   public void setAmount(BigDecimal amount) {
     this.amount = amount;
+  }
+
+  public String getPriceOrgCode() {
+    return priceOrgCode;
+  }
+
+  public void setPriceOrgCode(String priceOrgCode) {
+    this.priceOrgCode = priceOrgCode;
+  }
+
+  public String getMaterialOrganizationCode() {
+    return materialOrganizationCode;
+  }
+
+  public void setMaterialOrganizationCode(String materialOrganizationCode) {
+    this.materialOrganizationCode = materialOrganizationCode;
   }
 
   public String getMaterialShape() {

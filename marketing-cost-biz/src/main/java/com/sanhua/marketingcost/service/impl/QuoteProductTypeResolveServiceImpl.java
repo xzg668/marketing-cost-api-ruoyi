@@ -30,7 +30,7 @@ public class QuoteProductTypeResolveServiceImpl implements QuoteProductTypeResol
 
   @Override
   public QuoteProductTypeResolveResult resolve(String quoteProductCode) {
-    return resolve(quoteProductCode, MaterialOrganization.COMMERCIAL.getCode());
+    throw new IllegalArgumentException("产品类型识别必须由上游显式传入料品组织");
   }
 
   @Override
@@ -42,7 +42,7 @@ public class QuoteProductTypeResolveServiceImpl implements QuoteProductTypeResol
 
   @Override
   public List<QuoteProductTypeResolveResult> batchResolve(Collection<String> quoteProductCodes) {
-    return batchResolve(quoteProductCodes, MaterialOrganization.COMMERCIAL.getCode());
+    throw new IllegalArgumentException("产品类型识别必须由上游显式传入料品组织");
   }
 
   @Override
@@ -102,9 +102,6 @@ public class QuoteProductTypeResolveServiceImpl implements QuoteProductTypeResol
 
   private List<MaterialMasterRaw> selectRawRows(Set<String> uniqueCodes, String organizationCode) {
     String organization = MaterialOrganization.normalize(organizationCode);
-    if (MaterialOrganization.COMMERCIAL.getCode().equals(organization)) {
-      return materialMasterRawMapper.selectByLatestBatchAndCodes(uniqueCodes, null);
-    }
     return materialMasterRawMapper.selectByLatestBatchAndCodes(uniqueCodes, null, organization);
   }
 

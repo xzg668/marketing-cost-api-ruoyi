@@ -31,7 +31,8 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "  raw_hierarchy_node_id, matched_settlement_rule_id, settlement_row_type,"
           + "  material_name, material_spec, unit, material_attribute, shape_attr, source_category, cost_element_code,"
           + "  bom_purpose, bom_version, u9_is_cost_flag, effective_from, effective_to,"
-          + "  build_batch_id, built_at, period_month, as_of_date, raw_version_effective_from,"
+          + "  build_batch_id, built_at, price_org_code, material_organization_code,"
+          + "  period_month, as_of_date, raw_version_effective_from,"
           + "  manual_modified, modified_by, modified_at, business_unit_type"
           + ") VALUES "
           + "<foreach collection='rows' item='e' separator=','>"
@@ -40,7 +41,8 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "   #{e.rawHierarchyNodeId}, #{e.matchedSettlementRuleId}, #{e.settlementRowType},"
           + "   #{e.materialName}, #{e.materialSpec}, #{e.unit}, #{e.materialAttribute}, #{e.shapeAttr}, #{e.sourceCategory}, #{e.costElementCode},"
           + "   #{e.bomPurpose}, #{e.bomVersion}, #{e.u9IsCostFlag}, #{e.effectiveFrom}, #{e.effectiveTo},"
-          + "   #{e.buildBatchId}, #{e.builtAt}, #{e.periodMonth}, #{e.asOfDate}, #{e.rawVersionEffectiveFrom},"
+          + "   #{e.buildBatchId}, #{e.builtAt}, #{e.priceOrgCode}, #{e.materialOrganizationCode},"
+          + "   #{e.periodMonth}, #{e.asOfDate}, #{e.rawVersionEffectiveFrom},"
           + "   COALESCE(#{e.manualModified}, 0), #{e.modifiedBy}, #{e.modifiedAt}, #{e.businessUnitType})"
           + "</foreach>"
           + " ON DUPLICATE KEY UPDATE"
@@ -69,6 +71,8 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "  effective_to = VALUES(effective_to),"
           + "  build_batch_id = VALUES(build_batch_id),"
           + "  built_at = VALUES(built_at),"
+          + "  price_org_code = VALUES(price_org_code),"
+          + "  material_organization_code = VALUES(material_organization_code),"
           + "  period_month = VALUES(period_month),"
           + "  manual_modified = VALUES(manual_modified),"
           + "  modified_by = VALUES(modified_by),"
@@ -80,19 +84,32 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
   @Select("SELECT DISTINCT material_code FROM lp_bom_costing_row WHERE oa_no=#{oaNo}")
   List<String> selectDistinctMaterialCodesByOaNo(@Param("oaNo") String oaNo);
 
+  /** T5：主档同步必须按 BOM 成本行已经落表的组织分组，不能再按 OA 推断组织。 */
+  @Select(
+      "SELECT DISTINCT material_code, material_organization_code "
+          + "FROM lp_bom_costing_row "
+          + "WHERE oa_no=#{oaNo}")
+  List<BomCostingRow> selectDistinctMaterialCodesWithOrgByOaNo(@Param("oaNo") String oaNo);
+
   /**
    * BOM 可用性检查只需要快照头信息，显式列出字段，避免旧库缺少新结算规则字段时
    * MyBatis-Plus 默认 SELECT 全实体列导致检查失败。
    */
   @Select(
-      "SELECT bom_purpose, bom_version, effective_from, effective_to, build_batch_id, period_month "
+      "SELECT bom_purpose, bom_version, effective_from, effective_to, "
+          + "build_batch_id, period_month, price_org_code "
           + "FROM lp_bom_costing_row "
-          + "WHERE top_product_code=#{topProductCode} "
+          + "WHERE (#{oaNo} IS NULL OR oa_no=#{oaNo}) "
+          + "AND top_product_code=#{topProductCode} "
+          + "AND price_org_code=#{priceOrgCode} "
           + "AND (#{periodMonth} IS NULL OR period_month=#{periodMonth}) "
           + "ORDER BY built_at DESC, id DESC "
           + "LIMIT 1")
   BomCostingRow selectAvailabilitySnapshot(
-      @Param("topProductCode") String topProductCode, @Param("periodMonth") String periodMonth);
+      @Param("oaNo") String oaNo,
+      @Param("topProductCode") String topProductCode,
+      @Param("periodMonth") String periodMonth,
+      @Param("priceOrgCode") String priceOrgCode);
 
   @Select(
       "SELECT period_month "

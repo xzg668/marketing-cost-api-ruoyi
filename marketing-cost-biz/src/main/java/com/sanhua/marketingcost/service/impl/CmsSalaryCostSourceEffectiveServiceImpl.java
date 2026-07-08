@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
@@ -187,6 +188,7 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
     for (Aggregate aggregate : aggregates.values()) {
       byParent.computeIfAbsent(aggregate.parentCode, ignored -> new ArrayList<>()).add(aggregate);
     }
+    Map<String, PlanEligibility> eligibilityByKey = eligibilityMap(aggregates.values(), businessUnitType);
     for (Map.Entry<String, List<Aggregate>> entry : byParent.entrySet()) {
       List<Aggregate> candidates = entry.getValue();
       candidates.sort(Comparator.comparing((Aggregate aggregate) -> preferredPeriodOrder(costYear, aggregate.period))
@@ -194,7 +196,10 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
       Aggregate selected = null;
       PlanEligibility selectedEligibility = null;
       for (Aggregate candidate : candidates) {
-        PlanEligibility eligibility = eligibility(candidate.parentCode, candidate.period, businessUnitType);
+        PlanEligibility eligibility =
+            eligibilityByKey.getOrDefault(
+                key(candidate.parentCode, candidate.period),
+                PlanEligibility.allowed(candidate.parentCode, candidate.period, "允许生效"));
         boolean allowed = SALARY_DIRECT.equals(sourceType) ? eligibility.isDirectLaborAllowed() : eligibility.isIndirectLaborAllowed();
         if (allowed) {
           selected = candidate;
@@ -224,6 +229,22 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
       }
       insertLog(saved.getId(), costYear, sourceType, selected, oldSnapshot, "DEFAULT", selectedEligibility.getReason(), operator, businessUnitType);
     }
+  }
+
+  private Map<String, PlanEligibility> eligibilityMap(
+      Collection<Aggregate> aggregates, String businessUnitType) {
+    LinkedHashSet<String> parentCodes = new LinkedHashSet<>();
+    LinkedHashSet<String> periods = new LinkedHashSet<>();
+    for (Aggregate aggregate : aggregates) {
+      if (StringUtils.hasText(aggregate.parentCode) && StringUtils.hasText(aggregate.period)) {
+        parentCodes.add(aggregate.parentCode);
+        periods.add(aggregate.period);
+      }
+    }
+    if (parentCodes.isEmpty() || periods.isEmpty()) {
+      return new LinkedHashMap<>();
+    }
+    return planEligibilityService.checkEligibility(parentCodes, periods, normalizeBusinessUnit(businessUnitType));
   }
 
   private Map<String, Aggregate> aggregateDirect(int costYear, String businessUnitType) {

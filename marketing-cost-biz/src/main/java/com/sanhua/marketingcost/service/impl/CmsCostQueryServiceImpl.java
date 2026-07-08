@@ -20,7 +20,6 @@ import com.sanhua.marketingcost.mapper.CmsPlanCostRawMapper;
 import com.sanhua.marketingcost.mapper.CmsProductSubjectCostRawMapper;
 import com.sanhua.marketingcost.mapper.CmsSubjectSettingRawMapper;
 import com.sanhua.marketingcost.mapper.CmsWorkshopLaborRawMapper;
-import com.sanhua.marketingcost.service.CmsCostEffectiveSourceEnsureService;
 import com.sanhua.marketingcost.service.CmsCostQueryService;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -36,7 +35,6 @@ public class CmsCostQueryServiceImpl implements CmsCostQueryService {
   private static final int DEFAULT_PAGE = 1;
   private static final int DEFAULT_SIZE = 20;
   private static final int MAX_SIZE = 200;
-  private static final String AUTO_OPERATOR = "SYSTEM_AUTO";
   private static final String SALARY_DIRECT = "SALARY_DIRECT";
   private static final String SALARY_INDIRECT = "SALARY_INDIRECT";
   private static final String DIRECT_LABOR_SUBJECT_CODE = "0301";
@@ -50,7 +48,6 @@ public class CmsCostQueryServiceImpl implements CmsCostQueryService {
   private final CmsSubjectSettingRawMapper subjectSettingRawMapper;
   private final CmsCostSourceEffectiveMapper effectiveMapper;
   private final CmsCostSourceEffectiveLogMapper effectiveLogMapper;
-  private final CmsCostEffectiveSourceEnsureService ensureService;
 
   public CmsCostQueryServiceImpl(
       CmsCostImportBatchMapper batchMapper,
@@ -59,8 +56,7 @@ public class CmsCostQueryServiceImpl implements CmsCostQueryService {
       CmsProductSubjectCostRawMapper productSubjectCostRawMapper,
       CmsSubjectSettingRawMapper subjectSettingRawMapper,
       CmsCostSourceEffectiveMapper effectiveMapper,
-      CmsCostSourceEffectiveLogMapper effectiveLogMapper,
-      CmsCostEffectiveSourceEnsureService ensureService) {
+      CmsCostSourceEffectiveLogMapper effectiveLogMapper) {
     this.batchMapper = batchMapper;
     this.planCostRawMapper = planCostRawMapper;
     this.workshopLaborRawMapper = workshopLaborRawMapper;
@@ -68,7 +64,6 @@ public class CmsCostQueryServiceImpl implements CmsCostQueryService {
     this.subjectSettingRawMapper = subjectSettingRawMapper;
     this.effectiveMapper = effectiveMapper;
     this.effectiveLogMapper = effectiveLogMapper;
-    this.ensureService = ensureService;
   }
 
   @Override
@@ -213,9 +208,6 @@ public class CmsCostQueryServiceImpl implements CmsCostQueryService {
       int current,
       int size,
       String businessUnitType) {
-    if (costYear != null) {
-      ensureService.ensureDefaultSources(costYear, AUTO_OPERATOR, normalizeBusinessUnit(businessUnitType));
-    }
     QueryWrapper<CmsCostSourceEffective> query =
         new QueryWrapper<CmsCostSourceEffective>()
             .eq(costYear != null, "cost_year", costYear)
@@ -447,7 +439,4 @@ public class CmsCostQueryServiceImpl implements CmsCostQueryService {
     return value == null ? null : value.trim();
   }
 
-  private String normalizeBusinessUnit(String businessUnitType) {
-    return businessUnitType == null ? "" : businessUnitType;
-  }
 }

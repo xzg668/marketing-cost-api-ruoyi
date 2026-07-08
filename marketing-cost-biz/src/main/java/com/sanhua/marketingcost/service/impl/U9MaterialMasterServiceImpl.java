@@ -19,8 +19,6 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class U9MaterialMasterServiceImpl implements U9MaterialMasterService {
-  public static final String SOURCE_TYPE_EXCEL = U9MaterialMasterSourceType.EXCEL.getCode();
-
   private final MaterialMasterRawMapper rawMapper;
   private final U9MaterialMasterIngestService ingestService;
 
@@ -58,8 +56,7 @@ public class U9MaterialMasterServiceImpl implements U9MaterialMasterService {
     String org = MaterialOrganization.normalize(organizationCode);
     QueryWrapper<MaterialMasterRaw> query = new QueryWrapper<>();
     query.eq("organization_code", org)
-        .eq("active_flag", 1)
-        .eq("source_type", SOURCE_TYPE_EXCEL);
+        .eq("active_flag", 1);
     like(query, "material_code", materialCode);
     like(query, "material_name", materialName);
     like(query, "material_spec", spec);
@@ -79,7 +76,7 @@ public class U9MaterialMasterServiceImpl implements U9MaterialMasterService {
     String normalized = trimToNull(keyword);
     String org = MaterialOrganization.normalize(organizationCode);
     return rawMapper.selectOptionsByLatestBatchKeyword(
-            normalized, SOURCE_TYPE_EXCEL, org, safeOptionLimit(limit))
+            normalized, null, org, safeOptionLimit(limit))
         .stream()
         .map(U9MaterialMasterServiceImpl::toOption)
         .toList();

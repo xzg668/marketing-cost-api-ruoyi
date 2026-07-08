@@ -188,6 +188,33 @@ class QuotePriceTypeConfirmationServiceImplTest {
         ArgumentCaptor.forClass(PackageSnapshotRequest.class);
     verify(packageSnapshotService).ensureSnapshot(requestCaptor.capture());
     assertThat(requestCaptor.getValue().getSourceType()).isEqualTo("U9");
+    assertThat(requestCaptor.getValue().getPriceOrgCode()).isEqualTo("210");
+  }
+
+  @Test
+  void packageParentUsesCostingRowOrganizationForSnapshot() {
+    OaForm form = form();
+    form.setProcessCode("FI-SC-006");
+    form.setBusinessUnitType("PLATE");
+    OaFormItem item = item();
+    item.setBusinessUnitType("PLATE");
+    item.setProductName("普通产品");
+    mockScope(form, item);
+    BomCostingRow parent = row(304L, "PKG-1");
+    parent.setPriceOrgCode("220");
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+        .thenReturn(List.of(parent));
+    when(itemClassifier.classify(any())).thenReturn(List.of(packagePlan(parent)));
+    when(packageSnapshotService.ensureSnapshot(any())).thenReturn(packageSnapshot());
+    when(materialPriceRouterService.resolve(eq("PKG-CHILD-1"), eq("2026-06"), any(LocalDate.class)))
+        .thenReturn(Optional.empty());
+
+    service.getConfirmation("OA-001", 10L, null);
+
+    ArgumentCaptor<PackageSnapshotRequest> requestCaptor =
+        ArgumentCaptor.forClass(PackageSnapshotRequest.class);
+    verify(packageSnapshotService).ensureSnapshot(requestCaptor.capture());
+    assertThat(requestCaptor.getValue().getPriceOrgCode()).isEqualTo("220");
   }
 
   @Test
@@ -397,8 +424,12 @@ class QuotePriceTypeConfirmationServiceImplTest {
   }
 
   private void mockScope() {
-    when(oaFormMapper.selectOne(any())).thenReturn(form());
-    when(oaFormItemMapper.selectById(10L)).thenReturn(item());
+    mockScope(form(), item());
+  }
+
+  private void mockScope(OaForm form, OaFormItem item) {
+    when(oaFormMapper.selectOne(any())).thenReturn(form);
+    when(oaFormItemMapper.selectById(10L)).thenReturn(item);
     when(quoteBomStatusMapper.selectOne(any())).thenReturn(status());
     when(bomConfirmationMapper.selectOne(any())).thenReturn(bomConfirmation());
   }
@@ -454,6 +485,7 @@ class QuotePriceTypeConfirmationServiceImplTest {
     row.setQtyPerParent(BigDecimal.ONE);
     row.setPeriodMonth("2026-06");
     row.setLevel(1);
+    row.setPriceOrgCode("210");
     return row;
   }
 

@@ -19,6 +19,8 @@ public class QuoteBomPreparationRecord {
   private Long oaFormItemId;
   private String oaNo;
   private String quoteProductCode;
+  private String priceOrgCode;
+  private String materialOrganizationCode;
   private String productType;
   private String bareProductCode;
   private Integer needPackage;

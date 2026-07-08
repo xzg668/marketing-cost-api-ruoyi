@@ -8,7 +8,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.dto.PackageSnapshotRequest;
 import com.sanhua.marketingcost.dto.PackageSnapshotResult;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
@@ -25,6 +28,8 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -40,6 +45,16 @@ class PackageComponentSnapshotServiceImplTest {
   private BomRawHierarchyMapper bomRawHierarchyMapper;
   private BomU9SourceMapper bomU9SourceMapper;
   private PackageComponentSnapshotServiceImpl service;
+
+  @BeforeAll
+  static void initTableInfo() {
+    MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    TableInfoHelper.initTableInfo(assistant, BomRawHierarchy.class);
+    TableInfoHelper.initTableInfo(assistant, BomU9Source.class);
+    TableInfoHelper.initTableInfo(assistant, PackageComponentSnapshot.class);
+    TableInfoHelper.initTableInfo(assistant, PackageComponentSnapshotDetail.class);
+    TableInfoHelper.initTableInfo(assistant, PackageComponentGapItem.class);
+  }
 
   @BeforeEach
   void setUp() {
@@ -274,6 +289,80 @@ class PackageComponentSnapshotServiceImplTest {
     verifyNoInteractions(gapItemMapper);
   }
 
+  @Test
+  @DisplayName("包装快照读取 raw hierarchy 时按 price_org_code 过滤")
+  void rawHierarchyQueriesUsePriceOrgCode() {
+    when(snapshotMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    when(snapshotMapper.insert(any(PackageComponentSnapshot.class))).thenAnswer(invocation -> {
+      PackageComponentSnapshot snapshot = invocation.getArgument(0);
+      snapshot.setId(30L);
+      return 1;
+    });
+    PackageSnapshotRequest request = request();
+    request.setPriceOrgCode("220");
+    BomRawHierarchy parent = parent();
+    parent.setPriceOrgCode("220");
+    BomRawHierarchy child = child(201L, "A", 1, "1.000000", "/107/pkg/A/");
+    child.setPriceOrgCode("220");
+    when(bomRawHierarchyMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(parent), List.of(child));
+
+    service.ensureSnapshot(request);
+
+    ArgumentCaptor<Wrapper> captor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(bomRawHierarchyMapper, org.mockito.Mockito.times(2)).selectList(captor.capture());
+    assertThat(captor.getAllValues())
+        .allSatisfy(
+            wrapper -> {
+              assertThat(wrapper.getSqlSegment()).contains("price_org_code");
+              assertThat(((AbstractWrapper<?, ?, ?>) wrapper).getParamNameValuePairs())
+                  .containsValue("220");
+            });
+    ArgumentCaptor<Wrapper> sourceCaptor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(bomU9SourceMapper, org.mockito.Mockito.times(2)).selectList(sourceCaptor.capture());
+    assertThat(sourceCaptor.getAllValues())
+        .allSatisfy(
+            wrapper -> {
+              assertThat(wrapper.getSqlSegment()).contains("price_org_code");
+              assertThat(((AbstractWrapper<?, ?, ?>) wrapper).getParamNameValuePairs())
+                  .containsValue("220");
+            });
+  }
+
+  @Test
+  @DisplayName("不同组织已有包装快照时不能跨组织复用")
+  void plateSnapshotDoesNotReuseCommercialExistingSnapshot() {
+    PackageComponentSnapshot commercialExisting = snapshot(50L, "NORMAL");
+    when(snapshotMapper.selectOne(any(Wrapper.class)))
+        .thenAnswer(
+            invocation -> {
+              AbstractWrapper<?, ?, ?> wrapper = invocation.getArgument(0);
+              boolean plateQuery = hasParamValue(wrapper, "220");
+              return plateQuery ? null : commercialExisting;
+            });
+    when(snapshotMapper.insert(any(PackageComponentSnapshot.class))).thenAnswer(invocation -> {
+      PackageComponentSnapshot snapshot = invocation.getArgument(0);
+      snapshot.setId(51L);
+      return 1;
+    });
+    PackageSnapshotRequest request = request();
+    request.setPriceOrgCode("220");
+    BomRawHierarchy parent = parent();
+    parent.setPriceOrgCode("220");
+    BomRawHierarchy child = child(201L, "A", 1, "1.000000", "/107/pkg/A/");
+    child.setPriceOrgCode("220");
+    when(bomRawHierarchyMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(parent), List.of(child));
+
+    PackageSnapshotResult result = service.ensureSnapshot(request);
+
+    assertThat(result.isCreated()).isTrue();
+    assertThat(result.getSnapshot().getId()).isEqualTo(51L);
+    assertThat(result.getSnapshot().getPriceOrgCode()).isEqualTo("220");
+    verify(bomRawHierarchyMapper, org.mockito.Mockito.times(2)).selectList(any(Wrapper.class));
+    verify(snapshotMapper).insert(any(PackageComponentSnapshot.class));
+  }
+
   private PackageSnapshotRequest request() {
     PackageSnapshotRequest request = new PackageSnapshotRequest();
     request.setPackageMaterialCode(" 9830000026238 ");
@@ -281,16 +370,28 @@ class PackageComponentSnapshotServiceImplTest {
     request.setQuoteNo("Q-001");
     request.setOaNo("OA-001");
     request.setTopProductCode("1079900000536");
+    request.setPriceOrgCode("210");
     request.setBomPurpose("主制造");
     request.setSourceType("U9");
     request.setAsOfDate(LocalDate.parse("2026-05-21"));
     return request;
   }
 
+  private boolean hasParamValue(AbstractWrapper<?, ?, ?> wrapper, String expectedValue) {
+    if (wrapper == null) {
+      return false;
+    }
+    wrapper.getSqlSegment();
+    return wrapper.getParamNameValuePairs().values().stream()
+        .map(String::valueOf)
+        .anyMatch(expectedValue::equals);
+  }
+
   private PackageComponentSnapshot snapshot(Long id, String status) {
     PackageComponentSnapshot snapshot = new PackageComponentSnapshot();
     snapshot.setId(id);
     snapshot.setPackageMaterialCode("9830000026238");
+    snapshot.setPriceOrgCode("210");
     snapshot.setPeriodMonth("2026-05");
     snapshot.setStatus(status);
     return snapshot;
@@ -308,6 +409,7 @@ class PackageComponentSnapshotServiceImplTest {
   private BomRawHierarchy parent() {
     BomRawHierarchy row = new BomRawHierarchy();
     row.setId(101L);
+    row.setPriceOrgCode("210");
     row.setTopProductCode("1079900000536");
     row.setParentCode("1079900000536");
     row.setMaterialCode("9830000026238");
@@ -329,6 +431,7 @@ class PackageComponentSnapshotServiceImplTest {
       Long id, String materialCode, Integer sortSeq, String qtyPerParent, String path) {
     BomRawHierarchy row = new BomRawHierarchy();
     row.setId(id);
+    row.setPriceOrgCode("210");
     row.setTopProductCode("1079900000536");
     row.setParentCode("9830000026238");
     row.setMaterialCode(materialCode);
@@ -349,6 +452,7 @@ class PackageComponentSnapshotServiceImplTest {
 
   private BomU9Source source(String parentCode, String childCode, Integer childSeq, String parentBaseQty) {
     BomU9Source row = new BomU9Source();
+    row.setPriceOrgCode("210");
     row.setImportBatchId("b-test");
     row.setParentMaterialNo(parentCode);
     row.setChildMaterialNo(childCode);

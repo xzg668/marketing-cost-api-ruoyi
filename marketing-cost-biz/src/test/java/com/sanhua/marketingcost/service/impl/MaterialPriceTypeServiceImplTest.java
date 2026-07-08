@@ -9,7 +9,10 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.MaterialPriceTypeImportRequest;
+import com.sanhua.marketingcost.dto.MaterialPriceTypeRangeApplyRequest;
+import com.sanhua.marketingcost.dto.RangePriceTypeConflict;
 import com.sanhua.marketingcost.entity.MaterialPriceType;
+import com.sanhua.marketingcost.entity.PriceRangeItem;
 import com.sanhua.marketingcost.mapper.MaterialPriceTypeMapper;
 import java.time.LocalDate;
 import java.util.List;
@@ -355,5 +358,103 @@ class MaterialPriceTypeServiceImplTest {
     assertEquals(1, result.getTotal());
     assertEquals(1, result.getRecords().size());
     assertEquals("1008000300944", result.getRecords().get(0).getMaterialCode());
+  }
+
+  @Test
+  void findRangePriceTypeConflicts_reportsMissingPriceType() {
+    MaterialPriceTypeMapper mapper = Mockito.mock(MaterialPriceTypeMapper.class);
+    MaterialPriceTypeServiceImpl service = new MaterialPriceTypeServiceImpl(mapper);
+    when(mapper.selectList(any())).thenReturn(List.of());
+
+    List<RangePriceTypeConflict> conflicts =
+        service.findRangePriceTypeConflicts(List.of(factorRangeItem("201850160")));
+
+    assertEquals(1, conflicts.size());
+    RangePriceTypeConflict conflict = conflicts.get(0);
+    assertEquals("201850160", conflict.getMaterialCode());
+    assertEquals("MISSING", conflict.getConflictType());
+    assertEquals(null, conflict.getCurrentPriceType());
+    assertEquals("区间价", conflict.getSuggestedPriceType());
+    assertEquals("2026-07", conflict.getPeriod());
+  }
+
+  @Test
+  void findRangePriceTypeConflicts_reportsFixedPriceTypeConflict() {
+    MaterialPriceTypeMapper mapper = Mockito.mock(MaterialPriceTypeMapper.class);
+    MaterialPriceTypeServiceImpl service = new MaterialPriceTypeServiceImpl(mapper);
+    MaterialPriceType fixed = currentPriceType("201850160", "固定价");
+    when(mapper.selectList(any())).thenReturn(List.of(fixed));
+
+    List<RangePriceTypeConflict> conflicts =
+        service.findRangePriceTypeConflicts(List.of(factorRangeItem("201850160")));
+
+    assertEquals(1, conflicts.size());
+    assertEquals("NOT_RANGE", conflicts.get(0).getConflictType());
+    assertEquals("固定价", conflicts.get(0).getCurrentPriceType());
+  }
+
+  @Test
+  void findRangePriceTypeConflicts_ignoresExistingRangePriceType() {
+    MaterialPriceTypeMapper mapper = Mockito.mock(MaterialPriceTypeMapper.class);
+    MaterialPriceTypeServiceImpl service = new MaterialPriceTypeServiceImpl(mapper);
+    MaterialPriceType range = currentPriceType("201850160", "区间价");
+    when(mapper.selectList(any())).thenReturn(List.of(range));
+
+    List<RangePriceTypeConflict> conflicts =
+        service.findRangePriceTypeConflicts(List.of(factorRangeItem("201850160")));
+
+    assertEquals(0, conflicts.size());
+  }
+
+  @Test
+  void applyRangePriceType_expiresFixedPriceTypeAndInsertsRangePriceType() {
+    MaterialPriceTypeMapper mapper = Mockito.mock(MaterialPriceTypeMapper.class);
+    MaterialPriceTypeServiceImpl service = new MaterialPriceTypeServiceImpl(mapper);
+    MaterialPriceType fixed = currentPriceType("201850160", "固定价");
+    fixed.setEffectiveFrom(LocalDate.of(2026, 1, 1));
+    when(mapper.selectList(any())).thenReturn(List.of(fixed));
+
+    MaterialPriceTypeRangeApplyRequest request = new MaterialPriceTypeRangeApplyRequest();
+    MaterialPriceTypeRangeApplyRequest.Row row = new MaterialPriceTypeRangeApplyRequest.Row();
+    row.setMaterialCode("201850160");
+    row.setMaterialName("测试区间价物料");
+    row.setBusinessUnitType("COMMERCIAL");
+    row.setEffectiveFrom(LocalDate.of(2026, 7, 1));
+    request.setRows(List.of(row));
+
+    service.applyRangePriceType(request);
+
+    ArgumentCaptor<MaterialPriceType> updateCaptor = ArgumentCaptor.forClass(MaterialPriceType.class);
+    verify(mapper).updateById(updateCaptor.capture());
+    assertEquals(LocalDate.of(2026, 6, 30), updateCaptor.getValue().getEffectiveTo());
+
+    ArgumentCaptor<MaterialPriceType> insertCaptor = ArgumentCaptor.forClass(MaterialPriceType.class);
+    verify(mapper).insert(insertCaptor.capture());
+    MaterialPriceType inserted = insertCaptor.getValue();
+    assertEquals("201850160", inserted.getMaterialCode());
+    assertEquals("区间价", inserted.getPriceType());
+    assertEquals("2026-07", inserted.getPeriod());
+    assertEquals(LocalDate.of(2026, 7, 1), inserted.getEffectiveFrom());
+    assertEquals("range-price-import", inserted.getSource());
+  }
+
+  private static PriceRangeItem factorRangeItem(String materialCode) {
+    PriceRangeItem item = new PriceRangeItem();
+    item.setMaterialCode(materialCode);
+    item.setMaterialName("测试区间价物料");
+    item.setBusinessUnitType("COMMERCIAL");
+    item.setRangeBasis("FACTOR");
+    item.setEffectiveFrom(LocalDate.of(2026, 7, 1));
+    return item;
+  }
+
+  private static MaterialPriceType currentPriceType(String materialCode, String priceType) {
+    MaterialPriceType row = new MaterialPriceType();
+    row.setId(1L);
+    row.setMaterialCode(materialCode);
+    row.setPriceType(priceType);
+    row.setPriority(1);
+    row.setEffectiveFrom(LocalDate.of(2026, 1, 1));
+    return row;
   }
 }

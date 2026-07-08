@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.PriceRangeItemImportRequest;
+import com.sanhua.marketingcost.dto.PriceRangeItemImportResult;
 import com.sanhua.marketingcost.dto.PriceRangeItemUpdateRequest;
 import com.sanhua.marketingcost.entity.PriceRangeItem;
 import java.util.List;
@@ -17,4 +18,6 @@ public interface PriceRangeItemService {
   boolean delete(Long id);
 
   List<PriceRangeItem> importItems(PriceRangeItemImportRequest request);
+
+  PriceRangeItemImportResult importItemsWithResult(PriceRangeItemImportRequest request);
 }

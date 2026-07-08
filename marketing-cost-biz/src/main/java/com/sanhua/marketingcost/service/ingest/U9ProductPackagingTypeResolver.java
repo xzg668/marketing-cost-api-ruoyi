@@ -21,7 +21,12 @@ public class U9ProductPackagingTypeResolver {
   }
 
   public Result resolve(String materialCode) {
-    QuoteProductTypeResolveResult result = quoteProductTypeResolveService.resolve(materialCode);
+    throw new IllegalArgumentException("产品包装类型识别必须由上游显式传入料品组织");
+  }
+
+  public Result resolve(String materialCode, String organizationCode) {
+    QuoteProductTypeResolveResult result =
+        quoteProductTypeResolveService.resolve(materialCode, organizationCode);
     if (QuoteProductType.BARE.equals(result.productType())) {
       return new Result(NAKED_PRODUCT, result.mainCategoryCode());
     }

@@ -60,6 +60,7 @@ public class U9BomByproductMasterController {
   @PreAuthorize("@ss.hasPermi('base:u9-bom-byproduct:list')")
   @GetMapping("/rows")
   public CommonResult<U9BomByproductPageResponse> rows(
+      @RequestParam(required = false) String priceOrgCode,
       @RequestParam(required = false) String parentMaterialNo,
       @RequestParam(required = false) String parentMaterialName,
       @RequestParam(required = false) String byproductMaterialNo,
@@ -72,7 +73,7 @@ public class U9BomByproductMasterController {
     int current = page == null || page < 1 ? 1 : page;
     int size = pageSize == null || pageSize < 1 ? 20 : pageSize;
     Page<U9BomByproductMaster> pager = service.page(
-        parentMaterialNo, parentMaterialName, byproductMaterialNo, byproductMaterialName,
+        priceOrgCode, parentMaterialNo, parentMaterialName, byproductMaterialNo, byproductMaterialName,
         bomPurpose, status, asOfDate, current, size);
     return CommonResult.success(new U9BomByproductPageResponse(pager.getTotal(), pager.getRecords()));
   }

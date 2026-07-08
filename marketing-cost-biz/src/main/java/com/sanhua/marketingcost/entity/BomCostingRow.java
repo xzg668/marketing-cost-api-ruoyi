@@ -129,6 +129,14 @@ public class BomCostingRow {
   /** 拍平时间（业务时间，手工赋值） */
   private LocalDateTime builtAt;
 
+  // ============================ U9 组织追溯 ============================
+
+  /** U9 报价组织：210=商用，220=板换 */
+  private String priceOrgCode;
+
+  /** 料品主档组织：COMMERCIAL=商用，PLATE=板换 */
+  private String materialOrganizationCode;
+
   // ============================ 版本锁定（锁月核心） ============================
 
   /** 结算期间，格式 yyyy-MM；同 OA + 顶层产品 + 期间刷新时覆盖 */
@@ -399,6 +407,22 @@ public class BomCostingRow {
 
   public void setBuiltAt(LocalDateTime builtAt) {
     this.builtAt = builtAt;
+  }
+
+  public String getPriceOrgCode() {
+    return priceOrgCode;
+  }
+
+  public void setPriceOrgCode(String priceOrgCode) {
+    this.priceOrgCode = priceOrgCode;
+  }
+
+  public String getMaterialOrganizationCode() {
+    return materialOrganizationCode;
+  }
+
+  public void setMaterialOrganizationCode(String materialOrganizationCode) {
+    this.materialOrganizationCode = materialOrganizationCode;
   }
 
   public LocalDate getAsOfDate() {
