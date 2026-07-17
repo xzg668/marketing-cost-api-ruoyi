@@ -38,6 +38,9 @@ public class PricePrepareItem {
   private String resultRefType;
   private Long resultRefId;
   private String message;
+  /** 1=当前最新准备快照；0=历史快照。历史核算仍可按 prepare_no 读取。 */
+  private Integer currentFlag;
+  private String settlementKey;
 
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;

@@ -1,7 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.sanhua.marketingcost.dto.CmsCostImportRequest;
@@ -12,6 +11,7 @@ import com.sanhua.marketingcost.dto.CmsProductSubjectCostExcelRow;
 import com.sanhua.marketingcost.dto.CmsSubjectSettingExcelRow;
 import com.sanhua.marketingcost.dto.CmsWorkshopLaborExcelRow;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
+import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.entity.CmsCostSourceEffective;
 import com.sanhua.marketingcost.entity.CmsCostSourceEffectiveLog;
 import com.sanhua.marketingcost.mapper.CmsCostSourceEffectiveLogMapper;
@@ -20,10 +20,7 @@ import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
 import com.sanhua.marketingcost.service.CmsAuxSubjectSourceEffectiveService;
 import com.sanhua.marketingcost.service.CmsCostImportService;
 import com.sanhua.marketingcost.service.CmsSalaryCostSourceEffectiveService;
-import java.io.InputStream;
 import java.math.BigDecimal;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
@@ -46,14 +43,6 @@ import org.testcontainers.utility.MountableFile;
 @Tag("integration")
 @DisplayName("T17 CMS 成本来源端到端回归")
 class CmsCostT17EndToEndIntegrationTest extends BomMapperTestBase {
-  private static final Path PLAN_SAMPLE =
-      Path.of("/Users/xiexicheng/Desktop/cms/产品计划成本汇总-空值-2026-05-13-09-43.xlsx");
-  private static final Path WORKSHOP_SAMPLE =
-      Path.of("/Users/xiexicheng/Desktop/cms/产品车间料工费汇总_商用导出20260512150458.xlsx");
-  private static final Path SUBJECT_SAMPLE =
-      Path.of("/Users/xiexicheng/Desktop/cms/产品科目成本汇总_商用导出20260512150308.xlsx");
-  private static final Path SUBJECT_SETTING_SAMPLE =
-      Path.of("/Users/xiexicheng/Desktop/cms/科目设置导出20260514103958.xlsx");
   private static final String PRODUCT_CODE = "1079900000536";
   private static final String BUSINESS_UNIT_TYPE = "COMMERCIAL";
   private static final String IMPORTED_BY_PREFIX = "t17-e2e-";
@@ -98,15 +87,9 @@ class CmsCostT17EndToEndIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
-  @DisplayName("真实样例 Excel：导入原始池、生成公共生效来源，并用公共来源进入核算辅料项")
-  void importsRealSamplesAndGeneratesEffectiveSourcesForGoldenProduct() throws Exception {
-    assumeTrue(
-        Files.exists(PLAN_SAMPLE)
-            && Files.exists(WORKSHOP_SAMPLE)
-            && Files.exists(SUBJECT_SAMPLE)
-            && Files.exists(SUBJECT_SETTING_SAMPLE));
-
-    CmsCostImportResponse response = importSamples(importedBy);
+  @DisplayName("标准解析行夹具：导入原始池、生成公共生效来源，并用公共来源进入核算辅料项")
+  void importsFixtureAndGeneratesEffectiveSourcesForGoldenProduct() throws Exception {
+    CmsCostImportResponse response = importService.importParsedRows(goldenRequest(importedBy));
 
     assertThat(response.getStatus()).isEqualTo("IMPORTED");
     assertThat(response.getPlanRowCount()).isPositive();
@@ -155,9 +138,10 @@ class CmsCostT17EndToEndIntegrationTest extends BomMapperTestBase {
             .toList();
     assertThat(cmsAuxItems).extracting(CostRunCostItemDto::getCostCode)
         .containsExactly("AUX_0201", "AUX_0202", "AUX_0205", "AUX_0208", "AUX_0212", "AUX_0216", "AUX_0217");
-    assertThat(cmsAuxItems).allSatisfy(item -> assertThat(item.getRate()).isNull());
+    assertThat(cmsAuxItems)
+        .allSatisfy(item -> assertThat(item.getRate()).isEqualByComparingTo("1.05"));
     assertThat(cmsAuxItems.stream().map(CostRunCostItemDto::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add))
-        .isEqualByComparingTo("1.822700");
+        .isEqualByComparingTo("1.913835");
   }
 
   @Test
@@ -217,42 +201,70 @@ class CmsCostT17EndToEndIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
-  @DisplayName("OA 参考料号：报价员只选参考料号，核算按报价年份读取参考料号公共生效来源")
-  void costCalculationReadsCurrentEffectiveSourcesFromReferenceMaterial() throws Exception {
+  @DisplayName("OA 旧参考料号映射：正式核算只读当前料号公共生效来源，不回退旧复制数据")
+  void costCalculationDoesNotFallbackToLegacyReferenceMaterial() throws Exception {
     importService.importParsedRows(referenceRequest());
     salaryEffectiveService.generateDefaultSources(2026, refImportedBy, BUSINESS_UNIT_TYPE);
     auxEffectiveService.generateDefaultSources(2026, refImportedBy, BUSINESS_UNIT_TYPE);
     seedReferenceOaAndLegacyRows();
 
     List<CostRunCostItemDto> items =
-        costItemService.listByMaterialCodes(refOaNo, refActualCode, Set.of(refActualCode), ignored -> {});
+        costItemService.listByMaterialCodes(
+            refOaNo,
+            refActualCode,
+            Set.of(refActualCode),
+            commercialContext(refOaNo, refActualCode),
+            null,
+            true,
+            ignored -> {});
 
-    assertThat(item(items, "DIRECT_LABOR").getAmount()).isEqualByComparingTo("4.000000");
-    assertThat(item(items, "INDIRECT_LABOR").getAmount()).isEqualByComparingTo("0.220000");
-    CostRunCostItemDto aux = item(items, "AUX_0201");
-    assertThat(aux.getCostName()).isEqualTo("辅助焊料类");
-    assertThat(aux.getRate()).isNull();
-    assertThat(aux.getAmount()).isEqualByComparingTo("0.400000");
+    CostRunCostItemDto direct = item(items, "DIRECT_LABOR");
+    CostRunCostItemDto indirect = item(items, "INDIRECT_LABOR");
+    assertThat(direct.getAmount()).isEqualByComparingTo("0.000000");
+    assertThat(indirect.getAmount()).isEqualByComparingTo("0.000000");
+    assertThat(direct.getRemark()).contains("CMS 公共生效直接人工工资");
+    assertThat(indirect.getRemark()).contains("CMS 公共生效辅助员工工资");
+    assertThat(items).noneMatch(costItem -> "AUX_0201".equals(costItem.getCostCode()));
   }
 
-  private CmsCostImportResponse importSamples(String user) throws Exception {
-    try (InputStream plan = Files.newInputStream(PLAN_SAMPLE);
-        InputStream workshop = Files.newInputStream(WORKSHOP_SAMPLE);
-        InputStream subject = Files.newInputStream(SUBJECT_SAMPLE);
-        InputStream subjectSetting = Files.newInputStream(SUBJECT_SETTING_SAMPLE)) {
-      return importService.importExcel(
-          plan,
-          PLAN_SAMPLE.getFileName().toString(),
-          workshop,
-          WORKSHOP_SAMPLE.getFileName().toString(),
-          subject,
-          SUBJECT_SAMPLE.getFileName().toString(),
-          subjectSetting,
-          SUBJECT_SETTING_SAMPLE.getFileName().toString(),
-          false,
-          user,
-          BUSINESS_UNIT_TYPE);
-    }
+  private CmsCostImportRequest goldenRequest(String user) {
+    CmsCostImportRequest request = baseRequest(user, "T17-标准夹具.xlsx");
+    request.setPlanRows(List.of(plan(PRODUCT_CODE, "2026-01", null)));
+    request.setWorkshopRows(List.of(workshop(PRODUCT_CODE, "2026-01", "400.000000")));
+    request.setSubjectRows(List.of(
+        indirect(PRODUCT_CODE, "2026-01", "22.000000"),
+        aux(PRODUCT_CODE, "2026-01", "0201", "辅助焊料类", "40.000000"),
+        aux(PRODUCT_CODE, "2026-01", "0202", "包装材料", "60.000000"),
+        aux(PRODUCT_CODE, "2026-01", "0205", "外购零部件", "52.000000"),
+        aux(PRODUCT_CODE, "2026-01", "0208", "低值易耗品", "20.000000"),
+        aux(PRODUCT_CODE, "2026-01", "0212", "周转材料", "3.270000"),
+        aux(PRODUCT_CODE, "2026-01", "0216", "其他辅助材料", "3.000000"),
+        aux(PRODUCT_CODE, "2026-01", "0217", "专项辅料", "4.000000")));
+    request.setSubjectSettingRows(List.of(
+        subjectSetting("03", "工资", "0302", "辅助人员工资"),
+        subjectSetting("02", "辅助材料", "0201", "辅助焊料类"),
+        subjectSetting("02", "辅助材料", "0202", "包装材料"),
+        subjectSetting("02", "辅助材料", "0205", "外购零部件"),
+        subjectSetting("02", "辅助材料", "0208", "低值易耗品"),
+        subjectSetting("02", "辅助材料", "0212", "周转材料"),
+        subjectSetting("02", "辅助材料", "0216", "其他辅助材料"),
+        subjectSetting("02", "辅助材料", "0217", "专项辅料")));
+    return request;
+  }
+
+  private CostRunContext commercialContext(String oaNo, String productCode) {
+    CostRunContext context = CostRunContext.quote(
+        oaNo,
+        null,
+        productCode,
+        null,
+        null,
+        BUSINESS_UNIT_TYPE,
+        "2026-05",
+        oaNo + ":" + productCode);
+    context.setPriceOrgCode("210");
+    context.setMaterialOrganizationCode("COMMERCIAL");
+    return context;
   }
 
   private CmsCostImportRequest refreshRequest(String a, String b, String c) {

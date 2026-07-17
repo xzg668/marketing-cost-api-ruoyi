@@ -8,6 +8,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -161,6 +162,57 @@ class QuoteProductBomPreparationServiceImplTest {
   }
 
   @Test
+  @DisplayName("月度调价已有当月 BOM 状态时优先使用状态期间，不回退 OA 原核算月")
+  void prepareUsesLatestBomStatusPeriodForMonthlyReprice() {
+    stubQuoteLine("FIN-REPRICE", "2026-01");
+    QuoteBomStatus latestStatus = new QuoteBomStatus();
+    latestStatus.setId(301L);
+    latestStatus.setOaFormItemId(10L);
+    latestStatus.setCostPeriodMonth("2026-07");
+    when(statusMapper.selectOne(any())).thenReturn(latestStatus);
+    when(productTypeResolveService.resolve("FIN-REPRICE", "COMMERCIAL"))
+        .thenReturn(type("FIN-REPRICE", QuoteProductType.NON_BARE));
+    stubFormalRead("FIN-REPRICE", "2026-07", formalFound("FIN-REPRICE", "2026-07"));
+
+    QuoteProductBomPreparationPreview preview = service.prepareByOaFormItem(10L);
+
+    assertThat(preview.periodMonth()).isEqualTo("2026-07");
+    verify(formalBomReadService)
+        .read(
+            eq("FIN-REPRICE"),
+            eq("2026-07"),
+            isNull(),
+            any(LocalDate.class),
+            any(QuoteDataOrganization.class));
+  }
+
+  @Test
+  @DisplayName("迁移前同产品行同月记录组织为空时复用旧行补组织，不重复插入")
+  void prepareUpdatesLegacyMonthlyRecordWithoutOrganization() {
+    stubQuoteLine("FIN-LEGACY", "2026-07");
+    when(productTypeResolveService.resolve("FIN-LEGACY", "COMMERCIAL"))
+        .thenReturn(type("FIN-LEGACY", QuoteProductType.NON_BARE));
+    stubFormalRead("FIN-LEGACY", "2026-07", formalFound("FIN-LEGACY", "2026-07"));
+    QuoteBomPreparationRecord legacy = new QuoteBomPreparationRecord();
+    legacy.setId(401L);
+    legacy.setOaFormItemId(10L);
+    legacy.setCostPeriodMonth("2026-07");
+    legacy.setActiveFlag(1);
+    when(preparationRecordMapper.selectOne(any())).thenReturn(null, legacy);
+
+    QuoteProductBomPreparationPreview preview = service.prepareByOaFormItem(10L);
+
+    assertThat(preview.preparationRecordId()).isEqualTo(401L);
+    assertThat(legacy.getPriceOrgCode()).isEqualTo("210");
+    assertThat(legacy.getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
+    verify(preparationRecordMapper, never()).insert(any(QuoteBomPreparationRecord.class));
+    verify(preparationRecordMapper, times(1)).updateById(legacy);
+    ArgumentCaptor<QuoteBomStatus> statusCaptor = ArgumentCaptor.forClass(QuoteBomStatus.class);
+    verify(statusMapper).updateById(statusCaptor.capture());
+    assertThat(statusCaptor.getValue().getPreparationRecordId()).isEqualTo(401L);
+  }
+
+  @Test
   @DisplayName("非裸品补录 6 个月过期：不能复用，进入技术补录缺口")
   void prepareNonBareExpiredSupplementNeedsTask() {
     stubQuoteLine("FIN-EXPIRED", "2026-05");
@@ -297,6 +349,40 @@ class QuoteProductBomPreparationServiceImplTest {
     assertThat(recordCaptor.getValue().getMaterialOrganizationCode()).isEqualTo("PLATE");
   }
 
+  @Test
+  @DisplayName("FI-SR-005 板式热交换器报价准备按板换 220/PLATE 读取正式 BOM")
+  void prepareFiSr005HeatExchangerUsesPlateOrganization() {
+    stubQuoteLine(
+        "1053900000062",
+        "2026-07",
+        "FI-SR-005",
+        "FI-SR-005-20260318-0397",
+        "板式热交换器");
+    when(productTypeResolveService.resolve("1053900000062", "PLATE"))
+        .thenReturn(type("1053900000062", QuoteProductType.NON_BARE));
+    stubFormalRead("1053900000062", "2026-07", formalFound("1053900000062", "2026-07"));
+
+    QuoteProductBomPreparationPreview preview = service.prepareByOaFormItem(10L);
+
+    assertThat(preview.ready()).isTrue();
+    ArgumentCaptor<QuoteDataOrganization> captor =
+        ArgumentCaptor.forClass(QuoteDataOrganization.class);
+    verify(formalBomReadService)
+        .read(
+            eq("1053900000062"),
+            eq("2026-07"),
+            isNull(),
+            any(LocalDate.class),
+            captor.capture());
+    assertThat(captor.getValue().priceOrgCode()).isEqualTo("220");
+    assertThat(captor.getValue().materialOrganizationCode()).isEqualTo("PLATE");
+    ArgumentCaptor<QuoteBomPreparationRecord> recordCaptor =
+        ArgumentCaptor.forClass(QuoteBomPreparationRecord.class);
+    verify(preparationRecordMapper).insert(recordCaptor.capture());
+    assertThat(recordCaptor.getValue().getPriceOrgCode()).isEqualTo("220");
+    assertThat(recordCaptor.getValue().getMaterialOrganizationCode()).isEqualTo("PLATE");
+  }
+
   private void stubQuoteLine(String productCode, String periodMonth) {
     stubQuoteLine(productCode, periodMonth, null, "OA-QBP-05", "产品");
   }
@@ -407,6 +493,7 @@ class QuoteProductBomPreparationServiceImplTest {
         "图号",
         "实体",
         "1201",
+        "零部件类",
         "PCS",
         "U9",
         null,

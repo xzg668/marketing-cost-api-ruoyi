@@ -29,6 +29,8 @@ import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.service.ProductPropertyAnnualUsageService;
+import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.LinkedHashMap;
@@ -50,6 +52,7 @@ class QuoteIngestServiceImplTest {
   private OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper;
   private QuoteBomStatusMapper quoteBomStatusMapper;
   private ProductPropertyAnnualUsageService productPropertyAnnualUsageService;
+  private QuoteCostRunVersionInvalidationService versionInvalidationService;
   private QuoteIngestServiceImpl service;
 
   @BeforeEach
@@ -62,6 +65,7 @@ class QuoteIngestServiceImplTest {
     oaFormItemExtraFieldMapper = mock(OaFormItemExtraFieldMapper.class);
     quoteBomStatusMapper = mock(QuoteBomStatusMapper.class);
     productPropertyAnnualUsageService = mock(ProductPropertyAnnualUsageService.class);
+    versionInvalidationService = mock(QuoteCostRunVersionInvalidationService.class);
     service =
         new QuoteIngestServiceImpl(
             new QuoteNormalizeService(new QuoteIngestRequestValidator(), new QuoteClassifyService()),
@@ -73,6 +77,7 @@ class QuoteIngestServiceImplTest {
             oaFormItemExtraFieldMapper,
             quoteBomStatusMapper,
             productPropertyAnnualUsageService,
+            versionInvalidationService,
             objectMapper);
     stubInsertIds();
   }
@@ -218,6 +223,46 @@ class QuoteIngestServiceImplTest {
     verify(oaFormMapper).updateById(existingForm);
     verify(oaFormItemMapper).delete(any());
     verify(oaFormItemMapper).insert(any(OaFormItem.class));
+  }
+
+  @Test
+  void changedOaCopperPriceInvalidatesOnlyThisOaTrialVersions() {
+    QuoteIngestRequest request = request("FI-SC-006", "EXT-T5-CU", "1002", "批量品");
+    request.getHeader().setCopperPrice("95000");
+    QuoteIngestLog existingLog = log(18L, "EXCEL:EXT-T5-CU:1", "different-hash");
+    OaForm existingForm = new OaForm();
+    existingForm.setId(201L);
+    existingForm.setOaNo("EXT-T5-CU");
+    existingForm.setCopperPrice(new BigDecimal("90000"));
+    existingForm.setCalcStatus("未核算");
+    when(quoteIngestLogService.findByIdempotencyKey("EXCEL:EXT-T5-CU:1"))
+        .thenReturn(existingLog);
+    when(oaFormMapper.selectOne(any())).thenReturn(existingForm);
+
+    QuoteIngestResponse response = service.ingest(request);
+
+    assertThat(response.isAccepted()).isTrue();
+    verify(versionInvalidationService).invalidateByOaCu("EXT-T5-CU");
+  }
+
+  @Test
+  void numericallySameOaCopperPriceDoesNotInvalidateTrialVersions() {
+    QuoteIngestRequest request = request("FI-SC-006", "EXT-T5-CU-SAME", "1002", "批量品");
+    request.getHeader().setCopperPrice("90000.00");
+    QuoteIngestLog existingLog = log(19L, "EXCEL:EXT-T5-CU-SAME:1", "different-hash");
+    OaForm existingForm = new OaForm();
+    existingForm.setId(202L);
+    existingForm.setOaNo("EXT-T5-CU-SAME");
+    existingForm.setCopperPrice(new BigDecimal("90000"));
+    existingForm.setCalcStatus("未核算");
+    when(quoteIngestLogService.findByIdempotencyKey("EXCEL:EXT-T5-CU-SAME:1"))
+        .thenReturn(existingLog);
+    when(oaFormMapper.selectOne(any())).thenReturn(existingForm);
+
+    QuoteIngestResponse response = service.ingest(request);
+
+    assertThat(response.isAccepted()).isTrue();
+    verify(versionInvalidationService, never()).invalidateByOaCu(any());
   }
 
   @Test

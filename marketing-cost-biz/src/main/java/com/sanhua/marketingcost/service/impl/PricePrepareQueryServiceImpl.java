@@ -483,6 +483,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
                 "SUM(CASE WHEN status = '" + ITEM_STATUS_READY + "' THEN 1 ELSE 0 END) AS ready_count",
                 "SUM(CASE WHEN status = '" + ITEM_STATUS_FAILED + "' THEN 1 ELSE 0 END) AS failed_count",
                 "MAX(updated_at) AS updated_at");
+    itemQuery.eq("current_flag", 1);
     eqIfText(itemQuery, "oa_no", oaNo);
     if (oaFormItemId != null) {
       itemQuery.eq("oa_form_item_id", oaFormItemId);
@@ -531,6 +532,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
     QueryWrapper<PricePrepareGap> gapQuery =
         Wrappers.<PricePrepareGap>query()
             .select("oa_no", "oa_form_item_id", "top_product_code", "COUNT(*) AS gap_count");
+    gapQuery.eq("current_flag", 1);
     eqIfText(gapQuery, "oa_no", oaNo);
     if (oaFormItemId != null) {
       gapQuery.eq("oa_form_item_id", oaFormItemId);
@@ -582,6 +584,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
             .in("oa_no", oaNos)
             .in("top_product_code", topProductCodes)
             .eq("period_month", periodMonth)
+            .eq("current_flag", 1)
             .groupBy("oa_no", "period_month", "top_product_code");
 
     Map<String, PricePrepareTopProductSummaryResponse> summaries = new LinkedHashMap<>();
@@ -625,6 +628,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
             .in("oa_no", oaNos)
             .in("top_product_code", topProductCodes)
             .eq("period_month", periodMonth)
+            .eq("current_flag", 1)
             .groupBy("oa_no", "top_product_code");
     Map<String, Integer> gapCounts = new HashMap<>();
     List<Map<String, Object>> gapMaps = gapMapper.selectMaps(gapQuery);
@@ -746,6 +750,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
     eqIfText(query, PricePrepareBatch::getTopProductCode, request.getTopProductCode());
     eqIfText(query, PricePrepareBatch::getPriceTypeConfirmNo, request.getPriceTypeConfirmNo());
     eqIfText(query, PricePrepareBatch::getPeriodMonth, request.getPeriodMonth());
+    eqIfText(query, PricePrepareBatch::getScenarioType, request.getScenarioType());
     eqIfText(query, PricePrepareBatch::getStatus, request.getStatus());
     return query;
   }
@@ -754,6 +759,9 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
       PricePrepareItemQueryRequest request) {
     LambdaQueryWrapper<PricePrepareItem> query = Wrappers.lambdaQuery();
     eqIfText(query, PricePrepareItem::getPrepareNo, request.getPrepareNo());
+    if (!StringUtils.hasText(request.getPrepareNo())) {
+      query.eq(PricePrepareItem::getCurrentFlag, 1);
+    }
     eqIfText(query, PricePrepareItem::getPeriodMonth, request.getPeriodMonth());
     eqIfText(query, PricePrepareItem::getPriceTypeConfirmNo, request.getPriceTypeConfirmNo());
     eqIfText(query, PricePrepareItem::getOaNo, request.getOaNo());
@@ -768,6 +776,9 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
   private LambdaQueryWrapper<PricePrepareGap> buildGapQuery(PricePrepareGapQueryRequest request) {
     LambdaQueryWrapper<PricePrepareGap> query = Wrappers.lambdaQuery();
     eqIfText(query, PricePrepareGap::getPrepareNo, request.getPrepareNo());
+    if (!StringUtils.hasText(request.getPrepareNo())) {
+      query.eq(PricePrepareGap::getCurrentFlag, 1);
+    }
     eqIfText(query, PricePrepareGap::getPeriodMonth, request.getPeriodMonth());
     eqIfText(query, PricePrepareGap::getPriceTypeConfirmNo, request.getPriceTypeConfirmNo());
     eqIfText(query, PricePrepareGap::getOaNo, request.getOaNo());

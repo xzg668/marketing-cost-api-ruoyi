@@ -41,7 +41,6 @@ import com.sanhua.marketingcost.enums.CostItemCategory;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.service.CostRunCacheLookupService;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
-import com.sanhua.marketingcost.service.CmsCostEffectiveSourceEnsureService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -72,7 +71,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private static final String CMS_SOURCE_EFFECTIVE = "CMS_EFFECTIVE";
   private static final String CMS_SOURCE_TYPE_SALARY_DIRECT = "SALARY_DIRECT";
   private static final String CMS_SOURCE_TYPE_SALARY_INDIRECT = "SALARY_INDIRECT";
-  private static final String CMS_AUTO_OPERATOR = "SYSTEM_AUTO";
   private static final String MATERIAL = "MATERIAL";
   private static final String LOSS = "LOSS";
   private static final String MANUFACTURE = "MANUFACTURE";
@@ -94,8 +92,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private static final String OTHER_EXP_PREFIX = "OTHER_EXP_";
   /** T11：包装费固定 cost_code，区别于 lp_other_expense_rate 的 OTHER_EXP_<id> 系列 */
   private static final String OTHER_EXP_PACKAGE = "OTHER_EXP_PACKAGE";
-  /** T11：运费固定 cost_code，取 oa_form_item.shipping_fee */
-  private static final String OTHER_EXP_FREIGHT = "OTHER_EXP_FREIGHT";
   /** T11：lp_material_master.cost_element 表示包装材料的固定文本（U9 同步上来的中文枚举值） */
   private static final String COST_ELEMENT_PACKAGE = "主要材料-包装材料";
   /** 报价净损失率匹配层级：产品料号。 */
@@ -145,7 +141,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private final OaFormItemMapper oaFormItemMapper;
   private final SalaryCostMapper salaryCostMapper;
   private final CmsCostSourceEffectiveMapper cmsCostSourceEffectiveMapper;
-  private final CmsCostEffectiveSourceEnsureService cmsCostEffectiveSourceEnsureService;
   private final DepartmentFundRateMapper departmentFundRateMapper;
   private final AuxCostItemMapper auxCostItemMapper;
   private final CostRunPartItemMapper costRunPartItemMapper;
@@ -178,7 +173,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       OaFormItemMapper oaFormItemMapper,
       SalaryCostMapper salaryCostMapper,
       CmsCostSourceEffectiveMapper cmsCostSourceEffectiveMapper,
-      CmsCostEffectiveSourceEnsureService cmsCostEffectiveSourceEnsureService,
       DepartmentFundRateMapper departmentFundRateMapper,
       AuxCostItemMapper auxCostItemMapper,
       CostRunPartItemMapper costRunPartItemMapper,
@@ -191,13 +185,12 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       MaterialMasterRawMapper materialMasterRawMapper,
       BomRawHierarchyMapper bomRawHierarchyMapper,
       CostRunCacheLookupService cacheLookup,
-      @Value("${cost.material.includeWaterPower:true}") boolean includeWaterPowerInMaterial) {
+      @Value("${cost.material.includeWaterPower:false}") boolean includeWaterPowerInMaterial) {
     this.costRunCostItemMapper = costRunCostItemMapper;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.salaryCostMapper = salaryCostMapper;
     this.cmsCostSourceEffectiveMapper = cmsCostSourceEffectiveMapper;
-    this.cmsCostEffectiveSourceEnsureService = cmsCostEffectiveSourceEnsureService;
     this.departmentFundRateMapper = departmentFundRateMapper;
     this.auxCostItemMapper = auxCostItemMapper;
     this.costRunPartItemMapper = costRunPartItemMapper;
@@ -400,7 +393,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       CostSourceContext costSourceContext,
       List<CostRunPartItemDto> currentPartItems,
       boolean persistDailyResult) {
-    ensureCmsCostSources(costSourceContext);
+    // 单产品核算只读取当前料号已发布的 CMS 生效来源；全年默认来源由 CMS 同步/发布链路维护，
+    // 不能在用户点击核算时按“年度 + 事业部”重新扫描全量数据。
     List<SalaryCost> salaryCosts =
         salaryCostMapper.selectList(
             Wrappers.lambdaQuery(SalaryCost.class).in(SalaryCost::getMaterialCode, materialCodes));
@@ -454,8 +448,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     }
 
     // 3) 最后汇总材料费(部品+辅料+部门经费+见机表包装)
-    //    Task #9：水电费默认计入材料费（与 Excel 见机表3 口径对齐），
-    //    通过 cost.material.includeWaterPower=false 保留历史口径回溯能力。
+    //    见机表3 的材料费 E66=SUM(E9:E64)，水电费在 E65，因此默认只列示、不进入材料费；
+    //    如需回溯曾经把水电计入材料费的版本，可显式设置 cost.material.includeWaterPower=true。
     //    包装组件已在部品取价阶段按子件汇总价 / 母件底数折算成父件金额；
     //    见机表只需对该包装父件金额乘 1.05。
     PartTotalSplit partSplit = splitPartAmount(oaNoValue, productCodeValue, currentPartItems);
@@ -465,12 +459,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         calculatePackageBucketAmount(oaNoValue, productCodeValue, currentPartItems);
     BigDecimal packageAmount =
         packageBucketAmount.signum() > 0 ? packageBucketAmount : rawPackageAmount;
-    BigDecimal freightAmount = lookupFreight(oaNoValue, productCodeValue);
     // 包装进 materialTotal；优先用包装组件父件新口径，取不到包装组件数据时退回原始包装件金额。
-    //      totalAmount 只额外累加运费等真正价外项，避免重复。
-    otherExpenseTotal = otherExpenseTotal.add(freightAmount);
+    // 运费属于报价商务信息，不进入成本核算；这里只累计正式配置的其他费用。
     costCodes.add(OTHER_EXP_PACKAGE);
-    costCodes.add(OTHER_EXP_FREIGHT);
     BigDecimal deptTotal =
         feeResult.overhaul
             .add(feeResult.toolingRepair)
@@ -590,9 +581,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     items.add(buildItem(
         FIN_EXP, "财务费用", adjustedManufactureCost, financeRate, financeAmount, threeExpRemark));
     items.addAll(otherExpenseItems);
-    // T11：包装费/运费固定项，紧跟 lp_other_expense_rate 系列
+    // T11：包装费仅用于展示其归集结果，金额已进入材料费，不重复累加总成本。
     items.add(buildItem(OTHER_EXP_PACKAGE, "包装费", rawPackageAmount, null, packageAmount));
-    items.add(buildItem(OTHER_EXP_FREIGHT, "运费", null, null, freightAmount));
     items.add(buildItem(TOTAL, "不含税总成本", null, null, totalAmount));
     // T10：4 项部门经费共享 feeResult.remark
     items.add(buildItem(
@@ -873,9 +863,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
                     TOOLING_REPAIR,
                     WATER_POWER,
                     DEPT_OTHER,
-                    // T11：固定其他费用项；OTHER_EXP_<id> 系列因前缀不固定不放白名单
-                    OTHER_EXP_PACKAGE,
-                    OTHER_EXP_FREIGHT));
+                    // T11：固定包装归集项；OTHER_EXP_<id> 系列因前缀不固定不放白名单
+                    OTHER_EXP_PACKAGE));
     if (stored.isEmpty()) {
       return Collections.emptyList();
     }
@@ -1087,14 +1076,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         || "YES".equalsIgnoreCase(text)
         || "TRUE".equalsIgnoreCase(text)
         || "1".equals(text);
-  }
-
-  private void ensureCmsCostSources(CostSourceContext costSourceContext) {
-    if (costSourceContext == null || costSourceContext.costYear == null) {
-      return;
-    }
-    cmsCostEffectiveSourceEnsureService.ensureDefaultSources(
-        costSourceContext.costYear, CMS_AUTO_OPERATOR, costSourceContext.businessUnitType);
   }
 
   int currentCostYear() {
@@ -1715,6 +1696,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     int fallbackIndex = 1;
     for (OtherExpenseRate rate : rates) {
       String expenseType = trimToNull(rate.getExpenseType());
+      if (isFreightExpenseType(expenseType)) {
+        continue;
+      }
       String codeSuffix =
           rate.getId() == null ? ("TMP" + fallbackIndex++) : String.valueOf(rate.getId());
       String code = OTHER_EXP_PREFIX + codeSuffix;
@@ -1733,6 +1717,13 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
               otherRemark));
     }
     return items;
+  }
+
+  private boolean isFreightExpenseType(String expenseType) {
+    return expenseType != null
+        && (expenseType.contains("运费")
+            || expenseType.contains("运输费")
+            || "freight".equalsIgnoreCase(expenseType));
   }
 
   List<CostRunCostItemDto> buildAuxItems(Set<String> materialCodes) {
@@ -2202,40 +2193,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return requiredMaterialOrganizationCode(organizationCode)
         + "|"
         + (materialCode == null ? "" : materialCode.trim());
-  }
-
-  /**
-   * T11：从 OA 行级 shipping_fee 取运费；按 (oa_no, productCode) 命中行求和。
-   * OA 多产品时只取 productCode 对应行；空/0 都返 0（不当 miss）。
-   */
-  /** 包私有以便单测覆盖 */
-  BigDecimal lookupFreight(String oaNo, String productCode) {
-    if (!StringUtils.hasText(oaNo) || !StringUtils.hasText(productCode)) {
-      return BigDecimal.ZERO;
-    }
-    OaForm form =
-        oaFormMapper.selectOne(
-            Wrappers.lambdaQuery(OaForm.class)
-                .eq(OaForm::getOaNo, oaNo)
-                .last("LIMIT 1"));
-    if (form == null) {
-      return BigDecimal.ZERO;
-    }
-    List<OaFormItem> rows =
-        oaFormItemMapper.selectList(
-            Wrappers.lambdaQuery(OaFormItem.class)
-                .eq(OaFormItem::getOaFormId, form.getId())
-                .eq(OaFormItem::getMaterialNo, productCode));
-    if (rows == null || rows.isEmpty()) {
-      return BigDecimal.ZERO;
-    }
-    BigDecimal total = BigDecimal.ZERO;
-    for (OaFormItem r : rows) {
-      if (r.getShippingFee() != null) {
-        total = total.add(r.getShippingFee());
-      }
-    }
-    return total;
   }
 
   /** T11：part 金额拆分元组（非包装/包装），用于材料费 vs 包装费分流；包私有以便单测断言字段 */

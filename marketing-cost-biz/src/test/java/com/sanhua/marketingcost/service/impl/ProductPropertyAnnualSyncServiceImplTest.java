@@ -165,6 +165,30 @@ class ProductPropertyAnnualSyncServiceImplTest {
     assertThat(captor.getValue().getAnnualUsage()).isEqualByComparingTo("12300");
   }
 
+  @Test
+  @DisplayName("OA年用量同步：缺产品料号和产品信息时返回校验错误而不是空指针")
+  void usageOnlyMissingProductCodeAndIdentityDoesNotThrow() {
+    ProductPropertyMapper mapper = mock(ProductPropertyMapper.class);
+    ProductPropertyAnnualSyncRequest request = new ProductPropertyAnnualSyncRequest();
+    request.setPropertyYear(2026);
+    request.setBusinessUnitType("COMMERCIAL");
+    request.setUsageOnly(true);
+    request.setRequireProductCode(true);
+    request.setCreatePlaceholderOnMissing(true);
+    ProductPropertyAnnualSyncRow row = new ProductPropertyAnnualSyncRow();
+    row.setRowNo(1);
+    row.setAnnualUsage(new BigDecimal("4000"));
+    request.setRows(List.of(row));
+
+    ProductPropertyAnnualSyncServiceImpl service = new ProductPropertyAnnualSyncServiceImpl(mapper);
+    ProductPropertyAnnualSyncResult result = service.sync(request);
+
+    assertThat(result.getErrors()).isEqualTo(1);
+    assertThat(result.getErrorMessages()).containsExactly("第1行缺产品料号，OA 年用量不能沉淀到产品属性对照表");
+    verify(mapper, never()).selectOne(any(Wrapper.class));
+    verify(mapper, never()).insert(any(ProductProperty.class));
+  }
+
   private ProductPropertyAnnualSyncRequest request(ProductPropertyAnnualSyncRow row) {
     ProductPropertyAnnualSyncRequest request = new ProductPropertyAnnualSyncRequest();
     request.setPropertyYear(2026);

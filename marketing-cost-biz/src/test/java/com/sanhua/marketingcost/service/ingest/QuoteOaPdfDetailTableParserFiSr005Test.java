@@ -65,6 +65,67 @@ class QuoteOaPdfDetailTableParserFiSr005Test {
     assertThat(response.getForms().get(0).getItems().get(0).getBusinessType()).isEqualTo("批量品");
   }
 
+  @Test
+  void parsesDenseSplitHeaderRowsForFiSr005() {
+    QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SR_005_DERIVED);
+
+    parser.parse(
+        context(
+            QuoteExcelTemplateType.FI_SR_005_DERIVED,
+            document(
+                "FI-SR-005-20260318-0397.pdf",
+                row(cell(">>财务部", 30)),
+                row(
+                    cell("序", 56),
+                    cell("产品名称", 70),
+                    cell("客户图号", 104),
+                    cell("料号", 137),
+                    cell("型号规格", 174),
+                    cell("新品运输", 207),
+                    cell("预计年用", 240),
+                    cell("含运输费", 305),
+                    cell("新品不含", 336),
+                    cell("新品价格", 495)),
+                row(
+                    cell("号", 56),
+                    cell("费[元/只]", 207),
+                    cell("量[万只]", 240),
+                    cell("总成本", 305),
+                    cell("运输费总", 336),
+                    cell("有效期", 495)),
+                row(
+                    cell("1", 56),
+                    cell("板式热交换器", 70),
+                    cell("/", 137),
+                    cell("S12BH-12L-18", 174),
+                    cell("5.2910", 207),
+                    cell("0.400", 240),
+                    cell("196.278", 305),
+                    cell("190.987", 336),
+                    cell("1个月", 495)),
+                row(cell("", 30)),
+                row(
+                    cell("2", 56),
+                    cell("板式热交换器", 70),
+                    cell("/", 137),
+                    cell("S12BH-16L-34", 174),
+                    cell("5.2910", 207),
+                    cell("0.400", 240),
+                    cell("204.202", 305),
+                    cell("198.911", 336),
+                    cell("1个月", 495)),
+                row(cell(">>辅助信息", 30)))),
+        request);
+
+    assertThat(request.getItems()).hasSize(2);
+    assertThat(request.getItems()).extracting(QuoteIngestItemRequest::getSunlModel)
+        .containsExactly("S12BH-12L-18", "S12BH-16L-34");
+    assertThat(request.getItems()).extracting(QuoteIngestItemRequest::getMaterialNo)
+        .containsExactly(null, null);
+    assertThat(request.getItems()).extracting(QuoteIngestItemRequest::getBusinessType)
+        .containsExactly("衍生品", "衍生品");
+  }
+
   private QuotePdfDocument detailDocument(String fileName) {
     return document(
         fileName,

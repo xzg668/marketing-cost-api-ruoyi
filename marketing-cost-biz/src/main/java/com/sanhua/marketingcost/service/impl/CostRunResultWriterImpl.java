@@ -187,6 +187,8 @@ public class CostRunResultWriterImpl implements CostRunResultWriter {
       entity.setAmount(item.getAmount());
       entity.setRemark(truncateRemark(item.getRemark()));
       entity.setBusinessUnitType(trimToNull(result.getContext().getBusinessUnitType()));
+      entity.setPriceOrgCode(trimToNull(item.getPriceOrgCode()));
+      entity.setMaterialOrganizationCode(trimToNull(item.getMaterialOrganizationCode()));
       costRunPartItemMapper.insert(entity);
     }
   }

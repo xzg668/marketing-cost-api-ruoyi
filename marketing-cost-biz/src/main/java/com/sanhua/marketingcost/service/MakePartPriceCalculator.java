@@ -22,6 +22,7 @@ public class MakePartPriceCalculator {
   public static final String STATUS_INVALID_PROCESS_TYPE = "INVALID_PROCESS_TYPE";
 
   private static final BigDecimal G_TO_KG = new BigDecimal("1000");
+  private static final int WEIGHT_SCALE = 16;
   private static final int AMOUNT_SCALE = 8;
 
   public List<MakePartPriceCalcRow> calculate(List<MakePartPriceCalcRow> rows) {
@@ -63,13 +64,13 @@ public class MakePartPriceCalculator {
     BigDecimal grossWeightG = row.getGrossWeightG();
     BigDecimal netWeightG = row.getNetWeightG();
     BigDecimal scrapWeightKg = grossWeightG.subtract(netWeightG)
-        .divide(G_TO_KG, AMOUNT_SCALE, RoundingMode.HALF_UP);
+        .divide(G_TO_KG, WEIGHT_SCALE, RoundingMode.HALF_UP);
     BigDecimal scrapDeduction = scrapWeightKg.multiply(row.getScrapUnitPrice());
     BigDecimal cost;
     if (MakePartProcessTypePolicy.PROCESS_TYPE_RAW.equals(row.getItemProcessType())) {
       // 原材料加工：毛重/净重是 g，原材料价和废料价是元/kg，所以参与计算前必须 /1000 转 kg。
       BigDecimal materialAmount = grossWeightG
-          .divide(G_TO_KG, AMOUNT_SCALE, RoundingMode.HALF_UP)
+          .divide(G_TO_KG, WEIGHT_SCALE, RoundingMode.HALF_UP)
           .multiply(row.getRawUnitPrice());
       cost = materialAmount.subtract(scrapDeduction);
     } else {
@@ -161,6 +162,7 @@ public class MakePartPriceCalculator {
     row.setBusinessUnitType(source.getBusinessUnitType());
     row.setPricingMonth(source.getPricingMonth());
     row.setPriceAsOfTime(source.getPriceAsOfTime());
+    row.setPriceScenarioType(source.getPriceScenarioType());
     row.setParentMaterialNo(source.getParentMaterialNo());
     row.setParentMaterialName(source.getParentMaterialName());
     row.setDrawingNo(source.getDrawingNo());

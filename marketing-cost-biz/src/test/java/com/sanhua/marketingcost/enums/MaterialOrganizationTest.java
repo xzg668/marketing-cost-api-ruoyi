@@ -72,14 +72,41 @@ class MaterialOrganizationTest {
   }
 
   @Test
-  @DisplayName("产品名称不参与组织判断，非板换专用流程必须传组织码")
-  void quoteDataOrganizationDoesNotGuessByProductName() {
+  @DisplayName("普通产品名称不参与组织判断，非板换专用流程必须传组织码")
+  void quoteDataOrganizationDoesNotGuessByGenericProductName() {
     assertThatThrownBy(
-            () -> MaterialOrganization.quoteDataForQuoteProcess("FI-SC-006", null, "板换组件"))
+            () ->
+                MaterialOrganization.quoteDataForQuoteProduct(
+                    "FI-SC-006", null, null, "普通组件", "MODEL", "MAT-001"))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("料品组织仅支持");
+        .hasMessageContaining("显式传入料品组织");
     assertQuoteData(
         MaterialOrganization.quoteDataForQuoteProcess("FI-SC-006", null, "PLATE"),
+        "220",
+        "PLATE");
+  }
+
+  @Test
+  @DisplayName("板式热交换器产品行即使单据业务单元为 COMMERCIAL，也按板换 220/PLATE 取 BOM")
+  void quoteProductTextResolvesPlateOrganization() {
+    assertQuoteData(
+        MaterialOrganization.quoteDataForQuoteProduct(
+            "FI-SR-005",
+            "FI-SR-005-20260318-0397",
+            "COMMERCIAL",
+            "板式热交换器",
+            "S12BH-30L-19",
+            "1053900000062"),
+        "220",
+        "PLATE");
+    assertQuoteData(
+        MaterialOrganization.quoteDataForQuoteProduct(
+            "FI-SR-005",
+            "FI-SR-005-20260318-0397",
+            "COMMERCIAL",
+            "钎焊板式换热器",
+            "S12BH-30L-19",
+            "1053900000062"),
         "220",
         "PLATE");
   }

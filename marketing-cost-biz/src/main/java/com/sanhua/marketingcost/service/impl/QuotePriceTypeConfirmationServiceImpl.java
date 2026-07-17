@@ -26,7 +26,6 @@ import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmItem;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.MaterialPriceTypeMapper;
-import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
@@ -38,6 +37,7 @@ import com.sanhua.marketingcost.service.MakePartPriceGenerationService;
 import com.sanhua.marketingcost.service.PackageComponentSnapshotService;
 import com.sanhua.marketingcost.service.PricePrepareItemClassifier;
 import com.sanhua.marketingcost.service.QuotePriceTypeConfirmationService;
+import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -84,10 +84,10 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
   private final PricePrepareItemClassifier itemClassifier;
   private final PackageComponentSnapshotService packageSnapshotService;
   private final MakePartPriceGenerationService makePartPriceGenerationService;
-  private final MakePartPriceCalcRowMapper makePartPriceCalcRowMapper;
   private final QuotePriceTypeConfirmBatchMapper batchMapper;
   private final QuotePriceTypeConfirmItemMapper itemMapper;
   private final QuotePriceTypeConfirmationInvalidationService priceTypeInvalidationService;
+  private final QuoteCostRunVersionInvalidationService versionInvalidationService;
 
   public QuotePriceTypeConfirmationServiceImpl(
       OaFormMapper oaFormMapper,
@@ -100,10 +100,10 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
       PricePrepareItemClassifier itemClassifier,
       PackageComponentSnapshotService packageSnapshotService,
       MakePartPriceGenerationService makePartPriceGenerationService,
-      MakePartPriceCalcRowMapper makePartPriceCalcRowMapper,
       QuotePriceTypeConfirmBatchMapper batchMapper,
       QuotePriceTypeConfirmItemMapper itemMapper,
-      QuotePriceTypeConfirmationInvalidationService priceTypeInvalidationService) {
+      QuotePriceTypeConfirmationInvalidationService priceTypeInvalidationService,
+      QuoteCostRunVersionInvalidationService versionInvalidationService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
@@ -114,14 +114,20 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     this.itemClassifier = itemClassifier;
     this.packageSnapshotService = packageSnapshotService;
     this.makePartPriceGenerationService = makePartPriceGenerationService;
-    this.makePartPriceCalcRowMapper = makePartPriceCalcRowMapper;
     this.batchMapper = batchMapper;
     this.itemMapper = itemMapper;
     this.priceTypeInvalidationService = priceTypeInvalidationService;
+    this.versionInvalidationService = versionInvalidationService;
   }
 
   @Override
+  @Transactional(readOnly = true)
   public QuotePriceTypeConfirmationResponse getConfirmation(
+      String oaNo, Long oaFormItemId, String periodMonth) {
+    return buildConfirmation(oaNo, oaFormItemId, periodMonth);
+  }
+
+  private QuotePriceTypeConfirmationResponse buildConfirmation(
       String oaNo, Long oaFormItemId, String periodMonth) {
     Scope scope = requireScope(oaNo, oaFormItemId, periodMonth);
     List<BomCostingRow> rows = loadRows(scope);
@@ -151,7 +157,7 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     for (QuotePriceTypeImportMissingRequest.Item item : request.getItems()) {
       response.getResults().add(importOne(scope, priceableRows, item));
     }
-    response.setSummary(getConfirmation(oaNo, oaFormItemId, scope.periodMonth()).getSummary());
+    response.setSummary(buildConfirmation(oaNo, oaFormItemId, scope.periodMonth()).getSummary());
     return response;
   }
 
@@ -166,7 +172,7 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     if ("SUCCESS".equalsIgnoreCase(result.getStatus())) {
       markActiveConfirmationsStale(scope);
     }
-    response.setSummary(getConfirmation(oaNo, oaFormItemId, scope.periodMonth()).getSummary());
+    response.setSummary(buildConfirmation(oaNo, oaFormItemId, scope.periodMonth()).getSummary());
     return response;
   }
 
@@ -175,7 +181,12 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
   public QuotePriceTypeConfirmationActionResponse confirm(
       String oaNo, Long oaFormItemId, QuotePriceTypeConfirmRequest request) {
     Scope scope = requireScope(oaNo, oaFormItemId, request == null ? null : request.getPeriodMonth());
-    QuotePriceTypeConfirmationResponse current = getConfirmation(oaNo, oaFormItemId, scope.periodMonth());
+    QuotePriceTypeConfirmBatch existing = activeConfirmationForCurrentBom(scope);
+    if (existing != null) {
+      return existingConfirmationResponse(existing);
+    }
+    QuotePriceTypeConfirmationResponse current =
+        buildConfirmation(oaNo, oaFormItemId, scope.periodMonth());
     if (current.getSummary().getMissingTypeCount() != null
         && current.getSummary().getMissingTypeCount() > 0) {
       throw new QuoteIngestException("存在缺失价格类型，不能确认价格类型");
@@ -214,6 +225,8 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
       }
       itemMapper.insert(toConfirmItem(scope, confirmNo, row, now));
     }
+    versionInvalidationService.invalidateProduct(
+        scope.oaNo(), scope.oaFormItemId(), scope.productCode(), scope.periodMonth());
 
     QuotePriceTypeConfirmationActionResponse response = new QuotePriceTypeConfirmationActionResponse();
     response.setConfirmNo(confirmNo);
@@ -398,11 +411,13 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     if (plans == null || plans.isEmpty()) {
       plans = defaultPlans(rows);
     }
+    List<MakePartPriceCalcRow> makePartStructureRows = List.of();
     if (plans.stream()
         .map(PricePreparePlanItem::getItemType)
         .anyMatch(PricePrepareItemClassifierImpl.ITEM_TYPE_MAKE_PART::equals)) {
-      makePartPriceGenerationService.generateByOa(
-          scope.oaNo(), scope.businessUnitType(), scope.periodMonth());
+      makePartStructureRows =
+          makePartPriceGenerationService.previewStructureByOa(
+              scope.oaNo(), scope.businessUnitType(), scope.periodMonth());
     }
     List<QuotePriceTypeConfirmationRow> result = new ArrayList<>();
     for (PricePreparePlanItem plan : plans) {
@@ -410,7 +425,7 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
       if (PricePrepareItemClassifierImpl.ITEM_TYPE_PACKAGE_COMPONENT.equals(type)) {
         result.add(packageParentRow(scope, plan));
       } else if (PricePrepareItemClassifierImpl.ITEM_TYPE_MAKE_PART.equals(type)) {
-        result.add(makeParentRow(scope, plan));
+        result.add(makeParentRow(scope, plan, makePartStructureRows));
       } else {
         result.add(priceableRow(scope, plan.getBomRow(), OBJECT_NORMAL, plan.getMaterialCode(), plan.getMaterialName(), null, plan.getBomRowId()));
       }
@@ -432,10 +447,17 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     return plans;
   }
 
-  private QuotePriceTypeConfirmationRow makeParentRow(Scope scope, PricePreparePlanItem plan) {
+  private QuotePriceTypeConfirmationRow makeParentRow(
+      Scope scope, PricePreparePlanItem plan, List<MakePartPriceCalcRow> structureRows) {
     BomCostingRow row = plan.getBomRow();
     QuotePriceTypeConfirmationRow parent = parentRow(row, OBJECT_MAKE_PARENT, plan.getMaterialCode(), plan.getMaterialName());
-    List<MakePartPriceCalcRow> calcRows = latestMakePartRows(scope, plan.getMaterialCode());
+    List<MakePartPriceCalcRow> calcRows =
+        (structureRows == null ? List.<MakePartPriceCalcRow>of() : structureRows).stream()
+            .filter(
+                calcRow ->
+                    plan.getMaterialCode() != null
+                        && plan.getMaterialCode().equals(calcRow.getParentMaterialNo()))
+            .toList();
     if (calcRows.isEmpty()) {
       parent.setTypeStatus(STATUS_CHILD_MISSING_TYPE);
       parent.setMessage("缺制造件价格生成结果，无法展开原材料/废料");
@@ -519,7 +541,7 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     request.setBomPurpose(row == null ? null : row.getBomPurpose());
     request.setSourceType("U9");
     request.setAsOfDate(row == null ? null : row.getAsOfDate());
-    PackageSnapshotResult snapshot = packageSnapshotService.ensureSnapshot(request);
+    PackageSnapshotResult snapshot = packageSnapshotService.previewSnapshot(request);
     if (snapshot == null || snapshot.getDetails() == null || snapshot.getDetails().isEmpty()) {
       parent.setTypeStatus(STATUS_CHILD_MISSING_TYPE);
       parent.setMessage("包装组件结构缺失，无法展开包装子件");
@@ -622,23 +644,6 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     parent.setMessage(missing ? "存在子项缺价格类型" : "子项价格类型已配置");
   }
 
-  private List<MakePartPriceCalcRow> latestMakePartRows(Scope scope, String parentMaterialNo) {
-    String parentCode = trimToNull(parentMaterialNo);
-    if (parentCode == null) {
-      return List.of();
-    }
-    List<MakePartPriceCalcRow> rows =
-        makePartPriceCalcRowMapper.selectList(
-            Wrappers.<MakePartPriceCalcRow>lambdaQuery()
-                .eq(MakePartPriceCalcRow::getOaNo, scope.oaNo())
-                .eq(MakePartPriceCalcRow::getBusinessUnitType, scope.businessUnitType())
-                .eq(MakePartPriceCalcRow::getPricingMonth, scope.periodMonth())
-                .eq(MakePartPriceCalcRow::getParentMaterialNo, parentCode)
-                .orderByDesc(MakePartPriceCalcRow::getCreatedAt)
-                .orderByDesc(MakePartPriceCalcRow::getId));
-    return rows == null ? List.of() : rows;
-  }
-
   private QuotePriceTypeConfirmationSummary summary(
       int bomRowCount, List<QuotePriceTypeConfirmationRow> rows) {
     List<QuotePriceTypeConfirmationRow> flat = flatten(rows);
@@ -708,7 +713,7 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
   private Map<String, QuotePriceTypeConfirmationRow> priceableRowsByCode(Scope scope) {
     Map<String, QuotePriceTypeConfirmationRow> result = new LinkedHashMap<>();
     for (QuotePriceTypeConfirmationRow row :
-        flatten(getConfirmation(scope.oaNo(), scope.oaFormItemId(), scope.periodMonth()).getRows())) {
+        flatten(buildConfirmation(scope.oaNo(), scope.oaFormItemId(), scope.periodMonth()).getRows())) {
       if (isPriceable(row) && trimToNull(row.getMaterialCode()) != null) {
         result.put(row.getMaterialCode(), row);
       }
@@ -767,6 +772,36 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
       batch.setUpdatedAt(now);
       batchMapper.updateById(batch);
     }
+  }
+
+  private QuotePriceTypeConfirmBatch activeConfirmationForCurrentBom(Scope scope) {
+    return batchMapper.selectOne(
+        Wrappers.<QuotePriceTypeConfirmBatch>lambdaQuery()
+            .eq(QuotePriceTypeConfirmBatch::getOaNo, scope.oaNo())
+            .eq(QuotePriceTypeConfirmBatch::getOaFormItemId, scope.oaFormItemId())
+            .eq(QuotePriceTypeConfirmBatch::getProductCode, scope.productCode())
+            .eq(QuotePriceTypeConfirmBatch::getPeriodMonth, scope.periodMonth())
+            .eq(QuotePriceTypeConfirmBatch::getBomConfirmNo, scope.bomConfirmation().getConfirmNo())
+            .eq(QuotePriceTypeConfirmBatch::getStatus, QuotePriceTypeConfirmBatch.STATUS_CONFIRMED)
+            .orderByDesc(QuotePriceTypeConfirmBatch::getConfirmedAt)
+            .orderByDesc(QuotePriceTypeConfirmBatch::getId)
+            .last("LIMIT 1"));
+  }
+
+  private QuotePriceTypeConfirmationActionResponse existingConfirmationResponse(
+      QuotePriceTypeConfirmBatch existing) {
+    QuotePriceTypeConfirmationSummary summary = new QuotePriceTypeConfirmationSummary();
+    summary.setBomRowCount(existing.getTotalCount());
+    summary.setReadyForPricePrepareCount(existing.getTotalCount());
+    summary.setConfiguredTypeCount(existing.getConfirmedCount());
+    summary.setMissingTypeCount(existing.getGapCount());
+    summary.setReferencePriceCount(existing.getReferencePriceCount());
+    QuotePriceTypeConfirmationActionResponse response =
+        new QuotePriceTypeConfirmationActionResponse();
+    response.setConfirmNo(existing.getConfirmNo());
+    response.setStatus(existing.getStatus());
+    response.setSummary(summary);
+    return response;
   }
 
   private QuotePriceTypeConfirmItem toConfirmItem(

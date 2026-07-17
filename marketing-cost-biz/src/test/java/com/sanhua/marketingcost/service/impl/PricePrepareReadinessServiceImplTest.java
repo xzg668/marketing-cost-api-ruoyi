@@ -3,17 +3,21 @@ package com.sanhua.marketingcost.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBatchPageResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareTopProductSummaryPageResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareTopProductSummaryResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
+import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
+import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
@@ -153,14 +157,64 @@ class PricePrepareReadinessServiceImplTest {
             ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>)
                     itemQueryCaptor.getValue())
                 .getSqlSegment())
-        .contains("oa_form_item_id", "top_product_code");
+        .contains("oa_form_item_id", "top_product_code", "current_flag");
     assertThat(itemQueryCaptor.getValue().getParamNameValuePairs().values())
-        .contains("OA-001", 202L, "TOP-SAME", "2026-05");
+        .contains("OA-001", 202L, "TOP-SAME", "2026-05", 1);
     assertThat(
             ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>)
                     gapQueryCaptor.getValue())
                 .getSqlSegment())
-        .contains("oa_form_item_id", "top_product_code");
+        .contains("oa_form_item_id", "top_product_code", "current_flag");
+    assertThat(gapQueryCaptor.getValue().getParamNameValuePairs().values()).contains(1);
+  }
+
+  @Test
+  @DisplayName("产品行维度检查：自动检查快照不能覆盖已完成的OA和财务正式批次")
+  void completedScenarioPairWinsOverNewerCheckOnlyBatch() {
+    PricePrepareBatch checkOnly = batch("PPR-CHECK", QuotePriceScenarioType.OA_LOCKED.name(), null);
+    PricePrepareBatch oa = batch("PPR-OA-FINAL", QuotePriceScenarioType.OA_LOCKED.name(), null);
+    oa.setScenarioGroupNo("GROUP-1");
+    PricePrepareBatch finance =
+        batch(
+            "PPR-FIN-FINAL",
+            QuotePriceScenarioType.FINANCE_QUOTE_BASE.name(),
+            "PPR-OA-FINAL");
+    finance.setScenarioGroupNo("GROUP-1");
+    when(queryService.pageBatches(any()))
+        .thenReturn(new PricePrepareBatchPageResponse(3, List.of(checkOnly, finance, oa)));
+    PricePrepareItem item = new PricePrepareItem();
+    item.setPrepareNo("PPR-OA-FINAL");
+    item.setStatus("READY");
+    when(itemMapper.selectList(any())).thenReturn(List.of(item));
+
+    PricePrepareReadinessResult result =
+        service.check("OA-001", 202L, "TOP-SAME", "2026-05", "PTC-1");
+
+    assertThat(result.getStatus()).isEqualTo("READY");
+    assertThat(result.getPrepareNo()).isEqualTo("PPR-OA-FINAL");
+    ArgumentCaptor<LambdaQueryWrapper<PricePrepareItem>> captor =
+        ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+    verify(itemMapper).selectList(captor.capture());
+    assertThat(
+            ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>)
+                    captor.getValue())
+                .getSqlSegment())
+        .contains("prepare_no")
+        .doesNotContain("current_flag");
+    assertThat(captor.getValue().getParamNameValuePairs().values())
+        .contains("PPR-OA-FINAL");
+    verify(gapMapper, never()).selectList(any());
+  }
+
+  private PricePrepareBatch batch(
+      String prepareNo, String scenarioType, String sourcePrepareNo) {
+    PricePrepareBatch batch = new PricePrepareBatch();
+    batch.setPrepareNo(prepareNo);
+    batch.setScenarioType(scenarioType);
+    batch.setSourcePrepareNo(sourcePrepareNo);
+    batch.setStatus("SUCCESS");
+    batch.setGapCount(0);
+    return batch;
   }
 
   private PricePrepareTopProductSummaryPageResponse topPage(PricePrepareTopProductSummaryResponse... records) {

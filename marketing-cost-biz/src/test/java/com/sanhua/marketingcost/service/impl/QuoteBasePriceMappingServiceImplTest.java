@@ -12,6 +12,7 @@ import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.dto.MetalBasePricePolicyResponse;
 import com.sanhua.marketingcost.dto.QuoteBasePriceDetectResult;
 import com.sanhua.marketingcost.entity.FactorIdentity;
 import com.sanhua.marketingcost.entity.FactorQuoteBaseMapping;
@@ -161,6 +162,61 @@ class QuoteBasePriceMappingServiceImplTest {
   }
 
   @Test
+  @DisplayName("listMetalBasePricePolicies：页面只返回 Zn、Al，实际映射策略优先展示")
+  void listMetalBasePricePoliciesReturnsZincAndAluminum() {
+    FactorQuoteBaseMapping zinc = mapping(21L);
+    zinc.setQuoteFieldCode("zinc_price");
+    zinc.setQuoteFieldName("锌基价");
+    zinc.setVariableCode("Zn");
+    zinc.setPricePolicy("FACTOR_MONTHLY");
+    FactorQuoteBaseMapping aluminum = mapping(22L);
+    aluminum.setQuoteFieldCode("aluminum_price");
+    aluminum.setQuoteFieldName("铝基价");
+    aluminum.setVariableCode("Al");
+    aluminum.setPricePolicy("OA_PRIORITY");
+    when(mappingMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(zinc))
+        .thenReturn(List.of(aluminum));
+
+    List<MetalBasePricePolicyResponse> rows = service.listMetalBasePricePolicies();
+
+    assertThat(rows).extracting(MetalBasePricePolicyResponse::getVariableCode)
+        .containsExactly("Zn", "Al");
+    assertThat(rows).extracting(MetalBasePricePolicyResponse::getPricePolicy)
+        .containsExactly("FACTOR_MONTHLY", "OA_PRIORITY");
+  }
+
+  @Test
+  @DisplayName("updateMetalBasePricePolicy：同时更新识别规则和已有实际映射")
+  void updateMetalBasePricePolicyUpdatesRuleAndMapping() {
+    MetalBasePricePolicyResponse updated =
+        service.updateMetalBasePricePolicy("Zn", "FACTOR_MONTHLY", "alice");
+
+    assertThat(updated.getVariableCode()).isEqualTo("Zn");
+    assertThat(updated.getPricePolicy()).isEqualTo("FACTOR_MONTHLY");
+
+    ArgumentCaptor<QuoteBasePriceMappingRule> ruleCaptor =
+        ArgumentCaptor.forClass(QuoteBasePriceMappingRule.class);
+    verify(ruleMapper).update(ruleCaptor.capture(), any(Wrapper.class));
+    assertThat(ruleCaptor.getValue().getPricePolicy()).isEqualTo("FACTOR_MONTHLY");
+    assertThat(ruleCaptor.getValue().getUpdatedBy()).isEqualTo("alice");
+
+    ArgumentCaptor<FactorQuoteBaseMapping> mappingCaptor =
+        ArgumentCaptor.forClass(FactorQuoteBaseMapping.class);
+    verify(mappingMapper).update(mappingCaptor.capture(), any(Wrapper.class));
+    assertThat(mappingCaptor.getValue().getPricePolicy()).isEqualTo("FACTOR_MONTHLY");
+    assertThat(mappingCaptor.getValue().getUpdatedBy()).isEqualTo("alice");
+  }
+
+  @Test
+  @DisplayName("updateMetalBasePricePolicy：Cu 不允许从本页面修改")
+  void updateMetalBasePricePolicyRejectsCopper() {
+    assertThatThrownBy(() -> service.updateMetalBasePricePolicy("Cu", "OA_PRIORITY", "alice"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("只允许配置 Zn、Al");
+  }
+
+  @Test
   @DisplayName("saveMapping：补默认来源和置信度后新增识别结果")
   void saveMappingInsertsWithDefaults() {
     FactorQuoteBaseMapping mapping = mapping(null);
@@ -169,6 +225,7 @@ class QuoteBasePriceMappingServiceImplTest {
 
     assertThat(saved.getMatchSource()).isEqualTo("AUTO");
     assertThat(saved.getConfidence()).isEqualTo("HIGH");
+    assertThat(saved.getPricePolicy()).isEqualTo("OA_PRIORITY");
     assertThat(saved.getEnabled()).isEqualTo(1);
     assertThat(saved.getCreatedBy()).isEqualTo("system");
     verify(mappingMapper).insert(saved);

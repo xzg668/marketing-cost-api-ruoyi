@@ -33,6 +33,19 @@ public class BomAvailabilityAdapterImpl implements BomAvailabilityAdapter {
     }
     String org = requiredPriceOrgCode(priceOrgCode);
 
+    BomRawHierarchy raw = selectRawHierarchy(productCode.trim(), org);
+    if (raw != null) {
+      BomAvailability availability = new BomAvailability();
+      availability.setAvailable(true);
+      availability.setSource(defaultSource(raw.getSourceType()));
+      availability.setBomPurpose(raw.getBomPurpose());
+      availability.setBomVersion(raw.getBomVersion());
+      availability.setEffectiveFrom(raw.getEffectiveFrom());
+      availability.setEffectiveTo(raw.getEffectiveTo());
+      availability.setSyncBatchId(raw.getBuildBatchId());
+      return availability;
+    }
+
     BomCostingRow snapshot =
         bomCostingRowMapper.selectAvailabilitySnapshot(
             trimToNull(oaNo), productCode.trim(), trimToNull(periodMonth), org);
@@ -48,26 +61,16 @@ public class BomAvailabilityAdapterImpl implements BomAvailabilityAdapter {
       return availability;
     }
 
-    BomRawHierarchy raw =
-        bomRawHierarchyMapper.selectOne(
-            Wrappers.lambdaQuery(BomRawHierarchy.class)
-                .eq(BomRawHierarchy::getPriceOrgCode, org)
-                .eq(BomRawHierarchy::getTopProductCode, productCode.trim())
-                .eq(BomRawHierarchy::getLevel, 0)
-                .last("LIMIT 1"));
-    if (raw != null) {
-      BomAvailability availability = new BomAvailability();
-      availability.setAvailable(true);
-      availability.setSource(defaultSource(raw.getSourceType()));
-      availability.setBomPurpose(raw.getBomPurpose());
-      availability.setBomVersion(raw.getBomVersion());
-      availability.setEffectiveFrom(raw.getEffectiveFrom());
-      availability.setEffectiveTo(raw.getEffectiveTo());
-      availability.setSyncBatchId(raw.getBuildBatchId());
-      return availability;
-    }
-
     return BomAvailability.unavailable("未匹配到本地正式 BOM 或有效补录 BOM");
+  }
+
+  private BomRawHierarchy selectRawHierarchy(String productCode, String priceOrgCode) {
+    return bomRawHierarchyMapper.selectOne(
+        Wrappers.lambdaQuery(BomRawHierarchy.class)
+            .eq(BomRawHierarchy::getPriceOrgCode, priceOrgCode)
+            .eq(BomRawHierarchy::getTopProductCode, productCode)
+            .eq(BomRawHierarchy::getLevel, 0)
+            .last("LIMIT 1"));
   }
 
   private String requiredPriceOrgCode(String value) {

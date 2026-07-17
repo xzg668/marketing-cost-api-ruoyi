@@ -113,7 +113,7 @@ class CmsPlanEligibilityServiceImplTest {
   }
 
   @Test
-  void checkEligibilityBuildsParentPeriodScopedQueryWithoutBusinessUnitFilter() {
+  void checkEligibilityBuildsParentPeriodAndBusinessUnitScopedQuery() {
     when(planCostRawMapper.selectList(any())).thenReturn(List.of());
 
     service.checkEligibility(List.of(" A ", "A", "", "B"), List.of(" 2026-01 ", "2026-01"), "COMMERCIAL");
@@ -124,7 +124,7 @@ class CmsPlanEligibilityServiceImplTest {
     String sqlSegment = captor.getValue().getSqlSegment();
     assertThat(sqlSegment).contains("parent_code");
     assertThat(sqlSegment).contains("effective_period");
-    assertThat(sqlSegment).doesNotContain("business_unit_type");
+    assertThat(sqlSegment).contains("business_unit_type");
   }
 
   @Test

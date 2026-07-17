@@ -8,6 +8,7 @@ import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmItem;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmBatchMapper;
 import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmItemMapper;
+import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
@@ -31,14 +32,17 @@ public class QuotePriceTypeConfirmationInvalidationService {
   private final QuotePriceTypeConfirmBatchMapper batchMapper;
   private final QuotePriceTypeConfirmItemMapper itemMapper;
   private final QuoteCostRunVersionMapper costRunVersionMapper;
+  private final QuoteCostRunVersionInvalidationService versionInvalidationService;
 
   public QuotePriceTypeConfirmationInvalidationService(
       QuotePriceTypeConfirmBatchMapper batchMapper,
       QuotePriceTypeConfirmItemMapper itemMapper,
-      QuoteCostRunVersionMapper costRunVersionMapper) {
+      QuoteCostRunVersionMapper costRunVersionMapper,
+      QuoteCostRunVersionInvalidationService versionInvalidationService) {
     this.batchMapper = batchMapper;
     this.itemMapper = itemMapper;
     this.costRunVersionMapper = costRunVersionMapper;
+    this.versionInvalidationService = versionInvalidationService;
   }
 
   public int invalidateScope(
@@ -119,6 +123,7 @@ public class QuotePriceTypeConfirmationInvalidationService {
     if (confirmNos == null || confirmNos.isEmpty()) {
       return 0;
     }
+    versionInvalidationService.invalidateByPriceTypeConfirmNos(confirmNos);
     Set<String> mutableConfirmNos = new LinkedHashSet<>(confirmNos);
     mutableConfirmNos.removeAll(confirmedCostVersionConfirmNos(mutableConfirmNos));
     if (mutableConfirmNos.isEmpty()) {

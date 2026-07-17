@@ -6,6 +6,7 @@ import com.sanhua.marketingcost.dto.FinanceBasePriceRequest;
 import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.mapper.FinanceBasePriceMapper;
 import com.sanhua.marketingcost.service.FinanceBasePriceService;
+import com.sanhua.marketingcost.service.FinanceQuoteBasePriceConstants;
 import java.util.ArrayList;
 import java.util.List;
 import org.springframework.stereotype.Service;
@@ -39,6 +40,9 @@ public class FinanceBasePriceServiceImpl implements FinanceBasePriceService {
 
   @Override
   public FinanceBasePrice create(FinanceBasePriceRequest request) {
+    requireOrdinaryIdentity(
+        request == null ? null : request.getShortName(),
+        request == null ? null : request.getPriceSource());
     FinanceBasePrice entity = toEntity(request);
     fillDefaults(entity);
     financeBasePriceMapper.insert(entity);
@@ -51,6 +55,10 @@ public class FinanceBasePriceServiceImpl implements FinanceBasePriceService {
     if (existing == null) {
       return null;
     }
+    requireOrdinaryEntity(existing);
+    requireOrdinaryIdentity(
+        request == null ? null : request.getShortName(),
+        request == null ? null : request.getPriceSource());
     merge(existing, request);
     fillDefaults(existing);
     financeBasePriceMapper.updateById(existing);
@@ -59,6 +67,10 @@ public class FinanceBasePriceServiceImpl implements FinanceBasePriceService {
 
   @Override
   public boolean delete(Long id) {
+    FinanceBasePrice existing = financeBasePriceMapper.selectById(id);
+    if (existing != null) {
+      requireOrdinaryEntity(existing);
+    }
     return financeBasePriceMapper.deleteById(id) > 0;
   }
 
@@ -72,7 +84,11 @@ public class FinanceBasePriceServiceImpl implements FinanceBasePriceService {
     String priceMonth = request.getPriceMonth().trim();
     List<FinanceBasePrice> imported = new ArrayList<>();
     for (var row : request.getRows()) {
+      requireOrdinaryIdentity(row.getShortName(), row.getPriceSource());
       FinanceBasePrice existing = findExisting(priceMonth, row);
+      if (existing != null) {
+        requireOrdinaryEntity(existing);
+      }
       FinanceBasePrice entity = existing != null ? existing : new FinanceBasePrice();
       entity.setPriceMonth(priceMonth);
       entity.setSeq(row.getSeq());
@@ -218,5 +234,16 @@ public class FinanceBasePriceServiceImpl implements FinanceBasePriceService {
       return null;
     }
     return latest.getPriceMonth();
+  }
+
+  private void requireOrdinaryEntity(FinanceBasePrice entity) {
+    requireOrdinaryIdentity(entity.getShortName(), entity.getPriceSource());
+  }
+
+  private void requireOrdinaryIdentity(String shortName, String priceSource) {
+    if (FinanceQuoteBasePriceConstants.usesProtectedIdentity(shortName, priceSource)) {
+      throw new IllegalArgumentException(
+          "财务报价Cu基准只能通过专用接口维护，普通财务基价入口禁止修改");
+    }
   }
 }

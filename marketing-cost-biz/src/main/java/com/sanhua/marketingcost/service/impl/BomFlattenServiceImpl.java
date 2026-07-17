@@ -63,6 +63,7 @@ public class BomFlattenServiceImpl implements BomFlattenService {
   private final BomByproductCostRuleQueryService byproductRuleQueryService;
   private final BomByproductSettlementAdapter byproductSettlementAdapter;
   private final BomSettlementRowBuildEngine buildEngine;
+  private final PlateCommercialMakeBomExpansionService crossOrganizationExpansionService;
 
   public BomFlattenServiceImpl(
       BomRawHierarchyMapper rawMapper,
@@ -72,7 +73,8 @@ public class BomFlattenServiceImpl implements BomFlattenService {
       BomSettlementRuleQueryService settlementRuleQueryService,
       BomByproductCostRuleQueryService byproductRuleQueryService,
       BomByproductSettlementAdapter byproductSettlementAdapter,
-      BomSettlementRowBuildEngine buildEngine) {
+      BomSettlementRowBuildEngine buildEngine,
+      PlateCommercialMakeBomExpansionService crossOrganizationExpansionService) {
     this.rawMapper = rawMapper;
     this.costingMapper = costingMapper;
     this.subRefMapper = subRefMapper;
@@ -81,6 +83,7 @@ public class BomFlattenServiceImpl implements BomFlattenService {
     this.byproductRuleQueryService = byproductRuleQueryService;
     this.byproductSettlementAdapter = byproductSettlementAdapter;
     this.buildEngine = buildEngine;
+    this.crossOrganizationExpansionService = crossOrganizationExpansionService;
   }
 
   @Override
@@ -105,8 +108,24 @@ public class BomFlattenServiceImpl implements BomFlattenService {
       return result;
     }
 
+    PlateCommercialMakeBomExpansionService.ExpansionResult expansion =
+        crossOrganizationExpansionService.expand(
+            rawRows,
+            request.getTopProductCode(),
+            asOf,
+            purpose,
+            "U9",
+            organization);
+    if (expansion.hasGaps()) {
+      throw new IllegalStateException(
+          "跨组织制造 BOM 展开失败：" + String.join("；", expansion.gaps()));
+    }
+    rawRows = new ArrayList<>(expansion.rows());
+
     rawRows.sort(Comparator.comparing(BomRawHierarchy::getPath));
-    String buType = BusinessUnitContext.getCurrentBusinessUnitType();
+    String buType =
+        firstText(
+            request.getBusinessUnitType(), BusinessUnitContext.getCurrentBusinessUnitType());
     Map<String, Boolean> packageFlags =
         identifyPackageComponents(
             rawRows,
@@ -232,6 +251,8 @@ public class BomFlattenServiceImpl implements BomFlattenService {
         row.getEffectiveFrom(),
         row.getEffectiveTo(),
         row.getEffectiveFrom(),
+        row.getPriceOrgCode(),
+        MaterialOrganization.fromPriceOrgCode(row.getPriceOrgCode()).getCode(),
         buType,
         null);
   }
@@ -255,8 +276,12 @@ public class BomFlattenServiceImpl implements BomFlattenService {
     }
     for (BomCostingRow row : rows) {
       row.setOaFormItemId(request.getOaFormItemId());
-      row.setPriceOrgCode(organization.priceOrgCode());
-      row.setMaterialOrganizationCode(organization.materialOrganizationCode());
+      if (!StringUtils.hasText(row.getPriceOrgCode())) {
+        row.setPriceOrgCode(organization.priceOrgCode());
+      }
+      if (!StringUtils.hasText(row.getMaterialOrganizationCode())) {
+        row.setMaterialOrganizationCode(organization.materialOrganizationCode());
+      }
       if (row.getManualModified() == null) {
         row.setManualModified(0);
       }

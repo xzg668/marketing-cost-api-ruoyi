@@ -15,7 +15,9 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
+import com.sanhua.marketingcost.dto.CostRunObjectResult;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
+import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcResult;
 import com.sanhua.marketingcost.dto.PriceRangeItemImportRequest;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.dto.priceprepare.NormalMaterialPricePrepareResult;
@@ -58,6 +60,8 @@ import com.sanhua.marketingcost.mapper.PriceRangeFactorRuleMapper;
 import com.sanhua.marketingcost.mapper.PriceRangeItemMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostingWorkbenchSummaryMapper;
+import com.sanhua.marketingcost.mapper.QuoteCuMaterialDiffItemMapper;
+import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
 import com.sanhua.marketingcost.service.CostRunEngine;
 import com.sanhua.marketingcost.service.CostRunPartItemService;
@@ -66,6 +70,7 @@ import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
 import com.sanhua.marketingcost.service.PricePrepareService;
+import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionService;
 import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
@@ -81,9 +86,13 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 @DisplayName("MFRP-08 排水泵行情区间价端到端样例")
 class MarketFactorRangePriceEndToEndSampleTest {
@@ -119,6 +128,20 @@ class MarketFactorRangePriceEndToEndSampleTest {
     TableInfoHelper.initTableInfo(assistant, CostRunCostItem.class);
     TableInfoHelper.initTableInfo(assistant, CostRunTraceSnapshot.class);
     TableInfoHelper.initTableInfo(assistant, CostRunTask.class);
+  }
+
+  @BeforeEach
+  void authenticateBusinessUnit() {
+    UsernamePasswordAuthenticationToken authentication =
+        new UsernamePasswordAuthenticationToken("mfrp.test", null, List.of());
+    authentication.setDetails(
+        Map.of(BusinessUnitContext.KEY_BUSINESS_UNIT_TYPE, BUSINESS_UNIT_TYPE));
+    SecurityContextHolder.getContext().setAuthentication(authentication);
+  }
+
+  @AfterEach
+  void clearAuthentication() {
+    SecurityContextHolder.clearContext();
   }
 
   @Test
@@ -368,6 +391,45 @@ class MarketFactorRangePriceEndToEndSampleTest {
             anyString(), eq(OA_FORM_ITEM_ID), eq(PRODUCT_CODE), anyString(), anyString(),
             any(), any(), any(), any()))
         .thenReturn(trialVersion);
+    QuoteCuAdjustmentCalcService cuAdjustmentCalcService = request -> {
+      CostRunContext context = CostRunContext.quote(
+          request.form().getOaNo(),
+          request.item().getId(),
+          request.item().getMaterialNo(),
+          request.item().getPackageMethod(),
+          request.form().getCustomer(),
+          request.item().getBusinessUnitType(),
+          request.pricingMonth(),
+          request.calcObjectKey());
+      context.setPriceOrgCode("210");
+      context.setMaterialOrganizationCode("COMMERCIAL");
+      context.setCostRunVersionId(trialVersion.getId());
+      context.setCostRunNo(trialVersion.getCostRunNo());
+      context.setPricePrepareNo(request.oaPricePrepareNo());
+      CostRunObjectResult calculated = costRunEngine.run(context);
+      BigDecimal total = calculated.getResult().getTotalCost();
+      BigDecimal material = calculated.getCostItems().stream()
+          .filter(row -> "MATERIAL".equals(row.getCostCode()))
+          .map(CostRunCostItemDto::getAmount)
+          .findFirst()
+          .orElse(BigDecimal.ZERO);
+      trialVersion.setTotalCost(total);
+      trialVersion.setFinanceMaterialCost(material);
+      trialVersion.setOaMaterialCost(material);
+      trialVersion.setCuMaterialAdjustment(BigDecimal.ZERO);
+      trialVersion.setFinalQuoteAmount(total);
+      trialVersion.setPartItemCount(calculated.getPartItems().size());
+      trialVersion.setCostItemCount(calculated.getCostItems().size());
+      return new QuoteCuAdjustmentCalcResult(
+          trialVersion,
+          calculated,
+          null,
+          material,
+          material,
+          total,
+          BigDecimal.ZERO,
+          total);
+    };
 
     return new QuoteCostRunWorkbenchServiceImpl(
         oaFormMapper,
@@ -376,16 +438,11 @@ class MarketFactorRangePriceEndToEndSampleTest {
         resultMapper,
         partItemMapper,
         costItemMapper,
-        traceSnapshotMapper,
-        taskMapper,
+        mock(QuoteCuMaterialDiffItemMapper.class),
         summaryMapper,
-        costingBuildService,
-        pricePrepareService,
         readinessService,
-        versionService,
         versionNoGenerator,
-        costRunEngine,
-        resultWriter);
+        cuAdjustmentCalcService);
   }
 
   private List<CostRunTraceSnapshot> buildTraceSnapshots(

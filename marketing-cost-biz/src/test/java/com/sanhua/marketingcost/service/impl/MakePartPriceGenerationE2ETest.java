@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -189,7 +190,8 @@ class MakePartPriceGenerationE2ETest {
     when(sourceDataService.listDedupedChildren(eq("MAKE-MISSING-SCRAP-PRICE"), any(), eq("210")))
         .thenReturn(List.of(rawChild("MAKE-MISSING-SCRAP-PRICE", "RAW-MISSING-SCRAP-PRICE")));
 
-    when(weightService.resolveWeights(anyString(), any(BomU9Source.class), anyString()))
+    when(weightService.resolveWeights(
+            anyString(), any(BomU9Source.class), anyString(), anyString(), anyBoolean()))
         .thenAnswer(invocation -> {
           String parentCode = invocation.getArgument(0);
           BomU9Source child = invocation.getArgument(1);

@@ -1,7 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.sanhua.marketingcost.dto.CmsCostExcelParseResult;
 import com.sanhua.marketingcost.dto.CmsMaterialScrapRefSourceRow;
@@ -9,14 +8,13 @@ import com.sanhua.marketingcost.dto.CmsPlanCostExcelRow;
 import com.sanhua.marketingcost.dto.CmsProductSubjectCostExcelRow;
 import com.sanhua.marketingcost.dto.CmsSubjectSettingExcelRow;
 import com.sanhua.marketingcost.dto.CmsWorkshopLaborExcelRow;
+import com.sanhua.marketingcost.testsupport.CmsWorkbookFixtures;
 import com.sanhua.marketingcost.util.CmsFieldNormalizeUtils;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.List;
@@ -27,19 +25,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class CmsCostExcelParseServiceImplTest {
-  private static final Path PLAN_SAMPLE =
-      Path.of("/Users/xiexicheng/Desktop/cms/产品计划成本汇总-空值-2026-05-13-09-43.xlsx");
-  private static final Path WORKSHOP_SAMPLE =
-      Path.of("/Users/xiexicheng/Desktop/cms/产品车间料工费汇总_商用导出20260512150458.xlsx");
-  private static final Path WORKSHOP_REORDERED_SAMPLE =
-      Path.of("/Users/xiexicheng/Desktop/demo4/cms/产品车间料工费汇总_商用导出20260529153518.xlsx");
-  private static final Path SUBJECT_SAMPLE =
-      Path.of("/Users/xiexicheng/Desktop/cms/产品科目成本汇总_商用导出20260512150308.xlsx");
-  private static final Path SUBJECT_SETTING_SAMPLE =
-      Path.of("/Users/xiexicheng/Desktop/cms/科目设置导出20260514103958.xlsx");
-  private static final Path MATERIAL_SCRAP_SAMPLE =
-      Path.of("/Users/xiexicheng/Desktop/cms/原材料对应回收废料信息-列表导出20260512150059-new.xlsx");
-
   private CmsCostExcelParseServiceImpl service;
 
   @BeforeEach
@@ -322,11 +307,9 @@ class CmsCostExcelParseServiceImplTest {
   }
 
   @Test
-  void parsesProvidedMaterialScrapSampleWhenAvailable() throws IOException {
-    assumeTrue(Files.exists(MATERIAL_SCRAP_SAMPLE));
-
+  void parsesMaterialScrapStandardFixture() throws IOException {
     CmsCostExcelParseResult<CmsMaterialScrapRefSourceRow> result;
-    try (InputStream input = Files.newInputStream(MATERIAL_SCRAP_SAMPLE)) {
+    try (InputStream input = CmsWorkbookFixtures.materialScrapWorkbook()) {
       result = service.parseMaterialScrapRef(input);
     }
 
@@ -508,27 +491,21 @@ class CmsCostExcelParseServiceImplTest {
   }
 
   @Test
-  void parsesProvidedCmsSamplesWhenAvailable() throws IOException {
-    assumeTrue(
-        Files.exists(PLAN_SAMPLE)
-            && Files.exists(WORKSHOP_SAMPLE)
-            && Files.exists(SUBJECT_SAMPLE)
-            && Files.exists(SUBJECT_SETTING_SAMPLE));
-
+  void parsesAllCmsSourceTypesFromDeterministicFixtures() throws IOException {
     CmsCostExcelParseResult<CmsPlanCostExcelRow> plan;
     CmsCostExcelParseResult<CmsWorkshopLaborExcelRow> workshop;
     CmsCostExcelParseResult<CmsProductSubjectCostExcelRow> subject;
     CmsCostExcelParseResult<CmsSubjectSettingExcelRow> subjectSetting;
-    try (InputStream input = Files.newInputStream(PLAN_SAMPLE)) {
+    try (InputStream input = planFixture()) {
       plan = service.parsePlanCost(input);
     }
-    try (InputStream input = Files.newInputStream(WORKSHOP_SAMPLE)) {
+    try (InputStream input = workshopFixture()) {
       workshop = service.parseWorkshopLabor(input);
     }
-    try (InputStream input = Files.newInputStream(SUBJECT_SAMPLE)) {
+    try (InputStream input = subjectFixture()) {
       subject = service.parseProductSubjectCost(input);
     }
-    try (InputStream input = Files.newInputStream(SUBJECT_SETTING_SAMPLE)) {
+    try (InputStream input = subjectSettingFixture()) {
       subjectSetting = service.parseSubjectSetting(input);
     }
 
@@ -537,10 +514,10 @@ class CmsCostExcelParseServiceImplTest {
     assertThat(subject.getErrors()).isEmpty();
     assertThat(subjectSetting.getErrors()).isEmpty();
     assertThat(plan.getRows()).isNotEmpty();
-    assertThat(workshop.getRows()).extracting("parentCode").contains("1079900000536");
+    assertThat(workshop.getRows()).extracting("parentCode").contains("1001900001090");
     assertThat(workshop.getRows()).extracting(CmsWorkshopLaborExcelRow::getWorkingCostCent)
-        .anySatisfy(value -> assertThat(value).isEqualByComparingTo("80"));
-    assertThat(workshop.getRows().get(0).getWorkingCostYuan()).isEqualByComparingTo("0.8");
+        .anySatisfy(value -> assertThat(value).isEqualByComparingTo("113.729166"));
+    assertThat(workshop.getRows().get(0).getWorkingCostYuan()).isEqualByComparingTo("1.137292");
     assertThat(subject.getRows()).extracting("secondSubjectName").contains("辅助人员工资");
     assertThat(subject.getRows()).extracting("firstSubjectName").contains("辅助材料");
     assertThat(subject.getRows()).extracting(CmsProductSubjectCostExcelRow::getMaterialPrice)
@@ -550,11 +527,9 @@ class CmsCostExcelParseServiceImplTest {
   }
 
   @Test
-  void parsesProvidedReorderedWorkshopSampleWhenAvailable() throws IOException {
-    assumeTrue(Files.exists(WORKSHOP_REORDERED_SAMPLE));
-
+  void parsesReorderedWorkshopFixture() throws IOException {
     CmsCostExcelParseResult<CmsWorkshopLaborExcelRow> result;
-    try (InputStream input = Files.newInputStream(WORKSHOP_REORDERED_SAMPLE)) {
+    try (InputStream input = workshopFixture()) {
       result = service.parseWorkshopLabor(input);
     }
 
@@ -564,7 +539,7 @@ class CmsCostExcelParseServiceImplTest {
     assertThat(result.getRows()).extracting(CmsWorkshopLaborExcelRow::getParentCode)
         .contains("1001900001090");
     assertThat(result.getRows()).extracting(CmsWorkshopLaborExcelRow::getSourceRowId)
-        .contains("f341cd8091f209d362a817fd61e3f27b");
+        .contains("raw-id-new");
     assertThat(result.getRows()).extracting(CmsWorkshopLaborExcelRow::getMaterialPrice)
         .anySatisfy(value -> assertThat(value).isEqualByComparingTo("4349.26"));
     assertThat(result.getRows()).extracting(CmsWorkshopLaborExcelRow::getWorkingCostCent)
@@ -587,6 +562,48 @@ class CmsCostExcelParseServiceImplTest {
     } catch (IOException ex) {
       throw new IllegalStateException(ex);
     }
+  }
+
+  private InputStream planFixture() {
+    return workbook(List.of(
+        List.of(
+            "一级编码", "一级编码名称", "父件编码", "父件名称", "父件规格", "父件型号", "单位",
+            "工时", "生效时间", "主材成本", "辅材成本", "工资成本", "经费成本", "损失成本",
+            "计划价(总)", "业务状态", "未审批项", "制定说明", "OA单号"),
+        List.of(
+            "55", "商用部品事业部", "1079900000536", "四通换向阀阀体", "SHF-P35792-001",
+            "SHF-35B-79-01(P)", "只", "1.5", "2026/5/1", "10", "20", "30", "40", "50",
+            "150", "finishStatus", "工时", "测试说明", "OA-1")));
+  }
+
+  private InputStream workshopFixture() {
+    return workbook(List.of(
+        workshopReorderedHeaderWithMissingPeriod(),
+        workshopReorderedChineseHeader(),
+        workshopReorderedChineseHeader(),
+        workshopReorderedRow()));
+  }
+
+  private InputStream subjectFixture() {
+    return workbook(List.of(
+        subjectHeader(),
+        subjectChineseHeader(),
+        subjectChineseHeader(),
+        List.of(
+            "2026-04-01 00:00:00", "55", "商用部品事业部", "1079900000536", "四通换向阀阀体",
+            "SHF-P35792-001", "SHF-35B-79-01(P)", "020101", "辅助焊料类", "二级", "22",
+            "自算", "path", "02", "辅助材料", "0201", "辅助人员工资", "", "", "raw-id-2",
+            "name", "admin", "", "admin", "", "2026-04-30 20:22:27", "", "", "", "SEQ-2",
+            "已完成")));
+  }
+
+  private InputStream subjectSettingFixture() {
+    return workbook(List.of(
+        subjectSettingHeader(),
+        subjectSettingChineseHeader(),
+        subjectSettingChineseHeader(),
+        List.of("03", "工资", "0302", "辅助人员工资", "", ""),
+        List.of("02", "辅助材料", "0202", "包装辅料", "", "")));
   }
 
   private List<String> workshopHeader() {

@@ -4,6 +4,8 @@ package com.sanhua.marketingcost.enums;
 public enum LinkedPriceFactorSource {
   /** 正常报价：铜、锌、锡等变量取 OA 单头锁价。 */
   OA_LOCKED("OA_LOCKED", "OA单头锁价"),
+  /** 财务报价：只把明确传入的 Cu 覆盖为财务月度报价基准。 */
+  FINANCE_QUOTE_BASE("FINANCE_QUOTE_BASE", "财务报价基准"),
   /** 月度价：变量取影响因素表指定月份价格。 */
   MONTHLY_FACTOR("MONTHLY_FACTOR", "影响因素月度价"),
   /** 月度调价：变量取指定调价批次价格。 */

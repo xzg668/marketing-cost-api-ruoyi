@@ -160,8 +160,6 @@ public class BomSettlementRowBuildEngine {
       }
     }
 
-    appendByproductExtraRows(request, nodes, extraRows, warnings);
-
     List<BomCostingRow> costingRows = new ArrayList<>();
     List<BomSettlementSubRefCandidate> subRefs = new ArrayList<>();
     materializeRollupBuckets(
@@ -174,6 +172,16 @@ public class BomSettlementRowBuildEngine {
         subRefs,
         sourceRefs,
         emittedProcessFeePaths,
+        warnings);
+    List<BomCostingRow> byproductAnchorRows = new ArrayList<>(costingRows);
+    byproductAnchorRows.addAll(normalRows);
+    appendByproductExtraRows(
+        request,
+        nodes,
+        byproductAnchorRows,
+        nodeByPath,
+        rollupBuckets.keySet(),
+        extraRows,
         warnings);
     costingRows.addAll(extraRows);
     costingRows.addAll(normalRows);
@@ -376,6 +384,8 @@ public class BomSettlementRowBuildEngine {
     row.setPeriodMonth(periodMonth(request));
     row.setAsOfDate(request.asOfDate());
     row.setRawVersionEffectiveFrom(rawVersionEffectiveFrom(node));
+    row.setPriceOrgCode(node.priceOrgCode());
+    row.setMaterialOrganizationCode(node.materialOrganizationCode());
     row.setBusinessUnitType(firstText(request.businessUnitType(), node.businessUnitType()));
     return row;
   }
@@ -439,35 +449,86 @@ public class BomSettlementRowBuildEngine {
   private void appendByproductExtraRows(
       BomSettlementBuildRequest request,
       List<BomSettlementNode> nodes,
+      List<BomCostingRow> anchorRows,
+      Map<String, BomSettlementNode> nodeByPath,
+      Set<String> rollupParentPaths,
       List<BomCostingRow> extraRows,
       List<String> warnings) {
     if (request.byproducts().isEmpty() || request.byproductRules().isEmpty()) {
       return;
     }
-    Map<String, List<BomSettlementNode>> manufacturedNodesByMaterialCode = new LinkedHashMap<>();
+    Map<String, List<BomSettlementNode>> allManufacturedNodesByMaterialCode = new LinkedHashMap<>();
     for (BomSettlementNode node : nodes) {
       if (isManufacturedNode(node)) {
-        manufacturedNodesByMaterialCode
+        allManufacturedNodesByMaterialCode
             .computeIfAbsent(node.materialCode(), ignored -> new ArrayList<>())
             .add(node);
       }
     }
+    Map<String, List<BomSettlementNode>> byproductCandidateNodesByMaterialCode =
+        byproductCandidateNodes(anchorRows, nodeByPath, rollupParentPaths);
     for (BomSettlementByproduct byproduct : request.byproducts()) {
       if (byproduct == null || !inByproductEffectiveWindow(request, byproduct)) {
         continue;
       }
-      List<BomSettlementNode> parentNodes = manufacturedNodesByMaterialCode
+      List<BomSettlementNode> parentNodes = byproductCandidateNodesByMaterialCode
           .getOrDefault(byproduct.parentMaterialCode(), List.of());
       if (parentNodes.isEmpty()) {
-        warnings.add("BYPRODUCT_PARENT_NOT_FOUND: 副产品 "
-            + byproduct.byproductMaterialCode()
-            + " 找不到制造件母项 " + byproduct.parentMaterialCode());
+        if (!allManufacturedNodesByMaterialCode.containsKey(byproduct.parentMaterialCode())) {
+          warnings.add("BYPRODUCT_PARENT_NOT_FOUND: 副产品 "
+              + byproduct.byproductMaterialCode()
+              + " 找不到制造件母项 " + byproduct.parentMaterialCode());
+        }
         continue;
       }
       for (BomSettlementNode parent : parentNodes) {
         appendOneByproductExtraRow(request, nodes, parent, byproduct, extraRows);
       }
     }
+  }
+
+  private static Map<String, List<BomSettlementNode>> byproductCandidateNodes(
+      List<BomCostingRow> anchorRows,
+      Map<String, BomSettlementNode> nodeByPath,
+      Set<String> rollupParentPaths) {
+    Map<String, List<BomSettlementNode>> candidates = new LinkedHashMap<>();
+    Set<String> candidatePaths = new LinkedHashSet<>();
+    if (anchorRows == null || nodeByPath == null || nodeByPath.isEmpty()) {
+      return candidates;
+    }
+    for (BomCostingRow row : anchorRows) {
+      if (row == null || !StringUtils.hasText(row.getPath())) {
+        continue;
+      }
+      String path = row.getPath();
+      boolean skipCurrent = ROW_TYPE_SPECIAL_ROLLUP_PARENT.equals(row.getSettlementRowType());
+      while (StringUtils.hasText(path)) {
+        BomSettlementNode node = nodeByPath.get(path);
+        if (!skipCurrent) {
+          addByproductCandidate(candidates, candidatePaths, node, rollupParentPaths);
+        }
+        skipCurrent = false;
+        path = parentPathOf(path);
+      }
+    }
+    return candidates;
+  }
+
+  private static void addByproductCandidate(
+      Map<String, List<BomSettlementNode>> candidates,
+      Set<String> candidatePaths,
+      BomSettlementNode node,
+      Set<String> rollupParentPaths) {
+    if (node == null || !isManufacturedNode(node) || !StringUtils.hasText(node.path())) {
+      return;
+    }
+    if (rollupParentPaths != null && rollupParentPaths.contains(node.path())) {
+      return;
+    }
+    if (!candidatePaths.add(node.path())) {
+      return;
+    }
+    candidates.computeIfAbsent(node.materialCode(), ignored -> new ArrayList<>()).add(node);
   }
 
   private void appendOneByproductExtraRow(
@@ -550,7 +611,7 @@ public class BomSettlementRowBuildEngine {
       BomSettlementByproduct byproduct,
       BomByproductCostRule rule) {
     BomCostingRow row = new BomCostingRow();
-    BigDecimal qtyPerParent = byproduct.outputQty() == null ? BigDecimal.ONE : byproduct.outputQty();
+    BigDecimal qtyPerParent = negativeQty(byproduct.outputQty());
     BigDecimal parentQtyPerTop = parent.qtyPerTop() == null ? BigDecimal.ONE : parent.qtyPerTop();
     row.setOaNo(request.oaNo());
     row.setTopProductCode(firstText(parent.topProductCode(), request.topProductCode()));
@@ -565,8 +626,8 @@ public class BomSettlementRowBuildEngine {
     row.setRawHierarchyNodeId(null);
     row.setMatchedSettlementRuleId(rule.getId());
     row.setSettlementRowType(firstText(rule.getSettlementRowType(), ROW_TYPE_BYPRODUCT_EXTRA));
-    row.setMaterialName(byproduct.byproductMaterialName());
-    row.setMaterialSpec(byproduct.byproductMaterialSpec());
+    row.setMaterialName(byproductDisplayName(parent));
+    row.setMaterialSpec(firstText(parent.materialSpec(), byproduct.byproductMaterialSpec()));
     row.setShapeAttr("副产品");
     row.setSourceCategory(parent.productionCategory());
     row.setCostElementCode(parent.costElementCode());
@@ -580,8 +641,24 @@ public class BomSettlementRowBuildEngine {
     row.setPeriodMonth(periodMonth(request));
     row.setAsOfDate(request.asOfDate());
     row.setRawVersionEffectiveFrom(rawVersionEffectiveFrom(parent));
+    row.setPriceOrgCode(parent.priceOrgCode());
+    row.setMaterialOrganizationCode(parent.materialOrganizationCode());
     row.setBusinessUnitType(firstText(request.businessUnitType(), byproduct.businessUnitType()));
     return row;
+  }
+
+  private static BigDecimal negativeQty(BigDecimal outputQty) {
+    BigDecimal qty = outputQty == null ? BigDecimal.ONE : outputQty;
+    return qty.signum() > 0 ? qty.negate() : qty;
+  }
+
+  private static String byproductDisplayName(BomSettlementNode parent) {
+    String parentName = firstText(parent.materialName(), parent.materialCode());
+    String parentSpec = parent.materialSpec();
+    if (StringUtils.hasText(parentSpec)) {
+      return parentName + "/" + parentSpec.trim() + " 废料";
+    }
+    return parentName + " 废料";
   }
 
   private static BomCostingRowSubRef toSubRef(BomSettlementNode child, BomSettlementRule rule) {

@@ -6,7 +6,9 @@ import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.enums.LinkedPriceCalcScene;
+import com.sanhua.marketingcost.enums.LinkedPriceFactorSource;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
+import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import java.util.List;
 import org.springframework.stereotype.Component;
@@ -59,10 +61,15 @@ public class LinkedPriceResolver implements PriceResolver {
             .eq(PriceLinkedCalcItem::getItemCode, code.trim())
             // 普通报价只读 QUOTE 场景的联动价结果；月调结果必须由 MONTHLY_ADJUST 分支读取。
             .eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.QUOTE.getCode())
+            .eq(PriceLinkedCalcItem::getFactorSource, quoteFactorSource(context))
             .eq(StringUtils.hasText(pricingMonth), PriceLinkedCalcItem::getPricingMonth,
                 pricingMonth == null ? null : pricingMonth.trim())
             .eq(PriceLinkedCalcItem::getCalcStatus, "OK")
             .isNotNull(PriceLinkedCalcItem::getPartUnitPrice)
+            .eq(
+                context != null && context.getPriceAsOfTime() != null,
+                PriceLinkedCalcItem::getPriceAsOfTime,
+                context == null ? null : context.getPriceAsOfTime())
             .orderByDesc(PriceLinkedCalcItem::getId)
             .last("LIMIT 1");
     List<PriceLinkedCalcItem> rows =
@@ -73,9 +80,12 @@ public class LinkedPriceResolver implements PriceResolver {
               + oaNo.trim()
               + " code="
               + code.trim()
-              + (StringUtils.hasText(pricingMonth) ? " pricingMonth=" + pricingMonth.trim() : ""));
+              + (StringUtils.hasText(pricingMonth) ? " pricingMonth=" + pricingMonth.trim() : "")
+              + (context != null && context.getPriceAsOfTime() != null
+                  ? " priceAsOfTime=" + context.getPriceAsOfTime()
+                  : ""));
     }
-    return PriceResolveResult.hit(rows.get(0).getPartUnitPrice(), "联动价");
+    return PriceResolveResult.hit(rows.get(0).getPartUnitPrice(), "联动价", rows.get(0).getId());
   }
 
   private PriceResolveResult resolveMonthlyAdjust(CostRunPartItemDto item, CostRunContext context) {
@@ -110,5 +120,14 @@ public class LinkedPriceResolver implements PriceResolver {
               + context.getAdjustBatchId());
     }
     return PriceResolveResult.hit(rows.get(0).getPartUnitPrice(), "月度调价联动价");
+  }
+
+  private String quoteFactorSource(CostRunContext context) {
+    if (context != null
+        && QuotePriceScenarioType.FINANCE_QUOTE_BASE.name()
+            .equalsIgnoreCase(context.getPriceScenarioType())) {
+      return LinkedPriceFactorSource.FINANCE_QUOTE_BASE.getCode();
+    }
+    return LinkedPriceFactorSource.OA_LOCKED.getCode();
   }
 }

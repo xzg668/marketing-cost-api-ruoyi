@@ -18,6 +18,7 @@ import com.sanhua.marketingcost.mapper.QuoteBomConfirmationLogMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.service.QuoteBomConfirmationService;
+import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
@@ -44,6 +45,7 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
   private final BomCostingRowMapper bomCostingRowMapper;
   private final QuoteBomConfirmationMapper confirmationMapper;
   private final QuoteBomConfirmationLogMapper confirmationLogMapper;
+  private final QuoteCostRunVersionInvalidationService versionInvalidationService;
 
   public QuoteBomConfirmationServiceImpl(
       OaFormMapper oaFormMapper,
@@ -51,13 +53,15 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
       QuoteBomStatusMapper quoteBomStatusMapper,
       BomCostingRowMapper bomCostingRowMapper,
       QuoteBomConfirmationMapper confirmationMapper,
-      QuoteBomConfirmationLogMapper confirmationLogMapper) {
+      QuoteBomConfirmationLogMapper confirmationLogMapper,
+      QuoteCostRunVersionInvalidationService versionInvalidationService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
     this.bomCostingRowMapper = bomCostingRowMapper;
     this.confirmationMapper = confirmationMapper;
     this.confirmationLogMapper = confirmationLogMapper;
+    this.versionInvalidationService = versionInvalidationService;
   }
 
   @Override
@@ -70,6 +74,12 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
       throw new QuoteIngestException("当前产品行 BOM 明细为空，无法确认");
     }
 
+    List<QuoteBomConfirmation> active = activeConfirmations(scope);
+    if (!active.isEmpty()) {
+      // 确认后的 BOM 不允许直接编辑；重复请求直接返回现有版本，避免重试产生无效历史。
+      return QuoteBomConfirmResponse.from(active.get(0));
+    }
+
     LocalDateTime now = LocalDateTime.now();
     String operator = currentUsername("system");
     int nextVersion =
@@ -79,20 +89,6 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
                 .max(Comparator.naturalOrder())
                 .orElse(0)
             + 1;
-
-    for (QuoteBomConfirmation old : activeConfirmations(scope)) {
-      old.setConfirmStatus(QuoteBomConfirmation.STATUS_INVALID);
-      old.setUpdatedAt(now);
-      confirmationMapper.updateById(old);
-      writeLog(
-          old,
-          QuoteBomConfirmationLog.ACTION_STALE,
-          QuoteBomConfirmation.STATUS_CONFIRMED,
-          QuoteBomConfirmation.STATUS_INVALID,
-          operator,
-          now,
-          "重复确认生成新版本，旧确认失效");
-    }
 
     QuoteBomConfirmation entity = new QuoteBomConfirmation();
     entity.setConfirmNo(generateConfirmNo(now));
@@ -123,6 +119,8 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
         operator,
         now,
         entity.getConfirmRemark());
+    versionInvalidationService.invalidateProduct(
+        scope.oaNo(), scope.oaFormItemId(), scope.productCode(), scope.periodMonth());
     return QuoteBomConfirmResponse.from(entity);
   }
 
@@ -154,6 +152,8 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
         operator,
         now,
         remark);
+    versionInvalidationService.invalidateProduct(
+        scope.oaNo(), scope.oaFormItemId(), scope.productCode(), scope.periodMonth());
     return QuoteBomConfirmResponse.from(latest);
   }
 

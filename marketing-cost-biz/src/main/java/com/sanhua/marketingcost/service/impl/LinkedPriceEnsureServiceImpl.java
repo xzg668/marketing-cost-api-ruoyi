@@ -9,6 +9,7 @@ import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.enums.LinkedPriceCalcScene;
 import com.sanhua.marketingcost.enums.LinkedPriceFactorSource;
+import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
@@ -18,6 +19,7 @@ import com.sanhua.marketingcost.service.pricing.SupplierPreferredPriceSelection;
 import com.sanhua.marketingcost.service.pricing.SupplierPreferredPriceSelector;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -56,6 +58,74 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
   }
 
   @Override
+  @Transactional(readOnly = true)
+  public List<PriceLinkedCalcItem> calculate(LinkedPriceEnsureRequest request) {
+    if (request == null) {
+      throw new IllegalArgumentException("联动价 calculate 请求不能为空");
+    }
+    Set<String> itemCodes = request.normalizedItemCodes();
+    if (itemCodes.isEmpty()) {
+      return List.of();
+    }
+    List<String> errors = request.validate();
+    if (!errors.isEmpty()) {
+      throw new IllegalArgumentException(String.join("；", errors));
+    }
+    if (request.getCalcScene() != LinkedPriceCalcScene.QUOTE) {
+      throw new IllegalArgumentException("只读价格检查当前仅支持报价联动价场景");
+    }
+
+    String oaNo = request.getOaNo().trim();
+    String businessUnitType = request.getBusinessUnitType().trim();
+    String pricingMonth = request.getPricingMonth().trim();
+    String factorSource = quoteFactorSource(request);
+    Map<String, PriceLinkedItem> linkedItemMap =
+        fetchLinkedItems(
+            businessUnitType,
+            pricingMonth,
+            itemCodes,
+            request.getPriceAsOfTime() == null
+                ? null
+                : request.getPriceAsOfTime().toLocalDate());
+    Map<String, BomSnapshot> bomMap =
+        fetchBomSnapshots(oaNo, businessUnitType, itemCodes);
+    OaForm oaForm = fetchOaForm(oaNo);
+    List<PriceLinkedCalcItem> calculated = new ArrayList<>(itemCodes.size());
+    for (String itemCode : itemCodes) {
+      PriceLinkedCalcItem calcItem = new PriceLinkedCalcItem();
+      populateQuoteContext(
+          calcItem,
+          oaNo,
+          businessUnitType,
+          pricingMonth,
+          request.getPriceAsOfTime(),
+          factorSource,
+          itemCode,
+          bomMap);
+      try {
+        if (request.getPriceScenarioType() == QuotePriceScenarioType.FINANCE_QUOTE_BASE) {
+          priceLinkedCalcService.calculateQuoteItemForEnsure(
+              calcItem,
+              linkedItemMap.get(itemCode),
+              oaForm,
+              request.normalizedVariableOverrides(),
+              factorSource);
+        } else {
+          priceLinkedCalcService.calculateQuoteItemForEnsure(
+              calcItem, linkedItemMap.get(itemCode), oaForm);
+        }
+      } catch (RuntimeException ex) {
+        calcItem.setPartUnitPrice(null);
+        calcItem.setPartAmount(null);
+        calcItem.setCalcStatus(CALC_STATUS_FAILED);
+        calcItem.setCalcMessage(ex.getMessage());
+      }
+      calculated.add(calcItem);
+    }
+    return calculated;
+  }
+
+  @Override
   @Transactional(rollbackFor = Exception.class)
   public LinkedPriceEnsureResult ensure(LinkedPriceEnsureRequest request) {
     if (request == null) {
@@ -88,8 +158,15 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
     String oaNo = request.getOaNo().trim();
     String businessUnitType = request.getBusinessUnitType().trim();
     String pricingMonth = request.getPricingMonth().trim();
+    String factorSource = quoteFactorSource(request);
     Map<String, PriceLinkedCalcItem> existingMap =
-        fetchExistingQuoteResults(oaNo, businessUnitType, pricingMonth, itemCodes);
+        fetchExistingQuoteResults(
+            oaNo,
+            businessUnitType,
+            pricingMonth,
+            request.getPriceAsOfTime(),
+            factorSource,
+            itemCodes);
     Map<String, PriceLinkedItem> linkedItemMap =
         fetchLinkedItems(
             businessUnitType,
@@ -109,10 +186,28 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
       PriceLinkedCalcItem calcItem = created
           ? new PriceLinkedCalcItem()
           : existing;
-      populateQuoteContext(calcItem, oaNo, businessUnitType, pricingMonth, itemCode, bomMap);
+      populateQuoteContext(
+          calcItem,
+          oaNo,
+          businessUnitType,
+          pricingMonth,
+          request.getPriceAsOfTime(),
+          factorSource,
+          itemCode,
+          bomMap);
       PriceLinkedItem linkedItem = linkedItemMap.get(itemCode);
       try {
-        priceLinkedCalcService.calculateQuoteItemForEnsure(calcItem, linkedItem, oaForm);
+        if (request.getPriceScenarioType() == QuotePriceScenarioType.FINANCE_QUOTE_BASE) {
+          priceLinkedCalcService.calculateQuoteItemForEnsure(
+              calcItem,
+              linkedItem,
+              oaForm,
+              request.normalizedVariableOverrides(),
+              factorSource);
+        } else {
+          // 保留既有 OA 调用契约，避免正常报价链路发生任何行为变化。
+          priceLinkedCalcService.calculateQuoteItemForEnsure(calcItem, linkedItem, oaForm);
+        }
       } catch (RuntimeException ex) {
         calcItem.setPartUnitPrice(null);
         calcItem.setPartAmount(null);
@@ -182,18 +277,28 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
   }
 
   private Map<String, PriceLinkedCalcItem> fetchExistingQuoteResults(
-      String oaNo, String businessUnitType, String pricingMonth, Set<String> itemCodes) {
-    List<PriceLinkedCalcItem> rows = priceLinkedCalcItemMapper.selectList(
-        Wrappers.lambdaQuery(PriceLinkedCalcItem.class)
-            .eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.QUOTE.getCode())
-            .eq(PriceLinkedCalcItem::getOaNo, oaNo)
-            .eq(PriceLinkedCalcItem::getBusinessUnitType, businessUnitType)
-            .eq(PriceLinkedCalcItem::getPricingMonth, pricingMonth)
-            .in(PriceLinkedCalcItem::getItemCode, itemCodes));
+      String oaNo,
+      String businessUnitType,
+      String pricingMonth,
+      LocalDateTime priceAsOfTime,
+      String factorSource,
+      Set<String> itemCodes) {
+    var query = Wrappers.lambdaQuery(PriceLinkedCalcItem.class)
+        .eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.QUOTE.getCode())
+        .eq(PriceLinkedCalcItem::getOaNo, oaNo)
+        .eq(PriceLinkedCalcItem::getBusinessUnitType, businessUnitType)
+        .eq(PriceLinkedCalcItem::getPricingMonth, pricingMonth)
+        .eq(PriceLinkedCalcItem::getFactorSource, factorSource)
+        .in(PriceLinkedCalcItem::getItemCode, itemCodes);
+    if (priceAsOfTime != null) {
+      query.eq(PriceLinkedCalcItem::getPriceAsOfTime, priceAsOfTime);
+    }
+    List<PriceLinkedCalcItem> rows =
+        priceLinkedCalcItemMapper.selectList(query.orderByDesc(PriceLinkedCalcItem::getId));
     Map<String, PriceLinkedCalcItem> map = new LinkedHashMap<>();
     for (PriceLinkedCalcItem row : rows) {
       if (StringUtils.hasText(row.getItemCode())) {
-        map.put(row.getItemCode().trim(), row);
+        map.putIfAbsent(row.getItemCode().trim(), row);
       }
     }
     return map;
@@ -317,14 +422,17 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
       String oaNo,
       String businessUnitType,
       String pricingMonth,
+      LocalDateTime priceAsOfTime,
+      String factorSource,
       String itemCode,
       Map<String, BomSnapshot> bomMap) {
     BomSnapshot bom = bomMap.get(itemCode);
     calcItem.setOaNo(oaNo);
     calcItem.setBusinessUnitType(businessUnitType);
     calcItem.setPricingMonth(pricingMonth);
+    calcItem.setPriceAsOfTime(priceAsOfTime);
     calcItem.setCalcScene(LinkedPriceCalcScene.QUOTE.getCode());
-    calcItem.setFactorSource(LinkedPriceCalcScene.QUOTE.getDefaultFactorSource().getCode());
+    calcItem.setFactorSource(factorSource);
     calcItem.setAdjustBatchId(null);
     calcItem.setItemCode(itemCode);
     calcItem.setShapeAttr(bom == null ? null : bom.shapeAttr);
@@ -361,6 +469,13 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
     return adjustBatchId == null
         ? LinkedPriceFactorSource.MONTHLY_FACTOR.getCode()
         : LinkedPriceFactorSource.ADJUST_BATCH.getCode();
+  }
+
+  private String quoteFactorSource(LinkedPriceEnsureRequest request) {
+    return request != null
+        && request.getPriceScenarioType() == QuotePriceScenarioType.FINANCE_QUOTE_BASE
+        ? LinkedPriceFactorSource.FINANCE_QUOTE_BASE.getCode()
+        : LinkedPriceFactorSource.OA_LOCKED.getCode();
   }
 
   private static class BomSnapshot {

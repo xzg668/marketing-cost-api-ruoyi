@@ -166,6 +166,25 @@ class FinanceBasePriceImportServiceImplTest {
     assertThat(resp.getSkipped()).isZero();
   }
 
+  @Test
+  @DisplayName("普通影响因素导入遇到财务报价基准专用标识时拒绝且不覆盖")
+  void importRows_protectedFinanceQuoteBase_isRejectedWithoutDbWrite() {
+    InfluenceFactorImportRow protectedRow =
+        row(1, "报价Cu基准", "财务报价电解铜基准价", "财务报价基准", "99", "公斤");
+
+    InfluenceFactorImportResponse resp =
+        service.importRows(List.of(protectedRow), "2026-07");
+
+    assertThat(resp.getImported()).isZero();
+    assertThat(resp.getSkipped()).isEqualTo(1);
+    assertThat(resp.getErrors()).singleElement()
+        .satisfies(error -> assertThat(error.getMessage())
+            .contains("只能通过专用接口维护", "不得覆盖"));
+    verify(financeBasePriceMapper, never()).selectOne(any(Wrapper.class));
+    verify(financeBasePriceMapper, never()).insert(any(FinanceBasePrice.class));
+    verify(financeBasePriceMapper, never()).updateById(any(FinanceBasePrice.class));
+  }
+
   // ===================== helpers =====================
 
   @SuppressWarnings("unchecked")

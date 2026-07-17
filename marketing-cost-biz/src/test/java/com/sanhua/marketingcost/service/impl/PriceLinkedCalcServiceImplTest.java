@@ -16,7 +16,6 @@ import com.sanhua.marketingcost.config.LinkedParserProperties;
 import com.sanhua.marketingcost.dto.LinkedPriceVariableContext;
 import com.sanhua.marketingcost.dto.PriceLinkedCalcRow;
 import com.sanhua.marketingcost.dto.PriceLinkedCalcTraceResponse;
-import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewRequest;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewResponse;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewResponse.VariableDetail;
 import com.sanhua.marketingcost.service.PriceLinkedFormulaPreviewService;
@@ -421,7 +420,8 @@ class PriceLinkedCalcServiceImplTest {
    * {@code getTrace} 三分支覆盖 —— id=null / linked_item 不存在 / 存在。
    *
    * <p>重构后 trace 不再读 calc_item，而是按 linked_item.id 当场跑 preview；
-   * 所以 mock 目标改成 {@code linkedItemMapper.selectById} + {@code previewService.preview}。
+   * 所以 mock 目标改成 {@code linkedItemMapper.selectById}
+   * + {@code previewService.previewForRefresh}，确保同料号多供应商不会串用行上下文。
    */
   @Test
   void getTrace_covers_null_missing_and_present() {
@@ -465,6 +465,8 @@ class PriceLinkedCalcServiceImplTest {
     linked.setFormulaExpr("Cu+process_fee");
     linked.setMaterialCode("MAT-42");
     linked.setPricingMonth("2026-02");
+    linked.setSupplierCode("S001301");
+    linked.setProcessFee(new BigDecimal("4.350001"));
     when(linkedItemMapper.selectById(42L)).thenReturn(linked);
 
     PriceLinkedFormulaPreviewResponse previewResp = new PriceLinkedFormulaPreviewResponse();
@@ -481,7 +483,7 @@ class PriceLinkedCalcServiceImplTest {
     fee.setValue(new BigDecimal("5.00"));
     fee.setSource("PART_CONTEXT");
     previewResp.setVariables(List.of(cu, fee));
-    when(previewService.preview(any(PriceLinkedFormulaPreviewRequest.class)))
+    when(previewService.previewForRefresh(linked, Map.of()))
         .thenReturn(previewResp);
 
     PriceLinkedCalcTraceResponse trace = service.getTrace(42L);
@@ -495,6 +497,7 @@ class PriceLinkedCalcServiceImplTest {
     assertThat(trace.getTraceJson()).contains("\"name\":\"铜基价\"");
     assertThat(trace.getTraceJson()).contains("\"source\":\"FINANCE\"");
     assertThat(trace.getTraceJson()).contains("\"result\":93.73");
+    Mockito.verify(previewService).previewForRefresh(linked, Map.of());
   }
 
   // ================== V28 收尾：OA 锁价 + 基价回落 单测 ==================
@@ -681,6 +684,100 @@ class PriceLinkedCalcServiceImplTest {
     assertThat(result).isEqualByComparingTo("90.000000");
     assertThat(calcItem.getTraceJson()).contains("\"source\":\"OA_LOCKED\"");
     assertThat(calcItem.getTraceJson()).doesNotContain("999");
+  }
+
+  @Test
+  void financeQuoteOverridesOnlyCuAndKeepsOaZnAl() {
+    FactorVariableRegistry registry = Mockito.mock(FactorVariableRegistry.class);
+    FormulaNormalizer normalizer = Mockito.mock(FormulaNormalizer.class);
+    when(normalizer.normalize(any())).thenReturn("[Cu]+[Zn]+[Al]");
+    when(registry.resolve(any(String.class), any(VariableContext.class)))
+        .thenAnswer(inv -> {
+          String code = inv.getArgument(0);
+          VariableContext ctx = inv.getArgument(1);
+          return java.util.Optional.ofNullable(ctx.getOverrides().get(code));
+        });
+
+    LinkedParserProperties props = new LinkedParserProperties();
+    props.setMode("new");
+    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(props, normalizer, registry);
+    PriceLinkedItem linkedItem = new PriceLinkedItem();
+    linkedItem.setFormulaExpr("[Cu]+[Zn]+[Al]");
+    linkedItem.setMaterialCode("MAT-CU-ZN-AL");
+    linkedItem.setPricingMonth("2026-05");
+    OaForm oaForm = new OaForm();
+    oaForm.setCopperPrice(new BigDecimal("102039"));
+    oaForm.setZincPrice(new BigDecimal("21684"));
+    oaForm.setAluminumPrice(new BigDecimal("18880"));
+
+    PriceLinkedCalcItem oa = new PriceLinkedCalcItem();
+    oa.setPricingMonth("2026-05");
+    service.calculateQuoteItemForEnsure(oa, linkedItem, oaForm);
+    PriceLinkedCalcItem finance = new PriceLinkedCalcItem();
+    finance.setPricingMonth("2026-05");
+    service.calculateQuoteItemForEnsure(
+        finance,
+        linkedItem,
+        oaForm,
+        Map.of("Cu", new BigDecimal("90.000000")),
+        "FINANCE_QUOTE_BASE");
+
+    assertThat(oa.getPartUnitPrice()).isEqualByComparingTo("142.603000");
+    assertThat(finance.getPartUnitPrice()).isEqualByComparingTo("130.564000");
+    assertThat(oa.getPartUnitPrice().subtract(finance.getPartUnitPrice()))
+        .isEqualByComparingTo("12.039000");
+    assertThat(finance.getFactorSource()).isEqualTo("FINANCE_QUOTE_BASE");
+    assertThat(finance.getTraceJson())
+        .contains("\"Cu\":90.000000")
+        .contains("\"Zn\":21.684000")
+        .contains("\"Al\":18.880000")
+        .contains("\"code\":\"Cu\"")
+        .contains("\"source\":\"FINANCE_QUOTE_BASE\"")
+        .contains("\"source\":\"OA_LOCKED\"");
+  }
+
+  @Test
+  void financeQuoteKeepsNonCuLinkedFormulaExactlyTheSame() {
+    FactorVariableRegistry registry = Mockito.mock(FactorVariableRegistry.class);
+    FormulaNormalizer normalizer = Mockito.mock(FormulaNormalizer.class);
+    when(normalizer.normalize(any())).thenReturn("[Zn]+[Al]");
+    when(registry.resolve(any(String.class), any(VariableContext.class)))
+        .thenAnswer(inv -> {
+          String code = inv.getArgument(0);
+          VariableContext ctx = inv.getArgument(1);
+          return java.util.Optional.ofNullable(ctx.getOverrides().get(code));
+        });
+
+    LinkedParserProperties props = new LinkedParserProperties();
+    props.setMode("new");
+    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(props, normalizer, registry);
+    PriceLinkedItem linkedItem = new PriceLinkedItem();
+    linkedItem.setFormulaExpr("[Zn]+[Al]");
+    linkedItem.setMaterialCode("MAT-ZN-AL");
+    linkedItem.setPricingMonth("2026-05");
+    OaForm oaForm = new OaForm();
+    oaForm.setCopperPrice(new BigDecimal("102039"));
+    oaForm.setZincPrice(new BigDecimal("21684"));
+    oaForm.setAluminumPrice(new BigDecimal("18880"));
+
+    PriceLinkedCalcItem oa = new PriceLinkedCalcItem();
+    oa.setPricingMonth("2026-05");
+    service.calculateQuoteItemForEnsure(oa, linkedItem, oaForm);
+    PriceLinkedCalcItem finance = new PriceLinkedCalcItem();
+    finance.setPricingMonth("2026-05");
+    service.calculateQuoteItemForEnsure(
+        finance,
+        linkedItem,
+        oaForm,
+        Map.of("Cu", new BigDecimal("90.000000")),
+        "FINANCE_QUOTE_BASE");
+
+    assertThat(oa.getPartUnitPrice()).isEqualByComparingTo("40.564000");
+    assertThat(finance.getPartUnitPrice()).isEqualByComparingTo(oa.getPartUnitPrice());
+    assertThat(finance.getTraceJson())
+        .contains("\"Zn\":21.684000")
+        .contains("\"Al\":18.880000")
+        .doesNotContain("\"code\":\"Cu\"");
   }
 
   // ==================== 风险 2：vat_rate 缺失时 newCalculate 硬错 ====================

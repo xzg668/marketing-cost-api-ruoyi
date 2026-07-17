@@ -149,6 +149,8 @@ class BomByproductCostSettlementAdapterTest {
         LocalDate.of(2026, 1, 1),
         null,
         LocalDate.of(2026, 1, 1),
+        "210",
+        "COMMERCIAL",
         "COMMERCIAL",
         null);
   }

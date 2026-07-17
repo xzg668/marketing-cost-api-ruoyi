@@ -111,6 +111,37 @@ class PackageComponentPriceServiceImplTest {
   }
 
   @Test
+  @DisplayName("第四步包装价格只读计算：返回汇总和明细但不写快照、价格或缺口")
+  void calculatesPackagePriceWithoutPersistence() {
+    service = serviceWith(resolver(Map.of(
+        "A", PriceResolveResult.hit(new BigDecimal("3.000000"), "固定采购价"),
+        "B", PriceResolveResult.hit(new BigDecimal("1.500000"), "固定采购价"))));
+    when(snapshotService.previewSnapshot(any(PackageSnapshotRequest.class)))
+        .thenReturn(snapshotResult(List.of(
+            detail(101L, 1, "A", "2.000000"),
+            detail(102L, 2, "B", "4.000000"))));
+    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), any(LocalDate.class)))
+        .thenReturn(List.of(route("A")));
+    when(materialPriceRouterService.listCandidates(eq("B"), eq("2026-05"), any(LocalDate.class)))
+        .thenReturn(List.of(route("B")));
+
+    PackagePriceResult result = service.calculatePrice(request());
+
+    assertThat(result.getStatus()).isEqualTo("PRICED");
+    assertThat(result.isComplete()).isTrue();
+    assertThat(result.getPrice().getId()).isNull();
+    assertThat(result.getPrice().getTotalPrice()).isEqualByComparingTo("12.000000000000");
+    assertThat(result.getDetails()).hasSize(2);
+    verify(snapshotService, never()).ensureSnapshot(any());
+    verify(priceMapper, never()).insert(any(PackageComponentPrice.class));
+    verify(priceMapper, never()).updateById(any(PackageComponentPrice.class));
+    verify(priceDetailMapper, never()).insert(any(PackageComponentPriceDetail.class));
+    verify(priceDetailMapper, never()).delete(any());
+    verify(gapItemMapper, never()).insert(any(PackageComponentGapItem.class));
+    verify(gapItemMapper, never()).updateById(any(PackageComponentGapItem.class));
+  }
+
+  @Test
   @DisplayName("T22：月度包装件按 price_as_of_time 传递给子件取价上下文")
   void monthlyPriceAsOfTimePassedToChildResolver() {
     LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 26, 10, 30);

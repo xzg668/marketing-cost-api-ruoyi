@@ -110,12 +110,15 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   public QuoteProductBomPreparationPreview prepareByOaFormItem(Long itemId, LocalDate quoteDate) {
     QuoteContext context = loadContext(itemId);
     String productCode = trimToNull(context.item().getMaterialNo());
-    String periodMonth = resolvePeriodMonth(context.form());
+    String periodMonth = resolvePeriodMonth(context.form(), context.item().getId());
     QuoteDataOrganization organization =
-        MaterialOrganization.quoteDataForQuoteProcess(
+        MaterialOrganization.quoteDataForQuoteProduct(
             context.form().getProcessCode(),
             context.form().getOaNo(),
-            context.item().getBusinessUnitType());
+            context.item().getBusinessUnitType(),
+            context.item().getProductName(),
+            context.item().getSunlModel(),
+            context.item().getMaterialNo());
     QuoteProductTypeResolveResult typeResult =
         resolveProductType(productCode, organization.materialOrganizationCode());
     if (typeResult.productType() == QuoteProductType.DATA_MISSING
@@ -628,18 +631,15 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
             Wrappers.<QuoteBomPreparationRecord>lambdaQuery()
                 .eq(QuoteBomPreparationRecord::getOaFormItemId, context.item().getId())
                 .eq(QuoteBomPreparationRecord::getCostPeriodMonth, periodMonth)
-                .eq(QuoteBomPreparationRecord::getPriceOrgCode, organization.priceOrgCode())
-                .eq(
-                    QuoteBomPreparationRecord::getMaterialOrganizationCode,
-                    organization.materialOrganizationCode())
-                .eq(QuoteBomPreparationRecord::getActiveFlag, ACTIVE)
                 .last("LIMIT 1"));
     boolean inserting = record == null;
     if (record == null) {
       record = new QuoteBomPreparationRecord();
       record.setCreatedAt(LocalDateTime.now());
-      record.setActiveFlag(ACTIVE);
     }
+    // 表上唯一键仍是 (oa_form_item_id, cost_period_month)。迁移前旧行的组织字段为空时，
+    // 必须复用该行并补齐组织，不能按组织误判为新行后触发重复键。
+    record.setActiveFlag(ACTIVE);
     record.setQuoteBomStatusId(status.getId());
     record.setOaFormId(context.form().getId());
     record.setOaFormItemId(context.item().getId());
@@ -663,11 +663,14 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     record.setUpdatedAt(LocalDateTime.now());
     if (inserting) {
       preparationRecordMapper.insert(record);
-      status.setPreparationRecordId(record.getId());
-      quoteBomStatusMapper.updateById(status);
     } else {
       preparationRecordMapper.updateById(record);
     }
+    // 状态表必须始终指向本次按“产品行 + 核算月”实际复用/写入的准备记录。
+    // 迁移前遗留记录被复用时也要刷新该引用，否则会出现状态期间已切月、
+    // preparation_record_id 却仍指向旧月份记录的交叉引用。
+    status.setPreparationRecordId(record.getId());
+    quoteBomStatusMapper.updateById(status);
     return record;
   }
 
@@ -871,7 +874,21 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     return new ArrayList<>(normalized);
   }
 
-  private String resolvePeriodMonth(OaForm form) {
+  private String resolvePeriodMonth(OaForm form, Long oaFormItemId) {
+    if (oaFormItemId != null) {
+      QuoteBomStatus latestStatus =
+          quoteBomStatusMapper.selectOne(
+              Wrappers.<QuoteBomStatus>lambdaQuery()
+                  .eq(QuoteBomStatus::getOaFormItemId, oaFormItemId)
+                  .orderByDesc(QuoteBomStatus::getCheckedAt)
+                  .orderByDesc(QuoteBomStatus::getId)
+                  .last("LIMIT 1"));
+      String statusPeriod =
+          trimToNull(latestStatus == null ? null : latestStatus.getCostPeriodMonth());
+      if (statusPeriod != null) {
+        return YearMonth.parse(statusPeriod).toString();
+      }
+    }
     String accountingPeriod = trimToNull(form.getAccountingPeriodMonth());
     if (accountingPeriod != null) {
       return YearMonth.parse(accountingPeriod).toString();

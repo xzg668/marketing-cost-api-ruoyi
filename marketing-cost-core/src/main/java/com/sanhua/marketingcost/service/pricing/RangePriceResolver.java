@@ -126,7 +126,8 @@ public class RangePriceResolver implements PriceResolver {
       query.and(q -> q.le(PriceRangeItem::getEffectiveFrom, priceDate)
           .or()
           .isNull(PriceRangeItem::getEffectiveFrom));
-      query.and(q -> q.gt(PriceRangeItem::getEffectiveTo, priceDate)
+      // 日期型有效期统一按闭区间处理，截止日当天仍然有效。
+      query.and(q -> q.ge(PriceRangeItem::getEffectiveTo, priceDate)
           .or()
           .isNull(PriceRangeItem::getEffectiveTo));
     }

@@ -32,6 +32,7 @@ public class MakePartPriceCalcRow {
 
   private String pricingMonth;
   private LocalDateTime priceAsOfTime;
+  private String priceScenarioType;
   private String parentMaterialNo;
   private String parentMaterialName;
   private String drawingNo;

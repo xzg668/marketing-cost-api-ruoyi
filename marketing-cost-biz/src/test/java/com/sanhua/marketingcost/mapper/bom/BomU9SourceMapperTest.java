@@ -63,7 +63,7 @@ class BomU9SourceMapperTest extends BomMapperTestBase {
     assertThat(loaded.getParentMaterialNo()).isEqualTo("P002");
     assertThat(loaded.getChildMaterialNo()).isEqualTo("C002");
     assertThat(loaded.getChildSeq()).isEqualTo(2);
-    assertThat(loaded.getPriceOrgCode()).as("旧 Excel/BaseMapper 插入应走 DB 默认商用组织").isEqualTo("210");
+    assertThat(loaded.getPriceOrgCode()).as("报价组织必须由上游显式传入").isEqualTo("210");
     assertThat(loaded.getQtyPerParent()).isEqualByComparingTo(new BigDecimal("3.5"));
     assertThat(loaded.getU9IsCostFlag()).isEqualTo(1);
     assertThat(loaded.getEffectiveFrom()).isEqualTo(LocalDate.of(2026, 1, 1));
@@ -130,6 +130,7 @@ class BomU9SourceMapperTest extends BomMapperTestBase {
 
   private BomU9Source newValidRow(String parent, String child, int seq) {
     BomU9Source row = new BomU9Source();
+    row.setPriceOrgCode("210");
     row.setImportBatchId(batchId);
     row.setSourceType("EXCEL");
     row.setImportedAt(LocalDateTime.now());

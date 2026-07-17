@@ -43,7 +43,32 @@ class BomAvailabilityAdapterImplTest {
   }
 
   @Test
-  void findsCurrentQuoteSnapshotFirst() {
+  void findsRawHierarchyFirstAndDoesNotTouchCostingSnapshot() {
+    BomRawHierarchy row = new BomRawHierarchy();
+    row.setSourceType("U9");
+    row.setBomPurpose("10");
+    row.setBomVersion("V2");
+    row.setEffectiveFrom(LocalDate.of(2026, 5, 1));
+    row.setBuildBatchId("raw-batch");
+    when(bomRawHierarchyMapper.selectOne(any())).thenReturn(row);
+
+    BomAvailability availability =
+        adapter.findAvailableBom("FI-SC-020-20260707-001", "MAT-1001", "2026-06", "220");
+
+    assertThat(availability.isAvailable()).isTrue();
+    assertThat(availability.getSource()).isEqualTo("U9");
+    assertThat(availability.getBomVersion()).isEqualTo("V2");
+    assertThat(availability.getSyncBatchId()).isEqualTo("raw-batch");
+    assertRawHierarchyQueryUsesPriceOrg("220");
+    verify(bomCostingRowMapper, never()).selectAvailabilitySnapshot(any(), any(), any(), any());
+    verify(bomCostingRowMapper, never()).insert(any(BomCostingRow.class));
+    verify(bomCostingRowMapper, never()).updateById(any(BomCostingRow.class));
+    verify(bomRawHierarchyMapper, never()).insert(any(BomRawHierarchy.class));
+    verify(bomRawHierarchyMapper, never()).updateById(any(BomRawHierarchy.class));
+  }
+
+  @Test
+  void fallsBackToCurrentQuoteSnapshotWhenRawHierarchyMissing() {
     BomCostingRow row = new BomCostingRow();
     row.setBomPurpose("10");
     row.setBomVersion("V1");
@@ -58,21 +83,18 @@ class BomAvailabilityAdapterImplTest {
     assertThat(availability.isAvailable()).isTrue();
     assertThat(availability.getSource()).isEqualTo("COSTING_SNAPSHOT");
     assertThat(availability.getSyncBatchId()).isEqualTo("costing-batch");
+    assertRawHierarchyQueryUsesPriceOrg("210");
     verify(bomCostingRowMapper).selectAvailabilitySnapshot("OA-T7-001", "MAT-1001", "2026-06", "210");
-    verify(bomRawHierarchyMapper, never()).selectOne(any());
   }
 
   @Test
-  void fallsBackToRawHierarchyAndDoesNotModifyBomData() {
+  void rawHierarchyCheckDoesNotModifyBomData() {
     BomRawHierarchy row = new BomRawHierarchy();
     row.setSourceType("U9");
     row.setBomPurpose("10");
     row.setBomVersion("V2");
     row.setEffectiveFrom(LocalDate.of(2026, 5, 1));
     row.setBuildBatchId("raw-batch");
-    when(bomCostingRowMapper.selectAvailabilitySnapshot(
-            "FI-SC-020-20260707-001", "MAT-1001", "2026-06", "220"))
-        .thenReturn(null);
     when(bomRawHierarchyMapper.selectOne(any())).thenReturn(row);
 
     BomAvailability availability =

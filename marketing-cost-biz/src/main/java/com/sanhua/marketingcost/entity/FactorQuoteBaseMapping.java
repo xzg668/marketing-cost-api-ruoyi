@@ -36,6 +36,10 @@ public class FactorQuoteBaseMapping {
   private String matchedKeyword;
   private String matchSource;
   private String confidence;
+
+  /** OA_PRIORITY=OA 有值优先；FACTOR_MONTHLY=直接使用核算月份影响因素价格。 */
+  private String pricePolicy;
+
   private Integer enabled;
 
   @TableField(fill = FieldFill.INSERT)

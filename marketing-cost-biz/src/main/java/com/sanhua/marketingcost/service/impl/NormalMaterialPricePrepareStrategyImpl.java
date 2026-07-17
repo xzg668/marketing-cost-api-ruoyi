@@ -11,10 +11,15 @@ import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.NormalMaterialPricePrepareStrategy;
+import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
+import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
+import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.service.pricing.PriceResolveResult;
 import com.sanhua.marketingcost.service.pricing.PriceResolver;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
@@ -26,6 +31,8 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPricePrepareStrategy {
+
+  private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
 
   static final String STATUS_READY = "READY";
   static final String STATUS_MISSING_PRICE_TYPE = "MISSING_PRICE_TYPE";
@@ -64,13 +71,79 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       String businessUnitType,
       String periodMonth,
       PricePreparePlanItem planItem) {
+    return prepare(
+        oaNo,
+        businessUnitType,
+        periodMonth,
+        LocalDateTime.now(BUSINESS_ZONE),
+        planItem);
+  }
+
+  @Override
+  public NormalMaterialPricePrepareResult prepare(
+      String oaNo,
+      String businessUnitType,
+      String periodMonth,
+      LocalDateTime priceAsOfTime,
+      PricePreparePlanItem planItem) {
+    return prepare(
+        oaNo, businessUnitType, periodMonth, priceAsOfTime, null, planItem);
+  }
+
+  @Override
+  public NormalMaterialPricePrepareResult prepare(
+      String oaNo,
+      String businessUnitType,
+      String periodMonth,
+      LocalDateTime priceAsOfTime,
+      PricePrepareScenarioContext scenarioContext,
+      PricePreparePlanItem planItem) {
+    return execute(
+        oaNo,
+        businessUnitType,
+        periodMonth,
+        priceAsOfTime,
+        scenarioContext,
+        planItem,
+        true);
+  }
+
+  @Override
+  public NormalMaterialPricePrepareResult calculate(
+      String oaNo,
+      String businessUnitType,
+      String periodMonth,
+      LocalDateTime priceAsOfTime,
+      PricePrepareScenarioContext scenarioContext,
+      PricePreparePlanItem planItem) {
+    return execute(
+        oaNo,
+        businessUnitType,
+        periodMonth,
+        priceAsOfTime,
+        scenarioContext,
+        planItem,
+        false);
+  }
+
+  private NormalMaterialPricePrepareResult execute(
+      String oaNo,
+      String businessUnitType,
+      String periodMonth,
+      LocalDateTime priceAsOfTime,
+      PricePrepareScenarioContext scenarioContext,
+      PricePreparePlanItem planItem,
+      boolean persistLinkedPrice) {
     String materialCode = planItem == null ? null : trimToNull(planItem.getMaterialCode());
     if (materialCode == null) {
       return NormalMaterialPricePrepareResult.gap(
           STATUS_FAILED, GAP_TYPE_MISSING_PRICE, PriceResolveResult.SOURCE_ERROR,
           SOURCE_TABLE_PRICE_RESOLVER, "普通料号缺料号，无法取价");
     }
-    LocalDate quoteDate = LocalDate.now();
+    LocalDateTime resolvedPriceAsOfTime = priceAsOfTime == null
+        ? LocalDateTime.now(BUSINESS_ZONE)
+        : priceAsOfTime;
+    LocalDate quoteDate = resolvedPriceAsOfTime.toLocalDate();
     List<PriceTypeRoute> candidates =
         materialPriceRouterService.listCandidates(materialCode, periodMonth, quoteDate);
     if (candidates == null || candidates.isEmpty()) {
@@ -82,14 +155,39 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
           "未配价格类型路由：去价格类型表录入 " + materialCode);
     }
 
-    NormalMaterialPricePrepareResult ensureFailure =
-        ensureLinkedPriceIfNeeded(oaNo, businessUnitType, periodMonth, materialCode, candidates);
-    if (ensureFailure != null) {
-      return ensureFailure;
+    PriceLinkedCalcItem calculatedLinkedPrice = null;
+    if (persistLinkedPrice) {
+      NormalMaterialPricePrepareResult ensureFailure =
+          ensureLinkedPriceIfNeeded(
+              oaNo,
+              businessUnitType,
+              periodMonth,
+              resolvedPriceAsOfTime,
+              materialCode,
+              candidates,
+              scenarioContext);
+      if (ensureFailure != null) {
+        return ensureFailure;
+      }
+    } else if (hasLinkedRoute(candidates)) {
+      calculatedLinkedPrice = calculateLinkedPrice(
+          oaNo,
+          businessUnitType,
+          periodMonth,
+          resolvedPriceAsOfTime,
+          materialCode,
+          scenarioContext);
     }
 
     CostRunPartItemDto resolveItem = toResolveItem(oaNo, planItem);
-    CostRunContext resolveContext = toResolveContext(oaNo, businessUnitType, periodMonth, planItem);
+    CostRunContext resolveContext =
+        toResolveContext(
+            oaNo,
+            businessUnitType,
+            periodMonth,
+            resolvedPriceAsOfTime,
+            planItem,
+            scenarioContext);
     List<String> attemptedBuckets = new ArrayList<>(candidates.size());
     String lastMissReason = null;
     for (PriceTypeRoute route : candidates) {
@@ -102,6 +200,25 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
         continue;
       }
       attemptedBuckets.add(route.priceType().name());
+      if (!persistLinkedPrice && route.priceType() == PriceTypeEnum.LINKED) {
+        if (calculatedLinkedPrice != null && calculatedLinkedPrice.getPartUnitPrice() != null) {
+          BigDecimal unitPrice = calculatedLinkedPrice.getPartUnitPrice();
+          BigDecimal amount = quantity(planItem) == null
+              ? null
+              : unitPrice.multiply(quantity(planItem));
+          return NormalMaterialPricePrepareResult.ready(
+              unitPrice,
+              amount,
+              "联动价",
+              resultRefType(route.priceType()),
+              null,
+              "联动价只读计算完成");
+        }
+        lastMissReason = calculatedLinkedPrice == null
+            ? "联动价只读计算未返回结果"
+            : calculatedLinkedPrice.getCalcMessage();
+        continue;
+      }
       PriceResolveResult result = resolver.resolve(oaNo, resolveItem, route, resolveContext);
       if (result != null && result.unitPrice() != null) {
         BigDecimal amount = quantity(planItem) == null ? null : result.unitPrice().multiply(quantity(planItem));
@@ -131,8 +248,10 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       String oaNo,
       String businessUnitType,
       String periodMonth,
+      LocalDateTime priceAsOfTime,
       String materialCode,
-      List<PriceTypeRoute> candidates) {
+      List<PriceTypeRoute> candidates,
+      PricePrepareScenarioContext scenarioContext) {
     boolean hasLinkedRoute = false;
     for (PriceTypeRoute route : candidates) {
       if (route != null && route.priceType() == PriceTypeEnum.LINKED) {
@@ -145,9 +264,13 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
     }
     // 联动价生成是入口级准备动作，不能藏在 LinkedPriceResolver 里；Resolver 只读取已准备结果。
     try {
+      LinkedPriceEnsureRequest request =
+          LinkedPriceEnsureRequest.quote(
+              oaNo, businessUnitType, periodMonth, Set.of(materialCode));
+      request.setPriceAsOfTime(priceAsOfTime);
+      applyScenario(request, scenarioContext);
       LinkedPriceEnsureResult result =
-          linkedPriceEnsureService.ensure(
-              LinkedPriceEnsureRequest.quote(oaNo, businessUnitType, periodMonth, Set.of(materialCode)));
+          linkedPriceEnsureService.ensure(request);
       if (result != null && result.getFailedCount() > 0) {
         return NormalMaterialPricePrepareResult.gap(
             STATUS_MISSING_PRICE,
@@ -164,6 +287,42 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
           PriceResolveResult.SOURCE_ERROR,
           SOURCE_TABLE_LINKED_ENSURE,
           "联动价按需确保失败：" + ex.getMessage());
+    }
+  }
+
+  private boolean hasLinkedRoute(List<PriceTypeRoute> candidates) {
+    if (candidates == null) {
+      return false;
+    }
+    for (PriceTypeRoute route : candidates) {
+      if (route != null && route.priceType() == PriceTypeEnum.LINKED) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private PriceLinkedCalcItem calculateLinkedPrice(
+      String oaNo,
+      String businessUnitType,
+      String periodMonth,
+      LocalDateTime priceAsOfTime,
+      String materialCode,
+      PricePrepareScenarioContext scenarioContext) {
+    try {
+      LinkedPriceEnsureRequest request =
+          LinkedPriceEnsureRequest.quote(
+              oaNo, businessUnitType, periodMonth, Set.of(materialCode));
+      request.setPriceAsOfTime(priceAsOfTime);
+      applyScenario(request, scenarioContext);
+      List<PriceLinkedCalcItem> calculated = linkedPriceEnsureService.calculate(request);
+      return calculated == null || calculated.isEmpty() ? null : calculated.get(0);
+    } catch (RuntimeException ex) {
+      PriceLinkedCalcItem failed = new PriceLinkedCalcItem();
+      failed.setItemCode(materialCode);
+      failed.setCalcStatus("FAILED");
+      failed.setCalcMessage("联动价只读计算失败：" + ex.getMessage());
+      return failed;
     }
   }
 
@@ -203,8 +362,10 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       String oaNo,
       String businessUnitType,
       String periodMonth,
-      PricePreparePlanItem planItem) {
-    return CostRunContext.quote(
+      LocalDateTime priceAsOfTime,
+      PricePreparePlanItem planItem,
+      PricePrepareScenarioContext scenarioContext) {
+    CostRunContext context = CostRunContext.quote(
         oaNo,
         null,
         planItem == null ? null : planItem.getTopProductCode(),
@@ -212,7 +373,23 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
         null,
         businessUnitType,
         periodMonth,
+        priceAsOfTime,
         "PRICE_PREPARE:" + (planItem == null ? "" : trimToNull(planItem.getMaterialCode())));
+    context.setPriceScenarioType(scenarioType(scenarioContext).name());
+    return context;
+  }
+
+  private void applyScenario(
+      LinkedPriceEnsureRequest request, PricePrepareScenarioContext scenarioContext) {
+    request.setPriceScenarioType(scenarioType(scenarioContext));
+    request.setVariableOverrides(
+        scenarioContext == null ? Map.of() : scenarioContext.variableOverrides());
+  }
+
+  private QuotePriceScenarioType scenarioType(PricePrepareScenarioContext scenarioContext) {
+    return scenarioContext == null || scenarioContext.scenarioType() == null
+        ? QuotePriceScenarioType.OA_LOCKED
+        : scenarioContext.scenarioType();
   }
 
   private BigDecimal quantity(PricePreparePlanItem planItem) {

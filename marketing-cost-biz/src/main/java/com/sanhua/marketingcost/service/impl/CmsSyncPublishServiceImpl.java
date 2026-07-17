@@ -220,6 +220,7 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
             "cms_subject_setting_raw",
             updateWithBusinessUnit(insertSubjectSettingSql(businessUnitType), businessUnitType));
 
+    preserveNewerMaterialScrapMappings(businessUnitType);
     deleteByBusinessUnit("lp_material_scrap_ref", businessUnitType, "COMMERCIAL");
     response
         .getPublishedCounts()
@@ -280,6 +281,64 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
       return jdbcTemplate.update(sql);
     }
     return jdbcTemplate.update(sql, businessUnitType);
+  }
+
+  private void preserveNewerMaterialScrapMappings(String businessUnitType) {
+    String sql = preserveNewerMaterialScrapSql(businessUnitType);
+    if (!StringUtils.hasText(businessUnitType)) {
+      jdbcTemplate.update(sql);
+      return;
+    }
+    jdbcTemplate.update(sql, businessUnitType);
+  }
+
+  String preserveNewerMaterialScrapSql(String businessUnitType) {
+    return """
+        INSERT INTO tmp_lp_material_scrap_ref (
+          material_code, material_name, material_spec, material_unit, scrap_code, scrap_name,
+          scrap_spec, scrap_unit, ratio, effective_from, effective_to, business_unit_type,
+          source_type, source_doc_no, cms_record_id, link_detail_id, cms_posting_period,
+          cms_effective_date, approval_time, sync_time, remark, created_at, updated_at
+        )
+        SELECT
+          live.material_code, live.material_name, live.material_spec, live.material_unit,
+          live.scrap_code, live.scrap_name, live.scrap_spec, live.scrap_unit, live.ratio,
+          live.effective_from, live.effective_to, live.business_unit_type, live.source_type,
+          live.source_doc_no, live.cms_record_id, live.link_detail_id, live.cms_posting_period,
+          live.cms_effective_date, live.approval_time, live.sync_time, live.remark,
+          live.created_at, live.updated_at
+        FROM lp_material_scrap_ref live
+        WHERE live.material_code IS NOT NULL
+          AND TRIM(live.material_code) <> ''
+          AND live.scrap_code IS NOT NULL
+          AND TRIM(live.scrap_code) <> ''
+          AND EXISTS (
+            SELECT 1
+            FROM tmp_lp_material_scrap_ref incoming
+            WHERE COALESCE(incoming.business_unit_type, 'COMMERCIAL') =
+                    COALESCE(live.business_unit_type, 'COMMERCIAL')
+              AND incoming.material_code = live.material_code
+          )
+          AND COALESCE(NULLIF(TRIM(live.cms_posting_period), ''), '') >
+              COALESCE((
+                SELECT MAX(NULLIF(TRIM(candidate.cms_posting_period), ''))
+                FROM tmp_lp_material_scrap_ref candidate
+                WHERE COALESCE(candidate.business_unit_type, 'COMMERCIAL') =
+                        COALESCE(live.business_unit_type, 'COMMERCIAL')
+                  AND candidate.material_code = live.material_code
+              ), '')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM tmp_lp_material_scrap_ref duplicate_row
+            WHERE COALESCE(duplicate_row.business_unit_type, 'COMMERCIAL') =
+                    COALESCE(live.business_unit_type, 'COMMERCIAL')
+              AND duplicate_row.material_code = live.material_code
+              AND duplicate_row.scrap_code = live.scrap_code
+              AND COALESCE(NULLIF(TRIM(duplicate_row.cms_posting_period), ''), '') =
+                    COALESCE(NULLIF(TRIM(live.cms_posting_period), ''), '')
+          )
+        """
+        + businessUnitLiveFilter(businessUnitType, "COMMERCIAL");
   }
 
   private void deleteDefaultEffectiveSources(int costYear, String businessUnitType) {
@@ -408,7 +467,7 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
         + businessUnitFilter(businessUnitType, "");
   }
 
-  private String insertMaterialScrapSql(String businessUnitType) {
+  String insertMaterialScrapSql(String businessUnitType) {
     return """
         INSERT INTO lp_material_scrap_ref (
           material_code, material_name, material_spec, material_unit, scrap_code, scrap_name,
@@ -426,13 +485,16 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
           SELECT
             t.*,
             ROW_NUMBER() OVER (
-              PARTITION BY COALESCE(t.business_unit_type, 'COMMERCIAL'), t.material_code, t.scrap_code
+              PARTITION BY COALESCE(t.business_unit_type, 'COMMERCIAL'), t.material_code
               ORDER BY
-                t.sync_time DESC,
-                t.approval_time DESC,
                 t.cms_posting_period DESC,
+                t.cms_effective_date DESC,
+                t.approval_time DESC,
+                t.sync_time DESC,
+                t.updated_at DESC,
                 t.source_doc_no DESC,
-                t.cms_record_id DESC
+                t.cms_record_id DESC,
+                t.scrap_code DESC
             ) AS row_rank
           FROM tmp_lp_material_scrap_ref t
           WHERE t.material_code IS NOT NULL
@@ -457,5 +519,12 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
       return "";
     }
     return " AND COALESCE(ranked.business_unit_type, '" + defaultBusinessUnit + "') = ?";
+  }
+
+  private String businessUnitLiveFilter(String businessUnitType, String defaultBusinessUnit) {
+    if (!StringUtils.hasText(businessUnitType)) {
+      return "";
+    }
+    return " AND COALESCE(live.business_unit_type, '" + defaultBusinessUnit + "') = ?";
   }
 }

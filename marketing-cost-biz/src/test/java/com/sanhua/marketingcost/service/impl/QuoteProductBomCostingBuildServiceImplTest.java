@@ -21,7 +21,9 @@ import com.sanhua.marketingcost.dto.quotebom.QuoteBomSourceLineDto;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomCostingRowSourceRef;
 import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
+import com.sanhua.marketingcost.entity.BomSettlementRule;
 import com.sanhua.marketingcost.entity.BomSupplementTask;
+import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomPackageReference;
 import com.sanhua.marketingcost.entity.QuoteBomPackageReferenceDetail;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
@@ -164,6 +166,10 @@ class QuoteProductBomCostingBuildServiceImplTest {
 
   @Test
   void nonBareFormalBuildReusesExistingFlattenAndWritesRawSourceRefs() {
+    SecurityContextHolder.clearContext();
+    OaFormItem oaItem = new OaFormItem();
+    oaItem.setBusinessUnitType("COMMERCIAL");
+    when(oaFormItemMapper.selectById(10L)).thenReturn(oaItem);
     QuoteBomPreparationRecord record = record("NON_BARE", null);
     when(preparationRecordMapper.selectOne(any())).thenReturn(record);
     FlattenResult flattenResult = new FlattenResult();
@@ -181,6 +187,7 @@ class QuoteProductBomCostingBuildServiceImplTest {
     assertThat(flattenCaptor.getValue().getPeriodMonth()).isEqualTo("2026-05");
     assertThat(flattenCaptor.getValue().getPriceOrgCode()).isEqualTo("210");
     assertThat(flattenCaptor.getValue().getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
+    assertThat(flattenCaptor.getValue().getBusinessUnitType()).isEqualTo("COMMERCIAL");
     ArgumentCaptor<BomCostingRowSourceRef> refCaptor = ArgumentCaptor.forClass(BomCostingRowSourceRef.class);
     verify(sourceRefMapper, org.mockito.Mockito.times(2)).insert(refCaptor.capture());
     assertThat(refCaptor.getAllValues()).allSatisfy(ref -> assertThat(ref.getSourcePartType()).isEqualTo("RAW_PRODUCT_BOM"));
@@ -311,7 +318,32 @@ class QuoteProductBomCostingBuildServiceImplTest {
   }
 
   @Test
-  void preparedRowsPassRecordPriceOrgToByproductRead() {
+  void crossOrganizationFormalRowsKeepCommercialOrganizationAfterSettlementBuild() {
+    QuoteBomPreparationRecord record = record("NON_BARE", 501L);
+    record.setReviewStatus("APPROVED");
+    record.setPriceOrgCode("220");
+    record.setMaterialOrganizationCode("PLATE");
+    when(taskMapper.selectById(501L)).thenReturn(task("APPROVED"));
+    when(preparationRecordMapper.selectOne(any())).thenReturn(record);
+    FlattenResult flattened = new FlattenResult();
+    flattened.setCostingRowsWritten(1);
+    when(flattenService.flatten(any(FlattenRequest.class))).thenReturn(flattened);
+    BomCostingRow commercialRow = costingRow("PIPE-RAW");
+    commercialRow.setPriceOrgCode("210");
+    commercialRow.setMaterialOrganizationCode("COMMERCIAL");
+    when(costingRowMapper.selectList(any())).thenReturn(List.of(commercialRow));
+
+    QuoteBomCostingBuildResponse response = service.buildByTask(501L);
+
+    assertThat(response.costingRowsWritten()).isEqualTo(1);
+    ArgumentCaptor<BomCostingRow> rowCaptor = ArgumentCaptor.forClass(BomCostingRow.class);
+    verify(costingRowMapper).updateById(rowCaptor.capture());
+    assertThat(rowCaptor.getValue().getPriceOrgCode()).isEqualTo("210");
+    assertThat(rowCaptor.getValue().getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
+  }
+
+  @Test
+  void preparedRowsPassPriceOrgAndCommercialBusinessUnitToByproductRead() {
     QuoteBomPreparationRecord record = record("NON_BARE", 501L);
     record.setReviewStatus("APPROVED");
     record.setPriceOrgCode("220");
@@ -325,6 +357,27 @@ class QuoteProductBomCostingBuildServiceImplTest {
 
     verify(byproductSettlementAdapter)
         .read(any(), any(), eq("220"), eq("COMMERCIAL"), eq("主制造"));
+  }
+
+  @Test
+  void formalBomAuxiliaryExcludeUsesMainCategoryNameFromSourceLine() {
+    QuoteBomPreparationRecord record = record("BARE", 501L);
+    record.setReviewStatus("APPROVED");
+    when(taskMapper.selectById(501L)).thenReturn(task("APPROVED"));
+    when(preparationRecordMapper.selectOne(any())).thenReturn(record);
+    when(supplementVersionMapper.selectOne(any())).thenReturn(null);
+    when(packageReferenceMapper.selectOne(any())).thenReturn(packageReference());
+    when(formalBomReadService.read(any(), any(), any(), any(), any(QuoteDataOrganization.class)))
+        .thenReturn(formalFound("OIL-1", "冷冻油", "181851454", "油类"));
+    when(packageReferenceDetailMapper.selectList(any())).thenReturn(List.of(packageDetail("BOX-1")));
+    when(settlementRuleQueryService.listEnabledCandidates()).thenReturn(List.of(auxiliaryExcludeRule()));
+
+    QuoteBomCostingBuildResponse response = service.buildByTask(501L);
+
+    assertThat(response.costingRowsWritten()).isEqualTo(1);
+    ArgumentCaptor<BomCostingRow> rowCaptor = ArgumentCaptor.forClass(BomCostingRow.class);
+    verify(costingRowMapper).insert(rowCaptor.capture());
+    assertThat(rowCaptor.getValue().getMaterialCode()).isEqualTo("BOX-1");
   }
 
   @Test
@@ -473,6 +526,11 @@ class QuoteProductBomCostingBuildServiceImplTest {
   }
 
   private FormalBomReadResult formalFound() {
+    return formalFound("BODY-RAW", "本体材料", "1201", "零部件类");
+  }
+
+  private FormalBomReadResult formalFound(
+      String materialCode, String materialName, String mainCategoryCode, String mainCategoryName) {
     return new FormalBomReadResult(
         "REF-001",
         "2026-05",
@@ -485,13 +543,14 @@ class QuoteProductBomCostingBuildServiceImplTest {
                 1,
                 "FIN-001",
                 "FIN-001",
-                "BODY-RAW",
-                "本体材料",
+                materialCode,
+                materialName,
                 "规格",
                 null,
                 null,
                 "实体",
-                "1201",
+                mainCategoryCode,
+                mainCategoryName,
                 "PCS",
                 "采购件",
                 "CE",
@@ -500,7 +559,7 @@ class QuoteProductBomCostingBuildServiceImplTest {
                 BigDecimal.ONE,
                 BigDecimal.ONE,
                 null,
-                "/FIN-001/BODY-RAW/",
+                "/FIN-001/" + materialCode + "/",
                 1,
                 301L,
                 null,
@@ -508,6 +567,25 @@ class QuoteProductBomCostingBuildServiceImplTest {
                 "210",
                 "COMMERCIAL")),
         null);
+  }
+
+  private BomSettlementRule auxiliaryExcludeRule() {
+    BomSettlementRule rule = new BomSettlementRule();
+    rule.setId(7L);
+    rule.setRuleCode("AUXILIARY_EXCLUDE_OIL");
+    rule.setRuleName("辅料排除：油类");
+    rule.setRuleCategory("AUXILIARY_EXCLUDE");
+    rule.setSettlementAction("EXCLUDE");
+    rule.setSettlementRowType("EXCLUDED");
+    rule.setMatchConditionJson("""
+        {"nodeConditions":[
+          {"field":"material_category_code","op":"PREFIX","value":"18"},
+          {"field":"main_category_name","op":"EQ","value":"油类"}
+        ]}
+        """);
+    rule.setPriority(41);
+    rule.setEnabled(1);
+    return rule;
   }
 
   private BomCostingRow costingRow(String code) {

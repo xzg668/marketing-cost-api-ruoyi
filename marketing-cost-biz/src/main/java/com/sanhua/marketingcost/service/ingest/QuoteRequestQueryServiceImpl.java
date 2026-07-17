@@ -21,7 +21,9 @@ import com.sanhua.marketingcost.entity.OaFormExtraFee;
 import com.sanhua.marketingcost.entity.OaFormHeaderExtraField;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.OaFormItemExtraField;
+import com.sanhua.marketingcost.entity.QuoteBomConfirmation;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
+import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.QuoteIngestLog;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.QuoteBomStatusCode;
@@ -32,13 +34,18 @@ import com.sanhua.marketingcost.mapper.OaFormHeaderExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
+import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
+import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteIngestLogMapper;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -55,7 +62,9 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   private final OaFormExtraFeeMapper oaFormExtraFeeMapper;
   private final OaFormHeaderExtraFieldMapper oaFormHeaderExtraFieldMapper;
   private final OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper;
+  private final QuoteBomConfirmationMapper quoteBomConfirmationMapper;
   private final QuoteBomStatusMapper quoteBomStatusMapper;
+  private final QuoteCostRunVersionMapper quoteCostRunVersionMapper;
   private final QuoteIngestLogMapper quoteIngestLogMapper;
   private final U9ProductPackagingTypeResolver productPackagingTypeResolver;
 
@@ -65,7 +74,9 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
       OaFormExtraFeeMapper oaFormExtraFeeMapper,
       OaFormHeaderExtraFieldMapper oaFormHeaderExtraFieldMapper,
       OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper,
+      QuoteBomConfirmationMapper quoteBomConfirmationMapper,
       QuoteBomStatusMapper quoteBomStatusMapper,
+      QuoteCostRunVersionMapper quoteCostRunVersionMapper,
       QuoteIngestLogMapper quoteIngestLogMapper,
       U9ProductPackagingTypeResolver productPackagingTypeResolver) {
     this.oaFormMapper = oaFormMapper;
@@ -73,7 +84,9 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     this.oaFormExtraFeeMapper = oaFormExtraFeeMapper;
     this.oaFormHeaderExtraFieldMapper = oaFormHeaderExtraFieldMapper;
     this.oaFormItemExtraFieldMapper = oaFormItemExtraFieldMapper;
+    this.quoteBomConfirmationMapper = quoteBomConfirmationMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
+    this.quoteCostRunVersionMapper = quoteCostRunVersionMapper;
     this.quoteIngestLogMapper = quoteIngestLogMapper;
     this.productPackagingTypeResolver = productPackagingTypeResolver;
   }
@@ -227,6 +240,9 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     List<OaFormItem> items = listItems(form.getId());
     List<QuoteBomStatus> statuses = listBomStatus(form.getOaNo());
     Map<Long, QuoteBomStatus> statusByItemId = toStatusMap(statuses);
+    Map<Long, QuoteCostRunVersion> latestCostRunByItemId =
+        latestCostRunByItemId(form.getOaNo(), items);
+    Set<Long> startedCostingItemIds = startedCostingItemIds(form.getOaNo(), items);
     String bomAggregateStatus = aggregateBomStatus(items.size(), statuses);
 
     QuoteRequestDetailResponse response = toDetailHeader(form);
@@ -234,7 +250,15 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setBomAggregateStatus(bomAggregateStatus);
     response.setCalculable(isCalculable(form, items.size(), bomAggregateStatus));
     for (OaFormItem item : items) {
-      response.getItems().add(toItemResponse(form, item, statusByItemId.get(item.getId())));
+      response
+          .getItems()
+          .add(
+              toItemResponse(
+                  form,
+                  item,
+                  statusByItemId.get(item.getId()),
+                  latestCostRunByItemId.get(item.getId()),
+                  startedCostingItemIds.contains(item.getId())));
     }
     for (OaFormExtraFee fee : listExtraFees(form.getId())) {
       response.getExtraFees().add(toExtraFee(fee));
@@ -297,7 +321,12 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     return response;
   }
 
-  private QuoteRequestItemResponse toItemResponse(OaForm form, OaFormItem item, QuoteBomStatus status) {
+  private QuoteRequestItemResponse toItemResponse(
+      OaForm form,
+      OaFormItem item,
+      QuoteBomStatus status,
+      QuoteCostRunVersion latestCostRun,
+      boolean costingStarted) {
     QuoteRequestItemResponse response = new QuoteRequestItemResponse();
     response.setId(item.getId());
     response.setSeq(item.getSeq());
@@ -338,11 +367,94 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setCopperWeightG(item.getCopperWeightG());
     response.setBusinessUnitType(item.getBusinessUnitType());
     response.setValidDate(item.getValidDate());
-    response.setCalcStatus(normalizeCalcStatus(item.getCalcStatus(), item.getCalcAt() != null || item.getConfirmedCostVersionId() != null));
+    response.setCalcStatus(resolveItemCalcStatus(item, latestCostRun, costingStarted));
     response.setCalcAt(item.getCalcAt());
     response.setConfirmedCostVersionId(item.getConfirmedCostVersionId());
     response.setBomStatus(toBomStatusResponse(form, item, status));
     return response;
+  }
+
+  private Map<Long, QuoteCostRunVersion> latestCostRunByItemId(
+      String oaNo, List<OaFormItem> items) {
+    List<Long> itemIds =
+        items == null
+            ? List.of()
+            : items.stream()
+                .map(OaFormItem::getId)
+                .filter(id -> id != null)
+                .distinct()
+                .toList();
+    if (itemIds.isEmpty()) {
+      return Map.of();
+    }
+    List<QuoteCostRunVersion> versions =
+        quoteCostRunVersionMapper.selectList(
+            Wrappers.lambdaQuery(QuoteCostRunVersion.class)
+                .eq(QuoteCostRunVersion::getOaNo, oaNo)
+                .in(QuoteCostRunVersion::getOaFormItemId, itemIds)
+                .in(QuoteCostRunVersion::getStatus, List.of("TRIAL", "CONFIRMED"))
+                .orderByDesc(QuoteCostRunVersion::getId));
+    Map<Long, QuoteCostRunVersion> result = new LinkedHashMap<>();
+    if (versions == null) {
+      return result;
+    }
+    for (QuoteCostRunVersion version : versions) {
+      if (version != null && version.getOaFormItemId() != null) {
+        result.putIfAbsent(version.getOaFormItemId(), version);
+      }
+    }
+    return result;
+  }
+
+  private Set<Long> startedCostingItemIds(String oaNo, List<OaFormItem> items) {
+    List<Long> itemIds =
+        items == null
+            ? List.of()
+            : items.stream()
+                .map(OaFormItem::getId)
+                .filter(id -> id != null)
+                .distinct()
+                .toList();
+    if (itemIds.isEmpty()) {
+      return Set.of();
+    }
+    List<QuoteBomConfirmation> confirmations =
+        quoteBomConfirmationMapper.selectList(
+            Wrappers.lambdaQuery(QuoteBomConfirmation.class)
+                .eq(QuoteBomConfirmation::getOaNo, oaNo)
+                .in(QuoteBomConfirmation::getOaFormItemId, itemIds)
+                .eq(
+                    QuoteBomConfirmation::getPeriodMonth,
+                    CostPricingPeriodUtils.currentPricingMonth())
+                .orderByDesc(QuoteBomConfirmation::getId));
+    Set<Long> result = new LinkedHashSet<>();
+    if (confirmations == null) {
+      return result;
+    }
+    for (QuoteBomConfirmation confirmation : confirmations) {
+      if (confirmation != null && confirmation.getOaFormItemId() != null) {
+        result.add(confirmation.getOaFormItemId());
+      }
+    }
+    return result;
+  }
+
+  private String resolveItemCalcStatus(
+      OaFormItem item, QuoteCostRunVersion latestCostRun, boolean costingStarted) {
+    String itemStatus = normalizeCalcStatus(item.getCalcStatus(), false);
+    if ("试算中".equals(itemStatus)
+        || (latestCostRun != null && "TRIAL".equalsIgnoreCase(latestCostRun.getStatus()))) {
+      return "试算中";
+    }
+    boolean hasConfirmedCost =
+        item.getCalcAt() != null
+            || item.getConfirmedCostVersionId() != null
+            || (latestCostRun != null
+                && "CONFIRMED".equalsIgnoreCase(latestCostRun.getStatus()));
+    if (hasConfirmedCost) {
+      return "已核算";
+    }
+    return costingStarted ? "试算中" : "未核算";
   }
 
   private QuoteBomStatusItemResponse toBomStatusResponse(OaForm form, OaFormItem item, QuoteBomStatus status) {
@@ -382,10 +494,13 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   private void applyProductPackagingType(
       QuoteBomStatusItemResponse response, OaForm form, OaFormItem item) {
     QuoteDataOrganization organization =
-        MaterialOrganization.quoteDataForQuoteProcess(
+        MaterialOrganization.quoteDataForQuoteProduct(
             form == null ? null : form.getProcessCode(),
             form == null ? null : form.getOaNo(),
-            item == null ? null : item.getBusinessUnitType());
+            item == null ? null : item.getBusinessUnitType(),
+            item == null ? null : item.getProductName(),
+            item == null ? null : item.getSunlModel(),
+            item == null ? null : item.getMaterialNo());
     U9ProductPackagingTypeResolver.Result result =
         productPackagingTypeResolver.resolve(
             response.getProductCode(), organization.materialOrganizationCode());

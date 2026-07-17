@@ -168,6 +168,12 @@ public class QuotePricePreparePartItemProviderImpl implements CostRunPreparedPar
     dto.setUnitPrice(item.getUnitPrice());
     dto.setAmount(item.getAmount());
     dto.setRemark(remark(item));
+    dto.setPriceOrgCode(firstText(
+        bomRow == null ? null : bomRow.getPriceOrgCode(),
+        context.getPriceOrgCode()));
+    dto.setMaterialOrganizationCode(firstText(
+        bomRow == null ? null : bomRow.getMaterialOrganizationCode(),
+        context.getMaterialOrganizationCode()));
     return dto;
   }
 

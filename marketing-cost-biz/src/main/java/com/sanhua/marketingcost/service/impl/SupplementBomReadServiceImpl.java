@@ -140,6 +140,7 @@ public class SupplementBomReadServiceImpl implements SupplementBomReadService {
         detail.getDrawingNo(),
         detail.getShapeAttr(),
         detail.getMainCategoryCode(),
+        detail.getMainCategoryCode(),
         detail.getUnit(),
         detail.getSourceCategory(),
         detail.getCostElementCode(),

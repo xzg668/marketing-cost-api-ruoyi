@@ -74,6 +74,7 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "  price_org_code = VALUES(price_org_code),"
           + "  material_organization_code = VALUES(material_organization_code),"
           + "  period_month = VALUES(period_month),"
+          + "  business_unit_type = VALUES(business_unit_type),"
           + "  manual_modified = VALUES(manual_modified),"
           + "  modified_by = VALUES(modified_by),"
           + "  modified_at = VALUES(modified_at)"

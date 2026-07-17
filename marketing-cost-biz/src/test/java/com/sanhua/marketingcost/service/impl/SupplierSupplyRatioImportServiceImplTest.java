@@ -1,7 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -19,8 +18,6 @@ import com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,9 +32,6 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 class SupplierSupplyRatioImportServiceImplTest {
-  private static final Path REAL_SAMPLE =
-      Path.of("/Users/xiexicheng/Documents/sales_cost/3 产品成本计算表（3.29- 提供）5.15改.xls");
-
   private SupplierSupplyRatioMapper mapper;
   private SupplierSupplyRatioImportServiceImpl service;
 
@@ -230,14 +224,12 @@ class SupplierSupplyRatioImportServiceImplTest {
   }
 
   @Test
-  @DisplayName("SSR-09 真实 Excel 重复导入：同业务键更新，不增加总行数")
-  void realExcelRepeatedImportIsIdempotentByBusinessKey() throws Exception {
-    assumeTrue(Files.exists(REAL_SAMPLE), "真实 Excel 不存在，跳过本地回归");
-
+  @DisplayName("SSR-09 完整内存夹具重复导入：同业务键更新，不增加总行数")
+  void fullFixtureRepeatedImportIsIdempotentByBusinessKey() throws Exception {
     SupplierSupplyRatioWorkbookParserImpl parser = new SupplierSupplyRatioWorkbookParserImpl();
     List<SupplierSupplyRatioExcelRow> parsedRows;
-    try (var input = Files.newInputStream(REAL_SAMPLE)) {
-      parsedRows = parser.parse(input, REAL_SAMPLE.getFileName().toString()).getRows();
+    try (var input = workbookWithValidRows(51)) {
+      parsedRows = parser.parse(input, "supply-ratio-fixture.xlsx").getRows();
     }
     assertThat(parsedRows).hasSize(51);
     long uniqueKeys = parsedRows.stream().map(this::keyOf).distinct().count();
@@ -263,12 +255,12 @@ class SupplierSupplyRatioImportServiceImplTest {
     });
 
     SupplierSupplyRatioImportResponse first;
-    try (var input = Files.newInputStream(REAL_SAMPLE)) {
-      first = service.importExcel(input, REAL_SAMPLE.getFileName().toString(), "COMMERCIAL", "alice");
+    try (var input = workbookWithValidRows(51)) {
+      first = service.importExcel(input, "supply-ratio-fixture.xlsx", "COMMERCIAL", "alice");
     }
     SupplierSupplyRatioImportResponse second;
-    try (var input = Files.newInputStream(REAL_SAMPLE)) {
-      second = service.importExcel(input, REAL_SAMPLE.getFileName().toString(), "COMMERCIAL", "bob");
+    try (var input = workbookWithValidRows(51)) {
+      second = service.importExcel(input, "supply-ratio-fixture.xlsx", "COMMERCIAL", "bob");
     }
 
     assertThat(first.getTotalRows()).isEqualTo(51);
@@ -366,6 +358,34 @@ class SupplierSupplyRatioImportServiceImplTest {
       excelRow(sheet, 3, "", "小阀座", "SHF-01", "个", "B", "供应商C", "0.6");
       excelRow(sheet, 4, "203240252", "小阀座", "SHF-01", "个", "B", "", "0.6");
       excelRow(sheet, 5, "203240253", "小阀座", "SHF-01", "个", "B", "供应商D", "abc");
+      workbook.write(out);
+      return new ByteArrayInputStream(out.toByteArray());
+    }
+  }
+
+  private ByteArrayInputStream workbookWithValidRows(int rowCount) throws Exception {
+    try (XSSFWorkbook workbook = new XSSFWorkbook();
+        ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+      Sheet sheet = workbook.createSheet("供货比例-SRM");
+      Row header = sheet.createRow(0);
+      List<String> headers = List.of(
+          "物料代码", "物料名称", "型号", "单位", "物料形态属性", "供应商", "供货比例",
+          "规则：取供货比例大的");
+      for (int i = 0; i < headers.size(); i++) {
+        header.createCell(i).setCellValue(headers.get(i));
+      }
+      for (int i = 0; i < rowCount; i++) {
+        excelRow(
+            sheet,
+            i + 1,
+            "MAT-" + i,
+            "物料" + i,
+            "MODEL-" + i,
+            "只",
+            "采购件",
+            "供应商" + i,
+            i % 2 == 0 ? "60%" : "0.6");
+      }
       workbook.write(out);
       return new ByteArrayInputStream(out.toByteArray());
     }

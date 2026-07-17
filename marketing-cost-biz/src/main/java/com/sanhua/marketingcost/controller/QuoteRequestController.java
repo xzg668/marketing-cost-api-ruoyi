@@ -16,6 +16,7 @@ import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunConfirmRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunTrialRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunWorkbenchResponse;
+import com.sanhua.marketingcost.dto.quotecosting.QuoteCuMaterialDifferenceResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeAdjustRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmationActionResponse;
@@ -23,6 +24,7 @@ import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmationRespo
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeImportMissingRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse;
+import com.sanhua.marketingcost.service.BusinessUnitRepriceLockGuard;
 import com.sanhua.marketingcost.service.QuoteBomConfirmationService;
 import com.sanhua.marketingcost.service.QuoteCostRunWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
@@ -53,6 +55,7 @@ public class QuoteRequestController {
   private final QuotePriceTypeConfirmationService quotePriceTypeConfirmationService;
   private final QuotePricePrepareWorkbenchService quotePricePrepareWorkbenchService;
   private final QuoteCostRunWorkbenchService quoteCostRunWorkbenchService;
+  private final BusinessUnitRepriceLockGuard repriceLockGuard;
 
   public QuoteRequestController(
       QuoteRequestQueryService quoteRequestQueryService,
@@ -60,13 +63,15 @@ public class QuoteRequestController {
       QuoteBomConfirmationService quoteBomConfirmationService,
       QuotePriceTypeConfirmationService quotePriceTypeConfirmationService,
       QuotePricePrepareWorkbenchService quotePricePrepareWorkbenchService,
-      QuoteCostRunWorkbenchService quoteCostRunWorkbenchService) {
+      QuoteCostRunWorkbenchService quoteCostRunWorkbenchService,
+      BusinessUnitRepriceLockGuard repriceLockGuard) {
     this.quoteRequestQueryService = quoteRequestQueryService;
     this.quoteCostingWorkbenchService = quoteCostingWorkbenchService;
     this.quoteBomConfirmationService = quoteBomConfirmationService;
     this.quotePriceTypeConfirmationService = quotePriceTypeConfirmationService;
     this.quotePricePrepareWorkbenchService = quotePricePrepareWorkbenchService;
     this.quoteCostRunWorkbenchService = quoteCostRunWorkbenchService;
+    this.repriceLockGuard = repriceLockGuard;
   }
 
   @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
@@ -88,10 +93,40 @@ public class QuoteRequestController {
   public CommonResult<QuoteCostRunWorkbenchResponse> costRun(
       @PathVariable("oaNo") String oaNo,
       @PathVariable("oaFormItemId") Long oaFormItemId,
-      @RequestParam(value = "periodMonth", required = false) String periodMonth) {
+      @RequestParam(value = "periodMonth", required = false) String periodMonth,
+      @RequestParam(value = "versionId", required = false) Long versionId) {
     try {
       return CommonResult.success(
-          quoteCostRunWorkbenchService.getCostRun(oaNo, oaFormItemId, periodMonth));
+          quoteCostRunWorkbenchService.getCostRun(oaNo, oaFormItemId, periodMonth, versionId));
+    } catch (QuoteIngestException | IllegalArgumentException ex) {
+      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
+    }
+  }
+
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
+  @GetMapping("/{oaNo}/items/{oaFormItemId}/cost-run/{costRunNo}/cu-material-differences")
+  public CommonResult<PageResult<QuoteCuMaterialDifferenceResponse>> cuMaterialDifferences(
+      @PathVariable("oaNo") String oaNo,
+      @PathVariable("oaFormItemId") Long oaFormItemId,
+      @PathVariable("costRunNo") String costRunNo,
+      @RequestParam(value = "pageNo", required = false) Integer pageNo,
+      @RequestParam(value = "pageSize", required = false) Integer pageSize,
+      @RequestParam(value = "parentMaterialCode", required = false) String parentMaterialCode,
+      @RequestParam(value = "materialCode", required = false) String materialCode,
+      @RequestParam(value = "onlyDifferent", required = false) Boolean onlyDifferent,
+      @RequestParam(value = "differenceSign", required = false) String differenceSign) {
+    try {
+      return CommonResult.success(
+          quoteCostRunWorkbenchService.pageCuMaterialDifferences(
+              oaNo,
+              oaFormItemId,
+              costRunNo,
+              pageNo,
+              pageSize,
+              parentMaterialCode,
+              materialCode,
+              onlyDifferent,
+              differenceSign));
     } catch (QuoteIngestException | IllegalArgumentException ex) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
     }
@@ -104,8 +139,9 @@ public class QuoteRequestController {
       @PathVariable("oaFormItemId") Long oaFormItemId,
       @RequestBody(required = false) QuoteCostRunTrialRequest request) {
     try {
+      repriceLockGuard.assertCostRunAllowed(oaNo);
       return CommonResult.success(quoteCostRunWorkbenchService.trial(oaNo, oaFormItemId, request));
-    } catch (QuoteIngestException | IllegalArgumentException ex) {
+    } catch (QuoteIngestException | IllegalArgumentException | IllegalStateException ex) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
     }
   }
@@ -133,10 +169,10 @@ public class QuoteRequestController {
       @PathVariable("versionId") Long versionId,
       HttpServletResponse response)
       throws IOException {
-    String fileName = "cost-run_" + oaNo + "_" + oaFormItemId + "_" + versionId + ".csv";
+    String fileName = "cost-run_" + oaNo + "_" + oaFormItemId + "_" + versionId + ".xlsx";
     String encoded = URLEncoder.encode(fileName, StandardCharsets.UTF_8).replace("+", "%20");
-    response.setContentType("text/csv;charset=UTF-8");
-    response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+    response.setContentType(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     response.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + encoded);
     try {
       quoteCostRunWorkbenchService.exportVersion(
@@ -232,6 +268,20 @@ public class QuoteRequestController {
     try {
       return CommonResult.success(
           quotePricePrepareWorkbenchService.getPricePrepare(oaNo, oaFormItemId, periodMonth));
+    } catch (QuoteIngestException | IllegalArgumentException ex) {
+      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
+    }
+  }
+
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
+  @PostMapping("/{oaNo}/items/{oaFormItemId}/price-prepare/check")
+  public CommonResult<QuotePricePrepareWorkbenchResponse> checkPriceSources(
+      @PathVariable("oaNo") String oaNo,
+      @PathVariable("oaFormItemId") Long oaFormItemId,
+      @RequestBody(required = false) QuotePricePrepareGenerateRequest request) {
+    try {
+      return CommonResult.success(
+          quotePricePrepareWorkbenchService.checkPriceSources(oaNo, oaFormItemId, request));
     } catch (QuoteIngestException | IllegalArgumentException ex) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
     }

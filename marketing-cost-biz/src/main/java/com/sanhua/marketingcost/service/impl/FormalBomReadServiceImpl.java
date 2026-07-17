@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -26,11 +27,25 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
 
   private final BomRawHierarchyMapper bomRawHierarchyMapper;
   private final MaterialMasterRawMapper materialMasterRawMapper;
+  private final PlateCommercialMakeBomExpansionService crossOrganizationExpansionService;
 
   public FormalBomReadServiceImpl(
       BomRawHierarchyMapper bomRawHierarchyMapper, MaterialMasterRawMapper materialMasterRawMapper) {
+    this(
+        bomRawHierarchyMapper,
+        materialMasterRawMapper,
+        new PlateCommercialMakeBomExpansionService(
+            bomRawHierarchyMapper, materialMasterRawMapper));
+  }
+
+  @Autowired
+  public FormalBomReadServiceImpl(
+      BomRawHierarchyMapper bomRawHierarchyMapper,
+      MaterialMasterRawMapper materialMasterRawMapper,
+      PlateCommercialMakeBomExpansionService crossOrganizationExpansionService) {
     this.bomRawHierarchyMapper = bomRawHierarchyMapper;
     this.materialMasterRawMapper = materialMasterRawMapper;
+    this.crossOrganizationExpansionService = crossOrganizationExpansionService;
   }
 
   @Override
@@ -97,15 +112,49 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
           "未在 lp_bom_raw_hierarchy 找到有效连通 BOM");
     }
 
+    PlateCommercialMakeBomExpansionService.ExpansionResult expansion =
+        crossOrganizationExpansionService.expand(
+            rows,
+            normalizedProductCode,
+            effectiveDate,
+            normalizedBomPurpose,
+            "U9",
+            organization);
+    if (expansion.hasGaps()) {
+      return new FormalBomReadResult(
+          normalizedProductCode,
+          normalizedPeriodMonth,
+          normalizedBomPurpose,
+          false,
+          List.of(),
+          "跨组织制造 BOM 展开失败：" + String.join("；", expansion.gaps()));
+    }
+    rows = expansion.rows();
+
     List<BomRawHierarchy> sorted = rows.stream().sorted(rowComparator()).toList();
-    Map<String, MaterialMasterRaw> masterByCode = selectMasterByCode(
-        sorted.stream().map(BomRawHierarchy::getMaterialCode).collect(Collectors.toCollection(LinkedHashSet::new)),
-        organization.materialOrganizationCode());
+    Map<String, MaterialMasterRaw> masterByCode =
+        MaterialOrganization.PLATE.getCode().equals(organization.materialOrganizationCode())
+            ? expansion.plateMasters()
+            : selectMasterByCode(
+                sorted.stream()
+                    .map(BomRawHierarchy::getMaterialCode)
+                    .collect(Collectors.toCollection(LinkedHashSet::new)),
+                organization.materialOrganizationCode());
+    Map<String, MaterialMasterRaw> commercialMasterByCode =
+        MaterialOrganization.COMMERCIAL.getCode().equals(
+                organization.materialOrganizationCode())
+            ? masterByCode
+            : expansion.commercialMasters();
     List<QuoteBomSourceLineDto> lines = new java.util.ArrayList<>(sorted.size());
     int lineNo = 1;
     for (BomRawHierarchy row : sorted) {
-      MaterialMasterRaw master = masterByCode.get(trimToNull(row.getMaterialCode()));
-      lines.add(toLine(row, master, lineNo++, organization));
+      QuoteDataOrganization lineOrganization = lineOrganization(row, organization);
+      MaterialMasterRaw master =
+          MaterialOrganization.COMMERCIAL.getCode().equals(
+                  lineOrganization.materialOrganizationCode())
+              ? commercialMasterByCode.get(trimToNull(row.getMaterialCode()))
+              : masterByCode.get(trimToNull(row.getMaterialCode()));
+      lines.add(toLine(row, master, lineNo++, lineOrganization));
     }
     return new FormalBomReadResult(
         normalizedProductCode, normalizedPeriodMonth, normalizedBomPurpose, true, lines, null);
@@ -128,7 +177,8 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
         master == null ? null : trimToNull(master.getMaterialModel()),
         master == null ? null : trimToNull(master.getDrawingNo()),
         firstText(row.getShapeAttr(), master == null ? null : master.getShapeAttr()),
-        master == null ? null : trimToNull(master.getMainCategoryCode()),
+        firstText(master == null ? null : master.getMainCategoryCode(), row.getMaterialCategory1()),
+        firstText(master == null ? null : master.getMainCategoryName(), row.getMaterialCategory2()),
         master == null ? null : trimToNull(master.getUnit()),
         row.getSourceCategory(),
         row.getCostElementCode(),
@@ -144,6 +194,15 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
         0,
         firstText(row.getPriceOrgCode(), organization.priceOrgCode()),
         organization.materialOrganizationCode());
+  }
+
+  private QuoteDataOrganization lineOrganization(
+      BomRawHierarchy row, QuoteDataOrganization fallback) {
+    String priceOrgCode = trimToNull(row == null ? null : row.getPriceOrgCode());
+    if (priceOrgCode == null) {
+      return fallback;
+    }
+    return MaterialOrganization.fromPriceOrgCode(priceOrgCode).toQuoteDataOrganization();
   }
 
   private Map<String, MaterialMasterRaw> selectMasterByCode(

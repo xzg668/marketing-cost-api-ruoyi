@@ -55,6 +55,7 @@ public interface QuoteCostingWorkbenchSummaryMapper {
           + "top_product_code AS topProductCode, price_type_confirm_no AS priceTypeConfirmNo, "
           + "period_month AS periodMonth, status, total_count AS totalCount, "
           + "success_count AS successCount, warning_count AS warningCount, gap_count AS gapCount, "
+          + "price_as_of_time AS priceAsOfTime, price_as_of_source AS priceAsOfSource, "
           + "started_at AS startedAt, finished_at AS finishedAt, message "
           + "FROM lp_price_prepare_batch "
           + "WHERE oa_no=#{oaNo} "

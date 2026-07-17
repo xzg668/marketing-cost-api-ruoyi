@@ -87,6 +87,24 @@ class MaterialPriceRouterServiceTest {
   }
 
   @Test
+  @DisplayName("路由有效期按闭区间判断，截止日当天仍可命中")
+  void effectiveToIsInclusive() {
+    LocalDate effectiveTo = LocalDate.parse("2026-07-30");
+    when(mapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(row(
+            "MAT-END-DATE",
+            "采购件",
+            "固定价",
+            1,
+            LocalDate.parse("2026-04-01"),
+            effectiveTo,
+            "manual")));
+
+    assertThat(router.resolve("MAT-END-DATE", "2026-07", effectiveTo)).isPresent();
+    assertThat(router.resolve("MAT-END-DATE", "2026-07", effectiveTo.plusDays(1))).isEmpty();
+  }
+
+  @Test
   @DisplayName("v1.1：未识别 shape 不再丢弃整条记录，formAttr 置 null 但保留路由")
   void unknownShapeKeepsRouteWithNullFormAttr() {
     when(mapper.selectList(any(Wrapper.class)))

@@ -1,10 +1,10 @@
 package com.sanhua.marketingcost.worker;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.sanhua.marketingcost.dto.CostRunContext;
-import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunObjectResult;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
+import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest;
+import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcResult;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
@@ -12,20 +12,17 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
 import com.sanhua.marketingcost.entity.CostRunTask;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
-import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.enums.CostRunTaskScene;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
 import com.sanhua.marketingcost.mapper.CostRunTaskMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
-import com.sanhua.marketingcost.service.CostRunEngine;
-import com.sanhua.marketingcost.service.CostRunResultWriter;
 import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MaterialMasterSyncService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
-import com.sanhua.marketingcost.service.QuoteCostRunVersionService;
+import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -55,9 +52,7 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
   private final PricePrepareReadinessService pricePrepareReadinessService;
   private final MaterialPriceRouterService materialPriceRouterService;
   private final LinkedPriceEnsureService linkedPriceEnsureService;
-  private final CostRunEngine costRunEngine;
-  private final CostRunResultWriter costRunResultWriter;
-  private final QuoteCostRunVersionService quoteCostRunVersionService;
+  private final QuoteCuAdjustmentCalcService cuAdjustmentCalcService;
 
   public QuoteCostRunTaskExecutor(
       OaFormMapper oaFormMapper,
@@ -68,9 +63,7 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
       PricePrepareReadinessService pricePrepareReadinessService,
       MaterialPriceRouterService materialPriceRouterService,
       LinkedPriceEnsureService linkedPriceEnsureService,
-      CostRunEngine costRunEngine,
-      CostRunResultWriter costRunResultWriter,
-      QuoteCostRunVersionService quoteCostRunVersionService) {
+      QuoteCuAdjustmentCalcService cuAdjustmentCalcService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.costRunPartItemMapper = costRunPartItemMapper;
@@ -79,9 +72,7 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
     this.pricePrepareReadinessService = pricePrepareReadinessService;
     this.materialPriceRouterService = materialPriceRouterService;
     this.linkedPriceEnsureService = linkedPriceEnsureService;
-    this.costRunEngine = costRunEngine;
-    this.costRunResultWriter = costRunResultWriter;
-    this.quoteCostRunVersionService = quoteCostRunVersionService;
+    this.cuAdjustmentCalcService = cuAdjustmentCalcService;
   }
 
   @Override
@@ -100,49 +91,26 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
     String pricingMonth = pricingMonth(task);
     PricePrepareReadinessResult readiness = checkPricePrepareReadiness(oaNo, item, productCode(task, item), pricingMonth);
     ensureLinkedPricesForTrial(oaNo, form, pricingMonth, task, workerId);
-    String productCode = productCode(task, item);
-    QuoteCostRunVersion version =
-        quoteCostRunVersionService.createTrial(
-            oaNo,
-            item.getId(),
-            productCode,
-            pricingMonth,
-            pricingMonth,
-            readiness == null ? null : readiness.getPrepareNo(),
-            null,
-            null,
-            firstText(item.getBusinessUnitType(), form.getBusinessUnitType(), task.getBusinessUnitType()));
-
-    CostRunContext context =
-        CostRunContext.quote(
-            oaNo,
-            item.getId(),
-            productCode,
-            firstText(task.getPackageMethod(), item.getPackageMethod()),
-            firstText(task.getCustomerName(), form.getCustomer()),
-            firstText(item.getBusinessUnitType(), form.getBusinessUnitType(), task.getBusinessUnitType()),
-            pricingMonth,
-            task.getPriceAsOfTime(),
-            firstText(task.getCalcObjectKey(), "QUOTE:" + item.getId()));
-    context.setCostRunVersionId(version.getId());
-    context.setCostRunNo(version.getCostRunNo());
-    context.setPricePrepareNo(version.getPricePrepareNo());
-    context.setPriceTypeConfirmNo(version.getPriceTypeConfirmNo());
-    context.setBomConfirmNo(version.getBomConfirmNo());
-    context.setProgress(
-        p -> updateTaskProgress(task, workerId, PROGRESS_AFTER_LINKED_ENSURE
-            + boundedProgress(p) * (PROGRESS_COSTS_END - PROGRESS_AFTER_LINKED_ENSURE) / 100));
-    CostRunObjectResult result = costRunEngine.run(context);
-    costRunResultWriter.writeQuoteResult(result, form, item);
-    quoteCostRunVersionService.finishTrial(
-        version.getId(),
-        totalCost(result),
-        result.getPartItems().size(),
-        result.getCostItems().size());
+    QuoteCuAdjustmentCalcResult calculation =
+        cuAdjustmentCalcService.calculate(
+            new QuoteCuAdjustmentCalcRequest(
+                form,
+                item,
+                pricingMonth,
+                readiness == null ? null : readiness.getPrepareNo(),
+                firstText(task.getCalcObjectKey(), "QUOTE:" + item.getId()),
+                p -> updateTaskProgress(
+                    task,
+                    workerId,
+                    PROGRESS_AFTER_LINKED_ENSURE
+                        + boundedProgress(p)
+                            * (PROGRESS_COSTS_END - PROGRESS_AFTER_LINKED_ENSURE)
+                            / 100)));
+    CostRunObjectResult result = calculation.costResult();
     markItemCalculated(item);
     updateTaskProgress(task, workerId, PROGRESS_COSTS_END);
     updateOaCalculatedIfAllItemsDone(form);
-    return new CostRunTaskExecutionResult(resultSummaryJson(result));
+    return new CostRunTaskExecutionResult(resultSummaryJson(calculation));
   }
 
   private void syncMaterialMaster(String oaNo, CostRunTask task, String workerId) {
@@ -356,35 +324,25 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
         task.getId(), workerId.trim(), boundedProgress(progress), LocalDateTime.now());
   }
 
-  private String resultSummaryJson(CostRunObjectResult result) {
+  private String resultSummaryJson(QuoteCuAdjustmentCalcResult calculation) {
+    CostRunObjectResult result = calculation.costResult();
     int partItemCount = result.getPartItems() == null ? 0 : result.getPartItems().size();
     int costItemCount = result.getCostItems() == null ? 0 : result.getCostItems().size();
-    String totalCost = result.getResult() == null || result.getResult().getTotalCost() == null
-        ? null
-        : result.getResult().getTotalCost().toPlainString();
+    String totalCost = decimal(calculation.totalCost());
+    String adjustment = decimal(calculation.cuMaterialAdjustment());
+    String finalQuoteAmount = decimal(calculation.finalQuoteAmount());
     return "{\"partItemCount\":" + partItemCount
         + ",\"costItemCount\":" + costItemCount
         + ",\"totalCost\":" + (totalCost == null ? "null" : "\"" + totalCost + "\"")
+        + ",\"cuMaterialAdjustment\":"
+        + (adjustment == null ? "null" : "\"" + adjustment + "\"")
+        + ",\"finalQuoteAmount\":"
+        + (finalQuoteAmount == null ? "null" : "\"" + finalQuoteAmount + "\"")
         + "}";
   }
 
-  private java.math.BigDecimal totalCost(CostRunObjectResult result) {
-    if (result != null && result.getResult() != null && result.getResult().getTotalCost() != null) {
-      return result.getResult().getTotalCost();
-    }
-    if (result == null || result.getCostItems() == null) {
-      return null;
-    }
-    for (CostRunCostItemDto item : result.getCostItems()) {
-      if (item != null && "TOTAL".equals(trimToEmpty(item.getCostCode()))) {
-        return item.getAmount();
-      }
-    }
-    return null;
-  }
-
-  private String trimToEmpty(String value) {
-    return StringUtils.hasText(value) ? value.trim() : "";
+  private String decimal(java.math.BigDecimal value) {
+    return value == null ? null : value.toPlainString();
   }
 
   private int boundedProgress(int progress) {

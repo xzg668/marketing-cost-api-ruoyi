@@ -3,12 +3,15 @@ package com.sanhua.marketingcost.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
 import com.sanhua.marketingcost.dto.MakePartMaterialPriceResolveResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.entity.PriceFixedItem;
@@ -19,6 +22,7 @@ import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.PriceFixedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.mapper.PriceRangeItemMapper;
+import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.SupplierSupplyRatioResolveService;
 import com.sanhua.marketingcost.service.pricing.FixedPriceResolver;
@@ -34,6 +38,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class MakePartMaterialPriceResolveServiceImplTest {
 
@@ -42,6 +47,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
   private PriceLinkedCalcItemMapper linkedMapper;
   private PriceRangeItemMapper rangeMapper;
   private SupplierSupplyRatioResolveService ratioService;
+  private LinkedPriceEnsureService linkedPriceEnsureService;
   private MakePartMaterialPriceResolveServiceImpl service;
 
   @BeforeAll
@@ -59,11 +65,14 @@ class MakePartMaterialPriceResolveServiceImplTest {
     linkedMapper = mock(PriceLinkedCalcItemMapper.class);
     rangeMapper = mock(PriceRangeItemMapper.class);
     ratioService = mock(SupplierSupplyRatioResolveService.class);
+    linkedPriceEnsureService = mock(LinkedPriceEnsureService.class);
     List<PriceResolver> resolvers = List.of(
         new FixedPriceResolver(fixedMapper, new SupplierPreferredPriceSelector(ratioService)),
         new LinkedPriceResolver(linkedMapper),
         new RangePriceResolver(rangeMapper));
-    service = new MakePartMaterialPriceResolveServiceImpl(routerService, resolvers);
+    service =
+        new MakePartMaterialPriceResolveServiceImpl(
+            routerService, resolvers, linkedPriceEnsureService);
   }
 
   @Test
@@ -105,6 +114,39 @@ class MakePartMaterialPriceResolveServiceImplTest {
     assertThat(result.getStatus()).isEqualTo("OK");
     assertThat(result.getPriceType()).isEqualTo("联动价");
     assertThat(result.getUnitPrice()).isEqualByComparingTo("75.660000");
+    ArgumentCaptor<LinkedPriceEnsureRequest> requestCaptor =
+        ArgumentCaptor.forClass(LinkedPriceEnsureRequest.class);
+    verify(linkedPriceEnsureService).ensure(requestCaptor.capture());
+    assertThat(requestCaptor.getValue().normalizedItemCodes()).containsExactly("SCRAP-001");
+    assertThat(requestCaptor.getValue().getPriceAsOfTime())
+        .isEqualTo(LocalDate.parse("2026-05-20").atStartOfDay());
+  }
+
+  @Test
+  @DisplayName("第四步自制件联动价直接使用内存计算结果，不 ensure 也不读取 calc_item")
+  void calculatesLinkedPriceWithoutPersistenceOrCalcItemRead() {
+    when(routerService.listCandidates("SCRAP-001", "2026-05", LocalDate.parse("2026-05-20")))
+        .thenReturn(List.of(route("SCRAP-001", PriceTypeEnum.LINKED, "联动价")));
+    PriceLinkedCalcItem calculated = new PriceLinkedCalcItem();
+    calculated.setItemCode("SCRAP-001");
+    calculated.setPartUnitPrice(new BigDecimal("75.660000"));
+    calculated.setCalcStatus("OK");
+    when(linkedPriceEnsureService.calculate(any(LinkedPriceEnsureRequest.class)))
+        .thenReturn(List.of(calculated));
+
+    MakePartMaterialPriceResolveResult result = service.calculateMaterialUnitPrice(
+        "SCRAP-001",
+        "2026-05",
+        LocalDate.parse("2026-05-20"),
+        LocalDate.parse("2026-05-20").atStartOfDay(),
+        "OA-001",
+        "COMMERCIAL",
+        null);
+
+    assertThat(result.getStatus()).isEqualTo("OK");
+    assertThat(result.getUnitPrice()).isEqualByComparingTo("75.660000");
+    verify(linkedPriceEnsureService, never()).ensure(any());
+    verify(linkedMapper, never()).selectList(any());
   }
 
   @Test

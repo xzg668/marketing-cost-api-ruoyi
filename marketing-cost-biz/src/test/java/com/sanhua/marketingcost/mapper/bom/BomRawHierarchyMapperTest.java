@@ -61,7 +61,7 @@ class BomRawHierarchyMapperTest extends BomMapperTestBase {
 
     assertThat(loaded).isNotNull();
     assertThat(loaded.getTopProductCode()).isEqualTo(topProductCode);
-    assertThat(loaded.getPriceOrgCode()).as("旧 Builder/BaseMapper 插入应走 DB 默认商用组织").isEqualTo("210");
+    assertThat(loaded.getPriceOrgCode()).as("报价组织必须由上游显式传入").isEqualTo("210");
     assertThat(loaded.getLevel()).isZero();
     assertThat(loaded.getPath()).isEqualTo("/" + topProductCode + "/");
     assertThat(loaded.getSourceType()).isEqualTo("U9");
@@ -134,6 +134,7 @@ class BomRawHierarchyMapperTest extends BomMapperTestBase {
 
   private BomRawHierarchy newTopNode() {
     BomRawHierarchy row = new BomRawHierarchy();
+    row.setPriceOrgCode("210");
     row.setTopProductCode(topProductCode);
     row.setParentCode(topProductCode);
     row.setMaterialCode(topProductCode);

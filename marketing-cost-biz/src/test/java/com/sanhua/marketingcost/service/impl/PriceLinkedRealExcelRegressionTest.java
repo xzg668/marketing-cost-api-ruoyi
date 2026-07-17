@@ -4,46 +4,40 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.sanhua.marketingcost.dto.FactorWorkbookParseResult;
 import com.sanhua.marketingcost.dto.FormulaFactorRef;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.poi.ss.usermodel.Cell;
-import org.apache.poi.EncryptedDocumentException;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 class PriceLinkedRealExcelRegressionTest {
 
-  private static final Path REAL_SAMPLE =
-      Path.of("/Users/xiexicheng/Documents/sales_cost/产品成本计算表（3.29- 提供）.xls");
-  private static final Path DECRYPTED_LINKED_SAMPLE =
-      Path.of("/Users/xiexicheng/Documents/sales_cost/decrypted-sheets/联动价-部品.xlsx");
   private static final Path DECRYPTED_FACTOR_SAMPLE =
       Path.of("/Users/xiexicheng/Documents/sales_cost/decrypted-sheets/影响因素.xlsx");
 
   @Test
-  @DisplayName("真实 Excel：示例联动价单价公式能解析到影响因素10 E64/E44")
-  void realWorkbookFormulaCanParseFactorRefs() throws Exception {
-    Assumptions.assumeTrue(Files.exists(REAL_SAMPLE), "真实 Excel 不存在，跳过本地回归");
+  @DisplayName("公式工作簿：示例联动价单价公式能解析到影响因素10 E64/E44")
+  void formulaWorkbookCanParseFactorRefs() throws Exception {
     PriceLinkedFormulaFactorRefParserImpl parser = new PriceLinkedFormulaFactorRefParserImpl();
 
     List<FormulaHit> hits;
-    try {
-      hits = findFormulaHits(REAL_SAMPLE, parser);
-    } catch (EncryptedDocumentException e) {
-      Assumptions.assumeTrue(false, "真实原始 Excel 已加密，POI 无密码无法读取公式：" + e.getMessage());
-      return;
+    try (InputStream input = formulaWorkbook()) {
+      hits = findFormulaHits(input, parser);
     }
 
     assertThat(hits)
-        .as("真实 Excel 中应存在引用 影响因素10!E64 和 影响因素10!E44 的联动价公式")
+        .as("工作簿中应存在引用 影响因素10!E64 和 影响因素10!E44 的联动价公式")
         .anySatisfy(hit -> {
           assertThat(hit.formula()).contains("影响因素10");
           assertThat(hit.refs()).extracting(FormulaFactorRef::getSheetName)
@@ -54,22 +48,13 @@ class PriceLinkedRealExcelRegressionTest {
   }
 
   @Test
-  @DisplayName("真实 Excel：影响因素 sheet 能解析出 E64/E44 对应行")
-  void realWorkbookFactorRowsCanBeParsed() throws Exception {
-    Assumptions.assumeTrue(Files.exists(REAL_SAMPLE), "真实 Excel 不存在，跳过本地回归");
+  @DisplayName("影响因素工作簿：能解析出 E64/E44 对应行")
+  void factorRowsCanBeParsed() throws Exception {
     PriceLinkedFactorWorkbookParserImpl parser = new PriceLinkedFactorWorkbookParserImpl();
 
-    try (InputStream input = Files.newInputStream(REAL_SAMPLE);
-        Workbook ignored = WorkbookFactory.create(input)) {
-      // only verifies that POI can open the original workbook before running parser assertions
-    } catch (EncryptedDocumentException e) {
-      Assumptions.assumeTrue(false, "真实原始 Excel 已加密，POI 无密码无法读取影响因素 sheet：" + e.getMessage());
-      return;
-    }
-
     FactorWorkbookParseResult result;
-    try (InputStream input = Files.newInputStream(REAL_SAMPLE)) {
-      result = parser.parse(input, REAL_SAMPLE.getFileName().toString());
+    try (InputStream input = factorWorkbook()) {
+      result = parser.parse(input, "factor-fixture.xlsx");
     }
 
     assertThat(result.getValidRowCount()).isGreaterThan(0);
@@ -94,15 +79,14 @@ class PriceLinkedRealExcelRegressionTest {
   }
 
   @Test
-  @DisplayName("已解密真实 sheet：示例联动价公式能解析到影响因素10 E64/E44")
-  void decryptedLinkedSheetFormulaCanParseFactorRefs() throws Exception {
-    Assumptions.assumeTrue(Files.exists(DECRYPTED_LINKED_SAMPLE), "已解密联动价 sheet 不存在");
+  @DisplayName("联动价 sheet：扫描公式单元格并解析影响因素10 E64/E44")
+  void linkedSheetFormulaCanParseFactorRefs() throws Exception {
     PriceLinkedFormulaFactorRefParserImpl parser = new PriceLinkedFormulaFactorRefParserImpl();
 
-    List<FormulaHit> hits = findFormulaHits(DECRYPTED_LINKED_SAMPLE, parser);
-    Assumptions.assumeFalse(
-        hits.isEmpty(),
-        "已解密联动价 sheet 是纯值版，未保留单价列公式，不能作为真实公式回归样本");
+    List<FormulaHit> hits;
+    try (InputStream input = formulaWorkbook()) {
+      hits = findFormulaHits(input, parser);
+    }
 
     assertThat(hits)
         .as("已解密联动价 sheet 中应存在引用 影响因素10!E64 和 影响因素10!E44 的公式")
@@ -159,12 +143,11 @@ class PriceLinkedRealExcelRegressionTest {
   }
 
   private List<FormulaHit> findFormulaHits(
-      Path workbookPath,
+      InputStream input,
       PriceLinkedFormulaFactorRefParserImpl parser)
       throws Exception {
     List<FormulaHit> hits = new ArrayList<>();
-    try (InputStream input = Files.newInputStream(workbookPath);
-        Workbook workbook = WorkbookFactory.create(input)) {
+    try (Workbook workbook = WorkbookFactory.create(input)) {
       for (int s = 0; s < workbook.getNumberOfSheets(); s++) {
         Sheet sheet = workbook.getSheetAt(s);
         for (int r = sheet.getFirstRowNum(); r <= sheet.getLastRowNum(); r++) {
@@ -193,6 +176,51 @@ class PriceLinkedRealExcelRegressionTest {
       }
     }
     return hits;
+  }
+
+  private InputStream formulaWorkbook() throws Exception {
+    try (XSSFWorkbook workbook = new XSSFWorkbook();
+        ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+      Sheet factor = workbook.createSheet("影响因素10");
+      factor.createRow(43).createCell(4).setCellValue(57.119);
+      factor.createRow(63).createCell(4).setCellValue(16.4);
+
+      Sheet linked = workbook.createSheet("联动价-部品");
+      Row row = linked.createRow(1);
+      row.createCell(8).setCellValue(300);
+      row.createCell(9).setCellValue(150);
+      row.createCell(10).setCellValue(0.5);
+      row.createCell(11).setCellFormula(
+          "ROUND($I$2*影响因素10!$E$64/1000-(I2-J2)*影响因素10!$E$44/1000+K2,4)/1.13");
+      workbook.write(output);
+      return new ByteArrayInputStream(output.toByteArray());
+    }
+  }
+
+  private InputStream factorWorkbook() throws Exception {
+    try (XSSFWorkbook workbook = new XSSFWorkbook();
+        ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+      Sheet factor = workbook.createSheet("影响因素10");
+      Row header = factor.createRow(0);
+      header.createCell(0).setCellValue("序号");
+      header.createCell(1).setCellValue("价表影响因素名称");
+      header.createCell(2).setCellValue("简称");
+      header.createCell(3).setCellValue("取价来源");
+      header.createCell(4).setCellValue("价格");
+      factorRow(factor.createRow(43), "44", "废料基价", "H65黄铜边料", "回收价", 57.119);
+      factorRow(factor.createRow(63), "64", "不锈钢基价", "SUS304/2Bδ0.6-900", "出厂价", 16.4);
+      workbook.write(output);
+      return new ByteArrayInputStream(output.toByteArray());
+    }
+  }
+
+  private void factorRow(
+      Row row, String seq, String factorName, String shortName, String priceSource, double price) {
+    row.createCell(0).setCellValue(seq);
+    row.createCell(1).setCellValue(factorName);
+    row.createCell(2).setCellValue(shortName);
+    row.createCell(3).setCellValue(priceSource);
+    row.createCell(4).setCellValue(price);
   }
 
   private record FormulaHit(

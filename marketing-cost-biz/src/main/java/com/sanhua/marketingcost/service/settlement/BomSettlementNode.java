@@ -28,6 +28,8 @@ public record BomSettlementNode(
     LocalDate effectiveFrom,
     LocalDate effectiveTo,
     LocalDate rawVersionEffectiveFrom,
+    String priceOrgCode,
+    String materialOrganizationCode,
     String businessUnitType,
     BomSettlementSourceRef sourceRef) {
 

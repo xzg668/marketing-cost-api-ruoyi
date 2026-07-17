@@ -5,10 +5,12 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.dto.MetalBasePricePolicyResponse;
 import com.sanhua.marketingcost.dto.QuoteBasePriceDetectResult;
 import com.sanhua.marketingcost.entity.FactorIdentity;
 import com.sanhua.marketingcost.entity.FactorQuoteBaseMapping;
 import com.sanhua.marketingcost.entity.QuoteBasePriceMappingRule;
+import com.sanhua.marketingcost.enums.MetalBasePricePolicy;
 import com.sanhua.marketingcost.mapper.FactorIdentityMapper;
 import com.sanhua.marketingcost.mapper.FactorQuoteBaseMappingMapper;
 import com.sanhua.marketingcost.mapper.QuoteBasePriceMappingRuleMapper;
@@ -28,6 +30,12 @@ public class QuoteBasePriceMappingServiceImpl implements QuoteBasePriceMappingSe
   private static final String DEFAULT_MATCH_MODE = "ANY_KEYWORD";
   private static final String DEFAULT_MATCH_SOURCE = "AUTO";
   private static final String DEFAULT_CONFIDENCE = "HIGH";
+  private static final String DEFAULT_PRICE_POLICY = MetalBasePricePolicy.OA_PRIORITY.name();
+
+  /** Cu 由财务 Cu 月度基准负责；这个简化页面只开放 Zn、Al 的取价策略。 */
+  private static final List<MetalPolicyDefinition> EDITABLE_METAL_POLICIES = List.of(
+      new MetalPolicyDefinition("Zn", "锌", "zinc_price", "锌基价"),
+      new MetalPolicyDefinition("Al", "铝", "aluminum_price", "铝基价"));
 
   /** 当前阶段只允许 OA 表头已有且单位口径已确认的公共基价字段。 */
   private static final Set<String> SUPPORTED_QUOTE_FIELDS =
@@ -104,6 +112,41 @@ public class QuoteBasePriceMappingServiceImpl implements QuoteBasePriceMappingSe
         .orderByAsc(QuoteBasePriceMappingRule::getPriority)
         .orderByDesc(QuoteBasePriceMappingRule::getId);
     return ruleMapper.selectList(query);
+  }
+
+  @Override
+  public List<MetalBasePricePolicyResponse> listMetalBasePricePolicies() {
+    return EDITABLE_METAL_POLICIES.stream()
+        .map(definition -> toPolicyResponse(definition, currentPricePolicy(definition)))
+        .toList();
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public MetalBasePricePolicyResponse updateMetalBasePricePolicy(
+      String variableCode, String pricePolicy, String operator) {
+    MetalPolicyDefinition definition = requireEditableMetalPolicy(variableCode);
+    String normalizedPolicy = MetalBasePricePolicy.from(pricePolicy).name();
+    String normalizedOperator = StringUtils.hasText(operator) ? operator.trim() : "system";
+    LocalDateTime now = LocalDateTime.now();
+
+    QuoteBasePriceMappingRule rulePatch = new QuoteBasePriceMappingRule();
+    rulePatch.setPricePolicy(normalizedPolicy);
+    rulePatch.setUpdatedBy(normalizedOperator);
+    rulePatch.setUpdatedAt(now);
+    ruleMapper.update(rulePatch, Wrappers.lambdaUpdate(QuoteBasePriceMappingRule.class)
+        .eq(QuoteBasePriceMappingRule::getQuoteFieldCode, definition.quoteFieldCode())
+        .eq(QuoteBasePriceMappingRule::getVariableCode, definition.variableCode()));
+
+    FactorQuoteBaseMapping mappingPatch = new FactorQuoteBaseMapping();
+    mappingPatch.setPricePolicy(normalizedPolicy);
+    mappingPatch.setUpdatedBy(normalizedOperator);
+    mappingPatch.setUpdatedAt(now);
+    mappingMapper.update(mappingPatch, Wrappers.lambdaUpdate(FactorQuoteBaseMapping.class)
+        .eq(FactorQuoteBaseMapping::getQuoteFieldCode, definition.quoteFieldCode())
+        .eq(FactorQuoteBaseMapping::getVariableCode, definition.variableCode()));
+
+    return toPolicyResponse(definition, normalizedPolicy);
   }
 
   @Override
@@ -331,6 +374,11 @@ public class QuoteBasePriceMappingServiceImpl implements QuoteBasePriceMappingSe
     if (rule.getPriority() == null) {
       rule.setPriority(100);
     }
+    if (!StringUtils.hasText(rule.getPricePolicy())) {
+      rule.setPricePolicy(DEFAULT_PRICE_POLICY);
+    } else {
+      rule.setPricePolicy(MetalBasePricePolicy.from(rule.getPricePolicy()).name());
+    }
     if (rule.getEnabled() == null) {
       rule.setEnabled(1);
     }
@@ -404,6 +452,11 @@ public class QuoteBasePriceMappingServiceImpl implements QuoteBasePriceMappingSe
     } else {
       mapping.setConfidence(mapping.getConfidence().trim());
     }
+    if (!StringUtils.hasText(mapping.getPricePolicy())) {
+      mapping.setPricePolicy(DEFAULT_PRICE_POLICY);
+    } else {
+      mapping.setPricePolicy(MetalBasePricePolicy.from(mapping.getPricePolicy()).name());
+    }
     if (mapping.getEnabled() == null) {
       mapping.setEnabled(1);
     }
@@ -442,6 +495,7 @@ public class QuoteBasePriceMappingServiceImpl implements QuoteBasePriceMappingSe
     mapping.setMatchedKeyword(selected.keyword());
     mapping.setMatchSource(DEFAULT_MATCH_SOURCE);
     mapping.setConfidence(DEFAULT_CONFIDENCE);
+    mapping.setPricePolicy(normalizedStoredPolicy(rule.getPricePolicy()));
     mapping.setEnabled(1);
     normalizeMapping(mapping, "system", creating);
     if (creating) {
@@ -542,6 +596,66 @@ public class QuoteBasePriceMappingServiceImpl implements QuoteBasePriceMappingSe
     return StringUtils.hasText(businessUnitType) ? businessUnitType.trim() : "";
   }
 
+  private String currentPricePolicy(MetalPolicyDefinition definition) {
+    List<FactorQuoteBaseMapping> mappings = mappingMapper.selectList(
+        Wrappers.lambdaQuery(FactorQuoteBaseMapping.class)
+            .eq(FactorQuoteBaseMapping::getQuoteFieldCode, definition.quoteFieldCode())
+            .eq(FactorQuoteBaseMapping::getVariableCode, definition.variableCode())
+            .eq(FactorQuoteBaseMapping::getDeleted, 0));
+    if (mappings != null && !mappings.isEmpty()) {
+      boolean anyOaPriority = mappings.stream()
+          .anyMatch(mapping -> MetalBasePricePolicy.OA_PRIORITY.name()
+              .equals(normalizedStoredPolicy(mapping.getPricePolicy())));
+      return anyOaPriority
+          ? MetalBasePricePolicy.OA_PRIORITY.name()
+          : MetalBasePricePolicy.FACTOR_MONTHLY.name();
+    }
+
+    List<QuoteBasePriceMappingRule> rules = ruleMapper.selectList(
+        ruleQuery()
+            .eq(QuoteBasePriceMappingRule::getQuoteFieldCode, definition.quoteFieldCode())
+            .eq(QuoteBasePriceMappingRule::getVariableCode, definition.variableCode())
+            .eq(QuoteBasePriceMappingRule::getDeleted, 0));
+    if (rules != null && !rules.isEmpty()) {
+      boolean anyOaPriority = rules.stream()
+          .anyMatch(rule -> MetalBasePricePolicy.OA_PRIORITY.name()
+              .equals(normalizedStoredPolicy(rule.getPricePolicy())));
+      return anyOaPriority
+          ? MetalBasePricePolicy.OA_PRIORITY.name()
+          : MetalBasePricePolicy.FACTOR_MONTHLY.name();
+    }
+    return DEFAULT_PRICE_POLICY;
+  }
+
+  private MetalPolicyDefinition requireEditableMetalPolicy(String variableCode) {
+    if (!StringUtils.hasText(variableCode)) {
+      throw new IllegalArgumentException("金属变量编码不能为空");
+    }
+    return EDITABLE_METAL_POLICIES.stream()
+        .filter(definition -> definition.variableCode().equalsIgnoreCase(variableCode.trim()))
+        .findFirst()
+        .orElseThrow(() -> new IllegalArgumentException(
+            "当前只允许配置 Zn、Al 的基价取值方式"));
+  }
+
+  private MetalBasePricePolicyResponse toPolicyResponse(
+      MetalPolicyDefinition definition, String pricePolicy) {
+    return new MetalBasePricePolicyResponse(
+        definition.variableCode(),
+        definition.metalName(),
+        definition.quoteFieldCode(),
+        definition.quoteFieldName(),
+        normalizedStoredPolicy(pricePolicy));
+  }
+
+  private String normalizedStoredPolicy(String pricePolicy) {
+    try {
+      return MetalBasePricePolicy.from(pricePolicy).name();
+    } catch (IllegalArgumentException ex) {
+      return DEFAULT_PRICE_POLICY;
+    }
+  }
+
   private String required(String value, String fieldName) {
     if (!StringUtils.hasText(value)) {
       throw new IllegalArgumentException(fieldName + "不能为空");
@@ -559,6 +673,9 @@ public class QuoteBasePriceMappingServiceImpl implements QuoteBasePriceMappingSe
     }
     return Math.min(pageSize, 200);
   }
+
+  private record MetalPolicyDefinition(
+      String variableCode, String metalName, String quoteFieldCode, String quoteFieldName) {}
 
   private record RuleMatch(QuoteBasePriceMappingRule rule, String keyword) {}
 }

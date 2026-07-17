@@ -584,6 +584,8 @@ class CostRunPartItemServiceImplTest {
     assertThat(packageRow.getPartCode()).isEqualTo("PKG-PARENT");
     assertThat(packageRow.getPartDrawingNo()).isEqualTo("DRW-PKG-PARENT");
     assertThat(packageRow.getUnitPrice()).isEqualByComparingTo("12.600000");
+    assertThat(packageRow.getPriceOrgCode()).isEqualTo("210");
+    assertThat(packageRow.getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
     assertThat(items).anyMatch(item -> "NORMAL".equals(item.getPartCode()));
     assertThat(items).filteredOn(item -> "PKG-PARENT".equals(item.getPartCode())).hasSize(1);
     verify(rawMapper).selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL"));

@@ -105,12 +105,25 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V21__business_unit_type_isolation.sql", "V21");
       runScriptViaMysqlCli("/db/V22__business_unit_type_isolation_extended.sql", "V22");
       runMigrationsViaJdbc(LATE_MIGRATION_SCRIPTS);
+      runScriptViaMysqlCli("/db/V59__quote_ingest_schema.sql", "V59");
+      runScriptViaMysqlCli("/db/V63__bom_supplement_task_minimal.sql", "V63");
       runScriptViaMysqlCli("/db/V95__u9_material_master_raw_20260519.sql", "V95");
       runScriptViaMysqlCli("/db/V170__material_master_raw_organization.sql", "V170");
       runScriptViaMysqlCli("/db/V40__bom_three_layer_and_rules.sql", "V40");
       // T8：V41 含 ALTER TABLE + DELIMITER 存储过程块 + 中文 INSERT，必须走 mysql CLI
       runScriptViaMysqlCli("/db/V41__bom_rule_enhance_and_sub_ref.sql", "V41");
+      runScriptViaMysqlCli("/db/V102__price_linked_calc_item_scene_fields.sql", "V102");
+      runScriptViaMysqlCli("/db/V108__price_prepare_schema.sql", "V108");
       runScriptViaMysqlCli("/db/V113__bom_costing_row_period_month.sql", "V113");
+      runScriptViaMysqlCli("/db/V114__product_property_annual_oa_schema.sql", "V114");
+      runScriptViaMysqlCli("/db/V116__quality_loss_rate_annual_match_schema.sql", "V116");
+      runScriptViaMysqlCli("/db/V119__manufacture_rate_annual_match_schema.sql", "V119");
+      runScriptViaMysqlCli(
+          "/db/V120__department_fund_rate_annual_subject_schema.sql", "V120");
+      runScriptViaMysqlCli("/db/V121__quote_oa_form_excel_model.sql", "V121");
+      runScriptViaMysqlCli("/db/V123__quote_oa_form_item_cost_detail_fields.sql", "V123");
+      runScriptViaMysqlCli("/db/V134__price_prepare_message_text.sql", "V134");
+      runScriptViaMysqlCli("/db/V137__cost_run_task_queue_schema.sql", "V137");
       // T11：V43 字典种子 + 老规则停用，纯 INSERT/UPDATE 走 mysql CLI 简单可靠
       runScriptViaMysqlCli("/db/V43__bom_leaf_rollup_dict.sql", "V43");
       // T11 增强：V44 原材料 cost_element 白名单字典（IN_DICT 命中前置硬条件）
@@ -119,13 +132,25 @@ public abstract class BomMapperTestBase {
       ensureSysMenuBusinessUnitTypeColumn();
       runScriptViaMysqlCli("/db/V145__u9_bom_byproduct_master.sql", "V145");
       runScriptViaMysqlCli("/db/V146__bom_settlement_rule_schema.sql", "V146");
+      runScriptViaMysqlCli("/db/V153__oa_form_item_calc_status.sql", "V153");
+      runScriptViaMysqlCli("/db/V156__price_prepare_period_month_scope.sql", "V156");
       runScriptViaMysqlCli("/db/V162__quote_costing_row_item_scope.sql", "V162");
+      runScriptViaMysqlCli("/db/V165__price_prepare_quote_item_scope.sql", "V165");
+      runScriptViaMysqlCli("/db/V166__quote_cost_run_version.sql", "V166");
+      runScriptViaMysqlCli(
+          "/db/V167__quote_cost_run_workbench_confirmed_version.sql", "V167");
       runScriptViaMysqlCli("/db/V172__bom_raw_hierarchy_source_line_key.sql", "V172");
+      runScriptViaMysqlCli("/db/V178__cms_sync_publish_signal.sql", "V178");
       runScriptViaMysqlCli("/db/V179__easydata_u9_org_base_tables.sql", "V179");
       runScriptViaMysqlCli("/db/V180__quote_bom_preparation_record_org_scope.sql", "V180");
       runScriptViaMysqlCli("/db/V181__bom_snapshot_package_price_org_scope.sql", "V181");
       runScriptViaMysqlCli("/db/V182__bom_costing_row_org_scope.sql", "V182");
       runScriptViaMysqlCli("/db/V183__cost_run_part_item_org_scope.sql", "V183");
+      runScriptViaMysqlCli("/db/V185__quote_price_prepare_as_of_snapshot.sql", "V185");
+      runScriptViaMysqlCli("/db/V187__finance_cu_quote_scenario_schema.sql", "V187");
+      runScriptViaMysqlCli("/db/V188__finance_cu_quote_base_permissions.sql", "V188");
+      runScriptViaMysqlCli("/db/V189__finance_cu_quote_base_page_menu.sql", "V189");
+      runScriptViaMysqlCli("/db/V190__price_prepare_settlement_key_uniqueness.sql", "V190");
     } catch (Exception e) {
       // 把 root cause 的文字信息拼进 message，避免 surefire 只保留 Caused by 的短描述
       Throwable root = e;

@@ -87,7 +87,7 @@ class PricePrepareQueryServiceImplTest {
   }
 
   @Test
-  @DisplayName("批次分页：过滤 OA、期间和状态")
+  @DisplayName("批次分页：过滤 OA、期间、场景和状态")
   void pageBatchesUsesFilters() {
     when(batchMapper.selectPage(any(), any())).thenAnswer(invocation -> {
       Page<PricePrepareBatch> page = invocation.getArgument(0);
@@ -98,6 +98,7 @@ class PricePrepareQueryServiceImplTest {
     PricePrepareBatchQueryRequest request = new PricePrepareBatchQueryRequest();
     request.setOaNo(" OA-001 ");
     request.setPeriodMonth(" 2026-05 ");
+    request.setScenarioType(" FINANCE_QUOTE_BASE ");
     request.setStatus(" SUCCESS ");
     request.setPage(2);
     request.setPageSize(600);
@@ -112,9 +113,9 @@ class PricePrepareQueryServiceImplTest {
     assertThat(pageCaptor.getValue().getCurrent()).isEqualTo(2);
     assertThat(pageCaptor.getValue().getSize()).isEqualTo(500);
     assertThat(((AbstractWrapper<?, ?, ?>) queryCaptor.getValue()).getSqlSegment())
-        .contains("oa_no", "period_month", "status", "ORDER BY");
+        .contains("oa_no", "period_month", "scenario_type", "status", "ORDER BY");
     assertThat(queryCaptor.getValue().getParamNameValuePairs().values())
-        .contains("OA-001", "2026-05", "SUCCESS");
+        .contains("OA-001", "2026-05", "FINANCE_QUOTE_BASE", "SUCCESS");
   }
 
   @Test
@@ -144,6 +145,58 @@ class PricePrepareQueryServiceImplTest {
     assertThat(pageCaptor.getValue().getSize()).isEqualTo(20);
     assertThat(((AbstractWrapper<?, ?, ?>) queryCaptor.getValue()).getSqlSegment())
         .contains("prepare_no", "top_product_code", "material_code", "item_type", "status", "ORDER BY");
+    assertThat(((AbstractWrapper<?, ?, ?>) queryCaptor.getValue()).getSqlSegment())
+        .doesNotContain("current_flag");
+  }
+
+  @Test
+  @DisplayName("明细分页：未指定批次时只读取当前价格快照")
+  void pageItemsWithoutPrepareNoUsesCurrentSnapshot() {
+    when(itemMapper.selectPage(any(), any())).thenAnswer(invocation -> {
+      Page<PricePrepareItem> page = invocation.getArgument(0);
+      page.setTotal(0);
+      page.setRecords(List.of());
+      return page;
+    });
+
+    service.pageItems(new PricePrepareItemQueryRequest());
+
+    ArgumentCaptor<LambdaQueryWrapper<PricePrepareItem>> queryCaptor =
+        ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+    verify(itemMapper).selectPage(any(Page.class), queryCaptor.capture());
+    assertThat(((AbstractWrapper<?, ?, ?>) queryCaptor.getValue()).getSqlSegment())
+        .contains("current_flag");
+    assertThat(queryCaptor.getValue().getParamNameValuePairs().values()).contains(1);
+  }
+
+  @Test
+  @DisplayName("明细分页：指定历史批次时兼容settlementKey为空的旧数据")
+  void pageItemsKeepsHistoricalRowsWithoutSettlementKey() {
+    PricePrepareItem historical = new PricePrepareItem();
+    historical.setPrepareNo("PPR-HISTORY");
+    historical.setMaterialCode("MAT-HISTORY");
+    historical.setSettlementKey(null);
+    when(itemMapper.selectPage(any(), any())).thenAnswer(invocation -> {
+      Page<PricePrepareItem> page = invocation.getArgument(0);
+      page.setTotal(1);
+      page.setRecords(List.of(historical));
+      return page;
+    });
+    PricePrepareItemQueryRequest request = new PricePrepareItemQueryRequest();
+    request.setPrepareNo("PPR-HISTORY");
+
+    PricePrepareItemPageResponse response = service.pageItems(request);
+
+    assertThat(response.getTotal()).isEqualTo(1);
+    assertThat(response.getRecords()).singleElement()
+        .extracting(PricePrepareItem::getSettlementKey)
+        .isNull();
+    ArgumentCaptor<LambdaQueryWrapper<PricePrepareItem>> queryCaptor =
+        ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+    verify(itemMapper).selectPage(any(Page.class), queryCaptor.capture());
+    assertThat(((AbstractWrapper<?, ?, ?>) queryCaptor.getValue()).getSqlSegment())
+        .contains("prepare_no")
+        .doesNotContain("settlement_key", "current_flag");
   }
 
   @Test
@@ -307,7 +360,15 @@ class PricePrepareQueryServiceImplTest {
         ArgumentCaptor.forClass(LambdaQueryWrapper.class);
     verify(gapMapper).selectPage(any(Page.class), queryCaptor.capture());
     assertThat(((AbstractWrapper<?, ?, ?>) queryCaptor.getValue()).getSqlSegment())
-        .contains("oa_no", "gap_material_code", "gap_type", "item_type", "oa_push_status", "ORDER BY");
+        .contains(
+            "current_flag",
+            "oa_no",
+            "gap_material_code",
+            "gap_type",
+            "item_type",
+            "oa_push_status",
+            "ORDER BY");
+    assertThat(queryCaptor.getValue().getParamNameValuePairs().values()).contains(1);
   }
 
   @Test

@@ -1,10 +1,14 @@
 package com.sanhua.marketingcost.dto;
 
 import com.sanhua.marketingcost.enums.LinkedPriceCalcScene;
+import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 import lombok.Getter;
 import lombok.Setter;
@@ -22,6 +26,8 @@ public class LinkedPriceEnsureRequest {
   private Set<String> itemCodes = new LinkedHashSet<>();
   private boolean forceRefresh;
   private LocalDateTime priceAsOfTime;
+  private QuotePriceScenarioType priceScenarioType = QuotePriceScenarioType.OA_LOCKED;
+  private Map<String, BigDecimal> variableOverrides = Map.of();
 
   public LinkedPriceEnsureRequest() {
   }
@@ -107,7 +113,29 @@ public class LinkedPriceEnsureRequest {
     if (calcScene != null && calcScene.requiresOaNo() && !StringUtils.hasText(oaNo)) {
       errors.add("QUOTE 场景 oaNo 不能为空");
     }
+    if (priceScenarioType == QuotePriceScenarioType.FINANCE_QUOTE_BASE) {
+      Map<String, BigDecimal> overrides = normalizedVariableOverrides();
+      if (overrides.size() != 1 || !overrides.containsKey("Cu")) {
+        errors.add("FINANCE_QUOTE_BASE 场景只允许覆盖 Cu");
+      } else if (overrides.get("Cu") == null || overrides.get("Cu").compareTo(BigDecimal.ZERO) <= 0) {
+        errors.add("FINANCE_QUOTE_BASE 场景 Cu 必须大于0");
+      }
+    }
     return errors;
+  }
+
+  public void setPriceScenarioType(QuotePriceScenarioType priceScenarioType) {
+    this.priceScenarioType = priceScenarioType == null
+        ? QuotePriceScenarioType.OA_LOCKED
+        : priceScenarioType;
+  }
+
+  public void setVariableOverrides(Map<String, BigDecimal> variableOverrides) {
+    this.variableOverrides = normalizedOverrides(variableOverrides);
+  }
+
+  public Map<String, BigDecimal> normalizedVariableOverrides() {
+    return normalizedOverrides(variableOverrides);
   }
 
   private Set<String> normalizeItemCodes(Set<String> source) {
@@ -121,5 +149,18 @@ public class LinkedPriceEnsureRequest {
       }
     }
     return normalized;
+  }
+
+  private Map<String, BigDecimal> normalizedOverrides(Map<String, BigDecimal> source) {
+    if (source == null || source.isEmpty()) {
+      return Map.of();
+    }
+    Map<String, BigDecimal> normalized = new LinkedHashMap<>();
+    for (Map.Entry<String, BigDecimal> entry : source.entrySet()) {
+      if (StringUtils.hasText(entry.getKey())) {
+        normalized.put(entry.getKey().trim(), entry.getValue());
+      }
+    }
+    return Map.copyOf(normalized);
   }
 }

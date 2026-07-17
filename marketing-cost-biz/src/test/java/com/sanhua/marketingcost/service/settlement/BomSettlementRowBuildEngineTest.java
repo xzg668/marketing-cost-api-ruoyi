@@ -378,8 +378,97 @@ class BomSettlementRowBuildEngineTest {
     BomCostingRow byproductRow = result.costingRows().getFirst();
     assertThat(byproductRow.getSettlementRowType()).isEqualTo("BYPRODUCT_EXTRA");
     assertThat(byproductRow.getParentCode()).isEqualTo("MAKE-1");
+    assertThat(byproductRow.getMaterialName()).isEqualTo("制造件一/SPEC 废料");
+    assertThat(byproductRow.getQtyPerParent()).isEqualByComparingTo(BigDecimal.valueOf(-1));
+    assertThat(byproductRow.getQtyPerTop()).isEqualByComparingTo(BigDecimal.valueOf(-1));
     assertThat(byproductRow.getMatchedSettlementRuleId()).isEqualTo(90L);
     assertThat(result.stats().extraRowBucketCount()).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("上卷父件不额外输出副产品，非上卷叶子的制造件直接父级仍输出副产品")
+  void rolledUpParentDoesNotAddByproductButDefaultLeafParentDoes() {
+    BomSettlementRowBuildResult result = engine.build(byproductRequest(
+        List.of(
+            node("P", "P", null, 0, "/P/", 0, "组件", null),
+            fullNode(
+                "ROLL-MAKE", "P", "P", 1, "/P/ROLL-MAKE/", 0, "上卷制造件", "制造件", "制造件",
+                "12", "专用件", null, "主制造", LocalDate.of(2026, 1, 1), null),
+            purchaseNode("COPPER-BAR", "P", "ROLL-MAKE", 2, "/P/ROLL-MAKE/COPPER-BAR/", "圆形黄铜棒"),
+            fullNode(
+                "NORMAL-MAKE", "P", "P", 1, "/P/NORMAL-MAKE/", 0, "普通制造件", "制造件", "制造件",
+                "12", "专用件", null, "主制造", LocalDate.of(2026, 1, 1), null),
+            purchaseNode("RAW-1", "P", "NORMAL-MAKE", 2, "/P/NORMAL-MAKE/RAW-1/", "普通采购件")
+        ),
+        List.of(
+            byproduct("ROLL-MAKE", "BYP-ROLL", "上卷废料"),
+            byproduct("NORMAL-MAKE", "BYP-NORMAL", "普通废料")),
+        List.of(),
+        List.of(byproductRule()),
+        List.of(rollupRule("SPECIAL_PURCHASE_ROLLUP_BAR", "圆形黄铜棒", 10))));
+
+    assertThat(result.costingRows()).extracting(BomCostingRow::getMaterialCode)
+        .containsExactly("ROLL-MAKE", "BYP-NORMAL", "RAW-1");
+    assertThat(result.costingRows()).noneMatch(row -> "BYP-ROLL".equals(row.getMaterialCode()));
+    BomCostingRow byproductRow = result.costingRows().get(1);
+    assertThat(byproductRow.getSettlementRowType()).isEqualTo("BYPRODUCT_EXTRA");
+    assertThat(byproductRow.getParentCode()).isEqualTo("NORMAL-MAKE");
+    assertThat(byproductRow.getMaterialName()).isEqualTo("普通制造件/SPEC 废料");
+    assertThat(byproductRow.getQtyPerTop()).isEqualByComparingTo(BigDecimal.valueOf(-1));
+  }
+
+  @Test
+  @DisplayName("子制造件上卷时，跳过上卷件自身副产品，但输出上级制造件副产品")
+  void rollupChildSkipsItselfButAddsAncestorByproduct() {
+    BomSettlementRowBuildResult result = engine.build(byproductRequest(
+        List.of(
+            node("P", "P", null, 0, "/P/", 0, "组件", null),
+            fullNode(
+                "PARENT-MAKE", "P", "P", 1, "/P/PARENT-MAKE/", 0, "端板", "制造件", "制造件",
+                "12", "专用件", null, "主制造", LocalDate.of(2026, 1, 1), null),
+            fullNode(
+                "ROLL-CHILD", "P", "PARENT-MAKE", 2, "/P/PARENT-MAKE/ROLL-CHILD/", 0, "端板", "制造件", "制造件",
+                "12", "专用件", null, "主制造", LocalDate.of(2026, 1, 1), null),
+            purchaseNode("RAW-STEEL", "P", "ROLL-CHILD", 3, "/P/PARENT-MAKE/ROLL-CHILD/RAW-STEEL/", "不锈钢板")
+        ),
+        List.of(
+            byproduct("PARENT-MAKE", "SCRAP-STEEL", "废不锈钢"),
+            byproduct("ROLL-CHILD", "SCRAP-ROLL", "上卷子件废料")),
+        List.of(),
+        List.of(byproductRule()),
+        List.of(rollupRule("SPECIAL_PURCHASE_ROLLUP_STEEL", "不锈钢板", 10))));
+
+    assertThat(result.costingRows()).extracting(BomCostingRow::getMaterialCode)
+        .containsExactly("ROLL-CHILD", "SCRAP-STEEL");
+    assertThat(result.costingRows()).noneMatch(row -> "SCRAP-ROLL".equals(row.getMaterialCode()));
+    BomCostingRow byproductRow = result.costingRows().get(1);
+    assertThat(byproductRow.getSettlementRowType()).isEqualTo("BYPRODUCT_EXTRA");
+    assertThat(byproductRow.getParentCode()).isEqualTo("PARENT-MAKE");
+    assertThat(byproductRow.getMaterialName()).isEqualTo("端板/SPEC 废料");
+  }
+
+  @Test
+  @DisplayName("默认叶子行沿路径向上追溯，所有有副产品的制造件祖先都输出副产品")
+  void leafAncestorsWithByproductAddExtraRows() {
+    BomSettlementRowBuildResult result = engine.build(byproductRequest(
+        List.of(
+            node("P", "P", null, 0, "/P/", 0, "组件", null),
+            fullNode(
+                "GRAND-MAKE", "P", "P", 1, "/P/GRAND-MAKE/", 0, "上层制造件", "制造件", "制造件",
+                "12", "专用件", null, "主制造", LocalDate.of(2026, 1, 1), null),
+            fullNode(
+                "DIRECT-MAKE", "P", "GRAND-MAKE", 2, "/P/GRAND-MAKE/DIRECT-MAKE/", 0, "直接制造件", "制造件", "制造件",
+                "12", "专用件", null, "主制造", LocalDate.of(2026, 1, 1), null),
+            purchaseNode("RAW-1", "P", "DIRECT-MAKE", 3, "/P/GRAND-MAKE/DIRECT-MAKE/RAW-1/", "普通采购件")
+        ),
+        List.of(
+            byproduct("GRAND-MAKE", "BYP-GRAND", "上层废料"),
+            byproduct("DIRECT-MAKE", "BYP-DIRECT", "直接废料")),
+        List.of(),
+        List.of(byproductRule())));
+
+    assertThat(result.costingRows()).extracting(BomCostingRow::getMaterialCode)
+        .containsExactly("BYP-GRAND", "BYP-DIRECT", "RAW-1");
   }
 
   private static BomSettlementBuildRequest request(
@@ -418,6 +507,28 @@ class BomSettlementRowBuildEngineTest {
         byproductRules);
   }
 
+  private static BomSettlementBuildRequest byproductRequest(
+      List<BomSettlementNode> nodes,
+      List<BomSettlementByproduct> byproducts,
+      List<BomSettlementScrapRef> scrapRefs,
+      List<BomByproductCostRule> byproductRules,
+      List<BomSettlementRule> settlementRules) {
+    return new BomSettlementBuildRequest(
+        "OA-BSR-06",
+        "P",
+        LocalDate.of(2026, 5, 29),
+        "2026-05",
+        "bsr06",
+        LocalDateTime.of(2026, 5, 29, 19, 30),
+        "COMMERCIAL",
+        "主制造",
+        nodes,
+        settlementRules,
+        byproducts,
+        scrapRefs,
+        byproductRules);
+  }
+
   private static BomSettlementNode node(
       String materialCode,
       String topProductCode,
@@ -451,6 +562,8 @@ class BomSettlementRowBuildEngineTest {
         LocalDate.of(2026, 1, 1),
         null,
         LocalDate.of(2026, 1, 1),
+        "210",
+        "COMMERCIAL",
         "COMMERCIAL",
         new BomSettlementSourceRef(
             "OA-BSR-03",
@@ -592,6 +705,8 @@ class BomSettlementRowBuildEngineTest {
         effectiveFrom,
         effectiveTo,
         effectiveFrom,
+        "210",
+        "COMMERCIAL",
         "COMMERCIAL",
         new BomSettlementSourceRef(
             "OA-BSR-03",
@@ -639,6 +754,8 @@ class BomSettlementRowBuildEngineTest {
         effectiveFrom,
         effectiveTo,
         effectiveFrom,
+        node.priceOrgCode(),
+        node.materialOrganizationCode(),
         node.businessUnitType(),
         node.sourceRef());
   }

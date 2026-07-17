@@ -13,6 +13,7 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.enums.LinkedPriceCalcScene;
+import com.sanhua.marketingcost.enums.MetalBasePricePolicy;
 import com.sanhua.marketingcost.formula.normalize.FormulaNormalizer;
 import com.sanhua.marketingcost.formula.normalize.FormulaSyntaxException;
 import com.sanhua.marketingcost.formula.normalize.FormulaUnitConsistencyChecker;
@@ -405,6 +406,11 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
             .eq(FactorQuoteBaseMapping::getDeleted, 0)
             .orderByAsc(FactorQuoteBaseMapping::getId));
     for (FactorQuoteBaseMapping mapping : mappings) {
+      if (mapping != null
+          && MetalBasePricePolicy.FACTOR_MONTHLY.name()
+              .equalsIgnoreCase(mapping.getPricePolicy())) {
+        continue;
+      }
       if (readOaQuoteBasePrice(ctx.getOaForm(), mapping.getQuoteFieldCode()) != null) {
         return true;
       }

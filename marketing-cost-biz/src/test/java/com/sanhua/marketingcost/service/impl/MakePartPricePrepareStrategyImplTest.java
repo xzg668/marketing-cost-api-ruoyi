@@ -18,11 +18,14 @@ import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.service.MakePartPriceCalculator;
 import com.sanhua.marketingcost.service.MakePartPriceGenerationService;
+import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
+import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -110,6 +113,32 @@ class MakePartPricePrepareStrategyImplTest {
     Wrapper<MakePartPriceCalcRow> firstQuery = captor.getAllValues().get(0);
     assertThat(firstQuery.getCustomSqlSegment()).contains("price_as_of_time");
     assertThat(paramValues(firstQuery)).contains(priceAsOfTime);
+  }
+
+  @Test
+  @DisplayName("财务场景触发独立制造件生成并只读取财务场景中间结果")
+  void financePrepareUsesIsolatedMakePartRows() {
+    LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 26, 10, 30);
+    PricePrepareScenarioContext context = new PricePrepareScenarioContext(
+        QuotePriceScenarioType.FINANCE_QUOTE_BASE,
+        "GROUP-1",
+        "PPR-OA-1",
+        Map.of("Cu", new BigDecimal("90")));
+    when(generationService.generateByOa(
+            "OA-001", "COMMERCIAL", "2026-05", priceAsOfTime, context))
+        .thenReturn(new MakePartPriceGenerateResponse("BATCH-FIN", 1, 1, 1, 0, 0));
+    when(calcRowMapper.selectList(any())).thenReturn(List.of(okRow(504L, "BATCH-FIN")));
+
+    MakePartPricePrepareResult result = strategy.prepare(
+        "OA-001", "COMMERCIAL", "2026-05", priceAsOfTime, context, planItem("MAKE-001"));
+
+    assertThat(result.getStatus()).isEqualTo("READY");
+    verify(generationService).generateByOa(
+        "OA-001", "COMMERCIAL", "2026-05", priceAsOfTime, context);
+    ArgumentCaptor<Wrapper<MakePartPriceCalcRow>> captor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(calcRowMapper).selectList(captor.capture());
+    assertThat(captor.getValue().getCustomSqlSegment()).contains("price_scenario_type");
+    assertThat(paramValues(captor.getValue())).contains("FINANCE_QUOTE_BASE");
   }
 
   @Test

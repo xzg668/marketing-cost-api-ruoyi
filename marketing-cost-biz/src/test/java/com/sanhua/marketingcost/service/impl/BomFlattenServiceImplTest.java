@@ -536,6 +536,7 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
       String effFrom, String effTo, String name, String shapeAttr,
       String sourceCategory, int isLeaf) {
     BomRawHierarchy row = new BomRawHierarchy();
+    row.setPriceOrgCode("210");
     row.setTopProductCode(top);
     row.setParentCode(parent);
     row.setMaterialCode(material);

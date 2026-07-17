@@ -115,6 +115,35 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
   }
 
   @Override
+  @Transactional(readOnly = true)
+  public PackageSnapshotResult previewSnapshot(PackageSnapshotRequest request) {
+    NormalizedRequest req = normalize(request);
+    PackageComponentSnapshot existing =
+        selectByPackagePeriodAndTop(
+            req.packageMaterialCode, req.periodMonth, req.topProductCode, req.priceOrgCode);
+    if (existing != null) {
+      List<PackageComponentSnapshotDetail> existingDetails = selectDetails(existing.getId());
+      if (SNAPSHOT_STATUS_NORMAL.equals(existing.getStatus()) || !existingDetails.isEmpty()) {
+        return PackageSnapshotResult.of(existing, existingDetails, false);
+      }
+    }
+    if (!StringUtils.hasText(req.topProductCode)) {
+      throw new IllegalArgumentException("topProductCode 必填：包装组件取结构必须指定来源顶层产品");
+    }
+    BomRawHierarchy parent = selectSourceParent(req);
+    if (parent == null) {
+      return missingPreview(req, "未在 lp_bom_raw_hierarchy 找到包装父料号结构");
+    }
+    List<BomRawHierarchy> children = selectDirectChildren(req, parent);
+    if (children.isEmpty()) {
+      return missingPreview(req, "包装父料号在 lp_bom_raw_hierarchy 中没有直接子件");
+    }
+    PackageComponentSnapshot snapshot = buildNormalSnapshot(req, parent);
+    List<PackageComponentSnapshotDetail> details = buildDetails(snapshot, children);
+    return PackageSnapshotResult.of(snapshot, details, false);
+  }
+
+  @Override
   public PackageSnapshotDetailResult getSnapshotDetail(Long snapshotId) {
     PackageSnapshotDetailResult result = new PackageSnapshotDetailResult();
     if (snapshotId == null) {
@@ -156,6 +185,25 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
     upsertGap(buildMissingStructureGap(req, snapshot, reason));
 
     PackageSnapshotResult result = PackageSnapshotResult.of(snapshot, List.of(), true);
+    result.getWarnings().add(reason);
+    return result;
+  }
+
+  private PackageSnapshotResult missingPreview(NormalizedRequest req, String reason) {
+    PackageComponentSnapshot snapshot = new PackageComponentSnapshot();
+    snapshot.setPackageMaterialCode(req.packageMaterialCode);
+    snapshot.setPriceOrgCode(req.priceOrgCode);
+    snapshot.setPeriodMonth(req.periodMonth);
+    snapshot.setStatus(SNAPSHOT_STATUS_MISSING_STRUCTURE);
+    snapshot.setSourceType(SNAPSHOT_SOURCE_BOM);
+    snapshot.setSourceQuoteNo(req.quoteNo);
+    snapshot.setSourceOaNo(req.oaNo);
+    snapshot.setSourceTopProductCode(req.topProductCode);
+    snapshot.setSourceBomPurpose(req.bomPurpose);
+    snapshot.setSourceBomSourceType(req.sourceType);
+    snapshot.setSourceAsOfDate(req.asOfDate);
+    snapshot.setMissingReason(reason);
+    PackageSnapshotResult result = PackageSnapshotResult.of(snapshot, List.of(), false);
     result.getWarnings().add(reason);
     return result;
   }

@@ -139,6 +139,60 @@ class FormalBomReadServiceImplTest {
   }
 
   @Test
+  @DisplayName("板换采购件在商用为制造件时正式 BOM 嫁接商用子件并保留行级组织")
+  void expandsCommercialMakeBomInsidePlateFormalBom() {
+    BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    BomRawHierarchy plateTop = rawRow(11L, 0, "P-PLATE", "P-PLATE", "220");
+    plateTop.setShapeAttr("制造件");
+    BomRawHierarchy platePurchase = rawRow(12L, 1, "P-PLATE", "C-CROSS", "220");
+    platePurchase.setShapeAttr("采购件");
+    platePurchase.setQtyPerTop(new BigDecimal("2"));
+    BomRawHierarchy commercialChild = rawRow(21L, 1, "C-CROSS", "R-COMM", "210");
+    commercialChild.setShapeAttr("采购件");
+    commercialChild.setQtyPerParent(new BigDecimal("0.5"));
+    commercialChild.setQtyPerTop(new BigDecimal("0.5"));
+    commercialChild.setSourceType("U9");
+    when(bomMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(plateTop, platePurchase), List.of(commercialChild));
+
+    MaterialMasterRaw plateTopMaster = master("P-PLATE");
+    plateTopMaster.setShapeAttr("制造件");
+    MaterialMasterRaw platePurchaseMaster = master("C-CROSS");
+    platePurchaseMaster.setShapeAttr("采购件");
+    MaterialMasterRaw commercialParentMaster = master("C-CROSS");
+    commercialParentMaster.setShapeAttr("制造件");
+    MaterialMasterRaw commercialChildMaster = master("R-COMM");
+    commercialChildMaster.setShapeAttr("采购件");
+    when(rawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("PLATE")))
+        .thenReturn(List.of(plateTopMaster, platePurchaseMaster));
+    when(rawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
+        .thenReturn(List.of(commercialParentMaster, commercialChildMaster));
+
+    FormalBomReadResult result =
+        new FormalBomReadServiceImpl(bomMapper, rawMapper)
+            .read(
+                "P-PLATE",
+                "2026-07",
+                "主制造",
+                LocalDate.of(2026, 7, 10),
+                new QuoteDataOrganization("220", "PLATE"));
+
+    assertThat(result.found()).isTrue();
+    assertThat(result.lines()).extracting(QuoteBomSourceLineDto::materialCode)
+        .containsExactly("P-PLATE", "C-CROSS", "R-COMM");
+    QuoteBomSourceLineDto crossParent = result.lines().get(1);
+    QuoteBomSourceLineDto crossChild = result.lines().get(2);
+    assertThat(crossParent.shapeAttr()).isEqualTo("制造件");
+    assertThat(crossParent.priceOrgCode()).isEqualTo("210");
+    assertThat(crossParent.materialOrganizationCode()).isEqualTo("COMMERCIAL");
+    assertThat(crossChild.path()).isEqualTo("/P-PLATE/C-CROSS/R-COMM/");
+    assertThat(crossChild.qtyPerTop()).isEqualByComparingTo("1.0");
+    assertThat(crossChild.priceOrgCode()).isEqualTo("210");
+    assertThat(crossChild.materialOrganizationCode()).isEqualTo("COMMERCIAL");
+  }
+
+  @Test
   @DisplayName("正式 BOM 无数据时返回明确缺口")
   void returnsGapWhenFormalBomMissing() {
     BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);

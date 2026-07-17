@@ -2,7 +2,6 @@ package com.sanhua.marketingcost.service.pricing;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -23,10 +22,9 @@ import com.sanhua.marketingcost.mapper.MaterialScrapRefMapper;
 import com.sanhua.marketingcost.service.PriceScrapService;
 import com.sanhua.marketingcost.service.impl.CmsCostExcelParseServiceImpl;
 import com.sanhua.marketingcost.service.impl.CmsMaterialScrapRefImportServiceImpl;
+import com.sanhua.marketingcost.testsupport.CmsWorkbookFixtures;
 import java.io.InputStream;
 import java.math.BigDecimal;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -38,8 +36,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 class CmsMaterialScrapRefT11ReconciliationTest {
-  private static final Path MATERIAL_SCRAP_SAMPLE =
-      Path.of("/Users/xiexicheng/Desktop/cms/原材料对应回收废料信息-列表导出20260512150059-new.xlsx");
   private static final BigDecimal TOLERANCE = new BigDecimal("0.000001");
 
   private MaterialScrapRefMapper materialScrapRefMapper;
@@ -62,12 +58,10 @@ class CmsMaterialScrapRefT11ReconciliationTest {
   }
 
   @Test
-  @DisplayName("T11: 真实样例导入后补齐缺价，4月自制件新旧口径可对账")
+  @DisplayName("T11: 标准夹具导入后补齐缺价，4月自制件新旧口径可对账")
   void importsSampleAndReconcilesAprilMakeParts() throws Exception {
-    assumeTrue(Files.exists(MATERIAL_SCRAP_SAMPLE));
-
     CmsMaterialScrapRefImportResponse response;
-    try (InputStream input = Files.newInputStream(MATERIAL_SCRAP_SAMPLE)) {
+    try (InputStream input = CmsWorkbookFixtures.materialScrapWorkbook()) {
       response =
           importService.importExcel(
               input, "COMMERCIAL");

@@ -1,7 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioExcelRow;
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioWorkbookParseResult;
@@ -11,8 +10,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -21,9 +19,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class SupplierSupplyRatioWorkbookParserImplTest {
-  private static final Path REAL_SAMPLE =
-      Path.of("/Users/xiexicheng/Documents/sales_cost/3 产品成本计算表（3.29- 提供）5.15改.xls");
-
   private SupplierSupplyRatioWorkbookParserImpl parser;
 
   @BeforeEach
@@ -112,11 +107,25 @@ class SupplierSupplyRatioWorkbookParserImplTest {
   }
 
   @Test
-  void realWorkbookSupplyRatioSheetCanBeParsed() throws Exception {
-    assumeTrue(Files.exists(REAL_SAMPLE), "真实 Excel 不存在，跳过本地回归");
+  void fullSizeSupplyRatioFixtureCanBeParsed() throws Exception {
+    List<List<String>> rows = new ArrayList<>();
+    rows.add(List.of(
+        "物料代码", "物料名称", "型号", "单位", "物料形态属性", "供应商", "供货比例",
+        "规则：取供货比例大的"));
+    for (int i = 0; i < 51; i++) {
+      rows.add(List.of(
+          i == 0 ? "201800082" : "MAT-" + i,
+          i == 0 ? "滑碗" : "物料" + i,
+          "MODEL-" + i,
+          "只",
+          "采购件",
+          "供应商" + i,
+          i == 0 ? "1" : "60%",
+          ""));
+    }
 
-    try (InputStream input = Files.newInputStream(REAL_SAMPLE)) {
-      SupplierSupplyRatioWorkbookParseResult result = parser.parse(input, REAL_SAMPLE.getFileName().toString());
+    try (InputStream input = workbook("供货比例-SRM", rows)) {
+      SupplierSupplyRatioWorkbookParseResult result = parser.parse(input, "supply-ratio-fixture.xlsx");
 
       assertThat(result.getErrors()).isEmpty();
       assertThat(result.getSheetName()).isEqualTo("供货比例-SRM");

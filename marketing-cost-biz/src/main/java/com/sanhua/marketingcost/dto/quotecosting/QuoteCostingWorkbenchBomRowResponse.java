@@ -10,6 +10,8 @@ public class QuoteCostingWorkbenchBomRowResponse {
   private String oaNo;
   private Long oaFormItemId;
   private String topProductCode;
+  private String priceOrgCode;
+  private String materialOrganizationCode;
   private String parentCode;
   private String childCode;
   private String childName;

@@ -35,9 +35,9 @@ class U9BomByproductMasterMapperIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
-  @DisplayName("insert：旧 BaseMapper 空组织走 DB 默认商用")
-  void insertDefaultsNullOrganizationToCommercial() throws Exception {
-    U9BomByproductMaster row = newRow("C_DEFAULT", "默认商用副产", null);
+  @DisplayName("insert：显式商用组织可正确持久化")
+  void insertPersistsExplicitCommercialOrganization() throws Exception {
+    U9BomByproductMaster row = newRow("C_DEFAULT", "商用副产", "210");
 
     int affected = mapper.insert(row);
 
@@ -46,9 +46,9 @@ class U9BomByproductMasterMapperIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
-  @DisplayName("upsert：空白组织默认商用")
-  void upsertDefaultsBlankOrganizationToCommercial() throws Exception {
-    U9BomByproductMaster row = newRow("C_BLANK", "空白组织副产", "  ");
+  @DisplayName("upsert：显式商用组织可正确持久化")
+  void upsertPersistsExplicitCommercialOrganization() throws Exception {
+    U9BomByproductMaster row = newRow("C_BLANK", "商用组织副产", "210");
 
     int affected = mapper.upsert(row);
 

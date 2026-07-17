@@ -25,4 +25,17 @@ public interface PackageComponentPricePrepareStrategy {
       PricePreparePlanItem planItem) {
     return prepare(prepareNo, oaNo, periodMonth, bomPurpose, sourceType, planItem);
   }
+
+  /** 只读组装包装结构并计算子件价格，不写包装快照、价格明细或缺口。 */
+  default PackageComponentPricePrepareResult calculate(
+      String prepareNo,
+      String oaNo,
+      String periodMonth,
+      LocalDateTime priceAsOfTime,
+      String bomPurpose,
+      String sourceType,
+      PricePreparePlanItem planItem) {
+    return prepare(
+        prepareNo, oaNo, periodMonth, priceAsOfTime, bomPurpose, sourceType, planItem);
+  }
 }

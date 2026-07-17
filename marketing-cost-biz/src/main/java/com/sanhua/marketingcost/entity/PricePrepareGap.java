@@ -35,6 +35,8 @@ public class PricePrepareGap {
   private String sourceTable;
   private String message;
   private String oaPushStatus;
+  /** 1=当前最新缺口；0=历史缺口。 */
+  private Integer currentFlag;
 
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;

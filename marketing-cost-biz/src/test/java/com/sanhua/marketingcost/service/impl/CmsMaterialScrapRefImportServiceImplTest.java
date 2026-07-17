@@ -1,7 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -13,10 +12,8 @@ import com.sanhua.marketingcost.dto.CmsMaterialScrapRefImportResponse;
 import com.sanhua.marketingcost.dto.CmsMaterialScrapRefSourceRow;
 import com.sanhua.marketingcost.entity.MaterialScrapRef;
 import com.sanhua.marketingcost.mapper.MaterialScrapRefMapper;
-import java.io.IOException;
+import com.sanhua.marketingcost.testsupport.CmsWorkbookFixtures;
 import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,9 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 class CmsMaterialScrapRefImportServiceImplTest {
-  private static final Path MATERIAL_SCRAP_SAMPLE =
-      Path.of("/Users/xiexicheng/Desktop/cms/原材料对应回收废料信息-列表导出20260512150059-new.xlsx");
-
   private MaterialScrapRefMapper materialScrapRefMapper;
   private CmsMaterialScrapRefImportServiceImpl service;
 
@@ -42,12 +36,10 @@ class CmsMaterialScrapRefImportServiceImplTest {
   }
 
   @Test
-  @DisplayName("T3 导入财务样例：生成 6 条 current 映射")
-  void importProvidedSampleGeneratesSixCurrentMappingsWhenAvailable() throws IOException {
-    assumeTrue(Files.exists(MATERIAL_SCRAP_SAMPLE));
-
+  @DisplayName("T3 导入标准夹具：生成 6 条 current 映射")
+  void importFixtureGeneratesSixCurrentMappings() throws Exception {
     CmsMaterialScrapRefImportResponse response;
-    try (InputStream input = Files.newInputStream(MATERIAL_SCRAP_SAMPLE)) {
+    try (InputStream input = CmsWorkbookFixtures.materialScrapWorkbook()) {
       response = service.importExcel(input, "COMMERCIAL");
     }
 

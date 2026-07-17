@@ -350,8 +350,13 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
               pricingMonth,
               oaNoValue + ":" + item.getId());
       QuoteDataOrganization organization =
-          MaterialOrganization.quoteDataForQuoteProcess(
-              form.getProcessCode(), form.getOaNo(), item.getBusinessUnitType());
+          MaterialOrganization.quoteDataForQuoteProduct(
+              form.getProcessCode(),
+              form.getOaNo(),
+              item.getBusinessUnitType(),
+              item.getProductName(),
+              item.getSunlModel(),
+              item.getMaterialNo());
       context.setPriceOrgCode(organization.priceOrgCode());
       context.setMaterialOrganizationCode(organization.materialOrganizationCode());
       context.setCostRunVersionId(version.getId());

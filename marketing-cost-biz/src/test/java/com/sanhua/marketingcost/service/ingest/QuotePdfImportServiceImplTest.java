@@ -13,6 +13,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -188,6 +189,35 @@ class QuotePdfImportServiceImplTest {
         .contains("1001900000237", "1001900000261");
   }
 
+  @Test
+  void realFiSr005SanhuaPdfPreviewParsesBlankOtherMaterialAndDenseItemsWhenAvailable() throws Exception {
+    Path file = Path.of("/Users/xiexicheng/Desktop/demo7/FI-SR-005-20260318-0397.pdf");
+    Assumptions.assumeTrue(Files.exists(file), "real FI-SR-005 SANHUA desktop PDF sample is required");
+    QuotePdfImportServiceImpl service =
+        new QuotePdfImportServiceImpl(
+            new QuoteNormalizeService(new QuoteIngestRequestValidator(), new QuoteClassifyService()),
+            quoteIngestService,
+            new PdfBoxQuotePdfTextExtractor());
+
+    QuoteExcelImportPreviewResponse response;
+    try (InputStream inputStream = Files.newInputStream(file)) {
+      response = service.preview(inputStream, file.getFileName().toString());
+    }
+
+    assertThat(response.getErrors())
+        .as(errorSummary(response))
+        .extracting("code")
+        .doesNotContain("NUMBER_INVALID", "ITEMS_REQUIRED");
+    assertThat(response.getForms()).hasSize(1);
+    assertThat(response.getForms().get(0).getOaNo()).isEqualTo("FI-SR-005-20260318-0397");
+    assertThat(response.getForms().get(0).getQuoteScenario()).isEqualTo("DERIVED_PRODUCT");
+    assertThat(response.getForms().get(0).getHeaderSummary().getRemark()).isNull();
+    assertThat(response.getForms().get(0).getItems()).hasSize(3);
+    assertThat(response.getForms().get(0).getItems())
+        .extracting("sunlModel")
+        .containsExactly("S12BH-12L-18", "S12BH-16L-34", "S12BH-30L-19");
+  }
+
   private QuotePdfDocument document(String fileName, List<String> lines) {
     QuotePdfDocument document = new QuotePdfDocument();
     document.setFileName(fileName);
@@ -204,6 +234,12 @@ class QuotePdfImportServiceImplTest {
     }
     document.setPages(List.of(page));
     return document;
+  }
+
+  private String errorSummary(QuoteExcelImportPreviewResponse response) {
+    return response.getErrors().stream()
+        .map(error -> error.getFieldPath() + ":" + error.getCode() + ":" + error.getMessage())
+        .collect(Collectors.joining("; "));
   }
 
   private record PdfSample(Path path, String processCode, String quoteScenario) {

@@ -49,9 +49,29 @@ class MakePartPriceCalcRowMapperTest extends BomMapperTestBase {
               + "ADD COLUMN pricing_month VARCHAR(7) DEFAULT NULL");
       addColumnIfMissing(
           stmt,
+          "price_as_of_time",
+          "ALTER TABLE lp_make_part_price_calc_row "
+              + "ADD COLUMN price_as_of_time DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP");
+      addColumnIfMissing(
+          stmt,
+          "price_scenario_type",
+          "ALTER TABLE lp_make_part_price_calc_row "
+              + "ADD COLUMN price_scenario_type VARCHAR(32) NOT NULL DEFAULT 'OA_LOCKED'");
+      addColumnIfMissing(
+          stmt,
           "price_complete",
           "ALTER TABLE lp_make_part_price_calc_row "
               + "ADD COLUMN price_complete TINYINT(1) NOT NULL DEFAULT 0");
+      addColumnIfMissing(
+          stmt,
+          "no_scrap_confirmed",
+          "ALTER TABLE lp_make_part_price_calc_row "
+              + "ADD COLUMN no_scrap_confirmed TINYINT(1) NOT NULL DEFAULT 0");
+      addColumnIfMissing(
+          stmt,
+          "no_scrap_confirmation_id",
+          "ALTER TABLE lp_make_part_price_calc_row "
+              + "ADD COLUMN no_scrap_confirmation_id BIGINT DEFAULT NULL");
     }
   }
 
@@ -116,6 +136,7 @@ class MakePartPriceCalcRowMapperTest extends BomMapperTestBase {
     row.setCalcBatchId(batchId);
     row.setBusinessUnitType("COMMERCIAL");
     row.setPricingMonth("2026-05");
+    row.setPriceScenarioType("OA_LOCKED");
     row.setParentMaterialNo(parent);
     row.setParentMaterialName("制造件");
     row.setItemProcessType("原材料加工");

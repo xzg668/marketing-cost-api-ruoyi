@@ -121,6 +121,21 @@ class QuoteOaPdfHeaderParserTest {
   }
 
   @Test
+  void doesNotUseDetailHeaderLineAsBlankRemarkValue() {
+    QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SR_005_DERIVED);
+    parser.parse(
+        context(
+            QuoteExcelTemplateType.FI_SR_005_DERIVED,
+            List.of(
+                ">>业务信息",
+                "备注",
+                "号 费[元/只] 量[万只] 价格 总成本 运输费总 费（万 （万元） （万元） 元） 有效期")),
+        request);
+
+    assertThat(request.getHeader().getRemark()).isNull();
+  }
+
+  @Test
   void parsesFiSr005BusinessTypeIntoHeaderExtraField() {
     QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SR_005_DERIVED);
     parser.parse(

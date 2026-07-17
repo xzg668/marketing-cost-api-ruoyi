@@ -70,11 +70,15 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
 
   private final BomU9SourceMapper bomU9SourceMapper;
   private final BomRawHierarchyMapper bomRawHierarchyMapper;
+  private final PlateCommercialMakeBomExpansionService crossOrganizationExpansionService;
 
   public U9SourceBuilder(
-      BomU9SourceMapper bomU9SourceMapper, BomRawHierarchyMapper bomRawHierarchyMapper) {
+      BomU9SourceMapper bomU9SourceMapper,
+      BomRawHierarchyMapper bomRawHierarchyMapper,
+      PlateCommercialMakeBomExpansionService crossOrganizationExpansionService) {
     this.bomU9SourceMapper = bomU9SourceMapper;
     this.bomRawHierarchyMapper = bomRawHierarchyMapper;
+    this.crossOrganizationExpansionService = crossOrganizationExpansionService;
   }
 
   // ============================ public API ============================
@@ -202,6 +206,19 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
     if (rows.isEmpty()) {
       return null;
     }
+    PlateCommercialMakeBomExpansionService.ExpansionResult expansion =
+        crossOrganizationExpansionService.expand(
+            rows,
+            topProductCode,
+            d,
+            bomPurpose,
+            st,
+            MaterialOrganization.fromPriceOrgCode(org).toQuoteDataOrganization());
+    if (expansion.hasGaps()) {
+      throw new IllegalStateException(
+          "跨组织制造 BOM 展开失败：" + String.join("；", expansion.gaps()));
+    }
+    rows = expansion.rows();
     return assembleTree(rows, topProductCode);
   }
 

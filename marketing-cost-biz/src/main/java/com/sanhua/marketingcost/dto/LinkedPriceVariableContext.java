@@ -74,6 +74,25 @@ public class LinkedPriceVariableContext {
     return code == null ? null : variableSources.get(code);
   }
 
+  /**
+   * 在已加载的 OA 锁价之上覆盖单个“元/公斤”变量。
+   *
+   * <p>财务场景只调用本方法覆盖 Cu，因此不会清空或改写 OA 中的 Zn、Al 等锁价。
+   */
+  public LinkedPriceVariableContext overrideKg(
+      String code, BigDecimal value, String source) {
+    if (code == null || code.trim().isEmpty()) {
+      throw new IllegalArgumentException("变量编码不能为空");
+    }
+    if (value == null) {
+      throw new IllegalArgumentException("变量值不能为空");
+    }
+    String normalizedCode = code.trim();
+    variableValues.put(normalizedCode, value);
+    variableSources.put(normalizedCode, source == null ? null : source.trim());
+    return this;
+  }
+
   private void putOaLockedKg(String code, BigDecimal tonPrice) {
     if (tonPrice == null) {
       return;

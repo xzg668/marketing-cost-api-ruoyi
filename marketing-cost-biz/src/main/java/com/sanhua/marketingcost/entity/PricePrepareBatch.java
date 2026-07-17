@@ -26,11 +26,18 @@ public class PricePrepareBatch {
   private String periodMonth;
   private String bomPurpose;
   private String sourceType;
+  private String scenarioType;
+  private String scenarioGroupNo;
+  private String sourcePrepareNo;
   private String status;
   private Integer totalCount;
   private Integer successCount;
   private Integer warningCount;
   private Integer gapCount;
+  /** 本批次所有价格源统一使用的取价时点。 */
+  private LocalDateTime priceAsOfTime;
+  /** 取价时点来源：CURRENT_TIME / REQUEST / LEGACY。 */
+  private String priceAsOfSource;
   private LocalDateTime startedAt;
   private LocalDateTime finishedAt;
   private String message;

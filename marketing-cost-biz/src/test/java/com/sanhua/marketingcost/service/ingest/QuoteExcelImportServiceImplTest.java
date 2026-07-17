@@ -15,17 +15,13 @@ import com.sanhua.marketingcost.dto.ingest.QuoteIngestRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestResponse;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.FileInputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -295,49 +291,46 @@ class QuoteExcelImportServiceImplTest {
   }
 
   @Test
-  void desktopOaOriginalTemplatesParseWhenAvailable() throws Exception {
-    Path base = Path.of("/Users/xiexicheng/Desktop/demo3");
-    List<String> templateFileNames =
-        List.of(
-            "报价单导入模板_01_FI-SC-020_板换科技直销.xlsx",
-            "报价单导入模板_02_FI-SC-006_标准品批量品.xlsx",
-            "报价单导入模板_03_FI-SC-005_新品.xlsx",
-            "报价单导入模板_04_FI-SR-005_家代商新品.xlsx",
-            "报价单导入模板_05_FI-SR-005_家代商批量品.xlsx",
-            "报价单导入模板_06_FI-SR-005_家代商衍生品.xlsx");
-    Assumptions.assumeTrue(
-        templateFileNames.stream().map(base::resolve).allMatch(Files::exists));
+  void allSupportedOaTemplateScenariosParseFromDeterministicFixtures() throws Exception {
+    List<List<String>> cases = List.of(
+        List.of("FI-SC-020", "DIRECT_SALE", "板换科技业务单元", "板换科技直销产品", "批量品"),
+        List.of("FI-SC-006", "STANDARD_BATCH", "商用业务单元", "商用直销产品", "批量品"),
+        List.of("FI-SC-005", "NEW_PRODUCT", "商用业务单元", "商用直销产品", "新品"),
+        List.of("FI-SR-005", "NEW_PRODUCT", "家代商业务单元", "家代商代销产品", "新品"),
+        List.of("FI-SR-005", "MASS_PRODUCT", "家代商业务单元", "家代商代销产品", "批量品"),
+        List.of("FI-SR-005", "DERIVED_PRODUCT", "家代商业务单元", "家代商代销产品", "衍生品"));
 
-    for (String name : templateFileNames) {
-      try (InputStream inputStream = new FileInputStream(base.resolve(name).toFile())) {
+    for (List<String> fixture : cases) {
+      String name = fixture.get(0) + "-" + fixture.get(1) + ".xlsx";
+      try (InputStream inputStream = oaOriginalExcel(
+          fixture.get(0), fixture.get(1), fixture.get(2), fixture.get(3), fixture.get(4), true)) {
         QuoteExcelImportPreviewResponse response = service.preview(inputStream, name);
         assertThat(response.getFormCount()).as(name).isEqualTo(1);
         assertThat(response.getForms()).as(name).hasSize(1);
+        assertThat(response.getForms().get(0).getQuoteScenario()).as(name).isEqualTo(fixture.get(1));
       }
     }
   }
 
   @Test
-  void desktopFiSc006TemplateProducesGoldenCostDimensionsWhenAvailable() throws Exception {
-    Path file = Path.of("/Users/xiexicheng/Desktop/demo3/报价单导入模板_02_FI-SC-006_标准品批量品.xlsx");
-    Assumptions.assumeTrue(Files.exists(file));
-
-    try (InputStream inputStream = new FileInputStream(file.toFile())) {
-      QuoteExcelImportPreviewResponse response = service.preview(inputStream, file.getFileName().toString());
+  void fiSc006FixtureProducesGoldenCostDimensions() throws Exception {
+    try (InputStream inputStream = oaOriginalExcel(
+        "FI-SC-006", "STANDARD_BATCH", "商用业务单元", "商用直销产品", "批量品", true)) {
+      QuoteExcelImportPreviewResponse response = service.preview(inputStream, "fi-sc-006-fixture.xlsx");
 
       assertThat(response.isValid()).isTrue();
       assertThat(response.getFormCount()).isEqualTo(1);
       QuoteIngestPreviewResponse form = response.getForms().get(0);
-      assertThat(form.getOaNo()).isEqualTo("FI-SC-006-20260327-037");
+      assertThat(form.getOaNo()).isEqualTo("FI-SC-006-20260327-Q4");
       assertThat(form.getQuoteScenario()).isEqualTo("STANDARD_BATCH");
       assertThat(form.getAccountingContext().getBusinessUnitType()).isEqualTo("COMMERCIAL");
       assertThat(form.getAccountingContext().getExpenseProductCategory()).isEqualTo("商用直销产品");
-      assertThat(form.getAccountingContext().getSourceBusinessDivision()).isEqualTo("商用压缩事业部");
+      assertThat(form.getAccountingContext().getSourceBusinessDivision()).isEqualTo("商用四通阀事业部");
       assertThat(form.getHeaderSummary().getProcessCode()).isEqualTo("FI-SC-006");
       assertThat(form.getHeaderSummary().getApplicantDept()).isEqualTo("欧美业务管理部");
       assertThat(form.getHeaderSummary().getApplicantOffice()).isEqualTo("欧洲业务管理部");
-      assertThat(form.getHeaderSummary().getOverseasSalesMode()).isEqualTo("是");
-      assertThat(form.getItems()).extracting("materialNo").contains("1079900000536");
+      assertThat(form.getHeaderSummary().getOverseasSalesMode()).isEqualTo("否");
+      assertThat(form.getItems()).extracting("sunlModel").contains("RFQ-2026-Q4");
     }
   }
 

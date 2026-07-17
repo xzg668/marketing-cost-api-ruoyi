@@ -17,6 +17,8 @@ public class QuotePricePrepareSummaryResponse {
   private Integer successCount;
   private Integer warningCount;
   private Integer gapCount;
+  private LocalDateTime priceAsOfTime;
+  private String priceAsOfSource;
   private LocalDateTime startedAt;
   private LocalDateTime finishedAt;
   private String message;

@@ -207,6 +207,7 @@ class BomImportServiceImplTest extends BomMapperTestBase {
   }
 
   @Test
+  @Tag("legacy-bom-import")
   @DisplayName("importAndBuild：财务一键入口只构建当前报价口径主制造")
   void testImportAndBuildOnlyMainManufacturing() throws Exception {
     byte[] xlsx = buildVersionedXlsx(new String[][] {

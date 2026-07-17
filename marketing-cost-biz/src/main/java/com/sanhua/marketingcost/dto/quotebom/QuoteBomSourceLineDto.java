@@ -15,6 +15,7 @@ public record QuoteBomSourceLineDto(
     String drawingNo,
     String shapeAttr,
     String mainCategoryCode,
+    String mainCategoryName,
     String unit,
     String sourceCategory,
     String costElementCode,

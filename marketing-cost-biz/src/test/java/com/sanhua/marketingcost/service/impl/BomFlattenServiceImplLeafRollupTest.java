@@ -159,6 +159,7 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
   void testCopperLeafIsTopLevel() {
     // 顶层 T 自己就是叶子，名字命中"拉制铜管"
     BomRawHierarchy top = new BomRawHierarchy();
+    top.setPriceOrgCode("210");
     top.setTopProductCode("T");
     top.setParentCode("T");
     top.setMaterialCode("T");
@@ -474,6 +475,7 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
   /** 顶层 raw 行（level=0, path=/top/） */
   private void seedTop(String top, String purpose, String effFrom, int isLeaf) {
     BomRawHierarchy row = new BomRawHierarchy();
+    row.setPriceOrgCode("210");
     row.setTopProductCode(top);
     row.setParentCode(top);
     row.setMaterialCode(top);
@@ -503,6 +505,7 @@ class BomFlattenServiceImplLeafRollupTest extends BomMapperTestBase {
       String purpose, String effFrom, String name, String cat1, String sourceCategory,
       int isLeaf) {
     BomRawHierarchy row = new BomRawHierarchy();
+    row.setPriceOrgCode("210");
     String top = path.substring(1, path.indexOf('/', 1));
     row.setTopProductCode(top);
     row.setParentCode(parent);

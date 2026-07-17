@@ -45,7 +45,35 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
       String bomPurpose,
       String sourceType,
       PricePreparePlanItem planItem) {
-    return prepare(prepareNo, oaNo, periodMonth, null, bomPurpose, sourceType, planItem);
+    return execute(
+        prepareNo,
+        oaNo,
+        periodMonth,
+        null,
+        bomPurpose,
+        sourceType,
+        planItem,
+        true);
+  }
+
+  @Override
+  public PackageComponentPricePrepareResult calculate(
+      String prepareNo,
+      String oaNo,
+      String periodMonth,
+      LocalDateTime priceAsOfTime,
+      String bomPurpose,
+      String sourceType,
+      PricePreparePlanItem planItem) {
+    return execute(
+        prepareNo,
+        oaNo,
+        periodMonth,
+        priceAsOfTime,
+        bomPurpose,
+        sourceType,
+        planItem,
+        false);
   }
 
   @Override
@@ -57,6 +85,26 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
       String bomPurpose,
       String sourceType,
       PricePreparePlanItem planItem) {
+    return execute(
+        prepareNo,
+        oaNo,
+        periodMonth,
+        priceAsOfTime,
+        bomPurpose,
+        sourceType,
+        planItem,
+        true);
+  }
+
+  private PackageComponentPricePrepareResult execute(
+      String prepareNo,
+      String oaNo,
+      String periodMonth,
+      LocalDateTime priceAsOfTime,
+      String bomPurpose,
+      String sourceType,
+      PricePreparePlanItem planItem,
+      boolean persist) {
     String packageMaterialCode = planItem == null ? null : trimToNull(planItem.getMaterialCode());
     String topProductCode = planItem == null ? null : trimToNull(planItem.getTopProductCode());
     if (packageMaterialCode == null || topProductCode == null) {
@@ -84,7 +132,9 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
     request.setCalcBatchId(prepareNo);
     request.setForceRefresh(true);
 
-    PackagePriceResult priceResult = packageComponentPriceService.ensurePrice(request);
+    PackagePriceResult priceResult = persist
+        ? packageComponentPriceService.ensurePrice(request)
+        : packageComponentPriceService.calculatePrice(request);
     if (priceResult == null || priceResult.getPrice() == null) {
       List<PackageComponentPricePrepareResult.Gap> gaps = List.of(
           new PackageComponentPricePrepareResult.Gap(

@@ -27,6 +27,15 @@ public class QuoteCostRunVersion {
   private String bomConfirmNo;
   private String priceTypeConfirmNo;
   private String pricePrepareNo;
+  private String oaPricePrepareNo;
+  private String financePricePrepareNo;
+  private BigDecimal financeCuPrice;
+  private BigDecimal oaCuPrice;
+  private Long financeBasePriceId;
+  private BigDecimal financeMaterialCost;
+  private BigDecimal oaMaterialCost;
+  private BigDecimal cuMaterialAdjustment;
+  private BigDecimal finalQuoteAmount;
   private String status;
   private BigDecimal totalCost;
   private Integer partItemCount;

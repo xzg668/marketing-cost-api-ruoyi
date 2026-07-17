@@ -3,6 +3,8 @@ package com.sanhua.marketingcost.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -32,7 +34,6 @@ import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmItem;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.MaterialPriceTypeMapper;
-import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
@@ -43,6 +44,7 @@ import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.MakePartPriceGenerationService;
 import com.sanhua.marketingcost.service.PackageComponentSnapshotService;
 import com.sanhua.marketingcost.service.PricePrepareItemClassifier;
+import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -51,6 +53,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.transaction.annotation.Transactional;
 
 class QuotePriceTypeConfirmationServiceImplTest {
 
@@ -64,10 +67,10 @@ class QuotePriceTypeConfirmationServiceImplTest {
   private PricePrepareItemClassifier itemClassifier;
   private PackageComponentSnapshotService packageSnapshotService;
   private MakePartPriceGenerationService makePartPriceGenerationService;
-  private MakePartPriceCalcRowMapper makePartPriceCalcRowMapper;
   private QuotePriceTypeConfirmBatchMapper batchMapper;
   private QuotePriceTypeConfirmItemMapper itemMapper;
   private QuotePriceTypeConfirmationInvalidationService priceTypeInvalidationService;
+  private QuoteCostRunVersionInvalidationService versionInvalidationService;
   private QuotePriceTypeConfirmationServiceImpl service;
 
   @BeforeEach
@@ -82,10 +85,10 @@ class QuotePriceTypeConfirmationServiceImplTest {
     itemClassifier = mock(PricePrepareItemClassifier.class);
     packageSnapshotService = mock(PackageComponentSnapshotService.class);
     makePartPriceGenerationService = mock(MakePartPriceGenerationService.class);
-    makePartPriceCalcRowMapper = mock(MakePartPriceCalcRowMapper.class);
     batchMapper = mock(QuotePriceTypeConfirmBatchMapper.class);
     itemMapper = mock(QuotePriceTypeConfirmItemMapper.class);
     priceTypeInvalidationService = mock(QuotePriceTypeConfirmationInvalidationService.class);
+    versionInvalidationService = mock(QuoteCostRunVersionInvalidationService.class);
     service =
         new QuotePriceTypeConfirmationServiceImpl(
             oaFormMapper,
@@ -98,10 +101,10 @@ class QuotePriceTypeConfirmationServiceImplTest {
             itemClassifier,
             packageSnapshotService,
             makePartPriceGenerationService,
-            makePartPriceCalcRowMapper,
             batchMapper,
             itemMapper,
-            priceTypeInvalidationService);
+            priceTypeInvalidationService,
+            versionInvalidationService);
   }
 
   @Test
@@ -147,7 +150,9 @@ class QuotePriceTypeConfirmationServiceImplTest {
     when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
         .thenReturn(List.of(parent));
     when(itemClassifier.classify(any())).thenReturn(List.of(makePlan(parent)));
-    when(makePartPriceCalcRowMapper.selectList(any())).thenReturn(List.of(makeCalcRow()));
+    when(makePartPriceGenerationService.previewStructureByOa(
+            "OA-001", "COMMERCIAL", "2026-06"))
+        .thenReturn(List.of(makeCalcRow()));
     when(materialPriceRouterService.resolve(eq("RAW-1"), eq("2026-06"), any(LocalDate.class)))
         .thenReturn(Optional.empty());
     when(materialPriceRouterService.resolve(eq("SCRAP-1"), eq("2026-06"), any(LocalDate.class)))
@@ -160,7 +165,8 @@ class QuotePriceTypeConfirmationServiceImplTest {
     assertThat(response.getRows().get(0).getTypeStatus()).isEqualTo("CHILD_MISSING_TYPE");
     assertThat(response.getRows().get(0).getChildren()).extracting("objectType")
         .containsExactly("MAKE_RAW", "MAKE_SCRAP");
-    verify(makePartPriceGenerationService).generateByOa("OA-001", "COMMERCIAL", "2026-06");
+    verify(makePartPriceGenerationService)
+        .previewStructureByOa("OA-001", "COMMERCIAL", "2026-06");
     assertThat(response.getSummary().getMakePartCount()).isEqualTo(1);
     assertThat(response.getSummary().getMissingTypeCount()).isEqualTo(1);
   }
@@ -172,7 +178,7 @@ class QuotePriceTypeConfirmationServiceImplTest {
     when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
         .thenReturn(List.of(parent));
     when(itemClassifier.classify(any())).thenReturn(List.of(packagePlan(parent)));
-    when(packageSnapshotService.ensureSnapshot(any())).thenReturn(packageSnapshot());
+    when(packageSnapshotService.previewSnapshot(any())).thenReturn(packageSnapshot());
     when(materialPriceRouterService.resolve(eq("PKG-CHILD-1"), eq("2026-06"), any(LocalDate.class)))
         .thenReturn(Optional.empty());
 
@@ -186,7 +192,7 @@ class QuotePriceTypeConfirmationServiceImplTest {
     assertThat(response.getSummary().getMissingTypeCount()).isEqualTo(1);
     ArgumentCaptor<PackageSnapshotRequest> requestCaptor =
         ArgumentCaptor.forClass(PackageSnapshotRequest.class);
-    verify(packageSnapshotService).ensureSnapshot(requestCaptor.capture());
+    verify(packageSnapshotService).previewSnapshot(requestCaptor.capture());
     assertThat(requestCaptor.getValue().getSourceType()).isEqualTo("U9");
     assertThat(requestCaptor.getValue().getPriceOrgCode()).isEqualTo("210");
   }
@@ -205,7 +211,7 @@ class QuotePriceTypeConfirmationServiceImplTest {
     when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
         .thenReturn(List.of(parent));
     when(itemClassifier.classify(any())).thenReturn(List.of(packagePlan(parent)));
-    when(packageSnapshotService.ensureSnapshot(any())).thenReturn(packageSnapshot());
+    when(packageSnapshotService.previewSnapshot(any())).thenReturn(packageSnapshot());
     when(materialPriceRouterService.resolve(eq("PKG-CHILD-1"), eq("2026-06"), any(LocalDate.class)))
         .thenReturn(Optional.empty());
 
@@ -213,7 +219,7 @@ class QuotePriceTypeConfirmationServiceImplTest {
 
     ArgumentCaptor<PackageSnapshotRequest> requestCaptor =
         ArgumentCaptor.forClass(PackageSnapshotRequest.class);
-    verify(packageSnapshotService).ensureSnapshot(requestCaptor.capture());
+    verify(packageSnapshotService).previewSnapshot(requestCaptor.capture());
     assertThat(requestCaptor.getValue().getPriceOrgCode()).isEqualTo("220");
   }
 
@@ -399,6 +405,47 @@ class QuotePriceTypeConfirmationServiceImplTest {
     verify(itemMapper).insert(itemCaptor.capture());
     assertThat(itemCaptor.getValue().getObjectType()).isEqualTo("NORMAL");
     assertThat(itemCaptor.getValue().getStatus()).isEqualTo("CONFIRMED");
+    verify(versionInvalidationService)
+        .invalidateProduct("OA-001", 10L, "FIN-001", "2026-06");
+  }
+
+  @Test
+  void repeatConfirmReturnsExistingBatchWithoutWritingDuplicateData() {
+    mockScope();
+    QuotePriceTypeConfirmBatch existing = new QuotePriceTypeConfirmBatch();
+    existing.setConfirmNo("PT-CF-EXISTING");
+    existing.setBomConfirmNo("BOM-CF-001");
+    existing.setStatus(QuotePriceTypeConfirmBatch.STATUS_CONFIRMED);
+    existing.setTotalCount(1);
+    existing.setConfirmedCount(1);
+    existing.setGapCount(0);
+    when(batchMapper.selectOne(any())).thenReturn(existing);
+
+    QuotePriceTypeConfirmationActionResponse response =
+        service.confirm("OA-001", 10L, new QuotePriceTypeConfirmRequest());
+
+    assertThat(response.getConfirmNo()).isEqualTo("PT-CF-EXISTING");
+    assertThat(response.getStatus()).isEqualTo(QuotePriceTypeConfirmBatch.STATUS_CONFIRMED);
+    verify(batchMapper, never()).insert(any(QuotePriceTypeConfirmBatch.class));
+    verify(batchMapper, never()).updateById(any(QuotePriceTypeConfirmBatch.class));
+    verify(itemMapper, never()).insert(any(QuotePriceTypeConfirmItem.class));
+    verify(bomCostingRowMapper, never()).selectQuoteCostingSnapshot(anyString(), anyLong(), anyString(), anyString());
+    verify(makePartPriceGenerationService, never())
+        .previewStructureByOa(anyString(), anyString(), anyString());
+    verify(packageSnapshotService, never()).previewSnapshot(any(PackageSnapshotRequest.class));
+    verify(versionInvalidationService, never())
+        .invalidateProduct(anyString(), anyLong(), anyString(), anyString());
+  }
+
+  @Test
+  void priceTypePageReadUsesReadOnlyTransaction() throws Exception {
+    Transactional transactional =
+        QuotePriceTypeConfirmationServiceImpl.class
+            .getMethod("getConfirmation", String.class, Long.class, String.class)
+            .getAnnotation(Transactional.class);
+
+    assertThat(transactional).isNotNull();
+    assertThat(transactional.readOnly()).isTrue();
   }
 
   @Test

@@ -8,7 +8,6 @@ import com.sanhua.marketingcost.config.LinkedParserProperties;
 import com.sanhua.marketingcost.dto.LinkedPriceVariableContext;
 import com.sanhua.marketingcost.dto.PriceLinkedCalcRow;
 import com.sanhua.marketingcost.dto.PriceLinkedCalcTraceResponse;
-import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewRequest;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewResponse;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewResponse.VariableDetail;
 import com.sanhua.marketingcost.service.PriceLinkedFormulaPreviewService;
@@ -457,9 +456,10 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
    *
    * <p>历史实现把 {@code id} 当作 calc_item.id 去 {@code selectById}，
    * 但 calc_item 与 linked_item 的主键域完全独立，前端点的又是 linked_item.id，
-   * 造成必 miss 的 404。改走 {@link PriceLinkedFormulaPreviewService#preview}：
+   * 造成必 miss 的 404。改走
+   * {@link PriceLinkedFormulaPreviewService#previewForRefresh(PriceLinkedItem, Map)}：
    * <ul>
-   *   <li>从 linkedItem 抽 {@code formulaExpr / materialCode / pricingMonth} 拼 request</li>
+   *   <li>把当前 linkedItem 原样传入，保留供应商、加工费等行级上下文</li>
    *   <li>preview 内部自带 normalize + resolve + evaluate 全链路</li>
    *   <li>把 response 拍平成前端 {@code parseTraceJson + buildTraceTimeline} 期待的 schema：
    *       {@code {rawExpr, normalizedExpr, variables, result, error}}</li>
@@ -478,14 +478,10 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       return null;
     }
 
-    PriceLinkedFormulaPreviewRequest request = new PriceLinkedFormulaPreviewRequest();
-    request.setFormulaExpr(linkedItem.getFormulaExpr());
-    request.setMaterialCode(linkedItem.getMaterialCode());
-    request.setPricingMonth(linkedItem.getPricingMonth());
-    // 不含税结算口径：Excel"联动价-部品6"单价列 = 含税公式结果 / (1+vat_rate)；
-    // 把 linkedItem.tax_included 透传给 preview，让其在阶段 5 做 1/(1+vat_rate) 转换
-    request.setTaxIncluded(linkedItem.getTaxIncluded());
-    PriceLinkedFormulaPreviewResponse preview = previewService.preview(request);
+    // 必须使用按 id 取到的当前行作为上下文。同料号存在多个供应商时，如果重新按
+    // materialCode + pricingMonth 查询，会误取最新供应商行并串用其加工费。
+    PriceLinkedFormulaPreviewResponse preview =
+        previewService.previewForRefresh(linkedItem, Map.of());
 
     // 前端 priceLinkedResultUtils.buildTraceTimeline 按平铺字段读；把 preview 结果摊平成 map
     Map<String, Object> flat = new LinkedHashMap<>();
@@ -834,11 +830,28 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
 
   PriceLinkedCalcItem calculateQuoteItemForEnsure(
       PriceLinkedCalcItem calcItem, PriceLinkedItem linkedItem, OaForm oaForm) {
+    return calculateQuoteItemForEnsure(
+        calcItem,
+        linkedItem,
+        oaForm,
+        Map.of(),
+        LinkedPriceFactorSource.OA_LOCKED.getCode());
+  }
+
+  PriceLinkedCalcItem calculateQuoteItemForEnsure(
+      PriceLinkedCalcItem calcItem,
+      PriceLinkedItem linkedItem,
+      OaForm oaForm,
+      Map<String, BigDecimal> variableOverrides,
+      String factorSource) {
     if (calcItem == null) {
       throw new IllegalArgumentException("calcItem 不能为空");
     }
     calcItem.setCalcScene(LinkedPriceCalcScene.QUOTE.getCode());
-    calcItem.setFactorSource(LinkedPriceCalcScene.QUOTE.getDefaultFactorSource().getCode());
+    String resolvedFactorSource = StringUtils.hasText(factorSource)
+        ? factorSource.trim()
+        : LinkedPriceFactorSource.OA_LOCKED.getCode();
+    calcItem.setFactorSource(resolvedFactorSource);
     calcItem.setAdjustBatchId(null);
     if (linkedItem == null || !StringUtils.hasText(linkedItem.getFormulaExpr())) {
       calcItem.setPartUnitPrice(null);
@@ -851,7 +864,13 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     Map<String, PriceVariable> variableMap = fetchVariableMap();
     Map<String, Map<String, BigDecimal>> financePriceMap = buildFinancePriceMap(variableMap);
     BigDecimal partUnitPrice = calculatePartUnitPrice(
-        linkedItem, calcItem, oaForm, variableMap, financePriceMap);
+        linkedItem,
+        calcItem,
+        oaForm,
+        variableMap,
+        financePriceMap,
+        variableOverrides,
+        resolvedFactorSource);
     BigDecimal partAmount = calculatePartAmount(partUnitPrice, calcItem.getBomQty());
     calcItem.setPartUnitPrice(partUnitPrice);
     calcItem.setPartAmount(partAmount);
@@ -1005,6 +1024,24 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       OaForm oaForm,
       Map<String, PriceVariable> variableMap,
       Map<String, Map<String, BigDecimal>> financePriceMap) {
+    return calculatePartUnitPrice(
+        linkedItem,
+        calcItem,
+        oaForm,
+        variableMap,
+        financePriceMap,
+        Map.of(),
+        LinkedPriceFactorSource.OA_LOCKED.getCode());
+  }
+
+  private BigDecimal calculatePartUnitPrice(
+      PriceLinkedItem linkedItem,
+      PriceLinkedCalcItem calcItem,
+      OaForm oaForm,
+      Map<String, PriceVariable> variableMap,
+      Map<String, Map<String, BigDecimal>> financePriceMap,
+      Map<String, BigDecimal> variableOverrides,
+      String factorSource) {
     if (linkedItem == null || !StringUtils.hasText(linkedItem.getFormulaExpr())) {
       return null;
     }
@@ -1016,10 +1053,11 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
 
     if (runLegacy) {
       legacyResult = legacyCalculate(
-          linkedItem, calcItem, oaForm, variableMap, financePriceMap);
+          linkedItem, calcItem, oaForm, variableMap, financePriceMap, variableOverrides);
     }
     if (runNew) {
-      NewCalcOutcome outcome = newCalculate(linkedItem, calcItem, oaForm);
+      NewCalcOutcome outcome =
+          newCalculate(linkedItem, calcItem, oaForm, variableOverrides, factorSource);
       newResult = outcome.value;
       trace = outcome.trace;
     }
@@ -1059,10 +1097,18 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       PriceLinkedCalcItem calcItem,
       OaForm oaForm,
       Map<String, PriceVariable> variableMap,
-      Map<String, Map<String, BigDecimal>> financePriceMap) {
+      Map<String, Map<String, BigDecimal>> financePriceMap,
+      Map<String, BigDecimal> variableOverrides) {
     String expr = linkedItem.getFormulaExpr().trim();
     Map<String, BigDecimal> values = resolveVariables(
         expr, linkedItem, calcItem, oaForm, variableMap, financePriceMap);
+    if (variableOverrides != null && !variableOverrides.isEmpty()) {
+      variableOverrides.forEach((code, value) -> {
+        if (code != null && value != null && values.containsKey(code.trim())) {
+          values.put(code.trim(), value);
+        }
+      });
+    }
     return evaluateExpression(expr, values);
   }
 
@@ -1091,6 +1137,20 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       PriceLinkedItem linkedItem,
       PriceLinkedCalcItem calcItem,
       OaForm oaForm) {
+    return newCalculate(
+        linkedItem,
+        calcItem,
+        oaForm,
+        Map.of(),
+        calcItem == null ? null : calcItem.getFactorSource());
+  }
+
+  private NewCalcOutcome newCalculate(
+      PriceLinkedItem linkedItem,
+      PriceLinkedCalcItem calcItem,
+      OaForm oaForm,
+      Map<String, BigDecimal> variableOverrides,
+      String factorSource) {
     Map<String, Object> trace = new LinkedHashMap<>();
     trace.put("mode", parserProperties.getMode());
     if (linkedItem == null || !StringUtils.hasText(linkedItem.getFormulaExpr())) {
@@ -1101,7 +1161,8 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     trace.put("formulaPriceMonth", linkedItem.getPricingMonth());
     trace.put("calculationPriceMonth", calculationPricingMonth(calcItem, linkedItem));
 
-    LinkedPriceVariableContext variableContext = buildVariableContext(calcItem, oaForm, trace);
+    LinkedPriceVariableContext variableContext =
+        buildVariableContext(calcItem, oaForm, trace, variableOverrides, factorSource);
     OaForm contextOaForm =
         variableContext.getCalcScene() == LinkedPriceCalcScene.MONTHLY_ADJUST ? null : oaForm;
 
@@ -1150,6 +1211,20 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
 
   private LinkedPriceVariableContext buildVariableContext(
       PriceLinkedCalcItem calcItem, OaForm oaForm, Map<String, Object> trace) {
+    return buildVariableContext(
+        calcItem,
+        oaForm,
+        trace,
+        Map.of(),
+        calcItem == null ? null : calcItem.getFactorSource());
+  }
+
+  private LinkedPriceVariableContext buildVariableContext(
+      PriceLinkedCalcItem calcItem,
+      OaForm oaForm,
+      Map<String, Object> trace,
+      Map<String, BigDecimal> variableOverrides,
+      String factorSource) {
     String calcScene = calcItem == null ? null : calcItem.getCalcScene();
     if (LinkedPriceCalcScene.MONTHLY_ADJUST.getCode().equalsIgnoreCase(calcScene)) {
       Long adjustBatchId = calcItem.getAdjustBatchId();
@@ -1161,9 +1236,20 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     }
     // QUOTE 场景变量上下文：正常报价必须优先使用 OA 表头锁价，不能误读月度调价影响因素价。
     trace.put("calcScene", LinkedPriceCalcScene.QUOTE.getCode());
-    trace.put("factorSource", LinkedPriceCalcScene.QUOTE.getDefaultFactorSource().getCode());
-    return LinkedPriceVariableContext.quote(oaForm)
+    String resolvedFactorSource = StringUtils.hasText(factorSource)
+        ? factorSource.trim()
+        : LinkedPriceFactorSource.OA_LOCKED.getCode();
+    trace.put("factorSource", resolvedFactorSource);
+    LinkedPriceVariableContext context = LinkedPriceVariableContext.quote(oaForm)
         .pricingMonth(calcItem == null ? null : calcItem.getPricingMonth());
+    if (variableOverrides != null) {
+      variableOverrides.forEach((code, value) -> {
+        if (code != null && value != null) {
+          context.overrideKg(code, value, resolvedFactorSource);
+        }
+      });
+    }
+    return context;
   }
 
   private String calculationPricingMonth(PriceLinkedCalcItem calcItem, PriceLinkedItem linkedItem) {

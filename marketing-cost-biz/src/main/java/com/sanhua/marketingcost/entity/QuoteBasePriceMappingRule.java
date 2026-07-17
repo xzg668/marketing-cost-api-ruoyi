@@ -35,6 +35,10 @@ public class QuoteBasePriceMappingRule {
 
   private String matchMode;
   private Integer priority;
+
+  /** OA_PRIORITY=OA 有值优先；FACTOR_MONTHLY=直接使用核算月份影响因素价格。 */
+  private String pricePolicy;
+
   private Integer enabled;
   private String remark;
 

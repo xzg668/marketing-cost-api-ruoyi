@@ -20,7 +20,7 @@ class V146BomSettlementRuleSchemaSqlTest {
     assertThat(SQL).contains(
         "CREATE TABLE IF NOT EXISTS lp_bom_settlement_rule",
         "CREATE TABLE IF NOT EXISTS lp_bom_byproduct_cost_rule",
-        "COMMENT='BOM 树节点结算规则：特殊采购分类上卷、辅料排除、包装截断等'",
+        "COMMENT='BOM 树节点结算规则：特殊子项品名上卷、辅料排除、包装截断等'",
         "COMMENT='BOM 副产品附加结算行规则：基于 U9 副产品档案和废料映射判断是否额外输出'");
   }
 
@@ -58,7 +58,7 @@ class V146BomSettlementRuleSchemaSqlTest {
   }
 
   @Test
-  @DisplayName("初始化特殊采购分类上卷、辅料排除和副产品附加规则")
+  @DisplayName("初始化特殊子项品名上卷、辅料排除和副产品附加规则")
   void seedsInitialRules() {
     assertThat(SQL).contains(
         "SPECIAL_PURCHASE_ROLLUP_MESH",

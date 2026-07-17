@@ -60,6 +60,33 @@ class MakePartPriceCalculatorTest {
   }
 
   @Test
+  @DisplayName("A板片组件两条原材料分别按各自净重计算后与见机表单价一致")
+  void plateComponentMultipleRawMaterialsMatchMachineTable() {
+    MakePartPriceCalcRow stainless = baseRow("不锈钢废料");
+    stainless.setParentMaterialNo("1053000301687");
+    stainless.setChildMaterialNo("301240299");
+    stainless.setGrossWeightG(new BigDecimal("37.9"));
+    stainless.setNetWeightG(new BigDecimal("37.89999570"));
+    stainless.setRawUnitPrice(new BigDecimal("20.1238938053"));
+    stainless.setScrapUnitPrice(new BigDecimal("9.43362831858"));
+
+    MakePartPriceCalcRow copper = baseRow("铜废料");
+    copper.setParentMaterialNo("1053000301687");
+    copper.setChildMaterialNo("301070047");
+    copper.setGrossWeightG(new BigDecimal("5.6"));
+    copper.setNetWeightG(new BigDecimal("5.59999940"));
+    copper.setRawUnitPrice(new BigDecimal("87.1681415929"));
+    copper.setScrapUnitPrice(new BigDecimal("78.2123893805"));
+
+    List<MakePartPriceCalcRow> result = calculator.calculate(List.of(stainless, copper));
+
+    assertThat(result).extracting(MakePartPriceCalcRow::getCostPrice)
+        .containsExactly(new BigDecimal("0.76269553"), new BigDecimal("0.48814155"));
+    assertThat(result).allSatisfy(row ->
+        assertThat(row.getParentTotalCostPrice()).isEqualByComparingTo("1.25083708"));
+  }
+
+  @Test
   @DisplayName("缺重量、缺原材料价格、缺回收价格、缺废料映射不计算 OK 价")
   void missingInputsReturnErrorRows() {
     MakePartPriceCalcRow missingWeight = baseRow("SCRAP-WEIGHT");

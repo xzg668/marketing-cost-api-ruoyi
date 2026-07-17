@@ -12,6 +12,7 @@ import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.entity.PriceVariableBinding;
 import com.sanhua.marketingcost.enums.LinkedPriceFactorSource;
+import com.sanhua.marketingcost.enums.MetalBasePricePolicy;
 import com.sanhua.marketingcost.mapper.FactorAdjustPriceMapper;
 import com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper;
 import com.sanhua.marketingcost.mapper.FactorQuoteBaseMappingMapper;
@@ -269,9 +270,13 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
         return adjustedPrice;
       }
     } else {
-      Optional<BigDecimal> quoteBasePrice = resolveQuoteBaseLockPrice(factorIdentityId, ctx);
+      Optional<BigDecimal> quoteBasePrice =
+          resolveQuoteBaseLockPrice(variable, factorIdentityId, ctx);
       if (quoteBasePrice.isPresent()) {
-        ctx.resolvedSource(variable.getVariableCode(), LinkedPriceFactorSource.OA_LOCKED.getCode());
+        if (ctx.getResolvedSource(variable.getVariableCode()) == null) {
+          ctx.resolvedSource(
+              variable.getVariableCode(), LinkedPriceFactorSource.OA_LOCKED.getCode());
+        }
         return quoteBasePrice;
       }
     }
@@ -292,9 +297,8 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
   }
 
   private Optional<BigDecimal> resolveQuoteBaseLockPrice(
-      Long factorIdentityId, VariableContext ctx) {
-    if (factorIdentityId == null || ctx == null || ctx.getOaForm() == null
-        || factorQuoteBaseMappingMapper == null) {
+      PriceVariable variable, Long factorIdentityId, VariableContext ctx) {
+    if (factorIdentityId == null || ctx == null || factorQuoteBaseMappingMapper == null) {
       return Optional.empty();
     }
     List<FactorQuoteBaseMapping> mappings = factorQuoteBaseMappingMapper.selectList(
@@ -303,7 +307,41 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
             .eq(FactorQuoteBaseMapping::getEnabled, 1)
             .eq(FactorQuoteBaseMapping::getDeleted, 0)
             .orderByAsc(FactorQuoteBaseMapping::getId));
+    // factor_identity_xxx 是导入公式的稳定身份编码，而财务场景显式覆盖使用
+    // Cu/Zn/Al 等业务变量编码。先借助映射表把两者对齐，确保显式覆盖仍保持
+    // 最高优先级；否则会继续从 OA 表头读到锁价，导致财务与 OA 场景完全相同。
     for (FactorQuoteBaseMapping mapping : mappings) {
+      String variableCode = mapping == null ? null : mapping.getVariableCode();
+      if (variableCode == null
+          || variableCode.isBlank()
+          || !ctx.getOverrides().containsKey(variableCode.trim())) {
+        continue;
+      }
+      BigDecimal override = ctx.getOverrides().get(variableCode.trim());
+      if (override == null) {
+        continue;
+      }
+      String source = ctx.getOverrideSource(variableCode.trim());
+      // 报价上下文会把 OA 表头的 Cu/Zn/Al 预先放入语义变量 overrides。
+      // 当规则配置为“影响因素表”时，这类 OA_LOCKED 覆盖也必须跳过，
+      // 否则会在下方 price_policy 判断之前提前返回，导致页面配置形同虚设。
+      // 非 OA 的显式覆盖（例如财务 Cu 月度基准）仍保持最高优先级。
+      if (isFactorMonthlyPolicy(mapping)
+          && LinkedPriceFactorSource.OA_LOCKED.getCode().equalsIgnoreCase(source)) {
+        continue;
+      }
+      if (variable != null) {
+        ctx.resolvedSource(variable.getVariableCode(), source);
+      }
+      return Optional.of(override);
+    }
+    if (ctx.getOaForm() == null) {
+      return Optional.empty();
+    }
+    for (FactorQuoteBaseMapping mapping : mappings) {
+      if (isFactorMonthlyPolicy(mapping)) {
+        continue;
+      }
       BigDecimal tonPrice = readOaQuoteBasePrice(ctx.getOaForm(), mapping.getQuoteFieldCode());
       if (tonPrice != null) {
         // OA 表头基价按元/吨存储；公式变量沿用老 Cu/Zn/Al 口径，统一转成元/kg。
@@ -311,6 +349,12 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
       }
     }
     return Optional.empty();
+  }
+
+  private boolean isFactorMonthlyPolicy(FactorQuoteBaseMapping mapping) {
+    return mapping != null
+        && MetalBasePricePolicy.FACTOR_MONTHLY.name()
+            .equalsIgnoreCase(mapping.getPricePolicy());
   }
 
   private Optional<BigDecimal> resolveAdjustBatchPrice(

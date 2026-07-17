@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.sanhua.marketingcost.dto.MetalBasePricePolicyResponse;
 import com.sanhua.marketingcost.dto.QuoteBasePriceDetectResult;
 import com.sanhua.marketingcost.entity.FactorQuoteBaseMapping;
 import com.sanhua.marketingcost.entity.QuoteBasePriceMappingRule;
@@ -17,6 +18,11 @@ public interface QuoteBasePriceMappingService {
       int pageSize);
 
   List<QuoteBasePriceMappingRule> listEnabledRules(String businessUnitType, String keyword);
+
+  List<MetalBasePricePolicyResponse> listMetalBasePricePolicies();
+
+  MetalBasePricePolicyResponse updateMetalBasePricePolicy(
+      String variableCode, String pricePolicy, String operator);
 
   QuoteBasePriceMappingRule createRule(QuoteBasePriceMappingRule rule, String operator);
 

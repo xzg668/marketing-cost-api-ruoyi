@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
+import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -31,4 +32,21 @@ public interface MakePartPriceCalcRowMapper extends BaseMapper<MakePartPriceCalc
       @Param("oaNo") String oaNo,
       @Param("businessUnitType") String businessUnitType,
       @Param("parentMaterialNo") String parentMaterialNo);
+
+  @Select({
+      "SELECT *",
+      "FROM lp_make_part_price_calc_row",
+      "WHERE oa_no = #{oaNo}",
+      "  AND business_unit_type = #{businessUnitType}",
+      "  AND pricing_month = #{pricingMonth}",
+      "  AND parent_material_no = #{parentMaterialNo}",
+      "  AND calc_batch_id = #{calcBatchId}",
+      "ORDER BY created_at DESC, id DESC"
+  })
+  List<MakePartPriceCalcRow> selectBatchRows(
+      @Param("oaNo") String oaNo,
+      @Param("businessUnitType") String businessUnitType,
+      @Param("pricingMonth") String pricingMonth,
+      @Param("parentMaterialNo") String parentMaterialNo,
+      @Param("calcBatchId") String calcBatchId);
 }

@@ -116,7 +116,8 @@ public class MaterialPriceRouterServiceImpl implements MaterialPriceRouterServic
         if (row.getEffectiveFrom() != null && quoteDate.isBefore(row.getEffectiveFrom())) {
           continue;
         }
-        if (row.getEffectiveTo() != null && !quoteDate.isBefore(row.getEffectiveTo())) {
+        // 路由有效期与各价格源一致，起止日期都按闭区间处理。
+        if (row.getEffectiveTo() != null && quoteDate.isAfter(row.getEffectiveTo())) {
           continue;
         }
       }

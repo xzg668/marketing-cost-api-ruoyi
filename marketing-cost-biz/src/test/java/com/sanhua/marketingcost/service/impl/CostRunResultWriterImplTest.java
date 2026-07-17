@@ -62,6 +62,8 @@ class CostRunResultWriterImplTest {
     assertThat(partState.rows.get(0).getProductCode()).isEqualTo("P-001");
     assertThat(partState.rows.get(0).getPartCode()).isEqualTo("PART-001");
     assertThat(partState.rows.get(0).getBusinessUnitType()).isEqualTo("COMMERCIAL");
+    assertThat(partState.rows.get(0).getPriceOrgCode()).isEqualTo("210");
+    assertThat(partState.rows.get(0).getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
     assertThat(costState.rows).hasSize(1);
     assertThat(costState.rows.get(0).getCostCode()).isEqualTo("TOTAL");
     assertThat(costState.rows.get(0).getLineNo()).isEqualTo(1);
@@ -277,6 +279,8 @@ class CostRunResultWriterImplTest {
     item.setPartQty(new BigDecimal("2"));
     item.setUnitPrice(new BigDecimal("3"));
     item.setAmount(new BigDecimal("6"));
+    item.setPriceOrgCode("210");
+    item.setMaterialOrganizationCode("COMMERCIAL");
     return item;
   }
 

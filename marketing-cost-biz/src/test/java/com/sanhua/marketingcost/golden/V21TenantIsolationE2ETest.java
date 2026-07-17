@@ -96,7 +96,7 @@ class V21TenantIsolationE2ETest {
     MYSQL.start();
     try {
       runBaseMigrations();
-      runV21ViaMysqlCli();
+      runScriptViaMysqlCli("/db/V21__business_unit_type_isolation.sql", "V21");
       // T13-B：补 V24 + V31。
       // 根因不是 spec 推测的"别名冲突"，而是 testcontainers 容器只跑到 V16 + V21，缺
       // V24 加的 factor_type / aliases_json / context_binding_json 列、缺 V31 加的
@@ -106,6 +106,8 @@ class V21TenantIsolationE2ETest {
       // 不搬整套 V24..V47，仅补 VariableAliasIndex 启动必需的两条，最小化对 V21 测试的耦合。
       runScriptViaJdbcSingle("/db/V24__linked_price_variable_extension.sql");
       runScriptViaJdbcSingle("/db/V31__unified_resolver_model.sql");
+      runScriptViaMysqlCli("/db/V59__quote_ingest_schema.sql", "V59");
+      runScriptViaMysqlCli("/db/V121__quote_oa_form_excel_model.sql", "V121");
     } catch (Exception e) {
       throw new IllegalStateException("启动阶段初始化数据库失败", e);
     }
@@ -315,16 +317,17 @@ class V21TenantIsolationE2ETest {
    * V21 含 {@code DELIMITER //} 存储过程块，JDBC 无法识别。
    * 用容器内 {@code mysql} CLI 执行，并强制 utf8mb4 避免 "家用" 被按 latin1 解码。
    */
-  private static void runV21ViaMysqlCli() throws Exception {
+  private static void runScriptViaMysqlCli(String classpathResource, String logTag)
+      throws Exception {
     MYSQL.copyFileToContainer(
-        MountableFile.forClasspathResource("/db/V21__business_unit_type_isolation.sql"),
-        "/tmp/V21.sql");
+        MountableFile.forClasspathResource(classpathResource),
+        "/tmp/" + logTag + ".sql");
     ExecResult result = MYSQL.execInContainer(
         "sh", "-c",
         "mysql --default-character-set=utf8mb4 -uroot -p" + MYSQL.getPassword()
-            + " " + MYSQL.getDatabaseName() + " < /tmp/V21.sql");
+            + " " + MYSQL.getDatabaseName() + " < /tmp/" + logTag + ".sql");
     if (result.getExitCode() != 0) {
-      throw new IllegalStateException("V21 执行失败: exit=" + result.getExitCode()
+      throw new IllegalStateException(logTag + " 执行失败: exit=" + result.getExitCode()
           + "\nstdout:\n" + result.getStdout()
           + "\nstderr:\n" + result.getStderr());
     }

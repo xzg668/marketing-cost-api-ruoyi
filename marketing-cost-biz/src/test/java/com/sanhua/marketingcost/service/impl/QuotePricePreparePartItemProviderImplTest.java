@@ -47,9 +47,14 @@ class QuotePricePreparePartItemProviderImplTest {
         802L, 902L, "201290727", null, "MISSING_PRICE", "NO_ROUTE",
         "未配价格类型路由：去价格类型表录入 201290727", "1", null);
     when(itemMapper.selectList(any())).thenReturn(List.of(ready, missing));
-    when(bomMapper.selectList(any())).thenReturn(List.of(
-        bomRow(901L, "301300339", "BOM棒料", "原材料", "棒料规格"),
-        bomRow(902L, "201290727", "密封塞", "自制件", "密封塞规格")));
+    BomCostingRow contextOrganizationRow =
+        bomRow(901L, "301300339", "BOM棒料", "原材料", "棒料规格");
+    BomCostingRow crossOrganizationRow =
+        bomRow(902L, "201290727", "密封塞", "自制件", "密封塞规格");
+    crossOrganizationRow.setPriceOrgCode("220");
+    crossOrganizationRow.setMaterialOrganizationCode("PLATE");
+    when(bomMapper.selectList(any()))
+        .thenReturn(List.of(contextOrganizationRow, crossOrganizationRow));
     when(materialMasterMapper.selectList(any())).thenReturn(List.of(
         master("301300339", "PEEK棒料主档", "DRAW-339", "SUS303Cu Φ7", "原材料"),
         master("201290727", "密封塞主档", "DRAW-727", null, "自制件")));
@@ -66,10 +71,14 @@ class QuotePricePreparePartItemProviderImplTest {
     assertThat(result.get(0).getShapeAttr()).isEqualTo("原材料");
     assertThat(result.get(0).getPriceSource()).isEqualTo("固定价");
     assertThat(result.get(0).getAmount()).isEqualByComparingTo("0.005000");
+    assertThat(result.get(0).getPriceOrgCode()).isEqualTo("210");
+    assertThat(result.get(0).getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
     assertThat(result.get(1).getPartName()).isEqualTo("密封塞");
     assertThat(result.get(1).getAmount()).isNull();
     assertThat(result.get(1).getPriceSource()).isEqualTo("NO_ROUTE");
     assertThat(result.get(1).getRemark()).contains("未配价格类型路由");
+    assertThat(result.get(1).getPriceOrgCode()).isEqualTo("220");
+    assertThat(result.get(1).getMaterialOrganizationCode()).isEqualTo("PLATE");
   }
 
   @Test
@@ -117,6 +126,8 @@ class QuotePricePreparePartItemProviderImplTest {
         "2026-06",
         "QUOTE:14");
     context.setPricePrepareNo("PPR-001");
+    context.setPriceOrgCode("210");
+    context.setMaterialOrganizationCode("COMMERCIAL");
     return context;
   }
 

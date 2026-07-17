@@ -44,6 +44,9 @@ public class PriceLinkedCalcItem {
   /** LPE-02：计算失败或跳过说明。 */
   private String calcMessage;
 
+  /** 报价联动价的统一取价时点；为空表示改造前的历史兼容结果。 */
+  private LocalDateTime priceAsOfTime;
+
   /** V26 计算 trace JSON —— 存 {normalizedExpr, variables, steps, result/error} */
   @TableField("trace_json")
   private String traceJson;
@@ -116,6 +119,14 @@ public class PriceLinkedCalcItem {
 
   public void setCalcMessage(String calcMessage) {
     this.calcMessage = calcMessage;
+  }
+
+  public LocalDateTime getPriceAsOfTime() {
+    return priceAsOfTime;
+  }
+
+  public void setPriceAsOfTime(LocalDateTime priceAsOfTime) {
+    this.priceAsOfTime = priceAsOfTime;
   }
 
   public Long getId() {

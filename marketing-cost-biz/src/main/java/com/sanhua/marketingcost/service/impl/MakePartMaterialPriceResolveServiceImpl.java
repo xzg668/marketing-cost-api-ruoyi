@@ -2,11 +2,17 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.CostRunContext;
+import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
+import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
 import com.sanhua.marketingcost.dto.MakePartMaterialPriceResolveResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
+import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
+import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
+import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
+import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
 import com.sanhua.marketingcost.service.pricing.PriceResolveResult;
 import com.sanhua.marketingcost.service.pricing.PriceResolver;
 import java.math.BigDecimal;
@@ -16,6 +22,8 @@ import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -24,16 +32,26 @@ public class MakePartMaterialPriceResolveServiceImpl implements MakePartMaterial
 
   private final MaterialPriceRouterService materialPriceRouterService;
   private final Map<PriceTypeEnum, PriceResolver> resolverMap;
+  private final LinkedPriceEnsureService linkedPriceEnsureService;
 
   public MakePartMaterialPriceResolveServiceImpl(
       MaterialPriceRouterService materialPriceRouterService,
       List<PriceResolver> priceResolvers) {
+    this(materialPriceRouterService, priceResolvers, null);
+  }
+
+  @Autowired
+  public MakePartMaterialPriceResolveServiceImpl(
+      MaterialPriceRouterService materialPriceRouterService,
+      List<PriceResolver> priceResolvers,
+      LinkedPriceEnsureService linkedPriceEnsureService) {
     this.materialPriceRouterService = materialPriceRouterService;
     Map<PriceTypeEnum, PriceResolver> map = new EnumMap<>(PriceTypeEnum.class);
     for (PriceResolver resolver : priceResolvers) {
       map.put(resolver.priceType(), resolver);
     }
     this.resolverMap = Map.copyOf(map);
+    this.linkedPriceEnsureService = linkedPriceEnsureService;
   }
 
   /**
@@ -60,6 +78,65 @@ public class MakePartMaterialPriceResolveServiceImpl implements MakePartMaterial
       LocalDateTime priceAsOfTime,
       String oaNo,
       String businessUnitType) {
+    return resolveMaterialUnitPrice(
+        materialCode,
+        period,
+        quoteDate,
+        priceAsOfTime,
+        oaNo,
+        businessUnitType,
+        null);
+  }
+
+  @Override
+  public MakePartMaterialPriceResolveResult resolveMaterialUnitPrice(
+      String materialCode,
+      String period,
+      LocalDate quoteDate,
+      LocalDateTime priceAsOfTime,
+      String oaNo,
+      String businessUnitType,
+      PricePrepareScenarioContext scenarioContext) {
+    return execute(
+        materialCode,
+        period,
+        quoteDate,
+        priceAsOfTime,
+        oaNo,
+        businessUnitType,
+        scenarioContext,
+        true);
+  }
+
+  @Override
+  public MakePartMaterialPriceResolveResult calculateMaterialUnitPrice(
+      String materialCode,
+      String period,
+      LocalDate quoteDate,
+      LocalDateTime priceAsOfTime,
+      String oaNo,
+      String businessUnitType,
+      PricePrepareScenarioContext scenarioContext) {
+    return execute(
+        materialCode,
+        period,
+        quoteDate,
+        priceAsOfTime,
+        oaNo,
+        businessUnitType,
+        scenarioContext,
+        false);
+  }
+
+  private MakePartMaterialPriceResolveResult execute(
+      String materialCode,
+      String period,
+      LocalDate quoteDate,
+      LocalDateTime priceAsOfTime,
+      String oaNo,
+      String businessUnitType,
+      PricePrepareScenarioContext scenarioContext,
+      boolean persistLinkedPrice) {
     String code = trimToNull(materialCode);
     if (code == null) {
       return MakePartMaterialPriceResolveResult.miss(
@@ -76,9 +153,18 @@ public class MakePartMaterialPriceResolveServiceImpl implements MakePartMaterial
     item.setOaNo(oaNo);
     item.setPartCode(code);
     item.setPartQty(BigDecimal.ONE);
+    CostRunContext context =
+        priceContext(
+            period,
+            quoteDate,
+            priceAsOfTime,
+            oaNo,
+            businessUnitType,
+            scenarioContext);
 
     List<String> traceParts = new ArrayList<>();
     String lastMissReason = null;
+    boolean linkedPriceEnsured = false;
     for (PriceTypeRoute route : candidates) {
       String priceTypeText = priceTypeText(route);
       traceParts.add(traceRoute(route));
@@ -92,8 +178,32 @@ public class MakePartMaterialPriceResolveServiceImpl implements MakePartMaterial
         lastMissReason = "价格类型无 Resolver(price_type=" + priceTypeText + ")";
         continue;
       }
+      if (route.priceType() == PriceTypeEnum.LINKED && !linkedPriceEnsured) {
+        if (persistLinkedPrice) {
+          lastMissReason = ensureLinkedPrice(
+              code, period, oaNo, businessUnitType, context, scenarioContext);
+        } else {
+          PriceLinkedCalcItem calculated = calculateLinkedPrice(
+              code, period, oaNo, businessUnitType, context, scenarioContext);
+          if (calculated != null && calculated.getPartUnitPrice() != null) {
+            return MakePartMaterialPriceResolveResult.ok(
+                code,
+                priceTypeText,
+                calculated.getPartUnitPrice(),
+                "联动价只读计算完成",
+                String.join(" -> ", traceParts));
+          }
+          lastMissReason = calculated == null
+              ? "联动价只读计算未返回结果(material_code=" + code + ")"
+              : calculated.getCalcMessage();
+        }
+        linkedPriceEnsured = true;
+      }
+      if (!persistLinkedPrice && route.priceType() == PriceTypeEnum.LINKED) {
+        continue;
+      }
       PriceResolveResult resolved =
-          resolver.resolve(oaNo, item, route, priceContext(period, quoteDate, priceAsOfTime, oaNo, businessUnitType));
+          resolver.resolve(oaNo, item, route, context);
       if (resolved.unitPrice() != null) {
         return MakePartMaterialPriceResolveResult.ok(
             code,
@@ -117,6 +227,71 @@ public class MakePartMaterialPriceResolveServiceImpl implements MakePartMaterial
     return MakePartMaterialPriceResolveResult.miss(code, status, remark, trace);
   }
 
+  private String ensureLinkedPrice(
+      String materialCode,
+      String period,
+      String oaNo,
+      String businessUnitType,
+      CostRunContext context,
+      PricePrepareScenarioContext scenarioContext) {
+    if (linkedPriceEnsureService == null
+        || !StringUtils.hasText(oaNo)
+        || !StringUtils.hasText(businessUnitType)
+        || !StringUtils.hasText(period)) {
+      return null;
+    }
+    try {
+      LinkedPriceEnsureRequest request =
+          LinkedPriceEnsureRequest.quote(
+              oaNo.trim(), businessUnitType.trim(), period.trim(), Set.of(materialCode));
+      request.setPriceAsOfTime(context == null ? null : context.getPriceAsOfTime());
+      request.setPriceScenarioType(scenarioType(scenarioContext));
+      request.setVariableOverrides(
+          scenarioContext == null ? Map.of() : scenarioContext.variableOverrides());
+      LinkedPriceEnsureResult result = linkedPriceEnsureService.ensure(request);
+      if (result != null && result.getFailedCount() > 0) {
+        return "联动价准备失败(material_code=" + materialCode + ")";
+      }
+      return null;
+    } catch (RuntimeException ex) {
+      return "联动价准备异常(material_code=" + materialCode + "): "
+          + (StringUtils.hasText(ex.getMessage()) ? ex.getMessage() : ex.getClass().getSimpleName());
+    }
+  }
+
+  private PriceLinkedCalcItem calculateLinkedPrice(
+      String materialCode,
+      String period,
+      String oaNo,
+      String businessUnitType,
+      CostRunContext context,
+      PricePrepareScenarioContext scenarioContext) {
+    if (linkedPriceEnsureService == null
+        || !StringUtils.hasText(oaNo)
+        || !StringUtils.hasText(businessUnitType)
+        || !StringUtils.hasText(period)) {
+      return null;
+    }
+    try {
+      LinkedPriceEnsureRequest request =
+          LinkedPriceEnsureRequest.quote(
+              oaNo.trim(), businessUnitType.trim(), period.trim(), Set.of(materialCode));
+      request.setPriceAsOfTime(context == null ? null : context.getPriceAsOfTime());
+      request.setPriceScenarioType(scenarioType(scenarioContext));
+      request.setVariableOverrides(
+          scenarioContext == null ? Map.of() : scenarioContext.variableOverrides());
+      List<PriceLinkedCalcItem> calculated = linkedPriceEnsureService.calculate(request);
+      return calculated == null || calculated.isEmpty() ? null : calculated.get(0);
+    } catch (RuntimeException ex) {
+      PriceLinkedCalcItem failed = new PriceLinkedCalcItem();
+      failed.setItemCode(materialCode);
+      failed.setCalcStatus("FAILED");
+      failed.setCalcMessage(
+          "联动价只读计算异常(material_code=" + materialCode + "): " + ex.getMessage());
+      return failed;
+    }
+  }
+
   private String traceRoute(PriceTypeRoute route) {
     return priceTypeText(route)
         + "(priority=" + route.priority()
@@ -128,11 +303,12 @@ public class MakePartMaterialPriceResolveServiceImpl implements MakePartMaterial
       LocalDate quoteDate,
       LocalDateTime priceAsOfTime,
       String oaNo,
-      String businessUnitType) {
+      String businessUnitType,
+      PricePrepareScenarioContext scenarioContext) {
     LocalDateTime resolvedPriceAsOfTime = priceAsOfTime == null && quoteDate != null
         ? quoteDate.atStartOfDay()
         : priceAsOfTime;
-    return CostRunContext.quote(
+    CostRunContext context = CostRunContext.quote(
         oaNo,
         null,
         null,
@@ -142,6 +318,14 @@ public class MakePartMaterialPriceResolveServiceImpl implements MakePartMaterial
         trimToNull(period),
         resolvedPriceAsOfTime,
         null);
+    context.setPriceScenarioType(scenarioType(scenarioContext).name());
+    return context;
+  }
+
+  private QuotePriceScenarioType scenarioType(PricePrepareScenarioContext scenarioContext) {
+    return scenarioContext == null || scenarioContext.scenarioType() == null
+        ? QuotePriceScenarioType.OA_LOCKED
+        : scenarioContext.scenarioType();
   }
 
   private String priceTypeText(PriceTypeRoute route) {

@@ -17,11 +17,12 @@ class U9ProductPackagingTypeResolverTest {
   @DisplayName("新产品形态 BARE 适配为旧 NAKED_PRODUCT")
   void resolvesNakedProductByMainCategoryPrefix11() {
     QuoteProductTypeResolveService service = mock(QuoteProductTypeResolveService.class);
-    when(service.resolve(" MAT-NAKED "))
+    when(service.resolve(" MAT-NAKED ", "COMMERCIAL"))
         .thenReturn(result("MAT-NAKED", QuoteProductType.BARE, "110101"));
 
     U9ProductPackagingTypeResolver resolver = new U9ProductPackagingTypeResolver(service);
-    U9ProductPackagingTypeResolver.Result result = resolver.resolve(" MAT-NAKED ");
+    U9ProductPackagingTypeResolver.Result result =
+        resolver.resolve(" MAT-NAKED ", "COMMERCIAL");
 
     assertThat(result.productPackagingType()).isEqualTo(U9ProductPackagingTypeResolver.NAKED_PRODUCT);
     assertThat(result.mainCategoryCode()).isEqualTo("110101");
@@ -31,11 +32,12 @@ class U9ProductPackagingTypeResolverTest {
   @DisplayName("新产品形态 NON_BARE 适配为旧 PACKAGED_PRODUCT")
   void resolvesPackagedProductWhenMainCategoryDoesNotStartWith11() {
     QuoteProductTypeResolveService service = mock(QuoteProductTypeResolveService.class);
-    when(service.resolve("MAT-PACKAGED"))
+    when(service.resolve("MAT-PACKAGED", "COMMERCIAL"))
         .thenReturn(result("MAT-PACKAGED", QuoteProductType.NON_BARE, "120101"));
 
     U9ProductPackagingTypeResolver resolver = new U9ProductPackagingTypeResolver(service);
-    U9ProductPackagingTypeResolver.Result result = resolver.resolve("MAT-PACKAGED");
+    U9ProductPackagingTypeResolver.Result result =
+        resolver.resolve("MAT-PACKAGED", "COMMERCIAL");
 
     assertThat(result.productPackagingType()).isEqualTo(U9ProductPackagingTypeResolver.PACKAGED_PRODUCT);
     assertThat(result.mainCategoryCode()).isEqualTo("120101");
@@ -45,20 +47,20 @@ class U9ProductPackagingTypeResolverTest {
   @DisplayName("新产品形态 DATA_MISSING / UNKNOWN 适配为旧 UNKNOWN")
   void keepsUnknownWhenRawMissingOrMainCategoryBlank() {
     QuoteProductTypeResolveService service = mock(QuoteProductTypeResolveService.class);
-    when(service.resolve("MAT-MISSING"))
+    when(service.resolve("MAT-MISSING", "COMMERCIAL"))
         .thenReturn(result("MAT-MISSING", QuoteProductType.DATA_MISSING, null));
-    when(service.resolve("MAT-BLANK"))
+    when(service.resolve("MAT-BLANK", "COMMERCIAL"))
         .thenReturn(result("MAT-BLANK", QuoteProductType.UNKNOWN, null));
-    when(service.resolve(" "))
+    when(service.resolve(" ", "COMMERCIAL"))
         .thenReturn(result(null, QuoteProductType.UNKNOWN, null));
 
     U9ProductPackagingTypeResolver resolver = new U9ProductPackagingTypeResolver(service);
 
-    assertThat(resolver.resolve("MAT-MISSING").productPackagingType())
+    assertThat(resolver.resolve("MAT-MISSING", "COMMERCIAL").productPackagingType())
         .isEqualTo(U9ProductPackagingTypeResolver.UNKNOWN);
-    assertThat(resolver.resolve("MAT-BLANK").productPackagingType())
+    assertThat(resolver.resolve("MAT-BLANK", "COMMERCIAL").productPackagingType())
         .isEqualTo(U9ProductPackagingTypeResolver.UNKNOWN);
-    assertThat(resolver.resolve(" ").productPackagingType())
+    assertThat(resolver.resolve(" ", "COMMERCIAL").productPackagingType())
         .isEqualTo(U9ProductPackagingTypeResolver.UNKNOWN);
   }
 

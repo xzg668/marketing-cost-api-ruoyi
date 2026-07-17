@@ -7,11 +7,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.EnabledUpdateRequest;
 import com.sanhua.marketingcost.dto.FactorQuoteBaseMappingPageResponse;
 import com.sanhua.marketingcost.dto.FactorQuoteBaseMappingRequest;
+import com.sanhua.marketingcost.dto.MetalBasePricePolicyResponse;
+import com.sanhua.marketingcost.dto.MetalBasePricePolicyUpdateRequest;
 import com.sanhua.marketingcost.dto.QuoteBasePriceMappingRulePageResponse;
 import com.sanhua.marketingcost.dto.QuoteBasePriceMappingRuleRequest;
 import com.sanhua.marketingcost.entity.FactorQuoteBaseMapping;
 import com.sanhua.marketingcost.entity.QuoteBasePriceMappingRule;
 import com.sanhua.marketingcost.service.QuoteBasePriceMappingService;
+import java.util.List;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -52,6 +55,33 @@ public class QuoteBasePriceMappingController {
         businessUnitType, quoteFieldCode, keyword, enabled, page, pageSize);
     return CommonResult.success(
         new QuoteBasePriceMappingRulePageResponse(result.getTotal(), result.getRecords()));
+  }
+
+  @PreAuthorize("@ss.hasPermi('price:quote-base-mapping:list')"
+      + " or @ss.hasPermi('price:linked-item:list')"
+      + " or @ss.hasPermi('price:finance-base:list')")
+  @GetMapping("/metal-base-price-policies")
+  public CommonResult<List<MetalBasePricePolicyResponse>> listMetalBasePricePolicies() {
+    return CommonResult.success(service.listMetalBasePricePolicies());
+  }
+
+  @PreAuthorize("@ss.hasPermi('price:quote-base-mapping:edit')"
+      + " or @ss.hasPermi('price:finance-base:edit')")
+  @PutMapping("/metal-base-price-policies/{variableCode}")
+  public CommonResult<MetalBasePricePolicyResponse> updateMetalBasePricePolicy(
+      @PathVariable String variableCode,
+      @RequestBody MetalBasePricePolicyUpdateRequest request,
+      Authentication authentication) {
+    if (request == null || request.getPricePolicy() == null) {
+      return CommonResult.error(
+          GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "pricePolicy 不能为空");
+    }
+    try {
+      return CommonResult.success(service.updateMetalBasePricePolicy(
+          variableCode, request.getPricePolicy(), currentUsername(authentication)));
+    } catch (IllegalArgumentException ex) {
+      return badRequest(ex);
+    }
   }
 
   @PreAuthorize("@ss.hasPermi('price:quote-base-mapping:add')"

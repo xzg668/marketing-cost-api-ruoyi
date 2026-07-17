@@ -13,6 +13,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.EnabledUpdateRequest;
 import com.sanhua.marketingcost.dto.FactorQuoteBaseMappingPageResponse;
 import com.sanhua.marketingcost.dto.FactorQuoteBaseMappingRequest;
+import com.sanhua.marketingcost.dto.MetalBasePricePolicyResponse;
+import com.sanhua.marketingcost.dto.MetalBasePricePolicyUpdateRequest;
 import com.sanhua.marketingcost.dto.QuoteBasePriceMappingRulePageResponse;
 import com.sanhua.marketingcost.dto.QuoteBasePriceMappingRuleRequest;
 import com.sanhua.marketingcost.entity.FactorQuoteBaseMapping;
@@ -54,6 +56,41 @@ class QuoteBasePriceMappingControllerTest {
     assertThat(result.getData().getTotal()).isEqualTo(1);
     assertThat(result.getData().getRecords()).hasSize(1);
     verify(service).pageRules("COMMERCIAL", "copper_price", "铜", true, 2, 30);
+  }
+
+  @Test
+  @DisplayName("GET /metal-base-price-policies：返回简化的 Zn、Al 取价规则")
+  void listMetalBasePricePolicies() {
+    when(service.listMetalBasePricePolicies()).thenReturn(List.of(
+        new MetalBasePricePolicyResponse(
+            "Zn", "锌", "zinc_price", "锌基价", "OA_PRIORITY"),
+        new MetalBasePricePolicyResponse(
+            "Al", "铝", "aluminum_price", "铝基价", "FACTOR_MONTHLY")));
+
+    CommonResult<List<MetalBasePricePolicyResponse>> result =
+        controller.listMetalBasePricePolicies();
+
+    assertThat(result.isSuccess()).isTrue();
+    assertThat(result.getData()).extracting(MetalBasePricePolicyResponse::getVariableCode)
+        .containsExactly("Zn", "Al");
+  }
+
+  @Test
+  @DisplayName("PUT /metal-base-price-policies/{variableCode}：更新取价方式")
+  void updateMetalBasePricePolicy() {
+    MetalBasePricePolicyUpdateRequest request = new MetalBasePricePolicyUpdateRequest();
+    request.setPricePolicy("FACTOR_MONTHLY");
+    MetalBasePricePolicyResponse response = new MetalBasePricePolicyResponse(
+        "Zn", "锌", "zinc_price", "锌基价", "FACTOR_MONTHLY");
+    when(service.updateMetalBasePricePolicy("Zn", "FACTOR_MONTHLY", "alice"))
+        .thenReturn(response);
+
+    CommonResult<MetalBasePricePolicyResponse> result =
+        controller.updateMetalBasePricePolicy("Zn", request, auth("alice"));
+
+    assertThat(result.isSuccess()).isTrue();
+    assertThat(result.getData().getPricePolicy()).isEqualTo("FACTOR_MONTHLY");
+    verify(service).updateMetalBasePricePolicy("Zn", "FACTOR_MONTHLY", "alice");
   }
 
   @Test

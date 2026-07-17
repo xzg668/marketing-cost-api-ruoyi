@@ -397,6 +397,22 @@ class QuoteBomStatusServiceImplTest {
   }
 
   @Test
+  void fiSr005HeatExchangerChecksPlateOrganization() {
+    OaFormItem item = item(39L, 1, "1053900000062", "S12BH-30L-19");
+    item.setProductName("板式热交换器");
+    stubFormAndItems("FI-SR-005-20260318-0397", List.of(item), List.of());
+    when(bomAvailabilityAdapter.findAvailableBom(
+            "FI-SR-005-20260318-0397", "1053900000062", "2026-06", "220"))
+        .thenReturn(available("U9"));
+
+    QuoteBomStatusResponse response = service.checkByOaNo("FI-SR-005-20260318-0397");
+
+    assertThat(response.getSyncedCount()).isEqualTo(1);
+    verify(bomAvailabilityAdapter)
+        .findAvailableBom("FI-SR-005-20260318-0397", "1053900000062", "2026-06", "220");
+  }
+
+  @Test
   void checkForCostRunDifferentCustomerDoesNotReuseAndChecksAgain() {
     OaFormItem item = item(33L, 1, "MAT-2003", "SHF-H");
     item.setCustomerCode("CUST-B");
@@ -512,6 +528,7 @@ class QuoteBomStatusServiceImplTest {
     OaForm form = new OaForm();
     form.setId(1L);
     form.setOaNo(oaNo);
+    form.setProcessCode(oaNo == null ? null : oaNo.split("-202")[0]);
     when(oaFormMapper.selectOne(any())).thenReturn(form);
     when(oaFormItemMapper.selectList(any())).thenReturn(items);
     when(quoteBomStatusMapper.selectList(any())).thenReturn(new ArrayList<>(statuses));

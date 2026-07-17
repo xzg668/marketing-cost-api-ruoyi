@@ -216,6 +216,7 @@ public class QuoteProductBomCostingBuildServiceImpl
     QuoteDataOrganization organization = requiredOrganization(record);
     request.setPriceOrgCode(organization.priceOrgCode());
     request.setMaterialOrganizationCode(organization.materialOrganizationCode());
+    request.setBusinessUnitType(resolveBusinessUnitType(record.getOaFormItemId()));
     request.setPeriodMonth(periodMonth);
     request.setAsOfDate(quoteDate);
     FlattenResult flattened = flattenService.flatten(request);
@@ -297,6 +298,7 @@ public class QuoteProductBomCostingBuildServiceImpl
               line.materialSpec(),
               line.shapeAttr(),
               line.mainCategoryCode(),
+              line.mainCategoryName(),
               line.sourceCategory(),
               line.costElementCode(),
               line.bomPurpose(),
@@ -315,7 +317,9 @@ public class QuoteProductBomCostingBuildServiceImpl
               null,
               null,
               line.sourceU9BomId(),
-              line.path()));
+              line.path(),
+              line.priceOrgCode(),
+              line.materialOrganizationCode()));
     }
     return lines;
   }
@@ -338,6 +342,18 @@ public class QuoteProductBomCostingBuildServiceImpl
     }
     OaFormItem item = oaFormItemMapper.selectById(oaFormItemId);
     return item == null ? null : item.getProductName();
+  }
+
+  private String resolveBusinessUnitType(Long oaFormItemId) {
+    OaFormItem item = oaFormItemId == null ? null : oaFormItemMapper.selectById(oaFormItemId);
+    String businessUnitType =
+        firstText(
+            item == null ? null : item.getBusinessUnitType(),
+            BusinessUnitContext.getCurrentBusinessUnitType());
+    if (!StringUtils.hasText(businessUnitType)) {
+      throw new QuoteIngestException("报价产品行缺少业务单元，不能生成结算行");
+    }
+    return businessUnitType;
   }
 
   private List<PreparedLine> loadSupplementLines(
@@ -368,6 +384,7 @@ public class QuoteProductBomCostingBuildServiceImpl
               detail.getMaterialSpec(),
               detail.getShapeAttr(),
               detail.getMainCategoryCode(),
+              detail.getMainCategoryCode(),
               detail.getSourceCategory(),
               detail.getCostElementCode(),
               detail.getBomPurpose(),
@@ -386,7 +403,9 @@ public class QuoteProductBomCostingBuildServiceImpl
               null,
               null,
               detail.getSourceU9BomId(),
-              detail.getPath()));
+              detail.getPath(),
+              record.getPriceOrgCode(),
+              record.getMaterialOrganizationCode()));
     }
     return lines;
   }
@@ -415,6 +434,7 @@ public class QuoteProductBomCostingBuildServiceImpl
               detail.getPackageMaterialSpec(),
               detail.getPackageMaterialShapeAttr(),
               detail.getPackageMaterialMainCategoryCode(),
+              detail.getPackageMaterialMainCategoryCode(),
               null,
               null,
               null,
@@ -433,7 +453,9 @@ public class QuoteProductBomCostingBuildServiceImpl
               detail.getSnapshotId(),
               detail.getSnapshotDetailId(),
               detail.getSourceU9BomId(),
-              detail.getSourcePath()));
+              detail.getSourcePath(),
+              record.getPriceOrgCode(),
+              record.getMaterialOrganizationCode()));
       fallback++;
     }
     return lines;
@@ -460,17 +482,18 @@ public class QuoteProductBomCostingBuildServiceImpl
     String buildBatchId = generateBuildBatchId();
     LocalDateTime builtAt = LocalDateTime.now();
     QuoteDataOrganization organization = requiredOrganization(record);
-    String buType = BusinessUnitContext.getCurrentBusinessUnitType();
+    String settlementScope = resolveBusinessUnitType(record.getOaFormItemId());
 
     // 报价 BOM 入口只负责把正式 BOM / 补录 BOM / 包装参考归一成标准节点；
     // 结算行取舍、上卷、附加行等业务规则统一交给 BomSettlementRowBuildEngine。
     List<BomSettlementNode> nodes = new ArrayList<>();
     for (PreparedLine line : lines) {
-      nodes.add(toSettlementNode(record, line, buType,
+      nodes.add(toSettlementNode(record, line, settlementScope,
           childrenByParentPath.getOrDefault(line.path(), List.of()).isEmpty()));
     }
     BomByproductSettlementReadResult byproductRead =
-        byproductSettlementAdapter.read(nodes, quoteDate, organization.priceOrgCode(), buType, "主制造");
+        byproductSettlementAdapter.read(
+            nodes, quoteDate, organization.priceOrgCode(), settlementScope, "主制造");
     BomSettlementRowBuildResult built = buildEngine.build(
         new BomSettlementBuildRequest(
             record.getOaNo(),
@@ -479,7 +502,7 @@ public class QuoteProductBomCostingBuildServiceImpl
             periodMonth,
             buildBatchId,
             builtAt,
-            buType,
+            settlementScope,
             "主制造",
             nodes,
             settlementRuleQueryService.listEnabledCandidates(),
@@ -516,8 +539,12 @@ public class QuoteProductBomCostingBuildServiceImpl
     QuoteDataOrganization organization = requiredOrganization(record);
     for (BomCostingRow row : rows) {
       row.setOaFormItemId(record.getOaFormItemId());
-      row.setPriceOrgCode(organization.priceOrgCode());
-      row.setMaterialOrganizationCode(organization.materialOrganizationCode());
+      if (!StringUtils.hasText(row.getPriceOrgCode())) {
+        row.setPriceOrgCode(organization.priceOrgCode());
+      }
+      if (!StringUtils.hasText(row.getMaterialOrganizationCode())) {
+        row.setMaterialOrganizationCode(organization.materialOrganizationCode());
+      }
       if (row.getManualModified() == null) {
         row.setManualModified(0);
       }
@@ -532,16 +559,20 @@ public class QuoteProductBomCostingBuildServiceImpl
     QuoteDataOrganization organization = requiredOrganization(record);
     for (BomCostingRow row : rows) {
       row.setOaFormItemId(record.getOaFormItemId());
-      row.setPriceOrgCode(organization.priceOrgCode());
-      row.setMaterialOrganizationCode(organization.materialOrganizationCode());
+      if (!StringUtils.hasText(row.getPriceOrgCode())) {
+        row.setPriceOrgCode(organization.priceOrgCode());
+      }
+      if (!StringUtils.hasText(row.getMaterialOrganizationCode())) {
+        row.setMaterialOrganizationCode(organization.materialOrganizationCode());
+      }
       if (row.getManualModified() == null) {
         row.setManualModified(0);
       }
       BomCostingRow patch = new BomCostingRow();
       patch.setId(row.getId());
       patch.setOaFormItemId(record.getOaFormItemId());
-      patch.setPriceOrgCode(organization.priceOrgCode());
-      patch.setMaterialOrganizationCode(organization.materialOrganizationCode());
+      patch.setPriceOrgCode(row.getPriceOrgCode());
+      patch.setMaterialOrganizationCode(row.getMaterialOrganizationCode());
       patch.setManualModified(row.getManualModified());
       costingRowMapper.updateById(patch);
     }
@@ -575,7 +606,7 @@ public class QuoteProductBomCostingBuildServiceImpl
         line.sourceCategory(),
         line.costElementCode(),
         line.mainCategoryCode(),
-        line.mainCategoryCode(),
+        firstText(line.mainCategoryName(), line.mainCategoryCode()),
         line.mainCategoryCode(),
         firstText(line.bomPurpose(), "主制造"),
         line.bomVersion(),
@@ -584,6 +615,8 @@ public class QuoteProductBomCostingBuildServiceImpl
         null,
         null,
         null,
+        firstText(line.priceOrgCode(), record.getPriceOrgCode()),
+        firstText(line.materialOrganizationCode(), record.getMaterialOrganizationCode()),
         buType,
         settlementSourceRef(record, line));
   }
@@ -961,6 +994,7 @@ public class QuoteProductBomCostingBuildServiceImpl
       String materialSpec,
       String shapeAttr,
       String mainCategoryCode,
+      String mainCategoryName,
       String sourceCategory,
       String costElementCode,
       String bomPurpose,
@@ -979,7 +1013,9 @@ public class QuoteProductBomCostingBuildServiceImpl
       Long sourceSnapshotId,
       Long sourceSnapshotDetailId,
       Long sourceU9BomId,
-      String sourcePath) {}
+      String sourcePath,
+      String priceOrgCode,
+      String materialOrganizationCode) {}
 
   private record DirectBuildResult(
       String buildBatchId,

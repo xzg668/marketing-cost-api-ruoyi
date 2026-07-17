@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -17,6 +18,7 @@ import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmItem;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmBatchMapper;
 import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmItemMapper;
+import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import java.time.LocalDate;
 import java.util.List;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -29,6 +31,7 @@ class QuotePriceTypeConfirmationInvalidationServiceTest {
   private QuotePriceTypeConfirmBatchMapper batchMapper;
   private QuotePriceTypeConfirmItemMapper itemMapper;
   private QuoteCostRunVersionMapper costRunVersionMapper;
+  private QuoteCostRunVersionInvalidationService versionInvalidationService;
   private QuotePriceTypeConfirmationInvalidationService service;
 
   @BeforeAll
@@ -44,9 +47,10 @@ class QuotePriceTypeConfirmationInvalidationServiceTest {
     batchMapper = mock(QuotePriceTypeConfirmBatchMapper.class);
     itemMapper = mock(QuotePriceTypeConfirmItemMapper.class);
     costRunVersionMapper = mock(QuoteCostRunVersionMapper.class);
+    versionInvalidationService = mock(QuoteCostRunVersionInvalidationService.class);
     service =
         new QuotePriceTypeConfirmationInvalidationService(
-            batchMapper, itemMapper, costRunVersionMapper);
+            batchMapper, itemMapper, costRunVersionMapper, versionInvalidationService);
   }
 
   @Test
@@ -58,6 +62,9 @@ class QuotePriceTypeConfirmationInvalidationServiceTest {
     int affected = service.invalidateByMaterialPriceTypeChanges(List.of(type("MAT-001")));
 
     assertThat(affected).isEqualTo(1);
+    verify(versionInvalidationService)
+        .invalidateByPriceTypeConfirmNos(
+            argThat(confirmNos -> List.copyOf(confirmNos).equals(List.of("PTC-001"))));
     verify(batchMapper).update(isNull(), any());
   }
 
@@ -69,6 +76,9 @@ class QuotePriceTypeConfirmationInvalidationServiceTest {
     int affected = service.invalidateByMaterialPriceTypeChanges(List.of(type("MAT-001")));
 
     assertThat(affected).isZero();
+    verify(versionInvalidationService)
+        .invalidateByPriceTypeConfirmNos(
+            argThat(confirmNos -> List.copyOf(confirmNos).equals(List.of("PTC-HISTORY"))));
     verify(batchMapper, never()).update(isNull(), any());
   }
 

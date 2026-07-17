@@ -16,6 +16,7 @@ import com.sanhua.marketingcost.entity.MaterialScrapRef;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
+import com.sanhua.marketingcost.entity.PriceVariableBinding;
 import com.sanhua.marketingcost.formula.normalize.FormulaNormalizer;
 import com.sanhua.marketingcost.formula.normalize.VariableAliasIndex;
 import com.sanhua.marketingcost.formula.registry.DerivedResolver;
@@ -29,6 +30,7 @@ import com.sanhua.marketingcost.mapper.MaterialScrapRefMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
+import com.sanhua.marketingcost.mapper.PriceVariableBindingMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
 import com.sanhua.marketingcost.service.impl.PriceLinkedCalcServiceImpl;
 import java.lang.reflect.Method;
@@ -67,6 +69,7 @@ class LinkedFormulaE2ETest {
   private PriceVariableMapper priceVariableMapper;
   private FinanceBasePriceMapper financeBasePriceMapper;
   private MaterialScrapRefMapper materialScrapRefMapper;
+  private PriceVariableBindingMapper priceVariableBindingMapper;
   private PriceLinkedCalcServiceImpl service;
 
   /** 动态 finance 仓库：shortName / factorCode → price；mock answer 统一从这里查 */
@@ -98,6 +101,7 @@ class LinkedFormulaE2ETest {
     priceVariableMapper = mock(PriceVariableMapper.class);
     financeBasePriceMapper = mock(FinanceBasePriceMapper.class);
     materialScrapRefMapper = mock(MaterialScrapRefMapper.class);
+    priceVariableBindingMapper = mock(PriceVariableBindingMapper.class);
     financeRepo.clear();
     scrapRefRepo.clear();
 
@@ -139,9 +143,13 @@ class LinkedFormulaE2ETest {
     FinanceBasePriceQuery financeQuery = new FinanceBasePriceQuery(financeBasePriceMapper);
     FactorVariableRegistryImpl registry = new FactorVariableRegistryImpl(
         priceVariableMapper, financeQuery, new ObjectMapper(), rowLocal);
+    registry.setPriceVariableBindingMapper(priceVariableBindingMapper);
     DerivedResolver derivedResolver = new DerivedResolver(
         financeBasePriceMapper, materialScrapRefMapper);
     registry.setDerivedContextResolver(derivedResolver);
+    when(priceVariableBindingMapper.findCurrentByLinkedItemId(101L)).thenReturn(List.of(
+        binding(1L, "材料含税价格", "material_price_incl"),
+        binding(2L, "废料含税价格", "scrap_price_incl")));
 
     // service 只依赖上述真实管线 + 其它 mapper mock（不会被新路径触达）
     LinkedParserProperties props = new LinkedParserProperties();
@@ -171,8 +179,6 @@ class LinkedFormulaE2ETest {
   // 测试用例
   // ==========================================================================
 
-  @org.junit.jupiter.api.Disabled("V34 起 B 组 token（材料含税价格/废料含税价格）语义改为行局部绑定（lp_price_variable_binding）。"
-      + "等 T5 evaluator 支持 [__material]/[__scrap] 后改造为 binding-driven 用例并去掉 @Disabled。")
   @Test
   @DisplayName("场景1 部品联动：下料重量×材料价-废料×回收价+加工费")
   void partMaterialScrapProcessFee() throws Exception {
@@ -244,7 +250,6 @@ class LinkedFormulaE2ETest {
     assertThat(result).isCloseTo(new BigDecimal("9.298541"), within(TOLERANCE));
   }
 
-  @org.junit.jupiter.api.Disabled("V34 起 B 组 token 语义改为行局部绑定；等 T5 完成后重写为 binding-driven。")
   @Test
   @DisplayName("场景5 多层派生 SCRAP_REF：ratio=0.92 × 废料价")
   void partScrapRefWithRatio() throws Exception {
@@ -407,6 +412,7 @@ class LinkedFormulaE2ETest {
       String materialCode, String formula,
       BigDecimal blankWeightG, BigDecimal netWeightG, BigDecimal processFee) {
     PriceLinkedItem item = new PriceLinkedItem();
+    item.setId(101L);
     item.setMaterialCode(materialCode);
     item.setPricingMonth("2026-04");
     item.setFormulaExpr(formula);
@@ -423,6 +429,18 @@ class LinkedFormulaE2ETest {
     r.setScrapCode(scrapCode);
     r.setRatio(ratio);
     return r;
+  }
+
+  private static PriceVariableBinding binding(Long id, String tokenName, String factorCode) {
+    PriceVariableBinding binding = new PriceVariableBinding();
+    binding.setId(id);
+    binding.setLinkedItemId(101L);
+    binding.setTokenName(tokenName);
+    binding.setFactorCode(factorCode);
+    binding.setPriceSource("平均价");
+    binding.setBuScoped(0);
+    binding.setDeleted(0);
+    return binding;
   }
 
   /** 反射调 private calculatePartUnitPrice */

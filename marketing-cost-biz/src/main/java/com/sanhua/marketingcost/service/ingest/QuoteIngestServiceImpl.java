@@ -29,6 +29,8 @@ import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.service.ProductPropertyAnnualUsageService;
+import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -56,6 +58,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
   private final OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper;
   private final QuoteBomStatusMapper quoteBomStatusMapper;
   private final ProductPropertyAnnualUsageService productPropertyAnnualUsageService;
+  private final QuoteCostRunVersionInvalidationService versionInvalidationService;
   private final ObjectMapper objectMapper;
 
   public QuoteIngestServiceImpl(
@@ -68,6 +71,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper,
       QuoteBomStatusMapper quoteBomStatusMapper,
       ProductPropertyAnnualUsageService productPropertyAnnualUsageService,
+      QuoteCostRunVersionInvalidationService versionInvalidationService,
       ObjectMapper objectMapper) {
     this.quoteNormalizeService = quoteNormalizeService;
     this.quoteIngestLogService = quoteIngestLogService;
@@ -78,6 +82,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     this.oaFormItemExtraFieldMapper = oaFormItemExtraFieldMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
     this.productPropertyAnnualUsageService = productPropertyAnnualUsageService;
+    this.versionInvalidationService = versionInvalidationService;
     this.objectMapper = objectMapper;
   }
 
@@ -124,7 +129,14 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       return rejectedResponse(log, normalized, "单据已核算，拒绝覆盖");
     }
 
+    boolean oaCuChanged =
+        existingForm != null
+            && differentAmount(
+                existingForm.getCopperPrice(), normalized.getHeader().getCopperPrice());
     OaForm form = upsertOaForm(existingForm, normalized.getHeader(), request, oaNo, log.getId());
+    if (oaCuChanged) {
+      versionInvalidationService.invalidateByOaCu(form.getOaNo());
+    }
     ItemInsertResult itemInsertResult = replaceItems(form, normalized);
     replaceExtraFees(form, normalized, itemInsertResult.itemIdMap(), log.getId());
     replaceExtraFields(form, normalized, itemInsertResult.itemIdMap(), log.getId());
@@ -521,6 +533,13 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
 
   private boolean isCalculated(OaForm form) {
     return form != null && "已核算".equals(form.getCalcStatus());
+  }
+
+  private boolean differentAmount(BigDecimal left, BigDecimal right) {
+    if (left == null || right == null) {
+      return left != right;
+    }
+    return left.compareTo(right) != 0;
   }
 
   private String toJson(Object value) {

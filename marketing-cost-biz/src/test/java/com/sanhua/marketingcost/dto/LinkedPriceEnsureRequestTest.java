@@ -4,9 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sanhua.marketingcost.enums.LinkedPriceCalcScene;
+import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
+import java.math.BigDecimal;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class LinkedPriceEnsureRequestTest {
@@ -74,5 +77,19 @@ class LinkedPriceEnsureRequestTest {
             new LinkedHashSet<>(List.of("MAT-1")));
 
     assertTrue(request.validate().isEmpty());
+  }
+
+  @Test
+  void financeQuote_should_allow_only_positive_cu_override() {
+    LinkedPriceEnsureRequest request = LinkedPriceEnsureRequest.quote(
+        "OA-001", "COMMERCIAL", "2026-05", Set.of("MAT-CU"));
+    request.setPriceScenarioType(QuotePriceScenarioType.FINANCE_QUOTE_BASE);
+    request.setVariableOverrides(Map.of("Cu", new BigDecimal("90.000000")));
+
+    assertTrue(request.validate().isEmpty());
+
+    request.setVariableOverrides(Map.of(
+        "Cu", new BigDecimal("90.000000"), "Zn", new BigDecimal("20")));
+    assertEquals(List.of("FINANCE_QUOTE_BASE 场景只允许覆盖 Cu"), request.validate());
   }
 }

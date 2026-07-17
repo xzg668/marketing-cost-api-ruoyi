@@ -433,6 +433,8 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     dto.setPriceType(first.getPriceType());
     dto.setSourceSystem(first.getSourceSystem());
     dto.setCostElement(first.getCostElement());
+    dto.setPriceOrgCode(first.getPriceOrgCode());
+    dto.setMaterialOrganizationCode(first.getMaterialOrganizationCode());
     dto.setUnitPrice(calculateDisplayUnitPrice(first, amount));
     return dto;
   }

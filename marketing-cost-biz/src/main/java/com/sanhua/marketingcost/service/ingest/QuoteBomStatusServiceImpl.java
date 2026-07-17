@@ -670,10 +670,13 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
   }
 
   private QuoteDataOrganization resolveOrganization(OaForm form, OaFormItem item) {
-    return MaterialOrganization.quoteDataForQuoteProcess(
+    return MaterialOrganization.quoteDataForQuoteProduct(
         form == null ? null : form.getProcessCode(),
         form == null ? null : form.getOaNo(),
-        item == null ? null : item.getBusinessUnitType());
+        item == null ? null : item.getBusinessUnitType(),
+        item == null ? null : item.getProductName(),
+        item == null ? null : item.getSunlModel(),
+        item == null ? null : item.getMaterialNo());
   }
 
   private String sourceKey(String priceOrgCode, String productCode) {

@@ -17,6 +17,7 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.enums.LinkedPriceCalcScene;
+import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
@@ -27,6 +28,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
@@ -141,6 +143,35 @@ class LinkedPriceEnsureServiceImplTest {
     assertThat(saved.getPricingMonth()).isEqualTo("2026-05");
     assertThat(saved.getBusinessUnitType()).isEqualTo("COMMERCIAL");
     assertThat(saved.getBomQty()).isEqualByComparingTo("2.5");
+  }
+
+  @Test
+  void calculateReturnsTransientResultWithoutCalcItemWrites() {
+    PriceLinkedItem linkedItem = linkedItem("MAT-1");
+    when(linkedItemMapper.selectList(any())).thenReturn(List.of(linkedItem));
+    when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("MAT-1")));
+    when(oaFormMapper.selectOne(any())).thenReturn(null);
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+        .thenAnswer(invocation -> {
+          PriceLinkedCalcItem calcItem = invocation.getArgument(0);
+          calcItem.setPartUnitPrice(new BigDecimal("10.000000"));
+          calcItem.setPartAmount(new BigDecimal("25.000000"));
+          calcItem.setCalcStatus("OK");
+          return calcItem;
+        });
+
+    List<PriceLinkedCalcItem> result = service.calculate(
+        LinkedPriceEnsureRequest.quote(
+            "OA-001", "COMMERCIAL", "2026-05", Set.of("MAT-1")));
+
+    assertThat(result).singleElement().satisfies(item -> {
+      assertThat(item.getPartUnitPrice()).isEqualByComparingTo("10.000000");
+      assertThat(item.getCalcStatus()).isEqualTo("OK");
+      assertThat(item.getId()).isNull();
+    });
+    verify(calcItemMapper, never()).selectList(any());
+    verify(calcItemMapper, never()).insert(any(PriceLinkedCalcItem.class));
+    verify(calcItemMapper, never()).updateById(any(PriceLinkedCalcItem.class));
   }
 
   @Test
@@ -350,7 +381,12 @@ class LinkedPriceEnsureServiceImplTest {
 
     ArgumentCaptor<PriceLinkedItem> linkedItemCaptor =
         ArgumentCaptor.forClass(PriceLinkedItem.class);
-    verify(calcService).calculateQuoteItemForEnsure(any(), linkedItemCaptor.capture(), any());
+    ArgumentCaptor<PriceLinkedCalcItem> calcItemCaptor =
+        ArgumentCaptor.forClass(PriceLinkedCalcItem.class);
+    verify(calcService).calculateQuoteItemForEnsure(
+        calcItemCaptor.capture(), linkedItemCaptor.capture(), any());
+    assertThat(calcItemCaptor.getValue().getPriceAsOfTime())
+        .isEqualTo(LocalDateTime.of(2026, 6, 10, 12, 0));
     assertThat(linkedItemCaptor.getValue().getSupplierCode()).isEqualTo("S1");
     assertThat(linkedItemCaptor.getValue().getEffectiveTo())
         .isEqualTo(LocalDate.of(2026, 6, 15));
@@ -435,6 +471,43 @@ class LinkedPriceEnsureServiceImplTest {
     assertThat(result.getFailedItems().get(0).getItemCode()).isEqualTo("MAT-FAIL");
     assertThat(result.getFailedItems().get(0).getReason()).isEqualTo("变量 Cu 缺失");
     verify(calcItemMapper).insert(any(PriceLinkedCalcItem.class));
+  }
+
+  @Test
+  void financeQuoteUsesIndependentFactorSourceAndCuOverride() {
+    when(calcItemMapper.selectList(any())).thenReturn(List.of());
+    when(linkedItemMapper.selectList(any())).thenReturn(List.of(linkedItem("MAT-CU")));
+    when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("MAT-CU")));
+    when(oaFormMapper.selectOne(any())).thenReturn(new OaForm());
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), any(), any()))
+        .thenAnswer(invocation -> {
+          PriceLinkedCalcItem calcItem = invocation.getArgument(0);
+          calcItem.setPartUnitPrice(new BigDecimal("90.000000"));
+          calcItem.setCalcStatus("OK");
+          return calcItem;
+        });
+    LinkedPriceEnsureRequest request = LinkedPriceEnsureRequest.quote(
+        "OA-001", "COMMERCIAL", "2026-05", Set.of("MAT-CU"));
+    request.setPriceScenarioType(QuotePriceScenarioType.FINANCE_QUOTE_BASE);
+    request.setVariableOverrides(Map.of("Cu", new BigDecimal("90.000000")));
+
+    var result = service.ensure(request);
+
+    assertThat(result.getCreatedCount()).isEqualTo(1);
+    ArgumentCaptor<Map<String, BigDecimal>> overrides = ArgumentCaptor.forClass(Map.class);
+    verify(calcService).calculateQuoteItemForEnsure(
+        any(), any(), any(), overrides.capture(),
+        org.mockito.ArgumentMatchers.eq("FINANCE_QUOTE_BASE"));
+    assertThat(overrides.getValue()).containsOnlyKeys("Cu");
+    ArgumentCaptor<PriceLinkedCalcItem> saved = ArgumentCaptor.forClass(PriceLinkedCalcItem.class);
+    verify(calcItemMapper).insert(saved.capture());
+    assertThat(saved.getValue().getFactorSource()).isEqualTo("FINANCE_QUOTE_BASE");
+    ArgumentCaptor<Wrapper<PriceLinkedCalcItem>> query = ArgumentCaptor.forClass(Wrapper.class);
+    verify(calcItemMapper).selectList(query.capture());
+    assertThat(query.getValue().getSqlSegment()).contains("factor_source");
+    assertThat(((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>)
+            query.getValue()).getParamNameValuePairs().values())
+        .contains("FINANCE_QUOTE_BASE");
   }
 
   private PriceLinkedItem linkedItem(String materialCode) {

@@ -27,6 +27,7 @@ public class QuoteOaPdfHeaderParser {
           "goldPrice",
           "sus304Price",
           "sus316lPrice",
+          "otherMaterial",
           "baseShipping");
 
   public void parse(QuotePdfParseContext context, QuoteIngestRequest request) {
@@ -73,7 +74,7 @@ public class QuoteOaPdfHeaderParser {
         }
         int valueStart = skipSeparators(line, labelIndex + alias.length());
         String value = trimToNull(line.substring(valueStart, nextLabelIndex(line, valueStart, allLabels)));
-        if (!StringUtils.hasText(value)) {
+        if (!StringUtils.hasText(value) && allowNextLineValue(field)) {
           value = nextLineValue(lines, lineIndex + 1, allLabels);
         }
         if (StringUtils.hasText(value)) {
@@ -82,6 +83,10 @@ public class QuoteOaPdfHeaderParser {
       }
     }
     return null;
+  }
+
+  private boolean allowNextLineValue(QuoteOaPdfFieldDefinition field) {
+    return field != null && !"remark".equals(field.getFieldCode());
   }
 
   private void applyCoordinateNumberOverrides(
@@ -316,6 +321,7 @@ public class QuoteOaPdfHeaderParser {
       case "goldPrice" -> value.contains("金") && value.contains("价");
       case "sus304Price" -> upper.contains("SUS304");
       case "sus316lPrice" -> upper.contains("SUS316");
+      case "otherMaterial" -> value.contains("其他材料") || value.contains("其它材料");
       case "baseShipping" -> value.contains("运费核算标准") || value.contains("海运费核算标准");
       default -> false;
     };
@@ -548,6 +554,7 @@ public class QuoteOaPdfHeaderParser {
       case "goldPrice" -> header.getGoldPrice();
       case "sus304Price" -> header.getSus304Price();
       case "sus316lPrice" -> header.getSus316lPrice();
+      case "otherMaterial" -> header.getOtherMaterial();
       case "baseShipping" -> header.getBaseShipping();
       default -> null;
     };
@@ -564,6 +571,7 @@ public class QuoteOaPdfHeaderParser {
       case "goldPrice" -> header.setGoldPrice(value);
       case "sus304Price" -> header.setSus304Price(value);
       case "sus316lPrice" -> header.setSus316lPrice(value);
+      case "otherMaterial" -> header.setOtherMaterial(value);
       case "baseShipping" -> header.setBaseShipping(value);
       default -> {
       }

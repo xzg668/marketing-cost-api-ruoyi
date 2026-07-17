@@ -8,6 +8,9 @@ public interface QuotePricePrepareWorkbenchService {
   QuotePricePrepareWorkbenchResponse getPricePrepare(
       String oaNo, Long oaFormItemId, String periodMonth);
 
+  QuotePricePrepareWorkbenchResponse checkPriceSources(
+      String oaNo, Long oaFormItemId, QuotePricePrepareGenerateRequest request);
+
   QuotePricePrepareWorkbenchResponse generate(
       String oaNo, Long oaFormItemId, QuotePricePrepareGenerateRequest request);
 }

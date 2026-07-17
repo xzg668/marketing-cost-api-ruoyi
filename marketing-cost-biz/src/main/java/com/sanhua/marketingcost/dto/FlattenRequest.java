@@ -24,6 +24,7 @@ public class FlattenRequest {
   private String topProductCode;
   private String priceOrgCode;
   private String materialOrganizationCode;
+  private String businessUnitType;
   private String periodMonth;
   private LocalDate asOfDate;
 
@@ -81,6 +82,14 @@ public class FlattenRequest {
 
   public void setMaterialOrganizationCode(String materialOrganizationCode) {
     this.materialOrganizationCode = materialOrganizationCode;
+  }
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
   }
 
   public String getPeriodMonth() {

@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
@@ -169,7 +170,7 @@ class CostRunCostItemServiceImplTest {
   }
 
   @Test
-  @DisplayName("T15 核算工资优先读取 CMS 公共生效来源，不使用旧 CMS 派生工资")
+  @DisplayName("T15 核算只读取当前料号 CMS 公共生效来源，不触发全量成本源生成")
   void calculationUsesCmsEffectiveSalarySources() {
     OaFormMapper formMapper = mock(OaFormMapper.class);
     OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
@@ -189,6 +190,7 @@ class CostRunCostItemServiceImplTest {
     OaFormItem item = new OaFormItem();
     item.setOaFormId(1L);
     item.setMaterialNo("P-1");
+    item.setShippingFee(new BigDecimal("222.732000"));
     item.setValidDate(LocalDate.of(2026, 6, 1));
     item.setBusinessUnitType("COMMERCIAL");
     when(formMapper.selectOne(any())).thenReturn(form);
@@ -236,7 +238,10 @@ class CostRunCostItemServiceImplTest {
     assertThat(directItem.getRemark()).isNull();
     assertThat(indirectItem.getAmount()).isEqualByComparingTo("0.220000");
     assertThat(indirectItem.getRemark()).isNull();
-    verify(ensureService).ensureDefaultSources(eq(2026), eq("SYSTEM_AUTO"), eq("COMMERCIAL"));
+    assertThat(items)
+        .extracting(CostRunCostItemDto::getCostCode)
+        .doesNotContain("OTHER_EXP_FREIGHT");
+    verifyNoInteractions(ensureService);
   }
 
   @Test
@@ -390,7 +395,7 @@ class CostRunCostItemServiceImplTest {
         true,
         ignored -> {});
 
-    verify(ensureService).ensureDefaultSources(eq(currentYear), eq("SYSTEM_AUTO"), eq("COMMERCIAL"));
+    verifyNoInteractions(ensureService);
     verify(auxMapper).selectEffectiveAuxCostItems(currentYear, Set.of("P-CURRENT-YEAR"), "COMMERCIAL");
   }
 
@@ -1023,45 +1028,6 @@ class CostRunCostItemServiceImplTest {
     assertThat(split.nonPackageTotal()).isEqualByComparingTo(new BigDecimal("3.000000"));
   }
 
-  // -------- T11 lookupFreight --------
-
-  @Test
-  @DisplayName("T11 lookupFreight: 命中 OaFormItem.shipping_fee → 求和")
-  void lookupFreight_hit() {
-    OaFormMapper formMapper = mock(OaFormMapper.class);
-    OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
-
-    OaForm form = new OaForm();
-    form.setId(99L);
-    form.setOaNo("OA-1");
-    when(formMapper.selectOne(any(Wrapper.class))).thenReturn(form);
-
-    OaFormItem r1 = new OaFormItem();
-    r1.setShippingFee(new BigDecimal("1.250000"));
-    OaFormItem r2 = new OaFormItem();
-    r2.setShippingFee(new BigDecimal("0.500000"));
-    OaFormItem r3 = new OaFormItem();
-    r3.setShippingFee(null); // NULL 跳过
-    when(formItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(r1, r2, r3));
-
-    CostRunCostItemServiceImpl svc =
-        buildWith(mock(CostRunPartItemMapper.class), mock(MaterialMasterMapper.class), formMapper, formItemMapper);
-    BigDecimal freight = svc.lookupFreight("OA-1", "P-1");
-
-    assertThat(freight).isEqualByComparingTo(new BigDecimal("1.750000"));
-  }
-
-  @Test
-  @DisplayName("T11 lookupFreight: OA 不存在 → 0（不抛错）")
-  void lookupFreight_noForm() {
-    OaFormMapper formMapper = mock(OaFormMapper.class);
-    when(formMapper.selectOne(any(Wrapper.class))).thenReturn(null);
-
-    CostRunCostItemServiceImpl svc =
-        buildWith(mock(CostRunPartItemMapper.class), mock(MaterialMasterMapper.class), formMapper, mock(OaFormItemMapper.class));
-    assertThat(svc.lookupFreight("OA-MISSING", "P-1")).isEqualByComparingTo(BigDecimal.ZERO);
-  }
-
   // -------- T24 BOM_BUCKET 焊料 / 包装聚合 --------
 
   @Test
@@ -1277,7 +1243,6 @@ class CostRunCostItemServiceImplTest {
         mock(OaFormItemMapper.class),
         mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
-        mock(CmsCostEffectiveSourceEnsureService.class),
         mock(DepartmentFundRateMapper.class),
         mock(AuxCostItemMapper.class),
         partMapper,
@@ -1301,7 +1266,6 @@ class CostRunCostItemServiceImplTest {
         mock(OaFormItemMapper.class),
         mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
-        mock(CmsCostEffectiveSourceEnsureService.class),
         mock(DepartmentFundRateMapper.class),
         mock(AuxCostItemMapper.class),
         mock(CostRunPartItemMapper.class),
@@ -1324,7 +1288,6 @@ class CostRunCostItemServiceImplTest {
         mock(OaFormItemMapper.class),
         mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
-        mock(CmsCostEffectiveSourceEnsureService.class),
         mock(DepartmentFundRateMapper.class),
         auxMapper,
         mock(CostRunPartItemMapper.class),
@@ -1660,7 +1623,6 @@ class CostRunCostItemServiceImplTest {
         formItemMapper,
         salaryMapper,
         effectiveMapper,
-        ensureService,
         departmentFundRateMapper,
         auxMapper,
         partMapper,
@@ -1688,7 +1650,6 @@ class CostRunCostItemServiceImplTest {
         formItemMapper,
         mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
-        mock(CmsCostEffectiveSourceEnsureService.class),
         mock(DepartmentFundRateMapper.class),
         mock(AuxCostItemMapper.class),
         partMapper,

@@ -129,6 +129,44 @@ class PackageComponentSnapshotServiceImplTest {
   }
 
   @Test
+  @DisplayName("只读预览：临时组装正常包装结构但不写快照、明细或缺口")
+  void previewBuildsStructureWithoutPersistence() {
+    when(snapshotMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    when(bomRawHierarchyMapper.selectList(any(Wrapper.class)))
+        .thenReturn(
+            List.of(parent()),
+            List.of(child(201L, "A", 1, "1.000000", "/107/pkg/A/")));
+
+    PackageSnapshotResult result = service.previewSnapshot(request());
+
+    assertThat(result.isCreated()).isFalse();
+    assertThat(result.getStatus()).isEqualTo("NORMAL");
+    assertThat(result.getDetails()).extracting(PackageComponentSnapshotDetail::getChildMaterialCode)
+        .containsExactly("A");
+    verify(snapshotMapper, never()).insert(any(PackageComponentSnapshot.class));
+    verify(snapshotMapper, never()).updateById(any(PackageComponentSnapshot.class));
+    verify(snapshotDetailMapper, never()).insert(any(PackageComponentSnapshotDetail.class));
+    verify(snapshotDetailMapper, never()).delete(any(Wrapper.class));
+    verifyNoInteractions(gapItemMapper);
+  }
+
+  @Test
+  @DisplayName("只读预览：缺包装结构只返回提示，不写缺口记录")
+  void previewMissingStructureWithoutPersistence() {
+    when(snapshotMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    when(bomRawHierarchyMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+
+    PackageSnapshotResult result = service.previewSnapshot(request());
+
+    assertThat(result.isCreated()).isFalse();
+    assertThat(result.getStatus()).isEqualTo("MISSING_STRUCTURE");
+    assertThat(result.getWarnings()).singleElement().asString().contains("未在 lp_bom_raw_hierarchy");
+    verify(snapshotMapper, never()).insert(any(PackageComponentSnapshot.class));
+    verify(snapshotDetailMapper, never()).insert(any(PackageComponentSnapshotDetail.class));
+    verifyNoInteractions(gapItemMapper);
+  }
+
+  @Test
   @DisplayName("旧缺结构快照：BOM 已有子件时恢复为正常快照")
   void rebuildsStaleMissingStructureSnapshotWhenChildrenExist() {
     PackageComponentSnapshot existing = snapshot(23L, "MISSING_STRUCTURE");

@@ -2,8 +2,10 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.sanhua.marketingcost.dto.MakePartWeightResult;
 import com.sanhua.marketingcost.entity.BomU9Source;
+import com.sanhua.marketingcost.entity.MakePartChildNetWeight;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
+import com.sanhua.marketingcost.mapper.MakePartChildNetWeightMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.service.MakePartProcessTypePolicy;
 import com.sanhua.marketingcost.service.MakePartWeightService;
@@ -21,14 +23,22 @@ public class MakePartWeightServiceImpl implements MakePartWeightService {
   private static final BigDecimal KG_TO_G = new BigDecimal("1000");
 
   private final MaterialMasterRawMapper materialMasterRawMapper;
+  private final MakePartChildNetWeightMapper childNetWeightMapper;
 
-  public MakePartWeightServiceImpl(MaterialMasterRawMapper materialMasterRawMapper) {
+  public MakePartWeightServiceImpl(
+      MaterialMasterRawMapper materialMasterRawMapper,
+      MakePartChildNetWeightMapper childNetWeightMapper) {
     this.materialMasterRawMapper = materialMasterRawMapper;
+    this.childNetWeightMapper = childNetWeightMapper;
   }
 
   @Override
   public MakePartWeightResult resolveWeights(
-      String parentMaterialNo, BomU9Source child, String itemProcessType) {
+      String parentMaterialNo,
+      BomU9Source child,
+      String itemProcessType,
+      String periodMonth,
+      boolean requireChildNetWeight) {
     String parentCode = trim(parentMaterialNo);
     String childCode = child == null ? null : trim(child.getChildMaterialNo());
     if (parentCode == null || childCode == null) {
@@ -38,7 +48,19 @@ public class MakePartWeightServiceImpl implements MakePartWeightService {
     String organizationCode = requiredMaterialOrganization(child.getPriceOrgCode());
     Map<String, MaterialMasterRaw> rawByCode =
         loadLatestRawRows(List.of(parentCode, childCode), organizationCode);
-    BigDecimal netWeightG = theoreticalNetWeightG(rawByCode.get(parentCode));
+    MakePartChildNetWeight childNetWeight = childNetWeightMapper.selectEffective(
+        organizationCode,
+        parentCode,
+        childCode,
+        trim(child.getBomVersion()),
+        trim(periodMonth));
+    BigDecimal netWeightG = childNetWeight == null ? null : childNetWeight.getNetWeightG();
+    boolean parentNetWeightFallback = false;
+    if (netWeightG == null && !requireChildNetWeight) {
+      // 单子料制造件兼容历史数据：没有父子关系净重时，父件理论净重就是该唯一子料净重。
+      netWeightG = theoreticalNetWeightG(rawByCode.get(parentCode));
+      parentNetWeightFallback = netWeightG != null;
+    }
     BigDecimal grossWeightG;
     String remark = "";
     if (MakePartProcessTypePolicy.PROCESS_TYPE_BLANK.equals(itemProcessType)) {
@@ -55,7 +77,17 @@ public class MakePartWeightServiceImpl implements MakePartWeightService {
       }
     }
     if (netWeightG == null) {
-      remark = appendRemark(remark, "缺 parent 理论净重(parent_material_no=" + parentCode + ")");
+      remark = appendRemark(
+          remark,
+          requireChildNetWeight
+              ? "缺父子材料净重(material_organization_code=" + organizationCode
+                  + ", parent_material_no=" + parentCode
+                  + ", child_material_no=" + childCode
+                  + ", bom_version=" + nullToBlank(trim(child.getBomVersion()))
+                  + ", period_month=" + nullToBlank(trim(periodMonth)) + ")"
+              : "缺父子材料净重且缺 parent 理论净重(parent_material_no=" + parentCode + ")");
+    } else if (parentNetWeightFallback) {
+      remark = appendRemark(remark, "单子料兼容：净重取 parent 理论净重");
     }
     String status = grossWeightG == null || netWeightG == null ? "MISSING_WEIGHT" : "OK";
     return MakePartWeightResult.of(
@@ -114,5 +146,9 @@ public class MakePartWeightServiceImpl implements MakePartWeightService {
 
   private String trim(String value) {
     return StringUtils.hasText(value) ? value.trim() : null;
+  }
+
+  private String nullToBlank(String value) {
+    return value == null ? "" : value;
   }
 }

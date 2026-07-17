@@ -230,6 +230,7 @@ public class QuoteOaPdfDetailTableParser {
       return List.of();
     }
     boolean wideRowBand = context.getTemplateDefinition().getTemplateType() == QuoteExcelTemplateType.FI_SC_020;
+    boolean narrowLastRowBand = isFiSr005Template(context.getTemplateDefinition().getTemplateType());
     List<QuoteIngestItemRequest> items = new ArrayList<>();
     for (int i = 0; i < starts.size(); i++) {
       RowStart start = starts.get(i);
@@ -237,9 +238,11 @@ public class QuoteOaPdfDetailTableParser {
       boolean previousRowOnSamePage = i > 0 && starts.get(i - 1).pageIndex() == start.pageIndex();
       if (wideRowBand && previousRowOnSamePage) {
         fromY = Math.max(fromY, starts.get(i - 1).y() + 18.0f);
+      } else if (narrowLastRowBand && previousRowOnSamePage) {
+        fromY = Math.max(fromY, starts.get(i - 1).y() + 14.0f);
       }
       boolean nextRowOnSamePage = i + 1 < starts.size() && starts.get(i + 1).pageIndex() == start.pageIndex();
-      float toY = nextRowOnSamePage ? starts.get(i + 1).y() - 18.0f : start.y() + 48.0f;
+      float toY = nextRowOnSamePage ? starts.get(i + 1).y() - 18.0f : start.y() + (narrowLastRowBand ? 24.0f : 48.0f);
       List<QuotePdfToken> rowTokens = denseRowTokens(lines, range, start.pageIndex(), fromY, toY);
       QuoteIngestItemRequest item =
           toDenseFiSc006Item(rowTokens, context.getTemplateDefinition(), layout, start.seq());
@@ -250,9 +253,16 @@ public class QuoteOaPdfDetailTableParser {
     return normalizeDenseFiSc006Items(items);
   }
 
+  private boolean isFiSr005Template(QuoteExcelTemplateType templateType) {
+    return templateType == QuoteExcelTemplateType.FI_SR_005_NEW
+        || templateType == QuoteExcelTemplateType.FI_SR_005_MASS
+        || templateType == QuoteExcelTemplateType.FI_SR_005_DERIVED;
+  }
+
   private boolean supportsDenseDetailFallback(QuoteExcelTemplateType templateType) {
     return templateType == QuoteExcelTemplateType.FI_SC_006
-        || templateType == QuoteExcelTemplateType.FI_SC_020;
+        || templateType == QuoteExcelTemplateType.FI_SC_020
+        || isFiSr005Template(templateType);
   }
 
   private List<QuoteIngestItemRequest> normalizeDenseFiSc006Items(List<QuoteIngestItemRequest> items) {
@@ -421,7 +431,9 @@ public class QuoteOaPdfDetailTableParser {
     if (normalizedLabel.contains("物料选择") || normalizedLabel.contains("料号")) {
       return "materialNo";
     }
-    if (normalizedLabel.contains("三花型号") || normalizedLabel.contains("三花型")) {
+    if (normalizedLabel.contains("型号规格")
+        || normalizedLabel.contains("三花型号")
+        || normalizedLabel.contains("三花型")) {
       return "sunlModel";
     }
     if (normalizedLabel.contains("规格")) {
@@ -551,7 +563,7 @@ public class QuoteOaPdfDetailTableParser {
     }
     item.setCustomerDrawing(joinDenseColumn(tokens, layout.column("customerDrawing"), false));
     item.setCustomerCode(joinDenseColumn(tokens, layout.column("customerCode"), false));
-    item.setMaterialNo(joinDenseColumn(tokens, layout.column("materialNo"), false));
+    item.setMaterialNo(normalizeDenseMaterialNo(joinDenseColumn(tokens, layout.column("materialNo"), false)));
     item.setSunlModel(joinDenseColumn(tokens, layout.column("sunlModel"), false));
     item.setSpec(joinDenseColumn(tokens, layout.column("spec"), false));
     item.setShippingFee(joinDenseColumn(tokens, layout.column("shippingFee"), true));
@@ -603,6 +615,14 @@ public class QuoteOaPdfDetailTableParser {
       value.append(text);
     }
     return trimToNull(value.toString());
+  }
+
+  private String normalizeDenseMaterialNo(String value) {
+    String normalized = trimToNull(value);
+    if (normalized == null || "/".equals(normalized) || "-".equals(normalized)) {
+      return null;
+    }
+    return normalized;
   }
 
   private String joinRaw(List<QuotePdfToken> tokens) {

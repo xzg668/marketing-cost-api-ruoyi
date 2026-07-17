@@ -82,6 +82,50 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
   }
 
   @Override
+  @Transactional(readOnly = true)
+  public PackagePriceResult calculatePrice(PackagePriceRequest request) {
+    NormalizedRequest req = normalize(request);
+    PackageSnapshotResult snapshotResult =
+        snapshotService.previewSnapshot(toSnapshotRequest(req));
+    PackageComponentSnapshot snapshot = snapshotResult.getSnapshot();
+    PackageComponentPrice price = transientPrice(req, snapshot);
+
+    if (snapshot == null || SNAPSHOT_STATUS_MISSING_STRUCTURE.equals(snapshot.getStatus())) {
+      applyCalculatedPrice(price, snapshot, PRICE_STATUS_MISSING_STRUCTURE, null, false);
+      PackagePriceResult result = PackagePriceResult.of(price, List.of(), snapshotResult);
+      result.getWarnings().add("包装组件缺结构，无法生成子件价格");
+      if (snapshotResult != null && snapshotResult.getWarnings() != null) {
+        result.getWarnings().addAll(snapshotResult.getWarnings());
+      }
+      return result;
+    }
+
+    List<PackageComponentPriceDetail> details = new ArrayList<>();
+    BigDecimal total = BigDecimal.ZERO;
+    boolean complete = true;
+    for (PackageComponentSnapshotDetail snapshotDetail : snapshotResult.getDetails()) {
+      ResolvedChild child = resolveChild(req, price, snapshot, snapshotDetail);
+      details.add(child.detail());
+      if (DETAIL_STATUS_PRICED.equals(child.detail().getPriceStatus())) {
+        total = total.add(child.detail().getChildAmount());
+      } else {
+        complete = false;
+      }
+    }
+    applyCalculatedPrice(
+        price,
+        snapshot,
+        complete ? PRICE_STATUS_PRICED : PRICE_STATUS_MISSING_CHILD_PRICE,
+        complete ? applyPackageParentBaseQty(total, snapshot) : null,
+        complete);
+    PackagePriceResult result = PackagePriceResult.of(price, details, snapshotResult);
+    if (!complete) {
+      result.getWarnings().add("包装组件存在子件缺价，当前阶段只记录不阻断");
+    }
+    return result;
+  }
+
+  @Override
   @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
   public PackagePriceResult ensurePrice(PackagePriceRequest request) {
     NormalizedRequest req = normalize(request);
@@ -387,6 +431,40 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     price.setTotalPrice(totalPrice);
     price.setGeneratedAt(LocalDateTime.now());
     priceMapper.updateById(price);
+  }
+
+  private PackageComponentPrice transientPrice(
+      NormalizedRequest req, PackageComponentSnapshot snapshot) {
+    PackageComponentPrice price = new PackageComponentPrice();
+    price.setSnapshotId(snapshot == null ? null : snapshot.getId());
+    price.setPackageMaterialCode(req.packageMaterialCode);
+    price.setPriceOrgCode(req.priceOrgCode);
+    price.setPackageMaterialName(snapshot == null ? null : snapshot.getPackageMaterialName());
+    price.setPeriodMonth(req.periodMonth);
+    price.setOaNo(blankIfNull(req.oaNo));
+    price.setPriceAsOfTime(req.priceAsOfTime);
+    price.setCalcBatchId(req.calcBatchId);
+    price.setGeneratedAt(LocalDateTime.now());
+    applyPackageUsage(price, snapshot);
+    applySourceContext(price, snapshot, req);
+    return price;
+  }
+
+  private void applyCalculatedPrice(
+      PackageComponentPrice price,
+      PackageComponentSnapshot snapshot,
+      String status,
+      BigDecimal totalPrice,
+      boolean complete) {
+    price.setSnapshotId(snapshot == null ? null : snapshot.getId());
+    price.setPackageMaterialName(
+        snapshot == null ? price.getPackageMaterialName() : snapshot.getPackageMaterialName());
+    applyPackageUsage(price, snapshot);
+    applySourceContext(price, snapshot, null);
+    price.setPriceStatus(status);
+    price.setPriceComplete(complete);
+    price.setTotalPrice(totalPrice);
+    price.setGeneratedAt(LocalDateTime.now());
   }
 
   private void applyPackageUsage(PackageComponentPrice price, PackageComponentSnapshot snapshot) {

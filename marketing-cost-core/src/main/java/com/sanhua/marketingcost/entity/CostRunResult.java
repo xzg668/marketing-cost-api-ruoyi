@@ -30,6 +30,10 @@ public class CostRunResult {
   private String currency;
   private String unit;
   private BigDecimal totalCost;
+  private BigDecimal financeMaterialCost;
+  private BigDecimal oaMaterialCost;
+  private BigDecimal cuMaterialAdjustment;
+  private BigDecimal finalQuoteAmount;
   private String calcStatus;
   private LocalDateTime calcAt;
   private String productAttr;
@@ -208,6 +212,38 @@ public class CostRunResult {
 
   public void setTotalCost(BigDecimal totalCost) {
     this.totalCost = totalCost;
+  }
+
+  public BigDecimal getFinanceMaterialCost() {
+    return financeMaterialCost;
+  }
+
+  public void setFinanceMaterialCost(BigDecimal financeMaterialCost) {
+    this.financeMaterialCost = financeMaterialCost;
+  }
+
+  public BigDecimal getOaMaterialCost() {
+    return oaMaterialCost;
+  }
+
+  public void setOaMaterialCost(BigDecimal oaMaterialCost) {
+    this.oaMaterialCost = oaMaterialCost;
+  }
+
+  public BigDecimal getCuMaterialAdjustment() {
+    return cuMaterialAdjustment;
+  }
+
+  public void setCuMaterialAdjustment(BigDecimal cuMaterialAdjustment) {
+    this.cuMaterialAdjustment = cuMaterialAdjustment;
+  }
+
+  public BigDecimal getFinalQuoteAmount() {
+    return finalQuoteAmount;
+  }
+
+  public void setFinalQuoteAmount(BigDecimal finalQuoteAmount) {
+    this.finalQuoteAmount = finalQuoteAmount;
   }
 
   public String getCalcStatus() {

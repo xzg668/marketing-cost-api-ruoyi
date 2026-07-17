@@ -156,12 +156,13 @@ class FactorVariableRegistryImplTest {
   }
 
   private static FactorQuoteBaseMapping quoteBaseMapping(
-      Long factorIdentityId, String quoteFieldCode) {
+      Long factorIdentityId, String quoteFieldCode, String variableCode) {
     FactorQuoteBaseMapping mapping = new FactorQuoteBaseMapping();
     mapping.setId(1L);
     mapping.setFactorIdentityId(factorIdentityId);
     mapping.setQuoteFieldCode(quoteFieldCode);
     mapping.setQuoteFieldName("铜基价");
+    mapping.setVariableCode(variableCode);
     mapping.setEnabled(1);
     mapping.setDeleted(0);
     return mapping;
@@ -246,7 +247,7 @@ class FactorVariableRegistryImplTest {
   void factorIdentityDailyQuoteUsesOaQuoteBasePrice() {
     seedVariables(financeByFactorIdentity("factor_identity_191", 191L, 6401L));
     when(factorQuoteBaseMappingMapper.selectList(any()))
-        .thenReturn(List.of(quoteBaseMapping(191L, "copper_price")));
+        .thenReturn(List.of(quoteBaseMapping(191L, "copper_price", "Cu")));
 
     OaForm oaForm = new OaForm();
     oaForm.setCopperPrice(new BigDecimal("72000"));
@@ -259,11 +260,31 @@ class FactorVariableRegistryImplTest {
   }
 
   @Test
+  @DisplayName("FINANCE：factor_identity_xxx 优先使用对应语义变量的显式覆盖")
+  void factorIdentityDailyQuoteUsesSemanticFinanceOverrideBeforeOaQuoteBasePrice() {
+    seedVariables(financeByFactorIdentity("factor_identity_191", 191L, 6401L));
+    when(factorQuoteBaseMappingMapper.selectList(any()))
+        .thenReturn(List.of(quoteBaseMapping(191L, "copper_price", "Cu")));
+
+    OaForm oaForm = new OaForm();
+    oaForm.setCopperPrice(new BigDecimal("102039"));
+    VariableContext ctx = new VariableContext()
+        .pricingMonth("2026-07")
+        .oaForm(oaForm)
+        .override("Cu", new BigDecimal("90.000000"), "FINANCE_QUOTE_BASE");
+
+    assertThat(registry.resolve("factor_identity_191", ctx))
+        .contains(new BigDecimal("90.000000"));
+    assertThat(ctx.getResolvedSource("factor_identity_191"))
+        .isEqualTo("FINANCE_QUOTE_BASE");
+  }
+
+  @Test
   @DisplayName("FINANCE：日常报价 OA 基价为空时回落月度影响因素价格")
   void factorIdentityDailyQuoteFallsBackToMonthlyPrice() {
     seedVariables(financeByFactorIdentity("factor_identity_191", 191L, 6401L));
     when(factorQuoteBaseMappingMapper.selectList(any()))
-        .thenReturn(List.of(quoteBaseMapping(191L, "copper_price")));
+        .thenReturn(List.of(quoteBaseMapping(191L, "copper_price", "Cu")));
     when(factorMonthlyPriceMapper.selectOne(any()))
         .thenReturn(monthlyPrice(6401L, 191L, "2026-05", "16.40"));
 
@@ -273,6 +294,47 @@ class FactorVariableRegistryImplTest {
 
     assertThat(registry.resolve("factor_identity_191", ctx))
         .contains(new BigDecimal("16.40"));
+  }
+
+  @Test
+  @DisplayName("FINANCE：Zn/Al 配置影响因素表时跳过预注入的 OA 锁价")
+  void factorIdentityFactorMonthlyPolicySkipsPreloadedOaQuoteBasePrice() {
+    seedVariables(financeByFactorIdentity("factor_identity_192", 192L, 6402L));
+    FactorQuoteBaseMapping mapping = quoteBaseMapping(192L, "zinc_price", "Zn");
+    mapping.setPricePolicy("FACTOR_MONTHLY");
+    when(factorQuoteBaseMappingMapper.selectList(any())).thenReturn(List.of(mapping));
+    when(factorMonthlyPriceMapper.selectOne(any()))
+        .thenReturn(monthlyPrice(6402L, 192L, "2026-07", "21.68"));
+
+    OaForm oaForm = new OaForm();
+    oaForm.setZincPrice(new BigDecimal("24586"));
+    VariableContext ctx = new VariableContext()
+        .pricingMonth("2026-07")
+        .oaForm(oaForm)
+        // 真实报价链路会先把 OA Zn 放进语义变量覆盖；规则仍应优先于该 OA 覆盖。
+        .override("Zn", new BigDecimal("24.586000"), "OA_LOCKED");
+
+    assertThat(registry.resolve("factor_identity_192", ctx))
+        .contains(new BigDecimal("21.68"));
+  }
+
+  @Test
+  @DisplayName("FINANCE：影响因素规则不拦截非 OA 的显式覆盖")
+  void factorIdentityFactorMonthlyPolicyKeepsNonOaExplicitOverride() {
+    seedVariables(financeByFactorIdentity("factor_identity_192", 192L, 6402L));
+    FactorQuoteBaseMapping mapping = quoteBaseMapping(192L, "zinc_price", "Zn");
+    mapping.setPricePolicy("FACTOR_MONTHLY");
+    when(factorQuoteBaseMappingMapper.selectList(any())).thenReturn(List.of(mapping));
+
+    VariableContext ctx = new VariableContext()
+        .pricingMonth("2026-07")
+        .oaForm(new OaForm())
+        .override("Zn", new BigDecimal("22.000000"), "MANUAL_OVERRIDE");
+
+    assertThat(registry.resolve("factor_identity_192", ctx))
+        .contains(new BigDecimal("22.000000"));
+    assertThat(ctx.getResolvedSource("factor_identity_192"))
+        .isEqualTo("MANUAL_OVERRIDE");
   }
 
   @Test

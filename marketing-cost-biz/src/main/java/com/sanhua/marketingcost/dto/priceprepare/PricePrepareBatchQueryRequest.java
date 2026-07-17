@@ -12,6 +12,7 @@ public class PricePrepareBatchQueryRequest {
   private String topProductCode;
   private String priceTypeConfirmNo;
   private String periodMonth;
+  private String scenarioType;
   private String status;
   private Integer page;
   private Integer pageSize;

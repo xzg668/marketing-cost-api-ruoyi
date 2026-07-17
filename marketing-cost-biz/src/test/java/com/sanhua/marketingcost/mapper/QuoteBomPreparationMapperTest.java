@@ -213,6 +213,8 @@ class QuoteBomPreparationMapperTest extends BomMapperTestBase {
     record.setOaFormItemId(3001L);
     record.setOaNo(oaNo);
     record.setQuoteProductCode("110000000001");
+    record.setPriceOrgCode("210");
+    record.setMaterialOrganizationCode("COMMERCIAL");
     record.setProductType("BARE");
     record.setBareProductCode("110000000001");
     record.setNeedPackage(1);

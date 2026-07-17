@@ -12,6 +12,7 @@ import com.sanhua.marketingcost.formula.normalize.VariableAliasIndex;
 import com.sanhua.marketingcost.mapper.FinanceBasePriceMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.FinanceBasePriceImportService;
+import com.sanhua.marketingcost.service.FinanceQuoteBasePriceConstants;
 import java.io.InputStream;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -184,6 +185,10 @@ public class FinanceBasePriceImportServiceImpl implements FinanceBasePriceImport
     }
     if (row.getPrice().compareTo(BigDecimal.ZERO) <= 0) {
       return "价格必须 > 0";
+    }
+    if (FinanceQuoteBasePriceConstants.usesProtectedIdentity(
+        row.getShortName(), row.getPriceSource())) {
+      return "财务报价Cu基准只能通过专用接口维护，普通影响因素导入不得覆盖";
     }
     return null;
   }

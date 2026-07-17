@@ -1,12 +1,16 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBatchPageResponse;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBatchQueryRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareTopProductSummaryPageResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareTopProductSummaryQueryRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareTopProductSummaryResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
+import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
+import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
@@ -135,17 +139,35 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
       return check(oaNoValue, periodValue);
     }
 
+    String completedPrepareNo =
+        latestCompletedPrepareNo(
+            oaNoValue, oaFormItemId, topProductCodeValue, periodValue, confirmNoValue);
     List<PricePrepareItem> items =
         itemMapper.selectList(
             Wrappers.lambdaQuery(PricePrepareItem.class)
                 .eq(PricePrepareItem::getOaNo, oaNoValue)
                 .eq(PricePrepareItem::getOaFormItemId, oaFormItemId)
                 .eq(PricePrepareItem::getTopProductCode, topProductCodeValue)
+                .eq(
+                    StringUtils.hasText(completedPrepareNo),
+                    PricePrepareItem::getPrepareNo,
+                    completedPrepareNo)
+                .eq(
+                    !StringUtils.hasText(completedPrepareNo),
+                    PricePrepareItem::getCurrentFlag,
+                    1)
                 .eq(StringUtils.hasText(periodValue), PricePrepareItem::getPeriodMonth, periodValue)
                 .eq(StringUtils.hasText(confirmNoValue), PricePrepareItem::getPriceTypeConfirmNo, confirmNoValue)
                 .orderByDesc(PricePrepareItem::getId));
     List<PricePrepareGap> gaps =
-        loadScopedGaps(oaNoValue, oaFormItemId, topProductCodeValue, periodValue, confirmNoValue);
+        StringUtils.hasText(completedPrepareNo)
+            ? List.of()
+            : loadScopedGaps(
+                oaNoValue,
+                oaFormItemId,
+                topProductCodeValue,
+                periodValue,
+                confirmNoValue);
     if (items == null || items.isEmpty()) {
       String message =
           StringUtils.hasText(periodValue)
@@ -199,6 +221,58 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
     this.blockOnNotReady = blockOnNotReady;
   }
 
+  private String latestCompletedPrepareNo(
+      String oaNo,
+      Long oaFormItemId,
+      String topProductCode,
+      String periodMonth,
+      String priceTypeConfirmNo) {
+    PricePrepareBatchQueryRequest query = new PricePrepareBatchQueryRequest();
+    query.setOaNo(oaNo);
+    query.setOaFormItemId(oaFormItemId);
+    query.setTopProductCode(topProductCode);
+    query.setPeriodMonth(periodMonth);
+    query.setPriceTypeConfirmNo(priceTypeConfirmNo);
+    query.setPage(1);
+    query.setPageSize(500);
+    PricePrepareBatchPageResponse page = queryService.pageBatches(query);
+    List<PricePrepareBatch> batches =
+        page == null || page.getRecords() == null ? List.of() : page.getRecords();
+    for (PricePrepareBatch oaBatch : batches) {
+      if (!isSuccessfulOaBatch(oaBatch)) {
+        continue;
+      }
+      boolean financeReady =
+          batches.stream().anyMatch(batch -> isSuccessfulFinanceBatchFor(batch, oaBatch));
+      if (financeReady) {
+        return oaBatch.getPrepareNo();
+      }
+    }
+    return null;
+  }
+
+  private boolean isSuccessfulOaBatch(PricePrepareBatch batch) {
+    return isSuccessfulBatch(batch)
+        && (!StringUtils.hasText(batch.getScenarioType())
+            || QuotePriceScenarioType.OA_LOCKED.name().equals(batch.getScenarioType()))
+        && StringUtils.hasText(batch.getPrepareNo());
+  }
+
+  private boolean isSuccessfulFinanceBatchFor(
+      PricePrepareBatch batch, PricePrepareBatch oaBatch) {
+    return isSuccessfulBatch(batch)
+        && QuotePriceScenarioType.FINANCE_QUOTE_BASE.name().equals(batch.getScenarioType())
+        && oaBatch.getPrepareNo().equals(batch.getSourcePrepareNo())
+        && (!StringUtils.hasText(oaBatch.getScenarioGroupNo())
+            || oaBatch.getScenarioGroupNo().equals(batch.getScenarioGroupNo()));
+  }
+
+  private boolean isSuccessfulBatch(PricePrepareBatch batch) {
+    return batch != null
+        && STATUS_SUCCESS.equals(batch.getStatus())
+        && (batch.getGapCount() == null || batch.getGapCount() == 0);
+  }
+
   private PricePrepareReadinessResult warning(
       String status,
       String message,
@@ -229,6 +303,7 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
         gapMapper.selectList(
             Wrappers.lambdaQuery(PricePrepareGap.class)
                 .eq(PricePrepareGap::getOaNo, oaNo.trim())
+                .eq(PricePrepareGap::getCurrentFlag, 1)
                 .eq(StringUtils.hasText(periodMonth), PricePrepareGap::getPeriodMonth,
                     periodMonth == null ? null : periodMonth.trim())
                 .orderByDesc(PricePrepareGap::getCreatedAt)
@@ -266,6 +341,7 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
                 .eq(PricePrepareGap::getOaNo, oaNo)
                 .eq(PricePrepareGap::getOaFormItemId, oaFormItemId)
                 .eq(PricePrepareGap::getTopProductCode, topProductCode)
+                .eq(PricePrepareGap::getCurrentFlag, 1)
                 .eq(StringUtils.hasText(periodMonth), PricePrepareGap::getPeriodMonth, periodMonth)
                 .eq(
                     StringUtils.hasText(priceTypeConfirmNo),

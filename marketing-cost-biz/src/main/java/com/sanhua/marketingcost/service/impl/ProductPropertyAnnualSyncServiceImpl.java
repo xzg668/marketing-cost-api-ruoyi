@@ -440,12 +440,12 @@ public class ProductPropertyAnnualSyncServiceImpl implements ProductPropertyAnnu
         String.join(
             "|",
             List.of(
-                firstText(entity.getBusinessUnitType(), ""),
+                nullToEmpty(entity.getBusinessUnitType()),
                 String.valueOf(entity.getPropertyYear()),
-                firstText(entity.getBusinessDivision(), ""),
-                firstText(entity.getProductName(), ""),
-                firstText(entity.getProductModel(), ""),
-                firstText(entity.getProductSpec(), "")));
+                nullToEmpty(entity.getBusinessDivision()),
+                nullToEmpty(entity.getProductName()),
+                nullToEmpty(entity.getProductModel()),
+                nullToEmpty(entity.getProductSpec())));
     return "NO_CODE_" + Integer.toHexString(Objects.hash(raw));
   }
 
@@ -470,5 +470,9 @@ public class ProductPropertyAnnualSyncServiceImpl implements ProductPropertyAnnu
       }
     }
     return null;
+  }
+
+  private String nullToEmpty(String value) {
+    return value == null ? "" : value;
   }
 }

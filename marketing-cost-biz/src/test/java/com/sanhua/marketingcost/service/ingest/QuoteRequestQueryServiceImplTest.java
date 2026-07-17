@@ -19,15 +19,20 @@ import com.sanhua.marketingcost.entity.OaFormExtraFee;
 import com.sanhua.marketingcost.entity.OaFormHeaderExtraField;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.OaFormItemExtraField;
+import com.sanhua.marketingcost.entity.QuoteBomConfirmation;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
+import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.QuoteIngestLog;
 import com.sanhua.marketingcost.mapper.OaFormExtraFeeMapper;
 import com.sanhua.marketingcost.mapper.OaFormHeaderExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
+import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
+import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteIngestLogMapper;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -42,7 +47,9 @@ class QuoteRequestQueryServiceImplTest {
   private OaFormExtraFeeMapper oaFormExtraFeeMapper;
   private OaFormHeaderExtraFieldMapper oaFormHeaderExtraFieldMapper;
   private OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper;
+  private QuoteBomConfirmationMapper quoteBomConfirmationMapper;
   private QuoteBomStatusMapper quoteBomStatusMapper;
+  private QuoteCostRunVersionMapper quoteCostRunVersionMapper;
   private QuoteIngestLogMapper quoteIngestLogMapper;
   private U9ProductPackagingTypeResolver productPackagingTypeResolver;
   private QuoteRequestQueryServiceImpl service;
@@ -54,11 +61,15 @@ class QuoteRequestQueryServiceImplTest {
     oaFormExtraFeeMapper = mock(OaFormExtraFeeMapper.class);
     oaFormHeaderExtraFieldMapper = mock(OaFormHeaderExtraFieldMapper.class);
     oaFormItemExtraFieldMapper = mock(OaFormItemExtraFieldMapper.class);
+    quoteBomConfirmationMapper = mock(QuoteBomConfirmationMapper.class);
     quoteBomStatusMapper = mock(QuoteBomStatusMapper.class);
+    quoteCostRunVersionMapper = mock(QuoteCostRunVersionMapper.class);
     quoteIngestLogMapper = mock(QuoteIngestLogMapper.class);
     productPackagingTypeResolver = mock(U9ProductPackagingTypeResolver.class);
     when(productPackagingTypeResolver.resolve(any(), any()))
         .thenReturn(U9ProductPackagingTypeResolver.Result.unknown(null));
+    when(quoteBomConfirmationMapper.selectList(any())).thenReturn(List.of());
+    when(quoteCostRunVersionMapper.selectList(any())).thenReturn(List.of());
     service =
         new QuoteRequestQueryServiceImpl(
             oaFormMapper,
@@ -66,7 +77,9 @@ class QuoteRequestQueryServiceImplTest {
             oaFormExtraFeeMapper,
             oaFormHeaderExtraFieldMapper,
             oaFormItemExtraFieldMapper,
+            quoteBomConfirmationMapper,
             quoteBomStatusMapper,
+            quoteCostRunVersionMapper,
             quoteIngestLogMapper,
             productPackagingTypeResolver);
   }
@@ -228,6 +241,39 @@ class QuoteRequestQueryServiceImplTest {
   }
 
   @Test
+  void detailDistinguishesTrialAndConfirmedCostRunVersions() {
+    OaForm form = form("OA-T8-COST-STATUS", "FI-SC-020", "CONFIRMED");
+    OaFormItem trialItem = item(31L, "MAT-TRIAL");
+    OaFormItem confirmedItem = item(32L, "MAT-CONFIRMED");
+    OaFormItem workflowItem = item(33L, "MAT-WORKFLOW");
+    when(oaFormMapper.selectOne(any())).thenReturn(form);
+    when(oaFormItemMapper.selectList(any()))
+        .thenReturn(List.of(trialItem, confirmedItem, workflowItem));
+    when(quoteBomStatusMapper.selectList(any()))
+        .thenReturn(
+            List.of(
+                status(31L, "SYNCED"),
+                status(32L, "SYNCED"),
+                status(33L, "SYNCED")));
+    when(oaFormExtraFeeMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormHeaderExtraFieldMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormItemExtraFieldMapper.selectList(any())).thenReturn(List.of());
+    when(quoteCostRunVersionMapper.selectList(any()))
+        .thenReturn(
+            List.of(
+                costRunVersion(31L, 101L, "TRIAL"),
+                costRunVersion(32L, 100L, "CONFIRMED")));
+    when(quoteBomConfirmationMapper.selectList(any()))
+        .thenReturn(List.of(bomConfirmation(33L)));
+
+    QuoteRequestDetailResponse detail = service.getRequestDetail("OA-T8-COST-STATUS");
+
+    assertThat(detail.getItems().get(0).getCalcStatus()).isEqualTo("试算中");
+    assertThat(detail.getItems().get(1).getCalcStatus()).isEqualTo("已核算");
+    assertThat(detail.getItems().get(2).getCalcStatus()).isEqualTo("试算中");
+  }
+
+  @Test
   void pendingClassificationCanConfirm() {
     OaForm form = form("OA-T8-005", "FI-SC-999", "PENDING");
     form.setQuoteScenario(null);
@@ -367,6 +413,26 @@ class QuoteRequestQueryServiceImplTest {
     status.setBomStatus(bomStatus);
     status.setBomSource("U9");
     return status;
+  }
+
+  private QuoteCostRunVersion costRunVersion(
+      Long itemId, Long versionId, String versionStatus) {
+    QuoteCostRunVersion version = new QuoteCostRunVersion();
+    version.setId(versionId);
+    version.setOaNo("OA-T8-COST-STATUS");
+    version.setOaFormItemId(itemId);
+    version.setStatus(versionStatus);
+    return version;
+  }
+
+  private QuoteBomConfirmation bomConfirmation(Long itemId) {
+    QuoteBomConfirmation confirmation = new QuoteBomConfirmation();
+    confirmation.setId(itemId + 200);
+    confirmation.setOaNo("OA-T8-COST-STATUS");
+    confirmation.setOaFormItemId(itemId);
+    confirmation.setPeriodMonth(CostPricingPeriodUtils.currentPricingMonth());
+    confirmation.setConfirmStatus(QuoteBomConfirmation.STATUS_CONFIRMED);
+    return confirmation;
   }
 
   private OaFormExtraFee extraFee() {

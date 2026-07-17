@@ -9,6 +9,8 @@ import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunObjectResult;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.CostRunResultDto;
+import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest;
+import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcResult;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
@@ -22,13 +24,11 @@ import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
 import com.sanhua.marketingcost.mapper.CostRunTaskMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
-import com.sanhua.marketingcost.service.CostRunEngine;
-import com.sanhua.marketingcost.service.CostRunResultWriter;
 import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MaterialMasterSyncService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
-import com.sanhua.marketingcost.service.QuoteCostRunVersionService;
+import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.lang.reflect.Proxy;
 import java.math.BigDecimal;
@@ -51,7 +51,7 @@ class QuoteCostRunTaskExecutorTest {
   }
 
   @Test
-  @DisplayName("T32：QUOTE worker 按旧 API 链路顺序执行并写入普通报价结果")
+  @DisplayName("FCQ-07：QUOTE worker 调用统一双场景编排服务")
   void quoteWorkerRunsFullQuoteChainInApiSyncOrder() {
     Harness harness = new Harness();
 
@@ -59,25 +59,16 @@ class QuoteCostRunTaskExecutorTest {
         harness.executor.execute(quoteTask(), "worker-1");
 
     assertThat(executionResult.resultSummaryJson())
-        .isEqualTo("{\"partItemCount\":1,\"costItemCount\":0,\"totalCost\":\"123.45\"}");
-    assertThat(harness.engineContext.getScene()).isEqualTo(CostRunContext.SCENE_QUOTE);
-    assertThat(harness.engineContext.getOaNo()).isEqualTo("OA-1");
-    assertThat(harness.engineContext.getOaFormItemId()).isEqualTo(11L);
-    assertThat(harness.engineContext.getProductCode()).isEqualTo("PROD-1");
-    assertThat(harness.engineContext.getPackageMethod()).isEqualTo("BOX");
-    assertThat(harness.engineContext.getCustomerName()).isEqualTo("ACME");
-    assertThat(harness.engineContext.getBusinessUnitType()).isEqualTo("COMMERCIAL");
-    assertThat(harness.engineContext.getPricingMonth()).isEqualTo("2026-05");
-    assertThat(harness.engineContext.getCostRunVersionId()).isEqualTo(9011L);
-    assertThat(harness.engineContext.getCostRunNo()).isEqualTo("TRIAL-11");
-    assertThat(harness.engineContext.getPricePrepareNo()).isEqualTo("PPR-1");
+        .isEqualTo("{\"partItemCount\":1,\"costItemCount\":0,\"totalCost\":\"123.45\",\"cuMaterialAdjustment\":\"2.00\",\"finalQuoteAmount\":\"125.45\"}");
+    assertThat(harness.adjustmentRequest.form()).isSameAs(harness.form);
+    assertThat(harness.adjustmentRequest.item()).isSameAs(harness.item);
+    assertThat(harness.adjustmentRequest.pricingMonth()).isEqualTo("2026-05");
+    assertThat(harness.adjustmentRequest.oaPricePrepareNo()).isEqualTo("PPR-1");
+    assertThat(harness.adjustmentRequest.calcObjectKey()).isEqualTo("QUOTE:11");
     assertThat(harness.ensureRequest.getItemCodes()).containsExactly("PART-LINK");
-    assertThat(harness.writtenResult).isSameAs(harness.engineResult);
-    assertThat(harness.writtenForm).isSameAs(harness.form);
-    assertThat(harness.writtenItem).isSameAs(harness.item);
     assertThat(harness.progressValues).containsExactly(5, 10, 52, 95);
     assertThat(harness.calls)
-        .containsExactly("sync", "readiness", "ensure", "engine", "writer", "itemUpdate", "oaUpdate");
+        .containsExactly("sync", "readiness", "ensure", "orchestrator", "itemUpdate", "oaUpdate");
   }
 
   @Test
@@ -114,9 +105,9 @@ class QuoteCostRunTaskExecutorTest {
         harness.executor.execute(quoteTask(), "worker-1");
 
     assertThat(executionResult.resultSummaryJson())
-        .isEqualTo("{\"partItemCount\":1,\"costItemCount\":0,\"totalCost\":\"123.45\"}");
+        .isEqualTo("{\"partItemCount\":1,\"costItemCount\":0,\"totalCost\":\"123.45\",\"cuMaterialAdjustment\":\"2.00\",\"finalQuoteAmount\":\"125.45\"}");
     assertThat(harness.calls)
-        .containsExactly("sync", "readiness", "ensure", "engine", "writer", "itemUpdate", "oaUpdate");
+        .containsExactly("sync", "readiness", "ensure", "orchestrator", "itemUpdate", "oaUpdate");
   }
 
   @Test
@@ -129,11 +120,10 @@ class QuoteCostRunTaskExecutorTest {
         harness.executor.execute(quoteTask(), "worker-1");
 
     assertThat(executionResult.resultSummaryJson())
-        .isEqualTo("{\"partItemCount\":1,\"costItemCount\":0,\"totalCost\":\"123.45\"}");
+        .isEqualTo("{\"partItemCount\":1,\"costItemCount\":0,\"totalCost\":\"123.45\",\"cuMaterialAdjustment\":\"2.00\",\"finalQuoteAmount\":\"125.45\"}");
     assertThat(harness.calls)
-        .containsExactly("sync", "readiness", "ensure", "engine", "writer", "itemUpdate", "oaUpdate");
+        .containsExactly("sync", "readiness", "ensure", "orchestrator", "itemUpdate", "oaUpdate");
     assertThat(harness.progressValues).containsExactly(5, 10, 52, 95);
-    assertThat(harness.writtenResult).isSameAs(harness.engineResult);
   }
 
   @Test
@@ -146,7 +136,7 @@ class QuoteCostRunTaskExecutorTest {
     harness.executor.execute(task, "worker-1");
 
     assertThat(harness.readinessPeriod).isEqualTo(CostPricingPeriodUtils.currentPricingMonth());
-    assertThat(harness.engineContext.getPricingMonth())
+    assertThat(harness.adjustmentRequest.pricingMonth())
         .isEqualTo(CostPricingPeriodUtils.currentPricingMonth());
     assertThat(harness.ensureRequest.getPricingMonth())
         .isEqualTo(CostPricingPeriodUtils.currentPricingMonth());
@@ -162,12 +152,9 @@ class QuoteCostRunTaskExecutorTest {
     private PricePrepareReadinessResult readiness =
         PricePrepareReadinessResult.ready("PPR-1", "2026-05", "SUCCESS");
     private String readinessPeriod;
-    private CostRunContext engineContext;
+    private QuoteCuAdjustmentCalcRequest adjustmentRequest;
     private LinkedPriceEnsureRequest ensureRequest;
     private LinkedPriceEnsureResult ensureResult = new LinkedPriceEnsureResult();
-    private CostRunObjectResult writtenResult;
-    private OaForm writtenForm;
-    private OaFormItem writtenItem;
 
     private Harness() {
       OaFormMapper oaFormMapper =
@@ -277,48 +264,33 @@ class QuoteCostRunTaskExecutorTest {
             ensureRequest = request;
             return ensureResult;
           };
-      CostRunEngine costRunEngine =
-          context -> {
-            calls.add("engine");
-            engineContext = context;
-            context.getProgress().accept(50);
-            engineResult.setContext(context);
-            return engineResult;
-          };
-      CostRunResultWriter costRunResultWriter =
-          (result, form, item) -> {
-            calls.add("writer");
-            writtenResult = result;
-            writtenForm = form;
-            writtenItem = item;
-          };
-      QuoteCostRunVersionService quoteCostRunVersionService =
-          new QuoteCostRunVersionService() {
-            @Override
-            public QuoteCostRunVersion createTrial(
-                String oaNo,
-                Long oaFormItemId,
-                String productCode,
-                String pricingMonth,
-                String resultPeriod,
-                String pricePrepareNo,
-                String priceTypeConfirmNo,
-                String bomConfirmNo,
-                String businessUnitType) {
-              QuoteCostRunVersion version = new QuoteCostRunVersion();
-              version.setId(9000L + oaFormItemId);
-              version.setCostRunNo("TRIAL-" + oaFormItemId);
-              version.setPricePrepareNo(pricePrepareNo);
-              return version;
-            }
-
-            @Override
-            public void finishTrial(
-                Long versionId,
-                BigDecimal totalCost,
-                int partItemCount,
-                int costItemCount) {}
-          };
+      QuoteCuAdjustmentCalcService cuAdjustmentCalcService = request -> {
+        calls.add("orchestrator");
+        adjustmentRequest = request;
+        request.progress().accept(50);
+        QuoteCostRunVersion version = new QuoteCostRunVersion();
+        version.setId(9000L + request.item().getId());
+        version.setCostRunNo("TRIAL-" + request.item().getId());
+        version.setPricePrepareNo("PPR-FIN-1");
+        version.setOaPricePrepareNo(request.oaPricePrepareNo());
+        version.setFinancePricePrepareNo("PPR-FIN-1");
+        version.setTotalCost(new BigDecimal("123.45"));
+        version.setCuMaterialAdjustment(new BigDecimal("2.00"));
+        version.setFinalQuoteAmount(new BigDecimal("125.45"));
+        engineResult.getResult().setFinanceMaterialCost(new BigDecimal("100.00"));
+        engineResult.getResult().setOaMaterialCost(new BigDecimal("102.00"));
+        engineResult.getResult().setCuMaterialAdjustment(new BigDecimal("2.00"));
+        engineResult.getResult().setFinalQuoteAmount(new BigDecimal("125.45"));
+        return new QuoteCuAdjustmentCalcResult(
+            version,
+            engineResult,
+            null,
+            new BigDecimal("100.00"),
+            new BigDecimal("102.00"),
+            new BigDecimal("123.45"),
+            new BigDecimal("2.00"),
+            new BigDecimal("125.45"));
+      };
 
       executor =
           new QuoteCostRunTaskExecutor(
@@ -330,9 +302,7 @@ class QuoteCostRunTaskExecutorTest {
               pricePrepareReadinessService,
               materialPriceRouterService,
               linkedPriceEnsureService,
-              costRunEngine,
-              costRunResultWriter,
-              quoteCostRunVersionService);
+              cuAdjustmentCalcService);
     }
   }
 

@@ -91,11 +91,11 @@ cost:
       # 逗号分隔；为空表示当前 mode 对全部请求生效。生产灰度建议先显式配置小范围名单。
       gray-business-units: ${COST_RUN_EXECUTION_GRAY_BUSINESS_UNITS:}
       gray-users: ${COST_RUN_EXECUTION_GRAY_USERS:}
-  # Task #9：水电费是否计入材料费
-  #   true（默认） = 与 Excel 见机表3 口径一致：水电列报，同时进入材料费基数
-  #   false        = 水电独立列报，不进材料费，用于历史口径回溯
+  # 水电费是否计入材料费
+  #   false（默认）= 与 Excel 见机表3 的 E66=SUM(E9:E64) 一致：水电 E65 仅列报、不进材料费
+  #   true         = 仅用于回溯曾经把水电计入材料费的历史版本
   material:
-    includeWaterPower: ${COST_MATERIAL_INCLUDE_WATER_POWER:true}
+    includeWaterPower: ${COST_MATERIAL_INCLUDE_WATER_POWER:false}
   # 联动价 parser 模式灰度（T08 配置）
   #   legacy = 只走旧 evaluateExpression（保留 [中文] 包裹兼容）
   #   dual   = legacy 主、new 并跑；差异 > dual-warn-threshold 写 WARN，返回 legacy 值

@@ -3,11 +3,16 @@ package com.sanhua.marketingcost.controller;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import com.sanhua.marketingcost.dto.ingest.QuoteRequestListItemResponse;
+import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunTrialRequest;
+import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunWorkbenchResponse;
+import com.sanhua.marketingcost.dto.quotecosting.QuoteCuMaterialDifferenceResponse;
 import com.sanhua.marketingcost.security.PermissionService;
+import com.sanhua.marketingcost.service.BusinessUnitRepriceLockGuard;
 import com.sanhua.marketingcost.service.QuoteBomConfirmationService;
 import com.sanhua.marketingcost.service.QuoteCostRunWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
@@ -66,6 +71,90 @@ class QuoteRequestControllerSecurityTest {
     }
   }
 
+  @Test
+  void cuMaterialDifferencesDeniesWithoutQuotePermission() {
+    try (AnnotationConfigApplicationContext context =
+        new AnnotationConfigApplicationContext(TestSecurityConfig.class)) {
+      QuoteRequestController controller = context.getBean(QuoteRequestController.class);
+      SecurityContextHolder.getContext()
+          .setAuthentication(
+              new UsernamePasswordAuthenticationToken(
+                  "staff", null, List.of(new SimpleGrantedAuthority("other:permission"))));
+
+      assertThatThrownBy(
+              () ->
+                  controller.cuMaterialDifferences(
+                      "OA-1", 1L, "RUN-1", 1, 20, null, null, true, null))
+          .isInstanceOf(AccessDeniedException.class);
+    }
+  }
+
+  @Test
+  void cuMaterialDifferencesAllowsWithQuotePermission() {
+    try (AnnotationConfigApplicationContext context =
+        new AnnotationConfigApplicationContext(TestSecurityConfig.class)) {
+      QuoteCostRunWorkbenchService service = context.getBean(QuoteCostRunWorkbenchService.class);
+      when(
+              service.pageCuMaterialDifferences(
+                  "OA-1", 1L, "RUN-1", 1, 20, null, null, true, null))
+          .thenReturn(new PageResult<>(List.of(new QuoteCuMaterialDifferenceResponse()), 1L));
+      QuoteRequestController controller = context.getBean(QuoteRequestController.class);
+      SecurityContextHolder.getContext()
+          .setAuthentication(
+              new UsernamePasswordAuthenticationToken(
+                  "finance",
+                  null,
+                  List.of(new SimpleGrantedAuthority("ingest:quote:list"))));
+
+      assertThat(
+              controller
+                  .cuMaterialDifferences(
+                      "OA-1", 1L, "RUN-1", 1, 20, null, null, true, null)
+                  .getData()
+                  .getTotal())
+          .isEqualTo(1L);
+    }
+  }
+
+  @Test
+  void trialCostRunDeniesWithoutQuotePermission() {
+    try (AnnotationConfigApplicationContext context =
+        new AnnotationConfigApplicationContext(TestSecurityConfig.class)) {
+      QuoteRequestController controller = context.getBean(QuoteRequestController.class);
+      SecurityContextHolder.getContext()
+          .setAuthentication(
+              new UsernamePasswordAuthenticationToken(
+                  "staff", null, List.of(new SimpleGrantedAuthority("other:permission"))));
+
+      assertThatThrownBy(
+              () -> controller.trialCostRun("OA-1", 1L, new QuoteCostRunTrialRequest()))
+          .isInstanceOf(AccessDeniedException.class);
+    }
+  }
+
+  @Test
+  void trialCostRunAllowsQuotePermissionAndChecksMonthlyRepriceLock() {
+    try (AnnotationConfigApplicationContext context =
+        new AnnotationConfigApplicationContext(TestSecurityConfig.class)) {
+      QuoteCostRunWorkbenchService service = context.getBean(QuoteCostRunWorkbenchService.class);
+      BusinessUnitRepriceLockGuard lockGuard =
+          context.getBean(BusinessUnitRepriceLockGuard.class);
+      QuoteCostRunTrialRequest request = new QuoteCostRunTrialRequest();
+      when(service.trial("OA-1", 1L, request)).thenReturn(new QuoteCostRunWorkbenchResponse());
+      QuoteRequestController controller = context.getBean(QuoteRequestController.class);
+      SecurityContextHolder.getContext()
+          .setAuthentication(
+              new UsernamePasswordAuthenticationToken(
+                  "quoter",
+                  null,
+                  List.of(new SimpleGrantedAuthority("ingest:quote:list"))));
+
+      assertThat(controller.trialCostRun("OA-1", 1L, request).isSuccess()).isTrue();
+      verify(lockGuard).assertCostRunAllowed("OA-1");
+      verify(service).trial("OA-1", 1L, request);
+    }
+  }
+
   @Configuration
   @EnableMethodSecurity
   static class TestSecurityConfig {
@@ -105,20 +194,27 @@ class QuoteRequestControllerSecurityTest {
     }
 
     @Bean
+    BusinessUnitRepriceLockGuard businessUnitRepriceLockGuard() {
+      return mock(BusinessUnitRepriceLockGuard.class);
+    }
+
+    @Bean
     QuoteRequestController quoteRequestController(
         QuoteRequestQueryService service,
         QuoteCostingWorkbenchService workbenchService,
         QuoteBomConfirmationService confirmationService,
         QuotePriceTypeConfirmationService priceTypeConfirmationService,
         QuotePricePrepareWorkbenchService pricePrepareWorkbenchService,
-        QuoteCostRunWorkbenchService costRunWorkbenchService) {
+        QuoteCostRunWorkbenchService costRunWorkbenchService,
+        BusinessUnitRepriceLockGuard repriceLockGuard) {
       return new QuoteRequestController(
           service,
           workbenchService,
           confirmationService,
           priceTypeConfirmationService,
           pricePrepareWorkbenchService,
-          costRunWorkbenchService);
+          costRunWorkbenchService,
+          repriceLockGuard);
     }
   }
 }

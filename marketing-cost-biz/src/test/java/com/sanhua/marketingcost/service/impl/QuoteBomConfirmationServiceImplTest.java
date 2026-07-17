@@ -23,6 +23,7 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomConfirmationLogMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
+import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -39,6 +40,7 @@ class QuoteBomConfirmationServiceImplTest {
   private BomCostingRowMapper bomCostingRowMapper;
   private QuoteBomConfirmationMapper confirmationMapper;
   private QuoteBomConfirmationLogMapper confirmationLogMapper;
+  private QuoteCostRunVersionInvalidationService versionInvalidationService;
   private QuoteBomConfirmationServiceImpl service;
 
   @BeforeEach
@@ -49,6 +51,7 @@ class QuoteBomConfirmationServiceImplTest {
     bomCostingRowMapper = mock(BomCostingRowMapper.class);
     confirmationMapper = mock(QuoteBomConfirmationMapper.class);
     confirmationLogMapper = mock(QuoteBomConfirmationLogMapper.class);
+    versionInvalidationService = mock(QuoteCostRunVersionInvalidationService.class);
     service =
         new QuoteBomConfirmationServiceImpl(
             oaFormMapper,
@@ -56,7 +59,8 @@ class QuoteBomConfirmationServiceImplTest {
             quoteBomStatusMapper,
             bomCostingRowMapper,
             confirmationMapper,
-            confirmationLogMapper);
+            confirmationLogMapper,
+            versionInvalidationService);
   }
 
   @Test
@@ -116,28 +120,27 @@ class QuoteBomConfirmationServiceImplTest {
     verify(confirmationLogMapper).insert(logCaptor.capture());
     assertThat(logCaptor.getValue().getActionType()).isEqualTo(QuoteBomConfirmationLog.ACTION_CONFIRM);
     assertThat(logCaptor.getValue().getAfterStatus()).isEqualTo(QuoteBomConfirmation.STATUS_CONFIRMED);
+    verify(versionInvalidationService)
+        .invalidateProduct("OA-001", 10L, "FIN-001", "2026-06");
   }
 
   @Test
-  void repeatConfirmInvalidatesOldAndCreatesNextVersion() {
+  void repeatConfirmReturnsExistingVersionWithoutWritingDuplicateData() {
     mockScope();
     QuoteBomConfirmation old = existingConfirmation(1, QuoteBomConfirmation.STATUS_CONFIRMED);
     when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
         .thenReturn(List.of(row("MAT-1", 0)));
-    when(confirmationMapper.selectList(any())).thenReturn(List.of(old), List.of(old));
-    when(confirmationMapper.updateById(any(QuoteBomConfirmation.class))).thenReturn(1);
-    when(confirmationMapper.insert(any(QuoteBomConfirmation.class))).thenReturn(1);
+    when(confirmationMapper.selectList(any())).thenReturn(List.of(old));
 
     QuoteBomConfirmResponse response = service.confirm("OA-001", 10L, new QuoteBomConfirmRequest());
 
-    assertThat(response.getConfirmVersion()).isEqualTo(2);
-    assertThat(old.getConfirmStatus()).isEqualTo(QuoteBomConfirmation.STATUS_INVALID);
-    verify(confirmationMapper).updateById(old);
-    ArgumentCaptor<QuoteBomConfirmationLog> logCaptor =
-        ArgumentCaptor.forClass(QuoteBomConfirmationLog.class);
-    verify(confirmationLogMapper, org.mockito.Mockito.times(2)).insert(logCaptor.capture());
-    assertThat(logCaptor.getAllValues()).extracting("actionType")
-        .containsExactly(QuoteBomConfirmationLog.ACTION_STALE, QuoteBomConfirmationLog.ACTION_CONFIRM);
+    assertThat(response.getConfirmVersion()).isEqualTo(1);
+    assertThat(response.getConfirmNo()).isEqualTo(old.getConfirmNo());
+    verify(confirmationMapper, never()).insert(any(QuoteBomConfirmation.class));
+    verify(confirmationMapper, never()).updateById(any(QuoteBomConfirmation.class));
+    verify(confirmationLogMapper, never()).insert(any(QuoteBomConfirmationLog.class));
+    verify(versionInvalidationService, never())
+        .invalidateProduct(any(), any(), any(), any());
   }
 
   @Test
@@ -160,6 +163,8 @@ class QuoteBomConfirmationServiceImplTest {
     assertThat(logCaptor.getValue().getBeforeStatus()).isEqualTo(QuoteBomConfirmation.STATUS_CONFIRMED);
     assertThat(logCaptor.getValue().getAfterStatus()).isEqualTo(QuoteBomConfirmation.STATUS_INVALID);
     assertThat(logCaptor.getValue().getRemark()).isEqualTo("撤销后调整用量");
+    verify(versionInvalidationService)
+        .invalidateProduct("OA-001", 10L, "FIN-001", "2026-06");
   }
 
   private void mockScope() {

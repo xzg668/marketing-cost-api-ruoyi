@@ -123,9 +123,41 @@ public enum MaterialOrganization {
         .toQuoteDataOrganization();
   }
 
+  public static QuoteDataOrganization quoteDataForQuoteProduct(
+      String processCode,
+      String oaNo,
+      String materialOrganizationCode,
+      String productName,
+      String productModel,
+      String materialNo) {
+    return resolveQuoteOrganization(
+            processCode,
+            oaNo,
+            materialOrganizationCode,
+            null,
+            productName,
+            productModel,
+            materialNo)
+        .toQuoteDataOrganization();
+  }
+
   private static MaterialOrganization resolveQuoteOrganization(
       String processCode, String oaNo, String materialOrganizationCode, String contextOrganizationCode) {
+    return resolveQuoteOrganization(processCode, oaNo, materialOrganizationCode, contextOrganizationCode, null, null, null);
+  }
+
+  private static MaterialOrganization resolveQuoteOrganization(
+      String processCode,
+      String oaNo,
+      String materialOrganizationCode,
+      String contextOrganizationCode,
+      String productName,
+      String productModel,
+      String materialNo) {
     if (isPlateProcess(processCode) || isPlateProcess(oaNo)) {
+      return PLATE;
+    }
+    if (isPlateProduct(productName, productModel, materialNo)) {
       return PLATE;
     }
     MaterialOrganization explicitOrganization = fromBusinessUnitType(materialOrganizationCode);
@@ -177,6 +209,24 @@ public enum MaterialOrganization {
     String normalized = process.trim().toUpperCase(Locale.ROOT);
     String compact = normalized.replace("-", "").replace("_", "");
     return normalized.startsWith("FI-SC-020") || compact.startsWith("FISC020");
+  }
+
+  private static boolean isPlateProduct(String productName, String productModel, String materialNo) {
+    String text = join(productName, productModel, materialNo);
+    return text.contains("板换")
+        || text.contains("板式换热器")
+        || text.contains("板式热交换器")
+        || text.contains("钎焊板式");
+  }
+
+  private static String join(String... values) {
+    StringBuilder builder = new StringBuilder();
+    for (String value : values) {
+      if (StringUtils.hasText(value)) {
+        builder.append(' ').append(value.trim());
+      }
+    }
+    return builder.toString();
   }
 
 }
