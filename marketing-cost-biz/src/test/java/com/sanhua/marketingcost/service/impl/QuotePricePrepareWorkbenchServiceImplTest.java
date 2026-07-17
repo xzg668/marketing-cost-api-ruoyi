@@ -16,6 +16,7 @@ import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
+import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
 import com.sanhua.marketingcost.entity.QuoteBomConfirmation;
 import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmBatch;
@@ -184,6 +185,43 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     org.assertj.core.api.Assertions.assertThat(response.getReadiness().getPrepareNo()).isNull();
     verify(pricePrepareService, org.mockito.Mockito.never()).generate(any());
     verify(financePricePrepareService, org.mockito.Mockito.never()).generateFromOa(any());
+  }
+
+  @Test
+  @DisplayName("价格源预检查为内存缺口补齐已确认价格类型")
+  void sourceCheckEnrichesPreviewGapPriceType() {
+    prepareConfirmedScope();
+    PricePrepareGap gap = new PricePrepareGap();
+    gap.setPriceTypeConfirmNo("PTC-WORKBENCH");
+    gap.setPriceTypeConfirmItemId(9L);
+    gap.setMaterialCode("MAT-FIXED");
+    gap.setGapMaterialCode("MAT-FIXED");
+    gap.setGapType("MISSING_PRICE");
+    PricePrepareGenerateResult summary =
+        generated("PPR-OA-WORKBENCH", QuotePriceScenarioType.OA_LOCKED.name());
+    summary.setStatus("PARTIAL");
+    summary.setGapCount(1);
+    PricePrepareCalculationResult calculation = new PricePrepareCalculationResult();
+    calculation.setSummary(summary);
+    calculation.setItems(List.of());
+    calculation.setGaps(List.of(gap));
+    when(pricePrepareService.calculate(any())).thenReturn(calculation);
+    org.mockito.Mockito.doAnswer(invocation -> {
+      List<PricePrepareGap> gaps = invocation.getArgument(0);
+      gaps.getFirst().setPriceType("固定价");
+      return null;
+    }).when(pricePrepareQueryService).enrichGaps(any());
+    QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
+    request.setPeriodMonth("2026-07");
+    request.setPriceTypeConfirmNo("PTC-WORKBENCH");
+
+    var response = service.checkPriceSources("OA-WORKBENCH", 101L, request);
+
+    verify(pricePrepareQueryService).enrichGaps(calculation.getGaps());
+    org.assertj.core.api.Assertions.assertThat(response.getGaps().getRecords())
+        .singleElement()
+        .extracting(PricePrepareGap::getPriceType)
+        .isEqualTo("固定价");
   }
 
   @Test

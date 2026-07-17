@@ -198,6 +198,9 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
         calculation == null || calculation.getGaps() == null
             ? List.of()
             : calculation.getGaps();
+    // 纯检查不落库，因此不会经过 pageGaps 的展示字段补齐；这里复用同一只读补齐逻辑，
+    // 确保前端能按第三步确认结果正确区分固定价、联动价、区间价等缺口。
+    pricePrepareQueryService.enrichGaps(gapRecords);
     response.setItems(new PricePrepareItemPageResponse(items.size(), items));
     PricePrepareGapPageResponse gaps =
         new PricePrepareGapPageResponse(gapRecords.size(), gapRecords);

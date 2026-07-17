@@ -12,6 +12,8 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePrepareOaSummaryPageRespon
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareOaSummaryQueryRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareTopProductSummaryPageResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareTopProductSummaryQueryRequest;
+import com.sanhua.marketingcost.entity.PricePrepareGap;
+import java.util.List;
 
 public interface PricePrepareQueryService {
 
@@ -27,4 +29,7 @@ public interface PricePrepareQueryService {
   PricePrepareItemPageResponse pageItems(PricePrepareItemQueryRequest request);
 
   PricePrepareGapPageResponse pageGaps(PricePrepareGapQueryRequest request);
+
+  /** 为数据库缺口或纯计算缺口补齐价格类型、无废料确认等只读展示信息。 */
+  void enrichGaps(List<PricePrepareGap> gaps);
 }

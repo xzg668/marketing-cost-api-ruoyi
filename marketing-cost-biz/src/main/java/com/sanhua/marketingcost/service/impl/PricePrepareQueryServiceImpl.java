@@ -298,9 +298,14 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
             buildGapQuery(safe)
                 .orderByDesc(PricePrepareGap::getCreatedAt)
                 .orderByDesc(PricePrepareGap::getId));
-    enrichPriceTypes(page.getRecords());
-    enrichNoScrapConfirmations(page.getRecords());
+    enrichGaps(page.getRecords());
     return new PricePrepareGapPageResponse(page.getTotal(), page.getRecords());
+  }
+
+  @Override
+  public void enrichGaps(List<PricePrepareGap> gaps) {
+    enrichPriceTypes(gaps);
+    enrichNoScrapConfirmations(gaps);
   }
 
   private void enrichPriceTypes(List<PricePrepareGap> gaps) {

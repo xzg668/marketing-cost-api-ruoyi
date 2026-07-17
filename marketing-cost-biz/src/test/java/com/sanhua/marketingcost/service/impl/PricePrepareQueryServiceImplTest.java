@@ -408,6 +408,29 @@ class PricePrepareQueryServiceImplTest {
   }
 
   @Test
+  @DisplayName("纯计算缺口：无需落库也能按确认明细补齐价格类型")
+  void enrichGapsSupportsInMemoryPreviewRows() {
+    PricePrepareGap gap = new PricePrepareGap();
+    gap.setPriceTypeConfirmNo("PT-CF-PREVIEW");
+    gap.setPriceTypeConfirmItemId(19L);
+    gap.setOaNo("OA-PREVIEW");
+    gap.setOaFormItemId(20L);
+    gap.setTopProductCode("TOP-PREVIEW");
+    gap.setMaterialCode("MAT-LINKED");
+    gap.setGapMaterialCode("MAT-LINKED");
+    QuotePriceTypeConfirmItem confirmItem = new QuotePriceTypeConfirmItem();
+    confirmItem.setId(19L);
+    confirmItem.setMaterialCode("MAT-LINKED");
+    confirmItem.setPriceType("联动价");
+    when(priceTypeConfirmItemMapper.selectList(any())).thenReturn(List.of(confirmItem));
+
+    service.enrichGaps(List.of(gap));
+
+    assertThat(gap.getPriceType()).isEqualTo("联动价");
+    org.mockito.Mockito.verifyNoInteractions(gapMapper);
+  }
+
+  @Test
   @DisplayName("缺废料映射缺口：按料号和价格月份回填有效无废料确认")
   void pageGapsEnrichesEffectiveNoScrapConfirmation() {
     PricePrepareGap gap = new PricePrepareGap();
