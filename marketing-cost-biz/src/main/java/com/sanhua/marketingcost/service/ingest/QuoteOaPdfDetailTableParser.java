@@ -61,12 +61,9 @@ public class QuoteOaPdfDetailTableParser {
 
   private TableRange tableRange(
       List<TableLine> lines, QuoteOaPdfTableDefinition table, List<QuoteOaPdfFieldDefinition> fields) {
-    int start = -1;
-    for (int i = 0; i < lines.size(); i++) {
-      if (containsAny(lines.get(i).text(), table.getStartAnchors())) {
-        start = i;
-        break;
-      }
+    int start = standaloneTableStart(lines, table.getStartAnchors());
+    if (start < 0) {
+      start = firstContainingLine(lines, table.getStartAnchors());
     }
     if (start < 0) {
       for (int i = 0; i < lines.size(); i++) {
@@ -87,6 +84,35 @@ public class QuoteOaPdfDetailTableParser {
       }
     }
     return new TableRange(start, end);
+  }
+
+  private int standaloneTableStart(List<TableLine> lines, List<String> anchors) {
+    for (int i = 0; i < lines.size(); i++) {
+      String lineText = normalizeTableAnchor(lines.get(i).text());
+      for (String anchor : anchors) {
+        if (StringUtils.hasText(lineText) && lineText.equals(normalizeTableAnchor(anchor))) {
+          return i;
+        }
+      }
+    }
+    return -1;
+  }
+
+  private int firstContainingLine(List<TableLine> lines, List<String> anchors) {
+    for (int i = 0; i < lines.size(); i++) {
+      if (containsAny(lines.get(i).text(), anchors)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  private String normalizeTableAnchor(String value) {
+    String normalized = normalizeLabel(value);
+    while (normalized.startsWith(">")) {
+      normalized = normalized.substring(1);
+    }
+    return normalized;
   }
 
   private int matchingHeaderColumnCount(TableLine line, List<QuoteOaPdfFieldDefinition> fields) {
@@ -356,6 +382,15 @@ public class QuoteOaPdfDetailTableParser {
       List<QuotePdfToken> tokens = new ArrayList<>(entry.getValue());
       tokens.sort(Comparator.comparing(QuotePdfToken::getY));
       String label = normalizeLabel(joinRaw(tokens));
+      if (isCombinedSeqProductHeader(label)) {
+        layout.putCandidate("seq", entry.getKey());
+        Float productX = inferCombinedProductColumnX(tokens);
+        if (productX != null) {
+          layout.addColumnX(productX);
+          layout.putCandidate("productName", productX);
+        }
+        continue;
+      }
       String fieldCode = denseFieldCode(label);
       if (fieldCode != null) {
         layout.putCandidate(fieldCode, entry.getKey());
@@ -363,6 +398,31 @@ public class QuoteOaPdfDetailTableParser {
     }
     layout.finish();
     return layout;
+  }
+
+  private boolean isCombinedSeqProductHeader(String normalizedLabel) {
+    return StringUtils.hasText(normalizedLabel)
+        && normalizedLabel.contains("序")
+        && normalizedLabel.contains("产品")
+        && normalizedLabel.contains("名称");
+  }
+
+  private Float inferCombinedProductColumnX(List<QuotePdfToken> tokens) {
+    float sum = 0f;
+    int count = 0;
+    for (QuotePdfToken token : tokens) {
+      String text = normalizeLabel(token.getText());
+      int productIndex = text.indexOf("产品");
+      if (productIndex < 0) {
+        productIndex = text.indexOf("名称");
+      }
+      if (productIndex <= 0 || text.isEmpty() || token.getWidth() <= 0f) {
+        continue;
+      }
+      sum += token.getX() + token.getWidth() * productIndex / text.length();
+      count++;
+    }
+    return count == 0 ? null : sum / count;
   }
 
   private float nearestColumnX(Set<Float> existingColumns, float x) {
@@ -543,13 +603,24 @@ public class QuoteOaPdfDetailTableParser {
         continue;
       }
       for (QuotePdfToken token : line.tokens()) {
-        if (token.getY() >= fromY && token.getY() < toY) {
+        if (token.getY() >= fromY && token.getY() < toY && !isDensePrintFooterToken(token)) {
           tokens.add(token);
         }
       }
     }
     tokens.sort(Comparator.comparing(QuotePdfToken::getY).thenComparing(QuotePdfToken::getX));
     return tokens;
+  }
+
+  private boolean isDensePrintFooterToken(QuotePdfToken token) {
+    String text = token == null ? null : trimToNull(token.getText());
+    if (text == null) {
+      return false;
+    }
+    String lower = text.toLowerCase(Locale.ROOT);
+    return lower.startsWith("http://")
+        || lower.startsWith("https://")
+        || (text.contains("打印") && lower.contains("sanhua"));
   }
 
   private QuoteIngestItemRequest toDenseFiSc006Item(

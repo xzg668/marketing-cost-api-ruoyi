@@ -8,13 +8,13 @@ public class BomRuleClause {
   /** 字段名；必须在新规则评估器白名单内。 */
   private String field;
 
-  /** 操作符：EQ / IN / LIKE / PREFIX。 */
+  /** 操作符：EQ / NE / IN / NOT_IN / LIKE / PREFIX。 */
   private String op;
 
-  /** EQ / LIKE / PREFIX 时的单值。 */
+  /** EQ / NE / LIKE / PREFIX 时的单值。 */
   private String value;
 
-  /** IN 时的编码或名称白名单。 */
+  /** IN / NOT_IN 时的编码或名称清单。 */
   private List<String> values;
 
   public String getField() {

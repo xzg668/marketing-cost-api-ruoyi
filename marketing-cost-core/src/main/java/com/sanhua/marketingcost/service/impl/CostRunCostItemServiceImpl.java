@@ -43,7 +43,6 @@ import com.sanhua.marketingcost.service.CostRunCacheLookupService;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.format.DateTimeFormatter;
@@ -159,14 +158,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   /** T19：试算路径专用 cached lookup（5 个 rate + ProductProperty），避免重复 SQL */
   private final CostRunCacheLookupService cacheLookup;
 
-  /**
-   * Task #9：是否把"水电费"计入材料费。
-   *
-   * <p>Excel 见机表3 的口径是「水电费独立列报，同时进入材料费基数」，故默认 true。开关保留是为了
-   * 历史报表回溯时可以临时恢复「水电不进材料费」口径。
-   */
-  private final boolean includeWaterPowerInMaterial;
-
   public CostRunCostItemServiceImpl(
       CostRunCostItemMapper costRunCostItemMapper,
       OaFormMapper oaFormMapper,
@@ -184,8 +175,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       MaterialMasterMapper materialMasterMapper,
       MaterialMasterRawMapper materialMasterRawMapper,
       BomRawHierarchyMapper bomRawHierarchyMapper,
-      CostRunCacheLookupService cacheLookup,
-      @Value("${cost.material.includeWaterPower:false}") boolean includeWaterPowerInMaterial) {
+      CostRunCacheLookupService cacheLookup) {
     this.costRunCostItemMapper = costRunCostItemMapper;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
@@ -203,7 +193,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     this.materialMasterRawMapper = materialMasterRawMapper;
     this.bomRawHierarchyMapper = bomRawHierarchyMapper;
     this.cacheLookup = cacheLookup;
-    this.includeWaterPowerInMaterial = includeWaterPowerInMaterial;
   }
 
   @Override
@@ -448,8 +437,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     }
 
     // 3) 最后汇总材料费(部品+辅料+部门经费+见机表包装)
-    //    见机表3 的材料费 E66=SUM(E9:E64)，水电费在 E65，因此默认只列示、不进入材料费；
-    //    如需回溯曾经把水电计入材料费的版本，可显式设置 cost.material.includeWaterPower=true。
+    //    水电费属于部门经费，按财务确认口径计入材料费，并继续参与净损失、制造费用和三项费用计算。
     //    包装组件已在部品取价阶段按子件汇总价 / 母件底数折算成父件金额；
     //    见机表只需对该包装父件金额乘 1.05。
     PartTotalSplit partSplit = splitPartAmount(oaNoValue, productCodeValue, currentPartItems);
@@ -465,10 +453,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     BigDecimal deptTotal =
         feeResult.overhaul
             .add(feeResult.toolingRepair)
+            .add(feeResult.waterPower)
             .add(feeResult.other);
-    if (includeWaterPowerInMaterial) {
-      deptTotal = deptTotal.add(feeResult.waterPower);
-    }
     BigDecimal materialTotal =
         partTotal
             .add(auxTotal)

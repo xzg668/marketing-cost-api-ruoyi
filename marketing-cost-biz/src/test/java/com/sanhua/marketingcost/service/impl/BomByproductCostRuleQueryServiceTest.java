@@ -56,6 +56,6 @@ class BomByproductCostRuleQueryServiceTest {
 
   private static BomRuleNodeContext node() {
     return new BomRuleNodeContext(
-        "P001", "副产品", "31", "副产品", null, "制造件", "BY01", "制造件", "COMMERCIAL", "主制造");
+        "P001", "副产品", "31", null, "副产品", null, "制造件", "BY01", "制造件", "COMMERCIAL", "主制造");
   }
 }

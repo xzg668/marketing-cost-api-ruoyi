@@ -68,7 +68,8 @@ public class CostRunDetailController {
   public CommonResult<CostRunDetailDto> getDetail(
       @RequestParam String oaNo,
       @RequestParam String productCode,
-      @RequestParam(required = false) String costRunNo) {
+      @RequestParam(required = false) String costRunNo,
+      @RequestParam(value = "legacyResult", required = false) Boolean legacyResult) {
     if (!StringUtils.hasText(oaNo)) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(),"oaNo is required");
     }
@@ -76,15 +77,29 @@ public class CostRunDetailController {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(),"productCode is required");
     }
     String productCodeValue = productCode.trim();
-    QuoteCostRunVersion version = resolveVersion(oaNo.trim(), productCodeValue, costRunNo);
-    String effectiveCostRunNo = version == null ? trimToNull(costRunNo) : trimToNull(version.getCostRunNo());
+    boolean useLegacyResult = Boolean.TRUE.equals(legacyResult);
+    QuoteCostRunVersion version =
+        useLegacyResult ? null : resolveVersion(oaNo.trim(), productCodeValue, costRunNo);
+    String effectiveCostRunNo = null;
+    if (!useLegacyResult) {
+      effectiveCostRunNo =
+          version == null ? trimToNull(costRunNo) : trimToNull(version.getCostRunNo());
+    }
     // T26：见机表展示用聚合视图（焊料/包装各合 1 行），DB 明细 listStoredByOaNo 仍可拉
-    List<CostRunPartItemDto> filteredParts =
-        StringUtils.hasText(effectiveCostRunNo)
-            ? costRunPartItemService.listAggregatedByCostRunNo(effectiveCostRunNo, productCodeValue)
-            : costRunPartItemService.listAggregatedByOaNo(oaNo, productCodeValue);
+    List<CostRunPartItemDto> filteredParts;
+    if (useLegacyResult) {
+      filteredParts = legacyPartItems(oaNo, productCodeValue);
+    } else if (StringUtils.hasText(effectiveCostRunNo)) {
+      filteredParts =
+          costRunPartItemService.listAggregatedByCostRunNo(
+              effectiveCostRunNo, productCodeValue);
+    } else {
+      filteredParts = costRunPartItemService.listAggregatedByOaNo(oaNo, productCodeValue);
+    }
     // T12：批量查主档把 cost_element 灌进 partItems（前端 T13 用来分组/染色）
-    enrichPartsWithCostElement(filteredParts);
+    if (!useLegacyResult) {
+      enrichPartsWithCostElement(filteredParts);
+    }
     List<CostRunCostItemDto> costItems =
         StringUtils.hasText(effectiveCostRunNo)
             ? costRunCostItemService.listStoredByCostRunNo(effectiveCostRunNo)
@@ -133,6 +148,19 @@ public class CostRunDetailController {
     dto.setProductName(productName);
     dto.setProductModel(productModel);
     return CommonResult.success(dto);
+  }
+
+  private List<CostRunPartItemDto> legacyPartItems(String oaNo, String productCode) {
+    List<CostRunPartItemDto> stored = costRunPartItemService.listStoredByOaNo(oaNo);
+    if (stored == null || stored.isEmpty()) {
+      return List.of();
+    }
+    return stored.stream()
+        .filter(
+            item ->
+                item != null
+                    && productCode.equals(trimToNull(item.getProductCode())))
+        .toList();
   }
 
   private QuoteCostRunVersion resolveVersion(String oaNo, String productCode, String costRunNo) {

@@ -149,6 +149,51 @@ class QuoteOaPdfDetailTableParserFiSc006Test {
   }
 
   @Test
+  void keepsProductNameWhenSeqAndProductHeadersOverlapAndPrintFooterFollowsLastRow() {
+    QuotePdfDocument document =
+        document(
+            "FI-SC-006-20260326-032.pdf",
+            row(cell("首次报价技术员需上传附件：明细表", 299)),
+            row(cell("备注", 60)),
+            row(cell("明细表", 48)),
+            row(
+                cell("序产品", 50),
+                cell("客户", 78),
+                cell("U11", 98),
+                cell("料号", 118),
+                cell("三花型", 138),
+                cell("规格", 162)),
+            row(cell("号名称", 50), cell("图号", 78), cell("位码", 98), cell("号", 138)),
+            row(
+                cell("1", 51),
+                cell("排水", 58),
+                cell("1047", 118),
+                cell("PSB12", 138),
+                cell("PSB12", 162)),
+            row(
+                cell("泵", 58),
+                cell("900000031", 118),
+                cell("B55", 138),
+                cell("B55", 162)),
+            row(
+                cell(
+                    "https://10.10.202.31/sp/print/printMainPage/workflow/1148725394789531843",
+                    24),
+                cell("1/2", 560)),
+            row(cell("成本核算员", 40)));
+    QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SC_006);
+
+    parser.parse(context(QuoteExcelTemplateType.FI_SC_006, document), request);
+
+    assertThat(request.getItems()).hasSize(1);
+    QuoteIngestItemRequest item = request.getItems().get(0);
+    assertThat(item.getProductName()).isEqualTo("排水泵");
+    assertThat(item.getMaterialNo()).isEqualTo("1047900000031");
+    assertThat(item.getSunlModel()).isEqualTo("PSB12B55");
+    assertThat(item.getProductName()).doesNotStartWith("http");
+  }
+
+  @Test
   void desktopFiSc006PdfFiltersSplitMaterialFragmentsAndKeepsTwentyProductRows() throws Exception {
     Path path = Path.of("/Users/xiexicheng/Desktop/打印 - SANHUA三花(1).pdf");
     Assumptions.assumeTrue(Files.exists(path), "desktop FI-SC-006 PDF sample is required");

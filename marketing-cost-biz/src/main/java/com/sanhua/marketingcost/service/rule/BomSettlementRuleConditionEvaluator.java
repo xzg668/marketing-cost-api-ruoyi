@@ -90,9 +90,12 @@ public class BomSettlementRuleConditionEvaluator {
     String actual = readFieldValue(clause.getField(), context);
     return switch (clause.getOp().toUpperCase()) {
       case "EQ" -> Objects.equals(actual, clause.getValue());
+      case "NE" -> !Objects.equals(actual, clause.getValue());
       case "IN" -> actual != null
           && clause.getValues() != null
           && clause.getValues().contains(actual);
+      case "NOT_IN" -> clause.getValues() != null
+          && (actual == null || !clause.getValues().contains(actual));
       case "LIKE" -> actual != null
           && clause.getValue() != null
           && actual.contains(clause.getValue());
@@ -111,6 +114,7 @@ public class BomSettlementRuleConditionEvaluator {
       case "material_code" -> context.materialCode();
       case "material_name" -> context.materialName();
       case "material_category_code" -> context.materialCategoryCode();
+      case "main_category_code" -> context.mainCategoryCode();
       case "main_category_name" -> context.mainCategoryName();
       case "purchase_category" -> context.purchaseCategory();
       case "shape_attr" -> context.shapeAttr();

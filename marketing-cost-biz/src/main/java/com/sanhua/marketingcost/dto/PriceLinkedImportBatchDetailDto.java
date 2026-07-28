@@ -32,8 +32,12 @@ public class PriceLinkedImportBatchDetailDto {
   private int autoBindingCount;
   private int conflictBindingCount;
   private int bindingErrorCount;
+  private int errorCount;
+  /** 旧批次只保存了失败数量、没有行级明细时，用于前端如实提示。 */
+  private int unpersistedErrorCount;
   private int manualSkippedCount;
   private List<FactorMonthlyPriceUpsertResult.RowResult> factorRows = new ArrayList<>();
   private List<ExcelAutoBindingImportLogDto> bindingLogs = new ArrayList<>();
   private List<PriceItemImportResponse.BindingError> bindingErrors = new ArrayList<>();
+  private List<PriceItemImportResponse.ErrorRow> errors = new ArrayList<>();
 }

@@ -5,8 +5,11 @@ import com.sanhua.marketingcost.entity.BomCostingRowSourceRef;
 import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
 import com.sanhua.marketingcost.entity.BomByproductCostRule;
 import com.sanhua.marketingcost.entity.BomSettlementRule;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.service.rule.BomRuleNodeContext;
 import com.sanhua.marketingcost.service.rule.BomByproductCostRuleMatcher;
+import com.sanhua.marketingcost.service.rule.BomRuleMaterialAttributeResolver;
+import com.sanhua.marketingcost.service.rule.BomRuleMaterialAttributes;
 import com.sanhua.marketingcost.service.rule.BomSettlementRuleMatcher;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -22,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -49,16 +53,25 @@ public class BomSettlementRowBuildEngine {
   private static final String SHAPE_OUTSOURCED = "委外加工件";
   private static final String SHAPE_OUTSOURCED_SHORT = "委外件";
   private static final String CATEGORY_PACKAGE_COMPONENT_PREFIX = "15155";
-  private static final String CATEGORY_AUXILIARY_PREFIX = "18";
-
   private final BomSettlementRuleMatcher ruleMatcher;
   private final BomByproductCostRuleMatcher byproductRuleMatcher;
+  private final BomRuleMaterialAttributeResolver materialAttributeResolver;
 
+  @Autowired
+  public BomSettlementRowBuildEngine(
+      BomSettlementRuleMatcher ruleMatcher,
+      BomByproductCostRuleMatcher byproductRuleMatcher,
+      BomRuleMaterialAttributeResolver materialAttributeResolver) {
+    this.ruleMatcher = ruleMatcher;
+    this.byproductRuleMatcher = byproductRuleMatcher;
+    this.materialAttributeResolver = materialAttributeResolver;
+  }
+
+  /** 纯内存测试入口；生产环境使用注入 U9 原始料品档案解析器的构造方法。 */
   public BomSettlementRowBuildEngine(
       BomSettlementRuleMatcher ruleMatcher,
       BomByproductCostRuleMatcher byproductRuleMatcher) {
-    this.ruleMatcher = ruleMatcher;
-    this.byproductRuleMatcher = byproductRuleMatcher;
+    this(ruleMatcher, byproductRuleMatcher, (ignoredCodes, ignoredOrganization) -> Map.of());
   }
 
   public BomSettlementRowBuildResult build(BomSettlementBuildRequest request) {
@@ -73,9 +86,19 @@ public class BomSettlementRowBuildEngine {
           new BomSettlementRowBuildStats(0, 0, 0, 0, warnings.size(), 0, 0, 0, 0));
     }
     List<BomSettlementNode> nodes = normalizedNodes(request, warnings);
+    Map<String, BomRuleMaterialAttributes> materialAttributes =
+        resolveMaterialAttributes(nodes);
     Map<String, BomSettlementNode> nodeByPath = indexByPath(nodes, warnings);
     Map<String, List<BomSettlementNode>> childrenByParentPath = indexChildren(nodes);
     validateStructure(nodes, nodeByPath, childrenByParentPath, warnings);
+    List<BomSettlementRule> excludeRules = request.settlementRules().stream()
+        .filter(rule -> rule != null)
+        .filter(rule -> ACTION_EXCLUDE.equals(normalize(rule.getSettlementAction())))
+        .toList();
+    List<BomSettlementRule> nonExcludeRules = request.settlementRules().stream()
+        .filter(rule -> rule != null)
+        .filter(rule -> !ACTION_EXCLUDE.equals(normalize(rule.getSettlementAction())))
+        .toList();
 
     List<BomCostingRow> normalRows = new ArrayList<>();
     List<BomCostingRow> extraRows = new ArrayList<>();
@@ -92,26 +115,40 @@ public class BomSettlementRowBuildEngine {
 
       BomSettlementNode parent = nodeByPath.get(parentPathOf(node.path()));
       List<BomSettlementNode> children = childrenByParentPath.getOrDefault(node.path(), List.of());
-      Optional<BomSettlementRule> hit = ruleMatcher.match(
-          toRuleContext(node, request),
-          parent == null ? null : toRuleContext(parent, request),
-          children.stream().map(child -> toRuleContext(child, request)).toList(),
+      BomRuleNodeContext nodeContext = toRuleContext(node, request, materialAttributes);
+      BomRuleNodeContext parentContext =
+          parent == null ? null : toRuleContext(parent, request, materialAttributes);
+      List<BomRuleNodeContext> childContexts = children.stream()
+          .map(child -> toRuleContext(child, request, materialAttributes))
+          .toList();
+      Optional<BomSettlementRule> exclusionHit = ruleMatcher.match(
+          nodeContext,
+          parentContext,
+          childContexts,
           requestedBomPurpose(request, node),
           request.asOfDate(),
-          request.settlementRules());
+          excludeRules);
 
-      // 规则执行顺序：先排除，再做上卷，再做包装/停止边界，再做额外附加行，最后才落到默认叶子。
+      // 排除优先于上卷、包装停止和附加行，避免同一节点同时命中时被低序号规则抢先输出。
+      if (exclusionHit.isPresent() && shouldExcludeNode(node, exclusionHit.get())) {
+        stoppedPaths.add(node.path());
+        continue;
+      }
+
+      Optional<BomSettlementRule> hit = ruleMatcher.match(
+          nodeContext,
+          parentContext,
+          childContexts,
+          requestedBomPurpose(request, node),
+          request.asOfDate(),
+          nonExcludeRules);
+
+      // 排除完成后，再做上卷、包装/停止边界、额外附加行，最后才落到默认叶子。
       if (hit.isPresent()) {
         BomSettlementRule rule = hit.get();
         String action = normalize(rule.getSettlementAction());
 
-        if (ACTION_EXCLUDE.equals(action)) {
-          if (shouldExcludeNode(node, rule)) {
-            // 辅料排除只在 18 开头辅料范围内排除，非辅料不能被误删。
-            stoppedPaths.add(node.path());
-            continue;
-          }
-        } else if (ACTION_ROLLUP_TO_PARENT.equals(action)) {
+        if (ACTION_ROLLUP_TO_PARENT.equals(action)) {
           if (canRollupNode(node, rule, warnings)) {
             consumeRollupNode(node, parent, rule, rollupBuckets, stoppedPaths, consumedLeafPaths, warnings);
             continue;
@@ -598,6 +635,7 @@ public class BomSettlementRowBuildEngine {
         null,
         null,
         null,
+        null,
         parent.shapeAttr(),
         parent.costElementCode(),
         parent.productionCategory(),
@@ -706,13 +744,18 @@ public class BomSettlementRowBuildEngine {
   }
 
   private static BomRuleNodeContext toRuleContext(
-      BomSettlementNode node, BomSettlementBuildRequest request) {
+      BomSettlementNode node,
+      BomSettlementBuildRequest request,
+      Map<String, BomRuleMaterialAttributes> materialAttributes) {
+    BomRuleMaterialAttributes attributes =
+        materialAttributes.get(trimToNull(node.materialCode()));
     return new BomRuleNodeContext(
         node.materialCode(),
         node.materialName(),
         node.materialCategoryCode(),
+        attributes == null ? null : attributes.mainCategoryCode(),
         node.mainCategoryName(),
-        node.purchaseCategory(),
+        attributes == null ? null : attributes.purchaseCategory(),
         node.shapeAttr(),
         node.costElementCode(),
         node.productionCategory(),
@@ -831,9 +874,41 @@ public class BomSettlementRowBuildEngine {
     if (!RULE_CATEGORY_AUXILIARY_EXCLUDE.equals(rule.getRuleCategory())) {
       return true;
     }
-    return isTerminalPurchasedNode(node)
-        && StringUtils.hasText(node.materialCategoryCode())
-        && node.materialCategoryCode().startsWith(CATEGORY_AUXILIARY_PREFIX);
+    return isTerminalPurchasedNode(node);
+  }
+
+  private Map<String, BomRuleMaterialAttributes> resolveMaterialAttributes(
+      List<BomSettlementNode> nodes) {
+    Map<String, Set<String>> materialCodesByOrganization = new LinkedHashMap<>();
+    for (BomSettlementNode node : nodes) {
+      String materialCode = trimToNull(node.materialCode());
+      String organizationCode = materialOrganizationCode(node);
+      if (materialCode != null && organizationCode != null) {
+        materialCodesByOrganization
+            .computeIfAbsent(organizationCode, ignored -> new LinkedHashSet<>())
+            .add(materialCode);
+      }
+    }
+    Map<String, BomRuleMaterialAttributes> result = new LinkedHashMap<>();
+    for (Map.Entry<String, Set<String>> entry : materialCodesByOrganization.entrySet()) {
+      Map<String, BomRuleMaterialAttributes> resolved =
+          materialAttributeResolver.resolve(entry.getValue(), entry.getKey());
+      if (resolved != null) {
+        result.putAll(resolved);
+      }
+    }
+    return Map.copyOf(result);
+  }
+
+  private static String materialOrganizationCode(BomSettlementNode node) {
+    String organizationCode = trimToNull(node.materialOrganizationCode());
+    if (organizationCode != null) {
+      return MaterialOrganization.normalize(organizationCode);
+    }
+    String priceOrgCode = trimToNull(node.priceOrgCode());
+    return priceOrgCode == null
+        ? null
+        : MaterialOrganization.fromPriceOrgCode(priceOrgCode).getCode();
   }
 
   private static boolean isTerminalPurchasedNode(BomSettlementNode node) {
@@ -859,6 +934,10 @@ public class BomSettlementRowBuildEngine {
 
   private static String normalize(String value) {
     return value == null ? "" : value.trim().toUpperCase();
+  }
+
+  private static String trimToNull(String value) {
+    return StringUtils.hasText(value) ? value.trim() : null;
   }
 
   private static String firstText(String first, String second) {

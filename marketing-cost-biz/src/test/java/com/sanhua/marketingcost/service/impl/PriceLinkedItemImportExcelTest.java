@@ -34,6 +34,7 @@ import com.sanhua.marketingcost.dto.ResolvedFactorRef;
 import com.sanhua.marketingcost.dto.StandardBindingCheckRequest;
 import com.sanhua.marketingcost.dto.StandardBindingDecision;
 import com.sanhua.marketingcost.entity.FactorUploadBatch;
+import com.sanhua.marketingcost.entity.FactorUploadRowError;
 import com.sanhua.marketingcost.entity.PriceFixedItem;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
@@ -45,6 +46,7 @@ import com.sanhua.marketingcost.formula.normalize.VariableAliasIndex;
 import com.sanhua.marketingcost.formula.registry.FactorVariableRegistryImpl;
 import com.sanhua.marketingcost.formula.registry.RowLocalPlaceholderRegistry;
 import com.sanhua.marketingcost.mapper.FinanceBasePriceMapper;
+import com.sanhua.marketingcost.mapper.FactorUploadRowErrorMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
 import com.sanhua.marketingcost.mapper.PriceFixedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
@@ -933,8 +935,48 @@ class PriceLinkedItemImportExcelTest {
     assertThat(resp.getErrors()).hasSize(1);
     assertThat(resp.getErrors().getFirst().getMaterialCode()).isEqualTo("M001");
     assertThat(resp.getErrors().getFirst().getMessage()).contains("生命周期倒挂");
+    assertThat(resp.getErrors().getFirst().getFormula()).isEqualTo("电解铜+加工费");
+    assertThat(resp.getErrors().getFirst().getFormulaEffectiveDate()).isEqualTo("2026-05-01");
+    assertThat(resp.getErrors().getFirst().getErrorCode())
+        .isEqualTo("FORMULA_LIFECYCLE_OVERLAP");
+    assertThat(resp.getErrors().getFirst().getSuggestion()).contains("晚于当前版本生效日期");
     verify(itemMapper, never()).insert(any(PriceLinkedItem.class));
     verify(itemMapper, never()).updateById(any(PriceLinkedItem.class));
+  }
+
+  @Test
+  @DisplayName("importExcel：V2 批次将生命周期倒挂失败行持久化用于历史回看")
+  void importExcel_persistsLifecycleErrorForBatchHistory() throws Exception {
+    PriceLinkedItem existing = existingLinkedItem();
+    when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    configureV2Pipeline();
+    FactorUploadRowErrorMapper rowErrorMapper = mock(FactorUploadRowErrorMapper.class);
+    injectV2Service("factorUploadRowErrorMapper", rowErrorMapper);
+
+    byte[] xlsx = buildXlsxWithFactorSheetFirst(new Object[][] {
+        {"210", "供管处", "供应商A", "S001", "部品联动", "物料A", "M001", "SPEC-A", "千克",
+            "下料重量*材料含税价格", 0.0, 0.0, 12.8, null, 91.0, "0", null, null, "联动"}
+    });
+
+    PriceItemImportResponse resp = service.importExcel(
+        new ByteArrayInputStream(xlsx), "2026-05", false,
+        "COMMERCIAL", "monthly.xlsx", null, "2026-05-01", "KEEP_EXISTING");
+
+    assertThat(resp.getErrors()).hasSize(1);
+    ArgumentCaptor<FactorUploadRowError> errorCaptor =
+        ArgumentCaptor.forClass(FactorUploadRowError.class);
+    verify(rowErrorMapper).insert(errorCaptor.capture());
+    FactorUploadRowError persisted = errorCaptor.getValue();
+    assertThat(persisted.getFactorUploadBatchId()).isEqualTo(77L);
+    assertThat(persisted.getExcelRowNumber()).isEqualTo(2);
+    assertThat(persisted.getMaterialCode()).isEqualTo("M001");
+    assertThat(persisted.getMaterialName()).isEqualTo("物料A");
+    assertThat(persisted.getSupplierCode()).isEqualTo("S001");
+    assertThat(persisted.getFormula()).isNotBlank();
+    assertThat(persisted.getFormulaEffectiveDate()).isEqualTo(LocalDate.of(2026, 5, 1));
+    assertThat(persisted.getErrorStage()).isEqualTo("FORMULA_VERSION");
+    assertThat(persisted.getErrorCode()).isEqualTo("FORMULA_LIFECYCLE_OVERLAP");
+    assertThat(persisted.getSuggestion()).contains("重新导入");
   }
 
   @Test

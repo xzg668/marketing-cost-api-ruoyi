@@ -55,6 +55,6 @@ class BomSettlementRuleQueryServiceTest {
 
   private static BomRuleNodeContext node() {
     return new BomRuleNodeContext(
-        "X", "丝网件", "18", "辅料", "丝网", "制造件", "RM01", "采购件", "COMMERCIAL", null);
+        "X", "丝网件", "18", null, "辅料", "丝网", "制造件", "RM01", "采购件", "COMMERCIAL", null);
   }
 }

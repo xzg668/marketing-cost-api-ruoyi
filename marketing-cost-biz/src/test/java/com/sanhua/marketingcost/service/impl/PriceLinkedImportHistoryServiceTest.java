@@ -16,6 +16,7 @@ import com.sanhua.marketingcost.entity.FactorMonthlyPrice;
 import com.sanhua.marketingcost.entity.FactorQuoteBaseMapping;
 import com.sanhua.marketingcost.entity.FactorRowRef;
 import com.sanhua.marketingcost.entity.FactorUploadBatch;
+import com.sanhua.marketingcost.entity.FactorUploadRowError;
 import com.sanhua.marketingcost.formula.normalize.FormulaDisplayRenderer;
 import com.sanhua.marketingcost.formula.normalize.FormulaNormalizer;
 import com.sanhua.marketingcost.formula.normalize.FormulaValidator;
@@ -28,6 +29,7 @@ import com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper;
 import com.sanhua.marketingcost.mapper.FactorQuoteBaseMappingMapper;
 import com.sanhua.marketingcost.mapper.FactorRowRefMapper;
 import com.sanhua.marketingcost.mapper.FactorUploadBatchMapper;
+import com.sanhua.marketingcost.mapper.FactorUploadRowErrorMapper;
 import com.sanhua.marketingcost.mapper.FinanceBasePriceMapper;
 import com.sanhua.marketingcost.mapper.PriceFixedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
@@ -56,6 +58,7 @@ class PriceLinkedImportHistoryServiceTest {
   private FactorMonthlyPriceMapper factorMonthlyPriceMapper;
   private FactorQuoteBaseMappingMapper factorQuoteBaseMappingMapper;
   private ExcelAutoBindingImportLogMapper autoBindingImportLogMapper;
+  private FactorUploadRowErrorMapper factorUploadRowErrorMapper;
   private PriceLinkedItemServiceImpl service;
 
   @BeforeAll
@@ -68,6 +71,7 @@ class PriceLinkedImportHistoryServiceTest {
     TableInfoHelper.initTableInfo(assistant, FactorMonthlyPrice.class);
     TableInfoHelper.initTableInfo(assistant, FactorQuoteBaseMapping.class);
     TableInfoHelper.initTableInfo(assistant, ExcelAutoBindingImportLog.class);
+    TableInfoHelper.initTableInfo(assistant, FactorUploadRowError.class);
   }
 
   @BeforeEach
@@ -78,6 +82,7 @@ class PriceLinkedImportHistoryServiceTest {
     factorMonthlyPriceMapper = mock(FactorMonthlyPriceMapper.class);
     factorQuoteBaseMappingMapper = mock(FactorQuoteBaseMappingMapper.class);
     autoBindingImportLogMapper = mock(ExcelAutoBindingImportLogMapper.class);
+    factorUploadRowErrorMapper = mock(FactorUploadRowErrorMapper.class);
     service = new PriceLinkedItemServiceImpl(
         mock(PriceLinkedItemMapper.class),
         mock(PriceFixedItemMapper.class),
@@ -96,6 +101,7 @@ class PriceLinkedImportHistoryServiceTest {
     inject("factorMonthlyPriceMapper", factorMonthlyPriceMapper);
     inject("factorQuoteBaseMappingMapper", factorQuoteBaseMappingMapper);
     inject("autoBindingImportLogMapper", autoBindingImportLogMapper);
+    inject("factorUploadRowErrorMapper", factorUploadRowErrorMapper);
   }
 
   @AfterEach
@@ -169,6 +175,7 @@ class PriceLinkedImportHistoryServiceTest {
     when(factorMonthlyPriceMapper.selectBatchIds(any())).thenReturn(List.of(monthlyPrice()));
     when(factorQuoteBaseMappingMapper.selectList(any(Wrapper.class))).thenReturn(List.of(quoteBaseMapping()));
     when(autoBindingImportLogMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(factorUploadRowErrorMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
     PriceLinkedImportBatchDetailDto detail = service.getImportBatchDetail(77L);
 
@@ -195,6 +202,29 @@ class PriceLinkedImportHistoryServiceTest {
     assertThat(row.getQuoteBaseVariableCode()).isEqualTo("Cu");
     assertThat(row.getQuoteBaseMatchedKeyword()).isEqualTo("电解铜");
     assertThat(row.getQuoteBaseMatchSource()).isEqualTo("AUTO");
+  }
+
+  @Test
+  @DisplayName("getImportBatchDetail：恢复持久化失败行并标识旧批次缺失明细数量")
+  void getImportBatchDetailRestoresRowErrorsAndReportsLegacyGap() {
+    login("alice", "COMMERCIAL", "price:linked-item:list");
+    FactorUploadBatch batch = batch(77L, "alice", "2026-05", "COMMERCIAL");
+    batch.setErrorCount(2);
+    when(factorUploadBatchMapper.selectById(eq(77L))).thenReturn(batch);
+    when(factorRowRefMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(autoBindingImportLogMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(factorUploadRowErrorMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(rowError()));
+
+    PriceLinkedImportBatchDetailDto detail = service.getImportBatchDetail(77L);
+
+    assertThat(detail.getErrorCount()).isEqualTo(2);
+    assertThat(detail.getErrors()).hasSize(1);
+    assertThat(detail.getErrors().getFirst().getRowNumber()).isEqualTo(15);
+    assertThat(detail.getErrors().getFirst().getMaterialCode()).isEqualTo("301990317");
+    assertThat(detail.getErrors().getFirst().getFormula()).isEqualTo("Cu * 0.981");
+    assertThat(detail.getErrors().getFirst().getSuggestion()).contains("重新导入");
+    assertThat(detail.getUnpersistedErrorCount()).isEqualTo(1);
   }
 
   private void inject(String fieldName, Object value) throws Exception {
@@ -280,5 +310,23 @@ class PriceLinkedImportHistoryServiceTest {
     mapping.setEnabled(1);
     mapping.setDeleted(0);
     return mapping;
+  }
+
+  private static FactorUploadRowError rowError() {
+    FactorUploadRowError error = new FactorUploadRowError();
+    error.setId(1L);
+    error.setFactorUploadBatchId(77L);
+    error.setSourceWorkbookName("联动价.xls");
+    error.setSourceSheetName("联动价");
+    error.setExcelRowNumber(15);
+    error.setMaterialCode("301990317");
+    error.setMaterialName("废紫铜沫（干净）");
+    error.setFormula("Cu * 0.981");
+    error.setFormulaEffectiveDate(java.time.LocalDate.of(2026, 7, 1));
+    error.setErrorStage("FORMULA_VERSION");
+    error.setErrorCode("FORMULA_LIFECYCLE_OVERLAP");
+    error.setErrorMessage("公式版本生命周期倒挂");
+    error.setSuggestion("调整公式生效日期后重新导入");
+    return error;
   }
 }

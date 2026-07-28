@@ -76,6 +76,7 @@ class BomByproductCostRuleMatcherTest {
         "P001",
         "副产品",
         "31",
+        null,
         "副产品",
         null,
         "制造件",

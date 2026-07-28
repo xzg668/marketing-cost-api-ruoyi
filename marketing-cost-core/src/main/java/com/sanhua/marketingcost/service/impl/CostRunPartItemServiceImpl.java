@@ -7,6 +7,7 @@ import com.sanhua.marketingcost.dto.PackagePriceRequest;
 import com.sanhua.marketingcost.dto.PackagePriceResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.dto.QuoteDataOrganization;
+import com.sanhua.marketingcost.dto.RollupPartComponentDto;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
 import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
@@ -81,6 +82,8 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
   private static final String MAIN_CATEGORY_PACKAGE = "包装组件";
   /** T26：包装算法系数 — 硬编码 1.05（业务来源待确认，TODO #T24.9） */
   private static final BigDecimal PACKAGE_COEFFICIENT = new BigDecimal("1.05");
+  private static final int DISPLAY_AMOUNT_SCALE = 6;
+  private static final int DISPLAY_UNIT_PRICE_SCALE = 8;
   private static final String SOURCE_TYPE_U9 = "U9";
   private static final String PRICE_SOURCE_PACKAGE_COMPONENT = "包装组件价格";
 
@@ -280,6 +283,16 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     if (filtered.isEmpty()) {
       return filtered;
     }
+    // 普通部品的料号来自结算行，名称/图号等展示字段从该组织的当前料品档案补齐。
+    // 上卷父件随后拆行时仍保留这里补齐的父件料号和父件图号。
+    enrichPartFieldsFromMaterialArchive(filtered);
+    filtered = expandRollupDisplayRows(filtered);
+    partCodes.clear();
+    for (CostRunPartItemDto p : filtered) {
+      if (StringUtils.hasText(p.getPartCode())) {
+        partCodes.add(p.getPartCode().trim());
+      }
+    }
     // 2) 查焊料子件集合
     Set<String> weldCodes = lookupCodesByCostElement(partCodes, COST_ELEMENT_WELD);
     // 3) 查包装组件父件集合
@@ -324,6 +337,348 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
           "包装汇总（包装组件父件金额 × 1.05）"));
     }
     return result;
+  }
+
+  /**
+   * 将上卷父件展示为“父件名称-命中子件名称”多行。
+   *
+   * <p>部品料号、图号始终保留父件；数量展示命中子件累计到顶层产品的用量；金额取本次核算
+   * 实际制造件价格批次中的子件成本贡献。最后一行吸收六位小数舍入差，保证拆分金额合计严格
+   * 等于原父件金额。
+   */
+  private List<CostRunPartItemDto> expandRollupDisplayRows(List<CostRunPartItemDto> rows) {
+    List<Long> partItemIds = rows.stream()
+        .map(CostRunPartItemDto::getId)
+        .filter(java.util.Objects::nonNull)
+        .toList();
+    if (partItemIds.isEmpty()) {
+      return rows;
+    }
+    List<RollupPartComponentDto> queried =
+        costRunPartItemMapper.selectRollupDisplayComponents(partItemIds);
+    if (queried == null || queried.isEmpty()) {
+      return rows;
+    }
+
+    Map<Long, LinkedHashMap<String, RollupComponentTotal>> componentsByPartItem =
+        new LinkedHashMap<>();
+    for (RollupPartComponentDto component : queried) {
+      if (component == null
+          || component.getPartItemId() == null
+          || !StringUtils.hasText(component.getChildMaterialCode())) {
+        continue;
+      }
+      String childCode = component.getChildMaterialCode().trim();
+      RollupComponentTotal total =
+          componentsByPartItem
+              .computeIfAbsent(component.getPartItemId(), ignored -> new LinkedHashMap<>())
+              .computeIfAbsent(childCode, ignored -> new RollupComponentTotal(childCode));
+      total.accept(component);
+    }
+    if (componentsByPartItem.isEmpty()) {
+      return rows;
+    }
+
+    Map<String, MaterialMasterRaw> childArchiveByKey =
+        loadChildMaterialArchive(rows, componentsByPartItem);
+    List<CostRunPartItemDto> expanded = new ArrayList<>();
+    for (CostRunPartItemDto parent : rows) {
+      LinkedHashMap<String, RollupComponentTotal> componentMap =
+          parent.getId() == null ? null : componentsByPartItem.get(parent.getId());
+      if (componentMap == null || componentMap.isEmpty()) {
+        expanded.add(parent);
+        continue;
+      }
+      List<RollupComponentTotal> components = new ArrayList<>(componentMap.values());
+      boolean complete = components.stream().allMatch(component -> component.unitCost != null);
+      if (!complete && components.size() > 1) {
+        parent.setRemark(appendRemark(
+            parent.getRemark(), "上卷展示未拆分：制造件价格分项不完整"));
+        expanded.add(parent);
+        continue;
+      }
+      expanded.addAll(splitRollupParent(parent, components, childArchiveByKey));
+    }
+    return expanded;
+  }
+
+  private List<CostRunPartItemDto> splitRollupParent(
+      CostRunPartItemDto parent,
+      List<RollupComponentTotal> components,
+      Map<String, MaterialMasterRaw> childArchiveByKey) {
+    List<BigDecimal> amounts = calculateRollupComponentAmounts(parent, components);
+    List<CostRunPartItemDto> result = new ArrayList<>(components.size());
+    for (int i = 0; i < components.size(); i++) {
+      RollupComponentTotal component = components.get(i);
+      BigDecimal amount = amounts.get(i);
+      CostRunPartItemDto row = copyPartItem(parent);
+      String parentName = firstText(parent.getPartName(), parent.getPartCode(), "父件");
+      String childName =
+          firstText(component.childName, component.childMaterialCode, "上卷子件");
+      row.setPartName(parentName + "-" + childName);
+      // 业务确认：上卷拆分行只展示父件料号、父件图号。
+      row.setPartCode(parent.getPartCode());
+      row.setPartDrawingNo(parent.getPartDrawingNo());
+      BigDecimal displayQty =
+          component.qtyPerTop == null || component.qtyPerTop.signum() == 0
+              ? parent.getPartQty()
+              : component.qtyPerTop;
+      row.setPartQty(displayQty);
+      row.setAmount(amount);
+      row.setUnitPrice(calculateSplitUnitPrice(
+          amount,
+          displayQty,
+          component.unitCost,
+          parent.getPartQty(),
+          parent.getUnitPrice()));
+      if (StringUtils.hasText(component.rawPriceType)) {
+        row.setPriceSource(component.rawPriceType);
+      }
+      MaterialMasterRaw childArchive =
+          childArchiveByKey.get(materialArchiveKey(
+              parent.getMaterialOrganizationCode(), component.childMaterialCode));
+      if (childArchive != null) {
+        if (StringUtils.hasText(childArchive.getShapeAttr())) {
+          row.setShapeAttr(childArchive.getShapeAttr().trim());
+          row.setMaterialShape(childArchive.getShapeAttr().trim());
+        }
+        if (StringUtils.hasText(childArchive.getGlobalSeg4Material())) {
+          row.setMaterial(childArchive.getGlobalSeg4Material().trim());
+        }
+        if (StringUtils.hasText(childArchive.getCostElement())) {
+          row.setCostElement(childArchive.getCostElement().trim());
+        }
+      }
+      row.setRemark(appendRemark(
+          parent.getRemark(), "上卷拆分子件=" + component.childMaterialCode));
+      result.add(row);
+    }
+    return result;
+  }
+
+  private List<BigDecimal> calculateRollupComponentAmounts(
+      CostRunPartItemDto parent, List<RollupComponentTotal> components) {
+    List<BigDecimal> amounts = new ArrayList<>(components.size());
+    BigDecimal parentQty = parent.getPartQty();
+    BigDecimal unitCostTotal = components.stream()
+        .map(component -> component.unitCost)
+        .filter(java.util.Objects::nonNull)
+        .reduce(BigDecimal.ZERO, BigDecimal::add);
+    for (RollupComponentTotal component : components) {
+      BigDecimal amount;
+      if (component.unitCost != null && parentQty != null) {
+        amount = component.unitCost.multiply(parentQty);
+      } else if (component.unitCost != null
+          && parent.getAmount() != null
+          && unitCostTotal.signum() != 0) {
+        amount = parent.getAmount()
+            .multiply(component.unitCost)
+            .divide(unitCostTotal, DISPLAY_AMOUNT_SCALE + 4, RoundingMode.HALF_UP);
+      } else {
+        amount = parent.getAmount();
+      }
+      amounts.add(amount == null
+          ? null
+          : amount.setScale(DISPLAY_AMOUNT_SCALE, RoundingMode.HALF_UP));
+    }
+    if (parent.getAmount() != null && amounts.stream().allMatch(java.util.Objects::nonNull)) {
+      BigDecimal target = parent.getAmount().setScale(DISPLAY_AMOUNT_SCALE, RoundingMode.HALF_UP);
+      BigDecimal sum = amounts.stream().reduce(BigDecimal.ZERO, BigDecimal::add);
+      int last = amounts.size() - 1;
+      amounts.set(last, amounts.get(last).add(target.subtract(sum)));
+    }
+    return amounts;
+  }
+
+  private BigDecimal calculateSplitUnitPrice(
+      BigDecimal amount,
+      BigDecimal qty,
+      BigDecimal componentUnitCost,
+      BigDecimal parentQty,
+      BigDecimal parentUnitPrice) {
+    if (componentUnitCost != null
+        && parentQty != null
+        && qty != null
+        && qty.signum() != 0) {
+      return componentUnitCost
+          .multiply(parentQty)
+          .divide(qty, DISPLAY_UNIT_PRICE_SCALE, RoundingMode.HALF_UP);
+    }
+    if (amount != null && qty != null && qty.signum() != 0) {
+      return amount.divide(qty, DISPLAY_UNIT_PRICE_SCALE, RoundingMode.HALF_UP);
+    }
+    if (componentUnitCost != null) {
+      return componentUnitCost.setScale(DISPLAY_UNIT_PRICE_SCALE, RoundingMode.HALF_UP);
+    }
+    return parentUnitPrice;
+  }
+
+  private void enrichPartFieldsFromMaterialArchive(List<CostRunPartItemDto> rows) {
+    Map<String, Set<String>> codesByOrganization = new LinkedHashMap<>();
+    for (CostRunPartItemDto row : rows) {
+      if (row == null
+          || !StringUtils.hasText(row.getMaterialOrganizationCode())
+          || !StringUtils.hasText(row.getPartCode())) {
+        continue;
+      }
+      codesByOrganization
+          .computeIfAbsent(
+              row.getMaterialOrganizationCode().trim(), ignored -> new LinkedHashSet<>())
+          .add(row.getPartCode().trim());
+    }
+    Map<String, MaterialMasterRaw> archiveByKey = loadMaterialArchive(codesByOrganization);
+    for (CostRunPartItemDto row : rows) {
+      MaterialMasterRaw archive =
+          archiveByKey.get(materialArchiveKey(
+              row.getMaterialOrganizationCode(), row.getPartCode()));
+      if (archive == null) {
+        continue;
+      }
+      if (!StringUtils.hasText(row.getPartName())
+          && StringUtils.hasText(archive.getMaterialName())) {
+        row.setPartName(archive.getMaterialName().trim());
+      }
+      if (StringUtils.hasText(archive.getDrawingNo())) {
+        row.setPartDrawingNo(archive.getDrawingNo().trim());
+      }
+      if (!StringUtils.hasText(row.getShapeAttr())
+          && StringUtils.hasText(archive.getShapeAttr())) {
+        row.setShapeAttr(archive.getShapeAttr().trim());
+      }
+      if (!StringUtils.hasText(row.getMaterial())
+          && StringUtils.hasText(archive.getGlobalSeg4Material())) {
+        row.setMaterial(archive.getGlobalSeg4Material().trim());
+      }
+    }
+  }
+
+  private Map<String, MaterialMasterRaw> loadChildMaterialArchive(
+      List<CostRunPartItemDto> rows,
+      Map<Long, LinkedHashMap<String, RollupComponentTotal>> componentsByPartItem) {
+    Map<String, Set<String>> codesByOrganization = new LinkedHashMap<>();
+    for (CostRunPartItemDto row : rows) {
+      if (row == null
+          || row.getId() == null
+          || !StringUtils.hasText(row.getMaterialOrganizationCode())) {
+        continue;
+      }
+      Map<String, RollupComponentTotal> components = componentsByPartItem.get(row.getId());
+      if (components == null || components.isEmpty()) {
+        continue;
+      }
+      codesByOrganization
+          .computeIfAbsent(
+              row.getMaterialOrganizationCode().trim(), ignored -> new LinkedHashSet<>())
+          .addAll(components.keySet());
+    }
+    return loadMaterialArchive(codesByOrganization);
+  }
+
+  private Map<String, MaterialMasterRaw> loadMaterialArchive(
+      Map<String, Set<String>> codesByOrganization) {
+    Map<String, MaterialMasterRaw> archiveByKey = new HashMap<>();
+    for (Map.Entry<String, Set<String>> entry : codesByOrganization.entrySet()) {
+      if (entry.getValue().isEmpty()) {
+        continue;
+      }
+      List<MaterialMasterRaw> archives =
+          materialMasterRawMapper.selectByLatestBatchAndCodes(
+              entry.getValue(), null, entry.getKey());
+      if (archives == null) {
+        continue;
+      }
+      for (MaterialMasterRaw archive : archives) {
+        if (archive != null && StringUtils.hasText(archive.getMaterialCode())) {
+          archiveByKey.put(
+              materialArchiveKey(entry.getKey(), archive.getMaterialCode()), archive);
+        }
+      }
+    }
+    return archiveByKey;
+  }
+
+  private String materialArchiveKey(String organizationCode, String materialCode) {
+    return normalizeBlankToNull(organizationCode) + "|" + normalizeBlankToNull(materialCode);
+  }
+
+  private String appendRemark(String original, String addition) {
+    if (!StringUtils.hasText(original)) {
+      return addition;
+    }
+    if (!StringUtils.hasText(addition)) {
+      return original;
+    }
+    return original + "；" + addition;
+  }
+
+  private String firstText(String... values) {
+    if (values == null) {
+      return null;
+    }
+    for (String value : values) {
+      if (StringUtils.hasText(value)) {
+        return value.trim();
+      }
+    }
+    return null;
+  }
+
+  private CostRunPartItemDto copyPartItem(CostRunPartItemDto source) {
+    CostRunPartItemDto target = new CostRunPartItemDto();
+    target.setId(source.getId());
+    target.setBomRowId(source.getBomRowId());
+    target.setPricePrepareItemId(source.getPricePrepareItemId());
+    target.setOaNo(source.getOaNo());
+    target.setPartName(source.getPartName());
+    target.setPartCode(source.getPartCode());
+    target.setProductCode(source.getProductCode());
+    target.setPartDrawingNo(source.getPartDrawingNo());
+    target.setPartQty(source.getPartQty());
+    target.setShapeAttr(source.getShapeAttr());
+    target.setMaterial(source.getMaterial());
+    target.setPriceType(source.getPriceType());
+    target.setPriceSource(source.getPriceSource());
+    target.setRemark(source.getRemark());
+    target.setUnitPrice(source.getUnitPrice());
+    target.setAmount(source.getAmount());
+    target.setPriceOrgCode(source.getPriceOrgCode());
+    target.setMaterialOrganizationCode(source.getMaterialOrganizationCode());
+    target.setMaterialShape(source.getMaterialShape());
+    target.setPriority(source.getPriority());
+    target.setEffectiveFrom(source.getEffectiveFrom());
+    target.setEffectiveTo(source.getEffectiveTo());
+    target.setSourceSystem(source.getSourceSystem());
+    target.setCostElement(source.getCostElement());
+    return target;
+  }
+
+  private static final class RollupComponentTotal {
+    private final String childMaterialCode;
+    private String childName;
+    private BigDecimal qtyPerTop;
+    private BigDecimal unitCost;
+    private String rawPriceType;
+
+    private RollupComponentTotal(String childMaterialCode) {
+      this.childMaterialCode = childMaterialCode;
+    }
+
+    private void accept(RollupPartComponentDto component) {
+      if (StringUtils.hasText(component.getChildMaterialName())) {
+        childName = component.getChildMaterialName().trim();
+      }
+      if (qtyPerTop == null && component.getChildQtyPerTop() != null) {
+        qtyPerTop = component.getChildQtyPerTop();
+      }
+      if (component.getChildUnitCost() != null) {
+        unitCost = unitCost == null
+            ? component.getChildUnitCost()
+            : unitCost.add(component.getChildUnitCost());
+      }
+      if (StringUtils.hasText(component.getChildRawPriceType())) {
+        rawPriceType = component.getChildRawPriceType().trim();
+      }
+    }
   }
 
   /** T26：在给定 partCodes 集合里筛出 cost_element 命中的 material_code 子集 */

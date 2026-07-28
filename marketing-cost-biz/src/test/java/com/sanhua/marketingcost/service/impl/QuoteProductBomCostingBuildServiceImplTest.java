@@ -219,6 +219,25 @@ class QuoteProductBomCostingBuildServiceImplTest {
   }
 
   @Test
+  void readyLegacyPreparationMissingOrganizationIsRefreshedBeforeBuild() {
+    QuoteBomPreparationRecord legacy = record("NON_BARE", null);
+    legacy.setPriceOrgCode(null);
+    legacy.setMaterialOrganizationCode(null);
+    QuoteBomPreparationRecord refreshed = record("NON_BARE", null);
+    when(preparationRecordMapper.selectOne(any())).thenReturn(legacy, refreshed);
+    FlattenResult flattenResult = new FlattenResult();
+    flattenResult.setCostingRowsWritten(1);
+    when(flattenService.flatten(any(FlattenRequest.class))).thenReturn(flattenResult);
+    when(costingRowMapper.selectList(any())).thenReturn(List.of(costingRow("RAW-1")));
+
+    QuoteBomCostingBuildResponse response = service.buildByOaFormItem(10L);
+
+    assertThat(response.costingRowsWritten()).isEqualTo(1);
+    verify(preparationService).prepareByOaFormItem(10L, LocalDate.now());
+    verify(flattenService).flatten(any(FlattenRequest.class));
+  }
+
+  @Test
   void nonBareApprovedSupplementBuildsManualSourceRowsWithoutFormalFlatten() {
     QuoteBomPreparationRecord record = record("NON_BARE", 501L);
     record.setReviewStatus("APPROVED");

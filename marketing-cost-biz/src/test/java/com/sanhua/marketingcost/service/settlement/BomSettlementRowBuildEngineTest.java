@@ -10,10 +10,12 @@ import com.sanhua.marketingcost.service.rule.BomByproductCostRuleConditionEvalua
 import com.sanhua.marketingcost.service.rule.BomByproductCostRuleMatcher;
 import com.sanhua.marketingcost.service.rule.BomSettlementRuleConditionEvaluator;
 import com.sanhua.marketingcost.service.rule.BomSettlementRuleMatcher;
+import com.sanhua.marketingcost.service.rule.BomRuleMaterialAttributes;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -239,18 +241,29 @@ class BomSettlementRowBuildEngineTest {
   }
 
   @Test
-  @DisplayName("辅料排除只删除 18 开头命中主分类的末级采购件，非 18 或未命中主分类仍输出")
-  void auxiliaryExcludeOnlyAppliesTo18PrefixedPurchasedLeaves() {
-    BomSettlementRowBuildResult result = engine.build(request(List.of(
+  @DisplayName("辅料排除使用 U9 原始主分类编码，17开头可排除且分类名称不参与判断")
+  void auxiliaryExcludeUsesRawMainCategoryCodeWithout18PrefixOrName() {
+    BomSettlementRowBuildEngine financeEngine = new BomSettlementRowBuildEngine(
+        new BomSettlementRuleMatcher(
+            new BomSettlementRuleConditionEvaluator(new ObjectMapper())),
+        new BomByproductCostRuleMatcher(
+            new BomByproductCostRuleConditionEvaluator(new ObjectMapper())),
+        (ignoredCodes, ignoredOrganization) -> Map.of(
+            "EXCLUDED-17", new BomRuleMaterialAttributes("171721414", null),
+            "NORMAL-18", new BomRuleMaterialAttributes("181811432", null),
+            "NAME-ONLY", new BomRuleMaterialAttributes("121191304", null)));
+    BomSettlementRowBuildResult result = financeEngine.build(request(List.of(
         node("P", "P", null, 0, "/P/", 0, "组件", null),
-        purchasedNodeWithCategory("GREASE-18", "P", "P", 1, "/P/GREASE-18/", "脂类采购件", "1801", "脂类", null),
-        purchasedNodeWithCategory("NORMAL-18", "P", "P", 1, "/P/NORMAL-18/", "普通辅料", "1802", "普通主分类", null),
-        purchasedNodeWithCategory("GREASE-19", "P", "P", 1, "/P/GREASE-19/", "非辅料脂类", "1901", "脂类", null)
-    ), List.of(auxiliaryExcludeRule("AUXILIARY_EXCLUDE_GREASE", "脂类", 40))));
+        purchasedNodeWithCategory("EXCLUDED-17", "P", "P", 1, "/P/EXCLUDED-17/", "胶黏剂", "17", "任意名称", null),
+        purchasedNodeWithCategory("NORMAL-18", "P", "P", 1, "/P/NORMAL-18/", "普通焊料", "18", "任意名称", null),
+        purchasedNodeWithCategory("NAME-ONLY", "P", "P", 1, "/P/NAME-ONLY/", "名称相同但编码不同", "18", "胶黏剂类", null)
+    ), List.of(
+        rollupRule("SPECIAL_ROLLUP_SAME_NODE", "胶黏剂", 10),
+        auxiliaryExcludeCodeRule("AUXILIARY_EXCLUDE_ADHESIVE", "171721414", 40))));
 
     assertThat(result.warnings()).isEmpty();
     assertThat(result.costingRows()).extracting(BomCostingRow::getMaterialCode)
-        .containsExactly("GREASE-19", "NORMAL-18");
+        .containsExactly("NAME-ONLY", "NORMAL-18");
   }
 
   @Test
@@ -778,8 +791,8 @@ class BomSettlementRowBuildEngineTest {
     return rule;
   }
 
-  private static BomSettlementRule auxiliaryExcludeRule(
-      String code, String mainCategoryName, int priority) {
+  private static BomSettlementRule auxiliaryExcludeCodeRule(
+      String code, String mainCategoryCode, int priority) {
     BomSettlementRule rule = new BomSettlementRule();
     rule.setId((long) priority);
     rule.setRuleCode(code);
@@ -788,8 +801,8 @@ class BomSettlementRowBuildEngineTest {
     rule.setSettlementAction("EXCLUDE");
     rule.setSettlementRowType("EXCLUDED");
     rule.setMatchConditionJson("""
-        {"nodeConditions":[{"field":"main_category_name","op":"EQ","value":"%s"}]}
-        """.formatted(mainCategoryName));
+        {"nodeConditions":[{"field":"main_category_code","op":"EQ","value":"%s"}]}
+        """.formatted(mainCategoryCode));
     rule.setMarkSubtreeCostRequired(0);
     rule.setPriority(priority);
     rule.setEnabled(1);

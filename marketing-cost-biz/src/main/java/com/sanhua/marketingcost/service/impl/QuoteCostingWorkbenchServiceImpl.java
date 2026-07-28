@@ -39,6 +39,8 @@ import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.rule.BomRuleNodeContext;
+import com.sanhua.marketingcost.service.rule.BomRuleMaterialAttributeResolver;
+import com.sanhua.marketingcost.service.rule.BomRuleMaterialAttributes;
 import com.sanhua.marketingcost.service.rule.BomSettlementRuleMatcher;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
@@ -70,7 +72,6 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   private static final String TAB_STALE = "STALE";
   private static final String ACTION_EXCLUDE = "EXCLUDE";
   private static final String RULE_CATEGORY_AUXILIARY_EXCLUDE = "AUXILIARY_EXCLUDE";
-  private static final String CATEGORY_AUXILIARY_PREFIX = "18";
   private static final String SHAPE_PURCHASED = "采购件";
   private static final String SHAPE_MANUFACTURED = "制造件";
 
@@ -87,6 +88,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   private final QuotePriceTypeConfirmBatchMapper priceTypeConfirmBatchMapper;
   private final QuoteProductBomCostingBuildService costingBuildService;
   private final BomSettlementRuleMatcher settlementRuleMatcher;
+  private final BomRuleMaterialAttributeResolver materialAttributeResolver;
   private final QuoteCostRunVersionInvalidationService versionInvalidationService;
 
   public QuoteCostingWorkbenchServiceImpl(
@@ -103,6 +105,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       QuotePriceTypeConfirmBatchMapper priceTypeConfirmBatchMapper,
       QuoteProductBomCostingBuildService costingBuildService,
       BomSettlementRuleMatcher settlementRuleMatcher,
+      BomRuleMaterialAttributeResolver materialAttributeResolver,
       QuoteCostRunVersionInvalidationService versionInvalidationService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
@@ -117,6 +120,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     this.priceTypeConfirmBatchMapper = priceTypeConfirmBatchMapper;
     this.costingBuildService = costingBuildService;
     this.settlementRuleMatcher = settlementRuleMatcher;
+    this.materialAttributeResolver = materialAttributeResolver;
     this.versionInvalidationService = versionInvalidationService;
   }
 
@@ -376,6 +380,19 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     if (activeRows.isEmpty()) {
       return false;
     }
+    String materialOrganizationCode = materialOrganizationCode(activeRows, rows);
+    Map<String, BomRuleMaterialAttributes> resolvedMaterialAttributes =
+        materialOrganizationCode == null
+            ? Map.of()
+            : materialAttributeResolver.resolve(
+                activeRows.stream()
+                    .map(BomRawHierarchy::getMaterialCode)
+                    .map(QuoteCostingWorkbenchServiceImpl::trimToNull)
+                    .filter(Objects::nonNull)
+                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new)),
+                materialOrganizationCode);
+    Map<String, BomRuleMaterialAttributes> materialAttributes =
+        resolvedMaterialAttributes == null ? Map.of() : resolvedMaterialAttributes;
     Map<Long, BomRawHierarchy> activeById = new LinkedHashMap<>();
     Map<String, BomRawHierarchy> activeByPath = new LinkedHashMap<>();
     Map<String, List<BomRawHierarchy>> childrenByParentPath = new HashMap<>();
@@ -403,13 +420,13 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       BomRawHierarchy parent = activeByPath.get(parentPath(path));
       List<BomRuleNodeContext> childContexts =
           childrenByParentPath.getOrDefault(path, List.of()).stream()
-              .map(this::toRuleContext)
+              .map(child -> toRuleContext(child, materialAttributes))
               .toList();
       BomSettlementRule hit =
           settlementRuleMatcher
               .match(
-                  toRuleContext(raw),
-                  parent == null ? null : toRuleContext(parent),
+                  toRuleContext(raw, materialAttributes),
+                  parent == null ? null : toRuleContext(parent, materialAttributes),
                   childContexts,
                   firstText(raw.getBomPurpose(), bomPurpose(rows)),
                   asOfDate,
@@ -420,6 +437,37 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       }
     }
     return false;
+  }
+
+  private static String materialOrganizationCode(
+      List<BomRawHierarchy> rawRows, List<BomCostingRow> costingRows) {
+    String explicitOrganization =
+        (costingRows == null ? List.<BomCostingRow>of() : costingRows).stream()
+            .map(BomCostingRow::getMaterialOrganizationCode)
+            .map(QuoteCostingWorkbenchServiceImpl::trimToNull)
+            .filter(Objects::nonNull)
+            .findFirst()
+            .orElse(null);
+    if (explicitOrganization != null) {
+      return MaterialOrganization.normalize(explicitOrganization);
+    }
+    String priceOrgCode =
+        (rawRows == null ? List.<BomRawHierarchy>of() : rawRows).stream()
+            .map(BomRawHierarchy::getPriceOrgCode)
+            .map(QuoteCostingWorkbenchServiceImpl::trimToNull)
+            .filter(Objects::nonNull)
+            .findFirst()
+            .orElseGet(
+                () ->
+                    (costingRows == null ? List.<BomCostingRow>of() : costingRows).stream()
+                        .map(BomCostingRow::getPriceOrgCode)
+                        .map(QuoteCostingWorkbenchServiceImpl::trimToNull)
+                        .filter(Objects::nonNull)
+                        .findFirst()
+                        .orElse(null));
+    return priceOrgCode == null
+        ? null
+        : MaterialOrganization.fromPriceOrgCode(priceOrgCode).getCode();
   }
 
   private List<BomRawHierarchy> loadActiveRawRows(List<BomCostingRow> rows, String productCode) {
@@ -463,18 +511,20 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       return true;
     }
     return Integer.valueOf(1).equals(raw.getIsLeaf())
-        && SHAPE_PURCHASED.equals(firstText(raw.getShapeAttr(), raw.getSourceCategory()))
-        && StringUtils.hasText(raw.getMaterialCategory1())
-        && raw.getMaterialCategory1().startsWith(CATEGORY_AUXILIARY_PREFIX);
+        && SHAPE_PURCHASED.equals(firstText(raw.getShapeAttr(), raw.getSourceCategory()));
   }
 
-  private BomRuleNodeContext toRuleContext(BomRawHierarchy raw) {
+  private BomRuleNodeContext toRuleContext(
+      BomRawHierarchy raw, Map<String, BomRuleMaterialAttributes> materialAttributes) {
+    BomRuleMaterialAttributes attributes =
+        materialAttributes.get(trimToNull(raw.getMaterialCode()));
     return new BomRuleNodeContext(
         raw.getMaterialCode(),
         raw.getMaterialName(),
         raw.getMaterialCategory1(),
+        attributes == null ? null : attributes.mainCategoryCode(),
         firstText(raw.getMaterialCategory2(), raw.getMaterialCategory1()),
-        raw.getMaterialCategory1(),
+        attributes == null ? null : attributes.purchaseCategory(),
         raw.getShapeAttr(),
         raw.getCostElementCode(),
         raw.getSourceCategory(),

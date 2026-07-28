@@ -10,6 +10,7 @@ public record BomRuleNodeContext(
     String materialCode,
     String materialName,
     String materialCategoryCode,
+    String mainCategoryCode,
     String mainCategoryName,
     String purchaseCategory,
     String shapeAttr,

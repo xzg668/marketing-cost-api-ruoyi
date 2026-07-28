@@ -245,7 +245,7 @@ class CostRunCostItemServiceImplTest {
   }
 
   @Test
-  @DisplayName("部门经费：CMS 生效工资金额可作为大修/工装/水电计算基数")
+  @DisplayName("部门经费：CMS 生效工资金额可作为计算基数，且水电计入材料费")
   void departmentFeesUseCmsEffectiveSalaryTotals() {
     OaFormMapper formMapper = mock(OaFormMapper.class);
     OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
@@ -326,6 +326,7 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemDto overhaul = findItem(items, "OVERHAUL");
     CostRunCostItemDto tooling = findItem(items, "TOOLING_REPAIR");
     CostRunCostItemDto water = findItem(items, "WATER_POWER");
+    CostRunCostItemDto material = findItem(items, "MATERIAL");
     assertThat(overhaul.getBaseAmount()).isEqualByComparingTo("30.156554");
     assertThat(overhaul.getRate()).isEqualByComparingTo("0.005610");
     assertThat(overhaul.getAmount()).isEqualByComparingTo("0.169178");
@@ -334,6 +335,7 @@ class CostRunCostItemServiceImplTest {
     assertThat(water.getRate()).isEqualByComparingTo("0.058300");
     assertThat(water.getAmount()).isEqualByComparingTo("1.758127");
     assertThat(water.getRemark()).isNull();
+    assertThat(material.getAmount()).isEqualByComparingTo("2.866079");
   }
 
   @Test
@@ -1254,8 +1256,7 @@ class CostRunCostItemServiceImplTest {
         mock(MaterialMasterMapper.class),
         rawMapper,
         bomMapper,
-        mock(CostRunCacheLookupService.class),
-        false);
+        mock(CostRunCacheLookupService.class));
   }
 
   /** T19：T19 之前的 4 个 coefficient test 走这个 helper（直接 mock cacheLookup） */
@@ -1277,8 +1278,7 @@ class CostRunCostItemServiceImplTest {
         mock(MaterialMasterMapper.class),
         mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class),
         mock(com.sanhua.marketingcost.mapper.BomRawHierarchyMapper.class),
-        lookup,
-        false);
+        lookup);
   }
 
   private CostRunCostItemServiceImpl buildWithAuxMapper(AuxCostItemMapper auxMapper) {
@@ -1299,8 +1299,7 @@ class CostRunCostItemServiceImplTest {
         mock(MaterialMasterMapper.class),
         mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class),
         mock(com.sanhua.marketingcost.mapper.BomRawHierarchyMapper.class),
-        mock(CostRunCacheLookupService.class),
-        false);
+        mock(CostRunCacheLookupService.class));
   }
 
   private static AuxCostItemDto newAuxCost(
@@ -1634,8 +1633,7 @@ class CostRunCostItemServiceImplTest {
         masterMapper,
         rawMapper,
         bomMapper,
-        lookup,
-        false);
+        lookup);
   }
 
   /** T11 单测专用：只关心 part / master / oaForm* 4 个 mapper，其余 mock 兜底 */
@@ -1661,7 +1659,6 @@ class CostRunCostItemServiceImplTest {
         masterMapper,
         mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class),
         mock(com.sanhua.marketingcost.mapper.BomRawHierarchyMapper.class),
-        mock(CostRunCacheLookupService.class),
-        false);
+        mock(CostRunCacheLookupService.class));
   }
 }

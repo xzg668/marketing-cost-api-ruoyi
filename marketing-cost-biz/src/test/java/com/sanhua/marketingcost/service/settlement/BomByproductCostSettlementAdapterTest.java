@@ -32,10 +32,13 @@ class BomByproductCostSettlementAdapterTest {
     TableInfoHelper.initTableInfo(
         new MapperBuilderAssistant(new MybatisConfiguration(), ""),
         U9BomByproductMaster.class);
+    TableInfoHelper.initTableInfo(
+        new MapperBuilderAssistant(new MybatisConfiguration(), ""),
+        MaterialScrapRef.class);
   }
 
   @Test
-  @DisplayName("按 price_org_code 读取当前有效 U9 副产品，并只带回制造件下层原材料命中的废料映射")
+  @DisplayName("读取副产品废料映射时兼容起止生效日期都为空")
   void readsCurrentByproductsAndMatchingScrapRefs() {
     U9BomByproductMasterMapper byproductMapper = mock(U9BomByproductMasterMapper.class);
     MaterialScrapRefMapper scrapRefMapper = mock(MaterialScrapRefMapper.class);
@@ -61,12 +64,26 @@ class BomByproductCostSettlementAdapterTest {
         .containsExactly((String) null);
     assertThat(result.scrapRefs()).extracting(BomSettlementScrapRef::materialCode)
         .containsExactly("RAW-1");
+    assertThat(result.scrapRefs()).singleElement().satisfies(ref -> {
+      assertThat(ref.effectiveFrom()).isNull();
+      assertThat(ref.effectiveTo()).isNull();
+    });
     ArgumentCaptor<Wrapper<U9BomByproductMaster>> queryCaptor =
         ArgumentCaptor.forClass(Wrapper.class);
     verify(byproductMapper).selectList(queryCaptor.capture());
     assertThat(queryCaptor.getValue().getCustomSqlSegment()).contains("price_org_code");
     assertThat(((AbstractWrapper<?, ?, ?>) queryCaptor.getValue()).getParamNameValuePairs().values())
         .contains("210");
+
+    ArgumentCaptor<Wrapper<MaterialScrapRef>> scrapRefQueryCaptor =
+        ArgumentCaptor.forClass(Wrapper.class);
+    verify(scrapRefMapper).selectList(scrapRefQueryCaptor.capture());
+    String scrapRefSql = scrapRefQueryCaptor.getValue().getCustomSqlSegment();
+    assertThat(scrapRefSql)
+        .contains("effective_from <=")
+        .contains("OR effective_from IS NULL")
+        .contains("effective_to >=")
+        .contains("OR effective_to IS NULL");
   }
 
   @Test
@@ -176,7 +193,7 @@ class BomByproductCostSettlementAdapterTest {
     row.setMaterialCode("RAW-1");
     row.setScrapCode("SCRAP-1");
     row.setBusinessUnitType("COMMERCIAL");
-    row.setEffectiveFrom(LocalDate.of(2026, 1, 1));
+    row.setEffectiveFrom(null);
     row.setEffectiveTo(null);
     return row;
   }

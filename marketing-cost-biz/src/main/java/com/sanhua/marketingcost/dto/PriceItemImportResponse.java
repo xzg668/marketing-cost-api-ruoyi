@@ -328,8 +328,17 @@ public class PriceItemImportResponse {
   public static class ErrorRow {
     private Integer rowNumber;
     private String materialCode;
+    private String materialName;
+    private String supplierCode;
     private String orderType;
+    private String sourceWorkbookName;
+    private String sourceSheetName;
+    private String formula;
+    private String formulaEffectiveDate;
+    private String errorStage;
+    private String errorCode;
     private String message;
+    private String suggestion;
 
     public ErrorRow() {
     }
@@ -357,6 +366,22 @@ public class PriceItemImportResponse {
       this.materialCode = materialCode;
     }
 
+    public String getMaterialName() {
+      return materialName;
+    }
+
+    public void setMaterialName(String materialName) {
+      this.materialName = materialName;
+    }
+
+    public String getSupplierCode() {
+      return supplierCode;
+    }
+
+    public void setSupplierCode(String supplierCode) {
+      this.supplierCode = supplierCode;
+    }
+
     public String getOrderType() {
       return orderType;
     }
@@ -365,12 +390,68 @@ public class PriceItemImportResponse {
       this.orderType = orderType;
     }
 
+    public String getSourceWorkbookName() {
+      return sourceWorkbookName;
+    }
+
+    public void setSourceWorkbookName(String sourceWorkbookName) {
+      this.sourceWorkbookName = sourceWorkbookName;
+    }
+
+    public String getSourceSheetName() {
+      return sourceSheetName;
+    }
+
+    public void setSourceSheetName(String sourceSheetName) {
+      this.sourceSheetName = sourceSheetName;
+    }
+
+    public String getFormula() {
+      return formula;
+    }
+
+    public void setFormula(String formula) {
+      this.formula = formula;
+    }
+
+    public String getFormulaEffectiveDate() {
+      return formulaEffectiveDate;
+    }
+
+    public void setFormulaEffectiveDate(String formulaEffectiveDate) {
+      this.formulaEffectiveDate = formulaEffectiveDate;
+    }
+
+    public String getErrorStage() {
+      return errorStage;
+    }
+
+    public void setErrorStage(String errorStage) {
+      this.errorStage = errorStage;
+    }
+
+    public String getErrorCode() {
+      return errorCode;
+    }
+
+    public void setErrorCode(String errorCode) {
+      this.errorCode = errorCode;
+    }
+
     public String getMessage() {
       return message;
     }
 
     public void setMessage(String message) {
       this.message = message;
+    }
+
+    public String getSuggestion() {
+      return suggestion;
+    }
+
+    public void setSuggestion(String suggestion) {
+      this.suggestion = suggestion;
     }
   }
 

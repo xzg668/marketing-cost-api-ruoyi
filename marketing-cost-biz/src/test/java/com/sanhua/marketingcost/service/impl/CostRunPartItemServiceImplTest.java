@@ -16,6 +16,7 @@ import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.PackagePriceRequest;
 import com.sanhua.marketingcost.dto.PackagePriceResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
+import com.sanhua.marketingcost.dto.RollupPartComponentDto;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.OaForm;
@@ -36,9 +37,11 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -591,6 +594,113 @@ class CostRunPartItemServiceImplTest {
     verify(rawMapper).selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL"));
   }
 
+  @Test
+  @DisplayName("上卷父件按命中子件拆行，保留父件料号图号且拆分金额守恒")
+  void rollupParentExpandsByFrozenMakePriceComponents() {
+    CostRunPartItemMapper partMapper = Mockito.mock(CostRunPartItemMapper.class);
+    MaterialMasterMapper masterMapper = Mockito.mock(MaterialMasterMapper.class);
+    MaterialMasterRawMapper rawMapper = Mockito.mock(MaterialMasterRawMapper.class);
+    BomRawHierarchyMapper bomMapper = Mockito.mock(BomRawHierarchyMapper.class);
+
+    CostRunPartItem rollupParent =
+        storedPart("OA-1", "TOP-1", "1053000301687", "A板片组件", "37.525113");
+    rollupParent.setId(101L);
+    rollupParent.setBomRowId(3603L);
+    rollupParent.setPricePrepareItemId(3707L);
+    rollupParent.setPartDrawingNo(null);
+    rollupParent.setQty(new BigDecimal("30.000000"));
+    rollupParent.setUnitPrice(new BigDecimal("1.250837"));
+    rollupParent.setPriceOrgCode("220");
+    rollupParent.setMaterialOrganizationCode("PLATE");
+    CostRunPartItem normal =
+        storedPart("OA-1", "TOP-1", "NORMAL", "普通部品", "2.000000");
+    normal.setId(102L);
+    normal.setPartDrawingNo(null);
+    normal.setPriceOrgCode("220");
+    normal.setMaterialOrganizationCode("PLATE");
+    when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of(rollupParent, normal));
+    when(partMapper.selectRollupDisplayComponents(any()))
+        .thenReturn(List.of(
+            rollupComponent(
+                101L,
+                "301070047",
+                "铜箔",
+                "0.16800000",
+                "0.48814155",
+                "联动价"),
+            rollupComponent(
+                101L,
+                "301240299",
+                "0.3厚×80宽不锈钢卷",
+                "1.13700000",
+                "0.76269554",
+                "联动价")));
+    when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("PLATE")))
+        .thenReturn(List.of());
+    MaterialMasterRaw parentArchive = rawMaterial("1053000301687", "A板片组件", "S012B-05101", "制造件");
+    MaterialMasterRaw copperArchive = rawMaterial("301070047", "铜箔", null, "采购件");
+    MaterialMasterRaw steelArchive =
+        rawMaterial("301240299", "0.3厚×80宽不锈钢卷", null, "采购件");
+    MaterialMasterRaw normalArchive = rawMaterial("NORMAL", "普通部品", "DRW-NORMAL", "采购件");
+    when(rawMapper.selectByLatestBatchAndCodes(any(), any(), eq("PLATE")))
+        .thenAnswer(invocation -> {
+          @SuppressWarnings("unchecked")
+          Collection<String> codes = invocation.getArgument(0);
+          return List.of(parentArchive, copperArchive, steelArchive, normalArchive).stream()
+              .filter(raw -> codes.contains(raw.getMaterialCode()))
+              .toList();
+        });
+
+    CostRunPartItemServiceImpl svc =
+        new CostRunPartItemServiceImpl(
+            partMapper,
+            routerService,
+            packageComponentIdentifyService,
+            packageComponentPriceService,
+            oaFormMapper,
+            masterMapper,
+            rawMapper,
+            bomMapper,
+            List.of());
+
+    List<CostRunPartItemDto> items = svc.listAggregatedByOaNo("OA-1", "TOP-1");
+
+    assertThat(items).hasSize(3);
+    List<CostRunPartItemDto> splitRows = items.stream()
+        .filter(item -> "1053000301687".equals(item.getPartCode()))
+        .toList();
+    assertThat(splitRows)
+        .extracting(CostRunPartItemDto::getPartName)
+        .containsExactly(
+            "A板片组件-铜箔",
+            "A板片组件-0.3厚×80宽不锈钢卷");
+    assertThat(splitRows)
+        .extracting(CostRunPartItemDto::getPartDrawingNo)
+        .containsOnly("S012B-05101");
+    assertThat(splitRows)
+        .extracting(CostRunPartItemDto::getShapeAttr)
+        .containsOnly("采购件");
+    assertThat(splitRows.get(0).getPartQty()).isEqualByComparingTo("0.16800000");
+    assertThat(splitRows.get(0).getUnitPrice()).isEqualByComparingTo("87.16813393");
+    assertThat(splitRows.get(0).getAmount()).isEqualByComparingTo("14.644247");
+    assertThat(splitRows.get(1).getPartQty()).isEqualByComparingTo("1.13700000");
+    assertThat(splitRows.get(1).getUnitPrice()).isEqualByComparingTo("20.12389288");
+    assertThat(splitRows.get(1).getAmount()).isEqualByComparingTo("22.880866");
+    assertThat(splitRows.stream()
+        .map(CostRunPartItemDto::getAmount)
+        .reduce(BigDecimal.ZERO, BigDecimal::add))
+        .isEqualByComparingTo("37.525113");
+    assertThat(items.stream()
+        .filter(item -> "NORMAL".equals(item.getPartCode()))
+        .findFirst()
+        .orElseThrow()
+        .getPartDrawingNo())
+        .isEqualTo("DRW-NORMAL");
+    verify(partMapper).selectRollupDisplayComponents(
+        argThat(ids -> ids != null && Set.copyOf(ids).equals(Set.of(101L, 102L))));
+  }
+
   // ============================ resolveQuoteDate ============================
 
   @Test
@@ -689,6 +799,35 @@ class CostRunPartItemServiceImplTest {
     parent.setImportBatchId("u9-new");
     parent.setActiveFlag(1);
     return parent;
+  }
+
+  private static MaterialMasterRaw rawMaterial(
+      String materialCode, String materialName, String drawingNo, String shapeAttr) {
+    MaterialMasterRaw raw = new MaterialMasterRaw();
+    raw.setMaterialCode(materialCode);
+    raw.setMaterialName(materialName);
+    raw.setDrawingNo(drawingNo);
+    raw.setShapeAttr(shapeAttr);
+    raw.setOrganizationCode("PLATE");
+    raw.setActiveFlag(1);
+    return raw;
+  }
+
+  private static RollupPartComponentDto rollupComponent(
+      Long partItemId,
+      String childMaterialCode,
+      String childMaterialName,
+      String childQtyPerTop,
+      String childUnitCost,
+      String rawPriceType) {
+    RollupPartComponentDto component = new RollupPartComponentDto();
+    component.setPartItemId(partItemId);
+    component.setChildMaterialCode(childMaterialCode);
+    component.setChildMaterialName(childMaterialName);
+    component.setChildQtyPerTop(new BigDecimal(childQtyPerTop));
+    component.setChildUnitCost(new BigDecimal(childUnitCost));
+    component.setChildRawPriceType(rawPriceType);
+    return component;
   }
 
   private static PriceTypeRoute route(PriceTypeEnum priceType) {

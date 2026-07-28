@@ -16,7 +16,7 @@ class BomSettlementRuleMatcherTest {
       new BomSettlementRuleMatcher(new BomSettlementRuleConditionEvaluator(new ObjectMapper()));
 
   @Test
-  @DisplayName("JSON 条件覆盖编码白名单、名称、主分类、采购分类、形态属性、成本要素")
+  @DisplayName("JSON 条件覆盖编码白名单、正式主分类编码、采购分类、形态属性、成本要素")
   void conditionSupportsSettlementFieldWhitelist() {
     BomSettlementRule rule = baseRule("FIELD_WHITELIST", 10);
     rule.setMatchConditionJson("""
@@ -24,6 +24,7 @@ class BomSettlementRuleMatcherTest {
           "nodeConditions": [
             {"field":"material_code","op":"IN","values":["301240123"]},
             {"field":"material_name","op":"LIKE","value":"不锈钢"},
+            {"field":"main_category_code","op":"EQ","value":"181831498"},
             {"field":"main_category_name","op":"EQ","value":"辅料"},
             {"field":"purchase_category","op":"EQ","value":"丝网"},
             {"field":"shape_attr","op":"EQ","value":"制造件"},
@@ -35,6 +36,49 @@ class BomSettlementRuleMatcherTest {
 
     assertThat(matcher.match(node(), null, List.of(), null, LocalDate.of(2026, 5, 29), List.of(rule)))
         .contains(rule);
+  }
+
+  @Test
+  @DisplayName("塑料默认排除，但财务指定采购分类保留")
+  void plasticExcludeRuleSupportsPurchaseCategoryKeepList() {
+    BomSettlementRule rule = baseRule("AUXILIARY_EXCLUDE_PLASTIC", 10);
+    rule.setMatchConditionJson("""
+        {"nodeConditions":[
+          {"field":"main_category_code","op":"EQ","value":"171721412"},
+          {"field":"purchase_category","op":"NOT_IN","values":[
+            "PEEK","PVC套管","其它高分子材料","其它橡塑制品","热缩管","注塑件"
+          ]}
+        ]}
+        """);
+
+    assertThat(matcher.match(
+        nodeWithClassification("171721412", "普通塑料"), null, List.of(), null,
+        LocalDate.of(2026, 7, 20), List.of(rule))).contains(rule);
+    assertThat(matcher.match(
+        nodeWithClassification("171721412", "PEEK"), null, List.of(), null,
+        LocalDate.of(2026, 7, 20), List.of(rule))).isEmpty();
+    assertThat(matcher.match(
+        nodeWithClassification("171721412", null), null, List.of(), null,
+        LocalDate.of(2026, 7, 20), List.of(rule))).contains(rule);
+  }
+
+  @Test
+  @DisplayName("粘胶辅料默认排除，其它包装材料保留")
+  void adhesiveAuxiliaryRuleSupportsPackagingException() {
+    BomSettlementRule rule = baseRule("AUXILIARY_EXCLUDE_ADHESIVE_AUX", 10);
+    rule.setMatchConditionJson("""
+        {"nodeConditions":[
+          {"field":"main_category_code","op":"EQ","value":"181841444"},
+          {"field":"purchase_category","op":"NE","value":"其它包装材料"}
+        ]}
+        """);
+
+    assertThat(matcher.match(
+        nodeWithClassification("181841444", "普通粘胶"), null, List.of(), null,
+        LocalDate.of(2026, 7, 20), List.of(rule))).contains(rule);
+    assertThat(matcher.match(
+        nodeWithClassification("181841444", "其它包装材料"), null, List.of(), null,
+        LocalDate.of(2026, 7, 20), List.of(rule))).isEmpty();
   }
 
   @Test
@@ -111,6 +155,7 @@ class BomSettlementRuleMatcherTest {
         "301240123",
         "不锈钢带",
         "1801",
+        "181831498",
         "辅料",
         "丝网",
         "制造件",
@@ -125,9 +170,26 @@ class BomSettlementRuleMatcherTest {
         "X",
         materialName,
         "18",
+        null,
         "辅料",
         purchaseCategory,
         "制造件",
+        "RM01",
+        "采购件",
+        "COMMERCIAL",
+        "主制造");
+  }
+
+  private static BomRuleNodeContext nodeWithClassification(
+      String mainCategoryCode, String purchaseCategory) {
+    return new BomRuleNodeContext(
+        "X",
+        "辅料",
+        "legacy-category",
+        mainCategoryCode,
+        "仅供展示的分类名称",
+        purchaseCategory,
+        "采购件",
         "RM01",
         "采购件",
         "COMMERCIAL",

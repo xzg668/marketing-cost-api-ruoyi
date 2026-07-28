@@ -52,9 +52,6 @@ cost:
       lock-timeout-minutes: ${COST_RUN_WORKER_LOCK_TIMEOUT_MINUTES:10}
       max-retry-count: ${COST_RUN_WORKER_MAX_RETRY_COUNT:3}
       scenes: ${COST_RUN_WORKER_SCENES:QUOTE,MONTHLY_REPRICE}
-  material:
-    # 与见机表3 E66=SUM(E9:E64) 一致：水电 E65 只列示，不进入材料费。
-    includeWaterPower: ${COST_MATERIAL_INCLUDE_WATER_POWER:false}
   linked:
     excel-auto-binding:
       enabled: ${COST_LINKED_EXCEL_AUTO_BINDING_ENABLED:true}

@@ -46,6 +46,7 @@ import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.rule.BomSettlementRuleMatcher;
+import com.sanhua.marketingcost.service.rule.BomRuleMaterialAttributeResolver;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -81,6 +82,7 @@ class QuoteCostingWorkbenchServiceImplTest {
   private QuotePriceTypeConfirmBatchMapper priceTypeConfirmBatchMapper;
   private QuoteProductBomCostingBuildService costingBuildService;
   private BomSettlementRuleMatcher settlementRuleMatcher;
+  private BomRuleMaterialAttributeResolver materialAttributeResolver;
   private QuoteCostRunVersionInvalidationService versionInvalidationService;
   private QuoteCostingWorkbenchServiceImpl service;
 
@@ -113,6 +115,8 @@ class QuoteCostingWorkbenchServiceImplTest {
     priceTypeConfirmBatchMapper = mock(QuotePriceTypeConfirmBatchMapper.class);
     costingBuildService = mock(QuoteProductBomCostingBuildService.class);
     settlementRuleMatcher = mock(BomSettlementRuleMatcher.class);
+    materialAttributeResolver = mock(BomRuleMaterialAttributeResolver.class);
+    when(materialAttributeResolver.resolve(any(), any())).thenReturn(Map.of());
     versionInvalidationService = mock(QuoteCostRunVersionInvalidationService.class);
     service =
         new QuoteCostingWorkbenchServiceImpl(
@@ -129,6 +133,7 @@ class QuoteCostingWorkbenchServiceImplTest {
             priceTypeConfirmBatchMapper,
             costingBuildService,
             settlementRuleMatcher,
+            materialAttributeResolver,
             versionInvalidationService);
   }
 

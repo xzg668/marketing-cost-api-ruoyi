@@ -61,7 +61,8 @@ class CostRunDetailControllerTest {
     when(partService.listAggregatedByCostRunNo("TRIAL-V1", "P-1")).thenReturn(List.of(part));
     when(costService.listStoredByCostRunNo("TRIAL-V1")).thenReturn(List.of(total));
 
-    CommonResult<CostRunDetailDto> response = controller.getDetail("OA-1", "P-1", "TRIAL-V1");
+    CommonResult<CostRunDetailDto> response =
+        controller.getDetail("OA-1", "P-1", "TRIAL-V1", false);
 
     assertThat(response.getData().getCostRunNo()).isEqualTo("TRIAL-V1");
     assertThat(response.getData().getVersionNo()).isEqualTo("COST-V1");
@@ -110,7 +111,7 @@ class CostRunDetailControllerTest {
         .thenReturn(List.of(part));
     when(costService.listStoredByCostRunNo("TRIAL-LATEST")).thenReturn(List.of(total));
 
-    CommonResult<CostRunDetailDto> response = controller.getDetail("OA-1", "P-1", null);
+    CommonResult<CostRunDetailDto> response = controller.getDetail("OA-1", "P-1", null, false);
 
     assertThat(response.getData().getCostRunNo()).isEqualTo("TRIAL-LATEST");
     assertThat(response.getData().getVersionNo()).isEqualTo("V3");
@@ -120,5 +121,58 @@ class CostRunDetailControllerTest {
     verify(costService).listStoredByCostRunNo(eq("TRIAL-LATEST"));
     verify(partService, never()).listAggregatedByOaNo(any(), any());
     verify(costService, never()).listStoredByOaNo(any(), any());
+  }
+
+  @Test
+  @DisplayName("显式查看历史核算结果时，按 OA 单号和产品料号查询旧明细")
+  void detailUsesLegacyResultWhenRequested() {
+    CostRunPartItemService partService = mock(CostRunPartItemService.class);
+    CostRunCostItemService costService = mock(CostRunCostItemService.class);
+    CostRunResultService resultService = mock(CostRunResultService.class);
+    MaterialMasterMapper materialMasterMapper = mock(MaterialMasterMapper.class);
+    OaFormMapper oaFormMapper = mock(OaFormMapper.class);
+    OaFormItemMapper oaFormItemMapper = mock(OaFormItemMapper.class);
+    QuoteCostRunVersionMapper versionMapper = mock(QuoteCostRunVersionMapper.class);
+    CostRunDetailController controller =
+        new CostRunDetailController(
+            partService,
+            costService,
+            resultService,
+            materialMasterMapper,
+            oaFormMapper,
+            oaFormItemMapper,
+            versionMapper);
+    CostRunPartItemDto part = new CostRunPartItemDto();
+    part.setId(701L);
+    part.setProductCode("1079900000536");
+    part.setPartCode("LEGACY-PART");
+    CostRunPartItemDto otherProductPart = new CostRunPartItemDto();
+    otherProductPart.setId(702L);
+    otherProductPart.setProductCode("OTHER-PRODUCT");
+    otherProductPart.setPartCode("OTHER-PART");
+    CostRunCostItemDto total = new CostRunCostItemDto();
+    total.setId(801L);
+    total.setCostCode("TOTAL");
+    total.setAmount(new BigDecimal("151.063341"));
+    when(partService.listStoredByOaNo("OA-GOLDEN-001"))
+        .thenReturn(List.of(part, otherProductPart));
+    when(costService.listStoredByOaNo("OA-GOLDEN-001", "1079900000536"))
+        .thenReturn(List.of(total));
+
+    CommonResult<CostRunDetailDto> response =
+        controller.getDetail("OA-GOLDEN-001", "1079900000536", null, true);
+
+    assertThat(response.getData().getCostRunNo()).isNull();
+    assertThat(response.getData().getVersionNo()).isNull();
+    assertThat(response.getData().getPartItems())
+        .extracting(CostRunPartItemDto::getPartCode)
+        .containsExactly("LEGACY-PART");
+    assertThat(response.getData().getTotal()).isEqualByComparingTo("151.063341");
+    verify(versionMapper, never()).selectOne(any(Wrapper.class));
+    verify(partService).listStoredByOaNo("OA-GOLDEN-001");
+    verify(costService).listStoredByOaNo("OA-GOLDEN-001", "1079900000536");
+    verify(partService, never()).listAggregatedByOaNo(any(), any());
+    verify(partService, never()).listAggregatedByCostRunNo(any(), any());
+    verify(costService, never()).listStoredByCostRunNo(any());
   }
 }

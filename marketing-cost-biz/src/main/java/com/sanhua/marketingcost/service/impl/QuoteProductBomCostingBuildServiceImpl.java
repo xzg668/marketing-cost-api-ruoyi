@@ -162,7 +162,9 @@ public class QuoteProductBomCostingBuildServiceImpl
     }
     QuoteBomPreparationRecord record = loadActiveRecordByItem(oaFormItemId);
     LocalDate buildQuoteDate = resolveQuoteDate(quoteDate);
-    if (record == null || !PREPARATION_READY.equals(record.getPreparationStatus())) {
+    if (record == null
+        || !PREPARATION_READY.equals(record.getPreparationStatus())
+        || missingOrganization(record)) {
       preparationService.prepareByOaFormItem(oaFormItemId, buildQuoteDate);
       record = loadActiveRecordByItem(oaFormItemId);
     }
@@ -587,6 +589,12 @@ public class QuoteProductBomCostingBuildServiceImpl
     }
     return MaterialOrganization.normalizeQuoteDataOrganization(
         new QuoteDataOrganization(priceOrgCode, materialOrganizationCode));
+  }
+
+  private static boolean missingOrganization(QuoteBomPreparationRecord record) {
+    return record != null
+        && (!StringUtils.hasText(record.getPriceOrgCode())
+            || !StringUtils.hasText(record.getMaterialOrganizationCode()));
   }
 
   private BomSettlementNode toSettlementNode(

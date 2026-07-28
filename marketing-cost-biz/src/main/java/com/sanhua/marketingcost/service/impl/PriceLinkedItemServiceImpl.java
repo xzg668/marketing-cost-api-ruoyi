@@ -38,6 +38,7 @@ import com.sanhua.marketingcost.entity.FactorMonthlyPrice;
 import com.sanhua.marketingcost.entity.FactorQuoteBaseMapping;
 import com.sanhua.marketingcost.entity.FactorRowRef;
 import com.sanhua.marketingcost.entity.FactorUploadBatch;
+import com.sanhua.marketingcost.entity.FactorUploadRowError;
 import com.sanhua.marketingcost.dto.PriceLinkedItemUpdateRequest;
 import com.sanhua.marketingcost.entity.PriceFixedItem;
 import com.sanhua.marketingcost.entity.PriceLinkedFormulaChangeLog;
@@ -58,6 +59,7 @@ import com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper;
 import com.sanhua.marketingcost.mapper.FactorQuoteBaseMappingMapper;
 import com.sanhua.marketingcost.mapper.FactorRowRefMapper;
 import com.sanhua.marketingcost.mapper.FactorUploadBatchMapper;
+import com.sanhua.marketingcost.mapper.FactorUploadRowErrorMapper;
 import com.sanhua.marketingcost.mapper.PriceFixedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedFormulaChangeLogMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
@@ -175,6 +177,8 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
   private FactorQuoteBaseMappingMapper factorQuoteBaseMappingMapper;
   @Autowired(required = false)
   private ExcelAutoBindingImportLogMapper autoBindingImportLogMapper;
+  @Autowired(required = false)
+  private FactorUploadRowErrorMapper factorUploadRowErrorMapper;
   private boolean excelAutoBindingEnabled = true;
 
   public PriceLinkedItemServiceImpl(
@@ -416,7 +420,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     detail.setLinkedCount(nullToZero(batch.getLinkedRowCount()));
     detail.setLinkedVersionCreatedCount(detail.getLinkedCount());
     detail.setAutoBindingCount(nullToZero(batch.getAutoBindingCount()));
-    detail.setBindingErrorCount(nullToZero(batch.getErrorCount()));
+    detail.setErrorCount(nullToZero(batch.getErrorCount()));
     detail.getFactorRows().addAll(loadPersistedFactorRows(batch));
     detail.setQuoteBaseRecognizedCount((int) detail.getFactorRows().stream()
         .filter(row -> "RECOGNIZED".equalsIgnoreCase(row.getQuoteBaseDetectStatus()))
@@ -435,10 +439,16 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     detail.setConflictBindingCount((int) logs.stream()
         .filter(log -> "FAILED".equalsIgnoreCase(log.getStatus()))
         .count());
+    detail.setBindingErrorCount(detail.getConflictBindingCount());
     detail.getBindingErrors().addAll(logs.stream()
         .filter(log -> !"SUCCESS".equalsIgnoreCase(log.getStatus()))
         .map(this::toBindingError)
         .toList());
+    List<ErrorRow> persistedErrors = loadPersistedImportErrors(batch.getId());
+    detail.getErrors().addAll(persistedErrors);
+    int restoredFailureCount = persistedErrors.size() + detail.getBindingErrorCount();
+    detail.setUnpersistedErrorCount(
+        Math.max(0, detail.getErrorCount() - restoredFailureCount));
     return detail;
   }
 
@@ -529,6 +539,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     List<CollectedImportRow> rows = new ArrayList<>();
     List<ErrorRow> parseErrors = new ArrayList<>();
     Integer linkedSheetNo = findLinkedImportSheetNo(excelBytes);
+    String linkedSheetName = findLinkedImportSheetName(excelBytes);
     try {
       EasyExcel.read(new ByteArrayInputStream(excelBytes), PriceItemExcelImportRow.class,
               new CollectingListener(rows, parseErrors))
@@ -539,6 +550,10 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       response.getErrors().add(new ErrorRow(
           null, null, null, "Excel 解析失败: " + e.getMessage()));
       response.setSkipped(response.getSkipped() + 1);
+      enrichAndPersistImportErrors(
+          v2Context.factorUploadBatchId(), response, sourceFileName, linkedSheetName);
+      finalizeImportBatch(v2Context.factorUploadBatchId(), response);
+      applyVersionedSummaryAliases(response);
       return response;
     }
 
@@ -547,11 +562,9 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       int excelRow = collected.rowNumber();
       String validateError = validateRow(row);
       if (validateError != null) {
-        response.getErrors().add(new ErrorRow(
-            excelRow,
-            row == null ? null : row.getMaterialCode(),
-            row == null ? null : row.getOrderType(),
-            validateError));
+        response.getErrors().add(buildImportError(
+            excelRow, row, row == null ? null : row.getFormulaExpr(),
+            resolvedFormulaEffectiveDate, linkedSheetName, validateError));
         response.setSkipped(response.getSkipped() + 1);
         continue;
       }
@@ -575,8 +588,8 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
           normalizedFormula = tryNormalize(formulaSource);
         }
         if (normalizedFormula == null) {
-          response.getErrors().add(new ErrorRow(
-              excelRow, row.getMaterialCode(), row.getOrderType(),
+          response.getErrors().add(buildImportError(
+              excelRow, row, formulaSource, resolvedFormulaEffectiveDate, linkedSheetName,
               "联动公式非法或无法解析: " + formulaSource));
           response.setSkipped(response.getSkipped() + 1);
           continue;
@@ -587,8 +600,9 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
           linkedOutcome = upsertLinked(
               row, month, normalizedFormula, resolvedFormulaEffectiveDate, resolvedBusinessUnitType);
         } catch (IllegalArgumentException ex) {
-          response.getErrors().add(new ErrorRow(
-              excelRow, row.getMaterialCode(), row.getOrderType(), ex.getMessage()));
+          response.getErrors().add(buildImportError(
+              excelRow, row, formulaSource, resolvedFormulaEffectiveDate, linkedSheetName,
+              ex.getMessage()));
           response.setSkipped(response.getSkipped() + 1);
           continue;
         }
@@ -624,6 +638,8 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       response.getErrors().addAll(parseErrors);
       response.setSkipped(response.getSkipped() + parseErrors.size());
     }
+    enrichAndPersistImportErrors(
+        v2Context.factorUploadBatchId(), response, sourceFileName, linkedSheetName);
     finalizeImportBatch(v2Context.factorUploadBatchId(), response);
     applyVersionedSummaryAliases(response);
     return response;
@@ -637,7 +653,8 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     if (batch == null) {
       return;
     }
-    int errorCount = response.getSkipped() + response.getBindingErrorCount();
+    int rowErrorCount = response.getErrors() == null ? 0 : response.getErrors().size();
+    int errorCount = rowErrorCount + response.getBindingErrorCount();
     batch.setLinkedRowCount(response.getLinkedCount());
     batch.setAutoBindingCount(response.getAutoBindingCount());
     batch.setWarningCount(response.getManualSkippedCount()
@@ -648,6 +665,175 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     batch.setFinishedAt(LocalDateTime.now());
     batch.setUpdatedAt(LocalDateTime.now());
     factorUploadBatchMapper.updateById(batch);
+  }
+
+  private ErrorRow buildImportError(
+      Integer rowNumber,
+      PriceItemExcelImportRow sourceRow,
+      String formula,
+      LocalDate formulaEffectiveDate,
+      String sourceSheetName,
+      String message) {
+    ErrorRow error = new ErrorRow(
+        rowNumber,
+        sourceRow == null ? null : sourceRow.getMaterialCode(),
+        sourceRow == null ? null : sourceRow.getOrderType(),
+        message);
+    if (sourceRow != null) {
+      error.setMaterialName(sourceRow.getMaterialName());
+      error.setSupplierCode(sourceRow.getSupplierCode());
+    }
+    error.setSourceSheetName(sourceSheetName);
+    error.setFormula(formula);
+    error.setFormulaEffectiveDate(
+        formulaEffectiveDate == null ? null : formulaEffectiveDate.toString());
+    return error;
+  }
+
+  private void enrichAndPersistImportErrors(
+      Long factorUploadBatchId,
+      PriceItemImportResponse response,
+      String sourceFileName,
+      String defaultSourceSheetName) {
+    if (response == null || response.getErrors() == null) {
+      return;
+    }
+    for (ErrorRow error : response.getErrors()) {
+      if (error == null) {
+        continue;
+      }
+      if (!StringUtils.hasText(error.getSourceWorkbookName())) {
+        error.setSourceWorkbookName(sourceFileName);
+      }
+      if (!StringUtils.hasText(error.getSourceSheetName())) {
+        error.setSourceSheetName(defaultSourceSheetName);
+      }
+      if (!StringUtils.hasText(error.getFormulaEffectiveDate())) {
+        error.setFormulaEffectiveDate(response.getFormulaEffectiveDate());
+      }
+      if (!StringUtils.hasText(error.getErrorStage())) {
+        error.setErrorStage(classifyImportErrorStage(error.getMessage()));
+      }
+      if (!StringUtils.hasText(error.getErrorCode())) {
+        error.setErrorCode(classifyImportErrorCode(error.getMessage()));
+      }
+      if (!StringUtils.hasText(error.getSuggestion())) {
+        error.setSuggestion(importErrorSuggestion(error.getErrorCode()));
+      }
+    }
+    persistImportErrors(factorUploadBatchId, response.getErrors());
+  }
+
+  private void persistImportErrors(Long factorUploadBatchId, List<ErrorRow> errors) {
+    if (factorUploadRowErrorMapper == null
+        || factorUploadBatchId == null
+        || errors == null
+        || errors.isEmpty()) {
+      return;
+    }
+    for (ErrorRow error : errors) {
+      if (error == null) {
+        continue;
+      }
+      FactorUploadRowError entity = new FactorUploadRowError();
+      entity.setFactorUploadBatchId(factorUploadBatchId);
+      entity.setSourceWorkbookName(limitText(error.getSourceWorkbookName(), 255));
+      entity.setSourceSheetName(limitText(error.getSourceSheetName(), 128));
+      entity.setExcelRowNumber(error.getRowNumber());
+      entity.setMaterialCode(limitText(error.getMaterialCode(), 64));
+      entity.setMaterialName(limitText(error.getMaterialName(), 255));
+      entity.setSupplierCode(limitText(error.getSupplierCode(), 64));
+      entity.setOrderType(limitText(error.getOrderType(), 64));
+      entity.setFormula(error.getFormula());
+      entity.setFormulaEffectiveDate(parseLocalDate(error.getFormulaEffectiveDate()));
+      entity.setErrorStage(limitText(error.getErrorStage(), 32));
+      entity.setErrorCode(limitText(error.getErrorCode(), 64));
+      entity.setErrorMessage(limitText(firstText(error.getMessage(), "导入失败"), 2048));
+      entity.setSuggestion(limitText(error.getSuggestion(), 1024));
+      entity.setCreatedAt(LocalDateTime.now());
+      factorUploadRowErrorMapper.insert(entity);
+    }
+  }
+
+  private String classifyImportErrorStage(String message) {
+    String text = firstText(message, "");
+    if (text.contains("生命周期倒挂") || text.contains("formulaEffectiveDate")) {
+      return "FORMULA_VERSION";
+    }
+    if (text.contains("公式非法") || text.contains("无法解析")) {
+      return "FORMULA_PARSE";
+    }
+    if (text.contains("Excel 解析") || text.contains("Excel 读取")) {
+      return "EXCEL_PARSE";
+    }
+    if (text.contains("必填")) {
+      return "ROW_VALIDATE";
+    }
+    if (text.contains("自动绑定") || text.contains("影响因素无法登记变量")) {
+      return "AUTO_BIND";
+    }
+    return "ROW_IMPORT";
+  }
+
+  private String classifyImportErrorCode(String message) {
+    String text = firstText(message, "");
+    if (text.contains("生命周期倒挂") || text.contains("formulaEffectiveDate")) {
+      return "FORMULA_LIFECYCLE_OVERLAP";
+    }
+    if (text.contains("公式非法") || text.contains("无法解析")) {
+      return "FORMULA_INVALID";
+    }
+    if (text.contains("Excel 解析") || text.contains("Excel 读取")) {
+      return "EXCEL_PARSE_FAILED";
+    }
+    if (text.contains("必填")) {
+      return "REQUIRED_FIELD_MISSING";
+    }
+    if (text.contains("自动绑定") || text.contains("影响因素无法登记变量")) {
+      return "AUTO_BIND_FAILED";
+    }
+    return "IMPORT_ERROR";
+  }
+
+  private String importErrorSuggestion(String errorCode) {
+    if ("FORMULA_LIFECYCLE_OVERLAP".equals(errorCode)) {
+      return "请将新公式生效日期调整为晚于当前版本生效日期，再重新导入";
+    }
+    if ("FORMULA_INVALID".equals(errorCode)) {
+      return "请检查该行联动公式及引用单元格，修正后重新导入";
+    }
+    if ("EXCEL_PARSE_FAILED".equals(errorCode)) {
+      return "请检查 Excel 模板、单元格格式及必填列后重新上传";
+    }
+    if ("REQUIRED_FIELD_MISSING".equals(errorCode)) {
+      return "请补齐该行必填字段后重新导入";
+    }
+    if ("AUTO_BIND_FAILED".equals(errorCode)) {
+      return "请检查公式引用的影响因素，必要时进入人工绑定";
+    }
+    if ("FACTOR_PRICE_ERROR".equals(errorCode)
+        || "FACTOR_REFERENCE_ERROR".equals(errorCode)) {
+      return "请检查影响因素表对应行的数据后重新导入";
+    }
+    return "请根据失败原因修正 Excel 后重新导入";
+  }
+
+  private LocalDate parseLocalDate(String value) {
+    if (!StringUtils.hasText(value)) {
+      return null;
+    }
+    try {
+      return LocalDate.parse(value.trim());
+    } catch (DateTimeParseException ignored) {
+      return null;
+    }
+  }
+
+  private String limitText(String value, int maxLength) {
+    if (value == null || value.length() <= maxLength) {
+      return value;
+    }
+    return value.substring(0, maxLength);
   }
 
   private String normalizeEffectiveStrategy(String effectiveStrategy) {
@@ -811,6 +997,41 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
         .stream()
         .map(this::toImportLogDto)
         .toList();
+  }
+
+  private List<ErrorRow> loadPersistedImportErrors(Long factorUploadBatchId) {
+    if (factorUploadRowErrorMapper == null || factorUploadBatchId == null) {
+      return List.of();
+    }
+    return factorUploadRowErrorMapper.selectList(
+        Wrappers.lambdaQuery(FactorUploadRowError.class)
+            .eq(FactorUploadRowError::getFactorUploadBatchId, factorUploadBatchId)
+            .orderByAsc(FactorUploadRowError::getExcelRowNumber)
+            .orderByAsc(FactorUploadRowError::getId))
+        .stream()
+        .map(this::toImportErrorRow)
+        .toList();
+  }
+
+  private ErrorRow toImportErrorRow(FactorUploadRowError entity) {
+    ErrorRow row = new ErrorRow(
+        entity.getExcelRowNumber(),
+        entity.getMaterialCode(),
+        entity.getOrderType(),
+        entity.getErrorMessage());
+    row.setMaterialName(entity.getMaterialName());
+    row.setSupplierCode(entity.getSupplierCode());
+    row.setSourceWorkbookName(entity.getSourceWorkbookName());
+    row.setSourceSheetName(entity.getSourceSheetName());
+    row.setFormula(entity.getFormula());
+    row.setFormulaEffectiveDate(
+        entity.getFormulaEffectiveDate() == null
+            ? null
+            : entity.getFormulaEffectiveDate().toString());
+    row.setErrorStage(entity.getErrorStage());
+    row.setErrorCode(entity.getErrorCode());
+    row.setSuggestion(entity.getSuggestion());
+    return row;
   }
 
   private Map<Long, FactorIdentity> loadIdentities(List<FactorRowRef> refs) {
@@ -1051,16 +1272,24 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     response.setQuoteBaseConflictCount(upsertResult.getQuoteBaseConflictCount());
     response.getFactorRows().addAll(upsertResult.getRows());
     for (FactorMonthlyPriceUpsertResult.RowError error : upsertResult.getErrors()) {
-      response.getErrors().add(new ErrorRow(
-          error.getSourceRowNumber(), null, null, error.getMessage()));
+      ErrorRow errorRow = new ErrorRow(
+          error.getSourceRowNumber(), null, null, error.getMessage());
+      errorRow.setSourceSheetName(error.getSourceSheetName());
+      errorRow.setErrorStage("FACTOR_IMPORT");
+      errorRow.setErrorCode("FACTOR_PRICE_ERROR");
+      response.getErrors().add(errorRow);
       response.setSkipped(response.getSkipped() + 1);
     }
 
     FactorRowRefSaveResult rowRefResult = factorUploadBatchService.saveRowRefs(
         factorUploadBatchId, factorParseResult, upsertResult);
     for (FactorRowRefSaveResult.RowError error : rowRefResult.getErrors()) {
-      response.getErrors().add(new ErrorRow(
-          error.getSourceRowNumber(), null, null, error.getMessage()));
+      ErrorRow errorRow = new ErrorRow(
+          error.getSourceRowNumber(), null, null, error.getMessage());
+      errorRow.setSourceSheetName(error.getSourceSheetName());
+      errorRow.setErrorStage("FACTOR_IMPORT");
+      errorRow.setErrorCode("FACTOR_REFERENCE_ERROR");
+      response.getErrors().add(errorRow);
       response.setSkipped(response.getSkipped() + 1);
     }
 

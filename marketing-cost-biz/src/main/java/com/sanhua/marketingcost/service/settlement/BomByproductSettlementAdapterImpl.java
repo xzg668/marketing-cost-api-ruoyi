@@ -138,7 +138,10 @@ public class BomByproductSettlementAdapterImpl implements BomByproductSettlement
         Wrappers.<MaterialScrapRef>lambdaQuery()
             .in(MaterialScrapRef::getMaterialCode, materialCodes)
             .in(MaterialScrapRef::getScrapCode, scrapCodes)
-            .le(MaterialScrapRef::getEffectiveFrom, effectiveDate)
+            .and(wrapper -> wrapper
+                .le(MaterialScrapRef::getEffectiveFrom, effectiveDate)
+                .or()
+                .isNull(MaterialScrapRef::getEffectiveFrom))
             .and(wrapper -> wrapper
                 .ge(MaterialScrapRef::getEffectiveTo, effectiveDate)
                 .or()
