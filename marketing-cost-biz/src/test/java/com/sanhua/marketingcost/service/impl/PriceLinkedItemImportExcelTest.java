@@ -440,6 +440,51 @@ class PriceLinkedItemImportExcelTest {
   }
 
   @Test
+  @DisplayName("PLI2-13：原 demo9 标准联动价仍走旧导入链路且不写类型2来源快照")
+  void importExcel_userDemo9StandardWorkbookKeepsLegacyImportContract() throws Exception {
+    Path sample = Path.of("/Users/xiexicheng/Desktop/demo9/联动价.xls");
+    assertThat(Files.exists(sample)).as("用户 demo9 联动价 xls 存在").isTrue();
+    byte[] xls = Files.readAllBytes(sample);
+    assertThat(PriceLinkedImportFileDigest.sha256(xls))
+        .isEqualTo("b1609a65380129a51ee623ce78bad70226ec0ecf0d689b19c4d4b346d12740a1");
+    when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    AtomicLong linkedId = new AtomicLong(13000L);
+    List<PriceLinkedItem> insertedItems = new ArrayList<>();
+    doAnswer(invocation -> {
+      PriceLinkedItem item = invocation.getArgument(0);
+      item.setId(linkedId.incrementAndGet());
+      insertedItems.add(item);
+      return 1;
+    }).when(itemMapper).insert(any(PriceLinkedItem.class));
+    QuasiRealV2Mocks mocks = configureQuasiRealV2Pipeline(new InMemoryLifecycleStore());
+
+    PriceItemImportResponse response = service.importExcel(
+        new ByteArrayInputStream(xls), "2026-07", false,
+        "COMMERCIAL", sample.getFileName().toString(),
+        null, "2026-07-01", "KEEP_EXISTING");
+
+    assertThat(response.getFactorRecognizedCount()).isEqualTo(62);
+    assertThat(response.getLinkedCount()).isEqualTo(7);
+    assertThat(response.getFixedCount()).isZero();
+    assertThat(response.getAutoBindingCount()).isEqualTo(11);
+    assertThat(response.getSkipped()).isZero();
+    assertThat(response.getErrors()).isEmpty();
+    assertThat(insertedItems).hasSize(response.getLinkedCount());
+    assertThat(insertedItems)
+        .allSatisfy(item -> {
+          assertThat(item.getSourceUploadBatchId()).isNull();
+          assertThat(item.getSourceSheetName()).isNull();
+          assertThat(item.getSourceRowNumber()).isNull();
+          assertThat(item.getSourceFormulaCellRef()).isNull();
+          assertThat(item.getSourceFormulaExpr()).isNull();
+          assertThat(item.getSourceInputSnapshotJson()).isNull();
+          assertThat(item.getSourceTaxIncludedPrice()).isNull();
+          assertThat(item.getSourceTaxExcludedPrice()).isNull();
+        });
+    verify(mocks.writeService(), times(response.getLinkedCount())).write(any());
+  }
+
+  @Test
   @DisplayName("importExcel：中文联动公式列非法时，优先使用单价原始公式反推的标准公式入库")
   void importExcel_prefersExcelDerivedFormulaWhenDisplayFormulaInvalid() throws Exception {
     AtomicReference<PriceLinkedItem> inserted = new AtomicReference<>();

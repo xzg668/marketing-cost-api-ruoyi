@@ -103,6 +103,48 @@ class QuoteCostRunVersionInvalidationServiceImplTest {
         .doesNotContain(" PTC-001 ");
   }
 
+  @Test
+  void bomBranchChangeInvalidatesTrialAndConfirmedVersionsInExactProductScope() {
+    when(versionMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(version(21L), version(22L)));
+    when(versionMapper.update(
+            any(QuoteCostRunVersion.class), any(Wrapper.class)))
+        .thenReturn(2);
+    when(resultMapper.update(
+            any(CostRunResult.class), any(Wrapper.class)))
+        .thenReturn(2);
+
+    int affected =
+        service.invalidateProductAfterBomChange(
+            "OA-ALT", 88L, "TOP-ALT", "2026-07");
+
+    assertThat(affected).isEqualTo(2);
+    ArgumentCaptor<Wrapper<QuoteCostRunVersion>> selectCaptor =
+        wrapperCaptor();
+    verify(versionMapper).selectList(selectCaptor.capture());
+    AbstractWrapper<?, ?, ?> select =
+        (AbstractWrapper<?, ?, ?>) selectCaptor.getValue();
+    select.getSqlSegment();
+    assertThat(select.getParamNameValuePairs().values())
+        .contains(
+            "OA-ALT",
+            88L,
+            "TOP-ALT",
+            "2026-07",
+            "TRIAL",
+            "CONFIRMED");
+
+    ArgumentCaptor<Wrapper<QuoteCostRunVersion>> updateCaptor =
+        wrapperCaptor();
+    verify(versionMapper)
+        .update(any(QuoteCostRunVersion.class), updateCaptor.capture());
+    AbstractWrapper<?, ?, ?> update =
+        (AbstractWrapper<?, ?, ?>) updateCaptor.getValue();
+    update.getSqlSegment();
+    assertThat(update.getParamNameValuePairs().values())
+        .contains("TRIAL", "CONFIRMED");
+  }
+
   private QuoteCostRunVersion version(Long id) {
     QuoteCostRunVersion version = new QuoteCostRunVersion();
     version.setId(id);

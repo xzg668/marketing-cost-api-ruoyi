@@ -1,0 +1,15 @@
+package com.sanhua.marketingcost.enums;
+
+/** 类型 2 业务行与标准行的确定性匹配状态。 */
+public enum PriceLinkedType2RowMatchStatus {
+  MATCHED,
+  MATCHED_SUPPLIER_FALLBACK,
+  MISSING_STANDARD,
+  MISSING_BUSINESS,
+  BUSINESS_DUPLICATE,
+  STANDARD_DUPLICATE,
+  BOTH_DUPLICATE,
+  MISSING_SUPPLIER_CODE,
+  INVALID_BUSINESS_KEY,
+  INVALID_STANDARD_KEY
+}

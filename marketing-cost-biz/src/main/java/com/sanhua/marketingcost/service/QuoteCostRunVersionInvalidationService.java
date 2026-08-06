@@ -12,5 +12,13 @@ public interface QuoteCostRunVersionInvalidationService {
   int invalidateProduct(
       String oaNo, Long oaFormItemId, String productCode, String pricingMonth);
 
+  /**
+   * BOM 分支发生业务变化时，使当前产品的试算和已确认版本都失效。
+   *
+   * <p>只转为 STALE，保留全部历史版本和结果用于审计。
+   */
+  int invalidateProductAfterBomChange(
+      String oaNo, Long oaFormItemId, String productCode, String pricingMonth);
+
   int invalidateByPriceTypeConfirmNos(Collection<String> confirmNos);
 }

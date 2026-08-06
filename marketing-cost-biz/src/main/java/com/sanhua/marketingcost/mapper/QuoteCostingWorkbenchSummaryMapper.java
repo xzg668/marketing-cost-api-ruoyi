@@ -16,7 +16,7 @@ public interface QuoteCostingWorkbenchSummaryMapper {
           + "top_product_code AS topProductCode, period_month AS periodMonth, "
           + "confirm_status AS confirmStatus, confirm_version AS confirmVersion, "
           + "row_count AS rowCount, manual_modified_count AS manualModifiedCount, "
-          + "replace_count AS replaceCount, usage_adjust_count AS usageAdjustCount, "
+          + "replace_count AS replaceCount, "
           + "confirmed_by AS confirmedBy, confirmed_at AS confirmedAt, confirm_remark AS confirmRemark "
           + "FROM lp_quote_bom_confirmation "
           + "WHERE oa_no=#{oaNo} "

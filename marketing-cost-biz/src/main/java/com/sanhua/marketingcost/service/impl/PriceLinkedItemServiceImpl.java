@@ -2761,6 +2761,14 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     dto.setEffectiveTo(item.getEffectiveTo());
     dto.setOrderType(item.getOrderType());
     dto.setQuota(item.getQuota());
+    dto.setSourceUploadBatchId(item.getSourceUploadBatchId());
+    dto.setSourceSheetName(item.getSourceSheetName());
+    dto.setSourceRowNumber(item.getSourceRowNumber());
+    dto.setSourceFormulaCellRef(item.getSourceFormulaCellRef());
+    dto.setSourceFormulaExpr(item.getSourceFormulaExpr());
+    dto.setSourceInputSnapshotJson(item.getSourceInputSnapshotJson());
+    dto.setSourceTaxIncludedPrice(item.getSourceTaxIncludedPrice());
+    dto.setSourceTaxExcludedPrice(item.getSourceTaxExcludedPrice());
     dto.setUpdatedAt(item.getUpdatedAt());
     return dto;
   }

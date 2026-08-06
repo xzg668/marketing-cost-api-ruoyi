@@ -60,6 +60,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
   private final ProductPropertyAnnualUsageService productPropertyAnnualUsageService;
   private final QuoteCostRunVersionInvalidationService versionInvalidationService;
   private final ObjectMapper objectMapper;
+  private final QuoteBomContextResolver quoteBomContextResolver;
 
   public QuoteIngestServiceImpl(
       QuoteNormalizeService quoteNormalizeService,
@@ -72,7 +73,8 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       QuoteBomStatusMapper quoteBomStatusMapper,
       ProductPropertyAnnualUsageService productPropertyAnnualUsageService,
       QuoteCostRunVersionInvalidationService versionInvalidationService,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      QuoteBomContextResolver quoteBomContextResolver) {
     this.quoteNormalizeService = quoteNormalizeService;
     this.quoteIngestLogService = quoteIngestLogService;
     this.oaFormMapper = oaFormMapper;
@@ -84,6 +86,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     this.productPropertyAnnualUsageService = productPropertyAnnualUsageService;
     this.versionInvalidationService = versionInvalidationService;
     this.objectMapper = objectMapper;
+    this.quoteBomContextResolver = quoteBomContextResolver;
   }
 
   @Override
@@ -372,9 +375,11 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       status.setOaNo(form.getOaNo());
       status.setProductCode(source.getMaterialNo());
       status.setProductModel(source.getSunlModel());
-      status.setCustomerCode(source.getCustomerCode());
+      status.setCustomerCode(quoteBomContextResolver.resolveCustomer(form, null).value());
       status.setPackageType(source.getPackageType());
-      status.setPackageMethod(source.getPackageMethod());
+      status.setPackageMethod(
+          quoteBomContextResolver.normalizePackageMethod(source.getPackageMethod()));
+      status.setCostPeriodMonth(quoteBomContextResolver.resolveCostPeriodMonth(form));
       status.setTechnicianName(source.getTechnicianName());
       status.setBomStatus(
           StringUtils.hasText(source.getMaterialNo())

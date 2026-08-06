@@ -21,11 +21,12 @@ import org.springframework.util.StringUtils;
  *   <li>非顶层节点只有父路径也有效时才保留，避免跨版本拼出来的孤儿子树进入结算。</li>
  * </ul>
  */
-final class BomEffectiveTreePruner {
+public final class BomEffectiveTreePruner {
 
   private BomEffectiveTreePruner() {}
 
-  static List<BomRawHierarchy> prune(List<BomRawHierarchy> rows, String topProductCode) {
+  public static List<BomRawHierarchy> prune(
+      List<BomRawHierarchy> rows, String topProductCode) {
     String top = trimToNull(topProductCode);
     if (top == null || rows == null || rows.isEmpty()) {
       return List.of();

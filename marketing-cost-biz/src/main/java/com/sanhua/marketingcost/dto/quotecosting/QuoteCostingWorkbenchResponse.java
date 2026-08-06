@@ -13,6 +13,8 @@ public class QuoteCostingWorkbenchResponse {
   private String periodMonth;
   private QuoteCostingWorkflowStatusResponse workflowStatus;
   private Boolean snapshotGenerated;
+  /** 是否在核算工作台启用最终有效 BOM 产品明细；false 时前端恢复旧原始 BOM 树。 */
+  private Boolean effectiveBomEnabled;
   private String buildBatchId;
   private QuoteBomConfirmationSummaryResponse latestBomConfirmation;
   private QuotePriceTypeConfirmationSummaryResponse latestPriceTypeConfirmation;

@@ -16,8 +16,6 @@ import com.sanhua.marketingcost.dto.ingest.QuoteRequestListItemResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteBomCancelConfirmRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteBomConfirmRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteBomConfirmResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingBomRowUpdateRequest;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchBomRowResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunConfirmRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunSummaryResponse;
@@ -362,38 +360,6 @@ class QuoteRequestControllerTest {
         .checkPriceSources("OA-T8-001", 101L, request);
     verify(quotePricePrepareWorkbenchService, never())
         .generate("OA-T8-001", 101L, request);
-  }
-
-  @Test
-  void updateCostingBomRowReturnsServiceResponse() {
-    QuoteCostingBomRowUpdateRequest request = new QuoteCostingBomRowUpdateRequest();
-    request.setChildCode("MAT-NEW");
-    QuoteCostingWorkbenchBomRowResponse response = new QuoteCostingWorkbenchBomRowResponse();
-    response.setId(300L);
-    response.setChildCode("MAT-NEW");
-    when(quoteCostingWorkbenchService.updateBomRow("OA-T8-001", 101L, 300L, request))
-        .thenReturn(response);
-
-    CommonResult<QuoteCostingWorkbenchBomRowResponse> result =
-        controller.updateCostingBomRow("OA-T8-001", 101L, 300L, request);
-
-    assertThat(result.isSuccess()).isTrue();
-    assertThat(result.getData().getChildCode()).isEqualTo("MAT-NEW");
-    verify(quoteCostingWorkbenchService).updateBomRow("OA-T8-001", 101L, 300L, request);
-  }
-
-  @Test
-  void updateCostingBomRowExceptionReturnsBadRequest() {
-    QuoteCostingBomRowUpdateRequest request = new QuoteCostingBomRowUpdateRequest();
-    when(quoteCostingWorkbenchService.updateBomRow("OA-T8-001", 101L, 300L, request))
-        .thenThrow(new QuoteIngestException("BOM 行不属于当前产品行"));
-
-    CommonResult<QuoteCostingWorkbenchBomRowResponse> result =
-        controller.updateCostingBomRow("OA-T8-001", 101L, 300L, request);
-
-    assertThat(result.isSuccess()).isFalse();
-    assertThat(result.getCode()).isEqualTo(GlobalErrorCodeConstants.BAD_REQUEST.getCode());
-    assertThat(result.getMsg()).contains("当前产品行");
   }
 
   @Test

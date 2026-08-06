@@ -11,15 +11,22 @@ import com.sanhua.marketingcost.mapper.PriceRangeFactorRuleMapper;
 import com.sanhua.marketingcost.mapper.PriceRangeItemMapper;
 import com.sanhua.marketingcost.service.MaterialPriceTypeService;
 import com.sanhua.marketingcost.service.PriceRangeItemService;
+import com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -197,6 +204,7 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
     }
 
     List<PriceRangeItem> imported = new ArrayList<>();
+    List<PendingFactorVersionExpiration> pendingExpirations = new ArrayList<>();
     for (var entry : rowsByMaterial.entrySet()) {
       String materialCode = entry.getKey();
       List<PriceRangeItemImportRequest.PriceRangeItemImportRow> rows = entry.getValue();
@@ -205,6 +213,22 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
       PriceRangeItemImportRequest.PriceRangeItemImportRow first = rows.get(0);
 
       List<PriceRangeFactorRule> currentRules = findCurrentFactorRules(businessUnitType, materialCode);
+      List<PriceRangeItem> currentItems = findCurrentFactorItems(currentRules);
+      List<PriceRangeItem> mergeableCurrentItems = filterCurrentItemsForFactor(
+          currentRules,
+          currentItems,
+          factorCode);
+      List<PriceRangeItem> desiredItems = buildMergedFactorItems(
+          rows,
+          mergeableCurrentItems,
+          businessUnitType,
+          materialCode,
+          factorCode,
+          importBatchNo);
+      if (isIdenticalCurrentVersion(currentRules, currentItems, factorCode, desiredItems)) {
+        imported.addAll(currentItems);
+        continue;
+      }
       int nextVersion = currentRules.stream()
           .map(PriceRangeFactorRule::getVersionNo)
           .filter(v -> v != null)
@@ -229,32 +253,217 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
       newRule.setCurrentFlag(1);
       factorRuleMapper.insert(newRule);
 
-      for (PriceRangeItemImportRequest.PriceRangeItemImportRow row : rows) {
-        PriceRangeItem item = new PriceRangeItem();
-        fillItem(item, row);
-        fillDefaults(item);
-        item.setBusinessUnitType(businessUnitType);
-        item.setMaterialCode(materialCode);
-        item.setRangeBasis(RANGE_BASIS_FACTOR);
+      for (PriceRangeItem item : desiredItems) {
         item.setFactorRuleId(newRule.getId());
-        item.setFactorCode(factorCode);
-        item.setImportBatchNo(importBatchNo);
         item.setCurrentFlag(1);
-        item.setEffectiveFrom(effectiveFrom);
-        item.setEffectiveTo(null);
         itemMapper.insert(item);
         imported.add(item);
       }
-
-      expireCurrentFactorVersions(currentRules, effectiveFrom);
+      pendingExpirations.add(new PendingFactorVersionExpiration(
+          currentRules,
+          currentItems,
+          effectiveFrom));
+    }
+    for (PendingFactorVersionExpiration pending : pendingExpirations) {
+      expireCurrentFactorVersions(
+          pending.currentRules(),
+          pending.currentItems(),
+          pending.effectiveFrom());
     }
     return imported;
+  }
+
+  private List<PriceRangeItem> buildMergedFactorItems(
+      List<PriceRangeItemImportRequest.PriceRangeItemImportRow> rows,
+      List<PriceRangeItem> currentItems,
+      String businessUnitType,
+      String materialCode,
+      String factorCode,
+      String importBatchNo) {
+    Set<String> replacedIdentities = resolveReplacedSupplierIdentities(
+        rows,
+        currentItems,
+        materialCode);
+    List<PriceRangeItem> merged = new ArrayList<>();
+    for (PriceRangeItemImportRequest.PriceRangeItemImportRow row : rows) {
+      PriceRangeItem item = new PriceRangeItem();
+      fillItem(item, row);
+      fillDefaults(item);
+      item.setBusinessUnitType(businessUnitType);
+      item.setMaterialCode(materialCode);
+      item.setRangeBasis(RANGE_BASIS_FACTOR);
+      item.setFactorRuleId(null);
+      item.setFactorCode(factorCode);
+      item.setImportBatchNo(importBatchNo);
+      item.setCurrentFlag(1);
+      merged.add(item);
+    }
+    for (PriceRangeItem currentItem : currentItems) {
+      if (!replacedIdentities.contains(resolveSupplierIdentity(currentItem))) {
+        merged.add(copyFactorItem(currentItem));
+      }
+    }
+    return merged;
+  }
+
+  private Set<String> resolveReplacedSupplierIdentities(
+      List<PriceRangeItemImportRequest.PriceRangeItemImportRow> incomingRows,
+      List<PriceRangeItem> currentItems,
+      String materialCode) {
+    Set<String> currentIdentities = new HashSet<>();
+    for (PriceRangeItem currentItem : currentItems) {
+      currentIdentities.add(resolveSupplierIdentity(currentItem));
+    }
+    Set<String> replaced = new LinkedHashSet<>();
+    for (PriceRangeItemImportRequest.PriceRangeItemImportRow incoming : incomingRows) {
+      String incomingIdentity = resolveSupplierIdentity(incoming);
+      replaced.add(incomingIdentity);
+      if (!incomingIdentity.startsWith("CODE:") || currentIdentities.contains(incomingIdentity)) {
+        continue;
+      }
+      String normalizedName = normalizeSupplierIdentityPart(incoming.getSupplierName());
+      if (normalizedName == null) {
+        continue;
+      }
+      Set<String> nameCandidates = new LinkedHashSet<>();
+      for (PriceRangeItem currentItem : currentItems) {
+        if (normalizedName.equals(normalizeSupplierIdentityPart(currentItem.getSupplierName()))) {
+          nameCandidates.add(resolveSupplierIdentity(currentItem));
+        }
+      }
+      if (nameCandidates.size() > 1) {
+        throw new IllegalArgumentException(
+            "供应商名称身份不唯一，无法升级供应商代码: 料号=" + materialCode
+                + ", 供应商名称=" + incoming.getSupplierName()
+                + ", 候选身份=" + nameCandidates);
+      }
+      if (nameCandidates.size() == 1) {
+        String candidate = nameCandidates.iterator().next();
+        if (candidate.startsWith("NAME:")) {
+          replaced.add(candidate);
+        }
+      }
+    }
+    return replaced;
+  }
+
+  private List<PriceRangeItem> filterCurrentItemsForFactor(
+      List<PriceRangeFactorRule> currentRules,
+      List<PriceRangeItem> currentItems,
+      String factorCode) {
+    Set<Long> matchingRuleIds = new HashSet<>();
+    for (PriceRangeFactorRule rule : currentRules) {
+      if (Objects.equals(factorCode, upperTrimToNull(rule.getFactorCode()))
+          && rule.getId() != null) {
+        matchingRuleIds.add(rule.getId());
+      }
+    }
+    if (matchingRuleIds.isEmpty()) {
+      return List.of();
+    }
+    return currentItems.stream()
+        .filter(item -> matchingRuleIds.contains(item.getFactorRuleId()))
+        .toList();
+  }
+
+  private List<PriceRangeItem> findCurrentFactorItems(List<PriceRangeFactorRule> currentRules) {
+    if (currentRules == null || currentRules.isEmpty()) {
+      return List.of();
+    }
+    List<Long> ruleIds = currentRules.stream()
+        .map(PriceRangeFactorRule::getId)
+        .filter(Objects::nonNull)
+        .toList();
+    if (ruleIds.isEmpty()) {
+      return List.of();
+    }
+    List<PriceRangeItem> rows = itemMapper.selectList(
+        Wrappers.lambdaQuery(PriceRangeItem.class)
+            .eq(PriceRangeItem::getRangeBasis, RANGE_BASIS_FACTOR)
+            .in(PriceRangeItem::getFactorRuleId, ruleIds)
+            .eq(PriceRangeItem::getCurrentFlag, 1));
+    return rows == null ? List.of() : rows;
+  }
+
+  private boolean isIdenticalCurrentVersion(
+      List<PriceRangeFactorRule> currentRules,
+      List<PriceRangeItem> currentItems,
+      String factorCode,
+      List<PriceRangeItem> desiredItems) {
+    if (currentRules == null || currentRules.size() != 1) {
+      return false;
+    }
+    PriceRangeFactorRule currentRule = currentRules.get(0);
+    if (!Objects.equals(factorCode, upperTrimToNull(currentRule.getFactorCode()))) {
+      return false;
+    }
+    return factorItemSignatures(currentItems).equals(factorItemSignatures(desiredItems));
+  }
+
+  private Map<FactorItemBusinessSignature, Integer> factorItemSignatures(
+      List<PriceRangeItem> items) {
+    Map<FactorItemBusinessSignature, Integer> signatures = new HashMap<>();
+    for (PriceRangeItem item : items) {
+      FactorItemBusinessSignature signature = new FactorItemBusinessSignature(
+          resolveSupplierIdentity(item),
+          normalizeSupplierIdentityPart(item.getSupplierName()),
+          item.getEffectiveFrom(),
+          item.getEffectiveTo(),
+          normalizeDecimal(item.getRangeLow()),
+          normalizeDecimal(item.getRangeHigh()),
+          normalizeDecimal(item.getPriceExclTax()),
+          normalizeDecimal(item.getPriceInclTax()),
+          item.getTaxIncluded());
+      signatures.merge(signature, 1, Integer::sum);
+    }
+    return signatures;
+  }
+
+  private BigDecimal normalizeDecimal(BigDecimal value) {
+    return value == null ? null : value.stripTrailingZeros();
+  }
+
+  private PriceRangeItem copyFactorItem(PriceRangeItem source) {
+    PriceRangeItem target = new PriceRangeItem();
+    target.setBusinessUnitType(source.getBusinessUnitType());
+    target.setOrgCode(source.getOrgCode());
+    target.setSourceName(source.getSourceName());
+    target.setSupplierName(source.getSupplierName());
+    target.setSupplierCode(source.getSupplierCode());
+    target.setPurchaseClass(source.getPurchaseClass());
+    target.setMaterialName(source.getMaterialName());
+    target.setMaterialCode(source.getMaterialCode());
+    target.setSpecModel(source.getSpecModel());
+    target.setUnit(source.getUnit());
+    target.setFormulaExpr(source.getFormulaExpr());
+    target.setBlankWeight(source.getBlankWeight());
+    target.setNetWeight(source.getNetWeight());
+    target.setProcessFee(source.getProcessFee());
+    target.setAgentFee(source.getAgentFee());
+    target.setRangeLow(source.getRangeLow());
+    target.setRangeHigh(source.getRangeHigh());
+    target.setRangeBasis(RANGE_BASIS_FACTOR);
+    target.setFactorRuleId(null);
+    target.setFactorCode(source.getFactorCode());
+    target.setImportBatchNo(source.getImportBatchNo());
+    target.setCurrentFlag(1);
+    target.setPriceExclTax(source.getPriceExclTax());
+    target.setPriceInclTax(source.getPriceInclTax());
+    target.setTaxIncluded(source.getTaxIncluded());
+    target.setEffectiveFrom(source.getEffectiveFrom());
+    target.setEffectiveTo(source.getEffectiveTo());
+    target.setOrderType(source.getOrderType());
+    target.setQuota(source.getQuota());
+    return target;
   }
 
   private Map<String, List<PriceRangeItemImportRequest.PriceRangeItemImportRow>> validateAndGroupFactorRows(
       PriceRangeItemImportRequest request,
       String requestFactorCode) {
     Map<String, List<PriceRangeItemImportRequest.PriceRangeItemImportRow>> rowsByMaterial =
+        new LinkedHashMap<>();
+    Map<FactorRangeValidationGroup,
+        List<PriceRangeItemImportRequest.PriceRangeItemImportRow>> rowsByValidationGroup =
         new LinkedHashMap<>();
     for (var row : request.getRows()) {
       if (row == null) {
@@ -273,15 +482,37 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
       if (row.getPriceExclTax() == null && row.getPriceInclTax() == null) {
         throw new IllegalArgumentException("区间价导入价格为空: " + materialCode);
       }
+      if (row.getEffectiveFrom() == null) {
+        throw new IllegalArgumentException("行情因素区间价缺少生效日期: " + materialCode);
+      }
+      if (row.getEffectiveTo() != null
+          && row.getEffectiveTo().isBefore(row.getEffectiveFrom())) {
+        throw new IllegalArgumentException("行情因素区间价失效日期早于生效日期: " + materialCode);
+      }
       String rowFactorCode = resolveRowFactorCode(row, requestFactorCode);
       if (rowFactorCode == null) {
         throw new IllegalArgumentException("行情因素区间价缺少 factorCode: " + materialCode);
       }
       rowsByMaterial.computeIfAbsent(materialCode, ignored -> new ArrayList<>()).add(row);
+      FactorRangeValidationGroup validationGroup = new FactorRangeValidationGroup(
+          materialCode,
+          resolveSupplierIdentity(row),
+          rowFactorCode);
+      rowsByValidationGroup
+          .computeIfAbsent(validationGroup, ignored -> new ArrayList<>())
+          .add(row);
+    }
+    for (var entry : rowsByValidationGroup.entrySet()) {
+      FactorRangeValidationGroup group = entry.getKey();
+      validateNoOverlappingRanges(
+          group.materialCode(),
+          group.supplierIdentity(),
+          group.factorCode(),
+          entry.getValue());
+      validateConsistentSupplierDates(group, entry.getValue());
     }
     for (var entry : rowsByMaterial.entrySet()) {
       resolveSingleFactorCode(entry.getValue(), requestFactorCode, entry.getKey());
-      validateNoOverlappingRanges(entry.getKey(), entry.getValue());
     }
     return rowsByMaterial;
   }
@@ -304,6 +535,8 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
 
   private void validateNoOverlappingRanges(
       String materialCode,
+      String supplierIdentity,
+      String factorCode,
       List<PriceRangeItemImportRequest.PriceRangeItemImportRow> rows) {
     List<PriceRangeItemImportRequest.PriceRangeItemImportRow> sorted = new ArrayList<>(rows);
     sorted.sort(Comparator
@@ -313,19 +546,71 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
       var previous = sorted.get(i - 1);
       var current = sorted.get(i);
       if (previous.getRangeHigh().compareTo(current.getRangeLow()) >= 0) {
-        throw new IllegalArgumentException("同一物料同一批次区间重叠: " + materialCode);
+        throw new IllegalArgumentException(
+            "同一物料同一供应商同一影响因素区间重叠: 料号=" + materialCode
+                + ", 供应商身份=" + supplierIdentity
+                + ", factorCode=" + factorCode);
       }
     }
   }
 
-  private LocalDate resolveEffectiveFrom(
+  private void validateConsistentSupplierDates(
+      FactorRangeValidationGroup group,
       List<PriceRangeItemImportRequest.PriceRangeItemImportRow> rows) {
-    for (var row : rows) {
-      if (row.getEffectiveFrom() != null) {
-        return row.getEffectiveFrom();
+    LocalDate effectiveFrom = rows.get(0).getEffectiveFrom();
+    LocalDate effectiveTo = rows.get(0).getEffectiveTo();
+    for (int index = 1; index < rows.size(); index += 1) {
+      PriceRangeItemImportRequest.PriceRangeItemImportRow row = rows.get(index);
+      if (!Objects.equals(effectiveFrom, row.getEffectiveFrom())
+          || !Objects.equals(effectiveTo, row.getEffectiveTo())) {
+        throw new IllegalArgumentException(
+            "同一物料同一供应商同一影响因素的有效期不一致: 料号=" + group.materialCode()
+                + ", 供应商身份=" + group.supplierIdentity()
+                + ", factorCode=" + group.factorCode());
       }
     }
-    return LocalDate.now();
+  }
+
+  private String resolveSupplierIdentity(
+      PriceRangeItemImportRequest.PriceRangeItemImportRow row) {
+    return resolveSupplierIdentity(row.getSupplierCode(), row.getSupplierName());
+  }
+
+  private String resolveSupplierIdentity(PriceRangeItem item) {
+    return resolveSupplierIdentity(item.getSupplierCode(), item.getSupplierName());
+  }
+
+  private String resolveSupplierIdentity(String rawSupplierCode, String rawSupplierName) {
+    String supplierCode = normalizeSupplierIdentityPart(rawSupplierCode);
+    if (supplierCode != null) {
+      return "CODE:" + supplierCode;
+    }
+    String supplierName = normalizeSupplierIdentityPart(rawSupplierName);
+    if (supplierName != null) {
+      return "NAME:" + supplierName;
+    }
+    return "LEGACY";
+  }
+
+  private String normalizeSupplierIdentityPart(String value) {
+    String normalized = SupplierSupplyRatioNormalizeUtils.normalizeKeyPart(value);
+    return StringUtils.hasText(normalized)
+        ? normalized.toUpperCase(Locale.ROOT)
+        : null;
+  }
+
+  private record FactorRangeValidationGroup(
+      String materialCode,
+      String supplierIdentity,
+      String factorCode) {}
+
+  private LocalDate resolveEffectiveFrom(
+      List<PriceRangeItemImportRequest.PriceRangeItemImportRow> rows) {
+    return rows.stream()
+        .map(PriceRangeItemImportRequest.PriceRangeItemImportRow::getEffectiveFrom)
+        .filter(Objects::nonNull)
+        .min(LocalDate::compareTo)
+        .orElseThrow(() -> new IllegalArgumentException("行情因素区间价缺少生效日期"));
   }
 
   private List<PriceRangeFactorRule> findCurrentFactorRules(
@@ -343,7 +628,10 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
     return rows == null ? List.of() : rows;
   }
 
-  private void expireCurrentFactorVersions(List<PriceRangeFactorRule> currentRules, LocalDate effectiveFrom) {
+  private void expireCurrentFactorVersions(
+      List<PriceRangeFactorRule> currentRules,
+      List<PriceRangeItem> currentItems,
+      LocalDate effectiveFrom) {
     if (currentRules == null || currentRules.isEmpty()) {
       return;
     }
@@ -351,25 +639,31 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
       rule.setCurrentFlag(0);
       rule.setEffectiveTo(effectiveFrom);
       factorRuleMapper.updateById(rule);
-      if (rule.getId() == null) {
-        continue;
-      }
-      List<PriceRangeItem> oldItems =
-          itemMapper.selectList(
-              Wrappers.lambdaQuery(PriceRangeItem.class)
-                  .eq(PriceRangeItem::getRangeBasis, RANGE_BASIS_FACTOR)
-                  .eq(PriceRangeItem::getFactorRuleId, rule.getId())
-                  .eq(PriceRangeItem::getCurrentFlag, 1));
-      if (oldItems == null) {
-        continue;
-      }
-      for (PriceRangeItem oldItem : oldItems) {
-        oldItem.setCurrentFlag(0);
-        oldItem.setEffectiveTo(effectiveFrom);
-        itemMapper.updateById(oldItem);
-      }
+    }
+    if (currentItems == null) {
+      return;
+    }
+    for (PriceRangeItem oldItem : currentItems) {
+      oldItem.setCurrentFlag(0);
+      itemMapper.updateById(oldItem);
     }
   }
+
+  private record PendingFactorVersionExpiration(
+      List<PriceRangeFactorRule> currentRules,
+      List<PriceRangeItem> currentItems,
+      LocalDate effectiveFrom) {}
+
+  private record FactorItemBusinessSignature(
+      String supplierIdentity,
+      String supplierName,
+      LocalDate effectiveFrom,
+      LocalDate effectiveTo,
+      BigDecimal rangeLow,
+      BigDecimal rangeHigh,
+      BigDecimal priceExclTax,
+      BigDecimal priceInclTax,
+      Integer taxIncluded) {}
 
   private PriceRangeItem findExisting(PriceRangeItemImportRequest.PriceRangeItemImportRow row) {
     var query = Wrappers.lambdaQuery(PriceRangeItem.class)

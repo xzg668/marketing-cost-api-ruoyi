@@ -18,6 +18,7 @@ import com.sanhua.marketingcost.dto.MakePartPriceGenerateResponse;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.dto.priceprepare.NoScrapConfirmResponse;
 import com.sanhua.marketingcost.entity.BomCostingRow;
+import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
 import com.sanhua.marketingcost.entity.BomU9Source;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.entity.MakePartPriceGapItem;
@@ -25,6 +26,7 @@ import com.sanhua.marketingcost.entity.MaterialScrapRef;
 import com.sanhua.marketingcost.enums.MaterialFormAttrEnum;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
+import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceGapItemMapper;
 import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
@@ -53,6 +55,7 @@ import org.mockito.Mockito;
 class MakePartPriceGenerationServiceImplTest {
 
   private MakePartSourceDataService sourceDataService;
+  private BomCostingRowSubRefMapper bomCostingRowSubRefMapper;
   private MakePartWeightService weightService;
   private MakePartScrapMappingService scrapMappingService;
   private MaterialPriceRouterService materialPriceRouterService;
@@ -66,6 +69,7 @@ class MakePartPriceGenerationServiceImplTest {
   @BeforeEach
   void setUp() {
     sourceDataService = mock(MakePartSourceDataService.class);
+    bomCostingRowSubRefMapper = mock(BomCostingRowSubRefMapper.class);
     weightService = mock(MakePartWeightService.class);
     scrapMappingService = mock(MakePartScrapMappingService.class);
     materialPriceRouterService = mock(MaterialPriceRouterService.class);
@@ -80,6 +84,7 @@ class MakePartPriceGenerationServiceImplTest {
     service =
         new MakePartPriceGenerationServiceImpl(
             sourceDataService,
+            bomCostingRowSubRefMapper,
             new MakePartProcessTypePolicy(),
             weightService,
             scrapMappingService,
@@ -90,6 +95,61 @@ class MakePartPriceGenerationServiceImplTest {
             noScrapConfirmationService,
             calcRowMapper,
             gapItemMapper);
+  }
+
+  @Test
+  @DisplayName("特殊上卷父件第四步只计算第三步冻结的原材料，不把普通兄弟件当作废料原料")
+  void specialRollupParentOnlyCalculatesFrozenRawMaterial() {
+    BomCostingRow parent = parent("2018000671211");
+    parent.setId(501L);
+    parent.setSettlementRowType("SPECIAL_ROLLUP_PARENT");
+    BomU9Source normalSibling = child("203240247", "只");
+    normalSibling.setQtyPerParent(BigDecimal.ONE);
+    BomU9Source rollupRaw = child("301220046", "kg");
+    rollupRaw.setQtyPerParent(new BigDecimal("0.008"));
+    BomCostingRowSubRef ref = rollupRef(
+        501L, "301220046", "软磁不锈钢棒", "0.00786000");
+
+    when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
+        .thenReturn(List.of(parent));
+    when(sourceDataService.listDedupedChildren(
+            eq("2018000671211"), any(), eq("210")))
+        .thenReturn(List.of(normalSibling, rollupRaw));
+    when(bomCostingRowSubRefMapper.selectSpecialRollupChildren(List.of(501L)))
+        .thenReturn(List.of(ref));
+    when(scrapMappingService.listMappings("301220046", "COMMERCIAL"))
+        .thenReturn(List.of(scrap("301990752")));
+    when(weightService.resolveWeights(
+            eq("2018000671211"),
+            eq(rollupRaw),
+            eq("原材料加工"),
+            eq("2026-05"),
+            eq(false)))
+        .thenReturn(com.sanhua.marketingcost.dto.MakePartWeightResult.of(
+            "2018000671211",
+            "301220046",
+            "原材料加工",
+            new BigDecimal("7.86"),
+            new BigDecimal("5.50"),
+            "OK",
+            ""));
+    when(priceResolveService.calculateMaterialUnitPrice(
+            any(), any(), any(), any(), any(), any(), any()))
+        .thenAnswer(invocation -> okPrice(invocation.getArgument(0), "10"));
+
+    List<MakePartPriceCalcRow> rows = service.calculateRowsByOa(
+        "OA-001", "COMMERCIAL", "2026-05", priceAsOf(), null);
+
+    assertThat(rows).singleElement().satisfies(row -> {
+      assertThat(row.getParentMaterialNo()).isEqualTo("2018000671211");
+      assertThat(row.getChildMaterialNo()).isEqualTo("301220046");
+      assertThat(row.getQtyPerParent()).isEqualByComparingTo("0.00786000");
+      assertThat(row.getScrapCode()).isEqualTo("301990752");
+    });
+    verify(scrapMappingService).listMappings("301220046", "COMMERCIAL");
+    verify(scrapMappingService, never()).listMappings("203240247", "COMMERCIAL");
+    verify(priceResolveService, never()).calculateMaterialUnitPrice(
+        eq("203240247"), any(), any(), any(), any(), any(), any());
   }
 
   @Test
@@ -674,6 +734,20 @@ class MakePartPriceGenerationServiceImplTest {
     row.setScrapCode(code);
     row.setScrapName("废料" + code);
     return row;
+  }
+
+  private BomCostingRowSubRef rollupRef(
+      Long costingRowId,
+      String materialCode,
+      String materialName,
+      String quantity) {
+    BomCostingRowSubRef ref = new BomCostingRowSubRef();
+    ref.setCostingRowId(costingRowId);
+    ref.setRefType("SPECIAL_ROLLUP_CHILD");
+    ref.setSubMaterialCode(materialCode);
+    ref.setSubMaterialName(materialName);
+    ref.setSubQtyPerParent(new BigDecimal(quantity));
+    return ref;
   }
 
   private com.sanhua.marketingcost.dto.MakePartWeightResult weight(String childCode) {

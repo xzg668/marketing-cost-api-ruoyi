@@ -25,6 +25,7 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.enums.MaterialFormAttrEnum;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
+import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceGapItemMapper;
@@ -226,6 +227,7 @@ class MakePartPriceGenerationE2ETest {
 
     return new MakePartPriceGenerationServiceImpl(
         sourceDataService,
+        mock(BomCostingRowSubRefMapper.class),
         new MakePartProcessTypePolicy(),
         weightService,
         scrapMappingService,

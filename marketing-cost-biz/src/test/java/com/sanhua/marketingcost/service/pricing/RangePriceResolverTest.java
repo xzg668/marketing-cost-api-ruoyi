@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -15,6 +16,7 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
+import com.sanhua.marketingcost.dto.SupplierSupplyRatioResolveResult;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceRangeFactorRule;
 import com.sanhua.marketingcost.entity.PriceRangeItem;
@@ -23,6 +25,7 @@ import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PriceRangeFactorRuleMapper;
 import com.sanhua.marketingcost.mapper.PriceRangeItemMapper;
+import com.sanhua.marketingcost.service.SupplierSupplyRatioResolveService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -181,6 +184,210 @@ class RangePriceResolverTest {
   }
 
   @Test
+  @DisplayName("RPI1-10：7月只保留有效供应商且单候选不查询供货比例")
+  void factorRangeFiltersExpiredSupplierBeforeSelection() {
+    PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
+    PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
+    OaFormMapper oaFormMapper = mock(OaFormMapper.class);
+    SupplierSupplyRatioResolveService ratioService = mock(SupplierSupplyRatioResolveService.class);
+    RangePriceResolver resolver = factorResolver(itemMapper, ruleMapper, oaFormMapper, ratioService);
+    stubCopperFactor(ruleMapper, oaFormMapper);
+    PriceRangeItem supplierA = factorRange(
+        701L, "供应商A", "SUP-A", "0.410000", LocalDate.of(2026, 7, 1), null);
+    PriceRangeItem expiredSupplierB = factorRange(
+        702L, "供应商B", "SUP-B", "0.390000",
+        LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
+    when(itemMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(supplierA, expiredSupplierB));
+
+    PriceResolveResult result = resolver.resolve(
+        "OA-001", part("201850160", "1"), route(), quoteContext("COMMERCIAL"));
+
+    assertThat(result.unitPrice()).isEqualByComparingTo("0.410000");
+    assertThat(result.resultRefId()).isEqualTo(701L);
+    assertThat(result.remark()).contains(
+        "候选供应商数量=1",
+        "主供应商代码=SUP-A",
+        "供应商匹配方式=单一供应商",
+        "是否兜底=否");
+    verifyNoInteractions(ratioService);
+    ArgumentCaptor<Wrapper<PriceRangeItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(itemMapper).selectList(captor.capture());
+    assertThat(captor.getValue().getCustomSqlSegment())
+        .contains("effective_from", "effective_to", "ORDER BY", "id", "DESC");
+    assertThat(paramValues(captor.getValue())).contains(LocalDate.of(2026, 7, 1));
+  }
+
+  @Test
+  @DisplayName("RPI1-10：6月两个有效供应商按供货比例最大且按代码选择")
+  void factorRangeSelectsHighestRatioSupplierByCode() {
+    PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
+    PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
+    OaFormMapper oaFormMapper = mock(OaFormMapper.class);
+    SupplierSupplyRatioResolveService ratioService = mock(SupplierSupplyRatioResolveService.class);
+    RangePriceResolver resolver = factorResolver(itemMapper, ruleMapper, oaFormMapper, ratioService);
+    stubCopperFactor(ruleMapper, oaFormMapper);
+    PriceRangeItem supplierA = factorRange(
+        702L, "同名供应商", "SUP-A", "0.420000",
+        LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
+    PriceRangeItem supplierB = factorRange(
+        701L, "同名供应商", "SUP-B", "0.380000",
+        LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
+    when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(supplierA, supplierB));
+    when(ratioService.resolveAmongSuppliers(any(), any(), any(), any(), any(), any()))
+        .thenReturn(mainSupplier("同名供应商", "SUP-B", "0.7"));
+
+    PriceResolveResult result = resolver.resolve(
+        "OA-001",
+        part("201850160", "1"),
+        route(LocalDate.of(2026, 6, 15)),
+        quoteContextAt("COMMERCIAL", LocalDateTime.of(2026, 6, 15, 9, 0)));
+
+    assertThat(result.unitPrice()).isEqualByComparingTo("0.380000");
+    assertThat(result.resultRefId()).isEqualTo(701L);
+    assertThat(result.remark()).contains("按主供应商供货比例匹配价格");
+    assertThat(result.remark()).contains(
+        "区间价取价底稿[",
+        "物料代码=201850160",
+        "影响因素代码=CU",
+        "报价单行情值=90000",
+        "命中区间=87501-92500",
+        "候选供应商数量=2",
+        "主供应商名称=同名供应商",
+        "主供应商代码=SUP-B",
+        "供货比例=0.7",
+        "供应商匹配方式=供应商代码",
+        "最终价格行ID=701",
+        "最终不含税单价=0.38",
+        "是否兜底=否");
+    verify(ratioService).resolveAmongSuppliers(
+        any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  @DisplayName("RPI1-10：价格候选缺代码时按完整供应商名称匹配")
+  void factorRangeFallsBackToSupplierNameWhenCandidateCodeMissing() {
+    PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
+    PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
+    OaFormMapper oaFormMapper = mock(OaFormMapper.class);
+    SupplierSupplyRatioResolveService ratioService = mock(SupplierSupplyRatioResolveService.class);
+    RangePriceResolver resolver = factorResolver(itemMapper, ruleMapper, oaFormMapper, ratioService);
+    stubCopperFactor(ruleMapper, oaFormMapper);
+    PriceRangeItem supplierA = factorRange(702L, "供应商A", "SUP-A", "0.420000", null, null);
+    PriceRangeItem supplierB = factorRange(
+        701L, "吉林省 合信汽配有限公司", null, "0.380000", null, null);
+    when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(supplierA, supplierB));
+    when(ratioService.resolveAmongSuppliers(any(), any(), any(), any(), any(), any()))
+        .thenReturn(mainSupplier("吉林省合信汽配有限公司", "SUP-B", "0.7"));
+
+    PriceResolveResult result = resolver.resolve(
+        "OA-001", part("201850160", "1"), route(), quoteContext("COMMERCIAL"));
+
+    assertThat(result.unitPrice()).isEqualByComparingTo("0.380000");
+    assertThat(result.resultRefId()).isEqualTo(701L);
+    assertThat(result.remark()).contains("供应商匹配方式=供应商名称兜底", "是否兜底=否");
+  }
+
+  @Test
+  @DisplayName("RPI1-10：代码不同且名称相同不误匹配并按原排序兜底")
+  void factorRangeDoesNotMatchSameNameWhenCodesDiffer() {
+    PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
+    PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
+    OaFormMapper oaFormMapper = mock(OaFormMapper.class);
+    SupplierSupplyRatioResolveService ratioService = mock(SupplierSupplyRatioResolveService.class);
+    RangePriceResolver resolver = factorResolver(itemMapper, ruleMapper, oaFormMapper, ratioService);
+    stubCopperFactor(ruleMapper, oaFormMapper);
+    PriceRangeItem fallback = factorRange(702L, "同名供应商", "SUP-A", "0.420000", null, null);
+    PriceRangeItem other = factorRange(701L, "同名供应商", "SUP-B", "0.380000", null, null);
+    when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(fallback, other));
+    when(ratioService.resolveAmongSuppliers(any(), any(), any(), any(), any(), any()))
+        .thenReturn(mainSupplier("同名供应商", "SUP-C", "0.8"));
+
+    PriceResolveResult result = resolver.resolve(
+        "OA-001", part("201850160", "1"), route(), quoteContext("COMMERCIAL"));
+
+    assertThat(result.unitPrice()).isEqualByComparingTo("0.420000");
+    assertThat(result.resultRefId()).isEqualTo(702L);
+    assertThat(result.remark()).contains("主供应商无价格记录，按默认价格取价");
+    assertThat(result.remark()).contains(
+        "主供应商代码=SUP-C",
+        "供货比例=0.8",
+        "最终价格行ID=702",
+        "是否兜底=是",
+        "兜底原因=主供应商无价格记录");
+  }
+
+  @Test
+  @DisplayName("RPI1-10：未维护供货比例时按原ID倒序第一条兜底")
+  void factorRangeMissingRatioUsesOriginalOrderFallback() {
+    PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
+    PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
+    OaFormMapper oaFormMapper = mock(OaFormMapper.class);
+    SupplierSupplyRatioResolveService ratioService = mock(SupplierSupplyRatioResolveService.class);
+    RangePriceResolver resolver = factorResolver(itemMapper, ruleMapper, oaFormMapper, ratioService);
+    stubCopperFactor(ruleMapper, oaFormMapper);
+    PriceRangeItem first = factorRange(702L, "供应商A", "SUP-A", "0.420000", null, null);
+    PriceRangeItem second = factorRange(701L, "供应商B", "SUP-B", "0.380000", null, null);
+    when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(first, second));
+    when(ratioService.resolveAmongSuppliers(any(), any(), any(), any(), any(), any()))
+        .thenReturn(SupplierSupplyRatioResolveResult.miss("未维护"));
+
+    PriceResolveResult result = resolver.resolve(
+        "OA-001", part("201850160", "1"), route(), quoteContext("COMMERCIAL"));
+
+    assertThat(result.unitPrice()).isEqualByComparingTo("0.420000");
+    assertThat(result.resultRefId()).isEqualTo(702L);
+    assertThat(result.remark()).contains("未维护主供应商供货比例，按默认价格取价");
+    assertThat(result.remark()).contains(
+        "候选供应商数量=2",
+        "供应商匹配方式=默认排序兜底",
+        "是否兜底=是",
+        "兜底原因=未维护主供应商供货比例");
+  }
+
+  @Test
+  @DisplayName("RPI1-10：候选均无供应商身份时保持原历史排序")
+  void factorRangeWithoutSupplierIdentityKeepsLegacyFirstRow() {
+    PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
+    PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
+    OaFormMapper oaFormMapper = mock(OaFormMapper.class);
+    SupplierSupplyRatioResolveService ratioService = mock(SupplierSupplyRatioResolveService.class);
+    RangePriceResolver resolver = factorResolver(itemMapper, ruleMapper, oaFormMapper, ratioService);
+    stubCopperFactor(ruleMapper, oaFormMapper);
+    PriceRangeItem first = factorRange(702L, null, null, "0.420000", null, null);
+    PriceRangeItem second = factorRange(701L, null, null, "0.380000", null, null);
+    when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(first, second));
+
+    PriceResolveResult result = resolver.resolve(
+        "OA-001", part("201850160", "1"), route(), quoteContext("COMMERCIAL"));
+
+    assertThat(result.unitPrice()).isEqualByComparingTo("0.420000");
+    assertThat(result.resultRefId()).isEqualTo(702L);
+    verifyNoInteractions(ratioService);
+  }
+
+  @Test
+  @DisplayName("RPI1-10：行情区间候选不含税价全为空时返回缺价")
+  void factorRangeAllExclTaxPricesMissingReturnsMiss() {
+    PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
+    PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
+    OaFormMapper oaFormMapper = mock(OaFormMapper.class);
+    SupplierSupplyRatioResolveService ratioService = mock(SupplierSupplyRatioResolveService.class);
+    RangePriceResolver resolver = factorResolver(itemMapper, ruleMapper, oaFormMapper, ratioService);
+    stubCopperFactor(ruleMapper, oaFormMapper);
+    PriceRangeItem empty = factorRange(701L, "供应商A", "SUP-A", null, null, null);
+    empty.setPriceInclTax(new BigDecimal("0.450000"));
+    when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(empty));
+
+    PriceResolveResult result = resolver.resolve(
+        "OA-001", part("201850160", "1"), route(), quoteContext("COMMERCIAL"));
+
+    assertThat(result.unitPrice()).isNull();
+    assertThat(result.remark()).contains("未命中当前区间");
+    verifyNoInteractions(ratioService);
+  }
+
+  @Test
   @DisplayName("MFRP-05：报价单铜价为空时返回缺价且不查区间明细")
   void factorRangeMissingQuoteFactorValueReturnsMiss() {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
@@ -316,6 +523,12 @@ class RangePriceResolverTest {
   }
 
   private static CostRunContext quoteContext(String businessUnitType) {
+    return quoteContextAt(businessUnitType, LocalDateTime.of(2026, 7, 1, 9, 0));
+  }
+
+  private static CostRunContext quoteContextAt(
+      String businessUnitType,
+      LocalDateTime priceAsOfTime) {
     return CostRunContext.quote(
         "OA-001",
         1L,
@@ -323,8 +536,8 @@ class RangePriceResolverTest {
         null,
         null,
         businessUnitType,
-        "2026-07",
-        LocalDateTime.of(2026, 7, 1, 9, 0),
+        String.format("%04d-%02d", priceAsOfTime.getYear(), priceAsOfTime.getMonthValue()),
+        priceAsOfTime,
         "OBJ-001");
   }
 
@@ -348,17 +561,78 @@ class RangePriceResolverTest {
   }
 
   private static PriceRangeItem factorRange(String low, String high, String priceExclTax) {
+    PriceRangeItem item = factorRange(
+        601L,
+        null,
+        null,
+        priceExclTax,
+        LocalDate.of(2026, 7, 1),
+        null);
+    item.setRangeLow(new BigDecimal(low));
+    item.setRangeHigh(new BigDecimal(high));
+    return item;
+  }
+
+  private static PriceRangeItem factorRange(
+      Long id,
+      String supplierName,
+      String supplierCode,
+      String priceExclTax,
+      LocalDate effectiveFrom,
+      LocalDate effectiveTo) {
     PriceRangeItem item = new PriceRangeItem();
-    item.setId(601L);
+    item.setId(id);
+    item.setBusinessUnitType("COMMERCIAL");
     item.setMaterialCode("201850160");
+    item.setMaterialName("区间产品");
+    item.setSpecModel("SPEC-RANGE");
+    item.setSupplierName(supplierName);
+    item.setSupplierCode(supplierCode);
     item.setRangeBasis("FACTOR");
     item.setFactorRuleId(101L);
     item.setCurrentFlag(1);
-    item.setRangeLow(new BigDecimal(low));
-    item.setRangeHigh(new BigDecimal(high));
-    item.setPriceExclTax(new BigDecimal(priceExclTax));
-    item.setEffectiveFrom(LocalDate.of(2026, 7, 1));
+    item.setRangeLow(new BigDecimal("87501"));
+    item.setRangeHigh(new BigDecimal("92500"));
+    if (priceExclTax != null) {
+      item.setPriceExclTax(new BigDecimal(priceExclTax));
+    }
+    item.setEffectiveFrom(effectiveFrom);
+    item.setEffectiveTo(effectiveTo);
     return item;
+  }
+
+  private static RangePriceResolver factorResolver(
+      PriceRangeItemMapper itemMapper,
+      PriceRangeFactorRuleMapper ruleMapper,
+      OaFormMapper oaFormMapper,
+      SupplierSupplyRatioResolveService ratioService) {
+    return new RangePriceResolver(
+        itemMapper,
+        ruleMapper,
+        oaFormMapper,
+        new SupplierPreferredPriceSelector(ratioService));
+  }
+
+  private static void stubCopperFactor(
+      PriceRangeFactorRuleMapper ruleMapper,
+      OaFormMapper oaFormMapper) {
+    when(ruleMapper.selectList(any(Wrapper.class))).thenReturn(List.of(factorRule("CU", 101L)));
+    OaForm form = new OaForm();
+    form.setOaNo("OA-001");
+    form.setCopperPrice(new BigDecimal("90000"));
+    when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(form);
+  }
+
+  private static SupplierSupplyRatioResolveResult mainSupplier(
+      String supplierName,
+      String supplierCode,
+      String ratio) {
+    SupplierSupplyRatioResolveResult result = new SupplierSupplyRatioResolveResult();
+    result.setMatched(true);
+    result.setSupplierName(supplierName);
+    result.setSupplierCode(supplierCode);
+    result.setSupplyRatio(new BigDecimal(ratio));
+    return result;
   }
 
   private static PriceRangeFactorRule factorRule(String factorCode, Long id) {

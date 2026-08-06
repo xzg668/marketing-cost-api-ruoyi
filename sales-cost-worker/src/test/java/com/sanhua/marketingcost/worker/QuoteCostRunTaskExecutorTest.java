@@ -18,6 +18,7 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
 import com.sanhua.marketingcost.entity.CostRunTask;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
@@ -259,10 +260,18 @@ class QuoteCostRunTaskExecutorTest {
             }
           };
       LinkedPriceEnsureService linkedPriceEnsureService =
-          request -> {
-            calls.add("ensure");
-            ensureRequest = request;
-            return ensureResult;
+          new LinkedPriceEnsureService() {
+            @Override
+            public List<PriceLinkedCalcItem> calculate(LinkedPriceEnsureRequest request) {
+              return List.of();
+            }
+
+            @Override
+            public LinkedPriceEnsureResult ensure(LinkedPriceEnsureRequest request) {
+              calls.add("ensure");
+              ensureRequest = request;
+              return ensureResult;
+            }
           };
       QuoteCuAdjustmentCalcService cuAdjustmentCalcService = request -> {
         calls.add("orchestrator");

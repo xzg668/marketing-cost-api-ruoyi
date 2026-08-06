@@ -34,8 +34,12 @@ class QuoteOaPdfFiSc006GoldenComparisonTest {
 
   @Test
   void fiSc006PdfMatchesExcelGoldenWhenSameBusinessDataOtherwiseKeepsSmokeCoverage() throws Exception {
-    Assumptions.assumeTrue(Files.exists(FI_SC_006_EXCEL), "FI-SC-006 desktop Excel golden sample is required");
-    Assumptions.assumeTrue(Files.exists(FI_SC_006_PDF), "FI-SC-006 desktop PDF golden sample is required");
+    Assumptions.assumeTrue(
+        DesktopFixtureAccess.isReadable(FI_SC_006_EXCEL),
+        "FI-SC-006 desktop Excel golden sample must exist and be readable");
+    Assumptions.assumeTrue(
+        DesktopFixtureAccess.isReadable(FI_SC_006_PDF),
+        "FI-SC-006 desktop PDF golden sample must exist and be readable");
 
     QuoteExcelImportPreviewResponse excel = previewExcel();
     QuoteExcelImportPreviewResponse pdf = previewPdf();

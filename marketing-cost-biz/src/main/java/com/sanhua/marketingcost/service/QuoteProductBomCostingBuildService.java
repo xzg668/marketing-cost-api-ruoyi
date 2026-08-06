@@ -13,4 +13,8 @@ public interface QuoteProductBomCostingBuildService {
       Long oaFormItemId, String periodMonth, LocalDate quoteDate);
 
   QuoteBomCostingBuildResponse buildByTask(Long taskId);
+
+  /** 只从不可变最终有效BOM生成当前OA产品行的第2步结算行。 */
+  QuoteBomCostingBuildResponse buildFromEffectiveBom(
+      Long oaFormItemId, String effectiveBuildBatchId);
 }

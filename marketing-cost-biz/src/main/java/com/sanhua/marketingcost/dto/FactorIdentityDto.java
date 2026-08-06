@@ -14,6 +14,9 @@ public class FactorIdentityDto {
   private String shortName;
   private String priceSource;
   private String identityHash;
+  private String canonicalFactorKey;
+  private Long canonicalFactorIdentityId;
+  private String identityOrigin;
   private String status;
   private LocalDateTime createdAt;
   private LocalDateTime updatedAt;

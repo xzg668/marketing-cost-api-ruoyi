@@ -1,10 +1,9 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.sanhua.marketingcost.dto.FlattenRequest;
-import com.sanhua.marketingcost.dto.FlattenResult;
 import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.quotebom.FormalBomReadResult;
+import com.sanhua.marketingcost.dto.quotebom.QuoteBomReadContext;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomSourceLineDto;
 import com.sanhua.marketingcost.entity.BomCostingRow;
@@ -17,8 +16,10 @@ import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuoteBomSupplementDetail;
 import com.sanhua.marketingcost.entity.QuoteBomSupplementVersion;
+import com.sanhua.marketingcost.entity.QuoteEffectiveBomNode;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
+import com.sanhua.marketingcost.enums.QuoteMaterialShape;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowSourceRefMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
@@ -30,13 +31,14 @@ import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
+import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
-import com.sanhua.marketingcost.service.BomFlattenService;
 import com.sanhua.marketingcost.service.BomByproductCostRuleQueryService;
 import com.sanhua.marketingcost.service.BomSettlementRuleQueryService;
 import com.sanhua.marketingcost.service.FormalBomReadService;
 import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.QuoteProductBomPreparationService;
+import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomRepository;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.settlement.BomByproductSettlementAdapter;
 import com.sanhua.marketingcost.service.settlement.BomByproductSettlementReadResult;
@@ -62,6 +64,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -81,10 +84,10 @@ public class QuoteProductBomCostingBuildServiceImpl
   private static final String SOURCE_BARE_PRODUCT_BOM = "BARE_PRODUCT_BOM";
   private static final String SOURCE_REFERENCED_PACKAGE = "REFERENCED_PACKAGE";
   private static final String SOURCE_MANUAL_SUPPLEMENT = "MANUAL_SUPPLEMENT";
+  private static final String SOURCE_EFFECTIVE_BOM = "EFFECTIVE_BOM";
   private static final int ACTIVE = 1;
 
   private final QuoteProductBomPreparationService preparationService;
-  private final BomFlattenService flattenService;
   private final FormalBomReadService formalBomReadService;
   private final BomSettlementRuleQueryService settlementRuleQueryService;
   private final BomByproductCostRuleQueryService byproductRuleQueryService;
@@ -101,10 +104,12 @@ public class QuoteProductBomCostingBuildServiceImpl
   private final BomCostingRowSourceRefMapper sourceRefMapper;
   private final BomCostingRowSubRefMapper subRefMapper;
   private final OaFormItemMapper oaFormItemMapper;
+  private final QuoteEffectiveBomRepository effectiveBomRepository;
+  private final BomRawHierarchyMapper rawHierarchyMapper;
 
+  @Autowired
   public QuoteProductBomCostingBuildServiceImpl(
       QuoteProductBomPreparationService preparationService,
-      BomFlattenService flattenService,
       FormalBomReadService formalBomReadService,
       BomSettlementRuleQueryService settlementRuleQueryService,
       BomByproductCostRuleQueryService byproductRuleQueryService,
@@ -120,9 +125,10 @@ public class QuoteProductBomCostingBuildServiceImpl
       BomCostingRowMapper costingRowMapper,
       BomCostingRowSourceRefMapper sourceRefMapper,
       BomCostingRowSubRefMapper subRefMapper,
-      OaFormItemMapper oaFormItemMapper) {
+      OaFormItemMapper oaFormItemMapper,
+      QuoteEffectiveBomRepository effectiveBomRepository,
+      BomRawHierarchyMapper rawHierarchyMapper) {
     this.preparationService = preparationService;
-    this.flattenService = flattenService;
     this.formalBomReadService = formalBomReadService;
     this.settlementRuleQueryService = settlementRuleQueryService;
     this.byproductRuleQueryService = byproductRuleQueryService;
@@ -139,6 +145,49 @@ public class QuoteProductBomCostingBuildServiceImpl
     this.sourceRefMapper = sourceRefMapper;
     this.subRefMapper = subRefMapper;
     this.oaFormItemMapper = oaFormItemMapper;
+    this.effectiveBomRepository = effectiveBomRepository;
+    this.rawHierarchyMapper = rawHierarchyMapper;
+  }
+
+  /** 保留旧单元测试和非Spring调用的构造方式；effective专用入口要求完整依赖。 */
+  public QuoteProductBomCostingBuildServiceImpl(
+      QuoteProductBomPreparationService preparationService,
+      FormalBomReadService formalBomReadService,
+      BomSettlementRuleQueryService settlementRuleQueryService,
+      BomByproductCostRuleQueryService byproductRuleQueryService,
+      BomByproductSettlementAdapter byproductSettlementAdapter,
+      BomSettlementRowBuildEngine buildEngine,
+      QuoteBomPreparationRecordMapper preparationRecordMapper,
+      QuoteBomStatusMapper statusMapper,
+      BomSupplementTaskMapper taskMapper,
+      QuoteBomSupplementVersionMapper supplementVersionMapper,
+      QuoteBomSupplementDetailMapper supplementDetailMapper,
+      QuoteBomPackageReferenceMapper packageReferenceMapper,
+      QuoteBomPackageReferenceDetailMapper packageReferenceDetailMapper,
+      BomCostingRowMapper costingRowMapper,
+      BomCostingRowSourceRefMapper sourceRefMapper,
+      BomCostingRowSubRefMapper subRefMapper,
+      OaFormItemMapper oaFormItemMapper) {
+    this(
+        preparationService,
+        formalBomReadService,
+        settlementRuleQueryService,
+        byproductRuleQueryService,
+        byproductSettlementAdapter,
+        buildEngine,
+        preparationRecordMapper,
+        statusMapper,
+        taskMapper,
+        supplementVersionMapper,
+        supplementDetailMapper,
+        packageReferenceMapper,
+        packageReferenceDetailMapper,
+        costingRowMapper,
+        sourceRefMapper,
+        subRefMapper,
+        oaFormItemMapper,
+        null,
+        null);
   }
 
   @Override
@@ -185,6 +234,54 @@ public class QuoteProductBomCostingBuildServiceImpl
     return build(record, task, true, null, LocalDate.now());
   }
 
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public QuoteBomCostingBuildResponse buildFromEffectiveBom(
+      Long oaFormItemId, String effectiveBuildBatchId) {
+    if (oaFormItemId == null) {
+      throw new QuoteIngestException("报价产品行 ID 不能为空");
+    }
+    String buildBatchId = trimToNull(effectiveBuildBatchId);
+    if (buildBatchId == null) {
+      throw new QuoteIngestException("最终有效BOM构建编号不能为空");
+    }
+    if (effectiveBomRepository == null) {
+      throw new IllegalStateException("最终有效BOM仓储未配置");
+    }
+    QuoteBomPreparationRecord record = loadActiveRecordByItem(oaFormItemId);
+    if (record == null) {
+      throw new QuoteIngestException("报价产品行尚未完成 BOM 准备");
+    }
+    requireBuildable(record, null, false);
+    String periodMonth = requiredText(record.getCostPeriodMonth(), "BOM准备记录核算月份");
+    List<QuoteEffectiveBomNode> nodes =
+        effectiveBomRepository.findNodesByBuildBatchId(buildBatchId);
+    if (nodes == null || nodes.isEmpty()) {
+      throw new QuoteIngestException("最终有效BOM不存在: " + buildBatchId);
+    }
+    validateEffectiveNodes(record, buildBatchId, periodMonth, nodes);
+    requireNoManualRows(record, periodMonth);
+    List<PreparedLine> lines = effectiveLines(record, nodes);
+    cleanupExisting(record, periodMonth);
+    DirectBuildResult built =
+        applyRulesAndWrite(
+            record,
+            YearMonth.parse(periodMonth).atDay(1),
+            periodMonth,
+            lines,
+            buildBatchId);
+    updateBuildBatch(record, buildBatchId, periodMonth);
+    return response(
+        record,
+        built.buildBatchId(),
+        built.rowsWritten(),
+        built.sourceRefsWritten(),
+        built.subtreeRequiredCount(),
+        built.sourceTypeCounts(),
+        built.warnings(),
+        periodMonth);
+  }
+
   private QuoteBomCostingBuildResponse build(
       QuoteBomPreparationRecord record,
       BomSupplementTask task,
@@ -209,32 +306,24 @@ public class QuoteProductBomCostingBuildServiceImpl
       LocalDate quoteDate,
       String periodMonth,
       String sourceType) {
+    List<PreparedLine> lines =
+        loadFormalLines(record, sourceType, periodMonth, quoteDate);
+    if (lines.isEmpty()) {
+      throw new QuoteIngestException(
+          "正式 BOM 准备结果为空，不能生成结算行");
+    }
     cleanupExisting(record, periodMonth);
-    FlattenRequest request = new FlattenRequest();
-    request.setMode("BY_OA");
-    request.setOaNo(record.getOaNo());
-    request.setOaFormItemId(record.getOaFormItemId());
-    request.setTopProductCode(record.getQuoteProductCode());
-    QuoteDataOrganization organization = requiredOrganization(record);
-    request.setPriceOrgCode(organization.priceOrgCode());
-    request.setMaterialOrganizationCode(organization.materialOrganizationCode());
-    request.setBusinessUnitType(resolveBusinessUnitType(record.getOaFormItemId()));
-    request.setPeriodMonth(periodMonth);
-    request.setAsOfDate(quoteDate);
-    FlattenResult flattened = flattenService.flatten(request);
-    List<BomCostingRow> rows = loadCurrentCostingRows(record, periodMonth);
-    attachRowsToQuoteItem(record, rows);
-    int refs = writeFormalSourceRefs(record, rows, sourceType);
-    String batchId = rows.isEmpty() ? null : rows.get(0).getBuildBatchId();
-    updateBuildBatch(record, batchId, periodMonth);
+    DirectBuildResult built =
+        applyRulesAndWrite(record, quoteDate, periodMonth, lines);
+    updateBuildBatch(record, built.buildBatchId(), periodMonth);
     return response(
         record,
-        batchId,
-        rows.size(),
-        refs,
-        flattened.getSubtreeRequiredCount(),
-        countSourceTypes(sourceType, refs),
-        flattened.getWarnings(),
+        built.buildBatchId(),
+        built.rowsWritten(),
+        built.sourceRefsWritten(),
+        built.subtreeRequiredCount(),
+        built.sourceTypeCounts(),
+        built.warnings(),
         periodMonth);
   }
 
@@ -282,7 +371,17 @@ public class QuoteProductBomCostingBuildServiceImpl
     String formalProductCode = formalProductCode(record);
     QuoteDataOrganization organization = requiredOrganization(record);
     FormalBomReadResult formal =
-        formalBomReadService.read(formalProductCode, periodMonth, null, quoteDate, organization);
+        formalBomReadService.read(
+            new QuoteBomReadContext(
+                record.getOaNo(),
+                record.getOaFormItemId(),
+                formalProductCode,
+                periodMonth,
+                organization.priceOrgCode(),
+                organization.materialOrganizationCode(),
+                resolveBusinessUnitType(record.getOaFormItemId()),
+                "主制造",
+                quoteDate));
     if (formal == null || !formal.found()) {
       throw new QuoteIngestException(
           "正式 BOM 不可用: " + (formal == null ? formalProductCode + " 未返回读取结果" : formal.gapMessage()));
@@ -463,11 +562,167 @@ public class QuoteProductBomCostingBuildServiceImpl
     return lines;
   }
 
+  private List<PreparedLine> effectiveLines(
+      QuoteBomPreparationRecord record, List<QuoteEffectiveBomNode> nodes) {
+    Map<Long, com.sanhua.marketingcost.entity.BomRawHierarchy> rawById = new HashMap<>();
+    if (rawHierarchyMapper != null) {
+      List<Long> sourceIds =
+          nodes.stream()
+              .map(QuoteEffectiveBomNode::getSourceHierarchyId)
+              .filter(java.util.Objects::nonNull)
+              .distinct()
+              .toList();
+      if (!sourceIds.isEmpty()) {
+        List<com.sanhua.marketingcost.entity.BomRawHierarchy> sourceRows =
+            rawHierarchyMapper.selectBatchIds(sourceIds);
+        for (com.sanhua.marketingcost.entity.BomRawHierarchy row
+            : sourceRows == null
+                ? List.<com.sanhua.marketingcost.entity.BomRawHierarchy>of()
+                : sourceRows) {
+          if (row.getId() != null) {
+            rawById.put(row.getId(), row);
+          }
+        }
+      }
+    }
+
+    Map<String, QuoteEffectiveBomNode> nodeByKey = new HashMap<>();
+    for (QuoteEffectiveBomNode node : nodes) {
+      QuoteEffectiveBomNode duplicate = nodeByKey.put(node.getNodeKey(), node);
+      if (duplicate != null) {
+        throw new QuoteIngestException("最终有效BOM节点键重复: " + node.getNodeKey());
+      }
+    }
+    List<PreparedLine> result = new ArrayList<>();
+    for (QuoteEffectiveBomNode node : nodes.stream()
+        .sorted(
+            Comparator.comparing(
+                    QuoteEffectiveBomNode::getNodePath,
+                    Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(
+                    QuoteEffectiveBomNode::getSortSeq,
+                    Comparator.nullsLast(Comparator.naturalOrder())))
+        .toList()) {
+      com.sanhua.marketingcost.entity.BomRawHierarchy raw =
+          rawById.get(node.getSourceHierarchyId());
+      if (raw != null
+          && (!java.util.Objects.equals(
+                  trimToNull(raw.getMaterialCode()),
+                  trimToNull(node.getMaterialCode()))
+              || !java.util.Objects.equals(
+                  trimToNull(raw.getBuildBatchId()),
+                  trimToNull(node.getSourceBomBatchId())))) {
+        throw new QuoteIngestException(
+            "最终有效BOM节点与冻结来源层级证据不一致: " + node.getNodeKey());
+      }
+      QuoteEffectiveBomNode parent = nodeByKey.get(node.getParentNodeKey());
+      result.add(
+          new PreparedLine(
+              SOURCE_EFFECTIVE_BOM,
+              node.getSortSeq(),
+              node.getNodeLevel(),
+              parent == null ? null : parent.getMaterialCode(),
+              node.getMaterialCode(),
+              node.getMaterialName(),
+              node.getMaterialSpec(),
+              settlementShapeLabel(node),
+              raw == null ? null : raw.getMaterialCategory1(),
+              raw == null ? null : raw.getMaterialCategory2(),
+              raw == null ? null : raw.getSourceCategory(),
+              raw == null ? null : raw.getCostElementCode(),
+              raw == null ? null : raw.getBomPurpose(),
+              raw == null ? null : raw.getBomVersion(),
+              node.getQtyPerParent(),
+              node.getQtyPerTop(),
+              node.getNodePath(),
+              node.getSourceHierarchyId(),
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              node.getTopProductCode(),
+              null,
+              null,
+              raw == null ? null : raw.getSourceU9RowId(),
+              node.getSourceNodePath(),
+              node.getPriceOrgCode(),
+              record.getMaterialOrganizationCode()));
+    }
+    return result;
+  }
+
+  /**
+   * 最终有效 BOM 内部使用稳定英文形态编码，但现有结算引擎及其下游快照沿用 U9 中文形态契约。
+   * 在唯一接入边界完成转换，保证无形态覆盖时最终 BOM 替换原始 BOM 后的结算行为完全一致。
+   */
+  private static String settlementShapeLabel(QuoteEffectiveBomNode node) {
+    String effectiveShape = node == null ? null : trimToNull(node.getEffectiveMaterialShape());
+    if (effectiveShape == null) {
+      throw new QuoteIngestException(
+          "最终有效BOM节点缺少最终形态: " + (node == null ? "<空节点>" : node.getMaterialCode()));
+    }
+    try {
+      return QuoteMaterialShape.fromU9(effectiveShape).getLabel();
+    } catch (IllegalArgumentException exception) {
+      throw new QuoteIngestException(
+          "最终有效BOM节点形态非法: " + node.getMaterialCode() + " / " + effectiveShape);
+    }
+  }
+
+  private void validateEffectiveNodes(
+      QuoteBomPreparationRecord record,
+      String buildBatchId,
+      String periodMonth,
+      List<QuoteEffectiveBomNode> nodes) {
+    String expectedProduct = requiredText(formalProductCode(record), "最终BOM顶层产品");
+    String expectedOrg = requiredOrganization(record).priceOrgCode();
+    for (QuoteEffectiveBomNode node : nodes) {
+      if (!buildBatchId.equals(trimToNull(node.getBuildBatchId()))
+          || !expectedProduct.equals(trimToNull(node.getTopProductCode()))
+          || !periodMonth.equals(trimToNull(node.getCostPeriodMonth()))
+          || !expectedOrg.equals(trimToNull(node.getPriceOrgCode()))) {
+        throw new QuoteIngestException(
+            "最终有效BOM节点与当前产品、月份、组织或构建编号不一致");
+      }
+      if (trimToNull(node.getNodeKey()) == null
+          || trimToNull(node.getNodePath()) == null
+          || trimToNull(node.getMaterialCode()) == null) {
+        throw new QuoteIngestException("最终有效BOM存在缺少节点键、路径或料号的记录");
+      }
+    }
+  }
+
+  private void requireNoManualRows(
+      QuoteBomPreparationRecord record, String periodMonth) {
+    Long manualCount =
+        costingRowMapper.selectCount(
+            Wrappers.<BomCostingRow>lambdaQuery()
+                .eq(BomCostingRow::getOaNo, record.getOaNo())
+                .eq(BomCostingRow::getOaFormItemId, record.getOaFormItemId())
+                .eq(BomCostingRow::getTopProductCode, record.getQuoteProductCode())
+                .eq(BomCostingRow::getPeriodMonth, periodMonth)
+                .eq(BomCostingRow::getManualModified, 1));
+    if (manualCount != null && manualCount > 0) {
+      throw new QuoteIngestException("当前产品存在人工修改的结算行，不能自动重建覆盖");
+    }
+  }
+
   private DirectBuildResult applyRulesAndWrite(
       QuoteBomPreparationRecord record,
       LocalDate quoteDate,
       String periodMonth,
       List<PreparedLine> inputLines) {
+    return applyRulesAndWrite(record, quoteDate, periodMonth, inputLines, null);
+  }
+
+  private DirectBuildResult applyRulesAndWrite(
+      QuoteBomPreparationRecord record,
+      LocalDate quoteDate,
+      String periodMonth,
+      List<PreparedLine> inputLines,
+      String requiredBuildBatchId) {
     List<PreparedLine> lines =
         inputLines.stream()
             .filter(line -> trimToNull(line.materialCode()) != null)
@@ -481,7 +736,10 @@ public class QuoteProductBomCostingBuildServiceImpl
       }
     }
 
-    String buildBatchId = generateBuildBatchId();
+    String buildBatchId =
+        requiredBuildBatchId == null
+            ? generateBuildBatchId()
+            : requiredText(requiredBuildBatchId, "最终有效BOM构建编号");
     LocalDateTime builtAt = LocalDateTime.now();
     QuoteDataOrganization organization = requiredOrganization(record);
     String settlementScope = resolveBusinessUnitType(record.getOaFormItemId());
@@ -552,32 +810,6 @@ public class QuoteProductBomCostingBuildServiceImpl
       }
     }
     return rows;
-  }
-
-  private void attachRowsToQuoteItem(QuoteBomPreparationRecord record, List<BomCostingRow> rows) {
-    if (rows == null || rows.isEmpty()) {
-      return;
-    }
-    QuoteDataOrganization organization = requiredOrganization(record);
-    for (BomCostingRow row : rows) {
-      row.setOaFormItemId(record.getOaFormItemId());
-      if (!StringUtils.hasText(row.getPriceOrgCode())) {
-        row.setPriceOrgCode(organization.priceOrgCode());
-      }
-      if (!StringUtils.hasText(row.getMaterialOrganizationCode())) {
-        row.setMaterialOrganizationCode(organization.materialOrganizationCode());
-      }
-      if (row.getManualModified() == null) {
-        row.setManualModified(0);
-      }
-      BomCostingRow patch = new BomCostingRow();
-      patch.setId(row.getId());
-      patch.setOaFormItemId(record.getOaFormItemId());
-      patch.setPriceOrgCode(row.getPriceOrgCode());
-      patch.setMaterialOrganizationCode(row.getMaterialOrganizationCode());
-      patch.setManualModified(row.getManualModified());
-      costingRowMapper.updateById(patch);
-    }
   }
 
   private QuoteDataOrganization requiredOrganization(QuoteBomPreparationRecord record) {
@@ -720,26 +952,6 @@ public class QuoteProductBomCostingBuildServiceImpl
     return count;
   }
 
-  private int writeFormalSourceRefs(
-      QuoteBomPreparationRecord record, List<BomCostingRow> rows, String sourceType) {
-    int count = 0;
-    for (BomCostingRow row : rows) {
-      BomCostingRowSourceRef ref = new BomCostingRowSourceRef();
-      ref.setCostingRowId(row.getId());
-      ref.setOaNo(record.getOaNo());
-      ref.setOaFormItemId(record.getOaFormItemId());
-      ref.setQuoteProductCode(record.getQuoteProductCode());
-      ref.setSourcePartType(sourceType);
-      ref.setSourceRawHierarchyId(row.getRawHierarchyNodeId());
-      ref.setPreparationId(record.getId());
-      ref.setSourceTaskId(record.getTaskId());
-      ref.setSourcePath(row.getPath());
-      sourceRefMapper.insert(ref);
-      count++;
-    }
-    return count;
-  }
-
   private void requireBuildable(
       QuoteBomPreparationRecord record, BomSupplementTask task, boolean requireApprovedTask) {
     if (!PREPARATION_READY.equals(record.getPreparationStatus())) {
@@ -779,29 +991,19 @@ public class QuoteProductBomCostingBuildServiceImpl
           Wrappers.<BomCostingRowSubRef>lambdaQuery()
               .in(BomCostingRowSubRef::getCostingRowId, existingRowIds));
     }
-    sourceRefMapper.delete(
-        Wrappers.<BomCostingRowSourceRef>lambdaQuery()
-            .eq(BomCostingRowSourceRef::getOaNo, record.getOaNo())
-            .eq(BomCostingRowSourceRef::getOaFormItemId, record.getOaFormItemId())
-            .eq(BomCostingRowSourceRef::getQuoteProductCode, record.getQuoteProductCode()));
+    if (!existingRowIds.isEmpty()) {
+      sourceRefMapper.delete(
+          Wrappers.<BomCostingRowSourceRef>lambdaQuery()
+              .in(
+                  BomCostingRowSourceRef::getCostingRowId,
+                  existingRowIds));
+    }
     costingRowMapper.delete(
         Wrappers.<BomCostingRow>lambdaQuery()
             .eq(BomCostingRow::getOaNo, record.getOaNo())
             .eq(BomCostingRow::getOaFormItemId, record.getOaFormItemId())
             .eq(BomCostingRow::getTopProductCode, record.getQuoteProductCode())
             .eq(BomCostingRow::getPeriodMonth, periodMonth));
-  }
-
-  private List<BomCostingRow> loadCurrentCostingRows(
-      QuoteBomPreparationRecord record, String periodMonth) {
-    return costingRowMapper.selectList(
-        Wrappers.<BomCostingRow>lambdaQuery()
-            .eq(BomCostingRow::getOaNo, record.getOaNo())
-            .eq(BomCostingRow::getOaFormItemId, record.getOaFormItemId())
-            .eq(BomCostingRow::getTopProductCode, record.getQuoteProductCode())
-            .eq(BomCostingRow::getPeriodMonth, periodMonth)
-            .orderByAsc(BomCostingRow::getPath)
-            .orderByAsc(BomCostingRow::getId));
   }
 
   private QuoteBomPreparationRecord loadActiveRecordByItem(Long oaFormItemId) {
@@ -990,6 +1192,14 @@ public class QuoteProductBomCostingBuildServiceImpl
 
   private static String trimToNull(String value) {
     return StringUtils.hasText(value) ? value.trim() : null;
+  }
+
+  private static String requiredText(String value, String field) {
+    String normalized = trimToNull(value);
+    if (normalized == null) {
+      throw new QuoteIngestException(field + "不能为空");
+    }
+    return normalized;
   }
 
   private record PreparedLine(

@@ -58,6 +58,14 @@ public class BomRawHierarchy {
   /** U9 工序号（如 030/040），用于区分和追溯同父同子多行 BOM。 */
   private String processSeq;
 
+  /** U9 子项类型：标准/替代；旧层级记录保持 NULL。 */
+  @TableField("child_type")
+  private String childType;
+
+  /** 同一 BOM 位置的标准/替代组稳定键；旧层级记录保持 NULL。 */
+  @TableField("alternative_group_key")
+  private String alternativeGroupKey;
+
   // ============================ 用量双口径 ============================
 
   /** 相对直接父用量 */
@@ -246,6 +254,22 @@ public class BomRawHierarchy {
 
   public void setProcessSeq(String processSeq) {
     this.processSeq = processSeq;
+  }
+
+  public String getChildType() {
+    return childType;
+  }
+
+  public void setChildType(String childType) {
+    this.childType = childType;
+  }
+
+  public String getAlternativeGroupKey() {
+    return alternativeGroupKey;
+  }
+
+  public void setAlternativeGroupKey(String alternativeGroupKey) {
+    this.alternativeGroupKey = alternativeGroupKey;
   }
 
   public BigDecimal getQtyPerParent() {

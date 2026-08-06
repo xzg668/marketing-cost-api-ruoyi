@@ -14,7 +14,9 @@ import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmationRow;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmationSummary;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeImportMissingRequest;
 import com.sanhua.marketingcost.entity.BomCostingRow;
+import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
 import com.sanhua.marketingcost.entity.MaterialPriceType;
+import com.sanhua.marketingcost.entity.MaterialScrapRef;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
@@ -25,6 +27,7 @@ import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmBatch;
 import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmItem;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
+import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
 import com.sanhua.marketingcost.mapper.MaterialPriceTypeMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
@@ -34,11 +37,13 @@ import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmBatchMapper;
 import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmItemMapper;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.MakePartPriceGenerationService;
+import com.sanhua.marketingcost.service.MakePartScrapMappingService;
 import com.sanhua.marketingcost.service.PackageComponentSnapshotService;
 import com.sanhua.marketingcost.service.PricePrepareItemClassifier;
 import com.sanhua.marketingcost.service.QuotePriceTypeConfirmationService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
@@ -70,6 +75,7 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
   static final String STATUS_CONFIRMED = QuotePriceTypeConfirmItem.STATUS_CONFIRMED;
   static final String STATUS_MISSING_TYPE = QuotePriceTypeConfirmItem.STATUS_MISSING_TYPE;
   static final String STATUS_CHILD_MISSING_TYPE = QuotePriceTypeConfirmItem.STATUS_CHILD_MISSING_TYPE;
+  private static final String ROW_TYPE_SPECIAL_ROLLUP_PARENT = "SPECIAL_ROLLUP_PARENT";
 
   private static final DateTimeFormatter CONFIRM_NO_TIME_FORMAT =
       DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
@@ -78,12 +84,14 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
   private final OaFormItemMapper oaFormItemMapper;
   private final QuoteBomStatusMapper quoteBomStatusMapper;
   private final BomCostingRowMapper bomCostingRowMapper;
+  private final BomCostingRowSubRefMapper bomCostingRowSubRefMapper;
   private final QuoteBomConfirmationMapper bomConfirmationMapper;
   private final MaterialPriceRouterService materialPriceRouterService;
   private final MaterialPriceTypeMapper materialPriceTypeMapper;
   private final PricePrepareItemClassifier itemClassifier;
   private final PackageComponentSnapshotService packageSnapshotService;
   private final MakePartPriceGenerationService makePartPriceGenerationService;
+  private final MakePartScrapMappingService makePartScrapMappingService;
   private final QuotePriceTypeConfirmBatchMapper batchMapper;
   private final QuotePriceTypeConfirmItemMapper itemMapper;
   private final QuotePriceTypeConfirmationInvalidationService priceTypeInvalidationService;
@@ -94,12 +102,14 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
       OaFormItemMapper oaFormItemMapper,
       QuoteBomStatusMapper quoteBomStatusMapper,
       BomCostingRowMapper bomCostingRowMapper,
+      BomCostingRowSubRefMapper bomCostingRowSubRefMapper,
       QuoteBomConfirmationMapper bomConfirmationMapper,
       MaterialPriceRouterService materialPriceRouterService,
       MaterialPriceTypeMapper materialPriceTypeMapper,
       PricePrepareItemClassifier itemClassifier,
       PackageComponentSnapshotService packageSnapshotService,
       MakePartPriceGenerationService makePartPriceGenerationService,
+      MakePartScrapMappingService makePartScrapMappingService,
       QuotePriceTypeConfirmBatchMapper batchMapper,
       QuotePriceTypeConfirmItemMapper itemMapper,
       QuotePriceTypeConfirmationInvalidationService priceTypeInvalidationService,
@@ -108,12 +118,14 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
     this.bomCostingRowMapper = bomCostingRowMapper;
+    this.bomCostingRowSubRefMapper = bomCostingRowSubRefMapper;
     this.bomConfirmationMapper = bomConfirmationMapper;
     this.materialPriceRouterService = materialPriceRouterService;
     this.materialPriceTypeMapper = materialPriceTypeMapper;
     this.itemClassifier = itemClassifier;
     this.packageSnapshotService = packageSnapshotService;
     this.makePartPriceGenerationService = makePartPriceGenerationService;
+    this.makePartScrapMappingService = makePartScrapMappingService;
     this.batchMapper = batchMapper;
     this.itemMapper = itemMapper;
     this.priceTypeInvalidationService = priceTypeInvalidationService;
@@ -411,10 +423,14 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     if (plans == null || plans.isEmpty()) {
       plans = defaultPlans(rows);
     }
+    Map<Long, List<BomCostingRowSubRef>> rollupChildrenByRowId =
+        loadSpecialRollupChildren(plans);
     List<MakePartPriceCalcRow> makePartStructureRows = List.of();
     if (plans.stream()
-        .map(PricePreparePlanItem::getItemType)
-        .anyMatch(PricePrepareItemClassifierImpl.ITEM_TYPE_MAKE_PART::equals)) {
+        .anyMatch(
+            plan ->
+                PricePrepareItemClassifierImpl.ITEM_TYPE_MAKE_PART.equals(plan.getItemType())
+                    && !isSpecialRollupParent(plan))) {
       makePartStructureRows =
           makePartPriceGenerationService.previewStructureByOa(
               scope.oaNo(), scope.businessUnitType(), scope.periodMonth());
@@ -425,12 +441,51 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
       if (PricePrepareItemClassifierImpl.ITEM_TYPE_PACKAGE_COMPONENT.equals(type)) {
         result.add(packageParentRow(scope, plan));
       } else if (PricePrepareItemClassifierImpl.ITEM_TYPE_MAKE_PART.equals(type)) {
-        result.add(makeParentRow(scope, plan, makePartStructureRows));
+        result.add(
+            makeParentRow(
+                scope,
+                plan,
+                makePartStructureRows,
+                rollupChildrenByRowId.getOrDefault(plan.getBomRowId(), List.of())));
       } else {
         result.add(priceableRow(scope, plan.getBomRow(), OBJECT_NORMAL, plan.getMaterialCode(), plan.getMaterialName(), null, plan.getBomRowId()));
       }
     }
     return result;
+  }
+
+  private Map<Long, List<BomCostingRowSubRef>> loadSpecialRollupChildren(
+      List<PricePreparePlanItem> plans) {
+    List<Long> rowIds =
+        plans == null
+            ? List.of()
+            : plans.stream()
+                .filter(this::isSpecialRollupParent)
+                .map(PricePreparePlanItem::getBomRowId)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+    if (rowIds.isEmpty()) {
+      return Map.of();
+    }
+    List<BomCostingRowSubRef> refs =
+        bomCostingRowSubRefMapper.selectSpecialRollupChildren(rowIds);
+    if (refs == null || refs.isEmpty()) {
+      return Map.of();
+    }
+    Map<Long, List<BomCostingRowSubRef>> result = new LinkedHashMap<>();
+    for (BomCostingRowSubRef ref : refs) {
+      if (ref != null && ref.getCostingRowId() != null) {
+        result.computeIfAbsent(ref.getCostingRowId(), ignored -> new ArrayList<>()).add(ref);
+      }
+    }
+    return result;
+  }
+
+  private boolean isSpecialRollupParent(PricePreparePlanItem plan) {
+    BomCostingRow row = plan == null ? null : plan.getBomRow();
+    return row != null
+        && ROW_TYPE_SPECIAL_ROLLUP_PARENT.equals(trimToNull(row.getSettlementRowType()));
   }
 
   private List<PricePreparePlanItem> defaultPlans(List<BomCostingRow> rows) {
@@ -448,7 +503,13 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
   }
 
   private QuotePriceTypeConfirmationRow makeParentRow(
-      Scope scope, PricePreparePlanItem plan, List<MakePartPriceCalcRow> structureRows) {
+      Scope scope,
+      PricePreparePlanItem plan,
+      List<MakePartPriceCalcRow> structureRows,
+      List<BomCostingRowSubRef> rollupChildren) {
+    if (isSpecialRollupParent(plan)) {
+      return specialRollupParentRow(scope, plan, rollupChildren);
+    }
     BomCostingRow row = plan.getBomRow();
     QuotePriceTypeConfirmationRow parent = parentRow(row, OBJECT_MAKE_PARENT, plan.getMaterialCode(), plan.getMaterialName());
     List<MakePartPriceCalcRow> calcRows =
@@ -493,6 +554,73 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
                 OBJECT_MAKE_SCRAP,
                 scrapCode,
                 calcRow.getScrapName(),
+                plan.getMaterialCode(),
+                plan.getBomRowId(),
+                null));
+      }
+    }
+    parent.getChildren().addAll(children.values());
+    aggregateParent(parent);
+    return parent;
+  }
+
+  /**
+   * 上卷父件只展开命中规则并冻结在 sub_ref 的原材料，不再把该父件的全部 U9
+   * 直接子件重复展开。未命中的兄弟子件会继续作为独立 BOM 结算行进入价格类型确认。
+   */
+  private QuotePriceTypeConfirmationRow specialRollupParentRow(
+      Scope scope,
+      PricePreparePlanItem plan,
+      List<BomCostingRowSubRef> rollupChildren) {
+    BomCostingRow row = plan.getBomRow();
+    QuotePriceTypeConfirmationRow parent =
+        parentRow(row, OBJECT_MAKE_PARENT, plan.getMaterialCode(), plan.getMaterialName());
+    Map<String, RollupRawMaterial> rawMaterials = new LinkedHashMap<>();
+    for (BomCostingRowSubRef ref :
+        rollupChildren == null ? List.<BomCostingRowSubRef>of() : rollupChildren) {
+      String rawCode = trimToNull(ref == null ? null : ref.getSubMaterialCode());
+      if (rawCode == null) {
+        continue;
+      }
+      rawMaterials
+          .computeIfAbsent(rawCode, RollupRawMaterial::new)
+          .accept(ref);
+    }
+    if (rawMaterials.isEmpty()) {
+      parent.setTypeStatus(STATUS_CHILD_MISSING_TYPE);
+      parent.setMessage("缺上卷命中子件快照，无法展开原材料/废料");
+      return parent;
+    }
+
+    Map<String, QuotePriceTypeConfirmationRow> children = new LinkedHashMap<>();
+    for (RollupRawMaterial raw : rawMaterials.values()) {
+      children.put(
+          OBJECT_MAKE_RAW + ":" + raw.materialCode,
+          priceableRow(
+              scope,
+              row,
+              OBJECT_MAKE_RAW,
+              raw.materialCode,
+              raw.materialName,
+              plan.getMaterialCode(),
+              plan.getBomRowId(),
+              raw.quantity));
+      List<MaterialScrapRef> mappings =
+          makePartScrapMappingService.listMappings(raw.materialCode, scope.businessUnitType());
+      for (MaterialScrapRef mapping :
+          mappings == null ? List.<MaterialScrapRef>of() : mappings) {
+        String scrapCode = trimToNull(mapping == null ? null : mapping.getScrapCode());
+        if (scrapCode == null) {
+          continue;
+        }
+        children.putIfAbsent(
+            OBJECT_MAKE_SCRAP + ":" + scrapCode,
+            priceableRow(
+                scope,
+                row,
+                OBJECT_MAKE_SCRAP,
+                scrapCode,
+                mapping.getScrapName(),
                 plan.getMaterialCode(),
                 plan.getBomRowId(),
                 null));
@@ -906,6 +1034,31 @@ public class QuotePriceTypeConfirmationServiceImpl implements QuotePriceTypeConf
     }
     String value = principal.toString();
     return StringUtils.hasText(value) ? value : fallback;
+  }
+
+  private static final class RollupRawMaterial {
+    private final String materialCode;
+    private String materialName;
+    private BigDecimal quantity;
+
+    private RollupRawMaterial(String materialCode) {
+      this.materialCode = materialCode;
+    }
+
+    private void accept(BomCostingRowSubRef ref) {
+      if (ref == null) {
+        return;
+      }
+      if (!StringUtils.hasText(materialName) && StringUtils.hasText(ref.getSubMaterialName())) {
+        materialName = ref.getSubMaterialName().trim();
+      }
+      if (ref.getSubQtyPerParent() != null) {
+        quantity =
+            quantity == null
+                ? ref.getSubQtyPerParent()
+                : quantity.add(ref.getSubQtyPerParent());
+      }
+    }
   }
 
   private record Scope(

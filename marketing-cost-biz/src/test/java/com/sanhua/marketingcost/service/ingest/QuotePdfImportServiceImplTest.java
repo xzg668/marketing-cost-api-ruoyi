@@ -136,8 +136,8 @@ class QuotePdfImportServiceImplTest {
             new PdfSample(Path.of("/Users/xiexicheng/Desktop/demo3/空白：批量品.pdf"), "FI-SR-005", "MASS_PRODUCT"),
             new PdfSample(Path.of("/Users/xiexicheng/Desktop/demo3/空白：衍生品.pdf"), "FI-SR-005", "DERIVED_PRODUCT"));
     Assumptions.assumeTrue(
-        samples.stream().allMatch(sample -> Files.exists(sample.path())),
-        "six desktop PDF samples are required for T4 all-template smoke test");
+        samples.stream().allMatch(sample -> DesktopFixtureAccess.isReadable(sample.path())),
+        "six readable desktop PDF samples are required for T4 all-template smoke test");
 
     QuotePdfImportServiceImpl service =
         new QuotePdfImportServiceImpl(
@@ -162,7 +162,9 @@ class QuotePdfImportServiceImplTest {
   @Test
   void realFiSc006SanhuaPdfPreviewParsesHeaderNumbersAndDenseItemWhenAvailable() throws Exception {
     Path file = Path.of("/Users/xiexicheng/Desktop/demo4/打印 - SANHUA三花.pdf");
-    Assumptions.assumeTrue(Files.exists(file), "real FI-SC-006 SANHUA desktop PDF sample is required");
+    Assumptions.assumeTrue(
+        DesktopFixtureAccess.isReadable(file),
+        "real FI-SC-006 SANHUA desktop PDF sample must exist and be readable");
     QuotePdfImportServiceImpl service =
         new QuotePdfImportServiceImpl(
             new QuoteNormalizeService(new QuoteIngestRequestValidator(), new QuoteClassifyService()),
@@ -192,7 +194,9 @@ class QuotePdfImportServiceImplTest {
   @Test
   void realFiSr005SanhuaPdfPreviewParsesBlankOtherMaterialAndDenseItemsWhenAvailable() throws Exception {
     Path file = Path.of("/Users/xiexicheng/Desktop/demo7/FI-SR-005-20260318-0397.pdf");
-    Assumptions.assumeTrue(Files.exists(file), "real FI-SR-005 SANHUA desktop PDF sample is required");
+    Assumptions.assumeTrue(
+        DesktopFixtureAccess.isReadable(file),
+        "real FI-SR-005 SANHUA desktop PDF sample must exist and be readable");
     QuotePdfImportServiceImpl service =
         new QuotePdfImportServiceImpl(
             new QuoteNormalizeService(new QuoteIngestRequestValidator(), new QuoteClassifyService()),

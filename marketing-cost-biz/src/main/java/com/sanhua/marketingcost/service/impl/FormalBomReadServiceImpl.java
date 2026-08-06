@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.impl;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.quotebom.FormalBomReadResult;
+import com.sanhua.marketingcost.dto.quotebom.QuoteBomReadContext;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomSourceLineDto;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
@@ -10,6 +11,9 @@ import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.service.FormalBomReadService;
+import com.sanhua.marketingcost.service.bomalternative.BomAlternativeBranchPrunerImpl;
+import com.sanhua.marketingcost.service.bomalternative.BomAlternativePruneResult;
+import com.sanhua.marketingcost.service.bomalternative.QuoteAwareBomAlternativeResolver;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.Comparator;
@@ -28,6 +32,7 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
   private final BomRawHierarchyMapper bomRawHierarchyMapper;
   private final MaterialMasterRawMapper materialMasterRawMapper;
   private final PlateCommercialMakeBomExpansionService crossOrganizationExpansionService;
+  private final QuoteAwareBomAlternativeResolver quoteAlternativeResolver;
 
   public FormalBomReadServiceImpl(
       BomRawHierarchyMapper bomRawHierarchyMapper, MaterialMasterRawMapper materialMasterRawMapper) {
@@ -35,17 +40,67 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
         bomRawHierarchyMapper,
         materialMasterRawMapper,
         new PlateCommercialMakeBomExpansionService(
-            bomRawHierarchyMapper, materialMasterRawMapper));
+            bomRawHierarchyMapper, materialMasterRawMapper),
+        null);
+  }
+
+  public FormalBomReadServiceImpl(
+      BomRawHierarchyMapper bomRawHierarchyMapper,
+      MaterialMasterRawMapper materialMasterRawMapper,
+      PlateCommercialMakeBomExpansionService crossOrganizationExpansionService) {
+    this(
+        bomRawHierarchyMapper,
+        materialMasterRawMapper,
+        crossOrganizationExpansionService,
+        null);
   }
 
   @Autowired
   public FormalBomReadServiceImpl(
       BomRawHierarchyMapper bomRawHierarchyMapper,
       MaterialMasterRawMapper materialMasterRawMapper,
-      PlateCommercialMakeBomExpansionService crossOrganizationExpansionService) {
+      PlateCommercialMakeBomExpansionService crossOrganizationExpansionService,
+      QuoteAwareBomAlternativeResolver quoteAlternativeResolver) {
     this.bomRawHierarchyMapper = bomRawHierarchyMapper;
     this.materialMasterRawMapper = materialMasterRawMapper;
     this.crossOrganizationExpansionService = crossOrganizationExpansionService;
+    this.quoteAlternativeResolver = quoteAlternativeResolver;
+  }
+
+  @Override
+  public FormalBomReadResult read(QuoteBomReadContext context) {
+    if (context == null) {
+      throw new IllegalArgumentException("报价BOM读取上下文不能为空");
+    }
+    if (quoteAlternativeResolver == null) {
+      throw new IllegalStateException("报价BOM替代选择解析器未配置");
+    }
+    QuoteDataOrganization organization =
+        MaterialOrganization.normalizeQuoteDataOrganization(
+            new QuoteDataOrganization(
+                context.priceOrgCode(),
+                context.materialOrganizationCode()));
+    String normalizedProductCode = trimToNull(context.topProductCode());
+    String normalizedPeriodMonth = normalizePeriodMonth(context.periodMonth());
+    String normalizedBomPurpose = trimToNull(context.bomPurpose());
+    QuoteBomReadContext normalizedContext =
+        new QuoteBomReadContext(
+            trimToNull(context.oaNo()),
+            context.oaFormItemId(),
+            normalizedProductCode,
+            normalizedPeriodMonth,
+            organization.priceOrgCode(),
+            organization.materialOrganizationCode(),
+            trimToNull(context.businessUnitType()),
+            normalizedBomPurpose,
+            context.quoteDate() == null ? LocalDate.now() : context.quoteDate());
+    return readInternal(
+        normalizedProductCode,
+        normalizedPeriodMonth,
+        normalizedBomPurpose,
+        normalizedContext.quoteDate(),
+        organization,
+        normalizedContext);
   }
 
   @Override
@@ -61,16 +116,27 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
       String bomPurpose,
       LocalDate quoteDate,
       QuoteDataOrganization quoteDataOrganization) {
-    QuoteDataOrganization organization =
-        MaterialOrganization.normalizeQuoteDataOrganization(quoteDataOrganization);
-    String normalizedProductCode = trimToNull(productCode);
-    String normalizedPeriodMonth = normalizePeriodMonth(periodMonth);
-    String normalizedBomPurpose = trimToNull(bomPurpose);
+    return readInternal(
+        trimToNull(productCode),
+        normalizePeriodMonth(periodMonth),
+        trimToNull(bomPurpose),
+        quoteDate == null ? LocalDate.now() : quoteDate,
+        MaterialOrganization.normalizeQuoteDataOrganization(
+            quoteDataOrganization),
+        null);
+  }
+
+  private FormalBomReadResult readInternal(
+      String normalizedProductCode,
+      String normalizedPeriodMonth,
+      String normalizedBomPurpose,
+      LocalDate effectiveDate,
+      QuoteDataOrganization organization,
+      QuoteBomReadContext quoteContext) {
     if (normalizedProductCode == null) {
       return new FormalBomReadResult(
           null, normalizedPeriodMonth, normalizedBomPurpose, false, List.of(), "产品料号为空");
     }
-    LocalDate effectiveDate = quoteDate == null ? LocalDate.now() : quoteDate;
 
     List<BomRawHierarchy> rows =
         bomRawHierarchyMapper.selectList(
@@ -112,6 +178,12 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
           "未在 lp_bom_raw_hierarchy 找到有效连通 BOM");
     }
 
+    if (quoteContext != null) {
+      BomAlternativePruneResult pruned =
+          quoteAlternativeResolver.resolve(quoteContext, rows);
+      rows = pruned.nodes();
+    }
+
     PlateCommercialMakeBomExpansionService.ExpansionResult expansion =
         crossOrganizationExpansionService.expand(
             rows,
@@ -121,13 +193,21 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
             "U9",
             organization);
     if (expansion.hasGaps()) {
+      String prefix =
+          quoteContext == null
+              ? ""
+              : BomAlternativeBranchPrunerImpl
+                      .ALT_BRANCH_STRUCTURE_MISSING
+                  + ": ";
       return new FormalBomReadResult(
           normalizedProductCode,
           normalizedPeriodMonth,
           normalizedBomPurpose,
           false,
           List.of(),
-          "跨组织制造 BOM 展开失败：" + String.join("；", expansion.gaps()));
+          prefix
+              + "跨组织制造 BOM 展开失败："
+              + String.join("；", expansion.gaps()));
     }
     rows = expansion.rows();
 
@@ -190,10 +270,12 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
         row.getPath(),
         row.getSortSeq(),
         row.getId(),
-        null,
+        row.getSourceU9RowId(),
         0,
         firstText(row.getPriceOrgCode(), organization.priceOrgCode()),
-        organization.materialOrganizationCode());
+        organization.materialOrganizationCode(),
+        row.getChildType(),
+        row.getAlternativeGroupKey());
   }
 
   private QuoteDataOrganization lineOrganization(

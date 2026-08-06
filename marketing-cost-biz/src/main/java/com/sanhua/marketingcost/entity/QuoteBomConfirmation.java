@@ -28,10 +28,10 @@ public class QuoteBomConfirmation {
   private Integer rowCount;
   private Integer manualModifiedCount;
   private Integer replaceCount;
-  private Integer usageAdjustCount;
   private String confirmedBy;
   private LocalDateTime confirmedAt;
   private String confirmRemark;
+  private String costingBuildBatchId;
 
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;

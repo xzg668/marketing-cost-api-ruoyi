@@ -16,7 +16,6 @@ public class QuoteBomConfirmationSummaryResponse {
   private Integer rowCount;
   private Integer manualModifiedCount;
   private Integer replaceCount;
-  private Integer usageAdjustCount;
   private String confirmedBy;
   private LocalDateTime confirmedAt;
   private String confirmRemark;

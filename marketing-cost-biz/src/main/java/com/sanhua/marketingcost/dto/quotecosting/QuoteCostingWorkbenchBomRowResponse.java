@@ -1,7 +1,8 @@
 package com.sanhua.marketingcost.dto.quotecosting;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import lombok.Data;
 
 @Data
@@ -26,6 +27,7 @@ public class QuoteCostingWorkbenchBomRowResponse {
   private String settlementRowType;
   private Integer subtreeCostRequired;
   private Integer manualModified;
-  private String modifiedBy;
-  private LocalDateTime modifiedAt;
+  /** 上卷父件按命中子件生成见机表展示名称所需的数据，不代表新增结算行。 */
+  private List<QuoteCostingWorkbenchRollupComponentResponse> rollupComponents =
+      new ArrayList<>();
 }

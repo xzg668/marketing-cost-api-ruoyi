@@ -5,60 +5,65 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
-import java.time.Clock;
-import java.time.Instant;
-import java.time.ZoneId;
 import org.junit.jupiter.api.Test;
 
 class QuoteBomReuseKeyTest {
-  private static final Clock JUNE_CLOCK =
-      Clock.fixed(Instant.parse("2026-06-01T00:01:00Z"), ZoneId.of("UTC"));
+  private final QuoteBomContextResolver resolver = new QuoteBomContextResolver();
 
   @Test
-  void itemCustomerTakesPrecedenceOverHeaderCustomer() {
+  void itemCustomerMaterialNumberNeverTakesPrecedenceOverHeaderCustomer() {
     OaForm form = form(" HEADER-CUST ");
     OaFormItem item = item(" MAT-1001 ", " ITEM-CUST ", " BOX ");
 
-    QuoteBomReuseKey key = QuoteBomReuseKey.from(form, item, JUNE_CLOCK);
+    QuoteBomReuseKey key = QuoteBomReuseKey.from(resolver.resolve(form, item));
 
     assertThat(key.getProductCode()).isEqualTo("MAT-1001");
-    assertThat(key.getCustomerCode()).isEqualTo("ITEM-CUST");
+    assertThat(key.getCustomerCode()).isEqualTo("HEADER-CUST");
     assertThat(key.getPackageMethod()).isEqualTo("BOX");
-    assertThat(key.getCostPeriodMonth()).isEqualTo("2026-06");
+    assertThat(key.getCostPeriodMonth()).isEqualTo("2026-08");
   }
 
   @Test
   void headerCustomerUsedWhenItemCustomerMissing() {
-    QuoteBomReuseKey key = QuoteBomReuseKey.from(form(" HEADER-CUST "), item("MAT-1002", " ", "BOX"), JUNE_CLOCK);
+    QuoteBomReuseKey key =
+        QuoteBomReuseKey.from(
+            resolver.resolve(form(" HEADER-CUST "), item("MAT-1002", " ", "BOX")));
 
     assertThat(key.getCustomerCode()).isEqualTo("HEADER-CUST");
   }
 
   @Test
-  void blankCustomerAndPackageMethodNormalizeToEmptyString() {
-    QuoteBomReuseKey key = QuoteBomReuseKey.from(form(" / "), item("MAT-1003", null, " / "), JUNE_CLOCK);
+  void blankCustomerFallsBackToOaAndPackageMethodNormalizesToEmptyString() {
+    QuoteBomReuseKey key =
+        QuoteBomReuseKey.from(resolver.resolve(form(" / "), item("MAT-1003", null, " / ")));
 
-    assertThat(key.getCustomerCode()).isEmpty();
+    assertThat(key.getCustomerCode()).isEqualTo("OA:OA-KEY-001");
     assertThat(key.getPackageMethod()).isEmpty();
   }
 
   @Test
-  void systemDateGeneratesCurrentCostPeriodMonth() {
-    QuoteBomReuseKey key = QuoteBomReuseKey.from(form("CUST"), item("MAT-1004", null, null), JUNE_CLOCK);
+  void oaAccountingMonthGeneratesCostPeriodMonth() {
+    QuoteBomReuseKey key =
+        QuoteBomReuseKey.from(resolver.resolve(form("CUST"), item("MAT-1004", null, null)));
 
-    assertThat(key.getCostPeriodMonth()).isEqualTo("2026-06");
+    assertThat(key.getCostPeriodMonth()).isEqualTo("2026-08");
   }
 
   @Test
   void productCodeIsRequired() {
-    assertThatThrownBy(() -> QuoteBomReuseKey.from(form("CUST"), item(" ", "CUST", "BOX"), JUNE_CLOCK))
+    assertThatThrownBy(
+            () ->
+                QuoteBomReuseKey.from(
+                    resolver.resolve(form("CUST"), item(" ", "CUST", "BOX"))))
         .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("产品料号不能为空");
+        .hasMessageContaining("产品料号为空");
   }
 
   private OaForm form(String customer) {
     OaForm form = new OaForm();
+    form.setOaNo("OA-KEY-001");
     form.setCustomer(customer);
+    form.setAccountingPeriodMonth("2026-08");
     return form;
   }
 
@@ -67,6 +72,7 @@ class QuoteBomReuseKeyTest {
     item.setMaterialNo(materialNo);
     item.setCustomerCode(customerCode);
     item.setPackageMethod(packageMethod);
+    item.setBusinessUnitType("COMMERCIAL");
     return item;
   }
 }

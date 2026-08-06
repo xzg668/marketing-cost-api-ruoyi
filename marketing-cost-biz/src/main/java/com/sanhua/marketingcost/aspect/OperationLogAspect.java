@@ -58,6 +58,9 @@ public class OperationLogAspect {
      */
     @Around("@annotation(operationLog)")
     public Object around(ProceedingJoinPoint joinPoint, OperationLog operationLog) throws Throwable {
+        if (operationLog.recordDiff()) {
+            OperationLogDiffContext.clear();
+        }
         // 在主线程中提取上下文信息（HttpServletRequest、SecurityContext 等在异步线程中不可用）
         String username = getCurrentUsername();
         String businessUnitType = BusinessUnitContext.getCurrentBusinessUnitType();
@@ -95,16 +98,22 @@ public class OperationLogAspect {
         } finally {
             long costTime = System.currentTimeMillis() - startTime;
             try {
+                OperationLogDiffContext.Snapshot diffSnapshot =
+                        operationLog.recordDiff() ? OperationLogDiffContext.current() : null;
                 // 构建日志记录并异步保存
                 SysOperationLog logRecord = buildLog(
                         operationLog, username, businessUnitType,
                         operUrl, operIp, requestMethodStr, methodName,
-                        operParam, targetId, result, error, costTime
+                        operParam, targetId, result, error, costTime, diffSnapshot
                 );
                 saveLogAsync(logRecord);
             } catch (Exception ex) {
                 // 切面异常不影响主流程
                 log.warn("操作日志记录失败", ex);
+            } finally {
+                if (operationLog.recordDiff()) {
+                    OperationLogDiffContext.clear();
+                }
             }
         }
     }
@@ -117,7 +126,8 @@ public class OperationLogAspect {
                                      String operIp, String requestMethod,
                                      String methodName, String operParam,
                                      String targetId, Object result,
-                                     Throwable error, long costTime) {
+                                     Throwable error, long costTime,
+                                     OperationLogDiffContext.Snapshot diffSnapshot) {
         SysOperationLog logRecord = new SysOperationLog();
         logRecord.setTitle(annotation.module());
         logRecord.setBusinessType(annotation.operationType().getCode());
@@ -143,9 +153,14 @@ public class OperationLogAspect {
             logRecord.setJsonResult(truncate(toJson(result), 2000));
         }
 
-        // recordDiff 时，after_data 记录请求体
+        // 新接口可登记真实前后快照；旧接口没有登记时继续以请求体作为 after_data。
         if (annotation.recordDiff()) {
-            logRecord.setAfterData(operParam);
+            if (diffSnapshot != null) {
+                logRecord.setBeforeData(truncate(toJson(diffSnapshot.before()), 4000));
+                logRecord.setAfterData(truncate(toJson(diffSnapshot.after()), 4000));
+            } else {
+                logRecord.setAfterData(operParam);
+            }
         }
 
         return logRecord;

@@ -38,6 +38,7 @@ import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.service.FormalBomReadService;
 import com.sanhua.marketingcost.service.PackageComponentStructureReadService;
+import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import com.sanhua.marketingcost.service.QuoteProductTypeResolveService;
 import com.sanhua.marketingcost.service.SupplementBomReadService;
 import java.math.BigDecimal;
@@ -89,7 +90,8 @@ class QuoteProductBomPreparationServiceImplTest {
             productTypeResolveService,
             formalBomReadService,
             supplementBomReadService,
-            packageReadService);
+            packageReadService,
+            new QuoteBomContextResolver());
 
     when(statusMapper.selectOne(any())).thenReturn(null);
     when(preparationRecordMapper.selectOne(any())).thenReturn(null);
@@ -210,6 +212,8 @@ class QuoteProductBomPreparationServiceImplTest {
     ArgumentCaptor<QuoteBomStatus> statusCaptor = ArgumentCaptor.forClass(QuoteBomStatus.class);
     verify(statusMapper).updateById(statusCaptor.capture());
     assertThat(statusCaptor.getValue().getPreparationRecordId()).isEqualTo(401L);
+    assertThat(statusCaptor.getValue().getCustomerCode()).isEqualTo("CUST");
+    assertThat(statusCaptor.getValue().getPackageMethod()).isEqualTo("纸箱");
   }
 
   @Test
@@ -396,13 +400,14 @@ class QuoteProductBomPreparationServiceImplTest {
     item.setProductName(productName);
     item.setBusinessUnitType("COMMERCIAL");
     item.setSunlModel("MODEL");
-    item.setCustomerCode("CUST");
+    item.setCustomerCode("CUSTOMER-MATERIAL-NO");
     item.setPackageMethod("纸箱");
     item.setTechnicianName("技术员A");
     OaForm form = new OaForm();
     form.setId(20L);
     form.setOaNo(oaNo);
     form.setProcessCode(processCode);
+    form.setCustomer("CUST");
     form.setApplyDate(LocalDate.parse(periodMonth + "-16"));
     form.setAccountingPeriodMonth(periodMonth);
     when(itemMapper.selectById(10L)).thenReturn(item);

@@ -77,6 +77,20 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
   private static final Pattern VARIABLE_TOKEN = Pattern.compile("\\[([^\\]]+)]");
   private static final Pattern FACTOR_VALUE_TOKEN =
       Pattern.compile("([A-Za-z][A-Za-z0-9_]*)\\s*=\\s*(-?\\d+(?:\\.\\d+)?)");
+  private static final Pattern RANGE_SELECTION_LEDGER =
+      Pattern.compile("区间价取价底稿\\[([^]]*)]");
+
+  private record RangeSelectionTrace(
+      Integer candidateSupplierCount,
+      String mainSupplierName,
+      String mainSupplierCode,
+      BigDecimal supplyRatio,
+      String supplierMatchMode,
+      Long finalPriceRowId,
+      BigDecimal finalPriceExclTax,
+      Boolean fallback,
+      String fallbackReason) {
+  }
 
   private record RangeTraceContext(
       PriceRangeItem item,
@@ -86,7 +100,8 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
       BigDecimal factorValue,
       String matchRange,
       BigDecimal rangeUnitPrice,
-      String priceField) {
+      String priceField,
+      RangeSelectionTrace selection) {
 
     boolean factorRange() {
       return RANGE_BASIS_FACTOR.equals(rangeBasis);
@@ -586,7 +601,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
       query.and(q -> q.le(PriceRangeItem::getEffectiveFrom, priceDate)
           .or()
           .isNull(PriceRangeItem::getEffectiveFrom));
-      query.and(q -> q.gt(PriceRangeItem::getEffectiveTo, priceDate)
+      query.and(q -> q.ge(PriceRangeItem::getEffectiveTo, priceDate)
           .or()
           .isNull(PriceRangeItem::getEffectiveTo));
     }
@@ -638,7 +653,16 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
           "priceInclTax", rangeItem.getPriceInclTax(),
           "taxIncluded", rangeItem.getTaxIncluded(),
           "effectiveFrom", stringValue(rangeItem.getEffectiveFrom()),
-          "effectiveTo", stringValue(rangeItem.getEffectiveTo())));
+          "effectiveTo", stringValue(rangeItem.getEffectiveTo()),
+          "candidateSupplierCount", selectionValue(rangeTrace, RangeSelectionTrace::candidateSupplierCount),
+          "mainSupplierName", selectionValue(rangeTrace, RangeSelectionTrace::mainSupplierName),
+          "mainSupplierCode", selectionValue(rangeTrace, RangeSelectionTrace::mainSupplierCode),
+          "supplyRatio", selectionValue(rangeTrace, RangeSelectionTrace::supplyRatio),
+          "supplierMatchMode", selectionValue(rangeTrace, RangeSelectionTrace::supplierMatchMode),
+          "finalPriceRowId", selectionValue(rangeTrace, RangeSelectionTrace::finalPriceRowId),
+          "finalPriceExclTax", selectionValue(rangeTrace, RangeSelectionTrace::finalPriceExclTax),
+          "fallback", selectionValue(rangeTrace, RangeSelectionTrace::fallback),
+          "fallbackReason", selectionValue(rangeTrace, RangeSelectionTrace::fallbackReason)));
     }
     payload.put("priceConclusion", mapOf(
         "priceKind", "区间价",
@@ -658,6 +682,19 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
         "range_low", rangeItem == null ? null : rangeItem.getRangeLow(),
         "rangeHigh", rangeItem == null ? null : rangeItem.getRangeHigh(),
         "range_high", rangeItem == null ? null : rangeItem.getRangeHigh(),
+        "candidateSupplierCount", selectionValue(rangeTrace, RangeSelectionTrace::candidateSupplierCount),
+        "mainSupplierName", selectionValue(rangeTrace, RangeSelectionTrace::mainSupplierName),
+        "mainSupplierCode", selectionValue(rangeTrace, RangeSelectionTrace::mainSupplierCode),
+        "supplyRatio", selectionValue(rangeTrace, RangeSelectionTrace::supplyRatio),
+        "supplierMatchMode", selectionValue(rangeTrace, RangeSelectionTrace::supplierMatchMode),
+        "finalPriceRowId", firstNonNull(
+            selectionValue(rangeTrace, RangeSelectionTrace::finalPriceRowId),
+            rangeItem == null ? null : rangeItem.getId()),
+        "finalPriceExclTax", firstNonNull(
+            selectionValue(rangeTrace, RangeSelectionTrace::finalPriceExclTax),
+            rangeItem == null ? null : rangeItem.getPriceExclTax()),
+        "fallback", selectionValue(rangeTrace, RangeSelectionTrace::fallback),
+        "fallbackReason", selectionValue(rangeTrace, RangeSelectionTrace::fallbackReason),
         "matchedUnitPrice", firstNonNull(rangeTrace.rangeUnitPrice(), part.getUnitPrice()),
         "formula", "命中单价 × BOM 用量",
         "unitPrice", part.getUnitPrice(),
@@ -708,6 +745,13 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
         "matchedRange", rangeTrace.matchRange(),
         "priceExclTax", rangeItem == null ? null : rangeItem.getPriceExclTax(),
         "priceInclTax", rangeItem == null ? null : rangeItem.getPriceInclTax(),
+        "candidateSupplierCount", selectionValue(rangeTrace, RangeSelectionTrace::candidateSupplierCount),
+        "mainSupplierName", selectionValue(rangeTrace, RangeSelectionTrace::mainSupplierName),
+        "mainSupplierCode", selectionValue(rangeTrace, RangeSelectionTrace::mainSupplierCode),
+        "supplyRatio", selectionValue(rangeTrace, RangeSelectionTrace::supplyRatio),
+        "supplierMatchMode", selectionValue(rangeTrace, RangeSelectionTrace::supplierMatchMode),
+        "fallback", selectionValue(rangeTrace, RangeSelectionTrace::fallback),
+        "fallbackReason", selectionValue(rangeTrace, RangeSelectionTrace::fallbackReason),
         "rangeUnitPrice", firstNonNull(rangeTrace.rangeUnitPrice(), part.getUnitPrice()),
         "matchedUnitPrice", firstNonNull(rangeTrace.rangeUnitPrice(), part.getUnitPrice()),
         "quantity", part.getQty(),
@@ -728,6 +772,14 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
             "factorCode", rangeTrace.factorCode(),
             "factorValue", rangeTrace.factorValue(),
             "matchRange", rangeTrace.matchRange(),
+            "candidateSupplierCount", selectionValue(
+                rangeTrace, RangeSelectionTrace::candidateSupplierCount),
+            "mainSupplierCode", selectionValue(rangeTrace, RangeSelectionTrace::mainSupplierCode),
+            "supplyRatio", selectionValue(rangeTrace, RangeSelectionTrace::supplyRatio),
+            "supplierMatchMode", selectionValue(
+                rangeTrace, RangeSelectionTrace::supplierMatchMode),
+            "fallback", selectionValue(rangeTrace, RangeSelectionTrace::fallback),
+            "remark", selectionValue(rangeTrace, RangeSelectionTrace::fallbackReason),
             "amount", firstNonNull(rangeTrace.rangeUnitPrice(), part.getUnitPrice()))
         : mapOf(
             "step", "RANGE_PRICE_ROW",
@@ -1670,6 +1722,10 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
       CostRunPartItem part, PricePrepareItem prepareItem, PriceRangeItem rangeItem) {
     boolean factorRange = isFactorRange(rangeItem);
     String factorCode = rangeItem == null ? null : trimToNull(rangeItem.getFactorCode());
+    BigDecimal selectedUnitPrice = factorRange && rangeItem != null
+        ? rangeItem.getPriceExclTax()
+        : rangeUnitPrice(rangeItem);
+    String selectedPriceField = factorRange ? "price_excl_tax" : rangePriceField(rangeItem);
     return new RangeTraceContext(
         rangeItem,
         factorRange ? RANGE_BASIS_FACTOR : RANGE_BASIS_QTY,
@@ -1677,8 +1733,77 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
         factorCode,
         factorRange ? parseFactorValue(factorCode, part, prepareItem) : null,
         rangeText(rangeItem),
-        rangeUnitPrice(rangeItem),
-        rangePriceField(rangeItem));
+        selectedUnitPrice,
+        selectedPriceField,
+        parseRangeSelectionTrace(part, prepareItem));
+  }
+
+  private RangeSelectionTrace parseRangeSelectionTrace(
+      CostRunPartItem part, PricePrepareItem prepareItem) {
+    String[] messages = {
+        prepareItem == null ? null : prepareItem.getMessage(),
+        part == null ? null : part.getRemark()
+    };
+    for (String message : messages) {
+      if (!StringUtils.hasText(message)) {
+        continue;
+      }
+      Matcher matcher = RANGE_SELECTION_LEDGER.matcher(message);
+      if (!matcher.find()) {
+        continue;
+      }
+      Map<String, String> values = new LinkedHashMap<>();
+      for (String token : matcher.group(1).split("；", -1)) {
+        int separator = token.indexOf('=');
+        if (separator > 0) {
+          values.put(token.substring(0, separator).trim(), token.substring(separator + 1).trim());
+        }
+      }
+      return new RangeSelectionTrace(
+          integerValue(values.get("候选供应商数量")),
+          values.get("主供应商名称"),
+          values.get("主供应商代码"),
+          decimalValue(values.get("供货比例")),
+          values.get("供应商匹配方式"),
+          longValue(values.get("最终价格行ID")),
+          decimalValue(values.get("最终不含税单价")),
+          booleanValue(values.get("是否兜底")),
+          values.getOrDefault("兜底原因", ""));
+    }
+    return null;
+  }
+
+  private <T> T selectionValue(
+      RangeTraceContext context, Function<RangeSelectionTrace, T> getter) {
+    return context == null || context.selection() == null
+        ? null
+        : getter.apply(context.selection());
+  }
+
+  private Integer integerValue(String value) {
+    try {
+      return StringUtils.hasText(value) ? Integer.valueOf(value.trim()) : null;
+    } catch (NumberFormatException ex) {
+      return null;
+    }
+  }
+
+  private Long longValue(String value) {
+    try {
+      return StringUtils.hasText(value) ? Long.valueOf(value.trim()) : null;
+    } catch (NumberFormatException ex) {
+      return null;
+    }
+  }
+
+  private Boolean booleanValue(String value) {
+    if ("是".equals(value)) {
+      return true;
+    }
+    if ("否".equals(value)) {
+      return false;
+    }
+    return null;
   }
 
   private boolean isFactorRange(PriceRangeItem row) {

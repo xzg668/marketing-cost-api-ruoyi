@@ -151,6 +151,11 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V188__finance_cu_quote_base_permissions.sql", "V188");
       runScriptViaMysqlCli("/db/V189__finance_cu_quote_base_page_menu.sql", "V189");
       runScriptViaMysqlCli("/db/V190__price_prepare_settlement_key_uniqueness.sql", "V190");
+      runScriptViaMysqlCli("/db/V199__quote_bom_alternative_selection.sql", "V199");
+      runScriptViaMysqlCli(
+          "/db/V200__quote_bom_alternative_selection_scope_isolation.sql", "V200");
+      runScriptViaMysqlCli(
+          "/db/V202__quote_effective_bom_and_shape_policy.sql", "V202");
     } catch (Exception e) {
       // 把 root cause 的文字信息拼进 message，避免 surefire 只保留 Caused by 的短描述
       Throwable root = e;

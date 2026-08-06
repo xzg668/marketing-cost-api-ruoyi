@@ -17,12 +17,12 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteBomConfirmationSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunSummaryResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingBomRowUpdateRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchBomRowResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmationSummaryResponse;
 import com.sanhua.marketingcost.entity.BomCostingRow;
+import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.BomSettlementRule;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
@@ -33,6 +33,7 @@ import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmBatch;
 import com.sanhua.marketingcost.mapper.BomByproductCostRuleMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
+import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.BomSettlementRuleMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
@@ -43,6 +44,8 @@ import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostingWorkbenchSummaryMapper;
 import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmBatchMapper;
 import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
+import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomFeatureSwitch;
+import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.rule.BomSettlementRuleMatcher;
@@ -73,6 +76,7 @@ class QuoteCostingWorkbenchServiceImplTest {
   private OaFormItemMapper oaFormItemMapper;
   private QuoteBomStatusMapper quoteBomStatusMapper;
   private BomCostingRowMapper bomCostingRowMapper;
+  private BomCostingRowSubRefMapper bomCostingRowSubRefMapper;
   private BomRawHierarchyMapper bomRawHierarchyMapper;
   private MaterialMasterRawMapper materialMasterRawMapper;
   private BomSettlementRuleMapper settlementRuleMapper;
@@ -84,6 +88,7 @@ class QuoteCostingWorkbenchServiceImplTest {
   private BomSettlementRuleMatcher settlementRuleMatcher;
   private BomRuleMaterialAttributeResolver materialAttributeResolver;
   private QuoteCostRunVersionInvalidationService versionInvalidationService;
+  private QuoteBomStatusService quoteBomStatusService;
   private QuoteCostingWorkbenchServiceImpl service;
 
   @BeforeAll
@@ -106,6 +111,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     oaFormItemMapper = mock(OaFormItemMapper.class);
     quoteBomStatusMapper = mock(QuoteBomStatusMapper.class);
     bomCostingRowMapper = mock(BomCostingRowMapper.class);
+    bomCostingRowSubRefMapper = mock(BomCostingRowSubRefMapper.class);
     bomRawHierarchyMapper = mock(BomRawHierarchyMapper.class);
     materialMasterRawMapper = mock(MaterialMasterRawMapper.class);
     settlementRuleMapper = mock(BomSettlementRuleMapper.class);
@@ -118,12 +124,14 @@ class QuoteCostingWorkbenchServiceImplTest {
     materialAttributeResolver = mock(BomRuleMaterialAttributeResolver.class);
     when(materialAttributeResolver.resolve(any(), any())).thenReturn(Map.of());
     versionInvalidationService = mock(QuoteCostRunVersionInvalidationService.class);
+    quoteBomStatusService = mock(QuoteBomStatusService.class);
     service =
         new QuoteCostingWorkbenchServiceImpl(
             oaFormMapper,
             oaFormItemMapper,
             quoteBomStatusMapper,
             bomCostingRowMapper,
+            bomCostingRowSubRefMapper,
             bomRawHierarchyMapper,
             materialMasterRawMapper,
             settlementRuleMapper,
@@ -134,7 +142,9 @@ class QuoteCostingWorkbenchServiceImplTest {
             costingBuildService,
             settlementRuleMatcher,
             materialAttributeResolver,
-            versionInvalidationService);
+            versionInvalidationService,
+            new QuoteEffectiveBomFeatureSwitch(true),
+            quoteBomStatusService);
   }
 
   @Test
@@ -148,6 +158,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     QuoteCostingWorkbenchResponse response = service.getWorkbench("OA-001", 10L);
 
     assertThat(response.getSnapshotGenerated()).isFalse();
+    assertThat(response.getEffectiveBomEnabled()).isTrue();
     assertThat(response.getPeriodMonth()).isEqualTo(SAMPLE_PERIOD_MONTH);
     assertThat(response.getBomRows()).hasSize(1);
     assertThat(response.getBomRows().get(0).getOaFormItemId()).isEqualTo(10L);
@@ -160,6 +171,42 @@ class QuoteCostingWorkbenchServiceImplTest {
     assertThat(response.getWorkflowStatus().getCurrentBlockedStep())
         .isEqualTo("PRICE_TYPE_CONFIRMATION");
     verify(costingBuildService, never()).buildByOaFormItem(any());
+  }
+
+  @Test
+  void rollupParentCarriesMatchedChildForCombinedDisplayNameWithoutAddingBomRows() {
+    BomCostingRow parent = row(10L, "FIN-001", "201190083");
+    parent.setMaterialName("接管");
+    parent.setMaterialSpec("T-JG-0029");
+    parent.setSettlementRowType("SPECIAL_ROLLUP_PARENT");
+    BomCostingRowSubRef ref = new BomCostingRowSubRef();
+    ref.setCostingRowId(parent.getId());
+    ref.setRefType("SPECIAL_ROLLUP_CHILD");
+    ref.setSubMaterialCode("301050120");
+    ref.setSubMaterialName("拉制铜管");
+    ref.setSubQtyPerParent(new BigDecimal("0.00381546"));
+    ref.setSubQtyPerTop(new BigDecimal("0.00381546"));
+    when(oaFormMapper.selectOne(any())).thenReturn(form());
+    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot(
+            "OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
+        .thenReturn(List.of(parent));
+    when(bomCostingRowSubRefMapper.selectSpecialRollupChildren(List.of(parent.getId())))
+        .thenReturn(List.of(ref));
+
+    QuoteCostingWorkbenchResponse response = service.getWorkbench("OA-001", 10L);
+
+    assertThat(response.getBomRows()).singleElement().satisfies(row -> {
+      assertThat(row.getChildCode()).isEqualTo("201190083");
+      assertThat(row.getChildName()).isEqualTo("接管");
+      assertThat(row.getRollupComponents()).singleElement().satisfies(component -> {
+        assertThat(component.getChildCode()).isEqualTo("301050120");
+        assertThat(component.getChildName()).isEqualTo("拉制铜管");
+        assertThat(component.getParentDrawingNo()).isEqualTo("T-JG-0029");
+        assertThat(component.getUsageQty()).isEqualByComparingTo("0.00381546");
+      });
+    });
   }
 
   @Test
@@ -236,6 +283,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     assertThat(response.getBomRows()).hasSize(1);
     assertThat(response.getBomRows().get(0).getChildCode()).isEqualTo("MAT-NEW");
     verify(costingBuildService).buildByOaFormItem(10L, SAMPLE_PERIOD_MONTH, LocalDate.now());
+    verify(quoteBomStatusService).checkItemForCostRun("OA-001", 10L);
     verify(quoteBomConfirmationMapper).update(any(), any());
     verify(priceTypeConfirmBatchMapper).update(any(), any());
     verify(versionInvalidationService)
@@ -642,125 +690,6 @@ class QuoteCostingWorkbenchServiceImplTest {
     verify(costingBuildService, never()).buildByOaFormItem(any());
   }
 
-  @Test
-  void updateBomRowSavesAllowedFieldsAndAuditOnly() {
-    when(oaFormMapper.selectOne(any())).thenReturn(form());
-    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
-    when(bomCostingRowMapper.selectById(300L)).thenReturn(row(10L, "FIN-001", "MAT-OLD"));
-    when(bomCostingRowMapper.updateById(any(BomCostingRow.class))).thenReturn(1);
-    QuoteCostingBomRowUpdateRequest request = updateRequest();
-
-    QuoteCostingWorkbenchBomRowResponse response =
-        service.updateBomRow("OA-001", 10L, 300L, request);
-
-    assertThat(response.getChildCode()).isEqualTo("MAT-NEW");
-    assertThat(response.getChildName()).isEqualTo("新子件");
-    assertThat(response.getChildModel()).isEqualTo("NEW-SPEC");
-    assertThat(response.getUsageQty()).isEqualByComparingTo("2.5");
-    assertThat(response.getManualModified()).isEqualTo(1);
-    assertThat(response.getModifiedBy()).isEqualTo("system");
-    assertThat(response.getModifiedAt()).isNotNull();
-
-    ArgumentCaptor<BomCostingRow> captor = ArgumentCaptor.forClass(BomCostingRow.class);
-    verify(bomCostingRowMapper).updateById(captor.capture());
-    BomCostingRow patch = captor.getValue();
-    assertThat(patch.getId()).isEqualTo(300L);
-    assertThat(patch.getMaterialCode()).isEqualTo("MAT-NEW");
-    assertThat(patch.getMaterialName()).isEqualTo("新子件");
-    assertThat(patch.getMaterialSpec()).isEqualTo("NEW-SPEC");
-    assertThat(patch.getQtyPerParent()).isEqualByComparingTo("2.5");
-    assertThat(patch.getUnit()).isEqualTo("PCS");
-    assertThat(patch.getMaterialAttribute()).isEqualTo("铜");
-    assertThat(patch.getShapeAttr()).isEqualTo("采购件");
-    assertThat(patch.getManualModified()).isEqualTo(1);
-    assertThat(patch.getModifiedBy()).isEqualTo("system");
-    assertThat(patch.getModifiedAt()).isNotNull();
-    assertThat(patch.getOaNo()).isNull();
-    assertThat(patch.getOaFormItemId()).isNull();
-    assertThat(patch.getTopProductCode()).isNull();
-    assertThat(patch.getParentCode()).isNull();
-    assertThat(patch.getPath()).isNull();
-    assertThat(patch.getPeriodMonth()).isNull();
-    assertThat(patch.getQtyPerTop()).isNull();
-    verify(versionInvalidationService)
-        .invalidateProduct("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH);
-  }
-
-  @Test
-  void updateBomRowRejectsCrossOaRow() {
-    when(oaFormMapper.selectOne(any())).thenReturn(form());
-    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
-    BomCostingRow row = row(10L, "FIN-001", "MAT-1");
-    row.setOaNo("OA-OTHER");
-    when(bomCostingRowMapper.selectById(300L)).thenReturn(row);
-
-    assertThatThrownBy(() -> service.updateBomRow("OA-001", 10L, 300L, updateRequest()))
-        .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("当前报价单");
-    verify(bomCostingRowMapper, never()).updateById(any(BomCostingRow.class));
-  }
-
-  @Test
-  void updateBomRowRejectsCrossQuoteItemRow() {
-    when(oaFormMapper.selectOne(any())).thenReturn(form());
-    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
-    BomCostingRow row = row(99L, "FIN-001", "MAT-1");
-    when(bomCostingRowMapper.selectById(300L)).thenReturn(row);
-
-    assertThatThrownBy(() -> service.updateBomRow("OA-001", 10L, 300L, updateRequest()))
-        .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("当前产品行");
-    verify(bomCostingRowMapper, never()).updateById(any(BomCostingRow.class));
-  }
-
-  @Test
-  void updateBomRowRejectsCrossPeriodRow() {
-    when(oaFormMapper.selectOne(any())).thenReturn(form());
-    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
-    BomCostingRow row = row(10L, "FIN-001", "MAT-1");
-    row.setPeriodMonth("2026-05");
-    when(bomCostingRowMapper.selectById(300L)).thenReturn(row);
-
-    assertThatThrownBy(() -> service.updateBomRow("OA-001", 10L, 300L, updateRequest()))
-        .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("当前核算月份");
-    verify(bomCostingRowMapper, never()).updateById(any(BomCostingRow.class));
-  }
-
-  @Test
-  void updateBomRowRejectsWhenBomAlreadyConfirmed() {
-    when(oaFormMapper.selectOne(any())).thenReturn(form());
-    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
-    when(bomCostingRowMapper.selectById(300L)).thenReturn(row(10L, "FIN-001", "MAT-1"));
-    when(quoteBomConfirmationMapper.selectOne(any())).thenReturn(activeBomConfirmation());
-
-    assertThatThrownBy(() -> service.updateBomRow("OA-001", 10L, 300L, updateRequest()))
-        .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("先撤销确认");
-    verify(bomCostingRowMapper, never()).updateById(any(BomCostingRow.class));
-  }
-
-  @Test
-  void updateBomRowAllowsAfterBomConfirmationCancelled() {
-    when(oaFormMapper.selectOne(any())).thenReturn(form());
-    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
-    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
-    when(bomCostingRowMapper.selectById(300L)).thenReturn(row(10L, "FIN-001", "MAT-OLD"));
-    when(quoteBomConfirmationMapper.selectOne(any())).thenReturn(null);
-    when(bomCostingRowMapper.updateById(any(BomCostingRow.class))).thenReturn(1);
-
-    QuoteCostingWorkbenchBomRowResponse response =
-        service.updateBomRow("OA-001", 10L, 300L, updateRequest());
-
-    assertThat(response.getChildCode()).isEqualTo("MAT-NEW");
-    verify(bomCostingRowMapper).updateById(any(BomCostingRow.class));
-  }
-
   private OaForm form() {
     OaForm form = new OaForm();
     form.setId(1L);
@@ -1012,15 +941,4 @@ class QuoteCostingWorkbenchServiceImplTest {
     return rows;
   }
 
-  private QuoteCostingBomRowUpdateRequest updateRequest() {
-    QuoteCostingBomRowUpdateRequest request = new QuoteCostingBomRowUpdateRequest();
-    request.setChildCode("MAT-NEW");
-    request.setChildName("新子件");
-    request.setChildModel("NEW-SPEC");
-    request.setUsageQty(new BigDecimal("2.5"));
-    request.setUnit("PCS");
-    request.setMaterialAttribute("铜");
-    request.setShapeAttribute("采购件");
-    return request;
-  }
 }

@@ -70,6 +70,8 @@ public class BomAvailabilityAdapterImpl implements BomAvailabilityAdapter {
             .eq(BomRawHierarchy::getPriceOrgCode, priceOrgCode)
             .eq(BomRawHierarchy::getTopProductCode, productCode)
             .eq(BomRawHierarchy::getLevel, 0)
+            .orderByDesc(BomRawHierarchy::getBuiltAt)
+            .orderByDesc(BomRawHierarchy::getId)
             .last("LIMIT 1"));
   }
 

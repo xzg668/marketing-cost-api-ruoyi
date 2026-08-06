@@ -6,6 +6,7 @@ import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
 import com.sanhua.marketingcost.entity.BomByproductCostRule;
 import com.sanhua.marketingcost.entity.BomSettlementRule;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
+import com.sanhua.marketingcost.enums.QuoteMaterialShape;
 import com.sanhua.marketingcost.service.rule.BomRuleNodeContext;
 import com.sanhua.marketingcost.service.rule.BomByproductCostRuleMatcher;
 import com.sanhua.marketingcost.service.rule.BomRuleMaterialAttributeResolver;
@@ -47,11 +48,7 @@ public class BomSettlementRowBuildEngine {
   private static final String RULE_CATEGORY_SPECIAL_PURCHASE_ROLLUP = "SPECIAL_PURCHASE_ROLLUP";
   private static final String RULE_CATEGORY_AUXILIARY_EXCLUDE = "AUXILIARY_EXCLUDE";
   private static final String BOM_PURPOSE_MAIN_MANUFACTURING = "主制造";
-  private static final String SHAPE_VIRTUAL = "虚拟";
-  private static final String SHAPE_MANUFACTURED = "制造件";
-  private static final String SHAPE_PURCHASED = "采购件";
   private static final String SHAPE_OUTSOURCED = "委外加工件";
-  private static final String SHAPE_OUTSOURCED_SHORT = "委外件";
   private static final String CATEGORY_PACKAGE_COMPONENT_PREFIX = "15155";
   private final BomSettlementRuleMatcher ruleMatcher;
   private final BomByproductCostRuleMatcher byproductRuleMatcher;
@@ -842,19 +839,17 @@ public class BomSettlementRowBuildEngine {
   }
 
   private static boolean isManufacturedNode(BomSettlementNode node) {
-    return SHAPE_MANUFACTURED.equals(node.shapeAttr())
-        || SHAPE_MANUFACTURED.equals(node.productionCategory());
+    return matchesShape(node.shapeAttr(), QuoteMaterialShape.MANUFACTURE)
+        || matchesShape(node.productionCategory(), QuoteMaterialShape.MANUFACTURE);
   }
 
   private static boolean isOutsourcedNode(BomSettlementNode node) {
-    return SHAPE_OUTSOURCED.equals(node.shapeAttr())
-        || SHAPE_OUTSOURCED.equals(node.productionCategory())
-        || SHAPE_OUTSOURCED_SHORT.equals(node.shapeAttr())
-        || SHAPE_OUTSOURCED_SHORT.equals(node.productionCategory());
+    return matchesShape(node.shapeAttr(), QuoteMaterialShape.OUTSOURCE)
+        || matchesShape(node.productionCategory(), QuoteMaterialShape.OUTSOURCE);
   }
 
   private static boolean isVirtualShape(BomSettlementNode node) {
-    return SHAPE_VIRTUAL.equals(node.shapeAttr());
+    return matchesShape(node.shapeAttr(), QuoteMaterialShape.VIRTUAL);
   }
 
   private static boolean canRollupNode(
@@ -913,8 +908,19 @@ public class BomSettlementRowBuildEngine {
 
   private static boolean isTerminalPurchasedNode(BomSettlementNode node) {
     return node.leaf()
-        && (SHAPE_PURCHASED.equals(node.shapeAttr())
-            || SHAPE_PURCHASED.equals(node.productionCategory()));
+        && (matchesShape(node.shapeAttr(), QuoteMaterialShape.PURCHASE)
+            || matchesShape(node.productionCategory(), QuoteMaterialShape.PURCHASE));
+  }
+
+  private static boolean matchesShape(String value, QuoteMaterialShape expected) {
+    if (!StringUtils.hasText(value) || expected == null) {
+      return false;
+    }
+    try {
+      return QuoteMaterialShape.fromU9(value) == expected;
+    } catch (IllegalArgumentException ignored) {
+      return false;
+    }
   }
 
   private static String periodMonth(BomSettlementBuildRequest request) {

@@ -138,7 +138,8 @@ class BomAvailabilityAdapterImplTest {
     ArgumentCaptor<Wrapper> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(bomRawHierarchyMapper, atLeastOnce()).selectOne(captor.capture());
     Wrapper wrapper = captor.getValue();
-    assertThat(wrapper.getSqlSegment()).contains("price_org_code");
+    assertThat(wrapper.getSqlSegment())
+        .contains("price_org_code", "built_at", "ORDER BY", "DESC", "LIMIT 1");
     assertThat(((AbstractWrapper<?, ?, ?>) wrapper).getParamNameValuePairs())
         .containsValue(expectedPriceOrgCode);
   }

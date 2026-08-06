@@ -17,10 +17,10 @@ public class QuoteBomConfirmResponse {
   private Integer rowCount;
   private Integer manualModifiedCount;
   private Integer replaceCount;
-  private Integer usageAdjustCount;
   private String confirmedBy;
   private LocalDateTime confirmedAt;
   private String confirmRemark;
+  private String costingBuildBatchId;
 
   public static QuoteBomConfirmResponse from(QuoteBomConfirmation entity) {
     QuoteBomConfirmResponse response = new QuoteBomConfirmResponse();
@@ -35,10 +35,10 @@ public class QuoteBomConfirmResponse {
     response.setRowCount(entity.getRowCount());
     response.setManualModifiedCount(entity.getManualModifiedCount());
     response.setReplaceCount(entity.getReplaceCount());
-    response.setUsageAdjustCount(entity.getUsageAdjustCount());
     response.setConfirmedBy(entity.getConfirmedBy());
     response.setConfirmedAt(entity.getConfirmedAt());
     response.setConfirmRemark(entity.getConfirmRemark());
+    response.setCostingBuildBatchId(entity.getCostingBuildBatchId());
     return response;
   }
 }

@@ -47,6 +47,36 @@ public class QuotePriceTypeConfirmationInvalidationService {
 
   public int invalidateScope(
       String oaNo, Long oaFormItemId, String productCode, String periodMonth) {
+    return invalidateScope(
+        oaNo,
+        oaFormItemId,
+        productCode,
+        periodMonth,
+        true,
+        REASON_MATERIAL_TYPE_CHANGED);
+  }
+
+  public int invalidateScopeAfterBomChange(
+      String oaNo,
+      Long oaFormItemId,
+      String productCode,
+      String periodMonth) {
+    return invalidateScope(
+        oaNo,
+        oaFormItemId,
+        productCode,
+        periodMonth,
+        false,
+        "BOM标准/替代分支已变化，请重新确认价格类型");
+  }
+
+  private int invalidateScope(
+      String oaNo,
+      Long oaFormItemId,
+      String productCode,
+      String periodMonth,
+      boolean protectConfirmedCost,
+      String reason) {
     if (!StringUtils.hasText(oaNo)
         || oaFormItemId == null
         || !StringUtils.hasText(productCode)
@@ -61,7 +91,11 @@ public class QuotePriceTypeConfirmationInvalidationService {
                 .eq(QuotePriceTypeConfirmBatch::getProductCode, productCode.trim())
                 .eq(QuotePriceTypeConfirmBatch::getPeriodMonth, periodMonth.trim())
                 .eq(QuotePriceTypeConfirmBatch::getStatus, QuotePriceTypeConfirmBatch.STATUS_CONFIRMED));
-    return markConfirmNosStale(collectBatchConfirmNos(batches), LocalDateTime.now());
+    return markConfirmNosStale(
+        collectBatchConfirmNos(batches),
+        LocalDateTime.now(),
+        protectConfirmedCost,
+        reason);
   }
 
   public int invalidateByMaterialPriceTypeChanges(Collection<MaterialPriceType> changedRows) {
@@ -116,16 +150,27 @@ public class QuotePriceTypeConfirmationInvalidationService {
       query.le(QuotePriceTypeConfirmItem::getPeriodMonth, window.toMonth());
     }
     List<QuotePriceTypeConfirmItem> items = itemMapper.selectList(query);
-    return markConfirmNosStale(collectItemConfirmNos(items), LocalDateTime.now());
+    return markConfirmNosStale(
+        collectItemConfirmNos(items),
+        LocalDateTime.now(),
+        true,
+        REASON_MATERIAL_TYPE_CHANGED);
   }
 
-  private int markConfirmNosStale(Set<String> confirmNos, LocalDateTime now) {
+  private int markConfirmNosStale(
+      Set<String> confirmNos,
+      LocalDateTime now,
+      boolean protectConfirmedCost,
+      String reason) {
     if (confirmNos == null || confirmNos.isEmpty()) {
       return 0;
     }
     versionInvalidationService.invalidateByPriceTypeConfirmNos(confirmNos);
     Set<String> mutableConfirmNos = new LinkedHashSet<>(confirmNos);
-    mutableConfirmNos.removeAll(confirmedCostVersionConfirmNos(mutableConfirmNos));
+    if (protectConfirmedCost) {
+      mutableConfirmNos.removeAll(
+          confirmedCostVersionConfirmNos(mutableConfirmNos));
+    }
     if (mutableConfirmNos.isEmpty()) {
       return 0;
     }
@@ -136,7 +181,7 @@ public class QuotePriceTypeConfirmationInvalidationService {
               null,
               Wrappers.<QuotePriceTypeConfirmBatch>update()
                   .set("status", QuotePriceTypeConfirmBatch.STATUS_STALE)
-                  .set("message", REASON_MATERIAL_TYPE_CHANGED)
+                  .set("message", reason)
                   .set("updated_at", now)
                   .in("confirm_no", chunk)
                   .eq("status", QuotePriceTypeConfirmBatch.STATUS_CONFIRMED));

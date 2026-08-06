@@ -14,6 +14,7 @@ import com.sanhua.marketingcost.enums.PriceLinkedImportEffectiveStrategy;
 import com.sanhua.marketingcost.mapper.FactorIdentityMapper;
 import com.sanhua.marketingcost.mapper.FactorMonthlyPriceChangeLogMapper;
 import com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper;
+import com.sanhua.marketingcost.service.FactorCanonicalKeyService;
 import com.sanhua.marketingcost.service.FactorMonthlyPriceUpsertService;
 import com.sanhua.marketingcost.service.QuoteBasePriceMappingService;
 import java.math.BigDecimal;
@@ -23,7 +24,11 @@ import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,6 +44,8 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
   private final FactorMonthlyPriceChangeLogMapper changeLogMapper;
   @Autowired(required = false)
   private QuoteBasePriceMappingService quoteBasePriceMappingService;
+  @Autowired(required = false)
+  private FactorCanonicalKeyService factorCanonicalKeyService;
 
   public FactorMonthlyPriceUpsertServiceImpl(
       FactorIdentityMapper factorIdentityMapper,
@@ -51,6 +58,10 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
 
   void setQuoteBasePriceMappingService(QuoteBasePriceMappingService quoteBasePriceMappingService) {
     this.quoteBasePriceMappingService = quoteBasePriceMappingService;
+  }
+
+  void setFactorCanonicalKeyService(FactorCanonicalKeyService factorCanonicalKeyService) {
+    this.factorCanonicalKeyService = factorCanonicalKeyService;
   }
 
   @Override
@@ -212,6 +223,15 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
       return new IdentityUpsertOutcome(existing, "REUSE");
     }
 
+    FactorIdentity canonicalIdentity =
+        findCanonicalIdentity(row, businessUnitType);
+    if (canonicalIdentity != null) {
+      upgradeType2Identity(canonicalIdentity, row, key, operator);
+      identityCache.put(key, canonicalIdentity);
+      result.setIdentityReusedCount(result.getIdentityReusedCount() + 1);
+      return new IdentityUpsertOutcome(canonicalIdentity, "REUSE_CANONICAL");
+    }
+
     LocalDateTime now = LocalDateTime.now();
     FactorIdentity identity = new FactorIdentity();
     identity.setBusinessUnitType(businessUnitType);
@@ -229,6 +249,66 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
     identityCache.put(key, identity);
     result.setIdentityCreatedCount(result.getIdentityCreatedCount() + 1);
     return new IdentityUpsertOutcome(identity, "CREATE");
+  }
+
+  private FactorIdentity findCanonicalIdentity(
+      FactorRowParseResult row, String businessUnitType) {
+    if (factorCanonicalKeyService == null) {
+      return null;
+    }
+    String canonicalKey =
+        factorCanonicalKeyService.build(row.getPriceSource(), row.getShortName());
+    if (!StringUtils.hasText(canonicalKey)) {
+      return null;
+    }
+    List<FactorIdentity> candidates = factorIdentityMapper.selectList(
+        Wrappers.lambdaQuery(FactorIdentity.class)
+            .eq(FactorIdentity::getBusinessUnitType, businessUnitType)
+            .eq(FactorIdentity::getCanonicalFactorKey, canonicalKey)
+            .eq(FactorIdentity::getStatus, STATUS_ACTIVE));
+    if (candidates == null || candidates.isEmpty()) {
+      return null;
+    }
+    Set<Long> masterIds = candidates.stream()
+        .map(FactorIdentity::getCanonicalFactorIdentityId)
+        .filter(Objects::nonNull)
+        .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    if (masterIds.size() > 1) {
+      throw new IllegalStateException(
+          "统一因素 " + canonicalKey + " 存在多个主身份：" + masterIds);
+    }
+    if (masterIds.size() == 1) {
+      Long masterId = masterIds.iterator().next();
+      return candidates.stream()
+          .filter(candidate -> masterId.equals(candidate.getId()))
+          .findFirst()
+          .orElseThrow(() -> new IllegalStateException(
+              "统一因素 " + canonicalKey + " 的主身份不存在：" + masterId));
+    }
+    if (candidates.size() == 1) {
+      return candidates.getFirst();
+    }
+    throw new IllegalStateException(
+        "统一因素 " + canonicalKey + " 存在多个候选但尚未确定主身份");
+  }
+
+  private void upgradeType2Identity(
+      FactorIdentity identity,
+      FactorRowParseResult row,
+      String identityKey,
+      String operator) {
+    if (!"TYPE2_AUTO_CREATE".equals(identity.getIdentityOrigin())) {
+      return;
+    }
+    identity.setFactorSeqNo(normalize(row.getFactorSeqNo()));
+    identity.setFactorName(normalize(row.getFactorName()));
+    identity.setShortName(normalize(row.getShortName()));
+    identity.setPriceSource(normalize(row.getPriceSource()));
+    identity.setIdentityHash(sha256(identityKey));
+    identity.setIdentityOrigin("STANDARD_IMPORT");
+    identity.setUpdatedBy(operator);
+    identity.setUpdatedAt(LocalDateTime.now());
+    factorIdentityMapper.updateById(identity);
   }
 
   private PriceUpsertOutcome upsertMonthlyPrice(

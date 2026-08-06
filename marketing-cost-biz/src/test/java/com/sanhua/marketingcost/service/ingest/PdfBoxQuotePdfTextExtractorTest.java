@@ -60,7 +60,9 @@ class PdfBoxQuotePdfTextExtractorTest {
 
   @Test
   void extractsDesktopFiSc006StructureSampleWhenAvailable() throws Exception {
-    Assumptions.assumeTrue(Files.exists(FI_SC_006_PDF), "FI-SC-006 desktop PDF sample is required for T2");
+    Assumptions.assumeTrue(
+        DesktopFixtureAccess.isReadable(FI_SC_006_PDF),
+        "FI-SC-006 desktop PDF sample must exist and be readable for T2");
 
     try (InputStream inputStream = Files.newInputStream(FI_SC_006_PDF)) {
       QuotePdfDocument document = extractor.extract(inputStream, FI_SC_006_PDF.getFileName().toString());

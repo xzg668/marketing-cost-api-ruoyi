@@ -81,6 +81,15 @@ app:
 # 老 Strangler 双跑配置（cost.router.mode = legacy/dual/new）已删除：legacy 老结果都是测试期造的数据，
 # 没有真实业务价值，保留双跑只是浪费 + 副作用（业务实际拿到 legacy 结果而非 v1 新功能）。
 cost:
+  quote-bom:
+    effective-bom:
+      # 最终有效 BOM 主链随应用启用，不依赖 IDEA 环境变量；
+      # 如需异常回退，改为 false 并重启服务即可，已生成的最终树和历史报价不会删除或改写。
+      enabled: true
+    alternative-selection:
+      # 报价 BOM 标准/替代选择随应用启用。关闭后拒绝新的切换操作；
+      # 已有选择历史、普通 BOM、上卷和已确认历史报价均保留。
+      enabled: true
   run:
     engine:
       # 当前版本统一 CostRunEngine 已是唯一核算核心；开关保留给上线检查和异常兜底策略识别。
@@ -97,6 +106,10 @@ cost:
   #   new（默认）= 只走新 FormulaNormalizer + VariableRegistry 管线；失败直接抛错
   # V48 业务确认老 parser 有口径问题（不做含税转换），全量切到 new；trace 弹窗不再有 legacy/diff
   linked:
+    # 采购价联动类型2导入总开关。异常回滚时设为 false，仅关闭类型2；
+    # 原标准联动价模板仍走旧导入链路，不受影响。
+    type2-import:
+      enabled: ${COST_LINKED_TYPE2_IMPORT_ENABLED:true}
     # 月度联动价与影响因素 Excel 自动绑定灰度开关
     #   true（默认） = 导入时解析影响因素 sheet、单价列公式并自动写行级绑定
     #   false        = 只导入联动价/固定价行，不自动写绑定，保留老流程可用

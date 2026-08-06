@@ -1,16 +1,9 @@
 package com.sanhua.marketingcost.service.ingest;
 
-import com.sanhua.marketingcost.entity.OaForm;
-import com.sanhua.marketingcost.entity.OaFormItem;
-import java.time.Clock;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
-import org.springframework.util.StringUtils;
+import java.util.Objects;
 
 /** 报价单产品 BOM 当月沿用组合键，统一封装归一化规则，避免各服务各自拼接导致口径漂移。 */
 public class QuoteBomReuseKey {
-  private static final DateTimeFormatter PERIOD_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM");
-
   private final String productCode;
   private final String customerCode;
   private final String packageMethod;
@@ -24,27 +17,16 @@ public class QuoteBomReuseKey {
     this.costPeriodMonth = costPeriodMonth;
   }
 
-  public static QuoteBomReuseKey from(OaForm form, OaFormItem item, Clock clock) {
-    if (item == null) {
-      throw new QuoteIngestException("报价单产品行不能为空");
+  /** 业务复用键只能由已经统一解析并校验的上下文生成。 */
+  public static QuoteBomReuseKey from(QuoteBomContext context) {
+    if (context == null) {
+      throw new QuoteIngestException("报价 BOM 上下文不能为空");
     }
-    String productCode = trimToNull(item.getMaterialNo());
-    if (productCode == null) {
-      throw new QuoteIngestException("产品料号不能为空，无法生成 BOM 沿用组合键");
-    }
-    // 客户维度优先使用产品行客户；产品行为空时使用表头客户；最终统一为空串，便于 SQL 等值匹配。
-    String customerCode = normalizeEmpty(firstText(item.getCustomerCode(), form == null ? null : form.getCustomer()));
-    String packageMethod = normalizeEmpty(item.getPackageMethod());
-    String costPeriodMonth = PERIOD_FORMATTER.format(LocalDate.now(clock == null ? Clock.systemDefaultZone() : clock));
-    return new QuoteBomReuseKey(productCode, customerCode, packageMethod, costPeriodMonth);
-  }
-
-  public static String normalizeEmpty(String value) {
-    String trimmed = trimToNull(value);
-    if (trimmed == null || "/".equals(trimmed)) {
-      return "";
-    }
-    return trimmed;
+    return new QuoteBomReuseKey(
+        context.productCode(),
+        context.customerKey(),
+        context.packageMethod(),
+        context.costPeriodMonth());
   }
 
   public String getProductCode() {
@@ -63,16 +45,22 @@ public class QuoteBomReuseKey {
     return costPeriodMonth;
   }
 
-  private static String firstText(String primary, String fallback) {
-    String normalizedPrimary = trimToNull(primary);
-    return normalizedPrimary == null ? trimToNull(fallback) : normalizedPrimary;
+  @Override
+  public boolean equals(Object other) {
+    if (this == other) {
+      return true;
+    }
+    if (!(other instanceof QuoteBomReuseKey that)) {
+      return false;
+    }
+    return Objects.equals(productCode, that.productCode)
+        && Objects.equals(customerCode, that.customerCode)
+        && Objects.equals(packageMethod, that.packageMethod)
+        && Objects.equals(costPeriodMonth, that.costPeriodMonth);
   }
 
-  private static String trimToNull(String value) {
-    if (!StringUtils.hasText(value)) {
-      return null;
-    }
-    String trimmed = value.trim();
-    return trimmed.isEmpty() ? null : trimmed;
+  @Override
+  public int hashCode() {
+    return Objects.hash(productCode, customerCode, packageMethod, costPeriodMonth);
   }
 }

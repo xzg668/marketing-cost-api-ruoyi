@@ -20,6 +20,7 @@ public class QuoteCostRunVersionInvalidationServiceImpl
     implements QuoteCostRunVersionInvalidationService {
 
   static final String STATUS_TRIAL = "TRIAL";
+  static final String STATUS_CONFIRMED = "CONFIRMED";
   static final String STATUS_STALE = "STALE";
   private static final int CHUNK_SIZE = 500;
 
@@ -40,7 +41,8 @@ public class QuoteCostRunVersionInvalidationServiceImpl
     return invalidate(
         Wrappers.<QuoteCostRunVersion>lambdaQuery()
             .eq(QuoteCostRunVersion::getPricingMonth, month)
-            .eq(QuoteCostRunVersion::getBusinessUnitType, businessUnit));
+            .eq(QuoteCostRunVersion::getBusinessUnitType, businessUnit),
+        List.of(STATUS_TRIAL));
   }
 
   @Override
@@ -48,7 +50,8 @@ public class QuoteCostRunVersionInvalidationServiceImpl
   public int invalidateByOaCu(String oaNo) {
     return invalidate(
         Wrappers.<QuoteCostRunVersion>lambdaQuery()
-            .eq(QuoteCostRunVersion::getOaNo, required("oaNo", oaNo)));
+            .eq(QuoteCostRunVersion::getOaNo, required("oaNo", oaNo)),
+        List.of(STATUS_TRIAL));
   }
 
   @Override
@@ -63,7 +66,31 @@ public class QuoteCostRunVersionInvalidationServiceImpl
             .eq(QuoteCostRunVersion::getOaNo, required("oaNo", oaNo))
             .eq(QuoteCostRunVersion::getOaFormItemId, oaFormItemId)
             .eq(QuoteCostRunVersion::getProductCode, required("productCode", productCode))
-            .eq(QuoteCostRunVersion::getPricingMonth, required("pricingMonth", pricingMonth)));
+            .eq(QuoteCostRunVersion::getPricingMonth, required("pricingMonth", pricingMonth)),
+        List.of(STATUS_TRIAL));
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public int invalidateProductAfterBomChange(
+      String oaNo,
+      Long oaFormItemId,
+      String productCode,
+      String pricingMonth) {
+    if (oaFormItemId == null) {
+      throw new IllegalArgumentException("oaFormItemId 不能为空");
+    }
+    return invalidate(
+        Wrappers.<QuoteCostRunVersion>lambdaQuery()
+            .eq(QuoteCostRunVersion::getOaNo, required("oaNo", oaNo))
+            .eq(QuoteCostRunVersion::getOaFormItemId, oaFormItemId)
+            .eq(
+                QuoteCostRunVersion::getProductCode,
+                required("productCode", productCode))
+            .eq(
+                QuoteCostRunVersion::getPricingMonth,
+                required("pricingMonth", pricingMonth)),
+        List.of(STATUS_TRIAL, STATUS_CONFIRMED));
   }
 
   @Override
@@ -82,12 +109,15 @@ public class QuoteCostRunVersionInvalidationServiceImpl
     }
     return invalidate(
         Wrappers.<QuoteCostRunVersion>lambdaQuery()
-            .in(QuoteCostRunVersion::getPriceTypeConfirmNo, normalized));
+            .in(QuoteCostRunVersion::getPriceTypeConfirmNo, normalized),
+        List.of(STATUS_TRIAL));
   }
 
-  private int invalidate(LambdaQueryWrapper<QuoteCostRunVersion> scope) {
+  private int invalidate(
+      LambdaQueryWrapper<QuoteCostRunVersion> scope,
+      Collection<String> sourceStatuses) {
     scope.select(QuoteCostRunVersion::getId)
-        .eq(QuoteCostRunVersion::getStatus, STATUS_TRIAL)
+        .in(QuoteCostRunVersion::getStatus, sourceStatuses)
         .orderByAsc(QuoteCostRunVersion::getId);
     List<QuoteCostRunVersion> candidates = versionMapper.selectList(scope);
     if (candidates == null || candidates.isEmpty()) {
@@ -108,7 +138,7 @@ public class QuoteCostRunVersionInvalidationServiceImpl
               versionPatch,
               Wrappers.<QuoteCostRunVersion>lambdaUpdate()
                   .in(QuoteCostRunVersion::getId, chunk)
-                  .eq(QuoteCostRunVersion::getStatus, STATUS_TRIAL));
+                  .in(QuoteCostRunVersion::getStatus, sourceStatuses));
       if (changed <= 0) {
         continue;
       }
@@ -119,7 +149,7 @@ public class QuoteCostRunVersionInvalidationServiceImpl
           resultPatch,
           Wrappers.<CostRunResult>lambdaUpdate()
               .in(CostRunResult::getCostRunVersionId, chunk)
-              .eq(CostRunResult::getResultStatus, STATUS_TRIAL));
+              .in(CostRunResult::getResultStatus, sourceStatuses));
     }
     return affected;
   }

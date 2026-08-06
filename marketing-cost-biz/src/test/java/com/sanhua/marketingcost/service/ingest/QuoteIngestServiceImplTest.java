@@ -78,7 +78,8 @@ class QuoteIngestServiceImplTest {
             quoteBomStatusMapper,
             productPropertyAnnualUsageService,
             versionInvalidationService,
-            objectMapper);
+            objectMapper,
+            new QuoteBomContextResolver());
     stubInsertIds();
   }
 

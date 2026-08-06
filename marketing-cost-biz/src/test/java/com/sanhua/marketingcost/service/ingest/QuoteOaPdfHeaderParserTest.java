@@ -192,7 +192,9 @@ class QuoteOaPdfHeaderParserTest {
 
   @Test
   void parsesAvailableHeaderFieldsFromDesktopFiSc006PdfWhenAvailable() throws Exception {
-    Assumptions.assumeTrue(Files.exists(FI_SC_006_PDF), "FI-SC-006 desktop PDF sample is required for T4");
+    Assumptions.assumeTrue(
+        DesktopFixtureAccess.isReadable(FI_SC_006_PDF),
+        "FI-SC-006 desktop PDF sample must exist and be readable for T4");
     QuotePdfDocument document;
     try (InputStream inputStream = Files.newInputStream(FI_SC_006_PDF)) {
       document = new PdfBoxQuotePdfTextExtractor().extract(inputStream, FI_SC_006_PDF.getFileName().toString());

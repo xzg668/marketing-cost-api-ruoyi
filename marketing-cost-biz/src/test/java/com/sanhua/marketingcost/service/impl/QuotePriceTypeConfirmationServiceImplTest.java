@@ -21,7 +21,9 @@ import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmationActio
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmationResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeImportMissingRequest;
 import com.sanhua.marketingcost.entity.BomCostingRow;
+import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
 import com.sanhua.marketingcost.entity.MaterialPriceType;
+import com.sanhua.marketingcost.entity.MaterialScrapRef;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
@@ -33,6 +35,7 @@ import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmBatch;
 import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmItem;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
+import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
 import com.sanhua.marketingcost.mapper.MaterialPriceTypeMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
@@ -42,6 +45,7 @@ import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmBatchMapper;
 import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmItemMapper;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.MakePartPriceGenerationService;
+import com.sanhua.marketingcost.service.MakePartScrapMappingService;
 import com.sanhua.marketingcost.service.PackageComponentSnapshotService;
 import com.sanhua.marketingcost.service.PricePrepareItemClassifier;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
@@ -61,12 +65,14 @@ class QuotePriceTypeConfirmationServiceImplTest {
   private OaFormItemMapper oaFormItemMapper;
   private QuoteBomStatusMapper quoteBomStatusMapper;
   private BomCostingRowMapper bomCostingRowMapper;
+  private BomCostingRowSubRefMapper bomCostingRowSubRefMapper;
   private QuoteBomConfirmationMapper bomConfirmationMapper;
   private MaterialPriceRouterService materialPriceRouterService;
   private MaterialPriceTypeMapper materialPriceTypeMapper;
   private PricePrepareItemClassifier itemClassifier;
   private PackageComponentSnapshotService packageSnapshotService;
   private MakePartPriceGenerationService makePartPriceGenerationService;
+  private MakePartScrapMappingService makePartScrapMappingService;
   private QuotePriceTypeConfirmBatchMapper batchMapper;
   private QuotePriceTypeConfirmItemMapper itemMapper;
   private QuotePriceTypeConfirmationInvalidationService priceTypeInvalidationService;
@@ -79,12 +85,14 @@ class QuotePriceTypeConfirmationServiceImplTest {
     oaFormItemMapper = mock(OaFormItemMapper.class);
     quoteBomStatusMapper = mock(QuoteBomStatusMapper.class);
     bomCostingRowMapper = mock(BomCostingRowMapper.class);
+    bomCostingRowSubRefMapper = mock(BomCostingRowSubRefMapper.class);
     bomConfirmationMapper = mock(QuoteBomConfirmationMapper.class);
     materialPriceRouterService = mock(MaterialPriceRouterService.class);
     materialPriceTypeMapper = mock(MaterialPriceTypeMapper.class);
     itemClassifier = mock(PricePrepareItemClassifier.class);
     packageSnapshotService = mock(PackageComponentSnapshotService.class);
     makePartPriceGenerationService = mock(MakePartPriceGenerationService.class);
+    makePartScrapMappingService = mock(MakePartScrapMappingService.class);
     batchMapper = mock(QuotePriceTypeConfirmBatchMapper.class);
     itemMapper = mock(QuotePriceTypeConfirmItemMapper.class);
     priceTypeInvalidationService = mock(QuotePriceTypeConfirmationInvalidationService.class);
@@ -95,12 +103,14 @@ class QuotePriceTypeConfirmationServiceImplTest {
             oaFormItemMapper,
             quoteBomStatusMapper,
             bomCostingRowMapper,
+            bomCostingRowSubRefMapper,
             bomConfirmationMapper,
             materialPriceRouterService,
             materialPriceTypeMapper,
             itemClassifier,
             packageSnapshotService,
             makePartPriceGenerationService,
+            makePartScrapMappingService,
             batchMapper,
             itemMapper,
             priceTypeInvalidationService,
@@ -169,6 +179,48 @@ class QuotePriceTypeConfirmationServiceImplTest {
         .previewStructureByOa("OA-001", "COMMERCIAL", "2026-06");
     assertThat(response.getSummary().getMakePartCount()).isEqualTo(1);
     assertThat(response.getSummary().getMissingTypeCount()).isEqualTo(1);
+  }
+
+  @Test
+  void specialRollupParentOnlyExpandsMatchedRawMaterialAndKeepsSiblingAsNormalRow() {
+    mockScope();
+    BomCostingRow parent = row(305L, "2018000671211");
+    parent.setMaterialName("封头部件");
+    parent.setSettlementRowType("SPECIAL_ROLLUP_PARENT");
+    BomCostingRow ring = row(306L, "203240247");
+    ring.setMaterialName("分磁环");
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot(
+            "OA-001", 10L, "FIN-001", "2026-06"))
+        .thenReturn(List.of(parent, ring));
+    when(itemClassifier.classify(any()))
+        .thenReturn(List.of(makePlan(parent), normalPlan(ring)));
+    when(bomCostingRowSubRefMapper.selectSpecialRollupChildren(List.of(305L)))
+        .thenReturn(List.of(rollupRef(305L, "301220046", "软磁不锈钢棒", "0.00786000")));
+    when(makePartScrapMappingService.listMappings("301220046", "COMMERCIAL"))
+        .thenReturn(List.of(scrapRef("301220046", "301990752", "废软磁不锈铁沫")));
+    when(materialPriceRouterService.resolve(
+            eq("301220046"), eq("2026-06"), any(LocalDate.class)))
+        .thenReturn(Optional.empty());
+    when(materialPriceRouterService.resolve(
+            eq("301990752"), eq("2026-06"), any(LocalDate.class)))
+        .thenReturn(Optional.of(route(PriceTypeEnum.LINKED)));
+    when(materialPriceRouterService.resolve(
+            eq("203240247"), eq("2026-06"), any(LocalDate.class)))
+        .thenReturn(Optional.of(route(PriceTypeEnum.FIXED)));
+
+    QuotePriceTypeConfirmationResponse response =
+        service.getConfirmation("OA-001", 10L, null);
+
+    assertThat(response.getRows()).hasSize(2);
+    assertThat(response.getRows().get(0).getMaterialCode()).isEqualTo("2018000671211");
+    assertThat(response.getRows().get(0).getChildren()).extracting("materialCode")
+        .containsExactly("301220046", "301990752");
+    assertThat(response.getRows().get(0).getChildren()).extracting("objectType")
+        .containsExactly("MAKE_RAW", "MAKE_SCRAP");
+    assertThat(response.getRows().get(1).getMaterialCode()).isEqualTo("203240247");
+    assertThat(response.getRows().get(1).getObjectType()).isEqualTo("NORMAL");
+    verify(makePartPriceGenerationService, never())
+        .previewStructureByOa(anyString(), anyString(), anyString());
   }
 
   @Test
@@ -573,6 +625,29 @@ class QuotePriceTypeConfirmationServiceImplTest {
     row.setScrapCode("SCRAP-1");
     row.setScrapName("废料1");
     return row;
+  }
+
+  private BomCostingRowSubRef rollupRef(
+      Long costingRowId,
+      String materialCode,
+      String materialName,
+      String quantity) {
+    BomCostingRowSubRef ref = new BomCostingRowSubRef();
+    ref.setCostingRowId(costingRowId);
+    ref.setRefType("SPECIAL_ROLLUP_CHILD");
+    ref.setSubMaterialCode(materialCode);
+    ref.setSubMaterialName(materialName);
+    ref.setSubQtyPerParent(new BigDecimal(quantity));
+    return ref;
+  }
+
+  private MaterialScrapRef scrapRef(
+      String materialCode, String scrapCode, String scrapName) {
+    MaterialScrapRef ref = new MaterialScrapRef();
+    ref.setMaterialCode(materialCode);
+    ref.setScrapCode(scrapCode);
+    ref.setScrapName(scrapName);
+    return ref;
   }
 
   private PackageSnapshotResult packageSnapshot() {

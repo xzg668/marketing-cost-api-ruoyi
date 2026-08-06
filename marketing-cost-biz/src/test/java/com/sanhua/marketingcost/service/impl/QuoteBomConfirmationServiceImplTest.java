@@ -16,14 +16,18 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomConfirmation;
 import com.sanhua.marketingcost.entity.QuoteBomConfirmationLog;
+import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomConfirmationLogMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
+import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
+import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
+import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeConfirmationGuard;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -41,6 +45,8 @@ class QuoteBomConfirmationServiceImplTest {
   private QuoteBomConfirmationMapper confirmationMapper;
   private QuoteBomConfirmationLogMapper confirmationLogMapper;
   private QuoteCostRunVersionInvalidationService versionInvalidationService;
+  private QuoteBomPreparationRecordMapper preparationRecordMapper;
+  private QuoteBomAlternativeConfirmationGuard alternativeConfirmationGuard;
   private QuoteBomConfirmationServiceImpl service;
 
   @BeforeEach
@@ -52,6 +58,8 @@ class QuoteBomConfirmationServiceImplTest {
     confirmationMapper = mock(QuoteBomConfirmationMapper.class);
     confirmationLogMapper = mock(QuoteBomConfirmationLogMapper.class);
     versionInvalidationService = mock(QuoteCostRunVersionInvalidationService.class);
+    preparationRecordMapper = mock(QuoteBomPreparationRecordMapper.class);
+    alternativeConfirmationGuard = mock(QuoteBomAlternativeConfirmationGuard.class);
     service =
         new QuoteBomConfirmationServiceImpl(
             oaFormMapper,
@@ -60,7 +68,10 @@ class QuoteBomConfirmationServiceImplTest {
             bomCostingRowMapper,
             confirmationMapper,
             confirmationLogMapper,
-            versionInvalidationService);
+            versionInvalidationService,
+            preparationRecordMapper,
+            alternativeConfirmationGuard,
+            new QuoteBomContextResolver());
   }
 
   @Test
@@ -113,7 +124,6 @@ class QuoteBomConfirmationServiceImplTest {
     assertThat(response.getRowCount()).isEqualTo(2);
     assertThat(response.getManualModifiedCount()).isEqualTo(1);
     assertThat(response.getReplaceCount()).isZero();
-    assertThat(response.getUsageAdjustCount()).isZero();
 
     ArgumentCaptor<QuoteBomConfirmationLog> logCaptor =
         ArgumentCaptor.forClass(QuoteBomConfirmationLog.class);
@@ -167,10 +177,105 @@ class QuoteBomConfirmationServiceImplTest {
         .invalidateProduct("OA-001", 10L, "FIN-001", "2026-06");
   }
 
+  @Test
+  void activeConfirmationCheckUsesExactQuoteProductMonthScope() {
+    when(confirmationMapper.selectCount(any()))
+        .thenReturn(1L);
+
+    boolean active =
+        service.hasActiveConfirmation(
+            "OA-001", 10L, "FIN-001", "2026-06");
+
+    assertThat(active).isTrue();
+    verify(confirmationMapper).selectCount(any());
+  }
+
+  @Test
+  void effectiveConfirmationPersistsTheSharedBuildAndSkipsLiveAlternativeGuard() {
+    mockScope();
+    QuoteBomStatus status = status();
+    status.setCostingBuildBatchId("qeb_BUILD_1");
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status);
+    BomCostingRow first = row("MAT-1", 0);
+    first.setBuildBatchId("qeb_BUILD_1");
+    BomCostingRow second = row("MAT-2", 0);
+    second.setBuildBatchId("qeb_BUILD_1");
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot(
+            "OA-001", 10L, "FIN-001", "2026-06"))
+        .thenReturn(List.of(first, second));
+    when(confirmationMapper.selectList(any())).thenReturn(List.of(), List.of());
+    when(confirmationMapper.insert(any(QuoteBomConfirmation.class)))
+        .thenAnswer(
+            invocation -> {
+              invocation.<QuoteBomConfirmation>getArgument(0).setId(801L);
+              return 1;
+            });
+
+    QuoteBomConfirmResponse response =
+        service.confirmEffective(
+            "OA-001", 10L, "qeb_BUILD_1", 1, new QuoteBomConfirmRequest());
+
+    assertThat(response.getCostingBuildBatchId()).isEqualTo("qeb_BUILD_1");
+    assertThat(response.getReplaceCount()).isOne();
+    ArgumentCaptor<QuoteBomConfirmation> confirmation =
+        ArgumentCaptor.forClass(QuoteBomConfirmation.class);
+    verify(confirmationMapper).insert(confirmation.capture());
+    assertThat(confirmation.getValue().getCostingBuildBatchId())
+        .isEqualTo("qeb_BUILD_1");
+    verify(alternativeConfirmationGuard, never())
+        .validateAndCountManualAlternatives(any(), any(), any());
+    verify(versionInvalidationService)
+        .invalidateProduct("OA-001", 10L, "FIN-001", "2026-06");
+  }
+
+  @Test
+  void effectiveConfirmationRejectsRowsOrStatusFromAnotherBuild() {
+    mockScope();
+    QuoteBomStatus status = status();
+    status.setCostingBuildBatchId("qeb_BUILD_1");
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status);
+    BomCostingRow wrong = row("MAT-1", 0);
+    wrong.setBuildBatchId("OTHER");
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot(
+            "OA-001", 10L, "FIN-001", "2026-06"))
+        .thenReturn(List.of(wrong));
+    when(confirmationMapper.selectList(any())).thenReturn(List.of());
+
+    assertThatThrownBy(
+            () ->
+                service.confirmEffective(
+                    "OA-001", 10L, "qeb_BUILD_1", 0, null))
+        .isInstanceOf(QuoteIngestException.class)
+        .hasMessageContaining("结算行");
+    verify(confirmationMapper, never()).insert(any(QuoteBomConfirmation.class));
+  }
+
+  @Test
+  void repeatEffectiveConfirmationRequiresTheSameBuildBatch() {
+    mockScope();
+    BomCostingRow row = row("MAT-1", 0);
+    row.setBuildBatchId("qeb_BUILD_1");
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot(
+            "OA-001", 10L, "FIN-001", "2026-06"))
+        .thenReturn(List.of(row));
+    QuoteBomConfirmation existing =
+        existingConfirmation(1, QuoteBomConfirmation.STATUS_CONFIRMED);
+    existing.setCostingBuildBatchId("OTHER");
+    when(confirmationMapper.selectList(any())).thenReturn(List.of(existing));
+
+    assertThatThrownBy(
+            () ->
+                service.confirmEffective(
+                    "OA-001", 10L, "qeb_BUILD_1", 0, null))
+        .isInstanceOf(QuoteIngestException.class)
+        .hasMessageContaining("已有BOM确认");
+  }
+
   private void mockScope() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item());
     when(quoteBomStatusMapper.selectOne(any())).thenReturn(status());
+    when(preparationRecordMapper.selectOne(any())).thenReturn(preparation());
   }
 
   private OaForm form() {
@@ -201,6 +306,21 @@ class QuoteBomConfirmationServiceImplTest {
     return status;
   }
 
+  private QuoteBomPreparationRecord preparation() {
+    QuoteBomPreparationRecord preparation =
+        new QuoteBomPreparationRecord();
+    preparation.setId(90L);
+    preparation.setOaFormId(1L);
+    preparation.setOaFormItemId(10L);
+    preparation.setOaNo("OA-001");
+    preparation.setQuoteProductCode("FIN-001");
+    preparation.setProductType("NON_BARE");
+    preparation.setPriceOrgCode("210");
+    preparation.setMaterialOrganizationCode("COMMERCIAL");
+    preparation.setActiveFlag(1);
+    return preparation;
+  }
+
   private BomCostingRow row(String materialCode, int manualModified) {
     BomCostingRow row = new BomCostingRow();
     row.setOaNo("OA-001");
@@ -226,7 +346,6 @@ class QuoteBomConfirmationServiceImplTest {
     confirmation.setRowCount(1);
     confirmation.setManualModifiedCount(0);
     confirmation.setReplaceCount(0);
-    confirmation.setUsageAdjustCount(0);
     confirmation.setConfirmedBy("system");
     confirmation.setConfirmedAt(LocalDateTime.now().minusMinutes(5));
     confirmation.setBusinessUnitType("COMMERCIAL");

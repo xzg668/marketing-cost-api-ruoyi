@@ -19,14 +19,13 @@ import com.sanhua.marketingcost.mapper.QuoteBomMonthlySnapshotMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import java.time.Clock;
 import java.time.LocalDateTime;
-import java.time.YearMonth;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
@@ -39,10 +38,10 @@ import org.springframework.util.StringUtils;
 @Service
 public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
   private static final String SNAPSHOT_STATUS_SUCCESS = "SUCCESS";
+  private static final String SNAPSHOT_FREEZE_STATUS_FROZEN = "FROZEN";
   private static final String SNAPSHOT_SYNC_TYPE_AUTO = "AUTO";
   private static final String SNAPSHOT_SYNC_TYPE_MANUAL = "MANUAL";
   private static final String SOURCE_COSTING_SNAPSHOT = "COSTING_SNAPSHOT";
-  private static final DateTimeFormatter PERIOD_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM");
 
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
@@ -51,6 +50,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
   private final BomAvailabilityAdapter bomAvailabilityAdapter;
   private final BomU9SourceMapper bomU9SourceMapper;
   private final U9ProductPackagingTypeResolver productPackagingTypeResolver;
+  private final QuoteBomContextResolver contextResolver;
   private final Clock clock;
 
   @Autowired
@@ -61,7 +61,8 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       QuoteBomMonthlySnapshotMapper quoteBomMonthlySnapshotMapper,
       BomAvailabilityAdapter bomAvailabilityAdapter,
       BomU9SourceMapper bomU9SourceMapper,
-      U9ProductPackagingTypeResolver productPackagingTypeResolver) {
+      U9ProductPackagingTypeResolver productPackagingTypeResolver,
+      QuoteBomContextResolver contextResolver) {
     this(
         oaFormMapper,
         oaFormItemMapper,
@@ -70,6 +71,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
         bomAvailabilityAdapter,
         bomU9SourceMapper,
         productPackagingTypeResolver,
+        contextResolver,
         Clock.systemDefaultZone());
   }
 
@@ -81,6 +83,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       BomAvailabilityAdapter bomAvailabilityAdapter,
       BomU9SourceMapper bomU9SourceMapper,
       U9ProductPackagingTypeResolver productPackagingTypeResolver,
+      QuoteBomContextResolver contextResolver,
       Clock clock) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
@@ -89,6 +92,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     this.bomAvailabilityAdapter = bomAvailabilityAdapter;
     this.bomU9SourceMapper = bomU9SourceMapper;
     this.productPackagingTypeResolver = productPackagingTypeResolver;
+    this.contextResolver = contextResolver;
     this.clock = clock;
   }
 
@@ -133,10 +137,44 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
         quoteBomStatusMapper.insert(status);
         statusByItemId.put(item.getId(), status);
       }
-      checkItemForCostRun(form, item, status, now);
+      checkItemForCostRun(form, item, status, now, null);
       quoteBomStatusMapper.updateById(status);
     }
     return buildResponse(form, items, statusByItemId);
+  }
+
+  @Override
+  @Transactional
+  public QuoteBomStatusItemResponse checkItemForCostRun(
+      String oaNo, Long oaFormItemId) {
+    return checkItemForCostRun(oaNo, oaFormItemId, null);
+  }
+
+  @Override
+  @Transactional
+  public QuoteBomStatusItemResponse checkItemForCostRun(
+      String oaNo, Long oaFormItemId, String costPeriodMonth) {
+    OaForm form = requireForm(oaNo);
+    if (oaFormItemId == null || oaFormItemId <= 0) {
+      throw new QuoteIngestException("报价产品行ID不能为空");
+    }
+    OaFormItem item = oaFormItemMapper.selectById(oaFormItemId);
+    if (item == null || !Objects.equals(form.getId(), item.getOaFormId())) {
+      throw new QuoteIngestException("报价产品行不属于当前报价单");
+    }
+    QuoteBomStatus status =
+        quoteBomStatusMapper.selectOne(
+            Wrappers.lambdaQuery(QuoteBomStatus.class)
+                .eq(QuoteBomStatus::getOaFormItemId, oaFormItemId)
+                .last("LIMIT 1"));
+    if (status == null) {
+      status = createInitialStatus(form, item);
+      quoteBomStatusMapper.insert(status);
+    }
+    checkItemForCostRun(
+        form, item, status, LocalDateTime.now(clock), trimToNull(costPeriodMonth));
+    quoteBomStatusMapper.updateById(status);
+    return toResponseItem(form, item, status);
   }
 
   @Override
@@ -163,7 +201,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     response.setDistinctProductCount(collectProductCodes(items).size());
 
     Set<String> missingProducts = new LinkedHashSet<>();
-    LocalDateTime now = LocalDateTime.now();
+    LocalDateTime now = LocalDateTime.now(clock);
     for (OaFormItem item : items) {
       OaForm form = formById.get(item.getOaFormId());
       if (form == null) {
@@ -176,18 +214,28 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
         quoteBomStatusMapper.insert(status);
         statusByItemId.put(item.getId(), status);
       }
-      QuoteDataOrganization organization = resolveOrganization(form, item);
+      QuoteBomContext context;
+      try {
+        context = contextResolver.resolve(form, item);
+      } catch (QuoteIngestException ex) {
+        applyManualSyncFailure(status, form, item, ex.getMessage(), now);
+        quoteBomStatusMapper.updateById(status);
+        response.getItems().add(toResponseItem(form, item, status));
+        response.setNoBomRowCount(response.getNoBomRowCount() + 1);
+        continue;
+      }
       // T14 口径：这里的“U9 同步”先读取 lp_bom_u9_source 本地全量快照，不代表已经接入外部 U9 实时接口。
       applyManualU9SourceSnapshot(
           status,
           form,
           item,
-          latestU9ByProductOrg.get(sourceKey(organization.priceOrgCode(), trimToNull(item.getMaterialNo()))),
-          organization,
+          latestU9ByProductOrg.get(
+              sourceKey(context.organization().priceOrgCode(), context.productCode())),
+          context,
           now);
       quoteBomStatusMapper.updateById(status);
       response.getItems().add(toResponseItem(form, item, status));
-      if (QuoteBomStatusCode.SYNCED.getCode().equals(status.getBomStatus())) {
+      if (isCostReadyBomStatus(status.getBomStatus())) {
         response.setSyncedRowCount(response.getSyncedRowCount() + 1);
       } else {
         response.setNoBomRowCount(response.getNoBomRowCount() + 1);
@@ -207,25 +255,34 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       OaForm form,
       OaFormItem item,
       BomU9Source source,
-      QuoteDataOrganization organization,
+      QuoteBomContext context,
       LocalDateTime now) {
-    QuoteBomReuseKey key;
-    try {
-      key = QuoteBomReuseKey.from(form, item, clock);
-    } catch (QuoteIngestException ex) {
-      applyManualSyncFailure(status, form, item, ex.getMessage(), now);
+    QuoteBomReuseKey key = QuoteBomReuseKey.from(context);
+    applyReuseKey(status, key, item, now);
+    QuoteBomMonthlySnapshot activeSnapshot =
+        findActiveSuccessSnapshot(key, context.organization());
+    if (activeSnapshot != null
+        && SNAPSHOT_FREEZE_STATUS_FROZEN.equals(
+            trimToNull(activeSnapshot.getFreezeStatus()))) {
+      // 月度最终BOM一旦冻结，月中再次点击U9同步也只能沿用，不能替换原始来源或最终构建。
+      applyReusedSnapshot(status, activeSnapshot, now);
       return;
     }
-    applyReuseKey(status, key, item, now);
     if (source == null) {
       applyManualSyncFailure(status, form, item, "本地 U9 全量快照中未找到该产品 BOM", now);
+      return;
+    }
+    try {
+      contextResolver.validateSourceOrganization(context, source.getPriceOrgCode());
+    } catch (QuoteIngestException ex) {
+      applyManualSyncFailure(status, form, item, ex.getMessage(), now);
       return;
     }
 
     // 手动同步成功后切换组合当月 active 快照；失败分支不会动旧 active 记录，避免破坏已可核算数据。
     QuoteBomMonthlySnapshot snapshot =
-        createManualSuccessSnapshot(form, item, key, source, organization, now);
-    deactivateActiveSnapshots(key, organization);
+        createManualSuccessSnapshot(form, item, key, source, context.organization(), now);
+    deactivateActiveSnapshots(key, context.organization());
     quoteBomMonthlySnapshotMapper.insert(snapshot);
     status.setBomStatus(QuoteBomStatusCode.SYNCED.getCode());
     status.setBomSource(defaultU9Source(source.getSourceType()));
@@ -240,18 +297,26 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     status.setErrorMessage(null);
   }
 
-  private void checkItemForCostRun(OaForm form, OaFormItem item, QuoteBomStatus status, LocalDateTime now) {
-    QuoteBomReuseKey key;
+  private void checkItemForCostRun(
+      OaForm form,
+      OaFormItem item,
+      QuoteBomStatus status,
+      LocalDateTime now,
+      String costPeriodMonth) {
+    QuoteBomContext context;
     try {
-      key = QuoteBomReuseKey.from(form, item, clock);
+      context =
+          costPeriodMonth == null
+              ? contextResolver.resolve(form, item)
+              : contextResolver.resolveWithExistingCostPeriod(form, item, costPeriodMonth);
     } catch (QuoteIngestException ex) {
       applyMissingProductStatus(status, form, item, ex.getMessage(), now);
       return;
     }
+    QuoteBomReuseKey key = QuoteBomReuseKey.from(context);
     applyReuseKey(status, key, item, now);
 
-    QuoteDataOrganization organization = resolveOrganization(form, item);
-    QuoteBomMonthlySnapshot activeSnapshot = findActiveSuccessSnapshot(key, organization);
+    QuoteBomMonthlySnapshot activeSnapshot = findActiveSuccessSnapshot(key, context.organization());
     if (activeSnapshot != null) {
       // 同组合当月已经存在 active 成功快照，成本核算直接复用来源 BOM，不再重复自动拉取。
       applyReusedSnapshot(status, activeSnapshot, now);
@@ -260,7 +325,10 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
 
     BomAvailability availability =
         bomAvailabilityAdapter.findAvailableBom(
-            form.getOaNo(), key.getProductCode(), key.getCostPeriodMonth(), organization.priceOrgCode());
+            form.getOaNo(),
+            key.getProductCode(),
+            key.getCostPeriodMonth(),
+            context.organization().priceOrgCode());
     if (!availability.isAvailable()) {
       applyNoBomStatus(status, availability, now);
       return;
@@ -268,8 +336,8 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
 
     // 首次进入当月成本核算且可找到 BOM 时，生成新的 active 快照，后续同组合本月可直接沿用。
     QuoteBomMonthlySnapshot snapshot =
-        createAutoSuccessSnapshot(form, item, key, availability, organization, now);
-    deactivateActiveSnapshots(key, organization);
+        createAutoSuccessSnapshot(form, item, key, availability, context.organization(), now);
+    deactivateActiveSnapshots(key, context.organization());
     quoteBomMonthlySnapshotMapper.insert(snapshot);
     applySyncedSnapshot(status, availability, snapshot, now);
   }
@@ -288,7 +356,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
                 .eq("active_flag", 1)
                 .orderByDesc("sync_at")
                 .orderByDesc("id")
-                .last("LIMIT 1"));
+                .last("LIMIT 1 FOR UPDATE"));
     return snapshots.isEmpty() ? null : snapshots.get(0);
   }
 
@@ -302,7 +370,13 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
             .eq("customer_code", key.getCustomerCode())
             .eq("package_method", key.getPackageMethod())
             .eq("cost_period_month", key.getCostPeriodMonth())
-            .eq("active_flag", 1));
+            .eq("active_flag", 1)
+            .and(
+                wrapper ->
+                    wrapper
+                        .ne("freeze_status", SNAPSHOT_FREEZE_STATUS_FROZEN)
+                        .or()
+                        .isNull("freeze_status")));
   }
 
   private QuoteBomMonthlySnapshot createAutoSuccessSnapshot(
@@ -343,7 +417,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       LocalDateTime now) {
     QuoteBomMonthlySnapshot snapshot = new QuoteBomMonthlySnapshot();
     snapshot.setProductCode(key.getProductCode());
-    snapshot.setPriceOrgCode(firstText(source.getPriceOrgCode(), organization.priceOrgCode()));
+    snapshot.setPriceOrgCode(organization.priceOrgCode());
     snapshot.setCustomerCode(key.getCustomerCode());
     snapshot.setPackageMethod(key.getPackageMethod());
     snapshot.setCostPeriodMonth(key.getCostPeriodMonth());
@@ -387,6 +461,10 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     status.setSyncBatchId(snapshot.getBomBatchId());
     status.setSyncRecordId(snapshot.getId());
     status.setReusedFromRecordId(snapshot.getId());
+    status.setCostingBuildBatchId(
+        SNAPSHOT_FREEZE_STATUS_FROZEN.equals(trimToNull(snapshot.getFreezeStatus()))
+            ? trimToNull(snapshot.getEffectiveBuildBatchId())
+            : null);
     status.setSyncAt(snapshot.getSyncAt());
     status.setErrorMessage(null);
     status.setCheckedAt(now);
@@ -429,18 +507,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
 
   private void applyMissingProductStatus(
       QuoteBomStatus status, OaForm form, OaFormItem item, String message, LocalDateTime now) {
-    status.setOaFormId(form.getId());
-    status.setOaFormItemId(item.getId());
-    status.setOaNo(form.getOaNo());
-    status.setProductCode(trimToNull(item.getMaterialNo()));
-    status.setProductModel(trimToNull(item.getSunlModel()));
-    status.setCustomerCode(QuoteBomReuseKey.normalizeEmpty(firstText(item.getCustomerCode(), form.getCustomer())));
-    status.setPackageType(trimToNull(item.getPackageType()));
-    status.setPackageMethod(QuoteBomReuseKey.normalizeEmpty(item.getPackageMethod()));
-    status.setCostPeriodMonth(null);
-    status.setTechnicianName(trimToNull(item.getTechnicianName()));
-    status.setCheckedAt(now);
-    status.setUpdatedAt(now);
+    applyStatusIdentity(status, form, item, now);
     status.setBomStatus(QuoteBomStatusCode.NO_BOM.getCode());
     status.setBomSource(null);
     status.setBomPurpose(null);
@@ -456,17 +523,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
 
   private void applyManualSyncFailure(
       QuoteBomStatus status, OaForm form, OaFormItem item, String message, LocalDateTime now) {
-    status.setOaFormId(form.getId());
-    status.setOaFormItemId(item.getId());
-    status.setOaNo(form.getOaNo());
-    status.setProductCode(trimToNull(item.getMaterialNo()));
-    status.setProductModel(trimToNull(item.getSunlModel()));
-    status.setCustomerCode(QuoteBomReuseKey.normalizeEmpty(firstText(item.getCustomerCode(), form.getCustomer())));
-    status.setPackageType(trimToNull(item.getPackageType()));
-    status.setPackageMethod(QuoteBomReuseKey.normalizeEmpty(item.getPackageMethod()));
-    status.setTechnicianName(trimToNull(item.getTechnicianName()));
-    status.setCheckedAt(now);
-    status.setUpdatedAt(now);
+    applyStatusIdentity(status, form, item, now);
     status.setBomStatus(QuoteBomStatusCode.CHECK_FAILED.getCode());
     status.setBomSource(null);
     status.setBomPurpose(null);
@@ -481,22 +538,23 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
   }
 
   private void applyAvailability(QuoteBomStatus status, OaForm form, OaFormItem item) {
-    status.setProductCode(trimToNull(item.getMaterialNo()));
-    status.setProductModel(trimToNull(item.getSunlModel()));
-    status.setCustomerCode(trimToNull(item.getCustomerCode()));
-    status.setPackageType(trimToNull(item.getPackageType()));
-    status.setPackageMethod(trimToNull(item.getPackageMethod()));
-    status.setTechnicianName(trimToNull(item.getTechnicianName()));
-    status.setCostPeriodMonth(currentPeriodMonth());
-    status.setCheckedAt(LocalDateTime.now());
-    status.setUpdatedAt(LocalDateTime.now());
+    LocalDateTime now = LocalDateTime.now(clock);
+    QuoteBomContext context;
+    try {
+      context = contextResolver.resolve(form, item);
+    } catch (QuoteIngestException ex) {
+      applyMissingProductStatus(status, form, item, ex.getMessage(), now);
+      return;
+    }
+    QuoteBomReuseKey key = QuoteBomReuseKey.from(context);
+    applyReuseKey(status, key, item, now);
 
     BomAvailability availability =
         bomAvailabilityAdapter.findAvailableBom(
             status.getOaNo(),
-            item.getMaterialNo(),
-            status.getCostPeriodMonth(),
-            resolveOrganization(form, item).priceOrgCode());
+            context.productCode(),
+            context.costPeriodMonth(),
+            context.organization().priceOrgCode());
     if (availability.isAvailable()) {
       status.setBomStatus(statusForAvailability(availability));
       status.setBomSource(availability.getSource());
@@ -521,22 +579,36 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
 
   private QuoteBomStatus createInitialStatus(OaForm form, OaFormItem item) {
     QuoteBomStatus status = new QuoteBomStatus();
+    LocalDateTime now = LocalDateTime.now(clock);
+    applyStatusIdentity(status, form, item, now);
+    status.setCheckedAt(null);
+    status.setBomStatus(
+        StringUtils.hasText(item.getMaterialNo())
+            ? QuoteBomStatusCode.NOT_CHECKED.getCode()
+            : QuoteBomStatusCode.NO_BOM.getCode());
+    status.setCreatedAt(now);
+    status.setUpdatedAt(now);
+    return status;
+  }
+
+  private void applyStatusIdentity(
+      QuoteBomStatus status, OaForm form, OaFormItem item, LocalDateTime now) {
     status.setOaFormId(form.getId());
     status.setOaFormItemId(item.getId());
     status.setOaNo(form.getOaNo());
     status.setProductCode(trimToNull(item.getMaterialNo()));
     status.setProductModel(trimToNull(item.getSunlModel()));
-    status.setCustomerCode(trimToNull(item.getCustomerCode()));
+    status.setCustomerCode(contextResolver.resolveCustomer(form, null).value());
     status.setPackageType(trimToNull(item.getPackageType()));
-    status.setPackageMethod(trimToNull(item.getPackageMethod()));
+    status.setPackageMethod(contextResolver.normalizePackageMethod(item.getPackageMethod()));
+    try {
+      status.setCostPeriodMonth(contextResolver.resolveCostPeriodMonth(form));
+    } catch (QuoteIngestException ex) {
+      status.setCostPeriodMonth(null);
+    }
     status.setTechnicianName(trimToNull(item.getTechnicianName()));
-    status.setBomStatus(
-        StringUtils.hasText(item.getMaterialNo())
-            ? QuoteBomStatusCode.NOT_CHECKED.getCode()
-            : QuoteBomStatusCode.NO_BOM.getCode());
-    status.setCreatedAt(LocalDateTime.now());
-    status.setUpdatedAt(LocalDateTime.now());
-    return status;
+    status.setCheckedAt(now);
+    status.setUpdatedAt(now);
   }
 
   private OaForm requireForm(String oaNo) {
@@ -641,7 +713,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       if (productCode == null) {
         continue;
       }
-      QuoteDataOrganization organization = resolveOrganization(form, item);
+      QuoteDataOrganization organization = contextResolver.resolveOrganization(form, item);
       productCodesByOrg
           .computeIfAbsent(organization.priceOrgCode(), ignored -> new LinkedHashSet<>())
           .add(productCode);
@@ -667,16 +739,6 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       }
     }
     return map;
-  }
-
-  private QuoteDataOrganization resolveOrganization(OaForm form, OaFormItem item) {
-    return MaterialOrganization.quoteDataForQuoteProduct(
-        form == null ? null : form.getProcessCode(),
-        form == null ? null : form.getOaNo(),
-        item == null ? null : item.getBusinessUnitType(),
-        item == null ? null : item.getProductName(),
-        item == null ? null : item.getSunlModel(),
-        item == null ? null : item.getMaterialNo());
   }
 
   private String sourceKey(String priceOrgCode, String productCode) {
@@ -756,7 +818,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
   }
 
   private void applyProductPackagingType(QuoteBomStatusItemResponse row, OaForm form, OaFormItem item) {
-    QuoteDataOrganization organization = resolveOrganization(form, item);
+    QuoteDataOrganization organization = contextResolver.resolveOrganization(form, item);
     U9ProductPackagingTypeResolver.Result result =
         productPackagingTypeResolver.resolve(
             row.getProductCode(), organization.materialOrganizationCode());
@@ -781,21 +843,12 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     return QuoteBomStatusCode.U9_BOM_EXISTS.getCode();
   }
 
-  private String currentPeriodMonth() {
-    return PERIOD_FORMATTER.format(YearMonth.now(clock == null ? Clock.systemDefaultZone() : clock));
-  }
-
   private String trimToNull(String value) {
     if (value == null) {
       return null;
     }
     String trimmed = value.trim();
     return trimmed.isEmpty() ? null : trimmed;
-  }
-
-  private String firstText(String first, String second) {
-    String normalizedFirst = trimToNull(first);
-    return normalizedFirst == null ? trimToNull(second) : normalizedFirst;
   }
 
   private String currentUsername(String fallback) {

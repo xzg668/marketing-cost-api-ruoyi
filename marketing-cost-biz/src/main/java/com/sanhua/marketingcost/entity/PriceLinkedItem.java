@@ -37,6 +37,38 @@ public class PriceLinkedItem {
   private String orderType;
   private BigDecimal quota;
 
+  /** 类型 2 导入来源批次；历史记录保持 null。 */
+  @TableField("source_upload_batch_id")
+  private Long sourceUploadBatchId;
+
+  /** 类型 2 业务计算 Sheet 名称。 */
+  @TableField("source_sheet_name")
+  private String sourceSheetName;
+
+  /** 类型 2 业务计算 Sheet 的 1-based 行号。 */
+  @TableField("source_row_number")
+  private Integer sourceRowNumber;
+
+  /** “现含税价”原始公式单元格，如 R5。 */
+  @TableField("source_formula_cell_ref")
+  private String sourceFormulaCellRef;
+
+  /** Excel 原始公式，不做影响因素或固定输入替换。 */
+  @TableField("source_formula_expr")
+  private String sourceFormulaExpr;
+
+  /** 原始输入字段、单元格、值、单位和影响因素身份 JSON 快照。 */
+  @TableField("source_input_snapshot_json")
+  private String sourceInputSnapshotJson;
+
+  /** Excel 导入当时的含税价快照。 */
+  @TableField("source_tax_included_price")
+  private BigDecimal sourceTaxIncludedPrice;
+
+  /** Excel 导入当时的不含税价快照。 */
+  @TableField("source_tax_excluded_price")
+  private BigDecimal sourceTaxExcludedPrice;
+
   /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
@@ -256,6 +288,70 @@ public class PriceLinkedItem {
 
   public void setQuota(BigDecimal quota) {
     this.quota = quota;
+  }
+
+  public Long getSourceUploadBatchId() {
+    return sourceUploadBatchId;
+  }
+
+  public void setSourceUploadBatchId(Long sourceUploadBatchId) {
+    this.sourceUploadBatchId = sourceUploadBatchId;
+  }
+
+  public String getSourceSheetName() {
+    return sourceSheetName;
+  }
+
+  public void setSourceSheetName(String sourceSheetName) {
+    this.sourceSheetName = sourceSheetName;
+  }
+
+  public Integer getSourceRowNumber() {
+    return sourceRowNumber;
+  }
+
+  public void setSourceRowNumber(Integer sourceRowNumber) {
+    this.sourceRowNumber = sourceRowNumber;
+  }
+
+  public String getSourceFormulaCellRef() {
+    return sourceFormulaCellRef;
+  }
+
+  public void setSourceFormulaCellRef(String sourceFormulaCellRef) {
+    this.sourceFormulaCellRef = sourceFormulaCellRef;
+  }
+
+  public String getSourceFormulaExpr() {
+    return sourceFormulaExpr;
+  }
+
+  public void setSourceFormulaExpr(String sourceFormulaExpr) {
+    this.sourceFormulaExpr = sourceFormulaExpr;
+  }
+
+  public String getSourceInputSnapshotJson() {
+    return sourceInputSnapshotJson;
+  }
+
+  public void setSourceInputSnapshotJson(String sourceInputSnapshotJson) {
+    this.sourceInputSnapshotJson = sourceInputSnapshotJson;
+  }
+
+  public BigDecimal getSourceTaxIncludedPrice() {
+    return sourceTaxIncludedPrice;
+  }
+
+  public void setSourceTaxIncludedPrice(BigDecimal sourceTaxIncludedPrice) {
+    this.sourceTaxIncludedPrice = sourceTaxIncludedPrice;
+  }
+
+  public BigDecimal getSourceTaxExcludedPrice() {
+    return sourceTaxExcludedPrice;
+  }
+
+  public void setSourceTaxExcludedPrice(BigDecimal sourceTaxExcludedPrice) {
+    this.sourceTaxExcludedPrice = sourceTaxExcludedPrice;
   }
 
   public LocalDateTime getCreatedAt() {

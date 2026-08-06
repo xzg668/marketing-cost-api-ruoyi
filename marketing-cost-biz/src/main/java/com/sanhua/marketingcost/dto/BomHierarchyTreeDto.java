@@ -24,6 +24,9 @@ public class BomHierarchyTreeDto {
   private String sourceCategory;
   private String bomPurpose;
   private String bomVersion;
+  private Long sourceU9RowId;
+  private String childType;
+  private String alternativeGroupKey;
   private Integer isLeaf;
   private LocalDate effectiveFrom;
   private LocalDate effectiveTo;
@@ -116,6 +119,30 @@ public class BomHierarchyTreeDto {
 
   public void setBomVersion(String bomVersion) {
     this.bomVersion = bomVersion;
+  }
+
+  public Long getSourceU9RowId() {
+    return sourceU9RowId;
+  }
+
+  public void setSourceU9RowId(Long sourceU9RowId) {
+    this.sourceU9RowId = sourceU9RowId;
+  }
+
+  public String getChildType() {
+    return childType;
+  }
+
+  public void setChildType(String childType) {
+    this.childType = childType;
+  }
+
+  public String getAlternativeGroupKey() {
+    return alternativeGroupKey;
+  }
+
+  public void setAlternativeGroupKey(String alternativeGroupKey) {
+    this.alternativeGroupKey = alternativeGroupKey;
   }
 
   public Integer getIsLeaf() {

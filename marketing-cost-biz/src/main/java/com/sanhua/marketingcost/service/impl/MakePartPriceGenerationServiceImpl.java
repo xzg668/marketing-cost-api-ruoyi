@@ -10,12 +10,14 @@ import com.sanhua.marketingcost.dto.MakePartWeightResult;
 import com.sanhua.marketingcost.dto.priceprepare.NoScrapConfirmResponse;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.entity.BomCostingRow;
+import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
 import com.sanhua.marketingcost.entity.BomU9Source;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.entity.MakePartPriceGapItem;
 import com.sanhua.marketingcost.entity.MaterialScrapRef;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
+import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceGapItemMapper;
 import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
@@ -51,8 +53,10 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
   private static final String STATUS_OK = MakePartPriceCalculator.STATUS_OK;
   private static final String STATUS_MISSING_BOM = "MISSING_BOM";
   private static final String PROCESS_TYPE_UNKNOWN = "UNKNOWN";
+  private static final String ROW_TYPE_SPECIAL_ROLLUP_PARENT = "SPECIAL_ROLLUP_PARENT";
 
   private final MakePartSourceDataService sourceDataService;
+  private final BomCostingRowSubRefMapper bomCostingRowSubRefMapper;
   private final MakePartProcessTypePolicy processTypePolicy;
   private final MakePartWeightService weightService;
   private final MakePartScrapMappingService scrapMappingService;
@@ -66,6 +70,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
 
   public MakePartPriceGenerationServiceImpl(
       MakePartSourceDataService sourceDataService,
+      BomCostingRowSubRefMapper bomCostingRowSubRefMapper,
       MakePartProcessTypePolicy processTypePolicy,
       MakePartWeightService weightService,
       MakePartScrapMappingService scrapMappingService,
@@ -77,6 +82,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       MakePartPriceCalcRowMapper calcRowMapper,
       MakePartPriceGapItemMapper gapItemMapper) {
     this.sourceDataService = sourceDataService;
+    this.bomCostingRowSubRefMapper = bomCostingRowSubRefMapper;
     this.processTypePolicy = processTypePolicy;
     this.weightService = weightService;
     this.scrapMappingService = scrapMappingService;
@@ -156,12 +162,13 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     List<BomCostingRow> parents =
         scopedManufacturedParents(
             normalizedOaNo, normalizedBusinessUnit, pricingPeriod, null);
+    Map<Long, List<BomCostingRowSubRef>> rollupChildrenByRowId =
+        loadSpecialRollupChildren(parents);
     List<MakePartPriceCalcRow> previewRows = new ArrayList<>();
     for (BomCostingRow parent : parents) {
       String parentCode = trim(parent.getMaterialCode());
       List<BomU9Source> children =
-          sourceDataService.listDedupedChildren(
-              parentCode, quoteDate, parent.getPriceOrgCode());
+          childrenForParent(parent, quoteDate, rollupChildrenByRowId);
       for (BomU9Source child : children == null ? List.<BomU9Source>of() : children) {
         String childCode = trim(child.getChildMaterialNo());
         List<MaterialScrapRef> scraps =
@@ -643,10 +650,12 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     if (parents == null || parents.isEmpty()) {
       return plan;
     }
+    Map<Long, List<BomCostingRowSubRef>> rollupChildrenByRowId =
+        loadSpecialRollupChildren(parents);
     for (BomCostingRow parent : parents) {
       String parentCode = trim(parent.getMaterialCode());
       List<BomU9Source> children =
-          sourceDataService.listDedupedChildren(parentCode, quoteDate, parent.getPriceOrgCode());
+          childrenForParent(parent, quoteDate, rollupChildrenByRowId);
       plan.childrenByParent.put(parentCode, children == null ? List.of() : children);
       for (BomU9Source child : plan.children(parentCode)) {
         String childCode = trim(child.getChildMaterialNo());
@@ -664,6 +673,106 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       ensureLinkedPrices(plan, businessUnitType, period);
     }
     return plan;
+  }
+
+  /**
+   * 普通制造件继续使用 U9 的全部直接子项；特殊上卷父件只允许第三步已冻结的命中子件进入
+   * 原材料/废料计算。U9 仍用于补齐库存单位、规格和 BOM 版本等重量计算字段，冻结快照则决定
+   * “哪些子件参与计算”以及本次采用的父件用量。
+   */
+  private List<BomU9Source> childrenForParent(
+      BomCostingRow parent,
+      LocalDate quoteDate,
+      Map<Long, List<BomCostingRowSubRef>> rollupChildrenByRowId) {
+    String parentCode = parent == null ? null : trim(parent.getMaterialCode());
+    if (parentCode == null) {
+      return List.of();
+    }
+    List<BomU9Source> u9Children =
+        sourceDataService.listDedupedChildren(
+            parentCode, quoteDate, parent.getPriceOrgCode());
+    List<BomU9Source> normalizedChildren =
+        u9Children == null ? List.of() : u9Children;
+    if (!isSpecialRollupParent(parent)) {
+      return normalizedChildren;
+    }
+
+    List<BomCostingRowSubRef> refs =
+        parent.getId() == null
+            ? List.of()
+            : rollupChildrenByRowId.getOrDefault(parent.getId(), List.of());
+    if (refs.isEmpty() || normalizedChildren.isEmpty()) {
+      return List.of();
+    }
+
+    Map<String, RollupChildSnapshot> snapshotsByCode = new LinkedHashMap<>();
+    for (BomCostingRowSubRef ref : refs) {
+      String childCode = ref == null ? null : trim(ref.getSubMaterialCode());
+      if (childCode != null) {
+        snapshotsByCode
+            .computeIfAbsent(childCode, RollupChildSnapshot::new)
+            .accept(ref);
+      }
+    }
+    if (snapshotsByCode.isEmpty()) {
+      return List.of();
+    }
+
+    Map<String, BomU9Source> u9ChildrenByCode = new LinkedHashMap<>();
+    for (BomU9Source child : normalizedChildren) {
+      String childCode = child == null ? null : trim(child.getChildMaterialNo());
+      if (childCode != null) {
+        u9ChildrenByCode.putIfAbsent(childCode, child);
+      }
+    }
+
+    List<BomU9Source> selected = new ArrayList<>();
+    for (RollupChildSnapshot snapshot : snapshotsByCode.values()) {
+      BomU9Source child = u9ChildrenByCode.get(snapshot.materialCode);
+      if (child == null) {
+        continue;
+      }
+      if (snapshot.quantity != null) {
+        child.setQtyPerParent(snapshot.quantity);
+      }
+      if (!StringUtils.hasText(child.getChildMaterialName())
+          && StringUtils.hasText(snapshot.materialName)) {
+        child.setChildMaterialName(snapshot.materialName);
+      }
+      selected.add(child);
+    }
+    return selected;
+  }
+
+  private Map<Long, List<BomCostingRowSubRef>> loadSpecialRollupChildren(
+      List<BomCostingRow> parents) {
+    List<Long> rowIds =
+        (parents == null ? List.<BomCostingRow>of() : parents).stream()
+            .filter(this::isSpecialRollupParent)
+            .map(BomCostingRow::getId)
+            .filter(java.util.Objects::nonNull)
+            .distinct()
+            .toList();
+    if (rowIds.isEmpty()) {
+      return Map.of();
+    }
+    List<BomCostingRowSubRef> refs =
+        bomCostingRowSubRefMapper.selectSpecialRollupChildren(rowIds);
+    if (refs == null || refs.isEmpty()) {
+      return Map.of();
+    }
+    Map<Long, List<BomCostingRowSubRef>> result = new LinkedHashMap<>();
+    for (BomCostingRowSubRef ref : refs) {
+      if (ref != null && ref.getCostingRowId() != null) {
+        result.computeIfAbsent(ref.getCostingRowId(), ignored -> new ArrayList<>()).add(ref);
+      }
+    }
+    return result;
+  }
+
+  private boolean isSpecialRollupParent(BomCostingRow parent) {
+    return parent != null
+        && ROW_TYPE_SPECIAL_ROLLUP_PARENT.equals(trim(parent.getSettlementRowType()));
   }
 
   private void collectLinkedEnsureCode(
@@ -901,6 +1010,32 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
 
     private List<MaterialScrapRef> scraps(String childCode) {
       return scrapsByChild.getOrDefault(childCode, List.of());
+    }
+  }
+
+  private static final class RollupChildSnapshot {
+    private final String materialCode;
+    private String materialName;
+    private BigDecimal quantity;
+
+    private RollupChildSnapshot(String materialCode) {
+      this.materialCode = materialCode;
+    }
+
+    private void accept(BomCostingRowSubRef ref) {
+      if (ref == null) {
+        return;
+      }
+      if (!StringUtils.hasText(materialName)
+          && StringUtils.hasText(ref.getSubMaterialName())) {
+        materialName = ref.getSubMaterialName().trim();
+      }
+      if (ref.getSubQtyPerParent() != null) {
+        quantity =
+            quantity == null
+                ? ref.getSubQtyPerParent()
+                : quantity.add(ref.getSubQtyPerParent());
+      }
     }
   }
 

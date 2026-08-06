@@ -31,7 +31,7 @@ import com.sanhua.marketingcost.service.FinanceQuoteBasePriceService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
 import com.sanhua.marketingcost.service.PricePrepareService;
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -40,6 +40,9 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.annotation.Transactional;
 
 class QuotePricePrepareWorkbenchServiceImplTest {
+
+  private static final YearMonth CURRENT_YEAR_MONTH = YearMonth.now();
+  private static final String CURRENT_MONTH = CURRENT_YEAR_MONTH.toString();
 
   private OaFormMapper oaFormMapper;
   private OaFormItemMapper oaFormItemMapper;
@@ -100,7 +103,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     generated.setOaNo("OA-WORKBENCH");
     generated.setOaFormItemId(101L);
     generated.setTopProductCode("TOP-WORKBENCH");
-    generated.setPeriodMonth("2026-07");
+    generated.setPeriodMonth(CURRENT_MONTH);
     generated.setPriceTypeConfirmNo("PTC-WORKBENCH");
     generated.setScenarioType("FINANCE_QUOTE_BASE");
     when(financePricePrepareService.generateFromOa("PPR-OA-WORKBENCH"))
@@ -113,8 +116,8 @@ class QuotePricePrepareWorkbenchServiceImplTest {
             generated));
 
     QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
-    request.setPeriodMonth("2026-07");
-    request.setPriceAsOfTime(LocalDateTime.of(2026, 7, 15, 12, 0));
+    request.setPeriodMonth(CURRENT_MONTH);
+    request.setPriceAsOfTime(CURRENT_YEAR_MONTH.atDay(15).atTime(12, 0));
     request.setPriceTypeConfirmNo("PTC-WORKBENCH");
     request.setScenarioType(QuotePriceScenarioType.FINANCE_QUOTE_BASE);
     request.setSourcePrepareNo("PPR-OA-WORKBENCH");
@@ -144,7 +147,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
             financeGenerated));
 
     QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
-    request.setPeriodMonth("2026-07");
+    request.setPeriodMonth(CURRENT_MONTH);
     request.setPriceTypeConfirmNo("PTC-WORKBENCH");
 
     var response = service.generate("OA-WORKBENCH", 101L, request);
@@ -169,7 +172,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     calculation.setGaps(List.of());
     when(pricePrepareService.calculate(any())).thenReturn(calculation);
     QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
-    request.setPeriodMonth("2026-07");
+    request.setPeriodMonth(CURRENT_MONTH);
     request.setPriceTypeConfirmNo("PTC-WORKBENCH");
 
     var response = service.checkPriceSources("OA-WORKBENCH", 101L, request);
@@ -212,7 +215,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
       return null;
     }).when(pricePrepareQueryService).enrichGaps(any());
     QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
-    request.setPeriodMonth("2026-07");
+    request.setPeriodMonth(CURRENT_MONTH);
     request.setPriceTypeConfirmNo("PTC-WORKBENCH");
 
     var response = service.checkPriceSources("OA-WORKBENCH", 101L, request);
@@ -238,7 +241,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     when(pricePrepareQueryService.pageBatches(any()))
         .thenReturn(new PricePrepareBatchPageResponse(2, List.of(financeBatch, oaBatch)));
     QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
-    request.setPeriodMonth("2026-07");
+    request.setPeriodMonth(CURRENT_MONTH);
     request.setPriceTypeConfirmNo("PTC-WORKBENCH");
 
     var response = service.checkPriceSources("OA-WORKBENCH", 101L, request);
@@ -300,9 +303,9 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     FinanceBasePrice financeBase = new FinanceBasePrice();
     financeBase.setId(9L);
     financeBase.setPrice(new BigDecimal("90"));
-    when(financeQuoteBasePriceService.getRequired("2026-07")).thenReturn(financeBase);
+    when(financeQuoteBasePriceService.getRequired(CURRENT_MONTH)).thenReturn(financeBase);
 
-    var response = service.getPricePrepare("OA-WORKBENCH", 101L, "2026-07");
+    var response = service.getPricePrepare("OA-WORKBENCH", 101L, CURRENT_MONTH);
 
     org.assertj.core.api.Assertions.assertThat(response.getOaScenario().getBatch().getPrepareNo())
         .isEqualTo("PPR-OA-WORKBENCH");
@@ -347,7 +350,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     generated.setOaNo("OA-WORKBENCH");
     generated.setOaFormItemId(101L);
     generated.setTopProductCode("TOP-WORKBENCH");
-    generated.setPeriodMonth("2026-07");
+    generated.setPeriodMonth(CURRENT_MONTH);
     generated.setPriceTypeConfirmNo("PTC-WORKBENCH");
     generated.setScenarioType(scenarioType);
     generated.setStatus("SUCCESS");

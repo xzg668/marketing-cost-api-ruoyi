@@ -9,8 +9,6 @@ import com.sanhua.marketingcost.dto.ingest.QuoteRequestListItemResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteBomCancelConfirmRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteBomConfirmRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteBomConfirmResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingBomRowUpdateRequest;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchBomRowResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunConfirmRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunSummaryResponse;
@@ -212,21 +210,6 @@ public class QuoteRequestController {
       @PathVariable("oaFormItemId") Long oaFormItemId) {
     try {
       return CommonResult.success(quoteCostingWorkbenchService.launchWorkbench(oaNo, oaFormItemId));
-    } catch (QuoteIngestException | IllegalArgumentException ex) {
-      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
-    }
-  }
-
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
-  @PutMapping("/{oaNo}/items/{oaFormItemId}/costing-bom/rows/{rowId}")
-  public CommonResult<QuoteCostingWorkbenchBomRowResponse> updateCostingBomRow(
-      @PathVariable("oaNo") String oaNo,
-      @PathVariable("oaFormItemId") Long oaFormItemId,
-      @PathVariable("rowId") Long rowId,
-      @RequestBody QuoteCostingBomRowUpdateRequest request) {
-    try {
-      return CommonResult.success(
-          quoteCostingWorkbenchService.updateBomRow(oaNo, oaFormItemId, rowId, request));
     } catch (QuoteIngestException | IllegalArgumentException ex) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
     }

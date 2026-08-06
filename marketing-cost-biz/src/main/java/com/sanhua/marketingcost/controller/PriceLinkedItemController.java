@@ -9,13 +9,17 @@ import com.sanhua.marketingcost.dto.FactorMonthlyPriceAdjustmentResponse;
 import com.sanhua.marketingcost.dto.FactorMonthlyPriceChangeLogDto;
 import com.sanhua.marketingcost.dto.PriceItemImportResponse;
 import com.sanhua.marketingcost.dto.PriceLinkedImportBatchDetailDto;
+import com.sanhua.marketingcost.dto.PriceLinkedImportCommand;
 import com.sanhua.marketingcost.dto.PriceLinkedItemDto;
 import com.sanhua.marketingcost.dto.PriceLinkedItemImportRequest;
 import com.sanhua.marketingcost.dto.PriceLinkedItemUpdateRequest;
+import com.sanhua.marketingcost.dto.PriceLinkedType2ImportPreviewResponse;
 import com.sanhua.marketingcost.service.FactorMonthlyPriceAdjustmentService;
+import com.sanhua.marketingcost.service.PriceLinkedImportDispatchService;
 import com.sanhua.marketingcost.service.PriceLinkedItemService;
 import java.io.IOException;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -38,12 +42,23 @@ import org.springframework.web.multipart.MultipartFile;
 public class PriceLinkedItemController {
   private final PriceLinkedItemService priceLinkedItemService;
   private final FactorMonthlyPriceAdjustmentService factorMonthlyPriceAdjustmentService;
+  private final PriceLinkedImportDispatchService priceLinkedImportDispatchService;
 
+  @Autowired
+  public PriceLinkedItemController(
+      PriceLinkedItemService priceLinkedItemService,
+      FactorMonthlyPriceAdjustmentService factorMonthlyPriceAdjustmentService,
+      PriceLinkedImportDispatchService priceLinkedImportDispatchService) {
+    this.priceLinkedItemService = priceLinkedItemService;
+    this.factorMonthlyPriceAdjustmentService = factorMonthlyPriceAdjustmentService;
+    this.priceLinkedImportDispatchService = priceLinkedImportDispatchService;
+  }
+
+  /** 保留给现有轻量单测和非 Spring 调用，生产环境使用三参数构造器。 */
   public PriceLinkedItemController(
       PriceLinkedItemService priceLinkedItemService,
       FactorMonthlyPriceAdjustmentService factorMonthlyPriceAdjustmentService) {
-    this.priceLinkedItemService = priceLinkedItemService;
-    this.factorMonthlyPriceAdjustmentService = factorMonthlyPriceAdjustmentService;
+    this(priceLinkedItemService, factorMonthlyPriceAdjustmentService, null);
   }
 
   /** 查询联动价格明细列表 */
@@ -114,12 +129,26 @@ public class PriceLinkedItemController {
       @RequestParam(value = "effectiveStrategy", required = false) String effectiveStrategy,
       @RequestParam(value = "formulaEffectiveDate", required = false) String formulaEffectiveDate,
       @RequestParam(value = "factorPriceConflictStrategy", required = false)
-          String factorPriceConflictStrategy) {
+          String factorPriceConflictStrategy,
+      @RequestParam(value = "previewFileSha256", required = false)
+          String previewFileSha256) {
     if (file == null || file.isEmpty()) {
       return CommonResult.error(
           GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "file is required");
     }
     try {
+      if (priceLinkedImportDispatchService != null) {
+        return CommonResult.success(priceLinkedImportDispatchService.confirm(
+            command(
+                file,
+                pricingMonth,
+                businessUnitType,
+                overwriteManual,
+                effectiveStrategy,
+                formulaEffectiveDate,
+                factorPriceConflictStrategy,
+                previewFileSha256)));
+      }
       return CommonResult.success(
           priceLinkedItemService.importExcel(
               file.getInputStream(), pricingMonth, overwriteManual,
@@ -133,6 +162,90 @@ public class PriceLinkedItemController {
           GlobalErrorCodeConstants.BAD_REQUEST.getCode(),
           "读取上传文件失败: " + e.getMessage());
     }
+  }
+
+  /** 兼容现有直接调用；Spring HTTP 映射使用带 previewFileSha256 的重载。 */
+  public CommonResult<PriceItemImportResponse> importExcel(
+      MultipartFile file,
+      String pricingMonth,
+      String businessUnitType,
+      boolean overwriteManual,
+      String effectiveStrategy,
+      String formulaEffectiveDate,
+      String factorPriceConflictStrategy) {
+    return importExcel(
+        file,
+        pricingMonth,
+        businessUnitType,
+        overwriteManual,
+        effectiveStrategy,
+        formulaEffectiveDate,
+        factorPriceConflictStrategy,
+        null);
+  }
+
+  /** 类型2导入预检：只解析和计算，不写数据库。 */
+  @PreAuthorize("@ss.hasPermi('price:linked-item:import')")
+  @PostMapping("/items/import-excel/preview")
+  public CommonResult<PriceLinkedType2ImportPreviewResponse> previewImportExcel(
+      @RequestPart("file") MultipartFile file,
+      @RequestParam("pricingMonth") String pricingMonth,
+      @RequestParam(value = "businessUnitType", required = false) String businessUnitType,
+      @RequestParam(value = "overwriteManual", defaultValue = "false") boolean overwriteManual,
+      @RequestParam(value = "effectiveStrategy", required = false) String effectiveStrategy,
+      @RequestParam(value = "formulaEffectiveDate", required = false)
+          String formulaEffectiveDate,
+      @RequestParam(value = "factorPriceConflictStrategy", required = false)
+          String factorPriceConflictStrategy) {
+    if (file == null || file.isEmpty()) {
+      return CommonResult.error(
+          GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "file is required");
+    }
+    if (priceLinkedImportDispatchService == null) {
+      return CommonResult.error(
+          GlobalErrorCodeConstants.INTERNAL_SERVER_ERROR.getCode(),
+          "import preview service is unavailable");
+    }
+    try {
+      return CommonResult.success(priceLinkedImportDispatchService.preview(
+          command(
+              file,
+              pricingMonth,
+              businessUnitType,
+              overwriteManual,
+              effectiveStrategy,
+              formulaEffectiveDate,
+              factorPriceConflictStrategy,
+              null)));
+    } catch (IllegalArgumentException exception) {
+      return CommonResult.error(
+          GlobalErrorCodeConstants.BAD_REQUEST.getCode(), exception.getMessage());
+    } catch (IOException exception) {
+      return CommonResult.error(
+          GlobalErrorCodeConstants.BAD_REQUEST.getCode(),
+          "读取上传文件失败: " + exception.getMessage());
+    }
+  }
+
+  private PriceLinkedImportCommand command(
+      MultipartFile file,
+      String pricingMonth,
+      String businessUnitType,
+      boolean overwriteManual,
+      String effectiveStrategy,
+      String formulaEffectiveDate,
+      String factorPriceConflictStrategy,
+      String previewFileSha256) throws IOException {
+    return new PriceLinkedImportCommand(
+        file.getBytes(),
+        file.getOriginalFilename(),
+        pricingMonth,
+        businessUnitType,
+        overwriteManual,
+        effectiveStrategy,
+        formulaEffectiveDate,
+        factorPriceConflictStrategy,
+        previewFileSha256);
   }
 
   /** 查询月度联动价与影响因素 Excel 导入历史 */

@@ -3,18 +3,19 @@ package com.sanhua.marketingcost.service.impl;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingBomRowUpdateRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteBomConfirmationSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchBomRowResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchHeaderResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchItemResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchResponse;
+import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchRollupComponentResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchTabResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkflowStatusResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmationSummaryResponse;
 import com.sanhua.marketingcost.entity.BomCostingRow;
+import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.BomSettlementRule;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
@@ -25,6 +26,7 @@ import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmBatch;
 import com.sanhua.marketingcost.mapper.BomByproductCostRuleMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
+import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.BomSettlementRuleMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
@@ -37,6 +39,8 @@ import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmBatchMapper;
 import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
+import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomFeatureSwitch;
+import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.rule.BomRuleNodeContext;
 import com.sanhua.marketingcost.service.rule.BomRuleMaterialAttributeResolver;
@@ -44,6 +48,7 @@ import com.sanhua.marketingcost.service.rule.BomRuleMaterialAttributes;
 import com.sanhua.marketingcost.service.rule.BomSettlementRuleMatcher;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -54,9 +59,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -79,6 +81,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   private final OaFormItemMapper oaFormItemMapper;
   private final QuoteBomStatusMapper quoteBomStatusMapper;
   private final BomCostingRowMapper bomCostingRowMapper;
+  private final BomCostingRowSubRefMapper bomCostingRowSubRefMapper;
   private final BomRawHierarchyMapper bomRawHierarchyMapper;
   private final MaterialMasterRawMapper materialMasterRawMapper;
   private final BomSettlementRuleMapper settlementRuleMapper;
@@ -90,12 +93,15 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   private final BomSettlementRuleMatcher settlementRuleMatcher;
   private final BomRuleMaterialAttributeResolver materialAttributeResolver;
   private final QuoteCostRunVersionInvalidationService versionInvalidationService;
+  private final QuoteEffectiveBomFeatureSwitch effectiveBomFeatureSwitch;
+  private final QuoteBomStatusService quoteBomStatusService;
 
   public QuoteCostingWorkbenchServiceImpl(
       OaFormMapper oaFormMapper,
       OaFormItemMapper oaFormItemMapper,
       QuoteBomStatusMapper quoteBomStatusMapper,
       BomCostingRowMapper bomCostingRowMapper,
+      BomCostingRowSubRefMapper bomCostingRowSubRefMapper,
       BomRawHierarchyMapper bomRawHierarchyMapper,
       MaterialMasterRawMapper materialMasterRawMapper,
       BomSettlementRuleMapper settlementRuleMapper,
@@ -106,11 +112,14 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       QuoteProductBomCostingBuildService costingBuildService,
       BomSettlementRuleMatcher settlementRuleMatcher,
       BomRuleMaterialAttributeResolver materialAttributeResolver,
-      QuoteCostRunVersionInvalidationService versionInvalidationService) {
+      QuoteCostRunVersionInvalidationService versionInvalidationService,
+      QuoteEffectiveBomFeatureSwitch effectiveBomFeatureSwitch,
+      QuoteBomStatusService quoteBomStatusService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
     this.bomCostingRowMapper = bomCostingRowMapper;
+    this.bomCostingRowSubRefMapper = bomCostingRowSubRefMapper;
     this.bomRawHierarchyMapper = bomRawHierarchyMapper;
     this.materialMasterRawMapper = materialMasterRawMapper;
     this.settlementRuleMapper = settlementRuleMapper;
@@ -122,6 +131,8 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     this.settlementRuleMatcher = settlementRuleMatcher;
     this.materialAttributeResolver = materialAttributeResolver;
     this.versionInvalidationService = versionInvalidationService;
+    this.effectiveBomFeatureSwitch = effectiveBomFeatureSwitch;
+    this.quoteBomStatusService = quoteBomStatusService;
   }
 
   @Override
@@ -150,6 +161,11 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     String productCode = trimToNull(item.getMaterialNo());
     if (productCode == null) {
       throw new QuoteIngestException("当前产品行料号为空，无法发起核算");
+    }
+
+    if (effectiveBomFeatureSwitch.isEnabled()) {
+      // 最终有效 BOM 第 1 步依赖成功月度原始 BOM。这里只同步当前产品，不能批量触碰同 OA 其他行。
+      quoteBomStatusService.checkItemForCostRun(form.getOaNo(), item.getId());
     }
 
     QuoteBomStatus status = latestBomStatus(form.getOaNo(), item.getId());
@@ -220,6 +236,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     response.setPeriodMonth(periodMonth);
     response.setWorkflowStatus(workflowStatus);
     response.setSnapshotGenerated(generated);
+    response.setEffectiveBomEnabled(effectiveBomFeatureSwitch.isEnabled());
     response.setBuildBatchId(firstText(buildBatchId, latestBuildBatchId(rows)));
     response.setLatestBomConfirmation(latestBomConfirmation);
     response.setLatestPriceTypeConfirmation(latestPriceTypeConfirmation);
@@ -228,65 +245,6 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     response.setBomRows(toBomRows(rows));
     response.setTabs(tabs(workflowStatus));
     return response;
-  }
-
-  @Override
-  @Transactional(rollbackFor = Exception.class)
-  public QuoteCostingWorkbenchBomRowResponse updateBomRow(
-      String oaNo, Long oaFormItemId, Long rowId, QuoteCostingBomRowUpdateRequest request) {
-    if (rowId == null) {
-      throw new QuoteIngestException("BOM 行 ID 不能为空");
-    }
-    if (request == null) {
-      throw new QuoteIngestException("BOM 行更新内容不能为空");
-    }
-    OaForm form = requireForm(oaNo);
-    OaFormItem item = requireItem(form, oaFormItemId);
-    String productCode = trimToNull(item.getMaterialNo());
-    if (productCode == null) {
-      throw new QuoteIngestException("当前产品行料号为空，无法编辑 BOM 行");
-    }
-    QuoteBomStatus status = latestBomStatus(form.getOaNo(), item.getId());
-    String periodMonth = resolvePeriodMonth(form, status, item.getId(), productCode);
-    BomCostingRow existing = bomCostingRowMapper.selectById(rowId);
-    requireEditableRow(existing, form.getOaNo(), item.getId(), productCode, periodMonth);
-    requireNoActiveBomConfirmation(form.getOaNo(), item.getId(), productCode, periodMonth);
-
-    LocalDateTime now = LocalDateTime.now();
-    String oldMaterialCode = trimToNull(existing.getMaterialCode());
-    String newMaterialCode = trimToNull(request.getChildCode());
-    BomCostingRow patch = new BomCostingRow();
-    patch.setId(rowId);
-    patch.setMaterialCode(newMaterialCode);
-    patch.setMaterialName(trimToNull(request.getChildName()));
-    patch.setMaterialSpec(trimToNull(request.getChildModel()));
-    patch.setQtyPerParent(request.getUsageQty());
-    patch.setUnit(trimToNull(request.getUnit()));
-    patch.setMaterialAttribute(trimToNull(request.getMaterialAttribute()));
-    patch.setShapeAttr(trimToNull(request.getShapeAttribute()));
-    patch.setManualModified(1);
-    patch.setModifiedBy(currentUsername("system"));
-    patch.setModifiedAt(now);
-    if (bomCostingRowMapper.updateById(patch) <= 0) {
-      throw new QuoteIngestException("BOM 行保存失败: " + rowId);
-    }
-    if (!Objects.equals(oldMaterialCode, newMaterialCode)) {
-      markPriceTypeConfirmationStale(form.getOaNo(), item.getId(), productCode, periodMonth, now);
-    }
-    versionInvalidationService.invalidateProduct(
-        form.getOaNo(), item.getId(), productCode, periodMonth);
-
-    existing.setMaterialCode(patch.getMaterialCode());
-    existing.setMaterialName(patch.getMaterialName());
-    existing.setMaterialSpec(patch.getMaterialSpec());
-    existing.setQtyPerParent(patch.getQtyPerParent());
-    existing.setUnit(patch.getUnit());
-    existing.setMaterialAttribute(patch.getMaterialAttribute());
-    existing.setShapeAttr(patch.getShapeAttr());
-    existing.setManualModified(patch.getManualModified());
-    existing.setModifiedBy(patch.getModifiedBy());
-    existing.setModifiedAt(patch.getModifiedAt());
-    return toBomRow(existing);
   }
 
   private boolean settlementRulesChangedSince(List<BomCostingRow> rows) {
@@ -771,11 +729,132 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   }
 
   private List<QuoteCostingWorkbenchBomRowResponse> toBomRows(List<BomCostingRow> rows) {
+    List<BomCostingRow> sourceRows = rows == null ? List.of() : rows;
+    Map<Long, List<QuoteCostingWorkbenchRollupComponentResponse>> componentsByRowId =
+        loadRollupDisplayComponents(sourceRows);
     List<QuoteCostingWorkbenchBomRowResponse> result = new ArrayList<>();
-    for (BomCostingRow row : rows == null ? List.<BomCostingRow>of() : rows) {
-      result.add(toBomRow(row));
+    for (BomCostingRow row : sourceRows) {
+      QuoteCostingWorkbenchBomRowResponse response = toBomRow(row);
+      response.setRollupComponents(
+          row.getId() == null
+              ? List.of()
+              : componentsByRowId.getOrDefault(row.getId(), List.of()));
+      result.add(response);
     }
     return result;
+  }
+
+  private Map<Long, List<QuoteCostingWorkbenchRollupComponentResponse>>
+      loadRollupDisplayComponents(List<BomCostingRow> rows) {
+    List<Long> rowIds =
+        rows.stream()
+            .filter(row -> "SPECIAL_ROLLUP_PARENT".equals(row.getSettlementRowType()))
+            .map(BomCostingRow::getId)
+            .filter(Objects::nonNull)
+            .toList();
+    if (rowIds.isEmpty()) {
+      return Map.of();
+    }
+    List<BomCostingRowSubRef> refs =
+        bomCostingRowSubRefMapper.selectSpecialRollupChildren(rowIds);
+    if (refs == null || refs.isEmpty()) {
+      return Map.of();
+    }
+
+    Map<Long, LinkedHashMap<String, RollupDisplayComponentTotal>> totalsByRow =
+        new LinkedHashMap<>();
+    for (BomCostingRowSubRef ref : refs) {
+      String childCode = trimToNull(ref == null ? null : ref.getSubMaterialCode());
+      if (childCode == null || ref.getCostingRowId() == null) {
+        continue;
+      }
+      totalsByRow
+          .computeIfAbsent(ref.getCostingRowId(), ignored -> new LinkedHashMap<>())
+          .computeIfAbsent(childCode, RollupDisplayComponentTotal::new)
+          .accept(ref);
+    }
+
+    Map<Long, BomCostingRow> rowById = new HashMap<>();
+    Map<String, Set<String>> codesByOrganization = new LinkedHashMap<>();
+    for (BomCostingRow row : rows) {
+      if (row == null || row.getId() == null) {
+        continue;
+      }
+      rowById.put(row.getId(), row);
+      Map<String, RollupDisplayComponentTotal> totals = totalsByRow.get(row.getId());
+      String organization = trimToNull(row.getMaterialOrganizationCode());
+      if (totals == null || totals.isEmpty() || organization == null) {
+        continue;
+      }
+      Set<String> codes =
+          codesByOrganization.computeIfAbsent(organization, ignored -> new LinkedHashSet<>());
+      codes.addAll(totals.keySet());
+      if (StringUtils.hasText(row.getMaterialCode())) {
+        codes.add(row.getMaterialCode().trim());
+      }
+    }
+    Map<String, MaterialMasterRaw> archiveByKey = new HashMap<>();
+    for (Map.Entry<String, Set<String>> entry : codesByOrganization.entrySet()) {
+      List<MaterialMasterRaw> archives =
+          materialMasterRawMapper.selectByLatestBatchAndCodes(
+              entry.getValue(), null, entry.getKey());
+      for (MaterialMasterRaw archive :
+          archives == null ? List.<MaterialMasterRaw>of() : archives) {
+        String code = trimToNull(archive == null ? null : archive.getMaterialCode());
+        if (code != null) {
+          archiveByKey.put(materialArchiveKey(entry.getKey(), code), archive);
+        }
+      }
+    }
+
+    Map<Long, List<QuoteCostingWorkbenchRollupComponentResponse>> result =
+        new LinkedHashMap<>();
+    for (Map.Entry<Long, LinkedHashMap<String, RollupDisplayComponentTotal>> entry :
+        totalsByRow.entrySet()) {
+      BomCostingRow parent = rowById.get(entry.getKey());
+      String organization =
+          trimToNull(parent == null ? null : parent.getMaterialOrganizationCode());
+      MaterialMasterRaw parentArchive =
+          archiveByKey.get(
+              materialArchiveKey(
+                  organization, parent == null ? null : parent.getMaterialCode()));
+      List<QuoteCostingWorkbenchRollupComponentResponse> components = new ArrayList<>();
+      for (RollupDisplayComponentTotal total : entry.getValue().values()) {
+        MaterialMasterRaw childArchive =
+            archiveByKey.get(materialArchiveKey(organization, total.childCode));
+        QuoteCostingWorkbenchRollupComponentResponse component =
+            new QuoteCostingWorkbenchRollupComponentResponse();
+        component.setChildCode(total.childCode);
+        component.setChildName(
+            firstText(
+                total.childName,
+                childArchive == null ? null : childArchive.getMaterialName()));
+        component.setParentDrawingNo(
+            firstText(
+                parentArchive == null ? null : parentArchive.getDrawingNo(),
+                parent == null ? null : parent.getMaterialSpec()));
+        component.setUsageQty(total.usageQty);
+        component.setQtyPerTop(total.qtyPerTop);
+        component.setUnit(
+            childArchive == null ? null : trimToNull(childArchive.getUnit()));
+        components.add(component);
+      }
+      result.put(entry.getKey(), components);
+    }
+    return result;
+  }
+
+  private static String materialArchiveKey(String organizationCode, String materialCode) {
+    return Objects.toString(trimToNull(organizationCode), "")
+        + "\u0000"
+        + Objects.toString(trimToNull(materialCode), "");
+  }
+
+  private static BigDecimal addNullable(BigDecimal left, BigDecimal right) {
+    if (left == null) {
+      return right;
+    }
+    return right == null ? left : left.add(right);
   }
 
   private QuoteCostingWorkbenchBomRowResponse toBomRow(BomCostingRow row) {
@@ -800,34 +879,23 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     response.setSettlementRowType(row.getSettlementRowType());
     response.setSubtreeCostRequired(row.getSubtreeCostRequired());
     response.setManualModified(row.getManualModified());
-    response.setModifiedBy(row.getModifiedBy());
-    response.setModifiedAt(row.getModifiedAt());
     return response;
   }
 
-  private void requireEditableRow(
-      BomCostingRow row, String oaNo, Long oaFormItemId, String topProductCode, String periodMonth) {
-    if (row == null) {
-      throw new QuoteIngestException("BOM 行不存在");
-    }
-    if (!Objects.equals(row.getOaNo(), oaNo)) {
-      throw new QuoteIngestException("BOM 行不属于当前报价单");
-    }
-    if (!Objects.equals(row.getOaFormItemId(), oaFormItemId)) {
-      throw new QuoteIngestException("BOM 行不属于当前产品行");
-    }
-    if (!Objects.equals(row.getTopProductCode(), topProductCode)) {
-      throw new QuoteIngestException("BOM 行不属于当前报价料号");
-    }
-    if (!Objects.equals(row.getPeriodMonth(), periodMonth)) {
-      throw new QuoteIngestException("BOM 行不属于当前核算月份");
-    }
-  }
+  private static final class RollupDisplayComponentTotal {
+    private final String childCode;
+    private String childName;
+    private BigDecimal usageQty;
+    private BigDecimal qtyPerTop;
 
-  private void requireNoActiveBomConfirmation(
-      String oaNo, Long oaFormItemId, String topProductCode, String periodMonth) {
-    if (hasActiveBomConfirmation(oaNo, oaFormItemId, topProductCode, periodMonth)) {
-      throw new QuoteIngestException("当前产品行 BOM 已确认，请先撤销确认后再编辑");
+    private RollupDisplayComponentTotal(String childCode) {
+      this.childCode = childCode;
+    }
+
+    private void accept(BomCostingRowSubRef ref) {
+      childName = firstText(childName, ref.getSubMaterialName());
+      usageQty = addNullable(usageQty, ref.getSubQtyPerParent());
+      qtyPerTop = addNullable(qtyPerTop, ref.getSubQtyPerTop());
     }
   }
 
@@ -1038,16 +1106,4 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     return StringUtils.hasText(value) ? value.trim() : null;
   }
 
-  private String currentUsername(String fallback) {
-    Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-    if (authentication == null || authentication.getPrincipal() == null) {
-      return fallback;
-    }
-    Object principal = authentication.getPrincipal();
-    if (principal instanceof UserDetails userDetails) {
-      return StringUtils.hasText(userDetails.getUsername()) ? userDetails.getUsername() : fallback;
-    }
-    String value = principal.toString();
-    return StringUtils.hasText(value) ? value : fallback;
-  }
 }

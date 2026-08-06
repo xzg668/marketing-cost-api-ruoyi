@@ -28,6 +28,14 @@ public class PriceLinkedItemDto {
   private LocalDate effectiveTo;
   private String orderType;
   private BigDecimal quota;
+  private Long sourceUploadBatchId;
+  private String sourceSheetName;
+  private Integer sourceRowNumber;
+  private String sourceFormulaCellRef;
+  private String sourceFormulaExpr;
+  private String sourceInputSnapshotJson;
+  private BigDecimal sourceTaxIncludedPrice;
+  private BigDecimal sourceTaxExcludedPrice;
   private LocalDateTime updatedAt;
 
   /**
@@ -240,6 +248,70 @@ public class PriceLinkedItemDto {
 
   public void setQuota(BigDecimal quota) {
     this.quota = quota;
+  }
+
+  public Long getSourceUploadBatchId() {
+    return sourceUploadBatchId;
+  }
+
+  public void setSourceUploadBatchId(Long sourceUploadBatchId) {
+    this.sourceUploadBatchId = sourceUploadBatchId;
+  }
+
+  public String getSourceSheetName() {
+    return sourceSheetName;
+  }
+
+  public void setSourceSheetName(String sourceSheetName) {
+    this.sourceSheetName = sourceSheetName;
+  }
+
+  public Integer getSourceRowNumber() {
+    return sourceRowNumber;
+  }
+
+  public void setSourceRowNumber(Integer sourceRowNumber) {
+    this.sourceRowNumber = sourceRowNumber;
+  }
+
+  public String getSourceFormulaCellRef() {
+    return sourceFormulaCellRef;
+  }
+
+  public void setSourceFormulaCellRef(String sourceFormulaCellRef) {
+    this.sourceFormulaCellRef = sourceFormulaCellRef;
+  }
+
+  public String getSourceFormulaExpr() {
+    return sourceFormulaExpr;
+  }
+
+  public void setSourceFormulaExpr(String sourceFormulaExpr) {
+    this.sourceFormulaExpr = sourceFormulaExpr;
+  }
+
+  public String getSourceInputSnapshotJson() {
+    return sourceInputSnapshotJson;
+  }
+
+  public void setSourceInputSnapshotJson(String sourceInputSnapshotJson) {
+    this.sourceInputSnapshotJson = sourceInputSnapshotJson;
+  }
+
+  public BigDecimal getSourceTaxIncludedPrice() {
+    return sourceTaxIncludedPrice;
+  }
+
+  public void setSourceTaxIncludedPrice(BigDecimal sourceTaxIncludedPrice) {
+    this.sourceTaxIncludedPrice = sourceTaxIncludedPrice;
+  }
+
+  public BigDecimal getSourceTaxExcludedPrice() {
+    return sourceTaxExcludedPrice;
+  }
+
+  public void setSourceTaxExcludedPrice(BigDecimal sourceTaxExcludedPrice) {
+    this.sourceTaxExcludedPrice = sourceTaxExcludedPrice;
   }
 
   public LocalDateTime getUpdatedAt() {

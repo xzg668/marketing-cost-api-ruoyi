@@ -18,6 +18,21 @@ public class PriceItemImportResponse {
 
   private String batchId;
   private Long factorUploadBatchId;
+  private String fileSha256;
+  private String templateType;
+  private String importStatus;
+  private String businessSheetName;
+  private String importDataSheetName;
+  private int businessRowCount;
+  private int matchedRowCount;
+  private int unmatchedRowCount;
+  private int duplicateRowCount;
+  private int formulaConvertedCount;
+  private int formulaMismatchCount;
+  private int taxModeWarningCount;
+  private int canonicalFactorReusedCount;
+  private int canonicalFactorCreatedCount;
+  private int canonicalFactorConflictCount;
   private String importPurpose;
   private String effectiveStrategy;
   private String formulaEffectiveDate;
@@ -66,6 +81,126 @@ public class PriceItemImportResponse {
 
   public void setFactorUploadBatchId(Long factorUploadBatchId) {
     this.factorUploadBatchId = factorUploadBatchId;
+  }
+
+  public String getFileSha256() {
+    return fileSha256;
+  }
+
+  public void setFileSha256(String fileSha256) {
+    this.fileSha256 = fileSha256;
+  }
+
+  public String getTemplateType() {
+    return templateType;
+  }
+
+  public void setTemplateType(String templateType) {
+    this.templateType = templateType;
+  }
+
+  public String getImportStatus() {
+    return importStatus;
+  }
+
+  public void setImportStatus(String importStatus) {
+    this.importStatus = importStatus;
+  }
+
+  public String getBusinessSheetName() {
+    return businessSheetName;
+  }
+
+  public void setBusinessSheetName(String businessSheetName) {
+    this.businessSheetName = businessSheetName;
+  }
+
+  public String getImportDataSheetName() {
+    return importDataSheetName;
+  }
+
+  public void setImportDataSheetName(String importDataSheetName) {
+    this.importDataSheetName = importDataSheetName;
+  }
+
+  public int getBusinessRowCount() {
+    return businessRowCount;
+  }
+
+  public void setBusinessRowCount(int businessRowCount) {
+    this.businessRowCount = businessRowCount;
+  }
+
+  public int getMatchedRowCount() {
+    return matchedRowCount;
+  }
+
+  public void setMatchedRowCount(int matchedRowCount) {
+    this.matchedRowCount = matchedRowCount;
+  }
+
+  public int getUnmatchedRowCount() {
+    return unmatchedRowCount;
+  }
+
+  public void setUnmatchedRowCount(int unmatchedRowCount) {
+    this.unmatchedRowCount = unmatchedRowCount;
+  }
+
+  public int getDuplicateRowCount() {
+    return duplicateRowCount;
+  }
+
+  public void setDuplicateRowCount(int duplicateRowCount) {
+    this.duplicateRowCount = duplicateRowCount;
+  }
+
+  public int getFormulaConvertedCount() {
+    return formulaConvertedCount;
+  }
+
+  public void setFormulaConvertedCount(int formulaConvertedCount) {
+    this.formulaConvertedCount = formulaConvertedCount;
+  }
+
+  public int getFormulaMismatchCount() {
+    return formulaMismatchCount;
+  }
+
+  public void setFormulaMismatchCount(int formulaMismatchCount) {
+    this.formulaMismatchCount = formulaMismatchCount;
+  }
+
+  public int getTaxModeWarningCount() {
+    return taxModeWarningCount;
+  }
+
+  public void setTaxModeWarningCount(int taxModeWarningCount) {
+    this.taxModeWarningCount = taxModeWarningCount;
+  }
+
+  public int getCanonicalFactorReusedCount() {
+    return canonicalFactorReusedCount;
+  }
+
+  public void setCanonicalFactorReusedCount(int canonicalFactorReusedCount) {
+    this.canonicalFactorReusedCount = canonicalFactorReusedCount;
+  }
+
+  public int getCanonicalFactorCreatedCount() {
+    return canonicalFactorCreatedCount;
+  }
+
+  public void setCanonicalFactorCreatedCount(int canonicalFactorCreatedCount) {
+    this.canonicalFactorCreatedCount = canonicalFactorCreatedCount;
+  }
+
+  public int getCanonicalFactorConflictCount() {
+    return canonicalFactorConflictCount;
+  }
+
+  public void setCanonicalFactorConflictCount(int canonicalFactorConflictCount) {
+    this.canonicalFactorConflictCount = canonicalFactorConflictCount;
   }
 
   public String getImportPurpose() {

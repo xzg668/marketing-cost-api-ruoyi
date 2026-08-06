@@ -186,7 +186,12 @@ class CostRunTraceSnapshotBuilderImplTest {
     prepare.setQuantity(new BigDecimal("0.655"));
     prepare.setUnitPrice(new BigDecimal("0.392035"));
     prepare.setAmount(new BigDecimal("0.256783"));
-    prepare.setMessage("行情区间命中(CU=90000,range=87501-92500,field=price_excl_tax)");
+    prepare.setMessage(
+        "行情区间命中(CU=90000,range=87501-92500,field=price_excl_tax)"
+            + "；区间价取价底稿[物料代码=MAT-CU；影响因素代码=CU；报价单行情值=90000；"
+            + "命中区间=87501-92500；候选供应商数量=2；主供应商名称=供应商乙；"
+            + "主供应商代码=SUP-B；供货比例=0.7；供应商匹配方式=供应商代码；"
+            + "最终价格行ID=9101；最终不含税单价=0.392035；是否兜底=否；兜底原因=]");
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of(rangePart));
     when(costMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(prepareMapper.selectList(any(Wrapper.class))).thenReturn(List.of(prepare));
@@ -209,7 +214,16 @@ class CostRunTraceSnapshotBuilderImplTest {
             "\"factor_value\":90000",
             "\"range_low\":87501",
             "\"range_high\":92500",
-            "\"matchedUnitPrice\":0.392035");
+            "\"matchedUnitPrice\":0.392035",
+            "\"candidateSupplierCount\":2",
+            "\"mainSupplierName\":\"供应商乙\"",
+            "\"mainSupplierCode\":\"SUP-B\"",
+            "\"supplyRatio\":0.7",
+            "\"supplierMatchMode\":\"供应商代码\"",
+            "\"finalPriceRowId\":9101",
+            "\"finalPriceExclTax\":0.392035",
+            "\"fallback\":false",
+            "\"fallbackReason\":\"\"");
     assertThat(row.getFormulaSnapshotJson())
         .contains("命中单价 × BOM 用量", "0.392035", "0.655", "0.256783");
     assertThat(row.getVariablesJson())

@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteBomCancelConfirmRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteBomConfirmRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteBomConfirmResponse;
@@ -10,18 +11,25 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomConfirmation;
 import com.sanhua.marketingcost.entity.QuoteBomConfirmationLog;
+import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomConfirmationLogMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
+import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.service.QuoteBomConfirmationService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
+import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeConfirmationGuard;
+import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelectionScope;
+import com.sanhua.marketingcost.service.ingest.QuoteBomContext;
+import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
 import java.util.List;
@@ -38,6 +46,9 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
 
   private static final DateTimeFormatter CONFIRM_NO_TIME_FORMAT =
       DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+  private static final int ACTIVE = 1;
+  private static final String PRODUCT_TYPE_NON_BARE = "NON_BARE";
+  private static final String MAIN_BOM_PURPOSE = "主制造";
 
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
@@ -46,6 +57,9 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
   private final QuoteBomConfirmationMapper confirmationMapper;
   private final QuoteBomConfirmationLogMapper confirmationLogMapper;
   private final QuoteCostRunVersionInvalidationService versionInvalidationService;
+  private final QuoteBomPreparationRecordMapper preparationRecordMapper;
+  private final QuoteBomAlternativeConfirmationGuard alternativeConfirmationGuard;
+  private final QuoteBomContextResolver quoteBomContextResolver;
 
   public QuoteBomConfirmationServiceImpl(
       OaFormMapper oaFormMapper,
@@ -54,7 +68,10 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
       BomCostingRowMapper bomCostingRowMapper,
       QuoteBomConfirmationMapper confirmationMapper,
       QuoteBomConfirmationLogMapper confirmationLogMapper,
-      QuoteCostRunVersionInvalidationService versionInvalidationService) {
+      QuoteCostRunVersionInvalidationService versionInvalidationService,
+      QuoteBomPreparationRecordMapper preparationRecordMapper,
+      QuoteBomAlternativeConfirmationGuard alternativeConfirmationGuard,
+      QuoteBomContextResolver quoteBomContextResolver) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
@@ -62,12 +79,87 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
     this.confirmationMapper = confirmationMapper;
     this.confirmationLogMapper = confirmationLogMapper;
     this.versionInvalidationService = versionInvalidationService;
+    this.preparationRecordMapper = preparationRecordMapper;
+    this.alternativeConfirmationGuard = alternativeConfirmationGuard;
+    this.quoteBomContextResolver = quoteBomContextResolver;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public boolean hasActiveConfirmation(
+      String oaNo,
+      Long oaFormItemId,
+      String topProductCode,
+      String periodMonth) {
+    if (!StringUtils.hasText(oaNo)
+        || oaFormItemId == null
+        || !StringUtils.hasText(topProductCode)
+        || !StringUtils.hasText(periodMonth)) {
+      return false;
+    }
+    Long count =
+        confirmationMapper.selectCount(
+            Wrappers.<QuoteBomConfirmation>lambdaQuery()
+                .eq(QuoteBomConfirmation::getOaNo, oaNo.trim())
+                .eq(QuoteBomConfirmation::getOaFormItemId, oaFormItemId)
+                .eq(
+                    QuoteBomConfirmation::getTopProductCode,
+                    topProductCode.trim())
+                .eq(
+                    QuoteBomConfirmation::getPeriodMonth,
+                    periodMonth.trim())
+                .eq(
+                    QuoteBomConfirmation::getConfirmStatus,
+                    QuoteBomConfirmation.STATUS_CONFIRMED));
+    return count != null && count > 0;
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public boolean hasActiveConfirmationForBuild(String effectiveBuildBatchId) {
+    if (!StringUtils.hasText(effectiveBuildBatchId)) {
+      return false;
+    }
+    Long count =
+        confirmationMapper.selectCount(
+            Wrappers.<QuoteBomConfirmation>lambdaQuery()
+                .eq(
+                    QuoteBomConfirmation::getCostingBuildBatchId,
+                    effectiveBuildBatchId.trim())
+                .eq(
+                    QuoteBomConfirmation::getConfirmStatus,
+                    QuoteBomConfirmation.STATUS_CONFIRMED));
+    return count != null && count > 0;
   }
 
   @Override
   @Transactional(rollbackFor = Exception.class)
   public QuoteBomConfirmResponse confirm(
       String oaNo, Long oaFormItemId, QuoteBomConfirmRequest request) {
+    return confirmInternal(oaNo, oaFormItemId, null, null, request);
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public QuoteBomConfirmResponse confirmEffective(
+      String oaNo,
+      Long oaFormItemId,
+      String effectiveBuildBatchId,
+      int replaceCount,
+      QuoteBomConfirmRequest request) {
+    String buildBatchId = required("最终有效BOM构建编号", effectiveBuildBatchId);
+    if (replaceCount < 0) {
+      throw new QuoteIngestException("替代料数量不能小于0");
+    }
+    return confirmInternal(oaNo, oaFormItemId, buildBatchId, replaceCount, request);
+  }
+
+  private QuoteBomConfirmResponse confirmInternal(
+      String oaNo,
+      Long oaFormItemId,
+      String expectedBuildBatchId,
+      Integer effectiveReplaceCount,
+      QuoteBomConfirmRequest request) {
     Scope scope = requireScope(oaNo, oaFormItemId);
     List<BomCostingRow> rows = loadRows(scope);
     if (rows.isEmpty()) {
@@ -76,10 +168,26 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
 
     List<QuoteBomConfirmation> active = activeConfirmations(scope);
     if (!active.isEmpty()) {
+      if (expectedBuildBatchId != null
+          && !expectedBuildBatchId.equals(
+              trimToNull(active.getFirst().getCostingBuildBatchId()))) {
+        throw new QuoteIngestException("已有BOM确认引用的构建编号与当前最终树不一致");
+      }
       // 确认后的 BOM 不允许直接编辑；重复请求直接返回现有版本，避免重试产生无效历史。
       return QuoteBomConfirmResponse.from(active.get(0));
     }
 
+    int replaceCount =
+        effectiveReplaceCount == null
+            ? alternativeConfirmationGuard
+                .validateAndCountManualAlternatives(
+                    alternativeScope(scope, requirePreparation(scope)),
+                    LocalDate.now(),
+                    MAIN_BOM_PURPOSE)
+            : effectiveReplaceCount;
+    if (expectedBuildBatchId != null) {
+      requireEffectiveBuildConsistency(scope, rows, expectedBuildBatchId);
+    }
     LocalDateTime now = LocalDateTime.now();
     String operator = currentUsername("system");
     int nextVersion =
@@ -100,11 +208,11 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
     entity.setConfirmVersion(nextVersion);
     entity.setRowCount(rows.size());
     entity.setManualModifiedCount(manualModifiedCount(rows));
-    entity.setReplaceCount(0);
-    entity.setUsageAdjustCount(0);
+    entity.setReplaceCount(replaceCount);
     entity.setConfirmedBy(operator);
     entity.setConfirmedAt(now);
     entity.setConfirmRemark(trimToNull(request == null ? null : request.getConfirmRemark()));
+    entity.setCostingBuildBatchId(expectedBuildBatchId);
     entity.setBusinessUnitType(firstText(scope.item().getBusinessUnitType(), scope.form().getBusinessUnitType()));
     entity.setCreatedAt(now);
     entity.setUpdatedAt(now);
@@ -122,6 +230,23 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
     versionInvalidationService.invalidateProduct(
         scope.oaNo(), scope.oaFormItemId(), scope.productCode(), scope.periodMonth());
     return QuoteBomConfirmResponse.from(entity);
+  }
+
+  private void requireEffectiveBuildConsistency(
+      Scope scope, List<BomCostingRow> rows, String expectedBuildBatchId) {
+    if (rows.stream()
+        .anyMatch(
+            row ->
+                !expectedBuildBatchId.equals(
+                    trimToNull(row.getBuildBatchId())))) {
+      throw new QuoteIngestException("第2步结算行与最终有效BOM构建编号不一致");
+    }
+    QuoteBomStatus status = latestBomStatus(scope.oaNo(), scope.oaFormItemId());
+    if (status == null
+        || !expectedBuildBatchId.equals(
+            trimToNull(status.getCostingBuildBatchId()))) {
+      throw new QuoteIngestException("OA产品状态与最终有效BOM构建编号不一致");
+    }
   }
 
   @Override
@@ -160,12 +285,19 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
   private Scope requireScope(String oaNo, Long oaFormItemId) {
     OaForm form = requireForm(oaNo);
     OaFormItem item = requireItem(form, oaFormItemId);
-    String productCode = trimToNull(item.getMaterialNo());
-    if (productCode == null) {
-      throw new QuoteIngestException("当前产品行料号为空，无法确认 BOM");
-    }
-    QuoteBomStatus status = latestBomStatus(form.getOaNo(), item.getId());
-    return new Scope(form, item, form.getOaNo(), item.getId(), productCode, resolvePeriodMonth(form, status));
+    QuoteBomStatus latestStatus = latestBomStatus(form.getOaNo(), item.getId());
+    QuoteBomContext context =
+        quoteBomContextResolver.resolveWithExistingCostPeriod(
+            form,
+            item,
+            latestStatus == null ? null : latestStatus.getCostPeriodMonth());
+    return new Scope(
+        form,
+        item,
+        form.getOaNo(),
+        item.getId(),
+        context.productCode(),
+        context.costPeriodMonth());
   }
 
   private OaForm requireForm(String oaNo) {
@@ -202,23 +334,60 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
             .last("LIMIT 1"));
   }
 
-  private String resolvePeriodMonth(OaForm form, QuoteBomStatus status) {
-    String period =
-        firstText(
-            status == null ? null : status.getCostPeriodMonth(),
-            trimToNull(form.getAccountingPeriodMonth()));
-    if (period != null) {
-      return period;
-    }
-    if (form.getApplyDate() != null) {
-      return YearMonth.from(form.getApplyDate()).toString();
-    }
-    return YearMonth.now().toString();
-  }
-
   private List<BomCostingRow> loadRows(Scope scope) {
     return bomCostingRowMapper.selectQuoteCostingSnapshot(
         scope.oaNo(), scope.oaFormItemId(), scope.productCode(), scope.periodMonth());
+  }
+
+  private QuoteBomPreparationRecord requirePreparation(Scope scope) {
+    QuoteBomPreparationRecord preparation =
+        preparationRecordMapper.selectOne(
+            Wrappers.<QuoteBomPreparationRecord>lambdaQuery()
+                .eq(
+                    QuoteBomPreparationRecord::getOaFormItemId,
+                    scope.oaFormItemId())
+                .eq(
+                    QuoteBomPreparationRecord::getActiveFlag,
+                    ACTIVE)
+                .orderByDesc(
+                    QuoteBomPreparationRecord::getUpdatedAt)
+                .orderByDesc(
+                    QuoteBomPreparationRecord::getId)
+                .last("LIMIT 1"));
+    if (preparation == null
+        || !scope.oaNo().equals(preparation.getOaNo())
+        || !scope.form().getId().equals(
+            preparation.getOaFormId())) {
+      throw new QuoteIngestException(
+          "当前报价产品没有有效且匹配的BOM准备记录，无法确认");
+    }
+    return preparation;
+  }
+
+  private QuoteBomAlternativeSelectionScope alternativeScope(
+      Scope scope, QuoteBomPreparationRecord preparation) {
+    QuoteDataOrganization organization =
+        MaterialOrganization.normalizeQuoteDataOrganization(
+            new QuoteDataOrganization(
+                preparation.getPriceOrgCode(),
+                preparation.getMaterialOrganizationCode()));
+    String businessUnitType =
+        firstText(
+            scope.item().getBusinessUnitType(),
+            scope.form().getBusinessUnitType());
+    if (!StringUtils.hasText(businessUnitType)) {
+      throw new QuoteIngestException(
+          "当前报价产品缺少业务单元，无法确认");
+    }
+    return new QuoteBomAlternativeSelectionScope(
+        scope.oaNo(),
+        scope.oaFormItemId(),
+        required(
+            "BOM顶层产品料号",
+            formalProductCode(preparation)),
+        scope.periodMonth(),
+        organization.priceOrgCode(),
+        businessUnitType.trim());
   }
 
   private List<QuoteBomConfirmation> confirmations(Scope scope) {
@@ -293,6 +462,26 @@ public class QuoteBomConfirmationServiceImpl implements QuoteBomConfirmationServ
   private static String firstText(String first, String second) {
     String normalized = trimToNull(first);
     return normalized == null ? trimToNull(second) : normalized;
+  }
+
+  private static String formalProductCode(
+      QuoteBomPreparationRecord record) {
+    if (PRODUCT_TYPE_NON_BARE.equals(record.getProductType())) {
+      return trimToNull(record.getQuoteProductCode());
+    }
+    return firstText(
+        firstText(
+            record.getSourceTopProductCode(),
+            record.getReferenceFinishedCode()),
+        record.getQuoteProductCode());
+  }
+
+  private static String required(String field, String value) {
+    String normalized = trimToNull(value);
+    if (normalized == null) {
+      throw new QuoteIngestException(field + "不能为空");
+    }
+    return normalized;
   }
 
   private static String trimToNull(String value) {

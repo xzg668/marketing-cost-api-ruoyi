@@ -59,7 +59,7 @@ class MakePartPricePrepareStrategyImplTest {
     MakePartPriceGenerateResponse response =
         new MakePartPriceGenerateResponse("BATCH-GEN", 1, 1, 1, 0, 0);
     when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(response);
-    when(calcRowMapper.selectList(any())).thenReturn(List.of(okRow(501L, "BATCH-OLD")));
+    when(calcRowMapper.selectList(any())).thenReturn(List.of(okRow(501L, "BATCH-GEN")));
 
     MakePartPricePrepareResult result =
         strategy.prepare("OA-001", "COMMERCIAL", "2026-05", planItem("MAKE-001"));
@@ -71,6 +71,10 @@ class MakePartPricePrepareStrategyImplTest {
     assertThat(result.getResultRefType()).isEqualTo("MAKE_PART_PRICE");
     assertThat(result.getResultRefId()).isEqualTo(501L);
     verify(generationService).generateByOa("OA-001", "COMMERCIAL", "2026-05", null);
+    ArgumentCaptor<Wrapper<MakePartPriceCalcRow>> captor = ArgumentCaptor.forClass(Wrapper.class);
+    verify(calcRowMapper).selectList(captor.capture());
+    assertThat(captor.getValue().getCustomSqlSegment()).contains("calc_batch_id");
+    assertThat(paramValues(captor.getValue())).contains("BATCH-GEN");
   }
 
   @Test

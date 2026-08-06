@@ -94,6 +94,25 @@ class QuotePriceTypeConfirmationInvalidationServiceTest {
     verify(itemMapper, never()).selectList(any());
   }
 
+  @Test
+  void bomBranchChangeStalesPriceTypeEvenWhenOldConfirmedCostExists() {
+    when(batchMapper.selectList(any()))
+        .thenReturn(List.of(batch("PTC-BOM-OLD")));
+    when(costRunVersionMapper.selectList(any()))
+        .thenReturn(
+            List.of(confirmedVersion("PTC-BOM-OLD")));
+    when(batchMapper.update(isNull(), any()))
+        .thenReturn(1);
+
+    int affected =
+        service.invalidateScopeAfterBomChange(
+            "OA-001", 10L, "FIN-001", "2026-06");
+
+    assertThat(affected).isEqualTo(1);
+    verify(batchMapper).update(isNull(), any());
+    verify(costRunVersionMapper, never()).selectList(any());
+  }
+
   private MaterialPriceType type(String materialCode) {
     MaterialPriceType type = new MaterialPriceType();
     type.setMaterialCode(materialCode);

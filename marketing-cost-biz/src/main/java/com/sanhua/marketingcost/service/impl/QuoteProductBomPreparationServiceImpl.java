@@ -31,9 +31,10 @@ import com.sanhua.marketingcost.service.PackageComponentStructureReadService;
 import com.sanhua.marketingcost.service.QuoteProductBomPreparationService;
 import com.sanhua.marketingcost.service.QuoteProductTypeResolveService;
 import com.sanhua.marketingcost.service.SupplementBomReadService;
+import com.sanhua.marketingcost.service.ingest.QuoteBomContext;
+import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -75,6 +76,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   private final FormalBomReadService formalBomReadService;
   private final SupplementBomReadService supplementBomReadService;
   private final PackageComponentStructureReadService packageComponentStructureReadService;
+  private final QuoteBomContextResolver quoteBomContextResolver;
 
   public QuoteProductBomPreparationServiceImpl(
       OaFormItemMapper oaFormItemMapper,
@@ -86,7 +88,8 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
       QuoteProductTypeResolveService productTypeResolveService,
       FormalBomReadService formalBomReadService,
       SupplementBomReadService supplementBomReadService,
-      PackageComponentStructureReadService packageComponentStructureReadService) {
+      PackageComponentStructureReadService packageComponentStructureReadService,
+      QuoteBomContextResolver quoteBomContextResolver) {
     this.oaFormItemMapper = oaFormItemMapper;
     this.oaFormMapper = oaFormMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
@@ -97,6 +100,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     this.formalBomReadService = formalBomReadService;
     this.supplementBomReadService = supplementBomReadService;
     this.packageComponentStructureReadService = packageComponentStructureReadService;
+    this.quoteBomContextResolver = quoteBomContextResolver;
   }
 
   @Override
@@ -109,16 +113,10 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   @Transactional
   public QuoteProductBomPreparationPreview prepareByOaFormItem(Long itemId, LocalDate quoteDate) {
     QuoteContext context = loadContext(itemId);
-    String productCode = trimToNull(context.item().getMaterialNo());
-    String periodMonth = resolvePeriodMonth(context.form(), context.item().getId());
-    QuoteDataOrganization organization =
-        MaterialOrganization.quoteDataForQuoteProduct(
-            context.form().getProcessCode(),
-            context.form().getOaNo(),
-            context.item().getBusinessUnitType(),
-            context.item().getProductName(),
-            context.item().getSunlModel(),
-            context.item().getMaterialNo());
+    QuoteBomContext bomContext = resolvePreparationBomContext(context);
+    String productCode = bomContext.productCode();
+    String periodMonth = bomContext.costPeriodMonth();
+    QuoteDataOrganization organization = bomContext.organization();
     QuoteProductTypeResolveResult typeResult =
         resolveProductType(productCode, organization.materialOrganizationCode());
     if (typeResult.productType() == QuoteProductType.DATA_MISSING
@@ -574,6 +572,9 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
       status = new QuoteBomStatus();
       status.setCreatedAt(LocalDateTime.now());
     }
+    QuoteBomContext bomContext =
+        quoteBomContextResolver.resolveWithExistingCostPeriod(
+            context.form(), context.item(), periodMonth);
     status.setOaFormId(context.form().getId());
     status.setOaFormItemId(context.item().getId());
     status.setOaNo(context.form().getOaNo());
@@ -584,9 +585,9 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     status.setReferenceFinishedCode(trimToNull(referenceFinishedCode));
     status.setCostPeriodMonth(periodMonth);
     status.setProductModel(context.item().getSunlModel());
-    status.setCustomerCode(context.item().getCustomerCode());
+    status.setCustomerCode(bomContext.customerKey());
     status.setPackageType(context.item().getPackageType());
-    status.setPackageMethod(context.item().getPackageMethod());
+    status.setPackageMethod(bomContext.packageMethod());
     status.setTechnicianName(context.item().getTechnicianName());
     status.setReviewStatus(REVIEW_NOT_SUBMITTED);
     status.setCheckedAt(LocalDateTime.now());
@@ -608,6 +609,20 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
       quoteBomStatusMapper.updateById(status);
     }
     return status;
+  }
+
+  private QuoteBomContext resolvePreparationBomContext(QuoteContext context) {
+    QuoteBomStatus latestStatus =
+        quoteBomStatusMapper.selectOne(
+            Wrappers.<QuoteBomStatus>lambdaQuery()
+                .eq(QuoteBomStatus::getOaFormItemId, context.item().getId())
+                .orderByDesc(QuoteBomStatus::getCheckedAt)
+                .orderByDesc(QuoteBomStatus::getId)
+                .last("LIMIT 1"));
+    return quoteBomContextResolver.resolveWithExistingCostPeriod(
+        context.form(),
+        context.item(),
+        latestStatus == null ? null : latestStatus.getCostPeriodMonth());
   }
 
   private QuoteBomPreparationRecord upsertPreparationRecord(
@@ -739,15 +754,18 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   private BomSupplementTask createTask(
       QuoteContext context, QuoteProductBomPreparationPreview preview) {
     LocalDateTime now = LocalDateTime.now();
+    QuoteBomContext bomContext =
+        quoteBomContextResolver.resolveWithExistingCostPeriod(
+            context.form(), context.item(), preview.periodMonth());
     BomSupplementTask task = new BomSupplementTask();
     task.setTaskNo("QBP-" + TASK_NO_DATE.format(now) + "-" + preview.oaFormItemId());
     task.setBusinessUnitType(context.item().getBusinessUnitType());
     task.setProductCode(preview.quoteProductCode());
     task.setProductName(context.item().getProductName());
     task.setProductModel(context.item().getSunlModel());
-    task.setCustomerCode(context.item().getCustomerCode());
+    task.setCustomerCode(bomContext.customerKey());
     task.setPackageType(context.item().getPackageType());
-    task.setPackageMethod(context.item().getPackageMethod());
+    task.setPackageMethod(bomContext.packageMethod());
     task.setMissingBomScope(String.join(",", preview.missingScopes()));
     task.setMissingReason(String.join("；", preview.gapMessages()));
     task.setTaskStatus("TODO_PENDING");
@@ -872,31 +890,6 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
       }
     }
     return new ArrayList<>(normalized);
-  }
-
-  private String resolvePeriodMonth(OaForm form, Long oaFormItemId) {
-    if (oaFormItemId != null) {
-      QuoteBomStatus latestStatus =
-          quoteBomStatusMapper.selectOne(
-              Wrappers.<QuoteBomStatus>lambdaQuery()
-                  .eq(QuoteBomStatus::getOaFormItemId, oaFormItemId)
-                  .orderByDesc(QuoteBomStatus::getCheckedAt)
-                  .orderByDesc(QuoteBomStatus::getId)
-                  .last("LIMIT 1"));
-      String statusPeriod =
-          trimToNull(latestStatus == null ? null : latestStatus.getCostPeriodMonth());
-      if (statusPeriod != null) {
-        return YearMonth.parse(statusPeriod).toString();
-      }
-    }
-    String accountingPeriod = trimToNull(form.getAccountingPeriodMonth());
-    if (accountingPeriod != null) {
-      return YearMonth.parse(accountingPeriod).toString();
-    }
-    if (form.getApplyDate() != null) {
-      return YearMonth.from(form.getApplyDate()).toString();
-    }
-    return YearMonth.now().toString();
   }
 
   private LocalDate resolveQuoteDate(LocalDate quoteDate) {

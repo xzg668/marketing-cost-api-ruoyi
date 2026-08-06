@@ -11,6 +11,10 @@ import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.BomU9SourceMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.BomHierarchyBuildService;
+import com.sanhua.marketingcost.service.bomalternative.BomAlternativeGroupIdentity;
+import com.sanhua.marketingcost.service.bomalternative.BomAlternativeGroupKeyGenerator;
+import com.sanhua.marketingcost.service.bomalternative.BomAlternativeGroupKeyGeneratorImpl;
+import com.sanhua.marketingcost.service.bomalternative.BomChildType;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -19,9 +23,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HexFormat;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -30,6 +34,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -71,14 +76,29 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
   private final BomU9SourceMapper bomU9SourceMapper;
   private final BomRawHierarchyMapper bomRawHierarchyMapper;
   private final PlateCommercialMakeBomExpansionService crossOrganizationExpansionService;
+  private final BomAlternativeGroupKeyGenerator alternativeGroupKeyGenerator;
 
   public U9SourceBuilder(
       BomU9SourceMapper bomU9SourceMapper,
       BomRawHierarchyMapper bomRawHierarchyMapper,
       PlateCommercialMakeBomExpansionService crossOrganizationExpansionService) {
+    this(
+        bomU9SourceMapper,
+        bomRawHierarchyMapper,
+        crossOrganizationExpansionService,
+        new BomAlternativeGroupKeyGeneratorImpl());
+  }
+
+  @Autowired
+  public U9SourceBuilder(
+      BomU9SourceMapper bomU9SourceMapper,
+      BomRawHierarchyMapper bomRawHierarchyMapper,
+      PlateCommercialMakeBomExpansionService crossOrganizationExpansionService,
+      BomAlternativeGroupKeyGenerator alternativeGroupKeyGenerator) {
     this.bomU9SourceMapper = bomU9SourceMapper;
     this.bomRawHierarchyMapper = bomRawHierarchyMapper;
     this.crossOrganizationExpansionService = crossOrganizationExpansionService;
+    this.alternativeGroupKeyGenerator = alternativeGroupKeyGenerator;
   }
 
   // ============================ public API ============================
@@ -362,17 +382,30 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
     visiting.add(node);
     try {
       List<BomU9Source> children = childrenByParent.getOrDefault(node, List.of());
+      Set<String> alternativeGroupKeys =
+          children.stream()
+              .filter(
+                  child ->
+                      BomChildType.fromSource(child.getChildType(), false)
+                          == BomChildType.ALTERNATIVE)
+              .map(child -> alternativeGroupKey(child, path, priceOrgCode))
+              .collect(Collectors.toSet());
       for (BomU9Source c : children) {
         BigDecimal childQtyPerParent = nvl(c.getQtyPerParent(), BigDecimal.ONE);
         BigDecimal childQtyPerTop = qtyPerTop.multiply(childQtyPerParent);
         String childPath = path + pathSegment(c) + "/";
         int childLevel = level + 1;
+        String alternativeGroupKey = alternativeGroupKey(c, path, priceOrgCode);
+        BomChildType childType =
+            BomChildType.fromSource(
+                c.getChildType(), alternativeGroupKeys.contains(alternativeGroupKey));
 
         // 先写自己（在递归进 c 的子件之前判断是否 leaf）
         boolean childIsLeaf =
             childrenByParent.getOrDefault(c.getChildMaterialNo(), List.of()).isEmpty();
         BomRawHierarchy row = fromU9Row(c, node, childLevel, childPath, childQtyPerTop,
-            childIsLeaf, key, importBatchId, buildBatchId, builtAt, buType, priceOrgCode);
+            childIsLeaf, key, importBatchId, buildBatchId, builtAt, buType, priceOrgCode,
+            childType, alternativeGroupKey);
         output.add(row);
 
         // 再递归下去
@@ -402,7 +435,9 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
       String buildBatchId,
       LocalDateTime builtAt,
       String buType,
-      String priceOrgCode) {
+      String priceOrgCode,
+      BomChildType childType,
+      String alternativeGroupKey) {
     BomRawHierarchy row = new BomRawHierarchy();
     row.setPriceOrgCode(priceOrgCode);
     row.setTopProductCode(pathTop(path));
@@ -414,6 +449,8 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
     row.setSourceU9RowId(src.getId());
     row.setSourceLineKey(sourceLineKey(src, path));
     row.setProcessSeq(src.getProcessSeq());
+    row.setChildType(childType.name());
+    row.setAlternativeGroupKey(alternativeGroupKey);
     row.setQtyPerParent(src.getQtyPerParent());
     row.setQtyPerTop(qtyPerTop);
     row.setMaterialName(src.getChildMaterialName());
@@ -438,6 +475,25 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
     row.setBuiltAt(builtAt);
     row.setBusinessUnitType(buType);
     return row;
+  }
+
+  private String alternativeGroupKey(
+      BomU9Source source, String parentPath, String priceOrgCode) {
+    LocalDate effectiveFrom =
+        source.getEffectiveFrom() == null ? EPOCH_PLACEHOLDER : source.getEffectiveFrom();
+    BomAlternativeGroupIdentity identity =
+        new BomAlternativeGroupIdentity(
+            priceOrgCode,
+            pathTop(parentPath),
+            alternativeGroupKeyGenerator.parentPathFingerprint(parentPath),
+            source.getParentMaterialNo(),
+            source.getBomPurpose(),
+            source.getBomVersion(),
+            effectiveFrom,
+            source.getEffectiveTo(),
+            source.getChildSeq(),
+            source.getProcessSeq());
+    return alternativeGroupKeyGenerator.generate(identity);
   }
 
   /** 从 path {@code /top/.../} 取出顶层料号（第一个 {@code /} 后、第二个 {@code /} 前） */
@@ -493,6 +549,9 @@ public class U9SourceBuilder implements BomHierarchyBuildService {
     dto.setSourceCategory(r.getSourceCategory());
     dto.setBomPurpose(r.getBomPurpose());
     dto.setBomVersion(r.getBomVersion());
+    dto.setSourceU9RowId(r.getSourceU9RowId());
+    dto.setChildType(r.getChildType());
+    dto.setAlternativeGroupKey(r.getAlternativeGroupKey());
     dto.setIsLeaf(r.getIsLeaf());
     dto.setEffectiveFrom(r.getEffectiveFrom());
     dto.setEffectiveTo(r.getEffectiveTo());

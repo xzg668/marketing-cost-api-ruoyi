@@ -154,8 +154,8 @@ class QuoteOaPdfDetailTableParserFiSc020Test {
             Path.of("/Users/xiexicheng/Desktop/demo3/空白：批量品.pdf"),
             Path.of("/Users/xiexicheng/Desktop/demo3/空白：衍生品.pdf"));
     Assumptions.assumeTrue(
-        samples.stream().allMatch(Files::exists),
-        "six desktop PDF samples are required for T5 detail table smoke test");
+        samples.stream().allMatch(DesktopFixtureAccess::isReadable),
+        "six readable desktop PDF samples are required for T5 detail table smoke test");
 
     PdfBoxQuotePdfTextExtractor extractor = new PdfBoxQuotePdfTextExtractor();
     for (Path sample : samples) {
@@ -181,7 +181,9 @@ class QuoteOaPdfDetailTableParserFiSc020Test {
   @Test
   void parsesRealFiSc020DirectSalePdfWhenAvailable() throws Exception {
     Path sample = Path.of("/Users/xiexicheng/Desktop/板换/FI-SC-020-20260611-2.pdf");
-    Assumptions.assumeTrue(Files.exists(sample), "real FI-SC-020 desktop PDF is required");
+    Assumptions.assumeTrue(
+        DesktopFixtureAccess.isReadable(sample),
+        "real FI-SC-020 desktop PDF must exist and be readable");
 
     PdfBoxQuotePdfTextExtractor extractor = new PdfBoxQuotePdfTextExtractor();
     try (InputStream inputStream = Files.newInputStream(sample)) {

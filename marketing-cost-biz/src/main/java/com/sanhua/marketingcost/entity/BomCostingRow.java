@@ -148,16 +148,10 @@ public class BomCostingRow {
   /** 冻住 raw_hierarchy 行的 effective_from，用于复算时精确定位到哪一版 */
   private LocalDate rawVersionEffectiveFrom;
 
-  // ============================ 报价核算 BOM 编辑审计 ============================
+  // ============================ 历史人工修改兼容 ============================
 
-  /** 是否人工修改 */
+  /** 旧版本是否曾人工修改；仅用于保护历史快照，当前版本不再提供行级编辑入口 */
   private Integer manualModified;
-
-  /** 修改人 */
-  private String modifiedBy;
-
-  /** 修改时间 */
-  private LocalDateTime modifiedAt;
 
   // ============================ 业务单元隔离（V21） ============================
 
@@ -455,22 +449,6 @@ public class BomCostingRow {
 
   public void setManualModified(Integer manualModified) {
     this.manualModified = manualModified;
-  }
-
-  public String getModifiedBy() {
-    return modifiedBy;
-  }
-
-  public void setModifiedBy(String modifiedBy) {
-    this.modifiedBy = modifiedBy;
-  }
-
-  public LocalDateTime getModifiedAt() {
-    return modifiedAt;
-  }
-
-  public void setModifiedAt(LocalDateTime modifiedAt) {
-    this.modifiedAt = modifiedAt;
   }
 
   public String getBusinessUnitType() {

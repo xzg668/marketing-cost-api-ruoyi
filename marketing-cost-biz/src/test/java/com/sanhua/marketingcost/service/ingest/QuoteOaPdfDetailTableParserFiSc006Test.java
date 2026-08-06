@@ -196,7 +196,9 @@ class QuoteOaPdfDetailTableParserFiSc006Test {
   @Test
   void desktopFiSc006PdfFiltersSplitMaterialFragmentsAndKeepsTwentyProductRows() throws Exception {
     Path path = Path.of("/Users/xiexicheng/Desktop/打印 - SANHUA三花(1).pdf");
-    Assumptions.assumeTrue(Files.exists(path), "desktop FI-SC-006 PDF sample is required");
+    Assumptions.assumeTrue(
+        DesktopFixtureAccess.isReadable(path),
+        "desktop FI-SC-006 PDF sample must exist and be readable");
 
     PdfBoxQuotePdfTextExtractor extractor = new PdfBoxQuotePdfTextExtractor();
     QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SC_006);
@@ -238,7 +240,9 @@ class QuoteOaPdfDetailTableParserFiSc006Test {
   @Test
   void desktopPlateFiSc006PdfKeepsActualEightyOneProductRows() throws Exception {
     Path path = Path.of("/Users/xiexicheng/Desktop/板换/FI-SC-006-20260605-008.pdf");
-    Assumptions.assumeTrue(Files.exists(path), "desktop plate FI-SC-006 PDF sample is required");
+    Assumptions.assumeTrue(
+        DesktopFixtureAccess.isReadable(path),
+        "desktop plate FI-SC-006 PDF sample must exist and be readable");
 
     PdfBoxQuotePdfTextExtractor extractor = new PdfBoxQuotePdfTextExtractor();
     QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SC_006);

@@ -30,6 +30,7 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
   private static final String HEADER_UNIT = "单位";
   private static final String HEADER_MATERIAL_SHAPE = "物料形态属性";
   private static final String HEADER_SUPPLIER_NAME = "供应商";
+  private static final String HEADER_SUPPLIER_CODE = "供应商代码";
   private static final String HEADER_SUPPLY_RATIO = "供货比例";
   private static final String HEADER_RULE = "规则：取供货比例大的";
 
@@ -90,6 +91,11 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
     }
     result.setHeaderRowNumber(header.rowNumber);
     result.getHeaders().addAll(ORDERED_HEADERS);
+    if (header.columns.containsKey(HEADER_SUPPLIER_CODE)) {
+      result.getHeaders().add(
+          result.getHeaders().indexOf(HEADER_SUPPLY_RATIO),
+          HEADER_SUPPLIER_CODE);
+    }
     if (!header.columns.keySet().containsAll(REQUIRED_HEADERS)) {
       result.getErrors().add(new SupplierSupplyRatioWorkbookParseResult.ParseError(header.rowNumber, null,
           "供货比例表头不完整，必须包含：物料代码、物料名称、型号、单位、物料形态属性、供应商、供货比例"));
@@ -128,7 +134,7 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
     short last = row.getLastCellNum();
     for (int col = 0; col < last; col++) {
       String text = canonicalHeader(cellText(row.getCell(col), formatter));
-      if (ORDERED_HEADERS.contains(text)) {
+      if (ORDERED_HEADERS.contains(text) || HEADER_SUPPLIER_CODE.equals(text)) {
         columns.putIfAbsent(text, col);
       }
     }
@@ -145,6 +151,7 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
     String materialName = text(row, columns.get(HEADER_MATERIAL_NAME), formatter);
     String specModel = text(row, columns.get(HEADER_SPEC_MODEL), formatter);
     String supplierName = text(row, columns.get(HEADER_SUPPLIER_NAME), formatter);
+    String supplierCode = text(row, columns.get(HEADER_SUPPLIER_CODE), formatter);
     BigDecimal supplyRatio = decimal(row, columns.get(HEADER_SUPPLY_RATIO), formatter, result, rowNo);
     if (!StringUtils.hasText(SupplierSupplyRatioNormalizeUtils.normalizeKeyPart(materialCode))) {
       result.getErrors().add(new SupplierSupplyRatioWorkbookParseResult.ParseError(rowNo, HEADER_MATERIAL_CODE,
@@ -167,6 +174,7 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
     parsed.setUnit(text(row, columns.get(HEADER_UNIT), formatter));
     parsed.setMaterialShape(text(row, columns.get(HEADER_MATERIAL_SHAPE), formatter));
     parsed.setSupplierName(supplierName);
+    parsed.setSupplierCode(supplierCode);
     parsed.setSupplyRatio(supplyRatio);
     // 导入幂等键固定为 物料代码 + 供应商；物料名称/型号作为展示字段随最后一次导入更新。
     parsed.setDedupeKey(
@@ -250,6 +258,7 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
       case "物料型号", "物料规格" -> HEADER_SPEC_MODEL;
       case "计量单位" -> HEADER_UNIT;
       case "U9物料形态属性" -> HEADER_MATERIAL_SHAPE;
+      case "供应商编码", "供方代码" -> HEADER_SUPPLIER_CODE;
       default -> normalized;
     };
   }

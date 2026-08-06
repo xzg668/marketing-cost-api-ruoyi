@@ -124,13 +124,40 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
   }
 
   private SupplierSupplyRatio findExisting(SupplierSupplyRatioImportRow row, String businessUnitType) {
+    String materialCode = normalized(row.getMaterialCode());
+    String supplierName = normalized(row.getSupplierName());
+    String supplierCode = normalized(row.getSupplierCode());
+    if (supplierCode != null) {
+      SupplierSupplyRatio codeMatch = mapper.selectOne(
+          baseIdentityQuery(businessUnitType, materialCode)
+              .eq("supplier_code", supplierCode)
+              .last(latestRowLimit()));
+      if (codeMatch != null) {
+        return codeMatch;
+      }
+      return mapper.selectOne(
+          baseIdentityQuery(businessUnitType, materialCode)
+              .eq("supplier_name", supplierName)
+              .and(query -> query.isNull("supplier_code").or().eq("supplier_code", ""))
+              .last(latestRowLimit()));
+    }
     return mapper.selectOne(
-        new QueryWrapper<SupplierSupplyRatio>()
-            .eq("business_unit_type", businessUnitType)
-            .eq("material_code", normalized(row.getMaterialCode()))
-            .eq("supplier_name", normalized(row.getSupplierName()))
-            .eq("deleted", 0)
-            .last("ORDER BY IFNULL(updated_at, '1970-01-01 00:00:00') DESC, id DESC LIMIT 1"));
+        baseIdentityQuery(businessUnitType, materialCode)
+            .eq("supplier_name", supplierName)
+            .last(latestRowLimit()));
+  }
+
+  private QueryWrapper<SupplierSupplyRatio> baseIdentityQuery(
+      String businessUnitType,
+      String materialCode) {
+    return new QueryWrapper<SupplierSupplyRatio>()
+        .eq("business_unit_type", businessUnitType)
+        .eq("material_code", materialCode)
+        .eq("deleted", 0);
+  }
+
+  private String latestRowLimit() {
+    return "ORDER BY IFNULL(updated_at, '1970-01-01 00:00:00') DESC, id DESC LIMIT 1";
   }
 
   private void applyFields(
@@ -149,7 +176,10 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
     entity.setUnit(trimToNull(row.getUnit()));
     entity.setMaterialShape(trimToNull(row.getMaterialShape()));
     entity.setSupplierName(normalized(row.getSupplierName()));
-    entity.setSupplierCode(trimToNull(row.getSupplierCode()));
+    String supplierCode = normalized(row.getSupplierCode());
+    if (supplierCode != null || entity.getId() == null) {
+      entity.setSupplierCode(supplierCode);
+    }
     entity.setSupplyRatio(row.getSupplyRatio() == null ? BigDecimal.ZERO : row.getSupplyRatio());
     entity.setSourceType(sourceType.getCode());
     entity.setSourceBatchNo(batchNo);
@@ -200,6 +230,7 @@ public class SupplierSupplyRatioImportServiceImpl implements SupplierSupplyRatio
     converted.setUnit(row.getUnit());
     converted.setMaterialShape(row.getMaterialShape());
     converted.setSupplierName(row.getSupplierName());
+    converted.setSupplierCode(row.getSupplierCode());
     converted.setSupplyRatio(row.getSupplyRatio());
     converted.setDedupeKey(row.getDedupeKey());
     return converted;

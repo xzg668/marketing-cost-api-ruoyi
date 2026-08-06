@@ -14,6 +14,7 @@ import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomBatchSyncResponse;
+import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse;
 import com.sanhua.marketingcost.entity.BomU9Source;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
@@ -75,6 +76,7 @@ class QuoteBomStatusServiceImplTest {
             bomAvailabilityAdapter,
             bomU9SourceMapper,
             productPackagingTypeResolver,
+            new QuoteBomContextResolver(),
             clock);
   }
 
@@ -180,6 +182,8 @@ class QuoteBomStatusServiceImplTest {
     OaForm form = new OaForm();
     form.setId(1L);
     form.setOaNo("OA-T7-001");
+    form.setCustomer("CUST-A");
+    form.setAccountingPeriodMonth("2026-06");
     List<OaFormItem> items =
         List.of(item(21L, 1, "MAT-1001", "SHF-A"), item(22L, 2, "MAT-1001", "SHF-A2"));
     when(oaFormItemMapper.selectList(any())).thenReturn(items);
@@ -211,6 +215,8 @@ class QuoteBomStatusServiceImplTest {
     OaForm form = new OaForm();
     form.setId(1L);
     form.setOaNo("OA-T7-001");
+    form.setCustomer("CUST-A");
+    form.setAccountingPeriodMonth("2026-06");
     when(oaFormItemMapper.selectList(any()))
         .thenReturn(List.of(item(23L, 1, "MAT-MISSING", "SHF-M")));
     when(oaFormMapper.selectBatchIds(any())).thenReturn(List.of(form));
@@ -233,8 +239,10 @@ class QuoteBomStatusServiceImplTest {
     OaForm form = new OaForm();
     form.setId(1L);
     form.setOaNo("OA-T7-001");
+    form.setCustomer(" CUST-N ");
+    form.setAccountingPeriodMonth("2026-06");
     OaFormItem item = item(24L, 1, "MAT-1004", "SHF-N");
-    item.setCustomerCode(" CUST-N ");
+    item.setCustomerCode(" CUSTOMER-MATERIAL-N ");
     item.setPackageMethod(" BOX ");
     when(oaFormItemMapper.selectList(any())).thenReturn(List.of(item));
     when(oaFormMapper.selectBatchIds(any())).thenReturn(List.of(form));
@@ -268,10 +276,51 @@ class QuoteBomStatusServiceImplTest {
   }
 
   @Test
+  void batchSyncCannotReplaceFrozenMonthlyCardAndBindsItsEffectiveBuild() {
+    OaForm form = new OaForm();
+    form.setId(1L);
+    form.setOaNo("OA-T7-001");
+    form.setCustomer("CUST-A");
+    form.setAccountingPeriodMonth("2026-06");
+    OaFormItem item = item(26L, 1, "MAT-FROZEN", "SHF-FROZEN");
+    item.setPackageMethod("BOX");
+    QuoteBomMonthlySnapshot frozen =
+        snapshot("MAT-FROZEN", "CUST-A", "BOX", "2026-06", 7260L);
+    frozen.setFreezeStatus("FROZEN");
+    frozen.setEffectiveBuildBatchId("BUILD-FROZEN-1");
+    frozen.setEffectiveVariantHash("a".repeat(64));
+    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(item));
+    when(oaFormMapper.selectBatchIds(any())).thenReturn(List.of(form));
+    when(quoteBomStatusMapper.selectList(any())).thenReturn(new ArrayList<>());
+    when(bomU9SourceMapper.selectList(any()))
+        .thenReturn(List.of(u9("MAT-FROZEN", "BATCH-U9-NEW")));
+    when(quoteBomMonthlySnapshotMapper.selectList(any()))
+        .thenReturn(List.of(frozen));
+
+    QuoteBomBatchSyncResponse response =
+        service.batchSyncFromU9Source(List.of(26L));
+
+    assertThat(response.getSyncedRowCount()).isEqualTo(1);
+    assertThat(response.getItems().getFirst().getBomStatus())
+        .isEqualTo("REUSED_CURRENT_MONTH");
+    verify(quoteBomMonthlySnapshotMapper, never())
+        .insert(any(QuoteBomMonthlySnapshot.class));
+    verify(quoteBomMonthlySnapshotMapper, never()).update(any(), any());
+    ArgumentCaptor<QuoteBomStatus> statusCaptor =
+        ArgumentCaptor.forClass(QuoteBomStatus.class);
+    verify(quoteBomStatusMapper).updateById(statusCaptor.capture());
+    assertThat(statusCaptor.getValue().getSyncRecordId()).isEqualTo(7260L);
+    assertThat(statusCaptor.getValue().getCostingBuildBatchId())
+        .isEqualTo("BUILD-FROZEN-1");
+  }
+
+  @Test
   void batchSyncFromU9SourceUsesPriceOrganization() {
     OaForm form = new OaForm();
     form.setId(1L);
     form.setOaNo("FI-SC-020-20260707-001");
+    form.setCustomer("CUST-PLATE");
+    form.setAccountingPeriodMonth("2026-06");
     OaFormItem item = item(25L, 1, "MAT-PLATE", "SHF-P");
     when(oaFormItemMapper.selectList(any())).thenReturn(List.of(item));
     when(oaFormMapper.selectBatchIds(any())).thenReturn(List.of(form));
@@ -330,13 +379,75 @@ class QuoteBomStatusServiceImplTest {
         ArgumentCaptor.forClass(QuoteBomMonthlySnapshot.class);
     verify(quoteBomMonthlySnapshotMapper).insert(snapshotCaptor.capture());
     assertThat(snapshotCaptor.getValue().getProductCode()).isEqualTo("MAT-2001");
-    assertThat(snapshotCaptor.getValue().getCustomerCode()).isEqualTo("ITEM-CUST");
+    assertThat(snapshotCaptor.getValue().getCustomerCode()).isEqualTo("CUST-A");
     assertThat(snapshotCaptor.getValue().getPackageMethod()).isEqualTo("BOX");
     assertThat(snapshotCaptor.getValue().getCostPeriodMonth()).isEqualTo("2026-06");
     assertThat(snapshotCaptor.getValue().getSyncType()).isEqualTo("AUTO");
     assertThat(snapshotCaptor.getValue().getSyncStatus()).isEqualTo("SUCCESS");
     assertThat(snapshotCaptor.getValue().getSyncBy()).isEqualTo("SYSTEM");
     assertThat(snapshotCaptor.getValue().getActiveFlag()).isEqualTo(1);
+  }
+
+  @Test
+  void checkSingleItemForCostRunCreatesSnapshotWithoutScanningOtherOaItems() {
+    OaFormItem requested = item(31L, 1, "MAT-2001", "SHF-F");
+    requested.setPackageMethod("BOX");
+    OaFormItem other = item(32L, 2, "MAT-OTHER", "SHF-X");
+    stubFormAndItems(List.of(requested, other), List.of());
+    when(oaFormItemMapper.selectById(31L)).thenReturn(requested);
+    when(quoteBomMonthlySnapshotMapper.selectList(any())).thenReturn(List.of());
+    doAnswer(
+            invocation -> {
+              QuoteBomMonthlySnapshot snapshot = invocation.getArgument(0);
+              snapshot.setId(7001L);
+              return 1;
+            })
+        .when(quoteBomMonthlySnapshotMapper)
+        .insert(any(QuoteBomMonthlySnapshot.class));
+    when(bomAvailabilityAdapter.findAvailableBom(
+            "OA-T7-001", "MAT-2001", "2026-06", "210"))
+        .thenReturn(available("U9"));
+
+    QuoteBomStatusItemResponse response =
+        service.checkItemForCostRun("OA-T7-001", 31L);
+
+    assertThat(response.getProductCode()).isEqualTo("MAT-2001");
+    assertThat(response.getSyncRecordId()).isEqualTo(7001L);
+    verify(oaFormItemMapper, never()).selectList(any());
+    verify(bomAvailabilityAdapter, times(1))
+        .findAvailableBom("OA-T7-001", "MAT-2001", "2026-06", "210");
+  }
+
+  @Test
+  void checkSingleItemUsesWorkbenchMonthInsteadOfHistoricalOaMonth() {
+    OaFormItem requested = item(33L, 1, "MAT-2008", "SHF-AUG");
+    requested.setPackageMethod("BOX");
+    stubFormAndItems(List.of(requested), List.of());
+    when(oaFormItemMapper.selectById(33L)).thenReturn(requested);
+    when(quoteBomMonthlySnapshotMapper.selectList(any())).thenReturn(List.of());
+    doAnswer(
+            invocation -> {
+              QuoteBomMonthlySnapshot snapshot = invocation.getArgument(0);
+              snapshot.setId(7008L);
+              return 1;
+            })
+        .when(quoteBomMonthlySnapshotMapper)
+        .insert(any(QuoteBomMonthlySnapshot.class));
+    when(bomAvailabilityAdapter.findAvailableBom(
+            "OA-T7-001", "MAT-2008", "2026-08", "210"))
+        .thenReturn(available("U9"));
+
+    QuoteBomStatusItemResponse response =
+        service.checkItemForCostRun("OA-T7-001", 33L, "2026-08");
+
+    assertThat(response.getCostPeriodMonth()).isEqualTo("2026-08");
+    assertThat(response.getSyncRecordId()).isEqualTo(7008L);
+    ArgumentCaptor<QuoteBomMonthlySnapshot> snapshotCaptor =
+        ArgumentCaptor.forClass(QuoteBomMonthlySnapshot.class);
+    verify(quoteBomMonthlySnapshotMapper).insert(snapshotCaptor.capture());
+    assertThat(snapshotCaptor.getValue().getCostPeriodMonth()).isEqualTo("2026-08");
+    verify(bomAvailabilityAdapter)
+        .findAvailableBom("OA-T7-001", "MAT-2008", "2026-08", "210");
   }
 
   @Test
@@ -417,7 +528,7 @@ class QuoteBomStatusServiceImplTest {
     OaFormItem item = item(33L, 1, "MAT-2003", "SHF-H");
     item.setCustomerCode("CUST-B");
     item.setPackageMethod("BOX");
-    stubFormAndItems(List.of(item), List.of());
+    stubFormAndItems("OA-T7-001", "CUST-B", List.of(item), List.of());
     when(quoteBomMonthlySnapshotMapper.selectList(any())).thenReturn(List.of());
     when(bomAvailabilityAdapter.findAvailableBom("OA-T7-001", "MAT-2003", "2026-06", "210"))
         .thenReturn(available("U9"));
@@ -509,6 +620,62 @@ class QuoteBomStatusServiceImplTest {
     verify(quoteBomMonthlySnapshotMapper).insert(any(QuoteBomMonthlySnapshot.class));
   }
 
+  @Test
+  void costRunUsesOaAccountingMonthAndHeaderCustomerInsteadOfClockAndItemCustomerCode() {
+    OaForm form = new OaForm();
+    form.setId(1L);
+    form.setOaNo("OA-CONTEXT-008");
+    form.setProcessCode("FI-SC-006");
+    form.setCustomer(" HEADER-CUSTOMER ");
+    form.setAccountingPeriodMonth("2026-08");
+    OaFormItem item = item(40L, 1, "MAT-CONTEXT", "SHF-CONTEXT");
+    item.setCustomerCode("CUSTOMER-MATERIAL-NO");
+    item.setPackageMethod(" BOX ");
+    when(oaFormMapper.selectOne(any())).thenReturn(form);
+    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(item));
+    when(quoteBomStatusMapper.selectList(any())).thenReturn(new ArrayList<>());
+    when(quoteBomMonthlySnapshotMapper.selectList(any())).thenReturn(List.of());
+    when(bomAvailabilityAdapter.findAvailableBom(
+            "OA-CONTEXT-008", "MAT-CONTEXT", "2026-08", "210"))
+        .thenReturn(available("U9"));
+
+    service.checkForCostRun("OA-CONTEXT-008");
+
+    ArgumentCaptor<QuoteBomMonthlySnapshot> snapshotCaptor =
+        ArgumentCaptor.forClass(QuoteBomMonthlySnapshot.class);
+    verify(quoteBomMonthlySnapshotMapper).insert(snapshotCaptor.capture());
+    assertThat(snapshotCaptor.getValue().getCostPeriodMonth()).isEqualTo("2026-08");
+    assertThat(snapshotCaptor.getValue().getCustomerCode()).isEqualTo("HEADER-CUSTOMER");
+    assertThat(snapshotCaptor.getValue().getPackageMethod()).isEqualTo("BOX");
+  }
+
+  @Test
+  void manualSyncBlocksRawBomFromDifferentPriceOrganization() {
+    OaForm form = new OaForm();
+    form.setId(1L);
+    form.setOaNo("OA-ORG-MISMATCH");
+    form.setCustomer("CUST-A");
+    form.setAccountingPeriodMonth("2026-08");
+    OaFormItem item = item(41L, 1, "MAT-ORG-MISMATCH", "SHF-ORG");
+    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(item));
+    when(oaFormMapper.selectBatchIds(any())).thenReturn(List.of(form));
+    when(quoteBomStatusMapper.selectList(any())).thenReturn(new ArrayList<>());
+    when(bomU9SourceMapper.selectList(any()))
+        .thenReturn(List.of(u9("MAT-ORG-MISMATCH", "BATCH-WRONG-ORG", "220")));
+
+    QuoteBomBatchSyncResponse response = service.batchSyncFromU9Source(List.of(41L));
+
+    assertThat(response.getSyncedRowCount()).isZero();
+    assertThat(response.getNoBomRowCount()).isEqualTo(1);
+    assertThat(response.getItems().get(0).getBomStatus()).isEqualTo("CHECK_FAILED");
+    assertThat(response.getItems().get(0).getErrorMessage())
+        .contains("210")
+        .contains("220")
+        .contains("不一致");
+    verify(quoteBomMonthlySnapshotMapper, never()).insert(any(QuoteBomMonthlySnapshot.class));
+    verify(quoteBomMonthlySnapshotMapper, never()).update(any(), any());
+  }
+
   private void stubFormAndItems(List<OaFormItem> items, List<QuoteBomStatus> statuses) {
     stubFormAndItems("OA-T7-001", items, statuses);
   }
@@ -525,10 +692,20 @@ class QuoteBomStatusServiceImplTest {
 
   private void stubFormAndItems(
       String oaNo, List<OaFormItem> items, List<QuoteBomStatus> statuses) {
+    stubFormAndItems(oaNo, "CUST-A", items, statuses);
+  }
+
+  private void stubFormAndItems(
+      String oaNo,
+      String customer,
+      List<OaFormItem> items,
+      List<QuoteBomStatus> statuses) {
     OaForm form = new OaForm();
     form.setId(1L);
     form.setOaNo(oaNo);
     form.setProcessCode(oaNo == null ? null : oaNo.split("-202")[0]);
+    form.setCustomer(customer);
+    form.setAccountingPeriodMonth("2026-06");
     when(oaFormMapper.selectOne(any())).thenReturn(form);
     when(oaFormItemMapper.selectList(any())).thenReturn(items);
     when(quoteBomStatusMapper.selectList(any())).thenReturn(new ArrayList<>(statuses));

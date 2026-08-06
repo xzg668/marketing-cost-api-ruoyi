@@ -297,6 +297,95 @@ class SupplierSupplyRatioImportServiceImplTest {
     assertThat(captor.getValue().getSupplyRatio()).isEqualByComparingTo(BigDecimal.ZERO);
   }
 
+  @Test
+  @DisplayName("RPI1-09 Excel可选供应商代码正确保存")
+  void excelSupplierCodeIsPersisted() {
+    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    SupplierSupplyRatioExcelRow coded =
+        row("201503873", "管件", "SPEC-A", "供应商A", "0.6");
+    coded.setSupplierCode(" S000 841 ");
+
+    SupplierSupplyRatioImportResponse response = service.importRows(
+        List.of(coded), "ratio-with-code.xlsx", "COMMERCIAL", "alice");
+
+    assertThat(response.getInsertedRows()).isOne();
+    ArgumentCaptor<SupplierSupplyRatio> captor = ArgumentCaptor.forClass(SupplierSupplyRatio.class);
+    verify(mapper).insert(captor.capture());
+    assertThat(captor.getValue().getSupplierCode()).isEqualTo("S000841");
+  }
+
+  @Test
+  @DisplayName("RPI1-09 同物料同名称后来补代码时升级原记录而非新增")
+  void laterSupplierCodeUpgradesNameOnlyRecord() {
+    SupplierSupplyRatio existing = new SupplierSupplyRatio();
+    existing.setId(201L);
+    existing.setMaterialCode("201503873");
+    existing.setSupplierName("供应商A");
+    existing.setSupplierCode(null);
+    existing.setDeleted(0);
+    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null, existing);
+    SupplierSupplyRatioImportRow coded =
+        importRow("201503873", "管件", "SPEC-A", "供应商A", "0.8");
+    coded.setSupplierCode("S000841");
+
+    SupplierSupplyRatioImportResponse response = service.upsertFromRows(
+        List.of(coded),
+        SupplierSupplyRatioSourceType.SRM,
+        "RPI1-09-UPGRADE",
+        null,
+        "COMMERCIAL",
+        "srm-job");
+
+    assertThat(response.getInsertedRows()).isZero();
+    assertThat(response.getUpdatedRows()).isOne();
+    verify(mapper, never()).insert(any(SupplierSupplyRatio.class));
+    verify(mapper).updateById(existing);
+    assertThat(existing.getSupplierCode()).isEqualTo("S000841");
+  }
+
+  @Test
+  @DisplayName("RPI1-09 旧模板无代码再次导入时不清空已有供应商代码")
+  void legacyExcelDoesNotClearExistingSupplierCode() {
+    SupplierSupplyRatio existing = new SupplierSupplyRatio();
+    existing.setId(202L);
+    existing.setMaterialCode("201503873");
+    existing.setSupplierName("供应商A");
+    existing.setSupplierCode("S000841");
+    existing.setDeleted(0);
+    when(mapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+
+    SupplierSupplyRatioImportResponse response = service.importRows(
+        List.of(row("201503873", "管件", "SPEC-A", "供应商A", "0.7")),
+        "legacy-ratio.xlsx",
+        "COMMERCIAL",
+        "alice");
+
+    assertThat(response.getUpdatedRows()).isOne();
+    assertThat(existing.getSupplierCode()).isEqualTo("S000841");
+  }
+
+  @Test
+  @DisplayName("RPI1-09 有代码时先按物料和代码查找已有关系")
+  void codedImportFindsExistingByCodeBeforeNameFallback() {
+    SupplierSupplyRatio existing = new SupplierSupplyRatio();
+    existing.setId(203L);
+    existing.setMaterialCode("201503873");
+    existing.setSupplierName("供应商旧名称");
+    existing.setSupplierCode("S000841");
+    existing.setDeleted(0);
+    when(mapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    SupplierSupplyRatioImportRow coded =
+        importRow("201503873", "管件", "SPEC-A", "供应商新名称", "0.9");
+    coded.setSupplierCode("S000841");
+
+    SupplierSupplyRatioImportResponse response = service.upsertFromRows(
+        List.of(coded), SupplierSupplyRatioSourceType.SRM, "RPI1-09-CODE");
+
+    assertThat(response.getUpdatedRows()).isOne();
+    assertThat(existing.getSupplierName()).isEqualTo("供应商新名称");
+    assertThat(existing.getSupplierCode()).isEqualTo("S000841");
+  }
+
   private SupplierSupplyRatioExcelRow row(
       String materialCode,
       String materialName,

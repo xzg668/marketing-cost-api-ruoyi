@@ -50,8 +50,28 @@ class SupplierSupplyRatioWorkbookParserImplTest {
     assertThat(first.getMaterialName()).isEqualTo("滑碗");
     assertThat(first.getSpecModel()).isEqualTo("SHF-000-042002");
     assertThat(first.getSupplierName()).isEqualTo("A");
+    assertThat(first.getSupplierCode()).isNull();
     assertThat(first.getSupplyRatio()).isEqualByComparingTo("1");
     assertThat(result.getRows().get(2).getSupplyRatio()).isEqualByComparingTo("0.6");
+  }
+
+  @Test
+  void parsesOptionalSupplierCodeColumnWhenPresent() {
+    SupplierSupplyRatioWorkbookParseResult result =
+        parser.parse(
+            workbook(
+                "供货比例-SRM",
+                List.of(
+                    List.of("物料代码", "物料名称", "型号", "单位", "物料形态属性", "供应商", "供应商代码", "供货比例", "规则：取供货比例大的"),
+                    List.of("201503873", "管件", "SPEC-A", "只", "采购件", "公主岭市远达实业有限公司", " S000841 ", "60%", ""),
+                    List.of("201503874", "管件", "SPEC-B", "只", "采购件", "吉林省合信汽配有限公司", "", "40%", ""))),
+            "supplier-code.xlsx");
+
+    assertThat(result.getErrors()).isEmpty();
+    assertThat(result.getHeaders()).contains("供应商代码");
+    assertThat(result.getRows()).hasSize(2);
+    assertThat(result.getRows().get(0).getSupplierCode()).isEqualTo("S000841");
+    assertThat(result.getRows().get(1).getSupplierCode()).isNull();
   }
 
   @Test

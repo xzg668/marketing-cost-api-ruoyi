@@ -26,6 +26,11 @@ public class QuoteBomMonthlySnapshot {
   private String bomBatchId;
   private Integer activeFlag;
   private String errorMessage;
+  private String freezeStatus;
+  private String effectiveBuildBatchId;
+  private String effectiveVariantHash;
+  private LocalDateTime frozenAt;
+  private Long frozenBy;
   private LocalDateTime createdAt;
   private LocalDateTime updatedAt;
 
@@ -171,6 +176,46 @@ public class QuoteBomMonthlySnapshot {
 
   public void setErrorMessage(String errorMessage) {
     this.errorMessage = errorMessage;
+  }
+
+  public String getFreezeStatus() {
+    return freezeStatus;
+  }
+
+  public void setFreezeStatus(String freezeStatus) {
+    this.freezeStatus = freezeStatus;
+  }
+
+  public String getEffectiveBuildBatchId() {
+    return effectiveBuildBatchId;
+  }
+
+  public void setEffectiveBuildBatchId(String effectiveBuildBatchId) {
+    this.effectiveBuildBatchId = effectiveBuildBatchId;
+  }
+
+  public String getEffectiveVariantHash() {
+    return effectiveVariantHash;
+  }
+
+  public void setEffectiveVariantHash(String effectiveVariantHash) {
+    this.effectiveVariantHash = effectiveVariantHash;
+  }
+
+  public LocalDateTime getFrozenAt() {
+    return frozenAt;
+  }
+
+  public void setFrozenAt(LocalDateTime frozenAt) {
+    this.frozenAt = frozenAt;
+  }
+
+  public Long getFrozenBy() {
+    return frozenBy;
+  }
+
+  public void setFrozenBy(Long frozenBy) {
+    this.frozenBy = frozenBy;
   }
 
   public LocalDateTime getCreatedAt() {

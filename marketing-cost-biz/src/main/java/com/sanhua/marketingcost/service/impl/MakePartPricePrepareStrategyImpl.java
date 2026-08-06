@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.sanhua.marketingcost.dto.MakePartPriceGenerateResponse;
 import com.sanhua.marketingcost.dto.priceprepare.MakePartPricePrepareResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePreparePlanItem;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
@@ -158,24 +159,28 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
       return MakePartPricePrepareResult.notReady(status, message, gaps);
     }
 
+    MakePartPriceGenerateResponse generation;
     if (isFinanceScenario(scenarioContext)) {
-      generationService.generateByOa(
+      generation = generationService.generateByOa(
           normalizedOaNo,
           normalizedBusinessUnitType,
           normalizedPeriod,
           priceAsOfTime,
           scenarioContext);
     } else {
-      generationService.generateByOa(
+      generation = generationService.generateByOa(
           normalizedOaNo, normalizedBusinessUnitType, normalizedPeriod, priceAsOfTime);
     }
+    String currentCalcBatchId =
+        generation == null ? null : trimToNull(generation.getCalcBatchId());
     MakePartPriceCalcRow ready = selectLatestReady(
         parentMaterialNo,
         normalizedOaNo,
         normalizedBusinessUnitType,
         normalizedPeriod,
         priceAsOfTime,
-        scenarioType(scenarioContext));
+        scenarioType(scenarioContext),
+        currentCalcBatchId);
     if (ready != null) {
       return readyResult(ready, planItem, "自制件价格准备已触发生成并取得价格");
     }
@@ -186,7 +191,8 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
         normalizedBusinessUnitType,
         normalizedPeriod,
         priceAsOfTime,
-        scenarioType(scenarioContext));
+        scenarioType(scenarioContext),
+        currentCalcBatchId);
     List<MakePartPricePrepareResult.Gap> gaps = buildGaps(parentMaterialNo, rows);
     String status = hasOnlyStructureGaps(gaps) ? STATUS_MISSING_STRUCTURE : STATUS_MISSING_PRICE;
     String message = rows.isEmpty()
@@ -213,9 +219,16 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
       String businessUnitType,
       String periodMonth,
       LocalDateTime priceAsOfTime,
-      QuotePriceScenarioType scenarioType) {
+      QuotePriceScenarioType scenarioType,
+      String calcBatchId) {
     List<MakePartPriceCalcRow> rows = calcRowMapper.selectList(baseQuery(
-            parentMaterialNo, oaNo, businessUnitType, periodMonth, priceAsOfTime, scenarioType)
+            parentMaterialNo,
+            oaNo,
+            businessUnitType,
+            periodMonth,
+            priceAsOfTime,
+            scenarioType,
+            calcBatchId)
         .eq(MakePartPriceCalcRow::getStatus, STATUS_OK)
         .eq(MakePartPriceCalcRow::getPriceComplete, true)
         .isNotNull(MakePartPriceCalcRow::getParentTotalCostPrice)
@@ -231,7 +244,8 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
       String businessUnitType,
       String periodMonth,
       LocalDateTime priceAsOfTime,
-      QuotePriceScenarioType scenarioType) {
+      QuotePriceScenarioType scenarioType,
+      String calcBatchId) {
     LambdaQueryWrapper<MakePartPriceCalcRow> query =
         baseQuery(
             parentMaterialNo,
@@ -239,7 +253,8 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
             businessUnitType,
             periodMonth,
             priceAsOfTime,
-            scenarioType);
+            scenarioType,
+            calcBatchId);
     List<MakePartPriceCalcRow> rows = calcRowMapper.selectList(
         query.orderByDesc(MakePartPriceCalcRow::getCreatedAt)
             .orderByDesc(MakePartPriceCalcRow::getId));
@@ -252,13 +267,18 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
       String businessUnitType,
       String periodMonth,
       LocalDateTime priceAsOfTime,
-      QuotePriceScenarioType scenarioType) {
+      QuotePriceScenarioType scenarioType,
+      String calcBatchId) {
     LambdaQueryWrapper<MakePartPriceCalcRow> query = Wrappers.lambdaQuery(MakePartPriceCalcRow.class)
         .eq(MakePartPriceCalcRow::getParentMaterialNo, parentMaterialNo)
         .eq(MakePartPriceCalcRow::getOaNo, oaNo)
         .eq(MakePartPriceCalcRow::getBusinessUnitType, businessUnitType)
         .eq(MakePartPriceCalcRow::getPricingMonth, periodMonth)
         .eq(MakePartPriceCalcRow::getPriceScenarioType, scenarioType.name());
+    if (StringUtils.hasText(calcBatchId)) {
+      // 每次生成都有独立批次；只读本次批次，避免历史结构的废料缺口污染当前结果。
+      query.eq(MakePartPriceCalcRow::getCalcBatchId, calcBatchId.trim());
+    }
     if (priceAsOfTime != null) {
       // 月度调价必须严格复用批次取价时点，不能把其他时间生成的当前结果混进来。
       query.eq(MakePartPriceCalcRow::getPriceAsOfTime, priceAsOfTime);

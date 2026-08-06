@@ -70,7 +70,9 @@ public class SupplierSupplyRatioResolveServiceImpl implements SupplierSupplyRati
       return SupplierSupplyRatioResolveResult.miss("物料代码为空，未查询供货比例");
     }
     CandidateKeys keys = candidateKeys(candidates);
-    if (keys.supplierCodes().isEmpty() && keys.supplierNames().isEmpty()) {
+    if (keys.supplierCodes().isEmpty()
+        && keys.namesWithCode().isEmpty()
+        && keys.namesWithoutCode().isEmpty()) {
       return SupplierSupplyRatioResolveResult.miss("候选供应商为空，未查询供货比例");
     }
     String bu = StringUtils.hasText(businessUnitType) ? businessUnitType.trim() : DEFAULT_BUSINESS_UNIT;
@@ -112,15 +114,28 @@ public class SupplierSupplyRatioResolveServiceImpl implements SupplierSupplyRati
           .and(w -> w.ge("effective_to", pricingDate).or().isNull("effective_to"));
     }
     query.and(w -> {
-      boolean hasCode = !keys.supplierCodes().isEmpty();
-      if (hasCode) {
+      boolean hasCondition = false;
+      if (!keys.supplierCodes().isEmpty()) {
         w.in("supplier_code", keys.supplierCodes());
+        hasCondition = true;
       }
-      if (!keys.supplierNames().isEmpty()) {
-        if (hasCode) {
-          w.or();
+      if (!keys.namesWithoutCode().isEmpty()) {
+        if (hasCondition) {
+          w.or(name -> name.in("supplier_name", keys.namesWithoutCode()));
+        } else {
+          w.in("supplier_name", keys.namesWithoutCode());
         }
-        w.in("supplier_name", keys.supplierNames());
+        hasCondition = true;
+      }
+      if (!keys.namesWithCode().isEmpty()) {
+        if (hasCondition) {
+          w.or(nameFallback -> nameFallback
+              .nested(code -> code.isNull("supplier_code").or().eq("supplier_code", ""))
+              .in("supplier_name", keys.namesWithCode()));
+        } else {
+          w.nested(code -> code.isNull("supplier_code").or().eq("supplier_code", ""))
+              .in("supplier_name", keys.namesWithCode());
+        }
       }
     });
     query.last("ORDER BY supply_ratio DESC, IFNULL(updated_at, '1970-01-01 00:00:00') DESC, id DESC LIMIT 1");
@@ -129,7 +144,8 @@ public class SupplierSupplyRatioResolveServiceImpl implements SupplierSupplyRati
 
   private CandidateKeys candidateKeys(List<SupplierSupplyRatioCandidate> candidates) {
     Set<String> supplierCodes = new LinkedHashSet<>();
-    Set<String> supplierNames = new LinkedHashSet<>();
+    Set<String> namesWithCode = new LinkedHashSet<>();
+    Set<String> namesWithoutCode = new LinkedHashSet<>();
     if (candidates != null) {
       for (SupplierSupplyRatioCandidate candidate : candidates) {
         if (candidate == null) {
@@ -141,14 +157,21 @@ public class SupplierSupplyRatioResolveServiceImpl implements SupplierSupplyRati
         }
         String supplierName = normalized(candidate.supplierName());
         if (StringUtils.hasText(supplierName)) {
-          supplierNames.add(supplierName);
+          if (StringUtils.hasText(supplierCode)) {
+            namesWithCode.add(supplierName);
+          } else {
+            namesWithoutCode.add(supplierName);
+          }
         }
       }
     }
-    return new CandidateKeys(supplierCodes, supplierNames);
+    return new CandidateKeys(supplierCodes, namesWithCode, namesWithoutCode);
   }
 
-  private record CandidateKeys(Set<String> supplierCodes, Set<String> supplierNames) {
+  private record CandidateKeys(
+      Set<String> supplierCodes,
+      Set<String> namesWithCode,
+      Set<String> namesWithoutCode) {
   }
 
   private SupplierSupplyRatioResolveResult hit(SupplierSupplyRatio row, String matchMode) {

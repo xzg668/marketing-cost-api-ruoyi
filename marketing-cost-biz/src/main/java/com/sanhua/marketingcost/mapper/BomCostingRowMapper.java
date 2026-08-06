@@ -33,7 +33,7 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "  bom_purpose, bom_version, u9_is_cost_flag, effective_from, effective_to,"
           + "  build_batch_id, built_at, price_org_code, material_organization_code,"
           + "  period_month, as_of_date, raw_version_effective_from,"
-          + "  manual_modified, modified_by, modified_at, business_unit_type"
+          + "  manual_modified, business_unit_type"
           + ") VALUES "
           + "<foreach collection='rows' item='e' separator=','>"
           + "  (#{e.oaNo}, #{e.oaFormItemId}, #{e.topProductCode}, #{e.parentCode}, #{e.materialCode}, #{e.level}, #{e.path},"
@@ -43,7 +43,7 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "   #{e.bomPurpose}, #{e.bomVersion}, #{e.u9IsCostFlag}, #{e.effectiveFrom}, #{e.effectiveTo},"
           + "   #{e.buildBatchId}, #{e.builtAt}, #{e.priceOrgCode}, #{e.materialOrganizationCode},"
           + "   #{e.periodMonth}, #{e.asOfDate}, #{e.rawVersionEffectiveFrom},"
-          + "   COALESCE(#{e.manualModified}, 0), #{e.modifiedBy}, #{e.modifiedAt}, #{e.businessUnitType})"
+          + "   COALESCE(#{e.manualModified}, 0), #{e.businessUnitType})"
           + "</foreach>"
           + " ON DUPLICATE KEY UPDATE"
           + "  oa_form_item_id = VALUES(oa_form_item_id),"
@@ -75,9 +75,7 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "  material_organization_code = VALUES(material_organization_code),"
           + "  period_month = VALUES(period_month),"
           + "  business_unit_type = VALUES(business_unit_type),"
-          + "  manual_modified = VALUES(manual_modified),"
-          + "  modified_by = VALUES(modified_by),"
-          + "  modified_at = VALUES(modified_at)"
+          + "  manual_modified = VALUES(manual_modified)"
           + "</script>")
   int batchUpsert(@Param("rows") List<BomCostingRow> rows);
 
