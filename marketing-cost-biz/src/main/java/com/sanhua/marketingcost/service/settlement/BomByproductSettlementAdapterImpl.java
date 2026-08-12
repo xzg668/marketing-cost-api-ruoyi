@@ -19,8 +19,8 @@ import org.springframework.util.StringUtils;
  * 副产品结算候选读取适配层。
  *
  * <p>这里只做数据库读取和轻量归一：U9 副产品档案说明“可能要补行”，
- * lp_material_scrap_ref 说明“该副产品已被下层原材料废料抵减”。真正是否输出
- * {@code BYPRODUCT_EXTRA} 由统一引擎结合规则表判断。
+ * lp_material_scrap_ref 提供采购件到废料的候选映射。映射是否属于当前制造件的同一加工层、
+ * 以及是否输出 {@code BYPRODUCT_EXTRA}，由统一引擎结合 BOM 制造边界和规则表判断。
  */
 @Component
 public class BomByproductSettlementAdapterImpl implements BomByproductSettlementAdapter {
@@ -74,15 +74,9 @@ public class BomByproductSettlementAdapterImpl implements BomByproductSettlement
       return new BomByproductSettlementReadResult(List.of(), List.of(), warnings);
     }
 
-    Set<String> byproductCodes = new LinkedHashSet<>();
-    for (U9BomByproductMaster row : byproductRows) {
-      if (StringUtils.hasText(row.getByproductMaterialNo())) {
-        byproductCodes.add(row.getByproductMaterialNo());
-      }
-    }
     Set<String> lowerRawMaterialCodes = lowerRawMaterialCodes(safeNodes, manufacturedCodes);
     List<BomSettlementScrapRef> scrapRefs = readScrapRefs(
-        lowerRawMaterialCodes, byproductCodes, businessUnitType, effectiveDate);
+        lowerRawMaterialCodes, businessUnitType, effectiveDate);
 
     return new BomByproductSettlementReadResult(
         byproductRows.stream().map(this::toByproduct).toList(),
@@ -128,16 +122,14 @@ public class BomByproductSettlementAdapterImpl implements BomByproductSettlement
 
   private List<BomSettlementScrapRef> readScrapRefs(
       Set<String> materialCodes,
-      Set<String> scrapCodes,
       String businessUnitType,
       LocalDate effectiveDate) {
-    if (materialCodes.isEmpty() || scrapCodes.isEmpty()) {
+    if (materialCodes.isEmpty()) {
       return List.of();
     }
     List<MaterialScrapRef> rows = materialScrapRefMapper.selectList(
         Wrappers.<MaterialScrapRef>lambdaQuery()
             .in(MaterialScrapRef::getMaterialCode, materialCodes)
-            .in(MaterialScrapRef::getScrapCode, scrapCodes)
             .and(wrapper -> wrapper
                 .le(MaterialScrapRef::getEffectiveFrom, effectiveDate)
                 .or()

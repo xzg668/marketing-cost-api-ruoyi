@@ -356,26 +356,108 @@ class BomSettlementRowBuildEngineTest {
   }
 
   @Test
-  @DisplayName("副产品命中 lp_material_scrap_ref 时不额外输出")
-  void byproductMatchedScrapRefDoesNotAddExtraRow() {
+  @DisplayName("直接加工父件已按采购件废料计算时，即使废料号不同也不输出自身副产品")
+  void directProcessingParentWithScrapMappingDoesNotAddItsOwnByproduct() {
     BomSettlementRowBuildResult result = engine.build(byproductRequest(
         List.of(
-            node("P", "P", null, 0, "/P/", 0, "组件", null),
-            node("MAKE-1", "P", "P", 1, "/P/MAKE-1/", 0, "制造件一", null),
-            purchaseNode("RAW-1", "P", "MAKE-1", 2, "/P/MAKE-1/RAW-1/", "原材料一")
+            node("1145900000302", "1145900000302", null, 0, "/1145900000302/", 0, "成品", null),
+            fullNode(
+                "7218501041211", "1145900000302", "1145900000302", 1,
+                "/1145900000302/7218501041211/", 0, "基座", "制造件", "制造件",
+                "12", "专用件", null, "主制造", LocalDate.of(2026, 1, 1), null),
+            purchaseNode(
+                "201850068", "1145900000302", "7218501041211", 2,
+                "/1145900000302/7218501041211/201850068/", "基座毛坯")
         ),
-        List.of(byproduct("MAKE-1", "SCRAP-1", "副产品一")),
-        List.of(scrapRef("RAW-1", "SCRAP-1")),
+        List.of(byproduct(
+            "7218501041211", "301991066", "油铁沫", new BigDecimal("0.0108"))),
+        List.of(scrapRef("201850068", "301990444")),
         List.of(byproductRule())));
 
     assertThat(result.costingRows()).extracting(BomCostingRow::getMaterialCode)
-        .containsExactly("RAW-1");
+        .containsExactly("201850068");
     assertThat(result.costingRows()).noneMatch(row -> "BYPRODUCT_EXTRA".equals(row.getSettlementRowType()));
   }
 
   @Test
-  @DisplayName("副产品未命中 lp_material_scrap_ref 时作为附加结算行输出")
-  void byproductWithoutScrapRefAddsExtraRow() {
+  @DisplayName("不锈钢带上卷后跳过直接加工父件，但保留膜片上级副产品")
+  void stainlessStripRollupKeepsOnlyMembraneAncestorByproduct() {
+    BomSettlementRowBuildResult result = engine.build(byproductRequest(
+        List.of(
+            node("1145900000302", "1145900000302", null, 0, "/1145900000302/", 0, "成品", null),
+            fullNode(
+                "721850074", "1145900000302", "1145900000302", 1,
+                "/1145900000302/721850074/", 0, "膜片", "制造件", "制造件",
+                "12", "专用件", null, "主制造", LocalDate.of(2026, 1, 1), null),
+            fullNode(
+                "3012402681163", "1145900000302", "721850074", 2,
+                "/1145900000302/721850074/3012402681163/", 0, "不锈钢带", "制造件", "制造件",
+                "12", "专用件", null, "主制造", LocalDate.of(2026, 1, 1), null),
+            purchaseNode(
+                "301240268", "1145900000302", "3012402681163", 3,
+                "/1145900000302/721850074/3012402681163/301240268/", "不锈钢带")
+        ),
+        List.of(
+            byproduct(
+                "3012402681163", "301990444", "直接加工父件废料", new BigDecimal("0.000130")),
+            byproduct(
+                "721850074", "301991071", "废不锈钢316L", new BigDecimal("0.000088"))),
+        List.of(scrapRef("301240268", "301990444")),
+        List.of(byproductRule()),
+        List.of(rollupRule("SPECIAL_PURCHASE_ROLLUP_STAINLESS_STRIP", "不锈钢带", 11))));
+
+    assertThat(result.costingRows()).extracting(BomCostingRow::getMaterialCode)
+        .containsExactly("3012402681163", "301991071");
+    assertThat(result.costingRows())
+        .filteredOn(row -> "BYPRODUCT_EXTRA".equals(row.getSettlementRowType()))
+        .singleElement()
+        .satisfies(row -> {
+          assertThat(row.getParentCode()).isEqualTo("721850074");
+          assertThat(row.getMaterialCode()).isEqualTo("301991071");
+          assertThat(row.getQtyPerTop()).isEqualByComparingTo(new BigDecimal("-0.000088"));
+        });
+  }
+
+  @Test
+  @DisplayName("采购件废料映射不穿透子制造件，所有更上级副产品逐级独立输出")
+  void scrapRefStopsAtNearestManufacturedParentAndKeepsAncestorByproducts() {
+    BomSettlementRowBuildResult result = engine.build(byproductRequest(
+        List.of(
+            node("P", "P", null, 0, "/P/", 0, "组件", null),
+            fullNode(
+                "UPPER-MAKE", "P", "P", 1, "/P/UPPER-MAKE/", 0, "上上级部件", "制造件", "制造件",
+                "12", "专用件", null, "主制造", LocalDate.of(2026, 1, 1), null),
+            fullNode(
+                "PARENT-MAKE", "P", "UPPER-MAKE", 2, "/P/UPPER-MAKE/PARENT-MAKE/", 0, "上级部件", "制造件", "制造件",
+                "12", "专用件", null, "主制造", LocalDate.of(2026, 1, 1), null),
+            fullNode(
+                "DIRECT-MAKE", "P", "PARENT-MAKE", 3, "/P/UPPER-MAKE/PARENT-MAKE/DIRECT-MAKE/", 0, "直接加工父件", "制造件", "制造件",
+                "12", "专用件", null, "主制造", LocalDate.of(2026, 1, 1), null),
+            purchaseNode(
+                "RAW-STEEL", "P", "DIRECT-MAKE", 4,
+                "/P/UPPER-MAKE/PARENT-MAKE/DIRECT-MAKE/RAW-STEEL/", "不锈钢板")
+        ),
+        List.of(
+            byproduct("UPPER-MAKE", "SCRAP-STEEL", "上上级废料"),
+            byproduct("PARENT-MAKE", "SCRAP-STEEL", "上级废料"),
+            byproduct("DIRECT-MAKE", "SCRAP-STEEL", "直接加工废料")),
+        List.of(scrapRef("RAW-STEEL", "OTHER-SCRAP")),
+        List.of(byproductRule())));
+
+    assertThat(result.costingRows()).extracting(BomCostingRow::getMaterialCode)
+        .containsExactly("SCRAP-STEEL", "SCRAP-STEEL", "RAW-STEEL");
+    assertThat(result.costingRows())
+        .filteredOn(row -> "BYPRODUCT_EXTRA".equals(row.getSettlementRowType()))
+        .extracting(BomCostingRow::getParentCode)
+        .containsExactly("UPPER-MAKE", "PARENT-MAKE");
+    assertThat(result.costingRows())
+        .noneMatch(row -> "DIRECT-MAKE".equals(row.getParentCode())
+            && "BYPRODUCT_EXTRA".equals(row.getSettlementRowType()));
+  }
+
+  @Test
+  @DisplayName("当前加工层采购件没有废料映射时，父件副产品作为附加结算行输出")
+  void byproductWithoutAnyScrapMappingAddsExtraRow() {
     BomSettlementRowBuildResult result = engine.build(byproductRequest(
         List.of(
             node("P", "P", null, 0, "/P/", 0, "组件", null),
@@ -383,7 +465,7 @@ class BomSettlementRowBuildEngineTest {
             purchaseNode("RAW-1", "P", "MAKE-1", 2, "/P/MAKE-1/RAW-1/", "原材料一")
         ),
         List.of(byproduct("MAKE-1", "BYP-1", "副产品一")),
-        List.of(scrapRef("RAW-1", "OTHER-SCRAP")),
+        List.of(),
         List.of(byproductRule())));
 
     assertThat(result.costingRows()).extracting(BomCostingRow::getMaterialCode)
@@ -431,7 +513,7 @@ class BomSettlementRowBuildEngineTest {
   }
 
   @Test
-  @DisplayName("子制造件上卷时，跳过上卷件自身副产品，但输出上级制造件副产品")
+  @DisplayName("子制造件上卷时，同码废料映射只覆盖子件且上级副产品仍输出")
   void rollupChildSkipsItselfButAddsAncestorByproduct() {
     BomSettlementRowBuildResult result = engine.build(byproductRequest(
         List.of(
@@ -445,19 +527,22 @@ class BomSettlementRowBuildEngineTest {
             purchaseNode("RAW-STEEL", "P", "ROLL-CHILD", 3, "/P/PARENT-MAKE/ROLL-CHILD/RAW-STEEL/", "不锈钢板")
         ),
         List.of(
-            byproduct("PARENT-MAKE", "SCRAP-STEEL", "废不锈钢"),
-            byproduct("ROLL-CHILD", "SCRAP-ROLL", "上卷子件废料")),
-        List.of(),
+            byproduct("PARENT-MAKE", "SCRAP-STEEL", "废不锈钢", new BigDecimal("0.0237")),
+            byproduct("ROLL-CHILD", "SCRAP-STEEL", "上卷子件废料", new BigDecimal("0.0139"))),
+        List.of(scrapRef("RAW-STEEL", "SCRAP-STEEL")),
         List.of(byproductRule()),
         List.of(rollupRule("SPECIAL_PURCHASE_ROLLUP_STEEL", "不锈钢板", 10))));
 
     assertThat(result.costingRows()).extracting(BomCostingRow::getMaterialCode)
         .containsExactly("ROLL-CHILD", "SCRAP-STEEL");
-    assertThat(result.costingRows()).noneMatch(row -> "SCRAP-ROLL".equals(row.getMaterialCode()));
+    assertThat(result.costingRows())
+        .filteredOn(row -> "SCRAP-STEEL".equals(row.getMaterialCode()))
+        .hasSize(1);
     BomCostingRow byproductRow = result.costingRows().get(1);
     assertThat(byproductRow.getSettlementRowType()).isEqualTo("BYPRODUCT_EXTRA");
     assertThat(byproductRow.getParentCode()).isEqualTo("PARENT-MAKE");
     assertThat(byproductRow.getMaterialName()).isEqualTo("端板/SPEC 废料");
+    assertThat(byproductRow.getQtyPerTop()).isEqualByComparingTo(new BigDecimal("-0.0237"));
   }
 
   @Test
@@ -811,13 +896,22 @@ class BomSettlementRowBuildEngineTest {
 
   private static BomSettlementByproduct byproduct(
       String parentMaterialCode, String byproductMaterialCode, String byproductMaterialName) {
+    return byproduct(
+        parentMaterialCode, byproductMaterialCode, byproductMaterialName, BigDecimal.ONE);
+  }
+
+  private static BomSettlementByproduct byproduct(
+      String parentMaterialCode,
+      String byproductMaterialCode,
+      String byproductMaterialName,
+      BigDecimal outputQty) {
     return new BomSettlementByproduct(
         900L,
         parentMaterialCode,
         byproductMaterialCode,
         byproductMaterialName,
         "BYP-SPEC",
-        BigDecimal.ONE,
+        outputQty,
         "KG",
         "主制造",
         "V1",

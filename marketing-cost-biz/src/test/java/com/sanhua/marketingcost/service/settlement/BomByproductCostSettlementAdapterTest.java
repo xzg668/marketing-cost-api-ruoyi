@@ -38,8 +38,8 @@ class BomByproductCostSettlementAdapterTest {
   }
 
   @Test
-  @DisplayName("读取副产品废料映射时兼容起止生效日期都为空")
-  void readsCurrentByproductsAndMatchingScrapRefs() {
+  @DisplayName("读取同加工层全部废料映射，不要求废料号与U9副产品号相同")
+  void readsCurrentByproductsAndAllSameLayerScrapRefs() {
     U9BomByproductMasterMapper byproductMapper = mock(U9BomByproductMasterMapper.class);
     MaterialScrapRefMapper scrapRefMapper = mock(MaterialScrapRefMapper.class);
     BomByproductSettlementAdapterImpl adapter =
@@ -65,6 +65,7 @@ class BomByproductCostSettlementAdapterTest {
     assertThat(result.scrapRefs()).extracting(BomSettlementScrapRef::materialCode)
         .containsExactly("RAW-1");
     assertThat(result.scrapRefs()).singleElement().satisfies(ref -> {
+      assertThat(ref.scrapCode()).isEqualTo("OTHER-SCRAP");
       assertThat(ref.effectiveFrom()).isNull();
       assertThat(ref.effectiveTo()).isNull();
     });
@@ -80,6 +81,7 @@ class BomByproductCostSettlementAdapterTest {
     verify(scrapRefMapper).selectList(scrapRefQueryCaptor.capture());
     String scrapRefSql = scrapRefQueryCaptor.getValue().getCustomSqlSegment();
     assertThat(scrapRefSql)
+        .doesNotContain("scrap_code IN")
         .contains("effective_from <=")
         .contains("OR effective_from IS NULL")
         .contains("effective_to >=")
@@ -191,7 +193,7 @@ class BomByproductCostSettlementAdapterTest {
   private static MaterialScrapRef scrapRefRow() {
     MaterialScrapRef row = new MaterialScrapRef();
     row.setMaterialCode("RAW-1");
-    row.setScrapCode("SCRAP-1");
+    row.setScrapCode("OTHER-SCRAP");
     row.setBusinessUnitType("COMMERCIAL");
     row.setEffectiveFrom(null);
     row.setEffectiveTo(null);

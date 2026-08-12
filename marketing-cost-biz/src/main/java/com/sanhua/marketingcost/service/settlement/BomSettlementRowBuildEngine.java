@@ -214,6 +214,7 @@ public class BomSettlementRowBuildEngine {
         nodes,
         byproductAnchorRows,
         nodeByPath,
+        childrenByParentPath,
         rollupBuckets.keySet(),
         extraRows,
         warnings);
@@ -485,6 +486,7 @@ public class BomSettlementRowBuildEngine {
       List<BomSettlementNode> nodes,
       List<BomCostingRow> anchorRows,
       Map<String, BomSettlementNode> nodeByPath,
+      Map<String, List<BomSettlementNode>> childrenByParentPath,
       Set<String> rollupParentPaths,
       List<BomCostingRow> extraRows,
       List<String> warnings) {
@@ -516,7 +518,8 @@ public class BomSettlementRowBuildEngine {
         continue;
       }
       for (BomSettlementNode parent : parentNodes) {
-        appendOneByproductExtraRow(request, nodes, parent, byproduct, extraRows);
+        appendOneByproductExtraRow(
+            request, childrenByParentPath, parent, byproduct, extraRows);
       }
     }
   }
@@ -567,12 +570,13 @@ public class BomSettlementRowBuildEngine {
 
   private void appendOneByproductExtraRow(
       BomSettlementBuildRequest request,
-      List<BomSettlementNode> nodes,
+      Map<String, List<BomSettlementNode>> childrenByParentPath,
       BomSettlementNode parent,
       BomSettlementByproduct byproduct,
       List<BomCostingRow> extraRows) {
-    Set<String> lowerRawMaterialCodes = lowerRawMaterialCodes(parent, nodes);
-    if (hasScrapRefMatch(request, byproduct, lowerRawMaterialCodes)) {
+    Set<String> lowerRawMaterialCodes = sameProcessingLayerRawMaterialCodes(
+        parent, childrenByParentPath);
+    if (hasEffectiveScrapMapping(request, byproduct, lowerRawMaterialCodes)) {
       return;
     }
     BomRuleNodeContext context = byproductRuleContext(request, parent, byproduct);
@@ -585,22 +589,51 @@ public class BomSettlementRowBuildEngine {
     hit.ifPresent(rule -> extraRows.add(toByproductExtraRow(request, parent, byproduct, rule)));
   }
 
-  private static Set<String> lowerRawMaterialCodes(
+  /**
+   * 查找当前制造件同一加工层的末级采购件。
+   *
+   * <p>采购件废料映射只负责它最近的加工父件成本，不能穿透中间制造件继续抑制更上层
+   * 制造件自己的 U9 副产品。因此向下遍历遇到新的制造/委外加工节点时立即停止该分支；
+   * 虚拟结构节点仍继续下钻。
+   */
+  private static Set<String> sameProcessingLayerRawMaterialCodes(
       BomSettlementNode parent,
-      List<BomSettlementNode> nodes) {
+      Map<String, List<BomSettlementNode>> childrenByParentPath) {
     Set<String> materialCodes = new LinkedHashSet<>();
-    for (BomSettlementNode node : nodes) {
-      if (!node.path().equals(parent.path())
-          && node.path().startsWith(parent.path())
-          && isTerminalPurchasedNode(node)
-          && StringUtils.hasText(node.materialCode())) {
-        materialCodes.add(node.materialCode());
+    if (parent == null || !StringUtils.hasText(parent.path()) || childrenByParentPath == null) {
+      return materialCodes;
+    }
+    List<BomSettlementNode> pending = new ArrayList<>(
+        childrenByParentPath.getOrDefault(parent.path(), List.of()));
+    for (int index = 0; index < pending.size(); index++) {
+      BomSettlementNode node = pending.get(index);
+      if (node == null || !StringUtils.hasText(node.path())) {
+        continue;
       }
+      if (isNestedProcessingBoundary(node)) {
+        continue;
+      }
+      if (isTerminalPurchasedNode(node) && StringUtils.hasText(node.materialCode())) {
+        materialCodes.add(node.materialCode());
+        continue;
+      }
+      pending.addAll(childrenByParentPath.getOrDefault(node.path(), List.of()));
     }
     return materialCodes;
   }
 
-  private static boolean hasScrapRefMatch(
+  private static boolean isNestedProcessingBoundary(BomSettlementNode node) {
+    return !isVirtualShape(node) && (isManufacturedNode(node) || isOutsourcedNode(node));
+  }
+
+  /**
+   * 当前加工层只要存在有效的采购件废料映射，就说明父件已经按“采购件 + 废料”计算。
+   *
+   * <p>这里不能再要求映射的废料料号与 U9 副产品料号相同：两者是不同来源的业务数据，
+   * 料号不同也不能把直接加工父件自己的 U9 副产品重复输出。制造边界之上的父件不会进入
+   * {@code lowerRawMaterialCodes}，因此其 U9 副产品仍会逐级独立输出。
+   */
+  private static boolean hasEffectiveScrapMapping(
       BomSettlementBuildRequest request,
       BomSettlementByproduct byproduct,
       Set<String> lowerRawMaterialCodes) {
@@ -613,7 +646,7 @@ public class BomSettlementRowBuildEngine {
         continue;
       }
       if (lowerRawMaterialCodes.contains(ref.materialCode())
-          && byproduct.byproductMaterialCode().equals(ref.scrapCode())
+          && StringUtils.hasText(ref.scrapCode())
           && inEffectiveWindow(asOfDate, ref.effectiveFrom(), ref.effectiveTo())
           && scopeMatches(ref.businessUnitType(), firstText(request.businessUnitType(), byproduct.businessUnitType()))) {
         return true;
