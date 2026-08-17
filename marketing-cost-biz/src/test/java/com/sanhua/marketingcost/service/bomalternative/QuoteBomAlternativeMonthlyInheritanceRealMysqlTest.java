@@ -91,6 +91,7 @@ class QuoteBomAlternativeMonthlyInheritanceRealMysqlTest {
 
   @BeforeEach
   void resetAndSeed() {
+    jdbcTemplate.update("DELETE FROM lp_quote_bom_confirmation");
     jdbcTemplate.update("DELETE FROM lp_quote_bom_alternative_selection");
     jdbcTemplate.update("DELETE FROM lp_quote_effective_bom_node");
     jdbcTemplate.update("DELETE FROM lp_quote_bom_monthly_snapshot");
@@ -106,6 +107,14 @@ class QuoteBomAlternativeMonthlyInheritanceRealMysqlTest {
            '2026-08-04 10:00:00',100,'RAW-1',1,'FROZEN','EFFECTIVE-T',
            REPEAT('a',64),'2026-08-04 10:00:00',9527,
            '2026-08-04 10:00:00','2026-08-04 10:00:00')
+        """);
+    jdbcTemplate.update(
+        """
+        INSERT INTO lp_quote_bom_confirmation
+          (confirm_no,oa_no,oa_form_item_id,top_product_code,period_month,
+           confirm_status,costing_build_batch_id)
+        VALUES
+          ('CONFIRM-SOURCE','OA-FIRST',100,'P','2026-08','CONFIRMED','EFFECTIVE-T')
         """);
     jdbcTemplate.update(
         """
@@ -241,6 +250,22 @@ class QuoteBomAlternativeMonthlyInheritanceRealMysqlTest {
             KEY idx_monthly_key (
               cost_period_month,product_code,customer_code,package_method,
               price_org_code,active_flag)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+          """);
+      statement.execute(
+          """
+          CREATE TABLE lp_quote_bom_confirmation (
+            id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            confirm_no VARCHAR(64) NOT NULL,
+            oa_no VARCHAR(64) NOT NULL,
+            oa_form_item_id BIGINT NOT NULL,
+            top_product_code VARCHAR(64) NOT NULL,
+            period_month VARCHAR(7) NOT NULL,
+            confirm_status VARCHAR(32) NOT NULL DEFAULT 'CONFIRMED',
+            costing_build_batch_id VARCHAR(64) NULL,
+            UNIQUE KEY uk_quote_bom_confirm_no (confirm_no),
+            KEY idx_quote_bom_confirm_item (
+              oa_no,oa_form_item_id,top_product_code,period_month)
           ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
           """);
       statement.execute(

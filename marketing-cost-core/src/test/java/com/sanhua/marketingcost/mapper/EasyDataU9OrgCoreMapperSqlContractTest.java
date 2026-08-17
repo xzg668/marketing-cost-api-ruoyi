@@ -6,7 +6,6 @@ import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.BomU9Source;
 import com.sanhua.marketingcost.entity.U9BomByproductMaster;
 import java.lang.reflect.Method;
-import java.util.List;
 import org.apache.ibatis.annotations.Insert;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -21,36 +20,6 @@ class EasyDataU9OrgCoreMapperSqlContractTest {
     assertThat(BomRawHierarchy.class.getDeclaredField("priceOrgCode").getType()).isEqualTo(String.class);
     assertThat(U9BomByproductMaster.class.getDeclaredField("priceOrgCode").getType())
         .isEqualTo(String.class);
-  }
-
-  @Test
-  @DisplayName("BomU9Source batchUpsert 写入 price_org_code 且不默认商用")
-  void bomU9SourceBatchUpsertCarriesOrg() throws Exception {
-    String sql = insertSql(BomU9SourceMapper.class.getMethod("batchUpsert", List.class));
-
-    assertThat(sql)
-        .contains(
-            "INSERT INTO lp_bom_u9_source",
-            "price_org_code",
-            "NULLIF(TRIM(#{e.priceOrgCode}), '')",
-            "ON DUPLICATE KEY UPDATE")
-        .doesNotContain("COALESCE(NULLIF(TRIM(#{e.priceOrgCode}), ''), '210')")
-        .doesNotContain("price_org_code = VALUES(price_org_code)");
-  }
-
-  @Test
-  @DisplayName("BomRawHierarchy batchUpsert 写入 price_org_code 且不默认商用")
-  void bomRawHierarchyBatchUpsertCarriesOrg() throws Exception {
-    String sql = insertSql(BomRawHierarchyMapper.class.getMethod("batchUpsert", List.class));
-
-    assertThat(sql)
-        .contains(
-            "INSERT INTO lp_bom_raw_hierarchy",
-            "price_org_code",
-            "NULLIF(TRIM(#{e.priceOrgCode}), '')",
-            "ON DUPLICATE KEY UPDATE")
-        .doesNotContain("COALESCE(NULLIF(TRIM(#{e.priceOrgCode}), ''), '210')")
-        .doesNotContain("price_org_code = VALUES(price_org_code)");
   }
 
   @Test

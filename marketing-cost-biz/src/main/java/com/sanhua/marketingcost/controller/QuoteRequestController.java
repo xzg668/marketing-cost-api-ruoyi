@@ -28,6 +28,7 @@ import com.sanhua.marketingcost.service.QuoteCostRunWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
 import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
 import com.sanhua.marketingcost.service.QuotePriceTypeConfirmationService;
+import com.sanhua.marketingcost.service.collaboration.CollaborationDomainException;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.ingest.QuoteRequestQueryService;
 import jakarta.servlet.http.HttpServletResponse;
@@ -210,6 +211,10 @@ public class QuoteRequestController {
       @PathVariable("oaFormItemId") Long oaFormItemId) {
     try {
       return CommonResult.success(quoteCostingWorkbenchService.launchWorkbench(oaNo, oaFormItemId));
+    } catch (CollaborationDomainException ex) {
+      return CommonResult.error(
+          GlobalErrorCodeConstants.BAD_REQUEST.getCode(),
+          ex.code().name() + ": " + ex.getMessage());
     } catch (QuoteIngestException | IllegalArgumentException ex) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
     }

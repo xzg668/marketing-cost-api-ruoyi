@@ -8,8 +8,6 @@ import java.util.Set;
 import java.util.function.IntConsumer;
 
 public interface CostRunCostItemService {
-  List<CostRunCostItemDto> listByOaNo(String oaNo, String productCode);
-
   List<CostRunCostItemDto> listStoredByOaNo(String oaNo, String productCode);
 
   List<CostRunCostItemDto> listStoredByCostRunNo(String costRunNo);

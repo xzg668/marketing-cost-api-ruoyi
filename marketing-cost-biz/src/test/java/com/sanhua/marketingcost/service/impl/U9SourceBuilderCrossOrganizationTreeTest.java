@@ -14,7 +14,6 @@ import com.sanhua.marketingcost.dto.BomHierarchyTreeDto;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
-import com.sanhua.marketingcost.mapper.BomU9SourceMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -26,7 +25,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 @DisplayName("BOM 层级树跨组织展示")
-class U9SourceBuilderCrossOrganizationTreeTest {
+class BomHierarchyQueryServiceCrossOrganizationTreeTest {
 
   @BeforeAll
   static void initTableInfo() {
@@ -37,7 +36,6 @@ class U9SourceBuilderCrossOrganizationTreeTest {
   @Test
   @DisplayName("板换树把商用制造件显示为非叶子并挂载商用 BOM 子件")
   void hierarchyTreeShowsCommercialMakeChildren() {
-    BomU9SourceMapper u9Mapper = mock(BomU9SourceMapper.class);
     BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
     MaterialMasterRawMapper masterMapper = mock(MaterialMasterRawMapper.class);
     BomRawHierarchy top = row(1L, "P", "P", "P", 0, "/P/", "制造件", "1", "220");
@@ -55,10 +53,11 @@ class U9SourceBuilderCrossOrganizationTreeTest {
         .thenReturn(List.of(master("C", "制造件"), master("R", "采购件")));
     PlateCommercialMakeBomExpansionService expansionService =
         new PlateCommercialMakeBomExpansionService(bomMapper, masterMapper);
-    U9SourceBuilder builder = new U9SourceBuilder(u9Mapper, bomMapper, expansionService);
+    BomHierarchyQueryServiceImpl queryService =
+        new BomHierarchyQueryServiceImpl(bomMapper, expansionService);
 
     BomHierarchyTreeDto tree =
-        builder.getHierarchyTree(
+        queryService.getHierarchyTree(
             "P", "主制造", LocalDate.of(2026, 7, 10), "U9", "220");
 
     assertThat(tree).isNotNull();

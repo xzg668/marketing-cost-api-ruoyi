@@ -77,6 +77,7 @@ class QuoteBomStatusServiceImplTest {
             bomU9SourceMapper,
             productPackagingTypeResolver,
             new QuoteBomContextResolver(),
+            mock(CollaborationBomAvailabilityResolver.class),
             clock);
   }
 
@@ -466,6 +467,34 @@ class QuoteBomStatusServiceImplTest {
     assertThat(response.getItems().get(0).getReusedFromRecordId()).isEqualTo(8001L);
     assertThat(response.getItems().get(0).getSyncAt()).isEqualTo(snapshot.getSyncAt());
     verify(bomAvailabilityAdapter, never()).findAvailableBom(any(), any(), any(), any());
+  }
+
+  @Test
+  void unfrozenElectronicSnapshotSwitchesBackToU9WhenU9LaterBecomesAvailable() {
+    QuoteBomMonthlySnapshot snapshot = snapshot(
+        "MAT-2002", "CUST-A", "BOX", "2026-06", 8001L);
+    snapshot.setBomSource("ELECTRONIC_DRAWING_BOM");
+    OaFormItem item = item(32L, 1, "MAT-2002", "SHF-G");
+    item.setCustomerCode("CUST-A");
+    item.setPackageMethod("BOX");
+    stubFormAndItems(List.of(item), List.of());
+    when(quoteBomMonthlySnapshotMapper.selectList(any())).thenReturn(List.of(snapshot));
+    when(bomAvailabilityAdapter.findAvailableBom(
+        "OA-T7-001", "MAT-2002", "2026-06", "210")).thenReturn(available("U9"));
+    doAnswer(invocation -> {
+      QuoteBomMonthlySnapshot inserted = invocation.getArgument(0);
+      inserted.setId(8002L);
+      return 1;
+    }).when(quoteBomMonthlySnapshotMapper).insert(any(QuoteBomMonthlySnapshot.class));
+
+    QuoteBomStatusResponse response = service.checkForCostRun("OA-T7-001");
+
+    assertThat(response.getItems().get(0).getBomStatus()).isEqualTo("U9_BOM_EXISTS");
+    assertThat(response.getItems().get(0).getSyncRecordId()).isEqualTo(8002L);
+    ArgumentCaptor<QuoteBomMonthlySnapshot> captor =
+        ArgumentCaptor.forClass(QuoteBomMonthlySnapshot.class);
+    verify(quoteBomMonthlySnapshotMapper).insert(captor.capture());
+    assertThat(captor.getValue().getBomSource()).isEqualTo("U9");
   }
 
   @Test

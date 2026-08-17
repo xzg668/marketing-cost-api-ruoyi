@@ -60,6 +60,26 @@ class ManufactureRateServiceImplTest {
   }
 
   @Test
+  @DisplayName("制造费用率导入：斜杠料号按空值处理并使用型号")
+  void importItemsTreatsSlashProductCodeAsBlank() {
+    ManufactureRateMapper mapper = mock(ManufactureRateMapper.class);
+    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    when(mapper.insert(any(ManufactureRate.class))).thenReturn(1);
+
+    ManufactureRateImportRequest.ManufactureRateRow row =
+        row(3, "/", "GBV04H024", "球阀");
+    ManufactureRateServiceImpl service = new ManufactureRateServiceImpl(mapper);
+
+    service.importItems(request(row));
+
+    ArgumentCaptor<ManufactureRate> captor = ArgumentCaptor.forClass(ManufactureRate.class);
+    verify(mapper).insert(captor.capture());
+    assertThat(captor.getValue().getProductCode()).isNull();
+    assertThat(captor.getValue().getMatchLevel()).isEqualTo("MATERIAL_MODEL");
+    assertThat(captor.getValue().getMatchKey()).isEqualTo("GBV04H024");
+  }
+
+  @Test
   @DisplayName("制造费用率导入：无料号型号时按事业部+产品名称插入")
   void importItemsInsertsDivisionProductNameLevel() {
     ManufactureRateMapper mapper = mock(ManufactureRateMapper.class);
@@ -92,6 +112,48 @@ class ManufactureRateServiceImplTest {
     verify(mapper).insert(captor.capture());
     assertThat(captor.getValue().getMatchLevel()).isEqualTo("DIVISION");
     assertThat(captor.getValue().getMatchKey()).isEqualTo("四通阀事业部");
+  }
+
+  @Test
+  @DisplayName("制造费用率导入：板换J系列按事业部+生产分类前缀插入")
+  void importItemsInsertsDivisionCategoryPrefixLevel() {
+    ManufactureRateMapper mapper = mock(ManufactureRateMapper.class);
+    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    when(mapper.insert(any(ManufactureRate.class))).thenReturn(1);
+
+    ManufactureRateImportRequest.ManufactureRateRow row = row(5, null, null, "钎焊板式换热器");
+    row.setBusinessDivision("板换事业部");
+    row.setProductCategory("J系列");
+    ManufactureRateServiceImpl service = new ManufactureRateServiceImpl(mapper);
+
+    ManufactureRateImportResponse result = service.importItems(request(row));
+
+    assertThat(result.getInserted()).isEqualTo(1);
+    ArgumentCaptor<ManufactureRate> captor = ArgumentCaptor.forClass(ManufactureRate.class);
+    verify(mapper).insert(captor.capture());
+    assertThat(captor.getValue().getMatchLevel()).isEqualTo("DIVISION_CATEGORY_PREFIX");
+    assertThat(captor.getValue().getMatchKey()).isEqualTo("板换事业部::J");
+  }
+
+  @Test
+  @DisplayName("制造费用率导入：具体型号优先于产品大类前缀")
+  void importItemsKeepsExactModelAheadOfCategoryPrefix() {
+    ManufactureRateMapper mapper = mock(ManufactureRateMapper.class);
+    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    when(mapper.insert(any(ManufactureRate.class))).thenReturn(1);
+
+    ManufactureRateImportRequest.ManufactureRateRow row =
+        row(6, null, "S6CH-34H-16", "钎焊板式换热器");
+    row.setBusinessDivision("板换事业部");
+    row.setProductCategory("S6C");
+    ManufactureRateServiceImpl service = new ManufactureRateServiceImpl(mapper);
+
+    service.importItems(request(row));
+
+    ArgumentCaptor<ManufactureRate> captor = ArgumentCaptor.forClass(ManufactureRate.class);
+    verify(mapper).insert(captor.capture());
+    assertThat(captor.getValue().getMatchLevel()).isEqualTo("MATERIAL_MODEL");
+    assertThat(captor.getValue().getMatchKey()).isEqualTo("S6CH-34H-16");
   }
 
   @Test

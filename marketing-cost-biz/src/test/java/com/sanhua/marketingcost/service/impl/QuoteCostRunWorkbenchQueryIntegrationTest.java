@@ -127,7 +127,7 @@ class QuoteCostRunWorkbenchQueryIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
-  @DisplayName("历史分页读取冻结值，Excel只导出成本汇总，切换BU后拒绝访问")
+  @DisplayName("历史分页读取冻结值，导出只含一张成本汇总，切换BU后拒绝访问")
   void readsFrozenRowsForPageAndExportAndRejectsCrossBusinessUnit() throws Exception {
     var firstPage =
         service.pageCuMaterialDifferences(
@@ -147,7 +147,7 @@ class QuoteCostRunWorkbenchQueryIntegrationTest extends BomMapperTestBase {
 
     QuoteCostRunVersion storedVersion = versionMapper.selectById(versionId);
     ByteArrayOutputStream output = new ByteArrayOutputStream();
-    assertThat(service.exportVersion(oaNo, itemId, versionId, output)).isEqualTo(3);
+    assertThat(service.exportVersion(oaNo, itemId, versionId, output)).isEqualTo(1);
 
     try (var workbook = WorkbookFactory.create(new ByteArrayInputStream(output.toByteArray()))) {
       assertThat(workbook.getSheet("汇总").getRow(11).getCell(1).getStringCellValue())

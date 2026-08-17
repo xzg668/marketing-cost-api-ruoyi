@@ -11,6 +11,7 @@ import com.sanhua.marketingcost.service.DepartmentFundRateService;
 import java.math.BigDecimal;
 import java.time.Year;
 import java.util.List;
+import java.util.Locale;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
@@ -23,6 +24,10 @@ public class DepartmentFundRateServiceImpl implements DepartmentFundRateService 
   private static final String SOURCE_MANUAL = "MANUAL";
   private static final String SOURCE_EXCEL_IMPORT = "EXCEL_IMPORT";
   private static final BigDecimal ZERO = BigDecimal.ZERO;
+  private static final List<String> OVERHAUL_SUBJECTS = List.of("大修费用", "大修费");
+  private static final List<String> TOOLING_SUBJECTS =
+      List.of("工装零星费用", "工装零星修理费", "零星工装费用", "零星工装费");
+  private static final List<String> WATER_POWER_SUBJECTS = List.of("水电费用", "水电费", "水电");
 
   private final DepartmentFundRateMapper departmentFundRateMapper;
 
@@ -156,6 +161,7 @@ public class DepartmentFundRateServiceImpl implements DepartmentFundRateService 
     entity.setPlanRate(row.getPlanRate());
     entity.setUpliftRatio(row.getUpliftRatio());
     entity.setQuoteRatio(row.getQuoteRatio());
+    entity.setRateCalculationMode(row.getRateCalculationMode());
     entity.setManhourRate(row.getManhourRate());
     entity.setRateYear(row.getRateYear() != null ? row.getRateYear() : request.getRateYear());
     entity.setRemark(row.getRemark());
@@ -196,6 +202,9 @@ public class DepartmentFundRateServiceImpl implements DepartmentFundRateService 
     if (request.getQuoteRatio() != null) {
       entity.setQuoteRatio(request.getQuoteRatio());
     }
+    if (request.getRateCalculationMode() != null) {
+      entity.setRateCalculationMode(request.getRateCalculationMode());
+    }
     if (request.getRateYear() != null) {
       entity.setRateYear(request.getRateYear());
     }
@@ -234,6 +243,7 @@ public class DepartmentFundRateServiceImpl implements DepartmentFundRateService 
     target.setPlanRate(source.getPlanRate());
     target.setUpliftRatio(source.getUpliftRatio());
     target.setQuoteRatio(source.getQuoteRatio());
+    target.setRateCalculationMode(source.getRateCalculationMode());
     target.setRateYear(source.getRateYear());
     target.setBusinessUnitType(source.getBusinessUnitType());
     target.setRemark(source.getRemark());
@@ -251,7 +261,8 @@ public class DepartmentFundRateServiceImpl implements DepartmentFundRateService 
       DepartmentFundRate entity, DepartmentFundRateImportRequest request, String sourceType) {
     entity.setBusinessDivision(trimToNull(firstText(entity.getBusinessDivision(), entity.getBusinessUnit())));
     entity.setBusinessUnit(legacyRequiredText(firstText(entity.getBusinessUnit(), entity.getBusinessDivision())));
-    entity.setExpenseSubject(trimToNull(entity.getExpenseSubject()));
+    entity.setExpenseSubject(canonicalExpenseSubject(entity.getExpenseSubject()));
+    entity.setRateCalculationMode(normalizeRateCalculationMode(entity.getRateCalculationMode()));
     entity.setBusinessUnitType(resolveBusinessUnitType(entity.getBusinessUnitType()));
     entity.setRemark(trimToNull(entity.getRemark()));
     entity.setSourceType(sourceType);
@@ -300,6 +311,9 @@ public class DepartmentFundRateServiceImpl implements DepartmentFundRateService 
     if (entity.getQuoteRatio() == null) {
       return "Excel第" + rowNo + "行缺报价比例（元/分钟）";
     }
+    if (!isSupportedRateCalculationMode(entity.getRateCalculationMode())) {
+      return "Excel第" + rowNo + "行费率口径不正确";
+    }
     return null;
   }
 
@@ -307,21 +321,66 @@ public class DepartmentFundRateServiceImpl implements DepartmentFundRateService 
     return entity.getRateYear() != null
         && StringUtils.hasText(entity.getBusinessDivision())
         && StringUtils.hasText(entity.getExpenseSubject())
-        && entity.getQuoteRatio() != null;
+        && entity.getQuoteRatio() != null
+        && isSupportedRateCalculationMode(entity.getRateCalculationMode());
   }
 
   private DepartmentFundRate findExisting(DepartmentFundRate entity) {
+    DepartmentFundRate exact = findExistingBySubjects(entity, List.of(entity.getExpenseSubject()));
+    if (exact != null) {
+      return exact;
+    }
+    List<String> aliases = expenseSubjectAliases(entity.getExpenseSubject());
+    if (aliases.size() <= 1) {
+      return null;
+    }
+    return findExistingBySubjects(entity, aliases);
+  }
+
+  private DepartmentFundRate findExistingBySubjects(
+      DepartmentFundRate entity, List<String> expenseSubjects) {
     var query =
         Wrappers.lambdaQuery(DepartmentFundRate.class)
             .eq(DepartmentFundRate::getRateYear, entity.getRateYear())
             .eq(DepartmentFundRate::getBusinessDivision, entity.getBusinessDivision())
-            .eq(DepartmentFundRate::getExpenseSubject, entity.getExpenseSubject());
+            .in(DepartmentFundRate::getExpenseSubject, expenseSubjects)
+            .orderByDesc(DepartmentFundRate::getId);
     if (StringUtils.hasText(entity.getBusinessUnitType())) {
       query.eq(DepartmentFundRate::getBusinessUnitType, entity.getBusinessUnitType());
     } else {
       query.isNull(DepartmentFundRate::getBusinessUnitType);
     }
     return departmentFundRateMapper.selectOne(query.last("LIMIT 1"));
+  }
+
+  private String canonicalExpenseSubject(String value) {
+    String subject = trimToNull(value);
+    if (subject == null) {
+      return null;
+    }
+    if (OVERHAUL_SUBJECTS.contains(subject)) {
+      return OVERHAUL_SUBJECTS.getFirst();
+    }
+    if (TOOLING_SUBJECTS.contains(subject)) {
+      return TOOLING_SUBJECTS.getFirst();
+    }
+    if (WATER_POWER_SUBJECTS.contains(subject)) {
+      return WATER_POWER_SUBJECTS.getFirst();
+    }
+    return subject;
+  }
+
+  private List<String> expenseSubjectAliases(String value) {
+    if (OVERHAUL_SUBJECTS.getFirst().equals(value)) {
+      return OVERHAUL_SUBJECTS;
+    }
+    if (TOOLING_SUBJECTS.getFirst().equals(value)) {
+      return TOOLING_SUBJECTS;
+    }
+    if (WATER_POWER_SUBJECTS.getFirst().equals(value)) {
+      return WATER_POWER_SUBJECTS;
+    }
+    return List.of(value);
   }
 
   private boolean isBlankRow(DepartmentFundRateImportRequest.DepartmentFundRateRow row) {
@@ -340,6 +399,18 @@ public class DepartmentFundRateServiceImpl implements DepartmentFundRateService 
   private String resolveBusinessUnitType(String requestValue) {
     String value = firstText(requestValue, BusinessUnitContext.getCurrentBusinessUnitType());
     return StringUtils.hasText(value) ? value : DEFAULT_BUSINESS_UNIT_TYPE;
+  }
+
+  private String normalizeRateCalculationMode(String value) {
+    if (!StringUtils.hasText(value)) {
+      return DepartmentFundRate.RATE_CALCULATION_MODE_FINAL_QUOTE;
+    }
+    return value.trim().toUpperCase(Locale.ROOT);
+  }
+
+  private boolean isSupportedRateCalculationMode(String value) {
+    return DepartmentFundRate.RATE_CALCULATION_MODE_FINAL_QUOTE.equals(value)
+        || DepartmentFundRate.RATE_CALCULATION_MODE_PLAN_UPLIFT.equals(value);
   }
 
   private String firstText(String first, String second) {

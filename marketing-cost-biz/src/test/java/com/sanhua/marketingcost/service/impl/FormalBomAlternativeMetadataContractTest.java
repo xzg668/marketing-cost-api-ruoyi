@@ -16,7 +16,6 @@ import com.sanhua.marketingcost.dto.quotebom.FormalBomReadResult;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomSourceLineDto;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
-import com.sanhua.marketingcost.mapper.BomU9SourceMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -67,7 +66,6 @@ class FormalBomAlternativeMetadataContractTest {
   @Test
   @DisplayName("层级树调试DTO完整展示来源和替代元数据，顶层允许为空")
   void hierarchyDebugTreeExposesAlternativeMetadata() {
-    BomU9SourceMapper u9Mapper = mock(BomU9SourceMapper.class);
     BomRawHierarchyMapper hierarchyMapper = mock(BomRawHierarchyMapper.class);
     MaterialMasterRawMapper masterMapper = mock(MaterialMasterRawMapper.class);
     BomRawHierarchy top = row(1L, "TOP", "TOP", 0, "/TOP/");
@@ -78,10 +76,11 @@ class FormalBomAlternativeMetadataContractTest {
     when(hierarchyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(top, child));
     PlateCommercialMakeBomExpansionService expansionService =
         new PlateCommercialMakeBomExpansionService(hierarchyMapper, masterMapper);
-    U9SourceBuilder builder = new U9SourceBuilder(u9Mapper, hierarchyMapper, expansionService);
+    BomHierarchyQueryServiceImpl queryService =
+        new BomHierarchyQueryServiceImpl(hierarchyMapper, expansionService);
 
     BomHierarchyTreeDto tree =
-        builder.getHierarchyTree(
+        queryService.getHierarchyTree(
             "TOP", "主制造", LocalDate.of(2026, 7, 15), "U9", "210");
 
     assertThat(tree.getChildType()).isNull();

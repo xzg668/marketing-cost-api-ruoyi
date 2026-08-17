@@ -19,16 +19,25 @@ import com.sanhua.marketingcost.dto.ThreeExpenseRateImportRequest;
 import com.sanhua.marketingcost.dto.ThreeExpenseRateImportResponse;
 import com.sanhua.marketingcost.entity.ThreeExpenseRate;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
+import com.sanhua.marketingcost.security.BusinessUnitContext;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 class ThreeExpenseRateServiceImplTest {
+
+  @AfterEach
+  void clearSecurityContext() {
+    SecurityContextHolder.clearContext();
+  }
 
   @BeforeAll
   static void initTableInfo() {
@@ -76,7 +85,7 @@ class ThreeExpenseRateServiceImplTest {
     assertEquals(2026, created.getPeriodYear());
     assertEquals("商用直销产品", created.getProductCategory());
     assertEquals("国内产线", created.getProductLine());
-    assertEquals("亚洲业务部（直销）", created.getApplicantDepartment());
+    assertEquals("亚洲业务部-直销", created.getApplicantDepartment());
     assertEquals("", created.getApplicantOffice());
     assertEquals(new BigDecimal("0.060000"), created.getThreeExpenseTotalRate());
     assertEquals(new BigDecimal("0.005000"), created.getOemExpenseRate());
@@ -105,7 +114,7 @@ class ThreeExpenseRateServiceImplTest {
     assertEquals(2026, updated.getPeriodYear());
     assertEquals("商用直销产品", updated.getProductCategory());
     assertEquals("墨西哥产线", updated.getProductLine());
-    assertEquals("亚洲业务部（直销）", updated.getApplicantDepartment());
+    assertEquals("亚洲业务部-直销", updated.getApplicantDepartment());
     assertEquals("", updated.getApplicantOffice());
     verify(mapper).updateById(updated);
   }
@@ -163,6 +172,31 @@ class ThreeExpenseRateServiceImplTest {
     assertEquals(new BigDecimal("0.040000"), existing.getManagementExpenseRate());
     verify(mapper).updateById(existing);
     verify(mapper, never()).insert(any(ThreeExpenseRate.class));
+  }
+
+  @Test
+  @DisplayName("importItems：产品口径不再推断租户，缺省时使用当前登录业务单元")
+  void importUsesCurrentBusinessUnitForHouseholdProductCategory() {
+    UsernamePasswordAuthenticationToken authentication =
+        new UsernamePasswordAuthenticationToken("tester", null, List.of());
+    authentication.setDetails(Map.of(BusinessUnitContext.KEY_BUSINESS_UNIT_TYPE, "COMMERCIAL"));
+    SecurityContextHolder.getContext().setAuthentication(authentication);
+
+    ThreeExpenseRateMapper mapper = mock(ThreeExpenseRateMapper.class);
+    when(mapper.selectOne(any())).thenReturn(null);
+    ThreeExpenseRateServiceImpl service = new ThreeExpenseRateServiceImpl(mapper);
+    ThreeExpenseRateImportRequest.ThreeExpenseRateRow row = importRow("国内产线", "0.100000");
+    row.setProductCategory("家代商代销产品");
+    row.setBusinessUnitType(null);
+    ThreeExpenseRateImportRequest request = new ThreeExpenseRateImportRequest();
+    request.setRows(List.of(row));
+
+    ThreeExpenseRateImportResponse response = service.importItems(request);
+
+    assertEquals(1, response.getInsertedCount());
+    ArgumentCaptor<ThreeExpenseRate> captor = ArgumentCaptor.forClass(ThreeExpenseRate.class);
+    verify(mapper).insert(captor.capture());
+    assertEquals("COMMERCIAL", captor.getValue().getBusinessUnitType());
   }
 
   @Test

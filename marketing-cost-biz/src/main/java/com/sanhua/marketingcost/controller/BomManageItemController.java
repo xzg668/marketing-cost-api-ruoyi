@@ -5,21 +5,16 @@ import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstant
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.BomManageParentPageResponse;
 import com.sanhua.marketingcost.dto.BomManageParentRow;
-import com.sanhua.marketingcost.dto.BomManageRefreshRequest;
 import com.sanhua.marketingcost.entity.BomManageItem;
 import com.sanhua.marketingcost.service.BomManageItemService;
 import java.util.List;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * BOM管理控制器 - 管理BOM主数据的查询与刷新
- */
+/** BOM 管理只读查询控制器。 */
 @RestController
 @RequestMapping("/api/v1/bom-manage")
 public class BomManageItemController {
@@ -63,15 +58,5 @@ public class BomManageItemController {
     }
     return CommonResult.success(
         bomManageItemService.listDetails(oaNo, oaFormItemId, bomCode, rootItemCode, shapeAttr));
-  }
-
-  /** 刷新BOM管理数据 */
-  @PreAuthorize("@ss.hasPermi('base:bom:edit')")
-  @PostMapping("/refresh")
-  public CommonResult<Integer> refresh(@RequestBody BomManageRefreshRequest request) {
-    if (request == null || !org.springframework.util.StringUtils.hasText(request.getOaNo())) {
-      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(),"missing oaNo");
-    }
-    return CommonResult.success(bomManageItemService.refresh(request));
   }
 }

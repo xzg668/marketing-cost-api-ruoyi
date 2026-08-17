@@ -23,6 +23,7 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomPackageReference;
 import com.sanhua.marketingcost.entity.QuoteBomPackageReferenceDetail;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
+import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuoteBomSupplementDetail;
 import com.sanhua.marketingcost.entity.QuoteBomSupplementVersion;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
@@ -247,6 +248,27 @@ class QuoteProductBomCostingBuildServiceImplTest {
     assertThat(rowCaptor.getValue().getManualModified()).isEqualTo(0);
     assertThat(rowCaptor.getValue().getPriceOrgCode()).isEqualTo("210");
     assertThat(rowCaptor.getValue().getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
+  }
+
+  @Test
+  void laterU9AvailabilityOverridesPreviouslyApprovedElectronicSupplement() {
+    QuoteBomPreparationRecord record = record("NON_BARE", 501L);
+    record.setReviewStatus("APPROVED");
+    QuoteBomStatus currentStatus = new QuoteBomStatus();
+    currentStatus.setId(101L);
+    currentStatus.setBomSource("U9C");
+    when(statusMapper.selectById(101L)).thenReturn(currentStatus);
+    when(taskMapper.selectById(501L)).thenReturn(task("APPROVED"));
+    when(preparationRecordMapper.selectOne(any())).thenReturn(record);
+    when(supplementVersionMapper.selectOne(any())).thenReturn(version("NON_BARE_FULL_BOM"));
+    when(packageReferenceMapper.selectOne(any())).thenReturn(null);
+    when(formalBomReadService.read(any(QuoteBomReadContext.class))).thenReturn(formalFound());
+
+    QuoteBomCostingBuildResponse response = service.buildByTask(501L);
+
+    assertThat(response.sourceTypeCounts()).containsEntry("RAW_PRODUCT_BOM", 1);
+    verify(formalBomReadService).read(any(QuoteBomReadContext.class));
+    verify(supplementDetailMapper, never()).selectList(any());
   }
 
   @Test

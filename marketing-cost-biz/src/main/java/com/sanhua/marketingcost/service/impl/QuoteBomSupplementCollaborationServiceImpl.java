@@ -473,7 +473,7 @@ public class QuoteBomSupplementCollaborationServiceImpl
                 .last("LIMIT 1"));
     String url = COLLABORATION_URL + token;
     if (existing != null) {
-      existing.setTodoStatus("MOCK_PUSHED");
+      existing.setTodoStatus("NOT_PUSHED");
       if (!StringUtils.hasText(existing.getPushStatus()) || "MOCK_PUSHED".equals(existing.getPushStatus())) {
         existing.setPushStatus("NOT_PUSHED");
       }
@@ -487,8 +487,9 @@ public class QuoteBomSupplementCollaborationServiceImpl
     BomSupplementTodo todo = new BomSupplementTodo();
     todo.setTaskId(task.getId());
     todo.setTaskNo(task.getTaskNo());
-    todo.setTodoNo("MOCK-OA-TODO-" + task.getTaskNo());
-    todo.setTodoStatus("MOCK_PUSHED");
+    // OA 尚未接入时只保存本地待推送记录，不伪造 OA 待办号或成功状态。
+    todo.setTodoNo("LOCAL-" + task.getTaskNo());
+    todo.setTodoStatus("NOT_PUSHED");
     todo.setPushStatus("NOT_PUSHED");
     todo.setTodoKind("TODO");
     todo.setRecipientRole("TECHNICIAN");
@@ -496,7 +497,7 @@ public class QuoteBomSupplementCollaborationServiceImpl
     todo.setTitle("请处理报价产品 " + preview.quoteProductCode() + " 的 BOM 准备任务");
     todo.setTodoUrl(url);
     todo.setPayloadJson(todoPayload(preview, token, expireTime));
-    todo.setPushedAt(now);
+    todo.setPushedAt(null);
     todo.setCreatedAt(now);
     todo.setUpdatedAt(now);
     todoMapper.insert(todo);

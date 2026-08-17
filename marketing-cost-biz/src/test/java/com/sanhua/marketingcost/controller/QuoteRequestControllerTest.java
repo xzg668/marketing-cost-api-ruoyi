@@ -35,6 +35,8 @@ import com.sanhua.marketingcost.service.QuoteCostRunWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
 import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
 import com.sanhua.marketingcost.service.QuotePriceTypeConfirmationService;
+import com.sanhua.marketingcost.service.collaboration.CollaborationDomainErrorCode;
+import com.sanhua.marketingcost.service.collaboration.CollaborationDomainException;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.ingest.QuoteRequestQueryService;
 import java.util.List;
@@ -157,6 +159,22 @@ class QuoteRequestControllerTest {
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getSnapshotGenerated()).isTrue();
     verify(quoteCostingWorkbenchService).launchWorkbench("OA-T8-001", 101L);
+  }
+
+  @Test
+  void launchCostingWorkbenchReturnsStableBusinessErrorWhenRoleIsNotAllowed() {
+    when(quoteCostingWorkbenchService.launchWorkbench("OA-T8-001", 101L))
+        .thenThrow(new CollaborationDomainException(
+            CollaborationDomainErrorCode.TASK_ASSIGNEE_MISMATCH,
+            "当前用户角色不允许执行该动作"));
+
+    CommonResult<QuoteCostingWorkbenchResponse> result =
+        controller.launchCostingWorkbench("OA-T8-001", 101L);
+
+    assertThat(result.isSuccess()).isFalse();
+    assertThat(result.getCode()).isEqualTo(GlobalErrorCodeConstants.BAD_REQUEST.getCode());
+    assertThat(result.getMsg())
+        .isEqualTo("TASK_ASSIGNEE_MISMATCH: 当前用户角色不允许执行该动作");
   }
 
   @Test

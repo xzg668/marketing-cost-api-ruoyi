@@ -2,6 +2,9 @@ package com.sanhua.marketingcost.worker;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.sanhua.marketingcost.config.ApprovedResultReuseProperties;
+import com.sanhua.marketingcost.config.ElectronicDrawingBomProperties;
+import com.sanhua.marketingcost.config.OaCollaborationProperties;
 import com.sanhua.marketingcost.service.impl.BusinessUnitRepriceLockGuardImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceBatchServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceConfirmServiceImpl;
@@ -12,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.FilterType;
+import org.springframework.context.annotation.Import;
 
 class CostRunWorkerApplicationTest {
 
@@ -44,5 +48,16 @@ class CostRunWorkerApplicationTest {
                   MonthlyRepriceQueryServiceImpl.class,
                   MonthlyRepriceStartServiceImpl.class);
         });
+  }
+
+  @Test
+  void workerApplicationImportsCollaborationConfigurationProperties() {
+    Import annotation = CostRunWorkerApplication.class.getAnnotation(Import.class);
+
+    assertThat(annotation.value())
+        .contains(
+            OaCollaborationProperties.class,
+            ElectronicDrawingBomProperties.class,
+            ApprovedResultReuseProperties.class);
   }
 }

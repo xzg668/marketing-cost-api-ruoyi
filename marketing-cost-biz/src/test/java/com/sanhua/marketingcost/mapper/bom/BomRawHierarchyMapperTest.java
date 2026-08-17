@@ -7,11 +7,9 @@ import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import java.math.BigDecimal;
 import java.sql.Connection;
-import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -109,27 +107,6 @@ class BomRawHierarchyMapperTest extends BomMapperTestBase {
         .isInstanceOf(DuplicateKeyException.class);
   }
 
-  @Test
-  @DisplayName("batchUpsert：同 source_line_key 按 price_org_code 隔离，更新商用不覆盖板换")
-  void testBatchUpsertSeparatesOrganizations() throws Exception {
-    BomRawHierarchy commercial = newTopNode();
-    commercial.setPriceOrgCode("210");
-    commercial.setMaterialName("商用节点");
-
-    BomRawHierarchy plate = newTopNode();
-    plate.setPriceOrgCode("220");
-    plate.setMaterialName("板换节点");
-
-    mapper.batchUpsert(List.of(commercial, plate));
-
-    commercial.setMaterialName("商用节点更新");
-    mapper.batchUpsert(List.of(commercial));
-
-    assertThat(countOrgRows()).isEqualTo(2);
-    assertThat(loadMaterialName("210")).isEqualTo("商用节点更新");
-    assertThat(loadMaterialName("220")).isEqualTo("板换节点");
-  }
-
   // ============================ 辅助 ============================
 
   private BomRawHierarchy newTopNode() {
@@ -151,28 +128,4 @@ class BomRawHierarchyMapperTest extends BomMapperTestBase {
     return row;
   }
 
-  private long countOrgRows() throws Exception {
-    try (Connection conn = openConnection();
-        Statement stmt = conn.createStatement();
-        ResultSet rs = stmt.executeQuery(
-            "SELECT COUNT(*) FROM lp_bom_raw_hierarchy"
-                + " WHERE top_product_code = '" + topProductCode + "'"
-                + " AND source_line_key = '__TOP__|" + topProductCode + "|主制造'")) {
-      assertThat(rs.next()).isTrue();
-      return rs.getLong(1);
-    }
-  }
-
-  private String loadMaterialName(String priceOrgCode) throws Exception {
-    try (Connection conn = openConnection();
-        Statement stmt = conn.createStatement();
-        ResultSet rs = stmt.executeQuery(
-            "SELECT material_name FROM lp_bom_raw_hierarchy"
-                + " WHERE top_product_code = '" + topProductCode + "'"
-                + " AND price_org_code = '" + priceOrgCode + "'"
-                + " AND source_line_key = '__TOP__|" + topProductCode + "|主制造'")) {
-      assertThat(rs.next()).isTrue();
-      return rs.getString(1);
-    }
-  }
 }

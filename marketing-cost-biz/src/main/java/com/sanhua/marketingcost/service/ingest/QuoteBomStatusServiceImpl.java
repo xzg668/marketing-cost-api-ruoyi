@@ -51,6 +51,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
   private final BomU9SourceMapper bomU9SourceMapper;
   private final U9ProductPackagingTypeResolver productPackagingTypeResolver;
   private final QuoteBomContextResolver contextResolver;
+  private final CollaborationBomAvailabilityResolver collaborationBomAvailabilityResolver;
   private final Clock clock;
 
   @Autowired
@@ -62,7 +63,8 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       BomAvailabilityAdapter bomAvailabilityAdapter,
       BomU9SourceMapper bomU9SourceMapper,
       U9ProductPackagingTypeResolver productPackagingTypeResolver,
-      QuoteBomContextResolver contextResolver) {
+      QuoteBomContextResolver contextResolver,
+      CollaborationBomAvailabilityResolver collaborationBomAvailabilityResolver) {
     this(
         oaFormMapper,
         oaFormItemMapper,
@@ -72,6 +74,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
         bomU9SourceMapper,
         productPackagingTypeResolver,
         contextResolver,
+        collaborationBomAvailabilityResolver,
         Clock.systemDefaultZone());
   }
 
@@ -84,6 +87,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       BomU9SourceMapper bomU9SourceMapper,
       U9ProductPackagingTypeResolver productPackagingTypeResolver,
       QuoteBomContextResolver contextResolver,
+      CollaborationBomAvailabilityResolver collaborationBomAvailabilityResolver,
       Clock clock) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
@@ -93,6 +97,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     this.bomU9SourceMapper = bomU9SourceMapper;
     this.productPackagingTypeResolver = productPackagingTypeResolver;
     this.contextResolver = contextResolver;
+    this.collaborationBomAvailabilityResolver = collaborationBomAvailabilityResolver;
     this.clock = clock;
   }
 
@@ -318,17 +323,28 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
 
     QuoteBomMonthlySnapshot activeSnapshot = findActiveSuccessSnapshot(key, context.organization());
     if (activeSnapshot != null) {
-      // 同组合当月已经存在 active 成功快照，成本核算直接复用来源 BOM，不再重复自动拉取。
-      applyReusedSnapshot(status, activeSnapshot, now);
-      return;
+      boolean electronicCandidate = "ELECTRONIC_DRAWING_BOM".equalsIgnoreCase(
+          trimToNull(activeSnapshot.getBomSource()))
+          && !SNAPSHOT_FREEZE_STATUS_FROZEN.equals(trimToNull(activeSnapshot.getFreezeStatus()));
+      if (!electronicCandidate) {
+        // 已冻结快照永不替换；未冻结的电子图库快照只有在 U9 后来补齐时才切回 U9。
+        applyReusedSnapshot(status, activeSnapshot, now);
+        return;
+      }
     }
-
     BomAvailability availability =
         bomAvailabilityAdapter.findAvailableBom(
             form.getOaNo(),
             key.getProductCode(),
             key.getCostPeriodMonth(),
             context.organization().priceOrgCode());
+    if (activeSnapshot != null && (availability == null || !availability.isAvailable())) {
+      applyReusedSnapshot(status, activeSnapshot, now);
+      return;
+    }
+    BomAvailability collaboration = collaborationBomAvailabilityResolver.resolve(
+        item.getId(), form.getBusinessUnitType(), key.getCostPeriodMonth(), availability);
+    if (collaboration != null) availability = collaboration;
     if (!availability.isAvailable()) {
       applyNoBomStatus(status, availability, now);
       return;
@@ -839,6 +855,10 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     String source = availability == null ? null : trimToNull(availability.getSource());
     if (SOURCE_COSTING_SNAPSHOT.equalsIgnoreCase(source)) {
       return QuoteBomStatusCode.CURRENT_MONTH_QUOTED.getCode();
+    }
+    if ("ELECTRONIC_DRAWING_BOM".equalsIgnoreCase(source)
+        || "U9_BODY+APPROVED_PACKAGE".equalsIgnoreCase(source)) {
+      return QuoteBomStatusCode.MANUAL_ENTERED.getCode();
     }
     return QuoteBomStatusCode.U9_BOM_EXISTS.getCode();
   }

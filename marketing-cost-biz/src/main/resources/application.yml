@@ -1,11 +1,28 @@
 server:
   port: ${SERVER_PORT:8081}
 
+quote:
+  collaboration:
+    oa:
+      # 本期不接真实OA：只保存HOLD事件，不发HTTP、不生成虚假流程号或待办号。
+      mode: ${QUOTE_COLLABORATION_OA_MODE:DISABLED}
+    electronic-drawing:
+      # 未配置真实电子图库时失败关闭；禁止把报价系统草稿当成电子图库正式结果。
+      mode: ${QUOTE_COLLABORATION_ELECTRONIC_DRAWING_MODE:DISABLED}
+      base-url: ${QUOTE_COLLABORATION_ELECTRONIC_DRAWING_BASE_URL:}
+      current-bom-path: ${QUOTE_COLLABORATION_ELECTRONIC_DRAWING_CURRENT_BOM_PATH:/api/v1/boms/current}
+      authorization: ${QUOTE_COLLABORATION_ELECTRONIC_DRAWING_AUTHORIZATION:}
+      connect-timeout-ms: ${QUOTE_COLLABORATION_ELECTRONIC_DRAWING_CONNECT_TIMEOUT_MS:3000}
+      read-timeout-ms: ${QUOTE_COLLABORATION_ELECTRONIC_DRAWING_READ_TIMEOUT_MS:10000}
+    approved-result:
+      # 暂按财务确认生效时刻起六个月；生成结果时固化策略，不追改历史记录。
+      policy-code: ${QUOTE_COLLABORATION_RESULT_POLICY_CODE:COLLAB_RESULT_SIX_MONTHS_V1}
+      validity-months: ${QUOTE_COLLABORATION_RESULT_VALIDITY_MONTHS:6}
+
 spring:
   application:
     name: marketing-cost-api
-  # T3 BOM 导入 —— U9 BOM Excel 实测 42 MB（34 万行），默认 1MB/10MB 直接被 Tomcat 拒。
-  # 放宽到 200MB 留足头部余量；max-request-size 覆盖整个 multipart 请求体（含多字段开销）
+  # 报价单、价格与基础资料等现有批量导入仍需较大的 multipart 上限；BOM 不走应用上传。
   servlet:
     multipart:
       max-file-size: ${SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE:200MB}

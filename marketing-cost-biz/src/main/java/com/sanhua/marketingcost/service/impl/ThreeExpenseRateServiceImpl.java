@@ -6,6 +6,7 @@ import com.sanhua.marketingcost.dto.ThreeExpenseRateImportResponse;
 import com.sanhua.marketingcost.dto.ThreeExpenseRateRequest;
 import com.sanhua.marketingcost.entity.ThreeExpenseRate;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
+import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.ThreeExpenseRateService;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -359,14 +360,16 @@ public class ThreeExpenseRateServiceImpl implements ThreeExpenseRateService {
     entity.setPeriodMonth(trimToNull(entity.getPeriodMonth()));
     entity.setStandardCompany(trimToNull(entity.getStandardCompany()));
     entity.setProductionDivision(trimToNull(entity.getProductionDivision()));
-    entity.setApplicantDepartment(trimToNull(entity.getApplicantDepartment()));
+    entity.setApplicantDepartment(normalizeApplicantDepartment(entity.getApplicantDepartment()));
     entity.setApplicantOffice(normalizeApplicantOffice(entity.getApplicantOffice()));
     // productCategory/productLine 来自配置表标题拆分，是新唯一键的核心匹配维度。
     entity.setProductCategory(trimToNull(entity.getProductCategory()));
     entity.setProductLine(trimToNull(entity.getProductLine()));
     entity.setSourceType(defaultIfBlank(entity.getSourceType(), "EXCEL_IMPORT"));
     entity.setImportBatchNo(trimToNull(entity.getImportBatchNo()));
-    entity.setBusinessUnitType(defaultIfBlank(entity.getBusinessUnitType(), inferBusinessUnitType(entity)));
+    entity.setBusinessUnitType(defaultIfBlank(
+        entity.getBusinessUnitType(),
+        defaultIfBlank(BusinessUnitContext.getCurrentBusinessUnitType(), inferBusinessUnitType(entity))));
     if (entity.getPeriodYear() == null || entity.getPeriodYear() <= 0) {
       entity.setPeriodYear(resolvePeriodYear(entity));
     }
@@ -377,6 +380,14 @@ public class ThreeExpenseRateServiceImpl implements ThreeExpenseRateService {
       return null;
     }
     return value.trim();
+  }
+
+  private String normalizeApplicantDepartment(String value) {
+    String normalized = trimToNull(value);
+    if (normalized == null) {
+      return null;
+    }
+    return normalized.replaceFirst("[（(](直销|海外|代销)[）)]$", "-$1");
   }
 
   private String trimToEmpty(String value) {

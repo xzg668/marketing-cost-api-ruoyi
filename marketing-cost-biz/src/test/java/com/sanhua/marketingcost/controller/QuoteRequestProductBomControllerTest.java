@@ -10,7 +10,6 @@ import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstant
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomBatchSyncRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomBatchSyncResponse;
-import com.sanhua.marketingcost.dto.ingest.QuoteProductBomBatchOaTaskResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteRequestProductBomListItemResponse;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
@@ -116,15 +115,4 @@ class QuoteRequestProductBomControllerTest {
     assertThat(result.getMsg()).contains("请选择需要同步");
   }
 
-  @Test
-  void batchOaTaskOnlyReturnsReservedMessage() {
-    QuoteBomBatchSyncRequest request = new QuoteBomBatchSyncRequest();
-    request.setOaFormItemIds(List.of(1L, 2L));
-
-    CommonResult<QuoteProductBomBatchOaTaskResponse> result = controller.batchOaTask(request);
-
-    assertThat(result.isSuccess()).isTrue();
-    assertThat(result.getData().getAcceptedCount()).isZero();
-    assertThat(result.getData().getMessage()).isEqualTo("OA待办推送和BOM补录闭环后续阶段对接");
-  }
 }

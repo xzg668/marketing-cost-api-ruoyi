@@ -442,7 +442,8 @@ class MarketFactorRangePriceEndToEndSampleTest {
         summaryMapper,
         readinessService,
         versionNoGenerator,
-        cuAdjustmentCalcService);
+        cuAdjustmentCalcService,
+        mock(com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate.class));
   }
 
   private List<CostRunTraceSnapshot> buildTraceSnapshots(

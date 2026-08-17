@@ -144,7 +144,8 @@ class QuoteCostingWorkbenchServiceImplTest {
             materialAttributeResolver,
             versionInvalidationService,
             new QuoteEffectiveBomFeatureSwitch(true),
-            quoteBomStatusService);
+            quoteBomStatusService,
+            mock(com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate.class));
   }
 
   @Test

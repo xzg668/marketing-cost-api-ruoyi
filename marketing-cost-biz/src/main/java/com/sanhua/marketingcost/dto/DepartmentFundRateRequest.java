@@ -11,6 +11,7 @@ public class DepartmentFundRateRequest {
   private BigDecimal planRate;
   private BigDecimal upliftRatio;
   private BigDecimal quoteRatio;
+  private String rateCalculationMode;
   private Integer rateYear;
   private String businessUnitType;
   private String remark;
@@ -83,6 +84,14 @@ public class DepartmentFundRateRequest {
 
   public void setQuoteRatio(BigDecimal quoteRatio) {
     this.quoteRatio = quoteRatio;
+  }
+
+  public String getRateCalculationMode() {
+    return rateCalculationMode;
+  }
+
+  public void setRateCalculationMode(String rateCalculationMode) {
+    this.rateCalculationMode = rateCalculationMode;
   }
 
   public Integer getRateYear() {

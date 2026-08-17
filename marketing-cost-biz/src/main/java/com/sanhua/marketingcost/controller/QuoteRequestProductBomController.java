@@ -5,7 +5,6 @@ import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomBatchSyncRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomBatchSyncResponse;
-import com.sanhua.marketingcost.dto.ingest.QuoteProductBomBatchOaTaskResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteRequestProductBomListItemResponse;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
@@ -76,13 +75,4 @@ public class QuoteRequestProductBomController {
     }
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote-product-bom:oa-task')")
-  @PostMapping("/batch-oa-task")
-  public CommonResult<QuoteProductBomBatchOaTaskResponse> batchOaTask(
-      @RequestBody QuoteBomBatchSyncRequest request) {
-    QuoteProductBomBatchOaTaskResponse response = new QuoteProductBomBatchOaTaskResponse();
-    response.setAcceptedCount(0);
-    response.setMessage("OA待办推送和BOM补录闭环后续阶段对接");
-    return CommonResult.success(response);
-  }
 }

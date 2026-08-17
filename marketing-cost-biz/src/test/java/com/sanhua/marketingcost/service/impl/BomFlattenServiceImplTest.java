@@ -4,9 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.sanhua.marketingcost.dto.BomImportResult;
-import com.sanhua.marketingcost.dto.BuildHierarchyRequest;
-import com.sanhua.marketingcost.dto.BuildHierarchyResult;
 import com.sanhua.marketingcost.dto.FlattenRequest;
 import com.sanhua.marketingcost.dto.FlattenResult;
 import com.sanhua.marketingcost.entity.BomCostingRow;
@@ -19,12 +16,7 @@ import com.sanhua.marketingcost.mapper.BomSettlementRuleMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
 import com.sanhua.marketingcost.service.BomFlattenService;
-import com.sanhua.marketingcost.service.BomHierarchyBuildService;
-import com.sanhua.marketingcost.service.BomImportService;
-import java.io.InputStream;
 import java.math.BigDecimal;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.Statement;
 import java.time.LocalDate;
@@ -32,7 +24,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -53,8 +44,6 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
   @Autowired private BomCostingRowMapper costingMapper;
   @Autowired private BomSettlementRuleMapper settlementRuleMapper;
   @Autowired private MaterialMasterRawMapper materialMasterRawMapper;
-  @Autowired private BomImportService bomImportService;
-  @Autowired private BomHierarchyBuildService buildService;
 
   /** 每个测试的 OA 编号，{@code cleanUp} 按此清 costing_row */
   private final String oaNo = "OA_TEST_" + UUID.randomUUID().toString().substring(0, 6);
@@ -328,89 +317,6 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
         .hasMessageContaining("topProductCode");
   }
 
-  /**
-   * testRealBomMaster1079Flatten：T3→T4→T5 全链路（导入 → 构建 → 拍平）的真实数据集成。
-   *
-   * <p>依赖 {@code ~/Desktop/BOMMaster20260423.xlsx}；Assumptions.assumeTrue 保护。
-   */
-  @Test
-  @Tag("real-bom")
-  @DisplayName("testRealBomMaster1079Flatten：真实 34 万行 → 构建 1079900000536 → 拍平 OA-GOLDEN-001")
-  void testRealBomMaster1079Flatten() throws Exception {
-    String defaultPath = System.getProperty("user.home") + "/Desktop/BOMMaster20260423.xlsx";
-    Path realXlsx = Path.of(System.getProperty("bom.real.xlsx.path", defaultPath));
-    Assumptions.assumeTrue(Files.exists(realXlsx), "真实 Excel 不存在，跳过: " + realXlsx);
-
-    String goldenOa = "OA-GOLDEN-" + UUID.randomUUID().toString().substring(0, 8);
-    try {
-      // 1) 导入（T3）
-      BomImportResult ir;
-      try (InputStream in = Files.newInputStream(realXlsx)) {
-        ir = bomImportService.importExcel(in, realXlsx.getFileName().toString(), "tester");
-      }
-
-      // 2) 构建 1079900000536 主制造（T4）
-      BuildHierarchyRequest br = new BuildHierarchyRequest();
-      br.setImportBatchId(ir.getImportBatchId());
-      br.setPriceOrgCode("210");
-      br.setBomPurpose("主制造");
-      br.setMode("BY_PRODUCT");
-      br.setTopProductCode("1079900000536");
-      BuildHierarchyResult buildResult = buildService.build(br);
-      assertThat(buildResult.getProductsProcessed()).isEqualTo(1);
-
-      // 3) 拍平（T5）
-      FlattenRequest fr = new FlattenRequest();
-      fr.setOaNo(goldenOa);
-      fr.setTopProductCode("1079900000536");
-      fr.setBomPurpose("主制造");
-      fr.setMode("BY_OA");
-      fr.setAsOfDate(LocalDate.of(2026, 4, 23));
-      fr.setPriceOrgCode("210");
-      fr.setMaterialOrganizationCode("COMMERCIAL");
-      long t0 = System.currentTimeMillis();
-      FlattenResult fResult = flattenService.flatten(fr);
-      long elapsedMs = System.currentTimeMillis() - t0;
-
-      System.out.printf(
-          "[REAL-BOM-FLATTEN] oa=%s written=%d subtreeRequired=%d warnings=%d elapsedMs=%d%n",
-          goldenOa, fResult.getCostingRowsWritten(),
-          fResult.getSubtreeRequiredCount(), fResult.getWarnings().size(), elapsedMs);
-
-      assertThat(fResult.getCostingRowsWritten()).isGreaterThan(0);
-
-      // 抽样校验：所有写入行 OA / top / asOfDate 冻结正确；is_costing_row=1
-      List<BomCostingRow> rows =
-          costingMapper.selectList(
-              Wrappers.<BomCostingRow>lambdaQuery()
-                  .eq(BomCostingRow::getOaNo, goldenOa));
-      assertThat(rows).isNotEmpty();
-      assertThat(rows).allSatisfy(c -> {
-        assertThat(c.getTopProductCode()).isEqualTo("1079900000536");
-        assertThat(c.getAsOfDate()).isEqualTo(LocalDate.of(2026, 4, 23));
-        assertThat(c.getIsCostingRow()).isEqualTo(1);
-        // 非顶层：path 必须以顶层开头，末段去掉 @项次/@工序 后等于 materialCode
-        if (c.getLevel() != null && c.getLevel() > 0) {
-          assertThat(c.getPath()).startsWith("/1079900000536/");
-          assertThat(materialCodeFromLastPathSegment(c.getPath())).isEqualTo(c.getMaterialCode());
-        }
-      });
-      // 若命中新结算规则，matched_settlement_rule_id 非空
-      long matched =
-          rows.stream().filter(c -> c.getMatchedSettlementRuleId() != null).count();
-      System.out.printf("[REAL-BOM-FLATTEN] 命中规则的行数=%d%n", matched);
-    } finally {
-      // 清理：本次真实链路的 costing / raw / u9 行
-      try (Connection conn = openConnection();
-          Statement stmt = conn.createStatement()) {
-        stmt.executeUpdate("DELETE FROM lp_bom_costing_row WHERE oa_no = '" + goldenOa + "'");
-        stmt.executeUpdate(
-            "DELETE FROM lp_bom_raw_hierarchy WHERE top_product_code = '1079900000536'");
-        stmt.executeUpdate("DELETE FROM lp_bom_u9_source WHERE import_batch_id LIKE 'b_2026%'");
-      }
-    }
-  }
-
   // ============================ 辅助 ============================
 
   private FlattenRequest req(String top, String purpose, LocalDate asOf) {
@@ -434,24 +340,6 @@ class BomFlattenServiceImplTest extends BomMapperTestBase {
         Wrappers.<BomCostingRow>lambdaQuery()
             .eq(BomCostingRow::getOaNo, queryOaNo)
             .orderByAsc(BomCostingRow::getLevel));
-  }
-
-  private static String materialCodeFromLastPathSegment(String path) {
-    String segment = lastPathSegment(path);
-    if (segment == null) {
-      return null;
-    }
-    int discriminator = segment.indexOf('@');
-    return discriminator < 0 ? segment : segment.substring(0, discriminator);
-  }
-
-  private static String lastPathSegment(String path) {
-    if (path == null || path.isBlank()) {
-      return null;
-    }
-    String normalized = path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
-    int lastSlash = normalized.lastIndexOf('/');
-    return lastSlash < 0 ? normalized : normalized.substring(lastSlash + 1);
   }
 
   /** 插入顶层 raw 行（level=0, path=/top/） */

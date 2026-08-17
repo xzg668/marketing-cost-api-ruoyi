@@ -24,17 +24,6 @@ public class CostRunCostItemController {
     this.costRunCostItemService = costRunCostItemService;
   }
 
-  /** 查询费用项列表 */
-  @PreAuthorize("@ss.hasPermi('cost:run:list')")
-  @GetMapping("/cost-items")
-  public CommonResult<List<CostRunCostItemDto>> list(
-      @RequestParam String oaNo, @RequestParam(required = false) String productCode) {
-    if (!StringUtils.hasText(oaNo)) {
-      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(),"oaNo is required");
-    }
-    return CommonResult.success(costRunCostItemService.listByOaNo(oaNo, productCode));
-  }
-
   /**
    * 查询费用项结果列表
    *

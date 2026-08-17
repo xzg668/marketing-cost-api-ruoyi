@@ -293,12 +293,30 @@ public class QuoteProductBomCostingBuildServiceImpl
     String periodMonth = resolveBuildPeriod(record, requestedPeriodMonth, quoteDate).toString();
     QuoteBomSupplementVersion approvedVersion = latestApprovedSupplementVersion(record);
     QuoteBomPackageReference approvedReference = latestApprovedPackageReference(record);
+    // 每次核算前的 BOM 检查已经重新查询 U9。若 U9 后续补齐，必须回到正式 U9
+    // 数据，不能继续沿用历史电子图库补录版本。裸品仍需组合 U9 本体和已审核包装。
+    if (PRODUCT_TYPE_NON_BARE.equals(record.getProductType())
+        && approvedVersion != null
+        && shouldPreferFormalU9(record)) {
+      return buildFormalOnly(record, quoteDate, periodMonth, SOURCE_RAW_PRODUCT_BOM);
+    }
     if (PRODUCT_TYPE_NON_BARE.equals(record.getProductType())
         && approvedVersion == null
         && approvedReference == null) {
       return buildFormalOnly(record, quoteDate, periodMonth, SOURCE_RAW_PRODUCT_BOM);
     }
     return buildPreparedRows(record, quoteDate, periodMonth, approvedVersion, approvedReference);
+  }
+
+  private boolean shouldPreferFormalU9(QuoteBomPreparationRecord record) {
+    if (record.getQuoteBomStatusId() == null) {
+      return false;
+    }
+    QuoteBomStatus status = statusMapper.selectById(record.getQuoteBomStatusId());
+    if (status == null || status.getBomSource() == null) {
+      return false;
+    }
+    return !"ELECTRONIC_DRAWING_BOM".equals(status.getBomSource());
   }
 
   private QuoteBomCostingBuildResponse buildFormalOnly(

@@ -42,6 +42,7 @@ import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomFeatureSwitch;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
+import com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate;
 import com.sanhua.marketingcost.service.rule.BomRuleNodeContext;
 import com.sanhua.marketingcost.service.rule.BomRuleMaterialAttributeResolver;
 import com.sanhua.marketingcost.service.rule.BomRuleMaterialAttributes;
@@ -95,6 +96,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   private final QuoteCostRunVersionInvalidationService versionInvalidationService;
   private final QuoteEffectiveBomFeatureSwitch effectiveBomFeatureSwitch;
   private final QuoteBomStatusService quoteBomStatusService;
+  private final CollaborationCostingGate collaborationCostingGate;
 
   public QuoteCostingWorkbenchServiceImpl(
       OaFormMapper oaFormMapper,
@@ -114,7 +116,8 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       BomRuleMaterialAttributeResolver materialAttributeResolver,
       QuoteCostRunVersionInvalidationService versionInvalidationService,
       QuoteEffectiveBomFeatureSwitch effectiveBomFeatureSwitch,
-      QuoteBomStatusService quoteBomStatusService) {
+      QuoteBomStatusService quoteBomStatusService,
+      CollaborationCostingGate collaborationCostingGate) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
@@ -133,6 +136,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     this.versionInvalidationService = versionInvalidationService;
     this.effectiveBomFeatureSwitch = effectiveBomFeatureSwitch;
     this.quoteBomStatusService = quoteBomStatusService;
+    this.collaborationCostingGate = collaborationCostingGate;
   }
 
   @Override
@@ -162,6 +166,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     if (productCode == null) {
       throw new QuoteIngestException("当前产品行料号为空，无法发起核算");
     }
+    collaborationCostingGate.requireReadyAndStart(item.getId(), form.getBusinessUnitType());
 
     if (effectiveBomFeatureSwitch.isEnabled()) {
       // 最终有效 BOM 第 1 步依赖成功月度原始 BOM。这里只同步当前产品，不能批量触碰同 OA 其他行。

@@ -163,7 +163,8 @@ class QuoteCostRunWorkbenchServiceImplTest {
             summaryMapper,
             readinessService,
             versionNoGenerator,
-            cuAdjustmentCalcService);
+            cuAdjustmentCalcService,
+            mock(com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate.class));
   }
 
   @AfterEach

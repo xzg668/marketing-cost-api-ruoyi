@@ -827,6 +827,32 @@ class CostRunCostItemServiceImplTest {
   }
 
   @Test
+  @DisplayName("TER-06 三项费用上下文：流程号缺失时按申请单位识别家代商口径")
+  void threeExpenseMatchContextFallsBackToApplicantUnit() {
+    CostRunCostItemServiceImpl svc = buildForCalculation(
+        mock(OaFormMapper.class),
+        mock(OaFormItemMapper.class),
+        mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(AuxCostItemMapper.class),
+        mock(CostRunPartItemMapper.class),
+        mock(MaterialMasterMapper.class),
+        mock(MaterialMasterRawMapper.class),
+        mock(BomRawHierarchyMapper.class));
+    OaForm form = threeExpenseForm("UNKNOWN", "板换事业部", "否");
+    form.setOaNo("OA-UNKNOWN");
+    form.setProcessCode(null);
+    form.setBusinessUnitType("COMMERCIAL");
+    form.setApplicantUnit("家用制冷事业本部（总部）");
+
+    CostRunCostItemServiceImpl.ThreeExpenseMatchContext context =
+        svc.buildThreeExpenseMatchContext(form);
+
+    assertThat(context.productCategory).isEqualTo("家代商代销产品");
+    assertThat(context.matchedDepartment).isEqualTo("欧美业务管理部-直销");
+  }
+
+  @Test
   @DisplayName("TER-06 三项费用上下文：缺关键字段时返回明确原因")
   void threeExpenseMatchContextMissingDivisionHasReason() {
     CostRunCostItemServiceImpl svc = buildForCalculation(
@@ -874,6 +900,106 @@ class CostRunCostItemServiceImplTest {
   }
 
   @Test
+  @DisplayName("TER-07 三项费用匹配：同一事务所同时有直销和代销时按 OA 销售模式命中")
+  void threeExpenseCandidateMatchesOfficeAndSalesModeTogether() {
+    CostRunCostItemServiceImpl svc = buildForCalculation(
+        mock(OaFormMapper.class),
+        mock(OaFormItemMapper.class),
+        mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(AuxCostItemMapper.class),
+        mock(CostRunPartItemMapper.class),
+        mock(MaterialMasterMapper.class),
+        mock(MaterialMasterRawMapper.class),
+        mock(BomRawHierarchyMapper.class));
+    OaForm form = threeExpenseForm("FI-SR-005", "板换事业部", "是");
+    form.setApplicantDept("亚太区业务部");
+    form.setApplicantOffice("泰国事务所");
+    CostRunCostItemServiceImpl.ThreeExpenseMatchContext context =
+        svc.buildThreeExpenseMatchContext(form);
+    ThreeExpenseRate directRate =
+        threeExpenseCandidate("泰国事务所", "亚太区业务部-直销", "0.100000");
+    ThreeExpenseRate agencyRate =
+        threeExpenseCandidate("泰国事务所", "亚太区业务部-代销", "0.110000");
+
+    ThreeExpenseRate matched =
+        svc.matchThreeExpenseRateCandidate(context, List.of(directRate, agencyRate));
+
+    assertThat(context.homeApplianceSalesModeFlag).isEqualTo("是");
+    assertThat(matched).isSameAs(agencyRate);
+  }
+
+  @Test
+  @DisplayName("TER-07 三项费用匹配：旧 FI-SR 申请部门中的事务所按直销配置命中")
+  void threeExpenseCandidateMatchesLegacyOfficeFromDepartmentForDirectSales() {
+    CostRunCostItemServiceImpl svc = buildForCalculation(
+        mock(OaFormMapper.class),
+        mock(OaFormItemMapper.class),
+        mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(AuxCostItemMapper.class),
+        mock(CostRunPartItemMapper.class),
+        mock(MaterialMasterMapper.class),
+        mock(MaterialMasterRawMapper.class),
+        mock(BomRawHierarchyMapper.class));
+    OaForm form = threeExpenseForm("FI-SR-005", "板换事业部", "否");
+    form.setApplicantDept("泰国事务所");
+    form.setApplicantOffice("/");
+    CostRunCostItemServiceImpl.ThreeExpenseMatchContext context =
+        svc.buildThreeExpenseMatchContext(form);
+    ThreeExpenseRate staleDepartmentRate =
+        threeExpenseCandidate("/", "泰国事务所-直销", "0.250000");
+    ThreeExpenseRate agencyRate =
+        threeExpenseCandidate("泰国事务所", "亚太区业务部-代销", "0.030000");
+    ThreeExpenseRate directRate =
+        threeExpenseCandidate("泰国事务所", "亚太区业务部-直销", "0.025000");
+    staleDepartmentRate.setSalesExpenseRate(new BigDecimal("0.250000"));
+    agencyRate.setSalesExpenseRate(new BigDecimal("0.030000"));
+    directRate.setSalesExpenseRate(new BigDecimal("0.025000"));
+
+    ThreeExpenseRate matched = svc.matchThreeExpenseRateCandidate(
+        context, List.of(staleDepartmentRate, agencyRate, directRate));
+
+    assertThat(context.sourceOffice).isEmpty();
+    assertThat(context.homeApplianceSalesModeFlag).isEqualTo("否");
+    assertThat(matched).isSameAs(directRate);
+    assertThat(matched.getSalesExpenseRate()).isEqualByComparingTo("0.025000");
+  }
+
+  @Test
+  @DisplayName("TER-07 三项费用匹配：旧 FI-SR 申请部门中的事务所按代销配置命中")
+  void threeExpenseCandidateMatchesLegacyOfficeFromDepartmentForAgencySales() {
+    CostRunCostItemServiceImpl svc = buildForCalculation(
+        mock(OaFormMapper.class),
+        mock(OaFormItemMapper.class),
+        mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(AuxCostItemMapper.class),
+        mock(CostRunPartItemMapper.class),
+        mock(MaterialMasterMapper.class),
+        mock(MaterialMasterRawMapper.class),
+        mock(BomRawHierarchyMapper.class));
+    OaForm form = threeExpenseForm("FI-SR-005", "板换事业部", "是");
+    form.setApplicantDept("泰国事务所");
+    form.setApplicantOffice(null);
+    CostRunCostItemServiceImpl.ThreeExpenseMatchContext context =
+        svc.buildThreeExpenseMatchContext(form);
+    ThreeExpenseRate directRate =
+        threeExpenseCandidate("泰国事务所", "亚太区业务部-直销", "0.025000");
+    ThreeExpenseRate agencyRate =
+        threeExpenseCandidate("泰国事务所", "亚太区业务部-代销", "0.030000");
+    directRate.setSalesExpenseRate(new BigDecimal("0.025000"));
+    agencyRate.setSalesExpenseRate(new BigDecimal("0.030000"));
+
+    ThreeExpenseRate matched =
+        svc.matchThreeExpenseRateCandidate(context, List.of(directRate, agencyRate));
+
+    assertThat(context.homeApplianceSalesModeFlag).isEqualTo("是");
+    assertThat(matched).isSameAs(agencyRate);
+    assertThat(matched.getSalesExpenseRate()).isEqualByComparingTo("0.030000");
+  }
+
+  @Test
   @DisplayName("TER-07 三项费用匹配：配置处室为空或 / 时按申请部门后缀命中")
   void threeExpenseCandidateFallsBackToMatchedDepartment() {
     CostRunCostItemServiceImpl svc = buildForCalculation(
@@ -894,6 +1020,64 @@ class CostRunCostItemServiceImplTest {
     ThreeExpenseRate matched = svc.matchThreeExpenseRateCandidate(context, List.of(slashOfficeRate));
 
     assertThat(matched).isSameAs(slashOfficeRate);
+  }
+
+  @Test
+  @DisplayName("TER-07 三项费用匹配：带模式后缀未命中时回退到无后缀公共部门")
+  void threeExpenseCandidateFallsBackToBaseDepartment() {
+    CostRunCostItemServiceImpl svc = buildForCalculation(
+        mock(OaFormMapper.class),
+        mock(OaFormItemMapper.class),
+        mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(AuxCostItemMapper.class),
+        mock(CostRunPartItemMapper.class),
+        mock(MaterialMasterMapper.class),
+        mock(MaterialMasterRawMapper.class),
+        mock(BomRawHierarchyMapper.class));
+    OaForm form = threeExpenseForm("FI-SR-005", "商用四通阀事业部", "否");
+    form.setBusinessUnitType("COMMERCIAL");
+    form.setApplicantDept("营业一部");
+    form.setApplicantOffice("/");
+    CostRunCostItemServiceImpl.ThreeExpenseMatchContext context =
+        svc.buildThreeExpenseMatchContext(form);
+    ThreeExpenseRate commonRate = threeExpenseCandidate("/", "营业一部", "0.100000");
+
+    ThreeExpenseRate matched = svc.matchThreeExpenseRateCandidate(context, List.of(commonRate));
+
+    assertThat(context.matchedDepartment).isEqualTo("营业一部-直销");
+    assertThat(matched).isSameAs(commonRate);
+  }
+
+  @Test
+  @DisplayName("TER-07 三项费用匹配：板换直销产品优先命中特殊配置行")
+  void threeExpenseCandidateMatchesPlateTechnologySpecialRate() {
+    CostRunCostItemServiceImpl svc = buildForCalculation(
+        mock(OaFormMapper.class),
+        mock(OaFormItemMapper.class),
+        mock(SalaryCostMapper.class),
+        mock(CmsCostSourceEffectiveMapper.class),
+        mock(AuxCostItemMapper.class),
+        mock(CostRunPartItemMapper.class),
+        mock(MaterialMasterMapper.class),
+        mock(MaterialMasterRawMapper.class),
+        mock(BomRawHierarchyMapper.class));
+    OaForm form = threeExpenseForm("FI-SC-020", "板换事业部-直销产品", "否");
+    form.setBusinessUnitType("COMMERCIAL");
+    form.setApplicantDept("浙江三花板换科技有限公司");
+    form.setApplicantOffice("营销部");
+    CostRunCostItemServiceImpl.ThreeExpenseMatchContext context =
+        svc.buildThreeExpenseMatchContext(form);
+    ThreeExpenseRate officeRate = threeExpenseCandidate("营销部", "其他部门", "0.090000");
+    ThreeExpenseRate plateRate =
+        threeExpenseCandidate("/", "板换科技（仅原锦直销产品）", "0.100000");
+
+    ThreeExpenseRate matched =
+        svc.matchThreeExpenseRateCandidate(context, List.of(officeRate, plateRate));
+
+    assertThat(context.specialApplicantDepartment)
+        .isEqualTo("板换科技（仅原锦直销产品）");
+    assertThat(matched).isSameAs(plateRate);
   }
 
   @Test

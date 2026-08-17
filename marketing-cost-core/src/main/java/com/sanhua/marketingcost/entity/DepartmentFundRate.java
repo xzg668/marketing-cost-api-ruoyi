@@ -10,6 +10,9 @@ import java.time.LocalDateTime;
 
 @TableName("lp_department_fund_rate")
 public class DepartmentFundRate {
+  public static final String RATE_CALCULATION_MODE_PLAN_UPLIFT = "PLAN_UPLIFT";
+  public static final String RATE_CALCULATION_MODE_FINAL_QUOTE = "FINAL_QUOTE";
+
   @TableId(type = IdType.AUTO)
   private Long id;
   private String businessUnit;
@@ -30,6 +33,8 @@ public class DepartmentFundRate {
   private BigDecimal planRate;
   private BigDecimal upliftRatio;
   private BigDecimal quoteRatio;
+  /** PLAN_UPLIFT：quoteRatio 仍需乘 upliftRatio；FINAL_QUOTE：quoteRatio 已是最终费率。 */
+  private String rateCalculationMode;
   private String sourceType;
   private String sourceBatchNo;
   private String remark;
@@ -174,6 +179,14 @@ public class DepartmentFundRate {
 
   public void setQuoteRatio(BigDecimal quoteRatio) {
     this.quoteRatio = quoteRatio;
+  }
+
+  public String getRateCalculationMode() {
+    return rateCalculationMode;
+  }
+
+  public void setRateCalculationMode(String rateCalculationMode) {
+    this.rateCalculationMode = rateCalculationMode;
   }
 
   public String getSourceType() {

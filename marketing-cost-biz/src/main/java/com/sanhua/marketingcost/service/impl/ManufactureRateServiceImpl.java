@@ -8,6 +8,7 @@ import com.sanhua.marketingcost.entity.ManufactureRate;
 import com.sanhua.marketingcost.mapper.ManufactureRateMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.ManufactureRateService;
+import com.sanhua.marketingcost.support.ManufactureRateMatchSupport;
 import java.time.Year;
 import java.util.List;
 import org.springframework.cache.annotation.CacheEvict;
@@ -233,10 +234,10 @@ public class ManufactureRateServiceImpl implements ManufactureRateService {
     entity.setBusinessUnit(legacyRequiredText(firstText(entity.getBusinessUnit(), entity.getBusinessDivision())));
     entity.setProductCategory(legacyRequiredText(entity.getProductCategory()));
     entity.setProductSubcategory(legacyRequiredText(entity.getProductSubcategory()));
-    entity.setProductCode(trimToNull(entity.getProductCode()));
+    entity.setProductCode(trimMatchValueToNull(entity.getProductCode()));
     entity.setProductName(trimToNull(entity.getProductName()));
     entity.setProductSpec(trimToNull(entity.getProductSpec()));
-    entity.setProductModel(trimToNull(entity.getProductModel()));
+    entity.setProductModel(trimMatchValueToNull(entity.getProductModel()));
     entity.setPeriod(trimToNull(entity.getPeriod()));
     entity.setBusinessUnitType(resolveBusinessUnitType(entity.getBusinessUnitType()));
     entity.setRemark(trimToNull(entity.getRemark()));
@@ -268,6 +269,17 @@ public class ManufactureRateServiceImpl implements ManufactureRateService {
       entity.setMatchKey(entity.getProductModel());
       return;
     }
+    String categoryPrefix =
+        ManufactureRateMatchSupport.categoryPrefix(entity.getProductCategory());
+    if (StringUtils.hasText(entity.getBusinessDivision())
+        && StringUtils.hasText(categoryPrefix)) {
+      entity.setMatchLevel(
+          ManufactureRateMatchSupport.MATCH_LEVEL_DIVISION_CATEGORY_PREFIX);
+      entity.setMatchKey(
+          ManufactureRateMatchSupport.divisionCategoryKey(
+              entity.getBusinessDivision(), categoryPrefix));
+      return;
+    }
     if (StringUtils.hasText(entity.getBusinessDivision())
         && StringUtils.hasText(entity.getProductName())) {
       entity.setMatchLevel(MATCH_LEVEL_DIVISION_PRODUCT_NAME);
@@ -292,7 +304,7 @@ public class ManufactureRateServiceImpl implements ManufactureRateService {
     }
     if (!StringUtils.hasText(entity.getMatchLevel())
         || !StringUtils.hasText(entity.getMatchKey())) {
-      return "Excel第" + rowNo + "行缺料号、产品型号、产品名称+事业部或事业部";
+      return "Excel第" + rowNo + "行缺料号、产品型号、产品大类+事业部、产品名称+事业部或事业部";
     }
     return null;
   }
@@ -320,6 +332,7 @@ public class ManufactureRateServiceImpl implements ManufactureRateService {
   private boolean isBlankRow(ManufactureRateImportRequest.ManufactureRateRow row) {
     return !StringUtils.hasText(row.getBusinessDivision())
         && !StringUtils.hasText(row.getBusinessUnit())
+        && !StringUtils.hasText(row.getProductCategory())
         && !StringUtils.hasText(row.getProductCode())
         && !StringUtils.hasText(row.getProductName())
         && !StringUtils.hasText(row.getProductModel())
@@ -359,6 +372,11 @@ public class ManufactureRateServiceImpl implements ManufactureRateService {
       return null;
     }
     return value.trim();
+  }
+
+  private String trimMatchValueToNull(String value) {
+    String trimmed = trimToNull(value);
+    return "/".equals(trimmed) || "／".equals(trimmed) ? null : trimmed;
   }
 
   private String legacyRequiredText(String value) {

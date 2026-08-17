@@ -50,7 +50,9 @@ class CmsCostT17EndToEndIntegrationTest extends BomMapperTestBase {
   static {
     try {
       runScriptViaMysqlCli("/db/V53__material_master_raw_staging.sql", "V53_T17");
-      runScriptViaMysqlCli("/db/V56__cost_run_cost_item_add_remark.sql", "V56_T17");
+      if (!columnExists("lp_cost_run_cost_item", "remark")) {
+        runScriptViaMysqlCli("/db/V56__cost_run_cost_item_add_remark.sql", "V56_T17");
+      }
       runScriptViaMysqlCli("/db/V59__quote_ingest_schema.sql", "V59_T17");
       runScriptViaMysqlCli("/db/V64__cms_cost_source_schema.sql", "V64_T17");
       runScriptViaMysqlCli("/db/V66__cms_subject_setting_source.sql", "V66_T17");
@@ -516,6 +518,19 @@ class CmsCostT17EndToEndIntegrationTest extends BomMapperTestBase {
           logTag + " mysql CLI 执行失败: exit=" + result.getExitCode()
               + "\nstdout:\n" + result.getStdout()
               + "\nstderr:\n" + result.getStderr());
+    }
+  }
+
+  private static boolean columnExists(String tableName, String columnName) throws Exception {
+    try (Connection connection = openConnection();
+        var statement = connection.prepareStatement(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                + "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?")) {
+      statement.setString(1, tableName);
+      statement.setString(2, columnName);
+      try (ResultSet result = statement.executeQuery()) {
+        return result.next() && result.getInt(1) > 0;
+      }
     }
   }
 }

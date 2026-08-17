@@ -41,6 +41,7 @@ import com.sanhua.marketingcost.enums.CostItemCategory;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.service.CostRunCacheLookupService;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
+import com.sanhua.marketingcost.support.ManufactureRateMatchSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.math.BigDecimal;
@@ -105,6 +106,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private static final String MANUFACTURE_MATCH_LEVEL_DIVISION_PRODUCT_NAME = "DIVISION_PRODUCT_NAME";
   /** 制造费用率匹配层级：事业部。 */
   private static final String MANUFACTURE_MATCH_LEVEL_DIVISION = "DIVISION";
+  private static final String MANUFACTURE_MATCH_LEVEL_DIVISION_CATEGORY_PREFIX =
+      ManufactureRateMatchSupport.MATCH_LEVEL_DIVISION_CATEGORY_PREFIX;
   private static final String MANUFACTURE_MATCH_KEY_SEPARATOR = "::";
   private static final List<String> DEPARTMENT_SUBJECT_OVERHAUL = List.of("大修费用", "大修费");
   private static final List<String> DEPARTMENT_SUBJECT_TOOLING =
@@ -116,6 +119,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private static final String THREE_EXPENSE_DIM_DEPARTMENT = "DEPARTMENT";
   private static final String THREE_EXPENSE_DIM_OFFICE = "OFFICE";
   private static final String THREE_EXPENSE_SOURCE_SYSTEM_OA = "OA";
+  private static final String THREE_EXPENSE_PLATE_SPECIAL_DEPARTMENT =
+      "板换科技（仅原锦直销产品）";
   private static final DateTimeFormatter ACCOUNTING_MONTH_FORMATTER =
       DateTimeFormatter.ofPattern("yyyy-MM");
 
@@ -193,69 +198,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     this.materialMasterRawMapper = materialMasterRawMapper;
     this.bomRawHierarchyMapper = bomRawHierarchyMapper;
     this.cacheLookup = cacheLookup;
-  }
-
-  @Override
-  public List<CostRunCostItemDto> listByOaNo(String oaNo, String productCode) {
-    if (!StringUtils.hasText(oaNo)) {
-      return Collections.emptyList();
-    }
-    String oaNoValue = oaNo.trim();
-    String productCodeValue = StringUtils.hasText(productCode) ? productCode.trim() : null;
-
-    // 优先查询 OA 表头；表头不存在则不做后续成本计算。
-    OaForm form =
-        oaFormMapper.selectOne(
-            Wrappers.lambdaQuery(OaForm.class)
-                .eq(OaForm::getOaNo, oaNoValue)
-                .last("LIMIT 1"));
-    if (form == null) {
-      return Collections.emptyList();
-    }
-
-    // 忽略已核算状态，始终按最新基础数据重新计算费用。
-
-    // 读取 OA 明细，若传入 productCode 则按料号过滤。
-    List<OaFormItem> formItems =
-        oaFormItemMapper.selectList(
-            Wrappers.lambdaQuery(OaFormItem.class)
-                .eq(OaFormItem::getOaFormId, form.getId())
-                .eq(StringUtils.hasText(productCodeValue), OaFormItem::getMaterialNo, productCodeValue));
-    if (formItems.isEmpty()) {
-      return Collections.emptyList();
-    }
-
-    // 未传入 productCode 时，仅在 OA 只有一个料号时自动推断。
-    if (!StringUtils.hasText(productCodeValue)) {
-      Set<String> uniqueCodes = new LinkedHashSet<>();
-      for (OaFormItem item : formItems) {
-        if (StringUtils.hasText(item.getMaterialNo())) {
-          uniqueCodes.add(item.getMaterialNo().trim());
-        }
-      }
-      if (uniqueCodes.size() == 1) {
-        productCodeValue = uniqueCodes.iterator().next();
-      } else {
-        return Collections.emptyList();
-      }
-    }
-
-    // 收集料号，查询工资成本（直接/间接人工 + 事业部）。
-    Set<String> materialCodes = new LinkedHashSet<>();
-    for (OaFormItem item : formItems) {
-      if (StringUtils.hasText(item.getMaterialNo())) {
-        materialCodes.add(item.getMaterialNo().trim());
-      }
-    }
-    if (materialCodes.isEmpty()) {
-      return Collections.emptyList();
-    }
-
-    String materialOrganizationCode =
-        resolveCostSourceMaterialOrganizationCode(null, null, oaNoValue, productCodeValue);
-    CostSourceContext costSourceContext =
-        resolveCostSourceContext(form, formItems, productCodeValue, null, materialOrganizationCode);
-    return calculateItems(oaNoValue, productCodeValue, materialCodes, costSourceContext, null, true);
   }
 
   @Override
@@ -971,13 +913,18 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     // 三项费用按成本核算当天年份取，不按 OA 申请日期。
     Integer periodYear = costYear == null ? currentCostYear() : costYear;
     if (form == null) {
-      return new ThreeExpenseMatchContext(periodYear, null, null, null, null, null, null, null, null,
-          "OA 表头为空");
+      return new ThreeExpenseMatchContext(
+          periodYear, null, null, null, null, null, null, null, null, null, "OA 表头为空");
     }
     String oaNo = trimToNull(form.getOaNo());
     String processCode = trimToNull(form.getProcessCode());
     String businessUnitType = normalizeBusinessUnit(form.getBusinessUnitType());
-    String productCategory = resolveThreeExpenseProductCategory(processCode, oaNo, businessUnitType);
+    String productCategory = resolveThreeExpenseProductCategory(
+        processCode,
+        oaNo,
+        form.getApplicantUnit(),
+        form.getExpenseProductCategory(),
+        businessUnitType);
     // 不同 OA 单据字段名不同：FI-SC-020/FI-SC-006 取“事业部”，FI-SC-005 取“产品事业部”，家用取“所属事业部”；入库后统一落在 sourceBusinessDivision。
     String sourceDivision = trimToNull(form.getSourceBusinessDivision());
     String productLine = resolveThreeExpenseProductLine(sourceDivision);
@@ -986,6 +933,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     String commercialOverseasFlag = null;
     String homeApplianceSalesModeFlag = null;
     String matchedDepartment = null;
+    String specialApplicantDepartment = resolveThreeExpenseSpecialApplicantDepartment(
+        productCategory, productLine, sourceDivision, sourceDepartment);
     String departmentMatchBase = StringUtils.hasText(sourceOffice) ? sourceOffice : sourceDepartment;
     if (StringUtils.hasText(departmentMatchBase) && StringUtils.hasText(productCategory)) {
       boolean flag = yesFlag(form.getOverseasSalesMode());
@@ -1015,20 +964,61 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         commercialOverseasFlag,
         homeApplianceSalesModeFlag,
         matchedDepartment,
+        specialApplicantDepartment,
         missingReason);
   }
 
   private String resolveThreeExpenseProductCategory(
-      String processCode, String oaNo, String businessUnitType) {
+      String processCode,
+      String oaNo,
+      String applicantUnit,
+      String configuredProductCategory,
+      String businessUnitType) {
     String process = StringUtils.hasText(processCode) ? processCode : oaNo;
     if (StringUtils.hasText(process)) {
-      return process.trim().startsWith("FI-SC") ? "商用直销产品" : "家代商代销产品";
+      String normalizedProcess = process.trim().toUpperCase();
+      if (normalizedProcess.startsWith("FI-SC")) {
+        return "商用直销产品";
+      }
+      if (normalizedProcess.startsWith("FI-SR")) {
+        return "家代商代销产品";
+      }
+    }
+    if ("商用直销产品".equals(configuredProductCategory)
+        || "家代商代销产品".equals(configuredProductCategory)) {
+      return configuredProductCategory;
+    }
+    if (StringUtils.hasText(applicantUnit)) {
+      String unit = applicantUnit.trim();
+      if (unit.contains("商用制冷")) {
+        return "商用直销产品";
+      }
+      if (unit.contains("家用制冷")) {
+        return "家代商代销产品";
+      }
     }
     if ("HOUSEHOLD".equals(businessUnitType)) {
       return "家代商代销产品";
     }
     if ("COMMERCIAL".equals(businessUnitType)) {
       return "商用直销产品";
+    }
+    return null;
+  }
+
+  private String resolveThreeExpenseSpecialApplicantDepartment(
+      String productCategory,
+      String productLine,
+      String sourceDivision,
+      String sourceDepartment) {
+    if ("商用直销产品".equals(productCategory)
+        && "国内产线".equals(productLine)
+        && StringUtils.hasText(sourceDivision)
+        && sourceDivision.contains("板换事业部")
+        && sourceDivision.contains("直销产品")
+        && StringUtils.hasText(sourceDepartment)
+        && sourceDepartment.contains("板换科技")) {
+      return THREE_EXPENSE_PLATE_SPECIAL_DEPARTMENT;
     }
     return null;
   }
@@ -1050,6 +1040,14 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private String normalizeOfficeForThreeExpense(String office) {
     String value = trimToNull(office);
     return "/".equals(value) ? "" : value;
+  }
+
+  private String normalizeDepartmentForThreeExpense(String department) {
+    String value = trimToNull(department);
+    if (value == null) {
+      return null;
+    }
+    return value.replaceFirst("[（(](直销|海外|代销)[）)]$", "-$1");
   }
 
   private boolean yesFlag(String value) {
@@ -1175,12 +1173,25 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
           null,
           "lp_department_fund_rate.quote_ratio 为空, id=" + rate.getId());
     }
-    BigDecimal upliftRatio =
-        rate.getUpliftRatio() == null ? BigDecimal.ONE : rate.getUpliftRatio();
-    BigDecimal effectiveRate = quoteRatio.multiply(upliftRatio);
+    BigDecimal effectiveRate = resolveDepartmentEffectiveRate(rate);
     BigDecimal manhourCost = divide(laborTotal, manhourRate);
     return new DepartmentSubjectAmount(
         manhourCost, effectiveRate, multiplyAmount(manhourCost, effectiveRate), null);
+  }
+
+  static BigDecimal resolveDepartmentEffectiveRate(DepartmentFundRate rate) {
+    if (rate == null || rate.getQuoteRatio() == null) {
+      return null;
+    }
+    String calculationMode = rate.getRateCalculationMode();
+    if (calculationMode != null
+        && DepartmentFundRate.RATE_CALCULATION_MODE_FINAL_QUOTE.equalsIgnoreCase(
+            calculationMode.trim())) {
+      return rate.getQuoteRatio();
+    }
+    BigDecimal upliftRatio =
+        rate.getUpliftRatio() == null ? BigDecimal.ONE : rate.getUpliftRatio();
+    return rate.getQuoteRatio().multiply(upliftRatio);
   }
 
   private DepartmentFundLookup findDepartmentFundRate(
@@ -1414,6 +1425,36 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       MaterialMasterRaw finishedRaw = lookupMaterialByCode(finishedCode, costSourceContext);
       String finishedDivision =
           trimToNull(finishedRaw == null ? null : finishedRaw.getProductionDivision());
+      String finishedCategory =
+          trimToNull(finishedRaw == null ? null : finishedRaw.getProductionCategory());
+      String categoryPrefix =
+          ManufactureRateMatchSupport.categoryPrefix(finishedCategory);
+      if (finishedDivision != null && categoryPrefix != null) {
+        String categoryMatchKey =
+            ManufactureRateMatchSupport.divisionCategoryKey(
+                finishedDivision, categoryPrefix);
+        ManufactureRate categoryRate =
+            findManufactureRateByMatch(
+                MANUFACTURE_MATCH_LEVEL_DIVISION_CATEGORY_PREFIX,
+                categoryMatchKey,
+                rateYear,
+                businessUnitType);
+        RateLookup categoryLookup = toManufactureLookup(categoryRate);
+        if (categoryLookup != null) {
+          return categoryLookup;
+        }
+        missReasons.add(
+            "成品料号 "
+                + finishedCode
+                + " 主档事业部/生产分类 "
+                + finishedDivision
+                + "/"
+                + finishedCategory
+                + " 无产品大类前缀配置");
+      } else if (finishedDivision != null) {
+        missReasons.add(
+            "成品料号 " + finishedCode + " 主档 production_category 为空或没有字母前缀");
+      }
       if (finishedDivision != null) {
         ManufactureRate divisionRate =
             findManufactureRateByMatch(
@@ -1530,24 +1571,113 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
   ThreeExpenseRate matchThreeExpenseRateCandidate(
       ThreeExpenseMatchContext match, List<ThreeExpenseRate> candidates) {
-    // 处室有具体值时优先按处室精确匹配；配置处室为 "/" 或空时，才走申请部门+后缀匹配。
-    if (StringUtils.hasText(match.sourceOffice)) {
+    // 板换原锦直销是财务配置中的独立特殊行，优先级高于通用营销处室。
+    if (StringUtils.hasText(match.specialApplicantDepartment)) {
       for (ThreeExpenseRate candidate : candidates) {
-        if (StringUtils.hasText(normalizeOfficeForThreeExpense(candidate.getApplicantOffice()))
-            && match.sourceOffice.equals(normalizeOfficeForThreeExpense(candidate.getApplicantOffice()))) {
-          // OEM费用率本期只导入和展示，不参与 MGMT_EXP / SALES_EXP / FIN_EXP 计算。
+        if (!StringUtils.hasText(normalizeOfficeForThreeExpense(candidate.getApplicantOffice()))
+            && match.specialApplicantDepartment.equals(
+                normalizeDepartmentForThreeExpense(candidate.getApplicantDepartment()))) {
           return candidate;
         }
+      }
+    }
+    // 处室有具体值时按处室+销售模式精确匹配，避免同一事务所的直销/代销配置串行。
+    if (StringUtils.hasText(match.sourceOffice)) {
+      ThreeExpenseRate officeMatched =
+          matchThreeExpenseOfficeCandidate(match, candidates, match.sourceOffice);
+      if (officeMatched != null) {
+        // OEM费用率本期只导入和展示，不参与 MGMT_EXP / SALES_EXP / FIN_EXP 计算。
+        return officeMatched;
+      }
+    }
+    // 旧 FI-SR 单据把“事务所”落在申请部门、申请处室为空；仅对“某某事务所”兼容，
+    // 并继续校验直销/代销，优先于历史“泰国事务所-直销”这类旧部门配置。
+    String legacyOffice = resolveLegacyThreeExpenseOffice(match);
+    if (StringUtils.hasText(legacyOffice)) {
+      ThreeExpenseRate officeMatched =
+          matchThreeExpenseOfficeCandidate(match, candidates, legacyOffice);
+      if (officeMatched != null) {
+        return officeMatched;
       }
     }
     for (ThreeExpenseRate candidate : candidates) {
       if (!StringUtils.hasText(normalizeOfficeForThreeExpense(candidate.getApplicantOffice()))
           && StringUtils.hasText(match.matchedDepartment)
-          && match.matchedDepartment.equals(candidate.getApplicantDepartment())) {
+          && match.matchedDepartment.equals(
+              normalizeDepartmentForThreeExpense(candidate.getApplicantDepartment()))) {
         return candidate;
       }
     }
+    // 营业一部～五部、家电营业部等公共费率没有模式后缀；后缀行不存在时才兜底。
+    String departmentMatchBase = StringUtils.hasText(match.sourceOffice)
+        ? match.sourceOffice
+        : match.sourceDepartment;
+    if (StringUtils.hasText(departmentMatchBase)) {
+      for (ThreeExpenseRate candidate : candidates) {
+        if (!StringUtils.hasText(normalizeOfficeForThreeExpense(candidate.getApplicantOffice()))
+            && departmentMatchBase.equals(
+                normalizeDepartmentForThreeExpense(candidate.getApplicantDepartment()))) {
+          return candidate;
+        }
+      }
+    }
     return null;
+  }
+
+  private ThreeExpenseRate matchThreeExpenseOfficeCandidate(
+      ThreeExpenseMatchContext match,
+      List<ThreeExpenseRate> candidates,
+      String sourceOffice) {
+    String expectedModeSuffix = expectedThreeExpenseModeSuffix(match);
+    ThreeExpenseRate modeNeutralCandidate = null;
+    for (ThreeExpenseRate candidate : candidates) {
+      String candidateOffice = normalizeOfficeForThreeExpense(candidate.getApplicantOffice());
+      if (!StringUtils.hasText(candidateOffice) || !sourceOffice.equals(candidateOffice)) {
+        continue;
+      }
+      String candidateDepartment =
+          normalizeDepartmentForThreeExpense(candidate.getApplicantDepartment());
+      if (!StringUtils.hasText(expectedModeSuffix)
+          || (StringUtils.hasText(candidateDepartment)
+              && candidateDepartment.endsWith(expectedModeSuffix))) {
+        return candidate;
+      }
+      if (!hasThreeExpenseModeSuffix(candidateDepartment) && modeNeutralCandidate == null) {
+        modeNeutralCandidate = candidate;
+      }
+    }
+    return modeNeutralCandidate;
+  }
+
+  private String resolveLegacyThreeExpenseOffice(ThreeExpenseMatchContext match) {
+    if (match == null
+        || !"家代商代销产品".equals(match.productCategory)
+        || StringUtils.hasText(match.sourceOffice)
+        || !StringUtils.hasText(match.sourceDepartment)) {
+      return null;
+    }
+    String department = match.sourceDepartment.trim();
+    return department.endsWith("事务所") ? department : null;
+  }
+
+  private String expectedThreeExpenseModeSuffix(ThreeExpenseMatchContext match) {
+    if (match == null) {
+      return null;
+    }
+    if ("商用直销产品".equals(match.productCategory)) {
+      return "是".equals(match.commercialOverseasFlag) ? "-海外" : "-直销";
+    }
+    if ("家代商代销产品".equals(match.productCategory)) {
+      return "是".equals(match.homeApplianceSalesModeFlag) ? "-代销" : "-直销";
+    }
+    return null;
+  }
+
+  private boolean hasThreeExpenseModeSuffix(String department) {
+    return StringUtils.hasText(department)
+        && (department.endsWith("-直销")
+            || department.endsWith("-代销")
+            || department.endsWith("-海外"));
   }
 
   private String threeExpenseMissRemark(ThreeExpenseMatchContext match) {
@@ -1569,7 +1699,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         + "，homeApplianceSalesModeFlag="
         + valueOrEmpty(match.homeApplianceSalesModeFlag)
         + "，matchedDepartment="
-        + valueOrEmpty(match.matchedDepartment);
+        + valueOrEmpty(match.matchedDepartment)
+        + "，specialApplicantDepartment="
+        + valueOrEmpty(match.specialApplicantDepartment);
   }
 
   private String firstMissingDimension(CostSourceContext context) {
@@ -2534,6 +2666,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     final String commercialOverseasFlag;
     final String homeApplianceSalesModeFlag;
     final String matchedDepartment;
+    final String specialApplicantDepartment;
     final String missingReason;
 
     private ThreeExpenseMatchContext(
@@ -2546,6 +2679,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         String commercialOverseasFlag,
         String homeApplianceSalesModeFlag,
         String matchedDepartment,
+        String specialApplicantDepartment,
         String missingReason) {
       this.periodYear = periodYear;
       this.oaNo = oaNo;
@@ -2556,6 +2690,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       this.commercialOverseasFlag = commercialOverseasFlag;
       this.homeApplianceSalesModeFlag = homeApplianceSalesModeFlag;
       this.matchedDepartment = matchedDepartment;
+      this.specialApplicantDepartment = specialApplicantDepartment;
       this.missingReason = missingReason;
     }
   }

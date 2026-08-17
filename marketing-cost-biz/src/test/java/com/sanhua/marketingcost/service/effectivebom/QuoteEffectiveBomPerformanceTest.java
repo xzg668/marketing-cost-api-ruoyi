@@ -66,6 +66,26 @@ class QuoteEffectiveBomPerformanceTest {
     assertThat(percentile(samples, 0.95)).isLessThan(SAFETY_LIMIT_MILLIS);
   }
 
+  @Test
+  void oneHundredProductsWithOneThousandNodesEachStayWithinSafetyLimit() {
+    EffectiveBomBuildRequest request = request(1_000);
+    QuoteEffectiveBomBuilder builder = builder();
+    builder.build(request);
+    long started = System.nanoTime();
+    int totalNodes = 0;
+    for (int product = 0; product < 100; product++) {
+      EffectiveBomBuildResult result = builder.build(request);
+      assertThat(result.blocked()).isFalse();
+      totalNodes += result.nodes().size();
+    }
+    double elapsed = elapsedMillis(started);
+    System.out.printf(Locale.ROOT,
+        "QCBP26_PERF operation=hundred_product_bom_build products=100 nodes_per_product=1000 total_nodes=%d elapsed_ms=%.3f%n",
+        totalNodes, elapsed);
+    assertThat(totalNodes).isEqualTo(100_000);
+    assertThat(elapsed).isLessThan(SAFETY_LIMIT_MILLIS);
+  }
+
   private static QuoteEffectiveBomPersistenceResult confirm(
       QuoteEffectiveBomBuilder builder,
       QuoteEffectiveBomPersistenceServiceImpl persistence,

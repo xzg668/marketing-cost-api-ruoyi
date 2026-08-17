@@ -19,8 +19,7 @@
       关键修复（T13）：不要再像旧 pom 那样定义 <surefire.groups></surefire.groups> 占位—— surefire 3.2.5
       在 batch 模式下把"空 groups"理解为"显式 include everything"，会盖掉 excludedGroups 的过滤效果，
       导致 mvn test 误跑 integration 测试。这里仅定义 excludedGroups，groups 留 unset。
-      命令行覆盖：mvn test -DexcludedGroups= -Dgroups=integration
-              或：mvn test -DexcludedGroups= -Dgroups=slow -Dtest=U9SourceBuilderTest#testRealBomMaster1079
+      命令行覆盖：mvn test -Dsurefire.excludedGroups= -Dgroups=integration
     -->
     <surefire.excludedGroups>integration,slow</surefire.excludedGroups>
   </properties>
@@ -176,8 +175,7 @@
           为空字符串时，surefire 3.2.5 batch 模式把"空 groups"理解为"显式 include everything"，
           反而把 excludedGroups 的过滤效果覆盖掉了，导致 mvn test 误跑 integration 测试。
           这里去掉空 <groups>，仅保留 <excludedGroups>，命令行可用 -Dgroups=integration 单独跑。
-          命令行覆盖：mvn test -DexcludedGroups= -Dgroups=integration
-                  或：mvn test -DexcludedGroups= -Dgroups=slow -Dtest=U9SourceBuilderTest#testRealBomMaster1079
+          命令行覆盖：mvn test -Dsurefire.excludedGroups= -Dgroups=integration
         -->
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>

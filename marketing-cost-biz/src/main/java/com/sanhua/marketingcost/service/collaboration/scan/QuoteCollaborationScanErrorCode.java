@@ -1,0 +1,13 @@
+package com.sanhua.marketingcost.service.collaboration.scan;
+
+public enum QuoteCollaborationScanErrorCode {
+  U9_TIMEOUT,
+  U9_ORGANIZATION_MISMATCH,
+  U9_DATA_EMPTY,
+  U9_ERROR,
+  PRODUCT_FORM_DATA_MISSING,
+  ACTIVE_TASK_QUERY_ERROR,
+  APPROVED_RESULT_QUERY_ERROR,
+  APPROVED_SOURCE_ERROR,
+  PRICE_PREPARATION_ERROR
+}

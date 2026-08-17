@@ -14,8 +14,8 @@ import java.util.UUID;
 /**
  * BOM 三层架构 · 第 2 层 DWD 事实层：lp_bom_raw_hierarchy。
  *
- * <p>在 U9 单层父子基础上派生 path / level / qty_per_top。版本 append-only，
- * 多版本并存，不做 DELETE 历史（见 project memory "BOM 版本 append-only 多版本并存"）。
+ * <p>EasyData 根据 U9 单层父子关系计算 path / level / qty_per_top 后推送。版本 append-only，
+ * 多版本并存；报价系统只读消费，不执行层级构建。
  *
  * <p>注意：built_at 是业务时间（层级构建时间），手工赋值不走自动填充；
  * business_unit_type 由 MetaObjectHandler 按登录态自动回填（V21 多租户隔离）。
@@ -49,7 +49,7 @@ public class BomRawHierarchy {
   /** U9 子件项次 */
   private Integer sortSeq;
 
-  /** 来源 U9/Excel 原始行 ID（lp_bom_u9_source.id），用于追溯同父同子多行 BOM。 */
+  /** 来源 U9 单层原始行 ID（lp_bom_u9_source.id），用于追溯同父同子多行 BOM。 */
   private Long sourceU9RowId;
 
   /** 来源 BOM 行业务实例 key，按源表业务唯一字段生成，保证重导入后仍稳定。 */
@@ -71,7 +71,7 @@ public class BomRawHierarchy {
   /** 相对直接父用量 */
   private BigDecimal qtyPerParent;
 
-  /** 累计到顶层用量（Builder 连乘计算） */
+  /** 累计到顶层用量（EasyData 计算） */
   private BigDecimal qtyPerTop;
 
   // ============================ 业务属性（从 u9_source 直接映射） ============================

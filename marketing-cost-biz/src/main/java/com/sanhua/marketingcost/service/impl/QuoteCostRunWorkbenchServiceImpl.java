@@ -38,6 +38,7 @@ import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
 import com.sanhua.marketingcost.service.QuoteCostRunWorkbenchService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
+import com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -77,6 +78,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   private final PricePrepareReadinessService pricePrepareReadinessService;
   private final QuoteCostRunVersionNoGenerator versionNoGenerator;
   private final QuoteCuAdjustmentCalcService cuAdjustmentCalcService;
+  private final CollaborationCostingGate collaborationCostingGate;
 
   public QuoteCostRunWorkbenchServiceImpl(
       OaFormMapper oaFormMapper,
@@ -89,7 +91,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
       QuoteCostingWorkbenchSummaryMapper summaryMapper,
       PricePrepareReadinessService pricePrepareReadinessService,
       QuoteCostRunVersionNoGenerator versionNoGenerator,
-      QuoteCuAdjustmentCalcService cuAdjustmentCalcService) {
+      QuoteCuAdjustmentCalcService cuAdjustmentCalcService,
+      CollaborationCostingGate collaborationCostingGate) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.versionMapper = versionMapper;
@@ -101,6 +104,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     this.pricePrepareReadinessService = pricePrepareReadinessService;
     this.versionNoGenerator = versionNoGenerator;
     this.cuAdjustmentCalcService = cuAdjustmentCalcService;
+    this.collaborationCostingGate = collaborationCostingGate;
   }
 
   @Override
@@ -308,6 +312,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
             .eq(CostRunResult::getCostRunVersionId, version.getId()));
 
     markConfirmedCostRun(scope, version.getId(), now);
+    collaborationCostingGate.complete(scope.oaFormItemId(), scope.form().getBusinessUnitType());
 
     version.setVersionNo(versionNo);
     version.setStatus(STATUS_CONFIRMED);
