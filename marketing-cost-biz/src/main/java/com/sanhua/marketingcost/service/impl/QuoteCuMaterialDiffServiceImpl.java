@@ -221,7 +221,6 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
         || value(finance.getGapCount()) != 0) {
       throw new IllegalStateException("OA与财务价格准备批次必须成功且无缺口");
     }
-    requireText(oa.getPriceTypeConfirmNo(), "OA价格类型确认批次");
     if (oa.getPriceAsOfTime() == null) {
       throw new IllegalStateException("OA价格准备批次缺取价时点");
     }
@@ -231,7 +230,6 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     requireSame("批次", "oa_no", oa.getOaNo(), finance.getOaNo());
     requireSame("批次", "OA产品行ID", oa.getOaFormItemId(), finance.getOaFormItemId());
     requireSame("批次", "产品料号", oa.getTopProductCode(), finance.getTopProductCode());
-    requireSame("批次", "价格类型确认批次", oa.getPriceTypeConfirmNo(), finance.getPriceTypeConfirmNo());
     requireSame("批次", "计价月份", oa.getPeriodMonth(), finance.getPeriodMonth());
     requireSame("批次", "取价时点", oa.getPriceAsOfTime(), finance.getPriceAsOfTime());
     requireSame("批次", "业务单元", oa.getBusinessUnitType(), finance.getBusinessUnitType());
@@ -282,8 +280,6 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
         label + "明细", "OA产品行ID", batch.getOaFormItemId(), item.getOaFormItemId());
     requireSame(
         label + "明细", "顶层产品", batch.getTopProductCode(), item.getTopProductCode());
-    requireSame(
-        label + "明细", "价格类型确认批次", batch.getPriceTypeConfirmNo(), item.getPriceTypeConfirmNo());
     requireSame(label + "明细", "计价月份", batch.getPeriodMonth(), item.getPeriodMonth());
     requireSame(
         label + "明细", "业务单元", batch.getBusinessUnitType(), item.getBusinessUnitType());
@@ -306,11 +302,6 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     requireSame(settlementKey, "BOM行ID", oa.getBomRowId(), finance.getBomRowId());
     requireSame(settlementKey, "OA产品行ID", oa.getOaFormItemId(), finance.getOaFormItemId());
     requireSame(settlementKey, "顶层产品", oa.getTopProductCode(), finance.getTopProductCode());
-    requireSame(
-        settlementKey,
-        "价格确认明细",
-        oa.getPriceTypeConfirmItemId(),
-        finance.getPriceTypeConfirmItemId());
     requireSame(settlementKey, "价格结果类型", oa.getResultRefType(), finance.getResultRefType());
     requireSame(settlementKey, "价格来源", oa.getPriceSource(), finance.getPriceSource());
     requireSame(settlementKey, "业务单元", oa.getBusinessUnitType(), finance.getBusinessUnitType());

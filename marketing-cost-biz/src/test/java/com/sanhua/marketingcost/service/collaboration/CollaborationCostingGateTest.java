@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.collaboration;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -53,16 +54,44 @@ class CollaborationCostingGateTest {
 
   @Test
   void blocksServerSideWhenFinanceAndRepriceAreNotReady() throws Exception {
-    stubRow("WAIT_SOURCE", "WAIT_FINANCE");
+    stubRow("WAIT_SOURCE", "WAIT_FINANCE", "FULL_BOM", 1, 0, 0, 2, false);
 
     assertThatThrownBy(() -> gate.requireReadyAndStart(11L, "COMMERCIAL"))
-        .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("尚未完成财务审核和重新取价");
+        .isInstanceOfSatisfying(CollaborationCostingPendingException.class, error -> {
+          assertThat(error.blockingStatus()).isEqualTo("WAIT_BOM");
+          assertThat(error.errorCode()).isEqualTo("BOM_MISSING");
+          assertThat(error.gapCount()).isEqualTo(2);
+          assertThat(error).hasMessageContaining("尚未完成财务审核和重新取价");
+        });
+  }
+
+  @Test
+  void preservesPriceTypeStepForPendingCollaboration() throws Exception {
+    stubRow("WAIT_SOURCE", "WAIT_TECH", "PRICE_ONLY", 0, 0, 1, 4, true);
+
+    assertThatThrownBy(() -> gate.requireReadyAndStart(11L, "COMMERCIAL"))
+        .isInstanceOfSatisfying(CollaborationCostingPendingException.class, error -> {
+          assertThat(error.blockingStatus()).isEqualTo("WAIT_PRICE_TYPE");
+          assertThat(error.errorCode()).isEqualTo("PRICE_TYPE_MISSING");
+          assertThat(error.gapCount()).isEqualTo(4);
+        });
+  }
+
+  @Test
+  void preservesPriceStepForPendingCollaboration() throws Exception {
+    stubRow("WAIT_SOURCE", "PRICE_IN_PROGRESS", "PRICE_ONLY", 0, 0, 1, 3, false);
+
+    assertThatThrownBy(() -> gate.requireReadyAndStart(11L, "COMMERCIAL"))
+        .isInstanceOfSatisfying(CollaborationCostingPendingException.class, error -> {
+          assertThat(error.blockingStatus()).isEqualTo("WAIT_PRICE");
+          assertThat(error.errorCode()).isEqualTo("PRICE_MISSING");
+          assertThat(error.gapCount()).isEqualTo(3);
+        });
   }
 
   @Test
   void readyLinkStartsExistingSixStepCostingExactlyOnce() throws Exception {
-    stubRow("READY", "READY_FOR_COSTING");
+    stubRow("READY", "READY_FOR_COSTING", "PRICE_ONLY", 0, 0, 0, 0, false);
     QuoteCollaborationProductTask task = task("READY_FOR_COSTING");
     when(repository.findProductTaskById(21L,
         new CollaborationScope("COMMERCIAL", "C01"))).thenReturn(Optional.of(task));
@@ -76,14 +105,44 @@ class CollaborationCostingGateTest {
         new CollaborationScope("COMMERCIAL", "C01"), ProductAction.START_COSTING, operator);
   }
 
+  @Test
+  void workerWithoutWebPrincipalUsesSystemOperator() throws Exception {
+    stubRow("READY", "READY_FOR_COSTING", "PRICE_ONLY", 0, 0, 0, 0, false);
+    QuoteCollaborationProductTask task = task("READY_FOR_COSTING");
+    when(repository.findProductTaskById(21L,
+        new CollaborationScope("COMMERCIAL", "C01"))).thenReturn(Optional.of(task));
+    when(principalProvider.current()).thenThrow(new IllegalStateException("没有登录上下文"));
+
+    gate.requireReadyAndStart(11L, "COMMERCIAL");
+
+    verify(productStateService).transition(anyLong(), anyInt(), any(), any(),
+        org.mockito.ArgumentMatchers.argThat(principal ->
+            Long.valueOf(0L).equals(principal.userId())
+                && principal.roles().contains(CollaborationRole.SYSTEM)));
+  }
+
   @SuppressWarnings("unchecked")
-  private void stubRow(String linkStatus, String productStatus) throws Exception {
+  private void stubRow(
+      String linkStatus,
+      String productStatus,
+      String primaryScope,
+      int needBom,
+      int needPackage,
+      int needPrice,
+      int openGapCount,
+      boolean missingPriceType) throws Exception {
     ResultSet rs = mock(ResultSet.class);
     when(rs.getLong("product_task_id")).thenReturn(21L);
     when(rs.getString("link_status")).thenReturn(linkStatus);
     when(rs.getString("task_status")).thenReturn(productStatus);
     when(rs.getString("business_unit_type")).thenReturn("COMMERCIAL");
     when(rs.getString("applicable_org_code")).thenReturn("C01");
+    when(rs.getString("primary_scope")).thenReturn(primaryScope);
+    when(rs.getInt("need_bom")).thenReturn(needBom);
+    when(rs.getInt("need_package")).thenReturn(needPackage);
+    when(rs.getInt("need_price")).thenReturn(needPrice);
+    when(rs.getInt("open_gap_count")).thenReturn(openGapCount);
+    when(rs.getBoolean("missing_price_type")).thenReturn(missingPriceType);
     when(jdbc.query(anyString(), any(RowMapper.class), any(), any()))
         .thenAnswer(invocation -> List.of(((RowMapper<Object>) invocation.getArgument(1))
             .mapRow(rs, 0)));

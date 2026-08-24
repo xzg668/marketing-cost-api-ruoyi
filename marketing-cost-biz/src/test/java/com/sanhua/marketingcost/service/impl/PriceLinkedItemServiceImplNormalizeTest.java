@@ -32,6 +32,7 @@ import com.sanhua.marketingcost.mapper.PriceLinkedFormulaChangeLogMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
 import com.sanhua.marketingcost.service.PriceVariableBindingService;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
 import java.util.List;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
@@ -62,6 +63,7 @@ class PriceLinkedItemServiceImplNormalizeTest {
   private FormulaNormalizer normalizer;
   private FormulaDisplayRenderer renderer;
   private FormulaValidator validator;
+  private MaterialPriceTypeRouteSyncService priceTypeRouteSyncService;
   private PriceLinkedItemServiceImpl service;
 
   @BeforeAll
@@ -80,6 +82,7 @@ class PriceLinkedItemServiceImplNormalizeTest {
     fixedItemMapper = mock(PriceFixedItemMapper.class);
     formulaChangeLogMapper = mock(PriceLinkedFormulaChangeLogMapper.class);
     priceVariableMapper = mock(PriceVariableMapper.class);
+    priceTypeRouteSyncService = mock(MaterialPriceTypeRouteSyncService.class);
 
     // Renderer 读同一份 priceVariableMapper —— 保证写回读取语义一致
     when(priceVariableMapper.selectList(any(Wrapper.class))).thenReturn(List.of(
@@ -107,7 +110,8 @@ class PriceLinkedItemServiceImplNormalizeTest {
         mock(FactorVariableRegistryImpl.class),
         normalizer,
         renderer,
-        validator);
+        validator,
+        priceTypeRouteSyncService);
     service.setFormulaChangeLogMapper(formulaChangeLogMapper);
   }
 
@@ -126,6 +130,10 @@ class PriceLinkedItemServiceImplNormalizeTest {
     // DB 里只留 [code] 形式 —— 再也没有中文 token 漂移风险
     assertThat(captor.getValue().getFormulaExpr())
         .isEqualTo("[blank_weight]*0.001+[Cu]*2");
+    ArgumentCaptor<MaterialPriceTypeRouteSyncService.RouteCommand> routeCaptor =
+        ArgumentCaptor.forClass(MaterialPriceTypeRouteSyncService.RouteCommand.class);
+    verify(priceTypeRouteSyncService).sync(routeCaptor.capture());
+    assertThat(routeCaptor.getValue().priceType()).isEqualTo("联动价");
   }
 
   @Test

@@ -16,24 +16,22 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePrepareItemQueryRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareItemPageResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse;
+import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionResponse;
 import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
-import com.sanhua.marketingcost.entity.QuoteBomConfirmation;
-import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmBatch;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
-import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmBatchMapper;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
 import com.sanhua.marketingcost.service.FinancePricePrepareService;
 import com.sanhua.marketingcost.service.FinanceQuoteBasePriceService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
 import com.sanhua.marketingcost.service.PricePrepareService;
 import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
+import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
@@ -56,8 +54,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
 
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
-  private final QuoteBomConfirmationMapper bomConfirmationMapper;
-  private final QuotePriceTypeConfirmBatchMapper priceTypeConfirmBatchMapper;
+  private final QuotePriceTypeRecognitionService priceTypeRecognitionService;
   private final PricePrepareService pricePrepareService;
   private final FinancePricePrepareService financePricePrepareService;
   private final FinanceQuoteBasePriceService financeQuoteBasePriceService;
@@ -67,8 +64,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   public QuotePricePrepareWorkbenchServiceImpl(
       OaFormMapper oaFormMapper,
       OaFormItemMapper oaFormItemMapper,
-      QuoteBomConfirmationMapper bomConfirmationMapper,
-      QuotePriceTypeConfirmBatchMapper priceTypeConfirmBatchMapper,
+      QuotePriceTypeRecognitionService priceTypeRecognitionService,
       PricePrepareService pricePrepareService,
       FinancePricePrepareService financePricePrepareService,
       FinanceQuoteBasePriceService financeQuoteBasePriceService,
@@ -76,8 +72,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       PricePrepareReadinessService pricePrepareReadinessService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
-    this.bomConfirmationMapper = bomConfirmationMapper;
-    this.priceTypeConfirmBatchMapper = priceTypeConfirmBatchMapper;
+    this.priceTypeRecognitionService = priceTypeRecognitionService;
     this.pricePrepareService = pricePrepareService;
     this.financePricePrepareService = financePricePrepareService;
     this.financeQuoteBasePriceService = financeQuoteBasePriceService;
@@ -87,12 +82,9 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
 
   @Override
   public QuotePricePrepareWorkbenchResponse getPricePrepare(
-      String oaNo, Long oaFormItemId, String periodMonth) {
+    String oaNo, Long oaFormItemId, String periodMonth) {
     Scope scope = resolveScope(oaNo, oaFormItemId, periodMonth);
-    QuotePriceTypeConfirmBatch latestConfirm = latestConfirmedPriceType(scope);
-    QuotePricePrepareWorkbenchResponse response = queryResponse(scope);
-    response.setLatestPriceTypeConfirmNo(latestConfirm == null ? null : latestConfirm.getConfirmNo());
-    return response;
+    return queryResponse(scope);
   }
 
   @Override
@@ -101,18 +93,14 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       String oaNo, Long oaFormItemId, QuotePricePrepareGenerateRequest request) {
     Scope scope =
         resolveScope(oaNo, oaFormItemId, request == null ? null : request.getPeriodMonth());
-    requireBomConfirmed(scope);
-    QuotePriceTypeConfirmBatch confirm =
-        requireConfirmedPriceType(
-            scope, request == null ? null : request.getPriceTypeConfirmNo());
+    requireRecognizedPriceTypes(scope);
     QuotePricePrepareWorkbenchResponse persisted = queryResponse(scope);
     if (hasCompletedScenarioPair(persisted)) {
-      persisted.setLatestPriceTypeConfirmNo(confirm.getConfirmNo());
       return persisted;
     }
     PricePrepareCalculationResult calculation =
-        pricePrepareService.calculate(buildOaGenerateRequest(scope, confirm, request, true));
-    return previewResponse(scope, confirm, calculation);
+        pricePrepareService.calculate(buildOaGenerateRequest(scope, request, true));
+    return previewResponse(scope, calculation);
   }
 
   @Override
@@ -120,9 +108,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   public QuotePricePrepareWorkbenchResponse generate(
       String oaNo, Long oaFormItemId, QuotePricePrepareGenerateRequest request) {
     Scope scope = resolveScope(oaNo, oaFormItemId, request == null ? null : request.getPeriodMonth());
-    requireBomConfirmed(scope);
-    QuotePriceTypeConfirmBatch confirm =
-        requireConfirmedPriceType(scope, request == null ? null : request.getPriceTypeConfirmNo());
+    requireRecognizedPriceTypes(scope);
     if (request != null
         && request.getScenarioType() == QuotePriceScenarioType.FINANCE_QUOTE_BASE) {
       if (request.getVariableOverrides() != null && !request.getVariableOverrides().isEmpty()) {
@@ -131,22 +117,20 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       FinancePricePrepareGenerateResult finance = financePricePrepareService.generateFromOa(
           requireText(request.getSourcePrepareNo(), "OA价格准备批次号"));
       PricePrepareGenerateResult result = finance.prepareResult();
-      validateFinanceResult(scope, confirm, result);
+      validateFinanceResult(scope, result);
       QuotePricePrepareWorkbenchResponse response = queryResponse(scope);
-      response.setLatestPriceTypeConfirmNo(confirm.getConfirmNo());
       response.setGeneratedResult(result);
       return response;
     }
     com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest generateRequest =
-        buildOaGenerateRequest(scope, confirm, request, false);
+        buildOaGenerateRequest(scope, request, false);
     PricePrepareGenerateResult result = pricePrepareService.generate(generateRequest);
     FinancePricePrepareGenerateResult finance = null;
     if (shouldGenerateFinanceComparison(request, result)) {
       finance = financePricePrepareService.generateFromOa(result.getPrepareNo());
-      validateFinanceResult(scope, confirm, finance.prepareResult());
+      validateFinanceResult(scope, finance.prepareResult());
     }
     QuotePricePrepareWorkbenchResponse response = queryResponse(scope);
-    response.setLatestPriceTypeConfirmNo(confirm.getConfirmNo());
     response.setGeneratedResult(result);
     if (finance != null) {
       response.setFinanceGeneratedResult(finance.prepareResult());
@@ -160,7 +144,6 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   private com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest
       buildOaGenerateRequest(
           Scope scope,
-          QuotePriceTypeConfirmBatch confirm,
           QuotePricePrepareGenerateRequest request,
           boolean preview) {
     com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest generateRequest =
@@ -169,7 +152,6 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     generateRequest.setOaFormItemId(scope.oaFormItemId());
     generateRequest.setTopProductCode(scope.topProductCode());
     generateRequest.setTopProductCodes(List.of(scope.topProductCode()));
-    generateRequest.setPriceTypeConfirmNo(confirm.getConfirmNo());
     generateRequest.setPeriodMonth(scope.periodMonth());
     generateRequest.setPriceAsOfTime(request == null ? null : request.getPriceAsOfTime());
     generateRequest.setBusinessUnitType(scope.businessUnitType());
@@ -186,10 +168,8 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
 
   private QuotePricePrepareWorkbenchResponse previewResponse(
       Scope scope,
-      QuotePriceTypeConfirmBatch confirm,
       PricePrepareCalculationResult calculation) {
     QuotePricePrepareWorkbenchResponse response = queryResponse(scope);
-    response.setLatestPriceTypeConfirmNo(confirm.getConfirmNo());
     List<PricePrepareItem> items =
         calculation == null || calculation.getItems() == null
             ? List.of()
@@ -257,10 +237,15 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
 
   private boolean hasCompletedScenarioPair(QuotePricePrepareWorkbenchResponse response) {
     return response != null
+        && response.getReadiness() != null
+        && "READY".equalsIgnoreCase(response.getReadiness().getStatus())
         && response.getOaScenario() != null
         && response.getFinanceScenario() != null
         && isSuccessfulBatch(response.getOaScenario().getBatch())
-        && isSuccessfulBatch(response.getFinanceScenario().getBatch());
+        && isSuccessfulBatch(response.getFinanceScenario().getBatch())
+        && response.getReadiness().getPrepareNo() != null
+        && response.getReadiness().getPrepareNo().equals(
+            response.getOaScenario().getBatch().getPrepareNo());
   }
 
   private boolean shouldGenerateFinanceComparison(
@@ -273,15 +258,13 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
 
   private void validateFinanceResult(
       Scope scope,
-      QuotePriceTypeConfirmBatch confirm,
       PricePrepareGenerateResult result) {
     if (result == null
         || !scope.oaNo().equals(result.getOaNo())
         || !scope.oaFormItemId().equals(result.getOaFormItemId())
         || !scope.topProductCode().equals(result.getTopProductCode())
-        || !scope.periodMonth().equals(result.getPeriodMonth())
-        || !confirm.getConfirmNo().equals(result.getPriceTypeConfirmNo())) {
-      throw new QuoteIngestException("OA来源批次与当前产品、月份或价格类型确认批次不一致");
+        || !scope.periodMonth().equals(result.getPeriodMonth())) {
+      throw new QuoteIngestException("OA来源批次与当前产品或月份不一致");
     }
   }
 
@@ -291,22 +274,17 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     response.setOaFormItemId(scope.oaFormItemId());
     response.setTopProductCode(scope.topProductCode());
     response.setPeriodMonth(scope.periodMonth());
-    QuotePriceTypeConfirmBatch latestConfirm = latestConfirmedPriceType(scope);
-    String latestConfirmNo = latestConfirm == null ? null : latestConfirm.getConfirmNo();
-    response.setLatestPriceTypeConfirmNo(latestConfirmNo);
     response.setReadiness(
         pricePrepareReadinessService.check(
             scope.oaNo(),
             scope.oaFormItemId(),
             scope.topProductCode(),
-            scope.periodMonth(),
-            latestConfirmNo));
+            scope.periodMonth()));
     PricePrepareBatchQueryRequest batchQuery = new PricePrepareBatchQueryRequest();
     batchQuery.setOaNo(scope.oaNo());
     batchQuery.setOaFormItemId(scope.oaFormItemId());
     batchQuery.setTopProductCode(scope.topProductCode());
     batchQuery.setPeriodMonth(scope.periodMonth());
-    batchQuery.setPriceTypeConfirmNo(latestConfirmNo);
     batchQuery.setPage(DEFAULT_PAGE);
     batchQuery.setPageSize(DEFAULT_PAGE_SIZE);
     PricePrepareBatchPageResponse batches = pricePrepareQueryService.pageBatches(batchQuery);
@@ -316,7 +294,6 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     itemQuery.setOaFormItemId(scope.oaFormItemId());
     itemQuery.setTopProductCode(scope.topProductCode());
     itemQuery.setPeriodMonth(scope.periodMonth());
-    itemQuery.setPriceTypeConfirmNo(latestConfirmNo);
     itemQuery.setPage(DEFAULT_PAGE);
     itemQuery.setPageSize(DEFAULT_PAGE_SIZE);
     response.setItems(pricePrepareQueryService.pageItems(itemQuery));
@@ -325,7 +302,6 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     gapQuery.setOaFormItemId(scope.oaFormItemId());
     gapQuery.setTopProductCode(scope.topProductCode());
     gapQuery.setPeriodMonth(scope.periodMonth());
-    gapQuery.setPriceTypeConfirmNo(latestConfirmNo);
     gapQuery.setPage(DEFAULT_PAGE);
     gapQuery.setPageSize(DEFAULT_PAGE_SIZE);
     response.setGaps(pricePrepareQueryService.pageGaps(gapQuery));
@@ -339,7 +315,9 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       PricePrepareBatchPageResponse batches) {
     List<PricePrepareBatch> records =
         batches == null || batches.getRecords() == null ? List.of() : batches.getRecords();
-    ScenarioPair pair = selectScenarioPair(records);
+    ScenarioPair pair = selectScenarioPair(
+        records,
+        response.getReadiness() == null ? null : response.getReadiness().getPrepareNo());
     PricePrepareBatch oaBatch = pair == null ? null : pair.oaBatch();
     PricePrepareBatch financeBatch = pair == null ? null : pair.financeBatch();
 
@@ -385,7 +363,19 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
         && oaPrepareNo.equals(batch.getSourcePrepareNo());
   }
 
-  private ScenarioPair selectScenarioPair(List<PricePrepareBatch> records) {
+  private ScenarioPair selectScenarioPair(
+      List<PricePrepareBatch> records, String currentOaPrepareNo) {
+    if (StringUtils.hasText(currentOaPrepareNo)) {
+      PricePrepareBatch currentOa =
+          (records == null ? List.<PricePrepareBatch>of() : records).stream()
+              .filter(this::isOaBatch)
+              .filter(batch -> currentOaPrepareNo.equals(batch.getPrepareNo()))
+              .findFirst()
+              .orElse(null);
+      if (currentOa != null) {
+        return new ScenarioPair(currentOa, findFinanceBatch(records, currentOa));
+      }
+    }
     ScenarioPair latestOa = null;
     for (PricePrepareBatch batch : records == null ? List.<PricePrepareBatch>of() : records) {
       if (!isOaBatch(batch)) {
@@ -589,65 +579,21 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
         firstText(item.getBusinessUnitType(), form.getBusinessUnitType()));
   }
 
-  private void requireBomConfirmed(Scope scope) {
-    if (latestBomConfirmation(scope) == null) {
-      throw new QuoteIngestException("请先确认当前产品行 BOM 后再执行价格准备");
+  private QuotePriceTypeRecognitionResponse requireRecognizedPriceTypes(Scope scope) {
+    QuotePriceTypeRecognitionResponse current =
+        priceTypeRecognitionService.getRecognition(
+            scope.oaNo(), scope.oaFormItemId(), scope.periodMonth());
+    if (current == null || current.getSummary() == null) {
+      throw new QuoteIngestException("价格类型自动识别未返回结果，请稍后重试");
     }
-  }
-
-  private QuoteBomConfirmation latestBomConfirmation(Scope scope) {
-    return bomConfirmationMapper.selectOne(
-        Wrappers.<QuoteBomConfirmation>lambdaQuery()
-            .eq(QuoteBomConfirmation::getOaNo, scope.oaNo())
-            .eq(QuoteBomConfirmation::getOaFormItemId, scope.oaFormItemId())
-            .eq(QuoteBomConfirmation::getTopProductCode, scope.topProductCode())
-            .eq(QuoteBomConfirmation::getPeriodMonth, scope.periodMonth())
-            .eq(QuoteBomConfirmation::getConfirmStatus, QuoteBomConfirmation.STATUS_CONFIRMED)
-            .orderByDesc(QuoteBomConfirmation::getConfirmedAt)
-            .orderByDesc(QuoteBomConfirmation::getId)
-            .last("LIMIT 1"));
-  }
-
-  private QuotePriceTypeConfirmBatch requireConfirmedPriceType(
-      Scope scope, String priceTypeConfirmNo) {
-    QuotePriceTypeConfirmBatch batch =
-        StringUtils.hasText(priceTypeConfirmNo)
-            ? priceTypeByConfirmNo(scope, priceTypeConfirmNo.trim())
-            : latestConfirmedPriceType(scope);
-    if (batch == null) {
-      throw new QuoteIngestException("请先确认当前产品行价格类型后再执行价格准备");
+    int missingCount = current.getSummary().getMissingTypeCount() == null
+        ? 0
+        : current.getSummary().getMissingTypeCount();
+    if (missingCount > 0) {
+      throw new QuoteIngestException(
+          "当前产品有 " + missingCount + " 项价格类型无法自动识别，请先补充价格类型");
     }
-    if (!QuotePriceTypeConfirmBatch.STATUS_CONFIRMED.equals(batch.getStatus())) {
-      throw new QuoteIngestException("价格类型确认批次未确认，无法执行价格准备");
-    }
-    if (batch.getGapCount() != null && batch.getGapCount() > 0) {
-      throw new QuoteIngestException("价格类型仍存在缺口，无法执行价格准备");
-    }
-    return batch;
-  }
-
-  private QuotePriceTypeConfirmBatch priceTypeByConfirmNo(Scope scope, String confirmNo) {
-    return priceTypeConfirmBatchMapper.selectOne(
-        Wrappers.<QuotePriceTypeConfirmBatch>lambdaQuery()
-            .eq(QuotePriceTypeConfirmBatch::getConfirmNo, confirmNo)
-            .eq(QuotePriceTypeConfirmBatch::getOaNo, scope.oaNo())
-            .eq(QuotePriceTypeConfirmBatch::getOaFormItemId, scope.oaFormItemId())
-            .eq(QuotePriceTypeConfirmBatch::getProductCode, scope.topProductCode())
-            .eq(QuotePriceTypeConfirmBatch::getPeriodMonth, scope.periodMonth())
-            .last("LIMIT 1"));
-  }
-
-  private QuotePriceTypeConfirmBatch latestConfirmedPriceType(Scope scope) {
-    return priceTypeConfirmBatchMapper.selectOne(
-        Wrappers.<QuotePriceTypeConfirmBatch>lambdaQuery()
-            .eq(QuotePriceTypeConfirmBatch::getOaNo, scope.oaNo())
-            .eq(QuotePriceTypeConfirmBatch::getOaFormItemId, scope.oaFormItemId())
-            .eq(QuotePriceTypeConfirmBatch::getProductCode, scope.topProductCode())
-            .eq(QuotePriceTypeConfirmBatch::getPeriodMonth, scope.periodMonth())
-            .eq(QuotePriceTypeConfirmBatch::getStatus, QuotePriceTypeConfirmBatch.STATUS_CONFIRMED)
-            .orderByDesc(QuotePriceTypeConfirmBatch::getConfirmedAt)
-            .orderByDesc(QuotePriceTypeConfirmBatch::getId)
-            .last("LIMIT 1"));
+    return current;
   }
 
   private String resolveDefaultPeriod(OaForm form) {

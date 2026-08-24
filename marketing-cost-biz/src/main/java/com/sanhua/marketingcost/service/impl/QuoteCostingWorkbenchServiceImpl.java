@@ -2,8 +2,9 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse;
+import com.sanhua.marketingcost.dto.ingest.QuoteCostingWorkspaceResponse;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteBomConfirmationSummaryResponse;
+import com.sanhua.marketingcost.dto.quotebom.QuoteProductBomPreparationPreview;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchBomRowResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchHeaderResponse;
@@ -13,41 +14,35 @@ import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchRollupComp
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchTabResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkflowStatusResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareSummaryResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmationSummaryResponse;
+import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionSummaryResponse;
+import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionResponse;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
-import com.sanhua.marketingcost.entity.BomRawHierarchy;
-import com.sanhua.marketingcost.entity.BomSettlementRule;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
-import com.sanhua.marketingcost.entity.QuoteBomConfirmation;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
-import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmBatch;
-import com.sanhua.marketingcost.mapper.BomByproductCostRuleMapper;
+import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
-import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
-import com.sanhua.marketingcost.mapper.BomSettlementRuleMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostingWorkbenchSummaryMapper;
-import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmBatchMapper;
+import com.sanhua.marketingcost.enums.QuoteBomStatusCode;
+import com.sanhua.marketingcost.enums.QuoteCostRunStatus;
+import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
+import com.sanhua.marketingcost.service.QuoteEffectiveBomCostingService;
+import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
 import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
+import com.sanhua.marketingcost.service.QuoteProductBomPreparationService;
 import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomFeatureSwitch;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate;
-import com.sanhua.marketingcost.service.rule.BomRuleNodeContext;
-import com.sanhua.marketingcost.service.rule.BomRuleMaterialAttributeResolver;
-import com.sanhua.marketingcost.service.rule.BomRuleMaterialAttributes;
-import com.sanhua.marketingcost.service.rule.BomSettlementRuleMatcher;
-import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -73,30 +68,23 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   private static final String TAB_PARTIAL = "PARTIAL";
   private static final String TAB_DONE = "DONE";
   private static final String TAB_STALE = "STALE";
-  private static final String ACTION_EXCLUDE = "EXCLUDE";
-  private static final String RULE_CATEGORY_AUXILIARY_EXCLUDE = "AUXILIARY_EXCLUDE";
-  private static final String SHAPE_PURCHASED = "采购件";
-  private static final String SHAPE_MANUFACTURED = "制造件";
 
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
   private final QuoteBomStatusMapper quoteBomStatusMapper;
   private final BomCostingRowMapper bomCostingRowMapper;
   private final BomCostingRowSubRefMapper bomCostingRowSubRefMapper;
-  private final BomRawHierarchyMapper bomRawHierarchyMapper;
   private final MaterialMasterRawMapper materialMasterRawMapper;
-  private final BomSettlementRuleMapper settlementRuleMapper;
-  private final BomByproductCostRuleMapper byproductCostRuleMapper;
-  private final QuoteBomConfirmationMapper quoteBomConfirmationMapper;
   private final QuoteCostingWorkbenchSummaryMapper workbenchSummaryMapper;
-  private final QuotePriceTypeConfirmBatchMapper priceTypeConfirmBatchMapper;
   private final QuoteProductBomCostingBuildService costingBuildService;
-  private final BomSettlementRuleMatcher settlementRuleMatcher;
-  private final BomRuleMaterialAttributeResolver materialAttributeResolver;
-  private final QuoteCostRunVersionInvalidationService versionInvalidationService;
+  private final QuoteProductBomPreparationService bomPreparationService;
+  private final QuoteEffectiveBomCostingService effectiveBomCostingService;
+  private final QuoteCostingWorkspaceService workspaceService;
+  private final QuoteCostRunVersionInvalidationService costRunVersionInvalidationService;
   private final QuoteEffectiveBomFeatureSwitch effectiveBomFeatureSwitch;
   private final QuoteBomStatusService quoteBomStatusService;
   private final CollaborationCostingGate collaborationCostingGate;
+  private final QuotePriceTypeRecognitionService priceTypeRecognitionService;
 
   public QuoteCostingWorkbenchServiceImpl(
       OaFormMapper oaFormMapper,
@@ -104,39 +92,33 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       QuoteBomStatusMapper quoteBomStatusMapper,
       BomCostingRowMapper bomCostingRowMapper,
       BomCostingRowSubRefMapper bomCostingRowSubRefMapper,
-      BomRawHierarchyMapper bomRawHierarchyMapper,
       MaterialMasterRawMapper materialMasterRawMapper,
-      BomSettlementRuleMapper settlementRuleMapper,
-      BomByproductCostRuleMapper byproductCostRuleMapper,
-      QuoteBomConfirmationMapper quoteBomConfirmationMapper,
       QuoteCostingWorkbenchSummaryMapper workbenchSummaryMapper,
-      QuotePriceTypeConfirmBatchMapper priceTypeConfirmBatchMapper,
       QuoteProductBomCostingBuildService costingBuildService,
-      BomSettlementRuleMatcher settlementRuleMatcher,
-      BomRuleMaterialAttributeResolver materialAttributeResolver,
-      QuoteCostRunVersionInvalidationService versionInvalidationService,
+      QuoteProductBomPreparationService bomPreparationService,
+      QuoteEffectiveBomCostingService effectiveBomCostingService,
+      QuoteCostingWorkspaceService workspaceService,
+      QuoteCostRunVersionInvalidationService costRunVersionInvalidationService,
       QuoteEffectiveBomFeatureSwitch effectiveBomFeatureSwitch,
       QuoteBomStatusService quoteBomStatusService,
-      CollaborationCostingGate collaborationCostingGate) {
+      CollaborationCostingGate collaborationCostingGate,
+      QuotePriceTypeRecognitionService priceTypeRecognitionService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
     this.bomCostingRowMapper = bomCostingRowMapper;
     this.bomCostingRowSubRefMapper = bomCostingRowSubRefMapper;
-    this.bomRawHierarchyMapper = bomRawHierarchyMapper;
     this.materialMasterRawMapper = materialMasterRawMapper;
-    this.settlementRuleMapper = settlementRuleMapper;
-    this.byproductCostRuleMapper = byproductCostRuleMapper;
-    this.quoteBomConfirmationMapper = quoteBomConfirmationMapper;
     this.workbenchSummaryMapper = workbenchSummaryMapper;
-    this.priceTypeConfirmBatchMapper = priceTypeConfirmBatchMapper;
     this.costingBuildService = costingBuildService;
-    this.settlementRuleMatcher = settlementRuleMatcher;
-    this.materialAttributeResolver = materialAttributeResolver;
-    this.versionInvalidationService = versionInvalidationService;
+    this.bomPreparationService = bomPreparationService;
+    this.effectiveBomCostingService = effectiveBomCostingService;
+    this.workspaceService = workspaceService;
+    this.costRunVersionInvalidationService = costRunVersionInvalidationService;
     this.effectiveBomFeatureSwitch = effectiveBomFeatureSwitch;
     this.quoteBomStatusService = quoteBomStatusService;
     this.collaborationCostingGate = collaborationCostingGate;
+    this.priceTypeRecognitionService = priceTypeRecognitionService;
   }
 
   @Override
@@ -153,8 +135,9 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     String periodMonth = resolvePeriodMonth(form, status, item.getId(), productCode);
     List<BomCostingRow> rows = loadSnapshot(form.getOaNo(), item.getId(), productCode, periodMonth);
     String buildBatchId = latestBuildBatchId(rows);
+    QuoteCostingWorkspace workspace = workspaceService.find(item.getId(), periodMonth).orElse(null);
     return buildWorkbenchResponse(
-        form, item, status, productCode, periodMonth, rows, false, buildBatchId);
+        form, item, status, productCode, periodMonth, rows, false, buildBatchId, workspace);
   }
 
   @Override
@@ -166,43 +149,47 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     if (productCode == null) {
       throw new QuoteIngestException("当前产品行料号为空，无法发起核算");
     }
+    oaFormMapper.selectIdForCostingUpdate(form.getOaNo());
     collaborationCostingGate.requireReadyAndStart(item.getId(), form.getBusinessUnitType());
 
-    if (effectiveBomFeatureSwitch.isEnabled()) {
-      // 最终有效 BOM 第 1 步依赖成功月度原始 BOM。这里只同步当前产品，不能批量触碰同 OA 其他行。
-      quoteBomStatusService.checkItemForCostRun(form.getOaNo(), item.getId());
-    }
-
-    QuoteBomStatus status = latestBomStatus(form.getOaNo(), item.getId());
-    String periodMonth = resolvePeriodMonth(form, status, item.getId(), productCode);
-    List<BomCostingRow> rows = loadSnapshot(form.getOaNo(), item.getId(), productCode, periodMonth);
-    boolean bomConfirmed =
-        hasActiveBomConfirmation(form.getOaNo(), item.getId(), productCode, periodMonth);
-    // “发起核算”是未确认报价物料的显式刷新入口：即使规则/BOM更新时间没有变化，
-    // 也要覆盖旧快照，确保运行中的最新过滤规则能够立即生效。已确认快照必须保持稳定，
-    // 用户撤销确认后再次发起核算才允许重建。
-    boolean shouldBuild = !bomConfirmed;
+    String periodMonth = CostPricingPeriodUtils.currentPricingMonth();
+    // 用户明确发起或重新发起当前月核算时，旧的未确认试算不能继续显示为可确认。
+    // 仅将同产品、同月份的未完成试算标记为 STALE，历史成功版本保持不变。
+    costRunVersionInvalidationService.invalidateProduct(
+        form.getOaNo(), item.getId(), productCode, periodMonth);
     boolean generated = false;
-    String buildBatchId = latestBuildBatchId(rows);
-
-    if (shouldBuild) {
+    String buildBatchId = null;
+    if (effectiveBomFeatureSwitch.isEnabled()) {
+      QuoteBomStatusItemResponse checked =
+          quoteBomStatusService.checkItemForCostRun(form.getOaNo(), item.getId(), periodMonth);
+      if (isCostReadyBomStatus(checked == null ? null : checked.getBomStatus())) {
+        // 状态检查只证明 U9/补录源中存在 BOM，不会创建当前产品、当前核算月的准备记录。
+        // 单品启动必须先补齐这一步，再生成最终有效 BOM；禁止要求用户预先调用旧准备接口。
+        QuoteProductBomPreparationPreview preparation =
+            bomPreparationService.prepareByOaFormItem(item.getId(), LocalDate.now());
+        if (preparation != null && preparation.ready()) {
+          QuoteBomCostingBuildResponse build =
+              effectiveBomCostingService.prepareCurrent(form.getOaNo(), item.getId());
+          generated = true;
+          buildBatchId = build == null ? null : build.buildBatchId();
+        } else {
+          markWaitingForBom(form, item, productCode, periodMonth);
+        }
+      } else {
+        markWaitingForBom(form, item, productCode, periodMonth);
+      }
+    } else {
       QuoteBomCostingBuildResponse build =
           costingBuildService.buildByOaFormItem(item.getId(), periodMonth, LocalDate.now());
       generated = true;
-      if (!rows.isEmpty()) {
-        LocalDateTime now = LocalDateTime.now();
-        markBomConfirmationStale(form.getOaNo(), item.getId(), productCode, periodMonth, now);
-        markPriceTypeConfirmationStale(form.getOaNo(), item.getId(), productCode, periodMonth, now);
-        versionInvalidationService.invalidateProduct(
-            form.getOaNo(), item.getId(), productCode, periodMonth);
-      }
-      periodMonth = firstText(build == null ? null : build.periodMonth(), periodMonth);
       buildBatchId = build == null ? null : build.buildBatchId();
-      rows = loadSnapshot(form.getOaNo(), item.getId(), productCode, periodMonth);
     }
 
+    QuoteBomStatus status = latestBomStatus(form.getOaNo(), item.getId());
+    List<BomCostingRow> rows = loadSnapshot(form.getOaNo(), item.getId(), productCode, periodMonth);
+    QuoteCostingWorkspace workspace = workspaceService.find(item.getId(), periodMonth).orElse(null);
     return buildWorkbenchResponse(
-        form, item, status, productCode, periodMonth, rows, generated, buildBatchId);
+        form, item, status, productCode, periodMonth, rows, generated, buildBatchId, workspace);
   }
 
   private QuoteCostingWorkbenchResponse buildWorkbenchResponse(
@@ -213,24 +200,26 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       String periodMonth,
       List<BomCostingRow> rows,
       boolean generated,
-      String buildBatchId) {
-    QuoteBomConfirmationSummaryResponse latestBomConfirmation =
-        workbenchSummaryMapper.selectLatestBomConfirmation(
-            form.getOaNo(), item.getId(), productCode, periodMonth);
-    QuotePriceTypeConfirmationSummaryResponse latestPriceTypeConfirmation =
-        workbenchSummaryMapper.selectLatestPriceTypeConfirmation(
-            form.getOaNo(), item.getId(), productCode, periodMonth);
+      String buildBatchId,
+      QuoteCostingWorkspace workspace) {
+    QuotePriceTypeRecognitionSummaryResponse latestPriceTypeRecognition =
+        automaticPriceTypeSummary(
+            form,
+            item,
+            productCode,
+            periodMonth,
+            rows,
+            workspace);
     QuotePricePrepareSummaryResponse latestPricePrepare =
-        workbenchSummaryMapper.selectLatestPricePrepare(
-            form.getOaNo(), item.getId(), productCode, periodMonth);
+        currentPricePrepare(form, item, productCode, periodMonth, workspace);
     QuoteCostRunSummaryResponse latestCostRun =
         workbenchSummaryMapper.selectLatestCostRun(
             form.getOaNo(), item.getId(), productCode, periodMonth);
     QuoteCostingWorkflowStatusResponse workflowStatus =
         workflowStatus(
             rows,
-            latestBomConfirmation,
-            latestPriceTypeConfirmation,
+            workspace,
+            latestPriceTypeRecognition,
             latestPricePrepare,
             latestCostRun);
 
@@ -243,8 +232,8 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     response.setSnapshotGenerated(generated);
     response.setEffectiveBomEnabled(effectiveBomFeatureSwitch.isEnabled());
     response.setBuildBatchId(firstText(buildBatchId, latestBuildBatchId(rows)));
-    response.setLatestBomConfirmation(latestBomConfirmation);
-    response.setLatestPriceTypeConfirmation(latestPriceTypeConfirmation);
+    response.setCostingWorkspace(toWorkspaceResponse(workspace));
+    response.setLatestPriceTypeRecognition(latestPriceTypeRecognition);
     response.setLatestPricePrepare(latestPricePrepare);
     response.setLatestCostRun(latestCostRun);
     response.setBomRows(toBomRows(rows));
@@ -252,353 +241,88 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     return response;
   }
 
-  private boolean settlementRulesChangedSince(List<BomCostingRow> rows) {
-    LocalDateTime builtAt = latestBuiltAt(rows);
-    if (builtAt == null) {
-      return true;
+  private QuotePricePrepareSummaryResponse currentPricePrepare(
+      OaForm form,
+      OaFormItem item,
+      String productCode,
+      String periodMonth,
+      QuoteCostingWorkspace workspace) {
+    String currentPrepareNo =
+        trimToNull(workspace == null ? null : workspace.getCurrentPrepareNo());
+    if (currentPrepareNo != null) {
+      QuotePricePrepareSummaryResponse current =
+          workbenchSummaryMapper.selectPricePrepareByNo(currentPrepareNo);
+      if (current != null) {
+        return current;
+      }
     }
-    LocalDateTime latestRuleChangedAt = latestRuleChangedAt();
-    return latestRuleChangedAt != null && latestRuleChangedAt.isAfter(builtAt);
-  }
-
-  private boolean snapshotStale(List<BomCostingRow> rows, String productCode) {
-    return settlementRulesChangedSince(rows)
-        || sourceBomChangedSince(rows, productCode)
-        || rowsContainCurrentlyExcludedRawNode(rows, productCode)
-        || rowsContainUnexpandedCommercialMake(rows);
+    return workbenchSummaryMapper.selectLatestPricePrepare(
+        form.getOaNo(), item.getId(), productCode, periodMonth);
   }
 
   /**
-   * 识别跨组织接管规则上线前生成的旧快照。
-   *
-   * <p>旧快照把板换采购件直接写成 220/PLATE 采购叶子；如果同料号当前在商用组织是制造件，
-   * 该快照必须重建，不能继续在报价物料明细中展示为采购件。重建后的接管行是
-   * 210/COMMERCIAL 制造件，不会再次命中。
+   * 第三步直接读取当前 BOM 对应的价格类型路由，不生成 OA 价格类型确认批次。
    */
-  private boolean rowsContainUnexpandedCommercialMake(List<BomCostingRow> rows) {
-    Set<String> platePurchaseCodes =
-        (rows == null ? List.<BomCostingRow>of() : rows).stream()
-            .filter(Objects::nonNull)
-            .filter(row -> SHAPE_PURCHASED.equals(trimToNull(row.getShapeAttr())))
-            .filter(
-                row ->
-                    MaterialOrganization.PLATE.getPriceOrgCode().equals(
-                            trimToNull(row.getPriceOrgCode()))
-                        || MaterialOrganization.PLATE.getCode().equalsIgnoreCase(
-                            trimToNull(row.getMaterialOrganizationCode())))
-            .map(BomCostingRow::getMaterialCode)
-            .map(QuoteCostingWorkbenchServiceImpl::trimToNull)
-            .filter(Objects::nonNull)
-            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
-    if (platePurchaseCodes.isEmpty()) {
-      return false;
-    }
-    List<MaterialMasterRaw> commercialMasters =
-        materialMasterRawMapper.selectByLatestBatchAndCodes(
-            platePurchaseCodes, null, MaterialOrganization.COMMERCIAL.getCode());
-    return commercialMasters != null
-        && commercialMasters.stream()
-            .filter(Objects::nonNull)
-            .anyMatch(master -> SHAPE_MANUFACTURED.equals(trimToNull(master.getShapeAttr())));
-  }
-
-  private boolean sourceBomChangedSince(List<BomCostingRow> rows, String productCode) {
-    LocalDateTime builtAt = latestBuiltAt(rows);
-    if (builtAt == null) {
-      return true;
-    }
-    List<BomRawHierarchy> activeRows = loadActiveRawRows(rows, productCode);
-    if (activeRows.isEmpty()) {
-      return false;
-    }
-    LocalDateTime latestRawBuiltAt = null;
-    Set<Long> activeIds = new LinkedHashSet<>();
-    for (BomRawHierarchy row : activeRows) {
-      if (row.getId() != null) {
-        activeIds.add(row.getId());
-      }
-      if (row.getBuiltAt() != null
-          && (latestRawBuiltAt == null || row.getBuiltAt().isAfter(latestRawBuiltAt))) {
-        latestRawBuiltAt = row.getBuiltAt();
-      }
-    }
-    if (latestRawBuiltAt != null && latestRawBuiltAt.isAfter(builtAt)) {
-      return true;
-    }
-    for (BomCostingRow row : rows == null ? List.<BomCostingRow>of() : rows) {
-      Long rawId = row == null ? null : row.getRawHierarchyNodeId();
-      if (rawId != null && !activeIds.contains(rawId)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private boolean rowsContainCurrentlyExcludedRawNode(List<BomCostingRow> rows, String productCode) {
-    List<BomSettlementRule> excludeRules = listEnabledExcludeRules();
-    if (excludeRules.isEmpty()) {
-      return false;
-    }
-    List<BomRawHierarchy> activeRows = loadActiveRawRows(rows, productCode);
-    if (activeRows.isEmpty()) {
-      return false;
-    }
-    String materialOrganizationCode = materialOrganizationCode(activeRows, rows);
-    Map<String, BomRuleMaterialAttributes> resolvedMaterialAttributes =
-        materialOrganizationCode == null
-            ? Map.of()
-            : materialAttributeResolver.resolve(
-                activeRows.stream()
-                    .map(BomRawHierarchy::getMaterialCode)
-                    .map(QuoteCostingWorkbenchServiceImpl::trimToNull)
-                    .filter(Objects::nonNull)
-                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new)),
-                materialOrganizationCode);
-    Map<String, BomRuleMaterialAttributes> materialAttributes =
-        resolvedMaterialAttributes == null ? Map.of() : resolvedMaterialAttributes;
-    Map<Long, BomRawHierarchy> activeById = new LinkedHashMap<>();
-    Map<String, BomRawHierarchy> activeByPath = new LinkedHashMap<>();
-    Map<String, List<BomRawHierarchy>> childrenByParentPath = new HashMap<>();
-    for (BomRawHierarchy row : activeRows) {
-      if (row.getId() != null) {
-        activeById.put(row.getId(), row);
-      }
-      String path = normalizePath(row.getPath());
-      if (path != null) {
-        activeByPath.put(path, row);
-        String parentPath = parentPath(path);
-        if (parentPath != null) {
-          childrenByParentPath.computeIfAbsent(parentPath, ignored -> new ArrayList<>()).add(row);
-        }
-      }
-    }
-    LocalDate asOfDate = snapshotAsOfDate(rows);
-    for (BomCostingRow costingRow : rows == null ? List.<BomCostingRow>of() : rows) {
-      Long rawId = costingRow == null ? null : costingRow.getRawHierarchyNodeId();
-      BomRawHierarchy raw = rawId == null ? null : activeById.get(rawId);
-      if (raw == null) {
-        continue;
-      }
-      String path = normalizePath(raw.getPath());
-      BomRawHierarchy parent = activeByPath.get(parentPath(path));
-      List<BomRuleNodeContext> childContexts =
-          childrenByParentPath.getOrDefault(path, List.of()).stream()
-              .map(child -> toRuleContext(child, materialAttributes))
-              .toList();
-      BomSettlementRule hit =
-          settlementRuleMatcher
-              .match(
-                  toRuleContext(raw, materialAttributes),
-                  parent == null ? null : toRuleContext(parent, materialAttributes),
-                  childContexts,
-                  firstText(raw.getBomPurpose(), bomPurpose(rows)),
-                  asOfDate,
-                  excludeRules)
-              .orElse(null);
-      if (hit != null && ACTION_EXCLUDE.equals(hit.getSettlementAction()) && shouldExcludeRaw(raw, hit)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private static String materialOrganizationCode(
-      List<BomRawHierarchy> rawRows, List<BomCostingRow> costingRows) {
-    String explicitOrganization =
-        (costingRows == null ? List.<BomCostingRow>of() : costingRows).stream()
-            .map(BomCostingRow::getMaterialOrganizationCode)
-            .map(QuoteCostingWorkbenchServiceImpl::trimToNull)
-            .filter(Objects::nonNull)
-            .findFirst()
-            .orElse(null);
-    if (explicitOrganization != null) {
-      return MaterialOrganization.normalize(explicitOrganization);
-    }
-    String priceOrgCode =
-        (rawRows == null ? List.<BomRawHierarchy>of() : rawRows).stream()
-            .map(BomRawHierarchy::getPriceOrgCode)
-            .map(QuoteCostingWorkbenchServiceImpl::trimToNull)
-            .filter(Objects::nonNull)
-            .findFirst()
-            .orElseGet(
-                () ->
-                    (costingRows == null ? List.<BomCostingRow>of() : costingRows).stream()
-                        .map(BomCostingRow::getPriceOrgCode)
-                        .map(QuoteCostingWorkbenchServiceImpl::trimToNull)
-                        .filter(Objects::nonNull)
-                        .findFirst()
-                        .orElse(null));
-    return priceOrgCode == null
-        ? null
-        : MaterialOrganization.fromPriceOrgCode(priceOrgCode).getCode();
-  }
-
-  private List<BomRawHierarchy> loadActiveRawRows(List<BomCostingRow> rows, String productCode) {
-    String priceOrgCode = priceOrgCode(rows);
-    String bomPurpose = bomPurpose(rows);
-    LocalDate asOfDate = snapshotAsOfDate(rows);
-    List<BomRawHierarchy> rawRows =
-        bomRawHierarchyMapper.selectList(
-            Wrappers.<BomRawHierarchy>lambdaQuery()
-                .eq(StringUtils.hasText(priceOrgCode), BomRawHierarchy::getPriceOrgCode, priceOrgCode)
-                .eq(BomRawHierarchy::getTopProductCode, productCode)
-                .eq(StringUtils.hasText(bomPurpose), BomRawHierarchy::getBomPurpose, bomPurpose)
-                .le(BomRawHierarchy::getEffectiveFrom, asOfDate)
-                .and(
-                    w ->
-                        w.isNull(BomRawHierarchy::getEffectiveTo)
-                            .or()
-                            .ge(BomRawHierarchy::getEffectiveTo, asOfDate))
-                .orderByAsc(BomRawHierarchy::getLevel)
-                .orderByAsc(BomRawHierarchy::getPath)
-                .orderByAsc(BomRawHierarchy::getSortSeq)
-                .orderByAsc(BomRawHierarchy::getId));
-    if (rawRows == null || rawRows.isEmpty()) {
-      return List.of();
-    }
-    return BomEffectiveTreePruner.prune(rawRows, productCode);
-  }
-
-  private List<BomSettlementRule> listEnabledExcludeRules() {
-    List<BomSettlementRule> rules =
-        settlementRuleMapper.selectList(
-            Wrappers.<BomSettlementRule>lambdaQuery()
-                .eq(BomSettlementRule::getEnabled, 1)
-                .eq(BomSettlementRule::getSettlementAction, ACTION_EXCLUDE)
-                .orderByAsc(BomSettlementRule::getPriority));
-    return rules == null ? List.of() : rules;
-  }
-
-  private boolean shouldExcludeRaw(BomRawHierarchy raw, BomSettlementRule rule) {
-    if (!RULE_CATEGORY_AUXILIARY_EXCLUDE.equals(rule.getRuleCategory())) {
-      return true;
-    }
-    return Integer.valueOf(1).equals(raw.getIsLeaf())
-        && SHAPE_PURCHASED.equals(firstText(raw.getShapeAttr(), raw.getSourceCategory()));
-  }
-
-  private BomRuleNodeContext toRuleContext(
-      BomRawHierarchy raw, Map<String, BomRuleMaterialAttributes> materialAttributes) {
-    BomRuleMaterialAttributes attributes =
-        materialAttributes.get(trimToNull(raw.getMaterialCode()));
-    return new BomRuleNodeContext(
-        raw.getMaterialCode(),
-        raw.getMaterialName(),
-        raw.getMaterialCategory1(),
-        attributes == null ? null : attributes.mainCategoryCode(),
-        firstText(raw.getMaterialCategory2(), raw.getMaterialCategory1()),
-        attributes == null ? null : attributes.purchaseCategory(),
-        raw.getShapeAttr(),
-        raw.getCostElementCode(),
-        raw.getSourceCategory(),
-        raw.getBusinessUnitType(),
-        raw.getBomPurpose());
-  }
-
-  private String priceOrgCode(List<BomCostingRow> rows) {
-    for (BomCostingRow row : rows == null ? List.<BomCostingRow>of() : rows) {
-      String value = trimToNull(row == null ? null : row.getPriceOrgCode());
-      if (value != null) {
-        return value;
-      }
-    }
-    return null;
-  }
-
-  private String bomPurpose(List<BomCostingRow> rows) {
-    for (BomCostingRow row : rows == null ? List.<BomCostingRow>of() : rows) {
-      String value = trimToNull(row == null ? null : row.getBomPurpose());
-      if (value != null) {
-        return value;
-      }
-    }
-    return null;
-  }
-
-  private LocalDate snapshotAsOfDate(List<BomCostingRow> rows) {
-    for (BomCostingRow row : rows == null ? List.<BomCostingRow>of() : rows) {
-      if (row != null && row.getAsOfDate() != null) {
-        return row.getAsOfDate();
-      }
-    }
-    return LocalDate.now();
-  }
-
-  private String parentPath(String path) {
-    String normalized = normalizePath(path);
-    if (normalized == null) {
+  private QuotePriceTypeRecognitionSummaryResponse automaticPriceTypeSummary(
+      OaForm form,
+      OaFormItem item,
+      String productCode,
+      String periodMonth,
+      List<BomCostingRow> rows,
+      QuoteCostingWorkspace workspace) {
+    if (!TAB_DONE.equals(quoteBomStatus(rows, workspace))) {
       return null;
     }
-    int lastSlashBeforeTail = normalized.lastIndexOf('/', normalized.length() - 2);
-    if (lastSlashBeforeTail <= 0) {
+    QuotePriceTypeRecognitionResponse recognition =
+        priceTypeRecognitionService.getRecognition(form.getOaNo(), item.getId(), periodMonth);
+    if (recognition == null || recognition.getSummary() == null) {
       return null;
     }
-    return normalized.substring(0, lastSlashBeforeTail + 1);
+    var summary = recognition.getSummary();
+    QuotePriceTypeRecognitionSummaryResponse response =
+        new QuotePriceTypeRecognitionSummaryResponse();
+    response.setOaNo(form.getOaNo());
+    response.setOaFormItemId(item.getId());
+    response.setProductCode(productCode);
+    response.setPeriodMonth(periodMonth);
+    response.setBomBuildBatchId(recognition.getBomBuildBatchId());
+    response.setTotalCount(summary.getReadyForPricePrepareCount());
+    response.setConfirmedCount(summary.getConfiguredTypeCount());
+    response.setGapCount(summary.getMissingTypeCount());
+    response.setReferencePriceCount(summary.getReferencePriceCount());
+    boolean ready = !positive(summary.getMissingTypeCount());
+    response.setStatus(ready ? "AUTO_READY" : "MISSING_PRICE_TYPE");
+    response.setMessage(ready ? "价格类型已自动识别" : "存在缺失价格类型");
+
+    return response;
   }
 
-  private String normalizePath(String path) {
-    String value = trimToNull(path);
-    if (value == null) {
-      return null;
-    }
-    return value.endsWith("/") ? value : value + "/";
+  private void markWaitingForBom(
+      OaForm form, OaFormItem item, String productCode, String periodMonth) {
+    QuoteCostingWorkspace workspace =
+        workspaceService.lockOrCreate(
+            form.getOaNo(),
+            item.getId(),
+            productCode,
+            periodMonth,
+            firstText(item.getBusinessUnitType(), form.getBusinessUnitType()));
+    int expectedVersion = workspace.getLockVersion() == null ? 0 : workspace.getLockVersion();
+    workspace.setWorkspaceStatus("WAIT_BOM");
+    workspace.setCurrentStep("QUOTE_BOM");
+    workspace.setStaleReasonCode("BOM_MISSING");
+    workspace.setLastErrorStep("QUOTE_BOM");
+    workspace.setLastErrorCode("BOM_MISSING");
+    workspace.setLastErrorMessage("当前产品没有可用于核算的 BOM，请由产品技术补录后重试");
+    workspace.setLastCheckedAt(LocalDateTime.now());
+    workspaceService.update(workspace, expectedVersion);
   }
 
-  private LocalDateTime latestBuiltAt(List<BomCostingRow> rows) {
-    LocalDateTime latest = null;
-    for (BomCostingRow row : rows == null ? List.<BomCostingRow>of() : rows) {
-      if (row == null || row.getBuiltAt() == null) {
-        continue;
-      }
-      if (latest == null || row.getBuiltAt().isAfter(latest)) {
-        latest = row.getBuiltAt();
-      }
-    }
-    return latest;
-  }
-
-  private LocalDateTime latestRuleChangedAt() {
-    return maxTime(
-        settlementRuleMapper.selectLatestRuleChangeTime(),
-        byproductCostRuleMapper.selectLatestRuleChangeTime());
-  }
-
-  private LocalDateTime maxTime(LocalDateTime first, LocalDateTime second) {
-    if (first == null) {
-      return second;
-    }
-    if (second == null) {
-      return first;
-    }
-    return first.isAfter(second) ? first : second;
-  }
-
-  private void markBomConfirmationStale(
-      String oaNo, Long oaFormItemId, String productCode, String periodMonth, LocalDateTime now) {
-    quoteBomConfirmationMapper.update(
-        null,
-        Wrappers.<QuoteBomConfirmation>lambdaUpdate()
-            .set(QuoteBomConfirmation::getConfirmStatus, QuoteBomConfirmation.STATUS_STALE)
-            .set(QuoteBomConfirmation::getUpdatedAt, now)
-            .eq(QuoteBomConfirmation::getOaNo, oaNo)
-            .eq(QuoteBomConfirmation::getOaFormItemId, oaFormItemId)
-            .eq(QuoteBomConfirmation::getTopProductCode, productCode)
-            .eq(QuoteBomConfirmation::getPeriodMonth, periodMonth)
-            .eq(QuoteBomConfirmation::getConfirmStatus, QuoteBomConfirmation.STATUS_CONFIRMED));
-  }
-
-  private void markPriceTypeConfirmationStale(
-      String oaNo, Long oaFormItemId, String productCode, String periodMonth, LocalDateTime now) {
-    priceTypeConfirmBatchMapper.update(
-        null,
-        Wrappers.<QuotePriceTypeConfirmBatch>lambdaUpdate()
-            .set(QuotePriceTypeConfirmBatch::getStatus, QuotePriceTypeConfirmBatch.STATUS_STALE)
-            .set(QuotePriceTypeConfirmBatch::getUpdatedAt, now)
-            .eq(QuotePriceTypeConfirmBatch::getOaNo, oaNo)
-            .eq(QuotePriceTypeConfirmBatch::getOaFormItemId, oaFormItemId)
-            .eq(QuotePriceTypeConfirmBatch::getProductCode, productCode)
-            .eq(QuotePriceTypeConfirmBatch::getPeriodMonth, periodMonth)
-            .eq(QuotePriceTypeConfirmBatch::getStatus, QuotePriceTypeConfirmBatch.STATUS_CONFIRMED));
+  private boolean isCostReadyBomStatus(String status) {
+    return QuoteBomStatusCode.SYNCED.getCode().equals(status)
+        || QuoteBomStatusCode.REUSED_CURRENT_MONTH.getCode().equals(status)
+        || QuoteBomStatusCode.CURRENT_MONTH_QUOTED.getCode().equals(status)
+        || QuoteBomStatusCode.U9_BOM_EXISTS.getCode().equals(status)
+        || QuoteBomStatusCode.MANUAL_ENTERED.getCode().equals(status);
   }
 
   private OaForm requireForm(String oaNo) {
@@ -733,6 +457,33 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     return response;
   }
 
+  private QuoteCostingWorkspaceResponse toWorkspaceResponse(QuoteCostingWorkspace workspace) {
+    if (workspace == null) {
+      return null;
+    }
+    QuoteCostingWorkspaceResponse response = new QuoteCostingWorkspaceResponse();
+    response.setPeriodMonth(workspace.getPeriodMonth());
+    response.setWorkspaceStatus(workspace.getWorkspaceStatus());
+    response.setCurrentStep(workspace.getCurrentStep());
+    response.setInputChanged(
+        StringUtils.hasText(workspace.getInputFingerprint())
+            && StringUtils.hasText(workspace.getLastSuccessInputFingerprint())
+            && !workspace.getInputFingerprint().equals(workspace.getLastSuccessInputFingerprint()));
+    response.setGapCount(workspace.getGapCount());
+    response.setCarriedForwardPriceCount(workspace.getCarriedForwardPriceCount());
+    response.setStaleReasonCode(workspace.getStaleReasonCode());
+    response.setLastErrorStep(workspace.getLastErrorStep());
+    response.setLastErrorCode(workspace.getLastErrorCode());
+    response.setLastErrorMessage(workspace.getLastErrorMessage());
+    response.setCurrentBomBuildBatchId(workspace.getCurrentBomBuildBatchId());
+    response.setCurrentPrepareNo(workspace.getCurrentPrepareNo());
+    response.setCurrentCostVersionId(workspace.getCurrentCostVersionId());
+    response.setLastTaskId(workspace.getLastTaskId());
+    response.setLockVersion(workspace.getLockVersion());
+    response.setLastCheckedAt(workspace.getLastCheckedAt());
+    return response;
+  }
+
   private List<QuoteCostingWorkbenchBomRowResponse> toBomRows(List<BomCostingRow> rows) {
     List<BomCostingRow> sourceRows = rows == null ? List.of() : rows;
     Map<Long, List<QuoteCostingWorkbenchRollupComponentResponse>> componentsByRowId =
@@ -834,11 +585,21 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
             firstText(
                 total.childName,
                 childArchive == null ? null : childArchive.getMaterialName()));
+        component.setChildDrawingNo(
+            firstText(
+                childArchive == null ? null : childArchive.getDrawingNo(),
+                firstText(
+                    childArchive == null ? null : childArchive.getMaterialModel(),
+                    childArchive == null ? null : childArchive.getMaterialSpec())));
         component.setParentDrawingNo(
             firstText(
                 parentArchive == null ? null : parentArchive.getDrawingNo(),
                 parent == null ? null : parent.getMaterialSpec()));
-        component.setUsageQty(total.usageQty);
+        component.setUsageQty(
+            RollupQuantityNormalizer.perParent(
+                total.qtyPerTop,
+                parent == null ? null : parent.getQtyPerTop(),
+                total.firstUsageQty));
         component.setQtyPerTop(total.qtyPerTop);
         component.setUnit(
             childArchive == null ? null : trimToNull(childArchive.getUnit()));
@@ -883,14 +644,13 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     response.setPath(row.getPath());
     response.setSettlementRowType(row.getSettlementRowType());
     response.setSubtreeCostRequired(row.getSubtreeCostRequired());
-    response.setManualModified(row.getManualModified());
     return response;
   }
 
   private static final class RollupDisplayComponentTotal {
     private final String childCode;
     private String childName;
-    private BigDecimal usageQty;
+    private BigDecimal firstUsageQty;
     private BigDecimal qtyPerTop;
 
     private RollupDisplayComponentTotal(String childCode) {
@@ -899,36 +659,23 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
 
     private void accept(BomCostingRowSubRef ref) {
       childName = firstText(childName, ref.getSubMaterialName());
-      usageQty = addNullable(usageQty, ref.getSubQtyPerParent());
+      if (firstUsageQty == null) {
+        firstUsageQty = ref.getSubQtyPerParent();
+      }
       qtyPerTop = addNullable(qtyPerTop, ref.getSubQtyPerTop());
     }
   }
 
-  private boolean hasActiveBomConfirmation(
-      String oaNo, Long oaFormItemId, String topProductCode, String periodMonth) {
-    QuoteBomConfirmation confirmation =
-        quoteBomConfirmationMapper.selectOne(
-            Wrappers.<QuoteBomConfirmation>lambdaQuery()
-                .eq(QuoteBomConfirmation::getOaNo, oaNo)
-                .eq(QuoteBomConfirmation::getOaFormItemId, oaFormItemId)
-                .eq(QuoteBomConfirmation::getTopProductCode, topProductCode)
-                .eq(QuoteBomConfirmation::getPeriodMonth, periodMonth)
-                .eq(QuoteBomConfirmation::getConfirmStatus, QuoteBomConfirmation.STATUS_CONFIRMED)
-                .orderByDesc(QuoteBomConfirmation::getConfirmedAt)
-                .orderByDesc(QuoteBomConfirmation::getId)
-                .last("LIMIT 1"));
-    return confirmation != null;
-  }
-
   private QuoteCostingWorkflowStatusResponse workflowStatus(
       List<BomCostingRow> rows,
-      QuoteBomConfirmationSummaryResponse bomConfirmation,
-      QuotePriceTypeConfirmationSummaryResponse priceTypeConfirmation,
+      QuoteCostingWorkspace workspace,
+      QuotePriceTypeRecognitionSummaryResponse priceTypeRecognition,
       QuotePricePrepareSummaryResponse pricePrepare,
       QuoteCostRunSummaryResponse costRun) {
-    String quoteBomStatus = quoteBomStatus(rows, bomConfirmation);
-    String priceTypeStatus = priceTypeStatus(quoteBomStatus, priceTypeConfirmation);
-    String pricePrepareStatus = pricePrepareStatus(priceTypeStatus, priceTypeConfirmation, pricePrepare);
+    String quoteBomStatus = quoteBomStatus(rows, workspace);
+    String priceTypeStatus = priceTypeStatus(quoteBomStatus, priceTypeRecognition);
+    String pricePrepareStatus =
+        pricePrepareStatus(priceTypeStatus, workspace, pricePrepare);
     String costRunStatus = costRunStatus(pricePrepareStatus, pricePrepare, costRun);
 
     QuoteCostingWorkflowStatusResponse response = new QuoteCostingWorkflowStatusResponse();
@@ -943,24 +690,22 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   }
 
   private String quoteBomStatus(
-      List<BomCostingRow> rows, QuoteBomConfirmationSummaryResponse bomConfirmation) {
+      List<BomCostingRow> rows, QuoteCostingWorkspace workspace) {
+    if (workspace != null && "STALE".equalsIgnoreCase(trimToNull(workspace.getWorkspaceStatus()))) {
+      return TAB_STALE;
+    }
+    if (workspace != null
+        && "WAIT_BOM".equalsIgnoreCase(trimToNull(workspace.getWorkspaceStatus()))) {
+      return TAB_BLOCKED;
+    }
     if (rows == null || rows.isEmpty()) {
       return TAB_BLOCKED;
     }
-    if (bomConfirmation == null) {
-      return TAB_PENDING;
-    }
-    if ("CONFIRMED".equalsIgnoreCase(trimToNull(bomConfirmation.getConfirmStatus()))) {
-      return TAB_DONE;
-    }
-    if ("STALE".equalsIgnoreCase(trimToNull(bomConfirmation.getConfirmStatus()))) {
-      return TAB_STALE;
-    }
-    return TAB_PENDING;
+    return TAB_DONE;
   }
 
   private String priceTypeStatus(
-      String quoteBomStatus, QuotePriceTypeConfirmationSummaryResponse confirmation) {
+      String quoteBomStatus, QuotePriceTypeRecognitionSummaryResponse confirmation) {
     if (!TAB_DONE.equals(quoteBomStatus)) {
       return TAB_BLOCKED;
     }
@@ -971,10 +716,12 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       return TAB_STALE;
     }
     if (positive(confirmation.getGapCount())
-        || "MISSING_TYPE".equalsIgnoreCase(trimToNull(confirmation.getStatus()))) {
+        || "MISSING_TYPE".equalsIgnoreCase(trimToNull(confirmation.getStatus()))
+        || "MISSING_PRICE_TYPE".equalsIgnoreCase(trimToNull(confirmation.getStatus()))) {
       return TAB_PARTIAL;
     }
-    if ("CONFIRMED".equalsIgnoreCase(trimToNull(confirmation.getStatus()))) {
+    if ("AUTO_READY".equalsIgnoreCase(trimToNull(confirmation.getStatus()))
+        || "CONFIRMED".equalsIgnoreCase(trimToNull(confirmation.getStatus()))) {
       return TAB_DONE;
     }
     return TAB_PENDING;
@@ -982,17 +729,18 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
 
   private String pricePrepareStatus(
       String priceTypeStatus,
-      QuotePriceTypeConfirmationSummaryResponse confirmation,
+      QuoteCostingWorkspace workspace,
       QuotePricePrepareSummaryResponse pricePrepare) {
     if (!TAB_DONE.equals(priceTypeStatus)) {
       return TAB_BLOCKED;
     }
-    if (pricePrepare == null) {
-      return TAB_PENDING;
+    String workspaceStatus = trimToNull(workspace == null ? null : workspace.getWorkspaceStatus());
+    if ("PRICE_BLOCKED".equalsIgnoreCase(workspaceStatus)
+        || "PRICE_ERROR".equalsIgnoreCase(workspaceStatus)
+        || positive(workspace == null ? null : workspace.getGapCount())) {
+      return TAB_PARTIAL;
     }
-    if (!Objects.equals(
-        trimToNull(confirmation == null ? null : confirmation.getConfirmNo()),
-        trimToNull(pricePrepare.getPriceTypeConfirmNo()))) {
+    if (pricePrepare == null) {
       return TAB_PENDING;
     }
     if ("STALE".equalsIgnoreCase(trimToNull(pricePrepare.getStatus()))) {
@@ -1021,32 +769,32 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     }
     if (!Objects.equals(
         trimToNull(pricePrepare == null ? null : pricePrepare.getPrepareNo()),
-        trimToNull(costRun.getPricePrepareNo()))) {
+        trimToNull(firstText(costRun.getOaPricePrepareNo(), costRun.getPricePrepareNo())))) {
       return TAB_PENDING;
     }
     if ("STALE".equalsIgnoreCase(trimToNull(costRun.getStatus()))) {
       return TAB_STALE;
     }
-    if ("CONFIRMED".equalsIgnoreCase(trimToNull(costRun.getStatus()))) {
+    if (QuoteCostRunStatus.isCurrentSuccess(costRun.getStatus())) {
       return TAB_DONE;
     }
-    if ("TRIAL".equalsIgnoreCase(trimToNull(costRun.getStatus()))) {
+    if (QuoteCostRunStatus.isInProgress(costRun.getStatus())) {
       return TAB_PARTIAL;
     }
     return TAB_PENDING;
   }
 
   private String currentBlockedStep(QuoteCostingWorkflowStatusResponse status) {
-    if (TAB_BLOCKED.equals(status.getQuoteBomStatus())) {
+    if (!TAB_DONE.equals(status.getQuoteBomStatus())) {
       return "QUOTE_BOM";
     }
-    if (TAB_BLOCKED.equals(status.getPriceTypeConfirmationStatus())) {
+    if (!TAB_DONE.equals(status.getPriceTypeConfirmationStatus())) {
       return "PRICE_TYPE_CONFIRMATION";
     }
-    if (TAB_BLOCKED.equals(status.getPricePrepareStatus())) {
+    if (!TAB_DONE.equals(status.getPricePrepareStatus())) {
       return "PRICE_PREPARE";
     }
-    if (TAB_BLOCKED.equals(status.getCostRunStatus())) {
+    if (!TAB_DONE.equals(status.getCostRunStatus())) {
       return "COST_RUN";
     }
     return null;
@@ -1059,19 +807,19 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   private List<QuoteCostingWorkbenchTabResponse> tabs(QuoteCostingWorkflowStatusResponse status) {
     List<QuoteCostingWorkbenchTabResponse> tabs = new ArrayList<>();
     tabs.add(tab("PRODUCT_DETAIL", "产品详情", status.getProductDetailStatus(), null));
-    tabs.add(tab("QUOTE_BOM", "报价物料确认", status.getQuoteBomStatus(), null));
+    tabs.add(tab("QUOTE_BOM", "报价物料明细", status.getQuoteBomStatus(), null));
     tabs.add(
         tab(
             "PRICE_TYPE_CONFIRMATION",
-            "价格类型确认",
+            "价格类型识别",
             status.getPriceTypeConfirmationStatus(),
-            blockedReason(status.getPriceTypeConfirmationStatus(), "请先确认报价物料")));
+            blockedReason(status.getPriceTypeConfirmationStatus(), "请先生成报价物料")));
     tabs.add(
         tab(
             "PRICE_PREPARE",
             "价格准备",
             status.getPricePrepareStatus(),
-            blockedReason(status.getPricePrepareStatus(), "请先确认价格类型")));
+            blockedReason(status.getPricePrepareStatus(), "请先补齐价格类型")));
     tabs.add(
         tab(
             "COST_RUN",

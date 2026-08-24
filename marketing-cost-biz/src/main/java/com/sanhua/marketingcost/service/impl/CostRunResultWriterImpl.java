@@ -5,58 +5,37 @@ import com.sanhua.marketingcost.dto.CostRunObjectResult;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.entity.CostRunCostItem;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
-import com.sanhua.marketingcost.entity.CostRunResult;
-import com.sanhua.marketingcost.entity.OaForm;
-import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.enums.CostItemCategory;
 import com.sanhua.marketingcost.mapper.CostRunCostItemMapper;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
-import com.sanhua.marketingcost.mapper.CostRunResultMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
-import com.sanhua.marketingcost.service.CostRunResultService;
 import com.sanhua.marketingcost.service.CostRunResultWriter;
 import com.sanhua.marketingcost.service.CostRunTraceSnapshotService;
-import java.math.BigDecimal;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.util.StringUtils;
 
+/** 成本版本明细写入器；结果头统一由 lp_quote_cost_run_version 保存。 */
 @Service
 public class CostRunResultWriterImpl implements CostRunResultWriter {
 
-  private static final Logger log = LoggerFactory.getLogger(CostRunResultWriterImpl.class);
-
-  private static final String COST_CODE_TOTAL = "TOTAL";
-  private static final int MAX_REMARK_LENGTH = 4000;
+  private static final int MAX_PART_REMARK_LENGTH = 200;
+  private static final int MAX_COST_REMARK_LENGTH = 4000;
   private static final String TRUNCATED_SUFFIX = "...(truncated)";
-  private static final DateTimeFormatter PERIOD_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM");
 
-  private final CostRunResultService costRunResultService;
-  private final CostRunResultMapper costRunResultMapper;
   private final CostRunPartItemMapper costRunPartItemMapper;
   private final CostRunCostItemMapper costRunCostItemMapper;
   private final PricePrepareItemMapper pricePrepareItemMapper;
   private final CostRunTraceSnapshotService traceSnapshotService;
 
   public CostRunResultWriterImpl(
-      CostRunResultService costRunResultService,
-      CostRunResultMapper costRunResultMapper,
       CostRunPartItemMapper costRunPartItemMapper,
       CostRunCostItemMapper costRunCostItemMapper,
       PricePrepareItemMapper pricePrepareItemMapper,
       CostRunTraceSnapshotService traceSnapshotService) {
-    this.costRunResultService = costRunResultService;
-    this.costRunResultMapper = costRunResultMapper;
     this.costRunPartItemMapper = costRunPartItemMapper;
     this.costRunCostItemMapper = costRunCostItemMapper;
     this.pricePrepareItemMapper = pricePrepareItemMapper;
@@ -65,101 +44,26 @@ public class CostRunResultWriterImpl implements CostRunResultWriter {
 
   @Override
   @Transactional
-  public void writeQuoteResult(CostRunObjectResult result, OaForm form, OaFormItem item) {
-    if (result == null || result.getContext() == null || item == null) {
-      return;
+  public void writeQuoteResult(CostRunObjectResult result) {
+    if (result == null || result.getContext() == null) {
+      throw new IllegalArgumentException("成本结果和核算上下文不能为空");
     }
-    String oaNo = result.getContext().getOaNo();
-    String productCode = result.getContext().getProductCode();
-    if (!StringUtils.hasText(oaNo) || !StringUtils.hasText(productCode)) {
-      return;
+    String oaNo = required(result.getContext().getOaNo(), "OA 单号");
+    String productCode = required(result.getContext().getProductCode(), "产品料号");
+    if (result.getContext().getCostRunVersionId() == null
+        || !StringUtils.hasText(result.getContext().getCostRunNo())) {
+      throw new IllegalArgumentException("成本明细必须归属明确的成本版本");
     }
-    if (StringUtils.hasText(result.getContext().getCostRunNo())) {
-      writeVersionedResult(result, form, item, oaNo.trim(), productCode.trim());
-    } else {
-      // 日常 OA 结果表仍沿用老 Service 写法，保证旧查询口径不变。
-      costRunResultService.saveOrUpdate(form, item);
-      costRunResultService.updateTotalCost(oaNo.trim(), productCode.trim(), totalCost(result));
-    }
-    overwritePartItems(result, oaNo.trim(), productCode.trim());
-    overwriteCostItems(result, oaNo.trim(), productCode.trim());
-    if (StringUtils.hasText(result.getContext().getCostRunNo())) {
-      scheduleTraceSnapshotRebuild(traceVersion(result));
-    }
-  }
 
-  private void scheduleTraceSnapshotRebuild(QuoteCostRunVersion version) {
-    if (version == null || !StringUtils.hasText(version.getCostRunNo())) {
-      return;
-    }
-    if (TransactionSynchronizationManager.isSynchronizationActive()) {
-      TransactionSynchronizationManager.registerSynchronization(
-          new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-              rebuildTraceSnapshotSafely(version);
-            }
-          });
-      return;
-    }
-    rebuildTraceSnapshotSafely(version);
-  }
-
-  private void rebuildTraceSnapshotSafely(QuoteCostRunVersion version) {
-    try {
-      traceSnapshotService.rebuildForVersion(version);
-    } catch (Exception ex) {
-      log.warn(
-          "成本核算底稿生成失败，costRunNo={} versionId={}，不影响成本核算结果写入，可重算恢复",
-          version.getCostRunNo(),
-          version.getId(),
-          ex);
-    }
-  }
-
-  private void writeVersionedResult(
-      CostRunObjectResult result, OaForm form, OaFormItem item, String oaNo, String productCode) {
-    String costRunNo = result.getContext().getCostRunNo().trim();
-    CostRunResult entity =
-        costRunResultMapper.selectOne(
-            com.baomidou.mybatisplus.core.toolkit.Wrappers.lambdaQuery(CostRunResult.class)
-                .eq(CostRunResult::getCostRunNo, costRunNo)
-                .last("LIMIT 1"));
-    if (entity == null) {
-      entity = new CostRunResult();
-      entity.setOaNo(oaNo);
-      entity.setProductCode(productCode);
-      entity.setCostRunNo(costRunNo);
-    }
-    entity.setOaFormItemId(result.getContext().getOaFormItemId());
-    entity.setCostRunVersionId(result.getContext().getCostRunVersionId());
-    entity.setProductName(trimToNull(item.getProductName()));
-    entity.setProductModel(trimToNull(item.getSunlModel()));
-    entity.setCustomerName(form == null ? null : trimToNull(form.getCustomer()));
-    entity.setBusinessUnitType(trimToNull(result.getContext().getBusinessUnitType()));
-    entity.setPeriod(firstText(
-        result.getContext().getPricingMonth(),
-        buildPeriod(form == null ? null : form.getApplyDate())));
-    entity.setPricingMonth(trimToNull(result.getContext().getPricingMonth()));
-    entity.setPricePrepareNo(trimToNull(result.getContext().getPricePrepareNo()));
-    entity.setPriceTypeConfirmNo(trimToNull(result.getContext().getPriceTypeConfirmNo()));
-    entity.setResultStatus("TRIAL");
-    entity.setCalcStatus("已核算");
-    entity.setCalcAt(LocalDateTime.now());
-    entity.setTotalCost(totalCost(result));
-    if (entity.getId() == null) {
-      costRunResultMapper.insert(entity);
-    } else {
-      costRunResultMapper.updateById(entity);
-    }
+    overwritePartItems(result, oaNo, productCode);
+    overwriteCostItems(result, oaNo, productCode);
+    // 底稿和明细必须在同一事务写入，不能留下“有成本、无依据”的半套结果。
+    traceSnapshotService.rebuildForVersion(traceVersion(result));
   }
 
   private void overwritePartItems(CostRunObjectResult result, String oaNo, String productCode) {
-    if (StringUtils.hasText(result.getContext().getCostRunNo())) {
-      costRunPartItemMapper.deleteQuoteItemsByCostRunNo(result.getContext().getCostRunNo().trim());
-    } else {
-      costRunPartItemMapper.deleteQuoteItems(oaNo, productCode);
-    }
+    String costRunNo = result.getContext().getCostRunNo().trim();
+    costRunPartItemMapper.deleteQuoteItemsByCostRunNo(costRunNo);
     List<CostRunPartItemDto> partItems = result.getPartItems();
     if (partItems == null || partItems.isEmpty()) {
       return;
@@ -172,7 +76,7 @@ public class CostRunResultWriterImpl implements CostRunResultWriter {
       entity.setOaNo(oaNo);
       entity.setOaFormItemId(result.getContext().getOaFormItemId());
       entity.setCostRunVersionId(result.getContext().getCostRunVersionId());
-      entity.setCostRunNo(trimToNull(result.getContext().getCostRunNo()));
+      entity.setCostRunNo(costRunNo);
       entity.setBomRowId(item.getBomRowId());
       entity.setPricePrepareItemId(resolvePricePrepareItemId(result, item));
       entity.setProductCode(firstText(item.getProductCode(), productCode));
@@ -185,7 +89,7 @@ public class CostRunResultWriterImpl implements CostRunResultWriter {
       entity.setPriceSource(trimToNull(item.getPriceSource()));
       entity.setUnitPrice(item.getUnitPrice());
       entity.setAmount(item.getAmount());
-      entity.setRemark(truncateRemark(item.getRemark()));
+      entity.setRemark(truncateRemark(item.getRemark(), MAX_PART_REMARK_LENGTH));
       entity.setBusinessUnitType(trimToNull(result.getContext().getBusinessUnitType()));
       entity.setPriceOrgCode(trimToNull(item.getPriceOrgCode()));
       entity.setMaterialOrganizationCode(trimToNull(item.getMaterialOrganizationCode()));
@@ -194,11 +98,8 @@ public class CostRunResultWriterImpl implements CostRunResultWriter {
   }
 
   private void overwriteCostItems(CostRunObjectResult result, String oaNo, String productCode) {
-    if (StringUtils.hasText(result.getContext().getCostRunNo())) {
-      costRunCostItemMapper.deleteQuoteItemsByCostRunNo(result.getContext().getCostRunNo().trim());
-    } else {
-      costRunCostItemMapper.deleteQuoteItems(oaNo, productCode);
-    }
+    String costRunNo = result.getContext().getCostRunNo().trim();
+    costRunCostItemMapper.deleteQuoteItemsByCostRunNo(costRunNo);
     List<CostRunCostItemDto> costItems = result.getCostItems();
     if (costItems == null || costItems.isEmpty()) {
       return;
@@ -212,7 +113,7 @@ public class CostRunResultWriterImpl implements CostRunResultWriter {
       entity.setOaNo(oaNo);
       entity.setOaFormItemId(result.getContext().getOaFormItemId());
       entity.setCostRunVersionId(result.getContext().getCostRunVersionId());
-      entity.setCostRunNo(trimToNull(result.getContext().getCostRunNo()));
+      entity.setCostRunNo(costRunNo);
       entity.setProductCode(productCode);
       entity.setLineNo(lineNo++);
       entity.setCostCode(trimToNull(item.getCostCode()));
@@ -220,7 +121,7 @@ public class CostRunResultWriterImpl implements CostRunResultWriter {
       entity.setBaseAmount(item.getBaseAmount());
       entity.setRate(item.getRate());
       entity.setAmount(item.getAmount());
-      entity.setRemark(truncateRemark(item.getRemark()));
+      entity.setRemark(truncateRemark(item.getRemark(), MAX_COST_REMARK_LENGTH));
       entity.setCategory(
           StringUtils.hasText(item.getCategory())
               ? item.getCategory().trim()
@@ -228,41 +129,6 @@ public class CostRunResultWriterImpl implements CostRunResultWriter {
       entity.setBusinessUnitType(trimToNull(result.getContext().getBusinessUnitType()));
       costRunCostItemMapper.insert(entity);
     }
-  }
-
-  private BigDecimal totalCost(CostRunObjectResult result) {
-    if (result.getResult() != null && result.getResult().getTotalCost() != null) {
-      return result.getResult().getTotalCost();
-    }
-    for (CostRunCostItemDto item : result.getCostItems()) {
-      if (item != null && COST_CODE_TOTAL.equals(trim(item.getCostCode()))) {
-        return item.getAmount();
-      }
-    }
-    return null;
-  }
-
-  private String trim(String value) {
-    return StringUtils.hasText(value) ? value.trim() : "";
-  }
-
-  private String trimToNull(String value) {
-    return StringUtils.hasText(value) ? value.trim() : null;
-  }
-
-  private String truncateRemark(String value) {
-    String text = trimToNull(value);
-    if (text == null || text.length() <= MAX_REMARK_LENGTH) {
-      return text;
-    }
-    return text.substring(0, MAX_REMARK_LENGTH - TRUNCATED_SUFFIX.length()) + TRUNCATED_SUFFIX;
-  }
-
-  private String firstText(String first, String second) {
-    if (StringUtils.hasText(first)) {
-      return first.trim();
-    }
-    return trimToNull(second);
   }
 
   private Long resolvePricePrepareItemId(CostRunObjectResult result, CostRunPartItemDto item) {
@@ -292,14 +158,30 @@ public class CostRunResultWriterImpl implements CostRunResultWriter {
     version.setProductCode(trimToNull(result.getContext().getProductCode()));
     version.setPricingMonth(trimToNull(result.getContext().getPricingMonth()));
     version.setPricePrepareNo(trimToNull(result.getContext().getPricePrepareNo()));
-    version.setPriceTypeConfirmNo(trimToNull(result.getContext().getPriceTypeConfirmNo()));
-    version.setBomConfirmNo(trimToNull(result.getContext().getBomConfirmNo()));
     version.setBusinessUnitType(trimToNull(result.getContext().getBusinessUnitType()));
     return version;
   }
 
-  private String buildPeriod(LocalDate applyDate) {
-    LocalDate date = applyDate == null ? LocalDate.now() : applyDate;
-    return date.format(PERIOD_FORMAT);
+  private String required(String value, String label) {
+    if (!StringUtils.hasText(value)) {
+      throw new IllegalArgumentException(label + "不能为空");
+    }
+    return value.trim();
+  }
+
+  private String trimToNull(String value) {
+    return StringUtils.hasText(value) ? value.trim() : null;
+  }
+
+  private String truncateRemark(String value, int maxLength) {
+    String text = trimToNull(value);
+    if (text == null || text.length() <= maxLength) {
+      return text;
+    }
+    return text.substring(0, maxLength - TRUNCATED_SUFFIX.length()) + TRUNCATED_SUFFIX;
+  }
+
+  private String firstText(String first, String second) {
+    return StringUtils.hasText(first) ? first.trim() : trimToNull(second);
   }
 }

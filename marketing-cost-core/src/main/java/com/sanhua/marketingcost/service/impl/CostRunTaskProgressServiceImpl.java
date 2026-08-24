@@ -29,35 +29,60 @@ public class CostRunTaskProgressServiceImpl implements CostRunTaskProgressServic
   @Override
   public CostRunBatchProgressSnapshot refreshBatchProgress(String batchNo) {
     String normalizedBatchNo = required("batchNo", batchNo);
-    Map<CostRunTaskStatus, Integer> counts = loadCounts(normalizedBatchNo);
-    int success = counts.get(CostRunTaskStatus.SUCCESS);
-    int failed = counts.get(CostRunTaskStatus.FAILED);
-    int canceled = counts.get(CostRunTaskStatus.CANCELED);
-    int running = counts.get(CostRunTaskStatus.RUNNING);
-    int retryable = counts.get(CostRunTaskStatus.RETRYABLE);
-    int pending = counts.get(CostRunTaskStatus.PENDING);
-    int total = success + failed + canceled + running + retryable + pending;
-    int finished = success + failed + canceled;
-    int progress = total == 0 ? 0 : (int) Math.floor(finished * 100.0 / total);
-    if (total > 0 && success == total) {
-      progress = 100;
-    }
-    String status = resolveBatchStatus(total, success, failed, canceled, running, retryable, pending);
+    CostRunBatchProgressSnapshot snapshot = snapshot(normalizedBatchNo);
+    String status = snapshot.getStatus();
+    int finished = snapshot.getSuccessCount()
+        + snapshot.getFailedCount()
+        + snapshot.getSkippedCount();
     LocalDateTime now = LocalDateTime.now();
-    LocalDateTime startedAt = running > 0 || finished > 0 ? now : null;
+    LocalDateTime startedAt = snapshot.getRunningCount() > 0 || finished > 0 ? now : null;
     LocalDateTime finishedAt = isTerminal(status) ? now : null;
 
     batchMapper.updateProgress(
         normalizedBatchNo,
         status,
+        snapshot.getTotalCount(),
+        snapshot.getSuccessCount(),
+        snapshot.getFailedCount(),
+        snapshot.getSkippedCount(),
+        snapshot.getProgress(),
+        startedAt,
+        finishedAt,
+        now);
+    return snapshot;
+  }
+
+  @Override
+  public CostRunBatchProgressSnapshot getBatchProgress(String batchNo) {
+    return snapshot(required("batchNo", batchNo));
+  }
+
+  private CostRunBatchProgressSnapshot snapshot(String normalizedBatchNo) {
+    Map<CostRunTaskStatus, Integer> counts = loadCounts(normalizedBatchNo);
+    int success = counts.get(CostRunTaskStatus.SUCCESS);
+    int failed = counts.get(CostRunTaskStatus.FAILED);
+    int canceled = counts.get(CostRunTaskStatus.CANCELED);
+    int collaboration = counts.get(CostRunTaskStatus.COLLABORATION);
+    int skippedCurrent = counts.get(CostRunTaskStatus.SKIPPED_CURRENT);
+    int running = counts.get(CostRunTaskStatus.RUNNING);
+    int retryable = counts.get(CostRunTaskStatus.RETRYABLE);
+    int pending = counts.get(CostRunTaskStatus.PENDING);
+    int skipped = canceled + collaboration + skippedCurrent;
+    int total = success + failed + skipped + running + retryable + pending;
+    int finished = success + failed + skipped;
+    int progress = total == 0 ? 0 : (int) Math.floor(finished * 100.0 / total);
+    if (total > 0 && finished == total) {
+      progress = 100;
+    }
+    String status = resolveBatchStatus(
         total,
         success,
         failed,
         canceled,
-        progress,
-        startedAt,
-        finishedAt,
-        now);
+        collaboration + skippedCurrent,
+        running,
+        retryable,
+        pending);
 
     CostRunBatchProgressSnapshot snapshot = new CostRunBatchProgressSnapshot();
     snapshot.setBatchNo(normalizedBatchNo);
@@ -65,7 +90,9 @@ public class CostRunTaskProgressServiceImpl implements CostRunTaskProgressServic
     snapshot.setTotalCount(total);
     snapshot.setSuccessCount(success);
     snapshot.setFailedCount(failed);
-    snapshot.setSkippedCount(canceled);
+    snapshot.setSkippedCount(skipped);
+    snapshot.setCollaborationCount(collaboration);
+    snapshot.setSkippedCurrentCount(skippedCurrent);
     snapshot.setRunningCount(running);
     snapshot.setRetryableCount(retryable);
     snapshot.setPendingCount(pending);
@@ -87,17 +114,24 @@ public class CostRunTaskProgressServiceImpl implements CostRunTaskProgressServic
   }
 
   private String resolveBatchStatus(
-      int total, int success, int failed, int canceled, int running, int retryable, int pending) {
+      int total,
+      int success,
+      int failed,
+      int canceled,
+      int acceptedSkipped,
+      int running,
+      int retryable,
+      int pending) {
     if (total == 0 || pending == total) {
       return CostRunBatchStatus.PENDING.name();
     }
-    if (success == total) {
+    if (success + acceptedSkipped == total && failed == 0 && canceled == 0) {
       return CostRunBatchStatus.SUCCESS.name();
     }
     if (canceled == total) {
       return CostRunBatchStatus.CANCELED.name();
     }
-    int finished = success + failed + canceled;
+    int finished = success + failed + canceled + acceptedSkipped;
     if (finished == total) {
       return success > 0 ? CostRunBatchStatus.PARTIAL_FAILED.name() : CostRunBatchStatus.FAILED.name();
     }

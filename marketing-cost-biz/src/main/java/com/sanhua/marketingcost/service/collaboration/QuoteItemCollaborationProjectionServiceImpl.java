@@ -10,12 +10,18 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteCollaborationProductTask;
 import com.sanhua.marketingcost.entity.QuoteCollaborationQuoteLink;
+import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
+import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
 import com.sanhua.marketingcost.mapper.IntegrationOutboxMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
+import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
+import com.sanhua.marketingcost.security.BusinessUnitContext;
+import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.collaboration.CollaborationCodes.PrimaryScope;
 import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationScanAction;
+import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationScanErrorCode;
 import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationScanResult;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -24,6 +30,8 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import org.springframework.cache.annotation.CachePut;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -38,6 +46,8 @@ public class QuoteItemCollaborationProjectionServiceImpl
   private final QuoteCollaborationTaskRepository repository;
   private final CollaborationTechnicianResolver technicianResolver;
   private final IntegrationOutboxMapper outboxMapper;
+  private final QuoteCostingWorkspaceService workspaceService;
+  private final QuoteCostRunVersionMapper costRunVersionMapper;
 
   public QuoteItemCollaborationProjectionServiceImpl(
       OaFormMapper formMapper,
@@ -46,7 +56,9 @@ public class QuoteItemCollaborationProjectionServiceImpl
       QuoteCollaborationScanService scanService,
       QuoteCollaborationTaskRepository repository,
       CollaborationTechnicianResolver technicianResolver,
-      IntegrationOutboxMapper outboxMapper) {
+      IntegrationOutboxMapper outboxMapper,
+      QuoteCostingWorkspaceService workspaceService,
+      QuoteCostRunVersionMapper costRunVersionMapper) {
     this.formMapper = formMapper;
     this.itemMapper = itemMapper;
     this.preparationRecordMapper = preparationRecordMapper;
@@ -54,11 +66,30 @@ public class QuoteItemCollaborationProjectionServiceImpl
     this.repository = repository;
     this.technicianResolver = technicianResolver;
     this.outboxMapper = outboxMapper;
+    this.workspaceService = workspaceService;
+    this.costRunVersionMapper = costRunVersionMapper;
   }
 
   @Override
+  @Cacheable(
+      value = "quoteCollaborationSummaries",
+      key = "T(com.sanhua.marketingcost.service.collaboration.QuoteItemCollaborationProjectionServiceImpl).summaryCacheKey(#oaNo)",
+      sync = true)
   @Transactional(readOnly = true)
   public QuoteCollaborationSummaryResponse summary(String oaNo) {
+    return buildSummary(oaNo);
+  }
+
+  @Override
+  @CachePut(
+      value = "quoteCollaborationSummaries",
+      key = "T(com.sanhua.marketingcost.service.collaboration.QuoteItemCollaborationProjectionServiceImpl).summaryCacheKey(#oaNo)")
+  @Transactional(readOnly = true)
+  public QuoteCollaborationSummaryResponse refreshSummary(String oaNo) {
+    return buildSummary(oaNo);
+  }
+
+  private QuoteCollaborationSummaryResponse buildSummary(String oaNo) {
     OaForm form = requireForm(oaNo);
     List<QuoteItemCollaborationResponse> items = itemMapper.selectList(
         Wrappers.<OaFormItem>lambdaQuery().eq(OaFormItem::getOaFormId, form.getId())
@@ -67,6 +98,11 @@ public class QuoteItemCollaborationProjectionServiceImpl
     String version = sha256(items.stream().map(QuoteItemCollaborationResponse::projectionVersion)
         .reduce("", (left, right) -> left + "|" + right));
     return new QuoteCollaborationSummaryResponse(form.getOaNo(), version, items);
+  }
+
+  public static String summaryCacheKey(String oaNo) {
+    String businessUnit = BusinessUnitContext.getCurrentBusinessUnitType();
+    return value(businessUnit) + ":" + value(oaNo).trim();
   }
 
   @Override
@@ -121,16 +157,27 @@ public class QuoteItemCollaborationProjectionServiceImpl
     QuoteCollaborationProductTask task = task(scan, link, scope);
     QuoteBomPreparationRecord preparation =
         currentPreparation(item.getId(), scan.productCode(), scan.accountingMonth());
-    ProjectionFields fields = fields(form, item, scan, task, link, preparation);
+    QuoteCostingWorkspace workspace =
+        workspaceService.find(item.getId(), scan.accountingMonth()).orElse(null);
+    QuoteCostRunVersion currentVersion = currentVersion(item);
+    ProjectionFields fields =
+        fields(form, item, scan, task, link, preparation, workspace, currentVersion);
     String version = sha256(String.join("|", String.valueOf(item.getId()),
         value(scan.status()), value(scan.action()), value(scan.requiredScope()),
         value(task == null ? null : task.getId()), value(task == null ? null : task.getTaskVersion()),
         value(link == null ? null : link.getId()), value(link == null ? null : link.getLinkStatus()),
         value(preparation == null ? null : preparation.getId()),
         value(preparation == null ? null : preparation.getUpdatedAt()),
+        value(workspace == null ? null : workspace.getWorkspaceStatus()),
+        value(workspace == null ? null : workspace.getInputFingerprint()),
+        value(workspace == null ? null : workspace.getLastSuccessInputFingerprint()),
+        value(currentVersion == null ? null : currentVersion.getPricingMonth()),
         value(item.getCalcStatus()), value(item.getConfirmedCostVersionId())));
     return new QuoteItemCollaborationResponse(item.getId(), fields.bomCode, fields.bomLabel,
-        fields.priceCode, fields.priceLabel, scan.price().gapCount(), fields.assigneeId,
+        fields.priceCode, fields.priceLabel,
+        task != null && task.getOpenGapCount() != null
+            ? task.getOpenGapCount() : scan.price().gapCount(),
+        fields.assigneeId,
         fields.assigneeName, fields.statusCode, fields.statusLabel,
         task == null ? null : task.getId(), task == null ? null : task.getProductTaskNo(),
         link == null ? null : link.getId(), task == null ? null : task.getTaskVersion(),
@@ -146,22 +193,52 @@ public class QuoteItemCollaborationProjectionServiceImpl
 
   private ProjectionFields fields(OaForm form, OaFormItem item, QuoteCollaborationScanResult scan,
       QuoteCollaborationProductTask task, QuoteCollaborationQuoteLink link,
-      QuoteBomPreparationRecord preparation) {
-    if (isCalculated(item)) return new ProjectionFields(bomCode(scan), bomLabel(scan), "READY", "价格齐全",
-        task == null ? null : task.getCurrentAssigneeUserId(), task == null ? null : task.getCurrentAssigneeName(),
-        "COMPLETED", "核算完成", QuoteItemCollaborationAction.VIEW_COSTING_RESULT, "该产品已完成核算");
+      QuoteBomPreparationRecord preparation, QuoteCostingWorkspace workspace,
+      QuoteCostRunVersion currentVersion) {
+    if (inputChanged(workspace) || periodChanged(scan, workspace, currentVersion)) {
+      String message = periodChanged(scan, workspace, currentVersion)
+          ? "核算月份已由 " + currentVersion.getPricingMonth() + " 变为 "
+              + scan.accountingMonth() + "；原核算结果仍可查看，重新核算成功后才替换当前结果"
+          : "规则、替代料、包装或价格来源已变化；原核算结果仍可查看，重新核算成功后才替换当前结果";
+      return new ProjectionFields(
+        bomCode(scan), bomLabel(scan), "STALE", "核算输入已变化",
+        task == null ? null : task.getCurrentAssigneeUserId(),
+        task == null ? null : task.getCurrentAssigneeName(),
+        "STALE", "待重新核算", QuoteItemCollaborationAction.RESTART_COSTING,
+        message);
+    }
+    ProjectionFields workspaceFields = workspaceFields(scan, workspace);
+    if (workspaceFields != null && "COSTING".equals(workspaceFields.statusCode)) {
+      return workspaceFields;
+    }
     if (link != null && "READY".equals(link.getLinkStatus())) return ready(scan, "补录审核通过，已具备核算条件");
     if (task != null && link != null) return taskFields(scan, task);
+    if (workspaceFields != null) return workspaceFields;
+    if (isCalculated(item)) return new ProjectionFields(bomCode(scan), bomLabel(scan), "READY", "价格齐全",
+        task == null ? null : task.getCurrentAssigneeUserId(), task == null ? null : task.getCurrentAssigneeName(),
+        "COMPLETED", "核算完成", QuoteItemCollaborationAction.VIEW_COSTING_RESULT,
+        "当前成功结果可直接查看；只有输入变化后才需要重新核算");
     if (preparation != null) return new ProjectionFields(bomCode(scan), bomLabel(scan), "PENDING",
-        "在核算工作台确认", null, null, "COSTING", "核算中",
-        QuoteItemCollaborationAction.CONTINUE_COSTING, "已存在当前核算准备，继续原六步核算流程");
+        "核算资料已准备", null, null, "READY_FOR_COSTING", "可核算",
+        QuoteItemCollaborationAction.START_COSTING, "已存在当前核算准备，可直接核算本产品");
     if (scan.action() == QuoteCollaborationScanAction.NO_COLLABORATION_REQUIRED) return ready(scan, scan.message());
     if (scan.action() == QuoteCollaborationScanAction.REUSE_APPROVED_RESULT)
       return action(scan, null, "可复用", "已有半年有效的审核结果", QuoteItemCollaborationAction.APPLY_APPROVED_RESULT, scan.message());
     if (scan.action() == QuoteCollaborationScanAction.LINK_ACTIVE_TASK)
       return action(scan, null, "他人处理中", "同月同产品已有补录任务", QuoteItemCollaborationAction.LINK_EXISTING_TASK, scan.message());
+    if (scan.action() == QuoteCollaborationScanAction.MAINTAIN_PRICE_TYPE)
+      return new ProjectionFields(
+          bomCode(scan), bomLabel(scan), "MISSING", "缺价格类型", null, "财务报价",
+          "MISSING_PRICE_TYPE", "缺价格类型", QuoteItemCollaborationAction.VIEW_COSTING_GAP,
+          valueOr(scan.message(), "请财务在物料价格类型中导入或维护后重新核算本产品"));
+    if (scan.action() == QuoteCollaborationScanAction.SYSTEM_BLOCKED
+        && scan.errorCode() == QuoteCollaborationScanErrorCode.PRICE_PREPARATION_ERROR)
+      return action(scan, null, "PRICE_PREPARATION_REQUIRED", "价格待处理",
+          QuoteItemCollaborationAction.RETRY_COSTING,
+          valueOr(scan.message(), "价格准备检查失败")
+              + "；重试时仅重新处理当前产品和当前核算月");
     if (scan.action() == QuoteCollaborationScanAction.SYSTEM_BLOCKED)
-      return action(scan, null, "检查未通过", "系统检查未通过", QuoteItemCollaborationAction.NONE, scan.message());
+      return action(scan, null, "SYSTEM_FAILED", "系统检查未通过", QuoteItemCollaborationAction.RETRY_COSTING, scan.message());
     CollaborationTechnicianResolver.Resolution resolution = technicianResolver.resolve(
         form, item, scan.businessUnitType(), null);
     if (!resolution.resolved())
@@ -179,7 +256,7 @@ public class QuoteItemCollaborationProjectionServiceImpl
     String status = task.getTaskStatus();
     QuoteItemCollaborationAction action = switch (status) {
       case "READY_FOR_COSTING" -> QuoteItemCollaborationAction.START_COSTING;
-      case "COSTING" -> QuoteItemCollaborationAction.CONTINUE_COSTING;
+      case "COSTING" -> QuoteItemCollaborationAction.VIEW_COSTING_PROGRESS;
       default -> QuoteItemCollaborationAction.VIEW_SUPPLEMENT;
     };
     String label = switch (status) {
@@ -208,6 +285,74 @@ public class QuoteItemCollaborationProjectionServiceImpl
   private ProjectionFields ready(QuoteCollaborationScanResult scan, String message) {
     return new ProjectionFields(bomCode(scan), bomLabel(scan), "READY", "价格齐全", null, null,
         "READY_FOR_COSTING", "已就绪", QuoteItemCollaborationAction.START_COSTING, message);
+  }
+
+  private ProjectionFields workspaceFields(
+      QuoteCollaborationScanResult scan, QuoteCostingWorkspace workspace) {
+    if (workspace == null || !StringUtils.hasText(workspace.getWorkspaceStatus())) return null;
+    return switch (workspace.getWorkspaceStatus().trim().toUpperCase(Locale.ROOT)) {
+      case "QUEUED", "RUNNING" -> new ProjectionFields(
+          bomCode(scan), bomLabel(scan), "PENDING", "核算处理中", null, null,
+          "COSTING", "核算中", QuoteItemCollaborationAction.VIEW_COSTING_PROGRESS,
+          "当前产品正在核算，可查看处理进度");
+      case "WAIT_BOM" -> new ProjectionFields(
+          bomCode(scan), bomLabel(scan), "PENDING_BOM", "待BOM补齐后检查", null, "待指定技术负责人",
+          "MISSING_BOM", "待补BOM", QuoteItemCollaborationAction.VIEW_COSTING_GAP,
+          gapMessage(workspace, "当前产品缺少可核算 BOM"));
+      case "WAIT_PRICE_TYPE" -> new ProjectionFields(
+          bomCode(scan), bomLabel(scan), "MISSING", "缺价格类型", null, "财务报价",
+          "MISSING_PRICE", "缺价格类型", QuoteItemCollaborationAction.VIEW_COSTING_GAP,
+          gapMessage(workspace, "当前产品存在价格类型缺口"));
+      case "WAIT_PRICE" -> new ProjectionFields(
+          bomCode(scan), bomLabel(scan), "MISSING", "缺价格", null, waitPriceAssignee(workspace),
+          "MISSING_PRICE", "缺价格", QuoteItemCollaborationAction.VIEW_COSTING_GAP,
+          gapMessage(workspace, "当前产品存在价格缺口"));
+      case "SYSTEM_FAILED" -> new ProjectionFields(
+          bomCode(scan), bomLabel(scan), "ERROR", "系统处理失败", null, null,
+          "SYSTEM_FAILED", "系统处理失败", QuoteItemCollaborationAction.RETRY_COSTING,
+          gapMessage(workspace, "系统处理失败，可重试当前产品"));
+      case "BOM_READY", "READY" -> ready(scan, "当前资料已准备，可核算本产品");
+      default -> null;
+    };
+  }
+
+  private static String waitPriceAssignee(QuoteCostingWorkspace workspace) {
+    if (workspace != null
+        && "FINANCE_BASE_PRICE_MISSING".equalsIgnoreCase(workspace.getLastErrorCode())) {
+      return "财务报价";
+    }
+    return "财务报价/产品技术";
+  }
+
+  private static boolean inputChanged(QuoteCostingWorkspace workspace) {
+    if (workspace == null) return false;
+    if ("STALE".equalsIgnoreCase(workspace.getWorkspaceStatus())) return true;
+    return StringUtils.hasText(workspace.getInputFingerprint())
+        && StringUtils.hasText(workspace.getLastSuccessInputFingerprint())
+        && !workspace.getInputFingerprint().equals(workspace.getLastSuccessInputFingerprint());
+  }
+
+  private static boolean periodChanged(
+      QuoteCollaborationScanResult scan,
+      QuoteCostingWorkspace workspace,
+      QuoteCostRunVersion currentVersion) {
+    return workspace == null
+        && currentVersion != null
+        && StringUtils.hasText(currentVersion.getPricingMonth())
+        && StringUtils.hasText(scan.accountingMonth())
+        && !currentVersion.getPricingMonth().trim().equals(scan.accountingMonth().trim());
+  }
+
+  private QuoteCostRunVersion currentVersion(OaFormItem item) {
+    if (item.getConfirmedCostVersionId() == null) return null;
+    return costRunVersionMapper.selectById(item.getConfirmedCostVersionId());
+  }
+
+  private static String gapMessage(QuoteCostingWorkspace workspace, String fallback) {
+    if (workspace != null && StringUtils.hasText(workspace.getLastErrorMessage())) {
+      return workspace.getLastErrorMessage();
+    }
+    return fallback;
   }
 
   private ProjectionFields action(QuoteCollaborationScanResult scan,
@@ -259,9 +404,12 @@ public class QuoteItemCollaborationProjectionServiceImpl
       case LINK_EXISTING_TASK -> "关联现有任务";
       case APPLY_APPROVED_RESULT -> "应用已审核结果";
       case VIEW_SUPPLEMENT -> "查看补录内容";
-      case START_COSTING -> "发起核算";
-      case CONTINUE_COSTING -> "继续核算";
-      case VIEW_COSTING_RESULT -> "查看核算结果";
+      case START_COSTING -> "核算本产品";
+      case RESTART_COSTING -> "重新核算";
+      case RETRY_COSTING -> "重试本产品";
+      case VIEW_COSTING_RESULT -> "查看结果";
+      case VIEW_COSTING_PROGRESS -> "查看进度";
+      case VIEW_COSTING_GAP -> "查看缺口";
       case NONE -> "";
     };
   }

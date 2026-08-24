@@ -1,7 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
@@ -73,6 +72,30 @@ class MaterialMasterSyncServiceImplTest {
     // r2: 当前 U9 文件净重按 kg 口径，不再除以 1000；BU = HOUSEHOLD（含"家用"）
     assertThat(rows.get(1).getNetWeightKg()).isEqualByComparingTo(new BigDecimal("1500"));
     assertThat(rows.get(1).getBusinessUnitType()).isEqualTo("HOUSEHOLD");
+  }
+
+  @Test
+  @DisplayName("报价批次主档同步只读取指定核算月份，不扫描历史 BOM")
+  void sync_scopesQuoteBatchToPricingMonth() {
+    BomCostingRowMapper bomMapper = mock(BomCostingRowMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
+
+    when(bomMapper.selectDistinctMaterialCodesWithOrgByOaNoAndPeriod("OA-SCOPED", "2026-08"))
+        .thenReturn(List.of(costingRow("M-CURRENT", "COMMERCIAL")));
+    when(rawMapper.selectLatestActiveBatchId(null, "COMMERCIAL")).thenReturn("u9-batch-x");
+    when(rawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
+        .thenReturn(List.of(newRaw("M-CURRENT", "1", null, null, "商用部品")));
+    when(masterMapper.upsertBatch(anyList())).thenReturn(1);
+
+    MaterialMasterSyncServiceImpl svc =
+        new MaterialMasterSyncServiceImpl(bomMapper, rawMapper, masterMapper);
+    SyncResult result = svc.syncByOaNoAndPeriod("OA-SCOPED", "2026-08");
+
+    assertThat(result.distinctCodes()).isEqualTo(1);
+    verify(bomMapper)
+        .selectDistinctMaterialCodesWithOrgByOaNoAndPeriod("OA-SCOPED", "2026-08");
+    verify(bomMapper, never()).selectDistinctMaterialCodesWithOrgByOaNo(any());
   }
 
   @Test
@@ -164,8 +187,8 @@ class MaterialMasterSyncServiceImplTest {
   }
 
   @Test
-  @DisplayName("staging 表无数据 → 抛 'staging 表 lp_material_master_raw 无数据'")
-  void sync_stagingEmpty() {
+  @DisplayName("某组织 staging 无数据 → 跳过预同步，由产品任务分别检查")
+  void sync_stagingEmptyDoesNotBlockWholeQuote() {
     BomCostingRowMapper bomMapper = mock(BomCostingRowMapper.class);
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
@@ -176,14 +199,17 @@ class MaterialMasterSyncServiceImplTest {
 
     MaterialMasterSyncServiceImpl svc =
         new MaterialMasterSyncServiceImpl(bomMapper, rawMapper, masterMapper);
-    assertThatThrownBy(() -> svc.syncByOaNo("OA-X"))
-        .isInstanceOf(RuntimeException.class)
-        .hasMessageContaining("staging");
+    SyncResult result = svc.syncByOaNo("OA-X");
+
+    assertThat(result.distinctCodes()).isEqualTo(1);
+    assertThat(result.stagingHits()).isZero();
+    assertThat(result.affectedRows()).isZero();
+    verify(masterMapper, never()).upsertBatch(anyList());
   }
 
   @Test
-  @DisplayName("BOM 成本行缺组织 → 直接报错，不按 OA 兜底")
-  void sync_missingOrganizationFailsFast() {
+  @DisplayName("BOM 成本行缺组织 → 不猜组织并跳过该行，不阻断其他产品")
+  void sync_missingOrganizationSkipsWithoutGuessing() {
     BomCostingRowMapper bomMapper = mock(BomCostingRowMapper.class);
     MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
     MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
@@ -193,9 +219,11 @@ class MaterialMasterSyncServiceImplTest {
 
     MaterialMasterSyncServiceImpl svc =
         new MaterialMasterSyncServiceImpl(bomMapper, rawMapper, masterMapper);
-    assertThatThrownBy(() -> svc.syncByOaNo("OA-NO-ORG"))
-        .isInstanceOf(RuntimeException.class)
-        .hasMessageContaining("materialOrganizationCode");
+    SyncResult result = svc.syncByOaNo("OA-NO-ORG");
+
+    assertThat(result.distinctCodes()).isZero();
+    assertThat(result.stagingHits()).isZero();
+    assertThat(result.affectedRows()).isZero();
     verify(rawMapper, never()).selectLatestActiveBatchId(any(), any());
     verify(masterMapper, never()).upsertBatch(anyList());
   }

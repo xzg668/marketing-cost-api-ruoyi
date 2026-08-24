@@ -92,7 +92,8 @@ class PriceLinkedItemImportBasisContractTest {
         mock(FactorVariableRegistryImpl.class),
         mock(FormulaNormalizer.class),
         mock(FormulaDisplayRenderer.class),
-        mock(FormulaValidator.class));
+        mock(FormulaValidator.class),
+        mock(com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.class));
     Method toDto = PriceLinkedItemServiceImpl.class.getDeclaredMethod(
         "toDto", PriceLinkedItem.class);
     toDto.setAccessible(true);

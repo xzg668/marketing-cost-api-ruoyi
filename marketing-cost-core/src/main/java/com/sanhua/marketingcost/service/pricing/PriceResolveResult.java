@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.pricing;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 /**
  * Resolver 取价结果。
@@ -15,10 +16,24 @@ import java.math.BigDecimal;
  * <p>用 record 保证不可变；调用方请勿在算后修改。
  */
 public record PriceResolveResult(
-    BigDecimal unitPrice, String priceSource, String remark, Long resultRefId) {
+    BigDecimal unitPrice,
+    String priceSource,
+    String remark,
+    Long resultRefId,
+    String failureCode,
+    PriceResolveEvidence evidence) {
 
   public PriceResolveResult(BigDecimal unitPrice, String priceSource, String remark) {
-    this(unitPrice, priceSource, remark, null);
+    this(unitPrice, priceSource, remark, null, null, PriceResolveEvidence.none());
+  }
+
+  public PriceResolveResult(
+      BigDecimal unitPrice, String priceSource, String remark, Long resultRefId) {
+    this(unitPrice, priceSource, remark, resultRefId, null, PriceResolveEvidence.none());
+  }
+
+  public PriceResolveResult {
+    evidence = evidence == null ? PriceResolveEvidence.none() : evidence;
   }
 
   /** 缺价标红：未配价格类型路由（路由表无该料号 × period 行）。 */
@@ -33,7 +48,18 @@ public record PriceResolveResult(
 
   /** 工厂：构造带来源行 ID 的命中结果。 */
   public static PriceResolveResult hit(BigDecimal unitPrice, String priceSource, Long resultRefId) {
-    return new PriceResolveResult(unitPrice, priceSource, "", resultRefId);
+    return new PriceResolveResult(
+        unitPrice, priceSource, "", resultRefId, null, PriceResolveEvidence.none());
+  }
+
+  /** 工厂：构造带供应商、生效期和历史价标记的命中结果。 */
+  public static PriceResolveResult hit(
+      BigDecimal unitPrice,
+      String priceSource,
+      String remark,
+      Long resultRefId,
+      PriceResolveEvidence evidence) {
+    return new PriceResolveResult(unitPrice, priceSource, remark, resultRefId, null, evidence);
   }
 
   /**
@@ -41,7 +67,14 @@ public record PriceResolveResult(
    * Resolver 内部使用，不直接进 DB。
    */
   public static PriceResolveResult miss(String reason) {
-    return new PriceResolveResult(null, "", reason);
+    return new PriceResolveResult(
+        null, "", reason, null, null, PriceResolveEvidence.none());
+  }
+
+  /** 工厂：单个 Resolver 结构化未命中。 */
+  public static PriceResolveResult miss(String failureCode, String reason) {
+    return new PriceResolveResult(
+        null, "", reason, null, failureCode, PriceResolveEvidence.none());
   }
 
   /**
@@ -50,7 +83,12 @@ public record PriceResolveResult(
    */
   public static PriceResolveResult noRoute(String materialCode) {
     return new PriceResolveResult(
-        null, SOURCE_NO_ROUTE, "未配价格类型路由：去价格类型表录入 " + materialCode);
+        null,
+        SOURCE_NO_ROUTE,
+        "未配价格类型路由：去价格类型表录入 " + materialCode,
+        null,
+        SOURCE_NO_ROUTE,
+        PriceResolveEvidence.none());
   }
 
   /**
@@ -58,6 +96,23 @@ public record PriceResolveResult(
    * remark 由调用方拼具体上下文（例如尝试过的桶名 + 最后一次 miss 原因）。
    */
   public static PriceResolveResult error(String remark) {
-    return new PriceResolveResult(null, SOURCE_ERROR, remark);
+    return new PriceResolveResult(
+        null, SOURCE_ERROR, remark, null, SOURCE_ERROR, PriceResolveEvidence.none());
+  }
+
+  public boolean carriedForward() {
+    return evidence.carriedForward();
+  }
+
+  public LocalDate effectiveFrom() {
+    return evidence.effectiveFrom();
+  }
+
+  public LocalDate effectiveTo() {
+    return evidence.effectiveTo();
+  }
+
+  public String warningMessage() {
+    return evidence.warningMessage();
   }
 }

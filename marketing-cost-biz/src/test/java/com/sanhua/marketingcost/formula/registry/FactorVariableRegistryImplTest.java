@@ -43,7 +43,7 @@ import org.junit.jupiter.api.Test;
  *   <li>种子变量不再读 {@code sourceTable / variableName-as-shortName / formulaExpr /
  *       defaultValue / contextBindingJson}，统一用 {@code resolverKind / resolverParams}；</li>
  *   <li>FINANCE 分支被 {@link FinanceBasePriceQuery} 的严格校验前置：pricingMonth / priceSource
- *       /（buScoped 时）bu 任何一项缺失都直接 empty，不再尝试"最新回退"。</li>
+ *       /（buScoped 时）bu 任何一项缺失都直接 empty；月份允许沿用不晚于核算月的正式价。</li>
  * </ul>
  */
 class FactorVariableRegistryImplTest {
@@ -294,6 +294,25 @@ class FactorVariableRegistryImplTest {
 
     assertThat(registry.resolve("factor_identity_191", ctx))
         .contains(new BigDecimal("16.40"));
+    assertThat(ctx.getResolvedSource("factor_identity_191")).isEqualTo("FINANCE_FACTOR");
+  }
+
+  @Test
+  @DisplayName("FINANCE：当月因素价缺失时沿用最近正式月并标记提醒来源")
+  void factorIdentityDailyQuoteCarriesLatestPriorMonthlyPrice() {
+    seedVariables(financeByFactorIdentity("factor_identity_209", 209L, 6409L));
+    when(factorQuoteBaseMappingMapper.selectList(any())).thenReturn(List.of());
+    when(factorMonthlyPriceMapper.selectOne(any()))
+        .thenReturn(monthlyPrice(6409L, 209L, "2026-07", "389.993"));
+
+    VariableContext ctx = new VariableContext()
+        .pricingMonth("2026-08")
+        .oaForm(new OaForm());
+
+    assertThat(registry.resolve("factor_identity_209", ctx))
+        .contains(new BigDecimal("389.993"));
+    assertThat(ctx.getResolvedSource("factor_identity_209"))
+        .isEqualTo("FINANCE_FACTOR_CARRIED_FORWARD");
   }
 
   @Test

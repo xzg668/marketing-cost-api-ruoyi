@@ -78,7 +78,18 @@ class PriceTypeEnumTest {
     assertEquals(Optional.empty(), PriceTypeEnum.fromDbText(""));
     assertEquals(Optional.empty(), PriceTypeEnum.fromDbText("   "));
     assertEquals(Optional.empty(), PriceTypeEnum.fromDbText("未知类型"));
-    assertEquals(Optional.empty(), PriceTypeEnum.fromDbText("SETTLE"));
+    assertEquals(Optional.of(PriceTypeEnum.FIXED), PriceTypeEnum.fromDbText("SETTLE"));
+    assertEquals(Optional.of(PriceTypeEnum.FIXED), PriceTypeEnum.fromDbText("SETTLE_FIXED"));
+  }
+
+  @Test
+  void normalizeRouteText_should_unify_all_formal_import_aliases() {
+    assertEquals("固定价", PriceTypeEnum.normalizeRouteText("PURCHASE_FIXED"));
+    assertEquals("结算固定价", PriceTypeEnum.normalizeRouteText(" settle_fixed "));
+    assertEquals("联动价", PriceTypeEnum.normalizeRouteText("LINKED"));
+    assertEquals("区间价", PriceTypeEnum.normalizeRouteText("range"));
+    assertEquals("自制件", PriceTypeEnum.normalizeRouteText("MAKE_PART"));
+    assertEquals(null, PriceTypeEnum.normalizeRouteText("  "));
   }
 
   @Test

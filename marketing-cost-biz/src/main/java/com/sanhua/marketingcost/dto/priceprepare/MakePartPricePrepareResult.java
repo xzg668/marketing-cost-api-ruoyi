@@ -50,6 +50,7 @@ public class MakePartPricePrepareResult {
   public static class Gap {
     private String gapType;
     private String gapMaterialCode;
+    private String materialName;
     private String sourceTable;
     private String message;
 
@@ -57,8 +58,18 @@ public class MakePartPricePrepareResult {
     }
 
     public Gap(String gapType, String gapMaterialCode, String sourceTable, String message) {
+      this(gapType, gapMaterialCode, null, sourceTable, message);
+    }
+
+    public Gap(
+        String gapType,
+        String gapMaterialCode,
+        String materialName,
+        String sourceTable,
+        String message) {
       this.gapType = gapType;
       this.gapMaterialCode = gapMaterialCode;
+      this.materialName = materialName;
       this.sourceTable = sourceTable;
       this.message = message;
     }

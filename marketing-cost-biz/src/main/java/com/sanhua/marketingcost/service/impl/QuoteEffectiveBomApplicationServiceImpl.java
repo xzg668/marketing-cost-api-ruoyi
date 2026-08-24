@@ -13,18 +13,13 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomAlternativeSelection;
 import com.sanhua.marketingcost.entity.QuoteBomMonthlySnapshot;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
-import com.sanhua.marketingcost.entity.QuoteBomStatus;
-import com.sanhua.marketingcost.entity.QuoteEffectiveBomNode;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
-import com.sanhua.marketingcost.enums.QuoteBomStatusCode;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomMonthlySnapshotMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
-import com.sanhua.marketingcost.service.QuoteBomConfirmationService;
 import com.sanhua.marketingcost.service.QuoteEffectiveBomApplicationService;
 import com.sanhua.marketingcost.service.bomalternative.BomAlternativeBranchPruner;
 import com.sanhua.marketingcost.service.bomalternative.BomAlternativeGroup;
@@ -44,11 +39,9 @@ import com.sanhua.marketingcost.service.effectivebom.EffectiveBomNodeDraft;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomShapeDecision;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomVariantInput;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomVariantHasher;
-import com.sanhua.marketingcost.service.effectivebom.QuoteBomMonthlyFreezeKey;
 import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomBuilder;
-import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomConfirmationCandidate;
+import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomCostingCandidate;
 import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomQueryException;
-import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomRepository;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContext;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
@@ -58,6 +51,7 @@ import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeResoluti
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeResolver;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeSource;
 import com.sanhua.marketingcost.service.materialshape.SupplierRatioResolution;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import com.sanhua.marketingcost.service.materialshape.SupplierRatioShapeResolver;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -86,15 +80,13 @@ public class QuoteEffectiveBomApplicationServiceImpl
   private static final int MAX_DEPTH = 128;
   private static final String PRODUCT_TYPE_NON_BARE = "NON_BARE";
   private static final String DEFAULT_BOM_PURPOSE = "主制造";
-  private static final String FROZEN = "FROZEN";
 
   private final QuoteBomPreparationRecordMapper preparationMapper;
-  private final QuoteBomStatusMapper statusMapper;
   private final OaFormItemMapper oaFormItemMapper;
   private final OaFormMapper oaFormMapper;
   private final QuoteBomMonthlySnapshotMapper monthlySnapshotMapper;
   private final BomRawHierarchyMapper rawHierarchyMapper;
-  private final QuoteEffectiveBomRepository effectiveBomRepository;
+  private final PlateCommercialMakeBomExpansionService crossOrganizationExpansionService;
   private final BomAlternativeGroupResolver alternativeGroupResolver;
   private final BomAlternativeBranchPruner alternativeBranchPruner;
   private final QuoteBomAlternativeSelectionRepository selectionRepository;
@@ -105,16 +97,14 @@ public class QuoteEffectiveBomApplicationServiceImpl
   private final EffectiveBomVariantHasher effectiveBomVariantHasher;
   private final QuoteBomContextResolver contextResolver;
   private final QuoteBomStatusService quoteBomStatusService;
-  private final QuoteBomConfirmationService confirmationService;
 
   public QuoteEffectiveBomApplicationServiceImpl(
       QuoteBomPreparationRecordMapper preparationMapper,
-      QuoteBomStatusMapper statusMapper,
       OaFormItemMapper oaFormItemMapper,
       OaFormMapper oaFormMapper,
       QuoteBomMonthlySnapshotMapper monthlySnapshotMapper,
       BomRawHierarchyMapper rawHierarchyMapper,
-      QuoteEffectiveBomRepository effectiveBomRepository,
+      PlateCommercialMakeBomExpansionService crossOrganizationExpansionService,
       BomAlternativeGroupResolver alternativeGroupResolver,
       BomAlternativeBranchPruner alternativeBranchPruner,
       QuoteBomAlternativeSelectionRepository selectionRepository,
@@ -124,15 +114,13 @@ public class QuoteEffectiveBomApplicationServiceImpl
       QuoteEffectiveBomBuilder effectiveBomBuilder,
       EffectiveBomVariantHasher effectiveBomVariantHasher,
       QuoteBomContextResolver contextResolver,
-      QuoteBomStatusService quoteBomStatusService,
-      QuoteBomConfirmationService confirmationService) {
+      QuoteBomStatusService quoteBomStatusService) {
     this.preparationMapper = preparationMapper;
-    this.statusMapper = statusMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.oaFormMapper = oaFormMapper;
     this.monthlySnapshotMapper = monthlySnapshotMapper;
     this.rawHierarchyMapper = rawHierarchyMapper;
-    this.effectiveBomRepository = effectiveBomRepository;
+    this.crossOrganizationExpansionService = crossOrganizationExpansionService;
     this.alternativeGroupResolver = alternativeGroupResolver;
     this.alternativeBranchPruner = alternativeBranchPruner;
     this.selectionRepository = selectionRepository;
@@ -143,7 +131,6 @@ public class QuoteEffectiveBomApplicationServiceImpl
     this.effectiveBomVariantHasher = effectiveBomVariantHasher;
     this.contextResolver = contextResolver;
     this.quoteBomStatusService = quoteBomStatusService;
-    this.confirmationService = confirmationService;
   }
 
   @Override
@@ -151,9 +138,6 @@ public class QuoteEffectiveBomApplicationServiceImpl
   public QuoteEffectiveBomResponse getEffectiveBom(String oaNo, Long oaFormItemId) {
     QueryContext context = requireContext(oaNo, oaFormItemId);
     QuoteBomMonthlySnapshot snapshot = findOrPrepareMonthlySnapshot(context);
-    if (isFinalFrozen(context, snapshot)) {
-      return frozenResponse(context, snapshot);
-    }
     return draftResponse(context, snapshot);
   }
 
@@ -162,11 +146,6 @@ public class QuoteEffectiveBomApplicationServiceImpl
   public QuoteEffectiveBomResponse rebuildPreview(String oaNo, Long oaFormItemId) {
     QueryContext context = requireContext(oaNo, oaFormItemId);
     QuoteBomMonthlySnapshot snapshot = findOrPrepareMonthlySnapshot(context);
-    if (isFinalFrozen(context, snapshot)) {
-      throw failure(
-          "EFFECTIVE_BOM_FROZEN",
-          "报价物料明细已经确认，只能查看当前计价方案");
-    }
     return draftResponse(context, snapshot);
   }
 
@@ -186,11 +165,6 @@ public class QuoteEffectiveBomApplicationServiceImpl
           "预览月份与当前核算月份不一致，当前月份=" + context.costPeriodMonth());
     }
     QuoteBomMonthlySnapshot snapshot = findOrPrepareMonthlySnapshot(context);
-    if (isFinalFrozen(context, snapshot)) {
-      throw failure(
-          "EFFECTIVE_BOM_FROZEN",
-          "报价物料明细已经确认，不能预览其他标准/替代方案");
-    }
     Map<String, String> overrides =
         Map.of(
             required(alternativeGroupKey, "alternativeGroupKey"),
@@ -200,17 +174,12 @@ public class QuoteEffectiveBomApplicationServiceImpl
 
   @Override
   @Transactional(rollbackFor = Exception.class)
-  public QuoteEffectiveBomConfirmationCandidate prepareConfirmation(
+  public QuoteEffectiveBomCostingCandidate prepareCostingCandidate(
       String oaNo, Long oaFormItemId) {
     QueryContext context = requireContext(oaNo, oaFormItemId);
     QuoteBomMonthlySnapshot snapshot = findOrPrepareMonthlySnapshot(context);
-    if (isFinalFrozen(context, snapshot)) {
-      QuoteEffectiveBomResponse response = frozenResponse(context, snapshot);
-      return new QuoteEffectiveBomConfirmationCandidate(
-          response, monthlyKey(context), selectionIds(response), null);
-    }
     DraftEvaluation evaluation = evaluateDraft(context, snapshot);
-    if (readyForConfirmation(evaluation)
+    if (readyForCosting(evaluation)
         && evaluation.response().alternativeSelections().stream()
             .anyMatch(selection -> selection.selectionId() == null)) {
       RawSnapshot rawSnapshot = loadRawSnapshot(context, snapshot);
@@ -228,9 +197,8 @@ public class QuoteEffectiveBomApplicationServiceImpl
               : evaluation.response().blockIssues().getFirst().message();
       throw failure("EFFECTIVE_BOM_BLOCKED", detail);
     }
-    return new QuoteEffectiveBomConfirmationCandidate(
+    return new QuoteEffectiveBomCostingCandidate(
         evaluation.response(),
-        monthlyKey(context),
         evaluation.alternativeSelectionIds(),
         evaluation.variantInput());
   }
@@ -266,6 +234,10 @@ public class QuoteEffectiveBomApplicationServiceImpl
 
     RawSnapshot rawSnapshot = loadRawSnapshot(context, snapshot);
     warnings.addAll(rawSnapshot.warnings());
+    if (!rawSnapshot.blockIssues().isEmpty()) {
+      return blockedEvaluation(
+          blockedResponse(context, snapshot, rawSnapshot.blockIssues(), warnings));
+    }
     if (rawSnapshot.rows().isEmpty()) {
       return blockedEvaluation(
           blockedResponse(
@@ -381,60 +353,20 @@ public class QuoteEffectiveBomApplicationServiceImpl
             selections.selectedMaterialByGroup(),
             built);
     String currentVariantHash = effectiveBomVariantHasher.hash(variant);
-    String stagedBuildBatchId = trimToNull(snapshot.getEffectiveBuildBatchId());
-    String stagedVariantHash = trimToNull(snapshot.getEffectiveVariantHash());
-    boolean stagedVariantIsCurrent =
-        stagedBuildBatchId != null && Objects.equals(stagedVariantHash, currentVariantHash);
     QuoteEffectiveBomResponse response =
         response(
             "DRAFT",
             context,
             snapshot,
             rawSnapshot.sourceBuildBatchId(),
-            stagedVariantIsCurrent ? stagedBuildBatchId : null,
-            stagedVariantIsCurrent ? stagedVariantHash : null,
+            null,
+            currentVariantHash,
             nodes,
             selections.responses(),
             exclusionSummary(built.exclusions()),
             List.of(),
             warnings);
     return new DraftEvaluation(response, variant, selectionIds(selections.responses()));
-  }
-
-  private QuoteEffectiveBomResponse frozenResponse(
-      QueryContext context, QuoteBomMonthlySnapshot snapshot) {
-    String buildBatchId = trimToNull(snapshot.getEffectiveBuildBatchId());
-    if (buildBatchId == null) {
-      throw failure(
-          "EFFECTIVE_BOM_FROZEN_INVALID", "冻结月度卡片缺少最终构建编号，请联系管理员处理");
-    }
-    List<QuoteEffectiveBomNode> nodes =
-        effectiveBomRepository.findNodesByBuildBatchId(buildBatchId);
-    if (nodes == null || nodes.isEmpty()) {
-      throw failure(
-          "EFFECTIVE_BOM_FROZEN_INVALID",
-          "冻结月度卡片指向的最终BOM不存在，构建编号=" + buildBatchId);
-    }
-    validateFrozenNodes(context, snapshot, buildBatchId, nodes);
-
-    List<String> warnings = baseWarnings(context);
-    if (isConfirmed(context)) {
-      warnings.add("已确认版本只展示实际进入计价的节点，不按实时规则反推历史排除原因");
-    }
-    List<QuoteEffectiveBomAlternativeResponse> selections = frozenSelections(nodes);
-    String state = frozenState(context, snapshot);
-    return response(
-        state,
-        context,
-        snapshot,
-        trimToNull(snapshot.getBomBatchId()),
-        buildBatchId,
-        trimToNull(snapshot.getEffectiveVariantHash()),
-        nodes.stream().map(this::toNode).toList(),
-        selections,
-        new QuoteEffectiveBomExclusionSummaryResponse(false, null, Map.of()),
-        List.of(),
-        warnings);
   }
 
   private QueryContext requireContext(String oaNo, Long oaFormItemId) {
@@ -486,7 +418,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
     try {
       bomContext =
           contextResolver.resolveWithExistingCostPeriod(
-              form, item, preparation.getCostPeriodMonth());
+              form, item, CostPricingPeriodUtils.currentPricingMonth());
     } catch (QuoteIngestException exception) {
       throw failure("EFFECTIVE_BOM_SCOPE_INVALID", exception.getMessage());
     }
@@ -559,7 +491,8 @@ public class QuoteEffectiveBomApplicationServiceImpl
       QueryContext context, QuoteBomMonthlySnapshot snapshot) {
     String batchId = trimToNull(snapshot.getBomBatchId());
     if (batchId == null) {
-      return new RawSnapshot(List.of(), null, List.of("月度卡片缺少原始BOM来源批次"));
+      return new RawSnapshot(
+          List.of(), null, List.of("月度卡片缺少原始BOM来源批次"), List.of());
     }
     LocalDate asOfDate =
         snapshot.getSyncAt() == null
@@ -596,7 +529,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
                 .orderByAsc(BomRawHierarchy::getSortSeq)
                 .orderByAsc(BomRawHierarchy::getId));
     if (candidates == null || candidates.isEmpty()) {
-      return new RawSnapshot(List.of(), batchId, List.of());
+      return new RawSnapshot(List.of(), batchId, List.of(), List.of());
     }
 
     List<String> warnings = new ArrayList<>();
@@ -615,10 +548,31 @@ public class QuoteEffectiveBomApplicationServiceImpl
           "月度卡片保存的是U9导入批次，已定位到对应层级构建批次="
               + display(sourceBuildBatchId));
     }
+    List<BomRawHierarchy> pruned =
+        BomEffectiveTreePruner.prune(selected, context.topProductCode());
+    // 板换产品必须先完成“220采购件 -> 210同料号制造BOM”的既有跨组织展开，
+    // 再进入替代料选择、形态解析和最终计价BOM构建；否则六步工作台会把该节点误当采购叶子截断。
+    PlateCommercialMakeBomExpansionService.ExpansionResult expansion =
+        crossOrganizationExpansionService.expand(
+            pruned,
+            context.topProductCode(),
+            asOfDate,
+            firstText(snapshot.getBomPurpose(), DEFAULT_BOM_PURPOSE),
+            "U9",
+            context.organization());
+    if (expansion.hasGaps()) {
+      List<QuoteEffectiveBomIssueResponse> issues =
+          expansion.gaps().stream()
+              .map(
+                  gap ->
+                      new QuoteEffectiveBomIssueResponse(
+                          "CROSS_ORG_BOM_EXPANSION_FAILED", null, null, gap))
+              .toList();
+      return new RawSnapshot(
+          expansion.rows(), sourceBuildBatchId, warnings, issues);
+    }
     return new RawSnapshot(
-        BomEffectiveTreePruner.prune(selected, context.topProductCode()),
-        sourceBuildBatchId,
-        warnings);
+        expansion.rows(), sourceBuildBatchId, warnings, List.of());
   }
 
   private SelectionSnapshot resolveSelections(
@@ -734,9 +688,19 @@ public class QuoteEffectiveBomApplicationServiceImpl
       }
       String sourceShape = entry.getValue().getFirst().getShapeAttr();
       sourceShapeByMaterial.put(materialCode, sourceShape);
+      String materialOrganizationCode =
+          resolveNodeMaterialOrganization(
+              context.organization().materialOrganizationCode(), entry.getValue());
+      if (materialOrganizationCode == null) {
+        decisions.put(
+            materialCode,
+            EffectiveBomShapeDecision.blocked(
+                materialCode, "同一原始BOM中该料号跨多个组织出现，不能任选形态规则"));
+        continue;
+      }
       requests.add(
           new MaterialQuoteShapeRequest(
-              context.organization().materialOrganizationCode(),
+              materialOrganizationCode,
               materialCode,
               context.costPeriodMonth(),
               sourceShape));
@@ -814,76 +778,20 @@ public class QuoteEffectiveBomApplicationServiceImpl
         && rows.stream().allMatch(row -> !StringUtils.hasText(row.getShapeAttr()));
   }
 
-  private void validateFrozenNodes(
-      QueryContext context,
-      QuoteBomMonthlySnapshot snapshot,
-      String buildBatchId,
-      List<QuoteEffectiveBomNode> nodes) {
-    for (QuoteEffectiveBomNode node : nodes) {
-      if (!sameText(buildBatchId, node.getBuildBatchId())
-          || !sameText(context.topProductCode(), node.getTopProductCode())
-          || !sameText(context.costPeriodMonth(), node.getCostPeriodMonth())
-          || !sameText(context.organization().priceOrgCode(), node.getPriceOrgCode())) {
-        throw failure(
-            "EFFECTIVE_BOM_FROZEN_INVALID", "冻结月度卡片与最终BOM节点的产品、月份或组织证据不一致");
-      }
-    }
-  }
-
-  private List<QuoteEffectiveBomAlternativeResponse> frozenSelections(
-      List<QuoteEffectiveBomNode> nodes) {
-    Set<Long> selectionIds =
-        nodes.stream()
-            .map(QuoteEffectiveBomNode::getAlternativeSelectionId)
+  private static String resolveNodeMaterialOrganization(
+      String fallbackOrganizationCode, List<BomRawHierarchy> rows) {
+    Set<String> organizations =
+        rows.stream()
+            .map(BomRawHierarchy::getPriceOrgCode)
+            .map(QuoteEffectiveBomApplicationServiceImpl::trimToNull)
             .filter(Objects::nonNull)
+            .map(MaterialOrganization::fromPriceOrgCode)
+            .map(MaterialOrganization::getCode)
             .collect(Collectors.toCollection(LinkedHashSet::new));
-    Map<Long, QuoteBomAlternativeSelection> selectionEvidence =
-        selectionIds.isEmpty()
-            ? Map.of()
-            : selectionRepository.findByIds(selectionIds).stream()
-                .collect(
-                    Collectors.toMap(
-                        QuoteBomAlternativeSelection::getId,
-                        Function.identity(),
-                        (first, ignored) -> first,
-                        LinkedHashMap::new));
-    Map<String, QuoteEffectiveBomAlternativeResponse> selections = new LinkedHashMap<>();
-    for (QuoteEffectiveBomNode node : nodes) {
-      String groupKey = trimToNull(node.getAlternativeGroupKey());
-      if (groupKey == null) {
-        continue;
-      }
-      QuoteBomAlternativeSelection evidence =
-          selectionEvidence.get(node.getAlternativeSelectionId());
-      if (evidence != null
-          && (!sameText(groupKey, evidence.getAlternativeGroupKey())
-              || !sameText(node.getMaterialCode(), evidence.getSelectedMaterialCode()))) {
-        throw failure(
-            "EFFECTIVE_BOM_FROZEN_INVALID", "冻结最终BOM的替代选择证据与节点不一致: " + groupKey);
-      }
-      QuoteEffectiveBomAlternativeResponse candidate =
-          new QuoteEffectiveBomAlternativeResponse(
-              groupKey,
-              evidence == null
-                  ? "STANDARD".equalsIgnoreCase(node.getAlternativeChildType())
-                      ? node.getMaterialCode()
-                      : null
-                  : evidence.getStandardMaterialCode(),
-              node.getMaterialCode(),
-              node.getAlternativeChildType(),
-              evidence == null
-                  ? node.getAlternativeSelectionSource()
-                  : evidence.getSelectionSource(),
-              evidence == null ? null : evidence.getSelectionVersion(),
-              node.getAlternativeSelectionId(),
-              true);
-      QuoteEffectiveBomAlternativeResponse old = selections.putIfAbsent(groupKey, candidate);
-      if (old != null && !sameText(old.selectedMaterialCode(), candidate.selectedMaterialCode())) {
-        throw failure(
-            "EFFECTIVE_BOM_FROZEN_INVALID", "冻结最终BOM同一替代组出现多个选中料号: " + groupKey);
-      }
+    if (organizations.isEmpty()) {
+      return fallbackOrganizationCode;
     }
-    return List.copyOf(selections.values());
+    return organizations.size() == 1 ? organizations.iterator().next() : null;
   }
 
   private QuoteEffectiveBomResponse blockedResponse(
@@ -972,37 +880,6 @@ public class QuoteEffectiveBomApplicationServiceImpl
         node.sourceNodePath());
   }
 
-  private QuoteEffectiveBomNodeResponse toNode(QuoteEffectiveBomNode node) {
-    return new QuoteEffectiveBomNodeResponse(
-        node.getNodeKey(),
-        node.getParentNodeKey(),
-        node.getNodeLevel(),
-        node.getSortSeq(),
-        node.getNodePath(),
-        node.getMaterialCode(),
-        node.getMaterialName(),
-        node.getMaterialSpec(),
-        node.getQtyPerParent(),
-        node.getQtyPerTop(),
-        node.getSourceMaterialShape(),
-        node.getEffectiveMaterialShape(),
-        node.getShapeResolutionSource(),
-        node.getShapePolicyId(),
-        node.getShapePolicyFingerprint(),
-        node.getSelectedSupplierRatioId(),
-        node.getSelectedSupplierCode(),
-        node.getSelectedSupplierName(),
-        node.getSelectedSupplyRatio(),
-        node.getAlternativeGroupKey(),
-        node.getAlternativeChildType(),
-        node.getAlternativeSelectionId(),
-        node.getAlternativeSelectionSource(),
-        node.getSourceBomType(),
-        node.getSourceBomBatchId(),
-        node.getSourceHierarchyId(),
-        node.getSourceNodePath());
-  }
-
   private QuoteEffectiveBomIssueResponse toIssue(EffectiveBomBlockIssue issue) {
     return new QuoteEffectiveBomIssueResponse(
         issue.issueCode(), issue.materialCode(), issue.sourcePath(), issue.message());
@@ -1032,28 +909,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
     return warnings;
   }
 
-  private static boolean isFrozen(QuoteBomMonthlySnapshot snapshot) {
-    return snapshot != null && FROZEN.equalsIgnoreCase(trimToNull(snapshot.getFreezeStatus()));
-  }
-
-  /**
-   * 只有第2步确认记录真正引用了构建，月度树才是不可变的最终版本。
-   * 历史上“进入第2步”误写成 FROZEN 的记录仍按可重新计算草稿处理。
-   */
-  private boolean isFinalFrozen(
-      QueryContext context, QuoteBomMonthlySnapshot snapshot) {
-    if (!isFrozen(snapshot)) {
-      return false;
-    }
-    if (isConfirmed(context)) {
-      return true;
-    }
-    String buildBatchId = trimToNull(snapshot.getEffectiveBuildBatchId());
-    return buildBatchId != null
-        && confirmationService.hasActiveConfirmationForBuild(buildBatchId);
-  }
-
-  private static boolean readyForConfirmation(DraftEvaluation evaluation) {
+  private static boolean readyForCosting(DraftEvaluation evaluation) {
     return evaluation != null
         && "DRAFT".equals(evaluation.response().state())
         && evaluation.variantInput() != null;
@@ -1068,30 +924,6 @@ public class QuoteEffectiveBomApplicationServiceImpl
         context.costPeriodMonth(),
         context.organization().priceOrgCode(),
         context.businessUnit());
-  }
-
-  private boolean isConfirmed(QueryContext context) {
-    return confirmationService.hasActiveConfirmation(
-        context.oaNo(),
-        context.oaFormItemId(),
-        context.topProductCode(),
-        context.costPeriodMonth());
-  }
-
-  private String frozenState(
-      QueryContext context, QuoteBomMonthlySnapshot snapshot) {
-    QuoteBomStatus status =
-        statusMapper.selectOne(
-            Wrappers.<QuoteBomStatus>lambdaQuery()
-                .eq(QuoteBomStatus::getOaFormItemId, context.oaFormItemId())
-                .last("LIMIT 1"));
-    if (status != null
-        && QuoteBomStatusCode.REUSED_CURRENT_MONTH.getCode().equals(status.getBomStatus())) {
-      return "REUSED";
-    }
-    return Objects.equals(snapshot.getSourceOaFormItemId(), context.oaFormItemId())
-        ? "FROZEN"
-        : "REUSED";
   }
 
   private static String latestSourceBuildBatchId(List<BomRawHierarchy> rows) {
@@ -1161,20 +993,6 @@ public class QuoteEffectiveBomApplicationServiceImpl
     return new DraftEvaluation(response, null, Map.of());
   }
 
-  private static QuoteBomMonthlyFreezeKey monthlyKey(QueryContext context) {
-    return new QuoteBomMonthlyFreezeKey(
-        context.costPeriodMonth(),
-        context.topProductCode(),
-        context.customerKey(),
-        context.packageMethod(),
-        context.organization().priceOrgCode());
-  }
-
-  private static Map<String, Long> selectionIds(
-      QuoteEffectiveBomResponse response) {
-    return response == null ? Map.of() : selectionIds(response.alternativeSelections());
-  }
-
   private static Map<String, Long> selectionIds(
       List<QuoteEffectiveBomAlternativeResponse> selections) {
     Map<String, Long> result = new LinkedHashMap<>();
@@ -1203,7 +1021,10 @@ public class QuoteEffectiveBomApplicationServiceImpl
       String businessUnit) {}
 
   private record RawSnapshot(
-      List<BomRawHierarchy> rows, String sourceBuildBatchId, List<String> warnings) {}
+      List<BomRawHierarchy> rows,
+      String sourceBuildBatchId,
+      List<String> warnings,
+      List<QuoteEffectiveBomIssueResponse> blockIssues) {}
 
   private record SelectionSnapshot(
       Map<String, String> selectedMaterialByGroup,

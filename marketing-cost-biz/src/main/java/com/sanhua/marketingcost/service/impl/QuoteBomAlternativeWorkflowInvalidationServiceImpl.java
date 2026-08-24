@@ -1,12 +1,9 @@
 package com.sanhua.marketingcost.service.impl;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.sanhua.marketingcost.entity.PricePrepareBatch;
-import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
+import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeWorkflowInvalidationResult;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeWorkflowInvalidationService;
-import java.time.LocalDateTime;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -16,23 +13,15 @@ import org.springframework.util.StringUtils;
 public class QuoteBomAlternativeWorkflowInvalidationServiceImpl
     implements QuoteBomAlternativeWorkflowInvalidationService {
 
-  static final String STATUS_STALE = "STALE";
-  static final String MESSAGE = "BOM标准/替代分支已变化，请重新确认价格并核算成本";
-
-  private final QuotePriceTypeConfirmationInvalidationService
-      priceTypeInvalidationService;
-  private final PricePrepareBatchMapper pricePrepareBatchMapper;
+  private final QuoteCostingWorkspaceService workspaceService;
   private final QuoteCostRunVersionInvalidationService
       costRunInvalidationService;
 
   public QuoteBomAlternativeWorkflowInvalidationServiceImpl(
-      QuotePriceTypeConfirmationInvalidationService
-          priceTypeInvalidationService,
-      PricePrepareBatchMapper pricePrepareBatchMapper,
+      QuoteCostingWorkspaceService workspaceService,
       QuoteCostRunVersionInvalidationService
           costRunInvalidationService) {
-    this.priceTypeInvalidationService = priceTypeInvalidationService;
-    this.pricePrepareBatchMapper = pricePrepareBatchMapper;
+    this.workspaceService = workspaceService;
     this.costRunInvalidationService = costRunInvalidationService;
   }
 
@@ -49,32 +38,16 @@ public class QuoteBomAlternativeWorkflowInvalidationServiceImpl
     }
     String normalizedProduct = required("productCode", productCode);
     String normalizedMonth = required("periodMonth", periodMonth);
-    int priceTypeCount =
-        priceTypeInvalidationService.invalidateScopeAfterBomChange(
-            normalizedOaNo,
-            oaFormItemId,
-            normalizedProduct,
-            normalizedMonth);
-    int pricePrepareCount =
-        pricePrepareBatchMapper.update(
-            null,
-            Wrappers.<PricePrepareBatch>lambdaUpdate()
-                .set(PricePrepareBatch::getStatus, STATUS_STALE)
-                .set(PricePrepareBatch::getMessage, MESSAGE)
-                .set(PricePrepareBatch::getFinishedAt, LocalDateTime.now())
-                .eq(PricePrepareBatch::getOaNo, normalizedOaNo)
-                .eq(PricePrepareBatch::getOaFormItemId, oaFormItemId)
-                .eq(PricePrepareBatch::getTopProductCode, normalizedProduct)
-                .eq(PricePrepareBatch::getPeriodMonth, normalizedMonth)
-                .ne(PricePrepareBatch::getStatus, STATUS_STALE));
+    workspaceService.markItemStale(
+        oaFormItemId, normalizedMonth, "BOM_ALTERNATIVE_CHANGED");
     int costRunCount =
-        costRunInvalidationService.invalidateProductAfterBomChange(
+        costRunInvalidationService.invalidateProduct(
             normalizedOaNo,
             oaFormItemId,
             normalizedProduct,
             normalizedMonth);
     return new QuoteBomAlternativeWorkflowInvalidationResult(
-        priceTypeCount, pricePrepareCount, costRunCount);
+        0, 0, costRunCount);
   }
 
   private static String required(String field, String value) {

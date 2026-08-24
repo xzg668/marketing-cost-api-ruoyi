@@ -14,13 +14,11 @@ import static org.mockito.Mockito.when;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.dto.PriceRangeItemImportRequest;
-import com.sanhua.marketingcost.dto.PriceRangeItemImportResult;
-import com.sanhua.marketingcost.dto.RangePriceTypeConflict;
 import com.sanhua.marketingcost.entity.PriceRangeFactorRule;
 import com.sanhua.marketingcost.entity.PriceRangeItem;
 import com.sanhua.marketingcost.mapper.PriceRangeFactorRuleMapper;
 import com.sanhua.marketingcost.mapper.PriceRangeItemMapper;
-import com.sanhua.marketingcost.service.MaterialPriceTypeService;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -38,6 +36,7 @@ class PriceRangeItemServiceImplTest {
 
   private PriceRangeItemMapper itemMapper;
   private PriceRangeFactorRuleMapper factorRuleMapper;
+  private MaterialPriceTypeRouteSyncService priceTypeRouteSyncService;
   private PriceRangeItemServiceImpl service;
 
   @BeforeAll
@@ -52,15 +51,18 @@ class PriceRangeItemServiceImplTest {
   void setUp() {
     itemMapper = mock(PriceRangeItemMapper.class);
     factorRuleMapper = mock(PriceRangeFactorRuleMapper.class);
-    service = new PriceRangeItemServiceImpl(itemMapper, factorRuleMapper);
+    priceTypeRouteSyncService = mock(MaterialPriceTypeRouteSyncService.class);
+    service = new PriceRangeItemServiceImpl(
+        itemMapper, factorRuleMapper, priceTypeRouteSyncService);
   }
 
   @Test
-  @DisplayName("QTY 导入保持旧逻辑，只写 lp_price_range_item")
+  @DisplayName("QTY 正式导入写区间价并按同一业务单元自动维护价格类型")
   void qtyImportStillWritesOnlyRangeItems() {
     when(itemMapper.selectOne(any())).thenReturn(null);
     when(itemMapper.selectList(any())).thenReturn(List.of());
     PriceRangeItemImportRequest request = new PriceRangeItemImportRequest();
+    request.setBusinessUnitType("COMMERCIAL");
     request.setRows(List.of(row("MAT-QTY", "0", "10", "5.000000")));
 
     List<PriceRangeItem> imported = service.importItems(request);
@@ -75,6 +77,12 @@ class PriceRangeItemServiceImplTest {
     assertThat(inserted.getFactorRuleId()).isNull();
     assertThat(inserted.getFactorCode()).isNull();
     assertThat(inserted.getCurrentFlag()).isOne();
+    assertThat(inserted.getBusinessUnitType()).isEqualTo("COMMERCIAL");
+    ArgumentCaptor<MaterialPriceTypeRouteSyncService.RouteCommand> routeCaptor =
+        ArgumentCaptor.forClass(MaterialPriceTypeRouteSyncService.RouteCommand.class);
+    verify(priceTypeRouteSyncService).sync(routeCaptor.capture());
+    assertThat(routeCaptor.getValue().priceType()).isEqualTo("区间价");
+    assertThat(routeCaptor.getValue().businessUnitType()).isEqualTo("COMMERCIAL");
   }
 
   @Test
@@ -219,33 +227,6 @@ class PriceRangeItemServiceImplTest {
     verify(factorRuleMapper, never()).updateById(any(PriceRangeFactorRule.class));
     verify(itemMapper, never()).updateById(any(PriceRangeItem.class));
     verify(itemMapper, never()).insert(any(PriceRangeItem.class));
-  }
-
-  @Test
-  @DisplayName("FACTOR 导入结果返回价格类型冲突清单")
-  void factorImportWithResultReturnsPriceTypeConflicts() {
-    MaterialPriceTypeService materialPriceTypeService = mock(MaterialPriceTypeService.class);
-    PriceRangeItemServiceImpl serviceWithPriceType =
-        new PriceRangeItemServiceImpl(itemMapper, factorRuleMapper, materialPriceTypeService);
-    when(factorRuleMapper.selectList(any())).thenReturn(List.of());
-    when(factorRuleMapper.insert(any(PriceRangeFactorRule.class))).thenAnswer(invocation -> {
-      PriceRangeFactorRule rule = invocation.getArgument(0);
-      rule.setId(101L);
-      return 1;
-    });
-    RangePriceTypeConflict conflict = new RangePriceTypeConflict();
-    conflict.setMaterialCode("201850160");
-    conflict.setCurrentPriceType("固定价");
-    conflict.setSuggestedPriceType("区间价");
-    when(materialPriceTypeService.findRangePriceTypeConflicts(any())).thenReturn(List.of(conflict));
-
-    PriceRangeItemImportResult result = serviceWithPriceType.importItemsWithResult(
-        factorRequest("CU", row("201850160", "87501", "92500", "0.392035")));
-
-    assertThat(result.getItems()).hasSize(1);
-    assertThat(result.getPriceTypeConflicts()).hasSize(1);
-    assertThat(result.getPriceTypeConflicts().get(0).getCurrentPriceType()).isEqualTo("固定价");
-    verify(materialPriceTypeService).findRangePriceTypeConflicts(any());
   }
 
   @Test

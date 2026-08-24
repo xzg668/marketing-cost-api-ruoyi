@@ -58,7 +58,8 @@ class ElectronicBomVerificationPersistenceIntegrationTest extends BomMapperTestB
     int index = 0;
     for (String resource : List.of(
         "/db/V142__quote_bom_preparation_schema.sql",
-        "/db/V206__quote_bom_price_collaboration_schema.sql")) {
+        "/db/V206__quote_bom_price_collaboration_schema.sql",
+        "/db/V210__quote_collaboration_gap_trace_fields.sql")) {
       String target = "/tmp/QCBP11-" + (++index) + ".sql";
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource(resource), target);
       ExecResult result = MYSQL.execInContainer(
@@ -110,6 +111,9 @@ class ElectronicBomVerificationPersistenceIntegrationTest extends BomMapperTestB
       assertThat(gap.getGapStatus()).isEqualTo("OPEN");
       assertThat(gap.getReasonCode()).isEqualTo("MANUFACTURE_CHILD_REQUIRED");
       assertThat(gap.getBomNodeKey()).isEqualTo("CHILD-1");
+      assertThat(gap.getAccountingMonth()).isEqualTo("2026-08");
+      assertThat(gap.getApplicableOrgCode()).isEqualTo("210");
+      assertThat(gap.getGapFingerprint()).hasSize(64);
     });
     String failurePayload = jdbc.queryForObject("""
         SELECT payload_json FROM lp_integration_outbox

@@ -15,6 +15,7 @@ import com.sanhua.marketingcost.service.impl.MonthlyRepriceConfirmServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceOperationServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceQueryServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceStartServiceImpl;
+import com.sanhua.marketingcost.service.impl.QuoteBatchCostRunServiceImpl;
 import java.util.Map;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
@@ -43,7 +44,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
             MonthlyRepriceConfirmServiceImpl.class,
             MonthlyRepriceOperationServiceImpl.class,
             MonthlyRepriceQueryServiceImpl.class,
-            MonthlyRepriceStartServiceImpl.class
+            MonthlyRepriceStartServiceImpl.class,
+            QuoteBatchCostRunServiceImpl.class
         }))
 @MapperScan("com.sanhua.marketingcost.mapper")
 @EnableScheduling

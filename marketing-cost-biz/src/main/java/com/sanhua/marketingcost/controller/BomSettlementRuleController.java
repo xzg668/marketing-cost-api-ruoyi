@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.BomSettlementRuleUpsertRequest;
 import com.sanhua.marketingcost.entity.BomSettlementRule;
 import com.sanhua.marketingcost.mapper.BomSettlementRuleMapper;
+import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import java.util.List;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.util.StringUtils;
@@ -25,9 +26,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class BomSettlementRuleController {
 
   private final BomSettlementRuleMapper ruleMapper;
+  private final QuoteCostingWorkspaceService workspaceService;
 
-  public BomSettlementRuleController(BomSettlementRuleMapper ruleMapper) {
+  public BomSettlementRuleController(
+      BomSettlementRuleMapper ruleMapper,
+      QuoteCostingWorkspaceService workspaceService) {
     this.ruleMapper = ruleMapper;
+    this.workspaceService = workspaceService;
   }
 
   @PreAuthorize("@ss.hasPermi('bom-data:settlement-rule:list')")
@@ -68,6 +73,7 @@ public class BomSettlementRuleController {
     BomSettlementRule entity = new BomSettlementRule();
     applyRequest(entity, req);
     ruleMapper.insert(entity);
+    markWorkspacesStale();
     return CommonResult.success(entity);
   }
 
@@ -82,6 +88,7 @@ public class BomSettlementRuleController {
     }
     applyRequest(existing, req);
     ruleMapper.updateById(existing);
+    markWorkspacesStale();
     return CommonResult.success(existing);
   }
 
@@ -89,6 +96,9 @@ public class BomSettlementRuleController {
   @DeleteMapping("/{id}")
   public CommonResult<Boolean> delete(@PathVariable Long id) {
     int affected = ruleMapper.deleteById(id);
+    if (affected > 0) {
+      markWorkspacesStale();
+    }
     return CommonResult.success(affected > 0);
   }
 
@@ -102,6 +112,7 @@ public class BomSettlementRuleController {
     }
     existing.setEnabled(Integer.valueOf(1).equals(existing.getEnabled()) ? 0 : 1);
     ruleMapper.updateById(existing);
+    markWorkspacesStale();
     return CommonResult.success(existing);
   }
 
@@ -138,5 +149,9 @@ public class BomSettlementRuleController {
       return null;
     }
     return value.trim();
+  }
+
+  private void markWorkspacesStale() {
+    workspaceService.markBomRuleWorkspacesStale(null, "BOM_RULE_CHANGED");
   }
 }

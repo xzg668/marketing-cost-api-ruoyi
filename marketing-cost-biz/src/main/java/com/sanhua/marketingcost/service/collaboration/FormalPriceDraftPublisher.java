@@ -3,7 +3,10 @@ package com.sanhua.marketingcost.service.collaboration;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.entity.QuotePriceDraft;
 import com.sanhua.marketingcost.entity.QuotePriceDraftField;
+import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.QuotePriceDraftMapper;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.RouteCommand;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -29,15 +32,18 @@ public class FormalPriceDraftPublisher {
   private final QuotePriceDraftRepository repository;
   private final QuotePriceDraftMapper draftMapper;
   private final RangePriceDraftFormalPublisher rangePublisher;
+  private final MaterialPriceTypeRouteSyncService priceTypeRouteSyncService;
 
   public FormalPriceDraftPublisher(
       JdbcTemplate jdbc, ObjectMapper objectMapper, QuotePriceDraftRepository repository,
-      QuotePriceDraftMapper draftMapper, RangePriceDraftFormalPublisher rangePublisher) {
+      QuotePriceDraftMapper draftMapper, RangePriceDraftFormalPublisher rangePublisher,
+      MaterialPriceTypeRouteSyncService priceTypeRouteSyncService) {
     this.jdbc = jdbc;
     this.objectMapper = objectMapper;
     this.repository = repository;
     this.draftMapper = draftMapper;
     this.rangePublisher = rangePublisher;
+    this.priceTypeRouteSyncService = priceTypeRouteSyncService;
   }
 
   @Transactional
@@ -61,7 +67,7 @@ public class FormalPriceDraftPublisher {
       case "FIXED_PURCHASE", "SETTLE_FIXED" -> publishFixed(draft, fields, batchNo);
       default -> throw new IllegalArgumentException("不支持的正式价格类型：" + draft.getPriceType());
     };
-    upsertPriceRoute(draft, batchNo);
+    syncPriceRoute(draft);
     int marked = draftMapper.markPublished(draft.getId(), draft.getDraftVersion(),
         target.table(), target.id(), batchNo, scope.businessUnitType(), scope.applicableOrgCode(),
         finance.userId(), finance.userName());
@@ -163,22 +169,16 @@ public class FormalPriceDraftPublisher {
     }
   }
 
-  private void upsertPriceRoute(QuotePriceDraft draft, String batchNo) {
-    jdbc.update("""
-        DELETE FROM lp_material_price_type
-        WHERE material_code=? AND business_unit_type=? AND period=?
-          AND source_system='quote_collab'
-        """, draft.getMaterialCode(), draft.getBusinessUnitType(), taskMonth(draft));
-    jdbc.update("""
-        INSERT INTO lp_material_price_type
-          (material_code,business_unit_type,material_name,material_spec,material_model,unit,
-           material_shape,price_type,period,source,priority,effective_from,effective_to,
-           source_system,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,'采购件',?,?,?,1,?,?,'quote_collab',NOW(),NOW())
-        """, draft.getMaterialCode(), draft.getBusinessUnitType(), draft.getMaterialName(),
-        draft.getMaterialSpec(), draft.getMaterialModel(), draft.getUnit(),
-        priceTypeLabel(draft.getPriceType()), taskMonth(draft), ROUTE_SOURCE,
-        draft.getEffectiveFrom(), draft.getEffectiveTo());
+  private void syncPriceRoute(QuotePriceDraft draft) {
+    priceTypeRouteSyncService.sync(new RouteCommand(
+        draft.getMaterialCode(),
+        draft.getMaterialName(),
+        first(draft.getMaterialModel(), draft.getMaterialSpec()),
+        draft.getUnit(),
+        draft.getBusinessUnitType(),
+        PriceTypeEnum.normalizeRouteText(draft.getPriceType()),
+        ROUTE_SOURCE,
+        "QUOTE_COLLAB"));
   }
 
   private BigDecimal variable(List<QuotePriceDraftField> fields, String code) {
@@ -209,15 +209,6 @@ public class FormalPriceDraftPublisher {
   private static int integer(String value, int fallback) {
     try { return StringUtils.hasText(value) ? Integer.parseInt(value) : fallback; }
     catch (NumberFormatException exception) { return fallback; }
-  }
-
-  private static String priceTypeLabel(String code) {
-    return switch (code) {
-      case "LINKED" -> "联动价";
-      case "RANGE" -> "区间价";
-      case "SETTLE_FIXED" -> "结算价";
-      default -> "固定价";
-    };
   }
 
   private static String taskMonth(QuotePriceDraft draft) {

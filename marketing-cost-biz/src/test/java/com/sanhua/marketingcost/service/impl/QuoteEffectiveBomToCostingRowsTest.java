@@ -129,7 +129,6 @@ class QuoteEffectiveBomToCostingRowsTest {
         .thenReturn(new BomByproductSettlementReadResult(List.of(), List.of(), List.of()));
     when(preparationMapper.selectOne(any())).thenReturn(preparation());
     when(statusMapper.selectById(101L)).thenReturn(status());
-    when(costingRowMapper.selectCount(any())).thenReturn(0L);
     when(costingRowMapper.selectList(any())).thenReturn(List.of());
     OaFormItem item = new OaFormItem();
     item.setId(10L);
@@ -162,6 +161,71 @@ class QuoteEffectiveBomToCostingRowsTest {
     assertThat(rows.getValue().getBuildBatchId()).isEqualTo("qeb_BUILD_1");
     assertThat(rows.getValue().getShapeAttr()).isEqualTo("采购件");
     verify(formalBomReadService, never()).read(any());
+  }
+
+  @Test
+  void effectiveBomMonthOverridesStalePreparationMonthForCurrentWorkspaceRows() {
+    QuoteBomPreparationRecord stalePreparation = preparation();
+    stalePreparation.setCostPeriodMonth("2026-07");
+    when(preparationMapper.selectOne(any())).thenReturn(stalePreparation);
+    when(effectiveRepository.findNodesByBuildBatchId("qeb_BUILD_1"))
+        .thenReturn(List.of(root(), selectedAlternative()));
+    when(rawMapper.selectBatchIds(any())).thenReturn(List.of(raw(1L, "P"), raw(2L, "T")));
+
+    QuoteBomCostingBuildResponse response =
+        service.buildFromEffectiveBom(10L, "qeb_BUILD_1");
+
+    assertThat(response.periodMonth()).isEqualTo("2026-08");
+    assertThat(stalePreparation.getCostPeriodMonth()).isEqualTo("2026-08");
+    assertThat(stalePreparation.getCostingBuildBatchId()).isEqualTo("qeb_BUILD_1");
+    verify(preparationMapper).updateById(stalePreparation);
+    ArgumentCaptor<BomCostingRow> rows = ArgumentCaptor.forClass(BomCostingRow.class);
+    verify(costingRowMapper).insert(rows.capture());
+    assertThat(rows.getValue().getPeriodMonth()).isEqualTo("2026-08");
+  }
+
+  @Test
+  void plateEffectiveBomKeepsCommercialOrganizationOnExpandedNodes() {
+    QuoteBomPreparationRecord platePreparation = preparation();
+    platePreparation.setPriceOrgCode("220");
+    platePreparation.setMaterialOrganizationCode("PLATE");
+    when(preparationMapper.selectOne(any())).thenReturn(platePreparation);
+    OaFormItem plateItem = new OaFormItem();
+    plateItem.setId(10L);
+    plateItem.setBusinessUnitType("PLATE");
+    when(itemMapper.selectById(10L)).thenReturn(plateItem);
+
+    QuoteEffectiveBomNode plateRoot = root();
+    plateRoot.setPriceOrgCode("220");
+    QuoteEffectiveBomNode commercialParent =
+        node(2L, "MAKE-210", "ROOT", 1, "/P/9990000050426/", "9990000050426", "MANUFACTURE");
+    commercialParent.setPriceOrgCode("210");
+    QuoteEffectiveBomNode commercialChild =
+        node(
+            3L,
+            "RAW-210",
+            "MAKE-210",
+            2,
+            "/P/9990000050426/301050013/",
+            "301050013",
+            "PURCHASE");
+    commercialChild.setPriceOrgCode("210");
+    when(effectiveRepository.findNodesByBuildBatchId("qeb_BUILD_1"))
+        .thenReturn(List.of(plateRoot, commercialParent, commercialChild));
+    when(rawMapper.selectBatchIds(any()))
+        .thenReturn(
+            List.of(
+                raw(1L, "P"),
+                raw(2L, "9990000050426"),
+                raw(3L, "301050013")));
+
+    service.buildFromEffectiveBom(10L, "qeb_BUILD_1");
+
+    ArgumentCaptor<BomCostingRow> rows = ArgumentCaptor.forClass(BomCostingRow.class);
+    verify(costingRowMapper).insert(rows.capture());
+    assertThat(rows.getValue().getMaterialCode()).isEqualTo("301050013");
+    assertThat(rows.getValue().getPriceOrgCode()).isEqualTo("210");
+    assertThat(rows.getValue().getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
   }
 
   @Test
@@ -346,16 +410,23 @@ class QuoteEffectiveBomToCostingRowsTest {
   }
 
   @Test
-  void manualCostingRowsBlockAutomaticRebuildBeforeDelete() {
+  void explicitRebuildReplacesLegacyManuallyModifiedCurrentRows() {
     when(effectiveRepository.findNodesByBuildBatchId("qeb_BUILD_1"))
         .thenReturn(List.of(root(), selectedAlternative()));
-    when(costingRowMapper.selectCount(any())).thenReturn(1L);
+    when(rawMapper.selectBatchIds(any())).thenReturn(List.of(raw(1L, "P"), raw(2L, "T")));
+    BomCostingRow legacyCurrentRow = new BomCostingRow();
+    legacyCurrentRow.setId(801L);
+    legacyCurrentRow.setManualModified(1);
+    when(costingRowMapper.selectList(any())).thenReturn(List.of(legacyCurrentRow));
 
-    assertThatThrownBy(() -> service.buildFromEffectiveBom(10L, "qeb_BUILD_1"))
-        .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("人工修改");
-    verify(costingRowMapper, never()).delete(any());
-    verify(costingRowMapper, never()).insert(any(BomCostingRow.class));
+    QuoteBomCostingBuildResponse response =
+        service.buildFromEffectiveBom(10L, "qeb_BUILD_1");
+
+    assertThat(response.costingRowsWritten()).isOne();
+    verify(subRefMapper).delete(any());
+    verify(sourceRefMapper).delete(any());
+    verify(costingRowMapper).delete(any());
+    verify(costingRowMapper).insert(any(BomCostingRow.class));
   }
 
   @Test

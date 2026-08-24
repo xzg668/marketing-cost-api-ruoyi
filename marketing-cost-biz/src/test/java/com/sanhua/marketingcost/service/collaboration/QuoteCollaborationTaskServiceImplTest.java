@@ -81,6 +81,65 @@ class QuoteCollaborationTaskServiceImplTest {
   }
 
   @Test
+  @DisplayName("核算流水线指定的月份必须贯穿扫描和新建协作任务")
+  void requestedAccountingMonthFlowsIntoCreatedTask() {
+    when(scanService.scanQuoteItem(275L, "2026-08"))
+        .thenReturn(fullBomScan(275L, "OA-001"));
+    when(repository.findLatestTaskByForm(27L, "COMMERCIAL"))
+        .thenReturn(Optional.empty());
+    when(repository.findActiveProductTaskByLockKey(any(), any()))
+        .thenReturn(Optional.empty());
+    assignIds();
+    QuoteCollaborationStartCommand command = new QuoteCollaborationStartCommand(
+        275L, 601L, "王工", 701L, "财务审核员", "2026-08",
+        new CollaborationActor(0L, "系统"));
+
+    QuoteCollaborationStartResult result = service.startAutomatically(command);
+
+    assertThat(result.action()).isEqualTo(CollaborationStartAction.CREATED);
+    verify(scanService).scanQuoteItem(275L, "2026-08");
+    verify(repository).saveProductTask(org.mockito.ArgumentMatchers.argThat(task ->
+        "2026-08".equals(task.getAccountingMonth())));
+    verify(repository).saveQuoteLink(org.mockito.ArgumentMatchers.argThat(link ->
+        "2026-08".equals(link.getAccountingMonth())));
+    verify(repository).synchronizeGaps(anyLong(), any(),
+        org.mockito.ArgumentMatchers.argThat(gaps -> gaps.size() == 1
+            && "2026-08".equals(gaps.getFirst().accountingMonth())
+            && "210".equals(gaps.getFirst().applicableOrgCode())),
+        any());
+  }
+
+  @Test
+  @DisplayName("人工发起必须有真实操作人，不能伪装成系统账号")
+  void manualStartRejectsSystemActor() {
+    QuoteCollaborationStartCommand command = new QuoteCollaborationStartCommand(
+        275L, 601L, "王工", null, null, new CollaborationActor(0L, "系统"));
+
+    assertThatThrownBy(() -> service.start(command))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("当前操作人不能为空");
+    verify(scanService, never()).scanQuoteItem(anyLong());
+  }
+
+  @Test
+  @DisplayName("后台一键核算允许系统账号留痕，但仍创建明确技术负责人的唯一任务")
+  void automaticStartAllowsSystemActorWithExplicitTechnician() {
+    when(scanService.scanQuoteItem(275L)).thenReturn(fullBomScan(275L, "OA-001"));
+    when(repository.findLatestTaskByForm(27L, "COMMERCIAL")).thenReturn(Optional.empty());
+    when(repository.findActiveProductTaskByLockKey(any(), any())).thenReturn(Optional.empty());
+    assignIds();
+    QuoteCollaborationStartCommand command = new QuoteCollaborationStartCommand(
+        275L, 601L, "王工", null, null, new CollaborationActor(0L, "系统"));
+
+    QuoteCollaborationStartResult result = service.startAutomatically(command);
+
+    assertThat(result.action()).isEqualTo(CollaborationStartAction.CREATED);
+    verify(repository).saveProductTask(org.mockito.ArgumentMatchers.argThat(task ->
+        Long.valueOf(0L).equals(task.getCreatedBy())
+            && Long.valueOf(601L).equals(task.getCurrentAssigneeUserId())));
+  }
+
+  @Test
   @DisplayName("同一报价产品顺序重复点击返回原OWNER任务且不重复写任何对象")
   void repeatedOwnerStartReturnsExistingTask() {
     QuoteCollaborationTask master = master(10L, 27L, "OA-001");
@@ -89,8 +148,7 @@ class QuoteCollaborationTaskServiceImplTest {
     when(scanService.scanQuoteItem(275L)).thenReturn(activeScan(275L, "OA-001", task));
     when(repository.findLatestTaskByForm(27L, "COMMERCIAL"))
         .thenReturn(Optional.of(master));
-    when(repository.findActiveProductTaskByLockKey(any(), any()))
-        .thenReturn(Optional.of(task));
+    when(repository.findProductTaskById(20L, scope())).thenReturn(Optional.of(task));
     when(repository.findActiveLinksByQuoteItem(275L, scope()))
         .thenReturn(List.of(owner));
 
@@ -112,8 +170,7 @@ class QuoteCollaborationTaskServiceImplTest {
     when(scanService.scanQuoteItem(276L)).thenReturn(activeScan(276L, "OA-002", task));
     when(repository.findLatestTaskByForm(28L, "COMMERCIAL"))
         .thenReturn(Optional.empty());
-    when(repository.findActiveProductTaskByLockKey(any(), any()))
-        .thenReturn(Optional.of(task));
+    when(repository.findProductTaskById(20L, scope())).thenReturn(Optional.of(task));
     when(repository.findActiveLinksByQuoteItem(276L, scope()))
         .thenReturn(List.of());
     assignIds();
@@ -134,7 +191,7 @@ class QuoteCollaborationTaskServiceImplTest {
     QuoteCollaborationProductTask task = productTask(20L, 10L);
     when(scanService.scanQuoteItem(276L)).thenReturn(activeScan(276L, "OA-002", task));
     when(repository.findLatestTaskByForm(28L, "COMMERCIAL")).thenReturn(Optional.empty());
-    when(repository.findActiveProductTaskByLockKey(any(), any())).thenReturn(Optional.of(task));
+    when(repository.findProductTaskById(20L, scope())).thenReturn(Optional.of(task));
     when(repository.findActiveLinksByQuoteItem(276L, scope())).thenReturn(List.of());
     assignIds();
 

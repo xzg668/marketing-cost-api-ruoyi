@@ -11,25 +11,25 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareCalculationResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareItemPageResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareItemQueryRequest;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateRequest;
+import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionResponse;
+import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionSummary;
 import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
-import com.sanhua.marketingcost.entity.QuoteBomConfirmation;
-import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmBatch;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
-import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmBatchMapper;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
 import com.sanhua.marketingcost.service.FinancePricePrepareService;
 import com.sanhua.marketingcost.service.FinanceQuoteBasePriceService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
 import com.sanhua.marketingcost.service.PricePrepareService;
+import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
 import java.math.BigDecimal;
 import java.time.YearMonth;
 import java.util.List;
@@ -46,35 +46,34 @@ class QuotePricePrepareWorkbenchServiceImplTest {
 
   private OaFormMapper oaFormMapper;
   private OaFormItemMapper oaFormItemMapper;
-  private QuoteBomConfirmationMapper bomConfirmationMapper;
-  private QuotePriceTypeConfirmBatchMapper priceTypeConfirmBatchMapper;
+  private QuotePriceTypeRecognitionService priceTypeRecognitionService;
   private PricePrepareService pricePrepareService;
   private FinancePricePrepareService financePricePrepareService;
   private FinanceQuoteBasePriceService financeQuoteBasePriceService;
   private PricePrepareQueryService pricePrepareQueryService;
+  private PricePrepareReadinessService pricePrepareReadinessService;
   private QuotePricePrepareWorkbenchServiceImpl service;
 
   @BeforeEach
   void setUp() {
     oaFormMapper = mock(OaFormMapper.class);
     oaFormItemMapper = mock(OaFormItemMapper.class);
-    bomConfirmationMapper = mock(QuoteBomConfirmationMapper.class);
-    priceTypeConfirmBatchMapper = mock(QuotePriceTypeConfirmBatchMapper.class);
+    priceTypeRecognitionService = mock(QuotePriceTypeRecognitionService.class);
     pricePrepareService = mock(PricePrepareService.class);
     financePricePrepareService = mock(FinancePricePrepareService.class);
     financeQuoteBasePriceService = mock(FinanceQuoteBasePriceService.class);
     pricePrepareQueryService = mock(PricePrepareQueryService.class);
+    pricePrepareReadinessService = mock(PricePrepareReadinessService.class);
     service =
         new QuotePricePrepareWorkbenchServiceImpl(
             oaFormMapper,
             oaFormItemMapper,
-            bomConfirmationMapper,
-            priceTypeConfirmBatchMapper,
+            priceTypeRecognitionService,
             pricePrepareService,
             financePricePrepareService,
             financeQuoteBasePriceService,
             pricePrepareQueryService,
-            mock(PricePrepareReadinessService.class));
+            pricePrepareReadinessService);
   }
 
   @Test
@@ -89,22 +88,15 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     item.setOaFormId(10L);
     item.setMaterialNo("TOP-WORKBENCH");
     item.setBusinessUnitType("COMMERCIAL");
-    QuoteBomConfirmation bomConfirmation = new QuoteBomConfirmation();
-    bomConfirmation.setConfirmStatus(QuoteBomConfirmation.STATUS_CONFIRMED);
-    QuotePriceTypeConfirmBatch priceTypeConfirm = new QuotePriceTypeConfirmBatch();
-    priceTypeConfirm.setConfirmNo("PTC-WORKBENCH");
-    priceTypeConfirm.setStatus(QuotePriceTypeConfirmBatch.STATUS_CONFIRMED);
-    priceTypeConfirm.setGapCount(0);
     when(oaFormMapper.selectOne(any())).thenReturn(form);
     when(oaFormItemMapper.selectById(101L)).thenReturn(item);
-    when(bomConfirmationMapper.selectOne(any())).thenReturn(bomConfirmation);
-    when(priceTypeConfirmBatchMapper.selectOne(any())).thenReturn(priceTypeConfirm);
+    when(priceTypeRecognitionService.getRecognition(any(), any(), any()))
+        .thenReturn(automaticTypeState(0));
     PricePrepareGenerateResult generated = new PricePrepareGenerateResult();
     generated.setOaNo("OA-WORKBENCH");
     generated.setOaFormItemId(101L);
     generated.setTopProductCode("TOP-WORKBENCH");
     generated.setPeriodMonth(CURRENT_MONTH);
-    generated.setPriceTypeConfirmNo("PTC-WORKBENCH");
     generated.setScenarioType("FINANCE_QUOTE_BASE");
     when(financePricePrepareService.generateFromOa("PPR-OA-WORKBENCH"))
         .thenReturn(new FinancePricePrepareGenerateResult(
@@ -118,7 +110,6 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
     request.setPeriodMonth(CURRENT_MONTH);
     request.setPriceAsOfTime(CURRENT_YEAR_MONTH.atDay(15).atTime(12, 0));
-    request.setPriceTypeConfirmNo("PTC-WORKBENCH");
     request.setScenarioType(QuotePriceScenarioType.FINANCE_QUOTE_BASE);
     request.setSourcePrepareNo("PPR-OA-WORKBENCH");
 
@@ -148,7 +139,6 @@ class QuotePricePrepareWorkbenchServiceImplTest {
 
     QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
     request.setPeriodMonth(CURRENT_MONTH);
-    request.setPriceTypeConfirmNo("PTC-WORKBENCH");
 
     var response = service.generate("OA-WORKBENCH", 101L, request);
 
@@ -173,7 +163,6 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     when(pricePrepareService.calculate(any())).thenReturn(calculation);
     QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
     request.setPeriodMonth(CURRENT_MONTH);
-    request.setPriceTypeConfirmNo("PTC-WORKBENCH");
 
     var response = service.checkPriceSources("OA-WORKBENCH", 101L, request);
 
@@ -191,12 +180,10 @@ class QuotePricePrepareWorkbenchServiceImplTest {
   }
 
   @Test
-  @DisplayName("价格源预检查为内存缺口补齐已确认价格类型")
+  @DisplayName("价格源预检查为内存缺口补齐当前路由价格类型")
   void sourceCheckEnrichesPreviewGapPriceType() {
     prepareConfirmedScope();
     PricePrepareGap gap = new PricePrepareGap();
-    gap.setPriceTypeConfirmNo("PTC-WORKBENCH");
-    gap.setPriceTypeConfirmItemId(9L);
     gap.setMaterialCode("MAT-FIXED");
     gap.setGapMaterialCode("MAT-FIXED");
     gap.setGapType("MISSING_PRICE");
@@ -216,7 +203,6 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     }).when(pricePrepareQueryService).enrichGaps(any());
     QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
     request.setPeriodMonth(CURRENT_MONTH);
-    request.setPriceTypeConfirmNo("PTC-WORKBENCH");
 
     var response = service.checkPriceSources("OA-WORKBENCH", 101L, request);
 
@@ -240,9 +226,11 @@ class QuotePricePrepareWorkbenchServiceImplTest {
             "PPR-OA-WORKBENCH");
     when(pricePrepareQueryService.pageBatches(any()))
         .thenReturn(new PricePrepareBatchPageResponse(2, List.of(financeBatch, oaBatch)));
+    when(pricePrepareReadinessService.check(any(), any(), any(), any()))
+        .thenReturn(PricePrepareReadinessResult.ready(
+            "PPR-OA-WORKBENCH", CURRENT_MONTH, "SUCCESS"));
     QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
     request.setPeriodMonth(CURRENT_MONTH);
-    request.setPriceTypeConfirmNo("PTC-WORKBENCH");
 
     var response = service.checkPriceSources("OA-WORKBENCH", 101L, request);
 
@@ -332,16 +320,10 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     item.setOaFormId(10L);
     item.setMaterialNo("TOP-WORKBENCH");
     item.setBusinessUnitType("COMMERCIAL");
-    QuoteBomConfirmation bomConfirmation = new QuoteBomConfirmation();
-    bomConfirmation.setConfirmStatus(QuoteBomConfirmation.STATUS_CONFIRMED);
-    QuotePriceTypeConfirmBatch priceTypeConfirm = new QuotePriceTypeConfirmBatch();
-    priceTypeConfirm.setConfirmNo("PTC-WORKBENCH");
-    priceTypeConfirm.setStatus(QuotePriceTypeConfirmBatch.STATUS_CONFIRMED);
-    priceTypeConfirm.setGapCount(0);
     when(oaFormMapper.selectOne(any())).thenReturn(form);
     when(oaFormItemMapper.selectById(101L)).thenReturn(item);
-    when(bomConfirmationMapper.selectOne(any())).thenReturn(bomConfirmation);
-    when(priceTypeConfirmBatchMapper.selectOne(any())).thenReturn(priceTypeConfirm);
+    when(priceTypeRecognitionService.getRecognition(any(), any(), any()))
+        .thenReturn(automaticTypeState(0));
   }
 
   private PricePrepareGenerateResult generated(String prepareNo, String scenarioType) {
@@ -351,7 +333,6 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     generated.setOaFormItemId(101L);
     generated.setTopProductCode("TOP-WORKBENCH");
     generated.setPeriodMonth(CURRENT_MONTH);
-    generated.setPriceTypeConfirmNo("PTC-WORKBENCH");
     generated.setScenarioType(scenarioType);
     generated.setStatus("SUCCESS");
     generated.setGapCount(0);
@@ -380,5 +361,13 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     item.setUnitPrice(new BigDecimal(unitPrice));
     item.setAmount(new BigDecimal(amount));
     return item;
+  }
+
+  private QuotePriceTypeRecognitionResponse automaticTypeState(int missingCount) {
+    QuotePriceTypeRecognitionSummary summary = new QuotePriceTypeRecognitionSummary();
+    summary.setMissingTypeCount(missingCount);
+    QuotePriceTypeRecognitionResponse response = new QuotePriceTypeRecognitionResponse();
+    response.setSummary(summary);
+    return response;
   }
 }

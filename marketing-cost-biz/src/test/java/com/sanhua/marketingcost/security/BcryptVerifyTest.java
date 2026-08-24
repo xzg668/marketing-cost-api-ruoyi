@@ -10,10 +10,11 @@ class BcryptVerifyTest {
     @Test
     void verifyAdmin123Hash() {
         BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
-        String storedHash = "$2a$10$7JB720yubVSZvUIVWMi80uOXTHG6.0WFXwM.2z9.K8Y/tG.v1EGaG";
+        String storedHash = "$2a$10$GbHUEQG3Z.HxChIvMTwSq.c1et5tTdFDx4Q31wMh1ThNbXtdJMRme";
 
         boolean matches = encoder.matches("admin123", storedHash);
         System.out.println("=== admin123 matches stored hash: " + matches + " ===");
+        assertTrue(matches, "部署种子 hash 必须匹配 admin123");
 
         // 生成一个新的正确的 hash
         String newHash = encoder.encode("admin123");

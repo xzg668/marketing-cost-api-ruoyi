@@ -1,8 +1,6 @@
 package com.sanhua.marketingcost.service;
 
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunConfirmRequest;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunTrialRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunWorkbenchResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCuMaterialDifferenceResponse;
@@ -27,14 +25,12 @@ public interface QuoteCostRunWorkbenchService {
       Boolean onlyDifferent,
       String differenceSign);
 
-  QuoteCostRunWorkbenchResponse trial(
-      String oaNo, Long oaFormItemId, QuoteCostRunTrialRequest request);
-
-  QuoteCostRunSummaryResponse confirm(
+  /** 统一流水线专用：在一个事务内完成成本计算、底稿写入和当前成功版本切换。 */
+  QuoteCostRunWorkbenchResponse runToSuccess(
       String oaNo,
       Long oaFormItemId,
-      String costRunNo,
-      QuoteCostRunConfirmRequest request);
+      QuoteCostRunTrialRequest request,
+      String completedBy);
 
   int exportVersion(String oaNo, Long oaFormItemId, Long versionId, OutputStream output)
       throws IOException;

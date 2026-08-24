@@ -15,6 +15,7 @@ import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.service.pricing.PriceResolveResult;
+import com.sanhua.marketingcost.service.pricing.PriceResolveEvidence;
 import com.sanhua.marketingcost.service.pricing.PriceResolver;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -190,6 +191,7 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
             scenarioContext);
     List<String> attemptedBuckets = new ArrayList<>(candidates.size());
     String lastMissReason = null;
+    String lastMissCode = null;
     for (PriceTypeRoute route : candidates) {
       if (route == null || route.priceType() == null) {
         continue;
@@ -206,32 +208,35 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
           BigDecimal amount = quantity(planItem) == null
               ? null
               : unitPrice.multiply(quantity(planItem));
-          return NormalMaterialPricePrepareResult.ready(
-              unitPrice,
+          PriceResolveResult linkedResult = linkedResult(calculatedLinkedPrice);
+          return readyResult(
+              linkedResult,
               amount,
-              "联动价",
+              route.priceType(),
               resultRefType(route.priceType()),
-              null,
               "联动价只读计算完成");
         }
         lastMissReason = calculatedLinkedPrice == null
             ? "联动价只读计算未返回结果"
             : calculatedLinkedPrice.getCalcMessage();
+        lastMissCode = calculatedLinkedPrice == null
+            ? null
+            : calculatedLinkedPrice.getFailureCode();
         continue;
       }
       PriceResolveResult result = resolver.resolve(oaNo, resolveItem, route, resolveContext);
       if (result != null && result.unitPrice() != null) {
         BigDecimal amount = quantity(planItem) == null ? null : result.unitPrice().multiply(quantity(planItem));
-        return NormalMaterialPricePrepareResult.ready(
-            result.unitPrice(),
+        return readyResult(
+            result,
             amount,
-            result.priceSource(),
+            route.priceType(),
             resultRefType(route.priceType()),
-            result.resultRefId(),
-            StringUtils.hasText(result.remark()) ? result.remark() : "普通料号价格准备完成");
+            "普通料号价格准备完成");
       }
       if (result != null && StringUtils.hasText(result.remark())) {
         lastMissReason = result.remark();
+        lastMissCode = result.failureCode();
       }
     }
     String message = "路由=" + attemptedBuckets + " 但桶内无该料号"
@@ -239,9 +244,58 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
     return NormalMaterialPricePrepareResult.gap(
         STATUS_MISSING_PRICE,
         GAP_TYPE_MISSING_PRICE,
+        lastMissCode,
         PriceResolveResult.SOURCE_ERROR,
         SOURCE_TABLE_PRICE_RESOLVER,
         message);
+  }
+
+  private NormalMaterialPricePrepareResult readyResult(
+      PriceResolveResult resolved,
+      BigDecimal amount,
+      PriceTypeEnum priceType,
+      String resultRefType,
+      String defaultMessage) {
+    String message = StringUtils.hasText(resolved.remark()) ? resolved.remark() : defaultMessage;
+    NormalMaterialPricePrepareResult result = NormalMaterialPricePrepareResult.ready(
+        resolved.unitPrice(),
+        amount,
+        resolved.priceSource(),
+        resultRefType,
+        resolved.resultRefId(),
+        message);
+    PriceResolveEvidence evidence = resolved.evidence();
+    result.setPriceType(priceType == null ? null : priceType.name());
+    result.setSourcePriceRecordId(evidence.sourcePriceRecordId());
+    result.setSourcePriceBatchNo(evidence.sourceBatchNo());
+    result.setSupplierName(evidence.supplierName());
+    result.setSupplierCode(evidence.supplierCode());
+    result.setSupplyRatio(evidence.supplyRatio());
+    result.setSupplyRatioRecordId(evidence.supplyRatioRecordId());
+    result.setSourceEffectiveFrom(evidence.effectiveFrom());
+    result.setSourceEffectiveTo(evidence.effectiveTo());
+    result.setCarriedForward(evidence.carriedForward());
+    result.setWarningMessage(evidence.warningMessage());
+    return result;
+  }
+
+  private PriceResolveResult linkedResult(PriceLinkedCalcItem item) {
+    PriceResolveEvidence evidence = new PriceResolveEvidence(
+        item.getSourcePriceRecordId(),
+        item.getSourcePriceBatchNo(),
+        item.getSupplierName(),
+        item.getSupplierCode(),
+        item.getSupplyRatio(),
+        item.getSupplyRatioRecordId(),
+        item.getSourceEffectiveFrom(),
+        item.getSourceEffectiveTo(),
+        Integer.valueOf(1).equals(item.getCarriedForward()),
+        item.getWarningMessage());
+    String message = StringUtils.hasText(item.getWarningMessage())
+        ? "联动价只读计算完成；" + item.getWarningMessage()
+        : "联动价只读计算完成";
+    return PriceResolveResult.hit(
+        item.getPartUnitPrice(), "联动价", message, item.getId(), evidence);
   }
 
   private NormalMaterialPricePrepareResult ensureLinkedPriceIfNeeded(
@@ -275,6 +329,7 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
         return NormalMaterialPricePrepareResult.gap(
             STATUS_MISSING_PRICE,
             GAP_TYPE_MISSING_PRICE,
+            firstFailureCode(result),
             PriceResolveResult.SOURCE_ERROR,
             SOURCE_TABLE_LINKED_ENSURE,
             formatEnsureFailures(result));
@@ -342,6 +397,17 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
     return messages.isEmpty()
         ? "联动价按需确保失败：存在联动价计算失败"
         : "联动价按需确保失败：" + String.join("; ", messages);
+  }
+
+  private String firstFailureCode(LinkedPriceEnsureResult result) {
+    if (result == null || result.getFailedItems() == null) {
+      return null;
+    }
+    return result.getFailedItems().stream()
+        .map(LinkedPriceEnsureResult.FailedItem::getReasonCode)
+        .filter(StringUtils::hasText)
+        .findFirst()
+        .orElse(null);
   }
 
   private CostRunPartItemDto toResolveItem(String oaNo, PricePreparePlanItem planItem) {

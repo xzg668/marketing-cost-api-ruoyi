@@ -55,14 +55,15 @@ class FixedPriceResolverTest {
     ArgumentCaptor<Wrapper<PriceFixedItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(mapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment())
-        .contains("material_code", "source_type", "effective_from", "effective_to")
-        .contains("ORDER BY", "effective_from", "DESC");
+        .contains("material_code", "source_type", "effective_from")
+        .contains("ORDER BY", "effective_from", "imported_at", "created_at", "DESC")
+        .doesNotContain("effective_to");
     assertThat(paramValues(captor.getValue())).contains(LocalDate.of(2026, 5, 10));
   }
 
   @Test
-  @DisplayName("T23：固定采购价结束日当天仍然有效")
-  void fixedPriceEffectiveToIsInclusive() {
+  @DisplayName("固定采购价结束日当天仍是当前价，不标记历史沿用")
+  void fixedPriceEffectiveToDayIsNotCarriedForward() {
     PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);
     FixedPriceResolver resolver = resolver(mapper);
     PriceFixedItem row = fixed("7.256637", "PURCHASE_FIXED");
@@ -77,11 +78,36 @@ class FixedPriceResolverTest {
             monthlyContext(LocalDateTime.of(2026, 6, 30, 23, 59, 59)));
 
     assertThat(result.unitPrice()).isEqualByComparingTo("7.256637");
+    assertThat(result.carriedForward()).isFalse();
+    assertThat(result.warningMessage()).isNull();
     ArgumentCaptor<Wrapper<PriceFixedItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(mapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment())
-        .contains("effective_to", ">=");
+        .doesNotContain("effective_to");
     assertThat(paramValues(captor.getValue())).contains(LocalDate.of(2026, 6, 30));
+  }
+
+  @Test
+  @DisplayName("8月核算可沿用截止7月31日的最近审批价")
+  void expiredFixedPriceIsCarriedForwardWithWarning() {
+    PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);
+    FixedPriceResolver resolver = resolver(mapper);
+    PriceFixedItem row = fixed("7.256637", "PURCHASE_FIXED");
+    row.setId(88L);
+    row.setEffectiveTo(LocalDate.of(2026, 7, 31));
+    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(row));
+
+    PriceResolveResult result = resolver.resolve(
+        "OA-001",
+        part("301990444"),
+        route("固定价"),
+        monthlyContext(LocalDateTime.of(2026, 8, 18, 9, 0)));
+
+    assertThat(result.unitPrice()).isEqualByComparingTo("7.256637");
+    assertThat(result.resultRefId()).isEqualTo(88L);
+    assertThat(result.carriedForward()).isTrue();
+    assertThat(result.effectiveTo()).isEqualTo(LocalDate.of(2026, 7, 31));
+    assertThat(result.warningMessage()).contains("沿用历史价", "2026-07-31", "2026-08-18");
   }
 
   @Test
@@ -107,7 +133,8 @@ class FixedPriceResolverTest {
     ArgumentCaptor<Wrapper<PriceFixedItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(mapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment())
-        .contains("source_type", "effective_from", "effective_to", "pricing_month");
+        .contains("source_type", "effective_from", "imported_at", "created_at")
+        .doesNotContain("effective_to");
     assertThat(paramValues(captor.getValue()))
         .contains("SETTLE_FIXED", "SETTLE", LocalDate.of(2026, 5, 20));
   }

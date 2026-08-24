@@ -329,8 +329,6 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
                   generatedPrepare == null ? null : generatedPrepare.getPrepareNo(),
                   itemReadiness == null ? null : itemReadiness.getPrepareNo(),
                   pricePrepareReadiness == null ? null : pricePrepareReadiness.getPrepareNo()),
-              null,
-              null,
               firstText(item.getBusinessUnitType(), form.getBusinessUnitType()));
       final int idx = productIndex; // for lambda
       int productStart =
@@ -362,15 +360,13 @@ public class CostRunTrialServiceImpl implements CostRunTrialService {
       context.setCostRunVersionId(version.getId());
       context.setCostRunNo(version.getCostRunNo());
       context.setPricePrepareNo(version.getPricePrepareNo());
-      context.setPriceTypeConfirmNo(version.getPriceTypeConfirmNo());
-      context.setBomConfirmNo(version.getBomConfirmNo());
       // 普通 OA 的上传、主档同步、BOM 刷新和联动价准备仍在外层流程完成；
       // 这里开始只进入统一计算器，确保后续月度调价和日常报价复用同一套成本公式。
       context.setProgress(
           p -> progressStore.update(
               oaNoValue, productStart + p * (productEnd - productStart) / 100));
       CostRunObjectResult result = costRunEngine.run(context);
-      costRunResultWriter.writeQuoteResult(result, form, item);
+      costRunResultWriter.writeQuoteResult(result);
       quoteCostRunVersionService.finishTrial(
           version.getId(),
           totalCost(result),

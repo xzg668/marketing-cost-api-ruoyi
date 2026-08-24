@@ -18,12 +18,12 @@ class QuoteEffectiveBomImmutabilityTest {
         new EffectiveBomPersistenceTestSupport.InMemoryRepository();
     QuoteEffectiveBomPersistenceServiceImpl service = service(repository);
     QuoteEffectiveBomPersistenceResult first =
-        service.persistConfirmed(request(11L, variant()));
+        service.persistCurrentVariant(request(11L, variant()));
     String originalChildQty =
         repository.nodes(first.buildBatchId()).get(1).getQtyPerTop().toPlainString();
 
     QuoteEffectiveBomPersistenceResult changed =
-        service.persistConfirmed(
+        service.persistCurrentVariant(
             request(
                 12L,
                 variant(

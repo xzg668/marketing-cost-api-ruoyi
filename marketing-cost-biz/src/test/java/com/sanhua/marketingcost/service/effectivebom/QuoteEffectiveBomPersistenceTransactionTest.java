@@ -24,7 +24,7 @@ class QuoteEffectiveBomPersistenceTransactionTest {
       throws Exception {
     Method method =
         QuoteEffectiveBomPersistenceServiceImpl.class.getMethod(
-            "persistConfirmed", QuoteEffectiveBomPersistenceRequest.class);
+            "persistCurrentVariant", QuoteEffectiveBomPersistenceRequest.class);
     Transactional transactional = method.getAnnotation(Transactional.class);
 
     assertThat(transactional).isNotNull();
@@ -46,7 +46,7 @@ class QuoteEffectiveBomPersistenceTransactionTest {
 
     assertThatThrownBy(
             () -> service(repository, ignored -> "a".repeat(64), () -> "BUILD-X")
-                .persistConfirmed(request(11L, variant())))
+                .persistCurrentVariant(request(11L, variant())))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("写入失败");
 
@@ -63,7 +63,7 @@ class QuoteEffectiveBomPersistenceTransactionTest {
 
     assertThatThrownBy(
             () -> service(repository, ignored -> "a".repeat(64), () -> "BUILD-X")
-                .persistConfirmed(request(11L, variant())))
+                .persistCurrentVariant(request(11L, variant())))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("拒绝覆盖");
 

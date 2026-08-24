@@ -1,7 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.sanhua.marketingcost.dto.SupplierSupplyRatioCandidate;
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioResolveResult;
 import com.sanhua.marketingcost.entity.SupplierSupplyRatio;
 import com.sanhua.marketingcost.mapper.SupplierSupplyRatioMapper;
@@ -10,9 +9,6 @@ import com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -57,32 +53,6 @@ public class SupplierSupplyRatioResolveServiceImpl implements SupplierSupplyRati
     return resolve(businessUnitType, materialCode, materialName, specModel, parseMonth(pricingMonth));
   }
 
-  @Override
-  public SupplierSupplyRatioResolveResult resolveAmongSuppliers(
-      String businessUnitType,
-      String materialCode,
-      String materialName,
-      String specModel,
-      LocalDate pricingDate,
-      List<SupplierSupplyRatioCandidate> candidates) {
-    String code = normalized(materialCode);
-    if (!StringUtils.hasText(code)) {
-      return SupplierSupplyRatioResolveResult.miss("物料代码为空，未查询供货比例");
-    }
-    CandidateKeys keys = candidateKeys(candidates);
-    if (keys.supplierCodes().isEmpty()
-        && keys.namesWithCode().isEmpty()
-        && keys.namesWithoutCode().isEmpty()) {
-      return SupplierSupplyRatioResolveResult.miss("候选供应商为空，未查询供货比例");
-    }
-    String bu = StringUtils.hasText(businessUnitType) ? businessUnitType.trim() : DEFAULT_BUSINESS_UNIT;
-    SupplierSupplyRatio mainSupplier = selectMainSupplier(bu, code, pricingDate, keys);
-    if (mainSupplier != null) {
-      return hit(mainSupplier, "匹配 material_code 和候选供应商，取供货比例最大供应商");
-    }
-    return SupplierSupplyRatioResolveResult.miss("未命中供货比例：候选供应商无数据");
-  }
-
   private SupplierSupplyRatio selectMainSupplier(
       String businessUnitType,
       String materialCode,
@@ -98,80 +68,6 @@ public class SupplierSupplyRatioResolveServiceImpl implements SupplierSupplyRati
     // 主供选择只负责选供应商，不负责决定固定价/联动价/区间价；价格桶仍由后续取价链路决定。
     query.last("ORDER BY supply_ratio DESC, IFNULL(updated_at, '1970-01-01 00:00:00') DESC, id DESC LIMIT 1");
     return mapper.selectOne(query);
-  }
-
-  private SupplierSupplyRatio selectMainSupplier(
-      String businessUnitType,
-      String materialCode,
-      LocalDate pricingDate,
-      CandidateKeys keys) {
-    QueryWrapper<SupplierSupplyRatio> query = new QueryWrapper<SupplierSupplyRatio>()
-        .eq("business_unit_type", businessUnitType)
-        .eq("material_code", materialCode)
-        .eq("deleted", 0);
-    if (pricingDate != null) {
-      query.and(w -> w.le("effective_from", pricingDate).or().isNull("effective_from"))
-          .and(w -> w.ge("effective_to", pricingDate).or().isNull("effective_to"));
-    }
-    query.and(w -> {
-      boolean hasCondition = false;
-      if (!keys.supplierCodes().isEmpty()) {
-        w.in("supplier_code", keys.supplierCodes());
-        hasCondition = true;
-      }
-      if (!keys.namesWithoutCode().isEmpty()) {
-        if (hasCondition) {
-          w.or(name -> name.in("supplier_name", keys.namesWithoutCode()));
-        } else {
-          w.in("supplier_name", keys.namesWithoutCode());
-        }
-        hasCondition = true;
-      }
-      if (!keys.namesWithCode().isEmpty()) {
-        if (hasCondition) {
-          w.or(nameFallback -> nameFallback
-              .nested(code -> code.isNull("supplier_code").or().eq("supplier_code", ""))
-              .in("supplier_name", keys.namesWithCode()));
-        } else {
-          w.nested(code -> code.isNull("supplier_code").or().eq("supplier_code", ""))
-              .in("supplier_name", keys.namesWithCode());
-        }
-      }
-    });
-    query.last("ORDER BY supply_ratio DESC, IFNULL(updated_at, '1970-01-01 00:00:00') DESC, id DESC LIMIT 1");
-    return mapper.selectOne(query);
-  }
-
-  private CandidateKeys candidateKeys(List<SupplierSupplyRatioCandidate> candidates) {
-    Set<String> supplierCodes = new LinkedHashSet<>();
-    Set<String> namesWithCode = new LinkedHashSet<>();
-    Set<String> namesWithoutCode = new LinkedHashSet<>();
-    if (candidates != null) {
-      for (SupplierSupplyRatioCandidate candidate : candidates) {
-        if (candidate == null) {
-          continue;
-        }
-        String supplierCode = normalized(candidate.supplierCode());
-        if (StringUtils.hasText(supplierCode)) {
-          supplierCodes.add(supplierCode);
-        }
-        String supplierName = normalized(candidate.supplierName());
-        if (StringUtils.hasText(supplierName)) {
-          if (StringUtils.hasText(supplierCode)) {
-            namesWithCode.add(supplierName);
-          } else {
-            namesWithoutCode.add(supplierName);
-          }
-        }
-      }
-    }
-    return new CandidateKeys(supplierCodes, namesWithCode, namesWithoutCode);
-  }
-
-  private record CandidateKeys(
-      Set<String> supplierCodes,
-      Set<String> namesWithCode,
-      Set<String> namesWithoutCode) {
   }
 
   private SupplierSupplyRatioResolveResult hit(SupplierSupplyRatio row, String matchMode) {

@@ -66,6 +66,8 @@ import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.PriceLinkedItemService;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.RouteCommand;
 import com.sanhua.marketingcost.service.FactorMonthlyPriceUpsertService;
 import com.sanhua.marketingcost.service.FactorUploadBatchService;
 import com.sanhua.marketingcost.service.PriceLinkedAutoBindingWriteService;
@@ -143,6 +145,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
   private final FormulaDisplayRenderer formulaDisplayRenderer;
   /** 方案 A 加严：Normalizer 之外再跑 Validator，抓相邻 value 缺运算符、未知 code 等结构错 */
   private final FormulaValidator formulaValidator;
+  private final MaterialPriceTypeRouteSyncService priceTypeRouteSyncService;
   @Autowired(required = false)
   private PriceLinkedFormulaChangeLogMapper formulaChangeLogMapper;
   @Autowired(required = false)
@@ -190,7 +193,8 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       FactorVariableRegistryImpl factorVariableRegistry,
       FormulaNormalizer formulaNormalizer,
       FormulaDisplayRenderer formulaDisplayRenderer,
-      FormulaValidator formulaValidator) {
+      FormulaValidator formulaValidator,
+      MaterialPriceTypeRouteSyncService priceTypeRouteSyncService) {
     this.itemMapper = itemMapper;
     this.fixedItemMapper = fixedItemMapper;
     this.financeBasePriceMapper = financeBasePriceMapper;
@@ -200,6 +204,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     this.formulaNormalizer = formulaNormalizer;
     this.formulaDisplayRenderer = formulaDisplayRenderer;
     this.formulaValidator = formulaValidator;
+    this.priceTypeRouteSyncService = priceTypeRouteSyncService;
   }
 
   @Override
@@ -265,6 +270,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
   }
 
   @Override
+  @Transactional(rollbackFor = Exception.class)
   public PriceLinkedItemDto create(PriceLinkedItemUpdateRequest request) {
     if (request == null) {
       return null;
@@ -280,10 +286,12 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     // 手工新增同样走 BU 注入，保持和 import 路径一致
     applyCurrentBusinessUnit(item);
     itemMapper.insert(item);
+    syncLinkedPriceType(item);
     return toDto(item);
   }
 
   @Override
+  @Transactional(rollbackFor = Exception.class)
   public PriceLinkedItemDto update(Long id, PriceLinkedItemUpdateRequest request) {
     if (id == null) {
       return null;
@@ -296,6 +304,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     String oldFormulaExprCn = item.getFormulaExprCn();
     merge(item, request);
     itemMapper.updateById(item);
+    syncLinkedPriceType(item);
     logFormulaChangeIfNeeded(item, request, oldFormulaExpr, oldFormulaExprCn);
     return toDto(item);
   }
@@ -345,6 +354,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
         applyCurrentBusinessUnit(item);
         itemMapper.updateById(item);
       }
+      syncLinkedPriceType(item);
       imported.add(toDto(item));
     }
     return imported;
@@ -2269,6 +2279,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       String businessUnitType) {
     PriceLinkedItem existing = findCurrentLinkedVersion(pricingMonth, businessUnitType, row);
     if (existing != null && sameLinkedFormulaVersion(existing, row, normalizedFormula)) {
+      syncLinkedPriceType(existing);
       return new LinkedImportOutcome(existing, false, false, true);
     }
     if (existing != null) {
@@ -2307,6 +2318,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     // 写入前显式注入当前登录账号的 BU，和 importItems 走同一路径，避免 NULL 行被 selectList 过滤掉
     applyCurrentBusinessUnit(item);
     itemMapper.insert(item);
+    syncLinkedPriceType(item);
     return new LinkedImportOutcome(item, true, existing != null, false);
   }
 
@@ -2339,6 +2351,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     } else {
       fixedItemMapper.updateById(item);
     }
+    syncFixedPriceType(item);
   }
 
   private PriceLinkedItem findCurrentLinkedVersion(
@@ -2346,20 +2359,34 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     var query = Wrappers.lambdaQuery(PriceLinkedItem.class)
         .eq(PriceLinkedItem::getPricingMonth, pricingMonth)
         .eq(PriceLinkedItem::getMaterialCode, trim(row.getMaterialCode()))
-        .isNull(PriceLinkedItem::getEffectiveTo)
         .eq(PriceLinkedItem::getDeleted, 0);
     if (StringUtils.hasText(businessUnitType)) {
       query.eq(PriceLinkedItem::getBusinessUnitType, businessUnitType.trim());
     } else {
       query.isNull(PriceLinkedItem::getBusinessUnitType);
     }
-    // 联动价导入身份：有供应商时按“供应商 + 料号 + 业务单元”匹配；
-    // Excel 供应商为空时退化为“料号 + 业务单元”。规格型号只是行属性，不参与判重。
+    // 同月同料号按供应商分别维护版本：代码优先，代码为空时按名称识别。
+    // effective_to 不再定义“当前公式”；当前版本只认最新成功导入时间。
     String supplierCode = trim(row.getSupplierCode());
     if (supplierCode != null) {
       query.eq(PriceLinkedItem::getSupplierCode, supplierCode);
+    } else {
+      query.and(q -> q.isNull(PriceLinkedItem::getSupplierCode)
+          .or()
+          .eq(PriceLinkedItem::getSupplierCode, ""));
+      String supplierName = trim(row.getSupplierName());
+      if (supplierName != null) {
+        query.eq(PriceLinkedItem::getSupplierName, supplierName);
+      } else {
+        query.and(q -> q.isNull(PriceLinkedItem::getSupplierName)
+            .or()
+            .eq(PriceLinkedItem::getSupplierName, ""));
+      }
     }
-    return itemMapper.selectOne(query.orderByDesc(PriceLinkedItem::getId).last("LIMIT 1"));
+    return itemMapper.selectOne(
+        query.orderByDesc(PriceLinkedItem::getCreatedAt)
+            .orderByDesc(PriceLinkedItem::getId)
+            .last("LIMIT 1"));
   }
 
   private boolean sameLinkedFormulaVersion(
@@ -2387,13 +2414,8 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     if (existing == null) {
       return;
     }
-    LocalDate oldEffectiveFrom = existing.getEffectiveFrom();
-    if (oldEffectiveFrom != null && !formulaEffectiveDate.isAfter(oldEffectiveFrom)) {
-      throw new IllegalArgumentException(
-          "formulaEffectiveDate 必须晚于当前公式版本 effective_from，避免生命周期倒挂: "
-              + formulaEffectiveDate + " <= " + oldEffectiveFrom);
-    }
-    existing.setEffectiveTo(formulaEffectiveDate.minusDays(1));
+    // 生效/失效日期只保留为历史展示元数据，不再阻止同月同日的再次导入。
+    existing.setEffectiveTo(formulaEffectiveDate);
     existing.setUpdatedAt(LocalDateTime.now());
     itemMapper.updateById(existing);
   }
@@ -2715,6 +2737,38 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     if (StringUtils.hasText(buType)) {
       item.setBusinessUnitType(buType);
     }
+  }
+
+  private void syncLinkedPriceType(PriceLinkedItem item) {
+    if (item == null
+        || !StringUtils.hasText(item.getMaterialCode())
+        || (!StringUtils.hasText(item.getFormulaExpr()) && item.getManualPrice() == null)) {
+      return;
+    }
+    priceTypeRouteSyncService.sync(new RouteCommand(
+        item.getMaterialCode(),
+        item.getMaterialName(),
+        item.getSpecModel(),
+        item.getUnit(),
+        item.getBusinessUnitType(),
+        "联动价",
+        "price_linked",
+        "FORMAL_LINKED"));
+  }
+
+  private void syncFixedPriceType(PriceFixedItem item) {
+    if (item == null || item.getFixedPrice() == null) {
+      return;
+    }
+    priceTypeRouteSyncService.sync(new RouteCommand(
+        item.getMaterialCode(),
+        item.getMaterialName(),
+        item.getSpecModel(),
+        item.getUnit(),
+        item.getBusinessUnitType(),
+        "固定价",
+        "price_fixed",
+        "FORMAL_FIXED"));
   }
 
   private PriceLinkedItemDto toDto(PriceLinkedItem item) {

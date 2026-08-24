@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import lombok.Getter;
 import lombok.Setter;
@@ -21,8 +22,6 @@ public class PricePrepareItem {
 
   private String prepareNo;
   private String periodMonth;
-  private String priceTypeConfirmNo;
-  private Long priceTypeConfirmItemId;
   private String oaNo;
   private Long oaFormItemId;
   private String topProductCode;
@@ -34,9 +33,20 @@ public class PricePrepareItem {
   private BigDecimal unitPrice;
   private BigDecimal amount;
   private String priceSource;
+  private String priceType;
   private String status;
   private String resultRefType;
   private Long resultRefId;
+  private Long sourcePriceRecordId;
+  private String sourcePriceBatchNo;
+  private String supplierName;
+  private String supplierCode;
+  private BigDecimal supplyRatio;
+  private Long supplyRatioRecordId;
+  private LocalDate sourceEffectiveFrom;
+  private LocalDate sourceEffectiveTo;
+  private Integer carriedForward;
+  private String warningMessage;
   private String message;
   /** 1=当前最新准备快照；0=历史快照。历史核算仍可按 prepare_no 读取。 */
   private Integer currentFlag;

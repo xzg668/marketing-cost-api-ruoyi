@@ -7,6 +7,8 @@ public enum CostRunTaskStatus {
   PENDING,
   RUNNING,
   SUCCESS,
+  COLLABORATION,
+  SKIPPED_CURRENT,
   FAILED,
   RETRYABLE,
   CANCELED;

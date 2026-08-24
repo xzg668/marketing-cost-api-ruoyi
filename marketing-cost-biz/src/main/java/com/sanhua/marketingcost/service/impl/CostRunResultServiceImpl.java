@@ -2,37 +2,37 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.CostRunResultDto;
-import com.sanhua.marketingcost.entity.CostRunResult;
 import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
-import com.sanhua.marketingcost.entity.ProductProperty;
-import com.sanhua.marketingcost.mapper.CostRunResultMapper;
+import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
+import com.sanhua.marketingcost.enums.QuoteCostRunStatus;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
-import com.sanhua.marketingcost.mapper.ProductPropertyMapper;
+import com.sanhua.marketingcost.mapper.OaFormItemMapper;
+import com.sanhua.marketingcost.mapper.OaFormMapper;
+import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.CostRunResultService;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.Year;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+/** 从唯一成本版本主表组装结果头，产品和客户名称直接读取主数据，避免重复存储。 */
 @Service
 public class CostRunResultServiceImpl implements CostRunResultService {
-  private static final DateTimeFormatter PERIOD_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM");
 
-  private final CostRunResultMapper costRunResultMapper;
-  private final ProductPropertyMapper productPropertyMapper;
+  private final QuoteCostRunVersionMapper versionMapper;
+  private final OaFormMapper formMapper;
+  private final OaFormItemMapper itemMapper;
   private final MaterialMasterMapper materialMasterMapper;
 
   public CostRunResultServiceImpl(
-      CostRunResultMapper costRunResultMapper,
-      ProductPropertyMapper productPropertyMapper,
+      QuoteCostRunVersionMapper versionMapper,
+      OaFormMapper formMapper,
+      OaFormItemMapper itemMapper,
       MaterialMasterMapper materialMasterMapper) {
-    this.costRunResultMapper = costRunResultMapper;
-    this.productPropertyMapper = productPropertyMapper;
+    this.versionMapper = versionMapper;
+    this.formMapper = formMapper;
+    this.itemMapper = itemMapper;
     this.materialMasterMapper = materialMasterMapper;
   }
 
@@ -41,193 +41,109 @@ public class CostRunResultServiceImpl implements CostRunResultService {
     if (!StringUtils.hasText(oaNo)) {
       return null;
     }
-    String oaNoValue = oaNo.trim();
-    String productCodeValue = StringUtils.hasText(productCode) ? productCode.trim() : null;
-
-    CostRunResult result;
-    if (StringUtils.hasText(productCodeValue)) {
-      result =
-          costRunResultMapper.selectOne(
-              Wrappers.lambdaQuery(CostRunResult.class)
-                  .eq(CostRunResult::getOaNo, oaNoValue)
-                  .eq(CostRunResult::getProductCode, productCodeValue)
-                  .last("LIMIT 1"));
-    } else {
-      List<CostRunResult> list =
-          costRunResultMapper.selectList(
-              Wrappers.lambdaQuery(CostRunResult.class)
-                  .eq(CostRunResult::getOaNo, oaNoValue)
-                  .orderByAsc(CostRunResult::getId)
-                  .last("LIMIT 1"));
-      result = list.isEmpty() ? null : list.get(0);
-    }
-
-    if (result == null) {
+    var query =
+        Wrappers.lambdaQuery(QuoteCostRunVersion.class)
+            .eq(QuoteCostRunVersion::getOaNo, oaNo.trim())
+            .eq(
+                StringUtils.hasText(productCode),
+                QuoteCostRunVersion::getProductCode,
+                trimToNull(productCode))
+            .orderByDesc(QuoteCostRunVersion::getTrialFinishedAt)
+            .orderByDesc(QuoteCostRunVersion::getCreatedAt)
+            .orderByDesc(QuoteCostRunVersion::getId);
+    List<QuoteCostRunVersion> versions = versionMapper.selectList(query);
+    if (versions == null || versions.isEmpty()) {
       return null;
     }
-    MaterialMaster materialMaster = findMaterialMaster(result.getProductCode());
-    String productName =
-        materialMaster == null ? null : trimToNull(materialMaster.getMaterialName());
-    String productModel =
-        materialMaster == null ? null : trimToNull(materialMaster.getItemModel());
-    if (!StringUtils.hasText(productName)) {
-      productName = trimToNull(result.getProductName());
+    QuoteCostRunVersion selected =
+        versions.stream()
+            .filter(
+                version ->
+                    QuoteCostRunStatus.isCurrentSuccess(version.getStatus()))
+            .findFirst()
+            .orElseGet(
+                () ->
+                    versions.stream()
+                        .filter(version -> version.getTotalCost() != null)
+                        .findFirst()
+                        .orElse(versions.get(0)));
+    return toDto(selected);
+  }
+
+  @Override
+  public CostRunResultDto getResult(Long costRunVersionId) {
+    if (costRunVersionId == null) {
+      return null;
     }
-    if (!StringUtils.hasText(productModel)) {
-      productModel = trimToNull(result.getProductModel());
+    return toDto(versionMapper.selectById(costRunVersionId));
+  }
+
+  private CostRunResultDto toDto(QuoteCostRunVersion version) {
+    if (version == null) {
+      return null;
     }
+    OaForm form = findForm(version.getOaNo());
+    OaFormItem item = findItem(version, form);
+    MaterialMaster material = findMaterial(version.getProductCode());
+
     CostRunResultDto dto = new CostRunResultDto();
-    dto.setOaNo(result.getOaNo());
-    dto.setProductCode(result.getProductCode());
-    dto.setProductName(productName);
-    dto.setProductModel(productModel);
-    dto.setCustomerName(result.getCustomerName());
-    dto.setBusinessUnit(result.getBusinessUnit());
-    dto.setDepartment(result.getDepartment());
-    dto.setPeriod(result.getPeriod());
-    dto.setCurrency(result.getCurrency());
-    dto.setUnit(result.getUnit());
-    dto.setTotalCost(result.getTotalCost());
-    dto.setCalcStatus(result.getCalcStatus());
-    dto.setProductAttr(result.getProductAttr());
+    dto.setOaNo(version.getOaNo());
+    dto.setProductCode(version.getProductCode());
+    dto.setProductName(
+        firstText(
+            material == null ? null : material.getMaterialName(),
+            item == null ? null : item.getProductName()));
+    dto.setProductModel(
+        firstText(
+            material == null ? null : material.getItemModel(),
+            item == null ? null : item.getSunlModel()));
+    dto.setCustomerName(form == null ? null : trimToNull(form.getCustomer()));
+    dto.setBusinessUnit(
+        form == null ? null : trimToNull(form.getSourceBusinessDivision()));
+    dto.setDepartment(form == null ? null : trimToNull(form.getApplicantDept()));
+    dto.setPeriod(version.getResultPeriod());
+    dto.setTotalCost(version.getTotalCost());
+    dto.setFinanceMaterialCost(version.getFinanceMaterialCost());
+    dto.setOaMaterialCost(version.getOaMaterialCost());
+    dto.setCuMaterialAdjustment(version.getCuMaterialAdjustment());
+    dto.setFinalQuoteAmount(version.getFinalQuoteAmount());
+    dto.setCalcStatus(calcStatus(version.getStatus(), version.getTotalCost() != null));
+    dto.setProductAttr(
+        firstText(
+            item == null ? null : item.getProductAttr(),
+            form == null ? null : form.getProductAttr()));
     return dto;
   }
 
-  @Override
-  public void saveOrUpdate(OaForm form, OaFormItem item) {
-    if (form == null || item == null || !StringUtils.hasText(form.getOaNo())) {
-      return;
-    }
-    String oaNo = form.getOaNo().trim();
-    String productCode = item.getMaterialNo();
-    if (!StringUtils.hasText(productCode)) {
-      return;
-    }
-    String productCodeValue = productCode.trim();
-
-    CostRunResult existing =
-        costRunResultMapper.selectOne(
-            Wrappers.lambdaQuery(CostRunResult.class)
-                .eq(CostRunResult::getOaNo, oaNo)
-                .eq(CostRunResult::getProductCode, productCodeValue)
-                .last("LIMIT 1"));
-    if (existing == null) {
-      existing = new CostRunResult();
-      existing.setOaNo(oaNo);
-      existing.setProductCode(productCodeValue);
-    }
-
-    MaterialMaster materialMaster = findMaterialMaster(productCodeValue);
-    String productName =
-        materialMaster == null ? null : trimToNull(materialMaster.getMaterialName());
-    String productModel =
-        materialMaster == null ? null : trimToNull(materialMaster.getItemModel());
-    if (!StringUtils.hasText(productName)) {
-      productName = trimToNull(item.getProductName());
-    }
-    if (!StringUtils.hasText(productModel)) {
-      productModel = trimToNull(item.getSunlModel());
-    }
-    existing.setProductName(productName);
-    existing.setProductModel(productModel);
-    existing.setCustomerName(trimToNull(form.getCustomer()));
-    existing.setBusinessUnitType(firstText(item.getBusinessUnitType(), form.getBusinessUnitType()));
-    existing.setCalcStatus("已核算");
-    existing.setCalcAt(LocalDateTime.now());
-    existing.setPeriod(buildPeriod(form.getApplyDate()));
-    existing.setProductAttr(
-        findProductAttr(
-            productCodeValue,
-            resolveQuoteYear(form, item),
-            firstText(item.getBusinessUnitType(), form.getBusinessUnitType())));
-
-    if (existing.getId() == null) {
-      costRunResultMapper.insert(existing);
-    } else {
-      costRunResultMapper.updateById(existing);
-    }
-  }
-
-  @Override
-  public void updateTotalCost(String oaNo, String productCode, java.math.BigDecimal totalCost) {
-    if (!StringUtils.hasText(oaNo) || !StringUtils.hasText(productCode)) {
-      return;
-    }
-    CostRunResult existing =
-        costRunResultMapper.selectOne(
-            Wrappers.lambdaQuery(CostRunResult.class)
-                .eq(CostRunResult::getOaNo, oaNo.trim())
-                .eq(CostRunResult::getProductCode, productCode.trim())
-                .last("LIMIT 1"));
-    if (existing == null) {
-      // T7 修复：新建时要补齐 NOT NULL 字段（period / calc_status），否则 INSERT 失败。
-      // period 取当月（applyDate 缺失时兜底为今天），与 ensureResult 口径对齐。
-      existing = new CostRunResult();
-      existing.setOaNo(oaNo.trim());
-      existing.setProductCode(productCode.trim());
-      existing.setTotalCost(totalCost);
-      existing.setPeriod(LocalDate.now().format(PERIOD_FORMAT));
-      existing.setCalcStatus("未核算");
-      costRunResultMapper.insert(existing);
-      return;
-    }
-    existing.setTotalCost(totalCost);
-    costRunResultMapper.updateById(existing);
-  }
-
-  private String buildPeriod(LocalDate applyDate) {
-    LocalDate date = applyDate == null ? LocalDate.now() : applyDate;
-    return date.format(PERIOD_FORMAT);
-  }
-
-  private Integer resolveQuoteYear(OaForm form, OaFormItem item) {
-    if (item != null && item.getValidDate() != null) {
-      return item.getValidDate().getYear();
-    }
-    if (form != null && form.getApplyDate() != null) {
-      return form.getApplyDate().getYear();
-    }
-    return Year.now().getValue();
-  }
-
-  private String findProductAttr(String productCode, Integer propertyYear, String businessUnitType) {
-    if (!StringUtils.hasText(productCode)) {
+  private OaForm findForm(String oaNo) {
+    if (!StringUtils.hasText(oaNo)) {
       return null;
     }
-    String code = productCode.trim();
-    String businessUnit = trimToNull(businessUnitType);
-    ProductProperty property =
-        productPropertyMapper.selectOne(
-            Wrappers.lambdaQuery(ProductProperty.class)
-                .eq(StringUtils.hasText(businessUnit), ProductProperty::getBusinessUnitType, businessUnit)
-                .eq(propertyYear != null, ProductProperty::getPropertyYear, propertyYear)
-                .eq(ProductProperty::getProductCode, code)
-                .orderByDesc(ProductProperty::getId)
-                .last("LIMIT 1"));
-    if (property == null) {
-      property =
-          productPropertyMapper.selectOne(
-              Wrappers.lambdaQuery(ProductProperty.class)
-                  .eq(StringUtils.hasText(businessUnit), ProductProperty::getBusinessUnitType, businessUnit)
-                  .eq(propertyYear != null, ProductProperty::getPropertyYear, propertyYear)
-                  .eq(ProductProperty::getParentCode, code)
-                  .orderByDesc(ProductProperty::getId)
-                  .last("LIMIT 1"));
-    }
-    return property == null ? null : property.getProductAttr();
+    return formMapper.selectOne(
+        Wrappers.lambdaQuery(OaForm.class)
+            .eq(OaForm::getOaNo, oaNo.trim())
+            .last("LIMIT 1"));
   }
 
-  private String firstText(String first, String second) {
-    if (StringUtils.hasText(first)) {
-      return first.trim();
+  private OaFormItem findItem(QuoteCostRunVersion version, OaForm form) {
+    if (version.getOaFormItemId() != null) {
+      OaFormItem item = itemMapper.selectById(version.getOaFormItemId());
+      if (item != null) {
+        return item;
+      }
     }
-    if (StringUtils.hasText(second)) {
-      return second.trim();
+    if (form == null || form.getId() == null || !StringUtils.hasText(version.getProductCode())) {
+      return null;
     }
-    return null;
+    return itemMapper.selectOne(
+        Wrappers.lambdaQuery(OaFormItem.class)
+            .eq(OaFormItem::getOaFormId, form.getId())
+            .eq(OaFormItem::getMaterialNo, version.getProductCode())
+            .orderByDesc(OaFormItem::getId)
+            .last("LIMIT 1"));
   }
 
-  private MaterialMaster findMaterialMaster(String productCode) {
+  private MaterialMaster findMaterial(String productCode) {
     if (!StringUtils.hasText(productCode)) {
       return null;
     }
@@ -237,10 +153,21 @@ public class CostRunResultServiceImpl implements CostRunResultService {
             .last("LIMIT 1"));
   }
 
-  private String trimToNull(String value) {
-    if (!StringUtils.hasText(value)) {
-      return null;
+  private String calcStatus(String status, boolean hasResult) {
+    if (QuoteCostRunStatus.isCurrentSuccess(status) || "HISTORY".equals(status) || hasResult) {
+      return "已核算";
     }
-    return value.trim();
+    if ("RUNNING".equals(status) || "TRIAL".equals(status)) {
+      return "试算中";
+    }
+    return "未核算";
+  }
+
+  private String firstText(String first, String second) {
+    return StringUtils.hasText(first) ? first.trim() : trimToNull(second);
+  }
+
+  private String trimToNull(String value) {
+    return StringUtils.hasText(value) ? value.trim() : null;
   }
 }

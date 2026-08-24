@@ -2,11 +2,8 @@ package com.sanhua.marketingcost.service;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.MaterialPriceTypeImportRequest;
-import com.sanhua.marketingcost.dto.MaterialPriceTypeRangeApplyRequest;
 import com.sanhua.marketingcost.dto.MaterialPriceTypeRequest;
-import com.sanhua.marketingcost.dto.RangePriceTypeConflict;
 import com.sanhua.marketingcost.entity.MaterialPriceType;
-import com.sanhua.marketingcost.entity.PriceRangeItem;
 import java.util.List;
 
 public interface MaterialPriceTypeService {
@@ -20,8 +17,4 @@ public interface MaterialPriceTypeService {
   boolean delete(Long id);
 
   List<MaterialPriceType> importItems(MaterialPriceTypeImportRequest request);
-
-  List<RangePriceTypeConflict> findRangePriceTypeConflicts(List<PriceRangeItem> rangeItems);
-
-  List<MaterialPriceType> applyRangePriceType(MaterialPriceTypeRangeApplyRequest request);
 }

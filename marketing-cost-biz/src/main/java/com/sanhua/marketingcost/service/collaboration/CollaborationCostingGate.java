@@ -46,11 +46,10 @@ public class CollaborationCostingGate {
     if (rows.isEmpty()) return; // 未进入协作的既有完整产品保持原流程。
     for (Row row : rows) {
       if (!"READY".equals(row.linkStatus()) || !ALLOWED_PRODUCT.contains(row.productStatus())) {
-        throw new QuoteIngestException(
-            "该产品的BOM/包装/价格协作尚未完成财务审核和重新取价，暂不能发起核算");
+        throw pending(row);
       }
     }
-    CollaborationPrincipal operator = principalProvider.current();
+    CollaborationPrincipal operator = currentOperator();
     Map<Long, Row> products = new LinkedHashMap<>();
     rows.forEach(row -> products.putIfAbsent(row.productTaskId(), row));
     for (Row row : products.values()) {
@@ -98,18 +97,56 @@ public class CollaborationCostingGate {
   private List<Row> rows(Long oaFormItemId, String businessUnitType) {
     return jdbc.query("""
         SELECT l.product_task_id,l.link_status,p.task_status,p.business_unit_type,
-               p.applicable_org_code
+               p.applicable_org_code,p.primary_scope,p.need_bom,p.need_package,p.need_price,
+               p.open_gap_count,
+               EXISTS(SELECT 1 FROM lp_quote_collaboration_gap g
+                      WHERE g.product_task_id=p.id AND g.gap_type='MISSING_PRICE_TYPE'
+                        AND g.gap_status NOT IN ('RESOLVED','WAIVED','OBSOLETE')) AS missing_price_type
         FROM lp_quote_collaboration_quote_link l
         JOIN lp_quote_collaboration_product_task p ON p.id=l.product_task_id
         WHERE l.oa_form_item_id=? AND l.active_flag=1 AND p.business_unit_type=?
         ORDER BY l.id
         """, (rs, index) -> new Row(rs.getLong("product_task_id"),
         rs.getString("link_status"), rs.getString("task_status"),
-        rs.getString("business_unit_type"), rs.getString("applicable_org_code")),
+        rs.getString("business_unit_type"), rs.getString("applicable_org_code"),
+        rs.getString("primary_scope"), rs.getInt("need_bom"), rs.getInt("need_package"),
+        rs.getInt("need_price"), rs.getInt("open_gap_count"),
+        rs.getBoolean("missing_price_type")),
         oaFormItemId, businessUnitType);
+  }
+
+  private CollaborationPrincipal currentOperator() {
+    try {
+      return principalProvider.current();
+    } catch (IllegalStateException exception) {
+      // Worker 没有 Web 登录上下文；任务本身已通过数据库锁取得执行权。
+      return SYSTEM;
+    }
+  }
+
+  private CollaborationCostingPendingException pending(Row row) {
+    String status;
+    String code;
+    if (row.missingPriceType()) {
+      status = "WAIT_PRICE_TYPE";
+      code = "PRICE_TYPE_MISSING";
+    } else if (row.needPrice() == 1
+        || "PRICE_ONLY".equals(row.primaryScope())
+        || "PRICE_IN_PROGRESS".equals(row.productStatus())) {
+      status = "WAIT_PRICE";
+      code = "PRICE_MISSING";
+    } else {
+      status = "WAIT_BOM";
+      code = row.needPackage() == 1 ? "PACKAGE_MISSING" : "BOM_MISSING";
+    }
+    return new CollaborationCostingPendingException(
+        status, code, row.openGapCount(),
+        "该产品协作尚未完成财务审核和重新取价，当前由系统显示的处理人继续处理；完成后可再次核算");
   }
 
   private record Row(
       Long productTaskId, String linkStatus, String productStatus,
-      String businessUnitType, String orgCode) {}
+      String businessUnitType, String orgCode, String primaryScope,
+      int needBom, int needPackage, int needPrice, int openGapCount,
+      boolean missingPriceType) {}
 }

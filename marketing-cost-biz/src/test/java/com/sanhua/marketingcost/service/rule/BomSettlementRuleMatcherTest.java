@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.entity.BomSettlementRule;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -79,6 +80,33 @@ class BomSettlementRuleMatcherTest {
     assertThat(matcher.match(
         nodeWithClassification("181841444", "其它包装材料"), null, List.of(), null,
         LocalDate.of(2026, 7, 20), List.of(rule))).isEmpty();
+  }
+
+  @Test
+  @DisplayName("财务特殊采购上卷同时校验采购形态、28项采购分类和8项主分类排除")
+  void financeSpecialPurchaseRollupRequiresAllThreeConditions() {
+    BomSettlementRule rule = baseRule("SPECIAL_PURCHASE_ROLLUP_FINANCE_CLASSIFICATION", 10);
+    rule.setMatchConditionJson("""
+        {"nodeConditions":[
+          {"field":"shape_attr","op":"EQ","value":"采购件"},
+          {"field":"purchase_category","op":"IN","values":["挤压铜棒","不锈钢棒"]},
+          {"field":"main_category_code","op":"NOT_BLANK"},
+          {"field":"main_category_code","op":"NOT_IN","values":["121191304","121181508"]}
+        ]}
+        """);
+
+    assertThat(match(rule, financeNode(" 采购件 ", " 挤压铜棒 ", "171711402")))
+        .contains(rule);
+    assertThat(match(rule, financeNode("制造件", "挤压铜棒", "171711402")))
+        .isEmpty();
+    assertThat(match(rule, financeNode("采购件", "普通采购分类", "171711402")))
+        .isEmpty();
+    assertThat(match(rule, financeNode("采购件", "挤压铜棒", "121191304")))
+        .isEmpty();
+    assertThat(match(rule, financeNode("采购件", "挤压铜棒", null)))
+        .isEmpty();
+    assertThat(match(rule, financeNode("采购件", null, "171711402")))
+        .isEmpty();
   }
 
   @Test
@@ -192,6 +220,27 @@ class BomSettlementRuleMatcherTest {
         "采购件",
         "RM01",
         "采购件",
+        "COMMERCIAL",
+        "主制造");
+  }
+
+  private Optional<BomSettlementRule> match(BomSettlementRule rule, BomRuleNodeContext context) {
+    return matcher.match(
+        context, null, List.of(), null, LocalDate.of(2026, 8, 20), List.of(rule));
+  }
+
+  private static BomRuleNodeContext financeNode(
+      String shapeAttr, String purchaseCategory, String mainCategoryCode) {
+    return new BomRuleNodeContext(
+        "FINANCE-ROLLUP-CHILD",
+        "财务上卷测试子件",
+        null,
+        mainCategoryCode,
+        null,
+        purchaseCategory,
+        shapeAttr,
+        null,
+        null,
         "COMMERCIAL",
         "主制造");
   }

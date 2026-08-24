@@ -10,7 +10,6 @@ public class QuotePricePrepareSummaryResponse {
   private String oaNo;
   private Long oaFormItemId;
   private String topProductCode;
-  private String priceTypeConfirmNo;
   private String periodMonth;
   private String status;
   private Integer totalCount;

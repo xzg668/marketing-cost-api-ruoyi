@@ -11,8 +11,11 @@ import com.sanhua.marketingcost.service.impl.MonthlyRepriceConfirmServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceOperationServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceQueryServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceStartServiceImpl;
+import com.sanhua.marketingcost.service.impl.QuoteBatchCostRunServiceImpl;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
 import org.springframework.boot.WebApplicationType;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.FilterType;
 import org.springframework.context.annotation.Import;
@@ -46,7 +49,8 @@ class CostRunWorkerApplicationTest {
                   MonthlyRepriceConfirmServiceImpl.class,
                   MonthlyRepriceOperationServiceImpl.class,
                   MonthlyRepriceQueryServiceImpl.class,
-                  MonthlyRepriceStartServiceImpl.class);
+                  MonthlyRepriceStartServiceImpl.class,
+                  QuoteBatchCostRunServiceImpl.class);
         });
   }
 
@@ -59,5 +63,15 @@ class CostRunWorkerApplicationTest {
             OaCollaborationProperties.class,
             ElectronicDrawingBomProperties.class,
             ApprovedResultReuseProperties.class);
+  }
+
+  @Test
+  void workerUsesSameEffectiveBomMainChainAsApi() {
+    YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+    yaml.setResources(new ClassPathResource("application.yml"));
+    var properties = yaml.getObject();
+
+    assertThat(properties).isNotNull();
+    assertThat(properties.getProperty("cost.quote-bom.effective-bom.enabled")).isEqualTo("true");
   }
 }

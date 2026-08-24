@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.effectivebom;
 
 import static com.sanhua.marketingcost.service.effectivebom.EffectiveBomPersistenceTestSupport.hasher;
+import static com.sanhua.marketingcost.service.effectivebom.EffectiveBomPersistenceTestSupport.crossOrganizationVariant;
 import static com.sanhua.marketingcost.service.effectivebom.EffectiveBomPersistenceTestSupport.request;
 import static com.sanhua.marketingcost.service.effectivebom.EffectiveBomPersistenceTestSupport.service;
 import static com.sanhua.marketingcost.service.effectivebom.EffectiveBomPersistenceTestSupport.variant;
@@ -12,7 +13,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
-import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.entity.QuoteEffectiveBomNode;
 import com.sanhua.marketingcost.mapper.QuoteEffectiveBomNodeMapper;
@@ -23,7 +23,6 @@ import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.apache.ibatis.executor.BatchResult;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
 class QuoteEffectiveBomPersistenceTest {
 
@@ -40,7 +39,7 @@ class QuoteEffectiveBomPersistenceTest {
         new EffectiveBomPersistenceTestSupport.InMemoryRepository();
 
     QuoteEffectiveBomPersistenceResult result =
-        service(repository).persistConfirmed(request(11L, variant()));
+        service(repository).persistCurrentVariant(request(11L, variant()));
 
     assertThat(result.reused()).isFalse();
     assertThat(result.nodeCount()).isEqualTo(2);
@@ -56,6 +55,19 @@ class QuoteEffectiveBomPersistenceTest {
       assertThat(row.getCreatedBy()).isEqualTo(9527L);
       assertThat(row.getCreatedAt()).isNotNull();
     });
+  }
+
+  @Test
+  void persistsCommercialOrganizationOnlyForExpandedPlateNode() {
+    EffectiveBomPersistenceTestSupport.InMemoryRepository repository =
+        new EffectiveBomPersistenceTestSupport.InMemoryRepository();
+
+    QuoteEffectiveBomPersistenceResult result =
+        service(repository).persistCurrentVariant(request(11L, crossOrganizationVariant()));
+
+    assertThat(repository.nodes(result.buildBatchId()))
+        .extracting(QuoteEffectiveBomNode::getPriceOrgCode)
+        .containsExactly("220", "210");
   }
 
   @Test
@@ -90,7 +102,7 @@ class QuoteEffectiveBomPersistenceTest {
                 List.of()));
 
     assertThatThrownBy(
-            () -> service(repository).persistConfirmed(request(11L, blocked)))
+            () -> service(repository).persistCurrentVariant(request(11L, blocked)))
         .isInstanceOf(IllegalArgumentException.class);
     assertThat(repository.insertCalls()).isZero();
   }
@@ -147,24 +159,4 @@ class QuoteEffectiveBomPersistenceTest {
                 .<Collection<QuoteEffectiveBomNode>>any());
   }
 
-  @Test
-  void provisionalCleanupPreservesBuildsReferencedByConfirmationsOrSnapshots() {
-    QuoteEffectiveBomNodeMapper mapper = mock(QuoteEffectiveBomNodeMapper.class);
-    QuoteEffectiveBomRepositoryImpl repository =
-        new QuoteEffectiveBomRepositoryImpl(mapper);
-    when(mapper.delete(org.mockito.ArgumentMatchers.<Wrapper<QuoteEffectiveBomNode>>any()))
-        .thenReturn(3);
-
-    int deleted = repository.deleteUnreferencedByOriginMonthlySnapshotId(11L);
-
-    assertThat(deleted).isEqualTo(3);
-    ArgumentCaptor<Wrapper<QuoteEffectiveBomNode>> wrapperCaptor =
-        ArgumentCaptor.forClass(Wrapper.class);
-    verify(mapper).delete(wrapperCaptor.capture());
-    assertThat(wrapperCaptor.getValue().getSqlSegment())
-        .contains("origin_monthly_snapshot_id")
-        .contains("lp_quote_bom_confirmation")
-        .contains("lp_quote_bom_monthly_snapshot")
-        .contains("effective_build_batch_id COLLATE utf8mb4_unicode_ci");
-  }
 }

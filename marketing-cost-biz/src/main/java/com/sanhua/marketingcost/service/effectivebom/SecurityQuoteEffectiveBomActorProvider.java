@@ -25,7 +25,7 @@ public class SecurityQuoteEffectiveBomActorProvider
     Authentication authentication =
         SecurityContextHolder.getContext().getAuthentication();
     if (authentication == null) {
-      throw new IllegalStateException("当前登录用户缺少用户ID，不能确认最终BOM");
+      throw new IllegalStateException("当前登录用户缺少用户ID，不能生成报价物料");
     }
     Long detailUserId = detailUserId(authentication.getDetails());
     if (positive(detailUserId)) {
@@ -37,7 +37,7 @@ public class SecurityQuoteEffectiveBomActorProvider
             ? sysUserService.findByUsername(username.trim())
             : null;
     if (user == null || !positive(user.getUserId())) {
-      throw new IllegalStateException("当前登录用户缺少用户ID，不能确认最终BOM");
+      throw new IllegalStateException("当前登录用户缺少用户ID，不能生成报价物料");
     }
     return user.getUserId();
   }

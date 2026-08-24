@@ -11,7 +11,6 @@ import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.PriceRangeItemImportRequest;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
-import com.sanhua.marketingcost.dto.SupplierSupplyRatioCandidate;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.enums.MaterialFormAttrEnum;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
@@ -190,27 +189,16 @@ class RangePriceSupplierRatioE2ETest extends BomMapperTestBase {
     assertThat(ratioResolveService.resolve(
             "COMMERCIAL", MATERIAL_A, "测试气门芯", "SPEC-" + MATERIAL_A, PRICE_DATE)
         .isMatched()).isTrue();
-    assertThat(ratioResolveService.resolveAmongSuppliers(
-            "COMMERCIAL",
-            MATERIAL_A,
-            "测试气门芯",
-            "SPEC-" + MATERIAL_A,
-            PRICE_DATE,
-            List.of(
-                new SupplierSupplyRatioCandidate(SUPPLIER_A_NAME, SUPPLIER_A_CODE),
-                new SupplierSupplyRatioCandidate(SUPPLIER_B_NAME, SUPPLIER_B_CODE)))
-        .isMatched()).isTrue();
-
     for (String material : List.of(MATERIAL_A, MATERIAL_B)) {
       PriceResolveResult result = resolve(material, "58500");
-      assertSelected(result, material, SUPPLIER_A_CODE, "0.700000", "供应商代码", false);
+      assertSelected(result, material, SUPPLIER_A_CODE, "0.700000", "供应商代码");
     }
 
     replaceRatios(MATERIAL_A, "0.200000", "0.800000");
     replaceRatios(MATERIAL_B, "0.200000", "0.800000");
     for (String material : List.of(MATERIAL_A, MATERIAL_B)) {
       PriceResolveResult result = resolve(material, "58500");
-      assertSelected(result, material, SUPPLIER_B_CODE, "0.800000", "供应商代码", false);
+      assertSelected(result, material, SUPPLIER_B_CODE, "0.800000", "供应商代码");
     }
   }
 
@@ -242,13 +230,12 @@ class RangePriceSupplierRatioE2ETest extends BomMapperTestBase {
         "主供应商代码=；供货比例=0.8",
         "供应商匹配方式=供应商名称兜底",
         "最终价格行ID=" + result.resultRefId(),
-        "最终不含税单价=2",
-        "是否兜底=否");
+        "最终不含税单价=2");
   }
 
   @Test
-  @DisplayName("代码明确不同时不按同名误匹配且主供无价格时留下兜底原因")
-  void explicitCodeMismatchNeverFallsBackToSameName() throws Exception {
+  @DisplayName("代码明确不同时不按同名误匹配，主供无价直接阻断")
+  void explicitCodeMismatchBlocksWithoutFallback() throws Exception {
     seedMaterial(MATERIAL_A);
     insertRatio(
         MATERIAL_A,
@@ -259,15 +246,10 @@ class RangePriceSupplierRatioE2ETest extends BomMapperTestBase {
 
     PriceResolveResult result = resolve(MATERIAL_A, "58500");
 
-    assertThat(querySupplierCode(result.resultRefId())).isEqualTo(SUPPLIER_B_CODE);
-    assertThat(result.remark())
-        .contains(
-            "主供应商名称=" + SUPPLIER_A_NAME,
-            "主供应商代码=OTHER-CODE",
-            "供应商匹配方式=默认排序兜底",
-            "是否兜底=是",
-            "兜底原因=主供应商无价格记录")
-        .doesNotContain("供应商匹配方式=供应商名称兜底");
+    assertThat(result.unitPrice()).isNull();
+    assertThat(result.failureCode())
+        .isEqualTo(SupplierPreferredPriceSelector.PRIMARY_SUPPLIER_PRICE_MISSING);
+    assertThat(result.remark()).contains("主供应商无价格", SUPPLIER_A_NAME);
   }
 
   @Test
@@ -297,23 +279,21 @@ class RangePriceSupplierRatioE2ETest extends BomMapperTestBase {
 
     PriceResolveResult idTieResult = resolve(MATERIAL_A, "58500");
     assertSelected(
-        idTieResult, MATERIAL_A, SUPPLIER_B_CODE, "0.500000", "供应商代码", false);
+        idTieResult, MATERIAL_A, SUPPLIER_B_CODE, "0.500000", "供应商代码");
   }
 
   @Test
-  @DisplayName("未维护供货比例时按价格ID倒序兜底并记录原因")
-  void missingRatioUsesDeterministicFallbackWithReason() throws Exception {
+  @DisplayName("多供应商未维护供货比例时稳定阻断")
+  void missingRatioBlocksDeterministically() throws Exception {
     seedMaterial(MATERIAL_A);
 
     PriceResolveResult first = resolve(MATERIAL_A, "58500");
     PriceResolveResult repeated = resolve(MATERIAL_A, "58500");
 
-    assertThat(querySupplierCode(first.resultRefId())).isEqualTo(SUPPLIER_B_CODE);
     assertThat(first).isEqualTo(repeated);
-    assertThat(first.remark()).contains(
-        "供应商匹配方式=默认排序兜底",
-        "是否兜底=是",
-        "兜底原因=未维护主供应商供货比例");
+    assertThat(first.unitPrice()).isNull();
+    assertThat(first.failureCode())
+        .isEqualTo(SupplierPreferredPriceSelector.SUPPLIER_RATIO_MISSING);
   }
 
   @Test
@@ -529,8 +509,7 @@ class RangePriceSupplierRatioE2ETest extends BomMapperTestBase {
       String materialCode,
       String supplierCode,
       String ratio,
-      String matchMode,
-      boolean fallback)
+      String matchMode)
       throws Exception {
     assertThat(result.unitPrice()).isNotNull();
     assertThat(result.priceSource()).isEqualTo("区间价");
@@ -542,8 +521,7 @@ class RangePriceSupplierRatioE2ETest extends BomMapperTestBase {
         "供货比例=" + new BigDecimal(ratio).stripTrailingZeros().toPlainString(),
         "供应商匹配方式=" + matchMode,
         "最终价格行ID=" + result.resultRefId(),
-        "最终不含税单价=" + result.unitPrice().stripTrailingZeros().toPlainString(),
-        "是否兜底=" + (fallback ? "是" : "否"));
+        "最终不含税单价=" + result.unitPrice().stripTrailingZeros().toPlainString());
   }
 
   private String querySupplierCode(Long priceRowId) throws Exception {

@@ -19,23 +19,24 @@ import com.sanhua.marketingcost.entity.OaFormExtraFee;
 import com.sanhua.marketingcost.entity.OaFormHeaderExtraField;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.OaFormItemExtraField;
-import com.sanhua.marketingcost.entity.QuoteBomConfirmation;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
+import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
 import com.sanhua.marketingcost.entity.QuoteIngestLog;
 import com.sanhua.marketingcost.mapper.OaFormExtraFeeMapper;
 import com.sanhua.marketingcost.mapper.OaFormHeaderExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteIngestLogMapper;
+import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,11 +48,10 @@ class QuoteRequestQueryServiceImplTest {
   private OaFormExtraFeeMapper oaFormExtraFeeMapper;
   private OaFormHeaderExtraFieldMapper oaFormHeaderExtraFieldMapper;
   private OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper;
-  private QuoteBomConfirmationMapper quoteBomConfirmationMapper;
   private QuoteBomStatusMapper quoteBomStatusMapper;
   private QuoteCostRunVersionMapper quoteCostRunVersionMapper;
   private QuoteIngestLogMapper quoteIngestLogMapper;
-  private U9ProductPackagingTypeResolver productPackagingTypeResolver;
+  private QuoteCostingWorkspaceService quoteCostingWorkspaceService;
   private QuoteRequestQueryServiceImpl service;
 
   @BeforeEach
@@ -61,14 +61,11 @@ class QuoteRequestQueryServiceImplTest {
     oaFormExtraFeeMapper = mock(OaFormExtraFeeMapper.class);
     oaFormHeaderExtraFieldMapper = mock(OaFormHeaderExtraFieldMapper.class);
     oaFormItemExtraFieldMapper = mock(OaFormItemExtraFieldMapper.class);
-    quoteBomConfirmationMapper = mock(QuoteBomConfirmationMapper.class);
     quoteBomStatusMapper = mock(QuoteBomStatusMapper.class);
     quoteCostRunVersionMapper = mock(QuoteCostRunVersionMapper.class);
     quoteIngestLogMapper = mock(QuoteIngestLogMapper.class);
-    productPackagingTypeResolver = mock(U9ProductPackagingTypeResolver.class);
-    when(productPackagingTypeResolver.resolve(any(), any()))
-        .thenReturn(U9ProductPackagingTypeResolver.Result.unknown(null));
-    when(quoteBomConfirmationMapper.selectList(any())).thenReturn(List.of());
+    quoteCostingWorkspaceService = mock(QuoteCostingWorkspaceService.class);
+    when(quoteCostingWorkspaceService.findAll(any(), any())).thenReturn(List.of());
     when(quoteCostRunVersionMapper.selectList(any())).thenReturn(List.of());
     service =
         new QuoteRequestQueryServiceImpl(
@@ -77,11 +74,10 @@ class QuoteRequestQueryServiceImplTest {
             oaFormExtraFeeMapper,
             oaFormHeaderExtraFieldMapper,
             oaFormItemExtraFieldMapper,
-            quoteBomConfirmationMapper,
             quoteBomStatusMapper,
             quoteCostRunVersionMapper,
             quoteIngestLogMapper,
-            productPackagingTypeResolver);
+            quoteCostingWorkspaceService);
   }
 
   @Test
@@ -206,10 +202,6 @@ class QuoteRequestQueryServiceImplTest {
     when(oaFormHeaderExtraFieldMapper.selectList(any())).thenReturn(List.of(headerExtraField()));
     when(oaFormItemExtraFieldMapper.selectList(any())).thenReturn(List.of(itemExtraField(13L)));
     when(quoteIngestLogMapper.selectById(8L)).thenReturn(log(8L));
-    when(productPackagingTypeResolver.resolve("MAT-1001", "PLATE"))
-        .thenReturn(new U9ProductPackagingTypeResolver.Result(
-            U9ProductPackagingTypeResolver.PACKAGED_PRODUCT, "120101"));
-
     QuoteRequestDetailResponse detail = service.getRequestDetail("OA-T8-004");
 
     assertThat(detail.getOaNo()).isEqualTo("OA-T8-004");
@@ -228,7 +220,7 @@ class QuoteRequestQueryServiceImplTest {
     assertThat(detail.getItems().get(0).getTotalWithShip()).isEqualByComparingTo("12.35");
     assertThat(detail.getItems().get(0).getBomStatus().getProductPackagingType())
         .isEqualTo("PACKAGED_PRODUCT");
-    assertThat(detail.getItems().get(0).getBomStatus().getMainCategoryCode()).isEqualTo("120101");
+    assertThat(detail.getItems().get(0).getBomStatus().getMainCategoryCode()).isNull();
     assertThat(detail.getExtraFees().get(0).getFeeCode()).isEqualTo("SAMPLE_FEE");
     assertThat(detail.getExtraFees().get(0).getFeeScope()).isEqualTo("ITEM");
     assertThat(detail.getExtraFees().get(0).getSourceFieldPath()).isEqualTo("OA原始表单!G12");
@@ -263,14 +255,78 @@ class QuoteRequestQueryServiceImplTest {
             List.of(
                 costRunVersion(31L, 101L, "TRIAL"),
                 costRunVersion(32L, 100L, "CONFIRMED")));
-    when(quoteBomConfirmationMapper.selectList(any()))
-        .thenReturn(List.of(bomConfirmation(33L)));
-
     QuoteRequestDetailResponse detail = service.getRequestDetail("OA-T8-COST-STATUS");
 
     assertThat(detail.getItems().get(0).getCalcStatus()).isEqualTo("试算中");
     assertThat(detail.getItems().get(1).getCalcStatus()).isEqualTo("已核算");
-    assertThat(detail.getItems().get(2).getCalcStatus()).isEqualTo("试算中");
+    assertThat(detail.getItems().get(2).getCalcStatus()).isEqualTo("未核算");
+  }
+
+  @Test
+  void detailProjectsInputChangedWithoutRebuildingBomOrPrices() {
+    OaForm form = form("OA-T8-STALE", "FI-SC-020", "CONFIRMED");
+    OaFormItem calculated = item(41L, "MAT-STALE");
+    calculated.setConfirmedCostVersionId(301L);
+    QuoteCostingWorkspace workspace = new QuoteCostingWorkspace();
+    workspace.setOaFormItemId(41L);
+    workspace.setPeriodMonth(CostPricingPeriodUtils.currentPricingMonth());
+    workspace.setWorkspaceStatus("SUCCESS");
+    workspace.setCurrentStep("COST_RUN");
+    workspace.setInputFingerprint("NEW-INPUT");
+    workspace.setLastSuccessInputFingerprint("OLD-INPUT");
+    workspace.setCurrentCostVersionId(301L);
+    workspace.setGapCount(0);
+    workspace.setCarriedForwardPriceCount(2);
+    workspace.setLockVersion(4);
+    when(oaFormMapper.selectOne(any())).thenReturn(form);
+    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(calculated));
+    when(quoteBomStatusMapper.selectList(any())).thenReturn(List.of(status(41L, "SYNCED")));
+    when(oaFormExtraFeeMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormHeaderExtraFieldMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormItemExtraFieldMapper.selectList(any())).thenReturn(List.of());
+    when(quoteCostingWorkspaceService.findAll(any(), any())).thenReturn(List.of(workspace));
+
+    QuoteRequestDetailResponse detail = service.getRequestDetail("OA-T8-STALE");
+
+    assertThat(detail.getItems().get(0).getCalcStatus()).isEqualTo("已核算");
+    assertThat(detail.getItems().get(0).getCostingWorkspace()).satisfies(projection -> {
+      assertThat(projection.getWorkspaceStatus()).isEqualTo("STALE");
+      assertThat(projection.getInputChanged()).isTrue();
+      assertThat(projection.getAttentionCode()).isEqualTo("INPUT_CHANGED");
+      assertThat(projection.getCurrentCostVersionId()).isEqualTo(301L);
+      assertThat(projection.getCarriedForwardPriceCount()).isEqualTo(2);
+    });
+    verify(quoteCostingWorkspaceService)
+        .findAll(List.of(41L), CostPricingPeriodUtils.currentPricingMonth());
+  }
+
+  @Test
+  void detailMarksPreviousMonthSuccessAsStaleWithoutCreatingWorkspace() {
+    OaForm form = form("OA-T8-PREVIOUS-MONTH", "FI-SC-020", "CONFIRMED");
+    OaFormItem calculated = item(42L, "MAT-PREVIOUS");
+    calculated.setCalcStatus("已核算");
+    calculated.setConfirmedCostVersionId(302L);
+    QuoteCostRunVersion previous = costRunVersion(42L, 302L, "CONFIRMED");
+    previous.setOaNo("OA-T8-PREVIOUS-MONTH");
+    previous.setPricingMonth(YearMonth.now().minusMonths(1).toString());
+    when(oaFormMapper.selectOne(any())).thenReturn(form);
+    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(calculated));
+    when(quoteBomStatusMapper.selectList(any())).thenReturn(List.of(status(42L, "SYNCED")));
+    when(quoteCostRunVersionMapper.selectList(any())).thenReturn(List.of(previous));
+    when(oaFormExtraFeeMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormHeaderExtraFieldMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormItemExtraFieldMapper.selectList(any())).thenReturn(List.of());
+
+    QuoteRequestDetailResponse detail = service.getRequestDetail("OA-T8-PREVIOUS-MONTH");
+
+    assertThat(detail.getItems().get(0).getCostingWorkspace()).satisfies(projection -> {
+      assertThat(projection.getPeriodMonth()).isEqualTo(CostPricingPeriodUtils.currentPricingMonth());
+      assertThat(projection.getWorkspaceStatus()).isEqualTo("STALE");
+      assertThat(projection.getInputChanged()).isTrue();
+      assertThat(projection.getAttentionCode()).isEqualTo("PERIOD_CHANGED");
+      assertThat(projection.getStaleReasonCode()).isEqualTo("PERIOD_CHANGED");
+      assertThat(projection.getCurrentCostVersionId()).isEqualTo(302L);
+    });
   }
 
   @Test
@@ -410,6 +466,7 @@ class QuoteRequestQueryServiceImplTest {
     status.setOaNo("OA-T8-001");
     status.setProductCode("MAT-1001");
     status.setProductModel("SHF-A");
+    status.setProductType("NON_BARE");
     status.setBomStatus(bomStatus);
     status.setBomSource("U9");
     return status;
@@ -423,16 +480,6 @@ class QuoteRequestQueryServiceImplTest {
     version.setOaFormItemId(itemId);
     version.setStatus(versionStatus);
     return version;
-  }
-
-  private QuoteBomConfirmation bomConfirmation(Long itemId) {
-    QuoteBomConfirmation confirmation = new QuoteBomConfirmation();
-    confirmation.setId(itemId + 200);
-    confirmation.setOaNo("OA-T8-COST-STATUS");
-    confirmation.setOaFormItemId(itemId);
-    confirmation.setPeriodMonth(CostPricingPeriodUtils.currentPricingMonth());
-    confirmation.setConfirmStatus(QuoteBomConfirmation.STATUS_CONFIRMED);
-    return confirmation;
   }
 
   private OaFormExtraFee extraFee() {

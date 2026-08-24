@@ -31,6 +31,8 @@ import org.slf4j.LoggerFactory;
 import java.lang.reflect.Method;
 import java.sql.Connection;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 业务单元数据隔离拦截器（MyBatis Plus InnerInterceptor）。
@@ -53,6 +55,9 @@ import java.util.concurrent.ConcurrentHashMap;
 public class BusinessUnitInterceptor implements InnerInterceptor {
 
     private static final Logger log = LoggerFactory.getLogger(BusinessUnitInterceptor.class);
+    private static final Pattern MYSQL_LOCK_BEFORE_LIMIT = Pattern.compile(
+            "(?is)^(.*)\\s+FOR\\s+UPDATE\\s+(LIMIT\\s+(?:\\?|\\d+)"
+                    + "(?:\\s*,\\s*(?:\\?|\\d+))?(?:\\s+OFFSET\\s+(?:\\?|\\d+))?)\\s*$");
 
     /** MappedStatement id → 对应方法的 @DataScope 注解（null 表示无注解，避免重复反射） */
     private final ConcurrentHashMap<String, DataScope> scopeCache = new ConcurrentHashMap<>();
@@ -163,13 +168,26 @@ public class BusinessUnitInterceptor implements InnerInterceptor {
             return sql;
         }
         applyToSelect(select, alias, column, value, includeShared);
-        return select.toString();
+        return normalizeMySqlLockClause(select.toString());
     }
 
     /** 旧签名兜底，便于既有单测调用（默认不含共享行）。 */
     String appendBusinessUnitCondition(String sql, String alias, String column, String value)
             throws JSQLParserException {
         return appendBusinessUnitCondition(sql, alias, column, value, false);
+    }
+
+    /**
+     * JSQLParser 会把 MySQL 的 {@code LIMIT ... FOR UPDATE} 输出成
+     * {@code FOR UPDATE LIMIT ...}。后者不符合 MySQL 语法，会让所有带数据隔离的加锁查询
+     * 在真实库失败。应用只使用 MySQL，因此在 SQL 改写出口统一恢复 MySQL 的子句顺序。
+     */
+    private String normalizeMySqlLockClause(String sql) {
+        Matcher matcher = MYSQL_LOCK_BEFORE_LIMIT.matcher(sql);
+        if (!matcher.matches()) {
+            return sql;
+        }
+        return matcher.group(1) + " " + matcher.group(2) + " FOR UPDATE";
     }
 
     private void applyToSelect(Select select, String alias, String column, String value, boolean includeShared) {

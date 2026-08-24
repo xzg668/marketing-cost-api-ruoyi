@@ -12,6 +12,7 @@ import com.sanhua.marketingcost.dto.PriceFixedItemImportRequest;
 import com.sanhua.marketingcost.dto.PriceFixedItemImportResponse;
 import com.sanhua.marketingcost.entity.PriceFixedItem;
 import com.sanhua.marketingcost.mapper.PriceFixedItemMapper;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -25,7 +26,7 @@ class PriceFixedItemServiceImplTest {
   @Test
   void importItems_insertsNewRow() {
     PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper);
+    PriceFixedItemServiceImpl service = service(mapper);
 
     PriceFixedItemImportRequest.PriceFixedItemImportRow row =
         new PriceFixedItemImportRequest.PriceFixedItemImportRow();
@@ -54,7 +55,7 @@ class PriceFixedItemServiceImplTest {
   @Test
   void importItems_updatesExistingRow() {
     PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper);
+    PriceFixedItemServiceImpl service = service(mapper);
 
     PriceFixedItem existing = new PriceFixedItem();
     existing.setId(1L);
@@ -84,7 +85,7 @@ class PriceFixedItemServiceImplTest {
   @Test
   void importItems_mapsSettleReferenceNumericPrice() {
     PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper);
+    PriceFixedItemServiceImpl service = service(mapper);
 
     PriceFixedItemImportRequest.PriceFixedItemImportRow row =
         new PriceFixedItemImportRequest.PriceFixedItemImportRow();
@@ -120,7 +121,7 @@ class PriceFixedItemServiceImplTest {
   @Test
   void importItems_keepsSettleReferenceTextWithoutFixedPrice() {
     PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper);
+    PriceFixedItemServiceImpl service = service(mapper);
 
     PriceFixedItemImportRequest.PriceFixedItemImportRow row =
         new PriceFixedItemImportRequest.PriceFixedItemImportRow();
@@ -151,7 +152,7 @@ class PriceFixedItemServiceImplTest {
   @Test
   void importItems_purchaseFixedSameExternalRowIdUpdates() {
     PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper);
+    PriceFixedItemServiceImpl service = service(mapper);
 
     PriceFixedItem existing = new PriceFixedItem();
     existing.setId(10L);
@@ -179,7 +180,7 @@ class PriceFixedItemServiceImplTest {
   @Test
   void importItems_purchaseFixedDifferentExternalRowIdsInsertSeparately() {
     PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper);
+    PriceFixedItemServiceImpl service = service(mapper);
 
     PriceFixedItemImportRequest.PriceFixedItemImportRow first = purchaseFixedRow("203240246", "OA-1001");
     PriceFixedItemImportRequest.PriceFixedItemImportRow second = purchaseFixedRow("203240246", "OA-1002");
@@ -198,7 +199,7 @@ class PriceFixedItemServiceImplTest {
   @Test
   void importItems_purchaseFixedMissingExternalRowIdSkipped() {
     PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper);
+    PriceFixedItemServiceImpl service = service(mapper);
 
     PriceFixedItemImportRequest.PriceFixedItemImportRow row = purchaseFixedRow("203240246", null);
     PriceFixedItemImportRequest request = new PriceFixedItemImportRequest();
@@ -214,7 +215,7 @@ class PriceFixedItemServiceImplTest {
   @Test
   void importItems_u9PurchaseFixedMissingExternalRowIdUpdatesByMaterial() {
     PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper);
+    PriceFixedItemServiceImpl service = service(mapper);
 
     PriceFixedItem existing = new PriceFixedItem();
     existing.setId(13L);
@@ -248,7 +249,7 @@ class PriceFixedItemServiceImplTest {
   @Test
   void importItems_u9SettleFixedSameMaterialUpdates() {
     PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper);
+    PriceFixedItemServiceImpl service = service(mapper);
 
     PriceFixedItem existing = new PriceFixedItem();
     existing.setId(11L);
@@ -273,7 +274,7 @@ class PriceFixedItemServiceImplTest {
   @Test
   void importItems_excelSettleFixedSameMaterialUpdates() {
     PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper);
+    PriceFixedItemServiceImpl service = service(mapper);
 
     PriceFixedItem existing = new PriceFixedItem();
     existing.setId(12L);
@@ -298,7 +299,7 @@ class PriceFixedItemServiceImplTest {
   @Test
   void importItems_householdSettleKeeps95RowsWith57PricedAnd38RemarkRows() {
     PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper);
+    PriceFixedItemServiceImpl service = service(mapper);
 
     List<PriceFixedItemImportRequest.PriceFixedItemImportRow> rows = new ArrayList<>();
     for (int i = 0; i < 95; i++) {
@@ -326,7 +327,7 @@ class PriceFixedItemServiceImplTest {
   @Test
   void page_returnsPagedRecords() {
     PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper);
+    PriceFixedItemServiceImpl service = service(mapper);
 
     PriceFixedItem record = new PriceFixedItem();
     record.setId(1L);
@@ -360,6 +361,25 @@ class PriceFixedItemServiceImplTest {
     return row;
   }
 
+  @Test
+  void formalSettlementPriceImportSynchronizesSettleFixedType() {
+    PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
+    MaterialPriceTypeRouteSyncService routeSync =
+        Mockito.mock(MaterialPriceTypeRouteSyncService.class);
+    PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper, routeSync);
+    PriceFixedItemImportRequest request = new PriceFixedItemImportRequest();
+    request.setRows(List.of(settleFixedRow(
+        "MAT-SETTLE", "EXCEL", new BigDecimal("12.34"), null)));
+
+    service.importItems(request);
+
+    ArgumentCaptor<MaterialPriceTypeRouteSyncService.RouteCommand> captor =
+        ArgumentCaptor.forClass(MaterialPriceTypeRouteSyncService.RouteCommand.class);
+    verify(routeSync).sync(captor.capture());
+    assertEquals("MAT-SETTLE", captor.getValue().materialCode());
+    assertEquals("结算固定价", captor.getValue().priceType());
+  }
+
   private PriceFixedItemImportRequest.PriceFixedItemImportRow settleFixedRow(
       String materialCode, String sourceSystem, BigDecimal price, String text) {
     PriceFixedItemImportRequest.PriceFixedItemImportRow row =
@@ -372,5 +392,10 @@ class PriceFixedItemServiceImplTest {
     row.setSettleReferencePrice(price);
     row.setSettleReferenceText(text);
     return row;
+  }
+
+  private PriceFixedItemServiceImpl service(PriceFixedItemMapper mapper) {
+    return new PriceFixedItemServiceImpl(
+        mapper, Mockito.mock(MaterialPriceTypeRouteSyncService.class));
   }
 }

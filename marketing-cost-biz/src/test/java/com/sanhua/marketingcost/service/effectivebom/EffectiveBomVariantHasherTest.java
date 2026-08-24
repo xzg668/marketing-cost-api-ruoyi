@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.effectivebom;
 
 import static com.sanhua.marketingcost.service.effectivebom.EffectiveBomPersistenceTestSupport.hasher;
+import static com.sanhua.marketingcost.service.effectivebom.EffectiveBomPersistenceTestSupport.crossOrganizationVariant;
 import static com.sanhua.marketingcost.service.effectivebom.EffectiveBomPersistenceTestSupport.variant;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -13,6 +14,28 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class EffectiveBomVariantHasherTest {
+
+  @Test
+  void crossOrganizationNodeIsPartOfVariantHash() {
+    EffectiveBomVariantInput crossOrganization = crossOrganizationVariant();
+    EffectiveBomVariantInput allPlate =
+        new EffectiveBomVariantInput(
+            crossOrganization.costPeriodMonth(),
+            crossOrganization.sourceBomBatchId(),
+            crossOrganization.priceOrgCode(),
+            crossOrganization.topProductCode(),
+            crossOrganization.packageMethod(),
+            crossOrganization.selectedMaterialCodeByGroupKey(),
+            new EffectiveBomBuildResult(
+                crossOrganization.buildResult().nodes().stream()
+                    .map(node -> EffectiveBomPersistenceTestSupport.withPriceOrg(node, "220"))
+                    .toList(),
+                crossOrganization.buildResult().exclusions(),
+                crossOrganization.buildResult().blockIssues(),
+                crossOrganization.buildResult().warnings()));
+
+    assertThat(hasher().hash(crossOrganization)).isNotEqualTo(hasher().hash(allPlate));
+  }
 
   @Test
   void collectionAndMapOrderDoNotChangeHash() {

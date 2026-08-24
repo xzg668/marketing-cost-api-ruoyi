@@ -37,6 +37,7 @@ import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.pricing.PriceResolveResult;
 import com.sanhua.marketingcost.service.pricing.PriceResolver;
 import com.sanhua.marketingcost.service.pricing.RangePriceResolver;
+import com.sanhua.marketingcost.service.pricing.RangePriceResolverTestSupport;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -65,7 +66,8 @@ class MarketFactorRangePriceRegressionIsolationTest {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
     OaFormMapper oaFormMapper = mock(OaFormMapper.class);
-    RangePriceResolver resolver = new RangePriceResolver(itemMapper, ruleMapper, oaFormMapper);
+    RangePriceResolver resolver =
+        RangePriceResolverTestSupport.create(itemMapper, ruleMapper, oaFormMapper);
     when(ruleMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(itemMapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(qtyRange("MAT-QTY", "0", "10", "6.000000")));
@@ -84,8 +86,8 @@ class MarketFactorRangePriceRegressionIsolationTest {
         ArgumentCaptor.forClass(Wrapper.class);
     verify(itemMapper).selectList(itemQuery.capture());
     assertThat(itemQuery.getValue().getCustomSqlSegment())
-        .contains("material_code", "range_basis", "IS NULL", "effective_from", "effective_to")
-        .doesNotContain("factor_rule_id");
+        .contains("material_code", "range_basis", "IS NULL", "effective_from")
+        .doesNotContain("factor_rule_id", "effective_to", "current_flag");
     assertThat(paramValues(itemQuery.getValue())).contains(LocalDate.of(2026, 5, 26));
   }
 
@@ -95,7 +97,8 @@ class MarketFactorRangePriceRegressionIsolationTest {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
     OaFormMapper oaFormMapper = mock(OaFormMapper.class);
-    RangePriceResolver resolver = new RangePriceResolver(itemMapper, ruleMapper, oaFormMapper);
+    RangePriceResolver resolver =
+        RangePriceResolverTestSupport.create(itemMapper, ruleMapper, oaFormMapper);
     when(ruleMapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(factorRule(101L, "COMMERCIAL", "201850160", "CU")));
     OaForm form = new OaForm();
@@ -117,9 +120,9 @@ class MarketFactorRangePriceRegressionIsolationTest {
         ArgumentCaptor.forClass(Wrapper.class);
     verify(itemMapper, times(1)).selectList(itemQuery.capture());
     assertThat(itemQuery.getValue().getCustomSqlSegment())
-        .contains("range_basis", "factor_rule_id", "current_flag")
-        .doesNotContain("material_code");
-    assertThat(paramValues(itemQuery.getValue())).contains(101L, 1, new BigDecimal("98000"));
+        .contains("range_basis", "factor_rule_id", "effective_from")
+        .doesNotContain("material_code", "current_flag", "effective_to");
+    assertThat(paramValues(itemQuery.getValue())).contains(101L, new BigDecimal("98000"));
   }
 
   @Test
@@ -128,7 +131,8 @@ class MarketFactorRangePriceRegressionIsolationTest {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
     OaFormMapper oaFormMapper = mock(OaFormMapper.class);
-    RangePriceResolver resolver = new RangePriceResolver(itemMapper, ruleMapper, oaFormMapper);
+    RangePriceResolver resolver =
+        RangePriceResolverTestSupport.create(itemMapper, ruleMapper, oaFormMapper);
     when(ruleMapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(factorRule(202L, "HOUSEHOLD", "MAT-ZN", "ZN")));
     OaForm form = new OaForm();
@@ -156,9 +160,9 @@ class MarketFactorRangePriceRegressionIsolationTest {
         ArgumentCaptor.forClass(Wrapper.class);
     verify(itemMapper).selectList(itemQuery.capture());
     assertThat(itemQuery.getValue().getCustomSqlSegment())
-        .contains("range_basis", "factor_rule_id", "current_flag")
-        .doesNotContain("current_flag = 0");
-    assertThat(paramValues(itemQuery.getValue())).contains(202L, 1);
+        .contains("range_basis", "factor_rule_id", "effective_from")
+        .doesNotContain("current_flag", "effective_to");
+    assertThat(paramValues(itemQuery.getValue())).contains(202L);
   }
 
   @Test
@@ -210,7 +214,10 @@ class MarketFactorRangePriceRegressionIsolationTest {
   void failedFactorImportDoesNotPolluteExistingVersions() {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
-    PriceRangeItemServiceImpl service = new PriceRangeItemServiceImpl(itemMapper, ruleMapper);
+    PriceRangeItemServiceImpl service = new PriceRangeItemServiceImpl(
+        itemMapper,
+        ruleMapper,
+        mock(com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.class));
     PriceRangeFactorRule existingRule = factorRule(301L, "COMMERCIAL", "MAT-FAIL", "CU");
     PriceRangeItem existingItem = factorRange(901L, 301L, "80000", "90000", "0.390000");
     PriceRangeItemImportRequest request = factorRequest(

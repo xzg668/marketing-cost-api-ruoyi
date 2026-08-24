@@ -125,6 +125,25 @@ class CostRunTaskClaimServiceImplTest {
     assertThat(stored.getResultSummaryJson()).isEqualTo("{\"ok\":true}");
   }
 
+  @Test
+  void businessGapIsMarkedCollaborationOnlyByCurrentWorker() {
+    FakeTaskMapper mapper =
+        new FakeTaskMapper(
+            List.of(task(6L, "RUNNING", "worker-a", LocalDateTime.now().plusMinutes(10), 0, 3)),
+            null);
+    CostRunTaskClaimService service = new CostRunTaskClaimServiceImpl(mapper.proxy());
+
+    boolean updated =
+        service.markCollaboration(6L, "worker-a", "{\"gapCount\":1}", "缺少 BOM");
+
+    CostRunTask stored = mapper.snapshot(6L);
+    assertThat(updated).isTrue();
+    assertThat(stored.getStatus()).isEqualTo("COLLABORATION");
+    assertThat(stored.getProgress()).isEqualTo(100);
+    assertThat(stored.getResultSummaryJson()).isEqualTo("{\"gapCount\":1}");
+    assertThat(stored.getErrorMessage()).isEqualTo("缺少 BOM");
+  }
+
   private CostRunTask task(
       Long id,
       String status,
@@ -170,6 +189,7 @@ class CostRunTaskClaimServiceImplTest {
                     case "markRetryable" -> markRetryable(args);
                     case "markFailure" -> markFailure(args);
                     case "markSuccess" -> markSuccess(args);
+                    case "markCollaboration" -> markCollaboration(args);
                     case "toString" -> "FakeCostRunTaskMapper";
                     default -> throw new UnsupportedOperationException(method.toString());
                   });
@@ -284,6 +304,29 @@ class CostRunTaskClaimServiceImplTest {
         task.setLockedAt(null);
         task.setLockExpireTime(null);
         task.setResultSummaryJson(resultSummaryJson);
+        task.setFinishedAt(finishedAt);
+        return 1;
+      }
+    }
+
+    private int markCollaboration(Object[] args) {
+      Long taskId = (Long) args[0];
+      String workerId = (String) args[1];
+      String resultSummaryJson = (String) args[2];
+      String message = (String) args[3];
+      LocalDateTime finishedAt = (LocalDateTime) args[4];
+      synchronized (tasks) {
+        CostRunTask task = tasks.get(taskId);
+        if (!ownedRunning(task, workerId)) {
+          return 0;
+        }
+        task.setStatus("COLLABORATION");
+        task.setProgress(100);
+        task.setWorkerId(null);
+        task.setLockedAt(null);
+        task.setLockExpireTime(null);
+        task.setResultSummaryJson(resultSummaryJson);
+        task.setErrorMessage(message);
         task.setFinishedAt(finishedAt);
         return 1;
       }

@@ -1,6 +1,6 @@
 package com.sanhua.marketingcost.service.effectivebom;
 
-/** 确认后创建或复用的不可变最终构建。 */
+/** 创建或复用后的不可变有效 BOM 构建。 */
 public record QuoteEffectiveBomPersistenceResult(
     String buildBatchId,
     String variantHash,

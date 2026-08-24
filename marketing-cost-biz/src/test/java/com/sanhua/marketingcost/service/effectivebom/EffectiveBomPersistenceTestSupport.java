@@ -82,6 +82,7 @@ final class EffectiveBomPersistenceTestSupport {
             "P",
             "产品P",
             "P-SPEC",
+            "210",
             BigDecimal.ONE,
             BigDecimal.ONE,
             "制造件",
@@ -110,6 +111,7 @@ final class EffectiveBomPersistenceTestSupport {
             selectedMaterialCode,
             "候选料",
             "C-SPEC",
+            "210",
             childQty,
             childQty,
             "制造件",
@@ -168,6 +170,55 @@ final class EffectiveBomPersistenceTestSupport {
         packageMethod,
         selections,
         new EffectiveBomBuildResult(nodes, exclusions, List.of(), List.of()));
+  }
+
+  static EffectiveBomNodeDraft withPriceOrg(
+      EffectiveBomNodeDraft source, String priceOrgCode) {
+    return new EffectiveBomNodeDraft(
+        source.nodeKey(),
+        source.parentNodeKey(),
+        source.nodeLevel(),
+        source.sortSeq(),
+        source.nodePath(),
+        source.materialCode(),
+        source.materialName(),
+        source.materialSpec(),
+        priceOrgCode,
+        source.qtyPerParent(),
+        source.qtyPerTop(),
+        source.sourceMaterialShape(),
+        source.effectiveMaterialShape(),
+        source.shapeResolutionSource(),
+        source.shapePolicyId(),
+        source.shapePolicyFingerprint(),
+        source.selectedSupplierRatioId(),
+        source.selectedSupplierCode(),
+        source.selectedSupplierName(),
+        source.selectedSupplyRatio(),
+        source.alternativeGroupKey(),
+        source.alternativeChildType(),
+        source.alternativeSelectionSource(),
+        source.sourceBomType(),
+        source.sourceBomBatchId(),
+        source.sourceHierarchyId(),
+        source.sourceNodePath());
+  }
+
+  static EffectiveBomVariantInput crossOrganizationVariant() {
+    EffectiveBomVariantInput source = variant();
+    List<EffectiveBomNodeDraft> nodes = source.buildResult().nodes();
+    return new EffectiveBomVariantInput(
+        source.costPeriodMonth(),
+        source.sourceBomBatchId(),
+        "220",
+        source.topProductCode(),
+        source.packageMethod(),
+        source.selectedMaterialCodeByGroupKey(),
+        new EffectiveBomBuildResult(
+            List.of(withPriceOrg(nodes.getFirst(), "220"), withPriceOrg(nodes.get(1), "210")),
+            source.buildResult().exclusions(),
+            source.buildResult().blockIssues(),
+            source.buildResult().warnings()));
   }
 
   static final class InMemoryRepository implements QuoteEffectiveBomRepository {

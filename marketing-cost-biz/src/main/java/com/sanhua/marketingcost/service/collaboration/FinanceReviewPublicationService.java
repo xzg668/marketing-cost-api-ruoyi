@@ -345,7 +345,8 @@ public class FinanceReviewPublicationService {
       }
       if (result.status() == CollaborationPriceScanResult.Status.GAPS) {
         List<GapUpsertCommand> gaps = result.gaps().stream()
-            .map(gap -> CollaborationPriceGapCommandFactory.create(product.getProductCode(), gap))
+            .map(gap -> CollaborationPriceGapCommandFactory.create(
+                link.getOaFormItemId(), product.getProductCode(), gap))
             .toList();
         throw new BusinessRecheckException(product.getId(), gaps,
             "重新取价仍有" + gaps.size() + "项真实缺价");

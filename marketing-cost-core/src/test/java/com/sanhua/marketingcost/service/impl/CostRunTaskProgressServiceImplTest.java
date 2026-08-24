@@ -80,6 +80,42 @@ class CostRunTaskProgressServiceImplTest {
     assertThat(batchMapper.last.finishedAt).isNull();
   }
 
+  @Test
+  void collaborationAndCurrentSkipAreTerminalButNotFailures() {
+    FakeBatchMapper batchMapper = new FakeBatchMapper();
+    FakeTaskMapper taskMapper =
+        new FakeTaskMapper(
+            List.of(
+                count("SUCCESS", 2),
+                count("COLLABORATION", 3),
+                count("SKIPPED_CURRENT", 4)));
+    CostRunTaskProgressServiceImpl service =
+        new CostRunTaskProgressServiceImpl(batchMapper.proxy(), taskMapper.proxy());
+
+    CostRunBatchProgressSnapshot snapshot = service.refreshBatchProgress("BATCH-COLLAB");
+
+    assertThat(snapshot.getStatus()).isEqualTo("SUCCESS");
+    assertThat(snapshot.getTotalCount()).isEqualTo(9);
+    assertThat(snapshot.getCollaborationCount()).isEqualTo(3);
+    assertThat(snapshot.getSkippedCurrentCount()).isEqualTo(4);
+    assertThat(snapshot.getSkippedCount()).isEqualTo(7);
+    assertThat(snapshot.getProgress()).isEqualTo(100);
+    assertThat(batchMapper.last.failedCount).isZero();
+  }
+
+  @Test
+  void readOnlyProgressDoesNotUpdateBatch() {
+    FakeBatchMapper batchMapper = new FakeBatchMapper();
+    CostRunTaskProgressServiceImpl service =
+        new CostRunTaskProgressServiceImpl(
+            batchMapper.proxy(), new FakeTaskMapper(List.of(count("RUNNING", 1))).proxy());
+
+    CostRunBatchProgressSnapshot snapshot = service.getBatchProgress("BATCH-READ");
+
+    assertThat(snapshot.getStatus()).isEqualTo("RUNNING");
+    assertThat(batchMapper.last).isNull();
+  }
+
   private CostRunTaskStatusCount count(String status, long count) {
     CostRunTaskStatusCount row = new CostRunTaskStatusCount();
     row.setStatus(status);

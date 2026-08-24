@@ -42,7 +42,7 @@ public class MonthlyRepriceResult {
   private String costEngineVersion;
   private String priceVersion;
   private String ruleVersion;
-  private Long sourceCostResultId;
+  private Long sourceCostVersionId;
   private String calcStatus;
   private String calcMessage;
 
@@ -52,4 +52,3 @@ public class MonthlyRepriceResult {
   @TableField(fill = FieldFill.INSERT_UPDATE)
   private LocalDateTime updatedAt;
 }
-

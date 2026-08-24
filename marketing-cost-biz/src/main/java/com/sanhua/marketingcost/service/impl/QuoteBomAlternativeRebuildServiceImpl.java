@@ -2,16 +2,11 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.QuoteDataOrganization;
-import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
-import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
-import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
-import com.sanhua.marketingcost.service.QuoteBomConfirmationService;
-import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.bomalternative.BomAlternativeCandidate;
 import com.sanhua.marketingcost.service.bomalternative.BomAlternativeGroup;
 import com.sanhua.marketingcost.service.bomalternative.BomAlternativeGroupIssue;
@@ -26,7 +21,6 @@ import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelect
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelectionResult;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelectionScope;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelectionService;
-import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeWorkflowInvalidationResult;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeWorkflowInvalidationService;
 import java.time.LocalDate;
 import java.time.YearMonth;
@@ -43,11 +37,6 @@ import org.springframework.util.StringUtils;
 public class QuoteBomAlternativeRebuildServiceImpl
     implements QuoteBomAlternativeRebuildService {
 
-  public static final String BOM_ALREADY_CONFIRMED =
-      "BOM_ALREADY_CONFIRMED";
-  public static final String MANUAL_ROW_CHANGES_EXIST =
-      "MANUAL_ROW_CHANGES_EXIST";
-
   private static final int ACTIVE = 1;
   private static final String PRODUCT_TYPE_NON_BARE = "NON_BARE";
 
@@ -55,9 +44,6 @@ public class QuoteBomAlternativeRebuildServiceImpl
   private final BomAlternativeGroupResolver groupResolver;
   private final QuoteBomAlternativeSelectionService selectionService;
   private final QuoteBomPreparationRecordMapper preparationRecordMapper;
-  private final BomCostingRowMapper costingRowMapper;
-  private final QuoteBomConfirmationService confirmationService;
-  private final QuoteProductBomCostingBuildService costingBuildService;
   private final QuoteBomAlternativeWorkflowInvalidationService
       workflowInvalidationService;
 
@@ -66,18 +52,12 @@ public class QuoteBomAlternativeRebuildServiceImpl
       BomAlternativeGroupResolver groupResolver,
       QuoteBomAlternativeSelectionService selectionService,
       QuoteBomPreparationRecordMapper preparationRecordMapper,
-      BomCostingRowMapper costingRowMapper,
-      QuoteBomConfirmationService confirmationService,
-      QuoteProductBomCostingBuildService costingBuildService,
       QuoteBomAlternativeWorkflowInvalidationService
           workflowInvalidationService) {
     this.bomRawHierarchyMapper = bomRawHierarchyMapper;
     this.groupResolver = groupResolver;
     this.selectionService = selectionService;
     this.preparationRecordMapper = preparationRecordMapper;
-    this.costingRowMapper = costingRowMapper;
-    this.confirmationService = confirmationService;
-    this.costingBuildService = costingBuildService;
     this.workflowInvalidationService = workflowInvalidationService;
   }
 
@@ -122,91 +102,20 @@ public class QuoteBomAlternativeRebuildServiceImpl
       return new QuoteBomAlternativeRebuildResult(
           idempotent,
           true,
-          false,
-          false,
-          0,
-          0,
-          null,
-          0,
-          0,
-          0);
+          false);
     }
 
-    if (confirmationService.hasActiveConfirmation(
+    QuoteBomAlternativeSelectionResult saved =
+        selectionService.save(selectionCommand, group);
+    workflowInvalidationService.invalidate(
         normalized.oaNo(),
         normalized.oaFormItemId(),
         costingProductCode,
-        normalized.periodMonth())) {
-      throw failure(
-          BOM_ALREADY_CONFIRMED,
-          "报价物料明细已确认；"
-              + groupContext(group)
-              + "；请先撤销报价物料明细确认后再切换");
-    }
-
-    List<BomCostingRow> beforeRows =
-        loadCostingRows(
-            normalized, costingProductCode);
-    int manualCount =
-        (int)
-            beforeRows.stream()
-                .filter(
-                    row ->
-                        Integer.valueOf(1)
-                            .equals(row.getManualModified()))
-                .count();
-    if (manualCount > 0
-        && !normalized.confirmDiscardManualChanges()) {
-      throw failure(
-          MANUAL_ROW_CHANGES_EXIST,
-          "当前有"
-              + manualCount
-              + "条人工修改结算行；"
-              + groupContext(group)
-              + "；请确认清除人工修改后再切换BOM分支");
-    }
-
-    String remark =
-        manualCount <= 0
-            ? normalized.selectionRemark()
-            : appendRemark(
-                normalized.selectionRemark(),
-                "用户已确认清除"
-                    + manualCount
-                    + "条人工修改结算行");
-    selectionCommand =
-        selectionCommand(
-            normalized, selectionScope, remark);
-    QuoteBomAlternativeSelectionResult saved =
-        selectionService.save(selectionCommand, group);
-    QuoteBomCostingBuildResponse build =
-        costingBuildService.buildByOaFormItem(
-            normalized.oaFormItemId(),
-            normalized.periodMonth(),
-            normalized.quoteDate());
-    if (build == null) {
-      throw new IllegalStateException("报价物料明细重建未返回结果");
-    }
-    QuoteBomAlternativeWorkflowInvalidationResult invalidated =
-        workflowInvalidationService.invalidate(
-            normalized.oaNo(),
-            normalized.oaFormItemId(),
-            costingProductCode,
-            normalized.periodMonth());
-    List<BomCostingRow> afterRows =
-        loadCostingRows(
-            normalized, costingProductCode);
+        normalized.periodMonth());
     return new QuoteBomAlternativeRebuildResult(
         saved,
         false,
-        true,
-        manualCount > 0,
-        beforeRows.size(),
-        afterRows.size(),
-        build.buildBatchId(),
-        invalidated.priceTypeCount(),
-        invalidated.pricePrepareCount(),
-        invalidated.costRunCount());
+        true);
   }
 
   private QuoteBomPreparationRecord requirePreparation(
@@ -399,17 +308,6 @@ public class QuoteBomAlternativeRebuildServiceImpl
             selectedCandidate.sourceBuildBatchId());
   }
 
-  private List<BomCostingRow> loadCostingRows(
-      NormalizedCommand command, String costingProductCode) {
-    List<BomCostingRow> rows =
-        costingRowMapper.selectQuoteCostingSnapshot(
-            command.oaNo(),
-            command.oaFormItemId(),
-            costingProductCode,
-            command.periodMonth());
-    return rows == null ? List.of() : rows;
-  }
-
   private QuoteBomAlternativeSelectionScope selectionScope(
       NormalizedCommand command) {
     return new QuoteBomAlternativeSelectionScope(
@@ -475,7 +373,6 @@ public class QuoteBomAlternativeRebuildServiceImpl
             command.selectedMaterialCode()),
         command.expectedSelectionVersion(),
         trimToNull(command.expectedBuildBatchId()),
-        command.confirmDiscardManualChanges(),
         trimToNull(command.selectedBy()),
         trimToNull(command.selectionRemark()));
   }
@@ -490,15 +387,6 @@ public class QuoteBomAlternativeRebuildServiceImpl
             record.getSourceTopProductCode(),
             record.getReferenceFinishedCode()),
         record.getQuoteProductCode());
-  }
-
-  private static String appendRemark(
-      String current, String addition) {
-    String left = trimToNull(current);
-    String right = trimToNull(addition);
-    return left == null
-        ? right
-        : left + "；" + right;
   }
 
   private static String groupContext(BomAlternativeGroup group) {
@@ -589,7 +477,6 @@ public class QuoteBomAlternativeRebuildServiceImpl
       String selectedMaterialCode,
       Integer expectedSelectionVersion,
       String expectedBuildBatchId,
-      boolean confirmDiscardManualChanges,
       String selectedBy,
       String selectionRemark) {
   }

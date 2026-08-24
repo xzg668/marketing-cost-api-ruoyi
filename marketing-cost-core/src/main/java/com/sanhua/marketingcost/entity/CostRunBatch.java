@@ -22,6 +22,9 @@ public class CostRunBatch {
   private String pricingMonth;
   private LocalDateTime priceAsOfTime;
   private String businessUnitType;
+  private Integer executionNo;
+  private String prerequisiteStatus;
+  private Integer controlVersion;
   private String status;
   private Integer totalCount;
   private Integer successCount;

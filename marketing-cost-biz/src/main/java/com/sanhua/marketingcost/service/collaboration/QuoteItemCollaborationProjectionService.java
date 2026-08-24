@@ -6,6 +6,7 @@ import com.sanhua.marketingcost.dto.collaboration.QuoteItemCollaborationResponse
 
 public interface QuoteItemCollaborationProjectionService {
   QuoteCollaborationSummaryResponse summary(String oaNo);
+  QuoteCollaborationSummaryResponse refreshSummary(String oaNo);
   QuoteItemCollaborationResponse project(String oaNo, Long itemId);
   QuoteCollaborationHistoryResponse history(String oaNo, Long itemId);
 }

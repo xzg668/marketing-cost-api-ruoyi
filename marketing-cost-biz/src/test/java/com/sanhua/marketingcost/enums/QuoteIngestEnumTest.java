@@ -54,8 +54,6 @@ class QuoteIngestEnumTest {
     assertThat(QuoteBomStatusCode.U9_BOM_EXISTS.getLabel()).isEqualTo("U9 有此 BOM");
     assertThat(QuoteBomStatusCode.REUSED_CURRENT_MONTH.getLabel()).isEqualTo("已沿用");
     assertThat(QuoteBomStatusCode.SYNCING.getLabel()).isEqualTo("同步中");
-    assertThat(Arrays.stream(QuoteWritebackStatus.values()).map(QuoteWritebackStatus::getCode))
-        .containsExactly("PENDING", "SUCCESS", "FAILED", "SKIPPED");
   }
 
   @Test

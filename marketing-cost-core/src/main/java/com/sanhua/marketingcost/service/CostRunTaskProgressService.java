@@ -6,4 +6,7 @@ import com.sanhua.marketingcost.dto.CostRunBatchProgressSnapshot;
 public interface CostRunTaskProgressService {
 
   CostRunBatchProgressSnapshot refreshBatchProgress(String batchNo);
+
+  /** 只读计算当前快照，供页面短轮询使用，不更新时间戳或批次状态。 */
+  CostRunBatchProgressSnapshot getBatchProgress(String batchNo);
 }

@@ -50,4 +50,5 @@ public class QuoteRequestItemResponse {
   private LocalDateTime calcAt;
   private Long confirmedCostVersionId;
   private QuoteBomStatusItemResponse bomStatus;
+  private QuoteCostingWorkspaceResponse costingWorkspace;
 }

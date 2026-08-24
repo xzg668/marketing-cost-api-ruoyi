@@ -10,15 +10,18 @@ import com.sanhua.marketingcost.dto.CostRunRegressionDifference;
 import com.sanhua.marketingcost.dto.CostRunResultDto;
 import com.sanhua.marketingcost.entity.CostRunCostItem;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
-import com.sanhua.marketingcost.entity.CostRunResult;
+import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
+import com.sanhua.marketingcost.enums.QuoteCostRunStatus;
 import com.sanhua.marketingcost.mapper.CostRunCostItemMapper;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
-import com.sanhua.marketingcost.mapper.CostRunResultMapper;
+import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.CostRunRegressionCompareService;
+import com.sanhua.marketingcost.service.CostRunResultService;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
@@ -34,15 +37,18 @@ public class CostRunRegressionCompareServiceImpl implements CostRunRegressionCom
   private static final String SECTION_COST_ITEM = "COST_ITEM";
   private static final String DEFAULT_COST_CATEGORY = "EXPENSE";
 
-  private final CostRunResultMapper costRunResultMapper;
+  private final QuoteCostRunVersionMapper versionMapper;
+  private final CostRunResultService costRunResultService;
   private final CostRunPartItemMapper costRunPartItemMapper;
   private final CostRunCostItemMapper costRunCostItemMapper;
 
   public CostRunRegressionCompareServiceImpl(
-      CostRunResultMapper costRunResultMapper,
+      QuoteCostRunVersionMapper versionMapper,
+      CostRunResultService costRunResultService,
       CostRunPartItemMapper costRunPartItemMapper,
       CostRunCostItemMapper costRunCostItemMapper) {
-    this.costRunResultMapper = costRunResultMapper;
+    this.versionMapper = versionMapper;
+    this.costRunResultService = costRunResultService;
     this.costRunPartItemMapper = costRunPartItemMapper;
     this.costRunCostItemMapper = costRunCostItemMapper;
   }
@@ -50,20 +56,27 @@ public class CostRunRegressionCompareServiceImpl implements CostRunRegressionCom
   @Override
   public List<CostRunObjectResult> loadStoredSnapshots(String oaNo) {
     String oaNoValue = requireText(oaNo, "oaNo");
-    List<CostRunResult> results =
-        costRunResultMapper.selectList(
-            Wrappers.lambdaQuery(CostRunResult.class)
-                .eq(CostRunResult::getOaNo, oaNoValue)
-                .orderByAsc(CostRunResult::getProductCode, CostRunResult::getId));
-    if (results == null || results.isEmpty()) {
+    List<QuoteCostRunVersion> versions =
+        versionMapper.selectList(
+            Wrappers.lambdaQuery(QuoteCostRunVersion.class)
+                .eq(QuoteCostRunVersion::getOaNo, oaNoValue)
+                .isNotNull(QuoteCostRunVersion::getTotalCost)
+                .orderByAsc(QuoteCostRunVersion::getProductCode)
+                .orderByDesc(QuoteCostRunVersion::getTrialFinishedAt)
+                .orderByDesc(QuoteCostRunVersion::getId));
+    if (versions == null || versions.isEmpty()) {
       return List.of();
     }
     List<CostRunObjectResult> snapshots = new ArrayList<>();
-    for (CostRunResult result : results) {
-      if (result == null || !StringUtils.hasText(result.getProductCode())) {
+    LinkedHashSet<String> productCodes = new LinkedHashSet<>();
+    for (QuoteCostRunVersion version : versions) {
+      if (version == null || !StringUtils.hasText(version.getProductCode())) {
         continue;
       }
-      snapshots.add(loadStoredSnapshot(oaNoValue, result.getProductCode()));
+      productCodes.add(version.getProductCode().trim());
+    }
+    for (String productCode : productCodes) {
+      snapshots.add(loadStoredSnapshot(oaNoValue, productCode));
     }
     return List.copyOf(snapshots);
   }
@@ -72,24 +85,23 @@ public class CostRunRegressionCompareServiceImpl implements CostRunRegressionCom
   public CostRunObjectResult loadStoredSnapshot(String oaNo, String productCode) {
     String oaNoValue = requireText(oaNo, "oaNo");
     String productCodeValue = requireText(productCode, "productCode");
-    CostRunResult result =
-        costRunResultMapper.selectOne(
-            Wrappers.lambdaQuery(CostRunResult.class)
-                .eq(CostRunResult::getOaNo, oaNoValue)
-                .eq(CostRunResult::getProductCode, productCodeValue)
-                .last("LIMIT 1"));
+    QuoteCostRunVersion version = currentVersion(oaNoValue, productCodeValue);
+    CostRunResultDto result =
+        version == null ? null : costRunResultService.getResult(version.getId());
     List<CostRunPartItem> partItems =
-        costRunPartItemMapper.selectList(
-            Wrappers.lambdaQuery(CostRunPartItem.class)
-                .eq(CostRunPartItem::getOaNo, oaNoValue)
-                .eq(CostRunPartItem::getProductCode, productCodeValue)
-                .orderByAsc(CostRunPartItem::getId));
+        version == null
+            ? List.of()
+            : costRunPartItemMapper.selectList(
+                Wrappers.lambdaQuery(CostRunPartItem.class)
+                    .eq(CostRunPartItem::getCostRunVersionId, version.getId())
+                    .orderByAsc(CostRunPartItem::getId));
     List<CostRunCostItem> costItems =
-        costRunCostItemMapper.selectList(
-            Wrappers.lambdaQuery(CostRunCostItem.class)
-                .eq(CostRunCostItem::getOaNo, oaNoValue)
-                .eq(CostRunCostItem::getProductCode, productCodeValue)
-                .orderByAsc(CostRunCostItem::getLineNo, CostRunCostItem::getId));
+        version == null
+            ? List.of()
+            : costRunCostItemMapper.selectList(
+                Wrappers.lambdaQuery(CostRunCostItem.class)
+                    .eq(CostRunCostItem::getCostRunVersionId, version.getId())
+                    .orderByAsc(CostRunCostItem::getLineNo, CostRunCostItem::getId));
 
     CostRunContext context =
         CostRunContext.quote(
@@ -98,15 +110,38 @@ public class CostRunRegressionCompareServiceImpl implements CostRunRegressionCom
             productCodeValue,
             null,
             result == null ? null : result.getCustomerName(),
-            result == null ? null : result.getBusinessUnitType(),
+            version == null ? null : version.getBusinessUnitType(),
             result == null ? null : result.getPeriod(),
             oaNoValue + "|" + productCodeValue);
     return CostRunObjectResult.of(
         context,
-        result == null ? null : result.getId(),
-        toResultDto(result),
+        version == null ? null : version.getId(),
+        result,
         toPartDtos(partItems),
         toCostItemDtos(costItems));
+  }
+
+  private QuoteCostRunVersion currentVersion(String oaNo, String productCode) {
+    List<QuoteCostRunVersion> versions =
+        versionMapper.selectList(
+            Wrappers.lambdaQuery(QuoteCostRunVersion.class)
+                .eq(QuoteCostRunVersion::getOaNo, oaNo)
+                .eq(QuoteCostRunVersion::getProductCode, productCode)
+                .orderByDesc(QuoteCostRunVersion::getTrialFinishedAt)
+                .orderByDesc(QuoteCostRunVersion::getCreatedAt)
+                .orderByDesc(QuoteCostRunVersion::getId));
+    if (versions == null || versions.isEmpty()) {
+      return null;
+    }
+    return versions.stream()
+        .filter(version -> QuoteCostRunStatus.isCurrentSuccess(version.getStatus()))
+        .findFirst()
+        .orElseGet(
+            () ->
+                versions.stream()
+                    .filter(version -> version.getTotalCost() != null)
+                    .findFirst()
+                    .orElse(versions.get(0)));
   }
 
   @Override
@@ -506,27 +541,6 @@ public class CostRunRegressionCompareServiceImpl implements CostRunRegressionCom
 
   private String decimalText(BigDecimal value) {
     return value == null ? null : value.stripTrailingZeros().toPlainString();
-  }
-
-  private CostRunResultDto toResultDto(CostRunResult result) {
-    if (result == null) {
-      return null;
-    }
-    CostRunResultDto dto = new CostRunResultDto();
-    dto.setOaNo(result.getOaNo());
-    dto.setProductCode(result.getProductCode());
-    dto.setProductName(result.getProductName());
-    dto.setProductModel(result.getProductModel());
-    dto.setCustomerName(result.getCustomerName());
-    dto.setBusinessUnit(result.getBusinessUnit());
-    dto.setDepartment(result.getDepartment());
-    dto.setPeriod(result.getPeriod());
-    dto.setCurrency(result.getCurrency());
-    dto.setUnit(result.getUnit());
-    dto.setTotalCost(result.getTotalCost());
-    dto.setCalcStatus(result.getCalcStatus());
-    dto.setProductAttr(result.getProductAttr());
-    return dto;
   }
 
   private List<CostRunPartItemDto> toPartDtos(List<CostRunPartItem> items) {

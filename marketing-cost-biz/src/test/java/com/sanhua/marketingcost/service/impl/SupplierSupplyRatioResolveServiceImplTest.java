@@ -8,14 +8,12 @@ import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.sanhua.marketingcost.dto.SupplierSupplyRatioCandidate;
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioResolveResult;
 import com.sanhua.marketingcost.entity.SupplierSupplyRatio;
 import com.sanhua.marketingcost.mapper.SupplierSupplyRatioMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -124,44 +122,6 @@ class SupplierSupplyRatioResolveServiceImplTest {
 
     assertThat(result.isMatched()).isTrue();
     assertThat(capturedQuery().getSqlSegment()).contains("effective_from", "effective_to");
-  }
-
-  @Test
-  @DisplayName("RPI1-09 候选有代码时查询代码并仅对无代码比例记录开放名称兜底")
-  void codedCandidateQueryUsesCodeAndMissingRatioCodeNameFallback() {
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(row(5L, "供应商A", "0.8", null));
-
-    SupplierSupplyRatioResolveResult result = service.resolveAmongSuppliers(
-        "COMMERCIAL",
-        "201503873",
-        "管件",
-        "SPEC-A",
-        LocalDate.of(2026, 7, 1),
-        List.of(new SupplierSupplyRatioCandidate("供应商A", "S000841")));
-
-    assertThat(result.isMatched()).isTrue();
-    assertThat(capturedQuery().getSqlSegment()).contains(
-        "supplier_code IN",
-        "supplier_code IS NULL",
-        "supplier_name IN",
-        " OR ");
-  }
-
-  @Test
-  @DisplayName("RPI1-09 候选缺代码时按标准化完整名称查询")
-  void nameOnlyCandidateQueryFallsBackToSupplierName() {
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(row(6L, "吉林省合信汽配有限公司", "0.7", null));
-
-    service.resolveAmongSuppliers(
-        "COMMERCIAL",
-        "201503873",
-        "管件",
-        "SPEC-A",
-        LocalDate.of(2026, 7, 1),
-        List.of(new SupplierSupplyRatioCandidate("吉林省 合信汽配有限公司", null)));
-
-    String sql = capturedQuery().getSqlSegment();
-    assertThat(sql).contains("supplier_name IN").doesNotContain("supplier_code IN");
   }
 
   private QueryWrapper<SupplierSupplyRatio> capturedQuery() {

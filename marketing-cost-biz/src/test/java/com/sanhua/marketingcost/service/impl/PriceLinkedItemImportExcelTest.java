@@ -156,7 +156,8 @@ class PriceLinkedItemImportExcelTest {
         mock(FactorVariableRegistryImpl.class),
         formulaNormalizer,
         renderer,
-        validator);
+        validator,
+        mock(com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.class));
   }
 
   @Test
@@ -810,14 +811,17 @@ class PriceLinkedItemImportExcelTest {
         .contains("material_code")
         .contains("business_unit_type")
         .contains("supplier_code")
+        .contains("ORDER BY created_at DESC,id DESC")
+        .doesNotContain("effective_to")
         .doesNotContain("spec_model");
   }
 
   @Test
-  @DisplayName("importExcel：供应商为空时按料号+业务单元匹配，供应商和规格都不参与判重")
-  void importExcel_blankSupplierLookupUsesMaterialBusinessUnitOnly() throws Exception {
+  @DisplayName("importExcel：供应商代码为空时按供应商名称区分同月版本")
+  void importExcel_blankSupplierCodeUsesSupplierName() throws Exception {
     PriceLinkedItem existing = sameDerivedFormulaLinkedItem();
-    existing.setSupplierCode("OLD-SUPPLIER");
+    existing.setSupplierCode(null);
+    existing.setSupplierName("供应商A");
     existing.setSpecModel("OLD-SPEC");
     when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
     when(priceVariableBindingService.listByLinkedItem(88L))
@@ -841,7 +845,10 @@ class PriceLinkedItemImportExcelTest {
     assertThat(queryCaptor.getValue().getSqlSegment())
         .contains("material_code")
         .contains("business_unit_type")
-        .doesNotContain("supplier_code")
+        .contains("supplier_code")
+        .contains("supplier_name")
+        .contains("ORDER BY created_at DESC,id DESC")
+        .doesNotContain("effective_to")
         .doesNotContain("spec_model");
   }
 
@@ -914,7 +921,7 @@ class PriceLinkedItemImportExcelTest {
     ArgumentCaptor<PriceLinkedItem> itemCaptor = ArgumentCaptor.forClass(PriceLinkedItem.class);
     verify(itemMapper).updateById(itemCaptor.capture());
     assertThat(itemCaptor.getValue().getId()).isEqualTo(88L);
-    assertThat(itemCaptor.getValue().getEffectiveTo()).isEqualTo(LocalDate.of(2026, 5, 31));
+    assertThat(itemCaptor.getValue().getEffectiveTo()).isEqualTo(LocalDate.of(2026, 6, 1));
     assertThat(inserted.get().getId()).isEqualTo(99L);
     assertThat(inserted.get().getEffectiveFrom()).isEqualTo(LocalDate.of(2026, 6, 1));
     assertThat(inserted.get().getEffectiveTo()).isNull();
@@ -961,10 +968,15 @@ class PriceLinkedItemImportExcelTest {
   }
 
   @Test
-  @DisplayName("importExcel：formulaEffectiveDate 不晚于旧版本 effective_from 时记录倒挂失败行")
-  void importExcel_rejectsFormulaEffectiveDateOverlap() throws Exception {
+  @DisplayName("importExcel：同一版本日期再次导入也按导入顺序创建新版本")
+  void importExcel_allowsSameFormulaVersionDate() throws Exception {
     PriceLinkedItem existing = existingLinkedItem();
     when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    doAnswer(invocation -> {
+      PriceLinkedItem item = invocation.getArgument(0);
+      item.setId(99L);
+      return 1;
+    }).when(itemMapper).insert(any(PriceLinkedItem.class));
 
     byte[] xlsx = buildXlsx(new Object[][] {
         {"210", "供管处", "供应商A", "S001", "部品联动", "物料A", "M001", "SPEC-A", "千克",
@@ -975,25 +987,23 @@ class PriceLinkedItemImportExcelTest {
         new ByteArrayInputStream(xlsx), "2026-05", false,
         "COMMERCIAL", "monthly.xlsx", null, "2026-05-01", "KEEP_EXISTING");
 
-    assertThat(resp.getLinkedCount()).isZero();
-    assertThat(resp.getSkipped()).isEqualTo(1);
-    assertThat(resp.getErrors()).hasSize(1);
-    assertThat(resp.getErrors().getFirst().getMaterialCode()).isEqualTo("M001");
-    assertThat(resp.getErrors().getFirst().getMessage()).contains("生命周期倒挂");
-    assertThat(resp.getErrors().getFirst().getFormula()).isEqualTo("电解铜+加工费");
-    assertThat(resp.getErrors().getFirst().getFormulaEffectiveDate()).isEqualTo("2026-05-01");
-    assertThat(resp.getErrors().getFirst().getErrorCode())
-        .isEqualTo("FORMULA_LIFECYCLE_OVERLAP");
-    assertThat(resp.getErrors().getFirst().getSuggestion()).contains("晚于当前版本生效日期");
-    verify(itemMapper, never()).insert(any(PriceLinkedItem.class));
-    verify(itemMapper, never()).updateById(any(PriceLinkedItem.class));
+    assertThat(resp.getLinkedCount()).isEqualTo(1);
+    assertThat(resp.getSkipped()).isZero();
+    assertThat(resp.getErrors()).isEmpty();
+    verify(itemMapper).insert(any(PriceLinkedItem.class));
+    verify(itemMapper).updateById(existing);
   }
 
   @Test
-  @DisplayName("importExcel：V2 批次将生命周期倒挂失败行持久化用于历史回看")
-  void importExcel_persistsLifecycleErrorForBatchHistory() throws Exception {
+  @DisplayName("importExcel：同日重导不再产生生命周期倒挂错误")
+  void importExcel_sameDayReimportHasNoLifecycleError() throws Exception {
     PriceLinkedItem existing = existingLinkedItem();
     when(itemMapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    doAnswer(invocation -> {
+      PriceLinkedItem item = invocation.getArgument(0);
+      item.setId(99L);
+      return 1;
+    }).when(itemMapper).insert(any(PriceLinkedItem.class));
     configureV2Pipeline();
     FactorUploadRowErrorMapper rowErrorMapper = mock(FactorUploadRowErrorMapper.class);
     injectV2Service("factorUploadRowErrorMapper", rowErrorMapper);
@@ -1007,21 +1017,9 @@ class PriceLinkedItemImportExcelTest {
         new ByteArrayInputStream(xlsx), "2026-05", false,
         "COMMERCIAL", "monthly.xlsx", null, "2026-05-01", "KEEP_EXISTING");
 
-    assertThat(resp.getErrors()).hasSize(1);
-    ArgumentCaptor<FactorUploadRowError> errorCaptor =
-        ArgumentCaptor.forClass(FactorUploadRowError.class);
-    verify(rowErrorMapper).insert(errorCaptor.capture());
-    FactorUploadRowError persisted = errorCaptor.getValue();
-    assertThat(persisted.getFactorUploadBatchId()).isEqualTo(77L);
-    assertThat(persisted.getExcelRowNumber()).isEqualTo(2);
-    assertThat(persisted.getMaterialCode()).isEqualTo("M001");
-    assertThat(persisted.getMaterialName()).isEqualTo("物料A");
-    assertThat(persisted.getSupplierCode()).isEqualTo("S001");
-    assertThat(persisted.getFormula()).isNotBlank();
-    assertThat(persisted.getFormulaEffectiveDate()).isEqualTo(LocalDate.of(2026, 5, 1));
-    assertThat(persisted.getErrorStage()).isEqualTo("FORMULA_VERSION");
-    assertThat(persisted.getErrorCode()).isEqualTo("FORMULA_LIFECYCLE_OVERLAP");
-    assertThat(persisted.getSuggestion()).contains("重新导入");
+    assertThat(resp.getErrors()).isEmpty();
+    assertThat(resp.getLinkedCount()).isEqualTo(1);
+    verify(rowErrorMapper, never()).insert(any(FactorUploadRowError.class));
   }
 
   @Test

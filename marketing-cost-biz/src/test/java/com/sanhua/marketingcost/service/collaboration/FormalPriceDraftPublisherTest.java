@@ -14,6 +14,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.entity.QuotePriceDraft;
 import com.sanhua.marketingcost.entity.QuotePriceDraftField;
 import com.sanhua.marketingcost.mapper.QuotePriceDraftMapper;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,6 +34,7 @@ class FormalPriceDraftPublisherTest {
   @Mock QuotePriceDraftRepository repository;
   @Mock QuotePriceDraftMapper draftMapper;
   @Mock RangePriceDraftFormalPublisher rangePublisher;
+  @Mock MaterialPriceTypeRouteSyncService priceTypeRouteSyncService;
 
   private FormalPriceDraftPublisher publisher;
   private final ObjectMapper objectMapper = new ObjectMapper();
@@ -43,7 +45,7 @@ class FormalPriceDraftPublisherTest {
   @BeforeEach
   void setUp() {
     publisher = new FormalPriceDraftPublisher(
-        jdbc, objectMapper, repository, draftMapper, rangePublisher);
+        jdbc, objectMapper, repository, draftMapper, rangePublisher, priceTypeRouteSyncService);
   }
 
   @Test
@@ -63,14 +65,12 @@ class FormalPriceDraftPublisherTest {
 
     verify(draftMapper).markPublished(eq(10L), eq(1), eq("lp_price_fixed_item"), eq(101L),
         eq(fullBatchNo), eq("COMMERCIAL"), eq("210"), eq(31L), eq("财务甲"));
-    verify(jdbc).update(
-        org.mockito.ArgumentMatchers.contains("business_unit_type=? AND period=?"),
-        eq("MAT-10"), eq("COMMERCIAL"), eq("2026-08"));
-    verify(jdbc).update(
-        org.mockito.ArgumentMatchers.contains("INSERT INTO lp_material_price_type"),
-        eq("MAT-10"), eq("COMMERCIAL"), eq("物料10"), eq("规格"), eq("型号"), eq("件"),
-        eq("固定价"), eq("2026-08"), eq("quote_collab"), eq(LocalDate.of(2026, 8, 1)),
-        org.mockito.ArgumentMatchers.isNull());
+    var captor = org.mockito.ArgumentCaptor.forClass(
+        MaterialPriceTypeRouteSyncService.RouteCommand.class);
+    verify(priceTypeRouteSyncService).sync(captor.capture());
+    assertThat(captor.getValue().materialCode()).isEqualTo("MAT-10");
+    assertThat(captor.getValue().priceType()).isEqualTo("固定价");
+    assertThat(captor.getValue().source()).isEqualTo("quote_collab");
   }
 
   @Test
@@ -100,6 +100,12 @@ class FormalPriceDraftPublisherTest {
     verify(rangePublisher).publish(any(), eq(fields), eq("BATCH-R-D3"));
     verify(draftMapper).markPublished(eq(3L), eq(1), eq("lp_price_range_item"), eq(301L),
         eq("BATCH-R"), eq("COMMERCIAL"), eq("210"), eq(31L), eq("财务甲"));
+    var routeCaptor = org.mockito.ArgumentCaptor.forClass(
+        MaterialPriceTypeRouteSyncService.RouteCommand.class);
+    verify(priceTypeRouteSyncService, org.mockito.Mockito.times(4)).sync(routeCaptor.capture());
+    assertThat(routeCaptor.getAllValues())
+        .extracting(MaterialPriceTypeRouteSyncService.RouteCommand::priceType)
+        .containsExactly("固定价", "联动价", "区间价", "结算固定价");
   }
 
   @Test
@@ -113,7 +119,8 @@ class FormalPriceDraftPublisherTest {
     assertThat(publisher.publish(draft, scope, "RETRY-BATCH", finance))
         .isEqualTo(new FormalPriceDraftPublisher.Published(
             "lp_price_linked_item", 99L, "ORIGINAL-BATCH"));
-    org.mockito.Mockito.verifyNoInteractions(repository, draftMapper, rangePublisher, jdbc);
+    org.mockito.Mockito.verifyNoInteractions(
+        repository, draftMapper, rangePublisher, jdbc, priceTypeRouteSyncService);
   }
 
   private QuotePriceDraft draft(Long id, String type) {

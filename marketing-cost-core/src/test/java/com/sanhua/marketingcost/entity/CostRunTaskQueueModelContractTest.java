@@ -43,7 +43,15 @@ class CostRunTaskQueueModelContractTest {
         .containsExactly("PENDING", "RUNNING", "SUCCESS", "PARTIAL_FAILED", "FAILED", "CANCELED");
     assertThat(CostRunTaskStatus.values())
         .extracting(Enum::name)
-        .containsExactly("PENDING", "RUNNING", "SUCCESS", "FAILED", "RETRYABLE", "CANCELED");
+        .containsExactly(
+            "PENDING",
+            "RUNNING",
+            "SUCCESS",
+            "COLLABORATION",
+            "SKIPPED_CURRENT",
+            "FAILED",
+            "RETRYABLE",
+            "CANCELED");
   }
 
   @Test

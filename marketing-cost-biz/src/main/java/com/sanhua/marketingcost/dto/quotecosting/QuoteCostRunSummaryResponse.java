@@ -14,8 +14,6 @@ public class QuoteCostRunSummaryResponse {
   private String productCode;
   private String pricingMonth;
   private String resultPeriod;
-  private String bomConfirmNo;
-  private String priceTypeConfirmNo;
   private String pricePrepareNo;
   private String oaPricePrepareNo;
   private String financePricePrepareNo;

@@ -119,6 +119,7 @@ class PackageComponentPricePrepareStrategyImplTest {
   void missingChildPrice() {
     PackageComponentPriceDetail missingDetail = new PackageComponentPriceDetail();
     missingDetail.setChildMaterialCode("CHILD-001");
+    missingDetail.setChildMaterialName("包装子件");
     missingDetail.setPriceStatus("MISSING_PRICE");
     missingDetail.setMissingReason("固定价无记录");
     when(packageComponentPriceService.ensurePrice(any(PackagePriceRequest.class)))
@@ -131,6 +132,7 @@ class PackageComponentPricePrepareStrategyImplTest {
     assertThat(result.getGaps()).hasSize(1);
     assertThat(result.getGaps().get(0).getGapType()).isEqualTo("MISSING_PRICE");
     assertThat(result.getGaps().get(0).getGapMaterialCode()).isEqualTo("CHILD-001");
+    assertThat(result.getGaps().get(0).getMaterialName()).isEqualTo("包装子件");
     assertThat(result.getGaps().get(0).getMessage()).contains("固定价无记录");
   }
 

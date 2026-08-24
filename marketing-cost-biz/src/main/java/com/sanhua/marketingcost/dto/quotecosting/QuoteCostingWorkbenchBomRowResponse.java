@@ -26,7 +26,6 @@ public class QuoteCostingWorkbenchBomRowResponse {
   private String path;
   private String settlementRowType;
   private Integer subtreeCostRequired;
-  private Integer manualModified;
   /** 上卷父件按命中子件生成见机表展示名称所需的数据，不代表新增结算行。 */
   private List<QuoteCostingWorkbenchRollupComponentResponse> rollupComponents =
       new ArrayList<>();

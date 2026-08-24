@@ -30,6 +30,7 @@ public class CostRunTaskWorker {
   private static final Logger log = LoggerFactory.getLogger(CostRunTaskWorker.class);
 
   private final CostRunTaskClaimService taskClaimService;
+  private final CostRunBatchPrerequisiteService batchPrerequisiteService;
   private final CostRunTaskProgressService progressService;
   private final MonthlyRepriceProgressService monthlyRepriceProgressService;
   private final CostRunTaskExecutorRegistry executorRegistry;
@@ -37,11 +38,13 @@ public class CostRunTaskWorker {
 
   public CostRunTaskWorker(
       CostRunTaskClaimService taskClaimService,
+      CostRunBatchPrerequisiteService batchPrerequisiteService,
       CostRunTaskProgressService progressService,
       ObjectProvider<MonthlyRepriceProgressService> monthlyRepriceProgressService,
       CostRunTaskExecutorRegistry executorRegistry,
       CostRunWorkerProperties properties) {
     this.taskClaimService = taskClaimService;
+    this.batchPrerequisiteService = batchPrerequisiteService;
     this.progressService = progressService;
     this.monthlyRepriceProgressService = monthlyRepriceProgressService.getIfAvailable();
     this.executorRegistry = executorRegistry;
@@ -59,6 +62,7 @@ public class CostRunTaskWorker {
       return 0;
     }
     String workerId = properties.resolvedWorkerId();
+    prepareQuoteBatches(workerId);
     List<CostRunTask> tasks =
         taskClaimService.claimTasks(
             workerId,
@@ -82,6 +86,26 @@ public class CostRunTaskWorker {
       refreshProgress(batchNo);
     }
     return tasks.size();
+  }
+
+  private void prepareQuoteBatches(String workerId) {
+    if (!properties.getScenes().contains(CostRunTaskScene.QUOTE)) {
+      return;
+    }
+    CostRunBatchPrerequisiteService.PreparationSummary summary =
+        batchPrerequisiteService.preparePendingQuoteBatches(
+            workerId,
+            properties.getClaimBatchSize(),
+            properties.getLockTimeoutMinutes());
+    if (summary.claimedCount() > 0) {
+      log.info(
+          "cost run worker batch prerequisites: workerId={} candidates={} claimed={} success={} failed={}",
+          workerId,
+          summary.candidateCount(),
+          summary.claimedCount(),
+          summary.successCount(),
+          summary.failedCount());
+    }
   }
 
   private List<TaskExecutionMetric> processTasks(String workerId, List<CostRunTask> tasks) {
@@ -130,6 +154,19 @@ public class CostRunTaskWorker {
       }
       refreshMonthlyRepriceProgress(task);
       return new TaskExecutionMetric(task.getId(), elapsedMillis(startedNanos), true);
+    } catch (CostRunTaskCollaborationRequiredException ex) {
+      boolean marked =
+          taskClaimService.markCollaboration(
+              task.getId(), workerId, ex.getResultSummaryJson(), ex.getMessage());
+      if (!marked) {
+        log.warn(
+            "cost run task collaboration ownership changed: workerId={} taskId={} batchNo={}",
+            workerId,
+            task.getId(),
+            task.getBatchNo());
+      }
+      refreshMonthlyRepriceProgress(task);
+      return new TaskExecutionMetric(task.getId(), elapsedMillis(startedNanos), marked);
     } catch (RuntimeException ex) {
       log.error(
           "cost run task failed: workerId={} taskId={} batchNo={} scene={}",

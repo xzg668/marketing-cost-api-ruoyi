@@ -13,6 +13,7 @@ import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariableBinding;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.PriceLinkedImportBasisRepository;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -24,13 +25,17 @@ import java.util.Optional;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.mockito.Mockito;
 
 final class PriceLinkedImportBasisTestSupport {
 
   final InMemoryRepository repository = new InMemoryRepository();
   final ObjectMapper objectMapper = new ObjectMapper();
+  final MaterialPriceTypeRouteSyncService priceTypeRouteSyncService =
+      Mockito.mock(MaterialPriceTypeRouteSyncService.class);
   final PriceLinkedImportBasisServiceImpl service =
-      new PriceLinkedImportBasisServiceImpl(repository, objectMapper);
+      new PriceLinkedImportBasisServiceImpl(
+          repository, objectMapper, priceTypeRouteSyncService);
 
   PriceLinkedImportBasisSaveRequest defaultRequest(long batchId, LocalDate effectiveDate) {
     return request(

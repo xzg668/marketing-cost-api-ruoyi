@@ -52,9 +52,9 @@ import org.springframework.util.StringUtils;
  * <p>取价流程：
  * <ol>
  *   <li>查 BOM 拍平结算行（按 oa_no）</li>
- *   <li>对每行：MaterialPriceRouterService.listCandidates 给出按 priority 升序的候选路由</li>
- *   <li>逐个候选尝试对应桶的 PriceResolver；首个 unitPrice != null 命中</li>
- *   <li>全部 fallthrough 仍未命中 → priceSource 标 ERROR / NO_ROUTE，remark 写具体原因</li>
+ *   <li>对每行：MaterialPriceRouterService.listCandidates 给出当前最新价格类型（最多一条）</li>
+ *   <li>调用该类型对应的 PriceResolver；价格源内部负责主供应商和历史价沿用</li>
+ *   <li>没有类型或当前类型没有可用价格 → priceSource 标 ERROR / NO_ROUTE，remark 写具体原因</li>
  *   <li>写 lp_cost_run_part_item</li>
  * </ol>
  */
@@ -227,11 +227,42 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       dto.setUnitPrice(item.getUnitPrice());
       dto.setAmount(item.getAmount());
       dto.setRemark(item.getRemark());
-      dto.setPriceOrgCode(item.getPriceOrgCode());
-      dto.setMaterialOrganizationCode(item.getMaterialOrganizationCode());
+      QuoteDataOrganization storedOrganization = storedReadOrganization(item);
+      dto.setPriceOrgCode(
+          storedOrganization == null ? item.getPriceOrgCode() : storedOrganization.priceOrgCode());
+      dto.setMaterialOrganizationCode(
+          storedOrganization == null
+              ? item.getMaterialOrganizationCode()
+              : storedOrganization.materialOrganizationCode());
       items.add(dto);
     }
     return items;
+  }
+
+  /**
+   * V182/V183 以前的历史成本行没有保存 U9 组织。历史结果只读展示时，可用已落库的
+   * OA 流程号和业务隔离字段恢复唯一可判定的 COMMERCIAL/PLATE 组织；不回写历史表，
+   * 也不放宽新核算链路“组织必须由上游显式传入”的校验。
+   */
+  private QuoteDataOrganization storedReadOrganization(CostRunPartItem item) {
+    String priceOrgCode = normalizeBlankToNull(item.getPriceOrgCode());
+    String materialOrganizationCode = normalizeBlankToNull(item.getMaterialOrganizationCode());
+    if (priceOrgCode != null || materialOrganizationCode != null) {
+      return normalizeOrganization(
+          priceOrgCode, materialOrganizationCode, "历史成本结果组织不完整");
+    }
+    String persistedScope = normalizeBlankToNull(item.getBusinessUnitType());
+    String materialScope =
+        "COMMERCIAL".equalsIgnoreCase(persistedScope)
+                || "PLATE".equalsIgnoreCase(persistedScope)
+            ? persistedScope
+            : null;
+    try {
+      return MaterialOrganization.quoteDataForQuoteProcess(
+          null, item.getOaNo(), materialScope);
+    } catch (IllegalArgumentException exception) {
+      return null;
+    }
   }
 
   // ============================ T26 见机表聚合视图 ============================
@@ -340,11 +371,11 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
   }
 
   /**
-   * 将上卷父件展示为“父件名称-命中子件名称”多行。
+   * 将上卷父件按命中子件拆成多条展示行。
    *
-   * <p>部品料号、图号始终保留父件；数量展示命中子件累计到顶层产品的用量；金额取本次核算
-   * 实际制造件价格批次中的子件成本贡献。最后一行吸收六位小数舍入差，保证拆分金额合计严格
-   * 等于原父件金额。
+   * <p>底层名称、料号、图号仍保留母件原值，新增 display 字段按“母件换行【子件】”输出；
+   * 数量展示命中子件累计到顶层产品的用量；金额取本次核算实际制造件价格批次中的子件成本贡献。
+   * 最后一行吸收六位小数舍入差，保证拆分金额合计严格等于原父件金额。
    */
   private List<CostRunPartItemDto> expandRollupDisplayRows(List<CostRunPartItemDto> rows) {
     List<Long> partItemIds = rows.stream()
@@ -415,10 +446,9 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       String parentName = firstText(parent.getPartName(), parent.getPartCode(), "父件");
       String childName =
           firstText(component.childName, component.childMaterialCode, "上卷子件");
-      row.setPartName(parentName + "-" + childName);
-      // 业务确认：上卷拆分行只展示父件料号、父件图号。
-      row.setPartCode(parent.getPartCode());
-      row.setPartDrawingNo(parent.getPartDrawingNo());
+      row.setDisplayPartName(parentChildDisplay(parentName, childName));
+      row.setDisplayPartCode(
+          parentChildDisplay(parent.getPartCode(), component.childMaterialCode));
       BigDecimal displayQty =
           component.qtyPerTop == null || component.qtyPerTop.signum() == 0
               ? parent.getPartQty()
@@ -437,6 +467,13 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       MaterialMasterRaw childArchive =
           childArchiveByKey.get(materialArchiveKey(
               parent.getMaterialOrganizationCode(), component.childMaterialCode));
+      String childDrawingNo = firstText(
+          childArchive == null ? null : childArchive.getDrawingNo(),
+          component.childSpec,
+          childArchive == null ? null : childArchive.getMaterialModel(),
+          childArchive == null ? null : childArchive.getMaterialSpec());
+      row.setDisplayPartDrawingNo(
+          parentChildDisplay(parent.getPartDrawingNo(), childDrawingNo));
       if (childArchive != null) {
         if (StringUtils.hasText(childArchive.getShapeAttr())) {
           row.setShapeAttr(childArchive.getShapeAttr().trim());
@@ -623,6 +660,18 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     return null;
   }
 
+  private String parentChildDisplay(String parentValue, String childValue) {
+    String parent = normalizeBlankToNull(parentValue);
+    String child = normalizeBlankToNull(childValue);
+    if (child == null) {
+      return parent;
+    }
+    if (parent == null) {
+      return "【" + child + "】";
+    }
+    return parent + "\n【" + child + "】";
+  }
+
   private CostRunPartItemDto copyPartItem(CostRunPartItemDto source) {
     CostRunPartItemDto target = new CostRunPartItemDto();
     target.setId(source.getId());
@@ -633,6 +682,9 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     target.setPartCode(source.getPartCode());
     target.setProductCode(source.getProductCode());
     target.setPartDrawingNo(source.getPartDrawingNo());
+    target.setDisplayPartName(source.getDisplayPartName());
+    target.setDisplayPartCode(source.getDisplayPartCode());
+    target.setDisplayPartDrawingNo(source.getDisplayPartDrawingNo());
     target.setPartQty(source.getPartQty());
     target.setShapeAttr(source.getShapeAttr());
     target.setMaterial(source.getMaterial());
@@ -655,6 +707,7 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
   private static final class RollupComponentTotal {
     private final String childMaterialCode;
     private String childName;
+    private String childSpec;
     private BigDecimal qtyPerTop;
     private BigDecimal unitCost;
     private String rawPriceType;
@@ -666,6 +719,9 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     private void accept(RollupPartComponentDto component) {
       if (StringUtils.hasText(component.getChildMaterialName())) {
         childName = component.getChildMaterialName().trim();
+      }
+      if (StringUtils.hasText(component.getChildMaterialSpec())) {
+        childSpec = component.getChildMaterialSpec().trim();
       }
       if (qtyPerTop == null && component.getChildQtyPerTop() != null) {
         qtyPerTop = component.getChildQtyPerTop();

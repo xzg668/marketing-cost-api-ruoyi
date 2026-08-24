@@ -17,7 +17,6 @@ public record QuoteBomAlternativeRebuildCommand(
     String selectedMaterialCode,
     Integer expectedSelectionVersion,
     String expectedBuildBatchId,
-    boolean confirmDiscardManualChanges,
     String selectedBy,
     String selectionRemark) {
 }

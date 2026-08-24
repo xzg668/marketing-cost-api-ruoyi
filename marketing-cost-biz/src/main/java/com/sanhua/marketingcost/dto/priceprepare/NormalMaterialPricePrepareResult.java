@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.dto.priceprepare;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -13,8 +14,20 @@ public class NormalMaterialPricePrepareResult {
   private BigDecimal unitPrice;
   private BigDecimal amount;
   private String priceSource;
+  private String priceType;
   private String resultRefType;
   private Long resultRefId;
+  private Long sourcePriceRecordId;
+  private String sourcePriceBatchNo;
+  private String supplierName;
+  private String supplierCode;
+  private BigDecimal supplyRatio;
+  private Long supplyRatioRecordId;
+  private LocalDate sourceEffectiveFrom;
+  private LocalDate sourceEffectiveTo;
+  private boolean carriedForward;
+  private String warningMessage;
+  private String reasonCode;
   private String sourceTable;
   private String message;
 
@@ -38,9 +51,20 @@ public class NormalMaterialPricePrepareResult {
 
   public static NormalMaterialPricePrepareResult gap(
       String status, String gapType, String priceSource, String sourceTable, String message) {
+    return gap(status, gapType, null, priceSource, sourceTable, message);
+  }
+
+  public static NormalMaterialPricePrepareResult gap(
+      String status,
+      String gapType,
+      String reasonCode,
+      String priceSource,
+      String sourceTable,
+      String message) {
     NormalMaterialPricePrepareResult result = new NormalMaterialPricePrepareResult();
     result.setStatus(status);
     result.setGapType(gapType);
+    result.setReasonCode(reasonCode);
     result.setPriceSource(priceSource);
     result.setSourceTable(sourceTable);
     result.setMessage(message);

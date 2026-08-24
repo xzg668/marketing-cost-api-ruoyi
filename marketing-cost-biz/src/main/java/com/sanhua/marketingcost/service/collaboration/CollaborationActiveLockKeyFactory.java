@@ -12,7 +12,7 @@ import java.util.Locale;
 /** 同月活动任务的唯一键；只使用稳定业务维度，不暴露原始料号。 */
 public final class CollaborationActiveLockKeyFactory {
 
-  private static final String PREFIX = "QCBP-ACTIVE-V1:";
+  private static final String PREFIX = "QCBP-ACTIVE-V2:";
 
   private CollaborationActiveLockKeyFactory() {}
 
@@ -37,13 +37,12 @@ public final class CollaborationActiveLockKeyFactory {
     String identityType = product == null ? "TEMP" : "PRODUCT";
     String identity = product == null ? temporary : product;
     String canonical = String.join("\n",
-        "VERSION=1",
+        "VERSION=2",
         "MONTH=" + month,
         "IDENTITY_TYPE=" + identityType,
         "IDENTITY=" + identity,
         "BUSINESS_UNIT=" + normalizeRequired(scope.businessUnitType()),
-        "ORG=" + normalizeRequired(scope.applicableOrgCode()),
-        "PRIMARY_SCOPE=" + primaryScope.code());
+        "ORG=" + normalizeRequired(scope.applicableOrgCode()));
     return PREFIX + sha256(canonical);
   }
 

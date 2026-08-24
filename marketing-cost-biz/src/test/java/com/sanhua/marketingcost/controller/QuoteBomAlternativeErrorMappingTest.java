@@ -21,10 +21,7 @@ class QuoteBomAlternativeErrorMappingTest {
             "ALT_STANDARD_MISSING", 400,
             "ALT_MULTIPLE_STANDARD", 400,
             "ALT_SELECTION_CONFLICT", 409,
-            "ALT_MONTHLY_FROZEN", 409,
             "ALT_SOURCE_STALE", 409,
-            "BOM_ALREADY_CONFIRMED", 409,
-            "MANUAL_ROW_CHANGES_EXIST", 409,
             "ALT_BRANCH_STRUCTURE_MISSING", 400);
 
     expectedCodes.forEach(

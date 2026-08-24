@@ -30,7 +30,6 @@ public class QuoteBomAlternativeSelectionServiceImpl
   public static final String ALT_CANDIDATE_INVALID = "ALT_CANDIDATE_INVALID";
   public static final String ALT_SELECTION_CONFLICT = "ALT_SELECTION_CONFLICT";
   public static final String ALT_SOURCE_STALE = "ALT_SOURCE_STALE";
-  public static final String ALT_MONTHLY_FROZEN = "ALT_MONTHLY_FROZEN";
   public static final String STATUS_PREVIEW = "PREVIEW";
 
   private final QuoteBomAlternativeSelectionRepository repository;
@@ -103,13 +102,6 @@ public class QuoteBomAlternativeSelectionServiceImpl
         validateGroup(scope, group, command.alternativeGroupKey());
     QuoteBomAlternativeSelection current =
         repository.findCurrentForUpdate(scope, validatedGroup.groupKey());
-    if (current != null
-        && QuoteBomAlternativeSelection.SOURCE_INHERITED_MONTHLY.equals(
-            current.getSelectionSource())) {
-      throw new QuoteBomAlternativeSelectionException(
-          ALT_MONTHLY_FROZEN,
-          "本月客户场景已冻结，当前OA继承的标准/替代选择不允许修改");
-    }
     BomAlternativeCandidate selected =
         findCandidate(validatedGroup.group(), command.selectedMaterialCode());
     if (selected == null) {
@@ -261,10 +253,6 @@ public class QuoteBomAlternativeSelectionServiceImpl
       if (groupByKey.containsKey(current.getAlternativeGroupKey())) {
         continue;
       }
-      if (QuoteBomAlternativeSelection.SOURCE_INHERITED_MONTHLY.equals(
-          current.getSelectionSource())) {
-        continue;
-      }
       transitionOrConflict(
           current, QuoteBomAlternativeSelection.STATUS_STALE);
       current.setSelectionStatus(
@@ -335,10 +323,6 @@ public class QuoteBomAlternativeSelectionServiceImpl
       QuoteBomAlternativeSelectionScope scope,
       ValidatedGroup group,
       QuoteBomAlternativeSelection current) {
-    if (QuoteBomAlternativeSelection.SOURCE_INHERITED_MONTHLY.equals(
-        current.getSelectionSource())) {
-      return result(current, true, false, true);
-    }
     BomAlternativeCandidate selected =
         findCandidate(group.group(), current.getSelectedMaterialCode());
     boolean standardUnchanged =

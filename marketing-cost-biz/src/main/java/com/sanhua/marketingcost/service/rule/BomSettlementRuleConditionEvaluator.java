@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.rule;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.BomRuleClause;
 import com.sanhua.marketingcost.dto.BomSettlementRuleCondition;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import org.slf4j.Logger;
@@ -87,26 +88,44 @@ public class BomSettlementRuleConditionEvaluator {
       log.warn("BOM 结算规则条件子句缺 field 或 op");
       return false;
     }
-    String actual = readFieldValue(clause.getField(), context);
+    String actual = trimToNull(readFieldValue(clause.getField(), context));
+    String expected = trimToNull(clause.getValue());
+    List<String> expectedValues = normalizeValues(clause.getValues());
     return switch (clause.getOp().toUpperCase()) {
-      case "EQ" -> Objects.equals(actual, clause.getValue());
-      case "NE" -> !Objects.equals(actual, clause.getValue());
+      case "EQ" -> Objects.equals(actual, expected);
+      case "NE" -> !Objects.equals(actual, expected);
       case "IN" -> actual != null
           && clause.getValues() != null
-          && clause.getValues().contains(actual);
+          && expectedValues.contains(actual);
+      // 保留既有 NOT_IN 的空值语义，避免改变财务辅料排除规则；需要必填时显式增加 NOT_BLANK。
       case "NOT_IN" -> clause.getValues() != null
-          && (actual == null || !clause.getValues().contains(actual));
+          && (actual == null || !expectedValues.contains(actual));
+      case "NOT_BLANK" -> actual != null;
       case "LIKE" -> actual != null
-          && clause.getValue() != null
-          && actual.contains(clause.getValue());
+          && expected != null
+          && actual.contains(expected);
       case "PREFIX" -> actual != null
-          && clause.getValue() != null
-          && actual.startsWith(clause.getValue());
+          && expected != null
+          && actual.startsWith(expected);
       default -> {
         log.warn("BOM 结算规则未知 op={}，视为不命中", clause.getOp());
         yield false;
       }
     };
+  }
+
+  private static List<String> normalizeValues(List<String> values) {
+    if (values == null) {
+      return Collections.emptyList();
+    }
+    return values.stream()
+        .map(BomSettlementRuleConditionEvaluator::trimToNull)
+        .filter(Objects::nonNull)
+        .toList();
+  }
+
+  private static String trimToNull(String value) {
+    return StringUtils.hasText(value) ? value.trim() : null;
   }
 
   private String readFieldValue(String field, BomRuleNodeContext context) {

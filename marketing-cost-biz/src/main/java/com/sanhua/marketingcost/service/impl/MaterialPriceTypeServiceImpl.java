@@ -3,43 +3,34 @@ package com.sanhua.marketingcost.service.impl;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.MaterialPriceTypeImportRequest;
-import com.sanhua.marketingcost.dto.MaterialPriceTypeRangeApplyRequest;
 import com.sanhua.marketingcost.dto.MaterialPriceTypeRequest;
-import com.sanhua.marketingcost.dto.RangePriceTypeConflict;
 import com.sanhua.marketingcost.entity.MaterialPriceType;
-import com.sanhua.marketingcost.entity.PriceRangeItem;
+import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.MaterialPriceTypeMapper;
 import com.sanhua.marketingcost.service.MaterialPriceTypeService;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import org.springframework.beans.factory.annotation.Autowired;
+import java.util.Objects;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
+/**
+ * 物料价格类型人工维护。
+ *
+ * <p>价格类型采用追加历史：当前类型按 created_at、id 倒序确定；相同类型重复导入不更新、
+ * 不新增，类型变化才新增一条。正式价格入口复用 MaterialPriceTypeRouteSyncService。
+ */
 @Service
 public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
   private static final String DEFAULT_SOURCE = "import";
-  private static final String RANGE_PRICE_TYPE = "区间价";
-  private static final String RANGE_BASIS_FACTOR = "FACTOR";
 
-  private final MaterialPriceTypeMapper materialPriceTypeMapper;
-  private final QuotePriceTypeConfirmationInvalidationService priceTypeInvalidationService;
+  private final MaterialPriceTypeMapper mapper;
 
-  public MaterialPriceTypeServiceImpl(MaterialPriceTypeMapper materialPriceTypeMapper) {
-    this(materialPriceTypeMapper, null);
-  }
-
-  @Autowired
-  public MaterialPriceTypeServiceImpl(
-      MaterialPriceTypeMapper materialPriceTypeMapper,
-      QuotePriceTypeConfirmationInvalidationService priceTypeInvalidationService) {
-    this.materialPriceTypeMapper = materialPriceTypeMapper;
-    this.priceTypeInvalidationService = priceTypeInvalidationService;
+  public MaterialPriceTypeServiceImpl(MaterialPriceTypeMapper mapper) {
+    this.mapper = mapper;
   }
 
   @Override
@@ -59,10 +50,9 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
       query.eq(MaterialPriceType::getPeriod, period.trim());
     }
     query.orderByAsc(MaterialPriceType::getMaterialCode)
-        .orderByAsc(MaterialPriceType::getPriceType)
+        .orderByDesc(MaterialPriceType::getCreatedAt)
         .orderByDesc(MaterialPriceType::getId);
-    Page<MaterialPriceType> pager = new Page<>(page, pageSize);
-    return materialPriceTypeMapper.selectPage(pager, query);
+    return mapper.selectPage(new Page<>(page, pageSize), query);
   }
 
   @Override
@@ -74,71 +64,29 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     MaterialPriceType entity = new MaterialPriceType();
     merge(entity, request);
     fillDefaults(entity);
-    if (!hasRequiredBusinessFields(entity)) {
-      return null;
-    }
-    List<MaterialPriceType> currentVersions = findCurrentVersions(entity);
-    MaterialPriceType samePriceType = findSamePriceType(currentVersions, entity.getPriceType());
-    if (samePriceType != null) {
-      MaterialPriceType before = copyOf(samePriceType);
-      overwriteExisting(samePriceType, entity);
-      materialPriceTypeMapper.updateById(samePriceType);
-      invalidateIfMatchingRuleChanged(before, samePriceType);
-      return samePriceType;
-    }
-    closePreviousVersions(currentVersions, entity.getEffectiveFrom());
-    materialPriceTypeMapper.insert(entity);
-    invalidateConfirmations(List.of(entity));
-    return entity;
+    return saveIfTypeChanged(entity);
   }
 
   @Override
   @Transactional(rollbackFor = Exception.class)
   public MaterialPriceType update(Long id, MaterialPriceTypeRequest request) {
-    if (id == null) {
+    if (id == null || request == null) {
       return null;
     }
-    MaterialPriceType existing = materialPriceTypeMapper.selectById(id);
+    MaterialPriceType existing = mapper.selectById(id);
     if (existing == null) {
       return null;
     }
-    MaterialPriceType before = copyOf(existing);
     MaterialPriceType next = copyOf(existing);
-    next.setId(null);
     merge(next, request);
-    next.setEffectiveFrom(LocalDate.now());
-    next.setEffectiveTo(null);
     fillDefaults(next);
-    LocalDate effectiveFrom = next.getEffectiveFrom();
-    existing.setEffectiveTo(effectiveFrom.minusDays(1));
-    materialPriceTypeMapper.updateById(existing);
-    closePreviousVersions(findCurrentVersions(next), effectiveFrom, existing.getId());
-    materialPriceTypeMapper.insert(next);
-    if (affectsPriceTypeConfirmation(before, next)) {
-      List<MaterialPriceType> changedRows = new ArrayList<>();
-      changedRows.add(next);
-      if (!sameText(before.getMaterialCode(), next.getMaterialCode())
-          || !sameText(before.getPeriod(), next.getPeriod())
-          || !sameText(before.getBusinessUnitType(), next.getBusinessUnitType())) {
-        changedRows.add(before);
-      }
-      invalidateConfirmations(changedRows);
-    }
-    return next;
+    return saveIfTypeChanged(next);
   }
 
   @Override
   @Transactional(rollbackFor = Exception.class)
   public boolean delete(Long id) {
-    if (id == null) {
-      return false;
-    }
-    MaterialPriceType existing = materialPriceTypeMapper.selectById(id);
-    boolean deleted = materialPriceTypeMapper.deleteById(id) > 0;
-    if (deleted && existing != null) {
-      invalidateConfirmations(List.of(existing));
-    }
-    return deleted;
+    return id != null && mapper.deleteById(id) > 0;
   }
 
   @Override
@@ -148,7 +96,6 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
       return List.of();
     }
     List<MaterialPriceType> imported = new ArrayList<>();
-    List<MaterialPriceType> changedRows = new ArrayList<>();
     for (var row : request.getRows()) {
       if (row == null
           || !StringUtils.hasText(row.getMaterialCode())
@@ -158,125 +105,36 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
       MaterialPriceType entity = new MaterialPriceType();
       fillFromRow(entity, row);
       fillDefaults(entity);
-      if (!hasRequiredBusinessFields(entity)) {
-        continue;
+      MaterialPriceType saved = saveIfTypeChanged(entity);
+      if (saved != null) {
+        imported.add(saved);
       }
-      List<MaterialPriceType> currentVersions = findCurrentVersions(entity);
-      MaterialPriceType samePriceType = findSamePriceType(currentVersions, entity.getPriceType());
-      if (samePriceType != null) {
-        MaterialPriceType before = copyOf(samePriceType);
-        overwriteExisting(samePriceType, entity);
-        materialPriceTypeMapper.updateById(samePriceType);
-        imported.add(samePriceType);
-        invalidateIfMatchingRuleChanged(before, samePriceType);
-        continue;
-      }
-      closePreviousVersions(currentVersions, entity.getEffectiveFrom());
-      materialPriceTypeMapper.insert(entity);
-      imported.add(entity);
-      changedRows.add(entity);
     }
-    invalidateConfirmations(changedRows);
     return imported;
   }
 
-  @Override
-  public List<RangePriceTypeConflict> findRangePriceTypeConflicts(List<PriceRangeItem> rangeItems) {
-    if (rangeItems == null || rangeItems.isEmpty()) {
-      return List.of();
+  private MaterialPriceType saveIfTypeChanged(MaterialPriceType entity) {
+    if (!hasRequiredFields(entity)) {
+      return null;
     }
-    Map<String, PriceRangeItem> samplesByMaterial = new LinkedHashMap<>();
-    for (PriceRangeItem item : rangeItems) {
-      if (item == null
-          || !StringUtils.hasText(item.getMaterialCode())
-          || !RANGE_BASIS_FACTOR.equalsIgnoreCase(trimToNull(item.getRangeBasis()))) {
-        continue;
-      }
-      samplesByMaterial.putIfAbsent(item.getMaterialCode().trim(), item);
+    MaterialPriceType current = findCurrent(entity.getMaterialCode());
+    if (current != null
+        && Objects.equals(PriceTypeEnum.normalizeRouteText(current.getPriceType()), entity.getPriceType())) {
+      return current;
     }
-    if (samplesByMaterial.isEmpty()) {
-      return List.of();
-    }
-    List<RangePriceTypeConflict> conflicts = new ArrayList<>();
-    for (PriceRangeItem item : samplesByMaterial.values()) {
-      LocalDate effectiveFrom = item.getEffectiveFrom() == null ? LocalDate.now() : item.getEffectiveFrom();
-      List<MaterialPriceType> currentRows =
-          findCurrentPriceTypes(item.getMaterialCode(), effectiveFrom);
-      if (hasRangePriceType(currentRows)) {
-        continue;
-      }
-      MaterialPriceType current = firstCurrentPriceType(currentRows);
-      RangePriceTypeConflict conflict = new RangePriceTypeConflict();
-      conflict.setMaterialCode(item.getMaterialCode());
-      conflict.setMaterialName(item.getMaterialName());
-      conflict.setBusinessUnitType(item.getBusinessUnitType());
-      conflict.setCurrentPriceType(current == null ? null : current.getPriceType());
-      conflict.setSuggestedPriceType(RANGE_PRICE_TYPE);
-      conflict.setConflictType(current == null ? "MISSING" : "NOT_RANGE");
-      conflict.setPeriod(YearMonth.from(effectiveFrom).toString());
-      conflict.setEffectiveFrom(effectiveFrom);
-      conflict.setMessage(current == null
-          ? "该物料没有价格类型，建议改为区间价后再核算"
-          : "该物料当前价格类型是" + current.getPriceType() + "，本次导入的是区间价");
-      conflicts.add(conflict);
-    }
-    return conflicts;
-  }
-
-  @Override
-  @Transactional(rollbackFor = Exception.class)
-  public List<MaterialPriceType> applyRangePriceType(MaterialPriceTypeRangeApplyRequest request) {
-    if (request == null || request.getRows() == null || request.getRows().isEmpty()) {
-      return List.of();
-    }
-    List<MaterialPriceType> applied = new ArrayList<>();
-    List<MaterialPriceType> changedRows = new ArrayList<>();
-    for (MaterialPriceTypeRangeApplyRequest.Row row : request.getRows()) {
-      if (row == null || !StringUtils.hasText(row.getMaterialCode())) {
-        continue;
-      }
-      MaterialPriceType entity = new MaterialPriceType();
-      entity.setMaterialCode(row.getMaterialCode());
-      entity.setMaterialName(row.getMaterialName());
-      entity.setBusinessUnitType(row.getBusinessUnitType());
-      entity.setPriceType(RANGE_PRICE_TYPE);
-      entity.setPeriod(row.getPeriod());
-      entity.setSource(StringUtils.hasText(row.getSource()) ? row.getSource() : "range-price-import");
-      entity.setPriority(1);
-      entity.setEffectiveFrom(row.getEffectiveFrom());
-      if (!StringUtils.hasText(entity.getPeriod()) && entity.getEffectiveFrom() != null) {
-        entity.setPeriod(YearMonth.from(entity.getEffectiveFrom()).toString());
-      }
-      fillDefaults(entity);
-      if (!hasRequiredBusinessFields(entity)) {
-        continue;
-      }
-      MaterialPriceType saved = saveMaterialPriceType(entity, changedRows);
-      applied.add(saved);
-    }
-    invalidateConfirmations(changedRows);
-    return applied;
-  }
-
-  private MaterialPriceType saveMaterialPriceType(
-      MaterialPriceType entity,
-      List<MaterialPriceType> changedRows) {
-    List<MaterialPriceType> currentVersions = findCurrentVersions(entity);
-    MaterialPriceType samePriceType = findSamePriceType(currentVersions, entity.getPriceType());
-    if (samePriceType != null) {
-      MaterialPriceType before = copyOf(samePriceType);
-      overwriteExisting(samePriceType, entity);
-      materialPriceTypeMapper.updateById(samePriceType);
-      if (affectsPriceTypeConfirmation(before, samePriceType)) {
-        changedRows.add(samePriceType);
-        changedRows.add(before);
-      }
-      return samePriceType;
-    }
-    closePreviousVersions(currentVersions, entity.getEffectiveFrom());
-    materialPriceTypeMapper.insert(entity);
-    changedRows.add(entity);
+    entity.setId(null);
+    mapper.insert(entity);
     return entity;
+  }
+
+  private MaterialPriceType findCurrent(String materialCode) {
+    List<MaterialPriceType> rows = mapper.selectList(
+        Wrappers.lambdaQuery(MaterialPriceType.class)
+            .eq(MaterialPriceType::getMaterialCode, materialCode)
+            .orderByDesc(MaterialPriceType::getCreatedAt)
+            .orderByDesc(MaterialPriceType::getId)
+            .last("LIMIT 1 FOR UPDATE"));
+    return rows == null || rows.isEmpty() ? null : rows.getFirst();
   }
 
   private void fillFromRow(
@@ -291,60 +149,28 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     entity.setMaterialShape(row.getMaterialShape());
     entity.setCategoryCode(row.getCategoryCode());
     entity.setCategoryName(row.getCategoryName());
-    entity.setPriceType(normalizePriceType(row.getPriceType()));
+    entity.setPriceType(row.getPriceType());
     entity.setPeriod(row.getPeriod());
     entity.setSource(row.getSource());
   }
 
   private void merge(MaterialPriceType entity, MaterialPriceTypeRequest request) {
-    if (request == null) {
-      return;
-    }
-    if (request.getRowNo() != null) {
-      entity.setRowNo(request.getRowNo());
-    }
-    if (request.getBillNo() != null) {
-      entity.setBillNo(request.getBillNo());
-    }
-    if (request.getMaterialCode() != null) {
-      entity.setMaterialCode(request.getMaterialCode());
-    }
-    if (request.getMaterialName() != null) {
-      entity.setMaterialName(request.getMaterialName());
-    }
-    if (request.getMaterialSpec() != null) {
-      entity.setMaterialSpec(request.getMaterialSpec());
-    }
-    if (request.getMaterialModel() != null) {
-      entity.setMaterialModel(request.getMaterialModel());
-    }
-    if (request.getUnit() != null) {
-      entity.setUnit(request.getUnit());
-    }
-    if (request.getMaterialShape() != null) {
-      entity.setMaterialShape(request.getMaterialShape());
-    }
-    if (request.getCategoryCode() != null) {
-      entity.setCategoryCode(request.getCategoryCode());
-    }
-    if (request.getCategoryName() != null) {
-      entity.setCategoryName(request.getCategoryName());
-    }
-    if (request.getPriceType() != null) {
-      entity.setPriceType(normalizePriceType(request.getPriceType()));
-    }
-    if (request.getPeriod() != null) {
-      entity.setPeriod(request.getPeriod());
-    }
-    if (request.getSource() != null) {
-      entity.setSource(request.getSource());
-    }
+    if (request.getRowNo() != null) entity.setRowNo(request.getRowNo());
+    if (request.getBillNo() != null) entity.setBillNo(request.getBillNo());
+    if (request.getMaterialCode() != null) entity.setMaterialCode(request.getMaterialCode());
+    if (request.getMaterialName() != null) entity.setMaterialName(request.getMaterialName());
+    if (request.getMaterialSpec() != null) entity.setMaterialSpec(request.getMaterialSpec());
+    if (request.getMaterialModel() != null) entity.setMaterialModel(request.getMaterialModel());
+    if (request.getUnit() != null) entity.setUnit(request.getUnit());
+    if (request.getMaterialShape() != null) entity.setMaterialShape(request.getMaterialShape());
+    if (request.getCategoryCode() != null) entity.setCategoryCode(request.getCategoryCode());
+    if (request.getCategoryName() != null) entity.setCategoryName(request.getCategoryName());
+    if (request.getPriceType() != null) entity.setPriceType(request.getPriceType());
+    if (request.getPeriod() != null) entity.setPeriod(request.getPeriod());
+    if (request.getSource() != null) entity.setSource(request.getSource());
   }
 
   private void fillDefaults(MaterialPriceType entity) {
-    if (!StringUtils.hasText(entity.getSource())) {
-      entity.setSource(DEFAULT_SOURCE);
-    }
     entity.setBillNo(trimToNull(entity.getBillNo()));
     entity.setMaterialCode(trimToNull(entity.getMaterialCode()));
     entity.setMaterialName(trimToNull(entity.getMaterialName()));
@@ -354,121 +180,13 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     entity.setMaterialShape(trimToNull(entity.getMaterialShape()));
     entity.setCategoryCode(trimToNull(entity.getCategoryCode()));
     entity.setCategoryName(trimToNull(entity.getCategoryName()));
-    entity.setPriceType(trimToNull(entity.getPriceType()));
+    entity.setPriceType(PriceTypeEnum.normalizeRouteText(entity.getPriceType()));
     entity.setPeriod(trimToNull(entity.getPeriod()));
-    if (entity.getPriority() == null) {
-      entity.setPriority(1);
-    }
+    entity.setSource(firstText(entity.getSource(), DEFAULT_SOURCE));
+    if (entity.getPriority() == null) entity.setPriority(1);
     if (entity.getEffectiveFrom() == null) {
       entity.setEffectiveFrom(defaultEffectiveFrom(entity.getPeriod()));
     }
-  }
-
-  private List<MaterialPriceType> findCurrentVersions(MaterialPriceType entity) {
-    if (entity == null || entity.getEffectiveFrom() == null || !StringUtils.hasText(entity.getMaterialCode())) {
-      return List.of();
-    }
-    var query = Wrappers.lambdaQuery(MaterialPriceType.class)
-        .eq(MaterialPriceType::getMaterialCode, entity.getMaterialCode())
-        .eq(MaterialPriceType::getPriority, entity.getPriority())
-        .and(q -> q.isNull(MaterialPriceType::getEffectiveTo)
-            .or()
-            .gt(MaterialPriceType::getEffectiveTo, entity.getEffectiveFrom()));
-    return materialPriceTypeMapper.selectList(query);
-  }
-
-  private MaterialPriceType findSamePriceType(List<MaterialPriceType> rows, String priceType) {
-    if (rows == null || !StringUtils.hasText(priceType)) {
-      return null;
-    }
-    for (MaterialPriceType row : rows) {
-      if (priceType.equals(normalizePriceType(row.getPriceType()))) {
-        return row;
-      }
-    }
-    return null;
-  }
-
-  private void overwriteExisting(MaterialPriceType target, MaterialPriceType source) {
-    Long id = target.getId();
-    LocalDate effectiveFrom = target.getEffectiveFrom();
-    LocalDate effectiveTo = target.getEffectiveTo();
-    fillImportFields(target, source);
-    target.setId(id);
-    target.setEffectiveFrom(effectiveFrom != null ? effectiveFrom : source.getEffectiveFrom());
-    target.setEffectiveTo(effectiveTo);
-  }
-
-  private void fillImportFields(MaterialPriceType target, MaterialPriceType source) {
-    if (source.getRowNo() != null) {
-      target.setRowNo(source.getRowNo());
-    }
-    if (source.getBillNo() != null) {
-      target.setBillNo(source.getBillNo());
-    }
-    target.setMaterialCode(source.getMaterialCode());
-    if (source.getMaterialName() != null) {
-      target.setMaterialName(source.getMaterialName());
-    }
-    if (source.getMaterialSpec() != null) {
-      target.setMaterialSpec(source.getMaterialSpec());
-    }
-    if (source.getMaterialModel() != null) {
-      target.setMaterialModel(source.getMaterialModel());
-    }
-    if (source.getUnit() != null) {
-      target.setUnit(source.getUnit());
-    }
-    if (source.getMaterialShape() != null) {
-      target.setMaterialShape(source.getMaterialShape());
-    }
-    if (source.getCategoryCode() != null) {
-      target.setCategoryCode(source.getCategoryCode());
-    }
-    if (source.getCategoryName() != null) {
-      target.setCategoryName(source.getCategoryName());
-    }
-    target.setPriceType(source.getPriceType());
-    if (source.getPeriod() != null) {
-      target.setPeriod(source.getPeriod());
-    }
-    if (source.getSource() != null) {
-      target.setSource(source.getSource());
-    }
-    if (source.getPriority() != null) {
-      target.setPriority(source.getPriority());
-    }
-    if (source.getBusinessUnitType() != null) {
-      target.setBusinessUnitType(source.getBusinessUnitType());
-    }
-  }
-
-  private void closePreviousVersions(List<MaterialPriceType> rows, LocalDate effectiveFrom) {
-    closePreviousVersions(rows, effectiveFrom, null);
-  }
-
-  private void closePreviousVersions(List<MaterialPriceType> rows, LocalDate effectiveFrom, Long excludedId) {
-    if (rows == null || rows.isEmpty() || effectiveFrom == null) {
-      return;
-    }
-    for (MaterialPriceType row : rows) {
-      if (excludedId != null && excludedId.equals(row.getId())) {
-        continue;
-      }
-      row.setEffectiveTo(effectiveFrom.minusDays(1));
-      materialPriceTypeMapper.updateById(row);
-    }
-  }
-
-  private LocalDate defaultEffectiveFrom(String period) {
-    if (StringUtils.hasText(period)) {
-      try {
-        return YearMonth.parse(period.trim()).atDay(1);
-      } catch (java.time.format.DateTimeParseException ignored) {
-        // fall through
-      }
-    }
-    return LocalDate.now();
   }
 
   private MaterialPriceType copyOf(MaterialPriceType source) {
@@ -488,115 +206,37 @@ public class MaterialPriceTypeServiceImpl implements MaterialPriceTypeService {
     copy.setSource(source.getSource());
     copy.setPriority(source.getPriority());
     copy.setEffectiveFrom(source.getEffectiveFrom());
-    copy.setEffectiveTo(null);
     copy.setSourceSystem(source.getSourceSystem());
     copy.setBusinessUnitType(source.getBusinessUnitType());
     return copy;
   }
 
-  private boolean hasRequiredBusinessFields(MaterialPriceType entity) {
+  private boolean hasRequiredFields(MaterialPriceType entity) {
     return entity != null
         && StringUtils.hasText(entity.getMaterialCode())
         && StringUtils.hasText(entity.getPriceType());
   }
 
-  private boolean affectsPriceTypeConfirmation(MaterialPriceType before, MaterialPriceType after) {
-    if (before == null || after == null) {
-      return false;
-    }
-    return !sameText(before.getMaterialCode(), after.getMaterialCode())
-        || !sameText(normalizePriceType(before.getPriceType()), normalizePriceType(after.getPriceType()))
-        || !sameText(before.getPeriod(), after.getPeriod())
-        || !sameText(before.getBusinessUnitType(), after.getBusinessUnitType());
-  }
-
-  private List<MaterialPriceType> findCurrentPriceTypes(String materialCode, LocalDate effectiveFrom) {
-    if (!StringUtils.hasText(materialCode)) {
-      return List.of();
-    }
-    var query = Wrappers.lambdaQuery(MaterialPriceType.class)
-        .eq(MaterialPriceType::getMaterialCode, materialCode.trim())
-        .and(q -> q.isNull(MaterialPriceType::getEffectiveTo)
-            .or()
-            .ge(MaterialPriceType::getEffectiveTo, effectiveFrom))
-        .orderByAsc(MaterialPriceType::getPriority)
-        .orderByDesc(MaterialPriceType::getEffectiveFrom)
-        .orderByDesc(MaterialPriceType::getId);
-    List<MaterialPriceType> rows = materialPriceTypeMapper.selectList(query);
-    return rows == null ? List.of() : rows;
-  }
-
-  private boolean hasRangePriceType(List<MaterialPriceType> rows) {
-    if (rows == null || rows.isEmpty()) {
-      return false;
-    }
-    for (MaterialPriceType row : rows) {
-      if (RANGE_PRICE_TYPE.equals(normalizePriceType(row.getPriceType()))) {
-        return true;
+  private LocalDate defaultEffectiveFrom(String period) {
+    if (StringUtils.hasText(period)) {
+      try {
+        return YearMonth.parse(period.trim()).atDay(1);
+      } catch (java.time.format.DateTimeParseException ignored) {
+        // 非年月格式按今天开始，仅保留历史字段兼容。
       }
     }
-    return false;
+    return LocalDate.now();
   }
 
-  private MaterialPriceType firstCurrentPriceType(List<MaterialPriceType> rows) {
-    if (rows == null || rows.isEmpty()) {
-      return null;
+  private String firstText(String... values) {
+    for (String value : values) {
+      String normalized = trimToNull(value);
+      if (normalized != null) return normalized;
     }
-    return rows.get(0);
-  }
-
-  private void invalidateConfirmations(List<MaterialPriceType> changedRows) {
-    if (priceTypeInvalidationService != null && changedRows != null && !changedRows.isEmpty()) {
-      priceTypeInvalidationService.invalidateByMaterialPriceTypeChanges(changedRows);
-    }
-  }
-
-  private void invalidateIfMatchingRuleChanged(MaterialPriceType before, MaterialPriceType after) {
-    if (!affectsPriceTypeConfirmation(before, after)) {
-      return;
-    }
-    List<MaterialPriceType> changedRows = new ArrayList<>();
-    changedRows.add(after);
-    changedRows.add(before);
-    invalidateConfirmations(changedRows);
-  }
-
-  private String normalizePriceType(String value) {
-    if (!StringUtils.hasText(value)) {
-      return value;
-    }
-    String text = value.trim();
-    return switch (text.toUpperCase()) {
-      case "FIXED" -> "固定价";
-      case "SETTLE_FIXED" -> "结算固定价";
-      case "LINKED" -> "联动价";
-      case "RANGE" -> "区间价";
-      case "MAKE", "MAKE_PART" -> "自制件";
-      default -> {
-        if ("固定采购价".equals(text) || "采购固定价".equals(text)) {
-          yield "固定价";
-        }
-        if ("结算价".equals(text) || "结算固定价".equals(text) || "家用结算价".equals(text)) {
-          yield "结算固定价";
-        }
-        yield text;
-      }
-    };
+    return null;
   }
 
   private String trimToNull(String value) {
-    if (!StringUtils.hasText(value)) {
-      return null;
-    }
-    return value.trim();
-  }
-
-  private boolean sameText(String left, String right) {
-    String normalizedLeft = trimToNull(left);
-    String normalizedRight = trimToNull(right);
-    if (normalizedLeft == null) {
-      return normalizedRight == null;
-    }
-    return normalizedLeft.equals(normalizedRight);
+    return StringUtils.hasText(value) ? value.trim() : null;
   }
 }

@@ -91,17 +91,12 @@ class QuoteBomAlternativeCostRegressionTest {
   }
 
   @Test
-  @DisplayName("选择变化后价格类型、价格准备和成本版本继续全部失效")
-  void selectionChangeInvalidatesAllDownstreamCostStages() {
+  @DisplayName("选择变化后要求按新分支显式重新核算")
+  void selectionChangeRequiresExplicitRecalculation() {
     support.defaultStandard();
     var switched = support.selectAlternative();
 
-    assertThat(switched.rebuild().priceTypeInvalidatedCount())
-        .isPositive();
-    assertThat(switched.rebuild().pricePrepareInvalidatedCount())
-        .isPositive();
-    assertThat(switched.rebuild().costRunInvalidatedCount())
-        .isPositive();
+    assertThat(switched.rebuild().recalculationRequired()).isTrue();
   }
 
   private static PriceSnapshot priced(

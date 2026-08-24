@@ -3,13 +3,13 @@ package com.sanhua.marketingcost.service.impl;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.PriceRangeItemImportRequest;
-import com.sanhua.marketingcost.dto.PriceRangeItemImportResult;
 import com.sanhua.marketingcost.dto.PriceRangeItemUpdateRequest;
 import com.sanhua.marketingcost.entity.PriceRangeFactorRule;
 import com.sanhua.marketingcost.entity.PriceRangeItem;
 import com.sanhua.marketingcost.mapper.PriceRangeFactorRuleMapper;
 import com.sanhua.marketingcost.mapper.PriceRangeItemMapper;
-import com.sanhua.marketingcost.service.MaterialPriceTypeService;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.RouteCommand;
 import com.sanhua.marketingcost.service.PriceRangeItemService;
 import com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils;
 import java.math.BigDecimal;
@@ -27,7 +27,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,22 +41,15 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
 
   private final PriceRangeItemMapper itemMapper;
   private final PriceRangeFactorRuleMapper factorRuleMapper;
-  private final MaterialPriceTypeService materialPriceTypeService;
+  private final MaterialPriceTypeRouteSyncService priceTypeRouteSyncService;
 
-  public PriceRangeItemServiceImpl(
-      PriceRangeItemMapper itemMapper,
-      PriceRangeFactorRuleMapper factorRuleMapper) {
-    this(itemMapper, factorRuleMapper, null);
-  }
-
-  @Autowired
   public PriceRangeItemServiceImpl(
       PriceRangeItemMapper itemMapper,
       PriceRangeFactorRuleMapper factorRuleMapper,
-      MaterialPriceTypeService materialPriceTypeService) {
+      MaterialPriceTypeRouteSyncService priceTypeRouteSyncService) {
     this.itemMapper = itemMapper;
     this.factorRuleMapper = factorRuleMapper;
-    this.materialPriceTypeService = materialPriceTypeService;
+    this.priceTypeRouteSyncService = priceTypeRouteSyncService;
   }
 
   @Override
@@ -86,6 +78,7 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
   }
 
   @Override
+  @Transactional(rollbackFor = Exception.class)
   public PriceRangeItem create(PriceRangeItemUpdateRequest request) {
     if (request == null) {
       return null;
@@ -102,10 +95,12 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
     }
     closePreviousVersions(item);
     itemMapper.insert(item);
+    syncPriceType(item);
     return item;
   }
 
   @Override
+  @Transactional(rollbackFor = Exception.class)
   public PriceRangeItem update(Long id, PriceRangeItemUpdateRequest request) {
     if (id == null) {
       return null;
@@ -117,6 +112,7 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
     merge(existing, request);
     fillDefaults(existing);
     itemMapper.updateById(existing);
+    syncPriceType(existing);
     return existing;
   }
 
@@ -131,28 +127,17 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
     if (request == null || request.getRows() == null || request.getRows().isEmpty()) {
       return List.of();
     }
-    if (RANGE_BASIS_FACTOR.equals(normalizeRangeBasis(request.getRangeBasis()))) {
-      return importFactorItems(request);
-    }
-    return importQtyItems(request);
-  }
-
-  @Override
-  @Transactional(rollbackFor = Exception.class)
-  public PriceRangeItemImportResult importItemsWithResult(PriceRangeItemImportRequest request) {
-    List<PriceRangeItem> imported = importItems(request);
-    if (request == null
-        || !RANGE_BASIS_FACTOR.equals(normalizeRangeBasis(request.getRangeBasis()))
-        || materialPriceTypeService == null) {
-      return new PriceRangeItemImportResult(imported, List.of());
-    }
-    return new PriceRangeItemImportResult(
-        imported,
-        materialPriceTypeService.findRangePriceTypeConflicts(imported));
+    List<PriceRangeItem> imported =
+        RANGE_BASIS_FACTOR.equals(normalizeRangeBasis(request.getRangeBasis()))
+            ? importFactorItems(request)
+            : importQtyItems(request);
+    syncPriceTypes(imported);
+    return imported;
   }
 
   private List<PriceRangeItem> importQtyItems(PriceRangeItemImportRequest request) {
     List<PriceRangeItem> imported = new ArrayList<>();
+    String businessUnitType = trimToNull(request.getBusinessUnitType());
     for (var row : request.getRows()) {
       if (row == null || !StringUtils.hasText(row.getMaterialCode())) {
         continue;
@@ -163,11 +148,12 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
       if (row.getPriceExclTax() == null && row.getPriceInclTax() == null) {
         continue;
       }
-      PriceRangeItem item = findExisting(row);
+      PriceRangeItem item = findExisting(row, businessUnitType);
       if (item == null) {
         item = new PriceRangeItem();
         fillItem(item, row);
         fillDefaults(item);
+        item.setBusinessUnitType(businessUnitType);
         item.setRangeBasis(RANGE_BASIS_QTY);
         item.setFactorRuleId(null);
         item.setFactorCode(null);
@@ -178,6 +164,9 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
       } else {
         fillItem(item, row);
         fillDefaults(item);
+        if (businessUnitType != null) {
+          item.setBusinessUnitType(businessUnitType);
+        }
         item.setRangeBasis(RANGE_BASIS_QTY);
         item.setFactorRuleId(null);
         item.setFactorCode(null);
@@ -665,7 +654,8 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
       BigDecimal priceInclTax,
       Integer taxIncluded) {}
 
-  private PriceRangeItem findExisting(PriceRangeItemImportRequest.PriceRangeItemImportRow row) {
+  private PriceRangeItem findExisting(
+      PriceRangeItemImportRequest.PriceRangeItemImportRow row, String businessUnitType) {
     var query = Wrappers.lambdaQuery(PriceRangeItem.class)
         .eq(PriceRangeItem::getMaterialCode, row.getMaterialCode().trim())
         .eq(PriceRangeItem::getRangeLow, row.getRangeLow())
@@ -673,6 +663,9 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
         .and(q -> q.eq(PriceRangeItem::getRangeBasis, RANGE_BASIS_QTY)
             .or()
             .isNull(PriceRangeItem::getRangeBasis));
+    if (businessUnitType != null) {
+      query.eq(PriceRangeItem::getBusinessUnitType, businessUnitType);
+    }
     String supplierCode = trimToNull(row.getSupplierCode());
     if (supplierCode == null) {
       query.isNull(PriceRangeItem::getSupplierCode);
@@ -802,6 +795,35 @@ public class PriceRangeItemServiceImpl implements PriceRangeItemService {
       row.setEffectiveTo(item.getEffectiveFrom());
       itemMapper.updateById(row);
     }
+  }
+
+  private void syncPriceTypes(List<PriceRangeItem> items) {
+    Map<String, PriceRangeItem> onePerMaterial = new LinkedHashMap<>();
+    for (PriceRangeItem item : items == null ? List.<PriceRangeItem>of() : items) {
+      if (item != null && StringUtils.hasText(item.getMaterialCode())) {
+        onePerMaterial.putIfAbsent(
+            String.valueOf(item.getBusinessUnitType()) + '\u0000' + item.getMaterialCode().trim(),
+            item);
+      }
+    }
+    onePerMaterial.values().forEach(this::syncPriceType);
+  }
+
+  private void syncPriceType(PriceRangeItem item) {
+    if (item == null
+        || !StringUtils.hasText(item.getMaterialCode())
+        || (item.getPriceExclTax() == null && item.getPriceInclTax() == null)) {
+      return;
+    }
+    priceTypeRouteSyncService.sync(new RouteCommand(
+        item.getMaterialCode(),
+        item.getMaterialName(),
+        item.getSpecModel(),
+        item.getUnit(),
+        item.getBusinessUnitType(),
+        "区间价",
+        "price_range",
+        "FORMAL_RANGE"));
   }
 
   private String trimToNull(String value) {

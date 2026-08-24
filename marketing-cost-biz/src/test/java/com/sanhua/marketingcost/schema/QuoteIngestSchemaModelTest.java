@@ -10,7 +10,6 @@ import com.sanhua.marketingcost.entity.OaFormItemExtraField;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuoteIngestLog;
 import com.sanhua.marketingcost.entity.QuoteIngestTypeRule;
-import com.sanhua.marketingcost.entity.QuoteWritebackTask;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -29,7 +28,6 @@ class QuoteIngestSchemaModelTest {
     assertThat(tableName(OaFormItemExtraField.class)).isEqualTo("lp_oa_form_item_extra_field");
     assertThat(tableName(OaFormExtraFee.class)).isEqualTo("lp_oa_form_extra_fee");
     assertThat(tableName(QuoteBomStatus.class)).isEqualTo("lp_quote_bom_status");
-    assertThat(tableName(QuoteWritebackTask.class)).isEqualTo("lp_quote_writeback_task");
   }
 
   @Test

@@ -137,6 +137,19 @@ class BusinessUnitInterceptorTest {
                 "OR 必须被括号包裹，避免与外层 AND 的优先级混淆：" + out);
     }
 
+    /** MySQL 要求 LIMIT 位于 FOR UPDATE 前，不能沿用 JSQLParser 的默认输出顺序。 */
+    @Test
+    void appendConditionKeepsMySqlLimitBeforeForUpdate() throws Exception {
+        String sql = "SELECT * FROM oa_form_item WHERE id = 284 LIMIT 1 FOR UPDATE";
+
+        String out = interceptor.appendBusinessUnitCondition(
+                sql, "", "business_unit_type", "COMMERCIAL");
+
+        assertTrue(out.endsWith("LIMIT 1 FOR UPDATE"), "锁子句必须保持 MySQL 合法顺序：" + out);
+        assertFalse(out.contains("FOR UPDATE LIMIT"), "不能生成 MySQL 非法锁语句：" + out);
+        assertTrue(out.contains("business_unit_type = 'COMMERCIAL'"));
+    }
+
     // ========== 上下文判断 ==========
 
     /** 未登录 → businessUnitType 为 null，isAdmin 为 false */

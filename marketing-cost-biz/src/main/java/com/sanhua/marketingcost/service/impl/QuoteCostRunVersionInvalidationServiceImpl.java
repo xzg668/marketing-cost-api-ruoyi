@@ -2,14 +2,11 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.sanhua.marketingcost.entity.CostRunResult;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
-import com.sanhua.marketingcost.mapper.CostRunResultMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.LinkedHashSet;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,17 +17,14 @@ public class QuoteCostRunVersionInvalidationServiceImpl
     implements QuoteCostRunVersionInvalidationService {
 
   static final String STATUS_TRIAL = "TRIAL";
-  static final String STATUS_CONFIRMED = "CONFIRMED";
+  static final String STATUS_RUNNING = "RUNNING";
   static final String STATUS_STALE = "STALE";
   private static final int CHUNK_SIZE = 500;
 
   private final QuoteCostRunVersionMapper versionMapper;
-  private final CostRunResultMapper resultMapper;
 
-  public QuoteCostRunVersionInvalidationServiceImpl(
-      QuoteCostRunVersionMapper versionMapper, CostRunResultMapper resultMapper) {
+  public QuoteCostRunVersionInvalidationServiceImpl(QuoteCostRunVersionMapper versionMapper) {
     this.versionMapper = versionMapper;
-    this.resultMapper = resultMapper;
   }
 
   @Override
@@ -42,7 +36,7 @@ public class QuoteCostRunVersionInvalidationServiceImpl
         Wrappers.<QuoteCostRunVersion>lambdaQuery()
             .eq(QuoteCostRunVersion::getPricingMonth, month)
             .eq(QuoteCostRunVersion::getBusinessUnitType, businessUnit),
-        List.of(STATUS_TRIAL));
+        List.of(STATUS_TRIAL, STATUS_RUNNING));
   }
 
   @Override
@@ -51,7 +45,7 @@ public class QuoteCostRunVersionInvalidationServiceImpl
     return invalidate(
         Wrappers.<QuoteCostRunVersion>lambdaQuery()
             .eq(QuoteCostRunVersion::getOaNo, required("oaNo", oaNo)),
-        List.of(STATUS_TRIAL));
+        List.of(STATUS_TRIAL, STATUS_RUNNING));
   }
 
   @Override
@@ -67,7 +61,7 @@ public class QuoteCostRunVersionInvalidationServiceImpl
             .eq(QuoteCostRunVersion::getOaFormItemId, oaFormItemId)
             .eq(QuoteCostRunVersion::getProductCode, required("productCode", productCode))
             .eq(QuoteCostRunVersion::getPricingMonth, required("pricingMonth", pricingMonth)),
-        List.of(STATUS_TRIAL));
+        List.of(STATUS_TRIAL, STATUS_RUNNING));
   }
 
   @Override
@@ -90,27 +84,8 @@ public class QuoteCostRunVersionInvalidationServiceImpl
             .eq(
                 QuoteCostRunVersion::getPricingMonth,
                 required("pricingMonth", pricingMonth)),
-        List.of(STATUS_TRIAL, STATUS_CONFIRMED));
-  }
-
-  @Override
-  @Transactional(rollbackFor = Exception.class)
-  public int invalidateByPriceTypeConfirmNos(Collection<String> confirmNos) {
-    LinkedHashSet<String> normalized = new LinkedHashSet<>();
-    if (confirmNos != null) {
-      for (String confirmNo : confirmNos) {
-        if (StringUtils.hasText(confirmNo)) {
-          normalized.add(confirmNo.trim());
-        }
-      }
-    }
-    if (normalized.isEmpty()) {
-      return 0;
-    }
-    return invalidate(
-        Wrappers.<QuoteCostRunVersion>lambdaQuery()
-            .in(QuoteCostRunVersion::getPriceTypeConfirmNo, normalized),
-        List.of(STATUS_TRIAL));
+        // BOM变化只让当前工作区待重算；已成功成本是不可变历史凭证，不能改状态。
+        List.of(STATUS_TRIAL, STATUS_RUNNING));
   }
 
   private int invalidate(
@@ -143,13 +118,6 @@ public class QuoteCostRunVersionInvalidationServiceImpl
         continue;
       }
       affected += changed;
-      CostRunResult resultPatch = new CostRunResult();
-      resultPatch.setResultStatus(STATUS_STALE);
-      resultMapper.update(
-          resultPatch,
-          Wrappers.<CostRunResult>lambdaUpdate()
-              .in(CostRunResult::getCostRunVersionId, chunk)
-              .in(CostRunResult::getResultStatus, sourceStatuses));
     }
     return affected;
   }

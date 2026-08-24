@@ -1,8 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomAlternativeCandidateResponse;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomAlternativeGroupResponse;
@@ -31,8 +29,6 @@ import com.sanhua.marketingcost.service.bomalternative.BomAlternativeGroupResolv
 import com.sanhua.marketingcost.service.bomalternative.BomAlternativePruneRequest;
 import com.sanhua.marketingcost.service.bomalternative.BomChildType;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeAuditService;
-import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeMonthlyInheritanceResult;
-import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeMonthlyInheritanceService;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeRebuildCommand;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeRebuildResult;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeRebuildService;
@@ -41,10 +37,7 @@ import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelect
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelectionResult;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelectionScope;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelectionService;
-import com.sanhua.marketingcost.service.effectivebom.QuoteBomMonthlyFreezeKey;
-import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
-import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
@@ -86,7 +79,8 @@ public class QuoteBomAlternativeApplicationServiceImpl
 
   private static final List<String> INVALIDATED_WORKFLOW =
       List.of(
-          "PRICE_TYPE_CONFIRMATION",
+          "QUOTE_BOM",
+          "PRICE_TYPE",
           "PRICE_PREPARE",
           "FINAL_PRICE",
           "COST_RUN");
@@ -101,10 +95,6 @@ public class QuoteBomAlternativeApplicationServiceImpl
   private final QuoteBomPreparationRecordMapper preparationRecordMapper;
   private final OaFormItemMapper oaFormItemMapper;
   private final OaFormMapper oaFormMapper;
-  private final QuoteBomContextResolver quoteBomContextResolver;
-  private final QuoteBomAlternativeMonthlyInheritanceService
-      monthlyInheritanceService;
-  private final ObjectMapper objectMapper;
 
   public QuoteBomAlternativeApplicationServiceImpl(
       BomRawHierarchyMapper bomRawHierarchyMapper,
@@ -116,10 +106,7 @@ public class QuoteBomAlternativeApplicationServiceImpl
       QuoteBomAlternativeAuditService auditService,
       QuoteBomPreparationRecordMapper preparationRecordMapper,
       OaFormItemMapper oaFormItemMapper,
-      OaFormMapper oaFormMapper,
-      QuoteBomContextResolver quoteBomContextResolver,
-      QuoteBomAlternativeMonthlyInheritanceService monthlyInheritanceService,
-      ObjectMapper objectMapper) {
+      OaFormMapper oaFormMapper) {
     this.bomRawHierarchyMapper = bomRawHierarchyMapper;
     this.groupResolver = groupResolver;
     this.branchPruner = branchPruner;
@@ -130,9 +117,6 @@ public class QuoteBomAlternativeApplicationServiceImpl
     this.preparationRecordMapper = preparationRecordMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.oaFormMapper = oaFormMapper;
-    this.quoteBomContextResolver = quoteBomContextResolver;
-    this.monthlyInheritanceService = monthlyInheritanceService;
-    this.objectMapper = objectMapper;
   }
 
   @Override
@@ -141,12 +125,6 @@ public class QuoteBomAlternativeApplicationServiceImpl
       String oaNo, Long oaFormItemId, String periodMonth) {
     ApiContext context =
         requireContext(oaNo, oaFormItemId, periodMonth);
-    QuoteBomAlternativeMonthlyInheritanceResult monthly =
-        monthlyInheritanceService.inheritIfFrozen(
-            context.monthlyKey(), context.selectionScope());
-    if (monthly.frozen()) {
-      return frozenSummary(context, monthly.selections());
-    }
     GroupSnapshot snapshot = loadReachableGroups(context);
     List<QuoteBomAlternativeSelectionResult> synchronizedSelections =
         selectionService.synchronize(
@@ -207,22 +185,6 @@ public class QuoteBomAlternativeApplicationServiceImpl
     ApiContext context =
         requireContext(
             oaNo, oaFormItemId, request.periodMonth());
-    QuoteBomAlternativeMonthlyInheritanceResult monthly =
-        monthlyInheritanceService.inheritIfFrozen(
-            context.monthlyKey(), context.selectionScope());
-    boolean keepsFrozenSelection =
-        monthly.selections().stream()
-            .anyMatch(
-                selection ->
-                    sameText(selection.getAlternativeGroupKey(), groupKey)
-                        && sameText(
-                            selection.getSelectedMaterialCode(),
-                            request.selectedMaterialCode()));
-    if (monthly.provisional()
-        || (monthly.frozen() && !keepsFrozenSelection)) {
-      monthlyInheritanceService.releaseProvisional(
-          context.monthlyKey(), context.selectionScope());
-    }
     QuoteBomAlternativeSelection previous =
         selectionRepository.findCurrent(
             context.selectionScope(), groupKey);
@@ -248,7 +210,6 @@ public class QuoteBomAlternativeApplicationServiceImpl
                       request.selectedMaterialCode()),
                   request.expectedSelectionVersion(),
                   trimToNull(request.expectedBuildBatchId()),
-                  request.confirmDiscardManualChanges(),
                   firstText(operator, "system"),
                   trimToNull(request.selectionRemark())));
     } catch (QuoteIngestException exception) {
@@ -265,7 +226,7 @@ public class QuoteBomAlternativeApplicationServiceImpl
     }
     QuoteBomAlternativeSelectionResult selection =
         rebuilt.selection();
-    if (rebuilt.rebuilt() && !rebuilt.idempotent()) {
+    if (!rebuilt.idempotent()) {
       auditService.recordSelectionChange(
           context.selectionScope(),
           groupKey,
@@ -283,12 +244,8 @@ public class QuoteBomAlternativeApplicationServiceImpl
             : selection.selectedChildType().name(),
         selection.selectionSource(),
         rebuilt.idempotent(),
-        rebuilt.rebuilt(),
-        rebuilt.manualChangesDiscarded(),
-        rebuilt.beforeRowCount(),
-        rebuilt.afterRowCount(),
-        rebuilt.buildBatchId(),
-        rebuilt.rebuilt() ? INVALIDATED_WORKFLOW : List.of());
+        rebuilt.recalculationRequired(),
+        rebuilt.idempotent() ? List.of() : INVALIDATED_WORKFLOW);
   }
 
   @Override
@@ -303,18 +260,10 @@ public class QuoteBomAlternativeApplicationServiceImpl
         required("groupKey", alternativeGroupKey);
     ApiContext context =
         requireContext(oaNo, oaFormItemId, periodMonth);
-    QuoteBomAlternativeMonthlyInheritanceResult monthly =
-        monthlyInheritanceService.inheritIfFrozen(
-            context.monthlyKey(), context.selectionScope());
     List<QuoteBomAlternativeSelection> history =
         selectionRepository.findHistory(
             context.selectionScope(), groupKey);
     if (history.isEmpty()) {
-      if (monthly.frozen()) {
-        throw failure(
-            ALT_GROUP_NOT_FOUND,
-            "冻结最终BOM中不存在该替代组");
-      }
       QuoteBomAlternativeSummaryResponse summary =
           getAlternativeGroups(
               context.oaNo(),
@@ -511,14 +460,6 @@ public class QuoteBomAlternativeApplicationServiceImpl
             normalizedMonth,
             organization.priceOrgCode(),
             businessUnitType.trim());
-    QuoteBomMonthlyFreezeKey monthlyKey =
-        new QuoteBomMonthlyFreezeKey(
-            normalizedMonth,
-            topProductCode,
-            quoteBomContextResolver.resolveCustomer(form, null).value(),
-            quoteBomContextResolver.normalizePackageMethod(
-                item.getPackageMethod()),
-            organization.priceOrgCode());
     return new ApiContext(
         normalizedOaNo,
         oaFormItemId,
@@ -528,119 +469,7 @@ public class QuoteBomAlternativeApplicationServiceImpl
         businessUnitType.trim(),
         MAIN_BOM_PURPOSE,
         quoteDate,
-        selectionScope,
-        monthlyKey);
-  }
-
-  private QuoteBomAlternativeSummaryResponse frozenSummary(
-      ApiContext context,
-      List<QuoteBomAlternativeSelection> selections) {
-    List<QuoteBomAlternativeGroupResponse> groups =
-        (selections == null ? List.<QuoteBomAlternativeSelection>of() : selections)
-            .stream()
-            .sorted(
-                Comparator.comparing(
-                    QuoteBomAlternativeSelection::getAlternativeGroupKey))
-            .map(this::toFrozenGroupResponse)
-            .toList();
-    int alternativeCount =
-        (int)
-            groups.stream()
-                .filter(
-                    group ->
-                        QuoteBomAlternativeSelection.CHILD_TYPE_ALTERNATIVE
-                            .equals(group.selectedChildType()))
-                .count();
-    return new QuoteBomAlternativeSummaryResponse(
-        context.periodMonth(),
-        groups.size(),
-        alternativeCount,
-        false,
-        groups);
-  }
-
-  private QuoteBomAlternativeGroupResponse toFrozenGroupResponse(
-      QuoteBomAlternativeSelection selection) {
-    return new QuoteBomAlternativeGroupResponse(
-        selection.getAlternativeGroupKey(),
-        selection.getParentMaterialCode(),
-        selection.getParentMaterialName(),
-        selection.getParentPath(),
-        selection.getChildSeq(),
-        selection.getProcessSeq(),
-        selection.getBomPurpose(),
-        selection.getBomVersion(),
-        selection.getSelectionVersion(),
-        selection.getSelectionSource(),
-        selection.getSelectionStatus(),
-        selection.getSelectedMaterialCode(),
-        selection.getSelectedChildType(),
-        selection.getSourceBuildBatchId(),
-        false,
-        true,
-        frozenCandidates(selection));
-  }
-
-  private List<QuoteBomAlternativeCandidateResponse> frozenCandidates(
-      QuoteBomAlternativeSelection selection) {
-    String snapshotJson = trimToNull(selection.getCandidateSnapshotJson());
-    if (snapshotJson == null) {
-      return List.of(selectedCandidateFallback(selection));
-    }
-    try {
-      JsonNode candidates = objectMapper.readTree(snapshotJson).path("candidates");
-      if (!candidates.isArray() || candidates.isEmpty()) {
-        return List.of(selectedCandidateFallback(selection));
-      }
-      List<QuoteBomAlternativeCandidateResponse> result = new ArrayList<>();
-      for (JsonNode candidate : candidates) {
-        String materialCode = trimToNull(candidate.path("materialCode").asText(null));
-        if (materialCode == null) {
-          continue;
-        }
-        result.add(
-            new QuoteBomAlternativeCandidateResponse(
-                materialCode,
-                trimToNull(candidate.path("materialName").asText(null)),
-                trimToNull(candidate.path("materialSpec").asText(null)),
-                trimToNull(candidate.path("childType").asText(null)),
-                decimalOrNull(candidate.path("qtyPerParent")),
-                trimToNull(candidate.path("sourceImportBatchId").asText(null)),
-                trimToNull(candidate.path("sourceBuildBatchId").asText(null)),
-                sameText(materialCode, selection.getSelectedMaterialCode())));
-      }
-      return result.isEmpty()
-          ? List.of(selectedCandidateFallback(selection))
-          : List.copyOf(result);
-    } catch (Exception exception) {
-      throw failure(
-          ALT_SOURCE_STALE,
-          "冻结月度BOM的替代候选快照损坏，请联系管理员处理");
-    }
-  }
-
-  private QuoteBomAlternativeCandidateResponse selectedCandidateFallback(
-      QuoteBomAlternativeSelection selection) {
-    return new QuoteBomAlternativeCandidateResponse(
-        selection.getSelectedMaterialCode(),
-        null,
-        null,
-        selection.getSelectedChildType(),
-        null,
-        selection.getSourceImportBatchId(),
-        selection.getSourceBuildBatchId(),
-        true);
-  }
-
-  private static BigDecimal decimalOrNull(JsonNode value) {
-    if (value == null || value.isMissingNode() || value.isNull()) {
-      return null;
-    }
-    try {
-      return new BigDecimal(value.asText());
-    } catch (NumberFormatException exception) {
-      return null;
-    }
+        selectionScope);
   }
 
   private QuoteBomAlternativeGroupResponse toGroupResponse(
@@ -977,8 +806,7 @@ public class QuoteBomAlternativeApplicationServiceImpl
       String businessUnitType,
       String bomPurpose,
       LocalDate quoteDate,
-      QuoteBomAlternativeSelectionScope selectionScope,
-      QuoteBomMonthlyFreezeKey monthlyKey) {
+      QuoteBomAlternativeSelectionScope selectionScope) {
   }
 
   private record GroupSnapshot(

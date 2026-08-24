@@ -37,7 +37,13 @@ monthly:
     execution-backend: ${MONTHLY_REPRICE_EXECUTION_BACKEND:LOCAL_WORKER}
 
 cost:
+  quote-bom:
+    effective-bom:
+      # worker 与 API 必须走同一条最终有效 BOM 主链，否则会生成 qbp_ 旧批次且工作区缺少当前 BOM 指针。
+      enabled: true
   run:
+    # 必须与 API 保持一致；worker 会把实际执行核算时的算法版本固化到成本版本。
+    algorithm-version: ${COST_RUN_ALGORITHM_VERSION:COST_V3}
     engine:
       enabled: ${COST_RUN_ENGINE_ENABLED:true}
     execution:

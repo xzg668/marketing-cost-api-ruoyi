@@ -3,7 +3,7 @@ package com.sanhua.marketingcost.service.effectivebom;
 import com.sanhua.marketingcost.entity.QuoteEffectiveBomNode;
 import java.util.List;
 
-/** 不可变最终有效 BOM 仓储；已确认构建只读，仅可清理未被确认或月度指针引用的草稿构建。 */
+/** 不可变有效 BOM 构建仓储；相同内容可复用，已写入构建不覆盖。 */
 public interface QuoteEffectiveBomRepository {
 
   List<String> findBuildBatchIdsByVariantHash(String variantHash);
@@ -14,7 +14,4 @@ public interface QuoteEffectiveBomRepository {
 
   void insertAll(List<QuoteEffectiveBomNode> nodes);
 
-  default int deleteUnreferencedByOriginMonthlySnapshotId(Long monthlySnapshotId) {
-    throw new UnsupportedOperationException();
-  }
 }

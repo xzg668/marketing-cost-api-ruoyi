@@ -133,7 +133,7 @@ public class MonthlyRepriceResultWriterImpl implements MonthlyRepriceResultWrite
     result.setFinanceCost(amountOf(costItems, COST_CODE_FINANCE));
     result.setCostEngineVersion(COST_ENGINE_VERSION);
     result.setPriceVersion(context.getPricingMonth());
-    result.setSourceCostResultId(objectResult.getSourceCostResultId());
+    result.setSourceCostVersionId(objectResult.getSourceCostVersionId());
     result.setCalcStatus(STATUS_SUCCESS);
     result.setCalcMessage("OK");
     result.setCreatedAt(now);

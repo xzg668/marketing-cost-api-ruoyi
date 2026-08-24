@@ -10,11 +10,14 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
+import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
+import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
+import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import java.util.ArrayList;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,7 +35,9 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
 
   private final PricePrepareItemMapper itemMapper;
   private final PricePrepareGapMapper gapMapper;
+  private final PricePrepareBatchMapper batchMapper;
   private final PricePrepareQueryService queryService;
+  private final QuoteCostingWorkspaceService workspaceService;
 
   @Value("${marketing-cost.price-prepare.block-on-not-ready:false}")
   private boolean blockOnNotReady;
@@ -40,10 +45,14 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
   public PricePrepareReadinessServiceImpl(
       PricePrepareItemMapper itemMapper,
       PricePrepareGapMapper gapMapper,
-      PricePrepareQueryService queryService) {
+      PricePrepareBatchMapper batchMapper,
+      PricePrepareQueryService queryService,
+      QuoteCostingWorkspaceService workspaceService) {
     this.itemMapper = itemMapper;
     this.gapMapper = gapMapper;
+    this.batchMapper = batchMapper;
     this.queryService = queryService;
+    this.workspaceService = workspaceService;
   }
 
   @Override
@@ -66,11 +75,13 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
 
     int topProductCount = topSummaries.size();
     int readyTopProductCount = 0;
+    int warningCount = 0;
     int gapCount = 0;
     boolean hasFailed = false;
     List<String> notReadyTopSummaries = new ArrayList<>();
     for (PricePrepareTopProductSummaryResponse summary : topSummaries) {
       gapCount += summary.getGapCount();
+      warningCount += summary.getWarningCount();
       if (SUMMARY_READY.equals(summary.getStatus())) {
         readyTopProductCount++;
       } else {
@@ -86,9 +97,7 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
       }
     }
     if (readyTopProductCount == topProductCount) {
-      PricePrepareReadinessResult result = PricePrepareReadinessResult.ready(null, periodValue, STATUS_SUCCESS);
-      result.setMessage("价格准备已完成");
-      return result;
+      return readyResult(null, periodValue, warningCount);
     }
 
     List<String> gapSummaries = loadGapSummaries(oaNoValue, periodValue);
@@ -118,20 +127,9 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
   @Override
   public PricePrepareReadinessResult check(
       String oaNo, Long oaFormItemId, String topProductCode, String periodMonth) {
-    return check(oaNo, oaFormItemId, topProductCode, periodMonth, null);
-  }
-
-  @Override
-  public PricePrepareReadinessResult check(
-      String oaNo,
-      Long oaFormItemId,
-      String topProductCode,
-      String periodMonth,
-      String priceTypeConfirmNo) {
     String oaNoValue = StringUtils.hasText(oaNo) ? oaNo.trim() : "";
     String topProductCodeValue = StringUtils.hasText(topProductCode) ? topProductCode.trim() : "";
     String periodValue = StringUtils.hasText(periodMonth) ? periodMonth.trim() : "";
-    String confirmNoValue = StringUtils.hasText(priceTypeConfirmNo) ? priceTypeConfirmNo.trim() : "";
     if (!StringUtils.hasText(oaNoValue)) {
       return warning("NOT_PREPARED", "缺少 OA 单号，无法检查价格准备状态", null, periodValue, null, 0, List.of());
     }
@@ -139,9 +137,15 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
       return check(oaNoValue, periodValue);
     }
 
+    java.util.Optional<QuoteCostingWorkspace> workspace =
+        workspaceService.find(oaFormItemId, periodValue);
+    if (workspace.isPresent()) {
+      return checkCurrentWorkspace(
+          workspace.get(), oaNoValue, oaFormItemId, topProductCodeValue, periodValue);
+    }
+
     String completedPrepareNo =
-        latestCompletedPrepareNo(
-            oaNoValue, oaFormItemId, topProductCodeValue, periodValue, confirmNoValue);
+        latestCompletedPrepareNo(oaNoValue, oaFormItemId, topProductCodeValue, periodValue);
     List<PricePrepareItem> items =
         itemMapper.selectList(
             Wrappers.lambdaQuery(PricePrepareItem.class)
@@ -157,7 +161,6 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
                     PricePrepareItem::getCurrentFlag,
                     1)
                 .eq(StringUtils.hasText(periodValue), PricePrepareItem::getPeriodMonth, periodValue)
-                .eq(StringUtils.hasText(confirmNoValue), PricePrepareItem::getPriceTypeConfirmNo, confirmNoValue)
                 .orderByDesc(PricePrepareItem::getId));
     List<PricePrepareGap> gaps =
         StringUtils.hasText(completedPrepareNo)
@@ -166,8 +169,7 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
                 oaNoValue,
                 oaFormItemId,
                 topProductCodeValue,
-                periodValue,
-                confirmNoValue);
+                periodValue);
     if (items == null || items.isEmpty()) {
       String message =
           StringUtils.hasText(periodValue)
@@ -177,6 +179,7 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
     }
 
     int readyCount = 0;
+    int warningCount = 0;
     boolean hasFailed = false;
     String prepareNo = null;
     String batchStatus = STATUS_SUCCESS;
@@ -190,11 +193,12 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
       } else {
         hasFailed = hasFailed || SUMMARY_FAILED.equals(item.getStatus());
       }
+      if (Integer.valueOf(1).equals(item.getCarriedForward())) {
+        warningCount++;
+      }
     }
     if (readyCount == items.size() && gaps.isEmpty()) {
-      PricePrepareReadinessResult result = PricePrepareReadinessResult.ready(prepareNo, periodValue, STATUS_SUCCESS);
-      result.setMessage("价格准备已完成");
-      return result;
+      return readyResult(prepareNo, periodValue, warningCount);
     }
     batchStatus = hasFailed ? STATUS_FAILED : STATUS_PARTIAL;
     List<String> gapSummaries = scopedGapSummaries(gaps);
@@ -221,18 +225,130 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
     this.blockOnNotReady = blockOnNotReady;
   }
 
+  private PricePrepareReadinessResult checkCurrentWorkspace(
+      QuoteCostingWorkspace workspace,
+      String oaNo,
+      Long oaFormItemId,
+      String topProductCode,
+      String periodMonth) {
+    List<PricePrepareGap> currentGaps =
+        loadScopedGaps(oaNo, oaFormItemId, topProductCode, periodMonth);
+    int workspaceGapCount = workspace.getGapCount() == null ? 0 : workspace.getGapCount();
+    if (workspaceGapCount > 0
+        || "PRICE_BLOCKED".equals(workspace.getWorkspaceStatus())
+        || "PRICE_ERROR".equals(workspace.getWorkspaceStatus())) {
+      List<String> summaries = scopedGapSummaries(currentGaps);
+      return blocked(
+          "PRICE_ERROR".equals(workspace.getWorkspaceStatus()) ? STATUS_FAILED : STATUS_PARTIAL,
+          "产品行 "
+              + topProductCode
+              + " 最终价格未生成：当前有 "
+              + Math.max(workspaceGapCount, currentGaps.size())
+              + " 项缺口"
+              + suffix(summaries),
+          workspace.getCurrentPrepareNo(),
+          periodMonth,
+          Math.max(workspaceGapCount, currentGaps.size()),
+          summaries);
+    }
+
+    String prepareNo = trimToNull(workspace.getCurrentPrepareNo());
+    if (prepareNo == null) {
+      return blocked(
+          "NOT_PREPARED",
+          "产品行 " + topProductCode + " 尚未生成最终价格",
+          null,
+          periodMonth,
+          0,
+          List.of());
+    }
+    PricePrepareBatch oaBatch =
+        batchMapper.selectOne(
+            Wrappers.<PricePrepareBatch>lambdaQuery()
+                .eq(PricePrepareBatch::getPrepareNo, prepareNo)
+                .eq(PricePrepareBatch::getOaNo, oaNo)
+                .eq(PricePrepareBatch::getOaFormItemId, oaFormItemId)
+                .eq(PricePrepareBatch::getTopProductCode, topProductCode)
+                .eq(PricePrepareBatch::getPeriodMonth, periodMonth)
+                .last("LIMIT 1"));
+    if (!isSuccessfulOaBatch(oaBatch)) {
+      return blocked(
+          STATUS_FAILED,
+          "当前最终价格指针对应的批次不存在或未成功，请重新生成最终价格",
+          prepareNo,
+          periodMonth,
+          0,
+          List.of());
+    }
+    List<PricePrepareItem> items =
+        itemMapper.selectList(
+            Wrappers.<PricePrepareItem>lambdaQuery()
+                .eq(PricePrepareItem::getPrepareNo, prepareNo)
+                .eq(PricePrepareItem::getCurrentFlag, 1)
+                .orderByAsc(PricePrepareItem::getId));
+    int readyCount = (int) (items == null ? List.<PricePrepareItem>of() : items).stream()
+        .filter(item -> item != null && SUMMARY_READY.equals(item.getStatus()))
+        .count();
+    if (items == null || items.isEmpty() || readyCount != items.size()) {
+      return blocked(
+          STATUS_FAILED,
+          "当前最终价格明细不完整，请重新生成最终价格",
+          prepareNo,
+          periodMonth,
+          0,
+          List.of());
+    }
+    List<PricePrepareBatch> financeBatches =
+        batchMapper.selectList(
+            Wrappers.<PricePrepareBatch>lambdaQuery()
+                .eq(PricePrepareBatch::getSourcePrepareNo, prepareNo)
+                .eq(
+                    PricePrepareBatch::getScenarioType,
+                    QuotePriceScenarioType.FINANCE_QUOTE_BASE.name())
+                .orderByDesc(PricePrepareBatch::getId));
+    boolean financeReady = financeBatches != null
+        && financeBatches.stream().anyMatch(this::isSuccessfulBatch);
+    if (!financeReady) {
+      return blocked(
+          STATUS_PARTIAL,
+          "最终价格已生成，但财务基准对比价格未完成，请重新生成最终价格",
+          prepareNo,
+          periodMonth,
+          0,
+          List.of());
+    }
+    int warningCount = workspace.getCarriedForwardPriceCount() == null
+        ? 0
+        : workspace.getCarriedForwardPriceCount();
+    return readyResult(prepareNo, periodMonth, warningCount);
+  }
+
+  private PricePrepareReadinessResult readyResult(
+      String prepareNo, String periodMonth, int warningCount) {
+    if (warningCount <= 0) {
+      PricePrepareReadinessResult result =
+          PricePrepareReadinessResult.ready(prepareNo, periodMonth, STATUS_SUCCESS);
+      result.setMessage("价格准备已完成");
+      return result;
+    }
+    return PricePrepareReadinessResult.readyWithWarnings(
+        prepareNo,
+        periodMonth,
+        STATUS_SUCCESS,
+        warningCount,
+        "价格准备已完成，其中 " + warningCount + " 项沿用历史价");
+  }
+
   private String latestCompletedPrepareNo(
       String oaNo,
       Long oaFormItemId,
       String topProductCode,
-      String periodMonth,
-      String priceTypeConfirmNo) {
+      String periodMonth) {
     PricePrepareBatchQueryRequest query = new PricePrepareBatchQueryRequest();
     query.setOaNo(oaNo);
     query.setOaFormItemId(oaFormItemId);
     query.setTopProductCode(topProductCode);
     query.setPeriodMonth(periodMonth);
-    query.setPriceTypeConfirmNo(priceTypeConfirmNo);
     query.setPage(1);
     query.setPageSize(500);
     PricePrepareBatchPageResponse page = queryService.pageBatches(query);
@@ -295,6 +411,25 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
         gapSummaries);
   }
 
+  private PricePrepareReadinessResult blocked(
+      String status,
+      String message,
+      String prepareNo,
+      String periodMonth,
+      int gapCount,
+      List<String> gapSummaries) {
+    return PricePrepareReadinessResult.notReady(
+        status,
+        false,
+        true,
+        message,
+        prepareNo,
+        periodMonth,
+        status,
+        gapCount,
+        gapSummaries);
+  }
+
   private List<String> loadGapSummaries(String oaNo, String periodMonth) {
     if (!StringUtils.hasText(oaNo)) {
       return List.of();
@@ -326,15 +461,6 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
 
   private List<PricePrepareGap> loadScopedGaps(
       String oaNo, Long oaFormItemId, String topProductCode, String periodMonth) {
-    return loadScopedGaps(oaNo, oaFormItemId, topProductCode, periodMonth, null);
-  }
-
-  private List<PricePrepareGap> loadScopedGaps(
-      String oaNo,
-      Long oaFormItemId,
-      String topProductCode,
-      String periodMonth,
-      String priceTypeConfirmNo) {
     List<PricePrepareGap> gaps =
         gapMapper.selectList(
             Wrappers.lambdaQuery(PricePrepareGap.class)
@@ -343,10 +469,6 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
                 .eq(PricePrepareGap::getTopProductCode, topProductCode)
                 .eq(PricePrepareGap::getCurrentFlag, 1)
                 .eq(StringUtils.hasText(periodMonth), PricePrepareGap::getPeriodMonth, periodMonth)
-                .eq(
-                    StringUtils.hasText(priceTypeConfirmNo),
-                    PricePrepareGap::getPriceTypeConfirmNo,
-                    priceTypeConfirmNo)
                 .orderByDesc(PricePrepareGap::getCreatedAt)
                 .orderByDesc(PricePrepareGap::getId));
     return gaps == null ? List.of() : gaps;
@@ -396,5 +518,9 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
       return second.trim();
     }
     return fallback;
+  }
+
+  private String trimToNull(String value) {
+    return StringUtils.hasText(value) ? value.trim() : null;
   }
 }

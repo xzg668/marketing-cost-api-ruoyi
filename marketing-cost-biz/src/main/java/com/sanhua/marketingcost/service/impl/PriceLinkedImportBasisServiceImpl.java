@@ -21,6 +21,8 @@ import com.sanhua.marketingcost.entity.FactorUploadBatch;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.PriceLinkedImportBasisRepository;
 import com.sanhua.marketingcost.service.PriceLinkedImportBasisService;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.RouteCommand;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -41,12 +43,15 @@ public class PriceLinkedImportBasisServiceImpl implements PriceLinkedImportBasis
 
   private final PriceLinkedImportBasisRepository repository;
   private final ObjectMapper objectMapper;
+  private final MaterialPriceTypeRouteSyncService priceTypeRouteSyncService;
 
   public PriceLinkedImportBasisServiceImpl(
       PriceLinkedImportBasisRepository repository,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      MaterialPriceTypeRouteSyncService priceTypeRouteSyncService) {
     this.repository = repository;
     this.objectMapper = objectMapper;
+    this.priceTypeRouteSyncService = priceTypeRouteSyncService;
   }
 
   @Override
@@ -57,6 +62,7 @@ public class PriceLinkedImportBasisServiceImpl implements PriceLinkedImportBasis
     PriceLinkedItem current = repository.findCurrentVersion(next);
 
     if (isSameType2Version(current, next)) {
+      syncPriceType(current);
       return new PriceLinkedImportBasisSaveResult(
           PriceLinkedImportBasisSaveResult.ACTION_DUPLICATE_SKIPPED,
           current.getId(),
@@ -65,8 +71,8 @@ public class PriceLinkedImportBasisServiceImpl implements PriceLinkedImportBasis
     }
 
     if (current != null) {
-      requireLaterEffectiveDate(current, validated.effectiveDate());
-      current.setEffectiveTo(validated.effectiveDate().minusDays(1));
+      // 公式版本先后改由正式导入时间决定；日期字段只保留历史展示，不阻断同日重导。
+      current.setEffectiveTo(validated.effectiveDate());
       repository.updateItem(current);
     }
 
@@ -79,11 +85,24 @@ public class PriceLinkedImportBasisServiceImpl implements PriceLinkedImportBasis
     for (PriceVariableBinding binding : bindings) {
       repository.insertBinding(binding);
     }
+    syncPriceType(next);
     return new PriceLinkedImportBasisSaveResult(
         PriceLinkedImportBasisSaveResult.ACTION_CREATED,
         next.getId(),
         current == null ? null : current.getId(),
         bindings.size());
+  }
+
+  private void syncPriceType(PriceLinkedItem item) {
+    priceTypeRouteSyncService.sync(new RouteCommand(
+        item.getMaterialCode(),
+        item.getMaterialName(),
+        item.getSpecModel(),
+        item.getUnit(),
+        item.getBusinessUnitType(),
+        "联动价",
+        "price_linked_type2",
+        "FORMAL_LINKED"));
   }
 
   @Override
@@ -355,13 +374,6 @@ public class PriceLinkedImportBasisServiceImpl implements PriceLinkedImportBasis
         && sameText(current.getFormulaExpr(), next.getFormulaExpr())
         && sameText(current.getSourceFormulaExpr(), next.getSourceFormulaExpr())
         && Objects.equals(current.getTaxIncluded(), next.getTaxIncluded());
-  }
-
-  private void requireLaterEffectiveDate(PriceLinkedItem current, LocalDate nextDate) {
-    if (current.getEffectiveFrom() != null && !nextDate.isAfter(current.getEffectiveFrom())) {
-      throw new IllegalArgumentException(
-          "新公式生效日期必须晚于当前版本生效日期 " + current.getEffectiveFrom());
-    }
   }
 
   private PriceLinkedImportBasisResponse baseResponse(PriceLinkedItem item) {

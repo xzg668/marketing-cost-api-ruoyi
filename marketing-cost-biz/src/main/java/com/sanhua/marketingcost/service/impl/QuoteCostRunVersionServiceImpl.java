@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
+import com.sanhua.marketingcost.service.CostingAlgorithmVersionProvider;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionService;
 import java.math.BigDecimal;
@@ -17,11 +18,15 @@ public class QuoteCostRunVersionServiceImpl implements QuoteCostRunVersionServic
 
   private final QuoteCostRunVersionMapper versionMapper;
   private final QuoteCostRunVersionNoGenerator noGenerator;
+  private final CostingAlgorithmVersionProvider algorithmVersionProvider;
 
   public QuoteCostRunVersionServiceImpl(
-      QuoteCostRunVersionMapper versionMapper, QuoteCostRunVersionNoGenerator noGenerator) {
+      QuoteCostRunVersionMapper versionMapper,
+      QuoteCostRunVersionNoGenerator noGenerator,
+      CostingAlgorithmVersionProvider algorithmVersionProvider) {
     this.versionMapper = versionMapper;
     this.noGenerator = noGenerator;
+    this.algorithmVersionProvider = algorithmVersionProvider;
   }
 
   @Override
@@ -32,9 +37,47 @@ public class QuoteCostRunVersionServiceImpl implements QuoteCostRunVersionServic
       String pricingMonth,
       String resultPeriod,
       String pricePrepareNo,
-      String priceTypeConfirmNo,
-      String bomConfirmNo,
       String businessUnitType) {
+    return create(
+        oaNo,
+        oaFormItemId,
+        productCode,
+        pricingMonth,
+        resultPeriod,
+        pricePrepareNo,
+        businessUnitType,
+        "TRIAL");
+  }
+
+  @Override
+  public QuoteCostRunVersion createRunning(
+      String oaNo,
+      Long oaFormItemId,
+      String productCode,
+      String pricingMonth,
+      String resultPeriod,
+      String pricePrepareNo,
+      String businessUnitType) {
+    return create(
+        oaNo,
+        oaFormItemId,
+        productCode,
+        pricingMonth,
+        resultPeriod,
+        pricePrepareNo,
+        businessUnitType,
+        "RUNNING");
+  }
+
+  private QuoteCostRunVersion create(
+      String oaNo,
+      Long oaFormItemId,
+      String productCode,
+      String pricingMonth,
+      String resultPeriod,
+      String pricePrepareNo,
+      String businessUnitType,
+      String status) {
     String oaNoValue = required("oaNo", oaNo);
     if (oaFormItemId == null) {
       throw new IllegalArgumentException("oaFormItemId 不能为空");
@@ -51,9 +94,8 @@ public class QuoteCostRunVersionServiceImpl implements QuoteCostRunVersionServic
       version.setPricingMonth(pricingMonthValue);
       version.setResultPeriod(resultPeriodValue);
       version.setPricePrepareNo(trimToNull(pricePrepareNo));
-      version.setPriceTypeConfirmNo(trimToNull(priceTypeConfirmNo));
-      version.setBomConfirmNo(trimToNull(bomConfirmNo));
-      version.setStatus("TRIAL");
+      version.setAlgorithmVersion(algorithmVersionProvider.currentVersion());
+      version.setStatus(status);
       version.setPartItemCount(0);
       version.setCostItemCount(0);
       version.setTrialStartedAt(LocalDateTime.now());

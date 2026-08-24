@@ -2,7 +2,6 @@ package com.sanhua.marketingcost.mapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.sanhua.marketingcost.entity.CostRunResult;
 import com.sanhua.marketingcost.entity.QuoteCostPriceScenario;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
@@ -23,7 +22,6 @@ class QuoteCostRunVersionInvalidationIntegrationTest extends BomMapperTestBase {
 
   @Autowired private QuoteCostRunVersionInvalidationService invalidationService;
   @Autowired private QuoteCostRunVersionMapper versionMapper;
-  @Autowired private CostRunResultMapper resultMapper;
   @Autowired private QuoteCostPriceScenarioMapper scenarioMapper;
   @Autowired private QuoteCuMaterialDiffItemMapper diffItemMapper;
   @Autowired private JdbcTemplate jdbcTemplate;
@@ -37,7 +35,6 @@ class QuoteCostRunVersionInvalidationIntegrationTest extends BomMapperTestBase {
         "DELETE FROM lp_quote_cu_material_diff_item WHERE cost_run_no LIKE ?", "%" + suffix);
     jdbcTemplate.update(
         "DELETE FROM lp_quote_cost_price_scenario WHERE cost_run_no LIKE ?", "%" + suffix);
-    jdbcTemplate.update("DELETE FROM lp_cost_run_result WHERE oa_no = ?", oaNo);
     jdbcTemplate.update("DELETE FROM lp_quote_cost_run_version WHERE oa_no = ?", oaNo);
   }
 
@@ -101,26 +98,8 @@ class QuoteCostRunVersionInvalidationIntegrationTest extends BomMapperTestBase {
     version.setBusinessUnitType(businessUnitType);
     assertThat(versionMapper.insert(version)).isEqualTo(1);
 
-    CostRunResult result = new CostRunResult();
-    result.setOaNo(oaNo);
-    result.setOaFormItemId(990001L);
-    result.setCostRunVersionId(version.getId());
-    result.setCostRunNo(version.getCostRunNo());
-    result.setProductCode("TOP-FCQ09");
-    result.setPeriod(pricingMonth);
-    result.setPricingMonth(pricingMonth);
-    result.setTotalCost(version.getTotalCost());
-    result.setFinanceMaterialCost(version.getFinanceMaterialCost());
-    result.setOaMaterialCost(version.getOaMaterialCost());
-    result.setCuMaterialAdjustment(version.getCuMaterialAdjustment());
-    result.setFinalQuoteAmount(version.getFinalQuoteAmount());
-    result.setCalcStatus("已核算");
-    result.setResultStatus(status);
-    result.setBusinessUnitType(businessUnitType);
-    assertThat(resultMapper.insert(result)).isEqualTo(1);
     return new Snapshot(
         version.getId(),
-        result.getId(),
         version.getTotalCost(),
         version.getCuMaterialAdjustment(),
         version.getFinalQuoteAmount());
@@ -128,15 +107,10 @@ class QuoteCostRunVersionInvalidationIntegrationTest extends BomMapperTestBase {
 
   private void assertSnapshot(Snapshot expected, String expectedStatus) {
     QuoteCostRunVersion version = versionMapper.selectById(expected.versionId());
-    CostRunResult result = resultMapper.selectById(expected.resultId());
     assertThat(version.getStatus()).isEqualTo(expectedStatus);
-    assertThat(result.getResultStatus()).isEqualTo(expectedStatus);
     assertThat(version.getTotalCost()).isEqualByComparingTo(expected.totalCost());
     assertThat(version.getCuMaterialAdjustment()).isEqualByComparingTo(expected.adjustment());
     assertThat(version.getFinalQuoteAmount()).isEqualByComparingTo(expected.finalAmount());
-    assertThat(result.getTotalCost()).isEqualByComparingTo(expected.totalCost());
-    assertThat(result.getCuMaterialAdjustment()).isEqualByComparingTo(expected.adjustment());
-    assertThat(result.getFinalQuoteAmount()).isEqualByComparingTo(expected.finalAmount());
   }
 
   private FrozenDetails insertFrozenDetails(Long versionId) {
@@ -198,7 +172,6 @@ class QuoteCostRunVersionInvalidationIntegrationTest extends BomMapperTestBase {
 
   private record Snapshot(
       Long versionId,
-      Long resultId,
       BigDecimal totalCost,
       BigDecimal adjustment,
       BigDecimal finalAmount) {}

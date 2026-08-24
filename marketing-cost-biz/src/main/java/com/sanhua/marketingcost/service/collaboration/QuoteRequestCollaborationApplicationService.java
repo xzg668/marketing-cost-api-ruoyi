@@ -87,7 +87,7 @@ public class QuoteRequestCollaborationApplicationService {
       }
     }
     QuoteCollaborationStartResult result = taskService.start(new QuoteCollaborationStartCommand(
-        itemId, technicianId, technicianName, null, null, actorProvider.current()));
+        itemId, technicianId, technicianName, null, null, null, actorProvider.current()));
     return new QuoteCollaborationStartResponse(result.action().name(), result.idempotentReplay(),
         result.message(), projectionService.project(oaNo, itemId));
   }

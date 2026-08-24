@@ -10,21 +10,17 @@ import com.sanhua.marketingcost.dto.financequote.FinancePricePrepareGenerateResu
 import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest;
 import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcResult;
 import com.sanhua.marketingcost.dto.financequote.QuoteCuMaterialDiffResult;
-import com.sanhua.marketingcost.entity.CostRunResult;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.QuoteCostPriceScenario;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
-import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmBatch;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
-import com.sanhua.marketingcost.mapper.CostRunResultMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostPriceScenarioMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
-import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmBatchMapper;
 import com.sanhua.marketingcost.service.CostRunEngine;
 import com.sanhua.marketingcost.service.CostRunResultWriter;
 import com.sanhua.marketingcost.service.FinancePricePrepareService;
@@ -55,7 +51,6 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
   private static final int MONEY_SCALE = 8;
 
   private final PricePrepareBatchMapper batchMapper;
-  private final QuotePriceTypeConfirmBatchMapper confirmBatchMapper;
   private final FinancePricePrepareService financePricePrepareService;
   private final QuoteCostRunVersionService versionService;
   private final QuoteCostRunVersionMapper versionMapper;
@@ -63,21 +58,17 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
   private final CostRunResultWriter resultWriter;
   private final QuoteCuMaterialDiffService materialDiffService;
   private final QuoteCostPriceScenarioMapper scenarioMapper;
-  private final CostRunResultMapper resultMapper;
 
   public QuoteCuAdjustmentCalcServiceImpl(
       PricePrepareBatchMapper batchMapper,
-      QuotePriceTypeConfirmBatchMapper confirmBatchMapper,
       FinancePricePrepareService financePricePrepareService,
       QuoteCostRunVersionService versionService,
       QuoteCostRunVersionMapper versionMapper,
       CostRunEngine costRunEngine,
       CostRunResultWriter resultWriter,
       QuoteCuMaterialDiffService materialDiffService,
-      QuoteCostPriceScenarioMapper scenarioMapper,
-      CostRunResultMapper resultMapper) {
+      QuoteCostPriceScenarioMapper scenarioMapper) {
     this.batchMapper = batchMapper;
-    this.confirmBatchMapper = confirmBatchMapper;
     this.financePricePrepareService = financePricePrepareService;
     this.versionService = versionService;
     this.versionMapper = versionMapper;
@@ -85,7 +76,6 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     this.resultWriter = resultWriter;
     this.materialDiffService = materialDiffService;
     this.scenarioMapper = scenarioMapper;
-    this.resultMapper = resultMapper;
   }
 
   @Override
@@ -93,14 +83,13 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
   public QuoteCuAdjustmentCalcResult calculate(QuoteCuAdjustmentCalcRequest request) {
     Scope scope = requireScope(request);
     PricePrepareBatch oaBatch = loadAndValidateOaBatch(scope);
-    QuotePriceTypeConfirmBatch confirmation = loadConfirmation(oaBatch);
     FinancePricePrepareGenerateResult financePrepare =
         financePricePrepareService.loadPreparedFromOa(oaBatch.getPrepareNo());
     oaBatch = reloadOaBatchWithScenarioGroup(scope, financePrepare);
     validateFinancePrepare(oaBatch, financePrepare);
 
-    QuoteCostRunVersion version = createVersion(scope, oaBatch, confirmation, financePrepare);
-    CostRunContext context = buildContext(scope, oaBatch, confirmation, financePrepare, version);
+    QuoteCostRunVersion version = createVersion(scope, oaBatch, financePrepare);
+    CostRunContext context = buildContext(scope, oaBatch, financePrepare, version);
     CostRunObjectResult costResult = requireCostResult(costRunEngine.run(context));
     validateNoAdjustmentCostItem(costResult);
     BigDecimal financeMaterialCost = uniqueCostAmount(costResult, COST_CODE_MATERIAL);
@@ -127,14 +116,7 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
         totalCost,
         adjustment,
         finalQuoteAmount);
-    resultWriter.writeQuoteResult(costResult, scope.form(), scope.item());
-    persistResultSummary(
-        version.getId(),
-        financeMaterialCost,
-        oaMaterialCost,
-        totalCost,
-        adjustment,
-        finalQuoteAmount);
+    resultWriter.writeQuoteResult(costResult);
     persistScenarios(
         version,
         oaBatch,
@@ -211,29 +193,10 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     requireSame("OA价格准备", "产品料号", scope.productCode(), batch.getTopProductCode());
     requireSame("OA价格准备", "计价月份", scope.pricingMonth(), batch.getPeriodMonth());
     requireSame("OA价格准备", "业务单元", scope.businessUnitType(), batch.getBusinessUnitType());
-    requireText(batch.getPriceTypeConfirmNo(), "OA价格准备priceTypeConfirmNo");
     if (batch.getPriceAsOfTime() == null) {
       throw new IllegalStateException("OA价格准备批次缺取价时点");
     }
     return batch;
-  }
-
-  private QuotePriceTypeConfirmBatch loadConfirmation(PricePrepareBatch batch) {
-    QuotePriceTypeConfirmBatch confirmation = confirmBatchMapper.selectOne(
-        Wrappers.lambdaQuery(QuotePriceTypeConfirmBatch.class)
-            .eq(QuotePriceTypeConfirmBatch::getConfirmNo, batch.getPriceTypeConfirmNo())
-            .eq(QuotePriceTypeConfirmBatch::getOaNo, batch.getOaNo())
-            .eq(QuotePriceTypeConfirmBatch::getOaFormItemId, batch.getOaFormItemId())
-            .eq(QuotePriceTypeConfirmBatch::getProductCode, batch.getTopProductCode())
-            .eq(QuotePriceTypeConfirmBatch::getPeriodMonth, batch.getPeriodMonth())
-            .eq(QuotePriceTypeConfirmBatch::getBusinessUnitType, batch.getBusinessUnitType())
-            .last("LIMIT 1"));
-    if (confirmation == null
-        || !QuotePriceTypeConfirmBatch.STATUS_CONFIRMED.equals(confirmation.getStatus())
-        || !StringUtils.hasText(confirmation.getBomConfirmNo())) {
-      throw new IllegalStateException("OA价格准备引用的BOM/价格类型确认批次已失效或不存在");
-    }
-    return confirmation;
   }
 
   private PricePrepareBatch reloadOaBatchWithScenarioGroup(
@@ -290,18 +253,29 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
   private QuoteCostRunVersion createVersion(
       Scope scope,
       PricePrepareBatch oaBatch,
-      QuotePriceTypeConfirmBatch confirmation,
       FinancePricePrepareGenerateResult financePrepare) {
-    QuoteCostRunVersion version = versionService.createTrial(
-        scope.oaNo(),
-        scope.item().getId(),
-        scope.productCode(),
-        scope.pricingMonth(),
-        scope.pricingMonth(),
-        financePrepare.financePrepareNo(),
-        oaBatch.getPriceTypeConfirmNo(),
-        confirmation.getBomConfirmNo(),
-        scope.businessUnitType());
+    QuoteCostRunVersion version;
+    if (scope.request().automaticCompletion()) {
+      version =
+          versionService.createRunning(
+              scope.oaNo(),
+              scope.item().getId(),
+              scope.productCode(),
+              scope.pricingMonth(),
+              scope.pricingMonth(),
+              financePrepare.financePrepareNo(),
+              scope.businessUnitType());
+    } else {
+      version =
+          versionService.createTrial(
+              scope.oaNo(),
+              scope.item().getId(),
+              scope.productCode(),
+              scope.pricingMonth(),
+              scope.pricingMonth(),
+              financePrepare.financePrepareNo(),
+              scope.businessUnitType());
+    }
     if (version == null || version.getId() == null || !StringUtils.hasText(version.getCostRunNo())) {
       throw new IllegalStateException("成本试算版本创建失败");
     }
@@ -328,7 +302,6 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
   private CostRunContext buildContext(
       Scope scope,
       PricePrepareBatch oaBatch,
-      QuotePriceTypeConfirmBatch confirmation,
       FinancePricePrepareGenerateResult financePrepare,
       QuoteCostRunVersion version) {
     CostRunContext context = CostRunContext.quote(
@@ -353,8 +326,6 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     context.setCostRunVersionId(version.getId());
     context.setCostRunNo(version.getCostRunNo());
     context.setPricePrepareNo(financePrepare.financePrepareNo());
-    context.setPriceTypeConfirmNo(oaBatch.getPriceTypeConfirmNo());
-    context.setBomConfirmNo(confirmation.getBomConfirmNo());
     context.setPriceScenarioType(QuotePriceScenarioType.FINANCE_QUOTE_BASE.name());
     context.setProgress(scope.request().progress());
     return context;
@@ -447,32 +418,6 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     result.setFinalQuoteAmount(finalQuoteAmount);
   }
 
-  private void persistResultSummary(
-      Long versionId,
-      BigDecimal financeMaterialCost,
-      BigDecimal oaMaterialCost,
-      BigDecimal totalCost,
-      BigDecimal adjustment,
-      BigDecimal finalQuoteAmount) {
-    CostRunResult stored = resultMapper.selectOne(
-        Wrappers.lambdaQuery(CostRunResult.class)
-            .eq(CostRunResult::getCostRunVersionId, versionId)
-            .last("LIMIT 1"));
-    if (stored == null || stored.getId() == null) {
-      throw new IllegalStateException("成本结果主表写入失败");
-    }
-    CostRunResult patch = new CostRunResult();
-    patch.setId(stored.getId());
-    patch.setTotalCost(totalCost);
-    patch.setFinanceMaterialCost(financeMaterialCost);
-    patch.setOaMaterialCost(oaMaterialCost);
-    patch.setCuMaterialAdjustment(adjustment);
-    patch.setFinalQuoteAmount(finalQuoteAmount);
-    if (resultMapper.updateById(patch) != 1) {
-      throw new IllegalStateException("成本结果双场景汇总写入失败");
-    }
-  }
-
   private void persistScenarios(
       QuoteCostRunVersion version,
       PricePrepareBatch oaBatch,
@@ -543,7 +488,6 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
         .append(text(batch.getOaNo())).append('|')
         .append(batch.getOaFormItemId()).append('|')
         .append(text(batch.getTopProductCode())).append('|')
-        .append(text(batch.getPriceTypeConfirmNo())).append('|')
         .append(text(batch.getPeriodMonth())).append('|')
         .append(batch.getPriceAsOfTime()).append('|')
         .append(text(batch.getBusinessUnitType())).append('|')

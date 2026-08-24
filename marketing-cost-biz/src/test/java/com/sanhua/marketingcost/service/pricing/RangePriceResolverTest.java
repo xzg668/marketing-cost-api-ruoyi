@@ -50,7 +50,7 @@ class RangePriceResolverTest {
   @DisplayName("T23：区间价按 price_as_of_time 和数量命中有效区间")
   void monthlyRangeUsesContextPriceAsOfTimeAndQuantity() {
     PriceRangeItemMapper mapper = mock(PriceRangeItemMapper.class);
-    RangePriceResolver resolver = new RangePriceResolver(mapper);
+    RangePriceResolver resolver = RangePriceResolverTestSupport.create(mapper);
     when(mapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(range("0", "9", "5.000000"), range("10", "99", "7.500000")));
     LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 15, 9, 0);
@@ -68,8 +68,9 @@ class RangePriceResolverTest {
     ArgumentCaptor<Wrapper<PriceRangeItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(mapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment())
-        .contains("material_code", "effective_from", "effective_to")
-        .contains("ORDER BY", "effective_from", "DESC");
+        .contains("material_code", "effective_from")
+        .contains("ORDER BY", "effective_from", "created_at", "DESC")
+        .doesNotContain("effective_to");
     assertThat(paramValues(captor.getValue())).contains(LocalDate.of(2026, 5, 15));
   }
 
@@ -77,7 +78,7 @@ class RangePriceResolverTest {
   @DisplayName("MFRP-00：数量不落在任何区间时返回缺价")
   void quantityOutsideAllRangesReturnsMiss() {
     PriceRangeItemMapper mapper = mock(PriceRangeItemMapper.class);
-    RangePriceResolver resolver = new RangePriceResolver(mapper);
+    RangePriceResolver resolver = RangePriceResolverTestSupport.create(mapper);
     when(mapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(range("0", "9", "5.000000"), range("20", "99", "7.500000")));
 
@@ -97,7 +98,7 @@ class RangePriceResolverTest {
   @DisplayName("MFRP-00：无上下文时使用路由 effectiveFrom 过滤有效期")
   void routeEffectiveFromFiltersWhenContextMissing() {
     PriceRangeItemMapper mapper = mock(PriceRangeItemMapper.class);
-    RangePriceResolver resolver = new RangePriceResolver(mapper);
+    RangePriceResolver resolver = RangePriceResolverTestSupport.create(mapper);
     when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(range("0", "99", "3.140000")));
     LocalDate routeEffectiveFrom = LocalDate.of(2026, 6, 1);
 
@@ -112,8 +113,9 @@ class RangePriceResolverTest {
     ArgumentCaptor<Wrapper<PriceRangeItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(mapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment())
-        .contains("effective_from", "effective_to", ">")
-        .contains("ORDER BY", "effective_from", "DESC", "id", "DESC");
+        .contains("effective_from", "<=")
+        .contains("ORDER BY", "effective_from", "DESC", "id", "DESC")
+        .doesNotContain("effective_to");
     assertThat(paramValues(captor.getValue())).contains(routeEffectiveFrom);
   }
 
@@ -121,7 +123,7 @@ class RangePriceResolverTest {
   @DisplayName("MFRP-00：数量区间价当前含税价优先")
   void rangePriceCurrentlyPrefersInclTaxPrice() {
     PriceRangeItemMapper mapper = mock(PriceRangeItemMapper.class);
-    RangePriceResolver resolver = new RangePriceResolver(mapper);
+    RangePriceResolver resolver = RangePriceResolverTestSupport.create(mapper);
     when(mapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(range("0", "99", "12.340000", "10.920000")));
 
@@ -140,7 +142,7 @@ class RangePriceResolverTest {
   @DisplayName("MFRP-00：含税价为空时使用不含税价")
   void rangePriceFallsBackToExclTaxWhenInclTaxMissing() {
     PriceRangeItemMapper mapper = mock(PriceRangeItemMapper.class);
-    RangePriceResolver resolver = new RangePriceResolver(mapper);
+    RangePriceResolver resolver = RangePriceResolverTestSupport.create(mapper);
     when(mapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(range("0", "99", null, "10.920000")));
 
@@ -161,7 +163,8 @@ class RangePriceResolverTest {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
     OaFormMapper oaFormMapper = mock(OaFormMapper.class);
-    RangePriceResolver resolver = new RangePriceResolver(itemMapper, ruleMapper, oaFormMapper);
+    RangePriceResolver resolver =
+        RangePriceResolverTestSupport.create(itemMapper, ruleMapper, oaFormMapper);
     when(ruleMapper.selectList(any(Wrapper.class))).thenReturn(List.of(factorRule("CU", 101L)));
     OaForm form = new OaForm();
     form.setOaNo("OA-001");
@@ -184,8 +187,8 @@ class RangePriceResolverTest {
   }
 
   @Test
-  @DisplayName("RPI1-10：7月只保留有效供应商且单候选不查询供货比例")
-  void factorRangeFiltersExpiredSupplierBeforeSelection() {
+  @DisplayName("主供已过审批有效期仍沿用，并返回非阻断提醒")
+  void factorRangeCarriesForwardExpiredPrimarySupplierPrice() {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
     OaFormMapper oaFormMapper = mock(OaFormMapper.class);
@@ -199,22 +202,22 @@ class RangePriceResolverTest {
         LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
     when(itemMapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(supplierA, expiredSupplierB));
+    when(ratioService.resolve(any(), any(), any(), any(), any()))
+        .thenReturn(mainSupplier("供应商B", "SUP-B", "0.70"));
 
     PriceResolveResult result = resolver.resolve(
         "OA-001", part("201850160", "1"), route(), quoteContext("COMMERCIAL"));
 
-    assertThat(result.unitPrice()).isEqualByComparingTo("0.410000");
-    assertThat(result.resultRefId()).isEqualTo(701L);
-    assertThat(result.remark()).contains(
-        "候选供应商数量=1",
-        "主供应商代码=SUP-A",
-        "供应商匹配方式=单一供应商",
-        "是否兜底=否");
-    verifyNoInteractions(ratioService);
+    assertThat(result.unitPrice()).isEqualByComparingTo("0.390000");
+    assertThat(result.resultRefId()).isEqualTo(702L);
+    assertThat(result.carriedForward()).isTrue();
+    assertThat(result.effectiveTo()).isEqualTo(LocalDate.of(2026, 6, 30));
+    assertThat(result.warningMessage()).contains("沿用历史价", "2026-06-30");
     ArgumentCaptor<Wrapper<PriceRangeItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(itemMapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment())
-        .contains("effective_from", "effective_to", "ORDER BY", "id", "DESC");
+        .contains("effective_from", "ORDER BY", "id", "DESC")
+        .doesNotContain("effective_to <=", "effective_to >=");
     assertThat(paramValues(captor.getValue())).contains(LocalDate.of(2026, 7, 1));
   }
 
@@ -234,7 +237,7 @@ class RangePriceResolverTest {
         701L, "同名供应商", "SUP-B", "0.380000",
         LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30));
     when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(supplierA, supplierB));
-    when(ratioService.resolveAmongSuppliers(any(), any(), any(), any(), any(), any()))
+    when(ratioService.resolve(any(), any(), any(), any(), any()))
         .thenReturn(mainSupplier("同名供应商", "SUP-B", "0.7"));
 
     PriceResolveResult result = resolver.resolve(
@@ -258,10 +261,8 @@ class RangePriceResolverTest {
         "供货比例=0.7",
         "供应商匹配方式=供应商代码",
         "最终价格行ID=701",
-        "最终不含税单价=0.38",
-        "是否兜底=否");
-    verify(ratioService).resolveAmongSuppliers(
-        any(), any(), any(), any(), any(), any());
+        "最终不含税单价=0.38");
+    verify(ratioService).resolve(any(), any(), any(), any(), any());
   }
 
   @Test
@@ -277,7 +278,7 @@ class RangePriceResolverTest {
     PriceRangeItem supplierB = factorRange(
         701L, "吉林省 合信汽配有限公司", null, "0.380000", null, null);
     when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(supplierA, supplierB));
-    when(ratioService.resolveAmongSuppliers(any(), any(), any(), any(), any(), any()))
+    when(ratioService.resolve(any(), any(), any(), any(), any()))
         .thenReturn(mainSupplier("吉林省合信汽配有限公司", "SUP-B", "0.7"));
 
     PriceResolveResult result = resolver.resolve(
@@ -285,12 +286,12 @@ class RangePriceResolverTest {
 
     assertThat(result.unitPrice()).isEqualByComparingTo("0.380000");
     assertThat(result.resultRefId()).isEqualTo(701L);
-    assertThat(result.remark()).contains("供应商匹配方式=供应商名称兜底", "是否兜底=否");
+    assertThat(result.remark()).contains("供应商匹配方式=供应商名称兜底");
   }
 
   @Test
-  @DisplayName("RPI1-10：代码不同且名称相同不误匹配并按原排序兜底")
-  void factorRangeDoesNotMatchSameNameWhenCodesDiffer() {
+  @DisplayName("主供代码与所有价格不同时阻断，不按原排序降级")
+  void factorRangeBlocksWhenPrimarySupplierHasNoPrice() {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
     OaFormMapper oaFormMapper = mock(OaFormMapper.class);
@@ -300,26 +301,21 @@ class RangePriceResolverTest {
     PriceRangeItem fallback = factorRange(702L, "同名供应商", "SUP-A", "0.420000", null, null);
     PriceRangeItem other = factorRange(701L, "同名供应商", "SUP-B", "0.380000", null, null);
     when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(fallback, other));
-    when(ratioService.resolveAmongSuppliers(any(), any(), any(), any(), any(), any()))
+    when(ratioService.resolve(any(), any(), any(), any(), any()))
         .thenReturn(mainSupplier("同名供应商", "SUP-C", "0.8"));
 
     PriceResolveResult result = resolver.resolve(
         "OA-001", part("201850160", "1"), route(), quoteContext("COMMERCIAL"));
 
-    assertThat(result.unitPrice()).isEqualByComparingTo("0.420000");
-    assertThat(result.resultRefId()).isEqualTo(702L);
-    assertThat(result.remark()).contains("主供应商无价格记录，按默认价格取价");
-    assertThat(result.remark()).contains(
-        "主供应商代码=SUP-C",
-        "供货比例=0.8",
-        "最终价格行ID=702",
-        "是否兜底=是",
-        "兜底原因=主供应商无价格记录");
+    assertThat(result.unitPrice()).isNull();
+    assertThat(result.failureCode())
+        .isEqualTo(SupplierPreferredPriceSelector.PRIMARY_SUPPLIER_PRICE_MISSING);
+    assertThat(result.remark()).contains("主供应商无价格", "SUP-C");
   }
 
   @Test
-  @DisplayName("RPI1-10：未维护供货比例时按原ID倒序第一条兜底")
-  void factorRangeMissingRatioUsesOriginalOrderFallback() {
+  @DisplayName("多供应商未维护供货比例时阻断")
+  void factorRangeMissingRatioBlocks() {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
     OaFormMapper oaFormMapper = mock(OaFormMapper.class);
@@ -329,20 +325,15 @@ class RangePriceResolverTest {
     PriceRangeItem first = factorRange(702L, "供应商A", "SUP-A", "0.420000", null, null);
     PriceRangeItem second = factorRange(701L, "供应商B", "SUP-B", "0.380000", null, null);
     when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(first, second));
-    when(ratioService.resolveAmongSuppliers(any(), any(), any(), any(), any(), any()))
+    when(ratioService.resolve(any(), any(), any(), any(), any()))
         .thenReturn(SupplierSupplyRatioResolveResult.miss("未维护"));
 
     PriceResolveResult result = resolver.resolve(
         "OA-001", part("201850160", "1"), route(), quoteContext("COMMERCIAL"));
 
-    assertThat(result.unitPrice()).isEqualByComparingTo("0.420000");
-    assertThat(result.resultRefId()).isEqualTo(702L);
-    assertThat(result.remark()).contains("未维护主供应商供货比例，按默认价格取价");
-    assertThat(result.remark()).contains(
-        "候选供应商数量=2",
-        "供应商匹配方式=默认排序兜底",
-        "是否兜底=是",
-        "兜底原因=未维护主供应商供货比例");
+    assertThat(result.unitPrice()).isNull();
+    assertThat(result.failureCode())
+        .isEqualTo(SupplierPreferredPriceSelector.SUPPLIER_RATIO_MISSING);
   }
 
   @Test
@@ -393,7 +384,8 @@ class RangePriceResolverTest {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
     OaFormMapper oaFormMapper = mock(OaFormMapper.class);
-    RangePriceResolver resolver = new RangePriceResolver(itemMapper, ruleMapper, oaFormMapper);
+    RangePriceResolver resolver =
+        RangePriceResolverTestSupport.create(itemMapper, ruleMapper, oaFormMapper);
     when(ruleMapper.selectList(any(Wrapper.class))).thenReturn(List.of(factorRule("CU", 101L)));
     when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(new OaForm());
 
@@ -415,7 +407,8 @@ class RangePriceResolverTest {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
     OaFormMapper oaFormMapper = mock(OaFormMapper.class);
-    RangePriceResolver resolver = new RangePriceResolver(itemMapper, ruleMapper, oaFormMapper);
+    RangePriceResolver resolver =
+        RangePriceResolverTestSupport.create(itemMapper, ruleMapper, oaFormMapper);
     when(ruleMapper.selectList(any(Wrapper.class))).thenReturn(List.of(factorRule("CU", 102L)));
     OaForm form = new OaForm();
     form.setOaNo("OA-001");
@@ -441,7 +434,8 @@ class RangePriceResolverTest {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
     OaFormMapper oaFormMapper = mock(OaFormMapper.class);
-    RangePriceResolver resolver = new RangePriceResolver(itemMapper, ruleMapper, oaFormMapper);
+    RangePriceResolver resolver =
+        RangePriceResolverTestSupport.create(itemMapper, ruleMapper, oaFormMapper);
     when(ruleMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(range("0", "9", "5.000000")));
 
@@ -466,7 +460,8 @@ class RangePriceResolverTest {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
     OaFormMapper oaFormMapper = mock(OaFormMapper.class);
-    RangePriceResolver resolver = new RangePriceResolver(itemMapper, ruleMapper, oaFormMapper);
+    RangePriceResolver resolver =
+        RangePriceResolverTestSupport.create(itemMapper, ruleMapper, oaFormMapper);
     when(ruleMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 

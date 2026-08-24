@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.sanhua.marketingcost.entity.CostRunResult;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
 import com.sanhua.marketingcost.entity.QuoteCostPriceScenario;
@@ -54,8 +53,8 @@ class FinanceCuQuoteScenarioModelContractTest {
   }
 
   @Test
-  @DisplayName("成本版本和结果实体暴露双场景金额快照")
-  void costModelsExposeScenarioSummaryFields() {
+  @DisplayName("唯一成本版本实体暴露双场景金额快照")
+  void costVersionExposesScenarioSummaryFields() {
     QuoteCostRunVersion version = new QuoteCostRunVersion();
     version.setOaPricePrepareNo("PPR-OA-1");
     version.setFinancePricePrepareNo("PPR-FIN-1");
@@ -65,15 +64,7 @@ class FinanceCuQuoteScenarioModelContractTest {
     version.setCuMaterialAdjustment(new BigDecimal("2.50000000"));
     version.setFinalQuoteAmount(new BigDecimal("102.50000000"));
 
-    CostRunResult result = new CostRunResult();
-    result.setFinanceMaterialCost(new BigDecimal("40.00000000"));
-    result.setOaMaterialCost(new BigDecimal("42.50000000"));
-    result.setCuMaterialAdjustment(new BigDecimal("2.50000000"));
-    result.setFinalQuoteAmount(new BigDecimal("102.50000000"));
-
     assertThat(version.getFinanceBasePriceId()).isEqualTo(99L);
     assertThat(version.getFinalQuoteAmount()).isEqualByComparingTo("102.50000000");
-    assertThat(result.getFinanceMaterialCost()).isEqualByComparingTo("40.00000000");
-    assertThat(result.getFinalQuoteAmount()).isEqualByComparingTo("102.50000000");
   }
 }

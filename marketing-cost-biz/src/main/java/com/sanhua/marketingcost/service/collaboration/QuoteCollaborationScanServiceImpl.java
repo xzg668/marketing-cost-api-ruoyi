@@ -7,6 +7,7 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteCollaborationApprovedResult;
 import com.sanhua.marketingcost.entity.QuoteCollaborationProductTask;
+import com.sanhua.marketingcost.entity.QuoteCollaborationQuoteLink;
 import com.sanhua.marketingcost.enums.QuoteProductType;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
@@ -111,7 +112,14 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
   @Override
   @Transactional(readOnly = true, propagation = Propagation.NOT_SUPPORTED)
   public QuoteCollaborationScanResult scanQuoteItem(Long oaFormItemId) {
-    QuoteCollaborationScanContext context = loadContext(oaFormItemId);
+    return scanQuoteItem(oaFormItemId, null);
+  }
+
+  @Override
+  @Transactional(readOnly = true, propagation = Propagation.NOT_SUPPORTED)
+  public QuoteCollaborationScanResult scanQuoteItem(
+      Long oaFormItemId, String requestedAccountingMonth) {
+    QuoteCollaborationScanContext context = loadContext(oaFormItemId, requestedAccountingMonth);
     List<QuoteCollaborationScanStage> stages = new ArrayList<>();
 
     CurrentU9BomResult u9 = readU9(context, stages);
@@ -329,11 +337,16 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
             : u9.lineCount();
     Long approvedResultId = reusable == null ? null : reusable.getId();
     if (price.status() == CollaborationPriceScanResult.Status.GAPS) {
+      boolean onlyMissingPriceType = !price.gaps().isEmpty()
+          && price.gaps().stream().allMatch(gap ->
+              "MISSING_PRICE_TYPE".equals(gap.gapType()));
       return result(
           context,
           productForm,
           QuoteCollaborationScanStatus.COLLABORATION_REQUIRED,
-          QuoteCollaborationScanAction.CREATE_COLLABORATION,
+          onlyMissingPriceType
+              ? QuoteCollaborationScanAction.MAINTAIN_PRICE_TYPE
+              : QuoteCollaborationScanAction.CREATE_COLLABORATION,
           PrimaryScope.PRICE_ONLY,
           bomSource,
           u9.bomVersion(),
@@ -344,7 +357,9 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
           price,
           stages,
           null,
-          "BOM已准备，本次报价存在" + price.gapCount() + "项真实缺价");
+          onlyMissingPriceType
+              ? "BOM已准备，存在" + price.gapCount() + "项缺价格类型，请财务维护物料价格类型"
+              : "BOM已准备，本次报价存在" + price.gapCount() + "项真实缺价");
     }
     if (price.status() != CollaborationPriceScanResult.Status.READY) {
       return blocked(
@@ -376,7 +391,8 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
         reusable == null ? "U9 BOM和价格均已准备" : "已审核结果可复用，本次价格重新检查通过");
   }
 
-  private QuoteCollaborationScanContext loadContext(Long oaFormItemId) {
+  private QuoteCollaborationScanContext loadContext(
+      Long oaFormItemId, String requestedAccountingMonth) {
     if (oaFormItemId == null || oaFormItemId <= 0) {
       throw new IllegalArgumentException("报价产品行ID必须为正数");
     }
@@ -398,15 +414,19 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
             .last("LIMIT 1"));
     String existingCostPeriodMonth = existingPreparation == null
         ? null : trimToNull(existingPreparation.getCostPeriodMonth());
+    String requestedMonth = normalizeRequestedMonth(requestedAccountingMonth);
     String accountingMonth;
     QuoteDataOrganization organization;
     if (productCode == null) {
-      accountingMonth = contextResolver.resolveCostPeriodMonth(form);
+      accountingMonth = requestedMonth == null
+          ? contextResolver.resolveCostPeriodMonth(form) : requestedMonth;
       organization = contextResolver.resolveOrganization(form, item);
     } else {
-      QuoteBomContext bomContext = existingCostPeriodMonth == null
+      String effectiveExistingMonth = requestedMonth == null
+          ? existingCostPeriodMonth : requestedMonth;
+      QuoteBomContext bomContext = effectiveExistingMonth == null
           ? contextResolver.resolve(form, item)
-          : contextResolver.resolveWithExistingCostPeriod(form, item, existingCostPeriodMonth);
+          : contextResolver.resolveWithExistingCostPeriod(form, item, effectiveExistingMonth);
       accountingMonth = bomContext.costPeriodMonth();
       organization = bomContext.organization();
       productCode = bomContext.productCode();
@@ -431,6 +451,15 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
         organization.materialOrganizationCode(),
         LocalDate.now(clock),
         now);
+  }
+
+  private String normalizeRequestedMonth(String value) {
+    String month = trimToNull(value);
+    if (month == null) return null;
+    if (!month.matches("\\d{4}-(0[1-9]|1[0-2])")) {
+      throw new IllegalArgumentException("核算月份必须为YYYY-MM");
+    }
+    return month;
   }
 
   private CurrentU9BomResult readU9(
@@ -531,12 +560,38 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
       QuoteCollaborationScanContext context,
       CollaborationScope scope,
       PrimaryScope primaryScope) {
+    QuoteCollaborationProductTask linked = activeTaskLinkedToQuoteItem(context, scope);
+    if (linked != null) {
+      return linked;
+    }
     String temporaryProductKey = StringUtils.hasText(context.productCode())
         ? null
         : CollaborationTemporaryProductKeyFactory.fromQuoteItem(context.oaFormItemId());
     String activeLockKey = CollaborationActiveLockKeyFactory.create(
         context.accountingMonth(), context.productCode(), temporaryProductKey, scope, primaryScope);
-    return taskRepository.findActiveProductTaskByLockKey(activeLockKey, scope).orElse(null);
+    QuoteCollaborationProductTask exact =
+        taskRepository.findActiveProductTaskByLockKey(activeLockKey, scope).orElse(null);
+    if (exact != null || !StringUtils.hasText(context.productCode())) {
+      return exact;
+    }
+    return taskRepository.findProductTasksByProductAndMonth(
+            context.productCode(), context.accountingMonth(), scope).stream()
+        .filter(task -> Integer.valueOf(1).equals(task.getActiveFlag()))
+        .findFirst()
+        .orElse(null);
+  }
+
+  private QuoteCollaborationProductTask activeTaskLinkedToQuoteItem(
+      QuoteCollaborationScanContext context, CollaborationScope scope) {
+    for (QuoteCollaborationQuoteLink link :
+        taskRepository.findActiveLinksByQuoteItem(context.oaFormItemId(), scope)) {
+      QuoteCollaborationProductTask task =
+          taskRepository.findProductTaskById(link.getProductTaskId(), scope).orElse(null);
+      if (task != null && Integer.valueOf(1).equals(task.getActiveFlag())) {
+        return task;
+      }
+    }
+    return null;
   }
 
   private QuoteCollaborationScanResult activeTaskResult(

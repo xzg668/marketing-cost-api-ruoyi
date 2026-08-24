@@ -1,7 +1,6 @@
 package com.sanhua.marketingcost.service.pricing;
 
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioResolveResult;
-import com.sanhua.marketingcost.dto.SupplierSupplyRatioCandidate;
 import com.sanhua.marketingcost.service.SupplierSupplyRatioResolveService;
 import com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils;
 import java.time.LocalDate;
@@ -13,6 +12,9 @@ import org.springframework.util.StringUtils;
 
 @Component
 public class SupplierPreferredPriceSelector {
+
+  public static final String PRIMARY_SUPPLIER_PRICE_MISSING = "PRIMARY_SUPPLIER_PRICE_MISSING";
+  public static final String SUPPLIER_RATIO_MISSING = "SUPPLIER_RATIO_MISSING";
 
   private final SupplierSupplyRatioResolveService resolveService;
 
@@ -30,57 +32,56 @@ public class SupplierPreferredPriceSelector {
       Function<T, String> supplierNameGetter,
       Function<T, String> supplierCodeGetter) {
     if (candidates == null || candidates.isEmpty()) {
-      return selection(null, "", 0, null, null, "NONE", false, "");
+      return selection(null, "", 0, null, null, null, "NONE", "", "");
     }
-    T fallback = candidates.get(0);
+    T first = candidates.get(0);
     int candidateSupplierCount = distinctSupplierCount(
         candidates, supplierNameGetter, supplierCodeGetter);
     if (candidateSupplierCount == 0) {
       return selection(
-          fallback,
-          "候选价格缺少供应商身份，按历史价格排序取价",
+          first,
+          "价格源无供应商维度，按价格版本规则取价",
           0,
           null,
           null,
-          "DEFAULT_FALLBACK",
-          true,
-          "候选价格缺少供应商身份");
+          null,
+          "NO_SUPPLIER_DIMENSION",
+          "",
+          "");
     }
     if (candidateSupplierCount == 1) {
+      T onlySupplierRow = candidates.stream()
+          .filter(candidate -> StringUtils.hasText(
+              supplierKey(candidate, supplierNameGetter, supplierCodeGetter)))
+          .findFirst()
+          .orElse(first);
       return selection(
-          fallback,
-          "",
+          onlySupplierRow,
+          "单一供应商价格，直接取该供应商最新已生效价格",
           1,
-          supplierNameGetter.apply(fallback),
-          supplierCodeGetter.apply(fallback),
+          supplierNameGetter.apply(onlySupplierRow),
+          supplierCodeGetter.apply(onlySupplierRow),
+          null,
           "SINGLE_SUPPLIER",
-          false,
+          "",
           "");
     }
 
     SupplierSupplyRatioResolveResult mainSupplier =
-        resolveService.resolveAmongSuppliers(
-            businessUnitType,
-            materialCode,
-            materialName,
-            specModel,
-            pricingDate,
-            supplierCandidates(candidates, supplierNameGetter, supplierCodeGetter));
+        resolveService.resolve(
+            businessUnitType, materialCode, materialName, specModel, pricingDate);
     if (mainSupplier == null || !mainSupplier.isMatched()) {
-      mainSupplier = resolveService.resolve(
-          businessUnitType, materialCode, materialName, specModel, pricingDate);
-    }
-    if (mainSupplier == null || !mainSupplier.isMatched()) {
-      // 供应关系缺失不能阻断报价；保留原价格源排序的第一条，并把原因写入 trace。
+      String message = "物料 " + materialCode + " 存在多个供应商价格，但未维护供货比例";
       return selection(
-          fallback,
-          "未维护主供应商供货比例，按默认价格取价",
+          null,
+          message,
           candidateSupplierCount,
           null,
           null,
-          "DEFAULT_FALLBACK",
-          true,
-          "未维护主供应商供货比例");
+          null,
+          "NONE",
+          SUPPLIER_RATIO_MISSING,
+          message);
     }
 
     for (T candidate : candidates) {
@@ -93,23 +94,26 @@ public class SupplierPreferredPriceSelector {
             candidateSupplierCount,
             mainSupplier.getSupplierName(),
             mainSupplier.getSupplierCode(),
+            mainSupplier.getId(),
             matchMode,
-            false,
+            "",
             "",
             mainSupplier.getSupplyRatio());
       }
     }
 
-    // 主供有维护但价格源没有对应供应商时，也不能阻断报价；仍按原排序兜底。
+    String message = "主供应商无价格：物料=" + materialCode
+        + "，主供应商=" + displaySupplier(mainSupplier);
     return selection(
-        fallback,
-        "主供应商无价格记录，按默认价格取价",
+        null,
+        message,
         candidateSupplierCount,
         mainSupplier.getSupplierName(),
         mainSupplier.getSupplierCode(),
-        "DEFAULT_FALLBACK",
-        true,
-        "主供应商无价格记录",
+        mainSupplier.getId(),
+        "NONE",
+        PRIMARY_SUPPLIER_PRICE_MISSING,
+        message,
         mainSupplier.getSupplyRatio());
   }
 
@@ -122,17 +126,6 @@ public class SupplierPreferredPriceSelector {
         .filter(StringUtils::hasText)
         .distinct()
         .count());
-  }
-
-  private <T> List<SupplierSupplyRatioCandidate> supplierCandidates(
-      List<T> candidates,
-      Function<T, String> supplierNameGetter,
-      Function<T, String> supplierCodeGetter) {
-    return candidates.stream()
-        .map(candidate -> new SupplierSupplyRatioCandidate(
-            supplierNameGetter.apply(candidate),
-            supplierCodeGetter.apply(candidate)))
-        .toList();
   }
 
   private <T> String supplierMatchMode(
@@ -160,18 +153,20 @@ public class SupplierPreferredPriceSelector {
       int candidateSupplierCount,
       String mainSupplierName,
       String mainSupplierCode,
+      Long supplyRatioRecordId,
       String matchMode,
-      boolean fallback,
-      String fallbackReason) {
+      String failureCode,
+      String failureMessage) {
     return selection(
         row,
         traceMessage,
         candidateSupplierCount,
         mainSupplierName,
         mainSupplierCode,
+        supplyRatioRecordId,
         matchMode,
-        fallback,
-        fallbackReason,
+        failureCode,
+        failureMessage,
         null);
   }
 
@@ -181,9 +176,10 @@ public class SupplierPreferredPriceSelector {
       int candidateSupplierCount,
       String mainSupplierName,
       String mainSupplierCode,
+      Long supplyRatioRecordId,
       String matchMode,
-      boolean fallback,
-      String fallbackReason,
+      String failureCode,
+      String failureMessage,
       java.math.BigDecimal supplyRatio) {
     return new SupplierPreferredPriceSelection<>(
         row,
@@ -192,9 +188,26 @@ public class SupplierPreferredPriceSelector {
         mainSupplierName,
         mainSupplierCode,
         supplyRatio,
+        supplyRatioRecordId,
         matchMode,
-        fallback,
-        fallbackReason);
+        failureCode,
+        failureMessage);
+  }
+
+  private String displaySupplier(SupplierSupplyRatioResolveResult supplier) {
+    if (supplier == null) {
+      return "";
+    }
+    String name = StringUtils.hasText(supplier.getSupplierName())
+        ? supplier.getSupplierName().trim()
+        : "";
+    String code = StringUtils.hasText(supplier.getSupplierCode())
+        ? supplier.getSupplierCode().trim()
+        : "";
+    if (StringUtils.hasText(name) && StringUtils.hasText(code)) {
+      return name + "(" + code + ")";
+    }
+    return StringUtils.hasText(name) ? name : code;
   }
 
   private <T> String supplierKey(

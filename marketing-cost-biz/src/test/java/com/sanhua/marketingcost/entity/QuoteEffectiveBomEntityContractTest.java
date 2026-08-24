@@ -64,23 +64,6 @@ class QuoteEffectiveBomEntityContractTest {
     assertField("createdBy", Long.class);
   }
 
-  @Test
-  @DisplayName("现有三张实体补齐最终构建和月度继承字段")
-  void existingEntitiesExposeNewTraceFields() throws Exception {
-    assertField(QuoteBomMonthlySnapshot.class, "freezeStatus", String.class);
-    assertField(QuoteBomMonthlySnapshot.class, "effectiveBuildBatchId", String.class);
-    assertField(QuoteBomMonthlySnapshot.class, "effectiveVariantHash", String.class);
-    assertField(QuoteBomMonthlySnapshot.class, "frozenAt", LocalDateTime.class);
-    assertField(QuoteBomMonthlySnapshot.class, "frozenBy", Long.class);
-    assertField(QuoteBomConfirmation.class, "costingBuildBatchId", String.class);
-    assertField(
-        QuoteBomAlternativeSelection.class,
-        "inheritedMonthlySnapshotId",
-        Long.class);
-    assertThat(QuoteBomAlternativeSelection.SOURCE_INHERITED_MONTHLY)
-        .isEqualTo("INHERITED_MONTHLY");
-  }
-
   private static void assertField(String name, Class<?> type) throws Exception {
     assertField(QuoteEffectiveBomNode.class, name, type);
   }

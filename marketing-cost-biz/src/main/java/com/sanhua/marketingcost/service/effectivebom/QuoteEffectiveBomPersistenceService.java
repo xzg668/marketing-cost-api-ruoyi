@@ -1,8 +1,8 @@
 package com.sanhua.marketingcost.service.effectivebom;
 
-/** 确认阶段最终有效 BOM 持久化入口。 */
+/** 当前有效 BOM 构建的持久化入口。 */
 public interface QuoteEffectiveBomPersistenceService {
 
-  QuoteEffectiveBomPersistenceResult persistConfirmed(
+  QuoteEffectiveBomPersistenceResult persistCurrentVariant(
       QuoteEffectiveBomPersistenceRequest request);
 }

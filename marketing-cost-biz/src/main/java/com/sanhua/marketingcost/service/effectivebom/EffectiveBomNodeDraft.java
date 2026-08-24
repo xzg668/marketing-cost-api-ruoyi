@@ -14,6 +14,7 @@ public record EffectiveBomNodeDraft(
     String materialCode,
     String materialName,
     String materialSpec,
+    String priceOrgCode,
     BigDecimal qtyPerParent,
     BigDecimal qtyPerTop,
     String sourceMaterialShape,

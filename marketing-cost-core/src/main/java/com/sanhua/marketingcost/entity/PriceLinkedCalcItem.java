@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @TableName("lp_price_linked_calc_item")
@@ -46,6 +47,19 @@ public class PriceLinkedCalcItem {
 
   /** 报价联动价的统一取价时点；为空表示改造前的历史兼容结果。 */
   private LocalDateTime priceAsOfTime;
+
+  /** 本次公式计算实际使用的联动价主数据行。 */
+  private Long sourcePriceRecordId;
+  private String sourcePriceBatchNo;
+  private String supplierName;
+  private String supplierCode;
+  private BigDecimal supplyRatio;
+  private Long supplyRatioRecordId;
+  private LocalDate sourceEffectiveFrom;
+  private LocalDate sourceEffectiveTo;
+  private Integer carriedForward;
+  private String warningMessage;
+  private String failureCode;
 
   /** V26 计算 trace JSON —— 存 {normalizedExpr, variables, steps, result/error} */
   @TableField("trace_json")
@@ -127,6 +141,94 @@ public class PriceLinkedCalcItem {
 
   public void setPriceAsOfTime(LocalDateTime priceAsOfTime) {
     this.priceAsOfTime = priceAsOfTime;
+  }
+
+  public Long getSourcePriceRecordId() {
+    return sourcePriceRecordId;
+  }
+
+  public void setSourcePriceRecordId(Long sourcePriceRecordId) {
+    this.sourcePriceRecordId = sourcePriceRecordId;
+  }
+
+  public String getSourcePriceBatchNo() {
+    return sourcePriceBatchNo;
+  }
+
+  public void setSourcePriceBatchNo(String sourcePriceBatchNo) {
+    this.sourcePriceBatchNo = sourcePriceBatchNo;
+  }
+
+  public String getSupplierName() {
+    return supplierName;
+  }
+
+  public void setSupplierName(String supplierName) {
+    this.supplierName = supplierName;
+  }
+
+  public String getSupplierCode() {
+    return supplierCode;
+  }
+
+  public void setSupplierCode(String supplierCode) {
+    this.supplierCode = supplierCode;
+  }
+
+  public BigDecimal getSupplyRatio() {
+    return supplyRatio;
+  }
+
+  public void setSupplyRatio(BigDecimal supplyRatio) {
+    this.supplyRatio = supplyRatio;
+  }
+
+  public Long getSupplyRatioRecordId() {
+    return supplyRatioRecordId;
+  }
+
+  public void setSupplyRatioRecordId(Long supplyRatioRecordId) {
+    this.supplyRatioRecordId = supplyRatioRecordId;
+  }
+
+  public LocalDate getSourceEffectiveFrom() {
+    return sourceEffectiveFrom;
+  }
+
+  public void setSourceEffectiveFrom(LocalDate sourceEffectiveFrom) {
+    this.sourceEffectiveFrom = sourceEffectiveFrom;
+  }
+
+  public LocalDate getSourceEffectiveTo() {
+    return sourceEffectiveTo;
+  }
+
+  public void setSourceEffectiveTo(LocalDate sourceEffectiveTo) {
+    this.sourceEffectiveTo = sourceEffectiveTo;
+  }
+
+  public Integer getCarriedForward() {
+    return carriedForward;
+  }
+
+  public void setCarriedForward(Integer carriedForward) {
+    this.carriedForward = carriedForward;
+  }
+
+  public String getWarningMessage() {
+    return warningMessage;
+  }
+
+  public void setWarningMessage(String warningMessage) {
+    this.warningMessage = warningMessage;
+  }
+
+  public String getFailureCode() {
+    return failureCode;
+  }
+
+  public void setFailureCode(String failureCode) {
+    this.failureCode = failureCode;
   }
 
   public Long getId() {

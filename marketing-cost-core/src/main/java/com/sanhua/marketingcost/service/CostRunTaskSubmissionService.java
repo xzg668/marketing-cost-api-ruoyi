@@ -11,5 +11,8 @@ public interface CostRunTaskSubmissionService {
 
   CostRunTaskSubmissionResult submitQuote(String oaNo, List<Long> oaFormItemIds);
 
+  CostRunTaskSubmissionResult submitQuote(
+      String oaNo, List<Long> oaFormItemIds, String pricingMonth, String submittedBy);
+
   CostRunTaskSubmissionResult submitMonthlyReprice(CostRunMonthlyRepriceSubmitRequest request);
 }

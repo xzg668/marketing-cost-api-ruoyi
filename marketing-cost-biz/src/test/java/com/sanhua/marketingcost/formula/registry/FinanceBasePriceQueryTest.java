@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 /**
- * {@link FinanceBasePriceQuery} 单测 —— 覆盖四键组装与严格校验的 8 个场景。
+ * {@link FinanceBasePriceQuery} 单测 —— 覆盖严格身份和历史正式价沿用规则。
  *
  * <p>重点验证：
  * <ol>
@@ -68,7 +68,9 @@ class FinanceBasePriceQueryTest {
     ArgumentCaptor<Wrapper<FinanceBasePrice>> captor = wrapperCaptor();
     verify(mapper).selectOne(captor.capture());
     String sql = ((AbstractWrapper<?, ?, ?>) captor.getValue()).getSqlSegment();
-    assertThat(sql).contains("factor_code").doesNotContain("short_name");
+    assertThat(sql)
+        .contains("factor_code", "price_month <=", "ORDER BY price_month DESC")
+        .doesNotContain("short_name");
   }
 
   @Test
@@ -130,7 +132,7 @@ class FinanceBasePriceQueryTest {
   }
 
   @Test
-  @DisplayName("pricingMonth 缺失 → empty，不查库（严格模式不回退）")
+  @DisplayName("pricingMonth 缺失 → empty，不查库（无法确定沿用上限）")
   void pricingMonthRequired() {
     Optional<FinanceBasePrice> hit = query.queryLatestBasePrice(
         "Cu", null, "平均价", true, null, "COMMERCIAL", "Cu");

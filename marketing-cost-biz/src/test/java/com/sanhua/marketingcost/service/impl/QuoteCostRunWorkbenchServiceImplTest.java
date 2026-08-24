@@ -26,29 +26,27 @@ import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunConfirmRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunTrialRequest;
-import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmationSummaryResponse;
 import com.sanhua.marketingcost.entity.CostRunCostItem;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
-import com.sanhua.marketingcost.entity.CostRunResult;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
+import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
 import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
 import com.sanhua.marketingcost.mapper.CostRunCostItemMapper;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
-import com.sanhua.marketingcost.mapper.CostRunResultMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
-import com.sanhua.marketingcost.mapper.QuoteCostingWorkbenchSummaryMapper;
 import com.sanhua.marketingcost.mapper.QuoteCuMaterialDiffItemMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
+import com.sanhua.marketingcost.service.CostRunResultService;
 import com.sanhua.marketingcost.service.PricePrepareService;
 import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
+import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
@@ -58,6 +56,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.junit.jupiter.api.AfterEach;
@@ -77,16 +76,16 @@ class QuoteCostRunWorkbenchServiceImplTest {
   private OaFormMapper oaFormMapper;
   private OaFormItemMapper oaFormItemMapper;
   private QuoteCostRunVersionMapper versionMapper;
-  private CostRunResultMapper resultMapper;
+  private CostRunResultService resultService;
   private CostRunPartItemMapper partItemMapper;
   private CostRunCostItemMapper costItemMapper;
   private QuoteCuMaterialDiffItemMapper diffItemMapper;
-  private QuoteCostingWorkbenchSummaryMapper summaryMapper;
   private QuoteProductBomCostingBuildService costingBuildService;
   private PricePrepareService pricePrepareService;
   private PricePrepareReadinessService readinessService;
   private QuoteCostRunVersionNoGenerator versionNoGenerator;
   private QuoteCuAdjustmentCalcService cuAdjustmentCalcService;
+  private QuoteCostingWorkspaceService workspaceService;
   private QuoteCostRunWorkbenchServiceImpl service;
 
   @BeforeAll
@@ -96,7 +95,6 @@ class QuoteCostRunWorkbenchServiceImplTest {
     TableInfoHelper.initTableInfo(assistant, OaForm.class);
     TableInfoHelper.initTableInfo(assistant, OaFormItem.class);
     TableInfoHelper.initTableInfo(assistant, QuoteCostRunVersion.class);
-    TableInfoHelper.initTableInfo(assistant, CostRunResult.class);
     TableInfoHelper.initTableInfo(assistant, CostRunPartItem.class);
     TableInfoHelper.initTableInfo(assistant, CostRunCostItem.class);
     TableInfoHelper.initTableInfo(assistant, QuoteCuMaterialDiffItem.class);
@@ -108,24 +106,29 @@ class QuoteCostRunWorkbenchServiceImplTest {
     oaFormMapper = mock(OaFormMapper.class);
     oaFormItemMapper = mock(OaFormItemMapper.class);
     versionMapper = mock(QuoteCostRunVersionMapper.class);
-    resultMapper = mock(CostRunResultMapper.class);
+    resultService = mock(CostRunResultService.class);
     partItemMapper = mock(CostRunPartItemMapper.class);
     costItemMapper = mock(CostRunCostItemMapper.class);
     diffItemMapper = mock(QuoteCuMaterialDiffItemMapper.class);
-    summaryMapper = mock(QuoteCostingWorkbenchSummaryMapper.class);
     costingBuildService = mock(QuoteProductBomCostingBuildService.class);
     pricePrepareService = mock(PricePrepareService.class);
     readinessService = mock(PricePrepareReadinessService.class);
     versionNoGenerator = mock(QuoteCostRunVersionNoGenerator.class);
     cuAdjustmentCalcService = mock(QuoteCuAdjustmentCalcService.class);
+    workspaceService = mock(QuoteCostingWorkspaceService.class);
     when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(form());
     when(oaFormItemMapper.selectById(101L)).thenReturn(item(101L, "TOP-A"));
+    when(oaFormItemMapper.selectOne(any(Wrapper.class))).thenReturn(item(101L, "TOP-A"));
+    when(oaFormItemMapper.selectForCostCompletion(anyLong(), anyLong(), anyString()))
+        .thenReturn(item(101L, "TOP-A"));
+    QuoteCostingWorkspace workspace = workspace();
+    when(workspaceService.find(101L, CURRENT_PERIOD)).thenReturn(Optional.of(workspace));
+    when(workspaceService.lockOrCreate(anyString(), anyLong(), anyString(), anyString(), anyString()))
+        .thenReturn(workspace);
+    when(workspaceService.update(any(QuoteCostingWorkspace.class), any(Integer.class)))
+        .thenAnswer(invocation -> invocation.getArgument(0));
     when(readinessService.check(anyString(), anyLong(), anyString(), anyString()))
         .thenReturn(PricePrepareReadinessResult.ready("PPR-1", CURRENT_PERIOD, "SUCCESS"));
-    when(readinessService.check(anyString(), anyLong(), anyString(), anyString(), anyString()))
-        .thenReturn(PricePrepareReadinessResult.ready("PPR-1", CURRENT_PERIOD, "SUCCESS"));
-    when(summaryMapper.selectLatestPriceTypeConfirmation("OA-001", 101L, "TOP-A", CURRENT_PERIOD))
-        .thenReturn(confirmedPriceType());
     when(costingBuildService.buildByOaFormItem(101L, CURRENT_PERIOD))
         .thenReturn(
             new QuoteBomCostingBuildResponse(
@@ -156,15 +159,15 @@ class QuoteCostRunWorkbenchServiceImplTest {
             oaFormMapper,
             oaFormItemMapper,
             versionMapper,
-            resultMapper,
+            resultService,
             partItemMapper,
             costItemMapper,
             diffItemMapper,
-            summaryMapper,
             readinessService,
             versionNoGenerator,
             cuAdjustmentCalcService,
-            mock(com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate.class));
+            mock(com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate.class),
+            workspaceService);
   }
 
   @AfterEach
@@ -173,55 +176,9 @@ class QuoteCostRunWorkbenchServiceImplTest {
   }
 
   @Test
-  @DisplayName("价格准备阻断时试算失败")
-  void trialFailsWhenPricePrepareBlocks() {
-    when(readinessService.check("OA-001", 101L, "TOP-A", CURRENT_PERIOD, "PTC-1"))
-        .thenReturn(
-            PricePrepareReadinessResult.notReady(
-                "PARTIAL",
-                false,
-                true,
-                "价格准备存在缺口",
-                "PPR-1",
-                CURRENT_PERIOD,
-                "PARTIAL",
-                1,
-                List.of("MAT-1 缺价")));
-
-    assertThatThrownBy(() -> service.trial("OA-001", 101L, new QuoteCostRunTrialRequest()))
-        .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("价格准备存在缺口");
-  }
-
-  @Test
-  @DisplayName("价格准备有可继续缺口时试算继续")
-  void trialContinuesWhenPricePrepareAllowsContinue() {
-    when(readinessService.check("OA-001", 101L, "TOP-A", CURRENT_PERIOD, "PTC-1"))
-        .thenReturn(
-            PricePrepareReadinessResult.notReady(
-                "PARTIAL",
-                true,
-                false,
-                "价格准备未完成，实时成本将继续，结果可能缺价",
-                "PPR-1",
-                CURRENT_PERIOD,
-                "PARTIAL",
-                1,
-                List.of("MAT-1 缺价")));
-    QuoteCostRunVersion version = version(88L, "TRIAL-1", "TRIAL", "TOP-A");
-    version.setPricePrepareNo("PPR-1");
-    stubCalculation(version, "123.450000");
-
-    var response = service.trial("OA-001", 101L, new QuoteCostRunTrialRequest());
-
-    assertThat(response.getCurrentDisplayVersion().getCostRunNo()).isEqualTo("TRIAL-1");
-    verify(cuAdjustmentCalcService).calculate(any(QuoteCuAdjustmentCalcRequest.class));
-  }
-
-  @Test
-  @DisplayName("价格准备允许继续时查询页仍允许发起核算")
-  void getCostRunAllowsStartTrialWhenPricePrepareAllowsContinue() {
-    when(readinessService.check("OA-001", 101L, "TOP-A", CURRENT_PERIOD, "PTC-1"))
+  @DisplayName("查询页不再接受旧兼容的带缺口继续标记")
+  void getCostRunBlocksLegacyAllowContinueFlag() {
+    when(readinessService.check("OA-001", 101L, "TOP-A", CURRENT_PERIOD))
         .thenReturn(
             PricePrepareReadinessResult.notReady(
                 "PARTIAL",
@@ -236,148 +193,62 @@ class QuoteCostRunWorkbenchServiceImplTest {
 
     var response = service.getCostRun("OA-001", 101L, CURRENT_PERIOD);
 
-    assertThat(response.isCanStartTrial()).isTrue();
-    assertThat(response.getBlockingReasons()).isEmpty();
+    assertThat(response.isCanStartTrial()).isFalse();
+    assertThat(response.getBlockingReasons())
+        .containsExactly("价格准备未完成，实时成本将继续，结果可能缺价");
   }
 
   @Test
-  @DisplayName("试算成功返回 total_cost 并写入版本上下文")
-  void trialReturnsTotalCost() {
-    QuoteCostRunVersion version = version(88L, "TRIAL-1", "TRIAL", "TOP-A");
-    LocalDateTime trialStartedAt = LocalDateTime.of(2026, 6, 16, 16, 41, 50);
-    version.setTrialStartedAt(trialStartedAt);
-    version.setPricePrepareNo("PPR-1");
+  @DisplayName("统一流水线成本核算在同一事务内自动形成 SUCCESS")
+  void runToSuccessCompletesAutomatically() {
+    QuoteCostRunVersion version = version(88L, "RUNNING-1", "RUNNING", "TOP-A");
     stubCalculation(version, "123.450000");
+    when(versionNoGenerator.nextVersionNo(101L, "TOP-A")).thenReturn("COST-AUTO-V1");
+    when(versionMapper.update(any(QuoteCostRunVersion.class), any(Wrapper.class))).thenReturn(1);
+    when(versionMapper.selectById(88L)).thenReturn(version);
+    when(versionMapper.selectList(any(Wrapper.class))).thenReturn(List.of(version));
+    when(partItemMapper.selectCount(any(Wrapper.class))).thenReturn(1L);
+    when(costItemMapper.selectCount(any(Wrapper.class))).thenReturn(1L);
+    when(oaFormItemMapper.countRunnableItems(10L)).thenReturn(1L);
+    when(oaFormItemMapper.countCalculatedRunnableItems(10L)).thenReturn(1L);
 
-    var response = service.trial("OA-001", 101L, new QuoteCostRunTrialRequest());
+    var response =
+        service.runToSuccess("OA-001", 101L, new QuoteCostRunTrialRequest(), "pipeline-user");
 
-    assertThat(response.getCurrentDisplayVersion().getCostRunNo()).isEqualTo("TRIAL-1");
-    assertThat(response.getResultHeader().getTotalCost()).isEqualByComparingTo("123.450000");
-    assertThat(response.getResultHeader().getFinalQuoteAmount()).isEqualByComparingTo("125.450000");
-    assertThat(response.isCanConfirm()).isTrue();
+    assertThat(response.getCurrentDisplayVersion().getStatus()).isEqualTo("SUCCESS");
+    assertThat(response.getCurrentDisplayVersion().getVersionNo()).isEqualTo("COST-AUTO-V1");
+    assertThat(response.getVersions()).singleElement().satisfies(row -> {
+      assertThat(row.getDisplayStatus()).isEqualTo("当前成功");
+      assertThat(row.isCurrentConfirmed()).isTrue();
+      assertThat(row.isStale()).isFalse();
+    });
     ArgumentCaptor<QuoteCuAdjustmentCalcRequest> requestCaptor =
         ArgumentCaptor.forClass(QuoteCuAdjustmentCalcRequest.class);
     verify(cuAdjustmentCalcService).calculate(requestCaptor.capture());
-    assertThat(requestCaptor.getValue().form()).isNotNull();
-    assertThat(requestCaptor.getValue().item().getId()).isEqualTo(101L);
-    assertThat(requestCaptor.getValue().oaPricePrepareNo()).isEqualTo("PPR-1");
-    verify(costingBuildService, never()).buildByOaFormItem(anyLong(), anyString());
-    verify(pricePrepareService, never()).generate(any());
-  }
-
-  @Test
-  @DisplayName("试算直接复用当前最终价格快照，拒绝页面旧批次")
-  void trialRejectsStaleRequestedBatchWithoutRebuildingPrices() {
-    when(readinessService.check("OA-001", 101L, "TOP-A", CURRENT_PERIOD, "PTC-1"))
-        .thenReturn(PricePrepareReadinessResult.ready("PPR-CURRENT", CURRENT_PERIOD, "SUCCESS"));
-    QuoteCostRunTrialRequest request = new QuoteCostRunTrialRequest();
-    request.setPricePrepareNo("PPR-STALE-FROM-PAGE");
-
-    assertThatThrownBy(() -> service.trial("OA-001", 101L, request))
-        .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("最终价格版本已更新");
-
-    verify(cuAdjustmentCalcService, never()).calculate(any());
-    verify(costingBuildService, never()).buildByOaFormItem(anyLong(), anyString());
-    verify(pricePrepareService, never()).generate(any());
-  }
-
-  @Test
-  @DisplayName("重新试算成功后旧未确认版本转历史，结果和明细不删除")
-  void trialVoidsOlderUnconfirmedTrialsWithoutDeletingVersionData() {
-    QuoteCostRunVersion version = version(88L, "TRIAL-NEW", "TRIAL", "TOP-A");
-    version.setPricePrepareNo("PPR-1");
-    QuoteCostRunVersion oldTrial = version(77L, "TRIAL-OLD", "TRIAL", "TOP-A");
-    oldTrial.setTrialFinishedAt(LocalDateTime.of(2026, 6, 18, 9, 0));
-    QuoteCostRunVersion oldVoided = version(77L, "TRIAL-OLD", "VOIDED", "TOP-A");
-    oldVoided.setTrialFinishedAt(oldTrial.getTrialFinishedAt());
-    when(versionMapper.selectList(any(Wrapper.class)))
-        .thenReturn(List.of(oldTrial), List.of(version, oldVoided));
-    stubCalculation(version, "123.450000");
-
-    var response = service.trial("OA-001", 101L, new QuoteCostRunTrialRequest());
-
-    assertThat(response.getVersions()).extracting("costRunNo")
-        .containsExactly("TRIAL-NEW", "TRIAL-OLD");
-    verify(versionMapper).update(any(QuoteCostRunVersion.class), any(Wrapper.class));
-    verify(resultMapper).update(any(CostRunResult.class), any(Wrapper.class));
-    verify(versionMapper, never()).delete(any(Wrapper.class));
-    verify(resultMapper, never()).delete(any(Wrapper.class));
-    verify(partItemMapper, never()).delete(any(Wrapper.class));
-    verify(costItemMapper, never()).delete(any(Wrapper.class));
-  }
-
-  @Test
-  @DisplayName("确认非当前产品行 costRunNo 失败")
-  void confirmRejectsOtherItemCostRunNo() {
-    when(versionMapper.selectOne(any(Wrapper.class)))
-        .thenReturn(version(88L, "TRIAL-OTHER", "TRIAL", "TOP-B"));
-
-    assertThatThrownBy(
-            () -> service.confirm("OA-001", 101L, "TRIAL-OTHER", new QuoteCostRunConfirmRequest()))
-        .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("不属于当前产品行");
-  }
-
-  @Test
-  @DisplayName("重复确认非 TRIAL 版本时明确失败")
-  void confirmRejectsDuplicateConfirm() {
-    when(versionMapper.selectOne(any(Wrapper.class)))
-        .thenReturn(version(88L, "TRIAL-1", "CONFIRMED", "TOP-A"));
-
-    assertThatThrownBy(
-            () -> service.confirm("OA-001", 101L, "TRIAL-1", new QuoteCostRunConfirmRequest()))
-        .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("不能重复确认");
-  }
-
-  @Test
-  @DisplayName("新版本确认后旧 CONFIRMED 变 VOIDED 并回写产品行和表头核算状态")
-  void confirmVoidsOldConfirmedVersion() {
-    when(versionMapper.selectOne(any(Wrapper.class)))
-        .thenReturn(version(88L, "TRIAL-1", "TRIAL", "TOP-A"));
-    when(versionMapper.update(any(QuoteCostRunVersion.class), any(Wrapper.class)))
-        .thenReturn(0, 1);
-    when(versionNoGenerator.nextVersionNo(101L, "TOP-A")).thenReturn("COST-20260609-0001-V1");
-    when(oaFormItemMapper.countRunnableItems(10L)).thenReturn(1L);
-    when(oaFormItemMapper.countCalculatedRunnableItems(10L)).thenReturn(1L);
-    QuoteCostRunConfirmRequest request = new QuoteCostRunConfirmRequest();
-    request.setConfirmedBy("alice");
-
-    var response = service.confirm("OA-001", 101L, "TRIAL-1", request);
-
-    assertThat(response.getStatus()).isEqualTo("CONFIRMED");
-    assertThat(response.getVersionNo()).isEqualTo("COST-20260609-0001-V1");
-    ArgumentCaptor<QuoteCostRunVersion> updateCaptor =
-        ArgumentCaptor.forClass(QuoteCostRunVersion.class);
-    verify(versionMapper, times(2)).update(updateCaptor.capture(), any(Wrapper.class));
-    assertThat(updateCaptor.getAllValues())
-        .extracting(QuoteCostRunVersion::getStatus)
-        .containsExactly("VOIDED", "CONFIRMED");
+    assertThat(requestCaptor.getValue().automaticCompletion()).isTrue();
     verify(oaFormItemMapper).update(eq(null), any(Wrapper.class));
-    verify(oaFormMapper).update(eq(null), any(Wrapper.class));
+    verify(workspaceService).update(any(QuoteCostingWorkspace.class), any(Integer.class));
   }
 
   @Test
-  @DisplayName("确认过程中试算已被配置变更标记失效时拒绝确认")
-  void confirmRejectsTrialThatBecomesStaleConcurrently() {
-    when(versionMapper.selectOne(any(Wrapper.class)))
-        .thenReturn(version(88L, "TRIAL-RACE", "TRIAL", "TOP-A"));
-    when(versionMapper.update(any(QuoteCostRunVersion.class), any(Wrapper.class)))
-        .thenReturn(0, 0);
-    when(versionNoGenerator.nextVersionNo(101L, "TOP-A"))
-        .thenReturn("COST-20260609-0001-V1");
+  @DisplayName("统一流水线成本异常时不切换旧成功版本或工作区指针")
+  void runToSuccessKeepsCurrentVersionWhenCalculationFails() {
+    OaFormItem currentItem = item(101L, "TOP-A");
+    currentItem.setConfirmedCostVersionId(77L);
+    when(oaFormItemMapper.selectById(101L)).thenReturn(currentItem);
+    when(cuAdjustmentCalcService.calculate(any()))
+        .thenThrow(new IllegalStateException("cost engine failed"));
 
     assertThatThrownBy(
             () ->
-                service.confirm(
-                    "OA-001", 101L, "TRIAL-RACE", new QuoteCostRunConfirmRequest()))
-        .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("已失效或状态已变化");
+                service.runToSuccess(
+                    "OA-001", 101L, new QuoteCostRunTrialRequest(), "pipeline-user"))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("cost engine failed");
 
-    verify(versionMapper, times(2)).update(any(QuoteCostRunVersion.class), any(Wrapper.class));
     verify(oaFormItemMapper, never()).update(eq(null), any(Wrapper.class));
     verify(oaFormMapper, never()).update(eq(null), any(Wrapper.class));
+    verify(workspaceService, never()).update(any(QuoteCostingWorkspace.class), any(Integer.class));
   }
 
   @Test
@@ -390,7 +261,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     confirmed.setTotalCost(new BigDecimal("123.45"));
     when(versionMapper.selectList(any(Wrapper.class))).thenReturn(List.of(confirmed));
     when(versionMapper.selectOne(any(Wrapper.class))).thenReturn(null, confirmed);
-    when(resultMapper.selectOne(any(Wrapper.class))).thenReturn(result("123.45"));
+    when(resultService.getResult(88L)).thenReturn(result("123.45"));
     CostRunPartItem part = new CostRunPartItem();
     part.setPartCode("PART-1");
     part.setAmount(BigDecimal.TEN);
@@ -415,7 +286,6 @@ class QuoteCostRunWorkbenchServiceImplTest {
     assertThat(response.getPartItems()).hasSize(1);
     assertThat(response.getCostItems()).hasSize(1);
     assertThat(response.isCanStartTrial()).isTrue();
-    assertThat(response.isCanConfirm()).isFalse();
   }
 
   @Test
@@ -447,7 +317,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     when(versionMapper.selectOne(any(Wrapper.class))).thenReturn(trial, current);
     when(versionMapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(oldTrial, history, current, trial));
-    when(resultMapper.selectOne(any(Wrapper.class))).thenReturn(result("138.00"));
+    when(resultService.getResult(77L)).thenReturn(result("138.00"));
     when(partItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(costItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
@@ -455,20 +325,17 @@ class QuoteCostRunWorkbenchServiceImplTest {
 
     assertThat(response.getLatestTrial().getId()).isEqualTo(77L);
     assertThat(response.getCurrentDisplayVersion().getId()).isEqualTo(77L);
-    assertThat(response.isCanConfirm()).isTrue();
     assertThat(response.getVersions())
         .extracting("id")
         .containsExactly(77L, 99L, 88L);
-    assertThat(response.getVersions().get(0).getDisplayStatus()).isEqualTo("待确认");
-    assertThat(response.getVersions().get(0).isCanConfirm()).isTrue();
-    assertThat(response.getVersions().get(1).getDisplayStatus()).isEqualTo("当前已确认");
+    assertThat(response.getVersions().get(0).getDisplayStatus()).isEqualTo("历史试算");
+    assertThat(response.getVersions().get(1).getDisplayStatus()).isEqualTo("当前成功");
     assertThat(response.getVersions().get(1).isCurrentConfirmed()).isTrue();
     assertThat(response.getVersions().get(2).getDisplayStatus()).isEqualTo("历史版本");
     assertThat(response.getVersions().get(2).isStale()).isTrue();
     assertThat(response.getVersions().get(2).isCanViewSheet()).isTrue();
     assertThat(response.getVersions().get(2).isCanViewTrace()).isTrue();
     verify(versionMapper, never()).update(any(QuoteCostRunVersion.class), any(Wrapper.class));
-    verify(resultMapper, never()).update(any(CostRunResult.class), any(Wrapper.class));
     verify(versionMapper, never()).delete(any(Wrapper.class));
   }
 
@@ -494,7 +361,6 @@ class QuoteCostRunWorkbenchServiceImplTest {
     assertThat(response.getVersions()).extracting("id").containsExactly(77L);
     assertThat(response.getPartItems()).isEmpty();
     assertThat(response.getCostItems()).isEmpty();
-    assertThat(response.isCanConfirm()).isTrue();
   }
 
   @Test
@@ -674,18 +540,6 @@ class QuoteCostRunWorkbenchServiceImplTest {
     return form;
   }
 
-  private static QuotePriceTypeConfirmationSummaryResponse confirmedPriceType() {
-    QuotePriceTypeConfirmationSummaryResponse response =
-        new QuotePriceTypeConfirmationSummaryResponse();
-    response.setConfirmNo("PTC-1");
-    response.setOaNo("OA-001");
-    response.setOaFormItemId(101L);
-    response.setProductCode("TOP-A");
-    response.setPeriodMonth(CURRENT_PERIOD);
-    response.setStatus("CONFIRMED");
-    return response;
-  }
-
   private static OaFormItem item(Long id, String materialNo) {
     OaFormItem item = new OaFormItem();
     item.setId(id);
@@ -694,6 +548,22 @@ class QuoteCostRunWorkbenchServiceImplTest {
     item.setPackageMethod("BOX");
     item.setBusinessUnitType("COMMERCIAL");
     return item;
+  }
+
+  private static QuoteCostingWorkspace workspace() {
+    QuoteCostingWorkspace workspace = new QuoteCostingWorkspace();
+    workspace.setId(501L);
+    workspace.setOaNo("OA-001");
+    workspace.setOaFormItemId(101L);
+    workspace.setProductCode("TOP-A");
+    workspace.setPeriodMonth(CURRENT_PERIOD);
+    workspace.setBusinessUnitType("COMMERCIAL");
+    workspace.setWorkspaceStatus("PRICE_READY");
+    workspace.setCurrentStep("COST_RUN");
+    workspace.setCurrentPrepareNo("PPR-1");
+    workspace.setInputFingerprint("INPUT-FINGERPRINT");
+    workspace.setLockVersion(0);
+    return workspace;
   }
 
   private static QuoteCostRunVersion version(Long id, String costRunNo, String status, String productCode) {
@@ -705,6 +575,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     version.setProductCode(productCode);
     version.setPricingMonth(CURRENT_PERIOD);
     version.setResultPeriod(CURRENT_PERIOD);
+    version.setOaPricePrepareNo("PPR-1");
     version.setStatus(status);
     return version;
   }
@@ -743,8 +614,8 @@ class QuoteCostRunWorkbenchServiceImplTest {
     SecurityContextHolder.getContext().setAuthentication(authentication);
   }
 
-  private static CostRunResult result(String totalCost) {
-    CostRunResult result = new CostRunResult();
+  private static CostRunResultDto result(String totalCost) {
+    CostRunResultDto result = new CostRunResultDto();
     result.setOaNo("OA-001");
     result.setProductCode("TOP-A");
     result.setPeriod(CURRENT_PERIOD);

@@ -10,33 +10,32 @@ import com.sanhua.marketingcost.dto.CostRunResultDto;
 import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest;
 import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunConfirmRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunTrialRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunWorkbenchResponse.CostRunVersionItemResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunWorkbenchResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCuMaterialDifferenceResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmationSummaryResponse;
 import com.sanhua.marketingcost.entity.CostRunCostItem;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
-import com.sanhua.marketingcost.entity.CostRunResult;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
+import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
+import com.sanhua.marketingcost.enums.QuoteCostRunStatus;
 import com.sanhua.marketingcost.mapper.CostRunCostItemMapper;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
-import com.sanhua.marketingcost.mapper.CostRunResultMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
-import com.sanhua.marketingcost.mapper.QuoteCostingWorkbenchSummaryMapper;
 import com.sanhua.marketingcost.mapper.QuoteCuMaterialDiffItemMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
+import com.sanhua.marketingcost.service.CostRunResultService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
 import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
 import com.sanhua.marketingcost.service.QuoteCostRunWorkbenchService;
+import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
@@ -47,6 +46,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import org.apache.poi.ss.usermodel.CellStyle;
 import org.apache.poi.ss.usermodel.Font;
 import org.apache.poi.ss.usermodel.Row;
@@ -61,8 +61,10 @@ import org.springframework.util.StringUtils;
 public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchService {
 
   private static final String STATUS_TRIAL = "TRIAL";
+  private static final String STATUS_RUNNING = "RUNNING";
+  private static final String STATUS_SUCCESS = "SUCCESS";
+  private static final String STATUS_HISTORY = "HISTORY";
   private static final String STATUS_CONFIRMED = "CONFIRMED";
-  private static final String STATUS_VOIDED = "VOIDED";
   private static final BigDecimal KG_PER_TON = new BigDecimal("1000");
   private static final int DEFAULT_PAGE_SIZE = 20;
   private static final int MAX_PAGE_SIZE = 200;
@@ -70,41 +72,41 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
   private final QuoteCostRunVersionMapper versionMapper;
-  private final CostRunResultMapper resultMapper;
+  private final CostRunResultService costRunResultService;
   private final CostRunPartItemMapper partItemMapper;
   private final CostRunCostItemMapper costItemMapper;
   private final QuoteCuMaterialDiffItemMapper diffItemMapper;
-  private final QuoteCostingWorkbenchSummaryMapper summaryMapper;
   private final PricePrepareReadinessService pricePrepareReadinessService;
   private final QuoteCostRunVersionNoGenerator versionNoGenerator;
   private final QuoteCuAdjustmentCalcService cuAdjustmentCalcService;
   private final CollaborationCostingGate collaborationCostingGate;
+  private final QuoteCostingWorkspaceService workspaceService;
 
   public QuoteCostRunWorkbenchServiceImpl(
       OaFormMapper oaFormMapper,
       OaFormItemMapper oaFormItemMapper,
       QuoteCostRunVersionMapper versionMapper,
-      CostRunResultMapper resultMapper,
+      CostRunResultService costRunResultService,
       CostRunPartItemMapper partItemMapper,
       CostRunCostItemMapper costItemMapper,
       QuoteCuMaterialDiffItemMapper diffItemMapper,
-      QuoteCostingWorkbenchSummaryMapper summaryMapper,
       PricePrepareReadinessService pricePrepareReadinessService,
       QuoteCostRunVersionNoGenerator versionNoGenerator,
       QuoteCuAdjustmentCalcService cuAdjustmentCalcService,
-      CollaborationCostingGate collaborationCostingGate) {
+      CollaborationCostingGate collaborationCostingGate,
+      QuoteCostingWorkspaceService workspaceService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.versionMapper = versionMapper;
-    this.resultMapper = resultMapper;
+    this.costRunResultService = costRunResultService;
     this.partItemMapper = partItemMapper;
     this.costItemMapper = costItemMapper;
     this.diffItemMapper = diffItemMapper;
-    this.summaryMapper = summaryMapper;
     this.pricePrepareReadinessService = pricePrepareReadinessService;
     this.versionNoGenerator = versionNoGenerator;
     this.cuAdjustmentCalcService = cuAdjustmentCalcService;
     this.collaborationCostingGate = collaborationCostingGate;
+    this.workspaceService = workspaceService;
   }
 
   @Override
@@ -121,8 +123,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
       return getHistoricalCostRun(oaNo, oaFormItemId, versionId);
     }
     Scope scope = requireScope(oaNo, oaFormItemId, periodMonth);
-    QuoteCostRunSummaryResponse latestTrial = latestVersion(scope, STATUS_TRIAL);
-    QuoteCostRunSummaryResponse latestConfirmed = latestVersion(scope, STATUS_CONFIRMED);
+    QuoteCostRunSummaryResponse latestTrial = latestInProgressVersion(scope);
+    QuoteCostRunSummaryResponse latestConfirmed = latestSuccessfulVersion(scope);
     QuoteCostRunWorkbenchResponse response = baseResponse(scope, latestTrial, latestConfirmed);
     QuoteCostRunSummaryResponse displayVersion = latestTrial != null ? latestTrial : latestConfirmed;
     response.setCurrentDisplayVersion(displayVersion);
@@ -147,12 +149,11 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
             accessScope.productCode(),
             pricingMonth,
             accessScope.businessUnitType());
-    QuoteCostRunSummaryResponse latestTrial = latestVersion(scope, STATUS_TRIAL);
-    QuoteCostRunSummaryResponse latestConfirmed = latestVersion(scope, STATUS_CONFIRMED);
+    QuoteCostRunSummaryResponse latestTrial = latestInProgressVersion(scope);
+    QuoteCostRunSummaryResponse latestConfirmed = latestSuccessfulVersion(scope);
     QuoteCostRunWorkbenchResponse response = baseResponse(scope, latestTrial, latestConfirmed);
     response.setCurrentDisplayVersion(summary(selected, selected.getTotalCost()));
     fillResultRows(response, selected.getId());
-    response.setCanConfirm(STATUS_TRIAL.equals(selected.getStatus()));
     return response;
   }
 
@@ -196,130 +197,205 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
 
   @Override
   @Transactional(rollbackFor = Exception.class)
-  public QuoteCostRunWorkbenchResponse trial(
-      String oaNo, Long oaFormItemId, QuoteCostRunTrialRequest request) {
+  public QuoteCostRunWorkbenchResponse runToSuccess(
+      String oaNo,
+      Long oaFormItemId,
+      QuoteCostRunTrialRequest request,
+      String completedBy) {
     Scope scope = requireScope(oaNo, oaFormItemId, request == null ? null : request.getPeriodMonth());
-    QuotePriceTypeConfirmationSummaryResponse priceTypeConfirmation =
-        summaryMapper.selectLatestPriceTypeConfirmation(
-            scope.oaNo(), scope.oaFormItemId(), scope.productCode(), scope.periodMonth());
-    if (priceTypeConfirmation == null
-        || !"CONFIRMED".equalsIgnoreCase(trimToNull(priceTypeConfirmation.getStatus()))) {
-      throw new QuoteIngestException("请先确认当前价格类型后再发起成本核算");
-    }
+    QuoteCuAdjustmentCalcResult calculation = calculate(scope, request, true);
+    QuoteCostRunVersion version = calculation.version();
+    completeVersion(
+        scope,
+        version,
+        STATUS_RUNNING,
+        firstText(completedBy, "system"),
+        "统一产品核算流水线自动完成");
+    version.setStatus(STATUS_SUCCESS);
+    return calculationResponse(scope, calculation);
+  }
+
+  private QuoteCuAdjustmentCalcResult calculate(
+      Scope scope, QuoteCostRunTrialRequest request, boolean automaticCompletion) {
     PricePrepareReadinessResult readiness =
         pricePrepareReadinessService.check(
             scope.oaNo(),
             scope.oaFormItemId(),
             scope.productCode(),
-            scope.periodMonth(),
-            priceTypeConfirmation == null ? null : priceTypeConfirmation.getConfirmNo());
+            scope.periodMonth());
     requireReady(readiness);
     String pricePrepareNo = requireCurrentPricePrepareNo(readiness, request);
+    return cuAdjustmentCalcService.calculate(
+        new QuoteCuAdjustmentCalcRequest(
+            scope.form(),
+            scope.item(),
+            scope.periodMonth(),
+            pricePrepareNo,
+            "QUOTE:" + scope.oaFormItemId(),
+            null,
+            automaticCompletion));
+  }
 
-    QuoteCuAdjustmentCalcResult calculation =
-        cuAdjustmentCalcService.calculate(
-            new QuoteCuAdjustmentCalcRequest(
-                scope.form(),
-                scope.item(),
-                scope.periodMonth(),
-                pricePrepareNo,
-                "QUOTE:" + scope.oaFormItemId(),
-                null));
+  private QuoteCostRunWorkbenchResponse calculationResponse(
+      Scope scope, QuoteCuAdjustmentCalcResult calculation) {
     QuoteCostRunVersion version = calculation.version();
     var result = calculation.costResult();
-    cleanupTrialVersions(scope, version.getId());
 
     QuoteCostRunSummaryResponse trialSummary = summary(version, calculation.totalCost());
     trialSummary.setPartItemCount(result.getPartItems().size());
     trialSummary.setCostItemCount(result.getCostItems().size());
-    QuoteCostRunWorkbenchResponse response =
-        baseResponse(scope, trialSummary, latestVersion(scope, STATUS_CONFIRMED));
+    QuoteCostRunWorkbenchResponse response = baseResponse(scope, null, trialSummary);
     response.setCurrentDisplayVersion(trialSummary);
     response.setResultHeader(result.getResult());
     response.setPartItems(new ArrayList<>(result.getPartItems()));
     response.setCostItems(new ArrayList<>(result.getCostItems()));
-    response.setCanConfirm(true);
     return response;
   }
 
-  @Override
-  @Transactional(rollbackFor = Exception.class)
-  public QuoteCostRunSummaryResponse confirm(
-      String oaNo,
-      Long oaFormItemId,
-      String costRunNo,
-      QuoteCostRunConfirmRequest request) {
-    Scope scope = requireScope(oaNo, oaFormItemId, null);
-    QuoteCostRunVersion version =
-        versionMapper.selectOne(
-            Wrappers.lambdaQuery(QuoteCostRunVersion.class)
-                .eq(QuoteCostRunVersion::getCostRunNo, required("costRunNo", costRunNo))
-                .last("LIMIT 1"));
-    if (version == null
-        || !scope.oaNo().equals(version.getOaNo())
-        || !scope.oaFormItemId().equals(version.getOaFormItemId())
-        || !scope.productCode().equals(version.getProductCode())) {
-      throw new QuoteIngestException("成本试算批次不属于当前产品行");
+  private void completeVersion(
+      Scope scope,
+      QuoteCostRunVersion version,
+      String expectedStatus,
+      String completedBy,
+      String message) {
+    OaFormItem lockedItem =
+        oaFormItemMapper.selectForCostCompletion(
+            scope.oaFormItemId(),
+            scope.form().getId(),
+            required("businessUnitType", scope.form().getBusinessUnitType()));
+    if (lockedItem == null) {
+      throw new QuoteIngestException("报价产品行已不存在，成本版本不能完成");
     }
-    if (!STATUS_TRIAL.equals(version.getStatus())) {
-      throw new QuoteIngestException("当前成本试算版本不是 TRIAL，不能重复确认");
+    QuoteCostingWorkspace workspace =
+        workspaceService
+            .find(scope.oaFormItemId(), scope.periodMonth())
+            .orElseThrow(() -> new QuoteIngestException("当前核算工作区不存在，成本版本不能完成"));
+    if (!Objects.equals(
+        trimToNull(version.getOaPricePrepareNo()),
+        trimToNull(workspace.getCurrentPrepareNo()))) {
+      throw new QuoteIngestException("最终价格版本已更新，本次成本结果已回滚，请重新核算");
     }
+    requireCompleteVersionResult(version);
+
     LocalDateTime now = LocalDateTime.now();
     String versionNo = versionNoGenerator.nextVersionNo(scope.oaFormItemId(), scope.productCode());
-    String confirmedBy = firstText(request == null ? null : request.getConfirmedBy(), "system");
-
-    QuoteCostRunVersion voidPatch = new QuoteCostRunVersion();
-    voidPatch.setStatus(STATUS_VOIDED);
-    versionMapper.update(
-        voidPatch,
-        Wrappers.lambdaUpdate(QuoteCostRunVersion.class)
-            .eq(QuoteCostRunVersion::getOaNo, scope.oaNo())
-            .eq(QuoteCostRunVersion::getOaFormItemId, scope.oaFormItemId())
-            .eq(QuoteCostRunVersion::getProductCode, scope.productCode())
-            .eq(QuoteCostRunVersion::getStatus, STATUS_CONFIRMED));
-    CostRunResult voidResult = new CostRunResult();
-    voidResult.setResultStatus(STATUS_VOIDED);
-    resultMapper.update(
-        voidResult,
-        Wrappers.lambdaUpdate(CostRunResult.class)
-            .eq(CostRunResult::getOaNo, scope.oaNo())
-            .eq(CostRunResult::getOaFormItemId, scope.oaFormItemId())
-            .eq(CostRunResult::getProductCode, scope.productCode())
-            .eq(CostRunResult::getResultStatus, STATUS_CONFIRMED));
-
+    String inputFingerprint = trimToNull(workspace.getInputFingerprint());
     QuoteCostRunVersion patch = new QuoteCostRunVersion();
     patch.setId(version.getId());
     patch.setVersionNo(versionNo);
-    patch.setStatus(STATUS_CONFIRMED);
-    patch.setConfirmedBy(confirmedBy);
+    patch.setStatus(STATUS_SUCCESS);
+    patch.setInputFingerprint(inputFingerprint);
+    patch.setConfirmedBy(completedBy);
     patch.setConfirmedAt(now);
-    patch.setConfirmMessage(trimToNull(request == null ? null : request.getConfirmMessage()));
-    int confirmed =
+    patch.setConfirmMessage(message);
+    int completed =
         versionMapper.update(
             patch,
             Wrappers.lambdaUpdate(QuoteCostRunVersion.class)
                 .eq(QuoteCostRunVersion::getId, version.getId())
-                .eq(QuoteCostRunVersion::getStatus, STATUS_TRIAL));
-    if (confirmed != 1) {
-      throw new QuoteIngestException("成本试算版本已失效或状态已变化，请重新试算");
+                .eq(QuoteCostRunVersion::getStatus, expectedStatus));
+    if (completed != 1) {
+      throw new QuoteIngestException("成本版本已失效或状态已变化，请重新核算");
     }
 
-    CostRunResult resultPatch = new CostRunResult();
-    resultPatch.setResultStatus(STATUS_CONFIRMED);
-    resultMapper.update(
-        resultPatch,
-        Wrappers.lambdaUpdate(CostRunResult.class)
-            .eq(CostRunResult::getCostRunVersionId, version.getId()));
-
+    movePreviousCurrentVersionToHistory(scope, lockedItem.getConfirmedCostVersionId(), version.getId());
     markConfirmedCostRun(scope, version.getId(), now);
+    markWorkspaceSuccess(workspace, version.getId(), inputFingerprint, now);
     collaborationCostingGate.complete(scope.oaFormItemId(), scope.form().getBusinessUnitType());
 
     version.setVersionNo(versionNo);
-    version.setStatus(STATUS_CONFIRMED);
-    version.setConfirmedBy(confirmedBy);
+    version.setStatus(STATUS_SUCCESS);
+    version.setInputFingerprint(inputFingerprint);
+    version.setConfirmedBy(completedBy);
     version.setConfirmedAt(now);
-    version.setConfirmMessage(patch.getConfirmMessage());
-    return summary(version, version.getTotalCost());
+    version.setConfirmMessage(message);
+    // 同一事务内组装响应时沿用当前 scope；同步内存指针，避免刚完成的新版本被误标成历史。
+    scope.item().setConfirmedCostVersionId(version.getId());
+    scope.item().setCalcStatus("已核算");
+    scope.item().setCalcAt(now);
+  }
+
+  private void movePreviousCurrentVersionToHistory(
+      Scope scope, Long previousVersionId, Long newVersionId) {
+    if (previousVersionId == null || previousVersionId.equals(newVersionId)) {
+      return;
+    }
+    QuoteCostRunVersion previous = versionMapper.selectById(previousVersionId);
+    if (previous == null
+        || !scope.oaNo().equals(previous.getOaNo())
+        || !scope.oaFormItemId().equals(previous.getOaFormItemId())
+        || !QuoteCostRunStatus.isCurrentSuccess(previous.getStatus())) {
+      throw new QuoteIngestException("原当前成功版本状态异常，本次核算未切换");
+    }
+    QuoteCostRunVersion historyPatch = new QuoteCostRunVersion();
+    historyPatch.setStatus(STATUS_HISTORY);
+    int historyCount =
+        versionMapper.update(
+            historyPatch,
+            Wrappers.lambdaUpdate(QuoteCostRunVersion.class)
+                .eq(QuoteCostRunVersion::getId, previousVersionId)
+                .in(
+                    QuoteCostRunVersion::getStatus,
+                    List.of(STATUS_SUCCESS, STATUS_CONFIRMED)));
+    if (historyCount != 1) {
+      throw new QuoteIngestException("原当前成功版本已变化，本次核算未切换");
+    }
+  }
+
+  private void requireCompleteVersionResult(QuoteCostRunVersion version) {
+    if (version == null || version.getId() == null || version.getTotalCost() == null) {
+      throw new QuoteIngestException("成本版本汇总不完整，本次核算已回滚");
+    }
+    long actualPartCount =
+        partItemMapper.selectCount(
+            Wrappers.lambdaQuery(CostRunPartItem.class)
+                .eq(CostRunPartItem::getCostRunVersionId, version.getId()));
+    long actualCostCount =
+        costItemMapper.selectCount(
+            Wrappers.lambdaQuery(CostRunCostItem.class)
+                .eq(CostRunCostItem::getCostRunVersionId, version.getId()));
+    if (actualPartCount != intValue(version.getPartItemCount())
+        || actualCostCount != intValue(version.getCostItemCount())
+        || actualCostCount == 0) {
+      throw new QuoteIngestException("成本版本明细不完整，本次核算已回滚");
+    }
+  }
+
+  private int intValue(Integer value) {
+    return value == null ? 0 : value;
+  }
+
+  private void markWorkspaceSuccess(
+      QuoteCostingWorkspace workspace,
+      Long versionId,
+      String inputFingerprint,
+      LocalDateTime completedAt) {
+    QuoteCostingWorkspace locked =
+        workspaceService.lockOrCreate(
+            workspace.getOaNo(),
+            workspace.getOaFormItemId(),
+            workspace.getProductCode(),
+            workspace.getPeriodMonth(),
+            workspace.getBusinessUnitType());
+    QuoteCostRunVersion completedVersion = versionMapper.selectById(versionId);
+    if (completedVersion == null
+        || !Objects.equals(
+            trimToNull(completedVersion.getOaPricePrepareNo()),
+            trimToNull(locked.getCurrentPrepareNo()))) {
+      throw new QuoteIngestException("最终价格版本在成本完成前已变化，本次核算已回滚");
+    }
+    int expectedVersion = locked.getLockVersion() == null ? 0 : locked.getLockVersion();
+    locked.setWorkspaceStatus(STATUS_SUCCESS);
+    locked.setCurrentStep("COST_RUN");
+    locked.setCurrentCostVersionId(versionId);
+    locked.setLastSuccessInputFingerprint(inputFingerprint);
+    locked.setGapCount(0);
+    locked.setStaleReasonCode(null);
+    locked.setLastErrorStep(null);
+    locked.setLastErrorCode(null);
+    locked.setLastErrorMessage(null);
+    locked.setLastCheckedAt(completedAt);
+    workspaceService.update(locked, expectedVersion);
   }
 
   private void markConfirmedCostRun(Scope scope, Long versionId, LocalDateTime confirmedAt) {
@@ -381,39 +457,26 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     List<String> blockingReasons = readinessBlockingReasons(scope);
     response.setBlockingReasons(blockingReasons);
     response.setCanStartTrial(blockingReasons.isEmpty());
-    response.setCanConfirm(latestTrial != null && STATUS_TRIAL.equals(latestTrial.getStatus()));
     return response;
   }
 
   private void fillResultRows(QuoteCostRunWorkbenchResponse response, Long versionId) {
-    CostRunResult result =
-        resultMapper.selectOne(
-            Wrappers.lambdaQuery(CostRunResult.class)
-                .eq(CostRunResult::getCostRunVersionId, versionId)
-                .last("LIMIT 1"));
+    CostRunResultDto result = costRunResultService.getResult(versionId);
     if (result != null) {
-      response.setResultHeader(toResultDto(result));
+      response.setResultHeader(result);
     }
     response.setPartItems(partRows(versionId).stream().map(this::toPartDto).toList());
     response.setCostItems(costRows(versionId).stream().map(this::toCostDto).toList());
   }
 
   private List<String> readinessBlockingReasons(Scope scope) {
-    QuotePriceTypeConfirmationSummaryResponse priceTypeConfirmation =
-        summaryMapper.selectLatestPriceTypeConfirmation(
-            scope.oaNo(), scope.oaFormItemId(), scope.productCode(), scope.periodMonth());
-    if (priceTypeConfirmation == null
-        || !"CONFIRMED".equalsIgnoreCase(trimToNull(priceTypeConfirmation.getStatus()))) {
-      return List.of("请先确认当前价格类型");
-    }
     PricePrepareReadinessResult readiness =
         pricePrepareReadinessService.check(
             scope.oaNo(),
             scope.oaFormItemId(),
             scope.productCode(),
-            scope.periodMonth(),
-            priceTypeConfirmation == null ? null : priceTypeConfirmation.getConfirmNo());
-    if (isReady(readiness) || (readiness != null && readiness.isAllowContinue() && !readiness.isBlocking())) {
+            scope.periodMonth());
+    if (isReady(readiness)) {
       return List.of();
     }
     List<String> reasons = new ArrayList<>();
@@ -426,7 +489,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   }
 
   private void requireReady(PricePrepareReadinessResult readiness) {
-    if (isReady(readiness) || (readiness != null && readiness.isAllowContinue() && !readiness.isBlocking())) {
+    if (isReady(readiness)) {
       return;
     }
     String message =
@@ -523,7 +586,15 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     return version;
   }
 
-  private QuoteCostRunSummaryResponse latestVersion(Scope scope, String status) {
+  private QuoteCostRunSummaryResponse latestInProgressVersion(Scope scope) {
+    return latestVersion(scope, List.of(STATUS_TRIAL, STATUS_RUNNING));
+  }
+
+  private QuoteCostRunSummaryResponse latestSuccessfulVersion(Scope scope) {
+    return latestVersion(scope, List.of(STATUS_SUCCESS, STATUS_CONFIRMED));
+  }
+
+  private QuoteCostRunSummaryResponse latestVersion(Scope scope, List<String> statuses) {
     QuoteCostRunVersion version =
         versionMapper.selectOne(
             Wrappers.lambdaQuery(QuoteCostRunVersion.class)
@@ -531,7 +602,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
                 .eq(QuoteCostRunVersion::getOaFormItemId, scope.oaFormItemId())
                 .eq(QuoteCostRunVersion::getProductCode, scope.productCode())
                 .eq(QuoteCostRunVersion::getPricingMonth, scope.periodMonth())
-                .eq(QuoteCostRunVersion::getStatus, status)
+                .in(QuoteCostRunVersion::getStatus, statuses)
                 .orderByDesc(QuoteCostRunVersion::getConfirmedAt)
                 .orderByDesc(QuoteCostRunVersion::getTrialFinishedAt)
                 .orderByDesc(QuoteCostRunVersion::getId)
@@ -569,45 +640,10 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     if (version == null) {
       return false;
     }
-    if (!STATUS_TRIAL.equals(version.getStatus())) {
+    if (!QuoteCostRunStatus.isInProgress(version.getStatus())) {
       return true;
     }
     return latestTrialId != null && latestTrialId.equals(version.getId());
-  }
-
-  private void cleanupTrialVersions(Scope scope, Long keepVersionId) {
-    var query =
-        Wrappers.lambdaQuery(QuoteCostRunVersion.class)
-            .eq(QuoteCostRunVersion::getOaNo, scope.oaNo())
-            .eq(QuoteCostRunVersion::getOaFormItemId, scope.oaFormItemId())
-            .eq(QuoteCostRunVersion::getProductCode, scope.productCode())
-            .eq(QuoteCostRunVersion::getPricingMonth, scope.periodMonth())
-            .eq(QuoteCostRunVersion::getStatus, STATUS_TRIAL);
-    if (keepVersionId != null) {
-      query.ne(QuoteCostRunVersion::getId, keepVersionId);
-    }
-    List<QuoteCostRunVersion> staleTrials = versionMapper.selectList(query);
-    if (staleTrials == null || staleTrials.isEmpty()) {
-      return;
-    }
-    List<Long> staleVersionIds =
-        staleTrials.stream().map(QuoteCostRunVersion::getId).filter(id -> id != null).toList();
-    if (!staleVersionIds.isEmpty()) {
-      QuoteCostRunVersion versionPatch = new QuoteCostRunVersion();
-      versionPatch.setStatus(STATUS_VOIDED);
-      versionMapper.update(
-          versionPatch,
-          Wrappers.lambdaUpdate(QuoteCostRunVersion.class)
-              .in(QuoteCostRunVersion::getId, staleVersionIds)
-              .eq(QuoteCostRunVersion::getStatus, STATUS_TRIAL));
-      CostRunResult resultPatch = new CostRunResult();
-      resultPatch.setResultStatus(STATUS_VOIDED);
-      resultMapper.update(
-          resultPatch,
-          Wrappers.lambdaUpdate(CostRunResult.class)
-              .in(CostRunResult::getCostRunVersionId, staleVersionIds)
-              .eq(CostRunResult::getResultStatus, STATUS_TRIAL));
-    }
   }
 
   private CostRunVersionItemResponse toVersionItem(
@@ -625,22 +661,26 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     item.setTrialFinishedAt(version.getTrialFinishedAt());
     item.setConfirmedAt(version.getConfirmedAt());
     item.setConfirmedBy(version.getConfirmedBy());
-    item.setCanConfirm(STATUS_TRIAL.equals(version.getStatus()));
     item.setCanViewSheet(version.getId() != null && StringUtils.hasText(version.getCostRunNo()));
-    item.setCanViewTrace(!STATUS_TRIAL.equals(version.getStatus()) && StringUtils.hasText(version.getCostRunNo()));
+    item.setCanViewTrace(
+        !QuoteCostRunStatus.isInProgress(version.getStatus())
+            && StringUtils.hasText(version.getCostRunNo()));
     item.setCurrentConfirmed(version.getId() != null && version.getId().equals(confirmedVersionId));
-    item.setStale(!STATUS_TRIAL.equals(version.getStatus()) && !item.isCurrentConfirmed());
+    item.setStale(!QuoteCostRunStatus.isInProgress(version.getStatus()) && !item.isCurrentConfirmed());
     return item;
   }
 
   private String displayVersionStatus(String status, Long id, Long confirmedVersionId) {
     if (STATUS_TRIAL.equals(status)) {
-      return "待确认";
+      return "历史试算";
+    }
+    if (STATUS_RUNNING.equals(status)) {
+      return "核算中";
     }
     if (id != null && id.equals(confirmedVersionId)) {
-      return "当前已确认";
+      return "当前成功";
     }
-    if (STATUS_CONFIRMED.equals(status) || STATUS_VOIDED.equals(status)) {
+    if (QuoteCostRunStatus.isCurrentSuccess(status) || QuoteCostRunStatus.isHistorical(status)) {
       return "历史版本";
     }
     return firstText(status, "-");
@@ -659,7 +699,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   }
 
   private int versionSortRank(CostRunVersionItemResponse item) {
-    if (STATUS_TRIAL.equals(item.getStatus())) {
+    if (QuoteCostRunStatus.isInProgress(item.getStatus())) {
       return 0;
     }
     if (item.isCurrentConfirmed()) {
@@ -744,8 +784,6 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     response.setProductCode(version.getProductCode());
     response.setPricingMonth(version.getPricingMonth());
     response.setResultPeriod(version.getResultPeriod());
-    response.setBomConfirmNo(version.getBomConfirmNo());
-    response.setPriceTypeConfirmNo(version.getPriceTypeConfirmNo());
     response.setPricePrepareNo(version.getPricePrepareNo());
     response.setOaPricePrepareNo(version.getOaPricePrepareNo());
     response.setFinancePricePrepareNo(version.getFinancePricePrepareNo());
@@ -801,28 +839,6 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     dto.setPriceFormulaRefType(item.getPriceFormulaRefType());
     dto.setPriceFormulaRefId(item.getPriceFormulaRefId());
     dto.setTraceJson(item.getTraceJson());
-    return dto;
-  }
-
-  private CostRunResultDto toResultDto(CostRunResult result) {
-    CostRunResultDto dto = new CostRunResultDto();
-    dto.setOaNo(result.getOaNo());
-    dto.setProductCode(result.getProductCode());
-    dto.setProductName(result.getProductName());
-    dto.setProductModel(result.getProductModel());
-    dto.setCustomerName(result.getCustomerName());
-    dto.setBusinessUnit(result.getBusinessUnit());
-    dto.setDepartment(result.getDepartment());
-    dto.setPeriod(result.getPeriod());
-    dto.setCurrency(result.getCurrency());
-    dto.setUnit(result.getUnit());
-    dto.setTotalCost(result.getTotalCost());
-    dto.setFinanceMaterialCost(result.getFinanceMaterialCost());
-    dto.setOaMaterialCost(result.getOaMaterialCost());
-    dto.setCuMaterialAdjustment(result.getCuMaterialAdjustment());
-    dto.setFinalQuoteAmount(result.getFinalQuoteAmount());
-    dto.setCalcStatus(result.getCalcStatus());
-    dto.setProductAttr(result.getProductAttr());
     return dto;
   }
 

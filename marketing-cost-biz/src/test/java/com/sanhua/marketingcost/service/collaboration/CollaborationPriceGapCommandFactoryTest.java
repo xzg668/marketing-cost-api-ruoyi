@@ -12,17 +12,34 @@ class CollaborationPriceGapCommandFactoryTest {
 
   @Test
   void sameBusinessPositionReusesFingerprintWhenTransientSourceIdChanges() {
-    GapUpsertCommand first = CollaborationPriceGapCommandFactory.create("P-1", gap(11L,
+    GapUpsertCommand first = CollaborationPriceGapCommandFactory.create(275L, "P-1", gap(11L,
         "/P-1/M-1/RAW-1/", "1"));
-    GapUpsertCommand rescanned = CollaborationPriceGapCommandFactory.create("P-1", gap(99L,
+    GapUpsertCommand rescanned = CollaborationPriceGapCommandFactory.create(275L, "P-1", gap(99L,
         "/P-1/M-1/RAW-1/", "2"));
-    GapUpsertCommand anotherPath = CollaborationPriceGapCommandFactory.create("P-1", gap(99L,
+    GapUpsertCommand anotherPath = CollaborationPriceGapCommandFactory.create(275L, "P-1", gap(99L,
         "/P-1/M-2/RAW-1/", "2"));
 
     assertThat(rescanned.gapFingerprint()).isEqualTo(first.gapFingerprint());
     assertThat(rescanned.sourceId()).isEqualTo(99L);
     assertThat(rescanned.bomQuantity()).isEqualByComparingTo("2");
     assertThat(anotherPath.gapFingerprint()).isNotEqualTo(first.gapFingerprint());
+  }
+
+  @Test
+  void quoteItemAndMonthArePartOfBusinessFingerprint() {
+    GapUpsertCommand baseline = CollaborationPriceGapCommandFactory.create(
+        275L, "P-1", gap(11L, "/P-1/M-1/RAW-1/", "1"));
+    GapUpsertCommand anotherItem = CollaborationPriceGapCommandFactory.create(
+        276L, "P-1", gap(11L, "/P-1/M-1/RAW-1/", "1"));
+    CollaborationPriceScanResult.PriceGap nextMonth = new CollaborationPriceScanResult.PriceGap(
+        "RAW-1", "MISSING_PRICE", "MAINTAIN_PRICE", "缺价", "lp_price_linked_item",
+        null, "ELECTRONIC_DRAWING_BOM", 11L, "NODE:11", "/P-1/M-1/RAW-1/",
+        "原材料铜管", "TP2", "TP2-952", "RAW", new BigDecimal("1"), "kg",
+        "2026-09", "210");
+
+    assertThat(anotherItem.gapFingerprint()).isNotEqualTo(baseline.gapFingerprint());
+    assertThat(CollaborationPriceGapCommandFactory.create(275L, "P-1", nextMonth)
+        .gapFingerprint()).isNotEqualTo(baseline.gapFingerprint());
   }
 
   private CollaborationPriceScanResult.PriceGap gap(Long sourceId, String path, String quantity) {

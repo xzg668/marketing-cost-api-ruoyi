@@ -66,6 +66,19 @@ public class MaterialMasterSyncServiceImpl implements MaterialMasterSyncService 
   @Override
   @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
   public SyncResult syncByOaNo(String oaNo) {
+    return syncByScope(oaNo, null);
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+  public SyncResult syncByOaNoAndPeriod(String oaNo, String periodMonth) {
+    if (!StringUtils.hasText(periodMonth)) {
+      throw new IllegalArgumentException("periodMonth 为空");
+    }
+    return syncByScope(oaNo, periodMonth.trim());
+  }
+
+  private SyncResult syncByScope(String oaNo, String periodMonth) {
     if (!StringUtils.hasText(oaNo)) {
       throw new RuntimeException("oaNo 为空");
     }
@@ -73,9 +86,12 @@ public class MaterialMasterSyncServiceImpl implements MaterialMasterSyncService 
 
     // 1) OA 涉及的去重料号，按成本行已落表的 U9 料品组织分组。
     List<BomCostingRow> costingScopes =
-        bomCostingRowMapper.selectDistinctMaterialCodesWithOrgByOaNo(oa);
+        StringUtils.hasText(periodMonth)
+            ? bomCostingRowMapper.selectDistinctMaterialCodesWithOrgByOaNoAndPeriod(
+                oa, periodMonth)
+            : bomCostingRowMapper.selectDistinctMaterialCodesWithOrgByOaNo(oa);
     if (costingScopes == null || costingScopes.isEmpty()) {
-      log.warn("OA {} 在 lp_bom_costing_row 无 BOM 行，跳过同步", oa);
+      log.warn("OA {} 核算月 {} 在 lp_bom_costing_row 无 BOM 行，跳过同步", oa, periodMonth);
       return new SyncResult(0, 0, 0, null);
     }
     Map<String, List<String>> codesByOrganization = groupCodesByOrganization(costingScopes);
@@ -95,8 +111,13 @@ public class MaterialMasterSyncServiceImpl implements MaterialMasterSyncService 
       List<String> codes = entry.getValue();
       String batchId = selectLatestActiveImportId(organizationCode);
       if (!StringUtils.hasText(batchId)) {
-        throw new RuntimeException(
-            "staging 表 lp_material_master_raw 无数据，organizationCode=" + organizationCode);
+        log.warn(
+            "OA {} 核算月 {} 的组织 {} 无可用主档原始批次，跳过该组织 {} 个料号",
+            oa,
+            periodMonth,
+            organizationCode,
+            codes.size());
+        continue;
       }
       batchTraces.add(organizationCode + ":" + batchId);
 
@@ -132,11 +153,11 @@ public class MaterialMasterSyncServiceImpl implements MaterialMasterSyncService 
       if (code == null) {
         continue;
       }
-      String organization = requiredMaterialOrganization(row.getMaterialOrganizationCode(), code);
+      String organization = optionalMaterialOrganization(row.getMaterialOrganizationCode(), code);
+      if (organization == null) {
+        continue;
+      }
       scoped.computeIfAbsent(organization, ignored -> new LinkedHashSet<>()).add(code);
-    }
-    if (scoped.isEmpty()) {
-      throw new RuntimeException("OA BOM 成本行没有可同步的料号");
     }
     Map<String, List<String>> result = new LinkedHashMap<>();
     for (Map.Entry<String, LinkedHashSet<String>> entry : scoped.entrySet()) {
@@ -145,11 +166,20 @@ public class MaterialMasterSyncServiceImpl implements MaterialMasterSyncService 
     return result;
   }
 
-  private String requiredMaterialOrganization(String organizationCode, String materialCode) {
+  private String optionalMaterialOrganization(String organizationCode, String materialCode) {
     if (!StringUtils.hasText(organizationCode)) {
-      throw new RuntimeException("BOM 成本行缺少 materialOrganizationCode，materialCode=" + materialCode);
+      log.warn("BOM 成本行缺少 materialOrganizationCode，跳过主档预同步，materialCode={}", materialCode);
+      return null;
     }
-    return MaterialOrganization.fromCode(organizationCode).getCode();
+    try {
+      return MaterialOrganization.fromCode(organizationCode).getCode();
+    } catch (IllegalArgumentException exception) {
+      log.warn(
+          "BOM 成本行 materialOrganizationCode 非法，跳过主档预同步，materialCode={} organizationCode={}",
+          materialCode,
+          organizationCode);
+      return null;
+    }
   }
 
   private String selectLatestActiveImportId(String organizationCode) {

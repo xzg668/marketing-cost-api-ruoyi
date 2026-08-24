@@ -342,6 +342,7 @@ public final class QuoteEffectiveBomBuilderImpl
         trimToNull(row.getMaterialCode()),
         trimToNull(row.getMaterialName()),
         trimToNull(row.getMaterialSpec()),
+        trimToNull(row.getPriceOrgCode()),
         qtyPerParent,
         qtyPerTop,
         decision.sourceMaterialShape(),

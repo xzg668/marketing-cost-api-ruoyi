@@ -9,14 +9,9 @@ import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteCollaborationProductTaskMapper;
 import com.sanhua.marketingcost.service.collaboration.CollaborationActions.ProductAction;
 import com.sanhua.marketingcost.service.collaboration.scan.CollaborationPriceScanResult;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,8 +51,10 @@ public class ElectronicBomVerificationPersistenceService {
       CollaborationScope scope,
       List<ElectronicBomValidationIssue> issues) {
     QuoteCollaborationProductTask task = currentOwned(taskId, expectedVersion, principal, scope);
+    Long oaFormItemId = ownerItemId(task, scope);
+    QuoteCollaborationProductTask fingerprintTask = task;
     List<GapUpsertCommand> commands = safeIssues(issues).stream()
-        .map(this::toBomGap).toList();
+        .map(issue -> toBomGap(fingerprintTask, oaFormItemId, issue)).toList();
     repository.synchronizeGaps(task.getId(), scope, commands, principal.actor());
     task = repository.updateValidationResult(task.getId(), task.getTaskVersion(),
         CollaborationCodes.ValidationStatus.FAILED.code(), principal.userId(), scope,
@@ -123,9 +120,11 @@ public class ElectronicBomVerificationPersistenceService {
       throw invalid("电子图库BOM完成后的价格检查状态不正确：" + scan.status());
     }
     String productCode = task.getProductCode();
+    Long oaFormItemId = ownerItemId(task, scope);
     List<GapUpsertCommand> priceGaps = scan.status() == CollaborationPriceScanResult.Status.GAPS
         ? scan.gaps().stream()
-            .map(gap -> CollaborationPriceGapCommandFactory.create(productCode, gap))
+            .map(gap -> CollaborationPriceGapCommandFactory.create(
+                oaFormItemId, productCode, gap))
             .toList()
         : List.of();
     repository.synchronizeGaps(task.getId(), scope, priceGaps, principal.actor());
@@ -144,6 +143,25 @@ public class ElectronicBomVerificationPersistenceService {
           ProductAction.CONTINUE_PRICE_AFTER_BOM, principal).task();
     }
     return new PriceScanResult(task, gapCount, gapCount > 0);
+  }
+
+  private Long ownerItemId(
+      QuoteCollaborationProductTask task, CollaborationScope scope) {
+    Long linkedItemId = repository.findLinksByProductTask(task.getId(), scope).stream()
+        .filter(link -> Integer.valueOf(1).equals(link.getActiveFlag()))
+        .map(com.sanhua.marketingcost.entity.QuoteCollaborationQuoteLink::getOaFormItemId)
+        .filter(java.util.Objects::nonNull)
+        .findFirst()
+        .orElse(null);
+    if (linkedItemId != null) {
+      return linkedItemId;
+    }
+    QuoteBomSupplementVersion version = task.getSupplementVersionId() == null
+        ? null : versionMapper.selectById(task.getSupplementVersionId());
+    if (version != null && version.getOaFormItemId() != null) {
+      return version.getOaFormItemId();
+    }
+    throw invalid("产品协作任务缺少活动报价关联");
   }
 
   private List<QuoteBomSupplementDetail> buildDetails(
@@ -208,12 +226,25 @@ public class ElectronicBomVerificationPersistenceService {
     return task;
   }
 
-  private GapUpsertCommand toBomGap(ElectronicBomValidationIssue issue) {
-    String value = String.join("|", "BOM", text(issue.code()), text(issue.nodeKey()),
-        text(issue.bomPath()), text(issue.message()));
+  private GapUpsertCommand toBomGap(
+      QuoteCollaborationProductTask task,
+      Long oaFormItemId,
+      ElectronicBomValidationIssue issue) {
+    String businessPosition = StringUtils.hasText(issue.bomPath())
+        ? issue.bomPath() : issue.nodeKey();
+    String fingerprint = CollaborationGapFingerprintFactory.create(
+        oaFormItemId,
+        task.getAccountingMonth(),
+        "BOM",
+        "ELECTRONIC_BOM_VALIDATION",
+        task.getProductCode(),
+        businessPosition,
+        "ELECTRONIC_DRAWING|" + text(issue.code()));
     return new GapUpsertCommand("BOM", "ELECTRONIC_BOM_VALIDATION",
-        "ELECTRONIC_DRAWING", null, sha256(value), issue.nodeKey(), issue.bomPath(),
-        null, null, null, null, null, null, issue.code(), issue.message());
+        "ELECTRONIC_DRAWING", null, fingerprint, issue.nodeKey(), issue.bomPath(),
+        task.getProductCode(), task.getProductName(), task.getProductSpec(),
+        task.getProductModel(), "NORMAL", null, issue.code(), issue.message(),
+        null, null, task.getAccountingMonth(), task.getApplicableOrgCode());
   }
 
   private static List<ElectronicBomValidationIssue> safeIssues(
@@ -232,15 +263,6 @@ public class ElectronicBomVerificationPersistenceService {
       case "VIRTUAL_PACKAGE" -> "虚拟件（包装）";
       default -> nature;
     };
-  }
-
-  private static String sha256(String value) {
-    try {
-      return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-          .digest(value.getBytes(StandardCharsets.UTF_8))).toUpperCase(Locale.ROOT);
-    } catch (NoSuchAlgorithmException exception) {
-      throw new IllegalStateException("当前JVM不支持SHA-256", exception);
-    }
   }
 
   private static String firstText(String value, String fallback) {

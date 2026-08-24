@@ -7,12 +7,12 @@ import com.sanhua.marketingcost.dto.OaFormDetailKeyDto;
 import com.sanhua.marketingcost.dto.OaFormListItemDto;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
-import com.sanhua.marketingcost.entity.CostRunResult;
 import com.sanhua.marketingcost.entity.MaterialMaster;
+import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
-import com.sanhua.marketingcost.mapper.CostRunResultMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
+import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.OaFormService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -29,17 +29,17 @@ import org.springframework.util.StringUtils;
 public class OaFormServiceImpl implements OaFormService {
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
-  private final CostRunResultMapper costRunResultMapper;
+  private final QuoteCostRunVersionMapper costRunVersionMapper;
   private final MaterialMasterMapper materialMasterMapper;
 
   public OaFormServiceImpl(
       OaFormMapper oaFormMapper,
       OaFormItemMapper oaFormItemMapper,
-      CostRunResultMapper costRunResultMapper,
+      QuoteCostRunVersionMapper costRunVersionMapper,
       MaterialMasterMapper materialMasterMapper) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
-    this.costRunResultMapper = costRunResultMapper;
+    this.costRunVersionMapper = costRunVersionMapper;
     this.materialMasterMapper = materialMasterMapper;
   }
 
@@ -198,14 +198,16 @@ public class OaFormServiceImpl implements OaFormService {
     }
     Map<Long, BigDecimal> totalByItemId = new HashMap<>();
     Map<String, BigDecimal> legacyTotalByProductCode = new HashMap<>();
-    List<CostRunResult> results =
-        costRunResultMapper.selectList(
-            Wrappers.lambdaQuery(CostRunResult.class)
-                .eq(CostRunResult::getOaNo, oaNo.trim())
-                .orderByDesc(CostRunResult::getCalcAt)
-                .orderByDesc(CostRunResult::getId));
+    List<QuoteCostRunVersion> results =
+        costRunVersionMapper.selectList(
+            Wrappers.lambdaQuery(QuoteCostRunVersion.class)
+                .eq(QuoteCostRunVersion::getOaNo, oaNo.trim())
+                .isNotNull(QuoteCostRunVersion::getTotalCost)
+                .orderByDesc(QuoteCostRunVersion::getTrialFinishedAt)
+                .orderByDesc(QuoteCostRunVersion::getCreatedAt)
+                .orderByDesc(QuoteCostRunVersion::getId));
     if (results != null) {
-      for (CostRunResult result : results) {
+      for (QuoteCostRunVersion result : results) {
         if (result.getTotalCost() == null) {
           continue;
         }

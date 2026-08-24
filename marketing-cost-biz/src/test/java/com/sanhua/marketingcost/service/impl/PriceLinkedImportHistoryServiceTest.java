@@ -94,7 +94,8 @@ class PriceLinkedImportHistoryServiceTest {
             mock(VariableAliasIndex.class), mock(RowLocalPlaceholderRegistry.class)),
         new FormulaDisplayRenderer(
             mock(PriceVariableMapper.class), mock(RowLocalPlaceholderRegistry.class)),
-        mock(FormulaValidator.class));
+        mock(FormulaValidator.class),
+        mock(com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.class));
     inject("factorUploadBatchMapper", factorUploadBatchMapper);
     inject("factorRowRefMapper", factorRowRefMapper);
     inject("factorIdentityMapper", factorIdentityMapper);

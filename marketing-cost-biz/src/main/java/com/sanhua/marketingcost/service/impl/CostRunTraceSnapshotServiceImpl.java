@@ -8,7 +8,6 @@ import com.sanhua.marketingcost.service.CostRunTraceSnapshotBuilder;
 import com.sanhua.marketingcost.service.CostRunTraceSnapshotService;
 import java.util.List;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -26,7 +25,7 @@ public class CostRunTraceSnapshotServiceImpl implements CostRunTraceSnapshotServ
   }
 
   @Override
-  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  @Transactional(rollbackFor = Exception.class)
   public int rebuildForVersion(QuoteCostRunVersion version) {
     if (version == null || !StringUtils.hasText(version.getCostRunNo())) {
       return 0;

@@ -1,13 +1,10 @@
 package com.sanhua.marketingcost.service.impl;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunObjectResult;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.CostRunResultDto;
-import com.sanhua.marketingcost.entity.CostRunResult;
-import com.sanhua.marketingcost.mapper.CostRunResultMapper;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
 import com.sanhua.marketingcost.service.CostRunObjectCalcService;
 import com.sanhua.marketingcost.service.CostRunPartItemService;
@@ -25,17 +22,14 @@ public class CostRunObjectCalcServiceImpl implements CostRunObjectCalcService {
 
   private static final String COST_CODE_TOTAL = "TOTAL";
 
-  private final CostRunResultMapper costRunResultMapper;
   private final CostRunPartItemService costRunPartItemService;
   private final CostRunCostItemService costRunCostItemService;
   private final List<CostRunPreparedPartItemProvider> preparedPartItemProviders;
 
   public CostRunObjectCalcServiceImpl(
-      CostRunResultMapper costRunResultMapper,
       CostRunPartItemService costRunPartItemService,
       CostRunCostItemService costRunCostItemService,
       List<CostRunPreparedPartItemProvider> preparedPartItemProviders) {
-    this.costRunResultMapper = costRunResultMapper;
     this.costRunPartItemService = costRunPartItemService;
     this.costRunCostItemService = costRunCostItemService;
     this.preparedPartItemProviders =
@@ -48,7 +42,6 @@ public class CostRunObjectCalcServiceImpl implements CostRunObjectCalcService {
     String productCode = context.getProductCode().trim();
     java.util.function.IntConsumer progress =
         context.getProgress() == null ? p -> {} : context.getProgress();
-    boolean monthlyReprice = CostRunContext.SCENE_MONTHLY_REPRICE.equals(context.getScene());
     List<CostRunPartItemDto> rawPartItems = loadPartItems(context, oaNo, progress);
     List<CostRunPartItemDto> partItems = filterByProduct(rawPartItems, productCode);
     progress.accept(60);
@@ -62,12 +55,11 @@ public class CostRunObjectCalcServiceImpl implements CostRunObjectCalcService {
             false,
             p -> progress.accept(60 + p * 40 / 100));
     progress.accept(100);
-    // 月度调价不能把历史 lp_cost_run_result 当计算输入；普通报价才读取它补充结果展示元数据。
-    CostRunResult sourceResult = monthlyReprice ? null : findSourceResult(oaNo, productCode);
-    CostRunResultDto resultDto = buildResultFromContext(context, costItems, sourceResult);
+    // 核算只读取本次 BOM、最终价格和费率，结果展示信息不再从历史结果表反向补充。
+    CostRunResultDto resultDto = buildResultFromContext(context, costItems);
     return CostRunObjectResult.of(
         context,
-        sourceResult == null ? null : sourceResult.getId(),
+        context.getCostRunVersionId(),
         resultDto,
         partItems,
         costItems);
@@ -106,14 +98,6 @@ public class CostRunObjectCalcServiceImpl implements CostRunObjectCalcService {
         && StringUtils.hasText(context.getPricePrepareNo());
   }
 
-  private CostRunResult findSourceResult(String oaNo, String productCode) {
-    return costRunResultMapper.selectOne(
-        Wrappers.lambdaQuery(CostRunResult.class)
-            .eq(CostRunResult::getOaNo, oaNo)
-            .eq(CostRunResult::getProductCode, productCode)
-            .last("LIMIT 1"));
-  }
-
   private List<CostRunPartItemDto> filterByProduct(
       List<CostRunPartItemDto> partItems, String productCode) {
     if (partItems == null || partItems.isEmpty()) {
@@ -129,22 +113,13 @@ public class CostRunObjectCalcServiceImpl implements CostRunObjectCalcService {
   }
 
   private CostRunResultDto buildResultFromContext(
-      CostRunContext context, List<CostRunCostItemDto> costItems, CostRunResult sourceResult) {
+      CostRunContext context, List<CostRunCostItemDto> costItems) {
     CostRunResultDto dto = new CostRunResultDto();
     dto.setOaNo(context.getOaNo());
     dto.setProductCode(context.getProductCode());
     dto.setCustomerName(context.getCustomerName());
     dto.setPeriod(context.getPricingMonth());
     dto.setTotalCost(amountOf(costItems, COST_CODE_TOTAL));
-    if (sourceResult != null) {
-      dto.setProductName(sourceResult.getProductName());
-      dto.setProductModel(sourceResult.getProductModel());
-      dto.setBusinessUnit(sourceResult.getBusinessUnit());
-      dto.setDepartment(sourceResult.getDepartment());
-      dto.setCurrency(sourceResult.getCurrency());
-      dto.setUnit(sourceResult.getUnit());
-      dto.setProductAttr(sourceResult.getProductAttr());
-    }
     dto.setCalcStatus(CostRunContext.SCENE_QUOTE.equals(context.getScene()) ? "已核算" : "SUCCESS");
     return dto;
   }

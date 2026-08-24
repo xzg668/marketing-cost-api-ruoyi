@@ -73,7 +73,7 @@ class CostRunTraceSnapshotBuilderImplTest {
     when(makePartMapper.selectById(9003L)).thenReturn(anchor);
     when(makePartMapper.selectList(any(Wrapper.class))).thenReturn(List.of(child));
     when(linkedCalcMapper.selectById(9002L)).thenReturn(linkedCalc());
-    when(linkedItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(linkedItem()));
+    when(linkedItemMapper.selectById(8002L)).thenReturn(linkedItem());
     when(fixedMapper.selectById(9001L)).thenReturn(fixedItem());
 
     List<CostRunTraceSnapshot> snapshots = builder.build(version());
@@ -483,6 +483,7 @@ class CostRunTraceSnapshotBuilderImplTest {
     item.setCalcScene("QUOTE");
     item.setPricingMonth("2026-06");
     item.setFactorSource("OA_LOCKED");
+    item.setSourcePriceRecordId(8002L);
     item.setCalcStatus("OK");
     item.setTraceJson("""
         {

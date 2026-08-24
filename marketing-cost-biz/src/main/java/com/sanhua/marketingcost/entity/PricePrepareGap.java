@@ -21,8 +21,6 @@ public class PricePrepareGap {
 
   private String prepareNo;
   private String periodMonth;
-  private String priceTypeConfirmNo;
-  private Long priceTypeConfirmItemId;
   private String actionType;
   private String actionTarget;
   private String oaNo;
@@ -30,7 +28,11 @@ public class PricePrepareGap {
   private String topProductCode;
   private String materialCode;
   private String gapMaterialCode;
+  /** 缺口料号品名快照，用于缺口处理页面展示。 */
+  private String materialName;
   private String gapType;
+  /** 结构化原因，例如 PRIMARY_SUPPLIER_PRICE_MISSING；gapType 仍保持协作大类。 */
+  private String reasonCode;
   private String itemType;
   private String sourceTable;
   private String message;

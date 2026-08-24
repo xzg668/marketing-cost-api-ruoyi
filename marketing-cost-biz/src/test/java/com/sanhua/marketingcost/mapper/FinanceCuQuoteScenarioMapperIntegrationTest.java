@@ -3,7 +3,6 @@ package com.sanhua.marketingcost.mapper;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.sanhua.marketingcost.entity.CostRunResult;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
 import com.sanhua.marketingcost.entity.QuoteCostPriceScenario;
@@ -28,7 +27,6 @@ class FinanceCuQuoteScenarioMapperIntegrationTest extends BomMapperTestBase {
   @Autowired private QuoteCostPriceScenarioMapper scenarioMapper;
   @Autowired private QuoteCuMaterialDiffItemMapper diffItemMapper;
   @Autowired private QuoteCostRunVersionMapper versionMapper;
-  @Autowired private CostRunResultMapper resultMapper;
 
   private final String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
 
@@ -106,8 +104,8 @@ class FinanceCuQuoteScenarioMapperIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
-  @DisplayName("成本版本和结果表可持久化双场景金额快照")
-  void mapsCostVersionAndResultSummary() {
+  @DisplayName("唯一成本版本表可持久化双场景金额快照")
+  void mapsCostVersionSummary() {
     QuoteCostRunVersion version = new QuoteCostRunVersion();
     version.setCostRunNo("RUN-FCQ01-" + suffix);
     version.setOaNo("OA-FCQ01-" + suffix);
@@ -133,24 +131,7 @@ class FinanceCuQuoteScenarioMapperIntegrationTest extends BomMapperTestBase {
     assertThat(versionMapper.selectById(version.getId()).getFinalQuoteAmount())
         .isEqualByComparingTo("102.50000000");
 
-    CostRunResult result = new CostRunResult();
-    result.setOaNo(version.getOaNo());
-    result.setOaFormItemId(version.getOaFormItemId());
-    result.setCostRunVersionId(version.getId());
-    result.setCostRunNo(version.getCostRunNo());
-    result.setProductCode(version.getProductCode());
-    result.setPeriod("2026-07");
-    result.setPricingMonth("2026-07");
-    result.setTotalCost(new BigDecimal("100.00000000"));
-    result.setFinanceMaterialCost(new BigDecimal("40.00000000"));
-    result.setOaMaterialCost(new BigDecimal("42.50000000"));
-    result.setCuMaterialAdjustment(new BigDecimal("2.50000000"));
-    result.setFinalQuoteAmount(new BigDecimal("102.50000000"));
-    result.setCalcStatus("已核算");
-    result.setResultStatus("TRIAL");
-    result.setBusinessUnitType("COMMERCIAL");
-    assertThat(resultMapper.insert(result)).isEqualTo(1);
-    assertThat(resultMapper.selectById(result.getId()).getCuMaterialAdjustment())
+    assertThat(versionMapper.selectById(version.getId()).getCuMaterialAdjustment())
         .isEqualByComparingTo("2.50000000");
   }
 

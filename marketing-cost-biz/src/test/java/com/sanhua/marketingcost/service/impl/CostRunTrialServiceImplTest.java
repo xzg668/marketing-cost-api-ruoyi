@@ -131,7 +131,8 @@ class CostRunTrialServiceImplTest {
     prepareResult.setStatus("SUCCESS");
     when(pricePrepareService.generate(any())).thenReturn(prepareResult);
     when(quoteBomStatusService.checkForCostRun(anyString())).thenReturn(bomResponse("MAT-READY", "SYNCED"));
-    when(quoteCostRunVersionService.createTrial(anyString(), any(), anyString(), anyString(), anyString(), any(), any(), any(), any()))
+    when(quoteCostRunVersionService.createTrial(
+            anyString(), any(), anyString(), anyString(), anyString(), any(), any()))
         .thenAnswer(invocation -> {
           QuoteCostRunVersion version = new QuoteCostRunVersion();
           version.setId(9000L + ((Long) invocation.getArgument(1)));
@@ -142,9 +143,7 @@ class CostRunTrialServiceImplTest {
           version.setPricingMonth(invocation.getArgument(3));
           version.setResultPeriod(invocation.getArgument(4));
           version.setPricePrepareNo((String) invocation.getArgument(5));
-          version.setPriceTypeConfirmNo((String) invocation.getArgument(6));
-          version.setBomConfirmNo((String) invocation.getArgument(7));
-          version.setBusinessUnitType((String) invocation.getArgument(8));
+          version.setBusinessUnitType((String) invocation.getArgument(6));
           return version;
         });
     service = new CostRunTrialServiceImpl(
@@ -580,10 +579,8 @@ class CostRunTrialServiceImplTest {
         eq(currentPeriod),
         eq(currentPeriod),
         any(),
-        isNull(),
-        isNull(),
         any());
-    verify(costRunResultWriter).writeQuoteResult(any(), eq(form), eq(second));
+    verify(costRunResultWriter).writeQuoteResult(any());
     verify(oaFormMapper, never()).update(any(), any());
   }
 
@@ -853,7 +850,7 @@ class CostRunTrialServiceImplTest {
     verify(costRunEngine).run(any(CostRunContext.class));
     ArgumentCaptor<CostRunObjectResult> resultCaptor =
         ArgumentCaptor.forClass(CostRunObjectResult.class);
-    verify(costRunResultWriter).writeQuoteResult(resultCaptor.capture(), eq(form), eq(formItem));
+    verify(costRunResultWriter).writeQuoteResult(resultCaptor.capture());
     CostRunPartItemDto writtenPart = resultCaptor.getValue().getPartItems().get(0);
     assertEquals("ERROR", writtenPart.getPriceSource());
     assertTrue(writtenPart.getRemark().contains("公式变量缺失"));

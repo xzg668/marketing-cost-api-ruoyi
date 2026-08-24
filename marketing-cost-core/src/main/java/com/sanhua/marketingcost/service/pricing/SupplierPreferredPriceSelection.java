@@ -9,11 +9,16 @@ public record SupplierPreferredPriceSelection<T>(
     String mainSupplierName,
     String mainSupplierCode,
     BigDecimal supplyRatio,
+    Long supplyRatioRecordId,
     String matchMode,
-    boolean fallback,
-    String fallbackReason) {
+    String failureCode,
+    String failureMessage) {
 
   public SupplierPreferredPriceSelection(T row, String traceMessage) {
-    this(row, traceMessage, row == null ? 0 : 1, null, null, null, "LEGACY", false, "");
+    this(row, traceMessage, row == null ? 0 : 1, null, null, null, null, "NO_SUPPLIER_DIMENSION", "", "");
+  }
+
+  public boolean failed() {
+    return failureCode != null && !failureCode.isBlank();
   }
 }

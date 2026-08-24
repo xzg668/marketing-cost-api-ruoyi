@@ -12,6 +12,12 @@ public class CostRunPartItemDto {
   private String partCode;
   private String productCode;
   private String partDrawingNo;
+  /** 仅用于成本表展示；底层结算行仍保留原始母件名称。 */
+  private String displayPartName;
+  /** 仅用于成本表展示；底层结算行仍保留原始母件料号。 */
+  private String displayPartCode;
+  /** 仅用于成本表展示；底层结算行仍保留原始母件图号。 */
+  private String displayPartDrawingNo;
   private BigDecimal partQty;
   private String shapeAttr;
   private String material;
@@ -107,6 +113,30 @@ public class CostRunPartItemDto {
 
   public void setPartDrawingNo(String partDrawingNo) {
     this.partDrawingNo = partDrawingNo;
+  }
+
+  public String getDisplayPartName() {
+    return displayPartName;
+  }
+
+  public void setDisplayPartName(String displayPartName) {
+    this.displayPartName = displayPartName;
+  }
+
+  public String getDisplayPartCode() {
+    return displayPartCode;
+  }
+
+  public void setDisplayPartCode(String displayPartCode) {
+    this.displayPartCode = displayPartCode;
+  }
+
+  public String getDisplayPartDrawingNo() {
+    return displayPartDrawingNo;
+  }
+
+  public void setDisplayPartDrawingNo(String displayPartDrawingNo) {
+    this.displayPartDrawingNo = displayPartDrawingNo;
   }
 
   public BigDecimal getPartQty() {

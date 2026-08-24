@@ -253,14 +253,16 @@ public class QuoteProductBomCostingBuildServiceImpl
       throw new QuoteIngestException("报价产品行尚未完成 BOM 准备");
     }
     requireBuildable(record, null, false);
-    String periodMonth = requiredText(record.getCostPeriodMonth(), "BOM准备记录核算月份");
     List<QuoteEffectiveBomNode> nodes =
         effectiveBomRepository.findNodesByBuildBatchId(buildBatchId);
     if (nodes == null || nodes.isEmpty()) {
       throw new QuoteIngestException("最终有效BOM不存在: " + buildBatchId);
     }
+    // 最终有效 BOM 是本次显式重算刚生成的权威输入。准备记录可能仍保存上一次
+    // 核算月份，必须以本次构建节点的月份为准，并在成功后回写准备记录。
+    String periodMonth =
+        requiredText(nodes.getFirst().getCostPeriodMonth(), "最终有效BOM核算月份");
     validateEffectiveNodes(record, buildBatchId, periodMonth, nodes);
-    requireNoManualRows(record, periodMonth);
     List<PreparedLine> lines = effectiveLines(record, nodes);
     cleanupExisting(record, periodMonth);
     DirectBuildResult built =
@@ -666,7 +668,7 @@ public class QuoteProductBomCostingBuildServiceImpl
               raw == null ? null : raw.getSourceU9RowId(),
               node.getSourceNodePath(),
               node.getPriceOrgCode(),
-              record.getMaterialOrganizationCode()));
+              materialOrganizationForPriceOrg(node.getPriceOrgCode(), node.getMaterialCode())));
     }
     return result;
   }
@@ -697,10 +699,15 @@ public class QuoteProductBomCostingBuildServiceImpl
     String expectedProduct = requiredText(formalProductCode(record), "最终BOM顶层产品");
     String expectedOrg = requiredOrganization(record).priceOrgCode();
     for (QuoteEffectiveBomNode node : nodes) {
+      String nodeOrg = trimToNull(node.getPriceOrgCode());
+      boolean organizationMatches =
+          expectedOrg.equals(nodeOrg)
+              || (MaterialOrganization.PLATE.getPriceOrgCode().equals(expectedOrg)
+                  && MaterialOrganization.COMMERCIAL.getPriceOrgCode().equals(nodeOrg));
       if (!buildBatchId.equals(trimToNull(node.getBuildBatchId()))
           || !expectedProduct.equals(trimToNull(node.getTopProductCode()))
           || !periodMonth.equals(trimToNull(node.getCostPeriodMonth()))
-          || !expectedOrg.equals(trimToNull(node.getPriceOrgCode()))) {
+          || !organizationMatches) {
         throw new QuoteIngestException(
             "最终有效BOM节点与当前产品、月份、组织或构建编号不一致");
       }
@@ -712,18 +719,13 @@ public class QuoteProductBomCostingBuildServiceImpl
     }
   }
 
-  private void requireNoManualRows(
-      QuoteBomPreparationRecord record, String periodMonth) {
-    Long manualCount =
-        costingRowMapper.selectCount(
-            Wrappers.<BomCostingRow>lambdaQuery()
-                .eq(BomCostingRow::getOaNo, record.getOaNo())
-                .eq(BomCostingRow::getOaFormItemId, record.getOaFormItemId())
-                .eq(BomCostingRow::getTopProductCode, record.getQuoteProductCode())
-                .eq(BomCostingRow::getPeriodMonth, periodMonth)
-                .eq(BomCostingRow::getManualModified, 1));
-    if (manualCount != null && manualCount > 0) {
-      throw new QuoteIngestException("当前产品存在人工修改的结算行，不能自动重建覆盖");
+  private static String materialOrganizationForPriceOrg(
+      String priceOrgCode, String materialCode) {
+    try {
+      return MaterialOrganization.fromPriceOrgCode(priceOrgCode).getCode();
+    } catch (IllegalArgumentException exception) {
+      throw new QuoteIngestException(
+          "最终有效BOM节点报价组织非法: " + firstText(materialCode, "<空料号>"));
     }
   }
 

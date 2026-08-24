@@ -108,6 +108,9 @@ cost:
       # 已有选择历史、普通 BOM、上卷和已确认历史报价均保留。
       enabled: true
   run:
+    # 只在废料、上卷、加工费等会改变成本金额的算法变更时升级；普通发布不要修改。
+    # 成功版本记录的算法版本与此值不一致时必须重算，避免程序修复后仍复用旧成本。
+    algorithm-version: ${COST_RUN_ALGORITHM_VERSION:COST_V3}
     engine:
       # 当前版本统一 CostRunEngine 已是唯一核算核心；开关保留给上线检查和异常兜底策略识别。
       enabled: ${COST_RUN_ENGINE_ENABLED:true}

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -22,20 +23,16 @@ import com.sanhua.marketingcost.dto.financequote.FinancePricePrepareGenerateResu
 import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest;
 import com.sanhua.marketingcost.dto.financequote.QuoteCuMaterialDiffResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult;
-import com.sanhua.marketingcost.entity.CostRunResult;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.QuoteCostPriceScenario;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
-import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmBatch;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
-import com.sanhua.marketingcost.mapper.CostRunResultMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostPriceScenarioMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
-import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmBatchMapper;
 import com.sanhua.marketingcost.service.CostRunEngine;
 import com.sanhua.marketingcost.service.CostRunResultWriter;
 import com.sanhua.marketingcost.service.FinancePricePrepareService;
@@ -59,7 +56,6 @@ class QuoteCuAdjustmentCalcServiceImplTest {
   private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 7, 15, 9, 30);
 
   private PricePrepareBatchMapper batchMapper;
-  private QuotePriceTypeConfirmBatchMapper confirmMapper;
   private FinancePricePrepareService financePrepareService;
   private QuoteCostRunVersionService versionService;
   private QuoteCostRunVersionMapper versionMapper;
@@ -67,7 +63,6 @@ class QuoteCuAdjustmentCalcServiceImplTest {
   private CostRunResultWriter resultWriter;
   private QuoteCuMaterialDiffService diffService;
   private QuoteCostPriceScenarioMapper scenarioMapper;
-  private CostRunResultMapper resultMapper;
   private QuoteCuAdjustmentCalcServiceImpl service;
   private OaForm form;
   private OaFormItem item;
@@ -77,14 +72,11 @@ class QuoteCuAdjustmentCalcServiceImplTest {
   static void initTableInfo() {
     MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
     TableInfoHelper.initTableInfo(assistant, PricePrepareBatch.class);
-    TableInfoHelper.initTableInfo(assistant, QuotePriceTypeConfirmBatch.class);
-    TableInfoHelper.initTableInfo(assistant, CostRunResult.class);
   }
 
   @BeforeEach
   void setUp() {
     batchMapper = mock(PricePrepareBatchMapper.class);
-    confirmMapper = mock(QuotePriceTypeConfirmBatchMapper.class);
     financePrepareService = mock(FinancePricePrepareService.class);
     versionService = mock(QuoteCostRunVersionService.class);
     versionMapper = mock(QuoteCostRunVersionMapper.class);
@@ -92,37 +84,28 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     resultWriter = mock(CostRunResultWriter.class);
     diffService = mock(QuoteCuMaterialDiffService.class);
     scenarioMapper = mock(QuoteCostPriceScenarioMapper.class);
-    resultMapper = mock(CostRunResultMapper.class);
     service = new QuoteCuAdjustmentCalcServiceImpl(
         batchMapper,
-        confirmMapper,
         financePrepareService,
         versionService,
         versionMapper,
         costRunEngine,
         resultWriter,
         diffService,
-        scenarioMapper,
-        resultMapper);
+        scenarioMapper);
 
     form = form(new BigDecimal("102039"));
     item = item();
     oaBatch = oaBatch();
     when(batchMapper.selectOne(any(Wrapper.class))).thenReturn(oaBatch);
-    when(confirmMapper.selectOne(any(Wrapper.class))).thenReturn(confirmation());
     when(financePrepareService.loadPreparedFromOa("PPR-OA-1")).thenReturn(financePrepare());
     when(versionService.createTrial(
-            anyString(), any(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            anyString(), anyString()))
+            anyString(), any(), anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenReturn(version(101L));
     when(versionMapper.updateById(any(QuoteCostRunVersion.class))).thenReturn(1);
     when(costRunEngine.run(any())).thenAnswer(invocation -> costResult(invocation.getArgument(0), "100", "140"));
     when(diffService.calculate(101L)).thenReturn(diff(101L, "12", 1));
     when(scenarioMapper.insert(any(QuoteCostPriceScenario.class))).thenReturn(1);
-    CostRunResult stored = new CostRunResult();
-    stored.setId(501L);
-    when(resultMapper.selectOne(any(Wrapper.class))).thenReturn(stored);
-    when(resultMapper.updateById(any(CostRunResult.class))).thenReturn(1);
   }
 
   @Test
@@ -143,7 +126,7 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     verify(costRunEngine, times(1)).run(any());
     verify(financePrepareService).loadPreparedFromOa("PPR-OA-1");
     verify(financePrepareService, never()).generateFromOa(anyString());
-    verify(resultWriter).writeQuoteResult(any(), any(), any());
+    verify(resultWriter).writeQuoteResult(any());
 
     ArgumentCaptor<CostRunContext> contextCaptor = ArgumentCaptor.forClass(CostRunContext.class);
     verify(costRunEngine).run(contextCaptor.capture());
@@ -168,10 +151,30 @@ class QuoteCuAdjustmentCalcServiceImplTest {
         .isEqualTo(scenarios.get(1).getInputSnapshotHash())
         .hasSize(64);
 
-    ArgumentCaptor<CostRunResult> resultPatch = ArgumentCaptor.forClass(CostRunResult.class);
-    verify(resultMapper).updateById(resultPatch.capture());
-    assertThat(resultPatch.getValue().getTotalCost()).isEqualByComparingTo("140");
-    assertThat(resultPatch.getValue().getFinalQuoteAmount()).isEqualByComparingTo("152");
+    ArgumentCaptor<QuoteCostRunVersion> versionPatch =
+        ArgumentCaptor.forClass(QuoteCostRunVersion.class);
+    verify(versionMapper, times(2)).updateById(versionPatch.capture());
+    QuoteCostRunVersion finished = versionPatch.getAllValues().getLast();
+    assertThat(finished.getTotalCost()).isEqualByComparingTo("140");
+    assertThat(finished.getFinalQuoteAmount()).isEqualByComparingTo("152");
+  }
+
+  @Test
+  @DisplayName("自动完成模式创建 RUNNING 而不是人工 TRIAL 版本")
+  void automaticCompletionCreatesRunningVersion() {
+    when(versionService.createRunning(
+            anyString(), any(), anyString(), anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(version(101L));
+    QuoteCuAdjustmentCalcRequest automatic =
+        new QuoteCuAdjustmentCalcRequest(
+            form, item, MONTH, "PPR-OA-1", "QUOTE:11", ignored -> {}, true);
+
+    service.calculate(automatic);
+
+    verify(versionService).createRunning(
+        anyString(), any(), anyString(), anyString(), anyString(), anyString(), anyString());
+    verify(versionService, never()).createTrial(
+        anyString(), any(), anyString(), anyString(), anyString(), anyString(), anyString());
   }
 
   @Test
@@ -209,8 +212,7 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     assertThatThrownBy(() -> service.calculate(request()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("未锁定Cu价格");
-    verify(resultWriter, never()).writeQuoteResult(any(), any(), any());
-    verify(resultMapper, never()).updateById(any(CostRunResult.class));
+    verify(resultWriter, never()).writeQuoteResult(any());
     verify(scenarioMapper, never()).insert(any(QuoteCostPriceScenario.class));
   }
 
@@ -227,7 +229,7 @@ class QuoteCuAdjustmentCalcServiceImplTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("totalCost与TOTAL");
     verify(diffService, never()).calculate(any());
-    verify(resultWriter, never()).writeQuoteResult(any(), any(), any());
+    verify(resultWriter, never()).writeQuoteResult(any());
   }
 
   @Test
@@ -247,7 +249,7 @@ class QuoteCuAdjustmentCalcServiceImplTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("不能写入普通成本项");
     verify(diffService, never()).calculate(any());
-    verify(resultWriter, never()).writeQuoteResult(any(), any(), any());
+    verify(resultWriter, never()).writeQuoteResult(any());
   }
 
   @Test
@@ -270,17 +272,10 @@ class QuoteCuAdjustmentCalcServiceImplTest {
   void repeatedTrialCreatesNewVersionWithoutOverwritingOldOne() {
     AtomicLong id = new AtomicLong(100);
     when(versionService.createTrial(
-            anyString(), any(), anyString(), anyString(), anyString(), anyString(), anyString(),
-            anyString(), anyString()))
+            anyString(), any(), anyString(), anyString(), anyString(), anyString(), anyString()))
         .thenAnswer(invocation -> version(id.incrementAndGet()));
     when(diffService.calculate(any())).thenAnswer(invocation ->
         diff(invocation.getArgument(0), "12", 1));
-    CostRunResult stored1 = new CostRunResult();
-    stored1.setId(501L);
-    CostRunResult stored2 = new CostRunResult();
-    stored2.setId(502L);
-    when(resultMapper.selectOne(any(Wrapper.class))).thenReturn(stored1, stored2);
-
     var first = service.calculate(request());
     var second = service.calculate(request());
 
@@ -288,8 +283,7 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     assertThat(second.version().getId()).isEqualTo(102L);
     assertThat(second.version().getId()).isNotEqualTo(first.version().getId());
     verify(versionService, times(2)).createTrial(
-        anyString(), any(), anyString(), anyString(), anyString(), anyString(), anyString(),
-        anyString(), anyString());
+        anyString(), any(), anyString(), anyString(), anyString(), anyString(), anyString());
   }
 
   private QuoteCuAdjustmentCalcRequest request() {
@@ -325,7 +319,6 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     value.setOaNo("OA-1");
     value.setOaFormItemId(11L);
     value.setTopProductCode("PROD-1");
-    value.setPriceTypeConfirmNo("PTC-1");
     value.setPeriodMonth(MONTH);
     value.setScenarioType(QuotePriceScenarioType.OA_LOCKED.name());
     value.setScenarioGroupNo("FQG-1");
@@ -335,14 +328,6 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     value.setBomPurpose("NON_BARE");
     value.setSourceType("SYSTEM");
     value.setBusinessUnitType("COMMERCIAL");
-    return value;
-  }
-
-  private QuotePriceTypeConfirmBatch confirmation() {
-    QuotePriceTypeConfirmBatch value = new QuotePriceTypeConfirmBatch();
-    value.setConfirmNo("PTC-1");
-    value.setBomConfirmNo("BOMC-1");
-    value.setStatus(QuotePriceTypeConfirmBatch.STATUS_CONFIRMED);
     return value;
   }
 
@@ -367,8 +352,6 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     value.setProductCode("PROD-1");
     value.setPricingMonth(MONTH);
     value.setResultPeriod(MONTH);
-    value.setPriceTypeConfirmNo("PTC-1");
-    value.setBomConfirmNo("BOMC-1");
     value.setStatus("TRIAL");
     value.setBusinessUnitType("COMMERCIAL");
     value.setTrialStartedAt(AS_OF);

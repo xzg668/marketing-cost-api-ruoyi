@@ -482,7 +482,6 @@ class QuoteCuMaterialDiffServiceImplTest {
     batch.setOaNo("OA-1");
     batch.setOaFormItemId(101L);
     batch.setTopProductCode("TOP-1");
-    batch.setPriceTypeConfirmNo("QPTC-1");
     batch.setPeriodMonth("2026-05");
     batch.setBomPurpose("主制造");
     batch.setSourceType("U9");
@@ -549,8 +548,6 @@ class QuoteCuMaterialDiffServiceImplTest {
     item.setId(id);
     item.setPrepareNo(prepareNo);
     item.setPeriodMonth("2026-05");
-    item.setPriceTypeConfirmNo("QPTC-1");
-    item.setPriceTypeConfirmItemId(901L);
     item.setOaNo("OA-1");
     item.setOaFormItemId(101L);
     item.setTopProductCode("TOP-1");

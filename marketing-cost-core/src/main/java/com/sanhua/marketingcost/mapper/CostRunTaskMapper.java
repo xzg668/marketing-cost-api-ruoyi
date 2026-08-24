@@ -18,6 +18,7 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
   @Insert("""
       INSERT IGNORE INTO lp_cost_run_task (
         batch_no,
+        execution_no,
         scene,
         source_no,
         calc_object_key,
@@ -40,6 +41,7 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
         updated_at
       ) VALUES (
         #{task.batchNo},
+        #{task.executionNo},
         #{task.scene},
         #{task.sourceNo},
         #{task.calcObjectKey},
@@ -69,8 +71,10 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
       SELECT t.*
         FROM lp_cost_run_task t
         JOIN lp_cost_run_batch b
-          ON b.batch_no = t.batch_no
+         ON b.batch_no = t.batch_no
+         AND b.execution_no = t.execution_no
          AND b.status IN ('PENDING', 'RUNNING', 'PARTIAL_FAILED')
+         AND b.prerequisite_status IN ('SUCCESS', 'NOT_REQUIRED')
        WHERE t.scene IN
         <foreach collection="scenes" item="scene" open="(" separator="," close=")">
           #{scene}
@@ -103,6 +107,10 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
              finished_at = NULL,
              updated_at = #{lockedAt}
        WHERE id = #{taskId}
+         AND execution_no = (
+           SELECT b.execution_no FROM lp_cost_run_batch b
+            WHERE b.batch_no = lp_cost_run_task.batch_no
+         )
          AND (
            status IN ('PENDING', 'RETRYABLE')
            OR (
@@ -131,6 +139,10 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
              finished_at = #{finishedAt},
              updated_at = #{finishedAt}
        WHERE id = #{taskId}
+         AND execution_no = (
+           SELECT b.execution_no FROM lp_cost_run_batch b
+            WHERE b.batch_no = lp_cost_run_task.batch_no
+         )
          AND status = 'RUNNING'
          AND worker_id = #{workerId}
       """)
@@ -142,9 +154,40 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
 
   @Update("""
       UPDATE lp_cost_run_task
+         SET status = 'COLLABORATION',
+             progress = 100,
+             worker_id = NULL,
+             locked_at = NULL,
+             lock_expire_time = NULL,
+             result_summary_json = #{resultSummaryJson},
+             error_message = #{message},
+             error_stack = NULL,
+             finished_at = #{finishedAt},
+             updated_at = #{finishedAt}
+       WHERE id = #{taskId}
+         AND execution_no = (
+           SELECT b.execution_no FROM lp_cost_run_batch b
+            WHERE b.batch_no = lp_cost_run_task.batch_no
+         )
+         AND status = 'RUNNING'
+         AND worker_id = #{workerId}
+      """)
+  int markCollaboration(
+      @Param("taskId") Long taskId,
+      @Param("workerId") String workerId,
+      @Param("resultSummaryJson") String resultSummaryJson,
+      @Param("message") String message,
+      @Param("finishedAt") LocalDateTime finishedAt);
+
+  @Update("""
+      UPDATE lp_cost_run_task
          SET progress = #{progress},
              updated_at = #{updatedAt}
        WHERE id = #{taskId}
+         AND execution_no = (
+           SELECT b.execution_no FROM lp_cost_run_batch b
+            WHERE b.batch_no = lp_cost_run_task.batch_no
+         )
          AND status = 'RUNNING'
          AND worker_id = #{workerId}
       """)
@@ -166,6 +209,10 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
              finished_at = #{finishedAt},
              updated_at = #{finishedAt}
        WHERE id = #{taskId}
+         AND execution_no = (
+           SELECT b.execution_no FROM lp_cost_run_batch b
+            WHERE b.batch_no = lp_cost_run_task.batch_no
+         )
          AND status = 'RUNNING'
          AND worker_id = #{workerId}
          AND retry_count + 1 < max_retry_count
@@ -192,6 +239,10 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
              finished_at = #{finishedAt},
              updated_at = #{finishedAt}
        WHERE id = #{taskId}
+         AND execution_no = (
+           SELECT b.execution_no FROM lp_cost_run_batch b
+            WHERE b.batch_no = lp_cost_run_task.batch_no
+         )
          AND status = 'RUNNING'
          AND worker_id = #{workerId}
       """)
@@ -200,6 +251,32 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
       @Param("workerId") String workerId,
       @Param("errorMessage") String errorMessage,
       @Param("errorStack") String errorStack,
+      @Param("finishedAt") LocalDateTime finishedAt);
+
+  @Update("""
+      UPDATE lp_cost_run_task t
+      JOIN lp_cost_run_batch b
+        ON b.batch_no = t.batch_no
+       AND b.execution_no = t.execution_no
+       AND b.scene = 'QUOTE'
+       AND b.prerequisite_status = 'FAILED'
+         SET t.status = 'FAILED',
+             t.progress = 100,
+             t.worker_id = NULL,
+             t.locked_at = NULL,
+             t.lock_expire_time = NULL,
+             t.error_message = #{errorMessage},
+             t.error_stack = NULL,
+             t.finished_at = #{finishedAt},
+             t.updated_at = #{finishedAt}
+       WHERE t.batch_no = #{batchNo}
+         AND t.execution_no = #{executionNo}
+         AND t.status IN ('PENDING', 'RETRYABLE')
+      """)
+  int markQuoteTasksFailedByPrerequisite(
+      @Param("batchNo") String batchNo,
+      @Param("executionNo") int executionNo,
+      @Param("errorMessage") String errorMessage,
       @Param("finishedAt") LocalDateTime finishedAt);
 
   @Update("""
@@ -226,8 +303,9 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
   @Update("""
       <script>
       UPDATE lp_cost_run_task
-         SET status = 'PENDING',
-             progress = 0,
+         SET execution_no = #{executionNo},
+             status = #{status},
+             progress = CASE WHEN #{status} = 'SKIPPED_CURRENT' THEN 100 ELSE 0 END,
              worker_id = NULL,
              locked_at = NULL,
              lock_expire_time = NULL,
@@ -243,19 +321,45 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
         <foreach collection="calcObjectKeys" item="key" open="(" separator="," close=")">
           #{key}
         </foreach>
-         AND status IN ('PENDING', 'SUCCESS', 'FAILED', 'CANCELED', 'RETRYABLE')
+         AND status IN (
+           'PENDING', 'SUCCESS', 'COLLABORATION', 'SKIPPED_CURRENT',
+           'FAILED', 'CANCELED', 'RETRYABLE'
+         )
       </script>
       """)
   int resetQuoteTasksForRerun(
       @Param("batchNo") String batchNo,
       @Param("calcObjectKeys") List<String> calcObjectKeys,
+      @Param("executionNo") int executionNo,
+      @Param("status") String status,
       @Param("updatedAt") LocalDateTime updatedAt);
 
   @Select("""
-      SELECT status AS status, COUNT(*) AS count
-        FROM lp_cost_run_task
-       WHERE batch_no = #{batchNo}
-       GROUP BY status
+      SELECT t.*
+        FROM lp_cost_run_task t
+        JOIN lp_cost_run_batch b
+          ON b.batch_no = t.batch_no
+         AND b.execution_no = t.execution_no
+       WHERE t.scene = 'QUOTE'
+         AND t.oa_no = #{oaNo}
+         AND t.oa_form_item_id = #{oaFormItemId}
+         AND t.pricing_month = #{pricingMonth}
+       ORDER BY t.id DESC
+       LIMIT 1
+      """)
+  CostRunTask selectCurrentQuoteTask(
+      @Param("oaNo") String oaNo,
+      @Param("oaFormItemId") Long oaFormItemId,
+      @Param("pricingMonth") String pricingMonth);
+
+  @Select("""
+      SELECT t.status AS status, COUNT(*) AS count
+        FROM lp_cost_run_task t
+        JOIN lp_cost_run_batch b
+          ON b.batch_no = t.batch_no
+         AND b.execution_no = t.execution_no
+       WHERE t.batch_no = #{batchNo}
+       GROUP BY t.status
       """)
   List<CostRunTaskStatusCount> selectStatusCounts(@Param("batchNo") String batchNo);
 

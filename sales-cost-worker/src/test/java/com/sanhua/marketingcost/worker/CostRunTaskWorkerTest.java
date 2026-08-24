@@ -29,6 +29,7 @@ class CostRunTaskWorkerTest {
     CostRunTaskWorker worker =
         new CostRunTaskWorker(
             claimService,
+            new FakePrerequisiteService(),
             progressService,
             emptyProvider(),
             new CostRunTaskExecutorRegistry(List.of(executor)),
@@ -45,12 +46,14 @@ class CostRunTaskWorkerTest {
     FakeClaimService claimService = new FakeClaimService();
     FakeProgressService progressService = new FakeProgressService();
     FakeExecutor executor = new FakeExecutor(CostRunTaskScene.QUOTE);
+    FakePrerequisiteService prerequisiteService = new FakePrerequisiteService();
     CostRunWorkerProperties properties = enabledProperties();
     properties.setClaimBatchSize(2);
     properties.setLockTimeoutMinutes(15);
     CostRunTaskWorker worker =
         new CostRunTaskWorker(
             claimService,
+            prerequisiteService,
             progressService,
             emptyProvider(),
             new CostRunTaskExecutorRegistry(List.of(executor)),
@@ -63,6 +66,9 @@ class CostRunTaskWorkerTest {
     assertThat(claimService.lastScenes).containsExactly(CostRunTaskScene.QUOTE);
     assertThat(claimService.lastBatchSize).isEqualTo(2);
     assertThat(claimService.lastLockTimeoutMinutes).isEqualTo(15);
+    assertThat(prerequisiteService.callCount).isEqualTo(1);
+    assertThat(prerequisiteService.lastLimit).isEqualTo(2);
+    assertThat(prerequisiteService.lastStaleTimeoutMinutes).isEqualTo(15);
     assertThat(executor.executedTaskIds).containsExactly(1L, 2L);
     assertThat(claimService.successTaskIds).containsExactly(1L, 2L);
     assertThat(claimService.successSummaries)
@@ -76,6 +82,7 @@ class CostRunTaskWorkerTest {
     CostRunTaskWorker worker =
         new CostRunTaskWorker(
             claimService,
+            new FakePrerequisiteService(),
             new FakeProgressService(),
             emptyProvider(),
             new CostRunTaskExecutorRegistry(List.of(new FakeExecutor(CostRunTaskScene.QUOTE))),
@@ -98,6 +105,7 @@ class CostRunTaskWorkerTest {
     CostRunTaskWorker worker =
         new CostRunTaskWorker(
             claimService,
+            new FakePrerequisiteService(),
             new FakeProgressService(),
             emptyProvider(),
             new CostRunTaskExecutorRegistry(List.of(executor)),
@@ -114,6 +122,31 @@ class CostRunTaskWorkerTest {
   }
 
   @Test
+  void businessGapIsMarkedCollaborationWithoutRetrying() {
+    FakeClaimService claimService = new FakeClaimService();
+    FakeExecutor executor = new FakeExecutor(CostRunTaskScene.QUOTE);
+    executor.failure =
+        new CostRunTaskCollaborationRequiredException(
+            "缺少价格", "{\"pipelineStatus\":\"BLOCKED\"}");
+    CostRunTaskWorker worker =
+        new CostRunTaskWorker(
+            claimService,
+            new FakePrerequisiteService(),
+            new FakeProgressService(),
+            emptyProvider(),
+            new CostRunTaskExecutorRegistry(List.of(executor)),
+            enabledProperties());
+
+    CostRunTaskWorker.TaskExecutionMetric metric =
+        worker.processTask("worker-node-1", task(5L, "BATCH-3", "QUOTE"));
+
+    assertThat(metric.success()).isTrue();
+    assertThat(claimService.collaborationTaskIds).containsExactly(5L);
+    assertThat(claimService.retryableFailureTaskIds).isEmpty();
+    assertThat(claimService.finalFailureTaskIds).isEmpty();
+  }
+
+  @Test
   void workerUsesConfiguredThreadsForClaimedTasks() {
     FakeClaimService claimService = new FakeClaimService();
     FakeProgressService progressService = new FakeProgressService();
@@ -125,6 +158,7 @@ class CostRunTaskWorkerTest {
     CostRunTaskWorker worker =
         new CostRunTaskWorker(
             claimService,
+            new FakePrerequisiteService(),
             progressService,
             emptyProvider(),
             new CostRunTaskExecutorRegistry(List.of(executor)),
@@ -139,6 +173,77 @@ class CostRunTaskWorkerTest {
         java.util.stream.LongStream.rangeClosed(1L, 20L).boxed().toList());
     assertThat(executor.maxConcurrency.get()).isGreaterThan(1);
     assertThat(progressService.refreshedBatchNos).containsExactly("BATCH-4");
+  }
+
+  @Test
+  void fortySevenQuoteProductsUseOneBatchPreparationAndFourProductThreads() {
+    FakeClaimService claimService = new FakeClaimService();
+    claimService.taskPages = List.of(
+        tasks(1L, 20L, "BATCH-47", "QUOTE"),
+        tasks(21L, 40L, "BATCH-47", "QUOTE"),
+        tasks(41L, 47L, "BATCH-47", "QUOTE"));
+    FakePrerequisiteService prerequisiteService = new FakePrerequisiteService();
+    prerequisiteService.successOnlyOnce = true;
+    FakeExecutor executor = new FakeExecutor(CostRunTaskScene.QUOTE);
+    executor.delayMillis = 10L;
+    CostRunWorkerProperties properties = enabledProperties();
+    properties.setThreads(4);
+    properties.setClaimBatchSize(20);
+    CostRunTaskWorker worker =
+        new CostRunTaskWorker(
+            claimService,
+            prerequisiteService,
+            new FakeProgressService(),
+            emptyProvider(),
+            new CostRunTaskExecutorRegistry(List.of(executor)),
+            properties);
+
+    assertThat(worker.scanOnce()).isEqualTo(20);
+    assertThat(worker.scanOnce()).isEqualTo(20);
+    assertThat(worker.scanOnce()).isEqualTo(7);
+
+    assertThat(executor.executedTaskIds).hasSize(47);
+    assertThat(executor.maxConcurrency.get()).isEqualTo(4);
+    assertThat(prerequisiteService.successCount).isEqualTo(1);
+  }
+
+  @Test
+  void prerequisiteFailureLeavesQuoteProductsUnclaimed() {
+    FakeClaimService claimService = new FakeClaimService();
+    FakePrerequisiteService prerequisiteService = new FakePrerequisiteService();
+    prerequisiteService.fail = true;
+    FakeExecutor executor = new FakeExecutor(CostRunTaskScene.QUOTE);
+    CostRunTaskWorker worker =
+        new CostRunTaskWorker(
+            claimService,
+            prerequisiteService,
+            new FakeProgressService(),
+            emptyProvider(),
+            new CostRunTaskExecutorRegistry(List.of(executor)),
+            enabledProperties());
+
+    assertThat(worker.scanOnce()).isZero();
+    assertThat(prerequisiteService.failedCount).isEqualTo(1);
+    assertThat(executor.executedTaskIds).isEmpty();
+  }
+
+  @Test
+  void monthlyOnlyWorkerSkipsQuoteBatchPreparation() {
+    FakePrerequisiteService prerequisiteService = new FakePrerequisiteService();
+    CostRunWorkerProperties properties = enabledProperties();
+    properties.setScenes(EnumSet.of(CostRunTaskScene.MONTHLY_REPRICE));
+    CostRunTaskWorker worker =
+        new CostRunTaskWorker(
+            new FakeClaimService(),
+            prerequisiteService,
+            new FakeProgressService(),
+            emptyProvider(),
+            new CostRunTaskExecutorRegistry(
+                List.of(new FakeExecutor(CostRunTaskScene.MONTHLY_REPRICE))),
+            properties);
+
+    assertThat(worker.scanOnce()).isZero();
+    assertThat(prerequisiteService.callCount).isZero();
   }
 
   private CostRunWorkerProperties enabledProperties() {
@@ -156,6 +261,12 @@ class CostRunTaskWorkerTest {
     task.setBatchNo(batchNo);
     task.setScene(scene);
     return task;
+  }
+
+  private List<CostRunTask> tasks(long firstId, long lastId, String batchNo, String scene) {
+    return java.util.stream.LongStream.rangeClosed(firstId, lastId)
+        .mapToObj(id -> task(id, batchNo, scene))
+        .toList();
   }
 
   private ObjectProvider<MonthlyRepriceProgressService> emptyProvider() {
@@ -190,10 +301,13 @@ class CostRunTaskWorkerTest {
     private int lastBatchSize;
     private int lastLockTimeoutMinutes;
     private List<CostRunTask> tasks = List.of();
+    private List<List<CostRunTask>> taskPages = List.of();
+    private int taskPageIndex;
     private final List<Long> successTaskIds = new ArrayList<>();
     private final List<String> successSummaries = new ArrayList<>();
     private final List<Long> retryableFailureTaskIds = new ArrayList<>();
     private final List<Long> finalFailureTaskIds = new ArrayList<>();
+    private final List<Long> collaborationTaskIds = new ArrayList<>();
     private String lastErrorMessage;
     private String lastErrorStack;
 
@@ -205,6 +319,9 @@ class CostRunTaskWorkerTest {
       lastScenes = scenes;
       lastBatchSize = batchSize;
       lastLockTimeoutMinutes = lockTimeoutMinutes;
+      if (taskPageIndex < taskPages.size()) {
+        return taskPages.get(taskPageIndex++);
+      }
       return tasks;
     }
 
@@ -212,6 +329,14 @@ class CostRunTaskWorkerTest {
     public boolean markSuccess(Long taskId, String workerId, String resultSummaryJson) {
       successTaskIds.add(taskId);
       successSummaries.add(resultSummaryJson);
+      return true;
+    }
+
+    @Override
+    public boolean markCollaboration(
+        Long taskId, String workerId, String resultSummaryJson, String message) {
+      collaborationTaskIds.add(taskId);
+      lastErrorMessage = message;
       return true;
     }
 
@@ -242,6 +367,34 @@ class CostRunTaskWorkerTest {
     }
   }
 
+  private static class FakePrerequisiteService implements CostRunBatchPrerequisiteService {
+
+    private int callCount;
+    private int successCount;
+    private int failedCount;
+    private int lastLimit;
+    private int lastStaleTimeoutMinutes;
+    private boolean successOnlyOnce;
+    private boolean fail;
+
+    @Override
+    public PreparationSummary preparePendingQuoteBatches(
+        String workerId, int limit, int staleTimeoutMinutes) {
+      callCount++;
+      lastLimit = limit;
+      lastStaleTimeoutMinutes = staleTimeoutMinutes;
+      if (fail) {
+        failedCount++;
+        return new PreparationSummary(1, 1, 0, 1);
+      }
+      if (!successOnlyOnce || successCount == 0) {
+        successCount++;
+        return new PreparationSummary(1, 1, 1, 0);
+      }
+      return PreparationSummary.empty();
+    }
+  }
+
   private static class FakeProgressService implements CostRunTaskProgressService {
 
     private final List<String> refreshedBatchNos = new ArrayList<>();
@@ -249,6 +402,11 @@ class CostRunTaskWorkerTest {
     @Override
     public CostRunBatchProgressSnapshot refreshBatchProgress(String batchNo) {
       refreshedBatchNos.add(batchNo);
+      return new CostRunBatchProgressSnapshot();
+    }
+
+    @Override
+    public CostRunBatchProgressSnapshot getBatchProgress(String batchNo) {
       return new CostRunBatchProgressSnapshot();
     }
   }

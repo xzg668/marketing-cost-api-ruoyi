@@ -6,33 +6,32 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 物料价格路由服务 —— 根据 (materialCode, period, quoteDate) 给出该物料应走的取价桶。
+ * 物料价格路由服务 —— 根据物料当前最新类型给出该物料应走的取价桶。
  *
  * <p>设计要点：
  * <ul>
- *   <li>命中：按 priority 升序的第一条满足生效期的路由</li>
- *   <li>降级：listCandidates 返回所有候选，调用方可在第一条 Resolver 拿不到值时按顺序回退</li>
+ *   <li>当前类型：严格按 {@code created_at DESC, id DESC} 取一条</li>
+ *   <li>类型路由不按月份复制，也不因 {@code effective_to} 到期停止报价</li>
+ *   <li>价格生效期、供应商选择和历史价沿用由具体价格源负责</li>
  *   <li>纯查询服务，无写操作；可在 Caffeine 中缓存（本期未启用，避免与导入/编辑窗口冲突）</li>
  * </ul>
  */
 public interface MaterialPriceRouterService {
 
   /**
-   * 解析当前生效的取价路由（priority 最小且在生效期内）。
+   * 解析当前最新价格类型。
    *
    * @param materialCode 物料编码
-   * @param period       账期（格式 yyyy-MM）；与 lp_material_price_type.period 严格匹配
-   * @param quoteDate    询价/试算日期，用于过滤 effective_from/to 窗口；null 表示不限
+   * @param period       账期（格式 yyyy-MM）；保留在接口中供下游取价，类型路由不使用
+   * @param quoteDate    询价/试算日期；保留在接口中供下游取价，类型路由不使用
    * @return 命中的路由；查不到任何候选时返回 empty（调用方应记录 WARN 并标红）
    */
   Optional<PriceTypeRoute> resolve(String materialCode, String period, LocalDate quoteDate);
 
   /**
-   * 列出所有候选路由（按 priority 升序）。
+   * 返回当前最新路由，结果最多一条。
    *
-   * <p>用于双跑模式下的 diff 审计，以及主路由 Resolver 拿不到值时的有序降级。
-   *
-   * @return 候选列表；无任何登记返回空 list（调用方需自行处理）
+   * @return 当前路由；无任何登记或当前类型非法时返回空 list
    */
   List<PriceTypeRoute> listCandidates(String materialCode, String period, LocalDate quoteDate);
 }

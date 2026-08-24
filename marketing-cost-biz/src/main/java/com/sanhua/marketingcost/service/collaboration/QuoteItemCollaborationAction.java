@@ -10,8 +10,11 @@ public enum QuoteItemCollaborationAction {
   APPLY_APPROVED_RESULT,
   VIEW_SUPPLEMENT,
   START_COSTING,
-  CONTINUE_COSTING,
+  RESTART_COSTING,
+  RETRY_COSTING,
   VIEW_COSTING_RESULT,
+  VIEW_COSTING_PROGRESS,
+  VIEW_COSTING_GAP,
   NONE;
 
   public boolean canStartCollaboration() {

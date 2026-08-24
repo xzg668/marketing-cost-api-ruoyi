@@ -17,11 +17,15 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
+import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
+import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
+import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import java.util.List;
+import java.util.Optional;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,7 +37,9 @@ class PricePrepareReadinessServiceImplTest {
 
   private PricePrepareItemMapper itemMapper;
   private PricePrepareGapMapper gapMapper;
+  private PricePrepareBatchMapper batchMapper;
   private PricePrepareQueryService queryService;
+  private QuoteCostingWorkspaceService workspaceService;
   private PricePrepareReadinessServiceImpl service;
 
   @BeforeAll
@@ -42,14 +48,19 @@ class PricePrepareReadinessServiceImplTest {
         new MapperBuilderAssistant(new MybatisConfiguration(), "");
     TableInfoHelper.initTableInfo(assistant, PricePrepareItem.class);
     TableInfoHelper.initTableInfo(assistant, PricePrepareGap.class);
+    TableInfoHelper.initTableInfo(assistant, PricePrepareBatch.class);
   }
 
   @BeforeEach
   void setUp() {
     itemMapper = mock(PricePrepareItemMapper.class);
     gapMapper = mock(PricePrepareGapMapper.class);
+    batchMapper = mock(PricePrepareBatchMapper.class);
     queryService = mock(PricePrepareQueryService.class);
-    service = new PricePrepareReadinessServiceImpl(itemMapper, gapMapper, queryService);
+    workspaceService = mock(QuoteCostingWorkspaceService.class);
+    when(workspaceService.find(any(), any())).thenReturn(Optional.empty());
+    service = new PricePrepareReadinessServiceImpl(
+        itemMapper, gapMapper, batchMapper, queryService, workspaceService);
   }
 
   @Test
@@ -65,6 +76,24 @@ class PricePrepareReadinessServiceImplTest {
     assertThat(result.isWarning()).isFalse();
     assertThat(result.getPrepareNo()).isNull();
     assertThat(result.getMessage()).isEqualTo("价格准备已完成");
+  }
+
+  @Test
+  @DisplayName("整单已就绪但沿用历史价：允许继续并返回非阻断提醒数")
+  void readyWithCarriedForwardWarnings() {
+    PricePrepareTopProductSummaryResponse summary =
+        topSummary("OA-001", "TOP-1", 3, 3, 0, "READY");
+    summary.setWarningCount(2);
+    when(queryService.pageTopProductSummaries(any())).thenReturn(topPage(summary));
+
+    PricePrepareReadinessResult result = service.check("OA-001", "2026-08");
+
+    assertThat(result.getStatus()).isEqualTo("READY");
+    assertThat(result.isAllowContinue()).isTrue();
+    assertThat(result.isBlocking()).isFalse();
+    assertThat(result.isWarning()).isTrue();
+    assertThat(result.getWarningCount()).isEqualTo(2);
+    assertThat(result.getMessage()).contains("2 项沿用历史价");
   }
 
   @Test
@@ -169,6 +198,30 @@ class PricePrepareReadinessServiceImplTest {
   }
 
   @Test
+  @DisplayName("产品行已就绪但沿用历史价：从当前明细返回非阻断提醒")
+  void scopedReadyWithCarriedForwardWarning() {
+    PricePrepareItem item = new PricePrepareItem();
+    item.setPrepareNo("PPR-HISTORY");
+    item.setOaNo("OA-001");
+    item.setOaFormItemId(203L);
+    item.setTopProductCode("TOP-HISTORY");
+    item.setPeriodMonth("2026-08");
+    item.setStatus("READY");
+    item.setCarriedForward(1);
+    when(itemMapper.selectList(any())).thenReturn(List.of(item));
+    when(gapMapper.selectList(any())).thenReturn(List.of());
+
+    PricePrepareReadinessResult result =
+        service.check("OA-001", 203L, "TOP-HISTORY", "2026-08");
+
+    assertThat(result.getStatus()).isEqualTo("READY");
+    assertThat(result.isAllowContinue()).isTrue();
+    assertThat(result.isWarning()).isTrue();
+    assertThat(result.getWarningCount()).isEqualTo(1);
+    assertThat(result.getMessage()).contains("1 项沿用历史价");
+  }
+
+  @Test
   @DisplayName("产品行维度检查：自动检查快照不能覆盖已完成的OA和财务正式批次")
   void completedScenarioPairWinsOverNewerCheckOnlyBatch() {
     PricePrepareBatch checkOnly = batch("PPR-CHECK", QuotePriceScenarioType.OA_LOCKED.name(), null);
@@ -188,7 +241,7 @@ class PricePrepareReadinessServiceImplTest {
     when(itemMapper.selectList(any())).thenReturn(List.of(item));
 
     PricePrepareReadinessResult result =
-        service.check("OA-001", 202L, "TOP-SAME", "2026-05", "PTC-1");
+        service.check("OA-001", 202L, "TOP-SAME", "2026-05");
 
     assertThat(result.getStatus()).isEqualTo("READY");
     assertThat(result.getPrepareNo()).isEqualTo("PPR-OA-FINAL");
@@ -204,6 +257,58 @@ class PricePrepareReadinessServiceImplTest {
     assertThat(captor.getValue().getParamNameValuePairs().values())
         .contains("PPR-OA-FINAL");
     verify(gapMapper, never()).selectList(any());
+  }
+
+  @Test
+  @DisplayName("工作区当前最终价格及财务对比都成功时才允许成本核算")
+  void workspacePointerIsAuthoritativeWhenReady() {
+    QuoteCostingWorkspace workspace = new QuoteCostingWorkspace();
+    workspace.setCurrentPrepareNo("PPR-CURRENT");
+    workspace.setWorkspaceStatus("PRICE_READY");
+    workspace.setGapCount(0);
+    workspace.setCarriedForwardPriceCount(1);
+    when(workspaceService.find(202L, "2026-08")).thenReturn(Optional.of(workspace));
+    when(gapMapper.selectList(any())).thenReturn(List.of());
+    when(batchMapper.selectOne(any()))
+        .thenReturn(batch("PPR-CURRENT", QuotePriceScenarioType.OA_LOCKED.name(), null));
+    when(batchMapper.selectList(any()))
+        .thenReturn(List.of(batch(
+            "PPR-FIN", QuotePriceScenarioType.FINANCE_QUOTE_BASE.name(), "PPR-CURRENT")));
+    PricePrepareItem item = new PricePrepareItem();
+    item.setPrepareNo("PPR-CURRENT");
+    item.setCurrentFlag(1);
+    item.setStatus("READY");
+    when(itemMapper.selectList(any())).thenReturn(List.of(item));
+
+    PricePrepareReadinessResult result =
+        service.check("OA-001", 202L, "TOP-SAME", "2026-08");
+
+    assertThat(result.getStatus()).isEqualTo("READY");
+    assertThat(result.getPrepareNo()).isEqualTo("PPR-CURRENT");
+    assertThat(result.getWarningCount()).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("新候选失败时即使旧价格指针仍在也必须阻断成本核算")
+  void workspaceGapBlocksWithoutSwitchingOldPointer() {
+    QuoteCostingWorkspace workspace = new QuoteCostingWorkspace();
+    workspace.setCurrentPrepareNo("PPR-OLD");
+    workspace.setWorkspaceStatus("PRICE_BLOCKED");
+    workspace.setGapCount(2);
+    when(workspaceService.find(202L, "2026-08")).thenReturn(Optional.of(workspace));
+    PricePrepareGap gap = new PricePrepareGap();
+    gap.setGapMaterialCode("MAT-MISSING");
+    gap.setMessage("缺价格");
+    when(gapMapper.selectList(any())).thenReturn(List.of(gap));
+
+    PricePrepareReadinessResult result =
+        service.check("OA-001", 202L, "TOP-SAME", "2026-08");
+
+    assertThat(result.getStatus()).isEqualTo("PARTIAL");
+    assertThat(result.isBlocking()).isTrue();
+    assertThat(result.isAllowContinue()).isFalse();
+    assertThat(result.getPrepareNo()).isEqualTo("PPR-OLD");
+    assertThat(result.getMessage()).contains("2 项缺口", "MAT-MISSING");
   }
 
   private PricePrepareBatch batch(

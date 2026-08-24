@@ -9,7 +9,7 @@ import java.util.List;
 import org.apache.ibatis.executor.BatchResult;
 import org.springframework.stereotype.Repository;
 
-/** 最终节点仓储；已确认构建保持不可变，仅允许删除尚未确认且被撤回的临时构建。 */
+/** 最终节点仓储；构建写入后保持不可变。 */
 @Repository
 public class QuoteEffectiveBomRepositoryImpl
     implements QuoteEffectiveBomRepository {
@@ -93,24 +93,5 @@ public class QuoteEffectiveBomRepositoryImpl
               + ", actual="
               + knownAffectedRows);
     }
-  }
-
-  @Override
-  public int deleteUnreferencedByOriginMonthlySnapshotId(Long monthlySnapshotId) {
-    return mapper.delete(
-        Wrappers.lambdaQuery(QuoteEffectiveBomNode.class)
-            .eq(
-                QuoteEffectiveBomNode::getOriginMonthlySnapshotId,
-                monthlySnapshotId)
-            .notInSql(
-                QuoteEffectiveBomNode::getBuildBatchId,
-                "SELECT costing_build_batch_id"
-                    + " FROM lp_quote_bom_confirmation"
-                    + " WHERE costing_build_batch_id IS NOT NULL")
-            .notInSql(
-                QuoteEffectiveBomNode::getBuildBatchId,
-                "SELECT effective_build_batch_id COLLATE utf8mb4_unicode_ci"
-                    + " FROM lp_quote_bom_monthly_snapshot"
-                    + " WHERE effective_build_batch_id IS NOT NULL"));
   }
 }

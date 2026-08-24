@@ -8,16 +8,17 @@ import static org.mockito.Mockito.when;
 
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import com.sanhua.marketingcost.dto.ingest.QuoteRequestListItemResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunTrialRequest;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunWorkbenchResponse;
+import com.sanhua.marketingcost.dto.quotecosting.ProductCostingRequest;
+import com.sanhua.marketingcost.dto.quotecosting.ProductCostingResult;
+import com.sanhua.marketingcost.dto.quotecosting.QuoteProductCostRunRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCuMaterialDifferenceResponse;
 import com.sanhua.marketingcost.security.PermissionService;
 import com.sanhua.marketingcost.service.BusinessUnitRepriceLockGuard;
-import com.sanhua.marketingcost.service.QuoteBomConfirmationService;
+import com.sanhua.marketingcost.service.ProductCostingPipeline;
 import com.sanhua.marketingcost.service.QuoteCostRunWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
 import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
-import com.sanhua.marketingcost.service.QuotePriceTypeConfirmationService;
+import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
 import com.sanhua.marketingcost.service.ingest.QuoteRequestQueryService;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
@@ -117,7 +118,7 @@ class QuoteRequestControllerSecurityTest {
   }
 
   @Test
-  void trialCostRunDeniesWithoutQuotePermission() {
+  void submitProductCostRunDeniesWithoutQuotePermission() {
     try (AnnotationConfigApplicationContext context =
         new AnnotationConfigApplicationContext(TestSecurityConfig.class)) {
       QuoteRequestController controller = context.getBean(QuoteRequestController.class);
@@ -127,20 +128,24 @@ class QuoteRequestControllerSecurityTest {
                   "staff", null, List.of(new SimpleGrantedAuthority("other:permission"))));
 
       assertThatThrownBy(
-              () -> controller.trialCostRun("OA-1", 1L, new QuoteCostRunTrialRequest()))
+              () -> controller.submitProductCostRun("OA-1", 1L, new QuoteProductCostRunRequest()))
           .isInstanceOf(AccessDeniedException.class);
     }
   }
 
   @Test
-  void trialCostRunAllowsQuotePermissionAndChecksMonthlyRepriceLock() {
+  void submitProductCostRunAllowsQuotePermissionAndChecksMonthlyRepriceLock() {
     try (AnnotationConfigApplicationContext context =
         new AnnotationConfigApplicationContext(TestSecurityConfig.class)) {
-      QuoteCostRunWorkbenchService service = context.getBean(QuoteCostRunWorkbenchService.class);
+      ProductCostingPipeline pipeline = context.getBean(ProductCostingPipeline.class);
       BusinessUnitRepriceLockGuard lockGuard =
           context.getBean(BusinessUnitRepriceLockGuard.class);
-      QuoteCostRunTrialRequest request = new QuoteCostRunTrialRequest();
-      when(service.trial("OA-1", 1L, request)).thenReturn(new QuoteCostRunWorkbenchResponse());
+      QuoteProductCostRunRequest request = new QuoteProductCostRunRequest();
+      ProductCostingResult response = new ProductCostingResult();
+      response.setPipelineStatus("SUCCESS");
+      ProductCostingRequest command =
+          new ProductCostingRequest("OA-1", 1L, null, "quoter", false);
+      when(pipeline.execute(command)).thenReturn(response);
       QuoteRequestController controller = context.getBean(QuoteRequestController.class);
       SecurityContextHolder.getContext()
           .setAuthentication(
@@ -149,9 +154,9 @@ class QuoteRequestControllerSecurityTest {
                   null,
                   List.of(new SimpleGrantedAuthority("ingest:quote:list"))));
 
-      assertThat(controller.trialCostRun("OA-1", 1L, request).isSuccess()).isTrue();
+      assertThat(controller.submitProductCostRun("OA-1", 1L, request).isSuccess()).isTrue();
       verify(lockGuard).assertCostRunAllowed("OA-1");
-      verify(service).trial("OA-1", 1L, request);
+      verify(pipeline).execute(command);
     }
   }
 
@@ -174,13 +179,8 @@ class QuoteRequestControllerSecurityTest {
     }
 
     @Bean
-    QuoteBomConfirmationService quoteBomConfirmationService() {
-      return mock(QuoteBomConfirmationService.class);
-    }
-
-    @Bean
-    QuotePriceTypeConfirmationService quotePriceTypeConfirmationService() {
-      return mock(QuotePriceTypeConfirmationService.class);
+    QuotePriceTypeRecognitionService quotePriceTypeRecognitionService() {
+      return mock(QuotePriceTypeRecognitionService.class);
     }
 
     @Bean
@@ -194,6 +194,16 @@ class QuoteRequestControllerSecurityTest {
     }
 
     @Bean
+    ProductCostingPipeline productCostingPipeline() {
+      return mock(ProductCostingPipeline.class);
+    }
+
+    @Bean
+    com.sanhua.marketingcost.service.QuoteBatchCostRunService quoteBatchCostRunService() {
+      return mock(com.sanhua.marketingcost.service.QuoteBatchCostRunService.class);
+    }
+
+    @Bean
     BusinessUnitRepriceLockGuard businessUnitRepriceLockGuard() {
       return mock(BusinessUnitRepriceLockGuard.class);
     }
@@ -202,18 +212,20 @@ class QuoteRequestControllerSecurityTest {
     QuoteRequestController quoteRequestController(
         QuoteRequestQueryService service,
         QuoteCostingWorkbenchService workbenchService,
-        QuoteBomConfirmationService confirmationService,
-        QuotePriceTypeConfirmationService priceTypeConfirmationService,
+        QuotePriceTypeRecognitionService priceTypeRecognitionService,
         QuotePricePrepareWorkbenchService pricePrepareWorkbenchService,
         QuoteCostRunWorkbenchService costRunWorkbenchService,
+        ProductCostingPipeline productCostingPipeline,
+        com.sanhua.marketingcost.service.QuoteBatchCostRunService quoteBatchCostRunService,
         BusinessUnitRepriceLockGuard repriceLockGuard) {
       return new QuoteRequestController(
           service,
           workbenchService,
-          confirmationService,
-          priceTypeConfirmationService,
+          priceTypeRecognitionService,
           pricePrepareWorkbenchService,
           costRunWorkbenchService,
+          productCostingPipeline,
+          quoteBatchCostRunService,
           repriceLockGuard);
     }
   }

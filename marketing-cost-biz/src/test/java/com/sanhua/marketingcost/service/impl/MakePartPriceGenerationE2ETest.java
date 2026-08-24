@@ -192,7 +192,8 @@ class MakePartPriceGenerationE2ETest {
         .thenReturn(List.of(rawChild("MAKE-MISSING-SCRAP-PRICE", "RAW-MISSING-SCRAP-PRICE")));
 
     when(weightService.resolveWeights(
-            anyString(), any(BomU9Source.class), anyString(), anyString(), anyBoolean()))
+            anyString(), any(BomU9Source.class), anyString(), anyString(),
+            any(LocalDate.class), anyString(), anyBoolean()))
         .thenAnswer(invocation -> {
           String parentCode = invocation.getArgument(0);
           BomU9Source child = invocation.getArgument(1);

@@ -74,7 +74,7 @@ class QuoteBomAlternativeControllerTest {
 
     QuoteBomAlternativeSelectionRequest request =
         new QuoteBomAlternativeSelectionRequest(
-            "2026-07", "ALT", 1, "BUILD-1", false, null);
+            "2026-07", "ALT", 1, "BUILD-1", null);
     CommonResult<QuoteBomAlternativeSelectionResponse> result =
         controller.saveSelection(
             "OA-QBA-14", 1401L, "GROUP", request, null);
@@ -95,7 +95,7 @@ class QuoteBomAlternativeControllerTest {
   void savesSelectionWithAuthenticatedOperatorAndReturnsRebuildResult() {
     QuoteBomAlternativeSelectionRequest request =
         new QuoteBomAlternativeSelectionRequest(
-            "2026-07", "ALT", 1, "BUILD-1", false, "报价要求");
+            "2026-07", "ALT", 1, "BUILD-1", "报价要求");
     Authentication authentication = mock(Authentication.class);
     when(authentication.getName()).thenReturn("quoter");
     QuoteBomAlternativeSelectionResponse response =
@@ -107,10 +107,6 @@ class QuoteBomAlternativeControllerTest {
             "MANUAL_ALTERNATIVE",
             false,
             true,
-            false,
-            35,
-            36,
-            "BUILD-2",
             List.of(
                 "PRICE_TYPE_CONFIRMATION",
                 "PRICE_PREPARE",
@@ -147,7 +143,7 @@ class QuoteBomAlternativeControllerTest {
   void samePutEndpointRestoresStandardAndKeepsVersionHistory() {
     QuoteBomAlternativeSelectionRequest request =
         new QuoteBomAlternativeSelectionRequest(
-            "2026-07", "STD", 2, "BUILD-2", false, "恢复标准件");
+            "2026-07", "STD", 2, "BUILD-2", "恢复标准件");
     QuoteBomAlternativeSelectionResponse response =
         new QuoteBomAlternativeSelectionResponse(
             "GROUP",
@@ -157,10 +153,6 @@ class QuoteBomAlternativeControllerTest {
             "MANUAL_STANDARD",
             false,
             true,
-            false,
-            36,
-            35,
-            "BUILD-3",
             List.of("PRICE_TYPE_CONFIRMATION", "PRICE_PREPARE", "FINAL_PRICE", "COST_RUN"));
     when(
             service.saveSelection(
@@ -215,7 +207,7 @@ class QuoteBomAlternativeControllerTest {
   void rejectsMaterialOutsideCurrentCandidateGroupWithStableError() {
     QuoteBomAlternativeSelectionRequest request =
         new QuoteBomAlternativeSelectionRequest(
-            "2026-07", "ARBITRARY", 1, "BUILD-1", false, null);
+            "2026-07", "ARBITRARY", 1, "BUILD-1", null);
     when(
             service.saveSelection(
                 "OA-QBA-09", 901L, "GROUP", request, "system"))
@@ -239,7 +231,7 @@ class QuoteBomAlternativeControllerTest {
   void distinguishesIdempotentRepeatFromVersionConflict() {
     QuoteBomAlternativeSelectionRequest request =
         new QuoteBomAlternativeSelectionRequest(
-            "2026-07", "STD", 1, "BUILD-1", false, null);
+            "2026-07", "STD", 1, "BUILD-1", null);
     when(
             service.saveSelection(
                 "OA-QBA-09", 901L, "GROUP", request, "system"))
@@ -252,10 +244,6 @@ class QuoteBomAlternativeControllerTest {
                 "AUTO_STANDARD",
                 true,
                 false,
-                false,
-                0,
-                0,
-                null,
                 List.of()));
 
     CommonResult<QuoteBomAlternativeSelectionResponse> idempotent =
@@ -264,7 +252,7 @@ class QuoteBomAlternativeControllerTest {
 
     assertThat(idempotent.isSuccess()).isTrue();
     assertThat(idempotent.getData().idempotent()).isTrue();
-    assertThat(idempotent.getData().rebuilt()).isFalse();
+    assertThat(idempotent.getData().recalculationRequired()).isFalse();
 
     when(
             service.saveSelection(

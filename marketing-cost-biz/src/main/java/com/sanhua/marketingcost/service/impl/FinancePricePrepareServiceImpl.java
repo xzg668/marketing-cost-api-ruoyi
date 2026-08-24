@@ -8,14 +8,10 @@ import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
-import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmBatch;
-import com.sanhua.marketingcost.entity.QuoteBomConfirmation;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
-import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmBatchMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
 import com.sanhua.marketingcost.service.FinancePricePrepareService;
 import com.sanhua.marketingcost.service.FinanceQuoteBasePriceService;
 import com.sanhua.marketingcost.service.PricePrepareService;
@@ -38,8 +34,6 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
 
   private final PricePrepareBatchMapper batchMapper;
   private final PricePrepareItemMapper itemMapper;
-  private final QuotePriceTypeConfirmBatchMapper confirmBatchMapper;
-  private final QuoteBomConfirmationMapper bomConfirmationMapper;
   private final MakePartPriceCalcRowMapper makePartRowMapper;
   private final FinanceQuoteBasePriceService financeBasePriceService;
   private final PricePrepareService pricePrepareService;
@@ -47,15 +41,11 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
   public FinancePricePrepareServiceImpl(
       PricePrepareBatchMapper batchMapper,
       PricePrepareItemMapper itemMapper,
-      QuotePriceTypeConfirmBatchMapper confirmBatchMapper,
-      QuoteBomConfirmationMapper bomConfirmationMapper,
       MakePartPriceCalcRowMapper makePartRowMapper,
       FinanceQuoteBasePriceService financeBasePriceService,
       PricePrepareService pricePrepareService) {
     this.batchMapper = batchMapper;
     this.itemMapper = itemMapper;
-    this.confirmBatchMapper = confirmBatchMapper;
-    this.bomConfirmationMapper = bomConfirmationMapper;
     this.makePartRowMapper = makePartRowMapper;
     this.financeBasePriceService = financeBasePriceService;
     this.pricePrepareService = pricePrepareService;
@@ -67,7 +57,6 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
     String normalizedSourceNo = requireText(sourcePrepareNo, "sourcePrepareNo");
     PricePrepareBatch source = loadSourceBatch(normalizedSourceNo);
     validateSourceBatch(source);
-    validatePriceTypeConfirmation(source);
     List<PricePrepareItem> sourceItems = loadItems(normalizedSourceNo);
     validateSourceItems(sourceItems);
 
@@ -108,7 +97,6 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
     String normalizedSourceNo = requireText(sourcePrepareNo, "sourcePrepareNo");
     PricePrepareBatch source = loadSourceBatch(normalizedSourceNo);
     validateSourceBatch(source);
-    validatePriceTypeConfirmation(source);
     List<PricePrepareItem> sourceItems = loadItems(normalizedSourceNo);
     validateSourceItems(sourceItems);
 
@@ -168,7 +156,6 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
     }
     requireText(source.getOaNo(), "OA价格准备批次oaNo");
     requireText(source.getPeriodMonth(), "OA价格准备批次pricing_month");
-    requireText(source.getPriceTypeConfirmNo(), "OA价格准备批次priceTypeConfirmNo");
     requireText(source.getBusinessUnitType(), "OA价格准备批次businessUnitType");
     if (source.getPriceAsOfTime() == null) {
       throw new IllegalStateException("OA价格准备批次缺price_as_of_time");
@@ -191,8 +178,6 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
     requireSame("财务批次", "OA单号", source.getOaNo(), finance.getOaNo());
     requireSame("财务批次", "OA产品行", source.getOaFormItemId(), finance.getOaFormItemId());
     requireSame("财务批次", "顶层产品", source.getTopProductCode(), finance.getTopProductCode());
-    requireSame(
-        "财务批次", "价格类型确认批次", source.getPriceTypeConfirmNo(), finance.getPriceTypeConfirmNo());
     requireSame("财务批次", "计价月份", source.getPeriodMonth(), finance.getPeriodMonth());
     requireSame("财务批次", "取价时点", source.getPriceAsOfTime(), finance.getPriceAsOfTime());
     requireSame("财务批次", "业务单元", source.getBusinessUnitType(), finance.getBusinessUnitType());
@@ -206,7 +191,6 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
     result.setOaNo(batch.getOaNo());
     result.setOaFormItemId(batch.getOaFormItemId());
     result.setTopProductCode(batch.getTopProductCode());
-    result.setPriceTypeConfirmNo(batch.getPriceTypeConfirmNo());
     result.setPeriodMonth(batch.getPeriodMonth());
     result.setBomPurpose(batch.getBomPurpose());
     result.setSourceType(batch.getSourceType());
@@ -222,37 +206,6 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
     result.setPriceAsOfSource(batch.getPriceAsOfSource());
     result.setMessage(batch.getMessage());
     return result;
-  }
-
-  private void validatePriceTypeConfirmation(PricePrepareBatch source) {
-    QuotePriceTypeConfirmBatch confirmation = confirmBatchMapper.selectOne(
-        Wrappers.lambdaQuery(QuotePriceTypeConfirmBatch.class)
-            .eq(QuotePriceTypeConfirmBatch::getConfirmNo, source.getPriceTypeConfirmNo())
-            .eq(QuotePriceTypeConfirmBatch::getOaNo, source.getOaNo())
-            .eq(QuotePriceTypeConfirmBatch::getOaFormItemId, source.getOaFormItemId())
-            .eq(QuotePriceTypeConfirmBatch::getProductCode, source.getTopProductCode())
-            .eq(QuotePriceTypeConfirmBatch::getPeriodMonth, source.getPeriodMonth())
-            .eq(QuotePriceTypeConfirmBatch::getBusinessUnitType, source.getBusinessUnitType())
-            .last("LIMIT 1"));
-    if (confirmation == null
-        || !QuotePriceTypeConfirmBatch.STATUS_CONFIRMED.equals(confirmation.getStatus())
-        || !StringUtils.hasText(confirmation.getBomConfirmNo())) {
-      throw new IllegalStateException("OA价格准备引用的BOM/价格类型确认批次已失效或不存在");
-    }
-    QuoteBomConfirmation bomConfirmation = bomConfirmationMapper.selectOne(
-        Wrappers.lambdaQuery(QuoteBomConfirmation.class)
-            .eq(QuoteBomConfirmation::getConfirmNo, confirmation.getBomConfirmNo())
-            .eq(QuoteBomConfirmation::getOaNo, source.getOaNo())
-            .eq(QuoteBomConfirmation::getOaFormItemId, source.getOaFormItemId())
-            .eq(QuoteBomConfirmation::getTopProductCode, source.getTopProductCode())
-            .eq(QuoteBomConfirmation::getPeriodMonth, source.getPeriodMonth())
-            .eq(QuoteBomConfirmation::getBusinessUnitType, source.getBusinessUnitType())
-            .last("LIMIT 1"));
-    if (bomConfirmation == null
-        || !QuoteBomConfirmation.STATUS_CONFIRMED.equals(
-            bomConfirmation.getConfirmStatus())) {
-      throw new IllegalStateException("OA价格准备引用的BOM确认批次已失效或不存在");
-    }
   }
 
   private List<PricePrepareItem> loadItems(String prepareNo) {
@@ -284,7 +237,6 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
     request.setOaNo(source.getOaNo());
     request.setOaFormItemId(source.getOaFormItemId());
     request.setTopProductCode(source.getTopProductCode());
-    request.setPriceTypeConfirmNo(source.getPriceTypeConfirmNo());
     request.setPeriodMonth(source.getPeriodMonth());
     request.setPriceAsOfTime(source.getPriceAsOfTime());
     request.setBusinessUnitType(source.getBusinessUnitType());
@@ -323,7 +275,6 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
       requireSame(key, "料号", oa.getMaterialCode(), finance.getMaterialCode());
       requireSame(key, "明细类型", oa.getItemType(), finance.getItemType());
       requireSame(key, "数量", oa.getQuantity(), finance.getQuantity());
-      requireSame(key, "价格确认明细", oa.getPriceTypeConfirmItemId(), finance.getPriceTypeConfirmItemId());
       if (mustRemainExact(oa)) {
         requireSame(key, "非Cu单价", oa.getUnitPrice(), finance.getUnitPrice());
         requireSame(key, "非Cu金额", oa.getAmount(), finance.getAmount());

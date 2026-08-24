@@ -1,7 +1,7 @@
 package com.sanhua.marketingcost.service;
 
 import com.sanhua.marketingcost.dto.quotebom.QuoteEffectiveBomResponse;
-import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomConfirmationCandidate;
+import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomCostingCandidate;
 
 /** 核算工作台第 1 步的单产品本次计价 BOM 应用服务。 */
 public interface QuoteEffectiveBomApplicationService {
@@ -17,6 +17,6 @@ public interface QuoteEffectiveBomApplicationService {
       String alternativeGroupKey,
       String selectedMaterialCode);
 
-  QuoteEffectiveBomConfirmationCandidate prepareConfirmation(
+  QuoteEffectiveBomCostingCandidate prepareCostingCandidate(
       String oaNo, Long oaFormItemId);
 }

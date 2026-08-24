@@ -316,7 +316,8 @@ public class TechnicalPackageDraftApplicationService {
     }
     String productCode = task.getProductCode();
     List<GapUpsertCommand> gaps = scan.gaps().stream()
-        .map(gap -> CollaborationPriceGapCommandFactory.create(productCode, gap))
+        .map(gap -> CollaborationPriceGapCommandFactory.create(
+            owner.getOaFormItemId(), productCode, gap))
         .toList();
     CollaborationScope scope = scope(task);
     repository.synchronizeGaps(task.getId(), scope, gaps, principal.actor());

@@ -37,4 +37,8 @@ public class CostRunTaskSubmissionResult {
     result.setExistingBatch(existingBatch);
     return result;
   }
+
+  public int getQueuedCount() {
+    return taskCount;
+  }
 }

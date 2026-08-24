@@ -22,16 +22,12 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomMonthlySnapshot;
 import com.sanhua.marketingcost.entity.QuoteBomAlternativeSelection;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
-import com.sanhua.marketingcost.entity.QuoteBomStatus;
-import com.sanhua.marketingcost.entity.QuoteEffectiveBomNode;
 import com.sanhua.marketingcost.enums.QuoteMaterialShape;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomMonthlySnapshotMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
-import com.sanhua.marketingcost.service.QuoteBomConfirmationService;
 import com.sanhua.marketingcost.service.bomalternative.BomAlternativeBranchPrunerImpl;
 import com.sanhua.marketingcost.service.bomalternative.BomAlternativeCandidate;
 import com.sanhua.marketingcost.service.bomalternative.BomAlternativeGroup;
@@ -44,9 +40,8 @@ import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelect
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomPolicyActionResolver;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomVariantHasher;
 import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomBuilderImpl;
-import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomConfirmationCandidate;
+import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomCostingCandidate;
 import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomQueryException;
-import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomRepository;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContext;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
@@ -74,12 +69,11 @@ import org.springframework.security.core.context.SecurityContextHolder;
 class QuoteEffectiveBomQueryServiceTest {
 
   private QuoteBomPreparationRecordMapper preparationMapper;
-  private QuoteBomStatusMapper statusMapper;
   private OaFormItemMapper itemMapper;
   private OaFormMapper formMapper;
   private QuoteBomMonthlySnapshotMapper monthlyMapper;
   private BomRawHierarchyMapper rawMapper;
-  private QuoteEffectiveBomRepository effectiveRepository;
+  private PlateCommercialMakeBomExpansionService crossOrganizationExpansionService;
   private BomAlternativeGroupResolver groupResolver;
   private QuoteBomAlternativeSelectionRepository selectionRepository;
   private QuoteBomAlternativeSelectionService selectionService;
@@ -88,7 +82,6 @@ class QuoteEffectiveBomQueryServiceTest {
   private EffectiveBomVariantHasher variantHasher;
   private QuoteBomContextResolver contextResolver;
   private QuoteBomStatusService quoteBomStatusService;
-  private QuoteBomConfirmationService confirmationService;
   private QuoteEffectiveBomApplicationServiceImpl service;
   private QuoteBomMonthlySnapshot snapshot;
 
@@ -96,12 +89,11 @@ class QuoteEffectiveBomQueryServiceTest {
   @SuppressWarnings("unchecked")
   void setUp() {
     preparationMapper = mock(QuoteBomPreparationRecordMapper.class);
-    statusMapper = mock(QuoteBomStatusMapper.class);
     itemMapper = mock(OaFormItemMapper.class);
     formMapper = mock(OaFormMapper.class);
     monthlyMapper = mock(QuoteBomMonthlySnapshotMapper.class);
     rawMapper = mock(BomRawHierarchyMapper.class);
-    effectiveRepository = mock(QuoteEffectiveBomRepository.class);
+    crossOrganizationExpansionService = mock(PlateCommercialMakeBomExpansionService.class);
     selectionRepository = mock(QuoteBomAlternativeSelectionRepository.class);
     selectionService = mock(QuoteBomAlternativeSelectionService.class);
     shapeResolver = mock(MaterialQuoteShapeResolver.class);
@@ -110,7 +102,6 @@ class QuoteEffectiveBomQueryServiceTest {
     groupResolver = mock(BomAlternativeGroupResolver.class);
     contextResolver = mock(QuoteBomContextResolver.class);
     quoteBomStatusService = mock(QuoteBomStatusService.class);
-    confirmationService = mock(QuoteBomConfirmationService.class);
 
     QuoteBomPreparationRecord preparation = preparation();
     OaFormItem item = item();
@@ -155,16 +146,20 @@ class QuoteEffectiveBomQueryServiceTest {
             });
     when(supplierResolver.resolveAll(any())).thenReturn(Map.of());
     when(variantHasher.hash(any())).thenReturn("CURRENT-HASH");
+    when(crossOrganizationExpansionService.expand(any(), any(), any(), any(), any(), any()))
+        .thenAnswer(
+            invocation ->
+                new PlateCommercialMakeBomExpansionService.ExpansionResult(
+                    invocation.getArgument(0), Map.of(), Map.of(), List.of()));
 
     service =
         new QuoteEffectiveBomApplicationServiceImpl(
             preparationMapper,
-            statusMapper,
             itemMapper,
             formMapper,
             monthlyMapper,
             rawMapper,
-            effectiveRepository,
+            crossOrganizationExpansionService,
             groupResolver,
             new BomAlternativeBranchPrunerImpl(),
             selectionRepository,
@@ -176,9 +171,8 @@ class QuoteEffectiveBomQueryServiceTest {
                 new EffectiveBomPolicyActionResolver(new ObjectMapper())),
             variantHasher,
             contextResolver,
-            quoteBomStatusService,
-            confirmationService);
-    snapshot = snapshot("DRAFT", 42L, null);
+            quoteBomStatusService);
+    snapshot = snapshot(42L);
   }
 
   @AfterEach
@@ -198,38 +192,9 @@ class QuoteEffectiveBomQueryServiceTest {
     assertThat(result.buildBatchId()).isNull();
     assertThat(result.sourceBomBatchId()).isEqualTo("RAW-202608");
     assertThat(result.exclusionSummary().excludedNodeCount()).isZero();
-    verify(effectiveRepository, never()).insertAll(any());
     verify(selectionRepository, never()).insert(any());
     verify(monthlyMapper, never()).insert(any(QuoteBomMonthlySnapshot.class));
     verify(monthlyMapper, never()).updateById(any(QuoteBomMonthlySnapshot.class));
-  }
-
-  @Test
-  void refreshReusesTheSingleStagedDraftWhenItsVariantIsStillCurrent() {
-    snapshot.setEffectiveBuildBatchId("EFFECTIVE-DRAFT");
-    snapshot.setEffectiveVariantHash("CURRENT-HASH");
-    when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
-    when(rawMapper.selectList(any(Wrapper.class))).thenReturn(rawRows());
-
-    QuoteEffectiveBomResponse result = service.getEffectiveBom("OA-QEB-11", 42L);
-
-    assertThat(result.state()).isEqualTo("DRAFT");
-    assertThat(result.buildBatchId()).isEqualTo("EFFECTIVE-DRAFT");
-    assertThat(result.effectiveVariantHash()).isEqualTo("CURRENT-HASH");
-  }
-
-  @Test
-  void refreshDoesNotReuseAStagedDraftAfterRulesChangeItsVariant() {
-    snapshot.setEffectiveBuildBatchId("EFFECTIVE-OLD");
-    snapshot.setEffectiveVariantHash("OLD-HASH");
-    when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
-    when(rawMapper.selectList(any(Wrapper.class))).thenReturn(rawRows());
-
-    QuoteEffectiveBomResponse result = service.getEffectiveBom("OA-QEB-11", 42L);
-
-    assertThat(result.state()).isEqualTo("DRAFT");
-    assertThat(result.buildBatchId()).isNull();
-    assertThat(result.effectiveVariantHash()).isNull();
   }
 
   @Test
@@ -257,25 +222,122 @@ class QuoteEffectiveBomQueryServiceTest {
   }
 
   @Test
-  void preparesServerSideConfirmationCandidateFromTheSameDraftEvaluation() {
+  void preparesServerSideCostingCandidateFromTheSameDraftEvaluation() {
     when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(rawRows());
 
-    QuoteEffectiveBomConfirmationCandidate candidate =
-        service.prepareConfirmation("OA-QEB-11", 42L);
+    QuoteEffectiveBomCostingCandidate candidate =
+        service.prepareCostingCandidate("OA-QEB-11", 42L);
 
-    assertThat(candidate.alreadyFrozen()).isFalse();
-    assertThat(candidate.monthlyKey().costPeriodMonth()).isEqualTo("2026-08");
-    assertThat(candidate.monthlyKey().resolvedCustomerKey()).isEqualTo("CUSTOMER-A");
+    assertThat(candidate.response().costPeriodMonth()).isEqualTo("2026-08");
     assertThat(candidate.candidateVariant().sourceBomBatchId()).isEqualTo("RAW-202608");
     assertThat(candidate.candidateVariant().buildResult().nodes())
         .extracting(node -> node.materialCode())
         .containsExactly("P", "A");
-    verify(effectiveRepository, never()).insertAll(any());
   }
 
   @Test
-  void prepareConfirmationPersistsDefaultStandardEvidenceBeforeFreeze() {
+  void expandsPlatePurchaseNodeWithExistingCommercialMakeBomBeforeEffectiveBomBuild() {
+    QuoteBomPreparationRecord platePreparation = preparation();
+    platePreparation.setPriceOrgCode("220");
+    platePreparation.setMaterialOrganizationCode("PLATE");
+    when(preparationMapper.selectOne(any(Wrapper.class))).thenReturn(platePreparation);
+    OaFormItem plateItem = item();
+    plateItem.setBusinessUnitType("PLATE");
+    OaForm plateForm = form();
+    plateForm.setBusinessUnitType("PLATE");
+    when(itemMapper.selectById(42L)).thenReturn(plateItem);
+    when(formMapper.selectById(7L)).thenReturn(plateForm);
+    doReturn(
+            new QuoteBomContext(
+                "2026-08",
+                "P",
+                new ResolvedCustomerKey(
+                    "CUSTOMER-A", ResolvedCustomerKey.Source.OA_HEADER_CUSTOMER, null),
+                "BOX",
+                new QuoteDataOrganization("220", "PLATE")))
+        .when(contextResolver)
+        .resolveWithExistingCostPeriod(any(OaForm.class), any(OaFormItem.class), eq("2026-08"));
+    snapshot.setPriceOrgCode("220");
+    List<BomRawHierarchy> plateRows = rawRows();
+    plateRows.getFirst().setPriceOrgCode("220");
+    plateRows.get(1).setShapeAttr("采购件");
+    plateRows.get(1).setPriceOrgCode("220");
+    BomRawHierarchy commercialParent =
+        rawNode(2L, "A", "P", 1, "/P/A/", "2", "制造件");
+    commercialParent.setPriceOrgCode("210");
+    BomRawHierarchy commercialRaw =
+        rawNode(3L, "R", "A", 2, "/P/A/R/", "0.5", "采购件");
+    commercialRaw.setPriceOrgCode("210");
+    when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
+    when(rawMapper.selectList(any(Wrapper.class))).thenReturn(plateRows);
+    when(crossOrganizationExpansionService.expand(any(), any(), any(), any(), any(), any()))
+        .thenReturn(
+            new PlateCommercialMakeBomExpansionService.ExpansionResult(
+                List.of(plateRows.getFirst(), commercialParent, commercialRaw),
+                Map.of(),
+                Map.of(),
+                List.of()));
+
+    QuoteEffectiveBomResponse result = service.getEffectiveBom("OA-QEB-11", 42L);
+
+    assertThat(result.state()).isEqualTo("DRAFT");
+    assertThat(result.nodes())
+        .extracting(node -> node.materialCode())
+        .containsExactly("P", "A", "R");
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<MaterialQuoteShapeRequest>> requests =
+        ArgumentCaptor.forClass(List.class);
+    verify(shapeResolver).resolveAll(requests.capture());
+    assertThat(requests.getValue())
+        .filteredOn(request -> List.of("A", "R").contains(request.materialCode()))
+        .allMatch(request -> "COMMERCIAL".equals(request.materialOrgCode()));
+  }
+
+  @Test
+  void exposesCrossOrganizationExpansionGapAsAFirstStepBlockIssue() {
+    when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
+    when(rawMapper.selectList(any(Wrapper.class))).thenReturn(rawRows());
+    when(crossOrganizationExpansionService.expand(any(), any(), any(), any(), any(), any()))
+        .thenReturn(
+            new PlateCommercialMakeBomExpansionService.ExpansionResult(
+                rawRows(), Map.of(), Map.of(), List.of("料号 A 在210没有有效制造BOM")));
+
+    QuoteEffectiveBomResponse result = service.getEffectiveBom("OA-QEB-11", 42L);
+
+    assertThat(result.state()).isEqualTo("BLOCKED");
+    assertThat(result.blockIssues())
+        .singleElement()
+        .satisfies(
+            issue -> {
+              assertThat(issue.issueCode()).isEqualTo("CROSS_ORG_BOM_EXPANSION_FAILED");
+              assertThat(issue.message()).contains("料号 A", "210", "制造BOM");
+            });
+    verifyNoInteractions(shapeResolver, supplierResolver);
+  }
+
+  @Test
+  void costingCandidateUsesCurrentWorkbenchMonthInsteadOfStalePreparationMonth() {
+    QuoteBomPreparationRecord stalePreparation = preparation();
+    stalePreparation.setCostPeriodMonth("2026-07");
+    when(preparationMapper.selectOne(any(Wrapper.class))).thenReturn(stalePreparation);
+    when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
+    when(rawMapper.selectList(any(Wrapper.class))).thenReturn(rawRows());
+
+    QuoteEffectiveBomCostingCandidate candidate =
+        service.prepareCostingCandidate("OA-QEB-11", 42L);
+
+    assertThat(candidate.response().costPeriodMonth()).isEqualTo("2026-08");
+    verify(contextResolver)
+        .resolveWithExistingCostPeriod(
+            any(OaForm.class), any(OaFormItem.class), eq("2026-08"));
+    verify(contextResolver, never())
+        .resolveWithExistingCostPeriod(
+            any(OaForm.class), any(OaFormItem.class), eq("2026-07"));
+  }
+
+  @Test
+  void prepareCostingCandidatePersistsDefaultStandardEvidenceBeforeBuild() {
     List<BomRawHierarchy> rows = alternativeRows();
     BomAlternativeGroup group = alternativeGroup(rows.get(1), rows.get(2));
     QuoteBomAlternativeSelection persisted = new QuoteBomAlternativeSelection();
@@ -292,8 +354,8 @@ class QuoteEffectiveBomQueryServiceTest {
     when(selectionRepository.findCurrent(any(), eq("GROUP-1")))
         .thenReturn(null, persisted);
 
-    QuoteEffectiveBomConfirmationCandidate candidate =
-        service.prepareConfirmation("OA-QEB-11", 42L);
+    QuoteEffectiveBomCostingCandidate candidate =
+        service.prepareCostingCandidate("OA-QEB-11", 42L);
 
     assertThat(candidate.alternativeSelectionIdByGroupKey())
         .containsEntry("GROUP-1", 91L);
@@ -301,32 +363,14 @@ class QuoteEffectiveBomQueryServiceTest {
   }
 
   @Test
-  void preparesFrozenConfirmationWithoutReadingLiveSources() {
-    snapshot = snapshot("FROZEN", 42L, "EFFECTIVE-1");
-    when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
-    when(confirmationService.hasActiveConfirmation(
-            "OA-QEB-11", 42L, "P", "2026-08"))
-        .thenReturn(true);
-    when(effectiveRepository.findNodesByBuildBatchId("EFFECTIVE-1"))
-        .thenReturn(frozenNodes(snapshot.getId(), "EFFECTIVE-1"));
-
-    QuoteEffectiveBomConfirmationCandidate candidate =
-        service.prepareConfirmation("OA-QEB-11", 42L);
-
-    assertThat(candidate.alreadyFrozen()).isTrue();
-    assertThat(candidate.response().buildBatchId()).isEqualTo("EFFECTIVE-1");
-    verifyNoInteractions(rawMapper, shapeResolver, supplierResolver);
-  }
-
-  @Test
   void blockedDraftCannotBecomeAConfirmationCandidate() {
     when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
-    assertThatThrownBy(() -> service.prepareConfirmation("OA-QEB-11", 42L))
+    assertThatThrownBy(() -> service.prepareCostingCandidate("OA-QEB-11", 42L))
         .isInstanceOf(QuoteEffectiveBomQueryException.class)
         .extracting(exception -> ((QuoteEffectiveBomQueryException) exception).getCode())
         .isEqualTo("EFFECTIVE_BOM_BLOCKED");
-    verifyNoInteractions(rawMapper, effectiveRepository, shapeResolver, supplierResolver);
+    verifyNoInteractions(rawMapper, shapeResolver, supplierResolver);
   }
 
   @Test
@@ -357,7 +401,7 @@ class QuoteEffectiveBomQueryServiceTest {
         .doesNotContain("同步BOM", "月度原始BOM");
     assertThat(result.warnings()).contains("客户信息缺失，本次BOM按OA单号隔离");
     verify(quoteBomStatusService).checkItemForCostRun("OA-QEB-11", 42L, "2026-08");
-    verifyNoInteractions(rawMapper, effectiveRepository, shapeResolver, supplierResolver);
+    verifyNoInteractions(rawMapper, shapeResolver, supplierResolver);
   }
 
   @Test
@@ -404,7 +448,6 @@ class QuoteEffectiveBomQueryServiceTest {
     assertThat(result.blockIssues())
         .extracting(issue -> issue.issueCode())
         .contains("SHAPE_RESOLUTION_BLOCKED");
-    verify(effectiveRepository, never()).insertAll(any());
   }
 
   @Test
@@ -453,7 +496,6 @@ class QuoteEffectiveBomQueryServiceTest {
       assertThat(selection.persisted()).isFalse();
     });
     verify(selectionRepository, never()).insert(any());
-    verify(effectiveRepository, never()).insertAll(any());
     verify(monthlyMapper, never()).updateById(any(QuoteBomMonthlySnapshot.class));
   }
 
@@ -572,92 +614,8 @@ class QuoteEffectiveBomQueryServiceTest {
   }
 
   @Test
-  void readsFrozenTreeWithoutReadingLiveRawBomOrShapeRules() {
-    snapshot = snapshot("FROZEN", 42L, "EFFECTIVE-1");
-    when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
-    when(confirmationService.hasActiveConfirmation(
-            "OA-QEB-11", 42L, "P", "2026-08"))
-        .thenReturn(true);
-    when(effectiveRepository.findNodesByBuildBatchId("EFFECTIVE-1"))
-        .thenReturn(frozenNodes(snapshot.getId(), "EFFECTIVE-1"));
-
-    QuoteEffectiveBomResponse result = service.getEffectiveBom("OA-QEB-11", 42L);
-
-    assertThat(result.state()).isEqualTo("FROZEN");
-    assertThat(result.buildBatchId()).isEqualTo("EFFECTIVE-1");
-    assertThat(result.nodes()).hasSize(2);
-    assertThat(result.exclusionSummary().available()).isFalse();
-    verifyNoInteractions(rawMapper, shapeResolver, supplierResolver);
-  }
-
-  @Test
-  void laterOaItemUsesSameFrozenTreeAndReportsReused() {
-    snapshot = snapshot("FROZEN", 9L, "EFFECTIVE-1");
-    when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
-    when(confirmationService.hasActiveConfirmationForBuild("EFFECTIVE-1"))
-        .thenReturn(true);
-    when(effectiveRepository.findNodesByBuildBatchId("EFFECTIVE-1"))
-        .thenReturn(frozenNodes(999L, "EFFECTIVE-1"));
-
-    QuoteEffectiveBomResponse result = service.getEffectiveBom("OA-QEB-11", 42L);
-
-    assertThat(result.state()).isEqualTo("REUSED");
-    assertThat(result.monthlySourceOaFormItemId()).isEqualTo(9L);
-  }
-
-  @Test
-  void frozenResponseRestoresStandardAndAlternativeEvidenceWithoutLiveCandidates() {
-    snapshot = snapshot("FROZEN", 42L, "EFFECTIVE-1");
-    List<QuoteEffectiveBomNode> nodes = frozenNodes(snapshot.getId(), "EFFECTIVE-1");
-    QuoteEffectiveBomNode selected = nodes.get(1);
-    selected.setAlternativeGroupKey("GROUP-1");
-    selected.setAlternativeChildType("ALTERNATIVE");
-    selected.setAlternativeSelectionId(91L);
-    selected.setAlternativeSelectionSource("MANUAL_ALTERNATIVE");
-    QuoteBomAlternativeSelection evidence = new QuoteBomAlternativeSelection();
-    evidence.setId(91L);
-    evidence.setAlternativeGroupKey("GROUP-1");
-    evidence.setStandardMaterialCode("S");
-    evidence.setSelectedMaterialCode("A");
-    evidence.setSelectionSource("MANUAL_ALTERNATIVE");
-    evidence.setSelectionVersion(2);
-    when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
-    when(confirmationService.hasActiveConfirmation(
-            "OA-QEB-11", 42L, "P", "2026-08"))
-        .thenReturn(true);
-    when(effectiveRepository.findNodesByBuildBatchId("EFFECTIVE-1")).thenReturn(nodes);
-    when(selectionRepository.findByIds(any())).thenReturn(List.of(evidence));
-
-    QuoteEffectiveBomResponse result = service.getEffectiveBom("OA-QEB-11", 42L);
-
-    assertThat(result.alternativeSelections()).singleElement().satisfies(selection -> {
-      assertThat(selection.standardMaterialCode()).isEqualTo("S");
-      assertThat(selection.selectedMaterialCode()).isEqualTo("A");
-      assertThat(selection.selectionSource()).isEqualTo("MANUAL_ALTERNATIVE");
-      assertThat(selection.selectionVersion()).isEqualTo(2);
-    });
-    verifyNoInteractions(rawMapper, shapeResolver, supplierResolver);
-  }
-
-  @Test
-  void reusedBomStatusTakesPriorityOverTheRawSnapshotSourceItem() {
-    snapshot = snapshot("FROZEN", 42L, "EFFECTIVE-1");
-    QuoteBomStatus status = new QuoteBomStatus();
-    status.setOaFormItemId(42L);
-    status.setBomStatus("REUSED_CURRENT_MONTH");
-    when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
-    when(confirmationService.hasActiveConfirmationForBuild("EFFECTIVE-1"))
-        .thenReturn(true);
-    when(effectiveRepository.findNodesByBuildBatchId("EFFECTIVE-1"))
-        .thenReturn(frozenNodes(snapshot.getId(), "EFFECTIVE-1"));
-    when(statusMapper.selectOne(any(Wrapper.class))).thenReturn(status);
-
-    assertThat(service.getEffectiveBom("OA-QEB-11", 42L).state()).isEqualTo("REUSED");
-  }
-
-  @Test
-  void refreshTreatsLegacyEarlyFrozenTreeAsLiveDraftUntilStepTwoConfirmation() {
-    snapshot = snapshot("FROZEN", 42L, "EFFECTIVE-OLD");
+  void refreshTreatsMonthlySourceAsLiveDraftUntilStepTwo() {
+    snapshot = snapshot(42L);
     when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(rawRows());
 
@@ -667,26 +625,11 @@ class QuoteEffectiveBomQueryServiceTest {
     assertThat(result.state()).isEqualTo("DRAFT");
     assertThat(result.buildBatchId()).isNull();
     assertThat(result.nodes()).isNotEmpty();
-    verify(effectiveRepository, never()).findNodesByBuildBatchId("EFFECTIVE-OLD");
   }
 
   @Test
-  void rejectsRebuildWhenMonthlyScenarioIsFrozen() {
-    snapshot = snapshot("FROZEN", 9L, "EFFECTIVE-1");
-    when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
-    when(confirmationService.hasActiveConfirmation("OA-QEB-11", 42L, "P", "2026-08"))
-        .thenReturn(true);
-
-    assertThatThrownBy(() -> service.rebuildPreview("OA-QEB-11", 42L))
-        .isInstanceOf(QuoteEffectiveBomQueryException.class)
-        .extracting(exception -> ((QuoteEffectiveBomQueryException) exception).getCode())
-        .isEqualTo("EFFECTIVE_BOM_FROZEN");
-    verifyNoInteractions(rawMapper, effectiveRepository, shapeResolver, supplierResolver);
-  }
-
-  @Test
-  void allowsAlternativePreviewForProvisionalFrozenBomBeforeStepTwoConfirmation() {
-    snapshot = snapshot("FROZEN", 42L, "EFFECTIVE-1");
+  void allowsAlternativePreviewForMonthlyBomBeforeStepTwo() {
+    snapshot = snapshot(42L);
     List<BomRawHierarchy> rows = alternativeRows();
     BomAlternativeGroup group = alternativeGroup(rows.get(1), rows.get(2));
     when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
@@ -699,9 +642,6 @@ class QuoteEffectiveBomQueryServiceTest {
 
     assertThat(result.state()).isEqualTo("DRAFT");
     assertThat(result.nodes()).extracting(node -> node.materialCode()).containsExactly("P", "T");
-    verify(confirmationService)
-        .hasActiveConfirmation("OA-QEB-11", 42L, "P", "2026-08");
-    verify(effectiveRepository, never()).insertAll(any());
   }
 
   @Test
@@ -724,7 +664,7 @@ class QuoteEffectiveBomQueryServiceTest {
     assertThatThrownBy(() -> service.getEffectiveBom("OA-QEB-11", 42L))
         .isInstanceOf(QuoteEffectiveBomQueryException.class)
         .hasMessageContaining("不属于同一报价范围");
-    verifyNoInteractions(monthlyMapper, rawMapper, effectiveRepository);
+    verifyNoInteractions(monthlyMapper, rawMapper);
   }
 
   @Test
@@ -738,7 +678,7 @@ class QuoteEffectiveBomQueryServiceTest {
     assertThatThrownBy(() -> service.getEffectiveBom("OA-QEB-11", 42L))
         .isInstanceOf(QuoteEffectiveBomQueryException.class)
         .hasMessageContaining("不能访问该报价产品");
-    verifyNoInteractions(monthlyMapper, rawMapper, effectiveRepository);
+    verifyNoInteractions(monthlyMapper, rawMapper);
   }
 
   private static QuoteBomPreparationRecord preparation() {
@@ -777,8 +717,7 @@ class QuoteEffectiveBomQueryServiceTest {
     return form;
   }
 
-  private static QuoteBomMonthlySnapshot snapshot(
-      String freezeStatus, Long sourceItemId, String effectiveBuildBatchId) {
+  private static QuoteBomMonthlySnapshot snapshot(Long sourceItemId) {
     QuoteBomMonthlySnapshot row = new QuoteBomMonthlySnapshot();
     row.setId(501L);
     row.setProductCode("P");
@@ -791,9 +730,6 @@ class QuoteEffectiveBomQueryServiceTest {
     row.setSyncAt(LocalDateTime.of(2026, 8, 4, 9, 0));
     row.setSourceOaFormItemId(sourceItemId);
     row.setBomBatchId("RAW-202608");
-    row.setFreezeStatus(freezeStatus);
-    row.setEffectiveBuildBatchId(effectiveBuildBatchId);
-    row.setEffectiveVariantHash(effectiveBuildBatchId == null ? null : "HASH-1");
     row.setActiveFlag(1);
     return row;
   }
@@ -882,42 +818,4 @@ class QuoteEffectiveBomQueryServiceTest {
     return row;
   }
 
-  private static List<QuoteEffectiveBomNode> frozenNodes(
-      Long snapshotId, String buildBatchId) {
-    return List.of(
-        frozenNode(snapshotId, buildBatchId, "P", null, 0, "/P/", "MANUFACTURE"),
-        frozenNode(snapshotId, buildBatchId, "A", "P", 1, "/P/A/", "PURCHASE"));
-  }
-
-  private static QuoteEffectiveBomNode frozenNode(
-      Long snapshotId,
-      String buildBatchId,
-      String material,
-      String parent,
-      int level,
-      String path,
-      String shape) {
-    QuoteEffectiveBomNode node = new QuoteEffectiveBomNode();
-    node.setBuildBatchId(buildBatchId);
-    node.setOriginMonthlySnapshotId(snapshotId);
-    node.setEffectiveVariantHash("HASH-1");
-    node.setTopProductCode("P");
-    node.setCostPeriodMonth("2026-08");
-    node.setPriceOrgCode("210");
-    node.setNodeKey(material);
-    node.setParentNodeKey(parent);
-    node.setNodeLevel(level);
-    node.setSortSeq(level);
-    node.setNodePath(path);
-    node.setMaterialCode(material);
-    node.setQtyPerParent(BigDecimal.ONE);
-    node.setQtyPerTop(BigDecimal.ONE);
-    node.setSourceMaterialShape(shape);
-    node.setEffectiveMaterialShape(shape);
-    node.setShapeResolutionSource("U9");
-    node.setSourceBomType("U9");
-    node.setSourceBomBatchId("RAW-202608");
-    node.setSourceNodePath(path);
-    return node;
-  }
 }

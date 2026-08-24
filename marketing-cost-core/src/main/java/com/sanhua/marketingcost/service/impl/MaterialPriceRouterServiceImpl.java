@@ -2,15 +2,17 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
+import com.sanhua.marketingcost.dto.MaterialPriceTypeSourceCandidate;
 import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.MaterialPriceType;
 import com.sanhua.marketingcost.enums.MaterialFormAttrEnum;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
 import com.sanhua.marketingcost.mapper.MaterialPriceTypeMapper;
+import com.sanhua.marketingcost.mapper.MaterialPriceTypeSourceMapper;
+import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -20,22 +22,20 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * 物料价格路由服务实现 —— v1.1 (T03) 修复版。
+ * 物料价格路由服务实现。
  *
- * <p>v1.1 关键变更：
+ * <p>关键规则：
  * <ol>
  *   <li><b>shape 来源改用主档</b>：formAttr 优先取 {@code lp_material_master.shape_attr}（U9 ItemMaster
  *       权威源），路由表的 {@code material_shape} 仅作 fallback。修复"BOM 形态 vs 路由形态"对不齐。</li>
- *   <li><b>winner-first 排序</b>：路由表查询按 {@code priority DESC, effective_from DESC, id DESC}
- *       排序，{@code listCandidates} 第 1 条即 winner。{@code resolve()} 直接取首条。</li>
+ *   <li><b>只认当前类型</b>：按 {@code created_at DESC, id DESC} 取一条，不按月份或路由有效期回退。</li>
  *   <li><b>不丢弃 priceType 合法但 shape 不合法的记录</b>：formAttr 兜底为 null，仍参与路由（白名单
  *       校验在调用方做），避免脏 shape 数据让取价整条丢失。</li>
  * </ol>
  *
  * <p>查询流程：
  * <ol>
- *   <li>查路由表所有候选记录（已按 winner-first 排序）</li>
- *   <li>用 quoteDate 过滤生效期：null 边界视为开放</li>
+ *   <li>按 {@code created_at DESC, id DESC} 取物料当前价格类型</li>
  *   <li>查主档 shape_attr 一次性缓存到本次调用</li>
  *   <li>翻译每行：
  *     <ul>
@@ -52,12 +52,15 @@ public class MaterialPriceRouterServiceImpl implements MaterialPriceRouterServic
 
   private final MaterialPriceTypeMapper materialPriceTypeMapper;
   private final MaterialMasterMapper materialMasterMapper;
+  private final MaterialPriceTypeSourceMapper materialPriceTypeSourceMapper;
 
   public MaterialPriceRouterServiceImpl(
       MaterialPriceTypeMapper materialPriceTypeMapper,
-      MaterialMasterMapper materialMasterMapper) {
+      MaterialMasterMapper materialMasterMapper,
+      MaterialPriceTypeSourceMapper materialPriceTypeSourceMapper) {
     this.materialPriceTypeMapper = materialPriceTypeMapper;
     this.materialMasterMapper = materialMasterMapper;
+    this.materialPriceTypeSourceMapper = materialPriceTypeSourceMapper;
   }
 
   @Override
@@ -74,81 +77,74 @@ public class MaterialPriceRouterServiceImpl implements MaterialPriceRouterServic
       return Collections.emptyList();
     }
     String code = materialCode.trim();
-    String periodValue = StringUtils.hasText(period) ? period.trim() : null;
-
-    // 一次性按 winner-first 排序：
-    //   先取当前报价期间的精确路由；没有期间的 Excel 路由作为全局兜底
-    //   priority ASC（业务约定：数值小者优先级高，1 是最高），null 视为最低排最后
-    //   effective_from DESC（生效日期新者优先，null 视为最旧）
-    //   id DESC（同优先级同生效日时最新写入的赢，作为 tiebreaker）
-    // 用 .last() 注入完整 ORDER BY，避免 lambda orderBy* 对 null 的默认处理偏离语义
+    // 价格类型是物料级当前路由，不按报价月份复制。价格的生效期由具体价格源处理；
+    // effective_to 到期也不能让报价停止，因此这里不再用路由有效期淘汰当前类型。
     List<MaterialPriceType> rows =
         materialPriceTypeMapper.selectList(
             Wrappers.lambdaQuery(MaterialPriceType.class)
                 .eq(MaterialPriceType::getMaterialCode, code)
-                .and(q -> {
-                  if (StringUtils.hasText(periodValue)) {
-                    q.eq(MaterialPriceType::getPeriod, periodValue)
-                        .or()
-                        .isNull(MaterialPriceType::getPeriod)
-                        .or()
-                        .eq(MaterialPriceType::getPeriod, "");
-                  } else {
-                    q.isNull(MaterialPriceType::getPeriod)
-                        .or()
-                        .eq(MaterialPriceType::getPeriod, "");
-                  }
-                })
-                .last("ORDER BY CASE WHEN period = '" + escapeSqlLiteral(periodValue) + "' THEN 0 ELSE 1 END, "
-                    + "IFNULL(priority, 999999) ASC, "
-                    + "IFNULL(effective_from, '1970-01-01') DESC, id DESC"));
+                .orderByDesc(MaterialPriceType::getCreatedAt)
+                .orderByDesc(MaterialPriceType::getId)
+                .last("LIMIT 1"));
     if (rows.isEmpty()) {
-      return Collections.emptyList();
+      return inferredFromFormalPriceSource(code);
     }
 
     // 主档 shape_attr 是权威源（v1 T03 起）；查不到则 fallback 用路由表 material_shape
     String masterShape = lookupMasterShape(code);
 
-    List<PriceTypeRoute> candidates = new ArrayList<>(rows.size());
-    for (MaterialPriceType row : rows) {
-      // 生效期过滤：quoteDate 为 null 时不限制
-      if (quoteDate != null) {
-        if (row.getEffectiveFrom() != null && quoteDate.isBefore(row.getEffectiveFrom())) {
-          continue;
-        }
-        // 路由有效期与各价格源一致，起止日期都按闭区间处理。
-        if (row.getEffectiveTo() != null && quoteDate.isAfter(row.getEffectiveTo())) {
-          continue;
-        }
-      }
-
-      // priceType 必须合法（PriceTypeEnum.fromDbText 已含双别名兼容），否则跳过 + WARN
-      Optional<PriceTypeEnum> priceType = PriceTypeEnum.fromDbText(row.getPriceType());
-      if (priceType.isEmpty()) {
-        log.warn(
-            "MaterialPriceRouter 跳过未识别 priceType 记录: materialCode={}, priceType={}",
-            code, row.getPriceType());
-        continue;
-      }
-
-      // formAttr 优先主档；主档无则路由表 material_shape；都不识别则 null（不阻塞路由）
-      MaterialFormAttrEnum formAttr =
-          MaterialFormAttrEnum.fromDbText(masterShape)
-              .or(() -> MaterialFormAttrEnum.fromDbText(row.getMaterialShape()))
-              .orElse(null);
-
-      candidates.add(
-          new PriceTypeRoute(
-              code,
-              formAttr,
-              priceType.get(),
-              row.getPriority(),
-              row.getEffectiveFrom(),
-              row.getEffectiveTo(),
-              row.getSourceSystem(),
-              row.getPriceType()));
+    MaterialPriceType row = rows.getFirst();
+    Optional<PriceTypeEnum> priceType = PriceTypeEnum.fromDbText(row.getPriceType());
+    if (priceType.isEmpty()) {
+      log.warn(
+          "MaterialPriceRouter 当前 priceType 无法识别: materialCode={}, priceType={}",
+          code, row.getPriceType());
+      return Collections.emptyList();
     }
-    return candidates;
+    MaterialFormAttrEnum formAttr =
+        MaterialFormAttrEnum.fromDbText(masterShape)
+            .or(() -> MaterialFormAttrEnum.fromDbText(row.getMaterialShape()))
+            .orElse(null);
+    return List.of(
+        new PriceTypeRoute(
+            code,
+            formAttr,
+            priceType.get(),
+            row.getPriority(),
+            row.getEffectiveFrom(),
+            row.getEffectiveTo(),
+            row.getSourceSystem(),
+            row.getPriceType()));
+  }
+
+  private List<PriceTypeRoute> inferredFromFormalPriceSource(String materialCode) {
+    MaterialPriceTypeSourceCandidate source =
+        materialPriceTypeSourceMapper.selectLatest(
+            materialCode, BusinessUnitContext.getCurrentBusinessUnitType());
+    if (source == null) {
+      return Collections.emptyList();
+    }
+    Optional<PriceTypeEnum> priceType = PriceTypeEnum.fromDbText(source.getPriceType());
+    if (priceType.isEmpty()) {
+      log.warn(
+          "正式价格源推断出的 priceType 无法识别: materialCode={}, priceType={}",
+          materialCode,
+          source.getPriceType());
+      return Collections.emptyList();
+    }
+    String masterShape = lookupMasterShape(materialCode);
+    MaterialFormAttrEnum formAttr =
+        MaterialFormAttrEnum.fromDbText(masterShape).orElse(null);
+    return List.of(
+        new PriceTypeRoute(
+            materialCode,
+            formAttr,
+            priceType.get(),
+            1,
+            source.getEffectiveFrom(),
+            source.getEffectiveTo(),
+            "PRICE_SOURCE_INFERRED:" + source.getSourceSystem(),
+            source.getPriceType()));
   }
 
   /** 一次性查主档 shape_attr；查不到返 null（让 fallback 链兜底） */
@@ -161,7 +157,4 @@ public class MaterialPriceRouterServiceImpl implements MaterialPriceRouterServic
     return master == null ? null : master.getShapeAttr();
   }
 
-  private String escapeSqlLiteral(String value) {
-    return value == null ? "" : value.replace("'", "''");
-  }
 }

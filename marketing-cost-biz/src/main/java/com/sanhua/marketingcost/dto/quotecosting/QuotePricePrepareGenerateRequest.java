@@ -12,7 +12,6 @@ import lombok.Setter;
 public class QuotePricePrepareGenerateRequest {
   private String periodMonth;
   private LocalDateTime priceAsOfTime;
-  private String priceTypeConfirmNo;
   private QuotePriceScenarioType scenarioType;
   private String scenarioGroupNo;
   private String sourcePrepareNo;

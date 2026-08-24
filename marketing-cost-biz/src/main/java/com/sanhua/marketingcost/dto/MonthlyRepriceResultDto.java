@@ -30,7 +30,7 @@ public class MonthlyRepriceResultDto {
   private String costEngineVersion;
   private String priceVersion;
   private String ruleVersion;
-  private Long sourceCostResultId;
+  private Long sourceCostVersionId;
   private String calcStatus;
   private String calcMessage;
   private LocalDateTime createdAt;
@@ -62,7 +62,7 @@ public class MonthlyRepriceResultDto {
     dto.setCostEngineVersion(result.getCostEngineVersion());
     dto.setPriceVersion(result.getPriceVersion());
     dto.setRuleVersion(result.getRuleVersion());
-    dto.setSourceCostResultId(result.getSourceCostResultId());
+    dto.setSourceCostVersionId(result.getSourceCostVersionId());
     dto.setCalcStatus(result.getCalcStatus());
     dto.setCalcMessage(result.getCalcMessage());
     dto.setCreatedAt(result.getCreatedAt());

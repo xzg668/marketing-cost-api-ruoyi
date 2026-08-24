@@ -73,6 +73,21 @@ public class CostRunTaskClaimServiceImpl implements CostRunTaskClaimService {
   }
 
   @Override
+  public boolean markCollaboration(
+      Long taskId, String workerId, String resultSummaryJson, String message) {
+    if (taskId == null || !StringUtils.hasText(workerId)) {
+      return false;
+    }
+    return taskMapper.markCollaboration(
+            taskId,
+            workerId.trim(),
+            resultSummaryJson,
+            truncate(message, ERROR_MESSAGE_MAX_LENGTH),
+            LocalDateTime.now())
+        == 1;
+  }
+
+  @Override
   public boolean markRetryable(Long taskId, String workerId, String errorMessage, String errorStack) {
     if (taskId == null || !StringUtils.hasText(workerId)) {
       return false;

@@ -20,12 +20,12 @@ class CollaborationActiveLockKeyFactoryTest {
         "2026-08", "AB-001", null,
         new CollaborationScope("COMMERCIAL", "210"), PrimaryScope.FULL_BOM);
 
-    assertThat(first).isEqualTo(replay).startsWith("QCBP-ACTIVE-V1:");
+    assertThat(first).isEqualTo(replay).startsWith("QCBP-ACTIVE-V2:");
     assertThat(first).hasSize(79);
   }
 
   @Test
-  @DisplayName("月份、组织、产品、临时产品键和主要范围任一变化均不会误锁")
+  @DisplayName("月份、组织和产品变化相互隔离，但同一产品的BOM与价格阶段共用活动任务")
   void isolatesEveryBusinessDimension() {
     CollaborationScope current = new CollaborationScope("COMMERCIAL", "210");
     String baseline = CollaborationActiveLockKeyFactory.create(
@@ -38,7 +38,7 @@ class CollaborationActiveLockKeyFactoryTest {
         new CollaborationScope("COMMERCIAL", "220"), PrimaryScope.FULL_BOM));
     assertThat(baseline).isNotEqualTo(CollaborationActiveLockKeyFactory.create(
         "2026-08", "AB-002", null, current, PrimaryScope.FULL_BOM));
-    assertThat(baseline).isNotEqualTo(CollaborationActiveLockKeyFactory.create(
+    assertThat(baseline).isEqualTo(CollaborationActiveLockKeyFactory.create(
         "2026-08", "AB-001", null, current, PrimaryScope.PRICE_ONLY));
     assertThat(baseline).isNotEqualTo(CollaborationActiveLockKeyFactory.create(
         "2026-08", null, "NEW-001", current, PrimaryScope.FULL_BOM));
@@ -51,7 +51,7 @@ class CollaborationActiveLockKeyFactoryTest {
         "2026-08", null, " new-product-001 ",
         new CollaborationScope("COMMERCIAL", "210"), PrimaryScope.BARE_PACKAGE);
 
-    assertThat(key).startsWith("QCBP-ACTIVE-V1:");
+    assertThat(key).startsWith("QCBP-ACTIVE-V2:");
     assertThatThrownBy(() -> CollaborationActiveLockKeyFactory.create(
         "2026-08", null, " ",
         new CollaborationScope("COMMERCIAL", "210"), PrimaryScope.BARE_PACKAGE))

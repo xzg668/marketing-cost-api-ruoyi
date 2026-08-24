@@ -33,13 +33,10 @@ import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeRebuil
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeRebuildResult;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeRebuildService;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeAuditService;
-import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeMonthlyInheritanceResult;
-import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeMonthlyInheritanceService;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelectionRepository;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelectionResult;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelectionService;
 import com.sanhua.marketingcost.service.impl.QuoteBomAlternativeApplicationServiceImpl;
-import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -123,7 +120,6 @@ class QuoteBomAlternativeApiContractTest {
               "selectedMaterialCode": "ALT",
               "expectedSelectionVersion": 1,
               "expectedBuildBatchId": "BUILD-1",
-              "confirmDiscardManualChanges": true,
               "selectionRemark": "本次报价采用替代件",
               "materialName": "前端伪造名称",
               "childType": "STANDARD",
@@ -136,7 +132,6 @@ class QuoteBomAlternativeApiContractTest {
     assertThat(request.selectedMaterialCode()).isEqualTo("ALT");
     assertThat(request.expectedSelectionVersion()).isEqualTo(1);
     assertThat(request.expectedBuildBatchId()).isEqualTo("BUILD-1");
-    assertThat(request.confirmDiscardManualChanges()).isTrue();
     assertThat(request.selectionRemark()).contains("替代件");
     assertThat(QuoteBomAlternativeSelectionRequest.class.getRecordComponents())
         .extracting(java.lang.reflect.RecordComponent::getName)
@@ -145,12 +140,11 @@ class QuoteBomAlternativeApiContractTest {
             "selectedMaterialCode",
             "expectedSelectionVersion",
             "expectedBuildBatchId",
-            "confirmDiscardManualChanges",
             "selectionRemark");
   }
 
   @Test
-  void responseMakesRebuildAndIdempotencyObservable() throws Exception {
+  void responseMakesRecalculationAndIdempotencyObservable() throws Exception {
     QuoteBomAlternativeSelectionResponse response =
         new QuoteBomAlternativeSelectionResponse(
             "GROUP",
@@ -160,10 +154,6 @@ class QuoteBomAlternativeApiContractTest {
             "MANUAL_ALTERNATIVE",
             false,
             true,
-            true,
-            35,
-            36,
-            "BUILD-2",
             List.of("PRICE_TYPE_CONFIRMATION", "COST_RUN"));
 
     JsonNode json = objectMapper.readTree(objectMapper.writeValueAsBytes(response));
@@ -172,11 +162,7 @@ class QuoteBomAlternativeApiContractTest {
         .isEqualTo("GROUP");
     assertThat(json.get("selectionVersion").asInt()).isEqualTo(2);
     assertThat(json.get("idempotent").asBoolean()).isFalse();
-    assertThat(json.get("rebuilt").asBoolean()).isTrue();
-    assertThat(json.get("manualChangesDiscarded").asBoolean()).isTrue();
-    assertThat(json.get("rowsBefore").asInt()).isEqualTo(35);
-    assertThat(json.get("rowsAfter").asInt()).isEqualTo(36);
-    assertThat(json.get("newBuildBatchId").asText()).isEqualTo("BUILD-2");
+    assertThat(json.get("recalculationRequired").asBoolean()).isTrue();
     assertThat(json.get("workflowInvalidated")).hasSize(2);
   }
 
@@ -199,10 +185,6 @@ class QuoteBomAlternativeApiContractTest {
         mock(QuoteBomPreparationRecordMapper.class);
     OaFormItemMapper itemMapper = mock(OaFormItemMapper.class);
     OaFormMapper formMapper = mock(OaFormMapper.class);
-    QuoteBomAlternativeMonthlyInheritanceService monthlyInheritanceService =
-        mock(QuoteBomAlternativeMonthlyInheritanceService.class);
-    when(monthlyInheritanceService.inheritIfFrozen(any(), any()))
-        .thenReturn(QuoteBomAlternativeMonthlyInheritanceResult.notFrozen());
     QuoteBomAlternativeApplicationServiceImpl service =
         new QuoteBomAlternativeApplicationServiceImpl(
             rawMapper,
@@ -214,10 +196,7 @@ class QuoteBomAlternativeApiContractTest {
             mock(QuoteBomAlternativeAuditService.class),
             preparationMapper,
             itemMapper,
-            formMapper,
-            new QuoteBomContextResolver(),
-            monthlyInheritanceService,
-            objectMapper);
+            formMapper);
 
     QuoteBomPreparationRecord preparation =
         new QuoteBomPreparationRecord();
@@ -259,14 +238,7 @@ class QuoteBomAlternativeApiContractTest {
                     "IMPORT-1",
                     "BUILD-2"),
                 false,
-                true,
-                false,
-                35,
-                36,
-                "BUILD-2",
-                1,
-                1,
-                1));
+                true));
 
     QuoteBomAlternativeSelectionResponse response =
         service.saveSelection(
@@ -278,7 +250,6 @@ class QuoteBomAlternativeApiContractTest {
                 "ALT",
                 1,
                 "BUILD-1",
-                false,
                 "业务选择"),
             "quoter");
 
@@ -299,7 +270,8 @@ class QuoteBomAlternativeApiContractTest {
     assertThat(command.selectedBy()).isEqualTo("quoter");
     assertThat(response.workflowInvalidated())
         .containsExactly(
-            "PRICE_TYPE_CONFIRMATION",
+            "QUOTE_BOM",
+            "PRICE_TYPE",
             "PRICE_PREPARE",
             "FINAL_PRICE",
             "COST_RUN");
@@ -321,10 +293,6 @@ class QuoteBomAlternativeApiContractTest {
         mock(QuoteBomPreparationRecordMapper.class);
     OaFormItemMapper itemMapper = mock(OaFormItemMapper.class);
     OaFormMapper formMapper = mock(OaFormMapper.class);
-    QuoteBomAlternativeMonthlyInheritanceService monthlyInheritanceService =
-        mock(QuoteBomAlternativeMonthlyInheritanceService.class);
-    when(monthlyInheritanceService.inheritIfFrozen(any(), any()))
-        .thenReturn(QuoteBomAlternativeMonthlyInheritanceResult.notFrozen());
     QuoteBomAlternativeApplicationServiceImpl service =
         new QuoteBomAlternativeApplicationServiceImpl(
             rawMapper,
@@ -336,10 +304,7 @@ class QuoteBomAlternativeApiContractTest {
             mock(QuoteBomAlternativeAuditService.class),
             preparationMapper,
             itemMapper,
-            formMapper,
-            new QuoteBomContextResolver(),
-            monthlyInheritanceService,
-            objectMapper);
+            formMapper);
     stubQuoteScope(preparationMapper, itemMapper, formMapper);
 
     List<BomRawHierarchy> rows =

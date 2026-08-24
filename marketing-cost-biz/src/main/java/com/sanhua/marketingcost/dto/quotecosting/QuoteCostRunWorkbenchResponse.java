@@ -23,7 +23,6 @@ public class QuoteCostRunWorkbenchResponse {
   private List<CostRunPartItemDto> partItems = new ArrayList<>();
   private List<CostRunCostItemDto> costItems = new ArrayList<>();
   private boolean canStartTrial;
-  private boolean canConfirm;
   private List<String> blockingReasons = new ArrayList<>();
 
   @Data
@@ -40,7 +39,6 @@ public class QuoteCostRunWorkbenchResponse {
     private LocalDateTime trialFinishedAt;
     private LocalDateTime confirmedAt;
     private String confirmedBy;
-    private boolean canConfirm;
     private boolean canViewSheet;
     private boolean canViewTrace;
     private boolean stale;

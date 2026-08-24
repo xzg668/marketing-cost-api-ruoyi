@@ -15,7 +15,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Locale;
-import org.springframework.beans.factory.annotation.Autowired;
+import java.util.Objects;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -34,18 +34,6 @@ public class RangePriceResolver implements PriceResolver {
   private final OaFormMapper oaFormMapper;
   private final SupplierPreferredPriceSelector supplierPreferredPriceSelector;
 
-  public RangePriceResolver(PriceRangeItemMapper priceRangeItemMapper) {
-    this(priceRangeItemMapper, null, null, null);
-  }
-
-  public RangePriceResolver(
-      PriceRangeItemMapper priceRangeItemMapper,
-      PriceRangeFactorRuleMapper factorRuleMapper,
-      OaFormMapper oaFormMapper) {
-    this(priceRangeItemMapper, factorRuleMapper, oaFormMapper, null);
-  }
-
-  @Autowired
   public RangePriceResolver(
       PriceRangeItemMapper priceRangeItemMapper,
       PriceRangeFactorRuleMapper factorRuleMapper,
@@ -54,7 +42,9 @@ public class RangePriceResolver implements PriceResolver {
     this.priceRangeItemMapper = priceRangeItemMapper;
     this.factorRuleMapper = factorRuleMapper;
     this.oaFormMapper = oaFormMapper;
-    this.supplierPreferredPriceSelector = supplierPreferredPriceSelector;
+    this.supplierPreferredPriceSelector =
+        Objects.requireNonNull(
+            supplierPreferredPriceSelector, "supplierPreferredPriceSelector 不能为空");
   }
 
   @Override
@@ -80,7 +70,7 @@ public class RangePriceResolver implements PriceResolver {
     if (factorRule != null) {
       return resolveFactorRange(oaNo, code.trim(), factorRule, priceDate, context);
     }
-    return resolveQtyRange(code.trim(), qty, priceDate);
+    return resolveQtyRange(code.trim(), qty, priceDate, context);
   }
 
   private PriceResolveResult resolveFactorRange(
@@ -97,7 +87,6 @@ public class RangePriceResolver implements PriceResolver {
     var query = Wrappers.lambdaQuery(PriceRangeItem.class)
         .eq(PriceRangeItem::getRangeBasis, RANGE_BASIS_FACTOR)
         .eq(PriceRangeItem::getFactorRuleId, factorRule.getId())
-        .eq(PriceRangeItem::getCurrentFlag, 1)
         .isNotNull(PriceRangeItem::getPriceExclTax)
         .le(PriceRangeItem::getRangeLow, factorValue)
         .ge(PriceRangeItem::getRangeHigh, factorValue);
@@ -105,17 +94,16 @@ public class RangePriceResolver implements PriceResolver {
       query.and(q -> q.le(PriceRangeItem::getEffectiveFrom, priceDate)
           .or()
           .isNull(PriceRangeItem::getEffectiveFrom));
-      query.and(q -> q.ge(PriceRangeItem::getEffectiveTo, priceDate)
-          .or()
-          .isNull(PriceRangeItem::getEffectiveTo));
     }
     List<PriceRangeItem> queriedRows =
-        priceRangeItemMapper.selectList(query.orderByDesc(PriceRangeItem::getId));
+        priceRangeItemMapper.selectList(
+            query.orderByDesc(PriceRangeItem::getEffectiveFrom)
+                .orderByDesc(PriceRangeItem::getCreatedAt)
+                .orderByDesc(PriceRangeItem::getId));
     List<PriceRangeItem> rows = queriedRows == null
         ? List.of()
         : queriedRows.stream()
             .filter(row -> row != null && row.getPriceExclTax() != null)
-            .filter(row -> isEffectiveOn(row, priceDate))
             .toList();
     if (rows == null || rows.isEmpty()) {
       return PriceResolveResult.miss(
@@ -125,6 +113,9 @@ public class RangePriceResolver implements PriceResolver {
     }
     SupplierPreferredPriceSelection<PriceRangeItem> selection =
         selectPreferredFactorPrice(rows, materialCode, factorRule, priceDate, context);
+    if (selection.failed()) {
+      return PriceResolveResult.miss(selection.failureCode(), selection.failureMessage());
+    }
     PriceRangeItem row = selection.row();
     if (row == null) {
       return PriceResolveResult.miss(
@@ -136,14 +127,11 @@ public class RangePriceResolver implements PriceResolver {
           "行情因素区间价缺少不含税价: material=" + materialCode
               + ", factor=" + factorRule.getFactorCode());
     }
-    return new PriceResolveResult(
-        row.getPriceExclTax(),
-        "区间价",
-        "行情区间命中(" + factorRule.getFactorCode() + "=" + format(factorValue)
-            + ",range=" + format(row.getRangeLow()) + "-" + format(row.getRangeHigh())
-            + ",field=price_excl_tax)" + selectionTrace(selection.traceMessage())
-            + pricingLedger(materialCode, factorRule, factorValue, row, selection),
-        row.getId());
+    String trace = "行情区间命中(" + factorRule.getFactorCode() + "=" + format(factorValue)
+        + ",range=" + format(row.getRangeLow()) + "-" + format(row.getRangeHigh())
+        + ",field=price_excl_tax)" + selectionTrace(selection.traceMessage())
+        + pricingLedger(materialCode, factorRule, factorValue, row, selection);
+    return resolved(row.getPriceExclTax(), row, trace, priceDate, selection);
   }
 
   private SupplierPreferredPriceSelection<PriceRangeItem> selectPreferredFactorPrice(
@@ -152,9 +140,6 @@ public class RangePriceResolver implements PriceResolver {
       PriceRangeFactorRule factorRule,
       LocalDate priceDate,
       CostRunContext context) {
-    if (supplierPreferredPriceSelector == null) {
-      return new SupplierPreferredPriceSelection<>(rows.get(0), "");
-    }
     String businessUnitType = context == null ? null : trimToNull(context.getBusinessUnitType());
     if (businessUnitType == null) {
       businessUnitType = trimToNull(factorRule.getBusinessUnitType());
@@ -171,14 +156,6 @@ public class RangePriceResolver implements PriceResolver {
         priceDate,
         PriceRangeItem::getSupplierName,
         PriceRangeItem::getSupplierCode);
-  }
-
-  private boolean isEffectiveOn(PriceRangeItem row, LocalDate priceDate) {
-    if (priceDate == null) {
-      return true;
-    }
-    return (row.getEffectiveFrom() == null || !row.getEffectiveFrom().isAfter(priceDate))
-        && (row.getEffectiveTo() == null || !row.getEffectiveTo().isBefore(priceDate));
   }
 
   private String selectionTrace(String traceMessage) {
@@ -206,8 +183,6 @@ public class RangePriceResolver implements PriceResolver {
         + "；供应商匹配方式=" + matchModeLabel(selection.matchMode())
         + "；最终价格行ID=" + (row == null || row.getId() == null ? "" : row.getId())
         + "；最终不含税单价=" + format(row == null ? null : row.getPriceExclTax())
-        + "；是否兜底=" + (selection.fallback() ? "是" : "否")
-        + "；兜底原因=" + text(selection.fallbackReason())
         + "]";
   }
 
@@ -216,8 +191,7 @@ public class RangePriceResolver implements PriceResolver {
       case "CODE" -> "供应商代码";
       case "NAME_FALLBACK" -> "供应商名称兜底";
       case "SINGLE_SUPPLIER" -> "单一供应商";
-      case "DEFAULT_FALLBACK" -> "默认排序兜底";
-      case "LEGACY" -> "历史兼容";
+      case "NO_SUPPLIER_DIMENSION" -> "无供应商维度";
       default -> "";
     };
   }
@@ -238,7 +212,11 @@ public class RangePriceResolver implements PriceResolver {
     return null;
   }
 
-  private PriceResolveResult resolveQtyRange(String materialCode, BigDecimal qty, LocalDate priceDate) {
+  private PriceResolveResult resolveQtyRange(
+      String materialCode,
+      BigDecimal qty,
+      LocalDate priceDate,
+      CostRunContext context) {
     var query = Wrappers.lambdaQuery(PriceRangeItem.class)
         .eq(PriceRangeItem::getMaterialCode, materialCode)
         .and(q -> q.eq(PriceRangeItem::getRangeBasis, RANGE_BASIS_QTY)
@@ -251,28 +229,74 @@ public class RangePriceResolver implements PriceResolver {
       query.and(q -> q.le(PriceRangeItem::getEffectiveFrom, priceDate)
           .or()
           .isNull(PriceRangeItem::getEffectiveFrom));
-      // 日期型有效期统一按闭区间处理，截止日当天仍然有效。
-      query.and(q -> q.ge(PriceRangeItem::getEffectiveTo, priceDate)
-          .or()
-          .isNull(PriceRangeItem::getEffectiveTo));
     }
     List<PriceRangeItem> rows =
         priceRangeItemMapper.selectList(
             query.orderByDesc(PriceRangeItem::getEffectiveFrom)
+                .orderByDesc(PriceRangeItem::getCreatedAt)
                 .orderByDesc(PriceRangeItem::getId));
-    for (PriceRangeItem row : rows) {
-      if (matchesRange(row, qty)) {
-        BigDecimal price = row.getPriceInclTax() != null ? row.getPriceInclTax() : row.getPriceExclTax();
-        String field = row.getPriceInclTax() != null ? "price_incl_tax" : "price_excl_tax";
-        return new PriceResolveResult(
-            price,
-            "区间价",
-            "区间命中(" + format(row.getRangeLow()) + "-" + format(row.getRangeHigh())
-                + ",qty=" + format(qty) + ",field=" + field + ")",
-            row.getId());
-      }
+    List<PriceRangeItem> matched = rows == null
+        ? List.of()
+        : rows.stream().filter(row -> matchesRange(row, qty)).toList();
+    if (matched.isEmpty()) {
+      return PriceResolveResult.miss("lp_price_range_item 无有效区间价: " + materialCode);
     }
-    return PriceResolveResult.miss("lp_price_range_item 无有效区间价: " + materialCode);
+    SupplierPreferredPriceSelection<PriceRangeItem> selection = selectPreferredQtyPrice(
+        matched, materialCode, priceDate, context);
+    if (selection.failed()) {
+      return PriceResolveResult.miss(selection.failureCode(), selection.failureMessage());
+    }
+    PriceRangeItem row = selection.row();
+    if (row == null) {
+      return PriceResolveResult.miss("lp_price_range_item 无可用供应商区间价: " + materialCode);
+    }
+    BigDecimal price = row.getPriceInclTax() != null ? row.getPriceInclTax() : row.getPriceExclTax();
+    String field = row.getPriceInclTax() != null ? "price_incl_tax" : "price_excl_tax";
+    String trace = "区间命中(" + format(row.getRangeLow()) + "-" + format(row.getRangeHigh())
+        + ",qty=" + format(qty) + ",field=" + field + ")"
+        + selectionTrace(selection.traceMessage());
+    return resolved(price, row, trace, priceDate, selection);
+  }
+
+  private SupplierPreferredPriceSelection<PriceRangeItem> selectPreferredQtyPrice(
+      List<PriceRangeItem> rows,
+      String materialCode,
+      LocalDate priceDate,
+      CostRunContext context) {
+    String businessUnitType = context == null ? null : trimToNull(context.getBusinessUnitType());
+    if (businessUnitType == null) {
+      businessUnitType = firstText(rows, PriceRangeItem::getBusinessUnitType);
+    }
+    return supplierPreferredPriceSelector.select(
+        rows,
+        businessUnitType,
+        materialCode,
+        firstText(rows, PriceRangeItem::getMaterialName),
+        firstText(rows, PriceRangeItem::getSpecModel),
+        priceDate,
+        PriceRangeItem::getSupplierName,
+        PriceRangeItem::getSupplierCode);
+  }
+
+  private PriceResolveResult resolved(
+      BigDecimal price,
+      PriceRangeItem row,
+      String trace,
+      LocalDate priceDate,
+      SupplierPreferredPriceSelection<PriceRangeItem> selection) {
+    PriceResolveEvidence evidence = PriceResolveEvidenceFactory.create(
+        row.getId(),
+        row.getImportBatchNo(),
+        selection.mainSupplierName(),
+        selection.mainSupplierCode(),
+        selection.supplyRatio(),
+        selection.supplyRatioRecordId(),
+        row.getEffectiveFrom(),
+        row.getEffectiveTo(),
+        priceDate);
+    String warning = evidence.warningMessage();
+    String remark = StringUtils.hasText(warning) ? trace + "；" + warning : trace;
+    return PriceResolveResult.hit(price, "区间价", remark, row.getId(), evidence);
   }
 
   private PriceRangeFactorRule findCurrentFactorRule(String materialCode, CostRunContext context) {

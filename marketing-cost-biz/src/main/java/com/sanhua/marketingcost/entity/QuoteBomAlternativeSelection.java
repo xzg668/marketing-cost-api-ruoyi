@@ -24,7 +24,6 @@ public class QuoteBomAlternativeSelection {
   public static final String SOURCE_AUTO_STANDARD = "AUTO_STANDARD";
   public static final String SOURCE_MANUAL_STANDARD = "MANUAL_STANDARD";
   public static final String SOURCE_MANUAL_ALTERNATIVE = "MANUAL_ALTERNATIVE";
-  public static final String SOURCE_INHERITED_MONTHLY = "INHERITED_MONTHLY";
 
   public static final String STATUS_ACTIVE = "ACTIVE";
   public static final String STATUS_SUPERSEDED = "SUPERSEDED";
@@ -69,8 +68,6 @@ public class QuoteBomAlternativeSelection {
   private String selectedBy;
   private LocalDateTime selectedAt;
   private String selectionRemark;
-  private Long inheritedMonthlySnapshotId;
-
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
 

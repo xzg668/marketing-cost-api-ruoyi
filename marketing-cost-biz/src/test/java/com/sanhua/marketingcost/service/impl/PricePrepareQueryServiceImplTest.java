@@ -29,14 +29,13 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
-import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmItem;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
-import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmItemMapper;
 import com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService;
+import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -55,7 +54,6 @@ class PricePrepareQueryServiceImplTest {
   private OaFormItemMapper oaFormItemMapper;
   private PricePrepareItemMapper itemMapper;
   private PricePrepareGapMapper gapMapper;
-  private QuotePriceTypeConfirmItemMapper priceTypeConfirmItemMapper;
   private MakePartNoScrapConfirmationService noScrapConfirmationService;
   private PricePrepareQueryServiceImpl service;
 
@@ -66,7 +64,6 @@ class PricePrepareQueryServiceImplTest {
     TableInfoHelper.initTableInfo(assistant, PricePrepareBatch.class);
     TableInfoHelper.initTableInfo(assistant, PricePrepareItem.class);
     TableInfoHelper.initTableInfo(assistant, PricePrepareGap.class);
-    TableInfoHelper.initTableInfo(assistant, QuotePriceTypeConfirmItem.class);
     TableInfoHelper.initTableInfo(assistant, OaForm.class);
     TableInfoHelper.initTableInfo(assistant, OaFormItem.class);
   }
@@ -78,12 +75,11 @@ class PricePrepareQueryServiceImplTest {
     oaFormItemMapper = mock(OaFormItemMapper.class);
     itemMapper = mock(PricePrepareItemMapper.class);
     gapMapper = mock(PricePrepareGapMapper.class);
-    priceTypeConfirmItemMapper = mock(QuotePriceTypeConfirmItemMapper.class);
     noScrapConfirmationService = mock(MakePartNoScrapConfirmationService.class);
     service =
         new PricePrepareQueryServiceImpl(
             oaFormMapper, oaFormItemMapper, batchMapper, itemMapper, gapMapper,
-            priceTypeConfirmItemMapper, noScrapConfirmationService);
+            noScrapConfirmationService, mock(MaterialPriceRouterService.class));
   }
 
   @Test
@@ -369,65 +365,6 @@ class PricePrepareQueryServiceImplTest {
             "oa_push_status",
             "ORDER BY");
     assertThat(queryCaptor.getValue().getParamNameValuePairs().values()).contains(1);
-  }
-
-  @Test
-  @DisplayName("缺口分页：按缺价料号回填已确认价格类型")
-  void pageGapsEnrichesConfirmedPriceTypeByGapMaterialCode() {
-    PricePrepareGap gap = new PricePrepareGap();
-    gap.setPriceTypeConfirmNo("PT-CF-1");
-    gap.setPriceTypeConfirmItemId(9L);
-    gap.setOaNo("OA-001");
-    gap.setOaFormItemId(10L);
-    gap.setTopProductCode("TOP-1");
-    gap.setMaterialCode("PKG-PARENT");
-    gap.setGapMaterialCode("PKG-CHILD");
-    when(gapMapper.selectPage(any(), any())).thenAnswer(invocation -> {
-      Page<PricePrepareGap> page = invocation.getArgument(0);
-      page.setTotal(1);
-      page.setRecords(List.of(gap));
-      return page;
-    });
-    QuotePriceTypeConfirmItem parentItem = new QuotePriceTypeConfirmItem();
-    parentItem.setId(9L);
-    parentItem.setMaterialCode("PKG-PARENT");
-    parentItem.setPriceType("固定价");
-    QuotePriceTypeConfirmItem childItem = new QuotePriceTypeConfirmItem();
-    childItem.setId(10L);
-    childItem.setMaterialCode("PKG-CHILD");
-    childItem.setPriceType("结算价");
-    when(priceTypeConfirmItemMapper.selectList(any()))
-        .thenReturn(List.of(parentItem))
-        .thenReturn(List.of(childItem));
-
-    PricePrepareGapPageResponse response = service.pageGaps(new PricePrepareGapQueryRequest());
-
-    PricePrepareGap row = response.getRecords().get(0);
-    assertThat(row.getPriceType()).isEqualTo("结算固定价");
-    assertThat(row.getPriceTypeConfirmItemId()).isEqualTo(10L);
-  }
-
-  @Test
-  @DisplayName("纯计算缺口：无需落库也能按确认明细补齐价格类型")
-  void enrichGapsSupportsInMemoryPreviewRows() {
-    PricePrepareGap gap = new PricePrepareGap();
-    gap.setPriceTypeConfirmNo("PT-CF-PREVIEW");
-    gap.setPriceTypeConfirmItemId(19L);
-    gap.setOaNo("OA-PREVIEW");
-    gap.setOaFormItemId(20L);
-    gap.setTopProductCode("TOP-PREVIEW");
-    gap.setMaterialCode("MAT-LINKED");
-    gap.setGapMaterialCode("MAT-LINKED");
-    QuotePriceTypeConfirmItem confirmItem = new QuotePriceTypeConfirmItem();
-    confirmItem.setId(19L);
-    confirmItem.setMaterialCode("MAT-LINKED");
-    confirmItem.setPriceType("联动价");
-    when(priceTypeConfirmItemMapper.selectList(any())).thenReturn(List.of(confirmItem));
-
-    service.enrichGaps(List.of(gap));
-
-    assertThat(gap.getPriceType()).isEqualTo("联动价");
-    org.mockito.Mockito.verifyNoInteractions(gapMapper);
   }
 
   @Test

@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -26,11 +27,9 @@ import com.sanhua.marketingcost.dto.priceprepare.PricePreparePlanItem;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunTrialRequest;
-import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmationSummaryResponse;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.CostRunCostItem;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
-import com.sanhua.marketingcost.entity.CostRunResult;
 import com.sanhua.marketingcost.entity.CostRunTask;
 import com.sanhua.marketingcost.entity.CostRunTraceSnapshot;
 import com.sanhua.marketingcost.entity.MaterialMaster;
@@ -40,12 +39,12 @@ import com.sanhua.marketingcost.entity.PricePrepareItem;
 import com.sanhua.marketingcost.entity.PriceRangeFactorRule;
 import com.sanhua.marketingcost.entity.PriceRangeItem;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
+import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
 import com.sanhua.marketingcost.enums.MaterialFormAttrEnum;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.CostRunCostItemMapper;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
-import com.sanhua.marketingcost.mapper.CostRunResultMapper;
 import com.sanhua.marketingcost.mapper.CostRunTaskMapper;
 import com.sanhua.marketingcost.mapper.CostRunTraceSnapshotMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
@@ -59,13 +58,13 @@ import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
 import com.sanhua.marketingcost.mapper.PriceRangeFactorRuleMapper;
 import com.sanhua.marketingcost.mapper.PriceRangeItemMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
-import com.sanhua.marketingcost.mapper.QuoteCostingWorkbenchSummaryMapper;
 import com.sanhua.marketingcost.mapper.QuoteCuMaterialDiffItemMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
 import com.sanhua.marketingcost.service.CostRunEngine;
 import com.sanhua.marketingcost.service.CostRunPartItemService;
 import com.sanhua.marketingcost.service.CostRunResultWriter;
+import com.sanhua.marketingcost.service.CostRunResultService;
 import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
@@ -73,8 +72,10 @@ import com.sanhua.marketingcost.service.PricePrepareService;
 import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionService;
+import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.pricing.RangePriceResolver;
+import com.sanhua.marketingcost.service.pricing.RangePriceResolverTestSupport;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -83,6 +84,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -123,7 +125,6 @@ class MarketFactorRangePriceEndToEndSampleTest {
     TableInfoHelper.initTableInfo(assistant, PricePrepareItem.class);
     TableInfoHelper.initTableInfo(assistant, BomCostingRow.class);
     TableInfoHelper.initTableInfo(assistant, MaterialMaster.class);
-    TableInfoHelper.initTableInfo(assistant, CostRunResult.class);
     TableInfoHelper.initTableInfo(assistant, CostRunPartItem.class);
     TableInfoHelper.initTableInfo(assistant, CostRunCostItem.class);
     TableInfoHelper.initTableInfo(assistant, CostRunTraceSnapshot.class);
@@ -155,7 +156,6 @@ class MarketFactorRangePriceEndToEndSampleTest {
     PricePrepareItemMapper prepareItemMapper = mock(PricePrepareItemMapper.class);
     BomCostingRowMapper bomCostingRowMapper = mock(BomCostingRowMapper.class);
     MaterialMasterMapper materialMasterMapper = mock(MaterialMasterMapper.class);
-    CostRunResultMapper resultMapper = mock(CostRunResultMapper.class);
     CostRunPartItemService partItemService = mock(CostRunPartItemService.class);
     CostRunCostItemService costItemService = mock(CostRunCostItemService.class);
 
@@ -167,7 +167,10 @@ class MarketFactorRangePriceEndToEndSampleTest {
     when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(oaForm);
 
     PriceRangeItemServiceImpl rangeImportService =
-        new PriceRangeItemServiceImpl(rangeItemMapper, factorRuleMapper);
+        new PriceRangeItemServiceImpl(
+            rangeItemMapper,
+            factorRuleMapper,
+            mock(com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.class));
     List<PriceRangeItem> imported = rangeImportService.importItems(factorRangeImportRequest());
 
     assertThat(oaForm.getCopperPrice()).isEqualByComparingTo(QUOTE_COPPER_PRICE);
@@ -190,7 +193,7 @@ class MarketFactorRangePriceEndToEndSampleTest {
         });
 
     RangePriceResolver rangeResolver =
-        new RangePriceResolver(rangeItemMapper, factorRuleMapper, oaFormMapper);
+        RangePriceResolverTestSupport.create(rangeItemMapper, factorRuleMapper, oaFormMapper);
     NormalMaterialPricePrepareStrategyImpl prepareStrategy =
         new NormalMaterialPricePrepareStrategyImpl(
             routerService, linkedPriceEnsureService, List.of(rangeResolver));
@@ -220,11 +223,9 @@ class MarketFactorRangePriceEndToEndSampleTest {
             prepareItemMapper, bomCostingRowMapper, materialMasterMapper);
     CostRunObjectCalcServiceImpl objectCalcService =
         new CostRunObjectCalcServiceImpl(
-            resultMapper,
             partItemService,
             costItemService,
             List.of(preparedProvider));
-    when(resultMapper.selectOne(any(Wrapper.class))).thenReturn(null);
     when(costItemService.listByMaterialCodes(
             eq(OA_NO),
             eq(PRODUCT_CODE),
@@ -242,13 +243,12 @@ class MarketFactorRangePriceEndToEndSampleTest {
     QuoteCostRunTrialRequest trialRequest = new QuoteCostRunTrialRequest();
     trialRequest.setPeriodMonth(PERIOD_MONTH);
     trialRequest.setPricePrepareNo("PPR-MFRP-08");
-    var response = workbench.trial(OA_NO, OA_FORM_ITEM_ID, trialRequest);
+    var response = workbench.runToSuccess(OA_NO, OA_FORM_ITEM_ID, trialRequest, "range-e2e");
 
-    assertThat(response.getCurrentDisplayVersion().getStatus()).isEqualTo("TRIAL");
+    assertThat(response.getCurrentDisplayVersion().getStatus()).isEqualTo("SUCCESS");
     assertThat(response.getCurrentDisplayVersion().getPricePrepareNo()).isEqualTo("PPR-MFRP-08");
     assertThat(response.getResultHeader().getTotalCost())
         .isEqualByComparingTo(EXPECTED_AMOUNT.multiply(new BigDecimal("2")));
-    assertThat(response.isCanConfirm()).isTrue();
     assertThat(response.getPartItems())
         .extracting(CostRunPartItemDto::getPartCode)
         .containsExactlyElementsOf(SAMPLE_PART_CODES);
@@ -340,13 +340,13 @@ class MarketFactorRangePriceEndToEndSampleTest {
       CostRunEngine costRunEngine) {
     OaFormItemMapper oaFormItemMapper = mock(OaFormItemMapper.class);
     QuoteCostRunVersionMapper versionMapper = mock(QuoteCostRunVersionMapper.class);
-    CostRunResultMapper resultMapper = mock(CostRunResultMapper.class);
+    CostRunResultService resultService = mock(CostRunResultService.class);
     CostRunPartItemMapper partItemMapper = mock(CostRunPartItemMapper.class);
     CostRunCostItemMapper costItemMapper = mock(CostRunCostItemMapper.class);
+    when(partItemMapper.selectCount(any(Wrapper.class))).thenReturn(2L);
+    when(costItemMapper.selectCount(any(Wrapper.class))).thenReturn(1L);
     CostRunTraceSnapshotMapper traceSnapshotMapper = mock(CostRunTraceSnapshotMapper.class);
     CostRunTaskMapper taskMapper = mock(CostRunTaskMapper.class);
-    QuoteCostingWorkbenchSummaryMapper summaryMapper =
-        mock(QuoteCostingWorkbenchSummaryMapper.class);
     QuoteProductBomCostingBuildService costingBuildService =
         mock(QuoteProductBomCostingBuildService.class);
     PricePrepareService pricePrepareService = mock(PricePrepareService.class);
@@ -356,10 +356,12 @@ class MarketFactorRangePriceEndToEndSampleTest {
         mock(QuoteCostRunVersionNoGenerator.class);
     CostRunResultWriter resultWriter = mock(CostRunResultWriter.class);
 
-    when(oaFormItemMapper.selectById(OA_FORM_ITEM_ID)).thenReturn(sampleOaFormItem());
-    when(summaryMapper.selectLatestPriceTypeConfirmation(
-            OA_NO, OA_FORM_ITEM_ID, PRODUCT_CODE, PERIOD_MONTH))
-        .thenReturn(confirmedPriceType());
+    OaFormItem oaFormItem = sampleOaFormItem();
+    when(oaFormItemMapper.selectById(OA_FORM_ITEM_ID)).thenReturn(oaFormItem);
+    when(oaFormItemMapper.selectForCostCompletion(OA_FORM_ITEM_ID, OA_FORM_ID, BUSINESS_UNIT_TYPE))
+        .thenReturn(oaFormItem);
+    when(oaFormItemMapper.countRunnableItems(OA_FORM_ID)).thenReturn(1L);
+    when(oaFormItemMapper.countCalculatedRunnableItems(OA_FORM_ID)).thenReturn(1L);
     when(costingBuildService.buildByOaFormItem(OA_FORM_ITEM_ID, PERIOD_MONTH))
         .thenReturn(new QuoteBomCostingBuildResponse(
             8801L,
@@ -384,13 +386,33 @@ class MarketFactorRangePriceEndToEndSampleTest {
     generateResult.setPeriodMonth(PERIOD_MONTH);
     generateResult.setStatus("SUCCESS");
     when(pricePrepareService.generate(any())).thenReturn(generateResult);
-    when(readinessService.check(anyString(), anyLong(), anyString(), anyString(), anyString()))
+    when(readinessService.check(anyString(), anyLong(), anyString(), anyString()))
         .thenReturn(PricePrepareReadinessResult.ready("PPR-MFRP-08", PERIOD_MONTH, "SUCCESS"));
     QuoteCostRunVersion trialVersion = trialVersion();
     when(versionService.createTrial(
             anyString(), eq(OA_FORM_ITEM_ID), eq(PRODUCT_CODE), anyString(), anyString(),
-            any(), any(), any(), any()))
+            any(), any()))
         .thenReturn(trialVersion);
+    when(versionMapper.update(any(QuoteCostRunVersion.class), any(Wrapper.class))).thenReturn(1);
+    when(versionMapper.selectById(trialVersion.getId())).thenReturn(trialVersion);
+    when(versionMapper.selectList(any(Wrapper.class))).thenReturn(List.of(trialVersion));
+    when(versionNoGenerator.nextVersionNo(OA_FORM_ITEM_ID, PRODUCT_CODE))
+        .thenReturn("COST-MFRP-08-V1");
+    QuoteCostingWorkspace workspace = new QuoteCostingWorkspace();
+    workspace.setOaNo(OA_NO);
+    workspace.setOaFormItemId(OA_FORM_ITEM_ID);
+    workspace.setProductCode(PRODUCT_CODE);
+    workspace.setPeriodMonth(PERIOD_MONTH);
+    workspace.setBusinessUnitType(BUSINESS_UNIT_TYPE);
+    workspace.setCurrentPrepareNo("PPR-MFRP-08");
+    workspace.setInputFingerprint("MFRP-08-FP");
+    workspace.setLockVersion(0);
+    QuoteCostingWorkspaceService workspaceService = mock(QuoteCostingWorkspaceService.class);
+    when(workspaceService.find(OA_FORM_ITEM_ID, PERIOD_MONTH)).thenReturn(Optional.of(workspace));
+    when(workspaceService.lockOrCreate(
+            OA_NO, OA_FORM_ITEM_ID, PRODUCT_CODE, PERIOD_MONTH, BUSINESS_UNIT_TYPE))
+        .thenReturn(workspace);
+    when(workspaceService.update(any(QuoteCostingWorkspace.class), eq(0))).thenReturn(workspace);
     QuoteCuAdjustmentCalcService cuAdjustmentCalcService = request -> {
       CostRunContext context = CostRunContext.quote(
           request.form().getOaNo(),
@@ -435,15 +457,15 @@ class MarketFactorRangePriceEndToEndSampleTest {
         oaFormMapper,
         oaFormItemMapper,
         versionMapper,
-        resultMapper,
+        resultService,
         partItemMapper,
         costItemMapper,
         mock(QuoteCuMaterialDiffItemMapper.class),
-        summaryMapper,
         readinessService,
         versionNoGenerator,
         cuAdjustmentCalcService,
-        mock(com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate.class));
+        mock(com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate.class),
+        workspaceService);
   }
 
   private List<CostRunTraceSnapshot> buildTraceSnapshots(
@@ -577,7 +599,6 @@ class MarketFactorRangePriceEndToEndSampleTest {
     item.setId(id);
     item.setPrepareNo("PPR-MFRP-08");
     item.setPeriodMonth(PERIOD_MONTH);
-    item.setPriceTypeConfirmNo("PTC-MFRP-08");
     item.setOaNo(OA_NO);
     item.setOaFormItemId(OA_FORM_ITEM_ID);
     item.setTopProductCode(PRODUCT_CODE);
@@ -665,18 +686,6 @@ class MarketFactorRangePriceEndToEndSampleTest {
     return item;
   }
 
-  private QuotePriceTypeConfirmationSummaryResponse confirmedPriceType() {
-    QuotePriceTypeConfirmationSummaryResponse response =
-        new QuotePriceTypeConfirmationSummaryResponse();
-    response.setConfirmNo("PTC-MFRP-08");
-    response.setOaNo(OA_NO);
-    response.setOaFormItemId(OA_FORM_ITEM_ID);
-    response.setProductCode(PRODUCT_CODE);
-    response.setPeriodMonth(PERIOD_MONTH);
-    response.setStatus("CONFIRMED");
-    return response;
-  }
-
   private QuoteCostRunVersion trialVersion() {
     QuoteCostRunVersion version = new QuoteCostRunVersion();
     version.setId(7701L);
@@ -687,9 +696,8 @@ class MarketFactorRangePriceEndToEndSampleTest {
     version.setPricingMonth(PERIOD_MONTH);
     version.setResultPeriod(PERIOD_MONTH);
     version.setPricePrepareNo("PPR-MFRP-08");
-    version.setPriceTypeConfirmNo("PTC-MFRP-08");
-    version.setBomConfirmNo("BOM-MFRP-08");
-    version.setStatus("TRIAL");
+    version.setOaPricePrepareNo("PPR-MFRP-08");
+    version.setStatus("RUNNING");
     version.setBusinessUnitType(BUSINESS_UNIT_TYPE);
     version.setTrialStartedAt(LocalDateTime.of(2026, 7, 2, 10, 0));
     return version;

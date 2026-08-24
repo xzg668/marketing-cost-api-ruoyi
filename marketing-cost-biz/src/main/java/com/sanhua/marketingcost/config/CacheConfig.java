@@ -37,6 +37,11 @@ public class CacheConfig {
     manager.setCaffeine(Caffeine.newBuilder()
         .expireAfterWrite(5, TimeUnit.MINUTES)
         .maximumSize(200));
+    // 详情页会在后台自动读取协作投影；短缓存既抑制同一 OA 的重复全量扫描，
+    // 又把技术/财务在其他页面完成操作后的状态陈旧窗口控制在几秒内。
+    manager.registerCustomCache(
+        "quoteCollaborationSummaries",
+        Caffeine.newBuilder().expireAfterWrite(3, TimeUnit.SECONDS).maximumSize(100).build());
     return manager;
   }
 }

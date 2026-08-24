@@ -8,6 +8,7 @@ import com.sanhua.marketingcost.mapper.FactorUploadBatchMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableBindingMapper;
 import com.sanhua.marketingcost.service.PriceLinkedImportBasisRepository;
+import com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils;
 import java.util.List;
 import org.springframework.stereotype.Repository;
 import org.springframework.util.StringUtils;
@@ -35,15 +36,26 @@ public class PriceLinkedImportBasisRepositoryImpl
         .eq(PriceLinkedItem::getPricingMonth, identity.getPricingMonth())
         .eq(PriceLinkedItem::getMaterialCode, identity.getMaterialCode())
         .eq(PriceLinkedItem::getBusinessUnitType, identity.getBusinessUnitType())
-        .isNull(PriceLinkedItem::getEffectiveTo);
-    if (StringUtils.hasText(identity.getSupplierCode())) {
-      query.eq(PriceLinkedItem::getSupplierCode, identity.getSupplierCode().trim());
-    } else {
-      query.isNull(PriceLinkedItem::getSupplierCode);
-    }
-    query.orderByDesc(PriceLinkedItem::getId).last("LIMIT 1");
+        .eq(PriceLinkedItem::getDeleted, 0)
+        .orderByDesc(PriceLinkedItem::getCreatedAt)
+        .orderByDesc(PriceLinkedItem::getId);
     List<PriceLinkedItem> rows = itemMapper.selectList(query);
-    return rows.isEmpty() ? null : rows.getFirst();
+    String supplierKey = supplierKey(identity);
+    return rows.stream()
+        .filter(row -> supplierKey.equals(supplierKey(row)))
+        .findFirst()
+        .orElse(null);
+  }
+
+  private String supplierKey(PriceLinkedItem item) {
+    String supplierCode = SupplierSupplyRatioNormalizeUtils.normalizeKeyPart(
+        item == null ? null : item.getSupplierCode());
+    if (StringUtils.hasText(supplierCode)) {
+      return "CODE:" + supplierCode;
+    }
+    String supplierName = SupplierSupplyRatioNormalizeUtils.normalizeKeyPart(
+        item == null ? null : item.getSupplierName());
+    return StringUtils.hasText(supplierName) ? "NAME:" + supplierName : "NO_SUPPLIER";
   }
 
   @Override

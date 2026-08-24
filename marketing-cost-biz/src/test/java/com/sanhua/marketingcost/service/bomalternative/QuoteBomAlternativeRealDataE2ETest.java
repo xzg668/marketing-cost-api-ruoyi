@@ -59,10 +59,7 @@ class QuoteBomAlternativeRealDataE2ETest {
     assertThat(alternative.selection().selectionVersion()).isEqualTo(2);
     assertThat(alternative.replaceCount()).isEqualTo(1);
     assertThat(alternative.rebuild()).isNotNull();
-    assertThat(alternative.rebuild().rebuilt()).isTrue();
-    assertThat(alternative.rebuild().priceTypeInvalidatedCount()).isPositive();
-    assertThat(alternative.rebuild().pricePrepareInvalidatedCount()).isPositive();
-    assertThat(alternative.rebuild().costRunInvalidatedCount()).isPositive();
+    assertThat(alternative.rebuild().recalculationRequired()).isTrue();
     assertThat(alternative.costingRows()).hasSameSizeAs(standard.costingRows());
     assertSingleBranch(alternative.costingRows(),
         QuoteBomAlternativeRealDataTestSupport.ALTERNATIVE,

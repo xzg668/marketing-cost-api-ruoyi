@@ -24,6 +24,20 @@ public interface MakePartPriceGenerationService {
     return generateByOa(oaNo, businessUnitType, period, priceAsOfTime);
   }
 
+  /**
+   * 只生成指定 OA 下的一个自制件。价格准备逐结算物料执行时必须走此入口，避免每个自制件
+   * 都重复生成整张 OA 的全部自制件结果。
+   */
+  default MakePartPriceGenerateResponse generateByOaMaterial(
+      String oaNo,
+      String parentMaterialNo,
+      String businessUnitType,
+      String period,
+      LocalDateTime priceAsOfTime,
+      PricePrepareScenarioContext scenarioContext) {
+    return generateByOa(oaNo, businessUnitType, period, priceAsOfTime, scenarioContext);
+  }
+
   MakePartPriceGenerateResponse generateByMaterial(
       String parentMaterialNo, String businessUnitType, String period);
 
@@ -54,4 +68,23 @@ public interface MakePartPriceGenerationService {
       String period,
       LocalDateTime priceAsOfTime,
       PricePrepareScenarioContext scenarioContext);
+
+  /** 只读计算指定 OA 下的一个自制件，不写计算行、缺口或联动价结果。 */
+  default List<MakePartPriceCalcRow> calculateRowsByOaMaterial(
+      String oaNo,
+      String parentMaterialNo,
+      String businessUnitType,
+      String period,
+      LocalDateTime priceAsOfTime,
+      PricePrepareScenarioContext scenarioContext) {
+    List<MakePartPriceCalcRow> rows = calculateRowsByOa(
+        oaNo, businessUnitType, period, priceAsOfTime, scenarioContext);
+    if (rows == null || rows.isEmpty()) {
+      return List.of();
+    }
+    return rows.stream()
+        .filter(row -> row != null && parentMaterialNo != null
+            && parentMaterialNo.trim().equals(row.getParentMaterialNo()))
+        .toList();
+  }
 }

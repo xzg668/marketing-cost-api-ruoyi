@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.BomByproductCostRuleUpsertRequest;
 import com.sanhua.marketingcost.entity.BomByproductCostRule;
 import com.sanhua.marketingcost.mapper.BomByproductCostRuleMapper;
+import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import java.util.List;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.util.StringUtils;
@@ -25,9 +26,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class BomByproductCostRuleController {
 
   private final BomByproductCostRuleMapper ruleMapper;
+  private final QuoteCostingWorkspaceService workspaceService;
 
-  public BomByproductCostRuleController(BomByproductCostRuleMapper ruleMapper) {
+  public BomByproductCostRuleController(
+      BomByproductCostRuleMapper ruleMapper,
+      QuoteCostingWorkspaceService workspaceService) {
     this.ruleMapper = ruleMapper;
+    this.workspaceService = workspaceService;
   }
 
   @PreAuthorize("@ss.hasPermi('bom-data:byproduct-cost-rule:list')")
@@ -54,6 +59,7 @@ public class BomByproductCostRuleController {
     BomByproductCostRule entity = new BomByproductCostRule();
     applyRequest(entity, req);
     ruleMapper.insert(entity);
+    markWorkspacesStale();
     return CommonResult.success(entity);
   }
 
@@ -68,13 +74,18 @@ public class BomByproductCostRuleController {
     }
     applyRequest(existing, req);
     ruleMapper.updateById(existing);
+    markWorkspacesStale();
     return CommonResult.success(existing);
   }
 
   @PreAuthorize("@ss.hasPermi('bom-data:byproduct-cost-rule:remove')")
   @DeleteMapping("/{id}")
   public CommonResult<Boolean> delete(@PathVariable Long id) {
-    return CommonResult.success(ruleMapper.deleteById(id) > 0);
+    boolean deleted = ruleMapper.deleteById(id) > 0;
+    if (deleted) {
+      markWorkspacesStale();
+    }
+    return CommonResult.success(deleted);
   }
 
   @PreAuthorize("@ss.hasPermi('bom-data:byproduct-cost-rule:edit')")
@@ -87,6 +98,7 @@ public class BomByproductCostRuleController {
     }
     existing.setEnabled(Integer.valueOf(1).equals(existing.getEnabled()) ? 0 : 1);
     ruleMapper.updateById(existing);
+    markWorkspacesStale();
     return CommonResult.success(existing);
   }
 
@@ -120,5 +132,9 @@ public class BomByproductCostRuleController {
       return null;
     }
     return value.trim();
+  }
+
+  private void markWorkspacesStale() {
+    workspaceService.markBomRuleWorkspacesStale(null, "BOM_RULE_CHANGED");
   }
 }

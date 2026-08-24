@@ -90,6 +90,55 @@ class BomSettlementRowBuildEngineTest {
   }
 
   @Test
+  @DisplayName("财务分类规则只上卷同时满足三个条件的末级采购子件")
+  void financeClassificationRuleRollsUpOnlyQualifiedPurchasedLeaves() {
+    BomSettlementRowBuildEngine financeEngine = new BomSettlementRowBuildEngine(
+        new BomSettlementRuleMatcher(
+            new BomSettlementRuleConditionEvaluator(new ObjectMapper())),
+        new BomByproductCostRuleMatcher(
+            new BomByproductCostRuleConditionEvaluator(new ObjectMapper())),
+        (ignoredCodes, ignoredOrganization) -> Map.of(
+            "MATCH-BAR", new BomRuleMaterialAttributes("171711402", "不锈钢棒"),
+            "MATCH-TUBE", new BomRuleMaterialAttributes("171711404", "紫铜直管"),
+            "EXCLUDED-MAIN", new BomRuleMaterialAttributes("121191304", "锻镦件"),
+            "NOT-WHITELIST", new BomRuleMaterialAttributes("171711402", "普通采购分类"),
+            "MISSING-MAIN", new BomRuleMaterialAttributes(null, "丝网"),
+            "NON-PURCHASE", new BomRuleMaterialAttributes("171711402", "不锈钢棒")));
+
+    BomSettlementRowBuildResult result = financeEngine.build(request(List.of(
+        node("P", "P", null, 0, "/P/", 0, "组件", null),
+        purchaseNode("MATCH-BAR", "P", "P", 1, "/P/MATCH-BAR/", "不锈钢棒子件"),
+        purchaseNode("MATCH-TUBE", "P", "P", 1, "/P/MATCH-TUBE/", "紫铜直管子件"),
+        purchaseNode("EXCLUDED-MAIN", "P", "P", 1, "/P/EXCLUDED-MAIN/", "专用锻镦子件"),
+        purchaseNode("NOT-WHITELIST", "P", "P", 1, "/P/NOT-WHITELIST/", "普通采购子件"),
+        purchaseNode("MISSING-MAIN", "P", "P", 1, "/P/MISSING-MAIN/", "主分类缺失子件"),
+        fullNode(
+            "NON-PURCHASE", "P", "P", 1, "/P/NON-PURCHASE/", 1,
+            "非采购结构节点", "制造件", "制造件", "18", "普通主分类", null,
+            "主制造", LocalDate.of(2026, 1, 1), null)
+    ), List.of(financeRollupRule())));
+
+    assertThat(result.costingRows())
+        .filteredOn(row -> "SPECIAL_ROLLUP_PARENT".equals(row.getSettlementRowType()))
+        .extracting(BomCostingRow::getMaterialCode)
+        .containsExactly("P");
+    assertThat(result.subRefs()).extracting(ref -> ref.subRef().getSubMaterialCode())
+        .containsExactly("MATCH-BAR", "MATCH-TUBE");
+    assertThat(result.costingRows())
+        .filteredOn(row -> "DEFAULT_LEAF".equals(row.getSettlementRowType()))
+        .extracting(BomCostingRow::getMaterialCode)
+        .containsExactlyInAnyOrder("EXCLUDED-MAIN", "MISSING-MAIN", "NOT-WHITELIST");
+    assertThat(result.subRefs()).allSatisfy(ref -> {
+      assertThat(ref.subRef().getSubQtyPerParent()).isEqualByComparingTo(BigDecimal.ONE);
+      assertThat(ref.subRef().getSubQtyPerTop()).isEqualByComparingTo(BigDecimal.ONE);
+    });
+    assertThat(result.subRefs()).noneMatch(
+        ref -> "NON-PURCHASE".equals(ref.subRef().getSubMaterialCode()));
+    assertThat(result.stats().rollupBucketCount()).isEqualTo(1);
+    assertThat(result.stats().consumedLeafPathCount()).isEqualTo(2);
+  }
+
+  @Test
   @DisplayName("制造件和非包装虚拟件是结构节点，默认继续下钻且不输出自身")
   void structuralManufacturedAndNonPackageVirtualNodesAreNotDefaultRows() {
     BomSettlementRowBuildResult result = engine.build(request(List.of(
@@ -872,6 +921,29 @@ class BomSettlementRowBuildEngineTest {
         """.formatted(materialNameKeyword));
     rule.setMarkSubtreeCostRequired(1);
     rule.setPriority(priority);
+    rule.setEnabled(1);
+    return rule;
+  }
+
+  private static BomSettlementRule financeRollupRule() {
+    BomSettlementRule rule = new BomSettlementRule();
+    rule.setId(224L);
+    rule.setRuleCode("SPECIAL_PURCHASE_ROLLUP_FINANCE_CLASSIFICATION");
+    rule.setRuleName("特殊采购分类上卷：财务分类规则");
+    rule.setRuleCategory("SPECIAL_PURCHASE_ROLLUP");
+    rule.setSettlementAction("ROLLUP_TO_PARENT");
+    rule.setSettlementRowType("SPECIAL_ROLLUP_PARENT");
+    rule.setSubRefType("SPECIAL_ROLLUP_CHILD");
+    rule.setMatchConditionJson("""
+        {"nodeConditions":[
+          {"field":"shape_attr","op":"EQ","value":"采购件"},
+          {"field":"purchase_category","op":"IN","values":["不锈钢棒","紫铜直管","锻镦件","丝网"]},
+          {"field":"main_category_code","op":"NOT_BLANK"},
+          {"field":"main_category_code","op":"NOT_IN","values":["121191304","121181508"]}
+        ]}
+        """);
+    rule.setMarkSubtreeCostRequired(1);
+    rule.setPriority(10);
     rule.setEnabled(1);
     return rule;
   }

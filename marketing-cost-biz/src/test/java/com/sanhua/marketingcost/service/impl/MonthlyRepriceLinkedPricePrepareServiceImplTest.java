@@ -99,7 +99,9 @@ class MonthlyRepriceLinkedPricePrepareServiceImplTest {
     verify(priceLinkedItemMapper).selectList(queryCaptor.capture());
     assertThat(queryCaptor.getValue().getSqlSegment())
         .contains("pricing_month <=")
-        .contains("effective_to >=");
+        .contains("business_unit_type =")
+        .doesNotContain("effective_from")
+        .doesNotContain("effective_to");
     verify(factorAdjustBatchMapper, never()).selectById(any());
 
     ArgumentCaptor<MonthlyRepriceBatch> batchCaptor =

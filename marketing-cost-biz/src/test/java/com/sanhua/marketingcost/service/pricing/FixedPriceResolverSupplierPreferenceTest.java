@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -53,8 +54,8 @@ class FixedPriceResolverSupplierPreferenceTest {
   }
 
   @Test
-  @DisplayName("主供命中但价格源无该供应商时：回退原固定价排序第一条")
-  void fallsBackWhenMainSupplierHasNoPriceRow() {
+  @DisplayName("主供命中但价格源无该供应商时阻断")
+  void blocksWhenMainSupplierHasNoPriceRow() {
     PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);
     SupplierSupplyRatioResolveService ratioService = mock(SupplierSupplyRatioResolveService.class);
     FixedPriceResolver resolver = resolver(mapper, ratioService);
@@ -67,13 +68,15 @@ class FixedPriceResolverSupplierPreferenceTest {
 
     PriceResolveResult result = resolver.resolve("OA-1", item("MAT-1"), route());
 
-    assertThat(result.unitPrice()).isEqualByComparingTo("88.00");
-    assertThat(result.remark()).isEqualTo("主供应商无价格记录，按默认价格取价");
+    assertThat(result.unitPrice()).isNull();
+    assertThat(result.failureCode())
+        .isEqualTo(SupplierPreferredPriceSelector.PRIMARY_SUPPLIER_PRICE_MISSING);
+    assertThat(result.remark()).contains("主供应商无价格");
   }
 
   @Test
-  @DisplayName("未维护供货比例时：不阻断取价，回退原固定价排序第一条")
-  void fallsBackWhenRatioMissing() {
+  @DisplayName("多供应商未维护供货比例时阻断")
+  void blocksWhenRatioMissing() {
     PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);
     SupplierSupplyRatioResolveService ratioService = mock(SupplierSupplyRatioResolveService.class);
     FixedPriceResolver resolver = resolver(mapper, ratioService);
@@ -86,12 +89,13 @@ class FixedPriceResolverSupplierPreferenceTest {
 
     PriceResolveResult result = resolver.resolve("OA-1", item("MAT-1"), route());
 
-    assertThat(result.unitPrice()).isEqualByComparingTo("88.00");
-    assertThat(result.remark()).isEqualTo("未维护主供应商供货比例，按默认价格取价");
+    assertThat(result.unitPrice()).isNull();
+    assertThat(result.failureCode())
+        .isEqualTo(SupplierPreferredPriceSelector.SUPPLIER_RATIO_MISSING);
   }
 
   @Test
-  @DisplayName("单供应商固定价：不查询供货比例，沿用原逻辑")
+  @DisplayName("单供应商且未维护供货比例时直接取价")
   void singleSupplierKeepsOriginalLogic() {
     PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);
     SupplierSupplyRatioResolveService ratioService = mock(SupplierSupplyRatioResolveService.class);
@@ -102,8 +106,8 @@ class FixedPriceResolverSupplierPreferenceTest {
     PriceResolveResult result = resolver.resolve("OA-1", item("MAT-1"), route());
 
     assertThat(result.unitPrice()).isEqualByComparingTo("88.00");
-    assertThat(result.remark()).isEmpty();
-    org.mockito.Mockito.verifyNoInteractions(ratioService);
+    assertThat(result.remark()).contains("单一供应商价格");
+    verifyNoInteractions(ratioService);
     ArgumentCaptor<Wrapper<PriceFixedItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(mapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment())
@@ -132,8 +136,8 @@ class FixedPriceResolverSupplierPreferenceTest {
     PriceResolveResult result = resolver.resolve("OA-1", item("MAT-1"), route());
 
     assertThat(result.unitPrice()).isEqualByComparingTo("88.00");
-    assertThat(result.remark()).isEmpty();
-    org.mockito.Mockito.verifyNoInteractions(ratioService);
+    assertThat(result.remark()).contains("单一供应商价格");
+    verifyNoInteractions(ratioService);
   }
 
   @Test
@@ -151,7 +155,7 @@ class FixedPriceResolverSupplierPreferenceTest {
     approvalC.setProcessNo("SC-SC-018-20260418-026");
     when(mapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(u9, approvalA, approvalC));
-    when(ratioService.resolveAmongSuppliers(any(), any(), any(), any(), any(), any()))
+    when(ratioService.resolve(any(), any(), any(), any(), any()))
         .thenReturn(hit("供应商C", "SC", "0.40"));
 
     PriceResolveResult result = resolver.resolve("OA-1", item("MAT-1"), route());
@@ -204,7 +208,8 @@ class FixedPriceResolverSupplierPreferenceTest {
     verify(mapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment())
         .contains("material_code", "source_type", "IN", "fixed_price", "IS NOT NULL",
-            "effective_from", "effective_to", "ORDER BY", "pricing_month", "id");
+            "effective_from", "ORDER BY", "imported_at", "created_at", "id")
+        .doesNotContain("effective_to");
   }
 
   @Test

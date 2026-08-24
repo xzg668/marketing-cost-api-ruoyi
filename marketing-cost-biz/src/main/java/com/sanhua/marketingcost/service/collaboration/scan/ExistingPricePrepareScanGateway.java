@@ -96,7 +96,7 @@ public class ExistingPricePrepareScanGateway implements QuoteCollaborationPriceS
       return false;
     }
     if (GAP_TYPE_MISSING_PRICE_TYPE.equals(gap.getGapType())) {
-      // 新品无价格类型时由技术选择正式体系中的价格类型，不再误判成系统结构异常。
+      // 缺类型仍是可解释的业务缺口，但由上层路由到财务主数据维护，不创建技术任务。
       return true;
     }
     return GAP_TYPE_MISSING_PRICE.equals(gap.getGapType())

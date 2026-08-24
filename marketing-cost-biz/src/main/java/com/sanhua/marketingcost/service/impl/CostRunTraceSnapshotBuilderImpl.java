@@ -394,8 +394,6 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
           "id", prepareItem.getId(),
           "prepareNo", prepareItem.getPrepareNo(),
           "periodMonth", prepareItem.getPeriodMonth(),
-          "priceTypeConfirmNo", prepareItem.getPriceTypeConfirmNo(),
-          "priceTypeConfirmItemId", prepareItem.getPriceTypeConfirmItemId(),
           "bomRowId", prepareItem.getBomRowId(),
           "materialCode", prepareItem.getMaterialCode(),
           "itemType", prepareItem.getItemType(),
@@ -848,6 +846,13 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
       CostRunPartItem part,
       PricePrepareItem prepareItem,
       PriceLinkedCalcItem linkedCalc) {
+    if (linkedCalc != null && linkedCalc.getSourcePriceRecordId() != null) {
+      PriceLinkedItem selected =
+          priceLinkedItemMapper.selectById(linkedCalc.getSourcePriceRecordId());
+      if (selected != null && Integer.valueOf(0).equals(selected.getDeleted())) {
+        return selected;
+      }
+    }
     String materialCode =
         firstText(
             linkedCalc == null ? null : linkedCalc.getItemCode(),
@@ -876,7 +881,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     }
     List<PriceLinkedItem> rows =
         priceLinkedItemMapper.selectList(
-            query.orderByDesc(PriceLinkedItem::getEffectiveFrom)
+            query.orderByDesc(PriceLinkedItem::getCreatedAt)
                 .orderByDesc(PriceLinkedItem::getId)
                 .last("LIMIT 1"));
     return rows == null || rows.isEmpty() ? null : rows.get(0);

@@ -12,6 +12,7 @@ import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.sanhua.marketingcost.dto.BomSettlementRuleUpsertRequest;
 import com.sanhua.marketingcost.entity.BomSettlementRule;
 import com.sanhua.marketingcost.mapper.BomSettlementRuleMapper;
+import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -21,12 +22,14 @@ import org.junit.jupiter.api.Test;
 class BomSettlementRuleControllerTest {
 
   private BomSettlementRuleMapper mapper;
+  private QuoteCostingWorkspaceService workspaceService;
   private BomSettlementRuleController controller;
 
   @BeforeEach
   void setUp() {
     mapper = mock(BomSettlementRuleMapper.class);
-    controller = new BomSettlementRuleController(mapper);
+    workspaceService = mock(QuoteCostingWorkspaceService.class);
+    controller = new BomSettlementRuleController(mapper, workspaceService);
   }
 
   @Test

@@ -1,7 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.sanhua.marketingcost.dto.PriceLinkedImportBasisResponse;
 import com.sanhua.marketingcost.dto.PriceLinkedImportBasisSaveResult;
@@ -46,7 +45,7 @@ class PriceLinkedImportBasisVersionIsolationTest {
   }
 
   @Test
-  @DisplayName("原公式变化创建新版本，旧版本截止到新版本生效日前一天")
+  @DisplayName("原公式变化创建新版本，旧版本按本次版本日期归档")
   void changedFormulaCreatesNewVersion() {
     support = new PriceLinkedImportBasisTestSupport();
     PriceLinkedImportBasisSaveResult first = support.service.save(
@@ -66,7 +65,7 @@ class PriceLinkedImportBasisVersionIsolationTest {
     assertThat(second.previousVersionId()).isEqualTo(first.linkedItemId());
     assertThat(support.repository.items).hasSize(2);
     assertThat(support.repository.items.get(0).getEffectiveTo())
-        .isEqualTo(LocalDate.of(2026, 7, 14));
+        .isEqualTo(LocalDate.of(2026, 7, 15));
     assertThat(support.repository.items.get(1).getEffectiveTo()).isNull();
     assertThat(support.repository.items.get(1).getFormulaExpr())
         .isEqualTo("[factor_identity_191]+23+1");
@@ -125,17 +124,18 @@ class PriceLinkedImportBasisVersionIsolationTest {
     assertThat(result.previousVersionId()).isEqualTo(700L);
     assertThat(legacy.getSourceUploadBatchId()).isNull();
     assertThat(legacy.getSourceInputSnapshotJson()).isNull();
-    assertThat(legacy.getEffectiveTo()).isEqualTo(LocalDate.of(2026, 7, 14));
+    assertThat(legacy.getEffectiveTo()).isEqualTo(LocalDate.of(2026, 7, 15));
     assertThat(support.repository.items).hasSize(2);
   }
 
   @Test
-  @DisplayName("新公式生效日不晚于当前版本时明确拒绝且不写新版本")
-  void rejectsOverlappingVersionDate() {
+  @DisplayName("公式版本日期不再阻断新导入，版本先后由正式导入顺序确定")
+  void effectiveDateDoesNotBlockNewImportVersion() {
     support = new PriceLinkedImportBasisTestSupport();
-    support.service.save(support.defaultRequest(88207L, LocalDate.of(2026, 7, 15)));
+    long firstId = support.service.save(
+        support.defaultRequest(88207L, LocalDate.of(2026, 7, 15))).linkedItemId();
 
-    assertThatThrownBy(() -> support.service.save(support.request(
+    PriceLinkedImportBasisSaveResult result = support.service.save(support.request(
         88208L,
         LocalDate.of(2026, 7, 1),
         "$E$2+G6+1",
@@ -143,10 +143,11 @@ class PriceLinkedImportBasisVersionIsolationTest {
         "114",
         null,
         "TRUE",
-        "COMMERCIAL")))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("新公式生效日期");
-    assertThat(support.repository.items).hasSize(1);
-    assertThat(support.repository.itemUpdateCount).isZero();
+        "COMMERCIAL"));
+
+    assertThat(result.action()).isEqualTo(PriceLinkedImportBasisSaveResult.ACTION_CREATED);
+    assertThat(result.previousVersionId()).isEqualTo(firstId);
+    assertThat(support.repository.items).hasSize(2);
+    assertThat(support.repository.itemUpdateCount).isEqualTo(1);
   }
 }

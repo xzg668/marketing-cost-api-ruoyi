@@ -131,17 +131,14 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
 
     if (!persist) {
       List<MakePartPriceCalcRow> calculated =
-          generationService.calculateRowsByOa(
+          generationService.calculateRowsByOaMaterial(
               normalizedOaNo,
+              parentMaterialNo,
               normalizedBusinessUnitType,
               normalizedPeriod,
               priceAsOfTime,
               scenarioContext);
-      List<MakePartPriceCalcRow> rows = calculated == null
-          ? List.of()
-          : calculated.stream()
-              .filter(row -> row != null && parentMaterialNo.equals(trimToNull(row.getParentMaterialNo())))
-              .toList();
+      List<MakePartPriceCalcRow> rows = calculated == null ? List.of() : calculated;
       MakePartPriceCalcRow ready = rows.stream()
           .filter(row -> STATUS_OK.equals(row.getStatus()))
           .filter(row -> Boolean.TRUE.equals(row.getPriceComplete()))
@@ -159,18 +156,13 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
       return MakePartPricePrepareResult.notReady(status, message, gaps);
     }
 
-    MakePartPriceGenerateResponse generation;
-    if (isFinanceScenario(scenarioContext)) {
-      generation = generationService.generateByOa(
-          normalizedOaNo,
-          normalizedBusinessUnitType,
-          normalizedPeriod,
-          priceAsOfTime,
-          scenarioContext);
-    } else {
-      generation = generationService.generateByOa(
-          normalizedOaNo, normalizedBusinessUnitType, normalizedPeriod, priceAsOfTime);
-    }
+    MakePartPriceGenerateResponse generation = generationService.generateByOaMaterial(
+        normalizedOaNo,
+        parentMaterialNo,
+        normalizedBusinessUnitType,
+        normalizedPeriod,
+        priceAsOfTime,
+        scenarioContext);
     String currentCalcBatchId =
         generation == null ? null : trimToNull(generation.getCalcBatchId());
     MakePartPriceCalcRow ready = selectLatestReady(
@@ -292,10 +284,6 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
         : scenarioContext.scenarioType();
   }
 
-  private boolean isFinanceScenario(PricePrepareScenarioContext scenarioContext) {
-    return scenarioType(scenarioContext) == QuotePriceScenarioType.FINANCE_QUOTE_BASE;
-  }
-
   private List<MakePartPricePrepareResult.Gap> buildGaps(
       String parentMaterialNo, List<MakePartPriceCalcRow> rows) {
     if (rows == null || rows.isEmpty()) {
@@ -337,6 +325,7 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
       return new MakePartPricePrepareResult.Gap(
           GAP_TYPE_MISSING_STRUCTURE,
           parentMaterialNo,
+          row.getParentMaterialName(),
           "lp_bom_u9_source",
           message);
     }
@@ -344,6 +333,7 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
       return new MakePartPricePrepareResult.Gap(
           GAP_TYPE_MISSING_STRUCTURE,
           firstText(row.getChildMaterialNo(), parentMaterialNo),
+          row.getChildMaterialName(),
           "MakePartWeightService",
           message);
     }
@@ -351,6 +341,7 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
       return new MakePartPricePrepareResult.Gap(
           GAP_TYPE_MISSING_STRUCTURE,
           firstText(row.getChildMaterialNo(), parentMaterialNo),
+          row.getChildMaterialName(),
           "lp_material_scrap_ref",
           message);
     }
@@ -358,6 +349,7 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
       return new MakePartPricePrepareResult.Gap(
           GAP_TYPE_MISSING_PRICE,
           firstText(row.getChildMaterialNo(), parentMaterialNo),
+          row.getChildMaterialName(),
           "lp_make_part_price_gap_item",
           message);
     }
@@ -365,12 +357,14 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
       return new MakePartPricePrepareResult.Gap(
           GAP_TYPE_MISSING_PRICE,
           firstText(row.getScrapCode(), parentMaterialNo),
+          row.getScrapName(),
           "lp_make_part_price_gap_item",
           message);
     }
     return new MakePartPricePrepareResult.Gap(
         GAP_TYPE_MISSING_STRUCTURE,
         parentMaterialNo,
+        row.getParentMaterialName(),
         "lp_make_part_price_calc_row",
         message);
   }

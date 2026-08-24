@@ -41,9 +41,9 @@ import org.springframework.stereotype.Component;
  * <ol>
  *   <li>分发键从 {@code factor_type}（兼做 UI 分组 + 解析路由）拆分：
  *       {@code factor_type} 只做前端 catalog 分组；后端解析严格走 {@code resolver_kind}。</li>
- *   <li>FINANCE 分支不再把 {@code variable_name} 当 short_name 查、不再"月份回退"，
- *       改走 {@link FinanceBasePriceQuery} 的四键精确匹配
- *       （factorCode|shortName + priceSource + pricingMonth + bu），
+ *   <li>FINANCE 分支不再把 {@code variable_name} 当 short_name 查，
+ *       改走 {@link FinanceBasePriceQuery} 的严格身份匹配
+ *       （factorCode|shortName + priceSource + bu），并在不晚于核算月的正式价中取最新一条，
  *       与 legacy 计算路径口径完全一致 —— 修复 /items/{id}/trace 返回 0 的根因。</li>
  *   <li>ENTITY/DERIVED/FORMULA/CONST 四种 kind 的参数通通从同一个
  *       {@code resolver_params} JSON 读，不再读 {@code context_binding_json} /
@@ -241,7 +241,7 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
   }
 
   /**
-   * FINANCE：四键精确查 {@code lp_finance_base_price}。
+   * FINANCE：严格匹配因素、价源和业务单元，并取不晚于核算月的最新正式价。
    *
    * <p>params 契约：
    * <pre>{"factorCode":"Cu","priceSource":"平均价","buScoped":true}
@@ -281,18 +281,37 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
       }
     }
 
-    Optional<BigDecimal> monthlyPrice =
+    Optional<FactorMonthlyPrice> monthlyPrice =
         resolveMonthlyFactorPrice(factorIdentityId, factorMonthlyPriceId, pricingMonth);
     if (monthlyPrice.isPresent()) {
-      if (ctx != null && ctx.isMonthlyReprice()) {
-        ctx.resolvedSource(variable.getVariableCode(), LinkedPriceFactorSource.MONTHLY_FACTOR.getCode());
+      FactorMonthlyPrice price = monthlyPrice.get();
+      boolean carriedForward = isEarlierMonth(price.getPriceMonth(), pricingMonth);
+      if (ctx != null) {
+        String source;
+        if (ctx.isMonthlyReprice()) {
+          source = carriedForward
+              ? "MONTHLY_FACTOR_CARRIED_FORWARD"
+              : LinkedPriceFactorSource.MONTHLY_FACTOR.getCode();
+        } else {
+          source = carriedForward ? "FINANCE_FACTOR_CARRIED_FORWARD" : "FINANCE_FACTOR";
+        }
+        ctx.resolvedSource(variable.getVariableCode(), source);
       }
-      return monthlyPrice;
+      return Optional.of(price.getPrice());
     }
 
     Optional<FinanceBasePrice> row = financeBasePriceQuery.queryLatestBasePrice(
         factorCode, shortName, priceSource, buScoped, pricingMonth, bu,
         variable.getVariableCode());
+    row.ifPresent(price -> {
+      if (ctx != null) {
+        ctx.resolvedSource(
+            variable.getVariableCode(),
+            isEarlierMonth(price.getPriceMonth(), pricingMonth)
+                ? "FINANCE_FACTOR_CARRIED_FORWARD"
+                : "FINANCE_FACTOR");
+      }
+    });
     return row.map(FinanceBasePrice::getPrice);
   }
 
@@ -373,7 +392,7 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     return price == null ? Optional.empty() : Optional.ofNullable(price.getAdjustedPrice());
   }
 
-  private Optional<BigDecimal> resolveMonthlyFactorPrice(
+  private Optional<FactorMonthlyPrice> resolveMonthlyFactorPrice(
       Long factorIdentityId,
       Long factorMonthlyPriceId,
       String pricingMonth) {
@@ -384,12 +403,13 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
       FactorMonthlyPrice monthlyPrice = factorMonthlyPriceMapper.selectOne(
           Wrappers.lambdaQuery(FactorMonthlyPrice.class)
               .eq(FactorMonthlyPrice::getFactorIdentityId, factorIdentityId)
-              .eq(FactorMonthlyPrice::getPriceMonth, pricingMonth.trim())
+              .le(FactorMonthlyPrice::getPriceMonth, pricingMonth.trim())
               .eq(FactorMonthlyPrice::getStatus, "ACTIVE")
+              .orderByDesc(FactorMonthlyPrice::getPriceMonth)
               .orderByDesc(FactorMonthlyPrice::getId)
               .last("LIMIT 1"));
       if (monthlyPrice != null && monthlyPrice.getPrice() != null) {
-        return Optional.of(monthlyPrice.getPrice());
+        return Optional.of(monthlyPrice);
       }
     }
     if (factorMonthlyPriceId != null) {
@@ -397,10 +417,18 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
       if (monthlyPrice != null
           && monthlyPrice.getPrice() != null
           && matchesPricingMonth(monthlyPrice, pricingMonth)) {
-        return Optional.of(monthlyPrice.getPrice());
+        return Optional.of(monthlyPrice);
       }
     }
     return Optional.empty();
+  }
+
+  private boolean isEarlierMonth(String sourceMonth, String requestedMonth) {
+    return sourceMonth != null
+        && requestedMonth != null
+        && !sourceMonth.isBlank()
+        && !requestedMonth.isBlank()
+        && sourceMonth.trim().compareTo(requestedMonth.trim()) < 0;
   }
 
   /**

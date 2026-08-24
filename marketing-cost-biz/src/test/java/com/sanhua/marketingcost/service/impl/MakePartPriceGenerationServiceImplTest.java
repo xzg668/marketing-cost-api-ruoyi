@@ -124,6 +124,8 @@ class MakePartPriceGenerationServiceImplTest {
             eq(rollupRaw),
             eq("原材料加工"),
             eq("2026-05"),
+            eq(LocalDate.of(2026, 5, 31)),
+            eq("COMMERCIAL"),
             eq(false)))
         .thenReturn(com.sanhua.marketingcost.dto.MakePartWeightResult.of(
             "2018000671211",
@@ -150,6 +152,94 @@ class MakePartPriceGenerationServiceImplTest {
     verify(scrapMappingService, never()).listMappings("203240247", "COMMERCIAL");
     verify(priceResolveService, never()).calculateMaterialUnitPrice(
         eq("203240247"), any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  @DisplayName("特殊上卷同料号等数量重复时保留祖先倍率且不重复放大单件用量")
+  void specialRollupNormalizesEqualRepeatedPathsWithAncestorMultiplier() {
+    BomCostingRow parent = parent("1053000301622");
+    parent.setId(501L);
+    parent.setSettlementRowType("SPECIAL_ROLLUP_PARENT");
+    // 每个上级挂 2+2 个垫圈，上一级数量为 2，因此累计到顶层共有 8 个垫圈。
+    parent.setQtyPerTop(new BigDecimal("8"));
+    BomU9Source raw = child("301260124", "kg");
+    raw.setQtyPerParent(new BigDecimal("0.0053"));
+
+    when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
+        .thenReturn(List.of(parent));
+    when(sourceDataService.listDedupedChildren(
+            eq("1053000301622"), any(), eq("210")))
+        .thenReturn(List.of(raw));
+    when(bomCostingRowSubRefMapper.selectSpecialRollupChildren(List.of(501L)))
+        .thenReturn(List.of(
+            rollupRef(501L, "301260124", "不锈钢板", "0.0053", "0.0212"),
+            rollupRef(501L, "301260124", "不锈钢板", "0.0053", "0.0212")));
+
+    List<MakePartPriceCalcRow> rows =
+        service.previewStructureByOa("OA-001", "COMMERCIAL", "2026-05");
+
+    assertThat(rows).singleElement().satisfies(row ->
+        assertThat(row.getQtyPerParent()).isEqualByComparingTo("0.0053"));
+  }
+
+  @Test
+  @DisplayName("特殊上卷同料号1加2不等数量重复时还原真实单件用量")
+  void specialRollupNormalizesUnequalRepeatedPaths() {
+    BomCostingRow parent = parent("1053000301690");
+    parent.setId(502L);
+    parent.setSettlementRowType("SPECIAL_ROLLUP_PARENT");
+    parent.setQtyPerTop(new BigDecimal("3"));
+    BomU9Source raw = child("301070047", "kg");
+    raw.setQtyPerParent(new BigDecimal("0.0056"));
+
+    when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
+        .thenReturn(List.of(parent));
+    when(sourceDataService.listDedupedChildren(
+            eq("1053000301690"), any(), eq("210")))
+        .thenReturn(List.of(raw));
+    when(bomCostingRowSubRefMapper.selectSpecialRollupChildren(List.of(502L)))
+        .thenReturn(List.of(
+            rollupRef(502L, "301070047", "铜箔", "0.0056", "0.0056"),
+            rollupRef(502L, "301070047", "铜箔", "0.0056", "0.0112")));
+
+    List<MakePartPriceCalcRow> rows =
+        service.previewStructureByOa("OA-001", "COMMERCIAL", "2026-05");
+
+    assertThat(rows).singleElement().satisfies(row ->
+        assertThat(row.getQtyPerParent()).isEqualByComparingTo("0.0056"));
+  }
+
+  @Test
+  @DisplayName("特殊上卷同一父件下不同子件分别还原用量互不聚合")
+  void specialRollupKeepsDifferentChildrenIndependent() {
+    BomCostingRow parent = parent("1053000301687");
+    parent.setId(503L);
+    parent.setSettlementRowType("SPECIAL_ROLLUP_PARENT");
+    parent.setQtyPerTop(new BigDecimal("30"));
+    BomU9Source steel = child("301240299", "kg");
+    steel.setQtyPerParent(new BigDecimal("0.0379"));
+    BomU9Source copper = child("301070047", "kg");
+    copper.setQtyPerParent(new BigDecimal("0.0056"));
+
+    when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
+        .thenReturn(List.of(parent));
+    when(sourceDataService.listDedupedChildren(
+            eq("1053000301687"), any(), eq("210")))
+        .thenReturn(List.of(steel, copper));
+    when(bomCostingRowSubRefMapper.selectSpecialRollupChildren(List.of(503L)))
+        .thenReturn(List.of(
+            rollupRef(503L, "301240299", "不锈钢卷", "0.0379", "1.137"),
+            rollupRef(503L, "301070047", "铜箔", "0.0056", "0.168")));
+
+    List<MakePartPriceCalcRow> rows =
+        service.previewStructureByOa("OA-001", "COMMERCIAL", "2026-05");
+
+    assertThat(rows).extracting(
+            MakePartPriceCalcRow::getChildMaterialNo,
+            MakePartPriceCalcRow::getQtyPerParent)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple("301240299", new BigDecimal("0.0379")),
+            org.assertj.core.groups.Tuple.tuple("301070047", new BigDecimal("0.0056")));
   }
 
   @Test
@@ -208,6 +298,37 @@ class MakePartPriceGenerationServiceImplTest {
   }
 
   @Test
+  @DisplayName("价格准备按单个自制件生成，不重复计算同 OA 的其他自制件")
+  void generateByOaMaterialScopesOneParent() {
+    BomCostingRow selected = parent("MAKE-001");
+    BomCostingRow other = parent("MAKE-002");
+    when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
+        .thenReturn(List.of(selected, other));
+    when(sourceDataService.listDedupedChildren(eq("MAKE-001"), any(), eq("210")))
+        .thenReturn(List.of(child("RAW-001", "kg")));
+    when(weightService.resolveWeights(
+            eq("MAKE-001"), any(BomU9Source.class), eq("原材料加工"), any(),
+            any(), eq("COMMERCIAL"), anyBoolean()))
+        .thenReturn(weight("RAW-001"));
+    when(scrapMappingService.listMappings("RAW-001", "COMMERCIAL"))
+        .thenReturn(List.of(scrap("SCRAP-001")));
+    when(priceResolveService.resolveMaterialUnitPrice(any(), any(), any(), any(), any(), any()))
+        .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
+
+    MakePartPriceGenerateResponse response = service.generateByOaMaterial(
+        "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", priceAsOf(), null);
+
+    assertThat(response.getParentCount()).isEqualTo(1);
+    assertThat(response.getTotalCount()).isEqualTo(1);
+    verify(sourceDataService, never())
+        .listDedupedChildren(eq("MAKE-002"), any(), any());
+    ArgumentCaptor<MakePartPriceCalcRow> captor =
+        ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    verify(calcRowMapper).insert(captor.capture());
+    assertThat(captor.getValue().getParentMaterialNo()).isEqualTo("MAKE-001");
+  }
+
+  @Test
   @DisplayName("价格类型页面只读预览制造件结构，不取价也不写计算行和缺口")
   void previewStructureByOaDoesNotPersistOrResolvePrices() {
     BomCostingRow parent = parent("MAKE-001");
@@ -231,7 +352,8 @@ class MakePartPriceGenerationServiceImplTest {
     verify(calcRowMapper, never()).updateById(any(MakePartPriceCalcRow.class));
     verify(gapItemMapper, never()).insert(any(MakePartPriceGapItem.class));
     verify(gapItemMapper, never()).updateById(any(MakePartPriceGapItem.class));
-    verify(weightService, never()).resolveWeights(any(), any(), any(), any(), anyBoolean());
+    verify(weightService, never())
+        .resolveWeights(any(), any(), any(), any(), any(), any(), anyBoolean());
     verify(priceResolveService, never())
         .resolveMaterialUnitPrice(any(), any(), any(), any(), any(), any());
     verify(linkedPriceEnsureService, never()).ensure(any(LinkedPriceEnsureRequest.class));
@@ -295,7 +417,9 @@ class MakePartPriceGenerationServiceImplTest {
     BomU9Source child = child("RAW-001", "kg");
     when(sourceDataService.listDedupedChildren(eq("MAKE-001"), any(), eq("210")))
         .thenReturn(List.of(child));
-    when(weightService.resolveWeights("MAKE-001", child, "原材料加工", "2026-05", false))
+    when(weightService.resolveWeights(
+            "MAKE-001", child, "原材料加工", "2026-05",
+            LocalDate.of(2026, 5, 31), "COMMERCIAL", false))
         .thenReturn(weight("RAW-001"));
     when(scrapMappingService.listMappings("RAW-001", "COMMERCIAL"))
         .thenReturn(List.of(scrap("SCRAP-001")));
@@ -339,7 +463,7 @@ class MakePartPriceGenerationServiceImplTest {
         .thenReturn(List.of(parent));
     when(sourceDataService.listDedupedChildren(eq("MAKE-001"), any(), eq("210")))
         .thenReturn(List.of(rawA, rawB));
-    when(weightService.resolveWeights(any(), any(), any(), any(), anyBoolean()))
+    when(weightService.resolveWeights(any(), any(), any(), any(), any(), any(), anyBoolean()))
         .thenReturn(weight("RAW-A"), weight("RAW-B"));
     when(scrapMappingService.listMappings("RAW-A", "COMMERCIAL"))
         .thenReturn(List.of(scrap("SCRAP-A1"), scrap("SCRAP-A2")));
@@ -359,8 +483,12 @@ class MakePartPriceGenerationServiceImplTest {
         .containsExactly("SCRAP-A1", "SCRAP-A2", "SCRAP-B1");
     assertThat(captor.getAllValues()).allSatisfy(row ->
         assertThat(row.getParentTotalCostPrice()).isEqualByComparingTo("14.23350000"));
-    verify(weightService).resolveWeights("MAKE-001", rawA, "原材料加工", "2026-05", true);
-    verify(weightService).resolveWeights("MAKE-001", rawB, "原材料加工", "2026-05", true);
+    verify(weightService).resolveWeights(
+        "MAKE-001", rawA, "原材料加工", "2026-05",
+        LocalDate.of(2026, 5, 31), "COMMERCIAL", true);
+    verify(weightService).resolveWeights(
+        "MAKE-001", rawB, "原材料加工", "2026-05",
+        LocalDate.of(2026, 5, 31), "COMMERCIAL", true);
   }
 
   @Test
@@ -373,7 +501,7 @@ class MakePartPriceGenerationServiceImplTest {
         .thenReturn(List.of(parent));
     when(sourceDataService.listDedupedChildren(eq("MAKE-001"), any(), eq("210")))
         .thenReturn(List.of(rawA, rawB));
-    when(weightService.resolveWeights(any(), any(), any(), any(), anyBoolean()))
+    when(weightService.resolveWeights(any(), any(), any(), any(), any(), any(), anyBoolean()))
         .thenReturn(weight("RAW-CU-A"), weight("RAW-CU-B"));
     when(scrapMappingService.listMappings("RAW-CU-A", "COMMERCIAL"))
         .thenReturn(List.of(scrap("SCRAP-CU-A")));
@@ -694,7 +822,8 @@ class MakePartPriceGenerationServiceImplTest {
     when(sourceDataService.listDedupedChildren(eq(parentCode), any(), eq("210"))).thenReturn(children);
     for (BomU9Source child : children) {
       when(weightService.resolveWeights(
-              eq(parentCode), eq(child), eq("原材料加工"), any(), anyBoolean()))
+              eq(parentCode), eq(child), eq("原材料加工"), any(),
+              any(), eq("COMMERCIAL"), anyBoolean()))
           .thenReturn(weight(child.getChildMaterialNo()));
       when(scrapMappingService.listMappings(child.getChildMaterialNo(), "COMMERCIAL"))
           .thenReturn(scraps);
@@ -747,6 +876,18 @@ class MakePartPriceGenerationServiceImplTest {
     ref.setSubMaterialCode(materialCode);
     ref.setSubMaterialName(materialName);
     ref.setSubQtyPerParent(new BigDecimal(quantity));
+    return ref;
+  }
+
+  private BomCostingRowSubRef rollupRef(
+      Long costingRowId,
+      String materialCode,
+      String materialName,
+      String quantityPerParent,
+      String quantityPerTop) {
+    BomCostingRowSubRef ref =
+        rollupRef(costingRowId, materialCode, materialName, quantityPerParent);
+    ref.setSubQtyPerTop(new BigDecimal(quantityPerTop));
     return ref;
   }
 

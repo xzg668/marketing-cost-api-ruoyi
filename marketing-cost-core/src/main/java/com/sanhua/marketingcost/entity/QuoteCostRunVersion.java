@@ -24,14 +24,14 @@ public class QuoteCostRunVersion {
   private String productCode;
   private String pricingMonth;
   private String resultPeriod;
-  private String bomConfirmNo;
-  private String priceTypeConfirmNo;
   private String pricePrepareNo;
   private String oaPricePrepareNo;
   private String financePricePrepareNo;
   private BigDecimal financeCuPrice;
   private BigDecimal oaCuPrice;
   private Long financeBasePriceId;
+  private String inputFingerprint;
+  private String algorithmVersion;
   private BigDecimal financeMaterialCost;
   private BigDecimal oaMaterialCost;
   private BigDecimal cuMaterialAdjustment;

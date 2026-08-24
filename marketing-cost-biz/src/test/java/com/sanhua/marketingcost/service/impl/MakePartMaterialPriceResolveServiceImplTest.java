@@ -29,6 +29,7 @@ import com.sanhua.marketingcost.service.pricing.FixedPriceResolver;
 import com.sanhua.marketingcost.service.pricing.LinkedPriceResolver;
 import com.sanhua.marketingcost.service.pricing.PriceResolver;
 import com.sanhua.marketingcost.service.pricing.RangePriceResolver;
+import com.sanhua.marketingcost.service.pricing.RangePriceResolverTestSupport;
 import com.sanhua.marketingcost.service.pricing.SupplierPreferredPriceSelector;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -69,7 +70,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
     List<PriceResolver> resolvers = List.of(
         new FixedPriceResolver(fixedMapper, new SupplierPreferredPriceSelector(ratioService)),
         new LinkedPriceResolver(linkedMapper),
-        new RangePriceResolver(rangeMapper));
+        RangePriceResolverTestSupport.create(rangeMapper));
     service =
         new MakePartMaterialPriceResolveServiceImpl(
             routerService, resolvers, linkedPriceEnsureService);

@@ -22,7 +22,6 @@ public class PricePrepareBatch {
   private String oaNo;
   private Long oaFormItemId;
   private String topProductCode;
-  private String priceTypeConfirmNo;
   private String periodMonth;
   private String bomPurpose;
   private String sourceType;

@@ -17,12 +17,10 @@ import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
-import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmItem;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
-import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmItemMapper;
 import com.sanhua.marketingcost.dto.priceprepare.MakePartPricePrepareResult;
 import com.sanhua.marketingcost.dto.priceprepare.NormalMaterialPricePrepareResult;
 import com.sanhua.marketingcost.dto.priceprepare.PackageComponentPricePrepareResult;
@@ -31,10 +29,11 @@ import com.sanhua.marketingcost.service.NormalMaterialPricePrepareStrategy;
 import com.sanhua.marketingcost.service.PackageComponentPricePrepareStrategy;
 import com.sanhua.marketingcost.service.PricePrepareBomItemLoader;
 import com.sanhua.marketingcost.service.PricePrepareItemClassifier;
-import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
+import com.sanhua.marketingcost.service.PricePrepareCurrentStateService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
@@ -61,13 +60,12 @@ class PricePrepareServiceImplTest {
   private PricePrepareBatchMapper batchMapper;
   private PricePrepareItemMapper itemMapper;
   private PricePrepareGapMapper gapMapper;
-  private QuotePriceTypeConfirmItemMapper priceTypeConfirmItemMapper;
   private PricePrepareBomItemLoader bomItemLoader;
   private PricePrepareItemClassifier itemClassifier;
   private NormalMaterialPricePrepareStrategy normalMaterialPricePrepareStrategy;
   private PackageComponentPricePrepareStrategy packageComponentPricePrepareStrategy;
   private MakePartPricePrepareStrategy makePartPricePrepareStrategy;
-  private QuoteCostRunVersionInvalidationService versionInvalidationService;
+  private PricePrepareCurrentStateService currentStateService;
   private PricePrepareServiceImpl service;
 
   @BeforeAll
@@ -77,7 +75,6 @@ class PricePrepareServiceImplTest {
     TableInfoHelper.initTableInfo(assistant, PricePrepareBatch.class);
     TableInfoHelper.initTableInfo(assistant, PricePrepareItem.class);
     TableInfoHelper.initTableInfo(assistant, PricePrepareGap.class);
-    TableInfoHelper.initTableInfo(assistant, QuotePriceTypeConfirmItem.class);
   }
 
   @BeforeEach
@@ -86,25 +83,23 @@ class PricePrepareServiceImplTest {
     batchMapper = mock(PricePrepareBatchMapper.class);
     itemMapper = mock(PricePrepareItemMapper.class);
     gapMapper = mock(PricePrepareGapMapper.class);
-    priceTypeConfirmItemMapper = mock(QuotePriceTypeConfirmItemMapper.class);
     bomItemLoader = mock(PricePrepareBomItemLoader.class);
     itemClassifier = mock(PricePrepareItemClassifier.class);
     normalMaterialPricePrepareStrategy = mock(NormalMaterialPricePrepareStrategy.class);
     packageComponentPricePrepareStrategy = mock(PackageComponentPricePrepareStrategy.class);
     makePartPricePrepareStrategy = mock(MakePartPricePrepareStrategy.class);
-    versionInvalidationService = mock(QuoteCostRunVersionInvalidationService.class);
+    currentStateService = mock(PricePrepareCurrentStateService.class);
     service = new PricePrepareServiceImpl(
         batchMapper,
         itemMapper,
         gapMapper,
-        priceTypeConfirmItemMapper,
         bomItemLoader,
         itemClassifier,
         normalMaterialPricePrepareStrategy,
         packageComponentPricePrepareStrategy,
         makePartPricePrepareStrategy,
         Clock.fixed(CLOCK_TIME_WITH_NANOS.atZone(BUSINESS_ZONE).toInstant(), BUSINESS_ZONE),
-        versionInvalidationService);
+        currentStateService);
     when(packageComponentPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
@@ -390,46 +385,25 @@ class PricePrepareServiceImplTest {
     verify(bomItemLoader)
         .loadByOaNoAndTopProducts("OA-LINE", List.of("TOP-A", "TOP-B"));
     verify(bomItemLoader, org.mockito.Mockito.never()).loadByOaNo("OA-LINE");
-    ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PricePrepareItem>>
-        itemDeleteCaptor = ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper.class);
-    ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PricePrepareGap>>
-        gapDeleteCaptor = ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper.class);
-    verify(itemMapper).update(any(PricePrepareItem.class), itemDeleteCaptor.capture());
-    verify(gapMapper).update(any(PricePrepareGap.class), gapDeleteCaptor.capture());
-    assertThat(
-            ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>)
-                    itemDeleteCaptor.getValue())
-                .getSqlSegment())
-        .contains("oa_no", "top_product_code");
-    assertThat(itemDeleteCaptor.getValue().getParamNameValuePairs().values())
-        .contains("OA-LINE", "TOP-A", "TOP-B");
-    assertThat(
-            ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>)
-                    gapDeleteCaptor.getValue())
-                .getSqlSegment())
-        .contains("oa_no", "top_product_code");
+    verify(currentStateService).finalizeBatch(any(PricePrepareBatch.class));
   }
 
   @Test
-  @DisplayName("工作台行级生成：按 OA 产品行读取快照并写入价格类型确认批次")
-  void generateByQuoteItemWritesItemScopeAndPriceTypeConfirmRefs() {
+  @DisplayName("工作台行级生成：按 OA 产品行读取快照并写入当前价格准备")
+  void generateByQuoteItemWritesItemScope() {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo(" OA-LINE ");
     request.setOaFormItemId(101L);
     request.setTopProductCode("TOP-SAME");
-    request.setPriceTypeConfirmNo(" QPTC-101 ");
     request.setPeriodMonth(CURRENT_PERIOD);
     request.setBusinessUnitType("COMMERCIAL");
     BomCostingRow row = bomRow(1L, "TOP-SAME", "MAT-A", "采购件");
     row.setOaNo("OA-LINE");
     row.setOaFormItemId(101L);
     PricePreparePlanItem planItem = planItem(row, "NORMAL", "READY");
-    QuotePriceTypeConfirmItem confirmItem = new QuotePriceTypeConfirmItem();
-    confirmItem.setId(9001L);
     when(bomItemLoader.loadByQuoteItem("OA-LINE", 101L, "TOP-SAME", CURRENT_PERIOD))
         .thenReturn(List.of(row));
     when(itemClassifier.classify(List.of(row))).thenReturn(List.of(planItem));
-    when(priceTypeConfirmItemMapper.selectList(any())).thenReturn(List.of(confirmItem));
     when(normalMaterialPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.eq("OA-LINE"),
             org.mockito.ArgumentMatchers.eq("COMMERCIAL"),
@@ -444,38 +418,17 @@ class PricePrepareServiceImplTest {
     assertThat(result.getStatus()).isEqualTo("SUCCESS");
     assertThat(result.getOaFormItemId()).isEqualTo(101L);
     assertThat(result.getTopProductCode()).isEqualTo("TOP-SAME");
-    assertThat(result.getPriceTypeConfirmNo()).isEqualTo("QPTC-101");
     verify(bomItemLoader).loadByQuoteItem("OA-LINE", 101L, "TOP-SAME", CURRENT_PERIOD);
     verify(bomItemLoader, org.mockito.Mockito.never()).loadByOaNo("OA-LINE");
     ArgumentCaptor<PricePrepareBatch> batchCaptor = ArgumentCaptor.forClass(PricePrepareBatch.class);
     verify(batchMapper).insert(batchCaptor.capture());
     assertThat(batchCaptor.getValue().getOaFormItemId()).isEqualTo(101L);
     assertThat(batchCaptor.getValue().getTopProductCode()).isEqualTo("TOP-SAME");
-    assertThat(batchCaptor.getValue().getPriceTypeConfirmNo()).isEqualTo("QPTC-101");
     ArgumentCaptor<PricePrepareItem> itemCaptor = ArgumentCaptor.forClass(PricePrepareItem.class);
     verify(itemMapper).insert(itemCaptor.capture());
     assertThat(itemCaptor.getValue().getOaFormItemId()).isEqualTo(101L);
     assertThat(itemCaptor.getValue().getTopProductCode()).isEqualTo("TOP-SAME");
-    assertThat(itemCaptor.getValue().getPriceTypeConfirmNo()).isEqualTo("QPTC-101");
-    assertThat(itemCaptor.getValue().getPriceTypeConfirmItemId()).isEqualTo(9001L);
-    ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PricePrepareItem>>
-        itemDeleteCaptor = ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper.class);
-    ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PricePrepareGap>>
-        gapDeleteCaptor = ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper.class);
-    verify(itemMapper).update(any(PricePrepareItem.class), itemDeleteCaptor.capture());
-    verify(gapMapper).update(any(PricePrepareGap.class), gapDeleteCaptor.capture());
-    assertThat(
-            ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>)
-                    itemDeleteCaptor.getValue())
-                .getSqlSegment())
-        .contains("oa_form_item_id", "top_product_code");
-    assertThat(itemDeleteCaptor.getValue().getParamNameValuePairs().values())
-        .contains("OA-LINE", 101L, "TOP-SAME", CURRENT_PERIOD);
-    assertThat(
-            ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>)
-                    gapDeleteCaptor.getValue())
-                .getSqlSegment())
-        .contains("oa_form_item_id", "top_product_code");
+    verify(currentStateService).finalizeBatch(any(PricePrepareBatch.class));
   }
 
   @Test
@@ -582,8 +535,7 @@ class PricePrepareServiceImplTest {
     verify(itemMapper, org.mockito.Mockito.never()).updateById(any(PricePrepareItem.class));
     verify(gapMapper, org.mockito.Mockito.never()).insert(any(PricePrepareGap.class));
     verify(gapMapper, org.mockito.Mockito.never()).updateById(any(PricePrepareGap.class));
-    verify(versionInvalidationService, org.mockito.Mockito.never())
-        .invalidateProduct(any(), any(), any(), any());
+    verify(currentStateService, org.mockito.Mockito.never()).finalizeBatch(any());
   }
 
   @Test
@@ -630,7 +582,12 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
             org.mockito.ArgumentMatchers.eq(item1)))
         .thenReturn(NormalMaterialPricePrepareResult.gap(
-            "MISSING_PRICE", "MISSING_PRICE", "ERROR", "PriceResolver", "路由=[FIXED] 但桶内无该料号"));
+            "MISSING_PRICE",
+            "MISSING_PRICE",
+            "PRIMARY_SUPPLIER_PRICE_MISSING",
+            "ERROR",
+            "PriceResolver",
+            "主供应商没有价格"));
 
     PricePrepareGenerateResult result = service.generate(request);
 
@@ -646,7 +603,71 @@ class PricePrepareServiceImplTest {
     ArgumentCaptor<PricePrepareGap> gapCaptor = ArgumentCaptor.forClass(PricePrepareGap.class);
     verify(gapMapper).insert(gapCaptor.capture());
     assertThat(gapCaptor.getValue().getGapType()).isEqualTo("MISSING_PRICE");
+    assertThat(gapCaptor.getValue().getReasonCode())
+        .isEqualTo("PRIMARY_SUPPLIER_PRICE_MISSING");
+    assertThat(gapCaptor.getValue().getMaterialName()).isEqualTo("MAT-MISS-name");
     assertThat(gapCaptor.getValue().getOaPushStatus()).isEqualTo("PENDING");
+  }
+
+  @Test
+  @DisplayName("历史审批价沿用：准备成功、计入提醒并只固化必要取价证据")
+  void carriedForwardPriceIsReadyWithPersistedEvidence() {
+    PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
+    request.setOaNo("OA-HISTORY-PRICE");
+    request.setPeriodMonth(CURRENT_PERIOD);
+    BomCostingRow row = bomRow(11L, "TOP-HISTORY", "MAT-HISTORY", "采购件");
+    PricePreparePlanItem planItem = planItem(row, "NORMAL", "READY");
+    when(bomItemLoader.loadByOaNo("OA-HISTORY-PRICE")).thenReturn(List.of(row));
+    when(itemClassifier.classify(List.of(row))).thenReturn(List.of(planItem));
+    NormalMaterialPricePrepareResult prepared =
+        NormalMaterialPricePrepareResult.ready(
+            new BigDecimal("12.30"),
+            new BigDecimal("30.750"),
+            "固定采购价",
+            "FIXED_PRICE",
+            801L,
+            "沿用历史审批价");
+    prepared.setPriceType("FIXED");
+    prepared.setSourcePriceRecordId(801L);
+    prepared.setSourcePriceBatchNo("FIXED-2026-05-31");
+    prepared.setSupplierName("主供供应商");
+    prepared.setSupplierCode("SUP-001");
+    prepared.setSupplyRatio(new BigDecimal("0.700000"));
+    prepared.setSupplyRatioRecordId(901L);
+    prepared.setSourceEffectiveFrom(LocalDate.of(2026, 5, 31));
+    prepared.setSourceEffectiveTo(LocalDate.of(2026, 7, 31));
+    prepared.setCarriedForward(true);
+    prepared.setWarningMessage("审批有效期已到，报价沿用最近价格");
+    when(normalMaterialPricePrepareStrategy.prepare(
+            org.mockito.ArgumentMatchers.eq("OA-HISTORY-PRICE"),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
+            org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
+            org.mockito.ArgumentMatchers.eq(planItem)))
+        .thenReturn(prepared);
+
+    PricePrepareGenerateResult result = service.generate(request);
+
+    assertThat(result.getStatus()).isEqualTo("SUCCESS");
+    assertThat(result.getSuccessCount()).isEqualTo(1);
+    assertThat(result.getWarningCount()).isEqualTo(1);
+    assertThat(result.getGapCount()).isZero();
+    verify(gapMapper, org.mockito.Mockito.never()).insert(any(PricePrepareGap.class));
+    ArgumentCaptor<PricePrepareItem> itemCaptor = ArgumentCaptor.forClass(PricePrepareItem.class);
+    verify(itemMapper).insert(itemCaptor.capture());
+    PricePrepareItem item = itemCaptor.getValue();
+    assertThat(item.getStatus()).isEqualTo("READY");
+    assertThat(item.getPriceType()).isEqualTo("FIXED");
+    assertThat(item.getSourcePriceRecordId()).isEqualTo(801L);
+    assertThat(item.getSourcePriceBatchNo()).isEqualTo("FIXED-2026-05-31");
+    assertThat(item.getSupplierName()).isEqualTo("主供供应商");
+    assertThat(item.getSupplierCode()).isEqualTo("SUP-001");
+    assertThat(item.getSupplyRatio()).isEqualByComparingTo("0.700000");
+    assertThat(item.getSupplyRatioRecordId()).isEqualTo(901L);
+    assertThat(item.getSourceEffectiveFrom()).isEqualTo(LocalDate.of(2026, 5, 31));
+    assertThat(item.getSourceEffectiveTo()).isEqualTo(LocalDate.of(2026, 7, 31));
+    assertThat(item.getCarriedForward()).isEqualTo(1);
+    assertThat(item.getWarningMessage()).contains("沿用最近价格");
   }
 
   @Test
@@ -723,12 +744,8 @@ class PricePrepareServiceImplTest {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-PKG-PRICE");
     request.setPeriodMonth(CURRENT_PERIOD);
-    request.setPriceTypeConfirmNo("PT-CF-PKG");
     BomCostingRow row = bomRow(1L, "TOP-PKG", "PKG-001", "虚拟");
     PricePreparePlanItem planItem = planItem(row, "PACKAGE_COMPONENT", "READY");
-    QuotePriceTypeConfirmItem confirmItem = new QuotePriceTypeConfirmItem();
-    confirmItem.setId(901L);
-    when(priceTypeConfirmItemMapper.selectList(any())).thenReturn(List.of(confirmItem));
     when(bomItemLoader.loadByOaNo("OA-PKG-PRICE")).thenReturn(List.of(row));
     when(itemClassifier.classify(List.of(row))).thenReturn(List.of(planItem));
     when(packageComponentPricePrepareStrategy.prepare(
@@ -743,7 +760,7 @@ class PricePrepareServiceImplTest {
             "MISSING_PRICE",
             "包装组件存在子件缺价",
             List.of(new PackageComponentPricePrepareResult.Gap(
-                "MISSING_PRICE", "CHILD-001", "lp_package_component_price_detail", "子件缺价"))));
+                "MISSING_PRICE", "CHILD-001", "包装子件", "lp_package_component_price_detail", "子件缺价"))));
 
     PricePrepareGenerateResult result = service.generate(request);
 
@@ -753,13 +770,7 @@ class PricePrepareServiceImplTest {
     assertThat(gapCaptor.getValue().getGapType()).isEqualTo("MISSING_PRICE");
     assertThat(gapCaptor.getValue().getMaterialCode()).isEqualTo("PKG-001");
     assertThat(gapCaptor.getValue().getGapMaterialCode()).isEqualTo("CHILD-001");
-    ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<QuotePriceTypeConfirmItem>>
-        confirmQueryCaptor = ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper.class);
-    verify(priceTypeConfirmItemMapper, org.mockito.Mockito.times(2)).selectList(confirmQueryCaptor.capture());
-    com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<QuotePriceTypeConfirmItem> childQuery =
-        confirmQueryCaptor.getAllValues().get(confirmQueryCaptor.getAllValues().size() - 1);
-    assertThat(((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>) childQuery).getSqlSegment())
-        .doesNotContain("bom_row_id");
+    assertThat(gapCaptor.getValue().getMaterialName()).isEqualTo("包装子件");
   }
 
   @Test
@@ -812,7 +823,7 @@ class PricePrepareServiceImplTest {
             "MISSING_PRICE",
             "自制件价格生成结果存在缺口",
             List.of(new MakePartPricePrepareResult.Gap(
-                "MISSING_PRICE", "SCRAP-001", "lp_make_part_price_gap_item", "缺废料价格"))));
+                "MISSING_PRICE", "SCRAP-001", "废料一", "lp_make_part_price_gap_item", "缺废料价格"))));
 
     PricePrepareGenerateResult result = service.generate(request);
 
@@ -824,6 +835,7 @@ class PricePrepareServiceImplTest {
     assertThat(gapCaptor.getValue().getGapType()).isEqualTo("MISSING_PRICE");
     assertThat(gapCaptor.getValue().getMaterialCode()).isEqualTo("MAKE-001");
     assertThat(gapCaptor.getValue().getGapMaterialCode()).isEqualTo("SCRAP-001");
+    assertThat(gapCaptor.getValue().getMaterialName()).isEqualTo("废料一");
     assertThat(gapCaptor.getValue().getOaPushStatus()).isEqualTo("PENDING");
   }
 
@@ -978,9 +990,9 @@ class PricePrepareServiceImplTest {
         .allMatch(itemCaptor.getAllValues().get(0).getSettlementKey()::equals);
     assertThat(itemCaptor.getAllValues())
         .extracting(PricePrepareItem::getCurrentFlag)
-        .containsExactly(1, 0);
-    verify(versionInvalidationService)
-        .invalidateProduct("OA-SCENE", 901L, "TOP-SCENE", CURRENT_PERIOD);
+        .containsExactly(0, 0);
+    verify(currentStateService, org.mockito.Mockito.times(2))
+        .finalizeBatch(any(PricePrepareBatch.class));
   }
 
   @Test
@@ -1077,8 +1089,8 @@ class PricePrepareServiceImplTest {
     assertThat(itemCaptor.getAllValues())
         .extracting(PricePrepareItem::getAmount)
         .containsExactly(new BigDecimal("33.000"), new BigDecimal("33.000"));
-    verify(versionInvalidationService, org.mockito.Mockito.times(2))
-        .invalidateProduct("OA-RERUN", 903L, "TOP-RERUN", CURRENT_PERIOD);
+    verify(currentStateService, org.mockito.Mockito.times(2))
+        .finalizeBatch(any(PricePrepareBatch.class));
   }
 
   private PricePrepareGenerateRequest quoteItemRequest(

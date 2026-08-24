@@ -6,29 +6,25 @@ import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import com.sanhua.marketingcost.dto.ingest.QuoteRequestConfirmClassificationRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteRequestDetailResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteRequestListItemResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteBomCancelConfirmRequest;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteBomConfirmRequest;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteBomConfirmResponse;
+import com.sanhua.marketingcost.dto.quotecosting.ProductCostingRequest;
+import com.sanhua.marketingcost.dto.quotecosting.ProductCostingResult;
+import com.sanhua.marketingcost.dto.quotecosting.QuoteBatchCostRunRequest;
+import com.sanhua.marketingcost.dto.quotecosting.QuoteBatchCostRunResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunConfirmRequest;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunSummaryResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunTrialRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunWorkbenchResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCuMaterialDifferenceResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeAdjustRequest;
-import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmRequest;
-import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmationActionResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeConfirmationResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeImportMissingRequest;
+import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse;
+import com.sanhua.marketingcost.dto.quotecosting.QuoteProductCostRunRequest;
+import com.sanhua.marketingcost.dto.quotecosting.QuoteProductCostRunTaskResponse;
 import com.sanhua.marketingcost.service.BusinessUnitRepriceLockGuard;
-import com.sanhua.marketingcost.service.QuoteBomConfirmationService;
+import com.sanhua.marketingcost.service.ProductCostingPipeline;
+import com.sanhua.marketingcost.service.QuoteBatchCostRunService;
 import com.sanhua.marketingcost.service.QuoteCostRunWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
 import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
-import com.sanhua.marketingcost.service.QuotePriceTypeConfirmationService;
-import com.sanhua.marketingcost.service.collaboration.CollaborationDomainException;
+import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.ingest.QuoteRequestQueryService;
 import jakarta.servlet.http.HttpServletResponse;
@@ -36,6 +32,8 @@ import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -50,27 +48,69 @@ import org.springframework.web.bind.annotation.RestController;
 public class QuoteRequestController {
   private final QuoteRequestQueryService quoteRequestQueryService;
   private final QuoteCostingWorkbenchService quoteCostingWorkbenchService;
-  private final QuoteBomConfirmationService quoteBomConfirmationService;
-  private final QuotePriceTypeConfirmationService quotePriceTypeConfirmationService;
+  private final QuotePriceTypeRecognitionService quotePriceTypeRecognitionService;
   private final QuotePricePrepareWorkbenchService quotePricePrepareWorkbenchService;
   private final QuoteCostRunWorkbenchService quoteCostRunWorkbenchService;
+  private final ProductCostingPipeline productCostingPipeline;
+  private final QuoteBatchCostRunService quoteBatchCostRunService;
   private final BusinessUnitRepriceLockGuard repriceLockGuard;
 
   public QuoteRequestController(
       QuoteRequestQueryService quoteRequestQueryService,
       QuoteCostingWorkbenchService quoteCostingWorkbenchService,
-      QuoteBomConfirmationService quoteBomConfirmationService,
-      QuotePriceTypeConfirmationService quotePriceTypeConfirmationService,
+      QuotePriceTypeRecognitionService quotePriceTypeRecognitionService,
       QuotePricePrepareWorkbenchService quotePricePrepareWorkbenchService,
       QuoteCostRunWorkbenchService quoteCostRunWorkbenchService,
+      ProductCostingPipeline productCostingPipeline,
+      QuoteBatchCostRunService quoteBatchCostRunService,
       BusinessUnitRepriceLockGuard repriceLockGuard) {
     this.quoteRequestQueryService = quoteRequestQueryService;
     this.quoteCostingWorkbenchService = quoteCostingWorkbenchService;
-    this.quoteBomConfirmationService = quoteBomConfirmationService;
-    this.quotePriceTypeConfirmationService = quotePriceTypeConfirmationService;
+    this.quotePriceTypeRecognitionService = quotePriceTypeRecognitionService;
     this.quotePricePrepareWorkbenchService = quotePricePrepareWorkbenchService;
     this.quoteCostRunWorkbenchService = quoteCostRunWorkbenchService;
+    this.productCostingPipeline = productCostingPipeline;
+    this.quoteBatchCostRunService = quoteBatchCostRunService;
     this.repriceLockGuard = repriceLockGuard;
+  }
+
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
+  @PostMapping("/{oaNo}/cost-runs")
+  public CommonResult<QuoteBatchCostRunResponse> submitBatchCostRun(
+      @PathVariable("oaNo") String oaNo,
+      @RequestBody(required = false) QuoteBatchCostRunRequest request) {
+    try {
+      return CommonResult.success(
+          quoteBatchCostRunService.submit(oaNo, request, currentUsername()));
+    } catch (QuoteIngestException | IllegalArgumentException | IllegalStateException ex) {
+      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
+    }
+  }
+
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
+  @GetMapping("/{oaNo}/cost-runs/current")
+  public CommonResult<QuoteBatchCostRunResponse> currentBatchCostRun(
+      @PathVariable("oaNo") String oaNo,
+      @RequestParam(value = "periodMonth", required = false) String periodMonth) {
+    try {
+      return CommonResult.success(quoteBatchCostRunService.getCurrent(oaNo, periodMonth));
+    } catch (QuoteIngestException | IllegalArgumentException ex) {
+      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
+    }
+  }
+
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
+  @GetMapping("/{oaNo}/items/{oaFormItemId}/cost-runs/current")
+  public CommonResult<QuoteProductCostRunTaskResponse> currentProductCostRunTask(
+      @PathVariable("oaNo") String oaNo,
+      @PathVariable("oaFormItemId") Long oaFormItemId,
+      @RequestParam(value = "periodMonth", required = false) String periodMonth) {
+    try {
+      return CommonResult.success(
+          quoteBatchCostRunService.getCurrentItem(oaNo, oaFormItemId, periodMonth));
+    } catch (QuoteIngestException | IllegalArgumentException ex) {
+      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
+    }
   }
 
   @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
@@ -132,32 +172,31 @@ public class QuoteRequestController {
   }
 
   @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
-  @PostMapping("/{oaNo}/items/{oaFormItemId}/cost-run/trial")
-  public CommonResult<QuoteCostRunWorkbenchResponse> trialCostRun(
+  @PostMapping("/{oaNo}/items/{oaFormItemId}/cost-runs")
+  public CommonResult<ProductCostingResult> submitProductCostRun(
       @PathVariable("oaNo") String oaNo,
       @PathVariable("oaFormItemId") Long oaFormItemId,
-      @RequestBody(required = false) QuoteCostRunTrialRequest request) {
+      @RequestBody(required = false) QuoteProductCostRunRequest request) {
     try {
       repriceLockGuard.assertCostRunAllowed(oaNo);
-      return CommonResult.success(quoteCostRunWorkbenchService.trial(oaNo, oaFormItemId, request));
+      return CommonResult.success(
+          productCostingPipeline.execute(
+              new ProductCostingRequest(
+                  oaNo,
+                  oaFormItemId,
+                  request == null ? null : request.getPeriodMonth(),
+                  currentUsername(),
+                  false)));
     } catch (QuoteIngestException | IllegalArgumentException | IllegalStateException ex) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
     }
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
-  @PostMapping("/{oaNo}/items/{oaFormItemId}/cost-run/{costRunNo}/confirm")
-  public CommonResult<QuoteCostRunSummaryResponse> confirmCostRun(
-      @PathVariable("oaNo") String oaNo,
-      @PathVariable("oaFormItemId") Long oaFormItemId,
-      @PathVariable("costRunNo") String costRunNo,
-      @RequestBody(required = false) QuoteCostRunConfirmRequest request) {
-    try {
-      return CommonResult.success(
-          quoteCostRunWorkbenchService.confirm(oaNo, oaFormItemId, costRunNo, request));
-    } catch (QuoteIngestException | IllegalArgumentException ex) {
-      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
-    }
+  private String currentUsername() {
+    Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+    return authentication == null || authentication.getName() == null
+        ? "system"
+        : authentication.getName();
   }
 
   @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
@@ -199,49 +238,6 @@ public class QuoteRequestController {
       @PathVariable("oaFormItemId") Long oaFormItemId) {
     try {
       return CommonResult.success(quoteCostingWorkbenchService.getWorkbench(oaNo, oaFormItemId));
-    } catch (QuoteIngestException | IllegalArgumentException ex) {
-      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
-    }
-  }
-
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
-  @PostMapping("/{oaNo}/items/{oaFormItemId}/costing-workbench/launch")
-  public CommonResult<QuoteCostingWorkbenchResponse> launchCostingWorkbench(
-      @PathVariable("oaNo") String oaNo,
-      @PathVariable("oaFormItemId") Long oaFormItemId) {
-    try {
-      return CommonResult.success(quoteCostingWorkbenchService.launchWorkbench(oaNo, oaFormItemId));
-    } catch (CollaborationDomainException ex) {
-      return CommonResult.error(
-          GlobalErrorCodeConstants.BAD_REQUEST.getCode(),
-          ex.code().name() + ": " + ex.getMessage());
-    } catch (QuoteIngestException | IllegalArgumentException ex) {
-      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
-    }
-  }
-
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
-  @PostMapping("/{oaNo}/items/{oaFormItemId}/costing-bom/confirm")
-  public CommonResult<QuoteBomConfirmResponse> confirmCostingBom(
-      @PathVariable("oaNo") String oaNo,
-      @PathVariable("oaFormItemId") Long oaFormItemId,
-      @RequestBody(required = false) QuoteBomConfirmRequest request) {
-    try {
-      return CommonResult.success(quoteBomConfirmationService.confirm(oaNo, oaFormItemId, request));
-    } catch (QuoteIngestException | IllegalArgumentException ex) {
-      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
-    }
-  }
-
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
-  @PostMapping("/{oaNo}/items/{oaFormItemId}/costing-bom/cancel-confirm")
-  public CommonResult<QuoteBomConfirmResponse> cancelCostingBomConfirm(
-      @PathVariable("oaNo") String oaNo,
-      @PathVariable("oaFormItemId") Long oaFormItemId,
-      @RequestBody(required = false) QuoteBomCancelConfirmRequest request) {
-    try {
-      return CommonResult.success(
-          quoteBomConfirmationService.cancelConfirm(oaNo, oaFormItemId, request));
     } catch (QuoteIngestException | IllegalArgumentException ex) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
     }
@@ -290,56 +286,14 @@ public class QuoteRequestController {
   }
 
   @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
-  @GetMapping("/{oaNo}/items/{oaFormItemId}/price-type-confirmation")
-  public CommonResult<QuotePriceTypeConfirmationResponse> priceTypeConfirmation(
+  @GetMapping("/{oaNo}/items/{oaFormItemId}/price-type-recognition")
+  public CommonResult<QuotePriceTypeRecognitionResponse> priceTypeRecognition(
       @PathVariable("oaNo") String oaNo,
       @PathVariable("oaFormItemId") Long oaFormItemId,
       @RequestParam(value = "periodMonth", required = false) String periodMonth) {
     try {
       return CommonResult.success(
-          quotePriceTypeConfirmationService.getConfirmation(oaNo, oaFormItemId, periodMonth));
-    } catch (QuoteIngestException | IllegalArgumentException ex) {
-      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
-    }
-  }
-
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
-  @PostMapping("/{oaNo}/items/{oaFormItemId}/price-type-confirmation/import-missing")
-  public CommonResult<QuotePriceTypeConfirmationActionResponse> importMissingPriceType(
-      @PathVariable("oaNo") String oaNo,
-      @PathVariable("oaFormItemId") Long oaFormItemId,
-      @RequestBody QuotePriceTypeImportMissingRequest request) {
-    try {
-      return CommonResult.success(
-          quotePriceTypeConfirmationService.importMissing(oaNo, oaFormItemId, request));
-    } catch (QuoteIngestException | IllegalArgumentException ex) {
-      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
-    }
-  }
-
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
-  @PostMapping("/{oaNo}/items/{oaFormItemId}/price-type-confirmation/adjust")
-  public CommonResult<QuotePriceTypeConfirmationActionResponse> adjustPriceType(
-      @PathVariable("oaNo") String oaNo,
-      @PathVariable("oaFormItemId") Long oaFormItemId,
-      @RequestBody QuotePriceTypeAdjustRequest request) {
-    try {
-      return CommonResult.success(
-          quotePriceTypeConfirmationService.adjustPriceType(oaNo, oaFormItemId, request));
-    } catch (QuoteIngestException | IllegalArgumentException ex) {
-      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
-    }
-  }
-
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
-  @PostMapping("/{oaNo}/items/{oaFormItemId}/price-type-confirmation/confirm")
-  public CommonResult<QuotePriceTypeConfirmationActionResponse> confirmPriceType(
-      @PathVariable("oaNo") String oaNo,
-      @PathVariable("oaFormItemId") Long oaFormItemId,
-      @RequestBody(required = false) QuotePriceTypeConfirmRequest request) {
-    try {
-      return CommonResult.success(
-          quotePriceTypeConfirmationService.confirm(oaNo, oaFormItemId, request));
+          quotePriceTypeRecognitionService.getRecognition(oaNo, oaFormItemId, periodMonth));
     } catch (QuoteIngestException | IllegalArgumentException ex) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
     }

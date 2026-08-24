@@ -10,6 +10,7 @@ import com.sanhua.marketingcost.enums.LinkedPriceFactorSource;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
+import java.time.LocalDate;
 import java.util.List;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -85,7 +86,7 @@ public class LinkedPriceResolver implements PriceResolver {
                   ? " priceAsOfTime=" + context.getPriceAsOfTime()
                   : ""));
     }
-    return PriceResolveResult.hit(rows.get(0).getPartUnitPrice(), "联动价", rows.get(0).getId());
+    return resolved(rows.get(0), "联动价");
   }
 
   private PriceResolveResult resolveMonthlyAdjust(CostRunPartItemDto item, CostRunContext context) {
@@ -119,7 +120,49 @@ public class LinkedPriceResolver implements PriceResolver {
               + " adjustBatchId="
               + context.getAdjustBatchId());
     }
-    return PriceResolveResult.hit(rows.get(0).getPartUnitPrice(), "月度调价联动价");
+    return resolved(rows.get(0), "月度调价联动价");
+  }
+
+  private PriceResolveResult resolved(PriceLinkedCalcItem row, String source) {
+    boolean carriedForward = Integer.valueOf(1).equals(row.getCarriedForward());
+    PriceResolveEvidence evidence = new PriceResolveEvidence(
+        row.getSourcePriceRecordId(),
+        row.getSourcePriceBatchNo(),
+        row.getSupplierName(),
+        row.getSupplierCode(),
+        row.getSupplyRatio(),
+        row.getSupplyRatioRecordId(),
+        row.getSourceEffectiveFrom(),
+        row.getSourceEffectiveTo(),
+        carriedForward,
+        row.getWarningMessage());
+    String remark = evidence.hasEvidence() ? traceMessage(row, carriedForward) : "";
+    return PriceResolveResult.hit(row.getPartUnitPrice(), source, remark, row.getId(), evidence);
+  }
+
+  private String traceMessage(PriceLinkedCalcItem row, boolean carriedForward) {
+    StringBuilder trace = new StringBuilder("联动价底稿[")
+        .append("主供应商=").append(text(row.getSupplierName()))
+        .append("；供应商代码=").append(text(row.getSupplierCode()))
+        .append("；供货比例=").append(row.getSupplyRatio() == null ? "" : row.getSupplyRatio())
+        .append("；价格源记录ID=")
+        .append(row.getSourcePriceRecordId() == null ? "" : row.getSourcePriceRecordId())
+        .append("；生效期=").append(date(row.getSourceEffectiveFrom()))
+        .append("~").append(date(row.getSourceEffectiveTo()))
+        .append("；沿用历史价=").append(carriedForward ? "是" : "否")
+        .append("]");
+    if (StringUtils.hasText(row.getWarningMessage())) {
+      trace.append("；").append(row.getWarningMessage().trim());
+    }
+    return trace.toString();
+  }
+
+  private String text(String value) {
+    return StringUtils.hasText(value) ? value.trim() : "";
+  }
+
+  private String date(LocalDate value) {
+    return value == null ? "" : value.toString();
   }
 
   private String quoteFactorSource(CostRunContext context) {

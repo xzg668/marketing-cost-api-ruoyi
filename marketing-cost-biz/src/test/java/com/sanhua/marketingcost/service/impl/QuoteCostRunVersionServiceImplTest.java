@@ -11,6 +11,7 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
+import com.sanhua.marketingcost.service.CostingAlgorithmVersionProvider;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
@@ -56,7 +57,8 @@ class QuoteCostRunVersionServiceImplTest {
           version.setId(88L);
           return 1;
         });
-    QuoteCostRunVersionServiceImpl service = new QuoteCostRunVersionServiceImpl(mapper, generator);
+    QuoteCostRunVersionServiceImpl service =
+        new QuoteCostRunVersionServiceImpl(mapper, generator, algorithmVersion());
 
     QuoteCostRunVersion version =
         service.createTrial(
@@ -66,17 +68,54 @@ class QuoteCostRunVersionServiceImplTest {
             "2026-06",
             "2026-06",
             "PPR-1",
-            "QPTC-1",
-            "QBC-1",
             "COMMERCIAL");
 
     assertThat(version.getId()).isEqualTo(88L);
     assertThat(version.getCostRunNo()).isEqualTo("RUN-2");
     assertThat(version.getOaNo()).isEqualTo("OA-001");
     assertThat(version.getProductCode()).isEqualTo("P-001");
+    assertThat(version.getAlgorithmVersion())
+        .isEqualTo(CostingAlgorithmVersionProvider.DEFAULT_VERSION);
+    assertThat(version.getStatus()).isEqualTo("TRIAL");
     verify(generator, times(2)).nextCostRunNo();
     ArgumentCaptor<QuoteCostRunVersion> captor = ArgumentCaptor.forClass(QuoteCostRunVersion.class);
     verify(mapper, times(2)).insert(captor.capture());
     assertThat(captor.getAllValues().get(1).getPricePrepareNo()).isEqualTo("PPR-1");
+  }
+
+  @Test
+  @DisplayName("自动流水线创建 RUNNING 版本")
+  void createRunningUsesRunningStatus() {
+    QuoteCostRunVersionMapper mapper = mock(QuoteCostRunVersionMapper.class);
+    QuoteCostRunVersionNoGenerator generator = mock(QuoteCostRunVersionNoGenerator.class);
+    when(generator.nextCostRunNo()).thenReturn("RUN-AUTO-1");
+    when(mapper.insert(any(QuoteCostRunVersion.class)))
+        .thenAnswer(
+            invocation -> {
+              QuoteCostRunVersion version = invocation.getArgument(0);
+              version.setId(99L);
+              return 1;
+            });
+    QuoteCostRunVersionServiceImpl service =
+        new QuoteCostRunVersionServiceImpl(mapper, generator, algorithmVersion());
+
+    QuoteCostRunVersion version =
+        service.createRunning(
+            "OA-001",
+            101L,
+            "P-001",
+            "2026-08",
+            "2026-08",
+            "PPR-1",
+            "COMMERCIAL");
+
+    assertThat(version.getId()).isEqualTo(99L);
+    assertThat(version.getAlgorithmVersion())
+        .isEqualTo(CostingAlgorithmVersionProvider.DEFAULT_VERSION);
+    assertThat(version.getStatus()).isEqualTo("RUNNING");
+  }
+
+  private CostingAlgorithmVersionProvider algorithmVersion() {
+    return new CostingAlgorithmVersionProvider(CostingAlgorithmVersionProvider.DEFAULT_VERSION);
   }
 }

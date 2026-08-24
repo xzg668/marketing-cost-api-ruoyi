@@ -13,6 +13,7 @@ public class PricePrepareOaSummaryResponse {
   private int readyTopProductCount;
   private int totalCount;
   private int readyCount;
+  private int warningCount;
   private int gapCount;
   private String status;
   private LocalDateTime updatedAt;

@@ -4,7 +4,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** 确认时创建或复用最终有效 BOM 的请求。 */
+/** 创建或复用当前有效 BOM 构建的请求。 */
 public record QuoteEffectiveBomPersistenceRequest(
     Long originMonthlySnapshotId,
     Long createdBy,

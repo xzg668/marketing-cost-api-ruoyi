@@ -19,9 +19,9 @@ class QuoteEffectiveBomDeduplicationTest {
     QuoteEffectiveBomPersistenceServiceImpl service = service(repository);
 
     QuoteEffectiveBomPersistenceResult first =
-        service.persistConfirmed(request(11L, variant()));
+        service.persistCurrentVariant(request(11L, variant()));
     QuoteEffectiveBomPersistenceResult second =
-        service.persistConfirmed(request(12L, variant()));
+        service.persistCurrentVariant(request(12L, variant()));
 
     assertThat(second.reused()).isTrue();
     assertThat(second.buildBatchId()).isEqualTo(first.buildBatchId());
@@ -36,7 +36,7 @@ class QuoteEffectiveBomDeduplicationTest {
     QuoteEffectiveBomPersistenceServiceImpl service = service(repository);
 
     for (long snapshotId = 1; snapshotId <= 100; snapshotId++) {
-      service.persistConfirmed(request(snapshotId, variant()));
+      service.persistCurrentVariant(request(snapshotId, variant()));
     }
 
     assertThat(repository.buildCount()).isEqualTo(1);
@@ -50,9 +50,9 @@ class QuoteEffectiveBomDeduplicationTest {
     QuoteEffectiveBomPersistenceServiceImpl service = service(repository);
 
     QuoteEffectiveBomPersistenceResult standard =
-        service.persistConfirmed(request(11L, variant()));
+        service.persistCurrentVariant(request(11L, variant()));
     QuoteEffectiveBomPersistenceResult alternative =
-        service.persistConfirmed(
+        service.persistCurrentVariant(
             request(
                 12L,
                 variant(
@@ -83,9 +83,9 @@ class QuoteEffectiveBomDeduplicationTest {
             () -> "COLLISION-BUILD-" + sequence.incrementAndGet());
 
     QuoteEffectiveBomPersistenceResult first =
-        service.persistConfirmed(request(11L, variant()));
+        service.persistCurrentVariant(request(11L, variant()));
     QuoteEffectiveBomPersistenceResult changed =
-        service.persistConfirmed(
+        service.persistCurrentVariant(
             request(
                 12L,
                 variant(

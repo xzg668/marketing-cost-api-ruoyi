@@ -38,7 +38,6 @@ import org.springframework.util.StringUtils;
 @Service
 public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
   private static final String SNAPSHOT_STATUS_SUCCESS = "SUCCESS";
-  private static final String SNAPSHOT_FREEZE_STATUS_FROZEN = "FROZEN";
   private static final String SNAPSHOT_SYNC_TYPE_AUTO = "AUTO";
   private static final String SNAPSHOT_SYNC_TYPE_MANUAL = "MANUAL";
   private static final String SOURCE_COSTING_SNAPSHOT = "COSTING_SNAPSHOT";
@@ -264,15 +263,6 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       LocalDateTime now) {
     QuoteBomReuseKey key = QuoteBomReuseKey.from(context);
     applyReuseKey(status, key, item, now);
-    QuoteBomMonthlySnapshot activeSnapshot =
-        findActiveSuccessSnapshot(key, context.organization());
-    if (activeSnapshot != null
-        && SNAPSHOT_FREEZE_STATUS_FROZEN.equals(
-            trimToNull(activeSnapshot.getFreezeStatus()))) {
-      // 月度最终BOM一旦冻结，月中再次点击U9同步也只能沿用，不能替换原始来源或最终构建。
-      applyReusedSnapshot(status, activeSnapshot, now);
-      return;
-    }
     if (source == null) {
       applyManualSyncFailure(status, form, item, "本地 U9 全量快照中未找到该产品 BOM", now);
       return;
@@ -324,10 +314,9 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     QuoteBomMonthlySnapshot activeSnapshot = findActiveSuccessSnapshot(key, context.organization());
     if (activeSnapshot != null) {
       boolean electronicCandidate = "ELECTRONIC_DRAWING_BOM".equalsIgnoreCase(
-          trimToNull(activeSnapshot.getBomSource()))
-          && !SNAPSHOT_FREEZE_STATUS_FROZEN.equals(trimToNull(activeSnapshot.getFreezeStatus()));
+          trimToNull(activeSnapshot.getBomSource()));
       if (!electronicCandidate) {
-        // 已冻结快照永不替换；未冻结的电子图库快照只有在 U9 后来补齐时才切回 U9。
+        // 同月已有正式来源时直接沿用；电子图库来源在 U9 后续补齐时允许切回 U9。
         applyReusedSnapshot(status, activeSnapshot, now);
         return;
       }
@@ -386,13 +375,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
             .eq("customer_code", key.getCustomerCode())
             .eq("package_method", key.getPackageMethod())
             .eq("cost_period_month", key.getCostPeriodMonth())
-            .eq("active_flag", 1)
-            .and(
-                wrapper ->
-                    wrapper
-                        .ne("freeze_status", SNAPSHOT_FREEZE_STATUS_FROZEN)
-                        .or()
-                        .isNull("freeze_status")));
+            .eq("active_flag", 1));
   }
 
   private QuoteBomMonthlySnapshot createAutoSuccessSnapshot(
@@ -477,10 +460,6 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     status.setSyncBatchId(snapshot.getBomBatchId());
     status.setSyncRecordId(snapshot.getId());
     status.setReusedFromRecordId(snapshot.getId());
-    status.setCostingBuildBatchId(
-        SNAPSHOT_FREEZE_STATUS_FROZEN.equals(trimToNull(snapshot.getFreezeStatus()))
-            ? trimToNull(snapshot.getEffectiveBuildBatchId())
-            : null);
     status.setSyncAt(snapshot.getSyncAt());
     status.setErrorMessage(null);
     status.setCheckedAt(now);

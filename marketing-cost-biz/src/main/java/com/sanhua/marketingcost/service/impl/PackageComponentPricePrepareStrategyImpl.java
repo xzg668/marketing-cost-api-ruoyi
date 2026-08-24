@@ -203,6 +203,7 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
         gaps.add(new PackageComponentPricePrepareResult.Gap(
             GAP_TYPE_MISSING_PRICE,
             childCode == null ? packageMaterialCode : childCode,
+            childCode == null ? null : detail.getChildMaterialName(),
             "lp_package_component_price_detail",
             message));
       }

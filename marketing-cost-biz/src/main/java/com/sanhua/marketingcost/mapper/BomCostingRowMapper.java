@@ -90,6 +90,16 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "WHERE oa_no=#{oaNo}")
   List<BomCostingRow> selectDistinctMaterialCodesWithOrgByOaNo(@Param("oaNo") String oaNo);
 
+  /** 报价任务前置同步只读取本次核算月份，禁止历史 BOM 脏数据阻断当前批次。 */
+  @Select(
+      "SELECT DISTINCT material_code, material_organization_code "
+          + "FROM lp_bom_costing_row "
+          + "WHERE oa_no=#{oaNo} "
+          + "AND period_month=#{periodMonth}")
+  List<BomCostingRow> selectDistinctMaterialCodesWithOrgByOaNoAndPeriod(
+      @Param("oaNo") String oaNo,
+      @Param("periodMonth") String periodMonth);
+
   /**
    * BOM 可用性检查只需要快照头信息，显式列出字段，避免旧库缺少新结算规则字段时
    * MyBatis-Plus 默认 SELECT 全实体列导致检查失败。

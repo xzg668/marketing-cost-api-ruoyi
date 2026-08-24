@@ -12,8 +12,15 @@ public interface QuoteCostRunVersionService {
       String pricingMonth,
       String resultPeriod,
       String pricePrepareNo,
-      String priceTypeConfirmNo,
-      String bomConfirmNo,
+      String businessUnitType);
+
+  QuoteCostRunVersion createRunning(
+      String oaNo,
+      Long oaFormItemId,
+      String productCode,
+      String pricingMonth,
+      String resultPeriod,
+      String pricePrepareNo,
       String businessUnitType);
 
   void finishTrial(

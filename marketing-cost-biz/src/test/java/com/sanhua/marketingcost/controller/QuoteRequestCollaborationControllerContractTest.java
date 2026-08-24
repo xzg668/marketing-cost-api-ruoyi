@@ -23,6 +23,12 @@ class QuoteRequestCollaborationControllerContractTest {
     assertThat(summary.getAnnotation(GetMapping.class).value()).containsExactly("/collaboration-summary");
     assertThat(summary.getAnnotation(PreAuthorize.class).value()).contains("ingest:quote:list");
 
+    Method refreshSummary = method("refreshSummary", String.class);
+    assertThat(refreshSummary.getAnnotation(PostMapping.class).value())
+        .containsExactly("/collaboration-summary/refresh");
+    assertThat(refreshSummary.getAnnotation(PreAuthorize.class).value())
+        .contains("ingest:quote:list");
+
     Method scan = method("scan", String.class, Long.class);
     assertThat(scan.getAnnotation(PostMapping.class).value()).containsExactly("/items/{itemId}/collaboration/scan");
     assertThat(scan.getAnnotation(PreAuthorize.class).value()).contains("ingest:quote:bom-check");

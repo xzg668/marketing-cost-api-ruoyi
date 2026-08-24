@@ -11,9 +11,7 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
-import com.sanhua.marketingcost.entity.CostRunResult;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
-import com.sanhua.marketingcost.mapper.CostRunResultMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import java.util.List;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -25,21 +23,18 @@ import org.mockito.ArgumentCaptor;
 class QuoteCostRunVersionInvalidationServiceImplTest {
 
   private QuoteCostRunVersionMapper versionMapper;
-  private CostRunResultMapper resultMapper;
   private QuoteCostRunVersionInvalidationServiceImpl service;
 
   @BeforeAll
   static void initTableInfo() {
     MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
     TableInfoHelper.initTableInfo(assistant, QuoteCostRunVersion.class);
-    TableInfoHelper.initTableInfo(assistant, CostRunResult.class);
   }
 
   @BeforeEach
   void setUp() {
     versionMapper = mock(QuoteCostRunVersionMapper.class);
-    resultMapper = mock(CostRunResultMapper.class);
-    service = new QuoteCostRunVersionInvalidationServiceImpl(versionMapper, resultMapper);
+    service = new QuoteCostRunVersionInvalidationServiceImpl(versionMapper);
   }
 
   @Test
@@ -47,7 +42,6 @@ class QuoteCostRunVersionInvalidationServiceImplTest {
     when(versionMapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(version(11L), version(12L)));
     when(versionMapper.update(any(QuoteCostRunVersion.class), any(Wrapper.class))).thenReturn(2);
-    when(resultMapper.update(any(CostRunResult.class), any(Wrapper.class))).thenReturn(2);
 
     int affected = service.invalidateByFinanceCu(" 2026-09 ", " COMMERCIAL ");
 
@@ -71,9 +65,6 @@ class QuoteCostRunVersionInvalidationServiceImplTest {
     assertThat(versionCondition.getParamNameValuePairs().values())
         .contains(11L, 12L, "TRIAL");
 
-    ArgumentCaptor<CostRunResult> resultPatch = ArgumentCaptor.forClass(CostRunResult.class);
-    verify(resultMapper).update(resultPatch.capture(), any(Wrapper.class));
-    assertThat(resultPatch.getValue().getResultStatus()).isEqualTo("STALE");
   }
 
   @Test
@@ -84,34 +75,14 @@ class QuoteCostRunVersionInvalidationServiceImplTest {
 
     assertThat(affected).isZero();
     verify(versionMapper, never()).update(any(QuoteCostRunVersion.class), any(Wrapper.class));
-    verify(resultMapper, never()).update(any(CostRunResult.class), any(Wrapper.class));
   }
 
   @Test
-  void priceTypeConfirmNumbersAreTrimmedAndDeduplicated() {
-    when(versionMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-
-    service.invalidateByPriceTypeConfirmNos(
-        List.of(" PTC-001 ", "PTC-001", "PTC-002", " "));
-
-    ArgumentCaptor<Wrapper<QuoteCostRunVersion>> captor = wrapperCaptor();
-    verify(versionMapper).selectList(captor.capture());
-    AbstractWrapper<?, ?, ?> wrapper = (AbstractWrapper<?, ?, ?>) captor.getValue();
-    wrapper.getSqlSegment();
-    assertThat(wrapper.getParamNameValuePairs().values())
-        .contains("PTC-001", "PTC-002", "TRIAL")
-        .doesNotContain(" PTC-001 ");
-  }
-
-  @Test
-  void bomBranchChangeInvalidatesTrialAndConfirmedVersionsInExactProductScope() {
+  void bomBranchChangeInvalidatesOnlyUnfinishedVersionsInExactProductScope() {
     when(versionMapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(version(21L), version(22L)));
     when(versionMapper.update(
             any(QuoteCostRunVersion.class), any(Wrapper.class)))
-        .thenReturn(2);
-    when(resultMapper.update(
-            any(CostRunResult.class), any(Wrapper.class)))
         .thenReturn(2);
 
     int affected =
@@ -132,7 +103,8 @@ class QuoteCostRunVersionInvalidationServiceImplTest {
             "TOP-ALT",
             "2026-07",
             "TRIAL",
-            "CONFIRMED");
+            "RUNNING")
+        .doesNotContain("CONFIRMED", "SUCCESS", "HISTORY");
 
     ArgumentCaptor<Wrapper<QuoteCostRunVersion>> updateCaptor =
         wrapperCaptor();
@@ -142,7 +114,8 @@ class QuoteCostRunVersionInvalidationServiceImplTest {
         (AbstractWrapper<?, ?, ?>) updateCaptor.getValue();
     update.getSqlSegment();
     assertThat(update.getParamNameValuePairs().values())
-        .contains("TRIAL", "CONFIRMED");
+        .contains("TRIAL", "RUNNING")
+        .doesNotContain("CONFIRMED", "SUCCESS", "HISTORY");
   }
 
   private QuoteCostRunVersion version(Long id) {

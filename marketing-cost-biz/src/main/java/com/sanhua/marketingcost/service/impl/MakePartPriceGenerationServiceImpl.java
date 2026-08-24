@@ -124,6 +124,23 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
   }
 
   @Override
+  public MakePartPriceGenerateResponse generateByOaMaterial(
+      String oaNo,
+      String parentMaterialNo,
+      String businessUnitType,
+      String period,
+      LocalDateTime priceAsOfTime,
+      PricePrepareScenarioContext scenarioContext) {
+    return generate(
+        trim(oaNo),
+        trim(businessUnitType),
+        trim(period),
+        priceAsOfTime,
+        trim(parentMaterialNo),
+        scenarioContext);
+  }
+
+  @Override
   public MakePartPriceGenerateResponse generateByMaterial(
       String parentMaterialNo, String businessUnitType, String period) {
     return generateByMaterial(parentMaterialNo, businessUnitType, period, null);
@@ -212,6 +229,25 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
             trim(period),
             priceAsOfTime,
             null,
+            scenarioContext,
+            false)
+        .rows();
+  }
+
+  @Override
+  public List<MakePartPriceCalcRow> calculateRowsByOaMaterial(
+      String oaNo,
+      String parentMaterialNo,
+      String businessUnitType,
+      String period,
+      LocalDateTime priceAsOfTime,
+      PricePrepareScenarioContext scenarioContext) {
+    return calculateRows(
+            trim(oaNo),
+            trim(businessUnitType),
+            trim(period),
+            priceAsOfTime,
+            trim(parentMaterialNo),
             scenarioContext,
             false)
         .rows();
@@ -456,6 +492,8 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
             child,
             processType.getItemProcessType(),
             period,
+            quoteDate,
+            businessUnitType,
             requireChildNetWeight);
     MakePartMaterialPriceResolveResult rawPrice =
         resolveMaterialPrice(
@@ -732,8 +770,10 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       if (child == null) {
         continue;
       }
-      if (snapshot.quantity != null) {
-        child.setQtyPerParent(snapshot.quantity);
+      BigDecimal normalizedQtyPerParent =
+          snapshot.resolveQtyPerParent(parent.getQtyPerTop(), child.getQtyPerParent());
+      if (normalizedQtyPerParent != null) {
+        child.setQtyPerParent(normalizedQtyPerParent);
       }
       if (!StringUtils.hasText(child.getChildMaterialName())
           && StringUtils.hasText(snapshot.materialName)) {
@@ -1016,7 +1056,8 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
   private static final class RollupChildSnapshot {
     private final String materialCode;
     private String materialName;
-    private BigDecimal quantity;
+    private BigDecimal firstQtyPerParent;
+    private BigDecimal totalQtyPerTop;
 
     private RollupChildSnapshot(String materialCode) {
       this.materialCode = materialCode;
@@ -1030,12 +1071,22 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
           && StringUtils.hasText(ref.getSubMaterialName())) {
         materialName = ref.getSubMaterialName().trim();
       }
-      if (ref.getSubQtyPerParent() != null) {
-        quantity =
-            quantity == null
-                ? ref.getSubQtyPerParent()
-                : quantity.add(ref.getSubQtyPerParent());
+      if (firstQtyPerParent == null && ref.getSubQtyPerParent() != null) {
+        firstQtyPerParent = ref.getSubQtyPerParent();
       }
+      if (ref.getSubQtyPerTop() != null) {
+        totalQtyPerTop =
+            totalQtyPerTop == null
+                ? ref.getSubQtyPerTop()
+                : totalQtyPerTop.add(ref.getSubQtyPerTop());
+      }
+    }
+
+    private BigDecimal resolveQtyPerParent(
+        BigDecimal parentQtyPerTop, BigDecimal u9QtyPerParent) {
+      BigDecimal fallback =
+          firstQtyPerParent == null ? u9QtyPerParent : firstQtyPerParent;
+      return RollupQuantityNormalizer.perParent(totalQtyPerTop, parentQtyPerTop, fallback);
     }
   }
 

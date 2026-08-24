@@ -63,7 +63,7 @@ class MonthlyRepriceResultWriterImplTest {
     assertThat(result.getTotalCost()).isEqualByComparingTo("130.000000");
     assertThat(result.getMaterialCost()).isEqualByComparingTo("100.000000");
     assertThat(result.getLaborCost()).isEqualByComparingTo("15.000000");
-    assertThat(result.getSourceCostResultId()).isEqualTo(99L);
+    assertThat(result.getSourceCostVersionId()).isEqualTo(99L);
 
     ArgumentCaptor<MonthlyRepricePartItem> partCaptor =
         ArgumentCaptor.forClass(MonthlyRepricePartItem.class);

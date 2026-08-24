@@ -15,6 +15,7 @@ public class PricePrepareReadinessResult {
   private String prepareNo;
   private String periodMonth;
   private String batchStatus;
+  private int warningCount;
   private int gapCount;
   private List<String> gapSummaries = new ArrayList<>();
 
@@ -53,6 +54,19 @@ public class PricePrepareReadinessResult {
     result.setBatchStatus(batchStatus);
     result.setGapCount(gapCount);
     result.setGapSummaries(gapSummaries == null ? Collections.emptyList() : gapSummaries);
+    return result;
+  }
+
+  public static PricePrepareReadinessResult readyWithWarnings(
+      String prepareNo,
+      String periodMonth,
+      String batchStatus,
+      int warningCount,
+      String message) {
+    PricePrepareReadinessResult result = ready(prepareNo, periodMonth, batchStatus);
+    result.setWarning(warningCount > 0);
+    result.setWarningCount(warningCount);
+    result.setMessage(message);
     return result;
   }
 
@@ -122,6 +136,14 @@ public class PricePrepareReadinessResult {
 
   public int getGapCount() {
     return gapCount;
+  }
+
+  public int getWarningCount() {
+    return warningCount;
+  }
+
+  public void setWarningCount(int warningCount) {
+    this.warningCount = warningCount;
   }
 
   public void setGapCount(int gapCount) {

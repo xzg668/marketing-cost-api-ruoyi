@@ -7,6 +7,8 @@ import com.sanhua.marketingcost.dto.PriceFixedItemImportResponse;
 import com.sanhua.marketingcost.dto.PriceFixedItemUpdateRequest;
 import com.sanhua.marketingcost.entity.PriceFixedItem;
 import com.sanhua.marketingcost.mapper.PriceFixedItemMapper;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.RouteCommand;
 import com.sanhua.marketingcost.service.PriceFixedItemService;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -24,9 +26,13 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
   private static final String SOURCE_SYSTEM_EXCEL = "EXCEL";
 
   private final PriceFixedItemMapper itemMapper;
+  private final MaterialPriceTypeRouteSyncService priceTypeRouteSyncService;
 
-  public PriceFixedItemServiceImpl(PriceFixedItemMapper itemMapper) {
+  public PriceFixedItemServiceImpl(
+      PriceFixedItemMapper itemMapper,
+      MaterialPriceTypeRouteSyncService priceTypeRouteSyncService) {
     this.itemMapper = itemMapper;
+    this.priceTypeRouteSyncService = priceTypeRouteSyncService;
   }
 
   @Override
@@ -52,6 +58,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
   }
 
   @Override
+  @Transactional(rollbackFor = Exception.class)
   public PriceFixedItem create(PriceFixedItemUpdateRequest request) {
     if (request == null) {
       return null;
@@ -64,10 +71,12 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     }
     closePreviousVersions(item);
     itemMapper.insert(item);
+    syncPriceType(item);
     return item;
   }
 
   @Override
+  @Transactional(rollbackFor = Exception.class)
   public PriceFixedItem update(Long id, PriceFixedItemUpdateRequest request) {
     if (id == null) {
       return null;
@@ -79,6 +88,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     merge(existing, request);
     fillDefaults(existing);
     itemMapper.updateById(existing);
+    syncPriceType(existing);
     return existing;
   }
 
@@ -139,6 +149,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
         response.incrementUpdatedCount();
       }
       response.addItem(item);
+      syncPriceType(item);
     }
     return response;
   }
@@ -439,6 +450,23 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
       row.setEffectiveTo(item.getEffectiveFrom());
       itemMapper.updateById(row);
     }
+  }
+
+  private void syncPriceType(PriceFixedItem item) {
+    if (item == null || item.getFixedPrice() == null) {
+      return;
+    }
+    String sourceType = upperTrim(item.getSourceType());
+    boolean settle = SOURCE_TYPE_SETTLE_FIXED.equals(sourceType) || "SETTLE".equals(sourceType);
+    priceTypeRouteSyncService.sync(new RouteCommand(
+        item.getMaterialCode(),
+        item.getMaterialName(),
+        item.getSpecModel(),
+        item.getUnit(),
+        item.getBusinessUnitType(),
+        settle ? "结算固定价" : "固定价",
+        settle ? "price_settle_fixed" : "price_fixed",
+        firstText(item.getSourceSystem(), "FORMAL_FIXED")));
   }
 
   private LocalDate defaultEffectiveFrom(String pricingMonth) {

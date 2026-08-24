@@ -2,7 +2,7 @@ package com.sanhua.marketingcost.dto.quotebom;
 
 import java.util.List;
 
-/** 保存标准/替代选择并原子重建报价物料明细后的结果。 */
+/** 保存标准/替代选择后的结果；选择变化时提示重新核算。 */
 public record QuoteBomAlternativeSelectionResponse(
     String alternativeGroupKey,
     Integer selectionVersion,
@@ -10,11 +10,7 @@ public record QuoteBomAlternativeSelectionResponse(
     String selectedChildType,
     String selectionSource,
     boolean idempotent,
-    boolean rebuilt,
-    boolean manualChangesDiscarded,
-    int rowsBefore,
-    int rowsAfter,
-    String newBuildBatchId,
+    boolean recalculationRequired,
     List<String> workflowInvalidated) {
 
   public QuoteBomAlternativeSelectionResponse {

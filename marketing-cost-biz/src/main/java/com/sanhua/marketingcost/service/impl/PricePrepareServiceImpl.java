@@ -12,12 +12,10 @@ import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
-import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmItem;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
-import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmItemMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.MakePartPricePrepareStrategy;
 import com.sanhua.marketingcost.service.NormalMaterialPricePrepareStrategy;
@@ -25,9 +23,9 @@ import com.sanhua.marketingcost.service.PackageComponentPricePrepareStrategy;
 import com.sanhua.marketingcost.service.PricePrepareBomItemLoader;
 import com.sanhua.marketingcost.service.PricePrepareItemClassifier;
 import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
+import com.sanhua.marketingcost.service.PricePrepareCurrentStateService;
 import com.sanhua.marketingcost.service.PricePrepareService;
 import com.sanhua.marketingcost.service.PricePrepareSettlementKeyGenerator;
-import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -67,7 +65,6 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   private static final String GAP_PUSH_PENDING = "PENDING";
   private static final String PRICE_AS_OF_SOURCE_CURRENT_TIME = "CURRENT_TIME";
   private static final String PRICE_AS_OF_SOURCE_REQUEST = "REQUEST";
-  private static final int CURRENT_FLAG_ACTIVE = 1;
   private static final int CURRENT_FLAG_HISTORY = 0;
   private static final int DB_MESSAGE_MAX_LENGTH = 1000;
   private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
@@ -75,64 +72,59 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   private final PricePrepareBatchMapper batchMapper;
   private final PricePrepareItemMapper itemMapper;
   private final PricePrepareGapMapper gapMapper;
-  private final QuotePriceTypeConfirmItemMapper priceTypeConfirmItemMapper;
   private final PricePrepareBomItemLoader bomItemLoader;
   private final PricePrepareItemClassifier itemClassifier;
   private final NormalMaterialPricePrepareStrategy normalMaterialPricePrepareStrategy;
   private final PackageComponentPricePrepareStrategy packageComponentPricePrepareStrategy;
   private final MakePartPricePrepareStrategy makePartPricePrepareStrategy;
   private final Clock clock;
-  private final QuoteCostRunVersionInvalidationService versionInvalidationService;
+  private final PricePrepareCurrentStateService currentStateService;
 
   @Autowired
   public PricePrepareServiceImpl(
       PricePrepareBatchMapper batchMapper,
       PricePrepareItemMapper itemMapper,
       PricePrepareGapMapper gapMapper,
-      QuotePriceTypeConfirmItemMapper priceTypeConfirmItemMapper,
       PricePrepareBomItemLoader bomItemLoader,
       PricePrepareItemClassifier itemClassifier,
       NormalMaterialPricePrepareStrategy normalMaterialPricePrepareStrategy,
       PackageComponentPricePrepareStrategy packageComponentPricePrepareStrategy,
       MakePartPricePrepareStrategy makePartPricePrepareStrategy,
-      QuoteCostRunVersionInvalidationService versionInvalidationService) {
+      PricePrepareCurrentStateService currentStateService) {
     this(
         batchMapper,
         itemMapper,
         gapMapper,
-        priceTypeConfirmItemMapper,
         bomItemLoader,
         itemClassifier,
         normalMaterialPricePrepareStrategy,
         packageComponentPricePrepareStrategy,
         makePartPricePrepareStrategy,
         Clock.system(BUSINESS_ZONE),
-        versionInvalidationService);
+        currentStateService);
   }
 
   PricePrepareServiceImpl(
       PricePrepareBatchMapper batchMapper,
       PricePrepareItemMapper itemMapper,
       PricePrepareGapMapper gapMapper,
-      QuotePriceTypeConfirmItemMapper priceTypeConfirmItemMapper,
       PricePrepareBomItemLoader bomItemLoader,
       PricePrepareItemClassifier itemClassifier,
       NormalMaterialPricePrepareStrategy normalMaterialPricePrepareStrategy,
       PackageComponentPricePrepareStrategy packageComponentPricePrepareStrategy,
       MakePartPricePrepareStrategy makePartPricePrepareStrategy,
       Clock clock,
-      QuoteCostRunVersionInvalidationService versionInvalidationService) {
+      PricePrepareCurrentStateService currentStateService) {
     this.batchMapper = batchMapper;
     this.itemMapper = itemMapper;
     this.gapMapper = gapMapper;
-    this.priceTypeConfirmItemMapper = priceTypeConfirmItemMapper;
     this.bomItemLoader = bomItemLoader;
     this.itemClassifier = itemClassifier;
     this.normalMaterialPricePrepareStrategy = normalMaterialPricePrepareStrategy;
     this.packageComponentPricePrepareStrategy = packageComponentPricePrepareStrategy;
     this.makePartPricePrepareStrategy = makePartPricePrepareStrategy;
     this.clock = clock == null ? Clock.system(BUSINESS_ZONE) : clock;
-    this.versionInvalidationService = versionInvalidationService;
+    this.currentStateService = currentStateService;
   }
 
   @Override
@@ -153,11 +145,6 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     Execution execution = new Execution(persist);
 
     PricePrepareBatch batch = initBatch(req, now, persist);
-    if (persist) {
-      invalidateOaTrialVersion(req);
-      deactivateCurrentItems(req);
-      deactivateCurrentGaps(req);
-    }
 
     List<BomCostingRow> bomRows;
     try {
@@ -189,6 +176,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     }
     planItems = mergePlanItems(planItems, batch);
     int successCount = 0;
+    int warningCount = 0;
     int gapCount = 0;
     for (PricePreparePlanItem planItem : planItems) {
       PricePrepareItem item = buildPrepareItem(batch, planItem);
@@ -223,6 +211,9 @@ public class PricePrepareServiceImpl implements PricePrepareService {
         saveItem(item, execution);
         if (ITEM_STATUS_READY.equals(normalResult.getStatus())) {
           successCount++;
+          if (normalResult.isCarriedForward()) {
+            warningCount++;
+          }
         } else {
           gapCount++;
           insertNormalPriceGap(batch, planItem, normalResult, execution);
@@ -236,7 +227,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     String message = gapCount > 0
         ? "已读取BOM结算明细并完成价格准备，存在待补充缺口"
         : "已读取BOM结算明细并完成价格准备";
-    setBatchSummary(batch, planItems.size(), successCount, 0, gapCount, status, message);
+    setBatchSummary(batch, planItems.size(), successCount, warningCount, gapCount, status, message);
     return finishExecution(batch, execution);
   }
 
@@ -272,7 +263,6 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     batch.setPeriodMonth(req.periodMonth());
     batch.setOaFormItemId(req.oaFormItemId());
     batch.setTopProductCode(req.topProductCode());
-    batch.setPriceTypeConfirmNo(req.priceTypeConfirmNo());
     batch.setBomPurpose(req.bomPurpose());
     batch.setSourceType(req.sourceType());
     batch.setScenarioType(req.scenarioContext().scenarioType().name());
@@ -307,7 +297,6 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     PricePrepareItem item = new PricePrepareItem();
     item.setPrepareNo(batch.getPrepareNo());
     item.setPeriodMonth(batch.getPeriodMonth());
-    item.setPriceTypeConfirmNo(batch.getPriceTypeConfirmNo());
     item.setOaNo(batch.getOaNo());
     item.setOaFormItemId(batch.getOaFormItemId());
     item.setTopProductCode(planItem.getTopProductCode());
@@ -320,9 +309,9 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     item.setMessage(planItem.getMessage());
     item.setBusinessUnitType(batch.getBusinessUnitType());
     // 财务批次是由 source_prepare_no 显式引用的对比快照，不参与既有 OA“当前价格”查询。
-    item.setCurrentFlag(isOaScenario(batch) ? CURRENT_FLAG_ACTIVE : CURRENT_FLAG_HISTORY);
+    // 新批次先作为候选写入；完整成功后由 currentStateService 原子发布。
+    item.setCurrentFlag(CURRENT_FLAG_HISTORY);
     item.setSettlementKey(currentItemKey(batch, planItem));
-    item.setPriceTypeConfirmItemId(findPriceTypeConfirmItemId(batch, planItem));
     return item;
   }
 
@@ -474,8 +463,19 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     item.setUnitPrice(normalResult.getUnitPrice());
     item.setAmount(normalResult.getAmount());
     item.setPriceSource(normalResult.getPriceSource());
+    item.setPriceType(normalResult.getPriceType());
     item.setResultRefType(normalResult.getResultRefType());
     item.setResultRefId(normalResult.getResultRefId());
+    item.setSourcePriceRecordId(normalResult.getSourcePriceRecordId());
+    item.setSourcePriceBatchNo(normalResult.getSourcePriceBatchNo());
+    item.setSupplierName(normalResult.getSupplierName());
+    item.setSupplierCode(normalResult.getSupplierCode());
+    item.setSupplyRatio(normalResult.getSupplyRatio());
+    item.setSupplyRatioRecordId(normalResult.getSupplyRatioRecordId());
+    item.setSourceEffectiveFrom(normalResult.getSourceEffectiveFrom());
+    item.setSourceEffectiveTo(normalResult.getSourceEffectiveTo());
+    item.setCarriedForward(normalResult.isCarriedForward() ? 1 : 0);
+    item.setWarningMessage(normalResult.getWarningMessage());
     item.setMessage(normalResult.getMessage());
   }
 
@@ -539,13 +539,14 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     gap.setTopProductCode(planItem.getTopProductCode());
     gap.setMaterialCode(blankIfNull(planItem.getMaterialCode()));
     gap.setGapMaterialCode(planItem.getMaterialCode());
+    gap.setMaterialName(planItem.getMaterialName());
     gap.setGapType(normalResult.getGapType());
+    gap.setReasonCode(normalResult.getReasonCode());
     gap.setItemType(planItem.getItemType());
     gap.setSourceTable(normalResult.getSourceTable());
     gap.setMessage(normalResult.getMessage());
     gap.setOaPushStatus(GAP_PUSH_PENDING);
     gap.setBusinessUnitType(batch.getBusinessUnitType());
-    gap.setPriceTypeConfirmItemId(findPriceTypeConfirmItemId(batch, planItem, planItem.getMaterialCode()));
     gap.setActionType(actionTypeForGap(normalResult.getGapType()));
     gap.setActionTarget(blankIfNull(planItem.getMaterialCode()));
     saveGap(gap, execution);
@@ -571,14 +572,17 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       gap.setTopProductCode(planItem.getTopProductCode());
       gap.setMaterialCode(blankIfNull(planItem.getMaterialCode()));
       gap.setGapMaterialCode(packageGap.getGapMaterialCode());
+      gap.setMaterialName(firstText(
+          packageGap.getMaterialName(),
+          sameText(packageGap.getGapMaterialCode(), planItem.getMaterialCode())
+              ? planItem.getMaterialName()
+              : null));
       gap.setGapType(packageGap.getGapType());
       gap.setItemType(planItem.getItemType());
       gap.setSourceTable(packageGap.getSourceTable());
       gap.setMessage(packageGap.getMessage());
       gap.setOaPushStatus(GAP_PUSH_PENDING);
       gap.setBusinessUnitType(batch.getBusinessUnitType());
-      gap.setPriceTypeConfirmItemId(
-          findPriceTypeConfirmItemId(batch, planItem, packageGap.getGapMaterialCode()));
       gap.setActionType(actionTypeForGap(packageGap.getGapType()));
       gap.setActionTarget(firstText(packageGap.getGapMaterialCode(), planItem.getMaterialCode()));
       saveGap(gap, execution);
@@ -606,14 +610,17 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       gap.setTopProductCode(planItem.getTopProductCode());
       gap.setMaterialCode(blankIfNull(planItem.getMaterialCode()));
       gap.setGapMaterialCode(makePartGap.getGapMaterialCode());
+      gap.setMaterialName(firstText(
+          makePartGap.getMaterialName(),
+          sameText(makePartGap.getGapMaterialCode(), planItem.getMaterialCode())
+              ? planItem.getMaterialName()
+              : null));
       gap.setGapType(makePartGap.getGapType());
       gap.setItemType(planItem.getItemType());
       gap.setSourceTable(makePartGap.getSourceTable());
       gap.setMessage(makePartGap.getMessage());
       gap.setOaPushStatus(GAP_PUSH_PENDING);
       gap.setBusinessUnitType(batch.getBusinessUnitType());
-      gap.setPriceTypeConfirmItemId(
-          findPriceTypeConfirmItemId(batch, planItem, makePartGap.getGapMaterialCode()));
       gap.setActionType(actionTypeForGap(makePartGap.getGapType()));
       gap.setActionTarget(firstText(makePartGap.getGapMaterialCode(), planItem.getMaterialCode()));
       saveGap(gap, execution);
@@ -628,13 +635,13 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     gap.setTopProductCode(planItem.getTopProductCode());
     gap.setMaterialCode(blankIfNull(planItem.getMaterialCode()));
     gap.setGapMaterialCode(planItem.getMaterialCode());
+    gap.setMaterialName(planItem.getMaterialName());
     gap.setGapType(GAP_TYPE_MISSING_MASTER);
     gap.setItemType(planItem.getItemType());
     gap.setSourceTable("lp_material_master_raw/lp_material_master");
     gap.setMessage(planItem.getMessage());
     gap.setOaPushStatus(GAP_PUSH_PENDING);
     gap.setBusinessUnitType(batch.getBusinessUnitType());
-    gap.setPriceTypeConfirmItemId(findPriceTypeConfirmItemId(batch, planItem, planItem.getMaterialCode()));
     gap.setActionType(ACTION_MAINTAIN_STRUCTURE);
     gap.setActionTarget(blankIfNull(planItem.getMaterialCode()));
     saveGap(gap, execution);
@@ -655,97 +662,6 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     batch.setStatus(status);
     batch.setMessage(dbMessage(message));
     batch.setFinishedAt(currentTime());
-  }
-
-  private void deactivateCurrentGaps(NormalizedGenerateRequest req) {
-    if (req.scenarioContext().scenarioType() != QuotePriceScenarioType.OA_LOCKED) {
-      return;
-    }
-    deactivateCurrentOaGaps(req);
-  }
-
-  private void deactivateCurrentItems(NormalizedGenerateRequest req) {
-    if (req.scenarioContext().scenarioType() != QuotePriceScenarioType.OA_LOCKED) {
-      return;
-    }
-    deactivateCurrentOaItems(req);
-  }
-
-  private void deactivateCurrentOaGaps(NormalizedGenerateRequest req) {
-    var query = Wrappers.<PricePrepareGap>lambdaQuery()
-        .eq(PricePrepareGap::getOaNo, blankIfNull(req.oaNo()))
-        .eq(PricePrepareGap::getPeriodMonth, blankIfNull(req.periodMonth()))
-        .eq(PricePrepareGap::getCurrentFlag, CURRENT_FLAG_ACTIVE);
-    List<String> financePrepareNos = financePrepareNos(req);
-    if (!financePrepareNos.isEmpty()) {
-      query.notIn(PricePrepareGap::getPrepareNo, financePrepareNos);
-    }
-    applyCurrentGapScope(query, req);
-    PricePrepareGap history = new PricePrepareGap();
-    history.setCurrentFlag(CURRENT_FLAG_HISTORY);
-    gapMapper.update(history, query);
-  }
-
-  private void deactivateCurrentOaItems(NormalizedGenerateRequest req) {
-    var query = Wrappers.<PricePrepareItem>lambdaQuery()
-        .eq(PricePrepareItem::getOaNo, blankIfNull(req.oaNo()))
-        .eq(PricePrepareItem::getPeriodMonth, blankIfNull(req.periodMonth()))
-        .eq(PricePrepareItem::getCurrentFlag, CURRENT_FLAG_ACTIVE);
-    List<String> financePrepareNos = financePrepareNos(req);
-    if (!financePrepareNos.isEmpty()) {
-      query.notIn(PricePrepareItem::getPrepareNo, financePrepareNos);
-    }
-    applyCurrentItemScope(query, req);
-    PricePrepareItem history = new PricePrepareItem();
-    history.setCurrentFlag(CURRENT_FLAG_HISTORY);
-    itemMapper.update(history, query);
-  }
-
-  private void applyCurrentItemScope(
-      com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PricePrepareItem> query,
-      NormalizedGenerateRequest req) {
-    if (req.oaFormItemId() != null) {
-      query.eq(PricePrepareItem::getOaFormItemId, req.oaFormItemId())
-          .eq(PricePrepareItem::getTopProductCode, blankIfNull(req.topProductCode()));
-    } else if (req.topProductCodes() != null && !req.topProductCodes().isEmpty()) {
-      query.in(PricePrepareItem::getTopProductCode, req.topProductCodes());
-    }
-  }
-
-  private void applyCurrentGapScope(
-      com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PricePrepareGap> query,
-      NormalizedGenerateRequest req) {
-    if (req.oaFormItemId() != null) {
-      query.eq(PricePrepareGap::getOaFormItemId, req.oaFormItemId())
-          .eq(PricePrepareGap::getTopProductCode, blankIfNull(req.topProductCode()));
-    } else if (req.topProductCodes() != null && !req.topProductCodes().isEmpty()) {
-      query.in(PricePrepareGap::getTopProductCode, req.topProductCodes());
-    }
-  }
-
-  private List<String> financePrepareNos(NormalizedGenerateRequest req) {
-    var query = Wrappers.<PricePrepareBatch>lambdaQuery()
-        .eq(PricePrepareBatch::getOaNo, req.oaNo())
-        .eq(PricePrepareBatch::getPeriodMonth, req.periodMonth())
-        .eq(
-            PricePrepareBatch::getScenarioType,
-            QuotePriceScenarioType.FINANCE_QUOTE_BASE.name());
-    if (req.oaFormItemId() != null) {
-      query.eq(PricePrepareBatch::getOaFormItemId, req.oaFormItemId())
-          .eq(PricePrepareBatch::getTopProductCode, blankIfNull(req.topProductCode()));
-    } else if (req.topProductCodes() != null && !req.topProductCodes().isEmpty()) {
-      query.in(PricePrepareBatch::getTopProductCode, req.topProductCodes());
-    }
-    List<PricePrepareBatch> batches = batchMapper.selectList(query);
-    if (batches == null || batches.isEmpty()) {
-      return List.of();
-    }
-    return batches.stream()
-        .map(PricePrepareBatch::getPrepareNo)
-        .filter(StringUtils::hasText)
-        .map(String::trim)
-        .distinct()
-        .toList();
   }
 
   private void saveItem(PricePrepareItem item, Execution execution) {
@@ -862,40 +778,10 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   private void applyBatchScope(PricePrepareGap gap, PricePrepareBatch batch) {
     gap.setPrepareNo(batch.getPrepareNo());
     gap.setPeriodMonth(batch.getPeriodMonth());
-    gap.setPriceTypeConfirmNo(batch.getPriceTypeConfirmNo());
     gap.setOaNo(batch.getOaNo());
     gap.setOaFormItemId(batch.getOaFormItemId());
-    gap.setCurrentFlag(isOaScenario(batch) ? CURRENT_FLAG_ACTIVE : CURRENT_FLAG_HISTORY);
-  }
-
-  private Long findPriceTypeConfirmItemId(PricePrepareBatch batch, PricePreparePlanItem planItem) {
-    return findPriceTypeConfirmItemId(
-        batch, planItem, planItem == null ? null : planItem.getMaterialCode());
-  }
-
-  private Long findPriceTypeConfirmItemId(
-      PricePrepareBatch batch, PricePreparePlanItem planItem, String gapMaterialCode) {
-    if (batch == null
-        || planItem == null
-        || !StringUtils.hasText(batch.getPriceTypeConfirmNo())) {
-      return null;
-    }
-    String materialCode = firstText(gapMaterialCode, planItem.getMaterialCode());
-    var query =
-        Wrappers.<QuotePriceTypeConfirmItem>lambdaQuery()
-            .eq(QuotePriceTypeConfirmItem::getConfirmNo, batch.getPriceTypeConfirmNo().trim())
-            .eq(QuotePriceTypeConfirmItem::getMaterialCode, blankIfNull(materialCode))
-            .eq(QuotePriceTypeConfirmItem::getProductCode, blankIfNull(planItem.getTopProductCode()));
-    if (batch.getOaFormItemId() != null) {
-      query.eq(QuotePriceTypeConfirmItem::getOaFormItemId, batch.getOaFormItemId());
-    }
-    if (planItem.getBomRowId() != null && sameText(materialCode, planItem.getMaterialCode())) {
-      query.eq(QuotePriceTypeConfirmItem::getBomRowId, planItem.getBomRowId());
-    }
-    List<QuotePriceTypeConfirmItem> items =
-        priceTypeConfirmItemMapper.selectList(
-            query.orderByDesc(QuotePriceTypeConfirmItem::getId).last("LIMIT 1"));
-    return items == null || items.isEmpty() ? null : items.get(0).getId();
+    // 缺口也先作为候选写入，失败收尾时才替换当前缺口。
+    gap.setCurrentFlag(CURRENT_FLAG_HISTORY);
   }
 
   private String actionTypeForGap(String gapType) {
@@ -956,9 +842,6 @@ public class PricePrepareServiceImpl implements PricePrepareService {
         request.getOaNo().trim(),
         oaFormItemId,
         topProductCode,
-        StringUtils.hasText(request.getPriceTypeConfirmNo())
-            ? request.getPriceTypeConfirmNo().trim()
-            : null,
         topProductCodes,
         periodMonth,
         priceAsOfTime,
@@ -993,7 +876,6 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     result.setOaNo(batch.getOaNo());
     result.setOaFormItemId(batch.getOaFormItemId());
     result.setTopProductCode(batch.getTopProductCode());
-    result.setPriceTypeConfirmNo(batch.getPriceTypeConfirmNo());
     result.setPeriodMonth(batch.getPeriodMonth());
     result.setBomPurpose(batch.getBomPurpose());
     result.setSourceType(batch.getSourceType());
@@ -1015,6 +897,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       PricePrepareBatch batch, Execution execution) {
     if (execution.persist) {
       batchMapper.updateById(batch);
+      currentStateService.finalizeBatch(batch);
     }
     PricePrepareCalculationResult calculation = new PricePrepareCalculationResult();
     calculation.setSummary(toResult(batch));
@@ -1034,21 +917,6 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     return value == null ? 0 : value;
   }
 
-  private boolean isOaScenario(PricePrepareBatch batch) {
-    return batch == null
-        || !QuotePriceScenarioType.FINANCE_QUOTE_BASE.name().equals(batch.getScenarioType());
-  }
-
-  private void invalidateOaTrialVersion(NormalizedGenerateRequest req) {
-    if (req.scenarioContext().scenarioType() != QuotePriceScenarioType.OA_LOCKED
-        || req.oaFormItemId() == null
-        || !StringUtils.hasText(req.topProductCode())) {
-      return;
-    }
-    versionInvalidationService.invalidateProduct(
-        req.oaNo(), req.oaFormItemId(), req.topProductCode(), req.periodMonth());
-  }
-
   private LocalDateTime currentTime() {
     return normalizePriceAsOfTime(LocalDateTime.now(clock));
   }
@@ -1063,7 +931,6 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       String oaNo,
       Long oaFormItemId,
       String topProductCode,
-      String priceTypeConfirmNo,
       List<String> topProductCodes,
       String periodMonth,
       LocalDateTime priceAsOfTime,

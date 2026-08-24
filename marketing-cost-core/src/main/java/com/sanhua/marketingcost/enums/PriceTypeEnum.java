@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.enums;
 
 import java.util.EnumSet;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 
@@ -51,6 +52,29 @@ public enum PriceTypeEnum {
   }
 
   /**
+   * 把价格导入、正式发布和人工维护使用的别名统一成路由表标准文案。
+   *
+   * <p>结算固定价在取价时仍属于 FIXED 桶，但保留独立路由文案，便于页面说明价格来源。
+   */
+  public static String normalizeRouteText(String value) {
+    if (value == null) {
+      return null;
+    }
+    String text = value.trim();
+    if (text.isEmpty()) {
+      return null;
+    }
+    return switch (text.toUpperCase(Locale.ROOT)) {
+      case "FIXED", "FIXED_PURCHASE", "PURCHASE_FIXED", "固定采购价", "采购固定价" -> "固定价";
+      case "SETTLE", "SETTLE_FIXED", "结算价", "家用结算价" -> "结算固定价";
+      case "LINKED" -> "联动价";
+      case "RANGE" -> "区间价";
+      case "MAKE", "MAKE_PART" -> "自制件";
+      default -> text;
+    };
+  }
+
+  /**
    * 反查：字符串 → 枚举。
    *
    * <p>支持双别名兼容（V48 起 lp_material_price_type 实际可能仍含历史值，需平滑过渡）：
@@ -67,8 +91,8 @@ public enum PriceTypeEnum {
     if (dbText == null) {
       return Optional.empty();
     }
-    String s = dbText.trim();
-    if (s.isEmpty()) {
+    String s = normalizeRouteText(dbText);
+    if (s == null || s.isEmpty()) {
       return Optional.empty();
     }
     return switch (s) {

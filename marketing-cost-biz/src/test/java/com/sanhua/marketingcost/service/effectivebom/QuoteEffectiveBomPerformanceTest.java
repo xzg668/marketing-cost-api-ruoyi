@@ -96,7 +96,7 @@ class QuoteEffectiveBomPerformanceTest {
     EffectiveBomVariantInput variant =
         new EffectiveBomVariantInput(
             "2026-08", "RAW-PERF-1", "210", "P", "BOX", Map.of(), built);
-    return persistence.persistConfirmed(
+    return persistence.persistCurrentVariant(
         new QuoteEffectiveBomPersistenceRequest(snapshotId, 9527L, Map.of(), variant));
   }
 

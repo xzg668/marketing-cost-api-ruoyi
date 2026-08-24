@@ -25,14 +25,13 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
-import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmItem;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
-import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmItemMapper;
 import com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService;
+import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.sql.Timestamp;
@@ -74,8 +73,8 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
   private final PricePrepareBatchMapper batchMapper;
   private final PricePrepareItemMapper itemMapper;
   private final PricePrepareGapMapper gapMapper;
-  private final QuotePriceTypeConfirmItemMapper priceTypeConfirmItemMapper;
   private final MakePartNoScrapConfirmationService noScrapConfirmationService;
+  private final MaterialPriceRouterService materialPriceRouterService;
 
   public PricePrepareQueryServiceImpl(
       OaFormMapper oaFormMapper,
@@ -83,15 +82,15 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
       PricePrepareBatchMapper batchMapper,
       PricePrepareItemMapper itemMapper,
       PricePrepareGapMapper gapMapper,
-      QuotePriceTypeConfirmItemMapper priceTypeConfirmItemMapper,
-      MakePartNoScrapConfirmationService noScrapConfirmationService) {
+      MakePartNoScrapConfirmationService noScrapConfirmationService,
+      MaterialPriceRouterService materialPriceRouterService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.batchMapper = batchMapper;
     this.itemMapper = itemMapper;
     this.gapMapper = gapMapper;
-    this.priceTypeConfirmItemMapper = priceTypeConfirmItemMapper;
     this.noScrapConfirmationService = noScrapConfirmationService;
+    this.materialPriceRouterService = materialPriceRouterService;
   }
 
   @Override
@@ -123,6 +122,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
       oaSummary.setTopProductCount(oaSummary.getTopProductCount() + 1);
       oaSummary.setTotalCount(oaSummary.getTotalCount() + topSummary.getTotalCount());
       oaSummary.setReadyCount(oaSummary.getReadyCount() + topSummary.getReadyCount());
+      oaSummary.setWarningCount(oaSummary.getWarningCount() + topSummary.getWarningCount());
       oaSummary.setGapCount(oaSummary.getGapCount() + topSummary.getGapCount());
       if (SUMMARY_READY.equals(topSummary.getStatus())) {
         oaSummary.setReadyTopProductCount(oaSummary.getReadyTopProductCount() + 1);
@@ -312,87 +312,24 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
     if (gaps == null || gaps.isEmpty()) {
       return;
     }
-    Map<Long, QuotePriceTypeConfirmItem> confirmItemById = loadConfirmItemsById(gaps);
-    for (PricePrepareGap gap : gaps) {
-      Long itemId = gap == null ? null : gap.getPriceTypeConfirmItemId();
-      QuotePriceTypeConfirmItem confirmItem = itemId == null ? null : confirmItemById.get(itemId);
-      String targetMaterialCode =
-          firstText(gap == null ? null : gap.getGapMaterialCode(), gap == null ? null : gap.getMaterialCode());
-      if (confirmItem != null
-          && sameText(confirmItem.getMaterialCode(), targetMaterialCode)
-          && StringUtils.hasText(confirmItem.getPriceType())) {
-        gap.setPriceType(normalizePriceTypeText(confirmItem.getPriceType()));
-      }
-    }
+    Map<String, String> automaticTypes = new HashMap<>();
     for (PricePrepareGap gap : gaps) {
       if (gap == null || StringUtils.hasText(gap.getPriceType())) {
         continue;
       }
-      QuotePriceTypeConfirmItem confirmItem =
-          findPriceTypeConfirmItem(gap, firstText(gap.getGapMaterialCode(), gap.getMaterialCode()));
-      if (confirmItem == null) {
-        confirmItem = findPriceTypeConfirmItem(gap, gap.getMaterialCode());
+      String materialCode = firstText(gap.getGapMaterialCode(), gap.getMaterialCode());
+      if (!StringUtils.hasText(materialCode)) {
+        continue;
       }
-      if (confirmItem != null) {
-        gap.setPriceTypeConfirmItemId(confirmItem.getId());
-        if (StringUtils.hasText(confirmItem.getPriceType())) {
-          gap.setPriceType(normalizePriceTypeText(confirmItem.getPriceType()));
-        }
-      }
-    }
-  }
-
-  private Map<Long, QuotePriceTypeConfirmItem> loadConfirmItemsById(List<PricePrepareGap> gaps) {
-    Set<Long> ids = new LinkedHashSet<>();
-    for (PricePrepareGap gap : gaps) {
-      if (gap != null && gap.getPriceTypeConfirmItemId() != null) {
-        ids.add(gap.getPriceTypeConfirmItemId());
+      String priceType = automaticTypes.computeIfAbsent(
+          materialCode,
+          code -> materialPriceRouterService.resolve(code, gap.getPeriodMonth(), LocalDate.now())
+              .map(route -> route.priceType().getDbText())
+              .orElse(""));
+      if (StringUtils.hasText(priceType)) {
+        gap.setPriceType(priceType);
       }
     }
-    if (ids.isEmpty()) {
-      return Map.of();
-    }
-    List<QuotePriceTypeConfirmItem> items =
-        priceTypeConfirmItemMapper.selectList(
-            Wrappers.<QuotePriceTypeConfirmItem>lambdaQuery()
-                .in(QuotePriceTypeConfirmItem::getId, ids));
-    Map<Long, QuotePriceTypeConfirmItem> result = new HashMap<>();
-    if (items == null) {
-      return result;
-    }
-    for (QuotePriceTypeConfirmItem item : items) {
-      if (item != null && item.getId() != null) {
-        result.put(item.getId(), item);
-      }
-    }
-    return result;
-  }
-
-  private QuotePriceTypeConfirmItem findPriceTypeConfirmItem(
-      PricePrepareGap gap, String materialCode) {
-    String confirmNo = trimToNull(gap == null ? null : gap.getPriceTypeConfirmNo());
-    String targetMaterialCode = trimToNull(materialCode);
-    if (confirmNo == null || targetMaterialCode == null) {
-      return null;
-    }
-    LambdaQueryWrapper<QuotePriceTypeConfirmItem> query =
-        Wrappers.<QuotePriceTypeConfirmItem>lambdaQuery()
-            .eq(QuotePriceTypeConfirmItem::getConfirmNo, confirmNo)
-            .eq(QuotePriceTypeConfirmItem::getMaterialCode, targetMaterialCode);
-    String productCode = trimToNull(gap.getTopProductCode());
-    if (productCode != null) {
-      query.eq(QuotePriceTypeConfirmItem::getProductCode, productCode);
-    }
-    if (gap.getOaFormItemId() != null) {
-      query.eq(QuotePriceTypeConfirmItem::getOaFormItemId, gap.getOaFormItemId());
-    }
-    List<QuotePriceTypeConfirmItem> items =
-        priceTypeConfirmItemMapper.selectList(
-            query
-                .orderByDesc(QuotePriceTypeConfirmItem::getTypeEffectiveFrom)
-                .orderByDesc(QuotePriceTypeConfirmItem::getId)
-                .last("LIMIT 1"));
-    return items == null || items.isEmpty() ? null : items.get(0);
   }
 
   private void enrichNoScrapConfirmations(List<PricePrepareGap> gaps) {
@@ -486,6 +423,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
                 "top_product_code",
                 "COUNT(*) AS total_count",
                 "SUM(CASE WHEN status = '" + ITEM_STATUS_READY + "' THEN 1 ELSE 0 END) AS ready_count",
+                "SUM(CASE WHEN carried_forward = 1 THEN 1 ELSE 0 END) AS warning_count",
                 "SUM(CASE WHEN status = '" + ITEM_STATUS_FAILED + "' THEN 1 ELSE 0 END) AS failed_count",
                 "MAX(updated_at) AS updated_at");
     itemQuery.eq("current_flag", 1);
@@ -512,6 +450,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
         summary.setTopProductCode(rowTopProductCode);
         summary.setTotalCount(number(row, "total_count"));
         summary.setReadyCount(number(row, "ready_count"));
+        summary.setWarningCount(number(row, "warning_count"));
         summary.setUpdatedAt(time(row, "updated_at"));
         int failedCount = number(row, "failed_count");
         summary.setStatus(topStatus(summary, failedCount));
@@ -584,6 +523,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
                 "top_product_code",
                 "COUNT(*) AS total_count",
                 "SUM(CASE WHEN status = '" + ITEM_STATUS_READY + "' THEN 1 ELSE 0 END) AS ready_count",
+                "SUM(CASE WHEN carried_forward = 1 THEN 1 ELSE 0 END) AS warning_count",
                 "SUM(CASE WHEN status = '" + ITEM_STATUS_FAILED + "' THEN 1 ELSE 0 END) AS failed_count",
                 "MAX(updated_at) AS updated_at")
             .in("oa_no", oaNos)
@@ -605,6 +545,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
         summary.setTopProductCode(rowTopProductCode);
         summary.setTotalCount(number(row, "total_count"));
         summary.setReadyCount(number(row, "ready_count"));
+        summary.setWarningCount(number(row, "warning_count"));
         summary.setUpdatedAt(time(row, "updated_at"));
         summary.setStatus(topStatus(summary, number(row, "failed_count")));
         summaries.put(summaryKey(rowOaNo, rowTopProductCode), summary);
@@ -753,7 +694,6 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
     eqIfText(query, PricePrepareBatch::getOaNo, request.getOaNo());
     eqIfValue(query, PricePrepareBatch::getOaFormItemId, request.getOaFormItemId());
     eqIfText(query, PricePrepareBatch::getTopProductCode, request.getTopProductCode());
-    eqIfText(query, PricePrepareBatch::getPriceTypeConfirmNo, request.getPriceTypeConfirmNo());
     eqIfText(query, PricePrepareBatch::getPeriodMonth, request.getPeriodMonth());
     eqIfText(query, PricePrepareBatch::getScenarioType, request.getScenarioType());
     eqIfText(query, PricePrepareBatch::getStatus, request.getStatus());
@@ -768,7 +708,6 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
       query.eq(PricePrepareItem::getCurrentFlag, 1);
     }
     eqIfText(query, PricePrepareItem::getPeriodMonth, request.getPeriodMonth());
-    eqIfText(query, PricePrepareItem::getPriceTypeConfirmNo, request.getPriceTypeConfirmNo());
     eqIfText(query, PricePrepareItem::getOaNo, request.getOaNo());
     eqIfValue(query, PricePrepareItem::getOaFormItemId, request.getOaFormItemId());
     eqIfText(query, PricePrepareItem::getTopProductCode, request.getTopProductCode());
@@ -785,7 +724,6 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
       query.eq(PricePrepareGap::getCurrentFlag, 1);
     }
     eqIfText(query, PricePrepareGap::getPeriodMonth, request.getPeriodMonth());
-    eqIfText(query, PricePrepareGap::getPriceTypeConfirmNo, request.getPriceTypeConfirmNo());
     eqIfText(query, PricePrepareGap::getOaNo, request.getOaNo());
     eqIfValue(query, PricePrepareGap::getOaFormItemId, request.getOaFormItemId());
     eqIfText(query, PricePrepareGap::getTopProductCode, request.getTopProductCode());

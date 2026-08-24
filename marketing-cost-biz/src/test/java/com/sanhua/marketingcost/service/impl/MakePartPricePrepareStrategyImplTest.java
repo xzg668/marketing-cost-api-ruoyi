@@ -58,7 +58,9 @@ class MakePartPricePrepareStrategyImplTest {
   void prepareRegeneratesBeforeReadingReadyResult() {
     MakePartPriceGenerateResponse response =
         new MakePartPriceGenerateResponse("BATCH-GEN", 1, 1, 1, 0, 0);
-    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(response);
+    when(generationService.generateByOaMaterial(
+            "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", null, null))
+        .thenReturn(response);
     when(calcRowMapper.selectList(any())).thenReturn(List.of(okRow(501L, "BATCH-GEN")));
 
     MakePartPricePrepareResult result =
@@ -70,7 +72,8 @@ class MakePartPricePrepareStrategyImplTest {
     assertThat(result.getPriceSource()).isEqualTo("自制件价格生成");
     assertThat(result.getResultRefType()).isEqualTo("MAKE_PART_PRICE");
     assertThat(result.getResultRefId()).isEqualTo(501L);
-    verify(generationService).generateByOa("OA-001", "COMMERCIAL", "2026-05", null);
+    verify(generationService).generateByOaMaterial(
+        "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", null, null);
     ArgumentCaptor<Wrapper<MakePartPriceCalcRow>> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(calcRowMapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment()).contains("calc_batch_id");
@@ -82,7 +85,9 @@ class MakePartPricePrepareStrategyImplTest {
   void missingResultTriggersGeneration() {
     MakePartPriceGenerateResponse response =
         new MakePartPriceGenerateResponse("BATCH-GEN", 1, 1, 1, 0, 0);
-    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(response);
+    when(generationService.generateByOaMaterial(
+            "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", null, null))
+        .thenReturn(response);
     when(calcRowMapper.selectList(any())).thenReturn(List.of(okRow(502L, "BATCH-GEN")));
 
     MakePartPricePrepareResult result =
@@ -91,7 +96,8 @@ class MakePartPricePrepareStrategyImplTest {
     assertThat(result.getStatus()).isEqualTo("READY");
     assertThat(result.getResultRefId()).isEqualTo(502L);
     assertThat(result.getMessage()).contains("已触发生成");
-    verify(generationService).generateByOa("OA-001", "COMMERCIAL", "2026-05", null);
+    verify(generationService).generateByOaMaterial(
+        "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", null, null);
   }
 
   @Test
@@ -100,7 +106,8 @@ class MakePartPricePrepareStrategyImplTest {
     LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 26, 10, 30);
     MakePartPriceGenerateResponse response =
         new MakePartPriceGenerateResponse("BATCH-GEN", 1, 1, 1, 0, 0);
-    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", priceAsOfTime))
+    when(generationService.generateByOaMaterial(
+            "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", priceAsOfTime, null))
         .thenReturn(response);
     MakePartPriceCalcRow ready = okRow(503L, "BATCH-GEN");
     ready.setPriceAsOfTime(priceAsOfTime);
@@ -111,7 +118,8 @@ class MakePartPricePrepareStrategyImplTest {
 
     assertThat(result.getStatus()).isEqualTo("READY");
     assertThat(result.getResultRefId()).isEqualTo(503L);
-    verify(generationService).generateByOa("OA-001", "COMMERCIAL", "2026-05", priceAsOfTime);
+    verify(generationService).generateByOaMaterial(
+        "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", priceAsOfTime, null);
     ArgumentCaptor<Wrapper<MakePartPriceCalcRow>> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(calcRowMapper).selectList(captor.capture());
     Wrapper<MakePartPriceCalcRow> firstQuery = captor.getAllValues().get(0);
@@ -128,8 +136,8 @@ class MakePartPricePrepareStrategyImplTest {
         "GROUP-1",
         "PPR-OA-1",
         Map.of("Cu", new BigDecimal("90")));
-    when(generationService.generateByOa(
-            "OA-001", "COMMERCIAL", "2026-05", priceAsOfTime, context))
+    when(generationService.generateByOaMaterial(
+            "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", priceAsOfTime, context))
         .thenReturn(new MakePartPriceGenerateResponse("BATCH-FIN", 1, 1, 1, 0, 0));
     when(calcRowMapper.selectList(any())).thenReturn(List.of(okRow(504L, "BATCH-FIN")));
 
@@ -137,8 +145,8 @@ class MakePartPricePrepareStrategyImplTest {
         "OA-001", "COMMERCIAL", "2026-05", priceAsOfTime, context, planItem("MAKE-001"));
 
     assertThat(result.getStatus()).isEqualTo("READY");
-    verify(generationService).generateByOa(
-        "OA-001", "COMMERCIAL", "2026-05", priceAsOfTime, context);
+    verify(generationService).generateByOaMaterial(
+        "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", priceAsOfTime, context);
     ArgumentCaptor<Wrapper<MakePartPriceCalcRow>> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(calcRowMapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment()).contains("price_scenario_type");
@@ -150,7 +158,9 @@ class MakePartPricePrepareStrategyImplTest {
   void missingRawPriceWritesGap() {
     MakePartPriceGenerateResponse response =
         new MakePartPriceGenerateResponse("BATCH-MISS", 1, 1, 0, 0, 1);
-    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(response);
+    when(generationService.generateByOaMaterial(
+            "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", null, null))
+        .thenReturn(response);
     when(calcRowMapper.selectList(any()))
         .thenReturn(List.of())
         .thenReturn(List.of(row("BATCH-MISS", MakePartPriceCalculator.STATUS_MISSING_RAW_PRICE,
@@ -163,6 +173,7 @@ class MakePartPricePrepareStrategyImplTest {
     assertThat(result.getGaps()).hasSize(1);
     assertThat(result.getGaps().get(0).getGapType()).isEqualTo("MISSING_PRICE");
     assertThat(result.getGaps().get(0).getGapMaterialCode()).isEqualTo("RAW-001");
+    assertThat(result.getGaps().get(0).getMaterialName()).isEqualTo("RAW-001-name");
     assertThat(result.getGaps().get(0).getSourceTable()).isEqualTo("lp_make_part_price_gap_item");
   }
 
@@ -171,7 +182,9 @@ class MakePartPricePrepareStrategyImplTest {
   void missingScrapPriceWritesGap() {
     MakePartPriceGenerateResponse response =
         new MakePartPriceGenerateResponse("BATCH-MISS", 1, 1, 0, 0, 1);
-    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(response);
+    when(generationService.generateByOaMaterial(
+            "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", null, null))
+        .thenReturn(response);
     when(calcRowMapper.selectList(any()))
         .thenReturn(List.of())
         .thenReturn(List.of(row("BATCH-MISS", MakePartPriceCalculator.STATUS_MISSING_SCRAP_PRICE,
@@ -183,6 +196,7 @@ class MakePartPricePrepareStrategyImplTest {
     assertThat(result.getStatus()).isEqualTo("MISSING_PRICE");
     assertThat(result.getGaps()).hasSize(1);
     assertThat(result.getGaps().get(0).getGapMaterialCode()).isEqualTo("SCRAP-001");
+    assertThat(result.getGaps().get(0).getMaterialName()).isEqualTo("SCRAP-001-name");
     assertThat(result.getGaps().get(0).getMessage()).contains("缺回收价格");
   }
 
@@ -191,7 +205,9 @@ class MakePartPricePrepareStrategyImplTest {
   void missingBomWritesStructureGap() {
     MakePartPriceGenerateResponse response =
         new MakePartPriceGenerateResponse("BATCH-BOM", 1, 1, 0, 0, 1);
-    when(generationService.generateByOa("OA-001", "COMMERCIAL", "2026-05", null)).thenReturn(response);
+    when(generationService.generateByOaMaterial(
+            "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", null, null))
+        .thenReturn(response);
     when(calcRowMapper.selectList(any()))
         .thenReturn(List.of())
         .thenReturn(List.of(row("BATCH-BOM", "MISSING_BOM", null, null, "缺 U9 直接子项")));
@@ -251,8 +267,11 @@ class MakePartPricePrepareStrategyImplTest {
     row.setBusinessUnitType("COMMERCIAL");
     row.setPricingMonth("2026-05");
     row.setParentMaterialNo("MAKE-001");
+    row.setParentMaterialName("MAKE-001-name");
     row.setChildMaterialNo(childMaterialNo);
+    row.setChildMaterialName(childMaterialNo == null ? null : childMaterialNo + "-name");
     row.setScrapCode(scrapCode);
+    row.setScrapName(scrapCode == null ? null : scrapCode + "-name");
     row.setStatus(status);
     row.setRemark(remark);
     row.setPriceComplete(false);

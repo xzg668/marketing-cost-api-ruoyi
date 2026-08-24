@@ -11,7 +11,18 @@ public record QuoteCuAdjustmentCalcRequest(
     String pricingMonth,
     String oaPricePrepareNo,
     String calcObjectKey,
-    IntConsumer progress) {
+    IntConsumer progress,
+    boolean automaticCompletion) {
+
+  public QuoteCuAdjustmentCalcRequest(
+      OaForm form,
+      OaFormItem item,
+      String pricingMonth,
+      String oaPricePrepareNo,
+      String calcObjectKey,
+      IntConsumer progress) {
+    this(form, item, pricingMonth, oaPricePrepareNo, calcObjectKey, progress, false);
+  }
 
   public QuoteCuAdjustmentCalcRequest {
     progress = progress == null ? ignored -> {} : progress;

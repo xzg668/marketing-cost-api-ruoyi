@@ -17,7 +17,11 @@ public class LinkedPriceEnsureResult {
   private List<FailedItem> failedItems = new ArrayList<>();
 
   public void addFailedItem(String itemCode, String reason) {
-    failedItems.add(new FailedItem(itemCode, reason));
+    addFailedItem(itemCode, null, reason);
+  }
+
+  public void addFailedItem(String itemCode, String reasonCode, String reason) {
+    failedItems.add(new FailedItem(itemCode, reasonCode, reason));
     failedCount = failedItems.size();
   }
 
@@ -25,13 +29,19 @@ public class LinkedPriceEnsureResult {
   @Setter
   public static class FailedItem {
     private String itemCode;
+    private String reasonCode;
     private String reason;
 
     public FailedItem() {
     }
 
     public FailedItem(String itemCode, String reason) {
+      this(itemCode, null, reason);
+    }
+
+    public FailedItem(String itemCode, String reasonCode, String reason) {
       this.itemCode = itemCode;
+      this.reasonCode = reasonCode;
       this.reason = reason;
     }
   }

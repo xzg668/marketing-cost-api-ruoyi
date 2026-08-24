@@ -40,6 +40,13 @@ public class QuoteRequestCollaborationController {
     return execute(() -> projectionService.summary(oaNo));
   }
 
+  @PostMapping("/collaboration-summary/refresh")
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
+  public CommonResult<QuoteCollaborationSummaryResponse> refreshSummary(
+      @PathVariable String oaNo) {
+    return execute(() -> projectionService.refreshSummary(oaNo));
+  }
+
   @PreAuthorize("@ss.hasAnyPermi('ingest:quote:bom-check')")
   @PostMapping("/items/{itemId}/collaboration/scan")
   public CommonResult<QuoteItemCollaborationResponse> scan(

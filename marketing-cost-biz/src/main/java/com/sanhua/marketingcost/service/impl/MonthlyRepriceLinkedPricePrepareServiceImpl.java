@@ -17,7 +17,6 @@ import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MonthlyRepriceAuditService;
 import com.sanhua.marketingcost.service.MonthlyRepriceLinkedPricePrepareService;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -127,19 +126,10 @@ public class MonthlyRepriceLinkedPricePrepareServiceImpl
   }
 
   private Set<String> loadLinkedItemCodes(MonthlyRepriceBatch batch) {
-    LocalDate priceDate = batch.getPriceAsOfTime() == null ? null : batch.getPriceAsOfTime().toLocalDate();
     var query = Wrappers.lambdaQuery(PriceLinkedItem.class)
         .eq(PriceLinkedItem::getDeleted, 0)
         .eq(PriceLinkedItem::getBusinessUnitType, batch.getBusinessUnitType())
         .le(PriceLinkedItem::getPricingMonth, batch.getPricingMonth());
-    if (priceDate != null) {
-      query.and(q -> q.le(PriceLinkedItem::getEffectiveFrom, priceDate)
-          .or()
-          .isNull(PriceLinkedItem::getEffectiveFrom));
-      query.and(q -> q.ge(PriceLinkedItem::getEffectiveTo, priceDate)
-          .or()
-          .isNull(PriceLinkedItem::getEffectiveTo));
-    }
     List<PriceLinkedItem> linkedItems = priceLinkedItemMapper.selectList(
         query.orderByAsc(PriceLinkedItem::getMaterialCode)
             .orderByAsc(PriceLinkedItem::getId));

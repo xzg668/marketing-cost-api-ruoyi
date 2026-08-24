@@ -21,7 +21,30 @@ public interface OaFormItemMapper extends BaseMapper<OaFormItem> {
   List<OaFormItem> selectList(@Param("ew") Wrapper<OaFormItem> queryWrapper);
 
   /**
-   * T3：月度调价只按 OA 已核算状态展开范围，不从 lp_cost_run_result 反推。
+   * 锁定待完成核算的产品行。
+   *
+   * <p>这里使用显式 SQL，而不通过 {@code selectOne + last("LIMIT 1 FOR UPDATE")}：
+   * {@link DataScope} 的 SQL 重写会把锁子句序列化到 LIMIT 前面，形成 MySQL 不接受的
+   * {@code FOR UPDATE LIMIT 1}。主键和 OA 表头共同限定唯一行，并显式带入业务单元，既保持
+   * 数据隔离，也保证锁语句稳定为 {@code LIMIT 1 FOR UPDATE}。
+   */
+  @Select("""
+      SELECT *
+        FROM oa_form_item
+       WHERE id = #{itemId}
+         AND oa_form_id = #{oaFormId}
+         AND COALESCE(deleted, 0) = 0
+         AND business_unit_type = #{businessUnitType}
+       LIMIT 1
+       FOR UPDATE
+      """)
+  OaFormItem selectForCostCompletion(
+      @Param("itemId") Long itemId,
+      @Param("oaFormId") Long oaFormId,
+      @Param("businessUnitType") String businessUnitType);
+
+  /**
+   * T3：月度调价只按 OA 已核算状态展开范围，不从成本历史版本反推。
    *
    * <p>客户名称当前稳定来源是 OA 表头 customer；产品料号和包装方式来源于 OA 明细行。
    */

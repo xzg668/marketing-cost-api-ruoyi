@@ -66,7 +66,7 @@ public final class EffectiveBomVariantHasherImpl
     ArrayNode nodes = objectMapper.createArrayNode();
     input.buildResult().nodes().stream()
         .sorted(NODE_ORDER)
-        .map(this::canonicalNode)
+        .map(node -> canonicalNode(node, input.priceOrgCode()))
         .forEach(nodes::add);
     root.set("nodes", nodes);
 
@@ -89,7 +89,7 @@ public final class EffectiveBomVariantHasherImpl
     }
   }
 
-  private ObjectNode canonicalNode(EffectiveBomNodeDraft node) {
+  private ObjectNode canonicalNode(EffectiveBomNodeDraft node, String topPriceOrgCode) {
     ObjectNode value = objectMapper.createObjectNode();
     putText(value, "nodeKey", node.nodeKey());
     putText(value, "parentNodeKey", node.parentNodeKey());
@@ -99,6 +99,10 @@ public final class EffectiveBomVariantHasherImpl
     putText(value, "materialCode", node.materialCode());
     putText(value, "materialName", node.materialName());
     putText(value, "materialSpec", node.materialSpec());
+    // 普通节点与顶层组织相同，不改变历史指纹；只有跨组织节点才把组织纳入指纹。
+    if (!java.util.Objects.equals(normalize(node.priceOrgCode()), normalize(topPriceOrgCode))) {
+      putText(value, "priceOrgCode", node.priceOrgCode());
+    }
     putDecimal(value, "qtyPerParent", node.qtyPerParent());
     putDecimal(value, "qtyPerTop", node.qtyPerTop());
     putText(value, "sourceMaterialShape", node.sourceMaterialShape());
@@ -166,7 +170,7 @@ public final class EffectiveBomVariantHasherImpl
       throw new IllegalArgumentException("最终有效BOM构建结果不能为空");
     }
     if (input.buildResult().blocked()) {
-      throw new IllegalArgumentException("最终有效BOM仍有阻断项，不能确认或计算指纹");
+      throw new IllegalArgumentException("最终有效BOM仍有阻断项，不能生成或计算指纹");
     }
     if (input.buildResult().nodes().isEmpty()) {
       throw new IllegalArgumentException("最终有效BOM节点为空");

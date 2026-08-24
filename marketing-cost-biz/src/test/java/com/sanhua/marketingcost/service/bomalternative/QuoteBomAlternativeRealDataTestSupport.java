@@ -7,17 +7,13 @@ import static org.mockito.Mockito.when;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
 import com.sanhua.marketingcost.entity.BomByproductCostRule;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.BomSettlementRule;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
-import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
-import com.sanhua.marketingcost.service.QuoteBomConfirmationService;
-import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.impl.QuoteBomAlternativeRebuildServiceImpl;
 import com.sanhua.marketingcost.service.rule.BomByproductCostRuleConditionEvaluator;
 import com.sanhua.marketingcost.service.rule.BomByproductCostRuleMatcher;
@@ -245,9 +241,10 @@ final class QuoteBomAlternativeRealDataTestSupport {
                 selectedMaterialCode,
                 expectedVersion,
                 BUILD_BATCH,
-                false,
                 "quote-user",
                 remark));
+    // 用户显式重新核算后，才按刚保存的选择重建当前 BOM 工作区。
+    rebuildCostingRows(result.selection().selectedMaterialCode());
     return snapshot(result.selection(), result);
   }
 
@@ -298,12 +295,6 @@ final class QuoteBomAlternativeRealDataTestSupport {
             new BomAlternativeGroupKeyGeneratorImpl());
     QuoteBomPreparationRecordMapper preparationMapper =
         mock(QuoteBomPreparationRecordMapper.class);
-    BomCostingRowMapper costingRowMapper =
-        mock(BomCostingRowMapper.class);
-    QuoteBomConfirmationService confirmationService =
-        mock(QuoteBomConfirmationService.class);
-    QuoteProductBomCostingBuildService buildService =
-        mock(QuoteProductBomCostingBuildService.class);
     QuoteBomAlternativeWorkflowInvalidationService invalidationService =
         mock(
             QuoteBomAlternativeWorkflowInvalidationService.class);
@@ -311,63 +302,16 @@ final class QuoteBomAlternativeRealDataTestSupport {
     when(rawMapper.selectList(any())).thenReturn(sourceRows);
     when(preparationMapper.selectOne(any()))
         .thenReturn(preparationRecord());
-    when(costingRowMapper.selectQuoteCostingSnapshot(
-            any(), any(), any(), any()))
-        .thenAnswer(
-            ignored -> List.copyOf(persistedCostingRows));
-    when(confirmationService.hasActiveConfirmation(
-            any(), any(), any(), any()))
-        .thenReturn(false);
     when(invalidationService.invalidate(
             any(), any(), any(), any()))
         .thenReturn(
             new QuoteBomAlternativeWorkflowInvalidationResult(
                 2, 3, 4));
-    when(buildService.buildByOaFormItem(
-            any(), any(), any()))
-        .thenAnswer(
-            ignored -> {
-              QuoteBomAlternativeSelectionResult current =
-                  selectionService.findCurrent(
-                      scope(), group.alternativeGroupKey());
-              rebuildCostingRows(
-                  current.selectedMaterialCode());
-              return new QuoteBomCostingBuildResponse(
-                  20L,
-                  null,
-                  ITEM_ID,
-                  OA_NO,
-                  TOP,
-                  "NON_BARE",
-                  PERIOD,
-                  "qba12-rebuild-"
-                      + current.selectionVersion(),
-                  persistedCostingRows.size(),
-                  lastSourceRefCount,
-                  (int)
-                      persistedCostingRows.stream()
-                          .filter(
-                              row ->
-                                  Integer.valueOf(1)
-                                      .equals(
-                                          row
-                                              .getSubtreeCostRequired()))
-                          .count(),
-                  Map.of(
-                      "RAW_PRODUCT_BOM",
-                      persistedCostingRows.size()),
-                  List.of(),
-                  LocalDateTime.now(CLOCK));
-            });
-
     return new QuoteBomAlternativeRebuildServiceImpl(
         rawMapper,
         resolver,
         selectionService,
         preparationMapper,
-        costingRowMapper,
-        confirmationService,
-        buildService,
         invalidationService);
   }
 

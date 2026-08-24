@@ -15,13 +15,9 @@ import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
-import com.sanhua.marketingcost.entity.QuotePriceTypeConfirmBatch;
-import com.sanhua.marketingcost.entity.QuoteBomConfirmation;
 import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
-import com.sanhua.marketingcost.mapper.QuotePriceTypeConfirmBatchMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomConfirmationMapper;
 import com.sanhua.marketingcost.service.FinanceQuoteBasePriceService;
 import com.sanhua.marketingcost.service.PricePrepareService;
 import java.math.BigDecimal;
@@ -37,8 +33,6 @@ import org.mockito.Mockito;
 class FinancePricePrepareServiceImplTest {
   private PricePrepareBatchMapper batchMapper;
   private PricePrepareItemMapper itemMapper;
-  private QuotePriceTypeConfirmBatchMapper confirmBatchMapper;
-  private QuoteBomConfirmationMapper bomConfirmationMapper;
   private MakePartPriceCalcRowMapper makePartRowMapper;
   private FinanceQuoteBasePriceService financeBasePriceService;
   private PricePrepareService pricePrepareService;
@@ -49,8 +43,6 @@ class FinancePricePrepareServiceImplTest {
     MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
     TableInfoHelper.initTableInfo(assistant, PricePrepareBatch.class);
     TableInfoHelper.initTableInfo(assistant, PricePrepareItem.class);
-    TableInfoHelper.initTableInfo(assistant, QuotePriceTypeConfirmBatch.class);
-    TableInfoHelper.initTableInfo(assistant, QuoteBomConfirmation.class);
     TableInfoHelper.initTableInfo(assistant, MakePartPriceCalcRow.class);
   }
 
@@ -58,16 +50,12 @@ class FinancePricePrepareServiceImplTest {
   void setUp() {
     batchMapper = Mockito.mock(PricePrepareBatchMapper.class);
     itemMapper = Mockito.mock(PricePrepareItemMapper.class);
-    confirmBatchMapper = Mockito.mock(QuotePriceTypeConfirmBatchMapper.class);
-    bomConfirmationMapper = Mockito.mock(QuoteBomConfirmationMapper.class);
     makePartRowMapper = Mockito.mock(MakePartPriceCalcRowMapper.class);
     financeBasePriceService = Mockito.mock(FinanceQuoteBasePriceService.class);
     pricePrepareService = Mockito.mock(PricePrepareService.class);
     service = new FinancePricePrepareServiceImpl(
         batchMapper,
         itemMapper,
-        confirmBatchMapper,
-        bomConfirmationMapper,
         makePartRowMapper,
         financeBasePriceService,
         pricePrepareService);
@@ -78,8 +66,6 @@ class FinancePricePrepareServiceImplTest {
     PricePrepareBatch source = sourceBatch();
     when(batchMapper.selectOne(any())).thenReturn(source);
     when(batchMapper.updateById(source)).thenReturn(1);
-    when(confirmBatchMapper.selectOne(any())).thenReturn(confirmedBatch());
-    when(bomConfirmationMapper.selectOne(any())).thenReturn(confirmedBom());
     PricePrepareItem oaFixed = item("SET:FIXED", "MAT-FIXED", "FIXED_PRICE", "12.30", "30.75");
     PricePrepareItem oaRange = item("SET:RANGE", "MAT-RANGE", "RANGE_PRICE", "8.80", "17.60");
     PricePrepareItem oaLinked = item("SET:CU", "MAT-CU", "LINKED_PRICE", "102.039", "204.078");
@@ -124,7 +110,6 @@ class FinancePricePrepareServiceImplTest {
     assertThat(request.getValue().getPriceAsOfTime()).isEqualTo(source.getPriceAsOfTime());
     assertThat(request.getValue().getOaFormItemId()).isEqualTo(101L);
     assertThat(request.getValue().getTopProductCode()).isEqualTo("TOP-1");
-    assertThat(request.getValue().getPriceTypeConfirmNo()).isEqualTo("QPTC-1");
   }
 
   @Test
@@ -133,8 +118,6 @@ class FinancePricePrepareServiceImplTest {
     source.setScenarioGroupNo("GROUP-1");
     PricePrepareBatch finance = financeBatch(source);
     when(batchMapper.selectOne(any())).thenReturn(source).thenReturn(finance);
-    when(confirmBatchMapper.selectOne(any())).thenReturn(confirmedBatch());
-    when(bomConfirmationMapper.selectOne(any())).thenReturn(confirmedBom());
     PricePrepareItem oaFixed =
         item("SET:FIXED", "MAT-FIXED", "FIXED_PRICE", "12.30", "30.75");
     PricePrepareItem financeFixed =
@@ -160,8 +143,6 @@ class FinancePricePrepareServiceImplTest {
     PricePrepareBatch source = sourceBatch();
     source.setScenarioGroupNo("GROUP-1");
     when(batchMapper.selectOne(any())).thenReturn(source);
-    when(confirmBatchMapper.selectOne(any())).thenReturn(confirmedBatch());
-    when(bomConfirmationMapper.selectOne(any())).thenReturn(confirmedBom());
     when(itemMapper.selectList(any())).thenReturn(List.of(
         item("SET:FIXED", "MAT-FIXED", "FIXED_PRICE", "12.30", "30.75")));
     when(financeBasePriceService.getRequired("2026-05"))
@@ -178,8 +159,6 @@ class FinancePricePrepareServiceImplTest {
     PricePrepareBatch source = sourceBatch();
     source.setScenarioGroupNo("GROUP-1");
     when(batchMapper.selectOne(any())).thenReturn(source);
-    when(confirmBatchMapper.selectOne(any())).thenReturn(confirmedBatch());
-    when(bomConfirmationMapper.selectOne(any())).thenReturn(confirmedBom());
     PricePrepareItem oaMake = item(
         "SET:MAKE", "MAKE-1", "MAKE_PART_PRICE", "20", "40");
     oaMake.setResultRefId(10L);
@@ -235,7 +214,6 @@ class FinancePricePrepareServiceImplTest {
     batch.setOaNo("OA-1");
     batch.setOaFormItemId(101L);
     batch.setTopProductCode("TOP-1");
-    batch.setPriceTypeConfirmNo("QPTC-1");
     batch.setPeriodMonth("2026-05");
     batch.setBusinessUnitType("COMMERCIAL");
     batch.setBomPurpose("主制造");
@@ -254,7 +232,6 @@ class FinancePricePrepareServiceImplTest {
     batch.setOaNo(source.getOaNo());
     batch.setOaFormItemId(source.getOaFormItemId());
     batch.setTopProductCode(source.getTopProductCode());
-    batch.setPriceTypeConfirmNo(source.getPriceTypeConfirmNo());
     batch.setPeriodMonth(source.getPeriodMonth());
     batch.setBusinessUnitType(source.getBusinessUnitType());
     batch.setBomPurpose(source.getBomPurpose());
@@ -272,14 +249,6 @@ class FinancePricePrepareServiceImplTest {
     return batch;
   }
 
-  private QuotePriceTypeConfirmBatch confirmedBatch() {
-    QuotePriceTypeConfirmBatch batch = new QuotePriceTypeConfirmBatch();
-    batch.setConfirmNo("QPTC-1");
-    batch.setBomConfirmNo("QBOM-1");
-    batch.setStatus(QuotePriceTypeConfirmBatch.STATUS_CONFIRMED);
-    return batch;
-  }
-
   private FinanceBasePrice financeBasePrice() {
     FinanceBasePrice base = new FinanceBasePrice();
     base.setId(701L);
@@ -287,13 +256,6 @@ class FinancePricePrepareServiceImplTest {
     base.setPrice(new BigDecimal("90.000000"));
     base.setBusinessUnitType("COMMERCIAL");
     return base;
-  }
-
-  private QuoteBomConfirmation confirmedBom() {
-    QuoteBomConfirmation confirmation = new QuoteBomConfirmation();
-    confirmation.setConfirmNo("QBOM-1");
-    confirmation.setConfirmStatus(QuoteBomConfirmation.STATUS_CONFIRMED);
-    return confirmation;
   }
 
   private PricePrepareItem item(
@@ -309,7 +271,6 @@ class FinancePricePrepareServiceImplTest {
     item.setQuantity(new BigDecimal("2"));
     item.setUnitPrice(new BigDecimal(unitPrice));
     item.setAmount(new BigDecimal(amount));
-    item.setPriceTypeConfirmItemId(9001L);
     item.setResultRefType(resultRefType);
     item.setStatus("READY");
     return item;

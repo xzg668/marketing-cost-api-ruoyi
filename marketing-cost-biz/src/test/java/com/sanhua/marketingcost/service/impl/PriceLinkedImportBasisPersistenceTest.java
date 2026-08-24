@@ -1,15 +1,18 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.verify;
 
 import com.sanhua.marketingcost.dto.PriceLinkedImportBasisSaveResult;
 import com.sanhua.marketingcost.dto.PriceLinkedImportBasisSnapshot;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariableBinding;
+import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
 import java.lang.reflect.Method;
 import java.time.LocalDate;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.annotation.Transactional;
 
 @DisplayName("PLI2-09 类型2导入依据完整持久化")
@@ -57,6 +60,10 @@ class PriceLinkedImportBasisPersistenceTest {
     assertThat(binding.getExcelSourceSheetName()).isEqualTo("Sheet1");
     assertThat(binding.getExcelSourceCellRef()).isEqualTo("E2");
     assertThat(binding.getSource()).isEqualTo("TYPE2_IMPORT");
+    ArgumentCaptor<MaterialPriceTypeRouteSyncService.RouteCommand> routeCaptor =
+        ArgumentCaptor.forClass(MaterialPriceTypeRouteSyncService.RouteCommand.class);
+    verify(support.priceTypeRouteSyncService).sync(routeCaptor.capture());
+    assertThat(routeCaptor.getValue().priceType()).isEqualTo("联动价");
   }
 
   @Test

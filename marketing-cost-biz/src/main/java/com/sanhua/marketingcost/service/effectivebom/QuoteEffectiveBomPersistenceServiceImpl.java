@@ -17,7 +17,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-/** 确认时按结果指纹创建或复用不可变最终有效 BOM。 */
+/** 生成当前报价物料时，按结果指纹创建或复用不可变的有效 BOM 构建。 */
 @Service
 public class QuoteEffectiveBomPersistenceServiceImpl
     implements QuoteEffectiveBomPersistenceService {
@@ -58,7 +58,7 @@ public class QuoteEffectiveBomPersistenceServiceImpl
   @Transactional(
       propagation = Propagation.REQUIRED,
       rollbackFor = Exception.class)
-  public QuoteEffectiveBomPersistenceResult persistConfirmed(
+  public QuoteEffectiveBomPersistenceResult persistCurrentVariant(
       QuoteEffectiveBomPersistenceRequest request) {
     validateRequest(request);
     EffectiveBomVariantInput input = request.variantInput();
@@ -113,7 +113,10 @@ public class QuoteEffectiveBomPersistenceServiceImpl
       node.setEffectiveVariantHash(variantHash);
       node.setTopProductCode(normalize(input.topProductCode()));
       node.setCostPeriodMonth(normalize(input.costPeriodMonth()));
-      node.setPriceOrgCode(normalize(input.priceOrgCode()));
+      node.setPriceOrgCode(
+          normalize(draft.priceOrgCode()) == null
+              ? normalize(input.priceOrgCode())
+              : normalize(draft.priceOrgCode()));
       node.setNodeKey(draft.nodeKey());
       node.setParentNodeKey(draft.parentNodeKey());
       node.setNodeLevel(draft.nodeLevel());

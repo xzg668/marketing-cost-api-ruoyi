@@ -14,10 +14,7 @@ public class QuoteBomAlternativeErrorMapper {
       Set.of(
           "ALT_SELECTION_CONFLICT",
           "ALT_SELECTION_DISABLED",
-          "ALT_MONTHLY_FROZEN",
-          "ALT_SOURCE_STALE",
-          "BOM_ALREADY_CONFIRMED",
-          "MANUAL_ROW_CHANGES_EXIST");
+          "ALT_SOURCE_STALE");
 
   public <T> CommonResult<T> map(RuntimeException exception) {
     if (exception instanceof QuoteBomAlternativeSelectionException business) {

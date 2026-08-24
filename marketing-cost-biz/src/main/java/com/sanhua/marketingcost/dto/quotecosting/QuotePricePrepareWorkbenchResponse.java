@@ -17,7 +17,6 @@ public class QuotePricePrepareWorkbenchResponse {
   private Long oaFormItemId;
   private String topProductCode;
   private String periodMonth;
-  private String latestPriceTypeConfirmNo;
   private PricePrepareReadinessResult readiness;
   private PricePrepareBatchPageResponse batches;
   private PricePrepareItemPageResponse items;

@@ -83,10 +83,6 @@ class QuoteBomAlternativePermissionTest {
                   "MANUAL_ALTERNATIVE",
                   false,
                   true,
-                  false,
-                  10,
-                  11,
-                  "BUILD-2",
                   List.of()));
       when(service.getSelectionHistory(
               "OA-QBA-10", 10L, "GROUP", "2026-07"))
@@ -133,7 +129,7 @@ class QuoteBomAlternativePermissionTest {
 
   private static QuoteBomAlternativeSelectionRequest request() {
     return new QuoteBomAlternativeSelectionRequest(
-        "2026-07", "ALT", 1, "BUILD-1", false, "选择替代件");
+        "2026-07", "ALT", 1, "BUILD-1", "选择替代件");
   }
 
   private static void authenticate(String permission) {

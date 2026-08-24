@@ -31,8 +31,6 @@ public class CostRunContext {
   private Long costRunVersionId;
   private String costRunNo;
   private String pricePrepareNo;
-  private String priceTypeConfirmNo;
-  private String bomConfirmNo;
   /** 报价价格场景：OA_LOCKED / FINANCE_QUOTE_BASE；空值按 OA_LOCKED 兼容。 */
   private String priceScenarioType;
   /**

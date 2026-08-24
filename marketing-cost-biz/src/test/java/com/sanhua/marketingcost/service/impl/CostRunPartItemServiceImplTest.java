@@ -595,7 +595,52 @@ class CostRunPartItemServiceImplTest {
   }
 
   @Test
-  @DisplayName("上卷父件按命中子件拆行，保留父件料号图号且拆分金额守恒")
+  @DisplayName("V183前历史成本行按已保存的COMMERCIAL范围只读恢复组织，不修改历史数据")
+  void historicalStoredRowsWithoutOrganizationRemainViewable() {
+    CostRunPartItemMapper partMapper = Mockito.mock(CostRunPartItemMapper.class);
+    MaterialMasterMapper masterMapper = Mockito.mock(MaterialMasterMapper.class);
+    MaterialMasterRawMapper rawMapper = Mockito.mock(MaterialMasterRawMapper.class);
+    BomRawHierarchyMapper bomMapper = Mockito.mock(BomRawHierarchyMapper.class);
+    CostRunPartItem packagePart =
+        storedPart("FI-SC-006-20260108-109", "P-1", "PKG-PARENT", "包装组件", "12.000000");
+    packagePart.setPriceOrgCode(null);
+    packagePart.setMaterialOrganizationCode(null);
+    packagePart.setBusinessUnitType("COMMERCIAL");
+    CostRunPartItem normalPart =
+        storedPart("FI-SC-006-20260108-109", "P-1", "NORMAL", "普通子件", "2.000000");
+    normalPart.setPriceOrgCode(null);
+    normalPart.setMaterialOrganizationCode(null);
+    normalPart.setBusinessUnitType("COMMERCIAL");
+    when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of(packagePart, normalPart));
+    when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
+        .thenReturn(List.of(rawParent("PKG-PARENT")));
+
+    CostRunPartItemServiceImpl svc =
+        new CostRunPartItemServiceImpl(
+            partMapper,
+            routerService,
+            packageComponentIdentifyService,
+            packageComponentPriceService,
+            oaFormMapper,
+            masterMapper,
+            rawMapper,
+            bomMapper,
+            List.of());
+
+    List<CostRunPartItemDto> items =
+        svc.listAggregatedByCostRunNo("TRIAL-HISTORY", "P-1");
+
+    assertThat(items).anySatisfy(item -> {
+      assertThat(item.getPartName()).isEqualTo("包装");
+      assertThat(item.getPriceOrgCode()).isEqualTo("210");
+      assertThat(item.getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
+    });
+    verify(partMapper, never()).updateById(any(CostRunPartItem.class));
+  }
+
+  @Test
+  @DisplayName("上卷父件按命中子件拆行，展示母件换行子件且拆分金额守恒")
   void rollupParentExpandsByFrozenMakePriceComponents() {
     CostRunPartItemMapper partMapper = Mockito.mock(CostRunPartItemMapper.class);
     MaterialMasterMapper masterMapper = Mockito.mock(MaterialMasterMapper.class);
@@ -639,9 +684,10 @@ class CostRunPartItemServiceImplTest {
     when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("PLATE")))
         .thenReturn(List.of());
     MaterialMasterRaw parentArchive = rawMaterial("1053000301687", "A板片组件", "S012B-05101", "制造件");
-    MaterialMasterRaw copperArchive = rawMaterial("301070047", "铜箔", null, "采购件");
+    MaterialMasterRaw copperArchive =
+        rawMaterial("301070047", "铜箔", "CU-DRAWING", "采购件");
     MaterialMasterRaw steelArchive =
-        rawMaterial("301240299", "0.3厚×80宽不锈钢卷", null, "采购件");
+        rawMaterial("301240299", "0.3厚×80宽不锈钢卷", "SUS-DRAWING", "采购件");
     MaterialMasterRaw normalArchive = rawMaterial("NORMAL", "普通部品", "DRW-NORMAL", "采购件");
     when(rawMapper.selectByLatestBatchAndCodes(any(), any(), eq("PLATE")))
         .thenAnswer(invocation -> {
@@ -672,9 +718,22 @@ class CostRunPartItemServiceImplTest {
         .toList();
     assertThat(splitRows)
         .extracting(CostRunPartItemDto::getPartName)
+        .containsOnly("A板片组件");
+    assertThat(splitRows)
+        .extracting(CostRunPartItemDto::getDisplayPartName)
         .containsExactly(
-            "A板片组件-铜箔",
-            "A板片组件-0.3厚×80宽不锈钢卷");
+            "A板片组件\n【铜箔】",
+            "A板片组件\n【0.3厚×80宽不锈钢卷】");
+    assertThat(splitRows)
+        .extracting(CostRunPartItemDto::getDisplayPartCode)
+        .containsExactly(
+            "1053000301687\n【301070047】",
+            "1053000301687\n【301240299】");
+    assertThat(splitRows)
+        .extracting(CostRunPartItemDto::getDisplayPartDrawingNo)
+        .containsExactly(
+            "S012B-05101\n【CU-DRAWING】",
+            "S012B-05101\n【SUS-DRAWING】");
     assertThat(splitRows)
         .extracting(CostRunPartItemDto::getPartDrawingNo)
         .containsOnly("S012B-05101");

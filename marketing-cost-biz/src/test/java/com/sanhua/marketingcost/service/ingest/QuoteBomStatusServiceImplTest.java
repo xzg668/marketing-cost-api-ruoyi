@@ -277,45 +277,6 @@ class QuoteBomStatusServiceImplTest {
   }
 
   @Test
-  void batchSyncCannotReplaceFrozenMonthlyCardAndBindsItsEffectiveBuild() {
-    OaForm form = new OaForm();
-    form.setId(1L);
-    form.setOaNo("OA-T7-001");
-    form.setCustomer("CUST-A");
-    form.setAccountingPeriodMonth("2026-06");
-    OaFormItem item = item(26L, 1, "MAT-FROZEN", "SHF-FROZEN");
-    item.setPackageMethod("BOX");
-    QuoteBomMonthlySnapshot frozen =
-        snapshot("MAT-FROZEN", "CUST-A", "BOX", "2026-06", 7260L);
-    frozen.setFreezeStatus("FROZEN");
-    frozen.setEffectiveBuildBatchId("BUILD-FROZEN-1");
-    frozen.setEffectiveVariantHash("a".repeat(64));
-    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(item));
-    when(oaFormMapper.selectBatchIds(any())).thenReturn(List.of(form));
-    when(quoteBomStatusMapper.selectList(any())).thenReturn(new ArrayList<>());
-    when(bomU9SourceMapper.selectList(any()))
-        .thenReturn(List.of(u9("MAT-FROZEN", "BATCH-U9-NEW")));
-    when(quoteBomMonthlySnapshotMapper.selectList(any()))
-        .thenReturn(List.of(frozen));
-
-    QuoteBomBatchSyncResponse response =
-        service.batchSyncFromU9Source(List.of(26L));
-
-    assertThat(response.getSyncedRowCount()).isEqualTo(1);
-    assertThat(response.getItems().getFirst().getBomStatus())
-        .isEqualTo("REUSED_CURRENT_MONTH");
-    verify(quoteBomMonthlySnapshotMapper, never())
-        .insert(any(QuoteBomMonthlySnapshot.class));
-    verify(quoteBomMonthlySnapshotMapper, never()).update(any(), any());
-    ArgumentCaptor<QuoteBomStatus> statusCaptor =
-        ArgumentCaptor.forClass(QuoteBomStatus.class);
-    verify(quoteBomStatusMapper).updateById(statusCaptor.capture());
-    assertThat(statusCaptor.getValue().getSyncRecordId()).isEqualTo(7260L);
-    assertThat(statusCaptor.getValue().getCostingBuildBatchId())
-        .isEqualTo("BUILD-FROZEN-1");
-  }
-
-  @Test
   void batchSyncFromU9SourceUsesPriceOrganization() {
     OaForm form = new OaForm();
     form.setId(1L);

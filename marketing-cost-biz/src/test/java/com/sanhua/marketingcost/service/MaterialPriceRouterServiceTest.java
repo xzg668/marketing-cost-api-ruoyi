@@ -6,12 +6,14 @@ import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
+import com.sanhua.marketingcost.dto.MaterialPriceTypeSourceCandidate;
 import com.sanhua.marketingcost.entity.MaterialMaster;
 import com.sanhua.marketingcost.entity.MaterialPriceType;
 import com.sanhua.marketingcost.enums.MaterialFormAttrEnum;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
 import com.sanhua.marketingcost.mapper.MaterialPriceTypeMapper;
+import com.sanhua.marketingcost.mapper.MaterialPriceTypeSourceMapper;
 import com.sanhua.marketingcost.service.impl.MaterialPriceRouterServiceImpl;
 import java.time.LocalDate;
 import java.util.List;
@@ -24,11 +26,11 @@ import org.mockito.Mockito;
 /**
  * MaterialPriceRouterService 单测 —— 全 Mock，不依赖 Spring/数据库。
  *
- * <p>v1.1 (T03) 调整后覆盖：
+ * <p>T3 自动价格类型调整后覆盖：
  * <ul>
- *   <li>有候选时按 priority ASC（数值小者优先级高）取 winner，listCandidates 保持 winner-first 排序</li>
- *   <li>quoteDate 落在 effective 窗口外的记录被过滤</li>
- *   <li>未识别的 priceType 被丢弃 + WARN（合法 priceType 永远保留，shape 不识别仅置 formAttr=null）</li>
+ *   <li>Mapper 按 created_at、id 倒序返回的当前记录是唯一价格类型</li>
+ *   <li>价格类型不按报价月份或有效期失效；价格源负责历史价沿用</li>
+ *   <li>当前 priceType 非法时阻塞，不降级到旧类型</li>
  *   <li>主档 shape_attr 优先；主档无该料号 → fallback 用路由表 material_shape</li>
  *   <li>materialCode 或 period 缺失时短路返回空</li>
  * </ul>
@@ -37,19 +39,21 @@ class MaterialPriceRouterServiceTest {
 
   private MaterialPriceTypeMapper mapper;
   private MaterialMasterMapper masterMapper;
+  private MaterialPriceTypeSourceMapper sourceMapper;
   private MaterialPriceRouterServiceImpl router;
 
   @BeforeEach
   void setUp() {
     mapper = Mockito.mock(MaterialPriceTypeMapper.class);
     masterMapper = Mockito.mock(MaterialMasterMapper.class);
+    sourceMapper = Mockito.mock(MaterialPriceTypeSourceMapper.class);
     // 默认 master 查不到任何料号 → formAttr 走 fallback 用路由表 material_shape
     when(masterMapper.selectOne(any(Wrapper.class))).thenReturn(null);
-    router = new MaterialPriceRouterServiceImpl(mapper, masterMapper);
+    router = new MaterialPriceRouterServiceImpl(mapper, masterMapper, sourceMapper);
   }
 
   @Test
-  @DisplayName("priority=1 命中（数值小者优先），priority=2 仅作降级候选")
+  @DisplayName("只返回 created_at、id 倒序后的当前价格类型，不降级旧类型")
   void resolvePicksLowestPriority() {
     // 注意：v1.1 起 SQL 在 DB 层按 priority ASC 排序；mock 直接给"已排序后"列表
     when(mapper.selectList(any(Wrapper.class)))
@@ -65,13 +69,12 @@ class MaterialPriceRouterServiceTest {
     assertThat(hit.get().priority()).isEqualTo(1);
 
     List<PriceTypeRoute> all = router.listCandidates("MAT-001", "2026-04", LocalDate.parse("2026-04-20"));
-    assertThat(all).hasSize(2);
-    assertThat(all.get(1).priceType()).isEqualTo(PriceTypeEnum.LINKED);
+    assertThat(all).hasSize(1);
   }
 
   @Test
-  @DisplayName("quoteDate 在 effective 窗口外的记录被过滤")
-  void effectiveWindowFiltersOut() {
+  @DisplayName("价格类型忽略旧有效期，仍以最新导入记录为准")
+  void effectiveWindowDoesNotExpirePriceType() {
     when(mapper.selectList(any(Wrapper.class)))
         .thenReturn(
             List.of(
@@ -83,12 +86,12 @@ class MaterialPriceRouterServiceTest {
     Optional<PriceTypeRoute> hit = router.resolve("MAT-002", "2026-04", LocalDate.parse("2026-04-20"));
 
     assertThat(hit).isPresent();
-    assertThat(hit.get().priceType()).isEqualTo(PriceTypeEnum.LINKED);
+    assertThat(hit.get().priceType()).isEqualTo(PriceTypeEnum.FIXED);
   }
 
   @Test
-  @DisplayName("路由有效期按闭区间判断，截止日当天仍可命中")
-  void effectiveToIsInclusive() {
+  @DisplayName("effective_to 到期不阻断价格类型识别")
+  void effectiveToDoesNotBlockQuotation() {
     LocalDate effectiveTo = LocalDate.parse("2026-07-30");
     when(mapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(row(
@@ -101,7 +104,7 @@ class MaterialPriceRouterServiceTest {
             "manual")));
 
     assertThat(router.resolve("MAT-END-DATE", "2026-07", effectiveTo)).isPresent();
-    assertThat(router.resolve("MAT-END-DATE", "2026-07", effectiveTo.plusDays(1))).isEmpty();
+    assertThat(router.resolve("MAT-END-DATE", "2026-07", effectiveTo.plusDays(1))).isPresent();
   }
 
   @Test
@@ -115,17 +118,13 @@ class MaterialPriceRouterServiceTest {
 
     List<PriceTypeRoute> all = router.listCandidates("MAT-003", "2026-04", null);
 
-    // 两条都保留：第 1 条 priceType 合法（FIXED），shape 不识别 formAttr=null
-    // 第 2 条 priceType="结算固定价" 通过双别名映射为 FIXED，shape="采购件" → PURCHASED
-    assertThat(all).hasSize(2);
+    assertThat(all).hasSize(1);
     assertThat(all.get(0).priceType()).isEqualTo(PriceTypeEnum.FIXED);
     assertThat(all.get(0).formAttr()).isNull();  // 未识别 shape
-    assertThat(all.get(1).priceType()).isEqualTo(PriceTypeEnum.FIXED);  // "结算固定价" 双别名 → FIXED
-    assertThat(all.get(1).formAttr()).isEqualTo(MaterialFormAttrEnum.PURCHASED);
   }
 
   @Test
-  @DisplayName("priceType 完全不合法的记录被丢弃 + WARN")
+  @DisplayName("当前 priceType 非法时阻塞，不降级到旧类型")
   void unknownPriceTypeDropped() {
     when(mapper.selectList(any(Wrapper.class)))
         .thenReturn(
@@ -135,9 +134,7 @@ class MaterialPriceRouterServiceTest {
 
     List<PriceTypeRoute> all = router.listCandidates("MAT-005", "2026-04", null);
 
-    // 只剩 1 条合法的
-    assertThat(all).hasSize(1);
-    assertThat(all.get(0).priceType()).isEqualTo(PriceTypeEnum.LINKED);
+    assertThat(all).isEmpty();
   }
 
   @Test
@@ -152,7 +149,7 @@ class MaterialPriceRouterServiceTest {
   }
 
   @Test
-  @DisplayName("priority=null 排在最后（999999 兜底）")
+  @DisplayName("历史 priority 不再改变当前类型选择")
   void nullPriorityLastResort() {
     // mock 已按 SQL 排序后的顺序：priority=3 在前，priority=null 在后
     when(mapper.selectList(any(Wrapper.class)))
@@ -186,6 +183,27 @@ class MaterialPriceRouterServiceTest {
     assertThat(hit).isPresent();
     assertThat(hit.get().formAttr()).isEqualTo(MaterialFormAttrEnum.MANUFACTURED);  // 主档赢
     assertThat(hit.get().priceType()).isEqualTo(PriceTypeEnum.MAKE);
+  }
+
+  @Test
+  @DisplayName("价格类型表无记录时从最新正式价格源自动推断，不误报缺类型")
+  void missingRouteInfersFromFormalPriceSource() {
+    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    MaterialPriceTypeSourceCandidate source = new MaterialPriceTypeSourceCandidate();
+    source.setMaterialCode("208200130");
+    source.setPriceType("SETTLE_FIXED");
+    source.setSourceSystem("PRICE_FIXED");
+    source.setEffectiveFrom(LocalDate.parse("2026-05-01"));
+    source.setEffectiveTo(LocalDate.parse("2026-07-31"));
+    when(sourceMapper.selectLatest("208200130", null)).thenReturn(source);
+
+    Optional<PriceTypeRoute> hit =
+        router.resolve("208200130", "2026-08", LocalDate.parse("2026-08-19"));
+
+    assertThat(hit).isPresent();
+    assertThat(hit.get().priceType()).isEqualTo(PriceTypeEnum.FIXED);
+    assertThat(hit.get().rawPriceType()).isEqualTo("SETTLE_FIXED");
+    assertThat(hit.get().sourceSystem()).isEqualTo("PRICE_SOURCE_INFERRED:PRICE_FIXED");
   }
 
   // ============================ 辅助构造 ============================

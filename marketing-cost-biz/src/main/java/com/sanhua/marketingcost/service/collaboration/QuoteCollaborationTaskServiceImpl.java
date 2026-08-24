@@ -17,12 +17,7 @@ import com.sanhua.marketingcost.service.collaboration.CollaborationCodes.QuoteLi
 import com.sanhua.marketingcost.service.collaboration.CollaborationCodes.ValidationStatus;
 import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationScanAction;
 import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationScanResult;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.time.LocalDateTime;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -64,8 +59,22 @@ public class QuoteCollaborationTaskServiceImpl {
 
   @Transactional(isolation = Isolation.READ_COMMITTED)
   public QuoteCollaborationStartResult start(QuoteCollaborationStartCommand command) {
-    requireBaseCommand(command);
-    QuoteCollaborationScanResult scan = scanService.scanQuoteItem(command.oaFormItemId());
+    return start(command, false);
+  }
+
+  /** 一键核算后台入口；允许用系统账号(0)记录自动派单，但仍必须明确匹配技术负责人。 */
+  @Transactional(isolation = Isolation.READ_COMMITTED)
+  public QuoteCollaborationStartResult startAutomatically(
+      QuoteCollaborationStartCommand command) {
+    return start(command, true);
+  }
+
+  private QuoteCollaborationStartResult start(
+      QuoteCollaborationStartCommand command, boolean allowSystemActor) {
+    requireBaseCommand(command, allowSystemActor);
+    QuoteCollaborationScanResult scan = StringUtils.hasText(command.accountingMonth())
+        ? scanService.scanQuoteItem(command.oaFormItemId(), command.accountingMonth())
+        : scanService.scanQuoteItem(command.oaFormItemId());
     if (scan.action() == QuoteCollaborationScanAction.NO_COLLABORATION_REQUIRED) {
       return noCollaboration(scan);
     }
@@ -86,8 +95,8 @@ public class QuoteCollaborationTaskServiceImpl {
         scan.accountingMonth(), scan.productCode(), temporaryProductKey(source.item(), scan),
         scope, requirePrimaryScope(scan));
 
-    Optional<QuoteCollaborationProductTask> active =
-        repository.findActiveProductTaskByLockKey(activeLockKey, scope);
+    Optional<QuoteCollaborationProductTask> active = findScannedOrLockedActiveTask(
+        scan, activeLockKey, scope);
     if (active.isPresent()) {
       return linkOrReplay(source, scan, scope, active.get(), command);
     }
@@ -368,7 +377,8 @@ public class QuoteCollaborationTaskServiceImpl {
   private List<GapUpsertCommand> initialGaps(QuoteCollaborationScanResult scan) {
     if (scan.requiredScope() == PrimaryScope.PRICE_ONLY) {
       return scan.price().gaps().stream()
-          .map(gap -> CollaborationPriceGapCommandFactory.create(scan.productCode(), gap))
+          .map(gap -> CollaborationPriceGapCommandFactory.create(
+              scan.oaFormItemId(), scan.productCode(), scan.accountingMonth(), gap))
           .toList();
     }
     String category = scan.requiredScope() == PrimaryScope.BARE_PACKAGE
@@ -377,10 +387,15 @@ public class QuoteCollaborationTaskServiceImpl {
         ? "MISSING_PACKAGE" : "MISSING_BOM";
     return List.of(new GapUpsertCommand(
         category, type, "SCAN", scan.oaFormItemId(),
-        sha256(scan.oaFormItemId() + "|" + scan.requiredScope().code()),
+        CollaborationGapFingerprintFactory.create(
+            scan.oaFormItemId(), scan.accountingMonth(), category, type,
+            scan.productCode(), scan.productCode(),
+            firstText(scan.authoritativeBomSource(), "SCAN") + "|"
+                + firstText(scan.bomVersion(), "NO_VERSION")),
         null, null, scan.productCode(), null, null, null,
         MaterialRole.NORMAL.code(), null, type,
-        firstText(scan.message(), "当前报价产品存在" + category + "缺口")));
+        firstText(scan.message(), "当前报价产品存在" + category + "缺口"),
+        null, null, scan.accountingMonth(), scan.priceOrgCode()));
   }
 
   private QuoteCollaborationStartResult result(
@@ -455,6 +470,24 @@ public class QuoteCollaborationTaskServiceImpl {
     return CollaborationNextAction.SUPPLEMENT_PRICE;
   }
 
+  /**
+   * 扫描结果可能关联的是升级前生成的 V1 锁键。优先按扫描返回的任务主键复核，
+   * 再查当前 V2 锁键，避免上线后把同一产品的历史活动任务误判为不存在。
+   */
+  private Optional<QuoteCollaborationProductTask> findScannedOrLockedActiveTask(
+      QuoteCollaborationScanResult scan,
+      String activeLockKey,
+      CollaborationScope scope) {
+    if (scan.activeProductTaskId() != null) {
+      Optional<QuoteCollaborationProductTask> scanned = repository.findProductTaskById(
+          scan.activeProductTaskId(), scope);
+      if (scanned.isPresent() && Integer.valueOf(1).equals(scanned.get().getActiveFlag())) {
+        return scanned;
+      }
+    }
+    return repository.findActiveProductTaskByLockKey(activeLockKey, scope);
+  }
+
   private int initialOpenGapCount(QuoteCollaborationScanResult scan) {
     return scan.requiredScope() == PrimaryScope.PRICE_ONLY ? scan.price().gapCount() : 1;
   }
@@ -471,12 +504,14 @@ public class QuoteCollaborationTaskServiceImpl {
         + "处理，当前报价已关联结果";
   }
 
-  private static void requireBaseCommand(QuoteCollaborationStartCommand command) {
+  private static void requireBaseCommand(
+      QuoteCollaborationStartCommand command, boolean allowSystemActor) {
     if (command == null || command.oaFormItemId() == null || command.oaFormItemId() <= 0) {
       throw new IllegalArgumentException("报价产品行ID必须为正数");
     }
+    long minimumActorId = allowSystemActor ? 0 : 1;
     if (command.actor() == null || command.actor().userId() == null
-        || command.actor().userId() <= 0) {
+        || command.actor().userId() < minimumActorId) {
       throw new IllegalArgumentException("当前操作人不能为空");
     }
   }
@@ -512,15 +547,6 @@ public class QuoteCollaborationTaskServiceImpl {
 
   private static String firstText(String value, String fallback) {
     return StringUtils.hasText(value) ? value.trim() : fallback;
-  }
-
-  private static String sha256(String value) {
-    try {
-      return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-          .digest(value.getBytes(StandardCharsets.UTF_8))).toUpperCase(Locale.ROOT);
-    } catch (NoSuchAlgorithmException exception) {
-      throw new IllegalStateException("当前JVM不支持SHA-256", exception);
-    }
   }
 
   private record QuoteSource(OaForm form, OaFormItem item) {}

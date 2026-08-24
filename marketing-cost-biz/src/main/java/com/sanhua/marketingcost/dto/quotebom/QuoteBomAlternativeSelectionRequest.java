@@ -13,6 +13,5 @@ public record QuoteBomAlternativeSelectionRequest(
     String selectedMaterialCode,
     Integer expectedSelectionVersion,
     String expectedBuildBatchId,
-    boolean confirmDiscardManualChanges,
     String selectionRemark) {
 }

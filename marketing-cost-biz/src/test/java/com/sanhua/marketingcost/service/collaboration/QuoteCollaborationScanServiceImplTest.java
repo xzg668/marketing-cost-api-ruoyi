@@ -127,6 +127,26 @@ class QuoteCollaborationScanServiceImplTest {
   }
 
   @Test
+  @DisplayName("一键核算显式月份优先于OA表头和旧准备月份")
+  void requestedCostingMonthWins() {
+    QuoteBomPreparationRecord preparation = new QuoteBomPreparationRecord();
+    preparation.setId(23L);
+    preparation.setOaFormItemId(275L);
+    preparation.setCostPeriodMonth("2026-01");
+    preparation.setActiveFlag(1);
+    when(preparationRecordMapper.selectOne(any())).thenReturn(preparation);
+    stubU9Available();
+    stubProductType(QuoteProductType.NON_BARE);
+    when(priceGateway.check(argThat(context -> "2026-08".equals(context.accountingMonth()))))
+        .thenReturn(CollaborationPriceScanResult.ready(3));
+
+    QuoteCollaborationScanResult result = service.scanQuoteItem(275L, "2026-08");
+
+    assertThat(result.accountingMonth()).isEqualTo("2026-08");
+    assertThat(result.action()).isEqualTo(QuoteCollaborationScanAction.NO_COLLABORATION_REQUIRED);
+  }
+
+  @Test
   @DisplayName("D-01：普通产品U9完整且价格齐全，无需协作")
   void d01ReturnsNoCollaborationRequired() {
     stubU9Available();
@@ -187,6 +207,24 @@ class QuoteCollaborationScanServiceImplTest {
     assertThat(result.price().gaps())
         .extracting(CollaborationPriceScanResult.PriceGap::existingOfficialPriceType)
         .containsExactly("LINKED", "FIXED_PURCHASE", null);
+  }
+
+  @Test
+  @DisplayName("缺价格类型路由财务主数据维护且不创建技术协作")
+  void missingPriceTypeRoutesToFinanceMaintenance() {
+    stubU9Available();
+    stubProductType(QuoteProductType.NON_BARE);
+    when(priceGateway.check(any())).thenReturn(CollaborationPriceScanResult.gaps(
+        3, List.of(new CollaborationPriceScanResult.PriceGap(
+            "NEW-1", "MISSING_PRICE_TYPE", "MAINTAIN_PRICE_TYPE", "缺价格类型",
+            null, null))));
+
+    QuoteCollaborationScanResult result = service.scanQuoteItem(275L);
+
+    assertThat(result.status()).isEqualTo(QuoteCollaborationScanStatus.COLLABORATION_REQUIRED);
+    assertThat(result.action()).isEqualTo(QuoteCollaborationScanAction.MAINTAIN_PRICE_TYPE);
+    assertThat(result.requiredScope()).isEqualTo(PrimaryScope.PRICE_ONLY);
+    assertThat(result.message()).contains("财务", "价格类型");
   }
 
   @Test
@@ -308,6 +346,24 @@ class QuoteCollaborationScanServiceImplTest {
     verifyNoInteractions(reviewRepository, sourceInspector, priceGateway);
     verify(taskRepository, never()).saveProductTask(any());
     verify(taskRepository, never()).saveQuoteLink(any());
+  }
+
+  @Test
+  @DisplayName("旧FULL_BOM任务在当前只缺价格时仍按同产品同月复用，不并行新建PRICE_ONLY任务")
+  void existingFullBomTaskIsReusedWhenCurrentScopeBecomesPriceOnly() {
+    stubU9Available();
+    stubProductType(QuoteProductType.NON_BARE);
+    QuoteCollaborationProductTask active = activeTask(90L, PrimaryScope.FULL_BOM);
+    when(taskRepository.findProductTasksByProductAndMonth(
+        "1008900001289", "2026-08", new CollaborationScope("COMMERCIAL", "210")))
+        .thenReturn(List.of(active));
+
+    QuoteCollaborationScanResult result = service.scanQuoteItem(275L);
+
+    assertThat(result.action()).isEqualTo(QuoteCollaborationScanAction.LINK_ACTIVE_TASK);
+    assertThat(result.activeProductTaskId()).isEqualTo(90L);
+    assertThat(result.requiredScope()).isEqualTo(PrimaryScope.PRICE_ONLY);
+    verifyNoInteractions(priceGateway);
   }
 
   @Test

@@ -41,18 +41,18 @@ class QuoteEffectiveBomControllerTest {
   }
 
   @Test
-  void rebuildReturnsReadableFrozenConflict() {
+  void rebuildReturnsReadableInvalidScope() {
     when(service.rebuildPreview("OA-1", 11L))
         .thenThrow(
             new QuoteEffectiveBomQueryException(
-                "EFFECTIVE_BOM_FROZEN", "冻结后不能重建"));
+                "EFFECTIVE_BOM_SCOPE_INVALID", "OA与产品行不匹配"));
 
     CommonResult<QuoteEffectiveBomResponse> result =
         controller.rebuildPreview("OA-1", 11L);
 
     assertThat(result.isSuccess()).isFalse();
-    assertThat(result.getCode()).isEqualTo(409);
-    assertThat(result.getMsg()).contains("EFFECTIVE_BOM_FROZEN").contains("不能重建");
+    assertThat(result.getCode()).isEqualTo(400);
+    assertThat(result.getMsg()).contains("EFFECTIVE_BOM_SCOPE_INVALID").contains("不匹配");
   }
 
   @Test
