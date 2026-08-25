@@ -185,12 +185,21 @@ class QuoteCostingWorkbenchServiceImplTest {
         .thenReturn(List.of(ref));
     MaterialMasterRaw parentArchive = new MaterialMasterRaw();
     parentArchive.setMaterialCode("201190083");
+    parentArchive.setMaterialSpec("PARENT-SPEC");
+    parentArchive.setMaterialModel("PARENT-MODEL");
     parentArchive.setDrawingNo("T-JG-0029");
+    parentArchive.setUnit("个");
+    parentArchive.setShapeAttr("制造件");
+    parentArchive.setGlobalSeg4Material("黄铜");
     MaterialMasterRaw childArchive = new MaterialMasterRaw();
     childArchive.setMaterialCode("301050120");
     childArchive.setMaterialName("拉制铜管");
+    childArchive.setMaterialSpec("CHILD-SPEC");
+    childArchive.setMaterialModel("CHILD-MODEL");
     childArchive.setDrawingNo("CHILD-DRAWING-001");
     childArchive.setUnit("千克");
+    childArchive.setShapeAttr("采购件");
+    childArchive.setGlobalSeg4Material("紫铜");
     when(materialMasterRawMapper.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL")))
         .thenReturn(List.of(parentArchive, childArchive));
 
@@ -202,10 +211,17 @@ class QuoteCostingWorkbenchServiceImplTest {
       assertThat(row.getRollupComponents()).singleElement().satisfies(component -> {
         assertThat(component.getChildCode()).isEqualTo("301050120");
         assertThat(component.getChildName()).isEqualTo("拉制铜管");
-        assertThat(component.getChildDrawingNo()).isEqualTo("CHILD-DRAWING-001");
-        assertThat(component.getParentDrawingNo()).isEqualTo("T-JG-0029");
+        assertThat(component.getChildSpec()).isEqualTo("CHILD-SPEC");
+        assertThat(component.getChildModel()).isEqualTo("CHILD-MODEL");
+        assertThat(component.getChildUnit()).isEqualTo("千克");
+        assertThat(component.getChildShapeAttribute()).isEqualTo("采购件");
+        assertThat(component.getChildMaterialAttribute()).isEqualTo("紫铜");
+        assertThat(component.getParentSpec()).isEqualTo("T-JG-0029");
+        assertThat(component.getParentModel()).isEqualTo("PARENT-MODEL");
+        assertThat(component.getParentUnit()).isEqualTo("个");
+        assertThat(component.getParentShapeAttribute()).isEqualTo("制造件");
+        assertThat(component.getParentMaterialAttribute()).isEqualTo("黄铜");
         assertThat(component.getUsageQty()).isEqualByComparingTo("0.00381546");
-        assertThat(component.getUnit()).isEqualTo("千克");
       });
     });
   }

@@ -17,4 +17,33 @@ public record BomRuleNodeContext(
     String costElementCode,
     String productionCategory,
     String businessUnitType,
-    String bomPurpose) {}
+    String bomPurpose,
+    boolean hasByproduct) {
+
+  public BomRuleNodeContext(
+      String materialCode,
+      String materialName,
+      String materialCategoryCode,
+      String mainCategoryCode,
+      String mainCategoryName,
+      String purchaseCategory,
+      String shapeAttr,
+      String costElementCode,
+      String productionCategory,
+      String businessUnitType,
+      String bomPurpose) {
+    this(
+        materialCode,
+        materialName,
+        materialCategoryCode,
+        mainCategoryCode,
+        mainCategoryName,
+        purchaseCategory,
+        shapeAttr,
+        costElementCode,
+        productionCategory,
+        businessUnitType,
+        bomPurpose,
+        false);
+  }
+}

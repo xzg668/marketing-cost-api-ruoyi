@@ -74,7 +74,8 @@ class BomByproductCostSettlementAdapterTest {
     verify(byproductMapper).selectList(queryCaptor.capture());
     assertThat(queryCaptor.getValue().getCustomSqlSegment()).contains("price_org_code");
     assertThat(((AbstractWrapper<?, ?, ?>) queryCaptor.getValue()).getParamNameValuePairs().values())
-        .contains("210");
+        .contains("210", "副产品");
+    assertThat(queryCaptor.getValue().getCustomSqlSegment()).contains("output_type");
 
     ArgumentCaptor<Wrapper<MaterialScrapRef>> scrapRefQueryCaptor =
         ArgumentCaptor.forClass(Wrapper.class);
@@ -180,6 +181,7 @@ class BomByproductCostSettlementAdapterTest {
     row.setPriceOrgCode("210");
     row.setParentMaterialNo("MAKE-1");
     row.setBomPurpose("主制造");
+    row.setOutputType("副产品");
     row.setByproductMaterialNo("SCRAP-1");
     row.setByproductMaterialName("副产品一");
     row.setOutputQty(BigDecimal.ONE);

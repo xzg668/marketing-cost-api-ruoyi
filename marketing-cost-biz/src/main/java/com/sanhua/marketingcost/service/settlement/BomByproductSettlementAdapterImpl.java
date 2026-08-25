@@ -28,6 +28,7 @@ public class BomByproductSettlementAdapterImpl implements BomByproductSettlement
   private static final String BOM_PURPOSE_MAIN_MANUFACTURING = "主制造";
   private static final String SHAPE_MANUFACTURED = "制造件";
   private static final String SHAPE_PURCHASED = "采购件";
+  private static final String OUTPUT_TYPE_BYPRODUCT = "副产品";
 
   private final U9BomByproductMasterMapper byproductMapper;
   private final MaterialScrapRefMapper materialScrapRefMapper;
@@ -64,6 +65,7 @@ public class BomByproductSettlementAdapterImpl implements BomByproductSettlement
               .eq(U9BomByproductMaster::getPriceOrgCode, normalizedPriceOrgCode)
               .in(U9BomByproductMaster::getParentMaterialNo, manufacturedCodes)
               .eq(U9BomByproductMaster::getBomPurpose, requestedPurpose)
+              .eq(U9BomByproductMaster::getOutputType, OUTPUT_TYPE_BYPRODUCT)
               .le(U9BomByproductMaster::getEffectiveFrom, effectiveDate)
               .ge(U9BomByproductMaster::getEffectiveTo, effectiveDate));
     } catch (BadSqlGrammarException ex) {

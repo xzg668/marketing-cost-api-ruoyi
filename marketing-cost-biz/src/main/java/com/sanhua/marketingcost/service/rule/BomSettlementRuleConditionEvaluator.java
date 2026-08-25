@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.rule;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.dto.BomRuleConditionGroup;
 import com.sanhua.marketingcost.dto.BomRuleClause;
 import com.sanhua.marketingcost.dto.BomSettlementRuleCondition;
 import java.util.Collections;
@@ -46,22 +47,52 @@ public class BomSettlementRuleConditionEvaluator {
       return false;
     }
 
-    if (!matchAll(condition.getNodeConditions(), node)) {
+    if (!matchesGroup(
+        condition.getNodeConditions(),
+        condition.getParentConditions(),
+        condition.getChildConditions(),
+        node,
+        parent,
+        children)) {
       return false;
     }
-    if (condition.getParentConditions() != null && !condition.getParentConditions().isEmpty()) {
-      if (parent == null) {
-        return false;
+    if (condition.getExcludeGroups() != null) {
+      for (BomRuleConditionGroup excludeGroup : condition.getExcludeGroups()) {
+        if (excludeGroup != null
+            && excludeGroup.hasConditions()
+            && matchesGroup(
+                excludeGroup.getNodeConditions(),
+                excludeGroup.getParentConditions(),
+                excludeGroup.getChildConditions(),
+                node,
+                parent,
+                children)) {
+          return false;
+        }
       }
-      if (!matchAll(condition.getParentConditions(), parent)) {
+    }
+    return true;
+  }
+
+  private boolean matchesGroup(
+      List<BomRuleClause> nodeConditions,
+      List<BomRuleClause> parentConditions,
+      List<BomRuleClause> childConditions,
+      BomRuleNodeContext node,
+      BomRuleNodeContext parent,
+      List<BomRuleNodeContext> children) {
+    if (!matchAll(nodeConditions, node)) {
+      return false;
+    }
+    if (parentConditions != null && !parentConditions.isEmpty()) {
+      if (parent == null || !matchAll(parentConditions, parent)) {
         return false;
       }
     }
-    if (condition.getChildConditions() != null && !condition.getChildConditions().isEmpty()) {
-      if (children == null || children.isEmpty()) {
-        return false;
-      }
-      return children.stream().anyMatch(child -> matchAll(condition.getChildConditions(), child));
+    if (childConditions != null && !childConditions.isEmpty()) {
+      return children != null
+          && !children.isEmpty()
+          && children.stream().anyMatch(child -> matchAll(childConditions, child));
     }
     return true;
   }
@@ -104,6 +135,8 @@ public class BomSettlementRuleConditionEvaluator {
       case "LIKE" -> actual != null
           && expected != null
           && actual.contains(expected);
+      case "NOT_LIKE" -> expected != null
+          && (actual == null || !actual.contains(expected));
       case "PREFIX" -> actual != null
           && expected != null
           && actual.startsWith(expected);
@@ -141,6 +174,7 @@ public class BomSettlementRuleConditionEvaluator {
       case "production_category" -> context.productionCategory();
       case "business_unit_type" -> context.businessUnitType();
       case "bom_purpose" -> context.bomPurpose();
+      case "has_byproduct" -> Boolean.toString(context.hasByproduct());
       default -> {
         log.warn("BOM 结算规则未识别字段 field={}，视为不命中", field);
         yield null;

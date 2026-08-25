@@ -85,6 +85,7 @@ public class BomSettlementRowBuildEngine {
     List<BomSettlementNode> nodes = normalizedNodes(request, warnings);
     Map<String, BomRuleMaterialAttributes> materialAttributes =
         resolveMaterialAttributes(nodes);
+    Set<String> byproductParentMaterialCodes = effectiveByproductParentMaterialCodes(request);
     Map<String, BomSettlementNode> nodeByPath = indexByPath(nodes, warnings);
     Map<String, List<BomSettlementNode>> childrenByParentPath = indexChildren(nodes);
     validateStructure(nodes, nodeByPath, childrenByParentPath, warnings);
@@ -112,11 +113,25 @@ public class BomSettlementRowBuildEngine {
 
       BomSettlementNode parent = nodeByPath.get(parentPathOf(node.path()));
       List<BomSettlementNode> children = childrenByParentPath.getOrDefault(node.path(), List.of());
-      BomRuleNodeContext nodeContext = toRuleContext(node, request, materialAttributes);
+      BomRuleNodeContext nodeContext = toRuleContext(
+          node,
+          request,
+          materialAttributes,
+          byproductParentMaterialCodes.contains(trimToNull(node.materialCode())));
       BomRuleNodeContext parentContext =
-          parent == null ? null : toRuleContext(parent, request, materialAttributes);
+          parent == null
+              ? null
+              : toRuleContext(
+                  parent,
+                  request,
+                  materialAttributes,
+                  byproductParentMaterialCodes.contains(trimToNull(parent.materialCode())));
       List<BomRuleNodeContext> childContexts = children.stream()
-          .map(child -> toRuleContext(child, request, materialAttributes))
+          .map(child -> toRuleContext(
+              child,
+              request,
+              materialAttributes,
+              byproductParentMaterialCodes.contains(trimToNull(child.materialCode()))))
           .toList();
       Optional<BomSettlementRule> exclusionHit = ruleMatcher.match(
           nodeContext,
@@ -776,7 +791,8 @@ public class BomSettlementRowBuildEngine {
   private static BomRuleNodeContext toRuleContext(
       BomSettlementNode node,
       BomSettlementBuildRequest request,
-      Map<String, BomRuleMaterialAttributes> materialAttributes) {
+      Map<String, BomRuleMaterialAttributes> materialAttributes,
+      boolean hasByproduct) {
     BomRuleMaterialAttributes attributes =
         materialAttributes.get(trimToNull(node.materialCode()));
     return new BomRuleNodeContext(
@@ -790,7 +806,29 @@ public class BomSettlementRowBuildEngine {
         node.costElementCode(),
         node.productionCategory(),
         firstText(request.businessUnitType(), node.businessUnitType()),
-        firstText(node.bomPurpose(), request.bomPurpose()));
+        firstText(node.bomPurpose(), request.bomPurpose()),
+        hasByproduct);
+  }
+
+  private static Set<String> effectiveByproductParentMaterialCodes(
+      BomSettlementBuildRequest request) {
+    if (request == null || request.byproducts().isEmpty()) {
+      return Set.of();
+    }
+    Set<String> result = new LinkedHashSet<>();
+    for (BomSettlementByproduct byproduct : request.byproducts()) {
+      if (byproduct == null
+          || !inByproductEffectiveWindow(request, byproduct)
+          || !scopeMatches(byproduct.bomPurpose(), request.bomPurpose())
+          || !scopeMatches(byproduct.businessUnitType(), request.businessUnitType())) {
+        continue;
+      }
+      String parentMaterialCode = trimToNull(byproduct.parentMaterialCode());
+      if (parentMaterialCode != null) {
+        result.add(parentMaterialCode);
+      }
+    }
+    return Set.copyOf(result);
   }
 
   private static boolean isUnderStoppedSubtree(String path, Set<String> stoppedPaths) {

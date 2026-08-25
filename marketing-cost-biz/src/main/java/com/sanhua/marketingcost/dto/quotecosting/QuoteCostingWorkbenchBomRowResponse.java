@@ -16,6 +16,7 @@ public class QuoteCostingWorkbenchBomRowResponse {
   private String parentCode;
   private String childCode;
   private String childName;
+  private String childSpec;
   private String childModel;
   private BigDecimal usageQty;
   private BigDecimal qtyPerTop;

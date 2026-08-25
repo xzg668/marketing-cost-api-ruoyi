@@ -128,7 +128,9 @@ class CostRunTaskSubmissionServiceImplTest {
             batchMapper.proxy(), taskMapper.proxy(), oaFormMapper.proxy(), oaFormItemMapper.proxy(),
             emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion());
 
-    CostRunTaskSubmissionResult result = service.submitQuote("OA-001", List.of(11L));
+    CostRunTaskSubmissionResult result =
+        service.submitQuote(
+            "OA-001", List.of(11L), YearMonth.now().toString(), "quote-user");
 
     assertThat(result.getBatchNo()).isEqualTo("BATCH-FAILED");
     assertThat(result.isExistingBatch()).isTrue();
@@ -141,6 +143,10 @@ class CostRunTaskSubmissionServiceImplTest {
     assertThat(taskMapper.resetBatchNos).isEmpty();
     assertThat(taskMapper.quoteRerunBatchNos).containsExactly("BATCH-FAILED");
     assertThat(taskMapper.quoteRerunKeys).containsExactly(List.of("QUOTE:11"));
+    assertThat(taskMapper.quoteRerunSnapshots)
+        .singleElement()
+        .asString()
+        .contains("\"submittedBy\":\"quote-user\"");
     assertThat(taskMapper.inserted)
         .extracting(CostRunTask::getCalcObjectKey)
         .containsExactly("QUOTE:11");
@@ -464,6 +470,7 @@ class CostRunTaskSubmissionServiceImplTest {
     private final List<String> quoteRerunBatchNos = new ArrayList<>();
     private final List<List<String>> quoteRerunKeys = new ArrayList<>();
     private final List<Integer> quoteRerunExecutionNos = new ArrayList<>();
+    private final List<String> quoteRerunSnapshots = new ArrayList<>();
 
     CostRunTaskMapper proxy() {
       return (CostRunTaskMapper)
@@ -484,6 +491,7 @@ class CostRunTaskSubmissionServiceImplTest {
                       quoteRerunBatchNos.add((String) args[0]);
                       quoteRerunKeys.add((List<String>) args[1]);
                       quoteRerunExecutionNos.add((Integer) args[2]);
+                      quoteRerunSnapshots.add((String) args[4]);
                       yield 1;
                     }
                     case "toString" -> "FakeCostRunTaskMapper";

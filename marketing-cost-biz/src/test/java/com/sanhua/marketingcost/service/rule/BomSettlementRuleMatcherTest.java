@@ -83,30 +83,101 @@ class BomSettlementRuleMatcherTest {
   }
 
   @Test
-  @DisplayName("财务特殊采购上卷同时校验采购形态、28项采购分类和8项主分类排除")
-  void financeSpecialPurchaseRollupRequiresAllThreeConditions() {
+  @DisplayName("财务特殊采购上卷校验子件、制造母件、副产品和三组组合排除")
+  void financeSpecialPurchaseRollupRequiresParentAndExclusionConditions() {
     BomSettlementRule rule = baseRule("SPECIAL_PURCHASE_ROLLUP_FINANCE_CLASSIFICATION", 10);
     rule.setMatchConditionJson("""
-        {"nodeConditions":[
-          {"field":"shape_attr","op":"EQ","value":"采购件"},
-          {"field":"purchase_category","op":"IN","values":["挤压铜棒","不锈钢棒"]},
-          {"field":"main_category_code","op":"NOT_BLANK"},
-          {"field":"main_category_code","op":"NOT_IN","values":["121191304","121181508"]}
-        ]}
+        {
+          "nodeConditions":[
+            {"field":"shape_attr","op":"EQ","value":"采购件"},
+            {"field":"purchase_category","op":"IN","values":["挤压铜棒","不锈钢棒"]}
+          ],
+          "parentConditions":[
+            {"field":"shape_attr","op":"EQ","value":"制造件"},
+            {"field":"has_byproduct","op":"EQ","value":"true"}
+          ],
+          "excludeGroups":[
+            {"parentConditions":[
+              {"field":"main_category_code","op":"IN","values":[
+                "101001018","111001018","101001007","111001007"
+              ]}
+            ]},
+            {
+              "parentConditions":[
+                {"field":"main_category_code","op":"EQ","value":"121151306"}
+              ],
+              "nodeConditions":[
+                {"field":"material_name","op":"LIKE","value":"分磁环"}
+              ]
+            },
+            {
+              "parentConditions":[
+                {"field":"main_category_code","op":"EQ","value":"121191304"}
+              ],
+              "nodeConditions":[
+                {"field":"material_name","op":"NOT_LIKE","value":"毛坯"},
+                {"field":"material_name","op":"NOT_LIKE","value":"半成品"}
+              ]
+            }
+          ]
+        }
         """);
 
-    assertThat(match(rule, financeNode(" 采购件 ", " 挤压铜棒 ", "171711402")))
+    assertThat(match(
+        rule,
+        financeNode("普通铜棒子件", " 采购件 ", " 挤压铜棒 "),
+        financeParent(" 制造件 ", "171711402", true)))
         .contains(rule);
-    assertThat(match(rule, financeNode("制造件", "挤压铜棒", "171711402")))
+    assertThat(match(
+        rule,
+        financeNode("普通铜棒子件", "制造件", "挤压铜棒"),
+        financeParent("制造件", "171711402", true)))
         .isEmpty();
-    assertThat(match(rule, financeNode("采购件", "普通采购分类", "171711402")))
+    assertThat(match(
+        rule,
+        financeNode("普通铜棒子件", "采购件", "普通采购分类"),
+        financeParent("制造件", "171711402", true)))
         .isEmpty();
-    assertThat(match(rule, financeNode("采购件", "挤压铜棒", "121191304")))
+    assertThat(match(
+        rule,
+        financeNode("普通铜棒子件", "采购件", "挤压铜棒"),
+        financeParent("采购件", "171711402", true)))
         .isEmpty();
-    assertThat(match(rule, financeNode("采购件", "挤压铜棒", null)))
+    assertThat(match(
+        rule,
+        financeNode("普通铜棒子件", "采购件", "挤压铜棒"),
+        financeParent("制造件", "171711402", false)))
         .isEmpty();
-    assertThat(match(rule, financeNode("采购件", null, "171711402")))
+    assertThat(match(
+        rule,
+        financeNode("普通铜棒子件", "采购件", "挤压铜棒"),
+        financeParent("制造件", "101001018", true)))
         .isEmpty();
+    assertThat(match(
+        rule,
+        financeNode("阀座分磁环", "采购件", "挤压铜棒"),
+        financeParent("制造件", "121151306", true)))
+        .isEmpty();
+    assertThat(match(
+        rule,
+        financeNode("普通半成品原料", "采购件", "挤压铜棒"),
+        financeParent("制造件", "121151306", true)))
+        .contains(rule);
+    assertThat(match(
+        rule,
+        financeNode("精加工阀座", "采购件", "挤压铜棒"),
+        financeParent("制造件", "121191304", true)))
+        .isEmpty();
+    assertThat(match(
+        rule,
+        financeNode("阀座毛坯", "采购件", "挤压铜棒"),
+        financeParent("制造件", "121191304", true)))
+        .contains(rule);
+    assertThat(match(
+        rule,
+        financeNode("阀座半成品", "采购件", "挤压铜棒"),
+        financeParent("制造件", "121191304", true)))
+        .contains(rule);
   }
 
   @Test
@@ -229,13 +300,19 @@ class BomSettlementRuleMatcherTest {
         context, null, List.of(), null, LocalDate.of(2026, 8, 20), List.of(rule));
   }
 
+  private Optional<BomSettlementRule> match(
+      BomSettlementRule rule, BomRuleNodeContext context, BomRuleNodeContext parent) {
+    return matcher.match(
+        context, parent, List.of(), null, LocalDate.of(2026, 8, 20), List.of(rule));
+  }
+
   private static BomRuleNodeContext financeNode(
-      String shapeAttr, String purchaseCategory, String mainCategoryCode) {
+      String materialName, String shapeAttr, String purchaseCategory) {
     return new BomRuleNodeContext(
         "FINANCE-ROLLUP-CHILD",
-        "财务上卷测试子件",
+        materialName,
         null,
-        mainCategoryCode,
+        null,
         null,
         purchaseCategory,
         shapeAttr,
@@ -243,5 +320,22 @@ class BomSettlementRuleMatcherTest {
         null,
         "COMMERCIAL",
         "主制造");
+  }
+
+  private static BomRuleNodeContext financeParent(
+      String shapeAttr, String mainCategoryCode, boolean hasByproduct) {
+    return new BomRuleNodeContext(
+        "FINANCE-ROLLUP-PARENT",
+        "财务上卷测试母件",
+        null,
+        mainCategoryCode,
+        null,
+        null,
+        shapeAttr,
+        null,
+        null,
+        "COMMERCIAL",
+        "主制造",
+        hasByproduct);
   }
 }

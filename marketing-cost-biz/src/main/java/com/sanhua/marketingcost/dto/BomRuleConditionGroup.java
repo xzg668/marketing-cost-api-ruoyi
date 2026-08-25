@@ -4,17 +4,16 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 新 BOM 树节点结算规则条件 DTO。
+ * BOM 规则中的一组复合条件。
  *
- * <p>对应 {@code lp_bom_settlement_rule.match_condition_json}，避免继续沿用旧
- * 旧过滤规则 DTO 命名。三组条件语义为：本节点 AND 父节点 AND 至少一个子节点。
+ * <p>组内条件按“本节点 AND 父节点 AND 至少一个子节点”判断；规则中的多个排除组按 OR
+ * 判断，任意一组完整命中即排除当前规则。
  */
-public class BomSettlementRuleCondition {
+public class BomRuleConditionGroup {
 
   private List<BomRuleClause> nodeConditions = new ArrayList<>();
   private List<BomRuleClause> parentConditions = new ArrayList<>();
   private List<BomRuleClause> childConditions = new ArrayList<>();
-  private List<BomRuleConditionGroup> excludeGroups = new ArrayList<>();
 
   public List<BomRuleClause> getNodeConditions() {
     return nodeConditions;
@@ -40,11 +39,11 @@ public class BomSettlementRuleCondition {
     this.childConditions = childConditions;
   }
 
-  public List<BomRuleConditionGroup> getExcludeGroups() {
-    return excludeGroups;
+  public boolean hasConditions() {
+    return hasItems(nodeConditions) || hasItems(parentConditions) || hasItems(childConditions);
   }
 
-  public void setExcludeGroups(List<BomRuleConditionGroup> excludeGroups) {
-    this.excludeGroups = excludeGroups;
+  private static boolean hasItems(List<?> values) {
+    return values != null && !values.isEmpty();
   }
 }

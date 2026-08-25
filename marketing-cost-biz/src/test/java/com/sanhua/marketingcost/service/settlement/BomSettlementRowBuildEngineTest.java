@@ -90,52 +90,100 @@ class BomSettlementRowBuildEngineTest {
   }
 
   @Test
-  @DisplayName("财务分类规则只上卷同时满足三个条件的末级采购子件")
+  @DisplayName("财务分类规则使用母件形态、副产品和组合排除条件筛选末级采购子件")
   void financeClassificationRuleRollsUpOnlyQualifiedPurchasedLeaves() {
     BomSettlementRowBuildEngine financeEngine = new BomSettlementRowBuildEngine(
         new BomSettlementRuleMatcher(
             new BomSettlementRuleConditionEvaluator(new ObjectMapper())),
         new BomByproductCostRuleMatcher(
             new BomByproductCostRuleConditionEvaluator(new ObjectMapper())),
-        (ignoredCodes, ignoredOrganization) -> Map.of(
-            "MATCH-BAR", new BomRuleMaterialAttributes("171711402", "不锈钢棒"),
-            "MATCH-TUBE", new BomRuleMaterialAttributes("171711404", "紫铜直管"),
-            "EXCLUDED-MAIN", new BomRuleMaterialAttributes("121191304", "锻镦件"),
-            "NOT-WHITELIST", new BomRuleMaterialAttributes("171711402", "普通采购分类"),
-            "MISSING-MAIN", new BomRuleMaterialAttributes(null, "丝网"),
-            "NON-PURCHASE", new BomRuleMaterialAttributes("171711402", "不锈钢棒")));
+        (ignoredCodes, ignoredOrganization) -> Map.ofEntries(
+            Map.entry("P", new BomRuleMaterialAttributes("181811432", null)),
+            Map.entry("SPRAY", new BomRuleMaterialAttributes("101001018", null)),
+            Map.entry("HALF", new BomRuleMaterialAttributes("121151306", null)),
+            Map.entry("SPECIAL", new BomRuleMaterialAttributes("121191304", null)),
+            Map.entry("NO-BYPRODUCT", new BomRuleMaterialAttributes("181811432", null)),
+            Map.entry("MATCH-BAR", new BomRuleMaterialAttributes("171711402", "不锈钢棒")),
+            Map.entry("MATCH-TUBE", new BomRuleMaterialAttributes("171711404", "紫铜直管")),
+            Map.entry("NOT-WHITELIST", new BomRuleMaterialAttributes("171711402", "普通采购分类")),
+            Map.entry("SPRAY-CHILD", new BomRuleMaterialAttributes("171711402", "丝网")),
+            Map.entry("MAGNET-RING", new BomRuleMaterialAttributes("171711402", "丝网")),
+            Map.entry("SPECIAL-NORMAL", new BomRuleMaterialAttributes("171711402", "锻镦件")),
+            Map.entry("SPECIAL-BLANK", new BomRuleMaterialAttributes("171711402", "锻镦件")),
+            Map.entry("NO-BYPRODUCT-CHILD", new BomRuleMaterialAttributes("171711402", "丝网")),
+            Map.entry("NON-PURCHASE", new BomRuleMaterialAttributes("171711402", "不锈钢棒"))));
 
-    BomSettlementRowBuildResult result = financeEngine.build(request(List.of(
+    BomSettlementRowBuildResult result = financeEngine.build(byproductRequest(
+        List.of(
         node("P", "P", null, 0, "/P/", 0, "组件", null),
         purchaseNode("MATCH-BAR", "P", "P", 1, "/P/MATCH-BAR/", "不锈钢棒子件"),
         purchaseNode("MATCH-TUBE", "P", "P", 1, "/P/MATCH-TUBE/", "紫铜直管子件"),
-        purchaseNode("EXCLUDED-MAIN", "P", "P", 1, "/P/EXCLUDED-MAIN/", "专用锻镦子件"),
         purchaseNode("NOT-WHITELIST", "P", "P", 1, "/P/NOT-WHITELIST/", "普通采购子件"),
-        purchaseNode("MISSING-MAIN", "P", "P", 1, "/P/MISSING-MAIN/", "主分类缺失子件"),
         fullNode(
             "NON-PURCHASE", "P", "P", 1, "/P/NON-PURCHASE/", 1,
             "非采购结构节点", "制造件", "制造件", "18", "普通主分类", null,
-            "主制造", LocalDate.of(2026, 1, 1), null)
-    ), List.of(financeRollupRule())));
+            "主制造", LocalDate.of(2026, 1, 1), null),
+        fullNode(
+            "SPRAY", "P", "P", 1, "/P/SPRAY/", 0,
+            "喷液阀母件", "制造件", "制造件", "18", "喷液阀", null,
+            "主制造", LocalDate.of(2026, 1, 1), null),
+        purchaseNode(
+            "SPRAY-CHILD", "P", "SPRAY", 2, "/P/SPRAY/SPRAY-CHILD/", "丝网采购件"),
+        fullNode(
+            "HALF", "P", "P", 1, "/P/HALF/", 0,
+            "半成品母件", "制造件", "制造件", "18", "半成品", null,
+            "主制造", LocalDate.of(2026, 1, 1), null),
+        purchaseNode(
+            "MAGNET-RING", "P", "HALF", 2, "/P/HALF/MAGNET-RING/", "精制分磁环"),
+        fullNode(
+            "SPECIAL", "P", "P", 1, "/P/SPECIAL/", 0,
+            "专用零部件母件", "制造件", "制造件", "18", "专用零部件", null,
+            "主制造", LocalDate.of(2026, 1, 1), null),
+        purchaseNode(
+            "SPECIAL-NORMAL", "P", "SPECIAL", 2,
+            "/P/SPECIAL/SPECIAL-NORMAL/", "普通锻镦子件"),
+        purchaseNode(
+            "SPECIAL-BLANK", "P", "SPECIAL", 2,
+            "/P/SPECIAL/SPECIAL-BLANK/", "阀体毛坯"),
+        fullNode(
+            "NO-BYPRODUCT", "P", "P", 1, "/P/NO-BYPRODUCT/", 0,
+            "无副产品母件", "制造件", "制造件", "18", "普通主分类", null,
+            "主制造", LocalDate.of(2026, 1, 1), null),
+        purchaseNode(
+            "NO-BYPRODUCT-CHILD", "P", "NO-BYPRODUCT", 2,
+            "/P/NO-BYPRODUCT/NO-BYPRODUCT-CHILD/", "丝网采购件")),
+        List.of(
+            byproduct("P", "BYP-P", "副产品P"),
+            byproduct("SPRAY", "BYP-SPRAY", "副产品喷液阀"),
+            byproduct("HALF", "BYP-HALF", "副产品半成品"),
+            byproduct("SPECIAL", "BYP-SPECIAL", "副产品专用零部件")),
+        List.of(),
+        List.of(),
+        List.of(financeRollupRule())));
 
     assertThat(result.costingRows())
         .filteredOn(row -> "SPECIAL_ROLLUP_PARENT".equals(row.getSettlementRowType()))
         .extracting(BomCostingRow::getMaterialCode)
-        .containsExactly("P");
+        .containsExactly("P", "SPECIAL");
     assertThat(result.subRefs()).extracting(ref -> ref.subRef().getSubMaterialCode())
-        .containsExactly("MATCH-BAR", "MATCH-TUBE");
+        .containsExactly("MATCH-BAR", "MATCH-TUBE", "SPECIAL-BLANK");
     assertThat(result.costingRows())
         .filteredOn(row -> "DEFAULT_LEAF".equals(row.getSettlementRowType()))
         .extracting(BomCostingRow::getMaterialCode)
-        .containsExactlyInAnyOrder("EXCLUDED-MAIN", "MISSING-MAIN", "NOT-WHITELIST");
+        .containsExactlyInAnyOrder(
+            "NOT-WHITELIST",
+            "SPRAY-CHILD",
+            "MAGNET-RING",
+            "SPECIAL-NORMAL",
+            "NO-BYPRODUCT-CHILD");
     assertThat(result.subRefs()).allSatisfy(ref -> {
       assertThat(ref.subRef().getSubQtyPerParent()).isEqualByComparingTo(BigDecimal.ONE);
       assertThat(ref.subRef().getSubQtyPerTop()).isEqualByComparingTo(BigDecimal.ONE);
     });
     assertThat(result.subRefs()).noneMatch(
         ref -> "NON-PURCHASE".equals(ref.subRef().getSubMaterialCode()));
-    assertThat(result.stats().rollupBucketCount()).isEqualTo(1);
-    assertThat(result.stats().consumedLeafPathCount()).isEqualTo(2);
+    assertThat(result.stats().rollupBucketCount()).isEqualTo(2);
+    assertThat(result.stats().consumedLeafPathCount()).isEqualTo(3);
   }
 
   @Test
@@ -929,7 +977,7 @@ class BomSettlementRowBuildEngineTest {
     BomSettlementRule rule = new BomSettlementRule();
     rule.setId(224L);
     rule.setRuleCode("SPECIAL_PURCHASE_ROLLUP_FINANCE_CLASSIFICATION");
-    rule.setRuleName("特殊采购分类上卷：财务分类规则");
+    rule.setRuleName("特殊采购分类上卷：母件副产品规则");
     rule.setRuleCategory("SPECIAL_PURCHASE_ROLLUP");
     rule.setSettlementAction("ROLLUP_TO_PARENT");
     rule.setSettlementRowType("SPECIAL_ROLLUP_PARENT");
@@ -937,9 +985,27 @@ class BomSettlementRowBuildEngineTest {
     rule.setMatchConditionJson("""
         {"nodeConditions":[
           {"field":"shape_attr","op":"EQ","value":"采购件"},
-          {"field":"purchase_category","op":"IN","values":["不锈钢棒","紫铜直管","锻镦件","丝网"]},
-          {"field":"main_category_code","op":"NOT_BLANK"},
-          {"field":"main_category_code","op":"NOT_IN","values":["121191304","121181508"]}
+          {"field":"purchase_category","op":"IN","values":["不锈钢棒","紫铜直管","锻镦件","丝网"]}
+        ],
+        "parentConditions":[
+          {"field":"shape_attr","op":"EQ","value":"制造件"},
+          {"field":"has_byproduct","op":"EQ","value":"true"}
+        ],
+        "excludeGroups":[
+          {"parentConditions":[
+            {"field":"main_category_code","op":"IN","values":["101001018","111001018","101001007","111001007"]}
+          ]},
+          {
+            "parentConditions":[{"field":"main_category_code","op":"EQ","value":"121151306"}],
+            "nodeConditions":[{"field":"material_name","op":"LIKE","value":"分磁环"}]
+          },
+          {
+            "parentConditions":[{"field":"main_category_code","op":"EQ","value":"121191304"}],
+            "nodeConditions":[
+              {"field":"material_name","op":"NOT_LIKE","value":"毛坯"},
+              {"field":"material_name","op":"NOT_LIKE","value":"半成品"}
+            ]
+          }
         ]}
         """);
     rule.setMarkSubtreeCostRequired(1);

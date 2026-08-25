@@ -585,24 +585,46 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
             firstText(
                 total.childName,
                 childArchive == null ? null : childArchive.getMaterialName()));
-        component.setChildDrawingNo(
+        component.setChildSpec(
+            childArchive == null ? null : trimToNull(childArchive.getMaterialSpec()));
+        component.setChildModel(
             firstText(
-                childArchive == null ? null : childArchive.getDrawingNo(),
-                firstText(
-                    childArchive == null ? null : childArchive.getMaterialModel(),
-                    childArchive == null ? null : childArchive.getMaterialSpec())));
-        component.setParentDrawingNo(
+                childArchive == null ? null : childArchive.getMaterialModel(),
+                childArchive == null ? null : childArchive.getDrawingNo()));
+        component.setChildUnit(
+            childArchive == null ? null : trimToNull(childArchive.getUnit()));
+        component.setChildMaterialAttribute(
+            childArchive == null
+                ? null
+                : trimToNull(childArchive.getGlobalSeg4Material()));
+        component.setChildShapeAttribute(
+            childArchive == null ? null : trimToNull(childArchive.getShapeAttr()));
+        component.setParentSpec(
             firstText(
-                parentArchive == null ? null : parentArchive.getDrawingNo(),
-                parent == null ? null : parent.getMaterialSpec()));
+                parent == null ? null : parent.getMaterialSpec(),
+                parentArchive == null ? null : parentArchive.getMaterialSpec()));
+        component.setParentModel(
+            firstText(
+                parentArchive == null ? null : parentArchive.getMaterialModel(),
+                parentArchive == null ? null : parentArchive.getDrawingNo()));
+        component.setParentUnit(
+            firstText(
+                parent == null ? null : parent.getUnit(),
+                parentArchive == null ? null : parentArchive.getUnit()));
+        component.setParentMaterialAttribute(
+            firstText(
+                parent == null ? null : parent.getMaterialAttribute(),
+                parentArchive == null ? null : parentArchive.getGlobalSeg4Material()));
+        component.setParentShapeAttribute(
+            firstText(
+                parent == null ? null : parent.getShapeAttr(),
+                parentArchive == null ? null : parentArchive.getShapeAttr()));
         component.setUsageQty(
             RollupQuantityNormalizer.perParent(
                 total.qtyPerTop,
                 parent == null ? null : parent.getQtyPerTop(),
                 total.firstUsageQty));
         component.setQtyPerTop(total.qtyPerTop);
-        component.setUnit(
-            childArchive == null ? null : trimToNull(childArchive.getUnit()));
         components.add(component);
       }
       result.put(entry.getKey(), components);
@@ -634,6 +656,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     response.setParentCode(row.getParentCode());
     response.setChildCode(row.getMaterialCode());
     response.setChildName(row.getMaterialName());
+    response.setChildSpec(row.getMaterialSpec());
     response.setChildModel(row.getMaterialSpec());
     response.setUsageQty(row.getQtyPerParent());
     response.setQtyPerTop(row.getQtyPerTop());

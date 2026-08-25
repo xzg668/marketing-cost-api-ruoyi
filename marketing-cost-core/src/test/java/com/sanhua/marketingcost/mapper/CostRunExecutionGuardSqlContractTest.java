@@ -107,6 +107,7 @@ class CostRunExecutionGuardSqlContractTest {
             java.util.List.class,
             int.class,
             String.class,
+            String.class,
             java.time.LocalDateTime.class));
 
     assertThat(batchSql)
@@ -116,7 +117,8 @@ class CostRunExecutionGuardSqlContractTest {
         .contains("t.status = 'RUNNING'");
     assertThat(taskSql)
         .contains("execution_no = #{executionNo}")
-        .contains("status = #{status}");
+        .contains("status = #{status}")
+        .contains("request_snapshot_json = #{requestSnapshotJson}");
   }
 
   private String selectSql(Method method) {

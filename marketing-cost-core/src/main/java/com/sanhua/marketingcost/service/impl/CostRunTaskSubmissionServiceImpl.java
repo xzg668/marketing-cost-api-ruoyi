@@ -109,6 +109,10 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
                 submittedBy,
                 quoteSnapshot(normalizedOaNo, pricingMonth, businessUnitType))
             : existing;
+    if (existing != null && StringUtils.hasText(submittedBy)) {
+      // 重跑沿用原批次号，但任务身份必须使用本次真实提交人，不能继承历史空快照。
+      batch.setCreatedBy(submittedBy.trim());
+    }
 
     List<OaFormItem> items =
         oaFormItemMapper.selectList(
@@ -311,19 +315,15 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
 
   private void resetTasksForExecution(
       String batchNo, List<CostRunTask> tasks, int executionNo, LocalDateTime now) {
-    Map<String, List<String>> keysByStatus =
-        tasks.stream()
-            .collect(
-                java.util.stream.Collectors.groupingBy(
-                    CostRunTask::getStatus,
-                    LinkedHashMap::new,
-                    java.util.stream.Collectors.mapping(
-                        CostRunTask::getCalcObjectKey,
-                        java.util.stream.Collectors.toList())));
-    keysByStatus.forEach(
-        (status, keys) ->
-            taskMapper.resetQuoteTasksForRerun(
-                batchNo, keys, executionNo, status, now));
+    for (CostRunTask task : tasks) {
+      taskMapper.resetQuoteTasksForRerun(
+          batchNo,
+          List.of(task.getCalcObjectKey()),
+          executionNo,
+          task.getStatus(),
+          task.getRequestSnapshotJson(),
+          now);
+    }
   }
 
   private CostRunBatch buildBatch(

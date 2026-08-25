@@ -313,6 +313,7 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
              error_message = NULL,
              error_stack = NULL,
              result_summary_json = NULL,
+             request_snapshot_json = #{requestSnapshotJson},
              started_at = NULL,
              finished_at = NULL,
              updated_at = #{updatedAt}
@@ -332,6 +333,7 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
       @Param("calcObjectKeys") List<String> calcObjectKeys,
       @Param("executionNo") int executionNo,
       @Param("status") String status,
+      @Param("requestSnapshotJson") String requestSnapshotJson,
       @Param("updatedAt") LocalDateTime updatedAt);
 
   @Select("""

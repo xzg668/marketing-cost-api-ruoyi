@@ -8,7 +8,7 @@ public class BomRuleClause {
   /** 字段名；必须在新规则评估器白名单内。 */
   private String field;
 
-  /** 操作符：EQ / NE / IN / NOT_IN / LIKE / PREFIX。 */
+  /** 操作符：EQ / NE / IN / NOT_IN / NOT_BLANK / LIKE / NOT_LIKE / PREFIX。 */
   private String op;
 
   /** EQ / NE / LIKE / PREFIX 时的单值。 */
