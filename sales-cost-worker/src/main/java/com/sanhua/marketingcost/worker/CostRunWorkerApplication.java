@@ -3,12 +3,10 @@ package com.sanhua.marketingcost.worker;
 import com.sanhua.marketingcost.config.ApprovedResultReuseProperties;
 import com.sanhua.marketingcost.config.AsyncConfig;
 import com.sanhua.marketingcost.config.CacheConfig;
-import com.sanhua.marketingcost.config.CostRunExecutionProperties;
 import com.sanhua.marketingcost.config.ElectronicDrawingBomProperties;
 import com.sanhua.marketingcost.config.LinkedParserProperties;
 import com.sanhua.marketingcost.config.MetaObjectHandlerConfig;
 import com.sanhua.marketingcost.config.MybatisPlusConfig;
-import com.sanhua.marketingcost.config.OaCollaborationProperties;
 import com.sanhua.marketingcost.service.impl.BusinessUnitRepriceLockGuardImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceBatchServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceConfirmServiceImpl;
@@ -53,12 +51,10 @@ import org.springframework.scheduling.annotation.EnableScheduling;
     ApprovedResultReuseProperties.class,
     AsyncConfig.class,
     CacheConfig.class,
-    CostRunExecutionProperties.class,
     ElectronicDrawingBomProperties.class,
     LinkedParserProperties.class,
     MetaObjectHandlerConfig.class,
-    MybatisPlusConfig.class,
-    OaCollaborationProperties.class
+    MybatisPlusConfig.class
 })
 public class CostRunWorkerApplication {
 

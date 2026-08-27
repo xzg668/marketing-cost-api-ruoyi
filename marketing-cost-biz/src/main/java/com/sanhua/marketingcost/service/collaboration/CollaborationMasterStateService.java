@@ -12,18 +12,12 @@ public class CollaborationMasterStateService {
 
   private final QuoteCollaborationTaskRepository repository;
   private final CollaborationAuthorization authorization;
-  private final CollaborationTransitionEventFactory eventFactory;
-  private final CollaborationEventService eventService;
 
   public CollaborationMasterStateService(
       QuoteCollaborationTaskRepository repository,
-      CollaborationAuthorization authorization,
-      CollaborationTransitionEventFactory eventFactory,
-      CollaborationEventService eventService) {
+      CollaborationAuthorization authorization) {
     this.repository = repository;
     this.authorization = authorization;
-    this.eventFactory = eventFactory;
-    this.eventService = eventService;
   }
 
   @Transactional
@@ -48,7 +42,6 @@ public class CollaborationMasterStateService {
       QuoteCollaborationTask updated = repository.transitionTaskStatus(
           task.getId(), expectedVersion, source.code(),
           target.code(), businessUnitType, principal.actor());
-      eventFactory.masterTransition(updated, source, action).ifPresent(eventService::append);
       return updated;
     } catch (CollaborationOptimisticLockException exception) {
       throw versionConflict();

@@ -45,6 +45,7 @@ public class TechnicalSubmissionCoordinator {
   private final QuoteCollaborationTaskMapper taskMapper;
   private final QuoteCollaborationReviewMapper reviewMapper;
   private final ObjectMapper objectMapper;
+  private final CollaborationStructuralDraftLifecycleService structuralDraftLifecycle;
 
   public TechnicalSubmissionCoordinator(
       QuoteCollaborationTaskRepository taskRepository,
@@ -55,7 +56,8 @@ public class TechnicalSubmissionCoordinator {
       CollaborationMasterStateService masterStateService,
       QuoteCollaborationTaskMapper taskMapper,
       QuoteCollaborationReviewMapper reviewMapper,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      CollaborationStructuralDraftLifecycleService structuralDraftLifecycle) {
     this.taskRepository = taskRepository;
     this.draftRepository = draftRepository;
     this.reviewRepository = reviewRepository;
@@ -65,6 +67,7 @@ public class TechnicalSubmissionCoordinator {
     this.taskMapper = taskMapper;
     this.reviewMapper = reviewMapper;
     this.objectMapper = objectMapper;
+    this.structuralDraftLifecycle = structuralDraftLifecycle;
   }
 
   @Transactional
@@ -91,6 +94,7 @@ public class TechnicalSubmissionCoordinator {
   @Transactional
   public QuoteCollaborationProductTask aggregateAfterSubmission(
       QuoteCollaborationProductTask submitted, CollaborationPrincipal technician) {
+    structuralDraftLifecycle.submit(submitted, technician.actor());
     QuoteCollaborationTask master = taskMapper.selectScopedForUpdate(
         submitted.getOriginCollaborationId(), submitted.getBusinessUnitType());
     if (master == null) throw new IllegalStateException("产品所属协作主任务不存在");

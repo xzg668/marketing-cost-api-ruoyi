@@ -8,7 +8,9 @@ public record CurrentU9BomResult(
     String syncBatchId,
     int lineCount,
     String structureFingerprint,
-    String message) {
+    String message,
+    Long monthlySnapshotId,
+    boolean monthlySnapshotCreated) {
 
   public enum Status {
     AVAILABLE,
@@ -32,7 +34,7 @@ public record CurrentU9BomResult(
       String structureFingerprint) {
     return new CurrentU9BomResult(
         Status.AVAILABLE, source, bomVersion, syncBatchId, lineCount,
-        structureFingerprint, null);
+        structureFingerprint, null, null, false);
   }
 
   public static CurrentU9BomResult notFound(String message) {
@@ -56,6 +58,13 @@ public record CurrentU9BomResult(
   }
 
   private static CurrentU9BomResult failure(Status status, String message) {
-    return new CurrentU9BomResult(status, null, null, null, 0, null, message);
+    return new CurrentU9BomResult(
+        status, null, null, null, 0, null, message, null, false);
+  }
+
+  public CurrentU9BomResult withMonthlySnapshot(Long snapshotId, boolean created) {
+    return new CurrentU9BomResult(
+        status, source, bomVersion, syncBatchId, lineCount, structureFingerprint, message,
+        snapshotId, created);
   }
 }

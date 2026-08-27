@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.sanhua.marketingcost.dto.CostRunObjectResult;
+import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunResultDto;
 import com.sanhua.marketingcost.entity.CostRunTask;
 import com.sanhua.marketingcost.service.MonthlyRepriceCostRunAdapter;
@@ -24,6 +25,8 @@ class MonthlyRepriceCostRunTaskExecutorTest {
 
     assertThat(result.resultSummaryJson())
         .isEqualTo("{\"partItemCount\":0,\"costItemCount\":0,\"totalCost\":\"88.66\"}");
+    assertThat(result.costRunVersionId()).isEqualTo(66L);
+    assertThat(result.costRunNo()).isEqualTo("MONTHLY-66");
     assertThat(harness.adapterTask).isSameAs(task);
     assertThat(harness.adapterWorkerId).isEqualTo("worker-1");
   }
@@ -64,7 +67,10 @@ class MonthlyRepriceCostRunTaskExecutorTest {
   private static CostRunObjectResult result() {
     CostRunResultDto resultDto = new CostRunResultDto();
     resultDto.setTotalCost(new BigDecimal("88.66"));
-    return CostRunObjectResult.of(null, null, resultDto, List.of(), List.of());
+    CostRunContext context = new CostRunContext();
+    context.setCostRunVersionId(66L);
+    context.setCostRunNo("MONTHLY-66");
+    return CostRunObjectResult.of(context, null, resultDto, List.of(), List.of());
   }
 
   private static class Harness {

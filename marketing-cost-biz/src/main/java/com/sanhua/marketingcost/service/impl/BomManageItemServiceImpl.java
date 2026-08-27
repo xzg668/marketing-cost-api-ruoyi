@@ -11,10 +11,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * BOM 管理（老表视图服务）。
+ * BOM 管理只读视图服务。
  *
  * <p>读取能力保留 —— {@link #page} / {@link #listDetails} 走
- * {@link BomManageItemMapper} 的自定义 SQL，底层表已切到新表
+ * {@link BomManageItemMapper} 的自定义 SQL，直接读取
  * {@code lp_bom_costing_row}（见 Mapper 文件注释）。
  */
 @Service

@@ -67,7 +67,6 @@ class SupplementBomReadServiceImplTest {
   private QuoteBomSupplementVersion version(Long id, String periodMonth, String reuseValidUntil) {
     QuoteBomSupplementVersion version = new QuoteBomSupplementVersion();
     version.setId(id);
-    version.setTaskId(1000L + id);
     version.setTaskNo("TASK-" + id);
     version.setQuoteProductCode("MAT-001");
     version.setProductType("NON_BARE");

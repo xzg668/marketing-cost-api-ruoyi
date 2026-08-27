@@ -22,7 +22,6 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.ProductProperty;
 import com.sanhua.marketingcost.entity.QualityLossRate;
-import com.sanhua.marketingcost.entity.SalaryCost;
 import com.sanhua.marketingcost.entity.ThreeExpenseDimensionMapping;
 import com.sanhua.marketingcost.entity.ThreeExpenseRate;
 import com.sanhua.marketingcost.mapper.AuxCostItemMapper;
@@ -41,7 +40,6 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.OtherExpenseRateMapper;
 import com.sanhua.marketingcost.mapper.ProductPropertyMapper;
 import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
-import com.sanhua.marketingcost.mapper.SalaryCostMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -61,56 +59,6 @@ import org.junit.jupiter.api.Test;
 class CostRunCostItemServiceImplTest {
 
   @Test
-  @DisplayName("T9 辅料 DIRECT 模式：金额直接取 unit_price，不乘上浮率")
-  void auxDirectAmountUsesUnitPrice() {
-    AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
-    AuxCostItemDto direct = newAuxCost("0201", "辅助焊料类", "12.345678", "9.9900", "DIRECT");
-    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of(direct));
-
-    CostRunCostItemServiceImpl svc = buildWithAuxMapper(auxMapper);
-    List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-1"));
-
-    assertThat(items).hasSize(1);
-    assertThat(items.get(0).getCostCode()).isEqualTo("AUX_0201");
-    assertThat(items.get(0).getCostName()).isEqualTo("辅助焊料类");
-    assertThat(items.get(0).getBaseAmount()).isEqualByComparingTo("12.345678");
-    assertThat(items.get(0).getRate()).isNull();
-    assertThat(items.get(0).getAmount()).isEqualByComparingTo("12.345678");
-  }
-
-  @Test
-  @DisplayName("T9 辅料 RATE 模式：保持 unit_price × float_rate 原行为")
-  void auxRateAmountKeepsLegacyFormula() {
-    AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
-    AuxCostItemDto rate = newAuxCost("1004", "清洗费", "4.000000", "0.0400", "RATE");
-    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of(rate));
-
-    CostRunCostItemServiceImpl svc = buildWithAuxMapper(auxMapper);
-    List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-1"));
-
-    assertThat(items).hasSize(1);
-    assertThat(items.get(0).getCostCode()).isEqualTo("AUX_1004");
-    assertThat(items.get(0).getBaseAmount()).isEqualByComparingTo("4.000000");
-    assertThat(items.get(0).getRate()).isEqualByComparingTo("0.0400");
-    assertThat(items.get(0).getAmount()).isEqualByComparingTo("0.160000");
-  }
-
-  @Test
-  @DisplayName("T9 辅料兼容：amount_calc_mode 为空时按历史 RATE 口径计算")
-  void auxBlankModeFallsBackToRateFormula() {
-    AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
-    AuxCostItemDto legacy = newAuxCost("1001", "气体", "3.000000", "0.0100", null);
-    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of(legacy));
-
-    CostRunCostItemServiceImpl svc = buildWithAuxMapper(auxMapper);
-    List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-1"));
-
-    assertThat(items).hasSize(1);
-    assertThat(items.get(0).getRate()).isEqualByComparingTo("0.0100");
-    assertThat(items.get(0).getAmount()).isEqualByComparingTo("0.030000");
-  }
-
-  @Test
   @DisplayName("T9 CMS 公共生效辅料：正式核算只取公共生效来源并乘 1.05")
   void auxCmsEffectiveUsesEffectiveAmountAndDisplayOrder() {
     AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
@@ -122,14 +70,8 @@ class CostRunCostItemServiceImplTest {
     cmsFirst.setMaterialCode("P-1");
     cmsFirst.setSource("CMS_EFFECTIVE");
     cmsFirst.setDisplayOrder(10);
-    AuxCostItemDto oldCmsDerived = newAuxCost("0201", "旧CMS派生", "99.000000", "9.9900", "DIRECT");
-    oldCmsDerived.setMaterialCode("P-1");
-    oldCmsDerived.setSource("CMS");
-    AuxCostItemDto manual = newAuxCost("1004", "清洗费", "4.000000", "0.0400", "RATE");
-    manual.setMaterialCode("P-1");
     when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-1"), "COMMERCIAL"))
         .thenReturn(List.of(cmsSecond, cmsFirst));
-    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of(oldCmsDerived, manual));
 
     CostRunCostItemServiceImpl svc = buildWithAuxMapper(auxMapper);
     List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-1"), 2026, "COMMERCIAL");
@@ -154,11 +96,8 @@ class CostRunCostItemServiceImplTest {
     AuxCostItemDto normalCms = newAuxCost("0201", "辅助焊料类", "0.400000", "9.9900", "DIRECT");
     normalCms.setMaterialCode("P-1");
     normalCms.setSource("CMS_EFFECTIVE");
-    AuxCostItemDto packagingLegacy = newAuxCost("0215", "包装辅料", "10.000000", "0.1000", "RATE");
-    packagingLegacy.setMaterialCode("P-1");
     when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-1"), "COMMERCIAL"))
         .thenReturn(List.of(packagingCms, normalCms));
-    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of(packagingLegacy));
 
     CostRunCostItemServiceImpl svc = buildWithAuxMapper(auxMapper);
     List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-1"), 2026, "COMMERCIAL");
@@ -174,7 +113,6 @@ class CostRunCostItemServiceImplTest {
   void calculationUsesCmsEffectiveSalarySources() {
     OaFormMapper formMapper = mock(OaFormMapper.class);
     OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
-    SalaryCostMapper salaryMapper = mock(SalaryCostMapper.class);
     CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
     AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
     CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
@@ -196,19 +134,10 @@ class CostRunCostItemServiceImplTest {
     when(formMapper.selectOne(any())).thenReturn(form);
     when(formItemMapper.selectList(any())).thenReturn(List.of(item));
 
-    SalaryCost oldCms = new SalaryCost();
-    oldCms.setMaterialCode("P-1");
-    oldCms.setSource("CMS");
-    oldCms.setBusinessUnit("商用部品事业部");
-    oldCms.setDirectLaborCost(new BigDecimal("99.000000"));
-    oldCms.setIndirectLaborCost(new BigDecimal("88.000000"));
-    when(salaryMapper.selectList(any())).thenReturn(List.of(oldCms));
-
     CmsCostSourceEffective direct = effective("SALARY_DIRECT", "P-1", "0301", "4.000000");
     CmsCostSourceEffective indirect = effective("SALARY_INDIRECT", "P-1", "0302", "0.220000");
     when(effectiveMapper.selectList(any())).thenReturn(List.of(direct, indirect));
     when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-1"), "COMMERCIAL")).thenReturn(List.of());
-    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of());
     when(partMapper.selectList(any())).thenReturn(List.of());
     when(masterMapper.selectList(any())).thenReturn(List.of());
     when(rawMapper.selectList(any())).thenReturn(List.of());
@@ -219,7 +148,6 @@ class CostRunCostItemServiceImplTest {
         buildForCalculation(
             formMapper,
             formItemMapper,
-            salaryMapper,
             effectiveMapper,
             ensureService,
             auxMapper,
@@ -249,7 +177,6 @@ class CostRunCostItemServiceImplTest {
   void departmentFeesUseCmsEffectiveSalaryTotals() {
     OaFormMapper formMapper = mock(OaFormMapper.class);
     OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
-    SalaryCostMapper salaryMapper = mock(SalaryCostMapper.class);
     CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
     DepartmentFundRateMapper departmentMapper = mock(DepartmentFundRateMapper.class);
     AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
@@ -270,7 +197,6 @@ class CostRunCostItemServiceImplTest {
     item.setBusinessUnitType("COMMERCIAL");
     when(formMapper.selectOne(any())).thenReturn(form);
     when(formItemMapper.selectList(any())).thenReturn(List.of(item));
-    when(salaryMapper.selectList(any())).thenReturn(List.of());
 
     CmsCostSourceEffective direct =
         effective("SALARY_DIRECT", "1001900001090", "0301", "12.491320");
@@ -300,7 +226,6 @@ class CostRunCostItemServiceImplTest {
         buildForCalculation(
             formMapper,
             formItemMapper,
-            salaryMapper,
             effectiveMapper,
             mock(CmsCostEffectiveSourceEnsureService.class),
             auxMapper,
@@ -344,7 +269,6 @@ class CostRunCostItemServiceImplTest {
     int currentYear = java.time.Year.now().getValue();
     OaFormMapper formMapper = mock(OaFormMapper.class);
     OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
-    SalaryCostMapper salaryMapper = mock(SalaryCostMapper.class);
     CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
     AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
     CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
@@ -364,7 +288,6 @@ class CostRunCostItemServiceImplTest {
     item.setBusinessUnitType("COMMERCIAL");
     when(formMapper.selectOne(any(Wrapper.class))).thenReturn(form);
     when(formItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(item));
-    when(salaryMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(effectiveMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(auxMapper.selectEffectiveAuxCostItems(currentYear, Set.of("P-CURRENT-YEAR"), "COMMERCIAL"))
         .thenReturn(List.of());
@@ -379,7 +302,6 @@ class CostRunCostItemServiceImplTest {
         buildForCalculation(
             formMapper,
             formItemMapper,
-            salaryMapper,
             effectiveMapper,
             ensureService,
             auxMapper,
@@ -402,11 +324,10 @@ class CostRunCostItemServiceImplTest {
   }
 
   @Test
-  @DisplayName("T15 工资正式核算：只取当前料号公共生效来源，不用 lp_salary_cost 参考料号兜底")
-  void calculationDoesNotFallbackToSalaryReferenceMaterial() {
+  @DisplayName("T15 工资正式核算：只取当前料号公共生效来源，不跨料号兜底")
+  void calculationDoesNotFallbackToAnotherEffectiveMaterial() {
     OaFormMapper formMapper = mock(OaFormMapper.class);
     OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
-    SalaryCostMapper salaryMapper = mock(SalaryCostMapper.class);
     CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
     AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
     CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
@@ -427,19 +348,10 @@ class CostRunCostItemServiceImplTest {
     when(formMapper.selectOne(any())).thenReturn(form);
     when(formItemMapper.selectList(any())).thenReturn(List.of(item));
 
-    SalaryCost referenceSelection = new SalaryCost();
-    referenceSelection.setMaterialCode("P-NEW");
-    referenceSelection.setRefMaterialCode("P-REF");
-    referenceSelection.setBusinessUnit("商用部品事业部");
-    referenceSelection.setDirectLaborCost(new BigDecimal("99.000000"));
-    referenceSelection.setIndirectLaborCost(new BigDecimal("88.000000"));
-    when(salaryMapper.selectList(any())).thenReturn(List.of(referenceSelection));
-
     CmsCostSourceEffective direct = effective("SALARY_DIRECT", "P-REF", "0301", "4.000000");
     CmsCostSourceEffective indirect = effective("SALARY_INDIRECT", "P-REF", "0302", "0.220000");
     when(effectiveMapper.selectList(any())).thenReturn(List.of(direct, indirect));
     when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-NEW"), "COMMERCIAL")).thenReturn(List.of());
-    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of());
     when(partMapper.selectList(any())).thenReturn(List.of());
     when(masterMapper.selectList(any())).thenReturn(List.of());
     when(rawMapper.selectList(any())).thenReturn(List.of());
@@ -449,7 +361,6 @@ class CostRunCostItemServiceImplTest {
         buildForCalculation(
             formMapper,
             formItemMapper,
-            salaryMapper,
             effectiveMapper,
             auxMapper,
             partMapper,
@@ -474,7 +385,6 @@ class CostRunCostItemServiceImplTest {
   void calculationLossRateUsesMaterialCodeMatch() {
     OaFormMapper formMapper = mock(OaFormMapper.class);
     OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
-    SalaryCostMapper salaryMapper = mock(SalaryCostMapper.class);
     CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
     AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
     CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
@@ -483,7 +393,7 @@ class CostRunCostItemServiceImplTest {
     BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
     QualityLossRateMapper qualityMapper = mock(QualityLossRateMapper.class);
     stubBasicCalculationInputs(
-        formMapper, formItemMapper, salaryMapper, effectiveMapper, auxMapper, partMapper, masterMapper,
+        formMapper, formItemMapper, effectiveMapper, auxMapper, partMapper, masterMapper,
         rawMapper, bomMapper, "P-LOSS");
     QualityLossRate rate = new QualityLossRate();
     rate.setId(10L);
@@ -492,7 +402,7 @@ class CostRunCostItemServiceImplTest {
 
     CostRunCostItemServiceImpl svc =
         buildForCalculation(
-            formMapper, formItemMapper, salaryMapper, effectiveMapper, auxMapper, partMapper,
+            formMapper, formItemMapper, effectiveMapper, auxMapper, partMapper,
             masterMapper, rawMapper, bomMapper, qualityMapper);
     List<CostRunCostItemDto> items =
         svc.listByMaterialCodes(
@@ -514,7 +424,6 @@ class CostRunCostItemServiceImplTest {
   void calculationLossRateFallsBackToMaterialModel() {
     OaFormMapper formMapper = mock(OaFormMapper.class);
     OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
-    SalaryCostMapper salaryMapper = mock(SalaryCostMapper.class);
     CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
     AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
     CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
@@ -523,7 +432,7 @@ class CostRunCostItemServiceImplTest {
     BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
     QualityLossRateMapper qualityMapper = mock(QualityLossRateMapper.class);
     stubBasicCalculationInputs(
-        formMapper, formItemMapper, salaryMapper, effectiveMapper, auxMapper, partMapper, masterMapper,
+        formMapper, formItemMapper, effectiveMapper, auxMapper, partMapper, masterMapper,
         rawMapper, bomMapper, "P-MODEL");
     MaterialMasterRaw raw = new MaterialMasterRaw();
     raw.setMaterialCode("P-MODEL");
@@ -537,7 +446,7 @@ class CostRunCostItemServiceImplTest {
 
     CostRunCostItemServiceImpl svc =
         buildForCalculation(
-            formMapper, formItemMapper, salaryMapper, effectiveMapper, auxMapper, partMapper,
+            formMapper, formItemMapper, effectiveMapper, auxMapper, partMapper,
             masterMapper, rawMapper, bomMapper, qualityMapper);
     List<CostRunCostItemDto> items =
         svc.listByMaterialCodes(
@@ -559,7 +468,6 @@ class CostRunCostItemServiceImplTest {
   void threeExpenseRateUsesQuoteAccountingContext() {
     OaFormMapper formMapper = mock(OaFormMapper.class);
     OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
-    SalaryCostMapper salaryMapper = mock(SalaryCostMapper.class);
     CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
     AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
     CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
@@ -577,11 +485,9 @@ class CostRunCostItemServiceImplTest {
     item.setBusinessUnitType("COMMERCIAL");
     when(formMapper.selectOne(any(Wrapper.class))).thenReturn(form);
     when(formItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(item));
-    when(salaryMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(effectiveMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-Q10"), "COMMERCIAL"))
         .thenReturn(List.of());
-    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of());
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
@@ -603,7 +509,7 @@ class CostRunCostItemServiceImplTest {
 
     CostRunCostItemServiceImpl svc =
         buildForCalculation(
-            formMapper, formItemMapper, salaryMapper, effectiveMapper, auxMapper, partMapper,
+            formMapper, formItemMapper, effectiveMapper, auxMapper, partMapper,
             masterMapper, rawMapper, bomMapper, mock(QualityLossRateMapper.class), lookup,
             threeExpenseRateMapper);
     List<CostRunCostItemDto> items =
@@ -628,7 +534,6 @@ class CostRunCostItemServiceImplTest {
   void realFiSc006OverseasWarehouseMatchesCommercialDomesticOverseasRate() {
     OaFormMapper formMapper = mock(OaFormMapper.class);
     OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
-    SalaryCostMapper salaryMapper = mock(SalaryCostMapper.class);
     CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
     AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
     CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
@@ -650,11 +555,9 @@ class CostRunCostItemServiceImplTest {
     item.setBusinessUnitType("COMMERCIAL");
     when(formMapper.selectOne(any(Wrapper.class))).thenReturn(form);
     when(formItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(item));
-    when(salaryMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(effectiveMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("1079900000536"), "COMMERCIAL"))
         .thenReturn(List.of());
-    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of());
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
@@ -676,7 +579,7 @@ class CostRunCostItemServiceImplTest {
 
     CostRunCostItemServiceImpl svc =
         buildForCalculation(
-            formMapper, formItemMapper, salaryMapper, effectiveMapper, auxMapper, partMapper,
+            formMapper, formItemMapper, effectiveMapper, auxMapper, partMapper,
             masterMapper, rawMapper, bomMapper, mock(QualityLossRateMapper.class), lookup,
             threeExpenseRateMapper);
     List<CostRunCostItemDto> items =
@@ -701,7 +604,6 @@ class CostRunCostItemServiceImplTest {
   void threeExpenseRateMissingDimensionReturnsRemark() {
     OaFormMapper formMapper = mock(OaFormMapper.class);
     OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
-    SalaryCostMapper salaryMapper = mock(SalaryCostMapper.class);
     CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
     AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
     CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
@@ -718,11 +620,9 @@ class CostRunCostItemServiceImplTest {
     item.setBusinessUnitType("COMMERCIAL");
     when(formMapper.selectOne(any(Wrapper.class))).thenReturn(form);
     when(formItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(item));
-    when(salaryMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(effectiveMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-Q10"), "COMMERCIAL"))
         .thenReturn(List.of());
-    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of());
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
@@ -732,7 +632,7 @@ class CostRunCostItemServiceImplTest {
 
     CostRunCostItemServiceImpl svc =
         buildForCalculation(
-            formMapper, formItemMapper, salaryMapper, effectiveMapper, auxMapper, partMapper,
+            formMapper, formItemMapper, effectiveMapper, auxMapper, partMapper,
             masterMapper, rawMapper, bomMapper, mock(QualityLossRateMapper.class), lookup);
     List<CostRunCostItemDto> items =
         svc.listByMaterialCodes(
@@ -757,7 +657,6 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemServiceImpl svc = buildForCalculation(
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(AuxCostItemMapper.class),
         mock(CostRunPartItemMapper.class),
@@ -787,7 +686,6 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemServiceImpl svc = buildForCalculation(
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(AuxCostItemMapper.class),
         mock(CostRunPartItemMapper.class),
@@ -808,7 +706,6 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemServiceImpl svc = buildForCalculation(
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(AuxCostItemMapper.class),
         mock(CostRunPartItemMapper.class),
@@ -832,7 +729,6 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemServiceImpl svc = buildForCalculation(
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(AuxCostItemMapper.class),
         mock(CostRunPartItemMapper.class),
@@ -858,7 +754,6 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemServiceImpl svc = buildForCalculation(
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(AuxCostItemMapper.class),
         mock(CostRunPartItemMapper.class),
@@ -879,7 +774,6 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemServiceImpl svc = buildForCalculation(
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(AuxCostItemMapper.class),
         mock(CostRunPartItemMapper.class),
@@ -905,7 +799,6 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemServiceImpl svc = buildForCalculation(
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(AuxCostItemMapper.class),
         mock(CostRunPartItemMapper.class),
@@ -935,7 +828,6 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemServiceImpl svc = buildForCalculation(
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(AuxCostItemMapper.class),
         mock(CostRunPartItemMapper.class),
@@ -972,7 +864,6 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemServiceImpl svc = buildForCalculation(
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(AuxCostItemMapper.class),
         mock(CostRunPartItemMapper.class),
@@ -1005,7 +896,6 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemServiceImpl svc = buildForCalculation(
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(AuxCostItemMapper.class),
         mock(CostRunPartItemMapper.class),
@@ -1028,7 +918,6 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemServiceImpl svc = buildForCalculation(
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(AuxCostItemMapper.class),
         mock(CostRunPartItemMapper.class),
@@ -1055,7 +944,6 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemServiceImpl svc = buildForCalculation(
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(AuxCostItemMapper.class),
         mock(CostRunPartItemMapper.class),
@@ -1081,13 +969,12 @@ class CostRunCostItemServiceImplTest {
   }
 
   @Test
-  @DisplayName("T15 辅料正式核算：只取当前料号公共生效来源，不用 lp_aux_subject 参考料号兜底")
+  @DisplayName("T15 辅料正式核算：只取当前料号的 CMS 公共生效来源")
   void auxCmsEffectiveDoesNotFallbackToReferenceMaterial() {
     AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
     AuxCostItemDto referenceSelection = newAuxCost("0201", "旧复制辅料", "99.000000", "0.1000", "RATE");
     referenceSelection.setMaterialCode("P-NEW");
     referenceSelection.setRefMaterialCode("P-REF");
-    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of(referenceSelection));
     when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-NEW"), "COMMERCIAL"))
         .thenReturn(List.of());
 
@@ -1385,7 +1272,6 @@ class CostRunCostItemServiceImplTest {
   private void stubBasicCalculationInputs(
       OaFormMapper formMapper,
       OaFormItemMapper formItemMapper,
-      SalaryCostMapper salaryMapper,
       CmsCostSourceEffectiveMapper effectiveMapper,
       AuxCostItemMapper auxMapper,
       CostRunPartItemMapper partMapper,
@@ -1405,11 +1291,9 @@ class CostRunCostItemServiceImplTest {
     item.setBusinessUnitType("COMMERCIAL");
     when(formMapper.selectOne(any(Wrapper.class))).thenReturn(form);
     when(formItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(item));
-    when(salaryMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(effectiveMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of(productCode), "COMMERCIAL"))
         .thenReturn(List.of());
-    when(auxMapper.selectByMaterialCodes(any())).thenReturn(List.of());
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
@@ -1427,7 +1311,6 @@ class CostRunCostItemServiceImplTest {
         mock(CostRunCostItemMapper.class),
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(DepartmentFundRateMapper.class),
         mock(AuxCostItemMapper.class),
@@ -1449,7 +1332,6 @@ class CostRunCostItemServiceImplTest {
         mock(CostRunCostItemMapper.class),
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(DepartmentFundRateMapper.class),
         mock(AuxCostItemMapper.class),
@@ -1470,7 +1352,6 @@ class CostRunCostItemServiceImplTest {
         mock(CostRunCostItemMapper.class),
         mock(OaFormMapper.class),
         mock(OaFormItemMapper.class),
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(DepartmentFundRateMapper.class),
         auxMapper,
@@ -1572,7 +1453,6 @@ class CostRunCostItemServiceImplTest {
   private CostRunCostItemServiceImpl buildForCalculation(
       OaFormMapper formMapper,
       OaFormItemMapper formItemMapper,
-      SalaryCostMapper salaryMapper,
       CmsCostSourceEffectiveMapper effectiveMapper,
       AuxCostItemMapper auxMapper,
       CostRunPartItemMapper partMapper,
@@ -1582,7 +1462,6 @@ class CostRunCostItemServiceImplTest {
     return buildForCalculation(
         formMapper,
         formItemMapper,
-        salaryMapper,
         effectiveMapper,
         auxMapper,
         partMapper,
@@ -1595,7 +1474,6 @@ class CostRunCostItemServiceImplTest {
   private CostRunCostItemServiceImpl buildForCalculation(
       OaFormMapper formMapper,
       OaFormItemMapper formItemMapper,
-      SalaryCostMapper salaryMapper,
       CmsCostSourceEffectiveMapper effectiveMapper,
       AuxCostItemMapper auxMapper,
       CostRunPartItemMapper partMapper,
@@ -1606,7 +1484,6 @@ class CostRunCostItemServiceImplTest {
     return buildForCalculation(
         formMapper,
         formItemMapper,
-        salaryMapper,
         effectiveMapper,
         mock(CmsCostEffectiveSourceEnsureService.class),
         auxMapper,
@@ -1620,7 +1497,6 @@ class CostRunCostItemServiceImplTest {
   private CostRunCostItemServiceImpl buildForCalculation(
       OaFormMapper formMapper,
       OaFormItemMapper formItemMapper,
-      SalaryCostMapper salaryMapper,
       CmsCostSourceEffectiveMapper effectiveMapper,
       CmsCostEffectiveSourceEnsureService ensureService,
       AuxCostItemMapper auxMapper,
@@ -1631,7 +1507,6 @@ class CostRunCostItemServiceImplTest {
     return buildForCalculation(
         formMapper,
         formItemMapper,
-        salaryMapper,
         effectiveMapper,
         ensureService,
         auxMapper,
@@ -1645,7 +1520,6 @@ class CostRunCostItemServiceImplTest {
   private CostRunCostItemServiceImpl buildForCalculation(
       OaFormMapper formMapper,
       OaFormItemMapper formItemMapper,
-      SalaryCostMapper salaryMapper,
       CmsCostSourceEffectiveMapper effectiveMapper,
       CmsCostEffectiveSourceEnsureService ensureService,
       AuxCostItemMapper auxMapper,
@@ -1657,7 +1531,6 @@ class CostRunCostItemServiceImplTest {
     return buildForCalculation(
         formMapper,
         formItemMapper,
-        salaryMapper,
         effectiveMapper,
         ensureService,
         auxMapper,
@@ -1672,7 +1545,6 @@ class CostRunCostItemServiceImplTest {
   private CostRunCostItemServiceImpl buildForCalculation(
       OaFormMapper formMapper,
       OaFormItemMapper formItemMapper,
-      SalaryCostMapper salaryMapper,
       CmsCostSourceEffectiveMapper effectiveMapper,
       AuxCostItemMapper auxMapper,
       CostRunPartItemMapper partMapper,
@@ -1684,7 +1556,6 @@ class CostRunCostItemServiceImplTest {
     return buildForCalculation(
         formMapper,
         formItemMapper,
-        salaryMapper,
         effectiveMapper,
         mock(CmsCostEffectiveSourceEnsureService.class),
         auxMapper,
@@ -1699,7 +1570,6 @@ class CostRunCostItemServiceImplTest {
   private CostRunCostItemServiceImpl buildForCalculation(
       OaFormMapper formMapper,
       OaFormItemMapper formItemMapper,
-      SalaryCostMapper salaryMapper,
       CmsCostSourceEffectiveMapper effectiveMapper,
       CmsCostEffectiveSourceEnsureService ensureService,
       AuxCostItemMapper auxMapper,
@@ -1712,7 +1582,6 @@ class CostRunCostItemServiceImplTest {
     return buildForCalculation(
         formMapper,
         formItemMapper,
-        salaryMapper,
         effectiveMapper,
         ensureService,
         auxMapper,
@@ -1728,7 +1597,6 @@ class CostRunCostItemServiceImplTest {
   private CostRunCostItemServiceImpl buildForCalculation(
       OaFormMapper formMapper,
       OaFormItemMapper formItemMapper,
-      SalaryCostMapper salaryMapper,
       CmsCostSourceEffectiveMapper effectiveMapper,
       AuxCostItemMapper auxMapper,
       CostRunPartItemMapper partMapper,
@@ -1741,7 +1609,6 @@ class CostRunCostItemServiceImplTest {
     return buildForCalculation(
         formMapper,
         formItemMapper,
-        salaryMapper,
         effectiveMapper,
         mock(CmsCostEffectiveSourceEnsureService.class),
         auxMapper,
@@ -1757,7 +1624,6 @@ class CostRunCostItemServiceImplTest {
   private CostRunCostItemServiceImpl buildForCalculation(
       OaFormMapper formMapper,
       OaFormItemMapper formItemMapper,
-      SalaryCostMapper salaryMapper,
       CmsCostSourceEffectiveMapper effectiveMapper,
       CmsCostEffectiveSourceEnsureService ensureService,
       AuxCostItemMapper auxMapper,
@@ -1771,7 +1637,6 @@ class CostRunCostItemServiceImplTest {
     return buildForCalculation(
         formMapper,
         formItemMapper,
-        salaryMapper,
         effectiveMapper,
         ensureService,
         auxMapper,
@@ -1788,7 +1653,6 @@ class CostRunCostItemServiceImplTest {
   private CostRunCostItemServiceImpl buildForCalculation(
       OaFormMapper formMapper,
       OaFormItemMapper formItemMapper,
-      SalaryCostMapper salaryMapper,
       CmsCostSourceEffectiveMapper effectiveMapper,
       CmsCostEffectiveSourceEnsureService ensureService,
       AuxCostItemMapper auxMapper,
@@ -1804,7 +1668,6 @@ class CostRunCostItemServiceImplTest {
         mock(CostRunCostItemMapper.class),
         formMapper,
         formItemMapper,
-        salaryMapper,
         effectiveMapper,
         departmentFundRateMapper,
         auxMapper,
@@ -1830,7 +1693,6 @@ class CostRunCostItemServiceImplTest {
         mock(CostRunCostItemMapper.class),
         formMapper,
         formItemMapper,
-        mock(SalaryCostMapper.class),
         mock(CmsCostSourceEffectiveMapper.class),
         mock(DepartmentFundRateMapper.class),
         mock(AuxCostItemMapper.class),

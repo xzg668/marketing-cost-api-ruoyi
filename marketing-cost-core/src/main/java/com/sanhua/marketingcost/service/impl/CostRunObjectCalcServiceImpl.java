@@ -146,6 +146,6 @@ public class CostRunObjectCalcServiceImpl implements CostRunObjectCalcService {
         return LocalDate.parse(context.getPricingMonth().trim() + "-01");
       }
     }
-    return LocalDate.now();
+    return com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingDate();
   }
 }

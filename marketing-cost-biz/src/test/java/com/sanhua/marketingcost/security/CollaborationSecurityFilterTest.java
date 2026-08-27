@@ -2,9 +2,10 @@ package com.sanhua.marketingcost.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.entity.system.LpCollaborationToken;
+import com.sanhua.marketingcost.entity.SysUser;
 import com.sanhua.marketingcost.service.CollaborationTokenService;
+import com.sanhua.marketingcost.service.SysUserService;
 import jakarta.servlet.FilterChain;
-import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -13,8 +14,9 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
-import java.time.LocalDateTime;
 import java.util.Map;
+import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -25,13 +27,18 @@ import static org.mockito.Mockito.*;
 class CollaborationSecurityFilterTest {
 
     private CollaborationTokenService tokenService;
+    private SysUserService userService;
+    private CollaborationPortalGrantCodec grantCodec;
     private CollaborationSecurityFilter filter;
     private FilterChain filterChain;
 
     @BeforeEach
     void setUp() {
         tokenService = mock(CollaborationTokenService.class);
-        filter = new CollaborationSecurityFilter(tokenService, new ObjectMapper());
+        userService = mock(SysUserService.class);
+        ObjectMapper objectMapper = new ObjectMapper();
+        grantCodec = new CollaborationPortalGrantCodec(objectMapper);
+        filter = new CollaborationSecurityFilter(tokenService, grantCodec, userService, objectMapper);
         filterChain = mock(FilterChain.class);
         SecurityContextHolder.clearContext();
     }
@@ -49,82 +56,53 @@ class CollaborationSecurityFilterTest {
     }
 
     @Test
-    @DisplayName("/collaborate 路径无 token 参数 — 返回 401")
-    void collaboratePath_noToken_returns401() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/collaborate/bom-supplement");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-
-        filter.doFilterInternal(request, response, filterChain);
-
-        assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.getStatus());
-        verify(filterChain, never()).doFilter(any(), any());
-    }
-
-    @Test
-    @DisplayName("/collaborate 路径 token 无效 — 返回 401")
-    void collaboratePath_invalidToken_returns401() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/collaborate/bom-supplement");
-        request.setParameter("token", "invalid-token");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-
-        when(tokenService.validateToken("invalid-token")).thenReturn(null);
-
-        filter.doFilterInternal(request, response, filterChain);
-
-        assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.getStatus());
-        verify(filterChain, never()).doFilter(any(), any());
-    }
-
-    @Test
-    @DisplayName("/collaborate 路径 token 有效 — 设置 Authentication 并放行")
-    void collaboratePath_validToken_setsAuthAndContinues() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/collaborate/bom-supplement");
-        request.setParameter("token", "valid-token");
+    @DisplayName("统一协作 API 携带有效请求头 — 绑定人员、主任务和模块权限")
+    void portalApi_validHeader_setsRestrictedAuthentication() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "GET", "/api/v1/collaboration/product-tasks/mine");
+        request.addHeader(CollaborationPortalAuthentication.HEADER, "portal-token");
         MockHttpServletResponse response = new MockHttpServletResponse();
 
         LpCollaborationToken record = new LpCollaborationToken();
-        record.setTokenId(10L);
-        record.setToken("valid-token");
-        record.setUserId(5L);
-        record.setTokenType("bom-supplement");
-        record.setRemark("OA-2026-001");
-        record.setStatus("0");
-        record.setExpireTime(LocalDateTime.now().plusHours(10));
-
-        when(tokenService.validateToken("valid-token")).thenReturn(record);
+        record.setTokenId(20L);
+        record.setToken("portal-token");
+        record.setUserId(6L);
+        record.setTokenType(CollaborationPortalAuthentication.TOKEN_TYPE);
+        record.setRemark(grantCodec.encode(88L,
+                Set.of(CollaborationPortalModule.BOM, CollaborationPortalModule.PRICE)));
+        when(tokenService.validateToken("portal-token")).thenReturn(record);
+        SysUser user = new SysUser();
+        user.setUserId(6L);
+        user.setStatus("0");
+        user.setDelFlag("0");
+        user.setBusinessUnitType("COMMERCIAL");
+        when(userService.getById(6L)).thenReturn(user);
 
         filter.doFilterInternal(request, response, filterChain);
 
-        // 应放行
         verify(filterChain).doFilter(request, response);
-
-        // 应设置 Authentication
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        assertNotNull(auth);
-        assertEquals("collaborator:5", auth.getPrincipal());
-        assertTrue(auth.getAuthorities().stream()
-                .anyMatch(a -> a.getAuthority().equals("ROLE_OA_COLLABORATOR")));
-
-        // 应设置 details
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        assertNotNull(authentication);
+        assertTrue(authentication.getAuthorities().stream()
+                .anyMatch(a -> "collaboration:task:edit".equals(a.getAuthority())));
         @SuppressWarnings("unchecked")
-        Map<String, Object> details = (Map<String, Object>) auth.getDetails();
-        assertEquals(10L, details.get("tokenId"));
-        assertEquals("bom-supplement", details.get("tokenType"));
-        assertEquals(5L, details.get("userId"));
-        assertEquals("OA-2026-001", details.get("remark"));
+        Map<String, Object> details = (Map<String, Object>) authentication.getDetails();
+        assertEquals(88L, details.get(CollaborationPortalAuthentication.KEY_COLLABORATION_ID));
+        assertEquals("COMMERCIAL", details.get(BusinessUnitContext.KEY_BUSINESS_UNIT_TYPE));
+        assertEquals(List.of("BOM", "PRICE"), details.get(
+                CollaborationPortalAuthentication.KEY_MODULES));
     }
 
     @Test
-    @DisplayName("/collaborate/price-supplement 路径 — 同样走 Token 校验")
-    void priceSupplementPath_alsoChecked() throws Exception {
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/collaborate/price-supplement");
-        request.setParameter("token", "price-token");
+    @DisplayName("统一协作 API 未带协作请求头 — 放行给普通 JWT 认证")
+    void portalApi_withoutCollaborationHeader_passesToJwt() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "GET", "/api/v1/collaboration/product-tasks/mine");
         MockHttpServletResponse response = new MockHttpServletResponse();
-
-        when(tokenService.validateToken("price-token")).thenReturn(null);
 
         filter.doFilterInternal(request, response, filterChain);
 
-        assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.getStatus());
+        verify(filterChain).doFilter(request, response);
+        verifyNoInteractions(tokenService);
     }
 }

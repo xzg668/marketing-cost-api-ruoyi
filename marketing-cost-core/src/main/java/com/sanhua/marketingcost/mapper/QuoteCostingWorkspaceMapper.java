@@ -17,13 +17,16 @@ public interface QuoteCostingWorkspaceMapper extends BaseMapper<QuoteCostingWork
   @Insert("""
       INSERT IGNORE INTO lp_quote_costing_workspace (
         oa_no, oa_form_item_id, product_code, period_month, business_unit_type,
-        workspace_status, current_step, gap_count, carried_forward_price_count,
+        workspace_status, current_step, source_revision, gap_count, carried_forward_price_count,
+        data_quality_status, data_quality_warning_count,
         lock_version, created_at, updated_at
       ) VALUES (
         #{workspace.oaNo}, #{workspace.oaFormItemId}, #{workspace.productCode},
         #{workspace.periodMonth}, #{workspace.businessUnitType},
-        #{workspace.workspaceStatus}, #{workspace.currentStep}, #{workspace.gapCount},
-        #{workspace.carriedForwardPriceCount}, #{workspace.lockVersion},
+        #{workspace.workspaceStatus}, #{workspace.currentStep}, #{workspace.sourceRevision},
+        #{workspace.gapCount}, #{workspace.carriedForwardPriceCount},
+        COALESCE(#{workspace.dataQualityStatus}, 'UNKNOWN'),
+        COALESCE(#{workspace.dataQualityWarningCount}, 0), #{workspace.lockVersion},
         #{workspace.createdAt}, #{workspace.updatedAt}
       )
       """)
@@ -72,7 +75,9 @@ public interface QuoteCostingWorkspaceMapper extends BaseMapper<QuoteCostingWork
          SET workspace_status = #{workspace.workspaceStatus},
              current_step = #{workspace.currentStep},
              input_fingerprint = #{workspace.inputFingerprint},
+             source_revision = #{workspace.sourceRevision},
              last_success_input_fingerprint = #{workspace.lastSuccessInputFingerprint},
+             last_success_source_revision = #{workspace.lastSuccessSourceRevision},
              bom_source_fingerprint = #{workspace.bomSourceFingerprint},
              bom_rule_fingerprint = #{workspace.bomRuleFingerprint},
              current_bom_build_batch_id = #{workspace.currentBomBuildBatchId},
@@ -80,6 +85,9 @@ public interface QuoteCostingWorkspaceMapper extends BaseMapper<QuoteCostingWork
              current_cost_version_id = #{workspace.currentCostVersionId},
              gap_count = #{workspace.gapCount},
              carried_forward_price_count = #{workspace.carriedForwardPriceCount},
+             data_quality_status = #{workspace.dataQualityStatus},
+             data_quality_warning_count = #{workspace.dataQualityWarningCount},
+             data_quality_summary = #{workspace.dataQualitySummary},
              stale_reason_code = #{workspace.staleReasonCode},
              last_error_step = #{workspace.lastErrorStep},
              last_error_code = #{workspace.lastErrorCode},

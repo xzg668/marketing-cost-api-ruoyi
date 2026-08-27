@@ -18,6 +18,7 @@ import com.sanhua.marketingcost.service.collaboration.CollaborationCodes.Validat
 import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationScanAction;
 import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationScanResult;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.time.LocalDateTime;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -37,8 +38,7 @@ public class QuoteCollaborationTaskServiceImpl {
   private final QuoteCollaborationReviewRepository reviewRepository;
   private final OaFormItemMapper itemMapper;
   private final OaFormMapper formMapper;
-  private final CollaborationTransitionEventFactory eventFactory;
-  private final CollaborationEventService eventService;
+  private final CollaborationTaskLogService taskLogService;
 
   public QuoteCollaborationTaskServiceImpl(
       QuoteCollaborationScanService scanService,
@@ -46,15 +46,13 @@ public class QuoteCollaborationTaskServiceImpl {
       QuoteCollaborationReviewRepository reviewRepository,
       OaFormItemMapper itemMapper,
       OaFormMapper formMapper,
-      CollaborationTransitionEventFactory eventFactory,
-      CollaborationEventService eventService) {
+      CollaborationTaskLogService taskLogService) {
     this.scanService = scanService;
     this.repository = repository;
     this.reviewRepository = reviewRepository;
     this.itemMapper = itemMapper;
     this.formMapper = formMapper;
-    this.eventFactory = eventFactory;
-    this.eventService = eventService;
+    this.taskLogService = taskLogService;
   }
 
   @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -92,8 +90,8 @@ public class QuoteCollaborationTaskServiceImpl {
     CollaborationScope scope = new CollaborationScope(
         scan.businessUnitType(), scan.priceOrgCode());
     String activeLockKey = CollaborationActiveLockKeyFactory.create(
-        scan.accountingMonth(), scan.productCode(), temporaryProductKey(source.item(), scan),
-        scope, requirePrimaryScope(scan));
+        scan.productCode(), source.item().getSunlModel(), temporaryProductKey(source.item(), scan),
+        scope);
 
     Optional<QuoteCollaborationProductTask> active = findScannedOrLockedActiveTask(
         scan, activeLockKey, scope);
@@ -128,7 +126,7 @@ public class QuoteCollaborationTaskServiceImpl {
     repository.synchronizeGaps(
         productTask.getId(), scope, initialGaps(scan), command.actor());
     CollaborationNextAction nextAction = initialNextAction(productTask);
-    eventService.append(eventFactory.taskCreated(productTask, master, nextAction));
+    taskLogService.record(productTask, "TECH_TASK_CREATED", "技术协作任务已创建");
     return result(
         CollaborationStartAction.CREATED, productTask, owner, nextAction, false,
         "已生成技术协作任务，由" + command.technicianName().trim() + "处理");
@@ -225,8 +223,7 @@ public class QuoteCollaborationTaskServiceImpl {
       return reusedResult(sourceTask, concurrent, true,
           "已复用审核通过的BOM或包装，本次价格检查通过");
     }
-    eventService.append(eventFactory.approvedResultReused(
-        approved, sourceTask, master, source.item().getId()));
+    taskLogService.record(sourceTask, "APPROVED_RESULT_REUSED", "当前报价已复用审核通过的结果");
     return reusedResult(sourceTask, link, false,
         "已复用审核通过的BOM或包装，本次价格检查通过");
   }
@@ -270,8 +267,7 @@ public class QuoteCollaborationTaskServiceImpl {
           CollaborationStartAction.LINKED_ACTIVE_TASK, active, linked,
           CollaborationNextAction.NONE, true, linkedMessage(active));
     }
-    eventService.append(eventFactory.taskLinked(
-        active, currentMaster, source.item().getId()));
+    taskLogService.record(active, "TECH_TASK_LINKED", "当前报价已关联正在处理的技术任务");
     return result(
         CollaborationStartAction.LINKED_ACTIVE_TASK, active, linked,
         CollaborationNextAction.NONE, false, linkedMessage(active));
@@ -443,7 +439,7 @@ public class QuoteCollaborationTaskServiceImpl {
     }
     if (!form.getId().equals(item.getOaFormId())
         || !same(scan.oaNo(), form.getOaNo())
-        || !same(scan.productCode(), item.getMaterialNo())) {
+        || !sameNullable(scan.productCode(), item.getMaterialNo())) {
       throw new CollaborationDomainException(
           CollaborationDomainErrorCode.IDEMPOTENCY_CONFLICT,
           "报价产品在扫描后已变化，请重新检查后发起");
@@ -496,7 +492,7 @@ public class QuoteCollaborationTaskServiceImpl {
     if (StringUtils.hasText(scan.productCode())) {
       return null;
     }
-    return CollaborationTemporaryProductKeyFactory.fromQuoteItem(item.getId());
+    return CollaborationTemporaryProductKeyFactory.fromQuoteProduct(item);
   }
 
   private static String linkedMessage(QuoteCollaborationProductTask task) {
@@ -539,6 +535,11 @@ public class QuoteCollaborationTaskServiceImpl {
 
   private static boolean same(String first, String second) {
     return trimToNull(first) != null && trimToNull(first).equals(trimToNull(second));
+  }
+
+  /** 新品允许扫描结果和报价行的料号同时为空，但只允许“两边都空”，不能吞掉真实变化。 */
+  private static boolean sameNullable(String first, String second) {
+    return Objects.equals(trimToNull(first), trimToNull(second));
   }
 
   private static String trimToNull(String value) {

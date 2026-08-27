@@ -47,19 +47,6 @@ class QuoteBomPreparationEntityContractTest {
   }
 
   @Test
-  @DisplayName("BomSupplementTodo 可保存真实 OA 推送状态")
-  void bomSupplementTodoHasRealOaPushFields() {
-    assertFields(
-        BomSupplementTodo.class,
-        "oaTodoId",
-        "oaTodoUrl",
-        "pushStatus",
-        "pushErrorMessage",
-        "lastPushAt",
-        "closedAt");
-  }
-
-  @Test
   @DisplayName("包装参考实体显式保存参考成品、source_top 和调整字段")
   void packageReferenceDetailHasTraceAndAdjustedFields() {
     assertFields(

@@ -280,7 +280,6 @@ public class QuoteBomDetailQueryServiceImpl implements QuoteBomDetailQueryServic
         ref.getCostingRowId(),
         ref.getSourcePartType(),
         ref.getSourceRawHierarchyId(),
-        ref.getSourceTaskId(),
         ref.getPreparationId(),
         ref.getSupplementVersionId(),
         ref.getSupplementDetailId(),

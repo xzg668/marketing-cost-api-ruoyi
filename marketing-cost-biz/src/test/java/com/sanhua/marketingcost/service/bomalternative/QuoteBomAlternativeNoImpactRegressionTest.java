@@ -394,7 +394,6 @@ class QuoteBomAlternativeNoImpactRegressionTest {
                         null,
                         null,
                         null,
-                        null,
                         row.getTopProductCode(),
                         null,
                         null,

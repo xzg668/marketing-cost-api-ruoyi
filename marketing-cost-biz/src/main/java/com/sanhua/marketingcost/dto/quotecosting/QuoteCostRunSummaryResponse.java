@@ -23,6 +23,10 @@ public class QuoteCostRunSummaryResponse {
   private BigDecimal oaCuPricePerTon;
   private Long financeBasePriceId;
   private String status;
+  private String sourceRevision;
+  private String dataQualityStatus;
+  private Integer dataQualityWarningCount;
+  private String dataQualitySummary;
   private BigDecimal totalCost;
   private BigDecimal financeBaseTotalCost;
   private BigDecimal financeMaterialCost;

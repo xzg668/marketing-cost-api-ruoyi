@@ -14,6 +14,8 @@ import com.sanhua.marketingcost.dto.collaboration.TechnicalBomReferenceRequest;
 import com.sanhua.marketingcost.dto.collaboration.TechnicalBomWorkspaceResponse;
 import com.sanhua.marketingcost.dto.collaboration.ElectronicBomVerifyRequest;
 import com.sanhua.marketingcost.dto.collaboration.ElectronicBomVerificationResponse;
+import com.sanhua.marketingcost.dto.collaboration.ElectronicDrawingBomImportResponse;
+import com.sanhua.marketingcost.dto.collaboration.ElectronicDrawingMaterialMappingRequest;
 import com.sanhua.marketingcost.dto.collaboration.TechnicalPackageCopyRequest;
 import com.sanhua.marketingcost.dto.collaboration.TechnicalPackageDraftRequest;
 import com.sanhua.marketingcost.dto.collaboration.TechnicalPackagePriceCheckResponse;
@@ -23,6 +25,8 @@ import com.sanhua.marketingcost.service.collaboration.CollaborationDomainExcepti
 import com.sanhua.marketingcost.service.collaboration.TechnicalBomDraftApplicationService;
 import com.sanhua.marketingcost.service.collaboration.TechnicalBomTemplateService;
 import com.sanhua.marketingcost.service.collaboration.ElectronicBomVerificationService;
+import com.sanhua.marketingcost.service.collaboration.ElectronicDrawingBomImportService;
+import com.sanhua.marketingcost.service.collaboration.ElectronicDrawingMaterialMatcher.Option;
 import com.sanhua.marketingcost.service.collaboration.TechnicalPackageDraftApplicationService;
 import com.sanhua.marketingcost.service.collaboration.TechnicalTaskApplicationService;
 import jakarta.servlet.http.HttpServletResponse;
@@ -37,7 +41,9 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/v1/collaboration/product-tasks")
@@ -46,6 +52,7 @@ public class TechnicalCollaborationTaskController {
   private final TechnicalBomDraftApplicationService bomDraftService;
   private final TechnicalBomTemplateService bomTemplateService;
   private final ElectronicBomVerificationService electronicBomVerificationService;
+  private final ElectronicDrawingBomImportService electronicDrawingBomImportService;
   private final TechnicalPackageDraftApplicationService packageDraftService;
 
   public TechnicalCollaborationTaskController(
@@ -53,11 +60,13 @@ public class TechnicalCollaborationTaskController {
       TechnicalBomDraftApplicationService bomDraftService,
       TechnicalBomTemplateService bomTemplateService,
       ElectronicBomVerificationService electronicBomVerificationService,
+      ElectronicDrawingBomImportService electronicDrawingBomImportService,
       TechnicalPackageDraftApplicationService packageDraftService) {
     this.applicationService = applicationService;
     this.bomDraftService = bomDraftService;
     this.bomTemplateService = bomTemplateService;
     this.electronicBomVerificationService = electronicBomVerificationService;
+    this.electronicDrawingBomImportService = electronicDrawingBomImportService;
     this.packageDraftService = packageDraftService;
   }
 
@@ -167,6 +176,49 @@ public class TechnicalCollaborationTaskController {
       @PathVariable Long taskId,
       @RequestBody ElectronicBomVerifyRequest request) {
     return execute(() -> electronicBomVerificationService.verify(taskId, request));
+  }
+
+  @PreAuthorize("@ss.hasPermi('collaboration:task:edit')")
+  @PostMapping(value = "/{taskId}/electronic-bom/import", consumes = "multipart/form-data")
+  public CommonResult<ElectronicDrawingBomImportResponse> importElectronicBom(
+      @PathVariable Long taskId,
+      @RequestPart("file") MultipartFile file,
+      @RequestParam Integer expectedVersion) throws IOException {
+    byte[] bytes = file.getBytes();
+    return execute(() -> electronicDrawingBomImportService.importFile(
+        taskId, expectedVersion, file.getOriginalFilename(), bytes));
+  }
+
+  @PreAuthorize("@ss.hasPermi('collaboration:task:read')")
+  @GetMapping("/{taskId}/electronic-bom/import-result")
+  public CommonResult<ElectronicDrawingBomImportResponse> electronicBomImportResult(
+      @PathVariable Long taskId) {
+    return execute(() -> electronicDrawingBomImportService.current(taskId));
+  }
+
+  @PreAuthorize("@ss.hasPermi('collaboration:task:edit')")
+  @PostMapping("/{taskId}/electronic-bom/import/confirm")
+  public CommonResult<ElectronicBomVerificationResponse> confirmElectronicBomImport(
+      @PathVariable Long taskId,
+      @RequestBody ElectronicBomVerifyRequest request) {
+    return execute(() -> electronicBomVerificationService.confirmImportedExcel(taskId, request));
+  }
+
+  @PreAuthorize("@ss.hasPermi('collaboration:task:read')")
+  @GetMapping("/{taskId}/electronic-bom/material-options")
+  public CommonResult<java.util.List<Option>> electronicBomMaterialOptions(
+      @PathVariable Long taskId,
+      @RequestParam String keyword,
+      @RequestParam(defaultValue = "30") int limit) {
+    return execute(() -> electronicDrawingBomImportService.searchMaterialOptions(taskId, keyword, limit));
+  }
+
+  @PreAuthorize("@ss.hasPermi('collaboration:task:edit')")
+  @PutMapping("/{taskId}/electronic-bom/mappings")
+  public CommonResult<ElectronicDrawingBomImportResponse> applyElectronicBomMappings(
+      @PathVariable Long taskId,
+      @RequestBody ElectronicDrawingMaterialMappingRequest request) {
+    return execute(() -> electronicDrawingBomImportService.applyMappings(taskId, request));
   }
 
   @PreAuthorize("@ss.hasPermi('collaboration:task:read')")

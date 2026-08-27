@@ -6,6 +6,7 @@ import lombok.Data;
 /** 详情页使用的轻量核算状态；不包含 BOM 行和价格明细。 */
 @Data
 public class QuoteCostingWorkspaceResponse {
+  private String productCode;
   private String periodMonth;
   private String workspaceStatus;
   private String currentStep;

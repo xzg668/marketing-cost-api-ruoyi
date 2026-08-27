@@ -38,8 +38,7 @@ class QuoteCollaborationTaskServiceImplTest {
   private QuoteCollaborationReviewRepository reviewRepository;
   private OaFormItemMapper itemMapper;
   private OaFormMapper formMapper;
-  private CollaborationTransitionEventFactory eventFactory;
-  private CollaborationEventService eventService;
+  private CollaborationTaskLogService taskLogService;
   private QuoteCollaborationTaskServiceImpl service;
 
   @BeforeEach
@@ -49,11 +48,10 @@ class QuoteCollaborationTaskServiceImplTest {
     reviewRepository = mock(QuoteCollaborationReviewRepository.class);
     itemMapper = mock(OaFormItemMapper.class);
     formMapper = mock(OaFormMapper.class);
-    eventFactory = mock(CollaborationTransitionEventFactory.class);
-    eventService = mock(CollaborationEventService.class);
+    taskLogService = mock(CollaborationTaskLogService.class);
     service = new QuoteCollaborationTaskServiceImpl(
         scanService, repository, reviewRepository, itemMapper, formMapper,
-        eventFactory, eventService);
+        taskLogService);
     stubQuote(275L, 27L, "OA-001");
   }
 
@@ -401,7 +399,7 @@ class QuoteCollaborationTaskServiceImplTest {
     task.setTaskVersion(1);
     task.setActiveFlag(1);
     task.setActiveLockKey(CollaborationActiveLockKeyFactory.create(
-        "2026-08", task.getProductCode(), null, scope(), PrimaryScope.FULL_BOM));
+        task.getProductCode(), null, null, scope()));
     return task;
   }
 

@@ -4,14 +4,12 @@ import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.quotebom.QuoteProductTypeResolveResult;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
-import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteCollaborationApprovedResult;
 import com.sanhua.marketingcost.entity.QuoteCollaborationProductTask;
 import com.sanhua.marketingcost.entity.QuoteCollaborationQuoteLink;
 import com.sanhua.marketingcost.enums.QuoteProductType;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
 import com.sanhua.marketingcost.service.QuoteProductTypeResolveService;
 import com.sanhua.marketingcost.service.collaboration.CollaborationCodes.PrimaryScope;
 import com.sanhua.marketingcost.service.collaboration.CollaborationCodes.ProductForm;
@@ -32,6 +30,7 @@ import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
@@ -48,7 +47,6 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
 
   private final OaFormItemMapper itemMapper;
   private final OaFormMapper formMapper;
-  private final QuoteBomPreparationRecordMapper preparationRecordMapper;
   private final QuoteBomContextResolver contextResolver;
   private final QuoteCollaborationCurrentU9BomGateway u9BomGateway;
   private final QuoteProductTypeResolveService productTypeService;
@@ -62,7 +60,6 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
   public QuoteCollaborationScanServiceImpl(
       OaFormItemMapper itemMapper,
       OaFormMapper formMapper,
-      QuoteBomPreparationRecordMapper preparationRecordMapper,
       QuoteBomContextResolver contextResolver,
       QuoteCollaborationCurrentU9BomGateway u9BomGateway,
       QuoteProductTypeResolveService productTypeService,
@@ -73,7 +70,6 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
     this(
         itemMapper,
         formMapper,
-        preparationRecordMapper,
         contextResolver,
         u9BomGateway,
         productTypeService,
@@ -87,7 +83,6 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
   QuoteCollaborationScanServiceImpl(
       OaFormItemMapper itemMapper,
       OaFormMapper formMapper,
-      QuoteBomPreparationRecordMapper preparationRecordMapper,
       QuoteBomContextResolver contextResolver,
       QuoteCollaborationCurrentU9BomGateway u9BomGateway,
       QuoteProductTypeResolveService productTypeService,
@@ -98,7 +93,6 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
       Clock clock) {
     this.itemMapper = itemMapper;
     this.formMapper = formMapper;
-    this.preparationRecordMapper = preparationRecordMapper;
     this.contextResolver = contextResolver;
     this.u9BomGateway = u9BomGateway;
     this.productTypeService = productTypeService;
@@ -174,7 +168,7 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
 
     QuoteCollaborationProductTask active;
     try {
-      active = findActiveTask(context, persistenceScope, structuralScope);
+      active = findActiveTask(context, persistenceScope);
     } catch (RuntimeException exception) {
       stages.add(QuoteCollaborationScanStage.SAME_MONTH_ACTIVE_TASK);
       return blocked(
@@ -405,28 +399,17 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
       throw new IllegalArgumentException("报价单不存在: " + item.getOaFormId());
     }
     String productCode = trimToNull(item.getMaterialNo());
-    QuoteBomPreparationRecord existingPreparation = preparationRecordMapper.selectOne(
-        com.baomidou.mybatisplus.core.toolkit.Wrappers.<QuoteBomPreparationRecord>lambdaQuery()
-            .eq(QuoteBomPreparationRecord::getOaFormItemId, item.getId())
-            .eq(QuoteBomPreparationRecord::getActiveFlag, 1)
-            .orderByDesc(QuoteBomPreparationRecord::getUpdatedAt)
-            .orderByDesc(QuoteBomPreparationRecord::getId)
-            .last("LIMIT 1"));
-    String existingCostPeriodMonth = existingPreparation == null
-        ? null : trimToNull(existingPreparation.getCostPeriodMonth());
     String requestedMonth = normalizeRequestedMonth(requestedAccountingMonth);
+    String currentMonth = requestedMonth == null
+        ? YearMonth.now(clock).toString() : requestedMonth;
     String accountingMonth;
     QuoteDataOrganization organization;
     if (productCode == null) {
-      accountingMonth = requestedMonth == null
-          ? contextResolver.resolveCostPeriodMonth(form) : requestedMonth;
+      accountingMonth = currentMonth;
       organization = contextResolver.resolveOrganization(form, item);
     } else {
-      String effectiveExistingMonth = requestedMonth == null
-          ? existingCostPeriodMonth : requestedMonth;
-      QuoteBomContext bomContext = effectiveExistingMonth == null
-          ? contextResolver.resolve(form, item)
-          : contextResolver.resolveWithExistingCostPeriod(form, item, effectiveExistingMonth);
+      QuoteBomContext bomContext =
+          contextResolver.resolveWithExistingCostPeriod(form, item, currentMonth);
       accountingMonth = bomContext.costPeriodMonth();
       organization = bomContext.organization();
       productCode = bomContext.productCode();
@@ -486,7 +469,7 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
         new CollaborationScope(context.businessUnitType(), context.priceOrgCode());
     QuoteCollaborationProductTask active;
     try {
-      active = findActiveTask(context, persistenceScope, PrimaryScope.FULL_BOM);
+      active = findActiveTask(context, persistenceScope);
     } catch (RuntimeException exception) {
       stages.add(QuoteCollaborationScanStage.SAME_MONTH_ACTIVE_TASK);
       return blocked(
@@ -558,8 +541,7 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
 
   private QuoteCollaborationProductTask findActiveTask(
       QuoteCollaborationScanContext context,
-      CollaborationScope scope,
-      PrimaryScope primaryScope) {
+      CollaborationScope scope) {
     QuoteCollaborationProductTask linked = activeTaskLinkedToQuoteItem(context, scope);
     if (linked != null) {
       return linked;
@@ -568,17 +550,10 @@ public class QuoteCollaborationScanServiceImpl implements QuoteCollaborationScan
         ? null
         : CollaborationTemporaryProductKeyFactory.fromQuoteItem(context.oaFormItemId());
     String activeLockKey = CollaborationActiveLockKeyFactory.create(
-        context.accountingMonth(), context.productCode(), temporaryProductKey, scope, primaryScope);
+        context.productCode(), context.productModel(), temporaryProductKey, scope);
     QuoteCollaborationProductTask exact =
         taskRepository.findActiveProductTaskByLockKey(activeLockKey, scope).orElse(null);
-    if (exact != null || !StringUtils.hasText(context.productCode())) {
-      return exact;
-    }
-    return taskRepository.findProductTasksByProductAndMonth(
-            context.productCode(), context.accountingMonth(), scope).stream()
-        .filter(task -> Integer.valueOf(1).equals(task.getActiveFlag()))
-        .findFirst()
-        .orElse(null);
+    return exact;
   }
 
   private QuoteCollaborationProductTask activeTaskLinkedToQuoteItem(

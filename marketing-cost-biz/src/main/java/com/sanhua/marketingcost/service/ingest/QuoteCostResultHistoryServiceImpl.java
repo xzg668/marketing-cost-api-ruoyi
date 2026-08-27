@@ -21,6 +21,7 @@ import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
+import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -310,12 +311,37 @@ public class QuoteCostResultHistoryServiceImpl implements QuoteCostResultHistory
       throw new QuoteIngestException("报价产品行不存在或不属于当前报价单: " + itemId);
     }
     String businessUnit = currentBusinessUnit(form, item);
-    String productCode = required("产品料号", item.getMaterialNo());
-    long activeSameProductCount =
-        itemMapper.selectCount(
-            Wrappers.lambdaQuery(OaFormItem.class)
-                .eq(OaFormItem::getOaFormId, form.getId())
-                .eq(OaFormItem::getMaterialNo, productCode));
+    String productCode =
+        required(
+            "产品料号、型号或图号",
+            QuoteProductIdentityUtils.resolveCostingCode(item));
+    var sameProduct =
+        Wrappers.lambdaQuery(OaFormItem.class).eq(OaFormItem::getOaFormId, form.getId());
+    if (StringUtils.hasText(item.getMaterialNo())) {
+      sameProduct.eq(OaFormItem::getMaterialNo, item.getMaterialNo().trim());
+    } else if (StringUtils.hasText(item.getSunlModel())) {
+      sameProduct
+          .and(
+              material ->
+                  material
+                      .isNull(OaFormItem::getMaterialNo)
+                      .or()
+                      .eq(OaFormItem::getMaterialNo, ""))
+          .eq(OaFormItem::getSunlModel, item.getSunlModel().trim());
+    } else {
+      sameProduct
+          .and(
+              material ->
+                  material
+                      .isNull(OaFormItem::getMaterialNo)
+                      .or()
+                      .eq(OaFormItem::getMaterialNo, ""))
+          .and(
+              model ->
+                  model.isNull(OaFormItem::getSunlModel).or().eq(OaFormItem::getSunlModel, ""))
+          .eq(OaFormItem::getCustomerDrawing, item.getCustomerDrawing().trim());
+    }
+    long activeSameProductCount = itemMapper.selectCount(sameProduct);
     return new Scope(
         form, item, oaNoValue, productCode, businessUnit, activeSameProductCount);
   }

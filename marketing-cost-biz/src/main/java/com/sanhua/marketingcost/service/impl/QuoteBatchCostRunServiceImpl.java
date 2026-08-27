@@ -80,6 +80,7 @@ public class QuoteBatchCostRunServiceImpl implements QuoteBatchCostRunService {
       response.setOaNo(normalizedOaNo);
       response.setPeriodMonth(normalizedMonth);
       response.setStatus("NOT_STARTED");
+      response.setBusinessOutcome("NOT_STARTED");
       return response;
     }
     return response(
@@ -122,36 +123,25 @@ public class QuoteBatchCostRunServiceImpl implements QuoteBatchCostRunService {
       CostRunBatch batch,
       CostRunBatchProgressSnapshot progress,
       boolean existingBatch) {
-    boolean prerequisiteFailed =
-        batch != null && "FAILED".equals(batch.getPrerequisiteStatus());
-    String status = prerequisiteFailed ? "FAILED" : progress.getStatus();
-    int failedCount =
-        prerequisiteFailed
-            ? Math.max(
-                Math.max(progress.getFailedCount(), value(batch.getFailedCount())),
-                Math.max(
-                    progress.getTotalCount()
-                        - progress.getSuccessCount()
-                        - progress.getCollaborationCount()
-                        - progress.getSkippedCurrentCount(),
-                    0))
-            : progress.getFailedCount();
+    String status = progress.getStatus();
+    int failedCount = progress.getFailedCount();
     QuoteBatchCostRunResponse response = new QuoteBatchCostRunResponse();
     response.setOaNo(oaNo);
     response.setPeriodMonth(periodMonth);
     response.setBatchNo(progress.getBatchNo());
     response.setStatus(status);
-    response.setPrerequisiteStatus(batch == null ? null : batch.getPrerequisiteStatus());
+    response.setBusinessOutcome(progress.getBusinessOutcome());
+    response.setExecutionNo(batch == null ? null : batch.getExecutionNo());
     response.setMessage(batch == null ? null : batch.getErrorMessage());
     response.setTotalCount(progress.getTotalCount());
     response.setQueuedCount(
-        prerequisiteFailed ? 0 : progress.getPendingCount() + progress.getRetryableCount());
-    response.setRunningCount(prerequisiteFailed ? 0 : progress.getRunningCount());
+        progress.getPendingCount() + progress.getRetryableCount());
+    response.setRunningCount(progress.getRunningCount());
     response.setSuccessCount(progress.getSuccessCount());
     response.setCollaborationCount(progress.getCollaborationCount());
     response.setFailedCount(failedCount);
     response.setSkippedCurrentCount(progress.getSkippedCurrentCount());
-    response.setProgress(prerequisiteFailed ? 100 : progress.getProgress());
+    response.setProgress(progress.getProgress());
     response.setActive(
         "PENDING".equals(status) || "RUNNING".equals(status));
     response.setExistingBatch(existingBatch);

@@ -92,8 +92,6 @@ class CmsCostImportServiceImplIntegrationTest extends BomMapperTestBase {
     assertThat(response.getWorkshopRowCount()).isEqualTo(1);
     assertThat(response.getSubjectRowCount()).isEqualTo(1);
     assertThat(response.getSubjectSettingRowCount()).isEqualTo(1);
-    assertThat(response.getSalaryInsertCount()).isZero();
-    assertThat(response.getAuxInsertCount()).isZero();
 
     CmsCostImportBatch batch = batchMapper.selectById(response.getImportBatchId());
     assertThat(batch.getImportType()).isEqualTo("EXCEL");
@@ -139,10 +137,6 @@ class CmsCostImportServiceImplIntegrationTest extends BomMapperTestBase {
     assertThat(countSql("SELECT COUNT(*) FROM cms_cost_source_effective WHERE parent_code = '" + parentCode + "'"))
         .isZero();
     assertThat(countSql("SELECT COUNT(*) FROM cms_cost_source_effective_log WHERE parent_code = '" + parentCode + "'"))
-        .isZero();
-    assertThat(countSql("SELECT COUNT(*) FROM lp_salary_cost WHERE material_code = '" + parentCode + "'"))
-        .isZero();
-    assertThat(countSql("SELECT COUNT(*) FROM lp_aux_subject WHERE material_code = '" + parentCode + "'"))
         .isZero();
   }
 

@@ -57,7 +57,8 @@ class TechnicalBomDraftApplicationServiceTest {
       601L, "王工", Set.of(CollaborationRole.TECHNICIAN));
   private final TechnicalBomDraftApplicationService service = new TechnicalBomDraftApplicationService(
       repository, principalProvider, candidateMapper, rawMapper, materialMapper, versionMapper,
-      detailMapper, productTaskMapper, preparationService);
+      detailMapper, productTaskMapper, preparationService,
+      new CollaborationPortalAccessPolicy());
   private QuoteCollaborationProductTask task;
 
   @BeforeEach
@@ -101,6 +102,22 @@ class TechnicalBomDraftApplicationServiceTest {
     assertThat(service.search(10L, null, "不存在", "不存在").candidates()).isEmpty();
     verify(candidateMapper).selectCandidates(eq("210"), eq("COMMERCIAL"), any(),
         any(), any(), any(), any(), any(), anyInt());
+  }
+
+  @Test
+  void searchExcludesReferenceBomContainingTargetProduct() {
+    when(candidateMapper.selectCandidates(anyString(), anyString(), any(), any(), any(), any(),
+        any(), any(), anyInt())).thenReturn(List.of(
+            candidate("REF-CYCLE", "S1", "M1", 190),
+            candidate("REF-SAFE", "S1", "M1", 180)));
+    BomRawHierarchy cycle = raw(2L, "REF-CYCLE", "REF-CYCLE", "P-TARGET", 1,
+        "/REF-CYCLE/P-TARGET/", "制造件");
+    when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of(cycle));
+
+    var result = service.search(10L, null, "S1", "M1");
+
+    assertThat(result.candidates()).extracting(candidate -> candidate.productCode())
+        .containsExactly("REF-SAFE");
   }
 
   @Test
@@ -166,7 +183,31 @@ class TechnicalBomDraftApplicationServiceTest {
         node("C2", "ROOT", "C-1", "PURCHASE"));
     assertThatThrownBy(() -> service.save(10L, new TechnicalBomDraftRequest(3, duplicate)))
         .hasMessageContaining("重复物料");
+
+    List<TechnicalBomDraftRequest.Node> selfReference = List.of(
+        node("ROOT", null, "P-TARGET", "MANUFACTURE"),
+        node("C1", "ROOT", "P-TARGET", "MANUFACTURE"));
+    assertThatThrownBy(() -> service.save(10L,
+        new TechnicalBomDraftRequest(3, selfReference)))
+        .hasMessageContaining("循环BOM");
     verify(detailMapper, never()).insert(any(QuoteBomSupplementDetail.class));
+  }
+
+  @Test
+  void copiedReferenceCannotContainTargetProductAsDescendant() {
+    BomRawHierarchy root = raw(
+        1L, "REF-1", "REF-1", "REF-1", 0, "/REF-1/", "制造件");
+    BomRawHierarchy self = raw(
+        2L, "REF-1", "REF-1", "P-TARGET", 1, "/REF-1/P-TARGET/", "制造件");
+    when(rawMapper.selectList(any(Wrapper.class))).thenReturn(List.of(root, self));
+    when(materialMapper.selectByLatestBatchAndCodes(any(), eq(null), eq("COMMERCIAL")))
+        .thenReturn(masters("P-TARGET", "REF-1"));
+
+    assertThatThrownBy(() -> service.copyReference(10L,
+        new TechnicalBomReferenceRequest(
+            3, "REF-1", "主制造", null, null, null, null, null)))
+        .hasMessageContaining("循环BOM");
+    verify(versionMapper, never()).insert(any(QuoteBomSupplementVersion.class));
   }
 
   @Test
@@ -203,6 +244,46 @@ class TechnicalBomDraftApplicationServiceTest {
             "新品", "S1", "M1", null)))
         .hasMessageContaining("名称、规格、型号/图号和物料性质必须填写");
     verify(versionMapper, never()).insert(any(QuoteBomSupplementVersion.class));
+  }
+
+  @Test
+  void electronicDrawingImportReusesDraftTablesAndPreservesSourceRemark() {
+    when(versionMapper.insert(any(QuoteBomSupplementVersion.class))).thenAnswer(invocation -> {
+      QuoteBomSupplementVersion version = invocation.getArgument(0);
+      version.setId(901L);
+      return 1;
+    });
+    List<QuoteBomSupplementDetail> stored = new java.util.ArrayList<>();
+    when(detailMapper.insert(any(QuoteBomSupplementDetail.class))).thenAnswer(invocation -> {
+      stored.add(invocation.getArgument(0));
+      return 1;
+    });
+    when(productTaskMapper.attachBomDraft(eq(10L), eq(3), eq(77L), eq(901L), eq(601L),
+        eq("COMMERCIAL"), eq("210"), eq(601L), eq("王工"))).thenReturn(1);
+    QuoteCollaborationProductTask refreshed = task(10L, "P-TARGET");
+    refreshed.setTaskVersion(4);
+    refreshed.setSupplementVersionId(901L);
+    when(repository.findMineById(10L, 601L, "COMMERCIAL"))
+        .thenReturn(Optional.of(task), Optional.of(refreshed));
+    when(detailMapper.selectList(any(Wrapper.class))).thenAnswer(invocation -> List.copyOf(stored));
+
+    var response = service.replaceFromElectronicDrawingExcel(10L, 3, List.of(
+        new TechnicalBomDraftApplicationService.ImportedNode(
+            "ROOT", null, "P-TARGET", "目标产品", "S", "M", "D", "MANUFACTURE",
+            BigDecimal.ONE, "件", 1, "EDX1|ROOT|F=ZmlsZS54bHN4"),
+        new TechnicalBomDraftApplicationService.ImportedNode(
+            "ED-1", "ROOT", null, "待匹配零件", "铜", "D-1", "D-1", "PURCHASE",
+            BigDecimal.ONE, "件", 2, "EDX1|NODE|Q=MQ")));
+
+    ArgumentCaptor<QuoteBomSupplementVersion> version =
+        ArgumentCaptor.forClass(QuoteBomSupplementVersion.class);
+    verify(versionMapper).insert(version.capture());
+    assertThat(version.getValue().getBomSource()).isEqualTo("ELECTRONIC_DRAWING_EXCEL");
+    assertThat(stored).hasSize(2);
+    assertThat(stored.get(1).getMaterialCode()).startsWith("TMP-10-");
+    assertThat(stored.get(1).getRemark()).isEqualTo("EDX1|NODE|Q=MQ");
+    assertThat(response.sourceMode()).isEqualTo("ELECTRONIC_DRAWING_EXCEL");
+    assertThat(response.taskVersion()).isEqualTo(4);
   }
 
   @Test

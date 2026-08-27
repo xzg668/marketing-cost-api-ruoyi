@@ -355,7 +355,10 @@ public class QuoteOaPdfDetailTableParser {
   }
 
   private boolean hasProductKey(QuoteIngestItemRequest item) {
-    return item != null && (StringUtils.hasText(item.getMaterialNo()) || StringUtils.hasText(item.getSunlModel()));
+    return item != null
+        && (StringUtils.hasText(item.getMaterialNo())
+            || StringUtils.hasText(item.getSunlModel())
+            || StringUtils.hasText(item.getCustomerDrawing()));
   }
 
   private boolean hasProductIdentity(QuoteIngestItemRequest item) {
@@ -812,6 +815,7 @@ public class QuoteOaPdfDetailTableParser {
     return item.getSeq() == null
         && !StringUtils.hasText(item.getMaterialNo())
         && !StringUtils.hasText(item.getSunlModel())
+        && !StringUtils.hasText(item.getCustomerDrawing())
         && !StringUtils.hasText(item.getProductName())
         && !StringUtils.hasText(item.getCustomerCode());
   }

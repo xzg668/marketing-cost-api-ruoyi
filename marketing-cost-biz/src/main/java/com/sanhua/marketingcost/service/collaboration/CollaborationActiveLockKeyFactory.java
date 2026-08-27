@@ -1,57 +1,46 @@
 package com.sanhua.marketingcost.service.collaboration;
 
-import com.sanhua.marketingcost.service.collaboration.CollaborationCodes.PrimaryScope;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.YearMonth;
-import java.time.format.DateTimeParseException;
 import java.util.HexFormat;
 import java.util.Locale;
 
-/** 同月活动任务的唯一键；只使用稳定业务维度，不暴露原始料号。 */
+/**
+ * 活动补录任务的唯一键。
+ *
+ * <p>锁不带报价单和核算月份：同一组织下，有料号按料号锁；无料号按型号锁；连型号也没有时
+ * 才按报价产品行生成的稳定临时键锁。这样同一产品跨报价、跨月份只能有一个进行中的补录任务。
+ */
 public final class CollaborationActiveLockKeyFactory {
 
-  private static final String PREFIX = "QCBP-ACTIVE-V2:";
+  private static final String PREFIX = "QCBP-ACTIVE-V3:";
 
   private CollaborationActiveLockKeyFactory() {}
 
   public static String create(
-      String accountingMonth,
       String productCode,
+      String productModel,
       String temporaryProductKey,
-      CollaborationScope scope,
-      PrimaryScope primaryScope) {
-    String month = normalizeMonth(accountingMonth);
+      CollaborationScope scope) {
     String product = normalizeOptional(productCode);
+    String model = normalizeOptional(productModel);
     String temporary = normalizeOptional(temporaryProductKey);
-    if (product == null && temporary == null) {
-      throw new IllegalArgumentException("产品料号或临时产品键至少填写一个");
+    if (product == null && model == null && temporary == null) {
+      throw new IllegalArgumentException("产品料号、型号或临时产品键至少填写一个");
     }
     if (scope == null) {
       throw new IllegalArgumentException("协作范围不能为空");
     }
-    if (primaryScope == null) {
-      throw new IllegalArgumentException("主要缺口范围不能为空");
-    }
-    String identityType = product == null ? "TEMP" : "PRODUCT";
-    String identity = product == null ? temporary : product;
+    String identityType = product != null ? "PRODUCT" : model != null ? "MODEL" : "TEMP";
+    String identity = product != null ? product : model != null ? model : temporary;
     String canonical = String.join("\n",
-        "VERSION=2",
-        "MONTH=" + month,
+        "VERSION=3",
         "IDENTITY_TYPE=" + identityType,
         "IDENTITY=" + identity,
         "BUSINESS_UNIT=" + normalizeRequired(scope.businessUnitType()),
         "ORG=" + normalizeRequired(scope.applicableOrgCode()));
     return PREFIX + sha256(canonical);
-  }
-
-  private static String normalizeMonth(String value) {
-    try {
-      return YearMonth.parse(CollaborationScope.requireText(value, "核算月份")).toString();
-    } catch (DateTimeParseException exception) {
-      throw new IllegalArgumentException("核算月份格式错误，应为YYYY-MM", exception);
-    }
   }
 
   private static String normalizeOptional(String value) {

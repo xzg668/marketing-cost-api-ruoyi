@@ -15,7 +15,6 @@ public class QuoteBomSupplementVersion {
   @TableId(type = IdType.AUTO)
   private Long id;
   private Long preparationId;
-  private Long taskId;
   private String taskNo;
   private String oaNo;
   private Long oaFormItemId;

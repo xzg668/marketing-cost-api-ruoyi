@@ -87,6 +87,9 @@ public class CostRunTaskProgressServiceImpl implements CostRunTaskProgressServic
     CostRunBatchProgressSnapshot snapshot = new CostRunBatchProgressSnapshot();
     snapshot.setBatchNo(normalizedBatchNo);
     snapshot.setStatus(status);
+    snapshot.setBusinessOutcome(resolveBusinessOutcome(
+        total, success, failed, canceled, collaboration, skippedCurrent,
+        running, retryable, pending));
     snapshot.setTotalCount(total);
     snapshot.setSuccessCount(success);
     snapshot.setFailedCount(failed);
@@ -98,6 +101,28 @@ public class CostRunTaskProgressServiceImpl implements CostRunTaskProgressServic
     snapshot.setPendingCount(pending);
     snapshot.setProgress(progress);
     return snapshot;
+  }
+
+  private String resolveBusinessOutcome(
+      int total,
+      int success,
+      int failed,
+      int canceled,
+      int collaboration,
+      int skippedCurrent,
+      int running,
+      int retryable,
+      int pending) {
+    if (total == 0) return "NOT_STARTED";
+    if (running + retryable + pending > 0) return "IN_PROGRESS";
+    if (canceled == total) return "CANCELED";
+    if (collaboration > 0) {
+      return success + skippedCurrent > 0 ? "PARTIAL_SUCCESS" : "WAITING_INPUT";
+    }
+    if (failed > 0) {
+      return success + skippedCurrent > 0 ? "PARTIAL_SUCCESS" : "FAILED";
+    }
+    return "SUCCESS";
   }
 
   private Map<CostRunTaskStatus, Integer> loadCounts(String batchNo) {

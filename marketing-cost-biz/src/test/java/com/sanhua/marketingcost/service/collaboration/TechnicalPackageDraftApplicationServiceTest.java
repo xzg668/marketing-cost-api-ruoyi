@@ -71,7 +71,7 @@ class TechnicalPackageDraftApplicationServiceTest {
           repository, principalProvider, formalBomReadService, preparationService,
           preparationMapper, referenceMapper, detailMapper, snapshotMapper,
           snapshotDetailMapper, oaFormItemMapper, productTaskMapper,
-          priceScanService, stateService);
+          priceScanService, stateService, new CollaborationPortalAccessPolicy());
 
   private QuoteCollaborationProductTask task;
   private QuoteCollaborationQuoteLink owner;
@@ -235,7 +235,6 @@ class TechnicalPackageDraftApplicationServiceTest {
 
     assertThat(result.draft().lines()).extracting(line -> line.packageMaterialCode())
         .containsExactly("BOX");
-    assertThat(stored).allSatisfy(line -> assertThat(line.getTaskId()).isNull());
   }
 
   @Test
@@ -470,6 +469,6 @@ class TechnicalPackageDraftApplicationServiceTest {
         77L, 1L, 1L, 111L, "OA-12", "BARE-1", "BARE", "BARE-1",
         true, "2026-08", "READY", "NOT_SUBMITTED", true, false, false,
         "U9", true, 1, null, null, false, 0, null, null, null, null,
-        null, null, List.of(), List.of(), null, List.of(bodyLine()), List.of());
+        List.of(), List.of(), null, List.of(bodyLine()), List.of());
   }
 }

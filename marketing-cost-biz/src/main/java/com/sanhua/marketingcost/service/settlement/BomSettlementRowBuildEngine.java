@@ -773,7 +773,6 @@ public class BomSettlementRowBuildEngine {
     ref.setQuoteProductCode(source.quoteProductCode());
     ref.setSourcePartType(source.sourcePartType());
     ref.setSourceRawHierarchyId(source.sourceRawHierarchyId());
-    ref.setSourceTaskId(source.sourceTaskId());
     ref.setPreparationId(source.preparationId());
     ref.setSupplementVersionId(source.supplementVersionId());
     ref.setSupplementDetailId(source.supplementDetailId());

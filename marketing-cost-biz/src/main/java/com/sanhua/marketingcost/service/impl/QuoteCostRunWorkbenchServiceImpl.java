@@ -1,9 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
-import cn.iocoder.yudao.framework.common.pojo.PageResult;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.CostRunResultDto;
@@ -14,13 +11,11 @@ import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunTrialRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunWorkbenchResponse.CostRunVersionItemResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunWorkbenchResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCuMaterialDifferenceResponse;
 import com.sanhua.marketingcost.entity.CostRunCostItem;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
-import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
 import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
 import com.sanhua.marketingcost.enums.QuoteCostRunStatus;
 import com.sanhua.marketingcost.mapper.CostRunCostItemMapper;
@@ -28,9 +23,9 @@ import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
-import com.sanhua.marketingcost.mapper.QuoteCuMaterialDiffItemMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.CostRunResultService;
+import com.sanhua.marketingcost.service.CostInputRevisionService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
 import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
@@ -39,14 +34,17 @@ import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
+import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
+import java.util.regex.Pattern;
 import org.apache.poi.ss.usermodel.CellStyle;
 import org.apache.poi.ss.usermodel.Font;
 import org.apache.poi.ss.usermodel.Row;
@@ -54,6 +52,7 @@ import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -66,8 +65,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   private static final String STATUS_HISTORY = "HISTORY";
   private static final String STATUS_CONFIRMED = "CONFIRMED";
   private static final BigDecimal KG_PER_TON = new BigDecimal("1000");
-  private static final int DEFAULT_PAGE_SIZE = 20;
-  private static final int MAX_PAGE_SIZE = 200;
+  private static final Pattern NEGATED_HISTORICAL_PRICE_PATTERN =
+      Pattern.compile("沿用历史(?:月份|因素)?价\\s*[=:：]\\s*否");
 
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
@@ -75,13 +74,14 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   private final CostRunResultService costRunResultService;
   private final CostRunPartItemMapper partItemMapper;
   private final CostRunCostItemMapper costItemMapper;
-  private final QuoteCuMaterialDiffItemMapper diffItemMapper;
   private final PricePrepareReadinessService pricePrepareReadinessService;
   private final QuoteCostRunVersionNoGenerator versionNoGenerator;
   private final QuoteCuAdjustmentCalcService cuAdjustmentCalcService;
   private final CollaborationCostingGate collaborationCostingGate;
   private final QuoteCostingWorkspaceService workspaceService;
+  private final CostInputRevisionService inputRevisionService;
 
+  @Autowired
   public QuoteCostRunWorkbenchServiceImpl(
       OaFormMapper oaFormMapper,
       OaFormItemMapper oaFormItemMapper,
@@ -89,24 +89,51 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
       CostRunResultService costRunResultService,
       CostRunPartItemMapper partItemMapper,
       CostRunCostItemMapper costItemMapper,
-      QuoteCuMaterialDiffItemMapper diffItemMapper,
       PricePrepareReadinessService pricePrepareReadinessService,
       QuoteCostRunVersionNoGenerator versionNoGenerator,
       QuoteCuAdjustmentCalcService cuAdjustmentCalcService,
       CollaborationCostingGate collaborationCostingGate,
-      QuoteCostingWorkspaceService workspaceService) {
+      QuoteCostingWorkspaceService workspaceService,
+      CostInputRevisionService inputRevisionService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.versionMapper = versionMapper;
     this.costRunResultService = costRunResultService;
     this.partItemMapper = partItemMapper;
     this.costItemMapper = costItemMapper;
-    this.diffItemMapper = diffItemMapper;
     this.pricePrepareReadinessService = pricePrepareReadinessService;
     this.versionNoGenerator = versionNoGenerator;
     this.cuAdjustmentCalcService = cuAdjustmentCalcService;
     this.collaborationCostingGate = collaborationCostingGate;
     this.workspaceService = workspaceService;
+    this.inputRevisionService = inputRevisionService;
+  }
+
+  QuoteCostRunWorkbenchServiceImpl(
+      OaFormMapper oaFormMapper,
+      OaFormItemMapper oaFormItemMapper,
+      QuoteCostRunVersionMapper versionMapper,
+      CostRunResultService costRunResultService,
+      CostRunPartItemMapper partItemMapper,
+      CostRunCostItemMapper costItemMapper,
+      PricePrepareReadinessService pricePrepareReadinessService,
+      QuoteCostRunVersionNoGenerator versionNoGenerator,
+      QuoteCuAdjustmentCalcService cuAdjustmentCalcService,
+      CollaborationCostingGate collaborationCostingGate,
+      QuoteCostingWorkspaceService workspaceService) {
+    this(
+        oaFormMapper,
+        oaFormItemMapper,
+        versionMapper,
+        costRunResultService,
+        partItemMapper,
+        costItemMapper,
+        pricePrepareReadinessService,
+        versionNoGenerator,
+        cuAdjustmentCalcService,
+        collaborationCostingGate,
+        workspaceService,
+        null);
   }
 
   @Override
@@ -158,44 +185,6 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   }
 
   @Override
-  @Transactional(readOnly = true)
-  public PageResult<QuoteCuMaterialDifferenceResponse> pageCuMaterialDifferences(
-      String oaNo,
-      Long oaFormItemId,
-      String costRunNo,
-      Integer pageNo,
-      Integer pageSize,
-      String parentMaterialCode,
-      String materialCode,
-      Boolean onlyDifferent,
-      String differenceSign) {
-    Scope scope = requireScope(oaNo, oaFormItemId, null);
-    QuoteCostRunVersion version = requireOwnedVersion(scope, null, required("costRunNo", costRunNo));
-    var query =
-        Wrappers.lambdaQuery(QuoteCuMaterialDiffItem.class)
-            .eq(QuoteCuMaterialDiffItem::getCostRunVersionId, version.getId())
-            .eq(QuoteCuMaterialDiffItem::getBusinessUnitType, scope.businessUnitType());
-    if (StringUtils.hasText(parentMaterialCode)) {
-      query.eq(QuoteCuMaterialDiffItem::getParentMaterialCode, parentMaterialCode.trim());
-    }
-    if (StringUtils.hasText(materialCode)) {
-      query.eq(QuoteCuMaterialDiffItem::getMaterialCode, materialCode.trim());
-    }
-    if (Boolean.TRUE.equals(onlyDifferent)) {
-      query.ne(QuoteCuMaterialDiffItem::getDiffAmount, BigDecimal.ZERO);
-    }
-    applyDifferenceSign(query, differenceSign);
-    query.orderByAsc(QuoteCuMaterialDiffItem::getLineNo)
-        .orderByAsc(QuoteCuMaterialDiffItem::getId);
-    Page<QuoteCuMaterialDiffItem> page =
-        diffItemMapper.selectPage(
-            new Page<>(pageNo(pageNo), pageSize(pageSize)), query);
-    List<QuoteCuMaterialDifferenceResponse> rows =
-        page.getRecords().stream().map(this::toDifferenceDto).toList();
-    return new PageResult<>(rows, page.getTotal());
-  }
-
-  @Override
   @Transactional(rollbackFor = Exception.class)
   public QuoteCostRunWorkbenchResponse runToSuccess(
       String oaNo,
@@ -210,7 +199,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
         version,
         STATUS_RUNNING,
         firstText(completedBy, "system"),
-        "统一产品核算流水线自动完成");
+        "统一产品核算流水线自动完成",
+        request == null ? null : request.getSourceRevision());
     version.setStatus(STATUS_SUCCESS);
     return calculationResponse(scope, calculation);
   }
@@ -257,7 +247,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
       QuoteCostRunVersion version,
       String expectedStatus,
       String completedBy,
-      String message) {
+      String message,
+      String expectedSourceRevision) {
     OaFormItem lockedItem =
         oaFormItemMapper.selectForCostCompletion(
             scope.oaFormItemId(),
@@ -275,7 +266,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
         trimToNull(workspace.getCurrentPrepareNo()))) {
       throw new QuoteIngestException("最终价格版本已更新，本次成本结果已回滚，请重新核算");
     }
-    requireCompleteVersionResult(version);
+    String sourceRevision = resolveAndVerifySourceRevision(scope, expectedSourceRevision);
+    DataQuality dataQuality = requireCompleteVersionResult(version);
 
     LocalDateTime now = LocalDateTime.now();
     String versionNo = versionNoGenerator.nextVersionNo(scope.oaFormItemId(), scope.productCode());
@@ -285,6 +277,10 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     patch.setVersionNo(versionNo);
     patch.setStatus(STATUS_SUCCESS);
     patch.setInputFingerprint(inputFingerprint);
+    patch.setSourceRevision(sourceRevision);
+    patch.setDataQualityStatus(dataQuality.status());
+    patch.setDataQualityWarningCount(dataQuality.warningCount());
+    patch.setDataQualitySummary(dataQuality.summary());
     patch.setConfirmedBy(completedBy);
     patch.setConfirmedAt(now);
     patch.setConfirmMessage(message);
@@ -300,12 +296,17 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
 
     movePreviousCurrentVersionToHistory(scope, lockedItem.getConfirmedCostVersionId(), version.getId());
     markConfirmedCostRun(scope, version.getId(), now);
-    markWorkspaceSuccess(workspace, version.getId(), inputFingerprint, now);
+    markWorkspaceSuccess(
+        workspace, version.getId(), inputFingerprint, sourceRevision, dataQuality, now);
     collaborationCostingGate.complete(scope.oaFormItemId(), scope.form().getBusinessUnitType());
 
     version.setVersionNo(versionNo);
     version.setStatus(STATUS_SUCCESS);
     version.setInputFingerprint(inputFingerprint);
+    version.setSourceRevision(sourceRevision);
+    version.setDataQualityStatus(dataQuality.status());
+    version.setDataQualityWarningCount(dataQuality.warningCount());
+    version.setDataQualitySummary(dataQuality.summary());
     version.setConfirmedBy(completedBy);
     version.setConfirmedAt(now);
     version.setConfirmMessage(message);
@@ -342,23 +343,89 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     }
   }
 
-  private void requireCompleteVersionResult(QuoteCostRunVersion version) {
+  private DataQuality requireCompleteVersionResult(QuoteCostRunVersion version) {
     if (version == null || version.getId() == null || version.getTotalCost() == null) {
       throw new QuoteIngestException("成本版本汇总不完整，本次核算已回滚");
     }
-    long actualPartCount =
-        partItemMapper.selectCount(
-            Wrappers.lambdaQuery(CostRunPartItem.class)
-                .eq(CostRunPartItem::getCostRunVersionId, version.getId()));
-    long actualCostCount =
-        costItemMapper.selectCount(
-            Wrappers.lambdaQuery(CostRunCostItem.class)
-                .eq(CostRunCostItem::getCostRunVersionId, version.getId()));
+    List<CostRunPartItem> parts = partRows(version.getId());
+    List<CostRunCostItem> costs = costRows(version.getId());
+    long actualPartCount = parts.size();
+    long actualCostCount = costs.size();
     if (actualPartCount != intValue(version.getPartItemCount())
         || actualCostCount != intValue(version.getCostItemCount())
         || actualCostCount == 0) {
       throw new QuoteIngestException("成本版本明细不完整，本次核算已回滚");
     }
+    List<CostRunCostItem> totals =
+        costs.stream().filter(item -> "TOTAL".equals(item.getCostCode())).toList();
+    if (totals.size() != 1
+        || totals.get(0).getAmount() == null
+        || totals.get(0).getAmount().compareTo(version.getTotalCost()) != 0) {
+      throw new QuoteIngestException("成本版本总计行与汇总金额不一致，本次核算已回滚");
+    }
+    Set<String> warnings = new LinkedHashSet<>();
+    for (CostRunCostItem cost : costs) {
+      if (cost.getAmount() == null) {
+        warnings.add(firstText(cost.getCostCode(), cost.getCostName(), "未知费用项") + " 金额为空");
+      }
+      if (isQualityWarningRemark(cost.getRemark())) {
+        warnings.add(firstText(cost.getCostCode(), cost.getCostName(), "未知费用项")
+            + "：" + cost.getRemark().trim());
+      }
+    }
+    for (CostRunPartItem part : parts) {
+      if (part.getAmount() == null) {
+        warnings.add(firstText(part.getPartCode(), part.getPartName(), "未知部品") + " 金额为空");
+      }
+      if (isQualityWarningRemark(part.getRemark())) {
+        warnings.add(firstText(part.getPartCode(), part.getPartName(), "未知部品")
+            + "：" + part.getRemark().trim());
+      }
+    }
+    String summary = warnings.isEmpty()
+        ? "成本汇总、部品明细和费用明细完整"
+        : truncateQualitySummary(String.join("；", warnings));
+    return new DataQuality(
+        warnings.isEmpty() ? "COMPLETE" : "WARNING", warnings.size(), summary);
+  }
+
+  private boolean isQualityWarningRemark(String remark) {
+    if (!StringUtils.hasText(remark)) {
+      return false;
+    }
+    String text = remark.trim();
+    String riskText = NEGATED_HISTORICAL_PRICE_PATTERN.matcher(text).replaceAll("");
+    return List.of(
+            "缺失",
+            "缺少",
+            "失败",
+            "异常",
+            "为空",
+            "未找到",
+            "未配置",
+            "沿用历史",
+            "已过期",
+            "不完整",
+            "请财务关注",
+            "警告")
+        .stream()
+        .anyMatch(riskText::contains);
+  }
+
+  private String resolveAndVerifySourceRevision(Scope scope, String expectedSourceRevision) {
+    if (inputRevisionService == null) {
+      return trimToNull(expectedSourceRevision);
+    }
+    String current = inputRevisionService.currentRevision(scope.form(), scope.item());
+    if (StringUtils.hasText(expectedSourceRevision)
+        && !Objects.equals(expectedSourceRevision.trim(), current)) {
+      throw new QuoteIngestException("核算期间上游业务输入已变化，本次结果已回滚，请重新发起核算");
+    }
+    return current;
+  }
+
+  private String truncateQualitySummary(String value) {
+    return value == null || value.length() <= 1000 ? value : value.substring(0, 1000);
   }
 
   private int intValue(Integer value) {
@@ -369,6 +436,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
       QuoteCostingWorkspace workspace,
       Long versionId,
       String inputFingerprint,
+      String sourceRevision,
+      DataQuality dataQuality,
       LocalDateTime completedAt) {
     QuoteCostingWorkspace locked =
         workspaceService.lockOrCreate(
@@ -389,6 +458,11 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     locked.setCurrentStep("COST_RUN");
     locked.setCurrentCostVersionId(versionId);
     locked.setLastSuccessInputFingerprint(inputFingerprint);
+    locked.setSourceRevision(sourceRevision);
+    locked.setLastSuccessSourceRevision(sourceRevision);
+    locked.setDataQualityStatus(dataQuality.status());
+    locked.setDataQualityWarningCount(dataQuality.warningCount());
+    locked.setDataQualitySummary(dataQuality.summary());
     locked.setGapCount(0);
     locked.setStaleReasonCode(null);
     locked.setLastErrorStep(null);
@@ -543,7 +617,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
         || (formBusinessUnit == null && itemBusinessUnit == null)) {
       throw new QuoteIngestException("当前业务单元无权访问该报价产品行");
     }
-    String productCode = required("productCode", item.getMaterialNo());
+    String productCode =
+        required("productCode", QuoteProductIdentityUtils.resolveCostingCode(item));
     String period =
         StringUtils.hasText(periodMonth)
             ? CostPricingPeriodUtils.requireCurrentPricingMonth(periodMonth)
@@ -740,40 +815,6 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
             .orderByAsc(CostRunCostItem::getId));
   }
 
-  private void applyDifferenceSign(
-      LambdaQueryWrapper<QuoteCuMaterialDiffItem> query, String differenceSign) {
-    if (!StringUtils.hasText(differenceSign)) {
-      return;
-    }
-    switch (differenceSign.trim().toUpperCase(Locale.ROOT)) {
-      case "POSITIVE" -> query.gt(QuoteCuMaterialDiffItem::getDiffAmount, BigDecimal.ZERO);
-      case "NEGATIVE" -> query.lt(QuoteCuMaterialDiffItem::getDiffAmount, BigDecimal.ZERO);
-      case "ZERO" -> query.eq(QuoteCuMaterialDiffItem::getDiffAmount, BigDecimal.ZERO);
-      default -> throw new IllegalArgumentException(
-          "differenceSign 只支持 POSITIVE、NEGATIVE 或 ZERO");
-    }
-  }
-
-  private long pageNo(Integer value) {
-    if (value == null) {
-      return 1L;
-    }
-    if (value < 1) {
-      throw new IllegalArgumentException("pageNo 必须大于等于1");
-    }
-    return value.longValue();
-  }
-
-  private long pageSize(Integer value) {
-    if (value == null) {
-      return DEFAULT_PAGE_SIZE;
-    }
-    if (value < 1 || value > MAX_PAGE_SIZE) {
-      throw new IllegalArgumentException("pageSize 必须在1到" + MAX_PAGE_SIZE + "之间");
-    }
-    return value.longValue();
-  }
-
   private QuoteCostRunSummaryResponse summary(QuoteCostRunVersion version, BigDecimal totalCost) {
     QuoteCostRunSummaryResponse response = new QuoteCostRunSummaryResponse();
     response.setId(version.getId());
@@ -793,6 +834,10 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     response.setOaCuPricePerTon(toPerTon(version.getOaCuPrice()));
     response.setFinanceBasePriceId(version.getFinanceBasePriceId());
     response.setStatus(version.getStatus());
+    response.setSourceRevision(version.getSourceRevision());
+    response.setDataQualityStatus(version.getDataQualityStatus());
+    response.setDataQualityWarningCount(version.getDataQualityWarningCount());
+    response.setDataQualitySummary(version.getDataQualitySummary());
     response.setTotalCost(totalCost);
     response.setFinanceBaseTotalCost(totalCost);
     response.setFinanceMaterialCost(version.getFinanceMaterialCost());
@@ -813,34 +858,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     return pricePerKg == null ? null : pricePerKg.multiply(KG_PER_TON);
   }
 
-  private QuoteCuMaterialDifferenceResponse toDifferenceDto(QuoteCuMaterialDiffItem item) {
-    QuoteCuMaterialDifferenceResponse dto = new QuoteCuMaterialDifferenceResponse();
-    dto.setId(item.getId());
-    dto.setCostRunVersionId(item.getCostRunVersionId());
-    dto.setCostRunNo(item.getCostRunNo());
-    dto.setLineNo(item.getLineNo());
-    dto.setSettlementKey(item.getSettlementKey());
-    dto.setParentSettlementKey(item.getParentSettlementKey());
-    dto.setDetailLevel(item.getDetailLevel());
-    dto.setContributesToAdjustment(Integer.valueOf(1).equals(item.getContributesToAdjustment()));
-    dto.setBomRowId(item.getBomRowId());
-    dto.setTopProductCode(item.getTopProductCode());
-    dto.setParentMaterialCode(item.getParentMaterialCode());
-    dto.setMaterialCode(item.getMaterialCode());
-    dto.setMaterialName(item.getMaterialName());
-    dto.setItemType(item.getItemType());
-    dto.setQuantity(item.getQuantity());
-    dto.setFinanceUnitPrice(item.getFinanceUnitPrice());
-    dto.setOaUnitPrice(item.getOaUnitPrice());
-    dto.setFinanceAmount(item.getFinanceAmount());
-    dto.setOaAmount(item.getOaAmount());
-    dto.setDiffAmount(item.getDiffAmount());
-    dto.setCuAffected(Integer.valueOf(1).equals(item.getCuAffected()));
-    dto.setPriceFormulaRefType(item.getPriceFormulaRefType());
-    dto.setPriceFormulaRefId(item.getPriceFormulaRefId());
-    dto.setTraceJson(item.getTraceJson());
-    return dto;
-  }
+  private record DataQuality(String status, int warningCount, String summary) {}
 
   private CostRunPartItemDto toPartDto(CostRunPartItem item) {
     CostRunPartItemDto dto = new CostRunPartItemDto();

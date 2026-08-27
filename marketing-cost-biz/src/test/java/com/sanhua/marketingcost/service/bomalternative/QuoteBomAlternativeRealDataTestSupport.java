@@ -540,7 +540,6 @@ final class QuoteBomAlternativeRealDataTestSupport {
                       TOP,
                       "RAW_PRODUCT_BOM",
                       row.getId(),
-                      null,
                       20L,
                       null,
                       null,

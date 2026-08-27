@@ -10,6 +10,7 @@ public class CostRunBatchProgressSnapshot {
 
   private String batchNo;
   private String status;
+  private String businessOutcome;
   private int totalCount;
   private int successCount;
   private int failedCount;

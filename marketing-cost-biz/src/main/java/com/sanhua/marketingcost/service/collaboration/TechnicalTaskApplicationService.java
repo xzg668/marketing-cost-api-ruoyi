@@ -5,12 +5,11 @@ import com.sanhua.marketingcost.dto.collaboration.TechnicalTaskDetailResponse;
 import com.sanhua.marketingcost.dto.collaboration.TechnicalTaskListResponse;
 import com.sanhua.marketingcost.dto.collaboration.TechnicalTaskValidationResponse;
 import com.sanhua.marketingcost.dto.collaboration.TechnicalTaskValidationResponse.Issue;
-import com.sanhua.marketingcost.entity.IntegrationOutbox;
+import com.sanhua.marketingcost.entity.BusinessChangeLog;
 import com.sanhua.marketingcost.entity.QuoteCollaborationGap;
 import com.sanhua.marketingcost.entity.QuoteCollaborationProductTask;
 import com.sanhua.marketingcost.entity.QuoteCollaborationQuoteLink;
 import com.sanhua.marketingcost.entity.QuoteCollaborationReviewItem;
-import com.sanhua.marketingcost.mapper.IntegrationOutboxMapper;
 import com.sanhua.marketingcost.mapper.QuoteCollaborationReviewItemMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.collaboration.CollaborationActions.ProductAction;
@@ -47,8 +46,9 @@ public class TechnicalTaskApplicationService {
   private final CollaborationProductStateService stateService;
   private final TechnicalTaskValidator validator;
   private final TechnicalSubmissionCoordinator submissionCoordinator;
-  private final IntegrationOutboxMapper outboxMapper;
+  private final CollaborationTaskLogService taskLogService;
   private final QuoteCollaborationReviewItemMapper reviewItemMapper;
+  private final CollaborationPortalAccessPolicy portalAccessPolicy;
 
   public TechnicalTaskApplicationService(
       QuoteCollaborationTaskRepository repository,
@@ -57,24 +57,26 @@ public class TechnicalTaskApplicationService {
       CollaborationProductStateService stateService,
       TechnicalTaskValidator validator,
       TechnicalSubmissionCoordinator submissionCoordinator,
-      IntegrationOutboxMapper outboxMapper,
-      QuoteCollaborationReviewItemMapper reviewItemMapper) {
+      CollaborationTaskLogService taskLogService,
+      QuoteCollaborationReviewItemMapper reviewItemMapper,
+      CollaborationPortalAccessPolicy portalAccessPolicy) {
     this.repository = repository;
     this.principalProvider = principalProvider;
     this.nextActionCalculator = nextActionCalculator;
     this.stateService = stateService;
     this.validator = validator;
     this.submissionCoordinator = submissionCoordinator;
-    this.outboxMapper = outboxMapper;
+    this.taskLogService = taskLogService;
     this.reviewItemMapper = reviewItemMapper;
+    this.portalAccessPolicy = portalAccessPolicy;
   }
 
   @Transactional(readOnly = true)
   public TechnicalTaskListResponse mine() {
     CollaborationPrincipal principal = principalProvider.currentTechnician();
     String businessUnit = currentBusinessUnit();
-    List<TechnicalTaskListResponse.Item> items = repository
-        .findMineByTechnician(principal.userId(), businessUnit).stream()
+    List<TechnicalTaskListResponse.Item> items = portalAccessPolicy.visibleTasks(repository
+        .findMineByTechnician(principal.userId(), businessUnit)).stream()
         .map(task -> listItem(task, principal))
         .toList();
     return new TechnicalTaskListResponse(items.size(), items);
@@ -162,8 +164,8 @@ public class TechnicalTaskApplicationService {
   public TechnicalTaskChangeLogResponse changeLog(Long taskId) {
     CollaborationPrincipal principal = principalProvider.currentTechnician();
     QuoteCollaborationProductTask task = ownTask(taskId, principal);
-    List<TechnicalTaskChangeLogResponse.Entry> entries = outboxMapper
-        .selectByAggregate("PRODUCT_TASK", task.getId()).stream()
+    List<TechnicalTaskChangeLogResponse.Entry> entries = taskLogService
+        .findByProductTask(task.getId()).stream()
         .map(this::changeLogEntry)
         .toList();
     return new TechnicalTaskChangeLogResponse(task.getId(), entries);
@@ -274,8 +276,10 @@ public class TechnicalTaskApplicationService {
   private QuoteCollaborationProductTask ownTask(
       Long taskId, CollaborationPrincipal principal) {
     if (taskId == null || taskId <= 0) throw notFound();
-    return repository.findMineById(taskId, principal.userId(), currentBusinessUnit())
+    QuoteCollaborationProductTask task = repository
+        .findMineById(taskId, principal.userId(), currentBusinessUnit())
         .orElseThrow(TechnicalTaskApplicationService::notFound);
+    return portalAccessPolicy.requireTask(task);
   }
 
   private List<QuoteCollaborationGap> gaps(QuoteCollaborationProductTask task) {
@@ -302,8 +306,8 @@ public class TechnicalTaskApplicationService {
     return ProductAction.RETRY_PRICE;
   }
 
-  private TechnicalTaskChangeLogResponse.Entry changeLogEntry(IntegrationOutbox event) {
-    String eventType = event.getEventType();
+  private TechnicalTaskChangeLogResponse.Entry changeLogEntry(BusinessChangeLog event) {
+    String eventType = event.getFieldName();
     String title = switch (eventType == null ? "" : eventType) {
       case "TECH_TASK_CREATED" -> "任务已分配";
       case "TECH_TASK_UPDATED" -> "处理状态已更新";
@@ -311,10 +315,10 @@ public class TechnicalTaskApplicationService {
       case "TECH_TASK_REOPENED" -> "任务已退回修改";
       default -> "任务状态更新";
     };
-    String description = "SYSTEM".equals(event.getDestination())
-        ? "报价系统已记录" : "OA未接入时仅在报价系统保存事件，不伪造推送成功";
+    String description = StringUtils.hasText(event.getChangeReason())
+        ? event.getChangeReason() : "报价系统已记录协作状态变化";
     return new TechnicalTaskChangeLogResponse.Entry(
-        event.getOccurredAt(), eventType, title, description);
+        event.getChangedAt(), eventType, title, description);
   }
 
   private static boolean editable(

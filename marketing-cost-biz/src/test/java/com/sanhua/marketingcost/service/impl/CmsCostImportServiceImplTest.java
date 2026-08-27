@@ -97,11 +97,6 @@ class CmsCostImportServiceImplTest {
     assertThat(response.getWorkshopRowCount()).isEqualTo(1);
     assertThat(response.getSubjectRowCount()).isEqualTo(1);
     assertThat(response.getSubjectSettingRowCount()).isEqualTo(1);
-    assertThat(response.getSalaryInsertCount()).isZero();
-    assertThat(response.getSalarySkipCount()).isZero();
-    assertThat(response.getSalaryBlockedCount()).isZero();
-    assertThat(response.getAuxInsertCount()).isZero();
-    assertThat(response.getAuxSkipCount()).isZero();
     verify(planMapper).upsert(any(CmsPlanCostRaw.class));
     verify(workshopMapper).upsert(any(CmsWorkshopLaborRaw.class));
     verify(subjectMapper).upsert(any(CmsProductSubjectCostRaw.class));

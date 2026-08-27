@@ -5,7 +5,7 @@ import com.sanhua.marketingcost.entity.system.LpCollaborationToken;
 /**
  * 协作者 Token 管理 Service 接口
  * <p>
- * 用于 OA 协作者的一次性 Token 生成、校验和标记已使用。
+ * 用于统一外部协作门户的 Token 生成、校验和标记已使用。
  * 协作者不走标准登录流程，通过 Token 访问受限页面。
  */
 public interface CollaborationTokenService {
@@ -14,12 +14,20 @@ public interface CollaborationTokenService {
      * 生成协作 Token
      *
      * @param userId          关联用户ID（发起协作的用户）
-     * @param tokenType       令牌类型（如 bom-supplement、price-supplement）
+     * @param tokenType       令牌类型
      * @param remark          备注（通常存储 oaNo 等业务信息）
      * @param expireHours     过期时长（小时）
      * @return 生成的 Token 记录
      */
     LpCollaborationToken generateToken(Long userId, String tokenType, String remark, int expireHours);
+
+    /**
+     * 复用同一人员、同一业务授权下尚未过期的 Token；没有时再创建。
+     *
+     * <p>用于可重复复制的协作入口，避免用户每点一次“复制链接”就在表里堆一条等价记录。
+     */
+    LpCollaborationToken getOrCreateReusableToken(
+            Long userId, String tokenType, String remark, int expireHours);
 
     /**
      * 校验 Token 有效性

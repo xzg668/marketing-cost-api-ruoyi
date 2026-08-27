@@ -19,7 +19,6 @@ public class BomCostingRowSourceRef {
   private String quoteProductCode;
   private String sourcePartType;
   private Long sourceRawHierarchyId;
-  private Long sourceTaskId;
   private Long preparationId;
   private Long supplementVersionId;
   private Long supplementDetailId;

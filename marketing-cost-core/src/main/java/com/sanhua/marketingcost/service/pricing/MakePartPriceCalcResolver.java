@@ -20,7 +20,7 @@ import org.springframework.util.StringUtils;
  * 制造件价格生成结果 Resolver。
  *
  * <p>实时成本里的制造件价格只能消费 {@code lp_make_part_price_calc_row} 生成表最新 OK 结果，
- * 禁止回退 {@code lp_make_part_spec.raw_unit_price / recycle_unit_price} 等旧人工维护字段。
+ * 旧人工规格/废料价兼容表已下线；这里只读取正式制造件价格生成结果。
  */
 @Service
 public class MakePartPriceCalcResolver implements PriceResolver {
@@ -130,7 +130,7 @@ public class MakePartPriceCalcResolver implements PriceResolver {
     if (context != null && StringUtils.hasText(context.getPricingMonth())) {
       return context.getPricingMonth().trim();
     }
-    return YearMonth.now().toString();
+    return com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
   }
 
   private String trimToNull(String value) {

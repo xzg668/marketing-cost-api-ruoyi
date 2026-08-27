@@ -29,13 +29,6 @@ public final class CollaborationIdempotencyKeys {
         + ":REPRICE";
   }
 
-  public static String oaEvent(
-      String aggregateNo, int aggregateVersion, String eventType, String target) {
-    String key = text(aggregateNo, "聚合编号") + ":" + version(aggregateVersion) + ":"
-        + text(eventType, "事件类型");
-    return target == null || target.isBlank() ? key : key + ":" + target.trim();
-  }
-
   private static long positive(Long value, String name) {
     if (value == null || value <= 0) {
       throw new IllegalArgumentException(name + "必须为正数");

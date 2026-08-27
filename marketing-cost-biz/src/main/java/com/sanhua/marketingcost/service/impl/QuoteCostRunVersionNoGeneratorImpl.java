@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
+
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
@@ -37,7 +39,8 @@ public class QuoteCostRunVersionNoGeneratorImpl implements QuoteCostRunVersionNo
 
   @Override
   public String nextVersionNo(Long oaFormItemId, String productCode) {
-    String prefix = "COST-" + LocalDate.now().format(VERSION_DATE_FORMAT) + "-";
+    String prefix = "COST-"
+        + CostPricingPeriodUtils.currentPricingDate().format(VERSION_DATE_FORMAT) + "-";
     Long dailyCount =
         versionMapper.selectCount(
             Wrappers.lambdaQuery(QuoteCostRunVersion.class)

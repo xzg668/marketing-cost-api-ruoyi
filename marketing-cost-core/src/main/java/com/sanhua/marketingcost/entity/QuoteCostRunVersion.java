@@ -31,7 +31,11 @@ public class QuoteCostRunVersion {
   private BigDecimal oaCuPrice;
   private Long financeBasePriceId;
   private String inputFingerprint;
+  private String sourceRevision;
   private String algorithmVersion;
+  private String dataQualityStatus;
+  private Integer dataQualityWarningCount;
+  private String dataQualitySummary;
   private BigDecimal financeMaterialCost;
   private BigDecimal oaMaterialCost;
   private BigDecimal cuMaterialAdjustment;

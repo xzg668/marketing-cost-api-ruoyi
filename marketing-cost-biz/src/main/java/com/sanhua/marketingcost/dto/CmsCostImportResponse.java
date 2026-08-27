@@ -8,11 +8,6 @@ public class CmsCostImportResponse {
   private int workshopRowCount;
   private int subjectRowCount;
   private int subjectSettingRowCount;
-  private int salaryInsertCount;
-  private int salarySkipCount;
-  private int salaryBlockedCount;
-  private int auxInsertCount;
-  private int auxSkipCount;
   private int errorCount;
   private String errorMessage;
 
@@ -70,46 +65,6 @@ public class CmsCostImportResponse {
 
   public void setSubjectSettingRowCount(int subjectSettingRowCount) {
     this.subjectSettingRowCount = subjectSettingRowCount;
-  }
-
-  public int getSalaryInsertCount() {
-    return salaryInsertCount;
-  }
-
-  public void setSalaryInsertCount(int salaryInsertCount) {
-    this.salaryInsertCount = salaryInsertCount;
-  }
-
-  public int getSalarySkipCount() {
-    return salarySkipCount;
-  }
-
-  public void setSalarySkipCount(int salarySkipCount) {
-    this.salarySkipCount = salarySkipCount;
-  }
-
-  public int getSalaryBlockedCount() {
-    return salaryBlockedCount;
-  }
-
-  public void setSalaryBlockedCount(int salaryBlockedCount) {
-    this.salaryBlockedCount = salaryBlockedCount;
-  }
-
-  public int getAuxInsertCount() {
-    return auxInsertCount;
-  }
-
-  public void setAuxInsertCount(int auxInsertCount) {
-    this.auxInsertCount = auxInsertCount;
-  }
-
-  public int getAuxSkipCount() {
-    return auxSkipCount;
-  }
-
-  public void setAuxSkipCount(int auxSkipCount) {
-    this.auxSkipCount = auxSkipCount;
   }
 
   public int getErrorCount() {

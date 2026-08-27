@@ -4,6 +4,7 @@ import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
+import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
 import org.springframework.stereotype.Component;
@@ -44,9 +45,9 @@ public class QuoteBomContextResolver {
     if (item == null) {
       throw new QuoteIngestException("报价单产品行不能为空");
     }
-    String productCode = trimToNull(item.getMaterialNo());
+    String productCode = QuoteProductIdentityUtils.resolveCostingCode(item);
     if (productCode == null) {
-      throw new QuoteIngestException("产品料号为空，无法解析报价 BOM 上下文");
+      throw new QuoteIngestException("产品料号、三花型号和客户图号均为空，无法识别报价产品");
     }
     return new QuoteBomContext(
         resolveCostPeriodMonth(form, existingCostPeriodMonth),

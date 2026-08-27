@@ -34,6 +34,7 @@ import com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
+import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -222,7 +223,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
     Set<String> topProductCodes = new LinkedHashSet<>();
     Set<String> seen = new LinkedHashSet<>();
     for (OaFormItem item : items) {
-      if (item == null || !StringUtils.hasText(item.getMaterialNo())) {
+      if (!QuoteProductIdentityUtils.hasCostingIdentity(item)) {
         continue;
       }
       OaForm form = formById.get(item.getOaFormId());
@@ -230,7 +231,7 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
         continue;
       }
       String oaNo = trimToNull(form.getOaNo());
-      String topProductCode = trimToNull(item.getMaterialNo());
+      String topProductCode = QuoteProductIdentityUtils.resolveCostingCode(item);
       if (oaNo == null || topProductCode == null) {
         continue;
       }
@@ -323,7 +324,8 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
       }
       String priceType = automaticTypes.computeIfAbsent(
           materialCode,
-          code -> materialPriceRouterService.resolve(code, gap.getPeriodMonth(), LocalDate.now())
+          code -> materialPriceRouterService.resolve(
+              code, gap.getPeriodMonth(), CostPricingPeriodUtils.currentPricingDate())
               .map(route -> route.priceType().getDbText())
               .orElse(""));
       if (StringUtils.hasText(priceType)) {

@@ -50,8 +50,27 @@ class MaterialMasterRawMapperSqlTest {
         "source_type = #{sourceType}",
         "material_code LIKE CONCAT('%', #{keyword}, '%')",
         "material_name LIKE CONCAT('%', #{keyword}, '%')",
+        "material_spec LIKE CONCAT('%', #{keyword}, '%')",
         "material_model LIKE CONCAT('%', #{keyword}, '%')",
+        "drawing_no LIKE CONCAT('%', #{keyword}, '%')",
         "ORDER BY material_code ASC",
+        "LIMIT #{limit}");
+    assertThat(sql).doesNotContain("SELECT MAX(import_batch_id)");
+  }
+
+  @Test
+  @DisplayName("电子图库图号批量匹配只查当前组织和当前有效行")
+  void drawingIdentityQueryUsesOrganizationAndExactIdentityFields() throws Exception {
+    String sql = selectSql(
+        "selectByDrawingIdentities", java.util.Collection.class, String.class, String.class, int.class);
+
+    assertThat(sql).contains(
+        "active_flag = 1",
+        "organization_code = #{organizationCode}",
+        "UPPER(TRIM(drawing_no)) IN",
+        "UPPER(TRIM(material_spec)) IN",
+        "UPPER(TRIM(material_model)) IN",
+        "<foreach collection='drawingCodes'",
         "LIMIT #{limit}");
     assertThat(sql).doesNotContain("SELECT MAX(import_batch_id)");
   }

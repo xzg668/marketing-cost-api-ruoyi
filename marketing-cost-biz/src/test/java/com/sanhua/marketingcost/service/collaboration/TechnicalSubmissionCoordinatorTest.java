@@ -36,6 +36,7 @@ class TechnicalSubmissionCoordinatorTest {
   @Mock CollaborationMasterStateService masterStateService;
   @Mock QuoteCollaborationTaskMapper taskMapper;
   @Mock QuoteCollaborationReviewMapper reviewMapper;
+  @Mock CollaborationStructuralDraftLifecycleService structuralDraftLifecycle;
 
   TechnicalSubmissionCoordinator coordinator;
   CollaborationPrincipal technician = new CollaborationPrincipal(
@@ -45,7 +46,7 @@ class TechnicalSubmissionCoordinatorTest {
   void setUp() {
     coordinator = new TechnicalSubmissionCoordinator(taskRepository, draftRepository,
         reviewRepository, draftStateService, productStateService, masterStateService,
-        taskMapper, reviewMapper, new ObjectMapper());
+        taskMapper, reviewMapper, new ObjectMapper(), structuralDraftLifecycle);
   }
 
   @Test

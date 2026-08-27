@@ -16,10 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 class TransactionalAnnotationTest {
 
   private static final List<MethodRef> REQUIRED = List.of(
-      new MethodRef(AuxRateItemServiceImpl.class, "importItems"),
       new MethodRef(MaterialMasterServiceImpl.class, "importItems"),
-      new MethodRef(AuxSubjectServiceImpl.class, "importItems"),
-      new MethodRef(SalaryCostServiceImpl.class, "importItems"),
       new MethodRef(PriceRangeItemServiceImpl.class, "importItems"),
       new MethodRef(BomManualItemServiceImpl.class, "importItems"),
       new MethodRef(ProductPropertyServiceImpl.class, "importItems"),

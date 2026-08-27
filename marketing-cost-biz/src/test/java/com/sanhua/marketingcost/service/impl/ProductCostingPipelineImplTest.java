@@ -113,6 +113,24 @@ class ProductCostingPipelineImplTest {
   }
 
   @Test
+  @DisplayName("新品只有型号时仍进入流水线并停在BOM协作，而不是系统失败")
+  void modelOnlyProductEntersPipeline() {
+    OaFormItem newProduct = item(null);
+    newProduct.setMaterialNo(null);
+    newProduct.setSunlModel("MODEL-NEW-1");
+    when(itemMapper.selectById(11L)).thenReturn(newProduct);
+    when(workbenchService.launchWorkbench("OA-1", 11L))
+        .thenReturn(workbench("BLOCKED", "BLOCKED", 0));
+
+    var result = pipeline.execute(request(false));
+
+    assertThat(result.getPipelineStatus()).isEqualTo("BLOCKED");
+    assertThat(result.getBlockingStatus()).isEqualTo("WAIT_BOM");
+    assertThat(result.getProductCode()).isEqualTo("MODEL:MODEL-NEW-1");
+    verify(priceService, never()).generate(anyString(), anyLong(), any());
+  }
+
+  @Test
   @DisplayName("最终 BOM 构建发现准备未就绪时转待协作，不记系统失败")
   void preparationNotReadyBecomesBomCollaboration() {
     when(workbenchService.launchWorkbench("OA-1", 11L))

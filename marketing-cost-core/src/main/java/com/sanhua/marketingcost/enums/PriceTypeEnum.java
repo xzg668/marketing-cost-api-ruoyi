@@ -11,7 +11,7 @@ import java.util.Set;
  * <p>历史变更（V48+）：6 桶 → 4 桶
  * <ul>
  *   <li>原 SETTLE 结算价 → 合并到 FIXED（家用结算价归 lp_price_fixed_item.source_type=SETTLE）</li>
- *   <li>原 BOM_CALC → 改名 MAKE（自制件按 lp_make_part_spec 配方算价）</li>
+ *   <li>原 BOM_CALC → 改名 MAKE（自制件按当前 BOM 子树和正式价格准备结果算价）</li>
  *   <li>原 RAW_BREAKDOWN → 合并到 MAKE（原材料拆解本质是自制件配方公式的一种）</li>
  * </ul>
  *
@@ -20,7 +20,7 @@ import java.util.Set;
  *   <li>FIXED  固定价 —— 一口价（lp_price_fixed_item，含 PURCHASE/SETTLE 两种 source_type）</li>
  *   <li>LINKED 联动价 —— 公式 + 月度基价实时算（lp_price_linked_item + lp_finance_base_price）</li>
  *   <li>RANGE  区间价 —— 按数量段取价（lp_price_range_item）</li>
- *   <li>MAKE   自制件 —— 配方算价（lp_make_part_spec：原料 × 毛重 - 废料 × 边角 + 加工费）</li>
+ *   <li>MAKE   自制件 —— 按 BOM 子树、净重、废料映射和正式价格准备结果算价</li>
  * </ol>
  *
  * <p>形态白名单（决定该物料形态合法的取价桶）：

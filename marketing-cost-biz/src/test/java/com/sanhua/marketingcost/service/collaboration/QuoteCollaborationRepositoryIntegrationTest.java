@@ -3,10 +3,7 @@ package com.sanhua.marketingcost.service.collaboration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.sanhua.marketingcost.entity.IntegrationInbox;
-import com.sanhua.marketingcost.entity.IntegrationOutbox;
 import com.sanhua.marketingcost.entity.QuoteCollaborationApprovedResult;
-import com.sanhua.marketingcost.entity.QuoteCollaborationExternalTask;
 import com.sanhua.marketingcost.entity.QuoteCollaborationGap;
 import com.sanhua.marketingcost.entity.QuoteCollaborationProductTask;
 import com.sanhua.marketingcost.entity.QuoteCollaborationQuoteLink;
@@ -51,9 +48,6 @@ class QuoteCollaborationRepositoryIntegrationTest extends BomMapperTestBase {
   @Autowired private QuoteCollaborationTaskRepository taskRepository;
   @Autowired private QuotePriceDraftRepository draftRepository;
   @Autowired private QuoteCollaborationReviewRepository reviewRepository;
-  @Autowired private QuoteCollaborationExternalTaskRepository externalTaskRepository;
-  @Autowired private IntegrationOutboxRepository outboxRepository;
-  @Autowired private IntegrationInboxRepository inboxRepository;
   @Autowired private JdbcTemplate jdbcTemplate;
   @Autowired private PlatformTransactionManager transactionManager;
 
@@ -96,9 +90,6 @@ class QuoteCollaborationRepositoryIntegrationTest extends BomMapperTestBase {
   @AfterEach
   void cleanRows() {
     for (String table : List.of(
-        "lp_integration_inbox",
-        "lp_integration_outbox",
-        "lp_quote_collaboration_external_task",
         "lp_quote_collaboration_approved_result",
         "lp_quote_collaboration_review_item",
         "lp_quote_collaboration_review",
@@ -113,7 +104,7 @@ class QuoteCollaborationRepositoryIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
-  @DisplayName("十二张表可读写NULL、DECIMAL、JSON、日期、中文和长BOM路径")
+  @DisplayName("当前协作表可读写NULL、DECIMAL、JSON、日期、中文和长BOM路径")
   void readsAndWritesEveryAggregateWithExactTypes() {
     Graph graph = createGraph(SCOPE, "A");
     String longPath = "顶层/制造件/" + "原材料层级/".repeat(150);
@@ -127,10 +118,6 @@ class QuoteCollaborationRepositoryIntegrationTest extends BomMapperTestBase {
     QuoteCollaborationReviewItem reviewItem = createReviewItem(review, graph.productTask(), draft);
     QuoteCollaborationApprovedResult result = createApprovedResult(
         review, graph.productTask(), SCOPE);
-    QuoteCollaborationExternalTask external = createExternalTask(graph, "TECH-A");
-    IntegrationOutbox outbox = createOutbox(graph.productTask());
-    IntegrationOutbox dispatchableOutbox = createDispatchableOutbox(graph.productTask());
-    IntegrationInbox inbox = createInbox();
 
     QuoteCollaborationGap storedGap = taskRepository.findGaps(
         graph.productTask().getId(), SCOPE).get(0);
@@ -166,20 +153,6 @@ class QuoteCollaborationRepositoryIntegrationTest extends BomMapperTestBase {
     assertThat(reviewRepository.findValidResults(
         graph.productTask().getProductCode(), "FULL_BOM", LocalDateTime.now(), SCOPE))
         .extracting(QuoteCollaborationApprovedResult::getId).containsExactly(result.getId());
-    assertThat(externalTaskRepository.findCurrentByAssignee(
-        "TECH-A", List.of("HOLD"), SCOPE))
-        .extracting(QuoteCollaborationExternalTask::getId).containsExactly(external.getId());
-    assertThat(outboxRepository.findByIdempotencyKey(outbox.getIdempotencyKey()))
-        .get().extracting(IntegrationOutbox::getPayloadJson).asString().contains("技术任务");
-    assertThat(outboxRepository.findDispatchable(
-        "OA", "PENDING", LocalDateTime.now(), 10))
-        .extracting(IntegrationOutbox::getId).containsExactly(dispatchableOutbox.getId());
-    assertThat(outboxRepository.findDispatchable(
-        "OA", "HOLD", LocalDateTime.now(), 10)).isEmpty();
-    assertThat(inboxRepository.findByCallback("OA", inbox.getCallbackId()))
-        .get().extracting(IntegrationInbox::getPayloadJson).asString().contains("回调");
-    assertThat(inboxRepository.findByIdempotencyKey(inbox.getIdempotencyKey()))
-        .get().extracting(IntegrationInbox::getId).isEqualTo(inbox.getId());
   }
 
   @Test
@@ -648,68 +621,6 @@ class QuoteCollaborationRepositoryIntegrationTest extends BomMapperTestBase {
     result.setValidUntil(LocalDateTime.now().plusMonths(6));
     result.setResultStatus("ACTIVE");
     return reviewRepository.saveApprovedResult(result);
-  }
-
-  private QuoteCollaborationExternalTask createExternalTask(Graph graph, String assignee) {
-    QuoteCollaborationExternalTask task = new QuoteCollaborationExternalTask();
-    task.setCollaborationId(graph.task().getId());
-    task.setProductTaskId(graph.productTask().getId());
-    task.setTaskKind("TECH");
-    task.setLogicalTaskVersion(1);
-    task.setExternalStatus("HOLD");
-    task.setAssigneeUserId(assignee);
-    task.setAssigneeName("技术协作者");
-    return externalTaskRepository.save(task);
-  }
-
-  private IntegrationOutbox createOutbox(QuoteCollaborationProductTask productTask) {
-    IntegrationOutbox event = new IntegrationOutbox();
-    event.setEventId(UUID.randomUUID().toString());
-    event.setIdempotencyKey("OUT-" + suffix);
-    event.setDestination("OA");
-    event.setAggregateType("PRODUCT_TASK");
-    event.setAggregateId(productTask.getId());
-    event.setAggregateVersion(1);
-    event.setEventType("TECH_TASK_READY");
-    event.setPayloadJson("{\"消息\":\"技术任务已就绪\"}");
-    event.setPayloadHash("b".repeat(64));
-    event.setSendPolicy("HOLD");
-    event.setSendStatus("HOLD");
-    event.setOccurredAt(LocalDateTime.now());
-    return outboxRepository.save(event);
-  }
-
-  private IntegrationOutbox createDispatchableOutbox(
-      QuoteCollaborationProductTask productTask) {
-    IntegrationOutbox event = new IntegrationOutbox();
-    event.setEventId(UUID.randomUUID().toString());
-    event.setIdempotencyKey("OUT-AUTO-" + suffix);
-    event.setDestination("OA");
-    event.setAggregateType("PRODUCT_TASK");
-    event.setAggregateId(productTask.getId());
-    event.setAggregateVersion(2);
-    event.setEventType("TECH_TASK_READY");
-    event.setPayloadJson("{\"消息\":\"允许调度的技术任务\"}");
-    event.setPayloadHash("d".repeat(64));
-    event.setSendPolicy("AUTO");
-    event.setSendStatus("PENDING");
-    event.setOccurredAt(LocalDateTime.now().minusMinutes(2));
-    event.setNextRetryAt(LocalDateTime.now().minusMinutes(1));
-    return outboxRepository.save(event);
-  }
-
-  private IntegrationInbox createInbox() {
-    IntegrationInbox callback = new IntegrationInbox();
-    callback.setSourceSystem("OA");
-    callback.setCallbackId("CALL-" + suffix);
-    callback.setIdempotencyKey("IN-" + suffix);
-    callback.setCallbackType("TASK_CALLBACK");
-    callback.setPayloadJson("{\"消息\":\"回调已收到\"}");
-    callback.setPayloadHash("c".repeat(64));
-    callback.setSignatureStatus("NOT_CHECKED");
-    callback.setProcessStatus("RECEIVED");
-    callback.setReceivedAt(LocalDateTime.now());
-    return inboxRepository.save(callback);
   }
 
   private long positiveKey(String marker) {

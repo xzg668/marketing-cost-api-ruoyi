@@ -63,7 +63,7 @@ public class CostRunDetailController {
   }
 
   /** 查询试算明细列表 */
-  @PreAuthorize("@ss.hasPermi('cost:run:list')")
+  @PreAuthorize("@ss.hasPermi('ingest:quote:list')")
   @GetMapping("/detail")
   public CommonResult<CostRunDetailDto> getDetail(
       @RequestParam String oaNo,

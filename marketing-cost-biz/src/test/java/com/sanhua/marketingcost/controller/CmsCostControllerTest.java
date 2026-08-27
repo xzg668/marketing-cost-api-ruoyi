@@ -69,8 +69,6 @@ class CmsCostControllerTest {
     response.setPlanRowCount(1);
     response.setWorkshopRowCount(2);
     response.setSubjectRowCount(3);
-    response.setSalaryInsertCount(1);
-    response.setAuxInsertCount(2);
     when(importService.importExcel(
             any(InputStream.class),
             eq("plan.xlsx"),
@@ -97,8 +95,6 @@ class CmsCostControllerTest {
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getStatus()).isEqualTo("DERIVED");
-    assertThat(result.getData().getSalaryInsertCount()).isEqualTo(1);
-    assertThat(result.getData().getAuxInsertCount()).isEqualTo(2);
   }
 
   @Test

@@ -24,7 +24,9 @@ public class QuoteCostingWorkspace {
   private String workspaceStatus;
   private String currentStep;
   private String inputFingerprint;
+  private String sourceRevision;
   private String lastSuccessInputFingerprint;
+  private String lastSuccessSourceRevision;
   private String bomSourceFingerprint;
   private String bomRuleFingerprint;
   private String currentBomBuildBatchId;
@@ -32,6 +34,9 @@ public class QuoteCostingWorkspace {
   private Long currentCostVersionId;
   private Integer gapCount;
   private Integer carriedForwardPriceCount;
+  private String dataQualityStatus;
+  private Integer dataQualityWarningCount;
+  private String dataQualitySummary;
   private String staleReasonCode;
   private String lastErrorStep;
   private String lastErrorCode;

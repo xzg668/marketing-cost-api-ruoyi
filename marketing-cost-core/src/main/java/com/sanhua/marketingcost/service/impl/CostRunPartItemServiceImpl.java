@@ -20,6 +20,7 @@ import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.service.CostRunPartItemService;
+import com.sanhua.marketingcost.service.CostBusinessRuleProvider;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
 import com.sanhua.marketingcost.service.PackageComponentPriceService;
@@ -40,6 +41,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 
 /**
@@ -80,12 +82,39 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
   private static final String COST_ELEMENT_WELD = "主要材料-焊料";
   /** T26：包装父件判定 — raw 主档 main_category_name 固定文本 */
   private static final String MAIN_CATEGORY_PACKAGE = "包装组件";
-  /** T26：包装算法系数 — 硬编码 1.05（业务来源待确认，TODO #T24.9） */
-  private static final BigDecimal PACKAGE_COEFFICIENT = new BigDecimal("1.05");
+  private static final BigDecimal DEFAULT_PACKAGE_COEFFICIENT = new BigDecimal("1.05");
   private static final int DISPLAY_AMOUNT_SCALE = 6;
   private static final int DISPLAY_UNIT_PRICE_SCALE = 8;
   private static final String SOURCE_TYPE_U9 = "U9";
   private static final String PRICE_SOURCE_PACKAGE_COMPONENT = "包装组件价格";
+  private final CostBusinessRuleProvider businessRuleProvider;
+
+  @Autowired
+  public CostRunPartItemServiceImpl(
+      CostRunPartItemMapper costRunPartItemMapper,
+      MaterialPriceRouterService materialPriceRouterService,
+      PackageComponentIdentifyService packageComponentIdentifyService,
+      PackageComponentPriceService packageComponentPriceService,
+      OaFormMapper oaFormMapper,
+      MaterialMasterMapper materialMasterMapper,
+      MaterialMasterRawMapper materialMasterRawMapper,
+      com.sanhua.marketingcost.mapper.BomRawHierarchyMapper bomRawHierarchyMapper,
+      List<PriceResolver> priceResolvers,
+      CostBusinessRuleProvider businessRuleProvider) {
+    this.costRunPartItemMapper = costRunPartItemMapper;
+    this.materialPriceRouterService = materialPriceRouterService;
+    this.packageComponentIdentifyService = packageComponentIdentifyService;
+    this.packageComponentPriceService = packageComponentPriceService;
+    this.oaFormMapper = oaFormMapper;
+    this.materialMasterMapper = materialMasterMapper;
+    this.materialMasterRawMapper = materialMasterRawMapper;
+    this.businessRuleProvider = businessRuleProvider;
+    Map<PriceTypeEnum, PriceResolver> map = new EnumMap<>(PriceTypeEnum.class);
+    for (PriceResolver resolver : priceResolvers) {
+      map.put(resolver.priceType(), resolver);
+    }
+    this.resolverMap = Collections.unmodifiableMap(map);
+  }
 
   public CostRunPartItemServiceImpl(
       CostRunPartItemMapper costRunPartItemMapper,
@@ -97,18 +126,17 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       MaterialMasterRawMapper materialMasterRawMapper,
       com.sanhua.marketingcost.mapper.BomRawHierarchyMapper bomRawHierarchyMapper,
       List<PriceResolver> priceResolvers) {
-    this.costRunPartItemMapper = costRunPartItemMapper;
-    this.materialPriceRouterService = materialPriceRouterService;
-    this.packageComponentIdentifyService = packageComponentIdentifyService;
-    this.packageComponentPriceService = packageComponentPriceService;
-    this.oaFormMapper = oaFormMapper;
-    this.materialMasterMapper = materialMasterMapper;
-    this.materialMasterRawMapper = materialMasterRawMapper;
-    Map<PriceTypeEnum, PriceResolver> map = new EnumMap<>(PriceTypeEnum.class);
-    for (PriceResolver resolver : priceResolvers) {
-      map.put(resolver.priceType(), resolver);
-    }
-    this.resolverMap = Collections.unmodifiableMap(map);
+    this(
+        costRunPartItemMapper,
+        materialPriceRouterService,
+        packageComponentIdentifyService,
+        packageComponentPriceService,
+        oaFormMapper,
+        materialMasterMapper,
+        materialMasterRawMapper,
+        bomRawHierarchyMapper,
+        priceResolvers,
+        (ruleCode, pricingMonth, businessUnitType, fallbackValue) -> fallbackValue);
   }
 
   @Override
@@ -360,12 +388,15 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
           "焊料汇总（cost_element=主要材料-焊料 子件 SUM）"));
     }
     if (packageParentSum.signum() > 0) {
+      BigDecimal packageCoefficient = packageCoefficient(oaNo);
       BigDecimal pkgAmount = packageParentSum
-          .multiply(PACKAGE_COEFFICIENT)
+          .multiply(packageCoefficient)
           .setScale(6, RoundingMode.HALF_UP);
       result.add(buildPackageAggregatedRow(
           oaNo, productCodeValue, packageRows, pkgAmount,
-          "包装汇总（包装组件父件金额 × 1.05）"));
+          "包装汇总（包装组件父件金额 × "
+              + packageCoefficient.stripTrailingZeros().toPlainString() + "）",
+          packageCoefficient));
     }
     return result;
   }
@@ -830,7 +861,8 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       String productCode,
       List<CostRunPartItemDto> packageRows,
       BigDecimal amount,
-      String remark) {
+      String remark,
+      BigDecimal packageCoefficient) {
     CostRunPartItemDto dto = buildAggregatedRow(oaNo, productCode, "包装", amount, remark);
     if (packageRows == null || packageRows.isEmpty()) {
       return dto;
@@ -846,11 +878,12 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     dto.setCostElement(first.getCostElement());
     dto.setPriceOrgCode(first.getPriceOrgCode());
     dto.setMaterialOrganizationCode(first.getMaterialOrganizationCode());
-    dto.setUnitPrice(calculateDisplayUnitPrice(first, amount));
+    dto.setUnitPrice(calculateDisplayUnitPrice(first, amount, packageCoefficient));
     return dto;
   }
 
-  private BigDecimal calculateDisplayUnitPrice(CostRunPartItemDto row, BigDecimal amount) {
+  private BigDecimal calculateDisplayUnitPrice(
+      CostRunPartItemDto row, BigDecimal amount, BigDecimal packageCoefficient) {
     if (row == null || amount == null) {
       return null;
     }
@@ -861,7 +894,23 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     BigDecimal unitPrice = row.getUnitPrice();
     return unitPrice == null
         ? null
-        : unitPrice.multiply(PACKAGE_COEFFICIENT).setScale(6, RoundingMode.HALF_UP);
+        : unitPrice.multiply(packageCoefficient).setScale(6, RoundingMode.HALF_UP);
+  }
+
+  private BigDecimal packageCoefficient(String oaNo) {
+    String businessUnitType = null;
+    if (StringUtils.hasText(oaNo)) {
+      OaForm form = oaFormMapper.selectOne(
+          Wrappers.lambdaQuery(OaForm.class)
+              .eq(OaForm::getOaNo, oaNo.trim())
+              .last("LIMIT 1"));
+      businessUnitType = form == null ? null : form.getBusinessUnitType();
+    }
+    return businessRuleProvider.decimalValue(
+        CostBusinessRuleProvider.PACKAGE_COMPONENT_COEFFICIENT,
+        com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth(),
+        businessUnitType,
+        DEFAULT_PACKAGE_COEFFICIENT);
   }
 
   // ============================ Router + Resolver 取价 ============================
@@ -1189,7 +1238,7 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
    * <p>当前试算按系统当前月份取价；OA.apply_date 只表示单据申请时间，不作为试算价格月份。
    */
   LocalDate resolveQuoteDate(String oaNo) {
-    return LocalDate.now();
+    return com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingDate();
   }
 
   /** 用试算取价日推算 period（yyyy-MM）；未来可扩展按账期查找服务。 */

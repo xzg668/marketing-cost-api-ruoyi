@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test;
 class CollaborationIdempotencyKeysTest {
 
   @Test
-  @DisplayName("六类命令和OA事件生成稳定且不串业务的幂等键")
+  @DisplayName("五类内部命令生成稳定且不串业务的幂等键")
   void buildsStableBusinessKeys() {
     assertThat(CollaborationIdempotencyKeys.start(91L, "2026-08", PrimaryScope.FULL_BOM))
         .isEqualTo("91:2026-08:FULL_BOM:START");
@@ -23,10 +23,6 @@ class CollaborationIdempotencyKeysTest {
         .isEqualTo("PUB-1:12");
     assertThat(CollaborationIdempotencyKeys.reprice(8L, "PUB-1"))
         .isEqualTo("8:PUB-1:REPRICE");
-    assertThat(CollaborationIdempotencyKeys.oaEvent("QC-P-1", 4, "TECH_SUBMITTED", null))
-        .isEqualTo("QC-P-1:4:TECH_SUBMITTED");
-    assertThat(CollaborationIdempotencyKeys.oaEvent("QC-P-1", 4, "ASSIGNEE_CHANGED", "701"))
-        .isEqualTo("QC-P-1:4:ASSIGNEE_CHANGED:701");
   }
 
   @Test

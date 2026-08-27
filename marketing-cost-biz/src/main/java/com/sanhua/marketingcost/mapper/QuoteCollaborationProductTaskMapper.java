@@ -95,6 +95,15 @@ public interface QuoteCollaborationProductTaskMapper
 
   @Select("""
       SELECT * FROM lp_quote_collaboration_product_task
+      WHERE id = #{id} AND business_unit_type = #{businessUnitType}
+      LIMIT 1
+      """)
+  QuoteCollaborationProductTask selectByIdAndBusinessUnit(
+      @Param("id") Long id,
+      @Param("businessUnitType") String businessUnitType);
+
+  @Select("""
+      SELECT * FROM lp_quote_collaboration_product_task
       WHERE product_code = #{productCode} AND accounting_month = #{accountingMonth}
         AND business_unit_type = #{businessUnitType}
         AND applicable_org_code = #{applicableOrgCode}

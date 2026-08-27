@@ -20,8 +20,10 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostingWorkspaceMapper;
 import com.sanhua.marketingcost.service.CostingAlgorithmVersionProvider;
+import com.sanhua.marketingcost.service.CostInputRevisionService;
 import com.sanhua.marketingcost.service.CostRunTaskSubmissionService;
 import com.sanhua.marketingcost.service.QuoteCurrentSuccessMatcher;
+import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -34,6 +36,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -51,7 +54,9 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
   private final QuoteCostingWorkspaceMapper workspaceMapper;
   private final QuoteCostRunVersionMapper versionMapper;
   private final CostingAlgorithmVersionProvider algorithmVersionProvider;
+  private final CostInputRevisionService inputRevisionService;
 
+  @Autowired
   public CostRunTaskSubmissionServiceImpl(
       CostRunBatchMapper batchMapper,
       CostRunTaskMapper taskMapper,
@@ -59,7 +64,8 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
       OaFormItemMapper oaFormItemMapper,
       QuoteCostingWorkspaceMapper workspaceMapper,
       QuoteCostRunVersionMapper versionMapper,
-      CostingAlgorithmVersionProvider algorithmVersionProvider) {
+      CostingAlgorithmVersionProvider algorithmVersionProvider,
+      CostInputRevisionService inputRevisionService) {
     this.batchMapper = batchMapper;
     this.taskMapper = taskMapper;
     this.oaFormMapper = oaFormMapper;
@@ -67,6 +73,27 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     this.workspaceMapper = workspaceMapper;
     this.versionMapper = versionMapper;
     this.algorithmVersionProvider = algorithmVersionProvider;
+    this.inputRevisionService = inputRevisionService;
+  }
+
+  /** Kept for focused mapper unit tests that do not start a database-backed revision provider. */
+  CostRunTaskSubmissionServiceImpl(
+      CostRunBatchMapper batchMapper,
+      CostRunTaskMapper taskMapper,
+      OaFormMapper oaFormMapper,
+      OaFormItemMapper oaFormItemMapper,
+      QuoteCostingWorkspaceMapper workspaceMapper,
+      QuoteCostRunVersionMapper versionMapper,
+      CostingAlgorithmVersionProvider algorithmVersionProvider) {
+    this(
+        batchMapper,
+        taskMapper,
+        oaFormMapper,
+        oaFormItemMapper,
+        workspaceMapper,
+        versionMapper,
+        algorithmVersionProvider,
+        (form, item) -> null);
   }
 
   @Override
@@ -129,10 +156,10 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
       throw new IllegalArgumentException("当前 OA 没有可核算的产品明细");
     }
     boolean existingBatch = existing != null;
+    batch.setSourceRevision(tasks.batchSourceRevision());
     if (existing == null) {
       batch.setTotalCount(tasks.totalCount());
       batch.setSkippedCount(tasks.skippedCurrentCount());
-      batch.setPrerequisiteStatus(tasks.queuedCount() == 0 ? "NOT_REQUIRED" : "PENDING");
       String draftBatchNo = batch.getBatchNo();
       batch = insertOrLoadExisting(batch);
       if (!draftBatchNo.equals(batch.getBatchNo())) {
@@ -297,13 +324,15 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     int expectedExecutionNo = batch.getExecutionNo() == null ? 1 : batch.getExecutionNo();
     int expectedControlVersion = batch.getControlVersion() == null ? 0 : batch.getControlVersion();
     int nextExecutionNo = expectedExecutionNo + 1;
+    taskMapper.archiveExecutionTasks(batchNo, expectedExecutionNo, now);
+    batchMapper.archiveExecution(batchNo, expectedExecutionNo, now);
     if (batchMapper.resetQuoteBatchForRerun(
         batchNo,
         expectedExecutionNo,
         expectedControlVersion,
         result.totalCount(),
         result.skippedCurrentCount(),
-        result.queuedCount() == 0 ? "NOT_REQUIRED" : "PENDING",
+        result.batchSourceRevision(),
         now) != 1) {
       throw new IllegalStateException("当前 OA 批次已被其他请求更新或正在执行，请稍后重试");
     }
@@ -322,6 +351,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
           executionNo,
           task.getStatus(),
           task.getRequestSnapshotJson(),
+          task.getSourceRevision(),
           now);
     }
   }
@@ -344,8 +374,6 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     batch.setPriceAsOfTime(priceAsOfTime);
     batch.setBusinessUnitType(businessUnitType);
     batch.setExecutionNo(1);
-    batch.setPrerequisiteStatus(
-        scene == CostRunTaskScene.QUOTE ? "PENDING" : "NOT_REQUIRED");
     batch.setControlVersion(0);
     batch.setStatus(CostRunBatchStatus.PENDING.name());
     batch.setTotalCount(0);
@@ -375,6 +403,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     Map<Long, QuoteCostingWorkspace> workspaces = loadWorkspaces(itemIds, pricingMonth);
     Map<Long, QuoteCostRunVersion> versions = loadVersions(workspaces.values());
     Map<String, CostRunTask> tasksByKey = new LinkedHashMap<>();
+    Map<Long, String> sourceRevisions = inputRevisionService.currentRevisions(oaForm, items);
     int skipped = 0;
     for (OaFormItem item : items == null ? List.<OaFormItem>of() : items) {
       CostRunTask task = buildQuoteTask(batch, oaForm, item);
@@ -382,24 +411,31 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
         skipped++;
         continue;
       }
+      String sourceRevision = sourceRevisions.get(item.getId());
+      task.setSourceRevision(sourceRevision);
       QuoteCostingWorkspace workspace = workspaces.get(item.getId());
       QuoteCostRunVersion version =
           workspace == null || workspace.getCurrentCostVersionId() == null
               ? null
               : versions.get(workspace.getCurrentCostVersionId());
-      if (QuoteCurrentSuccessMatcher.matches(
-          oaForm.getOaNo(),
-          item.getId(),
-          pricingMonth,
-          item,
-          workspace,
-          version,
-          algorithmVersionProvider.currentVersion())) {
+      boolean currentSuccess = sourceRevision == null
+          ? QuoteCurrentSuccessMatcher.matches(
+              oaForm.getOaNo(), item.getId(), pricingMonth, item, workspace, version,
+              algorithmVersionProvider.currentVersion())
+          : QuoteCurrentSuccessMatcher.matches(
+              oaForm.getOaNo(), item.getId(), pricingMonth, item, workspace, version,
+              algorithmVersionProvider.currentVersion(), sourceRevision);
+      if (currentSuccess) {
         task.setStatus(CostRunTaskStatus.SKIPPED_CURRENT.name());
         task.setProgress(100);
       }
     }
-    return new TaskBuildResult(List.copyOf(tasksByKey.values()), skipped);
+    String batchSourceRevision = sha256Hex(
+        tasksByKey.values().stream()
+            .map(task -> normalize(task.getCalcObjectKey()) + "=" + normalize(task.getSourceRevision()))
+            .sorted()
+            .collect(java.util.stream.Collectors.joining("|")));
+    return new TaskBuildResult(List.copyOf(tasksByKey.values()), skipped, batchSourceRevision);
   }
 
   private Map<Long, QuoteCostingWorkspace> loadWorkspaces(
@@ -454,7 +490,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     boolean active =
         CostRunBatchStatus.PENDING.name().equals(batch.getStatus())
             || CostRunBatchStatus.RUNNING.name().equals(batch.getStatus());
-    return active && !"FAILED".equals(batch.getPrerequisiteStatus());
+    return active;
   }
 
   private int valueOrOne(Integer value) {
@@ -465,7 +501,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     if (item == null) {
       return null;
     }
-    String productCode = normalize(item.getMaterialNo());
+    String productCode = QuoteProductIdentityUtils.resolveCostingCode(item);
     if (!StringUtils.hasText(productCode)) {
       return null;
     }
@@ -495,7 +531,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
         skipped++;
       }
     }
-    return new TaskBuildResult(List.copyOf(tasksByKey.values()), skipped);
+    return new TaskBuildResult(List.copyOf(tasksByKey.values()), skipped, null);
   }
 
   private CostRunTask buildMonthlyRepriceTask(
@@ -533,6 +569,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     task.setSourceNo(batch.getSourceNo());
     task.setBusinessUnitType(batch.getBusinessUnitType());
     task.setPricingMonth(batch.getPricingMonth());
+    task.setSourceRevision(batch.getSourceRevision());
     task.setPriceAsOfTime(batch.getPriceAsOfTime());
     task.setStatus(CostRunTaskStatus.PENDING.name());
     task.setProgress(0);
@@ -701,7 +738,8 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
         : value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
   }
 
-  private record TaskBuildResult(List<CostRunTask> tasks, int skippedCount) {
+  private record TaskBuildResult(
+      List<CostRunTask> tasks, int skippedCount, String batchSourceRevision) {
     int taskCount() {
       return tasks.size();
     }

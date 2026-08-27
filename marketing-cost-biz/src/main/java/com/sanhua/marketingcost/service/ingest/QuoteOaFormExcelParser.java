@@ -298,6 +298,7 @@ public class QuoteOaFormExcelParser {
   private boolean isBlankItem(QuoteIngestItemRequest item) {
     return !StringUtils.hasText(item.getMaterialNo())
         && !StringUtils.hasText(item.getSunlModel())
+        && !StringUtils.hasText(item.getCustomerDrawing())
         && !StringUtils.hasText(item.getProductName())
         && !StringUtils.hasText(item.getCustomerCode())
         && item.getSeq() == null;

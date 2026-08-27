@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
+
 import com.sanhua.marketingcost.dto.PackagePriceRequest;
 import com.sanhua.marketingcost.dto.PackagePriceResult;
 import com.sanhua.marketingcost.dto.priceprepare.PackageComponentPricePrepareResult;
@@ -127,7 +129,8 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
     request.setBomPurpose(bomPurpose);
     request.setSourceType(sourceType);
     // 月度调价由批次固化 price_as_of_time；普通价格准备未传时继续沿用当前日期。
-    request.setAsOfDate(priceAsOfTime == null ? LocalDate.now() : priceAsOfTime.toLocalDate());
+    request.setAsOfDate(priceAsOfTime == null
+        ? CostPricingPeriodUtils.currentPricingDate() : priceAsOfTime.toLocalDate());
     request.setPriceAsOfTime(priceAsOfTime);
     request.setCalcBatchId(prepareNo);
     request.setForceRefresh(true);

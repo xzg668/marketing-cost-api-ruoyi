@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.sanhua.marketingcost.config.ApprovedResultReuseProperties;
 import com.sanhua.marketingcost.config.ElectronicDrawingBomProperties;
-import com.sanhua.marketingcost.config.OaCollaborationProperties;
+import com.sanhua.marketingcost.service.collaboration.CollaborationPortalLinkService;
 import com.sanhua.marketingcost.service.impl.BusinessUnitRepriceLockGuardImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceBatchServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceConfirmServiceImpl;
@@ -15,6 +15,7 @@ import com.sanhua.marketingcost.service.impl.QuoteBatchCostRunServiceImpl;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
 import org.springframework.boot.WebApplicationType;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.FilterType;
@@ -26,6 +27,14 @@ class CostRunWorkerApplicationTest {
   void workerApplicationDoesNotStartWebServer() {
     assertThat(CostRunWorkerApplication.buildApplication().getWebApplicationType())
         .isEqualTo(WebApplicationType.NONE);
+  }
+
+  @Test
+  void workerDoesNotCreateServletOnlyCollaborationPortalLinkService() {
+    new ApplicationContextRunner()
+        .withUserConfiguration(CollaborationPortalLinkService.class)
+        .run(context -> assertThat(context.getBeansOfType(CollaborationPortalLinkService.class))
+            .isEmpty());
   }
 
   @Test
@@ -60,7 +69,6 @@ class CostRunWorkerApplicationTest {
 
     assertThat(annotation.value())
         .contains(
-            OaCollaborationProperties.class,
             ElectronicDrawingBomProperties.class,
             ApprovedResultReuseProperties.class);
   }
@@ -72,6 +80,6 @@ class CostRunWorkerApplicationTest {
     var properties = yaml.getObject();
 
     assertThat(properties).isNotNull();
-    assertThat(properties.getProperty("cost.quote-bom.effective-bom.enabled")).isEqualTo("true");
+    assertThat(properties).doesNotContainKey("cost.quote-bom.effective-bom.enabled");
   }
 }

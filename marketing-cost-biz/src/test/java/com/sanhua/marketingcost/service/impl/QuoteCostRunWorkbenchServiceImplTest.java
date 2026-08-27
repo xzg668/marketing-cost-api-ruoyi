@@ -15,7 +15,6 @@ import static org.mockito.Mockito.when;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunObjectResult;
@@ -25,7 +24,6 @@ import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest;
 import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
-import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunTrialRequest;
 import com.sanhua.marketingcost.entity.CostRunCostItem;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
@@ -33,21 +31,19 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
-import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
 import com.sanhua.marketingcost.mapper.CostRunCostItemMapper;
 import com.sanhua.marketingcost.mapper.CostRunPartItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
-import com.sanhua.marketingcost.mapper.QuoteCuMaterialDiffItemMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
 import com.sanhua.marketingcost.service.CostRunResultService;
+import com.sanhua.marketingcost.service.CostInputRevisionService;
 import com.sanhua.marketingcost.service.PricePrepareService;
 import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
-import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.io.ByteArrayInputStream;
@@ -79,8 +75,6 @@ class QuoteCostRunWorkbenchServiceImplTest {
   private CostRunResultService resultService;
   private CostRunPartItemMapper partItemMapper;
   private CostRunCostItemMapper costItemMapper;
-  private QuoteCuMaterialDiffItemMapper diffItemMapper;
-  private QuoteProductBomCostingBuildService costingBuildService;
   private PricePrepareService pricePrepareService;
   private PricePrepareReadinessService readinessService;
   private QuoteCostRunVersionNoGenerator versionNoGenerator;
@@ -97,7 +91,6 @@ class QuoteCostRunWorkbenchServiceImplTest {
     TableInfoHelper.initTableInfo(assistant, QuoteCostRunVersion.class);
     TableInfoHelper.initTableInfo(assistant, CostRunPartItem.class);
     TableInfoHelper.initTableInfo(assistant, CostRunCostItem.class);
-    TableInfoHelper.initTableInfo(assistant, QuoteCuMaterialDiffItem.class);
   }
 
   @BeforeEach
@@ -109,8 +102,6 @@ class QuoteCostRunWorkbenchServiceImplTest {
     resultService = mock(CostRunResultService.class);
     partItemMapper = mock(CostRunPartItemMapper.class);
     costItemMapper = mock(CostRunCostItemMapper.class);
-    diffItemMapper = mock(QuoteCuMaterialDiffItemMapper.class);
-    costingBuildService = mock(QuoteProductBomCostingBuildService.class);
     pricePrepareService = mock(PricePrepareService.class);
     readinessService = mock(PricePrepareReadinessService.class);
     versionNoGenerator = mock(QuoteCostRunVersionNoGenerator.class);
@@ -129,23 +120,6 @@ class QuoteCostRunWorkbenchServiceImplTest {
         .thenAnswer(invocation -> invocation.getArgument(0));
     when(readinessService.check(anyString(), anyLong(), anyString(), anyString()))
         .thenReturn(PricePrepareReadinessResult.ready("PPR-1", CURRENT_PERIOD, "SUCCESS"));
-    when(costingBuildService.buildByOaFormItem(101L, CURRENT_PERIOD))
-        .thenReturn(
-            new QuoteBomCostingBuildResponse(
-                201L,
-                null,
-                101L,
-                "OA-001",
-                "TOP-A",
-                "NON_BARE",
-                CURRENT_PERIOD,
-                "qbp-test",
-                1,
-                1,
-                0,
-                java.util.Map.of(),
-                List.of(),
-                LocalDateTime.now()));
     PricePrepareGenerateResult prepareResult = new PricePrepareGenerateResult();
     prepareResult.setPrepareNo("PPR-1");
     prepareResult.setOaNo("OA-001");
@@ -162,7 +136,6 @@ class QuoteCostRunWorkbenchServiceImplTest {
             resultService,
             partItemMapper,
             costItemMapper,
-            diffItemMapper,
             readinessService,
             versionNoGenerator,
             cuAdjustmentCalcService,
@@ -209,6 +182,15 @@ class QuoteCostRunWorkbenchServiceImplTest {
     when(versionMapper.selectList(any(Wrapper.class))).thenReturn(List.of(version));
     when(partItemMapper.selectCount(any(Wrapper.class))).thenReturn(1L);
     when(costItemMapper.selectCount(any(Wrapper.class))).thenReturn(1L);
+    CostRunPartItem storedPart = new CostRunPartItem();
+    storedPart.setPartCode("PART-1");
+    storedPart.setAmount(BigDecimal.TEN);
+    storedPart.setRemark("单一供应商价格，已按审批价格计算；联动价底稿[沿用历史价=否]");
+    CostRunCostItem storedTotal = new CostRunCostItem();
+    storedTotal.setCostCode("TOTAL");
+    storedTotal.setAmount(new BigDecimal("123.450000"));
+    when(partItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(storedPart));
+    when(costItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(storedTotal));
     when(oaFormItemMapper.countRunnableItems(10L)).thenReturn(1L);
     when(oaFormItemMapper.countCalculatedRunnableItems(10L)).thenReturn(1L);
 
@@ -217,6 +199,8 @@ class QuoteCostRunWorkbenchServiceImplTest {
 
     assertThat(response.getCurrentDisplayVersion().getStatus()).isEqualTo("SUCCESS");
     assertThat(response.getCurrentDisplayVersion().getVersionNo()).isEqualTo("COST-AUTO-V1");
+    assertThat(version.getDataQualityStatus()).isEqualTo("COMPLETE");
+    assertThat(version.getDataQualityWarningCount()).isZero();
     assertThat(response.getVersions()).singleElement().satisfies(row -> {
       assertThat(row.getDisplayStatus()).isEqualTo("当前成功");
       assertThat(row.isCurrentConfirmed()).isTrue();
@@ -228,6 +212,67 @@ class QuoteCostRunWorkbenchServiceImplTest {
     assertThat(requestCaptor.getValue().automaticCompletion()).isTrue();
     verify(oaFormItemMapper).update(eq(null), any(Wrapper.class));
     verify(workspaceService).update(any(QuoteCostingWorkspace.class), any(Integer.class));
+  }
+
+  @Test
+  @DisplayName("完成时只持久化真正的明细告警，不把普通说明误报为告警")
+  void runToSuccessPersistsDataQualityWarning() {
+    QuoteCostRunVersion version = version(89L, "RUNNING-2", "RUNNING", "TOP-A");
+    stubCalculation(version, "123.450000");
+    when(versionNoGenerator.nextVersionNo(101L, "TOP-A")).thenReturn("COST-AUTO-V2");
+    when(versionMapper.update(any(QuoteCostRunVersion.class), any(Wrapper.class))).thenReturn(1);
+    when(versionMapper.selectById(89L)).thenReturn(version);
+    when(versionMapper.selectList(any(Wrapper.class))).thenReturn(List.of(version));
+    CostRunPartItem storedPart = new CostRunPartItem();
+    storedPart.setPartCode("PART-1");
+    storedPart.setAmount(BigDecimal.TEN);
+    storedPart.setRemark("沿用历史价");
+    CostRunCostItem storedTotal = new CostRunCostItem();
+    storedTotal.setCostCode("TOTAL");
+    storedTotal.setAmount(new BigDecimal("123.450000"));
+    when(partItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(storedPart));
+    when(costItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(storedTotal));
+    when(oaFormItemMapper.countRunnableItems(10L)).thenReturn(1L);
+    when(oaFormItemMapper.countCalculatedRunnableItems(10L)).thenReturn(1L);
+
+    service.runToSuccess("OA-001", 101L, new QuoteCostRunTrialRequest(), "pipeline-user");
+
+    assertThat(version.getDataQualityStatus()).isEqualTo("WARNING");
+    assertThat(version.getDataQualityWarningCount()).isEqualTo(1);
+    assertThat(version.getDataQualitySummary()).contains("PART-1", "沿用历史价");
+  }
+
+  @Test
+  @DisplayName("提交后上游输入修订发生变化时回滚结果")
+  void runToSuccessRejectsChangedSourceRevision() {
+    CostInputRevisionService inputRevisionService = mock(CostInputRevisionService.class);
+    QuoteCostRunWorkbenchServiceImpl revisionAwareService =
+        new QuoteCostRunWorkbenchServiceImpl(
+            oaFormMapper,
+            oaFormItemMapper,
+            versionMapper,
+            resultService,
+            partItemMapper,
+            costItemMapper,
+            readinessService,
+            versionNoGenerator,
+            cuAdjustmentCalcService,
+            mock(com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate.class),
+            workspaceService,
+            inputRevisionService);
+    QuoteCostRunVersion version = version(90L, "RUNNING-3", "RUNNING", "TOP-A");
+    stubCalculation(version, "123.450000");
+    when(inputRevisionService.currentRevision(any(OaForm.class), any(OaFormItem.class)))
+        .thenReturn("changed-revision");
+    QuoteCostRunTrialRequest request = new QuoteCostRunTrialRequest();
+    request.setSourceRevision("submitted-revision");
+
+    assertThatThrownBy(
+            () -> revisionAwareService.runToSuccess("OA-001", 101L, request, "pipeline-user"))
+        .isInstanceOf(QuoteIngestException.class)
+        .hasMessageContaining("上游业务输入已变化");
+
+    verify(versionMapper, never()).update(any(QuoteCostRunVersion.class), any(Wrapper.class));
   }
 
   @Test
@@ -405,72 +450,6 @@ class QuoteCostRunWorkbenchServiceImplTest {
   }
 
   @Test
-  @DisplayName("逐料差异按版本分页并组合父子料号、有差异和正负筛选")
-  @SuppressWarnings({"rawtypes", "unchecked"})
-  void pageCuMaterialDifferencesUsesPersistedVersionAndFilters() {
-    QuoteCostRunVersion version = version(88L, "TRIAL-1", "CONFIRMED", "TOP-A");
-    version.setBusinessUnitType("COMMERCIAL");
-    when(versionMapper.selectOne(any(Wrapper.class))).thenReturn(version);
-    QuoteCuMaterialDiffItem difference = difference(501L, "24.07800000");
-    when(diffItemMapper.selectPage(any(Page.class), any(Wrapper.class)))
-        .thenAnswer(
-            invocation -> {
-              Page<QuoteCuMaterialDiffItem> page = invocation.getArgument(0);
-              page.setRecords(List.of(difference));
-              page.setTotal(3L);
-              return page;
-            });
-
-    var result =
-        service.pageCuMaterialDifferences(
-            "OA-001",
-            101L,
-            "TRIAL-1",
-            2,
-            10,
-            "MAKE-1",
-            "RAW-CU-1",
-            true,
-            "POSITIVE");
-
-    assertThat(result.getTotal()).isEqualTo(3L);
-    assertThat(result.getList()).hasSize(1);
-    assertThat(result.getList().get(0).getParentMaterialCode()).isEqualTo("MAKE-1");
-    assertThat(result.getList().get(0).getMaterialCode()).isEqualTo("RAW-CU-1");
-    assertThat(result.getList().get(0).getDiffAmount()).isEqualByComparingTo("24.07800000");
-    assertThat(result.getList().get(0).isContributesToAdjustment()).isTrue();
-    ArgumentCaptor<Page<QuoteCuMaterialDiffItem>> pageCaptor = ArgumentCaptor.forClass(Page.class);
-    ArgumentCaptor<Wrapper<QuoteCuMaterialDiffItem>> wrapperCaptor =
-        ArgumentCaptor.forClass(Wrapper.class);
-    verify(diffItemMapper).selectPage(pageCaptor.capture(), wrapperCaptor.capture());
-    assertThat(pageCaptor.getValue().getCurrent()).isEqualTo(2L);
-    assertThat(pageCaptor.getValue().getSize()).isEqualTo(10L);
-    assertThat(wrapperCaptor.getValue().getSqlSegment())
-        .contains("cost_run_version_id", "business_unit_type", "parent_material_code")
-        .contains("material_code", "diff_amount");
-  }
-
-  @Test
-  @DisplayName("逐料差异拒绝未知差异方向和越界分页")
-  void pageCuMaterialDifferencesRejectsInvalidFilters() {
-    QuoteCostRunVersion version = version(88L, "TRIAL-1", "CONFIRMED", "TOP-A");
-    when(versionMapper.selectOne(any(Wrapper.class))).thenReturn(version);
-
-    assertThatThrownBy(
-            () ->
-                service.pageCuMaterialDifferences(
-                    "OA-001", 101L, "TRIAL-1", 1, 20, null, null, false, "UP"))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("POSITIVE");
-    assertThatThrownBy(
-            () ->
-                service.pageCuMaterialDifferences(
-                    "OA-001", 101L, "TRIAL-1", 1, 201, null, null, false, null))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("pageSize");
-  }
-
-  @Test
   @DisplayName("单产品查询显式拒绝跨业务单元访问")
   void getCostRunRejectsCrossBusinessUnit() {
     authenticate("HOUSEHOLD");
@@ -578,32 +557,6 @@ class QuoteCostRunWorkbenchServiceImplTest {
     version.setOaPricePrepareNo("PPR-1");
     version.setStatus(status);
     return version;
-  }
-
-  private static QuoteCuMaterialDiffItem difference(Long id, String diffAmount) {
-    QuoteCuMaterialDiffItem item = new QuoteCuMaterialDiffItem();
-    item.setId(id);
-    item.setCostRunVersionId(88L);
-    item.setCostRunNo("TRIAL-1");
-    item.setLineNo(1);
-    item.setSettlementKey("SETTLEMENT:1:RAW-CU-1");
-    item.setDetailLevel("RAW_COMPONENT");
-    item.setContributesToAdjustment(1);
-    item.setTopProductCode("TOP-A");
-    item.setParentMaterialCode("MAKE-1");
-    item.setMaterialCode("RAW-CU-1");
-    item.setMaterialName("铜材");
-    item.setQuantity(new BigDecimal("2.00000000"));
-    item.setFinanceUnitPrice(new BigDecimal("90.00000000"));
-    item.setOaUnitPrice(new BigDecimal("102.03900000"));
-    item.setFinanceAmount(new BigDecimal("261.12800000"));
-    item.setOaAmount(new BigDecimal("285.20600000"));
-    item.setDiffAmount(new BigDecimal(diffAmount));
-    item.setCuAffected(1);
-    item.setPriceFormulaRefType("MAKE_PART_COMPONENT");
-    item.setPriceFormulaRefId(9001L);
-    item.setBusinessUnitType("COMMERCIAL");
-    return item;
   }
 
   private void authenticate(String businessUnitType) {

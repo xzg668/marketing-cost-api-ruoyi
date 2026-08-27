@@ -25,7 +25,6 @@ import com.sanhua.marketingcost.dto.priceprepare.NormalMaterialPricePrepareResul
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePreparePlanItem;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
-import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunTrialRequest;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.CostRunCostItem;
@@ -58,7 +57,6 @@ import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
 import com.sanhua.marketingcost.mapper.PriceRangeFactorRuleMapper;
 import com.sanhua.marketingcost.mapper.PriceRangeItemMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
-import com.sanhua.marketingcost.mapper.QuoteCuMaterialDiffItemMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
 import com.sanhua.marketingcost.service.CostRunEngine;
@@ -73,7 +71,6 @@ import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
-import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.pricing.RangePriceResolver;
 import com.sanhua.marketingcost.service.pricing.RangePriceResolverTestSupport;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
@@ -345,10 +342,20 @@ class MarketFactorRangePriceEndToEndSampleTest {
     CostRunCostItemMapper costItemMapper = mock(CostRunCostItemMapper.class);
     when(partItemMapper.selectCount(any(Wrapper.class))).thenReturn(2L);
     when(costItemMapper.selectCount(any(Wrapper.class))).thenReturn(1L);
+    CostRunPartItem storedPartOne = new CostRunPartItem();
+    storedPartOne.setPartCode(SAMPLE_PART_CODES.get(0));
+    storedPartOne.setAmount(EXPECTED_AMOUNT);
+    CostRunPartItem storedPartTwo = new CostRunPartItem();
+    storedPartTwo.setPartCode(SAMPLE_PART_CODES.get(1));
+    storedPartTwo.setAmount(EXPECTED_AMOUNT);
+    CostRunCostItem storedTotal = new CostRunCostItem();
+    storedTotal.setCostCode("TOTAL");
+    storedTotal.setAmount(EXPECTED_AMOUNT.multiply(new BigDecimal("2")));
+    when(partItemMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(storedPartOne, storedPartTwo));
+    when(costItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(storedTotal));
     CostRunTraceSnapshotMapper traceSnapshotMapper = mock(CostRunTraceSnapshotMapper.class);
     CostRunTaskMapper taskMapper = mock(CostRunTaskMapper.class);
-    QuoteProductBomCostingBuildService costingBuildService =
-        mock(QuoteProductBomCostingBuildService.class);
     PricePrepareService pricePrepareService = mock(PricePrepareService.class);
     PricePrepareReadinessService readinessService = mock(PricePrepareReadinessService.class);
     QuoteCostRunVersionService versionService = mock(QuoteCostRunVersionService.class);
@@ -362,22 +369,6 @@ class MarketFactorRangePriceEndToEndSampleTest {
         .thenReturn(oaFormItem);
     when(oaFormItemMapper.countRunnableItems(OA_FORM_ID)).thenReturn(1L);
     when(oaFormItemMapper.countCalculatedRunnableItems(OA_FORM_ID)).thenReturn(1L);
-    when(costingBuildService.buildByOaFormItem(OA_FORM_ITEM_ID, PERIOD_MONTH))
-        .thenReturn(new QuoteBomCostingBuildResponse(
-            8801L,
-            null,
-            OA_FORM_ITEM_ID,
-            OA_NO,
-            PRODUCT_CODE,
-            "NON_BARE",
-            PERIOD_MONTH,
-            "MFRP-08-BOM",
-            1,
-            2,
-            0,
-            Map.of(),
-            List.of(),
-            LocalDateTime.of(2026, 7, 2, 10, 0)));
     PricePrepareGenerateResult generateResult = new PricePrepareGenerateResult();
     generateResult.setPrepareNo("PPR-MFRP-08");
     generateResult.setOaNo(OA_NO);
@@ -460,7 +451,6 @@ class MarketFactorRangePriceEndToEndSampleTest {
         resultService,
         partItemMapper,
         costItemMapper,
-        mock(QuoteCuMaterialDiffItemMapper.class),
         readinessService,
         versionNoGenerator,
         cuAdjustmentCalcService,

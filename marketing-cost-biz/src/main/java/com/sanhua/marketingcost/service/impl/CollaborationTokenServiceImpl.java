@@ -45,6 +45,26 @@ public class CollaborationTokenServiceImpl implements CollaborationTokenService 
     }
 
     @Override
+    @Transactional
+    public LpCollaborationToken getOrCreateReusableToken(
+            Long userId, String tokenType, String remark, int expireHours) {
+        LocalDateTime now = LocalDateTime.now();
+        LpCollaborationToken reusable = tokenMapper.selectOne(
+                Wrappers.lambdaQuery(LpCollaborationToken.class)
+                        .eq(LpCollaborationToken::getUserId, userId)
+                        .eq(LpCollaborationToken::getTokenType, tokenType)
+                        .eq(LpCollaborationToken::getRemark, remark)
+                        .eq(LpCollaborationToken::getStatus, STATUS_VALID)
+                        .gt(LpCollaborationToken::getExpireTime, now)
+                        .orderByDesc(LpCollaborationToken::getTokenId)
+                        .last("LIMIT 1")
+        );
+        return reusable == null
+                ? generateToken(userId, tokenType, remark, expireHours)
+                : reusable;
+    }
+
+    @Override
     public LpCollaborationToken validateToken(String token) {
         // 按 token 值查询记录
         LpCollaborationToken record = tokenMapper.selectOne(

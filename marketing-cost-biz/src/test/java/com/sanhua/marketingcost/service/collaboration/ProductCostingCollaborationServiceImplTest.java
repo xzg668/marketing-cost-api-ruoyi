@@ -87,7 +87,9 @@ class ProductCostingCollaborationServiceImplTest {
     assertThat(result.productTaskId()).isEqualTo(101L);
     assertThat(result.assigneeName()).isEqualTo("技术甲");
     assertThat(result.gapFactPersisted()).isTrue();
-    verify(taskService).startAutomatically(any());
+    verify(taskService).startAutomatically(org.mockito.ArgumentMatchers.argThat(command ->
+        Long.valueOf(8L).equals(command.financeReviewerUserId())
+            && "报价员".equals(command.financeReviewerName())));
     verify(priceStateService, never()).discardPromotedFailedAttempt(any());
   }
 

@@ -1,16 +1,10 @@
 package com.sanhua.marketingcost.entity;
 
-import com.baomidou.mybatisplus.annotation.FieldFill;
-import com.baomidou.mybatisplus.annotation.IdType;
-import com.baomidou.mybatisplus.annotation.TableField;
-import com.baomidou.mybatisplus.annotation.TableId;
-import com.baomidou.mybatisplus.annotation.TableName;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
-@TableName("lp_bom_manage_item")
+/** BOM 管理查询行；数据由 {@code lp_bom_costing_row} 只读投影，不对应独立表。 */
 public class BomManageItem {
-  @TableId(type = IdType.AUTO)
   private Long id;
   private String oaNo;
   private Long oaFormId;
@@ -37,13 +31,10 @@ public class BomManageItem {
   private String filterRule;
 
   /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
-  @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
 
-  @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
 
-  @TableField(fill = FieldFill.INSERT_UPDATE)
   private LocalDateTime updatedAt;
 
   public String getBusinessUnitType() {

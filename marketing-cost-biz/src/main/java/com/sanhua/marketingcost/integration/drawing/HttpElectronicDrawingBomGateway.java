@@ -58,6 +58,7 @@ public class HttpElectronicDrawingBomGateway implements ElectronicDrawingBomGate
       URI uri = endpoint();
       ObjectNode body = objectMapper.createObjectNode();
       body.put("productCode", query.productCode());
+      body.put("drawingNo", query.drawingNo());
       body.put("materialOrganizationCode", query.materialOrganizationCode());
       put(body, "priceOrganizationCode", query.priceOrganizationCode());
       put(body, "bomPurpose", query.bomPurpose());
@@ -134,6 +135,7 @@ public class HttpElectronicDrawingBomGateway implements ElectronicDrawingBomGate
   private static void requireQuery(ElectronicBomQuery query) {
     if (query == null) throw new IllegalArgumentException("电子图库查询不能为空");
     requireText(query.productCode(), "电子图库查询产品料号不能为空");
+    requireText(query.drawingNo(), "电子图库查询产品图号不能为空");
     requireText(query.materialOrganizationCode(), "电子图库查询物料组织不能为空");
   }
 

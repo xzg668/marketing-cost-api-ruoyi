@@ -24,11 +24,6 @@ public class CmsCostImportBatch {
   private Integer workshopRowCount;
   private Integer subjectRowCount;
   private Integer subjectSettingRowCount;
-  private Integer salaryInsertCount;
-  private Integer salarySkipCount;
-  private Integer salaryBlockedCount;
-  private Integer auxInsertCount;
-  private Integer auxSkipCount;
   private Integer errorCount;
   private String errorMessage;
   private String importedBy;

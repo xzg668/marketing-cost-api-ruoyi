@@ -9,7 +9,8 @@ public class QuoteBatchCostRunResponse {
   private String periodMonth;
   private String batchNo;
   private String status;
-  private String prerequisiteStatus;
+  private String businessOutcome;
+  private Integer executionNo;
   private String message;
   private int totalCount;
   private int queuedCount;

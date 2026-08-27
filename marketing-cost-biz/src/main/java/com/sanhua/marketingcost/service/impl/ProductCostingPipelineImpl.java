@@ -13,12 +13,16 @@ import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateReques
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionSummaryResponse;
 import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
 import com.sanhua.marketingcost.enums.QuoteCostRunStatus;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
+import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.CostingAlgorithmVersionProvider;
+import com.sanhua.marketingcost.service.CostInputRevisionService;
+import com.sanhua.marketingcost.service.MaterialMasterSyncService;
 import com.sanhua.marketingcost.service.ProductCostingPipeline;
 import com.sanhua.marketingcost.service.ProductCostingCollaborationService;
 import com.sanhua.marketingcost.service.ProductCostingStateService;
@@ -30,8 +34,14 @@ import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.collaboration.CollaborationCostingPendingException;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
+import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
+import org.springframework.dao.TransientDataAccessException;
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
+import java.sql.SQLTransientException;
 
 @Service
 public class ProductCostingPipelineImpl implements ProductCostingPipeline {
@@ -47,11 +57,42 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   private final ProductCostingStateService stateService;
   private final QuoteCostingWorkspaceService workspaceService;
   private final OaFormItemMapper itemMapper;
+  private final OaFormMapper formMapper;
   private final QuoteCostRunVersionMapper versionMapper;
   private final ProductCostingCollaborationService collaborationService;
   private final CostingAlgorithmVersionProvider algorithmVersionProvider;
+  private final CostInputRevisionService inputRevisionService;
+  private final MaterialMasterSyncService materialMasterSyncService;
 
+  @Autowired
   public ProductCostingPipelineImpl(
+      QuoteCostingWorkbenchService costingWorkbenchService,
+      QuotePricePrepareWorkbenchService pricePrepareService,
+      QuoteCostRunWorkbenchService costRunService,
+      ProductCostingStateService stateService,
+      QuoteCostingWorkspaceService workspaceService,
+      OaFormItemMapper itemMapper,
+      OaFormMapper formMapper,
+      QuoteCostRunVersionMapper versionMapper,
+      ProductCostingCollaborationService collaborationService,
+      CostingAlgorithmVersionProvider algorithmVersionProvider,
+      CostInputRevisionService inputRevisionService,
+      MaterialMasterSyncService materialMasterSyncService) {
+    this.costingWorkbenchService = costingWorkbenchService;
+    this.pricePrepareService = pricePrepareService;
+    this.costRunService = costRunService;
+    this.stateService = stateService;
+    this.workspaceService = workspaceService;
+    this.itemMapper = itemMapper;
+    this.formMapper = formMapper;
+    this.versionMapper = versionMapper;
+    this.collaborationService = collaborationService;
+    this.algorithmVersionProvider = algorithmVersionProvider;
+    this.inputRevisionService = inputRevisionService;
+    this.materialMasterSyncService = materialMasterSyncService;
+  }
+
+  ProductCostingPipelineImpl(
       QuoteCostingWorkbenchService costingWorkbenchService,
       QuotePricePrepareWorkbenchService pricePrepareService,
       QuoteCostRunWorkbenchService costRunService,
@@ -61,15 +102,19 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       QuoteCostRunVersionMapper versionMapper,
       ProductCostingCollaborationService collaborationService,
       CostingAlgorithmVersionProvider algorithmVersionProvider) {
-    this.costingWorkbenchService = costingWorkbenchService;
-    this.pricePrepareService = pricePrepareService;
-    this.costRunService = costRunService;
-    this.stateService = stateService;
-    this.workspaceService = workspaceService;
-    this.itemMapper = itemMapper;
-    this.versionMapper = versionMapper;
-    this.collaborationService = collaborationService;
-    this.algorithmVersionProvider = algorithmVersionProvider;
+    this(
+        costingWorkbenchService,
+        pricePrepareService,
+        costRunService,
+        stateService,
+        workspaceService,
+        itemMapper,
+        null,
+        versionMapper,
+        collaborationService,
+        algorithmVersionProvider,
+        null,
+        null);
   }
 
   @Override
@@ -87,6 +132,10 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       ProductCostingResult bomBlocked = bomBlock(scope, workbench);
       if (bomBlocked != null) {
         return bomBlocked;
+      }
+      // BOM 行生成后再同步本轮实际涉及的料号，避免前置同步读取上一轮成本行。
+      if (materialMasterSyncService != null) {
+        materialMasterSyncService.syncByOaNoAndPeriod(scope.oaNo(), scope.periodMonth());
       }
 
       stage = STEP_PRICE_TYPE;
@@ -113,6 +162,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       QuoteCostRunTrialRequest costRequest = new QuoteCostRunTrialRequest();
       costRequest.setPeriodMonth(scope.periodMonth());
       costRequest.setPricePrepareNo(prepareNo);
+      costRequest.setSourceRevision(scope.sourceRevision());
       QuoteCostRunWorkbenchResponse cost =
           costRunService.runToSuccess(
               scope.oaNo(), scope.itemId(), costRequest, scope.initiatedBy());
@@ -179,6 +229,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       failed.setMessage(message(exception));
       failed.setGapCount(0);
       failed.setWarningCount(0);
+      failed.setRetryable(isRetryableSystemFailure(exception));
       return failed;
     }
   }
@@ -304,14 +355,14 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
         workspace == null || workspace.getCurrentCostVersionId() == null
             ? null
             : versionMapper.selectById(workspace.getCurrentCostVersionId());
-    if (!QuoteCurrentSuccessMatcher.matches(
-        scope.oaNo(),
-        scope.itemId(),
-        scope.periodMonth(),
-        item,
-        workspace,
-        version,
-        algorithmVersionProvider.currentVersion())) {
+    boolean current = inputRevisionService == null
+        ? QuoteCurrentSuccessMatcher.matches(
+            scope.oaNo(), scope.itemId(), scope.periodMonth(), item, workspace, version,
+            algorithmVersionProvider.currentVersion())
+        : QuoteCurrentSuccessMatcher.matches(
+            scope.oaNo(), scope.itemId(), scope.periodMonth(), item, workspace, version,
+            algorithmVersionProvider.currentVersion(), scope.sourceRevision());
+    if (!current) {
       return null;
     }
     return success(
@@ -378,12 +429,29 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
     if (item == null) {
       throw new QuoteIngestException("报价产品行不存在: " + request.oaFormItemId());
     }
+    String productCode = QuoteProductIdentityUtils.resolveCostingCode(item);
+    if (!StringUtils.hasText(productCode)) {
+      throw new QuoteIngestException("产品料号、三花型号和客户图号至少填写一个");
+    }
+    OaForm form = null;
+    String sourceRevision = null;
+    if (formMapper != null && inputRevisionService != null) {
+      form = formMapper.selectOne(
+          com.baomidou.mybatisplus.core.toolkit.Wrappers.lambdaQuery(OaForm.class)
+              .eq(OaForm::getOaNo, oaNo)
+              .last("LIMIT 1"));
+      if (form == null || !java.util.Objects.equals(form.getId(), item.getOaFormId())) {
+        throw new QuoteIngestException("报价产品行不存在或不属于当前报价单");
+      }
+      sourceRevision = inputRevisionService.currentRevision(form, item);
+    }
     return new RequestScope(
         oaNo,
         request.oaFormItemId(),
-        required(item.getMaterialNo(), "产品料号"),
+        productCode,
         period,
-        firstText(request.initiatedBy(), "system"));
+        firstText(request.initiatedBy(), "system"),
+        sourceRevision);
   }
 
   private boolean isPriceTypeGap(RuntimeException exception) {
@@ -429,6 +497,20 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
     };
   }
 
+  private boolean isRetryableSystemFailure(Throwable throwable) {
+    Throwable current = throwable;
+    while (current != null) {
+      if (current instanceof TransientDataAccessException
+          || current instanceof SQLTransientException
+          || current instanceof SocketTimeoutException
+          || current instanceof ConnectException) {
+        return true;
+      }
+      current = current.getCause();
+    }
+    return false;
+  }
+
   private String stepFor(String blockingStatus) {
     return switch (blockingStatus) {
       case "WAIT_PRICE_TYPE" -> STEP_PRICE_TYPE;
@@ -466,5 +548,6 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       Long itemId,
       String productCode,
       String periodMonth,
-      String initiatedBy) {}
+      String initiatedBy,
+      String sourceRevision) {}
 }

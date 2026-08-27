@@ -4,10 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.sanhua.marketingcost.entity.IntegrationInbox;
-import com.sanhua.marketingcost.entity.IntegrationOutbox;
 import com.sanhua.marketingcost.entity.QuoteCollaborationApprovedResult;
-import com.sanhua.marketingcost.entity.QuoteCollaborationExternalTask;
 import com.sanhua.marketingcost.entity.QuoteCollaborationGap;
 import com.sanhua.marketingcost.entity.QuoteCollaborationProductTask;
 import com.sanhua.marketingcost.entity.QuoteCollaborationQuoteLink;
@@ -16,10 +13,7 @@ import com.sanhua.marketingcost.entity.QuoteCollaborationReviewItem;
 import com.sanhua.marketingcost.entity.QuoteCollaborationTask;
 import com.sanhua.marketingcost.entity.QuotePriceDraft;
 import com.sanhua.marketingcost.entity.QuotePriceDraftField;
-import com.sanhua.marketingcost.mapper.IntegrationInboxMapper;
-import com.sanhua.marketingcost.mapper.IntegrationOutboxMapper;
 import com.sanhua.marketingcost.mapper.QuoteCollaborationApprovedResultMapper;
-import com.sanhua.marketingcost.mapper.QuoteCollaborationExternalTaskMapper;
 import com.sanhua.marketingcost.mapper.QuoteCollaborationGapMapper;
 import com.sanhua.marketingcost.mapper.QuoteCollaborationProductTaskMapper;
 import com.sanhua.marketingcost.mapper.QuoteCollaborationQuoteLinkMapper;
@@ -52,9 +46,9 @@ class QuoteCollaborationPersistenceContractTest {
       "/db/V210__quote_collaboration_gap_trace_fields.sql");
 
   @Test
-  @DisplayName("十二个Entity与V206表名和全部字段一一对应")
+  @DisplayName("九个当前协作Entity与V206表名和全部字段一一对应")
   void entitiesMatchEveryMigrationColumn() {
-    assertThat(ENTITY_TABLES).hasSize(12);
+    assertThat(ENTITY_TABLES).hasSize(9);
     ENTITY_TABLES.forEach((entityType, tableName) -> {
       TableName annotation = entityType.getAnnotation(TableName.class);
       assertThat(annotation).as(entityType.getSimpleName()).isNotNull();
@@ -66,9 +60,9 @@ class QuoteCollaborationPersistenceContractTest {
   }
 
   @Test
-  @DisplayName("十二个Mapper全部以正确Entity作为BaseMapper泛型")
+  @DisplayName("九个当前协作Mapper全部以正确Entity作为BaseMapper泛型")
   void mappersBindToCorrectEntity() {
-    assertThat(MAPPER_ENTITIES).hasSize(12);
+    assertThat(MAPPER_ENTITIES).hasSize(9);
     MAPPER_ENTITIES.forEach((mapperType, entityType) -> {
       assertThat(mapperType.getInterfaces()).contains(BaseMapper.class);
       ParameterizedType generic = (ParameterizedType) mapperType.getGenericInterfaces()[0];
@@ -78,7 +72,7 @@ class QuoteCollaborationPersistenceContractTest {
   }
 
   @Test
-  @DisplayName("协作Mapper自定义SQL只访问十二张新增表")
+  @DisplayName("协作Mapper自定义SQL只访问当前九张新增表")
   void customMapperSqlNeverDependsOnLegacyTablesOrColumns() {
     Pattern tableReference = Pattern.compile(
         "(?i)\\b(?:FROM|JOIN|UPDATE|INTO)\\s+([a-z0-9_]+)");
@@ -156,18 +150,6 @@ class QuoteCollaborationPersistenceContractTest {
         .containsExactly("ELECTRONIC_DRAWING", "QUOTE_PACKAGE");
     assertThat(CollaborationCodes.codes(CollaborationCodes.ResultStatus.class))
         .containsExactly("ACTIVE", "EXPIRED", "REVOKED", "INVALIDATED");
-    assertThat(CollaborationCodes.codes(CollaborationCodes.ExternalTaskKind.class))
-        .containsExactly("TECH", "TECH_REWORK", "FINANCE", "NOTICE");
-    assertThat(CollaborationCodes.codes(CollaborationCodes.ExternalStatus.class))
-        .containsExactly("NOT_CREATED", "HOLD", "OPEN", "DONE", "CLOSED", "FAILED");
-    assertThat(CollaborationCodes.codes(CollaborationCodes.SendPolicy.class))
-        .containsExactly("AUTO", "HOLD");
-    assertThat(CollaborationCodes.codes(CollaborationCodes.SendStatus.class))
-        .containsExactly("HOLD", "PENDING", "SENDING", "SENT", "FAILED", "DEAD");
-    assertThat(CollaborationCodes.codes(CollaborationCodes.SignatureStatus.class))
-        .containsExactly("NOT_CHECKED", "PASSED", "FAILED");
-    assertThat(CollaborationCodes.codes(CollaborationCodes.InboxProcessStatus.class))
-        .containsExactly("RECEIVED", "PROCESSED", "REJECTED", "FAILED");
   }
 
   @Test
@@ -248,9 +230,6 @@ class QuoteCollaborationPersistenceContractTest {
     result.put(QuoteCollaborationReview.class, "lp_quote_collaboration_review");
     result.put(QuoteCollaborationReviewItem.class, "lp_quote_collaboration_review_item");
     result.put(QuoteCollaborationApprovedResult.class, "lp_quote_collaboration_approved_result");
-    result.put(QuoteCollaborationExternalTask.class, "lp_quote_collaboration_external_task");
-    result.put(IntegrationOutbox.class, "lp_integration_outbox");
-    result.put(IntegrationInbox.class, "lp_integration_inbox");
     return result;
   }
 
@@ -266,10 +245,6 @@ class QuoteCollaborationPersistenceContractTest {
     result.put(QuoteCollaborationReviewItemMapper.class, QuoteCollaborationReviewItem.class);
     result.put(QuoteCollaborationApprovedResultMapper.class,
         QuoteCollaborationApprovedResult.class);
-    result.put(QuoteCollaborationExternalTaskMapper.class,
-        QuoteCollaborationExternalTask.class);
-    result.put(IntegrationOutboxMapper.class, IntegrationOutbox.class);
-    result.put(IntegrationInboxMapper.class, IntegrationInbox.class);
     return result;
   }
 }

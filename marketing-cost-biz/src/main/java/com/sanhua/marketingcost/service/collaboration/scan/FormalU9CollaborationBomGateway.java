@@ -15,7 +15,7 @@ import org.springframework.util.StringUtils;
 /** 将当前正式U9 BOM读取能力适配为不会把异常误判成“无BOM”的扫描结果。 */
 @Component
 public class FormalU9CollaborationBomGateway
-    implements QuoteCollaborationCurrentU9BomGateway {
+    implements QuoteCollaborationLiveU9BomGateway {
 
   private final FormalBomReadService formalBomReadService;
   private final BomRawHierarchyMapper bomRawHierarchyMapper;
@@ -31,7 +31,7 @@ public class FormalU9CollaborationBomGateway
   }
 
   @Override
-  public CurrentU9BomResult read(QuoteCollaborationScanContext context) {
+  public CurrentU9BomResult readLive(QuoteCollaborationScanContext context) {
     if (context == null) {
       return CurrentU9BomResult.dataEmpty("报价扫描上下文为空");
     }
@@ -59,8 +59,12 @@ public class FormalU9CollaborationBomGateway
                 .map(String::trim)
                 .findFirst()
                 .orElse(null);
+        String batchId = resolveRootBatchId(lines);
+        if (!StringUtils.hasText(batchId)) {
+          return CurrentU9BomResult.dataEmpty("U9正式BOM缺少可追溯的层级构建批次");
+        }
         return CurrentU9BomResult.available(
-            "U9", version, null, lines.size(), fingerprints.u9Structure(lines));
+            "U9", version, batchId, lines.size(), fingerprints.u9Structure(lines));
       }
       String gapMessage = trimToNull(result.gapMessage());
       if (gapMessage != null
@@ -94,10 +98,26 @@ public class FormalU9CollaborationBomGateway
     }
   }
 
+  private String resolveRootBatchId(List<QuoteBomSourceLineDto> lines) {
+    Long rootId = lines.stream()
+        .filter(line -> line.level() != null && line.level() == 0)
+        .map(QuoteBomSourceLineDto::sourceRawHierarchyId)
+        .filter(java.util.Objects::nonNull)
+        .findFirst()
+        .orElse(null);
+    if (rootId == null) return null;
+    BomRawHierarchy root = bomRawHierarchyMapper.selectById(rootId);
+    if (root == null) return null;
+    return StringUtils.hasText(root.getBuildBatchId())
+        ? root.getBuildBatchId().trim()
+        : trimToNull(root.getSourceImportBatchId());
+  }
+
   private boolean existsOnlyInOtherOrganization(QuoteCollaborationScanContext context) {
     Long count =
         bomRawHierarchyMapper.selectCount(
             Wrappers.<BomRawHierarchy>lambdaQuery()
+                .eq(BomRawHierarchy::getSourceType, "U9")
                 .eq(BomRawHierarchy::getTopProductCode, context.productCode())
                 .eq(BomRawHierarchy::getLevel, 0)
                 .ne(BomRawHierarchy::getPriceOrgCode, context.priceOrgCode())

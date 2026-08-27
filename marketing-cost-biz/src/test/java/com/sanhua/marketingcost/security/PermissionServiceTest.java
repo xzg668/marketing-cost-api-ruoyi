@@ -43,8 +43,8 @@ class PermissionServiceTest {
     /** 普通用户仅拥有具名权限 */
     @Test
     void normalUserOnlyMatchesGrantedPermi() {
-        authenticate("cost:run:list", "ROLE_BU_STAFF");
-        assertTrue(permissionService.hasPermi("cost:run:list"));
+        authenticate("ingest:quote:list", "ROLE_BU_STAFF");
+        assertTrue(permissionService.hasPermi("ingest:quote:list"));
         assertFalse(permissionService.hasPermi("system:user:add"));
         assertTrue(permissionService.hasRole("BU_STAFF"));
         assertFalse(permissionService.hasRole("ADMIN"));
@@ -53,8 +53,8 @@ class PermissionServiceTest {
     /** hasAnyPermi / hasAnyRole OR 语义 */
     @Test
     void hasAnyMatchesAtLeastOne() {
-        authenticate("cost:run:list", "ROLE_BU_STAFF");
-        assertTrue(permissionService.hasAnyPermi("no:such:perm", "cost:run:list"));
+        authenticate("ingest:quote:list", "ROLE_BU_STAFF");
+        assertTrue(permissionService.hasAnyPermi("no:such:perm", "ingest:quote:list"));
         assertFalse(permissionService.hasAnyPermi("no:such:perm", "other:missing:perm"));
         assertTrue(permissionService.hasAnyRole("ADMIN", "BU_STAFF"));
         assertFalse(permissionService.hasAnyRole("ADMIN", "BU_DIRECTOR"));

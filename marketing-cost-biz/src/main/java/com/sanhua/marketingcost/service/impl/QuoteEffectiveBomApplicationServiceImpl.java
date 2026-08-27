@@ -46,6 +46,7 @@ import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContext;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
+import com.sanhua.marketingcost.service.collaboration.scan.U9MonthlySnapshotIdentity;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeRequest;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeResolution;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeResolver;
@@ -455,6 +456,24 @@ public class QuoteEffectiveBomApplicationServiceImpl
   }
 
   private QuoteBomMonthlySnapshot findMonthlySnapshot(QueryContext context) {
+    U9MonthlySnapshotIdentity identity = U9MonthlySnapshotIdentity.of(
+        context.businessUnit(), context.organization().priceOrgCode(),
+        context.organization().materialOrganizationCode(), context.costPeriodMonth(),
+        context.topProductCode());
+    List<QuoteBomMonthlySnapshot> u9Rows =
+        monthlySnapshotMapper.selectList(
+            Wrappers.<QuoteBomMonthlySnapshot>lambdaQuery()
+                .eq(QuoteBomMonthlySnapshot::getSnapshotIdentityKey, identity.identityKey())
+                .eq(QuoteBomMonthlySnapshot::getActiveFlag, ACTIVE)
+                .last("LIMIT 1"));
+    QuoteBomMonthlySnapshot u9 =
+        u9Rows == null || u9Rows.isEmpty() ? null : u9Rows.getFirst();
+    if (u9 != null && "SUCCESS".equals(u9.getSyncStatus())
+        && Objects.equals(u9.getActiveFlag(), ACTIVE)) {
+      return u9;
+    }
+    // U9 本月明确无 BOM 后，才允许读取当前报价关联的已审核电子图库候选。
+    if (u9 == null || !"NOT_FOUND".equals(u9.getSyncStatus())) return null;
     List<QuoteBomMonthlySnapshot> rows =
         monthlySnapshotMapper.selectList(
             Wrappers.<QuoteBomMonthlySnapshot>lambdaQuery()
@@ -465,6 +484,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
                 .eq(
                     QuoteBomMonthlySnapshot::getPriceOrgCode,
                     context.organization().priceOrgCode())
+                .isNull(QuoteBomMonthlySnapshot::getSnapshotIdentityKey)
                 .eq(QuoteBomMonthlySnapshot::getSyncStatus, "SUCCESS")
                 .eq(QuoteBomMonthlySnapshot::getActiveFlag, ACTIVE)
                 .orderByDesc(QuoteBomMonthlySnapshot::getSyncAt)

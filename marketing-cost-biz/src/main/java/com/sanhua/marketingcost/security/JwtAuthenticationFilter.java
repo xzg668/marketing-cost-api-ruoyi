@@ -48,6 +48,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
+        // 外部协作过滤器已完成受限认证时，不能再被浏览器里残留的普通 JWT 覆盖。
+        if (SecurityContextHolder.getContext().getAuthentication() != null) {
+            filterChain.doFilter(request, response);
+            return;
+        }
         String token = extractToken(request);
 
         if (token != null && jwtUtils.validateToken(token)) {

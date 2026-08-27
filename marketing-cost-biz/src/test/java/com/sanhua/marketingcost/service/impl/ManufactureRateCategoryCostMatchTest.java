@@ -26,7 +26,6 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.OtherExpenseRateMapper;
 import com.sanhua.marketingcost.mapper.ProductPropertyMapper;
 import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
-import com.sanhua.marketingcost.mapper.SalaryCostMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
 import com.sanhua.marketingcost.service.CostRunCacheLookupService;
 import java.math.BigDecimal;
@@ -89,7 +88,6 @@ class ManufactureRateCategoryCostMatchTest {
             mock(CostRunCostItemMapper.class),
             formMapper,
             formItemMapper,
-            mock(SalaryCostMapper.class),
             mock(CmsCostSourceEffectiveMapper.class),
             mock(DepartmentFundRateMapper.class),
             mock(AuxCostItemMapper.class),

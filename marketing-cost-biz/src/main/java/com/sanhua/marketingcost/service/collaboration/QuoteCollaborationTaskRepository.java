@@ -43,6 +43,9 @@ public interface QuoteCollaborationTaskRepository {
   Optional<QuoteCollaborationProductTask> findMineById(
       Long id, Long technicianUserId, String businessUnitType);
 
+  Optional<QuoteCollaborationProductTask> findProductTaskByIdAndBusinessUnit(
+      Long id, String businessUnitType);
+
   List<QuoteCollaborationProductTask> findProductTasksByProductAndMonth(
       String productCode, String accountingMonth, CollaborationScope scope);
 

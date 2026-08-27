@@ -84,8 +84,11 @@ public interface OaFormItemMapper extends BaseMapper<OaFormItem> {
         FROM oa_form_item
        WHERE oa_form_id = #{oaFormId}
          AND COALESCE(deleted, 0) = 0
-         AND material_no IS NOT NULL
-         AND TRIM(material_no) <> ''
+         AND (
+           (material_no IS NOT NULL AND TRIM(material_no) <> '')
+           OR (sunl_model IS NOT NULL AND TRIM(sunl_model) <> '')
+           OR (customer_drawing IS NOT NULL AND TRIM(customer_drawing) <> '')
+         )
       """)
   long countRunnableItems(@Param("oaFormId") Long oaFormId);
 
@@ -94,8 +97,11 @@ public interface OaFormItemMapper extends BaseMapper<OaFormItem> {
         FROM oa_form_item
        WHERE oa_form_id = #{oaFormId}
          AND COALESCE(deleted, 0) = 0
-         AND material_no IS NOT NULL
-         AND TRIM(material_no) <> ''
+         AND (
+           (material_no IS NOT NULL AND TRIM(material_no) <> '')
+           OR (sunl_model IS NOT NULL AND TRIM(sunl_model) <> '')
+           OR (customer_drawing IS NOT NULL AND TRIM(customer_drawing) <> '')
+         )
          AND calc_status = '已核算'
       """)
   long countCalculatedRunnableItems(@Param("oaFormId") Long oaFormId);

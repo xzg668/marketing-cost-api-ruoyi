@@ -1,6 +1,5 @@
 package com.sanhua.marketingcost.dto.financequote;
 
-import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
 import java.math.BigDecimal;
 import java.util.List;
 
@@ -12,7 +11,7 @@ public record QuoteCuMaterialDiffResult(
     int settlementCount,
     int rawComponentCount,
     int cuAffectedSettlementCount,
-    List<QuoteCuMaterialDiffItem> items) {
+    List<QuoteCuMaterialDiffItemResult> items) {
 
   public QuoteCuMaterialDiffResult {
     items = items == null ? List.of() : List.copyOf(items);

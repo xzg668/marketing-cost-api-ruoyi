@@ -11,6 +11,9 @@ public class QuoteBomMonthlySnapshot {
   private Long id;
   private String productCode;
   private String priceOrgCode;
+  private String businessUnitType;
+  private String materialOrganizationCode;
+  private String snapshotIdentityKey;
   private String customerCode;
   private String packageMethod;
   private String costPeriodMonth;
@@ -24,6 +27,8 @@ public class QuoteBomMonthlySnapshot {
   private String sourceOaNo;
   private Long sourceOaFormItemId;
   private String bomBatchId;
+  private String structureFingerprint;
+  private Integer lineCount;
   private Integer activeFlag;
   private String errorMessage;
   private LocalDateTime createdAt;
@@ -51,6 +56,30 @@ public class QuoteBomMonthlySnapshot {
 
   public void setPriceOrgCode(String priceOrgCode) {
     this.priceOrgCode = priceOrgCode;
+  }
+
+  public String getBusinessUnitType() {
+    return businessUnitType;
+  }
+
+  public void setBusinessUnitType(String businessUnitType) {
+    this.businessUnitType = businessUnitType;
+  }
+
+  public String getMaterialOrganizationCode() {
+    return materialOrganizationCode;
+  }
+
+  public void setMaterialOrganizationCode(String materialOrganizationCode) {
+    this.materialOrganizationCode = materialOrganizationCode;
+  }
+
+  public String getSnapshotIdentityKey() {
+    return snapshotIdentityKey;
+  }
+
+  public void setSnapshotIdentityKey(String snapshotIdentityKey) {
+    this.snapshotIdentityKey = snapshotIdentityKey;
   }
 
   public String getCustomerCode() {
@@ -155,6 +184,22 @@ public class QuoteBomMonthlySnapshot {
 
   public void setBomBatchId(String bomBatchId) {
     this.bomBatchId = bomBatchId;
+  }
+
+  public String getStructureFingerprint() {
+    return structureFingerprint;
+  }
+
+  public void setStructureFingerprint(String structureFingerprint) {
+    this.structureFingerprint = structureFingerprint;
+  }
+
+  public Integer getLineCount() {
+    return lineCount;
+  }
+
+  public void setLineCount(Integer lineCount) {
+    this.lineCount = lineCount;
   }
 
   public Integer getActiveFlag() {

@@ -16,7 +16,6 @@ public class QuoteBomSupplementDetail {
   private Long id;
   private Long supplementVersionId;
   private Long preparationId;
-  private Long taskId;
   private String oaNo;
   private Long oaFormItemId;
   private String quoteProductCode;

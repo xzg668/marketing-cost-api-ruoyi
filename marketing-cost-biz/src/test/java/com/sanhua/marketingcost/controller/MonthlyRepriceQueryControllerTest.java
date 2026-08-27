@@ -194,8 +194,8 @@ class MonthlyRepriceQueryControllerTest {
         String.class);
 
     assertThat(results.getAnnotation(PreAuthorize.class).value())
-        .contains("price:monthly-reprice:review", "cost:run:list");
+        .contains("price:monthly-reprice:review", "ingest:quote:list");
     assertThat(auditLogs.getAnnotation(PreAuthorize.class).value())
-        .contains("price:monthly-reprice:review", "cost:run:list");
+        .contains("price:monthly-reprice:review", "ingest:quote:list");
   }
 }

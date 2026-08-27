@@ -4,7 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.collaboration.QuoteCollaborationHistoryResponse;
 import com.sanhua.marketingcost.dto.collaboration.QuoteCollaborationSummaryResponse;
 import com.sanhua.marketingcost.dto.collaboration.QuoteItemCollaborationResponse;
-import com.sanhua.marketingcost.entity.IntegrationOutbox;
+import com.sanhua.marketingcost.entity.BusinessChangeLog;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
@@ -12,10 +12,10 @@ import com.sanhua.marketingcost.entity.QuoteCollaborationProductTask;
 import com.sanhua.marketingcost.entity.QuoteCollaborationQuoteLink;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
-import com.sanhua.marketingcost.mapper.IntegrationOutboxMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
+import com.sanhua.marketingcost.mapper.QuoteCollaborationQuoteLinkMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
@@ -23,13 +23,18 @@ import com.sanhua.marketingcost.service.collaboration.CollaborationCodes.Primary
 import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationScanAction;
 import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationScanErrorCode;
 import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationScanResult;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.springframework.cache.annotation.CachePut;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
@@ -45,9 +50,10 @@ public class QuoteItemCollaborationProjectionServiceImpl
   private final QuoteCollaborationScanService scanService;
   private final QuoteCollaborationTaskRepository repository;
   private final CollaborationTechnicianResolver technicianResolver;
-  private final IntegrationOutboxMapper outboxMapper;
+  private final CollaborationTaskLogService taskLogService;
   private final QuoteCostingWorkspaceService workspaceService;
   private final QuoteCostRunVersionMapper costRunVersionMapper;
+  private final QuoteCollaborationQuoteLinkMapper quoteLinkMapper;
 
   public QuoteItemCollaborationProjectionServiceImpl(
       OaFormMapper formMapper,
@@ -56,18 +62,20 @@ public class QuoteItemCollaborationProjectionServiceImpl
       QuoteCollaborationScanService scanService,
       QuoteCollaborationTaskRepository repository,
       CollaborationTechnicianResolver technicianResolver,
-      IntegrationOutboxMapper outboxMapper,
+      CollaborationTaskLogService taskLogService,
       QuoteCostingWorkspaceService workspaceService,
-      QuoteCostRunVersionMapper costRunVersionMapper) {
+      QuoteCostRunVersionMapper costRunVersionMapper,
+      QuoteCollaborationQuoteLinkMapper quoteLinkMapper) {
     this.formMapper = formMapper;
     this.itemMapper = itemMapper;
     this.preparationRecordMapper = preparationRecordMapper;
     this.scanService = scanService;
     this.repository = repository;
     this.technicianResolver = technicianResolver;
-    this.outboxMapper = outboxMapper;
+    this.taskLogService = taskLogService;
     this.workspaceService = workspaceService;
     this.costRunVersionMapper = costRunVersionMapper;
+    this.quoteLinkMapper = quoteLinkMapper;
   }
 
   @Override
@@ -77,7 +85,7 @@ public class QuoteItemCollaborationProjectionServiceImpl
       sync = true)
   @Transactional(readOnly = true)
   public QuoteCollaborationSummaryResponse summary(String oaNo) {
-    return buildSummary(oaNo);
+    return buildStoredSummary(oaNo);
   }
 
   @Override
@@ -86,16 +94,81 @@ public class QuoteItemCollaborationProjectionServiceImpl
       key = "T(com.sanhua.marketingcost.service.collaboration.QuoteItemCollaborationProjectionServiceImpl).summaryCacheKey(#oaNo)")
   @Transactional(readOnly = true)
   public QuoteCollaborationSummaryResponse refreshSummary(String oaNo) {
-    return buildSummary(oaNo);
+    return buildLiveSummary(oaNo);
   }
 
-  private QuoteCollaborationSummaryResponse buildSummary(String oaNo) {
+  private QuoteCollaborationSummaryResponse buildLiveSummary(String oaNo) {
     OaForm form = requireForm(oaNo);
-    List<QuoteItemCollaborationResponse> items = itemMapper.selectList(
+    List<OaFormItem> quoteItems = itemMapper.selectList(
         Wrappers.<OaFormItem>lambdaQuery().eq(OaFormItem::getOaFormId, form.getId())
-            .orderByAsc(OaFormItem::getSeq).orderByAsc(OaFormItem::getId))
-        .stream().map(item -> projectItem(form, item)).toList();
+            .orderByAsc(OaFormItem::getSeq).orderByAsc(OaFormItem::getId));
+    if (quoteItems.isEmpty()) {
+      return new QuoteCollaborationSummaryResponse(form.getOaNo(), sha256(""), List.of());
+    }
+
+    QuoteCollaborationScanResult firstScan = scanService.scanQuoteItem(quoteItems.get(0).getId());
+    List<Long> itemIds = quoteItems.stream().map(OaFormItem::getId).toList();
+    List<QuoteCostingWorkspace> storedWorkspaces = workspaceService
+        .findAll(itemIds, firstScan.accountingMonth());
+    Map<Long, QuoteCostingWorkspace> workspaces = (storedWorkspaces == null
+        ? List.<QuoteCostingWorkspace>of() : storedWorkspaces)
+        .stream().collect(Collectors.toMap(
+            QuoteCostingWorkspace::getOaFormItemId, Function.identity(), (left, right) -> right));
+    List<QuoteCollaborationQuoteLink> activeLinks = quoteLinkMapper.selectList(
+        Wrappers.<QuoteCollaborationQuoteLink>lambdaQuery()
+            .in(QuoteCollaborationQuoteLink::getOaFormItemId, itemIds)
+            .eq(QuoteCollaborationQuoteLink::getActiveFlag, 1));
+    Set<Long> linkedItemIds = (activeLinks == null ? List.<QuoteCollaborationQuoteLink>of() : activeLinks)
+        .stream().map(QuoteCollaborationQuoteLink::getOaFormItemId).collect(Collectors.toSet());
+
+    List<QuoteItemCollaborationResponse> items = quoteItems.stream().map(item -> {
+      QuoteCostingWorkspace workspace = workspaces.get(item.getId());
+      if (Objects.equals(item.getId(), firstScan.oaFormItemId())) {
+        return projectItem(form, item, firstScan, workspace);
+      }
+      if (isStoredFinanceProjection(workspace) && !linkedItemIds.contains(item.getId())) {
+        return projectStoredFinanceGap(item, workspace);
+      }
+      return projectItem(form, item);
+    }).toList();
     String version = sha256(items.stream().map(QuoteItemCollaborationResponse::projectionVersion)
+        .reduce("", (left, right) -> left + "|" + right));
+    return new QuoteCollaborationSummaryResponse(form.getOaNo(), version, items);
+  }
+
+  /** GET projection: reads persisted state only and never triggers U9/CMS/price scans. */
+  private QuoteCollaborationSummaryResponse buildStoredSummary(String oaNo) {
+    OaForm form = requireForm(oaNo);
+    List<OaFormItem> quoteItems = itemMapper.selectList(
+        Wrappers.<OaFormItem>lambdaQuery().eq(OaFormItem::getOaFormId, form.getId())
+            .orderByAsc(OaFormItem::getSeq).orderByAsc(OaFormItem::getId));
+    if (quoteItems.isEmpty()) {
+      return new QuoteCollaborationSummaryResponse(form.getOaNo(), sha256(""), List.of());
+    }
+    String month = CostPricingPeriodUtils.currentPricingMonth();
+    List<Long> itemIds = quoteItems.stream().map(OaFormItem::getId).toList();
+    List<QuoteCostingWorkspace> stored = workspaceService.findAll(itemIds, month);
+    Map<Long, QuoteCostingWorkspace> workspaces =
+        (stored == null ? List.<QuoteCostingWorkspace>of() : stored).stream()
+            .collect(Collectors.toMap(
+                QuoteCostingWorkspace::getOaFormItemId,
+                Function.identity(),
+                (left, right) -> right));
+    List<QuoteCollaborationQuoteLink> links = quoteLinkMapper.selectList(
+        Wrappers.<QuoteCollaborationQuoteLink>lambdaQuery()
+            .in(QuoteCollaborationQuoteLink::getOaFormItemId, itemIds)
+            .eq(QuoteCollaborationQuoteLink::getActiveFlag, 1));
+    Map<Long, QuoteCollaborationQuoteLink> linksByItem =
+        (links == null ? List.<QuoteCollaborationQuoteLink>of() : links).stream()
+            .collect(Collectors.toMap(
+                QuoteCollaborationQuoteLink::getOaFormItemId,
+                Function.identity(),
+                (left, right) -> right));
+    List<QuoteItemCollaborationResponse> items = quoteItems.stream()
+        .map(item -> projectStoredItem(form, item, workspaces.get(item.getId()), linksByItem.get(item.getId())))
+        .toList();
+    String version = sha256(items.stream()
+        .map(QuoteItemCollaborationResponse::projectionVersion)
         .reduce("", (left, right) -> left + "|" + right));
     return new QuoteCollaborationSummaryResponse(form.getOaNo(), version, items);
   }
@@ -117,22 +190,128 @@ public class QuoteItemCollaborationProjectionServiceImpl
   public QuoteCollaborationHistoryResponse history(String oaNo, Long itemId) {
     OaForm form = requireForm(oaNo);
     OaFormItem item = requireItem(form, itemId);
-    QuoteItemCollaborationResponse projection = projectItem(form, item);
+    QuoteCostingWorkspace workspace = workspaceService
+        .find(itemId, CostPricingPeriodUtils.currentPricingMonth()).orElse(null);
+    QuoteCollaborationQuoteLink link = quoteLinkMapper.selectOne(
+        Wrappers.<QuoteCollaborationQuoteLink>lambdaQuery()
+            .eq(QuoteCollaborationQuoteLink::getOaFormItemId, itemId)
+            .eq(QuoteCollaborationQuoteLink::getActiveFlag, 1)
+            .orderByDesc(QuoteCollaborationQuoteLink::getId)
+            .last("LIMIT 1"));
+    QuoteItemCollaborationResponse projection = projectStoredItem(form, item, workspace, link);
     if (projection.productTaskId() == null) {
       return new QuoteCollaborationHistoryResponse(itemId, null, null,
           projection.currentStatus(), projection.currentStatusLabel(), projection.assigneeName(), List.of());
     }
-    List<QuoteCollaborationHistoryResponse.Entry> entries = outboxMapper
-        .selectByAggregate("PRODUCT_TASK", projection.productTaskId()).stream()
+    List<QuoteCollaborationHistoryResponse.Entry> entries = taskLogService
+        .findByProductTask(projection.productTaskId()).stream()
         .map(this::historyEntry).toList();
     return new QuoteCollaborationHistoryResponse(itemId, projection.productTaskId(),
         projection.productTaskNo(), projection.currentStatus(), projection.currentStatusLabel(),
         projection.assigneeName(), entries);
   }
 
-  private QuoteCollaborationHistoryResponse.Entry historyEntry(IntegrationOutbox event) {
-    return new QuoteCollaborationHistoryResponse.Entry(event.getOccurredAt(), event.getEventType(),
-        eventTitle(event.getEventType()), eventDescription(event));
+  private QuoteItemCollaborationResponse projectStoredItem(
+      OaForm form,
+      OaFormItem item,
+      QuoteCostingWorkspace workspace,
+      QuoteCollaborationQuoteLink link) {
+    QuoteCollaborationProductTask task = link == null || link.getProductTaskId() == null
+        ? null
+        : repository.findProductTaskByIdAndBusinessUnit(
+            link.getProductTaskId(), form.getBusinessUnitType()).orElse(null);
+    ProjectionFields fields = storedFields(item, workspace, task);
+    String version = sha256(String.join("|",
+        String.valueOf(item.getId()),
+        value(workspace == null ? null : workspace.getWorkspaceStatus()),
+        value(workspace == null ? null : workspace.getInputFingerprint()),
+        value(workspace == null ? null : workspace.getLastSuccessInputFingerprint()),
+        value(workspace == null ? null : workspace.getSourceRevision()),
+        value(workspace == null ? null : workspace.getLastSuccessSourceRevision()),
+        value(workspace == null ? null : workspace.getUpdatedAt()),
+        value(task == null ? null : task.getId()),
+        value(task == null ? null : task.getTaskVersion()),
+        value(link == null ? null : link.getId()),
+        value(link == null ? null : link.getLinkStatus()),
+        value(item.getCalcStatus()),
+        value(item.getConfirmedCostVersionId())));
+    Integer gapCount = task != null && task.getOpenGapCount() != null
+        ? task.getOpenGapCount()
+        : workspace == null || workspace.getGapCount() == null ? 0 : workspace.getGapCount();
+    return response(item, fields, task, link, gapCount, version);
+  }
+
+  private ProjectionFields storedFields(
+      OaFormItem item,
+      QuoteCostingWorkspace workspace,
+      QuoteCollaborationProductTask task) {
+    if (task != null) {
+      String status = task.getTaskStatus();
+      QuoteItemCollaborationAction action = switch (status) {
+        case "READY_FOR_COSTING" -> QuoteItemCollaborationAction.START_COSTING;
+        case "COSTING" -> QuoteItemCollaborationAction.VIEW_COSTING_PROGRESS;
+        case "COMPLETED" -> QuoteItemCollaborationAction.VIEW_COSTING_RESULT;
+        case "CANCELLED" -> QuoteItemCollaborationAction.NONE;
+        default -> QuoteItemCollaborationAction.VIEW_SUPPLEMENT;
+      };
+      return new ProjectionFields(
+          "STORED", "已保存的BOM状态", "STORED", "已保存的价格状态",
+          task.getCurrentAssigneeUserId(), task.getCurrentAssigneeName(), status,
+          storedTaskLabel(status), action, "展示最近保存的协作状态；重新检查会刷新外部数据");
+    }
+    if (workspace != null) {
+      String status = value(workspace.getWorkspaceStatus()).toUpperCase(Locale.ROOT);
+      if ("SUCCESS".equals(status) && isCalculated(item)) {
+        return new ProjectionFields(
+            "AVAILABLE", "BOM已准备", "READY", "价格齐全", null, null,
+            "COMPLETED", "核算完成", QuoteItemCollaborationAction.VIEW_COSTING_RESULT,
+            "当前成功结果可直接查看");
+      }
+      QuoteItemCollaborationAction action = switch (status) {
+        case "QUEUED", "RUNNING" -> QuoteItemCollaborationAction.VIEW_COSTING_PROGRESS;
+        case "SYSTEM_FAILED" -> QuoteItemCollaborationAction.RETRY_COSTING;
+        case "WAIT_BOM", "WAIT_PRICE_TYPE", "WAIT_PRICE" ->
+            QuoteItemCollaborationAction.VIEW_COSTING_GAP;
+        case "BOM_READY", "READY" -> QuoteItemCollaborationAction.START_COSTING;
+        default -> QuoteItemCollaborationAction.NONE;
+      };
+      return new ProjectionFields(
+          "STORED", "已保存的BOM状态", "STORED", "已保存的价格状态", null, null,
+          status, storedWorkspaceLabel(status), action,
+          gapMessage(workspace, "展示最近保存的核算状态；重新检查会刷新外部数据"));
+    }
+    return new ProjectionFields(
+        "UNCHECKED", "待检查", "UNCHECKED", "待检查", null, null,
+        "UNCHECKED", "待检查", QuoteItemCollaborationAction.NONE,
+        "尚无保存的检查结果，请使用“重新检查”显式刷新");
+  }
+
+  private String storedTaskLabel(String status) {
+    if ("WAIT_TECH".equals(status)) return "待技术处理";
+    if ("WAIT_FINANCE".equals(status) || "TECH_SUBMITTED".equals(status)) return "待财务审核";
+    if ("READY_FOR_COSTING".equals(status)) return "已就绪";
+    if ("COSTING".equals(status)) return "核算中";
+    if ("COMPLETED".equals(status)) return "核算完成";
+    if ("CANCELLED".equals(status)) return "已取消";
+    return StringUtils.hasText(status) ? status : "待处理";
+  }
+
+  private String storedWorkspaceLabel(String status) {
+    return switch (status) {
+      case "QUEUED" -> "排队中";
+      case "RUNNING" -> "核算中";
+      case "WAIT_BOM" -> "待补BOM";
+      case "WAIT_PRICE_TYPE" -> "缺价格类型";
+      case "WAIT_PRICE" -> "缺价格";
+      case "SYSTEM_FAILED" -> "系统处理失败";
+      case "BOM_READY", "READY" -> "已就绪";
+      default -> StringUtils.hasText(status) ? status : "待检查";
+    };
+  }
+
+  private QuoteCollaborationHistoryResponse.Entry historyEntry(BusinessChangeLog event) {
+    return new QuoteCollaborationHistoryResponse.Entry(event.getChangedAt(), event.getFieldName(),
+        eventTitle(event.getFieldName()), eventDescription(event));
   }
 
   private static String eventTitle(String eventType) {
@@ -144,21 +323,29 @@ public class QuoteItemCollaborationProjectionServiceImpl
     return StringUtils.hasText(eventType) ? eventType : "状态更新";
   }
 
-  private static String eventDescription(IntegrationOutbox event) {
-    if (StringUtils.hasText(event.getLastErrorMessage())) return event.getLastErrorMessage();
-    return "事件已记录；OA对接关闭时保留在报价系统内，不伪造OA推送成功";
+  private static String eventDescription(BusinessChangeLog event) {
+    return StringUtils.hasText(event.getChangeReason())
+        ? event.getChangeReason() : "报价系统已记录协作状态变化";
   }
 
   private QuoteItemCollaborationResponse projectItem(OaForm form, OaFormItem item) {
     QuoteCollaborationScanResult scan = scanService.scanQuoteItem(item.getId());
+    QuoteCostingWorkspace workspace =
+        workspaceService.find(item.getId(), scan.accountingMonth()).orElse(null);
+    return projectItem(form, item, scan, workspace);
+  }
+
+  private QuoteItemCollaborationResponse projectItem(
+      OaForm form,
+      OaFormItem item,
+      QuoteCollaborationScanResult scan,
+      QuoteCostingWorkspace workspace) {
     CollaborationScope scope = new CollaborationScope(scan.businessUnitType(), scan.priceOrgCode());
     QuoteCollaborationQuoteLink link = repository.findActiveLinksByQuoteItem(item.getId(), scope)
         .stream().findFirst().orElse(null);
     QuoteCollaborationProductTask task = task(scan, link, scope);
     QuoteBomPreparationRecord preparation =
         currentPreparation(item.getId(), scan.productCode(), scan.accountingMonth());
-    QuoteCostingWorkspace workspace =
-        workspaceService.find(item.getId(), scan.accountingMonth()).orElse(null);
     QuoteCostRunVersion currentVersion = currentVersion(item);
     ProjectionFields fields =
         fields(form, item, scan, task, link, preparation, workspace, currentVersion);
@@ -173,10 +360,39 @@ public class QuoteItemCollaborationProjectionServiceImpl
         value(workspace == null ? null : workspace.getLastSuccessInputFingerprint()),
         value(currentVersion == null ? null : currentVersion.getPricingMonth()),
         value(item.getCalcStatus()), value(item.getConfirmedCostVersionId())));
+    return response(item, fields, task, link,
+        task != null && task.getOpenGapCount() != null
+            ? task.getOpenGapCount() : scan.price().gapCount(), version);
+  }
+
+  private QuoteItemCollaborationResponse projectStoredFinanceGap(
+      OaFormItem item, QuoteCostingWorkspace workspace) {
+    ProjectionFields fields = new ProjectionFields(
+        "AVAILABLE", "BOM已准备", "MISSING", "缺价格类型", null, "财务报价",
+        "MISSING_PRICE", "缺价格类型", QuoteItemCollaborationAction.VIEW_COSTING_GAP,
+        gapMessage(workspace, "当前产品存在价格类型缺口"));
+    String version = sha256(String.join("|", String.valueOf(item.getId()),
+        value(workspace.getWorkspaceStatus()), value(workspace.getInputFingerprint()),
+        value(workspace.getLastSuccessInputFingerprint()), value(workspace.getLockVersion()),
+        value(workspace.getUpdatedAt())));
+    return response(item, fields, null, null, workspace.getGapCount(), version);
+  }
+
+  private static boolean isStoredFinanceProjection(QuoteCostingWorkspace workspace) {
+    return workspace != null
+        && "WAIT_PRICE_TYPE".equalsIgnoreCase(workspace.getWorkspaceStatus());
+  }
+
+  private QuoteItemCollaborationResponse response(
+      OaFormItem item,
+      ProjectionFields fields,
+      QuoteCollaborationProductTask task,
+      QuoteCollaborationQuoteLink link,
+      Integer gapCount,
+      String version) {
     return new QuoteItemCollaborationResponse(item.getId(), fields.bomCode, fields.bomLabel,
         fields.priceCode, fields.priceLabel,
-        task != null && task.getOpenGapCount() != null
-            ? task.getOpenGapCount() : scan.price().gapCount(),
+        gapCount,
         fields.assigneeId,
         fields.assigneeName, fields.statusCode, fields.statusLabel,
         task == null ? null : task.getId(), task == null ? null : task.getProductTaskNo(),
@@ -213,12 +429,15 @@ public class QuoteItemCollaborationProjectionServiceImpl
     }
     if (link != null && "READY".equals(link.getLinkStatus())) return ready(scan, "补录审核通过，已具备核算条件");
     if (task != null && link != null) return taskFields(scan, task);
-    if (workspaceFields != null) return workspaceFields;
+    if (workspaceFields != null && !requiresTechnicalCollaboration(workspace, scan)) {
+      return workspaceFields;
+    }
     if (isCalculated(item)) return new ProjectionFields(bomCode(scan), bomLabel(scan), "READY", "价格齐全",
         task == null ? null : task.getCurrentAssigneeUserId(), task == null ? null : task.getCurrentAssigneeName(),
         "COMPLETED", "核算完成", QuoteItemCollaborationAction.VIEW_COSTING_RESULT,
         "当前成功结果可直接查看；只有输入变化后才需要重新核算");
-    if (preparation != null) return new ProjectionFields(bomCode(scan), bomLabel(scan), "PENDING",
+    if (preparation != null && scan.requiredScope() == PrimaryScope.PRICE_ONLY)
+      return new ProjectionFields(bomCode(scan), bomLabel(scan), "PENDING",
         "核算资料已准备", null, null, "READY_FOR_COSTING", "可核算",
         QuoteItemCollaborationAction.START_COSTING, "已存在当前核算准备，可直接核算本产品");
     if (scan.action() == QuoteCollaborationScanAction.NO_COLLABORATION_REQUIRED) return ready(scan, scan.message());
@@ -322,6 +541,24 @@ public class QuoteItemCollaborationProjectionServiceImpl
       return "财务报价";
     }
     return "财务报价/产品技术";
+  }
+
+  /**
+   * 核算工作区只记录阻塞结果，不负责决定协作动作。BOM 与底层物料缺价必须继续使用
+   * 实时扫描结果解析负责人和唯一下一步；价格类型、财务基准价仍留给报价人员处理。
+   */
+  private static boolean requiresTechnicalCollaboration(
+      QuoteCostingWorkspace workspace, QuoteCollaborationScanResult scan) {
+    if (workspace == null || !StringUtils.hasText(workspace.getWorkspaceStatus())) return false;
+    if (scan.action() != QuoteCollaborationScanAction.CREATE_COLLABORATION
+        && scan.action() != QuoteCollaborationScanAction.LINK_ACTIVE_TASK
+        && scan.action() != QuoteCollaborationScanAction.REUSE_APPROVED_RESULT) {
+      return false;
+    }
+    String status = workspace.getWorkspaceStatus().trim().toUpperCase(Locale.ROOT);
+    if ("WAIT_BOM".equals(status)) return true;
+    return "WAIT_PRICE".equals(status)
+        && !"FINANCE_BASE_PRICE_MISSING".equalsIgnoreCase(workspace.getLastErrorCode());
   }
 
   private static boolean inputChanged(QuoteCostingWorkspace workspace) {
@@ -441,7 +678,10 @@ public class QuoteItemCollaborationProjectionServiceImpl
             .last("LIMIT 1"));
     if (preparation == null) return null;
     if (!Objects.equals(productCode, preparation.getQuoteProductCode())) return null;
-    return Objects.equals(accountingMonth, preparation.getCostPeriodMonth()) ? preparation : null;
+    if (!Objects.equals(accountingMonth, preparation.getCostPeriodMonth())) return null;
+    return "READY".equalsIgnoreCase(preparation.getPreparationStatus())
+            || "CONFIRMED".equalsIgnoreCase(preparation.getPreparationStatus())
+        ? preparation : null;
   }
   private static String sha256(String value) {
     try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))).toUpperCase(Locale.ROOT); }

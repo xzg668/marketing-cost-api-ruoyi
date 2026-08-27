@@ -37,13 +37,12 @@ import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.service.QuoteEffectiveBomCostingService;
 import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
-import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.QuoteProductBomPreparationService;
-import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomFeatureSwitch;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
+import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -76,12 +75,10 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   private final BomCostingRowSubRefMapper bomCostingRowSubRefMapper;
   private final MaterialMasterRawMapper materialMasterRawMapper;
   private final QuoteCostingWorkbenchSummaryMapper workbenchSummaryMapper;
-  private final QuoteProductBomCostingBuildService costingBuildService;
   private final QuoteProductBomPreparationService bomPreparationService;
   private final QuoteEffectiveBomCostingService effectiveBomCostingService;
   private final QuoteCostingWorkspaceService workspaceService;
   private final QuoteCostRunVersionInvalidationService costRunVersionInvalidationService;
-  private final QuoteEffectiveBomFeatureSwitch effectiveBomFeatureSwitch;
   private final QuoteBomStatusService quoteBomStatusService;
   private final CollaborationCostingGate collaborationCostingGate;
   private final QuotePriceTypeRecognitionService priceTypeRecognitionService;
@@ -94,12 +91,10 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       BomCostingRowSubRefMapper bomCostingRowSubRefMapper,
       MaterialMasterRawMapper materialMasterRawMapper,
       QuoteCostingWorkbenchSummaryMapper workbenchSummaryMapper,
-      QuoteProductBomCostingBuildService costingBuildService,
       QuoteProductBomPreparationService bomPreparationService,
       QuoteEffectiveBomCostingService effectiveBomCostingService,
       QuoteCostingWorkspaceService workspaceService,
       QuoteCostRunVersionInvalidationService costRunVersionInvalidationService,
-      QuoteEffectiveBomFeatureSwitch effectiveBomFeatureSwitch,
       QuoteBomStatusService quoteBomStatusService,
       CollaborationCostingGate collaborationCostingGate,
       QuotePriceTypeRecognitionService priceTypeRecognitionService) {
@@ -110,12 +105,10 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     this.bomCostingRowSubRefMapper = bomCostingRowSubRefMapper;
     this.materialMasterRawMapper = materialMasterRawMapper;
     this.workbenchSummaryMapper = workbenchSummaryMapper;
-    this.costingBuildService = costingBuildService;
     this.bomPreparationService = bomPreparationService;
     this.effectiveBomCostingService = effectiveBomCostingService;
     this.workspaceService = workspaceService;
     this.costRunVersionInvalidationService = costRunVersionInvalidationService;
-    this.effectiveBomFeatureSwitch = effectiveBomFeatureSwitch;
     this.quoteBomStatusService = quoteBomStatusService;
     this.collaborationCostingGate = collaborationCostingGate;
     this.priceTypeRecognitionService = priceTypeRecognitionService;
@@ -126,9 +119,9 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   public QuoteCostingWorkbenchResponse getWorkbench(String oaNo, Long oaFormItemId) {
     OaForm form = requireForm(oaNo);
     OaFormItem item = requireItem(form, oaFormItemId);
-    String productCode = trimToNull(item.getMaterialNo());
+    String productCode = QuoteProductIdentityUtils.resolveCostingCode(item);
     if (productCode == null) {
-      throw new QuoteIngestException("当前产品行料号为空，无法发起核算");
+      throw new QuoteIngestException("当前产品行料号、型号和图号均为空，无法发起核算");
     }
 
     QuoteBomStatus status = latestBomStatus(form.getOaNo(), item.getId());
@@ -145,9 +138,9 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   public QuoteCostingWorkbenchResponse launchWorkbench(String oaNo, Long oaFormItemId) {
     OaForm form = requireForm(oaNo);
     OaFormItem item = requireItem(form, oaFormItemId);
-    String productCode = trimToNull(item.getMaterialNo());
+    String productCode = QuoteProductIdentityUtils.resolveCostingCode(item);
     if (productCode == null) {
-      throw new QuoteIngestException("当前产品行料号为空，无法发起核算");
+      throw new QuoteIngestException("当前产品行料号、型号和图号均为空，无法发起核算");
     }
     oaFormMapper.selectIdForCostingUpdate(form.getOaNo());
     collaborationCostingGate.requireReadyAndStart(item.getId(), form.getBusinessUnitType());
@@ -159,30 +152,22 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
         form.getOaNo(), item.getId(), productCode, periodMonth);
     boolean generated = false;
     String buildBatchId = null;
-    if (effectiveBomFeatureSwitch.isEnabled()) {
-      QuoteBomStatusItemResponse checked =
-          quoteBomStatusService.checkItemForCostRun(form.getOaNo(), item.getId(), periodMonth);
-      if (isCostReadyBomStatus(checked == null ? null : checked.getBomStatus())) {
-        // 状态检查只证明 U9/补录源中存在 BOM，不会创建当前产品、当前核算月的准备记录。
-        // 单品启动必须先补齐这一步，再生成最终有效 BOM；禁止要求用户预先调用旧准备接口。
-        QuoteProductBomPreparationPreview preparation =
-            bomPreparationService.prepareByOaFormItem(item.getId(), LocalDate.now());
-        if (preparation != null && preparation.ready()) {
-          QuoteBomCostingBuildResponse build =
-              effectiveBomCostingService.prepareCurrent(form.getOaNo(), item.getId());
-          generated = true;
-          buildBatchId = build == null ? null : build.buildBatchId();
-        } else {
-          markWaitingForBom(form, item, productCode, periodMonth);
-        }
+    QuoteBomStatusItemResponse checked =
+        quoteBomStatusService.checkItemForCostRun(form.getOaNo(), item.getId(), periodMonth);
+    if (isCostReadyBomStatus(checked == null ? null : checked.getBomStatus())) {
+      QuoteProductBomPreparationPreview preparation =
+          bomPreparationService.prepareByOaFormItem(
+              item.getId(), CostPricingPeriodUtils.currentPricingDate());
+      if (preparation != null && preparation.ready()) {
+        QuoteBomCostingBuildResponse build =
+            effectiveBomCostingService.prepareCurrent(form.getOaNo(), item.getId());
+        generated = true;
+        buildBatchId = build == null ? null : build.buildBatchId();
       } else {
         markWaitingForBom(form, item, productCode, periodMonth);
       }
     } else {
-      QuoteBomCostingBuildResponse build =
-          costingBuildService.buildByOaFormItem(item.getId(), periodMonth, LocalDate.now());
-      generated = true;
-      buildBatchId = build == null ? null : build.buildBatchId();
+      markWaitingForBom(form, item, productCode, periodMonth);
     }
 
     QuoteBomStatus status = latestBomStatus(form.getOaNo(), item.getId());
@@ -230,7 +215,6 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     response.setPeriodMonth(periodMonth);
     response.setWorkflowStatus(workflowStatus);
     response.setSnapshotGenerated(generated);
-    response.setEffectiveBomEnabled(effectiveBomFeatureSwitch.isEnabled());
     response.setBuildBatchId(firstText(buildBatchId, latestBuildBatchId(rows)));
     response.setCostingWorkspace(toWorkspaceResponse(workspace));
     response.setLatestPriceTypeRecognition(latestPriceTypeRecognition);
@@ -412,6 +396,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     response.setSeq(item.getSeq());
     response.setExternalLineId(item.getExternalLineId());
     response.setMaterialNo(item.getMaterialNo());
+    response.setCustomerDrawing(item.getCustomerDrawing());
     response.setProductName(item.getProductName());
     response.setSunlModel(item.getSunlModel());
     response.setBusinessType(item.getBusinessType());
@@ -433,7 +418,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     QuoteBomStatusItemResponse response = new QuoteBomStatusItemResponse();
     response.setSeq(item.getSeq());
     response.setOaFormItemId(item.getId());
-    response.setProductCode(item.getMaterialNo());
+    response.setProductCode(QuoteProductIdentityUtils.resolveCostingCode(item));
     response.setProductModel(item.getSunlModel());
     if (status == null) {
       response.setCostPeriodMonth(periodMonth);
@@ -451,8 +436,6 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     response.setCheckedAt(status.getCheckedAt());
     response.setSyncBatchId(status.getSyncBatchId());
     response.setCostPeriodMonth(periodMonth);
-    response.setManualTaskNo(status.getManualTaskNo());
-    response.setSupplementTaskId(status.getSupplementTaskId());
     response.setErrorMessage(status.getErrorMessage());
     return response;
   }
@@ -462,6 +445,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       return null;
     }
     QuoteCostingWorkspaceResponse response = new QuoteCostingWorkspaceResponse();
+    response.setProductCode(workspace.getProductCode());
     response.setPeriodMonth(workspace.getPeriodMonth());
     response.setWorkspaceStatus(workspace.getWorkspaceStatus());
     response.setCurrentStep(workspace.getCurrentStep());

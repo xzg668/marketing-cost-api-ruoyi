@@ -63,12 +63,22 @@ public class CostRunTaskClaimServiceImpl implements CostRunTaskClaimService {
   }
 
   @Override
-  public boolean markSuccess(Long taskId, String workerId, String resultSummaryJson) {
+  public boolean markSuccess(
+      Long taskId,
+      String workerId,
+      Long costRunVersionId,
+      String costRunNo,
+      String resultSummaryJson) {
     if (taskId == null || !StringUtils.hasText(workerId)) {
       return false;
     }
     return taskMapper.markSuccess(
-            taskId, workerId.trim(), resultSummaryJson, LocalDateTime.now())
+            taskId,
+            workerId.trim(),
+            costRunVersionId,
+            StringUtils.hasText(costRunNo) ? costRunNo.trim() : null,
+            resultSummaryJson,
+            LocalDateTime.now())
         == 1;
   }
 

@@ -3,8 +3,10 @@ package com.sanhua.marketingcost.security;
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.entity.SysUser;
 import com.sanhua.marketingcost.entity.system.LpCollaborationToken;
 import com.sanhua.marketingcost.service.CollaborationTokenService;
+import com.sanhua.marketingcost.service.SysUserService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -20,33 +22,38 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 /**
- * OA 协作者安全过滤器
+ * 外部协作门户安全过滤器。
  * <p>
- * 拦截 /collaborate/** 请求，从请求参数中提取 token 并校验。
- * 校验通过后构建 OA_COLLABORATOR 角色的 Authentication，
- * 将 tokenType 和 remark（oaNo）存入 details Map 供后续业务使用。
+ * 只接受请求头令牌，并把人员、协作主任务和可处理模块写入认证上下文。
  * <p>
- * 非 /collaborate/** 路径的请求直接放行（由 JwtAuthenticationFilter 处理）。
+ * 没有携带协作请求头的普通系统请求仍由 JwtAuthenticationFilter 处理。
  */
 @Component
 public class CollaborationSecurityFilter extends OncePerRequestFilter {
 
     /** 协作者角色标识 */
-    private static final String ROLE_COLLABORATOR = "ROLE_OA_COLLABORATOR";
-    /** 匹配的 URL 模式 */
-    private static final String COLLABORATE_PATTERN = "/collaborate/**";
+    private static final String ROLE_COLLABORATOR = "ROLE_TECHNICAL_COLLABORATOR";
+    /** 匹配的统一协作 API。 */
+    private static final String PORTAL_API_PATTERN = "/api/v1/collaboration/**";
 
     private final CollaborationTokenService collaborationTokenService;
+    private final CollaborationPortalGrantCodec grantCodec;
+    private final SysUserService userService;
     private final ObjectMapper objectMapper;
     private final AntPathMatcher pathMatcher = new AntPathMatcher();
 
     public CollaborationSecurityFilter(CollaborationTokenService collaborationTokenService,
+                                       CollaborationPortalGrantCodec grantCodec,
+                                       SysUserService userService,
                                        ObjectMapper objectMapper) {
         this.collaborationTokenService = collaborationTokenService;
+        this.grantCodec = grantCodec;
+        this.userService = userService;
         this.objectMapper = objectMapper;
     }
 
@@ -56,42 +63,66 @@ public class CollaborationSecurityFilter extends OncePerRequestFilter {
                                     FilterChain filterChain) throws ServletException, IOException {
         String path = request.getRequestURI();
 
-        // 只处理 /collaborate/** 路径
-        if (!pathMatcher.match(COLLABORATE_PATTERN, path)) {
+        String portalToken = request.getHeader(CollaborationPortalAuthentication.HEADER);
+        boolean portalRequest = pathMatcher.match(PORTAL_API_PATTERN, path)
+                && StringUtils.hasText(portalToken);
+        if (!portalRequest) {
             filterChain.doFilter(request, response);
             return;
         }
 
-        // 从请求参数中提取 token
-        String token = request.getParameter("token");
-        if (!StringUtils.hasText(token)) {
-            writeUnauthorized(response, "缺少协作令牌");
-            return;
-        }
-
-        // 校验 token
-        LpCollaborationToken record = collaborationTokenService.validateToken(token);
+        LpCollaborationToken record = collaborationTokenService.validateToken(portalToken);
         if (record == null) {
             writeUnauthorized(response, "协作令牌无效或已过期");
             return;
         }
 
-        // 构建协作者 Authentication
+        authenticatePortal(record, response, filterChain, request);
+    }
+
+    private void authenticatePortal(LpCollaborationToken record,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain,
+                                    HttpServletRequest request) throws IOException, ServletException {
+        if (!CollaborationPortalAuthentication.TOKEN_TYPE.equals(record.getTokenType())) {
+            writeUnauthorized(response, "协作令牌类型无效");
+            return;
+        }
+        CollaborationPortalGrant grant;
+        try {
+            grant = grantCodec.decode(record.getRemark());
+        } catch (IllegalArgumentException exception) {
+            writeUnauthorized(response, exception.getMessage());
+            return;
+        }
+        SysUser user = record.getUserId() == null ? null : userService.getById(record.getUserId());
+        if (user == null || user.getUserId() == null || !"0".equals(user.getStatus())
+                || (StringUtils.hasText(user.getDelFlag()) && !"0".equals(user.getDelFlag()))
+                || !StringUtils.hasText(user.getBusinessUnitType())) {
+            writeUnauthorized(response, "协作人员账号无效或已停用");
+            return;
+        }
+
+        List<SimpleGrantedAuthority> authorities = new ArrayList<>();
+        authorities.add(new SimpleGrantedAuthority(ROLE_COLLABORATOR));
+        authorities.add(new SimpleGrantedAuthority("collaboration:task:read"));
+        authorities.add(new SimpleGrantedAuthority("collaboration:task:edit"));
+        authorities.add(new SimpleGrantedAuthority("collaboration:task:submit"));
         UsernamePasswordAuthenticationToken authentication =
                 new UsernamePasswordAuthenticationToken(
-                        "collaborator:" + record.getUserId(),
-                        null,
-                        List.of(new SimpleGrantedAuthority(ROLE_COLLABORATOR))
-                );
+                        "collaborator:" + user.getUserId(), null, authorities);
 
-        // 将协作信息存入 details，供 Controller 读取
         Map<String, Object> details = new HashMap<>();
         details.put("tokenId", record.getTokenId());
         details.put("tokenType", record.getTokenType());
-        details.put("userId", record.getUserId());
-        details.put("remark", record.getRemark());
+        details.put("userId", user.getUserId());
+        details.put(BusinessUnitContext.KEY_BUSINESS_UNIT_TYPE, user.getBusinessUnitType());
+        details.put(CollaborationPortalAuthentication.KEY_RESTRICTED, true);
+        details.put(CollaborationPortalAuthentication.KEY_COLLABORATION_ID,
+                grant.collaborationId());
+        details.put(CollaborationPortalAuthentication.KEY_MODULES,
+                grant.modules().stream().map(Enum::name).sorted().toList());
         authentication.setDetails(details);
-
         SecurityContextHolder.getContext().setAuthentication(authentication);
         filterChain.doFilter(request, response);
     }

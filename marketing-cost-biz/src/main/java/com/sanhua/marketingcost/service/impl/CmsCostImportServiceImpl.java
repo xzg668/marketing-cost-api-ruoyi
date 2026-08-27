@@ -139,11 +139,6 @@ public class CmsCostImportServiceImpl implements CmsCostImportService {
     batch.setWorkshopRowCount(0);
     batch.setSubjectRowCount(0);
     batch.setSubjectSettingRowCount(0);
-    batch.setSalaryInsertCount(0);
-    batch.setSalarySkipCount(0);
-    batch.setSalaryBlockedCount(0);
-    batch.setAuxInsertCount(0);
-    batch.setAuxSkipCount(0);
     batch.setErrorCount(0);
     batch.setImportedBy(request.getImportedBy());
     batch.setBusinessUnitType(request.getBusinessUnitType());
@@ -362,11 +357,6 @@ public class CmsCostImportServiceImpl implements CmsCostImportService {
     response.setSubjectRowCount(Objects.requireNonNullElse(batch.getSubjectRowCount(), 0));
     response.setSubjectSettingRowCount(
         Objects.requireNonNullElse(batch.getSubjectSettingRowCount(), 0));
-    response.setSalaryInsertCount(0);
-    response.setSalarySkipCount(0);
-    response.setSalaryBlockedCount(0);
-    response.setAuxInsertCount(0);
-    response.setAuxSkipCount(0);
     response.setErrorCount(0);
     return response;
   }

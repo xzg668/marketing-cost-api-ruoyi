@@ -1,9 +1,7 @@
 package com.sanhua.marketingcost.service.ingest;
 
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusResponse;
-import com.sanhua.marketingcost.dto.ingest.QuoteBomBatchSyncResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse;
-import java.util.List;
 
 public interface QuoteBomStatusService {
   QuoteBomStatusResponse listByOaNo(String oaNo);
@@ -22,6 +20,4 @@ public interface QuoteBomStatusService {
    */
   QuoteBomStatusItemResponse checkItemForCostRun(
       String oaNo, Long oaFormItemId, String costPeriodMonth);
-
-  QuoteBomBatchSyncResponse batchSyncFromU9Source(List<Long> oaFormItemIds);
 }

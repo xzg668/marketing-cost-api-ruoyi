@@ -3,59 +3,60 @@ package com.sanhua.marketingcost.service.collaboration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.sanhua.marketingcost.service.collaboration.CollaborationCodes.PrimaryScope;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-@DisplayName("QCBP-06 同月活动任务锁键")
+@DisplayName("QCBP-06 跨报价跨月份活动任务锁键")
 class CollaborationActiveLockKeyFactoryTest {
 
   @Test
   @DisplayName("相同业务维度经空格和大小写归一后得到稳定锁键")
   void createsStableNormalizedKey() {
     String first = CollaborationActiveLockKeyFactory.create(
-        "2026-08", " ab-001 ", null,
-        new CollaborationScope(" commercial ", " 210 "), PrimaryScope.FULL_BOM);
+        " ab-001 ", "MODEL-A", null,
+        new CollaborationScope(" commercial ", " 210 "));
     String replay = CollaborationActiveLockKeyFactory.create(
-        "2026-08", "AB-001", null,
-        new CollaborationScope("COMMERCIAL", "210"), PrimaryScope.FULL_BOM);
+        "AB-001", "MODEL-B", null,
+        new CollaborationScope("COMMERCIAL", "210"));
 
-    assertThat(first).isEqualTo(replay).startsWith("QCBP-ACTIVE-V2:");
+    assertThat(first).isEqualTo(replay).startsWith("QCBP-ACTIVE-V3:");
     assertThat(first).hasSize(79);
   }
 
   @Test
-  @DisplayName("月份、组织和产品变化相互隔离，但同一产品的BOM与价格阶段共用活动任务")
+  @DisplayName("有料号优先按料号锁；不同组织或不同料号相互隔离")
   void isolatesEveryBusinessDimension() {
     CollaborationScope current = new CollaborationScope("COMMERCIAL", "210");
     String baseline = CollaborationActiveLockKeyFactory.create(
-        "2026-08", "AB-001", null, current, PrimaryScope.FULL_BOM);
+        "AB-001", "MODEL-A", null, current);
 
     assertThat(baseline).isNotEqualTo(CollaborationActiveLockKeyFactory.create(
-        "2026-09", "AB-001", null, current, PrimaryScope.FULL_BOM));
+        "AB-001", "MODEL-A", null,
+        new CollaborationScope("COMMERCIAL", "220")));
     assertThat(baseline).isNotEqualTo(CollaborationActiveLockKeyFactory.create(
-        "2026-08", "AB-001", null,
-        new CollaborationScope("COMMERCIAL", "220"), PrimaryScope.FULL_BOM));
-    assertThat(baseline).isNotEqualTo(CollaborationActiveLockKeyFactory.create(
-        "2026-08", "AB-002", null, current, PrimaryScope.FULL_BOM));
+        "AB-002", "MODEL-A", null, current));
     assertThat(baseline).isEqualTo(CollaborationActiveLockKeyFactory.create(
-        "2026-08", "AB-001", null, current, PrimaryScope.PRICE_ONLY));
+        "AB-001", "MODEL-B", "TEMP-2", current));
     assertThat(baseline).isNotEqualTo(CollaborationActiveLockKeyFactory.create(
-        "2026-08", null, "NEW-001", current, PrimaryScope.FULL_BOM));
+        null, "AB-001", "NEW-001", current));
   }
 
   @Test
-  @DisplayName("正式料号为空时使用稳定临时产品键，两者都空则明确拒绝")
-  void supportsTemporaryProductKey() {
-    String key = CollaborationActiveLockKeyFactory.create(
-        "2026-08", null, " new-product-001 ",
-        new CollaborationScope("COMMERCIAL", "210"), PrimaryScope.BARE_PACKAGE);
+  @DisplayName("无料号时同型号跨报价共用锁；型号也为空时才使用稳定临时键")
+  void supportsModelAndTemporaryProductKey() {
+    CollaborationScope scope = new CollaborationScope("COMMERCIAL", "210");
+    String byModel = CollaborationActiveLockKeyFactory.create(
+        null, " model-new-001 ", "OA_FORM_ITEM:1", scope);
+    String sameModelFromAnotherQuote = CollaborationActiveLockKeyFactory.create(
+        null, "MODEL-NEW-001", "OA_FORM_ITEM:2", scope);
+    String byTemporary = CollaborationActiveLockKeyFactory.create(
+        null, null, " new-product-001 ", scope);
 
-    assertThat(key).startsWith("QCBP-ACTIVE-V2:");
+    assertThat(byModel).isEqualTo(sameModelFromAnotherQuote);
+    assertThat(byTemporary).startsWith("QCBP-ACTIVE-V3:");
     assertThatThrownBy(() -> CollaborationActiveLockKeyFactory.create(
-        "2026-08", null, " ",
-        new CollaborationScope("COMMERCIAL", "210"), PrimaryScope.BARE_PACKAGE))
+        null, " ", " ", scope))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("产品料号或临时产品键");
+        .hasMessageContaining("产品料号、型号或临时产品键");
   }
 }

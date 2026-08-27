@@ -86,8 +86,9 @@ public class QuoteRequestCollaborationApplicationService {
         throw new IllegalArgumentException("技术负责人未匹配，不能发起补录");
       }
     }
-    QuoteCollaborationStartResult result = taskService.start(new QuoteCollaborationStartCommand(
-        itemId, technicianId, technicianName, null, null, null, actorProvider.current()));
+    QuoteCollaborationStartResult result = taskService.start(
+        QuoteCollaborationStartCommand.initiatedByCostingOperator(
+            itemId, technicianId, technicianName, null, actorProvider.current()));
     return new QuoteCollaborationStartResponse(result.action().name(), result.idempotentReplay(),
         result.message(), projectionService.project(oaNo, itemId));
   }

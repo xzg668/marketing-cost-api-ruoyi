@@ -28,7 +28,7 @@ class CollaborationCurrentPrincipalProviderTest {
   @Test
   void explicitCollaboratorRoleBecomesTechnician() {
     when(actorProvider.current()).thenReturn(new CollaborationActor(601L, "王工"));
-    authenticate("ROLE_oa_collaborator", "collaboration:task:read");
+    authenticate("ROLE_technical_collaborator", "collaboration:task:read");
 
     CollaborationPrincipal principal = provider.currentTechnician();
 
@@ -46,6 +46,17 @@ class CollaborationCurrentPrincipalProviderTest {
             error -> assertThat(error.code())
                 .isEqualTo(CollaborationDomainErrorCode.TASK_ASSIGNEE_MISMATCH));
     assertThat(provider.current().roles()).containsExactly(CollaborationRole.ADMINISTRATOR);
+  }
+
+  @Test
+  void costingOperatorCanReviewOnlyReviewsAssignedByTheService() {
+    when(actorProvider.current()).thenReturn(new CollaborationActor(701L, "报价员"));
+    authenticate("ROLE_BU_STAFF", "collaboration:review:read");
+
+    CollaborationPrincipal principal = provider.currentFinanceReviewer();
+
+    assertThat(principal.userId()).isEqualTo(701L);
+    assertThat(principal.roles()).containsExactly(CollaborationRole.COSTING_OPERATOR);
   }
 
   private static void authenticate(String... authorities) {

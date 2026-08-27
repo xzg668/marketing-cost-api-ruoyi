@@ -27,4 +27,5 @@ public class ProductCostingResult {
   private String versionNo;
   private BigDecimal totalCost;
   private boolean reusedSuccess;
+  private boolean retryable;
 }

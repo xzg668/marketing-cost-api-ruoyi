@@ -62,7 +62,10 @@ class QuoteRequestCollaborationApplicationServiceTest {
     assertThat(response.resultAction()).isEqualTo("CREATED");
     assertThat(response.item().projectionVersion()).isEqualTo("V2");
     verify(taskService).start(org.mockito.ArgumentMatchers.argThat(command ->
-        Long.valueOf(601L).equals(command.technicianUserId()) && "王工".equals(command.technicianName())));
+        Long.valueOf(601L).equals(command.technicianUserId())
+            && "王工".equals(command.technicianName())
+            && Long.valueOf(901L).equals(command.financeReviewerUserId())
+            && "报价员".equals(command.financeReviewerName())));
   }
 
   @Test
@@ -121,7 +124,8 @@ class QuoteRequestCollaborationApplicationServiceTest {
     assertThat(response.item().assigneeUserId()).isEqualTo(602L);
     verify(taskService).start(org.mockito.ArgumentMatchers.argThat(command ->
         Long.valueOf(602L).equals(command.technicianUserId())
-            && "李工".equals(command.technicianName())));
+            && "李工".equals(command.technicianName())
+            && Long.valueOf(901L).equals(command.financeReviewerUserId())));
   }
 
   @Test

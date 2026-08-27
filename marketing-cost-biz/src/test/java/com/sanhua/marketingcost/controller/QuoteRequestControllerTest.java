@@ -20,7 +20,6 @@ import com.sanhua.marketingcost.dto.quotecosting.QuoteBatchCostRunResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunWorkbenchResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCuMaterialDifferenceResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse;
@@ -209,40 +208,6 @@ class QuoteRequestControllerTest {
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getCurrentDisplayVersion().getId()).isEqualTo(88L);
     verify(quoteCostRunWorkbenchService).getCostRun("OA-T8-001", 101L, null, 88L);
-  }
-
-  @Test
-  void cuMaterialDifferencesReturnsPagedRows() {
-    QuoteCuMaterialDifferenceResponse row = new QuoteCuMaterialDifferenceResponse();
-    row.setMaterialCode("RAW-CU-1");
-    when(
-            quoteCostRunWorkbenchService.pageCuMaterialDifferences(
-                "OA-T8-001",
-                101L,
-                "TRIAL-1",
-                1,
-                20,
-                "MAKE-1",
-                "RAW-CU-1",
-                true,
-                "POSITIVE"))
-        .thenReturn(new PageResult<>(List.of(row), 1L));
-
-    CommonResult<PageResult<QuoteCuMaterialDifferenceResponse>> result =
-        controller.cuMaterialDifferences(
-            "OA-T8-001",
-            101L,
-            "TRIAL-1",
-            1,
-            20,
-            "MAKE-1",
-            "RAW-CU-1",
-            true,
-            "POSITIVE");
-
-    assertThat(result.isSuccess()).isTrue();
-    assertThat(result.getData().getTotal()).isEqualTo(1L);
-    assertThat(result.getData().getList().get(0).getMaterialCode()).isEqualTo("RAW-CU-1");
   }
 
   @Test

@@ -30,6 +30,7 @@ public class CostRunTask {
   private String customerName;
   private String businessUnitType;
   private String pricingMonth;
+  private String sourceRevision;
   private LocalDateTime priceAsOfTime;
   private Long adjustBatchId;
   private String bomSourcePolicy;

@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.config;
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.security.CollaborationPortalGrantCodec;
 import com.sanhua.marketingcost.security.CollaborationSecurityFilter;
 import com.sanhua.marketingcost.security.JwtAuthenticationFilter;
 import jakarta.servlet.http.HttpServletResponse;
@@ -35,7 +36,7 @@ import java.util.List;
  * v1.3 改造：
  * <ul>
  *   <li>启用 {@link EnableMethodSecurity} 以支持 {@code @PreAuthorize("@ss.hasPermi(...)")} 方法级权限</li>
- *   <li>放行 {@code /collaborate/**}，OA 协作者走独立认证（T27 注册 CollaborationSecurityFilter）</li>
+ *   <li>放行 {@code /collaborate/**} 静态门户路由；协作 API 使用请求头令牌认证</li>
  * </ul>
  */
 @Configuration
@@ -44,22 +45,26 @@ import java.util.List;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
-    private final CollaborationSecurityFilter collaborationSecurityFilter;
     private final ObjectMapper objectMapper;
 
     @Value("${app.cors.allowed-origins:http://localhost:5173}")
     private String allowedOrigins;
 
     public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
-                          CollaborationSecurityFilter collaborationSecurityFilter,
                           ObjectMapper objectMapper) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
-        this.collaborationSecurityFilter = collaborationSecurityFilter;
         this.objectMapper = objectMapper;
     }
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public CollaborationPortalGrantCodec collaborationPortalGrantCodec() {
+        return new CollaborationPortalGrantCodec(objectMapper);
+    }
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(
+            HttpSecurity http,
+            CollaborationSecurityFilter collaborationSecurityFilter) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -69,12 +74,12 @@ public class SecurityConfig {
                         // T16：登录页下拉需要公开读取字典（如 biz_unit_type）
                         .requestMatchers(HttpMethod.GET, "/api/v1/system/dict-data/type/*").permitAll()
                         .requestMatchers("/health").permitAll()
-                        // OA 协作者走独立认证链，T27 注册 CollaborationSecurityFilter
+                        // 技术协作者走系统内受限认证链，注册 CollaborationSecurityFilter
                         .requestMatchers("/collaborate/**").permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .anyRequest().authenticated()
                 )
-                // T27：协作者 Token 过滤器优先于 JWT 过滤器，拦截 /collaborate/** 请求
+                // 外部协作门户令牌过滤器优先于 JWT 过滤器。
                 .addFilterBefore(collaborationSecurityFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .exceptionHandling(ex -> ex

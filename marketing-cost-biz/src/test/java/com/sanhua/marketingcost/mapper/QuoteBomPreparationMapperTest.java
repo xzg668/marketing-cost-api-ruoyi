@@ -190,7 +190,6 @@ class QuoteBomPreparationMapperTest extends BomMapperTestBase {
     ref.setOaFormItemId(3001L);
     ref.setQuoteProductCode("110000000001");
     ref.setSourcePartType("REFERENCED_PACKAGE");
-    ref.setSourceTaskId(7001L);
     ref.setPreparationId(record.getId());
     ref.setPackageReferenceId(8001L);
     ref.setPackageReferenceDetailId(8002L);
@@ -223,7 +222,6 @@ class QuoteBomPreparationMapperTest extends BomMapperTestBase {
     record.setCostPeriodMonth("2026-05");
     record.setPreparationStatus("NEED_TECH");
     record.setReviewStatus("PENDING");
-    record.setTaskId(7001L);
     record.setActiveFlag(1);
     return record;
   }
@@ -231,7 +229,6 @@ class QuoteBomPreparationMapperTest extends BomMapperTestBase {
   private QuoteBomPackageReference newPackageReference(Long preparationId) {
     QuoteBomPackageReference reference = new QuoteBomPackageReference();
     reference.setPreparationId(preparationId);
-    reference.setTaskId(7001L);
     reference.setOaNo(oaNo);
     reference.setOaFormItemId(3001L);
     reference.setQuoteProductCode("110000000001");
@@ -252,7 +249,6 @@ class QuoteBomPreparationMapperTest extends BomMapperTestBase {
     QuoteBomPackageReferenceDetail detail = new QuoteBomPackageReferenceDetail();
     detail.setPackageReferenceId(packageReferenceId);
     detail.setPreparationId(preparationId);
-    detail.setTaskId(7001L);
     detail.setOaNo(oaNo);
     detail.setOaFormItemId(3001L);
     detail.setBareProductCode("110000000001");
@@ -293,7 +289,6 @@ class QuoteBomPreparationMapperTest extends BomMapperTestBase {
   private QuoteBomSupplementVersion newSupplementVersion(Long preparationId) {
     QuoteBomSupplementVersion version = new QuoteBomSupplementVersion();
     version.setPreparationId(preparationId);
-    version.setTaskId(7001L);
     version.setTaskNo("QBP-TASK-" + oaNo);
     version.setOaNo(oaNo);
     version.setOaFormItemId(3001L);
@@ -314,7 +309,6 @@ class QuoteBomPreparationMapperTest extends BomMapperTestBase {
     QuoteBomSupplementDetail detail = new QuoteBomSupplementDetail();
     detail.setSupplementVersionId(versionId);
     detail.setPreparationId(preparationId);
-    detail.setTaskId(7001L);
     detail.setOaNo(oaNo);
     detail.setOaFormItemId(3001L);
     detail.setQuoteProductCode("110000000001");

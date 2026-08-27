@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.collaboration;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.collaboration.TechnicalBomCandidateRow;
@@ -23,6 +24,7 @@ import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteCollaborationProductTaskMapper;
 import com.sanhua.marketingcost.mapper.TechnicalBomCandidateMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
+import com.sanhua.marketingcost.security.CollaborationPortalModule;
 import com.sanhua.marketingcost.service.QuoteProductBomPreparationService;
 import com.sanhua.marketingcost.service.impl.BomEffectiveTreePruner;
 import java.math.BigDecimal;
@@ -56,6 +58,7 @@ public class TechnicalBomDraftApplicationService {
   private static final String VERSION_DRAFT = "DRAFT";
   private static final String SOURCE_U9_COPY = "U9_COPY";
   private static final String SOURCE_NEW = "NEW";
+  private static final String SOURCE_ELECTRONIC_EXCEL = "ELECTRONIC_DRAWING_EXCEL";
   private static final BigDecimal ONE = BigDecimal.ONE.setScale(8, RoundingMode.UNNECESSARY);
   private static final Set<String> EDITABLE_STATUSES = Set.of(
       "BOM_IN_PROGRESS", "TECH_VALIDATION_FAILED", "RETURNED_TO_TECH");
@@ -69,6 +72,7 @@ public class TechnicalBomDraftApplicationService {
   private final QuoteBomSupplementDetailMapper detailMapper;
   private final QuoteCollaborationProductTaskMapper productTaskMapper;
   private final QuoteProductBomPreparationService preparationService;
+  private final CollaborationPortalAccessPolicy portalAccessPolicy;
 
   public TechnicalBomDraftApplicationService(
       QuoteCollaborationTaskRepository repository,
@@ -79,7 +83,8 @@ public class TechnicalBomDraftApplicationService {
       QuoteBomSupplementVersionMapper versionMapper,
       QuoteBomSupplementDetailMapper detailMapper,
       QuoteCollaborationProductTaskMapper productTaskMapper,
-      QuoteProductBomPreparationService preparationService) {
+      QuoteProductBomPreparationService preparationService,
+      CollaborationPortalAccessPolicy portalAccessPolicy) {
     this.repository = repository;
     this.principalProvider = principalProvider;
     this.candidateMapper = candidateMapper;
@@ -89,6 +94,7 @@ public class TechnicalBomDraftApplicationService {
     this.detailMapper = detailMapper;
     this.productTaskMapper = productTaskMapper;
     this.preparationService = preparationService;
+    this.portalAccessPolicy = portalAccessPolicy;
   }
 
   @Transactional(readOnly = true)
@@ -134,9 +140,11 @@ public class TechnicalBomDraftApplicationService {
     if (draft == null) throw invalid("请先建立目标BOM草稿");
     if (!draft.exportReady()) throw invalid("完整BOM仍有未补齐节点，不能导出电子图库模板");
     QuoteCollaborationProductTask task = owned.task();
+    MaterialMasterRaw targetMaster = formalMaster(task, trim(task.getProductCode()));
     return new ElectronicBomTemplateSnapshot(task.getId(), task.getTaskVersion(),
         task.getProductCode(), task.getTemporaryProductKey(), task.getProductName(),
-        task.getProductSpec(), task.getProductModel(), task.getMaterialOrgCode(),
+        task.getProductSpec(), task.getProductModel(),
+        targetMaster == null ? null : trim(targetMaster.getDrawingNo()), task.getMaterialOrgCode(),
         task.getPriceOrgCode(), draft);
   }
 
@@ -153,8 +161,10 @@ public class TechnicalBomDraftApplicationService {
         required(task.getPriceOrgCode(), "任务缺少U9报价组织"),
         materialOrganization(task), LocalDate.now(), resolvedKeyword,
         resolvedSpec, resolvedModel, null, null, 30);
+    Set<String> cyclicReferences = cyclicReferenceProducts(task, rows);
     List<TechnicalBomCandidateSearchResponse.Candidate> candidates = rows.stream()
         .filter(row -> !Objects.equals(trim(row.getProductCode()), trim(task.getProductCode())))
+        .filter(row -> !cyclicReferences.contains(trim(row.getProductCode())))
         .map(row -> new TechnicalBomCandidateSearchResponse.Candidate(
             row.getProductCode(), row.getProductName(), row.getProductSpec(), row.getProductModel(),
             row.getBomPurpose(), row.getBomVersion(), value(row.getBomNodeCount()),
@@ -225,7 +235,32 @@ public class TechnicalBomDraftApplicationService {
     List<DraftNode> nodes = fromRequest(request, existingByNode, owned.task());
     validateStructure(nodes);
     validateNodeFields(nodes, owned.task());
-    return persist(owned, nodes, sourceMode(existing), referenceProduct(existing));
+    QuoteBomSupplementVersion currentVersion =
+        versionMapper.selectById(owned.task().getSupplementVersionId());
+    return persist(owned, nodes, sourceMode(currentVersion, existing), referenceProduct(existing));
+  }
+
+  /**
+   * 保存电子图库 Excel 的候选草稿。未完成料号匹配的节点以独立临时代码保存，便于刷新后继续处理；
+   * 只有后续全部映射并通过正式结构校验后，才允许提交审核和参与核算。
+   */
+  @Transactional
+  public TechnicalBomDraftResponse replaceFromElectronicDrawingExcel(
+      Long taskId,
+      Integer expectedTaskVersion,
+      List<ImportedNode> importedNodes) {
+    OwnedTask owned = ownedTask(taskId, true);
+    requireVersion(owned.task(), expectedTaskVersion);
+    if (importedNodes == null || importedNodes.isEmpty()) throw invalid("电子图库候选BOM不能为空");
+    List<DraftNode> nodes = importedNodes.stream().map(row -> new DraftNode(
+        required(row.nodeId(), "节点ID不能为空"), trim(row.parentNodeId()),
+        firstText(row.materialCode(), temporaryCode(owned.task().getId())),
+        trim(row.materialName()), trim(row.materialSpec()), trim(row.materialModel()),
+        trim(row.drawingNo()), materialNature(row.materialNature(), true), row.quantity(),
+        trim(row.unit()), row.sortSeq(), true, null, null, null, null,
+        trim(row.sourceRemark()))).toList();
+    validateStructure(nodes);
+    return persist(owned, nodes, SOURCE_ELECTRONIC_EXCEL, null);
   }
 
   private TechnicalBomDraftResponse persist(
@@ -235,7 +270,7 @@ public class TechnicalBomDraftApplicationService {
     List<TechnicalBomDraftResponse.Issue> issues = completionIssues(normalized.nodes());
     Long preparationId = ensurePreparation(task);
     QuoteBomSupplementVersion version = loadOrCreateVersion(
-        task, owned.principal(), owned.ownerLink(), preparationId);
+        task, owned.principal(), owned.ownerLink(), preparationId, sourceMode);
     replaceDetails(version, task, owned.ownerLink(), normalized.nodes());
     int updated = productTaskMapper.attachBomDraft(task.getId(), task.getTaskVersion(),
         preparationId, version.getId(), owned.principal().userId(), task.getBusinessUnitType(),
@@ -260,7 +295,7 @@ public class TechnicalBomDraftApplicationService {
     }
     List<QuoteBomSupplementDetail> rows = details(version.getId());
     List<DraftNode> nodes = fromStored(rows);
-    return response(version.getId(), task.getTaskVersion(), sourceMode(rows),
+    return response(version.getId(), task.getTaskVersion(), sourceMode(version, rows),
         referenceProduct(rows), nodes, completionIssues(nodes));
   }
 
@@ -268,24 +303,24 @@ public class TechnicalBomDraftApplicationService {
       QuoteCollaborationProductTask task,
       CollaborationPrincipal principal,
       QuoteCollaborationQuoteLink ownerLink,
-      Long preparationId) {
+      Long preparationId,
+      String sourceMode) {
     QuoteBomSupplementVersion version = task.getSupplementVersionId() == null
         ? null : versionMapper.selectById(task.getSupplementVersionId());
     LocalDateTime now = LocalDateTime.now();
     if (version == null) {
       version = new QuoteBomSupplementVersion();
       version.setPreparationId(preparationId);
-      // 新产品协作任务仅保存 version.id；不占用旧 lp_bom_supplement_task 的 task_id 命名空间。
-      version.setTaskId(null);
       version.setTaskNo(task.getProductTaskNo());
       version.setOaNo(ownerLink.getOaNo());
       version.setOaFormItemId(ownerLink.getOaFormItemId());
       version.setQuoteProductCode(targetCode(task));
       version.setProductType("NON_BARE");
       version.setSupplementScope(SCOPE);
-      version.setBomSource("TECH_SUPPLEMENT");
       version.setVersionNo(1);
       version.setVersionStatus(VERSION_DRAFT);
+      version.setBomSource(SOURCE_ELECTRONIC_EXCEL.equals(sourceMode)
+          ? SOURCE_ELECTRONIC_EXCEL : "TECH_SUPPLEMENT");
       version.setActiveFlag(1);
       version.setPeriodMonth(task.getAccountingMonth());
       version.setEffectiveFrom(LocalDate.now());
@@ -319,7 +354,6 @@ public class TechnicalBomDraftApplicationService {
       QuoteBomSupplementDetail detail = new QuoteBomSupplementDetail();
       detail.setSupplementVersionId(version.getId());
       detail.setPreparationId(version.getPreparationId());
-      detail.setTaskId(null);
       detail.setOaNo(ownerLink.getOaNo());
       detail.setOaFormItemId(ownerLink.getOaFormItemId());
       detail.setQuoteProductCode(targetCode(task));
@@ -342,7 +376,7 @@ public class TechnicalBomDraftApplicationService {
       detail.setSourceRawHierarchyId(node.sourceRawHierarchyId());
       detail.setSourceU9BomId(node.sourceU9BomId());
       detail.setManualFlag(node.changed() ? 1 : 0);
-      detail.setRemark(node.changed() ? "CHANGED" : "SOURCE");
+      detail.setRemark(firstText(node.sourceRemark(), node.changed() ? "CHANGED" : "SOURCE"));
       detail.setCreatedAt(now);
       detail.setUpdatedAt(now);
       if (detailMapper.insert(detail) != 1) throw invalid("BOM草稿明细保存失败");
@@ -443,7 +477,8 @@ public class TechnicalBomDraftApplicationService {
           trim(row.drawingNo()), materialNature(row.materialNature(), true),
           row.quantity(), trim(row.unit()), row.sortSeq(), row.changed(),
           old == null ? null : old.getSourceRawHierarchyId(),
-          old == null ? null : old.getSourceU9BomId(), null, null));
+          old == null ? null : old.getSourceU9BomId(), null, null,
+          old == null ? null : old.getRemark()));
     }
     return nodes;
   }
@@ -462,7 +497,7 @@ public class TechnicalBomDraftApplicationService {
           value(row.getLevel()) == 0 ? BigDecimal.ONE : positiveOrOne(row.getQtyPerParent()),
           row.getUnit(), row.getSortSeq(), value(row.getManualFlag()) == 1,
           row.getSourceRawHierarchyId(), row.getSourceU9BomId(), row.getPath(),
-          row.getQtyPerTop()));
+          row.getQtyPerTop(), row.getRemark()));
     }
     return nodes;
   }
@@ -501,7 +536,8 @@ public class TechnicalBomDraftApplicationService {
         node.internalMaterialCode(), node.materialName(), node.materialSpec(), node.materialModel(),
         node.drawingNo(), node.nature(), quantity, node.unit(), node.sortSeq(), node.changed(),
         node.sourceRawHierarchyId(), node.sourceU9BomId(), path, toTop,
-        parent == null ? node.internalMaterialCode() : parent.internalMaterialCode(), level);
+        parent == null ? node.internalMaterialCode() : parent.internalMaterialCode(), level,
+        node.sourceRemark());
     output.add(normalized);
     for (DraftNode child : children.getOrDefault(node.nodeId(), List.of())) {
       normalizeNode(child, normalized, level + 1, toTop, children, output, visiting);
@@ -518,6 +554,12 @@ public class TechnicalBomDraftApplicationService {
     }
     List<DraftNode> roots = nodes.stream().filter(node -> node.parentNodeId() == null).toList();
     if (roots.size() != 1) throw invalid("完整BOM必须且只能有一个根节点");
+    String rootMaterialCode = trim(roots.get(0).internalMaterialCode());
+    if (rootMaterialCode != null && nodes.stream()
+        .anyMatch(node -> node.parentNodeId() != null
+            && rootMaterialCode.equals(trim(node.internalMaterialCode())))) {
+      throw invalid("BOM下级不能再次包含当前产品，否则会形成循环BOM：" + rootMaterialCode);
+    }
     Map<String, Set<String>> childKeys = new HashMap<>();
     for (DraftNode node : nodes) {
       if (node.parentNodeId() != null && !byId.containsKey(node.parentNodeId())) {
@@ -587,6 +629,11 @@ public class TechnicalBomDraftApplicationService {
         .collect(Collectors.groupingBy(DraftNode::parentNodeId, Collectors.counting()));
     List<TechnicalBomDraftResponse.Issue> issues = new ArrayList<>();
     for (DraftNode node : nodes) {
+      if (node.nature() == MaterialNature.PURCHASE
+          && childCount.getOrDefault(node.nodeId(), 0L) > 0) {
+        issues.add(new TechnicalBomDraftResponse.Issue(node.nodeId(), "PURCHASE_HAS_CHILDREN",
+            "采购件不能继续挂下级：" + displayMaterial(node)));
+      }
       if (node.nature().requiresChildren && childCount.getOrDefault(node.nodeId(), 0L) == 0) {
         issues.add(new TechnicalBomDraftResponse.Issue(node.nodeId(), "CHILD_REQUIRED",
             node.nature().label + "必须继续补下级：" + displayMaterial(node)));
@@ -624,12 +671,39 @@ public class TechnicalBomDraftApplicationService {
     return rows;
   }
 
+  private Set<String> cyclicReferenceProducts(
+      QuoteCollaborationProductTask task, List<TechnicalBomCandidateRow> candidates) {
+    String targetProduct = trim(task.getProductCode());
+    Set<String> referenceProducts = candidates == null ? Set.of() : candidates.stream()
+        .map(TechnicalBomCandidateRow::getProductCode)
+        .map(TechnicalBomDraftApplicationService::trim)
+        .filter(Objects::nonNull)
+        .collect(Collectors.toCollection(LinkedHashSet::new));
+    if (targetProduct == null || referenceProducts.isEmpty()) return Set.of();
+    QueryWrapper<BomRawHierarchy> query = new QueryWrapper<>();
+    query.select("top_product_code")
+        .eq("price_org_code", task.getPriceOrgCode())
+        .eq("source_type", "U9")
+        .in("top_product_code", referenceProducts)
+        .eq("material_code", targetProduct)
+        .gt("level", 0)
+        .le("effective_from", LocalDate.now())
+        .and(wrapper -> wrapper.isNull("effective_to").or()
+            .ge("effective_to", LocalDate.now()));
+    return rawHierarchyMapper.selectList(query).stream()
+        .map(BomRawHierarchy::getTopProductCode)
+        .map(TechnicalBomDraftApplicationService::trim)
+        .filter(Objects::nonNull)
+        .collect(Collectors.toSet());
+  }
+
   private OwnedTask ownedTask(Long taskId, boolean requireEditable) {
     CollaborationPrincipal principal = principalProvider.currentTechnician();
     QuoteCollaborationProductTask task = repository.findMineById(
         requireId(taskId), principal.userId(), currentBusinessUnit()).orElseThrow(
             () -> new CollaborationDomainException(
                 CollaborationDomainErrorCode.TASK_NOT_FOUND, "技术任务不存在"));
+    portalAccessPolicy.requireTask(task, CollaborationPortalModule.BOM);
     if (value(task.getNeedBom()) != 1) throw invalid("当前任务不是BOM补录任务");
     if (requireEditable && (!EDITABLE_STATUSES.contains(task.getTaskStatus())
         || !Objects.equals(task.getCurrentAssigneeUserId(), principal.userId()))) {
@@ -732,6 +806,12 @@ public class TechnicalBomDraftApplicationService {
   private String sourceMode(List<QuoteBomSupplementDetail> rows) {
     return rows.stream().anyMatch(row -> row.getSourceRawHierarchyId() != null)
         ? SOURCE_U9_COPY : SOURCE_NEW;
+  }
+
+  private String sourceMode(
+      QuoteBomSupplementVersion version, List<QuoteBomSupplementDetail> rows) {
+    return version != null && SOURCE_ELECTRONIC_EXCEL.equals(trim(version.getBomSource()))
+        ? SOURCE_ELECTRONIC_EXCEL : sourceMode(rows);
   }
 
   private String referenceProduct(List<QuoteBomSupplementDetail> rows) {
@@ -918,9 +998,25 @@ public class TechnicalBomDraftApplicationService {
       String productName,
       String productSpec,
       String productModel,
+      String productDrawingNo,
       String materialOrganizationCode,
       String priceOrganizationCode,
       TechnicalBomDraftResponse draft) {}
+
+  /** 电子图库导入服务传入的最小草稿节点；sourceRemark 仅保存来源核对信息。 */
+  public record ImportedNode(
+      String nodeId,
+      String parentNodeId,
+      String materialCode,
+      String materialName,
+      String materialSpec,
+      String materialModel,
+      String drawingNo,
+      String materialNature,
+      BigDecimal quantity,
+      String unit,
+      Integer sortSeq,
+      String sourceRemark) {}
 
   private record NormalizedTree(List<DraftNode> nodes) {}
 
@@ -942,7 +1038,8 @@ public class TechnicalBomDraftApplicationService {
       String path,
       BigDecimal quantityToTop,
       String parentMaterialCode,
-      Integer level) {
+      Integer level,
+      String sourceRemark) {
 
     DraftNode(
         String nodeId,
@@ -963,7 +1060,30 @@ public class TechnicalBomDraftApplicationService {
         BigDecimal quantityToTop) {
       this(nodeId, parentNodeId, internalMaterialCode, materialName, materialSpec,
           materialModel, drawingNo, nature, quantity, unit, sortSeq, changed,
-          sourceRawHierarchyId, sourceU9BomId, path, quantityToTop, null, null);
+          sourceRawHierarchyId, sourceU9BomId, path, quantityToTop, null, null, null);
+    }
+
+    DraftNode(
+        String nodeId,
+        String parentNodeId,
+        String internalMaterialCode,
+        String materialName,
+        String materialSpec,
+        String materialModel,
+        String drawingNo,
+        MaterialNature nature,
+        BigDecimal quantity,
+        String unit,
+        Integer sortSeq,
+        boolean changed,
+        Long sourceRawHierarchyId,
+        Long sourceU9BomId,
+        String path,
+        BigDecimal quantityToTop,
+        String sourceRemark) {
+      this(nodeId, parentNodeId, internalMaterialCode, materialName, materialSpec,
+          materialModel, drawingNo, nature, quantity, unit, sortSeq, changed,
+          sourceRawHierarchyId, sourceU9BomId, path, quantityToTop, null, null, sourceRemark);
     }
   }
 }

@@ -41,9 +41,7 @@ import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.service.QuoteEffectiveBomCostingService;
-import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.QuoteProductBomPreparationService;
-import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomFeatureSwitch;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
@@ -74,7 +72,6 @@ class QuoteCostingWorkbenchServiceImplTest {
   private MaterialMasterRawMapper materialMasterRawMapper;
   private QuoteCostingWorkbenchSummaryMapper workbenchSummaryMapper;
   private QuotePriceTypeRecognitionService priceTypeRecognitionService;
-  private QuoteProductBomCostingBuildService costingBuildService;
   private QuoteProductBomPreparationService bomPreparationService;
   private QuoteEffectiveBomCostingService effectiveBomCostingService;
   private QuoteCostingWorkspaceService workspaceService;
@@ -102,7 +99,6 @@ class QuoteCostingWorkbenchServiceImplTest {
     materialMasterRawMapper = mock(MaterialMasterRawMapper.class);
     workbenchSummaryMapper = mock(QuoteCostingWorkbenchSummaryMapper.class);
     priceTypeRecognitionService = mock(QuotePriceTypeRecognitionService.class);
-    costingBuildService = mock(QuoteProductBomCostingBuildService.class);
     bomPreparationService = mock(QuoteProductBomPreparationService.class);
     effectiveBomCostingService = mock(QuoteEffectiveBomCostingService.class);
     workspaceService = mock(QuoteCostingWorkspaceService.class);
@@ -124,12 +120,10 @@ class QuoteCostingWorkbenchServiceImplTest {
             bomCostingRowSubRefMapper,
             materialMasterRawMapper,
             workbenchSummaryMapper,
-            costingBuildService,
             bomPreparationService,
             effectiveBomCostingService,
             workspaceService,
             costRunVersionInvalidationService,
-            new QuoteEffectiveBomFeatureSwitch(true),
             quoteBomStatusService,
             mock(com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate.class),
             priceTypeRecognitionService);
@@ -146,7 +140,6 @@ class QuoteCostingWorkbenchServiceImplTest {
     QuoteCostingWorkbenchResponse response = service.getWorkbench("OA-001", 10L);
 
     assertThat(response.getSnapshotGenerated()).isFalse();
-    assertThat(response.getEffectiveBomEnabled()).isTrue();
     assertThat(response.getPeriodMonth()).isEqualTo(SAMPLE_PERIOD_MONTH);
     assertThat(response.getBomRows()).hasSize(1);
     assertThat(response.getBomRows().get(0).getOaFormItemId()).isEqualTo(10L);
@@ -158,7 +151,6 @@ class QuoteCostingWorkbenchServiceImplTest {
         .containsExactly("DONE", "DONE", "PENDING", "BLOCKED", "BLOCKED");
     assertThat(response.getWorkflowStatus().getCurrentBlockedStep())
         .isEqualTo("PRICE_TYPE_CONFIRMATION");
-    verify(costingBuildService, never()).buildByOaFormItem(any());
   }
 
   @Test
@@ -277,8 +269,6 @@ class QuoteCostingWorkbenchServiceImplTest {
 
     assertThat(response.getSnapshotGenerated()).isFalse();
     assertThat(response.getBomRows()).isEmpty();
-    verify(costingBuildService, never())
-        .buildByOaFormItem(anyLong(), anyString(), any(LocalDate.class));
   }
 
   @Test
@@ -309,7 +299,6 @@ class QuoteCostingWorkbenchServiceImplTest {
       assertThat(row.getQtyPerTop()).isEqualByComparingTo("5.00000000");
       assertThat(row.getPath()).isEqualTo("/FIN-001/HISTORY-PARENT/HISTORY-MAT/");
     });
-    verify(costingBuildService, never()).buildByOaFormItem(any());
   }
 
   @Test
@@ -362,6 +351,7 @@ class QuoteCostingWorkbenchServiceImplTest {
     QuoteCostingWorkbenchResponse response = service.launchWorkbench("OA-001", 10L);
 
     assertThat(response.getSnapshotGenerated()).isFalse();
+    assertThat(response.getCostingWorkspace().getProductCode()).isEqualTo("FIN-001");
     assertThat(response.getCostingWorkspace().getWorkspaceStatus()).isEqualTo("WAIT_BOM");
     assertThat(response.getWorkflowStatus().getQuoteBomStatus()).isEqualTo("BLOCKED");
     assertThat(workspace.getCurrentBomBuildBatchId()).isEqualTo("BOM-BUILD-OLD");
@@ -418,8 +408,6 @@ class QuoteCostingWorkbenchServiceImplTest {
         null,
         false,
         0,
-        null,
-        null,
         null,
         null,
         null,
@@ -624,7 +612,6 @@ class QuoteCostingWorkbenchServiceImplTest {
         .thenReturn(
             new QuoteBomCostingBuildResponse(
                 201L,
-                null,
                 10L,
                 "OA-001",
                 "FIN-001",
@@ -703,7 +690,6 @@ class QuoteCostingWorkbenchServiceImplTest {
     verify(workbenchSummaryMapper)
         .selectLatestCostRun(
             SAMPLE_OA_NO, SAMPLE_OA_FORM_ITEM_ID, SAMPLE_PRODUCT_CODE, SAMPLE_PERIOD_MONTH);
-    verify(costingBuildService, never()).buildByOaFormItem(any());
   }
 
   private OaForm form() {
@@ -859,7 +845,6 @@ class QuoteCostingWorkbenchServiceImplTest {
   private QuoteBomCostingBuildResponse buildResponse(String buildBatchId) {
     return new QuoteBomCostingBuildResponse(
         201L,
-        null,
         10L,
         "OA-001",
         "FIN-001",

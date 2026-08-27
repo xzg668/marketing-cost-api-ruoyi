@@ -56,7 +56,7 @@ class QuoteBomReuseKeyTest {
                 QuoteBomReuseKey.from(
                     resolver.resolve(form("CUST"), item(" ", "CUST", "BOX"))))
         .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("产品料号为空");
+        .hasMessageContaining("产品料号、三花型号和客户图号均为空");
   }
 
   private OaForm form(String customer) {

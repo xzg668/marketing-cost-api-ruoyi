@@ -49,7 +49,7 @@ public class CollaborationBomAvailabilityResolver {
     if (u9Availability != null && u9Availability.isAvailable()) return null;
     if ("FULL_BOM".equals(row.scope()) && row.supplementVersionId() != null
         && row.fingerprint() != null && !row.fingerprint().isBlank()) {
-      return available("ELECTRONIC_DRAWING_BOM", "完整BOM", "ED-"
+      return available("ELECTRONIC_DRAWING_BOM", "主制造", "ED-"
           + row.supplementVersionId(), "SUPPLEMENT_VERSION:" + row.supplementVersionId(), period);
     }
     return BomAvailability.unavailable("协作已完成，但缺少可核算的审核BOM来源");

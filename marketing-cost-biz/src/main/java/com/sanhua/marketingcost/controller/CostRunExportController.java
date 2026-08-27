@@ -36,7 +36,7 @@ public class CostRunExportController {
     this.jjbExportService = jjbExportService;
   }
 
-  @PreAuthorize("@ss.hasPermi('cost:run:export')")
+  @PreAuthorize("@ss.hasPermi('ingest:quote:list')")
   @GetMapping("/{oaNo}/export-jjb")
   public void exportJjb(
       @PathVariable("oaNo") String oaNo,

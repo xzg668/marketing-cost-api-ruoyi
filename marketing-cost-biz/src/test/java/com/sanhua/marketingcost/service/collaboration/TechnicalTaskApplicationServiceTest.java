@@ -9,7 +9,6 @@ import static org.mockito.Mockito.when;
 import com.sanhua.marketingcost.entity.QuoteCollaborationProductTask;
 import com.sanhua.marketingcost.entity.QuoteCollaborationReviewItem;
 import com.sanhua.marketingcost.entity.QuoteCollaborationGap;
-import com.sanhua.marketingcost.mapper.IntegrationOutboxMapper;
 import com.sanhua.marketingcost.mapper.QuoteCollaborationReviewItemMapper;
 import java.util.List;
 import java.util.Map;
@@ -34,14 +33,15 @@ class TechnicalTaskApplicationServiceTest {
       mock(CollaborationProductStateService.class);
   private final QuotePriceDraftRepository draftRepository = mock(QuotePriceDraftRepository.class);
   private final TechnicalTaskValidator validator = new TechnicalTaskValidator(draftRepository);
-  private final IntegrationOutboxMapper outboxMapper = mock(IntegrationOutboxMapper.class);
+  private final CollaborationTaskLogService taskLogService = mock(CollaborationTaskLogService.class);
   private final QuoteCollaborationReviewItemMapper reviewItemMapper =
       mock(QuoteCollaborationReviewItemMapper.class);
   private final TechnicalSubmissionCoordinator submissionCoordinator =
       mock(TechnicalSubmissionCoordinator.class);
   private final TechnicalTaskApplicationService service = new TechnicalTaskApplicationService(
       repository, principalProvider, nextActionCalculator, stateService, validator,
-      submissionCoordinator, outboxMapper, reviewItemMapper);
+      submissionCoordinator, taskLogService, reviewItemMapper,
+      new CollaborationPortalAccessPolicy());
   private final CollaborationPrincipal wang = new CollaborationPrincipal(
       601L, "王工", Set.of(CollaborationRole.TECHNICIAN));
 

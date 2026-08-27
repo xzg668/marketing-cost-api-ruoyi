@@ -19,8 +19,7 @@ public class CollaborationProductStateService {
   private final CollaborationAuthorization authorization;
   private final CollaborationNextActionCalculator nextActionCalculator;
   private final CollaborationResponsibilityRules responsibilityRules;
-  private final CollaborationTransitionEventFactory eventFactory;
-  private final CollaborationEventService eventService;
+  private final CollaborationTaskLogService taskLogService;
   private final CollaborationLinkedQuoteRecheckService linkedQuoteRecheckService;
 
   public CollaborationProductStateService(
@@ -28,15 +27,13 @@ public class CollaborationProductStateService {
       CollaborationAuthorization authorization,
       CollaborationNextActionCalculator nextActionCalculator,
       CollaborationResponsibilityRules responsibilityRules,
-      CollaborationTransitionEventFactory eventFactory,
-      CollaborationEventService eventService,
+      CollaborationTaskLogService taskLogService,
       CollaborationLinkedQuoteRecheckService linkedQuoteRecheckService) {
     this.repository = repository;
     this.authorization = authorization;
     this.nextActionCalculator = nextActionCalculator;
     this.responsibilityRules = responsibilityRules;
-    this.eventFactory = eventFactory;
-    this.eventService = eventService;
+    this.taskLogService = taskLogService;
     this.linkedQuoteRecheckService = linkedQuoteRecheckService;
   }
 
@@ -64,10 +61,10 @@ public class CollaborationProductStateService {
           assignment.userId(), assignment.userName(), scope, principal.actor());
       responsibilityRules.requireConsistent(updated, master);
       CollaborationNextAction nextAction = nextActionCalculator.calculate(updated, principal);
-      eventFactory.productTransition(updated, master, source, action, nextAction,
-              action == ProductAction.FAIL_TECH_VALIDATION
-                  ? repository.findGaps(updated.getId(), scope) : java.util.List.of())
-          .ifPresent(eventService::append);
+      String eventType = eventType(action);
+      if (eventType != null) {
+        taskLogService.record(updated, eventType, eventDescription(action));
+      }
       if (target == ProductTaskStatus.READY_FOR_COSTING) {
         linkedQuoteRecheckService.startLinkedQuoteRechecks(
             updated.getId(), scope, principal);
@@ -79,6 +76,40 @@ public class CollaborationProductStateService {
     } catch (CollaborationOptimisticLockException exception) {
       throw versionConflict();
     }
+  }
+
+  private static String eventType(ProductAction action) {
+    return switch (action) {
+      case START_BOM, START_PACKAGE, START_PRICE,
+          FAIL_TECH_VALIDATION, RETRY_BOM, RETRY_PACKAGE, RETRY_PRICE,
+          CONTINUE_PRICE_AFTER_BOM, CONTINUE_PRICE_AFTER_PACKAGE -> "TECH_TASK_UPDATED";
+      case SUBMIT_TECH -> "TECH_TASK_COMPLETED";
+      case REJECT_TO_TECH, RETURN_BUSINESS_GAP_TO_TECH -> "TECH_TASK_REOPENED";
+      case FAIL_PUBLISH_OR_REPRICE -> "SYSTEM_SYNC_FAILED";
+      case START_COSTING -> "COSTING_STARTED";
+      case COMPLETE_COSTING -> "COSTING_COMPLETED";
+      case CANCEL -> "COLLABORATION_CANCELLED";
+      case ROUTE_TO_FINANCE, APPROVE_FOR_PUBLISHING,
+          RETRY_PUBLISH_OR_REPRICE, MARK_READY_FOR_COSTING -> null;
+    };
+  }
+
+  private static String eventDescription(ProductAction action) {
+    return switch (action) {
+      case START_BOM -> "开始补录 BOM";
+      case START_PACKAGE -> "开始补录包装";
+      case START_PRICE -> "开始补录价格";
+      case SUBMIT_TECH -> "技术补录已提交";
+      case REJECT_TO_TECH, RETURN_BUSINESS_GAP_TO_TECH -> "任务已退回技术修改";
+      case START_COSTING -> "已进入成本核算";
+      case COMPLETE_COSTING -> "成本核算已完成";
+      case CANCEL -> "协作任务已取消";
+      case FAIL_TECH_VALIDATION -> "技术补录校验未通过";
+      case FAIL_PUBLISH_OR_REPRICE -> "发布或重算失败";
+      case RETRY_BOM, RETRY_PACKAGE, RETRY_PRICE,
+          CONTINUE_PRICE_AFTER_BOM, CONTINUE_PRICE_AFTER_PACKAGE -> "技术处理状态已更新";
+      default -> "协作任务状态已更新";
+    };
   }
 
   private void requireUniqueStartAction(

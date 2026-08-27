@@ -14,7 +14,6 @@ public class QuoteBomPackageReference {
   @TableId(type = IdType.AUTO)
   private Long id;
   private Long preparationId;
-  private Long taskId;
   private String oaNo;
   private Long oaFormItemId;
   private String quoteProductCode;

@@ -6,11 +6,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
-import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
-import com.sanhua.marketingcost.mapper.QuoteCuMaterialDiffItemMapper;
 import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.QuoteCostRunWorkbenchService;
@@ -33,7 +31,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContextHolder;
 
 @Tag("integration")
-@DisplayName("FCQ-10 单产品查询与差异导出真实数据库契约")
+@DisplayName("FCQ-10 单产品冻结版本导出真实数据库契约")
 class QuoteCostRunWorkbenchQueryIntegrationTest extends BomMapperTestBase {
 
   private static final String BUSINESS_UNIT = "COMMERCIAL";
@@ -42,7 +40,6 @@ class QuoteCostRunWorkbenchQueryIntegrationTest extends BomMapperTestBase {
   @Autowired private OaFormMapper oaFormMapper;
   @Autowired private OaFormItemMapper oaFormItemMapper;
   @Autowired private QuoteCostRunVersionMapper versionMapper;
-  @Autowired private QuoteCuMaterialDiffItemMapper diffItemMapper;
   @Autowired private JdbcTemplate jdbcTemplate;
 
   private final String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 10);
@@ -108,15 +105,11 @@ class QuoteCostRunWorkbenchQueryIntegrationTest extends BomMapperTestBase {
     assertThat(versionMapper.insert(version)).isEqualTo(1);
     versionId = version.getId();
 
-    insertDifference(1, "MAKE-1", "RAW-CU-1", "24.07800000");
-    insertDifference(2, "MAKE-2", "RAW-CU-2", "-1.50000000");
-    insertDifference(3, "MAKE-3", "RAW-NONCU-1", "0.00000000");
   }
 
   @AfterEach
   void cleanRows() {
     SecurityContextHolder.clearContext();
-    jdbcTemplate.update("DELETE FROM lp_quote_cu_material_diff_item WHERE cost_run_no = ?", costRunNo);
     jdbcTemplate.update("DELETE FROM lp_quote_cost_run_version WHERE cost_run_no = ?", costRunNo);
     if (itemId != null) {
       jdbcTemplate.update("DELETE FROM oa_form_item WHERE id = ?", itemId);
@@ -127,24 +120,8 @@ class QuoteCostRunWorkbenchQueryIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
-  @DisplayName("历史分页读取冻结值，导出只含一张成本汇总，切换BU后拒绝访问")
-  void readsFrozenRowsForPageAndExportAndRejectsCrossBusinessUnit() throws Exception {
-    var firstPage =
-        service.pageCuMaterialDifferences(
-            oaNo, itemId, costRunNo, 1, 2, null, null, false, null);
-    var secondPage =
-        service.pageCuMaterialDifferences(
-            oaNo, itemId, costRunNo, 2, 2, null, null, false, null);
-    var positive =
-        service.pageCuMaterialDifferences(
-            oaNo, itemId, costRunNo, 1, 20, "MAKE-1", "RAW-CU-1", true, "POSITIVE");
-
-    assertThat(firstPage.getTotal()).isEqualTo(3L);
-    assertThat(firstPage.getList()).hasSize(2);
-    assertThat(secondPage.getList()).hasSize(1);
-    assertThat(positive.getTotal()).isEqualTo(1L);
-    assertThat(positive.getList().get(0).getDiffAmount()).isEqualByComparingTo("24.07800000");
-
+  @DisplayName("导出只含一张成本汇总，切换BU后拒绝访问")
+  void exportsSummaryAndRejectsCrossBusinessUnit() throws Exception {
     QuoteCostRunVersion storedVersion = versionMapper.selectById(versionId);
     ByteArrayOutputStream output = new ByteArrayOutputStream();
     assertThat(service.exportVersion(oaNo, itemId, versionId, output)).isEqualTo(1);
@@ -159,42 +136,9 @@ class QuoteCostRunWorkbenchQueryIntegrationTest extends BomMapperTestBase {
 
     authenticate("HOUSEHOLD");
     assertThatThrownBy(
-            () ->
-                service.pageCuMaterialDifferences(
-                    oaNo, itemId, costRunNo, 1, 20, null, null, false, null))
-        .isInstanceOf(QuoteIngestException.class)
-        .hasMessageMatching(".*(无权访问|不存在).*");
-    assertThatThrownBy(
             () -> service.exportVersion(oaNo, itemId, versionId, new ByteArrayOutputStream()))
         .isInstanceOf(QuoteIngestException.class)
         .hasMessageMatching(".*(无权访问|不存在).*");
-  }
-
-  private void insertDifference(
-      int lineNo, String parentMaterialCode, String materialCode, String diffAmount) {
-    QuoteCuMaterialDiffItem row = new QuoteCuMaterialDiffItem();
-    row.setCostRunVersionId(versionId);
-    row.setCostRunNo(costRunNo);
-    row.setLineNo(lineNo);
-    row.setSettlementKey("SET:FCQ10:" + suffix + ":" + lineNo);
-    row.setDetailLevel("RAW_COMPONENT");
-    row.setContributesToAdjustment(lineNo == 1 ? 1 : 0);
-    row.setTopProductCode("TOP-FCQ10");
-    row.setParentMaterialCode(parentMaterialCode);
-    row.setMaterialCode(materialCode);
-    row.setMaterialName("FCQ10材料" + lineNo);
-    row.setQuantity(new BigDecimal("2.00000000"));
-    row.setFinanceUnitPrice(new BigDecimal("90.00000000"));
-    row.setOaUnitPrice(new BigDecimal("102.03900000"));
-    row.setFinanceAmount(new BigDecimal("261.12800000"));
-    row.setOaAmount(new BigDecimal("285.20600000"));
-    row.setDiffAmount(new BigDecimal(diffAmount));
-    row.setCuAffected(lineNo == 3 ? 0 : 1);
-    row.setPriceFormulaRefType("MAKE_PART_COMPONENT");
-    row.setPriceFormulaRefId(9000L + lineNo);
-    row.setTraceJson("{\"lineNo\":" + lineNo + "}");
-    row.setBusinessUnitType(BUSINESS_UNIT);
-    assertThat(diffItemMapper.insert(row)).isEqualTo(1);
   }
 
   private void authenticate(String businessUnitType) {

@@ -36,7 +36,7 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
               AND u.status = '0'
               AND u.business_unit_type = #{businessUnitType}
               AND (u.user_name = #{identity} OR u.nick_name = #{identity})
-              AND LOWER(r.role_key) = 'oa_collaborator'
+              AND LOWER(r.role_key) = 'technical_collaborator'
               AND r.status = '0' AND r.del_flag = '0'
             ORDER BY u.user_id
             """)
@@ -53,7 +53,7 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
               AND u.del_flag = '0'
               AND u.status = '0'
               AND u.business_unit_type = #{businessUnitType}
-              AND LOWER(r.role_key) = 'oa_collaborator'
+              AND LOWER(r.role_key) = 'technical_collaborator'
               AND r.status = '0' AND r.del_flag = '0'
             LIMIT 1
             """)
@@ -70,7 +70,7 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
             WHERE u.del_flag = '0'
               AND u.status = '0'
               AND u.business_unit_type = #{businessUnitType}
-              AND LOWER(r.role_key) = 'oa_collaborator'
+              AND LOWER(r.role_key) = 'technical_collaborator'
               AND r.status = '0' AND r.del_flag = '0'
             ORDER BY COALESCE(NULLIF(u.nick_name, ''), u.user_name), u.user_id
             """)

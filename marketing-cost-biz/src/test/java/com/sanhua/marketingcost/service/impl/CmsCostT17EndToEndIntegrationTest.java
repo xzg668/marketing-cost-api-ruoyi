@@ -66,10 +66,10 @@ class CmsCostT17EndToEndIntegrationTest extends BomMapperTestBase {
   private final String refreshImportedBy = IMPORTED_BY_PREFIX + "refresh-" + suffix;
   private final String blockedParentCode = "T17_BLOCK_" + suffix;
   private final String blockedImportedBy = IMPORTED_BY_PREFIX + "blocked-" + suffix;
-  private final String refSourceCode = "T17_REF_SRC_" + suffix;
-  private final String refActualCode = "T17_REF_ACT_" + suffix;
-  private final String refOaNo = "OA-T17-REF-" + suffix;
-  private final String refImportedBy = IMPORTED_BY_PREFIX + "ref-" + suffix;
+  private final String unrelatedSourceCode = "T17_OTHER_SRC_" + suffix;
+  private final String currentQuoteCode = "T17_CURRENT_" + suffix;
+  private final String currentOaNo = "OA-T17-CURRENT-" + suffix;
+  private final String unrelatedImportedBy = IMPORTED_BY_PREFIX + "other-" + suffix;
 
   @Autowired private CmsCostImportService importService;
   @Autowired private CmsSalaryCostSourceEffectiveService salaryEffectiveService;
@@ -97,8 +97,6 @@ class CmsCostT17EndToEndIntegrationTest extends BomMapperTestBase {
     assertThat(response.getPlanRowCount()).isPositive();
     assertThat(response.getWorkshopRowCount()).isPositive();
     assertThat(response.getSubjectRowCount()).isPositive();
-    assertThat(response.getSalaryInsertCount()).isZero();
-    assertThat(response.getAuxInsertCount()).isZero();
     assertThat(countSql("SELECT COUNT(*) FROM cms_plan_cost_raw WHERE import_batch_id = " + response.getImportBatchId()))
         .isEqualTo(response.getPlanRowCount());
     assertThat(countSql("SELECT COUNT(*) FROM cms_workshop_labor_raw WHERE import_batch_id = " + response.getImportBatchId()))
@@ -203,19 +201,19 @@ class CmsCostT17EndToEndIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
-  @DisplayName("OA 旧参考料号映射：正式核算只读当前料号公共生效来源，不回退旧复制数据")
-  void costCalculationDoesNotFallbackToLegacyReferenceMaterial() throws Exception {
+  @DisplayName("当前报价料号无公共生效来源：正式核算不读取其他料号的 CMS 数据")
+  void costCalculationDoesNotFallbackToAnotherMaterial() throws Exception {
     importService.importParsedRows(referenceRequest());
-    salaryEffectiveService.generateDefaultSources(2026, refImportedBy, BUSINESS_UNIT_TYPE);
-    auxEffectiveService.generateDefaultSources(2026, refImportedBy, BUSINESS_UNIT_TYPE);
-    seedReferenceOaAndLegacyRows();
+    salaryEffectiveService.generateDefaultSources(2026, unrelatedImportedBy, BUSINESS_UNIT_TYPE);
+    auxEffectiveService.generateDefaultSources(2026, unrelatedImportedBy, BUSINESS_UNIT_TYPE);
+    seedCurrentQuoteOaRows();
 
     List<CostRunCostItemDto> items =
         costItemService.listByMaterialCodes(
-            refOaNo,
-            refActualCode,
-            Set.of(refActualCode),
-            commercialContext(refOaNo, refActualCode),
+            currentOaNo,
+            currentQuoteCode,
+            Set.of(currentQuoteCode),
+            commercialContext(currentOaNo, currentQuoteCode),
             null,
             true,
             ignored -> {});
@@ -290,11 +288,11 @@ class CmsCostT17EndToEndIntegrationTest extends BomMapperTestBase {
   }
 
   private CmsCostImportRequest referenceRequest() {
-    CmsCostImportRequest request = baseRequest(refImportedBy, "T17-参考料号.xlsx");
-    request.setPlanRows(List.of(plan(refSourceCode, "2026-01", null)));
-    request.setWorkshopRows(List.of(workshop(refSourceCode, "2026-01", "400.000000")));
-    request.setSubjectRows(List.of(indirect(refSourceCode, "2026-01", "22.000000"),
-        aux(refSourceCode, "2026-01", "0201", "辅助焊料类", "40.000000")));
+    CmsCostImportRequest request = baseRequest(unrelatedImportedBy, "T17-其他料号.xlsx");
+    request.setPlanRows(List.of(plan(unrelatedSourceCode, "2026-01", null)));
+    request.setWorkshopRows(List.of(workshop(unrelatedSourceCode, "2026-01", "400.000000")));
+    request.setSubjectRows(List.of(indirect(unrelatedSourceCode, "2026-01", "22.000000"),
+        aux(unrelatedSourceCode, "2026-01", "0201", "辅助焊料类", "40.000000")));
     return request;
   }
 
@@ -436,37 +434,23 @@ class CmsCostT17EndToEndIntegrationTest extends BomMapperTestBase {
         .orElseThrow();
   }
 
-  private void seedReferenceOaAndLegacyRows() throws Exception {
+  private void seedCurrentQuoteOaRows() throws Exception {
     try (Connection conn = openConnection();
         Statement stmt = conn.createStatement()) {
       stmt.executeUpdate(
           "INSERT INTO oa_form (oa_no, form_type, apply_date, customer, business_unit_type, created_at, updated_at, deleted) "
-              + "VALUES ('" + refOaNo + "', 'T17参考料号', '2026-05-13', 'T17客户', '"
+              + "VALUES ('" + currentOaNo + "', 'T17当前料号', '2026-05-13', 'T17客户', '"
               + BUSINESS_UNIT_TYPE + "', NOW(), NOW(), 0)");
       stmt.executeUpdate(
           "INSERT INTO oa_form_item (oa_form_id, seq, product_name, material_no, valid_date, business_unit_type, created_at, updated_at, deleted) "
-              + "SELECT id, 1, 'T17实际报价料号', '" + refActualCode + "', '2026-05-13', '"
-              + BUSINESS_UNIT_TYPE + "', NOW(), NOW(), 0 FROM oa_form WHERE oa_no = '" + refOaNo + "'");
-      stmt.executeUpdate(
-          "INSERT INTO lp_salary_cost "
-              + "(material_code, product_name, ref_material_code, direct_labor_cost, indirect_labor_cost, source, business_unit, business_unit_type, created_at, updated_at) "
-              + "VALUES ('" + refActualCode + "', 'T17实际报价料号', '" + refSourceCode
-              + "', 99.000000, 88.000000, 'manual', '商用部品事业部', '"
-              + BUSINESS_UNIT_TYPE + "', NOW(), NOW())");
-      stmt.executeUpdate(
-          "INSERT INTO lp_aux_subject "
-              + "(material_code, product_name, ref_material_code, aux_subject_code, aux_subject_name, unit_price, period, source, business_unit_type, created_at, updated_at) "
-              + "VALUES ('" + refActualCode + "', 'T17实际报价料号', '" + refSourceCode
-              + "', '0201', '旧复制辅料', 99.000000, '2026-01', 'manual', '"
-              + BUSINESS_UNIT_TYPE + "', NOW(), NOW())");
+              + "SELECT id, 1, 'T17当前报价料号', '" + currentQuoteCode + "', '2026-05-13', '"
+              + BUSINESS_UNIT_TYPE + "', NOW(), NOW(), 0 FROM oa_form WHERE oa_no = '" + currentOaNo + "'");
     }
   }
 
   private void cleanT17Rows() throws Exception {
     try (Connection conn = openConnection();
         Statement stmt = conn.createStatement()) {
-      stmt.executeUpdate("DELETE FROM lp_salary_cost WHERE material_code LIKE 'T17_%'");
-      stmt.executeUpdate("DELETE FROM lp_aux_subject WHERE material_code LIKE 'T17_%'");
       stmt.executeUpdate(
           "DELETE FROM oa_form_item WHERE oa_form_id IN "
               + "(SELECT id FROM oa_form WHERE oa_no LIKE 'OA-T17-%')");

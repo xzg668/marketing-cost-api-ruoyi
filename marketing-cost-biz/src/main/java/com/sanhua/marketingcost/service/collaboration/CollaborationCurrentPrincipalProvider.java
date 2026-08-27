@@ -45,10 +45,11 @@ public class CollaborationCurrentPrincipalProvider {
 
   public CollaborationPrincipal currentFinanceReviewer() {
     CollaborationPrincipal principal = current();
-    if (!principal.has(CollaborationRole.FINANCE_REVIEWER)) {
+    if (!principal.has(CollaborationRole.FINANCE_REVIEWER)
+        && !principal.has(CollaborationRole.COSTING_OPERATOR)) {
       throw new CollaborationDomainException(
           CollaborationDomainErrorCode.TASK_ASSIGNEE_MISMATCH,
-          "当前账号不是财务审核人员，不能查看或处理补录审核");
+          "当前账号不是报价人员或财务审核人员，不能查看或处理补录审核");
     }
     return principal;
   }
@@ -57,7 +58,7 @@ public class CollaborationCurrentPrincipalProvider {
     if (authority == null || authority.isBlank()) return;
     String normalized = authority.trim().toUpperCase(Locale.ROOT);
     switch (normalized) {
-      case "ROLE_OA_COLLABORATOR" -> roles.add(CollaborationRole.TECHNICIAN);
+      case "ROLE_TECHNICAL_COLLABORATOR" -> roles.add(CollaborationRole.TECHNICIAN);
       case "ROLE_FINANCE_REVIEWER" -> roles.add(CollaborationRole.FINANCE_REVIEWER);
       case "ROLE_BU_STAFF", "ROLE_BU_DIRECTOR" -> roles.add(CollaborationRole.COSTING_OPERATOR);
       case "ROLE_ADMIN" -> roles.add(CollaborationRole.ADMINISTRATOR);

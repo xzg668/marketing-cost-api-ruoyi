@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.sanhua.marketingcost.entity.QuoteCostPriceScenario;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
-import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
 import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import java.math.BigDecimal;
@@ -23,7 +22,6 @@ class QuoteCostRunVersionInvalidationIntegrationTest extends BomMapperTestBase {
   @Autowired private QuoteCostRunVersionInvalidationService invalidationService;
   @Autowired private QuoteCostRunVersionMapper versionMapper;
   @Autowired private QuoteCostPriceScenarioMapper scenarioMapper;
-  @Autowired private QuoteCuMaterialDiffItemMapper diffItemMapper;
   @Autowired private JdbcTemplate jdbcTemplate;
 
   private final String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 10);
@@ -31,8 +29,6 @@ class QuoteCostRunVersionInvalidationIntegrationTest extends BomMapperTestBase {
 
   @AfterEach
   void cleanRows() {
-    jdbcTemplate.update(
-        "DELETE FROM lp_quote_cu_material_diff_item WHERE cost_run_no LIKE ?", "%" + suffix);
     jdbcTemplate.update(
         "DELETE FROM lp_quote_cost_price_scenario WHERE cost_run_no LIKE ?", "%" + suffix);
     jdbcTemplate.update("DELETE FROM lp_quote_cost_run_version WHERE oa_no = ?", oaNo);
@@ -130,44 +126,20 @@ class QuoteCostRunVersionInvalidationIntegrationTest extends BomMapperTestBase {
     scenario.setBusinessUnitType("COMMERCIAL");
     assertThat(scenarioMapper.insert(scenario)).isEqualTo(1);
 
-    QuoteCuMaterialDiffItem diff = new QuoteCuMaterialDiffItem();
-    diff.setCostRunVersionId(versionId);
-    diff.setCostRunNo(version.getCostRunNo());
-    diff.setLineNo(1);
-    diff.setSettlementKey("SET:FCQ09:" + suffix);
-    diff.setDetailLevel("SETTLEMENT");
-    diff.setContributesToAdjustment(1);
-    diff.setTopProductCode("TOP-FCQ09");
-    diff.setMaterialCode("MAT-CU-FCQ09");
-    diff.setQuantity(new BigDecimal("2.00000000"));
-    diff.setFinanceAmount(new BigDecimal("120.00000000"));
-    diff.setOaAmount(new BigDecimal("138.50000000"));
-    diff.setDiffAmount(new BigDecimal("18.50000000"));
-    diff.setCuAffected(1);
-    diff.setTraceJson("{\"financeCu\":90.00000000,\"oaCu\":102.03900000}");
-    diff.setBusinessUnitType("COMMERCIAL");
-    assertThat(diffItemMapper.insert(diff)).isEqualTo(1);
     QuoteCostPriceScenario storedScenario = scenarioMapper.selectById(scenario.getId());
-    QuoteCuMaterialDiffItem storedDiff = diffItemMapper.selectById(diff.getId());
     return new FrozenDetails(
         scenario.getId(),
         storedScenario.getCuPrice(),
         storedScenario.getMaterialCost(),
-        storedScenario.getInputSnapshotHash(),
-        diff.getId(),
-        storedDiff.getDiffAmount(),
-        storedDiff.getTraceJson());
+        storedScenario.getInputSnapshotHash());
   }
 
   private void assertFrozenDetails(FrozenDetails expected) {
     QuoteCostPriceScenario scenario = scenarioMapper.selectById(expected.scenarioId());
-    QuoteCuMaterialDiffItem diff = diffItemMapper.selectById(expected.diffId());
     assertThat(scenario.getCuPrice()).isEqualByComparingTo(expected.cuPrice());
     assertThat(scenario.getMaterialCost()).isEqualByComparingTo(expected.materialCost());
     assertThat(scenario.getInputSnapshotHash()).isEqualTo(expected.inputSnapshotHash());
     assertThat(scenario.getStatus()).isEqualTo("SUCCESS");
-    assertThat(diff.getDiffAmount()).isEqualByComparingTo(expected.diffAmount());
-    assertThat(diff.getTraceJson()).isEqualTo(expected.traceJson());
   }
 
   private record Snapshot(
@@ -180,8 +152,5 @@ class QuoteCostRunVersionInvalidationIntegrationTest extends BomMapperTestBase {
       Long scenarioId,
       BigDecimal cuPrice,
       BigDecimal materialCost,
-      String inputSnapshotHash,
-      Long diffId,
-      BigDecimal diffAmount,
-      String traceJson) {}
+      String inputSnapshotHash) {}
 }

@@ -10,7 +10,6 @@ public record SupplementBomReadResult(
     String periodMonth,
     boolean found,
     Long supplementVersionId,
-    Long taskId,
     String taskNo,
     String bomSource,
     LocalDate reuseValidUntil,

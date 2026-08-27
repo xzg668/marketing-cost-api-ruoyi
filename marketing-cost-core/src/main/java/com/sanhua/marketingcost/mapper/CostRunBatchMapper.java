@@ -13,25 +13,6 @@ import org.apache.ibatis.annotations.Update;
 @Mapper
 public interface CostRunBatchMapper extends BaseMapper<CostRunBatch> {
 
-  @Select("""
-      SELECT *
-        FROM lp_cost_run_batch
-       WHERE scene = 'QUOTE'
-         AND status IN ('PENDING', 'RUNNING', 'PARTIAL_FAILED')
-         AND (
-           prerequisite_status = 'PENDING'
-           OR (
-             prerequisite_status = 'RUNNING'
-             AND updated_at <= #{staleBefore}
-           )
-         )
-       ORDER BY id ASC
-       LIMIT #{limit}
-      """)
-  List<CostRunBatch> selectQuotePrerequisiteCandidates(
-      @Param("staleBefore") LocalDateTime staleBefore,
-      @Param("limit") int limit);
-
   @Insert("""
       INSERT IGNORE INTO lp_cost_run_batch (
         batch_no,
@@ -40,8 +21,8 @@ public interface CostRunBatchMapper extends BaseMapper<CostRunBatch> {
         pricing_month,
         price_as_of_time,
         business_unit_type,
+        source_revision,
         execution_no,
-        prerequisite_status,
         control_version,
         status,
         total_count,
@@ -61,8 +42,8 @@ public interface CostRunBatchMapper extends BaseMapper<CostRunBatch> {
         #{batch.pricingMonth},
         #{batch.priceAsOfTime},
         #{batch.businessUnitType},
+        #{batch.sourceRevision},
         #{batch.executionNo},
-        #{batch.prerequisiteStatus},
         #{batch.controlVersion},
         #{batch.status},
         #{batch.totalCount},
@@ -128,7 +109,7 @@ public interface CostRunBatchMapper extends BaseMapper<CostRunBatch> {
       UPDATE lp_cost_run_batch
          SET status = 'PENDING',
              execution_no = execution_no + 1,
-             prerequisite_status = #{prerequisiteStatus},
+             source_revision = #{sourceRevision},
              control_version = control_version + 1,
              total_count = #{totalCount},
              success_count = 0,
@@ -144,7 +125,6 @@ public interface CostRunBatchMapper extends BaseMapper<CostRunBatch> {
          AND scene = 'QUOTE'
          AND execution_no = #{expectedExecutionNo}
          AND control_version = #{expectedControlVersion}
-         AND prerequisite_status <> 'RUNNING'
          AND NOT EXISTS (
            SELECT 1
              FROM lp_cost_run_task t
@@ -159,8 +139,32 @@ public interface CostRunBatchMapper extends BaseMapper<CostRunBatch> {
       @Param("expectedControlVersion") int expectedControlVersion,
       @Param("totalCount") int totalCount,
       @Param("skippedCount") int skippedCount,
-      @Param("prerequisiteStatus") String prerequisiteStatus,
+      @Param("sourceRevision") String sourceRevision,
       @Param("updatedAt") LocalDateTime updatedAt);
+
+  @Insert("""
+      INSERT IGNORE INTO lp_cost_run_execution_history (
+        batch_id, batch_no, execution_no, scene, source_no, pricing_month,
+        business_unit_type, source_revision, status,
+        total_count, success_count, failed_count, skipped_count, progress,
+        request_snapshot_json, result_summary_json, error_message, error_stack,
+        created_by, created_name, started_at, finished_at,
+        original_created_at, original_updated_at, archived_at
+      )
+      SELECT id, batch_no, execution_no, scene, source_no, pricing_month,
+             business_unit_type, source_revision, status,
+             total_count, success_count, failed_count, skipped_count, progress,
+             request_snapshot_json, result_summary_json, error_message, error_stack,
+             created_by, created_name, started_at, finished_at,
+             created_at, updated_at, #{archivedAt}
+        FROM lp_cost_run_batch
+       WHERE batch_no = #{batchNo}
+         AND execution_no = #{executionNo}
+      """)
+  int archiveExecution(
+      @Param("batchNo") String batchNo,
+      @Param("executionNo") int executionNo,
+      @Param("archivedAt") LocalDateTime archivedAt);
 
   @Update("""
       UPDATE lp_cost_run_batch b
@@ -198,42 +202,4 @@ public interface CostRunBatchMapper extends BaseMapper<CostRunBatch> {
       @Param("pricingMonth") String pricingMonth,
       @Param("businessUnitType") String businessUnitType);
 
-  @Update("""
-      UPDATE lp_cost_run_batch
-         SET prerequisite_status = #{nextStatus},
-             control_version = control_version + 1,
-             status = CASE
-               WHEN #{nextStatus} = 'FAILED' THEN 'FAILED'
-               ELSE status
-             END,
-             failed_count = CASE
-               WHEN #{nextStatus} = 'FAILED' THEN GREATEST(total_count - skipped_count, 0)
-               ELSE failed_count
-             END,
-             progress = CASE
-               WHEN #{nextStatus} = 'FAILED' THEN 100
-               ELSE progress
-             END,
-             error_message = CASE
-               WHEN #{nextStatus} = 'FAILED' THEN #{errorMessage}
-               ELSE NULL
-             END,
-             finished_at = CASE
-               WHEN #{nextStatus} = 'FAILED' THEN #{updatedAt}
-               ELSE finished_at
-             END,
-             updated_at = #{updatedAt}
-       WHERE batch_no = #{batchNo}
-         AND execution_no = #{executionNo}
-         AND control_version = #{expectedControlVersion}
-         AND prerequisite_status = #{expectedStatus}
-      """)
-  int transitionPrerequisite(
-      @Param("batchNo") String batchNo,
-      @Param("executionNo") int executionNo,
-      @Param("expectedControlVersion") int expectedControlVersion,
-      @Param("expectedStatus") String expectedStatus,
-      @Param("nextStatus") String nextStatus,
-      @Param("errorMessage") String errorMessage,
-      @Param("updatedAt") LocalDateTime updatedAt);
 }

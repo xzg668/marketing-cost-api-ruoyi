@@ -33,13 +33,13 @@ class CollaborationTokenServiceImplTest {
     void generateToken_returnsValidRecord() {
         when(tokenMapper.insert(any(LpCollaborationToken.class))).thenReturn(1);
 
-        LpCollaborationToken result = service.generateToken(1L, "bom-supplement", "OA-2026-001", 24);
+        LpCollaborationToken result = service.generateToken(1L, "technical-collaboration", "OA-2026-001", 24);
 
         assertNotNull(result);
         assertNotNull(result.getToken());
         assertEquals(32, result.getToken().length()); // UUID 去掉连字符
         assertEquals(1L, result.getUserId());
-        assertEquals("bom-supplement", result.getTokenType());
+        assertEquals("technical-collaboration", result.getTokenType());
         assertEquals("OA-2026-001", result.getRemark());
         assertEquals("0", result.getStatus());
         assertNotNull(result.getExpireTime());
@@ -52,10 +52,41 @@ class CollaborationTokenServiceImplTest {
     void generateToken_uniqueTokens() {
         when(tokenMapper.insert(any(LpCollaborationToken.class))).thenReturn(1);
 
-        LpCollaborationToken t1 = service.generateToken(1L, "bom-supplement", "OA-001", 24);
-        LpCollaborationToken t2 = service.generateToken(1L, "bom-supplement", "OA-001", 24);
+        LpCollaborationToken t1 = service.generateToken(1L, "technical-collaboration", "OA-001", 24);
+        LpCollaborationToken t2 = service.generateToken(1L, "technical-collaboration", "OA-001", 24);
 
         assertNotEquals(t1.getToken(), t2.getToken());
+    }
+
+    @Test
+    @DisplayName("可重复协作链接 — 相同有效授权复用原 Token")
+    void getOrCreateReusableToken_reusesActiveToken() {
+        LpCollaborationToken reusable = new LpCollaborationToken();
+        reusable.setTokenId(9L);
+        reusable.setToken("reusable-token");
+        reusable.setStatus("0");
+        reusable.setExpireTime(LocalDateTime.now().plusHours(2));
+        when(tokenMapper.selectOne(any())).thenReturn(reusable);
+
+        LpCollaborationToken result = service.getOrCreateReusableToken(
+                1L, "technical-collaboration", "same-grant", 24);
+
+        assertSame(reusable, result);
+        verify(tokenMapper, never()).insert(any(LpCollaborationToken.class));
+    }
+
+    @Test
+    @DisplayName("可重复协作链接 — 无有效授权时只创建一条新 Token")
+    void getOrCreateReusableToken_createsWhenMissing() {
+        when(tokenMapper.selectOne(any())).thenReturn(null);
+        when(tokenMapper.insert(any(LpCollaborationToken.class))).thenReturn(1);
+
+        LpCollaborationToken result = service.getOrCreateReusableToken(
+                1L, "technical-collaboration", "new-grant", 24);
+
+        assertNotNull(result.getToken());
+        assertEquals("new-grant", result.getRemark());
+        verify(tokenMapper).insert(any(LpCollaborationToken.class));
     }
 
     // ========== 校验 Token ==========
@@ -118,7 +149,7 @@ class CollaborationTokenServiceImplTest {
         record.setStatus("0"); // 有效
         record.setExpireTime(LocalDateTime.now().plusHours(10)); // 未过期
         record.setUserId(1L);
-        record.setTokenType("bom-supplement");
+        record.setTokenType("technical-collaboration");
         record.setRemark("OA-2026-001");
         when(tokenMapper.selectOne(any())).thenReturn(record);
 
@@ -126,7 +157,7 @@ class CollaborationTokenServiceImplTest {
 
         assertNotNull(result);
         assertEquals(1L, result.getTokenId());
-        assertEquals("bom-supplement", result.getTokenType());
+        assertEquals("technical-collaboration", result.getTokenType());
     }
 
     // ========== 标记已使用 ==========

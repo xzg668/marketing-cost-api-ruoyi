@@ -120,15 +120,15 @@ class TechnicalPackageDraftPersistenceIntegrationTest extends BomMapperTestBase 
         repository, principalProvider, formalBom, preparationService, preparationMapper,
         referenceMapper, detailMapper, snapshotMapper, snapshotDetailMapper,
         itemMapper, productTaskMapper,
-        priceScanService, stateService);
+        priceScanService, stateService, new CollaborationPortalAccessPolicy());
   }
 
   @AfterEach
   void clean() {
     SecurityContextHolder.clearContext();
     if (productTaskId != null) {
-      jdbc.update("DELETE FROM lp_integration_outbox WHERE aggregate_type='PRODUCT_TASK' AND aggregate_id=?",
-          productTaskId);
+      jdbc.update("DELETE FROM lp_business_change_log WHERE biz_domain='QUOTE_COLLABORATION' "
+          + "AND biz_type='PRODUCT_TASK_EVENT' AND biz_id=?", productTaskId);
       jdbc.update("DELETE FROM lp_quote_collaboration_gap WHERE product_task_id=?", productTaskId);
       jdbc.update("DELETE FROM lp_quote_collaboration_quote_link WHERE product_task_id=?", productTaskId);
       jdbc.update("DELETE FROM lp_quote_collaboration_product_task WHERE id=?", productTaskId);
@@ -370,7 +370,7 @@ class TechnicalPackageDraftPersistenceIntegrationTest extends BomMapperTestBase 
         preparationId, 1L, formId, itemId, marker + "-OA", marker, "BARE", marker,
         true, "2026-08", "READY", "NOT_SUBMITTED", true, false, false,
         "U9", true, 1, null, null, false, 0, null, null, null, null,
-        null, null, List.of(), List.of(), null, bodyResult().lines(), List.of());
+        List.of(), List.of(), null, bodyResult().lines(), List.of());
   }
 
   private FormalBomReadResult bodyResult() {

@@ -76,8 +76,8 @@ class ElectronicBomVerificationPersistenceIntegrationTest extends BomMapperTestB
   @AfterEach
   void clean() {
     if (productTaskId != null) {
-      jdbc.update("DELETE FROM lp_integration_outbox WHERE aggregate_type='PRODUCT_TASK' AND aggregate_id=?",
-          productTaskId);
+      jdbc.update("DELETE FROM lp_business_change_log WHERE biz_domain='QUOTE_COLLABORATION' "
+          + "AND biz_type='PRODUCT_TASK_EVENT' AND biz_id=?", productTaskId);
       jdbc.update("DELETE FROM lp_quote_collaboration_gap WHERE product_task_id=?", productTaskId);
       jdbc.update("DELETE FROM lp_quote_collaboration_quote_link WHERE product_task_id=?", productTaskId);
       jdbc.update("DELETE FROM lp_quote_collaboration_product_task WHERE id=?", productTaskId);
@@ -115,14 +115,12 @@ class ElectronicBomVerificationPersistenceIntegrationTest extends BomMapperTestB
       assertThat(gap.getApplicableOrgCode()).isEqualTo("210");
       assertThat(gap.getGapFingerprint()).hasSize(64);
     });
-    String failurePayload = jdbc.queryForObject("""
-        SELECT payload_json FROM lp_integration_outbox
-        WHERE aggregate_type='PRODUCT_TASK' AND aggregate_id=?
-          AND event_type='TECH_TASK_UPDATED' AND aggregate_version=?
-        """, String.class, task.getId(), failed.task().getTaskVersion());
-    assertThat(failurePayload)
-        .contains("MANUFACTURE_CHILD_REQUIRED", "制造件必须至少包含一个有效下级")
-        .doesNotContain("quantityPerParent");
+    assertThat(jdbc.queryForObject("""
+        SELECT change_reason FROM lp_business_change_log
+        WHERE biz_domain='QUOTE_COLLABORATION' AND biz_type='PRODUCT_TASK_EVENT'
+          AND biz_id=? AND field_name='TECH_TASK_UPDATED'
+        ORDER BY id DESC LIMIT 1
+        """, String.class, task.getId())).isEqualTo("技术补录校验未通过");
 
     QuoteCollaborationProductTask retrying = stateService.transition(
         task.getId(), failed.task().getTaskVersion(), SCOPE,
@@ -150,7 +148,6 @@ class ElectronicBomVerificationPersistenceIntegrationTest extends BomMapperTestB
         .containsExactly("制造件", "采购件");
     assertThat(details).allSatisfy(detail -> assertThat(detail.getSourceCategory()).isNull());
     assertThat(details).allSatisfy(detail -> {
-      assertThat(detail.getTaskId()).isNull();
       assertThat(detail.getRemark()).isEqualTo("ELECTRONIC_DRAWING:ELECTRONIC_DRAWING");
     });
 
@@ -163,9 +160,9 @@ class ElectronicBomVerificationPersistenceIntegrationTest extends BomMapperTestB
     assertThat(repository.findGaps(task.getId(), SCOPE)).singleElement()
         .extracting(gap -> gap.getGapStatus()).isEqualTo("OBSOLETE");
     assertThat(jdbc.queryForObject("""
-        SELECT COUNT(*) FROM lp_integration_outbox
-        WHERE aggregate_type='PRODUCT_TASK' AND aggregate_id=?
-          AND event_type='TECH_TASK_UPDATED'
+        SELECT COUNT(*) FROM lp_business_change_log
+        WHERE biz_domain='QUOTE_COLLABORATION' AND biz_type='PRODUCT_TASK_EVENT'
+          AND biz_id=? AND field_name='TECH_TASK_UPDATED'
         """, Integer.class, task.getId())).isGreaterThanOrEqualTo(2);
     assertThat(jdbc.queryForObject(
         "SELECT COUNT(*) FROM lp_quote_collaboration_product_task WHERE id=?",
@@ -192,6 +189,29 @@ class ElectronicBomVerificationPersistenceIntegrationTest extends BomMapperTestB
         task.getId(), verified.task().getTaskVersion(), TECHNICIAN, SCOPE,
         CollaborationPriceScanResult.ready(1));
     assertThat(checked.task().getTaskStatus()).isEqualTo("RETURNED_TO_TECH");
+    assertThat(checked.task().getLastValidationStatus()).isEqualTo("PASSED");
+  }
+
+  @Test
+  @DisplayName("正式 Excel 草稿在同一版本上保存指纹并进入价格检查")
+  void importedExcelDraftIsConfirmedWithoutCreatingAnotherBomVersion() {
+    QuoteCollaborationProductTask task = createTaskAndDraft();
+    QuoteBomSupplementVersion version = versionMapper.selectById(supplementVersionId);
+    version.setBomSource("ELECTRONIC_DRAWING_EXCEL");
+    assertThat(versionMapper.updateById(version)).isOne();
+
+    var verified = persistence.persistVerifiedImportedBom(
+        task.getId(), task.getTaskVersion(), TECHNICIAN, SCOPE);
+
+    assertThat(verified.fingerprint()).hasSize(64);
+    assertThat(verified.task().getSupplementVersionId()).isEqualTo(supplementVersionId);
+    assertThat(verified.task().getElectronicBomFingerprint()).isEqualTo(verified.fingerprint());
+    assertThat(jdbc.queryForObject(
+        "SELECT COUNT(*) FROM lp_quote_bom_supplement_version WHERE preparation_id=?",
+        Integer.class, preparationId)).isOne();
+    var checked = persistence.persistPriceScan(
+        task.getId(), verified.task().getTaskVersion(), TECHNICIAN, SCOPE,
+        CollaborationPriceScanResult.ready(1));
     assertThat(checked.task().getLastValidationStatus()).isEqualTo("PASSED");
   }
 
@@ -225,7 +245,6 @@ class ElectronicBomVerificationPersistenceIntegrationTest extends BomMapperTestB
 
     QuoteBomSupplementVersion version = new QuoteBomSupplementVersion();
     version.setPreparationId(preparationId);
-    version.setTaskId(null);
     version.setTaskNo(null);
     version.setOaNo(master.getOaNo());
     version.setOaFormItemId(preparation.getOaFormItemId());

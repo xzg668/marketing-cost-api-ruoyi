@@ -198,6 +198,7 @@ public class FinanceReviewApplicationService {
             DraftAction.REJECT, principal);
       }
     }
+    publicationService.returnStructuralItems(rejected, products, principal);
     Set<Long> rejectedProducts = rejected.stream()
         .map(QuoteCollaborationReviewItem::getProductTaskId).collect(Collectors.toSet());
     for (Long productId : rejectedProducts) {

@@ -120,8 +120,15 @@ public class QuoteIngestRequestValidator {
         addError(response, path, "ITEM_REQUIRED", "产品明细行不能为空", rowNo);
         continue;
       }
-      if (trimToNull(item.getMaterialNo()) == null && trimToNull(item.getSunlModel()) == null) {
-        addError(response, path + ".materialNo", "PRODUCT_KEY_REQUIRED", "产品料号或三花型号至少填写一个", rowNo);
+      if (trimToNull(item.getMaterialNo()) == null
+          && trimToNull(item.getSunlModel()) == null
+          && trimToNull(item.getCustomerDrawing()) == null) {
+        addError(
+            response,
+            path + ".materialNo",
+            "PRODUCT_KEY_REQUIRED",
+            "产品料号、三花型号或客户图号至少填写一个",
+            rowNo);
       }
       validateDate(response, path + ".validDate", item.getValidDate(), rowNo);
       validateNumber(response, path + ".packageQty", item.getPackageQty(), rowNo);

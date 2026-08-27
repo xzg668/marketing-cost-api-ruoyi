@@ -15,7 +15,7 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.QuoteCostPriceScenario;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
-import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
+import com.sanhua.marketingcost.dto.financequote.QuoteCuMaterialDiffItemResult;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
@@ -27,6 +27,7 @@ import com.sanhua.marketingcost.service.FinancePricePrepareService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionService;
 import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
 import com.sanhua.marketingcost.service.QuoteCuMaterialDiffService;
+import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
@@ -157,7 +158,8 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
       throw new IllegalArgumentException("报价产品行不属于当前报价单");
     }
     String oaNo = requireText(form.getOaNo(), "oaNo");
-    String productCode = requireText(item.getMaterialNo(), "productCode");
+    String productCode =
+        requireText(QuoteProductIdentityUtils.resolveCostingCode(item), "productCode");
     String pricingMonth = requireText(request.pricingMonth(), "pricingMonth");
     String businessUnitType = firstText(item.getBusinessUnitType(), form.getBusinessUnitType());
     businessUnitType = requireText(businessUnitType, "businessUnitType");
@@ -395,7 +397,7 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     BigDecimal detailSum = diff.items().stream()
         .filter(Objects::nonNull)
         .filter(item -> Integer.valueOf(1).equals(item.getContributesToAdjustment()))
-        .map(QuoteCuMaterialDiffItem::getDiffAmount)
+        .map(QuoteCuMaterialDiffItemResult::getDiffAmount)
         .filter(Objects::nonNull)
         .reduce(BigDecimal.ZERO, BigDecimal::add);
     requireDecimal("D_CU=差异结算行之和", adjustment, money(detailSum));

@@ -10,6 +10,7 @@ import com.sanhua.marketingcost.integration.drawing.ElectronicBomFetchResult;
 import com.sanhua.marketingcost.integration.drawing.ElectronicBomQuery;
 import com.sanhua.marketingcost.integration.drawing.ElectronicDrawingBomGateway;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
+import com.sanhua.marketingcost.security.CollaborationPortalModule;
 import com.sanhua.marketingcost.service.collaboration.ElectronicBomStructureValidator.ValidationResult;
 import com.sanhua.marketingcost.service.collaboration.scan.CollaborationPriceScanResult;
 import java.time.LocalDate;
@@ -33,6 +34,7 @@ public class ElectronicBomVerificationService {
   private final ElectronicBomStructureValidator validator;
   private final ElectronicBomVerificationPersistenceService persistence;
   private final TechnicalRealPriceGapScanService priceScanService;
+  private final CollaborationPortalAccessPolicy portalAccessPolicy;
 
   public ElectronicBomVerificationService(
       QuoteCollaborationTaskRepository repository,
@@ -41,7 +43,8 @@ public class ElectronicBomVerificationService {
       ElectronicDrawingBomGateway gateway,
       ElectronicBomStructureValidator validator,
       ElectronicBomVerificationPersistenceService persistence,
-      TechnicalRealPriceGapScanService priceScanService) {
+      TechnicalRealPriceGapScanService priceScanService,
+      CollaborationPortalAccessPolicy portalAccessPolicy) {
     this.repository = repository;
     this.principalProvider = principalProvider;
     this.draftService = draftService;
@@ -49,6 +52,7 @@ public class ElectronicBomVerificationService {
     this.validator = validator;
     this.persistence = persistence;
     this.priceScanService = priceScanService;
+    this.portalAccessPolicy = portalAccessPolicy;
   }
 
   public ElectronicBomVerificationResponse verify(
@@ -61,7 +65,8 @@ public class ElectronicBomVerificationService {
     QuoteCollaborationProductTask task = ownTask(taskId, principal);
     requireVersion(task, expectedVersion);
     // 导出门禁与回取门禁使用同一份草稿，避免页面可导出而后端校验另一份数据。
-    draftService.exportSnapshot(taskId);
+    TechnicalBomDraftApplicationService.ElectronicBomTemplateSnapshot template =
+        draftService.exportSnapshot(taskId);
     CollaborationScope scope = new CollaborationScope(
         task.getBusinessUnitType(), task.getApplicableOrgCode());
     QuoteCollaborationQuoteLink owner = owner(task, scope);
@@ -73,8 +78,14 @@ public class ElectronicBomVerificationService {
           new ElectronicBomValidationIssue(null, null, "TARGET_PRODUCT_MAPPING_REQUIRED",
               "当前新品还没有电子图库正式料号，请先完成目标料号映射")));
     }
+    if (!StringUtils.hasText(template.productDrawingNo())) {
+      return fail(task, expectedVersion, principal, scope, List.of(
+          new ElectronicBomValidationIssue(null, null, "TARGET_DRAWING_NO_REQUIRED",
+              "当前产品缺少正式图号，不能查询电子图库BOM")));
+    }
     ElectronicBomFetchResult fetched = gateway.fetchCurrentBom(new ElectronicBomQuery(
-        task.getProductCode().trim(), materialOrganization(task), task.getPriceOrgCode(),
+        task.getProductCode().trim(), template.productDrawingNo().trim(),
+        materialOrganization(task), task.getPriceOrgCode(),
         purpose, asOfDate, UUID.randomUUID().toString()));
     if (fetched == null || fetched.status() != ElectronicBomFetchResult.Status.FOUND) {
       ElectronicBomValidationIssue issue = fetchIssue(fetched);
@@ -113,6 +124,50 @@ public class ElectronicBomVerificationService {
         scanSaved.task().getTaskVersion(), verified.fingerprint(),
         validation.bom().sourceVersion(), verified.nodeCount(), priceScan.status().name(),
         scanSaved.gapCount(), List.of());
+  }
+
+  /** 正式接口未接入时，对接口下载的原始 Excel 草稿执行同一套价格扫描和后续审核链路。 */
+  public ElectronicBomVerificationResponse confirmImportedExcel(
+      Long taskId, ElectronicBomVerifyRequest request) {
+    Integer expectedVersion = request == null ? null : request.expectedVersion();
+    if (expectedVersion == null || expectedVersion <= 0) {
+      throw new IllegalArgumentException("expectedVersion不能为空");
+    }
+    CollaborationPrincipal principal = principalProvider.currentTechnician();
+    QuoteCollaborationProductTask task = ownTask(taskId, principal);
+    requireVersion(task, expectedVersion);
+    var workspace = draftService.workspace(taskId);
+    if (workspace.draft() == null
+        || !"ELECTRONIC_DRAWING_EXCEL".equals(workspace.draft().sourceMode())) {
+      throw invalid("当前 BOM 不是电子图库正式 Excel 来源");
+    }
+    // exportSnapshot 复用现有正式料号、父子关系、用量和采购件下级门禁。
+    draftService.exportSnapshot(taskId);
+    CollaborationScope scope = new CollaborationScope(
+        task.getBusinessUnitType(), task.getApplicableOrgCode());
+    QuoteCollaborationQuoteLink owner = owner(task, scope);
+    var verified = persistence.persistVerifiedImportedBom(
+        task.getId(), expectedVersion, principal, scope);
+    CollaborationPriceScanResult priceScan = priceScanService.scan(verified.task(), owner);
+    if (priceScan == null || priceScan.status() == CollaborationPriceScanResult.Status.ERROR) {
+      String message = firstText(priceScan == null ? null : priceScan.message(),
+          "电子图库 Excel BOM 已确认，但价格检查失败，请稍后重试");
+      return new ElectronicBomVerificationResponse(true, "BOM_VERIFIED_PRICE_CHECK_FAILED",
+          message, verified.task().getTaskVersion(), verified.fingerprint(),
+          "EXCEL:" + verified.task().getSupplementVersionId(), verified.nodeCount(),
+          "ERROR", 0, List.of(new Issue(null, null, "PRICE_SCAN_FAILED", message)));
+    }
+    var scanSaved = persistence.persistPriceScan(task.getId(), verified.task().getTaskVersion(),
+        principal, scope, priceScan);
+    boolean hasGaps = scanSaved.gapCount() > 0;
+    return new ElectronicBomVerificationResponse(true,
+        hasGaps ? "VERIFIED_WITH_PRICE_GAPS" : "VERIFIED_READY",
+        hasGaps
+            ? "电子图库 Excel BOM 已确认，已进入底层物料补价"
+            : "电子图库 Excel BOM 已确认，当前没有真实缺价",
+        scanSaved.task().getTaskVersion(), verified.fingerprint(),
+        "EXCEL:" + verified.task().getSupplementVersionId(), verified.nodeCount(),
+        priceScan.status().name(), scanSaved.gapCount(), List.of());
   }
 
   private ElectronicBomVerificationResponse fail(
@@ -170,9 +225,11 @@ public class ElectronicBomVerificationService {
       throw new CollaborationDomainException(
           CollaborationDomainErrorCode.TASK_NOT_FOUND, "技术任务不存在");
     }
-    return repository.findMineById(taskId, principal.userId(), currentBusinessUnit())
+    QuoteCollaborationProductTask task = repository
+        .findMineById(taskId, principal.userId(), currentBusinessUnit())
         .orElseThrow(() -> new CollaborationDomainException(
             CollaborationDomainErrorCode.TASK_NOT_FOUND, "技术任务不存在"));
+    return portalAccessPolicy.requireTask(task, CollaborationPortalModule.BOM);
   }
 
   private static String materialOrganization(QuoteCollaborationProductTask task) {

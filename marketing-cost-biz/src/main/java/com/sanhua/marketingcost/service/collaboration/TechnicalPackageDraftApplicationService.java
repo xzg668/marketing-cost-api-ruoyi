@@ -27,6 +27,7 @@ import com.sanhua.marketingcost.mapper.QuoteBomPackageReferenceMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
 import com.sanhua.marketingcost.mapper.QuoteCollaborationProductTaskMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
+import com.sanhua.marketingcost.security.CollaborationPortalModule;
 import com.sanhua.marketingcost.service.FormalBomReadService;
 import com.sanhua.marketingcost.service.QuoteProductBomPreparationService;
 import com.sanhua.marketingcost.service.collaboration.CollaborationActions.ProductAction;
@@ -77,6 +78,7 @@ public class TechnicalPackageDraftApplicationService {
   private final QuoteCollaborationProductTaskMapper productTaskMapper;
   private final TechnicalRealPriceGapScanService priceScanService;
   private final CollaborationProductStateService stateService;
+  private final CollaborationPortalAccessPolicy portalAccessPolicy;
 
   public TechnicalPackageDraftApplicationService(
       QuoteCollaborationTaskRepository repository,
@@ -91,7 +93,8 @@ public class TechnicalPackageDraftApplicationService {
       OaFormItemMapper oaFormItemMapper,
       QuoteCollaborationProductTaskMapper productTaskMapper,
       TechnicalRealPriceGapScanService priceScanService,
-      CollaborationProductStateService stateService) {
+      CollaborationProductStateService stateService,
+      CollaborationPortalAccessPolicy portalAccessPolicy) {
     this.repository = repository;
     this.principalProvider = principalProvider;
     this.formalBomReadService = formalBomReadService;
@@ -105,6 +108,7 @@ public class TechnicalPackageDraftApplicationService {
     this.productTaskMapper = productTaskMapper;
     this.priceScanService = priceScanService;
     this.stateService = stateService;
+    this.portalAccessPolicy = portalAccessPolicy;
   }
 
   @Transactional(readOnly = true)
@@ -222,8 +226,6 @@ public class TechnicalPackageDraftApplicationService {
     QuoteBomPackageReference draft = currentReference(task);
     if (draft == null) draft = new QuoteBomPackageReference();
     draft.setPreparationId(preparation.preparationRecordId());
-    // task_id 属于旧 lp_bom_supplement_task，QCBP 产品任务通过 package_reference_id 关联。
-    draft.setTaskId(null);
     draft.setOaNo(owner.getOaNo());
     draft.setOaFormItemId(owner.getOaFormItemId());
     draft.setQuoteProductCode(task.getProductCode());
@@ -737,6 +739,7 @@ public class TechnicalPackageDraftApplicationService {
     if (taskId == null || taskId <= 0) throw notFound();
     QuoteCollaborationProductTask task = repository.findMineById(
         taskId, principal.userId(), currentBusinessUnit()).orElseThrow(this::notFound);
+    portalAccessPolicy.requireTask(task, CollaborationPortalModule.BOM);
     if (!SCOPE.equals(task.getPrimaryScope()) || !Objects.equals(task.getNeedPackage(), 1)) {
       throw invalid("当前任务不是裸品补包装任务");
     }
@@ -837,7 +840,6 @@ public class TechnicalPackageDraftApplicationService {
       QuoteCollaborationQuoteLink owner,
       int lineNo) {
     row.setPreparationId(preparationId);
-    row.setTaskId(null);
     row.setOaNo(owner.getOaNo());
     row.setOaFormItemId(owner.getOaFormItemId());
     row.setBareProductCode(task.getProductCode());

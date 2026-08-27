@@ -16,7 +16,6 @@ public class QuoteBomPackageReferenceDetail {
   private Long id;
   private Long packageReferenceId;
   private Long preparationId;
-  private Long taskId;
   private String oaNo;
   private Long oaFormItemId;
   private String bareProductCode;

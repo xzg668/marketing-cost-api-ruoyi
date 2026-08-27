@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
+
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.PackageSnapshotRequest;
 import com.sanhua.marketingcost.dto.PackageSnapshotResult;
@@ -31,6 +33,7 @@ import com.sanhua.marketingcost.service.PackageComponentSnapshotService;
 import com.sanhua.marketingcost.service.PricePrepareItemClassifier;
 import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
+import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.YearMonth;
@@ -126,7 +129,10 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
   private Scope requireScope(String oaNo, Long oaFormItemId, String requestedPeriodMonth) {
     OaForm form = requireForm(oaNo);
     OaFormItem item = requireItem(form, oaFormItemId);
-    String productCode = requireText(item.getMaterialNo(), "当前产品行料号");
+    String productCode =
+        requireText(
+            QuoteProductIdentityUtils.resolveCostingCode(item),
+            "当前产品行料号、型号或图号");
     QuoteBomStatus bomStatus = latestBomStatus(form.getOaNo(), item.getId());
     String periodMonth =
         firstText(requestedPeriodMonth, resolvePeriodMonth(form, bomStatus));
@@ -191,7 +197,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     if (form.getApplyDate() != null) {
       return YearMonth.from(form.getApplyDate()).toString();
     }
-    return YearMonth.now().toString();
+    return CostPricingPeriodUtils.currentPricingMonth();
   }
 
   private List<BomCostingRow> loadRows(Scope scope) {
@@ -591,7 +597,8 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     dto.setSourceText(objectType);
     dto.setQuantity(quantityOverride == null ? (row == null ? null : row.getQtyPerParent()) : quantityOverride);
     Optional<PriceTypeRoute> route =
-        materialPriceRouterService.resolve(materialCode, scope.periodMonth(), LocalDate.now());
+        materialPriceRouterService.resolve(
+            materialCode, scope.periodMonth(), CostPricingPeriodUtils.currentPricingDate());
     if (route.isPresent()) {
       PriceTypeRoute hit = route.get();
       dto.setPriceType(normalizePersistedPriceType(firstText(hit.rawPriceType(), hit.priceType().getDbText())));

@@ -11,7 +11,12 @@ public interface CostRunTaskClaimService {
   List<CostRunTask> claimTasks(
       String workerId, Set<CostRunTaskScene> scenes, int batchSize, int lockTimeoutMinutes);
 
-  boolean markSuccess(Long taskId, String workerId, String resultSummaryJson);
+  boolean markSuccess(
+      Long taskId,
+      String workerId,
+      Long costRunVersionId,
+      String costRunNo,
+      String resultSummaryJson);
 
   boolean markCollaboration(
       Long taskId, String workerId, String resultSummaryJson, String message);

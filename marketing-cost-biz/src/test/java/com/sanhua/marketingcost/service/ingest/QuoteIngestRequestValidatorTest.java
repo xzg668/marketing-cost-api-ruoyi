@@ -50,16 +50,29 @@ class QuoteIngestRequestValidatorTest {
   }
 
   @Test
-  void itemWithoutMaterialNoAndModelFails() {
+  void itemWithoutMaterialNoModelAndDrawingFails() {
     QuoteIngestRequest request = minimalRequest();
     request.getItems().get(0).setMaterialNo(" ");
     request.getItems().get(0).setSunlModel(null);
+    request.getItems().get(0).setCustomerDrawing(" ");
 
     QuoteIngestPreviewResponse response = validator.validate(request);
 
     assertThat(response.isValid()).isFalse();
     assertThat(response.getErrors()).extracting("code").contains("PRODUCT_KEY_REQUIRED");
     assertThat(response.getErrors().get(0).getRowNo()).isEqualTo(1);
+  }
+
+  @Test
+  void drawingOnlyNewProductPassesIdentityValidation() {
+    QuoteIngestRequest request = minimalRequest();
+    request.getItems().get(0).setMaterialNo(null);
+    request.getItems().get(0).setSunlModel(null);
+    request.getItems().get(0).setCustomerDrawing("DRAWING-NEW-1");
+
+    QuoteIngestPreviewResponse response = validator.validate(request);
+
+    assertThat(response.getErrors()).extracting("code").doesNotContain("PRODUCT_KEY_REQUIRED");
   }
 
   @Test

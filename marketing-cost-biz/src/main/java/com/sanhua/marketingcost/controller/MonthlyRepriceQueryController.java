@@ -32,7 +32,7 @@ public class MonthlyRepriceQueryController {
   // 查询入口允许复核角色和现有成本查询角色进入，具体可见范围在 QueryService 里按批次状态和业务单元再收窄。
   static final String QUERY_PERMISSION =
       "@ss.hasAnyRole('ADMIN','BU_DIRECTOR')"
-          + " or @ss.hasAnyPermi('price:monthly-reprice:review','price:monthly-reprice:list','cost:run:list')";
+          + " or @ss.hasAnyPermi('price:monthly-reprice:review','price:monthly-reprice:list','ingest:quote:list')";
 
   private final MonthlyRepriceQueryService queryService;
   private final MonthlyRepriceProgressService progressService;

@@ -9,10 +9,6 @@ public final class CollaborationOperationsResponse {
   public record Reconciliation(int total, List<Issue> issues) {}
   public record Issue(String type, String severity, Long targetId, String taskNo,
       String oaNo, Long oaFormItemId, String message) {}
-  public record OutboxPage(int total, List<OutboxItem> items) {}
-  public record OutboxItem(Long id, String eventId, String aggregateType, Long aggregateId,
-      Integer aggregateVersion, String eventType, String sendPolicy, String sendStatus,
-      Integer retryCount, String lastErrorMessage, LocalDateTime occurredAt) {}
   public record PublicationFailures(int total, List<PublicationFailure> items) {}
   public record PublicationFailure(Long reviewId, String reviewNo, Long collaborationId,
       String oaNo, String reviewStatus, String masterStatus, String publishBatchNo,

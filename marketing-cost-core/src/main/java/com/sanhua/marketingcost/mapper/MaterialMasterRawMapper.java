@@ -87,7 +87,9 @@ public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
       "  AND (",
       "    material_code LIKE CONCAT('%', #{keyword}, '%')",
       "    OR material_name LIKE CONCAT('%', #{keyword}, '%')",
+      "    OR material_spec LIKE CONCAT('%', #{keyword}, '%')",
       "    OR material_model LIKE CONCAT('%', #{keyword}, '%')",
+      "    OR drawing_no LIKE CONCAT('%', #{keyword}, '%')",
       "  )",
       "</if>",
       "ORDER BY material_code ASC",
@@ -96,6 +98,34 @@ public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
   })
   List<MaterialMasterRaw> selectOptionsByLatestBatchKeyword(
       @Param("keyword") String keyword,
+      @Param("sourceType") String sourceType,
+      @Param("organizationCode") String organizationCode,
+      @Param("limit") int limit);
+
+  /** 电子图库图号匹配：一次批量查询当前组织内 drawing/spec/model 精确相等的候选。 */
+  @Select({
+      "<script>",
+      "SELECT *",
+      "FROM lp_material_master_raw",
+      "WHERE active_flag = 1",
+      "  AND organization_code = #{organizationCode}",
+      "<if test='sourceType != null and sourceType != \"\"'>",
+      "  AND source_type = #{sourceType}",
+      "</if>",
+      "  AND (",
+      "    UPPER(TRIM(drawing_no)) IN",
+      "    <foreach collection='drawingCodes' item='code' open='(' separator=',' close=')'>#{code}</foreach>",
+      "    OR UPPER(TRIM(material_spec)) IN",
+      "    <foreach collection='drawingCodes' item='code' open='(' separator=',' close=')'>#{code}</foreach>",
+      "    OR UPPER(TRIM(material_model)) IN",
+      "    <foreach collection='drawingCodes' item='code' open='(' separator=',' close=')'>#{code}</foreach>",
+      "  )",
+      "ORDER BY material_code ASC",
+      "LIMIT #{limit}",
+      "</script>"
+  })
+  List<MaterialMasterRaw> selectByDrawingIdentities(
+      @Param("drawingCodes") Collection<String> drawingCodes,
       @Param("sourceType") String sourceType,
       @Param("organizationCode") String organizationCode,
       @Param("limit") int limit);

@@ -29,7 +29,8 @@ class TechnicalBomCandidateMapperIntegrationTest extends BomMapperTestBase {
     int index = 0;
     for (String resource : List.of(
         "/db/V142__quote_bom_preparation_schema.sql",
-        "/db/V206__quote_bom_price_collaboration_schema.sql")) {
+        "/db/V206__quote_bom_price_collaboration_schema.sql",
+        "/db/V235__optimize_technical_bom_candidate_search.sql")) {
       String target = "/tmp/QCBP10-" + (++index) + ".sql";
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource(resource), target);
       ExecResult result = MYSQL.execInContainer(

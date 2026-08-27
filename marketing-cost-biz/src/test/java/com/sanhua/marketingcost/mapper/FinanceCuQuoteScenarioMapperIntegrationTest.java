@@ -7,7 +7,6 @@ import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
 import com.sanhua.marketingcost.entity.QuoteCostPriceScenario;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
-import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
 import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -25,7 +24,6 @@ class FinanceCuQuoteScenarioMapperIntegrationTest extends BomMapperTestBase {
   @Autowired private PricePrepareBatchMapper pricePrepareBatchMapper;
   @Autowired private PricePrepareItemMapper pricePrepareItemMapper;
   @Autowired private QuoteCostPriceScenarioMapper scenarioMapper;
-  @Autowired private QuoteCuMaterialDiffItemMapper diffItemMapper;
   @Autowired private QuoteCostRunVersionMapper versionMapper;
 
   private final String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
@@ -83,8 +81,8 @@ class FinanceCuQuoteScenarioMapperIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
-  @DisplayName("场景和差额表按成本版本及场景/结算键防重")
-  void enforcesScenarioAndSettlementUniqueness() {
+  @DisplayName("场景表按成本版本及场景防重")
+  void enforcesScenarioUniqueness() {
     long versionId = 930000L + Integer.parseInt(suffix.substring(0, 4), 16);
     QuoteCostPriceScenario oa = scenario(versionId, "OA_LOCKED", "OA");
     QuoteCostPriceScenario finance = scenario(versionId, "FINANCE_QUOTE_BASE", "FIN");
@@ -94,13 +92,6 @@ class FinanceCuQuoteScenarioMapperIntegrationTest extends BomMapperTestBase {
     assertThatThrownBy(() -> scenarioMapper.insert(scenario(versionId, "OA_LOCKED", "DUP")))
         .isInstanceOf(DuplicateKeyException.class);
 
-    QuoteCuMaterialDiffItem diff = diffItem(versionId, "SETTLEMENT:1");
-    assertThat(diffItemMapper.insert(diff)).isEqualTo(1);
-    QuoteCuMaterialDiffItem stored = diffItemMapper.selectById(diff.getId());
-    assertThat(stored.getDiffAmount()).isEqualByComparingTo("-1.25000000");
-    assertThat(stored.getTraceJson()).contains("financeCu");
-    assertThatThrownBy(() -> diffItemMapper.insert(diffItem(versionId, "SETTLEMENT:1")))
-        .isInstanceOf(DuplicateKeyException.class);
   }
 
   @Test
@@ -149,23 +140,4 @@ class FinanceCuQuoteScenarioMapperIntegrationTest extends BomMapperTestBase {
     return row;
   }
 
-  private QuoteCuMaterialDiffItem diffItem(long versionId, String settlementKey) {
-    QuoteCuMaterialDiffItem row = new QuoteCuMaterialDiffItem();
-    row.setCostRunVersionId(versionId);
-    row.setCostRunNo("RUN-FCQ01-" + suffix);
-    row.setLineNo(1);
-    row.setSettlementKey(settlementKey);
-    row.setDetailLevel("SETTLEMENT");
-    row.setContributesToAdjustment(1);
-    row.setTopProductCode("TOP-FCQ01");
-    row.setMaterialCode("MAT-FCQ01");
-    row.setQuantity(new BigDecimal("1.00000000"));
-    row.setFinanceAmount(new BigDecimal("10.00000000"));
-    row.setOaAmount(new BigDecimal("8.75000000"));
-    row.setDiffAmount(new BigDecimal("-1.25000000"));
-    row.setCuAffected(1);
-    row.setTraceJson("{\"financeCu\":90.0,\"oaCu\":80.0}");
-    row.setBusinessUnitType("COMMERCIAL");
-    return row;
-  }
 }

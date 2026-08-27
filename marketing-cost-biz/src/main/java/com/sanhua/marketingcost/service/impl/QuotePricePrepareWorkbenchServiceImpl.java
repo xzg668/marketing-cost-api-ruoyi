@@ -35,6 +35,7 @@ import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
+import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.YearMonth;
@@ -566,7 +567,10 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     if (item == null || !form.getId().equals(item.getOaFormId())) {
       throw new QuoteIngestException("报价产品行不存在或不属于当前报价单: " + oaFormItemId);
     }
-    String topProductCode = requireText(item.getMaterialNo(), "报价产品料号");
+    String topProductCode =
+        requireText(
+            QuoteProductIdentityUtils.resolveCostingCode(item),
+            "报价产品料号、型号或图号");
     String period =
         StringUtils.hasText(periodMonth)
             ? CostPricingPeriodUtils.requireCurrentPricingMonth(periodMonth)

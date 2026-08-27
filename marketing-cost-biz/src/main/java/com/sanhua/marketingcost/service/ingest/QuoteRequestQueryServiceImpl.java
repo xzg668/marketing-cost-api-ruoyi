@@ -39,6 +39,7 @@ import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteIngestLogMapper;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
+import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -459,7 +460,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     QuoteBomStatusItemResponse response = new QuoteBomStatusItemResponse();
     response.setSeq(item.getSeq());
     response.setOaFormItemId(item.getId());
-    response.setProductCode(item.getMaterialNo());
+    response.setProductCode(QuoteProductIdentityUtils.resolveCostingCode(item));
     response.setProductModel(item.getSunlModel());
     if (status == null) {
       response.setProductPackagingType(PACKAGING_TYPE_UNKNOWN);
@@ -468,7 +469,9 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
               ? QuoteBomStatusCode.NOT_CHECKED.getCode()
               : QuoteBomStatusCode.NO_BOM.getCode());
       response.setErrorMessage(
-          StringUtils.hasText(item.getMaterialNo()) ? null : "产品料号为空，无法自动匹配 BOM");
+          StringUtils.hasText(item.getMaterialNo())
+              ? null
+              : "新品暂无正式料号，请先由技术补齐完整BOM");
       return response;
     }
     response.setId(status.getId());
@@ -483,8 +486,6 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setEffectiveTo(status.getEffectiveTo());
     response.setCheckedAt(status.getCheckedAt());
     response.setSyncBatchId(status.getSyncBatchId());
-    response.setManualTaskNo(status.getManualTaskNo());
-    response.setSupplementTaskId(status.getSupplementTaskId());
     response.setErrorMessage(status.getErrorMessage());
     return response;
   }
@@ -510,6 +511,10 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
             && historicalVersionId != null
             && !currentPeriodMonth.equals(historicalPeriodMonth);
     QuoteCostingWorkspaceResponse response = new QuoteCostingWorkspaceResponse();
+    response.setProductCode(
+        workspace == null
+            ? QuoteProductIdentityUtils.resolveCostingCode(item)
+            : workspace.getProductCode());
     response.setPeriodMonth(
         workspace == null
             ? currentPeriodMonth

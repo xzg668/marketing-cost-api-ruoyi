@@ -20,6 +20,7 @@ import com.sanhua.marketingcost.entity.QuotePriceDraftField;
 import com.sanhua.marketingcost.mapper.BusinessChangeLogMapper;
 import com.sanhua.marketingcost.mapper.QuoteCollaborationGapMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
+import com.sanhua.marketingcost.security.CollaborationPortalModule;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
@@ -55,6 +56,7 @@ public class TechnicalPriceDraftApplicationService {
   private final FixedPriceDraftValidator fixedPriceValidator;
   private final LinkedPriceDraftValidator linkedPriceValidator;
   private final RangePriceDraftValidator rangePriceValidator;
+  private final CollaborationPortalAccessPolicy portalAccessPolicy;
 
   public TechnicalPriceDraftApplicationService(
       QuoteCollaborationTaskRepository taskRepository,
@@ -67,7 +69,8 @@ public class TechnicalPriceDraftApplicationService {
       CollaborationIdempotency idempotency,
       FixedPriceDraftValidator fixedPriceValidator,
       LinkedPriceDraftValidator linkedPriceValidator,
-      RangePriceDraftValidator rangePriceValidator) {
+      RangePriceDraftValidator rangePriceValidator,
+      CollaborationPortalAccessPolicy portalAccessPolicy) {
     this.taskRepository = taskRepository;
     this.draftRepository = draftRepository;
     this.gapMapper = gapMapper;
@@ -79,6 +82,7 @@ public class TechnicalPriceDraftApplicationService {
     this.fixedPriceValidator = fixedPriceValidator;
     this.linkedPriceValidator = linkedPriceValidator;
     this.rangePriceValidator = rangePriceValidator;
+    this.portalAccessPolicy = portalAccessPolicy;
   }
 
   @Transactional(readOnly = true)
@@ -280,6 +284,7 @@ public class TechnicalPriceDraftApplicationService {
     QuoteCollaborationProductTask task = taskRepository.findMineById(
         requireId(taskId, "产品任务ID"), principal.userId(), currentBusinessUnit())
         .orElseThrow(TechnicalPriceDraftApplicationService::notFound);
+    portalAccessPolicy.requireTask(task, CollaborationPortalModule.PRICE);
     return new Owned(task, new CollaborationScope(
         task.getBusinessUnitType(), task.getApplicableOrgCode()), principal);
   }
@@ -292,6 +297,7 @@ public class TechnicalPriceDraftApplicationService {
     QuoteCollaborationProductTask task = taskRepository.findMineById(
         candidate.getProductTaskId(), principal.userId(), businessUnit)
         .orElseThrow(TechnicalPriceDraftApplicationService::notFound);
+    portalAccessPolicy.requireTask(task, CollaborationPortalModule.PRICE);
     CollaborationScope scope = new CollaborationScope(
         task.getBusinessUnitType(), task.getApplicableOrgCode());
     QuoteCollaborationGap gap = lock
@@ -690,7 +696,7 @@ public class TechnicalPriceDraftApplicationService {
     log.setChangedBy(owned.principal().userId());
     log.setChangedByName(owned.principal().userName());
     log.setChangedAt(LocalDateTime.now());
-    log.setChangeSource("OA_COLLABORATION");
+    log.setChangeSource("TECHNICAL_COLLABORATION");
     if (changeLogMapper.insert(log) != 1) {
       throw new CollaborationPersistenceException("保存参考价格变更记录失败");
     }

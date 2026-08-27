@@ -18,7 +18,6 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.OtherExpenseRate;
 import com.sanhua.marketingcost.entity.ProductProperty;
 import com.sanhua.marketingcost.entity.QualityLossRate;
-import com.sanhua.marketingcost.entity.SalaryCost;
 import com.sanhua.marketingcost.entity.ThreeExpenseDimensionMapping;
 import com.sanhua.marketingcost.entity.ThreeExpenseRate;
 import com.sanhua.marketingcost.mapper.AuxCostItemMapper;
@@ -35,12 +34,12 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.OtherExpenseRateMapper;
 import com.sanhua.marketingcost.mapper.ProductPropertyMapper;
 import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
-import com.sanhua.marketingcost.mapper.SalaryCostMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
 import com.sanhua.marketingcost.enums.CostItemCategory;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.service.CostRunCacheLookupService;
 import com.sanhua.marketingcost.service.CostRunCostItemService;
+import com.sanhua.marketingcost.service.CostBusinessRuleProvider;
 import com.sanhua.marketingcost.support.ManufactureRateMatchSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,6 +57,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 
 @Service
@@ -67,7 +67,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
   private static final String DIRECT_LABOR = "DIRECT_LABOR";
   private static final String INDIRECT_LABOR = "INDIRECT_LABOR";
-  private static final String CMS_SOURCE = "CMS";
   private static final String CMS_SOURCE_EFFECTIVE = "CMS_EFFECTIVE";
   private static final String CMS_SOURCE_TYPE_SALARY_DIRECT = "SALARY_DIRECT";
   private static final String CMS_SOURCE_TYPE_SALARY_INDIRECT = "SALARY_INDIRECT";
@@ -87,7 +86,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private static final String DEPT_OTHER = "DEPT_OTHER";
   private static final String AUX_PREFIX = "AUX_";
   private static final String AUX_AMOUNT_MODE_DIRECT = "DIRECT";
-  private static final BigDecimal CMS_AUX_UPLIFT_RATE = new BigDecimal("1.05");
+  private static final BigDecimal DEFAULT_CMS_AUX_UPLIFT_RATE = new BigDecimal("1.05");
   private static final String EXCLUDED_AUX_SUBJECT_PACKAGING = "包装辅料";
   private static final String OTHER_EXP_PREFIX = "OTHER_EXP_";
   /** T11：包装费固定 cost_code，区别于 lp_other_expense_rate 的 OTHER_EXP_<id> 系列 */
@@ -139,11 +138,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
    * <p>包装组件父件金额已经由包装价格服务按子件价和 U9 母件底数折算完成；见机表只叠加 5%。
    * <b>TODO</b> 业务方拍板后改为从 lp_product_property / 配置表读取（v1-business-followup #T24）。
    */
-  private static final BigDecimal PACKAGE_COEFFICIENT = new BigDecimal("1.05");
+  private static final BigDecimal DEFAULT_PACKAGE_COEFFICIENT = new BigDecimal("1.05");
   private final CostRunCostItemMapper costRunCostItemMapper;
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
-  private final SalaryCostMapper salaryCostMapper;
   private final CmsCostSourceEffectiveMapper cmsCostSourceEffectiveMapper;
   private final DepartmentFundRateMapper departmentFundRateMapper;
   private final AuxCostItemMapper auxCostItemMapper;
@@ -162,12 +160,13 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private final BomRawHierarchyMapper bomRawHierarchyMapper;
   /** T19：试算路径专用 cached lookup（5 个 rate + ProductProperty），避免重复 SQL */
   private final CostRunCacheLookupService cacheLookup;
+  private final CostBusinessRuleProvider businessRuleProvider;
 
+  @Autowired
   public CostRunCostItemServiceImpl(
       CostRunCostItemMapper costRunCostItemMapper,
       OaFormMapper oaFormMapper,
       OaFormItemMapper oaFormItemMapper,
-      SalaryCostMapper salaryCostMapper,
       CmsCostSourceEffectiveMapper cmsCostSourceEffectiveMapper,
       DepartmentFundRateMapper departmentFundRateMapper,
       AuxCostItemMapper auxCostItemMapper,
@@ -180,11 +179,11 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       MaterialMasterMapper materialMasterMapper,
       MaterialMasterRawMapper materialMasterRawMapper,
       BomRawHierarchyMapper bomRawHierarchyMapper,
-      CostRunCacheLookupService cacheLookup) {
+      CostRunCacheLookupService cacheLookup,
+      CostBusinessRuleProvider businessRuleProvider) {
     this.costRunCostItemMapper = costRunCostItemMapper;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
-    this.salaryCostMapper = salaryCostMapper;
     this.cmsCostSourceEffectiveMapper = cmsCostSourceEffectiveMapper;
     this.departmentFundRateMapper = departmentFundRateMapper;
     this.auxCostItemMapper = auxCostItemMapper;
@@ -198,6 +197,44 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     this.materialMasterRawMapper = materialMasterRawMapper;
     this.bomRawHierarchyMapper = bomRawHierarchyMapper;
     this.cacheLookup = cacheLookup;
+    this.businessRuleProvider = businessRuleProvider;
+  }
+
+  public CostRunCostItemServiceImpl(
+      CostRunCostItemMapper costRunCostItemMapper,
+      OaFormMapper oaFormMapper,
+      OaFormItemMapper oaFormItemMapper,
+      CmsCostSourceEffectiveMapper cmsCostSourceEffectiveMapper,
+      DepartmentFundRateMapper departmentFundRateMapper,
+      AuxCostItemMapper auxCostItemMapper,
+      CostRunPartItemMapper costRunPartItemMapper,
+      QualityLossRateMapper qualityLossRateMapper,
+      ManufactureRateMapper manufactureRateMapper,
+      ThreeExpenseRateMapper threeExpenseRateMapper,
+      OtherExpenseRateMapper otherExpenseRateMapper,
+      ProductPropertyMapper productPropertyMapper,
+      MaterialMasterMapper materialMasterMapper,
+      MaterialMasterRawMapper materialMasterRawMapper,
+      BomRawHierarchyMapper bomRawHierarchyMapper,
+      CostRunCacheLookupService cacheLookup) {
+    this(
+        costRunCostItemMapper,
+        oaFormMapper,
+        oaFormItemMapper,
+        cmsCostSourceEffectiveMapper,
+        departmentFundRateMapper,
+        auxCostItemMapper,
+        costRunPartItemMapper,
+        qualityLossRateMapper,
+        manufactureRateMapper,
+        threeExpenseRateMapper,
+        otherExpenseRateMapper,
+        productPropertyMapper,
+        materialMasterMapper,
+        materialMasterRawMapper,
+        bomRawHierarchyMapper,
+        cacheLookup,
+        (ruleCode, pricingMonth, businessUnitType, fallbackValue) -> fallbackValue);
   }
 
   @Override
@@ -324,14 +361,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       CostSourceContext costSourceContext,
       List<CostRunPartItemDto> currentPartItems,
       boolean persistDailyResult) {
-    // 单产品核算只读取当前料号已发布的 CMS 生效来源；全年默认来源由 CMS 同步/发布链路维护，
-    // 不能在用户点击核算时按“年度 + 事业部”重新扫描全量数据。
-    List<SalaryCost> salaryCosts =
-        salaryCostMapper.selectList(
-            Wrappers.lambdaQuery(SalaryCost.class).in(SalaryCost::getMaterialCode, materialCodes));
-
     // 1) 先算人工 -> 部门经费。正式核算有成本年度时，工资金额只取 CMS 公共生效来源。
-    LaborCostResult laborResult = buildLaborCostResult(materialCodes, salaryCosts, costSourceContext);
+    LaborCostResult laborResult = buildLaborCostResult(materialCodes, costSourceContext);
     BigDecimal directTotal = laborResult.directTotal;
     BigDecimal indirectTotal = laborResult.indirectTotal;
 
@@ -386,7 +417,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     BigDecimal partTotal = partSplit.nonPackageTotal();
     BigDecimal rawPackageAmount = partSplit.packageTotal();
     BigDecimal packageBucketAmount =
-        calculatePackageBucketAmount(oaNoValue, productCodeValue, currentPartItems);
+        calculatePackageBucketAmount(
+            oaNoValue, productCodeValue, currentPartItems, costSourceContext);
     BigDecimal packageAmount =
         packageBucketAmount.signum() > 0 ? packageBucketAmount : rawPackageAmount;
     // 包装进 materialTotal；优先用包装组件父件新口径，取不到包装组件数据时退回原始包装件金额。
@@ -531,7 +563,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     //   - 焊料 BUCKET_WELD: Σ(part 子件 cost_element=主要材料-焊料)
     //   - 包装 BUCKET_PACKAGE: Σ(包装组件父件 amount) × 1.05
     List<CostRunCostItemDto> bucketItems =
-        buildBucketItems(oaNoValue, productCodeValue, currentPartItems);
+        buildBucketItems(oaNoValue, productCodeValue, currentPartItems, costSourceContext);
     for (CostRunCostItemDto b : bucketItems) {
       items.add(b);
       if (StringUtils.hasText(b.getCostCode())) {
@@ -553,7 +585,10 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
    * <p>设计文档：docs/cost-bucket-aggregation-20260501-design.md
    */
   private List<CostRunCostItemDto> buildBucketItems(
-      String oaNoValue, String productCodeValue, List<CostRunPartItemDto> currentPartItems) {
+      String oaNoValue,
+      String productCodeValue,
+      List<CostRunPartItemDto> currentPartItems,
+      CostSourceContext costSourceContext) {
     List<CostRunCostItemDto> result = new ArrayList<>();
 
     // 焊料：从 part_item join material_master 按 cost_element 聚合
@@ -564,7 +599,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     }
 
     BigDecimal pkgAmount =
-        calculatePackageBucketAmount(oaNoValue, productCodeValue, currentPartItems);
+        calculatePackageBucketAmount(
+            oaNoValue, productCodeValue, currentPartItems, costSourceContext);
     if (pkgAmount != null && pkgAmount.signum() > 0) {
       result.add(buildBucketItem(BUCKET_PACKAGE, "包装", pkgAmount));
     }
@@ -574,17 +610,25 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
   /** 见机表包装金额 = 包装组件父件金额 × 1.05，用于材料费和 BOM_BUCKET_PACKAGE。 */
   BigDecimal calculatePackageBucketAmount(String oaNoValue, String productCodeValue) {
-    return calculatePackageBucketAmount(oaNoValue, productCodeValue, null);
+    return calculatePackageBucketAmount(oaNoValue, productCodeValue, null, null);
   }
 
   private BigDecimal calculatePackageBucketAmount(
-      String oaNoValue, String productCodeValue, List<CostRunPartItemDto> currentPartItems) {
+      String oaNoValue,
+      String productCodeValue,
+      List<CostRunPartItemDto> currentPartItems,
+      CostSourceContext costSourceContext) {
     BigDecimal packageParentAmount =
         sumPackageComponentParentAmount(oaNoValue, productCodeValue, currentPartItems);
     if (packageParentAmount == null || packageParentAmount.signum() <= 0) {
       return BigDecimal.ZERO;
     }
-    return packageParentAmount.multiply(PACKAGE_COEFFICIENT).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+    return packageParentAmount
+        .multiply(ruleDecimal(
+            CostBusinessRuleProvider.PACKAGE_COMPONENT_COEFFICIENT,
+            costSourceContext,
+            DEFAULT_PACKAGE_COEFFICIENT))
+        .setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
   }
 
   /**
@@ -1844,10 +1888,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
             || "freight".equalsIgnoreCase(expenseType));
   }
 
-  List<CostRunCostItemDto> buildAuxItems(Set<String> materialCodes) {
-    return buildAuxItems(materialCodes, null);
-  }
-
   List<CostRunCostItemDto> buildAuxItems(
       Set<String> materialCodes, Integer costYear, String businessUnitType) {
     return buildAuxItems(
@@ -1859,31 +1899,19 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     if (materialCodes == null || materialCodes.isEmpty()) {
       return Collections.emptyList();
     }
-    boolean useCmsEffectiveOnly = hasCostSourceContext(costSourceContext);
+    if (costSourceContext == null || costSourceContext.costYear == null) {
+      return Collections.emptyList();
+    }
     List<AuxCostItemDto> auxSubjects = new ArrayList<>();
-    if (useCmsEffectiveOnly) {
-      if (costSourceContext.costYear != null) {
-        List<AuxCostItemDto> cmsItems =
-            auxCostItemMapper.selectEffectiveAuxCostItems(
-                costSourceContext.costYear, materialCodes, costSourceContext.businessUnitType);
-        if (cmsItems != null) {
-          for (AuxCostItemDto cmsItem : cmsItems) {
-            if (isExcludedAuxSubject(cmsItem)) {
-              continue;
-            }
-            auxSubjects.add(cmsItem);
-          }
+    List<AuxCostItemDto> cmsItems =
+        auxCostItemMapper.selectEffectiveAuxCostItems(
+            costSourceContext.costYear, materialCodes, costSourceContext.businessUnitType);
+    if (cmsItems != null) {
+      for (AuxCostItemDto cmsItem : cmsItems) {
+        if (isExcludedAuxSubject(cmsItem)) {
+          continue;
         }
-      }
-    } else {
-      List<AuxCostItemDto> legacySubjects = auxCostItemMapper.selectByMaterialCodes(materialCodes);
-      if (legacySubjects != null) {
-        for (AuxCostItemDto subject : legacySubjects) {
-          if (isExcludedAuxSubject(subject)) {
-            continue;
-          }
-          auxSubjects.add(subject);
-        }
+        auxSubjects.add(cmsItem);
       }
     }
     if (auxSubjects.isEmpty()) {
@@ -1914,8 +1942,12 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         BigDecimal baseAmount =
             unitPrice == null ? BigDecimal.ZERO : unitPrice.setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
         if (isCmsEffectiveAuxSubject(subject)) {
-          amount = baseAmount.multiply(CMS_AUX_UPLIFT_RATE).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
-          rateForDisplay = CMS_AUX_UPLIFT_RATE;
+          BigDecimal upliftRate = ruleDecimal(
+              CostBusinessRuleProvider.CMS_AUX_UPLIFT_RATE,
+              costSourceContext,
+              DEFAULT_CMS_AUX_UPLIFT_RATE);
+          amount = baseAmount.multiply(upliftRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+          rateForDisplay = upliftRate;
         } else {
           amount = baseAmount;
           rateForDisplay = null;
@@ -1928,58 +1960,39 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return items;
   }
 
+  private BigDecimal ruleDecimal(
+      String ruleCode, CostSourceContext context, BigDecimal fallbackValue) {
+    return businessRuleProvider.decimalValue(
+        ruleCode,
+        context == null ? null : context.accountingPeriodMonth,
+        context == null ? null : context.businessUnitType,
+        fallbackValue);
+  }
+
   private LaborCostResult buildLaborCostResult(
-      Set<String> materialCodes, List<SalaryCost> salaryCosts, CostSourceContext costSourceContext) {
+      Set<String> materialCodes, CostSourceContext costSourceContext) {
     LaborCostResult result = new LaborCostResult();
-    boolean useCmsEffectiveOnly = hasCostSourceContext(costSourceContext);
-    Map<String, List<SalaryCost>> salaryByMaterial = groupSalaryCostsByMaterial(salaryCosts);
-    Map<String, String> refMaterialByMaterial =
-        useCmsEffectiveOnly
-            ? Collections.emptyMap()
-            : resolveSalaryRefMaterials(salaryCosts, materialCodes);
     Map<String, CmsCostSourceEffective> effectiveByTypeAndParent =
-        loadSalaryEffectiveSources(materialCodes, refMaterialByMaterial, costSourceContext);
+        loadSalaryEffectiveSources(materialCodes, costSourceContext);
 
     for (String materialCode : materialCodes) {
-      List<SalaryCost> costs = salaryByMaterial.getOrDefault(materialCode, Collections.emptyList());
-      String lookupParentCode = refMaterialByMaterial.getOrDefault(materialCode, materialCode);
       CmsCostSourceEffective directEffective =
-          effectiveByTypeAndParent.get(effectiveKey(CMS_SOURCE_TYPE_SALARY_DIRECT, lookupParentCode));
+          effectiveByTypeAndParent.get(effectiveKey(CMS_SOURCE_TYPE_SALARY_DIRECT, materialCode));
       CmsCostSourceEffective indirectEffective =
-          effectiveByTypeAndParent.get(effectiveKey(CMS_SOURCE_TYPE_SALARY_INDIRECT, lookupParentCode));
+          effectiveByTypeAndParent.get(effectiveKey(CMS_SOURCE_TYPE_SALARY_INDIRECT, materialCode));
 
       if (directEffective != null) {
         BigDecimal amount = nullToZero(directEffective.getAmountYuan());
         result.directTotal = result.directTotal.add(amount);
-        addLaborMetadata(result.laborByUnit, costs, amount, BigDecimal.ZERO);
-      } else if (useCmsEffectiveOnly) {
-        result.missingDirectCodes.add(materialCode);
       } else {
-        BigDecimal manualAmount = sumManualSalary(costs, true);
-        result.directTotal = result.directTotal.add(manualAmount);
-        addManualLaborByUnit(result.laborByUnit, costs, true);
-        if (costSourceContext != null
-            && costSourceContext.costYear != null
-            && manualAmount.signum() == 0) {
-          result.missingDirectCodes.add(materialCode);
-        }
+        result.missingDirectCodes.add(materialCode);
       }
 
       if (indirectEffective != null) {
         BigDecimal amount = nullToZero(indirectEffective.getAmountYuan());
         result.indirectTotal = result.indirectTotal.add(amount);
-        addLaborMetadata(result.laborByUnit, costs, BigDecimal.ZERO, amount);
-      } else if (useCmsEffectiveOnly) {
-        result.missingIndirectCodes.add(materialCode);
       } else {
-        BigDecimal manualAmount = sumManualSalary(costs, false);
-        result.indirectTotal = result.indirectTotal.add(manualAmount);
-        addManualLaborByUnit(result.laborByUnit, costs, false);
-        if (costSourceContext != null
-            && costSourceContext.costYear != null
-            && manualAmount.signum() == 0) {
-          result.missingIndirectCodes.add(materialCode);
-        }
+        result.missingIndirectCodes.add(materialCode);
       }
     }
 
@@ -1994,50 +2007,14 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return result;
   }
 
-  private Map<String, String> resolveSalaryRefMaterials(
-      List<SalaryCost> salaryCosts, Set<String> materialCodes) {
-    Map<String, String> result = new HashMap<>();
-    if (salaryCosts == null || materialCodes == null || materialCodes.isEmpty()) {
-      return result;
-    }
-    for (SalaryCost cost : salaryCosts) {
-      String materialCode = trimToNull(cost.getMaterialCode());
-      String refMaterialCode = trimToNull(cost.getRefMaterialCode());
-      if (materialCode != null && refMaterialCode != null && materialCodes.contains(materialCode)) {
-        result.putIfAbsent(materialCode, refMaterialCode);
-      }
-    }
-    return result;
-  }
-
-  private Map<String, List<SalaryCost>> groupSalaryCostsByMaterial(List<SalaryCost> salaryCosts) {
-    Map<String, List<SalaryCost>> result = new HashMap<>();
-    if (salaryCosts == null) {
-      return result;
-    }
-    for (SalaryCost cost : salaryCosts) {
-      String materialCode = trimToNull(cost.getMaterialCode());
-      if (materialCode == null) {
-        continue;
-      }
-      result.computeIfAbsent(materialCode, ignored -> new ArrayList<>()).add(cost);
-    }
-    return result;
-  }
-
   private Map<String, CmsCostSourceEffective> loadSalaryEffectiveSources(
       Set<String> materialCodes,
-      Map<String, String> refMaterialByMaterial,
       CostSourceContext costSourceContext) {
     if (costSourceContext == null
         || costSourceContext.costYear == null
         || materialCodes == null
         || materialCodes.isEmpty()) {
       return Collections.emptyMap();
-    }
-    Set<String> lookupCodes = new LinkedHashSet<>(materialCodes);
-    if (refMaterialByMaterial != null) {
-      lookupCodes.addAll(refMaterialByMaterial.values());
     }
     List<CmsCostSourceEffective> rows =
         cmsCostSourceEffectiveMapper.selectList(
@@ -2047,7 +2024,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
                     CmsCostSourceEffective::getSourceType,
                     CMS_SOURCE_TYPE_SALARY_DIRECT,
                     CMS_SOURCE_TYPE_SALARY_INDIRECT)
-                .in(CmsCostSourceEffective::getParentCode, lookupCodes)
+                .in(CmsCostSourceEffective::getParentCode, materialCodes)
                 .eq(CmsCostSourceEffective::getBusinessUnitType, costSourceContext.businessUnitType));
     if (rows == null || rows.isEmpty()) {
       return Collections.emptyMap();
@@ -2061,56 +2038,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       }
     }
     return result;
-  }
-
-  private BigDecimal sumManualSalary(List<SalaryCost> costs, boolean direct) {
-    BigDecimal sum = BigDecimal.ZERO;
-    for (SalaryCost cost : costs) {
-      if (isCmsSource(cost.getSource())) {
-        continue;
-      }
-      sum = sum.add(nullToZero(direct ? cost.getDirectLaborCost() : cost.getIndirectLaborCost()));
-    }
-    return sum;
-  }
-
-  private void addManualLaborByUnit(
-      Map<String, LaborSum> laborByUnit, List<SalaryCost> costs, boolean direct) {
-    for (SalaryCost cost : costs) {
-      if (isCmsSource(cost.getSource())) {
-        continue;
-      }
-      String businessUnit = trimToNull(cost.getBusinessUnit());
-      if (businessUnit == null) {
-        continue;
-      }
-      LaborSum sum = laborByUnit.computeIfAbsent(businessUnit, ignored -> new LaborSum());
-      if (direct) {
-        sum.direct = sum.direct.add(nullToZero(cost.getDirectLaborCost()));
-      } else {
-        sum.indirect = sum.indirect.add(nullToZero(cost.getIndirectLaborCost()));
-      }
-    }
-  }
-
-  private void addLaborMetadata(
-      Map<String, LaborSum> laborByUnit,
-      List<SalaryCost> costs,
-      BigDecimal directAmount,
-      BigDecimal indirectAmount) {
-    String businessUnit = null;
-    for (SalaryCost cost : costs) {
-      businessUnit = trimToNull(cost.getBusinessUnit());
-      if (businessUnit != null) {
-        break;
-      }
-    }
-    if (businessUnit == null) {
-      return;
-    }
-    LaborSum sum = laborByUnit.computeIfAbsent(businessUnit, ignored -> new LaborSum());
-    sum.direct = sum.direct.add(nullToZero(directAmount));
-    sum.indirect = sum.indirect.add(nullToZero(indirectAmount));
   }
 
   private String missingEffectiveRemark(
@@ -2479,15 +2406,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return null;
   }
 
-  private boolean isCmsSource(String source) {
-    return CMS_SOURCE.equalsIgnoreCase(trimToNull(source))
-        || CMS_SOURCE_EFFECTIVE.equalsIgnoreCase(trimToNull(source));
-  }
-
-  private boolean hasCostSourceContext(CostSourceContext costSourceContext) {
-    return costSourceContext != null;
-  }
-
   private boolean isExcludedAuxSubject(AuxCostItemDto subject) {
     return EXCLUDED_AUX_SUBJECT_PACKAGING.equals(
         trimToNull(subject == null ? null : subject.getAuxSubjectName()));
@@ -2579,15 +2497,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private record DepartmentSubjectAmount(
       BigDecimal baseAmount, BigDecimal rate, BigDecimal amount, String remark) {}
 
-  private static class LaborSum {
-    private BigDecimal direct = BigDecimal.ZERO;
-    private BigDecimal indirect = BigDecimal.ZERO;
-  }
-
   private static class LaborCostResult {
     private BigDecimal directTotal = BigDecimal.ZERO;
     private BigDecimal indirectTotal = BigDecimal.ZERO;
-    private final Map<String, LaborSum> laborByUnit = new LinkedHashMap<>();
     private final List<String> missingDirectCodes = new ArrayList<>();
     private final List<String> missingIndirectCodes = new ArrayList<>();
     private String directRemark;

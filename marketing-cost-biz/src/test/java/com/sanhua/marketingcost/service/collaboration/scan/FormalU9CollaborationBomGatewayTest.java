@@ -10,9 +10,11 @@ import static org.mockito.Mockito.when;
 import com.sanhua.marketingcost.dto.quotebom.FormalBomReadResult;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomSourceLineDto;
 import com.sanhua.marketingcost.dto.QuoteDataOrganization;
+import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.service.FormalBomReadService;
 import com.sanhua.marketingcost.service.collaboration.ApprovedResultFingerprints;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -41,18 +43,22 @@ class FormalU9CollaborationBomGatewayTest {
   void available() {
     QuoteBomSourceLineDto first = line("V6");
     QuoteBomSourceLineDto second = line(null);
+    BomRawHierarchy root = new BomRawHierarchy();
+    root.setBuildBatchId("BUILD-6");
+    when(rawMapper.selectById(100L)).thenReturn(root);
     when(formalBomReadService.read(
             eq("P-1"), eq("2026-08"), isNull(), any(LocalDate.class),
             any(QuoteDataOrganization.class)))
         .thenReturn(new FormalBomReadResult("P-1", "2026-08", null, true,
             List.of(first, second), null));
 
-    CurrentU9BomResult result = gateway.read(context());
+    CurrentU9BomResult result = gateway.readLive(context());
 
     assertThat(result.status()).isEqualTo(CurrentU9BomResult.Status.AVAILABLE);
     assertThat(result.source()).isEqualTo("U9");
     assertThat(result.bomVersion()).isEqualTo("V6");
     assertThat(result.lineCount()).isEqualTo(2);
+    assertThat(result.syncBatchId()).isEqualTo("BUILD-6");
   }
 
   @Test
@@ -64,7 +70,7 @@ class FormalU9CollaborationBomGatewayTest {
             List.of(), "未找到正式BOM"));
     when(rawMapper.selectCount(any())).thenReturn(0L);
 
-    CurrentU9BomResult result = gateway.read(context());
+    CurrentU9BomResult result = gateway.readLive(context());
 
     assertThat(result.status()).isEqualTo(CurrentU9BomResult.Status.NOT_FOUND);
     assertThat(result.message()).contains("未找到正式BOM");
@@ -79,7 +85,7 @@ class FormalU9CollaborationBomGatewayTest {
             List.of(), "未找到正式BOM"));
     when(rawMapper.selectCount(any())).thenReturn(1L);
 
-    CurrentU9BomResult result = gateway.read(context());
+    CurrentU9BomResult result = gateway.readLive(context());
 
     assertThat(result.status())
         .isEqualTo(CurrentU9BomResult.Status.ORGANIZATION_MISMATCH);
@@ -93,7 +99,7 @@ class FormalU9CollaborationBomGatewayTest {
             any(), any(), any(), any(LocalDate.class), any(QuoteDataOrganization.class)))
         .thenThrow(new QueryTimeoutException("query timeout"));
 
-    CurrentU9BomResult result = gateway.read(context());
+    CurrentU9BomResult result = gateway.readLive(context());
 
     assertThat(result.status()).isEqualTo(CurrentU9BomResult.Status.TIMEOUT);
   }
@@ -104,12 +110,12 @@ class FormalU9CollaborationBomGatewayTest {
     when(formalBomReadService.read(
             any(), any(), any(), any(LocalDate.class), any(QuoteDataOrganization.class)))
         .thenReturn(null);
-    assertThat(gateway.read(context()).status()).isEqualTo(CurrentU9BomResult.Status.DATA_EMPTY);
+    assertThat(gateway.readLive(context()).status()).isEqualTo(CurrentU9BomResult.Status.DATA_EMPTY);
 
     when(formalBomReadService.read(
             any(), any(), any(), any(LocalDate.class), any(QuoteDataOrganization.class)))
         .thenReturn(new FormalBomReadResult("P-1", "2026-08", null, true, List.of(), null));
-    assertThat(gateway.read(context()).status()).isEqualTo(CurrentU9BomResult.Status.DATA_EMPTY);
+    assertThat(gateway.readLive(context()).status()).isEqualTo(CurrentU9BomResult.Status.DATA_EMPTY);
   }
 
   @Test
@@ -119,13 +125,13 @@ class FormalU9CollaborationBomGatewayTest {
             any(), any(), any(), any(LocalDate.class), any(QuoteDataOrganization.class)))
         .thenReturn(new FormalBomReadResult(
             "P-1", "2026-08", null, false, List.of(), "未找到有效连通 BOM"));
-    assertThat(gateway.read(context()).status()).isEqualTo(CurrentU9BomResult.Status.DATA_EMPTY);
+    assertThat(gateway.readLive(context()).status()).isEqualTo(CurrentU9BomResult.Status.DATA_EMPTY);
 
     when(formalBomReadService.read(
             any(), any(), any(), any(LocalDate.class), any(QuoteDataOrganization.class)))
         .thenReturn(new FormalBomReadResult(
             "P-1", "2026-08", null, false, List.of(), "跨组织制造 BOM 展开失败：缺少下级"));
-    assertThat(gateway.read(context()).status()).isEqualTo(CurrentU9BomResult.Status.ERROR);
+    assertThat(gateway.readLive(context()).status()).isEqualTo(CurrentU9BomResult.Status.ERROR);
   }
 
   private QuoteCollaborationScanContext context() {
@@ -147,8 +153,9 @@ class FormalU9CollaborationBomGatewayTest {
 
   private QuoteBomSourceLineDto line(String bomVersion) {
     return new QuoteBomSourceLineDto(
-        null, null, null, null, null, null, null, null, null, null,
-        null, null, null, null, null, null, null, bomVersion, null, null,
-        null, null, null, null, null, null, null, null, null, null);
+        100L, 1, 0, "P-1", "P-1", "P-1", "产品", null, null, null,
+        null, null, null, "件", "制造件", null, "主制造", bomVersion,
+        BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "/P-1/", 1,
+        100L, 1L, 0, "210", "COMMERCIAL");
   }
 }

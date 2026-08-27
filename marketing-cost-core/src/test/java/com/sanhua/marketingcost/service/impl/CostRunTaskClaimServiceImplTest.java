@@ -115,13 +115,16 @@ class CostRunTaskClaimServiceImplTest {
             null);
     CostRunTaskClaimService service = new CostRunTaskClaimServiceImpl(mapper.proxy());
 
-    boolean updated = service.markSuccess(5L, "worker-a", "{\"ok\":true}");
+    boolean updated =
+        service.markSuccess(5L, "worker-a", 88L, "COST-88", "{\"ok\":true}");
 
     CostRunTask stored = mapper.snapshot(5L);
     assertThat(updated).isTrue();
     assertThat(stored.getStatus()).isEqualTo("SUCCESS");
     assertThat(stored.getProgress()).isEqualTo(100);
     assertThat(stored.getWorkerId()).isNull();
+    assertThat(stored.getCostRunVersionId()).isEqualTo(88L);
+    assertThat(stored.getCostRunNo()).isEqualTo("COST-88");
     assertThat(stored.getResultSummaryJson()).isEqualTo("{\"ok\":true}");
   }
 
@@ -291,8 +294,10 @@ class CostRunTaskClaimServiceImplTest {
     private int markSuccess(Object[] args) {
       Long taskId = (Long) args[0];
       String workerId = (String) args[1];
-      String resultSummaryJson = (String) args[2];
-      LocalDateTime finishedAt = (LocalDateTime) args[3];
+      Long costRunVersionId = (Long) args[2];
+      String costRunNo = (String) args[3];
+      String resultSummaryJson = (String) args[4];
+      LocalDateTime finishedAt = (LocalDateTime) args[5];
       synchronized (tasks) {
         CostRunTask task = tasks.get(taskId);
         if (!ownedRunning(task, workerId)) {
@@ -303,6 +308,8 @@ class CostRunTaskClaimServiceImplTest {
         task.setWorkerId(null);
         task.setLockedAt(null);
         task.setLockExpireTime(null);
+        task.setCostRunVersionId(costRunVersionId);
+        task.setCostRunNo(costRunNo);
         task.setResultSummaryJson(resultSummaryJson);
         task.setFinishedAt(finishedAt);
         return 1;
@@ -357,6 +364,8 @@ class CostRunTaskClaimServiceImplTest {
       CostRunTask copy = new CostRunTask();
       copy.setId(source.getId());
       copy.setBatchNo(source.getBatchNo());
+      copy.setCostRunVersionId(source.getCostRunVersionId());
+      copy.setCostRunNo(source.getCostRunNo());
       copy.setScene(source.getScene());
       copy.setStatus(source.getStatus());
       copy.setWorkerId(source.getWorkerId());

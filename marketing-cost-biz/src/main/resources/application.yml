@@ -3,9 +3,10 @@ server:
 
 quote:
   collaboration:
-    oa:
-      # 本期不接真实OA：只保存HOLD事件，不发HTTP、不生成虚假流程号或待办号。
-      mode: ${QUOTE_COLLABORATION_OA_MODE:DISABLED}
+    portal:
+      # OA 待办中的协作链接前缀；令牌写在 URL 片段中，浏览器收到后转存会话，不进入服务端访问日志。
+      base-url: ${QUOTE_COLLABORATION_PORTAL_BASE_URL:http://localhost:5173}
+      token-expire-hours: ${QUOTE_COLLABORATION_PORTAL_TOKEN_EXPIRE_HOURS:168}
     electronic-drawing:
       # 未配置真实电子图库时失败关闭；禁止把报价系统草稿当成电子图库正式结果。
       mode: ${QUOTE_COLLABORATION_ELECTRONIC_DRAWING_MODE:DISABLED}
@@ -99,10 +100,6 @@ app:
 # 没有真实业务价值，保留双跑只是浪费 + 副作用（业务实际拿到 legacy 结果而非 v1 新功能）。
 cost:
   quote-bom:
-    effective-bom:
-      # 最终有效 BOM 主链随应用启用，不依赖 IDEA 环境变量；
-      # 如需异常回退，改为 false 并重启服务即可，已生成的最终树和历史报价不会删除或改写。
-      enabled: true
     alternative-selection:
       # 报价 BOM 标准/替代选择随应用启用。关闭后拒绝新的切换操作；
       # 已有选择历史、普通 BOM、上卷和已确认历史报价均保留。
@@ -111,15 +108,6 @@ cost:
     # 只在废料、上卷、加工费等会改变成本金额的算法变更时升级；普通发布不要修改。
     # 成功版本记录的算法版本与此值不一致时必须重算，避免程序修复后仍复用旧成本。
     algorithm-version: ${COST_RUN_ALGORITHM_VERSION:COST_V3}
-    engine:
-      # 当前版本统一 CostRunEngine 已是唯一核算核心；开关保留给上线检查和异常兜底策略识别。
-      enabled: ${COST_RUN_ENGINE_ENABLED:true}
-    execution:
-      # 默认提交通用任务；回退只需设置 COST_RUN_EXECUTION_MODE=API_SYNC，灰度名单可保留。
-      mode: ${COST_RUN_EXECUTION_MODE:TASK_WORKER}
-      # 逗号分隔；为空表示当前 mode 对全部请求生效。生产灰度建议先显式配置小范围名单。
-      gray-business-units: ${COST_RUN_EXECUTION_GRAY_BUSINESS_UNITS:}
-      gray-users: ${COST_RUN_EXECUTION_GRAY_USERS:}
   # 联动价 parser 模式灰度（T08 配置）
   #   legacy = 只走旧 evaluateExpression（保留 [中文] 包裹兼容）
   #   dual   = legacy 主、new 并跑；差异 > dual-warn-threshold 写 WARN，返回 legacy 值

@@ -24,7 +24,7 @@ class TechnicalBomTemplateServiceTest {
     TechnicalBomDraftResponse draft = new TechnicalBomDraftResponse(9L, 4, "U9_COPY",
         "REF-1", true, List.of(), List.of(root), List.of(root, child));
     when(draftService.exportSnapshot(10L)).thenReturn(new ElectronicBomTemplateSnapshot(
-        10L, 4, "P-1", null, "产品", "S", "M", "COMMERCIAL", "210", draft));
+        10L, 4, "P-1", null, "产品", "S", "M", "DRAW-001", "COMMERCIAL", "210", draft));
 
     var file = new TechnicalBomTemplateService(draftService).export(10L);
 

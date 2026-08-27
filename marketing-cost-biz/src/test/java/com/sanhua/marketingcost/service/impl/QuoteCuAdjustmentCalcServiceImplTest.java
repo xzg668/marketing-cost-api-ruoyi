@@ -28,7 +28,7 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.QuoteCostPriceScenario;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
-import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
+import com.sanhua.marketingcost.dto.financequote.QuoteCuMaterialDiffItemResult;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostPriceScenarioMapper;
@@ -381,7 +381,7 @@ class QuoteCuAdjustmentCalcServiceImplTest {
   }
 
   private QuoteCuMaterialDiffResult diff(Long versionId, String adjustment, int cuCount) {
-    QuoteCuMaterialDiffItem row = new QuoteCuMaterialDiffItem();
+    QuoteCuMaterialDiffItemResult row = new QuoteCuMaterialDiffItemResult();
     row.setSettlementKey("11|PROD-1|1|CU-PART|NORMAL");
     row.setBomRowId(1L);
     row.setMaterialCode("CU-PART");

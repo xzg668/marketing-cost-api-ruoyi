@@ -94,26 +94,28 @@ class QuoteBatchCostRunServiceImplTest {
   }
 
   @Test
-  void prerequisiteFailureIsVisibleAndRetryableInsteadOfPendingForever() {
+  void failedExecutionExposesTechnicalStatusAndBusinessOutcome() {
     String month = CostPricingPeriodUtils.currentPricingMonth();
     OaForm form = new OaForm();
     form.setBusinessUnitType("COMMERCIAL");
     when(formMapper.selectOne(any())).thenReturn(form);
     CostRunBatch batch = new CostRunBatch();
     batch.setBatchNo("CRQ-FAILED");
-    batch.setPrerequisiteStatus("FAILED");
     batch.setStatus("FAILED");
     batch.setFailedCount(20);
-    batch.setErrorMessage("主档同步失败: 数据库连接失败");
+    batch.setErrorMessage("核算失败: 数据库连接失败");
     when(batchMapper.selectCurrentQuoteBatch("OA-FAIL", month, "COMMERCIAL"))
         .thenReturn(batch);
-    when(progressService.getBatchProgress("CRQ-FAILED"))
-        .thenReturn(progress("CRQ-FAILED", "PENDING", 20, 0, 20, 0, 0, 0, 0));
+    CostRunBatchProgressSnapshot progress =
+        progress("CRQ-FAILED", "FAILED", 20, 0, 0, 0, 0, 0, 100);
+    progress.setBusinessOutcome("FAILED");
+    progress.setFailedCount(20);
+    when(progressService.getBatchProgress("CRQ-FAILED")).thenReturn(progress);
 
     var response = service.getCurrent("OA-FAIL", month);
 
     assertThat(response.getStatus()).isEqualTo("FAILED");
-    assertThat(response.getPrerequisiteStatus()).isEqualTo("FAILED");
+    assertThat(response.getBusinessOutcome()).isEqualTo("FAILED");
     assertThat(response.getMessage()).contains("数据库连接失败");
     assertThat(response.getQueuedCount()).isZero();
     assertThat(response.getFailedCount()).isEqualTo(20);

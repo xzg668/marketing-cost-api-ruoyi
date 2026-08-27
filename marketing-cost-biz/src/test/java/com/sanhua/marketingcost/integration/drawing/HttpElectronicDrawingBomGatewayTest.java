@@ -67,6 +67,7 @@ class HttpElectronicDrawingBomGatewayTest {
     assertThat(result.sourceVersion()).isEqualTo("V3");
     assertThat(result.nodes()).hasSize(1);
     assertThat(requestBody.get()).contains("\"productCode\":\"P-1\"")
+        .contains("\"drawingNo\":\"DRAW-001\"")
         .contains("\"materialOrganizationCode\":\"COMMERCIAL\"")
         .contains("\"bomPurpose\":\"主制造\"");
   }
@@ -134,7 +135,7 @@ class HttpElectronicDrawingBomGatewayTest {
   }
 
   private ElectronicBomQuery query() {
-    return new ElectronicBomQuery("P-1", "COMMERCIAL", "210", "主制造",
+    return new ElectronicBomQuery("P-1", "DRAW-001", "COMMERCIAL", "210", "主制造",
         LocalDate.of(2026, 8, 13), "REQ-1");
   }
 

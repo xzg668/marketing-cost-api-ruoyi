@@ -13,40 +13,38 @@ public interface TechnicalBomCandidateMapper {
 
   @Select("""
       <script>
-      SELECT h.top_product_code AS productCode,
-             COALESCE(NULLIF(TRIM(m.material_name), ''), MAX(h.material_name)) AS productName,
-             COALESCE(NULLIF(TRIM(m.material_spec), ''), MAX(h.material_spec)) AS productSpec,
-             NULLIF(TRIM(m.material_model), '') AS productModel,
-             h.bom_purpose AS bomPurpose,
-             h.bom_version AS bomVersion,
-             COUNT(DISTINCT all_node.id) AS bomNodeCount,
+      WITH candidate_root AS (
+        SELECT DISTINCT
+               h.top_product_code AS productCode,
+               COALESCE(NULLIF(TRIM(m.material_name), ''), h.material_name) AS productName,
+               COALESCE(NULLIF(TRIM(m.material_spec), ''), h.material_spec) AS productSpec,
+               NULLIF(TRIM(m.material_model), '') AS productModel,
+               h.bom_purpose AS bomPurpose,
+               h.bom_version AS bomVersion,
              (
                CASE WHEN #{model} IS NOT NULL AND TRIM(m.material_model) = #{model} THEN 100 ELSE 0 END
-               + CASE WHEN #{spec} IS NOT NULL AND TRIM(COALESCE(m.material_spec, MAX(h.material_spec))) = #{spec} THEN 90 ELSE 0 END
+               + CASE WHEN #{spec} IS NOT NULL AND TRIM(COALESCE(m.material_spec, h.material_spec)) = #{spec} THEN 90 ELSE 0 END
                + CASE WHEN #{model} IS NOT NULL AND m.material_model LIKE CONCAT('%', #{model}, '%') THEN 30 ELSE 0 END
-               + CASE WHEN #{spec} IS NOT NULL AND COALESCE(m.material_spec, MAX(h.material_spec)) LIKE CONCAT('%', #{spec}, '%') THEN 25 ELSE 0 END
+               + CASE WHEN #{spec} IS NOT NULL AND COALESCE(m.material_spec, h.material_spec) LIKE CONCAT('%', #{spec}, '%') THEN 25 ELSE 0 END
                + CASE WHEN #{keyword} IS NOT NULL AND h.top_product_code LIKE CONCAT('%', #{keyword}, '%') THEN 15 ELSE 0 END
                + CASE WHEN #{keyword} IS NOT NULL AND m.material_name LIKE CONCAT('%', #{keyword}, '%') THEN 10 ELSE 0 END
              ) AS matchScore
       FROM lp_bom_raw_hierarchy h
+      <choose>
+        <when test='exactProductCode != null'>FORCE INDEX (idx_org_top_path)</when>
+        <otherwise>FORCE INDEX (idx_bom_candidate_root)</otherwise>
+      </choose>
       LEFT JOIN lp_material_master_raw m
         ON m.material_code = h.top_product_code
        AND m.organization_code = #{materialOrganizationCode}
        AND m.active_flag = 1
-      JOIN lp_bom_raw_hierarchy all_node
-        ON all_node.price_org_code = h.price_org_code
-       AND all_node.top_product_code = h.top_product_code
-       AND all_node.source_type = h.source_type
-       AND (all_node.bom_purpose &lt;=&gt; h.bom_purpose)
-       AND all_node.effective_from &lt;= #{effectiveDate}
-       AND (all_node.effective_to IS NULL OR all_node.effective_to &gt;= #{effectiveDate})
       WHERE h.price_org_code = #{priceOrgCode}
         AND h.source_type = 'U9'
         AND h.level = 0
         AND h.effective_from &lt;= #{effectiveDate}
         AND (h.effective_to IS NULL OR h.effective_to &gt;= #{effectiveDate})
         AND EXISTS (
-          SELECT 1 FROM lp_bom_raw_hierarchy child
+          SELECT 1 FROM lp_bom_raw_hierarchy child FORCE INDEX (idx_org_top_path)
           WHERE child.price_org_code = h.price_org_code
             AND child.top_product_code = h.top_product_code
             AND child.source_type = h.source_type
@@ -79,10 +77,30 @@ public interface TechnicalBomCandidateMapper {
           </if>
         )
       </if>
-      GROUP BY h.top_product_code, m.material_name, m.material_spec, m.material_model,
-               h.bom_purpose, h.bom_version
       ORDER BY matchScore DESC, h.top_product_code ASC, h.bom_version DESC
       LIMIT #{limit}
+      )
+      SELECT candidate.productCode,
+             candidate.productName,
+             candidate.productSpec,
+             candidate.productModel,
+             candidate.bomPurpose,
+             candidate.bomVersion,
+             COUNT(DISTINCT all_node.id) AS bomNodeCount,
+             candidate.matchScore
+      FROM candidate_root candidate
+      JOIN lp_bom_raw_hierarchy all_node FORCE INDEX (idx_org_top_path)
+        ON all_node.price_org_code = #{priceOrgCode}
+       AND all_node.top_product_code = candidate.productCode
+       AND all_node.source_type = 'U9'
+       AND (all_node.bom_purpose &lt;=&gt; candidate.bomPurpose)
+       AND all_node.effective_from &lt;= #{effectiveDate}
+       AND (all_node.effective_to IS NULL OR all_node.effective_to &gt;= #{effectiveDate})
+      GROUP BY candidate.productCode, candidate.productName, candidate.productSpec,
+               candidate.productModel, candidate.bomPurpose, candidate.bomVersion,
+               candidate.matchScore
+      ORDER BY candidate.matchScore DESC, candidate.productCode ASC,
+               candidate.bomVersion DESC
       </script>
       """)
   List<TechnicalBomCandidateRow> selectCandidates(

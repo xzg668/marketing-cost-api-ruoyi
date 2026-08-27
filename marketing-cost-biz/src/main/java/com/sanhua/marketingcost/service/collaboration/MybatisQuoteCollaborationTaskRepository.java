@@ -149,6 +149,14 @@ public class MybatisQuoteCollaborationTaskRepository
   }
 
   @Override
+  public Optional<QuoteCollaborationProductTask> findProductTaskByIdAndBusinessUnit(
+      Long id, String businessUnitType) {
+    return Optional.ofNullable(productTaskMapper.selectByIdAndBusinessUnit(
+        requireId(id, "产品任务ID"),
+        CollaborationScope.requireBusinessUnit(businessUnitType)));
+  }
+
+  @Override
   public List<QuoteCollaborationProductTask> findProductTasksByProductAndMonth(
       String productCode, String accountingMonth, CollaborationScope scope) {
     return productTaskMapper.selectByProductAndMonth(

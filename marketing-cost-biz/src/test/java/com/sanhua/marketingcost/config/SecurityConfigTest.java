@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.config;
 
+import com.sanhua.marketingcost.security.CollaborationPortalGrantCodec;
+import com.sanhua.marketingcost.security.CollaborationSecurityFilter;
 import com.sanhua.marketingcost.security.PermissionService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -38,6 +40,19 @@ class SecurityConfigTest {
     void securityConfigHasEnableMethodSecurity() {
         assertNotNull(SecurityConfig.class.getAnnotation(EnableMethodSecurity.class),
                 "SecurityConfig 应标注 @EnableMethodSecurity");
+    }
+
+    @Test
+    @DisplayName("统一协作授权编解码器由安全配置显式注册")
+    void collaborationPortalGrantCodecIsExplicitBean() throws NoSuchMethodException {
+        var method = SecurityConfig.class.getMethod("collaborationPortalGrantCodec");
+        assertNotNull(method.getAnnotation(Bean.class));
+        assertEquals(CollaborationPortalGrantCodec.class, method.getReturnType());
+        for (var constructor : SecurityConfig.class.getConstructors()) {
+            assertFalse(List.of(constructor.getParameterTypes())
+                    .contains(CollaborationSecurityFilter.class),
+                    "安全配置构造器不能依赖使用该编解码器的过滤器，否则会形成循环依赖");
+        }
     }
 
     @Test

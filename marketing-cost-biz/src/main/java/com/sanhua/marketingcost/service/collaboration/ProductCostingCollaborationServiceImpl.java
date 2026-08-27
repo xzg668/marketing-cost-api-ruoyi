@@ -87,12 +87,10 @@ public class ProductCostingCollaborationServiceImpl
       }
       CollaborationActor actor = actor(command.initiatedBy());
       QuoteCollaborationStartResult started = taskService.startAutomatically(
-          new QuoteCollaborationStartCommand(
+          QuoteCollaborationStartCommand.initiatedByCostingOperator(
               item.getId(),
               technician == null ? null : technician.userId(),
               technician == null ? null : technician.userName(),
-              null,
-              null,
               command.periodMonth(),
               actor));
       boolean persisted = hasActiveGapFacts(started.productTaskId(), scan);

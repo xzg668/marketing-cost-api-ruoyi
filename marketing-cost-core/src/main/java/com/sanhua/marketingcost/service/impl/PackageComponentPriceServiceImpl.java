@@ -680,11 +680,12 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     }
     String periodMonth = trimToNull(request.getPeriodMonth());
     if (periodMonth == null) {
-      periodMonth = YearMonth.now().toString();
+      periodMonth = com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
     }
     boolean explicitPriceAsOfTime = request.getPriceAsOfTime() != null;
     LocalDate quoteDate = request.getAsOfDate() == null
-        ? (explicitPriceAsOfTime ? request.getPriceAsOfTime().toLocalDate() : LocalDate.now())
+        ? (explicitPriceAsOfTime ? request.getPriceAsOfTime().toLocalDate()
+            : com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingDate())
         : request.getAsOfDate();
     LocalDateTime priceAsOfTime = explicitPriceAsOfTime
         ? request.getPriceAsOfTime()

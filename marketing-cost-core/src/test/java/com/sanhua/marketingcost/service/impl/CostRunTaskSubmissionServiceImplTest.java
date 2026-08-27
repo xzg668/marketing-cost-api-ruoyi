@@ -50,7 +50,6 @@ class CostRunTaskSubmissionServiceImplTest {
     assertThat(batchMapper.inserted.get(0).getPricingMonth()).isEqualTo(YearMonth.now().toString());
     assertThat(batchMapper.inserted.get(0).getBusinessUnitType()).isEqualTo("COMMERCIAL");
     assertThat(batchMapper.inserted.get(0).getExecutionNo()).isEqualTo(1);
-    assertThat(batchMapper.inserted.get(0).getPrerequisiteStatus()).isEqualTo("PENDING");
     assertThat(batchMapper.inserted.get(0).getControlVersion()).isZero();
     assertThat(taskMapper.inserted)
         .extracting(CostRunTask::getCalcObjectKey)
@@ -59,6 +58,33 @@ class CostRunTaskSubmissionServiceImplTest {
     assertThat(taskMapper.inserted)
         .extracting(CostRunTask::getPricingMonth)
         .containsOnly(YearMonth.now().toString());
+  }
+
+  @Test
+  void submitQuoteIncludesNewProductsIdentifiedOnlyByModelOrDrawing() {
+    OaFormItem modelOnly = item(11L, null, "BOX");
+    modelOnly.setSunlModel("MODEL-NEW-1");
+    OaFormItem drawingOnly = item(12L, " ", "BAG");
+    drawingOnly.setCustomerDrawing("DRAWING-NEW-2");
+    OaFormItem noIdentity = item(13L, null, null);
+    FakeBatchMapper batchMapper = new FakeBatchMapper(null);
+    FakeTaskMapper taskMapper = new FakeTaskMapper();
+    CostRunTaskSubmissionServiceImpl service =
+        new CostRunTaskSubmissionServiceImpl(
+            batchMapper.proxy(),
+            taskMapper.proxy(),
+            new FakeOaFormMapper(oaForm()).proxy(),
+            new FakeOaFormItemMapper(List.of(modelOnly, drawingOnly, noIdentity)).proxy(),
+            emptyWorkspaceMapper(),
+            emptyVersionMapper(),
+            algorithmVersion());
+
+    CostRunTaskSubmissionResult result = service.submitQuote("OA-001");
+
+    assertThat(result.getTotalCount()).isEqualTo(2);
+    assertThat(taskMapper.inserted)
+        .extracting(CostRunTask::getProductCode)
+        .containsExactly("MODEL:MODEL-NEW-1", "DRAWING:DRAWING-NEW-2");
   }
 
   @Test
@@ -240,7 +266,6 @@ class CostRunTaskSubmissionServiceImplTest {
     assertThat(result.getTotalCount()).isEqualTo(1);
     assertThat(result.getQueuedCount()).isZero();
     assertThat(result.getSkippedCount()).isEqualTo(1);
-    assertThat(batchMapper.inserted.get(0).getPrerequisiteStatus()).isEqualTo("NOT_REQUIRED");
     assertThat(taskMapper.inserted).singleElement().satisfies(task -> {
       assertThat(task.getStatus()).isEqualTo("SKIPPED_CURRENT");
       assertThat(task.getProgress()).isEqualTo(100);
@@ -282,7 +307,6 @@ class CostRunTaskSubmissionServiceImplTest {
 
     assertThat(result.getQueuedCount()).isEqualTo(1);
     assertThat(result.getSkippedCount()).isZero();
-    assertThat(batchMapper.inserted.get(0).getPrerequisiteStatus()).isEqualTo("PENDING");
     assertThat(taskMapper.inserted).singleElement().satisfies(task -> {
       assertThat(task.getStatus()).isEqualTo("PENDING");
       assertThat(task.getProgress()).isZero();
@@ -358,7 +382,6 @@ class CostRunTaskSubmissionServiceImplTest {
     batch.setSourceNo(sourceNo);
     batch.setStatus("PENDING");
     batch.setExecutionNo(1);
-    batch.setPrerequisiteStatus("SUCCESS");
     batch.setControlVersion(2);
     batch.setPricingMonth(YearMonth.now().toString());
     batch.setBusinessUnitType("COMMERCIAL");
@@ -454,6 +477,7 @@ class CostRunTaskSubmissionServiceImplTest {
                       quoteRerunSkippedCounts.add((Integer) args[4]);
                       yield quoteResetResult;
                     }
+                    case "archiveExecution" -> 1;
                     case "syncActiveQuoteBatchCounts" -> {
                       syncedBatchNos.add((String) args[0]);
                       yield 1;
@@ -494,6 +518,7 @@ class CostRunTaskSubmissionServiceImplTest {
                       quoteRerunSnapshots.add((String) args[4]);
                       yield 1;
                     }
+                    case "archiveExecutionTasks" -> 1;
                     case "toString" -> "FakeCostRunTaskMapper";
                     default -> throw new UnsupportedOperationException(method.toString());
                   });

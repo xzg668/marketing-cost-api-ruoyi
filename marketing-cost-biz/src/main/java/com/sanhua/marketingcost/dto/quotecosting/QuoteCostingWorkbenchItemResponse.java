@@ -9,6 +9,7 @@ public class QuoteCostingWorkbenchItemResponse {
   private Integer seq;
   private String externalLineId;
   private String materialNo;
+  private String customerDrawing;
   private String productName;
   private String sunlModel;
   private String businessType;

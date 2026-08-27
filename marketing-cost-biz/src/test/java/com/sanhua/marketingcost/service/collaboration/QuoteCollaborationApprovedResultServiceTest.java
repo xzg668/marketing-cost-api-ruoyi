@@ -54,7 +54,7 @@ class QuoteCollaborationApprovedResultServiceTest {
   }
 
   @Test
-  @DisplayName("财务审核生效后生成FULL_BOM结果并将六个月规则固化为半开区间")
+  @DisplayName("财务审核生效后按报价月份固化六个完整自然月")
   void activatesFullBomForExactlySixMonths() {
     QuoteCollaborationProductTask task = fullBomTask();
     QuoteCollaborationReview review = effectiveReview();
@@ -76,8 +76,8 @@ class QuoteCollaborationApprovedResultServiceTest {
         command());
 
     assertThat(result.getResultType()).isEqualTo("FULL_BOM");
-    assertThat(result.getValidFrom()).isEqualTo(LocalDateTime.of(2026, 8, 12, 10, 30));
-    assertThat(result.getValidUntil()).isEqualTo(LocalDateTime.of(2027, 2, 12, 10, 30));
+    assertThat(result.getValidFrom()).isEqualTo(LocalDateTime.of(2026, 8, 1, 0, 0));
+    assertThat(result.getValidUntil()).isEqualTo(LocalDateTime.of(2027, 1, 31, 23, 59, 59));
     assertThat(result.getValidityMonths()).isEqualTo(6);
     assertThat(result.getValidityPolicyCode()).isEqualTo("COLLAB_RESULT_SIX_MONTHS_V1");
     assertThat(result.getStructureFingerprint()).isEqualTo("a".repeat(64));

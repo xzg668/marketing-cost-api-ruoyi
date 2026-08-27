@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteCollaborationApprovedResult;
+import com.sanhua.marketingcost.entity.QuoteCollaborationProductTask;
 import com.sanhua.marketingcost.entity.QuoteCollaborationReview;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
@@ -51,8 +52,7 @@ class QuoteCollaborationTaskStartIntegrationTest extends BomMapperTestBase {
   @Autowired private QuoteCollaborationReviewRepository reviewRepository;
   @Autowired private OaFormMapper formMapper;
   @Autowired private OaFormItemMapper itemMapper;
-  @Autowired private CollaborationTransitionEventFactory eventFactory;
-  @Autowired private CollaborationEventService eventService;
+  @Autowired private CollaborationTaskLogService taskLogService;
   @Autowired private PlatformTransactionManager transactionManager;
   @Autowired private JdbcTemplate jdbcTemplate;
 
@@ -63,22 +63,46 @@ class QuoteCollaborationTaskStartIntegrationTest extends BomMapperTestBase {
   @BeforeAll
   static void createCollaborationSchema() throws Exception {
     try (Connection connection = openConnection();
-        Statement statement = connection.createStatement();
-        InputStream in = QuoteCollaborationTaskStartIntegrationTest.class.getResourceAsStream(
-            "/db/V206__quote_bom_price_collaboration_schema.sql")) {
-      assertThat(in).isNotNull();
-      String sql = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-      for (String fragment : sql.split(";")) {
-        if (!fragment.isBlank()) {
-          statement.execute(fragment);
+        Statement statement = connection.createStatement()) {
+      for (String resource : List.of(
+          "/db/V206__quote_bom_price_collaboration_schema.sql",
+          "/db/V210__quote_collaboration_gap_trace_fields.sql")) {
+        // 多个协作集成测试共享同一个 Testcontainers MySQL；V210 可能已由先运行的
+        // 测试建好。只在字段尚不存在时执行 ALTER，避免测试顺序造成重复列假失败。
+        if (resource.contains("V210") && collaborationGapTraceColumnsExist(connection)) {
+          continue;
         }
+        try (InputStream in = QuoteCollaborationTaskStartIntegrationTest.class
+            .getResourceAsStream(resource)) {
+          assertThat(in).as(resource).isNotNull();
+          String sql = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+          for (String fragment : sql.split(";")) {
+            if (!fragment.isBlank()) {
+              statement.execute(fragment);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private static boolean collaborationGapTraceColumnsExist(Connection connection)
+      throws Exception {
+    try (var statement = connection.prepareStatement(
+        "SELECT COUNT(*) FROM information_schema.columns "
+            + "WHERE table_schema=DATABASE() AND table_name='lp_quote_collaboration_gap' "
+            + "AND column_name IN "
+            + "('bom_quantity','bom_unit','accounting_month','applicable_org_code')")) {
+      try (var resultSet = statement.executeQuery()) {
+        return resultSet.next() && resultSet.getInt(1) == 4;
       }
     }
   }
 
   @AfterEach
   void cleanRows() {
-    jdbcTemplate.update("DELETE FROM lp_integration_outbox WHERE 1=1");
+    jdbcTemplate.update("DELETE FROM lp_business_change_log "
+        + "WHERE biz_domain='QUOTE_COLLABORATION' AND biz_type='PRODUCT_TASK_EVENT'");
     jdbcTemplate.update("DELETE FROM lp_quote_collaboration_approved_result WHERE 1=1");
     jdbcTemplate.update("DELETE FROM lp_quote_collaboration_review_item WHERE 1=1");
     jdbcTemplate.update("DELETE FROM lp_quote_collaboration_review WHERE 1=1");
@@ -133,7 +157,8 @@ class QuoteCollaborationTaskStartIntegrationTest extends BomMapperTestBase {
           "SELECT link_type FROM lp_quote_collaboration_quote_link ORDER BY link_type",
           String.class)).containsExactly("ACTIVE_TASK_LINK", "OWNER");
       assertThat(jdbcTemplate.queryForObject(
-          "SELECT COUNT(*) FROM lp_integration_outbox WHERE event_type IN "
+          "SELECT COUNT(*) FROM lp_business_change_log WHERE biz_domain='QUOTE_COLLABORATION' "
+              + "AND biz_type='PRODUCT_TASK_EVENT' AND field_name IN "
               + "('TECH_TASK_CREATED','TECH_TASK_LINKED')", Integer.class)).isEqualTo(2);
     } finally {
       executor.shutdownNow();
@@ -171,7 +196,8 @@ class QuoteCollaborationTaskStartIntegrationTest extends BomMapperTestBase {
       assertThat(count("lp_quote_collaboration_product_task")).isEqualTo(1);
       assertThat(count("lp_quote_collaboration_quote_link")).isEqualTo(1);
       assertThat(jdbcTemplate.queryForObject(
-          "SELECT COUNT(*) FROM lp_integration_outbox WHERE event_type='TECH_TASK_CREATED'",
+          "SELECT COUNT(*) FROM lp_business_change_log WHERE biz_domain='QUOTE_COLLABORATION' "
+              + "AND biz_type='PRODUCT_TASK_EVENT' AND field_name='TECH_TASK_CREATED'",
           Integer.class)).isEqualTo(1);
     } finally {
       executor.shutdownNow();
@@ -235,11 +261,13 @@ class QuoteCollaborationTaskStartIntegrationTest extends BomMapperTestBase {
     assertThat(second.quoteLinkId()).isEqualTo(first.quoteLinkId());
     assertThat(count("lp_quote_collaboration_product_task")).isEqualTo(1);
     assertThat(count("lp_quote_collaboration_quote_link")).isEqualTo(1);
-    assertThat(count("lp_integration_outbox")).isEqualTo(1);
+    assertThat(jdbcTemplate.queryForObject(
+        "SELECT COUNT(*) FROM lp_business_change_log WHERE biz_domain='QUOTE_COLLABORATION' "
+            + "AND biz_type='PRODUCT_TASK_EVENT'", Integer.class)).isEqualTo(1);
   }
 
   @Test
-  @DisplayName("不同月份、组织和主要范围各自生成活动任务，不发生误锁")
+  @DisplayName("同产品跨月份和缺口阶段共用任务，不同组织相互隔离")
   void lockDimensionsAreIsolatedInDatabase() {
     List<QuoteRow> rows = List.of(
         createQuote("MONTH", "1008900001289"),
@@ -254,12 +282,84 @@ class QuoteCollaborationTaskStartIntegrationTest extends BomMapperTestBase {
         .thenReturn(scan(rows.get(2), "2026-08", "210", PrimaryScope.PRICE_ONLY));
     QuoteCollaborationTaskServiceImpl service = service(scanService);
 
-    rows.forEach(row -> inTransaction(() -> service.start(command(row.itemId()))));
+    List<QuoteCollaborationStartResult> results = rows.stream()
+        .map(row -> inTransaction(() -> service.start(command(row.itemId()))))
+        .toList();
 
-    assertThat(count("lp_quote_collaboration_product_task")).isEqualTo(3);
+    assertThat(results).extracting(QuoteCollaborationStartResult::action)
+        .containsExactly(
+            CollaborationStartAction.CREATED,
+            CollaborationStartAction.CREATED,
+            CollaborationStartAction.LINKED_ACTIVE_TASK);
+    assertThat(results.get(2).productTaskId()).isEqualTo(results.get(0).productTaskId());
+    assertThat(count("lp_quote_collaboration_product_task")).isEqualTo(2);
     assertThat(jdbcTemplate.queryForObject(
         "SELECT COUNT(DISTINCT active_lock_key) FROM lp_quote_collaboration_product_task",
-        Integer.class)).isEqualTo(3);
+        Integer.class)).isEqualTo(2);
+  }
+
+  @Test
+  @DisplayName("两个无料号报价只要组织和型号相同就共用一个进行中任务")
+  void modelLocksNewProductsAcrossQuotes() {
+    QuoteRow first = createQuote("MODEL-A", null);
+    QuoteRow second = createQuote("MODEL-B", null);
+    QuoteCollaborationScanService scanService = mock(QuoteCollaborationScanService.class);
+    when(scanService.scanQuoteItem(first.itemId()))
+        .thenReturn(scan(first, "2026-08", "210", PrimaryScope.FULL_BOM));
+    when(scanService.scanQuoteItem(second.itemId()))
+        .thenReturn(scan(second, "2026-09", "210", PrimaryScope.FULL_BOM));
+    QuoteCollaborationTaskServiceImpl service = service(scanService);
+
+    QuoteCollaborationStartResult created = inTransaction(
+        () -> service.start(command(first.itemId())));
+    QuoteCollaborationStartResult linked = inTransaction(
+        () -> service.start(command(second.itemId())));
+
+    assertThat(created.action()).isEqualTo(CollaborationStartAction.CREATED);
+    assertThat(linked.action()).isEqualTo(CollaborationStartAction.LINKED_ACTIVE_TASK);
+    assertThat(linked.productTaskId()).isEqualTo(created.productTaskId());
+    assertThat(count("lp_quote_collaboration_product_task")).isEqualTo(1);
+    assertThat(count("lp_quote_collaboration_quote_link")).isEqualTo(2);
+  }
+
+  @Test
+  @DisplayName("原任务取消后释放活动锁，同组织同料号可以重新创建任务")
+  void terminalTaskReleasesLockForNewTask() {
+    QuoteRow first = createQuote("RELEASE-A", "1008900001289");
+    QuoteRow second = createQuote("RELEASE-B", "1008900001289");
+    QuoteCollaborationScanService scanService = mock(QuoteCollaborationScanService.class);
+    when(scanService.scanQuoteItem(first.itemId()))
+        .thenReturn(scan(first, "2026-08", "210", PrimaryScope.FULL_BOM));
+    when(scanService.scanQuoteItem(second.itemId()))
+        .thenReturn(scan(second, "2026-09", "210", PrimaryScope.FULL_BOM));
+    QuoteCollaborationTaskServiceImpl service = service(scanService);
+
+    QuoteCollaborationStartResult firstResult = inTransaction(
+        () -> service.start(command(first.itemId())));
+    QuoteCollaborationProductTask active = repository.findProductTaskById(
+        firstResult.productTaskId(), new CollaborationScope("COMMERCIAL", "210")).orElseThrow();
+    inTransaction(() -> {
+      repository.transitionProductTaskStatus(
+          active.getId(), active.getTaskVersion(), active.getTaskStatus(), "CANCELLED",
+          null, null, new CollaborationScope("COMMERCIAL", "210"),
+          new CollaborationActor(901L, "报价员"));
+      return Boolean.TRUE;
+    });
+
+    QuoteCollaborationStartResult secondResult = inTransaction(
+        () -> service.start(command(second.itemId())));
+
+    assertThat(secondResult.action()).isEqualTo(CollaborationStartAction.CREATED);
+    assertThat(secondResult.productTaskId()).isNotEqualTo(firstResult.productTaskId());
+    assertThat(count("lp_quote_collaboration_product_task")).isEqualTo(2);
+    assertThat(jdbcTemplate.queryForObject(
+        "SELECT COUNT(*) FROM lp_quote_collaboration_product_task "
+            + "WHERE active_flag=1 AND active_lock_key IS NOT NULL",
+        Integer.class)).isEqualTo(1);
+    assertThat(jdbcTemplate.queryForObject(
+        "SELECT COUNT(*) FROM lp_quote_collaboration_product_task "
+            + "WHERE task_status='CANCELLED' AND active_flag=0 AND active_lock_key IS NULL",
+        Integer.class)).isEqualTo(1);
   }
 
   @Test
@@ -351,7 +451,7 @@ class QuoteCollaborationTaskStartIntegrationTest extends BomMapperTestBase {
   private QuoteCollaborationTaskServiceImpl service(QuoteCollaborationScanService scanService) {
     return new QuoteCollaborationTaskServiceImpl(
         scanService, repository, reviewRepository, itemMapper, formMapper,
-        eventFactory, eventService);
+        taskLogService);
   }
 
   private QuoteCollaborationStartCommand command(Long itemId) {
@@ -360,8 +460,7 @@ class QuoteCollaborationTaskStartIntegrationTest extends BomMapperTestBase {
         new CollaborationActor(901L, "报价员"));
   }
 
-  private QuoteCollaborationStartResult inTransaction(
-      java.util.function.Supplier<QuoteCollaborationStartResult> action) {
+  private <T> T inTransaction(java.util.function.Supplier<T> action) {
     TransactionTemplate template = new TransactionTemplate(transactionManager);
     template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
     return template.execute(status -> action.get());

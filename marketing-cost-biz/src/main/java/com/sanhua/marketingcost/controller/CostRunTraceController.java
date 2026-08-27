@@ -22,7 +22,7 @@ public class CostRunTraceController {
     this.traceQueryService = traceQueryService;
   }
 
-  @PreAuthorize("@ss.hasPermi('cost:run:list')")
+  @PreAuthorize("@ss.hasPermi('ingest:quote:list')")
   @GetMapping
   public CommonResult<CostRunTraceListResponse> list(@PathVariable("costRunNo") String costRunNo) {
     if (!StringUtils.hasText(costRunNo)) {
@@ -32,7 +32,7 @@ public class CostRunTraceController {
     return CommonResult.success(traceQueryService.listByCostRunNo(costRunNo));
   }
 
-  @PreAuthorize("@ss.hasPermi('cost:run:list')")
+  @PreAuthorize("@ss.hasPermi('ingest:quote:list')")
   @GetMapping("/{traceId}")
   public CommonResult<CostRunTraceDetailDto> detail(
       @PathVariable("costRunNo") String costRunNo, @PathVariable("traceId") Long traceId) {

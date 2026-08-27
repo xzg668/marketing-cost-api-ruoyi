@@ -198,6 +198,37 @@ class QuoteEffectiveBomQueryServiceTest {
   }
 
   @Test
+  void usesApprovedElectronicDrawingSnapshotOnlyAfterMonthlyU9NotFound() {
+    QuoteBomMonthlySnapshot u9NotFound = snapshot(42L);
+    u9NotFound.setId(500L);
+    u9NotFound.setSnapshotIdentityKey("A".repeat(64));
+    u9NotFound.setSyncStatus("NOT_FOUND");
+    u9NotFound.setBomBatchId(null);
+
+    QuoteBomMonthlySnapshot electronic = snapshot(42L);
+    electronic.setId(601L);
+    electronic.setBomSource("ELECTRONIC_DRAWING_BOM");
+    electronic.setBomVersion("ED-88");
+    electronic.setBomBatchId("SUPPLEMENT_VERSION:88");
+    List<BomRawHierarchy> electronicRows = rawRows();
+    electronicRows.forEach(row -> {
+      row.setSourceType("E_DRAWING");
+      row.setSourceImportBatchId("SUPPLEMENT_VERSION:88");
+      row.setBuildBatchId("SUPPLEMENT_VERSION:88");
+    });
+    when(monthlyMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(u9NotFound), List.of(electronic));
+    when(rawMapper.selectList(any(Wrapper.class))).thenReturn(electronicRows);
+
+    QuoteEffectiveBomResponse result = service.getEffectiveBom("OA-QEB-11", 42L);
+
+    assertThat(result.state()).isEqualTo("DRAFT");
+    assertThat(result.monthlySnapshotId()).isEqualTo(601L);
+    assertThat(result.sourceBomBatchId()).isEqualTo("SUPPLEMENT_VERSION:88");
+    assertThat(result.nodes()).extracting(node -> node.materialCode()).containsExactly("P", "A");
+  }
+
+  @Test
   void shapeLessTopProductIsAPlanningRootAndDoesNotBlockItsBomTree() {
     List<BomRawHierarchy> rows = rawRows();
     rows.getFirst().setShapeAttr(null);

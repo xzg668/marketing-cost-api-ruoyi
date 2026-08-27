@@ -197,7 +197,6 @@ class QuoteEffectiveBomCostingServiceImplTest {
   private QuoteBomCostingBuildResponse build(String buildBatchId) {
     return new QuoteBomCostingBuildResponse(
         1L,
-        null,
         10L,
         "OA-1",
         "P",

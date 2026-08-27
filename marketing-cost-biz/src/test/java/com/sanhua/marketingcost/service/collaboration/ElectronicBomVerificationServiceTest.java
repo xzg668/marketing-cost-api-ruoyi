@@ -9,9 +9,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.sanhua.marketingcost.dto.collaboration.ElectronicBomVerifyRequest;
+import com.sanhua.marketingcost.dto.collaboration.TechnicalBomDraftResponse;
+import com.sanhua.marketingcost.dto.collaboration.TechnicalBomWorkspaceResponse;
 import com.sanhua.marketingcost.entity.QuoteCollaborationProductTask;
 import com.sanhua.marketingcost.entity.QuoteCollaborationQuoteLink;
 import com.sanhua.marketingcost.integration.drawing.ElectronicBomFetchResult;
+import com.sanhua.marketingcost.integration.drawing.ElectronicBomQuery;
 import com.sanhua.marketingcost.integration.drawing.ElectronicDrawingBomGateway;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.collaboration.ElectronicBomStructureValidator.ValidationResult;
@@ -26,6 +29,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -41,7 +45,8 @@ class ElectronicBomVerificationServiceTest {
   private final CollaborationPrincipal wang = new CollaborationPrincipal(
       601L, "王工", Set.of(CollaborationRole.TECHNICIAN));
   private final ElectronicBomVerificationService service = new ElectronicBomVerificationService(
-      repository, principalProvider, draftService, gateway, validator, persistence, priceScan);
+      repository, principalProvider, draftService, gateway, validator, persistence, priceScan,
+      new CollaborationPortalAccessPolicy());
   private QuoteCollaborationProductTask task;
 
   @BeforeEach
@@ -56,7 +61,7 @@ class ElectronicBomVerificationServiceTest {
     when(repository.findLinksByProductTask(eq(10L), any())).thenReturn(List.of(owner()));
     when(draftService.exportSnapshot(10L)).thenReturn(
         new TechnicalBomDraftApplicationService.ElectronicBomTemplateSnapshot(
-            10L, 3, "P-1", null, "产品", "S", "M", "COMMERCIAL", "210", null));
+            10L, 3, "P-1", null, "产品", "S", "M", "DRAW-001", "COMMERCIAL", "210", null));
   }
 
   @AfterEach
@@ -130,6 +135,28 @@ class ElectronicBomVerificationServiceTest {
     verify(persistence).persistVerifiedBom(eq(10L), eq(3), eq(wang), any(), eq(bom));
     verify(priceScan).scan(any(), any());
     verify(persistence).persistPriceScan(eq(10L), eq(4), eq(wang), any(), eq(scanResult));
+    ArgumentCaptor<ElectronicBomQuery> query = ArgumentCaptor.forClass(ElectronicBomQuery.class);
+    verify(gateway).fetchCurrentBom(query.capture());
+    assertThat(query.getValue().productCode()).isEqualTo("P-1");
+    assertThat(query.getValue().drawingNo()).isEqualTo("DRAW-001");
+  }
+
+  @Test
+  void missingTargetDrawingNumberBlocksRemoteQuery() {
+    when(draftService.exportSnapshot(10L)).thenReturn(
+        new TechnicalBomDraftApplicationService.ElectronicBomTemplateSnapshot(
+            10L, 3, "P-1", null, "产品", "S", "M", null,
+            "COMMERCIAL", "210", null));
+    QuoteCollaborationProductTask failed = task(4, "TECH_VALIDATION_FAILED");
+    when(persistence.persistFailure(eq(10L), eq(3), eq(wang), any(), any()))
+        .thenReturn(new ElectronicBomVerificationPersistenceService.FailureResult(failed, 1));
+
+    var response = service.verify(10L, new ElectronicBomVerifyRequest(3, "主制造", null));
+
+    assertThat(response.verified()).isFalse();
+    assertThat(response.issues()).extracting(issue -> issue.code())
+        .containsExactly("TARGET_DRAWING_NO_REQUIRED");
+    verify(gateway, never()).fetchCurrentBom(any());
   }
 
   @Test
@@ -154,6 +181,38 @@ class ElectronicBomVerificationServiceTest {
     assertThat(response.issues()).extracting(issue -> issue.code())
         .containsExactly("PRICE_SCAN_FAILED");
     verify(persistence, never()).persistPriceScan(any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void importedExcelUsesTheSameFingerprintAndPriceScanChainWithoutRemoteFetch() {
+    TechnicalBomDraftResponse draft = new TechnicalBomDraftResponse(
+        90L, 3, "ELECTRONIC_DRAWING_EXCEL", null, true,
+        List.of(), List.of(), List.of());
+    TechnicalBomWorkspaceResponse workspace = new TechnicalBomWorkspaceResponse(
+        10L, 3, null, 2, "SAVE_DRAFT", "保存", List.of(), draft,
+        null, null, List.of());
+    when(draftService.workspace(10L)).thenReturn(workspace);
+    QuoteCollaborationProductTask verifiedTask = task(4, "BOM_IN_PROGRESS");
+    verifiedTask.setElectronicBomFingerprint("E".repeat(64));
+    when(persistence.persistVerifiedImportedBom(eq(10L), eq(3), eq(wang), any()))
+        .thenReturn(new ElectronicBomVerificationPersistenceService.VerifiedResult(
+            verifiedTask, "E".repeat(64), 21));
+    CollaborationPriceScanResult ready = CollaborationPriceScanResult.ready(12);
+    when(priceScan.scan(any(), any())).thenReturn(ready);
+    QuoteCollaborationProductTask readyTask = task(5, "BOM_IN_PROGRESS");
+    readyTask.setElectronicBomFingerprint("E".repeat(64));
+    when(persistence.persistPriceScan(eq(10L), eq(4), eq(wang), any(), eq(ready)))
+        .thenReturn(new ElectronicBomVerificationPersistenceService.PriceScanResult(
+            readyTask, 0, false));
+
+    var response = service.confirmImportedExcel(
+        10L, new ElectronicBomVerifyRequest(3, null, null));
+
+    assertThat(response.status()).isEqualTo("VERIFIED_READY");
+    assertThat(response.nodeCount()).isEqualTo(21);
+    assertThat(response.priceGapCount()).isZero();
+    verify(gateway, never()).fetchCurrentBom(any());
+    verify(persistence).persistVerifiedImportedBom(eq(10L), eq(3), eq(wang), any());
   }
 
   private QuoteCollaborationProductTask task(int version, String status) {

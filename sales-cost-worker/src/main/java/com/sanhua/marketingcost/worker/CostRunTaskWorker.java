@@ -23,6 +23,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.dao.TransientDataAccessException;
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
+import java.sql.SQLTransientException;
 
 @Component
 public class CostRunTaskWorker {
@@ -30,7 +34,6 @@ public class CostRunTaskWorker {
   private static final Logger log = LoggerFactory.getLogger(CostRunTaskWorker.class);
 
   private final CostRunTaskClaimService taskClaimService;
-  private final CostRunBatchPrerequisiteService batchPrerequisiteService;
   private final CostRunTaskProgressService progressService;
   private final MonthlyRepriceProgressService monthlyRepriceProgressService;
   private final CostRunTaskExecutorRegistry executorRegistry;
@@ -38,13 +41,11 @@ public class CostRunTaskWorker {
 
   public CostRunTaskWorker(
       CostRunTaskClaimService taskClaimService,
-      CostRunBatchPrerequisiteService batchPrerequisiteService,
       CostRunTaskProgressService progressService,
       ObjectProvider<MonthlyRepriceProgressService> monthlyRepriceProgressService,
       CostRunTaskExecutorRegistry executorRegistry,
       CostRunWorkerProperties properties) {
     this.taskClaimService = taskClaimService;
-    this.batchPrerequisiteService = batchPrerequisiteService;
     this.progressService = progressService;
     this.monthlyRepriceProgressService = monthlyRepriceProgressService.getIfAvailable();
     this.executorRegistry = executorRegistry;
@@ -62,7 +63,6 @@ public class CostRunTaskWorker {
       return 0;
     }
     String workerId = properties.resolvedWorkerId();
-    prepareQuoteBatches(workerId);
     List<CostRunTask> tasks =
         taskClaimService.claimTasks(
             workerId,
@@ -86,26 +86,6 @@ public class CostRunTaskWorker {
       refreshProgress(batchNo);
     }
     return tasks.size();
-  }
-
-  private void prepareQuoteBatches(String workerId) {
-    if (!properties.getScenes().contains(CostRunTaskScene.QUOTE)) {
-      return;
-    }
-    CostRunBatchPrerequisiteService.PreparationSummary summary =
-        batchPrerequisiteService.preparePendingQuoteBatches(
-            workerId,
-            properties.getClaimBatchSize(),
-            properties.getLockTimeoutMinutes());
-    if (summary.claimedCount() > 0) {
-      log.info(
-          "cost run worker batch prerequisites: workerId={} candidates={} claimed={} success={} failed={}",
-          workerId,
-          summary.candidateCount(),
-          summary.claimedCount(),
-          summary.successCount(),
-          summary.failedCount());
-    }
   }
 
   private List<TaskExecutionMetric> processTasks(String workerId, List<CostRunTask> tasks) {
@@ -148,6 +128,8 @@ public class CostRunTaskWorker {
           taskClaimService.markSuccess(
               task.getId(),
               workerId,
+              result == null ? null : result.costRunVersionId(),
+              result == null ? null : result.costRunNo(),
               result == null ? null : result.resultSummaryJson());
       if (!marked) {
         throw new IllegalStateException("任务所有权已变更，无法标记成功");
@@ -188,7 +170,20 @@ public class CostRunTaskWorker {
   }
 
   private boolean isRetryable(RuntimeException ex) {
-    return !(ex instanceof IllegalArgumentException);
+    if (ex instanceof CostRunTaskExecutionFailedException executionFailure) {
+      return executionFailure.isRetryable();
+    }
+    Throwable current = ex;
+    while (current != null) {
+      if (current instanceof TransientDataAccessException
+          || current instanceof SQLTransientException
+          || current instanceof SocketTimeoutException
+          || current instanceof ConnectException) {
+        return true;
+      }
+      current = current.getCause();
+    }
+    return false;
   }
 
   private ThreadFactory workerThreadFactory(String workerId) {

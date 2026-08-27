@@ -14,13 +14,11 @@ import static org.mockito.Mockito.when;
 import com.sanhua.marketingcost.dto.quotebom.QuoteProductTypeResolveResult;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
-import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteCollaborationApprovedResult;
 import com.sanhua.marketingcost.entity.QuoteCollaborationProductTask;
 import com.sanhua.marketingcost.enums.QuoteProductType;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
 import com.sanhua.marketingcost.service.QuoteProductTypeResolveService;
 import com.sanhua.marketingcost.service.collaboration.CollaborationCodes.PrimaryScope;
 import com.sanhua.marketingcost.service.collaboration.scan.ApprovedSourceInspection;
@@ -57,7 +55,6 @@ class QuoteCollaborationScanServiceImplTest {
 
   private OaFormItemMapper itemMapper;
   private OaFormMapper formMapper;
-  private QuoteBomPreparationRecordMapper preparationRecordMapper;
   private QuoteCollaborationCurrentU9BomGateway u9Gateway;
   private QuoteProductTypeResolveService productTypeService;
   private QuoteCollaborationTaskRepository taskRepository;
@@ -70,7 +67,6 @@ class QuoteCollaborationScanServiceImplTest {
   void setUp() {
     itemMapper = mock(OaFormItemMapper.class);
     formMapper = mock(OaFormMapper.class);
-    preparationRecordMapper = mock(QuoteBomPreparationRecordMapper.class);
     u9Gateway = mock(QuoteCollaborationCurrentU9BomGateway.class);
     productTypeService = mock(QuoteProductTypeResolveService.class);
     taskRepository = mock(QuoteCollaborationTaskRepository.class);
@@ -81,7 +77,6 @@ class QuoteCollaborationScanServiceImplTest {
         new QuoteCollaborationScanServiceImpl(
             itemMapper,
             formMapper,
-            preparationRecordMapper,
             new QuoteBomContextResolver(),
             u9Gateway,
             productTypeService,
@@ -100,8 +95,8 @@ class QuoteCollaborationScanServiceImplTest {
   }
 
   @Test
-  @DisplayName("已有核算准备时沿用保存月份，不退回报价单表头月份")
-  void usesExistingPreparationMonth() {
+  @DisplayName("默认扫描使用当前核算月，不沿用旧准备月份或OA历史月份")
+  void usesCurrentCostingMonth() {
     OaForm historicalForm = new OaForm();
     historicalForm.setId(27L);
     historicalForm.setOaNo("FI-SC-006-20260106-082");
@@ -109,12 +104,6 @@ class QuoteCollaborationScanServiceImplTest {
     historicalForm.setAccountingPeriodMonth("2026-01");
     historicalForm.setBusinessUnitType("COMMERCIAL");
     when(formMapper.selectById(27L)).thenReturn(historicalForm);
-    QuoteBomPreparationRecord preparation = new QuoteBomPreparationRecord();
-    preparation.setId(23L);
-    preparation.setOaFormItemId(275L);
-    preparation.setCostPeriodMonth("2026-08");
-    preparation.setActiveFlag(1);
-    when(preparationRecordMapper.selectOne(any())).thenReturn(preparation);
     stubU9Available();
     stubProductType(QuoteProductType.NON_BARE);
     when(priceGateway.check(argThat(context -> "2026-08".equals(context.accountingMonth()))))
@@ -129,12 +118,6 @@ class QuoteCollaborationScanServiceImplTest {
   @Test
   @DisplayName("一键核算显式月份优先于OA表头和旧准备月份")
   void requestedCostingMonthWins() {
-    QuoteBomPreparationRecord preparation = new QuoteBomPreparationRecord();
-    preparation.setId(23L);
-    preparation.setOaFormItemId(275L);
-    preparation.setCostPeriodMonth("2026-01");
-    preparation.setActiveFlag(1);
-    when(preparationRecordMapper.selectOne(any())).thenReturn(preparation);
     stubU9Available();
     stubProductType(QuoteProductType.NON_BARE);
     when(priceGateway.check(argThat(context -> "2026-08".equals(context.accountingMonth()))))
@@ -349,14 +332,14 @@ class QuoteCollaborationScanServiceImplTest {
   }
 
   @Test
-  @DisplayName("旧FULL_BOM任务在当前只缺价格时仍按同产品同月复用，不并行新建PRICE_ONLY任务")
+  @DisplayName("进行中的FULL_BOM任务跨月份且当前只缺价格时仍复用，不并行新建PRICE_ONLY任务")
   void existingFullBomTaskIsReusedWhenCurrentScopeBecomesPriceOnly() {
     stubU9Available();
     stubProductType(QuoteProductType.NON_BARE);
     QuoteCollaborationProductTask active = activeTask(90L, PrimaryScope.FULL_BOM);
-    when(taskRepository.findProductTasksByProductAndMonth(
-        "1008900001289", "2026-08", new CollaborationScope("COMMERCIAL", "210")))
-        .thenReturn(List.of(active));
+    active.setAccountingMonth("2026-07");
+    when(taskRepository.findActiveProductTaskByLockKey(any(), any()))
+        .thenReturn(java.util.Optional.of(active));
 
     QuoteCollaborationScanResult result = service.scanQuoteItem(275L);
 
@@ -367,15 +350,16 @@ class QuoteCollaborationScanServiceImplTest {
   }
 
   @Test
-  @DisplayName("无正式料号新品使用报价产品行临时键查找同月活动任务")
-  void newProductWithoutCodeUsesStableTemporaryKey() {
+  @DisplayName("无正式料号新品优先按型号查找跨报价活动任务")
+  void newProductWithoutCodeUsesModelKey() {
     stubNewProductQuote();
     QuoteCollaborationProductTask active = activeTask(89L, PrimaryScope.FULL_BOM);
     active.setProductCode(null);
-    active.setTemporaryProductKey("OA_FORM_ITEM:276");
+    active.setProductModel("MODEL-N");
+    active.setTemporaryProductKey("OA_FORM_ITEM:100");
     String lockKey = CollaborationActiveLockKeyFactory.create(
-        "2026-08", null, "OA_FORM_ITEM:276",
-        new CollaborationScope("COMMERCIAL", "210"), PrimaryScope.FULL_BOM);
+        null, "MODEL-N", "OA_FORM_ITEM:276",
+        new CollaborationScope("COMMERCIAL", "210"));
     when(taskRepository.findActiveProductTaskByLockKey(
         eq(lockKey), eq(new CollaborationScope("COMMERCIAL", "210"))))
         .thenReturn(java.util.Optional.of(active));

@@ -2,15 +2,19 @@ package com.sanhua.marketingcost.util;
 
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.time.ZoneId;
 import org.springframework.util.StringUtils;
 
 /** 当前核算月统一口径。 */
 public final class CostPricingPeriodUtils {
 
+  /** All costing dates use the China business calendar, independent of server locale. */
+  public static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
+
   private CostPricingPeriodUtils() {}
 
   public static LocalDate currentPricingDate() {
-    return LocalDate.now();
+    return LocalDate.now(BUSINESS_ZONE);
   }
 
   public static String currentPricingMonth() {

@@ -1,15 +1,11 @@
 package com.sanhua.marketingcost.service.collaboration;
 
-import com.sanhua.marketingcost.config.OaCollaborationProperties;
 import com.sanhua.marketingcost.dto.collaboration.CollaborationOperationsResponse.CompensationRequest;
 import com.sanhua.marketingcost.dto.collaboration.CollaborationOperationsResponse.CompensationResult;
 import com.sanhua.marketingcost.dto.collaboration.CollaborationOperationsResponse.Issue;
-import com.sanhua.marketingcost.dto.collaboration.CollaborationOperationsResponse.OutboxItem;
-import com.sanhua.marketingcost.dto.collaboration.CollaborationOperationsResponse.OutboxPage;
 import com.sanhua.marketingcost.dto.collaboration.CollaborationOperationsResponse.PublicationFailure;
 import com.sanhua.marketingcost.dto.collaboration.CollaborationOperationsResponse.PublicationFailures;
 import com.sanhua.marketingcost.dto.collaboration.CollaborationOperationsResponse.Reconciliation;
-import com.sanhua.marketingcost.integration.oa.collaboration.OaCollaborationMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -27,14 +23,11 @@ public class CollaborationOperationsService {
   private static final Set<String> FORMAL_TABLES = Set.of(
       "lp_price_fixed_item", "lp_price_linked_item", "lp_price_range_item");
   private final JdbcTemplate jdbc;
-  private final OaCollaborationProperties oaProperties;
   private final CollaborationCurrentActorProvider actorProvider;
 
   public CollaborationOperationsService(
-      JdbcTemplate jdbc, OaCollaborationProperties oaProperties,
-      CollaborationCurrentActorProvider actorProvider) {
+      JdbcTemplate jdbc, CollaborationCurrentActorProvider actorProvider) {
     this.jdbc = jdbc;
-    this.oaProperties = oaProperties;
     this.actorProvider = actorProvider;
   }
 
@@ -95,22 +88,6 @@ public class CollaborationOperationsService {
   }
 
   @Transactional(readOnly = true)
-  public OutboxPage outbox(String status) {
-    String normalized = StringUtils.hasText(status) ? status.trim().toUpperCase() : "HOLD";
-    List<OutboxItem> items = jdbc.query("""
-        SELECT id,event_id,aggregate_type,aggregate_id,aggregate_version,event_type,
-               send_policy,send_status,retry_count,last_error_message,occurred_at
-        FROM lp_integration_outbox WHERE send_status=? ORDER BY occurred_at DESC,id DESC LIMIT 500
-        """, (rs, row) -> new OutboxItem(rs.getLong("id"), rs.getString("event_id"),
-        rs.getString("aggregate_type"), rs.getLong("aggregate_id"),
-        rs.getObject("aggregate_version", Integer.class), rs.getString("event_type"),
-        rs.getString("send_policy"), rs.getString("send_status"),
-        rs.getObject("retry_count", Integer.class), rs.getString("last_error_message"),
-        rs.getTimestamp("occurred_at").toLocalDateTime()), normalized);
-    return new OutboxPage(items.size(), items);
-  }
-
-  @Transactional(readOnly = true)
   public PublicationFailures publicationFailures() {
     List<PublicationFailure> items = jdbc.query("""
         SELECT r.id,r.review_no,r.collaboration_id,t.oa_no,r.review_status,t.master_status,
@@ -124,28 +101,6 @@ public class CollaborationOperationsService {
         rs.getString("master_status"), rs.getString("publish_batch_no"),
         rs.getTimestamp("updated_at").toLocalDateTime()));
     return new PublicationFailures(items.size(), items);
-  }
-
-  @Transactional
-  public CompensationResult releaseOutbox(Long id, CompensationRequest request) {
-    requireRequest(request);
-    if (oaProperties.getMode() == OaCollaborationMode.DISABLED) {
-      throw new IllegalStateException("OA尚未接入，Outbox必须保持HOLD，不能释放或发送");
-    }
-    Map<String, Object> row = single("SELECT send_status,event_id FROM lp_integration_outbox WHERE id=?", id);
-    String before = String.valueOf(row.get("send_status"));
-    CompensationResult replay = replay(request.requestId(), "RELEASE_OUTBOX", id);
-    if (replay != null) return replay;
-    if (!Set.of("HOLD", "FAILED").contains(before)) {
-      throw new IllegalStateException("只有HOLD或FAILED事件可以释放重试");
-    }
-    if (jdbc.update("""
-        UPDATE lp_integration_outbox SET send_policy='AUTO',send_status='PENDING',
-          next_retry_at=NULL,last_error_message=NULL,updated_at=NOW()
-        WHERE id=? AND send_status=?
-        """, id, before) != 1) throw new IllegalStateException("Outbox状态已变化，请刷新后重试");
-    audit(request, "RELEASE_OUTBOX", "OUTBOX", id, before, "PENDING", null, null, null, null, null);
-    return new CompensationResult(request.requestId(), "RELEASE_OUTBOX", id, before, "PENDING", false);
   }
 
   @Transactional

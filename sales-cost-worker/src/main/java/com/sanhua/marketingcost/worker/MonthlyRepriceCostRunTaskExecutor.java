@@ -31,7 +31,10 @@ public class MonthlyRepriceCostRunTaskExecutor implements CostRunTaskExecutor {
       throw new IllegalArgumentException("workerId 不能为空");
     }
     CostRunObjectResult result = costRunAdapter.execute(task, workerId);
-    return new CostRunTaskExecutionResult(resultSummaryJson(result));
+    return new CostRunTaskExecutionResult(
+        resultSummaryJson(result),
+        result.getContext() == null ? null : result.getContext().getCostRunVersionId(),
+        result.getContext() == null ? null : result.getContext().getCostRunNo());
   }
 
   private String resultSummaryJson(CostRunObjectResult result) {

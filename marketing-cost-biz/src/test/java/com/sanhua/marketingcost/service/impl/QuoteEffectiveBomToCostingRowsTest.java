@@ -26,18 +26,11 @@ import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowSourceRefMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
-import com.sanhua.marketingcost.mapper.BomSupplementTaskMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomPackageReferenceDetailMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomPackageReferenceMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
 import com.sanhua.marketingcost.service.BomByproductCostRuleQueryService;
 import com.sanhua.marketingcost.service.BomSettlementRuleQueryService;
-import com.sanhua.marketingcost.service.FormalBomReadService;
-import com.sanhua.marketingcost.service.QuoteProductBomPreparationService;
 import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomRepository;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.rule.BomByproductCostRuleConditionEvaluator;
@@ -58,7 +51,6 @@ import org.mockito.ArgumentCaptor;
 
 class QuoteEffectiveBomToCostingRowsTest {
 
-  private FormalBomReadService formalBomReadService;
   private QuoteBomPreparationRecordMapper preparationMapper;
   private QuoteBomStatusMapper statusMapper;
   private BomCostingRowMapper costingRowMapper;
@@ -81,7 +73,6 @@ class QuoteEffectiveBomToCostingRowsTest {
 
   @BeforeEach
   void setUp() {
-    formalBomReadService = mock(FormalBomReadService.class);
     preparationMapper = mock(QuoteBomPreparationRecordMapper.class);
     statusMapper = mock(QuoteBomStatusMapper.class);
     costingRowMapper = mock(BomCostingRowMapper.class);
@@ -104,19 +95,12 @@ class QuoteEffectiveBomToCostingRowsTest {
                 new BomByproductCostRuleConditionEvaluator(objectMapper)));
     service =
         new QuoteProductBomCostingBuildServiceImpl(
-            mock(QuoteProductBomPreparationService.class),
-            formalBomReadService,
             settlementRules,
             byproductRules,
             byproductAdapter,
             engine,
             preparationMapper,
             statusMapper,
-            mock(BomSupplementTaskMapper.class),
-            mock(QuoteBomSupplementVersionMapper.class),
-            mock(QuoteBomSupplementDetailMapper.class),
-            mock(QuoteBomPackageReferenceMapper.class),
-            mock(QuoteBomPackageReferenceDetailMapper.class),
             costingRowMapper,
             sourceRefMapper,
             subRefMapper,
@@ -160,7 +144,6 @@ class QuoteEffectiveBomToCostingRowsTest {
     assertThat(rows.getValue().getMaterialCode()).isEqualTo("T");
     assertThat(rows.getValue().getBuildBatchId()).isEqualTo("qeb_BUILD_1");
     assertThat(rows.getValue().getShapeAttr()).isEqualTo("采购件");
-    verify(formalBomReadService, never()).read(any());
   }
 
   @Test

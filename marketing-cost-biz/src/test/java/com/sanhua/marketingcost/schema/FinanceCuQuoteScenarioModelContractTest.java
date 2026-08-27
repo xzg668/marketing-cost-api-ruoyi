@@ -4,13 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.sanhua.marketingcost.dto.financequote.QuoteCuMaterialDiffItemResult;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
 import com.sanhua.marketingcost.entity.QuoteCostPriceScenario;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
-import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
 import com.sanhua.marketingcost.mapper.QuoteCostPriceScenarioMapper;
-import com.sanhua.marketingcost.mapper.QuoteCuMaterialDiffItemMapper;
 import java.math.BigDecimal;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -35,16 +34,14 @@ class FinanceCuQuoteScenarioModelContractTest {
   }
 
   @Test
-  @DisplayName("场景汇总和差额明细实体映射到 V187 新表")
-  void newEntitiesMapToScenarioTables() {
+  @DisplayName("场景汇总持久化，差额明细保持实时计算模型")
+  void scenarioPersistsAndDifferenceRemainsAResultModel() {
     assertThat(QuoteCostPriceScenario.class.getAnnotation(TableName.class).value())
         .isEqualTo("lp_quote_cost_price_scenario");
-    assertThat(QuoteCuMaterialDiffItem.class.getAnnotation(TableName.class).value())
-        .isEqualTo("lp_quote_cu_material_diff_item");
     assertThat(BaseMapper.class).isAssignableFrom(QuoteCostPriceScenarioMapper.class);
-    assertThat(BaseMapper.class).isAssignableFrom(QuoteCuMaterialDiffItemMapper.class);
+    assertThat(QuoteCuMaterialDiffItemResult.class.getAnnotation(TableName.class)).isNull();
 
-    QuoteCuMaterialDiffItem item = new QuoteCuMaterialDiffItem();
+    QuoteCuMaterialDiffItemResult item = new QuoteCuMaterialDiffItemResult();
     item.setSettlementKey("RAW_COMPONENT:1");
     item.setDiffAmount(new BigDecimal("-1.25000000"));
     item.setTraceJson("{\"financeCu\":90.0,\"oaCu\":80.0}");

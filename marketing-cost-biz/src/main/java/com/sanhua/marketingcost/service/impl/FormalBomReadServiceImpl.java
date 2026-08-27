@@ -143,6 +143,7 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
             Wrappers.<BomRawHierarchy>lambdaQuery()
                 .eq(BomRawHierarchy::getPriceOrgCode, organization.priceOrgCode())
                 .eq(BomRawHierarchy::getTopProductCode, normalizedProductCode)
+                .eq(BomRawHierarchy::getSourceType, "U9")
                 .eq(
                     normalizedBomPurpose != null,
                     BomRawHierarchy::getBomPurpose,

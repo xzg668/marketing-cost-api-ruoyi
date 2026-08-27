@@ -92,7 +92,7 @@ class MonthlyRepriceQueryServiceImplTest {
   @Test
   @DisplayName("普通用户查批次：强制限定当前业务单元和已确认状态，分页排序透传")
   void normalUserBatchQueryOnlyConfirmedInCurrentBusinessUnit() {
-    authenticate("COMMERCIAL", "cost:run:list", "ROLE_BU_STAFF");
+    authenticate("COMMERCIAL", "ingest:quote:list", "ROLE_BU_STAFF");
     when(batchMapper.selectPage(any(Page.class), any(Wrapper.class))).thenAnswer(invocation -> {
       Page<MonthlyRepriceBatch> page = invocation.getArgument(0);
       page.setTotal(0);
@@ -123,7 +123,7 @@ class MonthlyRepriceQueryServiceImplTest {
   @Test
   @DisplayName("普通用户不能查看 WAIT_CONFIRM 结果")
   void normalUserCannotViewUnconfirmedResults() {
-    authenticate("COMMERCIAL", "cost:run:list", "ROLE_BU_STAFF");
+    authenticate("COMMERCIAL", "ingest:quote:list", "ROLE_BU_STAFF");
     when(batchMapper.selectOne(any(Wrapper.class))).thenReturn(batch("WAIT_CONFIRM"));
 
     assertThatThrownBy(() -> service.pageResults("MRP-001", new MonthlyRepriceResultQueryRequest()))
@@ -134,7 +134,7 @@ class MonthlyRepriceQueryServiceImplTest {
   @Test
   @DisplayName("普通用户可以按现有成本权限查看 CONFIRMED 结果")
   void normalUserCanViewConfirmedResults() {
-    authenticate("COMMERCIAL", "cost:run:list", "ROLE_BU_STAFF");
+    authenticate("COMMERCIAL", "ingest:quote:list", "ROLE_BU_STAFF");
     when(batchMapper.selectOne(any(Wrapper.class))).thenReturn(batch("CONFIRMED"));
     when(resultMapper.selectPage(any(Page.class), any(Wrapper.class))).thenAnswer(invocation -> {
       Page<MonthlyRepriceResult> page = invocation.getArgument(0);
@@ -177,7 +177,7 @@ class MonthlyRepriceQueryServiceImplTest {
   @Test
   @DisplayName("普通用户查审计：未指定批次时只返回已确认批次关联日志")
   void normalUserAuditQueryOnlyConfirmedBatches() {
-    authenticate("COMMERCIAL", "cost:run:list", "ROLE_BU_STAFF");
+    authenticate("COMMERCIAL", "ingest:quote:list", "ROLE_BU_STAFF");
     when(auditLogMapper.selectPage(any(Page.class), any(Wrapper.class))).thenAnswer(invocation -> {
       Page<MonthlyRepriceAuditLog> page = invocation.getArgument(0);
       page.setTotal(0);
@@ -225,7 +225,7 @@ class MonthlyRepriceQueryServiceImplTest {
   @Test
   @DisplayName("active-lock：普通成本页可读取当前业务单元是否被月度调价锁定")
   void activeLockReturnsCurrentBusinessUnitLock() {
-    authenticate("COMMERCIAL", "cost:run:list", "ROLE_BU_STAFF");
+    authenticate("COMMERCIAL", "ingest:quote:list", "ROLE_BU_STAFF");
     MonthlyRepriceBatch batch = batch("CREATED");
     batch.setRepriceNo("MRP-CREATED");
     when(batchMapper.selectOne(any(Wrapper.class))).thenReturn(batch);

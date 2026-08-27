@@ -30,6 +30,7 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.service.ProductPropertyAnnualUsageService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
+import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -373,7 +374,9 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       status.setOaFormId(form.getId());
       status.setOaFormItemId(itemIdsByPosition.get(index));
       status.setOaNo(form.getOaNo());
-      status.setProductCode(source.getMaterialNo());
+      status.setProductCode(
+          QuoteProductIdentityUtils.resolveCostingCode(
+              source.getMaterialNo(), source.getSunlModel(), source.getCustomerDrawing()));
       status.setProductModel(source.getSunlModel());
       status.setCustomerCode(quoteBomContextResolver.resolveCustomer(form, null).value());
       status.setPackageType(source.getPackageType());

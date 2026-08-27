@@ -18,10 +18,10 @@ import com.sanhua.marketingcost.entity.QuoteCollaborationProductTask;
 import com.sanhua.marketingcost.entity.QuoteCollaborationQuoteLink;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
-import com.sanhua.marketingcost.mapper.IntegrationOutboxMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
+import com.sanhua.marketingcost.mapper.QuoteCollaborationQuoteLinkMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.collaboration.CollaborationCodes.PrimaryScope;
@@ -45,23 +45,25 @@ class QuoteItemCollaborationProjectionServiceImplTest {
   private QuoteBomPreparationRecordMapper preparationRecordMapper;
   private QuoteCostingWorkspaceService workspaceService;
   private QuoteCostRunVersionMapper costRunVersionMapper;
+  private OaFormItemMapper itemMapper;
   private OaFormItem item;
   private QuoteItemCollaborationProjectionServiceImpl service;
 
   @BeforeEach
   void setUp() {
     OaFormMapper formMapper = mock(OaFormMapper.class);
-    OaFormItemMapper itemMapper = mock(OaFormItemMapper.class);
+    itemMapper = mock(OaFormItemMapper.class);
     preparationRecordMapper = mock(QuoteBomPreparationRecordMapper.class);
     scanService = mock(QuoteCollaborationScanService.class);
     repository = mock(QuoteCollaborationTaskRepository.class);
     resolver = mock(CollaborationTechnicianResolver.class);
-    IntegrationOutboxMapper outboxMapper = mock(IntegrationOutboxMapper.class);
+    CollaborationTaskLogService taskLogService = mock(CollaborationTaskLogService.class);
     workspaceService = mock(QuoteCostingWorkspaceService.class);
     costRunVersionMapper = mock(QuoteCostRunVersionMapper.class);
+    QuoteCollaborationQuoteLinkMapper quoteLinkMapper = mock(QuoteCollaborationQuoteLinkMapper.class);
     service = new QuoteItemCollaborationProjectionServiceImpl(
         formMapper, itemMapper, preparationRecordMapper, scanService, repository, resolver,
-        outboxMapper, workspaceService, costRunVersionMapper);
+        taskLogService, workspaceService, costRunVersionMapper, quoteLinkMapper);
     OaForm form = new OaForm();
     form.setId(1L); form.setOaNo("OA-08"); form.setBusinessUnitType("COMMERCIAL");
     item = new OaFormItem();
@@ -263,6 +265,32 @@ class QuoteItemCollaborationProjectionServiceImplTest {
   }
 
   @Test
+  @DisplayName("未就绪准备记录不能把缺BOM误判为可核算")
+  void unreadyPreparationDoesNotOverrideMissingBom() {
+    QuoteBomPreparationRecord preparation = new QuoteBomPreparationRecord();
+    preparation.setId(23L);
+    preparation.setOaFormItemId(11L);
+    preparation.setQuoteProductCode("P-1");
+    preparation.setActiveFlag(1);
+    preparation.setCostPeriodMonth("2026-08");
+    preparation.setPreparationStatus("NEED_TECH");
+    when(preparationRecordMapper.selectOne(any())).thenReturn(preparation);
+    when(scanService.scanQuoteItem(11L)).thenReturn(scan(PrimaryScope.FULL_BOM,
+        QuoteCollaborationScanAction.CREATE_COLLABORATION,
+        CollaborationPriceScanResult.pendingBom("待补BOM")));
+    when(resolver.resolve(any(OaForm.class), org.mockito.ArgumentMatchers.eq(item),
+        org.mockito.ArgumentMatchers.eq("COMMERCIAL"), org.mockito.ArgumentMatchers.isNull()))
+        .thenReturn(new CollaborationTechnicianResolver.Resolution(
+            null, null, "未匹配到技术负责人，请手工指定"));
+
+    QuoteItemCollaborationResponse response = service.project("OA-08", 11L);
+
+    assertThat(response.currentStatus()).isEqualTo("TECHNICIAN_UNASSIGNED");
+    assertThat(response.nextAction()).isEqualTo("ASSIGN_TECHNICIAN");
+    assertThat(response.batchSelectable()).isTrue();
+  }
+
+  @Test
   @DisplayName("历史月份核算准备不能把当前月份误显示为继续核算")
   void stalePreparationDoesNotContinueCurrentMonth() {
     QuoteBomPreparationRecord stale = new QuoteBomPreparationRecord();
@@ -318,20 +346,48 @@ class QuoteItemCollaborationProjectionServiceImplTest {
   }
 
   @Test
-  @DisplayName("工作区缺价格时唯一下一步为查看缺口")
-  void workspacePriceGapCanBeViewed() {
+  @DisplayName("工作区底层缺价时继续派发技术协作而不是停在查看缺口")
+  void workspacePriceGapCanStartCollaboration() {
     QuoteCostingWorkspace workspace = workspace("WAIT_PRICE");
     workspace.setGapCount(4);
     workspace.setLastErrorMessage("缺少 4 项正式价格");
     when(workspaceService.find(11L, "2026-08")).thenReturn(Optional.of(workspace));
-    when(scanService.scanQuoteItem(11L)).thenReturn(readyScan());
+    when(scanService.scanQuoteItem(11L)).thenReturn(scan(PrimaryScope.PRICE_ONLY,
+        QuoteCollaborationScanAction.CREATE_COLLABORATION,
+        CollaborationPriceScanResult.gaps(4, List.of(
+            new CollaborationPriceScanResult.PriceGap(
+                "RAW-1", "MISSING", "MAINTAIN", "无价格", "price", null)))));
+    when(resolver.resolve(any(OaForm.class), org.mockito.ArgumentMatchers.eq(item),
+        org.mockito.ArgumentMatchers.eq("COMMERCIAL"), org.mockito.ArgumentMatchers.isNull()))
+        .thenReturn(new CollaborationTechnicianResolver.Resolution(
+            null, null, "未匹配到技术负责人，请手工指定"));
 
     QuoteItemCollaborationResponse response = service.project("OA-08", 11L);
 
-    assertThat(response.currentStatusLabel()).isEqualTo("缺价格");
-    assertThat(response.nextAction()).isEqualTo("VIEW_COSTING_GAP");
-    assertThat(response.nextActionLabel()).isEqualTo("查看缺口");
-    assertThat(response.message()).isEqualTo("缺少 4 项正式价格");
+    assertThat(response.currentStatusLabel()).isEqualTo("待指定负责人");
+    assertThat(response.nextAction()).isEqualTo("ASSIGN_TECHNICIAN");
+    assertThat(response.nextActionLabel()).isEqualTo("指定技术负责人");
+    assertThat(response.batchSelectable()).isTrue();
+  }
+
+  @Test
+  @DisplayName("工作区缺BOM且没有任务时继续解析技术负责人而不是停在查看缺口")
+  void workspaceBomGapCanStartCollaboration() {
+    when(workspaceService.find(11L, "2026-08"))
+        .thenReturn(Optional.of(workspace("WAIT_BOM")));
+    when(scanService.scanQuoteItem(11L)).thenReturn(scan(PrimaryScope.FULL_BOM,
+        QuoteCollaborationScanAction.CREATE_COLLABORATION,
+        CollaborationPriceScanResult.pendingBom("待补BOM")));
+    when(resolver.resolve(any(OaForm.class), org.mockito.ArgumentMatchers.eq(item),
+        org.mockito.ArgumentMatchers.eq("COMMERCIAL"), org.mockito.ArgumentMatchers.isNull()))
+        .thenReturn(new CollaborationTechnicianResolver.Resolution(
+            null, null, "未匹配到技术负责人，请手工指定"));
+
+    QuoteItemCollaborationResponse response = service.project("OA-08", 11L);
+
+    assertThat(response.currentStatusLabel()).isEqualTo("待指定负责人");
+    assertThat(response.nextAction()).isEqualTo("ASSIGN_TECHNICIAN");
+    assertThat(response.batchSelectable()).isTrue();
   }
 
   @Test
@@ -406,6 +462,44 @@ class QuoteItemCollaborationProjectionServiceImplTest {
     assertThat(service.refreshSummary("OA-08").items()).hasSize(1);
 
     verify(scanService, times(1)).scanQuoteItem(11L);
+  }
+
+  @Test
+  @DisplayName("GET 汇总只读取持久化投影，不触发 U9/CMS/价格实时扫描")
+  void summaryReadsStoredProjectionWithoutLiveScan() {
+    when(workspaceService.findAll(any(), anyString())).thenReturn(List.of(workspace("SUCCESS")));
+
+    assertThat(service.summary("OA-08").items()).hasSize(1);
+
+    verify(scanService, never()).scanQuoteItem(anyLong());
+  }
+
+  @Test
+  @DisplayName("整单财务价格类型缺口复用工作区投影，避免逐产品重复扫描")
+  void summaryUsesStoredFinanceWorkspaceProjection() {
+    OaFormItem second = new OaFormItem();
+    second.setId(12L);
+    second.setOaFormId(1L);
+    second.setSeq(2);
+    second.setMaterialNo("P-2");
+    second.setBusinessUnitType("COMMERCIAL");
+    QuoteCostingWorkspace firstWorkspace = workspace("WAIT_PRICE_TYPE");
+    firstWorkspace.setGapCount(3);
+    QuoteCostingWorkspace secondWorkspace = workspace("WAIT_PRICE_TYPE");
+    secondWorkspace.setOaFormItemId(12L);
+    secondWorkspace.setGapCount(5);
+    when(itemMapper.selectList(any())).thenReturn(List.of(item, second));
+    when(workspaceService.findAll(any(), anyString()))
+        .thenReturn(List.of(firstWorkspace, secondWorkspace));
+    when(scanService.scanQuoteItem(11L)).thenReturn(readyScan());
+
+    var response = service.refreshSummary("OA-08");
+
+    assertThat(response.items()).hasSize(2);
+    assertThat(response.items().get(1).currentStatus()).isEqualTo("MISSING_PRICE");
+    assertThat(response.items().get(1).priceGapCount()).isEqualTo(5);
+    assertThat(response.items().get(1).nextAction()).isEqualTo("VIEW_COSTING_GAP");
+    verify(scanService, times(1)).scanQuoteItem(anyLong());
   }
 
   private QuoteCollaborationScanResult scan(PrimaryScope scope,

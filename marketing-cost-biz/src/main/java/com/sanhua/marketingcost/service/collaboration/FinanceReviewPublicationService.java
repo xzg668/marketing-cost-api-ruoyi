@@ -56,6 +56,9 @@ public class FinanceReviewPublicationService {
   private final QuoteCollaborationPriceScanGateway priceScanGateway;
   private final TechnicalRealPriceGapScanService technicalPriceScanService;
   private final JdbcTemplate jdbc;
+  private final ApprovalBomSourcePolicy bomSourcePolicy;
+  private final CollaborationStructuralDraftLifecycleService structuralDraftLifecycle;
+  private final ApprovedElectronicBomRawSnapshotPublisher electronicBomSnapshotPublisher;
 
   public FinanceReviewPublicationService(
       QuoteCollaborationReviewRepository reviewRepository,
@@ -74,7 +77,10 @@ public class FinanceReviewPublicationService {
       QuoteCollaborationApprovedResultService approvedResultService,
       QuoteCollaborationPriceScanGateway priceScanGateway,
       TechnicalRealPriceGapScanService technicalPriceScanService,
-      JdbcTemplate jdbc) {
+      JdbcTemplate jdbc,
+      ApprovalBomSourcePolicy bomSourcePolicy,
+      CollaborationStructuralDraftLifecycleService structuralDraftLifecycle,
+      ApprovedElectronicBomRawSnapshotPublisher electronicBomSnapshotPublisher) {
     this.reviewRepository = reviewRepository;
     this.taskRepository = taskRepository;
     this.draftRepository = draftRepository;
@@ -92,6 +98,9 @@ public class FinanceReviewPublicationService {
     this.priceScanGateway = priceScanGateway;
     this.technicalPriceScanService = technicalPriceScanService;
     this.jdbc = jdbc;
+    this.bomSourcePolicy = bomSourcePolicy;
+    this.structuralDraftLifecycle = structuralDraftLifecycle;
+    this.electronicBomSnapshotPublisher = electronicBomSnapshotPublisher;
   }
 
   @Transactional
@@ -121,6 +130,14 @@ public class FinanceReviewPublicationService {
         .collect(Collectors.toMap(QuoteCollaborationProductTask::getId, Function.identity()));
     Set<Long> reviewProducts = items.stream().map(QuoteCollaborationReviewItem::getProductTaskId)
         .collect(Collectors.toSet());
+
+    // 审核动作产生任何正式发布副作用前复核同一份月度 U9 首查快照；不做月中重查。
+    for (Long productId : reviewProducts) {
+      QuoteCollaborationProductTask product = products.get(productId);
+      if (product != null && "FULL_BOM".equals(product.getPrimaryScope())) {
+        bomSourcePolicy.inspect(product, activeLinks(product));
+      }
+    }
 
     for (QuoteCollaborationReviewItem item : items) {
       if (!"PRICE_DRAFT".equals(item.getItemType())) continue;
@@ -179,9 +196,13 @@ public class FinanceReviewPublicationService {
     Map<Long, QuoteCollaborationProductTask> products = taskRepository
         .findProductTasksByCollaboration(master.getId(), businessUnit).stream()
         .collect(Collectors.toMap(QuoteCollaborationProductTask::getId, Function.identity()));
+    Map<Long, ApprovalBomSourcePolicy.Decision> bomDecisions = new java.util.HashMap<>();
     for (Long productId : productIds) {
       QuoteCollaborationProductTask product = products.get(productId);
-      recheckEveryLinkedQuote(product);
+      List<QuoteCollaborationQuoteLink> activeLinks = activeLinks(product);
+      ApprovalBomSourcePolicy.Decision bomDecision = bomSourcePolicy.inspect(product, activeLinks);
+      bomDecisions.put(productId, bomDecision);
+      recheckEveryLinkedQuote(product, activeLinks, bomDecision);
       gapMapper.resolvePublishedPriceGaps(productId, product.getBusinessUnitType(),
           product.getApplicableOrgCode(), phase.finance().userId(), phase.finance().userName());
       productMapper.clearPublishedPriceGaps(productId, product.getBusinessUnitType(),
@@ -201,8 +222,19 @@ public class FinanceReviewPublicationService {
         review.getReviewStatus(), businessUnit, ReviewAction.MARK_EFFECTIVE, SYSTEM);
     for (Long productId : productIds) {
       QuoteCollaborationProductTask product = products.get(productId);
-      if ("FULL_BOM".equals(product.getPrimaryScope())
-          || "BARE_PACKAGE".equals(product.getPrimaryScope())) {
+      if ("FULL_BOM".equals(product.getPrimaryScope())) {
+        ApprovalBomSourcePolicy.Decision decision = bomDecisions.get(productId);
+        if (decision != null && decision.supplementRequired()) {
+          structuralDraftLifecycle.approveBom(product, phase.finance().actor(), "审核通过");
+          electronicBomSnapshotPublisher.publish(product);
+          approvedResultService.activate(new ApprovedResultActivationCommand(
+              productId, review.getId(), product.getBusinessUnitType(),
+              product.getApplicableOrgCode(), phase.finance().actor()));
+        } else {
+          structuralDraftLifecycle.supersedeBomWithU9(product, phase.finance().actor());
+        }
+      } else if ("BARE_PACKAGE".equals(product.getPrimaryScope())) {
+        structuralDraftLifecycle.approvePackage(product);
         approvedResultService.activate(new ApprovedResultActivationCommand(
             productId, review.getId(), product.getBusinessUnitType(),
             product.getApplicableOrgCode(), phase.finance().actor()));
@@ -322,15 +354,21 @@ public class FinanceReviewPublicationService {
     return count != null && count == 1;
   }
 
-  private void recheckEveryLinkedQuote(QuoteCollaborationProductTask product) {
-    List<QuoteCollaborationQuoteLink> links = taskRepository.findLinksByProductTask(
-        product.getId(), scope(product)).stream()
-        .filter(link -> Integer.valueOf(1).equals(link.getActiveFlag())).toList();
-    if (links.isEmpty()) throw new IllegalStateException("产品任务没有活动报价关联，无法重新取价");
+  private void recheckEveryLinkedQuote(
+      QuoteCollaborationProductTask product,
+      List<QuoteCollaborationQuoteLink> links,
+      ApprovalBomSourcePolicy.Decision bomDecision) {
+    Map<Long, ApprovalBomSourcePolicy.LinkDecision> sourceByLink = bomDecision.links().stream()
+        .collect(Collectors.toMap(row -> row.link().getId(), Function.identity()));
     for (QuoteCollaborationQuoteLink link : links) {
       CollaborationPriceScanResult result;
-      if ("FULL_BOM".equals(product.getPrimaryScope())
-          || "BARE_PACKAGE".equals(product.getPrimaryScope())) {
+      if ("FULL_BOM".equals(product.getPrimaryScope())) {
+        ApprovalBomSourcePolicy.LinkDecision source = sourceByLink.get(link.getId());
+        if (source == null) throw new IllegalStateException("审核时缺少 U9 BOM 复查结果");
+        result = source.useSupplementBom()
+            ? technicalPriceScanService.scan(product, link, link.getAccountingMonth())
+            : priceScanGateway.check(source.context());
+      } else if ("BARE_PACKAGE".equals(product.getPrimaryScope())) {
         result = technicalPriceScanService.scan(product, link, link.getAccountingMonth());
       } else {
         YearMonth month = YearMonth.parse(link.getAccountingMonth());
@@ -353,6 +391,36 @@ public class FinanceReviewPublicationService {
       }
       if (result.status() != CollaborationPriceScanResult.Status.READY) {
         throw new IllegalStateException("重新取价尚未就绪：" + result.status());
+      }
+    }
+  }
+
+  private List<QuoteCollaborationQuoteLink> activeLinks(QuoteCollaborationProductTask product) {
+    List<QuoteCollaborationQuoteLink> links = taskRepository.findLinksByProductTask(
+        product.getId(), scope(product)).stream()
+        .filter(link -> Integer.valueOf(1).equals(link.getActiveFlag())).toList();
+    if (links.isEmpty()) throw new IllegalStateException("产品任务没有活动报价关联，无法重新取价");
+    return links;
+  }
+
+  @Transactional
+  public void returnStructuralItems(
+      List<QuoteCollaborationReviewItem> rejected,
+      Map<Long, QuoteCollaborationProductTask> products,
+      CollaborationPrincipal reviewer) {
+    if (rejected == null || rejected.isEmpty()) return;
+    Map<Long, List<QuoteCollaborationReviewItem>> byProduct = rejected.stream()
+        .collect(Collectors.groupingBy(QuoteCollaborationReviewItem::getProductTaskId));
+    for (Map.Entry<Long, List<QuoteCollaborationReviewItem>> entry : byProduct.entrySet()) {
+      QuoteCollaborationProductTask product = products.get(entry.getKey());
+      if (product == null) continue;
+      boolean bom = entry.getValue().stream().anyMatch(item -> "BOM".equals(item.getItemType()));
+      boolean pack = entry.getValue().stream().anyMatch(item -> "PACKAGE".equals(item.getItemType()));
+      if (bom || pack) {
+        String reason = entry.getValue().stream().map(QuoteCollaborationReviewItem::getDecisionReason)
+            .filter(org.springframework.util.StringUtils::hasText).findFirst().orElse("审核退回");
+        structuralDraftLifecycle.returnForRevision(
+            product, bom, pack, reason, reviewer.actor());
       }
     }
   }

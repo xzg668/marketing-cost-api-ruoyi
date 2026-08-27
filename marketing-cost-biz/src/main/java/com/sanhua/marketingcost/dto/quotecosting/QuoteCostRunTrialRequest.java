@@ -6,4 +6,5 @@ import lombok.Data;
 public class QuoteCostRunTrialRequest {
   private String periodMonth;
   private String pricePrepareNo;
+  private String sourceRevision;
 }

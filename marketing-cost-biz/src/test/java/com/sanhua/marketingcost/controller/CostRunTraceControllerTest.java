@@ -97,8 +97,8 @@ class CostRunTraceControllerTest {
     Method detail = CostRunTraceController.class.getMethod("detail", String.class, Long.class);
 
     assertThat(list.getAnnotation(PreAuthorize.class).value())
-        .isEqualTo("@ss.hasPermi('cost:run:list')");
+        .isEqualTo("@ss.hasPermi('ingest:quote:list')");
     assertThat(detail.getAnnotation(PreAuthorize.class).value())
-        .isEqualTo("@ss.hasPermi('cost:run:list')");
+        .isEqualTo("@ss.hasPermi('ingest:quote:list')");
   }
 }

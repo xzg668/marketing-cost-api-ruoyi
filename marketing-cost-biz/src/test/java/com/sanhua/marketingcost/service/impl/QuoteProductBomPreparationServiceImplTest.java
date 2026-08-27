@@ -30,8 +30,6 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.enums.QuoteProductType;
-import com.sanhua.marketingcost.mapper.BomSupplementTaskMapper;
-import com.sanhua.marketingcost.mapper.BomSupplementTaskQuoteLinkMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
@@ -85,8 +83,6 @@ class QuoteProductBomPreparationServiceImplTest {
             formMapper,
             statusMapper,
             preparationRecordMapper,
-            mock(BomSupplementTaskMapper.class),
-            mock(BomSupplementTaskQuoteLinkMapper.class),
             productTypeResolveService,
             formalBomReadService,
             supplementBomReadService,
@@ -127,6 +123,31 @@ class QuoteProductBomPreparationServiceImplTest {
     assertThat(preview.bodyBomSource()).isEqualTo("FORMAL_BOM");
     assertThat(preview.bodyBomLineCount()).isEqualTo(1);
     verify(supplementBomReadService, never()).readApproved(any(), any(), any(), any());
+  }
+
+  @Test
+  @DisplayName("新品只有型号时按非裸品读取已审核完整BOM，不要求先生成正式料号")
+  void prepareModelOnlyNewProductFromApprovedBom() {
+    stubQuoteLine("IGNORED", "2026-05");
+    OaFormItem item = itemMapper.selectById(10L);
+    item.setMaterialNo(null);
+    item.setSunlModel("MODEL-NEW-10");
+    stubFormalRead(
+        "MODEL:MODEL-NEW-10",
+        "2026-05",
+        formalFound("MODEL:MODEL-NEW-10", "2026-05"));
+
+    QuoteProductBomPreparationPreview preview = service.prepareByOaFormItem(10L);
+
+    assertThat(preview.ready()).isTrue();
+    assertThat(preview.quoteProductCode()).isEqualTo("MODEL:MODEL-NEW-10");
+    assertThat(preview.productType()).isEqualTo("NON_BARE");
+    verifyNoInteractions(productTypeResolveService);
+    ArgumentCaptor<QuoteBomPreparationRecord> recordCaptor =
+        ArgumentCaptor.forClass(QuoteBomPreparationRecord.class);
+    verify(preparationRecordMapper).insert(recordCaptor.capture());
+    assertThat(recordCaptor.getValue().getQuoteProductCode())
+        .isEqualTo("MODEL:MODEL-NEW-10");
   }
 
   @Test
@@ -232,7 +253,6 @@ class QuoteProductBomPreparationServiceImplTest {
                 "NON_BARE_FULL_BOM",
                 "2026-05",
                 false,
-                null,
                 null,
                 null,
                 null,
@@ -465,7 +485,6 @@ class QuoteProductBomPreparationServiceImplTest {
         scope,
         periodMonth,
         false,
-        null,
         null,
         null,
         null,

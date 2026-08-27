@@ -18,6 +18,7 @@ import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationCur
 import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationScanContext;
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.time.ZoneId;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -95,11 +96,25 @@ public class QuoteCollaborationApprovedResultService {
     }
     LocalDateTime effectiveAt = review.getEffectiveAt();
     validatePolicy();
+    YearMonth accountingMonth;
+    try {
+      accountingMonth = YearMonth.parse(requireText(task.getAccountingMonth(), "核算月份"));
+    } catch (java.time.format.DateTimeParseException exception) {
+      throw new CollaborationDomainException(
+          CollaborationDomainErrorCode.STATE_TRANSITION_INVALID,
+          "核算月份格式错误，不能生成半年复用结果");
+    }
+    // 六个月按报价月份的自然月计算，例如 2026-08 对应 08-01 至次年 01-31。
+    LocalDateTime validFrom = accountingMonth.atDay(1).atStartOfDay();
+    LocalDateTime validUntil = validFrom.plusMonths(properties.getValidityMonths()).minusSeconds(1);
     QuoteCollaborationApprovedResult result = new QuoteCollaborationApprovedResult();
     result.setResultType(resultType.code());
     result.setSourceProductTaskId(task.getId());
     result.setSourceReviewId(review.getId());
-    result.setProductCode(requireText(task.getProductCode(), "产品料号"));
+    result.setProductCode(
+        requireText(
+            firstText(task.getProductCode(), task.getTemporaryProductKey()),
+            "产品料号、型号或图号身份"));
     result.setProductForm(task.getProductForm());
     result.setApplicableOrgCode(task.getApplicableOrgCode());
     result.setSourceObjectType(source.sourceObjectType());
@@ -112,8 +127,8 @@ public class QuoteCollaborationApprovedResultService {
     }
     result.setValidityPolicyCode(properties.getPolicyCode().trim());
     result.setValidityMonths(properties.getValidityMonths());
-    result.setValidFrom(effectiveAt);
-    result.setValidUntil(effectiveAt.plusMonths(properties.getValidityMonths()));
+    result.setValidFrom(validFrom);
+    result.setValidUntil(validUntil);
     result.setResultStatus(ResultStatus.ACTIVE.code());
     LocalDateTime now = LocalDateTime.now(clock);
     result.setCreatedBy(command.actor().userId());
@@ -168,11 +183,12 @@ public class QuoteCollaborationApprovedResultService {
 
   private ApprovedResultSourceSnapshot readSource(
       QuoteCollaborationProductTask task, ResultType resultType) {
+    String productCode = firstText(task.getProductCode(), task.getTemporaryProductKey());
     if (resultType == ResultType.FULL_BOM) {
-      return sourceReader.readFullBom(task.getSupplementVersionId(), task.getProductCode());
+      return sourceReader.readFullBom(task.getSupplementVersionId(), productCode);
     }
     return sourceReader.readBarePackage(
-        task.getPackageReferenceId(), task.getProductCode(),
+        task.getPackageReferenceId(), productCode,
         task.getPriceOrgCode(), task.getMaterialOrgCode());
   }
 

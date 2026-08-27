@@ -1,7 +1,5 @@
 package com.sanhua.marketingcost.mapper;
 
-import com.baomidou.mybatisplus.core.conditions.Wrapper;
-import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.sanhua.marketingcost.annotation.DataScope;
 import com.sanhua.marketingcost.dto.BomManageParentRow;
 import com.sanhua.marketingcost.entity.BomManageItem;
@@ -10,10 +8,10 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
 /**
- * BOM 管理表 Mapper。
+ * BOM 管理只读投影 Mapper。
  *
- * <p>T5.5：老表 {@code lp_bom_manage_item} 进入保留期（物理保留 3~6 个月用于回滚），
- * 下面所有自定义 {@code @Select} 已切换到新表 {@code lp_bom_costing_row} 读取数据，
+ * <p>老表 {@code lp_bom_manage_item} 已下线。所有查询直接读取
+ * {@code lp_bom_costing_row}，
  * 通过 LEFT JOIN {@code oa_form} / {@code oa_form_item} 补齐老表 legacy 字段
  * （4 金属价 / 产品名 / 规格 / 客户名等）。
  *
@@ -30,15 +28,7 @@ import org.apache.ibatis.annotations.Select;
  * <p>V21：主表 {@code lp_bom_costing_row} 别名 {@code t1}；自定义方法统一加
  * {@code @DataScope(alias = "t1")} 让拦截器按 {@code t1.business_unit_type} 注入隔离条件。
  */
-public interface BomManageItemMapper extends BaseMapper<BomManageItem> {
-
-  /** V21：selectList 走数据隔离（按 business_unit_type 过滤） */
-  @DataScope
-  @Override
-  List<BomManageItem> selectList(@Param("ew") Wrapper<BomManageItem> queryWrapper);
-
-  // --- 下方自定义 @Select 方法 ---
-  // T5.5：切到新表 lp_bom_costing_row，V21 统一按 t1.business_unit_type 过滤。
+public interface BomManageItemMapper {
 
   /**
    * 统计父行数量 —— 按 {@code (oa_no, top_product_code)} 聚合。

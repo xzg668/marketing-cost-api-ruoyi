@@ -12,6 +12,7 @@ import com.sanhua.marketingcost.service.ProductCostingStateService;
 import com.sanhua.marketingcost.service.QuoteCostingInputFingerprintService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
+import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
@@ -82,7 +83,7 @@ public class ProductCostingStateServiceImpl implements ProductCostingStateServic
         fingerprintService.calculate(
             new QuoteCostingInputFingerprintService.Input(
                 item.getId(),
-                item.getMaterialNo(),
+                QuoteProductIdentityUtils.resolveCostingCode(item),
                 periodMonth,
                 item.getPackageMethod(),
                 item.getPackageComponentCode(),
@@ -167,7 +168,9 @@ public class ProductCostingStateServiceImpl implements ProductCostingStateServic
     return workspaceService.lockOrCreate(
         scope.form().getOaNo(),
         scope.item().getId(),
-        required(scope.item().getMaterialNo(), "产品料号"),
+        required(
+            QuoteProductIdentityUtils.resolveCostingCode(scope.item()),
+            "产品料号、三花型号或客户图号"),
         scope.periodMonth(),
         required(
             firstText(scope.item().getBusinessUnitType(), scope.form().getBusinessUnitType()),

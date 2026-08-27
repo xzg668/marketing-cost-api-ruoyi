@@ -31,12 +31,10 @@ public class QuoteBomPreparationRecord {
   private String reviewStatus;
   private Long technicianUserId;
   private String technicianName;
-  private Long taskId;
   private Long reviewerUserId;
   private String reviewerName;
   private LocalDateTime reviewedAt;
   private String costingBuildBatchId;
-  private Long reusedFromTaskId;
   private String reusedFromOaNo;
   private Long reusedFromOaFormItemId;
   private String reuseType;

@@ -29,6 +29,7 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
         customer_name,
         business_unit_type,
         pricing_month,
+        source_revision,
         price_as_of_time,
         adjust_batch_id,
         bom_source_policy,
@@ -52,6 +53,7 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
         #{task.customerName},
         #{task.businessUnitType},
         #{task.pricingMonth},
+        #{task.sourceRevision},
         #{task.priceAsOfTime},
         #{task.adjustBatchId},
         #{task.bomSourcePolicy},
@@ -74,7 +76,6 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
          ON b.batch_no = t.batch_no
          AND b.execution_no = t.execution_no
          AND b.status IN ('PENDING', 'RUNNING', 'PARTIAL_FAILED')
-         AND b.prerequisite_status IN ('SUCCESS', 'NOT_REQUIRED')
        WHERE t.scene IN
         <foreach collection="scenes" item="scene" open="(" separator="," close=")">
           #{scene}
@@ -133,6 +134,8 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
              worker_id = NULL,
              locked_at = NULL,
              lock_expire_time = NULL,
+             cost_run_version_id = #{costRunVersionId},
+             cost_run_no = #{costRunNo},
              result_summary_json = #{resultSummaryJson},
              error_message = NULL,
              error_stack = NULL,
@@ -149,6 +152,8 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
   int markSuccess(
       @Param("taskId") Long taskId,
       @Param("workerId") String workerId,
+      @Param("costRunVersionId") Long costRunVersionId,
+      @Param("costRunNo") String costRunNo,
       @Param("resultSummaryJson") String resultSummaryJson,
       @Param("finishedAt") LocalDateTime finishedAt);
 
@@ -254,32 +259,6 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
       @Param("finishedAt") LocalDateTime finishedAt);
 
   @Update("""
-      UPDATE lp_cost_run_task t
-      JOIN lp_cost_run_batch b
-        ON b.batch_no = t.batch_no
-       AND b.execution_no = t.execution_no
-       AND b.scene = 'QUOTE'
-       AND b.prerequisite_status = 'FAILED'
-         SET t.status = 'FAILED',
-             t.progress = 100,
-             t.worker_id = NULL,
-             t.locked_at = NULL,
-             t.lock_expire_time = NULL,
-             t.error_message = #{errorMessage},
-             t.error_stack = NULL,
-             t.finished_at = #{finishedAt},
-             t.updated_at = #{finishedAt}
-       WHERE t.batch_no = #{batchNo}
-         AND t.execution_no = #{executionNo}
-         AND t.status IN ('PENDING', 'RETRYABLE')
-      """)
-  int markQuoteTasksFailedByPrerequisite(
-      @Param("batchNo") String batchNo,
-      @Param("executionNo") int executionNo,
-      @Param("errorMessage") String errorMessage,
-      @Param("finishedAt") LocalDateTime finishedAt);
-
-  @Update("""
       UPDATE lp_cost_run_task
          SET status = 'PENDING',
              progress = 0,
@@ -314,6 +293,7 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
              error_stack = NULL,
              result_summary_json = NULL,
              request_snapshot_json = #{requestSnapshotJson},
+             source_revision = #{sourceRevision},
              started_at = NULL,
              finished_at = NULL,
              updated_at = #{updatedAt}
@@ -334,7 +314,31 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
       @Param("executionNo") int executionNo,
       @Param("status") String status,
       @Param("requestSnapshotJson") String requestSnapshotJson,
+      @Param("sourceRevision") String sourceRevision,
       @Param("updatedAt") LocalDateTime updatedAt);
+
+  @Insert("""
+      INSERT IGNORE INTO lp_cost_run_task_history (
+        task_id, batch_no, execution_no, cost_run_version_id, cost_run_no,
+        scene, source_no, calc_object_key, oa_no, oa_form_item_id, product_code,
+        business_unit_type, pricing_month, source_revision, status, progress,
+        retry_count, request_snapshot_json, result_summary_json, error_message,
+        error_stack, started_at, finished_at, original_created_at,
+        original_updated_at, archived_at
+      )
+      SELECT id, batch_no, execution_no, cost_run_version_id, cost_run_no,
+             scene, source_no, calc_object_key, oa_no, oa_form_item_id, product_code,
+             business_unit_type, pricing_month, source_revision, status, progress,
+             retry_count, request_snapshot_json, result_summary_json, error_message,
+             error_stack, started_at, finished_at, created_at, updated_at, #{archivedAt}
+        FROM lp_cost_run_task
+       WHERE batch_no = #{batchNo}
+         AND execution_no = #{executionNo}
+      """)
+  int archiveExecutionTasks(
+      @Param("batchNo") String batchNo,
+      @Param("executionNo") int executionNo,
+      @Param("archivedAt") LocalDateTime archivedAt);
 
   @Select("""
       SELECT t.*

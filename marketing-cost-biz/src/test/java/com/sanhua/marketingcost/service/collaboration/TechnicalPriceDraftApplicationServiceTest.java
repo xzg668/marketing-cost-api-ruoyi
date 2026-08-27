@@ -43,7 +43,7 @@ class TechnicalPriceDraftApplicationServiceTest {
   private final TechnicalPriceDraftApplicationService service = new TechnicalPriceDraftApplicationService(
       taskRepository, draftRepository, gapMapper, referenceGateway, principalProvider,
       changeLogMapper, new ObjectMapper(), new CollaborationIdempotency(), fixedPriceValidator,
-      linkedPriceValidator, rangePriceValidator);
+      linkedPriceValidator, rangePriceValidator, new CollaborationPortalAccessPolicy());
   private final CollaborationPrincipal technician = new CollaborationPrincipal(
       601L, "王工", Set.of(CollaborationRole.TECHNICIAN));
   private final CollaborationScope scope = new CollaborationScope("COMMERCIAL", "210");

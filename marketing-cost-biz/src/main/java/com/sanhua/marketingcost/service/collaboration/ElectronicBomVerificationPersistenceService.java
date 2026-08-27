@@ -101,6 +101,44 @@ public class ElectronicBomVerificationPersistenceService {
     return new VerifiedResult(refreshed, fingerprint, details.size());
   }
 
+  /**
+   * 正式接口过渡期直接下载电子图库 Excel：不再调用远程接口重复回取，而是对已经完成
+   * 当前组织料号映射和结构校验的同一份草稿计算指纹。后续审核、复用和核算仍走原链路。
+   */
+  @Transactional
+  public VerifiedResult persistVerifiedImportedBom(
+      Long taskId,
+      Integer expectedVersion,
+      CollaborationPrincipal principal,
+      CollaborationScope scope) {
+    QuoteCollaborationProductTask task = currentOwned(taskId, expectedVersion, principal, scope);
+    if (task.getSupplementVersionId() == null) {
+      throw invalid("当前任务没有电子图库 Excel BOM 草稿");
+    }
+    QuoteBomSupplementVersion version = versionMapper.selectById(task.getSupplementVersionId());
+    if (version == null || !"ELECTRONIC_DRAWING_EXCEL".equals(version.getBomSource())) {
+      throw invalid("当前 BOM 不是电子图库正式 Excel 来源");
+    }
+    List<QuoteBomSupplementDetail> details = detailMapper.selectList(
+        Wrappers.<QuoteBomSupplementDetail>lambdaQuery()
+            .eq(QuoteBomSupplementDetail::getSupplementVersionId, version.getId())
+            .orderByAsc(QuoteBomSupplementDetail::getLineNo));
+    if (details == null || details.isEmpty()) throw invalid("电子图库 Excel BOM 明细为空");
+    String fingerprint = fingerprints.fullBom(details);
+    version.setVersionStatus("DRAFT");
+    version.setEffectiveFrom(LocalDateTime.now().toLocalDate());
+    version.setEffectiveTo(null);
+    version.setUpdatedAt(LocalDateTime.now());
+    if (versionMapper.updateById(version) != 1) throw invalid("电子图库 Excel BOM 版本保存失败");
+    int updated = taskMapper.attachVerifiedElectronicBom(task.getId(), task.getTaskVersion(),
+        fingerprint, principal.userId(), scope.businessUnitType(), scope.applicableOrgCode(),
+        principal.userId(), principal.userName());
+    if (updated != 1) throw versionConflict();
+    QuoteCollaborationProductTask refreshed = repository.findProductTaskById(task.getId(), scope)
+        .orElseThrow(() -> invalid("电子图库 Excel BOM 确认后无法读取任务"));
+    return new VerifiedResult(refreshed, fingerprint, details.size());
+  }
+
   @Transactional
   public PriceScanResult persistPriceScan(
       Long taskId,
@@ -175,8 +213,6 @@ public class ElectronicBomVerificationPersistenceService {
       QuoteBomSupplementDetail detail = new QuoteBomSupplementDetail();
       detail.setSupplementVersionId(version.getId());
       detail.setPreparationId(version.getPreparationId());
-      // 旧 task_id 专指 lp_bom_supplement_task，QCBP 产品任务只通过 supplement_version_id 关联。
-      detail.setTaskId(null);
       detail.setOaNo(version.getOaNo());
       detail.setOaFormItemId(version.getOaFormItemId());
       detail.setQuoteProductCode(version.getQuoteProductCode());

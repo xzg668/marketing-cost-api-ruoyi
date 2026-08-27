@@ -17,7 +17,7 @@ import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
-import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
+import com.sanhua.marketingcost.dto.financequote.QuoteCuMaterialDiffItemResult;
 import com.sanhua.marketingcost.mapper.FactorQuoteBaseMappingMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
@@ -60,7 +60,6 @@ class QuoteCuMaterialDiffServiceImplTest {
     TableInfoHelper.initTableInfo(assistant, FactorQuoteBaseMapping.class);
     TableInfoHelper.initTableInfo(assistant, MakePartPriceCalcRow.class);
     TableInfoHelper.initTableInfo(assistant, PriceLinkedCalcItem.class);
-    TableInfoHelper.initTableInfo(assistant, QuoteCuMaterialDiffItem.class);
   }
 
   @BeforeEach
@@ -111,7 +110,7 @@ class QuoteCuMaterialDiffServiceImplTest {
     assertThat(result.settlementCount()).isEqualTo(1);
     assertThat(result.rawComponentCount()).isZero();
     assertThat(result.cuAffectedSettlementCount()).isEqualTo(1);
-    QuoteCuMaterialDiffItem row = result.items().get(0);
+    QuoteCuMaterialDiffItemResult row = result.items().get(0);
     assertThat(row.getDetailLevel()).isEqualTo("SETTLEMENT");
     assertThat(row.getContributesToAdjustment()).isEqualTo(1);
     assertThat(row.getOaAmount()).isEqualByComparingTo("285.20600000");
@@ -414,7 +413,7 @@ class QuoteCuMaterialDiffServiceImplTest {
     assertThat(result.settlementCount()).isEqualTo(1);
     assertThat(result.rawComponentCount()).isEqualTo(2);
     assertThat(result.items()).hasSize(3);
-    QuoteCuMaterialDiffItem parent = result.items().get(0);
+    QuoteCuMaterialDiffItemResult parent = result.items().get(0);
     assertThat(parent.getDetailLevel()).isEqualTo("SETTLEMENT");
     assertThat(parent.getContributesToAdjustment()).isEqualTo(1);
     assertThat(parent.getDiffAmount()).isEqualByComparingTo("4");
@@ -427,7 +426,7 @@ class QuoteCuMaterialDiffServiceImplTest {
               .contains("qtyPerParent", "grossWeightG", "netWeightG");
         });
     assertThat(result.items().subList(1, 3).stream()
-        .map(QuoteCuMaterialDiffItem::getDiffAmount)
+        .map(QuoteCuMaterialDiffItemResult::getDiffAmount)
         .reduce(BigDecimal.ZERO, BigDecimal::add)).isEqualByComparingTo(parent.getDiffAmount());
   }
 

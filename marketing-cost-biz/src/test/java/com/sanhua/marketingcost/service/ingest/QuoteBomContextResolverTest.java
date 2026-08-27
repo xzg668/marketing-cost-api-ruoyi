@@ -61,13 +61,26 @@ class QuoteBomContextResolverTest {
   }
 
   @Test
-  void blankProductCodeIsBlocked() {
+  void modelOrDrawingCanIdentifyProductWithoutMaterialNo() {
+    OaForm form = form("OA-CTX-005", "2026-08", null);
+    OaFormItem modelItem = item(" ", "BOX");
+    modelItem.setSunlModel("MODEL-NEW");
+    OaFormItem drawingItem = item(null, "BOX");
+    drawingItem.setCustomerDrawing("DRAWING-NEW");
+
+    assertThat(resolver.resolve(form, modelItem).productCode()).isEqualTo("MODEL:MODEL-NEW");
+    assertThat(resolver.resolve(form, drawingItem).productCode())
+        .isEqualTo("DRAWING:DRAWING-NEW");
+  }
+
+  @Test
+  void allProductIdentitiesBlankIsBlocked() {
     assertThatThrownBy(
             () ->
                 resolver.resolve(
                     form("OA-CTX-005", "2026-08", null), item(" ", "BOX")))
         .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("产品料号为空");
+        .hasMessageContaining("产品料号、三花型号和客户图号均为空");
   }
 
   @Test

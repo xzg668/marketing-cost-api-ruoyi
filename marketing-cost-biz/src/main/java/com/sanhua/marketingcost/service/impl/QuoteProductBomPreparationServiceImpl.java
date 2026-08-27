@@ -6,13 +6,9 @@ import com.sanhua.marketingcost.dto.quotebom.FormalBomReadResult;
 import com.sanhua.marketingcost.dto.quotebom.PackageComponentStructureLineDto;
 import com.sanhua.marketingcost.dto.quotebom.PackageComponentStructureReadResult;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomSourceLineDto;
-import com.sanhua.marketingcost.dto.quotebom.QuoteProductBomPreparationBatchResult;
 import com.sanhua.marketingcost.dto.quotebom.QuoteProductBomPreparationPreview;
-import com.sanhua.marketingcost.dto.quotebom.QuoteProductBomTechnicianTaskResult;
 import com.sanhua.marketingcost.dto.quotebom.QuoteProductTypeResolveResult;
 import com.sanhua.marketingcost.dto.quotebom.SupplementBomReadResult;
-import com.sanhua.marketingcost.entity.BomSupplementTask;
-import com.sanhua.marketingcost.entity.BomSupplementTaskQuoteLink;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
@@ -20,8 +16,6 @@ import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.QuoteBomStatusCode;
 import com.sanhua.marketingcost.enums.QuoteProductType;
-import com.sanhua.marketingcost.mapper.BomSupplementTaskMapper;
-import com.sanhua.marketingcost.mapper.BomSupplementTaskQuoteLinkMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
@@ -33,15 +27,12 @@ import com.sanhua.marketingcost.service.QuoteProductTypeResolveService;
 import com.sanhua.marketingcost.service.SupplementBomReadService;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContext;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
+import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -63,15 +54,10 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   static final String SCOPE_PACKAGE_REFERENCE = "PACKAGE_REFERENCE";
   static final int ACTIVE = 1;
 
-  private static final DateTimeFormatter TASK_NO_DATE =
-      DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
-
   private final OaFormItemMapper oaFormItemMapper;
   private final OaFormMapper oaFormMapper;
   private final QuoteBomStatusMapper quoteBomStatusMapper;
   private final QuoteBomPreparationRecordMapper preparationRecordMapper;
-  private final BomSupplementTaskMapper taskMapper;
-  private final BomSupplementTaskQuoteLinkMapper taskQuoteLinkMapper;
   private final QuoteProductTypeResolveService productTypeResolveService;
   private final FormalBomReadService formalBomReadService;
   private final SupplementBomReadService supplementBomReadService;
@@ -83,8 +69,6 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
       OaFormMapper oaFormMapper,
       QuoteBomStatusMapper quoteBomStatusMapper,
       QuoteBomPreparationRecordMapper preparationRecordMapper,
-      BomSupplementTaskMapper taskMapper,
-      BomSupplementTaskQuoteLinkMapper taskQuoteLinkMapper,
       QuoteProductTypeResolveService productTypeResolveService,
       FormalBomReadService formalBomReadService,
       SupplementBomReadService supplementBomReadService,
@@ -94,8 +78,6 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     this.oaFormMapper = oaFormMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
     this.preparationRecordMapper = preparationRecordMapper;
-    this.taskMapper = taskMapper;
-    this.taskQuoteLinkMapper = taskQuoteLinkMapper;
     this.productTypeResolveService = productTypeResolveService;
     this.formalBomReadService = formalBomReadService;
     this.supplementBomReadService = supplementBomReadService;
@@ -118,7 +100,8 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     String periodMonth = bomContext.costPeriodMonth();
     QuoteDataOrganization organization = bomContext.organization();
     QuoteProductTypeResolveResult typeResult =
-        resolveProductType(productCode, organization.materialOrganizationCode());
+        resolveProductType(
+            context.item(), productCode, organization.materialOrganizationCode());
     if (typeResult.productType() == QuoteProductType.DATA_MISSING
         || typeResult.productType() == QuoteProductType.UNKNOWN) {
       String error = firstText(typeResult.errorMessage(), "产品形态无法判断");
@@ -131,7 +114,6 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
               periodMonth,
               PREPARATION_ERROR,
               false,
-              null,
               null,
               null,
               null,
@@ -188,7 +170,6 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
               QuoteProductType.BARE == typeResult.productType(),
               locked.getReferenceFinishedCode(),
               locked.getSourceTopProductCode(),
-              locked.getTaskId(),
               firstText(locked.getReuseType(), BODY_SOURCE_MONTHLY_LOCK),
               locked,
               organization,
@@ -215,122 +196,13 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     return prepareBare(context, typeResult, periodMonth, organization, resolveQuoteDate(quoteDate));
   }
 
-  @Override
-  @Transactional
-  public QuoteProductBomPreparationBatchResult batchPrepare(Collection<Long> itemIds) {
-    List<Long> ids = normalizeIds(itemIds);
-    List<QuoteProductBomPreparationPreview> previews = new ArrayList<>();
-    for (Long id : ids) {
-      previews.add(prepareByOaFormItem(id));
-    }
-    return new QuoteProductBomPreparationBatchResult(
-        ids.size(),
-        previews.size(),
-        (int) previews.stream().filter(QuoteProductBomPreparationPreview::ready).count(),
-        (int) previews.stream().filter(QuoteProductBomPreparationPreview::needTechnicianTask).count(),
-        (int) previews.stream().filter(QuoteProductBomPreparationPreview::abnormal).count(),
-        previews);
-  }
-
-  @Override
-  @Transactional
-  public QuoteProductBomTechnicianTaskResult createTechnicianTask(Collection<Long> itemIds) {
-    List<Long> ids = normalizeIds(itemIds);
-    List<QuoteProductBomPreparationPreview> previews = new ArrayList<>();
-    List<String> rejectedMessages = new ArrayList<>();
-    int created = 0;
-    int reused = 0;
-    for (Long id : ids) {
-      QuoteProductBomPreparationPreview preview = prepareByOaFormItem(id);
-      if (!preview.needTechnicianTask()) {
-        rejectedMessages.add("报价产品行 " + id + " 当前不需要技术员处理");
-        previews.add(preview);
-        continue;
-      }
-      QuoteBomPreparationRecord record = preparationRecordMapper.selectById(preview.preparationRecordId());
-      BomSupplementTask task = record == null ? null : findActiveTask(record);
-      boolean reusedTask = task != null;
-      if (task == null) {
-        QuoteContext context = loadContext(id);
-        task = createTask(context, preview);
-        taskMapper.insert(task);
-        created++;
-      }
-      if (record != null) {
-        record.setTaskId(task.getId());
-        record.setUpdatedAt(LocalDateTime.now());
-        preparationRecordMapper.updateById(record);
-      }
-      QuoteBomStatus status =
-          quoteBomStatusMapper.selectOne(
-              Wrappers.<QuoteBomStatus>lambdaQuery()
-                  .eq(QuoteBomStatus::getOaFormItemId, id)
-                  .last("LIMIT 1"));
-      if (status != null) {
-        ensureTaskLink(task, status);
-        status.setSupplementTaskId(task.getId());
-        status.setManualTaskNo(task.getTaskNo());
-        status.setBomStatus(QuoteBomStatusCode.ENTRY_IN_PROGRESS.getCode());
-        status.setUpdatedAt(LocalDateTime.now());
-        quoteBomStatusMapper.updateById(status);
-      }
-      QuoteProductBomPreparationPreview refreshed = getPreparationPreview(id);
-      previews.add(refreshed == null ? preview : refreshed);
-      if (reusedTask) {
-        reused++;
-      }
-    }
-    return new QuoteProductBomTechnicianTaskResult(
-        ids.size(), created, reused, rejectedMessages.size(), previews, rejectedMessages);
-  }
-
-  @Override
-  public QuoteProductBomPreparationPreview getPreparationPreview(Long itemId) {
-    if (itemId == null) {
-      return null;
-    }
-    QuoteBomPreparationRecord record =
-        preparationRecordMapper.selectOne(
-            Wrappers.<QuoteBomPreparationRecord>lambdaQuery()
-                .eq(QuoteBomPreparationRecord::getOaFormItemId, itemId)
-                .eq(QuoteBomPreparationRecord::getActiveFlag, ACTIVE)
-                .orderByDesc(QuoteBomPreparationRecord::getUpdatedAt)
-                .orderByDesc(QuoteBomPreparationRecord::getId)
-                .last("LIMIT 1"));
-    if (record == null) {
-      return null;
-    }
-    QuoteBomStatus status =
-        record.getQuoteBomStatusId() == null
-            ? null
-            : quoteBomStatusMapper.selectById(record.getQuoteBomStatusId());
-    boolean ready = PREPARATION_READY.equals(record.getPreparationStatus());
-    boolean needTech = PREPARATION_NEED_TECH.equals(record.getPreparationStatus());
-    boolean abnormal = PREPARATION_ERROR.equals(record.getPreparationStatus());
-    String error = record.getErrorMessage();
-    return toPreview(
-        record,
-        status,
-        ready,
-        needTech,
-        abnormal,
-        record.getReuseType(),
-        ready,
-        List.of(),
-        record.getReferenceFinishedCode(),
-        trimToNull(record.getReferenceFinishedCode()) != null,
-        List.of(),
-        needTech ? inferMissingScopes(record) : List.of(),
-        error == null ? List.of() : List.of(error));
-  }
-
   private QuoteProductBomPreparationPreview prepareNonBare(
       QuoteContext context,
       QuoteProductTypeResolveResult typeResult,
       String periodMonth,
       QuoteDataOrganization organization,
       LocalDate quoteDate) {
-    String productCode = trimToNull(context.item().getMaterialNo());
+    String productCode = typeResult.quoteProductCode();
     FormalBomReadResult formal =
         readFormalBom(productCode, periodMonth, quoteDate, organization);
     if (formal.found()) {
@@ -343,7 +215,6 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
               periodMonth,
               PREPARATION_READY,
               false,
-              null,
               null,
               null,
               null,
@@ -383,7 +254,6 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
               false,
               null,
               null,
-              supplement.taskId(),
               REUSE_TYPE_MANUAL_BOM,
               supplement,
               organization,
@@ -418,7 +288,6 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
             null,
             null,
             null,
-            null,
             organization,
             String.join("；", gaps));
     return toPreview(
@@ -443,7 +312,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
       String periodMonth,
       QuoteDataOrganization organization,
       LocalDate quoteDate) {
-    String productCode = trimToNull(context.item().getMaterialNo());
+    String productCode = typeResult.quoteProductCode();
     FormalBomReadResult formal =
         readFormalBom(productCode, periodMonth, quoteDate, organization);
     boolean bodyReady = formal.found();
@@ -501,7 +370,6 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
             true,
             packageResult.referenceFinishedCode(),
             packageResult.sourceTopProductCode(),
-            supplement == null ? null : supplement.taskId(),
             supplement != null && supplement.found() ? REUSE_TYPE_MANUAL_BOM : null,
             supplement != null && supplement.found() ? supplement : null,
             organization,
@@ -542,7 +410,17 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   }
 
   private QuoteProductTypeResolveResult resolveProductType(
-      String productCode, String organizationCode) {
+      OaFormItem item, String productCode, String organizationCode) {
+    if (!QuoteProductIdentityUtils.hasFormalMaterialNo(item)) {
+      return new QuoteProductTypeResolveResult(
+          productCode,
+          QuoteProductType.NON_BARE,
+          null,
+          null,
+          item == null ? null : item.getProductName(),
+          item == null ? null : item.getSpec(),
+          null);
+    }
     String organization = MaterialOrganization.normalize(organizationCode);
     return productTypeResolveService.resolve(productCode, organization);
   }
@@ -634,7 +512,6 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
       boolean needPackage,
       String referenceFinishedCode,
       String sourceTopProductCode,
-      Long taskId,
       String reuseType,
       Object reuseSource,
       QuoteDataOrganization quoteDataOrganization,
@@ -659,11 +536,14 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     record.setOaFormId(context.form().getId());
     record.setOaFormItemId(context.item().getId());
     record.setOaNo(context.form().getOaNo());
-    record.setQuoteProductCode(trimToNull(context.item().getMaterialNo()));
+    record.setQuoteProductCode(typeResult.quoteProductCode());
     record.setPriceOrgCode(organization.priceOrgCode());
     record.setMaterialOrganizationCode(organization.materialOrganizationCode());
     record.setProductType(typeResult.productTypeCode());
-    record.setBareProductCode(typeResult.productType() == QuoteProductType.BARE ? trimToNull(context.item().getMaterialNo()) : null);
+    record.setBareProductCode(
+        typeResult.productType() == QuoteProductType.BARE
+            ? typeResult.quoteProductCode()
+            : null);
     record.setNeedPackage(needPackage ? 1 : 0);
     record.setReferenceFinishedCode(trimToNull(referenceFinishedCode));
     record.setSourceTopProductCode(trimToNull(sourceTopProductCode));
@@ -671,7 +551,6 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     record.setPreparationStatus(preparationStatus);
     record.setReviewStatus(REVIEW_NOT_SUBMITTED);
     record.setTechnicianName(context.item().getTechnicianName());
-    record.setTaskId(taskId);
     record.setReuseType(trimToNull(reuseType));
     record.setErrorMessage(trimToNull(errorMessage));
     applyReuseSource(record, reuseSource);
@@ -690,17 +569,14 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   }
 
   private void applyReuseSource(QuoteBomPreparationRecord record, Object reuseSource) {
-    record.setReusedFromTaskId(null);
     record.setReusedFromOaNo(null);
     record.setReusedFromOaFormItemId(null);
     record.setReuseValidUntil(null);
     if (reuseSource instanceof SupplementBomReadResult supplement) {
-      record.setReusedFromTaskId(supplement.taskId());
       record.setReuseValidUntil(supplement.reuseValidUntil());
       return;
     }
     if (reuseSource instanceof QuoteBomPreparationRecord locked) {
-      record.setReusedFromTaskId(locked.getTaskId());
       record.setReusedFromOaNo(locked.getOaNo());
       record.setReusedFromOaFormItemId(locked.getOaFormItemId());
       record.setReuseValidUntil(locked.getReuseValidUntil());
@@ -729,86 +605,6 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
             .orderByDesc(QuoteBomPreparationRecord::getUpdatedAt)
             .orderByDesc(QuoteBomPreparationRecord::getId)
             .last("LIMIT 1"));
-  }
-
-  private BomSupplementTask findActiveTask(QuoteBomPreparationRecord record) {
-    if (record == null) {
-      return null;
-    }
-    if (record.getTaskId() != null) {
-      BomSupplementTask task = taskMapper.selectById(record.getTaskId());
-      if (task != null) {
-        return task;
-      }
-    }
-    return taskMapper.selectOne(
-        Wrappers.<BomSupplementTask>lambdaQuery()
-            .eq(BomSupplementTask::getProductCode, record.getQuoteProductCode())
-            .eq(BomSupplementTask::getMissingBomScope, taskScope(record))
-            .in(
-                BomSupplementTask::getTaskStatus,
-                List.of("TODO_PENDING", "TODO_PUSHED", "IN_PROGRESS", "FINANCE_REVIEW"))
-            .last("LIMIT 1"));
-  }
-
-  private BomSupplementTask createTask(
-      QuoteContext context, QuoteProductBomPreparationPreview preview) {
-    LocalDateTime now = LocalDateTime.now();
-    QuoteBomContext bomContext =
-        quoteBomContextResolver.resolveWithExistingCostPeriod(
-            context.form(), context.item(), preview.periodMonth());
-    BomSupplementTask task = new BomSupplementTask();
-    task.setTaskNo("QBP-" + TASK_NO_DATE.format(now) + "-" + preview.oaFormItemId());
-    task.setBusinessUnitType(context.item().getBusinessUnitType());
-    task.setProductCode(preview.quoteProductCode());
-    task.setProductName(context.item().getProductName());
-    task.setProductModel(context.item().getSunlModel());
-    task.setCustomerCode(bomContext.customerKey());
-    task.setPackageType(context.item().getPackageType());
-    task.setPackageMethod(bomContext.packageMethod());
-    task.setMissingBomScope(String.join(",", preview.missingScopes()));
-    task.setMissingReason(String.join("；", preview.gapMessages()));
-    task.setTaskStatus("TODO_PENDING");
-    task.setTechnicianName(context.item().getTechnicianName());
-    task.setRemark("报价产品 BOM 准备待技术员处理");
-    task.setCreatedAt(now);
-    task.setUpdatedAt(now);
-    return task;
-  }
-
-  private void ensureTaskLink(BomSupplementTask task, QuoteBomStatus status) {
-    if (task == null || status == null) {
-      return;
-    }
-    BomSupplementTaskQuoteLink existing =
-        taskQuoteLinkMapper.selectOne(
-            Wrappers.<BomSupplementTaskQuoteLink>lambdaQuery()
-                .eq(BomSupplementTaskQuoteLink::getTaskId, task.getId())
-                .eq(BomSupplementTaskQuoteLink::getOaFormItemId, status.getOaFormItemId())
-                .last("LIMIT 1"));
-    if (existing != null) {
-      return;
-    }
-    BomSupplementTaskQuoteLink link = new BomSupplementTaskQuoteLink();
-    link.setTaskId(task.getId());
-    link.setTaskNo(task.getTaskNo());
-    link.setQuoteBomStatusId(status.getId());
-    link.setOaFormId(status.getOaFormId());
-    link.setOaFormItemId(status.getOaFormItemId());
-    link.setOaNo(status.getOaNo());
-    link.setProductCode(status.getProductCode());
-    link.setCreatedAt(LocalDateTime.now());
-    taskQuoteLinkMapper.insert(link);
-  }
-
-  private String taskScope(QuoteBomPreparationRecord record) {
-    if (record.getProductType() != null && record.getProductType().equals(QuoteProductType.NON_BARE.getCode())) {
-      return SCOPE_NON_BARE_FULL_BOM;
-    }
-    if (record.getNeedPackage() != null && record.getNeedPackage() == 1) {
-      return SCOPE_BARE_BODY_BOM + "," + SCOPE_PACKAGE_REFERENCE;
-    }
-    return SCOPE_BARE_BODY_BOM;
   }
 
   private QuoteProductBomPreparationPreview toPreview(
@@ -848,8 +644,6 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
         record.getSourceTopProductCode(),
         packageReferenceReady,
         packageLines == null ? 0 : packageLines.size(),
-        record.getTaskId(),
-        record.getReusedFromTaskId(),
         record.getReusedFromOaNo(),
         record.getReusedFromOaFormItemId(),
         record.getReuseType(),
@@ -859,37 +653,6 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
         record.getErrorMessage(),
         bodyLines == null ? List.of() : List.copyOf(bodyLines),
         packageLines == null ? List.of() : List.copyOf(packageLines));
-  }
-
-  private List<String> inferMissingScopes(QuoteBomPreparationRecord record) {
-    if (record == null) {
-      return List.of();
-    }
-    if (QuoteProductType.NON_BARE.getCode().equals(record.getProductType())) {
-      return List.of(SCOPE_NON_BARE_FULL_BOM);
-    }
-    List<String> scopes = new ArrayList<>();
-    if (trimToNull(record.getReuseType()) == null) {
-      scopes.add(SCOPE_BARE_BODY_BOM);
-    }
-    if (record.getNeedPackage() != null && record.getNeedPackage() == 1
-        && trimToNull(record.getReferenceFinishedCode()) == null) {
-      scopes.add(SCOPE_PACKAGE_REFERENCE);
-    }
-    return scopes;
-  }
-
-  private List<Long> normalizeIds(Collection<Long> itemIds) {
-    if (itemIds == null || itemIds.isEmpty()) {
-      return List.of();
-    }
-    Set<Long> normalized = new LinkedHashSet<>();
-    for (Long id : itemIds) {
-      if (id != null) {
-        normalized.add(id);
-      }
-    }
-    return new ArrayList<>(normalized);
   }
 
   private LocalDate resolveQuoteDate(LocalDate quoteDate) {

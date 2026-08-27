@@ -12,7 +12,6 @@ import com.sanhua.marketingcost.dto.quotecosting.QuoteBatchCostRunRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteBatchCostRunResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunWorkbenchResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCuMaterialDifferenceResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse;
@@ -74,7 +73,7 @@ public class QuoteRequestController {
     this.repriceLockGuard = repriceLockGuard;
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:cost-run:execute')")
   @PostMapping("/{oaNo}/cost-runs")
   public CommonResult<QuoteBatchCostRunResponse> submitBatchCostRun(
       @PathVariable("oaNo") String oaNo,
@@ -142,36 +141,7 @@ public class QuoteRequestController {
     }
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
-  @GetMapping("/{oaNo}/items/{oaFormItemId}/cost-run/{costRunNo}/cu-material-differences")
-  public CommonResult<PageResult<QuoteCuMaterialDifferenceResponse>> cuMaterialDifferences(
-      @PathVariable("oaNo") String oaNo,
-      @PathVariable("oaFormItemId") Long oaFormItemId,
-      @PathVariable("costRunNo") String costRunNo,
-      @RequestParam(value = "pageNo", required = false) Integer pageNo,
-      @RequestParam(value = "pageSize", required = false) Integer pageSize,
-      @RequestParam(value = "parentMaterialCode", required = false) String parentMaterialCode,
-      @RequestParam(value = "materialCode", required = false) String materialCode,
-      @RequestParam(value = "onlyDifferent", required = false) Boolean onlyDifferent,
-      @RequestParam(value = "differenceSign", required = false) String differenceSign) {
-    try {
-      return CommonResult.success(
-          quoteCostRunWorkbenchService.pageCuMaterialDifferences(
-              oaNo,
-              oaFormItemId,
-              costRunNo,
-              pageNo,
-              pageSize,
-              parentMaterialCode,
-              materialCode,
-              onlyDifferent,
-              differenceSign));
-    } catch (QuoteIngestException | IllegalArgumentException ex) {
-      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
-    }
-  }
-
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:cost-run:execute')")
   @PostMapping("/{oaNo}/items/{oaFormItemId}/cost-runs")
   public CommonResult<ProductCostingResult> submitProductCostRun(
       @PathVariable("oaNo") String oaNo,
@@ -257,7 +227,7 @@ public class QuoteRequestController {
     }
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:cost-run:execute')")
   @PostMapping("/{oaNo}/items/{oaFormItemId}/price-prepare/check")
   public CommonResult<QuotePricePrepareWorkbenchResponse> checkPriceSources(
       @PathVariable("oaNo") String oaNo,
@@ -271,7 +241,7 @@ public class QuoteRequestController {
     }
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:cost-run:execute')")
   @PostMapping("/{oaNo}/items/{oaFormItemId}/price-prepare/generate")
   public CommonResult<QuotePricePrepareWorkbenchResponse> generatePricePrepare(
       @PathVariable("oaNo") String oaNo,

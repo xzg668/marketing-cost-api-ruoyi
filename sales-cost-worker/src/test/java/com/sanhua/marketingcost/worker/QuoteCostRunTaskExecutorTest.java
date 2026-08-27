@@ -41,6 +41,8 @@ class QuoteCostRunTaskExecutorTest {
     assertThat(captured.get().initiatedBy()).isEqualTo("worker-1");
     assertThat(captured.get().force()).isFalse();
     assertThat(execution.resultSummaryJson()).contains("\"pipelineStatus\":\"SUCCESS\"");
+    assertThat(execution.costRunVersionId()).isEqualTo(88L);
+    assertThat(execution.costRunNo()).isEqualTo("COST-88");
   }
 
   @Test
@@ -91,14 +93,18 @@ class QuoteCostRunTaskExecutorTest {
   }
 
   @Test
-  void failedPipelineResultRemainsRetryableSystemFailure() {
+  void failedPipelineResultCarriesExplicitRetryPolicy() {
     QuoteCostRunTaskExecutor executor =
         new QuoteCostRunTaskExecutor(
             request -> result("FAILED", "价格服务超时"), new ObjectMapper());
 
     assertThatThrownBy(() -> executor.execute(task(), "worker-1"))
-        .isInstanceOf(IllegalStateException.class)
-        .hasMessage("价格服务超时");
+        .isInstanceOfSatisfying(
+            CostRunTaskExecutionFailedException.class,
+            ex -> {
+              assertThat(ex.getMessage()).isEqualTo("价格服务超时");
+              assertThat(ex.isRetryable()).isFalse();
+            });
   }
 
   @Test
@@ -151,6 +157,8 @@ class QuoteCostRunTaskExecutorTest {
     result.setPeriodMonth("2026-08");
     result.setPipelineStatus(status);
     result.setMessage(message);
+    result.setCostVersionId(88L);
+    result.setCostRunNo("COST-88");
     return result;
   }
 }

@@ -269,7 +269,6 @@ class QuoteBomDetailQueryServiceImplTest {
     ref.setCostingRowId(1001L);
     ref.setSourcePartType("REFERENCED_PACKAGE");
     ref.setSourceRawHierarchyId(3001L);
-    ref.setSourceTaskId(501L);
     ref.setPreparationId(201L);
     ref.setPackageReferenceId(801L);
     ref.setPackageReferenceDetailId(802L);

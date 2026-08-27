@@ -39,8 +39,6 @@ public class QuoteBomStatus {
   private Long syncRecordId;
   private Long reusedFromRecordId;
   private LocalDateTime syncAt;
-  private String manualTaskNo;
-  private Long supplementTaskId;
   private Long preparationRecordId;
   private String technicianName;
   private Long reviewerUserId;
@@ -275,22 +273,6 @@ public class QuoteBomStatus {
 
   public void setSyncAt(LocalDateTime syncAt) {
     this.syncAt = syncAt;
-  }
-
-  public String getManualTaskNo() {
-    return manualTaskNo;
-  }
-
-  public void setManualTaskNo(String manualTaskNo) {
-    this.manualTaskNo = manualTaskNo;
-  }
-
-  public Long getSupplementTaskId() {
-    return supplementTaskId;
-  }
-
-  public void setSupplementTaskId(Long supplementTaskId) {
-    this.supplementTaskId = supplementTaskId;
   }
 
   public Long getPreparationRecordId() {

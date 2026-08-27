@@ -26,8 +26,6 @@ public record QuoteProductBomPreparationPreview(
     String sourceTopProductCode,
     boolean packageReferenceReady,
     int packageLineCount,
-    Long taskId,
-    Long reusedFromTaskId,
     String reusedFromOaNo,
     Long reusedFromOaFormItemId,
     String reuseType,

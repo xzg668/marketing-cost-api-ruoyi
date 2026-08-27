@@ -90,7 +90,8 @@ class CollaborationStateTransitionIntegrationTest extends BomMapperTestBase {
 
   @AfterEach
   void cleanRows() {
-    jdbcTemplate.update("DELETE FROM lp_integration_outbox WHERE 1=1");
+    jdbcTemplate.update("DELETE FROM lp_business_change_log "
+        + "WHERE biz_domain='QUOTE_COLLABORATION' AND biz_type='PRODUCT_TASK_EVENT'");
     jdbcTemplate.update("DELETE FROM lp_quote_collaboration_review WHERE 1=1");
     jdbcTemplate.update("DELETE FROM lp_quote_price_draft WHERE 1=1");
     jdbcTemplate.update("DELETE FROM lp_quote_collaboration_quote_link WHERE 1=1");

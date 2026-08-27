@@ -4,11 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.lang.reflect.Method;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Update;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-@DisplayName("成本任务执行轮次与前置状态SQL契约")
+@DisplayName("成本任务执行轮次与历史归档SQL契约")
 class CostRunExecutionGuardSqlContractTest {
 
   @Test
@@ -21,23 +22,7 @@ class CostRunExecutionGuardSqlContractTest {
         CostRunTaskMapper.class.getMethod("selectStatusCounts", String.class));
 
     assertThat(claim).contains("b.execution_no = t.execution_no");
-    assertThat(claim).contains("b.prerequisite_status IN ('SUCCESS', 'NOT_REQUIRED')");
     assertThat(counts).contains("b.execution_no = t.execution_no");
-  }
-
-  @Test
-  @DisplayName("只有待准备或超时的报价批次可进入前置抢占")
-  void quotePrerequisiteCandidatesExcludeFailedAndFreshRunningBatches() throws Exception {
-    String sql = selectSql(
-        CostRunBatchMapper.class.getMethod(
-            "selectQuotePrerequisiteCandidates", java.time.LocalDateTime.class, int.class));
-
-    assertThat(sql)
-        .contains("scene = 'QUOTE'")
-        .contains("prerequisite_status = 'PENDING'")
-        .contains("prerequisite_status = 'RUNNING'")
-        .contains("updated_at <= #{staleBefore}")
-        .doesNotContain("prerequisite_status = 'FAILED'");
   }
 
   @Test
@@ -45,46 +30,19 @@ class CostRunExecutionGuardSqlContractTest {
   void completionRejectsOldExecution() throws Exception {
     String success = updateSql(
         CostRunTaskMapper.class.getMethod(
-            "markSuccess", Long.class, String.class, String.class, java.time.LocalDateTime.class));
+            "markSuccess",
+            Long.class,
+            String.class,
+            Long.class,
+            String.class,
+            String.class,
+            java.time.LocalDateTime.class));
 
     assertThat(success)
+        .contains("cost_run_version_id = #{costRunVersionId}")
+        .contains("cost_run_no = #{costRunNo}")
         .contains("execution_no = (")
         .contains("b.batch_no = lp_cost_run_task.batch_no");
-  }
-
-  @Test
-  @DisplayName("批次前置状态转换同时校验轮次、状态和控制版本")
-  void prerequisiteTransitionIsOptimistic() throws Exception {
-    String sql = updateSql(
-        CostRunBatchMapper.class.getMethod(
-            "transitionPrerequisite",
-            String.class,
-            int.class,
-            int.class,
-            String.class,
-            String.class,
-            String.class,
-            java.time.LocalDateTime.class));
-
-    assertThat(sql)
-        .contains("execution_no = #{executionNo}")
-        .contains("control_version = #{expectedControlVersion}")
-        .contains("prerequisite_status = #{expectedStatus}")
-        .contains("control_version = control_version + 1")
-        .contains("WHEN #{nextStatus} = 'FAILED' THEN 'FAILED'")
-        .contains("WHEN #{nextStatus} = 'FAILED' THEN 100");
-
-    String taskFailure = updateSql(
-        CostRunTaskMapper.class.getMethod(
-            "markQuoteTasksFailedByPrerequisite",
-            String.class,
-            int.class,
-            String.class,
-            java.time.LocalDateTime.class));
-    assertThat(taskFailure)
-        .contains("b.prerequisite_status = 'FAILED'")
-        .contains("t.execution_no = #{executionNo}")
-        .contains("t.status IN ('PENDING', 'RETRYABLE')");
   }
 
   @Test
@@ -108,6 +66,7 @@ class CostRunExecutionGuardSqlContractTest {
             int.class,
             String.class,
             String.class,
+            String.class,
             java.time.LocalDateTime.class));
 
     assertThat(batchSql)
@@ -121,11 +80,31 @@ class CostRunExecutionGuardSqlContractTest {
         .contains("request_snapshot_json = #{requestSnapshotJson}");
   }
 
+  @Test
+  @DisplayName("重跑前按批次和执行轮次归档不可变历史")
+  void executionHistoryUsesStableUniqueKeys() throws Exception {
+    String batchArchive = insertSql(CostRunBatchMapper.class.getMethod(
+        "archiveExecution", String.class, int.class, java.time.LocalDateTime.class));
+    String taskArchive = insertSql(CostRunTaskMapper.class.getMethod(
+        "archiveExecutionTasks", String.class, int.class, java.time.LocalDateTime.class));
+
+    assertThat(batchArchive)
+        .contains("INSERT IGNORE INTO lp_cost_run_execution_history")
+        .contains("execution_no = #{executionNo}");
+    assertThat(taskArchive)
+        .contains("INSERT IGNORE INTO lp_cost_run_task_history")
+        .contains("execution_no = #{executionNo}");
+  }
+
   private String selectSql(Method method) {
     return String.join("\n", method.getAnnotation(Select.class).value());
   }
 
   private String updateSql(Method method) {
     return String.join("\n", method.getAnnotation(Update.class).value());
+  }
+
+  private String insertSql(Method method) {
+    return String.join("\n", method.getAnnotation(Insert.class).value());
   }
 }

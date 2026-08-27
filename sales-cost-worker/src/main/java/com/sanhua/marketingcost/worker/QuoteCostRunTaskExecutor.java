@@ -66,13 +66,15 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
     }
     String summary = toJson(result);
     if ("SUCCESS".equals(result.getPipelineStatus())) {
-      return new CostRunTaskExecutionResult(summary);
+      return new CostRunTaskExecutionResult(
+          summary, result.getCostVersionId(), result.getCostRunNo());
     }
     if ("BLOCKED".equals(result.getPipelineStatus())) {
       throw new CostRunTaskCollaborationRequiredException(
           firstText(result.getMessage(), "产品核算资料存在缺口"), summary);
     }
-    throw new IllegalStateException(firstText(result.getMessage(), "产品核算失败"));
+    throw new CostRunTaskExecutionFailedException(
+        firstText(result.getMessage(), "产品核算失败"), result.isRetryable());
   }
 
   private SecurityContext taskSecurityContext(String username, String businessUnitType) {

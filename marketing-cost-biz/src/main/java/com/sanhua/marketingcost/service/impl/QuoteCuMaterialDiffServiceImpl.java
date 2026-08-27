@@ -5,13 +5,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.financequote.QuoteCuMaterialDiffResult;
+import com.sanhua.marketingcost.dto.financequote.QuoteCuMaterialDiffItemResult;
 import com.sanhua.marketingcost.entity.FactorQuoteBaseMapping;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
-import com.sanhua.marketingcost.entity.QuoteCuMaterialDiffItem;
 import com.sanhua.marketingcost.enums.LinkedPriceCalcScene;
 import com.sanhua.marketingcost.enums.LinkedPriceFactorSource;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
@@ -117,7 +117,7 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     validateScenarioCu("OA", oaLinked, version.getOaCuPrice(), cuVariableCodes);
     validateScenarioCu("财务", financeLinked, version.getFinanceCuPrice(), cuVariableCodes);
 
-    List<QuoteCuMaterialDiffItem> rows = new ArrayList<>();
+    List<QuoteCuMaterialDiffItemResult> rows = new ArrayList<>();
     for (String settlementKey : oaItems.keySet()) {
       PricePrepareItem oa = oaItems.get(settlementKey);
       PricePrepareItem finance = financeItems.get(settlementKey);
@@ -152,7 +152,7 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     int settlementCount = 0;
     int componentCount = 0;
     int cuAffectedSettlementCount = 0;
-    for (QuoteCuMaterialDiffItem row : rows) {
+    for (QuoteCuMaterialDiffItemResult row : rows) {
       row.setLineNo(lineNo++);
       if (Integer.valueOf(1).equals(row.getContributesToAdjustment())) {
         adjustment = adjustment.add(row.getDiffAmount());
@@ -562,7 +562,7 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     }
   }
 
-  private QuoteCuMaterialDiffItem buildSettlementRow(
+  private QuoteCuMaterialDiffItemResult buildSettlementRow(
       QuoteCostRunVersion version,
       PricePrepareBatch oaBatch,
       PricePrepareBatch financeBatch,
@@ -599,7 +599,7 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     if (diff.signum() != 0 && !cuAffected) {
       throw new IllegalStateException("非Cu结算行出现非零差异: " + settlementKey);
     }
-    QuoteCuMaterialDiffItem row = baseDiffRow(version, settlementKey, oa, finance);
+    QuoteCuMaterialDiffItemResult row = baseDiffRow(version, settlementKey, oa, finance);
     row.setDetailLevel(DETAIL_SETTLEMENT);
     row.setContributesToAdjustment(1);
     row.setParentMaterialCode(null);
@@ -621,7 +621,7 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     return row;
   }
 
-  private List<QuoteCuMaterialDiffItem> buildMakeRows(
+  private List<QuoteCuMaterialDiffItemResult> buildMakeRows(
       QuoteCostRunVersion version,
       PricePrepareBatch oaBatch,
       PricePrepareBatch financeBatch,
@@ -632,7 +632,7 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
       Map<String, LinkedEvidence> oaLinked,
       Map<String, LinkedEvidence> financeLinked,
       Set<String> cuVariableCodes) {
-    List<QuoteCuMaterialDiffItem> components = new ArrayList<>();
+    List<QuoteCuMaterialDiffItemResult> components = new ArrayList<>();
     boolean settlementCuAffected = false;
     BigDecimal oaComponentTotal = BigDecimal.ZERO;
     BigDecimal financeComponentTotal = BigDecimal.ZERO;
@@ -670,7 +670,7 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
           oa.getParentMaterialNo(),
           oa.getChildMaterialNo(),
           identity);
-      QuoteCuMaterialDiffItem component = baseDiffRow(version, componentKey, oaItem, financeItem);
+      QuoteCuMaterialDiffItemResult component = baseDiffRow(version, componentKey, oaItem, financeItem);
       component.setParentSettlementKey(settlementKey);
       component.setDetailLevel(DETAIL_RAW_COMPONENT);
       component.setContributesToAdjustment(0);
@@ -716,7 +716,7 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
       throw new IllegalStateException("非Cu制造件结算行出现非零差异: " + settlementKey);
     }
 
-    QuoteCuMaterialDiffItem settlement = baseDiffRow(version, settlementKey, oaItem, financeItem);
+    QuoteCuMaterialDiffItemResult settlement = baseDiffRow(version, settlementKey, oaItem, financeItem);
     settlement.setDetailLevel(DETAIL_SETTLEMENT);
     settlement.setContributesToAdjustment(1);
     settlement.setParentMaterialCode(oaItem.getMaterialCode());
@@ -732,10 +732,10 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
         "detailLevel", DETAIL_SETTLEMENT,
         "oaPrepareNo", oaBatch.getPrepareNo(),
         "financePrepareNo", financeBatch.getPrepareNo(),
-        "componentKeys", components.stream().map(QuoteCuMaterialDiffItem::getSettlementKey).toList(),
+        "componentKeys", components.stream().map(QuoteCuMaterialDiffItemResult::getSettlementKey).toList(),
         "componentDiffTotal", componentDiffTotal,
         "contributesToAdjustment", true)));
-    List<QuoteCuMaterialDiffItem> result = new ArrayList<>();
+    List<QuoteCuMaterialDiffItemResult> result = new ArrayList<>();
     result.add(settlement);
     result.addAll(components);
     return result;
@@ -818,12 +818,12 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     return trace;
   }
 
-  private QuoteCuMaterialDiffItem baseDiffRow(
+  private QuoteCuMaterialDiffItemResult baseDiffRow(
       QuoteCostRunVersion version,
       String settlementKey,
       PricePrepareItem oa,
       PricePrepareItem finance) {
-    QuoteCuMaterialDiffItem row = new QuoteCuMaterialDiffItem();
+    QuoteCuMaterialDiffItemResult row = new QuoteCuMaterialDiffItemResult();
     row.setCostRunVersionId(version.getId());
     row.setCostRunNo(version.getCostRunNo());
     row.setSettlementKey(settlementKey);

@@ -7,7 +7,6 @@ public record BomSettlementSourceRef(
     String quoteProductCode,
     String sourcePartType,
     Long sourceRawHierarchyId,
-    Long sourceTaskId,
     Long preparationId,
     Long supplementVersionId,
     Long supplementDetailId,

@@ -7,7 +7,6 @@ public record QuoteBomCostingRowSourceRefDto(
     Long costingRowId,
     String sourcePartType,
     Long sourceRawHierarchyId,
-    Long sourceTaskId,
     Long preparationId,
     Long supplementVersionId,
     Long supplementDetailId,

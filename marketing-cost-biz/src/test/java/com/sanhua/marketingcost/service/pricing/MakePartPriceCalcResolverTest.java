@@ -30,7 +30,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.stereotype.Service;
 
 class MakePartPriceCalcResolverTest {
 
@@ -243,12 +242,6 @@ class MakePartPriceCalcResolverTest {
     assertThat(captor.getValue().getCustomSqlSegment()).doesNotContain("price_as_of_time");
     assertThat(paramValues(captor.getValue())).contains("2026-06", "COMMERCIAL");
     assertThat(paramValues(captor.getValue())).doesNotContain(priceAsOfTime);
-  }
-
-  @Test
-  @DisplayName("MPPG-07：旧 MakeSpecPriceResolver 不再作为 Spring Resolver 注入")
-  void oldMakeSpecResolverIsNotSpringService() {
-    assertThat(MakeSpecPriceResolver.class.getAnnotation(Service.class)).isNull();
   }
 
   private static CostRunPartItemDto part(String code) {
