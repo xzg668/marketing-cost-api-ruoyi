@@ -24,7 +24,6 @@ import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.OtherExpenseRateMapper;
-import com.sanhua.marketingcost.mapper.ProductPropertyMapper;
 import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
 import com.sanhua.marketingcost.service.CostRunCacheLookupService;
@@ -96,7 +95,6 @@ class ManufactureRateCategoryCostMatchTest {
             rateMapper,
             mock(ThreeExpenseRateMapper.class),
             mock(OtherExpenseRateMapper.class),
-            mock(ProductPropertyMapper.class),
             mock(MaterialMasterMapper.class),
             rawMapper,
             mock(BomRawHierarchyMapper.class),

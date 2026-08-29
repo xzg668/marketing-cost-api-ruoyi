@@ -7,7 +7,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.sanhua.marketingcost.dto.QualityLossRateImportRequest;
 import com.sanhua.marketingcost.dto.QualityLossRateImportResponse;
 import com.sanhua.marketingcost.entity.QualityLossRate;
@@ -21,107 +20,102 @@ import org.mockito.ArgumentCaptor;
 class QualityLossRateServiceImplTest {
 
   @Test
-  @DisplayName("净损失率导入：有料号按料号级配置插入")
-  void importItemsInsertsMaterialCodeLevel() {
+  @DisplayName("质量损失率导入：按 A:J 业务字段批量写入裸品规则")
+  void importItemsInsertsBareProductRule() {
     QualityLossRateMapper mapper = mock(QualityLossRateMapper.class);
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null);
-    when(mapper.insert(any(QualityLossRate.class))).thenReturn(1);
+    when(mapper.selectList(any())).thenReturn(List.of());
 
     QualityLossRateServiceImpl service = new QualityLossRateServiceImpl(mapper);
-    QualityLossRateImportResponse result = service.importItems(request(row(2, "P-001", "MODEL-A")));
+    QualityLossRateImportResponse result = service.importItems(request(row(2, "102053856", "0.0025")));
 
     assertThat(result.getInserted()).isEqualTo(1);
     assertThat(result.getUpdated()).isZero();
-    ArgumentCaptor<QualityLossRate> captor = ArgumentCaptor.forClass(QualityLossRate.class);
-    verify(mapper).insert(captor.capture());
-    QualityLossRate inserted = captor.getValue();
+    assertThat(result.getSourceBatchNo()).startsWith("QUALITY_LOSS_");
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<QualityLossRate>> captor = ArgumentCaptor.forClass(List.class);
+    verify(mapper).upsertBatch(captor.capture());
+    QualityLossRate inserted = captor.getValue().get(0);
     assertThat(inserted.getRateYear()).isEqualTo(2026);
-    assertThat(inserted.getMatchLevel()).isEqualTo("MATERIAL_CODE");
-    assertThat(inserted.getMatchKey()).isEqualTo("P-001");
-    assertThat(inserted.getPeriod()).isEqualTo("2026-01");
-    assertThat(inserted.getCompany()).isEmpty();
-    assertThat(inserted.getProductSubcategory()).isEmpty();
+    assertThat(inserted.getBareProductCode()).isEqualTo("102053856");
+    assertThat(inserted.getMaterialSpec()).isEqualTo("SPEC-C");
+    assertThat(inserted.getCategorySpec()).isEqualTo("SPEC-H");
+    assertThat(inserted.getFourthLevel()).isEqualTo("四级值");
+    assertThat(inserted.getSourceType()).isEqualTo("EXCEL_IMPORT");
   }
 
   @Test
-  @DisplayName("净损失率导入：无料号但有型号按型号级配置插入")
-  void importItemsInsertsMaterialModelLevel() {
+  @DisplayName("质量损失率导入：未报价和公式错误对应的空损失率直接跳过")
+  void importItemsSkipsRowsWithoutEffectiveRate() {
     QualityLossRateMapper mapper = mock(QualityLossRateMapper.class);
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null);
-    when(mapper.insert(any(QualityLossRate.class))).thenReturn(1);
+    QualityLossRateImportRequest.QualityLossRateRow invalid = row(3, "102053857", null);
 
-    QualityLossRateServiceImpl service = new QualityLossRateServiceImpl(mapper);
-    QualityLossRateImportResponse result = service.importItems(request(row(3, null, "MODEL-B")));
+    QualityLossRateImportResponse result =
+        new QualityLossRateServiceImpl(mapper).importItems(request(invalid));
+
+    assertThat(result.getSkipped()).isEqualTo(1);
+    assertThat(result.getErrors()).isZero();
+    verify(mapper, never()).upsertBatch(any());
+  }
+
+  @Test
+  @DisplayName("质量损失率导入：同一文件裸品料号重复时拒绝重复行")
+  void importItemsRejectsDuplicateBareProductCode() {
+    QualityLossRateMapper mapper = mock(QualityLossRateMapper.class);
+    when(mapper.selectList(any())).thenReturn(List.of());
+    QualityLossRateImportRequest request = new QualityLossRateImportRequest();
+    request.setRateYear(2026);
+    request.setRows(List.of(row(2, "102053856", "0.0025"), row(9, "102053856", "0.0030")));
+
+    QualityLossRateImportResponse result =
+        new QualityLossRateServiceImpl(mapper).importItems(request);
 
     assertThat(result.getInserted()).isEqualTo(1);
-    ArgumentCaptor<QualityLossRate> captor = ArgumentCaptor.forClass(QualityLossRate.class);
-    verify(mapper).insert(captor.capture());
-    assertThat(captor.getValue().getMatchLevel()).isEqualTo("MATERIAL_MODEL");
-    assertThat(captor.getValue().getMatchKey()).isEqualTo("MODEL-B");
-  }
-
-  @Test
-  @DisplayName("净损失率导入：料号和型号都没有时跳过并返回 Excel 行号")
-  void importItemsRejectsMissingMaterialCodeAndModel() {
-    QualityLossRateMapper mapper = mock(QualityLossRateMapper.class);
-
-    QualityLossRateServiceImpl service = new QualityLossRateServiceImpl(mapper);
-    QualityLossRateImportResponse result = service.importItems(request(row(4, null, null)));
-
-    assertThat(result.getInserted()).isZero();
     assertThat(result.getSkipped()).isEqualTo(1);
-    assertThat(result.getErrors()).isEqualTo(1);
-    assertThat(result.getErrorMessages()).containsExactly("Excel第4行缺产品料号或产品型号");
-    verify(mapper, never()).insert(any(QualityLossRate.class));
+    assertThat(result.getErrorMessages()).containsExactly("Excel第9行裸品料号重复：102053856");
   }
 
   @Test
-  @DisplayName("净损失率导入：同年度同业务单元同匹配键更新既有配置")
-  void importItemsUpdatesExistingMatchKey() {
+  @DisplayName("质量损失率导入：导入覆盖已手工修正的同年度裸品规则")
+  void importItemsCountsExistingRuleAsUpdated() {
     QualityLossRate existing = new QualityLossRate();
-    existing.setId(1L);
-    existing.setRateYear(2026);
-    existing.setBusinessUnitType("COMMERCIAL");
-    existing.setMatchLevel("MATERIAL_CODE");
-    existing.setMatchKey("P-001");
-    existing.setLossRate(new BigDecimal("0.010000"));
-
+    existing.setBareProductCode("102053856");
     QualityLossRateMapper mapper = mock(QualityLossRateMapper.class);
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(existing);
-    when(mapper.updateById(any(QualityLossRate.class))).thenReturn(1);
+    when(mapper.selectList(any())).thenReturn(List.of(existing));
 
-    QualityLossRateServiceImpl service = new QualityLossRateServiceImpl(mapper);
-    QualityLossRateImportResponse result = service.importItems(request(row(5, "P-001", "MODEL-A")));
+    QualityLossRateImportResponse result =
+        new QualityLossRateServiceImpl(mapper)
+            .importItems(request(row(5, "102053856", "0.00475")));
 
     assertThat(result.getInserted()).isZero();
     assertThat(result.getUpdated()).isEqualTo(1);
-    ArgumentCaptor<QualityLossRate> captor = ArgumentCaptor.forClass(QualityLossRate.class);
-    verify(mapper).updateById(captor.capture());
-    assertThat(captor.getValue().getLossRate()).isEqualByComparingTo("0.012000");
-    assertThat(captor.getValue().getProductModel()).isEqualTo("MODEL-A");
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<QualityLossRate>> captor = ArgumentCaptor.forClass(List.class);
+    verify(mapper).upsertBatch(captor.capture());
+    assertThat(captor.getValue().get(0).getLossRate()).isEqualByComparingTo("0.00475");
   }
 
   private QualityLossRateImportRequest request(QualityLossRateImportRequest.QualityLossRateRow row) {
     QualityLossRateImportRequest request = new QualityLossRateImportRequest();
     request.setRateYear(2026);
-    request.setBusinessUnitType("COMMERCIAL");
     request.setRows(List.of(row));
     return request;
   }
 
   private QualityLossRateImportRequest.QualityLossRateRow row(
-      int rowNo, String productCode, String productModel) {
+      int rowNo, String bareProductCode, String lossRate) {
     QualityLossRateImportRequest.QualityLossRateRow row =
         new QualityLossRateImportRequest.QualityLossRateRow();
     row.setRowNo(rowNo);
-    row.setBusinessDivision("四通阀事业部");
-    row.setProductCategory("热力膨胀阀");
-    row.setProductCode(productCode);
-    row.setProductName("测试产品");
-    row.setProductModel(productModel);
-    row.setProductSpec("SPEC");
-    row.setLossRate(new BigDecimal("0.012000"));
-    row.setRemark("测试");
+    row.setBareProductCode(bareProductCode);
+    row.setProductName("测试品名");
+    row.setMaterialSpec("SPEC-C");
+    row.setProductModel("MODEL-D");
+    row.setBusinessDivision("商用四通阀");
+    row.setProductCategory("大类F");
+    row.setProductSubcategory("小类G");
+    row.setCategorySpec("SPEC-H");
+    row.setFourthLevel("四级值");
+    row.setLossRate(lossRate == null ? null : new BigDecimal(lossRate));
     return row;
   }
 }

@@ -63,6 +63,22 @@ public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
       @Param("sourceType") String sourceType,
       @Param("organizationCode") String organizationCode);
 
+  /** 产品属性 A-E 导入：跨当前有效组织查生产事业部，由调用方识别空值或冲突值。 */
+  @Select({
+      "<script>",
+      "SELECT material_code, organization_code, production_division",
+      "FROM lp_material_master_raw",
+      "WHERE active_flag = 1",
+      "  AND material_code IN",
+      "  <foreach collection='codes' item='code' open='(' separator=',' close=')'>",
+      "    #{code}",
+      "  </foreach>",
+      "ORDER BY material_code, organization_code",
+      "</script>"
+  })
+  List<MaterialMasterRaw> selectActiveProductionDivisionsByCodes(
+      @Param("codes") Collection<String> codes);
+
   /** 兼容旧调用入口已废弃；必须显式传 organizationCode。 */
   default List<MaterialMasterRaw> selectByLatestBatchAndCodes(
       Collection<String> codes, String sourceType) {

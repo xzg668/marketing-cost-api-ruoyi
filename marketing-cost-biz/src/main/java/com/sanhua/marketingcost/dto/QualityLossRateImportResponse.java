@@ -1,6 +1,5 @@
 package com.sanhua.marketingcost.dto;
 
-import com.sanhua.marketingcost.entity.QualityLossRate;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -9,77 +8,30 @@ public class QualityLossRateImportResponse {
   private int updated;
   private int skipped;
   private int errors;
+  private String sourceBatchNo;
   private List<String> errorMessages = new ArrayList<>();
-  private List<QualityLossRate> records = new ArrayList<>();
 
-  public int getInserted() {
-    return inserted;
+  public int getInserted() { return inserted; }
+  public void setInserted(int value) { this.inserted = value; }
+  public int getUpdated() { return updated; }
+  public void setUpdated(int value) { this.updated = value; }
+  public int getSkipped() { return skipped; }
+  public void setSkipped(int value) { this.skipped = value; }
+  public int getErrors() { return errors; }
+  public void setErrors(int value) { this.errors = value; }
+  public String getSourceBatchNo() { return sourceBatchNo; }
+  public void setSourceBatchNo(String value) { this.sourceBatchNo = value; }
+  public List<String> getErrorMessages() { return errorMessages; }
+  public void setErrorMessages(List<String> value) {
+    this.errorMessages = value == null ? new ArrayList<>() : value;
   }
-
-  public void setInserted(int inserted) {
-    this.inserted = inserted;
-  }
-
-  public int getUpdated() {
-    return updated;
-  }
-
-  public void setUpdated(int updated) {
-    this.updated = updated;
-  }
-
-  public int getSkipped() {
-    return skipped;
-  }
-
-  public void setSkipped(int skipped) {
-    this.skipped = skipped;
-  }
-
-  public int getErrors() {
-    return errors;
-  }
-
-  public void setErrors(int errors) {
-    this.errors = errors;
-  }
-
-  public List<String> getErrorMessages() {
-    return errorMessages;
-  }
-
-  public void setErrorMessages(List<String> errorMessages) {
-    this.errorMessages = errorMessages == null ? new ArrayList<>() : errorMessages;
-  }
-
-  public List<QualityLossRate> getRecords() {
-    return records;
-  }
-
-  public void setRecords(List<QualityLossRate> records) {
-    this.records = records == null ? new ArrayList<>() : records;
-  }
-
-  public void incrementInserted() {
-    this.inserted++;
-  }
-
-  public void incrementUpdated() {
-    this.updated++;
-  }
-
-  public void incrementSkipped() {
-    this.skipped++;
-  }
-
+  public void incrementInserted() { inserted++; }
+  public void incrementUpdated() { updated++; }
+  public void incrementSkipped() { skipped++; }
   public void addError(String message) {
-    this.errors++;
-    this.errorMessages.add(message);
-  }
-
-  public void addRecord(QualityLossRate record) {
-    if (record != null) {
-      this.records.add(record);
+    errors++;
+    if (errorMessages.size() < 20) {
+      errorMessages.add(message);
     }
   }
 }

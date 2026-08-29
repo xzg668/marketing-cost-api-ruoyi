@@ -8,15 +8,11 @@ import com.sanhua.marketingcost.entity.QualityLossRate;
 
 public interface QualityLossRateService {
   Page<QualityLossRate> page(
-      String company,
-      String businessUnit,
       String productCategory,
       String productSubcategory,
-      String customer,
-      String period,
       Integer rateYear,
       String businessDivision,
-      String productCode,
+      String bareProductCode,
       String productName,
       String productModel,
       int page,

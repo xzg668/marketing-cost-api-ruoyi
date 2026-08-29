@@ -1,752 +1,522 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.sanhua.marketingcost.dto.ProductPropertyAnnualSyncRequest;
-import com.sanhua.marketingcost.dto.ProductPropertyAnnualSyncResult;
-import com.sanhua.marketingcost.dto.ProductPropertyAnnualSyncRow;
-import com.sanhua.marketingcost.dto.ProductPropertyImportRequest;
-import com.sanhua.marketingcost.dto.ProductPropertyRequest;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.sanhua.marketingcost.dto.ProductPropertyImportResult;
+import com.sanhua.marketingcost.dto.ProductPropertyRuleSaveRequest;
+import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.ProductProperty;
+import com.sanhua.marketingcost.entity.ProductPropertyRule;
+import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.ProductPropertyMapper;
-import com.sanhua.marketingcost.service.ProductPropertyAnnualSyncService;
+import com.sanhua.marketingcost.mapper.ProductPropertyRuleMapper;
+import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.ProductPropertyService;
 import java.io.InputStream;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellType;
 import org.apache.poi.ss.usermodel.DataFormatter;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.usermodel.WorkbookFactory;
+import org.apache.poi.ss.util.NumberToTextConverter;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 @Service
 public class ProductPropertyServiceImpl implements ProductPropertyService {
+  private static final String TARGET_SHEET = "报价系统展示-产品属性";
+  private static final String DEFAULT_BUSINESS_UNIT = "COMMERCIAL";
+  private static final String MODE_INCREMENTAL = "INCREMENTAL";
+  private static final String MODE_FULL = "FULL";
+  private static final Set<String> EXPECTED_ATTRIBUTES =
+      Set.of("非标品", "标准品", "定制品", "OEM");
+  private static final int BATCH_SIZE = 500;
+  private static final int MESSAGE_LIMIT = 200;
+
   private final ProductPropertyMapper productPropertyMapper;
-  private final ProductPropertyAnnualSyncService annualSyncService;
+  private final ProductPropertyRuleMapper ruleMapper;
+  private final MaterialMasterRawMapper materialMasterRawMapper;
 
   public ProductPropertyServiceImpl(
       ProductPropertyMapper productPropertyMapper,
-      ProductPropertyAnnualSyncService annualSyncService) {
+      ProductPropertyRuleMapper ruleMapper,
+      MaterialMasterRawMapper materialMasterRawMapper) {
     this.productPropertyMapper = productPropertyMapper;
-    this.annualSyncService = annualSyncService;
+    this.ruleMapper = ruleMapper;
+    this.materialMasterRawMapper = materialMasterRawMapper;
   }
 
   @Override
-  public List<ProductProperty> list(
-      String level1Name,
-      String parentCode,
+  public Page<ProductProperty> page(
       Integer propertyYear,
       String businessDivision,
       String productCode,
       String productName,
       String productAttr,
-      String attrSourceType,
-      String annualUsageSourceType) {
-    var query = Wrappers.lambdaQuery(ProductProperty.class);
-    if (StringUtils.hasText(level1Name)) {
-      query.like(ProductProperty::getLevel1Name, level1Name.trim());
-    }
-    if (StringUtils.hasText(parentCode)) {
-      query.like(ProductProperty::getParentCode, parentCode.trim());
-    }
-    if (propertyYear != null) {
-      query.eq(ProductProperty::getPropertyYear, propertyYear);
-    }
-    if (StringUtils.hasText(businessDivision)) {
-      String value = businessDivision.trim();
-      query.and(
-          q -> q.like(ProductProperty::getBusinessDivision, value)
-              .or()
-              .like(ProductProperty::getLevel1Name, value));
-    }
-    if (StringUtils.hasText(productCode)) {
-      String value = productCode.trim();
-      query.and(
-          q -> q.like(ProductProperty::getProductCode, value)
-              .or()
-              .like(ProductProperty::getParentCode, value));
-    }
-    if (StringUtils.hasText(productName)) {
-      String value = productName.trim();
-      query.and(
-          q -> q.like(ProductProperty::getProductName, value)
-              .or()
-              .like(ProductProperty::getParentName, value));
-    }
-    if (StringUtils.hasText(productAttr)) {
-      query.like(ProductProperty::getProductAttr, productAttr.trim());
-    }
-    if (StringUtils.hasText(attrSourceType)) {
-      query.eq(ProductProperty::getAttrSourceType, attrSourceType.trim());
-    }
-    if (StringUtils.hasText(annualUsageSourceType)) {
-      query.eq(ProductProperty::getAnnualUsageSourceType, annualUsageSourceType.trim());
-    }
-    query.orderByDesc(ProductProperty::getPropertyYear)
-        .orderByDesc(ProductProperty::getPeriod)
-        .orderByDesc(ProductProperty::getId);
-    return productPropertyMapper.selectList(query);
-  }
-
-  @Override
-  public ProductProperty create(ProductPropertyRequest request) {
-    if (request == null) {
-      return null;
-    }
-    ProductPropertyAnnualSyncRequest syncRequest = new ProductPropertyAnnualSyncRequest();
-    syncRequest.setAttrSourceType("MANUAL");
-    syncRequest.setAnnualUsageSourceType("MANUAL");
-    syncRequest.setRows(List.of(toSyncRow(request, null)));
-    ProductPropertyAnnualSyncResult result = annualSyncService.sync(syncRequest);
-    return result.getRecords().isEmpty() ? null : result.getRecords().get(0);
-  }
-
-  @Override
-  public ProductProperty update(Long id, ProductPropertyRequest request) {
-    if (id == null) {
-      return null;
-    }
-    ProductPropertyAnnualSyncRequest syncRequest = new ProductPropertyAnnualSyncRequest();
-    syncRequest.setAttrSourceType("MANUAL");
-    syncRequest.setAnnualUsageSourceType("MANUAL");
-    syncRequest.setRows(List.of(toSyncRow(request, id)));
-    ProductPropertyAnnualSyncResult result = annualSyncService.sync(syncRequest);
-    return result.getRecords().isEmpty() ? null : result.getRecords().get(0);
-  }
-
-  @Override
-  public boolean delete(Long id) {
-    return id != null && productPropertyMapper.deleteById(id) > 0;
+      String businessUnitType,
+      int page,
+      int pageSize) {
+    String bu = resolveBusinessUnit(businessUnitType);
+    var query = Wrappers.lambdaQuery(ProductProperty.class)
+        .eq(ProductProperty::getBusinessUnitType, bu)
+        .eq(propertyYear != null, ProductProperty::getPropertyYear, propertyYear)
+        .like(StringUtils.hasText(businessDivision), ProductProperty::getBusinessDivision,
+            trim(businessDivision))
+        .like(StringUtils.hasText(productCode), ProductProperty::getProductCode, trim(productCode))
+        .like(StringUtils.hasText(productName), ProductProperty::getProductName, trim(productName))
+        .eq(StringUtils.hasText(productAttr), ProductProperty::getProductAttr, trim(productAttr))
+        .orderByDesc(ProductProperty::getPropertyYear)
+        .orderByAsc(ProductProperty::getProductCode);
+    Page<ProductProperty> result = productPropertyMapper.selectPage(new Page<>(page, pageSize), query);
+    decorateWithRules(result.getRecords(), bu);
+    return result;
   }
 
   @Override
   @Transactional(rollbackFor = Exception.class)
-  public ProductPropertyAnnualSyncResult importItems(ProductPropertyImportRequest request) {
-    if (request == null || request.getRows() == null || request.getRows().isEmpty()) {
-      return new ProductPropertyAnnualSyncResult();
+  @CacheEvict(value = "productProperty", allEntries = true)
+  public ProductPropertyImportResult importExcel(
+      InputStream input,
+      String fileName,
+      Integer propertyYear,
+      String businessUnitType,
+      String importMode) {
+    ProductPropertyImportResult result = new ProductPropertyImportResult();
+    String bu = resolveBusinessUnit(businessUnitType);
+    String mode = normalizeMode(importMode, result);
+    if (propertyYear == null || propertyYear < 2000 || propertyYear > 2100) {
+      result.addError("年度必须在 2000 到 2100 之间");
+      return result;
     }
-    ProductPropertyAnnualSyncRequest syncRequest = new ProductPropertyAnnualSyncRequest();
-    syncRequest.setPropertyYear(request.getPropertyYear());
-    syncRequest.setBusinessUnitType(request.getBusinessUnitType());
-    syncRequest.setAttrSourceType("TECH_IMPORT");
-    syncRequest.setAnnualUsageSourceType("TECH_IMPORT");
-    List<ProductPropertyAnnualSyncRow> rows = new ArrayList<>();
-    int rowNo = 1;
-    for (var row : request.getRows()) {
-      if (row == null) {
-        rowNo++;
-        continue;
-      }
-      rows.add(toSyncRow(row, rowNo++));
+    if (mode == null) {
+      return result;
     }
-    syncRequest.setRows(rows);
-    return annualSyncService.sync(syncRequest);
-  }
 
-  @Override
-  @Transactional(rollbackFor = Exception.class)
-  public ProductPropertyAnnualSyncResult importExcel(
-      InputStream input, Integer propertyYear, String businessUnitType) {
-    ProductPropertyAnnualSyncResult parseResult = new ProductPropertyAnnualSyncResult();
-    ProductPropertyImportRequest request = new ProductPropertyImportRequest();
-    request.setPropertyYear(propertyYear);
-    request.setBusinessUnitType(businessUnitType);
-    List<ProductPropertyImportRequest.ProductPropertyRow> rows = new ArrayList<>();
+    List<ImportRow> rows;
     try (Workbook workbook = WorkbookFactory.create(input)) {
-      Sheet sheet = workbook.getSheetAt(0);
-      DataFormatter formatter = new DataFormatter();
-      HeaderMatch header = findHeader(sheet, formatter);
-      if (header.index < 0) {
-        parseResult.addError("未找到产品属性导入表头");
-        return parseResult;
+      SheetSelection selection = selectSheet(workbook);
+      if (selection.error() != null) {
+        result.addError(selection.error());
+        return result;
       }
-      for (int i = header.index + 1; i <= sheet.getLastRowNum(); i++) {
-        Row excelRow = sheet.getRow(i);
-        if (excelRow == null || isBlankRow(excelRow, formatter)) {
-          continue;
-        }
-        ProductPropertyImportRequest.ProductPropertyRow row = toImportRow(excelRow, formatter, header.fields);
-        if (isEmptyImportRow(row)) {
-          parseResult.incrementSkipped();
-          continue;
-        }
-        rows.add(row);
-      }
+      rows = parseRows(selection.sheet(), selection.header(), result);
     } catch (Exception ex) {
-      parseResult.addError("Excel 解析失败: " + ex.getMessage());
-      return parseResult;
+      result.addError("Excel 解析失败：" + safeMessage(ex));
+      return result;
     }
-    request.setRows(rows);
+    result.setTotal(rows.size());
     if (rows.isEmpty()) {
-      parseResult.addError("未解析到有效产品属性数据");
-      return parseResult;
+      result.addError("未解析到有效产品属性数据");
+      return result;
     }
-    return importItems(request);
+
+    validateDuplicatesAndRequired(rows, result);
+    Map<String, BigDecimal> rules = ruleMap(propertyYear, bu);
+    if (!rules.keySet().containsAll(EXPECTED_ATTRIBUTES)) {
+      result.addError("请先维护 " + propertyYear + " 年全部四项产品属性上浮规则");
+    }
+    for (ImportRow row : rows) {
+      if (StringUtils.hasText(row.productAttr()) && !rules.containsKey(row.productAttr())) {
+        addError(result, "第 " + row.rowNo() + " 行产品属性“" + row.productAttr() + "”没有年度上浮规则");
+      }
+    }
+
+    Map<String, Set<String>> masterDivisions = loadMasterDivisions(
+        rows.stream().map(ImportRow::productCode).filter(StringUtils::hasText).toList());
+    List<ImportRow> resolved = new ArrayList<>(rows.size());
+    int excelDivision = 0;
+    int resolvedDivision = 0;
+    for (ImportRow row : rows) {
+      Set<String> databaseValues = masterDivisions.getOrDefault(row.productCode(), Set.of());
+      if (StringUtils.hasText(row.businessDivision())) {
+        excelDivision++;
+        if (!databaseValues.isEmpty() && !databaseValues.contains(row.businessDivision())) {
+          addWarning(result, "第 " + row.rowNo() + " 行料号 " + row.productCode()
+              + "：Excel 生产事业部“" + row.businessDivision() + "”与料品档案“"
+              + String.join("/", databaseValues) + "”不同，已按 Excel 导入");
+        }
+        resolved.add(row);
+      } else if (databaseValues.size() == 1) {
+        resolvedDivision++;
+        resolved.add(row.withBusinessDivision(databaseValues.iterator().next()));
+      } else if (databaseValues.isEmpty()) {
+        addError(result, "第 " + row.rowNo() + " 行料号 " + row.productCode()
+            + " 未提供生产事业部，且系统料品档案无法匹配");
+      } else {
+        addError(result, "第 " + row.rowNo() + " 行料号 " + row.productCode()
+            + " 在系统料品档案匹配到多个生产事业部：" + String.join("/", databaseValues));
+      }
+    }
+    result.setExcelDivision(excelDivision);
+    result.setResolvedDivision(resolvedDivision);
+    if (!result.getErrors().isEmpty()) {
+      return result;
+    }
+
+    List<ProductProperty> existing = productPropertyMapper.selectList(
+        Wrappers.lambdaQuery(ProductProperty.class)
+            .eq(ProductProperty::getBusinessUnitType, bu)
+            .eq(ProductProperty::getPropertyYear, propertyYear));
+    Set<String> existingCodes = existing.stream()
+        .map(ProductProperty::getProductCode).collect(Collectors.toSet());
+    Set<String> importedCodes = resolved.stream()
+        .map(ImportRow::productCode).collect(Collectors.toCollection(LinkedHashSet::new));
+    result.setInserted((int) importedCodes.stream().filter(code -> !existingCodes.contains(code)).count());
+    result.setUpdated(importedCodes.size() - result.getInserted());
+
+    String batchNo = batchNo(fileName);
+    List<ProductProperty> entities = resolved.stream()
+        .map(row -> toEntity(row, propertyYear, bu, batchNo))
+        .toList();
+    for (int start = 0; start < entities.size(); start += BATCH_SIZE) {
+      productPropertyMapper.upsertBatch(entities.subList(start, Math.min(start + BATCH_SIZE, entities.size())));
+    }
+
+    if (MODE_FULL.equals(mode)) {
+      List<Long> removedIds = existing.stream()
+          .filter(row -> !importedCodes.contains(row.getProductCode()))
+          .map(ProductProperty::getId)
+          .toList();
+      for (int start = 0; start < removedIds.size(); start += BATCH_SIZE) {
+        productPropertyMapper.deleteByIds(
+            removedIds.subList(start, Math.min(start + BATCH_SIZE, removedIds.size())));
+      }
+      result.setRemoved(removedIds.size());
+    }
+    return result;
+  }
+
+  @Override
+  public List<ProductPropertyRule> listRules(Integer propertyYear, String businessUnitType) {
+    if (propertyYear == null) {
+      return List.of();
+    }
+    return ruleMapper.selectList(Wrappers.lambdaQuery(ProductPropertyRule.class)
+        .eq(ProductPropertyRule::getBusinessUnitType, resolveBusinessUnit(businessUnitType))
+        .eq(ProductPropertyRule::getPropertyYear, propertyYear)
+        .orderByAsc(ProductPropertyRule::getId));
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  @CacheEvict(value = "productProperty", allEntries = true)
+  public List<ProductPropertyRule> saveRules(ProductPropertyRuleSaveRequest request) {
+    if (request == null || request.getPropertyYear() == null
+        || request.getPropertyYear() < 2000 || request.getPropertyYear() > 2100) {
+      throw new IllegalArgumentException("年度必须在 2000 到 2100 之间");
+    }
+    String bu = resolveBusinessUnit(request.getBusinessUnitType());
+    Map<String, BigDecimal> values = new LinkedHashMap<>();
+    for (ProductPropertyRuleSaveRequest.RuleRow row : request.getRules()) {
+      String attr = row == null ? null : trim(row.getProductAttr());
+      BigDecimal rate = row == null ? null : row.getUpliftRate();
+      if (!EXPECTED_ATTRIBUTES.contains(attr) || rate == null
+          || rate.compareTo(BigDecimal.ZERO) < 0 || rate.compareTo(BigDecimal.ONE) > 0) {
+        throw new IllegalArgumentException("上浮规则必须包含四类有效属性，比例范围为 0 到 1");
+      }
+      if (values.put(attr, rate.setScale(6, RoundingMode.HALF_UP)) != null) {
+        throw new IllegalArgumentException("产品属性规则重复：" + attr);
+      }
+    }
+    if (!values.keySet().equals(EXPECTED_ATTRIBUTES)) {
+      throw new IllegalArgumentException("必须同时维护非标品、标准品、定制品、OEM 四项规则");
+    }
+    Map<String, ProductPropertyRule> existing = listRules(request.getPropertyYear(), bu).stream()
+        .collect(Collectors.toMap(ProductPropertyRule::getProductAttr, value -> value));
+    for (Map.Entry<String, BigDecimal> entry : values.entrySet()) {
+      ProductPropertyRule entity = existing.get(entry.getKey());
+      if (entity == null) {
+        entity = new ProductPropertyRule();
+        entity.setBusinessUnitType(bu);
+        entity.setPropertyYear(request.getPropertyYear());
+        entity.setProductAttr(entry.getKey());
+        entity.setUpliftRate(entry.getValue());
+        ruleMapper.insert(entity);
+      } else {
+        entity.setUpliftRate(entry.getValue());
+        ruleMapper.updateById(entity);
+      }
+    }
+    return listRules(request.getPropertyYear(), bu);
+  }
+
+  private void decorateWithRules(List<ProductProperty> records, String bu) {
+    Map<Integer, Map<String, BigDecimal>> rulesByYear = new HashMap<>();
+    for (ProductProperty row : records) {
+      Map<String, BigDecimal> rules = rulesByYear.computeIfAbsent(
+          row.getPropertyYear(), year -> ruleMap(year, bu));
+      BigDecimal rate = rules.get(row.getProductAttr());
+      row.setUpliftRate(rate);
+      row.setCoefficient(rate == null ? null : BigDecimal.ONE.add(rate));
+    }
+  }
+
+  private Map<String, BigDecimal> ruleMap(Integer year, String bu) {
+    if (year == null) {
+      return Map.of();
+    }
+    return ruleMapper.selectList(Wrappers.lambdaQuery(ProductPropertyRule.class)
+            .eq(ProductPropertyRule::getBusinessUnitType, bu)
+            .eq(ProductPropertyRule::getPropertyYear, year))
+        .stream().collect(Collectors.toMap(
+            ProductPropertyRule::getProductAttr,
+            ProductPropertyRule::getUpliftRate,
+            (left, right) -> right,
+            LinkedHashMap::new));
+  }
+
+  private SheetSelection selectSheet(Workbook workbook) {
+    DataFormatter formatter = new DataFormatter();
+    Sheet exact = workbook.getSheet(TARGET_SHEET);
+    if (exact != null) {
+      HeaderMatch header = findHeader(exact, formatter);
+      return header.valid()
+          ? new SheetSelection(exact, header, null)
+          : new SheetSelection(null, null, "工作表“" + TARGET_SHEET + "”缺少 A-E 必需表头");
+    }
+    List<SheetSelection> candidates = new ArrayList<>();
+    for (int i = 0; i < workbook.getNumberOfSheets(); i++) {
+      Sheet sheet = workbook.getSheetAt(i);
+      HeaderMatch header = findHeader(sheet, formatter);
+      if (header.valid()) {
+        candidates.add(new SheetSelection(sheet, header, null));
+      }
+    }
+    if (candidates.size() == 1) {
+      return candidates.get(0);
+    }
+    if (candidates.isEmpty()) {
+      return new SheetSelection(null, null, "未找到产品属性工作表；支持原工作簿第二页或单独 A-E/A-F 工作表");
+    }
+    return new SheetSelection(null, null, "检测到多个产品属性候选工作表，请保留一页或命名为“" + TARGET_SHEET + "”");
   }
 
   private HeaderMatch findHeader(Sheet sheet, DataFormatter formatter) {
-    int maxScanRow = Math.min(sheet.getLastRowNum(), 20);
-    HeaderMatch best = new HeaderMatch(-1, 0, Map.of());
-    for (int i = 0; i <= maxScanRow; i++) {
-      Row row = sheet.getRow(i);
-      if (row == null) {
+    int max = Math.min(sheet.getLastRowNum(), 20);
+    for (int rowIndex = 0; rowIndex <= max; rowIndex++) {
+      Row row = sheet.getRow(rowIndex);
+      if (row == null || row.getFirstCellNum() < 0) {
         continue;
       }
       Map<String, Integer> fields = new HashMap<>();
-      if (row.getFirstCellNum() < 0) {
+      for (int column = row.getFirstCellNum(); column < row.getLastCellNum(); column++) {
+        String field = resolveField(cellText(row.getCell(column), formatter));
+        if (field != null) {
+          fields.putIfAbsent(field, column);
+        }
+      }
+      if (fields.keySet().containsAll(Set.of(
+          "productCode", "productName", "productSpec", "productModel", "productAttr"))) {
+        return new HeaderMatch(rowIndex, fields);
+      }
+    }
+    return new HeaderMatch(-1, Map.of());
+  }
+
+  private List<ImportRow> parseRows(
+      Sheet sheet, HeaderMatch header, ProductPropertyImportResult result) {
+    DataFormatter formatter = new DataFormatter();
+    List<ImportRow> rows = new ArrayList<>();
+    for (int index = header.rowIndex() + 1; index <= sheet.getLastRowNum(); index++) {
+      Row row = sheet.getRow(index);
+      if (row == null) {
         continue;
       }
-      for (int c = row.getFirstCellNum(); c < row.getLastCellNum(); c++) {
-        String field = resolveImportField(cellText(row, c, formatter));
-        if (field != null && !fields.containsKey(field)) {
-          fields.put(field, c);
-        }
+      String code = value(row, header.fields(), "productCode", formatter);
+      String name = value(row, header.fields(), "productName", formatter);
+      String spec = value(row, header.fields(), "productSpec", formatter);
+      String model = value(row, header.fields(), "productModel", formatter);
+      String attr = value(row, header.fields(), "productAttr", formatter);
+      String division = value(row, header.fields(), "businessDivision", formatter);
+      if (!StringUtils.hasText(code) && !StringUtils.hasText(name) && !StringUtils.hasText(attr)) {
+        continue;
       }
-      if (fields.size() > best.count) {
-        best = new HeaderMatch(i, fields.size(), fields);
-      }
+      rows.add(new ImportRow(index + 1, code, name, spec, model, attr, division));
     }
-    return best.count >= 3 ? best : new HeaderMatch(-1, 0, Map.of());
+    return rows;
   }
 
-  private ProductPropertyImportRequest.ProductPropertyRow toImportRow(
-      Row row, DataFormatter formatter, Map<String, Integer> fields) {
-    ProductPropertyImportRequest.ProductPropertyRow item =
-        new ProductPropertyImportRequest.ProductPropertyRow();
-    item.setLevel1Code(value(row, fields, "level1Code", formatter));
-    item.setBusinessDivision(value(row, fields, "businessDivision", formatter));
-    item.setLevel1Name(value(row, fields, "businessDivision", formatter));
-    item.setProductCode(value(row, fields, "productCode", formatter));
-    item.setParentCode(value(row, fields, "productCode", formatter));
-    item.setProductName(value(row, fields, "productName", formatter));
-    item.setParentName(value(row, fields, "productName", formatter));
-    item.setProductModel(value(row, fields, "productModel", formatter));
-    item.setParentModel(value(row, fields, "productModel", formatter));
-    item.setProductSpec(value(row, fields, "productSpec", formatter));
-    item.setParentSpec(value(row, fields, "productSpec", formatter));
-    item.setProductAttr(value(row, fields, "productAttr", formatter));
-    item.setRemark(value(row, fields, "remark", formatter));
-    item.setPeriod(formatPeriod(value(row, fields, "period", formatter)));
-    item.setPropertyYear(parseYear(value(row, fields, "propertyYear", formatter)));
-    item.setAnnualUsage(parseDecimal(value(row, fields, "annualUsage", formatter)));
-    return item;
+  private void validateDuplicatesAndRequired(
+      List<ImportRow> rows, ProductPropertyImportResult result) {
+    Set<String> seen = new HashSet<>();
+    for (ImportRow row : rows) {
+      if (!StringUtils.hasText(row.productCode())) {
+        addError(result, "第 " + row.rowNo() + " 行料号为空");
+      } else if (!seen.add(row.productCode())) {
+        addError(result, "第 " + row.rowNo() + " 行料号 " + row.productCode() + " 在文件中重复");
+      }
+      if (!StringUtils.hasText(row.productName())) {
+        addError(result, "第 " + row.rowNo() + " 行品名为空");
+      }
+      if (!StringUtils.hasText(row.productAttr())) {
+        addError(result, "第 " + row.rowNo() + " 行产品属性为空");
+      } else if (!EXPECTED_ATTRIBUTES.contains(row.productAttr())) {
+        addError(result, "第 " + row.rowNo() + " 行产品属性不支持：" + row.productAttr());
+      }
+    }
   }
 
-  private String resolveImportField(String header) {
-    String normalized = normalizeHeader(header);
-    if (!StringUtils.hasText(normalized)) {
-      return null;
-    }
-    Map<String, List<String>> aliases = new HashMap<>();
-    aliases.put("level1Code", List.of("一级编码"));
-    aliases.put("businessDivision", List.of("事业部", "一级编码名称", "生产事业部"));
-    aliases.put("productCode", List.of("产品料号", "父件编码", "物料编码", "料号"));
-    aliases.put("productName", List.of("产品名称", "父件名称", "物料名称", "品名"));
-    aliases.put("productModel", List.of("产品型号", "父件型号", "型号"));
-    aliases.put("productSpec", List.of("产品规格", "父件规格", "规格"));
-    aliases.put("productAttr", List.of("产品属性"));
-    aliases.put("annualUsage", List.of("预计年用量", "年用量"));
-    aliases.put("remark", List.of("备注"));
-    aliases.put("propertyYear", List.of("年度", "年份"));
-    aliases.put("period", List.of("期间", "月份"));
-    for (Map.Entry<String, List<String>> entry : aliases.entrySet()) {
-      for (String alias : entry.getValue()) {
-        String normalizedAlias = normalizeHeader(alias);
-        if (normalized.equals(normalizedAlias) || normalized.contains(normalizedAlias)) {
-          return entry.getKey();
+  private Map<String, Set<String>> loadMasterDivisions(List<String> codes) {
+    Map<String, Set<String>> values = new HashMap<>();
+    List<String> unique = codes.stream().distinct().toList();
+    for (int start = 0; start < unique.size(); start += BATCH_SIZE) {
+      List<MaterialMasterRaw> rows = materialMasterRawMapper.selectActiveProductionDivisionsByCodes(
+          unique.subList(start, Math.min(start + BATCH_SIZE, unique.size())));
+      for (MaterialMasterRaw row : rows) {
+        String code = trim(row.getMaterialCode());
+        String division = trim(row.getProductionDivision());
+        if (StringUtils.hasText(code) && StringUtils.hasText(division)) {
+          values.computeIfAbsent(code, ignored -> new LinkedHashSet<>()).add(division);
         }
       }
     }
-    return null;
+    return values;
+  }
+
+  private ProductProperty toEntity(
+      ImportRow row, Integer year, String bu, String batchNo) {
+    ProductProperty entity = new ProductProperty();
+    entity.setBusinessUnitType(bu);
+    entity.setPropertyYear(year);
+    entity.setProductCode(row.productCode());
+    entity.setProductName(row.productName());
+    entity.setProductSpec(row.productSpec());
+    entity.setProductModel(row.productModel());
+    entity.setProductAttr(row.productAttr());
+    entity.setBusinessDivision(row.businessDivision());
+    entity.setSourceType("BUSINESS_EXCEL");
+    entity.setSourceBatchNo(batchNo);
+    return entity;
+  }
+
+  private String resolveField(String header) {
+    return switch (normalizeHeader(header)) {
+      case "料号", "产品料号", "物料编码" -> "productCode";
+      case "品名", "产品名称", "物料名称" -> "productName";
+      case "规格", "产品规格" -> "productSpec";
+      case "型号", "产品型号" -> "productModel";
+      case "产品属性", "判定规则" -> "productAttr";
+      case "生产事业部", "事业部" -> "businessDivision";
+      default -> null;
+    };
   }
 
   private String value(
       Row row, Map<String, Integer> fields, String field, DataFormatter formatter) {
     Integer index = fields.get(field);
-    if (index == null) {
-      return null;
-    }
-    return trimToNull(cellText(row, index, formatter));
+    return index == null ? null : trim(cellText(row.getCell(index), formatter));
   }
 
-  private String cellText(Row row, int index, DataFormatter formatter) {
-    if (row == null || index < 0) {
+  private String cellText(Cell cell, DataFormatter formatter) {
+    if (cell == null) {
       return "";
     }
-    Cell cell = row.getCell(index);
-    return cell == null ? "" : formatter.formatCellValue(cell);
+    if (cell.getCellType() == CellType.FORMULA) {
+      return switch (cell.getCachedFormulaResultType()) {
+        case STRING -> cell.getStringCellValue();
+        case NUMERIC -> NumberToTextConverter.toText(cell.getNumericCellValue());
+        case BOOLEAN -> Boolean.toString(cell.getBooleanCellValue());
+        default -> "";
+      };
+    }
+    if (cell.getCellType() == CellType.NUMERIC) {
+      return NumberToTextConverter.toText(cell.getNumericCellValue());
+    }
+    return formatter.formatCellValue(cell);
   }
 
-  private boolean isBlankRow(Row row, DataFormatter formatter) {
-    if (row.getFirstCellNum() < 0) {
-      return true;
-    }
-    for (int i = row.getFirstCellNum(); i < row.getLastCellNum(); i++) {
-      if (StringUtils.hasText(cellText(row, i, formatter))) {
-        return false;
+  private String normalizeHeader(String value) {
+    return StringUtils.hasText(value)
+        ? value.replaceAll("[\\s\\n\\r\\t（）()，,：:；;_/\\\\-]", "").trim()
+        : "";
+  }
+
+  private String resolveBusinessUnit(String requested) {
+    String value = trim(requested);
+    String current = trim(BusinessUnitContext.getCurrentBusinessUnitType());
+    if (StringUtils.hasText(current) && !BusinessUnitContext.isAdmin()) {
+      if (StringUtils.hasText(value) && !current.equalsIgnoreCase(value)) {
+        throw new IllegalArgumentException("无权访问其他业务单元的产品属性");
       }
+      return current.toUpperCase();
     }
-    return true;
+    if (!StringUtils.hasText(value)) value = current;
+    return StringUtils.hasText(value) ? value.toUpperCase() : DEFAULT_BUSINESS_UNIT;
   }
 
-  private boolean isEmptyImportRow(ProductPropertyImportRequest.ProductPropertyRow row) {
-    return !StringUtils.hasText(row.getProductCode())
-        && !StringUtils.hasText(row.getProductName())
-        && !StringUtils.hasText(row.getProductAttr())
-        && row.getAnnualUsage() == null;
-  }
-
-  private String normalizeHeader(String text) {
-    if (!StringUtils.hasText(text)) {
-      return "";
-    }
-    return text.replaceAll("[\\s\\n\\r\\t（）()，,：:；;_/\\\\-]", "").trim();
-  }
-
-  private String formatPeriod(String value) {
-    if (!StringUtils.hasText(value)) {
+  private String normalizeMode(String value, ProductPropertyImportResult result) {
+    String mode = StringUtils.hasText(value) ? value.trim().toUpperCase() : MODE_INCREMENTAL;
+    if (!Set.of(MODE_INCREMENTAL, MODE_FULL).contains(mode)) {
+      result.addError("导入模式只支持 INCREMENTAL（增量）或 FULL（全量）");
       return null;
     }
-    String text = value.trim();
-    if (text.matches("\\d{4}-\\d{1,2}")) {
-      String[] parts = text.split("-");
-      return parts[0] + "-" + String.format("%02d", Integer.parseInt(parts[1]));
-    }
-    if (text.matches("\\d{4}/\\d{1,2}")) {
-      String[] parts = text.split("/");
-      return parts[0] + "-" + String.format("%02d", Integer.parseInt(parts[1]));
-    }
-    if (text.matches("\\d{4}年\\d{1,2}月?")) {
-      String[] parts = text.replace("月", "").split("年");
-      return parts[0] + "-" + String.format("%02d", Integer.parseInt(parts[1]));
-    }
-    if (text.matches("\\d{4}")) {
-      return text + "-01";
-    }
-    return text;
+    return mode;
   }
 
-  private BigDecimal parseDecimal(String value) {
-    if (!StringUtils.hasText(value)) {
-      return null;
-    }
-    String text = value.trim().replace(",", "");
-    try {
-      return new BigDecimal(text);
-    } catch (NumberFormatException ex) {
-      return null;
+  private String batchNo(String fileName) {
+    String safe = StringUtils.hasText(fileName) ? fileName.replaceAll("[^0-9A-Za-z._\\-\\u4e00-\\u9fa5]", "_") : "upload.xlsx";
+    String value = "BUSINESS_EXCEL:" + safe + ":"
+        + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
+    return value.length() <= 128 ? value : value.substring(0, 128);
+  }
+
+  private void addError(ProductPropertyImportResult result, String value) {
+    if (result.getErrors().size() < MESSAGE_LIMIT) {
+      result.addError(value);
+    } else if (result.getErrors().size() == MESSAGE_LIMIT) {
+      result.addError("错误过多，仅展示前 " + MESSAGE_LIMIT + " 条");
     }
   }
 
-  private record HeaderMatch(int index, int count, Map<String, Integer> fields) {}
-
-  private ProductPropertyAnnualSyncRow toSyncRow(ProductPropertyRequest request, Long id) {
-    ProductPropertyAnnualSyncRow row = new ProductPropertyAnnualSyncRow();
-    row.setId(id);
-    if (request == null) {
-      return row;
-    }
-    row.setLevel1Code(request.getLevel1Code());
-    row.setLevel1Name(request.getLevel1Name());
-    row.setParentCode(request.getParentCode());
-    row.setParentName(request.getParentName());
-    row.setParentSpec(request.getParentSpec());
-    row.setParentModel(request.getParentModel());
-    row.setPeriod(request.getPeriod());
-    row.setProductAttr(request.getProductAttr());
-    row.setPropertyYear(request.getPropertyYear());
-    row.setBusinessDivision(request.getBusinessDivision());
-    row.setProductCode(request.getProductCode());
-    row.setProductName(request.getProductName());
-    row.setProductModel(request.getProductModel());
-    row.setProductSpec(request.getProductSpec());
-    row.setAnnualUsage(request.getAnnualUsage());
-    row.setRemark(request.getRemark());
-    row.setAttrSourceType(request.getAttrSourceType());
-    row.setAttrSourceBatchNo(request.getAttrSourceBatchNo());
-    row.setAnnualUsageSourceType(request.getAnnualUsageSourceType());
-    row.setAnnualUsageSourceBatchNo(request.getAnnualUsageSourceBatchNo());
-    row.setAnnualUsageOaNo(request.getAnnualUsageOaNo());
-    row.setAnnualUsageOaLineId(request.getAnnualUsageOaLineId());
-    row.setEffectiveFrom(request.getEffectiveFrom());
-    row.setEffectiveTo(request.getEffectiveTo());
-    row.setMatchRiskFlag(request.getMatchRiskFlag());
-    row.setMatchRiskReason(request.getMatchRiskReason());
-    return row;
-  }
-
-  private ProductPropertyAnnualSyncRow toSyncRow(
-      ProductPropertyImportRequest.ProductPropertyRow source, Integer rowNo) {
-    ProductPropertyAnnualSyncRow row = new ProductPropertyAnnualSyncRow();
-    row.setRowNo(rowNo);
-    row.setLevel1Code(source.getLevel1Code());
-    row.setLevel1Name(source.getLevel1Name());
-    row.setParentCode(source.getParentCode());
-    row.setParentName(source.getParentName());
-    row.setParentSpec(source.getParentSpec());
-    row.setParentModel(source.getParentModel());
-    row.setPeriod(source.getPeriod());
-    row.setProductAttr(source.getProductAttr());
-    row.setPropertyYear(source.getPropertyYear());
-    row.setBusinessDivision(source.getBusinessDivision());
-    row.setProductCode(source.getProductCode());
-    row.setProductName(source.getProductName());
-    row.setProductModel(source.getProductModel());
-    row.setProductSpec(source.getProductSpec());
-    row.setAnnualUsage(source.getAnnualUsage());
-    row.setRemark(source.getRemark());
-    row.setAttrSourceType(source.getAttrSourceType());
-    row.setAttrSourceBatchNo(source.getAttrSourceBatchNo());
-    row.setAnnualUsageSourceType(source.getAnnualUsageSourceType());
-    row.setAnnualUsageSourceBatchNo(source.getAnnualUsageSourceBatchNo());
-    row.setAnnualUsageOaNo(source.getAnnualUsageOaNo());
-    row.setAnnualUsageOaLineId(source.getAnnualUsageOaLineId());
-    row.setEffectiveFrom(source.getEffectiveFrom());
-    row.setEffectiveTo(source.getEffectiveTo());
-    row.setMatchRiskFlag(source.getMatchRiskFlag());
-    row.setMatchRiskReason(source.getMatchRiskReason());
-    return row;
-  }
-
-  private void fillFromRow(ProductProperty entity, ProductPropertyImportRequest.ProductPropertyRow row) {
-    entity.setLevel1Code(row.getLevel1Code());
-    entity.setLevel1Name(row.getLevel1Name());
-    entity.setParentCode(row.getParentCode());
-    entity.setParentName(row.getParentName());
-    entity.setParentSpec(row.getParentSpec());
-    entity.setParentModel(row.getParentModel());
-    entity.setPeriod(row.getPeriod());
-    entity.setProductAttr(row.getProductAttr());
-    entity.setPropertyYear(row.getPropertyYear());
-    entity.setBusinessDivision(row.getBusinessDivision());
-    entity.setProductCode(row.getProductCode());
-    entity.setProductName(row.getProductName());
-    entity.setProductModel(row.getProductModel());
-    entity.setProductSpec(row.getProductSpec());
-    entity.setAnnualUsage(row.getAnnualUsage());
-    entity.setRemark(row.getRemark());
-    entity.setAttrSourceType(row.getAttrSourceType());
-    entity.setAttrSourceBatchNo(row.getAttrSourceBatchNo());
-    entity.setAnnualUsageSourceType(row.getAnnualUsageSourceType());
-    entity.setAnnualUsageSourceBatchNo(row.getAnnualUsageSourceBatchNo());
-    entity.setAnnualUsageOaNo(row.getAnnualUsageOaNo());
-    entity.setAnnualUsageOaLineId(row.getAnnualUsageOaLineId());
-    entity.setEffectiveFrom(row.getEffectiveFrom());
-    entity.setEffectiveTo(row.getEffectiveTo());
-    entity.setMatchRiskFlag(row.getMatchRiskFlag());
-    entity.setMatchRiskReason(row.getMatchRiskReason());
-  }
-
-  private void merge(ProductProperty target, ProductProperty source) {
-    if (source.getLevel1Code() != null) {
-      target.setLevel1Code(source.getLevel1Code());
-    }
-    if (source.getLevel1Name() != null) {
-      target.setLevel1Name(source.getLevel1Name());
-    }
-    if (source.getParentCode() != null) {
-      target.setParentCode(source.getParentCode());
-    }
-    if (source.getParentName() != null) {
-      target.setParentName(source.getParentName());
-    }
-    if (source.getParentSpec() != null) {
-      target.setParentSpec(source.getParentSpec());
-    }
-    if (source.getParentModel() != null) {
-      target.setParentModel(source.getParentModel());
-    }
-    if (source.getPeriod() != null) {
-      target.setPeriod(source.getPeriod());
-    }
-    if (source.getProductAttr() != null) {
-      target.setProductAttr(source.getProductAttr());
-    }
-    if (source.getPropertyYear() != null) {
-      target.setPropertyYear(source.getPropertyYear());
-    }
-    if (source.getBusinessDivision() != null) {
-      target.setBusinessDivision(source.getBusinessDivision());
-    }
-    if (source.getProductCode() != null) {
-      target.setProductCode(source.getProductCode());
-    }
-    if (source.getProductName() != null) {
-      target.setProductName(source.getProductName());
-    }
-    if (source.getProductModel() != null) {
-      target.setProductModel(source.getProductModel());
-    }
-    if (source.getProductSpec() != null) {
-      target.setProductSpec(source.getProductSpec());
-    }
-    if (source.getAnnualUsage() != null) {
-      target.setAnnualUsage(source.getAnnualUsage());
-      target.setAnnualUsageUpdatedAt(LocalDateTime.now());
-    }
-    if (source.getRemark() != null) {
-      target.setRemark(source.getRemark());
-    }
-    if (source.getAttrSourceType() != null) {
-      target.setAttrSourceType(source.getAttrSourceType());
-    }
-    if (source.getAttrSourceBatchNo() != null) {
-      target.setAttrSourceBatchNo(source.getAttrSourceBatchNo());
-    }
-    if (source.getAnnualUsageSourceType() != null) {
-      target.setAnnualUsageSourceType(source.getAnnualUsageSourceType());
-    }
-    if (source.getAnnualUsageSourceBatchNo() != null) {
-      target.setAnnualUsageSourceBatchNo(source.getAnnualUsageSourceBatchNo());
-    }
-    if (source.getAnnualUsageOaNo() != null) {
-      target.setAnnualUsageOaNo(source.getAnnualUsageOaNo());
-    }
-    if (source.getAnnualUsageOaLineId() != null) {
-      target.setAnnualUsageOaLineId(source.getAnnualUsageOaLineId());
-    }
-    if (source.getEffectiveFrom() != null) {
-      target.setEffectiveFrom(source.getEffectiveFrom());
-    }
-    if (source.getEffectiveTo() != null) {
-      target.setEffectiveTo(source.getEffectiveTo());
-    }
-    if (source.getMatchRiskFlag() != null) {
-      target.setMatchRiskFlag(source.getMatchRiskFlag());
-    }
-    if (source.getMatchRiskReason() != null) {
-      target.setMatchRiskReason(source.getMatchRiskReason());
+  private void addWarning(ProductPropertyImportResult result, String value) {
+    if (result.getWarnings().size() < MESSAGE_LIMIT) {
+      result.addWarning(value);
+    } else if (result.getWarnings().size() == MESSAGE_LIMIT) {
+      result.addWarning("提示过多，仅展示前 " + MESSAGE_LIMIT + " 条");
     }
   }
 
-  private void merge(ProductProperty entity, ProductPropertyRequest request) {
-    if (request == null) {
-      return;
-    }
-    if (request.getLevel1Code() != null) {
-      entity.setLevel1Code(request.getLevel1Code());
-    }
-    if (request.getLevel1Name() != null) {
-      entity.setLevel1Name(request.getLevel1Name());
-    }
-    if (request.getParentCode() != null) {
-      entity.setParentCode(request.getParentCode());
-    }
-    if (request.getParentName() != null) {
-      entity.setParentName(request.getParentName());
-    }
-    if (request.getParentSpec() != null) {
-      entity.setParentSpec(request.getParentSpec());
-    }
-    if (request.getParentModel() != null) {
-      entity.setParentModel(request.getParentModel());
-    }
-    if (request.getPeriod() != null) {
-      entity.setPeriod(request.getPeriod());
-    }
-    if (request.getProductAttr() != null) {
-      entity.setProductAttr(request.getProductAttr());
-    }
-    if (request.getPropertyYear() != null) {
-      entity.setPropertyYear(request.getPropertyYear());
-    }
-    if (request.getBusinessDivision() != null) {
-      entity.setBusinessDivision(request.getBusinessDivision());
-    }
-    if (request.getProductCode() != null) {
-      entity.setProductCode(request.getProductCode());
-    }
-    if (request.getProductName() != null) {
-      entity.setProductName(request.getProductName());
-    }
-    if (request.getProductModel() != null) {
-      entity.setProductModel(request.getProductModel());
-    }
-    if (request.getProductSpec() != null) {
-      entity.setProductSpec(request.getProductSpec());
-    }
-    if (request.getAnnualUsage() != null) {
-      entity.setAnnualUsage(request.getAnnualUsage());
-      entity.setAnnualUsageUpdatedAt(LocalDateTime.now());
-    }
-    if (request.getRemark() != null) {
-      entity.setRemark(request.getRemark());
-    }
-    if (request.getAttrSourceType() != null) {
-      entity.setAttrSourceType(request.getAttrSourceType());
-    }
-    if (request.getAttrSourceBatchNo() != null) {
-      entity.setAttrSourceBatchNo(request.getAttrSourceBatchNo());
-    }
-    if (request.getAnnualUsageSourceType() != null) {
-      entity.setAnnualUsageSourceType(request.getAnnualUsageSourceType());
-    }
-    if (request.getAnnualUsageSourceBatchNo() != null) {
-      entity.setAnnualUsageSourceBatchNo(request.getAnnualUsageSourceBatchNo());
-    }
-    if (request.getAnnualUsageOaNo() != null) {
-      entity.setAnnualUsageOaNo(request.getAnnualUsageOaNo());
-    }
-    if (request.getAnnualUsageOaLineId() != null) {
-      entity.setAnnualUsageOaLineId(request.getAnnualUsageOaLineId());
-    }
-    if (request.getEffectiveFrom() != null) {
-      entity.setEffectiveFrom(request.getEffectiveFrom());
-    }
-    if (request.getEffectiveTo() != null) {
-      entity.setEffectiveTo(request.getEffectiveTo());
-    }
-    if (request.getMatchRiskFlag() != null) {
-      entity.setMatchRiskFlag(request.getMatchRiskFlag());
-    }
-    if (request.getMatchRiskReason() != null) {
-      entity.setMatchRiskReason(request.getMatchRiskReason());
-    }
+  private String safeMessage(Exception ex) {
+    return StringUtils.hasText(ex.getMessage()) ? ex.getMessage() : ex.getClass().getSimpleName();
   }
 
-  private void fillDefaults(
-      ProductProperty entity, String defaultAttrSourceType, String defaultAnnualUsageSourceType) {
-    entity.setLevel1Code(trimToNull(entity.getLevel1Code()));
-    entity.setLevel1Name(trimToNull(entity.getLevel1Name()));
-    entity.setParentCode(trimToNull(entity.getParentCode()));
-    entity.setParentName(trimToNull(entity.getParentName()));
-    entity.setParentSpec(trimToNull(entity.getParentSpec()));
-    entity.setParentModel(trimToNull(entity.getParentModel()));
-    entity.setPeriod(trimToNull(entity.getPeriod()));
-    entity.setProductAttr(trimToNull(entity.getProductAttr()));
-    entity.setBusinessDivision(trimToNull(entity.getBusinessDivision()));
-    entity.setProductCode(trimToNull(entity.getProductCode()));
-    entity.setProductName(trimToNull(entity.getProductName()));
-    entity.setProductModel(trimToNull(entity.getProductModel()));
-    entity.setProductSpec(trimToNull(entity.getProductSpec()));
-    entity.setRemark(trimToNull(entity.getRemark()));
-    entity.setAttrSourceType(trimToNull(entity.getAttrSourceType()));
-    entity.setAttrSourceBatchNo(trimToNull(entity.getAttrSourceBatchNo()));
-    entity.setAnnualUsageSourceType(trimToNull(entity.getAnnualUsageSourceType()));
-    entity.setAnnualUsageSourceBatchNo(trimToNull(entity.getAnnualUsageSourceBatchNo()));
-    entity.setAnnualUsageOaNo(trimToNull(entity.getAnnualUsageOaNo()));
-    entity.setAnnualUsageOaLineId(trimToNull(entity.getAnnualUsageOaLineId()));
-    entity.setMatchRiskReason(trimToNull(entity.getMatchRiskReason()));
-    syncAnnualFields(entity);
-    if (!StringUtils.hasText(entity.getAttrSourceType()) && defaultAttrSourceType != null) {
-      entity.setAttrSourceType(defaultAttrSourceType);
-    }
-    if (entity.getAnnualUsage() != null) {
-      if (!StringUtils.hasText(entity.getAnnualUsageSourceType())
-          && defaultAnnualUsageSourceType != null) {
-        entity.setAnnualUsageSourceType(defaultAnnualUsageSourceType);
-      }
-      if (entity.getAnnualUsageUpdatedAt() == null) {
-        entity.setAnnualUsageUpdatedAt(LocalDateTime.now());
-      }
-    }
-    if (entity.getMatchRiskFlag() == null) {
-      entity.setMatchRiskFlag(StringUtils.hasText(entity.getProductCode()) ? 0 : 1);
-    }
+  private String trim(String value) {
+    return StringUtils.hasText(value) ? value.trim() : null;
   }
 
-  private void syncAnnualFields(ProductProperty entity) {
-    if (!StringUtils.hasText(entity.getBusinessDivision())) {
-      entity.setBusinessDivision(entity.getLevel1Name());
-    }
-    if (!StringUtils.hasText(entity.getLevel1Name())) {
-      entity.setLevel1Name(entity.getBusinessDivision());
-    }
-    if (!StringUtils.hasText(entity.getLevel1Code())) {
-      entity.setLevel1Code(firstText(entity.getBusinessDivision(), entity.getLevel1Name()));
-    }
-    if (!StringUtils.hasText(entity.getProductCode())) {
-      entity.setProductCode(entity.getParentCode());
-    }
-    if (!StringUtils.hasText(entity.getParentCode())) {
-      entity.setParentCode(entity.getProductCode());
-    }
-    if (!StringUtils.hasText(entity.getProductName())) {
-      entity.setProductName(entity.getParentName());
-    }
-    if (!StringUtils.hasText(entity.getParentName())) {
-      entity.setParentName(entity.getProductName());
-    }
-    if (!StringUtils.hasText(entity.getProductModel())) {
-      entity.setProductModel(entity.getParentModel());
-    }
-    if (!StringUtils.hasText(entity.getParentModel())) {
-      entity.setParentModel(entity.getProductModel());
-    }
-    if (!StringUtils.hasText(entity.getProductSpec())) {
-      entity.setProductSpec(entity.getParentSpec());
-    }
-    if (!StringUtils.hasText(entity.getParentSpec())) {
-      entity.setParentSpec(entity.getProductSpec());
-    }
-    if (entity.getPropertyYear() == null) {
-      entity.setPropertyYear(parseYear(entity.getPeriod()));
-    }
-    if (!StringUtils.hasText(entity.getPeriod()) && entity.getPropertyYear() != null) {
-      entity.setPeriod(entity.getPropertyYear() + "-01");
-    }
+  private record HeaderMatch(int rowIndex, Map<String, Integer> fields) {
+    boolean valid() { return rowIndex >= 0; }
   }
 
-  private String firstText(String first, String second) {
-    if (StringUtils.hasText(first)) {
-      return first.trim();
-    }
-    if (StringUtils.hasText(second)) {
-      return second.trim();
-    }
-    return null;
-  }
+  private record SheetSelection(Sheet sheet, HeaderMatch header, String error) {}
 
-  private Integer parseYear(String period) {
-    if (!StringUtils.hasText(period) || period.trim().length() < 4) {
-      return null;
+  private record ImportRow(
+      int rowNo,
+      String productCode,
+      String productName,
+      String productSpec,
+      String productModel,
+      String productAttr,
+      String businessDivision) {
+    ImportRow withBusinessDivision(String value) {
+      return new ImportRow(rowNo, productCode, productName, productSpec, productModel, productAttr, value);
     }
-    try {
-      return Integer.valueOf(period.trim().substring(0, 4));
-    } catch (NumberFormatException ex) {
-      return null;
-    }
-  }
-
-  private String trimToNull(String value) {
-    if (!StringUtils.hasText(value)) {
-      return null;
-    }
-    return value.trim();
-  }
-
-  private boolean hasRequired(ProductProperty entity) {
-    return StringUtils.hasText(entity.getLevel1Code())
-        && StringUtils.hasText(entity.getLevel1Name())
-        && StringUtils.hasText(entity.getParentCode())
-        && StringUtils.hasText(entity.getPeriod())
-        && StringUtils.hasText(entity.getProductAttr());
-  }
-
-  private ProductProperty findExisting(ProductProperty entity) {
-    if (entity.getPropertyYear() != null && StringUtils.hasText(entity.getProductCode())) {
-      return productPropertyMapper.selectOne(
-          Wrappers.lambdaQuery(ProductProperty.class)
-              .eq(ProductProperty::getPropertyYear, entity.getPropertyYear())
-              .eq(ProductProperty::getProductCode, entity.getProductCode())
-              .last("LIMIT 1"));
-    }
-    var query = Wrappers.lambdaQuery(ProductProperty.class)
-        .eq(ProductProperty::getLevel1Code, entity.getLevel1Code())
-        .eq(ProductProperty::getParentCode, entity.getParentCode());
-    if (StringUtils.hasText(entity.getPeriod())) {
-      query.eq(ProductProperty::getPeriod, entity.getPeriod());
-    } else {
-      query.isNull(ProductProperty::getPeriod);
-    }
-    return productPropertyMapper.selectOne(query.last("LIMIT 1"));
   }
 }

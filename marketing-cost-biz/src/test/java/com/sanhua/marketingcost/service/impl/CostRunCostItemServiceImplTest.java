@@ -38,7 +38,6 @@ import com.sanhua.marketingcost.service.CostRunCacheLookupService;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.OtherExpenseRateMapper;
-import com.sanhua.marketingcost.mapper.ProductPropertyMapper;
 import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
 import java.math.BigDecimal;
@@ -381,8 +380,8 @@ class CostRunCostItemServiceImplTest {
   }
 
   @Test
-  @DisplayName("报价净损失率：成本核算优先按产品料号命中导入配置")
-  void calculationLossRateUsesMaterialCodeMatch() {
+  @DisplayName("报价净损失率：裸品报价料号直接按裸品料号命中")
+  void calculationLossRateUsesBareQuoteMaterialCode() {
     OaFormMapper formMapper = mock(OaFormMapper.class);
     OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
     CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
@@ -395,8 +394,14 @@ class CostRunCostItemServiceImplTest {
     stubBasicCalculationInputs(
         formMapper, formItemMapper, effectiveMapper, auxMapper, partMapper, masterMapper,
         rawMapper, bomMapper, "P-LOSS");
+    MaterialMasterRaw bare = new MaterialMasterRaw();
+    bare.setMaterialCode("P-LOSS");
+    bare.setMainCategoryCode("11");
+    when(rawMapper.selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL")))
+        .thenReturn(List.of(bare));
     QualityLossRate rate = new QualityLossRate();
     rate.setId(10L);
+    rate.setBareProductCode("P-LOSS");
     rate.setLossRate(new BigDecimal("0.010000"));
     when(qualityMapper.selectOne(any(Wrapper.class))).thenReturn(rate);
 
@@ -420,8 +425,8 @@ class CostRunCostItemServiceImplTest {
   }
 
   @Test
-  @DisplayName("报价净损失率：料号未命中时用 raw 主档 material_model 按型号匹配")
-  void calculationLossRateFallsBackToMaterialModel() {
+  @DisplayName("报价净损失率：非裸品报价料号按 raw 主档 bare_code 命中")
+  void calculationLossRateUsesRawBareProductCode() {
     OaFormMapper formMapper = mock(OaFormMapper.class);
     OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
     CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
@@ -433,16 +438,18 @@ class CostRunCostItemServiceImplTest {
     QualityLossRateMapper qualityMapper = mock(QualityLossRateMapper.class);
     stubBasicCalculationInputs(
         formMapper, formItemMapper, effectiveMapper, auxMapper, partMapper, masterMapper,
-        rawMapper, bomMapper, "P-MODEL");
+        rawMapper, bomMapper, "P-FINISHED");
     MaterialMasterRaw raw = new MaterialMasterRaw();
-    raw.setMaterialCode("P-MODEL");
-    raw.setMaterialModel("MODEL-X");
+    raw.setMaterialCode("P-FINISHED");
+    raw.setMainCategoryCode("12");
+    raw.setBareCode("P-BARE");
     when(rawMapper.selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL")))
         .thenReturn(List.of(raw));
-    QualityLossRate modelRate = new QualityLossRate();
-    modelRate.setId(11L);
-    modelRate.setLossRate(new BigDecimal("0.020000"));
-    when(qualityMapper.selectOne(any(Wrapper.class))).thenReturn(null, modelRate);
+    QualityLossRate bareRate = new QualityLossRate();
+    bareRate.setId(11L);
+    bareRate.setBareProductCode("P-BARE");
+    bareRate.setLossRate(new BigDecimal("0.020000"));
+    when(qualityMapper.selectOne(any(Wrapper.class))).thenReturn(bareRate);
 
     CostRunCostItemServiceImpl svc =
         buildForCalculation(
@@ -451,9 +458,9 @@ class CostRunCostItemServiceImplTest {
     List<CostRunCostItemDto> items =
         svc.listByMaterialCodes(
             "OA-LOSS",
-            "P-MODEL",
-            Set.of("P-MODEL"),
-            commercialContext("OA-LOSS", "P-MODEL"),
+            "P-FINISHED",
+            Set.of("P-FINISHED"),
+            commercialContext("OA-LOSS", "P-FINISHED"),
             null,
             true,
             ignored -> {});
@@ -986,21 +993,6 @@ class CostRunCostItemServiceImplTest {
   }
 
   @Test
-  @DisplayName("产品属性系数：命中 lp_product_property → 返回 coefficient")
-  void coefficientHit() {
-    // T19：lookup 走 cacheLookup（@Cacheable），不再直接 mapper
-    CostRunCacheLookupService lookup = mock(CostRunCacheLookupService.class);
-    ProductProperty property = new ProductProperty();
-    property.setParentCode("P-NON-STD");
-    property.setCoefficient(new BigDecimal("1.2500"));
-    when(lookup.findProductProperty("P-NON-STD")).thenReturn(property);
-
-    CostRunCostItemServiceImpl svc = buildWithLookup(lookup);
-    assertThat(svc.lookupProductCoefficient("P-NON-STD"))
-        .isEqualByComparingTo(new BigDecimal("1.2500"));
-  }
-
-  @Test
   @DisplayName("PPA-06 产品属性系数：按年度和业务单元查询，避免跨年复用")
   void coefficientHitByYearAndBusinessUnit() {
     CostRunCacheLookupService lookup = mock(CostRunCacheLookupService.class);
@@ -1024,10 +1016,10 @@ class CostRunCostItemServiceImplTest {
   @DisplayName("产品属性系数：查无记录 → 回落 1（标准品兜底）")
   void coefficientMissDefault() {
     CostRunCacheLookupService lookup = mock(CostRunCacheLookupService.class);
-    when(lookup.findProductProperty("P-UNKNOWN")).thenReturn(null);
+    when(lookup.findProductProperty("P-UNKNOWN", 2026, "COMMERCIAL")).thenReturn(null);
 
     CostRunCostItemServiceImpl svc = buildWithLookup(lookup);
-    assertThat(svc.lookupProductCoefficient("P-UNKNOWN"))
+    assertThat(svc.lookupProductCoefficient("P-UNKNOWN", 2026, "COMMERCIAL").coefficient())
         .isEqualByComparingTo(BigDecimal.ONE);
   }
 
@@ -1036,12 +1028,12 @@ class CostRunCostItemServiceImplTest {
   void coefficientNullDefault() {
     CostRunCacheLookupService lookup = mock(CostRunCacheLookupService.class);
     ProductProperty property = new ProductProperty();
-    property.setParentCode("P-NULL-COEF");
+    property.setProductCode("P-NULL-COEF");
     property.setCoefficient(null);
-    when(lookup.findProductProperty("P-NULL-COEF")).thenReturn(property);
+    when(lookup.findProductProperty("P-NULL-COEF", 2026, "COMMERCIAL")).thenReturn(property);
 
     CostRunCostItemServiceImpl svc = buildWithLookup(lookup);
-    assertThat(svc.lookupProductCoefficient("P-NULL-COEF"))
+    assertThat(svc.lookupProductCoefficient("P-NULL-COEF", 2026, "COMMERCIAL").coefficient())
         .isEqualByComparingTo(BigDecimal.ONE);
   }
 
@@ -1051,8 +1043,10 @@ class CostRunCostItemServiceImplTest {
     CostRunCacheLookupService lookup = mock(CostRunCacheLookupService.class);
     CostRunCostItemServiceImpl svc = buildWithLookup(lookup);
 
-    assertThat(svc.lookupProductCoefficient(null)).isEqualByComparingTo(BigDecimal.ONE);
-    assertThat(svc.lookupProductCoefficient("  ")).isEqualByComparingTo(BigDecimal.ONE);
+    assertThat(svc.lookupProductCoefficient(null, 2026, "COMMERCIAL").coefficient())
+        .isEqualByComparingTo(BigDecimal.ONE);
+    assertThat(svc.lookupProductCoefficient("  ", 2026, "COMMERCIAL").coefficient())
+        .isEqualByComparingTo(BigDecimal.ONE);
     // 没有任何查库行为
     org.mockito.Mockito.verifyNoInteractions(lookup);
   }
@@ -1319,7 +1313,6 @@ class CostRunCostItemServiceImplTest {
         mock(ManufactureRateMapper.class),
         mock(ThreeExpenseRateMapper.class),
         mock(OtherExpenseRateMapper.class),
-        mock(ProductPropertyMapper.class),
         mock(MaterialMasterMapper.class),
         rawMapper,
         bomMapper,
@@ -1340,7 +1333,6 @@ class CostRunCostItemServiceImplTest {
         mock(ManufactureRateMapper.class),
         mock(ThreeExpenseRateMapper.class),
         mock(OtherExpenseRateMapper.class),
-        mock(ProductPropertyMapper.class),
         mock(MaterialMasterMapper.class),
         mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class),
         mock(com.sanhua.marketingcost.mapper.BomRawHierarchyMapper.class),
@@ -1360,7 +1352,6 @@ class CostRunCostItemServiceImplTest {
         mock(ManufactureRateMapper.class),
         mock(ThreeExpenseRateMapper.class),
         mock(OtherExpenseRateMapper.class),
-        mock(ProductPropertyMapper.class),
         mock(MaterialMasterMapper.class),
         mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class),
         mock(com.sanhua.marketingcost.mapper.BomRawHierarchyMapper.class),
@@ -1676,7 +1667,6 @@ class CostRunCostItemServiceImplTest {
         mock(ManufactureRateMapper.class),
         threeExpenseRateMapper,
         mock(OtherExpenseRateMapper.class),
-        mock(ProductPropertyMapper.class),
         masterMapper,
         rawMapper,
         bomMapper,
@@ -1701,7 +1691,6 @@ class CostRunCostItemServiceImplTest {
         mock(ManufactureRateMapper.class),
         mock(ThreeExpenseRateMapper.class),
         mock(OtherExpenseRateMapper.class),
-        mock(ProductPropertyMapper.class),
         masterMapper,
         mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class),
         mock(com.sanhua.marketingcost.mapper.BomRawHierarchyMapper.class),

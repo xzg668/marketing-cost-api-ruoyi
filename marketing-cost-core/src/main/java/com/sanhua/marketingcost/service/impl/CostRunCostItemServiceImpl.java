@@ -32,7 +32,6 @@ import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.OtherExpenseRateMapper;
-import com.sanhua.marketingcost.mapper.ProductPropertyMapper;
 import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
 import com.sanhua.marketingcost.enums.CostItemCategory;
@@ -93,10 +92,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private static final String OTHER_EXP_PACKAGE = "OTHER_EXP_PACKAGE";
   /** T11：lp_material_master.cost_element 表示包装材料的固定文本（U9 同步上来的中文枚举值） */
   private static final String COST_ELEMENT_PACKAGE = "主要材料-包装材料";
-  /** 报价净损失率匹配层级：产品料号。 */
-  private static final String LOSS_MATCH_LEVEL_MATERIAL_CODE = "MATERIAL_CODE";
-  /** 报价净损失率匹配层级：产品型号。 */
-  private static final String LOSS_MATCH_LEVEL_MATERIAL_MODEL = "MATERIAL_MODEL";
   /** 制造费用率匹配层级：料号。 */
   private static final String MANUFACTURE_MATCH_LEVEL_MATERIAL_CODE = "MATERIAL_CODE";
   /** 制造费用率匹配层级：产品型号。 */
@@ -150,8 +145,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
   private final ManufactureRateMapper manufactureRateMapper;
   private final ThreeExpenseRateMapper threeExpenseRateMapper;
   private final OtherExpenseRateMapper otherExpenseRateMapper;
-  /** Task #9：产品属性系数来源（lp_product_property.coefficient） */
-  private final ProductPropertyMapper productPropertyMapper;
   /** T11：用主档 cost_element 区分包装材料部品 → OTHER_EXP_PACKAGE */
   private final MaterialMasterMapper materialMasterMapper;
   /** T24：包装组件父件查 raw 主档（虚拟件 9830000026238 不在同步表 lp_material_master 里）*/
@@ -175,7 +168,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       ManufactureRateMapper manufactureRateMapper,
       ThreeExpenseRateMapper threeExpenseRateMapper,
       OtherExpenseRateMapper otherExpenseRateMapper,
-      ProductPropertyMapper productPropertyMapper,
       MaterialMasterMapper materialMasterMapper,
       MaterialMasterRawMapper materialMasterRawMapper,
       BomRawHierarchyMapper bomRawHierarchyMapper,
@@ -192,7 +184,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     this.manufactureRateMapper = manufactureRateMapper;
     this.threeExpenseRateMapper = threeExpenseRateMapper;
     this.otherExpenseRateMapper = otherExpenseRateMapper;
-    this.productPropertyMapper = productPropertyMapper;
     this.materialMasterMapper = materialMasterMapper;
     this.materialMasterRawMapper = materialMasterRawMapper;
     this.bomRawHierarchyMapper = bomRawHierarchyMapper;
@@ -212,7 +203,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       ManufactureRateMapper manufactureRateMapper,
       ThreeExpenseRateMapper threeExpenseRateMapper,
       OtherExpenseRateMapper otherExpenseRateMapper,
-      ProductPropertyMapper productPropertyMapper,
       MaterialMasterMapper materialMasterMapper,
       MaterialMasterRawMapper materialMasterRawMapper,
       BomRawHierarchyMapper bomRawHierarchyMapper,
@@ -229,7 +219,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         manufactureRateMapper,
         threeExpenseRateMapper,
         otherExpenseRateMapper,
-        productPropertyMapper,
         materialMasterMapper,
         materialMasterRawMapper,
         bomRawHierarchyMapper,
@@ -1298,9 +1287,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return departmentFundRateMapper.selectOne(query);
   }
 
-  /**
-   * 报价净损失率：先按当前报价产品料号匹配；料号未命中，再用该料号查 raw 主档 material_model 按型号匹配。
-   */
+  /** 报价质量损失率：在当前料品组织解析裸品料号，再按年度 + 裸品料号唯一匹配。 */
   private RateLookup findLossRate(String productCode, CostSourceContext costSourceContext) {
     String code = trimToNull(productCode);
     if (code == null) {
@@ -1313,59 +1300,43 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     String businessUnitType =
         costSourceContext == null ? "" : normalizeBusinessUnit(costSourceContext.businessUnitType);
 
-    QualityLossRate codeRate =
-        findQualityLossRateByMatch(
-            LOSS_MATCH_LEVEL_MATERIAL_CODE, code, rateYear, businessUnitType);
-    RateLookup codeLookup = toLossLookup(codeRate);
-    if (codeLookup != null) {
-      return codeLookup;
-    }
-
-    String materialModel = lookupMaterialModelByCode(code, costSourceContext);
-    if (materialModel == null) {
+    MaterialMasterRaw material = lookupMaterialByCode(code, costSourceContext);
+    if (material == null) {
       return new RateLookup(
           null,
-          "lp_quality_loss_rate 无产品料号="
+          "lp_material_master_raw 未找到报价料号="
               + code
-              + "、rateYear="
-              + rateYear
-              + " 配置；且 lp_material_master_raw 未找到 material_model");
+              + " 的当前有效料品档案，无法解析裸品料号");
     }
-    QualityLossRate modelRate =
-        findQualityLossRateByMatch(
-            LOSS_MATCH_LEVEL_MATERIAL_MODEL, materialModel, rateYear, businessUnitType);
-    RateLookup modelLookup = toLossLookup(modelRate);
-    if (modelLookup != null) {
-      return modelLookup;
-    }
-    return new RateLookup(
-        null,
-        "lp_quality_loss_rate 无产品料号="
-            + code
-            + " 或产品型号="
-            + materialModel
-            + "、rateYear="
-            + rateYear
-            + " 配置");
-  }
-
-  private QualityLossRate findQualityLossRateByMatch(
-      String matchLevel, String matchKey, Integer rateYear, String businessUnitType) {
-    if (!StringUtils.hasText(matchLevel) || !StringUtils.hasText(matchKey) || rateYear == null) {
-      return null;
+    String bareProductCode = isBareProduct(material) ? code : trimToNull(material.getBareCode());
+    if (bareProductCode == null) {
+      return new RateLookup(
+          null,
+          "报价料号=" + code + " 不是裸品，且 lp_material_master_raw.bare_code 为空");
     }
     var query =
         Wrappers.lambdaQuery(QualityLossRate.class)
             .eq(QualityLossRate::getRateYear, rateYear)
-            .eq(QualityLossRate::getMatchLevel, matchLevel.trim())
-            .eq(QualityLossRate::getMatchKey, matchKey.trim())
+            .eq(QualityLossRate::getBareProductCode, bareProductCode)
             .eq(
                 StringUtils.hasText(businessUnitType),
                 QualityLossRate::getBusinessUnitType,
                 businessUnitType.trim())
             .orderByDesc(QualityLossRate::getId)
             .last("LIMIT 1");
-    return qualityLossRateMapper.selectOne(query);
+    RateLookup lookup = toLossLookup(qualityLossRateMapper.selectOne(query));
+    if (lookup != null) {
+      return lookup;
+    }
+    return new RateLookup(
+        null,
+        "lp_quality_loss_rate 无裸品料号="
+            + bareProductCode
+            + "、rateYear="
+            + rateYear
+            + " 配置（报价料号="
+            + code
+            + "）");
   }
 
   private RateLookup toLossLookup(QualityLossRate rate) {
@@ -1378,9 +1349,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return new RateLookup(rate.getLossRate(), null);
   }
 
-  private String lookupMaterialModelByCode(String productCode, CostSourceContext costSourceContext) {
-    MaterialMasterRaw row = lookupMaterialByCode(productCode, costSourceContext);
-    return trimToNull(row == null ? null : row.getMaterialModel());
+  private boolean isBareProduct(MaterialMasterRaw material) {
+    String categoryCode = trimToNull(material == null ? null : material.getMainCategoryCode());
+    return categoryCode != null && categoryCode.startsWith("11");
   }
 
   private MaterialMasterRaw lookupMaterialByCode(String materialCode, CostSourceContext costSourceContext) {
@@ -2441,25 +2412,6 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       return BigDecimal.ZERO;
     }
     return base.multiply(rate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
-  }
-
-  /**
-   * Task #9：按产品料号查 lp_product_property.coefficient（标准品=1）。
-   *
-   * <p>口径：parentCode 命中即用其 coefficient；查多条按 id 倒序取最新；查不到时回落到 1
-   * （标准品语义，与 V11 DEFAULT 1.0000 对齐），同时打 debug 日志方便定位脏数据。包私有便于单测。
-   */
-  BigDecimal lookupProductCoefficient(String productCode) {
-    if (!StringUtils.hasText(productCode)) {
-      return BigDecimal.ONE;
-    }
-    // T19：走 cached lookup
-    ProductProperty property = cacheLookup.findProductProperty(productCode);
-    if (property == null || property.getCoefficient() == null) {
-      log.debug("产品属性系数未命中，回落=1: productCode={}", productCode);
-      return BigDecimal.ONE;
-    }
-    return property.getCoefficient();
   }
 
   ProductCoefficientLookup lookupProductCoefficient(

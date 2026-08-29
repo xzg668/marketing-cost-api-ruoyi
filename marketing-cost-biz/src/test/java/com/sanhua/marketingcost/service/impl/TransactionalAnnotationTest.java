@@ -19,7 +19,7 @@ class TransactionalAnnotationTest {
       new MethodRef(MaterialMasterServiceImpl.class, "importItems"),
       new MethodRef(PriceRangeItemServiceImpl.class, "importItems"),
       new MethodRef(BomManualItemServiceImpl.class, "importItems"),
-      new MethodRef(ProductPropertyServiceImpl.class, "importItems"),
+      new MethodRef(ProductPropertyServiceImpl.class, "importExcel"),
       new MethodRef(PriceFixedItemServiceImpl.class, "importItems"),
       new MethodRef(MaterialPriceTypeServiceImpl.class, "importItems"),
       new MethodRef(MaterialPriceTypeRouteSyncServiceImpl.class, "sync"),

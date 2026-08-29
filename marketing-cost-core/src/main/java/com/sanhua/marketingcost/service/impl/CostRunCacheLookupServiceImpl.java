@@ -5,14 +5,14 @@ import com.sanhua.marketingcost.entity.DepartmentFundRate;
 import com.sanhua.marketingcost.entity.ManufactureRate;
 import com.sanhua.marketingcost.entity.OtherExpenseRate;
 import com.sanhua.marketingcost.entity.ProductProperty;
-import com.sanhua.marketingcost.entity.QualityLossRate;
+import com.sanhua.marketingcost.entity.ProductPropertyRule;
 import com.sanhua.marketingcost.entity.ThreeExpenseDimensionMapping;
 import com.sanhua.marketingcost.entity.ThreeExpenseRate;
 import com.sanhua.marketingcost.mapper.DepartmentFundRateMapper;
 import com.sanhua.marketingcost.mapper.ManufactureRateMapper;
 import com.sanhua.marketingcost.mapper.OtherExpenseRateMapper;
 import com.sanhua.marketingcost.mapper.ProductPropertyMapper;
-import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
+import com.sanhua.marketingcost.mapper.ProductPropertyRuleMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseDimensionMappingMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
 import com.sanhua.marketingcost.service.CostRunCacheLookupService;
@@ -31,40 +31,29 @@ import org.springframework.util.StringUtils;
 @Service
 public class CostRunCacheLookupServiceImpl implements CostRunCacheLookupService {
 
-  private final QualityLossRateMapper qualityLossRateMapper;
   private final ManufactureRateMapper manufactureRateMapper;
   private final ThreeExpenseRateMapper threeExpenseRateMapper;
   private final DepartmentFundRateMapper departmentFundRateMapper;
   private final OtherExpenseRateMapper otherExpenseRateMapper;
   private final ProductPropertyMapper productPropertyMapper;
+  private final ProductPropertyRuleMapper productPropertyRuleMapper;
   private final ThreeExpenseDimensionMappingMapper threeExpenseDimensionMappingMapper;
 
   public CostRunCacheLookupServiceImpl(
-      QualityLossRateMapper qualityLossRateMapper,
       ManufactureRateMapper manufactureRateMapper,
       ThreeExpenseRateMapper threeExpenseRateMapper,
       DepartmentFundRateMapper departmentFundRateMapper,
       OtherExpenseRateMapper otherExpenseRateMapper,
       ProductPropertyMapper productPropertyMapper,
+      ProductPropertyRuleMapper productPropertyRuleMapper,
       ThreeExpenseDimensionMappingMapper threeExpenseDimensionMappingMapper) {
-    this.qualityLossRateMapper = qualityLossRateMapper;
     this.manufactureRateMapper = manufactureRateMapper;
     this.threeExpenseRateMapper = threeExpenseRateMapper;
     this.departmentFundRateMapper = departmentFundRateMapper;
     this.otherExpenseRateMapper = otherExpenseRateMapper;
     this.productPropertyMapper = productPropertyMapper;
+    this.productPropertyRuleMapper = productPropertyRuleMapper;
     this.threeExpenseDimensionMappingMapper = threeExpenseDimensionMappingMapper;
-  }
-
-  @Override
-  @Cacheable(value = "qualityLossRates", key = "'trial:' + (#businessUnit ?: 'NULL')")
-  public QualityLossRate findQualityLossRate(String businessUnit) {
-    if (!StringUtils.hasText(businessUnit)) return null;
-    return qualityLossRateMapper.selectOne(
-        Wrappers.lambdaQuery(QualityLossRate.class)
-            .eq(QualityLossRate::getBusinessUnit, businessUnit)
-            .orderByDesc(QualityLossRate::getId)
-            .last("LIMIT 1"));
   }
 
   @Override
@@ -172,17 +161,6 @@ public class CostRunCacheLookupServiceImpl implements CostRunCacheLookupService 
   }
 
   @Override
-  @Cacheable(value = "productProperty", key = "'trial:' + (#parentCode ?: 'NULL')")
-  public ProductProperty findProductProperty(String parentCode) {
-    if (!StringUtils.hasText(parentCode)) return null;
-    return productPropertyMapper.selectOne(
-        Wrappers.lambdaQuery(ProductProperty.class)
-            .eq(ProductProperty::getParentCode, parentCode.trim())
-            .orderByDesc(ProductProperty::getId)
-            .last("LIMIT 1"));
-  }
-
-  @Override
   @Cacheable(
       value = "productProperty",
       key =
@@ -194,7 +172,7 @@ public class CostRunCacheLookupServiceImpl implements CostRunCacheLookupService 
     }
     String code = productCode.trim();
     String businessUnit = trimToNull(businessUnitType);
-    ProductProperty byProductCode =
+    ProductProperty property =
         productPropertyMapper.selectOne(
             Wrappers.lambdaQuery(ProductProperty.class)
                 .eq(StringUtils.hasText(businessUnit), ProductProperty::getBusinessUnitType, businessUnit)
@@ -202,16 +180,20 @@ public class CostRunCacheLookupServiceImpl implements CostRunCacheLookupService 
                 .eq(ProductProperty::getProductCode, code)
                 .orderByDesc(ProductProperty::getId)
                 .last("LIMIT 1"));
-    if (byProductCode != null) {
-      return byProductCode;
+    if (property == null) {
+      return null;
     }
-    return productPropertyMapper.selectOne(
-        Wrappers.lambdaQuery(ProductProperty.class)
-            .eq(StringUtils.hasText(businessUnit), ProductProperty::getBusinessUnitType, businessUnit)
-            .eq(propertyYear != null, ProductProperty::getPropertyYear, propertyYear)
-            .eq(ProductProperty::getParentCode, code)
-            .orderByDesc(ProductProperty::getId)
+    ProductPropertyRule rule = productPropertyRuleMapper.selectOne(
+        Wrappers.lambdaQuery(ProductPropertyRule.class)
+            .eq(ProductPropertyRule::getBusinessUnitType, property.getBusinessUnitType())
+            .eq(ProductPropertyRule::getPropertyYear, property.getPropertyYear())
+            .eq(ProductPropertyRule::getProductAttr, property.getProductAttr())
             .last("LIMIT 1"));
+    if (rule != null && rule.getUpliftRate() != null) {
+      property.setUpliftRate(rule.getUpliftRate());
+      property.setCoefficient(java.math.BigDecimal.ONE.add(rule.getUpliftRate()));
+    }
+    return property;
   }
 
   private String trimToNull(String value) {

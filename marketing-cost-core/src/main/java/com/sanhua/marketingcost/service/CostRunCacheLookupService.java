@@ -4,7 +4,6 @@ import com.sanhua.marketingcost.entity.DepartmentFundRate;
 import com.sanhua.marketingcost.entity.ManufactureRate;
 import com.sanhua.marketingcost.entity.OtherExpenseRate;
 import com.sanhua.marketingcost.entity.ProductProperty;
-import com.sanhua.marketingcost.entity.QualityLossRate;
 import com.sanhua.marketingcost.entity.ThreeExpenseDimensionMapping;
 import com.sanhua.marketingcost.entity.ThreeExpenseRate;
 import java.util.List;
@@ -20,9 +19,6 @@ import java.util.List;
  * admin 改这些表会触发 @CacheEvict 清除（业务保证）。
  */
 public interface CostRunCacheLookupService {
-
-  /** 按 businessUnit 精确取最新 1 条 quality_loss_rate；无返 null */
-  QualityLossRate findQualityLossRate(String businessUnit);
 
   /** 按 businessUnit 精确取最新 1 条 manufacture_rate；无返 null */
   ManufactureRate findManufactureRate(String businessUnit);
@@ -51,9 +47,6 @@ public interface CostRunCacheLookupService {
   /** 按 productCode 取该料号所有 other_expense_rate（id ASC）；无返空 list */
   List<OtherExpenseRate> findOtherExpenseRates(String productCode);
 
-  /** 按 parentCode 取最新 1 条 product_property；无返 null。保留给旧调用和单测兼容。 */
-  ProductProperty findProductProperty(String parentCode);
-
-  /** 按年度 + 业务单元 + 产品料号取 product_property；优先 product_code，兼容 parent_code；无返 null。 */
+  /** 按年度 + 业务单元 + 产品料号取产品属性，并按年度规则计算系数；无返 null。 */
   ProductProperty findProductProperty(String productCode, Integer propertyYear, String businessUnitType);
 }

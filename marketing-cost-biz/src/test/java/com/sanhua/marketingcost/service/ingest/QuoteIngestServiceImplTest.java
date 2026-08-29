@@ -28,7 +28,6 @@ import com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
-import com.sanhua.marketingcost.service.ProductPropertyAnnualUsageService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -51,7 +50,6 @@ class QuoteIngestServiceImplTest {
   private OaFormHeaderExtraFieldMapper oaFormHeaderExtraFieldMapper;
   private OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper;
   private QuoteBomStatusMapper quoteBomStatusMapper;
-  private ProductPropertyAnnualUsageService productPropertyAnnualUsageService;
   private QuoteCostRunVersionInvalidationService versionInvalidationService;
   private QuoteIngestServiceImpl service;
 
@@ -64,7 +62,6 @@ class QuoteIngestServiceImplTest {
     oaFormHeaderExtraFieldMapper = mock(OaFormHeaderExtraFieldMapper.class);
     oaFormItemExtraFieldMapper = mock(OaFormItemExtraFieldMapper.class);
     quoteBomStatusMapper = mock(QuoteBomStatusMapper.class);
-    productPropertyAnnualUsageService = mock(ProductPropertyAnnualUsageService.class);
     versionInvalidationService = mock(QuoteCostRunVersionInvalidationService.class);
     service =
         new QuoteIngestServiceImpl(
@@ -76,7 +73,6 @@ class QuoteIngestServiceImplTest {
             oaFormHeaderExtraFieldMapper,
             oaFormItemExtraFieldMapper,
             quoteBomStatusMapper,
-            productPropertyAnnualUsageService,
             versionInvalidationService,
             objectMapper,
             new QuoteBomContextResolver());

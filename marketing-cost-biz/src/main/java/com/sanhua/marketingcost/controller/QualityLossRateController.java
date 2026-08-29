@@ -36,15 +36,11 @@ public class QualityLossRateController {
   @PreAuthorize("@ss.hasPermi('base:quality-loss:list')")
   @GetMapping
   public CommonResult<QualityLossRatePageResponse> list(
-      @RequestParam(required = false) String company,
-      @RequestParam(required = false) String businessUnit,
       @RequestParam(required = false) String productCategory,
       @RequestParam(required = false) String productSubcategory,
-      @RequestParam(required = false) String customer,
-      @RequestParam(required = false) String period,
       @RequestParam(required = false) Integer rateYear,
       @RequestParam(required = false) String businessDivision,
-      @RequestParam(required = false) String productCode,
+      @RequestParam(required = false) String bareProductCode,
       @RequestParam(required = false) String productName,
       @RequestParam(required = false) String productModel,
       @RequestParam(required = false, defaultValue = "1") Integer page,
@@ -52,15 +48,11 @@ public class QualityLossRateController {
     int current = page == null || page < 1 ? 1 : page;
     int size = pageSize == null || pageSize < 1 ? 20 : pageSize;
     Page<QualityLossRate> pager = qualityLossRateService.page(
-        company,
-        businessUnit,
         productCategory,
         productSubcategory,
-        customer,
-        period,
         rateYear,
         businessDivision,
-        productCode,
+        bareProductCode,
         productName,
         productModel,
         current,

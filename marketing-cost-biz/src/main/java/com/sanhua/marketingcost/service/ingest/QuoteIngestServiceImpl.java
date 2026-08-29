@@ -3,7 +3,6 @@ package com.sanhua.marketingcost.service.ingest;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sanhua.marketingcost.dto.ProductPropertyAnnualSyncResult;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestRequest;
 import com.sanhua.marketingcost.dto.ingest.QuoteIngestResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedDocument;
@@ -28,7 +27,6 @@ import com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
-import com.sanhua.marketingcost.service.ProductPropertyAnnualUsageService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.math.BigDecimal;
@@ -58,7 +56,6 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
   private final OaFormHeaderExtraFieldMapper oaFormHeaderExtraFieldMapper;
   private final OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper;
   private final QuoteBomStatusMapper quoteBomStatusMapper;
-  private final ProductPropertyAnnualUsageService productPropertyAnnualUsageService;
   private final QuoteCostRunVersionInvalidationService versionInvalidationService;
   private final ObjectMapper objectMapper;
   private final QuoteBomContextResolver quoteBomContextResolver;
@@ -72,7 +69,6 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       OaFormHeaderExtraFieldMapper oaFormHeaderExtraFieldMapper,
       OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper,
       QuoteBomStatusMapper quoteBomStatusMapper,
-      ProductPropertyAnnualUsageService productPropertyAnnualUsageService,
       QuoteCostRunVersionInvalidationService versionInvalidationService,
       ObjectMapper objectMapper,
       QuoteBomContextResolver quoteBomContextResolver) {
@@ -84,7 +80,6 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     this.oaFormHeaderExtraFieldMapper = oaFormHeaderExtraFieldMapper;
     this.oaFormItemExtraFieldMapper = oaFormItemExtraFieldMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
-    this.productPropertyAnnualUsageService = productPropertyAnnualUsageService;
     this.versionInvalidationService = versionInvalidationService;
     this.objectMapper = objectMapper;
     this.quoteBomContextResolver = quoteBomContextResolver;
@@ -145,11 +140,9 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     replaceExtraFees(form, normalized, itemInsertResult.itemIdMap(), log.getId());
     replaceExtraFields(form, normalized, itemInsertResult.itemIdMap(), log.getId());
     replaceBomStatuses(form, normalized, itemInsertResult.itemIdsByPosition());
-    ProductPropertyAnnualSyncResult annualUsageSyncResult =
-        productPropertyAnnualUsageService.syncFromOaForm(form, listItems(form.getId()));
 
     quoteIngestLogService.markImported(log, normalized, form.getId(), form.getOaNo());
-    return importedResponse(log, normalized, form, annualUsageSyncResult);
+    return importedResponse(log, normalized, form);
   }
 
   private OaForm upsertOaForm(
@@ -396,14 +389,6 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
 
   private record ItemInsertResult(Map<String, Long> itemIdMap, List<Long> itemIdsByPosition) {}
 
-  private List<OaFormItem> listItems(Long oaFormId) {
-    return oaFormItemMapper.selectList(
-        Wrappers.lambdaQuery(OaFormItem.class)
-            .eq(OaFormItem::getOaFormId, oaFormId)
-            .orderByAsc(OaFormItem::getSeq)
-            .orderByAsc(OaFormItem::getId));
-  }
-
   private OaForm findExistingForm(String oaNo, QuoteIngestRequest request) {
     if (StringUtils.hasText(oaNo)) {
       OaForm byOaNo =
@@ -427,14 +412,12 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
   private QuoteIngestResponse importedResponse(
       QuoteIngestLog log,
       QuoteNormalizedDocument normalized,
-      OaForm form,
-      ProductPropertyAnnualSyncResult annualUsageSyncResult) {
+      OaForm form) {
     QuoteIngestResponse response = baseResponse(log, normalized);
     response.setAccepted(true);
     response.setOaFormId(form.getId());
     response.setOaNo(form.getOaNo());
     response.setIngestStatus(log.getIngestStatus());
-    attachAnnualUsageSyncResult(response, annualUsageSyncResult);
     return response;
   }
 
@@ -480,31 +463,6 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
             ? new ArrayList<>()
             : new ArrayList<>(normalized.getWarnings()));
     return response;
-  }
-
-  private void attachAnnualUsageSyncResult(
-      QuoteIngestResponse response, ProductPropertyAnnualSyncResult result) {
-    response.setAnnualUsageSyncResult(result);
-    if (result == null) {
-      return;
-    }
-    List<QuoteValidationWarning> warnings =
-        response.getWarnings() == null ? new ArrayList<>() : new ArrayList<>(response.getWarnings());
-    for (String message : result.getErrorMessages()) {
-      warnings.add(
-          new QuoteValidationWarning(
-              "annualUsageSync",
-              "PRODUCT_PROPERTY_ANNUAL_USAGE_SYNC_ERROR",
-              message));
-    }
-    for (String message : result.getWarnings()) {
-      warnings.add(
-          new QuoteValidationWarning(
-              "annualUsageSync",
-              "PRODUCT_PROPERTY_ANNUAL_USAGE_SYNC_WARNING",
-              message));
-    }
-    response.setWarnings(warnings);
   }
 
   private String resolveRequestId(QuoteIngestRequest request) {

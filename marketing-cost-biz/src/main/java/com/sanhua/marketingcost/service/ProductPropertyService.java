@@ -1,32 +1,32 @@
 package com.sanhua.marketingcost.service;
 
-import com.sanhua.marketingcost.dto.ProductPropertyAnnualSyncResult;
-import com.sanhua.marketingcost.dto.ProductPropertyImportRequest;
-import com.sanhua.marketingcost.dto.ProductPropertyRequest;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.sanhua.marketingcost.dto.ProductPropertyImportResult;
+import com.sanhua.marketingcost.dto.ProductPropertyRuleSaveRequest;
 import com.sanhua.marketingcost.entity.ProductProperty;
+import com.sanhua.marketingcost.entity.ProductPropertyRule;
 import java.io.InputStream;
 import java.util.List;
 
 public interface ProductPropertyService {
-  List<ProductProperty> list(
-      String level1Name,
-      String parentCode,
+  Page<ProductProperty> page(
       Integer propertyYear,
       String businessDivision,
       String productCode,
       String productName,
       String productAttr,
-      String attrSourceType,
-      String annualUsageSourceType);
+      String businessUnitType,
+      int page,
+      int pageSize);
 
-  ProductProperty create(ProductPropertyRequest request);
+  ProductPropertyImportResult importExcel(
+      InputStream input,
+      String fileName,
+      Integer propertyYear,
+      String businessUnitType,
+      String importMode);
 
-  ProductProperty update(Long id, ProductPropertyRequest request);
+  List<ProductPropertyRule> listRules(Integer propertyYear, String businessUnitType);
 
-  boolean delete(Long id);
-
-  ProductPropertyAnnualSyncResult importItems(ProductPropertyImportRequest request);
-
-  ProductPropertyAnnualSyncResult importExcel(
-      InputStream input, Integer propertyYear, String businessUnitType);
+  List<ProductPropertyRule> saveRules(ProductPropertyRuleSaveRequest request);
 }

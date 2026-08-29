@@ -6,309 +6,64 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 
+/** 业务年度产品属性清单，唯一键为业务单元 + 年度 + 料号。 */
 @TableName("lp_product_property")
 public class ProductProperty {
   @TableId(type = IdType.AUTO)
   private Long id;
-  private String level1Code;
-  private String level1Name;
-  private String parentCode;
-  private String parentName;
-  private String parentSpec;
-  private String parentModel;
-  private String period;
-  private String productAttr;
-
-  /** V114 年度产品属性字段，兼容旧字段同步写入。 */
   private Integer propertyYear;
   private String businessDivision;
   private String productCode;
   private String productName;
-  private String productModel;
   private String productSpec;
-  private BigDecimal annualUsage;
+  private String productModel;
+  private String productAttr;
   private String remark;
-  private String attrSourceType;
-  private String attrSourceBatchNo;
-  private String annualUsageSourceType;
-  private String annualUsageSourceBatchNo;
-  private String annualUsageOaNo;
-  private String annualUsageOaLineId;
-  private LocalDateTime annualUsageUpdatedAt;
-  private LocalDate effectiveFrom;
-  private LocalDate effectiveTo;
-  private Integer matchRiskFlag;
-  private String matchRiskReason;
-
-  /** V11 新增：产品属性系数 —— 调整后制造成本 = 制造成本 × 系数（标准品=1.0000） */
-  private BigDecimal coefficient;
-
-  /** V21 业务单元数据隔离：COMMERCIAL / HOUSEHOLD */
+  private String sourceType;
+  private String sourceBatchNo;
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
-
+  @TableField(exist = false)
+  private BigDecimal upliftRate;
+  @TableField(exist = false)
+  private BigDecimal coefficient;
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;
-
   @TableField(fill = FieldFill.INSERT_UPDATE)
   private LocalDateTime updatedAt;
 
-  public String getBusinessUnitType() {
-    return businessUnitType;
-  }
-
-  public void setBusinessUnitType(String businessUnitType) {
-    this.businessUnitType = businessUnitType;
-  }
-
-  public Long getId() {
-    return id;
-  }
-
-  public void setId(Long id) {
-    this.id = id;
-  }
-
-  public String getLevel1Code() {
-    return level1Code;
-  }
-
-  public void setLevel1Code(String level1Code) {
-    this.level1Code = level1Code;
-  }
-
-  public String getLevel1Name() {
-    return level1Name;
-  }
-
-  public void setLevel1Name(String level1Name) {
-    this.level1Name = level1Name;
-  }
-
-  public String getParentCode() {
-    return parentCode;
-  }
-
-  public void setParentCode(String parentCode) {
-    this.parentCode = parentCode;
-  }
-
-  public String getParentName() {
-    return parentName;
-  }
-
-  public void setParentName(String parentName) {
-    this.parentName = parentName;
-  }
-
-  public String getParentSpec() {
-    return parentSpec;
-  }
-
-  public void setParentSpec(String parentSpec) {
-    this.parentSpec = parentSpec;
-  }
-
-  public String getParentModel() {
-    return parentModel;
-  }
-
-  public void setParentModel(String parentModel) {
-    this.parentModel = parentModel;
-  }
-
-  public String getPeriod() {
-    return period;
-  }
-
-  public void setPeriod(String period) {
-    this.period = period;
-  }
-
-  public String getProductAttr() {
-    return productAttr;
-  }
-
-  public void setProductAttr(String productAttr) {
-    this.productAttr = productAttr;
-  }
-
-  public Integer getPropertyYear() {
-    return propertyYear;
-  }
-
-  public void setPropertyYear(Integer propertyYear) {
-    this.propertyYear = propertyYear;
-  }
-
-  public String getBusinessDivision() {
-    return businessDivision;
-  }
-
-  public void setBusinessDivision(String businessDivision) {
-    this.businessDivision = businessDivision;
-  }
-
-  public String getProductCode() {
-    return productCode;
-  }
-
-  public void setProductCode(String productCode) {
-    this.productCode = productCode;
-  }
-
-  public String getProductName() {
-    return productName;
-  }
-
-  public void setProductName(String productName) {
-    this.productName = productName;
-  }
-
-  public String getProductModel() {
-    return productModel;
-  }
-
-  public void setProductModel(String productModel) {
-    this.productModel = productModel;
-  }
-
-  public String getProductSpec() {
-    return productSpec;
-  }
-
-  public void setProductSpec(String productSpec) {
-    this.productSpec = productSpec;
-  }
-
-  public BigDecimal getAnnualUsage() {
-    return annualUsage;
-  }
-
-  public void setAnnualUsage(BigDecimal annualUsage) {
-    this.annualUsage = annualUsage;
-  }
-
-  public String getRemark() {
-    return remark;
-  }
-
-  public void setRemark(String remark) {
-    this.remark = remark;
-  }
-
-  public String getAttrSourceType() {
-    return attrSourceType;
-  }
-
-  public void setAttrSourceType(String attrSourceType) {
-    this.attrSourceType = attrSourceType;
-  }
-
-  public String getAttrSourceBatchNo() {
-    return attrSourceBatchNo;
-  }
-
-  public void setAttrSourceBatchNo(String attrSourceBatchNo) {
-    this.attrSourceBatchNo = attrSourceBatchNo;
-  }
-
-  public String getAnnualUsageSourceType() {
-    return annualUsageSourceType;
-  }
-
-  public void setAnnualUsageSourceType(String annualUsageSourceType) {
-    this.annualUsageSourceType = annualUsageSourceType;
-  }
-
-  public String getAnnualUsageSourceBatchNo() {
-    return annualUsageSourceBatchNo;
-  }
-
-  public void setAnnualUsageSourceBatchNo(String annualUsageSourceBatchNo) {
-    this.annualUsageSourceBatchNo = annualUsageSourceBatchNo;
-  }
-
-  public String getAnnualUsageOaNo() {
-    return annualUsageOaNo;
-  }
-
-  public void setAnnualUsageOaNo(String annualUsageOaNo) {
-    this.annualUsageOaNo = annualUsageOaNo;
-  }
-
-  public String getAnnualUsageOaLineId() {
-    return annualUsageOaLineId;
-  }
-
-  public void setAnnualUsageOaLineId(String annualUsageOaLineId) {
-    this.annualUsageOaLineId = annualUsageOaLineId;
-  }
-
-  public LocalDateTime getAnnualUsageUpdatedAt() {
-    return annualUsageUpdatedAt;
-  }
-
-  public void setAnnualUsageUpdatedAt(LocalDateTime annualUsageUpdatedAt) {
-    this.annualUsageUpdatedAt = annualUsageUpdatedAt;
-  }
-
-  public LocalDate getEffectiveFrom() {
-    return effectiveFrom;
-  }
-
-  public void setEffectiveFrom(LocalDate effectiveFrom) {
-    this.effectiveFrom = effectiveFrom;
-  }
-
-  public LocalDate getEffectiveTo() {
-    return effectiveTo;
-  }
-
-  public void setEffectiveTo(LocalDate effectiveTo) {
-    this.effectiveTo = effectiveTo;
-  }
-
-  public Integer getMatchRiskFlag() {
-    return matchRiskFlag;
-  }
-
-  public void setMatchRiskFlag(Integer matchRiskFlag) {
-    this.matchRiskFlag = matchRiskFlag;
-  }
-
-  public String getMatchRiskReason() {
-    return matchRiskReason;
-  }
-
-  public void setMatchRiskReason(String matchRiskReason) {
-    this.matchRiskReason = matchRiskReason;
-  }
-
-  public BigDecimal getCoefficient() {
-    return coefficient;
-  }
-
-  public void setCoefficient(BigDecimal coefficient) {
-    this.coefficient = coefficient;
-  }
-
-  public LocalDateTime getCreatedAt() {
-    return createdAt;
-  }
-
-  public void setCreatedAt(LocalDateTime createdAt) {
-    this.createdAt = createdAt;
-  }
-
-  public LocalDateTime getUpdatedAt() {
-    return updatedAt;
-  }
-
-  public void setUpdatedAt(LocalDateTime updatedAt) {
-    this.updatedAt = updatedAt;
-  }
+  public Long getId() { return id; }
+  public void setId(Long value) { this.id = value; }
+  public Integer getPropertyYear() { return propertyYear; }
+  public void setPropertyYear(Integer value) { this.propertyYear = value; }
+  public String getBusinessDivision() { return businessDivision; }
+  public void setBusinessDivision(String value) { this.businessDivision = value; }
+  public String getProductCode() { return productCode; }
+  public void setProductCode(String value) { this.productCode = value; }
+  public String getProductName() { return productName; }
+  public void setProductName(String value) { this.productName = value; }
+  public String getProductSpec() { return productSpec; }
+  public void setProductSpec(String value) { this.productSpec = value; }
+  public String getProductModel() { return productModel; }
+  public void setProductModel(String value) { this.productModel = value; }
+  public String getProductAttr() { return productAttr; }
+  public void setProductAttr(String value) { this.productAttr = value; }
+  public String getRemark() { return remark; }
+  public void setRemark(String value) { this.remark = value; }
+  public String getSourceType() { return sourceType; }
+  public void setSourceType(String value) { this.sourceType = value; }
+  public String getSourceBatchNo() { return sourceBatchNo; }
+  public void setSourceBatchNo(String value) { this.sourceBatchNo = value; }
+  public String getBusinessUnitType() { return businessUnitType; }
+  public void setBusinessUnitType(String value) { this.businessUnitType = value; }
+  public BigDecimal getUpliftRate() { return upliftRate; }
+  public void setUpliftRate(BigDecimal value) { this.upliftRate = value; }
+  public BigDecimal getCoefficient() { return coefficient; }
+  public void setCoefficient(BigDecimal value) { this.coefficient = value; }
+  public LocalDateTime getCreatedAt() { return createdAt; }
+  public void setCreatedAt(LocalDateTime value) { this.createdAt = value; }
+  public LocalDateTime getUpdatedAt() { return updatedAt; }
+  public void setUpdatedAt(LocalDateTime value) { this.updatedAt = value; }
 }
