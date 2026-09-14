@@ -36,4 +36,12 @@ public final class ManufactureRateMatchSupport {
         + MATCH_KEY_SEPARATOR
         + categoryPrefix.trim().toUpperCase(Locale.ROOT);
   }
+
+  /** 型号级制造费用率必须同时限定事业部，避免相同型号跨事业部串用费率。 */
+  public static String divisionModelKey(String businessDivision, String materialModel) {
+    if (!StringUtils.hasText(businessDivision) || !StringUtils.hasText(materialModel)) {
+      return null;
+    }
+    return businessDivision.trim() + MATCH_KEY_SEPARATOR + materialModel.trim();
+  }
 }

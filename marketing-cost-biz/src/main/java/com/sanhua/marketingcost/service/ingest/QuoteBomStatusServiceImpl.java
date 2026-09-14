@@ -13,9 +13,9 @@ import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomMonthlySnapshotMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
-import com.sanhua.marketingcost.service.collaboration.scan.CurrentU9BomResult;
-import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationCurrentU9BomGateway;
-import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationScanContext;
+import com.sanhua.marketingcost.service.quotebom.CurrentU9BomGateway;
+import com.sanhua.marketingcost.service.quotebom.CurrentU9BomResult;
+import com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.time.Clock;
 import java.time.LocalDateTime;
@@ -40,10 +40,10 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
   private final OaFormItemMapper oaFormItemMapper;
   private final QuoteBomStatusMapper quoteBomStatusMapper;
   private final QuoteBomMonthlySnapshotMapper quoteBomMonthlySnapshotMapper;
-  private final QuoteCollaborationCurrentU9BomGateway u9BomGateway;
+  private final CurrentU9BomGateway u9BomGateway;
   private final U9ProductPackagingTypeResolver productPackagingTypeResolver;
   private final QuoteBomContextResolver contextResolver;
-  private final CollaborationBomAvailabilityResolver collaborationBomAvailabilityResolver;
+  private final SupplementBomAvailabilityResolver supplementBomAvailabilityResolver;
   private final Clock clock;
 
   @Autowired
@@ -52,10 +52,10 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       OaFormItemMapper oaFormItemMapper,
       QuoteBomStatusMapper quoteBomStatusMapper,
       QuoteBomMonthlySnapshotMapper quoteBomMonthlySnapshotMapper,
-      QuoteCollaborationCurrentU9BomGateway u9BomGateway,
+      CurrentU9BomGateway u9BomGateway,
       U9ProductPackagingTypeResolver productPackagingTypeResolver,
       QuoteBomContextResolver contextResolver,
-      CollaborationBomAvailabilityResolver collaborationBomAvailabilityResolver) {
+      SupplementBomAvailabilityResolver supplementBomAvailabilityResolver) {
     this(
         oaFormMapper,
         oaFormItemMapper,
@@ -64,7 +64,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
         u9BomGateway,
         productPackagingTypeResolver,
         contextResolver,
-        collaborationBomAvailabilityResolver,
+        supplementBomAvailabilityResolver,
         Clock.systemDefaultZone());
   }
 
@@ -73,10 +73,10 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       OaFormItemMapper oaFormItemMapper,
       QuoteBomStatusMapper quoteBomStatusMapper,
       QuoteBomMonthlySnapshotMapper quoteBomMonthlySnapshotMapper,
-      QuoteCollaborationCurrentU9BomGateway u9BomGateway,
+      CurrentU9BomGateway u9BomGateway,
       U9ProductPackagingTypeResolver productPackagingTypeResolver,
       QuoteBomContextResolver contextResolver,
-      CollaborationBomAvailabilityResolver collaborationBomAvailabilityResolver,
+      SupplementBomAvailabilityResolver supplementBomAvailabilityResolver,
       Clock clock) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
@@ -85,7 +85,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     this.u9BomGateway = u9BomGateway;
     this.productPackagingTypeResolver = productPackagingTypeResolver;
     this.contextResolver = contextResolver;
-    this.collaborationBomAvailabilityResolver = collaborationBomAvailabilityResolver;
+    this.supplementBomAvailabilityResolver = supplementBomAvailabilityResolver;
     this.clock = clock;
   }
 
@@ -233,12 +233,12 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       return;
     }
     BomAvailability noU9 = BomAvailability.unavailable(u9.message());
-    BomAvailability collaboration = collaborationBomAvailabilityResolver.resolve(
+    BomAvailability supplement = supplementBomAvailabilityResolver.resolve(
         item.getId(), requiredBusinessUnit(form, item), key.getCostPeriodMonth(), noU9);
-    if (collaboration == null || !collaboration.isAvailable()) {
+    if (supplement == null || !supplement.isAvailable()) {
       applyNoBomStatus(
           status,
-          collaboration == null ? noU9 : collaboration,
+          supplement == null ? noU9 : supplement,
           u9.monthlySnapshotId(),
           u9.monthlySnapshotCreated(),
           now);
@@ -246,10 +246,10 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     }
 
     QuoteBomMonthlySnapshot snapshot =
-        createAutoSuccessSnapshot(form, item, key, collaboration, context.organization(), now);
+        createAutoSuccessSnapshot(form, item, key, supplement, context.organization(), now);
     deactivateActiveApprovedSnapshots(key, context.organization());
     quoteBomMonthlySnapshotMapper.insert(snapshot);
-    applySyncedSnapshot(status, collaboration, snapshot, now);
+    applySyncedSnapshot(status, supplement, snapshot, now);
   }
 
   private QuoteBomMonthlySnapshot findActiveApprovedSnapshot(
@@ -402,9 +402,9 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     status.setErrorMessage(message);
   }
 
-  private QuoteCollaborationScanContext scanContext(
+  private QuoteBomReadContext scanContext(
       OaForm form, OaFormItem item, QuoteBomContext context, LocalDateTime now) {
-    return new QuoteCollaborationScanContext(
+    return new QuoteBomReadContext(
         form.getId(), item.getId(), form.getOaNo(), context.costPeriodMonth(),
         requiredBusinessUnit(form, item), context.productCode(), item.getProductName(),
         item.getSpec(), item.getSunlModel(), context.organization().priceOrgCode(),
@@ -416,7 +416,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       throw new QuoteIngestException("U9月度BOM结果缺少快照ID");
     }
     QuoteBomMonthlySnapshot snapshot =
-        quoteBomMonthlySnapshotMapper.selectById(u9.monthlySnapshotId());
+        quoteBomMonthlySnapshotMapper.selectCurrentById(u9.monthlySnapshotId());
     if (snapshot == null || !StringUtils.hasText(snapshot.getSnapshotIdentityKey())) {
       throw new QuoteIngestException("U9月度BOM快照不存在或身份无效");
     }

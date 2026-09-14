@@ -1,6 +1,5 @@
 package com.sanhua.marketingcost.worker;
 
-import com.sanhua.marketingcost.config.ApprovedResultReuseProperties;
 import com.sanhua.marketingcost.config.AsyncConfig;
 import com.sanhua.marketingcost.config.CacheConfig;
 import com.sanhua.marketingcost.config.ElectronicDrawingBomProperties;
@@ -14,6 +13,8 @@ import com.sanhua.marketingcost.service.impl.MonthlyRepriceOperationServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceQueryServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceStartServiceImpl;
 import com.sanhua.marketingcost.service.impl.QuoteBatchCostRunServiceImpl;
+import com.sanhua.marketingcost.service.technicaldata.EffectiveTechnicalDataQueryServiceImpl;
+import com.sanhua.marketingcost.service.technicaldata.TechnicalDataVersionContentCodec;
 import java.util.Map;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
@@ -34,27 +35,33 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         "com.sanhua.marketingcost.integration",
         "com.sanhua.marketingcost.formula"
     },
-    excludeFilters = @ComponentScan.Filter(
-        type = FilterType.ASSIGNABLE_TYPE,
-        classes = {
-            BusinessUnitRepriceLockGuardImpl.class,
-            MonthlyRepriceBatchServiceImpl.class,
-            MonthlyRepriceConfirmServiceImpl.class,
-            MonthlyRepriceOperationServiceImpl.class,
-            MonthlyRepriceQueryServiceImpl.class,
-            MonthlyRepriceStartServiceImpl.class,
-            QuoteBatchCostRunServiceImpl.class
-        }))
+    excludeFilters = {
+        @ComponentScan.Filter(
+            type = FilterType.ASSIGNABLE_TYPE,
+            classes = {
+                BusinessUnitRepriceLockGuardImpl.class,
+                MonthlyRepriceBatchServiceImpl.class,
+                MonthlyRepriceConfirmServiceImpl.class,
+                MonthlyRepriceOperationServiceImpl.class,
+                MonthlyRepriceQueryServiceImpl.class,
+                MonthlyRepriceStartServiceImpl.class,
+                QuoteBatchCostRunServiceImpl.class
+            }),
+        @ComponentScan.Filter(
+            type = FilterType.REGEX,
+            pattern = "com\\.sanhua\\.marketingcost\\.service\\.technicaldata\\..*")
+    })
 @MapperScan("com.sanhua.marketingcost.mapper")
 @EnableScheduling
 @Import({
-    ApprovedResultReuseProperties.class,
     AsyncConfig.class,
     CacheConfig.class,
     ElectronicDrawingBomProperties.class,
+    EffectiveTechnicalDataQueryServiceImpl.class,
     LinkedParserProperties.class,
     MetaObjectHandlerConfig.class,
-    MybatisPlusConfig.class
+    MybatisPlusConfig.class,
+    TechnicalDataVersionContentCodec.class
 })
 public class CostRunWorkerApplication {
 

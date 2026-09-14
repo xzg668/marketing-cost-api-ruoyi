@@ -17,10 +17,6 @@ public class ProductCostingResult {
   private String message;
   private Integer gapCount;
   private Integer warningCount;
-  private Long collaborationTaskId;
-  private String collaborationStatus;
-  private String collaborationAssigneeName;
-  private String collaborationMessage;
   private String pricePrepareNo;
   private Long costVersionId;
   private String costRunNo;

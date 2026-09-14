@@ -24,6 +24,11 @@ public class QuoteCostRunSummaryResponse {
   private Long financeBasePriceId;
   private String status;
   private String sourceRevision;
+  private Long techDataVersionId;
+  private Integer techDataVersionNo;
+  private String techDataSource;
+  private String techDataInputJson;
+  private LocalDateTime techDataRetrievedAt;
   private String dataQualityStatus;
   private Integer dataQualityWarningCount;
   private String dataQualitySummary;

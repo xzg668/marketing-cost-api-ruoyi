@@ -7,6 +7,7 @@ import com.sanhua.marketingcost.enums.CostRunTaskStatus;
 import com.sanhua.marketingcost.mapper.CostRunBatchMapper;
 import com.sanhua.marketingcost.mapper.CostRunTaskMapper;
 import com.sanhua.marketingcost.service.CostRunTaskProgressService;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.LocalDateTime;
 import java.util.EnumMap;
 import java.util.List;
@@ -34,7 +35,7 @@ public class CostRunTaskProgressServiceImpl implements CostRunTaskProgressServic
     int finished = snapshot.getSuccessCount()
         + snapshot.getFailedCount()
         + snapshot.getSkippedCount();
-    LocalDateTime now = LocalDateTime.now();
+    LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     LocalDateTime startedAt = snapshot.getRunningCount() > 0 || finished > 0 ? now : null;
     LocalDateTime finishedAt = isTerminal(status) ? now : null;
 
@@ -62,12 +63,12 @@ public class CostRunTaskProgressServiceImpl implements CostRunTaskProgressServic
     int success = counts.get(CostRunTaskStatus.SUCCESS);
     int failed = counts.get(CostRunTaskStatus.FAILED);
     int canceled = counts.get(CostRunTaskStatus.CANCELED);
-    int collaboration = counts.get(CostRunTaskStatus.COLLABORATION);
+    int waitingInput = counts.get(CostRunTaskStatus.WAITING_INPUT);
     int skippedCurrent = counts.get(CostRunTaskStatus.SKIPPED_CURRENT);
     int running = counts.get(CostRunTaskStatus.RUNNING);
     int retryable = counts.get(CostRunTaskStatus.RETRYABLE);
     int pending = counts.get(CostRunTaskStatus.PENDING);
-    int skipped = canceled + collaboration + skippedCurrent;
+    int skipped = canceled + waitingInput + skippedCurrent;
     int total = success + failed + skipped + running + retryable + pending;
     int finished = success + failed + skipped;
     int progress = total == 0 ? 0 : (int) Math.floor(finished * 100.0 / total);
@@ -79,7 +80,7 @@ public class CostRunTaskProgressServiceImpl implements CostRunTaskProgressServic
         success,
         failed,
         canceled,
-        collaboration + skippedCurrent,
+        waitingInput + skippedCurrent,
         running,
         retryable,
         pending);
@@ -88,13 +89,13 @@ public class CostRunTaskProgressServiceImpl implements CostRunTaskProgressServic
     snapshot.setBatchNo(normalizedBatchNo);
     snapshot.setStatus(status);
     snapshot.setBusinessOutcome(resolveBusinessOutcome(
-        total, success, failed, canceled, collaboration, skippedCurrent,
+        total, success, failed, canceled, waitingInput, skippedCurrent,
         running, retryable, pending));
     snapshot.setTotalCount(total);
     snapshot.setSuccessCount(success);
     snapshot.setFailedCount(failed);
     snapshot.setSkippedCount(skipped);
-    snapshot.setCollaborationCount(collaboration);
+    snapshot.setWaitingInputCount(waitingInput);
     snapshot.setSkippedCurrentCount(skippedCurrent);
     snapshot.setRunningCount(running);
     snapshot.setRetryableCount(retryable);
@@ -108,7 +109,7 @@ public class CostRunTaskProgressServiceImpl implements CostRunTaskProgressServic
       int success,
       int failed,
       int canceled,
-      int collaboration,
+      int waitingInput,
       int skippedCurrent,
       int running,
       int retryable,
@@ -116,7 +117,7 @@ public class CostRunTaskProgressServiceImpl implements CostRunTaskProgressServic
     if (total == 0) return "NOT_STARTED";
     if (running + retryable + pending > 0) return "IN_PROGRESS";
     if (canceled == total) return "CANCELED";
-    if (collaboration > 0) {
+    if (waitingInput > 0) {
       return success + skippedCurrent > 0 ? "PARTIAL_SUCCESS" : "WAITING_INPUT";
     }
     if (failed > 0) {

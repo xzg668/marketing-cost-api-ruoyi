@@ -56,6 +56,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String token = extractToken(request);
 
         if (token != null && jwtUtils.validateToken(token)) {
+            boolean technicalDataSession = jwtUtils.isTechnicalDataSession(token);
+            if (technicalDataSession
+                    && !request.getRequestURI().startsWith("/api/v2/technical-data/")) {
+                filterChain.doFilter(request, response);
+                return;
+            }
             String username = jwtUtils.getUsernameFromToken(token);
 
             // 加载用户基本信息（含角色 → ROLE_xxx authorities）
@@ -83,6 +89,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String businessUnitType = jwtUtils.extractBusinessUnitType(token);
             Map<String, Object> detailsMap = new HashMap<>();
             detailsMap.put(BusinessUnitContext.KEY_BUSINESS_UNIT_TYPE, businessUnitType);
+            if (technicalDataSession) {
+                detailsMap.put("technicalDataTaskId", jwtUtils.extractTechnicalDataTaskId(token));
+                detailsMap.put("technicalDataPurpose", jwtUtils.extractTechnicalDataPurpose(token));
+            }
             authentication.setDetails(detailsMap);
 
             SecurityContextHolder.getContext().setAuthentication(authentication);

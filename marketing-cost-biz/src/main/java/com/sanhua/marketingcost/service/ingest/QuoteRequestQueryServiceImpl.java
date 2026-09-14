@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.ingest;
 
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -22,6 +23,7 @@ import com.sanhua.marketingcost.entity.OaFormHeaderExtraField;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.OaFormItemExtraField;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
+import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.enums.QuoteCostRunStatus;
 import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
@@ -35,6 +37,7 @@ import com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
+import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteIngestLogMapper;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
@@ -65,6 +68,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   private final OaFormHeaderExtraFieldMapper oaFormHeaderExtraFieldMapper;
   private final OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper;
   private final QuoteBomStatusMapper quoteBomStatusMapper;
+  private final QuoteBomPreparationRecordMapper quoteBomPreparationRecordMapper;
   private final QuoteCostRunVersionMapper quoteCostRunVersionMapper;
   private final QuoteIngestLogMapper quoteIngestLogMapper;
   private final QuoteCostingWorkspaceService quoteCostingWorkspaceService;
@@ -76,6 +80,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
       OaFormHeaderExtraFieldMapper oaFormHeaderExtraFieldMapper,
       OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper,
       QuoteBomStatusMapper quoteBomStatusMapper,
+      QuoteBomPreparationRecordMapper quoteBomPreparationRecordMapper,
       QuoteCostRunVersionMapper quoteCostRunVersionMapper,
       QuoteIngestLogMapper quoteIngestLogMapper,
       QuoteCostingWorkspaceService quoteCostingWorkspaceService) {
@@ -85,6 +90,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     this.oaFormHeaderExtraFieldMapper = oaFormHeaderExtraFieldMapper;
     this.oaFormItemExtraFieldMapper = oaFormItemExtraFieldMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
+    this.quoteBomPreparationRecordMapper = quoteBomPreparationRecordMapper;
     this.quoteCostRunVersionMapper = quoteCostRunVersionMapper;
     this.quoteIngestLogMapper = quoteIngestLogMapper;
     this.quoteCostingWorkspaceService = quoteCostingWorkspaceService;
@@ -243,6 +249,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
         latestCostRunByItemId(form.getOaNo(), items);
     Map<Long, QuoteCostingWorkspace> workspaceByItemId =
         workspaceByItemId(items, CostPricingPeriodUtils.currentPricingMonth());
+    Map<Long, QuoteBomPreparationRecord> preparationByItemId = preparationByItemId(items);
     String bomAggregateStatus = aggregateBomStatus(items.size(), statuses);
 
     QuoteRequestDetailResponse response = toDetailHeader(form);
@@ -257,7 +264,8 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
                   item,
                   statusByItemId.get(item.getId()),
                   latestCostRunByItemId.get(item.getId()),
-                  workspaceByItemId.get(item.getId())));
+                  workspaceByItemId.get(item.getId()),
+                  preparationByItemId.get(item.getId())));
     }
     for (OaFormExtraFee fee : listExtraFees(form.getId())) {
       response.getExtraFees().add(toExtraFee(fee));
@@ -324,7 +332,8 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
       OaFormItem item,
       QuoteBomStatus status,
       QuoteCostRunVersion latestCostRun,
-      QuoteCostingWorkspace workspace) {
+      QuoteCostingWorkspace workspace,
+      QuoteBomPreparationRecord preparation) {
     QuoteRequestItemResponse response = new QuoteRequestItemResponse();
     response.setId(item.getId());
     response.setSeq(item.getSeq());
@@ -368,9 +377,34 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setCalcStatus(resolveItemCalcStatus(item, latestCostRun, workspace));
     response.setCalcAt(item.getCalcAt());
     response.setConfirmedCostVersionId(item.getConfirmedCostVersionId());
+    if (preparation != null && StringUtils.hasText(preparation.getElectronicWorkflowStage())) {
+      response.setElectronicDrawingWorkflowId(item.getId());
+      response.setElectronicDrawingStage(preparation.getElectronicWorkflowStage());
+    }
     response.setBomStatus(toBomStatusResponse(item, status));
     response.setCostingWorkspace(toWorkspaceResponse(item, latestCostRun, workspace));
     return response;
+  }
+
+  private Map<Long, QuoteBomPreparationRecord> preparationByItemId(List<OaFormItem> items) {
+    List<Long> itemIds = items == null ? List.of() : items.stream()
+        .map(OaFormItem::getId)
+        .filter(id -> id != null)
+        .distinct()
+        .toList();
+    if (itemIds.isEmpty()) return Map.of();
+    List<QuoteBomPreparationRecord> rows = quoteBomPreparationRecordMapper.selectList(
+        new QueryWrapper<QuoteBomPreparationRecord>()
+            .in("oa_form_item_id", itemIds)
+            .eq("active_flag", 1)
+            .orderByDesc("id"));
+    Map<Long, QuoteBomPreparationRecord> result = new LinkedHashMap<>();
+    for (QuoteBomPreparationRecord row : rows == null ? List.<QuoteBomPreparationRecord>of() : rows) {
+      if (row != null && row.getOaFormItemId() != null) {
+        result.putIfAbsent(row.getOaFormItemId(), row);
+      }
+    }
+    return result;
   }
 
   private Map<Long, QuoteCostingWorkspace> workspaceByItemId(

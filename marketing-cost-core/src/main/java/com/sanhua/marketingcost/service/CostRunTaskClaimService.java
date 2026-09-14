@@ -18,7 +18,7 @@ public interface CostRunTaskClaimService {
       String costRunNo,
       String resultSummaryJson);
 
-  boolean markCollaboration(
+  boolean markWaitingInput(
       Long taskId, String workerId, String resultSummaryJson, String message);
 
   boolean markRetryable(Long taskId, String workerId, String errorMessage, String errorStack);

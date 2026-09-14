@@ -81,7 +81,16 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
           #{scene}
         </foreach>
          AND (
-           t.status IN ('PENDING', 'RETRYABLE')
+           t.status = 'PENDING'
+           OR (
+             t.status = 'RETRYABLE'
+             AND TIMESTAMPADD(
+               MICROSECOND,
+               CAST(#{retryInitialBackoffMicros}
+                 * POW(2, LEAST(COALESCE(t.retry_count, 0), 7)) AS SIGNED),
+               t.updated_at
+             ) &lt;= #{now}
+           )
            OR (
              t.status = 'RUNNING'
              AND t.lock_expire_time IS NOT NULL
@@ -95,7 +104,8 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
   List<CostRunTask> selectClaimCandidates(
       @Param("scenes") Set<String> scenes,
       @Param("now") LocalDateTime now,
-      @Param("limit") int limit);
+      @Param("limit") int limit,
+      @Param("retryInitialBackoffMicros") long retryInitialBackoffMicros);
 
   @Update("""
       UPDATE lp_cost_run_task
@@ -159,7 +169,7 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
 
   @Update("""
       UPDATE lp_cost_run_task
-         SET status = 'COLLABORATION',
+         SET status = 'WAITING_INPUT',
              progress = 100,
              worker_id = NULL,
              locked_at = NULL,
@@ -177,7 +187,7 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
          AND status = 'RUNNING'
          AND worker_id = #{workerId}
       """)
-  int markCollaboration(
+  int markWaitingInput(
       @Param("taskId") Long taskId,
       @Param("workerId") String workerId,
       @Param("resultSummaryJson") String resultSummaryJson,
@@ -303,7 +313,7 @@ public interface CostRunTaskMapper extends BaseMapper<CostRunTask> {
           #{key}
         </foreach>
          AND status IN (
-           'PENDING', 'SUCCESS', 'COLLABORATION', 'SKIPPED_CURRENT',
+           'PENDING', 'SUCCESS', 'WAITING_INPUT', 'SKIPPED_CURRENT',
            'FAILED', 'CANCELED', 'RETRYABLE'
          )
       </script>

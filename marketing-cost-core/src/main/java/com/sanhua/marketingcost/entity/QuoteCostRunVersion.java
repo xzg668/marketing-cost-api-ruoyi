@@ -32,6 +32,11 @@ public class QuoteCostRunVersion {
   private Long financeBasePriceId;
   private String inputFingerprint;
   private String sourceRevision;
+  private Long techDataVersionId;
+  private Integer techDataVersionNo;
+  private String techDataSource;
+  private String techDataInputJson;
+  private LocalDateTime techDataRetrievedAt;
   private String algorithmVersion;
   private String dataQualityStatus;
   private Integer dataQualityWarningCount;

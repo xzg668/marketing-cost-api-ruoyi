@@ -121,6 +121,8 @@ public class CostRunResultWriterImpl implements CostRunResultWriter {
       entity.setBaseAmount(item.getBaseAmount());
       entity.setRate(item.getRate());
       entity.setAmount(item.getAmount());
+      entity.setSourceTable(trimToNull(item.getSourceTable()));
+      entity.setSourceId(item.getSourceId());
       entity.setRemark(truncateRemark(item.getRemark(), MAX_COST_REMARK_LENGTH));
       entity.setCategory(
           StringUtils.hasText(item.getCategory())

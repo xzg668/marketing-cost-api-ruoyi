@@ -266,7 +266,9 @@ public class ManufactureRateServiceImpl implements ManufactureRateService {
     }
     if (StringUtils.hasText(entity.getProductModel())) {
       entity.setMatchLevel(MATCH_LEVEL_MATERIAL_MODEL);
-      entity.setMatchKey(entity.getProductModel());
+      entity.setMatchKey(
+          ManufactureRateMatchSupport.divisionModelKey(
+              entity.getBusinessDivision(), entity.getProductModel()));
       return;
     }
     String categoryPrefix =
@@ -301,6 +303,10 @@ public class ManufactureRateServiceImpl implements ManufactureRateService {
     }
     if (entity.getFeeRate() == null) {
       return "Excel第" + rowNo + "行缺制造费用率";
+    }
+    if (StringUtils.hasText(entity.getProductModel())
+        && !StringUtils.hasText(entity.getBusinessDivision())) {
+      return "Excel第" + rowNo + "行型号级配置缺事业部";
     }
     if (!StringUtils.hasText(entity.getMatchLevel())
         || !StringUtils.hasText(entity.getMatchKey())) {

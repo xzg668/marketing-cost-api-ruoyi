@@ -31,5 +31,6 @@ public class BusinessChangeLog {
   private String changeSource;
   private String submitBatchNo;
   private String requestId;
+  private String idempotencyKey;
   private LocalDateTime createdAt;
 }

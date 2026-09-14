@@ -136,13 +136,13 @@ public class CostRunTaskWorker {
       }
       refreshMonthlyRepriceProgress(task);
       return new TaskExecutionMetric(task.getId(), elapsedMillis(startedNanos), true);
-    } catch (CostRunTaskCollaborationRequiredException ex) {
+    } catch (CostRunTaskWaitingInputException ex) {
       boolean marked =
-          taskClaimService.markCollaboration(
+          taskClaimService.markWaitingInput(
               task.getId(), workerId, ex.getResultSummaryJson(), ex.getMessage());
       if (!marked) {
         log.warn(
-            "cost run task collaboration ownership changed: workerId={} taskId={} batchNo={}",
+            "cost run task waiting-input ownership changed: workerId={} taskId={} batchNo={}",
             workerId,
             task.getId(),
             task.getBatchNo());

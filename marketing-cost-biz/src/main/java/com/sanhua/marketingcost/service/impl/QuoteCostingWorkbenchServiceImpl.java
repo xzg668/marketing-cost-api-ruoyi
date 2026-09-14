@@ -40,7 +40,7 @@ import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
 import com.sanhua.marketingcost.service.QuoteProductBomPreparationService;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
-import com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate;
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingCostingFallbackService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.math.BigDecimal;
@@ -80,8 +80,8 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   private final QuoteCostingWorkspaceService workspaceService;
   private final QuoteCostRunVersionInvalidationService costRunVersionInvalidationService;
   private final QuoteBomStatusService quoteBomStatusService;
-  private final CollaborationCostingGate collaborationCostingGate;
   private final QuotePriceTypeRecognitionService priceTypeRecognitionService;
+  private final ElectronicDrawingCostingFallbackService electronicDrawingFallbackService;
 
   public QuoteCostingWorkbenchServiceImpl(
       OaFormMapper oaFormMapper,
@@ -96,8 +96,8 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       QuoteCostingWorkspaceService workspaceService,
       QuoteCostRunVersionInvalidationService costRunVersionInvalidationService,
       QuoteBomStatusService quoteBomStatusService,
-      CollaborationCostingGate collaborationCostingGate,
-      QuotePriceTypeRecognitionService priceTypeRecognitionService) {
+      QuotePriceTypeRecognitionService priceTypeRecognitionService,
+      ElectronicDrawingCostingFallbackService electronicDrawingFallbackService) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
@@ -110,8 +110,8 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     this.workspaceService = workspaceService;
     this.costRunVersionInvalidationService = costRunVersionInvalidationService;
     this.quoteBomStatusService = quoteBomStatusService;
-    this.collaborationCostingGate = collaborationCostingGate;
     this.priceTypeRecognitionService = priceTypeRecognitionService;
+    this.electronicDrawingFallbackService = electronicDrawingFallbackService;
   }
 
   @Override
@@ -143,8 +143,6 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       throw new QuoteIngestException("当前产品行料号、型号和图号均为空，无法发起核算");
     }
     oaFormMapper.selectIdForCostingUpdate(form.getOaNo());
-    collaborationCostingGate.requireReadyAndStart(item.getId(), form.getBusinessUnitType());
-
     String periodMonth = CostPricingPeriodUtils.currentPricingMonth();
     // 用户明确发起或重新发起当前月核算时，旧的未确认试算不能继续显示为可确认。
     // 仅将同产品、同月份的未完成试算标记为 STALE，历史成功版本保持不变。
@@ -154,6 +152,16 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     String buildBatchId = null;
     QuoteBomStatusItemResponse checked =
         quoteBomStatusService.checkItemForCostRun(form.getOaNo(), item.getId(), periodMonth);
+    if (!isCostReadyBomStatus(checked == null ? null : checked.getBomStatus())
+        && checked != null
+        && QuoteBomStatusCode.NO_BOM.getCode().equals(checked.getBomStatus())) {
+      ElectronicDrawingCostingFallbackService.AttemptResult electronic =
+          electronicDrawingFallbackService.attempt(form, item, periodMonth);
+      if (electronic.costingCanContinue()) {
+        checked = quoteBomStatusService.checkItemForCostRun(
+            form.getOaNo(), item.getId(), periodMonth);
+      }
+    }
     if (isCostReadyBomStatus(checked == null ? null : checked.getBomStatus())) {
       QuoteProductBomPreparationPreview preparation =
           bomPreparationService.prepareByOaFormItem(

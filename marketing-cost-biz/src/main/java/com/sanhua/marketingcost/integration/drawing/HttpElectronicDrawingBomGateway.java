@@ -23,7 +23,7 @@ import org.springframework.util.StringUtils;
 /** 电子图库 HTTP 适配器；只做协议转换，不相信上游的 valid/complete 布尔值。 */
 @Component
 @ConditionalOnProperty(
-    prefix = "quote.collaboration.electronic-drawing",
+    prefix = "quote.electronic-drawing",
     name = "mode",
     havingValue = "HTTP")
 public class HttpElectronicDrawingBomGateway implements ElectronicDrawingBomGateway {

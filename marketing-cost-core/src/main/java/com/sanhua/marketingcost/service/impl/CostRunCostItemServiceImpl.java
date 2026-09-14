@@ -5,6 +5,7 @@ import com.sanhua.marketingcost.dto.AuxCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
+import com.sanhua.marketingcost.dto.EffectiveTechnicalDataInput;
 import com.sanhua.marketingcost.entity.CmsCostSourceEffective;
 import com.sanhua.marketingcost.entity.CostRunCostItem;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
@@ -285,10 +286,14 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       dto.setBaseAmount(item.getBaseAmount());
       dto.setRate(item.getRate());
       dto.setAmount(item.getAmount());
+      dto.setSourceTable(item.getSourceTable());
+      dto.setSourceId(item.getSourceId());
       // T10：把落库的缺率说明回传给前端
       dto.setRemark(item.getRemark());
       // T24：把 category 也回传，前端/对账脚本可识别行类别
       dto.setCategory(item.getCategory());
+      dto.setSourceTable(item.getSourceTable());
+      dto.setSourceId(item.getSourceId());
       items.add(dto);
     }
     return items;
@@ -350,8 +355,13 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       CostSourceContext costSourceContext,
       List<CostRunPartItemDto> currentPartItems,
       boolean persistDailyResult) {
+    EffectiveTechnicalDataInput technicalData =
+        costSourceContext == null ? null : costSourceContext.effectiveTechnicalData;
     // 1) 先算人工 -> 部门经费。正式核算有成本年度时，工资金额只取 CMS 公共生效来源。
-    LaborCostResult laborResult = buildLaborCostResult(materialCodes, costSourceContext);
+    //    当前产品/月存在审核生效技术工资时，只读该版本；没有技术版本时才回退 CMS。
+    LaborCostResult laborResult = technicalData != null && technicalData.salaryRequired()
+        ? buildTechnicalLaborCostResult(technicalData)
+        : buildLaborCostResult(materialCodes, costSourceContext);
     BigDecimal directTotal = laborResult.directTotal;
     BigDecimal indirectTotal = laborResult.indirectTotal;
 
@@ -376,7 +386,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     costCodes.add(DEPT_OTHER);
 
     // 2) 再算辅料
-    List<CostRunCostItemDto> auxItems = buildAuxItems(materialCodes, costSourceContext);
+    List<CostRunCostItemDto> auxItems = technicalData != null && technicalData.auxiliaryRequired()
+        ? buildTechnicalAuxItems(technicalData)
+        : buildAuxItems(materialCodes, costSourceContext);
     BigDecimal auxTotal = BigDecimal.ZERO;
     for (CostRunCostItemDto auxItem : auxItems) {
       if (auxItem.getAmount() != null) {
@@ -404,12 +416,17 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     //    见机表只需对该包装父件金额乘 1.05。
     PartTotalSplit partSplit = splitPartAmount(oaNoValue, productCodeValue, currentPartItems);
     BigDecimal partTotal = partSplit.nonPackageTotal();
-    BigDecimal rawPackageAmount = partSplit.packageTotal();
-    BigDecimal packageBucketAmount =
-        calculatePackageBucketAmount(
+    boolean useTechnicalPackage = technicalData != null && technicalData.packageRequired();
+    BigDecimal rawPackageAmount = useTechnicalPackage
+        ? technicalData.packageTotalAmount()
+        : partSplit.packageTotal();
+    BigDecimal packageBucketAmount = useTechnicalPackage
+        ? technicalData.packageTotalAmount()
+        : calculatePackageBucketAmount(
             oaNoValue, productCodeValue, currentPartItems, costSourceContext);
-    BigDecimal packageAmount =
-        packageBucketAmount.signum() > 0 ? packageBucketAmount : rawPackageAmount;
+    BigDecimal packageAmount = useTechnicalPackage
+        ? nullToZero(technicalData.packageTotalAmount())
+        : packageBucketAmount.signum() > 0 ? packageBucketAmount : rawPackageAmount;
     // 包装进 materialTotal；优先用包装组件父件新口径，取不到包装组件数据时退回原始包装件金额。
     // 运费属于报价商务信息，不进入成本核算；这里只累计正式配置的其他费用。
     costCodes.add(OTHER_EXP_PACKAGE);
@@ -507,8 +524,12 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     List<CostRunCostItemDto> items = new ArrayList<>();
     items.add(buildItem(MATERIAL, "材料费", null, null, materialTotal));
     items.addAll(auxItems);
-    items.add(buildItem(DIRECT_LABOR, "直接人工工资", null, null, directTotal, laborResult.directRemark));
-    items.add(buildItem(INDIRECT_LABOR, "辅助人工工资", null, null, indirectTotal, laborResult.indirectRemark));
+    items.add(buildItem(
+        DIRECT_LABOR, "直接人工工资", null, null, directTotal, laborResult.directRemark,
+        laborResult.sourceTable, laborResult.sourceId));
+    items.add(buildItem(
+        INDIRECT_LABOR, "辅助人工工资", null, null, indirectTotal, laborResult.indirectRemark,
+        laborResult.sourceTable, laborResult.sourceId));
     items.add(buildItem(LOSS, "净损失率", lossBase, lossRate, lossAmount, lossRemark));
     // T10：MANUFACTURE / MANUFACTURE_COST / ADJUSTED_MANUFACTURE_COST 共享同一份 remark
     items.add(buildItem(
@@ -531,7 +552,15 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         FIN_EXP, "财务费用", adjustedManufactureCost, financeRate, financeAmount, threeExpRemark));
     items.addAll(otherExpenseItems);
     // T11：包装费仅用于展示其归集结果，金额已进入材料费，不重复累加总成本。
-    items.add(buildItem(OTHER_EXP_PACKAGE, "包装费", rawPackageAmount, null, packageAmount));
+    items.add(buildItem(
+        OTHER_EXP_PACKAGE,
+        "包装费",
+        rawPackageAmount,
+        null,
+        packageAmount,
+        useTechnicalPackage ? technicalSourceRemark(technicalData, "PACKAGE") : null,
+        useTechnicalPackage ? "lp_quote_tech_data_version" : null,
+        useTechnicalPackage ? technicalData.versionId() : null));
     items.add(buildItem(TOTAL, "不含税总成本", null, null, totalAmount));
     // T10：4 项部门经费共享 feeResult.remark
     items.add(buildItem(
@@ -552,7 +581,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     //   - 焊料 BUCKET_WELD: Σ(part 子件 cost_element=主要材料-焊料)
     //   - 包装 BUCKET_PACKAGE: Σ(包装组件父件 amount) × 1.05
     List<CostRunCostItemDto> bucketItems =
-        buildBucketItems(oaNoValue, productCodeValue, currentPartItems, costSourceContext);
+        buildBucketItems(
+            oaNoValue, productCodeValue, currentPartItems, costSourceContext, technicalData);
     for (CostRunCostItemDto b : bucketItems) {
       items.add(b);
       if (StringUtils.hasText(b.getCostCode())) {
@@ -577,7 +607,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       String oaNoValue,
       String productCodeValue,
       List<CostRunPartItemDto> currentPartItems,
-      CostSourceContext costSourceContext) {
+      CostSourceContext costSourceContext,
+      EffectiveTechnicalDataInput technicalData) {
     List<CostRunCostItemDto> result = new ArrayList<>();
 
     // 焊料：从 part_item join material_master 按 cost_element 聚合
@@ -587,11 +618,19 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       result.add(buildBucketItem(BUCKET_WELD, "焊料", weldSum));
     }
 
-    BigDecimal pkgAmount =
-        calculatePackageBucketAmount(
+    boolean useTechnicalPackage = technicalData != null && technicalData.packageRequired();
+    BigDecimal pkgAmount = useTechnicalPackage
+        ? nullToZero(technicalData.packageTotalAmount())
+        : calculatePackageBucketAmount(
             oaNoValue, productCodeValue, currentPartItems, costSourceContext);
     if (pkgAmount != null && pkgAmount.signum() > 0) {
-      result.add(buildBucketItem(BUCKET_PACKAGE, "包装", pkgAmount));
+      CostRunCostItemDto packageBucket = buildBucketItem(BUCKET_PACKAGE, "包装", pkgAmount);
+      if (useTechnicalPackage) {
+        packageBucket.setSourceTable("lp_quote_tech_data_version");
+        packageBucket.setSourceId(technicalData.versionId());
+        packageBucket.setRemark(technicalSourceRemark(technicalData, "PACKAGE"));
+      }
+      result.add(packageBucket);
     }
 
     return result;
@@ -852,7 +891,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     String materialOrganizationCode =
         resolveCostSourceMaterialOrganizationCode(context, currentPartItems, oaNo, productCode);
     if (!StringUtils.hasText(oaNo)) {
-      return new CostSourceContext(resolveCostYear(context), "", materialOrganizationCode);
+      return new CostSourceContext(
+          resolveCostYear(context), "", materialOrganizationCode,
+          context == null ? null : context.getEffectiveTechnicalData());
     }
     OaForm form =
         oaFormMapper.selectOne(
@@ -860,7 +901,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
                 .eq(OaForm::getOaNo, oaNo)
                 .last("LIMIT 1"));
     if (form == null) {
-      return new CostSourceContext(resolveCostYear(context), "", materialOrganizationCode);
+      return new CostSourceContext(
+          resolveCostYear(context), "", materialOrganizationCode,
+          context == null ? null : context.getEffectiveTechnicalData());
     }
     List<OaFormItem> rows =
         oaFormItemMapper.selectList(
@@ -935,7 +978,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         applicantDept,
         applicantOffice,
         expenseProductCategory,
-        threeExpenseMatchContext);
+        threeExpenseMatchContext,
+        context == null ? null : context.getEffectiveTechnicalData());
   }
 
   ThreeExpenseMatchContext buildThreeExpenseMatchContext(OaForm form) {
@@ -1372,7 +1416,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return materialMasterRawMapper.selectByLatestBatchAndCodes(materialCodes, null, organization);
   }
 
-  /** 制造费用率：成品料号优先；未命中时按成本料号查 U9 型号、名称+事业部；最后按成品料号事业部兜底。 */
+  /** 制造费用率：成品料号优先；未命中时按成本料号查 U9 事业部+型号、名称+事业部；最后按成品料号事业部兜底。 */
   private RateLookup findManufactureRate(
       String finishedProductCode, Set<String> costMaterialCodes, CostSourceContext costSourceContext) {
     String finishedCode = trimToNull(finishedProductCode);
@@ -1404,21 +1448,35 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         continue;
       }
       String materialModel = trimToNull(raw.getMaterialModel());
-      if (materialModel != null) {
+      String division = trimToNull(raw.getProductionDivision());
+      if (materialModel != null && division != null) {
+        String modelMatchKey =
+            ManufactureRateMatchSupport.divisionModelKey(division, materialModel);
         ManufactureRate modelRate =
             findManufactureRateByMatch(
-                MANUFACTURE_MATCH_LEVEL_MATERIAL_MODEL, materialModel, rateYear, businessUnitType);
+                MANUFACTURE_MATCH_LEVEL_MATERIAL_MODEL,
+                modelMatchKey,
+                rateYear,
+                businessUnitType);
         RateLookup modelLookup = toManufactureLookup(modelRate);
         if (modelLookup != null) {
           return modelLookup;
         }
-        missReasons.add("成本料号 " + costCodeValue + " 主档型号 " + materialModel + " 无型号级配置");
+        missReasons.add(
+            "成本料号 "
+                + costCodeValue
+                + " 主档事业部/型号 "
+                + division
+                + "/"
+                + materialModel
+                + " 无型号级配置");
+      } else if (materialModel == null) {
+        missReasons.add("成本料号 " + costCodeValue + " 主档 material_model 为空");
       } else {
-        missReasons.add("成本料号 " + costCodeValue + " 主档 product_model 为空");
+        missReasons.add("成本料号 " + costCodeValue + " 主档 production_division 为空，无法做型号级匹配");
       }
 
       String materialName = trimToNull(raw.getMaterialName());
-      String division = trimToNull(raw.getProductionDivision());
       if (materialName != null && division != null) {
         String matchKey = buildManufactureDivisionProductKey(division, materialName);
         ManufactureRate nameRate =
@@ -1797,6 +1855,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       entity.setBaseAmount(item.getBaseAmount());
       entity.setRate(item.getRate());
       entity.setAmount(item.getAmount());
+      entity.setSourceTable(item.getSourceTable());
+      entity.setSourceId(item.getSourceId());
       // T10：把缺率说明落库，便于复算 / 对账时直接看历史
       entity.setRemark(item.getRemark());
       // T24：未显式标 category 时默认 EXPENSE（传统费用项），buildBucketItems 写入时会主动标 BOM_BUCKET
@@ -1931,6 +1991,35 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return items;
   }
 
+  private List<CostRunCostItemDto> buildTechnicalAuxItems(
+      EffectiveTechnicalDataInput technicalData) {
+    List<CostRunCostItemDto> items = new ArrayList<>();
+    for (EffectiveTechnicalDataInput.AuxiliaryLine line : technicalData.auxiliaryItems()) {
+      String subjectCode = trimToNull(line.subjectCode());
+      String code = "AUX_TECH_"
+          + (subjectCode == null ? "LINE" : subjectCode.replaceAll("[^A-Za-z0-9_-]", "_"))
+          + "_" + line.lineNo();
+      BigDecimal baseAmount = line.standardQuantity() == null || line.unitPrice() == null
+          ? null
+          : line.standardQuantity().multiply(line.unitPrice())
+              .setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+      BigDecimal displayRate = line.lossRate() == null || line.lossRate().signum() == 0
+          ? null : BigDecimal.ONE.add(line.lossRate());
+      items.add(buildItem(
+          code,
+          firstText(line.subjectName(), line.name(), "技术辅料"),
+          baseAmount,
+          displayRate,
+          nullToZero(line.amount()).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP),
+          technicalSourceRemark(technicalData, "AUXILIARY")
+              + "；标准用量=" + line.standardQuantity()
+              + line.standardUnit() + "，参考单价=" + line.unitPrice(),
+          "lp_quote_tech_aux_item",
+          line.id()));
+    }
+    return items;
+  }
+
   private BigDecimal ruleDecimal(
       String ruleCode, CostSourceContext context, BigDecimal fallbackValue) {
     return businessRuleProvider.decimalValue(
@@ -1976,6 +2065,42 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
           missingEffectiveRemark(costSourceContext.costYear, "辅助员工工资", result.missingIndirectCodes);
     }
     return result;
+  }
+
+  private LaborCostResult buildTechnicalLaborCostResult(
+      EffectiveTechnicalDataInput technicalData) {
+    LaborCostResult result = new LaborCostResult();
+    for (EffectiveTechnicalDataInput.SalaryLine line : technicalData.salaryItems()) {
+      String laborType = trimToNull(line.laborType());
+      if (laborType == null) {
+        throw new IllegalStateException("技术工资明细缺少人工类型，versionId=" + technicalData.versionId());
+      }
+      BigDecimal amount = nullToZero(line.amount());
+      if ("DIRECT".equalsIgnoreCase(laborType) || laborType.contains("直接")) {
+        result.directTotal = result.directTotal.add(amount);
+      } else if ("INDIRECT".equalsIgnoreCase(laborType)
+          || laborType.contains("INDIRECT")
+          || laborType.contains("辅助")
+          || laborType.contains("间接")) {
+        result.indirectTotal = result.indirectTotal.add(amount);
+      } else {
+        throw new IllegalStateException(
+            "技术工资人工类型不受支持：" + laborType + "，versionId=" + technicalData.versionId());
+      }
+    }
+    result.directTotal = result.directTotal.setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+    result.indirectTotal = result.indirectTotal.setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
+    result.directRemark = technicalSourceRemark(technicalData, "SALARY");
+    result.indirectRemark = technicalSourceRemark(technicalData, "SALARY");
+    result.sourceTable = "lp_quote_tech_data_version";
+    result.sourceId = technicalData.versionId();
+    return result;
+  }
+
+  private String technicalSourceRemark(
+      EffectiveTechnicalDataInput technicalData, String module) {
+    return "技术资料生效版本V" + technicalData.versionNo()
+        + "（versionId=" + technicalData.versionId() + "，module=" + module + "）";
   }
 
   private Map<String, CmsCostSourceEffective> loadSalaryEffectiveSources(
@@ -2237,6 +2362,21 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     return dto;
   }
 
+  private CostRunCostItemDto buildItem(
+      String code,
+      String name,
+      BigDecimal baseAmount,
+      BigDecimal rate,
+      BigDecimal amount,
+      String remark,
+      String sourceTable,
+      Long sourceId) {
+    CostRunCostItemDto dto = buildItem(code, name, baseAmount, rate, amount, remark);
+    dto.setSourceTable(sourceTable);
+    dto.setSourceId(sourceId);
+    return dto;
+  }
+
   private BigDecimal nullToZero(BigDecimal value) {
     return value == null ? BigDecimal.ZERO : value;
   }
@@ -2246,6 +2386,17 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       return null;
     }
     return value.trim();
+  }
+
+  private String firstText(String... values) {
+    if (values != null) {
+      for (String value : values) {
+        if (StringUtils.hasText(value)) {
+          return value.trim();
+        }
+      }
+    }
+    return null;
   }
 
   private String resolveCostSourceMaterialOrganizationCode(
@@ -2456,6 +2607,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     private final List<String> missingIndirectCodes = new ArrayList<>();
     private String directRemark;
     private String indirectRemark;
+    private String sourceTable;
+    private Long sourceId;
   }
 
   private static class CostSourceContext {
@@ -2470,6 +2623,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     private final String applicantOffice;
     private final String expenseProductCategory;
     private final ThreeExpenseMatchContext threeExpenseMatchContext;
+    private final EffectiveTechnicalDataInput effectiveTechnicalData;
 
     private CostSourceContext(Integer costYear, String businessUnitType) {
       this(costYear, businessUnitType, null);
@@ -2477,6 +2631,14 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
     private CostSourceContext(
         Integer costYear, String businessUnitType, String materialOrganizationCode) {
+      this(costYear, businessUnitType, materialOrganizationCode, null);
+    }
+
+    private CostSourceContext(
+        Integer costYear,
+        String businessUnitType,
+        String materialOrganizationCode,
+        EffectiveTechnicalDataInput effectiveTechnicalData) {
       this(
           costYear,
           businessUnitType,
@@ -2488,7 +2650,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
           null,
           null,
           null,
-          null);
+          null,
+          effectiveTechnicalData);
     }
 
     private CostSourceContext(
@@ -2502,7 +2665,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
         String applicantDept,
         String applicantOffice,
         String expenseProductCategory,
-        ThreeExpenseMatchContext threeExpenseMatchContext) {
+        ThreeExpenseMatchContext threeExpenseMatchContext,
+        EffectiveTechnicalDataInput effectiveTechnicalData) {
       this.costYear = costYear;
       this.businessUnitType = businessUnitType == null ? "" : businessUnitType;
       this.materialOrganizationCode =
@@ -2517,6 +2681,7 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       this.applicantOffice = applicantOffice;
       this.expenseProductCategory = expenseProductCategory;
       this.threeExpenseMatchContext = threeExpenseMatchContext;
+      this.effectiveTechnicalData = effectiveTechnicalData;
     }
   }
 

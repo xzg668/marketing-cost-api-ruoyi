@@ -32,7 +32,6 @@ import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
 import com.sanhua.marketingcost.service.QuoteCostRunWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
-import com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.io.IOException;
@@ -77,7 +76,6 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   private final PricePrepareReadinessService pricePrepareReadinessService;
   private final QuoteCostRunVersionNoGenerator versionNoGenerator;
   private final QuoteCuAdjustmentCalcService cuAdjustmentCalcService;
-  private final CollaborationCostingGate collaborationCostingGate;
   private final QuoteCostingWorkspaceService workspaceService;
   private final CostInputRevisionService inputRevisionService;
 
@@ -92,7 +90,6 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
       PricePrepareReadinessService pricePrepareReadinessService,
       QuoteCostRunVersionNoGenerator versionNoGenerator,
       QuoteCuAdjustmentCalcService cuAdjustmentCalcService,
-      CollaborationCostingGate collaborationCostingGate,
       QuoteCostingWorkspaceService workspaceService,
       CostInputRevisionService inputRevisionService) {
     this.oaFormMapper = oaFormMapper;
@@ -104,7 +101,6 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     this.pricePrepareReadinessService = pricePrepareReadinessService;
     this.versionNoGenerator = versionNoGenerator;
     this.cuAdjustmentCalcService = cuAdjustmentCalcService;
-    this.collaborationCostingGate = collaborationCostingGate;
     this.workspaceService = workspaceService;
     this.inputRevisionService = inputRevisionService;
   }
@@ -119,7 +115,6 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
       PricePrepareReadinessService pricePrepareReadinessService,
       QuoteCostRunVersionNoGenerator versionNoGenerator,
       QuoteCuAdjustmentCalcService cuAdjustmentCalcService,
-      CollaborationCostingGate collaborationCostingGate,
       QuoteCostingWorkspaceService workspaceService) {
     this(
         oaFormMapper,
@@ -131,7 +126,6 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
         pricePrepareReadinessService,
         versionNoGenerator,
         cuAdjustmentCalcService,
-        collaborationCostingGate,
         workspaceService,
         null);
   }
@@ -298,7 +292,6 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     markConfirmedCostRun(scope, version.getId(), now);
     markWorkspaceSuccess(
         workspace, version.getId(), inputFingerprint, sourceRevision, dataQuality, now);
-    collaborationCostingGate.complete(scope.oaFormItemId(), scope.form().getBusinessUnitType());
 
     version.setVersionNo(versionNo);
     version.setStatus(STATUS_SUCCESS);
@@ -416,7 +409,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     if (inputRevisionService == null) {
       return trimToNull(expectedSourceRevision);
     }
-    String current = inputRevisionService.currentRevision(scope.form(), scope.item());
+    String current = inputRevisionService.currentRevision(
+        scope.form(), scope.item(), scope.periodMonth());
     if (StringUtils.hasText(expectedSourceRevision)
         && !Objects.equals(expectedSourceRevision.trim(), current)) {
       throw new QuoteIngestException("核算期间上游业务输入已变化，本次结果已回滚，请重新发起核算");
@@ -835,6 +829,11 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     response.setFinanceBasePriceId(version.getFinanceBasePriceId());
     response.setStatus(version.getStatus());
     response.setSourceRevision(version.getSourceRevision());
+    response.setTechDataVersionId(version.getTechDataVersionId());
+    response.setTechDataVersionNo(version.getTechDataVersionNo());
+    response.setTechDataSource(version.getTechDataSource());
+    response.setTechDataInputJson(version.getTechDataInputJson());
+    response.setTechDataRetrievedAt(version.getTechDataRetrievedAt());
     response.setDataQualityStatus(version.getDataQualityStatus());
     response.setDataQualityWarningCount(version.getDataQualityWarningCount());
     response.setDataQualitySummary(version.getDataQualitySummary());

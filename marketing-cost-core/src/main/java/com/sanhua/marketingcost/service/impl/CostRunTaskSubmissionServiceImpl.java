@@ -36,7 +36,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -44,7 +44,6 @@ import org.springframework.util.StringUtils;
 @Service
 public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionService {
 
-  private static final int DEFAULT_MAX_RETRY_COUNT = 3;
   private static final char[] HEX = "0123456789abcdef".toCharArray();
 
   private final CostRunBatchMapper batchMapper;
@@ -56,7 +55,9 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
   private final CostingAlgorithmVersionProvider algorithmVersionProvider;
   private final CostInputRevisionService inputRevisionService;
 
-  @Autowired
+  @Value("${quote.electronic-drawing.retry-max-attempts:3}")
+  private int maxRetryCount = 3;
+
   public CostRunTaskSubmissionServiceImpl(
       CostRunBatchMapper batchMapper,
       CostRunTaskMapper taskMapper,
@@ -74,26 +75,6 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     this.versionMapper = versionMapper;
     this.algorithmVersionProvider = algorithmVersionProvider;
     this.inputRevisionService = inputRevisionService;
-  }
-
-  /** Kept for focused mapper unit tests that do not start a database-backed revision provider. */
-  CostRunTaskSubmissionServiceImpl(
-      CostRunBatchMapper batchMapper,
-      CostRunTaskMapper taskMapper,
-      OaFormMapper oaFormMapper,
-      OaFormItemMapper oaFormItemMapper,
-      QuoteCostingWorkspaceMapper workspaceMapper,
-      QuoteCostRunVersionMapper versionMapper,
-      CostingAlgorithmVersionProvider algorithmVersionProvider) {
-    this(
-        batchMapper,
-        taskMapper,
-        oaFormMapper,
-        oaFormItemMapper,
-        workspaceMapper,
-        versionMapper,
-        algorithmVersionProvider,
-        (form, item) -> null);
   }
 
   @Override
@@ -172,7 +153,8 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
         int inserted = insertTasks(tasks.tasks());
         if (inserted > 0) {
           batchMapper.syncActiveQuoteBatchCounts(
-              batch.getBatchNo(), valueOrOne(batch.getExecutionNo()), LocalDateTime.now());
+              batch.getBatchNo(), valueOrOne(batch.getExecutionNo()),
+              LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE));
         }
       } else {
         resetExistingQuoteBatchForRerun(batch, tasks);
@@ -300,7 +282,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
   }
 
   private void resetFailedBatchForRetry(String batchNo) {
-    LocalDateTime now = LocalDateTime.now();
+    LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     batchMapper.resetFailedBatchForRetry(batchNo, now);
     taskMapper.resetBatchTasksForRetry(batchNo, now);
   }
@@ -320,7 +302,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     if (calcObjectKeys.isEmpty()) {
       return;
     }
-    LocalDateTime now = LocalDateTime.now();
+    LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     int expectedExecutionNo = batch.getExecutionNo() == null ? 1 : batch.getExecutionNo();
     int expectedControlVersion = batch.getControlVersion() == null ? 0 : batch.getControlVersion();
     int nextExecutionNo = expectedExecutionNo + 1;
@@ -365,7 +347,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
       String createdBy,
       String createdName,
       String requestSnapshotJson) {
-    LocalDateTime now = LocalDateTime.now();
+    LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     CostRunBatch batch = new CostRunBatch();
     batch.setBatchNo(newBatchNo(scene));
     batch.setScene(scene.name());
@@ -403,7 +385,8 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     Map<Long, QuoteCostingWorkspace> workspaces = loadWorkspaces(itemIds, pricingMonth);
     Map<Long, QuoteCostRunVersion> versions = loadVersions(workspaces.values());
     Map<String, CostRunTask> tasksByKey = new LinkedHashMap<>();
-    Map<Long, String> sourceRevisions = inputRevisionService.currentRevisions(oaForm, items);
+    Map<Long, String> sourceRevisions =
+        inputRevisionService.currentRevisions(oaForm, items, pricingMonth);
     int skipped = 0;
     for (OaFormItem item : items == null ? List.<OaFormItem>of() : items) {
       CostRunTask task = buildQuoteTask(batch, oaForm, item);
@@ -418,11 +401,9 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
           workspace == null || workspace.getCurrentCostVersionId() == null
               ? null
               : versions.get(workspace.getCurrentCostVersionId());
-      boolean currentSuccess = sourceRevision == null
-          ? QuoteCurrentSuccessMatcher.matches(
-              oaForm.getOaNo(), item.getId(), pricingMonth, item, workspace, version,
-              algorithmVersionProvider.currentVersion())
-          : QuoteCurrentSuccessMatcher.matches(
+      // 没有完整输入修订时必须逐品校验，不能绕过修订检查复用旧结果。
+      boolean currentSuccess = StringUtils.hasText(sourceRevision)
+          && QuoteCurrentSuccessMatcher.matches(
               oaForm.getOaNo(), item.getId(), pricingMonth, item, workspace, version,
               algorithmVersionProvider.currentVersion(), sourceRevision);
       if (currentSuccess) {
@@ -561,7 +542,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
   }
 
   private CostRunTask baseTask(CostRunBatch batch) {
-    LocalDateTime now = LocalDateTime.now();
+    LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     CostRunTask task = new CostRunTask();
     task.setBatchNo(batch.getBatchNo());
     task.setExecutionNo(batch.getExecutionNo() == null ? 1 : batch.getExecutionNo());
@@ -574,7 +555,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     task.setStatus(CostRunTaskStatus.PENDING.name());
     task.setProgress(0);
     task.setRetryCount(0);
-    task.setMaxRetryCount(DEFAULT_MAX_RETRY_COUNT);
+    task.setMaxRetryCount(Math.max(1, maxRetryCount));
     task.setCreatedAt(now);
     task.setUpdatedAt(now);
     return task;

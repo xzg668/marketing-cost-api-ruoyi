@@ -1,10 +1,13 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunObjectResult;
 import com.sanhua.marketingcost.dto.CostRunResultDto;
+import com.sanhua.marketingcost.dto.EffectiveTechnicalDataInput;
 import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.financequote.FinancePricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest;
@@ -40,6 +43,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -59,7 +63,9 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
   private final CostRunResultWriter resultWriter;
   private final QuoteCuMaterialDiffService materialDiffService;
   private final QuoteCostPriceScenarioMapper scenarioMapper;
+  private final ObjectMapper objectMapper;
 
+  @Autowired
   public QuoteCuAdjustmentCalcServiceImpl(
       PricePrepareBatchMapper batchMapper,
       FinancePricePrepareService financePricePrepareService,
@@ -68,7 +74,8 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
       CostRunEngine costRunEngine,
       CostRunResultWriter resultWriter,
       QuoteCuMaterialDiffService materialDiffService,
-      QuoteCostPriceScenarioMapper scenarioMapper) {
+      QuoteCostPriceScenarioMapper scenarioMapper,
+      ObjectMapper objectMapper) {
     this.batchMapper = batchMapper;
     this.financePricePrepareService = financePricePrepareService;
     this.versionService = versionService;
@@ -77,6 +84,29 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     this.resultWriter = resultWriter;
     this.materialDiffService = materialDiffService;
     this.scenarioMapper = scenarioMapper;
+    this.objectMapper = objectMapper;
+  }
+
+  /** Focused unit-test constructor retained for tests that do not start Spring. */
+  QuoteCuAdjustmentCalcServiceImpl(
+      PricePrepareBatchMapper batchMapper,
+      FinancePricePrepareService financePricePrepareService,
+      QuoteCostRunVersionService versionService,
+      QuoteCostRunVersionMapper versionMapper,
+      CostRunEngine costRunEngine,
+      CostRunResultWriter resultWriter,
+      QuoteCuMaterialDiffService materialDiffService,
+      QuoteCostPriceScenarioMapper scenarioMapper) {
+    this(
+        batchMapper,
+        financePricePrepareService,
+        versionService,
+        versionMapper,
+        costRunEngine,
+        resultWriter,
+        materialDiffService,
+        scenarioMapper,
+        new ObjectMapper().findAndRegisterModules());
   }
 
   @Override
@@ -135,7 +165,8 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
         adjustment,
         finalQuoteAmount,
         size(costResult.getPartItems()),
-        size(costResult.getCostItems()));
+        size(costResult.getCostItems()),
+        costResult.getContext().getEffectiveTechnicalData());
 
     return new QuoteCuAdjustmentCalcResult(
         version,
@@ -522,7 +553,8 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
       BigDecimal adjustment,
       BigDecimal finalQuoteAmount,
       int partItemCount,
-      int costItemCount) {
+      int costItemCount,
+      EffectiveTechnicalDataInput technicalData) {
     LocalDateTime finishedAt = LocalDateTime.now();
     QuoteCostRunVersion patch = new QuoteCostRunVersion();
     patch.setId(version.getId());
@@ -534,6 +566,13 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     patch.setPartItemCount(partItemCount);
     patch.setCostItemCount(costItemCount);
     patch.setTrialFinishedAt(finishedAt);
+    if (technicalData != null) {
+      patch.setTechDataVersionId(technicalData.versionId());
+      patch.setTechDataVersionNo(technicalData.versionNo());
+      patch.setTechDataSource(technicalData.sourceType());
+      patch.setTechDataInputJson(technicalInputJson(technicalData));
+      patch.setTechDataRetrievedAt(technicalData.retrievedAt());
+    }
     if (versionMapper.updateById(patch) != 1) {
       throw new IllegalStateException("成本版本双场景汇总写入失败");
     }
@@ -545,6 +584,19 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     version.setPartItemCount(partItemCount);
     version.setCostItemCount(costItemCount);
     version.setTrialFinishedAt(finishedAt);
+    version.setTechDataVersionId(patch.getTechDataVersionId());
+    version.setTechDataVersionNo(patch.getTechDataVersionNo());
+    version.setTechDataSource(patch.getTechDataSource());
+    version.setTechDataInputJson(patch.getTechDataInputJson());
+    version.setTechDataRetrievedAt(patch.getTechDataRetrievedAt());
+  }
+
+  private String technicalInputJson(EffectiveTechnicalDataInput technicalData) {
+    try {
+      return objectMapper.writeValueAsString(technicalData);
+    } catch (JsonProcessingException exception) {
+      throw new IllegalStateException("成本技术资料输入快照序列化失败", exception);
+    }
   }
 
   private BigDecimal oaCuPrice(BigDecimal pricePerTon) {

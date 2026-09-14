@@ -15,7 +15,7 @@ public class CostRunBatchProgressSnapshot {
   private int successCount;
   private int failedCount;
   private int skippedCount;
-  private int collaborationCount;
+  private int waitingInputCount;
   private int skippedCurrentCount;
   private int runningCount;
   private int retryableCount;

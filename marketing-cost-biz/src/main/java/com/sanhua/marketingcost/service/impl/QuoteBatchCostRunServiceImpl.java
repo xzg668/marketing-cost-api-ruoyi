@@ -138,7 +138,7 @@ public class QuoteBatchCostRunServiceImpl implements QuoteBatchCostRunService {
         progress.getPendingCount() + progress.getRetryableCount());
     response.setRunningCount(progress.getRunningCount());
     response.setSuccessCount(progress.getSuccessCount());
-    response.setCollaborationCount(progress.getCollaborationCount());
+    response.setWaitingInputCount(progress.getWaitingInputCount());
     response.setFailedCount(failedCount);
     response.setSkippedCurrentCount(progress.getSkippedCurrentCount());
     response.setProgress(progress.getProgress());
@@ -153,10 +153,6 @@ public class QuoteBatchCostRunServiceImpl implements QuoteBatchCostRunService {
         Wrappers.lambdaQuery(CostRunBatch.class)
             .eq(CostRunBatch::getBatchNo, batchNo)
             .last("LIMIT 1"));
-  }
-
-  private int value(Integer number) {
-    return number == null ? 0 : number;
   }
 
   private OaForm loadForm(String oaNo) {

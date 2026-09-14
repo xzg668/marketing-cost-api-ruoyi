@@ -39,6 +39,12 @@ public class QuoteBomPreparationRecord {
   private Long reusedFromOaFormItemId;
   private String reuseType;
   private LocalDate reuseValidUntil;
+  private Integer electronicWorkflowVersion;
+  private String electronicWorkflowStage;
+  private Long electronicSourceVersionId;
+  private Long electronicAssigneeUserId;
+  private String electronicAssigneeName;
+  private String electronicCompositionFingerprint;
   private Integer activeFlag;
   private String errorMessage;
   private LocalDateTime createdAt;

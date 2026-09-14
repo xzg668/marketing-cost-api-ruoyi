@@ -33,6 +33,8 @@ public class CostRunContext {
   private String pricePrepareNo;
   /** 报价价格场景：OA_LOCKED / FINANCE_QUOTE_BASE；空值按 OA_LOCKED 兼容。 */
   private String priceScenarioType;
+  /** 当前报价产品/月份经审核生效的技术资料；为空时按既有 CMS/标准包装规则计算。 */
+  private EffectiveTechnicalDataInput effectiveTechnicalData;
   /**
    * 核算引擎内部进度回调。
    *

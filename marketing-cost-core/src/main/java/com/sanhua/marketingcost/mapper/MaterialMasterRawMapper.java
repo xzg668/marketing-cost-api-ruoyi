@@ -146,6 +146,34 @@ public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
       @Param("organizationCode") String organizationCode,
       @Param("limit") int limit);
 
+  /** 电子图库待处理页主动搜索；空关键字由服务层直接返回空集合，SQL 不允许跨字段预加载。 */
+  @Select({
+      "<script>",
+      "SELECT *",
+      "FROM lp_material_master_raw",
+      "WHERE active_flag = 1",
+      "  AND organization_code = #{organizationCode}",
+      "<if test='sourceType != null and sourceType != \"\"'>",
+      "  AND source_type = #{sourceType}",
+      "</if>",
+      "  AND",
+      "  <choose>",
+      "    <when test='searchType == \"DRAWING_NO\"'>drawing_no LIKE CONCAT('%', #{keyword}, '%')</when>",
+      "    <when test='searchType == \"MATERIAL_CODE\"'>material_code LIKE CONCAT('%', #{keyword}, '%')</when>",
+      "    <when test='searchType == \"MATERIAL_NAME\"'>material_name LIKE CONCAT('%', #{keyword}, '%')</when>",
+      "    <otherwise>1 = 0</otherwise>",
+      "  </choose>",
+      "ORDER BY material_code ASC",
+      "LIMIT #{limit}",
+      "</script>"
+  })
+  List<MaterialMasterRaw> selectElectronicDrawingOptions(
+      @Param("searchType") String searchType,
+      @Param("keyword") String keyword,
+      @Param("sourceType") String sourceType,
+      @Param("organizationCode") String organizationCode,
+      @Param("limit") int limit);
+
   /** 兼容旧调用入口已废弃；必须显式传 organizationCode。 */
   default List<MaterialMasterRaw> selectOptionsByLatestBatchKeyword(
       String keyword, String sourceType, int limit) {

@@ -46,7 +46,7 @@ import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContext;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
-import com.sanhua.marketingcost.service.collaboration.scan.U9MonthlySnapshotIdentity;
+import com.sanhua.marketingcost.service.quotebom.U9MonthlySnapshotIdentity;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeRequest;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeResolution;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeResolver;
@@ -502,8 +502,22 @@ public class QuoteEffectiveBomApplicationServiceImpl
     if (snapshot != null) {
       return snapshot;
     }
-    quoteBomStatusService.checkItemForCostRun(
+    var checked = quoteBomStatusService.checkItemForCostRun(
         context.oaNo(), context.oaFormItemId(), context.costPeriodMonth());
+    // 并发请求可能刚提交同月快照，普通 SELECT 仍受外层旧读视图影响。
+    // 只对本次检查返回的已知记录当前读，首次未建快照时不提前加间隙锁。
+    if (checked != null && checked.getSyncRecordId() != null
+        && List.of("SYNCED", "REUSED_CURRENT_MONTH", "MANUAL_ENTERED").contains(checked.getBomStatus())) {
+      QuoteBomMonthlySnapshot current =
+          monthlySnapshotMapper.selectCurrentById(checked.getSyncRecordId());
+      if (current != null && "SUCCESS".equals(current.getSyncStatus())
+          && Objects.equals(current.getActiveFlag(), ACTIVE)
+          && Objects.equals(current.getProductCode(), context.topProductCode())
+          && Objects.equals(current.getCostPeriodMonth(), context.costPeriodMonth())
+          && Objects.equals(current.getPriceOrgCode(), context.organization().priceOrgCode())) {
+        return current;
+      }
+    }
     return findMonthlySnapshot(context);
   }
 
@@ -514,10 +528,13 @@ public class QuoteEffectiveBomApplicationServiceImpl
       return new RawSnapshot(
           List.of(), null, List.of("月度卡片缺少原始BOM来源批次"), List.of());
     }
-    LocalDate asOfDate =
-        snapshot.getSyncAt() == null
-            ? YearMonth.parse(context.costPeriodMonth()).atDay(1)
-            : snapshot.getSyncAt().toLocalDate();
+    LocalDate periodStart = YearMonth.parse(context.costPeriodMonth()).atDay(1);
+    LocalDate synchronizedDate =
+        snapshot.getSyncAt() == null ? null : snapshot.getSyncAt().toLocalDate();
+    // 数据库时区可能落后于上海业务时区：上海已进入新核算月时，DB NOW() 仍可能是上月。
+    // 月度卡片读取口径不能早于核算月首日，否则会误过滤本月首日生效的电子图库 BOM。
+    LocalDate asOfDate = synchronizedDate == null || synchronizedDate.isBefore(periodStart)
+        ? periodStart : synchronizedDate;
     List<BomRawHierarchy> candidates =
         rawHierarchyMapper.selectList(
             Wrappers.<BomRawHierarchy>lambdaQuery()

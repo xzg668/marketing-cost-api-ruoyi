@@ -42,6 +42,9 @@ public class QuoteBomSupplementDetail {
   private Integer sortSeq;
   private Long sourceRawHierarchyId;
   private Long sourceU9BomId;
+  private String nodeSourceType;
+  private Long sourceElectronicNodeId;
+  private String mappingStatus;
   private Integer manualFlag;
   private String remark;
   private LocalDateTime createdAt;

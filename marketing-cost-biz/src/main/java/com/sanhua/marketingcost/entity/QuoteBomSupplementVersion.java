@@ -22,6 +22,15 @@ public class QuoteBomSupplementVersion {
   private String productType;
   private String supplementScope;
   private String bomSource;
+  private String electronicDrawingNo;
+  private String sourceFileName;
+  private String sourceFileSha256;
+  private Long sourceFileSize;
+  private String sourceSheetName;
+  private LocalDateTime sourceAcquiredAt;
+  private String sourceRequestId;
+  private String materialOrgCode;
+  private String compositionFingerprint;
   private Integer versionNo;
   private String versionStatus;
   private Integer activeFlag;

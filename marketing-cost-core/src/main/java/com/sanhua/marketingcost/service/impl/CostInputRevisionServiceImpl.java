@@ -3,6 +3,8 @@ package com.sanhua.marketingcost.service.impl;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.service.CostInputRevisionService;
+import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
+import com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -10,6 +12,8 @@ import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -37,27 +41,55 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
       "lp_cost_business_rule");
 
   private final JdbcTemplate jdbcTemplate;
+  private final EffectiveTechnicalDataQueryService effectiveTechnicalDataQueryService;
+
+  @Autowired
+  public CostInputRevisionServiceImpl(
+      JdbcTemplate jdbcTemplate,
+      ObjectProvider<EffectiveTechnicalDataQueryService> technicalDataProvider) {
+    this.jdbcTemplate = jdbcTemplate;
+    this.effectiveTechnicalDataQueryService = technicalDataProvider.getIfAvailable();
+  }
 
   public CostInputRevisionServiceImpl(JdbcTemplate jdbcTemplate) {
     this.jdbcTemplate = jdbcTemplate;
+    this.effectiveTechnicalDataQueryService = null;
   }
 
   @Override
   public String currentRevision(OaForm form, OaFormItem item) {
+    return currentRevision(form, item, form == null ? null : form.getAccountingPeriodMonth());
+  }
+
+  @Override
+  public String currentRevision(OaForm form, OaFormItem item, String pricingMonth) {
     if (form == null || item == null) {
       throw new IllegalArgumentException("报价表头和产品行不能为空");
     }
-    return scopedRevision(sourceRevision(), form, item);
+    return scopedRevision(
+        sourceRevision(), form, item, effectiveTechnicalFingerprint(item, pricingMonth));
   }
 
   @Override
   public Map<Long, String> currentRevisions(OaForm form, List<OaFormItem> items) {
+    return currentRevisions(
+        form, items, form == null ? null : form.getAccountingPeriodMonth());
+  }
+
+  @Override
+  public Map<Long, String> currentRevisions(
+      OaForm form, List<OaFormItem> items, String pricingMonth) {
     String sourceRevision = sourceRevision();
     Map<Long, String> revisions = new LinkedHashMap<>();
     if (items != null) {
       for (OaFormItem item : items) {
         if (item != null && item.getId() != null) {
-          revisions.put(item.getId(), scopedRevision(sourceRevision, form, item));
+          try {
+            revisions.put(item.getId(), scopedRevision(
+                sourceRevision, form, item, effectiveTechnicalFingerprint(item, pricingMonth)));
+          } catch (EffectiveTechnicalDataException missing) {
+            // 不复用该产品的旧成功；worker 逐品执行时记录明确的技术资料缺口。
+          }
         }
       }
     }
@@ -74,12 +106,29 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     return sha256(canonical.toString());
   }
 
-  private String scopedRevision(String sourceRevision, OaForm form, OaFormItem item) {
+  private String scopedRevision(
+      String sourceRevision,
+      OaForm form,
+      OaFormItem item,
+      String effectiveTechnicalFingerprint) {
     StringBuilder canonical = new StringBuilder(1024);
     append(canonical, "sources", sourceRevision);
+    append(canonical, "effectiveTechnicalData", effectiveTechnicalFingerprint);
     appendForm(canonical, form);
     appendItem(canonical, item);
     return sha256(canonical.toString());
+  }
+
+  private String effectiveTechnicalFingerprint(OaFormItem item, String pricingMonth) {
+    if (effectiveTechnicalDataQueryService == null
+        || item == null
+        || item.getId() == null
+        || pricingMonth == null
+        || pricingMonth.isBlank()) {
+      return "NO_EFFECTIVE_TECHNICAL_DATA";
+    }
+    return effectiveTechnicalDataQueryService.effectiveFingerprint(
+        item.getId(), pricingMonth.trim());
   }
 
   private Object valueIgnoreCase(Map<String, Object> row, String key) {

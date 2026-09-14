@@ -4,6 +4,8 @@ import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunObjectResult;
 import com.sanhua.marketingcost.service.CostRunEngine;
 import com.sanhua.marketingcost.service.CostRunObjectCalcService;
+import com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -11,14 +13,29 @@ import org.springframework.util.StringUtils;
 public class CostRunEngineImpl implements CostRunEngine {
 
   private final CostRunObjectCalcService costRunObjectCalcService;
+  private final EffectiveTechnicalDataQueryService effectiveTechnicalDataQueryService;
 
-  public CostRunEngineImpl(CostRunObjectCalcService costRunObjectCalcService) {
+  @Autowired
+  public CostRunEngineImpl(
+      CostRunObjectCalcService costRunObjectCalcService,
+      EffectiveTechnicalDataQueryService effectiveTechnicalDataQueryService) {
     this.costRunObjectCalcService = costRunObjectCalcService;
+    this.effectiveTechnicalDataQueryService = effectiveTechnicalDataQueryService;
+  }
+
+  /** Focused unit-test constructor for tests unrelated to technical-data selection. */
+  CostRunEngineImpl(CostRunObjectCalcService costRunObjectCalcService) {
+    this(costRunObjectCalcService, (itemId, month) -> null);
   }
 
   @Override
   public CostRunObjectResult run(CostRunContext context) {
     validate(context);
+    context.setEffectiveTechnicalData(
+        context.getOaFormItemId() == null || !StringUtils.hasText(context.getPricingMonth())
+            ? null
+            : effectiveTechnicalDataQueryService.resolve(
+                context.getOaFormItemId(), context.getPricingMonth().trim()));
     return costRunObjectCalcService.calculate(context);
   }
 

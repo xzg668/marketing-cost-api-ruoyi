@@ -19,50 +19,8 @@ public final class QuoteCurrentSuccessMatcher {
       OaFormItem item,
       QuoteCostingWorkspace workspace,
       QuoteCostRunVersion version,
-      String currentAlgorithmVersion) {
-    return matches(
-        oaNo,
-        oaFormItemId,
-        periodMonth,
-        item,
-        workspace,
-        version,
-        currentAlgorithmVersion,
-        null,
-        false);
-  }
-
-  public static boolean matches(
-      String oaNo,
-      Long oaFormItemId,
-      String periodMonth,
-      OaFormItem item,
-      QuoteCostingWorkspace workspace,
-      QuoteCostRunVersion version,
       String currentAlgorithmVersion,
       String currentSourceRevision) {
-    return matches(
-        oaNo,
-        oaFormItemId,
-        periodMonth,
-        item,
-        workspace,
-        version,
-        currentAlgorithmVersion,
-        currentSourceRevision,
-        true);
-  }
-
-  private static boolean matches(
-      String oaNo,
-      Long oaFormItemId,
-      String periodMonth,
-      OaFormItem item,
-      QuoteCostingWorkspace workspace,
-      QuoteCostRunVersion version,
-      String currentAlgorithmVersion,
-      String currentSourceRevision,
-      boolean requireSourceRevision) {
     if (workspace == null
         || item == null
         || version == null
@@ -75,12 +33,10 @@ public final class QuoteCurrentSuccessMatcher {
         || !QuoteCostRunStatus.isCurrentSuccess(version.getStatus())) {
       return false;
     }
-    if (requireSourceRevision
-        && (!StringUtils.hasText(currentSourceRevision)
-            || !Objects.equals(currentSourceRevision, version.getSourceRevision())
-            || !Objects.equals(currentSourceRevision, workspace.getSourceRevision())
-            || !Objects.equals(
-                currentSourceRevision, workspace.getLastSuccessSourceRevision()))) {
+    if (!StringUtils.hasText(currentSourceRevision)
+        || !Objects.equals(currentSourceRevision, version.getSourceRevision())
+        || !Objects.equals(currentSourceRevision, workspace.getSourceRevision())
+        || !Objects.equals(currentSourceRevision, workspace.getLastSuccessSourceRevision())) {
       return false;
     }
     // BOM、价格等业务输入不随程序修复而变化；必须额外比较算法版本，避免新算法上线后仍复用旧成本。

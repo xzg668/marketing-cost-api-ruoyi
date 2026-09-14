@@ -271,7 +271,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     snapshot.setCostItemId(cost.getId());
     snapshot.setCostCode(costCode);
     snapshot.setCostName(trimToNull(cost.getCostName()));
-    snapshot.setSourceType(costSourceType(costCode));
+    snapshot.setSourceType(costSourceType(cost));
     snapshot.setSourceBatchNo(trimToNull(cost.getSourceTable()));
     snapshot.setSourceRefId(cost.getSourceId());
     snapshot.setBaseAmount(cost.getBaseAmount());
@@ -279,7 +279,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     snapshot.setAmount(cost.getAmount());
     snapshot.setSummary(costSummary(cost));
     snapshot.setSourceSnapshotJson(json(costSourceSnapshot(cost)));
-    snapshot.setFormulaSnapshotJson(json(costFormula(costCode)));
+    snapshot.setFormulaSnapshotJson(json(costFormula(cost)));
     snapshot.setVariablesJson(json(costVariables(cost)));
     snapshot.setStepsJson(json(costSteps(cost, costCode)));
     if (costHasChildren(costCode)) {
@@ -376,6 +376,15 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
       return "CMS";
     }
     return "ROLLUP";
+  }
+
+  private String costSourceType(CostRunCostItem cost) {
+    if (cost != null
+        && StringUtils.hasText(cost.getSourceTable())
+        && cost.getSourceTable().trim().startsWith("lp_quote_tech_")) {
+      return "QUOTE_TECH_EFFECTIVE_VERSION";
+    }
+    return costSourceType(cost == null ? null : trimToNull(cost.getCostCode()));
   }
 
   private Map<String, Object> partSourceSnapshot(CostRunPartItem part, PricePrepareItem prepareItem) {
@@ -1456,24 +1465,32 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
         "amount", cost.getAmount(),
         "sourceTable", cost.getSourceTable(),
         "sourceId", cost.getSourceId(),
-        "sourceType", costSourceType(costCode),
+        "sourceType", costSourceType(cost),
         "sourceDescription", costSourceDescription(costCode),
         "category", cost.getCategory(),
         "remark", cost.getRemark());
   }
 
-  private Map<String, Object> costFormula(String costCode) {
+  private Map<String, Object> costFormula(CostRunCostItem cost) {
+    String costCode = trimToNull(cost == null ? null : cost.getCostCode());
+    boolean technical = "QUOTE_TECH_EFFECTIVE_VERSION".equals(costSourceType(cost));
     String formula;
     String display;
     if (COST_MATERIAL.equals(costCode)) {
       formula = "sum(part.amount) + sum(aux.amount) + departmentFees + packageAmount";
       display = "材料费 = 部品金额 + 辅料 + 部门经费 + 包装";
     } else if (COST_DIRECT_LABOR.equals(costCode)) {
-      formula = "cms.directLaborAmount";
-      display = "直接人工工资 = CMS直接人工有效来源金额";
+      formula = technical ? "sum(effectiveTechnicalSalary.directAmount)" : "cms.directLaborAmount";
+      display = technical
+          ? "直接人工工资 = 审核生效技术版本直接人工明细合计"
+          : "直接人工工资 = CMS直接人工有效来源金额";
     } else if (COST_INDIRECT_LABOR.equals(costCode)) {
-      formula = "cms.indirectLaborAmount";
-      display = "辅助人工工资 = CMS辅助人工有效来源金额";
+      formula = technical
+          ? "sum(effectiveTechnicalSalary.indirectAmount)"
+          : "cms.indirectLaborAmount";
+      display = technical
+          ? "辅助人工工资 = 审核生效技术版本辅助人工明细合计"
+          : "辅助人工工资 = CMS辅助人工有效来源金额";
     } else if (COST_LOSS.equals(costCode)) {
       formula = "baseAmount * rate";
       display = "净损失 = 损失基数 × 净损失率";
@@ -1531,7 +1548,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
   }
 
   private List<Map<String, Object>> costSteps(CostRunCostItem cost, String costCode) {
-    Map<String, Object> formula = costFormula(costCode);
+    Map<String, Object> formula = costFormula(cost);
     return List.of(mapOf(
         "step", costCode == null ? "COST_ITEM" : costCode,
         "formula", formula.get("formula"),

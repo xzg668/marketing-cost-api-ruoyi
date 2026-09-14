@@ -3,8 +3,6 @@ package com.sanhua.marketingcost.config;
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sanhua.marketingcost.security.CollaborationPortalGrantCodec;
-import com.sanhua.marketingcost.security.CollaborationSecurityFilter;
 import com.sanhua.marketingcost.security.JwtAuthenticationFilter;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,7 +34,7 @@ import java.util.List;
  * v1.3 改造：
  * <ul>
  *   <li>启用 {@link EnableMethodSecurity} 以支持 {@code @PreAuthorize("@ss.hasPermi(...)")} 方法级权限</li>
- *   <li>放行 {@code /collaborate/**} 静态门户路由；协作 API 使用请求头令牌认证</li>
+ *   <li>技术资料外部入口只接受一次性短票，不注册长期协作令牌认证链</li>
  * </ul>
  */
 @Configuration
@@ -57,14 +55,7 @@ public class SecurityConfig {
     }
 
     @Bean
-    public CollaborationPortalGrantCodec collaborationPortalGrantCodec() {
-        return new CollaborationPortalGrantCodec(objectMapper);
-    }
-
-    @Bean
-    public SecurityFilterChain securityFilterChain(
-            HttpSecurity http,
-            CollaborationSecurityFilter collaborationSecurityFilter) throws Exception {
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -74,13 +65,13 @@ public class SecurityConfig {
                         // T16：登录页下拉需要公开读取字典（如 biz_unit_type）
                         .requestMatchers(HttpMethod.GET, "/api/v1/system/dict-data/type/*").permitAll()
                         .requestMatchers("/health").permitAll()
-                        // 技术协作者走系统内受限认证链，注册 CollaborationSecurityFilter
-                        .requestMatchers("/collaborate/**").permitAll()
+                        .requestMatchers(HttpMethod.POST,
+                                "/api/v2/technical-data/access-tickets/exchange").permitAll()
+                        .requestMatchers(HttpMethod.POST,
+                                "/api/v2/technical-data/external/oa/task-callback").permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .anyRequest().authenticated()
                 )
-                // 外部协作门户令牌过滤器优先于 JWT 过滤器。
-                .addFilterBefore(collaborationSecurityFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((request, response, authException) -> {

@@ -16,7 +16,7 @@ public class QuoteBatchCostRunResponse {
   private int queuedCount;
   private int runningCount;
   private int successCount;
-  private int collaborationCount;
+  private int waitingInputCount;
   private int failedCount;
   private int skippedCurrentCount;
   private int progress;

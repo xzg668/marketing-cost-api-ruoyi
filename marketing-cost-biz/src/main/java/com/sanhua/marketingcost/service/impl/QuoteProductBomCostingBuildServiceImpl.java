@@ -34,6 +34,7 @@ import com.sanhua.marketingcost.service.settlement.BomSettlementRowBuildResult;
 import com.sanhua.marketingcost.service.settlement.BomSettlementSourceRef;
 import com.sanhua.marketingcost.service.settlement.BomSettlementSourceRefCandidate;
 import com.sanhua.marketingcost.service.settlement.BomSettlementSubRefCandidate;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -55,6 +56,7 @@ public class QuoteProductBomCostingBuildServiceImpl
   private static final String PREPARATION_READY = "READY";
   private static final String PRODUCT_TYPE_NON_BARE = "NON_BARE";
   private static final String SOURCE_EFFECTIVE_BOM = "EFFECTIVE_BOM";
+  private static final String SOURCE_ELECTRONIC_DRAWING = "E_DRAWING";
   private static final int ACTIVE = 1;
 
   private final BomSettlementRuleQueryService settlementRuleQueryService;
@@ -111,20 +113,19 @@ public class QuoteProductBomCostingBuildServiceImpl
     if (effectiveBomRepository == null) {
       throw new IllegalStateException("最终有效BOM仓储未配置");
     }
-    QuoteBomPreparationRecord record = loadActiveRecordByItem(oaFormItemId);
-    if (record == null) {
-      throw new QuoteIngestException("报价产品行尚未完成 BOM 准备");
-    }
-    requireBuildable(record);
     List<QuoteEffectiveBomNode> nodes =
         effectiveBomRepository.findNodesByBuildBatchId(buildBatchId);
     if (nodes == null || nodes.isEmpty()) {
       throw new QuoteIngestException("最终有效BOM不存在: " + buildBatchId);
     }
-    // 最终有效 BOM 是本次显式重算刚生成的权威输入。准备记录可能仍保存上一次
-    // 核算月份，必须以本次构建节点的月份为准，并在成功后回写准备记录。
+    // 准备记录按“产品 + 月份”隔离，不能按更新时间选中另一个月份后改写其月份。
     String periodMonth =
         requiredText(nodes.getFirst().getCostPeriodMonth(), "最终有效BOM核算月份");
+    QuoteBomPreparationRecord record = loadActiveRecordByItem(oaFormItemId, periodMonth);
+    if (record == null) {
+      throw new QuoteIngestException("报价产品行尚未完成 " + periodMonth + " 月份的 BOM 准备");
+    }
+    requireBuildable(record);
     validateEffectiveNodes(record, buildBatchId, periodMonth, nodes);
     List<PreparedLine> lines = effectiveLines(record, nodes);
     cleanupExisting(record, periodMonth);
@@ -232,7 +233,8 @@ public class QuoteProductBomCostingBuildServiceImpl
               raw == null ? null : raw.getSourceU9RowId(),
               node.getSourceNodePath(),
               node.getPriceOrgCode(),
-              materialOrganizationForPriceOrg(node.getPriceOrgCode(), node.getMaterialCode())));
+              materialOrganizationForPriceOrg(node.getPriceOrgCode(), node.getMaterialCode()),
+              raw == null ? null : raw.getSourceType()));
     }
     return result;
   }
@@ -353,7 +355,12 @@ public class QuoteProductBomCostingBuildServiceImpl
             byproductRuleQueryService.listEnabledCandidates()));
 
     List<BomCostingRow> costingRows = stampRowsForQuoteItem(record, built.costingRows());
-    BomCostingRowAggregation.Result aggregatedRows = BomCostingRowAggregation.aggregate(costingRows);
+    boolean preserveElectronicDrawingOccurrences =
+        lines.stream()
+            .anyMatch(line -> SOURCE_ELECTRONIC_DRAWING.equals(line.sourceBomType()));
+    BomCostingRowAggregation.Result aggregatedRows = preserveElectronicDrawingOccurrences
+        ? BomCostingRowAggregation.preserveOccurrences(costingRows)
+        : BomCostingRowAggregation.aggregate(costingRows);
     Map<String, Long> costingRowIdByPath = new HashMap<>();
     int rowsWritten = writeBuiltRows(aggregatedRows.rows(), costingRowIdByPath);
     aliasCostingRowIds(aggregatedRows.pathAliases(), costingRowIdByPath);
@@ -579,10 +586,11 @@ public class QuoteProductBomCostingBuildServiceImpl
             .eq(BomCostingRow::getPeriodMonth, periodMonth));
   }
 
-  private QuoteBomPreparationRecord loadActiveRecordByItem(Long oaFormItemId) {
+  private QuoteBomPreparationRecord loadActiveRecordByItem(Long oaFormItemId, String periodMonth) {
     return preparationRecordMapper.selectOne(
         Wrappers.<QuoteBomPreparationRecord>lambdaQuery()
             .eq(QuoteBomPreparationRecord::getOaFormItemId, oaFormItemId)
+            .eq(QuoteBomPreparationRecord::getCostPeriodMonth, periodMonth)
             .eq(QuoteBomPreparationRecord::getActiveFlag, ACTIVE)
             .orderByDesc(QuoteBomPreparationRecord::getUpdatedAt)
             .orderByDesc(QuoteBomPreparationRecord::getId)
@@ -592,15 +600,15 @@ public class QuoteProductBomCostingBuildServiceImpl
   private void updateBuildBatch(
       QuoteBomPreparationRecord record, String buildBatchId, String periodMonth) {
     record.setCostingBuildBatchId(buildBatchId);
-    record.setCostPeriodMonth(periodMonth);
-    record.setUpdatedAt(LocalDateTime.now());
+    record.setUpdatedAt(LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE));
     preparationRecordMapper.updateById(record);
     if (record.getQuoteBomStatusId() != null) {
       QuoteBomStatus status = statusMapper.selectById(record.getQuoteBomStatusId());
       if (status != null) {
+        status.setPreparationRecordId(record.getId());
         status.setCostingBuildBatchId(buildBatchId);
         status.setCostPeriodMonth(periodMonth);
-        status.setUpdatedAt(LocalDateTime.now());
+        status.setUpdatedAt(LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE));
         statusMapper.updateById(status);
       }
     }
@@ -697,7 +705,8 @@ public class QuoteProductBomCostingBuildServiceImpl
       Long sourceU9BomId,
       String sourcePath,
       String priceOrgCode,
-      String materialOrganizationCode) {}
+      String materialOrganizationCode,
+      String sourceBomType) {}
 
   private record DirectBuildResult(
       String buildBatchId,

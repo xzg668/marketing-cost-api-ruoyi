@@ -6,7 +6,7 @@ import org.springframework.stereotype.Component;
 /** 未配置电子图库时明确失败，不读取本地草稿冒充正式回取结果。 */
 @Component
 @ConditionalOnProperty(
-    prefix = "quote.collaboration.electronic-drawing",
+    prefix = "quote.electronic-drawing",
     name = "mode",
     havingValue = "DISABLED",
     matchIfMissing = true)

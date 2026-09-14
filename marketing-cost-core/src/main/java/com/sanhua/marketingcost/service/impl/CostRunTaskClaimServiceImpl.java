@@ -5,6 +5,7 @@ import com.sanhua.marketingcost.enums.CostRunTaskScene;
 import com.sanhua.marketingcost.enums.CostRunTaskStatus;
 import com.sanhua.marketingcost.mapper.CostRunTaskMapper;
 import com.sanhua.marketingcost.service.CostRunTaskClaimService;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -13,6 +14,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.springframework.beans.factory.annotation.Value;
 
 @Service
 public class CostRunTaskClaimServiceImpl implements CostRunTaskClaimService {
@@ -23,6 +25,9 @@ public class CostRunTaskClaimServiceImpl implements CostRunTaskClaimService {
   private static final int ERROR_STACK_MAX_LENGTH = 4000;
 
   private final CostRunTaskMapper taskMapper;
+
+  @Value("${quote.electronic-drawing.retry-initial-backoff-ms:500}")
+  private long retryInitialBackoffMs = 500;
 
   public CostRunTaskClaimServiceImpl(CostRunTaskMapper taskMapper) {
     this.taskMapper = taskMapper;
@@ -36,10 +41,12 @@ public class CostRunTaskClaimServiceImpl implements CostRunTaskClaimService {
     int limit = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
     int timeoutMinutes =
         lockTimeoutMinutes > 0 ? lockTimeoutMinutes : DEFAULT_LOCK_TIMEOUT_MINUTES;
-    LocalDateTime now = LocalDateTime.now();
+    LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     LocalDateTime lockExpireTime = now.plusMinutes(timeoutMinutes);
 
-    List<CostRunTask> candidates = taskMapper.selectClaimCandidates(sceneCodes, now, limit);
+    long retryBackoffMicros = Math.max(1L, retryInitialBackoffMs) * 1_000L;
+    List<CostRunTask> candidates = taskMapper.selectClaimCandidates(
+        sceneCodes, now, limit, retryBackoffMicros);
     List<CostRunTask> claimed = new ArrayList<>(candidates.size());
     for (CostRunTask candidate : candidates) {
       if (candidate.getId() == null) {
@@ -78,22 +85,22 @@ public class CostRunTaskClaimServiceImpl implements CostRunTaskClaimService {
             costRunVersionId,
             StringUtils.hasText(costRunNo) ? costRunNo.trim() : null,
             resultSummaryJson,
-            LocalDateTime.now())
+            LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE))
         == 1;
   }
 
   @Override
-  public boolean markCollaboration(
+  public boolean markWaitingInput(
       Long taskId, String workerId, String resultSummaryJson, String message) {
     if (taskId == null || !StringUtils.hasText(workerId)) {
       return false;
     }
-    return taskMapper.markCollaboration(
+    return taskMapper.markWaitingInput(
             taskId,
             workerId.trim(),
             resultSummaryJson,
             truncate(message, ERROR_MESSAGE_MAX_LENGTH),
-            LocalDateTime.now())
+            LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE))
         == 1;
   }
 
@@ -107,7 +114,7 @@ public class CostRunTaskClaimServiceImpl implements CostRunTaskClaimService {
             workerId.trim(),
             truncate(errorMessage, ERROR_MESSAGE_MAX_LENGTH),
             truncate(errorStack, ERROR_STACK_MAX_LENGTH),
-            LocalDateTime.now())
+            LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE))
         == 1;
   }
 
@@ -121,7 +128,7 @@ public class CostRunTaskClaimServiceImpl implements CostRunTaskClaimService {
             workerId.trim(),
             truncate(errorMessage, ERROR_MESSAGE_MAX_LENGTH),
             truncate(errorStack, ERROR_STACK_MAX_LENGTH),
-            LocalDateTime.now())
+            LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE))
         == 1;
   }
 

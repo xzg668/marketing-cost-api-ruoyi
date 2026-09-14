@@ -18,6 +18,8 @@ public class CostRunCostItemDto {
    * 默认 EXPENSE，新增见机表汇总行时显式设 BOM_BUCKET。
    */
   private String category;
+  private String sourceTable;
+  private Long sourceId;
 
   public Long getId() {
     return id;
@@ -81,5 +83,21 @@ public class CostRunCostItemDto {
 
   public void setCategory(String category) {
     this.category = category;
+  }
+
+  public String getSourceTable() {
+    return sourceTable;
+  }
+
+  public void setSourceTable(String sourceTable) {
+    this.sourceTable = sourceTable;
+  }
+
+  public Long getSourceId() {
+    return sourceId;
+  }
+
+  public void setSourceId(Long sourceId) {
+    this.sourceId = sourceId;
   }
 }

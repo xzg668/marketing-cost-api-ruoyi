@@ -10,6 +10,8 @@ import org.springframework.stereotype.Component;
 import javax.crypto.SecretKey;
 import java.util.Base64;
 import java.util.Date;
+import java.time.Instant;
+import java.util.UUID;
 
 /**
  * JWT 工具类。
@@ -59,6 +61,38 @@ public class JwtUtils {
         return builder.signWith(key).compact();
     }
 
+    public String generateTechnicalDataTicket(
+            String username, Long userId, Long taskId, String purpose, long ttlSeconds) {
+        Date now = new Date();
+        return Jwts.builder()
+                .subject(username)
+                .id(UUID.randomUUID().toString())
+                .issuedAt(now)
+                .expiration(Date.from(Instant.ofEpochMilli(now.getTime()).plusSeconds(ttlSeconds)))
+                .claim("tokenType", "TECHNICAL_DATA_ONE_TIME_TICKET")
+                .claim("technicalDataUserId", userId)
+                .claim("technicalDataTaskId", taskId)
+                .claim("technicalDataPurpose", purpose)
+                .signWith(key).compact();
+    }
+
+    public String generateTechnicalDataSessionToken(
+            String username, String businessUnitType, Long taskId, String purpose, long ttlSeconds) {
+        Date now = new Date();
+        var builder = Jwts.builder()
+                .subject(username)
+                .id(UUID.randomUUID().toString())
+                .issuedAt(now)
+                .expiration(Date.from(Instant.ofEpochMilli(now.getTime()).plusSeconds(ttlSeconds)))
+                .claim("tokenType", "TECHNICAL_DATA_SHORT_SESSION")
+                .claim("technicalDataTaskId", taskId)
+                .claim("technicalDataPurpose", purpose);
+        if (businessUnitType != null && !businessUnitType.isEmpty()) {
+            builder.claim(CLAIM_BUSINESS_UNIT_TYPE, businessUnitType);
+        }
+        return builder.signWith(key).compact();
+    }
+
     public String getUsernameFromToken(String token) {
         return parseClaims(token).getSubject();
     }
@@ -81,6 +115,49 @@ public class JwtUtils {
             return false;
         }
     }
+
+    public TechnicalDataTicketClaims parseTechnicalDataTicket(String token) {
+        Claims claims = parseClaims(token);
+        if (!"TECHNICAL_DATA_ONE_TIME_TICKET".equals(claims.get("tokenType", String.class))) {
+            throw new IllegalArgumentException("票据类型无效");
+        }
+        Number userId = claims.get("technicalDataUserId", Number.class);
+        Number taskId = claims.get("technicalDataTaskId", Number.class);
+        String purpose = claims.get("technicalDataPurpose", String.class);
+        if (userId == null || taskId == null || purpose == null || claims.getId() == null) {
+            throw new IllegalArgumentException("票据绑定信息不完整");
+        }
+        return new TechnicalDataTicketClaims(
+                claims.getId(), claims.getSubject(), userId.longValue(), taskId.longValue(),
+                purpose, claims.getIssuedAt().toInstant(), claims.getExpiration().toInstant());
+    }
+
+    public boolean isTechnicalDataSession(String token) {
+        try {
+            return "TECHNICAL_DATA_SHORT_SESSION".equals(
+                    parseClaims(token).get("tokenType", String.class));
+        } catch (JwtException | IllegalArgumentException exception) {
+            return false;
+        }
+    }
+
+    public Long extractTechnicalDataTaskId(String token) {
+        Number value = parseClaims(token).get("technicalDataTaskId", Number.class);
+        return value == null ? null : value.longValue();
+    }
+
+    public String extractTechnicalDataPurpose(String token) {
+        return parseClaims(token).get("technicalDataPurpose", String.class);
+    }
+
+    public record TechnicalDataTicketClaims(
+            String nonce,
+            String username,
+            Long userId,
+            Long taskId,
+            String purpose,
+            Instant issuedAt,
+            Instant expiresAt) {}
 
     private Claims parseClaims(String token) {
         return Jwts.parser()

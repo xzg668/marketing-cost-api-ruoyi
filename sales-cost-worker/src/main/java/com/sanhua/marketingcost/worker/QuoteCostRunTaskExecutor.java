@@ -70,7 +70,7 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
           summary, result.getCostVersionId(), result.getCostRunNo());
     }
     if ("BLOCKED".equals(result.getPipelineStatus())) {
-      throw new CostRunTaskCollaborationRequiredException(
+      throw new CostRunTaskWaitingInputException(
           firstText(result.getMessage(), "产品核算资料存在缺口"), summary);
     }
     throw new CostRunTaskExecutionFailedException(

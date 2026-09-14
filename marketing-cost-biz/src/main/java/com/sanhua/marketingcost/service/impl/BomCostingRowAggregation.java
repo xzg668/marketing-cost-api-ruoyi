@@ -34,6 +34,28 @@ final class BomCostingRowAggregation {
     return new Result(new ArrayList<>(rowByKey.values()), pathAliases);
   }
 
+  /**
+   * 保留每个结构分支的计价行，只建立 path 到自身的引用映射。
+   *
+   * <p>电子图库见机表按部品分支展示，同一采购料号在不同部品下是不同的用量明细，
+   * 不能按料号折成一行；正式 U9 链路仍使用 {@link #aggregate(List)} 的原有口径。
+   */
+  static Result preserveOccurrences(List<BomCostingRow> rows) {
+    if (rows == null || rows.isEmpty()) {
+      return new Result(List.of(), Map.of());
+    }
+    List<BomCostingRow> preserved = new ArrayList<>();
+    Map<String, String> pathAliases = new LinkedHashMap<>();
+    for (BomCostingRow row : rows) {
+      if (row == null) {
+        continue;
+      }
+      preserved.add(row);
+      aliasPath(pathAliases, row.getPath(), row.getPath());
+    }
+    return new Result(preserved, pathAliases);
+  }
+
   static String resolvePath(Map<String, String> pathAliases, String path) {
     if (path == null || pathAliases == null || pathAliases.isEmpty()) {
       return path;

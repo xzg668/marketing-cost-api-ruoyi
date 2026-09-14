@@ -28,6 +28,7 @@ import com.sanhua.marketingcost.service.SupplementBomReadService;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContext;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -52,6 +53,8 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   static final String SCOPE_NON_BARE_FULL_BOM = "NON_BARE_FULL_BOM";
   static final String SCOPE_BARE_BODY_BOM = "BARE_BODY_BOM";
   static final String SCOPE_PACKAGE_REFERENCE = "PACKAGE_REFERENCE";
+  static final String SOURCE_ELECTRONIC_DRAWING_BOM = "ELECTRONIC_DRAWING_BOM";
+  static final String SOURCE_ELECTRONIC_DRAWING_EXCEL = "ELECTRONIC_DRAWING_EXCEL";
   static final int ACTIVE = 1;
 
   private final OaFormItemMapper oaFormItemMapper;
@@ -88,7 +91,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   @Override
   @Transactional
   public QuoteProductBomPreparationPreview prepareByOaFormItem(Long itemId) {
-    return prepareByOaFormItem(itemId, LocalDate.now());
+    return prepareByOaFormItem(itemId, CostPricingPeriodUtils.currentPricingDate());
   }
 
   @Override
@@ -190,10 +193,60 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
           List.of());
     }
 
+    SupplementBomReadResult electronicDrawing = approvedElectronicDrawingFullBom(
+        context.item().getId(), productCode, periodMonth);
+    if (electronicDrawing != null) {
+      return prepareElectronicDrawingFullBom(
+          context, typeResult, periodMonth, organization, electronicDrawing);
+    }
+
     if (typeResult.productType() == QuoteProductType.NON_BARE) {
       return prepareNonBare(context, typeResult, periodMonth, organization, resolveQuoteDate(quoteDate));
     }
     return prepareBare(context, typeResult, periodMonth, organization, resolveQuoteDate(quoteDate));
+  }
+
+  private SupplementBomReadResult approvedElectronicDrawingFullBom(
+      Long itemId, String productCode, String periodMonth) {
+    QuoteBomStatus status = quoteBomStatusMapper.selectOne(
+        Wrappers.<QuoteBomStatus>lambdaQuery()
+            .eq(QuoteBomStatus::getOaFormItemId, itemId)
+            .orderByDesc(QuoteBomStatus::getCheckedAt)
+            .orderByDesc(QuoteBomStatus::getId)
+            .last("LIMIT 1"));
+    if (status == null
+        || !SOURCE_ELECTRONIC_DRAWING_BOM.equalsIgnoreCase(trimToNull(status.getBomSource()))) {
+      return null;
+    }
+    SupplementBomReadResult result = supplementBomReadService.readApproved(
+        productCode, QuoteProductType.NON_BARE.getCode(),
+        SCOPE_NON_BARE_FULL_BOM, periodMonth);
+    return result != null && result.found()
+        && SOURCE_ELECTRONIC_DRAWING_EXCEL.equalsIgnoreCase(trimToNull(result.bomSource()))
+        ? result : null;
+  }
+
+  private QuoteProductBomPreparationPreview prepareElectronicDrawingFullBom(
+      QuoteContext context,
+      QuoteProductTypeResolveResult originalType,
+      String periodMonth,
+      QuoteDataOrganization organization,
+      SupplementBomReadResult supplement) {
+    QuoteProductTypeResolveResult effectiveType = new QuoteProductTypeResolveResult(
+        originalType.quoteProductCode(), QuoteProductType.NON_BARE,
+        originalType.mainCategoryCode(), originalType.shapeAttr(),
+        originalType.materialName(), originalType.materialSpec(), null);
+    QuoteBomStatus status = upsertStatus(
+        context, effectiveType.quoteProductCode(), periodMonth, effectiveType, null, null);
+    status.setBomStatus(QuoteBomStatusCode.REUSED_CURRENT_MONTH.getCode());
+    status.setBomSource(SOURCE_ELECTRONIC_DRAWING_BOM);
+    quoteBomStatusMapper.updateById(status);
+    QuoteBomPreparationRecord record = upsertPreparationRecord(
+        context, status, effectiveType, periodMonth, PREPARATION_READY,
+        false, null, null, REUSE_TYPE_MANUAL_BOM, supplement, organization, null);
+    return toPreview(
+        record, status, true, false, false, BODY_SOURCE_MANUAL, true,
+        supplement.lines(), null, false, List.of(), List.of(), List.of());
   }
 
   private QuoteProductBomPreparationPreview prepareNonBare(
@@ -448,7 +501,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     boolean inserting = status == null;
     if (status == null) {
       status = new QuoteBomStatus();
-      status.setCreatedAt(LocalDateTime.now());
+      status.setCreatedAt(LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE));
     }
     QuoteBomContext bomContext =
         quoteBomContextResolver.resolveWithExistingCostPeriod(
@@ -468,8 +521,8 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     status.setPackageMethod(bomContext.packageMethod());
     status.setTechnicianName(context.item().getTechnicianName());
     status.setReviewStatus(REVIEW_NOT_SUBMITTED);
-    status.setCheckedAt(LocalDateTime.now());
-    status.setUpdatedAt(LocalDateTime.now());
+    status.setCheckedAt(LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE));
+    status.setUpdatedAt(LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE));
     status.setErrorMessage(trimToNull(errorMessage));
     if (typeResult.productType() == QuoteProductType.DATA_MISSING
         || typeResult.productType() == QuoteProductType.UNKNOWN) {
@@ -527,7 +580,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     boolean inserting = record == null;
     if (record == null) {
       record = new QuoteBomPreparationRecord();
-      record.setCreatedAt(LocalDateTime.now());
+      record.setCreatedAt(LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE));
     }
     // 表上唯一键仍是 (oa_form_item_id, cost_period_month)。迁移前旧行的组织字段为空时，
     // 必须复用该行并补齐组织，不能按组织误判为新行后触发重复键。
@@ -554,7 +607,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
     record.setReuseType(trimToNull(reuseType));
     record.setErrorMessage(trimToNull(errorMessage));
     applyReuseSource(record, reuseSource);
-    record.setUpdatedAt(LocalDateTime.now());
+    record.setUpdatedAt(LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE));
     if (inserting) {
       preparationRecordMapper.insert(record);
     } else {
@@ -656,7 +709,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   }
 
   private LocalDate resolveQuoteDate(LocalDate quoteDate) {
-    return quoteDate == null ? LocalDate.now() : quoteDate;
+    return quoteDate == null ? CostPricingPeriodUtils.currentPricingDate() : quoteDate;
   }
 
   private List<String> compact(String... values) {
