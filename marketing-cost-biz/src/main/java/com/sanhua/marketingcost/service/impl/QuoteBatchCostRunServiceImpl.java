@@ -23,6 +23,9 @@ import org.springframework.util.StringUtils;
 @Service
 public class QuoteBatchCostRunServiceImpl implements QuoteBatchCostRunService {
 
+  private com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy oaWorkflowAccess;
+  @org.springframework.beans.factory.annotation.Autowired
+  public void setOaWorkflowAccess(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy policy) { this.oaWorkflowAccess=policy; }
   private final OaFormMapper oaFormMapper;
   private final CostRunBatchMapper batchMapper;
   private final CostRunTaskMapper taskMapper;
@@ -55,6 +58,7 @@ public class QuoteBatchCostRunServiceImpl implements QuoteBatchCostRunService {
       throw new IllegalArgumentException("整单核算仅支持 ALL 模式");
     }
     String periodMonth = currentMonth(request == null ? null : request.getPeriodMonth());
+    oaWorkflowAccess.requireCosting(normalizedOaNo);
     repriceLockGuard.assertCostRunAllowed(normalizedOaNo);
     CostRunTaskSubmissionResult submitted =
         submissionService.submitQuote(normalizedOaNo, null, periodMonth, submittedBy);

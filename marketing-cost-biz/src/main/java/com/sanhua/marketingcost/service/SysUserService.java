@@ -11,6 +11,9 @@ import java.util.Set;
 public interface SysUserService {
     SysUser findByUsername(String username);
 
+    /** 身份校验按稳定账号 ID 查询；调用方仍须检查停用、删除状态和业务权限。 */
+    SysUser findIdentityById(Long userId);
+
     List<SysRole> findRolesByUserId(Long userId);
 
     Set<String> findPermissionsByUserId(Long userId);

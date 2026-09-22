@@ -27,5 +27,13 @@ public record PriceTypeRoute(
     /* 数据来源系统（srm/oa/u9/cms/manual），用于日志追溯 */
     String sourceSystem,
     /* 路由表原始价格类型文案；FIXED 桶用它区分固定采购价和结算固定价 */
-    String rawPriceType) {
+    String rawPriceType,
+    String sourceKind,
+    Long sourceRecordId) {
+  public PriceTypeRoute(String materialCode, MaterialFormAttrEnum formAttr, PriceTypeEnum priceType,
+      Integer priority, LocalDate effectiveFrom, LocalDate effectiveTo, String sourceSystem, String rawPriceType) {
+    this(materialCode, formAttr, priceType, priority, effectiveFrom, effectiveTo, sourceSystem, rawPriceType, "PUBLIC", null);
+  }
+
+  public boolean supplemental() { return "TECH_SUPPLEMENTAL".equals(sourceKind); }
 }

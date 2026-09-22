@@ -15,6 +15,7 @@ import lombok.Setter;
 @TableName("lp_quote_tech_data_version")
 public class QuoteTechDataVersion {
   public static final String STATUS_DRAFT = "DRAFT";
+  public static final String STATUS_FROZEN = "FROZEN";
   public static final String STATUS_SUBMITTED = "SUBMITTED";
   public static final String STATUS_RETURNED = "RETURNED";
   public static final String STATUS_APPROVED = "APPROVED";
@@ -29,6 +30,16 @@ public class QuoteTechDataVersion {
   private String productModel;
   private String productProperty;
   private Integer newProductFlag;
+  /** 1 为旧四模块实际内容；2 为九模块内容，不补造旧历史字段。 */
+  private Integer contentSchemaVersion;
+  private String productFeesJson;
+  private String drawingBomJson;
+  private String manufacturingJson;
+  private String packagingJson;
+  private String solderItemsJson;
+  private String netLossJson;
+  private String priceItemsJson;
+  private String sourceFactsJson;
   private BigDecimal packageTotalAmount;
   private BigDecimal auxiliaryTotalAmount;
   private BigDecimal salaryTotalAmount;

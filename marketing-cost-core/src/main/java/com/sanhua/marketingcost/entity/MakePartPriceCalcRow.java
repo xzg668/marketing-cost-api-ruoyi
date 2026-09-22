@@ -25,6 +25,11 @@ public class MakePartPriceCalcRow {
   private Long id;
 
   private String calcBatchId;
+  private Long sourceCostingRowId;
+  private Long rawSourcePriceRecordId;
+  private String rawSourcePriceBatchNo;
+  private Long scrapSourcePriceRecordId;
+  private String scrapSourcePriceBatchNo;
   private String oaNo;
 
   @TableField(fill = FieldFill.INSERT)

@@ -18,6 +18,7 @@ import com.sanhua.marketingcost.service.ingest.QuoteBomContext;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.util.List;
 import java.util.Objects;
 import org.springframework.stereotype.Component;
@@ -56,8 +57,8 @@ public class QuoteBomElectronicDrawingContextAdapter
 
   @Override
   public ElectronicDrawingWorkContext load(
-      Long workflowId, String businessUnitType, String applicableOrgCode) {
-    Scope scope = scope(workflowId);
+      Long workflowId, String businessUnitType, String applicableOrgCode, String accountingMonth) {
+    Scope scope = scope(workflowId, requiredMonth(accountingMonth));
     requireSame(businessUnitType, scope.businessUnit(), "电子图库业务单元不一致");
     requireSame(applicableOrgCode, scope.context().organization().priceOrgCode(),
         "电子图库适用组织不一致");
@@ -65,8 +66,8 @@ public class QuoteBomElectronicDrawingContextAdapter
   }
 
   @Override
-  public ElectronicDrawingWorkContext loadForCurrentBusinessUnit(Long workflowId) {
-    Scope scope = scope(workflowId);
+  public ElectronicDrawingWorkContext loadForCurrentBusinessUnit(Long workflowId, String accountingMonth) {
+    Scope scope = scope(workflowId, StringUtils.hasText(accountingMonth) ? requiredMonth(accountingMonth) : null);
     String current = BusinessUnitContext.getCurrentBusinessUnitType();
     if (StringUtils.hasText(current)) {
       requireSame(current, scope.businessUnit(), "当前用户无权访问该电子图库报价产品");
@@ -83,14 +84,16 @@ public class QuoteBomElectronicDrawingContextAdapter
       String assigneeName,
       LocalDateTime updatedAt) {
     QuoteBomPreparationRecord row = preparationMapper.selectById(preparationId);
-    if (row == null || !Objects.equals(row.getOaFormItemId(), context.workflowId())) {
+    if (row == null || !Objects.equals(row.getOaFormItemId(), context.workflowId())
+        || !Objects.equals(row.getCostPeriodMonth(), context.accountingMonth())
+        || !Objects.equals(row.getActiveFlag(), 1)) {
       throw conflict();
     }
     if (preparationMapper.updateElectronicStage(
         row.getId(), version(row), stage, assigneeUserId, assigneeName, updatedAt) != 1) {
       throw conflict();
     }
-    return load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode());
+    return load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
   }
 
   @Override
@@ -101,7 +104,7 @@ public class QuoteBomElectronicDrawingContextAdapter
         row.getId(), context.revision(), sourceVersionId, updatedAt) != 1) {
       throw conflict();
     }
-    return load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode());
+    return load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
   }
 
   @Override
@@ -116,7 +119,7 @@ public class QuoteBomElectronicDrawingContextAdapter
         row.getId(), context.revision(), sourceVersionId, updatedAt) != 1) {
       throw conflict();
     }
-    return load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode());
+    return load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
   }
 
   @Override
@@ -131,7 +134,7 @@ public class QuoteBomElectronicDrawingContextAdapter
         row.getId(), context.revision(), stage, assigneeUserId, assigneeName, updatedAt) != 1) {
       throw conflict();
     }
-    return load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode());
+    return load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
   }
 
   @Override
@@ -143,13 +146,13 @@ public class QuoteBomElectronicDrawingContextAdapter
     QuoteBomPreparationRecord row = requirePreparation(context);
     if ("PUBLISHED".equals(row.getElectronicWorkflowStage())
         && Objects.equals(row.getElectronicCompositionFingerprint(), compositionFingerprint)) {
-      return context(row, scope(context.workflowId()));
+      return context(row, scope(context.workflowId(), context.accountingMonth()));
     }
     if (preparationMapper.completeElectronicPublication(
         row.getId(), context.revision(), compositionFingerprint, updatedAt) != 1) {
       throw conflict();
     }
-    return load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode());
+    return load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
   }
 
   @Override
@@ -169,7 +172,8 @@ public class QuoteBomElectronicDrawingContextAdapter
     log.setChangedByName("系统");
     log.setChangedAt(LocalDateTime.now());
     log.setChangeSource("ELECTRONIC_DRAWING");
-    log.setIdempotencyKey(eventType + ":" + context.workflowId() + ":" + context.revision());
+    log.setIdempotencyKey(eventType + ":" + context.workflowId() + ":"
+        + context.accountingMonth() + ":" + context.revision());
     log.setCreatedAt(LocalDateTime.now());
     changeLogMapper.insert(log);
   }
@@ -208,7 +212,7 @@ public class QuoteBomElectronicDrawingContextAdapter
         preparation == null ? null : preparation.getElectronicAssigneeName(), fingerprint);
   }
 
-  private Scope scope(Long workflowId) {
+  private Scope scope(Long workflowId, String requestedMonth) {
     if (workflowId == null || workflowId <= 0) {
       throw new IllegalArgumentException("电子图库报价产品ID不能为空");
     }
@@ -220,19 +224,24 @@ public class QuoteBomElectronicDrawingContextAdapter
         Wrappers.<QuoteBomPreparationRecord>lambdaQuery()
             .eq(QuoteBomPreparationRecord::getOaFormItemId, item.getId())
             .eq(QuoteBomPreparationRecord::getActiveFlag, 1)
-            .orderByDesc(QuoteBomPreparationRecord::getId)
-            .last("LIMIT 1"));
+            .eq(requestedMonth != null, QuoteBomPreparationRecord::getCostPeriodMonth, requestedMonth)
+            .orderByDesc(QuoteBomPreparationRecord::getId));
+    if (requestedMonth == null && rows != null && rows.stream()
+        .map(QuoteBomPreparationRecord::getCostPeriodMonth).distinct().count() > 1) {
+      throw new IllegalArgumentException("该报价产品存在多个核算月份，请从对应月份进入电子图库物料确认");
+    }
     QuoteBomPreparationRecord preparation =
         rows == null || rows.isEmpty() ? null : rows.getFirst();
     QuoteBomStatus status = preparation == null
         ? statusMapper.selectOne(
             Wrappers.<QuoteBomStatus>lambdaQuery()
                 .eq(QuoteBomStatus::getOaFormItemId, item.getId())
+                .eq(requestedMonth != null, QuoteBomStatus::getCostPeriodMonth, requestedMonth)
                 .orderByDesc(QuoteBomStatus::getCheckedAt)
                 .orderByDesc(QuoteBomStatus::getId)
                 .last("LIMIT 1"))
         : null;
-    String periodMonth = preparation != null
+    String periodMonth = requestedMonth != null ? requestedMonth : preparation != null
         ? preparation.getCostPeriodMonth()
         : status == null ? null : status.getCostPeriodMonth();
     QuoteBomContext context = contextResolver.resolveWithExistingCostPeriod(
@@ -247,7 +256,12 @@ public class QuoteBomElectronicDrawingContextAdapter
   private QuoteBomSupplementVersion sourceVersion(QuoteBomPreparationRecord preparation) {
     if (preparation == null) return null;
     if (preparation.getElectronicSourceVersionId() != null) {
-      return versionMapper.selectById(preparation.getElectronicSourceVersionId());
+      QuoteBomSupplementVersion source = versionMapper.selectById(preparation.getElectronicSourceVersionId());
+      if (source == null || !Objects.equals(source.getPreparationId(), preparation.getId())
+          || !Objects.equals(source.getPeriodMonth(), preparation.getCostPeriodMonth())) {
+        throw new IllegalStateException("电子图库源版本与本产品核算月份不一致");
+      }
+      return source;
     }
     List<QuoteBomSupplementVersion> rows = versionMapper.selectList(
         Wrappers.<QuoteBomSupplementVersion>lambdaQuery()
@@ -264,6 +278,8 @@ public class QuoteBomElectronicDrawingContextAdapter
     if (context == null || context.preparationId() == null) throw conflict();
     QuoteBomPreparationRecord row = preparationMapper.selectById(context.preparationId());
     if (row == null || !Objects.equals(row.getOaFormItemId(), context.workflowId())
+        || !Objects.equals(row.getCostPeriodMonth(), context.accountingMonth())
+        || !Objects.equals(row.getActiveFlag(), 1)
         || !Objects.equals(version(row), context.revision())) {
       throw conflict();
     }
@@ -272,6 +288,17 @@ public class QuoteBomElectronicDrawingContextAdapter
 
   private static int version(QuoteBomPreparationRecord row) {
     return row.getElectronicWorkflowVersion() == null ? 0 : row.getElectronicWorkflowVersion();
+  }
+
+  private static String requiredMonth(String value) {
+    if (!StringUtils.hasText(value) || !value.trim().matches("\\d{4}-\\d{2}")) {
+      throw new IllegalArgumentException("电子图库核算月份必须为 YYYY-MM");
+    }
+    try {
+      return YearMonth.parse(value.trim()).toString();
+    } catch (java.time.format.DateTimeParseException exception) {
+      throw new IllegalArgumentException("电子图库核算月份无效");
+    }
   }
 
   private static String taskNo(OaForm form, OaFormItem item, String month) {

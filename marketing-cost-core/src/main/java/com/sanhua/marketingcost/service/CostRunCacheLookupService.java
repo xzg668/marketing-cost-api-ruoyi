@@ -6,6 +6,7 @@ import com.sanhua.marketingcost.entity.OtherExpenseRate;
 import com.sanhua.marketingcost.entity.ProductProperty;
 import com.sanhua.marketingcost.entity.ThreeExpenseDimensionMapping;
 import com.sanhua.marketingcost.entity.ThreeExpenseRate;
+import java.math.BigDecimal;
 import java.util.List;
 
 /**
@@ -49,4 +50,7 @@ public interface CostRunCacheLookupService {
 
   /** 按年度 + 业务单元 + 产品料号取产品属性，并按年度规则计算系数；无返 null。 */
   ProductProperty findProductProperty(String productCode, Integer propertyYear, String businessUnitType);
+
+  /** 已批准属性也使用同年度公共属性规则，不在补录中另定系数。 */
+  BigDecimal findProductPropertyCoefficient(String productAttr, Integer propertyYear, String businessUnitType);
 }

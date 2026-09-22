@@ -44,6 +44,8 @@ public class QuoteCostingWorkspace {
   private Long lastTaskId;
   private Integer lockVersion;
   private LocalDateTime lastCheckedAt;
+  private String technicalCheckJson;
+  private String technicalCheckFingerprint;
 
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;

@@ -870,6 +870,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     dto.setPartName(item.getPartName());
     dto.setPartDrawingNo(item.getPartDrawingNo());
     dto.setPartQty(item.getQty());
+    dto.setTechnicalModuleType(item.getTechnicalModuleType());
     dto.setMaterial(item.getMaterial());
     dto.setShapeAttr(item.getShapeAttr());
     dto.setPriceSource(item.getPriceSource());

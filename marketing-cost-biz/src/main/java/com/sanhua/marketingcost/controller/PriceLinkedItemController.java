@@ -131,7 +131,10 @@ public class PriceLinkedItemController {
       @RequestParam(value = "factorPriceConflictStrategy", required = false)
           String factorPriceConflictStrategy,
       @RequestParam(value = "previewFileSha256", required = false)
-          String previewFileSha256) {
+          String previewFileSha256,
+      @RequestParam(value="technicalVersionId",required=false) Long technicalVersionId,
+      @RequestParam(value="oaNo",required=false) String oaNo,
+      @RequestParam(value="oaFormItemId",required=false) Long oaFormItemId) {
     if (file == null || file.isEmpty()) {
       return CommonResult.error(
           GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "file is required");
@@ -147,13 +150,9 @@ public class PriceLinkedItemController {
                 effectiveStrategy,
                 formulaEffectiveDate,
                 factorPriceConflictStrategy,
-                previewFileSha256)));
+                previewFileSha256).withTechnicalContext(technicalContext(technicalVersionId,oaNo,oaFormItemId))));
       }
-      return CommonResult.success(
-          priceLinkedItemService.importExcel(
-              file.getInputStream(), pricingMonth, overwriteManual,
-              businessUnitType, file.getOriginalFilename(), effectiveStrategy,
-              formulaEffectiveDate, factorPriceConflictStrategy));
+      throw new IllegalStateException("联动价导入服务不可用");
     } catch (IllegalArgumentException e) {
       return CommonResult.error(
           GlobalErrorCodeConstants.BAD_REQUEST.getCode(), e.getMessage());
@@ -162,26 +161,6 @@ public class PriceLinkedItemController {
           GlobalErrorCodeConstants.BAD_REQUEST.getCode(),
           "读取上传文件失败: " + e.getMessage());
     }
-  }
-
-  /** 兼容现有直接调用；Spring HTTP 映射使用带 previewFileSha256 的重载。 */
-  public CommonResult<PriceItemImportResponse> importExcel(
-      MultipartFile file,
-      String pricingMonth,
-      String businessUnitType,
-      boolean overwriteManual,
-      String effectiveStrategy,
-      String formulaEffectiveDate,
-      String factorPriceConflictStrategy) {
-    return importExcel(
-        file,
-        pricingMonth,
-        businessUnitType,
-        overwriteManual,
-        effectiveStrategy,
-        formulaEffectiveDate,
-        factorPriceConflictStrategy,
-        null);
   }
 
   /** 类型2导入预检：只解析和计算，不写数据库。 */
@@ -196,7 +175,10 @@ public class PriceLinkedItemController {
       @RequestParam(value = "formulaEffectiveDate", required = false)
           String formulaEffectiveDate,
       @RequestParam(value = "factorPriceConflictStrategy", required = false)
-          String factorPriceConflictStrategy) {
+          String factorPriceConflictStrategy,
+      @RequestParam(value="technicalVersionId",required=false) Long technicalVersionId,
+      @RequestParam(value="oaNo",required=false) String oaNo,
+      @RequestParam(value="oaFormItemId",required=false) Long oaFormItemId) {
     if (file == null || file.isEmpty()) {
       return CommonResult.error(
           GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "file is required");
@@ -216,7 +198,7 @@ public class PriceLinkedItemController {
               effectiveStrategy,
               formulaEffectiveDate,
               factorPriceConflictStrategy,
-              null)));
+              null).withTechnicalContext(technicalContext(technicalVersionId,oaNo,oaFormItemId))));
     } catch (IllegalArgumentException exception) {
       return CommonResult.error(
           GlobalErrorCodeConstants.BAD_REQUEST.getCode(), exception.getMessage());
@@ -225,6 +207,12 @@ public class PriceLinkedItemController {
           GlobalErrorCodeConstants.BAD_REQUEST.getCode(),
           "读取上传文件失败: " + exception.getMessage());
     }
+  }
+
+  private com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportContext technicalContext(Long version,String oaNo,Long itemId) {
+    if(version==null && oaNo==null && itemId==null)return null;
+    if(version==null || oaNo==null || itemId==null)throw new IllegalArgumentException("补录导入必须同时提供报价单、产品行和技术审批版本");
+    return new com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportContext(oaNo,itemId,version);
   }
 
   private PriceLinkedImportCommand command(

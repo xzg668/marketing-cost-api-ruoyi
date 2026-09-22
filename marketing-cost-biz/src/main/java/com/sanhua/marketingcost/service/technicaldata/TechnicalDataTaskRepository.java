@@ -12,17 +12,22 @@ public interface TechnicalDataTaskRepository {
   QuoteTechTask upsertActiveTask(QuoteTechTask task);
 
   Optional<QuoteTechTask> lockActiveTask(
-      String oaNo, String accountingMonth, Long assigneeUserId);
+      Long oaFormItemId, String accountingMonth);
 
   Optional<QuoteTechTask> findTask(Long taskId);
 
+  int assignUnassignedTask(
+      Long taskId,
+      Integer expectedVersion,
+      Long assigneeUserId,
+      String assigneeName,
+      String sourceRequestId,
+      LocalDateTime dueAt,
+      Long actorId);
+
   QuoteTechProduct upsertActiveProduct(QuoteTechProduct product);
 
-  Optional<QuoteTechProduct> lockActiveProduct(Long oaFormItemId, String accountingMonth);
-
   List<QuoteTechProduct> findProducts(Long taskId);
-
-  List<QuoteTechProduct> lockActiveProducts(Long taskId);
 
   QuoteTechModule upsertModule(QuoteTechModule module);
 
@@ -40,26 +45,10 @@ public interface TechnicalDataTaskRepository {
 
   int deactivateProducts(Long taskId, LocalDateTime changedAt);
 
-  int deactivateTask(
-      Long taskId, String reason, Long actorId, LocalDateTime changedAt);
-
-  long countAccessible(
-      String accessMode,
-      Long userId,
-      String taskStatus,
-      String accountingMonth);
-
-  List<QuoteTechTask> findAccessiblePage(
-      String accessMode,
-      Long userId,
-      String taskStatus,
-      String accountingMonth,
-      int offset,
-      int size);
-
   long countAccessibleProducts(
       String accessMode,
       Long userId,
+      String businessUnitType,
       String taskStatus,
       String accountingMonth,
       String keyword);
@@ -67,6 +56,7 @@ public interface TechnicalDataTaskRepository {
   List<QuoteTechProduct> findAccessibleProductPage(
       String accessMode,
       Long userId,
+      String businessUnitType,
       String taskStatus,
       String accountingMonth,
       String keyword,

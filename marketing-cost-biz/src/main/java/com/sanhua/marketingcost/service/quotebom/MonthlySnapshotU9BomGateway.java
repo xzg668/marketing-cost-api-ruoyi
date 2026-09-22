@@ -10,7 +10,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-/** 同料号、同组织、同月只读取一次 U9，并冻结 AVAILABLE 或明确 NOT_FOUND。 */
+/** 已有可用 U9 BOM 按月复用；原来没有 BOM 时仍核实当前来源，避免挡住后来补齐的公共资料。 */
 @Component
 public class MonthlySnapshotU9BomGateway implements CurrentU9BomGateway {
 
@@ -45,8 +45,31 @@ public class MonthlySnapshotU9BomGateway implements CurrentU9BomGateway {
   public CurrentU9BomResult read(QuoteBomReadContext context) {
     U9MonthlySnapshotIdentity identity = U9MonthlySnapshotIdentity.from(context);
     QuoteBomMonthlySnapshot existing = mapper.selectU9MonthlyByIdentity(identity.identityKey());
-    if (existing != null) return restored(existing);
+    if (existing != null) {
+      if (!STATUS_NOT_FOUND.equals(existing.getSyncStatus())) return restored(existing);
+      return recheckMissing(context, identity, existing);
+    }
+    return createSnapshot(context, identity, null);
+  }
 
+  private CurrentU9BomResult recheckMissing(QuoteBomReadContext context,
+      U9MonthlySnapshotIdentity identity, QuoteBomMonthlySnapshot previous) {
+    CurrentU9BomResult live = liveGateway.readLive(context);
+    if (live == null) return CurrentU9BomResult.error("U9正式查询没有返回结果");
+    if (live.status() == CurrentU9BomResult.Status.NOT_FOUND) return restored(previous);
+    if (live.status() != CurrentU9BomResult.Status.AVAILABLE) return live;
+    // 当前读串行切换月度索引；旧的“无 BOM”证据保留，新可用结构另存快照。
+    var current = mapper.selectU9MonthlyByIdentityForUpdate(identity.identityKey());
+    if (current == null) throw new IllegalStateException("U9月度来源切换期间记录丢失，请重试");
+    if (!STATUS_NOT_FOUND.equals(current.getSyncStatus())) return restored(current);
+    if (mapper.retireMissingU9MonthlySnapshot(current.getId(), identity.identityKey(), LocalDateTime.now(clock)) != 1) {
+      throw new IllegalStateException("U9原缺失记录已变化，请重试");
+    }
+    return createSnapshot(context, identity, live);
+  }
+
+  private CurrentU9BomResult createSnapshot(QuoteBomReadContext context,
+      U9MonthlySnapshotIdentity identity, CurrentU9BomResult verified) {
     LocalDateTime now = LocalDateTime.now(clock);
     QuoteBomMonthlySnapshot claim = claim(identity, context, now);
     if (mapper.insertU9MonthlyClaim(claim) == 0) {
@@ -57,7 +80,7 @@ public class MonthlySnapshotU9BomGateway implements CurrentU9BomGateway {
           : restored(winner);
     }
 
-    CurrentU9BomResult live = liveGateway.readLive(context);
+    CurrentU9BomResult live = verified == null ? liveGateway.readLive(context) : verified;
     if (live == null) live = CurrentU9BomResult.error("U9正式查询没有返回结果");
     String resolvedStatus = switch (live.status()) {
       case AVAILABLE -> STATUS_SUCCESS;

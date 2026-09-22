@@ -54,6 +54,11 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
+  private com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy oaWorkflowAccess;
+  @org.springframework.beans.factory.annotation.Autowired
+  public void setOaWorkflowAccess(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy policy) {
+    this.oaWorkflowAccess = policy;
+  }
   private static final int DEFAULT_PAGE_NO = 1;
   private static final int DEFAULT_PAGE_SIZE = 20;
   private static final int MAX_PAGE_SIZE = 200;
@@ -253,6 +258,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     String bomAggregateStatus = aggregateBomStatus(items.size(), statuses);
 
     QuoteRequestDetailResponse response = toDetailHeader(form);
+    response.setOaWorkflow(oaWorkflowAccess.view(form.getId()));
     response.setCalcStatus(aggregateCalcStatus(items));
     response.setBomAggregateStatus(bomAggregateStatus);
     response.setCalculable(isCalculable(form, items.size(), bomAggregateStatus));
@@ -379,6 +385,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setConfirmedCostVersionId(item.getConfirmedCostVersionId());
     if (preparation != null && StringUtils.hasText(preparation.getElectronicWorkflowStage())) {
       response.setElectronicDrawingWorkflowId(item.getId());
+      response.setElectronicDrawingAccountingMonth(preparation.getCostPeriodMonth());
       response.setElectronicDrawingStage(preparation.getElectronicWorkflowStage());
     }
     response.setBomStatus(toBomStatusResponse(item, status));

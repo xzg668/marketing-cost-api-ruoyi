@@ -5,15 +5,14 @@ import java.time.LocalDateTime;
 /**
  * 电子图库编排与外层任务载体之间的单向端口。
  *
- * <p>实现可以暂时落在旧协作任务，也可以落在新的技术资料任务；电子图库核心不反向依赖任何任务实体、
- * Mapper、审核结果或报价关联表。
+ * <p>以报价产品行和核算月份定位共享 BOM 准备记录，来源、匹配及发布始终使用同一月份。
  */
 public interface ElectronicDrawingWorkflowContextPort {
 
   ElectronicDrawingWorkContext load(
-      Long workflowId, String businessUnitType, String applicableOrgCode);
+      Long workflowId, String businessUnitType, String applicableOrgCode, String accountingMonth);
 
-  ElectronicDrawingWorkContext loadForCurrentBusinessUnit(Long workflowId);
+  ElectronicDrawingWorkContext loadForCurrentBusinessUnit(Long workflowId, String accountingMonth);
 
   ElectronicDrawingWorkContext attachPreparation(
       ElectronicDrawingWorkContext context,

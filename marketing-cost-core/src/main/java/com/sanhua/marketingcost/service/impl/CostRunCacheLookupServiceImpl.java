@@ -183,17 +183,28 @@ public class CostRunCacheLookupServiceImpl implements CostRunCacheLookupService 
     if (property == null) {
       return null;
     }
-    ProductPropertyRule rule = productPropertyRuleMapper.selectOne(
-        Wrappers.lambdaQuery(ProductPropertyRule.class)
-            .eq(ProductPropertyRule::getBusinessUnitType, property.getBusinessUnitType())
-            .eq(ProductPropertyRule::getPropertyYear, property.getPropertyYear())
-            .eq(ProductPropertyRule::getProductAttr, property.getProductAttr())
-            .last("LIMIT 1"));
-    if (rule != null && rule.getUpliftRate() != null) {
-      property.setUpliftRate(rule.getUpliftRate());
-      property.setCoefficient(java.math.BigDecimal.ONE.add(rule.getUpliftRate()));
+    var coefficient = findProductPropertyCoefficient(property.getProductAttr(), property.getPropertyYear(), property.getBusinessUnitType());
+    if (coefficient != null) {
+      property.setUpliftRate(coefficient.subtract(java.math.BigDecimal.ONE));
+      property.setCoefficient(coefficient);
     }
     return property;
+  }
+
+  @Override
+  public java.math.BigDecimal findProductPropertyCoefficient(String productAttr, Integer propertyYear, String businessUnitType) {
+    if (!StringUtils.hasText(productAttr) || propertyYear == null || !StringUtils.hasText(businessUnitType)) return null;
+    ProductPropertyRule rule = productPropertyRuleMapper.selectOne(
+        Wrappers.lambdaQuery(ProductPropertyRule.class)
+            .eq(ProductPropertyRule::getBusinessUnitType, businessUnitType)
+            .eq(ProductPropertyRule::getPropertyYear, propertyYear)
+            .eq(ProductPropertyRule::getProductAttr, productAttr));
+    if (rule == null) return null;
+    var rate = rule.getUpliftRate();
+    if (rate == null || rate.signum() < 0 || rate.compareTo(java.math.BigDecimal.ONE) > 0) {
+      throw new IllegalArgumentException("产品属性上浮规则异常：" + productAttr + "／" + propertyYear);
+    }
+    return java.math.BigDecimal.ONE.add(rate);
   }
 
   private String trimToNull(String value) {

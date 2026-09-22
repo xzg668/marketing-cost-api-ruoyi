@@ -15,17 +15,22 @@ public class ElectronicDrawingCostingFallbackService {
   private static final Logger log =
       LoggerFactory.getLogger(ElectronicDrawingCostingFallbackService.class);
 
+  private final ElectronicDrawingPreparationSource preparation;
   private final QuoteBomContextResolver contextResolver;
   private final ElectronicDrawingWorkflowOrchestrator orchestrator;
 
   public ElectronicDrawingCostingFallbackService(
       QuoteBomContextResolver contextResolver,
-      ElectronicDrawingWorkflowOrchestrator orchestrator) {
+      ElectronicDrawingWorkflowOrchestrator orchestrator, ElectronicDrawingPreparationSource preparation) {
+    this.preparation = preparation;
     this.contextResolver = contextResolver;
     this.orchestrator = orchestrator;
   }
 
   public AttemptResult attempt(OaForm form, OaFormItem item, String periodMonth) {
+    if (form != null && item != null && preparation.prepareSharedDrawing(item.getId(), periodMonth)) {
+      return new AttemptResult(true, false, ElectronicDrawingWorkflowStage.COMPOSED, "沿用原产品已批准图库");
+    }
     if (form == null || item == null || !StringUtils.hasText(item.getCustomerDrawing())) {
       return AttemptResult.notAttempted();
     }
@@ -40,7 +45,7 @@ public class ElectronicDrawingCostingFallbackService {
           new ElectronicDrawingWorkflowOrchestrator.WorkflowCommand(
               item.getId(), item.getId(), businessUnit,
               context.organization().priceOrgCode(), item.getCustomerDrawing(),
-              null, "财务报价"));
+              null, "财务报价", context.costPeriodMonth()));
       return new AttemptResult(true, result.costingCanContinue(), result.stage(), result.message());
     } catch (ElectronicDrawingWorkflowRetryException exception) {
       log.warn("electronic drawing costing fallback will retry: oaNo={} itemId={}",

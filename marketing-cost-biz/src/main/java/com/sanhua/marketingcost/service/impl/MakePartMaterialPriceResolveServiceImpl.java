@@ -162,6 +162,7 @@ public class MakePartMaterialPriceResolveServiceImpl implements MakePartMaterial
             businessUnitType,
             scenarioContext);
 
+    context.setPriceCheckOnly(!persistLinkedPrice);
     List<String> traceParts = new ArrayList<>();
     String lastMissReason = null;
     boolean linkedPriceEnsured = false;
@@ -178,7 +179,7 @@ public class MakePartMaterialPriceResolveServiceImpl implements MakePartMaterial
         lastMissReason = "价格类型无 Resolver(price_type=" + priceTypeText + ")";
         continue;
       }
-      if (route.priceType() == PriceTypeEnum.LINKED && !linkedPriceEnsured) {
+      if (route.priceType() == PriceTypeEnum.LINKED && !route.supplemental() && !linkedPriceEnsured) {
         if (persistLinkedPrice) {
           lastMissReason = ensureLinkedPrice(
               code, period, oaNo, businessUnitType, context, scenarioContext);
@@ -193,24 +194,32 @@ public class MakePartMaterialPriceResolveServiceImpl implements MakePartMaterial
                 "联动价只读计算完成",
                 String.join(" -> ", traceParts));
           }
+          if (calculated != null && calculated.getFailureCode() != null) {
+            return MakePartMaterialPriceResolveResult.miss(code, "ERROR", calculated.getCalcMessage(), String.join(" -> ", traceParts));
+          }
           lastMissReason = calculated == null
               ? "联动价只读计算未返回结果(material_code=" + code + ")"
               : calculated.getCalcMessage();
         }
         linkedPriceEnsured = true;
       }
-      if (!persistLinkedPrice && route.priceType() == PriceTypeEnum.LINKED) {
+      if (!persistLinkedPrice && route.priceType() == PriceTypeEnum.LINKED && !route.supplemental()) {
         continue;
       }
       PriceResolveResult resolved =
           resolver.resolve(oaNo, item, route, context);
       if (resolved.unitPrice() != null) {
-        return MakePartMaterialPriceResolveResult.ok(
+        var result = MakePartMaterialPriceResolveResult.ok(
             code,
             priceTypeText,
             resolved.unitPrice(),
             resolved.remark(),
             String.join(" -> ", traceParts));
+        result.setEvidence(resolved.evidence());
+        return result;
+      }
+      if (resolved.failureCode() != null) {
+        return MakePartMaterialPriceResolveResult.miss(code, "ERROR", resolved.remark(), String.join(" -> ", traceParts));
       }
       if (StringUtils.hasText(resolved.remark())) {
         lastMissReason = resolved.remark();
@@ -319,6 +328,7 @@ public class MakePartMaterialPriceResolveServiceImpl implements MakePartMaterial
         resolvedPriceAsOfTime,
         null);
     context.setPriceScenarioType(scenarioType(scenarioContext).name());
+    context.setPriceVariableOverrides(scenarioContext == null ? Map.of() : scenarioContext.variableOverrides());
     return context;
   }
 

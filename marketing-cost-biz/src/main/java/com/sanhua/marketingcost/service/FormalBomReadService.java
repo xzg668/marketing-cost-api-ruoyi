@@ -11,6 +11,10 @@ public interface FormalBomReadService {
   /** 报价正式读取：应用报价维度的标准/替代选择，只返回唯一有效分支。 */
   FormalBomReadResult read(QuoteBomReadContext context);
 
+  /** 补录参考读取：使用标准分支，只读来源，不创建或修改任何报价的替代选择。 */
+  FormalBomReadResult readReference(String productCode, String periodMonth, String bomPurpose,
+      LocalDate quoteDate, QuoteDataOrganization organization);
+
   default FormalBomReadResult read(String productCode, String periodMonth, String bomPurpose) {
     throw new IllegalArgumentException("读取正式 BOM 必须显式传入报价组织和料品组织");
   }

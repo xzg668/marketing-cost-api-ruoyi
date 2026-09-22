@@ -71,6 +71,7 @@ public class QuoteProductBomCostingBuildServiceImpl
   private final OaFormItemMapper oaFormItemMapper;
   private final QuoteEffectiveBomRepository effectiveBomRepository;
   private final BomRawHierarchyMapper rawHierarchyMapper;
+  private final com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs manufacturingInputs;
 
   public QuoteProductBomCostingBuildServiceImpl(
       BomSettlementRuleQueryService settlementRuleQueryService,
@@ -84,7 +85,8 @@ public class QuoteProductBomCostingBuildServiceImpl
       BomCostingRowSubRefMapper subRefMapper,
       OaFormItemMapper oaFormItemMapper,
       QuoteEffectiveBomRepository effectiveBomRepository,
-      BomRawHierarchyMapper rawHierarchyMapper) {
+      BomRawHierarchyMapper rawHierarchyMapper,
+      com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs manufacturingInputs) {
     this.settlementRuleQueryService = settlementRuleQueryService;
     this.byproductRuleQueryService = byproductRuleQueryService;
     this.byproductSettlementAdapter = byproductSettlementAdapter;
@@ -97,6 +99,7 @@ public class QuoteProductBomCostingBuildServiceImpl
     this.oaFormItemMapper = oaFormItemMapper;
     this.effectiveBomRepository = effectiveBomRepository;
     this.rawHierarchyMapper = rawHierarchyMapper;
+    this.manufacturingInputs = manufacturingInputs;
   }
 
   @Override
@@ -125,7 +128,7 @@ public class QuoteProductBomCostingBuildServiceImpl
     if (record == null) {
       throw new QuoteIngestException("报价产品行尚未完成 " + periodMonth + " 月份的 BOM 准备");
     }
-    requireBuildable(record);
+    requireBuildable(record, nodes);
     validateEffectiveNodes(record, buildBatchId, periodMonth, nodes);
     List<PreparedLine> lines = effectiveLines(record, nodes);
     cleanupExisting(record, periodMonth);
@@ -204,7 +207,7 @@ public class QuoteProductBomCostingBuildServiceImpl
       QuoteEffectiveBomNode parent = nodeByKey.get(node.getParentNodeKey());
       result.add(
           new PreparedLine(
-              SOURCE_EFFECTIVE_BOM,
+              technicalModule(node) == null ? SOURCE_EFFECTIVE_BOM : node.getSourceBomType(),
               node.getSortSeq(),
               node.getNodeLevel(),
               parent == null ? null : parent.getMaterialCode(),
@@ -215,7 +218,7 @@ public class QuoteProductBomCostingBuildServiceImpl
               raw == null ? null : raw.getMaterialCategory1(),
               raw == null ? null : raw.getMaterialCategory2(),
               raw == null ? null : raw.getSourceCategory(),
-              raw == null ? null : raw.getCostElementCode(),
+              raw == null ? technicalCostElement(node) : raw.getCostElementCode(),
               raw == null ? null : raw.getBomPurpose(),
               raw == null ? null : raw.getBomVersion(),
               node.getQtyPerParent(),
@@ -234,9 +237,25 @@ public class QuoteProductBomCostingBuildServiceImpl
               node.getSourceNodePath(),
               node.getPriceOrgCode(),
               materialOrganizationForPriceOrg(node.getPriceOrgCode(), node.getMaterialCode()),
-              raw == null ? null : raw.getSourceType()));
+              raw == null ? node.getSourceBomType() : raw.getSourceType()));
     }
     return result;
+  }
+
+  private static String technicalModule(QuoteEffectiveBomNode node) {
+    return switch (java.util.Objects.toString(node.getSourceBomType(), "")) {
+      case "TECH_PACKAGE" -> "PACKAGE";
+      case "TECH_SOLDER" -> "SOLDER";
+      default -> null;
+    };
+  }
+
+  private static String technicalCostElement(QuoteEffectiveBomNode node) {
+    return switch (java.util.Objects.toString(technicalModule(node), "")) {
+      case "PACKAGE" -> "主要材料-包装材料";
+      case "SOLDER" -> "主要材料-焊料";
+      default -> null;
+    };
   }
 
   /**
@@ -338,6 +357,7 @@ public class QuoteProductBomCostingBuildServiceImpl
     BomByproductSettlementReadResult byproductRead =
         byproductSettlementAdapter.read(
             nodes, quoteDate, organization.priceOrgCode(), settlementScope, "主制造");
+    byproductRead = manufacturingInputs.byproducts(record.getOaFormItemId(), periodMonth, settlementScope, nodes, byproductRead);
     BomSettlementRowBuildResult built = buildEngine.build(
         new BomSettlementBuildRequest(
             record.getOaNo(),
@@ -545,8 +565,19 @@ public class QuoteProductBomCostingBuildServiceImpl
     return count;
   }
 
-  private void requireBuildable(QuoteBomPreparationRecord record) {
-    if (!PREPARATION_READY.equals(record.getPreparationStatus())) {
+  private void requireBuildable(QuoteBomPreparationRecord record, List<QuoteEffectiveBomNode> nodes) {
+    if (PREPARATION_READY.equals(record.getPreparationStatus())) return;
+    // 本产品已组树草稿可检查缺价；它仍未发布，正式成本会再核验审批和财务确认。
+    String draftPrefix = "ED_DRAFT:" + record.getElectronicSourceVersionId() + ":";
+    boolean composedDraft = record.getElectronicSourceVersionId() != null
+        && com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowStage.COMPOSED
+            .equals(record.getElectronicWorkflowStage())
+        && nodes.stream().anyMatch(node -> node.getSourceBomBatchId() != null
+            && node.getSourceBomBatchId().startsWith(draftPrefix))
+        && nodes.stream().allMatch(node -> node.getSourceBomBatchId() != null
+            && (node.getSourceBomBatchId().startsWith(draftPrefix)
+                || "TECH_PACKAGE".equals(node.getSourceBomType()) || "TECH_SOLDER".equals(node.getSourceBomType())));
+    if (!composedDraft) {
       throw new QuoteIngestException("BOM 准备结果尚未就绪，不能生成结算行");
     }
   }

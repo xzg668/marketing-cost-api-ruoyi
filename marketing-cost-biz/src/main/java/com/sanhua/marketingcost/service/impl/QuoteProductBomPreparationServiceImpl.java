@@ -97,8 +97,16 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   @Override
   @Transactional
   public QuoteProductBomPreparationPreview prepareByOaFormItem(Long itemId, LocalDate quoteDate) {
+    return prepareByOaFormItem(itemId, quoteDate, null);
+  }
+
+  @Override
+  @Transactional
+  public QuoteProductBomPreparationPreview prepareByOaFormItem(
+      Long itemId, LocalDate quoteDate, String accountingMonth) {
     QuoteContext context = loadContext(itemId);
-    QuoteBomContext bomContext = resolvePreparationBomContext(context);
+    QuoteBomContext bomContext = accountingMonth == null ? resolvePreparationBomContext(context)
+        : quoteBomContextResolver.resolveWithExistingCostPeriod(context.form(), context.item(), accountingMonth);
     String productCode = bomContext.productCode();
     String periodMonth = bomContext.costPeriodMonth();
     QuoteDataOrganization organization = bomContext.organization();

@@ -8,7 +8,6 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.annotations.Update;
 
 @Mapper
 public interface QuoteTechAuxItemMapper extends BaseMapper<QuoteTechAuxItem> {
@@ -63,33 +62,4 @@ public interface QuoteTechAuxItemMapper extends BaseMapper<QuoteTechAuxItem> {
       """)
   int deleteAllIfDraft(@Param("versionId") Long versionId);
 
-  @Update("""
-      UPDATE lp_quote_tech_aux_item item
-      INNER JOIN lp_quote_tech_data_version version ON version.id=item.version_id
-         SET item.line_no=#{item.lineNo}, item.sort_seq=#{item.sortSeq},
-             item.subject_code=#{item.subjectCode}, item.subject_name=#{item.subjectName},
-             item.auxiliary_material_no=#{item.auxiliaryMaterialNo},
-             item.auxiliary_name=#{item.auxiliaryName}, item.auxiliary_spec=#{item.auxiliarySpec},
-             item.pricing_method=#{item.pricingMethod},
-             item.quantity=#{item.quantity}, item.original_unit=#{item.originalUnit},
-             item.standard_quantity=#{item.standardQuantity}, item.standard_unit=#{item.standardUnit},
-             item.conversion_factor=#{item.conversionFactor},
-             item.reference_unit_price=#{item.referenceUnitPrice}, item.price_unit=#{item.priceUnit},
-             item.loss_rate=#{item.lossRate}, item.amount=#{item.amount},
-             item.source_reference_id=#{item.sourceReferenceId},
-             item.source_reference_version=#{item.sourceReferenceVersion},
-             item.source_snapshot_json=#{item.sourceSnapshotJson}, item.remark=#{item.remark},
-             item.updated_at=CURRENT_TIMESTAMP
-       WHERE item.id=#{item.id} AND item.version_id=#{item.versionId}
-         AND version.version_status='DRAFT'
-      """)
-  int updateIfDraft(@Param("item") QuoteTechAuxItem item);
-
-  @Delete("""
-      DELETE item FROM lp_quote_tech_aux_item item
-      INNER JOIN lp_quote_tech_data_version version ON version.id=item.version_id
-       WHERE item.id=#{itemId} AND item.version_id=#{versionId}
-         AND version.version_status='DRAFT'
-      """)
-  int deleteIfDraft(@Param("versionId") Long versionId, @Param("itemId") Long itemId);
 }

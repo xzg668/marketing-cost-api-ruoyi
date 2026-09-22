@@ -31,14 +31,17 @@ public class QuotePricePreparePartItemProviderImpl implements CostRunPreparedPar
   private final PricePrepareItemMapper pricePrepareItemMapper;
   private final BomCostingRowMapper bomCostingRowMapper;
   private final MaterialMasterMapper materialMasterMapper;
+  private final com.sanhua.marketingcost.mapper.BomCostingRowSourceRefMapper sourceRefs;
 
   public QuotePricePreparePartItemProviderImpl(
       PricePrepareItemMapper pricePrepareItemMapper,
       BomCostingRowMapper bomCostingRowMapper,
-      MaterialMasterMapper materialMasterMapper) {
+      MaterialMasterMapper materialMasterMapper,
+      com.sanhua.marketingcost.mapper.BomCostingRowSourceRefMapper sourceRefs) {
     this.pricePrepareItemMapper = pricePrepareItemMapper;
     this.bomCostingRowMapper = bomCostingRowMapper;
     this.materialMasterMapper = materialMasterMapper;
+    this.sourceRefs = sourceRefs;
   }
 
   @Override
@@ -74,7 +77,26 @@ public class QuotePricePreparePartItemProviderImpl implements CostRunPreparedPar
 
     Map<Long, BomCostingRow> bomRows = loadBomRows(items);
     Map<String, MaterialMaster> masters = loadMasters(items, bomRows);
-    return items.stream().map(item -> toPartDto(context, item, bomRows, masters)).toList();
+    var technicalModules = technicalModules(bomRows.keySet());
+    return items.stream().map(item -> {
+      var result = toPartDto(context, item, bomRows, masters);
+      result.setTechnicalModuleType(technicalModules.get(item.getBomRowId()));
+      return result;
+    }).toList();
+  }
+
+  private Map<Long, String> technicalModules(Set<Long> rowIds) {
+    if (rowIds.isEmpty()) return Map.of();
+    var references = sourceRefs.selectList(Wrappers.<com.sanhua.marketingcost.entity.BomCostingRowSourceRef>lambdaQuery()
+        .in(com.sanhua.marketingcost.entity.BomCostingRowSourceRef::getCostingRowId, rowIds)
+        .in(com.sanhua.marketingcost.entity.BomCostingRowSourceRef::getSourcePartType, List.of("TECH_PACKAGE", "TECH_SOLDER")));
+    Map<Long,String> result = new LinkedHashMap<>();
+    for (var reference : references) {
+      String module = reference.getSourcePartType().substring("TECH_".length());
+      String previous = result.putIfAbsent(reference.getCostingRowId(), module);
+      if (previous != null && !previous.equals(module)) throw new IllegalStateException("同一结算行混入不同补录材料类型");
+    }
+    return result;
   }
 
   private Map<Long, BomCostingRow> loadBomRows(List<PricePrepareItem> items) {

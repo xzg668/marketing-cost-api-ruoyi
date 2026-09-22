@@ -3,13 +3,10 @@ package com.sanhua.marketingcost.service.technicaldata;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataAdminActionRequest;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskResponse;
 import com.sanhua.marketingcost.entity.QuoteTechTask;
-import com.sanhua.marketingcost.entity.SysUser;
 import com.sanhua.marketingcost.mapper.QuoteTechTaskMapper;
-import com.sanhua.marketingcost.service.SysUserService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.LocalDateTime;
 import java.util.Objects;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -21,19 +18,19 @@ public class TechnicalDataAdminOperationServiceImpl
   private final TechnicalDataTaskRepository repository;
   private final TechnicalDataTaskApplicationService taskService;
   private final TechnicalDataAuditLogService auditLog;
-  private final SysUserService userService;
+  private final TechnicalDataOaIntegrationService oaIntegration;
 
   public TechnicalDataAdminOperationServiceImpl(
       QuoteTechTaskMapper taskMapper,
       TechnicalDataTaskRepository repository,
       TechnicalDataTaskApplicationService taskService,
       TechnicalDataAuditLogService auditLog,
-      SysUserService userService) {
+      TechnicalDataOaIntegrationService oaIntegration) {
     this.taskMapper = taskMapper;
     this.repository = repository;
     this.taskService = taskService;
     this.auditLog = auditLog;
-    this.userService = userService;
+    this.oaIntegration = oaIntegration;
   }
 
   @Override
@@ -42,27 +39,9 @@ public class TechnicalDataAdminOperationServiceImpl
       Long taskId, TechnicalDataAdminActionRequest request, TechnicalDataActor actor) {
     Command command = command(request, actor);
     QuoteTechTask task = lock(taskId, command.expectedVersion());
-    SysUser assignee = activeUser(positive(request.getAssigneeUserId(), "assigneeUserId"));
-    SysUser reviewer = request.getReviewerUserId() == null
-        ? task.getReviewerUserId() == null ? null : activeUser(task.getReviewerUserId())
-        : activeUser(positive(request.getReviewerUserId(), "reviewerUserId"));
-    if (reviewer != null && Objects.equals(assignee.getUserId(), reviewer.getUserId())) {
-      throw invalid("技术负责人和审核人不能是同一人");
-    }
-    String before = assignment(task.getAssigneeUserId(), task.getAssigneeName(),
-        task.getReviewerUserId(), task.getReviewerName());
-    String after = assignment(assignee.getUserId(), displayName(assignee),
-        reviewer == null ? null : reviewer.getUserId(), reviewer == null ? null : displayName(reviewer));
-    try {
-      int rows = taskMapper.reassign(
-          task.getId(), command.expectedVersion(), assignee.getUserId(), displayName(assignee),
-          reviewer == null ? null : reviewer.getUserId(), reviewer == null ? null : displayName(reviewer),
-          actor.userId(), now());
-      if (rows != 1) throw conflict("任务状态或版本已变化，不能改派");
-    } catch (DuplicateKeyException exception) {
-      throw conflict("目标负责人已有同一OA单和月份的活动任务，不能改派");
-    }
-    audit(task, "ADMIN_REASSIGN", before, after, command, actor);
+    if (request.getReviewerUserId() != null) throw invalid("部门审批人由 OA 确定，不在报价系统指定");
+    oaIntegration.queueDispatch(task, positive(request.getAssigneeUserId(), "assigneeUserId"), request.getModuleAssignees(), actor);
+    audit(task, "ADMIN_REASSIGN_REQUESTED", task.getExternalTaskStatus(), "SYNC_PENDING", command, actor);
     return taskService.detail(task.getId(), actor);
   }
 
@@ -107,17 +86,13 @@ public class TechnicalDataAdminOperationServiceImpl
     if ("APPROVED".equals(task.getTaskStatus())) {
       throw conflict("已生效任务不可作废；必须通过新版本更正");
     }
-    repository.deactivateProducts(task.getId(), now());
-    if (taskMapper.voidTask(
-        task.getId(), command.expectedVersion(), actor.userId(), now()) != 1) {
-      throw conflict("任务状态或版本已变化，不能作废");
-    }
-    audit(task, "ADMIN_TASK_VOIDED", task.getTaskStatus(), "CANCELLED", command, actor);
+    oaIntegration.queueCancellation(task, actor);
+    audit(task, "ADMIN_TASK_VOID_REQUESTED", task.getTaskStatus(), "SYNC_PENDING", command, actor);
     return taskService.detail(task.getId(), actor);
   }
 
   private Command command(TechnicalDataAdminActionRequest request, TechnicalDataActor actor) {
-    if (actor == null || !actor.admin()) throw forbidden("仅管理员可执行该操作");
+    if (actor == null || !actor.admin() || actor.shortSession()) throw forbidden("仅管理员可执行该操作");
     if (request == null || !request.getUnknownFields().isEmpty()) {
       throw invalid(request == null ? "请求体不能为空" : "请求包含未知字段");
     }
@@ -138,30 +113,12 @@ public class TechnicalDataAdminOperationServiceImpl
     return task;
   }
 
-  private SysUser activeUser(Long userId) {
-    SysUser user = userService.getById(userId);
-    if (user == null || !"0".equals(user.getStatus())
-        || (StringUtils.hasText(user.getDelFlag()) && !"0".equals(user.getDelFlag()))) {
-      throw invalid("用户不存在或已停用：" + userId);
-    }
-    return user;
-  }
-
   private void audit(
       QuoteTechTask task, String event, String before, String after,
       Command command, TechnicalDataActor actor) {
     auditLog.record(
         task, null, null, event, before, after, command.reason(), actor,
         command.requestId(), "TD_ADMIN:" + event + ":" + task.getId() + ":" + command.requestId());
-  }
-
-  private String displayName(SysUser user) {
-    return StringUtils.hasText(user.getNickName()) ? user.getNickName() : user.getUserName();
-  }
-
-  private String assignment(Long assigneeId, String assigneeName, Long reviewerId, String reviewerName) {
-    return "assignee=" + assigneeId + "/" + assigneeName
-        + ",reviewer=" + reviewerId + "/" + reviewerName;
   }
 
   private LocalDateTime now() {

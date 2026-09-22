@@ -6,8 +6,7 @@ import org.springframework.util.StringUtils;
 /**
  * 电子图库处理所需的稳定业务上下文。
  *
- * <p>核心能力只读取这里的报价产品、BOM准备记录和源版本身份，不感知上下文来自旧协作任务、
- * 新技术资料任务或其他调度入口。
+ * <p>核心能力按报价产品和核算月份读取 BOM 准备记录及源版本，供补录、财务确认及核算调度共用。
  */
 public record ElectronicDrawingWorkContext(
     Long workflowId,

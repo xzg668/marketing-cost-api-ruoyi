@@ -1,6 +1,8 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingPreparationSource;
+
 import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.quotebom.QuoteEffectiveBomAlternativeResponse;
 import com.sanhua.marketingcost.dto.quotebom.QuoteEffectiveBomExclusionSummaryResponse;
@@ -98,6 +100,8 @@ public class QuoteEffectiveBomApplicationServiceImpl
   private final EffectiveBomVariantHasher effectiveBomVariantHasher;
   private final QuoteBomContextResolver contextResolver;
   private final QuoteBomStatusService quoteBomStatusService;
+  private final ElectronicDrawingPreparationSource drawingPreparation;
+  private final com.sanhua.marketingcost.service.technicaldata.TechnicalBomContributions technicalContributions;
 
   public QuoteEffectiveBomApplicationServiceImpl(
       QuoteBomPreparationRecordMapper preparationMapper,
@@ -115,7 +119,9 @@ public class QuoteEffectiveBomApplicationServiceImpl
       QuoteEffectiveBomBuilder effectiveBomBuilder,
       EffectiveBomVariantHasher effectiveBomVariantHasher,
       QuoteBomContextResolver contextResolver,
-      QuoteBomStatusService quoteBomStatusService) {
+      QuoteBomStatusService quoteBomStatusService,
+      com.sanhua.marketingcost.service.technicaldata.TechnicalBomContributions technicalContributions,
+      ElectronicDrawingPreparationSource drawingPreparation) {
     this.preparationMapper = preparationMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.oaFormMapper = oaFormMapper;
@@ -132,6 +138,8 @@ public class QuoteEffectiveBomApplicationServiceImpl
     this.effectiveBomVariantHasher = effectiveBomVariantHasher;
     this.contextResolver = contextResolver;
     this.quoteBomStatusService = quoteBomStatusService;
+    this.technicalContributions = technicalContributions;
+    this.drawingPreparation = drawingPreparation;
   }
 
   @Override
@@ -518,7 +526,11 @@ public class QuoteEffectiveBomApplicationServiceImpl
         return current;
       }
     }
-    return findMonthlySnapshot(context);
+    snapshot = findMonthlySnapshot(context);
+    if (snapshot != null) return snapshot;
+    if (checked == null || !"NO_BOM".equals(checked.getBomStatus())) return null;
+    return drawingPreparation.snapshot(context.oaFormItemId(), context.costPeriodMonth(),
+        context.businessUnit(), context.organization().priceOrgCode(), context.customerKey(), context.packageMethod());
   }
 
   private RawSnapshot loadRawSnapshot(
@@ -535,8 +547,8 @@ public class QuoteEffectiveBomApplicationServiceImpl
     // 月度卡片读取口径不能早于核算月首日，否则会误过滤本月首日生效的电子图库 BOM。
     LocalDate asOfDate = synchronizedDate == null || synchronizedDate.isBefore(periodStart)
         ? periodStart : synchronizedDate;
-    List<BomRawHierarchy> candidates =
-        rawHierarchyMapper.selectList(
+    List<BomRawHierarchy> candidates = "DRAFT".equals(snapshot.getSyncStatus())
+        ? drawingPreparation.rows(snapshot) : rawHierarchyMapper.selectList(
             Wrappers.<BomRawHierarchy>lambdaQuery()
                 .eq(BomRawHierarchy::getPriceOrgCode, context.organization().priceOrgCode())
                 .eq(BomRawHierarchy::getTopProductCode, context.topProductCode())
@@ -609,7 +621,8 @@ public class QuoteEffectiveBomApplicationServiceImpl
           expansion.rows(), sourceBuildBatchId, warnings, issues);
     }
     return new RawSnapshot(
-        expansion.rows(), sourceBuildBatchId, warnings, List.of());
+        technicalContributions.merge(context.oaFormItemId(), context.costPeriodMonth(), expansion.rows()),
+        sourceBuildBatchId, warnings, List.of());
   }
 
   private SelectionSnapshot resolveSelections(

@@ -138,6 +138,22 @@ public class ApprovedElectronicBomRawSnapshotPublisher {
     return row;
   }
 
+  /** 当前报价准备价格时复用同一字段转换；只返回草稿，不发布原始层或审批版本。 */
+  public List<BomRawHierarchy> preview(PublicationContext product, String batchId) {
+    List<QuoteBomSupplementDetail> details = detailMapper.selectList(
+        Wrappers.<QuoteBomSupplementDetail>lambdaQuery()
+            .eq(QuoteBomSupplementDetail::getSupplementVersionId, product.supplementVersionId())
+            .orderByAsc(QuoteBomSupplementDetail::getLineNo));
+    if (details == null || details.isEmpty()) throw new IllegalStateException("电子图库草稿没有已组树明细");
+    Set<String> parents = structuralParentPaths(details);
+    return details.stream().map(detail -> {
+      var row = toRaw(detail, product, product.productCode(), product.priceOrgCode(),
+          product.businessUnitType(), batchId, parents, YearMonth.parse(product.accountingMonth()), null);
+      row.setBomStatus("DRAFT");
+      return row;
+    }).toList();
+  }
+
   private void validateExisting(
       List<BomRawHierarchy> existing,
       List<QuoteBomSupplementDetail> details,

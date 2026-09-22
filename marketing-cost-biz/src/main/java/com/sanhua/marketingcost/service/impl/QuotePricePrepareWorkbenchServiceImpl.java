@@ -53,6 +53,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   private static final int DEFAULT_PAGE_SIZE = 200;
   private static final int SCENARIO_PAGE_SIZE = 500;
 
+  private final com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService technicalCorrections;
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
   private final QuotePriceTypeRecognitionService priceTypeRecognitionService;
@@ -70,7 +71,9 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       FinancePricePrepareService financePricePrepareService,
       FinanceQuoteBasePriceService financeQuoteBasePriceService,
       PricePrepareQueryService pricePrepareQueryService,
-      PricePrepareReadinessService pricePrepareReadinessService) {
+      PricePrepareReadinessService pricePrepareReadinessService,
+      com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService technicalCorrections) {
+    this.technicalCorrections=technicalCorrections;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.priceTypeRecognitionService = priceTypeRecognitionService;
@@ -271,6 +274,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
 
   private QuotePricePrepareWorkbenchResponse queryResponse(Scope scope) {
     QuotePricePrepareWorkbenchResponse response = new QuotePricePrepareWorkbenchResponse();
+    response.setTechnicalPriceCorrection(technicalCorrections.get(scope.oaNo(),scope.oaFormItemId(),scope.periodMonth()));
     response.setOaNo(scope.oaNo());
     response.setOaFormItemId(scope.oaFormItemId());
     response.setTopProductCode(scope.topProductCode());

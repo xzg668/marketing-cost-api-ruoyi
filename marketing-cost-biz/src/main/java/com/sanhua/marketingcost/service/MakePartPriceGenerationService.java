@@ -6,6 +6,9 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 public interface MakePartPriceGenerationService {
+  /** 按本报价的真实结算节点计算，重复料号在不同产品/节点的输入不能相互替代。 */
+  List<MakePartPriceCalcRow> calculateForBomRow(com.sanhua.marketingcost.entity.BomCostingRow parent,
+      LocalDateTime priceAsOfTime, PricePrepareScenarioContext scenarioContext, boolean persist);
 
   MakePartPriceGenerateResponse generateByOa(
       String oaNo, String businessUnitType, String period);

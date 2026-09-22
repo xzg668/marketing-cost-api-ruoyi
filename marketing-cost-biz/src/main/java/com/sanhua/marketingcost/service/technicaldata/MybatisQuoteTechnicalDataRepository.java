@@ -5,7 +5,6 @@ import com.sanhua.marketingcost.entity.QuoteTechDataVersion;
 import com.sanhua.marketingcost.entity.QuoteTechModule;
 import com.sanhua.marketingcost.entity.QuoteTechPackageItem;
 import com.sanhua.marketingcost.entity.QuoteTechProduct;
-import com.sanhua.marketingcost.entity.QuoteTechReviewItem;
 import com.sanhua.marketingcost.entity.QuoteTechSalaryItem;
 import com.sanhua.marketingcost.entity.QuoteTechTask;
 import com.sanhua.marketingcost.mapper.QuoteTechAuxItemMapper;
@@ -13,7 +12,6 @@ import com.sanhua.marketingcost.mapper.QuoteTechDataVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteTechModuleMapper;
 import com.sanhua.marketingcost.mapper.QuoteTechPackageItemMapper;
 import com.sanhua.marketingcost.mapper.QuoteTechProductMapper;
-import com.sanhua.marketingcost.mapper.QuoteTechReviewItemMapper;
 import com.sanhua.marketingcost.mapper.QuoteTechSalaryItemMapper;
 import com.sanhua.marketingcost.mapper.QuoteTechTaskMapper;
 import java.time.LocalDateTime;
@@ -30,7 +28,6 @@ public class MybatisQuoteTechnicalDataRepository implements QuoteTechnicalDataRe
   private final QuoteTechPackageItemMapper packageItemMapper;
   private final QuoteTechAuxItemMapper auxItemMapper;
   private final QuoteTechSalaryItemMapper salaryItemMapper;
-  private final QuoteTechReviewItemMapper reviewItemMapper;
 
   public MybatisQuoteTechnicalDataRepository(
       QuoteTechTaskMapper taskMapper,
@@ -39,8 +36,7 @@ public class MybatisQuoteTechnicalDataRepository implements QuoteTechnicalDataRe
       QuoteTechDataVersionMapper versionMapper,
       QuoteTechPackageItemMapper packageItemMapper,
       QuoteTechAuxItemMapper auxItemMapper,
-      QuoteTechSalaryItemMapper salaryItemMapper,
-      QuoteTechReviewItemMapper reviewItemMapper) {
+      QuoteTechSalaryItemMapper salaryItemMapper) {
     this.taskMapper = taskMapper;
     this.productMapper = productMapper;
     this.moduleMapper = moduleMapper;
@@ -48,7 +44,6 @@ public class MybatisQuoteTechnicalDataRepository implements QuoteTechnicalDataRe
     this.packageItemMapper = packageItemMapper;
     this.auxItemMapper = auxItemMapper;
     this.salaryItemMapper = salaryItemMapper;
-    this.reviewItemMapper = reviewItemMapper;
   }
 
   @Override
@@ -133,17 +128,6 @@ public class MybatisQuoteTechnicalDataRepository implements QuoteTechnicalDataRe
   }
 
   @Override
-  public QuoteTechReviewItem insertReviewItem(QuoteTechReviewItem reviewItem) {
-    requireInserted(reviewItemMapper.insert(reviewItem), "技术资料审核项");
-    return reviewItem;
-  }
-
-  @Override
-  public List<QuoteTechReviewItem> findReviewItems(Long taskId, int reviewRound) {
-    return reviewItemMapper.selectByTaskRound(taskId, reviewRound);
-  }
-
-  @Override
   public int insertPackageItemsIfDraft(Long versionId, List<QuoteTechPackageItem> items) {
     return packageItemMapper.insertBatchIfDraft(versionId, items);
   }
@@ -204,36 +188,6 @@ public class MybatisQuoteTechnicalDataRepository implements QuoteTechnicalDataRe
   }
 
   @Override
-  public int updatePackageItemIfDraft(QuoteTechPackageItem item) {
-    return packageItemMapper.updateIfDraft(item);
-  }
-
-  @Override
-  public int updateAuxItemIfDraft(QuoteTechAuxItem item) {
-    return auxItemMapper.updateIfDraft(item);
-  }
-
-  @Override
-  public int updateSalaryItemIfDraft(QuoteTechSalaryItem item) {
-    return salaryItemMapper.updateIfDraft(item);
-  }
-
-  @Override
-  public int deletePackageItemIfDraft(Long versionId, Long itemId) {
-    return packageItemMapper.deleteIfDraft(versionId, itemId);
-  }
-
-  @Override
-  public int deleteAuxItemIfDraft(Long versionId, Long itemId) {
-    return auxItemMapper.deleteIfDraft(versionId, itemId);
-  }
-
-  @Override
-  public int deleteSalaryItemIfDraft(Long versionId, Long itemId) {
-    return salaryItemMapper.deleteIfDraft(versionId, itemId);
-  }
-
-  @Override
   public int updateDraftVersion(
       QuoteTechDataVersion version, int expectedVersion, LocalDateTime updatedAt) {
     return versionMapper.updateDraftWithVersion(version, expectedVersion, updatedAt);
@@ -275,20 +229,6 @@ public class MybatisQuoteTechnicalDataRepository implements QuoteTechnicalDataRe
   @Override
   public int markTaskInProgress(Long taskId, Long actorId, LocalDateTime changedAt) {
     return taskMapper.markInProgress(taskId, actorId, changedAt);
-  }
-
-  @Override
-  public int submitTask(
-      Long taskId,
-      int expectedVersion,
-      int reviewRound,
-      String idempotencyKey,
-      String submissionFingerprint,
-      Long actorId,
-      LocalDateTime submittedAt) {
-    return taskMapper.submitWithVersion(
-        taskId, expectedVersion, reviewRound, idempotencyKey,
-        submissionFingerprint, actorId, submittedAt);
   }
 
   private void requireInserted(int rows, String label) {

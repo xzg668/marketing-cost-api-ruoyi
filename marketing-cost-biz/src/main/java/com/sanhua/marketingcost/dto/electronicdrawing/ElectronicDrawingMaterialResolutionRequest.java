@@ -2,7 +2,7 @@ package com.sanhua.marketingcost.dto.electronicdrawing;
 
 import java.util.List;
 
-/** 财务报价员一次保存一条或多条电子图库物料的 U9 料号选择。 */
+/** 保存 U9 料号选择；全部已确认时允许空 selections 重试下级 BOM 检查。 */
 public record ElectronicDrawingMaterialResolutionRequest(
     Integer expectedTaskVersion,
     Long expectedSourceVersionId,

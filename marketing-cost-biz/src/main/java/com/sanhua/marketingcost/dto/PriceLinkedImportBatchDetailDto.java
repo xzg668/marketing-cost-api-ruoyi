@@ -8,6 +8,7 @@ import lombok.Setter;
 @Getter
 @Setter
 public class PriceLinkedImportBatchDetailDto {
+  private java.util.List<com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportResult> technicalResults = java.util.List.of();
   private FactorUploadBatchDto batch;
   private String batchId;
   private Long factorUploadBatchId;

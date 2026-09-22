@@ -1,6 +1,10 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.alibaba.excel.EasyExcel;
+import com.sanhua.marketingcost.dto.PriceLinkedImportCommand;
+import com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportResult;
+import com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionWorkbook;
+import com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionImportService;
 import com.alibaba.excel.context.AnalysisContext;
 import com.alibaba.excel.event.AnalysisEventListener;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
@@ -152,6 +156,9 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
   private PriceLinkedFactorWorkbookParser factorWorkbookParser;
   @Autowired(required = false)
   private FactorUploadBatchService factorUploadBatchService;
+
+  @Autowired
+  private TechnicalPriceCorrectionImportService technicalPriceImport;
   @Autowired(required = false)
   private FactorMonthlyPriceUpsertService factorMonthlyPriceUpsertService;
   @Autowired(required = false)
@@ -216,7 +223,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
   public List<PriceLinkedItemDto> list(
       String pricingMonth, String materialCode, boolean includeHistory) {
     String resolvedMonth = resolvePricingMonth(pricingMonth);
-    var query = Wrappers.lambdaQuery(PriceLinkedItem.class);
+    var query = Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC");
     if (StringUtils.hasText(resolvedMonth)) {
       query.eq(PriceLinkedItem::getPricingMonth, resolvedMonth);
     }
@@ -240,7 +247,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       int page,
       int pageSize) {
     String resolvedMonth = resolvePricingMonth(pricingMonth);
-    var query = Wrappers.lambdaQuery(PriceLinkedItem.class);
+    var query = Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC");
     if (StringUtils.hasText(resolvedMonth)) {
       query.eq(PriceLinkedItem::getPricingMonth, resolvedMonth);
     }
@@ -256,6 +263,12 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     return new PageResult<>(
         result.getRecords().stream().map(this::toDto).toList(),
         result.getTotal());
+  }
+
+  private void requirePublicSource(PriceLinkedItem item) {
+    if (item != null && "TECH_SUPPLEMENTAL".equals(item.getSourceKind())) {
+      throw new IllegalArgumentException("技术审批价格不能在公共价格页面修改或删除，请查看原补录任务");
+    }
   }
 
   private long normalizePage(int page) {
@@ -300,6 +313,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     if (item == null) {
       return null;
     }
+    requirePublicSource(item);
     String oldFormulaExpr = item.getFormulaExpr();
     String oldFormulaExprCn = item.getFormulaExprCn();
     merge(item, request);
@@ -365,7 +379,9 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     if (id == null) {
       return false;
     }
-    return itemMapper.deleteById(id) > 0;
+    requirePublicSource(itemMapper.selectById(id));
+    return itemMapper.delete(Wrappers.lambdaQuery(PriceLinkedItem.class)
+        .eq(PriceLinkedItem::getId, id).eq(PriceLinkedItem::getSourceKind, "PUBLIC")) > 0;
   }
 
   @Override
@@ -422,6 +438,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     detail.setBatch(toBatchDto(batch));
     detail.setBatchId(String.valueOf(batch.getId()));
     detail.setFactorUploadBatchId(batch.getId());
+    if(batch.getTechnicalVersionId()!=null)detail.setTechnicalResults(technicalPriceImport.results(batch));
     detail.setImportPurpose(batch.getImportPurpose());
     detail.setFactorRecognizedCount(nullToZero(batch.getFactorRowCount()));
     detail.setEffectiveStrategy(batch.getEffectiveStrategy());
@@ -429,6 +446,9 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     detail.setFactorPriceConflictStrategy(FactorPriceConflictStrategy.KEEP_EXISTING.getCode());
     detail.setLinkedCount(nullToZero(batch.getLinkedRowCount()));
     detail.setLinkedVersionCreatedCount(detail.getLinkedCount());
+    if (batch.getTechnicalVersionId() != null) {
+      technicalPriceImport.restoreSummary(batch, detail);
+    }
     detail.setAutoBindingCount(nullToZero(batch.getAutoBindingCount()));
     detail.setErrorCount(nullToZero(batch.getErrorCount()));
     detail.getFactorRows().addAll(loadPersistedFactorRows(batch));
@@ -505,6 +525,17 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       String effectiveStrategy,
       String formulaEffectiveDate,
       String factorPriceConflictStrategy) {
+    return importWorkbook(input,pricingMonth,overwriteManual,businessUnitType,sourceFileName,effectiveStrategy,formulaEffectiveDate,factorPriceConflictStrategy,null);
+  }
+
+  @Override
+  @Transactional(rollbackFor=Exception.class)
+  public PriceItemImportResponse importExcel(PriceLinkedImportCommand command) {
+    return importWorkbook(new ByteArrayInputStream(command.getFileBytes()),command.getPricingMonth(),command.isOverwriteManual(),command.getBusinessUnitType(),command.getSourceFileName(),command.getEffectiveStrategy(),command.getFormulaEffectiveDate(),command.getFactorPriceConflictStrategy(),command.getTechnicalPlan());
+  }
+
+  private PriceItemImportResponse importWorkbook(InputStream input,String pricingMonth,boolean overwriteManual,String businessUnitType,
+      String sourceFileName,String effectiveStrategy,String formulaEffectiveDate,String factorPriceConflictStrategy,TechnicalPriceCorrectionWorkbook.Plan technicalPlan) {
     PriceItemImportResponse response = new PriceItemImportResponse();
     response.setBatchId(UUID.randomUUID().toString());
     String strategy = normalizeEffectiveStrategy(effectiveStrategy);
@@ -551,7 +582,9 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     Integer linkedSheetNo = findLinkedImportSheetNo(excelBytes);
     String linkedSheetName = findLinkedImportSheetName(excelBytes);
     try {
-      EasyExcel.read(new ByteArrayInputStream(excelBytes), PriceItemExcelImportRow.class,
+      if(technicalPlan!=null) {
+        for(var row:technicalPlan.rows())rows.add(new CollectedImportRow(row.rowNumber(),row.values()));
+      } else EasyExcel.read(new ByteArrayInputStream(excelBytes), PriceItemExcelImportRow.class,
               new CollectingListener(rows, parseErrors))
           .sheet(linkedSheetNo == null ? 0 : linkedSheetNo)
           .headRowNumber(HEADER_ROW_NUMBER)
@@ -570,6 +603,11 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     for (CollectedImportRow collected : rows) {
       PriceItemExcelImportRow row = collected.row();
       int excelRow = collected.rowNumber();
+      var technicalRow=technicalPlan==null?null:technicalPlan.row(linkedSheetName,excelRow);
+      if(technicalRow!=null && !technicalRow.issues().isEmpty()) {
+        response.getErrors().add(buildImportError(excelRow,row,row.getFormulaExpr(),resolvedFormulaEffectiveDate,linkedSheetName,String.join("；",technicalRow.issues())));
+        response.setSkipped(response.getSkipped()+1);continue;
+      }
       String validateError = validateRow(row);
       if (validateError != null) {
         response.getErrors().add(buildImportError(
@@ -608,7 +646,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
         LinkedImportOutcome linkedOutcome;
         try {
           linkedOutcome = upsertLinked(
-              row, month, normalizedFormula, resolvedFormulaEffectiveDate, resolvedBusinessUnitType);
+              row, month, normalizedFormula, resolvedFormulaEffectiveDate, resolvedBusinessUnitType,technicalPlan,technicalRow);
         } catch (IllegalArgumentException ex) {
           response.getErrors().add(buildImportError(
               excelRow, row, formulaSource, resolvedFormulaEffectiveDate, linkedSheetName,
@@ -616,6 +654,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
           response.setSkipped(response.getSkipped() + 1);
           continue;
         }
+        if(technicalRow!=null)response.getTechnicalResults().add(new TechnicalPriceImportResult(technicalRow.itemKey(),linkedSheetName,excelRow,row.getMaterialCode(),linkedOutcome.item().getId(),linkedOutcome.skipped()?"REUSED":"IMPORTED",null,null));
         if (linkedOutcome.skipped()) {
           PriceLinkedItem item = linkedOutcome.item();
           if (v2Context.enabled() && missingCurrentV2Bindings(item, v2Plan)) {
@@ -2277,12 +2316,18 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       String normalizedFormula,
       LocalDate formulaEffectiveDate,
       String businessUnitType) {
-    PriceLinkedItem existing = findCurrentLinkedVersion(pricingMonth, businessUnitType, row);
-    if (existing != null && sameLinkedFormulaVersion(existing, row, normalizedFormula)) {
+    return upsertLinked(row,pricingMonth,normalizedFormula,formulaEffectiveDate,businessUnitType,null,null);
+  }
+
+  private LinkedImportOutcome upsertLinked(PriceItemExcelImportRow row,String pricingMonth,String normalizedFormula,
+      LocalDate formulaEffectiveDate,String businessUnitType,TechnicalPriceCorrectionWorkbook.Plan plan,TechnicalPriceCorrectionWorkbook.ImportRow technicalRow) {
+    PriceLinkedItem existing = plan==null?findCurrentLinkedVersion(pricingMonth,businessUnitType,row):technicalPriceImport.current(plan.scope().version().getId(),technicalRow.itemKey());
+    if (existing != null && sameLinkedFormulaVersion(existing, row, normalizedFormula)
+        && (plan==null || Objects.equals(trim(existing.getSupplierCode()),trim(row.getSupplierCode())) && Objects.equals(trim(existing.getSupplierName()),trim(row.getSupplierName())))) {
       syncLinkedPriceType(existing);
       return new LinkedImportOutcome(existing, false, false, true);
     }
-    if (existing != null) {
+    if (existing != null && plan==null) {
       expireOldVersion(existing, formulaEffectiveDate);
     }
     PriceLinkedItem item = new PriceLinkedItem();
@@ -2316,7 +2361,8 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
       item.setBusinessUnitType(businessUnitType.trim());
     }
     // 写入前显式注入当前登录账号的 BU，和 importItems 走同一路径，避免 NULL 行被 selectList 过滤掉
-    applyCurrentBusinessUnit(item);
+    if(plan==null)applyCurrentBusinessUnit(item);
+    else technicalPriceImport.identify(item,plan,technicalRow);
     itemMapper.insert(item);
     syncLinkedPriceType(item);
     return new LinkedImportOutcome(item, true, existing != null, false);
@@ -2356,7 +2402,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
 
   private PriceLinkedItem findCurrentLinkedVersion(
       String pricingMonth, String businessUnitType, PriceItemExcelImportRow row) {
-    var query = Wrappers.lambdaQuery(PriceLinkedItem.class)
+    var query = Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
         .eq(PriceLinkedItem::getPricingMonth, pricingMonth)
         .eq(PriceLinkedItem::getMaterialCode, trim(row.getMaterialCode()))
         .eq(PriceLinkedItem::getDeleted, 0);
@@ -2421,7 +2467,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
   }
 
   private PriceFixedItem findExistingFixed(PriceItemExcelImportRow row) {
-    var query = Wrappers.lambdaQuery(PriceFixedItem.class)
+    var query = Wrappers.lambdaQuery(PriceFixedItem.class).eq(PriceFixedItem::getSourceKind, "PUBLIC")
         .eq(PriceFixedItem::getMaterialCode, trim(row.getMaterialCode()));
     String supplierCode = trim(row.getSupplierCode());
     if (supplierCode == null) {
@@ -2574,7 +2620,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
     if (StringUtils.hasText(pricingMonth)) {
       return pricingMonth.trim();
     }
-    PriceLinkedItem latest = itemMapper.selectOne(Wrappers.lambdaQuery(PriceLinkedItem.class)
+    PriceLinkedItem latest = itemMapper.selectOne(Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
         .select(PriceLinkedItem::getPricingMonth)
         .orderByDesc(PriceLinkedItem::getPricingMonth)
         .last("LIMIT 1"));
@@ -2583,7 +2629,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
 
   private PriceLinkedItem findExisting(String pricingMonth,
       PriceLinkedItemImportRequest.PriceLinkedItemImportRow row) {
-    var query = Wrappers.lambdaQuery(PriceLinkedItem.class)
+    var query = Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
         .eq(PriceLinkedItem::getPricingMonth, pricingMonth)
         .eq(PriceLinkedItem::getMaterialCode, row.getMaterialCode());
     if (StringUtils.hasText(row.getSupplierCode())) {
@@ -2740,6 +2786,7 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
   }
 
   private void syncLinkedPriceType(PriceLinkedItem item) {
+    if (item!=null && "TECH_SUPPLEMENTAL".equals(item.getSourceKind()))return;
     if (item == null
         || !StringUtils.hasText(item.getMaterialCode())
         || (!StringUtils.hasText(item.getFormulaExpr()) && item.getManualPrice() == null)) {

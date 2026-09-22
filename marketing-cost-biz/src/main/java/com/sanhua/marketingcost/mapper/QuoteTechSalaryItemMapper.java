@@ -8,7 +8,6 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.annotations.Update;
 
 @Mapper
 public interface QuoteTechSalaryItemMapper extends BaseMapper<QuoteTechSalaryItem> {
@@ -28,9 +27,8 @@ public interface QuoteTechSalaryItemMapper extends BaseMapper<QuoteTechSalaryIte
       "#{item.standardHours} AS standard_hours,",
       "#{item.standardTimeUnit} AS standard_time_unit,",
       "#{item.conversionFactor} AS conversion_factor,#{item.hourlyRate} AS hourly_rate,",
-      "COALESCE(#{item.wageRate},#{item.hourlyRate}) AS wage_rate,",
-      "COALESCE(#{item.rateUnit},'元/小时') AS rate_unit,",
-      "COALESCE(#{item.personCoefficient},1) AS person_coefficient,",
+      "#{item.wageRate} AS wage_rate,#{item.rateUnit} AS rate_unit,",
+      "#{item.personCoefficient} AS person_coefficient,",
       "#{item.amount} AS amount,#{item.sourceReferenceId} AS source_reference_id,",
       "#{item.sourceReferenceVersion} AS source_reference_version,",
       "#{item.sourceSnapshotJson} AS source_snapshot_json,#{item.remark} AS remark",
@@ -61,32 +59,4 @@ public interface QuoteTechSalaryItemMapper extends BaseMapper<QuoteTechSalaryIte
       """)
   int deleteAllIfDraft(@Param("versionId") Long versionId);
 
-  @Update("""
-      UPDATE lp_quote_tech_salary_item item
-      INNER JOIN lp_quote_tech_data_version version ON version.id=item.version_id
-         SET item.line_no=#{item.lineNo}, item.sort_seq=#{item.sortSeq},
-             item.process_code=#{item.processCode}, item.process_name=#{item.processName},
-             item.labor_type=#{item.laborType}, item.working_hours=#{item.workingHours},
-             item.original_time_unit=#{item.originalTimeUnit},
-             item.standard_hours=#{item.standardHours},
-             item.standard_time_unit=#{item.standardTimeUnit},
-             item.conversion_factor=#{item.conversionFactor}, item.hourly_rate=#{item.hourlyRate},
-             item.wage_rate=#{item.wageRate}, item.rate_unit=#{item.rateUnit},
-             item.person_coefficient=#{item.personCoefficient},
-             item.amount=#{item.amount}, item.source_reference_id=#{item.sourceReferenceId},
-             item.source_reference_version=#{item.sourceReferenceVersion},
-             item.source_snapshot_json=#{item.sourceSnapshotJson}, item.remark=#{item.remark},
-             item.updated_at=CURRENT_TIMESTAMP
-       WHERE item.id=#{item.id} AND item.version_id=#{item.versionId}
-         AND version.version_status='DRAFT'
-      """)
-  int updateIfDraft(@Param("item") QuoteTechSalaryItem item);
-
-  @Delete("""
-      DELETE item FROM lp_quote_tech_salary_item item
-      INNER JOIN lp_quote_tech_data_version version ON version.id=item.version_id
-       WHERE item.id=#{itemId} AND item.version_id=#{versionId}
-         AND version.version_status='DRAFT'
-      """)
-  int deleteIfDraft(@Param("versionId") Long versionId, @Param("itemId") Long itemId);
 }

@@ -31,6 +31,8 @@ public class ElectronicDrawingSourceNode {
   private String importanceClass;
   private String hsfRiskClass;
   private BigDecimal referenceWeight;
+  /** 源重量单位 g/kg；历史未记录单位的行保持 null，不重写原始重量。 */
+  private String referenceWeightUnit;
   private String sourceRemark;
   private String matchStatus;
   private String resolvedMaterialCode;

@@ -47,16 +47,16 @@ public class ElectronicDrawingWorkflowOrchestrator {
     this.autoPublicationService = autoPublicationService;
   }
 
-  /** 整单核算和显式“重新检查”共用入口；重复执行不会重复创建源版本或混合明细。 */
+  /** 整单核算入口；已有源版本继续处理，技术显式复查通过 acquire/refreshSource 重新取数。 */
   public WorkflowResult process(WorkflowCommand command) {
     ValidCommand valid = validate(command);
     ElectronicDrawingWorkContext context = load(
-        valid.workflowId(), valid.businessUnitType(), valid.applicableOrgCode());
+        valid.workflowId(), valid.businessUnitType(), valid.applicableOrgCode(), valid.accountingMonth());
+    validateContextBinding(context, valid);
     if (autoPublicationService.isPublished(context)) {
       return result(context, ElectronicDrawingWorkflowStage.PUBLISHED,
           "电子图库 BOM 已自动发布并进入后续核算", true, 0);
     }
-    validateContextBinding(context, valid);
     if (ElectronicDrawingWorkflowStage.COMPOSED.equals(context.workflowStage())
         && context.sourceVersionId() != null) {
       return publish(context, 0);
@@ -74,16 +74,16 @@ public class ElectronicDrawingWorkflowOrchestrator {
         importService.importSource(
             new ElectronicDrawingSourceImportService.ImportCommand(
                 context.workflowId(), context.businessUnitType(), context.applicableOrgCode(),
-                valid.drawingNo()),
+                valid.drawingNo(), context.accountingMonth()),
             acquired);
-        context = load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode());
+        context = load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
       }
 
       context = stage(context, ElectronicDrawingWorkflowStage.MATCHING,
           SYSTEM_USER_ID, SYSTEM_PROCESSING);
       ElectronicDrawingMaterialResolutionResponse resolution = resolutionService.autoMatch(
-          context.workflowId(), context.businessUnitType(), context.applicableOrgCode());
-      context = load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode());
+          context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
+      context = load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
       if (!resolution.complete()) {
         context = stage(context, ElectronicDrawingWorkflowStage.MAPPING_PENDING,
             valid.financeUserId(), valid.financeUserName());
@@ -138,14 +138,43 @@ public class ElectronicDrawingWorkflowOrchestrator {
     }
   }
 
+  /** 外部取数不持有补录草稿的数据库锁。 */
+  public ElectronicDrawingExcelAcquisitionPort.AcquiredExcel acquire(WorkflowCommand command) {
+    ValidCommand valid = validate(command);
+    var context = load(valid.workflowId(), valid.businessUnitType(), valid.applicableOrgCode(), valid.accountingMonth());
+    validateContextBinding(context, valid);
+    return acquisitionPort.acquire(new ElectronicDrawingExcelAcquisitionPort.Query(
+        valid.drawingNo(), "ED-RECHECK:" + java.util.UUID.randomUUID()));
+  }
+
+  /** 技术复查只取得并匹配来源；后续组树和发布仍走已有流程与审批门槛。 */
+  @org.springframework.transaction.annotation.Transactional
+  public ElectronicDrawingWorkContext refreshSource(WorkflowCommand command,
+      ElectronicDrawingExcelAcquisitionPort.AcquiredExcel acquired) {
+    ValidCommand valid = validate(command);
+    var context = load(valid.workflowId(), valid.businessUnitType(), valid.applicableOrgCode(), valid.accountingMonth());
+    validateContextBinding(context, valid);
+    context = ensurePreparation(context, valid);
+    importService.importSource(new ElectronicDrawingSourceImportService.ImportCommand(
+        context.workflowId(), context.businessUnitType(), context.applicableOrgCode(),
+        valid.drawingNo(), context.accountingMonth()), acquired);
+    context = load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
+    if (context.published()) return context;
+    var resolution = resolutionService.autoMatch(context.workflowId(), context.businessUnitType(),
+        context.applicableOrgCode(), context.accountingMonth());
+    context = load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
+    return stage(context, resolution.complete() ? ElectronicDrawingWorkflowStage.MATCHED
+        : ElectronicDrawingWorkflowStage.MAPPING_PENDING, valid.financeUserId(), valid.financeUserName());
+  }
+
   /** 财务分批保存选择后，仅在全部物料已就绪时继续合成，不重复调用电子图库接口。 */
   public WorkflowResult resumeAfterMaterialSelection(
-      Long workflowId, String businessUnitType, String applicableOrgCode) {
-    ElectronicDrawingWorkContext context = load(workflowId, businessUnitType, applicableOrgCode);
+      Long workflowId, String businessUnitType, String applicableOrgCode, String accountingMonth) {
+    ElectronicDrawingWorkContext context = load(workflowId, businessUnitType, applicableOrgCode, accountingMonth);
     try {
       ElectronicDrawingMaterialResolutionResponse resolution = resolutionService.autoMatch(
-          context.workflowId(), context.businessUnitType(), context.applicableOrgCode());
-      context = load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode());
+          context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
+      context = load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
       if (!resolution.complete()) {
         return result(context, ElectronicDrawingWorkflowStage.MAPPING_PENDING,
             "已保存本次选择，仍有 "
@@ -163,15 +192,15 @@ public class ElectronicDrawingWorkflowOrchestrator {
       return validationFailed(context,
           new ValidCommand(context.workflowId(), null, context.businessUnitType(),
               context.applicableOrgCode(), firstText(context.quoteProductCode(), "UNKNOWN"),
-              null, "财务报价"),
+              null, "财务报价", context.accountingMonth()),
           exception);
     }
   }
 
-  public WorkflowResult resumeAfterMaterialSelection(Long workflowId) {
-    ElectronicDrawingWorkContext context = contextPort.loadForCurrentBusinessUnit(workflowId);
+  public WorkflowResult resumeAfterMaterialSelection(Long workflowId, String accountingMonth) {
+    ElectronicDrawingWorkContext context = contextPort.loadForCurrentBusinessUnit(workflowId, accountingMonth);
     return resumeAfterMaterialSelection(
-        workflowId, context.businessUnitType(), context.applicableOrgCode());
+        workflowId, context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
   }
 
   private WorkflowResult compose(
@@ -179,8 +208,8 @@ public class ElectronicDrawingWorkflowOrchestrator {
     context = stage(context, ElectronicDrawingWorkflowStage.COMPOSING,
         SYSTEM_USER_ID, SYSTEM_PROCESSING);
     ElectronicDrawingHybridBomService.CompositionResult composition = hybridBomService.compose(
-        context.workflowId(), context.businessUnitType(), context.applicableOrgCode());
-    context = load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode());
+        context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
+    context = load(context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
     context = stage(context, ElectronicDrawingWorkflowStage.COMPOSED,
         SYSTEM_USER_ID, SYSTEM_PROCESSING);
     record(context, "E_DRAWING_COMPOSED",
@@ -190,9 +219,12 @@ public class ElectronicDrawingWorkflowOrchestrator {
 
   private WorkflowResult publish(
       ElectronicDrawingWorkContext context, int quotationLeafCount) {
+    String blocked = autoPublicationService.blockingReason(context);
+    if (blocked != null) return result(context, ElectronicDrawingWorkflowStage.COMPOSED,
+        "BOM 已组好，仍需完成补录审批及报价确认：" + blocked, false, quotationLeafCount);
     ElectronicDrawingAutoPublicationService.PublicationResult published =
         autoPublicationService.publish(
-            context.workflowId(), context.businessUnitType(), context.applicableOrgCode());
+            context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
     ElectronicDrawingWorkContext current = published.context();
     record(current, "E_DRAWING_PUBLISHED",
         "电子图库 BOM 已自动发布，继续价格检查和核算");
@@ -207,7 +239,7 @@ public class ElectronicDrawingWorkflowOrchestrator {
       ElectronicDrawingWorkContext context, ValidCommand command) {
     if (context.preparationId() != null) return context;
     QuoteProductBomPreparationPreview preparation = preparationService.prepareByOaFormItem(
-        command.oaFormItemId(), CostPricingPeriodUtils.currentPricingDate());
+        command.oaFormItemId(), CostPricingPeriodUtils.currentPricingDate(), context.accountingMonth());
     if (preparation == null || preparation.preparationRecordId() == null) {
       throw new IllegalStateException("电子图库处理所需的 BOM 准备记录创建失败");
     }
@@ -239,7 +271,7 @@ public class ElectronicDrawingWorkflowOrchestrator {
       String assigneeName) {
     try {
       ElectronicDrawingWorkContext current = load(
-          context.workflowId(), context.businessUnitType(), context.applicableOrgCode());
+          context.workflowId(), context.businessUnitType(), context.applicableOrgCode(), context.accountingMonth());
       return stage(current, nextStage, assigneeUserId, assigneeName);
     } catch (RuntimeException stageFailure) {
       log.error("electronic drawing stage persistence failed: opsAlert=true taskId={} stage={}",
@@ -262,8 +294,8 @@ public class ElectronicDrawingWorkflowOrchestrator {
   }
 
   private ElectronicDrawingWorkContext load(
-      Long workflowId, String businessUnitType, String applicableOrgCode) {
-    return contextPort.load(workflowId, businessUnitType, applicableOrgCode);
+      Long workflowId, String businessUnitType, String applicableOrgCode, String accountingMonth) {
+    return contextPort.load(workflowId, businessUnitType, applicableOrgCode, accountingMonth);
   }
 
   private void validateContextBinding(
@@ -271,6 +303,8 @@ public class ElectronicDrawingWorkflowOrchestrator {
     if (!context.active()
         || !context.bomRequired()
         || !Objects.equals(context.businessUnitType(), command.businessUnitType())
+        || !Objects.equals(context.oaFormItemId(), command.oaFormItemId())
+        || !Objects.equals(context.accountingMonth(), command.accountingMonth())
         || !Objects.equals(context.applicableOrgCode(), command.applicableOrgCode())) {
       throw new IllegalArgumentException("当前报价产品不允许进入电子图库处理");
     }
@@ -324,8 +358,9 @@ public class ElectronicDrawingWorkflowOrchestrator {
     String org = required(command.applicableOrgCode(), "适用组织");
     String drawing = required(command.drawingNo(), "产品图号");
     String financeName = required(command.financeUserName(), "财务报价员");
+    String month = java.time.YearMonth.parse(required(command.accountingMonth(), "核算月份")).toString();
     return new ValidCommand(command.workflowId(), command.oaFormItemId(), businessUnit, org,
-        drawing, command.financeUserId(), financeName);
+        drawing, command.financeUserId(), financeName, month);
   }
 
   private static String required(String value, String label) {
@@ -344,7 +379,8 @@ public class ElectronicDrawingWorkflowOrchestrator {
       String applicableOrgCode,
       String drawingNo,
       Long financeUserId,
-      String financeUserName) {}
+      String financeUserName,
+      String accountingMonth) {}
 
   public record WorkflowResult(
       Long workflowId,
@@ -367,5 +403,6 @@ public class ElectronicDrawingWorkflowOrchestrator {
       String applicableOrgCode,
       String drawingNo,
       Long financeUserId,
-      String financeUserName) {}
+      String financeUserName,
+      String accountingMonth) {}
 }

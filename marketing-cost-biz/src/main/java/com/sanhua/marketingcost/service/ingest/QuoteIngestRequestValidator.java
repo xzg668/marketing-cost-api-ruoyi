@@ -88,7 +88,7 @@ public class QuoteIngestRequestValidator {
       return;
     }
 
-    if (trimToNull(header.getApplyDate()) == null) {
+    if (trimToNull(header.getApplyDate()) == null && !isOaSnapshot(request)) {
       addError(response, "header.applyDate", "APPLY_DATE_REQUIRED", "申请日期不能为空");
     }
     validateDate(response, "header.applyDate", header.getApplyDate(), null);
@@ -122,7 +122,7 @@ public class QuoteIngestRequestValidator {
       }
       if (trimToNull(item.getMaterialNo()) == null
           && trimToNull(item.getSunlModel()) == null
-          && trimToNull(item.getCustomerDrawing()) == null) {
+          && trimToNull(item.getCustomerDrawing()) == null && !isOaSnapshot(request)) {
         addError(
             response,
             path + ".materialNo",
@@ -204,6 +204,10 @@ public class QuoteIngestRequestValidator {
     } else {
       response.setIngestStatus(QuoteIngestStatus.RECEIVED.getCode());
     }
+  }
+
+  private boolean isOaSnapshot(QuoteIngestRequest request) {
+    return QuoteSourceType.WEAVER_OA.getCode().equals(request.getSourceType());
   }
 
   private boolean requiresProcessCode(String sourceType) {

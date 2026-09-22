@@ -50,6 +50,7 @@ public class QuoteRequestItemResponse {
   private LocalDateTime calcAt;
   private Long confirmedCostVersionId;
   private Long electronicDrawingWorkflowId;
+  private String electronicDrawingAccountingMonth;
   private String electronicDrawingStage;
   private QuoteBomStatusItemResponse bomStatus;
   private QuoteCostingWorkspaceResponse costingWorkspace;

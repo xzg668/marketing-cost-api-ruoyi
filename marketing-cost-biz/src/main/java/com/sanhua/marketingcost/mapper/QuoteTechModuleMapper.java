@@ -14,14 +14,34 @@ import org.apache.ibatis.annotations.Update;
 @Mapper
 public interface QuoteTechModuleMapper extends BaseMapper<QuoteTechModule> {
 
+  // 和模块查询使用同一 Mapper，更新后清掉当前事务的 MyBatis 查询缓存，供 OA 分派读取最新缺口。
+  @Update("""
+      UPDATE lp_quote_tech_module SET required_flag=#{requirement.required},
+        requirement_reason_code=#{requirement.reasonCode},requirement_reason=#{requirement.reason},
+        source_availability=#{requirement.availability},source_reference=#{requirement.sourceReference},
+        source_checked_at=#{requirement.checkedAt},module_status=#{status},
+        last_validation_code='SOURCE_RECHECKED',last_validation_message='来源已复查，已有内容保留；需要补录时请重新确认',
+        row_version=row_version+1,updated_at=NOW(6) WHERE id=#{moduleId} AND row_version=#{expectedVersion}
+      """)
+  int refreshRequirement(@Param("moduleId") Long moduleId, @Param("expectedVersion") Integer expectedVersion,
+      @Param("requirement") com.sanhua.marketingcost.service.technicaldata.TechnicalDataModuleRequirement requirement,
+      @Param("status") String status);
+
+  @Select("""
+      SELECT m.* FROM lp_quote_tech_module m JOIN lp_quote_tech_product p ON p.id=m.product_id
+      WHERE p.task_id=#{taskId} AND p.active_flag=1 ORDER BY m.product_id,m.id
+      """)
+  List<QuoteTechModule> selectByTaskId(@Param("taskId") Long taskId);
+
   @Insert("""
       INSERT INTO lp_quote_tech_module (
         product_id,module_type,required_flag,requirement_reason_code,requirement_reason,
-        entry_mode,module_status,row_version)
+        entry_mode,module_status,row_version,source_availability,source_reference,source_checked_at)
       VALUES (
         #{module.productId},#{module.moduleType},#{module.requiredFlag},
         #{module.requirementReasonCode},#{module.requirementReason},#{module.entryMode},
-        #{module.moduleStatus},#{module.rowVersion})
+        #{module.moduleStatus},#{module.rowVersion},#{module.sourceAvailability},
+        #{module.sourceReference},#{module.sourceCheckedAt})
       ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)
       """)
   @Options(useGeneratedKeys = true, keyProperty = "module.id")
@@ -30,7 +50,7 @@ public interface QuoteTechModuleMapper extends BaseMapper<QuoteTechModule> {
   @Select("""
       SELECT * FROM lp_quote_tech_module
        WHERE product_id=#{productId}
-       ORDER BY FIELD(module_type,'PROFILE','PACKAGE','AUXILIARY','SALARY'),id
+       ORDER BY FIELD(module_type,'PROFILE','DRAWING_BOM','MANUFACTURING','PACKAGE','AUXILIARY','SOLDER','SALARY','NET_LOSS','PRICE'),id
       """)
   List<QuoteTechModule> selectByProductId(@Param("productId") Long productId);
 
@@ -41,7 +61,7 @@ public interface QuoteTechModuleMapper extends BaseMapper<QuoteTechModule> {
       "<foreach collection='productIds' item='id' open='(' separator=',' close=')'>",
       "#{id}",
       "</foreach>",
-      "ORDER BY product_id,FIELD(module_type,'PROFILE','PACKAGE','AUXILIARY','SALARY'),id",
+      "ORDER BY product_id,FIELD(module_type,'PROFILE','DRAWING_BOM','MANUFACTURING','PACKAGE','AUXILIARY','SOLDER','SALARY','NET_LOSS','PRICE'),id",
       "</script>"
   })
   List<QuoteTechModule> selectByProductIds(@Param("productIds") List<Long> productIds);
@@ -49,7 +69,7 @@ public interface QuoteTechModuleMapper extends BaseMapper<QuoteTechModule> {
   @Select("""
       SELECT * FROM lp_quote_tech_module
        WHERE product_id=#{productId}
-       ORDER BY FIELD(module_type,'PROFILE','PACKAGE','AUXILIARY','SALARY'),id
+       ORDER BY FIELD(module_type,'PROFILE','DRAWING_BOM','MANUFACTURING','PACKAGE','AUXILIARY','SOLDER','SALARY','NET_LOSS','PRICE'),id
        FOR UPDATE
       """)
   List<QuoteTechModule> selectByProductIdForUpdate(@Param("productId") Long productId);
@@ -87,10 +107,11 @@ public interface QuoteTechModuleMapper extends BaseMapper<QuoteTechModule> {
   @Update("""
       UPDATE lp_quote_tech_module
          SET entry_mode='MANUAL',
-             module_status=CASE WHEN required_flag=1 THEN 'READY' ELSE 'NOT_REQUIRED' END,
+             module_status=CASE WHEN source_availability IN ('UNCONFIRMED','ERROR') THEN 'EDITING'
+               WHEN required_flag=1 THEN 'READY' ELSE 'NOT_REQUIRED' END,
              current_version_id=#{versionId},
              last_validation_code='PROFILE_COMPLETE',
-             last_validation_message='产品型号、产品属性和新品标识完整',
+             last_validation_message='产品属性、新增费用选项和三项单件费用完整',
              row_version=row_version+1,
              updated_at=#{updatedAt}
        WHERE id=#{moduleId} AND row_version=#{expectedVersion}

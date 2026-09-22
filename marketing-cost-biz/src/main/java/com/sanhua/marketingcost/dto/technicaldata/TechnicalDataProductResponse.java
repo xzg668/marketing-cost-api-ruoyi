@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.dto.technicaldata;
 
 import java.util.List;
+import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.SupplementSnapshot;
 
 public record TechnicalDataProductResponse(
     Long id,
@@ -10,6 +11,8 @@ public record TechnicalDataProductResponse(
     String productName,
     String sourceModel,
     String sourceSpec,
+    java.math.BigDecimal annualVolume,
+    String annualVolumeUnit,
     String quoteNo,
     String accountingMonth,
     String sourceSnapshotJson,
@@ -20,4 +23,6 @@ public record TechnicalDataProductResponse(
     Long effectiveVersionId,
     Integer rowVersion,
     TechnicalDataProfileResponse profile,
-    List<TechnicalDataModuleResponse> modules) {}
+    List<TechnicalDataModuleResponse> modules,
+    Integer contentSchemaVersion,
+    SupplementSnapshot supplementContent) {}

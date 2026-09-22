@@ -43,6 +43,12 @@ public class SysUserServiceImpl implements SysUserService {
     }
 
     @Override
+    public SysUser findIdentityById(Long userId) {
+        // 身份查询不能套用人员管理列表的事业部筛选，公共管理员也需要验证实际账号状态。
+        return sysUserMapper.selectById(userId);
+    }
+
+    @Override
     public List<SysRole> findRolesByUserId(Long userId) {
         List<SysUserRole> userRoles = sysUserRoleMapper.selectList(
                 Wrappers.lambdaQuery(SysUserRole.class)

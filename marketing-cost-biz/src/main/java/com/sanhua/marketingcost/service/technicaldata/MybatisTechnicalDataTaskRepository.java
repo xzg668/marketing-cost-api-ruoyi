@@ -54,14 +54,27 @@ public class MybatisTechnicalDataTaskRepository implements TechnicalDataTaskRepo
 
   @Override
   public Optional<QuoteTechTask> lockActiveTask(
-      String oaNo, String accountingMonth, Long assigneeUserId) {
+      Long oaFormItemId, String accountingMonth) {
     return Optional.ofNullable(
-        taskMapper.selectActiveForUpdate(oaNo, accountingMonth, assigneeUserId));
+        taskMapper.selectActiveForUpdate(oaFormItemId, accountingMonth));
   }
 
   @Override
   public Optional<QuoteTechTask> findTask(Long taskId) {
     return Optional.ofNullable(taskMapper.selectById(taskId));
+  }
+
+  @Override
+  public int assignUnassignedTask(
+      Long taskId,
+      Integer expectedVersion,
+      Long assigneeUserId,
+      String assigneeName,
+      String sourceRequestId,
+      LocalDateTime dueAt,
+      Long actorId) {
+    return taskMapper.assignUnassigned(
+        taskId, expectedVersion, assigneeUserId, assigneeName, sourceRequestId, dueAt, actorId);
   }
 
   @Override
@@ -74,20 +87,8 @@ public class MybatisTechnicalDataTaskRepository implements TechnicalDataTaskRepo
   }
 
   @Override
-  public Optional<QuoteTechProduct> lockActiveProduct(
-      Long oaFormItemId, String accountingMonth) {
-    return Optional.ofNullable(
-        productMapper.selectActiveForUpdate(oaFormItemId, accountingMonth));
-  }
-
-  @Override
   public List<QuoteTechProduct> findProducts(Long taskId) {
     return productMapper.selectByTaskId(taskId);
-  }
-
-  @Override
-  public List<QuoteTechProduct> lockActiveProducts(Long taskId) {
-    return productMapper.selectActiveByTaskIdForUpdate(taskId);
   }
 
   @Override
@@ -137,54 +138,29 @@ public class MybatisTechnicalDataTaskRepository implements TechnicalDataTaskRepo
   }
 
   @Override
-  public int deactivateTask(
-      Long taskId, String reason, Long actorId, LocalDateTime changedAt) {
-    return taskMapper.deactivateForReplacement(taskId, reason, actorId, changedAt);
-  }
-
-  @Override
-  public long countAccessible(
-      String accessMode,
-      Long userId,
-      String taskStatus,
-      String accountingMonth) {
-    return taskMapper.countAccessible(accessMode, userId, taskStatus, accountingMonth);
-  }
-
-  @Override
-  public List<QuoteTechTask> findAccessiblePage(
-      String accessMode,
-      Long userId,
-      String taskStatus,
-      String accountingMonth,
-      int offset,
-      int size) {
-    return taskMapper.selectAccessiblePage(
-        accessMode, userId, taskStatus, accountingMonth, offset, size);
-  }
-
-  @Override
   public long countAccessibleProducts(
       String accessMode,
       Long userId,
+      String businessUnitType,
       String taskStatus,
       String accountingMonth,
       String keyword) {
     return productMapper.countAccessibleWorkbenchRows(
-        accessMode, userId, taskStatus, accountingMonth, keyword);
+        accessMode, userId, businessUnitType, taskStatus, accountingMonth, keyword);
   }
 
   @Override
   public List<QuoteTechProduct> findAccessibleProductPage(
       String accessMode,
       Long userId,
+      String businessUnitType,
       String taskStatus,
       String accountingMonth,
       String keyword,
       int offset,
       int size) {
     return productMapper.selectAccessibleWorkbenchPage(
-        accessMode, userId, taskStatus, accountingMonth, keyword, offset, size);
+        accessMode, userId, businessUnitType, taskStatus, accountingMonth, keyword, offset, size);
   }
 
   @Override

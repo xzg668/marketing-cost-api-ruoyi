@@ -189,6 +189,7 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
             resolvedPriceAsOfTime,
             planItem,
             scenarioContext);
+    resolveContext.setPriceCheckOnly(!persistLinkedPrice);
     List<String> attemptedBuckets = new ArrayList<>(candidates.size());
     String lastMissReason = null;
     String lastMissCode = null;
@@ -202,7 +203,7 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
         continue;
       }
       attemptedBuckets.add(route.priceType().name());
-      if (!persistLinkedPrice && route.priceType() == PriceTypeEnum.LINKED) {
+      if (!persistLinkedPrice && route.priceType() == PriceTypeEnum.LINKED && !route.supplemental()) {
         if (calculatedLinkedPrice != null && calculatedLinkedPrice.getPartUnitPrice() != null) {
           BigDecimal unitPrice = calculatedLinkedPrice.getPartUnitPrice();
           BigDecimal amount = quantity(planItem) == null
@@ -215,6 +216,10 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
               route.priceType(),
               resultRefType(route.priceType()),
               "联动价只读计算完成");
+        }
+        if (calculatedLinkedPrice != null && calculatedLinkedPrice.getFailureCode() != null) {
+          return NormalMaterialPricePrepareResult.gap(STATUS_FAILED, GAP_TYPE_MISSING_PRICE, calculatedLinkedPrice.getFailureCode(),
+              PriceResolveResult.SOURCE_ERROR, SOURCE_TABLE_PRICE_RESOLVER, calculatedLinkedPrice.getCalcMessage());
         }
         lastMissReason = calculatedLinkedPrice == null
             ? "联动价只读计算未返回结果"
@@ -233,6 +238,10 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
             route.priceType(),
             resultRefType(route.priceType()),
             "普通料号价格准备完成");
+      }
+      if (result != null && result.failureCode() != null) {
+        return NormalMaterialPricePrepareResult.gap(STATUS_FAILED, GAP_TYPE_MISSING_PRICE, result.failureCode(),
+            PriceResolveResult.SOURCE_ERROR, SOURCE_TABLE_PRICE_RESOLVER, result.remark());
       }
       if (result != null && StringUtils.hasText(result.remark())) {
         lastMissReason = result.remark();
@@ -308,7 +317,7 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       PricePrepareScenarioContext scenarioContext) {
     boolean hasLinkedRoute = false;
     for (PriceTypeRoute route : candidates) {
-      if (route != null && route.priceType() == PriceTypeEnum.LINKED) {
+      if (route != null && route.priceType() == PriceTypeEnum.LINKED && !route.supplemental()) {
         hasLinkedRoute = true;
         break;
       }
@@ -350,7 +359,7 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       return false;
     }
     for (PriceTypeRoute route : candidates) {
-      if (route != null && route.priceType() == PriceTypeEnum.LINKED) {
+      if (route != null && route.priceType() == PriceTypeEnum.LINKED && !route.supplemental()) {
         return true;
       }
     }
@@ -418,6 +427,9 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
     item.setPartName(planItem.getMaterialName());
     item.setPartQty(quantity(planItem));
     if (planItem.getBomRow() != null) {
+      item.setPriceOrgCode(trimToNull(planItem.getBomRow().getPriceOrgCode()));
+      item.setMaterialOrganizationCode(
+          trimToNull(planItem.getBomRow().getMaterialOrganizationCode()));
       item.setShapeAttr(planItem.getBomRow().getShapeAttr());
       item.setMaterial(planItem.getBomRow().getMaterialSpec());
     }
@@ -441,7 +453,13 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
         periodMonth,
         priceAsOfTime,
         "PRICE_PREPARE:" + (planItem == null ? "" : trimToNull(planItem.getMaterialCode())));
+    if (planItem != null && planItem.getBomRow() != null) {
+      context.setPriceOrgCode(trimToNull(planItem.getBomRow().getPriceOrgCode()));
+      context.setMaterialOrganizationCode(
+          trimToNull(planItem.getBomRow().getMaterialOrganizationCode()));
+    }
     context.setPriceScenarioType(scenarioType(scenarioContext).name());
+    context.setPriceVariableOverrides(scenarioContext == null ? Map.of() : scenarioContext.variableOverrides());
     return context;
   }
 

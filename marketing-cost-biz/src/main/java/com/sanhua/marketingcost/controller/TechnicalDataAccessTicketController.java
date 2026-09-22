@@ -4,8 +4,6 @@ import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstant
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataAccessTicketExchangeRequest;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataAccessTicketExchangeResponse;
-import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataAccessTicketIssueRequest;
-import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataAccessTicketIssueResponse;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataAccessTicketService;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataActorProvider;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataTaskException;
@@ -28,13 +26,6 @@ public class TechnicalDataAccessTicketController {
     this.actorProvider = actorProvider;
   }
 
-  @PreAuthorize("@ss.hasPermi('technical:data:admin:operate')")
-  @PostMapping("/tasks/{taskId}")
-  public CommonResult<TechnicalDataAccessTicketIssueResponse> issue(
-      @PathVariable Long taskId, @RequestBody TechnicalDataAccessTicketIssueRequest request) {
-    return execute(() -> service.issue(taskId, request, actorProvider.current()));
-  }
-
   @PostMapping("/exchange")
   public CommonResult<TechnicalDataAccessTicketExchangeResponse> exchange(
       @RequestBody TechnicalDataAccessTicketExchangeRequest request) {
@@ -48,11 +39,17 @@ public class TechnicalDataAccessTicketController {
       int code = switch (exception.code()) {
         case TASK_NOT_FOUND, PRODUCT_NOT_FOUND -> GlobalErrorCodeConstants.NOT_FOUND.getCode();
         case FORBIDDEN -> GlobalErrorCodeConstants.FORBIDDEN.getCode();
-        case VERSION_CONFLICT, ACTIVE_PRODUCT_CONFLICT,
-            SOURCE_CHANGE_REQUIRES_COMPLETE_TASK, PERSISTENCE_CONFLICT -> 409;
+        case VERSION_CONFLICT, ACTIVE_PRODUCT_CONFLICT, SHARED_MODULE_CONFLICT,
+            PERSISTENCE_CONFLICT -> 409;
         case INVALID_REQUEST -> GlobalErrorCodeConstants.BAD_REQUEST.getCode();
       };
       return CommonResult.error(code, exception.code().name() + ": " + exception.getMessage());
+    } catch (com.sanhua.marketingcost.integration.oa.OaIntegrationException exception) {
+      return CommonResult.error(exception.httpStatus().value(), exception.code() + ": " + exception.getMessage());
+    } catch (com.sanhua.marketingcost.integration.technicaldata.OaDeliveryUnknownException exception) {
+      return CommonResult.error(503, exception.getMessage());
+    } catch (IllegalArgumentException exception) {
+      return CommonResult.error(400, exception.getMessage());
     }
   }
 }

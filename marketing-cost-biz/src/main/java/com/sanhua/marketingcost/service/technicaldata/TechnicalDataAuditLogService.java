@@ -54,10 +54,10 @@ public class TechnicalDataAuditLogService {
     log.setBeforeValue(before);
     log.setAfterValue(after);
     log.setChangeReason(reason);
-    log.setChangedBy(actor.userId());
+    log.setChangedBy(Long.valueOf(0).equals(actor.userId()) ? null : actor.userId());
     log.setChangedByName(actor.name());
     log.setChangedAt(LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE));
-    log.setChangeSource(actor.admin() ? "ADMIN_PROXY" : "TECHNICAL_DATA");
+    log.setChangeSource(Long.valueOf(0).equals(actor.userId()) ? "OA_INTEGRATION" : actor.admin() ? "ADMIN_PROXY" : "TECHNICAL_DATA");
     log.setSubmitBatchNo("TD-R" + task.getReviewRound());
     log.setRequestId(requestId);
     log.setIdempotencyKey(idempotencyKey);

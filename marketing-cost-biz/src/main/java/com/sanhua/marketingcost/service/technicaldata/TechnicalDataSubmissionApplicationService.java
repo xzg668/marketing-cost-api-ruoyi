@@ -5,7 +5,7 @@ import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskSubmissionRes
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskValidationResponse;
 
 public interface TechnicalDataSubmissionApplicationService {
-  TechnicalDataTaskValidationResponse validate(Long taskId, TechnicalDataActor actor);
+  TechnicalDataTaskValidationResponse validate(Long taskId, Long assigneeUserId, TechnicalDataActor actor);
 
   TechnicalDataTaskSubmissionResponse submit(
       Long taskId, TechnicalDataTaskSubmissionRequest request, TechnicalDataActor actor);

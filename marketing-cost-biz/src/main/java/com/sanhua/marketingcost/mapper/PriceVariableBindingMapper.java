@@ -155,7 +155,7 @@ public interface PriceVariableBindingMapper extends BaseMapper<PriceVariableBind
    */
   @Select("SELECT li.id, li.material_code, li.spec_model, li.formula_expr, li.formula_expr_cn"
       + " FROM lp_price_linked_item li"
-      + " WHERE li.deleted = 0"
+      + " WHERE li.deleted = 0 AND li.source_kind = 'PUBLIC'"
       + "   AND li.effective_to IS NULL"
       + "   AND li.formula_expr LIKE '%[!_!_%' ESCAPE '!'"
       + "   AND NOT EXISTS ("

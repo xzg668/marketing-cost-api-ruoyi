@@ -70,7 +70,7 @@ public class PriceLinkedImportBasisServiceImpl implements PriceLinkedImportBasis
           repository.findBindings(current.getId()).size());
     }
 
-    if (current != null) {
+    if (current != null && !"TECH_SUPPLEMENTAL".equals(next.getSourceKind())) {
       // 公式版本先后改由正式导入时间决定；日期字段只保留历史展示，不阻断同日重导。
       current.setEffectiveTo(validated.effectiveDate());
       repository.updateItem(current);
@@ -94,6 +94,7 @@ public class PriceLinkedImportBasisServiceImpl implements PriceLinkedImportBasis
   }
 
   private void syncPriceType(PriceLinkedItem item) {
+    if("TECH_SUPPLEMENTAL".equals(item.getSourceKind()))return;
     priceTypeRouteSyncService.sync(new RouteCommand(
         item.getMaterialCode(),
         item.getMaterialName(),

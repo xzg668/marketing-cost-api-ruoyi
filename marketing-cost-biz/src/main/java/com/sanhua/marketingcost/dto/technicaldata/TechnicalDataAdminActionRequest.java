@@ -10,8 +10,11 @@ public class TechnicalDataAdminActionRequest {
   private String requestId;
   private Long assigneeUserId;
   private Long reviewerUserId;
+  private Map<String, Long> moduleAssignees = Map.of();
   private final Map<String, Object> unknownFields = new LinkedHashMap<>();
 
+  public Map<String, Long> getModuleAssignees() { return moduleAssignees; }
+  public void setModuleAssignees(Map<String, Long> value) { moduleAssignees = value; }
   public Integer getExpectedTaskVersion() { return expectedTaskVersion; }
   public void setExpectedTaskVersion(Integer value) { expectedTaskVersion = value; }
   public String getReason() { return reason; }

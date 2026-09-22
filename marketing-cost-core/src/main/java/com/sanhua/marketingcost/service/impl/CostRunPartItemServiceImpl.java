@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import cn.iocoder.yudao.framework.common.util.json.JsonUtils;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.CostRunContext;
@@ -242,6 +243,7 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       CostRunPartItemDto dto = new CostRunPartItemDto();
       dto.setId(item.getId());
       dto.setBomRowId(item.getBomRowId());
+      dto.setTechnicalModuleType(item.getTechnicalModuleType());
       dto.setPricePrepareItemId(item.getPricePrepareItemId());
       dto.setOaNo(item.getOaNo());
       dto.setProductCode(item.getProductCode());
@@ -365,11 +367,11 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     for (CostRunPartItemDto p : filtered) {
       String code = p.getPartCode() == null ? null : p.getPartCode().trim();
       BigDecimal amt = p.getAmount();
-      if (code != null && weldCodes.contains(code)) {
+      if ("SOLDER".equals(p.getTechnicalModuleType()) || code != null && weldCodes.contains(code)) {
         if (amt != null) {
           weldSum = weldSum.add(amt);
         }
-      } else if (code != null && packageParentKeys.contains(packageFlagKey(
+      } else if ("PACKAGE".equals(p.getTechnicalModuleType()) || code != null && packageParentKeys.contains(packageFlagKey(
           requiredItemOrganization(null, p, "包装组件聚合").materialOrganizationCode(), code))) {
         if (amt != null) {
           packageParentSum = packageParentSum.add(amt);
@@ -416,9 +418,21 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     if (partItemIds.isEmpty()) {
       return rows;
     }
-    List<RollupPartComponentDto> queried =
-        costRunPartItemMapper.selectRollupDisplayComponents(partItemIds);
-    if (queried == null || queried.isEmpty()) {
+    List<RollupPartComponentDto> queried = new ArrayList<>();
+    Set<Long> frozenIds = new LinkedHashSet<>();
+    for (var snapshot : costRunPartItemMapper.selectRollupDisplaySnapshots(partItemIds)) {
+      frozenIds.add(snapshot.partItemId());
+      for (var component : JsonUtils.parseArray(snapshot.componentsJson(), RollupPartComponentDto.class)) {
+        component.setPartItemId(snapshot.partItemId());
+        queried.add(component);
+      }
+    }
+    // 尚在生成底稿，或旧版本没有保存拆分依据时，才读取仍存在的原 BOM 引用。
+    List<Long> unfrozenIds = partItemIds.stream().filter(id -> !frozenIds.contains(id)).toList();
+    if (!unfrozenIds.isEmpty()) {
+      queried.addAll(costRunPartItemMapper.selectRollupDisplayComponents(unfrozenIds));
+    }
+    if (queried.isEmpty()) {
       return rows;
     }
 
@@ -707,6 +721,7 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     CostRunPartItemDto target = new CostRunPartItemDto();
     target.setId(source.getId());
     target.setBomRowId(source.getBomRowId());
+    target.setTechnicalModuleType(source.getTechnicalModuleType());
     target.setPricePrepareItemId(source.getPricePrepareItemId());
     target.setOaNo(source.getOaNo());
     target.setPartName(source.getPartName());
@@ -867,6 +882,12 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     if (packageRows == null || packageRows.isEmpty()) {
       return dto;
     }
+    if (packageRows.stream().anyMatch(row -> "PACKAGE".equals(row.getTechnicalModuleType()))) {
+      dto.setTechnicalModuleType("PACKAGE");
+      dto.setRemark("包装明细金额合计 × " + packageCoefficient.stripTrailingZeros().toPlainString());
+      // 多种子件只有合计金额，不能把第一种子件的料号/数量当成整套包装。
+      return dto;
+    }
     CostRunPartItemDto first = packageRows.get(0);
     dto.setPartCode(first.getPartCode());
     dto.setPartDrawingNo(first.getPartDrawingNo());
@@ -993,6 +1014,7 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
         if (StringUtils.hasText(result.remark())) {
           lastMissReason = result.remark();
         }
+        if (result.failureCode() != null) break;
       }
       if (hit != null) {
         results.put(i, hit);
@@ -1264,6 +1286,7 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       entity.setPartName(item.getPartName());
       entity.setPartDrawingNo(item.getPartDrawingNo());
       entity.setQty(item.getPartQty());
+      entity.setTechnicalModuleType(item.getTechnicalModuleType());
       entity.setMaterial(item.getMaterial());
       entity.setShapeAttr(item.getShapeAttr());
       entity.setPriceSource(item.getPriceSource());

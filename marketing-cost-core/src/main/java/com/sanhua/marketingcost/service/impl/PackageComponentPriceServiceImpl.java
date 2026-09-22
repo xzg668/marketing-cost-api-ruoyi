@@ -139,11 +139,14 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
 
     PackageSnapshotResult snapshotResult = snapshotService.ensureSnapshot(toSnapshotRequest(req));
     PackageComponentSnapshot snapshot = snapshotResult.getSnapshot();
-    PackageComponentPrice price = ensurePriceRow(req, snapshot);
+    StoredPrice stored = ensurePriceRow(req, snapshot);
+    PackageComponentPrice price = stored.price();
     if (!req.forceRefresh && isReusableCompletePrice(price)) {
       return PackagePriceResult.of(price, loadDetails(price.getId()), snapshotResult);
     }
-    deleteDetails(price.getId());
+    // 新主记录尚无明细。外层核算事务可能是 REPEATABLE READ，对空范围 DELETE
+    // 会持有间隙锁，使不同报价的首次包装明细插入互相死锁。
+    if (!stored.created()) deleteDetails(price.getId());
 
     if (snapshot == null || SNAPSHOT_STATUS_MISSING_STRUCTURE.equals(snapshot.getStatus())) {
       updatePrice(price, snapshot, PRICE_STATUS_MISSING_STRUCTURE, null, false);
@@ -241,6 +244,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
       if (StringUtils.hasText(resolved.remark())) {
         lastMissReason = resolved.remark();
       }
+      if (resolved.failureCode() != null) break;
     }
 
     String reason = "路由=" + attempted + " 但未取到有效价格"
@@ -351,10 +355,14 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     context.setPriceOrgCode(req.priceOrgCode);
     context.setMaterialOrganizationCode(
         MaterialOrganization.fromPriceOrgCode(req.priceOrgCode).getCode());
+    context.setBusinessUnitType(com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType());
+    context.setPriceCheckOnly(true);
     return context;
   }
 
-  private PackageComponentPrice ensurePriceRow(NormalizedRequest req, PackageComponentSnapshot snapshot) {
+  private record StoredPrice(PackageComponentPrice price, boolean created) {}
+
+  private StoredPrice ensurePriceRow(NormalizedRequest req, PackageComponentSnapshot snapshot) {
     PackageComponentPrice existing =
         selectByUniqueKey(req);
     if (existing != null) {
@@ -370,7 +378,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
       existing.setPriceAsOfTime(req.priceAsOfTime);
       existing.setGeneratedAt(LocalDateTime.now());
       priceMapper.updateById(existing);
-      return existing;
+      return new StoredPrice(existing, false);
     }
 
     PackageComponentPrice price = new PackageComponentPrice();
@@ -390,13 +398,13 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     price.setCalcBatchId(req.calcBatchId);
     try {
       priceMapper.insert(price);
-      return price;
+      return new StoredPrice(price, true);
     } catch (DuplicateKeyException ex) {
       PackageComponentPrice concurrent =
           selectByUniqueKey(req);
       if (concurrent != null) {
         if (!req.forceRefresh && isReusableCompletePrice(concurrent)) {
-          return concurrent;
+          return new StoredPrice(concurrent, false);
         }
         concurrent.setSnapshotId(snapshot == null ? null : snapshot.getId());
         concurrent.setPriceOrgCode(req.priceOrgCode);
@@ -410,7 +418,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
         concurrent.setPriceAsOfTime(req.priceAsOfTime);
         concurrent.setGeneratedAt(LocalDateTime.now());
         priceMapper.updateById(concurrent);
-        return concurrent;
+        return new StoredPrice(concurrent, false);
       }
       throw ex;
     }

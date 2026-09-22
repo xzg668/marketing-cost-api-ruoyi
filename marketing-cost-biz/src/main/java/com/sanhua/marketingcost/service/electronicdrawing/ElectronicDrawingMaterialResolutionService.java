@@ -67,9 +67,9 @@ public class ElectronicDrawingMaterialResolutionService {
   /** 后台编排器在电子图库源版本入库后调用；不借用当前登录人的身份。 */
   @Transactional
   public ElectronicDrawingMaterialResolutionResponse autoMatch(
-      Long workflowId, String businessUnitType, String applicableOrgCode) {
+      Long workflowId, String businessUnitType, String applicableOrgCode, String accountingMonth) {
     ElectronicDrawingWorkContext context = contextPort.load(
-        workflowId, businessUnitType, applicableOrgCode);
+        workflowId, businessUnitType, applicableOrgCode, accountingMonth);
     Target target = target(context, true);
     List<ElectronicDrawingSourceNode> pending = sourceNodeRepository
         .findPendingByVersionId(target.version().getId());
@@ -110,8 +110,8 @@ public class ElectronicDrawingMaterialResolutionService {
   }
 
   @Transactional(readOnly = true)
-  public ElectronicDrawingMaterialResolutionResponse state(Long workflowId) {
-    ElectronicDrawingWorkContext context = userContext(workflowId);
+  public ElectronicDrawingMaterialResolutionResponse state(Long workflowId, String accountingMonth) {
+    ElectronicDrawingWorkContext context = userContext(workflowId, accountingMonth);
     Target target = target(context, false);
     return response(context, target.version(), target.nodes());
   }
@@ -122,8 +122,8 @@ public class ElectronicDrawingMaterialResolutionService {
       Long expectedSourceVersionId,
       String searchType,
       String keyword,
-      Integer limit) {
-    ElectronicDrawingWorkContext context = userContext(workflowId);
+      Integer limit, String accountingMonth) {
+    ElectronicDrawingWorkContext context = userContext(workflowId, accountingMonth);
     Target target = target(context, true);
     if (!Objects.equals(target.version().getId(), expectedSourceVersionId)) {
       throw error(SOURCE_VERSION_INVALID, "电子图库源版本已变化，请刷新页面后重新搜索");
@@ -142,13 +142,21 @@ public class ElectronicDrawingMaterialResolutionService {
 
   @Transactional
   public ElectronicDrawingMaterialResolutionResponse apply(
-      Long workflowId, ElectronicDrawingMaterialResolutionRequest request) {
-    ElectronicDrawingWorkContext context = userContext(workflowId);
+      Long workflowId, ElectronicDrawingMaterialResolutionRequest request, String accountingMonth) {
+    ElectronicDrawingWorkContext context = userContext(workflowId, accountingMonth);
     ValidRequest valid = validate(request);
     if (!Objects.equals(context.revision(), valid.expectedTaskVersion())) throw conflict();
     Target target = target(context, true);
     if (!Objects.equals(target.version().getId(), valid.expectedSourceVersionId())) {
       throw error(SOURCE_VERSION_INVALID, "电子图库源版本已变化，请刷新页面后重新选择");
+    }
+
+    // 全部料号已确认后允许重试下级 BOM 检查，不重写已保存的选择和确认人。
+    if (valid.selections().isEmpty()) {
+      if (target.nodes().stream().anyMatch(node -> isPending(node.getMatchStatus()))) {
+        throw error(COMMAND_INVALID, "仍有待确认物料，请至少选择一个 U9 料号");
+      }
+      return response(context, target.version(), target.nodes());
     }
 
     Map<Long, ElectronicDrawingSourceNode> nodes = target.nodes().stream()
@@ -197,10 +205,10 @@ public class ElectronicDrawingMaterialResolutionService {
         sourceNodeRepository.findByVersionId(target.version().getId()));
   }
 
-  private ElectronicDrawingWorkContext userContext(Long workflowId) {
+  private ElectronicDrawingWorkContext userContext(Long workflowId, String accountingMonth) {
     actorProvider.current();
     try {
-      return contextPort.loadForCurrentBusinessUnit(workflowId);
+      return contextPort.loadForCurrentBusinessUnit(workflowId, accountingMonth);
     } catch (IllegalArgumentException exception) {
       throw error(TASK_NOT_FOUND, "电子图库对应的报价产品不存在");
     }
@@ -250,7 +258,7 @@ public class ElectronicDrawingMaterialResolutionService {
 
   private ElectronicDrawingWorkContext reload(ElectronicDrawingWorkContext context) {
     return contextPort.load(context.workflowId(), context.businessUnitType(),
-        context.applicableOrgCode());
+        context.applicableOrgCode(), context.accountingMonth());
   }
 
   private ElectronicDrawingMaterialResolutionResponse response(
@@ -280,13 +288,16 @@ public class ElectronicDrawingMaterialResolutionService {
         case ElectronicDrawingSourceNode.MATCH_AMBIGUOUS -> ambiguous++;
         default -> unmatched++;
       }
-      MaterialMasterRaw material = materials.get(normalize(node.getResolvedMaterialCode()));
+      String materialCode = normalize(node.getResolvedMaterialCode());
+      MaterialMasterRaw material = materialCode == null ? null : materials.get(materialCode);
       items.add(item(node, material));
     }
     return new ElectronicDrawingMaterialResolutionResponse(
         context.workflowId(), context.revision(), version.getId(), version.getVersionNo(),
         version.getVersionStatus(), version.getElectronicDrawingNo(), context.materialOrgCode(),
-        nodes.size(), auto, manual, unmatched, ambiguous, unmatched + ambiguous == 0, items);
+        nodes.size(), auto, manual, unmatched, ambiguous, unmatched + ambiguous == 0, items,
+        context.accountingMonth(), context.workflowStage(), version.getCompositionFingerprint() != null,
+        context.published());
   }
 
   private static ElectronicDrawingMaterialResolutionResponse.Item item(
@@ -315,14 +326,15 @@ public class ElectronicDrawingMaterialResolutionService {
     return new ElectronicDrawingExcelParseResult.SourceNode(
         node.getSourceSequence(), node.getParentSourceSequence(), 0, node.getDrawingCode(),
         node.getSourceName(), node.getMaterial(), node.getImportanceClass(), node.getHsfRiskClass(),
-        node.getQty(), node.getReferenceWeight(), node.getSourceRemark(), node.getSourceRowNo());
+        node.getQty(), node.getReferenceWeight(), node.getReferenceWeightUnit(),
+        node.getSourceRemark(), node.getSourceRowNo());
   }
 
   private static ValidRequest validate(ElectronicDrawingMaterialResolutionRequest request) {
     if (request == null || request.expectedTaskVersion() == null
         || request.expectedTaskVersion() < 0 || request.expectedSourceVersionId() == null
-        || request.expectedSourceVersionId() <= 0 || request.selections().isEmpty()) {
-      throw error(COMMAND_INVALID, "任务版本、电子图库源版本和至少一条物料选择不能为空");
+        || request.expectedSourceVersionId() <= 0) {
+      throw error(COMMAND_INVALID, "任务版本和电子图库源版本不能为空");
     }
     List<ValidSelection> selections = request.selections().stream().map(selection -> {
       if (selection == null || selection.sourceNodeId() == null || selection.sourceNodeId() <= 0) {

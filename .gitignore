@@ -15,3 +15,5 @@ docs/
 *.ear
 __pycache__/
 *.py[cod]
+/data/
+/marketing-cost-biz/data/

@@ -1,0 +1,41 @@
+# 与现有 marketing-cost-biz 可执行包一起加载，无须新增 Java 部署模块。
+# --spring.config.additional-location=file:/部署目录/oa-integration.yml
+# 模拟与真实环境均须显式配置；默认关闭。密钥从部署环境注入，不写入此文件。
+integration:
+  # 每日全量读取 OA 后原子替换本地人员目录；报价页面不直连 OA。
+  oa-person-directory:
+    enabled: ${OA_PERSON_DIRECTORY_ENABLED:false}
+    run-at-startup: ${OA_PERSON_DIRECTORY_RUN_AT_STARTUP:false}
+    source-system: ${OA_PERSON_DIRECTORY_SOURCE_SYSTEM:HZ_KG_OA_TST}
+    environment: ${OA_PERSON_DIRECTORY_ENVIRONMENT:TEST}
+    auth-base-url: ${OA_PERSON_DIRECTORY_AUTH_BASE_URL:}
+    query-base-url: ${OA_PERSON_DIRECTORY_QUERY_BASE_URL:}
+    detail-base-url: ${OA_PERSON_DIRECTORY_DETAIL_BASE_URL:}
+    call-sys-code: ${OA_PERSON_DIRECTORY_CALL_SYS_CODE:}
+    corp-id: ${OA_PERSON_DIRECTORY_CORP_ID:}
+    app-key: ${OA_PERSON_DIRECTORY_APP_KEY:}
+    app-secret: ${OA_PERSON_DIRECTORY_APP_SECRET:}
+    cron: ${OA_PERSON_DIRECTORY_CRON:0 15 2 * * *}
+    zone: ${OA_PERSON_DIRECTORY_ZONE:Asia/Shanghai}
+    page-size: 1000
+    connect-timeout-ms: 5000
+    read-timeout-ms: 30000
+    max-attempts: 5
+    detail-concurrency: 4
+  oa:
+    mode: ${OA_INTEGRATION_MODE:DISABLED}
+    environment: ${OA_ENVIRONMENT:}
+    worker-enabled: true
+    max-body-bytes: 2097152
+    batch-size: 20
+    lease-seconds: 60
+    max-attempts: 5
+    poll-interval-ms: 1000
+    clients:
+      oa:
+        source-system: ${OA_SOURCE_SYSTEM:}
+        environment: ${OA_ENVIRONMENT:}
+        mode: ${OA_INTEGRATION_MODE:DISABLED}
+        secret: ${OA_INBOUND_SECRET:}
+        business-units:
+          - COMMERCIAL

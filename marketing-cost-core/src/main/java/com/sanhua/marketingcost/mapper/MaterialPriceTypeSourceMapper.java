@@ -33,7 +33,7 @@ public interface MaterialPriceTypeSourceMapper {
                  COALESCE(imported_at, created_at) AS source_time,
                  id AS source_id
             FROM lp_price_fixed_item
-           WHERE material_code = #{materialCode}
+           WHERE material_code = #{materialCode} AND source_kind='PUBLIC'
           UNION ALL
           SELECT material_code,
                  'LINKED' AS price_type,
@@ -44,7 +44,7 @@ public interface MaterialPriceTypeSourceMapper {
                  created_at AS source_time,
                  id AS source_id
             FROM lp_price_linked_item
-           WHERE material_code = #{materialCode}
+           WHERE material_code = #{materialCode} AND source_kind='PUBLIC'
              AND deleted = 0
           UNION ALL
           SELECT material_code,

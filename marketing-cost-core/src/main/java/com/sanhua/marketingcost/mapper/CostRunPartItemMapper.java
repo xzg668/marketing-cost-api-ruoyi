@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.sanhua.marketingcost.annotation.DataScope;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.RollupPartComponentDto;
+import com.sanhua.marketingcost.dto.RollupDisplaySnapshot;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
 import java.util.Collection;
 import java.util.List;
@@ -57,8 +58,12 @@ public interface CostRunPartItemMapper extends BaseMapper<CostRunPartItem> {
       """
           SELECT
             t1.id AS bomRowId,
+            CASE
+              WHEN EXISTS (SELECT 1 FROM lp_bom_costing_row_source_ref sr WHERE sr.costing_row_id=t1.id AND sr.source_part_type='TECH_PACKAGE') THEN 'PACKAGE'
+              WHEN EXISTS (SELECT 1 FROM lp_bom_costing_row_source_ref sr WHERE sr.costing_row_id=t1.id AND sr.source_part_type='TECH_SOLDER') THEN 'SOLDER'
+              ELSE NULL END AS technicalModuleType,
             t1.oa_no AS oaNo,
-            t2.material_name AS partName,
+            COALESCE(t2.material_name, t1.material_name) AS partName,
             t1.material_code AS partCode,
             t1.top_product_code AS productCode,
             t2.drawing_no AS partDrawingNo,
@@ -80,8 +85,12 @@ public interface CostRunPartItemMapper extends BaseMapper<CostRunPartItem> {
       """
           SELECT
             t1.id AS bomRowId,
+            CASE
+              WHEN EXISTS (SELECT 1 FROM lp_bom_costing_row_source_ref sr WHERE sr.costing_row_id=t1.id AND sr.source_part_type='TECH_PACKAGE') THEN 'PACKAGE'
+              WHEN EXISTS (SELECT 1 FROM lp_bom_costing_row_source_ref sr WHERE sr.costing_row_id=t1.id AND sr.source_part_type='TECH_SOLDER') THEN 'SOLDER'
+              ELSE NULL END AS technicalModuleType,
             t1.oa_no AS oaNo,
-            t2.material_name AS partName,
+            COALESCE(t2.material_name, t1.material_name) AS partName,
             t1.material_code AS partCode,
             t1.top_product_code AS productCode,
             t2.drawing_no AS partDrawingNo,
@@ -151,5 +160,23 @@ public interface CostRunPartItemMapper extends BaseMapper<CostRunPartItem> {
   })
   @DataScope(alias = "t1")
   List<RollupPartComponentDto> selectRollupDisplayComponents(
+      @Param("partItemIds") Collection<Long> partItemIds);
+
+  /** 保留空数组，区别于未保存拆分依据的旧版本。JSON 在 Java 解析，查询沿用业务单元隔离。 */
+  @Select({
+    "<script>",
+    "SELECT t1.id AS partItemId,",
+    "  JSON_EXTRACT(trace.source_snapshot_json, '$.rollupDisplayComponents') AS componentsJson",
+    "FROM lp_cost_run_part_item t1",
+    "JOIN lp_cost_run_trace_snapshot trace ON trace.cost_run_no = t1.cost_run_no COLLATE utf8mb4_unicode_ci",
+    "  AND trace.part_item_id = t1.id AND trace.trace_type = 'PART_PRICE'",
+    "WHERE JSON_TYPE(JSON_EXTRACT(trace.source_snapshot_json, '$.rollupDisplayComponents')) = 'ARRAY'",
+    "  AND t1.id IN",
+    "<foreach collection='partItemIds' item='id' open='(' separator=',' close=')'>#{id}</foreach>",
+    "ORDER BY t1.id",
+    "</script>"
+  })
+  @DataScope(alias = "t1")
+  List<RollupDisplaySnapshot> selectRollupDisplaySnapshots(
       @Param("partItemIds") Collection<Long> partItemIds);
 }

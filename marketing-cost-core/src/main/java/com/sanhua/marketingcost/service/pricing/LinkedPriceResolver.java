@@ -25,9 +25,11 @@ import org.springframework.util.StringUtils;
 @Component
 public class LinkedPriceResolver implements PriceResolver {
 
+  private final TechnicalPriceSourceResolver technicalPrices;
   private final PriceLinkedCalcItemMapper priceLinkedCalcItemMapper;
 
-  public LinkedPriceResolver(PriceLinkedCalcItemMapper priceLinkedCalcItemMapper) {
+  public LinkedPriceResolver(PriceLinkedCalcItemMapper priceLinkedCalcItemMapper, TechnicalPriceSourceResolver technicalPrices) {
+    this.technicalPrices = technicalPrices;
     this.priceLinkedCalcItemMapper = priceLinkedCalcItemMapper;
   }
 
@@ -38,12 +40,13 @@ public class LinkedPriceResolver implements PriceResolver {
 
   @Override
   public PriceResolveResult resolve(String oaNo, CostRunPartItemDto item, PriceTypeRoute route) {
-    return resolveQuote(oaNo, item, null);
+    return resolve(oaNo, item, route, null);
   }
 
   @Override
   public PriceResolveResult resolve(
       String oaNo, CostRunPartItemDto item, PriceTypeRoute route, CostRunContext context) {
+    if (route != null && route.supplemental()) return technicalPrices.resolve(item, route, context);
     if (context != null && CostRunContext.SCENE_MONTHLY_REPRICE.equals(context.getScene())) {
       return resolveMonthlyAdjust(item, context);
     }
@@ -57,7 +60,7 @@ public class LinkedPriceResolver implements PriceResolver {
     }
     String pricingMonth = context == null ? null : context.getPricingMonth();
     var query =
-        Wrappers.lambdaQuery(PriceLinkedCalcItem.class)
+        Wrappers.lambdaQuery(PriceLinkedCalcItem.class).eq(PriceLinkedCalcItem::getSourceKind, "PUBLIC")
             .eq(PriceLinkedCalcItem::getOaNo, oaNo.trim())
             .eq(PriceLinkedCalcItem::getItemCode, code.trim())
             // 普通报价只读 QUOTE 场景的联动价结果；月调结果必须由 MONTHLY_ADJUST 分支读取。
@@ -66,6 +69,7 @@ public class LinkedPriceResolver implements PriceResolver {
             .eq(StringUtils.hasText(pricingMonth), PriceLinkedCalcItem::getPricingMonth,
                 pricingMonth == null ? null : pricingMonth.trim())
             .eq(PriceLinkedCalcItem::getCalcStatus, "OK")
+            .apply("(source_price_record_id IS NULL OR source_price_record_id IN (SELECT id FROM lp_price_linked_item WHERE source_kind='PUBLIC'))")
             .isNotNull(PriceLinkedCalcItem::getPartUnitPrice)
             .eq(
                 context != null && context.getPriceAsOfTime() != null,
@@ -96,7 +100,7 @@ public class LinkedPriceResolver implements PriceResolver {
         || !StringUtils.hasText(context.getPricingMonth())) {
       return PriceResolveResult.miss("月度调价联动价缺少料号、业务单元或月份");
     }
-    var query = Wrappers.lambdaQuery(PriceLinkedCalcItem.class)
+    var query = Wrappers.lambdaQuery(PriceLinkedCalcItem.class).eq(PriceLinkedCalcItem::getSourceKind, "PUBLIC")
         // 月调不能读 OA 锁价场景结果，必须读 MONTHLY_ADJUST 联动价结果。
         .eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.MONTHLY_ADJUST.getCode())
         .eq(PriceLinkedCalcItem::getBusinessUnitType, context.getBusinessUnitType().trim())

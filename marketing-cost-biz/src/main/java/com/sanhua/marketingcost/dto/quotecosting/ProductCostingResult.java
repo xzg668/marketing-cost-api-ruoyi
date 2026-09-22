@@ -24,4 +24,5 @@ public class ProductCostingResult {
   private BigDecimal totalCost;
   private boolean reusedSuccess;
   private boolean retryable;
+  private com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSourceCheckResponse technicalDataCheck;
 }

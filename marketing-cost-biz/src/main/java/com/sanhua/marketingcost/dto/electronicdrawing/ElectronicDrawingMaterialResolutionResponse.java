@@ -19,7 +19,8 @@ public record ElectronicDrawingMaterialResolutionResponse(
     int unmatchedCount,
     int ambiguousCount,
     boolean complete,
-    List<Item> items) {
+    List<Item> items,
+    String accountingMonth, String workflowStage, boolean bomComposed, boolean bomPublished) {
 
   public ElectronicDrawingMaterialResolutionResponse {
     items = items == null ? List.of() : List.copyOf(items);

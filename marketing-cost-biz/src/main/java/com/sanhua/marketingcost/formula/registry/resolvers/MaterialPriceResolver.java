@@ -47,7 +47,7 @@ public class MaterialPriceResolver implements VariableResolver {
     PriceLinkedItem item = ctx == null ? null : ctx.getLinkedItem();
     if (item == null && ctx != null && ctx.getMaterialCode() != null) {
       List<PriceLinkedItem> rows = mapper.selectList(
-          Wrappers.lambdaQuery(PriceLinkedItem.class)
+          Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
               .eq(PriceLinkedItem::getMaterialCode, ctx.getMaterialCode().trim())
               .orderByDesc(PriceLinkedItem::getUpdatedAt)
               .orderByDesc(PriceLinkedItem::getId)

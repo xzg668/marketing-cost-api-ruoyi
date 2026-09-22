@@ -13,6 +13,9 @@ import java.time.LocalDateTime;
 public class PriceLinkedCalcItem {
   @TableId(type = IdType.AUTO)
   private Long id;
+  private String sourceKind = "PUBLIC";
+  public String getSourceKind() { return sourceKind; }
+  public void setSourceKind(String value) { sourceKind = value; }
   private String oaNo;
   private String itemCode;
   private String shapeAttr;

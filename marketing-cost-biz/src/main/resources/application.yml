@@ -2,6 +2,9 @@ server:
   port: ${SERVER_PORT:8081}
 
 quote:
+  technical-data:
+    # 辅料原表随审批版本保留；部署时挂载持久目录并纳入备份。
+    attachments-root: ${TECHNICAL_DATA_ATTACHMENTS_ROOT:./data/technical-data}
   electronic-drawing:
     # 电子图库是报价 BOM 的独立补充来源，不属于协作任务私有配置。
     # 未配置真实电子图库时失败关闭；禁止把报价系统草稿当成电子图库正式结果。
@@ -46,6 +49,28 @@ spring:
       # 不动 MySQL 全局（避免影响 docker 内其他业务库）
       connection-init-sql: "SET time_zone = '+08:00'"
 
+# OA 人员只由定时同步读取；技术员下拉框始终查询本地 lp_oa_person_directory。
+integration:
+  oa-person-directory:
+    enabled: ${OA_PERSON_DIRECTORY_ENABLED:false}
+    run-at-startup: ${OA_PERSON_DIRECTORY_RUN_AT_STARTUP:false}
+    source-system: ${OA_PERSON_DIRECTORY_SOURCE_SYSTEM:HZ_KG_OA_TST}
+    environment: ${OA_PERSON_DIRECTORY_ENVIRONMENT:TEST}
+    auth-base-url: ${OA_PERSON_DIRECTORY_AUTH_BASE_URL:}
+    query-base-url: ${OA_PERSON_DIRECTORY_QUERY_BASE_URL:}
+    detail-base-url: ${OA_PERSON_DIRECTORY_DETAIL_BASE_URL:}
+    call-sys-code: ${OA_PERSON_DIRECTORY_CALL_SYS_CODE:}
+    corp-id: ${OA_PERSON_DIRECTORY_CORP_ID:}
+    app-key: ${OA_PERSON_DIRECTORY_APP_KEY:}
+    app-secret: ${OA_PERSON_DIRECTORY_APP_SECRET:}
+    cron: ${OA_PERSON_DIRECTORY_CRON:0 15 2 * * *}
+    zone: ${OA_PERSON_DIRECTORY_ZONE:Asia/Shanghai}
+    page-size: ${OA_PERSON_DIRECTORY_PAGE_SIZE:1000}
+    connect-timeout-ms: ${OA_PERSON_DIRECTORY_CONNECT_TIMEOUT_MS:5000}
+    read-timeout-ms: ${OA_PERSON_DIRECTORY_READ_TIMEOUT_MS:30000}
+    max-attempts: ${OA_PERSON_DIRECTORY_MAX_ATTEMPTS:5}
+    detail-concurrency: ${OA_PERSON_DIRECTORY_DETAIL_CONCURRENCY:4}
+
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
@@ -70,6 +95,15 @@ monthly:
     # 逗号分隔；为空表示不限制业务单元。灰度期建议显式配置测试业务单元。
     allowed-business-units: ${MONTHLY_REPRICE_ALLOWED_BUSINESS_UNITS:}
 
+# EasyData 每天 00:22 开始把 SRM 全量固定价写入原始表；应用在 01:00-04:50 间轮询发布昨天批次。
+srm:
+  fixed-price:
+    enabled: ${SRM_FIXED_PRICE_ENABLED:true}
+    cron: ${SRM_FIXED_PRICE_CRON:0 */10 1-4 * * *}
+    minimum-valid-rows: ${SRM_FIXED_PRICE_MINIMUM_VALID_ROWS:70000}
+    maximum-change-ratio: ${SRM_FIXED_PRICE_MAXIMUM_CHANGE_RATIO:0.10}
+    quiet-period-minutes: ${SRM_FIXED_PRICE_QUIET_PERIOD_MINUTES:5}
+
 # T34: Actuator 运维端点（health/info 公开；其他端点仅 ADMIN —— 见 ActuatorSecurityConfig）
 management:
   endpoints:
@@ -88,18 +122,6 @@ app:
   jwt:
     secret: ${JWT_SECRET:dGhpcy1pcy1hLWRldi1vbmx5LXNlY3JldC1rZXktcGxlYXNlLWNoYW5nZS1pbi1wcm9k}
     expiration-ms: ${JWT_EXPIRATION_MS:86400000}
-  technical-data:
-    oa:
-      # OA待办只接收稳定任务ID；跳转凭证由服务端临时签发，默认关闭真实HTTP调用。
-      enabled: ${TECHNICAL_DATA_OA_ENABLED:false}
-      base-url: ${TECHNICAL_DATA_OA_BASE_URL:}
-      publish-path: ${TECHNICAL_DATA_OA_PUBLISH_PATH:/api/tasks}
-      authorization: ${TECHNICAL_DATA_OA_AUTHORIZATION:}
-      callback-secret: ${TECHNICAL_DATA_OA_CALLBACK_SECRET:technical-data-oa-dev-secret-change-in-production}
-      frontend-base-url: ${TECHNICAL_DATA_FRONTEND_BASE_URL:http://localhost:5173}
-      connect-timeout-ms: ${TECHNICAL_DATA_OA_CONNECT_TIMEOUT_MS:3000}
-      read-timeout-ms: ${TECHNICAL_DATA_OA_READ_TIMEOUT_MS:10000}
-      callback-clock-skew-seconds: ${TECHNICAL_DATA_OA_CALLBACK_CLOCK_SKEW_SECONDS:300}
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
 

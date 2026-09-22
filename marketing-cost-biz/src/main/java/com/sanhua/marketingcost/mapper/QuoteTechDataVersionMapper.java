@@ -26,6 +26,15 @@ public interface QuoteTechDataVersionMapper extends BaseMapper<QuoteTechDataVers
          SET product_model = #{version.productModel},
              product_property = #{version.productProperty},
              new_product_flag = #{version.newProductFlag},
+             content_schema_version = #{version.contentSchemaVersion},
+             product_fees_json = #{version.productFeesJson},
+             drawing_bom_json = #{version.drawingBomJson},
+             manufacturing_json = #{version.manufacturingJson},
+             packaging_json = #{version.packagingJson},
+             solder_items_json = #{version.solderItemsJson},
+             net_loss_json = #{version.netLossJson},
+             price_items_json = #{version.priceItemsJson},
+             source_facts_json = #{version.sourceFactsJson},
              package_total_amount = #{version.packageTotalAmount},
              auxiliary_total_amount = #{version.auxiliaryTotalAmount},
              salary_total_amount = #{version.salaryTotalAmount},
@@ -47,12 +56,12 @@ public interface QuoteTechDataVersionMapper extends BaseMapper<QuoteTechDataVers
          SET version_status = #{targetStatus},
              content_fingerprint = #{contentFingerprint},
              reference_snapshot_json = CASE
-               WHEN #{targetStatus} = 'SUBMITTED'
+               WHEN #{targetStatus} IN ('FROZEN','SUBMITTED')
                  THEN COALESCE(#{referenceSnapshotJson}, reference_snapshot_json)
                ELSE reference_snapshot_json
              END,
-             submitted_by = CASE WHEN #{targetStatus} = 'SUBMITTED' THEN #{actorId} ELSE submitted_by END,
-             submitted_at = CASE WHEN #{targetStatus} = 'SUBMITTED' THEN #{changedAt} ELSE submitted_at END,
+             submitted_by = CASE WHEN #{expectedStatus} = 'DRAFT' AND #{targetStatus} IN ('FROZEN','SUBMITTED') THEN #{actorId} ELSE submitted_by END,
+             submitted_at = CASE WHEN #{expectedStatus} = 'DRAFT' AND #{targetStatus} IN ('FROZEN','SUBMITTED') THEN #{changedAt} ELSE submitted_at END,
              approved_by = CASE WHEN #{targetStatus} = 'APPROVED' THEN #{actorId} ELSE approved_by END,
              approved_at = CASE WHEN #{targetStatus} = 'APPROVED' THEN #{changedAt} ELSE approved_at END,
              updated_by = #{actorId},
@@ -62,6 +71,8 @@ public interface QuoteTechDataVersionMapper extends BaseMapper<QuoteTechDataVers
          AND version_status = #{expectedStatus}
          AND row_version = #{expectedVersion}
          AND ((#{expectedStatus} = 'DRAFT'
+               AND #{targetStatus} IN ('FROZEN', 'SUBMITTED', 'VOIDED'))
+           OR (#{expectedStatus} = 'FROZEN'
                AND #{targetStatus} IN ('SUBMITTED', 'VOIDED'))
            OR (#{expectedStatus} = 'SUBMITTED'
                AND #{targetStatus} IN ('APPROVED', 'RETURNED', 'VOIDED')))

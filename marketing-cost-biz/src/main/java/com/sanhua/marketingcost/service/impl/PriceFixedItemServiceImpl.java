@@ -38,7 +38,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
   @Override
   public Page<PriceFixedItem> page(String materialCode, String supplierCode, String sourceType,
       String pricingMonth, int page, int pageSize) {
-    var query = Wrappers.lambdaQuery(PriceFixedItem.class);
+    var query = Wrappers.lambdaQuery(PriceFixedItem.class).eq(PriceFixedItem::getSourceKind, "PUBLIC");
     if (StringUtils.hasText(materialCode)) {
       query.like(PriceFixedItem::getMaterialCode, materialCode.trim());
     }
@@ -85,6 +85,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     if (existing == null) {
       return null;
     }
+    requirePublicSource(existing);
     merge(existing, request);
     fillDefaults(existing);
     itemMapper.updateById(existing);
@@ -94,7 +95,9 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
 
   @Override
   public boolean delete(Long id) {
-    return id != null && itemMapper.deleteById(id) > 0;
+    if (id != null) requirePublicSource(itemMapper.selectById(id));
+    return id != null && itemMapper.delete(Wrappers.lambdaQuery(PriceFixedItem.class)
+        .eq(PriceFixedItem::getId, id).eq(PriceFixedItem::getSourceKind, "PUBLIC")) > 0;
   }
 
   @Override
@@ -167,7 +170,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
   private PriceFixedItem findExisting(PriceFixedItemImportRequest.PriceFixedItemImportRow row) {
     if (isPurchaseFixed(row) && isU9Source(row)) {
       return itemMapper.selectOne(
-          Wrappers.lambdaQuery(PriceFixedItem.class)
+          Wrappers.lambdaQuery(PriceFixedItem.class).eq(PriceFixedItem::getSourceKind, "PUBLIC")
               .eq(PriceFixedItem::getSourceType, row.getSourceType())
               .eq(PriceFixedItem::getSourceSystem, row.getSourceSystem())
               .eq(PriceFixedItem::getMaterialCode, row.getMaterialCode().trim())
@@ -175,7 +178,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     }
     if (isPurchaseFixed(row) && !isU9Source(row)) {
       return itemMapper.selectOne(
-          Wrappers.lambdaQuery(PriceFixedItem.class)
+          Wrappers.lambdaQuery(PriceFixedItem.class).eq(PriceFixedItem::getSourceKind, "PUBLIC")
               .eq(PriceFixedItem::getSourceType, row.getSourceType())
               .eq(PriceFixedItem::getSourceSystem, row.getSourceSystem())
               .eq(PriceFixedItem::getExternalRowId, trimToNull(row.getExternalRowId()))
@@ -183,14 +186,14 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     }
     if (isSettleFixed(row) && (isU9Source(row) || SOURCE_SYSTEM_EXCEL.equals(row.getSourceSystem()))) {
       return itemMapper.selectOne(
-          Wrappers.lambdaQuery(PriceFixedItem.class)
+          Wrappers.lambdaQuery(PriceFixedItem.class).eq(PriceFixedItem::getSourceKind, "PUBLIC")
               .eq(PriceFixedItem::getSourceType, row.getSourceType())
               .eq(PriceFixedItem::getSourceSystem, row.getSourceSystem())
               .eq(PriceFixedItem::getMaterialCode, row.getMaterialCode().trim())
               .last("LIMIT 1"));
     }
 
-    var query = Wrappers.lambdaQuery(PriceFixedItem.class)
+    var query = Wrappers.lambdaQuery(PriceFixedItem.class).eq(PriceFixedItem::getSourceKind, "PUBLIC")
         .eq(PriceFixedItem::getMaterialCode, row.getMaterialCode().trim());
     String supplierCode = trimToNull(row.getSupplierCode());
     if (supplierCode == null) {
@@ -413,11 +416,17 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     }
   }
 
+  private void requirePublicSource(PriceFixedItem item) {
+    if (item != null && "TECH_SUPPLEMENTAL".equals(item.getSourceKind())) {
+      throw new IllegalArgumentException("技术审批价格不能在公共价格页面修改或删除，请查看原补录任务");
+    }
+  }
+
   private void closePreviousVersions(PriceFixedItem item) {
     if (item == null || item.getEffectiveFrom() == null || !StringUtils.hasText(item.getMaterialCode())) {
       return;
     }
-    var query = Wrappers.lambdaQuery(PriceFixedItem.class)
+    var query = Wrappers.lambdaQuery(PriceFixedItem.class).eq(PriceFixedItem::getSourceKind, "PUBLIC")
         .eq(PriceFixedItem::getMaterialCode, item.getMaterialCode())
         .eq(PriceFixedItem::getSourceType, item.getSourceType())
         .and(q -> q.isNull(PriceFixedItem::getEffectiveTo)

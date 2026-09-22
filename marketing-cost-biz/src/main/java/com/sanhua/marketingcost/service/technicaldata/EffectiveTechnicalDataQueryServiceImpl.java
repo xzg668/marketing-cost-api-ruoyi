@@ -34,7 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class EffectiveTechnicalDataQueryServiceImpl
     implements EffectiveTechnicalDataQueryService {
 
-  private static final List<String> MODULE_ORDER =
+  private static final List<String> LEGACY_MODULE_ORDER =
       List.of("PROFILE", "PACKAGE", "AUXILIARY", "SALARY");
 
   private final QuoteTechProductMapper productMapper;
@@ -45,6 +45,11 @@ public class EffectiveTechnicalDataQueryServiceImpl
   private final QuoteTechAuxItemMapper auxItemMapper;
   private final QuoteTechSalaryItemMapper salaryItemMapper;
   private final TechnicalDataVersionContentCodec contentCodec;
+  private final TechnicalDataAuxiliaryClassificationService auxiliaryClassification;
+  private final TechnicalDataCostingSources costingSources;
+  private final TechnicalPriceCostingSources priceSources;
+  private final com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaWorkflowRepository workflow;
+  private final com.sanhua.marketingcost.integration.oa.OaMessageCodec oaCodec;
 
   public EffectiveTechnicalDataQueryServiceImpl(
       QuoteTechProductMapper productMapper,
@@ -54,7 +59,11 @@ public class EffectiveTechnicalDataQueryServiceImpl
       QuoteTechPackageItemMapper packageItemMapper,
       QuoteTechAuxItemMapper auxItemMapper,
       QuoteTechSalaryItemMapper salaryItemMapper,
-      TechnicalDataVersionContentCodec contentCodec) {
+      TechnicalDataVersionContentCodec contentCodec,
+      com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaWorkflowRepository workflow,
+      com.sanhua.marketingcost.integration.oa.OaMessageCodec oaCodec,
+      TechnicalDataAuxiliaryClassificationService auxiliaryClassification,
+      TechnicalDataCostingSources costingSources, TechnicalPriceCostingSources priceSources) {
     this.productMapper = productMapper;
     this.taskMapper = taskMapper;
     this.moduleMapper = moduleMapper;
@@ -63,16 +72,24 @@ public class EffectiveTechnicalDataQueryServiceImpl
     this.auxItemMapper = auxItemMapper;
     this.salaryItemMapper = salaryItemMapper;
     this.contentCodec = contentCodec;
+    this.workflow = workflow;
+    this.oaCodec = oaCodec;
+    this.auxiliaryClassification = auxiliaryClassification;
+    this.costingSources = costingSources;
+    this.priceSources = priceSources;
   }
 
   @Override
-  @Transactional(readOnly = true)
+  // 缺审批属于可展示的业务阻断，调用方检查后仍须保存本次 BOM/价格准备结果。
+  @Transactional(noRollbackFor = EffectiveTechnicalDataException.class)
   public EffectiveTechnicalDataInput resolve(Long oaFormItemId, String accountingMonth) {
     requireScope(oaFormItemId, accountingMonth);
     List<QuoteTechProduct> candidates = productMapper.selectActiveCandidatesByItemAndMonth(
         oaFormItemId, accountingMonth);
     if (candidates == null || candidates.isEmpty()) {
-      return null;
+      var selection = costingSources.select(oaFormItemId, accountingMonth);
+      selection.requireReady();
+      return compose(selection, null);
     }
     if (candidates.size() != 1) {
       throw error(
@@ -83,13 +100,20 @@ public class EffectiveTechnicalDataQueryServiceImpl
           "产品行存在多条活动技术资料，无法确定成本取数版本");
     }
     QuoteTechProduct product = candidates.getFirst();
+    // 九模块按本次实际来源核验。公共资料已补齐时，旧任务的草稿或退回状态不再阻断。
+    if (Integer.valueOf(2).equals(product.getContentSchemaVersion())) {
+      return compose(costingSources.select(oaFormItemId, accountingMonth), null);
+    }
     List<QuoteTechModule> modules = requireModules(product, accountingMonth);
     List<String> requiredModules = modules.stream()
         .filter(module -> Integer.valueOf(1).equals(module.getRequiredFlag()))
         .map(QuoteTechModule::getModuleType)
         .toList();
     if (product.getEffectiveVersionId() == null) {
-      if (requiredModules.isEmpty()) return null;
+      if (requiredModules.isEmpty()) {
+        var selection = costingSources.select(oaFormItemId, accountingMonth);
+        return compose(selection, null);
+      }
       throw error(
           "TECH_DATA_EFFECTIVE_VERSION_MISSING",
           oaFormItemId,
@@ -108,6 +132,14 @@ public class EffectiveTechnicalDataQueryServiceImpl
           accountingMonth,
           requiredModules,
           "技术资料任务尚未全部审核通过，不能用于成本核算");
+    }
+    if (task.getOaFlowId() != null) {
+      var flow = workflow.findFlow(task.getOaFlowId());
+      if (flow == null || !flow.financeReady() || flow.confirmedFingerprint() == null
+          || !flow.confirmedFingerprint().equals(oaCodec.canonicalHash(workflow.approvalBasis(flow.id())))) {
+        throw error("TECH_DATA_FINANCE_CONFIRMATION_REQUIRED", oaFormItemId, accountingMonth, requiredModules,
+            "补录资料须各部门审批通过、到达 OA 财务核算节点并经报价员确认后才能核算");
+      }
     }
     QuoteTechDataVersion version = versionMapper.selectById(product.getEffectiveVersionId());
     if (version == null) {
@@ -133,13 +165,21 @@ public class EffectiveTechnicalDataQueryServiceImpl
     List<QuoteTechSalaryItem> salaryItems = salaryItemMapper.selectByVersionId(version.getId());
     validateContent(product, version, modules, packageItems, auxiliaryItems, salaryItems);
 
+    if (contentCodec.schemaVersion(version) == 2) {
+      return compose(costingSources.select(oaFormItemId, accountingMonth), version);
+    }
+
+    List<EffectiveTechnicalDataInput.AuxiliaryLine> classifiedAuxiliary =
+        auxiliaryItems.stream().map(this::auxiliaryLine).toList();
+    String effectiveFingerprint = version.getContentFingerprint();
+
     return new EffectiveTechnicalDataInput(
         product.getId(),
         version.getId(),
         version.getVersionNo(),
         product.getAccountingMonth(),
         EffectiveTechnicalDataInput.SOURCE_EFFECTIVE_VERSION,
-        version.getContentFingerprint(),
+        effectiveFingerprint,
         LocalDateTime.now(),
         required(modules, "PACKAGE"),
         required(modules, "AUXILIARY"),
@@ -148,16 +188,92 @@ public class EffectiveTechnicalDataQueryServiceImpl
         amount(version.getAuxiliaryTotalAmount()),
         amount(version.getSalaryTotalAmount()),
         packageItems.stream().map(this::packageLine).toList(),
-        auxiliaryItems.stream().map(this::auxiliaryLine).toList(),
-        salaryItems.stream().map(this::salaryLine).toList());
+        classifiedAuxiliary,
+        salaryItems.stream().map(this::salaryLine).toList(),
+        TechnicalDataProductFeeRules.costingInput(contentCodec.productFees(version)),
+        required(modules, "NET_LOSS") ? TechnicalDataNetLossRules.costingInput(contentCodec.netLoss(version)) : null);
+  }
+
+  private EffectiveTechnicalDataInput compose(TechnicalDataCostingSources.Selection selection,
+      QuoteTechDataVersion currentVersion) {
+    selection.requireReady();
+    var sources = selection.sources();
+    var selectedPrices = priceSources.select(selection.context());
+    var priceInputs = selectedPrices.stream().map(TechnicalPriceCostingSources.Selected::price).toList();
+    var allSources = java.util.stream.Stream.concat(sources.values().stream(), selectedPrices.stream()
+        .map(TechnicalPriceCostingSources.Selected::approval)).distinct().toList();
+    if (allSources.isEmpty() && currentVersion == null) return null;
+    var anchor = currentVersion == null
+        ? allSources.stream().sorted(java.util.Comparator.comparing(TechnicalDataCostingSources.Source::moduleType))
+            .findFirst().orElseThrow().version() : currentVersion;
+    List<EffectiveTechnicalDataInput.ModuleSource> moduleSources = allSources.stream()
+        .map(source -> new EffectiveTechnicalDataInput.ModuleSource(source.moduleType(), source.product().getId(),
+            source.version().getId(), source.moduleVersionId(), source.version().getContentFingerprint()))
+        .distinct().sorted(java.util.Comparator.comparing(EffectiveTechnicalDataInput.ModuleSource::moduleType)
+            .thenComparing(EffectiveTechnicalDataInput.ModuleSource::productId)).toList();
+    var materials = materialItems(sources);
+    var auxiliary = sources.get("AUXILIARY");
+    List<EffectiveTechnicalDataInput.AuxiliaryLine> auxiliaryLines = auxiliary == null ? List.of()
+        : auxiliaryClassification.costingLines(auxiliary.version(), auxItemMapper.selectByVersionId(auxiliary.version().getId()),
+            selection.context().businessUnitType());
+    var salary = sources.get("SALARY");
+    List<EffectiveTechnicalDataInput.SalaryLine> salaryLines = salary == null ? List.of()
+        : salaryItemMapper.selectByVersionId(salary.version().getId()).stream().map(this::salaryLine).toList();
+    var profile = sources.get("PROFILE");
+    var fees = profile == null ? null : TechnicalDataProductFeeRules.costingInput(contentCodec.productFees(profile.version()));
+    var loss = sources.get("NET_LOSS");
+    var lossRate = loss == null ? null : TechnicalDataNetLossRules.costingInput(contentCodec.netLoss(loss.version()));
+    // 各模块的批准版本与后处理映射进入输入指纹；取数时间不影响同输入复用。
+    String fingerprint = oaCodec.canonicalHash(java.util.Arrays.asList(anchor.getContentFingerprint(), moduleSources,
+        materials, auxiliaryLines, salaryLines, fees, lossRate, priceInputs));
+    return new EffectiveTechnicalDataInput(anchor.getProductId(), anchor.getId(), anchor.getVersionNo(),
+        selection.context().accountingMonth(), EffectiveTechnicalDataInput.SOURCE_EFFECTIVE_VERSION,
+        fingerprint, LocalDateTime.now(), false, auxiliary != null, salary != null,
+        null, auxiliaryLines.stream().map(EffectiveTechnicalDataInput.AuxiliaryLine::amount).reduce(BigDecimal.ZERO, BigDecimal::add),
+        salaryLines.stream().map(EffectiveTechnicalDataInput.SalaryLine::amount).reduce(BigDecimal.ZERO, BigDecimal::add),
+        List.of(), auxiliaryLines, salaryLines, fees, lossRate,
+        profile == null ? null : profile.version().getProductProperty(), moduleSources, materials, priceInputs);
+  }
+
+  @Override
+  @Transactional
+  public List<EffectiveTechnicalDataInput.MaterialLine> preparationMaterials(Long itemId, String month) {
+    requireScope(itemId, month);
+    return materialItems(costingSources.preparationSources(itemId, month));
+  }
+
+  private List<EffectiveTechnicalDataInput.MaterialLine> materialItems(Map<String, TechnicalDataCostingSources.Source> sources) {
+    List<EffectiveTechnicalDataInput.MaterialLine> materials = new ArrayList<>();
+    var packaging = sources.get("PACKAGE");
+    if (packaging != null) {
+      var value = contentCodec.packaging(packaging.version());
+      var lines = packageItemMapper.selectByVersionId(packaging.version().getId());
+      var issues = TechnicalDataPackageRules.validate(value, lines);
+      if (!issues.isEmpty()) throw new IllegalArgumentException(String.join("；", issues));
+      for (var line : lines) materials.add(new EffectiveTechnicalDataInput.MaterialLine("PACKAGE",
+          "PACKAGE:" + packaging.version().getId() + ":" + line.getId(), line.getComponentMaterialNo(), line.getComponentName(),
+          TechnicalDataPackageRules.perProduct(value, line), line.getOriginalUnit(), packaging.version().getId()));
+    }
+    var solder = sources.get("SOLDER");
+    if (solder != null) {
+      var value = contentCodec.solder(solder.version());
+      var issues = TechnicalDataSolderRules.validate(value);
+      if (!issues.isEmpty()) throw new IllegalArgumentException(String.join("；", issues));
+      for (var line : value.items()) materials.add(new EffectiveTechnicalDataInput.MaterialLine("SOLDER",
+          "SOLDER:" + solder.version().getId() + ":" + line.itemKey(), line.materialNo(), line.name(),
+          line.quantityPerProduct(), line.unit(), solder.version().getId()));
+    }
+    return List.copyOf(materials);
   }
 
   private List<QuoteTechModule> requireModules(
       QuoteTechProduct product, String accountingMonth) {
+    List<String> moduleOrder = Integer.valueOf(2).equals(product.getContentSchemaVersion())
+        ? TechnicalDataModuleType.orderedCodes() : LEGACY_MODULE_ORDER;
     List<QuoteTechModule> modules = moduleMapper.selectByProductId(product.getId());
     Map<String, QuoteTechModule> byType = new LinkedHashMap<>();
     for (QuoteTechModule module : modules == null ? List.<QuoteTechModule>of() : modules) {
-      if (module == null || !MODULE_ORDER.contains(module.getModuleType())
+      if (module == null || !moduleOrder.contains(module.getModuleType())
           || byType.put(module.getModuleType(), module) != null) {
         throw error(
             "TECH_DATA_MODULE_SET_INVALID",
@@ -167,7 +283,7 @@ public class EffectiveTechnicalDataQueryServiceImpl
             "技术资料模块集合损坏或存在重复模块");
       }
     }
-    List<String> missing = MODULE_ORDER.stream().filter(type -> !byType.containsKey(type)).toList();
+    List<String> missing = moduleOrder.stream().filter(type -> !byType.containsKey(type)).toList();
     if (!missing.isEmpty()) {
       throw error(
           "TECH_DATA_MODULE_MISSING",
@@ -176,7 +292,7 @@ public class EffectiveTechnicalDataQueryServiceImpl
           missing,
           "技术资料缺少模块：" + missing);
     }
-    return MODULE_ORDER.stream().map(byType::get).toList();
+    return moduleOrder.stream().map(byType::get).toList();
   }
 
   private void requireApprovedProduct(
@@ -305,9 +421,7 @@ public class EffectiveTechnicalDataQueryServiceImpl
 
   private EffectiveTechnicalDataInput.SalaryLine salaryLine(QuoteTechSalaryItem item) {
     return new EffectiveTechnicalDataInput.SalaryLine(
-        item.getId(), item.getLineNo(), item.getProcessCode(), item.getProcessName(),
-        item.getLaborType(), item.getStandardHours(), item.getHourlyRate(),
-        item.getPersonCoefficient(), item.getAmount());
+        item.getId(), item.getLineNo(), item.getLaborType(), item.getAmount());
   }
 
   private BigDecimal amount(BigDecimal value) {

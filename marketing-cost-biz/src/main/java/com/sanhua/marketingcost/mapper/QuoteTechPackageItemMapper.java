@@ -8,7 +8,6 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
-import org.apache.ibatis.annotations.Update;
 
 @Mapper
 public interface QuoteTechPackageItemMapper extends BaseMapper<QuoteTechPackageItem> {
@@ -60,31 +59,4 @@ public interface QuoteTechPackageItemMapper extends BaseMapper<QuoteTechPackageI
       """)
   int deleteAllIfDraft(@Param("versionId") Long versionId);
 
-  @Update("""
-      UPDATE lp_quote_tech_package_item item
-      INNER JOIN lp_quote_tech_data_version version ON version.id=item.version_id
-         SET item.line_no=#{item.lineNo}, item.sort_seq=#{item.sortSeq},
-             item.component_material_no=#{item.componentMaterialNo},
-             item.component_name=#{item.componentName}, item.component_spec=#{item.componentSpec},
-             item.quantity=#{item.quantity}, item.original_unit=#{item.originalUnit},
-             item.standard_quantity=#{item.standardQuantity}, item.standard_unit=#{item.standardUnit},
-             item.conversion_factor=#{item.conversionFactor},
-             item.price_basis_type=#{item.priceBasisType},
-             item.reference_unit_price=#{item.referenceUnitPrice}, item.amount=#{item.amount},
-             item.source_reference_id=#{item.sourceReferenceId},
-             item.source_reference_version=#{item.sourceReferenceVersion},
-             item.source_snapshot_json=#{item.sourceSnapshotJson}, item.remark=#{item.remark},
-             item.updated_at=CURRENT_TIMESTAMP
-       WHERE item.id=#{item.id} AND item.version_id=#{item.versionId}
-         AND version.version_status='DRAFT'
-      """)
-  int updateIfDraft(@Param("item") QuoteTechPackageItem item);
-
-  @Delete("""
-      DELETE item FROM lp_quote_tech_package_item item
-      INNER JOIN lp_quote_tech_data_version version ON version.id=item.version_id
-       WHERE item.id=#{itemId} AND item.version_id=#{versionId}
-         AND version.version_status='DRAFT'
-      """)
-  int deleteIfDraft(@Param("versionId") Long versionId, @Param("itemId") Long itemId);
 }

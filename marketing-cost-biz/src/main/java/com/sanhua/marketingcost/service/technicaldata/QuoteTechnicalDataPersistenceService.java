@@ -5,11 +5,9 @@ import com.sanhua.marketingcost.entity.QuoteTechDataVersion;
 import com.sanhua.marketingcost.entity.QuoteTechModule;
 import com.sanhua.marketingcost.entity.QuoteTechPackageItem;
 import com.sanhua.marketingcost.entity.QuoteTechProduct;
-import com.sanhua.marketingcost.entity.QuoteTechReviewItem;
 import com.sanhua.marketingcost.entity.QuoteTechSalaryItem;
 import com.sanhua.marketingcost.entity.QuoteTechTask;
 import java.util.List;
-import java.util.Set;
 
 public interface QuoteTechnicalDataPersistenceService {
   QuoteTechTask createTask(QuoteTechTask task);
@@ -22,8 +20,6 @@ public interface QuoteTechnicalDataPersistenceService {
 
   QuoteTechDataVersion createDraftWithPackageItems(
       QuoteTechDataVersion version, List<QuoteTechPackageItem> items);
-
-  QuoteTechReviewItem createReviewItem(QuoteTechReviewItem reviewItem);
 
   void addPackageItems(Long versionId, List<QuoteTechPackageItem> items);
 
@@ -44,25 +40,4 @@ public interface QuoteTechnicalDataPersistenceService {
   QuoteTechDataVersion freezeDraftForSubmission(
       Long productId, int expectedProductVersion, Long actorId);
 
-  QuoteTechDataVersion copySubmittedVersionAsDraft(
-      Long productId, Long sourceVersionId, int expectedProductVersion, Long actorId);
-
-  QuoteTechDataVersion copyReturnedModulesAsDraft(
-      Long productId,
-      Long sourceVersionId,
-      int expectedProductVersion,
-      Long actorId,
-      Set<String> returnedModuleTypes);
-
-  void updatePackageItem(QuoteTechPackageItem item);
-
-  void updateAuxItem(QuoteTechAuxItem item);
-
-  void updateSalaryItem(QuoteTechSalaryItem item);
-
-  void deletePackageItem(Long versionId, Long itemId);
-
-  void deleteAuxItem(Long versionId, Long itemId);
-
-  void deleteSalaryItem(Long versionId, Long itemId);
 }

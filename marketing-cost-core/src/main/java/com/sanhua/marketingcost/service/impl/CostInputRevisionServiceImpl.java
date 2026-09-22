@@ -27,6 +27,7 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
       "lp_three_expense_rate",
       "lp_other_expense_rate",
       "lp_product_property",
+      "lp_product_property_rule",
       "lp_price_fixed_item",
       "lp_price_linked_item",
       "lp_price_range_item",
@@ -67,7 +68,7 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
       throw new IllegalArgumentException("报价表头和产品行不能为空");
     }
     return scopedRevision(
-        sourceRevision(), form, item, effectiveTechnicalFingerprint(item, pricingMonth));
+        sourceRevision(), form, item, effectiveTechnicalFingerprint(item, pricingMonth), pricingMonth);
   }
 
   @Override
@@ -86,7 +87,7 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
         if (item != null && item.getId() != null) {
           try {
             revisions.put(item.getId(), scopedRevision(
-                sourceRevision, form, item, effectiveTechnicalFingerprint(item, pricingMonth)));
+                sourceRevision, form, item, effectiveTechnicalFingerprint(item, pricingMonth), pricingMonth));
           } catch (EffectiveTechnicalDataException missing) {
             // 不复用该产品的旧成功；worker 逐品执行时记录明确的技术资料缺口。
           }
@@ -110,10 +111,13 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
       String sourceRevision,
       OaForm form,
       OaFormItem item,
-      String effectiveTechnicalFingerprint) {
+      String effectiveTechnicalFingerprint, String pricingMonth) {
     StringBuilder canonical = new StringBuilder(1024);
     append(canonical, "sources", sourceRevision);
     append(canonical, "effectiveTechnicalData", effectiveTechnicalFingerprint);
+    // 下游退回要求真正生成新成本；只纳入本报价、本月的退回记录，不改旧成功版本。
+    Long returned = jdbcTemplate.queryForObject("SELECT MAX(id) FROM lp_quote_final_submission WHERE oa_form_id=? AND accounting_month=? AND returned_at IS NOT NULL", Long.class, form.getId(), pricingMonth);
+    append(canonical, "returnedQuotationSubmission", returned);
     appendForm(canonical, form);
     appendItem(canonical, item);
     return sha256(canonical.toString());

@@ -132,6 +132,7 @@ public class MakePartPriceCalculator {
   }
 
   private String parentKey(MakePartPriceCalcRow row) {
+    if (row.getSourceCostingRowId() != null) return "ROW:" + row.getSourceCostingRowId();
     return StringUtils.hasText(row.getParentMaterialNo())
         ? row.getParentMaterialNo().trim()
         : "";
@@ -158,6 +159,11 @@ public class MakePartPriceCalculator {
     }
     row.setId(source.getId());
     row.setCalcBatchId(source.getCalcBatchId());
+    row.setSourceCostingRowId(source.getSourceCostingRowId());
+    row.setRawSourcePriceRecordId(source.getRawSourcePriceRecordId());
+    row.setRawSourcePriceBatchNo(source.getRawSourcePriceBatchNo());
+    row.setScrapSourcePriceRecordId(source.getScrapSourcePriceRecordId());
+    row.setScrapSourcePriceBatchNo(source.getScrapSourcePriceBatchNo());
     row.setOaNo(source.getOaNo());
     row.setBusinessUnitType(source.getBusinessUnitType());
     row.setPricingMonth(source.getPricingMonth());

@@ -85,7 +85,7 @@ public class BomSettlementRowBuildEngine {
     List<BomSettlementNode> nodes = normalizedNodes(request, warnings);
     Map<String, BomRuleMaterialAttributes> materialAttributes =
         resolveMaterialAttributes(nodes);
-    Set<String> byproductParentMaterialCodes = effectiveByproductParentMaterialCodes(request);
+    Set<String> byproductParentPaths = effectiveByproductParentPaths(request, nodes);
     Map<String, BomSettlementNode> nodeByPath = indexByPath(nodes, warnings);
     Map<String, List<BomSettlementNode>> childrenByParentPath = indexChildren(nodes);
     validateStructure(nodes, nodeByPath, childrenByParentPath, warnings);
@@ -117,7 +117,7 @@ public class BomSettlementRowBuildEngine {
           node,
           request,
           materialAttributes,
-          byproductParentMaterialCodes.contains(trimToNull(node.materialCode())));
+          byproductParentPaths.contains(node.path()));
       BomRuleNodeContext parentContext =
           parent == null
               ? null
@@ -125,13 +125,13 @@ public class BomSettlementRowBuildEngine {
                   parent,
                   request,
                   materialAttributes,
-                  byproductParentMaterialCodes.contains(trimToNull(parent.materialCode())));
+                  byproductParentPaths.contains(parent.path()));
       List<BomRuleNodeContext> childContexts = children.stream()
           .map(child -> toRuleContext(
               child,
               request,
               materialAttributes,
-              byproductParentMaterialCodes.contains(trimToNull(child.materialCode()))))
+              byproductParentPaths.contains(child.path())))
           .toList();
       Optional<BomSettlementRule> exclusionHit = ruleMatcher.match(
           nodeContext,
@@ -523,7 +523,8 @@ public class BomSettlementRowBuildEngine {
         continue;
       }
       List<BomSettlementNode> parentNodes = byproductCandidateNodesByMaterialCode
-          .getOrDefault(byproduct.parentMaterialCode(), List.of());
+          .getOrDefault(byproduct.parentMaterialCode(), List.of()).stream()
+          .filter(parent -> byproduct.parentNodePath() == null || byproduct.parentNodePath().equals(parent.path())).toList();
       if (parentNodes.isEmpty()) {
         if (!allManufacturedNodesByMaterialCode.containsKey(byproduct.parentMaterialCode())) {
           warnings.add("BYPRODUCT_PARENT_NOT_FOUND: 副产品 "
@@ -809,8 +810,8 @@ public class BomSettlementRowBuildEngine {
         hasByproduct);
   }
 
-  private static Set<String> effectiveByproductParentMaterialCodes(
-      BomSettlementBuildRequest request) {
+  private static Set<String> effectiveByproductParentPaths(
+      BomSettlementBuildRequest request, List<BomSettlementNode> nodes) {
     if (request == null || request.byproducts().isEmpty()) {
       return Set.of();
     }
@@ -824,7 +825,9 @@ public class BomSettlementRowBuildEngine {
       }
       String parentMaterialCode = trimToNull(byproduct.parentMaterialCode());
       if (parentMaterialCode != null) {
-        result.add(parentMaterialCode);
+        nodes.stream().filter(node -> parentMaterialCode.equals(node.materialCode())
+            && (byproduct.parentNodePath() == null || byproduct.parentNodePath().equals(node.path())))
+            .map(BomSettlementNode::path).forEach(result::add);
       }
     }
     return Set.copyOf(result);

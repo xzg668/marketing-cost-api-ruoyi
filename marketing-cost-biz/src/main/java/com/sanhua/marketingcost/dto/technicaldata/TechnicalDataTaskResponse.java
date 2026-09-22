@@ -13,8 +13,6 @@ public record TechnicalDataTaskResponse(
     String applicableOrgCode,
     Long assigneeUserId,
     String assigneeName,
-    Long reviewerUserId,
-    String reviewerName,
     String taskStatus,
     Integer taskVersion,
     Integer reviewRound,

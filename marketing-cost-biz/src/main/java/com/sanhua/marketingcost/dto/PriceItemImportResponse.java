@@ -16,6 +16,9 @@ import java.util.List;
  */
 public class PriceItemImportResponse {
 
+  private List<com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportResult> technicalResults = new ArrayList<>();
+  public List<com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportResult> getTechnicalResults() { return technicalResults; }
+  public void setTechnicalResults(List<com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportResult> values) { technicalResults=values; }
   private String batchId;
   private Long factorUploadBatchId;
   private String fileSha256;
@@ -461,6 +464,9 @@ public class PriceItemImportResponse {
 
   /** Excel 单行错误信息。rowNumber 为 1-based 的 Excel 行号。 */
   public static class ErrorRow {
+    private String itemKey;
+    public String getItemKey() { return itemKey; }
+    public void setItemKey(String value) { itemKey=value; }
     private Integer rowNumber;
     private String materialCode;
     private String materialName;

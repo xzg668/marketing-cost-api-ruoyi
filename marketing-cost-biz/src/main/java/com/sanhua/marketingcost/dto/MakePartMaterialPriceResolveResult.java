@@ -13,6 +13,7 @@ public class MakePartMaterialPriceResolveResult {
   private String status;
   private String remark;
   private String trace;
+  private com.sanhua.marketingcost.service.pricing.PriceResolveEvidence evidence;
 
   public static MakePartMaterialPriceResolveResult ok(
       String materialCode, String priceType, BigDecimal unitPrice, String remark, String trace) {

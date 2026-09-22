@@ -32,7 +32,10 @@ public class PriceLinkedImportBasisRepositoryImpl
 
   @Override
   public PriceLinkedItem findCurrentVersion(PriceLinkedItem identity) {
-    var query = Wrappers.lambdaQuery(PriceLinkedItem.class)
+    if("TECH_SUPPLEMENTAL".equals(identity.getSourceKind()))return itemMapper.selectOne(Wrappers.lambdaQuery(PriceLinkedItem.class)
+        .eq(PriceLinkedItem::getSourceKind,"TECH_SUPPLEMENTAL").eq(PriceLinkedItem::getTechnicalVersionId,identity.getTechnicalVersionId())
+        .eq(PriceLinkedItem::getTechnicalItemKey,identity.getTechnicalItemKey()).orderByDesc(PriceLinkedItem::getTechnicalRevision).last("LIMIT 1"));
+    var query = Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
         .eq(PriceLinkedItem::getPricingMonth, identity.getPricingMonth())
         .eq(PriceLinkedItem::getMaterialCode, identity.getMaterialCode())
         .eq(PriceLinkedItem::getBusinessUnitType, identity.getBusinessUnitType())

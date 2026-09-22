@@ -1,57 +1,30 @@
 package com.sanhua.marketingcost.mapper;
 
-import com.sanhua.marketingcost.service.technicaldata.TechnicalDataPackageReferenceRow;
+import java.time.LocalDate;
 import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
+/** 仅发现可能命中的成品，实际可用版本及父子关系由正式 BOM 读取服务核实。 */
 @Mapper
 public interface TechnicalDataPackageReferenceMapper {
-
   @Select("""
-      <script>
-      SELECT source_product.id AS source_product_id,
-             source_version.id AS source_version_id,
-             source_version.version_no AS source_version_no,
-             source_product.material_no,
-             source_product.product_name,
-             source_version.product_model,
-             source_product.accounting_month AS valid_from_month,
-             source_version.content_fingerprint,
-             (SELECT COUNT(*) FROM lp_quote_tech_package_item item
-               WHERE item.version_id=source_version.id) AS item_count
-        FROM lp_quote_tech_product source_product
-        JOIN lp_quote_tech_task source_task ON source_task.id=source_product.task_id
-        JOIN lp_quote_tech_data_version source_version
-          ON source_version.id=source_product.effective_version_id
-       WHERE source_product.id&lt;&gt;#{targetProductId}
-         AND source_product.active_flag=1
-         AND source_task.active_flag=1
-         AND source_task.task_status='APPROVED'
-         AND source_version.version_status='APPROVED'
-         AND source_task.business_unit_type=#{businessUnitType}
-         AND source_task.applicable_org_code=#{applicableOrgCode}
-         AND source_product.accounting_month&lt;=#{accountingMonth}
-         AND EXISTS (SELECT 1 FROM lp_quote_tech_package_item item
-                      WHERE item.version_id=source_version.id)
-      <if test="sourceVersionId != null">
-         AND source_version.id=#{sourceVersionId}
-      </if>
-      <if test="keyword != null and keyword != ''">
-         AND (source_product.material_no LIKE CONCAT('%',#{keyword},'%')
-           OR source_product.product_name LIKE CONCAT('%',#{keyword},'%')
-           OR source_version.product_model LIKE CONCAT('%',#{keyword},'%'))
-      </if>
-       ORDER BY source_product.accounting_month DESC,source_version.id DESC
-       LIMIT 100
-      </script>
+      SELECT DISTINCT h.top_product_code
+        FROM lp_bom_raw_hierarchy h
+        LEFT JOIN lp_material_master_raw m
+          ON m.material_code=h.material_code AND m.organization_code=#{materialOrg} AND m.active_flag=1
+       WHERE h.source_type='U9' AND h.price_org_code=#{priceOrg}
+         AND (h.business_unit_type=#{businessUnit} OR h.business_unit_type IS NULL)
+         AND h.effective_from<=#{effectiveDate}
+         AND (h.effective_to IS NULL OR h.effective_to>=#{effectiveDate})
+         AND (LOCATE(#{keyword},h.material_code)>0 OR LOCATE(#{keyword},h.material_name)>0
+           OR LOCATE(#{keyword},h.material_spec)>0 OR LOCATE(#{keyword},m.material_model)>0
+           OR LOCATE(#{keyword},m.drawing_no)>0 OR LOCATE(#{keyword},m.material_spec)>0)
+       ORDER BY h.top_product_code
+       LIMIT 101
       """)
-  List<TechnicalDataPackageReferenceRow> selectApprovedSources(
-      @Param("targetProductId") Long targetProductId,
-      @Param("businessUnitType") String businessUnitType,
-      @Param("applicableOrgCode") String applicableOrgCode,
-      @Param("accountingMonth") String accountingMonth,
-      @Param("keyword") String keyword,
-      @Param("sourceVersionId") Long sourceVersionId);
+  List<String> searchProducts(@Param("keyword") String keyword, @Param("priceOrg") String priceOrg,
+      @Param("materialOrg") String materialOrg, @Param("businessUnit") String businessUnit,
+      @Param("effectiveDate") LocalDate effectiveDate);
 }

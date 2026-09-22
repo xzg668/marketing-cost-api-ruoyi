@@ -88,6 +88,17 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
   @Override
   @Transactional
   public QuoteIngestResponse ingest(QuoteIngestRequest request) {
+    return ingestDocument(request, false);
+  }
+
+  @Override
+  @Transactional
+  public QuoteIngestResponse ingestFromOa(QuoteIngestRequest request) {
+    return ingestDocument(request, true);
+  }
+
+  private QuoteIngestResponse ingestDocument(
+      QuoteIngestRequest request, boolean oaSource) {
     String requestId = resolveRequestId(request);
     String idempotencyKey = resolveIdempotencyKey(request);
     String payloadJson = toJson(request);
@@ -116,9 +127,16 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     }
 
     String oaNo = resolveOaNo(normalized.getHeader(), request);
-    OaForm existingForm = findExistingForm(oaNo, request);
+    OaForm existingForm = oaSource ? null : findExistingForm(oaNo, request);
+    if (!oaSource && existingForm != null
+        && oaFormMapper.countOaSourceBindings(existingForm.getId()) > 0) {
+      normalized.getErrors().add(new QuoteValidationError("oaNo", "OA_SOURCE_MANAGED",
+          "该报价已绑定 OA 正式需求，不能重新导入覆盖或替换产品行"));
+      quoteIngestLogService.markRejected(log, normalized, "OA 来源单据禁止重新导入覆盖");
+      return rejectedResponse(log, normalized, "OA 来源单据禁止重新导入覆盖");
+    }
     // 已核算单据已经进入成本核算链路，重新接入会改写核算上下文，所以默认拒绝覆盖关键字段。
-    if (isCalculated(existingForm)) {
+    if (!oaSource && isCalculated(existingForm)) {
       normalized
           .getErrors()
           .add(
@@ -132,7 +150,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
         existingForm != null
             && differentAmount(
                 existingForm.getCopperPrice(), normalized.getHeader().getCopperPrice());
-    OaForm form = upsertOaForm(existingForm, normalized.getHeader(), request, oaNo, log.getId());
+    OaForm form = upsertOaForm(existingForm, normalized.getHeader(), oaNo, log.getId());
     if (oaCuChanged) {
       versionInvalidationService.invalidateByOaCu(form.getOaNo());
     }
@@ -146,7 +164,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
   }
 
   private OaForm upsertOaForm(
-      OaForm existing, QuoteNormalizedHeader header, QuoteIngestRequest request, String oaNo, Long logId) {
+      OaForm existing, QuoteNormalizedHeader header, String oaNo, Long logId) {
     OaForm form = existing == null ? new OaForm() : existing;
     form.setOaNo(oaNo);
     form.setSourceType(header.getSourceType());
@@ -200,7 +218,8 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     return form;
   }
 
-  private ItemInsertResult replaceItems(OaForm form, QuoteNormalizedDocument normalized) {
+  private ItemInsertResult replaceItems(
+      OaForm form, QuoteNormalizedDocument normalized) {
     oaFormItemMapper.delete(
         Wrappers.lambdaQuery(OaFormItem.class).eq(OaFormItem::getOaFormId, form.getId()));
     Map<String, Long> itemIdMap = new HashMap<>();
@@ -363,6 +382,9 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
         Wrappers.lambdaQuery(QuoteBomStatus.class).eq(QuoteBomStatus::getOaFormId, form.getId()));
     for (int index = 0; index < normalized.getItems().size(); index++) {
       QuoteNormalizedItem source = normalized.getItems().get(index);
+      // 原单可先保存缺识别资料的行；不能创建没有产品身份的 BOM 检查记录。
+      if (QuoteProductIdentityUtils.resolveCostingCode(
+          source.getMaterialNo(), source.getSunlModel(), source.getCustomerDrawing()) == null) continue;
       QuoteBomStatus status = new QuoteBomStatus();
       status.setOaFormId(form.getId());
       status.setOaFormItemId(itemIdsByPosition.get(index));

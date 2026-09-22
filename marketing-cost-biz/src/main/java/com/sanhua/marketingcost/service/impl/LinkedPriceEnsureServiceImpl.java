@@ -252,7 +252,7 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
       LocalDateTime priceAsOfTime,
       String factorSource,
       Set<String> itemCodes) {
-    var query = Wrappers.lambdaQuery(PriceLinkedCalcItem.class)
+    var query = Wrappers.lambdaQuery(PriceLinkedCalcItem.class).eq(PriceLinkedCalcItem::getSourceKind, "PUBLIC")
         .eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.QUOTE.getCode())
         .eq(PriceLinkedCalcItem::getOaNo, oaNo)
         .eq(PriceLinkedCalcItem::getBusinessUnitType, businessUnitType)
@@ -275,7 +275,7 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
 
   private Map<String, PriceLinkedCalcItem> fetchExistingMonthlyAdjustResults(
       Long adjustBatchId, String businessUnitType, String pricingMonth, Set<String> itemCodes) {
-    var query = Wrappers.lambdaQuery(PriceLinkedCalcItem.class)
+    var query = Wrappers.lambdaQuery(PriceLinkedCalcItem.class).eq(PriceLinkedCalcItem::getSourceKind, "PUBLIC")
         .eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.MONTHLY_ADJUST.getCode())
         .eq(PriceLinkedCalcItem::getBusinessUnitType, businessUnitType)
         .eq(PriceLinkedCalcItem::getPricingMonth, pricingMonth)
@@ -299,6 +299,7 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
       String businessUnitType, String pricingMonth, Set<String> itemCodes, LocalDate priceDate) {
     var query = Wrappers.lambdaQuery(PriceLinkedItem.class)
         .eq(PriceLinkedItem::getDeleted, 0)
+        .eq(PriceLinkedItem::getSourceKind, "PUBLIC")
         .eq(PriceLinkedItem::getBusinessUnitType, businessUnitType)
         .le(PriceLinkedItem::getPricingMonth, pricingMonth)
         .in(PriceLinkedItem::getMaterialCode, itemCodes);

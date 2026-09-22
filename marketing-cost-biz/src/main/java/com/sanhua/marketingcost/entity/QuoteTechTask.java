@@ -18,14 +18,17 @@ public class QuoteTechTask {
 
   private String taskNo;
   private Long oaFormId;
+  private Long oaFormItemId;
+  private Long oaFlowId;
+  private String oaEnvironment;
+  private Integer oaAssignmentVersion;
+  private Long oaDispatchMessageId;
   private String oaNo;
   private String accountingMonth;
   private String businessUnitType;
   private String applicableOrgCode;
   private Long assigneeUserId;
   private String assigneeName;
-  private Long reviewerUserId;
-  private String reviewerName;
   private String taskStatus;
   private Integer taskVersion;
   private Integer reviewRound;

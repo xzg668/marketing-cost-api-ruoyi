@@ -17,6 +17,7 @@ public class QuoteTechProduct {
   private Long id;
 
   private Long taskId;
+  private Integer contentSchemaVersion;
   private Long oaFormItemId;
   private Integer levelNo;
   private String materialNo;

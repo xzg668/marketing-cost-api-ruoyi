@@ -79,6 +79,17 @@ public interface QuoteBomMonthlySnapshotMapper extends BaseMapper<QuoteBomMonthl
       @Param("result")
           com.sanhua.marketingcost.service.quotebom.CurrentU9BomResult result);
 
+  /** 公共 BOM 后来可用时仅释放当前索引，保留旧缺失记录供历史来源追溯。 */
+  @Update("""
+      UPDATE lp_quote_bom_monthly_snapshot
+         SET snapshot_identity_key = NULL, active_flag = 0, updated_at = #{updatedAt}
+       WHERE id = #{id} AND snapshot_identity_key = #{identityKey}
+         AND sync_status = 'NOT_FOUND' AND active_flag = 1
+      """)
+  int retireMissingU9MonthlySnapshot(@Param("id") Long id,
+      @Param("identityKey") String identityKey,
+      @Param("updatedAt") java.time.LocalDateTime updatedAt);
+
   @Delete("""
       DELETE FROM lp_quote_bom_monthly_snapshot
        WHERE id = #{id}

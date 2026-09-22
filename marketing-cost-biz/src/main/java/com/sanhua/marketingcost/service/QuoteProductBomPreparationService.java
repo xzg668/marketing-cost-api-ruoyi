@@ -9,4 +9,6 @@ public interface QuoteProductBomPreparationService {
 
   QuoteProductBomPreparationPreview prepareByOaFormItem(Long itemId, LocalDate quoteDate);
 
+  QuoteProductBomPreparationPreview prepareByOaFormItem(Long itemId, LocalDate quoteDate, String accountingMonth);
+
 }

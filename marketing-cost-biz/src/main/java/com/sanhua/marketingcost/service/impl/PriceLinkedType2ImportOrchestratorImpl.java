@@ -67,6 +67,9 @@ import org.springframework.util.StringUtils;
 public class PriceLinkedType2ImportOrchestratorImpl
     implements PriceLinkedType2ImportOrchestrator {
 
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionImportService technicalPriceImport;
+
   private static final long PREVIEW_ID_BASE = 9_000_000_000_000_000L;
   private static final String TEMPLATE_TYPE = "TYPE2";
   private static final List<DateTimeFormatter> DATE_FORMATTERS = List.of(
@@ -127,7 +130,8 @@ public class PriceLinkedType2ImportOrchestratorImpl
     ImportPlan plan = buildPlan(command);
     requireMatchingHash(command.getExpectedPreviewSha256(), plan.preview().getFileSha256());
     PriceItemImportResponse response = responseFromPreview(plan.preview(), command);
-    List<RowPlan> importableRows = plan.rows().stream().filter(RowPlan::importable).toList();
+    List<RowPlan> importableRows = plan.rows().stream().filter(RowPlan::importable)
+        .filter(row -> command.getTechnicalPlan()==null || technicalRow(command,row).issues().isEmpty()).toList();
     if (importableRows.isEmpty()) {
       response.setImportStatus("FAILED");
       response.setSkipped(Math.max(1, response.getErrors().size()));
@@ -183,9 +187,11 @@ public class PriceLinkedType2ImportOrchestratorImpl
                 + rowPlan.mergedRow().getBusinessRow().getSourceSheetName()
                 + "，行=" + rowPlan.mergedRow().getBusinessRow().getSourceRowNumber());
       }
+      var candidate=candidate(rowPlan.mergedRow(),plan.businessUnitType());
+      if(command.getTechnicalPlan()!=null)technicalPriceImport.identify(candidate,command.getTechnicalPlan(),technicalRow(command,rowPlan));
       PriceLinkedImportBasisSaveResult saved = importBasisService.save(
           new PriceLinkedImportBasisSaveRequest(
-              candidate(rowPlan.mergedRow(), plan.businessUnitType()),
+              candidate,
               batch.getId(),
               rowPlan.mergedRow(),
               conversion,
@@ -194,6 +200,10 @@ public class PriceLinkedType2ImportOrchestratorImpl
               rowPlan.effectiveDate(),
               monthlyPriceIds));
       applyLinkedResult(response, saved);
+      if(command.getTechnicalPlan()!=null) {
+        var row=technicalRow(command,rowPlan);
+        response.getTechnicalResults().add(new com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportResult(row.itemKey(),row.sheetName(),row.rowNumber(),row.values().getMaterialCode(),saved.linkedItemId(),PriceLinkedImportBasisSaveResult.ACTION_DUPLICATE_SKIPPED.equals(saved.action())?"REUSED":"IMPORTED",null,null));
+      }
     }
 
     response.setSkipped(plan.rows().size() - importableRows.size()
@@ -202,6 +212,11 @@ public class PriceLinkedType2ImportOrchestratorImpl
     response.setImportStatus(response.getErrors().isEmpty() ? "SUCCESS" : "PARTIAL");
     finishBatch(batch, plan, response);
     return response;
+  }
+
+  private com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionWorkbook.ImportRow technicalRow(PriceLinkedImportCommand command,RowPlan row) {
+    var source=row.mergedRow().getStandardRow();
+    return command.getTechnicalPlan().row(source.getSourceSheetName(),source.getSourceRowNumber());
   }
 
   private ImportPlan buildPlan(PriceLinkedImportCommand command) {

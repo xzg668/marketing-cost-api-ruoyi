@@ -24,12 +24,20 @@ import com.sanhua.marketingcost.service.costing.ProductCostingContext;
 import com.sanhua.marketingcost.service.costing.ProductCostingContextResolver;
 import com.sanhua.marketingcost.service.costing.ProductCostingSuccessLookup;
 import com.sanhua.marketingcost.service.costing.ProductCostingFailurePolicy;
+import com.sanhua.marketingcost.service.technicaldata.TechnicalDataAvailability;
+import com.sanhua.marketingcost.service.technicaldata.TechnicalDataQuoteSourceReader;
+import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSourceCheckResponse;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /** 只编排BOM、价格类型、价格准备与成本发布；输入及失败规则由专职组件处理。 */
 @Service
 public class ProductCostingPipelineImpl implements ProductCostingPipeline {
+  private com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy oaWorkflowAccess;
+  @org.springframework.beans.factory.annotation.Autowired
+  public void setOaWorkflowAccess(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy policy) {
+    this.oaWorkflowAccess = policy;
+  }
 
   static final String STEP_BOM = "QUOTE_BOM";
   static final String STEP_PRICE_TYPE = "PRICE_TYPE_CONFIRMATION";
@@ -44,6 +52,8 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   private final ProductCostingContextResolver contextResolver;
   private final ProductCostingSuccessLookup successLookup;
   private final ProductCostingFailurePolicy failurePolicy;
+  private final TechnicalDataQuoteSourceReader technicalSources;
+  private final com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService effectiveTechnicalData;
 
   public ProductCostingPipelineImpl(
       QuoteCostingWorkbenchService costingWorkbenchService,
@@ -53,7 +63,9 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       MaterialMasterSyncService materialMasterSyncService,
       ProductCostingContextResolver contextResolver,
       ProductCostingSuccessLookup successLookup,
-      ProductCostingFailurePolicy failurePolicy) {
+      ProductCostingFailurePolicy failurePolicy,
+      TechnicalDataQuoteSourceReader technicalSources,
+      com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService effectiveTechnicalData) {
     this.costingWorkbenchService = costingWorkbenchService;
     this.pricePrepareService = pricePrepareService;
     this.costRunService = costRunService;
@@ -62,16 +74,34 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
     this.contextResolver = contextResolver;
     this.successLookup = successLookup;
     this.failurePolicy = failurePolicy;
+    this.technicalSources = technicalSources;
+    this.effectiveTechnicalData = effectiveTechnicalData;
   }
 
   @Override
   public ProductCostingResult execute(ProductCostingRequest request) {
     // 请求归属错误直接拒绝；验证通过后，所有阶段故障均返回同一产品的结构化结果。
     ProductCostingContext context = contextResolver.resolve(request);
+    oaWorkflowAccess.requireCosting(context.form().getId());
+    ProductCostingResult result = executeResolved(context, request.force());
+    if (result.getTechnicalDataCheck() != null) return result;
+    try {
+      result.setTechnicalDataCheck(technicalSources.afterCosting(context));
+    } catch (RuntimeException exception) {
+      // 来源检查未保存时不能让后续分派误用旧结论，核算原失败原因仍保留在工作区。
+      result.setMessage(result.getMessage() + "；补录来源检查未完成，请重新检查资料");
+    }
+    return result;
+  }
+
+  private ProductCostingResult executeResolved(ProductCostingContext context, boolean force) {
     try {
       context = contextResolver.resolveRevision(context);
-      ProductCostingResult reusable = request.force() ? null : reusableSuccess(context);
+      ProductCostingResult reusable = force ? null : reusableSuccess(context);
       if (reusable != null) return reusable;
+    } catch (com.sanhua.marketingcost.service.EffectiveTechnicalDataException pendingApproval) {
+      // 审批尚未齐全仍可检查 BOM/价格缺口；正式成本阶段必须再次核验批准输入。
+      return executeStages(context);
     } catch (RuntimeException exception) {
       return failure(context, "INPUT_CHECK", exception);
     }
@@ -111,6 +141,11 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
           scope.oaNo(), scope.itemId(), scope.periodMonth(), prepareNo);
 
       stage = STEP_COST;
+      var sourceCheck = technicalSources.afterCosting(scope);
+      var technicalBlocked = technicalBlock(scope, sourceCheck);
+      if (technicalBlocked != null) return technicalBlocked;
+      // 价格准备可能切换实际补录来源，成本版本必须绑定本轮最终输入。
+      scope = contextResolver.resolveRevision(scope);
       QuoteCostRunTrialRequest costRequest = new QuoteCostRunTrialRequest();
       costRequest.setPeriodMonth(scope.periodMonth());
       costRequest.setPricePrepareNo(prepareNo);
@@ -122,13 +157,15 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       if (version == null || !QuoteCostRunStatus.isCurrentSuccess(version.getStatus())) {
         throw new IllegalStateException("成本核算完成后没有生成当前成功版本");
       }
-      return success(
+      var result = success(
           scope,
           version,
           prepareNo,
           readiness.getWarningCount(),
           false,
           readiness.getWarningCount() > 0 ? readiness.getMessage() : "产品核算成功");
+      result.setTechnicalDataCheck(sourceCheck);
+      return result;
     } catch (RuntimeException exception) {
       return failure(scope, stage, exception);
     }
@@ -137,7 +174,8 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   private ProductCostingResult failure(
       ProductCostingContext scope, String stage, RuntimeException exception) {
     try {
-      ProductCostingResult concurrent = reusableSuccess(scope);
+      // 原补录退回或财务确认失效时，不能用失败前的输入版本冒充本次成功。
+      ProductCostingResult concurrent = reusableSuccess(contextResolver.resolveRevision(scope));
       if (concurrent != null) return concurrent;
     } catch (RuntimeException lookupFailure) {
       // 故障后的并发结果探测不能覆盖本次真正的错误及其重试属性。
@@ -171,6 +209,9 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       return null;
     }
     QuoteBomStatusItemResponse bom = workbench == null ? null : workbench.getBomStatus();
+    if (bom != null && "CHECK_FAILED".equals(bom.getBomStatus())) {
+      throw new IllegalStateException(firstText(bom.getErrorMessage(), "BOM 来源检查失败，请核实后重试"));
+    }
     String message = firstText(
         bom == null ? null : bom.getErrorMessage(),
         "当前产品没有可用于核算的 BOM，请由产品技术补录后重试");
@@ -204,6 +245,9 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
 
   private ProductCostingResult priceBlock(
       ProductCostingContext scope, QuotePricePrepareWorkbenchResponse prices) {
+    var correction=prices==null?null:prices.getTechnicalPriceCorrection();
+    if(correction!=null && !correction.items().isEmpty())return blocked(scope,"WAIT_PRICE",STEP_PRICE,"TECH_PRICE_CORRECTION_REQUIRED",
+        "本产品有 "+correction.items().size()+" 项自行公式尚未形成可用价格，请在价格源维护下载修正后导入",correction.items().size());
     PricePrepareReadinessResult readiness = prices == null ? null : prices.getReadiness();
     if (readiness != null
         && "READY".equals(readiness.getStatus())
@@ -248,9 +292,41 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
 
   private ProductCostingResult reusableSuccess(ProductCostingContext scope) {
     return successLookup.find(scope)
-        .map(reused -> success(scope, summary(reused.version()), reused.prepareNo(),
-            reused.warningCount(), true, "当前输入已核算成功，本次直接复用现有版本"))
+        .map(reused -> {
+          var check = technicalSources.afterCosting(scope);
+          var blocked = technicalBlock(scope, check);
+          if (blocked != null) return blocked;
+          var result = success(scope, summary(reused.version()), reused.prepareNo(),
+              reused.warningCount(), true, "当前输入已核算成功，本次直接复用现有版本");
+          result.setTechnicalDataCheck(check);
+          return result;
+        })
         .orElse(null);
+  }
+
+  private ProductCostingResult technicalBlock(ProductCostingContext scope, TechnicalDataSourceCheckResponse check) {
+    if (check == null) throw new IllegalStateException("补录来源检查没有返回有效结论");
+    var gaps = check.modules().stream().filter(module -> module.required()
+        || module.availability() == TechnicalDataAvailability.ERROR
+        || "SALARY".equals(module.moduleType()) && module.availability() == TechnicalDataAvailability.UNCONFIRMED).toList();
+    if (gaps.isEmpty()) return null;
+    boolean queryError = gaps.stream().anyMatch(module -> module.availability() == TechnicalDataAvailability.ERROR)
+        || check.sharedModules().stream().anyMatch(source -> "ERROR".equals(source.status()));
+    if (!queryError) {
+      var input = effectiveTechnicalData.resolve(scope.itemId(), scope.periodMonth());
+      if (input != null) {
+        var supplied = input.moduleSources().stream().map(
+            com.sanhua.marketingcost.dto.EffectiveTechnicalDataInput.ModuleSource::moduleType).toList();
+        if (gaps.stream().allMatch(gap -> supplied.contains(gap.moduleType()))) return null;
+      }
+    }
+    var result = blocked(scope, "WAIT_TECH_DATA", "TECHNICAL_DATA",
+        queryError ? "TECH_SOURCE_QUERY_FAILED" : "TECH_SOURCE_NOT_READY",
+        String.join("；", gaps.stream().map(module -> check.sharedModules().stream()
+            .filter(source -> source.moduleType().equals(module.moduleType()))
+            .map(source -> source.message()).findFirst().orElse(module.reason())).distinct().toList()), gaps.size());
+    result.setTechnicalDataCheck(check);
+    return result;
   }
 
   private ProductCostingResult success(

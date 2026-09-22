@@ -5,7 +5,6 @@ import com.sanhua.marketingcost.entity.QuoteTechDataVersion;
 import com.sanhua.marketingcost.entity.QuoteTechModule;
 import com.sanhua.marketingcost.entity.QuoteTechPackageItem;
 import com.sanhua.marketingcost.entity.QuoteTechProduct;
-import com.sanhua.marketingcost.entity.QuoteTechReviewItem;
 import com.sanhua.marketingcost.entity.QuoteTechSalaryItem;
 import com.sanhua.marketingcost.entity.QuoteTechTask;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
@@ -25,12 +24,6 @@ import org.springframework.util.StringUtils;
 @Service
 public class QuoteTechnicalDataPersistenceServiceImpl
     implements QuoteTechnicalDataPersistenceService {
-  private static final Set<String> MODULE_TYPES = Set.of(
-      "PROFILE", "PACKAGE", "AUXILIARY", "SALARY");
-  private static final Set<String> COPYABLE_VERSION_STATUSES = Set.of(
-      QuoteTechDataVersion.STATUS_SUBMITTED,
-      QuoteTechDataVersion.STATUS_RETURNED,
-      QuoteTechDataVersion.STATUS_APPROVED);
   private final QuoteTechnicalDataRepository repository;
   private final TechnicalDataVersionContentCodec contentCodec;
 
@@ -59,7 +52,7 @@ public class QuoteTechnicalDataPersistenceServiceImpl
     task.setReviewRound(defaultNumber(task.getReviewRound(), 0));
     task.setActiveFlag(defaultNumber(task.getActiveFlag(), 1));
     task.setActiveLockKey(task.getActiveFlag() == 1
-        ? taskActiveLockKey(task.getOaNo(), task.getAccountingMonth(), task.getAssigneeUserId())
+        ? taskActiveLockKey(task.getOaFormItemId(), task.getAccountingMonth())
         : null);
     return repository.insertTask(task);
   }
@@ -119,21 +112,6 @@ public class QuoteTechnicalDataPersistenceServiceImpl
 
   @Override
   @Transactional
-  public QuoteTechReviewItem createReviewItem(QuoteTechReviewItem reviewItem) {
-    Objects.requireNonNull(reviewItem, "reviewItem");
-    requiredId("taskId", reviewItem.getTaskId());
-    requiredId("productId", reviewItem.getProductId());
-    requiredId("submittedVersionId", reviewItem.getSubmittedVersionId());
-    if (reviewItem.getReviewRound() == null || reviewItem.getReviewRound() <= 0) {
-      throw new IllegalArgumentException("reviewRound 必须大于0");
-    }
-    reviewItem.setModuleType(required("moduleType", reviewItem.getModuleType()));
-    reviewItem.setDecision(defaultText(reviewItem.getDecision(), "PENDING"));
-    return repository.insertReviewItem(reviewItem);
-  }
-
-  @Override
-  @Transactional
   public void addPackageItems(Long versionId, List<QuoteTechPackageItem> items) {
     List<QuoteTechPackageItem> values = values(items);
     if (values.isEmpty()) return;
@@ -173,7 +151,13 @@ public class QuoteTechnicalDataPersistenceServiceImpl
     Objects.requireNonNull(version, "version");
     requiredId("version.id", version.getId());
     requireExpectedVersion(expectedRowVersion);
-    requireDraft(version.getId());
+    QuoteTechDataVersion current = requireDraft(version.getId());
+    if (!Objects.equals(current.getProductId(), version.getProductId())
+        || !Objects.equals(current.getVersionNo(), version.getVersionNo())
+        || contentCodec.schemaVersion(current) != contentCodec.schemaVersion(version)) {
+      throw new IllegalArgumentException("不能修改草稿的产品归属、版本号或内容结构");
+    }
+    contentCodec.supplementContent(version);
     if (repository.updateDraftVersion(version, expectedRowVersion, now()) != 1) {
       throw new QuoteTechnicalDataOptimisticLockException("版本", version.getId());
     }
@@ -197,7 +181,8 @@ public class QuoteTechnicalDataPersistenceServiceImpl
     String target = required("targetStatus", targetStatus);
     requireAllowedVersionTransition(expected, target);
     if (QuoteTechDataVersion.STATUS_DRAFT.equals(expected)
-        && QuoteTechDataVersion.STATUS_SUBMITTED.equals(target)) {
+        && (QuoteTechDataVersion.STATUS_SUBMITTED.equals(target)
+            || QuoteTechDataVersion.STATUS_FROZEN.equals(target))) {
       QuoteTechDataVersion draft = repository.findVersion(versionId)
           .orElseThrow(() -> new IllegalArgumentException("技术资料版本不存在：" + versionId));
       if (!QuoteTechDataVersion.STATUS_DRAFT.equals(draft.getVersionStatus())
@@ -247,7 +232,7 @@ public class QuoteTechnicalDataPersistenceServiceImpl
     List<QuoteTechPackageItem> packages = repository.findPackageItems(draftId);
     List<QuoteTechAuxItem> auxiliaries = repository.findAuxItems(draftId);
     List<QuoteTechSalaryItem> salaries = repository.findSalaryItems(draftId);
-    requireCompleteModules(draftId, modules, packages, auxiliaries, salaries);
+    requireCompleteModules(draft, modules, packages, auxiliaries, salaries);
 
     draft.setPackageTotalAmount(sumPackageAmount(packages));
     draft.setAuxiliaryTotalAmount(sumAuxAmount(auxiliaries));
@@ -256,6 +241,9 @@ public class QuoteTechnicalDataPersistenceServiceImpl
         contentCodec.moduleSnapshots(modules);
     String referenceSnapshotJson = contentCodec.referenceSnapshotJson(snapshots);
     draft.setReferenceSnapshotJson(referenceSnapshotJson);
+    if (contentCodec.schemaVersion(draft) == 2) {
+      draft.setSourceFactsJson(contentCodec.sourceFactsJson(product.getSourceSnapshotJson(), modules));
+    }
     draft.setUpdatedBy(actorId);
     LocalDateTime changedAt = now();
     int draftRowVersion = draft.getRowVersion();
@@ -273,7 +261,8 @@ public class QuoteTechnicalDataPersistenceServiceImpl
     if (repository.transitionVersion(
         draftId,
         QuoteTechDataVersion.STATUS_DRAFT,
-        QuoteTechDataVersion.STATUS_SUBMITTED,
+        contentCodec.schemaVersion(draft) == 2 ? QuoteTechDataVersion.STATUS_FROZEN
+            : QuoteTechDataVersion.STATUS_SUBMITTED,
         persistedDraft.getRowVersion(),
         fingerprint,
         referenceSnapshotJson,
@@ -285,7 +274,7 @@ public class QuoteTechnicalDataPersistenceServiceImpl
     for (QuoteTechModule module : modules) {
       int moduleVersion = module.getRowVersion();
       if (Integer.valueOf(1).equals(module.getRequiredFlag())) {
-        module.setModuleStatus("SUBMITTED");
+        module.setModuleStatus(contentCodec.schemaVersion(draft) == 2 ? "FROZEN" : "SUBMITTED");
       } else {
         module.setModuleStatus("NOT_REQUIRED");
       }
@@ -294,7 +283,7 @@ public class QuoteTechnicalDataPersistenceServiceImpl
       }
     }
 
-    product.setProductStatus("SUBMITTED");
+    product.setProductStatus(contentCodec.schemaVersion(draft) == 2 ? "PREPARED" : "SUBMITTED");
     product.setCurrentEditVersionId(null);
     product.setLatestSubmittedVersionId(draftId);
     if (repository.updateProductPointers(product, expectedProductVersion, changedAt) != 1) {
@@ -302,130 +291,6 @@ public class QuoteTechnicalDataPersistenceServiceImpl
     }
     return repository.findVersion(draftId)
         .orElseThrow(() -> new IllegalStateException("提交后技术资料版本不存在"));
-  }
-
-  @Override
-  @Transactional
-  public QuoteTechDataVersion copySubmittedVersionAsDraft(
-      Long productId,
-      Long sourceVersionId,
-      int expectedProductVersion,
-      Long actorId) {
-    return copyVersionAsDraft(
-        productId, sourceVersionId, expectedProductVersion, actorId, null);
-  }
-
-  @Override
-  @Transactional
-  public QuoteTechDataVersion copyReturnedModulesAsDraft(
-      Long productId,
-      Long sourceVersionId,
-      int expectedProductVersion,
-      Long actorId,
-      Set<String> returnedModuleTypes) {
-    if (returnedModuleTypes == null || returnedModuleTypes.isEmpty()
-        || !MODULE_TYPES.containsAll(returnedModuleTypes)) {
-      throw new IllegalArgumentException("退回模块集合无效");
-    }
-    return copyVersionAsDraft(
-        productId, sourceVersionId, expectedProductVersion, actorId,
-        Set.copyOf(returnedModuleTypes));
-  }
-
-  private QuoteTechDataVersion copyVersionAsDraft(
-      Long productId,
-      Long sourceVersionId,
-      int expectedProductVersion,
-      Long actorId,
-      Set<String> returnedModuleTypes) {
-    requiredId("productId", productId);
-    requiredId("sourceVersionId", sourceVersionId);
-    requiredId("actorId", actorId);
-    requireExpectedVersion(expectedProductVersion);
-    QuoteTechProduct product = lockProduct(productId, expectedProductVersion);
-    if (product.getCurrentEditVersionId() != null) {
-      throw new IllegalStateException("产品已有当前草稿，不能重复复制历史版本");
-    }
-    QuoteTechDataVersion source = lockOwnedVersion(product, sourceVersionId);
-    if (!COPYABLE_VERSION_STATUSES.contains(source.getVersionStatus())) {
-      throw new IllegalArgumentException("只能从已提交、已退回或已生效版本复制草稿");
-    }
-    if (!StringUtils.hasText(source.getContentFingerprint())) {
-      throw new IllegalStateException("历史提交版本缺少内容指纹");
-    }
-
-    List<QuoteTechModule> modules = repository.lockModules(productId);
-    List<QuoteTechPackageItem> sourcePackages = repository.findPackageItems(sourceVersionId);
-    List<QuoteTechAuxItem> sourceAuxiliaries = repository.findAuxItems(sourceVersionId);
-    List<QuoteTechSalaryItem> sourceSalaries = repository.findSalaryItems(sourceVersionId);
-
-    QuoteTechDataVersion draft = copiedDraft(
-        source, repository.maxVersionNo(productId) + 1, actorId, now());
-    repository.insertVersion(draft);
-    addPackageItems(draft.getId(), copyPackages(sourcePackages));
-    addAuxItems(draft.getId(), copyAuxiliaries(sourceAuxiliaries));
-    addSalaryItems(draft.getId(), copySalaries(sourceSalaries));
-
-    List<TechnicalDataVersionContentCodec.ModuleSnapshot> snapshots =
-        contentCodec.readReferenceSnapshot(source.getReferenceSnapshotJson());
-    restoreCopiedModules(
-        draft.getId(), sourceVersionId, modules, snapshots, returnedModuleTypes);
-
-    product.setProductStatus("EDITING");
-    product.setCurrentEditVersionId(draft.getId());
-    if (repository.updateProductPointers(product, expectedProductVersion, now()) != 1) {
-      throw new QuoteTechnicalDataOptimisticLockException("产品", productId);
-    }
-    return repository.findVersion(draft.getId())
-        .orElseThrow(() -> new IllegalStateException("复制后的技术资料草稿不存在"));
-  }
-
-  @Override
-  @Transactional
-  public void updatePackageItem(QuoteTechPackageItem item) {
-    requireMutableItem(item == null ? null : item.getVersionId(), item == null ? null : item.getId());
-    if (repository.updatePackageItemIfDraft(item) != 1) {
-      throw immutable(item.getVersionId());
-    }
-  }
-
-  @Override
-  @Transactional
-  public void updateAuxItem(QuoteTechAuxItem item) {
-    requireMutableItem(item == null ? null : item.getVersionId(), item == null ? null : item.getId());
-    if (repository.updateAuxItemIfDraft(item) != 1) {
-      throw immutable(item.getVersionId());
-    }
-  }
-
-  @Override
-  @Transactional
-  public void updateSalaryItem(QuoteTechSalaryItem item) {
-    requireMutableItem(item == null ? null : item.getVersionId(), item == null ? null : item.getId());
-    if (repository.updateSalaryItemIfDraft(item) != 1) {
-      throw immutable(item.getVersionId());
-    }
-  }
-
-  @Override
-  @Transactional
-  public void deletePackageItem(Long versionId, Long itemId) {
-    requireMutableItem(versionId, itemId);
-    if (repository.deletePackageItemIfDraft(versionId, itemId) != 1) throw immutable(versionId);
-  }
-
-  @Override
-  @Transactional
-  public void deleteAuxItem(Long versionId, Long itemId) {
-    requireMutableItem(versionId, itemId);
-    if (repository.deleteAuxItemIfDraft(versionId, itemId) != 1) throw immutable(versionId);
-  }
-
-  @Override
-  @Transactional
-  public void deleteSalaryItem(Long versionId, Long itemId) {
-    requireMutableItem(versionId, itemId);
-    if (repository.deleteSalaryItemIfDraft(versionId, itemId) != 1) throw immutable(versionId);
   }
 
   private QuoteTechProduct lockProduct(Long productId, int expectedProductVersion) {
@@ -451,12 +316,30 @@ public class QuoteTechnicalDataPersistenceServiceImpl
   }
 
   private void requireCompleteModules(
-      Long draftId,
+      QuoteTechDataVersion draft,
       List<QuoteTechModule> modules,
       List<QuoteTechPackageItem> packages,
       List<QuoteTechAuxItem> auxiliaries,
       List<QuoteTechSalaryItem> salaries) {
-    Map<String, QuoteTechModule> byType = moduleMap(modules);
+    Long draftId = draft.getId();
+    Map<String, QuoteTechModule> byType = moduleMap(modules,
+        TechnicalDataModuleType.codesForVersion(draft.getContentSchemaVersion()));
+    if (contentCodec.schemaVersion(draft) == 2) {
+      for (QuoteTechModule module : modules) {
+        if (!Set.of("AVAILABLE", "MISSING").contains(module.getSourceAvailability() == null
+            ? "UNCONFIRMED" : module.getSourceAvailability())) {
+          throw new IllegalStateException(module.getModuleType() + "来源检查未确认或失败，不能提交");
+        }
+        if (Set.of("PROFILE", "DRAWING_BOM", "MANUFACTURING", "SOLDER", "NET_LOSS", "PRICE")
+            .contains(module.getModuleType())) {
+          requireDetailModule(draftId, module, contentCodec.supplementItemCount(draft, module.getModuleType()));
+        }
+      }
+      requireDetailModule(draftId, byType.get("PACKAGE"), packages.size());
+      requireDetailModule(draftId, byType.get("AUXILIARY"), auxiliaries.size());
+      requireDetailModule(draftId, byType.get("SALARY"), salaries.size());
+      return;
+    }
     QuoteTechModule profile = byType.get("PROFILE");
     if (!Objects.equals(profile.getCurrentVersionId(), draftId)
         || !"MANUAL".equals(profile.getEntryMode())
@@ -479,7 +362,8 @@ public class QuoteTechnicalDataPersistenceServiceImpl
     }
     if (!Objects.equals(module.getCurrentVersionId(), draftId)
         || !"READY".equals(module.getModuleStatus())
-        || !("MANUAL".equals(module.getEntryMode()) || "REFERENCE".equals(module.getEntryMode()))
+        || !("MANUAL".equals(module.getEntryMode()) || "REFERENCE".equals(module.getEntryMode())
+            || "AUXILIARY".equals(module.getModuleType()) && "UPLOAD".equals(module.getEntryMode()))
         || !StringUtils.hasText(module.getLastValidationCode())
         || module.getLastValidationCode().toUpperCase().contains("INVALID")
         || itemCount <= 0) {
@@ -494,172 +378,18 @@ public class QuoteTechnicalDataPersistenceServiceImpl
     }
   }
 
-  private Map<String, QuoteTechModule> moduleMap(List<QuoteTechModule> modules) {
+  private Map<String, QuoteTechModule> moduleMap(List<QuoteTechModule> modules, Set<String> expectedTypes) {
     Map<String, QuoteTechModule> result = new LinkedHashMap<>();
     for (QuoteTechModule module : modules) {
-      if (!MODULE_TYPES.contains(module.getModuleType())
+      if (!expectedTypes.contains(module.getModuleType())
           || result.put(module.getModuleType(), module) != null) {
         throw new IllegalStateException("产品技术资料模块结构异常");
       }
     }
-    if (!result.keySet().equals(MODULE_TYPES)) {
-      throw new IllegalStateException("产品必须且只能包含PROFILE/PACKAGE/AUXILIARY/SALARY模块");
+    if (!result.keySet().equals(expectedTypes)) {
+      throw new IllegalStateException("产品模块与版本结构不一致：" + expectedTypes);
     }
     return result;
-  }
-
-  private void restoreCopiedModules(
-      Long draftId,
-      Long sourceVersionId,
-      List<QuoteTechModule> modules,
-      List<TechnicalDataVersionContentCodec.ModuleSnapshot> snapshots,
-      Set<String> returnedModuleTypes) {
-    Map<String, QuoteTechModule> byType = moduleMap(modules);
-    Map<String, TechnicalDataVersionContentCodec.ModuleSnapshot> snapshotByType =
-        new LinkedHashMap<>();
-    for (TechnicalDataVersionContentCodec.ModuleSnapshot snapshot : snapshots) {
-      if (!MODULE_TYPES.contains(snapshot.moduleType())
-          || snapshotByType.put(snapshot.moduleType(), snapshot) != null) {
-        throw new IllegalStateException("历史提交版本模块快照结构异常");
-      }
-    }
-    if (!snapshotByType.keySet().equals(MODULE_TYPES)) {
-      throw new IllegalStateException("历史提交版本模块快照不完整");
-    }
-    LocalDateTime changedAt = now();
-    for (String type : MODULE_TYPES) {
-      QuoteTechModule module = byType.get(type);
-      TechnicalDataVersionContentCodec.ModuleSnapshot snapshot = snapshotByType.get(type);
-      boolean required = Integer.valueOf(1).equals(module.getRequiredFlag());
-      if (required != snapshot.required()) {
-        throw new IllegalStateException(type + "模块必填规则已变化，不能直接复制历史版本");
-      }
-      if (required && "NONE".equals(snapshot.entryMode())) {
-        throw new IllegalStateException(type + "历史模块缺少有效录入方式");
-      }
-      int expectedVersion = module.getRowVersion();
-      module.setEntryMode(snapshot.entryMode());
-      boolean partialReturn = returnedModuleTypes != null;
-      boolean returned = partialReturn && returnedModuleTypes.contains(type);
-      module.setModuleStatus(required
-          ? (partialReturn ? (returned ? "EDITING" : "APPROVED")
-              : ("RETURNED".equals(module.getModuleStatus()) ? "EDITING" : "READY"))
-          : "NOT_REQUIRED");
-      module.setCurrentVersionId(partialReturn && !returned ? sourceVersionId : draftId);
-      module.setReferenceSourceType(snapshot.referenceSourceType());
-      module.setReferenceSourceId(snapshot.referenceSourceId());
-      module.setReferenceSourceVersion(snapshot.referenceSourceVersion());
-      module.setReferenceFingerprint(snapshot.referenceFingerprint());
-      module.setReferenceSnapshotJson(snapshot.referenceSnapshotJson());
-      module.setLastValidationCode(snapshot.validationCode());
-      module.setLastValidationMessage(snapshot.validationMessage());
-      if (repository.updateModule(module, expectedVersion, changedAt) != 1) {
-        throw new QuoteTechnicalDataOptimisticLockException("模块", module.getId());
-      }
-    }
-  }
-
-  private QuoteTechDataVersion copiedDraft(
-      QuoteTechDataVersion source,
-      int versionNo,
-      Long actorId,
-      LocalDateTime createdAt) {
-    QuoteTechDataVersion draft = new QuoteTechDataVersion();
-    draft.setProductId(source.getProductId());
-    draft.setVersionNo(versionNo);
-    draft.setVersionStatus(QuoteTechDataVersion.STATUS_DRAFT);
-    draft.setProductModel(source.getProductModel());
-    draft.setProductProperty(source.getProductProperty());
-    draft.setNewProductFlag(source.getNewProductFlag());
-    draft.setPackageTotalAmount(source.getPackageTotalAmount());
-    draft.setAuxiliaryTotalAmount(source.getAuxiliaryTotalAmount());
-    draft.setSalaryTotalAmount(source.getSalaryTotalAmount());
-    draft.setReferenceSnapshotJson(source.getReferenceSnapshotJson());
-    draft.setCreatedFromVersionId(source.getId());
-    draft.setRowVersion(0);
-    draft.setCreatedBy(actorId);
-    draft.setUpdatedBy(actorId);
-    draft.setCreatedAt(createdAt);
-    draft.setUpdatedAt(createdAt);
-    return draft;
-  }
-
-  private List<QuoteTechPackageItem> copyPackages(List<QuoteTechPackageItem> source) {
-    return source.stream().map(item -> {
-      QuoteTechPackageItem copy = new QuoteTechPackageItem();
-      copy.setLineNo(item.getLineNo());
-      copy.setSortSeq(item.getSortSeq());
-      copy.setComponentMaterialNo(item.getComponentMaterialNo());
-      copy.setComponentName(item.getComponentName());
-      copy.setComponentSpec(item.getComponentSpec());
-      copy.setQuantity(item.getQuantity());
-      copy.setOriginalUnit(item.getOriginalUnit());
-      copy.setStandardQuantity(item.getStandardQuantity());
-      copy.setStandardUnit(item.getStandardUnit());
-      copy.setConversionFactor(item.getConversionFactor());
-      copy.setPriceBasisType(item.getPriceBasisType());
-      copy.setReferenceUnitPrice(item.getReferenceUnitPrice());
-      copy.setAmount(item.getAmount());
-      copy.setSourceReferenceId(item.getSourceReferenceId());
-      copy.setSourceReferenceVersion(item.getSourceReferenceVersion());
-      copy.setSourceSnapshotJson(item.getSourceSnapshotJson());
-      copy.setRemark(item.getRemark());
-      return copy;
-    }).toList();
-  }
-
-  private List<QuoteTechAuxItem> copyAuxiliaries(List<QuoteTechAuxItem> source) {
-    return source.stream().map(item -> {
-      QuoteTechAuxItem copy = new QuoteTechAuxItem();
-      copy.setLineNo(item.getLineNo());
-      copy.setSortSeq(item.getSortSeq());
-      copy.setSubjectCode(item.getSubjectCode());
-      copy.setSubjectName(item.getSubjectName());
-      copy.setAuxiliaryMaterialNo(item.getAuxiliaryMaterialNo());
-      copy.setAuxiliaryName(item.getAuxiliaryName());
-      copy.setAuxiliarySpec(item.getAuxiliarySpec());
-      copy.setPricingMethod(item.getPricingMethod());
-      copy.setQuantity(item.getQuantity());
-      copy.setOriginalUnit(item.getOriginalUnit());
-      copy.setStandardQuantity(item.getStandardQuantity());
-      copy.setStandardUnit(item.getStandardUnit());
-      copy.setConversionFactor(item.getConversionFactor());
-      copy.setReferenceUnitPrice(item.getReferenceUnitPrice());
-      copy.setPriceUnit(item.getPriceUnit());
-      copy.setLossRate(item.getLossRate());
-      copy.setAmount(item.getAmount());
-      copy.setSourceReferenceId(item.getSourceReferenceId());
-      copy.setSourceReferenceVersion(item.getSourceReferenceVersion());
-      copy.setSourceSnapshotJson(item.getSourceSnapshotJson());
-      copy.setRemark(item.getRemark());
-      return copy;
-    }).toList();
-  }
-
-  private List<QuoteTechSalaryItem> copySalaries(List<QuoteTechSalaryItem> source) {
-    return source.stream().map(item -> {
-      QuoteTechSalaryItem copy = new QuoteTechSalaryItem();
-      copy.setLineNo(item.getLineNo());
-      copy.setSortSeq(item.getSortSeq());
-      copy.setProcessCode(item.getProcessCode());
-      copy.setProcessName(item.getProcessName());
-      copy.setLaborType(item.getLaborType());
-      copy.setWorkingHours(item.getWorkingHours());
-      copy.setOriginalTimeUnit(item.getOriginalTimeUnit());
-      copy.setStandardHours(item.getStandardHours());
-      copy.setStandardTimeUnit(item.getStandardTimeUnit());
-      copy.setConversionFactor(item.getConversionFactor());
-      copy.setWageRate(item.getWageRate());
-      copy.setRateUnit(item.getRateUnit());
-      copy.setHourlyRate(item.getHourlyRate());
-      copy.setPersonCoefficient(item.getPersonCoefficient());
-      copy.setAmount(item.getAmount());
-      copy.setSourceReferenceId(item.getSourceReferenceId());
-      copy.setSourceReferenceVersion(item.getSourceReferenceVersion());
-      copy.setSourceSnapshotJson(item.getSourceSnapshotJson());
-      copy.setRemark(item.getRemark());
-      return copy;
-    }).toList();
   }
 
   private BigDecimal sumPackageAmount(List<QuoteTechPackageItem> items) {
@@ -678,8 +408,9 @@ public class QuoteTechnicalDataPersistenceServiceImpl
   }
 
   public static String taskActiveLockKey(
-      String oaNo, String accountingMonth, Long assigneeUserId) {
-    return "OA:" + oaNo + ":MONTH:" + accountingMonth + ":ASSIGNEE:" + assigneeUserId;
+      Long oaFormItemId, String accountingMonth) {
+    if (oaFormItemId == null || oaFormItemId <= 0) throw new IllegalArgumentException("oaFormItemId必须大于0");
+    return productActiveLockKey(oaFormItemId, accountingMonth);
   }
 
   public static String productActiveLockKey(Long oaFormItemId, String accountingMonth) {
@@ -693,6 +424,12 @@ public class QuoteTechnicalDataPersistenceServiceImpl
       throw new IllegalArgumentException("versionNo 必须大于0");
     }
     version.setVersionStatus(defaultText(version.getVersionStatus(), QuoteTechDataVersion.STATUS_DRAFT));
+    if (version.getContentSchemaVersion() == null) {
+      QuoteTechProduct product = repository.findProduct(version.getProductId())
+          .orElseThrow(() -> new IllegalArgumentException("技术产品不存在"));
+      version.setContentSchemaVersion(product.getContentSchemaVersion() == null ? 1 : product.getContentSchemaVersion());
+    }
+    contentCodec.supplementContent(version);
     version.setNewProductFlag(defaultNumber(version.getNewProductFlag(), 0));
     version.setPackageTotalAmount(defaultDecimal(version.getPackageTotalAmount()));
     version.setAuxiliaryTotalAmount(defaultDecimal(version.getAuxiliaryTotalAmount()));
@@ -708,12 +445,6 @@ public class QuoteTechnicalDataPersistenceServiceImpl
       throw new QuoteTechnicalDataImmutableVersionException(versionId, version.getVersionStatus());
     }
     return version;
-  }
-
-  private void requireMutableItem(Long versionId, Long itemId) {
-    requiredId("versionId", versionId);
-    requiredId("itemId", itemId);
-    requireDraft(versionId);
   }
 
   private QuoteTechnicalDataImmutableVersionException immutable(Long versionId) {
@@ -771,7 +502,8 @@ public class QuoteTechnicalDataPersistenceServiceImpl
 
   private void requireAllowedVersionTransition(String expectedStatus, String targetStatus) {
     boolean allowed = (QuoteTechDataVersion.STATUS_DRAFT.equals(expectedStatus)
-        && ("SUBMITTED".equals(targetStatus) || "VOIDED".equals(targetStatus)))
+        && ("FROZEN".equals(targetStatus) || "SUBMITTED".equals(targetStatus) || "VOIDED".equals(targetStatus)))
+        || ("FROZEN".equals(expectedStatus) && ("SUBMITTED".equals(targetStatus) || "VOIDED".equals(targetStatus)))
         || ("SUBMITTED".equals(expectedStatus)
         && ("APPROVED".equals(targetStatus)
         || "RETURNED".equals(targetStatus)

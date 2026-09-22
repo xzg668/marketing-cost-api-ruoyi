@@ -14,7 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 /**
- * 已完成料号解析的电子图库混合 BOM 由系统直接发布，不产生技术提交或财务审核页面。
+ * 已完成料号解析及组树的电子图库 BOM，通过补录审批和报价确认门槛后由系统发布。
  * 版本生效、原始层快照、缺口关闭、产品和报价关联放行处于同一事务，任一步失败整体回滚。
  */
 @Service
@@ -24,22 +24,27 @@ public class ElectronicDrawingAutoPublicationService {
   private final QuoteBomSupplementVersionMapper versionMapper;
   private final ElectronicDrawingSourceNodeRepository sourceNodeRepository;
   private final ApprovedElectronicBomRawSnapshotPublisher rawSnapshotPublisher;
+  private final com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService technicalData;
 
   public ElectronicDrawingAutoPublicationService(
       ElectronicDrawingWorkflowContextPort contextPort,
       QuoteBomSupplementVersionMapper versionMapper,
       ElectronicDrawingSourceNodeRepository sourceNodeRepository,
-      ApprovedElectronicBomRawSnapshotPublisher rawSnapshotPublisher) {
+      ApprovedElectronicBomRawSnapshotPublisher rawSnapshotPublisher,
+      com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService technicalData) {
     this.contextPort = contextPort;
     this.versionMapper = versionMapper;
     this.sourceNodeRepository = sourceNodeRepository;
     this.rawSnapshotPublisher = rawSnapshotPublisher;
+    this.technicalData = technicalData;
   }
 
   @Transactional(rollbackFor = Exception.class)
-  public PublicationResult publish(Long workflowId, String businessUnitType, String orgCode) {
-    ElectronicDrawingWorkContext context = contextPort.load(workflowId, businessUnitType, orgCode);
+  public PublicationResult publish(Long workflowId, String businessUnitType, String orgCode, String accountingMonth) {
+    ElectronicDrawingWorkContext context = contextPort.load(workflowId, businessUnitType, orgCode, accountingMonth);
     validateIdentity(context);
+    String blocked = blockingReason(context);
+    if (blocked != null) throw new IllegalStateException(blocked);
     QuoteBomSupplementVersion version = requireVersion(context);
     ensureNoPendingMappings(version.getId());
 
@@ -72,6 +77,16 @@ public class ElectronicDrawingAutoPublicationService {
 
   public boolean isPublished(ElectronicDrawingWorkContext context) {
     return context != null && context.published();
+  }
+
+  /** 与正式核算共用已审批、财务确认及输入完整性门槛，不能由组树成功绕过补录流程。 */
+  public String blockingReason(ElectronicDrawingWorkContext context) {
+    try {
+      technicalData.resolve(context.oaFormItemId(), context.accountingMonth());
+      return null;
+    } catch (com.sanhua.marketingcost.service.EffectiveTechnicalDataException exception) {
+      return exception.getMessage();
+    }
   }
 
   private QuoteBomSupplementVersion requireVersion(ElectronicDrawingWorkContext context) {

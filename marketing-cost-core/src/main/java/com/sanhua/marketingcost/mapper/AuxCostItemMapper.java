@@ -25,6 +25,7 @@ public interface AuxCostItemMapper {
           FROM cms_cost_source_effective e
           WHERE e.cost_year = #{costYear}
             AND e.source_type = 'AUX_SUBJECT'
+            AND e.period &lt;= #{pricingMonth}
             AND e.business_unit_type = #{businessUnitType}
             AND (e.subject_name IS NULL OR TRIM(e.subject_name) &lt;&gt; '包装辅料')
             AND e.parent_code IN
@@ -37,5 +38,6 @@ public interface AuxCostItemMapper {
   List<AuxCostItemDto> selectEffectiveAuxCostItems(
       @Param("costYear") int costYear,
       @Param("materialCodes") Collection<String> materialCodes,
-      @Param("businessUnitType") String businessUnitType);
+      @Param("businessUnitType") String businessUnitType,
+      @Param("pricingMonth") String pricingMonth);
 }

@@ -1,32 +1,22 @@
 package com.sanhua.marketingcost.dto.technicaldata;
 
+import java.math.BigDecimal;
 import java.util.List;
 
-public record TechnicalDataPackageReferenceResponse(
-    Long productId,
-    String keyword,
-    int total,
-    List<Candidate> candidates) {
+public record TechnicalDataPackageReferenceResponse(List<Component> components) {
+  public record Component(String key, String materialNo, String name, String model,
+      String specification, int childCount, List<Source> sources) {}
 
-  public TechnicalDataPackageReferenceResponse {
-    candidates = candidates == null ? List.of() : List.copyOf(candidates);
-  }
+  public record Source(Evidence evidence, List<Child> children) {}
 
-  public record Candidate(
-      Long sourceProductId,
-      Long sourceVersionId,
-      Integer sourceVersionNo,
-      String materialNo,
-      String productName,
-      String productModel,
-      String validFromMonth,
-      String validToMonth,
-      String sourceType,
-      String contentFingerprint,
-      int itemCount,
-      List<TechnicalDataPackageResponse.Item> items) {
-    public Candidate {
-      items = items == null ? List.of() : List.copyOf(items);
-    }
-  }
+  public record Evidence(Long parentNodeId, String topProductCode, String topProductName,
+      String topProductModel, String topProductSpecification, String parentMaterialNo, String parentName, String parentModel,
+      String parentSpecification, BigDecimal parentQuantity, String priceOrgCode,
+      String materialOrganizationCode, String bomVersion, String bomPurpose, String buildBatchId,
+      String parentPath, String structureFingerprint, String fingerprint) {}
+
+  public record Child(Long sourceNodeId, String materialNo, String name, String model,
+      String specification, BigDecimal quantity, String unit, String path) {}
+
+  public record ChildOption(Evidence source, Child child) {}
 }

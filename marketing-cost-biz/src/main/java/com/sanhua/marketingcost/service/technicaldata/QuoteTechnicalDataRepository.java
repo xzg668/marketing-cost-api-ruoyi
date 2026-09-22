@@ -5,7 +5,6 @@ import com.sanhua.marketingcost.entity.QuoteTechDataVersion;
 import com.sanhua.marketingcost.entity.QuoteTechModule;
 import com.sanhua.marketingcost.entity.QuoteTechPackageItem;
 import com.sanhua.marketingcost.entity.QuoteTechProduct;
-import com.sanhua.marketingcost.entity.QuoteTechReviewItem;
 import com.sanhua.marketingcost.entity.QuoteTechSalaryItem;
 import com.sanhua.marketingcost.entity.QuoteTechTask;
 import java.time.LocalDateTime;
@@ -44,10 +43,6 @@ public interface QuoteTechnicalDataRepository {
 
   List<QuoteTechProduct> lockActiveProducts(Long taskId);
 
-  QuoteTechReviewItem insertReviewItem(QuoteTechReviewItem reviewItem);
-
-  List<QuoteTechReviewItem> findReviewItems(Long taskId, int reviewRound);
-
   int insertPackageItemsIfDraft(Long versionId, List<QuoteTechPackageItem> items);
 
   int insertAuxItemsIfDraft(Long versionId, List<QuoteTechAuxItem> items);
@@ -72,18 +67,6 @@ public interface QuoteTechnicalDataRepository {
 
   int deleteAllSalaryItemsIfDraft(Long versionId);
 
-  int updatePackageItemIfDraft(QuoteTechPackageItem item);
-
-  int updateAuxItemIfDraft(QuoteTechAuxItem item);
-
-  int updateSalaryItemIfDraft(QuoteTechSalaryItem item);
-
-  int deletePackageItemIfDraft(Long versionId, Long itemId);
-
-  int deleteAuxItemIfDraft(Long versionId, Long itemId);
-
-  int deleteSalaryItemIfDraft(Long versionId, Long itemId);
-
   int updateDraftVersion(
       QuoteTechDataVersion version, int expectedVersion, LocalDateTime updatedAt);
 
@@ -105,12 +88,4 @@ public interface QuoteTechnicalDataRepository {
 
   int markTaskInProgress(Long taskId, Long actorId, LocalDateTime changedAt);
 
-  int submitTask(
-      Long taskId,
-      int expectedVersion,
-      int reviewRound,
-      String idempotencyKey,
-      String submissionFingerprint,
-      Long actorId,
-      LocalDateTime submittedAt);
 }

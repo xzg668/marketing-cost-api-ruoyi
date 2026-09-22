@@ -1,0 +1,10 @@
+# Copy to oa-local.properties and replace the secret with a token of at least 32 characters.
+# Local I01 testing: requests are saved to the configured database.
+integration.oa.mode=MOCK
+integration.oa.environment=I01_TEST
+integration.oa.worker-enabled=false
+integration.oa.clients.oa.source-system=WEAVER
+integration.oa.clients.oa.environment=I01_TEST
+integration.oa.clients.oa.mode=MOCK
+integration.oa.clients.oa.business-units=COMMERCIAL
+integration.oa.clients.oa.secret=

@@ -24,12 +24,17 @@ public class CostRunResultServiceImpl implements CostRunResultService {
   private final OaFormMapper formMapper;
   private final OaFormItemMapper itemMapper;
   private final MaterialMasterMapper materialMasterMapper;
+  private final com.sanhua.marketingcost.mapper.CostRunCostItemMapper costItems;
+  private final com.fasterxml.jackson.databind.ObjectMapper json;
 
   public CostRunResultServiceImpl(
       QuoteCostRunVersionMapper versionMapper,
       OaFormMapper formMapper,
       OaFormItemMapper itemMapper,
-      MaterialMasterMapper materialMasterMapper) {
+      MaterialMasterMapper materialMasterMapper,
+      com.sanhua.marketingcost.mapper.CostRunCostItemMapper costItems, com.fasterxml.jackson.databind.ObjectMapper json) {
+    this.costItems = costItems;
+    this.json = json;
     this.versionMapper = versionMapper;
     this.formMapper = formMapper;
     this.itemMapper = itemMapper;
@@ -110,9 +115,28 @@ public class CostRunResultServiceImpl implements CostRunResultService {
     dto.setCalcStatus(calcStatus(version.getStatus(), version.getTotalCost() != null));
     dto.setProductAttr(
         firstText(
+            technicalProperty(version),
             item == null ? null : item.getProductAttr(),
             form == null ? null : form.getProductAttr()));
     return dto;
+  }
+
+  /** 属性名称跟随本次实际计算来源，查看历史版本时不读取另一版的补录。 */
+  private String technicalProperty(QuoteCostRunVersion version) {
+    if (!StringUtils.hasText(version.getTechDataInputJson())) return null;
+    var rows = costItems.selectList(Wrappers.<com.sanhua.marketingcost.entity.CostRunCostItem>lambdaQuery()
+        .eq(com.sanhua.marketingcost.entity.CostRunCostItem::getCostRunVersionId, version.getId())
+        .eq(com.sanhua.marketingcost.entity.CostRunCostItem::getCostCode, "ADJUSTED_MANUFACTURE_COST")
+        .eq(com.sanhua.marketingcost.entity.CostRunCostItem::getSourceTable, "lp_quote_tech_data_version"));
+    if (rows.isEmpty()) return null;
+    if (rows.size() != 1) throw new IllegalStateException("本成本版本的产品属性来源不唯一");
+    try {
+      String property = json.readTree(version.getTechDataInputJson()).path("productProperty").asText(null);
+      if (!StringUtils.hasText(property)) throw new IllegalStateException("本成本版本缺少实际采用的补录产品属性");
+      return property;
+    } catch (com.fasterxml.jackson.core.JsonProcessingException exception) {
+      throw new IllegalStateException("成本版本技术输入快照无法读取", exception);
+    }
   }
 
   private OaForm findForm(String oaNo) {
@@ -163,8 +187,9 @@ public class CostRunResultServiceImpl implements CostRunResultService {
     return "未核算";
   }
 
-  private String firstText(String first, String second) {
-    return StringUtils.hasText(first) ? first.trim() : trimToNull(second);
+  private String firstText(String... values) {
+    for (String value : values) if (StringUtils.hasText(value)) return value.trim();
+    return null;
   }
 
   private String trimToNull(String value) {

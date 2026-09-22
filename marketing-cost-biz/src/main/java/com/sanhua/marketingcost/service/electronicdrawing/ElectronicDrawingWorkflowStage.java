@@ -2,7 +2,7 @@ package com.sanhua.marketingcost.service.electronicdrawing;
 
 import java.util.Set;
 
-/** 复用产品任务校验状态字段保存电子图库业务阶段，不为页面文案新增独立状态表。 */
+/** 电子图库取得、料号确认、组树和发布阶段，保存在产品及月份对应的 BOM 准备记录中。 */
 public final class ElectronicDrawingWorkflowStage {
 
   public static final String QUERYING = "QUERYING_E_DRAWING";
@@ -11,6 +11,7 @@ public final class ElectronicDrawingWorkflowStage {
   public static final String PARSING = "PARSING";
   public static final String MATCHING = "MATCHING";
   public static final String MAPPING_PENDING = "MAPPING_PENDING";
+  public static final String MATCHED = "MATERIALS_MATCHED";
   public static final String COMPOSING = "COMPOSING";
   public static final String COMPOSED = "E_DRAWING_COMPOSED";
   public static final String PUBLISHED = "E_DRAWING_PUBLISHED";
@@ -25,7 +26,7 @@ public final class ElectronicDrawingWorkflowStage {
 
   public static boolean isElectronicDrawing(String value) {
     return value != null && (ACTIVE.contains(value)
-        || NOT_FOUND.equals(value) || COMPOSED.equals(value) || PUBLISHED.equals(value)
+        || NOT_FOUND.equals(value) || MATCHED.equals(value) || COMPOSED.equals(value) || PUBLISHED.equals(value)
         || VALIDATION_FAILED.equals(value));
   }
 

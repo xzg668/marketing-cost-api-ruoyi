@@ -7,24 +7,28 @@ import com.sanhua.marketingcost.entity.QuoteTechModule;
 import com.sanhua.marketingcost.entity.QuoteTechProduct;
 import com.sanhua.marketingcost.entity.QuoteTechTask;
 import java.math.BigDecimal;
+import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.ProductFees;
 import java.time.LocalDateTime;
 import java.util.Objects;
-import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.util.StringUtils;
 
 @Service
 public class TechnicalDataProfileApplicationServiceImpl
     implements TechnicalDataProfileApplicationService {
-  private static final Set<String> EDITABLE_TASK_STATUSES = Set.of(
-      "PENDING", "IN_PROGRESS", "PARTIALLY_RETURNED");
-  private static final Set<String> PRODUCT_PROPERTIES = Set.of("标准品", "非标品");
 
+  private final TechnicalDataSharedModules sharedModules;
   private final TechnicalDataProfileRepository repository;
+  private final TechnicalDataSourceSnapshotFactory snapshotFactory;
+  private final TechnicalDataVersionContentCodec contentCodec;
 
-  public TechnicalDataProfileApplicationServiceImpl(TechnicalDataProfileRepository repository) {
+  public TechnicalDataProfileApplicationServiceImpl(
+      TechnicalDataProfileRepository repository, TechnicalDataSourceSnapshotFactory snapshotFactory,
+      TechnicalDataVersionContentCodec contentCodec, TechnicalDataSharedModules sharedModules) {
+    this.sharedModules = sharedModules;
     this.repository = repository;
+    this.snapshotFactory = snapshotFactory;
+    this.contentCodec = contentCodec;
   }
 
   @Override
@@ -34,15 +38,19 @@ public class TechnicalDataProfileApplicationServiceImpl
       TechnicalDataProfileUpdateRequest request,
       TechnicalDataActor actor) {
     requireActor(actor);
-    if (!actor.canEdit()) throw forbidden("当前用户无权编辑产品技术资料");
     Command command = normalize(productId, request);
 
-    QuoteTechProduct product = repository.lockProduct(command.productId())
+    QuoteTechProduct found = repository.findProduct(command.productId())
         .orElseThrow(() -> error(
             TechnicalDataTaskErrorCode.PRODUCT_NOT_FOUND, "技术资料产品不存在"));
-    QuoteTechTask task = repository.lockTask(product.getTaskId())
+    QuoteTechTask task = repository.lockTask(found.getTaskId())
         .orElseThrow(() -> error(TechnicalDataTaskErrorCode.TASK_NOT_FOUND, "技术资料任务不存在"));
+    QuoteTechProduct product = repository.lockProduct(command.productId()).orElseThrow();
+    if (product.getCurrentEditVersionId() != null) repository.lockVersion(product.getCurrentEditVersionId()).orElseThrow();
     requireEditable(task, product, actor);
+    if (!Integer.valueOf(2).equals(product.getContentSchemaVersion())) {
+      throw forbidden("历史补录版本仅可查看，请通过当前产品核算检查进入新补录流程");
+    }
     if (!Objects.equals(product.getRowVersion(), command.expectedVersion())) {
       throw conflict(product.getRowVersion());
     }
@@ -50,13 +58,11 @@ public class TechnicalDataProfileApplicationServiceImpl
     QuoteTechModule profileModule = repository.lockProfileModule(product.getId())
         .orElseThrow(() -> error(
             TechnicalDataTaskErrorCode.PERSISTENCE_CONFLICT, "产品缺少PROFILE模块"));
-    if ("PARTIALLY_RETURNED".equals(task.getTaskStatus())
-        && !Set.of("RETURNED", "EDITING").contains(profileModule.getModuleStatus())) {
-      throw error(
-          TechnicalDataTaskErrorCode.VERSION_CONFLICT,
-          "产品基本信息本轮未退回，继续展示V1且禁止修改");
+    if (!actor.canEditModule(task, profileModule)) {
+      throw forbidden("当前产品资料模块未分派给本人，或 OA 分派尚未确认");
     }
-    LocalDateTime now = LocalDateTime.now();
+    sharedModules.requireOwnership(productId, "PROFILE");
+    LocalDateTime now = LocalDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
     QuoteTechDataVersion draft = product.getCurrentEditVersionId() == null
         ? createDraft(product, command, actor, now)
         : updateDraft(product, command, actor, now);
@@ -72,7 +78,7 @@ public class TechnicalDataProfileApplicationServiceImpl
     if ("PENDING".equals(task.getTaskStatus())) {
       repository.markTaskInProgress(task.getId(), actor.userId(), now);
     }
-    return response(draft, command.expectedVersion() + 1, now);
+    return response(product, draft, command.expectedVersion() + 1, now);
   }
 
   private QuoteTechDataVersion createDraft(
@@ -82,11 +88,14 @@ public class TechnicalDataProfileApplicationServiceImpl
       LocalDateTime now) {
     QuoteTechDataVersion draft = new QuoteTechDataVersion();
     draft.setProductId(product.getId());
+    draft.setContentSchemaVersion(product.getContentSchemaVersion() == null
+        ? 1 : product.getContentSchemaVersion());
     draft.setVersionNo(1);
     draft.setVersionStatus(QuoteTechDataVersion.STATUS_DRAFT);
-    draft.setProductModel(command.productModel());
+    draft.setProductModel(snapshotFactory.readProfile(product.getSourceSnapshotJson()).productModel());
     draft.setProductProperty(command.productProperty());
-    draft.setNewProductFlag(command.newProduct() ? 1 : 0);
+    draft.setNewProductFlag(Boolean.TRUE.equals(snapshotFactory.readProfile(product.getSourceSnapshotJson()).newProduct()) ? 1 : 0);
+    draft.setProductFeesJson(contentCodec.productFeesJson(command.fees()));
     draft.setPackageTotalAmount(BigDecimal.ZERO);
     draft.setAuxiliaryTotalAmount(BigDecimal.ZERO);
     draft.setSalaryTotalAmount(BigDecimal.ZERO);
@@ -115,9 +124,10 @@ public class TechnicalDataProfileApplicationServiceImpl
           "当前版本已" + draft.getVersionStatus() + "，不能继续修改");
     }
     int draftVersion = draft.getRowVersion();
-    draft.setProductModel(command.productModel());
+    draft.setProductModel(snapshotFactory.readProfile(product.getSourceSnapshotJson()).productModel());
     draft.setProductProperty(command.productProperty());
-    draft.setNewProductFlag(command.newProduct() ? 1 : 0);
+    draft.setNewProductFlag(Boolean.TRUE.equals(snapshotFactory.readProfile(product.getSourceSnapshotJson()).newProduct()) ? 1 : 0);
+    draft.setProductFeesJson(contentCodec.productFeesJson(command.fees()));
     draft.setUpdatedBy(actor.userId());
     if (repository.updateDraftProfile(draft, draftVersion, now) != 1) {
       throw conflict(product.getRowVersion());
@@ -135,14 +145,7 @@ public class TechnicalDataProfileApplicationServiceImpl
     if (!Objects.equals(task.getActiveFlag(), 1) || !Objects.equals(product.getActiveFlag(), 1)) {
       throw forbidden("历史任务只能查看，不能修改");
     }
-    if (!actor.admin() && !Objects.equals(task.getAssigneeUserId(), actor.userId())) {
-      throw forbidden("只能修改本人负责的技术资料产品");
-    }
-    if (!EDITABLE_TASK_STATUSES.contains(task.getTaskStatus())) {
-      throw error(
-          TechnicalDataTaskErrorCode.VERSION_CONFLICT,
-          "任务状态为" + task.getTaskStatus() + "，当前不可修改");
-    }
+
   }
 
   private Command normalize(Long productId, TechnicalDataProfileUpdateRequest request) {
@@ -152,29 +155,34 @@ public class TechnicalDataProfileApplicationServiceImpl
       throw invalid("OA只读字段或未知字段不能修改："
           + String.join(",", request.getUnknownFields().keySet()));
     }
-    String model = request.getProductModel();
-    if (!StringUtils.hasText(model)) throw invalid("产品型号不能为空");
-    model = model.trim();
-    if (model.length() > 255) throw invalid("产品型号长度不能超过255");
     String property = request.getProductProperty();
-    if (!PRODUCT_PROPERTIES.contains(property)) {
+    if (!"标准品".equals(property) && !"非标品".equals(property)) {
       throw invalid("产品属性只能为标准品或非标品");
     }
-    if (request.getNewProduct() == null) throw invalid("新品只能为是或否");
+    ProductFees fees;
+    try {
+      fees = TechnicalDataProductFeeRules.parse(request.getHasAdditionalFees(),
+          request.getUnitToolingFee(), request.getUnitMouldFee(), request.getUnitCertificationFee());
+    } catch (IllegalArgumentException exception) {
+      throw invalid(exception.getMessage());
+    }
     Integer expectedVersion = request.getExpectedVersion();
     if (expectedVersion == null || expectedVersion < 0) {
       throw invalid("expectedVersion必须大于等于0");
     }
     return new Command(
-        productId, model, property, request.getNewProduct(), expectedVersion);
+        productId, property, fees, expectedVersion);
   }
 
   private TechnicalDataProfileResponse response(
-      QuoteTechDataVersion version, int expectedVersion, LocalDateTime updatedAt) {
+      QuoteTechProduct product, QuoteTechDataVersion version, int expectedVersion, LocalDateTime updatedAt) {
+    ProductFees fees = contentCodec.productFees(version);
     return new TechnicalDataProfileResponse(
         version.getId(), version.getVersionNo(), version.getVersionStatus(),
         version.getProductModel(), version.getProductProperty(),
-        Objects.equals(version.getNewProductFlag(), 1), expectedVersion,
+        snapshotFactory.readProfile(product.getSourceSnapshotJson()).newProduct(),
+        fees.includesNewToolingMouldCertificationFee(), TechnicalDataProductFeeRules.display(fees.unitToolingFee()),
+        TechnicalDataProductFeeRules.display(fees.unitMouldFee()), TechnicalDataProductFeeRules.display(fees.unitCertificationFee()), expectedVersion,
         version.getRowVersion(), updatedAt);
   }
 
@@ -205,8 +213,7 @@ public class TechnicalDataProfileApplicationServiceImpl
 
   private record Command(
       Long productId,
-      String productModel,
       String productProperty,
-      boolean newProduct,
+      ProductFees fees,
       int expectedVersion) {}
 }

@@ -18,13 +18,13 @@ public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
       INSERT INTO lp_quote_tech_product (
         task_id,oa_form_item_id,level_no,material_no,product_name,source_model,source_spec,
         quote_no,accounting_month,source_snapshot_json,source_fingerprint,product_status,
-        active_flag,active_lock_key,row_version)
+        active_flag,active_lock_key,row_version,content_schema_version)
       VALUES (
         #{product.taskId},#{product.oaFormItemId},#{product.levelNo},#{product.materialNo},
         #{product.productName},#{product.sourceModel},#{product.sourceSpec},#{product.quoteNo},
         #{product.accountingMonth},#{product.sourceSnapshotJson},#{product.sourceFingerprint},
         #{product.productStatus},#{product.activeFlag},#{product.activeLockKey},
-        #{product.rowVersion})
+        #{product.rowVersion},#{product.contentSchemaVersion})
       ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)
       """)
   @Options(useGeneratedKeys = true, keyProperty = "product.id")
@@ -51,19 +51,6 @@ public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
        ORDER BY id
       """)
   List<QuoteTechProduct> selectActiveCandidatesByItemAndMonth(
-      @Param("oaFormItemId") Long oaFormItemId,
-      @Param("accountingMonth") String accountingMonth);
-
-  @Select("""
-      SELECT *
-        FROM lp_quote_tech_product
-       WHERE oa_form_item_id=#{oaFormItemId}
-         AND accounting_month=#{accountingMonth}
-         AND active_flag=1
-       LIMIT 1
-       FOR UPDATE
-      """)
-  QuoteTechProduct selectActiveForUpdate(
       @Param("oaFormItemId") Long oaFormItemId,
       @Param("accountingMonth") String accountingMonth);
 
@@ -107,19 +94,15 @@ public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
       "</if>",
       "<choose>",
       "<when test='accessMode == \"ALL\"'></when>",
-      "<when test='accessMode == \"ASSIGNEE_OR_REVIEWER\"'>",
-      "AND (task.assignee_user_id=#{userId} OR task.reviewer_user_id=#{userId})",
-      "</when>",
-      "<when test='accessMode == \"REVIEWER\"'>",
-      "AND task.reviewer_user_id=#{userId}",
-      "</when>",
-      "<otherwise>AND task.assignee_user_id=#{userId}</otherwise>",
+      "<when test='accessMode == \"FINANCE\"'>AND task.business_unit_type=#{businessUnitType}</when>",
+      "<otherwise>AND ((task.assignee_user_id=#{userId} AND NOT EXISTS (SELECT 1 FROM lp_quote_tech_module fm JOIN lp_quote_tech_product fp ON fp.id=fm.product_id WHERE fp.task_id=task.id AND fp.active_flag=1 AND fm.required_flag=1 AND fm.assignee_user_id IS NOT NULL)) OR EXISTS (SELECT 1 FROM lp_quote_tech_module am JOIN lp_quote_tech_product ap ON ap.id=am.product_id WHERE ap.task_id=task.id AND ap.active_flag=1 AND am.required_flag=1 AND am.assignee_user_id=#{userId}))</otherwise>",
       "</choose>",
       "</script>"
   })
   long countAccessibleWorkbenchRows(
       @Param("accessMode") String accessMode,
       @Param("userId") Long userId,
+      @Param("businessUnitType") String businessUnitType,
       @Param("taskStatus") String taskStatus,
       @Param("accountingMonth") String accountingMonth,
       @Param("keyword") String keyword);
@@ -146,13 +129,8 @@ public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
       "</if>",
       "<choose>",
       "<when test='accessMode == \"ALL\"'></when>",
-      "<when test='accessMode == \"ASSIGNEE_OR_REVIEWER\"'>",
-      "AND (task.assignee_user_id=#{userId} OR task.reviewer_user_id=#{userId})",
-      "</when>",
-      "<when test='accessMode == \"REVIEWER\"'>",
-      "AND task.reviewer_user_id=#{userId}",
-      "</when>",
-      "<otherwise>AND task.assignee_user_id=#{userId}</otherwise>",
+      "<when test='accessMode == \"FINANCE\"'>AND task.business_unit_type=#{businessUnitType}</when>",
+      "<otherwise>AND ((task.assignee_user_id=#{userId} AND NOT EXISTS (SELECT 1 FROM lp_quote_tech_module fm JOIN lp_quote_tech_product fp ON fp.id=fm.product_id WHERE fp.task_id=task.id AND fp.active_flag=1 AND fm.required_flag=1 AND fm.assignee_user_id IS NOT NULL)) OR EXISTS (SELECT 1 FROM lp_quote_tech_module am JOIN lp_quote_tech_product ap ON ap.id=am.product_id WHERE ap.task_id=task.id AND ap.active_flag=1 AND am.required_flag=1 AND am.assignee_user_id=#{userId}))</otherwise>",
       "</choose>",
       "ORDER BY task.updated_at DESC,task.id DESC,product.level_no,product.oa_form_item_id,product.id",
       "LIMIT #{offset},#{size}",
@@ -161,6 +139,7 @@ public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
   List<QuoteTechProduct> selectAccessibleWorkbenchPage(
       @Param("accessMode") String accessMode,
       @Param("userId") Long userId,
+      @Param("businessUnitType") String businessUnitType,
       @Param("taskStatus") String taskStatus,
       @Param("accountingMonth") String accountingMonth,
       @Param("keyword") String keyword,

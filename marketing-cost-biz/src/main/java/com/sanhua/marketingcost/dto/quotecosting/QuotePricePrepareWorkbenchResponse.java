@@ -13,6 +13,7 @@ import lombok.Setter;
 @Getter
 @Setter
 public class QuotePricePrepareWorkbenchResponse {
+  private com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceCorrection technicalPriceCorrection;
   private String oaNo;
   private Long oaFormItemId;
   private String topProductCode;

@@ -19,7 +19,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v2/technical-data")
 public class TechnicalDataProfileController {
   private static final String EDIT_PERMISSION =
-      "@ss.hasAnyPermi('technical:data:task:edit','technical:data:admin:operate')";
+      "@ss.hasAnyPermi('technical:data:task:edit','technical:data:admin:operate',"
+          + "'ingest:quote:cost-run:execute')";
 
   private final TechnicalDataProfileApplicationService applicationService;
   private final TechnicalDataActorProvider actorProvider;
@@ -47,8 +48,7 @@ public class TechnicalDataProfileController {
         case TASK_NOT_FOUND, PRODUCT_NOT_FOUND -> GlobalErrorCodeConstants.NOT_FOUND.getCode();
         case FORBIDDEN -> GlobalErrorCodeConstants.FORBIDDEN.getCode();
         case VERSION_CONFLICT,
-            ACTIVE_PRODUCT_CONFLICT,
-            SOURCE_CHANGE_REQUIRES_COMPLETE_TASK,
+            ACTIVE_PRODUCT_CONFLICT, SHARED_MODULE_CONFLICT,
             PERSISTENCE_CONFLICT -> 409;
         case INVALID_REQUEST -> GlobalErrorCodeConstants.BAD_REQUEST.getCode();
       };

@@ -102,5 +102,10 @@ public interface PriceLinkedItemService {
     return null;
   }
 
+  default PriceItemImportResponse importExcel(com.sanhua.marketingcost.dto.PriceLinkedImportCommand command) {
+    if(command.getTechnicalPlan()!=null)throw new IllegalStateException("补录导入必须支持已校验的逐项上下文");
+    return importExcel(new java.io.ByteArrayInputStream(command.getFileBytes()),command.getPricingMonth(),command.isOverwriteManual(),command.getBusinessUnitType(),command.getSourceFileName(),command.getEffectiveStrategy(),command.getFormulaEffectiveDate(),command.getFactorPriceConflictStrategy());
+  }
+
   boolean delete(Long id);
 }

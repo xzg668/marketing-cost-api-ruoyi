@@ -119,6 +119,7 @@ public class PriceVariableBindingServiceImpl implements PriceVariableBindingServ
     if (item == null) {
       throw new IllegalArgumentException("联动行不存在：linkedItemId=" + itemId);
     }
+    requirePublicItem(item);
     // factor_code 必须在 lp_price_variable 已登记，避免写入孤儿绑定
     PriceVariable variable = priceVariableMapper.selectOne(
         Wrappers.lambdaQuery(PriceVariable.class)
@@ -224,11 +225,18 @@ public class PriceVariableBindingServiceImpl implements PriceVariableBindingServ
     if (existing == null) {
       throw new IllegalArgumentException("绑定不存在：id=" + id);
     }
+    requirePublicItem(priceLinkedItemMapper.selectById(existing.getLinkedItemId()));
     // BaseMapper.deleteById + @TableLogic = UPDATE deleted=1
     bindingMapper.deleteById(id);
     logBindingChange("DELETE", existing, null, null, "软删行级变量绑定");
     factorVariableRegistry.invalidateBinding(existing.getLinkedItemId());
     log.info("软删行局部绑定：id={} linkedItemId={}", id, existing.getLinkedItemId());
+  }
+
+  private void requirePublicItem(PriceLinkedItem item) {
+    if (item != null && "TECH_SUPPLEMENTAL".equals(item.getSourceKind())) {
+      throw new IllegalArgumentException("技术审批价格的因素绑定不可在公共价格页修改");
+    }
   }
 
   // ============================ 待绑定 ============================
@@ -338,7 +346,7 @@ public class PriceVariableBindingServiceImpl implements PriceVariableBindingServ
 
     // 按 (material_code, spec_model) 查联动行 —— 可能一对多
     List<PriceLinkedItem> items = priceLinkedItemMapper.selectList(
-        Wrappers.lambdaQuery(PriceLinkedItem.class)
+        Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
             .eq(PriceLinkedItem::getMaterialCode, materialCode)
             .eq(PriceLinkedItem::getSpecModel, specModel));
     if (items.isEmpty()) {

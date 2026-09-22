@@ -12,6 +12,9 @@ import org.apache.ibatis.annotations.Select;
 @Mapper
 public interface OaFormMapper extends BaseMapper<OaForm> {
 
+  @Select("SELECT COUNT(*) FROM lp_oa_quote_document WHERE oa_form_id=#{formId}")
+  int countOaSourceBindings(@Param("formId") Long formId);
+
   /** V21：selectList 走数据隔离（按登录用户 business_unit_type 过滤） */
   @DataScope
   @Override

@@ -31,35 +31,38 @@ public class ElectronicDrawingMaterialResolutionController {
     this.workflowOrchestrator = workflowOrchestrator;
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list','ingest:quote:cost-run:execute')")
   @GetMapping("/{taskId}/material-resolution")
   public CommonResult<ElectronicDrawingMaterialResolutionResponse> state(
-      @PathVariable Long taskId) {
-    return execute(() -> service.state(taskId));
+      @PathVariable Long taskId,
+      @RequestParam(required = false) String accountingMonth) {
+    return execute(() -> service.state(taskId, accountingMonth));
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")
+  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list','ingest:quote:cost-run:execute')")
   @GetMapping("/{taskId}/material-options")
   public CommonResult<ElectronicDrawingMaterialSearchResponse> search(
       @PathVariable Long taskId,
       @RequestParam Long sourceVersionId,
       @RequestParam String searchType,
       @RequestParam(required = false) String keyword,
-      @RequestParam(required = false) Integer limit) {
+      @RequestParam(required = false) Integer limit,
+      @RequestParam(required = false) String accountingMonth) {
     return execute(() -> service.search(
-        taskId, sourceVersionId, searchType, keyword, limit));
+        taskId, sourceVersionId, searchType, keyword, limit, accountingMonth));
   }
 
   @PreAuthorize("@ss.hasAnyPermi('ingest:quote:cost-run:execute')")
   @PutMapping("/{taskId}/material-resolutions")
   public CommonResult<ElectronicDrawingMaterialResolutionResponse> apply(
       @PathVariable Long taskId,
-      @RequestBody ElectronicDrawingMaterialResolutionRequest request) {
+      @RequestBody ElectronicDrawingMaterialResolutionRequest request,
+      @RequestParam(required = false) String accountingMonth) {
     return execute(() -> {
-      ElectronicDrawingMaterialResolutionResponse response = service.apply(taskId, request);
+      ElectronicDrawingMaterialResolutionResponse response = service.apply(taskId, request, accountingMonth);
       if (!response.complete()) return response;
-      workflowOrchestrator.resumeAfterMaterialSelection(taskId);
-      return service.state(taskId);
+      workflowOrchestrator.resumeAfterMaterialSelection(taskId, response.accountingMonth());
+      return service.state(taskId, response.accountingMonth());
     });
   }
 

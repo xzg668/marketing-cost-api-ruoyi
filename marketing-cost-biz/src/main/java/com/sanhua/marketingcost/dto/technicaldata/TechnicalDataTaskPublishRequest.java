@@ -1,43 +1,29 @@
 package com.sanhua.marketingcost.dto.technicaldata;
 
+import com.fasterxml.jackson.annotation.JsonAnySetter;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import lombok.Getter;
+import lombok.Setter;
 
-/** 报价系统向技术资料工作台发布的完整任务快照。 */
-public record TechnicalDataTaskPublishRequest(
-    String sourceRequestId,
-    String sourceSystem,
-    Long oaFormId,
-    String oaNo,
-    String quoteNo,
-    String accountingMonth,
-    String businessUnitType,
-    String applicableOrgCode,
-    Long assigneeUserId,
-    String assigneeName,
-    Long reviewerUserId,
-    String reviewerName,
-    String externalSystem,
-    String externalTaskId,
-    String externalTaskStatus,
-    LocalDateTime dueAt,
-    List<Product> products) {
+/** 多产品共用默认办理人及可选模块分工；各产品仍保留独立任务。 */
+@Getter
+@Setter
+public final class TechnicalDataTaskPublishRequest {
+  private String requestId;
+  private List<Long> oaFormItemIds;
+  private String accountingMonth;
+  private Long assigneeUserId;
+  private Map<String, Long> moduleAssignees;
+  private Map<Long, String> checkFingerprints;
+  private LocalDateTime dueAt;
+  @Setter(lombok.AccessLevel.NONE)
+  private final Map<String, Object> unknownFields = new LinkedHashMap<>();
 
-  public record Product(
-      Long oaFormItemId,
-      Integer levelNo,
-      String materialNo,
-      String productName,
-      String sourceModel,
-      String sourceSpec,
-      String sourceProductProperty,
-      Boolean newProduct,
-      Boolean nonStandardPackage,
-      Boolean validPackageSource,
-      Boolean validCmsAuxiliarySource,
-      Boolean validCmsSalarySource,
-      Boolean auxiliaryRequested,
-      Boolean salaryRequested,
-      Map<String, Object> sourceFields) {}
+  @JsonAnySetter
+  public void captureUnknownField(String name, Object value) {
+    unknownFields.put(name, value);
+  }
 }

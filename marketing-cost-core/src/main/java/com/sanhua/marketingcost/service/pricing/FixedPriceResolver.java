@@ -29,12 +29,14 @@ public class FixedPriceResolver implements PriceResolver {
   private static final String U9_PAYABLE_PROCESS_NO = "U9C-应付单列表";
   private static final String U9_SOURCE_SYSTEM = "U9";
 
+  private final TechnicalPriceSourceResolver technicalPrices;
   private final PriceFixedItemMapper priceFixedItemMapper;
   private final SupplierPreferredPriceSelector supplierPreferredPriceSelector;
 
   public FixedPriceResolver(
       PriceFixedItemMapper priceFixedItemMapper,
-      SupplierPreferredPriceSelector supplierPreferredPriceSelector) {
+      SupplierPreferredPriceSelector supplierPreferredPriceSelector, TechnicalPriceSourceResolver technicalPrices) {
+    this.technicalPrices = technicalPrices;
     this.priceFixedItemMapper = priceFixedItemMapper;
     this.supplierPreferredPriceSelector = supplierPreferredPriceSelector;
   }
@@ -52,13 +54,15 @@ public class FixedPriceResolver implements PriceResolver {
   @Override
   public PriceResolveResult resolve(
       String oaNo, CostRunPartItemDto item, PriceTypeRoute route, CostRunContext context) {
+    if (route != null && route.supplemental()) return technicalPrices.resolve(item, route, context);
     String code = item.getPartCode();
     if (!StringUtils.hasText(code)) {
       return PriceResolveResult.miss("partCode 为空，无法查固定价");
     }
     FixedSourceKind sourceKind = resolveFixedSourceKind(route);
     LocalDate priceDate = pricingDate(route, context);
-    List<PriceFixedItem> rows = selectRows(code, sourceKind, priceDate);
+    String orgCode = priceOrgCode(item, context);
+    List<PriceFixedItem> rows = selectRows(code, sourceKind, priceDate, orgCode);
     rows = rows.stream()
         .filter(row -> row.getFixedPrice() != null)
         .toList();
@@ -93,15 +97,19 @@ public class FixedPriceResolver implements PriceResolver {
   }
 
   private List<PriceFixedItem> selectRows(
-      String code, FixedSourceKind sourceKind, LocalDate priceDate) {
+      String code, FixedSourceKind sourceKind, LocalDate priceDate, String orgCode) {
     List<String> sourceTypes = sourceTypes(sourceKind);
     LambdaQueryWrapper<PriceFixedItem> query =
         Wrappers.lambdaQuery(PriceFixedItem.class)
             .eq(PriceFixedItem::getMaterialCode, code)
+            .eq(PriceFixedItem::getSourceKind, "PUBLIC")
             // source_type 是固定采购价与结算固定价防串价的核心隔离条件。
             // 同时兼容旧值：PURCHASE -> PURCHASE_FIXED，SETTLE -> SETTLE_FIXED。
             .in(PriceFixedItem::getSourceType, sourceTypes)
             .isNotNull(PriceFixedItem::getFixedPrice);
+    if (StringUtils.hasText(orgCode)) {
+      query.eq(PriceFixedItem::getOrgCode, orgCode);
+    }
     if (priceDate != null) {
       query.and(q -> q.le(PriceFixedItem::getEffectiveFrom, priceDate)
           .or()
@@ -112,6 +120,15 @@ public class FixedPriceResolver implements PriceResolver {
         .orderByDesc(PriceFixedItem::getCreatedAt)
         .orderByDesc(PriceFixedItem::getId);
     return priceFixedItemMapper.selectList(query);
+  }
+
+  private String priceOrgCode(CostRunPartItemDto item, CostRunContext context) {
+    if (item != null && StringUtils.hasText(item.getPriceOrgCode())) {
+      return item.getPriceOrgCode().trim();
+    }
+    return context != null && StringUtils.hasText(context.getPriceOrgCode())
+        ? context.getPriceOrgCode().trim()
+        : null;
   }
 
   /**
@@ -197,8 +214,10 @@ public class FixedPriceResolver implements PriceResolver {
       String trace,
       LocalDate priceDate,
       SupplierPreferredPriceSelection<PriceFixedItem> selection) {
+    // SRM固定采购价每天按全量快照替换，自增ID不具备稳定业务含义。
+    Long evidenceRecordId = isDailySrmFixedPrice(row) ? null : row.getId();
     PriceResolveEvidence evidence = PriceResolveEvidenceFactory.create(
-        row.getId(),
+        evidenceRecordId,
         row.getSourceBatchNo(),
         selection == null ? row.getSupplierName() : selection.mainSupplierName(),
         selection == null ? row.getSupplierCode() : selection.mainSupplierCode(),
@@ -211,7 +230,15 @@ public class FixedPriceResolver implements PriceResolver {
     String remark = StringUtils.hasText(warning)
         ? (StringUtils.hasText(trace) ? trace + "；" : "") + warning
         : trace;
-    return PriceResolveResult.hit(row.getFixedPrice(), priceSource, remark, row.getId(), evidence);
+    return PriceResolveResult.hit(row.getFixedPrice(), priceSource, remark, evidenceRecordId, evidence);
+  }
+
+  private boolean isDailySrmFixedPrice(PriceFixedItem row) {
+    return row != null
+        && "PUBLIC".equalsIgnoreCase(row.getSourceKind())
+        && "SRM".equalsIgnoreCase(row.getSourceSystem())
+        && ("PURCHASE_FIXED".equalsIgnoreCase(row.getSourceType())
+            || "PURCHASE".equalsIgnoreCase(row.getSourceType()));
   }
 
   private LocalDate pricingDate(PriceTypeRoute route, CostRunContext context) {

@@ -11,6 +11,12 @@ public interface EffectiveTechnicalDataQueryService {
    */
   EffectiveTechnicalDataInput resolve(Long oaFormItemId, String accountingMonth);
 
+  /** 准备 BOM/检查缺价时可读本任务已保存明细；此结果不代表可以生成成本版本。 */
+  default java.util.List<EffectiveTechnicalDataInput.MaterialLine> preparationMaterials(Long oaFormItemId, String accountingMonth) {
+    var input = resolve(oaFormItemId, accountingMonth);
+    return input == null ? java.util.List.of() : input.materialItems();
+  }
+
   default String effectiveFingerprint(Long oaFormItemId, String accountingMonth) {
     EffectiveTechnicalDataInput input = resolve(oaFormItemId, accountingMonth);
     return input == null

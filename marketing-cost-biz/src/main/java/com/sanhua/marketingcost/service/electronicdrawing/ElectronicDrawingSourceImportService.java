@@ -39,6 +39,7 @@ public class ElectronicDrawingSourceImportService {
   private final QuoteBomPreparationRecordMapper preparationMapper;
   private final QuoteBomSupplementVersionMapper versionMapper;
   private final ElectronicDrawingSourceNodeRepository sourceNodeRepository;
+  private final ElectronicDrawingProductLookup productLookup;
 
   public ElectronicDrawingSourceImportService(
       ElectronicDrawingExcelParser parser,
@@ -46,13 +47,15 @@ public class ElectronicDrawingSourceImportService {
       OaFormItemMapper oaFormItemMapper,
       QuoteBomPreparationRecordMapper preparationMapper,
       QuoteBomSupplementVersionMapper versionMapper,
-      ElectronicDrawingSourceNodeRepository sourceNodeRepository) {
+      ElectronicDrawingSourceNodeRepository sourceNodeRepository,
+      ElectronicDrawingProductLookup productLookup) {
     this.parser = parser;
     this.contextPort = contextPort;
     this.oaFormItemMapper = oaFormItemMapper;
     this.preparationMapper = preparationMapper;
     this.versionMapper = versionMapper;
     this.sourceNodeRepository = sourceNodeRepository;
+    this.productLookup = productLookup;
   }
 
   @Transactional
@@ -62,13 +65,12 @@ public class ElectronicDrawingSourceImportService {
     byte[] content = validateAcquired(validCommand.requestedDrawingNo(), acquired);
     ElectronicDrawingWorkContext context = contextPort.load(
         validCommand.workflowId(), validCommand.businessUnitType(),
-        validCommand.applicableOrgCode());
+        validCommand.applicableOrgCode(), validCommand.accountingMonth());
     validateContext(context);
 
     OaFormItem quoteItem = oaFormItemMapper.selectById(context.oaFormItemId());
     validateQuoteBinding(context, quoteItem);
-    String quoteDrawingNo = requiredText(
-        quoteItem.getCustomerDrawing(), "报价产品图号", ElectronicDrawingSourceImportException.BINDING_INVALID);
+    String quoteDrawingNo = productLookup.requireDrawing(context, validCommand.requestedDrawingNo());
     requireSameDrawing(validCommand.requestedDrawingNo(), acquired.drawingNo(), "请求图号与接口响应图号不一致");
     requireSameDrawing(validCommand.requestedDrawingNo(), quoteDrawingNo, "请求图号与报价产品图号不一致");
 
@@ -94,12 +96,15 @@ public class ElectronicDrawingSourceImportService {
         throw error(ElectronicDrawingSourceImportException.SOURCE_INVALID,
             "相同 SHA 的电子图库源版本与已保存原始行不一致");
       }
-      boolean current = Objects.equals(context.sourceVersionId(), existing.getId());
-      if (context.sourceVersionId() == null) {
-        attach(context, existing.getId());
-        current = true;
+      if (sameWeightUnits(storedNodes, parsed.nodes())) {
+        boolean current = Objects.equals(context.sourceVersionId(), existing.getId());
+        if (!current) {
+          attach(context, existing.getId());
+          current = true;
+        }
+        return result(existing, storedNodes.size(), true, current);
       }
-      return result(existing, storedNodes.size(), true, current);
+      // 同一文件按新单位约定重查时另存版本，不回填或覆盖旧源节点及其审批引用。
     }
 
     LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
@@ -127,7 +132,8 @@ public class ElectronicDrawingSourceImportService {
         requiredText(command.applicableOrgCode(), "适用组织",
             ElectronicDrawingSourceImportException.COMMAND_INVALID),
         requiredText(command.requestedDrawingNo(), "请求图号",
-            ElectronicDrawingSourceImportException.COMMAND_INVALID));
+            ElectronicDrawingSourceImportException.COMMAND_INVALID),
+        parseMonth(command.accountingMonth()).toString());
   }
 
   private byte[] validateAcquired(
@@ -185,7 +191,8 @@ public class ElectronicDrawingSourceImportService {
         || !Objects.equals(quoteItem.getId(), context.oaFormItemId())
         || !Objects.equals(quoteItem.getOaFormId(), context.oaFormId())
         || !sameText(quoteItem.getBusinessUnitType(), context.businessUnitType())
-        || !sameText(quoteItem.getMaterialNo(), context.quoteProductCode())) {
+        || !sameText(com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(quoteItem),
+            context.quoteProductCode())) {
       throw error(ElectronicDrawingSourceImportException.BINDING_INVALID,
           "电子图库上下文、报价产品行和顶层料号绑定不一致");
     }
@@ -292,6 +299,7 @@ public class ElectronicDrawingSourceImportService {
     node.setImportanceClass(source.importanceClass());
     node.setHsfRiskClass(source.hsfRiskClass());
     node.setReferenceWeight(source.referenceWeight());
+    node.setReferenceWeightUnit(source.referenceWeightUnit());
     node.setSourceRemark(source.remark());
     node.setMatchStatus(ElectronicDrawingSourceNode.MATCH_UNMATCHED);
     node.setCreatedAt(now);
@@ -307,6 +315,16 @@ public class ElectronicDrawingSourceImportService {
       throw error(ElectronicDrawingSourceImportException.TASK_VERSION_CONFLICT,
           "产品任务版本已变化，请重新检查后重试");
     }
+  }
+
+  private boolean sameWeightUnits(
+      List<ElectronicDrawingSourceNode> stored,
+      List<ElectronicDrawingExcelParseResult.SourceNode> parsed) {
+    for (int index = 0; index < stored.size(); index++) {
+      if (!Objects.equals(stored.get(index).getReferenceWeightUnit(),
+          parsed.get(index).referenceWeightUnit())) return false;
+    }
+    return true;
   }
 
   private boolean sameImmutableNodes(
@@ -403,7 +421,8 @@ public class ElectronicDrawingSourceImportService {
       Long workflowId,
       String businessUnitType,
       String applicableOrgCode,
-      String requestedDrawingNo) {}
+      String requestedDrawingNo,
+      String accountingMonth) {}
 
   public record ImportResult(
       Long supplementVersionId,
@@ -418,5 +437,6 @@ public class ElectronicDrawingSourceImportService {
       Long workflowId,
       String businessUnitType,
       String applicableOrgCode,
-      String requestedDrawingNo) {}
+      String requestedDrawingNo,
+      String accountingMonth) {}
 }

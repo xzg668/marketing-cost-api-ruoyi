@@ -110,7 +110,8 @@ public class CostRunDetailController {
         materialMaster == null ? null : trimToNull(materialMaster.getMaterialName());
     String productModel =
         materialMaster == null ? null : trimToNull(materialMaster.getItemModel());
-    var result = costRunResultService.getResult(oaNo, productCodeValue);
+    var result = version == null ? costRunResultService.getResult(oaNo, productCodeValue)
+        : costRunResultService.getResult(version.getId());
     if (result != null) {
       dto.setProductAttr(result.getProductAttr());
     }

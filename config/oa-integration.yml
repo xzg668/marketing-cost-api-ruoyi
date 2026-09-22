@@ -1,0 +1,24 @@
+# 报价与 OA 联调测试环境配置。
+# 启动参数：--spring.config.additional-location=file:/部署目录/oa-integration.yml
+# 测试环境联调配置；生产环境部署时应通过独立配置覆盖 Token。
+integration:
+  oa:
+    mode: REAL
+    environment: TEST
+    # 当前只开放 OA 调用报价系统的 I01/I04/I08，暂不启动出站队列。
+    worker-enabled: false
+    max-body-bytes: 2097152
+    batch-size: 20
+    lease-seconds: 60
+    max-attempts: 5
+    clients:
+      oa:
+        source-system: WEAVER
+        environment: TEST
+        mode: REAL
+        secret: af2703c100b6491c8a182b8811073fc1
+        business-units:
+          - COMMERCIAL
+          - HOUSEHOLD
+    outbound:
+      enabled: false

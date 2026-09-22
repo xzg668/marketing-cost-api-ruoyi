@@ -5,6 +5,16 @@ import java.util.Arrays;
 /** 联动价 Excel 预检和确认分流的不可变请求。 */
 public final class PriceLinkedImportCommand {
 
+  private final com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportContext technicalContext;
+  private final com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionWorkbook.Plan technicalPlan;
+  public com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportContext getTechnicalContext() { return technicalContext; }
+  public com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionWorkbook.Plan getTechnicalPlan() { return technicalPlan; }
+  public PriceLinkedImportCommand withTechnicalContext(com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportContext context) {
+    return new PriceLinkedImportCommand(fileBytes,sourceFileName,pricingMonth,businessUnitType,overwriteManual,effectiveStrategy,formulaEffectiveDate,factorPriceConflictStrategy,expectedPreviewSha256,context,null);
+  }
+  public PriceLinkedImportCommand withTechnicalPlan(com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionWorkbook.Plan plan) {
+    return new PriceLinkedImportCommand(fileBytes,sourceFileName,pricingMonth,businessUnitType,overwriteManual,effectiveStrategy,formulaEffectiveDate,factorPriceConflictStrategy,expectedPreviewSha256,technicalContext,plan);
+  }
   private final byte[] fileBytes;
   private final String sourceFileName;
   private final String pricingMonth;
@@ -25,6 +35,15 @@ public final class PriceLinkedImportCommand {
       String formulaEffectiveDate,
       String factorPriceConflictStrategy,
       String expectedPreviewSha256) {
+    this(fileBytes,sourceFileName,pricingMonth,businessUnitType,overwriteManual,effectiveStrategy,formulaEffectiveDate,factorPriceConflictStrategy,expectedPreviewSha256,null,null);
+  }
+
+  private PriceLinkedImportCommand(byte[] fileBytes,String sourceFileName,String pricingMonth,String businessUnitType,
+      boolean overwriteManual,String effectiveStrategy,String formulaEffectiveDate,String factorPriceConflictStrategy,String expectedPreviewSha256,
+      com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportContext technicalContext,
+      com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionWorkbook.Plan technicalPlan) {
+    this.technicalContext=technicalContext;
+    this.technicalPlan=technicalPlan;
     this.fileBytes = fileBytes == null ? new byte[0] : Arrays.copyOf(fileBytes, fileBytes.length);
     this.sourceFileName = sourceFileName;
     this.pricingMonth = pricingMonth;

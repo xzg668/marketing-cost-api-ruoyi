@@ -13,6 +13,22 @@ import java.time.LocalDateTime;
 public class PriceFixedItem {
   @TableId(type = IdType.AUTO)
   private Long id;
+  private String sourceKind;
+  private Long technicalVersionId;
+  private String technicalItemKey;
+  private String technicalPublicationStatus;
+  private String technicalPublicationMessage;
+  public String getSourceKind() { return sourceKind; }
+  public void setSourceKind(String value) { sourceKind = value; }
+  public Long getTechnicalVersionId() { return technicalVersionId; }
+  public void setTechnicalVersionId(Long value) { technicalVersionId = value; }
+  public String getTechnicalItemKey() { return technicalItemKey; }
+  public void setTechnicalItemKey(String value) { technicalItemKey = value; }
+  public String getTechnicalPublicationStatus() { return technicalPublicationStatus; }
+  public void setTechnicalPublicationStatus(String value) { technicalPublicationStatus = value; }
+  public String getTechnicalPublicationMessage() { return technicalPublicationMessage; }
+  public void setTechnicalPublicationMessage(String value) { technicalPublicationMessage = value; }
+
   private String orgCode;
   private String sourceName;
   private String supplierName;

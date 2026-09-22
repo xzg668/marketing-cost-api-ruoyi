@@ -4,7 +4,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskPublishRequest;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -22,7 +21,7 @@ public class TechnicalDataSourceSnapshotFactory {
         .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
   }
 
-  public Snapshot create(TechnicalDataTaskPublishRequest.Product product) {
+  public Snapshot create(TechnicalDataProductSource product) {
     Map<String, Object> values = new TreeMap<>();
     values.put("oaFormItemId", product.oaFormItemId());
     values.put("levelNo", product.levelNo());
@@ -31,15 +30,16 @@ public class TechnicalDataSourceSnapshotFactory {
     values.put("sourceModel", product.sourceModel());
     values.put("sourceSpec", product.sourceSpec());
     values.put("sourceProductProperty", product.sourceProductProperty());
-    values.put("newProduct", Boolean.TRUE.equals(product.newProduct()));
-    values.put("nonStandardPackage", Boolean.TRUE.equals(product.nonStandardPackage()));
-    values.put("validPackageSource", Boolean.TRUE.equals(product.validPackageSource()));
-    values.put("validCmsAuxiliarySource", Boolean.TRUE.equals(product.validCmsAuxiliarySource()));
-    values.put("validCmsSalarySource", Boolean.TRUE.equals(product.validCmsSalarySource()));
-    values.put("auxiliaryRequested", Boolean.TRUE.equals(product.auxiliaryRequested()));
-    values.put("salaryRequested", Boolean.TRUE.equals(product.salaryRequested()));
-    values.put("sourceFields", product.sourceFields() == null
-        ? Map.of() : new TreeMap<>(product.sourceFields()));
+    values.put("newProduct", product.newProduct());
+    values.put("oaFormId", product.oaFormId());
+    values.put("oaNo", product.oaNo());
+    values.put("externalLineId", product.externalLineId());
+    values.put("annualVolume", product.annualVolume());
+    values.put("annualVolumeUnit", product.annualVolumeUnit());
+    values.put("packageMethod", product.packageMethod());
+    values.put("businessUnitType", product.businessUnitType());
+    values.put("applicableOrgCode", product.applicableOrgCode());
+    values.put("materialOrganizationCode", product.materialOrganizationCode());
     try {
       String json = canonicalMapper.writeValueAsString(values);
       return new Snapshot(json, sha256(json));
@@ -50,14 +50,16 @@ public class TechnicalDataSourceSnapshotFactory {
 
   public SourceProfile readProfile(String snapshotJson) {
     if (snapshotJson == null || snapshotJson.isBlank()) {
-      return new SourceProfile(null, null, false);
+      return new SourceProfile(null, null, null, null, null);
     }
     try {
       JsonNode root = canonicalMapper.readTree(snapshotJson);
       return new SourceProfile(
           text(root.get("sourceModel")),
           text(root.get("sourceProductProperty")),
-          root.path("newProduct").asBoolean(false));
+          root.hasNonNull("newProduct") ? root.path("newProduct").booleanValue() : null,
+          root.hasNonNull("annualVolume") ? new java.math.BigDecimal(root.path("annualVolume").asText()) : null,
+          text(root.get("annualVolumeUnit")));
     } catch (JsonProcessingException exception) {
       throw new IllegalStateException("已保存的OA产品源快照无法解析", exception);
     }
@@ -78,5 +80,6 @@ public class TechnicalDataSourceSnapshotFactory {
 
   public record Snapshot(String json, String fingerprint) {}
 
-  public record SourceProfile(String productModel, String productProperty, boolean newProduct) {}
+  public record SourceProfile(String productModel, String productProperty, Boolean newProduct,
+      java.math.BigDecimal annualVolume, String annualVolumeUnit) {}
 }

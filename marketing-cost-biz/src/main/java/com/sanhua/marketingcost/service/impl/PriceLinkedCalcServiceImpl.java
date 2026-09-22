@@ -155,7 +155,7 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       return empty;
     }
 
-    var liQuery = Wrappers.lambdaQuery(PriceLinkedItem.class)
+    var liQuery = Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
         .eq(PriceLinkedItem::getDeleted, 0)
         .isNull(PriceLinkedItem::getEffectiveTo);
     if (StringUtils.hasText(itemCode)) {
@@ -281,7 +281,7 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       int page,
       int pageSize) {
     // LPE-10：结果查询页只追溯已落库的 calc_item，不能像旧 calc 列表一样合成/补写记录。
-    var query = Wrappers.lambdaQuery(PriceLinkedCalcItem.class);
+    var query = Wrappers.lambdaQuery(PriceLinkedCalcItem.class).eq(PriceLinkedCalcItem::getSourceKind, "PUBLIC");
     if (StringUtils.hasText(oaNo)) {
       query.eq(PriceLinkedCalcItem::getOaNo, oaNo.trim());
     }
@@ -599,7 +599,7 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     }
     List<PriceLinkedItem> linkedItems =
         priceLinkedItemMapper.selectList(
-            Wrappers.lambdaQuery(PriceLinkedItem.class)
+            Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
                 .eq(PriceLinkedItem::getDeleted, 0)
                 .in(PriceLinkedItem::getMaterialCode, itemCodes)
                 .isNull(PriceLinkedItem::getEffectiveTo)
@@ -767,7 +767,7 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     if (itemCodes.isEmpty()) {
       return Map.of();
     }
-    var query = Wrappers.lambdaQuery(PriceLinkedCalcItem.class);
+    var query = Wrappers.lambdaQuery(PriceLinkedCalcItem.class).eq(PriceLinkedCalcItem::getSourceKind, "PUBLIC");
     if (StringUtils.hasText(oaNo)) {
       query.eq(PriceLinkedCalcItem::getOaNo, oaNo.trim());
     }
@@ -810,7 +810,7 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       return Map.of();
     }
     List<PriceLinkedItem> linkedItems = priceLinkedItemMapper.selectList(
-        Wrappers.lambdaQuery(PriceLinkedItem.class)
+        Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
             .eq(PriceLinkedItem::getDeleted, 0)
             .in(PriceLinkedItem::getMaterialCode, itemCodes)
             .isNull(PriceLinkedItem::getEffectiveTo));

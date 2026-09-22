@@ -30,8 +30,7 @@ public class ElectronicDrawingExcelParser {
   private static final Pattern SEQUENCE = Pattern.compile("[1-9]\\d*(?:\\.[1-9]\\d*)*");
   private static final List<String> REQUIRED_HEADERS = List.of(
       "序号", "代号", "名称", "材料", "物料重要性分类", "HSF风险分类", "数量", "重量", "备注");
-  private static final Map<String, List<String>> HEADER_ALIASES = Map.of(
-      "重量", List.of("重量", "单重"));
+  private static final Pattern WEIGHT_HEADER = Pattern.compile("(?:重量|单重)(?:\\(([^()]+)\\))?");
   private final DataFormatter formatter = new DataFormatter(Locale.CHINA);
 
   public ElectronicDrawingExcelParseResult parse(String fileName, InputStream input) {
@@ -95,10 +94,16 @@ public class ElectronicDrawingExcelParser {
     if (row == null) return columns;
     for (int column = row.getFirstCellNum(); column >= 0 && column < row.getLastCellNum(); column++) {
       String label = normalizeHeader(text(row.getCell(column)));
+      if (WEIGHT_HEADER.matcher(label).matches()) {
+        columns.putIfAbsent("重量", column);
+        continue;
+      }
+      if ("重量单位".equals(label) || "单重单位".equals(label)) {
+        columns.putIfAbsent("重量单位", column);
+        continue;
+      }
       for (String required : REQUIRED_HEADERS) {
-        List<String> aliases = HEADER_ALIASES.getOrDefault(required, List.of(required));
-        if (aliases.stream().map(ElectronicDrawingExcelParser::normalizeHeader)
-            .anyMatch(label::equals)) {
+        if (required.equals(label)) {
           columns.putIfAbsent(required, column);
         }
       }
@@ -146,13 +151,47 @@ public class ElectronicDrawingExcelParser {
       }
       BigDecimal quantity = decimal(value(row, header, "数量"), "QUANTITY", sourceRow, sequence, issues, true);
       BigDecimal weight = decimal(value(row, header, "重量"), "WEIGHT", sourceRow, sequence, issues, false);
+      String weightUnit = weightUnit(row, header, sourceRow, sequence, issues);
       nodes.add(new ElectronicDrawingExcelParseResult.SourceNode(
           sequence, parent(sequence), level(sequence), drawingCode, name,
           value(row, header, "材料"), value(row, header, "物料重要性分类"),
-          value(row, header, "HSF风险分类"), quantity, weight,
+          value(row, header, "HSF风险分类"), quantity, weight, weightUnit,
           value(row, header, "备注"), sourceRow));
     }
     return nodes;
+  }
+
+  private String weightUnit(
+      Row row, HeaderLocation header, int sourceRow, String sequence,
+      List<ElectronicDrawingExcelParseResult.Issue> issues) {
+    String headerValue = normalizeHeader(value(header.headerRow(), header, "重量"));
+    var matcher = WEIGHT_HEADER.matcher(headerValue);
+    String headerUnit = matcher.matches() ? matcher.group(1) : null;
+    String rowUnit = value(row, header, "重量单位");
+    String normalizedHeader = normalizeWeightUnit(headerUnit);
+    String normalizedRow = normalizeWeightUnit(rowUnit);
+    if ((headerUnit != null && normalizedHeader == null)
+        || (rowUnit != null && normalizedRow == null)) {
+      issues.add(issue("WEIGHT_UNIT_INVALID", sourceRow, sequence,
+          "重量单位只支持 g（克）或 kg（千克），请核对源表"));
+      return null;
+    }
+    if (normalizedHeader != null && normalizedRow != null
+        && !normalizedHeader.equals(normalizedRow)) {
+      issues.add(issue("WEIGHT_UNIT_CONFLICT", sourceRow, sequence,
+          "重量表头与本行重量单位不一致，请核对源表"));
+      return null;
+    }
+    // 2026-09-15 接入约定：未标单位的“单重/重量”为 g；明确标注时保留实际单位和原值。
+    return normalizedRow != null ? normalizedRow : normalizedHeader != null ? normalizedHeader : "g";
+  }
+
+  private static String normalizeWeightUnit(String value) {
+    return switch (normalizeHeader(value)) {
+      case "G", "克" -> "g";
+      case "KG", "千克", "公斤" -> "kg";
+      default -> null;
+    };
   }
 
   private void validateParents(
@@ -246,7 +285,8 @@ public class ElectronicDrawingExcelParser {
   }
 
   private static String normalizeHeader(String value) {
-    return value == null ? "" : value.replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
+    return value == null ? "" : value.replace('（', '(').replace('）', ')')
+        .replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
   }
 
   private static ElectronicDrawingExcelParseResult.Issue issue(

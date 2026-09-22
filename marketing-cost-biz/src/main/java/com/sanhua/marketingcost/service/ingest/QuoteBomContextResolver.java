@@ -4,6 +4,7 @@ import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
+import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
@@ -17,6 +18,11 @@ import org.springframework.util.StringUtils;
  */
 @Component
 public class QuoteBomContextResolver {
+  private final MaterialMasterRawMapper materialMaster;
+
+  public QuoteBomContextResolver(MaterialMasterRawMapper materialMaster) {
+    this.materialMaster = materialMaster;
+  }
 
   public QuoteBomContext resolve(OaForm form, OaFormItem item) {
     return resolve(form, item, null);
@@ -117,16 +123,39 @@ public class QuoteBomContextResolver {
 
   public QuoteDataOrganization resolveOrganization(OaForm form, OaFormItem item) {
     try {
-      return MaterialOrganization.quoteDataForQuoteProduct(
-          form == null ? null : form.getProcessCode(),
-          form == null ? null : form.getOaNo(),
-          item == null ? null : item.getBusinessUnitType(),
-          item == null ? null : item.getProductName(),
-          item == null ? null : item.getSunlModel(),
-          item == null ? null : item.getMaterialNo());
+      var organization = organizationForProduct(form, item, item == null ? null : item.getProductName());
+      // 专用板换流程/明确板换产品已可确定组织。新产品没有料号时仍沿用现有流程规则。
+      if (item == null || normalizeOptional(item.getProductName()) != null
+          || "220".equals(organization.priceOrgCode()) || normalizeOptional(item.getMaterialNo()) == null) {
+        return organization;
+      }
+      String materialCode = item.getMaterialNo().trim();
+      var names = materialMaster.selectActiveNamesForQuoteOrganization(materialCode).stream()
+          .map(this::normalizeOptional).filter(java.util.Objects::nonNull).distinct().sorted().toList();
+      if (names.isEmpty()) {
+        throw new QuoteIngestException("产品 " + materialCode
+            + " 的 OA 名称为空，当前料品档案也无有效名称，无法确认 BOM 组织，请补全产品名称后重查");
+      }
+      if (names.size() > 1) {
+        throw new QuoteIngestException("产品 " + materialCode
+            + " 的 OA 名称为空，当前料品档案名称不一致（" + String.join("、", names)
+            + "），无法确认 BOM 组织，请核实产品名称后重查");
+      }
+      // 仅补充本次判定依据，不回写 OA 原值，也不改变报价业务单元。
+      return organizationForProduct(form, item, names.getFirst());
     } catch (IllegalArgumentException ex) {
       throw new QuoteIngestException("报价 BOM 组织解析失败: " + ex.getMessage());
     }
+  }
+
+  private QuoteDataOrganization organizationForProduct(OaForm form, OaFormItem item, String productName) {
+    return MaterialOrganization.quoteDataForQuoteProduct(
+          form == null ? null : form.getProcessCode(),
+          form == null ? null : form.getOaNo(),
+          item == null ? null : item.getBusinessUnitType(),
+          productName,
+          item == null ? null : item.getSunlModel(),
+          item == null ? null : item.getMaterialNo());
   }
 
   /** 原始 BOM 读取完成后调用，禁止 210 与 220 的源数据串用。 */

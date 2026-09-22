@@ -8,6 +8,8 @@ import java.time.LocalDateTime;
 import java.util.Optional;
 
 public interface TechnicalDataProfileRepository {
+  Optional<QuoteTechProduct> findProduct(Long productId);
+
   Optional<QuoteTechProduct> lockProduct(Long productId);
 
   Optional<QuoteTechTask> lockTask(Long taskId);

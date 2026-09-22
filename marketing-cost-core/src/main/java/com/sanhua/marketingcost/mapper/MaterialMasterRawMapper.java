@@ -12,6 +12,22 @@ import org.apache.ibatis.annotations.Select;
 @Mapper
 public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
 
+  /** U9 成品主分类为 10、裸品为 11；不把同型号零部件混入成品候选。 */
+  @Select({
+      "<script>",
+      "SELECT * FROM lp_material_master_raw WHERE active_flag=1 AND organization_code=#{organizationCode}",
+      "AND (main_category_code LIKE '10%' OR main_category_code LIKE '11%')",
+      "<choose>",
+      "<when test='searchBy == \"CODE\"'>AND material_code=#{keyword}</when>",
+      "<when test='exactModel'>AND TRIM(material_model)=#{keyword}</when>",
+      "<otherwise>AND LOCATE(#{keyword},material_model)>0</otherwise>",
+      "</choose>",
+      "ORDER BY material_code LIMIT #{limit}",
+      "</script>"
+  })
+  List<MaterialMasterRaw> selectNetLossProducts(@Param("searchBy") String searchBy, @Param("keyword") String keyword,
+      @Param("exactModel") boolean exactModel, @Param("organizationCode") String organizationCode, @Param("limit") int limit);
+
   /** 查 staging 指定组织的最近一次导入流水，仅用于追溯展示；无数据返 null。 */
   @Select({
       "<script>",
@@ -62,6 +78,12 @@ public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
       @Param("codes") Collection<String> codes,
       @Param("sourceType") String sourceType,
       @Param("organizationCode") String organizationCode);
+
+  /** 仅用于报价组织识别前补全缺失品名；不跨组织读取 BOM、价格或其他料品属性。 */
+  @Select("SELECT DISTINCT material_name FROM lp_material_master_raw "
+      + "WHERE active_flag = 1 AND material_code = #{materialCode} "
+      + "AND organization_code IN ('COMMERCIAL', 'PLATE')")
+  List<String> selectActiveNamesForQuoteOrganization(@Param("materialCode") String materialCode);
 
   /** 产品属性 A-E 导入：跨当前有效组织查生产事业部，由调用方识别空值或冲突值。 */
   @Select({

@@ -26,7 +26,6 @@ import org.springframework.util.StringUtils;
 public class QualityLossRateServiceImpl implements QualityLossRateService {
   private static final String DEFAULT_BUSINESS_UNIT_TYPE = "COMMERCIAL";
   private static final int IMPORT_BATCH_SIZE = 500;
-  private static final BigDecimal MAX_RATE_EXCLUSIVE = BigDecimal.ONE;
 
   private final QualityLossRateMapper qualityLossRateMapper;
 
@@ -268,21 +267,21 @@ public class QualityLossRateServiceImpl implements QualityLossRateService {
       return "Excel第" + rowNo + "行缺裸品料号";
     }
     if (!isRateValid(entity.getLossRate())) {
-      return "Excel第" + rowNo + "行净损失率必须大于等于0且小于1";
+      return "Excel第" + rowNo + "行公共净损失率必须大于0且小于1";
     }
     return null;
   }
 
   private boolean isValid(QualityLossRate entity) {
+    if (!isRateValid(entity.getLossRate())) {
+      throw new IllegalArgumentException("公共净损失率必须大于0且小于100%");
+    }
     return entity.getRateYear() != null
-        && StringUtils.hasText(entity.getBareProductCode())
-        && isRateValid(entity.getLossRate());
+        && StringUtils.hasText(entity.getBareProductCode());
   }
 
   private boolean isRateValid(BigDecimal value) {
-    return value != null
-        && value.signum() >= 0
-        && value.compareTo(MAX_RATE_EXCLUSIVE) < 0;
+    return com.sanhua.marketingcost.service.NetLossRateQuery.validPublicRate(value);
   }
 
   private QualityLossRate findExisting(QualityLossRate entity) {

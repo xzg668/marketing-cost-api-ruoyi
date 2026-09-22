@@ -29,6 +29,11 @@ public class CostRunPartItem {
   private BigDecimal unitPrice;
   private BigDecimal amount;
   private String remark;
+  private String technicalModuleType;
+
+  public String getTechnicalModuleType() { return technicalModuleType; }
+  public void setTechnicalModuleType(String value) { technicalModuleType = value; }
+
   private String priceOrgCode;
   private String materialOrganizationCode;
 

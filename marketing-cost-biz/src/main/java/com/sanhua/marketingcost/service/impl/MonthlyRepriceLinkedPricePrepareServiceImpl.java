@@ -126,7 +126,7 @@ public class MonthlyRepriceLinkedPricePrepareServiceImpl
   }
 
   private Set<String> loadLinkedItemCodes(MonthlyRepriceBatch batch) {
-    var query = Wrappers.lambdaQuery(PriceLinkedItem.class)
+    var query = Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
         .eq(PriceLinkedItem::getDeleted, 0)
         .eq(PriceLinkedItem::getBusinessUnitType, batch.getBusinessUnitType())
         .le(PriceLinkedItem::getPricingMonth, batch.getPricingMonth());

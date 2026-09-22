@@ -13,6 +13,8 @@ import lombok.Setter;
 public class FactorUploadBatch {
   @TableId(type = IdType.AUTO)
   private Long id;
+  private Long technicalVersionId;
+  private String technicalResultJson;
   private String batchNo;
   private String importType;
   private String importPurpose;

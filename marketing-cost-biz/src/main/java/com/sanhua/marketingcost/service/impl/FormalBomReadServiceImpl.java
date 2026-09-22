@@ -14,6 +14,9 @@ import com.sanhua.marketingcost.service.FormalBomReadService;
 import com.sanhua.marketingcost.service.bomalternative.BomAlternativeBranchPrunerImpl;
 import com.sanhua.marketingcost.service.bomalternative.BomAlternativePruneResult;
 import com.sanhua.marketingcost.service.bomalternative.QuoteAwareBomAlternativeResolver;
+import com.sanhua.marketingcost.service.bomalternative.BomAlternativeGroupResolver;
+import com.sanhua.marketingcost.service.bomalternative.BomAlternativeBranchPruner;
+import com.sanhua.marketingcost.service.bomalternative.BomAlternativePruneRequest;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.Comparator;
@@ -33,6 +36,8 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
   private final MaterialMasterRawMapper materialMasterRawMapper;
   private final PlateCommercialMakeBomExpansionService crossOrganizationExpansionService;
   private final QuoteAwareBomAlternativeResolver quoteAlternativeResolver;
+  private final BomAlternativeGroupResolver referenceGroups;
+  private final BomAlternativeBranchPruner referencePruner;
 
   public FormalBomReadServiceImpl(
       BomRawHierarchyMapper bomRawHierarchyMapper, MaterialMasterRawMapper materialMasterRawMapper) {
@@ -55,16 +60,29 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
         null);
   }
 
-  @Autowired
   public FormalBomReadServiceImpl(
       BomRawHierarchyMapper bomRawHierarchyMapper,
       MaterialMasterRawMapper materialMasterRawMapper,
       PlateCommercialMakeBomExpansionService crossOrganizationExpansionService,
       QuoteAwareBomAlternativeResolver quoteAlternativeResolver) {
+    this(bomRawHierarchyMapper, materialMasterRawMapper, crossOrganizationExpansionService,
+        quoteAlternativeResolver, null, null);
+  }
+
+  @Autowired
+  public FormalBomReadServiceImpl(
+      BomRawHierarchyMapper bomRawHierarchyMapper,
+      MaterialMasterRawMapper materialMasterRawMapper,
+      PlateCommercialMakeBomExpansionService crossOrganizationExpansionService,
+      QuoteAwareBomAlternativeResolver quoteAlternativeResolver,
+      BomAlternativeGroupResolver referenceGroups,
+      BomAlternativeBranchPruner referencePruner) {
     this.bomRawHierarchyMapper = bomRawHierarchyMapper;
     this.materialMasterRawMapper = materialMasterRawMapper;
     this.crossOrganizationExpansionService = crossOrganizationExpansionService;
     this.quoteAlternativeResolver = quoteAlternativeResolver;
+    this.referenceGroups = referenceGroups;
+    this.referencePruner = referencePruner;
   }
 
   @Override
@@ -100,7 +118,7 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
         normalizedBomPurpose,
         normalizedContext.quoteDate(),
         organization,
-        normalizedContext);
+        normalizedContext, false);
   }
 
   @Override
@@ -123,7 +141,16 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
         quoteDate == null ? LocalDate.now() : quoteDate,
         MaterialOrganization.normalizeQuoteDataOrganization(
             quoteDataOrganization),
-        null);
+        null, false);
+  }
+
+  @Override
+  public FormalBomReadResult readReference(String productCode, String periodMonth, String bomPurpose,
+      LocalDate quoteDate, QuoteDataOrganization organization) {
+    if (referenceGroups == null || referencePruner == null) throw new IllegalStateException("参考 BOM 标准分支读取未配置");
+    if (quoteDate == null) throw new IllegalArgumentException("参考 BOM 必须指定适用日期");
+    return readInternal(trimToNull(productCode), normalizePeriodMonth(periodMonth), trimToNull(bomPurpose),
+        quoteDate, MaterialOrganization.normalizeQuoteDataOrganization(organization), null, true);
   }
 
   private FormalBomReadResult readInternal(
@@ -132,7 +159,7 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
       String normalizedBomPurpose,
       LocalDate effectiveDate,
       QuoteDataOrganization organization,
-      QuoteBomReadContext quoteContext) {
+      QuoteBomReadContext quoteContext, boolean reference) {
     if (normalizedProductCode == null) {
       return new FormalBomReadResult(
           null, normalizedPeriodMonth, normalizedBomPurpose, false, List.of(), "产品料号为空");
@@ -184,6 +211,7 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
           quoteAlternativeResolver.resolve(quoteContext, rows);
       rows = pruned.nodes();
     }
+    if (reference) rows = standardBranches(rows);
 
     PlateCommercialMakeBomExpansionService.ExpansionResult expansion =
         crossOrganizationExpansionService.expand(
@@ -211,6 +239,8 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
               + String.join("；", expansion.gaps()));
     }
     rows = expansion.rows();
+    // 展开后的商用子树也可能包含替代组，只保留其标准分支。
+    if (reference) rows = standardBranches(rows);
 
     List<BomRawHierarchy> sorted = rows.stream().sorted(rowComparator()).toList();
     Map<String, MaterialMasterRaw> masterByCode =
@@ -239,6 +269,20 @@ public class FormalBomReadServiceImpl implements FormalBomReadService {
     }
     return new FormalBomReadResult(
         normalizedProductCode, normalizedPeriodMonth, normalizedBomPurpose, true, lines, null);
+  }
+
+  private List<BomRawHierarchy> standardBranches(List<BomRawHierarchy> rows) {
+    var resolution = referenceGroups.resolve(rows);
+    var selections = resolution.groups().stream().collect(Collectors.toMap(
+        group -> group.alternativeGroupKey(), group -> group.standardCandidate().materialCode()));
+    var selected = referencePruner.prune(new BomAlternativePruneRequest(rows, resolution.groups(), selections)).nodes();
+    for (var issue : resolution.issues()) {
+      String parent = issue.parentPath();
+      boolean reachable = parent == null || parent.isBlank() || selected.stream().anyMatch(row ->
+          row.getPath() != null && (row.getPath().equals(parent) || row.getPath().startsWith(parent.endsWith("/") ? parent : parent + "/")));
+      if (reachable) throw new IllegalStateException("参考 BOM 替代关系不完整：" + issue.message());
+    }
+    return selected;
   }
 
   private QuoteBomSourceLineDto toLine(

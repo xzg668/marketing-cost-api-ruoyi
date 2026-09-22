@@ -33,6 +33,11 @@ public class CostRunContext {
   private String pricePrepareNo;
   /** 报价价格场景：OA_LOCKED / FINANCE_QUOTE_BASE；空值按 OA_LOCKED 兼容。 */
   private String priceScenarioType;
+  /** 只检查价格时，补录联动价也只计算，不写入结果表。 */
+  @JsonIgnore
+  private boolean priceCheckOnly;
+  @JsonIgnore
+  private java.util.Map<String, java.math.BigDecimal> priceVariableOverrides = java.util.Map.of();
   /** 当前报价产品/月份经审核生效的技术资料；为空时按既有 CMS/标准包装规则计算。 */
   private EffectiveTechnicalDataInput effectiveTechnicalData;
   /**

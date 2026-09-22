@@ -15,7 +15,10 @@ public record TechnicalDataTaskSubmissionResponse(
     String submissionFingerprint,
     LocalDateTime submittedAt,
     TechnicalDataTaskValidationResponse validation,
-    List<ProductSubmission> products) {
+    List<ProductSubmission> products,
+    Long submissionId,
+    String deliveryStatus,
+    boolean queued) {
 
   public TechnicalDataTaskSubmissionResponse {
     products = products == null ? List.of() : List.copyOf(products);

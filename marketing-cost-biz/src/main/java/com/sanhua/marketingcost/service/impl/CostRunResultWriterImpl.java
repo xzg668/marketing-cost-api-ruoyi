@@ -84,6 +84,7 @@ public class CostRunResultWriterImpl implements CostRunResultWriter {
       entity.setPartName(trimToNull(item.getPartName()));
       entity.setPartDrawingNo(trimToNull(item.getPartDrawingNo()));
       entity.setQty(item.getPartQty());
+      entity.setTechnicalModuleType(item.getTechnicalModuleType());
       entity.setMaterial(trimToNull(item.getMaterial()));
       entity.setShapeAttr(trimToNull(item.getShapeAttr()));
       entity.setPriceSource(trimToNull(item.getPriceSource()));

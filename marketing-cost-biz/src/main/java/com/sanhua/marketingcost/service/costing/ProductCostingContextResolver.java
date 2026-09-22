@@ -41,12 +41,30 @@ public class ProductCostingContextResolver {
     if (form == null || item == null || !Objects.equals(form.getId(), item.getOaFormId())) {
       throw new QuoteIngestException("报价产品行不存在或不属于当前报价单");
     }
+    requireOaCostingInputs(form);
     String productCode = QuoteProductIdentityUtils.resolveCostingCode(item);
     if (!StringUtils.hasText(productCode)) {
       throw new QuoteIngestException("产品料号、三花型号和客户图号至少填写一个");
     }
     return new ProductCostingContext(form, item, productCode, period,
         StringUtils.hasText(request.initiatedBy()) ? request.initiatedBy().trim() : "system", null);
+  }
+
+  private void requireOaCostingInputs(OaForm form) {
+    if (!"WEAVER_OA".equals(form.getSourceType())) return;
+    // I01 允许保存未填全的原单，但不能让下游把缺值当作“否”或使用默认取率维度。
+    if (form.getApplyDate() == null) throw new QuoteIngestException("OA需求缺少申请日期，请更正原单后重新推送");
+    if (!StringUtils.hasText(form.getSourceBusinessDivision())) {
+      throw new QuoteIngestException("OA需求缺少产品事业部，请更正原单后重新推送");
+    }
+    if (!StringUtils.hasText(form.getApplicantDept()) && !StringUtils.hasText(form.getApplicantOffice())) {
+      throw new QuoteIngestException("OA需求缺少申请部门或申请处室，不能确定费率");
+    }
+    // SC020 表单本身没有这一独立字段，沿用该表既有直销取率规则。
+    if (!"FI-SC-020".equals(form.getProcessCode())
+        && !java.util.Set.of("是", "否").contains(java.util.Objects.toString(form.getOverseasSalesMode(), ""))) {
+      throw new QuoteIngestException("OA需求缺少有效的海外销售标识，不能默认按直销核算，请补充是或否");
+    }
   }
 
   public ProductCostingContext resolveRevision(ProductCostingContext context) {

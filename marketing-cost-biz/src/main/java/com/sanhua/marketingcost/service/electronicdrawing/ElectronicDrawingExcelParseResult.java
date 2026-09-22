@@ -31,6 +31,7 @@ public record ElectronicDrawingExcelParseResult(
       String hsfRiskClass,
       BigDecimal quantity,
       BigDecimal referenceWeight,
+      String referenceWeightUnit,
       String remark,
       int sourceRowNumber) {}
 

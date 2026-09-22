@@ -149,6 +149,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     costRunVersionInvalidationService.invalidateProduct(
         form.getOaNo(), item.getId(), productCode, periodMonth);
     boolean generated = false;
+    boolean drawingDraftReady = false;
     String buildBatchId = null;
     QuoteBomStatusItemResponse checked =
         quoteBomStatusService.checkItemForCostRun(form.getOaNo(), item.getId(), periodMonth);
@@ -157,12 +158,18 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
         && QuoteBomStatusCode.NO_BOM.getCode().equals(checked.getBomStatus())) {
       ElectronicDrawingCostingFallbackService.AttemptResult electronic =
           electronicDrawingFallbackService.attempt(form, item, periodMonth);
+      drawingDraftReady = com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowStage.COMPOSED.equals(electronic.stage());
       if (electronic.costingCanContinue()) {
         checked = quoteBomStatusService.checkItemForCostRun(
             form.getOaNo(), item.getId(), periodMonth);
       }
     }
-    if (isCostReadyBomStatus(checked == null ? null : checked.getBomStatus())) {
+    if (drawingDraftReady) {
+      // 草稿只形成计价对象/缺价检查；正式核算仍由有效技术资料门槛拦截。
+      QuoteBomCostingBuildResponse build = effectiveBomCostingService.prepareCurrent(form.getOaNo(), item.getId());
+      generated = true;
+      buildBatchId = build.buildBatchId();
+    } else if (isCostReadyBomStatus(checked == null ? null : checked.getBomStatus())) {
       QuoteProductBomPreparationPreview preparation =
           bomPreparationService.prepareByOaFormItem(
               item.getId(), CostPricingPeriodUtils.currentPricingDate());

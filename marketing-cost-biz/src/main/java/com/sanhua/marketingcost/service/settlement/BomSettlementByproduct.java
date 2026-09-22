@@ -16,4 +16,14 @@ public record BomSettlementByproduct(
     String versionNo,
     LocalDate effectiveFrom,
     LocalDate effectiveTo,
-    String businessUnitType) {}
+    String businessUnitType,
+    String parentNodePath) {
+  public BomSettlementByproduct(Long sourceByproductId, String parentMaterialCode,
+      String byproductMaterialCode, String byproductMaterialName, String byproductMaterialSpec,
+      BigDecimal outputQty, String unit, String bomPurpose, String versionNo,
+      LocalDate effectiveFrom, LocalDate effectiveTo, String businessUnitType) {
+    this(sourceByproductId, parentMaterialCode, byproductMaterialCode, byproductMaterialName,
+        byproductMaterialSpec, outputQty, unit, bomPurpose, versionNo, effectiveFrom, effectiveTo,
+        businessUnitType, null);
+  }
+}

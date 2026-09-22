@@ -35,13 +35,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtUtils jwtUtils;
     private final UserDetailsService userDetailsService;
     private final SysUserService sysUserService;
+    private final com.sanhua.marketingcost.integration.oa.OaIntegrationProperties oaProperties;
 
     public JwtAuthenticationFilter(JwtUtils jwtUtils,
                                    UserDetailsService userDetailsService,
-                                   SysUserService sysUserService) {
+                                   SysUserService sysUserService,
+                                   com.sanhua.marketingcost.integration.oa.OaIntegrationProperties oaProperties) {
         this.jwtUtils = jwtUtils;
         this.userDetailsService = userDetailsService;
         this.sysUserService = sysUserService;
+        this.oaProperties = oaProperties;
     }
 
     @Override
@@ -58,7 +61,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (token != null && jwtUtils.validateToken(token)) {
             boolean technicalDataSession = jwtUtils.isTechnicalDataSession(token);
             if (technicalDataSession
-                    && !request.getRequestURI().startsWith("/api/v2/technical-data/")) {
+                    && (!request.getRequestURI().startsWith("/api/v2/technical-data/")
+                    || oaProperties.getEnvironment() == null
+                    || !oaProperties.getEnvironment().equals(jwtUtils.extractTechnicalDataEnvironment(token))
+                    || jwtUtils.extractTechnicalDataTaskId(token) == null
+                    || !"TASK_ENTRY".equals(jwtUtils.extractTechnicalDataPurpose(token)))) {
                 filterChain.doFilter(request, response);
                 return;
             }
@@ -69,6 +76,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
             // 查询用户ID，用于加载权限标识
             SysUser sysUser = sysUserService.findByUsername(username);
+            if (sysUser == null || !"0".equals(sysUser.getStatus()) || !"0".equals(sysUser.getDelFlag())
+                    || !userDetails.isEnabled() || !userDetails.isAccountNonLocked()) {
+                filterChain.doFilter(request, response);
+                return;
+            }
 
             // 合并角色 authorities + 权限标识 authorities
             List<SimpleGrantedAuthority> allAuthorities = new ArrayList<>();

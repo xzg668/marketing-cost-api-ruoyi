@@ -22,6 +22,19 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
             """)
     SysUser selectByUsername(@Param("username") String username);
 
+    /** 分派候选只返回当前事业部内具有补录权限的有效账号；不开放用户管理接口给报价员。 */
+    @Select("""
+            SELECT DISTINCT u.* FROM sys_user u
+            JOIN sys_user_role ur ON ur.user_id=u.user_id
+            JOIN sys_role r ON r.role_id=ur.role_id AND r.status='0' AND r.del_flag='0'
+            LEFT JOIN sys_role_menu rm ON rm.role_id=r.role_id
+            LEFT JOIN sys_menu m ON m.menu_id=rm.menu_id AND m.status='0'
+            WHERE u.status='0' AND u.del_flag='0' AND u.business_unit_type=#{businessUnitType}
+              AND (LOWER(r.role_key)='admin' OR m.perms IN ('technical:data:task:edit','technical:data:admin:operate'))
+            ORDER BY COALESCE(NULLIF(u.nick_name,''),u.user_name),u.user_id
+            """)
+    List<SysUser> selectTechnicalDataAssignees(@Param("businessUnitType") String businessUnitType);
+
     /**
      * 报价协作按OA产品行上的技术负责人名称做严格匹配。
      *

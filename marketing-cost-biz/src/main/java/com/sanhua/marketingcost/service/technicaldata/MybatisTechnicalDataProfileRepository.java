@@ -31,6 +31,11 @@ public class MybatisTechnicalDataProfileRepository implements TechnicalDataProfi
   }
 
   @Override
+  public Optional<QuoteTechProduct> findProduct(Long productId) {
+    return Optional.ofNullable(productMapper.selectById(productId));
+  }
+
+  @Override
   public Optional<QuoteTechProduct> lockProduct(Long productId) {
     return Optional.ofNullable(productMapper.selectByIdForUpdate(productId));
   }

@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.dto.technicaldata;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 public record TechnicalDataWorkbenchRowResponse(
     Long taskId,
@@ -13,4 +14,7 @@ public record TechnicalDataWorkbenchRowResponse(
     Integer taskVersion,
     Integer reviewRound,
     LocalDateTime dueAt,
-    TechnicalDataProductResponse product) {}
+    List<String> assignedModules,
+    List<String> editableModules,
+    TechnicalDataProductResponse product,
+    TechnicalDataSourceCheckResponse sourceCheck) {}

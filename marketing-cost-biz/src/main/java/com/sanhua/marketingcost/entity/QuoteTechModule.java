@@ -13,14 +13,20 @@ import lombok.Setter;
 @Setter
 @TableName("lp_quote_tech_module")
 public class QuoteTechModule {
+  private Integer oaEditAllowed;
   @TableId(type = IdType.AUTO)
   private Long id;
 
   private Long productId;
   private String moduleType;
+  private Long assigneeUserId;
+  private String assigneeName;
   private Integer requiredFlag;
   private String requirementReasonCode;
   private String requirementReason;
+  private String sourceAvailability;
+  private String sourceReference;
+  private LocalDateTime sourceCheckedAt;
   private String entryMode;
   private String moduleStatus;
   private Long currentVersionId;

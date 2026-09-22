@@ -5,6 +5,8 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.core.toolkit.support.SFunction;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.sanhua.marketingcost.dto.RollupPartComponentDto;
 import com.sanhua.marketingcost.entity.CostRunCostItem;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
 import com.sanhua.marketingcost.entity.CostRunTraceSnapshot;
@@ -156,12 +158,15 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
                 .eq(CostRunCostItem::getCostRunNo, costRunNo)
                 .orderByAsc(CostRunCostItem::getLineNo, CostRunCostItem::getId));
     Map<Long, PricePrepareItem> prepareItems = loadPrepareItems(parts);
+    Map<Long, List<RollupPartComponentDto>> rollupComponents = loadRollupComponents(parts);
     List<CostRunTraceSnapshot> snapshots = new ArrayList<>();
     for (CostRunPartItem part : parts) {
       if (part == null) {
         continue;
       }
-      snapshots.add(buildPartSnapshot(version, part, prepareItems.get(part.getPricePrepareItemId())));
+      CostRunTraceSnapshot snapshot = buildPartSnapshot(version, part, prepareItems.get(part.getPricePrepareItemId()));
+      freezeRollupComponents(snapshot, rollupComponents.getOrDefault(part.getId(), List.of()));
+      snapshots.add(snapshot);
     }
     for (CostRunCostItem cost : costs) {
       if (cost == null) {
@@ -170,6 +175,25 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
       snapshots.add(buildCostSnapshot(version, cost, costs));
     }
     return snapshots;
+  }
+
+  private Map<Long, List<RollupPartComponentDto>> loadRollupComponents(List<CostRunPartItem> parts) {
+    List<Long> ids = parts.stream().filter(Objects::nonNull).map(CostRunPartItem::getId)
+        .filter(Objects::nonNull).toList();
+    if (ids.isEmpty()) return Map.of();
+    return partItemMapper.selectRollupDisplayComponents(ids).stream()
+        .collect(Collectors.groupingBy(RollupPartComponentDto::getPartItemId));
+  }
+
+  private void freezeRollupComponents(CostRunTraceSnapshot snapshot, List<RollupPartComponentDto> components) {
+    try {
+      ObjectNode source = (ObjectNode) objectMapper.readTree(snapshot.getSourceSnapshotJson());
+      source.set("rollupDisplayComponents", objectMapper.valueToTree(components));
+      // 重算会重建 BOM 子件引用；展示所用数量、成本分项及来源必须随本次底稿保留。
+      snapshot.setSourceSnapshotJson(objectMapper.writeValueAsString(source));
+    } catch (JsonProcessingException exception) {
+      throw new IllegalStateException("无法保存成本版本的上卷展示依据", exception);
+    }
   }
 
   private Map<Long, PricePrepareItem> loadPrepareItems(List<CostRunPartItem> parts) {
@@ -223,7 +247,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     } else if (SOURCE_TYPE_FIXED_PRICE.equals(sourceType)
         || SOURCE_TYPE_SETTLE_FIXED_PRICE.equals(sourceType)) {
       PriceFixedItem fixedItem = loadFixedPriceItem(version, part, prepareItem, sourceType);
-      if (fixedItem != null && fixedItem.getId() != null) {
+      if (fixedItem != null && fixedItem.getId() != null && !isDailySrmFixedPrice(fixedItem)) {
         snapshot.setSourceRefId(fixedItem.getId());
       }
       snapshot.setSourceSnapshotJson(json(fixedSourceSnapshot(part, prepareItem, fixedItem, sourceType)));
@@ -461,7 +485,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     }
     boolean settle = SOURCE_TYPE_SETTLE_FIXED_PRICE.equals(sourceType);
     LambdaQueryWrapper<PriceFixedItem> query =
-        Wrappers.lambdaQuery(PriceFixedItem.class)
+        Wrappers.lambdaQuery(PriceFixedItem.class).eq(PriceFixedItem::getSourceKind, "PUBLIC")
             .eq(PriceFixedItem::getMaterialCode, materialCode)
             .in(
                 PriceFixedItem::getSourceType,
@@ -478,6 +502,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     }
     eqIfText(query, PriceFixedItem::getBusinessUnitType,
         firstText(part.getBusinessUnitType(), version.getBusinessUnitType()));
+    eqIfText(query, PriceFixedItem::getOrgCode, part.getPriceOrgCode());
     List<PriceFixedItem> rows =
         priceFixedItemMapper.selectList(
             query.orderByDesc(PriceFixedItem::getEffectiveFrom)
@@ -497,7 +522,10 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     Map<String, Object> payload = partSourceSnapshot(part, prepareItem);
     if (fixedItem != null) {
       payload.put("fixedPriceItem", mapOf(
-          "id", fixedItem.getId(),
+          "id", isDailySrmFixedPrice(fixedItem) ? null : fixedItem.getId(),
+          "externalRowId", fixedItem.getExternalRowId(),
+          "sourceBatchNo", fixedItem.getSourceBatchNo(),
+          "orgCode", fixedItem.getOrgCode(),
           "sourceType", fixedItem.getSourceType(),
           "sourceSystem", fixedItem.getSourceSystem(),
           "sourceName", fixedItem.getSourceName(),
@@ -530,6 +558,14 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
         "quantity", part.getQty(),
         "amount", part.getAmount()));
     return payload;
+  }
+
+  private boolean isDailySrmFixedPrice(PriceFixedItem row) {
+    return row != null
+        && "PUBLIC".equalsIgnoreCase(row.getSourceKind())
+        && "SRM".equalsIgnoreCase(row.getSourceSystem())
+        && ("PURCHASE_FIXED".equalsIgnoreCase(row.getSourceType())
+            || "PURCHASE".equalsIgnoreCase(row.getSourceType()));
   }
 
   private Map<String, Object> fixedFormula(
@@ -876,7 +912,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
       return null;
     }
     LambdaQueryWrapper<PriceLinkedItem> query =
-        Wrappers.lambdaQuery(PriceLinkedItem.class)
+        Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
             .eq(PriceLinkedItem::getMaterialCode, materialCode)
             .eq(PriceLinkedItem::getPricingMonth, pricingMonth)
             .eq(PriceLinkedItem::getDeleted, 0);
@@ -1257,6 +1293,8 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
               Wrappers.lambdaQuery(MakePartPriceCalcRow.class)
                   .eq(MakePartPriceCalcRow::getCalcBatchId, calcBatchId)
                   .eq(MakePartPriceCalcRow::getParentMaterialNo, parentMaterialNo)
+                  .eq(anchor.getSourceCostingRowId() != null, MakePartPriceCalcRow::getSourceCostingRowId, anchor.getSourceCostingRowId())
+                  .isNull(anchor.getSourceCostingRowId() == null, MakePartPriceCalcRow::getSourceCostingRowId)
                   .orderByAsc(MakePartPriceCalcRow::getChildMaterialNo)
                   .orderByAsc(MakePartPriceCalcRow::getScrapCode)
                   .orderByAsc(MakePartPriceCalcRow::getId));
@@ -1312,12 +1350,19 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     eqIfText(query, MakePartPriceCalcRow::getOaNo, oaNo);
     eqIfText(query, MakePartPriceCalcRow::getPricingMonth, pricingMonth);
     eqIfText(query, MakePartPriceCalcRow::getBusinessUnitType, businessUnitType);
+    if (part.getBomRowId() != null) query.eq(MakePartPriceCalcRow::getSourceCostingRowId, part.getBomRowId());
+    else query.isNull(MakePartPriceCalcRow::getSourceCostingRowId);
     return query;
   }
 
   private Map<String, Object> makePartChild(MakePartPriceCalcRow row) {
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("calcRowId", row.getId());
+    payload.put("sourceCostingRowId", row.getSourceCostingRowId());
+    payload.put("rawSourcePriceRecordId", row.getRawSourcePriceRecordId());
+    payload.put("rawSourcePriceBatchNo", row.getRawSourcePriceBatchNo());
+    payload.put("scrapSourcePriceRecordId", row.getScrapSourcePriceRecordId());
+    payload.put("scrapSourcePriceBatchNo", row.getScrapSourcePriceBatchNo());
     payload.put("calcBatchId", row.getCalcBatchId());
     payload.put("oaNo", row.getOaNo());
     payload.put("pricingMonth", row.getPricingMonth());
@@ -1476,7 +1521,10 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     boolean technical = "QUOTE_TECH_EFFECTIVE_VERSION".equals(costSourceType(cost));
     String formula;
     String display;
-    if (COST_MATERIAL.equals(costCode)) {
+    if (technical && costCode != null && costCode.startsWith("AUX_TECH_")) {
+      formula = "sum(approvedAuxiliary.amount by subjectCode)";
+      display = "辅料费 = 同一二级科目编码的已审批金额之和";
+    } else if (COST_MATERIAL.equals(costCode)) {
       formula = "sum(part.amount) + sum(aux.amount) + departmentFees + packageAmount";
       display = "材料费 = 部品金额 + 辅料 + 部门经费 + 包装";
     } else if (COST_DIRECT_LABOR.equals(costCode)) {
