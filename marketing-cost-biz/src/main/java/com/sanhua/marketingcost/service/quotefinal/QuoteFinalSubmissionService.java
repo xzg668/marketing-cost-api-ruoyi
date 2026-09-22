@@ -202,6 +202,7 @@ public class QuoteFinalSubmissionService {
     payload.put("operatorExternalId",submission.operatorExternalId()); payload.put("contentFingerprint",submission.fingerprint());
     payload.put("costs",codec.read(submission.snapshotJson()));
     String requestId = "quote-final-"+submission.id()+"-"+step+"-"+(submission.stepAttempt()+1);
+    if ("QUOTE_COST_SUBMIT".equals(step)) payload.put("resultSubmissionId", requestId);
     String raw = codec.write(Map.of("schemaVersion",1,"sourceSystem",submission.peer().sourceSystem(),"environment",submission.peer().environment(),
         "requestId",requestId,"occurredAt",OffsetDateTime.now().toString(),"payload",payload));
     var type = OaMessageCodec.InterfaceType.valueOf(step);

@@ -153,8 +153,13 @@ public class TechnicalDataOaIntegrationServiceImpl implements TechnicalDataOaInt
       String externalId = users.externalId(peer, userId);
       String personAction = group.getValue().isEmpty() ? "CANCEL" : "ASSIGN";
       String requestId = "TD-DISPATCH:" + task.getId() + ":" + version + ":" + userId;
+      // 一人一条对外任务身份；产品主键只用于产品范围的查询和页面入口。
+      String integrationTaskId = "ASSIGN".equals(personAction) ? "T-" + java.util.UUID.randomUUID()
+          : current.stream().filter(row -> row.userId() == userId).findFirst().orElseThrow().integrationTaskId();
+      if (integrationTaskId == null || integrationTaskId.isBlank()) throw conflict("原待办缺少对外任务编号，请先核实 OA 分派");
       Map<String, Object> payload = new LinkedHashMap<>();
-      payload.put("taskId", task.getId()); payload.put("oaFormItemId", task.getOaFormItemId());
+      payload.put("taskId", integrationTaskId); payload.put("quoteTaskId", task.getId());
+      payload.put("oaFormItemId", task.getOaFormItemId());
       payload.put("documentId", flow.documentId()); payload.put("accountingMonth", task.getAccountingMonth());
       payload.put("assigneeExternalId", externalId); payload.put("moduleTypes", group.getValue());
       payload.put("assignmentVersion", version); payload.put("action", personAction);
@@ -165,7 +170,9 @@ public class TechnicalDataOaIntegrationServiceImpl implements TechnicalDataOaInt
           "requestId", requestId, "occurredAt", OffsetDateTime.now().toString(), "payload", payload));
       var type = OaMessageCodec.InterfaceType.TASK_DISPATCH;
       var message = messages.enqueue(peer, type, codec.decode(raw, peer, type));
-      recipients.insert(task.getId(), version, userId, names.get(userId), externalId, personAction, group.getValue(), message.id());
+      // 取消操作引用原任务，不再为其创建一个新的可审批任务身份。
+      recipients.insert(task.getId(), version, userId, names.get(userId), externalId, personAction,
+          group.getValue(), message.id(), "ASSIGN".equals(personAction) ? integrationTaskId : null);
       if (firstMessage == null) firstMessage = message.id();
     }
     workflow.bindDispatch(task, flow, version, Objects.requireNonNull(firstMessage));

@@ -18,6 +18,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class OaOutboxProcessor {
   private static final Logger log = LoggerFactory.getLogger(OaOutboxProcessor.class);
   private final com.sanhua.marketingcost.service.quotefinal.QuoteFinalSubmissionService quotes;
+  private final com.sanhua.marketingcost.mapper.QuoteTechSubmissionMapper technicalSubmissions;
   private final OaIntegrationProperties properties;
   private final OaMessageRepository messages;
   private final OaMessageCodec codec;
@@ -31,8 +32,10 @@ public class OaOutboxProcessor {
   public OaOutboxProcessor(OaIntegrationProperties properties, OaMessageRepository messages, OaMessageCodec codec,
       TechnicalDataOaGateway gateway, TechnicalDataOaIntegrationService dispatch,
       TechnicalDataOaSubmissionLifecycle submissions, TechnicalDataOaWorkflowRepository workflow,
-      PlatformTransactionManager transactionManager, com.sanhua.marketingcost.service.technicaldata.TechnicalDataWorkflowService finance, com.sanhua.marketingcost.service.quotefinal.QuoteFinalSubmissionService quotes) {
+      PlatformTransactionManager transactionManager, com.sanhua.marketingcost.service.technicaldata.TechnicalDataWorkflowService finance, com.sanhua.marketingcost.service.quotefinal.QuoteFinalSubmissionService quotes,
+      com.sanhua.marketingcost.mapper.QuoteTechSubmissionMapper technicalSubmissions) {
     this.quotes = quotes;
+    this.technicalSubmissions = technicalSubmissions;
     this.properties = properties; this.messages = messages; this.codec = codec; this.gateway = gateway;
     this.dispatch = dispatch; this.submissions = submissions; this.workflow = workflow;
     this.finance = finance;
@@ -54,7 +57,7 @@ public class OaOutboxProcessor {
     var message = transaction.execute(status -> {
       var claimed = messages.claimOutgoing(gateway.peer(), properties.getLeaseSeconds(), properties.getMaxAttempts());
       if (claimed != null && "TECH_SUBMISSION".equals(claimed.interfaceType())) {
-        workflow.markSending(codec.read(claimed.rawPayload()).path("payload").path("submissionId").longValue());
+        workflow.markSending(technicalSubmissionId(claimed.id()));
       }
       return claimed;
     });
@@ -99,13 +102,18 @@ public class OaOutboxProcessor {
     transaction.executeWithoutResult(status -> {
       var owned = messages.lockOwned(message.id(), message.leaseToken());
       if (owned == null) return;
-      var payload = codec.read(owned.rawPayload()).path("payload");
       if ("TASK_DISPATCH".equals(owned.interfaceType())) dispatch.markUnconfirmed(owned, false, reason);
-      else if ("TECH_SUBMISSION".equals(owned.interfaceType())) workflow.markUnknown(payload.path("submissionId").longValue());
+      else if ("TECH_SUBMISSION".equals(owned.interfaceType())) workflow.markUnknown(technicalSubmissionId(owned.id()));
       else if (owned.interfaceType().startsWith("QUOTE_")) quotes.unknown(owned, reason);
       boolean retry = retryable && owned.attemptCount() < properties.getMaxAttempts();
       messages.finish(owned, retry ? "RECEIVED" : "FAILED", null, "VERIFY", code, reason,
           retry ? Math.min(60, owned.attemptCount() * 3) : 0);
     });
+  }
+
+  private long technicalSubmissionId(long messageId) {
+    var submission = technicalSubmissions.selectByOutboundMessage(messageId);
+    if (submission == null) throw new IllegalStateException("发送记录未关联资料提交：" + messageId);
+    return submission.getId();
   }
 }

@@ -8,6 +8,9 @@ import org.apache.ibatis.annotations.Select;
 
 @Mapper
 public interface QuoteTechSubmissionMapper extends BaseMapper<QuoteTechSubmission> {
+  @Select("SELECT * FROM lp_quote_tech_submission WHERE outbound_message_id=#{messageId}")
+  QuoteTechSubmission selectByOutboundMessage(@Param("messageId") Long messageId);
+
   @Select("SELECT * FROM lp_quote_tech_submission WHERE task_id=#{taskId} AND request_id=#{requestId}")
   QuoteTechSubmission selectByRequest(@Param("taskId") Long taskId, @Param("requestId") String requestId);
 

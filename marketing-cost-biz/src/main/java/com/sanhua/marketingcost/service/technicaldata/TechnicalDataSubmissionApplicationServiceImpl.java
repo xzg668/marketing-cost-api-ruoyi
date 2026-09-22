@@ -75,6 +75,7 @@ public class TechnicalDataSubmissionApplicationServiceImpl implements TechnicalD
     if (flow == null || flow.externalFlowId() == null || !peer.sourceSystem().equals(flow.sourceSystem())
         || !peer.environment().equals(flow.environment())) throw conflict("OA 流程身份不一致");
     String assignee = person.externalUserId();
+    if (person.integrationTaskId() == null || person.integrationTaskId().isBlank()) throw conflict("本人待办缺少对外任务编号，请先核实 OA 分派");
     if (!"OPEN".equals(person.todoStatus())) throw conflict("本人已有待确认或待审批提交，请先查看处理结果");
     String operator = users.externalId(peer, actor.userId());
     var checked = validation.validate(taskId, person.userId(), actor);
@@ -83,7 +84,9 @@ public class TechnicalDataSubmissionApplicationServiceImpl implements TechnicalD
     String requestId = "TD-SUBMISSION:" + submission.getId();
     String raw = codec.write(Map.of("schemaVersion", 1, "sourceSystem", peer.sourceSystem(), "environment", peer.environment(),
         "requestId", requestId, "occurredAt", OffsetDateTime.now().toString(), "payload", Map.ofEntries(
-        Map.entry("taskId", taskId), Map.entry("submissionId", submission.getId()), Map.entry("technicalVersionId", submission.getTechnicalVersionId()),
+        Map.entry("taskId", person.integrationTaskId()), Map.entry("quoteTaskId", taskId),
+        Map.entry("submissionId", requestId), Map.entry("quoteSubmissionId", submission.getId()),
+        Map.entry("documentId", flow.documentId()), Map.entry("technicalVersionId", submission.getTechnicalVersionId()),
         Map.entry("round", submission.getSubmissionRound()), Map.entry("recipientId", person.id()),
         Map.entry("moduleTypes", person.modules()), Map.entry("leaderExternalId", person.leaderExternalId()),
         Map.entry("technicalDataReady", true), Map.entry("externalTaskId", person.externalTaskId()),

@@ -125,12 +125,18 @@ public class TechnicalDataWorkflowService {
     if (!Objects.equals(task.getTaskVersion(), request.getExpectedTaskVersion())) throw conflict("任务版本已变化，请刷新后退回");
     if (!"DONE".equals(person.todoStatus()) || flow.financeSequence() <= person.callbackSequence()) throw conflict("此人的审批结果尚未进入当前财务节点");
     var submission = submissions.selectById(person.latestSubmissionId());
+    var submittedMessage = messages.findById(submission.getOutboundMessageId());
+    if (submittedMessage == null || person.integrationTaskId() == null || person.integrationTaskId().isBlank()) {
+      throw conflict("原资料提交缺少对外任务或提交编号，请先核实发送记录");
+    }
     var peer = gateway.peer();
     if (!peer.sourceSystem().equals(flow.sourceSystem()) || !peer.environment().equals(flow.environment())
         || !peer.businessUnits().contains(task.getBusinessUnitType())) throw forbidden("当前 OA 通道不能办理此单据");
     String raw = codec.write(Map.of("schemaVersion", 1, "sourceSystem", peer.sourceSystem(), "environment", peer.environment(),
         "requestId", requestId, "occurredAt", OffsetDateTime.now().toString(), "payload", Map.ofEntries(
-            Map.entry("taskId", taskId), Map.entry("recipientId", person.id()), Map.entry("submissionId", submission.getId()),
+            Map.entry("taskId", person.integrationTaskId()), Map.entry("quoteTaskId", taskId),
+            Map.entry("recipientId", person.id()), Map.entry("submissionId", submittedMessage.requestId()),
+            Map.entry("quoteSubmissionId", submission.getId()),
             Map.entry("technicalVersionId", submission.getTechnicalVersionId()), Map.entry("round", submission.getSubmissionRound()),
             Map.entry("externalTaskId", person.externalTaskId()), Map.entry("externalFlowId", flow.externalFlowId()),
             Map.entry("documentId", flow.documentId()), Map.entry("assigneeExternalId", person.externalUserId()),
@@ -182,8 +188,8 @@ public class TechnicalDataWorkflowService {
   /** 只有来自已认证 OA 通道且身份匹配的明确成功回执，才能重新开放此人的模块。 */
   public void acceptReturn(OaMessageRepository.Message message, TechnicalDataOaGateway.Receipt receipt) {
     var expected = codec.read(message.rawPayload()).path("payload");
-    var task = tasks.selectByIdForUpdate(expected.path("taskId").longValue());
     var person = recipients.findById(expected.path("recipientId").longValue());
+    var task = person == null ? null : tasks.selectByIdForUpdate(person.taskId());
     if (task == null || person == null || !person.active() || !Objects.equals(person.returnMessageId(), message.id())
         || !"RETURN_PENDING".equals(person.todoStatus())) throw conflict("退回回执不是此人的当前请求");
     if (!receipt.accepted()) {
@@ -192,7 +198,7 @@ public class TechnicalDataWorkflowService {
       return;
     }
     var result = receipt.result();
-    for (String field : List.of("taskId", "recipientId", "submissionId", "technicalVersionId", "round", "externalFlowId",
+    for (String field : List.of("taskId", "quoteTaskId", "recipientId", "submissionId", "quoteSubmissionId", "technicalVersionId", "round", "externalFlowId",
         "assigneeExternalId", "operatorExternalId", "moduleTypes", "technicalDataReady", "documentId", "reason")) {
       if (!expected.path(field).equals(result.path(field))) throw new OaDeliveryUnknownException("OA 退回回执身份不一致：" + field);
     }

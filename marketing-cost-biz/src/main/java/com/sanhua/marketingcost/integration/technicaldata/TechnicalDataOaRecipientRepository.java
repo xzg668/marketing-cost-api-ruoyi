@@ -17,7 +17,8 @@ public class TechnicalDataOaRecipientRepository {
       String externalUserId, String action, List<String> modules, long messageId,
       String externalTaskId, String dispatchStatus, String todoStatus, String lastError,
       String departmentName, String leaderExternalId, String leaderName,
-      Long latestSubmissionId, int submissionRound, long callbackSequence, String returnReason, boolean active, Long returnMessageId, Long returnRequestedBy) {}
+      Long latestSubmissionId, int submissionRound, long callbackSequence, String returnReason, boolean active, Long returnMessageId, Long returnRequestedBy,
+      String integrationTaskId) {}
 
   private final JdbcTemplate jdbc;
   private final OaMessageCodec codec;
@@ -28,12 +29,12 @@ public class TechnicalDataOaRecipientRepository {
   }
 
   public void insert(long taskId, int version, long userId, String name, String externalUserId,
-      String action, List<String> modules, long messageId) {
+      String action, List<String> modules, long messageId, String integrationTaskId) {
     jdbc.update("""
         INSERT INTO lp_quote_tech_oa_recipient(task_id,assignment_version,assignee_user_id,assignee_name,
           external_user_id,action,module_types_json,outbound_message_id,integration_task_id)
         VALUES(?,?,?,?,?,?,?,?,?)
-        """, taskId, version, userId, name, externalUserId, action, codec.write(modules), messageId, "T-" + java.util.UUID.randomUUID());
+        """, taskId, version, userId, name, externalUserId, action, codec.write(modules), messageId, integrationTaskId);
   }
 
   public List<Recipient> find(long taskId, int version) {
@@ -176,6 +177,7 @@ public class TechnicalDataOaRecipientRepository {
         row.getString("department_name"), row.getString("leader_external_id"), row.getString("leader_name"),
         row.getObject("latest_submission_id", Long.class), row.getInt("submission_round"), row.getLong("callback_sequence"),
         row.getString("return_reason"), row.getBoolean("active_flag"),
-        row.getObject("return_message_id", Long.class), row.getObject("return_requested_by", Long.class));
+        row.getObject("return_message_id", Long.class), row.getObject("return_requested_by", Long.class),
+        row.getString("integration_task_id"));
   }
 }

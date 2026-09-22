@@ -40,8 +40,9 @@ public class TechnicalDataOaSubmissionLifecycle {
 
   public void acceptReceipt(OaMessageRepository.Message message, TechnicalDataOaGateway.Receipt receipt) {
     var expected = codec.read(message.rawPayload()).path("payload");
-    var task = tasks.selectByIdForUpdate(expected.path("taskId").longValue());
-    var submission = submissions.selectById(expected.path("submissionId").longValue());
+    var submission = submissions.selectByOutboundMessage(message.id());
+    if (submission == null) throw conflict("发送记录未关联资料提交");
+    var task = tasks.selectByIdForUpdate(submission.getTaskId());
     var person = requireCurrent(task, submission);
     if (!Objects.equals(submission.getOutboundMessageId(), message.id())
         || !Set.of("SENDING", "UNKNOWN").contains(submission.getSubmissionStatus())) throw conflict("发送记录不属于本人当前待确认提交");
@@ -53,7 +54,7 @@ public class TechnicalDataOaSubmissionLifecycle {
       return;
     }
     var result = receipt.result();
-    for (String field : Set.of("taskId", "recipientId", "submissionId", "technicalVersionId", "round", "externalTaskId",
+    for (String field : Set.of("taskId", "quoteTaskId", "recipientId", "submissionId", "quoteSubmissionId", "documentId", "technicalVersionId", "round", "externalTaskId",
         "externalFlowId", "assigneeExternalId", "operatorExternalId", "contentFingerprint", "moduleTypes", "leaderExternalId", "technicalDataReady")) {
       if (!result.hasNonNull(field) || !expected.path(field).equals(result.path(field))) {
         throw new OaDeliveryUnknownException("OA 提交回执的 " + field + " 与本人冻结提交不一致");
