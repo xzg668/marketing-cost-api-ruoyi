@@ -20,21 +20,25 @@ public class MonthlySnapshotU9BomGateway implements CurrentU9BomGateway {
 
   private final QuoteBomMonthlySnapshotMapper mapper;
   private final LiveU9BomGateway liveGateway;
+  private final MonthlyBomSnapshotDetailService details;
   private final Clock clock;
 
   @Autowired
   public MonthlySnapshotU9BomGateway(
       QuoteBomMonthlySnapshotMapper mapper,
-      LiveU9BomGateway liveGateway) {
-    this(mapper, liveGateway, Clock.system(CostPricingPeriodUtils.BUSINESS_ZONE));
+      LiveU9BomGateway liveGateway,
+      MonthlyBomSnapshotDetailService details) {
+    this(mapper, liveGateway, details, Clock.system(CostPricingPeriodUtils.BUSINESS_ZONE));
   }
 
   MonthlySnapshotU9BomGateway(
       QuoteBomMonthlySnapshotMapper mapper,
       LiveU9BomGateway liveGateway,
+      MonthlyBomSnapshotDetailService details,
       Clock clock) {
     this.mapper = mapper;
     this.liveGateway = liveGateway;
+    this.details = details;
     this.clock = clock;
   }
 
@@ -46,10 +50,39 @@ public class MonthlySnapshotU9BomGateway implements CurrentU9BomGateway {
     U9MonthlySnapshotIdentity identity = U9MonthlySnapshotIdentity.from(context);
     QuoteBomMonthlySnapshot existing = mapper.selectU9MonthlyByIdentity(identity.identityKey());
     if (existing != null) {
+      if (STATUS_SUCCESS.equals(existing.getSyncStatus())) {
+        return reuseAvailable(context, identity, existing);
+      }
       if (!STATUS_NOT_FOUND.equals(existing.getSyncStatus())) return restored(existing);
       return recheckMissing(context, identity, existing);
     }
     return createSnapshot(context, identity, null);
+  }
+
+  private CurrentU9BomResult reuseAvailable(QuoteBomReadContext context,
+      U9MonthlySnapshotIdentity identity, QuoteBomMonthlySnapshot existing) {
+    if (!details.load(existing.getId()).isEmpty()) return restored(existing);
+    // Pre-migration headers stored only a batch ID. Backfill while that exact batch still exists.
+    // If EasyData already removed it, preserve the old header for history and start a new card
+    // from the current BOM; the lost historical structure cannot be reconstructed.
+    QuoteBomMonthlySnapshot locked = mapper.selectU9MonthlyByIdentityForUpdate(identity.identityKey());
+    if (locked == null) return CurrentU9BomResult.error("U9月度卡片并发更新，请重试");
+    if (!STATUS_SUCCESS.equals(locked.getSyncStatus())) return restored(locked);
+    if (!details.load(locked.getId()).isEmpty()) return restored(locked);
+    try {
+      details.captureU9(locked.getId(), context, locked.getBomBatchId());
+      return restored(locked);
+    } catch (MonthlyBomSnapshotDetailService.SourceUnavailableException missing) {
+      CurrentU9BomResult live = liveGateway.readLive(context);
+      if (live == null || live.status() != CurrentU9BomResult.Status.AVAILABLE) {
+        return live == null ? CurrentU9BomResult.error("U9正式查询没有返回结果") : live;
+      }
+      if (mapper.retireUnavailableU9MonthlySnapshot(
+          locked.getId(), identity.identityKey(), LocalDateTime.now(clock)) != 1) {
+        throw new IllegalStateException("旧U9月度卡片释放失败，请重试");
+      }
+      return createSnapshot(context, identity, live);
+    }
   }
 
   private CurrentU9BomResult recheckMissing(QuoteBomReadContext context,
@@ -90,6 +123,14 @@ public class MonthlySnapshotU9BomGateway implements CurrentU9BomGateway {
     if (resolvedStatus == null) {
       mapper.deleteU9MonthlyClaim(claim.getId());
       return live;
+    }
+    if (live.status() == CurrentU9BomResult.Status.AVAILABLE) {
+      try {
+        details.captureU9(claim.getId(), context, live.syncBatchId());
+      } catch (MonthlyBomSnapshotDetailService.SourceUnavailableException missing) {
+        mapper.deleteU9MonthlyClaim(claim.getId());
+        return CurrentU9BomResult.error(missing.getMessage());
+      }
     }
     LocalDateTime completedAt = LocalDateTime.now(clock);
     if (mapper.completeU9MonthlyClaim(

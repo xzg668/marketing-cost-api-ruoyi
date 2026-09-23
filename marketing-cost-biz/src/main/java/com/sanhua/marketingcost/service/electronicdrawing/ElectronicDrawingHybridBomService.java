@@ -311,6 +311,7 @@ public class ElectronicDrawingHybridBomService {
       String expectedRemark = right.nodeSourceType() + ":" + right.nodeKey();
       int expectedManual = ElectronicDrawingSourceNode.MATCH_MANUAL.equals(right.mappingStatus())
           || ElectronicDrawingHybridBomAssembler.SOURCE_TECHNICAL_RAW.equals(right.nodeSourceType()) ? 1 : 0;
+      // 导入行 ID 仅是当时的来源记录，不参与跨批次业务内容比较。
       if (!Objects.equals(left.getSupplementVersionId(), version.getId())
           || !Objects.equals(left.getPreparationId(), version.getPreparationId())
           || !Objects.equals(left.getOaNo(), version.getOaNo())
@@ -337,8 +338,6 @@ public class ElectronicDrawingHybridBomService {
           || !Objects.equals(left.getUnit(), right.unit())
           || !Objects.equals(left.getPath(), right.path())
           || !Objects.equals(left.getSortSeq(), right.sortSeq())
-          || !Objects.equals(left.getSourceRawHierarchyId(), right.sourceRawHierarchyId())
-          || !Objects.equals(left.getSourceU9BomId(), right.sourceU9BomId())
           || !Objects.equals(left.getNodeSourceType(), right.nodeSourceType())
           || !Objects.equals(left.getSourceElectronicNodeId(), right.sourceElectronicNodeId())
           || !Objects.equals(left.getMappingStatus(), right.mappingStatus())

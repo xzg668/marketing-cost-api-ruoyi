@@ -48,6 +48,7 @@ public class MaterialMasterRaw {
   private String sourceBatchNo;
   private String mappingVersion;
   private Integer activeFlag;
+  private String productAttr;
 
   /**
    * U9 全局段：物料字符串（如"铜"/"不锈钢"），灌进 master.material。
@@ -254,4 +255,6 @@ public class MaterialMasterRaw {
   public void setPurchaseReceivePrinciple(String v) { this.purchaseReceivePrinciple = v; }
   public String getMrpPurchasePreLeadTime() { return mrpPurchasePreLeadTime; }
   public void setMrpPurchasePreLeadTime(String v) { this.mrpPurchasePreLeadTime = v; }
+  public String getProductAttr() { return productAttr; }
+  public void setProductAttr(String v) { this.productAttr = v; }
 }

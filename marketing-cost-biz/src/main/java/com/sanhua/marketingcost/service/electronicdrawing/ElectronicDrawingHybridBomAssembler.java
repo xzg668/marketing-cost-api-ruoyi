@@ -55,7 +55,7 @@ public class ElectronicDrawingHybridBomAssembler {
     String rootKey = "ROOT:" + root.materialCode();
     // raw_hierarchy / effective BOM 的既有消费链以 /顶层料号/ 识别根节点。
     // nodeKey 继续保留 ROOT: 前缀用于节点身份，结构 path 则遵守全局 BOM 路径契约；
-    // 子节点仍使用来源节点 ID 作为段值，避免同料号兄弟节点被按 path 合并。
+    // U9 子节点使用业务行键作为段值，避免重导入改变路径和组合指纹。
     String rootPath = "/" + root.materialCode() + "/";
     output.add(new Node(
         rootKey, null, 0, root.materialCode(), root.materialName(), root.materialSpec(),
@@ -390,13 +390,11 @@ public class ElectronicDrawingHybridBomAssembler {
   }
 
   private static String sourceIdentity(ElectronicDrawingU9SubBomPort.U9Node node) {
-    if (node.sourceRawHierarchyId() != null && node.sourceRawHierarchyId() > 0) {
-      return "U9:" + node.sourceRawHierarchyId();
+    String key = node.nodeKey();
+    if (key != null && !key.isBlank() && !key.contains("/")) {
+      return key;
     }
-    if (node.sourceU9BomId() != null && node.sourceU9BomId() > 0) {
-      return "U9SRC:" + node.sourceU9BomId();
-    }
-    throw invalid(STRUCTURE_INVALID, "U9 子 BOM 缺少来源层级ID或U9来源行ID");
+    throw invalid(STRUCTURE_INVALID, "U9 子 BOM 缺少稳定业务行键");
   }
 
   private void validateAvailableResult(
@@ -524,7 +522,6 @@ public class ElectronicDrawingHybridBomAssembler {
         decimal(node.qtyPerParent()), decimal(node.qtyPerTop()), decimal(node.parentBaseQty()),
         node.unit(), node.path(), String.valueOf(node.sortSeq()), node.nodeSourceType(),
         String.valueOf(node.sourceElectronicNodeId()),
-        String.valueOf(node.sourceRawHierarchyId()), String.valueOf(node.sourceU9BomId()),
         nullText(node.mappingStatus()))).collect(Collectors.joining("\n"));
     try {
       return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")

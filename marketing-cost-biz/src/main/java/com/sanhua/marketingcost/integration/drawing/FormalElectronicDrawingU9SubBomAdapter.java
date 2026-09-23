@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.integration.drawing;
 
+import com.sanhua.marketingcost.bom.U9BomLineKey;
 import com.sanhua.marketingcost.dto.quotebom.FormalBomReadResult;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomReadContext;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomSourceLineDto;
@@ -82,8 +83,8 @@ public class FormalElectronicDrawingU9SubBomAdapter implements ElectronicDrawing
       }
       QuoteBomSourceLineDto root = roots.getFirst();
       String rootPath = path(root.path());
-      if (rootPath == null || root.sourceRawHierarchyId() == null) {
-        return SubBomResult.failure(Status.ERROR, parentCode, "U9 根节点缺少路径或来源层级ID");
+      if (rootPath == null) {
+        return SubBomResult.failure(Status.ERROR, parentCode, "U9 根节点缺少路径");
       }
       List<QuoteBomSourceLineDto> descendants = lines.stream()
           .filter(line -> line != root)
@@ -97,8 +98,8 @@ public class FormalElectronicDrawingU9SubBomAdapter implements ElectronicDrawing
       List<U9Node> nodes = new ArrayList<>();
       for (QuoteBomSourceLineDto line : descendants) {
         String currentPath = path(line.path());
-        if (currentPath == null || line.sourceRawHierarchyId() == null) {
-          return SubBomResult.failure(Status.ERROR, parentCode, "U9 子件缺少路径或来源层级ID");
+        if (currentPath == null) {
+          return SubBomResult.failure(Status.ERROR, parentCode, "U9 子件缺少路径");
         }
         if (byPath.put(currentPath, line) != null) {
           return SubBomResult.failure(Status.MULTIPLE, parentCode, "U9 子 BOM 路径重复");
@@ -157,7 +158,7 @@ public class FormalElectronicDrawingU9SubBomAdapter implements ElectronicDrawing
       String parentNodeKey,
       List<BomU9Source> rows,
       Set<String> ancestors,
-      Set<Long> sourceIds,
+      Set<String> sourceKeys,
       List<U9Node> nodes,
       int depth) {
     if (depth > MAX_SOURCE_DEPTH) {
@@ -168,15 +169,17 @@ public class FormalElectronicDrawingU9SubBomAdapter implements ElectronicDrawing
       throw new IllegalStateException("U9 子 BOM 存在循环料号：" + parentMaterialCode);
     }
     for (BomU9Source row : rows) {
-      if (row == null || row.getId() == null || row.getId() <= 0
-          || !sourceIds.add(row.getId())) {
-        throw new IllegalStateException("U9 子 BOM 缺少唯一来源行");
+      if (row == null) {
+        throw new IllegalStateException("U9 子 BOM 来源行不能为空");
+      }
+      String nodeKey = "U9SRC:" + U9BomLineKey.from(row).occurrenceToken(parentNodeKey);
+      if (!sourceKeys.add(nodeKey)) {
+        throw new IllegalStateException("U9 子 BOM 同一分支存在重复业务行");
       }
       if (nodes.size() >= MAX_SOURCE_NODES) {
         throw new IllegalStateException("U9 子 BOM 超过最大节点数");
       }
       String materialCode = required(row.getChildMaterialNo(), "U9 子件料号");
-      String nodeKey = "U9SRC:" + row.getId();
       String nature = nature(row);
       nodes.add(new U9Node(
           nodeKey, parentNodeKey, null, row.getId(), materialCode,
@@ -189,7 +192,7 @@ public class FormalElectronicDrawingU9SubBomAdapter implements ElectronicDrawing
             materialCode, query.effectiveDate(), query.priceOrgCode());
         if (children != null && !children.isEmpty()) {
           appendCurrentU9Source(
-              query, materialCode, nodeKey, children, ancestors, sourceIds, nodes, depth + 1);
+              query, materialCode, nodeKey, children, ancestors, sourceKeys, nodes, depth + 1);
         }
       }
     }
@@ -220,12 +223,13 @@ public class FormalElectronicDrawingU9SubBomAdapter implements ElectronicDrawing
             line.level() == null ? Integer.MAX_VALUE : line.level())
         .thenComparing(line -> path(line.path()), Comparator.nullsLast(String::compareTo))
         .thenComparing(line -> line.sortSeq() == null ? Integer.MAX_VALUE : line.sortSeq())
-        .thenComparing(line ->
-            line.sourceRawHierarchyId() == null ? Long.MAX_VALUE : line.sourceRawHierarchyId());
+        .thenComparing(QuoteBomSourceLineDto::materialCode,
+            Comparator.nullsLast(String::compareTo));
   }
 
   private static String nodeKey(QuoteBomSourceLineDto line) {
-    return "RAW:" + line.sourceRawHierarchyId();
+    return "RAW:" + U9BomLineKey.hierarchyToken(
+        line.priceOrgCode(), line.topProductCode(), line.bomPurpose(), path(line.path()));
   }
 
   private static String path(String value) {

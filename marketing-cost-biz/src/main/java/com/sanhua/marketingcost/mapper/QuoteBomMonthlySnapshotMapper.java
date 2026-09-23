@@ -90,6 +90,17 @@ public interface QuoteBomMonthlySnapshotMapper extends BaseMapper<QuoteBomMonthl
       @Param("identityKey") String identityKey,
       @Param("updatedAt") java.time.LocalDateTime updatedAt);
 
+  /** Retain a pre-migration header for history when its daily-overwritten source is gone. */
+  @Update("""
+      UPDATE lp_quote_bom_monthly_snapshot
+         SET snapshot_identity_key = NULL, active_flag = 0, updated_at = #{updatedAt}
+       WHERE id = #{id} AND snapshot_identity_key = #{identityKey}
+         AND sync_status = 'SUCCESS' AND active_flag = 1
+      """)
+  int retireUnavailableU9MonthlySnapshot(@Param("id") Long id,
+      @Param("identityKey") String identityKey,
+      @Param("updatedAt") java.time.LocalDateTime updatedAt);
+
   @Delete("""
       DELETE FROM lp_quote_bom_monthly_snapshot
        WHERE id = #{id}

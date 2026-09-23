@@ -128,7 +128,8 @@ public class ApprovedElectronicBomRawSnapshotPublisher {
     row.setEffectiveFrom(approvedMonth.atDay(1));
     row.setEffectiveTo(null);
     // source_type 表示整批正式来源。混合树里的 U9 展开节点仍属于电子图库补充批次；
-    // 其精确 U9 血缘由 source_u9_row_id 保存，不能标成正式 U9，否则后续 U9 首查
+    // source_u9_row_id 仅保留当时导入批次的来源记录，不用于重导入后的业务关联。
+    // 不能标成正式 U9，否则后续 U9 首查
     // 会把这些无 U9 根节点的复制行误判成“存在但断根的正式 U9 BOM”。
     row.setSourceType(SOURCE_TYPE);
     row.setSourceImportBatchId(batchId);
@@ -165,13 +166,14 @@ public class ApprovedElectronicBomRawSnapshotPublisher {
     Set<String> parentPaths = structuralParentPaths(details);
     YearMonth month = YearMonth.parse(required(
         product.accountingMonth(), "电子图库BOM缺少核算月份"));
-    Map<String, BomRawHierarchy> byKey = existing.stream().collect(Collectors.toMap(
-        BomRawHierarchy::getSourceLineKey, Function.identity(), (first, ignored) -> first));
+    // 历史 source_line_key 曾包含 U9 行 ID；按已审核版本的结构路径校验，可兼容旧快照。
+    Map<String, BomRawHierarchy> byPath = existing.stream().collect(Collectors.toMap(
+        BomRawHierarchy::getPath, Function.identity()));
     for (QuoteBomSupplementDetail detail : details) {
       BomRawHierarchy expected = toRaw(
           detail, product, productCode, priceOrg, businessUnit, batchId,
           parentPaths, month, null);
-      BomRawHierarchy actual = byKey.get(expected.getSourceLineKey());
+      BomRawHierarchy actual = byPath.get(expected.getPath());
       if (actual == null || !sameRaw(actual, expected)) {
         throw new IllegalStateException("电子图库BOM原始快照与已发布版本不一致，禁止覆盖");
       }
@@ -186,7 +188,6 @@ public class ApprovedElectronicBomRawSnapshotPublisher {
         && Objects.equals(left.getLevel(), right.getLevel())
         && Objects.equals(left.getPath(), right.getPath())
         && Objects.equals(left.getSortSeq(), right.getSortSeq())
-        && Objects.equals(left.getSourceU9RowId(), right.getSourceU9RowId())
         && decimalEquals(left.getQtyPerParent(), right.getQtyPerParent())
         && decimalEquals(left.getQtyPerTop(), right.getQtyPerTop())
         && Objects.equals(left.getMaterialName(), right.getMaterialName())
@@ -242,11 +243,7 @@ public class ApprovedElectronicBomRawSnapshotPublisher {
 
   private String sourceLineKey(Long versionId, QuoteBomSupplementDetail detail) {
     return first(detail.getNodeSourceType(), SOURCE_TYPE) + "|" + versionId + "|"
-        + detail.getLineNo() + "|"
-        + first(detail.getSourceElectronicNodeId() == null
-            ? null : detail.getSourceElectronicNodeId().toString(), "NO_ED") + "|"
-        + first(detail.getSourceRawHierarchyId() == null
-            ? null : detail.getSourceRawHierarchyId().toString(), "NO_U9");
+        + detail.getLineNo();
   }
 
   private String required(String value, String message) {

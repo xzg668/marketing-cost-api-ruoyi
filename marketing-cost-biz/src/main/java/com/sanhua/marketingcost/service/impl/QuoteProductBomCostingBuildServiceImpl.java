@@ -25,6 +25,7 @@ import com.sanhua.marketingcost.service.BomSettlementRuleQueryService;
 import com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService;
 import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomRepository;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
+import com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService;
 import com.sanhua.marketingcost.service.settlement.BomByproductSettlementAdapter;
 import com.sanhua.marketingcost.service.settlement.BomByproductSettlementReadResult;
 import com.sanhua.marketingcost.service.settlement.BomSettlementBuildRequest;
@@ -71,6 +72,7 @@ public class QuoteProductBomCostingBuildServiceImpl
   private final OaFormItemMapper oaFormItemMapper;
   private final QuoteEffectiveBomRepository effectiveBomRepository;
   private final BomRawHierarchyMapper rawHierarchyMapper;
+  private final MonthlyBomSnapshotDetailService monthlyDetails;
   private final com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs manufacturingInputs;
 
   public QuoteProductBomCostingBuildServiceImpl(
@@ -86,6 +88,7 @@ public class QuoteProductBomCostingBuildServiceImpl
       OaFormItemMapper oaFormItemMapper,
       QuoteEffectiveBomRepository effectiveBomRepository,
       BomRawHierarchyMapper rawHierarchyMapper,
+      MonthlyBomSnapshotDetailService monthlyDetails,
       com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs manufacturingInputs) {
     this.settlementRuleQueryService = settlementRuleQueryService;
     this.byproductRuleQueryService = byproductRuleQueryService;
@@ -99,6 +102,7 @@ public class QuoteProductBomCostingBuildServiceImpl
     this.oaFormItemMapper = oaFormItemMapper;
     this.effectiveBomRepository = effectiveBomRepository;
     this.rawHierarchyMapper = rawHierarchyMapper;
+    this.monthlyDetails = monthlyDetails;
     this.manufacturingInputs = manufacturingInputs;
   }
 
@@ -154,7 +158,15 @@ public class QuoteProductBomCostingBuildServiceImpl
   private List<PreparedLine> effectiveLines(
       QuoteBomPreparationRecord record, List<QuoteEffectiveBomNode> nodes) {
     Map<Long, com.sanhua.marketingcost.entity.BomRawHierarchy> rawById = new HashMap<>();
-    if (rawHierarchyMapper != null) {
+    QuoteBomStatus status = record.getQuoteBomStatusId() == null
+        ? null : statusMapper.selectById(record.getQuoteBomStatusId());
+    List<com.sanhua.marketingcost.entity.BomRawHierarchy> frozen =
+        status == null ? List.of() : monthlyDetails.load(status.getSyncRecordId());
+    if (!frozen.isEmpty()) {
+      for (com.sanhua.marketingcost.entity.BomRawHierarchy row : frozen) {
+        if (row.getId() != null) rawById.put(row.getId(), row);
+      }
+    } else if (rawHierarchyMapper != null) {
       List<Long> sourceIds =
           nodes.stream()
               .map(QuoteEffectiveBomNode::getSourceHierarchyId)

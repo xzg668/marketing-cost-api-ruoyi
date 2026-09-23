@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.technicaldata;
 
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.sanhua.marketingcost.bom.U9BomLineKey;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSolderSource.*;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.SolderItem;
 import com.sanhua.marketingcost.entity.*;
@@ -13,12 +15,15 @@ import java.math.BigDecimal;
 import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 /** 查询完整适用 BOM 后自动筛选焊料；所有可编辑字段之外的值均从真实来源取得。 */
 @Service
@@ -110,15 +115,14 @@ public class TechnicalDataSolderSourceQuery {
     var ids = selected.stream().map(row -> row.sourceRawHierarchyId()).filter(Objects::nonNull).distinct().toList();
     if (ids.isEmpty()) throw new IllegalStateException("焊料缺少 BOM 来源节点");
     Map<Long, BomRawHierarchy> raw = hierarchy.selectBatchIds(ids).stream().collect(Collectors.toMap(BomRawHierarchy::getId, Function.identity()));
-    var u9Ids = raw.values().stream().map(BomRawHierarchy::getSourceU9RowId).filter(Objects::nonNull).distinct().toList();
-    Map<Long, BomU9Source> original = u9Ids.isEmpty() ? Map.of() : u9.selectBatchIds(u9Ids).stream().collect(Collectors.toMap(BomU9Source::getId, Function.identity()));
+    Map<ScopedLineKey, BomU9Source> original = loadU9SourceByBusinessKey(raw.values());
     var items = new ArrayList<SolderItem>();
     for (var line : selected) {
       var node = raw.get(line.sourceRawHierarchyId());
       if (node == null || !Objects.equals(node.getMaterialCode(), line.materialCode())
           || !Objects.equals(node.getPriceOrgCode(), line.priceOrgCode())) throw new IllegalStateException("焊料 BOM 来源关联不一致");
       var master = material(masters.get(line.materialOrganizationCode() + ":" + line.materialCode()));
-      var source = node.getSourceU9RowId() == null ? null : original.get(node.getSourceU9RowId());
+      var source = sourceFor(node, original);
       if (source != null && (!Objects.equals(source.getPriceOrgCode(), node.getPriceOrgCode())
           || !Objects.equals(source.getChildMaterialNo(), line.materialCode()))) throw new IllegalStateException("焊料原始 U9 行关联不一致");
       String issueUnit = source == null ? null : nullable(source.getIssueUnit());
@@ -140,6 +144,48 @@ public class TechnicalDataSolderSourceQuery {
         org.materialOrganizationCode(), product.getAccountingMonth(), "STANDARD", fingerprint);
     return new Reference(evidence, items);
   }
+
+  private Map<ScopedLineKey, BomU9Source> loadU9SourceByBusinessKey(
+      java.util.Collection<BomRawHierarchy> nodes) {
+    Map<SourceScope, Set<String>> parentsByScope = new LinkedHashMap<>();
+    for (BomRawHierarchy node : nodes) {
+      if (!"U9".equals(node.getSourceType())
+          || !StringUtils.hasText(node.getSourceImportBatchId())) continue;
+      U9BomLineKey key = U9BomLineKey.from(node);
+      SourceScope scope = new SourceScope(node.getSourceImportBatchId(), key.priceOrgCode());
+      parentsByScope.computeIfAbsent(scope, ignored -> new LinkedHashSet<>())
+          .add(key.parentMaterialNo());
+    }
+    Map<ScopedLineKey, BomU9Source> result = new LinkedHashMap<>();
+    for (var entry : parentsByScope.entrySet()) {
+      SourceScope scope = entry.getKey();
+      List<BomU9Source> rows = u9.selectList(Wrappers.lambdaQuery(BomU9Source.class)
+          .eq(BomU9Source::getImportBatchId, scope.importBatchId())
+          .eq(BomU9Source::getPriceOrgCode, scope.priceOrgCode())
+          .in(BomU9Source::getParentMaterialNo, entry.getValue()));
+      if (rows == null) throw new IllegalStateException("U9 单层 BOM 查询未返回结果");
+      for (BomU9Source row : rows) {
+        ScopedLineKey key = new ScopedLineKey(scope, U9BomLineKey.from(row));
+        if (result.putIfAbsent(key, row) != null) {
+          throw new IllegalStateException("U9 单层 BOM 存在重复业务行：" + key.lineKey());
+        }
+      }
+    }
+    return result;
+  }
+
+  private static BomU9Source sourceFor(
+      BomRawHierarchy node, Map<ScopedLineKey, BomU9Source> original) {
+    if (!"U9".equals(node.getSourceType())
+        || !StringUtils.hasText(node.getSourceImportBatchId())) return null;
+    U9BomLineKey key = U9BomLineKey.from(node);
+    return original.get(new ScopedLineKey(
+        new SourceScope(node.getSourceImportBatchId(), key.priceOrgCode()), key));
+  }
+
+  private record SourceScope(String importBatchId, String priceOrgCode) {}
+
+  private record ScopedLineKey(SourceScope scope, U9BomLineKey lineKey) {}
 
   private Material material(MaterialMasterRaw row) {
     var unsigned = new Material(row.getId(), row.getMaterialCode(), nullable(row.getMaterialName()), nullable(row.getDrawingNo()),

@@ -2546,17 +2546,47 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
   ProductCoefficientLookup lookupProductCoefficient(
       String productCode, CostSourceContext costSourceContext) {
-    Integer propertyYear = costSourceContext == null ? Year.now().getValue() : costSourceContext.costYear;
+    // 产品属性按核算当天的业务年度取值，与报价申请日期和核算月无关。
+    Integer propertyYear = Year.now(CostPricingPeriodUtils.BUSINESS_ZONE).getValue();
     String businessUnitType = costSourceContext == null ? "" : costSourceContext.businessUnitType;
+    String organizationCode = costSourceContext == null ? null : costSourceContext.materialOrganizationCode;
     var technical = costSourceContext == null ? null : costSourceContext.effectiveTechnicalData;
-    if (technical != null && StringUtils.hasText(technical.productProperty())
-        && cacheLookup.findProductProperty(productCode, propertyYear, businessUnitType) == null) {
+    return lookupProductCoefficient(productCode, organizationCode, propertyYear, businessUnitType, technical);
+  }
+
+  ProductCoefficientLookup lookupProductCoefficient(
+      String productCode,
+      String organizationCode,
+      Integer propertyYear,
+      String businessUnitType,
+      EffectiveTechnicalDataInput technical) {
+    if (!StringUtils.hasText(productCode)) {
+      return new ProductCoefficientLookup(BigDecimal.ONE, "产品料号为空，产品属性系数回落=1", null);
+    }
+    String code = productCode.trim();
+    if (StringUtils.hasText(organizationCode)) {
+      String rawAttr = trimToNull(materialMasterRawMapper.selectActiveProductAttr(
+          code, MaterialOrganization.fromCode(organizationCode).getCode()));
+      if (rawAttr != null) {
+        BigDecimal coefficient = cacheLookup.findProductPropertyCoefficient(
+            rawAttr, propertyYear, businessUnitType);
+        if (coefficient == null) {
+          throw new IllegalArgumentException("U9 料品档案产品属性缺少本年度规则：料号=" + code
+              + "，属性=" + rawAttr + "，年度=" + propertyYear + "，业务单元=" + businessUnitType);
+        }
+        return new ProductCoefficientLookup(coefficient,
+            "产品属性来源=U9料品档案；属性=" + rawAttr + "；规则年度=" + propertyYear, null);
+      }
+    }
+
+    ProductProperty property = cacheLookup.findProductProperty(code, propertyYear, businessUnitType);
+    if (property == null && technical != null && StringUtils.hasText(technical.productProperty())) {
       var coefficient = cacheLookup.findProductPropertyCoefficient(technical.productProperty(), propertyYear, businessUnitType);
       if (coefficient == null) throw new IllegalArgumentException("缺少本年度产品属性规则：" + technical.productProperty());
       return new ProductCoefficientLookup(coefficient, technicalSourceRemark(technical, "PROFILE")
           + "；属性=" + technical.productProperty() + "；采用本年度公共属性规则", technical.sourceVersionId("PROFILE"));
     }
-    return lookupProductCoefficient(productCode, propertyYear, businessUnitType);
+    return coefficientFromProperty(code, propertyYear, businessUnitType, property);
   }
 
   ProductCoefficientLookup lookupProductCoefficient(
@@ -2564,12 +2594,17 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     if (!StringUtils.hasText(productCode)) {
       return new ProductCoefficientLookup(BigDecimal.ONE, "产品料号为空，产品属性系数回落=1", null);
     }
-    ProductProperty property =
-        cacheLookup.findProductProperty(productCode, propertyYear, businessUnitType);
+    String code = productCode.trim();
+    ProductProperty property = cacheLookup.findProductProperty(code, propertyYear, businessUnitType);
+    return coefficientFromProperty(code, propertyYear, businessUnitType, property);
+  }
+
+  private ProductCoefficientLookup coefficientFromProperty(
+      String productCode, Integer propertyYear, String businessUnitType, ProductProperty property) {
     if (property == null || property.getCoefficient() == null) {
       String remark =
           "产品属性系数未命中，回落=1：productCode="
-              + productCode.trim()
+              + productCode
               + "，propertyYear="
               + propertyYear
               + "，businessUnitType="

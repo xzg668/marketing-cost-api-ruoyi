@@ -12,6 +12,14 @@ import org.apache.ibatis.annotations.Select;
 @Mapper
 public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
 
+  /** 核算按报价料号和 U9 料品组织读取当前有效的中台产品属性。 */
+  @Select("SELECT product_attr FROM lp_material_master_raw "
+      + "WHERE organization_code = #{organizationCode} AND material_code = #{materialCode} "
+      + "AND active_flag = 1")
+  String selectActiveProductAttr(
+      @Param("materialCode") String materialCode,
+      @Param("organizationCode") String organizationCode);
+
   /** U9 成品主分类为 10、裸品为 11；不把同型号零部件混入成品候选。 */
   @Select({
       "<script>",

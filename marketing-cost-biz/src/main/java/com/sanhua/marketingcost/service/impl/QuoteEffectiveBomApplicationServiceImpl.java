@@ -49,6 +49,7 @@ import com.sanhua.marketingcost.service.ingest.QuoteBomContext;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.quotebom.U9MonthlySnapshotIdentity;
+import com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeRequest;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeResolution;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeResolver;
@@ -89,6 +90,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
   private final OaFormMapper oaFormMapper;
   private final QuoteBomMonthlySnapshotMapper monthlySnapshotMapper;
   private final BomRawHierarchyMapper rawHierarchyMapper;
+  private final MonthlyBomSnapshotDetailService monthlyDetails;
   private final PlateCommercialMakeBomExpansionService crossOrganizationExpansionService;
   private final BomAlternativeGroupResolver alternativeGroupResolver;
   private final BomAlternativeBranchPruner alternativeBranchPruner;
@@ -109,6 +111,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
       OaFormMapper oaFormMapper,
       QuoteBomMonthlySnapshotMapper monthlySnapshotMapper,
       BomRawHierarchyMapper rawHierarchyMapper,
+      MonthlyBomSnapshotDetailService monthlyDetails,
       PlateCommercialMakeBomExpansionService crossOrganizationExpansionService,
       BomAlternativeGroupResolver alternativeGroupResolver,
       BomAlternativeBranchPruner alternativeBranchPruner,
@@ -127,6 +130,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
     this.oaFormMapper = oaFormMapper;
     this.monthlySnapshotMapper = monthlySnapshotMapper;
     this.rawHierarchyMapper = rawHierarchyMapper;
+    this.monthlyDetails = monthlyDetails;
     this.crossOrganizationExpansionService = crossOrganizationExpansionService;
     this.alternativeGroupResolver = alternativeGroupResolver;
     this.alternativeBranchPruner = alternativeBranchPruner;
@@ -507,7 +511,8 @@ public class QuoteEffectiveBomApplicationServiceImpl
    */
   private QuoteBomMonthlySnapshot findOrPrepareMonthlySnapshot(QueryContext context) {
     QuoteBomMonthlySnapshot snapshot = findMonthlySnapshot(context);
-    if (snapshot != null) {
+    if (snapshot != null && (!"U9".equals(snapshot.getBomSource())
+        || !monthlyDetails.load(snapshot.getId()).isEmpty())) {
       return snapshot;
     }
     var checked = quoteBomStatusService.checkItemForCostRun(
@@ -522,12 +527,15 @@ public class QuoteEffectiveBomApplicationServiceImpl
           && Objects.equals(current.getActiveFlag(), ACTIVE)
           && Objects.equals(current.getProductCode(), context.topProductCode())
           && Objects.equals(current.getCostPeriodMonth(), context.costPeriodMonth())
-          && Objects.equals(current.getPriceOrgCode(), context.organization().priceOrgCode())) {
+          && Objects.equals(current.getPriceOrgCode(), context.organization().priceOrgCode())
+          && (!"U9".equals(current.getBomSource())
+              || !monthlyDetails.load(current.getId()).isEmpty())) {
         return current;
       }
     }
     snapshot = findMonthlySnapshot(context);
-    if (snapshot != null) return snapshot;
+    if (snapshot != null && (!"U9".equals(snapshot.getBomSource())
+        || !monthlyDetails.load(snapshot.getId()).isEmpty())) return snapshot;
     if (checked == null || !"NO_BOM".equals(checked.getBomStatus())) return null;
     return drawingPreparation.snapshot(context.oaFormItemId(), context.costPeriodMonth(),
         context.businessUnit(), context.organization().priceOrgCode(), context.customerKey(), context.packageMethod());
@@ -535,6 +543,12 @@ public class QuoteEffectiveBomApplicationServiceImpl
 
   private RawSnapshot loadRawSnapshot(
       QueryContext context, QuoteBomMonthlySnapshot snapshot) {
+    List<BomRawHierarchy> frozenRows = monthlyDetails.load(snapshot.getId());
+    if (!frozenRows.isEmpty()) {
+      return new RawSnapshot(
+          technicalContributions.merge(context.oaFormItemId(), context.costPeriodMonth(), frozenRows),
+          snapshot.getBomBatchId(), List.of(), List.of());
+    }
     String batchId = trimToNull(snapshot.getBomBatchId());
     if (batchId == null) {
       return new RawSnapshot(
@@ -619,6 +633,9 @@ public class QuoteEffectiveBomApplicationServiceImpl
               .toList();
       return new RawSnapshot(
           expansion.rows(), sourceBuildBatchId, warnings, issues);
+    }
+    if ("SUCCESS".equals(snapshot.getSyncStatus()) && !expansion.rows().isEmpty()) {
+      monthlyDetails.save(snapshot.getId(), expansion.rows());
     }
     return new RawSnapshot(
         technicalContributions.merge(context.oaFormItemId(), context.costPeriodMonth(), expansion.rows()),

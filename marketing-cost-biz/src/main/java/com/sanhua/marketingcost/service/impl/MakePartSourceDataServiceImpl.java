@@ -78,8 +78,7 @@ public class MakePartSourceDataServiceImpl implements MakePartSourceDataService 
     }
     List<BomU9Source> rows =
         bomU9SourceMapper.selectList(
-            query.orderByAsc(BomU9Source::getChildSeq)
-                .orderByDesc(BomU9Source::getId));
+            query.orderByAsc(BomU9Source::getChildSeq));
     return dedupeChildren(rows);
   }
 
@@ -104,20 +103,29 @@ public class MakePartSourceDataServiceImpl implements MakePartSourceDataService 
 
   private int compareChildPriority(BomU9Source left, BomU9Source right) {
     int seqCompare = nullLast(left.getChildSeq(), right.getChildSeq());
-    if (seqCompare != 0) {
-      return seqCompare;
-    }
-    return nullLastDesc(left.getId(), right.getId());
+    if (seqCompare != 0) return seqCompare;
+    // 同一父子件存在多个当前有效版本时，按生效日期和 BOM 版本选用，不能靠导入行 ID。
+    int effectiveCompare = nullLastDesc(left.getEffectiveFrom(), right.getEffectiveFrom());
+    if (effectiveCompare != 0) return effectiveCompare;
+    int versionCompare = nullLastDesc(left.getBomVersion(), right.getBomVersion());
+    if (versionCompare != 0) return versionCompare;
+    int endCompare = nullLastDesc(left.getEffectiveTo(), right.getEffectiveTo());
+    if (endCompare != 0) return endCompare;
+    int processCompare = nullLast(left.getProcessSeq(), right.getProcessSeq());
+    if (processCompare != 0) return processCompare;
+    int childCompare = nullLast(left.getChildMaterialNo(), right.getChildMaterialNo());
+    if (childCompare != 0) return childCompare;
+    return nullLast(left.getParentMaterialNo(), right.getParentMaterialNo());
   }
 
-  private int nullLast(Integer left, Integer right) {
+  private <T extends Comparable<? super T>> int nullLast(T left, T right) {
     if (left == null && right == null) return 0;
     if (left == null) return 1;
     if (right == null) return -1;
     return left.compareTo(right);
   }
 
-  private int nullLastDesc(Long left, Long right) {
+  private <T extends Comparable<? super T>> int nullLastDesc(T left, T right) {
     if (left == null && right == null) return 0;
     if (left == null) return 1;
     if (right == null) return -1;
