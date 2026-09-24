@@ -45,6 +45,28 @@ class CmsSyncPublishServiceImplTest {
   }
 
   @Test
+  @DisplayName("中台暂存表与正式表排序规则不同时仍按正式表规则比对")
+  void usesFormalCollationForCrossTableMatching() {
+    String sql = service.preserveNewerMaterialScrapSql("COMMERCIAL").replaceAll("\\s+", " ");
+
+    assertThat(sql)
+        .contains(
+            "COALESCE(incoming.business_unit_type, 'COMMERCIAL') "
+                + "COLLATE utf8mb4_0900_ai_ci =",
+            "incoming.material_code COLLATE utf8mb4_0900_ai_ci = live.material_code",
+            "COALESCE(candidate.business_unit_type, 'COMMERCIAL') "
+                + "COLLATE utf8mb4_0900_ai_ci =",
+            "candidate.material_code COLLATE utf8mb4_0900_ai_ci = live.material_code",
+            "COALESCE(duplicate_row.business_unit_type, 'COMMERCIAL') "
+                + "COLLATE utf8mb4_0900_ai_ci =",
+            "duplicate_row.material_code COLLATE utf8mb4_0900_ai_ci = live.material_code",
+            "duplicate_row.scrap_code COLLATE utf8mb4_0900_ai_ci = live.scrap_code",
+            "COLLATE utf8mb4_0900_ai_ci AND NOT EXISTS",
+            "COALESCE(NULLIF(TRIM(live.cms_posting_period), ''), '') "
+                + "COLLATE utf8mb4_0900_ai_ci");
+  }
+
+  @Test
   @DisplayName("同一原材料即使存在多个废料也只发布最新一条")
   void publishesOnlyLatestPeriodMappingGroup() {
     String sql = service.insertMaterialScrapSql("COMMERCIAL");

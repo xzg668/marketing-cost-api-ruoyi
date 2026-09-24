@@ -4,10 +4,30 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.sanhua.marketingcost.entity.CmsWorkshopLaborRaw;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.ResultType;
+import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.mapping.ResultSetType;
+import org.apache.ibatis.session.ResultHandler;
 
 @Mapper
 public interface CmsWorkshopLaborRawMapper extends BaseMapper<CmsWorkshopLaborRaw> {
+  @Select({
+    "SELECT id, period, parent_code, parent_name, parent_spec, parent_type,",
+    "       first_unit_name, working_cost_cent",
+    "FROM cms_workshop_labor_raw",
+    "WHERE period LIKE CONCAT(#{costYear}, '-%')",
+    "  AND (COALESCE(#{businessUnitType}, '') = '' OR business_unit_type = #{businessUnitType})",
+    "ORDER BY id"
+  })
+  @ResultType(CmsWorkshopLaborRaw.class)
+  @Options(resultSetType = ResultSetType.FORWARD_ONLY, fetchSize = Integer.MIN_VALUE)
+  void forEachDirectLaborSource(
+      @Param("costYear") int costYear,
+      @Param("businessUnitType") String businessUnitType,
+      ResultHandler<CmsWorkshopLaborRaw> handler);
+
   @Insert({
     "INSERT INTO cms_workshop_labor_raw (",
     "  import_batch_id, row_no, period, first_unit_code, first_unit_name, parent_code, parent_name,",

@@ -12,6 +12,7 @@ import com.sanhua.marketingcost.service.CmsSyncPublishService;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -19,6 +20,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 @Service
+@Slf4j
 public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
   private static final String STATUS_READY = "READY";
   private static final String STATUS_RUNNING = "RUNNING";
@@ -140,6 +142,7 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
       markSignal(signal.getId(), STATUS_SUCCESS, published.getMessage());
       return published;
     } catch (RuntimeException e) {
+      log.error("CMS sync publish failed, signalId={}, batchNo={}", signal.getId(), signal.getBatchNo(), e);
       String message = trimMessage(e.getMessage());
       markSignal(signal.getId(), STATUS_FAILED, message);
       response.setExecuted(true);
@@ -293,6 +296,9 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
   }
 
   String preserveNewerMaterialScrapSql(String businessUnitType) {
+    // EasyData's temporary table can use a different collation from the formal table.
+    // Compare cross-table business keys using the formal table's collation so publication
+    // remains stable when EasyData refreshes the temporary table.
     return """
         INSERT INTO tmp_lp_material_scrap_ref (
           material_code, material_name, material_spec, material_unit, scrap_code, scrap_name,
@@ -315,27 +321,31 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
           AND EXISTS (
             SELECT 1
             FROM tmp_lp_material_scrap_ref incoming
-            WHERE COALESCE(incoming.business_unit_type, 'COMMERCIAL') =
+            WHERE COALESCE(incoming.business_unit_type, 'COMMERCIAL')
+                    COLLATE utf8mb4_0900_ai_ci =
                     COALESCE(live.business_unit_type, 'COMMERCIAL')
-              AND incoming.material_code = live.material_code
+              AND incoming.material_code COLLATE utf8mb4_0900_ai_ci = live.material_code
           )
           AND COALESCE(NULLIF(TRIM(live.cms_posting_period), ''), '') >
               COALESCE((
                 SELECT MAX(NULLIF(TRIM(candidate.cms_posting_period), ''))
                 FROM tmp_lp_material_scrap_ref candidate
-                WHERE COALESCE(candidate.business_unit_type, 'COMMERCIAL') =
+                WHERE COALESCE(candidate.business_unit_type, 'COMMERCIAL')
+                        COLLATE utf8mb4_0900_ai_ci =
                         COALESCE(live.business_unit_type, 'COMMERCIAL')
-                  AND candidate.material_code = live.material_code
-              ), '')
+                  AND candidate.material_code COLLATE utf8mb4_0900_ai_ci = live.material_code
+              ), '') COLLATE utf8mb4_0900_ai_ci
           AND NOT EXISTS (
             SELECT 1
             FROM tmp_lp_material_scrap_ref duplicate_row
-            WHERE COALESCE(duplicate_row.business_unit_type, 'COMMERCIAL') =
+            WHERE COALESCE(duplicate_row.business_unit_type, 'COMMERCIAL')
+                    COLLATE utf8mb4_0900_ai_ci =
                     COALESCE(live.business_unit_type, 'COMMERCIAL')
-              AND duplicate_row.material_code = live.material_code
-              AND duplicate_row.scrap_code = live.scrap_code
+              AND duplicate_row.material_code COLLATE utf8mb4_0900_ai_ci = live.material_code
+              AND duplicate_row.scrap_code COLLATE utf8mb4_0900_ai_ci = live.scrap_code
               AND COALESCE(NULLIF(TRIM(duplicate_row.cms_posting_period), ''), '') =
-                    COALESCE(NULLIF(TRIM(live.cms_posting_period), ''), '')
+                  COALESCE(NULLIF(TRIM(live.cms_posting_period), ''), '')
+                      COLLATE utf8mb4_0900_ai_ci
           )
         """
         + businessUnitLiveFilter(businessUnitType, "COMMERCIAL");

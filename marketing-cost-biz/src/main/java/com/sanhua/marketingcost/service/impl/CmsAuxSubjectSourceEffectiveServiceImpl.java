@@ -23,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -204,36 +205,33 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
     if (subjectDefinitions.isEmpty()) {
       return new LinkedHashMap<>();
     }
-    List<CmsProductSubjectCostRaw> rows =
-        productSubjectCostRawMapper.selectList(
-            new QueryWrapper<CmsProductSubjectCostRaw>()
-                .likeRight("period", costYear + "-")
-                .in("second_subject_code", subjectDefinitions.keySet())
-                .eq(StringUtils.hasText(businessUnitType), "business_unit_type", businessUnitType));
     Map<String, Aggregate> result = new LinkedHashMap<>();
-    for (CmsProductSubjectCostRaw row : rows) {
-      String parentCode = trim(row.getParentCode());
-      String period = trim(row.getPeriod());
-      String subjectCode = trim(row.getSecondSubjectCode());
-      SubjectDefinition subjectDefinition = subjectDefinitions.get(subjectCode);
-      if (!StringUtils.hasText(parentCode)
-          || !StringUtils.hasText(period)
-          || !StringUtils.hasText(subjectCode)
-          || subjectDefinition == null) {
-        continue;
-      }
-      Aggregate aggregate =
-          result.computeIfAbsent(
-              key(parentCode, period, subjectCode),
-              ignored ->
-                  new Aggregate(
-                      parentCode,
-                      period,
-                      subjectCode,
-                      subjectDefinition.subjectName));
-      aggregate.amount = aggregate.amount.add(toYuan(row.getMaterialPrice()));
-      aggregate.rowIds.add(row.getId());
-    }
+    // Stream the CMS source rows so the subject calculation cannot exhaust the API heap.
+    productSubjectCostRawMapper.forEachAuxiliarySource(
+        costYear, subjectDefinitions.keySet(), businessUnitType, context -> {
+        CmsProductSubjectCostRaw row = context.getResultObject();
+        String parentCode = trim(row.getParentCode());
+        String period = trim(row.getPeriod());
+        String subjectCode = trim(row.getSecondSubjectCode());
+        SubjectDefinition subjectDefinition = subjectDefinitions.get(subjectCode);
+        if (!StringUtils.hasText(parentCode)
+            || !StringUtils.hasText(period)
+            || !StringUtils.hasText(subjectCode)
+            || subjectDefinition == null) {
+          return;
+        }
+        Aggregate aggregate =
+            result.computeIfAbsent(
+                key(parentCode, period, subjectCode),
+                ignored ->
+                    new Aggregate(
+                        parentCode,
+                        period,
+                        subjectCode,
+                        subjectDefinition.subjectName));
+        aggregate.amount = aggregate.amount.add(toYuan(row.getMaterialPrice()));
+        aggregate.rowIds.add(row.getId());
+      });
     return result;
   }
 
@@ -382,7 +380,7 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
   }
 
   private String joinIds(Collection<Long> ids) {
-    return ids.stream().filter(id -> id != null).map(String::valueOf).reduce((a, b) -> a + "," + b).orElse("");
+    return ids.stream().filter(id -> id != null).map(String::valueOf).collect(Collectors.joining(","));
   }
 
   private String normalizeBusinessUnit(String businessUnitType) {

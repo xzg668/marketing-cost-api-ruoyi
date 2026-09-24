@@ -2,12 +2,39 @@ package com.sanhua.marketingcost.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.sanhua.marketingcost.entity.CmsProductSubjectCostRaw;
+import java.util.Collection;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.ResultType;
+import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.mapping.ResultSetType;
+import org.apache.ibatis.session.ResultHandler;
 
 @Mapper
 public interface CmsProductSubjectCostRawMapper extends BaseMapper<CmsProductSubjectCostRaw> {
+  @Select({
+    "<script>",
+    "SELECT id, parent_code, period, second_subject_code, material_price",
+    "FROM cms_product_subject_cost_raw",
+    "WHERE period LIKE CONCAT(#{costYear}, '-%')",
+    "  AND second_subject_code IN",
+    "  <foreach collection='subjectCodes' item='code' open='(' separator=',' close=')'>",
+    "    #{code}",
+    "  </foreach>",
+    "  AND (COALESCE(#{businessUnitType}, '') = '' OR business_unit_type = #{businessUnitType})",
+    "ORDER BY id",
+    "</script>"
+  })
+  @ResultType(CmsProductSubjectCostRaw.class)
+  @Options(resultSetType = ResultSetType.FORWARD_ONLY, fetchSize = Integer.MIN_VALUE)
+  void forEachAuxiliarySource(
+      @Param("costYear") int costYear,
+      @Param("subjectCodes") Collection<String> subjectCodes,
+      @Param("businessUnitType") String businessUnitType,
+      ResultHandler<CmsProductSubjectCostRaw> handler);
+
   @Insert({
     "INSERT INTO cms_product_subject_cost_raw (",
     "  import_batch_id, row_no, period, first_unit_code, first_unit_name, parent_code, parent_name,",

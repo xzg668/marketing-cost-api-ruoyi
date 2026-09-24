@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -12,6 +14,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.sanhua.marketingcost.dto.CmsEffectiveSourceRefreshRequest;
 import com.sanhua.marketingcost.dto.PlanEligibility;
 import com.sanhua.marketingcost.entity.CmsCostSourceEffective;
@@ -25,11 +28,14 @@ import com.sanhua.marketingcost.mapper.CmsProductSubjectCostRawMapper;
 import com.sanhua.marketingcost.mapper.CmsSubjectSettingRawMapper;
 import com.sanhua.marketingcost.mapper.CmsWorkshopLaborRawMapper;
 import com.sanhua.marketingcost.service.CmsPlanEligibilityService;
+import org.apache.ibatis.executor.result.DefaultResultContext;
+import org.apache.ibatis.session.ResultHandler;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -60,6 +66,18 @@ class CmsSalaryCostSourceEffectiveServiceImplTest {
             effectiveMapper,
             logMapper,
             eligibilityService);
+    when(workshopMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    doAnswer(invocation -> {
+          ResultHandler<CmsWorkshopLaborRaw> handler = invocation.getArgument(2);
+          DefaultResultContext<CmsWorkshopLaborRaw> context = new DefaultResultContext<>();
+          for (CmsWorkshopLaborRaw row : workshopMapper.selectList(new QueryWrapper<>())) {
+            context.nextResultObject(row);
+            handler.handleResult(context);
+          }
+          return null;
+        })
+        .when(workshopMapper)
+        .forEachDirectLaborSource(anyInt(), anyString(), any());
     doAnswer(invocation -> {
           CmsCostSourceEffective row = invocation.getArgument(0);
           row.setId(1000L + insertedEffective.size());
@@ -115,6 +133,23 @@ class CmsSalaryCostSourceEffectiveServiceImplTest {
     assertThat(indirect.getAmountYuan()).isEqualByComparingTo("0.220000");
     assertThat(insertedLogs).extracting(CmsCostSourceEffectiveLog::getActionType)
         .containsOnly("DEFAULT");
+  }
+
+  @Test
+  void directSalaryStreamsAllRowsIntoAggregates() {
+    List<CmsWorkshopLaborRaw> sourceRows = new ArrayList<>(
+        IntStream.rangeClosed(1, 5000)
+            .mapToObj(id -> workshop((long) id, "P" + (id % 50), "2026-01", "100"))
+            .toList());
+    sourceRows.add(workshop(5001L, "P1", "2026-01", "100"));
+    when(workshopMapper.selectList(any(Wrapper.class))).thenReturn(sourceRows);
+    when(subjectMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+
+    var response = service.generateDefaultSources(2026, "tester", "COMMERCIAL");
+
+    assertThat(response.getInsertedCount()).isEqualTo(50);
+    assertThat(source("SALARY_DIRECT", "P1").getAmountYuan()).isEqualByComparingTo("101.000000");
+    verify(workshopMapper).forEachDirectLaborSource(eq(2026), eq("COMMERCIAL"), any());
   }
 
   @Test

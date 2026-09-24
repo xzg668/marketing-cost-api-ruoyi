@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -12,6 +13,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.sanhua.marketingcost.dto.CmsEffectiveSourceRefreshRequest;
 import com.sanhua.marketingcost.dto.PlanEligibility;
 import com.sanhua.marketingcost.entity.CmsCostSourceEffective;
@@ -28,6 +30,9 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
+import org.apache.ibatis.executor.result.DefaultResultContext;
+import org.apache.ibatis.session.ResultHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -51,6 +56,18 @@ class CmsAuxSubjectSourceEffectiveServiceImplTest {
     service =
         new CmsAuxSubjectSourceEffectiveServiceImpl(
             subjectMapper, subjectSettingMapper, effectiveMapper, logMapper, eligibilityService);
+    when(subjectMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    doAnswer(invocation -> {
+          ResultHandler<CmsProductSubjectCostRaw> handler = invocation.getArgument(3);
+          DefaultResultContext<CmsProductSubjectCostRaw> context = new DefaultResultContext<>();
+          for (CmsProductSubjectCostRaw row : subjectMapper.selectList(new QueryWrapper<>())) {
+            context.nextResultObject(row);
+            handler.handleResult(context);
+          }
+          return null;
+        })
+        .when(subjectMapper)
+        .forEachAuxiliarySource(anyInt(), anyCollection(), anyString(), any());
     doAnswer(invocation -> {
           CmsCostSourceEffective row = invocation.getArgument(0);
           row.setId(2000L + insertedEffective.size());
@@ -124,6 +141,24 @@ class CmsAuxSubjectSourceEffectiveServiceImplTest {
         .doesNotContain("包装辅料", "禁用或未配置");
     assertThat(insertedLogs).extracting(CmsCostSourceEffectiveLog::getActionType)
         .containsOnly("DEFAULT");
+  }
+
+  @Test
+  void auxiliarySourcesStreamAllRowsIntoAggregates() {
+    when(subjectSettingMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(subjectSetting("0201", "辅助焊料类")));
+    List<CmsProductSubjectCostRaw> sourceRows = new ArrayList<>(
+        IntStream.rangeClosed(1, 5000)
+            .mapToObj(id -> aux((long) id, "A", "2026-01", "0201", "辅助焊料类", "100"))
+            .toList());
+    sourceRows.add(aux(5001L, "A", "2026-01", "0201", "辅助焊料类", "100"));
+    when(subjectMapper.selectList(any(Wrapper.class))).thenReturn(sourceRows);
+
+    var response = service.generateDefaultSources(2026, "tester", "COMMERCIAL");
+
+    assertThat(response.getInsertedCount()).isEqualTo(1);
+    assertThat(source("0201").getAmountYuan()).isEqualByComparingTo("5001.000000");
+    verify(subjectMapper).forEachAuxiliarySource(anyInt(), anyCollection(), anyString(), any());
   }
 
   @Test

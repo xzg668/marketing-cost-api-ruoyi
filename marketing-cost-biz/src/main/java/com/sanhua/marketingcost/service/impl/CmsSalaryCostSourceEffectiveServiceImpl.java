@@ -25,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -248,23 +249,22 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
   }
 
   private Map<String, Aggregate> aggregateDirect(int costYear, String businessUnitType) {
-    List<CmsWorkshopLaborRaw> rows =
-        workshopLaborRawMapper.selectList(
-            new QueryWrapper<CmsWorkshopLaborRaw>()
-                .likeRight("period", costYear + "-")
-                .eq(StringUtils.hasText(businessUnitType), "business_unit_type", businessUnitType));
     Map<String, Aggregate> result = new LinkedHashMap<>();
-    for (CmsWorkshopLaborRaw row : rows) {
-      if (!StringUtils.hasText(row.getParentCode()) || !StringUtils.hasText(row.getPeriod())) {
-        continue;
-      }
-      Aggregate aggregate =
-          result.computeIfAbsent(key(row.getParentCode(), row.getPeriod()), ignored -> new Aggregate(row.getParentCode(), row.getPeriod()));
-      aggregate.amount = aggregate.amount.add(toYuan(row.getWorkingCostCent()));
-      aggregate.rowIds.add(row.getId());
-      aggregate.fillSubject(DIRECT_LABOR_SUBJECT_CODE, DIRECT_LABOR_SUBJECT_NAME);
-      aggregate.fillMeta(row.getParentName(), row.getParentSpec(), row.getParentType(), row.getFirstUnitName());
-    }
+    // Process each row as it arrives; retaining millions of raw entities exhausts the API heap.
+    workshopLaborRawMapper.forEachDirectLaborSource(
+        costYear, businessUnitType, context -> {
+        CmsWorkshopLaborRaw row = context.getResultObject();
+        if (!StringUtils.hasText(row.getParentCode()) || !StringUtils.hasText(row.getPeriod())) {
+          return;
+        }
+        Aggregate aggregate =
+            result.computeIfAbsent(key(row.getParentCode(), row.getPeriod()),
+                ignored -> new Aggregate(row.getParentCode(), row.getPeriod()));
+        aggregate.amount = aggregate.amount.add(toYuan(row.getWorkingCostCent()));
+        aggregate.rowIds.add(row.getId());
+        aggregate.fillSubject(DIRECT_LABOR_SUBJECT_CODE, DIRECT_LABOR_SUBJECT_NAME);
+        aggregate.fillMeta(row.getParentName(), row.getParentSpec(), row.getParentType(), row.getFirstUnitName());
+      });
     return result;
   }
 
@@ -436,7 +436,7 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
   }
 
   private String joinIds(Collection<Long> ids) {
-    return ids.stream().filter(id -> id != null).map(String::valueOf).reduce((a, b) -> a + "," + b).orElse("");
+    return ids.stream().filter(id -> id != null).map(String::valueOf).collect(Collectors.joining(","));
   }
 
   private String subjectCode(String sourceType, Aggregate aggregate) {
