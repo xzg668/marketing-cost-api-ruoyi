@@ -17,11 +17,17 @@ class CostRunExecutionGuardSqlContractTest {
   void claimAndProgressUseCurrentExecutionOnly() throws Exception {
     String claim = selectSql(
         CostRunTaskMapper.class.getMethod(
-            "selectClaimCandidates", java.util.Set.class, java.time.LocalDateTime.class, int.class));
+            "selectClaimCandidates", java.util.Set.class, java.time.LocalDateTime.class,
+            int.class, long.class));
     String counts = selectSql(
         CostRunTaskMapper.class.getMethod("selectStatusCounts", String.class));
 
     assertThat(claim).contains("b.execution_no = t.execution_no");
+    assertThat(claim)
+        .contains("t.status = 'RETRYABLE'")
+        .contains("TIMESTAMPADD(")
+        .contains("#{retryInitialBackoffMicros}")
+        .contains("POW(2, LEAST(COALESCE(t.retry_count, 0), 7))");
     assertThat(counts).contains("b.execution_no = t.execution_no");
   }
 

@@ -6,7 +6,6 @@ import com.sanhua.marketingcost.integration.oa.OaIntegrationException;
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import com.sanhua.marketingcost.integration.oa.OaMessageRepository;
 import com.sanhua.marketingcost.integration.technicaldata.OaDeliveryUnknownException;
-import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaGateway;
 import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository;
 import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository.Recipient;
 import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaWorkflowRepository;
@@ -38,40 +37,6 @@ public class TechnicalDataOaSubmissionLifecycle {
     this.workflow = workflow; this.recipients = recipients; this.messages = messages; this.codec = codec; this.audit = audit;
   }
 
-  public void acceptReceipt(OaMessageRepository.Message message, TechnicalDataOaGateway.Receipt receipt) {
-    var expected = codec.read(message.rawPayload()).path("payload");
-    var submission = submissions.selectByOutboundMessage(message.id());
-    if (submission == null) throw conflict("发送记录未关联资料提交");
-    var task = tasks.selectByIdForUpdate(submission.getTaskId());
-    var person = requireCurrent(task, submission);
-    if (!Objects.equals(submission.getOutboundMessageId(), message.id())
-        || !Set.of("SENDING", "UNKNOWN").contains(submission.getSubmissionStatus())) throw conflict("发送记录不属于本人当前待确认提交");
-    if (!receipt.accepted()) {
-      workflow.rejectSubmission(submission.getId());
-      restore(task, person, submission, submission.getSubmittedBy(), "PREPARED", "OA 明确拒绝：" + receipt.errorCode());
-      audit.recordSystem(task, "PERSON_SUBMISSION_REJECTED", "PREPARED", "OPEN",
-          "OA 明确拒绝：" + receipt.errorCode(), message.requestId(), "TD-SUBMISSION-REJECT:" + submission.getId());
-      return;
-    }
-    var result = receipt.result();
-    for (String field : Set.of("taskId", "quoteTaskId", "recipientId", "submissionId", "quoteSubmissionId", "documentId", "technicalVersionId", "round", "externalTaskId",
-        "externalFlowId", "assigneeExternalId", "operatorExternalId", "contentFingerprint", "moduleTypes", "leaderExternalId", "technicalDataReady")) {
-      if (!result.hasNonNull(field) || !expected.path(field).equals(result.path(field))) {
-        throw new OaDeliveryUnknownException("OA 提交回执的 " + field + " 与本人冻结提交不一致");
-      }
-    }
-    var product = products.lockProduct(submission.getProductId()).orElseThrow();
-    var version = versions.verified(submission.getTechnicalVersionId(), product.getId());
-    versions.transition(version, "SUBMITTED", submission.getSubmittedBy());
-    versions.state(product, person, version.getId(), "SUBMITTED");
-    workflow.acceptSubmission(submission.getId(), result.path("externalFlowId").asText());
-    recipients.state(person.id(), submission.getId(), "PREPARED", "SUBMITTED", null);
-    recipients.refreshTask(task.getId());
-    messages.resumeWorkflowEvents(message.peer(), task.getId());
-    audit.recordSystem(task, "PERSON_SUBMISSION_CONFIRMED", "PREPARED", "SUBMITTED",
-        "OA 已受理" + person.name() + "负责模块，交其部门领导审批", message.requestId(), "TD-SUBMISSION-CONFIRMED:" + submission.getId());
-  }
-
   /** 主动通知已证明OA受理：冻结快照已存在时，无须等待丢失的同步回执。 */
   public void confirmFromNotification(QuoteTechTask task, QuoteTechSubmission submission) {
     var person = requireCurrent(task, submission);
@@ -95,7 +60,7 @@ public class TechnicalDataOaSubmissionLifecycle {
     workflow.decision(submission.getId(), "APPROVED", messageId);
     var approved = versions.transition(version, "APPROVED", operator.userId());
     versions.state(product, person, version.getId(), "APPROVED");
-    if (person.modules().contains("PRICE")) prices.publish(task, product, approved);
+    if (person.processingModules().contains("PRICE")) prices.publish(task, product, approved);
     recipients.state(person.id(), submission.getId(), "SUBMITTED", "DONE", null);
     recipients.refreshTask(task.getId());
     versions.activate(product, operator.userId());
@@ -124,11 +89,12 @@ public class TechnicalDataOaSubmissionLifecycle {
 
   private void restore(QuoteTechTask task, Recipient person, QuoteTechSubmission submission, long operator, String from, String reason) {
     var product = products.lockProduct(submission.getProductId()).orElseThrow();
-    // OA 已确认退回：同一事务先恢复人员办理状态，再迁入新草稿。
-    // 旧数据库仍以任务汇总状态保护已提交模块，不能在 APPROVED/SUBMITTED 状态下更换编辑版本。
+    // OA 已确认退回：同一事务先恢复人员办理状态，再恢复选中板块到当前草稿。
+    // 旧数据库仍以任务汇总状态保护已提交模块，不能在 APPROVED/SUBMITTED 状态下恢复编辑内容。
     recipients.state(person.id(), submission.getId(), from, "OPEN", reason);
     recipients.refreshTask(task.getId());
-    versions.restore(product, person, submission.getTechnicalVersionId(), operator);
+    if ("RETURN_PENDING".equals(from)) versions.restoreApproved(product, person, operator);
+    else versions.restore(product, person, submission.getTechnicalVersionId(), operator);
     workflow.invalidateFinance(task.getOaFlowId());
   }
 

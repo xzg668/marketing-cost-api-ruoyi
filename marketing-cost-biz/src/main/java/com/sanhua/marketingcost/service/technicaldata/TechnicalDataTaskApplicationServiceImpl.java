@@ -7,7 +7,6 @@ import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataProfileResponse;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataProductResponse;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskPublishRequest;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskPublishResponse;
-import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskPrepareRequest;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskResponse;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataWorkbenchPageResponse;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataWorkbenchRowResponse;
@@ -30,7 +29,6 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
-import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -40,19 +38,21 @@ import org.springframework.util.StringUtils;
 public class TechnicalDataTaskApplicationServiceImpl
     implements TechnicalDataTaskApplicationService {
   private static final Set<String> TASK_STATUSES = Set.of(
-      "UNASSIGNED", "PENDING", "IN_PROGRESS", "PREPARED", "SUBMITTED", "PARTIALLY_RETURNED", "APPROVED", "CANCELLED");
+      "UNASSIGNED", "PENDING", "IN_PROGRESS", "PREPARED", "SUBMITTED", "RETURN_PENDING", "PARTIALLY_RETURNED", "APPROVED", "CANCELLED");
 
   private com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy oaWorkflowAccess;
   @org.springframework.beans.factory.annotation.Autowired
   public void setOaWorkflowAccess(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy policy) { this.oaWorkflowAccess=policy; }
   private final TechnicalDataTaskRepository repository;
+  private final TechnicalDataReadPolicy readPolicy;
   private final TechnicalDataModuleRequirementEvaluator requirementEvaluator;
   private final TechnicalDataSourceSnapshotFactory snapshotFactory;
   private final TransactionTemplate transactionTemplate;
   private final TechnicalDataQuoteSourceReader sourceReader;
   private final TechnicalDataAssigneeResolver assigneeResolver;
   private final TechnicalDataVersionContentCodec contentCodec;
-  private final TechnicalDataOaIntegrationService oaIntegration;
+  private final TechnicalDataOaDispatchService oaDispatch;
+  private final com.sanhua.marketingcost.integration.oa.OaMessageCodec messageCodec;
   private final TechnicalDataRequirementRefreshService requirementRefresh;
   private final TechnicalDataPendingProductQuery pendingProducts;
 
@@ -63,14 +63,18 @@ public class TechnicalDataTaskApplicationServiceImpl
       PlatformTransactionManager transactionManager,
       TechnicalDataQuoteSourceReader sourceReader,
       TechnicalDataAssigneeResolver assigneeResolver,
-      TechnicalDataVersionContentCodec contentCodec, TechnicalDataOaIntegrationService oaIntegration,
-      TechnicalDataRequirementRefreshService requirementRefresh, TechnicalDataPendingProductQuery pendingProducts) {
+      TechnicalDataVersionContentCodec contentCodec, TechnicalDataOaDispatchService oaDispatch,
+      com.sanhua.marketingcost.integration.oa.OaMessageCodec messageCodec,
+      TechnicalDataRequirementRefreshService requirementRefresh, TechnicalDataPendingProductQuery pendingProducts,
+      TechnicalDataReadPolicy readPolicy) {
+    this.readPolicy=readPolicy;
     this.pendingProducts = pendingProducts;
     this.repository = repository;
     this.sourceReader = sourceReader;
     this.assigneeResolver = assigneeResolver;
     this.contentCodec = contentCodec;
-    this.oaIntegration = oaIntegration;
+    this.oaDispatch = oaDispatch;
+    this.messageCodec = messageCodec;
     this.requirementRefresh = requirementRefresh;
     this.requirementEvaluator = requirementEvaluator;
     this.snapshotFactory = snapshotFactory;
@@ -80,73 +84,15 @@ public class TechnicalDataTaskApplicationServiceImpl
   }
 
   @Override
-  public TechnicalDataTaskResponse prepare(
-      TechnicalDataTaskPrepareRequest request, TechnicalDataActor actor) {
-    TransientDataAccessException lastFailure = null;
-    for (int attempt = 1; attempt <= 3; attempt++) {
-      try {
-        return Objects.requireNonNull(
-            transactionTemplate.execute(status -> prepareInTransaction(request, actor)));
-      } catch (TransientDataAccessException exception) {
-        lastFailure = exception;
-      }
-    }
-    throw new TechnicalDataTaskException(
-        TechnicalDataTaskErrorCode.PERSISTENCE_CONFLICT,
-        "并发建立补录草稿连续3次发生数据库锁冲突，请重试："
-            + (lastFailure == null ? "UNKNOWN" : lastFailure.getClass().getSimpleName()));
-  }
-
-  private TechnicalDataTaskResponse prepareInTransaction(
-      TechnicalDataTaskPrepareRequest request, TechnicalDataActor actor) {
-    requireActor(actor);
-    if (!actor.canViewSupplementOverview()) {
-      throw forbidden("仅报价员或管理员可在分派前检查和补录资料");
-    }
-    PrepareCommand command = normalize(request);
-    var source = sourceReader.readChecked(command.itemId(), command.accountingMonth());
-    oaWorkflowAccess.requireCosting(source.product().oaFormId());
-    requireCurrentCheck(command.checkFingerprint(), source, "进入补录");
-    requireSupplementGap(source);
-
-    QuoteTechTask task = repository.lockActiveTask(
-        command.itemId(), command.accountingMonth()).orElse(null);
-    if (task != null) {
-      requireSameContext(task, source.product());
-      return assemble(task);
-    }
-
-    task = repository.upsertActiveTask(newTask(
-        command.requestId(), command.accountingMonth(), null, source.product(), null, actor));
-    requireSameContext(task, source.product());
-    var snapshot = snapshotFactory.create(source.product());
-    QuoteTechProduct product = repository.upsertActiveProduct(newProduct(task, source.product(), snapshot));
-    if (!Objects.equals(product.getTaskId(), task.getId())
-        || !Objects.equals(product.getSourceFingerprint(), snapshot.fingerprint())) {
-      throw error(TechnicalDataTaskErrorCode.ACTIVE_PRODUCT_CONFLICT, "产品行已被其他活动任务占用");
-    }
-    for (var requirement : source.check().modules()) {
-      repository.upsertModule(newModule(product, requirement));
-    }
-    return assemble(repository.findTask(task.getId()).orElseThrow());
-  }
-
-  @Override
   public TechnicalDataTaskPublishResponse publish(
       TechnicalDataTaskPublishRequest request, TechnicalDataActor actor) {
-    TransientDataAccessException lastFailure = null;
-    for (int attempt = 1; attempt <= 3; attempt++) {
-      try {
-        return Objects.requireNonNull(
-            transactionTemplate.execute(status -> publishInTransaction(request, actor)));
-      } catch (TransientDataAccessException exception) {
-        lastFailure = exception;
-      }
-    }
-    throw new TechnicalDataTaskException(
-        TechnicalDataTaskErrorCode.PERSISTENCE_CONFLICT,
-        "并发发布技术资料任务连续3次发生数据库锁冲突，请重试："
-            + (lastFailure == null ? "UNKNOWN" : lastFailure.getClass().getSimpleName()));
+    // 仅准备事务可在并发冲突后重试；OA 写调用始终在提交事务外且只发送一次。
+    TechnicalDataTaskPublishResponse prepared = Objects.requireNonNull(
+        transactionTemplate.execute(status -> publishInTransaction(request, actor)));
+    var batch = oaDispatch.deliver(prepared.batchId());
+    return new TechnicalDataTaskPublishResponse(prepared.requestId(), prepared.items().stream()
+        .map(item -> new TechnicalDataTaskPublishResponse.Item(item.oaFormItemId(), item.action(),
+            detail(item.task().id(), actor))).toList(), batch.id(), batch.result());
   }
 
   private TechnicalDataTaskPublishResponse publishInTransaction(
@@ -155,7 +101,17 @@ public class TechnicalDataTaskApplicationServiceImpl
     if (!actor.canPublish()) throw forbidden("当前用户无权发布技术资料任务");
     if (actor.shortSession()) throw forbidden("短时任务会话不能批量分派产品");
     Command command = normalize(request);
+    String fingerprint = messageCodec.canonicalHash(request);
+    var replay = oaDispatch.replay(command.requestId(), fingerprint, actor);
+    if (replay != null) {
+      var items = oaDispatch.taskIds(replay.id()).stream().map(id -> {
+        var task = repository.findTask(id).orElseThrow();
+        return new TechnicalDataTaskPublishResponse.Item(task.getOaFormItemId(), "REPLAY", assemble(task, actor));
+      }).toList();
+      return new TechnicalDataTaskPublishResponse(command.requestId(), items, replay.id(), replay.result());
+    }
     SysUser assignee = assigneeResolver.resolve(command.assigneeUserId());
+    List<QuoteTechTask> selected = new ArrayList<>();
     List<TechnicalDataTaskPublishResponse.Item> results = new ArrayList<>();
     // 一个本地事务：某项归属或数据校验失败时整批回滚，调用方不会遇到半批成功。
     for (Long itemId : command.itemIds()) {
@@ -193,11 +149,13 @@ public class TechnicalDataTaskApplicationServiceImpl
           requireSameAssignment(task, command, source.product());
         }
       }
-      oaIntegration.queueDispatch(task, command.assigneeUserId(), request.getModuleAssignees(), actor);
+      selected.add(task);
       results.add(new TechnicalDataTaskPublishResponse.Item(itemId, action,
-          assemble(repository.findTask(task.getId()).orElseThrow())));
+          assemble(repository.findTask(task.getId()).orElseThrow(), actor)));
     }
-    return new TechnicalDataTaskPublishResponse(command.requestId(), results);
+    String batchId = oaDispatch.prepare(selected, command.assigneeUserId(), request.getModuleAssignees(),
+        command.requestId(), fingerprint, actor);
+    return new TechnicalDataTaskPublishResponse(command.requestId(), results, batchId, null);
   }
 
   @Override
@@ -208,12 +166,14 @@ public class TechnicalDataTaskApplicationServiceImpl
       String taskStatus,
       String accountingMonth,
       String keyword,
+      String oaNo,
       TechnicalDataActor actor) {
     requireActor(actor);
     if (!actor.technician() && !actor.canEdit() && !actor.canViewSupplementOverview()) throw forbidden("当前用户无权查看技术资料工作台");
     if (actor.shortSession()) throw forbidden("短时任务会话不允许查询工作台列表");
     if (current <= 0) throw invalid("current必须大于0");
     if (size <= 0 || size > 100) throw invalid("size必须在1到100之间");
+    oaNo = text("oaNo", oaNo, 128, false);
     String status = normalizeStatus(taskStatus);
     String month = StringUtils.hasText(accountingMonth) ? month(accountingMonth) : null;
     String search = text("keyword", keyword, 255, false);
@@ -221,20 +181,20 @@ public class TechnicalDataTaskApplicationServiceImpl
     String businessUnitType = BusinessUnitContext.getCurrentBusinessUnitType();
     if ("FINANCE".equals(accessMode) && businessUnitType == null) throw forbidden("未确定当前业务单元");
     int offset = (current - 1) * size;
-    long unassigned = pendingProducts.count(accessMode, businessUnitType, month, search);
+    long unassigned = pendingProducts.count(accessMode, businessUnitType, month, search, oaNo);
     long pendingCount = status == null || "UNASSIGNED".equals(status) ? unassigned : 0;
-    long taskCount = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, status, month, search);
+    long taskCount = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, status, month, search, oaNo);
     long total = pendingCount + taskCount;
     List<TechnicalDataWorkbenchRowResponse> records = new ArrayList<>();
-    if (offset < pendingCount) records.addAll(pendingProducts.page(accessMode, businessUnitType, month, search, offset, size));
+    if (offset < pendingCount) records.addAll(pendingProducts.page(accessMode, businessUnitType, month, search, oaNo, offset, size));
     int taskOffset = (int) Math.max(0, offset - pendingCount);
     List<QuoteTechProduct> products = records.size() == size || taskCount == 0 ? List.of()
         : repository.findAccessibleProductPage(accessMode, actor.userId(), businessUnitType,
-            status, month, search, taskOffset, size - records.size());
+            status, month, search, oaNo, taskOffset, size - records.size());
     Map<Long, QuoteTechTask> tasks = repository.findTasks(products.stream()
             .map(QuoteTechProduct::getTaskId).distinct().toList()).stream()
         .collect(Collectors.toMap(QuoteTechTask::getId, Function.identity()));
-    Map<Long, TechnicalDataProductResponse> responses = assembleProducts(products);
+    Map<Long, TechnicalDataProductResponse> responses = assembleProducts(products, actor);
     Map<Long, List<QuoteTechModule>> modules = repository.findModules(products.stream().map(QuoteTechProduct::getId).toList())
         .stream().collect(Collectors.groupingBy(QuoteTechModule::getProductId));
     records.addAll(products.stream()
@@ -247,7 +207,7 @@ public class TechnicalDataTaskApplicationServiceImpl
           }
           return new TechnicalDataWorkbenchRowResponse(
               task.getId(), task.getTaskNo(), task.getOaNo(), task.getAccountingMonth(),
-              task.getAssigneeUserId(), task.getAssigneeName(), task.getTaskStatus(),
+              task.getAssigneeUserId(), task.getAssigneeName(), visibleTaskStatus(task, List.of(responses.get(product.getId())), actor),
               task.getTaskVersion(), task.getReviewRound(), task.getDueAt(),
               actor.assignedModules(task, modules.getOrDefault(product.getId(), List.of())),
               modules.getOrDefault(product.getId(), List.of()).stream()
@@ -256,16 +216,16 @@ public class TechnicalDataTaskApplicationServiceImpl
         })
         .toList());
     // 统计遵循月份、关键字和权限范围，不受当前页或状态筛选影响。
-    long allTasks = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, null, month, search);
+    long allTasks = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, null, month, search, oaNo);
     long unassignedTasks = repository.countAccessibleProducts(
-        accessMode, actor.userId(), businessUnitType, "UNASSIGNED", month, search);
+        accessMode, actor.userId(), businessUnitType, "UNASSIGNED", month, search, oaNo);
     long pending = unassigned + unassignedTasks;
-    for (String pendingStatus : List.of("PENDING", "IN_PROGRESS", "PARTIALLY_RETURNED")) {
-      pending += repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, pendingStatus, month, search);
+    for (String pendingStatus : List.of("PENDING", "IN_PROGRESS", "RETURN_PENDING", "PARTIALLY_RETURNED")) {
+      pending += repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, pendingStatus, month, search, oaNo);
     }
-    long approving = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, "PREPARED", month, search)
-        + repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, "SUBMITTED", month, search);
-    long approved = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, "APPROVED", month, search);
+    long approving = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, "PREPARED", month, search, oaNo)
+        + repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, "SUBMITTED", month, search, oaNo);
+    long approved = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, "APPROVED", month, search, oaNo);
     var summary = new TechnicalDataWorkbenchPageResponse.Summary(
         allTasks + unassigned, pending, approving, approved, unassigned + unassignedTasks);
     return new TechnicalDataWorkbenchPageResponse(total, current, size, actor.canViewSupplementOverview(), summary, records);
@@ -281,7 +241,7 @@ public class TechnicalDataTaskApplicationServiceImpl
     var modules = repository.findModules(repository.findProducts(taskId).stream()
         .map(QuoteTechProduct::getId).toList());
     if (!actor.canReadTask(task, modules)) throw forbidden("只能查看本人参与或本人审核的技术资料任务");
-    return assemble(task);
+    return assemble(task, actor);
   }
 
   private QuoteTechTask newTask(
@@ -383,19 +343,6 @@ public class TechnicalDataTaskApplicationServiceImpl
         request.getDueAt(), itemIds.stream().sorted().toList());
   }
 
-  private PrepareCommand normalize(TechnicalDataTaskPrepareRequest request) {
-    if (request == null) throw invalid("请求不能为空");
-    if (!request.getUnknownFields().isEmpty()) {
-      throw invalid("请求包含来源只读字段或未知字段：" + String.join(",", request.getUnknownFields().keySet()));
-    }
-    String fingerprint = text("checkFingerprint", request.getCheckFingerprint(), 64, true);
-    if (!fingerprint.matches("[a-f0-9]{64}")) throw invalid("checkFingerprint格式无效");
-    return new PrepareCommand(
-        text("requestId", request.getRequestId(), 128, true),
-        month(request.getAccountingMonth()),
-        positive("oaFormItemId", request.getOaFormItemId()),
-        fingerprint);
-  }
 
   private void requireCurrentCheck(
       String expectedFingerprint,
@@ -436,87 +383,106 @@ public class TechnicalDataTaskApplicationServiceImpl
     }
   }
 
-  private TechnicalDataTaskResponse assemble(QuoteTechTask task) {
+  @Override
+  public TechnicalDataTaskResponse submittedDetail(com.sanhua.marketingcost.entity.QuoteTechSubmission submission,
+      TechnicalDataActor actor) {
+    var task=repository.findTask(submission.getTaskId()).orElseThrow();
+    if (!actor.canReadTask(task,repository.findModules(submission.getProductId()))
+        || submission.getSentAt()==null) throw forbidden("只能查看已提交的资料");
+    return assemble(task,actor,submission);
+  }
+
+  private TechnicalDataTaskResponse assemble(QuoteTechTask task, TechnicalDataActor actor) {
+    return assemble(task,actor,null);
+  }
+
+  private TechnicalDataTaskResponse assemble(QuoteTechTask task, TechnicalDataActor actor,
+      com.sanhua.marketingcost.entity.QuoteTechSubmission submission) {
     List<QuoteTechProduct> products = repository.findProducts(task.getId());
-    Map<Long, TechnicalDataProductResponse> responses = assembleProducts(products);
+    Map<Long, TechnicalDataProductResponse> responses = assembleProducts(products, actor, submission);
     List<TechnicalDataProductResponse> productResponses = products.stream()
         .map(product -> responses.get(product.getId()))
         .toList();
     return new TechnicalDataTaskResponse(
         task.getId(), task.getTaskNo(), task.getOaFormId(), task.getOaNo(),
         task.getAccountingMonth(), task.getBusinessUnitType(), task.getApplicableOrgCode(),
-        task.getAssigneeUserId(), task.getAssigneeName(), task.getTaskStatus(), task.getTaskVersion(),
+        task.getAssigneeUserId(), task.getAssigneeName(), visibleTaskStatus(task, productResponses, actor), task.getTaskVersion(),
         task.getReviewRound(), task.getReviewStatus(), task.getSourceSystem(),
         task.getSourceRequestId(), task.getExternalSystem(), task.getExternalTaskId(),
         task.getExternalTaskStatus(), task.getExternalCallbackSeq(), task.getExternalLastSyncAt(),
         task.getExternalRetryCount(), task.getExternalNextRetryAt(), task.getExternalLastError(),
-        task.getProxyOperatorUserId(), task.getProxyOperatorName(), task.getProxyReason(),
-        task.getProxyStartedAt(), task.getDueAt(),
+        task.getDueAt(),
         task.getSubmissionFingerprint(), task.getSubmittedAt(),
         task.getCreatedAt(), task.getUpdatedAt(), productResponses);
   }
 
   private Map<Long, TechnicalDataProductResponse> assembleProducts(
-      List<QuoteTechProduct> products) {
-    List<Long> productIds = products.stream().map(QuoteTechProduct::getId).toList();
-    Map<Long, List<QuoteTechModule>> modules = repository.findModules(productIds).stream()
-        .collect(Collectors.groupingBy(
-            QuoteTechModule::getProductId, LinkedHashMap::new, Collectors.toList()));
-    List<Long> displayVersionIds = new ArrayList<>();
-    products.stream().map(this::displayVersionId).filter(Objects::nonNull)
-        .forEach(displayVersionIds::add);
-    modules.values().stream().flatMap(List::stream)
-        .map(QuoteTechModule::getCurrentVersionId).filter(Objects::nonNull)
-        .forEach(displayVersionIds::add);
-    Map<Long, QuoteTechDataVersion> versions = repository.findVersions(
-            displayVersionIds.stream().distinct().toList()).stream()
-        .collect(Collectors.toMap(QuoteTechDataVersion::getId, Function.identity()));
-    return products.stream()
-        .collect(Collectors.toMap(QuoteTechProduct::getId, product -> {
-          List<QuoteTechModule> productModules = modules.getOrDefault(product.getId(), List.of());
-          Long profileVersionId = productModules.stream()
-              .filter(module -> "PROFILE".equals(module.getModuleType()))
-              .map(QuoteTechModule::getCurrentVersionId).filter(Objects::nonNull)
-              .findFirst().orElse(displayVersionId(product));
-          for (QuoteTechModule module : productModules) {
-            requireOwnedDisplayVersion(product, module.getCurrentVersionId(), versions);
+      List<QuoteTechProduct> products, TechnicalDataActor actor) {
+    return assembleProducts(products,actor,null);
+  }
+
+  private Map<Long, TechnicalDataProductResponse> assembleProducts(
+      List<QuoteTechProduct> products, TechnicalDataActor actor,
+      com.sanhua.marketingcost.entity.QuoteTechSubmission submission) {
+    Set<String> submittedTypes=new java.util.HashSet<>();
+    if (submission!=null) messageCodec.read(submission.getModuleTypesJson()).forEach(node -> submittedTypes.add(node.asText()));
+    Map<Long,TechnicalDataProductResponse> result=new LinkedHashMap<>();
+    for (var product:products) {
+      var modules=repository.findModules(product.getId()).stream()
+          .filter(module -> submission==null || submittedTypes.contains(module.getModuleType())).toList();
+      Map<String,QuoteTechDataVersion> visible=new LinkedHashMap<>();
+      for (var module:modules) {
+        Long id=submission==null ? readPolicy.readVersion(product,module,actor,null) : submission.getTechnicalVersionId();
+        if (submission!=null) readPolicy.projectReadOnly(module,id);
+        if (id!=null) {
+          var versions=repository.findVersions(List.of(id));
+          if (versions.isEmpty() || !Objects.equals(versions.getFirst().getProductId(),product.getId())) {
+            throw error(TechnicalDataTaskErrorCode.PERSISTENCE_CONFLICT,"模块版本不存在或不属于当前产品");
           }
-          requireOwnedDisplayVersion(product, profileVersionId, versions);
-          return product(product, versions.get(profileVersionId), productModules);
-        }, (left, right) -> left, LinkedHashMap::new));
-  }
-
-  private Long displayVersionId(QuoteTechProduct product) {
-    if (product.getCurrentEditVersionId() != null) return product.getCurrentEditVersionId();
-    if (product.getLatestSubmittedVersionId() != null) return product.getLatestSubmittedVersionId();
-    return product.getEffectiveVersionId();
-  }
-
-  private void requireOwnedDisplayVersion(
-      QuoteTechProduct product, Long versionId, Map<Long, QuoteTechDataVersion> versions) {
-    if (versionId == null) return;
-    QuoteTechDataVersion version = versions.get(versionId);
-    if (version == null || !Objects.equals(version.getProductId(), product.getId())) {
-      throw error(TechnicalDataTaskErrorCode.PERSISTENCE_CONFLICT, "产品版本引用不存在或归属错误");
+          visible.put(module.getModuleType(),versions.getFirst());
+        }
+      }
+      var profileVersion=visible.get("PROFILE");
+      var source=snapshotFactory.readProfile(product.getSourceSnapshotJson());
+      var supplements=new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.SupplementSnapshot(
+          contentCodec.productFees(profileVersion),contentCodec.drawingBom(visible.get("DRAWING_BOM")),
+          contentCodec.manufacturing(visible.get("MANUFACTURING")),contentCodec.packaging(visible.get("PACKAGE")),
+          contentCodec.solder(visible.get("SOLDER")),contentCodec.netLoss(visible.get("NET_LOSS")),
+          contentCodec.prices(visible.get("PRICE")),null);
+      boolean ownDraft=submission==null && modules.stream().anyMatch(module -> readPolicy.ownsDraft(module,actor));
+      String state=ownDraft?product.getProductStatus():visible.isEmpty()?"PENDING":
+          visible.values().stream().allMatch(version -> "APPROVED".equals(version.getVersionStatus()))?"APPROVED":"SUBMITTED";
+      Long latest=visible.values().stream().filter(version -> !"DRAFT".equals(version.getVersionStatus()))
+          .map(QuoteTechDataVersion::getId).max(Long::compareTo).orElse(null);
+      result.put(product.getId(),new TechnicalDataProductResponse(
+          product.getId(),product.getOaFormItemId(),product.getLevelNo(),product.getMaterialNo(),product.getProductName(),
+          product.getSourceModel(),product.getSourceSpec(),source.annualVolume(),source.annualVolumeUnit(),
+          product.getQuoteNo(),product.getAccountingMonth(),product.getSourceSnapshotJson(),product.getSourceFingerprint(),
+          state,ownDraft?product.getCurrentEditVersionId():null,latest,product.getEffectiveVersionId(),
+          product.getRowVersion(),profile(product,profileVersion),modules.stream().sorted(Comparator.comparingInt(
+              module -> TechnicalDataModuleType.orderOf(module.getModuleType()))).map(this::module).toList(),
+          product.getContentSchemaVersion(),supplements));
     }
+    return result;
   }
 
-  private TechnicalDataProductResponse product(
-      QuoteTechProduct product,
-      QuoteTechDataVersion version,
-      List<QuoteTechModule> modules) {
-    var source = snapshotFactory.readProfile(product.getSourceSnapshotJson());
-    return new TechnicalDataProductResponse(
-        product.getId(), product.getOaFormItemId(), product.getLevelNo(),
-        product.getMaterialNo(), product.getProductName(), product.getSourceModel(),
-        product.getSourceSpec(), source.annualVolume(), source.annualVolumeUnit(), product.getQuoteNo(), product.getAccountingMonth(),
-        product.getSourceSnapshotJson(), product.getSourceFingerprint(),
-        product.getProductStatus(), product.getCurrentEditVersionId(),
-        product.getLatestSubmittedVersionId(), product.getEffectiveVersionId(),
-        product.getRowVersion(), profile(product, version),
-        modules.stream().sorted(Comparator.comparingInt(
-            item -> TechnicalDataModuleType.orderOf(item.getModuleType()))).map(this::module).toList(),
-        product.getContentSchemaVersion(), version == null ? null : contentCodec.supplementContent(version));
+  private String visibleTaskStatus(QuoteTechTask task, List<TechnicalDataProductResponse> products, TechnicalDataActor actor) {
+    if ("UNASSIGNED".equals(task.getTaskStatus())) return task.getTaskStatus();
+    if (!actor.canViewSupplementOverview()) {
+      var own = products.stream().flatMap(product -> product.modules().stream())
+          .filter(module -> module.required() && Objects.equals(module.assigneeUserId(), actor.userId()))
+          .map(TechnicalDataModuleResponse::moduleStatus).toList();
+      if (own.isEmpty()) return task.getTaskStatus();
+      if (own.stream().allMatch("APPROVED"::equals)) return "APPROVED";
+      if (own.stream().allMatch(state -> Set.of("SUBMITTED", "APPROVED").contains(state))) return "SUBMITTED";
+      if (own.contains("FROZEN")) return "PREPARED";
+      if (own.contains("RETURNED")) return "PARTIALLY_RETURNED";
+      if (own.stream().anyMatch(state -> Set.of("READY", "EDITING").contains(state))) return "IN_PROGRESS";
+      return "PENDING";
+    }
+    if (Set.of("RETURN_PENDING", "PARTIALLY_RETURNED").contains(task.getTaskStatus())) return task.getTaskStatus();
+    if (products.stream().allMatch(product -> "APPROVED".equals(product.productStatus()))) return "APPROVED";
+    return products.stream().anyMatch(product -> product.latestSubmittedVersionId()!=null)?"SUBMITTED":"PENDING";
   }
 
   private TechnicalDataProfileResponse profile(
@@ -604,6 +570,5 @@ public class TechnicalDataTaskApplicationServiceImpl
       String requestId, String accountingMonth, Long assigneeUserId,
       LocalDateTime dueAt, List<Long> itemIds) {}
 
-  private record PrepareCommand(
-      String requestId, String accountingMonth, Long itemId, String checkFingerprint) {}
+
 }

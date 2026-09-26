@@ -1,285 +1,78 @@
 package com.sanhua.marketingcost.service.impl;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-
-import com.baomidou.mybatisplus.core.MybatisConfiguration;
-import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
-import com.baomidou.mybatisplus.core.conditions.Wrapper;
-import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
-import com.sanhua.marketingcost.dto.MakePartPriceGenerateResponse;
-import com.sanhua.marketingcost.dto.priceprepare.MakePartPricePrepareResult;
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 import com.sanhua.marketingcost.dto.priceprepare.PricePreparePlanItem;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
-import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
-import com.sanhua.marketingcost.service.MakePartPriceCalculator;
 import com.sanhua.marketingcost.service.MakePartPriceGenerationService;
 import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import java.math.BigDecimal;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-import org.apache.ibatis.builder.MapperBuilderAssistant;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-
-import org.mockito.ArgumentCaptor;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class MakePartPricePrepareStrategyImplTest {
+  final MakePartPriceGenerationService generation = mock(MakePartPriceGenerationService.class);
+  final MakePartPricePrepareStrategyImpl service = new MakePartPricePrepareStrategyImpl(generation);
 
-  private MakePartPriceGenerationService generationService;
-  private MakePartPriceCalcRowMapper calcRowMapper;
-  private MakePartPricePrepareStrategyImpl strategy;
-
-  @BeforeAll
-  static void initTableInfo() {
-    TableInfoHelper.initTableInfo(
-        new MapperBuilderAssistant(new MybatisConfiguration(), ""), MakePartPriceCalcRow.class);
-  }
-
-  @BeforeEach
-  void setUp() {
-    generationService = mock(MakePartPriceGenerationService.class);
-    calcRowMapper = mock(MakePartPriceCalcRowMapper.class);
-    strategy = new MakePartPricePrepareStrategyImpl(generationService, calcRowMapper);
-  }
-
-  @Test
-  @DisplayName("自制件：每次价格准备都先触发生成，避免复用旧重量/旧价格结果")
-  void prepareRegeneratesBeforeReadingReadyResult() {
-    MakePartPriceGenerateResponse response =
-        new MakePartPriceGenerateResponse("BATCH-GEN", 1, 1, 1, 0, 0);
-    when(generationService.generateByOaMaterial(
-            "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", null, null))
-        .thenReturn(response);
-    when(calcRowMapper.selectList(any())).thenReturn(List.of(okRow(501L, "BATCH-GEN")));
-
-    MakePartPricePrepareResult result =
-        strategy.prepare("OA-001", "COMMERCIAL", "2026-05", planItem("MAKE-001"));
-
+  @Test void usesExactNodeResultAndMultipliesQuantityOnce() {
+    var item = item(); var ready = row("OK", "RAW", "SCRAP");
+    ready.setId(55L); ready.setPriceComplete(true); ready.setParentTotalCostPrice(new BigDecimal(".965"));
+    when(generation.calculateForBomRow(item.getBomRow(), null, null, true)).thenReturn(List.of(ready));
+    var result = service.prepare("OA", "COMMERCIAL", "2026-09", item);
     assertThat(result.getStatus()).isEqualTo("READY");
-    assertThat(result.getUnitPrice()).isEqualByComparingTo("18.60");
-    assertThat(result.getAmount()).isEqualByComparingTo("46.500");
-    assertThat(result.getPriceSource()).isEqualTo("自制件价格生成");
-    assertThat(result.getResultRefType()).isEqualTo("MAKE_PART_PRICE");
-    assertThat(result.getResultRefId()).isEqualTo(501L);
-    verify(generationService).generateByOaMaterial(
-        "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", null, null);
-    ArgumentCaptor<Wrapper<MakePartPriceCalcRow>> captor = ArgumentCaptor.forClass(Wrapper.class);
-    verify(calcRowMapper).selectList(captor.capture());
-    assertThat(captor.getValue().getCustomSqlSegment()).contains("calc_batch_id");
-    assertThat(paramValues(captor.getValue())).contains("BATCH-GEN");
+    assertThat(result.getUnitPrice()).isEqualByComparingTo(".965");
+    assertThat(result.getAmount()).isEqualByComparingTo("1.930");
+    verify(generation).calculateForBomRow(item.getBomRow(), null, null, true);
   }
 
-  @Test
-  @DisplayName("自制件：缺当期结果时触发按 OA 生成后写 READY")
-  void missingResultTriggersGeneration() {
-    MakePartPriceGenerateResponse response =
-        new MakePartPriceGenerateResponse("BATCH-GEN", 1, 1, 1, 0, 0);
-    when(generationService.generateByOaMaterial(
-            "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", null, null))
-        .thenReturn(response);
-    when(calcRowMapper.selectList(any())).thenReturn(List.of(okRow(502L, "BATCH-GEN")));
-
-    MakePartPricePrepareResult result =
-        strategy.prepare("OA-001", "COMMERCIAL", "2026-05", planItem("MAKE-001"));
-
-    assertThat(result.getStatus()).isEqualTo("READY");
-    assertThat(result.getResultRefId()).isEqualTo(502L);
-    assertThat(result.getMessage()).contains("已触发生成");
-    verify(generationService).generateByOaMaterial(
-        "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", null, null);
+  @Test void readonlyAndFinanceScenarioReachSameNodeWithExactContext() {
+    var item = item(); var ready = row("OK", "RAW", "SCRAP");
+    ready.setPriceComplete(true); ready.setParentTotalCostPrice(BigDecimal.ONE);
+    var time = LocalDateTime.of(2026,9,17,10,0);
+    var context = new PricePrepareScenarioContext(QuotePriceScenarioType.FINANCE_QUOTE_BASE, "GROUP", "PPR", Map.of("Cu",new BigDecimal("90")));
+    when(generation.calculateForBomRow(item.getBomRow(), time, context, false)).thenReturn(List.of(ready));
+    assertThat(service.calculate("OA", "COMMERCIAL", "2026-09", time, context, item).getStatus()).isEqualTo("READY");
+    verify(generation).calculateForBomRow(item.getBomRow(), time, context, false);
   }
 
-  @Test
-  @DisplayName("自制件：月度调价准备按 price_as_of_time 查询并触发生成")
-  void monthlyPrepareUsesPriceAsOfTime() {
-    LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 26, 10, 30);
-    MakePartPriceGenerateResponse response =
-        new MakePartPriceGenerateResponse("BATCH-GEN", 1, 1, 1, 0, 0);
-    when(generationService.generateByOaMaterial(
-            "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", priceAsOfTime, null))
-        .thenReturn(response);
-    MakePartPriceCalcRow ready = okRow(503L, "BATCH-GEN");
-    ready.setPriceAsOfTime(priceAsOfTime);
-    when(calcRowMapper.selectList(any())).thenReturn(List.of(ready));
-
-    MakePartPricePrepareResult result =
-        strategy.prepare("OA-001", "COMMERCIAL", "2026-05", priceAsOfTime, planItem("MAKE-001"));
-
-    assertThat(result.getStatus()).isEqualTo("READY");
-    assertThat(result.getResultRefId()).isEqualTo(503L);
-    verify(generationService).generateByOaMaterial(
-        "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", priceAsOfTime, null);
-    ArgumentCaptor<Wrapper<MakePartPriceCalcRow>> captor = ArgumentCaptor.forClass(Wrapper.class);
-    verify(calcRowMapper).selectList(captor.capture());
-    Wrapper<MakePartPriceCalcRow> firstQuery = captor.getAllValues().get(0);
-    assertThat(firstQuery.getCustomSqlSegment()).contains("price_as_of_time");
-    assertThat(paramValues(firstQuery)).contains(priceAsOfTime);
-  }
-
-  @Test
-  @DisplayName("财务场景触发独立制造件生成并只读取财务场景中间结果")
-  void financePrepareUsesIsolatedMakePartRows() {
-    LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 26, 10, 30);
-    PricePrepareScenarioContext context = new PricePrepareScenarioContext(
-        QuotePriceScenarioType.FINANCE_QUOTE_BASE,
-        "GROUP-1",
-        "PPR-OA-1",
-        Map.of("Cu", new BigDecimal("90")));
-    when(generationService.generateByOaMaterial(
-            "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", priceAsOfTime, context))
-        .thenReturn(new MakePartPriceGenerateResponse("BATCH-FIN", 1, 1, 1, 0, 0));
-    when(calcRowMapper.selectList(any())).thenReturn(List.of(okRow(504L, "BATCH-FIN")));
-
-    MakePartPricePrepareResult result = strategy.prepare(
-        "OA-001", "COMMERCIAL", "2026-05", priceAsOfTime, context, planItem("MAKE-001"));
-
-    assertThat(result.getStatus()).isEqualTo("READY");
-    verify(generationService).generateByOaMaterial(
-        "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", priceAsOfTime, context);
-    ArgumentCaptor<Wrapper<MakePartPriceCalcRow>> captor = ArgumentCaptor.forClass(Wrapper.class);
-    verify(calcRowMapper).selectList(captor.capture());
-    assertThat(captor.getValue().getCustomSqlSegment()).contains("price_scenario_type");
-    assertThat(paramValues(captor.getValue())).contains("FINANCE_QUOTE_BASE");
-  }
-
-  @Test
-  @DisplayName("自制件：缺原材料价格写 MISSING_PRICE 缺口")
-  void missingRawPriceWritesGap() {
-    MakePartPriceGenerateResponse response =
-        new MakePartPriceGenerateResponse("BATCH-MISS", 1, 1, 0, 0, 1);
-    when(generationService.generateByOaMaterial(
-            "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", null, null))
-        .thenReturn(response);
-    when(calcRowMapper.selectList(any()))
-        .thenReturn(List.of())
-        .thenReturn(List.of(row("BATCH-MISS", MakePartPriceCalculator.STATUS_MISSING_RAW_PRICE,
-            "RAW-001", null, "缺原材料价格")));
-
-    MakePartPricePrepareResult result =
-        strategy.prepare("OA-001", "COMMERCIAL", "2026-05", planItem("MAKE-001"));
-
-    assertThat(result.getStatus()).isEqualTo("MISSING_PRICE");
+  @ParameterizedTest
+  @CsvSource({"MISSING_RAW_PRICE,MISSING_PRICE,RAW", "MISSING_SCRAP_PRICE,MISSING_PRICE,SCRAP", "MISSING_WEIGHT,MISSING_STRUCTURE,RAW", "MISSING_SCRAP_MAPPING,MISSING_STRUCTURE,RAW", "MISSING_BOM,MISSING_STRUCTURE,MAKE"})
+  void identifiesActualMissingMaterial(String upstream, String status, String code) {
+    var item = item();
+    when(generation.calculateForBomRow(any(), any(), any(), eq(true))).thenReturn(List.of(row(upstream,"RAW","SCRAP")));
+    var result = service.prepare("OA", "COMMERCIAL", "2026-09", item);
+    assertThat(result.getStatus()).isEqualTo(status);
     assertThat(result.getGaps()).hasSize(1);
-    assertThat(result.getGaps().get(0).getGapType()).isEqualTo("MISSING_PRICE");
-    assertThat(result.getGaps().get(0).getGapMaterialCode()).isEqualTo("RAW-001");
-    assertThat(result.getGaps().get(0).getMaterialName()).isEqualTo("RAW-001-name");
-    assertThat(result.getGaps().get(0).getSourceTable()).isEqualTo("lp_make_part_price_gap_item");
+    assertThat(result.getGaps().getFirst().getGapMaterialCode()).isEqualTo(code);
   }
 
-  @Test
-  @DisplayName("自制件：缺废料价格写 MISSING_PRICE 缺口，指向废料料号")
-  void missingScrapPriceWritesGap() {
-    MakePartPriceGenerateResponse response =
-        new MakePartPriceGenerateResponse("BATCH-MISS", 1, 1, 0, 0, 1);
-    when(generationService.generateByOaMaterial(
-            "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", null, null))
-        .thenReturn(response);
-    when(calcRowMapper.selectList(any()))
-        .thenReturn(List.of())
-        .thenReturn(List.of(row("BATCH-MISS", MakePartPriceCalculator.STATUS_MISSING_SCRAP_PRICE,
-            "RAW-001", "SCRAP-001", "缺回收价格")));
-
-    MakePartPricePrepareResult result =
-        strategy.prepare("OA-001", "COMMERCIAL", "2026-05", planItem("MAKE-001"));
-
-    assertThat(result.getStatus()).isEqualTo("MISSING_PRICE");
-    assertThat(result.getGaps()).hasSize(1);
-    assertThat(result.getGaps().get(0).getGapMaterialCode()).isEqualTo("SCRAP-001");
-    assertThat(result.getGaps().get(0).getMaterialName()).isEqualTo("SCRAP-001-name");
-    assertThat(result.getGaps().get(0).getMessage()).contains("缺回收价格");
+  @Test void partialChildSuccessCannotHideOtherChildFailure() {
+    var good = row("OK", "RAW", "SCRAP"); good.setPriceComplete(true); good.setParentTotalCostPrice(BigDecimal.ONE);
+    when(generation.calculateForBomRow(any(), any(), any(), anyBoolean()))
+        .thenReturn(List.of(good,row("MISSING_RAW_PRICE","RAW2","SCRAP")));
+    assertThat(service.prepare("OA","COMMERCIAL","2026-09",item()).getStatus()).isEqualTo("MISSING_PRICE");
   }
 
-  @Test
-  @DisplayName("自制件：缺 BOM 写 MISSING_STRUCTURE 缺口")
-  void missingBomWritesStructureGap() {
-    MakePartPriceGenerateResponse response =
-        new MakePartPriceGenerateResponse("BATCH-BOM", 1, 1, 0, 0, 1);
-    when(generationService.generateByOaMaterial(
-            "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", null, null))
-        .thenReturn(response);
-    when(calcRowMapper.selectList(any()))
-        .thenReturn(List.of())
-        .thenReturn(List.of(row("BATCH-BOM", "MISSING_BOM", null, null, "缺 U9 直接子项")));
-
-    MakePartPricePrepareResult result =
-        strategy.prepare("OA-001", "COMMERCIAL", "2026-05", planItem("MAKE-001"));
-
-    assertThat(result.getStatus()).isEqualTo("MISSING_STRUCTURE");
-    assertThat(result.getGaps()).hasSize(1);
-    assertThat(result.getGaps().get(0).getGapType()).isEqualTo("MISSING_STRUCTURE");
-    assertThat(result.getGaps().get(0).getSourceTable()).isEqualTo("lp_bom_u9_source");
+  @Test void rejectsDifferentQuoteMonthBeforeCalculation() {
+    var item = item(); item.getBomRow().setPeriodMonth("2026-10");
+    assertThatThrownBy(() -> service.prepare("OA","COMMERCIAL","2026-09",item)).hasMessageContaining("不一致");
+    verifyNoInteractions(generation);
   }
 
-  @Test
-  @DisplayName("自制件：策略实现不读取旧 lp_make_part_spec 人工维护价")
-  void doesNotReferenceOldMakePartSpec() throws Exception {
-    String source = Files.readString(Path.of(
-        "src/main/java/com/sanhua/marketingcost/service/impl/MakePartPricePrepareStrategyImpl.java"));
-
-    assertThat(source).doesNotContain("lp_make_part_spec", "MakePartSpec", "raw_unit_price", "recycle_unit_price");
+  private PricePreparePlanItem item() {
+    var row = new BomCostingRow(); row.setId(1L); row.setOaFormItemId(2L); row.setOaNo("OA");
+    row.setPeriodMonth("2026-09"); row.setBusinessUnitType("COMMERCIAL"); row.setMaterialCode("MAKE"); row.setQtyPerTop(new BigDecimal("2"));
+    var item = new PricePreparePlanItem(); item.setBomRow(row); item.setBomRowId(1L); item.setMaterialCode("MAKE"); return item;
   }
 
-  private PricePreparePlanItem planItem(String materialCode) {
-    BomCostingRow row = new BomCostingRow();
-    row.setOaNo("OA-001");
-    row.setTopProductCode("TOP-001");
-    row.setMaterialCode(materialCode);
-    row.setMaterialName(materialCode + "-name");
-    row.setQtyPerTop(new BigDecimal("2.5"));
-    PricePreparePlanItem item = new PricePreparePlanItem();
-    item.setBomRow(row);
-    item.setTopProductCode(row.getTopProductCode());
-    item.setMaterialCode(materialCode);
-    item.setMaterialName(row.getMaterialName());
-    item.setItemType("MAKE_PART");
-    item.setStatus("READY");
-    return item;
-  }
-
-  private MakePartPriceCalcRow okRow(Long id, String calcBatchId) {
-    MakePartPriceCalcRow row = row(calcBatchId, MakePartPriceCalculator.STATUS_OK, "RAW-001", "SCRAP-001", "OK");
-    row.setId(id);
-    row.setPriceComplete(true);
-    row.setParentTotalCostPrice(new BigDecimal("18.60"));
-    return row;
-  }
-
-  private MakePartPriceCalcRow row(
-      String calcBatchId,
-      String status,
-      String childMaterialNo,
-      String scrapCode,
-      String remark) {
-    MakePartPriceCalcRow row = new MakePartPriceCalcRow();
-    row.setCalcBatchId(calcBatchId);
-    row.setOaNo("OA-001");
-    row.setBusinessUnitType("COMMERCIAL");
-    row.setPricingMonth("2026-05");
-    row.setParentMaterialNo("MAKE-001");
-    row.setParentMaterialName("MAKE-001-name");
-    row.setChildMaterialNo(childMaterialNo);
-    row.setChildMaterialName(childMaterialNo == null ? null : childMaterialNo + "-name");
-    row.setScrapCode(scrapCode);
-    row.setScrapName(scrapCode == null ? null : scrapCode + "-name");
-    row.setStatus(status);
-    row.setRemark(remark);
-    row.setPriceComplete(false);
-    return row;
-  }
-
-  private static List<Object> paramValues(Wrapper<MakePartPriceCalcRow> wrapper) {
-    AbstractWrapper<?, ?, ?> abstractWrapper = (AbstractWrapper<?, ?, ?>) wrapper;
-    return List.copyOf(abstractWrapper.getParamNameValuePairs().values());
+  private MakePartPriceCalcRow row(String status,String raw,String scrap) {
+    var row = new MakePartPriceCalcRow(); row.setStatus(status); row.setParentMaterialNo("MAKE"); row.setChildMaterialNo(raw); row.setScrapCode(scrap); return row;
   }
 }

@@ -217,7 +217,7 @@ class MarketFactorRangePriceEndToEndSampleTest {
         preparedItems, bomRows);
     QuotePricePreparePartItemProviderImpl preparedProvider =
         new QuotePricePreparePartItemProviderImpl(
-            prepareItemMapper, bomCostingRowMapper, materialMasterMapper);
+            prepareItemMapper, bomCostingRowMapper, materialMasterMapper, mock(com.sanhua.marketingcost.mapper.BomCostingRowSourceRefMapper.class));
     CostRunObjectCalcServiceImpl objectCalcService =
         new CostRunObjectCalcServiceImpl(
             partItemService,
@@ -454,7 +454,6 @@ class MarketFactorRangePriceEndToEndSampleTest {
         readinessService,
         versionNoGenerator,
         cuAdjustmentCalcService,
-        mock(com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate.class),
         workspaceService);
   }
 

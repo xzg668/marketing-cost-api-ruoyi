@@ -46,11 +46,6 @@ public class QuoteTechTask {
   private Integer externalRetryCount;
   private LocalDateTime externalNextRetryAt;
   private String externalLastError;
-  private Long proxyOperatorUserId;
-  private String proxyOperatorName;
-  private String proxyReason;
-  private String proxyRequestId;
-  private LocalDateTime proxyStartedAt;
   private LocalDateTime dueAt;
   private LocalDateTime submittedAt;
   private LocalDateTime approvedAt;

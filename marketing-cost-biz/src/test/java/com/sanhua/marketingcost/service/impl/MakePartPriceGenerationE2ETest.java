@@ -44,13 +44,13 @@ import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
 import com.sanhua.marketingcost.service.PackageComponentPriceService;
 import com.sanhua.marketingcost.service.pricing.MakePartPriceCalcResolver;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -151,7 +151,7 @@ class MakePartPriceGenerationE2ETest {
     assertThat(makeItem.getRemark())
         .contains("取自制造件价格生成结果")
         .contains("批次=")
-        .contains("价格月份=" + YearMonth.now());
+        .contains("价格月份=" + CostPricingPeriodUtils.currentPricingMonth());
   }
 
   @Test
@@ -238,14 +238,14 @@ class MakePartPriceGenerationE2ETest {
         new MakePartPriceCalculator(),
         mock(com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService.class),
         calcRowMapper,
-        mock(MakePartPriceGapItemMapper.class));
+        mock(MakePartPriceGapItemMapper.class), mock(com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.class));
   }
 
   private CostRunPartItemServiceImpl buildCostRunService(MakePartPriceCalcRowMapper calcRowMapper) {
     CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
     MaterialPriceRouterService routerService = mock(MaterialPriceRouterService.class);
     OaFormMapper oaFormMapper = mock(OaFormMapper.class);
-    LocalDate currentDate = LocalDate.now();
+    LocalDate currentDate = CostPricingPeriodUtils.currentPricingDate();
     OaForm form = new OaForm();
     form.setApplyDate(currentDate);
     when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(form);

@@ -8,7 +8,8 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import org.junit.jupiter.api.Test;
 
 class QuoteBomReuseKeyTest {
-  private final QuoteBomContextResolver resolver = new QuoteBomContextResolver();
+  private final QuoteBomContextResolver resolver = new QuoteBomContextResolver(
+      org.mockito.Mockito.mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class));
 
   @Test
   void itemCustomerMaterialNumberNeverTakesPrecedenceOverHeaderCustomer() {
@@ -70,6 +71,7 @@ class QuoteBomReuseKeyTest {
   private OaFormItem item(String materialNo, String customerCode, String packageMethod) {
     OaFormItem item = new OaFormItem();
     item.setMaterialNo(materialNo);
+    item.setProductName("电磁阀");
     item.setCustomerCode(customerCode);
     item.setPackageMethod(packageMethod);
     item.setBusinessUnitType("COMMERCIAL");

@@ -133,7 +133,7 @@ class CmsCostT17EndToEndIntegrationTest extends BomMapperTestBase {
         .isEqualByComparingTo("1.822700");
 
     List<CostRunCostItemDto> cmsAuxItems =
-        costItemService.buildAuxItems(Set.of(PRODUCT_CODE), 2026, BUSINESS_UNIT_TYPE).stream()
+        costItemService.buildAuxItems(Set.of(PRODUCT_CODE), "2026-09", BUSINESS_UNIT_TYPE).stream()
             .filter(item -> item.getCostCode() != null && item.getCostCode().startsWith("AUX_02"))
             .toList();
     assertThat(cmsAuxItems).extracting(CostRunCostItemDto::getCostCode)

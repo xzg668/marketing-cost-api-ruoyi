@@ -3,7 +3,8 @@ package com.sanhua.marketingcost.dto.technicaldata;
 import java.util.List;
 
 /** 一次批量请求的逐产品结果；每项都有独立任务和版本。 */
-public record TechnicalDataTaskPublishResponse(String requestId, List<Item> items) {
+public record TechnicalDataTaskPublishResponse(String requestId, List<Item> items, String batchId,
+    com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowResult oaResult) {
   public TechnicalDataTaskPublishResponse {
     items = List.copyOf(items);
   }

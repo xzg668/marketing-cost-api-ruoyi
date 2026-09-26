@@ -45,6 +45,12 @@ class PriceLinkedItemControllerTest {
     factorMonthlyPriceAdjustmentService = mock(FactorMonthlyPriceAdjustmentService.class);
     controller = new PriceLinkedItemController(
         priceLinkedItemService, factorMonthlyPriceAdjustmentService);
+    var dispatch=mock(com.sanhua.marketingcost.service.PriceLinkedImportDispatchService.class);
+    org.springframework.test.util.ReflectionTestUtils.setField(controller,"priceLinkedImportDispatchService",dispatch);
+    when(dispatch.confirm(any())).thenAnswer(invocation -> {
+      com.sanhua.marketingcost.dto.PriceLinkedImportCommand command=invocation.getArgument(0);
+      return priceLinkedItemService.importExcel(new java.io.ByteArrayInputStream(command.getFileBytes()),command.getPricingMonth(),command.isOverwriteManual(),command.getBusinessUnitType(),command.getSourceFileName(),command.getEffectiveStrategy(),command.getFormulaEffectiveDate(),command.getFactorPriceConflictStrategy());
+    });
   }
 
   @Test
@@ -99,7 +105,7 @@ class PriceLinkedItemControllerTest {
 
     CommonResult<PriceItemImportResponse> result =
         controller.importExcel(
-            file, "2026-02", "COMMERCIAL", false, null, "2026-02-01", "KEEP_EXISTING");
+            file, "2026-02", "COMMERCIAL", false, null, "2026-02-01", "KEEP_EXISTING",null,null,null,null);
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getBatchId()).isEqualTo("batch-uuid-lp-1");
@@ -127,7 +133,7 @@ class PriceLinkedItemControllerTest {
         new byte[]{1, 2, 3});
 
     CommonResult<PriceItemImportResponse> result =
-        controller.importExcel(file, "2026-02", "COMMERCIAL", false, "APPEND_ONLY", null, null);
+        controller.importExcel(file, "2026-02", "COMMERCIAL", false, "APPEND_ONLY", null, null,null,null,null,null);
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getFormulaEffectiveDate()).isEqualTo("2026-02-01");
@@ -159,7 +165,7 @@ class PriceLinkedItemControllerTest {
 
     CommonResult<PriceItemImportResponse> result =
         controller.importExcel(
-            file, "2026-02", "COMMERCIAL", true, "OVERRIDE_EFFECTIVE", "2026-02-01", "OVERWRITE");
+            file, "2026-02", "COMMERCIAL", true, "OVERRIDE_EFFECTIVE", "2026-02-01", "OVERWRITE",null,null,null,null);
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getSkipped()).isEqualTo(1);
@@ -176,7 +182,7 @@ class PriceLinkedItemControllerTest {
         new byte[0]);
 
     CommonResult<PriceItemImportResponse> result =
-        controller.importExcel(empty, "2026-02", "COMMERCIAL", false, null, null, null);
+        controller.importExcel(empty, "2026-02", "COMMERCIAL", false, null, null, null,null,null,null,null);
 
     assertThat(result.isSuccess()).isFalse();
     assertThat(result.getCode()).isEqualTo(GlobalErrorCodeConstants.BAD_REQUEST.getCode());
@@ -199,7 +205,7 @@ class PriceLinkedItemControllerTest {
 
     CommonResult<PriceItemImportResponse> result =
         controller.importExcel(
-            file, "2026-02", "COMMERCIAL", false, null, "bad-date", "KEEP_EXISTING");
+            file, "2026-02", "COMMERCIAL", false, null, "bad-date", "KEEP_EXISTING",null,null,null,null);
 
     assertThat(result.isSuccess()).isFalse();
     assertThat(result.getCode()).isEqualTo(GlobalErrorCodeConstants.BAD_REQUEST.getCode());

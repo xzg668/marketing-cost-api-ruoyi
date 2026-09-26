@@ -116,6 +116,24 @@ class PriceLinkedItemServiceImplNormalizeTest {
   }
 
   @Test
+  void publicMaintenanceCannotModifyOrDeleteApprovedSupplementalFormula() {
+    var approved = new PriceLinkedItem();
+    approved.setId(91L);
+    approved.setSourceKind("TECH_SUPPLEMENTAL");
+    approved.setFormulaExpr("[process_fee]");
+    when(itemMapper.selectById(91L)).thenReturn(approved);
+    var request = new PriceLinkedItemUpdateRequest();
+    request.setFormulaExpr("99");
+    assertThatThrownBy(() -> service.update(91L, request))
+        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("原补录任务");
+    assertThatThrownBy(() -> service.delete(91L))
+        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("原补录任务");
+    assertThat(approved.getFormulaExpr()).isEqualTo("[process_fee]");
+    verify(itemMapper, org.mockito.Mockito.times(2)).selectById(91L);
+    org.mockito.Mockito.verifyNoMoreInteractions(itemMapper);
+  }
+
+  @Test
   @DisplayName("create：中文公式 → DB 存 [code] 形式")
   void createNormalizesFormula() {
     PriceLinkedItemUpdateRequest req = new PriceLinkedItemUpdateRequest();

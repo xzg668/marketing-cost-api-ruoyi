@@ -38,7 +38,7 @@ class QuotePricePreparePartItemProviderImplTest {
     BomCostingRowMapper bomMapper = mock(BomCostingRowMapper.class);
     MaterialMasterMapper materialMasterMapper = mock(MaterialMasterMapper.class);
     QuotePricePreparePartItemProviderImpl provider =
-        new QuotePricePreparePartItemProviderImpl(itemMapper, bomMapper, materialMasterMapper);
+        new QuotePricePreparePartItemProviderImpl(itemMapper, bomMapper, materialMasterMapper, mock(com.sanhua.marketingcost.mapper.BomCostingRowSourceRefMapper.class));
     CostRunContext context = quoteContext();
     PricePrepareItem ready = prepareItem(
         801L, 901L, "301300339", "PEEK棒料", "READY", "固定价",
@@ -86,7 +86,7 @@ class QuotePricePreparePartItemProviderImplTest {
     PricePrepareItemMapper itemMapper = mock(PricePrepareItemMapper.class);
     QuotePricePreparePartItemProviderImpl provider =
         new QuotePricePreparePartItemProviderImpl(
-            itemMapper, mock(BomCostingRowMapper.class), mock(MaterialMasterMapper.class));
+            itemMapper, mock(BomCostingRowMapper.class), mock(MaterialMasterMapper.class), mock(com.sanhua.marketingcost.mapper.BomCostingRowSourceRefMapper.class));
     when(itemMapper.selectList(any())).thenReturn(List.of());
 
     assertThatThrownBy(() -> provider.listPreparedPartItems(quoteContext()))
@@ -101,7 +101,7 @@ class QuotePricePreparePartItemProviderImplTest {
         new QuotePricePreparePartItemProviderImpl(
             mock(PricePrepareItemMapper.class),
             mock(BomCostingRowMapper.class),
-            mock(MaterialMasterMapper.class));
+            mock(MaterialMasterMapper.class), mock(com.sanhua.marketingcost.mapper.BomCostingRowSourceRefMapper.class));
     CostRunContext quote = quoteContext();
     CostRunContext withoutPrepare = quoteContext();
     withoutPrepare.setPricePrepareNo(null);

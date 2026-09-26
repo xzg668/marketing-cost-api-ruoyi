@@ -65,6 +65,7 @@ class MakePartPriceGenerationServiceImplTest {
   private MakePartPriceCalcRowMapper calcRowMapper;
   private MakePartPriceGapItemMapper gapItemMapper;
   private MakePartPriceGenerationServiceImpl service;
+  private com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs manufacturingInputs;
 
   @BeforeEach
   void setUp() {
@@ -81,6 +82,7 @@ class MakePartPriceGenerationServiceImplTest {
     when(materialPriceRouterService.listCandidates(any(), any(), any())).thenReturn(List.of());
     when(linkedPriceEnsureService.ensure(any())).thenReturn(new LinkedPriceEnsureResult());
     when(noScrapConfirmationService.findEffective(any(), any(), any())).thenReturn(null);
+    manufacturingInputs = mock(com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.class);
     service =
         new MakePartPriceGenerationServiceImpl(
             sourceDataService,
@@ -94,7 +96,76 @@ class MakePartPriceGenerationServiceImplTest {
             new MakePartPriceCalculator(),
             noScrapConfirmationService,
             calcRowMapper,
-            gapItemMapper);
+            gapItemMapper, manufacturingInputs);
+  }
+
+  @Test
+  void technicalNodeUsesApprovedWeightsAndGramPricesWithoutMasterWeightFallback() {
+    var parent = parent("MAKE-TECH");
+    parent.setId(501L); parent.setOaFormItemId(10L); parent.setPeriodMonth("2026-05");
+    parent.setBusinessUnitType("COMMERCIAL"); parent.setPath("/P/MAKE-TECH/");
+    var evidence = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.ManufacturingNodeEvidence(
+        "制造件", "DRAW", BigDecimal.ONE, new BigDecimal("10"), "g", "铜棒", "铜",
+        "MATCHED", List.of(new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.ManufacturingScrap("SCRAP", "废料", "克")));
+    var raw = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.RawMaterial(
+        "RAW:7", "7", 9L, "MAKE-TECH", "RAW", "DRAW-RAW", new BigDecimal(".01"), new BigDecimal("15"),
+        "克", null, new BigDecimal(".015"), new BigDecimal("120"), evidence);
+    when(manufacturingInputs.forParent(parent)).thenReturn(
+        new com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.Input(84L, parent.getPath(), raw));
+    when(sourceDataService.listDedupedChildren(eq("MAKE-TECH"), any(), eq("210"))).thenReturn(List.of());
+    var scrap = scrap("SCRAP"); scrap.setScrapUnit("克");
+    when(scrapMappingService.listMappings("RAW", "COMMERCIAL")).thenReturn(List.of(scrap));
+    when(priceResolveService.calculateMaterialUnitPrice(eq("RAW"), any(), any(), any(), any(), any(), any()))
+        .thenReturn(okPrice("RAW", ".066"));
+    when(priceResolveService.calculateMaterialUnitPrice(eq("SCRAP"), any(), any(), any(), any(), any(), any()))
+        .thenReturn(okPrice("SCRAP", ".005"));
+
+    var result = service.calculateForBomRow(parent, priceAsOf(), null, false).getFirst();
+
+    assertThat(result.getGrossWeightG()).isEqualByComparingTo("15");
+    assertThat(result.getNetWeightG()).isEqualByComparingTo("10");
+    assertThat(result.getRawUnitPrice()).isEqualByComparingTo("66");
+    assertThat(result.getScrapUnitPrice()).isEqualByComparingTo("5");
+    assertThat(result.getCostPrice()).isEqualByComparingTo(".965");
+    assertThat(result.getSourceCostingRowId()).isEqualTo(501L);
+    assertThat(result.getRemark()).contains("net_length_mm=120", "version=84", "node=7");
+    org.mockito.Mockito.verifyNoInteractions(weightService);
+    verify(calcRowMapper, never()).insert(any(MakePartPriceCalcRow.class));
+  }
+
+  @Test
+  void identicalMaterialAtDifferentNodesKeepsItsOwnRawMaterialAndWeights() {
+    var first = parent("MAKE"); first.setId(501L); first.setPath("/P/A/");
+    var second = parent("MAKE"); second.setId(502L); second.setPath("/P/B/");
+    for (var parent : List.of(first, second)) {
+      parent.setOaFormItemId(10L); parent.setPeriodMonth("2026-05"); parent.setBusinessUnitType("COMMERCIAL");
+      String rawCode = parent == first ? "RAW-A" : "RAW-B";
+      var gross = new BigDecimal(parent == first ? ".015" : ".020");
+      var evidence = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.ManufacturingNodeEvidence(
+          "制造件", "DRAW", BigDecimal.ONE, new BigDecimal("10"), "g", "铜棒", "铜", "MATCHED",
+          List.of(new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.ManufacturingScrap("SCRAP", "废料", "kg")));
+      var raw = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.RawMaterial(
+          rawCode, parent.getId().toString(), 9L, "MAKE", rawCode, "RAW-DRAW", new BigDecimal(".01"), gross,
+          "kg", null, gross, new BigDecimal("120"), evidence);
+      when(manufacturingInputs.forParent(parent)).thenReturn(
+          new com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.Input(84L, parent.getPath(), raw));
+      var scrap = scrap("SCRAP"); scrap.setScrapUnit("kg");
+      when(scrapMappingService.listMappings(rawCode, "COMMERCIAL")).thenReturn(List.of(scrap));
+      when(priceResolveService.calculateMaterialUnitPrice(eq(rawCode), any(), any(), any(), any(), any(), any()))
+          .thenReturn(okPrice(rawCode, "66"));
+    }
+    when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null)).thenReturn(List.of(first, second));
+    when(sourceDataService.listDedupedChildren(eq("MAKE"), any(), eq("210"))).thenReturn(List.of());
+    when(priceResolveService.calculateMaterialUnitPrice(eq("SCRAP"), any(), any(), any(), any(), any(), any()))
+        .thenReturn(okPrice("SCRAP", "5"));
+
+    var result = service.calculateRowsByOa("OA-001", "COMMERCIAL", "2026-05", priceAsOf(), null);
+
+    assertThat(result).extracting(MakePartPriceCalcRow::getSourceCostingRowId).containsExactly(501L, 502L);
+    assertThat(result).extracting(MakePartPriceCalcRow::getChildMaterialNo).containsExactly("RAW-A", "RAW-B");
+    assertThat(result.get(0).getParentTotalCostPrice()).isEqualByComparingTo(".965");
+    assertThat(result.get(1).getParentTotalCostPrice()).isEqualByComparingTo("1.270");
+    org.mockito.Mockito.verifyNoInteractions(weightService);
   }
 
   @Test

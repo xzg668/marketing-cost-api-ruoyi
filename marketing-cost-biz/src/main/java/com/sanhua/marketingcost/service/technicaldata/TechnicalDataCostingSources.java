@@ -184,8 +184,11 @@ public class TechnicalDataCostingSources {
       throw error(context, type, "TECH_DATA_TASK_NOT_APPROVED", "原补录尚未全部审批通过：" + label);
     }
     var flow = task.getOaFlowId() == null ? null : workflow.findFlow(task.getOaFlowId());
-    if (flow == null || !flow.financeReady() || flow.confirmedFingerprint() == null
-        || !flow.confirmedFingerprint().equals(json.canonicalHash(workflow.approvalBasis(flow.id())))) {
+    // 本单资料确认前须能检查已批准内容；成本发布另由整单 I06 门禁保护。
+    // 其他报价复用时仍要求原报价员已认可资料，避免把待退回内容当作公共有效依据。
+    if (!Objects.equals(task.getOaFormId(), context.oaFormId())
+        && (flow == null || !flow.financeReady() || flow.confirmedFingerprint() == null
+        || !flow.confirmedFingerprint().equals(json.canonicalHash(workflow.approvalBasis(flow.id()))))) {
       throw error(context, type, "TECH_DATA_FINANCE_CONFIRMATION_REQUIRED", "原补录尚未到财务节点并完成资料确认：" + label);
     }
     var version = repository.findVersion(product.getEffectiveVersionId()).orElseThrow();

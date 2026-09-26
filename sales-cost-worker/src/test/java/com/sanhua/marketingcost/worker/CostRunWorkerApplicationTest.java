@@ -2,9 +2,9 @@ package com.sanhua.marketingcost.worker;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.sanhua.marketingcost.config.ApprovedResultReuseProperties;
 import com.sanhua.marketingcost.config.ElectronicDrawingBomProperties;
-import com.sanhua.marketingcost.service.collaboration.CollaborationPortalLinkService;
+import com.sanhua.marketingcost.config.PasswordEncodingConfig;
+import com.sanhua.marketingcost.integration.oa.directory.OaPersonDirectorySyncScheduler;
 import com.sanhua.marketingcost.service.impl.BusinessUnitRepriceLockGuardImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceBatchServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceConfirmServiceImpl;
@@ -12,10 +12,12 @@ import com.sanhua.marketingcost.service.impl.MonthlyRepriceOperationServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceQueryServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceStartServiceImpl;
 import com.sanhua.marketingcost.service.impl.QuoteBatchCostRunServiceImpl;
+import com.sanhua.marketingcost.service.technicaldata.EffectiveTechnicalDataQueryServiceImpl;
+import com.sanhua.marketingcost.service.technicaldata.TechnicalDataVersionContentCodec;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
 import org.springframework.boot.WebApplicationType;
-import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.FilterType;
@@ -27,14 +29,6 @@ class CostRunWorkerApplicationTest {
   void workerApplicationDoesNotStartWebServer() {
     assertThat(CostRunWorkerApplication.buildApplication().getWebApplicationType())
         .isEqualTo(WebApplicationType.NONE);
-  }
-
-  @Test
-  void workerDoesNotCreateServletOnlyCollaborationPortalLinkService() {
-    new ApplicationContextRunner()
-        .withUserConfiguration(CollaborationPortalLinkService.class)
-        .run(context -> assertThat(context.getBeansOfType(CollaborationPortalLinkService.class))
-            .isEmpty());
   }
 
   @Test
@@ -59,18 +53,37 @@ class CostRunWorkerApplicationTest {
                   MonthlyRepriceOperationServiceImpl.class,
                   MonthlyRepriceQueryServiceImpl.class,
                   MonthlyRepriceStartServiceImpl.class,
-                  QuoteBatchCostRunServiceImpl.class);
+                  QuoteBatchCostRunServiceImpl.class,
+                  com.sanhua.marketingcost.integration.oa.OaWorkflowNotificationController.class,
+                  com.sanhua.marketingcost.integration.oa.OaWorkflowNotificationHandler.class,
+                  com.sanhua.marketingcost.integration.oa.OaWorkflowNotificationService.class);
+        })
+        .anySatisfy(filter -> {
+          assertThat(filter.type()).isEqualTo(FilterType.REGEX);
+          assertThat(filter.pattern())
+              .contains("com\\.sanhua\\.marketingcost\\.service\\.technicaldata\\..*");
         });
   }
 
   @Test
-  void workerApplicationImportsCollaborationConfigurationProperties() {
+  void workerApplicationImportsSharedBomConfigurationProperties() {
     Import annotation = CostRunWorkerApplication.class.getAnnotation(Import.class);
 
     assertThat(annotation.value())
         .contains(
             ElectronicDrawingBomProperties.class,
-            ApprovedResultReuseProperties.class);
+            EffectiveTechnicalDataQueryServiceImpl.class,
+            PasswordEncodingConfig.class,
+            TechnicalDataVersionContentCodec.class);
+  }
+
+  @Test
+  void oaDirectorySchedulerRunsOnlyInServletApiProcess() {
+    ConditionalOnWebApplication annotation =
+        OaPersonDirectorySyncScheduler.class.getAnnotation(ConditionalOnWebApplication.class);
+
+    assertThat(annotation).isNotNull();
+    assertThat(annotation.type()).isEqualTo(ConditionalOnWebApplication.Type.SERVLET);
   }
 
   @Test

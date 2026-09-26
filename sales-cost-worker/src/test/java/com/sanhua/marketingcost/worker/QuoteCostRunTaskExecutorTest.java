@@ -17,6 +17,12 @@ import org.junit.jupiter.api.Test;
 
 class QuoteCostRunTaskExecutorTest {
 
+  private ProductCostingPipeline pipeline(java.util.function.Function<ProductCostingRequest, ProductCostingResult> action) {
+    var pipeline = org.mockito.Mockito.mock(ProductCostingPipeline.class);
+    org.mockito.Mockito.when(pipeline.execute(org.mockito.ArgumentMatchers.any())).thenAnswer(call -> action.apply(call.getArgument(0)));
+    return pipeline;
+  }
+
   @AfterEach
   void clearSecurityContext() {
     org.springframework.security.core.context.SecurityContextHolder.clearContext();
@@ -27,10 +33,10 @@ class QuoteCostRunTaskExecutorTest {
   void quoteWorkerUsesUnifiedProductPipeline() {
     AtomicReference<ProductCostingRequest> captured = new AtomicReference<>();
     ProductCostingPipeline pipeline =
-        request -> {
+        pipeline(request -> {
           captured.set(request);
           return result("SUCCESS", "产品核算成功");
-        };
+        });
     QuoteCostRunTaskExecutor executor = new QuoteCostRunTaskExecutor(pipeline, new ObjectMapper());
 
     CostRunTaskExecutionResult execution = executor.execute(task(), "worker-1");
@@ -51,7 +57,7 @@ class QuoteCostRunTaskExecutorTest {
     AtomicReference<ProductCostingRequest> captured = new AtomicReference<>();
     AtomicReference<String> contextUsername = new AtomicReference<>();
     AtomicReference<String> contextBusinessUnit = new AtomicReference<>();
-    ProductCostingPipeline pipeline = request -> {
+    ProductCostingPipeline pipeline = pipeline(request -> {
       captured.set(request);
       contextUsername.set(
           org.springframework.security.core.context.SecurityContextHolder.getContext()
@@ -59,7 +65,7 @@ class QuoteCostRunTaskExecutorTest {
               .getName());
       contextBusinessUnit.set(BusinessUnitContext.getCurrentBusinessUnitType());
       return result("SUCCESS", "产品核算成功");
-    };
+    });
     QuoteCostRunTaskExecutor executor = new QuoteCostRunTaskExecutor(pipeline, new ObjectMapper());
     CostRunTask task = task();
     task.setRequestSnapshotJson("{\"submittedBy\":\"quote-user\"}");
@@ -81,11 +87,11 @@ class QuoteCostRunTaskExecutorTest {
   void blockedPipelineResultBecomesCollaborationSignal() {
     QuoteCostRunTaskExecutor executor =
         new QuoteCostRunTaskExecutor(
-            request -> result("BLOCKED", "缺少 3 项价格"), new ObjectMapper());
+            pipeline(request -> result("BLOCKED", "缺少 3 项价格")), new ObjectMapper());
 
     assertThatThrownBy(() -> executor.execute(task(), "worker-1"))
         .isInstanceOfSatisfying(
-            CostRunTaskCollaborationRequiredException.class,
+            CostRunTaskWaitingInputException.class,
             ex -> {
               assertThat(ex.getMessage()).isEqualTo("缺少 3 项价格");
               assertThat(ex.getResultSummaryJson()).contains("\"pipelineStatus\":\"BLOCKED\"");
@@ -96,7 +102,7 @@ class QuoteCostRunTaskExecutorTest {
   void failedPipelineResultCarriesExplicitRetryPolicy() {
     QuoteCostRunTaskExecutor executor =
         new QuoteCostRunTaskExecutor(
-            request -> result("FAILED", "价格服务超时"), new ObjectMapper());
+            pipeline(request -> result("FAILED", "价格服务超时")), new ObjectMapper());
 
     assertThatThrownBy(() -> executor.execute(task(), "worker-1"))
         .isInstanceOfSatisfying(
@@ -112,9 +118,9 @@ class QuoteCostRunTaskExecutorTest {
   void taskSecurityContextIsRestoredWhenPipelineThrows() {
     QuoteCostRunTaskExecutor executor =
         new QuoteCostRunTaskExecutor(
-            request -> {
+            pipeline(request -> {
               throw new IllegalStateException("流水线异常");
-            },
+            }),
             new ObjectMapper());
     CostRunTask task = task();
     task.setRequestSnapshotJson("{\"submittedBy\":\"quote-user\"}");

@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** 净损失率草稿、来源核验及本人提交边界，复用现有产品版本与审批。 */
 @Service
 public class TechnicalDataNetLossApplicationService {
+  private final TechnicalDataReadPolicy readPolicy;
   private final TechnicalDataSharedModules sharedModules;
   private final QuoteTechnicalDataRepository repository;
   private final TechnicalDataTaskRepository tasks;
@@ -30,7 +31,8 @@ public class TechnicalDataNetLossApplicationService {
 
   public TechnicalDataNetLossApplicationService(QuoteTechnicalDataRepository repository,
       TechnicalDataTaskRepository tasks, TechnicalDataVersionContentCodec codec,
-      TechnicalDataSourceSnapshotFactory snapshots, NetLossRateQuery sources, OaMessageCodec json, TechnicalDataSharedModules sharedModules) {
+      TechnicalDataSourceSnapshotFactory snapshots, NetLossRateQuery sources, OaMessageCodec json, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy) {
+    this.readPolicy=readPolicy;
     this.sharedModules = sharedModules;
     this.repository = repository; this.tasks = tasks; this.codec = codec; this.snapshots = snapshots;
     this.sources = sources; this.json = json;
@@ -39,9 +41,7 @@ public class TechnicalDataNetLossApplicationService {
   @Transactional(readOnly = true)
   public TechnicalDataNetLossResponse get(Long productId, Long versionId, TechnicalDataActor actor) {
     var scope = scope(productId, actor, null);
-    Long selected = versionId != null ? versionId
-        : Set.of("FROZEN", "SUBMITTED", "APPROVED").contains(scope.module().getModuleStatus())
-            ? scope.module().getCurrentVersionId() : scope.product().getCurrentEditVersionId();
+    Long selected = readPolicy.readVersion(scope.product(), scope.module(), actor, versionId);
     var version = selected == null ? null : repository.findVersion(selected).orElseThrow(() -> invalid("净损失率版本不存在"));
     if (version != null && !Objects.equals(version.getProductId(), productId)) throw forbidden("不能读取其他产品的净损失率版本");
     boolean historical = versionId != null || version != null && !"DRAFT".equals(version.getVersionStatus());

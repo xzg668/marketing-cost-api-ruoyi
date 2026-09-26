@@ -7,6 +7,7 @@ import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.dto.RollupPartComponentDto;
 import com.sanhua.marketingcost.entity.CostRunCostItem;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
 import com.sanhua.marketingcost.entity.CostRunTraceSnapshot;
@@ -75,8 +76,23 @@ class CostRunTraceSnapshotBuilderImplTest {
     when(linkedCalcMapper.selectById(9002L)).thenReturn(linkedCalc());
     when(linkedItemMapper.selectById(8002L)).thenReturn(linkedItem());
     when(fixedMapper.selectById(9001L)).thenReturn(fixedItem());
+    RollupPartComponentDto component = new RollupPartComponentDto();
+    component.setPartItemId(13L);
+    component.setChildMaterialCode("RAW-SNAPSHOT");
+    component.setChildQtyPerTop(new BigDecimal("0.00510001"));
+    component.setChildUnitCost(new BigDecimal("0.10998245"));
+    component.setChildRawPriceType("固定价");
+    when(partMapper.selectRollupDisplayComponents(any())).thenReturn(List.of(component));
 
     List<CostRunTraceSnapshot> snapshots = builder.build(version());
+
+    assertThat(snapshots.stream().filter(row -> "PART:13".equals(row.getTraceKey())).findFirst().orElseThrow()
+        .getSourceSnapshotJson()).contains("rollupDisplayComponents", "RAW-SNAPSHOT", "0.00510001", "0.10998245");
+    assertThat(snapshots.stream().filter(row -> "PART:11".equals(row.getTraceKey())).findFirst().orElseThrow()
+        .getSourceSnapshotJson()).contains("\"rollupDisplayComponents\":[]");
+    component.setChildUnitCost(BigDecimal.TEN);
+    assertThat(snapshots.stream().filter(row -> "PART:13".equals(row.getTraceKey())).findFirst().orElseThrow()
+        .getSourceSnapshotJson()).contains("0.10998245");
 
     assertThat(snapshots).hasSize(6);
     assertThat(snapshots)

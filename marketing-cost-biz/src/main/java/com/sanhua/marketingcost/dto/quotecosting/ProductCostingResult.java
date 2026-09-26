@@ -18,6 +18,7 @@ public class ProductCostingResult {
   private Integer gapCount;
   private Integer warningCount;
   private String pricePrepareNo;
+  private String sourceRevision;
   private Long costVersionId;
   private String costRunNo;
   private String versionNo;

@@ -19,13 +19,8 @@ public class OaPersonDirectoryProperties {
   private boolean runAtStartup;
   private String sourceSystem = "HZ_KG_OA_TST";
   private String environment = "TEST";
-  private String authBaseUrl;
   private String queryBaseUrl;
   private String detailBaseUrl;
-  private String callSysCode;
-  private String corpId;
-  private String appKey;
-  private String appSecret;
   private String cron = "0 15 2 * * *";
   private String zone = "Asia/Shanghai";
   private int pageSize = 1000;
@@ -54,12 +49,9 @@ public class OaPersonDirectoryProperties {
       throw new IllegalStateException("OA 人员目录目标部门不能为空或重复");
     }
     if (!enabled) return;
-    if (!StringUtils.hasText(sourceSystem) || !StringUtils.hasText(environment)
-        || !StringUtils.hasText(callSysCode) || !StringUtils.hasText(corpId)
-        || !StringUtils.hasText(appKey) || !StringUtils.hasText(appSecret)) {
-      throw new IllegalStateException("启用 OA 人员目录需要完整的环境和鉴权配置");
+    if (!StringUtils.hasText(sourceSystem) || !StringUtils.hasText(environment)) {
+      throw new IllegalStateException("启用 OA 人员目录需要完整的来源和环境配置");
     }
-    validateBaseUrl(authBaseUrl);
     validateBaseUrl(queryBaseUrl);
     validateBaseUrl(detailBaseUrl);
   }

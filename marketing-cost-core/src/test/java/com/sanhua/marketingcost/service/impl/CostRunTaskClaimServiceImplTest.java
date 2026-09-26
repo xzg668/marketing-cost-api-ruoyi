@@ -137,11 +137,11 @@ class CostRunTaskClaimServiceImplTest {
     CostRunTaskClaimService service = new CostRunTaskClaimServiceImpl(mapper.proxy());
 
     boolean updated =
-        service.markCollaboration(6L, "worker-a", "{\"gapCount\":1}", "缺少 BOM");
+        service.markWaitingInput(6L, "worker-a", "{\"gapCount\":1}", "缺少 BOM");
 
     CostRunTask stored = mapper.snapshot(6L);
     assertThat(updated).isTrue();
-    assertThat(stored.getStatus()).isEqualTo("COLLABORATION");
+    assertThat(stored.getStatus()).isEqualTo("WAITING_INPUT");
     assertThat(stored.getProgress()).isEqualTo(100);
     assertThat(stored.getResultSummaryJson()).isEqualTo("{\"gapCount\":1}");
     assertThat(stored.getErrorMessage()).isEqualTo("缺少 BOM");
@@ -192,7 +192,7 @@ class CostRunTaskClaimServiceImplTest {
                     case "markRetryable" -> markRetryable(args);
                     case "markFailure" -> markFailure(args);
                     case "markSuccess" -> markSuccess(args);
-                    case "markCollaboration" -> markCollaboration(args);
+                    case "markWaitingInput" -> markWaitingInput(args);
                     case "toString" -> "FakeCostRunTaskMapper";
                     default -> throw new UnsupportedOperationException(method.toString());
                   });
@@ -316,7 +316,7 @@ class CostRunTaskClaimServiceImplTest {
       }
     }
 
-    private int markCollaboration(Object[] args) {
+    private int markWaitingInput(Object[] args) {
       Long taskId = (Long) args[0];
       String workerId = (String) args[1];
       String resultSummaryJson = (String) args[2];
@@ -327,7 +327,7 @@ class CostRunTaskClaimServiceImplTest {
         if (!ownedRunning(task, workerId)) {
           return 0;
         }
-        task.setStatus("COLLABORATION");
+        task.setStatus("WAITING_INPUT");
         task.setProgress(100);
         task.setWorkerId(null);
         task.setLockedAt(null);

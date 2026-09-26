@@ -48,7 +48,11 @@ class CostRunDetailControllerTest {
             oaFormItemMapper,
             versionMapper);
     QuoteCostRunVersion requested = new QuoteCostRunVersion();
+    requested.setId(7L);
     requested.setCostRunNo("TRIAL-V1");
+    var frozenHeader = new com.sanhua.marketingcost.dto.CostRunResultDto();
+    frozenHeader.setProductAttr("非标品");
+    when(resultService.getResult(7L)).thenReturn(frozenHeader);
     requested.setVersionNo("COST-V1");
     when(versionMapper.selectOne(any(Wrapper.class))).thenReturn(requested);
     CostRunPartItemDto part = new CostRunPartItemDto();
@@ -64,6 +68,8 @@ class CostRunDetailControllerTest {
     CommonResult<CostRunDetailDto> response =
         controller.getDetail("OA-1", "P-1", "TRIAL-V1");
 
+    assertThat(response.getData().getProductAttr()).isEqualTo("非标品");
+    verify(resultService, never()).getResult(any(String.class), any(String.class));
     assertThat(response.getData().getCostRunNo()).isEqualTo("TRIAL-V1");
     assertThat(response.getData().getVersionNo()).isEqualTo("COST-V1");
     assertThat(response.getData().getPartItems()).extracting(CostRunPartItemDto::getPartCode)

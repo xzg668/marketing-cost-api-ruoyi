@@ -76,6 +76,26 @@ class MaterialMasterRawMapperSqlTest {
   }
 
   @Test
+  @DisplayName("电子图库人工搜索按指定字段查询且始终限定当前组织正常料品")
+  void electronicDrawingSearchNeverPreloadsOrCrossesOrganization() throws Exception {
+    String sql = selectSql(
+        "selectElectronicDrawingOptions",
+        String.class, String.class, String.class, String.class, int.class);
+
+    assertThat(sql).contains(
+        "active_flag = 1",
+        "organization_code = #{organizationCode}",
+        "searchType == \"DRAWING_NO\"",
+        "drawing_no LIKE CONCAT('%', #{keyword}, '%')",
+        "searchType == \"MATERIAL_CODE\"",
+        "material_code LIKE CONCAT('%', #{keyword}, '%')",
+        "searchType == \"MATERIAL_NAME\"",
+        "material_name LIKE CONCAT('%', #{keyword}, '%')",
+        "<otherwise>1 = 0</otherwise>",
+        "LIMIT #{limit}");
+  }
+
+  @Test
   @DisplayName("包装组件父件查询限定组织当前有效 raw")
   void packageComponentParentQueryUsesLatestActiveBatch() throws Exception {
     String sql = selectSql(

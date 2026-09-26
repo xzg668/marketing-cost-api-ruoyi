@@ -18,9 +18,9 @@ import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomMonthlySnapshotMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
-import com.sanhua.marketingcost.service.collaboration.scan.CurrentU9BomResult;
-import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationCurrentU9BomGateway;
-import com.sanhua.marketingcost.service.collaboration.scan.QuoteCollaborationScanContext;
+import com.sanhua.marketingcost.service.quotebom.CurrentU9BomGateway;
+import com.sanhua.marketingcost.service.quotebom.CurrentU9BomResult;
+import com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -37,12 +37,11 @@ class QuoteBomStatusServiceImplTest {
   private final QuoteBomStatusMapper statusMapper = mock(QuoteBomStatusMapper.class);
   private final QuoteBomMonthlySnapshotMapper snapshotMapper =
       mock(QuoteBomMonthlySnapshotMapper.class);
-  private final QuoteCollaborationCurrentU9BomGateway u9Gateway =
-      mock(QuoteCollaborationCurrentU9BomGateway.class);
+  private final CurrentU9BomGateway u9Gateway = mock(CurrentU9BomGateway.class);
   private final U9ProductPackagingTypeResolver packagingResolver =
       mock(U9ProductPackagingTypeResolver.class);
-  private final CollaborationBomAvailabilityResolver collaborationResolver =
-      mock(CollaborationBomAvailabilityResolver.class);
+  private final SupplementBomAvailabilityResolver supplementResolver =
+      mock(SupplementBomAvailabilityResolver.class);
   private final Clock clock =
       Clock.fixed(Instant.parse("2026-06-01T00:01:00Z"), ZoneId.of("UTC"));
   private QuoteBomStatusServiceImpl service;
@@ -53,7 +52,7 @@ class QuoteBomStatusServiceImplTest {
         .thenReturn(U9ProductPackagingTypeResolver.Result.unknown(null));
     service = new QuoteBomStatusServiceImpl(
         formMapper, itemMapper, statusMapper, snapshotMapper, u9Gateway,
-        packagingResolver, new QuoteBomContextResolver(), collaborationResolver, clock);
+        packagingResolver, new QuoteBomContextResolver(mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class)), supplementResolver, clock);
   }
 
   @Test
@@ -61,7 +60,7 @@ class QuoteBomStatusServiceImplTest {
     OaFormItem item = item(10L, "MAT-1", "BOX");
     stubQuote("OA-1", "CUST-A", "2026-06", item);
     QuoteBomMonthlySnapshot snapshot = u9Snapshot(7001L, "MAT-1", "2026-06", "SUCCESS");
-    when(snapshotMapper.selectById(7001L)).thenReturn(snapshot);
+    when(snapshotMapper.selectCurrentById(7001L)).thenReturn(snapshot);
     when(u9Gateway.read(any())).thenReturn(
         CurrentU9BomResult.available("U9", "V1", "BUILD-1", 8, "F1")
             .withMonthlySnapshot(7001L, true));
@@ -72,8 +71,8 @@ class QuoteBomStatusServiceImplTest {
     assertThat(response.getItems().getFirst().getBomStatus()).isEqualTo("U9_BOM_EXISTS");
     assertThat(response.getItems().getFirst().getSyncRecordId()).isEqualTo(7001L);
     verify(snapshotMapper, never()).insert(any(QuoteBomMonthlySnapshot.class));
-    ArgumentCaptor<QuoteCollaborationScanContext> context =
-        ArgumentCaptor.forClass(QuoteCollaborationScanContext.class);
+    ArgumentCaptor<QuoteBomReadContext> context =
+        ArgumentCaptor.forClass(QuoteBomReadContext.class);
     verify(u9Gateway).read(context.capture());
     assertThat(context.getValue().accountingMonth()).isEqualTo("2026-06");
     assertThat(context.getValue().priceOrgCode()).isEqualTo("210");
@@ -85,7 +84,7 @@ class QuoteBomStatusServiceImplTest {
     OaFormItem item = item(11L, "MAT-1", "PALLET");
     stubQuote("OA-2", "OTHER-CUSTOMER", "2026-06", item);
     QuoteBomMonthlySnapshot snapshot = u9Snapshot(7001L, "MAT-1", "2026-06", "SUCCESS");
-    when(snapshotMapper.selectById(7001L)).thenReturn(snapshot);
+    when(snapshotMapper.selectCurrentById(7001L)).thenReturn(snapshot);
     when(u9Gateway.read(any())).thenReturn(
         CurrentU9BomResult.available("U9", "V1", "BUILD-1", 8, "F1")
             .withMonthlySnapshot(7001L, false));
@@ -113,7 +112,7 @@ class QuoteBomStatusServiceImplTest {
     assertThat(response.getItems().getFirst().getBomStatus()).isEqualTo("NO_BOM");
     assertThat(response.getItems().getFirst().getSyncRecordId()).isEqualTo(7100L);
     assertThat(response.getItems().getFirst().getReusedFromRecordId()).isEqualTo(7100L);
-    verify(collaborationResolver).resolve(
+    verify(supplementResolver).resolve(
         eq(12L), eq("COMMERCIAL"), eq("2026-06"), any());
   }
 
@@ -132,7 +131,7 @@ class QuoteBomStatusServiceImplTest {
     assertThat(response.getItems().getFirst().getBomSource())
         .isEqualTo("ELECTRONIC_DRAWING_BOM");
     assertThat(response.getItems().getFirst().getSyncRecordId()).isEqualTo(7200L);
-    verify(collaborationResolver, never()).resolve(any(), any(), any(), any());
+    verify(supplementResolver, never()).resolve(any(), any(), any(), any());
     verify(snapshotMapper, never()).insert(any(QuoteBomMonthlySnapshot.class));
   }
 
@@ -143,7 +142,7 @@ class QuoteBomStatusServiceImplTest {
     when(u9Gateway.read(any())).thenReturn(
         CurrentU9BomResult.notFound("U9无BOM").withMonthlySnapshot(7100L, true));
     when(snapshotMapper.selectList(any())).thenReturn(List.of());
-    when(collaborationResolver.resolve(eq(14L), eq("COMMERCIAL"), eq("2026-06"), any()))
+    when(supplementResolver.resolve(eq(14L), eq("COMMERCIAL"), eq("2026-06"), any()))
         .thenReturn(electronicAvailability());
     doAnswer(invocation -> {
       QuoteBomMonthlySnapshot row = invocation.getArgument(0);
@@ -171,7 +170,7 @@ class QuoteBomStatusServiceImplTest {
 
     assertThat(response.getItems().getFirst().getBomStatus()).isEqualTo("CHECK_FAILED");
     assertThat(response.getItems().getFirst().getErrorMessage()).contains("超时");
-    verify(collaborationResolver, never()).resolve(any(), any(), any(), any());
+    verify(supplementResolver, never()).resolve(any(), any(), any(), any());
     verify(snapshotMapper, never()).insert(any(QuoteBomMonthlySnapshot.class));
   }
 
@@ -181,7 +180,7 @@ class QuoteBomStatusServiceImplTest {
     stubQuote("OA-7", "CUST-A", "2026-06", item);
     when(itemMapper.selectById(16L)).thenReturn(item);
     QuoteBomMonthlySnapshot snapshot = u9Snapshot(7400L, "MAT-AUG", "2026-08", "SUCCESS");
-    when(snapshotMapper.selectById(7400L)).thenReturn(snapshot);
+    when(snapshotMapper.selectCurrentById(7400L)).thenReturn(snapshot);
     when(u9Gateway.read(any())).thenReturn(
         CurrentU9BomResult.available("U9", "V2", "BUILD-AUG", 5)
             .withMonthlySnapshot(7400L, true));
@@ -190,8 +189,8 @@ class QuoteBomStatusServiceImplTest {
         service.checkItemForCostRun("OA-7", 16L, "2026-08");
 
     assertThat(response.getCostPeriodMonth()).isEqualTo("2026-08");
-    ArgumentCaptor<QuoteCollaborationScanContext> context =
-        ArgumentCaptor.forClass(QuoteCollaborationScanContext.class);
+    ArgumentCaptor<QuoteBomReadContext> context =
+        ArgumentCaptor.forClass(QuoteBomReadContext.class);
     verify(u9Gateway).read(context.capture());
     assertThat(context.getValue().accountingMonth()).isEqualTo("2026-08");
     verify(itemMapper, never()).selectList(any());
@@ -235,6 +234,7 @@ class QuoteBomStatusServiceImplTest {
     item.setOaFormId(1L);
     item.setSeq(1);
     item.setMaterialNo(productCode);
+    item.setProductName("电磁阀");
     item.setSunlModel("MODEL");
     item.setPackageMethod(packageMethod);
     item.setBusinessUnitType("COMMERCIAL");

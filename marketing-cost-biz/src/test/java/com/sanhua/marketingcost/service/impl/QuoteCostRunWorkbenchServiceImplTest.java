@@ -139,7 +139,6 @@ class QuoteCostRunWorkbenchServiceImplTest {
             readinessService,
             versionNoGenerator,
             cuAdjustmentCalcService,
-            mock(com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate.class),
             workspaceService);
   }
 
@@ -257,12 +256,12 @@ class QuoteCostRunWorkbenchServiceImplTest {
             readinessService,
             versionNoGenerator,
             cuAdjustmentCalcService,
-            mock(com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate.class),
             workspaceService,
             inputRevisionService);
     QuoteCostRunVersion version = version(90L, "RUNNING-3", "RUNNING", "TOP-A");
     stubCalculation(version, "123.450000");
-    when(inputRevisionService.currentRevision(any(OaForm.class), any(OaFormItem.class)))
+    when(inputRevisionService.currentRevision(
+        any(OaForm.class), any(OaFormItem.class), anyString()))
         .thenReturn("changed-revision");
     QuoteCostRunTrialRequest request = new QuoteCostRunTrialRequest();
     request.setSourceRevision("submitted-revision");

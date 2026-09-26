@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""单次发送一份 I04/I08 流程通知 JSON，原样发送，不生成编号或自动重试。"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+# 测试前直接修改这两项。Token 填后端配置的令牌本身，不加 Bearer 前缀。
+BASE_URL = os.environ.get("OA_NOTIFY_BASE_URL", "http://127.0.0.1:8081")
+TOKEN = os.environ.get("OA_NOTIFY_TOKEN", "")  # 与报价后端 integration.oa.clients.oa.secret 一致，不是 OA accessToken
+REQUEST_FILE = Path(__file__).resolve().parents[1] / "marketing-cost-biz/src/test/resources/fixtures/oa-workflow/TECH_APPROVED.json"
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    # 一次命令只调用指定接口；重定向应由使用者确认正确地址后重新发送。
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--request", type=Path, default=REQUEST_FILE,
+                        help="可选：本次通知JSON；未传参数时读取脚本顶部REQUEST_FILE")
+    parser.add_argument("--output", type=Path, help="可选：保存本次接口响应")
+    args = parser.parse_args()
+    base_url = urllib.parse.urlsplit(BASE_URL)
+    if base_url.scheme not in ("http", "https") or not base_url.hostname or base_url.query or base_url.fragment:
+        parser.error("请修改脚本顶部 BASE_URL，填写 HTTP/HTTPS 服务地址，不包含查询参数或片段")
+    try:
+        payload = args.request.read_bytes()
+        body = json.loads(payload.decode("utf-8"))
+    except (OSError, ValueError):
+        parser.error("无法读取请求文件，请检查路径以及 UTF-8 JSON 格式")
+    if not isinstance(body, dict):
+        parser.error("请求文件必须是一个 JSON 对象，表示一条流程通知")
+    if args.output and args.output.resolve() == args.request.resolve():
+        parser.error("响应文件不能覆盖请求 JSON 文件")
+    if len(TOKEN) < 32 or any(char.isspace() for char in TOKEN) or not TOKEN.isascii():
+        parser.error("请填写脚本顶部 TOKEN；"
+                     "必须与后端一致，至少32个ASCII字符且不含空白")
+
+    url = BASE_URL.rstrip("/") + "/integration/v1/workflow-events"
+    print(f"POST {url}")
+    print(f"请求文件：{args.request.resolve()}")
+    print(f"requestId：{body.get('requestId')}，eventType：{body.get('eventType')}")
+    request = urllib.request.Request(
+        url, data=payload, method="POST",
+        headers={"Content-Type": "application/json; charset=UTF-8",
+                 "Authorization": "Bearer " + TOKEN},
+    )
+    opener = urllib.request.build_opener(NoRedirect())
+    try:
+        try:
+            response = opener.open(request, timeout=45)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            status = response.status
+            response_body = response.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, OSError) as error:
+        print(f"请求未取得完整响应（{type(error).__name__}），请检查服务地址和网络。"
+              "脚本未自动重试；需要重发时使用同一份 JSON。", file=sys.stderr)
+        return 1
+
+    print(f"HTTP {status}")
+    try:
+        result = json.loads(response_body)
+    except ValueError:
+        result = None
+    formatted = json.dumps(result, ensure_ascii=False, indent=2) if result is not None else response_body
+    print(formatted)
+    if args.output:
+        try:
+            args.output.write_text(formatted + "\n", encoding="utf-8")
+        except OSError:
+            print("请求已发送，但响应文件保存失败，请查看上方接口返回值。", file=sys.stderr)
+            return 1
+    data = result.get("data") if isinstance(result, dict) else None
+    if 200 <= status < 300 and isinstance(data, dict) and data.get("status") == "SUCCEEDED":
+        print("通知处理成功。同一提交轮次内相同报文重发，不再次改变状态。")
+        return 0
+    print("未收到接收成功结果，请根据 HTTP 状态和接口响应检查；脚本未自动重试。", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

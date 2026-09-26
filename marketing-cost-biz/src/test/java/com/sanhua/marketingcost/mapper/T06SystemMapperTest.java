@@ -113,20 +113,6 @@ class T06SystemMapperTest {
     }
 
     @Test
-    @DisplayName("LpCollaborationToken Entity 字段赋值与读取")
-    void lpCollaborationToken_fieldsAccessible() {
-        LpCollaborationToken token = new LpCollaborationToken();
-        token.setTokenId(1L);
-        token.setToken("abc-123");
-        token.setUserId(1L);
-        token.setTokenType("COLLABORATION");
-        token.setStatus("0");
-
-        assertEquals("abc-123", token.getToken());
-        assertEquals("COLLABORATION", token.getTokenType());
-    }
-
-    @Test
     @DisplayName("所有 Mapper 接口可被 mock 实例化（验证接口定义正确）")
     void allMappers_canBeMocked() {
         // 验证 Mapper 接口定义正确，能被 Mockito 实例化
@@ -137,7 +123,6 @@ class T06SystemMapperTest {
         SysDictDataMapper dictDataMapper = mock(SysDictDataMapper.class);
         SysOperationLogMapper operLogMapper = mock(SysOperationLogMapper.class);
         SysLoginLogMapper loginLogMapper = mock(SysLoginLogMapper.class);
-        LpCollaborationTokenMapper tokenMapper = mock(LpCollaborationTokenMapper.class);
 
         // 验证 selectCount 方法存在（继承自 BaseMapper）
         when(deptMapper.selectCount(null)).thenReturn(0L);
@@ -147,9 +132,8 @@ class T06SystemMapperTest {
         when(dictDataMapper.selectCount(null)).thenReturn(0L);
         when(operLogMapper.selectCount(null)).thenReturn(0L);
         when(loginLogMapper.selectCount(null)).thenReturn(0L);
-        when(tokenMapper.selectCount(null)).thenReturn(0L);
 
         assertEquals(0L, deptMapper.selectCount(null));
-        assertEquals(0L, tokenMapper.selectCount(null));
+        assertEquals(0L, loginLogMapper.selectCount(null));
     }
 }

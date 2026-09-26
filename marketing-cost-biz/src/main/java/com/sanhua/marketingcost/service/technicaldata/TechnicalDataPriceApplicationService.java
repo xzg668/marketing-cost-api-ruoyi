@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** 协调价格草稿、真实需求和料号占用；审批继续走原人员分支。 */
 @Service
 public class TechnicalDataPriceApplicationService {
+  private final TechnicalDataReadPolicy readPolicy;
   private final QuoteTechnicalDataRepository repository;
   private final TechnicalDataTaskRepository tasks;
   private final TechnicalDataVersionContentCodec codec;
@@ -27,7 +28,8 @@ public class TechnicalDataPriceApplicationService {
 
   public TechnicalDataPriceApplicationService(QuoteTechnicalDataRepository repository, TechnicalDataTaskRepository tasks,
       TechnicalDataVersionContentCodec codec, TechnicalDataSourceSnapshotFactory snapshots,
-      TechnicalDataPriceRequirements requirements, TechnicalDataPriceReferences references, TechnicalDataPriceOwnership ownership, TechnicalDataPricePublication publication) {
+      TechnicalDataPriceRequirements requirements, TechnicalDataPriceReferences references, TechnicalDataPriceOwnership ownership, TechnicalDataPricePublication publication, TechnicalDataReadPolicy readPolicy) {
+    this.readPolicy=readPolicy;
     this.repository = repository; this.tasks = tasks; this.codec = codec; this.snapshots = snapshots;
     this.publication = publication;
     this.requirements = requirements; this.references = references; this.ownership = ownership;
@@ -36,8 +38,7 @@ public class TechnicalDataPriceApplicationService {
   @Transactional(readOnly = true)
   public TechnicalDataPriceResponse get(Long productId, Long versionId, TechnicalDataActor actor) {
     var scope = scope(productId, actor, null);
-    Long selected = versionId != null ? versionId : Set.of("FROZEN", "SUBMITTED", "APPROVED").contains(scope.module().getModuleStatus())
-        ? scope.module().getCurrentVersionId() : scope.product().getCurrentEditVersionId();
+    Long selected = readPolicy.readVersion(scope.product(), scope.module(), actor, versionId);
     var version = selected == null ? null : repository.findVersion(selected).orElseThrow(() -> invalid("价格版本不存在"));
     if (version != null && !Objects.equals(version.getProductId(), productId)) throw forbidden("不能读取其他产品的价格版本");
     boolean historical = versionId != null || version != null && !"DRAFT".equals(version.getVersionStatus());

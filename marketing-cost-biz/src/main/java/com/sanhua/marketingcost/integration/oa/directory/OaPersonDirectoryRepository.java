@@ -118,7 +118,8 @@ public class OaPersonDirectoryRepository {
           FROM lp_oa_person_directory d
           JOIN sys_user u ON u.user_id=d.system_user_id AND u.status='0' AND u.del_flag='0'
          WHERE d.source_system=? AND d.environment=? AND d.active_flag=1 AND d.selectable_flag=1
-           AND """ + predicate + " LIMIT 2",
+           AND
+        """ + predicate + " LIMIT 2",
         (row, rowNum) -> new OaPersonDirectoryIdentity(
             row.getLong("system_user_id"), row.getString("employee_no")),
         properties.getSourceSystem(), properties.getEnvironment(), value);

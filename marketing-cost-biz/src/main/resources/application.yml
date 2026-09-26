@@ -51,18 +51,28 @@ spring:
 
 # OA 人员只由定时同步读取；技术员下拉框始终查询本地 lp_oa_person_directory。
 integration:
+  # OA 出站接口共用一套应用鉴权；令牌仅缓存在本后端进程中。
+  oa-auth:
+    base-url: ${OA_AUTH_BASE_URL:}
+    call-sys-code: ${OA_AUTH_CALL_SYS_CODE:}
+    corp-id: ${OA_AUTH_CORP_ID:}
+    app-key: ${OA_AUTH_APP_KEY:}
+    app-secret: ${OA_AUTH_APP_SECRET:}
+    connect-timeout-ms: ${OA_AUTH_CONNECT_TIMEOUT_MS:5000}
+    read-timeout-ms: ${OA_AUTH_READ_TIMEOUT_MS:30000}
+    max-attempts: ${OA_AUTH_MAX_ATTEMPTS:5}
+  # 原生 submitRequest 共用通道；调试入口默认关闭，不驱动正式分派任务。
+  oa-workflow:
+    base-url: ${OA_WORKFLOW_BASE_URL:}
+    read-timeout-ms: ${OA_WORKFLOW_READ_TIMEOUT_MS:30000}
+    debug-enabled: ${OA_WORKFLOW_DEBUG_ENABLED:false}
   oa-person-directory:
     enabled: ${OA_PERSON_DIRECTORY_ENABLED:false}
     run-at-startup: ${OA_PERSON_DIRECTORY_RUN_AT_STARTUP:false}
     source-system: ${OA_PERSON_DIRECTORY_SOURCE_SYSTEM:HZ_KG_OA_TST}
     environment: ${OA_PERSON_DIRECTORY_ENVIRONMENT:TEST}
-    auth-base-url: ${OA_PERSON_DIRECTORY_AUTH_BASE_URL:}
     query-base-url: ${OA_PERSON_DIRECTORY_QUERY_BASE_URL:}
     detail-base-url: ${OA_PERSON_DIRECTORY_DETAIL_BASE_URL:}
-    call-sys-code: ${OA_PERSON_DIRECTORY_CALL_SYS_CODE:}
-    corp-id: ${OA_PERSON_DIRECTORY_CORP_ID:}
-    app-key: ${OA_PERSON_DIRECTORY_APP_KEY:}
-    app-secret: ${OA_PERSON_DIRECTORY_APP_SECRET:}
     cron: ${OA_PERSON_DIRECTORY_CRON:0 15 2 * * *}
     zone: ${OA_PERSON_DIRECTORY_ZONE:Asia/Shanghai}
     page-size: ${OA_PERSON_DIRECTORY_PAGE_SIZE:1000}

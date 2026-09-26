@@ -7,7 +7,8 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import org.junit.jupiter.api.Test;
 
 class QuoteBomCustomerResolutionTest {
-  private final QuoteBomContextResolver resolver = new QuoteBomContextResolver();
+  private final QuoteBomContextResolver resolver = new QuoteBomContextResolver(
+      org.mockito.Mockito.mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class));
 
   @Test
   void verifiedFormalCustomerCodeHasHighestPriority() {
@@ -72,6 +73,7 @@ class QuoteBomCustomerResolutionTest {
   private OaFormItem item(String customerMaterialNo) {
     OaFormItem item = new OaFormItem();
     item.setMaterialNo("MAT-CUST-1");
+    item.setProductName("电磁阀");
     item.setCustomerCode(customerMaterialNo);
     item.setBusinessUnitType("COMMERCIAL");
     return item;

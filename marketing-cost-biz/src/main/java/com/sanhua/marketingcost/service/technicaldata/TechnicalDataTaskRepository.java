@@ -51,7 +51,7 @@ public interface TechnicalDataTaskRepository {
       String businessUnitType,
       String taskStatus,
       String accountingMonth,
-      String keyword);
+      String keyword, String oaNo);
 
   List<QuoteTechProduct> findAccessibleProductPage(
       String accessMode,
@@ -60,6 +60,7 @@ public interface TechnicalDataTaskRepository {
       String taskStatus,
       String accountingMonth,
       String keyword,
+      String oaNo,
       int offset,
       int size);
 

@@ -7,7 +7,8 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import org.junit.jupiter.api.Test;
 
 class QuoteBomReuseKeyRegressionTest {
-  private final QuoteBomContextResolver resolver = new QuoteBomContextResolver();
+  private final QuoteBomContextResolver resolver = new QuoteBomContextResolver(
+      org.mockito.Mockito.mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class));
 
   @Test
   void reuseKeyComesOnlyFromResolvedBusinessDimensions() {
@@ -56,6 +57,7 @@ class QuoteBomReuseKeyRegressionTest {
   private OaFormItem item(String organization, String packageMethod) {
     OaFormItem item = new OaFormItem();
     item.setMaterialNo("MAT-KEY-1");
+    item.setProductName("电磁阀");
     item.setPackageMethod(packageMethod);
     item.setBusinessUnitType(organization);
     return item;

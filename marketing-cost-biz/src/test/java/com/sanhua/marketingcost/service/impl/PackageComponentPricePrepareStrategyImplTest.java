@@ -17,6 +17,7 @@ import com.sanhua.marketingcost.entity.PackageComponentPrice;
 import com.sanhua.marketingcost.entity.PackageComponentPriceDetail;
 import com.sanhua.marketingcost.entity.PackageComponentSnapshot;
 import com.sanhua.marketingcost.service.PackageComponentPriceService;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -61,7 +62,8 @@ class PackageComponentPricePrepareStrategyImplTest {
     assertThat(captor.getValue().getOaNo()).isEqualTo("OA-001");
     assertThat(captor.getValue().getPriceOrgCode()).isEqualTo("210");
     assertThat(captor.getValue().getCalcBatchId()).isEqualTo("PPR-001");
-    assertThat(captor.getValue().getAsOfDate()).isEqualTo(LocalDate.now());
+    assertThat(captor.getValue().getAsOfDate())
+        .isEqualTo(CostPricingPeriodUtils.currentPricingDate());
     assertThat(captor.getValue().isForceRefresh()).isTrue();
   }
 

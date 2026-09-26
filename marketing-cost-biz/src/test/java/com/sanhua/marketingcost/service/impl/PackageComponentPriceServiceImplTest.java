@@ -108,6 +108,7 @@ class PackageComponentPriceServiceImplTest {
     assertThat(detailCaptor.getAllValues()).extracting(PackageComponentPriceDetail::getChildAmount)
         .containsExactly(new BigDecimal("6.000000000000"), new BigDecimal("6.000000000000"));
     verify(gapItemMapper, never()).insert(any(PackageComponentGapItem.class));
+    verify(priceDetailMapper, never()).delete(any(Wrapper.class));
   }
 
   @Test

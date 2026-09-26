@@ -87,7 +87,7 @@ class QuoteProductBomPreparationServiceImplTest {
             formalBomReadService,
             supplementBomReadService,
             packageReadService,
-            new QuoteBomContextResolver());
+            new QuoteBomContextResolver(mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class)));
 
     when(statusMapper.selectOne(any())).thenReturn(null);
     when(preparationRecordMapper.selectOne(any())).thenReturn(null);
@@ -284,6 +284,36 @@ class QuoteProductBomPreparationServiceImplTest {
     assertThat(preview.needTechnicianTask()).isTrue();
     assertThat(preview.missingScopes()).containsExactly("PACKAGE_REFERENCE");
     verify(supplementBomReadService, never()).readApproved(any(), any(), any(), any());
+  }
+
+  @Test
+  @DisplayName("裸品主档在电子图库完整BOM已发布时不再重复要求包装参考")
+  void prepareElectronicDrawingFullBomOverridesBarePackagingBranch() {
+    stubQuoteLine("BARE-ED", "2026-05");
+    when(productTypeResolveService.resolve("BARE-ED", "COMMERCIAL"))
+        .thenReturn(type("BARE-ED", QuoteProductType.BARE));
+    QuoteBomStatus electronicStatus = new QuoteBomStatus();
+    electronicStatus.setId(301L);
+    electronicStatus.setOaFormItemId(10L);
+    electronicStatus.setCostPeriodMonth("2026-05");
+    electronicStatus.setBomSource("ELECTRONIC_DRAWING_BOM");
+    when(statusMapper.selectOne(any())).thenReturn(electronicStatus);
+    SupplementBomReadResult electronicBom = new SupplementBomReadResult(
+        "BARE-ED", "NON_BARE", "NON_BARE_FULL_BOM", "2026-05",
+        true, 901L, "QCPT-ED", "ELECTRONIC_DRAWING_EXCEL", null,
+        List.of(sourceLine("BARE-ED", 1)), null);
+    when(supplementBomReadService.readApproved(
+        "BARE-ED", "NON_BARE", "NON_BARE_FULL_BOM", "2026-05"))
+        .thenReturn(electronicBom);
+
+    QuoteProductBomPreparationPreview preview = service.prepareByOaFormItem(10L);
+
+    assertThat(preview.ready()).isTrue();
+    assertThat(preview.productType()).isEqualTo("NON_BARE");
+    assertThat(preview.needPackage()).isFalse();
+    assertThat(preview.bodyBomSource()).isEqualTo("MANUAL_SUPPLEMENT");
+    assertThat(preview.bodyBomLineCount()).isOne();
+    verifyNoInteractions(formalBomReadService, packageReadService);
   }
 
   @Test

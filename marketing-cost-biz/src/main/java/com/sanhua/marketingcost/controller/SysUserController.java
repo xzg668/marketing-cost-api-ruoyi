@@ -82,6 +82,7 @@ public class SysUserController {
         }
         SysUser user = new SysUser();
         user.setUserName(req.getUserName());
+        user.setEmployeeNo(req.getEmployeeNo() == null ? null : req.getEmployeeNo().trim());
         user.setPassword(passwordEncoder.encode(req.getPassword()));
         user.setNickName(req.getNickName());
         user.setPhone(req.getPhone());
@@ -116,6 +117,7 @@ public class SysUserController {
         }
         SysUser user = new SysUser();
         user.setUserId(id);
+        if (req.getEmployeeNo() != null) user.setEmployeeNo(req.getEmployeeNo().trim());
         if (req.getNickName() != null) user.setNickName(req.getNickName());
         if (req.getPhone() != null) user.setPhone(req.getPhone());
         if (req.getSex() != null) user.setSex(req.getSex());
@@ -240,6 +242,7 @@ public class SysUserController {
         SysUserVO vo = new SysUserVO();
         vo.setUserId(user.getUserId());
         vo.setUserName(user.getUserName());
+        vo.setEmployeeNo(user.getEmployeeNo());
         vo.setNickName(user.getNickName());
         vo.setPhone(user.getPhone());
         vo.setSex(user.getSex());

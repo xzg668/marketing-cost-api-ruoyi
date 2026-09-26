@@ -9,7 +9,8 @@ import java.time.LocalDate;
 import org.junit.jupiter.api.Test;
 
 class QuoteBomContextResolverTest {
-  private final QuoteBomContextResolver resolver = new QuoteBomContextResolver();
+  private final QuoteBomContextResolver resolver = new QuoteBomContextResolver(
+      org.mockito.Mockito.mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class));
 
   @Test
   void explicitOaAccountingMonthWinsOverApplyDateAndServerMonth() {
@@ -106,6 +107,7 @@ class QuoteBomContextResolverTest {
   private OaFormItem item(String materialNo, String packageMethod) {
     OaFormItem item = new OaFormItem();
     item.setMaterialNo(materialNo);
+    item.setProductName("电磁阀");
     item.setPackageMethod(packageMethod);
     item.setBusinessUnitType("COMMERCIAL");
     return item;

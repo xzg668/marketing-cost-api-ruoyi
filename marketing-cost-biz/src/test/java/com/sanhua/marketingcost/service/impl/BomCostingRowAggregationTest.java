@@ -12,6 +12,22 @@ import org.junit.jupiter.api.Test;
 class BomCostingRowAggregationTest {
 
   @Test
+  void preservesSameMaterialOccurrencesForElectronicDrawingStructure() {
+    BomCostingRow first = row(
+        "/TOP/ED:1/U9:11/", "MAT-1", "1.5", LocalDate.of(2026, 8, 1));
+    BomCostingRow second = row(
+        "/TOP/ED:2/U9:21/", "MAT-1", "2.5", LocalDate.of(2026, 8, 1));
+
+    BomCostingRowAggregation.Result result =
+        BomCostingRowAggregation.preserveOccurrences(List.of(first, second));
+
+    assertThat(result.rows()).containsExactly(first, second);
+    assertThat(result.pathAliases())
+        .containsEntry(first.getPath(), first.getPath())
+        .containsEntry(second.getPath(), second.getPath());
+  }
+
+  @Test
   @DisplayName("同一报价料号下同一结算料号多路径出现时按用量累加")
   void aggregatesSameMaterialAcrossBomPaths() {
     BomCostingRow first = row(

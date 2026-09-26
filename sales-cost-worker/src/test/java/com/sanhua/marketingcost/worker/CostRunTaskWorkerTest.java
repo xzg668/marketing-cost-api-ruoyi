@@ -116,11 +116,11 @@ class CostRunTaskWorkerTest {
   }
 
   @Test
-  void businessGapIsMarkedCollaborationWithoutRetrying() {
+  void businessGapIsMarkedWaitingInputWithoutRetrying() {
     FakeClaimService claimService = new FakeClaimService();
     FakeExecutor executor = new FakeExecutor(CostRunTaskScene.QUOTE);
     executor.failure =
-        new CostRunTaskCollaborationRequiredException(
+        new CostRunTaskWaitingInputException(
             "缺少价格", "{\"pipelineStatus\":\"BLOCKED\"}");
     CostRunTaskWorker worker =
         new CostRunTaskWorker(
@@ -134,7 +134,7 @@ class CostRunTaskWorkerTest {
         worker.processTask("worker-node-1", task(5L, "BATCH-3", "QUOTE"));
 
     assertThat(metric.success()).isTrue();
-    assertThat(claimService.collaborationTaskIds).containsExactly(5L);
+    assertThat(claimService.waitingInputTaskIds).containsExactly(5L);
     assertThat(claimService.retryableFailureTaskIds).isEmpty();
     assertThat(claimService.finalFailureTaskIds).isEmpty();
   }
@@ -258,7 +258,7 @@ class CostRunTaskWorkerTest {
     private final List<String> successRunNos = new ArrayList<>();
     private final List<Long> retryableFailureTaskIds = new ArrayList<>();
     private final List<Long> finalFailureTaskIds = new ArrayList<>();
-    private final List<Long> collaborationTaskIds = new ArrayList<>();
+    private final List<Long> waitingInputTaskIds = new ArrayList<>();
     private String lastErrorMessage;
     private String lastErrorStack;
 
@@ -291,9 +291,9 @@ class CostRunTaskWorkerTest {
     }
 
     @Override
-    public boolean markCollaboration(
+    public boolean markWaitingInput(
         Long taskId, String workerId, String resultSummaryJson, String message) {
-      collaborationTaskIds.add(taskId);
+      waitingInputTaskIds.add(taskId);
       lastErrorMessage = message;
       return true;
     }

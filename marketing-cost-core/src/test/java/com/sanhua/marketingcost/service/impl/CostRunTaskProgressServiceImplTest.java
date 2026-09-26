@@ -81,13 +81,13 @@ class CostRunTaskProgressServiceImplTest {
   }
 
   @Test
-  void collaborationAndCurrentSkipAreTerminalButNotFailures() {
+  void waitingInputAndCurrentSkipAreTerminalButNotFailures() {
     FakeBatchMapper batchMapper = new FakeBatchMapper();
     FakeTaskMapper taskMapper =
         new FakeTaskMapper(
             List.of(
                 count("SUCCESS", 2),
-                count("COLLABORATION", 3),
+                count("WAITING_INPUT", 3),
                 count("SKIPPED_CURRENT", 4)));
     CostRunTaskProgressServiceImpl service =
         new CostRunTaskProgressServiceImpl(batchMapper.proxy(), taskMapper.proxy());
@@ -96,7 +96,7 @@ class CostRunTaskProgressServiceImplTest {
 
     assertThat(snapshot.getStatus()).isEqualTo("SUCCESS");
     assertThat(snapshot.getTotalCount()).isEqualTo(9);
-    assertThat(snapshot.getCollaborationCount()).isEqualTo(3);
+    assertThat(snapshot.getWaitingInputCount()).isEqualTo(3);
     assertThat(snapshot.getSkippedCurrentCount()).isEqualTo(4);
     assertThat(snapshot.getSkippedCount()).isEqualTo(7);
     assertThat(snapshot.getProgress()).isEqualTo(100);

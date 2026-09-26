@@ -13,6 +13,21 @@ import org.apache.ibatis.annotations.Update;
 
 @Mapper
 public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
+  String OWN_MODULES = "SELECT 1 FROM lp_quote_tech_module vm WHERE vm.product_id=product.id "
+      + "AND vm.required_flag=1 AND vm.assignee_user_id=#{userId} ";
+  String WORKBENCH_STATUS = "CASE WHEN #{accessMode}='ASSIGNEE' THEN CASE "
+      + "WHEN NOT EXISTS (" + OWN_MODULES + ") THEN task.task_status "
+      + "WHEN NOT EXISTS (" + OWN_MODULES + "AND vm.module_status != 'APPROVED') THEN 'APPROVED' "
+      + "WHEN NOT EXISTS (" + OWN_MODULES + "AND vm.module_status NOT IN ('SUBMITTED','APPROVED')) THEN 'SUBMITTED' "
+      + "WHEN EXISTS (" + OWN_MODULES + "AND vm.module_status='FROZEN') THEN 'PREPARED' "
+      + "WHEN EXISTS (" + OWN_MODULES + "AND vm.module_status='RETURNED') THEN 'PARTIALLY_RETURNED' "
+      + "WHEN EXISTS (" + OWN_MODULES + "AND vm.module_status IN ('READY','EDITING')) THEN 'IN_PROGRESS' "
+      + "ELSE 'PENDING' END "
+      + "WHEN task.task_status IN ('UNASSIGNED','APPROVED','CANCELLED') THEN task.task_status "
+      + "WHEN EXISTS (SELECT 1 FROM lp_quote_tech_submission vs WHERE vs.product_id=product.id "
+      + "AND vs.sent_at IS NOT NULL AND vs.submission_status IN ('SENT','APPROVED','RETURNED')) THEN 'SUBMITTED' "
+      + "ELSE 'PENDING' END";
+
 
   @Insert("""
       INSERT INTO lp_quote_tech_product (
@@ -78,8 +93,9 @@ public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
       "FROM lp_quote_tech_product product",
       "JOIN lp_quote_tech_task task ON task.id=product.task_id",
       "WHERE product.active_flag=1 AND task.active_flag=1",
+      "<if test='oaNo != null'>AND task.oa_no=#{oaNo}</if>",
       "<if test='taskStatus != null and taskStatus != \"\"'>",
-      "AND task.task_status=#{taskStatus}",
+      "AND (" + WORKBENCH_STATUS + ")=#{taskStatus}",
       "</if>",
       "<if test='accountingMonth != null and accountingMonth != \"\"'>",
       "AND task.accounting_month=#{accountingMonth}",
@@ -105,7 +121,7 @@ public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
       @Param("businessUnitType") String businessUnitType,
       @Param("taskStatus") String taskStatus,
       @Param("accountingMonth") String accountingMonth,
-      @Param("keyword") String keyword);
+      @Param("keyword") String keyword, @Param("oaNo") String oaNo);
 
   @Select({
       "<script>",
@@ -113,8 +129,9 @@ public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
       "FROM lp_quote_tech_product product",
       "JOIN lp_quote_tech_task task ON task.id=product.task_id",
       "WHERE product.active_flag=1 AND task.active_flag=1",
+      "<if test='oaNo != null'>AND task.oa_no=#{oaNo}</if>",
       "<if test='taskStatus != null and taskStatus != \"\"'>",
-      "AND task.task_status=#{taskStatus}",
+      "AND (" + WORKBENCH_STATUS + ")=#{taskStatus}",
       "</if>",
       "<if test='accountingMonth != null and accountingMonth != \"\"'>",
       "AND task.accounting_month=#{accountingMonth}",
@@ -143,6 +160,7 @@ public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
       @Param("taskStatus") String taskStatus,
       @Param("accountingMonth") String accountingMonth,
       @Param("keyword") String keyword,
+      @Param("oaNo") String oaNo,
       @Param("offset") int offset,
       @Param("size") int size);
 

@@ -53,7 +53,7 @@ class QuoteOaPdfDetailTableParserFiSr005Test {
     QuotePdfImportServiceImpl service =
         new QuotePdfImportServiceImpl(
             new QuoteNormalizeService(new QuoteIngestRequestValidator(), new QuoteClassifyService()),
-            ignored -> null,
+            org.mockito.Mockito.mock(QuoteIngestService.class),
             (inputStream, fileName) -> document);
 
     QuoteExcelImportPreviewResponse response =

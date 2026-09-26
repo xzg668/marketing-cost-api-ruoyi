@@ -13,6 +13,9 @@ public class SysUserCreateRequest {
     @Size(min = 2, max = 30, message = "用户名长度 2~30")
     private String userName;
 
+    @Size(max = 64, message = "工号长度不能超过64个字符")
+    private String employeeNo;
+
     /** 密码：仅接收反序列化，序列化时跳过，防止审计日志写入明文密码 */
     @NotBlank(message = "密码不能为空")
     @Size(min = 6, max = 50, message = "密码长度 6~50")

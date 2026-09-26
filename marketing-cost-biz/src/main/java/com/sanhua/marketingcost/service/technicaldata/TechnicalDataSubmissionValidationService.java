@@ -20,6 +20,7 @@ import org.springframework.util.StringUtils;
 @Service
 public class TechnicalDataSubmissionValidationService {
 
+  private final com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository recipients;
   private final QuoteTechnicalDataRepository repository;
   private final TechnicalDataTaskRepository taskRepository;
   private final TechnicalDataVersionContentCodec codec;
@@ -36,7 +37,9 @@ public class TechnicalDataSubmissionValidationService {
       TechnicalDataTaskRepository taskRepository, TechnicalDataVersionContentCodec codec, TechnicalDataDependencies dependencies,
       TechnicalDataManufacturingApplicationService manufacturing, TechnicalDataPackageApplicationService packaging,
       TechnicalDataAuxiliaryApplicationService auxiliary, TechnicalDataSolderApplicationService solder,
-      TechnicalDataSalaryApplicationService salary, TechnicalDataNetLossApplicationService netLoss, TechnicalDataPriceApplicationService prices) {
+      TechnicalDataSalaryApplicationService salary, TechnicalDataNetLossApplicationService netLoss, TechnicalDataPriceApplicationService prices,
+      com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository recipients) {
+    this.recipients = recipients;
     this.repository = repository; this.taskRepository = taskRepository; this.codec = codec;
     this.dependencies = dependencies;
     this.manufacturing = manufacturing;
@@ -54,7 +57,7 @@ public class TechnicalDataSubmissionValidationService {
     var products = taskRepository.findProducts(taskId);
     var allModules = taskRepository.findModules(products.stream().map(QuoteTechProduct::getId).toList());
     if (actor == null || !actor.canReadTask(task, allModules) || assigneeUserId == null
-        || !actor.admin() && !Objects.equals(actor.userId(), assigneeUserId)) {
+        || actor.canViewSupplementOverview() || !Objects.equals(actor.userId(), assigneeUserId)) {
       throw new TechnicalDataTaskException(TechnicalDataTaskErrorCode.FORBIDDEN, "无权读取此产品任务");
     }
     List<TechnicalDataTaskValidationResponse.Issue> issues = new ArrayList<>();
@@ -67,8 +70,10 @@ public class TechnicalDataSubmissionValidationService {
       int start = issues.size();
       var modules = taskRepository.findModules(product.getId());
       var byType = moduleMap(product, modules, issues);
+      var person = recipients.current(taskId).stream().filter(row -> row.userId()==assigneeUserId).findFirst().orElse(null);
       var own = modules.stream().filter(module -> requiredModule(module)
-          && Objects.equals(module.getAssigneeUserId(), assigneeUserId)).toList();
+          && Objects.equals(module.getAssigneeUserId(), assigneeUserId)
+          && (person == null || person.processingModules().contains(module.getModuleType()))).toList();
       if (own.isEmpty()) add(issues, product, "TASK", "assigneeUserId", null, "PERSON_SCOPE_EMPTY", "此人没有负责的补录模块", "task-status");
       boolean frozen = !own.isEmpty() && own.stream().allMatch(module -> Set.of("FROZEN", "SUBMITTED", "APPROVED").contains(module.getModuleStatus()));
       Long versionId = frozen ? own.getFirst().getCurrentVersionId() : product.getCurrentEditVersionId();

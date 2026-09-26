@@ -1,0 +1,26 @@
+{
+  "nodeConditions": [
+    {"field": "shape_attr", "op": "EQ", "value": "采购件"},
+    {"field": "purchase_category", "op": "IN", "values": [
+      "挤压铜棒", "不锈钢棒", "锻镦件", "软磁不锈钢棒", "铝棒", "铸造件",
+      "不锈钢钢管", "无缝钢管", "紫铜直管", "焊接钢管", "金加工件", "不锈钢板带",
+      "冲压拉伸件", "黄铜管", "其它管件", "钢丝", "碳钢钢棒", "注塑件",
+      "其它钢材", "电镀类", "紫铜盘管", "PEEK", "连铸铜棒", "粉末冶金件",
+      "紫铜板带", "漆包线", "丝网", "铜包铝漆包线"
+    ]}
+  ],
+  "parentConditions": [
+    {"field": "shape_attr", "op": "EQ", "value": "制造件"},
+    {"field": "has_byproduct", "op": "EQ", "value": "true"}
+  ],
+  "excludeGroups": [{
+    "nodeConditions": [
+      {"field": "main_category_code", "op": "EQ", "value": "121191304"},
+      {"field": "material_name", "op": "NOT_LIKE", "value": "坯"},
+      {"field": "material_name", "op": "NOT_LIKE", "value": "半成品"},
+      {"field": "material_name", "op": "NOT_LIKE", "value": "加强板"},
+      {"field": "material_name", "op": "NOT_LIKE", "value": "落料板"},
+      {"field": "material_name", "op": "NOT_LIKE", "value": "内齿圈"}
+    ]
+  }]
+}

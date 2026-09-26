@@ -18,19 +18,14 @@ public class OaIntegrationProperties {
 
   private Mode mode = Mode.DISABLED;
   private String environment;
-  private boolean workerEnabled = true;
   private int maxBodyBytes = 2 * 1024 * 1024;
-  private int batchSize = 20;
-  private int leaseSeconds = 60;
-  private int maxAttempts = 5;
   private Map<String, Client> clients = new LinkedHashMap<>();
   private Outbound outbound = new Outbound();
 
   @PostConstruct
   void validate() {
-    if (maxBodyBytes < 1024 || maxBodyBytes > 10 * 1024 * 1024 || batchSize < 1 || batchSize > 100
-        || leaseSeconds < 5 || leaseSeconds > 3600 || maxAttempts < 1 || maxAttempts > 20) {
-      throw new IllegalStateException("OA inbox size, batch, lease or retry configuration is invalid");
+    if (maxBodyBytes < 1024 || maxBodyBytes > 10 * 1024 * 1024) {
+      throw new IllegalStateException("OA request body size configuration is invalid");
     }
     if (mode == Mode.DISABLED) return;
     if (environment == null || !environment.matches("[A-Za-z0-9._-]{1,32}") || clients.isEmpty()) {

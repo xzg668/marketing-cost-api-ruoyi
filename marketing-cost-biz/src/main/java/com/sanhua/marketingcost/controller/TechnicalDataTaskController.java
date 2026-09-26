@@ -4,17 +4,10 @@ import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstant
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskPublishRequest;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskPublishResponse;
-import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskPrepareRequest;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskResponse;
-import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskSubmissionRequest;
-import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskSubmissionResponse;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataTaskValidationResponse;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataWorkbenchPageResponse;
-import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataAdminActionRequest;
-import com.sanhua.marketingcost.service.technicaldata.TechnicalDataAdminOperationService;
-import com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaIntegrationService;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataActorProvider;
-import com.sanhua.marketingcost.service.technicaldata.TechnicalDataSubmissionApplicationService;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataTaskApplicationService;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataTaskException;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataWorkflowService;
@@ -36,36 +29,43 @@ public class TechnicalDataTaskController {
       "@ss.hasAnyPermi('technical:data:task:list','technical:data:task:edit',"
           + "'technical:data:admin:operate','ingest:quote:cost-run:execute')";
   private static final String PUBLISH_PERMISSION =
-      "@ss.hasAnyPermi('technical:data:task:edit','technical:data:admin:operate',"
+      "@ss.hasAnyPermi('technical:data:admin:operate',"
           + "'ingest:quote:cost-run:execute')";
 
   private final TechnicalDataTaskApplicationService applicationService;
-  private final TechnicalDataSubmissionApplicationService submissionService;
+  private final com.sanhua.marketingcost.service.technicaldata.TechnicalDataSubmissionValidationService validation;
+  private final com.sanhua.marketingcost.service.technicaldata.TechnicalDataDocumentSubmissionService documents;
   private final TechnicalDataActorProvider actorProvider;
-  private final TechnicalDataAdminOperationService adminOperationService;
-  private final TechnicalDataOaIntegrationService oaIntegrationService;
   private final TechnicalDataWorkflowService workflowService;
 
-  @Autowired
-  public TechnicalDataTaskController(
-      TechnicalDataTaskApplicationService applicationService,
-      TechnicalDataSubmissionApplicationService submissionService,
-      TechnicalDataActorProvider actorProvider,
-      TechnicalDataAdminOperationService adminOperationService,
-      TechnicalDataOaIntegrationService oaIntegrationService, TechnicalDataWorkflowService workflowService) {
-    this.applicationService = applicationService;
-    this.submissionService = submissionService;
-    this.actorProvider = actorProvider;
-    this.adminOperationService = adminOperationService;
-    this.oaIntegrationService = oaIntegrationService;
-    this.workflowService = workflowService;
+  public TechnicalDataTaskController(TechnicalDataTaskApplicationService applicationService,
+      com.sanhua.marketingcost.service.technicaldata.TechnicalDataSubmissionValidationService validation,
+      com.sanhua.marketingcost.service.technicaldata.TechnicalDataDocumentSubmissionService documents,
+      TechnicalDataActorProvider actorProvider, TechnicalDataWorkflowService workflowService) {
+    this.applicationService=applicationService; this.validation=validation; this.documents=documents;
+    this.actorProvider=actorProvider; this.workflowService=workflowService;
   }
 
-  public TechnicalDataTaskController(
-      TechnicalDataTaskApplicationService applicationService,
-      TechnicalDataSubmissionApplicationService submissionService,
-      TechnicalDataActorProvider actorProvider) {
-    this(applicationService, submissionService, actorProvider, null, null, null);
+  @PreAuthorize(READ_PERMISSION)
+  @GetMapping("/forms/{formId}/workbench")
+  public CommonResult<com.sanhua.marketingcost.service.technicaldata.TechnicalDataDocumentSubmissionService.Workbench> documentWorkbench(
+      @PathVariable long formId) {
+    return execute(() -> documents.workbench(formId, actorProvider.current()));
+  }
+
+  @PreAuthorize(READ_PERMISSION)
+  @GetMapping("/forms/{formId}/submissions/{batchId}")
+  public CommonResult<com.sanhua.marketingcost.service.technicaldata.TechnicalDataDocumentSubmissionService.Workbench> submittedDocument(
+      @PathVariable long formId, @PathVariable String batchId) {
+    return execute(() -> documents.submitted(formId,batchId,actorProvider.current()));
+  }
+
+  @PreAuthorize("@ss.hasPermi('technical:data:task:edit')")
+  @PostMapping("/forms/{formId}/submit")
+  public CommonResult<com.sanhua.marketingcost.service.technicaldata.TechnicalDataDocumentSubmissionService.Result> submitDocument(
+      @PathVariable long formId,
+      @RequestBody com.sanhua.marketingcost.service.technicaldata.TechnicalDataDocumentSubmissionService.Request request) {
+    return execute(() -> documents.submit(formId, request, actorProvider.current()));
   }
 
   @PreAuthorize(PUBLISH_PERMISSION)
@@ -79,13 +79,6 @@ public class TechnicalDataTaskController {
     });
   }
 
-  @PreAuthorize(PUBLISH_PERMISSION)
-  @PostMapping("/tasks/prepare-from-quote")
-  public CommonResult<TechnicalDataTaskResponse> prepareFromQuote(
-      @RequestBody TechnicalDataTaskPrepareRequest request) {
-    return execute(() -> applicationService.prepare(request, actorProvider.current()));
-  }
-
   @PreAuthorize(READ_PERMISSION)
   @GetMapping("/products")
   public CommonResult<TechnicalDataWorkbenchPageResponse> workbench(
@@ -93,9 +86,10 @@ public class TechnicalDataTaskController {
       @RequestParam(defaultValue = "20") int size,
       @RequestParam(required = false) String taskStatus,
       @RequestParam(required = false) String accountingMonth,
-      @RequestParam(required = false) String keyword) {
+      @RequestParam(required = false) String keyword,
+      @RequestParam(required = false) String oaNo) {
     return execute(() -> applicationService.workbench(
-        current, size, taskStatus, accountingMonth, keyword, actorProvider.current()));
+        current, size, taskStatus, accountingMonth, keyword, oaNo, actorProvider.current()));
   }
 
   @PreAuthorize(READ_PERMISSION)
@@ -110,81 +104,12 @@ public class TechnicalDataTaskController {
     return execute(() -> workflowService.status(taskId, actorProvider.current()));
   }
 
-  public record FinanceConfirmation(String approvalFingerprint) {}
-  public record WorkflowRetry(long recipientId) {}
-
-  @PreAuthorize(READ_PERMISSION)
-  @PostMapping("/tasks/{taskId}/workflow/retry")
-  public CommonResult<TechnicalDataWorkflowService.Status> retryWorkflow(
-      @PathVariable Long taskId, @RequestBody WorkflowRetry request) {
-    return execute(() -> workflowService.retry(taskId, request.recipientId(), actorProvider.current()));
-  }
-
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:cost-run:execute','technical:data:admin:operate')")
-  @PostMapping("/tasks/{taskId}/finance/confirm")
-  public CommonResult<TechnicalDataWorkflowService.Status> confirmFinance(
-      @PathVariable Long taskId, @RequestBody FinanceConfirmation request) {
-    return execute(() -> workflowService.confirm(taskId, request.approvalFingerprint(), actorProvider.current()));
-  }
-
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:cost-run:execute','technical:data:admin:operate')")
-  @PostMapping("/tasks/{taskId}/finance/return")
-  public CommonResult<TechnicalDataWorkflowService.Status> returnPerson(
-      @PathVariable Long taskId, @RequestBody TechnicalDataAdminActionRequest request) {
-    return execute(() -> workflowService.requestReturn(taskId, request, actorProvider.current()));
-  }
-
-  @PreAuthorize(PUBLISH_PERMISSION)
+  @PreAuthorize("@ss.hasPermi('technical:data:task:edit')")
   @PostMapping("/tasks/{taskId}/validate")
-  public CommonResult<TechnicalDataTaskValidationResponse> validate(@PathVariable Long taskId, @RequestParam(required = false) Long assigneeUserId) {
-    return execute(() -> submissionService.validate(taskId, assigneeUserId, actorProvider.current()));
-  }
-
-  @PreAuthorize(PUBLISH_PERMISSION)
-  @PostMapping("/tasks/{taskId}/submit")
-  public CommonResult<TechnicalDataTaskSubmissionResponse> submit(
-      @PathVariable Long taskId,
-      @RequestBody TechnicalDataTaskSubmissionRequest request) {
-    return execute(() -> submissionService.submit(taskId, request, actorProvider.current()));
-  }
-
-  @PreAuthorize("@ss.hasPermi('technical:data:admin:operate')")
-  @PostMapping("/tasks/{taskId}/admin/reassign")
-  public CommonResult<TechnicalDataTaskResponse> reassign(
-      @PathVariable Long taskId, @RequestBody TechnicalDataAdminActionRequest request) {
-    return execute(() -> adminOperationService.reassign(taskId, request, actorProvider.current()));
-  }
-
-  @PreAuthorize("@ss.hasPermi('technical:data:admin:operate')")
-  @PostMapping("/tasks/{taskId}/admin/proxy-entry")
-  public CommonResult<TechnicalDataTaskResponse> startProxyEntry(
-      @PathVariable Long taskId, @RequestBody TechnicalDataAdminActionRequest request) {
-    return execute(() -> adminOperationService.startProxyEntry(
-        taskId, request, actorProvider.current()));
-  }
-
-  @PreAuthorize("@ss.hasPermi('technical:data:admin:operate')")
-  @PostMapping("/tasks/{taskId}/admin/unlock-draft")
-  public CommonResult<TechnicalDataTaskResponse> unlockDraft(
-      @PathVariable Long taskId, @RequestBody TechnicalDataAdminActionRequest request) {
-    return execute(() -> adminOperationService.unlockDraft(taskId, request, actorProvider.current()));
-  }
-
-  @PreAuthorize("@ss.hasPermi('technical:data:admin:operate')")
-  @PostMapping("/tasks/{taskId}/admin/void")
-  public CommonResult<TechnicalDataTaskResponse> voidTask(
-      @PathVariable Long taskId, @RequestBody TechnicalDataAdminActionRequest request) {
-    return execute(() -> adminOperationService.voidTask(taskId, request, actorProvider.current()));
-  }
-
-  @PreAuthorize("@ss.hasPermi('technical:data:admin:operate')")
-  @PostMapping("/tasks/{taskId}/external-task/retry")
-  public CommonResult<TechnicalDataTaskResponse> retryExternalTask(
-      @PathVariable Long taskId, @RequestBody TechnicalDataAdminActionRequest request) {
+  public CommonResult<TechnicalDataTaskValidationResponse> validate(@PathVariable Long taskId) {
     return execute(() -> {
-      var actor = actorProvider.current();
-      oaIntegrationService.retry(taskId, request, actor);
-      return applicationService.detail(taskId, actor);
+      var actor=actorProvider.current();
+      return validation.validate(taskId, actor.userId(), actor);
     });
   }
 

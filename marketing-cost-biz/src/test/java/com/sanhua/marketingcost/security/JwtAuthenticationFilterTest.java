@@ -36,7 +36,7 @@ class JwtAuthenticationFilterTest {
         jwtUtils = mock(JwtUtils.class);
         userDetailsService = mock(UserDetailsService.class);
         sysUserService = mock(SysUserService.class);
-        filter = new JwtAuthenticationFilter(jwtUtils, userDetailsService, sysUserService);
+        filter = new JwtAuthenticationFilter(jwtUtils, userDetailsService, sysUserService, new com.sanhua.marketingcost.integration.oa.OaIntegrationProperties());
         filterChain = mock(FilterChain.class);
         SecurityContextHolder.clearContext();
     }
@@ -57,6 +57,7 @@ class JwtAuthenticationFilterTest {
         when(userDetailsService.loadUserByUsername("admin")).thenReturn(userDetails);
 
         SysUser sysUser = new SysUser();
+        sysUser.setStatus("0"); sysUser.setDelFlag("0");
         sysUser.setUserId(1L);
         when(sysUserService.findByUsername("admin")).thenReturn(sysUser);
         when(sysUserService.findPermissionsByUserId(1L)).thenReturn(Set.of("*:*:*"));
@@ -98,6 +99,7 @@ class JwtAuthenticationFilterTest {
         when(userDetailsService.loadUserByUsername("staff1")).thenReturn(userDetails);
 
         SysUser sysUser = new SysUser();
+        sysUser.setStatus("0"); sysUser.setDelFlag("0");
         sysUser.setUserId(10L);
         when(sysUserService.findByUsername("staff1")).thenReturn(sysUser);
         when(sysUserService.findPermissionsByUserId(10L))
@@ -133,6 +135,7 @@ class JwtAuthenticationFilterTest {
         when(userDetailsService.loadUserByUsername("user1")).thenReturn(userDetails);
 
         SysUser sysUser = new SysUser();
+        sysUser.setStatus("0"); sysUser.setDelFlag("0");
         sysUser.setUserId(5L);
         when(sysUserService.findByUsername("user1")).thenReturn(sysUser);
         when(sysUserService.findPermissionsByUserId(5L)).thenReturn(Set.of("cost:trial:list"));
@@ -219,8 +222,8 @@ class JwtAuthenticationFilterTest {
     }
 
     @Test
-    @DisplayName("用户不存在于 sys_user 时 — 仍设置认证但无权限标识")
-    void userNotInSysUser_authSetWithRolesOnly() throws ServletException, IOException {
+    @DisplayName("用户已删除时，即使旧 Token 有效也不建立认证")
+    void deletedUserWithOldTokenIsNotAuthenticated() throws ServletException, IOException {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("Authorization", "Bearer token1");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -237,9 +240,7 @@ class JwtAuthenticationFilterTest {
         filter.doFilterInternal(request, response, filterChain);
 
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        assertNotNull(auth);
-        Set<String> authorities = auth.getAuthorities().stream()
-                .map(GrantedAuthority::getAuthority).collect(Collectors.toSet());
-        assertEquals(Set.of("ROLE_BU_STAFF"), authorities, "仅包含角色，无权限标识");
+        assertNull(auth);
+        verify(filterChain).doFilter(request, response);
     }
 }

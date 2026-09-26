@@ -1,12 +1,17 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -19,20 +24,29 @@ import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkflowStatusRespo
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionSummaryResponse;
 import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
+import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.CostingAlgorithmVersionProvider;
+import com.sanhua.marketingcost.service.CostInputRevisionService;
+import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
+import com.sanhua.marketingcost.service.MaterialMasterSyncService;
 import com.sanhua.marketingcost.service.ProductCostingStateService;
-import com.sanhua.marketingcost.service.ProductCostingCollaborationService;
 import com.sanhua.marketingcost.service.QuoteCostRunWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowRetryException;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
+import com.sanhua.marketingcost.service.costing.ProductCostingContextResolver;
+import com.sanhua.marketingcost.service.costing.ProductCostingSuccessLookup;
+import com.sanhua.marketingcost.service.costing.ProductCostingFailurePolicy;
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -49,8 +63,11 @@ class ProductCostingPipelineImplTest {
   private QuoteCostingWorkspaceService workspaceService;
   private OaFormItemMapper itemMapper;
   private QuoteCostRunVersionMapper versionMapper;
-  private ProductCostingCollaborationService collaborationService;
   private ProductCostingPipelineImpl pipeline;
+  private OaFormMapper formMapper;
+  private CostInputRevisionService revisionService;
+  private MaterialMasterSyncService syncService;
+  private com.sanhua.marketingcost.service.technicaldata.TechnicalDataQuoteSourceReader technicalSources;
 
   @BeforeEach
   void setUp() {
@@ -61,22 +78,48 @@ class ProductCostingPipelineImplTest {
     workspaceService = mock(QuoteCostingWorkspaceService.class);
     itemMapper = mock(OaFormItemMapper.class);
     versionMapper = mock(QuoteCostRunVersionMapper.class);
-    collaborationService = mock(ProductCostingCollaborationService.class);
-    pipeline =
-        new ProductCostingPipelineImpl(
-            workbenchService,
-            priceService,
-            costService,
-            stateService,
-            workspaceService,
-            itemMapper,
-            versionMapper,
-            collaborationService,
-            algorithmVersion());
+    formMapper = mock(OaFormMapper.class);
+    revisionService = mock(CostInputRevisionService.class);
+    syncService = mock(MaterialMasterSyncService.class);
+    technicalSources = mock(com.sanhua.marketingcost.service.technicaldata.TechnicalDataQuoteSourceReader.class);
+    when(technicalSources.afterCosting(any())).thenReturn(new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSourceCheckResponse(
+        11L, MONTH, "checked", java.time.LocalDateTime.now(), List.of(), null, List.of()));
+    OaForm form = new OaForm();
+    form.setId(1L);
+    form.setOaNo("OA-1");
+    when(formMapper.selectOne(any())).thenReturn(form);
+    when(revisionService.currentRevision(any(), any(), eq(MONTH))).thenReturn("SOURCE-1");
+    pipeline = new ProductCostingPipelineImpl(
+        workbenchService, priceService, costService, stateService, syncService,
+        new ProductCostingContextResolver(formMapper, itemMapper, revisionService),
+        new ProductCostingSuccessLookup(workspaceService, itemMapper, versionMapper, algorithmVersion()),
+        new ProductCostingFailurePolicy(), technicalSources,
+        mock(com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService.class));
+    pipeline.setOaWorkflowAccess(mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
     when(itemMapper.selectById(11L)).thenReturn(item(null));
     when(workspaceService.find(11L, MONTH)).thenReturn(Optional.empty());
     when(stateService.bindCurrentPriceFingerprint("OA-1", 11L, MONTH, "PPR-OA-1"))
         .thenReturn("FULL-FP");
+  }
+
+  @Test void preparationChecksCurrentSourcesWithoutCreatingAnyCostVersion() {
+    stubReadyStages(0);
+    var result = pipeline.prepare(request(false));
+    assertThat(result.getPipelineStatus()).isEqualTo("READY");
+    assertThat(result.getSourceRevision()).isNotBlank();
+    assertThat(result.getCostVersionId()).isNull();
+    verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
+  }
+
+  @Test void automaticContinuationAtMaterialNodeCannotPublishCost() {
+    stubReadyStages(0);
+    var policy = mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class);
+    when(policy.view(anyLong())).thenReturn(new com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.View(
+        "MATERIAL_REVIEW", "待资料确认", null, null, true, true));
+    pipeline.setOaWorkflowAccess(policy);
+    var result = pipeline.execute(request(false));
+    assertThat(result.getErrorCode()).isEqualTo("MATERIAL_CONFIRMATION_REQUIRED");
+    verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
   }
 
   @Test
@@ -97,19 +140,59 @@ class ProductCostingPipelineImplTest {
   @DisplayName("缺 BOM 停在 BOM 步骤且不进入取价")
   void missingBomStopsAtBom() {
     when(workbenchService.launchWorkbench("OA-1", 11L)).thenReturn(workbench("BLOCKED", "BLOCKED", 0));
-    when(collaborationService.coordinate(any())).thenReturn(
-        new ProductCostingCollaborationService.CoordinationResult(
-            101L, "WAIT_TECH", 601L, "王工", true, false, "已创建协作"));
-
     var result = pipeline.execute(request(false));
 
     assertThat(result.getBlockingStatus()).isEqualTo("WAIT_BOM");
     assertThat(result.getCurrentStep()).isEqualTo("QUOTE_BOM");
     assertThat(result.getErrorCode()).isEqualTo("BOM_MISSING");
-    assertThat(result.getCollaborationTaskId()).isEqualTo(101L);
-    assertThat(result.getCollaborationStatus()).isEqualTo("WAIT_TECH");
-    assertThat(result.getCollaborationAssigneeName()).isEqualTo("王工");
     verify(priceService, never()).generate(anyString(), anyLong(), any());
+  }
+
+  @Test
+  @DisplayName("缺BOM时成本入口不再调用旧协作链或伪造自动继续")
+  void missingBomDoesNotInvokeLegacyCollaboration() {
+    when(workbenchService.launchWorkbench("OA-1", 11L)).thenReturn(
+        workbench("BLOCKED", "BLOCKED", 0));
+
+    var result = pipeline.execute(request(false));
+
+    assertThat(result.getPipelineStatus()).isEqualTo("BLOCKED");
+    assertThat(result.getBlockingStatus()).isEqualTo("WAIT_BOM");
+    verify(workbenchService).launchWorkbench("OA-1", 11L);
+    verify(priceService, never()).generate(anyString(), anyLong(), any());
+  }
+
+  @Test
+  @DisplayName("电子图库BOM已发布但真实缺价时只停在价格步骤且不回退BOM")
+  void electronicDrawingPublicationStopsOnlyAtRealPriceGap() {
+    when(workbenchService.launchWorkbench("OA-1", 11L)).thenReturn(
+        workbench("DONE", "DONE", 0));
+    QuotePricePrepareWorkbenchResponse prices = new QuotePricePrepareWorkbenchResponse();
+    prices.setReadiness(PricePrepareReadinessResult.notReady(
+        "NOT_READY", false, true, "缺 2 项正式价格", null, MONTH, "PARTIAL", 2, null));
+    when(priceService.generate(anyString(), anyLong(), any())).thenReturn(prices);
+    var result = pipeline.execute(request(false));
+
+    assertThat(result.getBlockingStatus()).isEqualTo("WAIT_PRICE");
+    assertThat(result.getCurrentStep()).isEqualTo("PRICE_PREPARE");
+    assertThat(result.getGapCount()).isEqualTo(2);
+    verify(workbenchService).launchWorkbench("OA-1", 11L);
+    verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
+  }
+
+  @Test
+  @DisplayName("电子图库可重试异常由流水线交给worker后台重试")
+  void electronicDrawingRetryIsMarkedRetryable() {
+    when(workbenchService.launchWorkbench("OA-1", 11L)).thenThrow(
+        new ElectronicDrawingWorkflowRetryException(
+            "电子图库正在后台自动重试，报价员无需处理"));
+
+    var result = pipeline.execute(request(false));
+
+    assertThat(result.getPipelineStatus()).isEqualTo("FAILED");
+    assertThat(result.isRetryable()).isTrue();
+    assertThat(result.getMessage()).isEqualTo("电子图库正在后台自动重试，报价员无需处理");
+    assertThat(result.getMessage()).doesNotContain("HTTP", "Exception");
   }
 
   @Test
@@ -118,6 +201,7 @@ class ProductCostingPipelineImplTest {
     OaFormItem newProduct = item(null);
     newProduct.setMaterialNo(null);
     newProduct.setSunlModel("MODEL-NEW-1");
+    pipeline.setOaWorkflowAccess(mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
     when(itemMapper.selectById(11L)).thenReturn(newProduct);
     when(workbenchService.launchWorkbench("OA-1", 11L))
         .thenReturn(workbench("BLOCKED", "BLOCKED", 0));
@@ -203,16 +287,10 @@ class ProductCostingPipelineImplTest {
         PricePrepareReadinessResult.notReady(
             "NOT_READY", false, true, "缺 2 项正式价格", null, MONTH, "PARTIAL", 2, null));
     when(priceService.generate(anyString(), anyLong(), any())).thenReturn(prices);
-    when(collaborationService.coordinate(any())).thenReturn(
-        new ProductCostingCollaborationService.CoordinationResult(
-            102L, "WAIT_TECH", 601L, "王工", true, true, "缺价已转协作"));
-
     var result = pipeline.execute(request(false));
 
     assertThat(result.getBlockingStatus()).isEqualTo("WAIT_PRICE");
     assertThat(result.getGapCount()).isEqualTo(2);
-    assertThat(result.getCollaborationTaskId()).isEqualTo(102L);
-    assertThat(result.getCollaborationMessage()).isEqualTo("缺价已转协作");
     verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
   }
 
@@ -246,6 +324,33 @@ class ProductCostingPipelineImplTest {
   }
 
   @Test
+  @DisplayName("审批未齐可检查 BOM 和价格，但不得生成正式成本版本")
+  void missingEffectiveTechnicalVersionDuringRevisionBecomesBusinessBlock() {
+    stubReadyStages(0);
+    when(revisionService.currentRevision(any(OaForm.class), any(OaFormItem.class), eq(MONTH)))
+        .thenThrow(new EffectiveTechnicalDataException(
+            "TECH_DATA_EFFECTIVE_VERSION_MISSING",
+            11L,
+            MONTH,
+            List.of("PACKAGE", "AUXILIARY", "SALARY"),
+            "产品11 / " + MONTH + "：尚无审核生效版本；缺少模块[PACKAGE, AUXILIARY, SALARY]"));
+    var result = pipeline.execute(request(false));
+
+    assertThat(result.getPipelineStatus()).isEqualTo("BLOCKED");
+    assertThat(result.getBlockingStatus()).isEqualTo("WAIT_TECH_DATA");
+    assertThat(result.getCurrentStep()).isEqualTo("TECHNICAL_DATA");
+    assertThat(result.getErrorCode()).isEqualTo("TECH_DATA_EFFECTIVE_VERSION_MISSING");
+    assertThat(result.getGapCount()).isEqualTo(3);
+    assertThat(result.getMessage()).contains("产品11", "PACKAGE", "SALARY");
+    verify(workbenchService).launchWorkbench("OA-1", 11L);
+    verify(priceService).generate(anyString(), anyLong(), any());
+    verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
+    verify(stateService).markBlocked(
+        "OA-1", 11L, MONTH, "WAIT_TECH_DATA", "TECHNICAL_DATA",
+        "TECH_DATA_EFFECTIVE_VERSION_MISSING", result.getMessage(), 3);
+  }
+
+  @Test
   @DisplayName("财务基准缺失属于价格缺口，不归类为系统异常")
   void financeBaseMissingIsPriceBlock() {
     when(workbenchService.launchWorkbench("OA-1", 11L)).thenReturn(workbench("DONE", "DONE", 0));
@@ -263,6 +368,7 @@ class ProductCostingPipelineImplTest {
   void duplicateRequestReusesSuccess() {
     QuoteCostingWorkspace workspace = workspace();
     when(workspaceService.find(11L, MONTH)).thenReturn(Optional.of(workspace));
+    pipeline.setOaWorkflowAccess(mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
     when(itemMapper.selectById(11L)).thenReturn(item(88L));
     QuoteCostRunVersion version = version();
     version.setInputFingerprint("FULL-FP");
@@ -282,6 +388,7 @@ class ProductCostingPipelineImplTest {
   void changedAlgorithmDoesNotReuseSuccess() {
     QuoteCostingWorkspace workspace = workspace();
     when(workspaceService.find(11L, MONTH)).thenReturn(Optional.of(workspace));
+    pipeline.setOaWorkflowAccess(mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
     when(itemMapper.selectById(11L)).thenReturn(item(88L));
     QuoteCostRunVersion version = version();
     version.setInputFingerprint("FULL-FP");
@@ -302,6 +409,7 @@ class ProductCostingPipelineImplTest {
   void forceRequestDoesNotReuseSuccess() {
     QuoteCostingWorkspace workspace = workspace();
     when(workspaceService.find(11L, MONTH)).thenReturn(Optional.of(workspace));
+    pipeline.setOaWorkflowAccess(mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
     when(itemMapper.selectById(11L)).thenReturn(item(88L));
     QuoteCostRunVersion version = version();
     version.setInputFingerprint("FULL-FP");
@@ -313,6 +421,75 @@ class ProductCostingPipelineImplTest {
     assertThat(result.getPipelineStatus()).isEqualTo("SUCCESS");
     assertThat(result.isReusedSuccess()).isFalse();
     verify(workbenchService).launchWorkbench("OA-1", 11L);
+  }
+
+  @Test
+  void wrongQuotationOwnershipIsRejectedBeforeAnyWork() {
+    OaFormItem otherItem = item(null);
+    otherItem.setOaFormId(2L);
+    pipeline.setOaWorkflowAccess(mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
+    when(itemMapper.selectById(11L)).thenReturn(otherItem);
+    assertThatThrownBy(() -> pipeline.execute(request(false)))
+        .isInstanceOf(QuoteIngestException.class).hasMessageContaining("不属于当前报价单");
+    verify(workbenchService, never()).launchWorkbench(anyString(), anyLong());
+    verify(revisionService, never()).currentRevision(any(), any(), anyString());
+  }
+
+  @Test
+  void transientRevisionFailureReturnsRetryableInputFailure() {
+    when(revisionService.currentRevision(any(), any(), eq(MONTH)))
+        .thenThrow(new org.springframework.dao.QueryTimeoutException("读取输入超时"));
+    var result = pipeline.execute(request(false));
+    assertThat(result.getPipelineStatus()).isEqualTo("FAILED");
+    assertThat(result.getErrorCode()).isEqualTo("INPUT_CHECK_SYSTEM_ERROR");
+    assertThat(result.isRetryable()).isTrue();
+    verify(workbenchService, never()).launchWorkbench(anyString(), anyLong());
+  }
+
+  @Test
+  void failedConcurrentLookupDoesNotMaskOriginalStageFailure() {
+    when(workspaceService.find(11L, MONTH)).thenReturn(Optional.empty())
+        .thenThrow(new IllegalStateException("后续查询失败"));
+    when(workbenchService.launchWorkbench("OA-1", 11L))
+        .thenThrow(new IllegalStateException("原始BOM失败"));
+    var result = pipeline.execute(request(false));
+    assertThat(result.getErrorCode()).isEqualTo("BOM_SYSTEM_ERROR");
+    assertThat(result.getMessage()).isEqualTo("原始BOM失败");
+  }
+
+  @Test
+  void wrappedNetworkFailureIsNotMisreportedAsMissingPrice() {
+    when(workbenchService.launchWorkbench("OA-1", 11L)).thenReturn(workbench("DONE", "DONE", 0));
+    when(priceService.generate(anyString(), anyLong(), any()))
+        .thenThrow(new IllegalArgumentException("价格服务连接失败", new java.net.ConnectException()));
+    var result = pipeline.execute(request(false));
+    assertThat(result.getPipelineStatus()).isEqualTo("FAILED");
+    assertThat(result.getErrorCode()).isEqualTo("PRICE_PREPARE_SYSTEM_ERROR");
+    assertThat(result.isRetryable()).isTrue();
+  }
+
+  @Test
+  void missingSourceRevisionCannotReuseOldSuccess() {
+    when(revisionService.currentRevision(any(), any(), eq(MONTH))).thenReturn(null);
+    when(workspaceService.find(11L, MONTH)).thenReturn(Optional.of(workspace()));
+    pipeline.setOaWorkflowAccess(mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
+    when(itemMapper.selectById(11L)).thenReturn(item(88L));
+    stubReadyStages(0);
+    assertThat(pipeline.execute(request(false)).isReusedSuccess()).isFalse();
+    verify(workbenchService).launchWorkbench("OA-1", 11L);
+  }
+
+  @Test
+  void concurrentSuccessIsReusedAfterAStageFails() {
+    when(workspaceService.find(11L, MONTH)).thenReturn(Optional.empty(), Optional.of(workspace()));
+    pipeline.setOaWorkflowAccess(mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
+    when(itemMapper.selectById(11L)).thenReturn(item(88L));
+    QuoteCostRunVersion version = version();
+    version.setInputFingerprint("FULL-FP");
+    when(versionMapper.selectById(88L)).thenReturn(version);
+    when(workbenchService.launchWorkbench("OA-1", 11L)).thenThrow(new IllegalStateException("并发已发布"));
+    assertThat(pipeline.execute(request(false)).isReusedSuccess()).isTrue();
+    verify(stateService, never()).markSystemFailed(anyString(), anyLong(), anyString(), anyString(), anyString(), anyString());
   }
 
   private void stubReadyStages(int warningCount) {
@@ -328,6 +505,74 @@ class ProductCostingPipelineImplTest {
     QuoteCostRunWorkbenchResponse cost = new QuoteCostRunWorkbenchResponse();
     cost.setCurrentDisplayVersion(summary());
     when(costService.runToSuccess(anyString(), anyLong(), any(), anyString())).thenReturn(cost);
+  }
+
+  @Test void confirmedSalaryGapBlocksCostEvenWhenBomAndAllMaterialPricesAreReady() {
+    stubReadyStages(0);
+    salaryCheck(com.sanhua.marketingcost.service.technicaldata.TechnicalDataAvailability.MISSING);
+    var result = pipeline.execute(request(false));
+    assertThat(result.getBlockingStatus()).isEqualTo("WAIT_TECH_DATA");
+    assertThat(result.getTechnicalDataCheck().modules().getFirst().moduleType()).isEqualTo("SALARY");
+    verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
+  }
+
+  @Test void existingSupplementShowsOriginalOwnerAndCannotBypassCostInputReadiness() {
+    stubReadyStages(0);
+    var missing = new com.sanhua.marketingcost.service.technicaldata.TechnicalDataModuleRequirement(
+        "SALARY", true, "PUBLIC_MISSING", "公共工资缺失", com.sanhua.marketingcost.service.technicaldata.TechnicalDataAvailability.MISSING,
+        "CMS", java.time.LocalDateTime.now());
+    var shared = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSharedModuleInfo(
+        "SALARY", "IN_PROGRESS", 20L, 21L, null, null, "王工", "已由王工办理，请等待原资料完成，不能重复补录");
+    when(technicalSources.afterCosting(any())).thenReturn(new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSourceCheckResponse(
+        11L, MONTH, "shared", java.time.LocalDateTime.now(), List.of(missing), null, List.of(shared)));
+    var result = pipeline.execute(request(false));
+    assertThat(result.getPipelineStatus()).isEqualTo("BLOCKED");
+    assertThat(result.getMessage()).contains("王工", "不能重复补录");
+    verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
+  }
+
+  @Test void sourceQueryErrorDoesNotBecomeASalarySupplementTaskOrSuccessfulCost() {
+    stubReadyStages(0);
+    salaryCheck(com.sanhua.marketingcost.service.technicaldata.TechnicalDataAvailability.ERROR);
+    var result = pipeline.execute(request(false));
+    assertThat(result.getErrorCode()).isEqualTo("TECH_SOURCE_QUERY_FAILED");
+    assertThat(result.getTechnicalDataCheck().modules().getFirst().required()).isFalse();
+    verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
+  }
+
+  @Test void newlyMissingSourceCannotReuseAnEarlierSuccess() {
+    when(workspaceService.find(11L, MONTH)).thenReturn(Optional.of(workspace()));
+    pipeline.setOaWorkflowAccess(mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
+    when(itemMapper.selectById(11L)).thenReturn(item(88L));
+    var old = version(); old.setInputFingerprint("FULL-FP");
+    when(versionMapper.selectById(88L)).thenReturn(old);
+    salaryCheck(com.sanhua.marketingcost.service.technicaldata.TechnicalDataAvailability.MISSING);
+    var result = pipeline.execute(request(false));
+    assertThat(result.getPipelineStatus()).isEqualTo("BLOCKED");
+    assertThat(result.isReusedSuccess()).isFalse();
+    assertThat(old.getStatus()).isEqualTo("SUCCESS");
+    verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
+  }
+
+  private void salaryCheck(com.sanhua.marketingcost.service.technicaldata.TechnicalDataAvailability availability) {
+    var module = new com.sanhua.marketingcost.service.technicaldata.TechnicalDataModuleRequirement(
+        "SALARY", availability == com.sanhua.marketingcost.service.technicaldata.TechnicalDataAvailability.MISSING,
+        "SALARY_TEST", "工资来源测试", availability, "CMS", java.time.LocalDateTime.now());
+    when(technicalSources.afterCosting(any())).thenReturn(new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSourceCheckResponse(
+        11L, MONTH, "current-salary", java.time.LocalDateTime.now(), List.of(module), null, List.of()));
+  }
+
+  @Test void failedBomQueryIsASystemFailureInsteadOfMissingBom() {
+    var workbench = workbench("BLOCKED", "BLOCKED", 0);
+    var bom = new QuoteBomStatusItemResponse();
+    bom.setBomStatus("CHECK_FAILED"); bom.setErrorMessage("目标组织 BOM 查询失败");
+    workbench.setBomStatus(bom);
+    when(workbenchService.launchWorkbench("OA-1",11L)).thenReturn(workbench);
+    var result = pipeline.execute(request(false));
+    assertThat(result.getPipelineStatus()).isEqualTo("FAILED");
+    assertThat(result.getGapCount()).isZero();
+    assertThat(result.getErrorCode()).isNotEqualTo("BOM_MISSING");
+    verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
   }
 
   private QuoteCostingWorkbenchResponse workbench(
@@ -366,6 +611,8 @@ class ProductCostingPipelineImplTest {
     workspace.setWorkspaceStatus("SUCCESS");
     workspace.setInputFingerprint("FULL-FP");
     workspace.setLastSuccessInputFingerprint("FULL-FP");
+    workspace.setSourceRevision("SOURCE-1");
+    workspace.setLastSuccessSourceRevision("SOURCE-1");
     workspace.setCurrentPrepareNo("PPR-OA-1");
     workspace.setCurrentCostVersionId(88L);
     workspace.setCarriedForwardPriceCount(2);
@@ -381,6 +628,7 @@ class ProductCostingPipelineImplTest {
     version.setPricingMonth(MONTH);
     version.setAlgorithmVersion(CostingAlgorithmVersionProvider.DEFAULT_VERSION);
     version.setStatus("SUCCESS");
+    version.setSourceRevision("SOURCE-1");
     version.setCostRunNo("RUN-88");
     version.setVersionNo("COST-88");
     version.setOaPricePrepareNo("PPR-OA-1");

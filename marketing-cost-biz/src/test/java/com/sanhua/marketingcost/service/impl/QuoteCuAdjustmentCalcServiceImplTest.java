@@ -19,6 +19,7 @@ import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunObjectResult;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.CostRunResultDto;
+import com.sanhua.marketingcost.dto.EffectiveTechnicalDataInput;
 import com.sanhua.marketingcost.dto.financequote.FinancePricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest;
 import com.sanhua.marketingcost.dto.financequote.QuoteCuMaterialDiffResult;
@@ -157,6 +158,31 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     QuoteCostRunVersion finished = versionPatch.getAllValues().getLast();
     assertThat(finished.getTotalCost()).isEqualByComparingTo("140");
     assertThat(finished.getFinalQuoteAmount()).isEqualByComparingTo("152");
+  }
+
+  @Test
+  @DisplayName("T11 成本版本保存有效技术V2标识、全量输入快照和取数时间")
+  void persistsEffectiveTechnicalVersionTraceOnCostVersion() {
+    EffectiveTechnicalDataInput v2 = effectiveTechnicalV2();
+    when(costRunEngine.run(any())).thenAnswer(invocation -> {
+      CostRunContext context = invocation.getArgument(0);
+      context.setEffectiveTechnicalData(v2);
+      return costResult(context, "100", "140");
+    });
+
+    service.calculate(request());
+
+    ArgumentCaptor<QuoteCostRunVersion> captor =
+        ArgumentCaptor.forClass(QuoteCostRunVersion.class);
+    verify(versionMapper, times(2)).updateById(captor.capture());
+    QuoteCostRunVersion finished = captor.getAllValues().getLast();
+    assertThat(finished.getTechDataVersionId()).isEqualTo(9002L);
+    assertThat(finished.getTechDataVersionNo()).isEqualTo(2);
+    assertThat(finished.getTechDataSource())
+        .isEqualTo(EffectiveTechnicalDataInput.SOURCE_EFFECTIVE_VERSION);
+    assertThat(finished.getTechDataRetrievedAt()).isEqualTo(v2.retrievedAt());
+    assertThat(finished.getTechDataInputJson())
+        .contains("\"versionId\":9002", "\"auxiliaryTotalAmount\":0.704", "\"salaryTotalAmount\":18.90");
   }
 
   @Test
@@ -392,5 +418,25 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     row.setDiffAmount(new BigDecimal(adjustment));
     return new QuoteCuMaterialDiffResult(
         versionId, "CR-" + versionId, new BigDecimal(adjustment), 1, 0, cuCount, List.of(row));
+  }
+
+  private EffectiveTechnicalDataInput effectiveTechnicalV2() {
+    return new EffectiveTechnicalDataInput(
+        9001L,
+        9002L,
+        2,
+        MONTH,
+        EffectiveTechnicalDataInput.SOURCE_EFFECTIVE_VERSION,
+        "f".repeat(64),
+        LocalDateTime.of(2026, 7, 15, 9, 31),
+        true,
+        true,
+        true,
+        new BigDecimal("3.50"),
+        new BigDecimal("0.704"),
+        new BigDecimal("18.90"),
+        List.of(),
+        List.of(),
+        List.of(), null, null);
   }
 }

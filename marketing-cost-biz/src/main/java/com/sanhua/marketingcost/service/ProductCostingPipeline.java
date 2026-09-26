@@ -7,4 +7,7 @@ import com.sanhua.marketingcost.dto.quotecosting.ProductCostingResult;
 public interface ProductCostingPipeline {
 
   ProductCostingResult execute(ProductCostingRequest request);
+
+  /** 检查并准备 BOM、价格和技术资料；不生成成本版本，不提交 OA。 */
+  ProductCostingResult prepare(ProductCostingRequest request);
 }

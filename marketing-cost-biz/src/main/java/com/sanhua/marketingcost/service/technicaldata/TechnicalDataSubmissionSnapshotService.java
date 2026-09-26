@@ -80,7 +80,7 @@ public class TechnicalDataSubmissionSnapshotService {
     QuoteTechSubmission submission = new QuoteTechSubmission();
     submission.setTaskId(taskId);
     submission.setRecipientId(person.id());
-    submission.setModuleTypesJson(messageCodec.write(person.modules()));
+    submission.setModuleTypesJson(messageCodec.write(person.processingModules()));
     submission.setLeaderExternalId(person.leaderExternalId());
     submission.setProductId(product.getId());
     submission.setTechnicalVersionId(frozen.getId());
@@ -111,7 +111,7 @@ public class TechnicalDataSubmissionSnapshotService {
     if (task == null || actor == null || !actor.canEdit() || !actor.canAccessTask(task.getId())
         || !Objects.equals(task.getActiveFlag(), 1)
         || person == null || !person.active() || person.taskId() != task.getId()
-        || (!actor.admin() && !Objects.equals(person.userId(), actor.userId()))) {
+        || (actor.canViewSupplementOverview() || !Objects.equals(person.userId(), actor.userId()))) {
       throw error(TechnicalDataTaskErrorCode.FORBIDDEN, "无权办理该产品任务");
     }
   }
@@ -126,6 +126,11 @@ public class TechnicalDataSubmissionSnapshotService {
     QuoteTechSubmission result = submissionMapper.selectById(submissionId);
     if (result == null || !Objects.equals(result.getTaskId(), taskId)) {
       throw error(TechnicalDataTaskErrorCode.FORBIDDEN, "不能跨产品读取提交快照");
+    }
+    boolean owner = !actor.canViewSupplementOverview() && Objects.equals(result.getAssigneeUserId(), actor.userId());
+    boolean submitted = result.getSentAt()!=null && java.util.Set.of("SENT","APPROVED","RETURNED").contains(result.getSubmissionStatus());
+    if ((!owner && !actor.canCoordinateTask(task)) || (!owner && !submitted)) {
+      throw error(TechnicalDataTaskErrorCode.FORBIDDEN, "只能查看已提交的资料，草稿仅本人可见");
     }
     return result;
   }

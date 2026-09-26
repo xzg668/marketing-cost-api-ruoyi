@@ -8,6 +8,9 @@ import java.util.List;
 
 @Data
 public class SysUserUpdateRequest {
+    /** null 表示保持不变，空字符串表示清空工号。 */
+    @Size(max = 64, message = "工号长度不能超过64个字符")
+    private String employeeNo;
     private String nickName;
     private String phone;
     private String sex;

@@ -46,12 +46,14 @@ import com.sanhua.marketingcost.service.ingest.QuoteBomContext;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.ResolvedCustomerKey;
+import com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeResolution;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeRequest;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeResolver;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeSource;
 import com.sanhua.marketingcost.service.materialshape.SupplierRatioShapeResolver;
 import com.sanhua.marketingcost.service.materialshape.SupplierRatioResolution;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -68,11 +70,14 @@ import org.springframework.security.core.context.SecurityContextHolder;
 
 class QuoteEffectiveBomQueryServiceTest {
 
+  private static final String CURRENT_PERIOD = CostPricingPeriodUtils.currentPricingMonth();
+
   private QuoteBomPreparationRecordMapper preparationMapper;
   private OaFormItemMapper itemMapper;
   private OaFormMapper formMapper;
   private QuoteBomMonthlySnapshotMapper monthlyMapper;
   private BomRawHierarchyMapper rawMapper;
+  private MonthlyBomSnapshotDetailService monthlyDetails;
   private PlateCommercialMakeBomExpansionService crossOrganizationExpansionService;
   private BomAlternativeGroupResolver groupResolver;
   private QuoteBomAlternativeSelectionRepository selectionRepository;
@@ -93,6 +98,8 @@ class QuoteEffectiveBomQueryServiceTest {
     formMapper = mock(OaFormMapper.class);
     monthlyMapper = mock(QuoteBomMonthlySnapshotMapper.class);
     rawMapper = mock(BomRawHierarchyMapper.class);
+    monthlyDetails = mock(MonthlyBomSnapshotDetailService.class);
+    when(monthlyDetails.load(any())).thenReturn(List.of());
     crossOrganizationExpansionService = mock(PlateCommercialMakeBomExpansionService.class);
     selectionRepository = mock(QuoteBomAlternativeSelectionRepository.class);
     selectionService = mock(QuoteBomAlternativeSelectionService.class);
@@ -109,10 +116,10 @@ class QuoteEffectiveBomQueryServiceTest {
     when(preparationMapper.selectOne(any(Wrapper.class))).thenReturn(preparation);
     when(itemMapper.selectById(42L)).thenReturn(item);
     when(formMapper.selectById(7L)).thenReturn(form);
-    when(contextResolver.resolveWithExistingCostPeriod(form, item, "2026-08"))
+    when(contextResolver.resolveWithExistingCostPeriod(form, item, CURRENT_PERIOD))
         .thenReturn(
             new QuoteBomContext(
-                "2026-08",
+                CURRENT_PERIOD,
                 "P",
                 new ResolvedCustomerKey(
                     "CUSTOMER-A", ResolvedCustomerKey.Source.OA_HEADER_CUSTOMER, null),
@@ -159,6 +166,7 @@ class QuoteEffectiveBomQueryServiceTest {
             formMapper,
             monthlyMapper,
             rawMapper,
+            monthlyDetails,
             crossOrganizationExpansionService,
             groupResolver,
             new BomAlternativeBranchPrunerImpl(),
@@ -171,7 +179,9 @@ class QuoteEffectiveBomQueryServiceTest {
                 new EffectiveBomPolicyActionResolver(new ObjectMapper())),
             variantHasher,
             contextResolver,
-            quoteBomStatusService);
+            quoteBomStatusService, new com.sanhua.marketingcost.service.technicaldata.TechnicalBomContributions(
+                (ignoredItem, ignoredMonth) -> null, mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class)),
+            mock(com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingPreparationSource.class));
     snapshot = snapshot(42L);
   }
 
@@ -195,6 +205,17 @@ class QuoteEffectiveBomQueryServiceTest {
     verify(selectionRepository, never()).insert(any());
     verify(monthlyMapper, never()).insert(any(QuoteBomMonthlySnapshot.class));
     verify(monthlyMapper, never()).updateById(any(QuoteBomMonthlySnapshot.class));
+  }
+
+  @Test
+  void readsFrozenMonthlyRowsAfterFormalTableWasReplaced() {
+    when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
+    when(monthlyDetails.load(snapshot.getId())).thenReturn(rawRows());
+
+    QuoteEffectiveBomResponse result = service.getEffectiveBom("OA-QEB-11", 42L);
+
+    assertThat(result.state()).isEqualTo("DRAFT");
+    verify(rawMapper, never()).selectList(any(Wrapper.class));
   }
 
   @Test
@@ -260,7 +281,7 @@ class QuoteEffectiveBomQueryServiceTest {
     QuoteEffectiveBomCostingCandidate candidate =
         service.prepareCostingCandidate("OA-QEB-11", 42L);
 
-    assertThat(candidate.response().costPeriodMonth()).isEqualTo("2026-08");
+    assertThat(candidate.response().costPeriodMonth()).isEqualTo(CURRENT_PERIOD);
     assertThat(candidate.candidateVariant().sourceBomBatchId()).isEqualTo("RAW-202608");
     assertThat(candidate.candidateVariant().buildResult().nodes())
         .extracting(node -> node.materialCode())
@@ -281,14 +302,14 @@ class QuoteEffectiveBomQueryServiceTest {
     when(formMapper.selectById(7L)).thenReturn(plateForm);
     doReturn(
             new QuoteBomContext(
-                "2026-08",
+                CURRENT_PERIOD,
                 "P",
                 new ResolvedCustomerKey(
                     "CUSTOMER-A", ResolvedCustomerKey.Source.OA_HEADER_CUSTOMER, null),
                 "BOX",
                 new QuoteDataOrganization("220", "PLATE")))
         .when(contextResolver)
-        .resolveWithExistingCostPeriod(any(OaForm.class), any(OaFormItem.class), eq("2026-08"));
+        .resolveWithExistingCostPeriod(any(OaForm.class), any(OaFormItem.class), eq(CURRENT_PERIOD));
     snapshot.setPriceOrgCode("220");
     List<BomRawHierarchy> plateRows = rawRows();
     plateRows.getFirst().setPriceOrgCode("220");
@@ -358,10 +379,10 @@ class QuoteEffectiveBomQueryServiceTest {
     QuoteEffectiveBomCostingCandidate candidate =
         service.prepareCostingCandidate("OA-QEB-11", 42L);
 
-    assertThat(candidate.response().costPeriodMonth()).isEqualTo("2026-08");
+    assertThat(candidate.response().costPeriodMonth()).isEqualTo(CURRENT_PERIOD);
     verify(contextResolver)
         .resolveWithExistingCostPeriod(
-            any(OaForm.class), any(OaFormItem.class), eq("2026-08"));
+            any(OaForm.class), any(OaFormItem.class), eq(CURRENT_PERIOD));
     verify(contextResolver, never())
         .resolveWithExistingCostPeriod(
             any(OaForm.class), any(OaFormItem.class), eq("2026-07"));
@@ -408,7 +429,7 @@ class QuoteEffectiveBomQueryServiceTest {
   void reportsMissingMonthlySourceAsBlockedAndPreservesCustomerFallbackWarning() {
     doReturn(
             new QuoteBomContext(
-                "2026-08",
+                CURRENT_PERIOD,
                 "P",
                 new ResolvedCustomerKey(
                     "OA:OA-QEB-11",
@@ -418,7 +439,7 @@ class QuoteEffectiveBomQueryServiceTest {
                 new QuoteDataOrganization("210", "COMMERCIAL")))
         .when(contextResolver)
         .resolveWithExistingCostPeriod(
-            any(OaForm.class), any(OaFormItem.class), eq("2026-08"));
+            any(OaForm.class), any(OaFormItem.class), eq(CURRENT_PERIOD));
     when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
     QuoteEffectiveBomResponse result = service.getEffectiveBom("OA-QEB-11", 42L);
@@ -431,7 +452,7 @@ class QuoteEffectiveBomQueryServiceTest {
     assertThat(result.blockIssues().getFirst().message())
         .doesNotContain("同步BOM", "月度原始BOM");
     assertThat(result.warnings()).contains("客户信息缺失，本次BOM按OA单号隔离");
-    verify(quoteBomStatusService).checkItemForCostRun("OA-QEB-11", 42L, "2026-08");
+    verify(quoteBomStatusService).checkItemForCostRun("OA-QEB-11", 42L, CURRENT_PERIOD);
     verifyNoInteractions(rawMapper, shapeResolver, supplierResolver);
   }
 
@@ -447,7 +468,41 @@ class QuoteEffectiveBomQueryServiceTest {
     assertThat(result.nodes())
         .extracting(node -> node.materialCode())
         .containsExactly("P", "A");
-    verify(quoteBomStatusService).checkItemForCostRun("OA-QEB-11", 42L, "2026-08");
+    verify(quoteBomStatusService).checkItemForCostRun("OA-QEB-11", 42L, CURRENT_PERIOD);
+  }
+
+  @Test
+  void buildsTreeFromConcurrentSnapshotEvenWhenTheOriginalReadViewStillHasNoRow() {
+    when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    var checked = new com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse();
+    checked.setBomStatus("REUSED_CURRENT_MONTH");
+    checked.setSyncRecordId(snapshot.getId());
+    when(quoteBomStatusService.checkItemForCostRun("OA-QEB-11", 42L, CURRENT_PERIOD))
+        .thenReturn(checked);
+    when(monthlyMapper.selectCurrentById(snapshot.getId())).thenReturn(snapshot);
+    when(rawMapper.selectList(any(Wrapper.class))).thenReturn(rawRows());
+
+    var result = service.getEffectiveBom("OA-QEB-11", 42L);
+
+    assertThat(result.state()).isEqualTo("DRAFT");
+    assertThat(result.monthlySnapshotId()).isEqualTo(snapshot.getId());
+    assertThat(result.nodes()).extracting(node -> node.materialCode()).containsExactly("P", "A");
+  }
+
+  @Test
+  void failedCheckMustNotReuseAnOldSnapshotPointer() {
+    when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    var checked = new com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse();
+    checked.setBomStatus("CHECK_FAILED");
+    checked.setSyncRecordId(snapshot.getId());
+    when(quoteBomStatusService.checkItemForCostRun("OA-QEB-11", 42L, CURRENT_PERIOD))
+        .thenReturn(checked);
+
+    var result = service.getEffectiveBom("OA-QEB-11", 42L);
+
+    assertThat(result.state()).isEqualTo("BLOCKED");
+    verify(monthlyMapper, never()).selectCurrentById(any());
+    verifyNoInteractions(rawMapper);
   }
 
   @Test
@@ -460,7 +515,7 @@ class QuoteEffectiveBomQueryServiceTest {
                 new MaterialQuoteShapeResolution(
                 "COMMERCIAL",
                 "P",
-                "2026-08",
+                CURRENT_PERIOD,
                 "制造件",
                 QuoteMaterialShape.MANUFACTURE,
                 null,
@@ -516,7 +571,7 @@ class QuoteEffectiveBomQueryServiceTest {
         .thenReturn(new BomAlternativeGroupResolution(List.of(group), List.of()));
 
     QuoteEffectiveBomResponse result =
-        service.previewAlternative("OA-QEB-11", 42L, "2026-08", "GROUP-1", "T");
+        service.previewAlternative("OA-QEB-11", 42L, CURRENT_PERIOD, "GROUP-1", "T");
 
     assertThat(result.state()).isEqualTo("DRAFT");
     assertThat(result.nodes()).extracting(node -> node.materialCode()).containsExactly("P", "T");
@@ -574,7 +629,7 @@ class QuoteEffectiveBomQueryServiceTest {
                       new MaterialQuoteShapeResolution(
                           "COMMERCIAL",
                           "A",
-                          "2026-08",
+                          CURRENT_PERIOD,
                           request.sourceU9Shape(),
                           QuoteMaterialShape.PURCHASE,
                           null,
@@ -592,7 +647,7 @@ class QuoteEffectiveBomQueryServiceTest {
                     new MaterialQuoteShapeResolution(
                         "COMMERCIAL",
                         request.materialCode(),
-                        "2026-08",
+                        CURRENT_PERIOD,
                         request.sourceU9Shape(),
                         shape,
                         shape,
@@ -615,7 +670,7 @@ class QuoteEffectiveBomQueryServiceTest {
                     "COMMERCIAL",
                     "210",
                     "A",
-                    "2026-08",
+                    CURRENT_PERIOD,
                     QuoteMaterialShape.OUTSOURCE,
                     77L,
                     "POLICY-FP",
@@ -669,7 +724,7 @@ class QuoteEffectiveBomQueryServiceTest {
         .thenReturn(new BomAlternativeGroupResolution(List.of(group), List.of()));
 
     QuoteEffectiveBomResponse result =
-        service.previewAlternative("OA-QEB-11", 42L, "2026-08", "GROUP-1", "T");
+        service.previewAlternative("OA-QEB-11", 42L, CURRENT_PERIOD, "GROUP-1", "T");
 
     assertThat(result.state()).isEqualTo("DRAFT");
     assertThat(result.nodes()).extracting(node -> node.materialCode()).containsExactly("P", "T");
@@ -722,7 +777,7 @@ class QuoteEffectiveBomQueryServiceTest {
     row.setProductType("NON_BARE");
     row.setPriceOrgCode("210");
     row.setMaterialOrganizationCode("COMMERCIAL");
-    row.setCostPeriodMonth("2026-08");
+    row.setCostPeriodMonth(CURRENT_PERIOD);
     row.setActiveFlag(1);
     return row;
   }
@@ -742,7 +797,7 @@ class QuoteEffectiveBomQueryServiceTest {
     form.setId(7L);
     form.setOaNo("OA-QEB-11");
     form.setCustomer("CUSTOMER-A");
-    form.setAccountingPeriodMonth("2026-08");
+    form.setAccountingPeriodMonth(CURRENT_PERIOD);
     form.setApplyDate(LocalDate.of(2026, 8, 4));
     form.setBusinessUnitType("COMMERCIAL");
     return form;
@@ -755,7 +810,7 @@ class QuoteEffectiveBomQueryServiceTest {
     row.setPriceOrgCode("210");
     row.setCustomerCode("CUSTOMER-A");
     row.setPackageMethod("BOX");
-    row.setCostPeriodMonth("2026-08");
+    row.setCostPeriodMonth(CURRENT_PERIOD);
     row.setBomPurpose("主制造");
     row.setSyncStatus("SUCCESS");
     row.setSyncAt(LocalDateTime.of(2026, 8, 4, 9, 0));

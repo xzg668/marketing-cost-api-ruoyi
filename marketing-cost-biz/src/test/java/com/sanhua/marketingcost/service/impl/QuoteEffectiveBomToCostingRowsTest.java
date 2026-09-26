@@ -59,6 +59,7 @@ class QuoteEffectiveBomToCostingRowsTest {
   private OaFormItemMapper itemMapper;
   private QuoteEffectiveBomRepository effectiveRepository;
   private BomRawHierarchyMapper rawMapper;
+  private com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService monthlyDetails;
   private BomSettlementRuleQueryService settlementRules;
   private QuoteProductBomCostingBuildServiceImpl service;
 
@@ -66,6 +67,7 @@ class QuoteEffectiveBomToCostingRowsTest {
   static void initTableInfo() {
     MapperBuilderAssistant assistant =
         new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    TableInfoHelper.initTableInfo(assistant, QuoteBomPreparationRecord.class);
     TableInfoHelper.initTableInfo(assistant, BomCostingRow.class);
     TableInfoHelper.initTableInfo(assistant, BomCostingRowSourceRef.class);
     TableInfoHelper.initTableInfo(assistant, BomCostingRowSubRef.class);
@@ -81,6 +83,8 @@ class QuoteEffectiveBomToCostingRowsTest {
     itemMapper = mock(OaFormItemMapper.class);
     effectiveRepository = mock(QuoteEffectiveBomRepository.class);
     rawMapper = mock(BomRawHierarchyMapper.class);
+    monthlyDetails = mock(com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService.class);
+    when(monthlyDetails.load(any())).thenReturn(List.of());
     settlementRules = mock(BomSettlementRuleQueryService.class);
     BomByproductCostRuleQueryService byproductRules =
         mock(BomByproductCostRuleQueryService.class);
@@ -93,6 +97,11 @@ class QuoteEffectiveBomToCostingRowsTest {
                 new BomSettlementRuleConditionEvaluator(objectMapper)),
             new BomByproductCostRuleMatcher(
                 new BomByproductCostRuleConditionEvaluator(objectMapper)));
+    var manufacturing = mock(com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.class);
+    when(manufacturing.byproducts(any(), any(), any(), any(), any())).thenAnswer(invocation -> invocation.getArgument(4));
+    var manufacturingInputs = mock(com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.class);
+    when(manufacturingInputs.byproducts(any(), any(), any(), any(), any()))
+        .thenAnswer(invocation -> invocation.getArgument(4));
     service =
         new QuoteProductBomCostingBuildServiceImpl(
             settlementRules,
@@ -106,7 +115,9 @@ class QuoteEffectiveBomToCostingRowsTest {
             subRefMapper,
             itemMapper,
             effectiveRepository,
-            rawMapper);
+            rawMapper,
+            monthlyDetails,
+            manufacturingInputs);
     when(settlementRules.listEnabledCandidates()).thenReturn(List.of());
     when(byproductRules.listEnabledCandidates()).thenReturn(List.of());
     when(byproductAdapter.read(any(), any(), any(), any(), any()))
@@ -147,24 +158,77 @@ class QuoteEffectiveBomToCostingRowsTest {
   }
 
   @Test
-  void effectiveBomMonthOverridesStalePreparationMonthForCurrentWorkspaceRows() {
-    QuoteBomPreparationRecord stalePreparation = preparation();
-    stalePreparation.setCostPeriodMonth("2026-07");
-    when(preparationMapper.selectOne(any())).thenReturn(stalePreparation);
+  void currentComposedDraftCanPrepareRowsWhileRemainingUnapproved() {
+    var record = preparation();
+    record.setPreparationStatus("PENDING_REVIEW");
+    record.setElectronicSourceVersionId(77L);
+    record.setElectronicWorkflowStage("E_DRAWING_COMPOSED");
+    when(preparationMapper.selectOne(any())).thenReturn(record);
+    var nodes = List.of(root(), selectedAlternative());
+    nodes.forEach(node -> { node.setSourceHierarchyId(null); node.setSourceBomBatchId("ED_DRAFT:77:hash"); node.setSourceBomType("E_DRAWING"); });
+    when(effectiveRepository.findNodesByBuildBatchId("qeb_BUILD_1")).thenReturn(nodes);
+
+    var result = service.buildFromEffectiveBom(10L, "qeb_BUILD_1");
+
+    assertThat(result.costingRowsWritten()).isOne();
+    assertThat(record.getPreparationStatus()).isEqualTo("PENDING_REVIEW");
+  }
+
+  @Test
+  void draftFromPreviousSourceVersionCannotPrepareRows() {
+    var record = preparation();
+    record.setPreparationStatus("PENDING_REVIEW");
+    record.setElectronicSourceVersionId(78L);
+    record.setElectronicWorkflowStage("E_DRAWING_COMPOSED");
+    when(preparationMapper.selectOne(any())).thenReturn(record);
+    var nodes = List.of(root(), selectedAlternative());
+    nodes.forEach(node -> node.setSourceBomBatchId("ED_DRAFT:77:hash"));
+    when(effectiveRepository.findNodesByBuildBatchId("qeb_BUILD_1")).thenReturn(nodes);
+    assertThatThrownBy(() -> service.buildFromEffectiveBom(10L, "qeb_BUILD_1")).hasMessageContaining("尚未就绪");
+    verify(costingRowMapper, never()).insert(any(BomCostingRow.class));
+  }
+
+  @Test
+  void buildUsesMatchingMonthEvenWhenHistoricalPreparationWasUpdatedMoreRecently() {
+    QuoteBomPreparationRecord july = preparation();
+    july.setId(200L);
+    july.setCostPeriodMonth("2026-07");
+    july.setCostingBuildBatchId("JULY-FROZEN");
+    QuoteBomPreparationRecord august = preparation();
+    when(preparationMapper.selectOne(any())).thenAnswer(invocation -> {
+      com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<QuoteBomPreparationRecord> query =
+          invocation.getArgument(0);
+      String sql = query.getSqlSegment();
+      boolean scoped = sql.contains("cost_period_month")
+          && query.getParamNameValuePairs().containsValue("2026-08");
+      return scoped ? august : july;
+    });
     when(effectiveRepository.findNodesByBuildBatchId("qeb_BUILD_1"))
         .thenReturn(List.of(root(), selectedAlternative()));
     when(rawMapper.selectBatchIds(any())).thenReturn(List.of(raw(1L, "P"), raw(2L, "T")));
 
-    QuoteBomCostingBuildResponse response =
-        service.buildFromEffectiveBom(10L, "qeb_BUILD_1");
+    var response = service.buildFromEffectiveBom(10L, "qeb_BUILD_1");
 
     assertThat(response.periodMonth()).isEqualTo("2026-08");
-    assertThat(stalePreparation.getCostPeriodMonth()).isEqualTo("2026-08");
-    assertThat(stalePreparation.getCostingBuildBatchId()).isEqualTo("qeb_BUILD_1");
-    verify(preparationMapper).updateById(stalePreparation);
-    ArgumentCaptor<BomCostingRow> rows = ArgumentCaptor.forClass(BomCostingRow.class);
-    verify(costingRowMapper).insert(rows.capture());
-    assertThat(rows.getValue().getPeriodMonth()).isEqualTo("2026-08");
+    assertThat(july.getCostPeriodMonth()).isEqualTo("2026-07");
+    assertThat(july.getCostingBuildBatchId()).isEqualTo("JULY-FROZEN");
+    verify(preparationMapper).updateById(august);
+    verify(preparationMapper, never()).updateById(july);
+    assertThat(august.getCostingBuildBatchId()).isEqualTo("qeb_BUILD_1");
+    ArgumentCaptor<QuoteBomStatus> statusCaptor = ArgumentCaptor.forClass(QuoteBomStatus.class);
+    verify(statusMapper).updateById(statusCaptor.capture());
+    assertThat(statusCaptor.getValue().getPreparationRecordId()).isEqualTo(august.getId());
+  }
+
+  @Test
+  void absentPreparationForRequestedMonthStopsBeforeReplacingAnyRows() {
+    when(effectiveRepository.findNodesByBuildBatchId("qeb_BUILD_1"))
+        .thenReturn(List.of(root(), selectedAlternative()));
+    when(preparationMapper.selectOne(any())).thenReturn(null);
+    assertThatThrownBy(() -> service.buildFromEffectiveBom(10L, "qeb_BUILD_1"))
+        .isInstanceOf(QuoteIngestException.class).hasMessageContaining("2026-08 月份的 BOM 准备");
+    verify(costingRowMapper, never()).delete(any());
+    verify(preparationMapper, never()).updateById(any(QuoteBomPreparationRecord.class));
   }
 
   @Test

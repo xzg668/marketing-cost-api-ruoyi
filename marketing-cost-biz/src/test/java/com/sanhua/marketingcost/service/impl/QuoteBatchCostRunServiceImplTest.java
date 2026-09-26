@@ -44,6 +44,7 @@ class QuoteBatchCostRunServiceImplTest {
     service =
         new QuoteBatchCostRunServiceImpl(
             formMapper, batchMapper, taskMapper, submissionService, progressService, lockGuard);
+    service.setOaWorkflowAccess(mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
   }
 
   @Test
@@ -66,7 +67,7 @@ class QuoteBatchCostRunServiceImplTest {
     assertThat(response.getQueuedCount()).isEqualTo(20);
     assertThat(response.getRunningCount()).isEqualTo(4);
     assertThat(response.getSuccessCount()).isEqualTo(10);
-    assertThat(response.getCollaborationCount()).isEqualTo(3);
+    assertThat(response.getWaitingInputCount()).isEqualTo(3);
     assertThat(response.getSkippedCurrentCount()).isEqualTo(10);
     assertThat(response.isActive()).isTrue();
     verify(lockGuard).assertCostRunAllowed("OA-1");
@@ -88,7 +89,7 @@ class QuoteBatchCostRunServiceImplTest {
     var response = service.getCurrent("OA-1", null);
 
     assertThat(response.getStatus()).isEqualTo("SUCCESS");
-    assertThat(response.getCollaborationCount()).isEqualTo(1);
+    assertThat(response.getWaitingInputCount()).isEqualTo(1);
     assertThat(response.isActive()).isFalse();
     verify(progressService).getBatchProgress("CRQ-2");
   }
@@ -128,14 +129,14 @@ class QuoteBatchCostRunServiceImplTest {
     String month = CostPricingPeriodUtils.currentPricingMonth();
     CostRunTask task = new CostRunTask();
     task.setBatchNo("CRQ-3");
-    task.setStatus("COLLABORATION");
+    task.setStatus("WAITING_INPUT");
     task.setProgress(100);
     task.setErrorMessage("缺少 BOM");
     when(taskMapper.selectCurrentQuoteTask("OA-1", 11L, month)).thenReturn(task);
 
     var response = service.getCurrentItem("OA-1", 11L, null);
 
-    assertThat(response.getStatus()).isEqualTo("COLLABORATION");
+    assertThat(response.getStatus()).isEqualTo("WAITING_INPUT");
     assertThat(response.getMessage()).isEqualTo("缺少 BOM");
   }
 
@@ -146,7 +147,7 @@ class QuoteBatchCostRunServiceImplTest {
       int running,
       int pending,
       int success,
-      int collaboration,
+      int waitingInput,
       int skippedCurrent,
       int percentage) {
     CostRunBatchProgressSnapshot result = new CostRunBatchProgressSnapshot();
@@ -156,7 +157,7 @@ class QuoteBatchCostRunServiceImplTest {
     result.setRunningCount(running);
     result.setPendingCount(pending);
     result.setSuccessCount(success);
-    result.setCollaborationCount(collaboration);
+    result.setWaitingInputCount(waitingInput);
     result.setSkippedCurrentCount(skippedCurrent);
     result.setProgress(percentage);
     return result;

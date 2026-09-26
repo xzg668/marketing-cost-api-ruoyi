@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.settlement;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static com.sanhua.marketingcost.support.FinancePurchaseRollupRuleTestSupport.rule;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.entity.BomByproductCostRule;
@@ -90,7 +91,7 @@ class BomSettlementRowBuildEngineTest {
   }
 
   @Test
-  @DisplayName("财务分类规则使用母件形态、副产品和组合排除条件筛选末级采购子件")
+  @DisplayName("财务上卷按子件分类筛选，旧母件排除失效且未命中兄弟子件保留")
   void financeClassificationRuleRollsUpOnlyQualifiedPurchasedLeaves() {
     BomSettlementRowBuildEngine financeEngine = new BomSettlementRowBuildEngine(
         new BomSettlementRuleMatcher(
@@ -109,7 +110,9 @@ class BomSettlementRowBuildEngineTest {
             Map.entry("SPRAY-CHILD", new BomRuleMaterialAttributes("171711402", "丝网")),
             Map.entry("MAGNET-RING", new BomRuleMaterialAttributes("171711402", "丝网")),
             Map.entry("SPECIAL-NORMAL", new BomRuleMaterialAttributes("171711402", "锻镦件")),
-            Map.entry("SPECIAL-BLANK", new BomRuleMaterialAttributes("171711402", "锻镦件")),
+            Map.entry("SPECIAL-BLANK", new BomRuleMaterialAttributes("121191304", "锻镦件")),
+            Map.entry("SPECIAL-REJECTED", new BomRuleMaterialAttributes("121191304", "丝网")),
+            Map.entry("SPECIAL-PLATE", new BomRuleMaterialAttributes("121191304", "丝网")),
             Map.entry("NO-BYPRODUCT-CHILD", new BomRuleMaterialAttributes("171711402", "丝网")),
             Map.entry("NON-PURCHASE", new BomRuleMaterialAttributes("171711402", "不锈钢棒"))));
 
@@ -118,6 +121,8 @@ class BomSettlementRowBuildEngineTest {
         node("P", "P", null, 0, "/P/", 0, "组件", null),
         purchaseNode("MATCH-BAR", "P", "P", 1, "/P/MATCH-BAR/", "不锈钢棒子件"),
         purchaseNode("MATCH-TUBE", "P", "P", 1, "/P/MATCH-TUBE/", "紫铜直管子件"),
+        purchaseNode("SPECIAL-REJECTED", "P", "P", 1, "/P/SPECIAL-REJECTED/", "普通精加工子件"),
+        purchaseNode("SPECIAL-PLATE", "P", "P", 1, "/P/SPECIAL-PLATE/", "阀体加强板"),
         purchaseNode("NOT-WHITELIST", "P", "P", 1, "/P/NOT-WHITELIST/", "普通采购子件"),
         fullNode(
             "NON-PURCHASE", "P", "P", 1, "/P/NON-PURCHASE/", 1,
@@ -159,22 +164,21 @@ class BomSettlementRowBuildEngineTest {
             byproduct("SPECIAL", "BYP-SPECIAL", "副产品专用零部件")),
         List.of(),
         List.of(),
-        List.of(financeRollupRule())));
+        List.of(rule())));
 
     assertThat(result.costingRows())
         .filteredOn(row -> "SPECIAL_ROLLUP_PARENT".equals(row.getSettlementRowType()))
         .extracting(BomCostingRow::getMaterialCode)
-        .containsExactly("P", "SPECIAL");
+        .containsExactlyInAnyOrder("P", "SPRAY", "HALF", "SPECIAL");
     assertThat(result.subRefs()).extracting(ref -> ref.subRef().getSubMaterialCode())
-        .containsExactly("MATCH-BAR", "MATCH-TUBE", "SPECIAL-BLANK");
+        .containsExactlyInAnyOrder("MATCH-BAR", "MATCH-TUBE", "SPECIAL-PLATE", "SPRAY-CHILD",
+            "MAGNET-RING", "SPECIAL-NORMAL", "SPECIAL-BLANK");
     assertThat(result.costingRows())
         .filteredOn(row -> "DEFAULT_LEAF".equals(row.getSettlementRowType()))
         .extracting(BomCostingRow::getMaterialCode)
         .containsExactlyInAnyOrder(
             "NOT-WHITELIST",
-            "SPRAY-CHILD",
-            "MAGNET-RING",
-            "SPECIAL-NORMAL",
+            "SPECIAL-REJECTED",
             "NO-BYPRODUCT-CHILD");
     assertThat(result.subRefs()).allSatisfy(ref -> {
       assertThat(ref.subRef().getSubQtyPerParent()).isEqualByComparingTo(BigDecimal.ONE);
@@ -182,8 +186,8 @@ class BomSettlementRowBuildEngineTest {
     });
     assertThat(result.subRefs()).noneMatch(
         ref -> "NON-PURCHASE".equals(ref.subRef().getSubMaterialCode()));
-    assertThat(result.stats().rollupBucketCount()).isEqualTo(2);
-    assertThat(result.stats().consumedLeafPathCount()).isEqualTo(3);
+    assertThat(result.stats().rollupBucketCount()).isEqualTo(4);
+    assertThat(result.stats().consumedLeafPathCount()).isEqualTo(7);
   }
 
   @Test
@@ -550,6 +554,24 @@ class BomSettlementRowBuildEngineTest {
     assertThat(result.costingRows())
         .noneMatch(row -> "DIRECT-MAKE".equals(row.getParentCode())
             && "BYPRODUCT_EXTRA".equals(row.getSettlementRowType()));
+  }
+
+  @Test
+  void technicalScrapBelongsOnlyToTheSpecifiedOccurrenceOfTheManufacturedMaterial() {
+    var original = byproduct("MAKE", "SCRAP", "废料");
+    var scoped = new BomSettlementByproduct(original.sourceByproductId(), original.parentMaterialCode(), original.byproductMaterialCode(),
+        original.byproductMaterialName(), original.byproductMaterialSpec(), original.outputQty(), original.unit(),
+        original.bomPurpose(), original.versionNo(), original.effectiveFrom(), original.effectiveTo(),
+        original.businessUnitType(), "/P/A/");
+    var result = engine.build(byproductRequest(List.of(
+        node("P", "P", null, 0, "/P/", 0, "组件", null),
+        node("MAKE", "P", "P", 1, "/P/A/", 0, "制造件", null),
+        purchaseNode("RAW", "P", "MAKE", 2, "/P/A/RAW/", "原料"),
+        node("MAKE", "P", "P", 1, "/P/B/", 0, "制造件", null),
+        purchaseNode("RAW", "P", "MAKE", 2, "/P/B/RAW/", "原料")),
+        List.of(scoped), List.of(), List.of(byproductRule())));
+    assertThat(result.costingRows()).filteredOn(row -> "BYPRODUCT_EXTRA".equals(row.getSettlementRowType()))
+        .hasSize(1).allMatch(row -> row.getPath().startsWith("/P/A/"));
   }
 
   @Test
@@ -967,47 +989,6 @@ class BomSettlementRowBuildEngineTest {
         """.formatted(materialNameKeyword));
     rule.setMarkSubtreeCostRequired(1);
     rule.setPriority(priority);
-    rule.setEnabled(1);
-    return rule;
-  }
-
-  private static BomSettlementRule financeRollupRule() {
-    BomSettlementRule rule = new BomSettlementRule();
-    rule.setId(224L);
-    rule.setRuleCode("SPECIAL_PURCHASE_ROLLUP_FINANCE_CLASSIFICATION");
-    rule.setRuleName("特殊采购分类上卷：母件副产品规则");
-    rule.setRuleCategory("SPECIAL_PURCHASE_ROLLUP");
-    rule.setSettlementAction("ROLLUP_TO_PARENT");
-    rule.setSettlementRowType("SPECIAL_ROLLUP_PARENT");
-    rule.setSubRefType("SPECIAL_ROLLUP_CHILD");
-    rule.setMatchConditionJson("""
-        {"nodeConditions":[
-          {"field":"shape_attr","op":"EQ","value":"采购件"},
-          {"field":"purchase_category","op":"IN","values":["不锈钢棒","紫铜直管","锻镦件","丝网"]}
-        ],
-        "parentConditions":[
-          {"field":"shape_attr","op":"EQ","value":"制造件"},
-          {"field":"has_byproduct","op":"EQ","value":"true"}
-        ],
-        "excludeGroups":[
-          {"parentConditions":[
-            {"field":"main_category_code","op":"IN","values":["101001018","111001018","101001007","111001007"]}
-          ]},
-          {
-            "parentConditions":[{"field":"main_category_code","op":"EQ","value":"121151306"}],
-            "nodeConditions":[{"field":"material_name","op":"LIKE","value":"分磁环"}]
-          },
-          {
-            "parentConditions":[{"field":"main_category_code","op":"EQ","value":"121191304"}],
-            "nodeConditions":[
-              {"field":"material_name","op":"NOT_LIKE","value":"毛坯"},
-              {"field":"material_name","op":"NOT_LIKE","value":"半成品"}
-            ]
-          }
-        ]}
-        """);
-    rule.setMarkSubtreeCostRequired(1);
-    rule.setPriority(10);
     rule.setEnabled(1);
     return rule;
   }

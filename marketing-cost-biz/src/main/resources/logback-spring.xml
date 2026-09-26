@@ -22,6 +22,7 @@
     </rollingPolicy>
     <encoder class="net.logstash.logback.encoder.LogstashEncoder">
       <includeMdcKeyName>traceId</includeMdcKeyName>
+      <includeMdcKeyName>oaCallId</includeMdcKeyName>
     </encoder>
   </appender>
 
@@ -41,6 +42,7 @@
     </rollingPolicy>
     <encoder class="net.logstash.logback.encoder.LogstashEncoder">
       <includeMdcKeyName>traceId</includeMdcKeyName>
+      <includeMdcKeyName>oaCallId</includeMdcKeyName>
     </encoder>
   </appender>
 

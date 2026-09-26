@@ -1,0 +1,59 @@
+{
+  "requestId": "REQ-I01-03",
+  "formNo": "FI-SC-020-DEMO-03",
+  "processCode": "FI-SC-020",
+  "mainData": {
+    "sqr": "示例营业",
+    "sqsj": "2026-09-16",
+    "gh": "001001",
+    "sqdw": "示例业务单元",
+    "sqbm": "示例营业部",
+    "sqcs": "示例业务处",
+    "khmc": "示例客户",
+    "khlx": "国内客户",
+    "gkyqhfsj": "2026-09-20",
+    "ywlx": "批量品",
+    "cpsx": "锦欣品牌",
+    "xsbmyqhfrq": "2026-09-19",
+    "syb": "商用四通阀事业部",
+    "mytk": "EXW",
+    "hl": null,
+    "hlldqk": null,
+    "xsjgsfld": "固定",
+    "hsstjjhs": 75000,
+    "hssxjj": null,
+    "hsssus316jj0": null,
+    "hsssus304jj0": null,
+    "hssljj": null,
+    "hyfhsbz": null,
+    "sfscbj": "是",
+    "jsy": "示例技术员",
+    "bz": "示例：按当前客户需求核算，保留原单说明。"
+  },
+  "detailData": [
+    {
+      "tableKey": "明细表1",
+      "rowId": "ROW-03",
+      "rowIndex": 1,
+      "fields": {
+        "wlxz1": "示例板换物料",
+        "khbm": "U9-C001",
+        "dhm": "U1100000001",
+        "lh": "DEMO-0001",
+        "shxh": "DEMO-A",
+        "pm": "示例板换产品",
+        "gg": "示例规格A",
+        "ysf": null,
+        "yjnylz": 12000,
+        "bzfs": "大包装",
+        "hysfzcbbhs": null,
+        "bhysfzcbbhs": null,
+        "cbyxq1": "3",
+        "bxgsu304k": 200,
+        "bxgsu316k": 100,
+        "tzk": 50,
+        "bz": "示例：按本行参数核算。"
+      }
+    }
+  ]
+}

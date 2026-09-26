@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** 工资资料保存与个人版本的事务边界；来源取证、完整性校验各自独立。 */
 @Service
 public class TechnicalDataSalaryApplicationService {
+  private final TechnicalDataReadPolicy readPolicy;
   private final TechnicalDataSharedModules sharedModules;
   private final QuoteTechnicalDataRepository repository;
   private final TechnicalDataTaskRepository tasks;
@@ -28,7 +29,8 @@ public class TechnicalDataSalaryApplicationService {
   public TechnicalDataSalaryApplicationService(QuoteTechnicalDataRepository repository,
       TechnicalDataTaskRepository tasks, TechnicalDataSourceSnapshotFactory snapshots,
       TechnicalDataVersionContentCodec codec, TechnicalDataSalarySourceQuery sources,
-      TechnicalDataSalaryUploadParser parser, TechnicalDataAttachmentStore files, TechnicalDataSharedModules sharedModules) {
+      TechnicalDataSalaryUploadParser parser, TechnicalDataAttachmentStore files, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy) {
+    this.readPolicy=readPolicy;
     this.sharedModules = sharedModules;
     this.repository = repository; this.tasks = tasks; this.snapshots = snapshots;
     this.codec = codec; this.sources = sources;
@@ -38,9 +40,7 @@ public class TechnicalDataSalaryApplicationService {
   @Transactional(readOnly = true)
   public TechnicalDataSalaryResponse get(Long productId, Long versionId, TechnicalDataActor actor) {
     var scope = scope(productId, actor, null);
-    Long selected = versionId != null ? versionId
-        : Set.of("FROZEN", "SUBMITTED", "APPROVED").contains(scope.module().getModuleStatus())
-            ? scope.module().getCurrentVersionId() : scope.product().getCurrentEditVersionId();
+    Long selected = readPolicy.readVersion(scope.product(), scope.module(), actor, versionId);
     var version = selected == null ? null : repository.findVersion(selected).orElseThrow(() -> invalid("工资版本不存在"));
     if (version != null && !Objects.equals(version.getProductId(), productId)) throw forbidden("不能读取其他产品的工资版本");
     var rows = version == null ? List.<QuoteTechSalaryItem>of() : repository.findSalaryItems(version.getId());

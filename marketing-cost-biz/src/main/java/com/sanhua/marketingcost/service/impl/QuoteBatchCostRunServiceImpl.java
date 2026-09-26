@@ -58,7 +58,7 @@ public class QuoteBatchCostRunServiceImpl implements QuoteBatchCostRunService {
       throw new IllegalArgumentException("整单核算仅支持 ALL 模式");
     }
     String periodMonth = currentMonth(request == null ? null : request.getPeriodMonth());
-    oaWorkflowAccess.requireCosting(normalizedOaNo);
+    oaWorkflowAccess.requireCostPublication(normalizedOaNo);
     repriceLockGuard.assertCostRunAllowed(normalizedOaNo);
     CostRunTaskSubmissionResult submitted =
         submissionService.submitQuote(normalizedOaNo, null, periodMonth, submittedBy);

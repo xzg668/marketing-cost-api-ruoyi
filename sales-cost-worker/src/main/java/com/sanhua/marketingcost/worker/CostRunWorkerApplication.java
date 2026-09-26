@@ -23,7 +23,6 @@ import com.sanhua.marketingcost.service.technicaldata.TechnicalDataSourceCheckSt
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataModuleRequirementEvaluator;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataSourceSnapshotFactory;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataRequirementRefreshService;
-import com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaIntegrationServiceImpl;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaUserDirectory;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataAssigneeResolver;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataAuditLogService;
@@ -63,6 +62,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
                 MonthlyRepriceQueryServiceImpl.class,
                 MonthlyRepriceStartServiceImpl.class,
                 QuoteBatchCostRunServiceImpl.class,
+                com.sanhua.marketingcost.service.quoteconfirmation.QuoteMaterialConfirmationService.class,
                 // 核算进程只写来源复查的待发送记录，OA 收发与审批由业务后端处理。
                 OaInboxProcessor.class,
                 OaOutboxProcessor.class,
@@ -109,6 +109,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
     TechnicalDataModuleRequirementEvaluator.class,
     TechnicalDataSourceSnapshotFactory.class,
     TechnicalDataRequirementRefreshService.class,
+    com.sanhua.marketingcost.service.technicaldata.TechnicalDataReadPolicy.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataSharedModules.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataSharedModuleRepository.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataPriceApplicationService.class,
@@ -123,7 +124,6 @@ import org.springframework.scheduling.annotation.EnableScheduling;
     com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionImportService.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionWorkbook.class,
     com.sanhua.marketingcost.service.technicaldata.SecurityTechnicalDataActorProvider.class,
-    TechnicalDataOaIntegrationServiceImpl.class,
     TechnicalDataOaUserDirectory.class,
     TechnicalDataAssigneeResolver.class,
     TechnicalDataAuditLogService.class

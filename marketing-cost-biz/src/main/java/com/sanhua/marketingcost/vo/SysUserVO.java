@@ -9,6 +9,7 @@ import java.util.List;
 public class SysUserVO {
     private Long userId;
     private String userName;
+    private String employeeNo;
     private String nickName;
     private String phone;
     private String sex;

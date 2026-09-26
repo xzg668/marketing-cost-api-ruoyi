@@ -44,10 +44,12 @@ class FixedPriceResolverTest {
     when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(fixed("12.340000", "PURCHASE_FIXED")));
     LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 10, 10, 30);
 
+    CostRunPartItemDto part = part("MAT-FIXED");
+    part.setPriceOrgCode("220");
     PriceResolveResult result =
         resolver.resolve(
             "OA-001",
-            part("MAT-FIXED"),
+            part,
             route("固定采购价"),
             monthlyContext(priceAsOfTime));
 
@@ -55,10 +57,10 @@ class FixedPriceResolverTest {
     ArgumentCaptor<Wrapper<PriceFixedItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(mapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment())
-        .contains("material_code", "source_type", "effective_from")
+        .contains("material_code", "source_type", "org_code", "effective_from")
         .contains("ORDER BY", "effective_from", "imported_at", "created_at", "DESC")
         .doesNotContain("effective_to");
-    assertThat(paramValues(captor.getValue())).contains(LocalDate.of(2026, 5, 10));
+    assertThat(paramValues(captor.getValue())).contains("220", LocalDate.of(2026, 5, 10));
   }
 
   @Test
@@ -111,6 +113,30 @@ class FixedPriceResolverTest {
   }
 
   @Test
+  @DisplayName("SRM每日全量固定采购价不把易变的数据库ID作为取价证据")
+  void dailySrmFixedPriceDoesNotExposeDatabaseIdAsEvidence() {
+    PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);
+    FixedPriceResolver resolver = resolver(mapper);
+    PriceFixedItem row = fixed("7.256637", "PURCHASE_FIXED");
+    row.setId(88L);
+    row.setSourceKind("PUBLIC");
+    row.setSourceSystem("SRM");
+    row.setSourceBatchNo("2026-09-20");
+    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(row));
+
+    PriceResolveResult result = resolver.resolve(
+        "OA-001",
+        part("301990444"),
+        route("固定采购价"),
+        monthlyContext(LocalDateTime.of(2026, 9, 20, 9, 0)));
+
+    assertThat(result.unitPrice()).isEqualByComparingTo("7.256637");
+    assertThat(result.resultRefId()).isNull();
+    assertThat(result.evidence().sourcePriceRecordId()).isNull();
+    assertThat(result.evidence().sourceBatchNo()).isEqualTo("2026-09-20");
+  }
+
+  @Test
   @DisplayName("T23：结算价使用 SETTLE 来源并按 price_as_of_time 过滤，不能直接取最新")
   void monthlySettleFixedUsesSettleSourceAndContextPriceAsOfTime() {
     PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);
@@ -142,7 +168,7 @@ class FixedPriceResolverTest {
   private static FixedPriceResolver resolver(PriceFixedItemMapper mapper) {
     return new FixedPriceResolver(
         mapper,
-        new SupplierPreferredPriceSelector(mock(SupplierSupplyRatioResolveService.class)));
+        new SupplierPreferredPriceSelector(mock(SupplierSupplyRatioResolveService.class)), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class));
   }
 
   private static CostRunPartItemDto part(String code) {

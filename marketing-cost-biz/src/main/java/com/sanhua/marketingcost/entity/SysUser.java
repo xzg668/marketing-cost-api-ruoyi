@@ -16,6 +16,8 @@ public class SysUser {
     @TableId(type = IdType.AUTO)
     private Long userId;
     private String userName;
+    /** 员工工号，按文本保存以保留前导零。 */
+    private String employeeNo;
     private String password;
     private String nickName;
     /** T04新增：部门ID */

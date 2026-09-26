@@ -51,13 +51,6 @@ public class TechnicalDataOaWorkflowRepository {
     return rows.isEmpty() ? null : rows.getFirst();
   }
 
-  public Flow lockExternalFlow(OaPeer peer, String externalId) {
-    var rows = jdbc.query("""
-        SELECT * FROM lp_oa_technical_flow WHERE source_system=? AND environment=? AND external_flow_id=? FOR UPDATE
-        """, this::flow, peer.sourceSystem(), peer.environment(), externalId);
-    return rows.isEmpty() ? null : rows.getFirst();
-  }
-
   public void bindDispatch(QuoteTechTask task, Flow flow, int assignmentVersion, long messageId) {
     if (jdbc.update("""
         UPDATE lp_quote_tech_task SET oa_flow_id=?,oa_environment=?,oa_assignment_version=?,oa_dispatch_message_id=?,
@@ -82,9 +75,12 @@ public class TechnicalDataOaWorkflowRepository {
   public void dispatchUnconfirmed(long taskId, boolean rejected, String error) {
     jdbc.update("""
         UPDATE lp_quote_tech_task SET external_task_status=?,external_last_error=?,
+          task_status=CASE WHEN ? THEN 'UNASSIGNED' ELSE task_status END,
+          assignee_user_id=CASE WHEN ? THEN NULL ELSE assignee_user_id END,
+          assignee_name=CASE WHEN ? THEN NULL ELSE assignee_name END,
           external_retry_count=external_retry_count+1,external_last_sync_at=NOW(3),task_version=task_version+1,updated_at=NOW(3)
         WHERE id=?
-        """, rejected ? "SYNC_FAILED" : "UNKNOWN", error, taskId);
+        """, rejected ? "SYNC_FAILED" : "UNKNOWN", error, rejected, rejected, rejected, taskId);
   }
 
   public void invalidateFinance(Long flowId) {
@@ -129,22 +125,6 @@ public class TechnicalDataOaWorkflowRepository {
         """, decision, messageId, submissionId) != 1) throw OaIntegrationException.conflict("OA_DECISION_CONFLICT", "提交已存在审批结论");
   }
 
-  public String claimEvent(OaPeer peer, String eventId, String hash, long messageId) {
-    jdbc.update("""
-        INSERT INTO lp_oa_workflow_event(source_system,environment,event_id,semantic_hash,message_id)
-        VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE event_id=event_id
-        """, peer.sourceSystem(), peer.environment(), eventId, hash, messageId);
-    var event = jdbc.queryForMap("SELECT semantic_hash,result_json FROM lp_oa_workflow_event WHERE source_system=? AND environment=? AND event_id=? FOR UPDATE",
-        peer.sourceSystem(), peer.environment(), eventId);
-    if (!hash.equals(event.get("semantic_hash"))) throw OaIntegrationException.conflict("OA_EVENT_CONTENT_CONFLICT", "同一审批事件编号不能更换内容");
-    return event.get("result_json") == null ? null : event.get("result_json").toString();
-  }
-
-  public void completeEvent(OaPeer peer, String eventId, String result) {
-    jdbc.update("UPDATE lp_oa_workflow_event SET result_json=? WHERE source_system=? AND environment=? AND event_id=? AND result_json IS NULL",
-        result, peer.sourceSystem(), peer.environment(), eventId);
-  }
-
   public void acceptSequence(long taskId, long sequence, String eventId) {
     jdbc.update("UPDATE lp_quote_tech_task SET external_callback_seq=GREATEST(COALESCE(external_callback_seq,0),?),external_last_event_id=?,updated_at=NOW(3) WHERE id=?", sequence, eventId, taskId);
   }
@@ -163,7 +143,9 @@ public class TechnicalDataOaWorkflowRepository {
     var flow = lockFlow(flowId);
     boolean ready = ((Number) counts.get("task_count")).longValue() > 0
         && ((Number) counts.get("pending_count")).longValue() == 0
-        && flow.financeSequence() > ((Number) counts.get("last_approval")).longValue();
+        // 最后一位技术审批通过与进入报价员资料节点可以在同一条 OA 通知中到达。
+        && flow.financeSequence() > 0
+        && flow.financeSequence() >= ((Number) counts.get("last_approval")).longValue();
     jdbc.update("UPDATE lp_oa_technical_flow SET finance_ready=?,updated_at=NOW(3) WHERE id=?", ready ? 1 : 0, flowId);
     return ready;
   }
@@ -172,7 +154,7 @@ public class TechnicalDataOaWorkflowRepository {
     return jdbc.queryForList("SELECT DISTINCT business_unit_type FROM lp_quote_tech_task WHERE oa_flow_id=?", String.class, flowId);
   }
 
-  /** 按批准版本绑定财务确认，任何人员重提或分工变化都使旧确认失效。 */
+  /** 按批准版本绑定报价员资料确认，任何人员重提或分工变化都使旧确认失效。 */
   public String approvalBasis(long flowId) {
     return jdbc.query("""
         SELECT r.id,s.id submission_id,s.technical_version_id,s.content_fingerprint
@@ -188,7 +170,7 @@ public class TechnicalDataOaWorkflowRepository {
     if (jdbc.update("""
         UPDATE lp_oa_technical_flow SET finance_confirmed_fingerprint=?,finance_confirmed_by=?,finance_confirmed_at=NOW(3),updated_at=NOW(3)
         WHERE id=? AND finance_ready=1
-        """, fingerprint, userId, flowId) != 1) throw OaIntegrationException.conflict("FINANCE_NOT_READY", "OA 尚未到达财务核算节点");
+        """, fingerprint, userId, flowId) != 1) throw OaIntegrationException.conflict("FINANCE_NOT_READY", "OA 资料尚未具备报价员确认条件");
   }
 
   private Flow flow(ResultSet row, int index) throws SQLException {

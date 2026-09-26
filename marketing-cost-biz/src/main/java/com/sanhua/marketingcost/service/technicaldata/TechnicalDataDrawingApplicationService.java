@@ -35,6 +35,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** 图库模块的授权、真实复查与草稿保存；采集、导入和料号匹配仍由既有图库链完成。 */
 @Service
 public class TechnicalDataDrawingApplicationService {
+  private final TechnicalDataReadPolicy readPolicy;
   private final TechnicalDataSharedModules sharedModules;
   private final QuoteTechnicalDataRepository repository;
   private final TechnicalDataTaskRepository tasks;
@@ -52,7 +53,8 @@ public class TechnicalDataDrawingApplicationService {
       ElectronicDrawingWorkflowContextPort contexts, ElectronicDrawingWorkflowOrchestrator workflow,
       ElectronicDrawingProductLookup productLookup, ElectronicDrawingSourceNodeRepository sourceNodes,
       QuoteBomSupplementVersionMapper sources, TechnicalDataSourceSnapshotFactory snapshots,
-      PlatformTransactionManager transactionManager, TechnicalDataSharedModules sharedModules) {
+      PlatformTransactionManager transactionManager, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy) {
+    this.readPolicy=readPolicy;
     this.sharedModules = sharedModules;
     this.repository = repository; this.tasks = tasks; this.codec = codec; this.contexts = contexts;
     this.workflow = workflow; this.productLookup = productLookup; this.sourceNodes = sourceNodes;
@@ -62,9 +64,7 @@ public class TechnicalDataDrawingApplicationService {
 
   public TechnicalDataDrawingResponse read(Long productId, Long versionId, TechnicalDataActor actor) {
     Scope scope = scope(productId, actor, false, null);
-    Long selected = versionId != null ? versionId
-        : Set.of("FROZEN", "SUBMITTED", "APPROVED").contains(scope.module().getModuleStatus())
-            ? scope.module().getCurrentVersionId() : scope.product().getCurrentEditVersionId();
+    Long selected = readPolicy.readVersion(scope.product(), scope.module(), actor, versionId);
     var version = selected == null ? null : repository.findVersion(selected).orElseThrow(() -> invalid("图库补录版本不存在"));
     if (version != null && !Objects.equals(version.getProductId(), productId)) throw forbidden("不能读取其他产品版本");
     var drawing = codec.drawingBom(version);

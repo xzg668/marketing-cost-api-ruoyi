@@ -83,7 +83,31 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
     // 请求归属错误直接拒绝；验证通过后，所有阶段故障均返回同一产品的结构化结果。
     ProductCostingContext context = contextResolver.resolve(request);
     oaWorkflowAccess.requireCosting(context.form().getId());
+    var oaState = oaWorkflowAccess.view(context.form().getId());
+    if (oaState != null && "MATERIAL_REVIEW".equals(oaState.state())
+        && !oaWorkflowAccess.materialConfirmed(context.form().getId())) {
+      var checked = withSourceCheck(context, executeStages(context, true));
+      if ("READY".equals(checked.getPipelineStatus())) {
+        checked.setPipelineStatus("BLOCKED");
+        checked.setBlockingStatus("WAIT_TECH_DATA");
+        checked.setCurrentStep("MATERIAL_CONFIRMATION");
+        checked.setMessage("资料检查通过，请由报价员确认整单资料后继续核算");
+        checked.setErrorCode("MATERIAL_CONFIRMATION_REQUIRED");
+      }
+      return checked;
+    }
     ProductCostingResult result = executeResolved(context, request.force());
+    return withSourceCheck(context, result);
+  }
+
+  @Override
+  public ProductCostingResult prepare(ProductCostingRequest request) {
+    ProductCostingContext context = contextResolver.resolve(request);
+    oaWorkflowAccess.requireCosting(context.form().getId());
+    return withSourceCheck(context, executeStages(context, true));
+  }
+
+  private ProductCostingResult withSourceCheck(ProductCostingContext context, ProductCostingResult result) {
     if (result.getTechnicalDataCheck() != null) return result;
     try {
       result.setTechnicalDataCheck(technicalSources.afterCosting(context));
@@ -101,14 +125,14 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       if (reusable != null) return reusable;
     } catch (com.sanhua.marketingcost.service.EffectiveTechnicalDataException pendingApproval) {
       // 审批尚未齐全仍可检查 BOM/价格缺口；正式成本阶段必须再次核验批准输入。
-      return executeStages(context);
+      return executeStages(context, false);
     } catch (RuntimeException exception) {
-      return failure(context, "INPUT_CHECK", exception);
+      return failure(context, "INPUT_CHECK", exception, false);
     }
-    return executeStages(context);
+    return executeStages(context, false);
   }
 
-  private ProductCostingResult executeStages(ProductCostingContext scope) {
+  private ProductCostingResult executeStages(ProductCostingContext scope, boolean preparationOnly) {
     String stage = STEP_BOM;
     try {
       QuoteCostingWorkbenchResponse workbench =
@@ -146,6 +170,17 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       if (technicalBlocked != null) return technicalBlocked;
       // 价格准备可能切换实际补录来源，成本版本必须绑定本轮最终输入。
       scope = contextResolver.resolveRevision(scope);
+      if (preparationOnly) {
+        var prepared = base(scope);
+        prepared.setPipelineStatus("READY");
+        prepared.setCurrentStep("MATERIAL_CHECK");
+        prepared.setMessage("本产品资料检查通过");
+        prepared.setPricePrepareNo(prepareNo);
+        prepared.setSourceRevision(scope.sourceRevision());
+        prepared.setTechnicalDataCheck(sourceCheck);
+        return prepared;
+      }
+      oaWorkflowAccess.requireCostPublication(scope.form().getId());
       QuoteCostRunTrialRequest costRequest = new QuoteCostRunTrialRequest();
       costRequest.setPeriodMonth(scope.periodMonth());
       costRequest.setPricePrepareNo(prepareNo);
@@ -167,15 +202,15 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       result.setTechnicalDataCheck(sourceCheck);
       return result;
     } catch (RuntimeException exception) {
-      return failure(scope, stage, exception);
+      return failure(scope, stage, exception, preparationOnly);
     }
   }
 
   private ProductCostingResult failure(
-      ProductCostingContext scope, String stage, RuntimeException exception) {
+      ProductCostingContext scope, String stage, RuntimeException exception, boolean preparationOnly) {
     try {
       // 原补录退回或财务确认失效时，不能用失败前的输入版本冒充本次成功。
-      ProductCostingResult concurrent = reusableSuccess(contextResolver.resolveRevision(scope));
+      ProductCostingResult concurrent = preparationOnly ? null : reusableSuccess(contextResolver.resolveRevision(scope));
       if (concurrent != null) return concurrent;
     } catch (RuntimeException lookupFailure) {
       // 故障后的并发结果探测不能覆盖本次真正的错误及其重试属性。
@@ -291,6 +326,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   }
 
   private ProductCostingResult reusableSuccess(ProductCostingContext scope) {
+    oaWorkflowAccess.requireCostPublication(scope.form().getId());
     return successLookup.find(scope)
         .map(reused -> {
           var check = technicalSources.afterCosting(scope);

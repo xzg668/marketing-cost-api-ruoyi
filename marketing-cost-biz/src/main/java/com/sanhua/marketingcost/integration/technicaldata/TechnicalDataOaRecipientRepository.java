@@ -18,7 +18,9 @@ public class TechnicalDataOaRecipientRepository {
       String externalTaskId, String dispatchStatus, String todoStatus, String lastError,
       String departmentName, String leaderExternalId, String leaderName,
       Long latestSubmissionId, int submissionRound, long callbackSequence, String returnReason, boolean active, Long returnMessageId, Long returnRequestedBy,
-      String integrationTaskId) {}
+      String integrationTaskId, List<String> revisionModules) {
+    public List<String> processingModules() { return revisionModules == null ? modules : revisionModules; }
+  }
 
   private final JdbcTemplate jdbc;
   private final OaMessageCodec codec;
@@ -113,7 +115,7 @@ public class TechnicalDataOaRecipientRepository {
   public void prepared(long id, long submissionId, int round) {
     if (jdbc.update("""
         UPDATE lp_quote_tech_oa_recipient SET todo_status='PREPARED',latest_submission_id=?,submission_round=?,
-          return_reason=NULL,row_version=row_version+1,updated_at=NOW(3) WHERE id=? AND active_flag=1 AND todo_status='OPEN'
+          row_version=row_version+1,updated_at=NOW(3) WHERE id=? AND active_flag=1 AND todo_status='OPEN'
         """, submissionId, round, id) != 1) throw conflict("本人待办已变化，不能重复提交");
   }
 
@@ -132,6 +134,12 @@ public class TechnicalDataOaRecipientRepository {
         """, messageId, userId, reason, id, submissionId) != 1) throw conflict("所选人员的审批版本已变化");
   }
 
+  public void revisionScope(long id, List<String> modules) {
+    if (modules == null || modules.isEmpty()) throw conflict("退回板块不能为空");
+    jdbc.update("UPDATE lp_quote_tech_oa_recipient SET revision_module_types_json=? WHERE id=? AND active_flag=1",
+        codec.write(modules), id);
+  }
+
   public void returnedTodo(long id, String externalTaskId) {
     jdbc.update("UPDATE lp_quote_tech_oa_recipient SET external_task_id=?,updated_at=NOW(3) WHERE id=? AND active_flag=1",
         externalTaskId, id);
@@ -148,7 +156,9 @@ public class TechnicalDataOaRecipientRepository {
     boolean approved = !current.isEmpty() && current.stream().allMatch(row -> "DONE".equals(row.todoStatus()));
     boolean open = current.stream().anyMatch(row -> "OPEN".equals(row.todoStatus()));
     boolean prepared = current.stream().anyMatch(row -> "PREPARED".equals(row.todoStatus()));
-    String status = approved ? "APPROVED" : open ? "IN_PROGRESS" : prepared ? "PREPARED" : "SUBMITTED";
+    boolean returned = current.stream().anyMatch(row -> "OPEN".equals(row.todoStatus()) && row.returnReason() != null);
+    boolean returning = current.stream().anyMatch(row -> "RETURN_PENDING".equals(row.todoStatus()));
+    String status = returning ? "RETURN_PENDING" : approved ? "APPROVED" : returned ? "PARTIALLY_RETURNED" : open ? "IN_PROGRESS" : prepared ? "PREPARED" : "SUBMITTED";
     jdbc.update("""
         UPDATE lp_quote_tech_task SET task_status=?,review_status=?,task_version=task_version+1,updated_at=NOW(3) WHERE id=? AND active_flag=1
         """, status, approved ? "PASSED" : open ? "NOT_STARTED" : "PENDING", taskId);
@@ -168,6 +178,11 @@ public class TechnicalDataOaRecipientRepository {
   }
 
   private Recipient recipient(ResultSet row, int index) throws SQLException {
+    List<String> revision = null;
+    if (row.getString("revision_module_types_json") != null) {
+      revision = new ArrayList<>();
+      for (var value : codec.read(row.getString("revision_module_types_json"))) revision.add(value.asText());
+    }
     List<String> modules = new ArrayList<>();
     codec.read(row.getString("module_types_json")).forEach(item -> modules.add(item.asText()));
     return new Recipient(row.getLong("id"), row.getLong("task_id"), row.getInt("assignment_version"),
@@ -178,6 +193,6 @@ public class TechnicalDataOaRecipientRepository {
         row.getObject("latest_submission_id", Long.class), row.getInt("submission_round"), row.getLong("callback_sequence"),
         row.getString("return_reason"), row.getBoolean("active_flag"),
         row.getObject("return_message_id", Long.class), row.getObject("return_requested_by", Long.class),
-        row.getString("integration_task_id"));
+        row.getString("integration_task_id"), revision == null ? null : List.copyOf(revision));
   }
 }

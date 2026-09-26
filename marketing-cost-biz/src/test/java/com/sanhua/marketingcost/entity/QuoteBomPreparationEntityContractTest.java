@@ -24,8 +24,49 @@ class QuoteBomPreparationEntityContractTest {
     assertTable(QuoteBomPackageReferenceDetail.class, "lp_quote_bom_package_reference_detail");
     assertTable(QuoteBomSupplementVersion.class, "lp_quote_bom_supplement_version");
     assertTable(QuoteBomSupplementDetail.class, "lp_quote_bom_supplement_detail");
+    assertTable(ElectronicDrawingSourceNode.class, "lp_electronic_drawing_source_node");
     assertTable(BusinessChangeLog.class, "lp_business_change_log");
     assertTable(BomCostingRowSourceRef.class, "lp_bom_costing_row_source_ref");
+  }
+
+  @Test
+  @DisplayName("电子图库实体显式承载文件证据、原始节点和混合树来源")
+  void electronicDrawingFieldsAreExplicit() {
+    assertFields(
+        QuoteBomSupplementVersion.class,
+        "electronicDrawingNo",
+        "sourceFileName",
+        "sourceFileSha256",
+        "sourceFileSize",
+        "sourceSheetName",
+        "sourceAcquiredAt",
+        "sourceRequestId",
+        "materialOrgCode",
+        "compositionFingerprint");
+    assertFields(
+        QuoteBomSupplementDetail.class,
+        "nodeSourceType",
+        "sourceElectronicNodeId",
+        "mappingStatus");
+    assertFields(
+        ElectronicDrawingSourceNode.class,
+        "supplementVersionId",
+        "sourceRowNo",
+        "sourceSequence",
+        "parentSourceSequence",
+        "drawingCode",
+        "sourceName",
+        "qty",
+        "material",
+        "importanceClass",
+        "hsfRiskClass",
+        "referenceWeight",
+        "referenceWeightUnit",
+        "sourceRemark",
+        "matchStatus",
+        "resolvedMaterialCode",
+        "resolvedBy",
+        "resolvedAt");
   }
 
   @Test

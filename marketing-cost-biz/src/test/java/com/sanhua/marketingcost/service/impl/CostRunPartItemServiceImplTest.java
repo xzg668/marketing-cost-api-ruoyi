@@ -17,6 +17,7 @@ import com.sanhua.marketingcost.dto.PackagePriceRequest;
 import com.sanhua.marketingcost.dto.PackagePriceResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.dto.RollupPartComponentDto;
+import com.sanhua.marketingcost.dto.RollupDisplaySnapshot;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.OaForm;
@@ -33,6 +34,7 @@ import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
 import com.sanhua.marketingcost.service.PackageComponentPriceService;
 import com.sanhua.marketingcost.service.pricing.PriceResolveResult;
 import com.sanhua.marketingcost.service.pricing.PriceResolver;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -239,7 +241,7 @@ class CostRunPartItemServiceImplTest {
   @Test
   @DisplayName("包装父料号 → 命中包装组件价格服务，返回父件单价并不查普通 Router")
   void packageComponentUsesPackagePriceService() {
-    LocalDate currentDate = LocalDate.now();
+    LocalDate currentDate = CostPricingPeriodUtils.currentPricingDate();
     String currentPeriod = currentDate.toString().substring(0, 7);
     CostRunPartItemDto p = part("PKG-PARENT");
     p.setProductCode("TOP-001");
@@ -529,7 +531,7 @@ class CostRunPartItemServiceImplTest {
   @Test
   @DisplayName("成本试算部品路由按当前日期和当前月份取价，忽略 OA.apply_date")
   void listByOaNoUsesCurrentDateForRouter() {
-    LocalDate currentDate = LocalDate.now();
+    LocalDate currentDate = CostPricingPeriodUtils.currentPricingDate();
     String currentPeriod = currentDate.toString().substring(0, 7);
     CostRunPartItemDto p = part("MAT-CURRENT");
     p.setPartQty(new BigDecimal("2"));
@@ -592,6 +594,24 @@ class CostRunPartItemServiceImplTest {
     assertThat(items).anyMatch(item -> "NORMAL".equals(item.getPartCode()));
     assertThat(items).filteredOn(item -> "PKG-PARENT".equals(item.getPartCode())).hasSize(1);
     verify(rawMapper).selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL"));
+  }
+
+  @Test
+  @DisplayName("补录包装多种子件只汇总一次，不把第一种子件显示为整套包装")
+  void technicalPackageSummaryKeepsAmountWithoutInventingASingleMaterial() {
+    var first = storedPart("OA-1", "P-1", "BOX", "纸箱", "12.007800");
+    first.setTechnicalModuleType("PACKAGE"); first.setQty(new BigDecimal("3"));
+    var second = storedPart("OA-1", "P-1", "BOARD", "隔板", "10.530000");
+    second.setTechnicalModuleType("PACKAGE"); second.setQty(new BigDecimal("36"));
+    when(costRunPartItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(first,second));
+    var service = build(List.of());
+    var result = service.listAggregatedByOaNo("OA-1", "P-1");
+    assertThat(result).singleElement().satisfies(row -> {
+      assertThat(row.getAmount()).isEqualByComparingTo("23.664690");
+      assertThat(row.getTechnicalModuleType()).isEqualTo("PACKAGE");
+      assertThat(row.getPartCode()).isNull(); assertThat(row.getPartQty()).isNull();
+      assertThat(row.getUnitPrice()).isNull(); assertThat(row.getRemark()).contains("明细金额合计 × 1.05");
+    });
   }
 
   @Test
@@ -760,6 +780,32 @@ class CostRunPartItemServiceImplTest {
         argThat(ids -> ids != null && Set.copyOf(ids).equals(Set.of(101L, 102L))));
   }
 
+  @Test
+  @DisplayName("历史上卷读取本版本底稿，已冻结空数组也不能回查新 BOM")
+  void frozenRollupAndFrozenEmptyNeverReadLiveBom() {
+    CostRunPartItem parent = storedPart("OA-1", "TOP-1", "MAKE", "制造件", "0.109982");
+    parent.setId(701L); parent.setQty(BigDecimal.ONE); parent.setUnitPrice(new BigDecimal("0.109982"));
+    parent.setPriceOrgCode("210"); parent.setMaterialOrganizationCode("COMMERCIAL");
+    CostRunPartItem plain = storedPart("OA-1", "TOP-1", "PLAIN", "普通件", "2");
+    plain.setId(702L); plain.setPriceOrgCode("210"); plain.setMaterialOrganizationCode("COMMERCIAL");
+    when(costRunPartItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(parent, plain));
+    when(costRunPartItemMapper.selectRollupDisplaySnapshots(any())).thenReturn(List.of(
+        new RollupDisplaySnapshot(701L, """
+            [{"childMaterialCode":"RAW","childMaterialName":"原材料","childQtyPerTop":0.0051,
+              "childUnitCost":0.10998245,"childRawPriceType":"固定价"}]
+            """), new RollupDisplaySnapshot(702L, "[]")));
+
+    var result = build(List.of()).listAggregatedByCostRunNo("HISTORY-RUN", "TOP-1");
+
+    assertThat(result).hasSize(2);
+    assertThat(result.getFirst().getDisplayPartCode()).isEqualTo("MAKE\n【RAW】");
+    assertThat(result.getFirst().getPartQty()).isEqualByComparingTo("0.0051");
+    assertThat(result.getFirst().getAmount()).isEqualByComparingTo("0.109982");
+    assertThat(result.getFirst().getPriceSource()).isEqualTo("固定价");
+    assertThat(result.getLast().getDisplayPartCode()).isNull();
+    verify(costRunPartItemMapper, never()).selectRollupDisplayComponents(any());
+  }
+
   // ============================ resolveQuoteDate ============================
 
   @Test
@@ -770,7 +816,8 @@ class CostRunPartItemServiceImplTest {
     when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(form);
 
     CostRunPartItemServiceImpl svc = build(List.of());
-    assertThat(svc.resolveQuoteDate("OA-X")).isEqualTo(LocalDate.now());
+    assertThat(svc.resolveQuoteDate("OA-X"))
+        .isEqualTo(CostPricingPeriodUtils.currentPricingDate());
   }
 
   @Test
@@ -781,7 +828,8 @@ class CostRunPartItemServiceImplTest {
     when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(form);
 
     CostRunPartItemServiceImpl svc = build(List.of());
-    assertThat(svc.resolveQuoteDate("OA-NULL-DATE")).isEqualTo(LocalDate.now());
+    assertThat(svc.resolveQuoteDate("OA-NULL-DATE"))
+        .isEqualTo(CostPricingPeriodUtils.currentPricingDate());
   }
 
   @Test
@@ -790,7 +838,8 @@ class CostRunPartItemServiceImplTest {
     when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(null);
 
     CostRunPartItemServiceImpl svc = build(List.of());
-    assertThat(svc.resolveQuoteDate("OA-MISSING")).isEqualTo(LocalDate.now());
+    assertThat(svc.resolveQuoteDate("OA-MISSING"))
+        .isEqualTo(CostPricingPeriodUtils.currentPricingDate());
   }
 
   // ============================ 辅助构造 ============================

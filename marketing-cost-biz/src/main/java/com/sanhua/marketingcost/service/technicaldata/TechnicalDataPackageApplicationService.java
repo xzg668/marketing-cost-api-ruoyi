@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** 包装草稿与本人模块版本的事务边界；来源查询和用量规则独立维护。 */
 @Service
 public class TechnicalDataPackageApplicationService {
+  private final TechnicalDataReadPolicy readPolicy;
   private final TechnicalDataSharedModules sharedModules;
   private final QuoteTechnicalDataRepository repository;
   private final TechnicalDataTaskRepository tasks;
@@ -28,7 +29,8 @@ public class TechnicalDataPackageApplicationService {
 
   public TechnicalDataPackageApplicationService(QuoteTechnicalDataRepository repository,
       TechnicalDataTaskRepository tasks, TechnicalDataSourceSnapshotFactory snapshots,
-      TechnicalDataVersionContentCodec codec, TechnicalDataPackageSourceQuery sources, TechnicalDataSharedModules sharedModules) {
+      TechnicalDataVersionContentCodec codec, TechnicalDataPackageSourceQuery sources, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy) {
+    this.readPolicy=readPolicy;
     this.sharedModules = sharedModules;
     this.repository = repository; this.tasks = tasks; this.snapshots = snapshots;
     this.codec = codec; this.sources = sources;
@@ -37,9 +39,7 @@ public class TechnicalDataPackageApplicationService {
   @Transactional(readOnly = true)
   public TechnicalDataPackageResponse get(Long productId, Long versionId, TechnicalDataActor actor) {
     var scope = scope(productId, actor, null);
-    Long selected = versionId != null ? versionId
-        : Set.of("FROZEN", "SUBMITTED", "APPROVED").contains(scope.module().getModuleStatus())
-            ? scope.module().getCurrentVersionId() : scope.product().getCurrentEditVersionId();
+    Long selected = readPolicy.readVersion(scope.product(), scope.module(), actor, versionId);
     var version = selected == null ? null : repository.findVersion(selected).orElseThrow(() -> invalid("包装版本不存在"));
     if (version != null && !Objects.equals(version.getProductId(), productId)) throw forbidden("不能读取其他产品包装版本");
     var packaging = codec.packaging(version);

@@ -131,9 +131,23 @@ class MakePartPriceCalcRowMapperTest extends BomMapperTestBase {
         .containsExactly("C-A", "C-B");
   }
 
+  @Test
+  void sameMaterialAndPriceMomentCanPersistSeparateCostingNodesButNotDuplicateOneNode() {
+    var first = newValidRow("SAME-MAKE", "RAW", "SCRAP"); first.setSourceCostingRowId(501L);
+    var second = newValidRow("SAME-MAKE", "RAW", "SCRAP"); second.setSourceCostingRowId(502L);
+    mapper.insert(first); mapper.insert(second);
+    assertThat(mapper.selectById(first.getId()).getSourceCostingRowId()).isEqualTo(501L);
+    assertThat(mapper.selectById(second.getId()).getSourceCostingRowId()).isEqualTo(502L);
+    var duplicate = newValidRow("SAME-MAKE", "RAW", "SCRAP"); duplicate.setSourceCostingRowId(501L);
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> mapper.insert(duplicate))
+        .isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
+  }
+
   private MakePartPriceCalcRow newValidRow(String parent, String child, String scrap) {
     MakePartPriceCalcRow row = new MakePartPriceCalcRow();
     row.setCalcBatchId(batchId);
+    row.setOaNo(batchId);
+    row.setPriceAsOfTime(java.time.LocalDateTime.of(2026, 5, 31, 23, 59, 59));
     row.setBusinessUnitType("COMMERCIAL");
     row.setPricingMonth("2026-05");
     row.setPriceScenarioType("OA_LOCKED");

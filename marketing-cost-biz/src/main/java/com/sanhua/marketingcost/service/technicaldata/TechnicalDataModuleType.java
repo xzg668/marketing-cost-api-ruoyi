@@ -6,15 +6,23 @@ import java.util.Set;
 
 /** 模块顺序属于业务契约，页面、提交快照和校验共用此顺序。 */
 public enum TechnicalDataModuleType {
-  PROFILE,
-  DRAWING_BOM,
-  MANUFACTURING,
-  PACKAGE,
-  AUXILIARY,
-  SOLDER,
-  SALARY,
-  NET_LOSS,
-  PRICE;
+  PROFILE("产品资料"),
+  DRAWING_BOM("电子图库明细表"),
+  MANUFACTURING("制造件原材料"),
+  PACKAGE("包装"),
+  AUXILIARY("辅料"),
+  SOLDER("焊料"),
+  SALARY("工资"),
+  NET_LOSS("净损失率"),
+  PRICE("价格");
+
+  private final String displayName;
+
+  TechnicalDataModuleType(String displayName) {
+    this.displayName = displayName;
+  }
+
+  public String displayName() { return displayName; }
 
   private static final Set<String> LEGACY_CODES = Set.of(
       "PROFILE", "PACKAGE", "AUXILIARY", "SALARY");

@@ -28,7 +28,7 @@ final class OaQuotationAuthenticationFilter extends OncePerRequestFilter {
       HttpServletRequest request, HttpServletResponse response, FilterChain chain)
       throws IOException, ServletException {
     if (properties.getMode() == OaIntegrationProperties.Mode.DISABLED) {
-      reject(response, 503, "INTEGRATION_DISABLED", "OA接口未启用");
+      reject(request, response, 503, "INTEGRATION_DISABLED", "OA接口未启用");
       return;
     }
     String header = request.getHeader("Authorization");
@@ -41,7 +41,7 @@ final class OaQuotationAuthenticationFilter extends OncePerRequestFilter {
                 client.getSecret().getBytes(StandardCharsets.UTF_8),
                 token.getBytes(StandardCharsets.UTF_8))) {
           if (matched != null) {
-            reject(response, 401, "INVALID_TOKEN", "调用方凭据配置不唯一");
+            reject(request, response, 401, "INVALID_TOKEN", "调用方凭据配置不唯一");
             return;
           }
           matched = client;
@@ -51,7 +51,7 @@ final class OaQuotationAuthenticationFilter extends OncePerRequestFilter {
     if (matched == null
         || matched.getMode() != properties.getMode()
         || !properties.getEnvironment().equals(matched.getEnvironment())) {
-      reject(response, 401, "INVALID_TOKEN", "Bearer Token无效");
+      reject(request, response, 401, "INVALID_TOKEN", "Bearer Token无效");
       return;
     }
     var peer =
@@ -66,8 +66,9 @@ final class OaQuotationAuthenticationFilter extends OncePerRequestFilter {
     }
   }
 
-  private void reject(HttpServletResponse response, int status, String code, String message)
+  private void reject(HttpServletRequest request, HttpServletResponse response, int status, String code, String message)
       throws IOException {
+    request.setAttribute(OaHttpLoggingFilter.RESULT_CODE, code);
     response.setStatus(status);
     response.setContentType("application/json;charset=UTF-8");
     json.writeValue(response.getOutputStream(), OaQuotationResponse.rejected(code, message, null));

@@ -67,12 +67,7 @@ public interface QuoteTechTaskMapper extends BaseMapper<QuoteTechTask> {
       @Param("dueAt") LocalDateTime dueAt,
       @Param("actorId") Long actorId);
 
-  @Update("""
-      UPDATE lp_quote_tech_task SET task_version=task_version+1,updated_by=COALESCE(#{actorId},updated_by),updated_at=NOW(3)
-       WHERE id=#{taskId} AND task_version=#{expectedVersion} AND active_flag=1
-      """)
-  int recordLocalAssignment(@Param("taskId") Long taskId, @Param("expectedVersion") Integer expectedVersion,
-      @Param("actorId") Long actorId);
+
 
   @Select("""
       SELECT * FROM lp_quote_tech_task
@@ -145,50 +140,9 @@ public interface QuoteTechTaskMapper extends BaseMapper<QuoteTechTask> {
       @Param("eventId") String eventId,
       @Param("changedAt") LocalDateTime changedAt);
 
-  @Update("""
-      UPDATE lp_quote_tech_task
-         SET proxy_operator_user_id=#{actorId},proxy_operator_name=#{actorName},
-             proxy_reason=#{reason},proxy_request_id=#{requestId},proxy_started_at=#{changedAt},
-             updated_by=#{actorId},task_version=task_version+1,updated_at=#{changedAt}
-       WHERE id=#{taskId} AND task_version=#{expectedVersion} AND active_flag=1
-         AND task_status IN ('PENDING','IN_PROGRESS','PARTIALLY_RETURNED')
-         AND proxy_operator_user_id IS NULL
-      """)
-  int startProxyEntry(
-      @Param("taskId") Long taskId,
-      @Param("expectedVersion") int expectedVersion,
-      @Param("actorId") Long actorId,
-      @Param("actorName") String actorName,
-      @Param("reason") String reason,
-      @Param("requestId") String requestId,
-      @Param("changedAt") LocalDateTime changedAt);
 
-  @Update("""
-      UPDATE lp_quote_tech_task
-         SET proxy_operator_user_id=NULL,proxy_operator_name=NULL,proxy_reason=NULL,
-             proxy_request_id=NULL,proxy_started_at=NULL,
-             updated_by=#{actorId},task_version=task_version+1,updated_at=#{changedAt}
-       WHERE id=#{taskId} AND task_version=#{expectedVersion} AND active_flag=1
-         AND proxy_operator_user_id IS NOT NULL
-      """)
-  int unlockDraft(
-      @Param("taskId") Long taskId,
-      @Param("expectedVersion") int expectedVersion,
-      @Param("actorId") Long actorId,
-      @Param("changedAt") LocalDateTime changedAt);
 
-  @Update("""
-      UPDATE lp_quote_tech_task
-         SET task_status='CANCELLED',active_flag=0,active_lock_key=NULL,
-             cancelled_at=#{changedAt},proxy_operator_user_id=NULL,proxy_operator_name=NULL,
-             proxy_reason=NULL,proxy_request_id=NULL,proxy_started_at=NULL,
-             updated_by=#{actorId},task_version=task_version+1,updated_at=#{changedAt}
-       WHERE id=#{taskId} AND task_version=#{expectedVersion} AND active_flag=1
-         AND task_status NOT IN ('APPROVED','CANCELLED')
-      """)
-  int voidTask(
-      @Param("taskId") Long taskId,
-      @Param("expectedVersion") int expectedVersion,
-      @Param("actorId") Long actorId,
-      @Param("changedAt") LocalDateTime changedAt);
+
+
+
 }

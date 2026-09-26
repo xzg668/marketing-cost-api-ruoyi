@@ -144,9 +144,9 @@ public class MybatisTechnicalDataTaskRepository implements TechnicalDataTaskRepo
       String businessUnitType,
       String taskStatus,
       String accountingMonth,
-      String keyword) {
+      String keyword, String oaNo) {
     return productMapper.countAccessibleWorkbenchRows(
-        accessMode, userId, businessUnitType, taskStatus, accountingMonth, keyword);
+        accessMode, userId, businessUnitType, taskStatus, accountingMonth, keyword, oaNo);
   }
 
   @Override
@@ -157,10 +157,11 @@ public class MybatisTechnicalDataTaskRepository implements TechnicalDataTaskRepo
       String taskStatus,
       String accountingMonth,
       String keyword,
+      String oaNo,
       int offset,
       int size) {
     return productMapper.selectAccessibleWorkbenchPage(
-        accessMode, userId, businessUnitType, taskStatus, accountingMonth, keyword, offset, size);
+        accessMode, userId, businessUnitType, taskStatus, accountingMonth, keyword, oaNo, offset, size);
   }
 
   @Override

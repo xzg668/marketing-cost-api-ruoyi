@@ -56,7 +56,7 @@ class ManufactureRateServiceImplTest {
     ArgumentCaptor<ManufactureRate> captor = ArgumentCaptor.forClass(ManufactureRate.class);
     verify(mapper).insert(captor.capture());
     assertThat(captor.getValue().getMatchLevel()).isEqualTo("MATERIAL_MODEL");
-    assertThat(captor.getValue().getMatchKey()).isEqualTo("MODEL-B");
+    assertThat(captor.getValue().getMatchKey()).isEqualTo("四通阀事业部::MODEL-B");
   }
 
   @Test
@@ -76,7 +76,7 @@ class ManufactureRateServiceImplTest {
     verify(mapper).insert(captor.capture());
     assertThat(captor.getValue().getProductCode()).isNull();
     assertThat(captor.getValue().getMatchLevel()).isEqualTo("MATERIAL_MODEL");
-    assertThat(captor.getValue().getMatchKey()).isEqualTo("GBV04H024");
+    assertThat(captor.getValue().getMatchKey()).isEqualTo("四通阀事业部::GBV04H024");
   }
 
   @Test
@@ -153,7 +153,24 @@ class ManufactureRateServiceImplTest {
     ArgumentCaptor<ManufactureRate> captor = ArgumentCaptor.forClass(ManufactureRate.class);
     verify(mapper).insert(captor.capture());
     assertThat(captor.getValue().getMatchLevel()).isEqualTo("MATERIAL_MODEL");
-    assertThat(captor.getValue().getMatchKey()).isEqualTo("S6CH-34H-16");
+    assertThat(captor.getValue().getMatchKey()).isEqualTo("板换事业部::S6CH-34H-16");
+  }
+
+  @Test
+  @DisplayName("制造费用率导入：型号级配置缺事业部时拒绝导入")
+  void importItemsRejectsModelWithoutDivision() {
+    ManufactureRateMapper mapper = mock(ManufactureRateMapper.class);
+    ManufactureRateImportRequest.ManufactureRateRow row = row(7, null, "MODEL-C", "产品C");
+    row.setBusinessDivision(null);
+    row.setBusinessUnit(null);
+    ManufactureRateServiceImpl service = new ManufactureRateServiceImpl(mapper);
+
+    ManufactureRateImportResponse result = service.importItems(request(row));
+
+    assertThat(result.getInserted()).isZero();
+    assertThat(result.getSkipped()).isEqualTo(1);
+    assertThat(result.getErrorMessages()).containsExactly("Excel第7行型号级配置缺事业部");
+    verify(mapper, never()).insert(any(ManufactureRate.class));
   }
 
   @Test

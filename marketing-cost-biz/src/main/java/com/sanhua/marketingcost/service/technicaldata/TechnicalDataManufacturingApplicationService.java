@@ -36,6 +36,7 @@ import org.slf4j.LoggerFactory;
 /** 只保存本人制造件模块；原始图库、正式 U9 及其他人的已填内容不回写。 */
 @Service
 public class TechnicalDataManufacturingApplicationService {
+  private final TechnicalDataReadPolicy readPolicy;
   private static final Logger log = LoggerFactory.getLogger(TechnicalDataManufacturingApplicationService.class);
   private final TechnicalDataSharedModules sharedModules;
   private final QuoteTechnicalDataRepository repository;
@@ -58,7 +59,8 @@ public class TechnicalDataManufacturingApplicationService {
       TechnicalDataManufacturingSourceQuery sources, MaterialMasterRawMapper materials,
       MakePartScrapMappingService scraps, MakePartNoScrapConfirmationService noScrap,
       ElectronicDrawingHybridBomService hybridBom, ElectronicDrawingWorkflowOrchestrator workflow,
-      PlatformTransactionManager transactionManager, TechnicalDataMaterialPriceQuery prices, TechnicalDataSharedModules sharedModules) {
+      PlatformTransactionManager transactionManager, TechnicalDataMaterialPriceQuery prices, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy) {
+    this.readPolicy=readPolicy;
     this.sharedModules = sharedModules;
     this.repository = repository; this.tasks = tasks; this.codec = codec; this.snapshots = snapshots;
     this.contexts = contexts; this.sources = sources; this.materials = materials; this.scraps = scraps; this.noScrap = noScrap;
@@ -69,9 +71,7 @@ public class TechnicalDataManufacturingApplicationService {
 
   public TechnicalDataManufacturingResponse read(Long productId, Long versionId, TechnicalDataActor actor) {
     var scope = scope(productId, actor, null);
-    Long selected = versionId != null ? versionId
-        : Set.of("FROZEN", "SUBMITTED", "APPROVED").contains(scope.module().getModuleStatus())
-            ? scope.module().getCurrentVersionId() : scope.product().getCurrentEditVersionId();
+    Long selected = readPolicy.readVersion(scope.product(), scope.module(), actor, versionId);
     var version = selected == null ? null : repository.findVersion(selected).orElseThrow(() -> invalid("制造件版本不存在"));
     if (version != null && !Objects.equals(version.getProductId(), productId)) throw forbidden("不能读取其他产品版本");
     var saved = codec.manufacturing(version);

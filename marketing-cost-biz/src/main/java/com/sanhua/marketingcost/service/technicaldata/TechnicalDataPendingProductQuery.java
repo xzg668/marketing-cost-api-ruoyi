@@ -24,7 +24,7 @@ public class TechnicalDataPendingProductQuery {
 
   private record Query(String sql, List<Object> args) {}
 
-  private Query scope(String accessMode, String businessUnit, String month, String keyword) {
+  private Query scope(String accessMode, String businessUnit, String month, String keyword, String oaNo) {
     StringBuilder sql = new StringBuilder("""
         FROM lp_quote_costing_workspace w
         JOIN oa_form_item i ON i.id=w.oa_form_item_id
@@ -43,6 +43,7 @@ public class TechnicalDataPendingProductQuery {
         """);
     List<Object> args = new ArrayList<>();
     if (!"ALL".equals(accessMode)) { sql.append(" AND f.business_unit_type=?"); args.add(businessUnit); }
+    if (oaNo != null) { sql.append(" AND f.oa_no=?"); args.add(oaNo); }
     if (month != null) { sql.append(" AND w.period_month=?"); args.add(month); }
     if (keyword != null) {
       sql.append(" AND (f.oa_no LIKE ? OR i.material_no LIKE ? OR i.product_name LIKE ? OR i.sunl_model LIKE ?)");
@@ -51,16 +52,16 @@ public class TechnicalDataPendingProductQuery {
     return new Query(sql.toString(), args);
   }
 
-  public long count(String accessMode, String businessUnit, String month, String keyword) {
+  public long count(String accessMode, String businessUnit, String month, String keyword, String oaNo) {
     if ("ASSIGNEE".equals(accessMode)) return 0;
-    Query query = scope(accessMode, businessUnit, month, keyword);
+    Query query = scope(accessMode, businessUnit, month, keyword, oaNo);
     return jdbc.queryForObject("SELECT COUNT(*) " + query.sql(), Long.class, query.args().toArray());
   }
 
   public List<TechnicalDataWorkbenchRowResponse> page(String accessMode, String businessUnit,
-      String month, String keyword, int offset, int size) {
+      String month, String keyword, String oaNo, int offset, int size) {
     if ("ASSIGNEE".equals(accessMode) || size <= 0) return List.of();
-    Query query = scope(accessMode, businessUnit, month, keyword);
+    Query query = scope(accessMode, businessUnit, month, keyword, oaNo);
     List<Object> args = new ArrayList<>(query.args());
     args.add(offset); args.add(size);
     return jdbc.query("""

@@ -20,6 +20,25 @@ import org.mockito.ArgumentCaptor;
 class QualityLossRateServiceImplTest {
 
   @Test
+  void publicZeroCannotBeCreatedEditedOrImported() {
+    QualityLossRateMapper mapper = mock(QualityLossRateMapper.class);
+    var service = new QualityLossRateServiceImpl(mapper);
+    var input = new com.sanhua.marketingcost.dto.QualityLossRateRequest();
+    input.setRateYear(2026); input.setBareProductCode("BARE"); input.setLossRate(BigDecimal.ZERO);
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.create(input)).hasMessageContaining("必须大于0");
+    QualityLossRate existing = new QualityLossRate();
+    existing.setId(1L); existing.setBusinessUnitType("COMMERCIAL");
+    existing.setRateYear(2026); existing.setBareProductCode("BARE"); existing.setLossRate(new BigDecimal("0.003"));
+    when(mapper.selectById(1L)).thenReturn(existing);
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.update(1L, input)).hasMessageContaining("必须大于0");
+    var imported = service.importItems(request(row(2, "BARE", "0")));
+    assertThat(imported.getErrorMessages()).containsExactly("Excel第2行公共净损失率必须大于0且小于1");
+    verify(mapper, never()).insert(any(QualityLossRate.class));
+    verify(mapper, never()).updateById(any(QualityLossRate.class));
+    verify(mapper, never()).upsertBatch(any());
+  }
+
+  @Test
   @DisplayName("质量损失率导入：按 A:J 业务字段批量写入裸品规则")
   void importItemsInsertsBareProductRule() {
     QualityLossRateMapper mapper = mock(QualityLossRateMapper.class);

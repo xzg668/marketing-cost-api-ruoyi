@@ -27,16 +27,4 @@ public class OaIntegrationSecurityConfig {
         .build();
   }
 
-  @Bean
-  @Order(Ordered.HIGHEST_PRECEDENCE + 20)
-  SecurityFilterChain oaIntegrationSecurity(HttpSecurity http, OaIntegrationProperties properties,
-      ObjectMapper json) throws Exception {
-    return http.securityMatcher("/integration/oa/**")
-        .csrf(csrf -> csrf.disable())
-        .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-        .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
-        .addFilterBefore(new OaMachineAuthenticationFilter(properties, json),
-            UsernamePasswordAuthenticationFilter.class)
-        .build();
-  }
 }

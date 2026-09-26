@@ -1,9 +1,13 @@
 package com.sanhua.marketingcost.service.impl;
 
+import static org.mockito.ArgumentMatchers.anyString;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -12,6 +16,7 @@ import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.sanhua.marketingcost.dto.AuxCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunContext;
+import com.sanhua.marketingcost.dto.EffectiveTechnicalDataInput;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.CmsCostSourceEffective;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
@@ -42,6 +47,7 @@ import com.sanhua.marketingcost.mapper.QualityLossRateMapper;
 import com.sanhua.marketingcost.mapper.ThreeExpenseRateMapper;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.Year;
 import java.util.List;
 import java.util.Set;
@@ -69,11 +75,11 @@ class CostRunCostItemServiceImplTest {
     cmsFirst.setMaterialCode("P-1");
     cmsFirst.setSource("CMS_EFFECTIVE");
     cmsFirst.setDisplayOrder(10);
-    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-1"), "COMMERCIAL"))
+    when(auxMapper.selectEffectiveAuxCostItems(eq(2026), eq(Set.of("P-1")), eq("COMMERCIAL"), anyString()))
         .thenReturn(List.of(cmsSecond, cmsFirst));
 
     CostRunCostItemServiceImpl svc = buildWithAuxMapper(auxMapper);
-    List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-1"), 2026, "COMMERCIAL");
+    List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-1"), "2026-09", "COMMERCIAL");
 
     assertThat(items).extracting(CostRunCostItemDto::getCostCode)
         .containsExactly("AUX_0201", "AUX_0202");
@@ -95,11 +101,11 @@ class CostRunCostItemServiceImplTest {
     AuxCostItemDto normalCms = newAuxCost("0201", "辅助焊料类", "0.400000", "9.9900", "DIRECT");
     normalCms.setMaterialCode("P-1");
     normalCms.setSource("CMS_EFFECTIVE");
-    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-1"), "COMMERCIAL"))
+    when(auxMapper.selectEffectiveAuxCostItems(eq(2026), eq(Set.of("P-1")), eq("COMMERCIAL"), anyString()))
         .thenReturn(List.of(packagingCms, normalCms));
 
     CostRunCostItemServiceImpl svc = buildWithAuxMapper(auxMapper);
-    List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-1"), 2026, "COMMERCIAL");
+    List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-1"), "2026-09", "COMMERCIAL");
 
     assertThat(items).extracting(CostRunCostItemDto::getCostName)
         .containsExactly("辅助焊料类")
@@ -136,7 +142,7 @@ class CostRunCostItemServiceImplTest {
     CmsCostSourceEffective direct = effective("SALARY_DIRECT", "P-1", "0301", "4.000000");
     CmsCostSourceEffective indirect = effective("SALARY_INDIRECT", "P-1", "0302", "0.220000");
     when(effectiveMapper.selectList(any())).thenReturn(List.of(direct, indirect));
-    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-1"), "COMMERCIAL")).thenReturn(List.of());
+    when(auxMapper.selectEffectiveAuxCostItems(eq(2026), eq(Set.of("P-1")), eq("COMMERCIAL"), anyString())).thenReturn(List.of());
     when(partMapper.selectList(any())).thenReturn(List.of());
     when(masterMapper.selectList(any())).thenReturn(List.of());
     when(rawMapper.selectList(any())).thenReturn(List.of());
@@ -169,6 +175,129 @@ class CostRunCostItemServiceImplTest {
         .extracting(CostRunCostItemDto::getCostCode)
         .doesNotContain("OTHER_EXP_FREIGHT");
     verifyNoInteractions(ensureService);
+  }
+
+  @Test
+  @DisplayName("T11 审核生效V2的包装、辅料、工资优先进入成本并可追溯")
+  void effectiveTechnicalV2OverridesCmsAndStandardPackage() {
+    OaFormMapper formMapper = mock(OaFormMapper.class);
+    OaFormItemMapper formItemMapper = mock(OaFormItemMapper.class);
+    CmsCostSourceEffectiveMapper effectiveMapper = mock(CmsCostSourceEffectiveMapper.class);
+    AuxCostItemMapper auxMapper = mock(AuxCostItemMapper.class);
+    CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
+    MaterialMasterMapper masterMapper = mock(MaterialMasterMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
+
+    OaForm form = new OaForm();
+    form.setId(1L);
+    form.setOaNo("E2E-EDRAW-J40AH-20260830-T8-002");
+    form.setApplyDate(LocalDate.of(2026, 8, 1));
+    form.setAccountingPeriodMonth("2026-08");
+    form.setBusinessUnitType("COMMERCIAL");
+    OaFormItem formItem = new OaFormItem();
+    formItem.setId(1053100052030L);
+    formItem.setOaFormId(1L);
+    formItem.setMaterialNo("205686641");
+    formItem.setBusinessUnitType("COMMERCIAL");
+    when(formMapper.selectOne(any())).thenReturn(form);
+    when(formItemMapper.selectList(any())).thenReturn(List.of(formItem));
+    when(partMapper.selectList(any())).thenReturn(List.of());
+    when(masterMapper.selectList(any())).thenReturn(List.of());
+    when(rawMapper.selectList(any())).thenReturn(List.of());
+    when(bomMapper.selectList(any())).thenReturn(List.of());
+
+    CostRunCostItemServiceImpl svc = buildForCalculation(
+        formMapper,
+        formItemMapper,
+        effectiveMapper,
+        mock(CmsCostEffectiveSourceEnsureService.class),
+        auxMapper,
+        partMapper,
+        masterMapper,
+        rawMapper,
+        bomMapper);
+    CostRunContext context = CostRunContext.quote(
+        form.getOaNo(),
+        formItem.getId(),
+        formItem.getMaterialNo(),
+        null,
+        null,
+        "COMMERCIAL",
+        "2026-08",
+        "ITEM:1053100052030:MONTH:2026-08");
+    context.setPriceOrgCode("210");
+    context.setMaterialOrganizationCode("COMMERCIAL");
+    context.setEffectiveTechnicalData(effectiveTechnicalV2());
+
+    List<CostRunCostItemDto> items = svc.listByMaterialCodes(
+        form.getOaNo(), formItem.getMaterialNo(), Set.of(formItem.getMaterialNo()),
+        context, null, false, ignored -> {});
+
+    CostRunCostItemDto salary = findItem(items, "DIRECT_LABOR");
+    CostRunCostItemDto auxiliary = findItem(items, "AUX_TECH_0201");
+    CostRunCostItemDto packaging = findItem(items, "OTHER_EXP_PACKAGE");
+    CostRunCostItemDto material = findItem(items, "MATERIAL");
+    assertThat(salary.getAmount()).isEqualByComparingTo("18.900000");
+    assertThat(salary.getSourceTable()).isEqualTo("lp_quote_tech_data_version");
+    assertThat(salary.getSourceId()).isEqualTo(9002L);
+    assertThat(auxiliary.getAmount()).isEqualByComparingTo("0.704000");
+    assertThat(auxiliary.getSourceTable()).isEqualTo("lp_quote_tech_data_version");
+    assertThat(auxiliary.getSourceId()).isEqualTo(9002L);
+    assertThat(auxiliary.getRemark()).contains("302=0.35", "304=0.354");
+    assertThat(packaging.getAmount()).isEqualByComparingTo("3.500000");
+    assertThat(packaging.getSourceTable()).isEqualTo("lp_quote_tech_data_version");
+    assertThat(packaging.getSourceId()).isEqualTo(9002L);
+    assertThat(material.getAmount()).isEqualByComparingTo("4.204000");
+    assertThat(items).filteredOn(row -> "BOM_BUCKET_PACKAGE".equals(row.getCostCode()))
+        .singleElement().satisfies(row -> {
+          assertThat(row.getAmount()).isEqualByComparingTo("3.500000");
+          assertThat(row.getSourceId()).isEqualTo(9002L);
+        });
+    var manufactureMapper = (ManufactureRateMapper)
+        org.springframework.test.util.ReflectionTestUtils.getField(svc, "manufactureRateMapper");
+    var manufactureRate = new com.sanhua.marketingcost.entity.ManufactureRate();
+    manufactureRate.setFeeRate(new BigDecimal("0.10"));
+    when(manufactureMapper.selectOne(any())).thenReturn(manufactureRate);
+    var withoutFees = svc.listByMaterialCodes(form.getOaNo(), formItem.getMaterialNo(),
+        Set.of(formItem.getMaterialNo()), context, null, false, ignored -> {});
+    var original = context.getEffectiveTechnicalData();
+    context.setEffectiveTechnicalData(new EffectiveTechnicalDataInput(
+        original.productId(), original.versionId(), original.versionNo(), original.accountingMonth(),
+        original.sourceType(), original.contentFingerprint(), original.retrievedAt(),
+        original.packageRequired(), original.auxiliaryRequired(), original.salaryRequired(),
+        original.packageTotalAmount(), original.auxiliaryTotalAmount(), original.salaryTotalAmount(),
+        original.packageItems(), original.auxiliaryItems(), original.salaryItems(),
+        new EffectiveTechnicalDataInput.ProductFees(true, new BigDecimal("0.10"),
+            new BigDecimal("0.30"), new BigDecimal("0.05"), "CNY"), original.netLossRate()));
+    var withFees = svc.listByMaterialCodes(form.getOaNo(), formItem.getMaterialNo(),
+        Set.of(formItem.getMaterialNo()), context, null, false, ignored -> {});
+    assertThat(findItem(withFees, "OTHER_EXP_TECH_TOOLING").getAmount()).isEqualByComparingTo("0.10");
+    assertThat(findItem(withFees, "OTHER_EXP_TECH_MOULD").getAmount()).isEqualByComparingTo("0.30");
+    assertThat(findItem(withFees, "OTHER_EXP_TECH_CERTIFICATION").getAmount()).isEqualByComparingTo("0.05");
+    assertThat(findItem(withFees, "OTHER_EXP_TECH_TOOLING").getSourceId()).isEqualTo(9002L);
+    assertThat(findItem(withFees, "MATERIAL").getAmount()).isEqualByComparingTo(material.getAmount());
+    assertThat(findItem(withFees, "LOSS").getBaseAmount()).isEqualByComparingTo(findItem(items, "LOSS").getBaseAmount());
+    assertThat(findItem(withFees, "TOTAL").getAmount().subtract(findItem(withoutFees, "TOTAL").getAmount()))
+        .isEqualByComparingTo("0.45");
+    var lookup = (CostRunCacheLookupService)
+        org.springframework.test.util.ReflectionTestUtils.getField(svc, "cacheLookup");
+    var publicMouldFee = new com.sanhua.marketingcost.entity.OtherExpenseRate();
+    publicMouldFee.setId(888L);
+    publicMouldFee.setExpenseType("模具费");
+    publicMouldFee.setExpenseAmount(new BigDecimal("0.70"));
+    when(lookup.findOtherExpenseRates(formItem.getMaterialNo())).thenReturn(List.of(publicMouldFee));
+    var withPublicFee = svc.listByMaterialCodes(form.getOaNo(), formItem.getMaterialNo(),
+        Set.of(formItem.getMaterialNo()), context, null, false, ignored -> {});
+    assertThat(withPublicFee).filteredOn(row -> "模具费".equals(row.getCostName()))
+        .singleElement().satisfies(row -> assertThat(row.getAmount()).isEqualByComparingTo("0.70"));
+    assertThat(findItem(withPublicFee, "TOTAL").getAmount().subtract(findItem(withoutFees, "TOTAL").getAmount()))
+        .isEqualByComparingTo("0.85");
+    publicMouldFee.setExpenseAmount(null);
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> svc.listByMaterialCodes(
+        form.getOaNo(), formItem.getMaterialNo(), Set.of(formItem.getMaterialNo()), context, null, false, ignored -> {}))
+        .hasMessageContaining("公共模具费金额异常");
+    verifyNoInteractions(effectiveMapper, auxMapper);
   }
 
   @Test
@@ -208,7 +337,7 @@ class CostRunCostItemServiceImplTest {
     raw.setProductionDivision("商用部品事业部");
     when(rawMapper.selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL")))
         .thenReturn(List.of(raw));
-    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("1001900001090"), "COMMERCIAL"))
+    when(auxMapper.selectEffectiveAuxCostItems(eq(2026), eq(Set.of("1001900001090")), eq("COMMERCIAL"), anyString()))
         .thenReturn(List.of());
     when(partMapper.selectList(any())).thenReturn(List.of());
     when(masterMapper.selectList(any())).thenReturn(List.of());
@@ -247,6 +376,7 @@ class CostRunCostItemServiceImplTest {
             true,
             ignored -> {});
 
+    verify(auxMapper).selectEffectiveAuxCostItems(2026, Set.of("1001900001090"), "COMMERCIAL", "2026-06");
     CostRunCostItemDto overhaul = findItem(items, "OVERHAUL");
     CostRunCostItemDto tooling = findItem(items, "TOOLING_REPAIR");
     CostRunCostItemDto water = findItem(items, "WATER_POWER");
@@ -288,7 +418,7 @@ class CostRunCostItemServiceImplTest {
     when(formMapper.selectOne(any(Wrapper.class))).thenReturn(form);
     when(formItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(item));
     when(effectiveMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(auxMapper.selectEffectiveAuxCostItems(currentYear, Set.of("P-CURRENT-YEAR"), "COMMERCIAL"))
+    when(auxMapper.selectEffectiveAuxCostItems(eq(currentYear), eq(Set.of("P-CURRENT-YEAR")), eq("COMMERCIAL"), anyString()))
         .thenReturn(List.of());
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
@@ -319,7 +449,7 @@ class CostRunCostItemServiceImplTest {
         ignored -> {});
 
     verifyNoInteractions(ensureService);
-    verify(auxMapper).selectEffectiveAuxCostItems(currentYear, Set.of("P-CURRENT-YEAR"), "COMMERCIAL");
+    verify(auxMapper).selectEffectiveAuxCostItems(eq(currentYear), eq(Set.of("P-CURRENT-YEAR")), eq("COMMERCIAL"), anyString());
   }
 
   @Test
@@ -350,7 +480,7 @@ class CostRunCostItemServiceImplTest {
     CmsCostSourceEffective direct = effective("SALARY_DIRECT", "P-REF", "0301", "4.000000");
     CmsCostSourceEffective indirect = effective("SALARY_INDIRECT", "P-REF", "0302", "0.220000");
     when(effectiveMapper.selectList(any())).thenReturn(List.of(direct, indirect));
-    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-NEW"), "COMMERCIAL")).thenReturn(List.of());
+    when(auxMapper.selectEffectiveAuxCostItems(eq(2026), eq(Set.of("P-NEW")), eq("COMMERCIAL"), anyString())).thenReturn(List.of());
     when(partMapper.selectList(any())).thenReturn(List.of());
     when(masterMapper.selectList(any())).thenReturn(List.of());
     when(rawMapper.selectList(any())).thenReturn(List.of());
@@ -394,6 +524,9 @@ class CostRunCostItemServiceImplTest {
     stubBasicCalculationInputs(
         formMapper, formItemMapper, effectiveMapper, auxMapper, partMapper, masterMapper,
         rawMapper, bomMapper, "P-LOSS");
+    when(effectiveMapper.selectList(any(Wrapper.class))).thenReturn(List.of(
+        effective("SALARY_DIRECT", "P-LOSS", "0301", "4.0"),
+        effective("SALARY_INDIRECT", "P-LOSS", "0302", "0.2")));
     MaterialMasterRaw bare = new MaterialMasterRaw();
     bare.setMaterialCode("P-LOSS");
     bare.setMainCategoryCode("11");
@@ -422,6 +555,32 @@ class CostRunCostItemServiceImplTest {
     CostRunCostItemDto lossItem = findItem(items, "LOSS");
     assertThat(lossItem.getRate()).isEqualByComparingTo("0.010000");
     assertThat(lossItem.getRemark()).isNull();
+    assertThat(findItem(items, "DIRECT_LABOR").getAmount()).isEqualByComparingTo("4.0");
+    assertThat(findItem(items, "INDIRECT_LABOR").getAmount()).isEqualByComparingTo("0.2");
+    assertThat(lossItem.getAmount()).isEqualByComparingTo(
+        findItem(items, "MATERIAL").getAmount().add(new BigDecimal("4.2")).multiply(new BigDecimal("0.01")));
+    var context = commercialContext("OA-LOSS", "P-LOSS");
+    context.setEffectiveTechnicalData(new EffectiveTechnicalDataInput(
+        9001L, 9002L, 2, "2026-06", EffectiveTechnicalDataInput.SOURCE_EFFECTIVE_VERSION,
+        "f".repeat(64), LocalDateTime.now(), false, false, false,
+        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, List.of(), List.of(), List.of(), null,
+        new BigDecimal("0.00475")));
+    var preferred = svc.listByMaterialCodes("OA-LOSS", "P-LOSS", Set.of("P-LOSS"), context, null, true, ignored -> {});
+    assertThat(findItem(preferred, "LOSS").getRate()).isEqualByComparingTo("0.01");
+    when(qualityMapper.selectOne(any(Wrapper.class))).thenReturn(null);
+    var fallback = svc.listByMaterialCodes("OA-LOSS", "P-LOSS", Set.of("P-LOSS"), context, null, true, ignored -> {});
+    assertThat(findItem(fallback, "LOSS").getRate()).isEqualByComparingTo("0.00475");
+    assertThat(findItem(fallback, "LOSS").getRemark()).contains("9002");
+    assertThat(findItem(fallback, "LOSS").getAmount()).isEqualByComparingTo(
+        findItem(fallback, "MATERIAL").getAmount().add(new BigDecimal("4.2"))
+            .multiply(new BigDecimal("0.00475")).setScale(6, java.math.RoundingMode.HALF_UP));
+    when(qualityMapper.selectOne(any(Wrapper.class))).thenReturn(rate);
+    rate.setLossRate(BigDecimal.ZERO);
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> svc.listByMaterialCodes("OA-LOSS", "P-LOSS", Set.of("P-LOSS"),
+        context, null, true, ignored -> {})).hasMessageContaining("必须大于 0%");
+    when(qualityMapper.selectOne(any(Wrapper.class))).thenThrow(new IllegalStateException("公共费率查询异常"));
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> svc.listByMaterialCodes("OA-LOSS", "P-LOSS", Set.of("P-LOSS"),
+        context, null, true, ignored -> {})).hasMessageContaining("公共费率查询异常");
   }
 
   @Test
@@ -493,7 +652,7 @@ class CostRunCostItemServiceImplTest {
     when(formMapper.selectOne(any(Wrapper.class))).thenReturn(form);
     when(formItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(item));
     when(effectiveMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-Q10"), "COMMERCIAL"))
+    when(auxMapper.selectEffectiveAuxCostItems(eq(2026), eq(Set.of("P-Q10")), eq("COMMERCIAL"), anyString()))
         .thenReturn(List.of());
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
@@ -563,7 +722,7 @@ class CostRunCostItemServiceImplTest {
     when(formMapper.selectOne(any(Wrapper.class))).thenReturn(form);
     when(formItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(item));
     when(effectiveMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("1079900000536"), "COMMERCIAL"))
+    when(auxMapper.selectEffectiveAuxCostItems(eq(2026), eq(Set.of("1079900000536")), eq("COMMERCIAL"), anyString()))
         .thenReturn(List.of());
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
@@ -628,7 +787,7 @@ class CostRunCostItemServiceImplTest {
     when(formMapper.selectOne(any(Wrapper.class))).thenReturn(form);
     when(formItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(item));
     when(effectiveMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-Q10"), "COMMERCIAL"))
+    when(auxMapper.selectEffectiveAuxCostItems(eq(2026), eq(Set.of("P-Q10")), eq("COMMERCIAL"), anyString()))
         .thenReturn(List.of());
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
@@ -982,14 +1141,14 @@ class CostRunCostItemServiceImplTest {
     AuxCostItemDto referenceSelection = newAuxCost("0201", "旧复制辅料", "99.000000", "0.1000", "RATE");
     referenceSelection.setMaterialCode("P-NEW");
     referenceSelection.setRefMaterialCode("P-REF");
-    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of("P-NEW"), "COMMERCIAL"))
+    when(auxMapper.selectEffectiveAuxCostItems(eq(2026), eq(Set.of("P-NEW")), eq("COMMERCIAL"), anyString()))
         .thenReturn(List.of());
 
     CostRunCostItemServiceImpl svc = buildWithAuxMapper(auxMapper);
-    List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-NEW"), 2026, "COMMERCIAL");
+    List<CostRunCostItemDto> items = svc.buildAuxItems(Set.of("P-NEW"), "2026-09", "COMMERCIAL");
 
     assertThat(items).isEmpty();
-    verify(auxMapper).selectEffectiveAuxCostItems(2026, Set.of("P-NEW"), "COMMERCIAL");
+    verify(auxMapper).selectEffectiveAuxCostItems(eq(2026), eq(Set.of("P-NEW")), eq("COMMERCIAL"), anyString());
   }
 
   @Test
@@ -1010,6 +1169,59 @@ class CostRunCostItemServiceImplTest {
     assertThat(result.coefficient()).isEqualByComparingTo("1.3500");
     assertThat(result.remark()).isNull();
     verify(lookup).findProductProperty("P-ANNUAL", 2026, "COMMERCIAL");
+  }
+
+  @Test
+  @DisplayName("中台产品属性优先于财务导入，并按当前业务年度取属性规则")
+  void rawProductAttributeWinsOverFinanceImport() {
+    CostRunCacheLookupService lookup = mock(CostRunCacheLookupService.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    when(rawMapper.selectActiveProductAttr("P-RAW", "PLATE")).thenReturn(" 非标品 ");
+    when(lookup.findProductPropertyCoefficient("非标品", 2026, "COMMERCIAL"))
+        .thenReturn(new BigDecimal("1.050000"));
+
+    CostRunCostItemServiceImpl svc = buildWithLookupAndRawMapper(lookup, rawMapper);
+    CostRunCostItemServiceImpl.ProductCoefficientLookup result =
+        svc.lookupProductCoefficient("P-RAW", "PLATE", 2026, "COMMERCIAL", null);
+
+    assertThat(result.coefficient()).isEqualByComparingTo("1.05");
+    assertThat(result.remark()).contains("U9料品档案", "非标品", "2026");
+    verify(lookup, never()).findProductProperty("P-RAW", 2026, "COMMERCIAL");
+  }
+
+  @Test
+  @DisplayName("中台产品属性为空时按当前年度回退财务导入")
+  void blankRawProductAttributeFallsBackToFinanceImport() {
+    CostRunCacheLookupService lookup = mock(CostRunCacheLookupService.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    when(rawMapper.selectActiveProductAttr("P-FINANCE", "COMMERCIAL")).thenReturn("  ");
+    ProductProperty finance = new ProductProperty();
+    finance.setCoefficient(new BigDecimal("1.120000"));
+    when(lookup.findProductProperty("P-FINANCE", 2026, "COMMERCIAL")).thenReturn(finance);
+
+    CostRunCostItemServiceImpl svc = buildWithLookupAndRawMapper(lookup, rawMapper);
+    CostRunCostItemServiceImpl.ProductCoefficientLookup result =
+        svc.lookupProductCoefficient("P-FINANCE", "COMMERCIAL", 2026, "COMMERCIAL", null);
+
+    assertThat(result.coefficient()).isEqualByComparingTo("1.12");
+    verify(lookup).findProductProperty("P-FINANCE", 2026, "COMMERCIAL");
+  }
+
+  @Test
+  @DisplayName("中台给出属性但缺少对应年度规则时明确失败")
+  void rawProductAttributeWithoutRuleFailsClearly() {
+    CostRunCacheLookupService lookup = mock(CostRunCacheLookupService.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    when(rawMapper.selectActiveProductAttr("P-INVALID", "COMMERCIAL")).thenReturn("非标品");
+
+    CostRunCostItemServiceImpl svc = buildWithLookupAndRawMapper(lookup, rawMapper);
+
+    assertThatThrownBy(() -> svc.lookupProductCoefficient(
+        "P-INVALID", "COMMERCIAL", 2026, "COMMERCIAL", null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("P-INVALID")
+        .hasMessageContaining("非标品");
+    verify(lookup, never()).findProductProperty("P-INVALID", 2026, "COMMERCIAL");
   }
 
   @Test
@@ -1223,6 +1435,34 @@ class CostRunCostItemServiceImplTest {
     return context;
   }
 
+  private static EffectiveTechnicalDataInput effectiveTechnicalV2() {
+    return new EffectiveTechnicalDataInput(
+        9001L,
+        9002L,
+        2,
+        "2026-08",
+        EffectiveTechnicalDataInput.SOURCE_EFFECTIVE_VERSION,
+        "f".repeat(64),
+        LocalDateTime.of(2026, 8, 31, 8, 0),
+        true,
+        true,
+        true,
+        new BigDecimal("3.50"),
+        new BigDecimal("0.704"),
+        new BigDecimal("18.90"),
+        List.of(new EffectiveTechnicalDataInput.PackageLine(
+            301L, 1, "PKG-BOX-041", "外包装箱", BigDecimal.ONE, "只",
+            new BigDecimal("3.50"), new BigDecimal("3.50"))),
+        List.of(new EffectiveTechnicalDataInput.AuxiliaryLine(
+            302L, 1, "0201", "辅助焊料类", "银基焊环",
+            new BigDecimal("0.00022"), "KG", new BigDecimal("3200"), BigDecimal.ZERO,
+            new BigDecimal("0.35")),
+            new EffectiveTechnicalDataInput.AuxiliaryLine(304L,2,"0201","辅助焊料类","第二条辅料",
+                null,null,null,null,new BigDecimal("0.354"))),
+        List.of(new EffectiveTechnicalDataInput.SalaryLine(
+            303L, 1, "DIRECT", new BigDecimal("18.90"))), null, null);
+  }
+
   private static CostRunPartItem newPart(
       String code, BigDecimal amount, String priceOrgCode, String materialOrganizationCode) {
     CostRunPartItem p = new CostRunPartItem();
@@ -1286,7 +1526,7 @@ class CostRunCostItemServiceImplTest {
     when(formMapper.selectOne(any(Wrapper.class))).thenReturn(form);
     when(formItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(item));
     when(effectiveMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
-    when(auxMapper.selectEffectiveAuxCostItems(2026, Set.of(productCode), "COMMERCIAL"))
+    when(auxMapper.selectEffectiveAuxCostItems(eq(2026), eq(Set.of(productCode)), eq("COMMERCIAL"), anyString()))
         .thenReturn(List.of());
     when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(masterMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
@@ -1321,6 +1561,11 @@ class CostRunCostItemServiceImplTest {
 
   /** T19：T19 之前的 4 个 coefficient test 走这个 helper（直接 mock cacheLookup） */
   private CostRunCostItemServiceImpl buildWithLookup(CostRunCacheLookupService lookup) {
+    return buildWithLookupAndRawMapper(lookup, mock(MaterialMasterRawMapper.class));
+  }
+
+  private CostRunCostItemServiceImpl buildWithLookupAndRawMapper(
+      CostRunCacheLookupService lookup, MaterialMasterRawMapper rawMapper) {
     return new CostRunCostItemServiceImpl(
         mock(CostRunCostItemMapper.class),
         mock(OaFormMapper.class),
@@ -1334,7 +1579,7 @@ class CostRunCostItemServiceImplTest {
         mock(ThreeExpenseRateMapper.class),
         mock(OtherExpenseRateMapper.class),
         mock(MaterialMasterMapper.class),
-        mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class),
+        rawMapper,
         mock(com.sanhua.marketingcost.mapper.BomRawHierarchyMapper.class),
         lookup);
   }
@@ -1655,6 +1900,9 @@ class CostRunCostItemServiceImplTest {
       CostRunCacheLookupService lookup,
       ThreeExpenseRateMapper threeExpenseRateMapper,
       DepartmentFundRateMapper departmentFundRateMapper) {
+    org.mockito.Mockito.doCallRealMethod().when(effectiveMapper).selectSalarySources(
+        org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyString(),
+        org.mockito.ArgumentMatchers.anyCollection());
     return new CostRunCostItemServiceImpl(
         mock(CostRunCostItemMapper.class),
         formMapper,

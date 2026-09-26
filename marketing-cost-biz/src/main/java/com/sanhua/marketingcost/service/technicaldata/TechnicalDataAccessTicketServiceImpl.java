@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.technicaldata;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataAccessTicketExchangeRequest;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataAccessTicketExchangeResponse;
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
+import com.sanhua.marketingcost.integration.oa.OaInterfaceLog;
 import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaGateway;
 import com.sanhua.marketingcost.mapper.QuoteTechTaskMapper;
 import com.sanhua.marketingcost.security.JwtUtils;
@@ -36,6 +37,18 @@ public class TechnicalDataAccessTicketServiceImpl implements TechnicalDataAccess
 
   @Override
   public TechnicalDataAccessTicketExchangeResponse exchange(TechnicalDataAccessTicketExchangeRequest request) {
+    try (var call = OaInterfaceLog.start("I11_ACCESS_EXCHANGE")) {
+      if (request != null) call.field("taskId", request.taskId());
+      try {
+        var result = exchangeAndAuthorize(request);
+        call.field("userId", result.userId()).field("taskId", result.taskId());
+        call.success();
+        return result;
+      } catch (RuntimeException exception) { call.failure(exception); throw exception; }
+    }
+  }
+
+  private TechnicalDataAccessTicketExchangeResponse exchangeAndAuthorize(TechnicalDataAccessTicketExchangeRequest request) {
     if (request == null || request.taskId() == null || request.taskId() <= 0 || request.code() == null
         || request.code().isBlank() || request.code().length() > 256) throw new IllegalArgumentException("请提供任务和一次性 OA 身份码");
     var peer = gateway.peer();

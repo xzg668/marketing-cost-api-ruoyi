@@ -59,7 +59,7 @@ public class TechnicalDataParticipantVersions {
     if (own.stream().anyMatch(module -> !Set.of("READY", "RETURNED").contains(module.getModuleStatus())
         || !Objects.equals(module.getCurrentVersionId(), draft.getId()) || !"MISSING".equals(module.getSourceAvailability())
         || module.getLastValidationCode() == null)) throw conflict("本人负责模块尚未全部完成服务端校验");
-    Set<String> types = Set.copyOf(person.modules());
+    Set<String> types = Set.copyOf(person.processingModules());
     if (types.contains("PROFILE") && !TechnicalDataProductFeeRules.validate(codec.productFees(draft)).isEmpty()) {
       throw conflict("本人负责模块的产品费用尚未填写完整，不能冻结提交");
     }
@@ -104,25 +104,58 @@ public class TechnicalDataParticipantVersions {
     return frozen;
   }
 
+  /** OA 明确拒绝时继续使用原来的唯一工作草稿，不另存一份草稿。 */
+  public void releaseCandidate(QuoteTechProduct product, Recipient person, long versionId, long actorId) {
+    var candidate = verified(versionId, product.getId());
+    var current = draft(product);
+    for (var module : scope(repository.lockModules(product.getId()), person)) {
+      if (!Objects.equals(module.getCurrentVersionId(), versionId)) throw conflict("模块已不属于本次提交");
+      setModule(module, current.getId(), "READY");
+    }
+    transition(candidate, "VOIDED", actorId);
+    if (Objects.equals(product.getLatestSubmittedVersionId(), versionId)) product.setLatestSubmittedVersionId(null);
+    product.setProductStatus("EDITING");
+    saveProduct(product);
+  }
+
   public void restore(QuoteTechProduct product, Recipient person, long sourceId, long actorId) {
-    var source = verified(sourceId, product.getId());
+    restore(product, person, Long.valueOf(sourceId), actorId);
+  }
+
+  /** 报价员可再次退回先前轮次批准的板块，读取各板块自己的批准版本。 */
+  public void restoreApproved(QuoteTechProduct product, Recipient person, long actorId) {
+    restore(product, person, null, actorId);
+  }
+
+  private void restore(QuoteTechProduct product, Recipient person, Long sourceId, long actorId) {
     var current = draft(product);
     var all = repository.lockModules(product.getId());
     var own = scope(all, person);
-    Set<String> types = Set.copyOf(person.modules());
-    var next = copiedDraft(current, repository.maxVersionNo(product.getId()) + 1, actorId, now());
-    for (String type : types) copyModule(source, next, type);
+    // 退回覆盖当前可变草稿的选中板块，不累积作废草稿；已提交快照保持不可变。
+    var next = current;
+    Map<String, Long> sourceIds = new LinkedHashMap<>();
+    for (var module : own) {
+      Long id = sourceId == null ? module.getCurrentVersionId() : sourceId;
+      if (id == null) throw conflict("退回板块缺少原已提交版本");
+      var source = verified(id, product.getId());
+      if (sourceId == null && !"APPROVED".equals(source.getVersionStatus())) throw conflict("退回板块尚未批准");
+      sourceIds.put(module.getModuleType(), id);
+      copyModule(source, next, module.getModuleType());
+    }
     next.setReferenceSnapshotJson(null);
-    repository.insertVersion(next);
-    for (String type : List.of("PACKAGE", "AUXILIARY", "SALARY")) {
-      copyDetails(next.getId(), types.contains(type) ? sourceId : current.getId(), Set.of(type));
+    next.setUpdatedBy(actorId);
+    if (repository.updateDraftVersion(next, next.getRowVersion(), now()) != 1) throw conflict("当前草稿已变化，不能覆盖退回内容");
+    for (var source : sourceIds.entrySet()) {
+      switch (source.getKey()) {
+        case "PACKAGE" -> repository.deleteAllPackageItemsIfDraft(next.getId());
+        case "AUXILIARY" -> repository.deleteAllAuxItemsIfDraft(next.getId());
+        case "SALARY" -> repository.deleteAllSalaryItemsIfDraft(next.getId());
+        default -> { }
+      }
+      copyDetails(next.getId(), source.getValue(), Set.of(source.getKey()));
     }
-    // 未退回的审批模块仍指向其原冻结版本；其他人的草稿内容原样迁入新工作草稿。
-    for (var module : all) {
-      if (own.contains(module)) setModule(module, next.getId(), "RETURNED");
-      else if (Objects.equals(module.getCurrentVersionId(), current.getId())) setModule(module, next.getId(), module.getModuleStatus());
-    }
-    transition(current, "VOIDED", actorId);
+    // 未退回的审批板块仍指向原冻结版本，其他人的草稿内容及明细保持原样。
+    for (var module : own) setModule(module, next.getId(), "RETURNED");
     product.setCurrentEditVersionId(next.getId());
     product.setEffectiveVersionId(null);
     product.setEffectiveReviewRound(null);
@@ -205,11 +238,14 @@ public class TechnicalDataParticipantVersions {
   }
 
   private List<QuoteTechModule> scope(List<QuoteTechModule> modules, Recipient person) {
-    var own = modules.stream().filter(module -> Integer.valueOf(1).equals(module.getRequiredFlag())
+    var assigned = modules.stream().filter(module -> Integer.valueOf(1).equals(module.getRequiredFlag())
         && Objects.equals(module.getAssigneeUserId(), person.userId())).toList();
-    if (!person.active() || own.isEmpty() || !Set.copyOf(person.modules()).equals(own.stream()
-        .map(QuoteTechModule::getModuleType).collect(java.util.stream.Collectors.toSet()))) throw conflict("本人负责模块与当前待办不一致");
-    return own;
+    if (!person.active() || assigned.isEmpty() || !Set.copyOf(person.modules()).equals(assigned.stream()
+        .map(QuoteTechModule::getModuleType).collect(java.util.stream.Collectors.toSet()))
+        || person.processingModules().isEmpty() || !person.modules().containsAll(person.processingModules())) {
+      throw conflict("本人负责板块或本轮修订范围与当前待办不一致");
+    }
+    return assigned.stream().filter(module -> person.processingModules().contains(module.getModuleType())).toList();
   }
 
   private void copyDetails(long target, long source, Set<String> types) {

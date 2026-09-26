@@ -75,7 +75,7 @@ class QuoteIngestServiceImplTest {
             quoteBomStatusMapper,
             versionInvalidationService,
             objectMapper,
-            new QuoteBomContextResolver());
+            new QuoteBomContextResolver(mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class)));
     stubInsertIds();
   }
 
@@ -342,6 +342,7 @@ class QuoteIngestServiceImplTest {
     QuoteIngestItemRequest item = new QuoteIngestItemRequest();
     item.setSeq(1);
     item.setMaterialNo(materialNo);
+    item.setProductName("电磁阀");
     item.setSunlModel("SHF-A");
     item.setBusinessType(businessType);
 

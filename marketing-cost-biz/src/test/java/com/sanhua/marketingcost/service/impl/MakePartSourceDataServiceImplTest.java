@@ -89,6 +89,21 @@ class MakePartSourceDataServiceImplTest {
         .hasMessageContaining("priceOrgCode");
   }
 
+  @Test
+  void newerEffectiveVersionWinsRegardlessOfImportId() {
+    BomCostingRowMapper costingMapper = mock(BomCostingRowMapper.class);
+    BomU9SourceMapper u9Mapper = mock(BomU9SourceMapper.class);
+    MakePartSourceDataServiceImpl service =
+        new MakePartSourceDataServiceImpl(costingMapper, u9Mapper);
+    BomU9Source older = child("P-001", "RAW-A", 1, 999L, "主制造", LocalDate.parse("9999-12-31"));
+    older.setEffectiveFrom(LocalDate.parse("2025-01-01"));
+    BomU9Source newer = child("P-001", "RAW-A", 1, 1L, "主制造", LocalDate.parse("9999-12-31"));
+    newer.setEffectiveFrom(LocalDate.parse("2026-01-01"));
+
+    assertThat(service.dedupeChildren(List.of(older, newer))).containsExactly(newer);
+    assertThat(service.dedupeChildren(List.of(newer, older))).containsExactly(newer);
+  }
+
   private BomCostingRow costingRow(String materialCode, String shapeAttr) {
     BomCostingRow row = new BomCostingRow();
     row.setMaterialCode(materialCode);

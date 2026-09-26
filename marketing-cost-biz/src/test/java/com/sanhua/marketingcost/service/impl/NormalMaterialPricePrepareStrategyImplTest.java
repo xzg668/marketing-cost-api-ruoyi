@@ -76,10 +76,16 @@ class NormalMaterialPricePrepareStrategyImplTest {
     assertThat(result.getAmount()).isEqualByComparingTo("30.750");
     assertThat(result.getPriceSource()).isEqualTo("固定采购价");
     assertThat(result.getResultRefType()).isEqualTo("FIXED_PRICE");
+    ArgumentCaptor<CostRunPartItemDto> itemCaptor =
+        ArgumentCaptor.forClass(CostRunPartItemDto.class);
     ArgumentCaptor<CostRunContext> contextCaptor = ArgumentCaptor.forClass(CostRunContext.class);
     verify(fixedResolver).resolve(
-        eq("OA-001"), any(CostRunPartItemDto.class), eq(route), contextCaptor.capture());
+        eq("OA-001"), itemCaptor.capture(), eq(route), contextCaptor.capture());
+    assertThat(itemCaptor.getValue().getPriceOrgCode()).isEqualTo("210");
+    assertThat(itemCaptor.getValue().getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
     assertThat(contextCaptor.getValue().getPriceAsOfTime()).isEqualTo(priceAsOfTime);
+    assertThat(contextCaptor.getValue().getPriceOrgCode()).isEqualTo("210");
+    assertThat(contextCaptor.getValue().getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
     verifyNoInteractions(linkedPriceEnsureService);
   }
 
@@ -215,6 +221,8 @@ class NormalMaterialPricePrepareStrategyImplTest {
     row.setTopProductCode("TOP-001");
     row.setMaterialCode(materialCode);
     row.setMaterialName(materialCode + "-name");
+    row.setPriceOrgCode("210");
+    row.setMaterialOrganizationCode("COMMERCIAL");
     row.setShapeAttr("采购件");
     row.setQtyPerTop(quantity);
     PricePreparePlanItem item = new PricePreparePlanItem();

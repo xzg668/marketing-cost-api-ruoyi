@@ -36,7 +36,7 @@ class LinkedPriceResolverTest {
   @DisplayName("QUOTE 联动价按 oaNo + partCode + pricingMonth 读取最新 OK calc_item 单价")
   void resolvesLatestOkCalcItemByOaNoPartCodeAndPricingMonth() {
     PriceLinkedCalcItemMapper mapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
-    LinkedPriceResolver resolver = new LinkedPriceResolver(mapper);
+    LinkedPriceResolver resolver = new LinkedPriceResolver(mapper, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class));
 
     PriceLinkedCalcItem calc = new PriceLinkedCalcItem();
     calc.setId(9001L);
@@ -85,7 +85,7 @@ class LinkedPriceResolverTest {
   @DisplayName("财务报价只读取 FINANCE_QUOTE_BASE 联动价结果")
   void financeQuoteReadsFinanceFactorSource() {
     PriceLinkedCalcItemMapper mapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
-    LinkedPriceResolver resolver = new LinkedPriceResolver(mapper);
+    LinkedPriceResolver resolver = new LinkedPriceResolver(mapper, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class));
     PriceLinkedCalcItem calc = new PriceLinkedCalcItem();
     calc.setId(9010L);
     calc.setPartUnitPrice(new BigDecimal("90"));
@@ -111,7 +111,7 @@ class LinkedPriceResolverTest {
   @DisplayName("V3-10：本 OA 没有刷新结果时联动价明确 miss，不带空价继续算")
   void missingCalcItemReturnsMiss() {
     PriceLinkedCalcItemMapper mapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
-    LinkedPriceResolver resolver = new LinkedPriceResolver(mapper);
+    LinkedPriceResolver resolver = new LinkedPriceResolver(mapper, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class));
     when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
     CostRunPartItemDto item = new CostRunPartItemDto();
@@ -130,7 +130,7 @@ class LinkedPriceResolverTest {
   @DisplayName("T7：月度调价联动价按 MONTHLY_ADJUST + 调价批次读取，不读 OA QUOTE 结果")
   void monthlyRepriceResolvesByAdjustBatchContext() {
     PriceLinkedCalcItemMapper mapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
-    LinkedPriceResolver resolver = new LinkedPriceResolver(mapper);
+    LinkedPriceResolver resolver = new LinkedPriceResolver(mapper, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class));
 
     PriceLinkedCalcItem calc = new PriceLinkedCalcItem();
     calc.setItemCode("MAT-LINKED");

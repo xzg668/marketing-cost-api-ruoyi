@@ -30,6 +30,7 @@ import com.sanhua.marketingcost.service.FinanceQuoteBasePriceService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
 import com.sanhua.marketingcost.service.PricePrepareService;
 import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.YearMonth;
 import java.util.List;
@@ -41,8 +42,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 class QuotePricePrepareWorkbenchServiceImplTest {
 
-  private static final YearMonth CURRENT_YEAR_MONTH = YearMonth.now();
-  private static final String CURRENT_MONTH = CURRENT_YEAR_MONTH.toString();
+  private static final String CURRENT_MONTH = CostPricingPeriodUtils.currentPricingMonth();
+  private static final YearMonth CURRENT_YEAR_MONTH = YearMonth.parse(CURRENT_MONTH);
 
   private OaFormMapper oaFormMapper;
   private OaFormItemMapper oaFormItemMapper;
@@ -73,7 +74,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
             financePricePrepareService,
             financeQuoteBasePriceService,
             pricePrepareQueryService,
-            pricePrepareReadinessService);
+            pricePrepareReadinessService,mock(com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService.class));
   }
 
   @Test

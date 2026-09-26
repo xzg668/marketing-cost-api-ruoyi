@@ -18,14 +18,16 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostingWorkspaceMapper;
 import com.sanhua.marketingcost.service.CostingAlgorithmVersionProvider;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.lang.reflect.Proxy;
 import java.time.LocalDate;
-import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class CostRunTaskSubmissionServiceImplTest {
+
+  private static final String CURRENT_PERIOD = CostPricingPeriodUtils.currentPricingMonth();
 
   @Test
   void submitQuoteCreatesBatchAndProductTasks() {
@@ -37,7 +39,7 @@ class CostRunTaskSubmissionServiceImplTest {
     CostRunTaskSubmissionServiceImpl service =
         new CostRunTaskSubmissionServiceImpl(
             batchMapper.proxy(), taskMapper.proxy(), oaFormMapper.proxy(), oaFormItemMapper.proxy(),
-            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion());
+            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion(), (form, item) -> "SOURCE-1");
 
     CostRunTaskSubmissionResult result = service.submitQuote(" OA-001 ");
 
@@ -47,7 +49,7 @@ class CostRunTaskSubmissionServiceImplTest {
     assertThat(result.getTaskCount()).isEqualTo(2);
     assertThat(result.isExistingBatch()).isFalse();
     assertThat(batchMapper.inserted).hasSize(1);
-    assertThat(batchMapper.inserted.get(0).getPricingMonth()).isEqualTo(YearMonth.now().toString());
+    assertThat(batchMapper.inserted.get(0).getPricingMonth()).isEqualTo(CURRENT_PERIOD);
     assertThat(batchMapper.inserted.get(0).getBusinessUnitType()).isEqualTo("COMMERCIAL");
     assertThat(batchMapper.inserted.get(0).getExecutionNo()).isEqualTo(1);
     assertThat(batchMapper.inserted.get(0).getControlVersion()).isZero();
@@ -57,7 +59,7 @@ class CostRunTaskSubmissionServiceImplTest {
     assertThat(taskMapper.inserted).extracting(CostRunTask::getExecutionNo).containsOnly(1);
     assertThat(taskMapper.inserted)
         .extracting(CostRunTask::getPricingMonth)
-        .containsOnly(YearMonth.now().toString());
+        .containsOnly(CURRENT_PERIOD);
   }
 
   @Test
@@ -77,7 +79,7 @@ class CostRunTaskSubmissionServiceImplTest {
             new FakeOaFormItemMapper(List.of(modelOnly, drawingOnly, noIdentity)).proxy(),
             emptyWorkspaceMapper(),
             emptyVersionMapper(),
-            algorithmVersion());
+            algorithmVersion(), (form, item) -> "SOURCE-1");
 
     CostRunTaskSubmissionResult result = service.submitQuote("OA-001");
 
@@ -97,14 +99,14 @@ class CostRunTaskSubmissionServiceImplTest {
     CostRunTaskSubmissionServiceImpl service =
         new CostRunTaskSubmissionServiceImpl(
             batchMapper.proxy(), taskMapper.proxy(), oaFormMapper.proxy(), oaFormItemMapper.proxy(),
-            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion());
+            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion(), (form, item) -> "SOURCE-1");
 
     service.submitQuote("OA-001");
 
     assertThat(batchMapper.inserted).hasSize(1);
-    assertThat(batchMapper.inserted.get(0).getPricingMonth()).isEqualTo(YearMonth.now().toString());
+    assertThat(batchMapper.inserted.get(0).getPricingMonth()).isEqualTo(CURRENT_PERIOD);
     assertThat(taskMapper.inserted).hasSize(1);
-    assertThat(taskMapper.inserted.get(0).getPricingMonth()).isEqualTo(YearMonth.now().toString());
+    assertThat(taskMapper.inserted.get(0).getPricingMonth()).isEqualTo(CURRENT_PERIOD);
   }
 
   @Test
@@ -119,7 +121,7 @@ class CostRunTaskSubmissionServiceImplTest {
     CostRunTaskSubmissionServiceImpl service =
         new CostRunTaskSubmissionServiceImpl(
             batchMapper.proxy(), taskMapper.proxy(), oaFormMapper.proxy(), oaFormItemMapper.proxy(),
-            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion());
+            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion(), (form, item) -> "SOURCE-1");
 
     CostRunTaskSubmissionResult result = service.submitQuote("OA-001");
 
@@ -152,11 +154,11 @@ class CostRunTaskSubmissionServiceImplTest {
     CostRunTaskSubmissionServiceImpl service =
         new CostRunTaskSubmissionServiceImpl(
             batchMapper.proxy(), taskMapper.proxy(), oaFormMapper.proxy(), oaFormItemMapper.proxy(),
-            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion());
+            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion(), (form, item) -> "SOURCE-1");
 
     CostRunTaskSubmissionResult result =
         service.submitQuote(
-            "OA-001", List.of(11L), YearMonth.now().toString(), "quote-user");
+            "OA-001", List.of(11L), CURRENT_PERIOD, "quote-user");
 
     assertThat(result.getBatchNo()).isEqualTo("BATCH-FAILED");
     assertThat(result.isExistingBatch()).isTrue();
@@ -191,7 +193,7 @@ class CostRunTaskSubmissionServiceImplTest {
             new FakeOaFormItemMapper(List.of(item(11L, "P-001", "BOX"))).proxy(),
             emptyWorkspaceMapper(),
             emptyVersionMapper(),
-            algorithmVersion());
+            algorithmVersion(), (form, item) -> "SOURCE-1");
 
     CostRunTaskSubmissionResult result = service.submitQuote("OA-001");
 
@@ -207,7 +209,7 @@ class CostRunTaskSubmissionServiceImplTest {
     CostRunBatch existing = existingBatch("BATCH-RUNNING", "QUOTE", "OA-001");
     QuoteCostingWorkspace workspace = new QuoteCostingWorkspace();
     workspace.setOaFormItemId(11L);
-    workspace.setPeriodMonth(YearMonth.now().toString());
+    workspace.setPeriodMonth(CURRENT_PERIOD);
     workspace.setWorkspaceStatus("BLOCKED");
     workspace.setCurrentCostVersionId(null);
     FakeBatchMapper batchMapper = new FakeBatchMapper(existing);
@@ -220,7 +222,7 @@ class CostRunTaskSubmissionServiceImplTest {
             new FakeOaFormItemMapper(List.of(item(11L, "P-001", "BOX"))).proxy(),
             workspaceMapper(List.of(workspace)),
             emptyVersionMapper(),
-            algorithmVersion());
+            algorithmVersion(), (form, item) -> "SOURCE-1");
 
     CostRunTaskSubmissionResult result = service.submitQuote("OA-001");
 
@@ -236,17 +238,20 @@ class CostRunTaskSubmissionServiceImplTest {
     currentItem.setConfirmedCostVersionId(99L);
     QuoteCostingWorkspace workspace = new QuoteCostingWorkspace();
     workspace.setOaFormItemId(11L);
-    workspace.setPeriodMonth(YearMonth.now().toString());
+    workspace.setPeriodMonth(CURRENT_PERIOD);
     workspace.setWorkspaceStatus("SUCCESS");
     workspace.setCurrentCostVersionId(99L);
     workspace.setInputFingerprint("FP-1");
     workspace.setLastSuccessInputFingerprint("FP-1");
+    workspace.setSourceRevision("SOURCE-1");
+    workspace.setLastSuccessSourceRevision("SOURCE-1");
     QuoteCostRunVersion version = new QuoteCostRunVersion();
     version.setId(99L);
     version.setOaNo("OA-001");
     version.setOaFormItemId(11L);
-    version.setPricingMonth(YearMonth.now().toString());
+    version.setPricingMonth(CURRENT_PERIOD);
     version.setInputFingerprint("FP-1");
+    version.setSourceRevision("SOURCE-1");
     version.setAlgorithmVersion(CostingAlgorithmVersionProvider.DEFAULT_VERSION);
     version.setStatus("SUCCESS");
     FakeBatchMapper batchMapper = new FakeBatchMapper(null);
@@ -259,7 +264,7 @@ class CostRunTaskSubmissionServiceImplTest {
             new FakeOaFormItemMapper(List.of(currentItem)).proxy(),
             workspaceMapper(List.of(workspace)),
             versionMapper(List.of(version)),
-            algorithmVersion());
+            algorithmVersion(), (form, item) -> "SOURCE-1");
 
     CostRunTaskSubmissionResult result = service.submitQuote("OA-001");
 
@@ -273,22 +278,74 @@ class CostRunTaskSubmissionServiceImplTest {
   }
 
   @Test
+  void missingTechnicalDataQueuesThatProductWithoutBlockingOthersOrReusingItsOldSuccess() {
+    OaFormItem currentItem = item(11L, "P-001", "BOX");
+    currentItem.setConfirmedCostVersionId(99L);
+    QuoteCostingWorkspace workspace = new QuoteCostingWorkspace();
+    workspace.setOaFormItemId(11L);
+    workspace.setPeriodMonth(CURRENT_PERIOD);
+    workspace.setWorkspaceStatus("SUCCESS");
+    workspace.setCurrentCostVersionId(99L);
+    workspace.setInputFingerprint("FP-1");
+    workspace.setLastSuccessInputFingerprint("FP-1");
+    workspace.setSourceRevision("SOURCE-1");
+    workspace.setLastSuccessSourceRevision("SOURCE-1");
+    QuoteCostRunVersion version = new QuoteCostRunVersion();
+    version.setId(99L);
+    version.setOaNo("OA-001");
+    version.setOaFormItemId(11L);
+    version.setPricingMonth(CURRENT_PERIOD);
+    version.setInputFingerprint("FP-1");
+    version.setSourceRevision("SOURCE-1");
+    version.setAlgorithmVersion(CostingAlgorithmVersionProvider.DEFAULT_VERSION);
+    version.setStatus("SUCCESS");
+    FakeBatchMapper batchMapper = new FakeBatchMapper(null);
+    FakeTaskMapper taskMapper = new FakeTaskMapper();
+    CostRunTaskSubmissionServiceImpl service =
+        new CostRunTaskSubmissionServiceImpl(
+            batchMapper.proxy(),
+            taskMapper.proxy(),
+            new FakeOaFormMapper(oaForm()).proxy(),
+            new FakeOaFormItemMapper(List.of(currentItem, item(12L, "P-002", "BAG"))).proxy(),
+            workspaceMapper(List.of(workspace)),
+            versionMapper(List.of(version)),
+            algorithmVersion(), (form, item) -> {
+              if (item.getId().equals(11L)) {
+                throw new com.sanhua.marketingcost.service.EffectiveTechnicalDataException(
+                    "TECH_DATA_EFFECTIVE_VERSION_MISSING", 11L, CURRENT_PERIOD,
+                    List.of("PACKAGE"), "包装未生效");
+              }
+              return "SOURCE-1";
+            });
+
+    var result = service.submitQuote("OA-001");
+    assertThat(result.getQueuedCount()).isEqualTo(2);
+    assertThat(result.getSkippedCount()).isZero();
+    assertThat(taskMapper.inserted).extracting(CostRunTask::getStatus).containsOnly("PENDING");
+    assertThat(taskMapper.inserted.get(0).getSourceRevision()).isNull();
+    assertThat(taskMapper.inserted.get(1).getSourceRevision()).isEqualTo("SOURCE-1");
+  }
+
+  @Test
   void submitQuoteQueuesCurrentSuccessWhenAlgorithmVersionChanged() {
     OaFormItem currentItem = item(11L, "P-001", "BOX");
     currentItem.setConfirmedCostVersionId(99L);
     QuoteCostingWorkspace workspace = new QuoteCostingWorkspace();
     workspace.setOaFormItemId(11L);
-    workspace.setPeriodMonth(YearMonth.now().toString());
+    workspace.setPeriodMonth(CURRENT_PERIOD);
     workspace.setWorkspaceStatus("SUCCESS");
     workspace.setCurrentCostVersionId(99L);
     workspace.setInputFingerprint("FP-1");
     workspace.setLastSuccessInputFingerprint("FP-1");
+    workspace.setSourceRevision("SOURCE-1");
+    workspace.setLastSuccessSourceRevision("SOURCE-1");
     QuoteCostRunVersion version = new QuoteCostRunVersion();
     version.setId(99L);
     version.setOaNo("OA-001");
     version.setOaFormItemId(11L);
-    version.setPricingMonth(YearMonth.now().toString());
+    version.setPricingMonth(CURRENT_PERIOD);
     version.setInputFingerprint("FP-1");
+    version.setSourceRevision("SOURCE-1");
     version.setAlgorithmVersion("LEGACY");
     version.setStatus("SUCCESS");
     FakeBatchMapper batchMapper = new FakeBatchMapper(null);
@@ -301,7 +358,7 @@ class CostRunTaskSubmissionServiceImplTest {
             new FakeOaFormItemMapper(List.of(currentItem)).proxy(),
             workspaceMapper(List.of(workspace)),
             versionMapper(List.of(version)),
-            algorithmVersion());
+            algorithmVersion(), (form, item) -> "SOURCE-1");
 
     CostRunTaskSubmissionResult result = service.submitQuote("OA-001");
 
@@ -325,7 +382,7 @@ class CostRunTaskSubmissionServiceImplTest {
             new FakeOaFormItemMapper(List.of()).proxy(),
             emptyWorkspaceMapper(),
             emptyVersionMapper(),
-            algorithmVersion());
+            algorithmVersion(), (form, item) -> "SOURCE-1");
     CostRunMonthlyRepriceSubmitRequest request = new CostRunMonthlyRepriceSubmitRequest();
     request.setRepriceNo("MRP-001");
     request.setPricingMonth("2026-05");
@@ -383,7 +440,7 @@ class CostRunTaskSubmissionServiceImplTest {
     batch.setStatus("PENDING");
     batch.setExecutionNo(1);
     batch.setControlVersion(2);
-    batch.setPricingMonth(YearMonth.now().toString());
+    batch.setPricingMonth(CURRENT_PERIOD);
     batch.setBusinessUnitType("COMMERCIAL");
     return batch;
   }

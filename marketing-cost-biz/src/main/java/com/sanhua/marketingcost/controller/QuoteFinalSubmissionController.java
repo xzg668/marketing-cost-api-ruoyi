@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/v1/quote-requests/{oaNo}/final-submission")
 @PreAuthorize("@ss.hasAnyPermi('ingest:quote:cost-run:execute')")
 public class QuoteFinalSubmissionController {
-  public record Confirmation(String periodMonth, String fingerprint) {}
+  public record Confirmation(String periodMonth, String fingerprint, String requestKey) {}
   private final QuoteFinalSubmissionService service;
   private final TechnicalDataActorProvider actors;
   public QuoteFinalSubmissionController(QuoteFinalSubmissionService service, TechnicalDataActorProvider actors) {
@@ -23,6 +23,6 @@ public class QuoteFinalSubmissionController {
   }
   @PostMapping
   public CommonResult<QuoteFinalSubmissionService.Status> confirm(@PathVariable String oaNo,@RequestBody Confirmation body) {
-    return CommonResult.success(service.confirm(oaNo,body.periodMonth(),body.fingerprint(),actors.current()));
+    return CommonResult.success(service.confirm(oaNo,body.periodMonth(),body.fingerprint(),body.requestKey(),actors.current()));
   }
 }

@@ -55,7 +55,7 @@ public record TechnicalDataActor(
     return !shortSession() && (admin() || has("ingest:quote:cost-run:execute"));
   }
 
-  /** 报价员只在当前业务单元内验收和补录；管理员可跨业务单元处理。 */
+  /** 报价员只在当前业务单元内查看和分派；管理员可跨业务单元查看。 */
   public boolean canCoordinateTask(QuoteTechTask task) {
     if (task == null || shortSession()) return false;
     return admin() || has("ingest:quote:cost-run:execute")
@@ -82,11 +82,11 @@ public record TechnicalDataActor(
             && Objects.equals(module.getAssigneeUserId(), userId));
   }
 
-  /** 历史未分工模块沿用默认办理人；管理员仍受任务范围、阶段及分派锁约束。 */
+  /** 只有实际办理人可以填写自己的模块；报价员和管理员只查看提交结果。 */
   public boolean canEditModule(QuoteTechTask task, QuoteTechModule module) {
-    boolean coordinator = canCoordinateTask(task);
+    if (canViewSupplementOverview()) return false;
     if (task == null || module == null || Integer.valueOf(0).equals(module.getOaEditAllowed())
-        || (!canEdit() && !coordinator) || !canAccessTask(task.getId())
+        || !canEdit() || !canAccessTask(task.getId())
         || !Integer.valueOf(1).equals(task.getActiveFlag())
         || !Integer.valueOf(1).equals(module.getRequiredFlag())
         || "CANCELLED".equals(task.getTaskStatus())
@@ -94,7 +94,7 @@ public record TechnicalDataActor(
         || (task.getOaAssignmentVersion() != null && task.getOaAssignmentVersion() > 0
             && !"PUBLISHED".equals(task.getExternalTaskStatus()))) return false;
     Long owner = module.getAssigneeUserId() == null ? task.getAssigneeUserId() : module.getAssigneeUserId();
-    return coordinator || Objects.equals(owner, userId);
+    return Objects.equals(owner, userId);
   }
 
   public List<String> assignedModules(QuoteTechTask task, Collection<QuoteTechModule> modules) {
@@ -108,9 +108,7 @@ public record TechnicalDataActor(
   }
 
   public boolean canPublish() {
-    return admin()
-        || has("technical:data:task:edit")
-        || has("ingest:quote:cost-run:execute");
+    return canViewSupplementOverview();
   }
 
   public boolean canEdit() {

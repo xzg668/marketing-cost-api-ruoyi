@@ -32,8 +32,24 @@ public class OaQuotationService {
 
   @Transactional
   public JsonNode receive(OaPeer peer, String raw) {
+    try (var call = OaInterfaceLog.start("I01_QUOTATION_RECEIVE")) {
+      if (peer != null) call.field("sourceSystem", peer.sourceSystem()).field("environment", peer.environment());
+      try {
+        JsonNode result = receive(peer, raw, call);
+        call.result("0".equals(result.path("code").asText()) ? "HANDLED" : "REJECTED", null, result.path("code").asText());
+        return result;
+      } catch (RuntimeException exception) {
+        call.failure(exception);
+        throw exception;
+      }
+    }
+  }
+
+  private JsonNode receive(OaPeer peer, String raw, OaInterfaceLog.Call call) {
     JsonNode root = codec.readQuotation(raw);
+    call.business(root).business(root.path("workflowState"));
     var mapped = mapper.map(root, peer);
+    call.field("itemCount", mapped.lines().size());
     var envelope =
         new OaMessageCodec.Envelope(
             3,
@@ -53,8 +69,11 @@ public class OaQuotationService {
     }
     if (message.schemaVersion() != 3 || !"QUOTE_REQUEST".equals(message.interfaceType()))
       throw OaIntegrationException.conflict("IDEMPOTENCY_CONFLICT", "requestId已用于其他接口");
-    if (message.resultJson() != null && "PROCESSED".equals(message.status()))
+    call.field("messageId", message.id());
+    if (message.resultJson() != null && "PROCESSED".equals(message.status())) {
+      call.field("stage", "IDEMPOTENT_REPLAY");
       return codec.read(message.resultJson());
+    }
     // receive 的唯一键写入已持有行锁；事务提交前后台接收箱看不到尚未完成的新记录。
     var result = handler.handle(message, mapped.quote());
     Map<String, String> ids =

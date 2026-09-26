@@ -20,6 +20,7 @@ import com.sanhua.marketingcost.entity.OaFormHeaderExtraField;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.OaFormItemExtraField;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
+import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
 import com.sanhua.marketingcost.entity.QuoteIngestLog;
@@ -29,6 +30,7 @@ import com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
+import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteIngestLogMapper;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
@@ -49,6 +51,7 @@ class QuoteRequestQueryServiceImplTest {
   private OaFormHeaderExtraFieldMapper oaFormHeaderExtraFieldMapper;
   private OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper;
   private QuoteBomStatusMapper quoteBomStatusMapper;
+  private QuoteBomPreparationRecordMapper quoteBomPreparationRecordMapper;
   private QuoteCostRunVersionMapper quoteCostRunVersionMapper;
   private QuoteIngestLogMapper quoteIngestLogMapper;
   private QuoteCostingWorkspaceService quoteCostingWorkspaceService;
@@ -62,11 +65,13 @@ class QuoteRequestQueryServiceImplTest {
     oaFormHeaderExtraFieldMapper = mock(OaFormHeaderExtraFieldMapper.class);
     oaFormItemExtraFieldMapper = mock(OaFormItemExtraFieldMapper.class);
     quoteBomStatusMapper = mock(QuoteBomStatusMapper.class);
+    quoteBomPreparationRecordMapper = mock(QuoteBomPreparationRecordMapper.class);
     quoteCostRunVersionMapper = mock(QuoteCostRunVersionMapper.class);
     quoteIngestLogMapper = mock(QuoteIngestLogMapper.class);
     quoteCostingWorkspaceService = mock(QuoteCostingWorkspaceService.class);
     when(quoteCostingWorkspaceService.findAll(any(), any())).thenReturn(List.of());
     when(quoteCostRunVersionMapper.selectList(any())).thenReturn(List.of());
+    when(quoteBomPreparationRecordMapper.selectList(any())).thenReturn(List.of());
     service =
         new QuoteRequestQueryServiceImpl(
             oaFormMapper,
@@ -75,9 +80,11 @@ class QuoteRequestQueryServiceImplTest {
             oaFormHeaderExtraFieldMapper,
             oaFormItemExtraFieldMapper,
             quoteBomStatusMapper,
+            quoteBomPreparationRecordMapper,
             quoteCostRunVersionMapper,
             quoteIngestLogMapper,
             quoteCostingWorkspaceService);
+    service.setOaWorkflowAccess(mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
   }
 
   @Test
@@ -230,6 +237,31 @@ class QuoteRequestQueryServiceImplTest {
     assertThat(detail.getExtraFields().get(1).getOaFormItemId()).isEqualTo(13L);
     assertThat(detail.getIngestLog().getPayloadSummary()).contains("raw");
     assertThat(detail.getIngestLog().getNormalizedSummary()).contains("normalized");
+  }
+
+  @Test
+  void detailProjectsElectronicDrawingStageFromSharedPreparationRecord() {
+    OaForm form = form("OA-T14-ED", "FI-SC-020", "CONFIRMED");
+    OaFormItem item = item(13L, "MAT-ED");
+    QuoteBomPreparationRecord preparation = new QuoteBomPreparationRecord();
+    preparation.setId(91L);
+    preparation.setOaFormItemId(13L);
+    preparation.setActiveFlag(1);
+    preparation.setElectronicWorkflowStage("MAPPING_PENDING");
+    when(oaFormMapper.selectOne(any())).thenReturn(form);
+    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(item));
+    when(quoteBomStatusMapper.selectList(any())).thenReturn(List.of(status(13L, "NO_BOM")));
+    when(quoteBomPreparationRecordMapper.selectList(any())).thenReturn(List.of(preparation));
+    when(oaFormExtraFeeMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormHeaderExtraFieldMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormItemExtraFieldMapper.selectList(any())).thenReturn(List.of());
+
+    QuoteRequestDetailResponse detail = service.getRequestDetail("OA-T14-ED");
+
+    assertThat(detail.getItems()).singleElement().satisfies(response -> {
+      assertThat(response.getElectronicDrawingWorkflowId()).isEqualTo(13L);
+      assertThat(response.getElectronicDrawingStage()).isEqualTo("MAPPING_PENDING");
+    });
   }
 
   @Test

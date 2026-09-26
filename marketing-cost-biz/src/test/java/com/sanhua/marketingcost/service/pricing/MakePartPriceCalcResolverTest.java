@@ -16,9 +16,9 @@ import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.time.YearMonth;
 import java.util.List;
 import java.util.Map;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -258,7 +258,7 @@ class MakePartPriceCalcResolverTest {
   }
 
   private static String currentMonth() {
-    return YearMonth.now().toString();
+    return CostPricingPeriodUtils.currentPricingMonth();
   }
 
   private static List<Object> paramValues(Wrapper<MakePartPriceCalcRow> wrapper) {

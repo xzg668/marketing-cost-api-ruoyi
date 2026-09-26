@@ -19,7 +19,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class OaMessageCodec {
-  public enum InterfaceType { QUOTE_REQUEST, WORKFLOW_EVENT, TASK_DISPATCH, TECH_SUBMISSION, TECH_RETURN, QUOTE_STATUS, QUOTE_DATA_SUBMIT, QUOTE_RESULT_SAVE, QUOTE_COST_SUBMIT }
+  public enum InterfaceType { QUOTE_REQUEST, WORKFLOW_EVENT, TASK_DISPATCH, TECH_SUBMISSION, TECH_RETURN, QUOTE_COST_SUBMIT }
   public record Envelope(int schemaVersion, String requestId, String occurredAt,
       JsonNode payload, String rawJson, String hash) {}
 

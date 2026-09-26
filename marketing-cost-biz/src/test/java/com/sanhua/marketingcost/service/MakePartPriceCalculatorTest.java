@@ -13,6 +13,16 @@ class MakePartPriceCalculatorTest {
   private final MakePartPriceCalculator calculator = new MakePartPriceCalculator();
 
   @Test
+  void sameMaterialAtDifferentQuoteNodesKeepsIndependentTotals() {
+    var first = baseRow("SCRAP-1"); first.setItemProcessType(MakePartProcessTypePolicy.PROCESS_TYPE_RAW); first.setSourceCostingRowId(1L);
+    var second = baseRow("SCRAP-1"); second.setItemProcessType(MakePartProcessTypePolicy.PROCESS_TYPE_RAW); second.setSourceCostingRowId(2L);
+    second.setGrossWeightG(new BigDecimal("100"));
+    var results = calculator.calculate(List.of(first, second));
+    assertThat(results.getFirst().getParentTotalCostPrice()).isEqualByComparingTo("4.7445");
+    assertThat(results.get(1).getParentTotalCostPrice()).isEqualByComparingTo("4.8903");
+  }
+
+  @Test
   @DisplayName("原材料加工公式：gross/1000*raw - (gross-net)/1000*scrap")
   void calculatesRawProcessCost() {
     MakePartPriceCalcRow row = baseRow("SCRAP-001");

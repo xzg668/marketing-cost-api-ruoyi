@@ -48,7 +48,6 @@ public class EffectiveTechnicalDataQueryServiceImpl
   private final TechnicalDataAuxiliaryClassificationService auxiliaryClassification;
   private final TechnicalDataCostingSources costingSources;
   private final TechnicalPriceCostingSources priceSources;
-  private final com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaWorkflowRepository workflow;
   private final com.sanhua.marketingcost.integration.oa.OaMessageCodec oaCodec;
 
   public EffectiveTechnicalDataQueryServiceImpl(
@@ -60,7 +59,6 @@ public class EffectiveTechnicalDataQueryServiceImpl
       QuoteTechAuxItemMapper auxItemMapper,
       QuoteTechSalaryItemMapper salaryItemMapper,
       TechnicalDataVersionContentCodec contentCodec,
-      com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaWorkflowRepository workflow,
       com.sanhua.marketingcost.integration.oa.OaMessageCodec oaCodec,
       TechnicalDataAuxiliaryClassificationService auxiliaryClassification,
       TechnicalDataCostingSources costingSources, TechnicalPriceCostingSources priceSources) {
@@ -72,7 +70,6 @@ public class EffectiveTechnicalDataQueryServiceImpl
     this.auxItemMapper = auxItemMapper;
     this.salaryItemMapper = salaryItemMapper;
     this.contentCodec = contentCodec;
-    this.workflow = workflow;
     this.oaCodec = oaCodec;
     this.auxiliaryClassification = auxiliaryClassification;
     this.costingSources = costingSources;
@@ -133,14 +130,7 @@ public class EffectiveTechnicalDataQueryServiceImpl
           requiredModules,
           "技术资料任务尚未全部审核通过，不能用于成本核算");
     }
-    if (task.getOaFlowId() != null) {
-      var flow = workflow.findFlow(task.getOaFlowId());
-      if (flow == null || !flow.financeReady() || flow.confirmedFingerprint() == null
-          || !flow.confirmedFingerprint().equals(oaCodec.canonicalHash(workflow.approvalBasis(flow.id())))) {
-        throw error("TECH_DATA_FINANCE_CONFIRMATION_REQUIRED", oaFormItemId, accountingMonth, requiredModules,
-            "补录资料须各部门审批通过、到达 OA 财务核算节点并经报价员确认后才能核算");
-      }
-    }
+    // 本产品已批准资料用于 I06 前的整单检查；成本发布由统一流水线校验 I06 成功状态。
     QuoteTechDataVersion version = versionMapper.selectById(product.getEffectiveVersionId());
     if (version == null) {
       throw error(

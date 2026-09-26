@@ -41,6 +41,7 @@ class MaterialPriceRouterServiceTest {
   private MaterialMasterMapper masterMapper;
   private MaterialPriceTypeSourceMapper sourceMapper;
   private MaterialPriceRouterServiceImpl router;
+  private final com.sanhua.marketingcost.mapper.TechnicalPriceSourceMapper technicalPrices = Mockito.mock(com.sanhua.marketingcost.mapper.TechnicalPriceSourceMapper.class);
 
   @BeforeEach
   void setUp() {
@@ -49,7 +50,19 @@ class MaterialPriceRouterServiceTest {
     sourceMapper = Mockito.mock(MaterialPriceTypeSourceMapper.class);
     // 默认 master 查不到任何料号 → formAttr 走 fallback 用路由表 material_shape
     when(masterMapper.selectOne(any(Wrapper.class))).thenReturn(null);
-    router = new MaterialPriceRouterServiceImpl(mapper, masterMapper, sourceMapper);
+    router = new MaterialPriceRouterServiceImpl(mapper, masterMapper, sourceMapper, technicalPrices);
+  }
+
+  @Test
+  void publicLinkedThenPublicFixedAreTriedBeforeLazySupplementalLookup() {
+    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(row("SHARED", "采购件", "固定价", 1, null, null, "manual")));
+    when(technicalPrices.publicKinds(Mockito.eq("SHARED"), Mockito.eq("2026-09"), Mockito.any()))
+        .thenReturn(List.of("LINKED", "FIXED"));
+    var result = router.listCandidates("SHARED", "2026-09", LocalDate.of(2026, 9, 1));
+    assertThat(result).extracting(PriceTypeRoute::priceType)
+        .containsExactly(PriceTypeEnum.LINKED, PriceTypeEnum.FIXED, PriceTypeEnum.FIXED, PriceTypeEnum.LINKED);
+    assertThat(result).extracting(PriceTypeRoute::supplemental).containsExactly(false, false, true, true);
+    Mockito.verify(technicalPrices, Mockito.never()).supplemental(Mockito.anyString(), Mockito.any());
   }
 
   @Test
@@ -69,7 +82,7 @@ class MaterialPriceRouterServiceTest {
     assertThat(hit.get().priority()).isEqualTo(1);
 
     List<PriceTypeRoute> all = router.listCandidates("MAT-001", "2026-04", LocalDate.parse("2026-04-20"));
-    assertThat(all).hasSize(1);
+    assertThat(all).hasSize(3);
   }
 
   @Test
@@ -118,7 +131,7 @@ class MaterialPriceRouterServiceTest {
 
     List<PriceTypeRoute> all = router.listCandidates("MAT-003", "2026-04", null);
 
-    assertThat(all).hasSize(1);
+    assertThat(all).hasSize(3);
     assertThat(all.get(0).priceType()).isEqualTo(PriceTypeEnum.FIXED);
     assertThat(all.get(0).formAttr()).isNull();  // 未识别 shape
   }

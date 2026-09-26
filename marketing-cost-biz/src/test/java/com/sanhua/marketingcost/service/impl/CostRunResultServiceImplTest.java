@@ -26,7 +26,8 @@ class CostRunResultServiceImplTest {
     OaFormItemMapper itemMapper = mock(OaFormItemMapper.class);
     MaterialMasterMapper materialMapper = mock(MaterialMasterMapper.class);
     CostRunResultServiceImpl service =
-        new CostRunResultServiceImpl(versionMapper, formMapper, itemMapper, materialMapper);
+        new CostRunResultServiceImpl(versionMapper, formMapper, itemMapper, materialMapper,
+            mock(com.sanhua.marketingcost.mapper.CostRunCostItemMapper.class), new com.fasterxml.jackson.databind.ObjectMapper());
     QuoteCostRunVersion version = version(7L, "SUCCESS", "189.365971");
     OaForm form = new OaForm();
     form.setOaNo("OA-001");
@@ -58,6 +59,26 @@ class CostRunResultServiceImplTest {
   }
 
   @Test
+  void propertyLabelUsesSelectedFrozenCostInputOnlyWhenTechnicalPropertyWasApplied() {
+    var versions = mock(QuoteCostRunVersionMapper.class);
+    var costs = mock(com.sanhua.marketingcost.mapper.CostRunCostItemMapper.class);
+    var forms = mock(OaFormMapper.class);
+    var items = mock(OaFormItemMapper.class);
+    var service = new CostRunResultServiceImpl(versions, forms, items, mock(MaterialMasterMapper.class),
+        costs, new com.fasterxml.jackson.databind.ObjectMapper());
+    var frozen = version(7L, "HISTORY", "84.572267");
+    frozen.setTechDataInputJson("{\"productProperty\":\"非标品\"}");
+    when(versions.selectById(7L)).thenReturn(frozen);
+    var current = new OaFormItem(); current.setProductAttr("后来变更的 OA 属性");
+    when(items.selectById(101L)).thenReturn(current);
+    var applied = new com.sanhua.marketingcost.entity.CostRunCostItem();
+    when(costs.selectList(any())).thenReturn(List.of(applied));
+    assertThat(service.getResult(7L).getProductAttr()).isEqualTo("非标品");
+    when(costs.selectList(any())).thenReturn(List.of());
+    assertThat(service.getResult(7L).getProductAttr()).isEqualTo("后来变更的 OA 属性");
+  }
+
+  @Test
   void currentSuccessWinsOverNewerStaleVersion() {
     QuoteCostRunVersionMapper versionMapper = mock(QuoteCostRunVersionMapper.class);
     CostRunResultServiceImpl service =
@@ -65,7 +86,7 @@ class CostRunResultServiceImplTest {
             versionMapper,
             mock(OaFormMapper.class),
             mock(OaFormItemMapper.class),
-            mock(MaterialMasterMapper.class));
+            mock(MaterialMasterMapper.class), mock(com.sanhua.marketingcost.mapper.CostRunCostItemMapper.class), new com.fasterxml.jackson.databind.ObjectMapper());
     when(versionMapper.selectList(any()))
         .thenReturn(List.of(version(8L, "STALE", "200"), version(7L, "SUCCESS", "189")));
 
@@ -81,7 +102,7 @@ class CostRunResultServiceImplTest {
             versionMapper,
             mock(OaFormMapper.class),
             mock(OaFormItemMapper.class),
-            mock(MaterialMasterMapper.class));
+            mock(MaterialMasterMapper.class), mock(com.sanhua.marketingcost.mapper.CostRunCostItemMapper.class), new com.fasterxml.jackson.databind.ObjectMapper());
     when(versionMapper.selectById(7L)).thenReturn(version(7L, "HISTORY", "123.45"));
 
     assertThat(service.getResult(7L).getTotalCost()).isEqualByComparingTo("123.45");

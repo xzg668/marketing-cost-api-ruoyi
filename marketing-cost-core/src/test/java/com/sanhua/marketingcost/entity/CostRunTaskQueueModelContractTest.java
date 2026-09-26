@@ -47,7 +47,7 @@ class CostRunTaskQueueModelContractTest {
             "PENDING",
             "RUNNING",
             "SUCCESS",
-            "COLLABORATION",
+            "WAITING_INPUT",
             "SKIPPED_CURRENT",
             "FAILED",
             "RETRYABLE",

@@ -234,7 +234,7 @@ class FixedPriceResolverSupplierPreferenceTest {
   private FixedPriceResolver resolver(
       PriceFixedItemMapper mapper,
       SupplierSupplyRatioResolveService ratioService) {
-    return new FixedPriceResolver(mapper, new SupplierPreferredPriceSelector(ratioService));
+    return new FixedPriceResolver(mapper, new SupplierPreferredPriceSelector(ratioService), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class));
   }
 
   private SupplierSupplyRatioResolveResult hit(String supplierName, String supplierCode, String ratio) {

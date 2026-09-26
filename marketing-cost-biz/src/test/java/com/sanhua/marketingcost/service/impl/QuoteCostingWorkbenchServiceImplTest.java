@@ -43,6 +43,8 @@ import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.service.QuoteEffectiveBomCostingService;
 import com.sanhua.marketingcost.service.QuoteProductBomPreparationService;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingCostingFallbackService;
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowStage;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -77,6 +79,7 @@ class QuoteCostingWorkbenchServiceImplTest {
   private QuoteCostingWorkspaceService workspaceService;
   private QuoteCostRunVersionInvalidationService costRunVersionInvalidationService;
   private QuoteBomStatusService quoteBomStatusService;
+  private ElectronicDrawingCostingFallbackService electronicDrawingFallbackService;
   private QuoteCostingWorkbenchServiceImpl service;
 
   @BeforeAll
@@ -105,6 +108,10 @@ class QuoteCostingWorkbenchServiceImplTest {
     costRunVersionInvalidationService = mock(QuoteCostRunVersionInvalidationService.class);
     when(workspaceService.find(anyLong(), anyString())).thenReturn(Optional.empty());
     quoteBomStatusService = mock(QuoteBomStatusService.class);
+    electronicDrawingFallbackService = mock(ElectronicDrawingCostingFallbackService.class);
+    when(electronicDrawingFallbackService.attempt(any(), any(), anyString()))
+        .thenReturn(new ElectronicDrawingCostingFallbackService.AttemptResult(
+            false, false, null, null));
     QuoteBomStatusItemResponse checkedBom = new QuoteBomStatusItemResponse();
     checkedBom.setBomStatus("SYNCED");
     when(quoteBomStatusService.checkItemForCostRun(anyString(), anyLong(), anyString()))
@@ -125,8 +132,8 @@ class QuoteCostingWorkbenchServiceImplTest {
             workspaceService,
             costRunVersionInvalidationService,
             quoteBomStatusService,
-            mock(com.sanhua.marketingcost.service.collaboration.CollaborationCostingGate.class),
-            priceTypeRecognitionService);
+            priceTypeRecognitionService,
+            electronicDrawingFallbackService);
   }
 
   @Test
@@ -321,7 +328,8 @@ class QuoteCostingWorkbenchServiceImplTest {
     assertThat(response.getBomRows()).hasSize(1);
     assertThat(response.getBomRows().get(0).getChildCode()).isEqualTo("MAT-NEW");
     verify(effectiveBomCostingService).prepareCurrent("OA-001", 10L);
-    verify(bomPreparationService).prepareByOaFormItem(10L, LocalDate.now());
+    verify(bomPreparationService)
+        .prepareByOaFormItem(10L, CostPricingPeriodUtils.currentPricingDate());
     verify(quoteBomStatusService).checkItemForCostRun("OA-001", 10L, SAMPLE_PERIOD_MONTH);
     verify(costRunVersionInvalidationService)
         .invalidateProduct("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH);
@@ -362,13 +370,71 @@ class QuoteCostingWorkbenchServiceImplTest {
   }
 
   @Test
+  void noU9BomUsesElectronicDrawingAndRechecksBeforeBuildingCostingBom() {
+    OaFormItem item = item(10L, "FIN-001");
+    item.setBusinessUnitType("COMMERCIAL");
+    item.setCustomerDrawing("DRAW-001");
+    QuoteBomStatusItemResponse missing = new QuoteBomStatusItemResponse();
+    missing.setBomStatus("NO_BOM");
+    QuoteBomStatusItemResponse published = new QuoteBomStatusItemResponse();
+    published.setBomStatus("MANUAL_ENTERED");
+    when(oaFormMapper.selectOne(any())).thenReturn(form());
+    when(oaFormItemMapper.selectById(10L)).thenReturn(item);
+    when(quoteBomStatusService.checkItemForCostRun("OA-001", 10L, SAMPLE_PERIOD_MONTH))
+        .thenReturn(missing, published);
+    when(electronicDrawingFallbackService.attempt(any(), any(), eq(SAMPLE_PERIOD_MONTH)))
+        .thenReturn(new ElectronicDrawingCostingFallbackService.AttemptResult(
+            true, true, ElectronicDrawingWorkflowStage.PUBLISHED, "已发布"));
+    when(effectiveBomCostingService.prepareCurrent("OA-001", 10L))
+        .thenReturn(buildResponse("electronic-build"));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot(
+        "OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH)).thenReturn(List.of());
+
+    QuoteCostingWorkbenchResponse response = service.launchWorkbench("OA-001", 10L);
+
+    assertThat(response.getSnapshotGenerated()).isTrue();
+    verify(electronicDrawingFallbackService).attempt(any(), any(), eq(SAMPLE_PERIOD_MONTH));
+    verify(quoteBomStatusService, org.mockito.Mockito.times(2))
+        .checkItemForCostRun("OA-001", 10L, SAMPLE_PERIOD_MONTH);
+    verify(bomPreparationService)
+        .prepareByOaFormItem(10L, CostPricingPeriodUtils.currentPricingDate());
+    verify(effectiveBomCostingService).prepareCurrent("OA-001", 10L);
+  }
+
+  @Test
+  void composedDrawingDraftPreparesPricesWithoutPublishingOrRequiringFinanceApproval() {
+    OaFormItem item = item(10L, "FIN-001");
+    item.setBusinessUnitType("COMMERCIAL");
+    item.setCustomerDrawing("DRAW-001");
+    QuoteBomStatusItemResponse missing = new QuoteBomStatusItemResponse();
+    missing.setBomStatus("NO_BOM");
+    when(oaFormMapper.selectOne(any())).thenReturn(form());
+    when(oaFormItemMapper.selectById(10L)).thenReturn(item);
+    when(quoteBomStatusService.checkItemForCostRun("OA-001", 10L, SAMPLE_PERIOD_MONTH)).thenReturn(missing);
+    when(electronicDrawingFallbackService.attempt(any(), any(), eq(SAMPLE_PERIOD_MONTH)))
+        .thenReturn(new ElectronicDrawingCostingFallbackService.AttemptResult(
+            true, false, ElectronicDrawingWorkflowStage.COMPOSED, "等待审批"));
+    when(effectiveBomCostingService.prepareCurrent("OA-001", 10L)).thenReturn(buildResponse("draft-build"));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot(
+        "OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH)).thenReturn(List.of());
+
+    var response = service.launchWorkbench("OA-001", 10L);
+
+    assertThat(response.getSnapshotGenerated()).isTrue();
+    assertThat(response.getBuildBatchId()).isEqualTo("draft-build");
+    verify(bomPreparationService, never()).prepareByOaFormItem(anyLong(), any());
+    verify(quoteBomStatusService).checkItemForCostRun("OA-001", 10L, SAMPLE_PERIOD_MONTH);
+  }
+
+  @Test
   void preparationGapAfterPositiveStatusBecomesWaitingForBomInsteadOfSystemFailure() {
     OaFormItem item = item(10L, "FIN-001");
     item.setBusinessUnitType("COMMERCIAL");
     QuoteCostingWorkspace workspace = workspace(null, "NOT_STARTED");
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item);
-    when(bomPreparationService.prepareByOaFormItem(10L, LocalDate.now()))
+    when(bomPreparationService.prepareByOaFormItem(
+            10L, CostPricingPeriodUtils.currentPricingDate()))
         .thenReturn(preparation(false));
     when(workspaceService.lockOrCreate(
             "OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH, "COMMERCIAL"))

@@ -19,16 +19,14 @@ public class TechnicalDataRequirementRefreshService {
   private final QuoteTechModuleMapper modules;
   private final JdbcTemplate jdbc;
   private final QuoteTechTaskMapper tasks;
-  private final TechnicalDataOaIntegrationService oa;
   private final com.sanhua.marketingcost.integration.oa.OaMessageCodec codec;
 
   public TechnicalDataRequirementRefreshService(QuoteTechModuleMapper modules, JdbcTemplate jdbc,
-      QuoteTechTaskMapper tasks, TechnicalDataOaIntegrationService oa,
+      QuoteTechTaskMapper tasks,
       com.sanhua.marketingcost.integration.oa.OaMessageCodec codec) {
     this.modules = modules;
     this.jdbc = jdbc;
     this.tasks = tasks;
-    this.oa = oa;
     this.codec = codec;
   }
 
@@ -52,10 +50,8 @@ public class TechnicalDataRequirementRefreshService {
     var current = modules.selectByTaskId(task.getId());
     var changed = current.stream().filter(module -> requirements.stream().anyMatch(next ->
         next.moduleType().equals(module.getModuleType()) && changed(module, next))).toList();
-    if (changed.isEmpty()) {
-      if (oa.enabled() && task.getOaFlowId() != null) oa.queueSourceRefresh(task);
-      return null;
-    }
+    if (changed.isEmpty()) return null;
+    if (!unassigned(task)) return "已分派任务保留原产品及模块范围，请在原任务查看";
     if (changed.stream().anyMatch(module -> locked(task, module))) return "来源已变化；原任务含送审资料，保留原版本，请在原任务核实";
     var unresolved = requirements.stream().filter(next -> next.availability() == TechnicalDataAvailability.ERROR
         || next.availability() == TechnicalDataAvailability.UNCONFIRMED).map(TechnicalDataModuleRequirement::moduleType).toList();
@@ -68,10 +64,7 @@ public class TechnicalDataRequirementRefreshService {
       return remaining ? "未分派草稿已按最新来源更新，已有内容保留"
           : "已无确认缺口，未分派草稿退出待补录，已有内容与历史保留";
     }
-    if (!oa.enabled() && !remaining && task.getOaFlowId() == null) cancelLocally(task);
-    else oa.queueSourceRefresh(task);
-    return remaining ? "原任务已按最新来源更新，已有草稿保留；待办变更由 OA 确认"
-        : "已无确认缺口，撤销原待办，已有草稿与历史保留";
+    return null;
   }
 
   /** 未分派草稿尚未产生 OA 待办，来源复查只需维护本地任务，不能伪造办理人发起 OA 消息。 */
@@ -118,6 +111,7 @@ public class TechnicalDataRequirementRefreshService {
   }
 
   public void refresh(QuoteTechTask task, List<TechnicalDataModuleRequirement> requirements) {
+    if (task.getOaAssignmentVersion() != null && task.getOaAssignmentVersion() > 0) return;
     var current = modules.selectByTaskId(task.getId());
     Map<String, TechnicalDataModuleRequirement> byType = requirements.stream()
         .collect(Collectors.toMap(TechnicalDataModuleRequirement::moduleType, Function.identity()));

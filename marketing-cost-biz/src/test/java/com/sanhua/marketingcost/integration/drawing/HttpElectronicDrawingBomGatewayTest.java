@@ -11,6 +11,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -73,24 +74,23 @@ class HttpElectronicDrawingBomGatewayTest {
   }
 
   @Test
-  void mapsNotFoundForbiddenAndVoidWithoutInventingSuccess() throws Exception {
-    server.createContext("/current", exchange -> respond(exchange, 404, "{}"));
+  void mapsNotFoundForbiddenAndVoidWithoutInventingSuccess() {
+    AtomicInteger call = new AtomicInteger();
+    server.createContext("/current", exchange -> {
+      int current = call.incrementAndGet();
+      if (current == 1) {
+        respond(exchange, 404, "{}");
+      } else if (current == 2) {
+        respond(exchange, 403, "{}");
+      } else {
+        respond(exchange, 200, "{\"versionStatus\":\"VOIDED\"}");
+      }
+    });
     server.start();
     assertThat(gateway().fetchCurrentBom(query()).status())
         .isEqualTo(ElectronicBomFetchResult.Status.NOT_FOUND);
-    server.stop(0);
-
-    setUp();
-    server.createContext("/current", exchange -> respond(exchange, 403, "{}"));
-    server.start();
     assertThat(gateway().fetchCurrentBom(query()).status())
         .isEqualTo(ElectronicBomFetchResult.Status.FORBIDDEN);
-    server.stop(0);
-
-    setUp();
-    server.createContext("/current", exchange -> respond(exchange, 200,
-        "{\"versionStatus\":\"VOIDED\"}"));
-    server.start();
     assertThat(gateway().fetchCurrentBom(query()).status())
         .isEqualTo(ElectronicBomFetchResult.Status.VOID);
   }

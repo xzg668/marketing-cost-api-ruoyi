@@ -24,6 +24,26 @@ import org.mockito.Mockito;
 class PriceFixedItemServiceImplTest {
 
   @Test
+  void publicMaintenanceCannotModifyOrDeleteApprovedSupplementalPrice() {
+    var mapper = Mockito.mock(PriceFixedItemMapper.class);
+    var service = service(mapper);
+    var approved = new PriceFixedItem();
+    approved.setId(91L);
+    approved.setSourceKind("TECH_SUPPLEMENTAL");
+    approved.setFixedPrice(new BigDecimal("12"));
+    when(mapper.selectById(91L)).thenReturn(approved);
+    var request = new com.sanhua.marketingcost.dto.PriceFixedItemUpdateRequest();
+    request.setFixedPrice(new BigDecimal("99"));
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.update(91L, request))
+        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("原补录任务");
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.delete(91L))
+        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("原补录任务");
+    assertEquals(new BigDecimal("12"), approved.getFixedPrice());
+    verify(mapper, times(2)).selectById(91L);
+    Mockito.verifyNoMoreInteractions(mapper);
+  }
+
+  @Test
   void importItems_insertsNewRow() {
     PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
     PriceFixedItemServiceImpl service = service(mapper);

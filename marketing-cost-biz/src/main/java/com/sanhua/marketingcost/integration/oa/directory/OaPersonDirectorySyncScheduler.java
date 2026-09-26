@@ -47,13 +47,13 @@ public class OaPersonDirectorySyncScheduler {
     try {
       OaPersonDirectoryRepository.SyncResult result = service.synchronize();
       log.info(
-          "OA person directory synchronized: trigger={}, batchId={}, total={}, selectable={}, missingDepartments={}",
+          "OA person directory synchronized: trigger={}, batchId={}, total={}, selectable={}, missingDepartmentCount={}",
           trigger, result.batchId(), result.totalPeople(), result.selectablePeople(),
-          result.missingDepartments());
+          result.missingDepartments().size());
     } catch (RuntimeException exception) {
       // 不打印请求、令牌或凭证；旧批次由仓储事务保证继续有效。
       log.error("OA person directory synchronization failed: trigger={}, reason={}",
-          trigger, exception.getMessage());
+          trigger, exception.getClass().getSimpleName());
     } finally {
       running.set(false);
     }

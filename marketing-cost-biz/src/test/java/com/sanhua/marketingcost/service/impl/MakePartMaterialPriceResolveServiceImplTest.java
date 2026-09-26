@@ -68,8 +68,8 @@ class MakePartMaterialPriceResolveServiceImplTest {
     ratioService = mock(SupplierSupplyRatioResolveService.class);
     linkedPriceEnsureService = mock(LinkedPriceEnsureService.class);
     List<PriceResolver> resolvers = List.of(
-        new FixedPriceResolver(fixedMapper, new SupplierPreferredPriceSelector(ratioService)),
-        new LinkedPriceResolver(linkedMapper),
+        new FixedPriceResolver(fixedMapper, new SupplierPreferredPriceSelector(ratioService), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class)),
+        new LinkedPriceResolver(linkedMapper, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class)),
         RangePriceResolverTestSupport.create(rangeMapper));
     service =
         new MakePartMaterialPriceResolveServiceImpl(

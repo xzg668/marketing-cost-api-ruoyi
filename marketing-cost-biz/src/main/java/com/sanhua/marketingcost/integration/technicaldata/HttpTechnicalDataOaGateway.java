@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.integration.technicaldata;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.integration.oa.OaIntegrationException;
+import com.sanhua.marketingcost.integration.oa.OaInterfaceLog;
 import com.sanhua.marketingcost.integration.oa.OaIntegrationProperties;
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import com.sanhua.marketingcost.integration.oa.OaPeer;
@@ -12,10 +13,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
 
@@ -38,41 +36,23 @@ public class HttpTechnicalDataOaGateway implements TechnicalDataOaGateway {
   }
 
   @Override public OaPeer peer() {
-    if (!enabled()) throw OaIntegrationException.conflict("OA_OUTBOUND_DISABLED", "OA 分派和审批通道未启用，草稿仍可保存");
+    if (!enabled()) throw OaIntegrationException.conflict("OA_OUTBOUND_DISABLED", "OA 身份兑换通道未启用");
     var client = properties.getClients().get(properties.getOutbound().getClientId());
     return new OaPeer(client.getSourceSystem(), client.getEnvironment(), client.getBusinessUnits());
   }
 
-  @Override public Receipt send(Operation operation, String commandJson) {
-    String path = switch (operation) {
-      case TASK_DISPATCH -> "/tasks";
-      case TECH_SUBMISSION -> "/submissions";
-      case TECH_RETURN -> "/returns";
-      case QUOTE_STATUS -> "/quotation/status";
-      case QUOTE_DATA_SUBMIT -> "/quotation/data-submit";
-      case QUOTE_RESULT_SAVE -> "/quotation/result-save";
-      case QUOTE_COST_SUBMIT -> "/quotation/cost-submit";
-    };
-    var command = parse(commandJson);
-    return receipt(command.path("requestId").asText(), request("POST", path, commandJson));
-  }
-
-  @Override public Optional<Receipt> query(Operation operation, String requestId) {
-    requireRequestId(requestId);
-    String kind = switch (operation) {
-      case TASK_DISPATCH -> "TASK";
-      case TECH_SUBMISSION -> "SUBMISSION";
-      case TECH_RETURN -> "RETURN";
-      case QUOTE_STATUS, QUOTE_DATA_SUBMIT, QUOTE_RESULT_SAVE, QUOTE_COST_SUBMIT -> operation.name();
-    };
-    var reply = request("GET", "/requests/" + kind + "/" + requestId, null);
-    if (reply.status() == 404 && "REQUEST_NOT_FOUND".equals(reply.body().path("code").asText())) return Optional.empty();
-    if (reply.status() != 200 || !reply.body().path("found").asBoolean(false)
-        || !reply.body().path("httpStatus").canConvertToInt()) throw unknown("OA 原请求状态暂时无法核实");
-    return Optional.of(receipt(requestId, new Reply(reply.body().path("httpStatus").intValue(), reply.body().path("result"))));
-  }
-
   @Override public Identity exchange(long taskId, String code) {
+    try (var call = OaInterfaceLog.start("OA_IDENTITY_EXCHANGE")) {
+      call.field("taskId", taskId).field("mode", properties.getMode());
+      try {
+        var identity = exchangeIdentity(taskId, code);
+        call.success();
+        return identity;
+      } catch (RuntimeException exception) { call.failure(exception); throw exception; }
+    }
+  }
+
+  private Identity exchangeIdentity(long taskId, String code) {
     var reply = request("POST", "/identity/exchange", command(Map.of("taskId", taskId, "code", code, "audience", "quote-workbench")));
     requireSuccess(reply, "OA_IDENTITY_REJECTED", "OA 身份码无效、过期或已使用");
     var identity = reply.body();
@@ -83,37 +63,19 @@ public class HttpTechnicalDataOaGateway implements TechnicalDataOaGateway {
     return new Identity(identity.path("externalUserId").asText(), taskId);
   }
 
-  @Override public List<ExternalUser> users() {
-    var reply = request("GET", "/users", null);
-    requireSuccess(reply, "OA_DIRECTORY_UNAVAILABLE", "OA 人员目录暂不可用");
-    if (!reply.body().path("users").isArray()) throw unknown("OA 人员目录回执格式不完整");
-    List<ExternalUser> users = new ArrayList<>();
-    for (JsonNode user : reply.body().path("users")) {
-      if (!user.path("externalUserId").isTextual() || !user.path("displayName").isTextual()
-          || !(user.path("active").isBoolean() || user.path("active").isIntegralNumber())) throw unknown("OA 人员目录字段不完整");
-      users.add(new ExternalUser(user.path("externalUserId").asText(), user.path("displayName").asText(),
-          user.path("active").isBoolean() ? user.path("active").booleanValue() : user.path("active").intValue() == 1));
-    }
-    return List.copyOf(users);
-  }
-
-  @Override public String taskAccessUrl(long taskId) {
-    peer();
-    return properties.getOutbound().getFrontendBaseUrl().replaceAll("/+$", "") + "/technical-data-access?taskId=" + taskId;
-  }
-
-  private Receipt receipt(String requestId, Reply reply) {
-    if (!requestId.equals(reply.body().path("requestId").asText())) throw unknown("OA 回执与原请求编号不一致");
-    if (reply.status() >= 200 && reply.status() < 300 && reply.body().path("accepted").isBoolean()
-        && reply.body().path("accepted").booleanValue()) return new Receipt(requestId, true, null, reply.body());
-    if (reply.status() >= 400 && reply.status() < 500 && reply.body().path("accepted").isBoolean()
-        && !reply.body().path("accepted").booleanValue()) {
-      return new Receipt(requestId, false, reply.body().path("code").asText("OA_REJECTED"), reply.body());
-    }
-    throw unknown("OA 未返回明确的受理或拒绝结果");
-  }
-
   private Reply request(String method, String path, String body) {
+    try (var call = OaInterfaceLog.start("OA_GATEWAY_HTTP")) {
+      call.field("direction", "OUTBOUND").field("method", method).field("endpoint", path)
+          .field("mode", properties.getMode()).field("environment", properties.getEnvironment());
+      try {
+        var reply = executeRequest(method, path, body, call);
+        call.result(reply.status() < 400 ? "HTTP_COMPLETED" : "REJECTED", reply.status(), reply.body().path("code").asText(null));
+        return reply;
+      } catch (RuntimeException exception) { call.failure(exception); throw exception; }
+    }
+  }
+
+  private Reply executeRequest(String method, String path, String body, OaInterfaceLog.Call call) {
     peer();
     var options = properties.getOutbound();
     var request = HttpRequest.newBuilder(URI.create(options.getBaseUrl().replaceAll("/+$", "") + "/mock/oa/v1" + path))
@@ -122,6 +84,7 @@ public class HttpTechnicalDataOaGateway implements TechnicalDataOaGateway {
         .method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body)).build();
     try {
       var response = http.send(request, HttpResponse.BodyHandlers.ofByteArray());
+      call.result("HTTP_RECEIVED", response.statusCode(), null);
       byte[] bytes = response.body();
       if (bytes.length > 2 * 1024 * 1024 || response.statusCode() >= 500 || response.statusCode() < 200
           || response.statusCode() >= 300 && response.statusCode() < 400) throw unknown("OA 通信结果未确认");
@@ -145,15 +108,6 @@ public class HttpTechnicalDataOaGateway implements TechnicalDataOaGateway {
 
   private String command(Map<String, Object> payload) {
     return codec.write(Map.of("schemaVersion", 1, "environment", peer().environment(), "requestId", "java-" + UUID.randomUUID(), "payload", payload));
-  }
-
-  private JsonNode parse(String value) {
-    try { return mapper.readTree(value); }
-    catch (IOException exception) { throw new IllegalArgumentException("OA 待发送契约格式错误"); }
-  }
-
-  private void requireRequestId(String value) {
-    if (value == null || !value.matches("[A-Za-z0-9._:-]{1,128}")) throw new IllegalArgumentException("请求编号不合法");
   }
 
   private OaDeliveryUnknownException unknown(String message) { return new OaDeliveryUnknownException(message); }

@@ -361,7 +361,10 @@ class PackageComponentSnapshotServiceImplTest {
     assertThat(sourceCaptor.getAllValues())
         .allSatisfy(
             wrapper -> {
-              assertThat(wrapper.getSqlSegment()).contains("price_org_code");
+              assertThat(wrapper.getSqlSegment()).contains(
+                  "price_org_code", "parent_material_no", "child_material_no", "bom_purpose",
+                  "child_seq", "bom_version", "effective_from", "effective_to");
+              assertThat(wrapper.getSqlSegment()).doesNotContain("ORDER BY id");
               assertThat(((AbstractWrapper<?, ?, ?>) wrapper).getParamNameValuePairs())
                   .containsValue("220");
             });
@@ -458,9 +461,11 @@ class PackageComponentSnapshotServiceImplTest {
     row.setQtyPerParent(new BigDecimal("1.000000"));
     row.setQtyPerTop(new BigDecimal("1.000000"));
     row.setBomPurpose("主制造");
+    row.setBomVersion("V1");
     row.setSourceType("U9");
     row.setSourceImportBatchId("b-test");
     row.setEffectiveFrom(LocalDate.parse("2026-01-01"));
+    row.setEffectiveTo(LocalDate.parse("2099-12-31"));
     row.setBuiltAt(LocalDateTime.parse("2026-05-20T10:15:30"));
     return row;
   }
@@ -482,9 +487,11 @@ class PackageComponentSnapshotServiceImplTest {
     row.setQtyPerParent(new BigDecimal(qtyPerParent));
     row.setQtyPerTop(new BigDecimal(qtyPerParent));
     row.setBomPurpose("主制造");
+    row.setBomVersion("V1");
     row.setSourceType("U9");
     row.setSourceImportBatchId("b-test");
     row.setEffectiveFrom(LocalDate.parse("2026-01-01"));
+    row.setEffectiveTo(LocalDate.parse("2099-12-31"));
     return row;
   }
 
@@ -495,8 +502,10 @@ class PackageComponentSnapshotServiceImplTest {
     row.setParentMaterialNo(parentCode);
     row.setChildMaterialNo(childCode);
     row.setBomPurpose("主制造");
+    row.setBomVersion("V1");
     row.setChildSeq(childSeq);
     row.setEffectiveFrom(LocalDate.parse("2026-01-01"));
+    row.setEffectiveTo(LocalDate.parse("2099-12-31"));
     row.setParentBaseQty(new BigDecimal(parentBaseQty));
     return row;
   }
