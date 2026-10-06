@@ -23,8 +23,10 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
+import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
+import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
 import com.sanhua.marketingcost.service.FinancePricePrepareService;
 import com.sanhua.marketingcost.service.FinanceQuoteBasePriceService;
@@ -56,6 +58,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   private final com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService technicalCorrections;
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
+  private final QuoteBomStatusMapper quoteBomStatusMapper;
   private final QuotePriceTypeRecognitionService priceTypeRecognitionService;
   private final PricePrepareService pricePrepareService;
   private final FinancePricePrepareService financePricePrepareService;
@@ -66,6 +69,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   public QuotePricePrepareWorkbenchServiceImpl(
       OaFormMapper oaFormMapper,
       OaFormItemMapper oaFormItemMapper,
+      QuoteBomStatusMapper quoteBomStatusMapper,
       QuotePriceTypeRecognitionService priceTypeRecognitionService,
       PricePrepareService pricePrepareService,
       FinancePricePrepareService financePricePrepareService,
@@ -76,6 +80,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     this.technicalCorrections=technicalCorrections;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
+    this.quoteBomStatusMapper = quoteBomStatusMapper;
     this.priceTypeRecognitionService = priceTypeRecognitionService;
     this.pricePrepareService = pricePrepareService;
     this.financePricePrepareService = financePricePrepareService;
@@ -159,6 +164,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     generateRequest.setPeriodMonth(scope.periodMonth());
     generateRequest.setPriceAsOfTime(request == null ? null : request.getPriceAsOfTime());
     generateRequest.setBusinessUnitType(scope.businessUnitType());
+    generateRequest.setSourceType(scope.bomSourceType());
     if (preview) {
       generateRequest.setScenarioType(QuotePriceScenarioType.OA_LOCKED);
     } else if (request != null) {
@@ -579,12 +585,20 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
         StringUtils.hasText(periodMonth)
             ? CostPricingPeriodUtils.requireCurrentPricingMonth(periodMonth)
             : resolveDefaultPeriod(form);
+    QuoteBomStatus bomStatus = quoteBomStatusMapper.selectOne(
+        Wrappers.<QuoteBomStatus>lambdaQuery()
+            .eq(QuoteBomStatus::getOaNo, oaNoValue)
+            .eq(QuoteBomStatus::getOaFormItemId, oaFormItemId)
+            .orderByDesc(QuoteBomStatus::getId)
+            .last("LIMIT 1"));
     return new Scope(
         oaNoValue,
         oaFormItemId,
         topProductCode,
         period,
-        firstText(item.getBusinessUnitType(), form.getBusinessUnitType()));
+        firstText(item.getBusinessUnitType(), form.getBusinessUnitType()),
+        bomStatus != null && "ELECTRONIC_DRAWING_BOM".equals(bomStatus.getBomSource())
+            ? "E_DRAWING" : "U9");
   }
 
   private QuotePriceTypeRecognitionResponse requireRecognizedPriceTypes(Scope scope) {
@@ -633,7 +647,8 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       Long oaFormItemId,
       String topProductCode,
       String periodMonth,
-      String businessUnitType) {}
+      String businessUnitType,
+      String bomSourceType) {}
 
   private record ScenarioPair(
       PricePrepareBatch oaBatch, PricePrepareBatch financeBatch) {}

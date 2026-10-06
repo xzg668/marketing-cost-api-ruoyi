@@ -35,9 +35,18 @@ public class MonthlyBomSnapshotDetailService {
   }
 
   public List<BomRawHierarchy> load(Long snapshotId) {
+    return load(snapshotId, false);
+  }
+
+  /** 已确认的月快照可能由并发请求提交；明细必须与当前读取的表头保持一致。 */
+  public List<BomRawHierarchy> loadCurrent(Long snapshotId) {
+    return load(snapshotId, true);
+  }
+
+  private List<BomRawHierarchy> load(Long snapshotId, boolean currentRead) {
     if (snapshotId == null) return List.of();
     return jdbc.query("SELECT raw_node_json FROM lp_quote_bom_monthly_snapshot_detail "
-            + "WHERE monthly_snapshot_id = ? ORDER BY line_no",
+            + "WHERE monthly_snapshot_id = ? ORDER BY line_no" + (currentRead ? " FOR SHARE" : ""),
         (rs, rowNum) -> decode(rs.getString(1)), snapshotId);
   }
 
@@ -78,7 +87,7 @@ public class MonthlyBomSnapshotDetailService {
     if (snapshotId == null || rows == null || rows.isEmpty()) {
       throw new IllegalArgumentException("月度BOM明细不能为空");
     }
-    if (!load(snapshotId).isEmpty()) return;
+    if (!loadCurrent(snapshotId).isEmpty()) return;
     jdbc.batchUpdate("INSERT INTO lp_quote_bom_monthly_snapshot_detail "
         + "(monthly_snapshot_id, line_no, raw_node_json) VALUES (?, ?, ?)",
         new BatchPreparedStatementSetter() {

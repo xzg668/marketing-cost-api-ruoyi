@@ -48,6 +48,10 @@ public class TechnicalDataRequirementRefreshService {
     if (task.getOaAssignmentVersion() != null && task.getOaAssignmentVersion() > 0
         && !"PUBLISHED".equals(task.getExternalTaskStatus())) return "原任务的待办变更尚待 OA 确认，保留当前资料";
     var current = modules.selectByTaskId(task.getId());
+    if (Set.of("SUBMITTED", "APPROVED", "PENDING").contains(task.getTaskStatus())) {
+      int additional = registerAdditionalRequirements(task, current, requirements);
+      if (additional > 0) return "发现新增资料缺口，请分派待补模块；原已提交资料保留";
+    }
     var changed = current.stream().filter(module -> requirements.stream().anyMatch(next ->
         next.moduleType().equals(module.getModuleType()) && changed(module, next))).toList();
     if (changed.isEmpty()) return null;
@@ -111,7 +115,10 @@ public class TechnicalDataRequirementRefreshService {
   }
 
   public void refresh(QuoteTechTask task, List<TechnicalDataModuleRequirement> requirements) {
-    if (task.getOaAssignmentVersion() != null && task.getOaAssignmentVersion() > 0) return;
+    if (task.getOaAssignmentVersion() != null && task.getOaAssignmentVersion() > 0) {
+      registerAdditionalRequirements(task, modules.selectByTaskId(task.getId()), requirements);
+      return;
+    }
     var current = modules.selectByTaskId(task.getId());
     Map<String, TechnicalDataModuleRequirement> byType = requirements.stream()
         .collect(Collectors.toMap(TechnicalDataModuleRequirement::moduleType, Function.identity()));
@@ -131,6 +138,42 @@ public class TechnicalDataRequirementRefreshService {
         throw conflict("补录资料已被另一人更新，请刷新后再分派");
       }
     }
+  }
+
+  /** 后置缺口只登记从未分派、从未填写的板块；OA确认追加分派前不开放给原技术员。 */
+  private int registerAdditionalRequirements(QuoteTechTask task, List<QuoteTechModule> current,
+      List<TechnicalDataModuleRequirement> requirements) {
+    if (!Set.of("SUBMITTED", "APPROVED", "PENDING").contains(task.getTaskStatus())
+        || !"PUBLISHED".equals(task.getExternalTaskStatus())) return 0;
+    var updates = new java.util.LinkedHashMap<QuoteTechModule, TechnicalDataModuleRequirement>();
+    for (var module : current) {
+      if (module.getAssigneeUserId() != null || module.getCurrentVersionId() != null
+          || !Set.of("PENDING", "NOT_REQUIRED").contains(module.getModuleStatus())) continue;
+      var next = requirements.stream().filter(value -> value.moduleType().equals(module.getModuleType()))
+          .findFirst().orElse(null);
+      if (next == null || !Set.of(TechnicalDataAvailability.MISSING, TechnicalDataAvailability.AVAILABLE)
+          .contains(next.availability()) || !changed(module, next)) continue;
+      if (!next.required() && !Integer.valueOf(1).equals(module.getRequiredFlag())) continue;
+      updates.put(module, next);
+    }
+    int additions = (int) updates.values().stream().filter(TechnicalDataModuleRequirement::required).count();
+    if (additions > 0) {
+      // 同一事务中先登记任务的新待办轮次，再更新未填报板块；已送审内容的数据库保护仍保留。
+      jdbc.update("""
+        UPDATE lp_quote_tech_task SET task_status='PENDING',task_version=task_version+1,updated_at=NOW(3)
+        WHERE id=? AND active_flag=1
+        """, task.getId());
+      task.setTaskStatus("PENDING");
+      task.setTaskVersion(task.getTaskVersion() + 1);
+    }
+    for (var update : updates.entrySet()) {
+      var module = update.getKey();
+      var next = update.getValue();
+      if (modules.refreshRequirement(module.getId(), module.getRowVersion(), next,
+          next.required() ? "PENDING" : "NOT_REQUIRED") != 1) throw conflict("新增缺口已变化，请刷新后再分派");
+      jdbc.update("UPDATE lp_quote_tech_module SET oa_edit_allowed=0 WHERE id=?", module.getId());
+    }
+    return additions;
   }
 
   private TechnicalDataTaskException conflict(String message) {

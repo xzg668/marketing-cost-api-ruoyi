@@ -11,14 +11,20 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
 import java.util.Set;
+import java.util.ArrayList;
+import java.sql.SQLException;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -44,6 +50,19 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
   @Autowired MockMvc http;
   @Autowired ObjectMapper json;
   @SpyBean OaMessageRepository repository;
+
+  @Test void rejectionNodeIsSavedWithOriginalWorkflowAndCannotBeOverwrittenByReplay() throws Exception {
+    var source = request(1).put("RejectToNodeid", "001327000000123456789");
+    var received = service.receive(PEER, source.toString());
+    long formId = received.at("/data/quoteId").asLong();
+    assertThat(jdbc.queryForObject("SELECT reject_to_node_id FROM lp_oa_quote_document WHERE oa_form_id=?",
+        String.class, formId)).isEqualTo("001327000000123456789");
+    assertThat(service.receive(PEER, source.toString())).isEqualTo(received);
+    assertThatThrownBy(() -> service.receive(PEER, source.deepCopy().put("RejectToNodeid", "OTHER").toString()))
+        .hasMessageContaining("不能覆盖");
+    assertThat(jdbc.queryForObject("SELECT reject_to_node_id FROM lp_oa_quote_document WHERE oa_form_id=?",
+        String.class, formId)).isEqualTo("001327000000123456789");
+  }
 
   @AfterEach
   void resetSpy() {
@@ -174,6 +193,7 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
         .completeQuotation(anyLong(), anyString());
     assertThatThrownBy(() -> service.receive(PEER, r.toString()))
         .isInstanceOf(DataIntegrityViolationException.class);
+    verify(repository, times(1)).completeQuotation(anyLong(), anyString());
     assertThat(
             jdbc.queryForObject(
                 "SELECT COUNT(*) FROM oa_form WHERE oa_no=?",
@@ -186,6 +206,136 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
                 Integer.class,
                 r.path("requestId").asText()))
         .isZero();
+  }
+
+  @Test
+  void concurrentDifferentQuotationsAndReplaysKeepEveryDocumentComplete() throws Exception {
+    var requests = new ArrayList<ObjectNode>();
+    for (int i = 0; i < 8; i++) requests.add(request(i % 6 + 1));
+    var start = new CountDownLatch(1);
+    try (var pool = Executors.newFixedThreadPool(8)) {
+      var futures = requests.stream().map(r -> pool.submit(() -> {
+        start.await();
+        return service.receive(PEER, r.toString());
+      })).toList();
+      start.countDown();
+      for (int i = 0; i < requests.size(); i++) {
+        var result = futures.get(i).get(30, TimeUnit.SECONDS);
+        assertCompleteSingleReceipt(requests.get(i), result);
+        assertThat(service.receive(PEER, requests.get(i).toString())).isEqualTo(result);
+      }
+    }
+  }
+
+  @Test
+  void concurrentDifferentDocumentsCannotClaimTheSameQuotationNumber() throws Exception {
+    var first = request(1);
+    var second = request(1).put("formNo", first.path("formNo").asText());
+    var start = new CountDownLatch(1);
+    try (var pool = Executors.newFixedThreadPool(2)) {
+      var futures = java.util.List.of(first, second).stream().map(r -> pool.submit(() -> {
+        start.await();
+        return http.perform(post(URL).header("Authorization", TOKEN)
+            .contentType("application/json").content(r.toString())).andReturn().getResponse();
+      })).toList();
+      start.countDown();
+      var a = futures.get(0).get(30, TimeUnit.SECONDS);
+      var b = futures.get(1).get(30, TimeUnit.SECONDS);
+      assertThat(java.util.List.of(a.getStatus(), b.getStatus())).containsExactlyInAnyOrder(200, 409);
+      var conflict = a.getStatus() == 409 ? a : b;
+      assertThat(json.readTree(conflict.getContentAsString()).path("code").asText()).isEqualTo("QUOTE_NUMBER_OWNED");
+      assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM oa_form WHERE oa_no=?", Integer.class,
+          first.path("formNo").asText())).isEqualTo(1);
+    }
+  }
+
+  @Test
+  void deadlockAfterBusinessWritesAutomaticallyRetriesTheEntireTransaction() throws Exception {
+    var r = request(2);
+    doThrow(lockFailure(1213)).doCallRealMethod().when(repository).completeQuotation(anyLong(), anyString());
+    var response = http.perform(post(URL).header("Authorization", TOKEN)
+        .contentType("application/json").content(r.toString()))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.code").value("0"))
+        .andReturn().getResponse().getContentAsString();
+    assertCompleteSingleReceipt(r, json.readTree(response));
+    verify(repository, times(2)).completeQuotation(anyLong(), anyString());
+  }
+
+  @Test
+  void actualMysqlDeadlockRecoversWithoutCallerResendingEitherQuotation() throws Exception {
+    long anchorA = service.receive(PEER, request(1).toString()).at("/data/quoteId").asLong();
+    long anchorB = service.receive(PEER, request(1).toString()).at("/data/quoteId").asLong();
+    var first = request(2);
+    var second = request(3);
+    var attempts = new ConcurrentHashMap<String, AtomicInteger>();
+    var bothLocked = new CountDownLatch(2);
+    doAnswer(invocation -> {
+      long messageId = invocation.getArgument(0);
+      String requestId = jdbc.queryForObject("SELECT request_id FROM lp_oa_integration_message WHERE id=?",
+          String.class, messageId);
+      int attempt = attempts.computeIfAbsent(requestId, ignored -> new AtomicInteger()).incrementAndGet();
+      if (attempt == 1) {
+        boolean isFirst = requestId.equals(first.path("requestId").asText());
+        jdbc.queryForObject("SELECT id FROM oa_form WHERE id=? FOR UPDATE", Long.class, isFirst ? anchorA : anchorB);
+        bothLocked.countDown();
+        assertThat(bothLocked.await(10, TimeUnit.SECONDS)).isTrue();
+        // 两个真实 MySQL 事务以相反顺序锁定既有行，确定触发一次 1213。
+        jdbc.queryForObject("SELECT id FROM oa_form WHERE id=? FOR UPDATE", Long.class, isFirst ? anchorB : anchorA);
+      }
+      return invocation.callRealMethod();
+    }).when(repository).completeQuotation(anyLong(), anyString());
+    try (var pool = Executors.newFixedThreadPool(2)) {
+      var a = pool.submit(() -> service.receive(PEER, first.toString()));
+      var b = pool.submit(() -> service.receive(PEER, second.toString()));
+      assertCompleteSingleReceipt(first, a.get(30, TimeUnit.SECONDS));
+      assertCompleteSingleReceipt(second, b.get(30, TimeUnit.SECONDS));
+    }
+    assertThat(attempts.values().stream().mapToInt(AtomicInteger::get).sum()).isEqualTo(3);
+    verify(repository, times(5)).completeQuotation(anyLong(), anyString()); // 两张预置单 + 两张新单的三次尝试
+  }
+
+  @Test
+  void lockWaitTimeoutAlsoRetriesAfterRollback() throws Exception {
+    var r = request(2);
+    doThrow(lockFailure(1205)).doCallRealMethod().when(repository).completeQuotation(anyLong(), anyString());
+    assertCompleteSingleReceipt(r, service.receive(PEER, r.toString()));
+    verify(repository, times(2)).completeQuotation(anyLong(), anyString());
+  }
+
+  @Test
+  void persistentDeadlockStopsAfterThreeAttemptsAndLeavesNoPartialDocument() throws Exception {
+    var r = request(2);
+    doThrow(lockFailure(1213)).when(repository).completeQuotation(anyLong(), anyString());
+    http.perform(post(URL).header("Authorization", TOKEN).contentType("application/json").content(r.toString()))
+        .andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.code").value("STORAGE_UNAVAILABLE"));
+    verify(repository, times(3)).completeQuotation(anyLong(), anyString());
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM oa_form WHERE oa_no=?", Integer.class,
+        r.path("formNo").asText())).isZero();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_quote_document WHERE external_document_id=?",
+        Integer.class, r.path("requestId").asText())).isZero();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_integration_message WHERE request_id=?",
+        Integer.class, r.path("requestId").asText())).isZero();
+  }
+
+  private CannotAcquireLockException lockFailure(int code) {
+    return new CannotAcquireLockException("injected rollback", new SQLException("injected", "40001", code));
+  }
+
+  private void assertCompleteSingleReceipt(ObjectNode r, JsonNode result) {
+    assertThat(result.path("code").asText()).isEqualTo("0");
+    long formId = result.at("/data/quoteId").asLong();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM oa_form WHERE oa_no=?", Integer.class,
+        r.path("formNo").asText())).isEqualTo(1);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM oa_form_item WHERE oa_form_id=?", Integer.class,
+        formId)).isEqualTo(r.path("detailData").size());
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_bom_status WHERE oa_form_id=?", Integer.class,
+        formId)).isEqualTo(r.path("detailData").size());
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_quote_document WHERE external_document_id=? AND oa_form_id=?",
+        Integer.class, r.path("requestId").asText(), formId)).isEqualTo(1);
+    assertThat(jdbc.queryForObject("""
+        SELECT COUNT(*) FROM lp_oa_integration_message m JOIN lp_oa_integration_attempt a ON a.message_id=m.id
+        WHERE m.request_id=? AND m.status='PROCESSED'
+        """, Integer.class, r.path("requestId").asText())).isEqualTo(1);
   }
 
   @Test

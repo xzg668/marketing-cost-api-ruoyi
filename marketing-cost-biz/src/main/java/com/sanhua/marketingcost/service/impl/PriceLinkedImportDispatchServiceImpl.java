@@ -163,6 +163,7 @@ public class PriceLinkedImportDispatchServiceImpl implements PriceLinkedImportDi
         response.getErrors().add(error);
       }
     if ("STANDARD".equals(response.getTemplateType())) {
+      response.setFactorRowCount(workbook.factorRowCount(command.getFileBytes()));
       response.setBusinessRowCount(plan.rows().size());
       response.setMatchedRowCount(plan.rows().size());
     }

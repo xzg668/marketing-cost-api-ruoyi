@@ -62,6 +62,7 @@ public class ElectronicDrawingMaterialResolutionController {
       ElectronicDrawingMaterialResolutionResponse response = service.apply(taskId, request, accountingMonth);
       if (!response.complete()) return response;
       workflowOrchestrator.resumeAfterMaterialSelection(taskId, response.accountingMonth());
+      // 料号保存已提交；组树若发现新的资料缺口，在状态中返回，不能伪装成料号保存失败。
       return service.state(taskId, response.accountingMonth());
     });
   }

@@ -51,6 +51,15 @@ spring:
 
 # OA 人员只由定时同步读取；技术员下拉框始终查询本地 lp_oa_person_directory。
 integration:
+  # 人员 OAuth2：不复用上面的业务公共 token；地址与回调必须在 OA 应用登记。
+  oa-oauth:
+    base-url: ${OA_OAUTH_BASE_URL:}
+    client-id: ${OA_OAUTH_CLIENT_ID:}
+    client-secret: ${OA_OAUTH_CLIENT_SECRET:}
+    redirect-uri: ${OA_OAUTH_REDIRECT_URI:}
+    connect-timeout-ms: ${OA_OAUTH_CONNECT_TIMEOUT_MS:5000}
+    read-timeout-ms: ${OA_OAUTH_READ_TIMEOUT_MS:15000}
+    session-seconds: ${OA_OAUTH_SESSION_SECONDS:7200}
   # OA 出站接口共用一套应用鉴权；令牌仅缓存在本后端进程中。
   oa-auth:
     base-url: ${OA_AUTH_BASE_URL:}
@@ -64,8 +73,14 @@ integration:
   # 原生 submitRequest 共用通道；调试入口默认关闭，不驱动正式分派任务。
   oa-workflow:
     base-url: ${OA_WORKFLOW_BASE_URL:}
+    reject-base-url: ${OA_WORKFLOW_REJECT_BASE_URL:http://172.16.113.57:20600}
     read-timeout-ms: ${OA_WORKFLOW_READ_TIMEOUT_MS:30000}
     debug-enabled: ${OA_WORKFLOW_DEBUG_ENABLED:false}
+    # I07：商用三种流程的 OA 明细表 ID；正式环境可用环境变量或外部配置覆盖。
+    final-cost-sub-form-ids:
+      "[FI-SC-005]": "${OA_I07_SC005_SUBFORM_ID:1315730937451335132}"
+      "[FI-SC-006]": "${OA_I07_SC006_SUBFORM_ID:1317497487388790985}"
+      "[FI-SC-020]": "${OA_I07_SC020_SUBFORM_ID:1315726685492431674}"
   oa-person-directory:
     enabled: ${OA_PERSON_DIRECTORY_ENABLED:false}
     run-at-startup: ${OA_PERSON_DIRECTORY_RUN_AT_STARTUP:false}

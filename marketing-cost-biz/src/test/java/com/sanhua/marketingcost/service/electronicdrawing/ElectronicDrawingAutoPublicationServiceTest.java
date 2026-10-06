@@ -9,9 +9,10 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.sanhua.marketingcost.entity.ElectronicDrawingSourceNode;
 import com.sanhua.marketingcost.entity.QuoteBomSupplementVersion;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
+import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
+import com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService;
 import com.sanhua.marketingcost.service.quotebom.ApprovedElectronicBomRawSnapshotPublisher;
 import com.sanhua.marketingcost.service.quotebom.ApprovedElectronicBomRawSnapshotPublisher.PublicationContext;
 import java.util.List;
@@ -30,7 +31,10 @@ class ElectronicDrawingAutoPublicationServiceTest {
       mock(ElectronicDrawingSourceNodeRepository.class);
   private final ApprovedElectronicBomRawSnapshotPublisher rawPublisher =
       mock(ApprovedElectronicBomRawSnapshotPublisher.class);
+  private final EffectiveTechnicalDataQueryService technicalData =
+      mock(EffectiveTechnicalDataQueryService.class);
 
+  private final ElectronicDrawingBomScope scope = mock(ElectronicDrawingBomScope.class);
   private ElectronicDrawingAutoPublicationService service;
   private ElectronicDrawingWorkContext context;
   private QuoteBomSupplementVersion version;
@@ -39,12 +43,12 @@ class ElectronicDrawingAutoPublicationServiceTest {
   void setUp() {
     service = new ElectronicDrawingAutoPublicationService(
         contextPort, versionMapper, sourceRepository, rawPublisher,
-        mock(com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService.class));
+        technicalData, scope);
+    when(scope.inspect(any(), any(), any())).thenReturn(new ElectronicDrawingBomScope.Plan(List.of(), java.util.Map.of(), java.util.Set.of()));
     context = context("BOM_IN_PROGRESS", "E_DRAWING_COMPOSED", null);
     version = version("DRAFT");
     when(contextPort.load(101L, "COMMERCIAL", "210", "2026-08")).thenReturn(context);
     when(versionMapper.selectById(201L)).thenReturn(version);
-    when(sourceRepository.findPendingByVersionId(201L)).thenReturn(List.of());
     when(rawPublisher.publish(any(PublicationContext.class)))
         .thenReturn("SUPPLEMENT_VERSION:201");
     when(versionMapper.updateById(version)).thenReturn(1);
@@ -67,9 +71,23 @@ class ElectronicDrawingAutoPublicationServiceTest {
   }
 
   @Test
+  void pendingAuxiliaryClassificationKeepsComposedBomAndBlocksPublication() {
+    when(technicalData.resolve(context.oaFormItemId(), context.accountingMonth()))
+        .thenThrow(new EffectiveTechnicalDataException(
+            "TECH_DATA_AUXILIARY_CLASSIFICATION_MISSING", context.oaFormItemId(),
+            context.accountingMonth(), List.of("AUXILIARY"), "辅料待财务归类：防锈液"));
+
+    assertThat(service.blockingReason(context)).isEqualTo("辅料待财务归类：防锈液");
+    assertThatThrownBy(() -> service.publish(101L, "COMMERCIAL", "210", "2026-08"))
+        .isInstanceOf(IllegalStateException.class).hasMessage("辅料待财务归类：防锈液");
+    assertThat(version.getVersionStatus()).isEqualTo("DRAFT");
+    verify(rawPublisher, never()).publish(any(PublicationContext.class));
+    verify(contextPort, never()).completePublication(any(), anyString(), any());
+  }
+
+  @Test
   void unresolvedMappingBlocksPublication() {
-    when(sourceRepository.findPendingByVersionId(201L))
-        .thenReturn(List.of(new ElectronicDrawingSourceNode()));
+    when(scope.inspect(any(), any(), any())).thenReturn(new ElectronicDrawingBomScope.Plan(List.of(), java.util.Map.of(), java.util.Set.of(1L)));
 
     assertThatThrownBy(() -> service.publish(101L, "COMMERCIAL", "210", "2026-08"))
         .isInstanceOf(IllegalStateException.class)

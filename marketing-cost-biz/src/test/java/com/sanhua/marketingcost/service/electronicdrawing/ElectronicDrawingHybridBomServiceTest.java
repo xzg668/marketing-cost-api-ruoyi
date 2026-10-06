@@ -58,7 +58,8 @@ class ElectronicDrawingHybridBomServiceTest {
     service = new ElectronicDrawingHybridBomService(
         contextPort, versionMapper, detailMapper,
         sourceNodeRepository, materialMapper, assembler,
-        org.mockito.Mockito.mock(com.sanhua.marketingcost.service.technicaldata.TechnicalDataManufacturingBomSource.class));
+        org.mockito.Mockito.mock(com.sanhua.marketingcost.service.technicaldata.TechnicalDataManufacturingBomSource.class),
+        ElectronicDrawingTestScope.create(materialMapper, org.mockito.Mockito.mock(ElectronicDrawingU9SubBomPort.class)));
     context = context(4);
     version = version();
     source = source(ElectronicDrawingSourceNode.MATCH_AUTO, "P");
@@ -228,7 +229,11 @@ class ElectronicDrawingHybridBomServiceTest {
     when(sourceNodeRepository.findByVersionId(501L)).thenReturn(List.of(source));
     when(materialMapper.selectByLatestBatchAndCodes(
         anyCollection(), eq(null), eq("COMMERCIAL")))
-        .thenReturn(List.of(material("TOP", "制造件"), material("P", "采购件")));
+        .thenAnswer(call -> {
+          java.util.Collection<String> codes = call.getArgument(0);
+          return List.of(material("TOP", "制造件"), material("P", "采购件")).stream()
+              .filter(row -> codes.contains(row.getMaterialCode())).toList();
+        });
     when(assembler.assemble(any(AssembleCommand.class))).thenReturn(hybrid);
   }
 

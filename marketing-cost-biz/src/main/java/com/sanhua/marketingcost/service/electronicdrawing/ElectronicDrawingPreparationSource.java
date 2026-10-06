@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Objects;
 import org.springframework.stereotype.Service;
 
-/** U9 明确无 BOM 时，提供本报价组树草稿或原产品已批准资料的报价范围内快照。 */
+/** U9 明确无 BOM 时，提供本报价组树草稿或原产品已提交资料的报价范围内快照。 */
 @Service
 public class ElectronicDrawingPreparationSource {
   private static final String PREFIX = "ED_DRAFT:";
@@ -155,6 +155,13 @@ public class ElectronicDrawingPreparationSource {
     if (prepared == null || prepared.preparationRecordId() == null)
       throw new IllegalStateException("本报价 BOM 准备记录尚未建立");
     return true;
+  }
+
+  /** 财务归类完成后接续本单已组好的图库；图号取已确认来源，客户图号允许未填写。 */
+  public String composedDrawingNo(Long itemId, String month, String businessUnit, String org) {
+    var context = contexts.load(itemId, businessUnit, org, month);
+    if (!ElectronicDrawingWorkflowStage.COMPOSED.equals(context.workflowStage())) return null;
+    return requireVersion(context, true).getElectronicDrawingNo();
   }
 
   private QuoteBomMonthlySnapshot sharedSnapshot(

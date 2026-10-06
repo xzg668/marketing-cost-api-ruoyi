@@ -25,18 +25,21 @@ public class ElectronicDrawingAutoPublicationService {
   private final ElectronicDrawingSourceNodeRepository sourceNodeRepository;
   private final ApprovedElectronicBomRawSnapshotPublisher rawSnapshotPublisher;
   private final com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService technicalData;
+  private final ElectronicDrawingBomScope scope;
 
   public ElectronicDrawingAutoPublicationService(
       ElectronicDrawingWorkflowContextPort contextPort,
       QuoteBomSupplementVersionMapper versionMapper,
       ElectronicDrawingSourceNodeRepository sourceNodeRepository,
       ApprovedElectronicBomRawSnapshotPublisher rawSnapshotPublisher,
-      com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService technicalData) {
+      com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService technicalData,
+      ElectronicDrawingBomScope scope) {
     this.contextPort = contextPort;
     this.versionMapper = versionMapper;
     this.sourceNodeRepository = sourceNodeRepository;
     this.rawSnapshotPublisher = rawSnapshotPublisher;
     this.technicalData = technicalData;
+    this.scope = scope;
   }
 
   @Transactional(rollbackFor = Exception.class)
@@ -46,7 +49,6 @@ public class ElectronicDrawingAutoPublicationService {
     String blocked = blockingReason(context);
     if (blocked != null) throw new IllegalStateException(blocked);
     QuoteBomSupplementVersion version = requireVersion(context);
-    ensureNoPendingMappings(version.getId());
 
     if (context.published()) {
       requireAlreadyPublished(version, context);
@@ -59,6 +61,7 @@ public class ElectronicDrawingAutoPublicationService {
     if (!ElectronicDrawingWorkflowStage.COMPOSED.equals(context.workflowStage())) {
       throw new IllegalStateException("电子图库混合 BOM 尚未合成，不能自动发布");
     }
+    ensureResolvedScope(context, version);
     String fingerprint = required(version.getCompositionFingerprint(), "混合 BOM 指纹");
 
     if (!"APPROVED".equals(version.getVersionStatus())) {
@@ -114,10 +117,14 @@ public class ElectronicDrawingAutoPublicationService {
     }
   }
 
-  private void ensureNoPendingMappings(Long versionId) {
-    if (!sourceNodeRepository.findPendingByVersionId(versionId).isEmpty()) {
-      throw new IllegalStateException("电子图库仍有物料未选择 U9 料号，不能自动发布");
-    }
+  private void ensureResolvedScope(ElectronicDrawingWorkContext context, QuoteBomSupplementVersion version) {
+    LocalDate date = version.getEffectiveFrom() == null
+        ? YearMonth.parse(context.accountingMonth()).atDay(1) : version.getEffectiveFrom();
+    var plan = scope.inspect(context, sourceNodeRepository.findByVersionId(version.getId()), date);
+    if (!plan.pendingIds().isEmpty())
+      throw new IllegalStateException("实际参与核算的图库物料仍未选择 U9 料号，不能自动发布");
+    plan.branches().values().stream().filter(branch -> branch.state() == ElectronicDrawingBomScope.State.ERROR)
+        .findFirst().ifPresent(branch -> { throw new IllegalStateException(branch.message()); });
   }
 
   private void validateIdentity(ElectronicDrawingWorkContext context) {

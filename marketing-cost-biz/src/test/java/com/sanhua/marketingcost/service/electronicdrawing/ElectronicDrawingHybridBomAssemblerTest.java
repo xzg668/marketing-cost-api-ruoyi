@@ -9,11 +9,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.sanhua.marketingcost.entity.ElectronicDrawingSourceNode;
+import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybridBomAssembler;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybridBomException;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybridBomAssembler.AssembleCommand;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybridBomAssembler.ElectronicNode;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybridBomAssembler.MaterialSnapshot;
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybridBomAssembler.Nature;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybridBomAssembler.ManufacturingRawNode;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingU9SubBomPort;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingU9SubBomPort.Status;
@@ -29,12 +31,14 @@ import org.junit.jupiter.api.Test;
 @DisplayName("电子图库与 U9 子 BOM 混合合成")
 class ElectronicDrawingHybridBomAssemblerTest {
   private ElectronicDrawingU9SubBomPort port;
+  private PackageComponentIdentifyService packageComponents;
   private ElectronicDrawingHybridBomAssembler assembler;
 
   @BeforeEach
   void setUp() {
     port = mock(ElectronicDrawingU9SubBomPort.class);
-    assembler = new ElectronicDrawingHybridBomAssembler(port);
+    packageComponents = mock(PackageComponentIdentifyService.class);
+    assembler = new ElectronicDrawingHybridBomAssembler(port, packageComponents);
   }
 
   @Test
@@ -47,6 +51,66 @@ class ElectronicDrawingHybridBomAssemblerTest {
     assertThat(result.u9PurchaseLeafCount()).isZero();
     assertThat(result.quotationLeafCount()).isOne();
     verify(port, never()).query(any());
+  }
+
+  @Test
+  void kilogramMaterialUsesDrawingWeightInsteadOfPieceCount() {
+    MaterialSnapshot steelBall = new MaterialSnapshot(
+        "BALL", "钢球", "3.175 G100", null, "DRAW-BALL", "采购件",
+        "CAT", "RAW", "RAW", "千克");
+    var node = new ElectronicNode(1L, 2, "1", null, "DRAW-BALL", "大钢球",
+        new BigDecimal("2"), new BigDecimal("0.1"), "g",
+        ElectronicDrawingSourceNode.MATCH_AUTO, steelBall, null);
+
+    var result = assembler.assemble(command(List.of(node)));
+
+    assertThat(result.nodes().get(1).qtyPerParent()).isEqualByComparingTo("0.0002");
+    assertThat(result.nodes().get(1).qtyPerTop()).isEqualByComparingTo("0.0002");
+  }
+
+  @Test
+  void kilogramMaterialWithoutPositiveDrawingWeightBlocksCosting() {
+    MaterialSnapshot steelBall = new MaterialSnapshot(
+        "BALL", "钢球", "RFK-E04-064011", null, "DRAW-BALL", "委外加工件",
+        "CAT", "RAW", "RAW", "千克");
+    var node = new ElectronicNode(1L, 2, "1", null, "DRAW-BALL", "小钢球",
+        BigDecimal.ONE, BigDecimal.ZERO, "g", ElectronicDrawingSourceNode.MATCH_AUTO, steelBall, null);
+
+    assertThatThrownBy(() -> assembler.assemble(command(List.of(node))))
+        .isInstanceOfSatisfying(ElectronicDrawingHybridBomException.class,
+            error -> assertThat(error.code()).isEqualTo(ElectronicDrawingHybridBomException.BOM_GAP));
+    verify(port, never()).query(any());
+  }
+
+  @Test
+  void kilogramAnchorScalesU9ChildrenUsingWeightAndParentBaseQuantity() {
+    MaterialSnapshot anchor = new MaterialSnapshot(
+        "M", "钢球", null, null, "DRAW-M", "委外件", "CAT", "RAW", "RAW", "kg");
+    when(port.query(any())).thenReturn(SubBomResult.available("M", "210", "COMMERCIAL",
+        List.of(u9("RAW", null, 101L, "RAW", "采购件", "2", "2", 1))));
+    var node = new ElectronicNode(1L, 2, "1", null, "DRAW-M", "小钢球",
+        new BigDecimal("3"), new BigDecimal("0.02"), "g",
+        ElectronicDrawingSourceNode.MATCH_AUTO, anchor, null);
+
+    var result = assembler.assemble(command(List.of(node)));
+
+    assertThat(result.nodes().get(1).qtyPerTop()).isEqualByComparingTo("0.00006");
+    assertThat(result.nodes().get(2).qtyPerTop()).isEqualByComparingTo("0.00006");
+  }
+
+  @Test
+  void electronicChildrenKeepPieceMultiplicityWhenParentUsesKilograms() {
+    MaterialSnapshot parent = new MaterialSnapshot(
+        "M", "部件", null, null, "DRAW-M", "制造件", "CAT", "RAW", "RAW", "kg");
+    when(port.query(any())).thenReturn(SubBomResult.failure(Status.NOT_FOUND, "M", "无 U9 BOM"));
+    var node = new ElectronicNode(1L, 2, "1", null, "DRAW-M", "部件",
+        new BigDecimal("2"), new BigDecimal("10"), "g",
+        ElectronicDrawingSourceNode.MATCH_AUTO, parent, null);
+    var result = assembler.assemble(command(List.of(node,
+        ed(2L, "1.1", "1", "DRAW-P", "3", material("P", "采购件")))));
+
+    assertThat(result.nodes().get(1).qtyPerTop()).isEqualByComparingTo("0.02");
+    assertThat(result.nodes().get(2).qtyPerTop()).isEqualByComparingTo("6");
   }
 
   @Test
@@ -191,13 +255,24 @@ class ElectronicDrawingHybridBomAssemblerTest {
   }
 
   @Test
-  void purchaseWithChildrenIsRejectedInsteadOfSilentlyDroppingData() {
-    assertThatThrownBy(() -> assembler.assemble(command(List.of(
+  void purchaseCutsItsDrawingDescendantsWithoutRequiringTheirMaterialMapping() {
+    var result = assembler.assemble(command(List.of(
         ed(1L, "1", null, "DRAW-P", "1", material("P", "采购件")),
-        ed(2L, "1.1", "1", "DRAW-C", "1", material("C", "采购件"))))))
-        .isInstanceOfSatisfying(ElectronicDrawingHybridBomException.class,
-            error -> assertThat(error.code()).isEqualTo(
-                ElectronicDrawingHybridBomException.STRUCTURE_INVALID));
+        ed(2L, "1.1", "1", "DRAW-C", "1", null))));
+    assertThat(result.nodes()).extracting(node -> node.materialCode()).containsExactly("TOP", "P");
+    verify(port, never()).query(any());
+  }
+
+  @Test
+  void drawingOnlyParentKeepsItsIdentityAndQuantityWithoutBeingQueriedAsU9() {
+    var drawing = new MaterialSnapshot("DRAWING:TH-001", "图库阀体", null, null, "TH-001", "制造件",
+        null, ElectronicDrawingBomScope.DRAWING_NODE, null, "件");
+    var result = assembler.assemble(command(List.of(
+        new ElectronicNode(1L, 2, "1", null, "TH-001", "图库阀体", new BigDecimal("2"),
+            new BigDecimal("150"), "g", ElectronicDrawingSourceNode.MATCH_UNMATCHED, drawing, Nature.MANUFACTURE),
+        ed(2L, "1.1", "1", "RAW-D", "3", material("RAW", "采购件")))));
+    assertThat(result.nodes()).extracting(node -> node.materialCode()).containsExactly("TOP", "DRAWING:TH-001", "RAW");
+    assertThat(result.nodes().get(2).qtyPerTop()).isEqualByComparingTo("6");
     verify(port, never()).query(any());
   }
 
@@ -216,7 +291,8 @@ class ElectronicDrawingHybridBomAssemblerTest {
   void incompleteMappingIsRejectedBeforeAnyU9Query() {
     ElectronicNode unresolved = new ElectronicNode(
         1L, 2, "1", null, "DRAW", "物料", BigDecimal.ONE,
-        ElectronicDrawingSourceNode.MATCH_UNMATCHED, material("M", "制造件"));
+        null, null,
+        ElectronicDrawingSourceNode.MATCH_UNMATCHED, material("M", "制造件"), null);
 
     assertThatThrownBy(() -> assembler.assemble(command(List.of(unresolved))))
         .isInstanceOfSatisfying(ElectronicDrawingHybridBomException.class,
@@ -278,6 +354,34 @@ class ElectronicDrawingHybridBomAssemblerTest {
         .isInstanceOfSatisfying(ElectronicDrawingHybridBomException.class,
             error -> assertThat(error.code()).isEqualTo(
                 ElectronicDrawingHybridBomException.BOM_GAP));
+  }
+
+  @Test
+  void packageParentWithoutRawChildrenIsPreservedForPackageSupplementAndCosting() {
+    when(packageComponents.isPackageComponent("PACKAGE", "COMMERCIAL")).thenReturn(true);
+    when(port.query(any())).thenReturn(SubBomResult.available("M", "210", "COMMERCIAL",
+        List.of(u9("package", null, 101L, "PACKAGE", "虚拟", "2", "1", 1),
+            u9("raw", null, 102L, "RAW", "采购件", "3", "1", 2))));
+
+    var result = assembler.assemble(command(List.of(
+        ed(1L, "1", null, "D", "4", material("M", "制造件")))));
+
+    var parent = result.nodes().stream().filter(node -> "PACKAGE".equals(node.materialCode()))
+        .findFirst().orElseThrow();
+    assertThat(parent.qtyPerTop()).isEqualByComparingTo("8");
+    assertThat(parent.nodeSourceType()).isEqualTo(ElectronicDrawingHybridBomAssembler.SOURCE_U9_EXPANDED);
+    assertThat(result.u9PurchaseLeafCount()).isOne();
+  }
+
+  @Test
+  void nonPackageVirtualLeafStillBlocksComposition() {
+    when(port.query(any())).thenReturn(SubBomResult.available("M", "210", "COMMERCIAL",
+        List.of(u9("virtual", null, 101L, "VIRTUAL", "虚拟", "1", "1", 1))));
+
+    assertThatThrownBy(() -> assembler.assemble(command(List.of(
+        ed(1L, "1", null, "D", "1", material("M", "制造件"))))))
+        .isInstanceOfSatisfying(ElectronicDrawingHybridBomException.class,
+            error -> assertThat(error.code()).isEqualTo(ElectronicDrawingHybridBomException.BOM_GAP));
   }
 
   @Test
@@ -387,7 +491,7 @@ class ElectronicDrawingHybridBomAssemblerTest {
       MaterialSnapshot material) {
     return new ElectronicNode(
         id, id.intValue() + 1, sequence, parent, drawing, "电子物料" + id,
-        new BigDecimal(quantity), ElectronicDrawingSourceNode.MATCH_AUTO, material);
+        new BigDecimal(quantity), null, null, ElectronicDrawingSourceNode.MATCH_AUTO, material, null);
   }
 
   private MaterialSnapshot material(String code, String nature) {

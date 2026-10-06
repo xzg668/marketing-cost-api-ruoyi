@@ -153,11 +153,15 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     String buildBatchId = null;
     QuoteBomStatusItemResponse checked =
         quoteBomStatusService.checkItemForCostRun(form.getOaNo(), item.getId(), periodMonth);
-    if (!isCostReadyBomStatus(checked == null ? null : checked.getBomStatus())
+    ElectronicDrawingCostingFallbackService.AttemptResult electronic =
+        electronicDrawingFallbackService.resumeComposed(form, item, periodMonth);
+    if (!electronic.attempted()
+        && !isCostReadyBomStatus(checked == null ? null : checked.getBomStatus())
         && checked != null
         && QuoteBomStatusCode.NO_BOM.getCode().equals(checked.getBomStatus())) {
-      ElectronicDrawingCostingFallbackService.AttemptResult electronic =
-          electronicDrawingFallbackService.attempt(form, item, periodMonth);
+      electronic = electronicDrawingFallbackService.attempt(form, item, periodMonth);
+    }
+    if (electronic.attempted()) {
       drawingDraftReady = com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowStage.COMPOSED.equals(electronic.stage());
       if (electronic.costingCanContinue()) {
         checked = quoteBomStatusService.checkItemForCostRun(

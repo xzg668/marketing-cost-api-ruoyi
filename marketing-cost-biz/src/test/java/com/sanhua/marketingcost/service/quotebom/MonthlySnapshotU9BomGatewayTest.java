@@ -33,7 +33,7 @@ class MonthlySnapshotU9BomGatewayTest {
   @BeforeEach
   void setUp() {
     gateway = new MonthlySnapshotU9BomGateway(mapper, live, details, clock);
-    when(details.load(any())).thenReturn(List.of(new BomRawHierarchy()));
+    when(details.loadCurrent(any())).thenReturn(List.of(new BomRawHierarchy()));
   }
 
   @Test
@@ -86,7 +86,7 @@ class MonthlySnapshotU9BomGatewayTest {
     old.setBomBatchId("OLD-DELETED-BATCH");
     when(mapper.selectU9MonthlyByIdentity(any())).thenReturn(old);
     when(mapper.selectU9MonthlyByIdentityForUpdate(any())).thenReturn(old);
-    when(details.load(301L)).thenReturn(List.of());
+    when(details.loadCurrent(301L)).thenReturn(List.of());
     org.mockito.Mockito.doThrow(new MonthlyBomSnapshotDetailService.SourceUnavailableException("旧批次已不存在"))
         .when(details).captureU9(eq(301L), any(), eq("OLD-DELETED-BATCH"));
     when(live.readLive(any())).thenReturn(

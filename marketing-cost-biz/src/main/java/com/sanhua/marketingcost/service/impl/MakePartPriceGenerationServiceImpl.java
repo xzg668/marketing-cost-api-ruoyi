@@ -633,6 +633,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       row.setRawSourcePriceBatchNo(rawPrice.getEvidence().sourceBatchNo());
     }
     if (technical != null) {
+      row.setDrawingNo(technical.material().evidence().parentDrawingNo());
       row.setRawUnitPrice(com.sanhua.marketingcost.service.technicaldata.TechnicalDataManufacturingUnits
           .pricePerKg(row.getRawUnitPrice(), technical.material().unit()));
       row.setStockUnit("kg");
@@ -772,9 +773,9 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     if (parentCode == null) {
       return List.of();
     }
-    List<BomU9Source> u9Children =
-        sourceDataService.listDedupedChildren(
-            parentCode, quoteDate, parent.getPriceOrgCode());
+    // DRAWING: 是图库节点的内部核算身份，不能作为 U9 料号查询。
+    List<BomU9Source> u9Children = parentCode.startsWith("DRAWING:") || parentCode.startsWith("DRAWING#")
+        ? List.of() : sourceDataService.listDedupedChildren(parentCode, quoteDate, parent.getPriceOrgCode());
     List<BomU9Source> normalizedChildren = u9Children == null ? List.of() : u9Children;
     if (normalizedChildren.isEmpty()) {
       var input = manufacturingInputs.forParent(parent);

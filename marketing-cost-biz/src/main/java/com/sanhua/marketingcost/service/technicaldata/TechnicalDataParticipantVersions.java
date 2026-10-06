@@ -15,7 +15,7 @@ import java.util.Objects;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 
-/** 个人冻结、定向恢复和批准版本汇总。调用方先锁任务，随后按产品、版本、模块顺序加锁。 */
+/** 个人冻结、定向恢复和提交版本汇总。调用方先锁任务，随后按产品、版本、模块顺序加锁。 */
 @Service
 public class TechnicalDataParticipantVersions {
   private final TechnicalDataSharedModules sharedModules;
@@ -122,8 +122,8 @@ public class TechnicalDataParticipantVersions {
     restore(product, person, Long.valueOf(sourceId), actorId);
   }
 
-  /** 报价员可再次退回先前轮次批准的板块，读取各板块自己的批准版本。 */
-  public void restoreApproved(QuoteTechProduct product, Recipient person, long actorId) {
+  /** 报价员可再次退回先前轮次提交的板块，读取各板块自己的提交版本。 */
+  public void restoreSubmitted(QuoteTechProduct product, Recipient person, long actorId) {
     restore(product, person, null, actorId);
   }
 
@@ -138,7 +138,7 @@ public class TechnicalDataParticipantVersions {
       Long id = sourceId == null ? module.getCurrentVersionId() : sourceId;
       if (id == null) throw conflict("退回板块缺少原已提交版本");
       var source = verified(id, product.getId());
-      if (sourceId == null && !"APPROVED".equals(source.getVersionStatus())) throw conflict("退回板块尚未批准");
+      if (sourceId == null && !TechnicalDataSubmissionState.submitted(source.getVersionStatus())) throw conflict("退回板块尚未成功提交");
       sourceIds.put(module.getModuleType(), id);
       copyModule(source, next, module.getModuleType());
     }
@@ -154,7 +154,7 @@ public class TechnicalDataParticipantVersions {
       }
       copyDetails(next.getId(), source.getValue(), Set.of(source.getKey()));
     }
-    // 未退回的审批板块仍指向原冻结版本，其他人的草稿内容及明细保持原样。
+    // 未退回的已提交板块仍指向原冻结版本，其他人的草稿内容及明细保持原样。
     for (var module : own) setModule(module, next.getId(), "RETURNED");
     product.setCurrentEditVersionId(next.getId());
     product.setEffectiveVersionId(null);
@@ -171,20 +171,31 @@ public class TechnicalDataParticipantVersions {
     }
   }
 
-  /** 只组装各模块实际批准的版本，避免将其他人的未提交草稿带入核算。 */
+  /** 只组装各模块已成功提交的版本，避免将其他人的未提交草稿带入核算。 */
   public QuoteTechDataVersion activate(QuoteTechProduct product, long actorId) {
     var modules = repository.lockModules(product.getId());
     var required = modules.stream().filter(module -> Integer.valueOf(1).equals(module.getRequiredFlag())).toList();
-    if (required.isEmpty() || required.stream().anyMatch(module -> !"APPROVED".equals(module.getModuleStatus()))) return null;
-    if (!dependencies.approvedIssues(modules).isEmpty()) return null;
-    if (modules.stream().anyMatch(module -> !Set.of("AVAILABLE", "MISSING").contains(
+    if (required.isEmpty() || required.stream().anyMatch(module -> !TechnicalDataSubmissionState.submitted(module.getModuleStatus()))) return null;
+    if (!dependencies.submittedIssues(modules).isEmpty()) return null;
+    // 后置的制造、包装、价格要等图库 BOM 发布后才能判定；它们未分派时不阻止本轮已提交资料生效。
+    if (required.stream().anyMatch(module -> !Set.of("AVAILABLE", "MISSING").contains(
         module.getSourceAvailability() == null ? "UNCONFIRMED" : module.getSourceAvailability()))) return null;
+    if (product.getEffectiveVersionId() != null) return verified(product.getEffectiveVersionId(), product.getId());
+    var sourceIds = required.stream().map(QuoteTechModule::getCurrentVersionId).distinct().toList();
+    // 全部板块来自同一次提交时，该冻结版本已经完整，无需再复制一份相同的生效版本。
+    // 多人提交或部分板块退回后，仍按各板块最新提交组装完整版本。
+    if (sourceIds.size() == 1 && sourceIds.getFirst() != null) {
+      var submitted = verified(sourceIds.getFirst(), product.getId());
+      if (!TechnicalDataSubmissionState.submitted(submitted.getVersionStatus())) throw conflict("汇总模块没有已提交版本");
+      activateProduct(product, submitted);
+      return submitted;
+    }
     var current = draft(product);
     var aggregate = scopedDraft(current, repository.maxVersionNo(product.getId()) + 1, actorId, now(), Set.of());
     Map<String, Long> sources = new LinkedHashMap<>();
     for (var module : required) {
       var source = verified(module.getCurrentVersionId(), product.getId());
-      if (!"APPROVED".equals(source.getVersionStatus())) throw conflict("汇总模块没有已批准版本");
+      if (!TechnicalDataSubmissionState.submitted(source.getVersionStatus())) throw conflict("汇总模块没有已提交版本");
       copyModule(source, aggregate, module.getModuleType());
       sources.put(module.getModuleType(), source.getId());
     }
@@ -194,13 +205,16 @@ public class TechnicalDataParticipantVersions {
     sources.forEach((type, sourceId) -> copyDetails(aggregate.getId(), sourceId, Set.of(type)));
     var frozen = freezeCopy(aggregate.getId(), actorId);
     var submitted = transition(frozen, "SUBMITTED", actorId);
-    var approved = transition(submitted, "APPROVED", actorId);
-    product.setEffectiveVersionId(approved.getId());
+    activateProduct(product, submitted);
+    return submitted;
+  }
+
+  private void activateProduct(QuoteTechProduct product, QuoteTechDataVersion submitted) {
+    product.setEffectiveVersionId(submitted.getId());
     product.setEffectiveAt(now());
-    product.setEffectiveReviewRound(approved.getVersionNo());
-    product.setProductStatus("APPROVED");
+    product.setEffectiveReviewRound(submitted.getVersionNo());
+    product.setProductStatus("SUBMITTED");
     saveProduct(product);
-    return approved;
   }
 
   public QuoteTechDataVersion verified(long id, long productId) {

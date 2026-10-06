@@ -7,6 +7,7 @@ import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.util.Comparator;
@@ -72,6 +73,8 @@ public class ApprovedElectronicBomRawSnapshotPublisher {
     }
 
     Set<String> parentPaths = structuralParentPaths(details);
+    Map<String, QuoteBomSupplementDetail> detailsByPath = details.stream().collect(Collectors.toMap(
+        QuoteBomSupplementDetail::getPath, Function.identity()));
     LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     YearMonth approvedMonth = YearMonth.parse(required(
         product.accountingMonth(), "电子图库BOM缺少核算月份"));
@@ -81,7 +84,7 @@ public class ApprovedElectronicBomRawSnapshotPublisher {
         .toList()) {
       BomRawHierarchy row = toRaw(
           detail, product, productCode, priceOrg, businessUnit, batchId,
-          parentPaths, approvedMonth, now);
+          parentPaths, detailsByPath, approvedMonth, now);
       rawMapper.insert(row);
     }
     return batchId;
@@ -95,6 +98,7 @@ public class ApprovedElectronicBomRawSnapshotPublisher {
       String businessUnit,
       String batchId,
       Set<String> parentPaths,
+      Map<String, QuoteBomSupplementDetail> detailsByPath,
       YearMonth approvedMonth,
       LocalDateTime builtAt) {
     BomRawHierarchy row = new BomRawHierarchy();
@@ -111,7 +115,7 @@ public class ApprovedElectronicBomRawSnapshotPublisher {
         ? detail.getSourceRawHierarchyId()
         : detail.getSourceU9BomId());
     row.setSourceLineKey(sourceLineKey(product.supplementVersionId(), detail));
-    row.setQtyPerParent(detail.getQtyPerParent());
+    row.setQtyPerParent(relativeQuantity(detail, detailsByPath));
     row.setQtyPerTop(detail.getQtyPerTop());
     row.setMaterialName(detail.getMaterialName());
     row.setMaterialSpec(detail.getMaterialSpec());
@@ -139,6 +143,19 @@ public class ApprovedElectronicBomRawSnapshotPublisher {
     return row;
   }
 
+  private BigDecimal relativeQuantity(QuoteBomSupplementDetail detail,
+      Map<String, QuoteBomSupplementDetail> detailsByPath) {
+    if (detail.getLevel() != null && detail.getLevel() == 0) return BigDecimal.ONE;
+    // 统一原始层只保存相对父用量，不保存母件底数。图库明细已完成重量与 U9 底数换算，
+    // 以累计用量反推相对用量，避免下游重新展开时把件数或底数再算一遍。
+    QuoteBomSupplementDetail parent = detailsByPath.get(parentPath(detail.getPath()));
+    if (parent == null || detail.getQtyPerTop() == null
+        || parent.getQtyPerTop() == null || parent.getQtyPerTop().signum() <= 0) {
+      throw new IllegalStateException("电子图库 BOM 缺少有效父项累计用量：" + detail.getMaterialCode());
+    }
+    return detail.getQtyPerTop().divide(parent.getQtyPerTop(), 16, RoundingMode.HALF_UP);
+  }
+
   /** 当前报价准备价格时复用同一字段转换；只返回草稿，不发布原始层或审批版本。 */
   public List<BomRawHierarchy> preview(PublicationContext product, String batchId) {
     List<QuoteBomSupplementDetail> details = detailMapper.selectList(
@@ -147,9 +164,11 @@ public class ApprovedElectronicBomRawSnapshotPublisher {
             .orderByAsc(QuoteBomSupplementDetail::getLineNo));
     if (details == null || details.isEmpty()) throw new IllegalStateException("电子图库草稿没有已组树明细");
     Set<String> parents = structuralParentPaths(details);
+    Map<String, QuoteBomSupplementDetail> detailsByPath = details.stream().collect(Collectors.toMap(
+        QuoteBomSupplementDetail::getPath, Function.identity()));
     return details.stream().map(detail -> {
       var row = toRaw(detail, product, product.productCode(), product.priceOrgCode(),
-          product.businessUnitType(), batchId, parents, YearMonth.parse(product.accountingMonth()), null);
+          product.businessUnitType(), batchId, parents, detailsByPath, YearMonth.parse(product.accountingMonth()), null);
       row.setBomStatus("DRAFT");
       return row;
     }).toList();
@@ -164,6 +183,8 @@ public class ApprovedElectronicBomRawSnapshotPublisher {
       String businessUnit,
       String batchId) {
     Set<String> parentPaths = structuralParentPaths(details);
+    Map<String, QuoteBomSupplementDetail> detailsByPath = details.stream().collect(Collectors.toMap(
+        QuoteBomSupplementDetail::getPath, Function.identity()));
     YearMonth month = YearMonth.parse(required(
         product.accountingMonth(), "电子图库BOM缺少核算月份"));
     // 历史 source_line_key 曾包含 U9 行 ID；按已审核版本的结构路径校验，可兼容旧快照。
@@ -172,7 +193,7 @@ public class ApprovedElectronicBomRawSnapshotPublisher {
     for (QuoteBomSupplementDetail detail : details) {
       BomRawHierarchy expected = toRaw(
           detail, product, productCode, priceOrg, businessUnit, batchId,
-          parentPaths, month, null);
+          parentPaths, detailsByPath, month, null);
       BomRawHierarchy actual = byPath.get(expected.getPath());
       if (actual == null || !sameRaw(actual, expected)) {
         throw new IllegalStateException("电子图库BOM原始快照与已发布版本不一致，禁止覆盖");

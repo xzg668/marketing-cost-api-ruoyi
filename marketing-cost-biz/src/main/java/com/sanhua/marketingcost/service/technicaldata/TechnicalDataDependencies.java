@@ -72,9 +72,9 @@ public class TechnicalDataDependencies {
     return result;
   }
 
-  public List<Issue> approvedIssues(List<QuoteTechModule> modules) {
+  public List<Issue> submittedIssues(List<QuoteTechModule> modules) {
     Map<Long, QuoteTechDataVersion> versions = new LinkedHashMap<>();
-    modules.stream().filter(module -> "APPROVED".equals(module.getModuleStatus()) && module.getCurrentVersionId() != null)
+    modules.stream().filter(module -> TechnicalDataSubmissionState.submitted(module.getModuleStatus()) && module.getCurrentVersionId() != null)
         .forEach(module -> versions.computeIfAbsent(module.getCurrentVersionId(), id -> repository.findVersion(id).orElseThrow()));
     return versions.values().stream().flatMap(version -> stale(version, modules).stream()).distinct().toList();
   }

@@ -16,6 +16,26 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 class QuoteCostRunTaskExecutorTest {
+  private final com.sanhua.marketingcost.service.SysUserService users = org.mockito.Mockito.mock(com.sanhua.marketingcost.service.SysUserService.class);
+
+  @org.junit.jupiter.api.BeforeEach void validSubmitter() {
+    org.mockito.Mockito.when(users.findByUsername(org.mockito.ArgumentMatchers.anyString())).thenAnswer(call -> {
+      var user = new com.sanhua.marketingcost.entity.SysUser();
+      user.setUserId(7L); user.setUserName(call.getArgument(0)); user.setStatus("0"); user.setDelFlag("0");
+      return user;
+    });
+    org.mockito.Mockito.when(users.findPermissionsByUserId(7L)).thenReturn(java.util.Set.of("ingest:quote:cost-run:execute"));
+  }
+
+  @Test void revokedPermissionDoesNotExecuteQueuedCosting() {
+    var pipeline = org.mockito.Mockito.mock(ProductCostingPipeline.class);
+    org.mockito.Mockito.when(users.findPermissionsByUserId(7L)).thenReturn(java.util.Set.of());
+    var executor = new QuoteCostRunTaskExecutor(pipeline, new ObjectMapper(), users);
+    assertThatThrownBy(() -> executor.execute(task(), "worker-1")).hasMessageContaining("已无核算权限");
+    org.mockito.Mockito.verifyNoInteractions(pipeline);
+    assertThat(org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication()).isNull();
+  }
+
 
   private ProductCostingPipeline pipeline(java.util.function.Function<ProductCostingRequest, ProductCostingResult> action) {
     var pipeline = org.mockito.Mockito.mock(ProductCostingPipeline.class);
@@ -37,7 +57,7 @@ class QuoteCostRunTaskExecutorTest {
           captured.set(request);
           return result("SUCCESS", "产品核算成功");
         });
-    QuoteCostRunTaskExecutor executor = new QuoteCostRunTaskExecutor(pipeline, new ObjectMapper());
+    QuoteCostRunTaskExecutor executor = new QuoteCostRunTaskExecutor(pipeline, new ObjectMapper(), users);
 
     CostRunTaskExecutionResult execution = executor.execute(task(), "worker-1");
 
@@ -59,6 +79,7 @@ class QuoteCostRunTaskExecutorTest {
     AtomicReference<String> contextBusinessUnit = new AtomicReference<>();
     ProductCostingPipeline pipeline = pipeline(request -> {
       captured.set(request);
+      assertThat(new com.sanhua.marketingcost.security.PermissionService().hasPermi("ingest:quote:cost-run:execute")).isTrue();
       contextUsername.set(
           org.springframework.security.core.context.SecurityContextHolder.getContext()
               .getAuthentication()
@@ -66,7 +87,7 @@ class QuoteCostRunTaskExecutorTest {
       contextBusinessUnit.set(BusinessUnitContext.getCurrentBusinessUnitType());
       return result("SUCCESS", "产品核算成功");
     });
-    QuoteCostRunTaskExecutor executor = new QuoteCostRunTaskExecutor(pipeline, new ObjectMapper());
+    QuoteCostRunTaskExecutor executor = new QuoteCostRunTaskExecutor(pipeline, new ObjectMapper(), users);
     CostRunTask task = task();
     task.setRequestSnapshotJson("{\"submittedBy\":\"quote-user\"}");
     task.setBusinessUnitType("COMMERCIAL");
@@ -87,7 +108,7 @@ class QuoteCostRunTaskExecutorTest {
   void blockedPipelineResultBecomesCollaborationSignal() {
     QuoteCostRunTaskExecutor executor =
         new QuoteCostRunTaskExecutor(
-            pipeline(request -> result("BLOCKED", "缺少 3 项价格")), new ObjectMapper());
+            pipeline(request -> result("BLOCKED", "缺少 3 项价格")), new ObjectMapper(), users);
 
     assertThatThrownBy(() -> executor.execute(task(), "worker-1"))
         .isInstanceOfSatisfying(
@@ -102,7 +123,7 @@ class QuoteCostRunTaskExecutorTest {
   void failedPipelineResultCarriesExplicitRetryPolicy() {
     QuoteCostRunTaskExecutor executor =
         new QuoteCostRunTaskExecutor(
-            pipeline(request -> result("FAILED", "价格服务超时")), new ObjectMapper());
+            pipeline(request -> result("FAILED", "价格服务超时")), new ObjectMapper(), users);
 
     assertThatThrownBy(() -> executor.execute(task(), "worker-1"))
         .isInstanceOfSatisfying(
@@ -121,7 +142,7 @@ class QuoteCostRunTaskExecutorTest {
             pipeline(request -> {
               throw new IllegalStateException("流水线异常");
             }),
-            new ObjectMapper());
+            new ObjectMapper(), users);
     CostRunTask task = task();
     task.setRequestSnapshotJson("{\"submittedBy\":\"quote-user\"}");
     task.setBusinessUnitType("COMMERCIAL");

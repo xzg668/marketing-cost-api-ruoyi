@@ -2,6 +2,12 @@
 # --spring.config.additional-location=file:/部署目录/oa-integration.yml
 # 模拟与真实环境均须显式配置；默认关闭。密钥从部署环境注入，不写入此文件。
 integration:
+  # E10 人员 OAuth2；secret 由部署环境注入，不写入代码仓库。
+  oa-oauth:
+    base-url: ${OA_OAUTH_BASE_URL:http://172.16.113.57:20600}
+    client-id: ${OA_OAUTH_CLIENT_ID:030afa62-02c9-4817-ac62-18995ee284ac}
+    client-secret: ${OA_OAUTH_CLIENT_SECRET:}
+    redirect-uri: ${OA_OAUTH_REDIRECT_URI:http://172.16.113.239:8081/api/v1/auth/oa/callback}
   # 同一 OA 应用的各出站接口共用。旧 OA_PERSON_DIRECTORY_* 鉴权变量迁至 OA_AUTH_*。
   oa-auth:
     base-url: ${OA_AUTH_BASE_URL:}
@@ -15,8 +21,20 @@ integration:
   # 地址留空沿用 OA_AUTH_BASE_URL。仅联调时开启管理员调试入口。
   oa-workflow:
     base-url: ${OA_WORKFLOW_BASE_URL:}
+    # 20260929 文档的 OA 直连退回地址；ESB 提交地址仍由 base-url 配置。
+    reject-base-url: ${OA_WORKFLOW_REJECT_BASE_URL:http://172.16.113.57:20600}
     read-timeout-ms: ${OA_WORKFLOW_READ_TIMEOUT_MS:30000}
     debug-enabled: ${OA_WORKFLOW_DEBUG_ENABLED:false}
+    # I02/I05技术员字段；006/020须由OA确认后配置，留空时拒绝分派/退回。
+    technical-people-data-keys:
+      "[FI-SC-005]": "${OA_I02_SC005_TECHNICIAN_FIELD:jsy}"
+      "[FI-SC-006]": "${OA_I02_SC006_TECHNICIAN_FIELD:}"
+      "[FI-SC-020]": "${OA_I02_SC020_TECHNICIAN_FIELD:}"
+    # I07：商用三种流程的 OA 明细表 ID；正式环境可用环境变量或外部配置覆盖。
+    final-cost-sub-form-ids:
+      "[FI-SC-005]": "${OA_I07_SC005_SUBFORM_ID:1315730937451335132}"
+      "[FI-SC-006]": "${OA_I07_SC006_SUBFORM_ID:1317497487388790985}"
+      "[FI-SC-020]": "${OA_I07_SC020_SUBFORM_ID:1315726685492431674}"
   # 每日全量读取 OA 后原子替换本地人员目录；报价页面不直连 OA。
   oa-person-directory:
     enabled: ${OA_PERSON_DIRECTORY_ENABLED:false}

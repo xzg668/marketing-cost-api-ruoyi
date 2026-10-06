@@ -7,6 +7,7 @@ import com.sanhua.marketingcost.mapper.QuoteTechTaskMapper;
 import com.sanhua.marketingcost.service.quotefinal.QuoteFinalSubmissionRepository;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataActor;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaSubmissionLifecycle;
+import com.sanhua.marketingcost.service.technicaldata.TechnicalDataReturnService;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -14,7 +15,7 @@ import java.util.Set;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
-/** 将 OA 的人员/整单通知落到当前提交；复用既有冻结版本的审批、退回规则。 */
+/** 将 OA 的人员/整单通知落到当前提交；按已提交的冻结版本处理退回。 */
 @Service
 public class OaWorkflowNotificationHandler {
   public record Scope(List<Long> recipientIds, List<Long> submissionIds, Long resultId, boolean localReturn) {}
@@ -28,15 +29,18 @@ public class OaWorkflowNotificationHandler {
   private final QuoteFinalSubmissionRepository results;
   private final OaWorkflowNotificationRepository notifications;
   private final com.sanhua.marketingcost.integration.oa.workflow.OaTechnicalBatchRepository batches;
+  private final TechnicalDataReturnService returns;
 
   public OaWorkflowNotificationHandler(JdbcTemplate jdbc, OaMessageCodec codec, QuoteTechTaskMapper tasks,
       QuoteTechSubmissionMapper submissions, TechnicalDataOaRecipientRepository recipients,
       TechnicalDataOaSubmissionLifecycle lifecycle, TechnicalDataOaWorkflowRepository workflow,
       QuoteFinalSubmissionRepository results, OaWorkflowNotificationRepository notifications,
-      com.sanhua.marketingcost.integration.oa.workflow.OaTechnicalBatchRepository batches) {
+      com.sanhua.marketingcost.integration.oa.workflow.OaTechnicalBatchRepository batches,
+      TechnicalDataReturnService returns) {
     this.jdbc=jdbc; this.codec=codec; this.tasks=tasks; this.submissions=submissions;
     this.recipients=recipients; this.lifecycle=lifecycle; this.workflow=workflow;
     this.results=results; this.notifications=notifications; this.batches=batches;
+    this.returns=returns;
   }
 
   public Scope scope(OaWorkflowNotification event, OaWorkflowNotificationRepository.Document document) {
@@ -63,7 +67,7 @@ public class OaWorkflowNotificationHandler {
     List<Long> submitted = new ArrayList<>();
     for (long id : selected) {
       var person = recipients.findById(id);
-      if (person.latestSubmissionId() == null) throw conflict("TECH_SUBMISSION_NOT_FOUND", "技术员尚未提交本单任务，不能审批或退回：" + person.externalUserId());
+      if (person.latestSubmissionId() == null) throw conflict("TECH_SUBMISSION_NOT_FOUND", "技术员尚未提交本单任务，不能退回：" + person.externalUserId());
       submitted.add(person.latestSubmissionId());
     }
     return new Scope(List.copyOf(selected), List.copyOf(submitted), null, localReturn);
@@ -86,19 +90,17 @@ public class OaWorkflowNotificationHandler {
     if (!changed) return false;
     String state = switch (event.eventType()) {
       case "TECHNICAL" -> "TECHNICAL";
-      case "TECH_APPROVED" -> allApproved(document.id()) ? "MATERIAL_REVIEW" : "TECHNICAL";
       case "COSTING" -> "RECOSTING";
       case "COMPLETED" -> "COMPLETED";
       default -> throw new IllegalStateException("通知类型未校验");
     };
     OaWorkflowNotificationRepository.Quoter quoter = null;
-    if (Set.of("MATERIAL_REVIEW", "RECOSTING").contains(state)) {
+    if (Set.of("COSTING", "RECOSTING").contains(state)) {
       quoter = notifications.quoter(document.id(), scope.resultId() == null ? null : results.find(scope.resultId()).operatorId());
     }
     notifications.applied(flow, document, state, event.reason(), quoter);
     for (long id : jdbc.queryForList("SELECT id FROM lp_oa_technical_flow WHERE oa_form_id=?", Long.class, document.id())) {
       if (quoter != null) {
-        workflow.finance(workflow.lockFlow(id), flow.appliedVersion() + 1, message.id(), quoter.userId());
         workflow.refreshFinance(id);
       } else workflow.invalidateFinance(id);
     }
@@ -116,28 +118,24 @@ public class OaWorkflowNotificationHandler {
       var submission = submissions.selectById(person.latestSubmissionId());
       lifecycle.requireCurrent(task, submission);
       requireVersion(submission.getId(), document.sourceVersion(), "lp_quote_tech_submission");
-      if ("TECH_APPROVED".equals(event.eventType())) {
-        if ("DONE".equals(person.todoStatus()) && "APPROVED".equals(submission.getSubmissionStatus())) continue;
+      if ("OPEN".equals(person.todoStatus()) && ("RETURNED".equals(submission.getSubmissionStatus()) || pendingLocalReturn(person.id()))) continue;
+      if (pendingLocalReturn(person.id())) {
+        var batchId = jdbc.queryForObject("SELECT technical_batch_id FROM lp_oa_integration_message WHERE id=?",
+            String.class, person.returnMessageId());
+        returns.confirmFromNotification(batchId, event, message.id());
+        changed = true;
+        continue;
+      }
+      if ("APPROVED".equals(submission.getSubmissionStatus()) && "DONE".equals(person.todoStatus())) {
+        recipients.revisionScope(person.id(), person.modules());
+        recipients.requestReturn(person.id(), submission.getId(), message.id(), 0, event.reason());
+        lifecycle.financeReturned(task, submission, 0, event.reason());
+      } else {
         requireSent(submission.getSubmissionStatus());
         lifecycle.confirmFromNotification(task, submission);
-        lifecycle.approve(task, submissions.selectById(submission.getId()), message.id(), operator);
-        setEditable(person.taskId(), person.userId(), false);
-      } else {
-        if ("OPEN".equals(person.todoStatus()) && ("RETURNED".equals(submission.getSubmissionStatus()) || pendingLocalReturn(person.id()))) continue;
-        if (pendingLocalReturn(person.id())) {
-          throw conflict("RETURN_RECEIPT_PENDING", "报价系统定向退回尚未完成回执处理，请稍后重试原通知");
-        }
-        if ("APPROVED".equals(submission.getSubmissionStatus()) && "DONE".equals(person.todoStatus())) {
-          recipients.revisionScope(person.id(), person.modules());
-          recipients.requestReturn(person.id(), submission.getId(), message.id(), 0, event.reason());
-          lifecycle.financeReturned(task, submission, 0, event.reason());
-        } else {
-          requireSent(submission.getSubmissionStatus());
-          lifecycle.confirmFromNotification(task, submission);
-          lifecycle.returned(task, submissions.selectById(submission.getId()), message.id(), operator, event.reason());
-        }
-        setEditable(person.taskId(), person.userId(), true);
+        lifecycle.returned(task, submissions.selectById(submission.getId()), message.id(), operator, event.reason());
       }
+      setEditable(person.taskId(), person.userId(), true);
       long sequence = flow.appliedVersion() + 1;
       recipients.sequence(person.id(), sequence);
       workflow.acceptSequence(task.getId(), sequence, message.requestId());
@@ -163,16 +161,8 @@ public class OaWorkflowNotificationHandler {
   }
   private void requireSent(String status) {
     if (!Set.of("SENT", "SENDING", "UNKNOWN").contains(status)) {
-      throw conflict("TECH_SUBMISSION_STATE_CONFLICT", "技术资料当前不是已发送待审批状态，不能使用此通知改变草稿或旧审批结论");
+      throw conflict("TECH_SUBMISSION_STATE_CONFLICT", "技术资料当前不是已发送状态，不能使用此通知改变草稿或旧提交记录");
     }
-  }
-  private boolean allApproved(long formId) {
-    return Boolean.TRUE.equals(jdbc.queryForObject("""
-        SELECT NOT EXISTS(SELECT 1 FROM lp_quote_tech_task t JOIN lp_quote_tech_oa_recipient r ON r.task_id=t.id
-          LEFT JOIN lp_quote_tech_submission s ON s.id=r.latest_submission_id
-          WHERE t.oa_form_id=? AND t.active_flag=1 AND r.active_flag=1
-            AND (r.todo_status<>'DONE' OR COALESCE(s.submission_status,'')<>'APPROVED'))
-        """, Boolean.class, formId));
   }
   private boolean result(OaMessageRepository.Message message, OaWorkflowNotification event,
       OaWorkflowNotificationRepository.Document document, OaWorkflowNotificationRepository.Flow flow, Scope scope) {

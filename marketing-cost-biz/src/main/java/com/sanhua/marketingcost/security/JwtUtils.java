@@ -61,22 +61,14 @@ public class JwtUtils {
         return builder.signWith(key).compact();
     }
 
-    public String generateTechnicalDataSessionToken(
-            String username, String businessUnitType, Long taskId, String environment, long ttlSeconds) {
-        Date now = new Date();
-        var builder = Jwts.builder()
-                .subject(username)
-                .id(UUID.randomUUID().toString())
-                .issuedAt(now)
-                .expiration(Date.from(Instant.ofEpochMilli(now.getTime()).plusSeconds(ttlSeconds)))
-                .claim("tokenType", "TECHNICAL_DATA_SHORT_SESSION")
-                .claim("technicalDataTaskId", taskId)
-                .claim("technicalDataPurpose", "TASK_ENTRY")
-                .claim("technicalDataEnvironment", environment);
-        if (businessUnitType != null && !businessUnitType.isEmpty()) {
-            builder.claim(CLAIM_BUSINESS_UNIT_TYPE, businessUnitType);
-        }
-        return builder.signWith(key).compact();
+    public String generateOaSessionToken(String employeeNo, String name, String businessUnit,
+            long formId, String environment, long ttlSeconds) {
+        Instant now = Instant.now();
+        return Jwts.builder().subject(employeeNo).id(UUID.randomUUID().toString())
+                .issuedAt(Date.from(now)).expiration(Date.from(now.plusSeconds(ttlSeconds)))
+                .claim("tokenType", "OA_COLLABORATION").claim("formId", formId)
+                .claim("displayName", name).claim("environment", environment)
+                .claim(CLAIM_BUSINESS_UNIT_TYPE, businessUnit).signWith(key).compact();
     }
 
     public String getUsernameFromToken(String token) {
@@ -96,33 +88,28 @@ public class JwtUtils {
     public boolean validateToken(String token) {
         try {
             String type = parseClaims(token).get("tokenType", String.class);
-            return type == null || "TECHNICAL_DATA_SHORT_SESSION".equals(type);
+            return type == null || "OA_COLLABORATION".equals(type);
         } catch (JwtException | IllegalArgumentException e) {
             return false;
         }
     }
 
-    public boolean isTechnicalDataSession(String token) {
+    public boolean isOaSession(String token) {
         try {
-            return "TECHNICAL_DATA_SHORT_SESSION".equals(
+            return "OA_COLLABORATION".equals(
                     parseClaims(token).get("tokenType", String.class));
         } catch (JwtException | IllegalArgumentException exception) {
             return false;
         }
     }
 
-    public Long extractTechnicalDataTaskId(String token) {
-        Number value = parseClaims(token).get("technicalDataTaskId", Number.class);
+    public Long extractOaFormId(String token) {
+        Number value = parseClaims(token).get("formId", Number.class);
         return value == null ? null : value.longValue();
     }
 
-    public String extractTechnicalDataPurpose(String token) {
-        return parseClaims(token).get("technicalDataPurpose", String.class);
-    }
-
-    public String extractTechnicalDataEnvironment(String token) {
-        return parseClaims(token).get("technicalDataEnvironment", String.class);
-    }
+    public String extractOaName(String token) { return parseClaims(token).get("displayName", String.class); }
+    public String extractOaEnvironment(String token) { return parseClaims(token).get("environment", String.class); }
 
     private Claims parseClaims(String token) {
         return Jwts.parser()

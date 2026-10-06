@@ -139,8 +139,8 @@ public class TechnicalDataProfileApplicationServiceImpl
 
   private void requireEditable(
       QuoteTechTask task, QuoteTechProduct product, TechnicalDataActor actor) {
-    if (!actor.canAccessTask(task.getId())) {
-      throw forbidden("短时访问会话不允许跨任务操作");
+    if (!actor.canAccessTask(task)) {
+      throw forbidden("OA 协作会话不允许批量修改产品");
     }
     if (!Objects.equals(task.getActiveFlag(), 1) || !Objects.equals(product.getActiveFlag(), 1)) {
       throw forbidden("历史任务只能查看，不能修改");

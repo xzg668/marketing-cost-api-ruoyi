@@ -64,6 +64,64 @@ class ElectronicDrawingExcelParserTest {
   }
 
   @Test
+  void resumesAfterPrintedFooterOnlyAtCompleteHeaderAndKeepsCrossPageParents() throws Exception {
+    try (var book = new XSSFWorkbook(); var output = new ByteArrayOutputStream()) {
+      var sheet = book.createSheet("Sheet");
+      for (int index : List.of(0, 5, 10)) {
+        Row header = sheet.createRow(index);
+        for (int column = 0; column < HEADERS.size(); column++)
+          header.createCell(column).setCellValue(HEADERS.get(column));
+      }
+      for (var detail : List.of(
+          new String[] {"1", "1", "PARENT", "父件", "1", "10"},
+          new String[] {"6", "1.1", "CHILD", "子部件", "2", "3"},
+          new String[] {"11", "1.1.1", "LEAF", "下级原料", "4", "0.5"})) {
+        Row row = sheet.createRow(Integer.parseInt(detail[0]));
+        row.createCell(0).setCellValue(detail[1]);
+        row.createCell(1).setCellValue(detail[2]);
+        row.createCell(2).setCellValue(detail[3]);
+        row.createCell(6).setCellValue(detail[4]);
+        row.createCell(7).setCellValue(detail[5]);
+      }
+      sheet.createRow(2).createCell(0).setCellValue("2026年07月31日浙三司(22)");
+      sheet.createRow(3).createCell(2).setCellValue("审核签字");
+      sheet.createRow(7).createCell(0).setCellValue("技术专用章");
+      sheet.createRow(8).createCell(6).setCellValue("第2页");
+      sheet.createRow(12).createCell(0).setCellValue("共3页");
+      book.write(output);
+      var result = parser.parse("three-pages.xlsx", new ByteArrayInputStream(output.toByteArray()));
+      assertThat(result.issues()).isEmpty();
+      assertThat(result.nodes()).extracting(ElectronicDrawingExcelParseResult.SourceNode::sourceSequence)
+          .containsExactly("1", "1.1", "1.1.1");
+      assertThat(result.nodes()).extracting(ElectronicDrawingExcelParseResult.SourceNode::sourceRowNumber)
+          .containsExactly(2, 7, 12);
+      assertThat(result.nodes().getLast().parentSourceSequence()).isEqualTo("1.1");
+      assertThat(result.nodes().getLast().quantity()).isEqualByComparingTo("4");
+    }
+  }
+
+  @Test
+  void parsesAllThreePagesOfShflSampleWhenAvailable() throws Exception {
+    String configured = System.getProperty("electronic.drawing.shfl.sample");
+    Assumptions.assumeTrue(configured != null && !configured.isBlank(), "未指定SHF(L)正式样例");
+    Path sample = Path.of(configured);
+    Assumptions.assumeTrue(Files.exists(sample), "本机没有SHF(L)样例");
+    ElectronicDrawingExcelParseResult result;
+    try (var input = Files.newInputStream(sample)) {
+      result = parser.parse(sample.getFileName().toString(), input);
+    }
+    assertThat(result.issues()).isEmpty();
+    assertThat(result.nodes()).hasSize(73);
+    assertThat(find(result, "7.1.7.3.1.1")).satisfies(node -> {
+      assertThat(node.parentSourceSequence()).isEqualTo("7.1.7.3.1");
+      assertThat(node.level()).isEqualTo(6);
+      assertThat(node.sourceRowNumber()).isEqualTo(76);
+    });
+    assertThat(find(result, "7.1.1.2").referenceWeight()).isNull();
+    assertThat(find(result, "9").sourceRowNumber()).isEqualTo(97);
+  }
+
+  @Test
   void acceptsWeightAndUnitWeightHeaderAliases() throws Exception {
     for (String weightHeader : List.of("重量", "单重")) {
       byte[] bytes = workbook(0,

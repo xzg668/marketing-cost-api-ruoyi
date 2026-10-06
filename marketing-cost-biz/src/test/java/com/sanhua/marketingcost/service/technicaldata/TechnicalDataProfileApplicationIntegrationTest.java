@@ -126,13 +126,16 @@ class TechnicalDataProfileApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_data_version WHERE product_id=?", Integer.class, product.id())).isOne();
   }
 
-  @Test void onlyAssigneeOrExplicitAdminMayFillAndAdminDoesNotTakeOwnership() {
+  @Test void onlyAssignedTechnicianMayFillAndAdminCannotReplaceTechnician() {
     var product = fixture();
     var stranger = actor(102L, "李工", "technical:data:task:edit");
-    assertThatThrownBy(() -> profiles.save(product.id(), update(false, null, null, null, 0), stranger))
-        .isInstanceOfSatisfying(TechnicalDataTaskException.class, error -> assertThat(error.code()).isEqualTo(TechnicalDataTaskErrorCode.FORBIDDEN));
-    var saved = profiles.save(product.id(), update(false, null, null, null, 0), ADMIN);
-    assertThat(jdbc.queryForObject("SELECT updated_by FROM lp_quote_tech_data_version WHERE id=?", Long.class, saved.versionId())).isEqualTo(1);
+    for (var unauthorized : new TechnicalDataActor[]{stranger, ADMIN}) {
+      assertThatThrownBy(() -> profiles.save(product.id(), update(false, null, null, null, 0), unauthorized))
+          .isInstanceOfSatisfying(TechnicalDataTaskException.class, error -> assertThat(error.code()).isEqualTo(TechnicalDataTaskErrorCode.FORBIDDEN));
+    }
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_data_version WHERE product_id=?", Integer.class, product.id())).isZero();
+    var saved = profiles.save(product.id(), update(false, null, null, null, 0), TECH);
+    assertThat(jdbc.queryForObject("SELECT updated_by FROM lp_quote_tech_data_version WHERE id=?", Long.class, saved.versionId())).isEqualTo(101);
     assertThat(jdbc.queryForObject("SELECT assignee_user_id FROM lp_quote_tech_module WHERE product_id=? AND module_type='PROFILE'", Long.class, product.id())).isEqualTo(101);
   }
 
@@ -146,19 +149,23 @@ class TechnicalDataProfileApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(frozen.getContentSnapshotJson()).contains("unitMouldFee", "0.3").doesNotContain("\"moduleType\":\"SALARY\"");
   }
 
-  @Test void incompletePersistedFeeCannotPassSubmissionEvenForAdmin() {
+  @Test void incompletePersistedFeeCannotPassSubmissionAndAdminCannotAccessDraft() {
     var product = fixture();
     var saved = profiles.save(product.id(), update(false, null, null, null, 0), TECH);
     // Simulates a pre-upgrade incomplete draft; submit must validate contents, not trust READY.
     jdbc.update("UPDATE lp_quote_tech_data_version SET product_fees_json=NULL WHERE id=?", saved.versionId());
-    for (var actor : new TechnicalDataActor[]{TECH, ADMIN}) {
-      var checked = validation.validate(taskId(product), 101L, actor);
-      assertThat(checked.valid()).isFalse();
-      assertThat(checked.issues()).anyMatch(issue -> "hasAdditionalFees".equals(issue.field()));
-      var latest = tasks.detail(taskId(product), actor);
-      assertThatThrownBy(() -> snapshots.prepare(taskId(product), "MISSING-" + actor.userId(), latest.taskVersion(), latest.products().getFirst().rowVersion(), recipients.current(taskId(product)).getFirst(), actor))
-          .hasMessageContaining("本人负责模块");
-    }
+    var latest = tasks.detail(taskId(product), TECH);
+    var checked = validation.validate(taskId(product), 101L, TECH);
+    assertThat(checked.valid()).isFalse();
+    assertThat(checked.issues()).anyMatch(issue -> "hasAdditionalFees".equals(issue.field()));
+    assertThatThrownBy(() -> snapshots.prepare(taskId(product), "MISSING-" + TECH.userId(), latest.taskVersion(), latest.products().getFirst().rowVersion(), recipients.current(taskId(product)).getFirst(), TECH))
+        .hasMessageContaining("本人负责模块");
+    assertThatThrownBy(() -> validation.validate(taskId(product), 101L, ADMIN))
+        .isInstanceOfSatisfying(TechnicalDataTaskException.class, error -> assertThat(error.code()).isEqualTo(TechnicalDataTaskErrorCode.FORBIDDEN));
+    var adminView = tasks.detail(taskId(product), ADMIN).products().getFirst();
+    assertThat(adminView.productStatus()).isEqualTo("PENDING");
+    assertThat(adminView.currentEditVersionId()).isNull();
+    assertThat(adminView.profile().versionId()).isNull();
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_submission WHERE task_id=?", Integer.class, taskId(product))).isZero();
   }
 

@@ -12,6 +12,7 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
+import com.sanhua.marketingcost.entity.QuoteBomSupplementVersion;
 import com.sanhua.marketingcost.mapper.BusinessChangeLogMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
@@ -71,6 +72,28 @@ class QuoteBomElectronicDrawingContextAdapterTest {
     assertThat(result.accountingMonth()).isEqualTo("2026-08");
     assertThat(result.preparationId()).isNull();
     verify(contextResolver).resolveWithExistingCostPeriod(any(), any(), eq("2026-08"));
+  }
+
+  @Test
+  void existingSourceKeepsItsPersistedTaskNumberWhenReloaded() {
+    QuoteBomPreparationRecord preparation = new QuoteBomPreparationRecord();
+    preparation.setId(81L);
+    preparation.setOaFormItemId(10L);
+    preparation.setCostPeriodMonth("2026-08");
+    preparation.setElectronicSourceVersionId(91L);
+    preparation.setActiveFlag(1);
+    QuoteBomSupplementVersion source = new QuoteBomSupplementVersion();
+    source.setId(91L);
+    source.setPreparationId(81L);
+    source.setPeriodMonth("2026-08");
+    source.setTaskNo("ED-OA-1-10-2026-08");
+    when(preparationMapper.selectList(any())).thenReturn(List.of(preparation));
+    when(versionMapper.selectById(91L)).thenReturn(source);
+
+    ElectronicDrawingWorkContext result = adapter.load(10L, "COMMERCIAL", "210", "2026-08");
+
+    assertThat(result.sourceVersionId()).isEqualTo(91L);
+    assertThat(result.taskNo()).isEqualTo(source.getTaskNo());
   }
 
   @Test

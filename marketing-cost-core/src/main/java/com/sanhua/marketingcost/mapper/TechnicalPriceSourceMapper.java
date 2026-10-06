@@ -31,7 +31,7 @@ public interface TechnicalPriceSourceMapper {
       JOIN lp_quote_tech_module m ON m.id=c.owner_module_id AND m.current_version_id=p.technical_version_id
       JOIN lp_quote_tech_data_version v ON v.id=p.technical_version_id
       WHERE p.material_code=#{code} AND p.business_unit_type=#{businessUnit}
-        AND p.technical_publication_status='AVAILABLE' AND m.module_status='APPROVED' AND v.version_status='APPROVED'
+        AND p.technical_publication_status='AVAILABLE' AND m.module_status IN ('SUBMITTED','APPROVED') AND v.version_status IN ('SUBMITTED','APPROVED')
       """)
   List<Source> supplemental(@Param("code") String code, @Param("businessUnit") String businessUnit);
 }

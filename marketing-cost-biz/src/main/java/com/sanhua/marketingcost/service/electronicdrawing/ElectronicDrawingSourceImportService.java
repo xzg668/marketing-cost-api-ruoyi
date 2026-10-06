@@ -92,11 +92,17 @@ public class ElectronicDrawingSourceImportService {
         preparation.getId(), supplementScope, context, quoteDrawingNo, acquired.sha256());
     if (existing != null) {
       List<ElectronicDrawingSourceNode> storedNodes = sourceNodeRepository.findByVersionId(existing.getId());
-      if (!sameImmutableNodes(storedNodes, parsed.nodes())) {
+      boolean sameNodes = sameImmutableNodes(storedNodes, parsed.nodes());
+      // 旧解析器在第一页页脚停止。原文件SHA和全部已存行一致，仅增加后续页时
+      // 创建完整来源的新版本；不覆盖旧节点、料号选择或已提交资料的历史引用。
+      boolean completedPages = !sameNodes && !storedNodes.isEmpty()
+          && storedNodes.size() < parsed.nodes().size()
+          && sameImmutableNodes(storedNodes, parsed.nodes().subList(0, storedNodes.size()));
+      if (!sameNodes && !completedPages) {
         throw error(ElectronicDrawingSourceImportException.SOURCE_INVALID,
             "相同 SHA 的电子图库源版本与已保存原始行不一致");
       }
-      if (sameWeightUnits(storedNodes, parsed.nodes())) {
+      if (sameNodes && sameWeightUnits(storedNodes, parsed.nodes())) {
         boolean current = Objects.equals(context.sourceVersionId(), existing.getId());
         if (!current) {
           attach(context, existing.getId());

@@ -16,16 +16,21 @@ public class TechnicalManufacturingInputs {
   private final TechnicalDataCostingSources sources;
   private final TechnicalDataVersionContentCodec codec;
   private final QuoteBomSupplementDetailMapper details;
+  private final ElectronicDrawingManufacturingInputs drawingInputs;
   public TechnicalManufacturingInputs(TechnicalDataCostingSources sources,
-      TechnicalDataVersionContentCodec codec, QuoteBomSupplementDetailMapper details) {
+      TechnicalDataVersionContentCodec codec, QuoteBomSupplementDetailMapper details,
+      ElectronicDrawingManufacturingInputs drawingInputs) {
     this.sources = sources;
     this.codec = codec;
     this.details = details;
+    this.drawingInputs = drawingInputs;
   }
 
   public Map<String, Input> byParentPath(Long itemId, String month) {
-    var source = sources.preparationSources(itemId, month).get("MANUFACTURING");
-    if (source == null) return Map.of();
+    var selected = sources.preparationSources(itemId, month);
+    var result = new LinkedHashMap<>(drawingInputs.read(selected.get("DRAWING_BOM")));
+    var source = selected.get("MANUFACTURING");
+    if (source == null) return Map.copyOf(result);
     var content = codec.manufacturing(source.version());
     var issues = TechnicalDataManufacturingRules.validate(content, source.product());
     if (!issues.isEmpty()) throw new IllegalArgumentException(String.join("；", issues));
@@ -33,7 +38,7 @@ public class TechnicalManufacturingInputs {
         details.selectList(
             Wrappers.<QuoteBomSupplementDetail>lambdaQuery()
                 .eq(QuoteBomSupplementDetail::getSupplementVersionId, content.evidence().drawingSourceVersionId()));
-    Map<String, Input> result = new LinkedHashMap<>();
+    var submittedPaths = new java.util.HashSet<String>();
     for (var material : content.items()) {
       var parents =
           rows.stream()
@@ -47,11 +52,8 @@ public class TechnicalManufacturingInputs {
         throw new IllegalArgumentException("制造件补录找不到唯一图库节点：" + material.parentSourceNodeId());
       var parent = parents.getFirst();
       requireRawRelation(rows, parent, material);
-      if (result.put(
-              parent.getPath(), new Input(source.version().getId(), parent.getPath(), material))
-          != null) {
-        throw new IllegalArgumentException("制造件补录节点重复");
-      }
+      if (!submittedPaths.add(parent.getPath())) throw new IllegalArgumentException("制造件补录节点重复");
+      result.put(parent.getPath(), new Input(source.version().getId(), parent.getPath(), material));
     }
     return Map.copyOf(result);
   }

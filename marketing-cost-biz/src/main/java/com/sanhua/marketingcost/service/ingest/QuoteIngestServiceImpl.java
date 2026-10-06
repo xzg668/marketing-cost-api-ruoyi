@@ -154,10 +154,11 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     if (oaCuChanged) {
       versionInvalidationService.invalidateByOaCu(form.getOaNo());
     }
-    ItemInsertResult itemInsertResult = replaceItems(form, normalized);
-    replaceExtraFees(form, normalized, itemInsertResult.itemIdMap(), log.getId());
-    replaceExtraFields(form, normalized, itemInsertResult.itemIdMap(), log.getId());
-    replaceBomStatuses(form, normalized, itemInsertResult.itemIdsByPosition());
+    if (existingForm != null) clearExistingDetails(form.getId());
+    ItemInsertResult itemInsertResult = insertItems(form, normalized);
+    insertExtraFees(form, normalized, itemInsertResult.itemIdMap(), log.getId());
+    insertExtraFields(form, normalized, itemInsertResult.itemIdMap(), log.getId());
+    insertBomStatuses(form, normalized, itemInsertResult.itemIdsByPosition());
 
     quoteIngestLogService.markImported(log, normalized, form.getId(), form.getOaNo());
     return importedResponse(log, normalized, form);
@@ -218,10 +219,24 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     return form;
   }
 
-  private ItemInsertResult replaceItems(
-      OaForm form, QuoteNormalizedDocument normalized) {
+  /** 只有未核算历史单重新导入才替换明细；新单不删除空范围，避免并发插入间隙锁冲突。 */
+  private void clearExistingDetails(Long formId) {
+    oaFormExtraFeeMapper.delete(
+        Wrappers.lambdaQuery(OaFormExtraFee.class).eq(OaFormExtraFee::getOaFormId, formId));
+    oaFormHeaderExtraFieldMapper.delete(
+        Wrappers.lambdaQuery(OaFormHeaderExtraField.class)
+            .eq(OaFormHeaderExtraField::getOaFormId, formId));
+    oaFormItemExtraFieldMapper.delete(
+        Wrappers.lambdaQuery(OaFormItemExtraField.class)
+            .eq(OaFormItemExtraField::getOaFormId, formId));
+    quoteBomStatusMapper.delete(
+        Wrappers.lambdaQuery(QuoteBomStatus.class).eq(QuoteBomStatus::getOaFormId, formId));
     oaFormItemMapper.delete(
-        Wrappers.lambdaQuery(OaFormItem.class).eq(OaFormItem::getOaFormId, form.getId()));
+        Wrappers.lambdaQuery(OaFormItem.class).eq(OaFormItem::getOaFormId, formId));
+  }
+
+  private ItemInsertResult insertItems(
+      OaForm form, QuoteNormalizedDocument normalized) {
     Map<String, Long> itemIdMap = new HashMap<>();
     List<Long> itemIdsByPosition = new ArrayList<>();
     for (QuoteNormalizedItem source : normalized.getItems()) {
@@ -274,10 +289,8 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     return new ItemInsertResult(itemIdMap, itemIdsByPosition);
   }
 
-  private void replaceExtraFees(
+  private void insertExtraFees(
       OaForm form, QuoteNormalizedDocument normalized, Map<String, Long> itemIdMap, Long logId) {
-    oaFormExtraFeeMapper.delete(
-        Wrappers.lambdaQuery(OaFormExtraFee.class).eq(OaFormExtraFee::getOaFormId, form.getId()));
     int fallback = 1;
     for (QuoteNormalizedExtraFee source : normalized.getExtraFees()) {
       OaFormExtraFee fee = new OaFormExtraFee();
@@ -301,15 +314,9 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     }
   }
 
-  private void replaceExtraFields(
+  private void insertExtraFields(
       OaForm form, QuoteNormalizedDocument normalized, Map<String, Long> itemIdMap, Long logId) {
     // OA 原始表单扩展字段按 HEADER/ITEM 粒度分表落库，旧混合表仅保留历史兼容。
-    oaFormHeaderExtraFieldMapper.delete(
-        Wrappers.lambdaQuery(OaFormHeaderExtraField.class)
-            .eq(OaFormHeaderExtraField::getOaFormId, form.getId()));
-    oaFormItemExtraFieldMapper.delete(
-        Wrappers.lambdaQuery(OaFormItemExtraField.class)
-            .eq(OaFormItemExtraField::getOaFormId, form.getId()));
     int fallback = 1;
     for (QuoteNormalizedExtraField source : normalized.getExtraFields()) {
       String fieldCode = defaultCode(source.getFieldCode(), "FIELD_" + fallback++);
@@ -376,10 +383,8 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     field.setValueType(defaultCode(source.getValueType(), "TEXT"));
   }
 
-  private void replaceBomStatuses(
+  private void insertBomStatuses(
       OaForm form, QuoteNormalizedDocument normalized, List<Long> itemIdsByPosition) {
-    quoteBomStatusMapper.delete(
-        Wrappers.lambdaQuery(QuoteBomStatus.class).eq(QuoteBomStatus::getOaFormId, form.getId()));
     for (int index = 0; index < normalized.getItems().size(); index++) {
       QuoteNormalizedItem source = normalized.getItems().get(index);
       // 原单可先保存缺识别资料的行；不能创建没有产品身份的 BOM 检查记录。

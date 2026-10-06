@@ -97,13 +97,13 @@ public class TechnicalPriceCorrectionService {
       TechnicalDataActor actor,
       boolean lock) {
     if (context == null || context.technicalVersionId() == null)
-      throw new IllegalArgumentException("缺少补录审批版本及报价上下文");
+      throw new IllegalArgumentException("缺少补录提交版本及报价上下文");
     Scope scope =
         scope(context.oaNo(), context.oaFormItemId(), month, context.technicalVersionId(), lock);
     if (scope == null || !Objects.equals(scope.businessUnit(), businessUnit))
       throw new IllegalArgumentException("补录版本、月份或业务单元与本次报价不一致");
     if (actor == null
-        || actor.shortSession()
+        || actor.oaSession()
         || !(actor.admin() || actor.has("ingest:quote:cost-run:execute")))
       throw new IllegalArgumentException("无权处理本报价的公式修正");
     if (!actor.admin()
@@ -150,21 +150,20 @@ public class TechnicalPriceCorrectionService {
     if (priceModules.isEmpty()) return null;
     var module = priceModules.getFirst();
     if (!Integer.valueOf(1).equals(task.getActiveFlag())
-        || !"APPROVED".equals(task.getTaskStatus())
-        || !"PASSED".equals(task.getReviewStatus())
-        || !"APPROVED".equals(product.getProductStatus())
-        || !"APPROVED".equals(module.getModuleStatus())
+        || !TechnicalDataSubmissionState.submitted(task.getTaskStatus())
+        || !TechnicalDataSubmissionState.submitted(product.getProductStatus())
+        || !TechnicalDataSubmissionState.submitted(module.getModuleStatus())
         || module.getCurrentVersionId() == null) return null;
     if (versionId != null && !versionId.equals(module.getCurrentVersionId()))
-      throw new IllegalArgumentException("审批版本已变化，请回原核算页重新下载");
+      throw new IllegalArgumentException("提交版本已变化，请回原核算页重新下载");
     var version =
         (lock
                 ? technical.lockVersion(module.getCurrentVersionId())
                 : technical.findVersion(module.getCurrentVersionId()))
             .orElseThrow();
     if (!Objects.equals(product.getId(), version.getProductId())
-        || !"APPROVED".equals(version.getVersionStatus()))
-      throw new IllegalArgumentException("价格审批版本已失效");
+        || !TechnicalDataSubmissionState.submitted(version.getVersionStatus()))
+      throw new IllegalArgumentException("价格提交版本已失效");
     String fingerprint =
         codec.fingerprint(
             version,
@@ -173,7 +172,7 @@ public class TechnicalPriceCorrectionService {
             technical.findAuxItems(version.getId()),
             technical.findSalaryItems(version.getId()));
     if (!Objects.equals(fingerprint, version.getContentFingerprint()))
-      throw new IllegalArgumentException("价格审批内容与冻结指纹不一致");
+      throw new IllegalArgumentException("价格提交内容与冻结指纹不一致");
     var content = codec.prices(version);
     List<PriceItem> manual =
         content == null

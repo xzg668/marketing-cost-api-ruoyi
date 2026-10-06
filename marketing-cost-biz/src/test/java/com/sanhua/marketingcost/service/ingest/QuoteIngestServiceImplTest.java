@@ -93,6 +93,11 @@ class QuoteIngestServiceImplTest {
     assertThat(response.getOaFormId()).isEqualTo(100L);
     assertThat(response.getOaNo()).isEqualTo("EXT-T5-001");
     assertThat(response.getClassificationStatus()).isEqualTo("CONFIRMED");
+    verify(oaFormItemMapper, never()).delete(any());
+    verify(oaFormExtraFeeMapper, never()).delete(any());
+    verify(oaFormHeaderExtraFieldMapper, never()).delete(any());
+    verify(oaFormItemExtraFieldMapper, never()).delete(any());
+    verify(quoteBomStatusMapper, never()).delete(any());
     assertThat(response.getQuoteScenario()).isEqualTo("STANDARD_BATCH");
 
     ArgumentCaptor<OaForm> formCaptor = ArgumentCaptor.forClass(OaForm.class);

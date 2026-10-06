@@ -109,6 +109,8 @@ class QuoteCostingWorkbenchServiceImplTest {
     when(workspaceService.find(anyLong(), anyString())).thenReturn(Optional.empty());
     quoteBomStatusService = mock(QuoteBomStatusService.class);
     electronicDrawingFallbackService = mock(ElectronicDrawingCostingFallbackService.class);
+    when(electronicDrawingFallbackService.resumeComposed(any(), any(), anyString()))
+        .thenReturn(new ElectronicDrawingCostingFallbackService.AttemptResult(false, false, null, null));
     when(electronicDrawingFallbackService.attempt(any(), any(), anyString()))
         .thenReturn(new ElectronicDrawingCostingFallbackService.AttemptResult(
             false, false, null, null));
@@ -399,6 +401,26 @@ class QuoteCostingWorkbenchServiceImplTest {
     verify(bomPreparationService)
         .prepareByOaFormItem(10L, CostPricingPeriodUtils.currentPricingDate());
     verify(effectiveBomCostingService).prepareCurrent("OA-001", 10L);
+  }
+
+  @Test
+  void rawMaterialRevisionPreparesCurrentDrawingDespiteOldPublishedBomStatus() {
+    when(oaFormMapper.selectOne(any())).thenReturn(form());
+    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
+    when(electronicDrawingFallbackService.resumeComposed(any(), any(), eq(SAMPLE_PERIOD_MONTH)))
+        .thenReturn(new ElectronicDrawingCostingFallbackService.AttemptResult(
+            true, false, ElectronicDrawingWorkflowStage.COMPOSED, "新原料待补价"));
+    when(effectiveBomCostingService.prepareCurrent("OA-001", 10L))
+        .thenReturn(buildResponse("revised-drawing-build"));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
+        .thenReturn(List.of());
+
+    var response = service.launchWorkbench("OA-001", 10L);
+
+    assertThat(response.getSnapshotGenerated()).isTrue();
+    assertThat(response.getBuildBatchId()).isEqualTo("revised-drawing-build");
+    verify(bomPreparationService, never()).prepareByOaFormItem(anyLong(), any(LocalDate.class));
+    verify(electronicDrawingFallbackService, never()).attempt(any(), any(), anyString());
   }
 
   @Test

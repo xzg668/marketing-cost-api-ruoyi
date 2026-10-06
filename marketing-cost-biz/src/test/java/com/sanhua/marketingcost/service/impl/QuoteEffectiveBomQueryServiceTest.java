@@ -89,6 +89,7 @@ class QuoteEffectiveBomQueryServiceTest {
   private QuoteBomStatusService quoteBomStatusService;
   private QuoteEffectiveBomApplicationServiceImpl service;
   private QuoteBomMonthlySnapshot snapshot;
+  private com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingPreparationSource drawingPreparation;
 
   @BeforeEach
   @SuppressWarnings("unchecked")
@@ -159,6 +160,7 @@ class QuoteEffectiveBomQueryServiceTest {
                 new PlateCommercialMakeBomExpansionService.ExpansionResult(
                     invocation.getArgument(0), Map.of(), Map.of(), List.of()));
 
+    drawingPreparation = mock(com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingPreparationSource.class);
     service =
         new QuoteEffectiveBomApplicationServiceImpl(
             preparationMapper,
@@ -181,7 +183,7 @@ class QuoteEffectiveBomQueryServiceTest {
             contextResolver,
             quoteBomStatusService, new com.sanhua.marketingcost.service.technicaldata.TechnicalBomContributions(
                 (ignoredItem, ignoredMonth) -> null, mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class)),
-            mock(com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingPreparationSource.class));
+            drawingPreparation);
     snapshot = snapshot(42L);
   }
 
@@ -211,6 +213,7 @@ class QuoteEffectiveBomQueryServiceTest {
   void readsFrozenMonthlyRowsAfterFormalTableWasReplaced() {
     when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
     when(monthlyDetails.load(snapshot.getId())).thenReturn(rawRows());
+    when(monthlyDetails.loadCurrent(snapshot.getId())).thenReturn(rawRows());
 
     QuoteEffectiveBomResponse result = service.getEffectiveBom("OA-QEB-11", 42L);
 
@@ -247,6 +250,36 @@ class QuoteEffectiveBomQueryServiceTest {
     assertThat(result.monthlySnapshotId()).isEqualTo(601L);
     assertThat(result.sourceBomBatchId()).isEqualTo("SUPPLEMENT_VERSION:88");
     assertThat(result.nodes()).extracting(node -> node.materialCode()).containsExactly("P", "A");
+  }
+
+  @Test
+  void currentRawRevisionOverridesOldPublishedDrawingSnapshot() {
+    var u9Missing = snapshot(42L);
+    u9Missing.setSyncStatus("NOT_FOUND");
+    var oldPublished = snapshot(42L);
+    oldPublished.setBomSource("ELECTRONIC_DRAWING_EXCEL");
+    oldPublished.setBomBatchId("SUPPLEMENT_VERSION:88");
+    when(monthlyMapper.selectList(any(Wrapper.class)))
+        .thenReturn(List.of(u9Missing), List.of(oldPublished));
+    var revised = snapshot(42L);
+    revised.setId(602L);
+    revised.setBomSource("ELECTRONIC_DRAWING_EXCEL");
+    revised.setSyncStatus("DRAFT");
+    revised.setBomBatchId("ED_DRAFT:89:changed-raw");
+    when(drawingPreparation.snapshot(eq(42L), eq(CURRENT_PERIOD), any(), any(), any(), any()))
+        .thenReturn(revised);
+    var revisedRows = rawRows();
+    revisedRows.getLast().setMaterialCode("NEW-RAW");
+    revisedRows.forEach(row -> row.setBuildBatchId(revised.getBomBatchId()));
+    when(drawingPreparation.rows(revised)).thenReturn(revisedRows);
+
+    var result = service.getEffectiveBom("OA-QEB-11", 42L);
+
+    assertThat(result.state()).isEqualTo("DRAFT");
+    assertThat(result.monthlySnapshotId()).isEqualTo(602L);
+    assertThat(result.sourceBomBatchId()).isEqualTo("ED_DRAFT:89:changed-raw");
+    assertThat(result.nodes()).extracting(node -> node.materialCode()).containsExactly("P", "NEW-RAW");
+    verify(rawMapper, never()).selectList(any(Wrapper.class));
   }
 
   @Test

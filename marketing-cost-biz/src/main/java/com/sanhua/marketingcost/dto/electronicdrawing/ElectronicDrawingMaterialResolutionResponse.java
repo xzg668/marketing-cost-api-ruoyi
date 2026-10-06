@@ -45,5 +45,8 @@ public record ElectronicDrawingMaterialResolutionResponse(
       String resolvedMaterialNature,
       String resolvedUnit,
       String resolvedBy,
-      LocalDateTime resolvedAt) {}
+      LocalDateTime resolvedAt,
+      String processingState,
+      String processingMessage,
+      boolean canModify) {}
 }

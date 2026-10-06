@@ -40,15 +40,17 @@ class OaWorkflowClientTest {
   private volatile String method;
   private volatile String caller;
   private volatile String contentType;
+  private volatile String path;
 
   @BeforeEach void start() throws Exception {
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     executor = Executors.newCachedThreadPool();
     server.setExecutor(executor);
-    server.createContext(OaWorkflowClient.SUBMIT_PATH, exchange -> {
+    server.createContext("/", exchange -> {
       calls.incrementAndGet();
       requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
       query = exchange.getRequestURI().getRawQuery();
+      path = exchange.getRequestURI().getPath();
       method = exchange.getRequestMethod();
       caller = exchange.getRequestHeaders().getFirst("callSysCode");
       contentType = exchange.getRequestHeaders().getFirst("Content-Type");
@@ -74,6 +76,39 @@ class OaWorkflowClientTest {
     server.stop(0);
     executor.shutdownNow();
     Thread.interrupted();
+  }
+
+  @Test void rejectionUsesItsOwnBaseUrlAndNativeBodyWithSharedAuthentication() throws Exception {
+    properties.setBaseUrl("http://127.0.0.1:1/unreachable-submit");
+    properties.setRejectBaseUrl(auth.getBaseUrl());
+    var body = json.createObjectNode().put("userid", "0001").put("requestId", "00123")
+        .put("RejectToType", "0").put("RejectToNodeid", "000987654321");
+    assertThat(client.reject(body).status()).isEqualTo(OaWorkflowResult.Status.SUCCESS);
+    assertThat(path).isEqualTo(OaWorkflowClient.REJECT_PATH);
+    assertThat(json.readTree(requestBody)).isEqualTo(body);
+    assertThat(caller).isEqualTo("CALLER");
+    assertThat(URLDecoder.decode(query, StandardCharsets.UTF_8)).isEqualTo("access_token=TOKEN +&中文&userType=JOB_NUM");
+    assertThat(calls.get()).isEqualTo(1);
+  }
+
+  @Test void invalidRejectionNodeIsNeverSentAndOaRejectionIsNotRetried() {
+    var body = json.createObjectNode().put("userid", "0001").put("requestId", "00123").put("RejectToType", "0");
+    assertThatThrownBy(() -> client.reject(body)).hasMessageContaining("RejectToNodeid");
+    assertThat(calls.get()).isZero();
+    response = "{\"message\":{\"errcode\":\"1200308\",\"errmsg\":\"退回节点不在可选范围内\"}}";
+    var result = client.reject(body.put("RejectToNodeid", "000987654321"));
+    assertThat(result.status()).isEqualTo(OaWorkflowResult.Status.REJECTED);
+    assertThat(result.errorCode()).isEqualTo("1200308");
+    assertThat(calls.get()).isEqualTo(1);
+  }
+
+  @Test void rejectionTimeoutRemainsUnknownAndDoesNotResend() {
+    delay = 1500;
+    properties.setReadTimeoutMs(1000);
+    var body = json.createObjectNode().put("userid", "0001").put("requestId", "00123")
+        .put("RejectToType", "0").put("RejectToNodeid", "000987654321");
+    assertThat(client.reject(body).status()).isEqualTo(OaWorkflowResult.Status.UNKNOWN);
+    assertThat(calls.get()).isEqualTo(1);
   }
 
   @Test void sendsNativeRequestWithSharedTokenAndUtf8() throws Exception {

@@ -511,6 +511,12 @@ public class QuoteEffectiveBomApplicationServiceImpl
    */
   private QuoteBomMonthlySnapshot findOrPrepareMonthlySnapshot(QueryContext context) {
     QuoteBomMonthlySnapshot snapshot = findMonthlySnapshot(context);
+    if (snapshot != null && !"U9".equals(snapshot.getBomSource())) {
+      // 同一报价原材料已修订时，先检查当前组树；旧已发布快照只保留历史用途。
+      var revised = drawingPreparation.snapshot(context.oaFormItemId(), context.costPeriodMonth(),
+          context.businessUnit(), context.organization().priceOrgCode(), context.customerKey(), context.packageMethod());
+      if (revised != null) return revised;
+    }
     if (snapshot != null && (!"U9".equals(snapshot.getBomSource())
         || !monthlyDetails.load(snapshot.getId()).isEmpty())) {
       return snapshot;
@@ -529,7 +535,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
           && Objects.equals(current.getCostPeriodMonth(), context.costPeriodMonth())
           && Objects.equals(current.getPriceOrgCode(), context.organization().priceOrgCode())
           && (!"U9".equals(current.getBomSource())
-              || !monthlyDetails.load(current.getId()).isEmpty())) {
+              || !monthlyDetails.loadCurrent(current.getId()).isEmpty())) {
         return current;
       }
     }
@@ -543,7 +549,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
 
   private RawSnapshot loadRawSnapshot(
       QueryContext context, QuoteBomMonthlySnapshot snapshot) {
-    List<BomRawHierarchy> frozenRows = monthlyDetails.load(snapshot.getId());
+    List<BomRawHierarchy> frozenRows = monthlyDetails.loadCurrent(snapshot.getId());
     if (!frozenRows.isEmpty()) {
       return new RawSnapshot(
           technicalContributions.merge(context.oaFormItemId(), context.costPeriodMonth(), frozenRows),

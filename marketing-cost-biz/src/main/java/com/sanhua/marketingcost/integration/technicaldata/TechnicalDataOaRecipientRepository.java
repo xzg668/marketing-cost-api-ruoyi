@@ -78,6 +78,13 @@ public class TechnicalDataOaRecipientRepository {
     }
   }
 
+  public void prepareProcessingScope(long messageId, List<String> modules) {
+    if (jdbc.update("""
+        UPDATE lp_quote_tech_oa_recipient SET revision_module_types_json=?
+        WHERE outbound_message_id=? AND active_flag=0 AND todo_status='WAITING' AND action='ASSIGN'
+        """, codec.write(modules), messageId) != 1) throw conflict("追加分派的办理范围已变化");
+  }
+
   public void activate(long taskId, int version) {
     var batch = find(taskId, version);
     if (batch.isEmpty() || batch.stream().anyMatch(row -> !"CONFIRMED".equals(row.dispatchStatus()))) {
@@ -130,8 +137,8 @@ public class TechnicalDataOaRecipientRepository {
     if (jdbc.update("""
         UPDATE lp_quote_tech_oa_recipient SET todo_status='RETURN_PENDING',return_message_id=?,return_requested_by=?,
           return_reason=?,row_version=row_version+1,updated_at=NOW(3)
-        WHERE id=? AND active_flag=1 AND latest_submission_id=? AND todo_status='DONE'
-        """, messageId, userId, reason, id, submissionId) != 1) throw conflict("所选人员的审批版本已变化");
+        WHERE id=? AND active_flag=1 AND latest_submission_id=? AND todo_status IN ('SUBMITTED','DONE')
+        """, messageId, userId, reason, id, submissionId) != 1) throw conflict("所选人员的提交版本已变化");
   }
 
   public void revisionScope(long id, List<String> modules) {
@@ -153,21 +160,28 @@ public class TechnicalDataOaRecipientRepository {
   /** 产品状态仅作汇总，不控制各人编辑权限。 */
   public void refreshTask(long taskId) {
     var current = current(taskId);
-    boolean approved = !current.isEmpty() && current.stream().allMatch(row -> "DONE".equals(row.todoStatus()));
+    boolean additional = Boolean.TRUE.equals(jdbc.queryForObject("""
+        SELECT EXISTS(SELECT 1 FROM lp_quote_tech_module m JOIN lp_quote_tech_product p ON p.id=m.product_id
+          WHERE p.task_id=? AND p.active_flag=1 AND m.required_flag=1 AND m.assignee_user_id IS NULL
+            AND m.current_version_id IS NULL AND m.module_status='PENDING' AND m.oa_edit_allowed=0)
+        """, Boolean.class, taskId));
     boolean open = current.stream().anyMatch(row -> "OPEN".equals(row.todoStatus()));
     boolean prepared = current.stream().anyMatch(row -> "PREPARED".equals(row.todoStatus()));
     boolean returned = current.stream().anyMatch(row -> "OPEN".equals(row.todoStatus()) && row.returnReason() != null);
     boolean returning = current.stream().anyMatch(row -> "RETURN_PENDING".equals(row.todoStatus()));
-    String status = returning ? "RETURN_PENDING" : approved ? "APPROVED" : returned ? "PARTIALLY_RETURNED" : open ? "IN_PROGRESS" : prepared ? "PREPARED" : "SUBMITTED";
+    String status = returning ? "RETURN_PENDING" : returned ? "PARTIALLY_RETURNED" : open ? "IN_PROGRESS"
+        : prepared ? "PREPARED" : additional ? "PENDING" : "SUBMITTED";
     jdbc.update("""
         UPDATE lp_quote_tech_task SET task_status=?,review_status=?,task_version=task_version+1,updated_at=NOW(3) WHERE id=? AND active_flag=1
-        """, status, approved ? "PASSED" : open ? "NOT_STARTED" : "PENDING", taskId);
+        """, status, open ? "NOT_STARTED" : "PENDING", taskId);
   }
 
   private void assignModule(long taskId, String type, long userId, String name) {
     if (jdbc.update("""
         UPDATE lp_quote_tech_module m JOIN lp_quote_tech_product p ON p.id=m.product_id
-        SET m.assignee_user_id=?,m.assignee_name=?,m.row_version=m.row_version+1,m.updated_at=NOW(3)
+        SET m.oa_edit_allowed=CASE WHEN m.current_version_id IS NULL AND m.module_status='PENDING'
+              THEN 1 ELSE m.oa_edit_allowed END,
+          m.assignee_user_id=?,m.assignee_name=?,m.row_version=m.row_version+1,m.updated_at=NOW(3)
         WHERE p.task_id=? AND p.active_flag=1 AND m.required_flag=1 AND m.module_type=?
         """, userId, name, taskId, type) != 1) throw conflict("分派期间产品模块范围已变化");
   }

@@ -14,12 +14,12 @@ class OaWorkflowNotificationTest {
     return root;
   }
   @Test void flowIdentityAndLeadingZerosArePreserved() {
-    var parsed=OaWorkflowNotification.parse(event("1137224760702033922","TECH_APPROVED","001002","001001"));
+    var parsed=OaWorkflowNotification.parse(event("1137224760702033922","TECHNICAL","001002","001001"));
     assertThat(parsed.requestId()).isEqualTo("1137224760702033922");
     assertThat(parsed.employeeNos()).containsExactly("001001","001002");
   }
-  @ParameterizedTest @ValueSource(strings={"TECHNICAL","TECH_APPROVED"})
-  void requiresTechniciansForBothTechnicalEvents(String type) {
+  @ParameterizedTest @ValueSource(strings={"TECHNICAL"})
+  void requiresTechniciansForTechnicalReturn(String type) {
     assertThatThrownBy(()->OaWorkflowNotification.parse(event("WF",type))).hasMessageContaining("employeeNos");
     var numeric=event("WF",type);numeric.putArray("employeeNos").add(123);
     assertThatThrownBy(()->OaWorkflowNotification.parse(numeric)).hasMessageContaining("字符串");
@@ -37,10 +37,11 @@ class OaWorkflowNotificationTest {
   }
   @Test void completionAllowsEmptyReasonAndRejectsOldContractAndTypo() {
     assertThat(OaWorkflowNotification.parse(event("WF","COMPLETED").put("reason","")).reason()).isNull();
+    assertThatThrownBy(()->OaWorkflowNotification.parse(event("WF","TECH_APPROVED","001"))).hasMessageContaining("未知");
     assertThatThrownBy(()->OaWorkflowNotification.parse(event("WF","COMPLETEN"))).hasMessageContaining("未知");
     assertThatThrownBy(()->OaWorkflowNotification.parse(event("WF","COMPLETED").put("workflowRequestId","other"))).hasMessageContaining("未定义");
   }
-  @ParameterizedTest @ValueSource(strings={"TECHNICAL","TECH_APPROVED","COSTING","COMPLETED"})
+  @ParameterizedTest @ValueSource(strings={"TECHNICAL","COSTING","COMPLETED"})
   void integrationExamplesUseThePublicContract(String type) throws Exception {
     try(var input=getClass().getResourceAsStream("/fixtures/oa-workflow/"+type+".json")) {
       assertThat(OaWorkflowNotification.parse(new ObjectMapper().readTree(input)).eventType()).isEqualTo(type);

@@ -8,6 +8,7 @@ import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaWorkflowRepository;
 import com.sanhua.marketingcost.mapper.*;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
+import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataAuxiliaryClassificationRepository.Classification;
 import java.math.BigDecimal;
 import java.time.YearMonth;
@@ -15,7 +16,7 @@ import java.util.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** 财务只保存审批明细的科目映射；技术快照、金额和原文件均不改写。 */
+/** 财务只保存提交明细的科目映射；技术快照、金额和原文件均不改写。 */
 @Service
 public class TechnicalDataAuxiliaryClassificationService {
   private final QuoteTechnicalDataRepository technical;
@@ -70,7 +71,7 @@ public class TechnicalDataAuxiliaryClassificationService {
     requireEditable(view);
     var checked=validate(view,rows);
     if (!checked.valid()) throw new IllegalArgumentException("归类文件校验未通过："+checked.issues().getFirst().message());
-    if (!Objects.equals(expectedFingerprint,checked.fingerprint())) throw conflict("审批版本、科目或归类结果已变化，请重新预检");
+    if (!Objects.equals(expectedFingerprint,checked.fingerprint())) throw conflict("提交版本、科目或归类结果已变化，请重新预检");
     for (var row:rows) {
       var subject=subjects.require(view.subjects(),row.columns().getLast());
       classifications.save(view.technicalVersionId(),new Classification(Long.valueOf(row.columns().get(4)),
@@ -79,9 +80,9 @@ public class TechnicalDataAuxiliaryClassificationService {
     return view(scope,actor);
   }
 
-  /** 成本消费与页面使用相同的有效科目校验；只返回映射结果，绝不修改审批实体。 */
+  /** 成本消费与页面使用相同的有效科目校验；只返回映射结果，绝不修改提交实体。 */
   public List<EffectiveTechnicalDataInput.AuxiliaryLine> costingLines(QuoteTechDataVersion version,
-      List<QuoteTechAuxItem> rows, String businessUnit) {
+      List<QuoteTechAuxItem> rows, String businessUnit, Long itemId, String accountingMonth) {
     var definitions=subjects.list(businessUnit);
     var mappings=classifications.find(version.getId());
     List<EffectiveTechnicalDataInput.AuxiliaryLine> result=new ArrayList<>();
@@ -89,7 +90,10 @@ public class TechnicalDataAuxiliaryClassificationService {
       String code=row.getSubjectCode(), name=row.getSubjectName();
       if ("UPLOAD_AMOUNT".equals(row.getPricingMethod())) {
         var mapping=validMapping(version,row,mappings,definitions);
-        if (mapping==null) throw new IllegalArgumentException("辅料待财务归类："+row.getAuxiliaryName());
+        // 归类未完成是待处理业务状态；选料和组树结果仍可保存，正式核算继续阻断。
+        if (mapping==null) throw new EffectiveTechnicalDataException(
+            "TECH_DATA_AUXILIARY_CLASSIFICATION_MISSING", itemId, accountingMonth,
+            List.of("AUXILIARY"), "辅料待财务归类："+row.getAuxiliaryName());
         code=mapping.subjectCode(); name=mapping.subjectName();
       }
       result.add(new EffectiveTechnicalDataInput.AuxiliaryLine(row.getId(),row.getLineNo(),code,name,
@@ -102,30 +106,33 @@ public class TechnicalDataAuxiliaryClassificationService {
     if (scope.product()==null) return empty(scope,"NOT_REQUIRED","本次没有待归类的技术辅料");
     var product=scope.product(); var task=scope.task();
     if (!Integer.valueOf(1).equals(product.getActiveFlag()) || !Integer.valueOf(1).equals(task.getActiveFlag())) {
-      return empty(scope,"WAIT_APPROVAL","原辅料任务已停用，请核对当前有效来源");
+      return empty(scope,"WAIT_SUBMISSION","原辅料任务已停用，请核对当前有效来源");
     }
-    if (!"APPROVED".equals(product.getProductStatus()) || !"APPROVED".equals(task.getTaskStatus())
-        || !"PASSED".equals(task.getReviewStatus()) || product.getEffectiveVersionId()==null) {
-      return empty(scope,"WAIT_APPROVAL","等待全部补录资料审批通过并回到财务");
+    if (!TechnicalDataSubmissionState.submitted(product.getProductStatus()) || !TechnicalDataSubmissionState.submitted(task.getTaskStatus())
+        || product.getEffectiveVersionId()==null) {
+      return empty(scope,"WAIT_SUBMISSION","等待全部补录资料成功提交");
     }
-    var version=technical.findVersion(product.getEffectiveVersionId()).orElseThrow(() -> conflict("辅料审批版本不存在"));
-    if (!Objects.equals(version.getProductId(),product.getId()) || !"APPROVED".equals(version.getVersionStatus())) throw conflict("辅料审批版本已失效");
+    var version=technical.findVersion(product.getEffectiveVersionId()).orElseThrow(() -> conflict("辅料提交版本不存在"));
+    if (!Objects.equals(version.getProductId(),product.getId()) || !TechnicalDataSubmissionState.submitted(version.getVersionStatus())) throw conflict("辅料提交版本已失效");
     var allRows=technical.findAuxItems(version.getId());
     String actual=content.fingerprint(version,content.readReferenceSnapshot(version.getReferenceSnapshotJson()),
         technical.findPackageItems(version.getId()),allRows,technical.findSalaryItems(version.getId()));
-    if (!Objects.equals(actual,version.getContentFingerprint())) throw conflict("审批内容与冻结指纹不一致，请核对原任务");
+    if (!Objects.equals(actual,version.getContentFingerprint())) throw conflict("提交内容与冻结指纹不一致，请核对原任务");
     var uploaded=allRows.stream().filter(row -> "UPLOAD_AMOUNT".equals(row.getPricingMethod())).toList();
     if (uploaded.isEmpty()) return empty(scope,"NOT_REQUIRED","已有 CMS 科目，无需财务归类");
     var flow=task.getOaFlowId()==null?null:workflow.findFlow(task.getOaFlowId());
-    if (flow==null || !flow.financeReady()) return empty(scope,"WAIT_FINANCE","等待全部资料审批通过并进入 OA 财务核算节点");
-    boolean editable=actor!=null && !actor.shortSession() && (actor.admin()
-        || actor.has("ingest:quote:cost-run:execute") && Objects.equals(actor.userId(),flow.financeUserId()));
     var definitions=subjects.list(task.getBusinessUnitType()); var mappings=classifications.find(version.getId());
+    boolean financeReady=flow!=null && flow.financeReady();
+    // 成本已提交后财务办理权限关闭，已完成的归类仍应可查，不能显示为待归类。
+    boolean classified=uploaded.stream().allMatch(row -> validMapping(version,row,mappings,definitions)!=null);
+    if (!financeReady && !classified) return empty(scope,"WAIT_FINANCE","请先点击核算，检查本单已提交资料");
+    boolean editable=financeReady && actor!=null && !actor.oaSession() && (actor.admin()
+        || actor.has("ingest:quote:cost-run:execute") && Objects.equals(actor.userId(),flow.financeUserId()));
     List<Item> result=new ArrayList<>(); List<Total> totals=new ArrayList<>(); boolean complete=true;
     for (var row:uploaded) {
       var mapping=validMapping(version,row,mappings,definitions); complete &= mapping!=null;
       var evidence=content.auxiliaryEvidence(row);
-      if (evidence==null || evidence.upload()==null) throw conflict("审批辅料缺少上传来源证据");
+      if (evidence==null || evidence.upload()==null) throw conflict("提交辅料缺少上传来源证据");
       var origin=evidence.upload().item();
       List<String> columns=Arrays.asList(scope.oaNo(),text(scope.itemId()),scope.month(),text(version.getId()),text(row.getId()),
           version.getContentFingerprint(),text(origin.partName()),text(origin.sequence()),text(origin.processName()),
@@ -161,16 +168,16 @@ public class TechnicalDataAuxiliaryClassificationService {
         Long id;
         try { id=Long.valueOf(row.columns().get(4)); } catch (NumberFormatException e) { throw new IllegalArgumentException("明细标识无效"); }
         var original=expected.get(id);
-        if (original==null) throw new IllegalArgumentException("明细不属于本产品当前审批版本");
+        if (original==null) throw new IllegalArgumentException("明细不属于本产品当前提交版本");
         if (!seen.add(id)) throw new IllegalArgumentException("明细重复");
         if (!original.approvedColumns().equals(row.columns().subList(0,21))) {
-          throw new IllegalArgumentException("产品、月份、审批版本、技术资料或金额被修改；只能填写二级科目名称");
+          throw new IllegalArgumentException("产品、月份、提交版本、技术资料或金额被修改；只能填写二级科目名称");
         }
         var subject=subjects.require(view.subjects(),row.columns().getLast());
         amounts.add(new Total(subject.code(),subject.name(),original.amount()));
       } catch (IllegalArgumentException invalid) { issues.add(new Issue(row.sheetRow(),invalid.getMessage())); }
     }
-    if (!seen.equals(expected.keySet())) issues.add(new Issue(null,"请完整导入全部已审批辅料明细，不能遗漏"));
+    if (!seen.equals(expected.keySet())) issues.add(new Issue(null,"请完整导入全部已提交辅料明细，不能遗漏"));
     String fingerprint=json.canonicalHash(List.of(view,rows));
     return new Preview(issues.isEmpty(),fingerprint,List.copyOf(issues),issues.isEmpty()?totals(amounts):List.of());
   }
@@ -183,7 +190,7 @@ public class TechnicalDataAuxiliaryClassificationService {
 
   private Scope scope(String oaNo, Long itemId, String month, TechnicalDataActor actor, boolean lock) {
     try { YearMonth.parse(month); } catch (RuntimeException e) { throw new IllegalArgumentException("核算月份必须为 yyyy-MM"); }
-    if (actor==null || actor.shortSession() || !(actor.admin() || actor.has("ingest:quote:list") || actor.has("ingest:quote:cost-run:execute"))) throw forbidden("无权读取报价辅料归类");
+    if (actor==null || actor.oaSession() || !(actor.admin() || actor.has("ingest:quote:list") || actor.has("ingest:quote:cost-run:execute"))) throw forbidden("无权读取报价辅料归类");
     var item=items.selectById(itemId); var form=item==null?null:forms.selectById(item.getOaFormId());
     if (form==null || !Objects.equals(oaNo,form.getOaNo())) throw forbidden("产品行不属于当前报价单");
     String businessUnit=item.getBusinessUnitType()==null?form.getBusinessUnitType():item.getBusinessUnitType();
@@ -208,7 +215,7 @@ public class TechnicalDataAuxiliaryClassificationService {
     return new AuxiliaryClassificationResponse(scope.itemId(),scope.month(),null,status,message,false,null,List.of(),List.of(),List.of());
   }
   private void requireEditable(AuxiliaryClassificationResponse view) {
-    if (!view.canClassify() || view.items().isEmpty()) throw forbidden("仅当前 OA 财务节点报价员或管理员可为已审批上传辅料归类："+view.message());
+    if (!view.canClassify() || view.items().isEmpty()) throw forbidden("仅当前 OA 财务节点报价员或管理员可为已提交上传辅料归类："+view.message());
   }
   private static String text(Object value) { return value==null?"":value instanceof BigDecimal decimal?decimal.toPlainString():value.toString(); }
   private TechnicalDataTaskException conflict(String message) { return new TechnicalDataTaskException(TechnicalDataTaskErrorCode.VERSION_CONFLICT,message); }

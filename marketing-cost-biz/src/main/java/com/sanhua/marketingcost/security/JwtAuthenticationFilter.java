@@ -35,16 +35,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtUtils jwtUtils;
     private final UserDetailsService userDetailsService;
     private final SysUserService sysUserService;
-    private final com.sanhua.marketingcost.integration.oa.OaIntegrationProperties oaProperties;
+    private final com.sanhua.marketingcost.integration.oa.directory.OaPersonDirectoryProperties oaProperties;
+    private final com.sanhua.marketingcost.integration.oa.directory.OaPersonDirectoryRepository directory;
 
     public JwtAuthenticationFilter(JwtUtils jwtUtils,
                                    UserDetailsService userDetailsService,
                                    SysUserService sysUserService,
-                                   com.sanhua.marketingcost.integration.oa.OaIntegrationProperties oaProperties) {
+                                   com.sanhua.marketingcost.integration.oa.directory.OaPersonDirectoryProperties oaProperties,
+                                   com.sanhua.marketingcost.integration.oa.directory.OaPersonDirectoryRepository directory) {
         this.jwtUtils = jwtUtils;
         this.userDetailsService = userDetailsService;
         this.sysUserService = sysUserService;
         this.oaProperties = oaProperties;
+        this.directory = directory;
     }
 
     @Override
@@ -59,13 +62,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String token = extractToken(request);
 
         if (token != null && jwtUtils.validateToken(token)) {
-            boolean technicalDataSession = jwtUtils.isTechnicalDataSession(token);
-            if (technicalDataSession
-                    && (!request.getRequestURI().startsWith("/api/v2/technical-data/")
-                    || oaProperties.getEnvironment() == null
-                    || !oaProperties.getEnvironment().equals(jwtUtils.extractTechnicalDataEnvironment(token))
-                    || jwtUtils.extractTechnicalDataTaskId(token) == null
-                    || !"TASK_ENTRY".equals(jwtUtils.extractTechnicalDataPurpose(token)))) {
+            if (jwtUtils.isOaSession(token)) {
+                authenticateOa(token, request);
                 filterChain.doFilter(request, response);
                 return;
             }
@@ -101,16 +99,30 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String businessUnitType = jwtUtils.extractBusinessUnitType(token);
             Map<String, Object> detailsMap = new HashMap<>();
             detailsMap.put(BusinessUnitContext.KEY_BUSINESS_UNIT_TYPE, businessUnitType);
-            if (technicalDataSession) {
-                detailsMap.put("technicalDataTaskId", jwtUtils.extractTechnicalDataTaskId(token));
-                detailsMap.put("technicalDataPurpose", jwtUtils.extractTechnicalDataPurpose(token));
-            }
             authentication.setDetails(detailsMap);
 
             SecurityContextHolder.getContext().setAuthentication(authentication);
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    private void authenticateOa(String token, HttpServletRequest request) {
+        String path = request.getRequestURI();
+        Long formId = jwtUtils.extractOaFormId(token);
+        if (!(path.startsWith("/api/v2/technical-data/") || path.equals("/api/v1/auth/oa/me"))
+                || formId == null || formId <= 0 || !Objects.equals(oaProperties.getEnvironment(), jwtUtils.extractOaEnvironment(token))) return;
+        String employeeNo = jwtUtils.getUsernameFromToken(token);
+        var identity = directory.findActiveByEmployeeNo(employeeNo);
+        var person = new com.sanhua.marketingcost.integration.oa.oauth.OaOAuthPrincipal(
+                employeeNo, jwtUtils.extractOaName(token), identity == null ? null : identity.userId(), formId);
+        // 每次请求重新匹配有效目录；不继承该内部账号的其他角色，停用/转派即时生效。
+        var permissions = new ArrayList<SimpleGrantedAuthority>();
+        permissions.add(new SimpleGrantedAuthority("technical:data:task:list"));
+        if (identity != null) permissions.add(new SimpleGrantedAuthority("technical:data:task:edit"));
+        var authentication = new UsernamePasswordAuthenticationToken(person, null, permissions);
+        authentication.setDetails(Map.of(BusinessUnitContext.KEY_BUSINESS_UNIT_TYPE, jwtUtils.extractBusinessUnitType(token)));
+        SecurityContextHolder.getContext().setAuthentication(authentication);
     }
 
     private String extractToken(HttpServletRequest request) {

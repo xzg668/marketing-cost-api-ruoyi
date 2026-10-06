@@ -8,10 +8,11 @@ import com.sanhua.marketingcost.entity.CostRunTask;
 import com.sanhua.marketingcost.enums.CostRunTaskScene;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.ProductCostingPipeline;
+import com.sanhua.marketingcost.service.SysUserService;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
@@ -23,11 +24,13 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
 
   private final ProductCostingPipeline productCostingPipeline;
   private final ObjectMapper objectMapper;
+  private final SysUserService users;
 
   public QuoteCostRunTaskExecutor(
-      ProductCostingPipeline productCostingPipeline, ObjectMapper objectMapper) {
+      ProductCostingPipeline productCostingPipeline, ObjectMapper objectMapper, SysUserService users) {
     this.productCostingPipeline = productCostingPipeline;
     this.objectMapper = objectMapper;
+    this.users = users;
   }
 
   @Override
@@ -78,8 +81,18 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
   }
 
   private SecurityContext taskSecurityContext(String username, String businessUnitType) {
+    // 排队入口已鉴权，执行时仍按实际提交人重新读取权限，不能伪造权限或以 worker 身份代办。
+    var user = users.findByUsername(username);
+    if (user == null || !"0".equals(user.getStatus()) || !"0".equals(user.getDelFlag())) {
+      throw new IllegalArgumentException("核算任务的提交人账号已失效");
+    }
+    var permissions = users.findPermissionsByUserId(user.getUserId());
+    if (!permissions.contains("*:*:*") && !permissions.contains("ingest:quote:cost-run:execute")) {
+      throw new IllegalArgumentException("核算任务的提交人已无核算权限");
+    }
     UsernamePasswordAuthenticationToken authentication =
-        new UsernamePasswordAuthenticationToken(username, null, List.of());
+        new UsernamePasswordAuthenticationToken(username, null,
+            permissions.stream().map(SimpleGrantedAuthority::new).toList());
     Map<String, Object> details = new HashMap<>();
     if (StringUtils.hasText(businessUnitType)) {
       details.put(BusinessUnitContext.KEY_BUSINESS_UNIT_TYPE, businessUnitType.trim());

@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class TechnicalDataOaContext {
 
-  public record Document(long formId, String requestId, String processCode, OaPeer peer) {}
+  public record Document(long formId, String requestId, String processCode, OaPeer peer, String rejectToNodeId) {}
 
   private final JdbcTemplate jdbc;
   private final SysUserService users;
@@ -48,7 +48,7 @@ public class TechnicalDataOaContext {
   }
 
   public void lockActor(TechnicalDataActor actor) {
-    if (actor == null || actor.userId() == null || actor.shortSession()) throw invalid(
+    if (actor == null || actor.userId() == null) throw invalid(
       "当前会话不能办理单据提交"
     );
     jdbc.queryForObject(
@@ -61,7 +61,7 @@ public class TechnicalDataOaContext {
   public Document document(long formId) {
     var rows = jdbc.queryForList(
       """
-      SELECT d.external_document_id,d.source_system,d.environment,f.process_code,f.business_unit_type
+      SELECT d.external_document_id,d.source_system,d.environment,d.reject_to_node_id,f.process_code,f.business_unit_type
       FROM oa_form f JOIN lp_oa_quote_document d ON d.oa_form_id=f.id
       WHERE f.id=? AND f.deleted=0 FOR UPDATE
       """,
@@ -81,7 +81,8 @@ public class TechnicalDataOaContext {
       formId,
       (String) row.get("external_document_id"),
       (String) row.get("process_code"),
-      new OaPeer(source, environment, Set.of((String) row.get("business_unit_type")))
+      new OaPeer(source, environment, Set.of((String) row.get("business_unit_type"))),
+      (String) row.get("reject_to_node_id")
     );
   }
 

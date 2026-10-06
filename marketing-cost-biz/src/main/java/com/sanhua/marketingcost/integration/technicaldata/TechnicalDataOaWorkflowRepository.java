@@ -129,23 +129,16 @@ public class TechnicalDataOaWorkflowRepository {
     jdbc.update("UPDATE lp_quote_tech_task SET external_callback_seq=GREATEST(COALESCE(external_callback_seq,0),?),external_last_event_id=?,updated_at=NOW(3) WHERE id=?", sequence, eventId, taskId);
   }
 
-  public void finance(Flow flow, long sequence, long messageId, long userId) {
-    jdbc.update("UPDATE lp_oa_technical_flow SET finance_sequence=?,finance_message_id=?,finance_user_id=?,updated_at=NOW(3) WHERE id=? AND finance_sequence<?", sequence, messageId, userId, flow.id(), sequence);
-  }
-
+  /** 仅判断提交资料是否齐全，不推断 OA 领导审批或当前节点。 */
   public boolean refreshFinance(long flowId) {
-    var counts = jdbc.queryForMap("""
-        SELECT COUNT(*) task_count,COALESCE(SUM(t.task_status<>'APPROVED' OR t.external_task_status<>'PUBLISHED'
-          OR p.effective_version_id IS NULL),0) pending_count,COALESCE(MAX(t.external_callback_seq),0) last_approval
-        FROM lp_quote_tech_task t JOIN lp_quote_tech_product p ON p.task_id=t.id AND p.active_flag=1
-        WHERE t.oa_flow_id=? AND t.active_flag=1
-        """, flowId);
-    var flow = lockFlow(flowId);
-    boolean ready = ((Number) counts.get("task_count")).longValue() > 0
-        && ((Number) counts.get("pending_count")).longValue() == 0
-        // 最后一位技术审批通过与进入报价员资料节点可以在同一条 OA 通知中到达。
-        && flow.financeSequence() > 0
-        && flow.financeSequence() >= ((Number) counts.get("last_approval")).longValue();
+    boolean ready = Boolean.TRUE.equals(jdbc.queryForObject("""
+        SELECT EXISTS(SELECT 1 FROM lp_quote_tech_task WHERE oa_flow_id=? AND active_flag=1)
+          AND NOT EXISTS(SELECT 1 FROM lp_quote_tech_task t
+            JOIN lp_quote_tech_product p ON p.task_id=t.id AND p.active_flag=1
+            WHERE t.oa_flow_id=? AND t.active_flag=1 AND
+              (t.task_status NOT IN ('SUBMITTED','APPROVED') OR t.external_task_status<>'PUBLISHED'
+                OR p.effective_version_id IS NULL))
+        """, Boolean.class, flowId, flowId));
     jdbc.update("UPDATE lp_oa_technical_flow SET finance_ready=?,updated_at=NOW(3) WHERE id=?", ready ? 1 : 0, flowId);
     return ready;
   }
@@ -154,13 +147,13 @@ public class TechnicalDataOaWorkflowRepository {
     return jdbc.queryForList("SELECT DISTINCT business_unit_type FROM lp_quote_tech_task WHERE oa_flow_id=?", String.class, flowId);
   }
 
-  /** 按批准版本绑定报价员资料确认，任何人员重提或分工变化都使旧确认失效。 */
-  public String approvalBasis(long flowId) {
+  /** 按已提交版本绑定报价员资料确认，任何人员重提或分工变化都使旧确认失效。 */
+  public String submissionBasis(long flowId) {
     return jdbc.query("""
         SELECT r.id,s.id submission_id,s.technical_version_id,s.content_fingerprint
         FROM lp_quote_tech_task t JOIN lp_quote_tech_oa_recipient r ON r.task_id=t.id AND r.active_flag=1
         JOIN lp_quote_tech_submission s ON s.id=r.latest_submission_id
-        WHERE t.oa_flow_id=? AND t.active_flag=1 AND r.todo_status='DONE' AND s.submission_status='APPROVED'
+        WHERE t.oa_flow_id=? AND t.active_flag=1 AND r.todo_status IN ('SUBMITTED','DONE') AND s.submission_status IN ('SENT','APPROVED')
         ORDER BY t.id,r.id
         """, (rs, index) -> rs.getLong("id") + ":" + rs.getLong("submission_id") + ":"
             + rs.getLong("technical_version_id") + ":" + rs.getString("content_fingerprint"), flowId).toString();
@@ -170,7 +163,7 @@ public class TechnicalDataOaWorkflowRepository {
     if (jdbc.update("""
         UPDATE lp_oa_technical_flow SET finance_confirmed_fingerprint=?,finance_confirmed_by=?,finance_confirmed_at=NOW(3),updated_at=NOW(3)
         WHERE id=? AND finance_ready=1
-        """, fingerprint, userId, flowId) != 1) throw OaIntegrationException.conflict("FINANCE_NOT_READY", "OA 资料尚未具备报价员确认条件");
+        """, fingerprint, userId, flowId) != 1) throw OaIntegrationException.conflict("FINANCE_NOT_READY", "技术资料尚未全部提交");
   }
 
   private Flow flow(ResultSet row, int index) throws SQLException {

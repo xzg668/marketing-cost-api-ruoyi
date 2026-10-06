@@ -11,13 +11,13 @@ public final class OaTechnicalPeopleRequest {
 
   public static ObjectNode build(
       ObjectMapper json,
-      String processCode,
+      String dataKey,
       String requestId,
       String operator,
       Collection<String> employees,
       String remark) {
-    if (!"FI-SC-005".equals(processCode)) {
-      throw new IllegalArgumentException("当前仅已明确 FI-SC-005 的技术员字段 jsy，其他流程须确认字段后接入");
+    if (dataKey == null || dataKey.isBlank()) {
+      throw new IllegalArgumentException("OA技术员字段 dataKey 不能为空");
     }
     if (requestId == null || !requestId.matches("[A-Za-z0-9._:-]{1,128}")) {
       throw new IllegalArgumentException("原 OA 流程 requestId 格式不正确");
@@ -37,7 +37,7 @@ public final class OaTechnicalPeopleRequest {
             .put("module", "workflow")
             .putArray("dataDetails")
             .addObject()
-            .put("dataKey", "jsy")
+            .put("dataKey", dataKey)
             .putArray("dataOptions");
     new TreeSet<>(employees)
         .forEach(

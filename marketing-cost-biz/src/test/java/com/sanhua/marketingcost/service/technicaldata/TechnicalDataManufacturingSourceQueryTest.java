@@ -28,7 +28,8 @@ class TechnicalDataManufacturingSourceQueryTest {
   private final ElectronicDrawingU9SubBomPort u9 = mock(ElectronicDrawingU9SubBomPort.class);
   private final QuoteBomSupplementVersionMapper versions = mock(QuoteBomSupplementVersionMapper.class);
   private final TechnicalDataManufacturingSourceQuery query = new TechnicalDataManufacturingSourceQuery(
-      sources, materials, u9, new OaMessageCodec(new ObjectMapper().findAndRegisterModules()), versions);
+      sources, com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingTestScope.create(materials, u9),
+      new OaMessageCodec(new ObjectMapper().findAndRegisterModules()), versions);
   private final ElectronicDrawingWorkContext context = new ElectronicDrawingWorkContext(11L, 2, 21L, 31L,
       10L, 11L, "TASK", "OA", "TOP", null, null, null, null, null, "FULL_BOM", "2026-09",
       "210", "COMMERCIAL", "COMMERCIAL", "210", true, true, "EDITING", "MATERIALS_MATCHED", null, null, null);

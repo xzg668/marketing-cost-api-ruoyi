@@ -152,7 +152,9 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
         periodMonth,
         bomReferenceNo,
         List.copyOf(bomRows),
-        firstText(item.getBusinessUnitType(), form.getBusinessUnitType()));
+        firstText(item.getBusinessUnitType(), form.getBusinessUnitType()),
+        bomStatus != null && "ELECTRONIC_DRAWING_BOM".equals(bomStatus.getBomSource())
+            ? "E_DRAWING" : "U9");
   }
 
   private OaForm requireForm(String oaNo) {
@@ -514,7 +516,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     request.setOaNo(scope.oaNo());
     request.setTopProductCode(scope.productCode());
     request.setBomPurpose(row == null ? null : row.getBomPurpose());
-    request.setSourceType("U9");
+    request.setSourceType(scope.bomSourceType());
     request.setAsOfDate(row == null ? null : row.getAsOfDate());
     PackageSnapshotResult snapshot = packageSnapshotService.previewSnapshot(request);
     if (snapshot == null || snapshot.getDetails() == null || snapshot.getDetails().isEmpty()) {
@@ -791,5 +793,6 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
       String periodMonth,
       String bomReferenceNo,
       List<BomCostingRow> bomRows,
-      String businessUnitType) {}
+      String businessUnitType,
+      String bomSourceType) {}
 }

@@ -25,10 +25,12 @@ public class OaTechnicalReturnClient {
 
   private final ObjectMapper json;
   private final OaWorkflowClient workflow;
+  private final OaWorkflowProperties properties;
 
-  public OaTechnicalReturnClient(ObjectMapper json, OaWorkflowClient workflow) {
+  public OaTechnicalReturnClient(ObjectMapper json, OaWorkflowClient workflow, OaWorkflowProperties properties) {
     this.json = json;
     this.workflow = workflow;
+    this.properties = properties;
   }
 
   public ObjectNode preview(Request request) {
@@ -80,18 +82,35 @@ public class OaTechnicalReturnClient {
     OaWorkflowClient.validateRemark(remark);
     return OaTechnicalPeopleRequest.build(
         json,
-        request.processCode(),
+        properties.requireTechnicalPeopleDataKey(request.processCode()),
         request.requestId(),
         request.operatorEmployeeNo(),
         employees,
         remark);
   }
 
-  public OaWorkflowResult submit(Request request) {
-    var body = preview(request);
-    try (var call = OaInterfaceLog.start("I05_TECHNICAL_RETURN")) {
+  public ObjectNode previewRejection(String requestId, String employeeNo, String rejectToNodeId) {
+    if (rejectToNodeId == null || !rejectToNodeId.matches("[A-Za-z0-9._:-]{1,128}")) {
+      throw new IllegalArgumentException("原 OA 报价需求未提供有效的 RejectToNodeid，不能退回，请先核实需求推送");
+    }
+    return json.createObjectNode().put("userid", line(employeeNo, "报价员工号"))
+        .put("requestId", line(requestId, "原OA流程ID"))
+        .put("RejectToType", "0").put("RejectToNodeid", rejectToNodeId);
+  }
+
+  public OaWorkflowResult updateTechnicians(ObjectNode body) {
+    try (var call = OaInterfaceLog.start("I05_UPDATE_TECHNICIANS")) {
       call.business(body);
       var result = workflow.submit(body);
+      call.result(result.status().name(), result.httpStatus(), result.errorCode());
+      return result;
+    }
+  }
+
+  public OaWorkflowResult reject(ObjectNode body) {
+    try (var call = OaInterfaceLog.start("I05_TECHNICAL_RETURN")) {
+      call.business(body);
+      var result = workflow.reject(body);
       call.result(result.status().name(), result.httpStatus(), result.errorCode());
       return result;
     }

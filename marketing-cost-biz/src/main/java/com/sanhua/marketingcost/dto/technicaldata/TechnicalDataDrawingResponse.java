@@ -8,5 +8,5 @@ public record TechnicalDataDrawingResponse(Long productId, int expectedVersion, 
     boolean materialsMatched, boolean bomComposed, boolean bomPublished, boolean sourceChanged,
     TechnicalDataSupplementContent.DrawingBom drawing, List<Option> drawingOptions,
     List<Resolution> resolutions, Long workflowId, boolean canResolveMaterials) {
-  public record Resolution(String sourceNodeId, String materialNo, String matchStatus) {}
+  public record Resolution(String sourceNodeId, String materialNo, String matchStatus, String processingState, String message) {}
 }

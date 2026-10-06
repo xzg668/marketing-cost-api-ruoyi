@@ -111,14 +111,32 @@ class ProductCostingPipelineImplTest {
     verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
   }
 
-  @Test void automaticContinuationAtMaterialNodeCannotPublishCost() {
+  @Test void preparationKeepsCurrentSuccessVersionWithoutRebuildingSources() {
+    var savedVersion = version();
+    savedVersion.setInputFingerprint("FULL-FP");
+    when(workspaceService.find(11L, MONTH)).thenReturn(Optional.of(workspace()));
+    when(itemMapper.selectById(11L)).thenReturn(item(88L));
+    when(versionMapper.selectById(88L)).thenReturn(savedVersion);
+
+    var result = pipeline.prepare(request(false));
+
+    assertThat(result.getPipelineStatus()).isEqualTo("READY");
+    assertThat(result.isReusedSuccess()).isTrue();
+    assertThat(result.getCostVersionId()).isEqualTo(88L);
+    assertThat(result.getSourceRevision()).isEqualTo("SOURCE-1");
+    verify(workbenchService, never()).launchWorkbench(anyString(), anyLong());
+    verify(priceService, never()).generate(anyString(), anyLong(), any());
+    verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
+  }
+
+  @Test void automaticContinuationCannotPublishUnacceptedTechnicalData() {
     stubReadyStages(0);
     var policy = mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class);
-    when(policy.view(anyLong())).thenReturn(new com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.View(
-        "MATERIAL_REVIEW", "待资料确认", null, null, true, true));
+    org.mockito.Mockito.doThrow(new IllegalArgumentException("技术资料已更新，请检查补录内容后点击核算"))
+        .when(policy).requireCostPublication(anyLong(), anyLong());
     pipeline.setOaWorkflowAccess(policy);
     var result = pipeline.execute(request(false));
-    assertThat(result.getErrorCode()).isEqualTo("MATERIAL_CONFIRMATION_REQUIRED");
+    assertThat(result.getMessage()).contains("技术资料已更新");
     verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
   }
 

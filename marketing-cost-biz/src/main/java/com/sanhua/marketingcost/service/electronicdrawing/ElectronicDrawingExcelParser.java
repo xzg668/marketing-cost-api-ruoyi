@@ -124,7 +124,15 @@ public class ElectronicDrawingExcelParser {
       int sourceRow = rowIndex + 1;
       String sequence = value(row, header, "序号");
       if (!isSequence(sequence)) {
-        if (started && !looksLikeBomDetail(row, header)) break;
+        if (started && !looksLikeBomDetail(row, header)) {
+          // 工程明细可能在同一Sheet连续打印多页。页脚后只从下一处完整表头恢复，
+          // 避免把印章、签字、页码当成BOM，同时保留跨页父子关系及原Excel行号。
+          HeaderLocation continuation = nextPageHeader(header.sheet(), rowIndex + 1);
+          if (continuation == null) break;
+          header = continuation;
+          rowIndex = header.headerRow().getRowNum();
+          continue;
+        }
         if (looksLikeBomDetail(row, header)) {
           issues.add(issue(sequence == null ? "SEQUENCE_REQUIRED" : "SEQUENCE_INVALID",
               sourceRow, sequence, sequence == null ? "BOM 明细缺少序号" : "BOM 序号格式不正确：" + sequence));
@@ -159,6 +167,17 @@ public class ElectronicDrawingExcelParser {
           value(row, header, "备注"), sourceRow));
     }
     return nodes;
+  }
+
+  private HeaderLocation nextPageHeader(Sheet sheet, int firstRow) {
+    for (int rowIndex = firstRow; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+      Row row = sheet.getRow(rowIndex);
+      Map<String, Integer> columns = headerColumns(row);
+      if (columns.keySet().containsAll(REQUIRED_HEADERS)) {
+        return new HeaderLocation(sheet, row, columns);
+      }
+    }
+    return null;
   }
 
   private String weightUnit(

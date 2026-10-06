@@ -33,7 +33,7 @@ public class TechnicalDataSharedModules {
     if (ownerId == current.moduleId()) return;
     var owner = repository.find(identity, type);
     if (owner == null) throw conflict("原补录来源不存在，请核对资料");
-    if ("CANCELLED".equals(owner.taskStatus()) && !"APPROVED".equals(owner.versionStatus())) {
+    if ("CANCELLED".equals(owner.taskStatus()) && !TechnicalDataSubmissionState.submitted(owner.versionStatus())) {
       repository.transfer(identity, type, ownerId, current.moduleId());
       return;
     }
@@ -55,8 +55,8 @@ public class TechnicalDataSharedModules {
 
   private TechnicalDataTaskException occupied(TechnicalDataSharedModuleRepository.Owner owner, String type) {
     String name = owner.assigneeName() == null || owner.assigneeName().isBlank() ? "原办理人" : owner.assigneeName();
-    String state = "APPROVED".equals(owner.moduleStatus()) && "APPROVED".equals(owner.versionStatus())
-        ? "已有审批通过的补录资料，请重新检查公共来源和这份补录的适用性，无需重复补录"
+    String state = TechnicalDataSubmissionState.submitted(owner.moduleStatus()) && TechnicalDataSubmissionState.submitted(owner.versionStatus())
+        ? "已有提交的补录资料，请重新检查公共来源和这份补录的适用性，无需重复补录"
         : "已由" + name + "办理，请等待原资料完成，不能重复补录";
     return conflict(label(type) + state + "（原任务 " + owner.taskId() + "）");
   }

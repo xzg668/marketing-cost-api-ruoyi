@@ -13,6 +13,56 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 class TechnicalDataRequirementRefreshServiceTest {
+  @Test void registeredPostBomGapDoesNotUnlockOrReplaceSubmittedModules() {
+    var mapper = mock(QuoteTechModuleMapper.class);
+    var tasks = mock(QuoteTechTaskMapper.class);
+    var jdbc = mock(JdbcTemplate.class);
+    var task = new QuoteTechTask(); task.setId(6L); task.setTaskStatus("SUBMITTED");
+    task.setTaskVersion(3); task.setApplicableOrgCode("210");
+    task.setOaAssignmentVersion(1); task.setExternalTaskStatus("PUBLISHED");
+    var submitted = new QuoteTechModule(); submitted.setId(7L); submitted.setModuleType("SALARY");
+    submitted.setRequiredFlag(1); submitted.setAssigneeUserId(101L); submitted.setCurrentVersionId(9L);
+    submitted.setModuleStatus("SUBMITTED"); submitted.setSourceAvailability("MISSING"); submitted.setSourceReference("same");
+    var price = new QuoteTechModule(); price.setId(8L); price.setModuleType("PRICE");
+    price.setRequiredFlag(0); price.setModuleStatus("PENDING"); price.setRowVersion(0);
+    price.setSourceAvailability("UNCONFIRMED");
+    var gap = new TechnicalDataModuleRequirement("PRICE", true, "PRICE_SOURCE_MISSING", "缺固定价",
+        TechnicalDataAvailability.MISSING, "known-bom", LocalDateTime.now());
+    when(tasks.selectActiveForUpdate(168L,"2026-10")).thenReturn(task);
+    when(mapper.selectByTaskId(6L)).thenReturn(List.of(submitted,price));
+    when(mapper.refreshRequirement(8L,0,gap,"PENDING")).thenReturn(1);
+    var service=new TechnicalDataRequirementRefreshService(mapper,jdbc,tasks,new OaMessageCodec(new ObjectMapper()));
+    assertThat(service.reconcile(168L,"2026-10","210",List.of(gap))).contains("新增", "原已提交资料保留");
+    verify(mapper).refreshRequirement(8L,0,gap,"PENDING");
+    verify(mapper,never()).refreshRequirement(eq(7L),anyInt(),any(),anyString());
+    verify(jdbc).update(contains("oa_edit_allowed=0"),eq(8L));
+    var order = inOrder(jdbc, mapper);
+    order.verify(jdbc).update(contains("task_status='PENDING'"), eq(6L));
+    order.verify(mapper).refreshRequirement(8L,0,gap,"PENDING");
+    assertThat(task.getTaskVersion()).isEqualTo(4);
+    assertThat(submitted.getCurrentVersionId()).isEqualTo(9);
+    assertThat(submitted.getModuleStatus()).isEqualTo("SUBMITTED");
+  }
+
+  @Test void unknownSourceOrAlreadyOwnedModuleDoesNotBecomeAnAdditionalDispatch() {
+    var mapper=mock(QuoteTechModuleMapper.class); var tasks=mock(QuoteTechTaskMapper.class);
+    var jdbc=mock(JdbcTemplate.class);
+    var task=new QuoteTechTask(); task.setId(6L); task.setTaskStatus("SUBMITTED"); task.setApplicableOrgCode("210");
+    task.setTaskVersion(3); task.setOaAssignmentVersion(1); task.setExternalTaskStatus("PUBLISHED");
+    var owned=new QuoteTechModule(); owned.setId(7L); owned.setModuleType("MANUFACTURING");
+    owned.setAssigneeUserId(101L); owned.setCurrentVersionId(9L); owned.setModuleStatus("SUBMITTED");
+    var unknown=new QuoteTechModule(); unknown.setId(8L); unknown.setModuleType("PRICE"); unknown.setModuleStatus("PENDING");
+    when(tasks.selectActiveForUpdate(168L,"2026-10")).thenReturn(task);
+    when(mapper.selectByTaskId(6L)).thenReturn(List.of(owned,unknown));
+    var service=new TechnicalDataRequirementRefreshService(mapper,jdbc,tasks,new OaMessageCodec(new ObjectMapper()));
+    var facts=List.of(new TechnicalDataModuleRequirement("MANUFACTURING",true,"MISSING","原模块",
+        TechnicalDataAvailability.MISSING,"changed",LocalDateTime.now()),new TechnicalDataModuleRequirement("PRICE",false,
+        "WAIT","待检查",TechnicalDataAvailability.UNCONFIRMED,null,LocalDateTime.now()));
+    service.reconcile(168L,"2026-10","210",facts);
+    verify(mapper,never()).refreshRequirement(anyLong(),anyInt(),any(),anyString());
+    verify(jdbc,never()).update(anyString(),anyLong());
+  }
+
   @Test void correctedOrganizationRetiresOnlyAnEmptyUnassignedTask() {
     var modules = mock(QuoteTechModuleMapper.class);
     var tasks = mock(QuoteTechTaskMapper.class);

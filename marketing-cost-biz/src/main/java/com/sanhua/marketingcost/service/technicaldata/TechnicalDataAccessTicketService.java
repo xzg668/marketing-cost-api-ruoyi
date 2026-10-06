@@ -1,8 +1,0 @@
-package com.sanhua.marketingcost.service.technicaldata;
-
-import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataAccessTicketExchangeRequest;
-import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataAccessTicketExchangeResponse;
-
-public interface TechnicalDataAccessTicketService {
-  TechnicalDataAccessTicketExchangeResponse exchange(TechnicalDataAccessTicketExchangeRequest request);
-}

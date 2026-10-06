@@ -39,7 +39,7 @@ public class TechnicalDataPriceOwnership {
       long current = jdbc.queryForObject("SELECT owner_module_id FROM lp_quote_tech_price_claim WHERE material_code=? FOR UPDATE", Long.class, item.materialNo());
       var owner = find(item.materialNo());
       if (current != moduleId) {
-        if (!"CANCELLED".equals(owner.taskStatus()) || "APPROVED".equals(owner.moduleStatus())) {
+        if (!"CANCELLED".equals(owner.taskStatus()) || TechnicalDataSubmissionState.submitted(owner.moduleStatus())) {
           throw new TechnicalDataTaskException(TechnicalDataTaskErrorCode.SHARED_MODULE_CONFLICT,
               item.materialNo() + " 已由" + Objects.toString(owner.assigneeName(), "原技术员") + "办理，请查看原任务 " + owner.taskId() + "，不能重复补价");
         }

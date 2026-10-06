@@ -23,6 +23,11 @@ public class SecurityTechnicalDataActorProvider implements TechnicalDataActorPro
   public TechnicalDataActor current() {
     Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
     if (authentication == null) throw new IllegalStateException("当前登录用户无效");
+    if (authentication.getPrincipal() instanceof com.sanhua.marketingcost.integration.oa.oauth.OaOAuthPrincipal person) {
+      Set<String> authorities = authentication.getAuthorities().stream()
+          .map(authority -> authority.getAuthority()).collect(Collectors.toUnmodifiableSet());
+      return new TechnicalDataActor(person.userId(), person.name(), authorities, person.formId());
+    }
     SysUser user = resolveUser(authentication);
     if (user == null || user.getUserId() == null || user.getUserId() <= 0) {
       throw new IllegalStateException("当前登录用户缺少有效用户ID");
@@ -32,9 +37,7 @@ public class SecurityTechnicalDataActorProvider implements TechnicalDataActorPro
         .map(authority -> authority.getAuthority())
         .collect(Collectors.toUnmodifiableSet());
     return new TechnicalDataActor(
-        user.getUserId(), name, authorities,
-        detailLong(authentication.getDetails(), "technicalDataTaskId"),
-        detailText(authentication.getDetails(), "technicalDataPurpose"));
+        user.getUserId(), name, authorities);
   }
 
   private SysUser resolveUser(Authentication authentication) {
@@ -58,17 +61,4 @@ public class SecurityTechnicalDataActorProvider implements TechnicalDataActorPro
         ? Long.valueOf(value.toString()) : null;
   }
 
-  private Long detailLong(Object details, String key) {
-    if (!(details instanceof Map<?, ?> values)) return null;
-    Object value = values.get(key);
-    if (value instanceof Number number) return number.longValue();
-    return value != null && value.toString().matches("\\d+")
-        ? Long.valueOf(value.toString()) : null;
-  }
-
-  private String detailText(Object details, String key) {
-    if (!(details instanceof Map<?, ?> values)) return null;
-    Object value = values.get(key);
-    return value == null || !StringUtils.hasText(value.toString()) ? null : value.toString();
-  }
 }

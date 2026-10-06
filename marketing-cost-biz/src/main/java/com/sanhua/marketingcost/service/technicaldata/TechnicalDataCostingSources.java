@@ -24,7 +24,7 @@ import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** 正式组树和成本汇总共用的资料选择：公共明确缺失后，才读取唯一的已批准补录来源。 */
+/** 正式组树和成本汇总共用的资料选择：公共明确缺失后，才读取唯一的已提交补录来源。 */
 @Service
 public class TechnicalDataCostingSources {
   public record Source(String moduleType, QuoteTechTask task, QuoteTechProduct product,
@@ -105,7 +105,7 @@ public class TechnicalDataCostingSources {
     return new Selection(context, selected, facts, issues);
   }
 
-  /** 仅本任务准备阶段允许读取尚未送审的数量；跨报价仍须原任务全部批准且财务确认。 */
+  /** 本任务准备阶段可读取图库和补录数量；跨报价仍须原任务全部提交且财务确认。 */
   @Transactional
   public Map<String, Source> preparationSources(Long itemId, String month) {
     var context = context(itemId, month);
@@ -113,7 +113,8 @@ public class TechnicalDataCostingSources {
     Map<String, Source> selected = new LinkedHashMap<>();
     for (var fact : publicSources.checkDataSources(context)) {
       String type = fact.moduleType().name();
-      if (!Set.of("PACKAGE", "SOLDER", "MANUFACTURING").contains(type) || fact.availability() == TechnicalDataAvailability.AVAILABLE) continue;
+      if (!Set.of("DRAWING_BOM", "PACKAGE", "SOLDER", "MANUFACTURING").contains(type)
+          || fact.availability() == TechnicalDataAvailability.AVAILABLE) continue;
       if (fact.availability() != TechnicalDataAvailability.MISSING) {
         throw error(context, type, "TECH_DATA_SOURCE_NOT_CONFIRMED", fact.reason());
       }
@@ -178,27 +179,27 @@ public class TechnicalDataCostingSources {
     var product = repository.findProduct(owner.productId()).orElseThrow();
     var task = repository.findTask(owner.taskId()).orElseThrow();
     if (!Integer.valueOf(1).equals(product.getActiveFlag()) || !Integer.valueOf(1).equals(task.getActiveFlag())
-        || !"APPROVED".equals(task.getTaskStatus()) || !"PASSED".equals(task.getReviewStatus())
-        || !"APPROVED".equals(product.getProductStatus()) || product.getEffectiveVersionId() == null
-        || !"APPROVED".equals(owner.moduleStatus()) || !"APPROVED".equals(owner.versionStatus())) {
-      throw error(context, type, "TECH_DATA_TASK_NOT_APPROVED", "原补录尚未全部审批通过：" + label);
+        || !TechnicalDataSubmissionState.submitted(task.getTaskStatus())
+        || !TechnicalDataSubmissionState.submitted(product.getProductStatus()) || product.getEffectiveVersionId() == null
+        || !TechnicalDataSubmissionState.submitted(owner.moduleStatus()) || !TechnicalDataSubmissionState.submitted(owner.versionStatus())) {
+      throw error(context, type, "TECH_DATA_TASK_NOT_SUBMITTED", "原补录尚未全部提交：" + label);
     }
     var flow = task.getOaFlowId() == null ? null : workflow.findFlow(task.getOaFlowId());
-    // 本单资料确认前须能检查已批准内容；成本发布另由整单 I06 门禁保护。
+    // 本单资料确认前须能检查已提交内容；成本发布另行校验报价员本次确认采用的整单资料。
     // 其他报价复用时仍要求原报价员已认可资料，避免把待退回内容当作公共有效依据。
     if (!Objects.equals(task.getOaFormId(), context.oaFormId())
         && (flow == null || !flow.financeReady() || flow.confirmedFingerprint() == null
-        || !flow.confirmedFingerprint().equals(json.canonicalHash(workflow.approvalBasis(flow.id()))))) {
+        || !flow.confirmedFingerprint().equals(json.canonicalHash(workflow.submissionBasis(flow.id()))))) {
       throw error(context, type, "TECH_DATA_FINANCE_CONFIRMATION_REQUIRED", "原补录尚未到财务节点并完成资料确认：" + label);
     }
     var version = repository.findVersion(product.getEffectiveVersionId()).orElseThrow();
-    if (!Objects.equals(version.getProductId(), product.getId()) || !"APPROVED".equals(version.getVersionStatus())) {
+    if (!Objects.equals(version.getProductId(), product.getId()) || !TechnicalDataSubmissionState.submitted(version.getVersionStatus())) {
       throw error(context, type, "TECH_DATA_EFFECTIVE_VERSION_INVALID", "原补录有效版本指针异常");
     }
     var actual = content.fingerprint(version, content.readReferenceSnapshot(version.getReferenceSnapshotJson()),
         repository.findPackageItems(version.getId()), repository.findAuxItems(version.getId()), repository.findSalaryItems(version.getId()));
     if (!Objects.equals(actual, version.getContentFingerprint())) {
-      throw error(context, type, "TECH_DATA_CONTENT_FINGERPRINT_MISMATCH", "原补录内容与批准指纹不一致");
+      throw error(context, type, "TECH_DATA_CONTENT_FINGERPRINT_MISMATCH", "原补录内容与提交指纹不一致");
     }
     var moduleVersions = modules.selectByProductId(product.getId());
     var module = moduleVersions.stream().filter(row -> type.equals(row.getModuleType())).findFirst().orElseThrow();
@@ -207,7 +208,7 @@ public class TechnicalDataCostingSources {
     }
     var submitted = repository.findVersion(owner.versionId()).orElseThrow();
     if (dependencies.stale(submitted, moduleVersions).stream().anyMatch(issue -> type.equals(issue.moduleType()))) {
-      throw error(context, type, "TECH_DATA_SOURCE_CHANGED", "原批准补录的引用依据已经变化，请退回原办理人核实");
+      throw error(context, type, "TECH_DATA_SOURCE_CHANGED", "原提交补录的引用依据已经变化，请退回原办理人核实");
     }
     return new Source(type, task, product, version, owner.versionId());
   }

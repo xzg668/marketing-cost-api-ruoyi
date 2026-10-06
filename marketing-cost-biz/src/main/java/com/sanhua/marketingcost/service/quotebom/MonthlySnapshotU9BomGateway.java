@@ -61,14 +61,14 @@ public class MonthlySnapshotU9BomGateway implements CurrentU9BomGateway {
 
   private CurrentU9BomResult reuseAvailable(QuoteBomReadContext context,
       U9MonthlySnapshotIdentity identity, QuoteBomMonthlySnapshot existing) {
-    if (!details.load(existing.getId()).isEmpty()) return restored(existing);
+    if (!details.loadCurrent(existing.getId()).isEmpty()) return restored(existing);
     // Pre-migration headers stored only a batch ID. Backfill while that exact batch still exists.
     // If EasyData already removed it, preserve the old header for history and start a new card
     // from the current BOM; the lost historical structure cannot be reconstructed.
     QuoteBomMonthlySnapshot locked = mapper.selectU9MonthlyByIdentityForUpdate(identity.identityKey());
     if (locked == null) return CurrentU9BomResult.error("U9月度卡片并发更新，请重试");
     if (!STATUS_SUCCESS.equals(locked.getSyncStatus())) return restored(locked);
-    if (!details.load(locked.getId()).isEmpty()) return restored(locked);
+    if (!details.loadCurrent(locked.getId()).isEmpty()) return restored(locked);
     try {
       details.captureU9(locked.getId(), context, locked.getBomBatchId());
       return restored(locked);

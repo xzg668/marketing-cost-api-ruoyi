@@ -7,7 +7,7 @@ import java.util.List;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-/** 原生 I02/I03/I05 的一次发送及回执；与产品快照通过既有消息编号关联。 */
+/** 原生 I02/I03/I05 的业务批次及分步回执；与产品快照通过既有消息编号关联。 */
 @Repository
 public class OaTechnicalBatchRepository {
 
@@ -20,7 +20,11 @@ public class OaTechnicalBatchRepository {
     String inputFingerprint,
     String status,
     ObjectNode request,
-    OaWorkflowResult result
+    OaWorkflowResult result,
+    String returnStep,
+    int returnAttempt,
+    ObjectNode rejectRequest,
+    OaWorkflowResult peopleResult
   ) {}
 
   private final JdbcTemplate jdbc;
@@ -48,7 +52,12 @@ public class OaTechnicalBatchRepository {
           (ObjectNode) codec.read(row.getString("request_json")),
           row.getString("result_json") == null
             ? null
-            : json.convertValue(codec.read(row.getString("result_json")), OaWorkflowResult.class)
+            : json.convertValue(codec.read(row.getString("result_json")), OaWorkflowResult.class),
+          row.getString("return_step"),
+          row.getInt("return_attempt"),
+          row.getString("reject_request_json") == null ? null : (ObjectNode) codec.read(row.getString("reject_request_json")),
+          row.getString("people_result_json") == null ? null
+              : json.convertValue(codec.read(row.getString("people_result_json")), OaWorkflowResult.class)
         ),
       id
     );
@@ -98,6 +107,54 @@ public class OaTechnicalBatchRepository {
         id
       ) == 1
     );
+  }
+
+  public void prepareReturn(String id, ObjectNode peopleRequest, ObjectNode rejectRequest) {
+    requireOne(jdbc.update("""
+        UPDATE lp_oa_technical_batch SET request_json=?,reject_request_json=?,return_step='PEOPLE'
+        WHERE id=? AND operation='I05' AND status='PREPARED' AND return_step IS NULL
+        """, codec.write(peopleRequest), codec.write(rejectRequest), id));
+  }
+
+  public boolean startReturnStep(Batch batch) {
+    return jdbc.update("""
+        UPDATE lp_oa_technical_batch SET status='SENDING',return_attempt=return_attempt+1,result_json=NULL,updated_at=NOW(3)
+        WHERE id=? AND operation='I05' AND status=? AND return_step=? AND return_attempt=?
+        """, batch.id(), batch.status(), batch.returnStep(), batch.returnAttempt()) == 1;
+  }
+
+  public void receiveReturnStep(Batch sending, OaWorkflowResult result) {
+    boolean people = "PEOPLE".equals(sending.returnStep());
+    boolean success = result.status() == OaWorkflowResult.Status.SUCCESS;
+    String state = success ? (people ? "REJECT_READY" : "OA_ACCEPTED")
+        : !people && (result.status() == OaWorkflowResult.Status.REJECTED || result.status() == OaWorkflowResult.Status.NOT_SENT)
+            ? "RETURN_FAILED" : result.status().name();
+    requireOne(jdbc.update("""
+        UPDATE lp_oa_technical_batch SET status=?,return_step=?,result_json=?,
+          people_result_json=IF(?=1,CAST(? AS JSON),people_result_json),updated_at=NOW(3)
+        WHERE id=? AND operation='I05' AND status='SENDING' AND return_step=? AND return_attempt=?
+        """, state, people && success ? "REJECT" : sending.returnStep(),
+        people && success ? null : codec.write(result), people ? 1 : 0, codec.write(result),
+        sending.id(), sending.returnStep(), sending.returnAttempt()));
+  }
+
+  /** 第一阶段的人工核实作为独立凭据保存，保留原始未知回执。 */
+  public void confirmPeopleManually(Batch batch, OaWorkflowResult confirmed) {
+    requireOne(jdbc.update("""
+        UPDATE lp_oa_technical_batch SET status='REJECT_READY',return_step='REJECT',
+          result_json=NULL,people_result_json=?,updated_at=NOW(3)
+        WHERE id=? AND operation='I05' AND status='UNKNOWN' AND return_step='PEOPLE' AND return_attempt=?
+        """, codec.write(confirmed), batch.id(), batch.returnAttempt()));
+  }
+
+  /** 已鉴权的技术节点通知确认第二步结果；不重新发送，也不覆盖明确失败。 */
+  public void confirmReturnNotification(Batch batch, long notificationId) {
+    var result = new OaWorkflowResult("OA-NOTIFY:" + notificationId, OaWorkflowResult.Status.SUCCESS,
+        null, "0", "OA技术节点通知已确认原流程退回", batch.request().path("requestId").asText(), null, 0);
+    requireOne(jdbc.update("""
+        UPDATE lp_oa_technical_batch SET status='OA_ACCEPTED',result_json=?,updated_at=NOW(3)
+        WHERE id=? AND operation='I05' AND status='UNKNOWN' AND return_step='REJECT' AND return_attempt=?
+        """, codec.write(result), batch.id(), batch.returnAttempt()));
   }
 
   public void received(String id, OaWorkflowResult result) {

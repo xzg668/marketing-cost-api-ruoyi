@@ -8,7 +8,7 @@ import java.util.TreeSet;
 /** I04/I08：requestId 始终是 I01 的流程 ID，employeeNos 始终指技术员。 */
 public record OaWorkflowNotification(String requestId, String eventType, List<String> employeeNos,
     String reason) {
-  public boolean technical() { return Set.of("TECHNICAL", "TECH_APPROVED").contains(eventType); }
+  public boolean technical() { return "TECHNICAL".equals(eventType); }
 
   public static OaWorkflowNotification parse(JsonNode root) {
     if (!root.isObject()) throw invalid("请求必须为 JSON 对象");
@@ -18,10 +18,10 @@ public record OaWorkflowNotification(String requestId, String eventType, List<St
     });
     String requestId = text(root, "requestId", true, 128);
     String type = text(root, "eventType", true, 32);
-    if (!Set.of("TECHNICAL", "TECH_APPROVED", "COSTING", "COMPLETED").contains(type)) {
+    if (!Set.of("TECHNICAL", "COSTING", "COMPLETED").contains(type)) {
       throw invalid("未知 eventType：" + type);
     }
-    boolean technical = Set.of("TECHNICAL", "TECH_APPROVED").contains(type);
+    boolean technical = "TECHNICAL".equals(type);
     var numbers = new TreeSet<String>();
     var employees = root.get("employeeNos");
     if (technical && (employees == null || !employees.isArray() || employees.isEmpty())) {

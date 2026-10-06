@@ -33,6 +33,7 @@ import org.springframework.util.StringUtils;
 /** 只编排BOM、价格类型、价格准备与成本发布；输入及失败规则由专职组件处理。 */
 @Service
 public class ProductCostingPipelineImpl implements ProductCostingPipeline {
+  private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ProductCostingPipelineImpl.class);
   private com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy oaWorkflowAccess;
   @org.springframework.beans.factory.annotation.Autowired
   public void setOaWorkflowAccess(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy policy) {
@@ -83,19 +84,6 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
     // 请求归属错误直接拒绝；验证通过后，所有阶段故障均返回同一产品的结构化结果。
     ProductCostingContext context = contextResolver.resolve(request);
     oaWorkflowAccess.requireCosting(context.form().getId());
-    var oaState = oaWorkflowAccess.view(context.form().getId());
-    if (oaState != null && "MATERIAL_REVIEW".equals(oaState.state())
-        && !oaWorkflowAccess.materialConfirmed(context.form().getId())) {
-      var checked = withSourceCheck(context, executeStages(context, true));
-      if ("READY".equals(checked.getPipelineStatus())) {
-        checked.setPipelineStatus("BLOCKED");
-        checked.setBlockingStatus("WAIT_TECH_DATA");
-        checked.setCurrentStep("MATERIAL_CONFIRMATION");
-        checked.setMessage("资料检查通过，请由报价员确认整单资料后继续核算");
-        checked.setErrorCode("MATERIAL_CONFIRMATION_REQUIRED");
-      }
-      return checked;
-    }
     ProductCostingResult result = executeResolved(context, request.force());
     return withSourceCheck(context, result);
   }
@@ -104,6 +92,26 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   public ProductCostingResult prepare(ProductCostingRequest request) {
     ProductCostingContext context = contextResolver.resolve(request);
     oaWorkflowAccess.requireCosting(context.form().getId());
+    try {
+      ProductCostingContext current = contextResolver.resolveRevision(context);
+      var reusable = successLookup.find(current);
+      if (reusable.isPresent()) {
+        var check = technicalSources.afterCosting(current);
+        var blocked = technicalBlock(current, check);
+        if (blocked != null) return blocked;
+        var result = success(current, summary(reusable.get().version()), reusable.get().prepareNo(),
+            reusable.get().warningCount(), true, "当前输入已核算成功，沿用现有成本版本");
+        result.setPipelineStatus("READY");
+        result.setCurrentStep("MATERIAL_CHECK");
+        result.setSourceRevision(current.sourceRevision());
+        result.setTechnicalDataCheck(check);
+        return result;
+      }
+    } catch (com.sanhua.marketingcost.service.EffectiveTechnicalDataException pendingApproval) {
+      // 未获批准的补录不能复用旧成功；继续逐项检查并返回实际资料缺口。
+    } catch (RuntimeException exception) {
+      return failure(context, "INPUT_CHECK", exception, true);
+    }
     return withSourceCheck(context, executeStages(context, true));
   }
 
@@ -113,6 +121,8 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       result.setTechnicalDataCheck(technicalSources.afterCosting(context));
     } catch (RuntimeException exception) {
       // 来源检查未保存时不能让后续分派误用旧结论，核算原失败原因仍保留在工作区。
+      log.warn("核算后补录来源检查失败：oaNo={}, itemId={}, month={}",
+          context.form().getOaNo(), context.itemId(), context.periodMonth(), exception);
       result.setMessage(result.getMessage() + "；补录来源检查未完成，请重新检查资料");
     }
     return result;
@@ -180,7 +190,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
         prepared.setTechnicalDataCheck(sourceCheck);
         return prepared;
       }
-      oaWorkflowAccess.requireCostPublication(scope.form().getId());
+      oaWorkflowAccess.requireCostPublication(scope.form().getId(), scope.itemId());
       QuoteCostRunTrialRequest costRequest = new QuoteCostRunTrialRequest();
       costRequest.setPeriodMonth(scope.periodMonth());
       costRequest.setPricePrepareNo(prepareNo);
@@ -326,7 +336,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   }
 
   private ProductCostingResult reusableSuccess(ProductCostingContext scope) {
-    oaWorkflowAccess.requireCostPublication(scope.form().getId());
+    oaWorkflowAccess.requireCostPublication(scope.form().getId(), scope.itemId());
     return successLookup.find(scope)
         .map(reused -> {
           var check = technicalSources.afterCosting(scope);

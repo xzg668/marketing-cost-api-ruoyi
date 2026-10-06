@@ -17,13 +17,12 @@ public interface QuoteTechProductMapper extends BaseMapper<QuoteTechProduct> {
       + "AND vm.required_flag=1 AND vm.assignee_user_id=#{userId} ";
   String WORKBENCH_STATUS = "CASE WHEN #{accessMode}='ASSIGNEE' THEN CASE "
       + "WHEN NOT EXISTS (" + OWN_MODULES + ") THEN task.task_status "
-      + "WHEN NOT EXISTS (" + OWN_MODULES + "AND vm.module_status != 'APPROVED') THEN 'APPROVED' "
       + "WHEN NOT EXISTS (" + OWN_MODULES + "AND vm.module_status NOT IN ('SUBMITTED','APPROVED')) THEN 'SUBMITTED' "
       + "WHEN EXISTS (" + OWN_MODULES + "AND vm.module_status='FROZEN') THEN 'PREPARED' "
       + "WHEN EXISTS (" + OWN_MODULES + "AND vm.module_status='RETURNED') THEN 'PARTIALLY_RETURNED' "
       + "WHEN EXISTS (" + OWN_MODULES + "AND vm.module_status IN ('READY','EDITING')) THEN 'IN_PROGRESS' "
       + "ELSE 'PENDING' END "
-      + "WHEN task.task_status IN ('UNASSIGNED','APPROVED','CANCELLED') THEN task.task_status "
+      + "WHEN task.task_status IN ('UNASSIGNED','RETURN_PENDING','PARTIALLY_RETURNED','CANCELLED') THEN task.task_status "
       + "WHEN EXISTS (SELECT 1 FROM lp_quote_tech_submission vs WHERE vs.product_id=product.id "
       + "AND vs.sent_at IS NOT NULL AND vs.submission_status IN ('SENT','APPROVED','RETURNED')) THEN 'SUBMITTED' "
       + "ELSE 'PENDING' END";

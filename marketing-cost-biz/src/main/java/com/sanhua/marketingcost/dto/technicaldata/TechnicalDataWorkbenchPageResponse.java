@@ -9,5 +9,5 @@ public record TechnicalDataWorkbenchPageResponse(
     boolean canViewSupplementOverview,
     Summary summary,
     List<TechnicalDataWorkbenchRowResponse> records) {
-  public record Summary(long total, long pending, long approving, long approved, long unassigned) {}
+  public record Summary(long total, long pending, long submitting, long submitted, long unassigned) {}
 }

@@ -7,6 +7,7 @@ import static com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawi
 import static com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybridBomException.U9_QUERY_BLOCKED;
 
 import com.sanhua.marketingcost.entity.ElectronicDrawingSourceNode;
+import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
@@ -42,9 +43,12 @@ public class ElectronicDrawingHybridBomAssembler {
   private static final int DIVISION_SCALE = 16;
 
   private final ElectronicDrawingU9SubBomPort u9SubBomPort;
+  private final PackageComponentIdentifyService packageComponents;
 
-  public ElectronicDrawingHybridBomAssembler(ElectronicDrawingU9SubBomPort u9SubBomPort) {
+  public ElectronicDrawingHybridBomAssembler(ElectronicDrawingU9SubBomPort u9SubBomPort,
+      PackageComponentIdentifyService packageComponents) {
     this.u9SubBomPort = u9SubBomPort;
+    this.packageComponents = packageComponents;
   }
 
   public HybridBom assemble(AssembleCommand command) {
@@ -70,7 +74,7 @@ public class ElectronicDrawingHybridBomAssembler {
       composeElectronic(valid, electronicTree, child, rootKey, rootPath, ONE,
           rootAncestors, output, stats);
     }
-    validateFinalTree(output);
+    validateFinalTree(output, valid.materialOrganizationCode());
     String fingerprint = fingerprint(output);
     return new HybridBom(
         List.copyOf(output), fingerprint, stats.u9PurchaseLeaves,
@@ -84,26 +88,28 @@ public class ElectronicDrawingHybridBomAssembler {
       ElectronicNode source,
       String parentKey,
       String parentPath,
-      BigDecimal parentQtyToTop,
+      BigDecimal parentOccurrencesToTop,
       Set<String> ancestorMaterialCodes,
       List<Node> output,
       ComposeStats stats) {
     MaterialSnapshot material = source.material();
-    Nature nature = Nature.parse(material.shapeAttr());
+    if (material == null) throw invalid(MAPPING_INCOMPLETE, "实际参与核算的图库物料未确认 U9 料号：" + source.drawingCode());
+    if (!ElectronicDrawingBomScope.DRAWING_NODE.equals(material.sourceCategory())
+        && !Set.of(ElectronicDrawingSourceNode.MATCH_AUTO, ElectronicDrawingSourceNode.MATCH_MANUAL).contains(source.matchStatus()))
+      throw invalid(MAPPING_INCOMPLETE, "实际参与核算的图库物料未确认 U9 料号：" + source.drawingCode());
+    validateMaterial(material, "电子图库当前可达节点");
+    Nature nature = source.effectiveNature() == null ? Nature.parse(material.shapeAttr()) : source.effectiveNature();
     String normalizedCode = normalizeCode(material.materialCode());
     if (ancestorMaterialCodes.contains(normalizedCode)) {
       throw invalid(STRUCTURE_INVALID,
           "电子图库分支存在循环料号：" + material.materialCode());
     }
-    BigDecimal quantity = positive(source.quantity(), "电子图库节点数量");
-    BigDecimal toTop = parentQtyToTop.multiply(quantity);
+    BigDecimal occurrencesToTop = parentOccurrencesToTop.multiply(source.quantity());
+    BigDecimal quantity = electronicQuantity(source);
+    BigDecimal toTop = parentOccurrencesToTop.multiply(quantity);
     String nodeKey = "ED:" + source.sourceNodeId();
     String path = checkedPath(parentPath + nodeKey + "/");
     List<ElectronicNode> children = tree.children().getOrDefault(source.sourceSequence(), List.of());
-    if (nature == Nature.PURCHASE && !children.isEmpty()) {
-      throw invalid(STRUCTURE_INVALID,
-          "采购件不能保留电子图库下级：" + material.materialCode());
-    }
     output.add(new Node(
         nodeKey, parentKey, level(path), material.materialCode(), material.materialName(),
         material.materialSpec(), material.materialModel(), source.drawingCode(),
@@ -113,6 +119,18 @@ public class ElectronicDrawingHybridBomAssembler {
         SOURCE_ELECTRONIC_DRAWING, source.sourceNodeId(), null, null, source.matchStatus()));
     if (nature == Nature.PURCHASE) {
       stats.electronicPurchaseLeaves++;
+      return;
+    }
+
+    if (ElectronicDrawingBomScope.DRAWING_NODE.equals(material.sourceCategory())) {
+      var raw = command.manufacturingRawNodes().get(source.sourceNodeId());
+      if (raw != null) {
+        attachTechnicalRaw(raw, source, nodeKey, path, occurrencesToTop, withAncestor(ancestorMaterialCodes, normalizedCode), output);
+        return;
+      }
+      if (children.isEmpty()) throw invalid(BOM_GAP, "图库结构节点没有下级：" + source.drawingCode());
+      for (var child : children) composeElectronic(command, tree, child, nodeKey, path, occurrencesToTop,
+          withAncestor(ancestorMaterialCodes, normalizedCode), output, stats);
       return;
     }
 
@@ -131,23 +149,23 @@ public class ElectronicDrawingHybridBomAssembler {
       case AVAILABLE -> {
         validateAvailableResult(command, material.materialCode(), result);
         Set<String> nextAncestors = withAncestor(ancestorMaterialCodes, normalizedCode);
-        attachU9Tree(result.nodes(), source, nodeKey, path, toTop,
+        attachU9Tree(result.nodes(), command.materialOrganizationCode(), source, nodeKey, path, toTop,
             nextAncestors, output, stats);
         stats.replacedElectronicDescendants += countDescendants(source.sourceSequence(), tree.children());
       }
       case NOT_FOUND -> {
+        var savedRaw = command.manufacturingRawNodes().get(source.sourceNodeId());
+        if (nature == Nature.MANUFACTURE && savedRaw != null) {
+          attachTechnicalRaw(savedRaw, source, nodeKey, path, occurrencesToTop, withAncestor(ancestorMaterialCodes, normalizedCode), output);
+          return;
+        }
         if (children.isEmpty()) {
-          ManufacturingRawNode raw = command.manufacturingRawNodes().get(source.sourceNodeId());
-          if (nature == Nature.MANUFACTURE && raw != null) {
-            attachTechnicalRaw(raw, source, nodeKey, path, toTop, withAncestor(ancestorMaterialCodes, normalizedCode), output);
-            return;
-          }
           throw invalid(BOM_GAP,
               "制造/委外/虚拟件既无 U9 子 BOM，也无电子图库下级：" + material.materialCode());
         }
         Set<String> nextAncestors = withAncestor(ancestorMaterialCodes, normalizedCode);
         for (ElectronicNode child : children) {
-          composeElectronic(command, tree, child, nodeKey, path, toTop,
+          composeElectronic(command, tree, child, nodeKey, path, occurrencesToTop,
               nextAncestors, output, stats);
         }
       }
@@ -174,8 +192,42 @@ public class ElectronicDrawingHybridBomAssembler {
         material.unit(), path, 1, SOURCE_TECHNICAL_RAW, parent.sourceNodeId(), null, null, SOURCE_TECHNICAL_RAW));
   }
 
+  private BigDecimal electronicQuantity(ElectronicNode source) {
+    BigDecimal pieces = positive(source.quantity(), "电子图库节点数量");
+    String unit = weightUnit(required(source.material().unit(), "电子图库节点单位"));
+    if (unit == null) {
+      return pieces;
+    }
+    BigDecimal weight = source.referenceWeight();
+    if (weight == null || weight.signum() <= 0) {
+      throw invalid(BOM_GAP, "电子图库按重量计价的物料缺少有效单重：" + source.drawingCode());
+    }
+    String weightUnit = text(source.referenceWeightUnit());
+    if (weightUnit == null) {
+      throw invalid(BOM_GAP, "电子图库物料单重缺少单位：" + source.drawingCode());
+    }
+    BigDecimal grams = switch (weightUnit(weightUnit)) {
+      case "g" -> weight;
+      case "kg" -> weight.movePointRight(3);
+      case null, default -> throw invalid(BOM_GAP, "电子图库物料单重单位无法换算：" + source.drawingCode());
+    };
+    // 图库数量是件数；只有按重量管理的料品才换成其采购/核算单位。
+    // 图库后代仍按部件件数展开，U9 子 BOM 则按转换后的母件计量单位展开。
+    return pieces.multiply("kg".equals(unit) ? grams.movePointLeft(3) : grams);
+  }
+
+  private String weightUnit(String value) {
+    if (value == null) return null;
+    return switch (value.trim().toLowerCase(Locale.ROOT)) {
+      case "g", "克" -> "g";
+      case "kg", "千克", "公斤" -> "kg";
+      default -> null;
+    };
+  }
+
   private void attachU9Tree(
       List<ElectronicDrawingU9SubBomPort.U9Node> sourceNodes,
+      String materialOrganizationCode,
       ElectronicNode anchor,
       String anchorKey,
       String anchorPath,
@@ -185,7 +237,7 @@ public class ElectronicDrawingHybridBomAssembler {
       ComposeStats stats) {
     U9Tree tree = validateU9Tree(sourceNodes);
     for (ElectronicDrawingU9SubBomPort.U9Node root : tree.roots()) {
-      attachU9Node(tree, root, anchor, anchorKey, anchorPath, anchorQtyToTop,
+      attachU9Node(tree, root, materialOrganizationCode, anchor, anchorKey, anchorPath, anchorQtyToTop,
           ancestorMaterialCodes, output, stats);
     }
   }
@@ -193,6 +245,7 @@ public class ElectronicDrawingHybridBomAssembler {
   private void attachU9Node(
       U9Tree tree,
       ElectronicDrawingU9SubBomPort.U9Node source,
+      String materialOrganizationCode,
       ElectronicNode anchor,
       String parentKey,
       String parentPath,
@@ -220,7 +273,11 @@ public class ElectronicDrawingHybridBomAssembler {
     if (nature == Nature.PURCHASE && !children.isEmpty()) {
       throw invalid(STRUCTURE_INVALID, "U9 采购件不能有子级：" + code);
     }
-    if (nature != Nature.PURCHASE && children.isEmpty()) {
+    // 包装母件由现有包装流程检查下级、补录并汇总成本；U9 原始树可能只带母件。
+    // 保留母件身份和用量，不能在图库组树阶段误判为制造件缺原材料，也不能丢弃包装成本。
+    boolean packageParent = nature == Nature.VIRTUAL
+        && packageComponents.isPackageComponent(code, materialOrganizationCode);
+    if (nature != Nature.PURCHASE && !packageParent && children.isEmpty()) {
       throw invalid(BOM_GAP, "U9 制造/委外/虚拟件没有子级：" + code);
     }
     output.add(new Node(
@@ -239,7 +296,7 @@ public class ElectronicDrawingHybridBomAssembler {
     }
     Set<String> nextAncestors = withAncestor(ancestorMaterialCodes, normalizedCode);
     for (ElectronicDrawingU9SubBomPort.U9Node child : children) {
-      attachU9Node(tree, child, anchor, nodeKey, path, toTop,
+      attachU9Node(tree, child, materialOrganizationCode, anchor, nodeKey, path, toTop,
           nextAncestors, output, stats);
     }
   }
@@ -262,12 +319,6 @@ public class ElectronicDrawingHybridBomAssembler {
           || text(node.sourceSequence()) == null || text(node.drawingCode()) == null) {
         throw invalid(COMMAND_INVALID, "电子图库源节点身份、源行和图号不能为空");
       }
-      if (!ElectronicDrawingSourceNode.MATCH_AUTO.equals(node.matchStatus())
-          && !ElectronicDrawingSourceNode.MATCH_MANUAL.equals(node.matchStatus())) {
-        throw invalid(MAPPING_INCOMPLETE,
-            "电子图库仍有未完成料号映射：" + node.drawingCode());
-      }
-      validateMaterial(node.material(), "电子图库节点");
       positive(node.quantity(), "电子图库节点数量");
     }
     Map<Long, ManufacturingRawNode> rawByParent = new LinkedHashMap<>();
@@ -279,7 +330,7 @@ public class ElectronicDrawingHybridBomAssembler {
       }
       var parent = nodes.stream().filter(node -> Objects.equals(node.sourceNodeId(), raw.parentSourceNodeId())).findFirst()
           .orElseThrow(() -> invalid(STRUCTURE_INVALID, "补录原材料不属于当前图库源节点"));
-      if (!same(parent.material().materialCode(), raw.parentMaterialCode())) throw invalid(STRUCTURE_INVALID, "补录制造件料号已变化");
+      if (parent.material() == null || !same(parent.material().materialCode(), raw.parentMaterialCode())) throw invalid(STRUCTURE_INVALID, "补录制造件核算身份已变化");
       validateMaterial(raw.material(), "补录原材料");
       if (Nature.parse(raw.material().shapeAttr()) != Nature.PURCHASE) throw invalid(STRUCTURE_INVALID, "补录原材料必须为采购件");
       positive(raw.quantityPerParent(), "补录原材料用量");
@@ -410,7 +461,7 @@ public class ElectronicDrawingHybridBomAssembler {
     }
   }
 
-  private void validateFinalTree(List<Node> nodes) {
+  private void validateFinalTree(List<Node> nodes, String materialOrganizationCode) {
     Map<String, Node> byKey = nodes.stream().collect(Collectors.toMap(Node::nodeKey,
         Function.identity(), (first, ignored) -> {
           throw invalid(STRUCTURE_INVALID, "混合 BOM 存在重复节点键");
@@ -426,7 +477,9 @@ public class ElectronicDrawingHybridBomAssembler {
       if (node.level() > 0 && nature == Nature.PURCHASE && !childRows.isEmpty()) {
         throw invalid(STRUCTURE_INVALID, "混合 BOM 采购件存在子级：" + node.materialCode());
       }
-      if (nature != Nature.PURCHASE && childRows.isEmpty()) {
+      if (nature != Nature.PURCHASE && childRows.isEmpty()
+          && !(nature == Nature.VIRTUAL
+              && packageComponents.isPackageComponent(node.materialCode(), materialOrganizationCode))) {
         throw invalid(BOM_GAP, "混合 BOM 制造/委外/虚拟件没有子级：" + node.materialCode());
       }
       positive(node.qtyPerParent(), "混合 BOM 相对用量");
@@ -632,8 +685,11 @@ public class ElectronicDrawingHybridBomAssembler {
       String drawingCode,
       String sourceName,
       BigDecimal quantity,
+      BigDecimal referenceWeight,
+      String referenceWeightUnit,
       String matchStatus,
-      MaterialSnapshot material) {}
+      MaterialSnapshot material,
+      Nature effectiveNature) {}
 
   public record MaterialSnapshot(
       String materialCode,

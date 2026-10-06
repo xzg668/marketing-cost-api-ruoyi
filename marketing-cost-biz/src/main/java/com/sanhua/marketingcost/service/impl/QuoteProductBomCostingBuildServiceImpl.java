@@ -161,7 +161,7 @@ public class QuoteProductBomCostingBuildServiceImpl
     QuoteBomStatus status = record.getQuoteBomStatusId() == null
         ? null : statusMapper.selectById(record.getQuoteBomStatusId());
     List<com.sanhua.marketingcost.entity.BomRawHierarchy> frozen =
-        status == null ? List.of() : monthlyDetails.load(status.getSyncRecordId());
+        status == null ? List.of() : monthlyDetails.loadCurrent(status.getSyncRecordId());
     if (!frozen.isEmpty()) {
       for (com.sanhua.marketingcost.entity.BomRawHierarchy row : frozen) {
         if (row.getId() != null) rawById.put(row.getId(), row);

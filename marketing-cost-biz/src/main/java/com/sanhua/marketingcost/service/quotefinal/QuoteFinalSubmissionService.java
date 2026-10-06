@@ -144,7 +144,7 @@ public class QuoteFinalSubmissionService {
     return oa.preview(document.requestId(), employee, document.processCode(), oaRows(costs));
   }
   private List<OaFinalCostSubmissionClient.Row> oaRows(List<CostLine> costs) {
-    return costs.stream().map(c -> new OaFinalCostSubmissionClient.Row(c.businessType(), c.sourceRowId(), c.sourceRowIndex(), c.totalCost())).toList();
+    return costs.stream().map(c -> new OaFinalCostSubmissionClient.Row(c.sourceRowIndex(), c.totalCost())).toList();
   }
   private List<CostLine> currentCosts(OaForm form, String period, String operator) {
     var products = items.selectList(Wrappers.<OaFormItem>lambdaQuery().eq(OaFormItem::getOaFormId, form.getId())
@@ -200,7 +200,7 @@ public class QuoteFinalSubmissionService {
     return new Status(submission == null ? null : submission.id(), state, month, costs, costs.size(), ready, fingerprint, error, reason, allowed);
   }
   private OaForm requireForm(String oaNo, TechnicalDataActor actor) {
-    if (actor == null || actor.userId() == null || actor.shortSession() || !actor.has("ingest:quote:cost-run:execute")) throw invalid("无权确认本报价");
+    if (actor == null || actor.userId() == null || actor.oaSession() || !actor.has("ingest:quote:cost-run:execute")) throw invalid("无权确认本报价");
     var form = forms.selectOne(Wrappers.<OaForm>lambdaQuery().eq(OaForm::getOaNo, oaNo));
     if (form == null || !Objects.equals(form.getBusinessUnitType(), BusinessUnitContext.getCurrentBusinessUnitType())) throw invalid("报价单不存在或不属于当前业务单元");
     return form;

@@ -99,7 +99,7 @@ public class TechnicalDataTaskApplicationServiceImpl
       TechnicalDataTaskPublishRequest request, TechnicalDataActor actor) {
     requireActor(actor);
     if (!actor.canPublish()) throw forbidden("当前用户无权发布技术资料任务");
-    if (actor.shortSession()) throw forbidden("短时任务会话不能批量分派产品");
+    if (actor.oaSession()) throw forbidden("OA 协作会话不能分派产品");
     Command command = normalize(request);
     String fingerprint = messageCodec.canonicalHash(request);
     var replay = oaDispatch.replay(command.requestId(), fingerprint, actor);
@@ -146,7 +146,13 @@ public class TechnicalDataTaskApplicationServiceImpl
           task = repository.findTask(task.getId()).orElseThrow();
           action = "ASSIGNED";
         } else {
-          requireSameAssignment(task, command, source.product());
+          boolean additional = repository.findProducts(task.getId()).stream()
+              .flatMap(product -> repository.findModules(product.getId()).stream())
+              .anyMatch(module -> Integer.valueOf(1).equals(module.getRequiredFlag())
+                  && module.getAssigneeUserId() == null && module.getCurrentVersionId() == null
+                  && "PENDING".equals(module.getModuleStatus()) && "MISSING".equals(module.getSourceAvailability())
+                  && Integer.valueOf(0).equals(module.getOaEditAllowed()));
+          if (!additional) requireSameAssignment(task, command, source.product());
         }
       }
       selected.add(task);
@@ -170,7 +176,7 @@ public class TechnicalDataTaskApplicationServiceImpl
       TechnicalDataActor actor) {
     requireActor(actor);
     if (!actor.technician() && !actor.canEdit() && !actor.canViewSupplementOverview()) throw forbidden("当前用户无权查看技术资料工作台");
-    if (actor.shortSession()) throw forbidden("短时任务会话不允许查询工作台列表");
+    if (actor.oaSession()) throw forbidden("OA 协作会话只能查看当前单据的任务");
     if (current <= 0) throw invalid("current必须大于0");
     if (size <= 0 || size > 100) throw invalid("size必须在1到100之间");
     oaNo = text("oaNo", oaNo, 128, false);
@@ -223,11 +229,10 @@ public class TechnicalDataTaskApplicationServiceImpl
     for (String pendingStatus : List.of("PENDING", "IN_PROGRESS", "RETURN_PENDING", "PARTIALLY_RETURNED")) {
       pending += repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, pendingStatus, month, search, oaNo);
     }
-    long approving = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, "PREPARED", month, search, oaNo)
-        + repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, "SUBMITTED", month, search, oaNo);
-    long approved = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, "APPROVED", month, search, oaNo);
+    long submitting = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, "PREPARED", month, search, oaNo);
+    long submitted = repository.countAccessibleProducts(accessMode, actor.userId(), businessUnitType, "SUBMITTED", month, search, oaNo);
     var summary = new TechnicalDataWorkbenchPageResponse.Summary(
-        allTasks + unassigned, pending, approving, approved, unassigned + unassignedTasks);
+        allTasks + unassigned, pending, submitting, submitted, unassigned + unassignedTasks);
     return new TechnicalDataWorkbenchPageResponse(total, current, size, actor.canViewSupplementOverview(), summary, records);
   }
 
@@ -450,8 +455,7 @@ public class TechnicalDataTaskApplicationServiceImpl
           contentCodec.solder(visible.get("SOLDER")),contentCodec.netLoss(visible.get("NET_LOSS")),
           contentCodec.prices(visible.get("PRICE")),null);
       boolean ownDraft=submission==null && modules.stream().anyMatch(module -> readPolicy.ownsDraft(module,actor));
-      String state=ownDraft?product.getProductStatus():visible.isEmpty()?"PENDING":
-          visible.values().stream().allMatch(version -> "APPROVED".equals(version.getVersionStatus()))?"APPROVED":"SUBMITTED";
+      String state=ownDraft?product.getProductStatus():visible.isEmpty()?"PENDING":"SUBMITTED";
       Long latest=visible.values().stream().filter(version -> !"DRAFT".equals(version.getVersionStatus()))
           .map(QuoteTechDataVersion::getId).max(Long::compareTo).orElse(null);
       result.put(product.getId(),new TechnicalDataProductResponse(
@@ -472,8 +476,7 @@ public class TechnicalDataTaskApplicationServiceImpl
       var own = products.stream().flatMap(product -> product.modules().stream())
           .filter(module -> module.required() && Objects.equals(module.assigneeUserId(), actor.userId()))
           .map(TechnicalDataModuleResponse::moduleStatus).toList();
-      if (own.isEmpty()) return task.getTaskStatus();
-      if (own.stream().allMatch("APPROVED"::equals)) return "APPROVED";
+      if (own.isEmpty()) return products.stream().anyMatch(product -> product.latestSubmittedVersionId() != null) ? "SUBMITTED" : "PENDING";
       if (own.stream().allMatch(state -> Set.of("SUBMITTED", "APPROVED").contains(state))) return "SUBMITTED";
       if (own.contains("FROZEN")) return "PREPARED";
       if (own.contains("RETURNED")) return "PARTIALLY_RETURNED";
@@ -481,7 +484,8 @@ public class TechnicalDataTaskApplicationServiceImpl
       return "PENDING";
     }
     if (Set.of("RETURN_PENDING", "PARTIALLY_RETURNED").contains(task.getTaskStatus())) return task.getTaskStatus();
-    if (products.stream().allMatch(product -> "APPROVED".equals(product.productStatus()))) return "APPROVED";
+    if (products.stream().flatMap(product -> product.modules().stream()).anyMatch(module ->
+        module.required() && module.currentVersionId() == null && "PENDING".equals(module.moduleStatus()))) return "PENDING";
     return products.stream().anyMatch(product -> product.latestSubmittedVersionId()!=null)?"SUBMITTED":"PENDING";
   }
 
@@ -548,7 +552,7 @@ public class TechnicalDataTaskApplicationServiceImpl
   }
 
   private void requireActor(TechnicalDataActor actor) {
-    if (actor == null || actor.userId() == null || actor.userId() <= 0) {
+    if (actor == null || !actor.oaSession() && (actor.userId() == null || actor.userId() <= 0)) {
       throw forbidden("当前登录用户无效");
     }
   }

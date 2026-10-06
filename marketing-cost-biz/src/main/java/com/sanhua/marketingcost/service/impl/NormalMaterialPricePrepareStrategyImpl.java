@@ -157,9 +157,9 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
     }
 
     PriceLinkedCalcItem calculatedLinkedPrice = null;
+    NormalMaterialPricePrepareResult ensureFailure = null;
     if (persistLinkedPrice) {
-      NormalMaterialPricePrepareResult ensureFailure =
-          ensureLinkedPriceIfNeeded(
+      ensureFailure = ensureLinkedPriceIfNeeded(
               oaNo,
               businessUnitType,
               periodMonth,
@@ -167,9 +167,6 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
               materialCode,
               candidates,
               scenarioContext);
-      if (ensureFailure != null) {
-        return ensureFailure;
-      }
     } else if (hasLinkedRoute(candidates)) {
       calculatedLinkedPrice = calculateLinkedPrice(
           oaNo,
@@ -203,6 +200,10 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
         continue;
       }
       attemptedBuckets.add(route.priceType().name());
+      // A missing public formula must not prevent a submitted technical formula from being tried.
+      if (ensureFailure != null && route.priceType() == PriceTypeEnum.LINKED && !route.supplemental()) {
+        continue;
+      }
       if (!persistLinkedPrice && route.priceType() == PriceTypeEnum.LINKED && !route.supplemental()) {
         if (calculatedLinkedPrice != null && calculatedLinkedPrice.getPartUnitPrice() != null) {
           BigDecimal unitPrice = calculatedLinkedPrice.getPartUnitPrice();
@@ -248,6 +249,7 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
         lastMissCode = result.failureCode();
       }
     }
+    if (ensureFailure != null) return ensureFailure;
     String message = "路由=" + attemptedBuckets + " 但桶内无该料号"
         + (lastMissReason == null ? "" : ": " + lastMissReason);
     return NormalMaterialPricePrepareResult.gap(

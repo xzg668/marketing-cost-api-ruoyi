@@ -36,11 +36,16 @@ class TechnicalDataAuxiliaryClassificationIntegrationTest extends BomMapperTestB
   @Autowired OaFormMapper forms;
   @Autowired OaFormItemMapper items;
   @MockBean TechnicalDataOaWorkflowRepository workflow;
+  @MockBean com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver contexts;
+  @MockBean TechnicalDataPublicSourceCheck publicSources;
   private Long itemId,productId,taskId,flowId;
   private String key,subjectName,subjectCode;
   private QuoteTechDataVersion approved;
 
   @BeforeEach void fixture() throws Exception {
+    when(contexts.resolveOrganization(any(), any())).thenReturn(new com.sanhua.marketingcost.dto.QuoteDataOrganization("210", "COMMERCIAL"));
+    when(publicSources.checkDataSources(any())).thenReturn(List.of(new TechnicalDataSourceFact(
+        TechnicalDataModuleType.AUXILIARY, TechnicalDataAvailability.MISSING, "MISSING", "待补辅料", null, LocalDateTime.now())));
     key="TW16-"+UUID.randomUUID().toString().substring(0,8); subjectName=key+"科目";subjectCode=key;
     var form=new OaForm();form.setOaNo(key);form.setBusinessUnitType("COMMERCIAL");forms.insert(form);
     var item=new OaFormItem();item.setOaFormId(form.getId());item.setMaterialNo(key);item.setBusinessUnitType("COMMERCIAL");items.insert(item);itemId=item.getId();
@@ -54,8 +59,11 @@ class TechnicalDataAuxiliaryClassificationIntegrationTest extends BomMapperTestB
     productId=persistence.createProduct(product).getId();
     for(String type:TechnicalDataModuleType.orderedCodes()) {
       boolean required=type.equals("AUXILIARY");var module=new QuoteTechModule();module.setProductId(productId);module.setModuleType(type);
-      module.setRequiredFlag(required?1:0);module.setModuleStatus(required?"PENDING":"NOT_REQUIRED");module.setSourceAvailability(required?"MISSING":"AVAILABLE");
-      module.setSourceReference("TW16-CONTROLLED");module.setSourceCheckedAt(LocalDateTime.now());module.setRequirementReasonCode("TEST_CHECK");module.setRequirementReason("控制审批辅料来源");
+      module.setRequiredFlag(required?1:0);
+      module.setModuleStatus(required || type.equals("PRICE") ? "PENDING" : "NOT_REQUIRED");
+      // BOM 发布前价格尚无法判定，不能因此阻止已提交的辅料版本生效。
+      module.setSourceAvailability(required?"MISSING":type.equals("PRICE")?"UNCONFIRMED":"AVAILABLE");
+      module.setSourceReference("TW16-CONTROLLED");module.setSourceCheckedAt(LocalDateTime.now());module.setRequirementReasonCode("TEST_CHECK");module.setRequirementReason("控制已提交辅料来源");
       module.setEntryMode(required?"UPLOAD":"NONE");if(required){module.setAssigneeUserId(101L);module.setAssigneeName("王工");}persistence.createModule(module);
     }
     jdbc.update("INSERT INTO cms_subject_setting_raw(import_batch_id,row_no,first_subject_code,first_subject_name,second_subject_code,second_subject_name,third_subject_code,business_unit_type) VALUES(1,1,'02','辅助材料',?,?,?,'COMMERCIAL')",subjectCode,subjectName,key+"3");
@@ -66,17 +74,23 @@ class TechnicalDataAuxiliaryClassificationIntegrationTest extends BomMapperTestB
     var saved=auxiliary.save(productId,request,WANG);
     var person=new Recipient(1L,taskId,1,101L,"王工","wang","FILL",List.of("AUXILIARY"),1L,"todo","CONFIRMED","OPEN",null,"工程部","leader","王总",null,0,0,null,true,null,null,"T-TEST", null);
     var frozen=versions.freeze(repository.lockProduct(productId).orElseThrow(),person,saved.expectedVersion(),101L);
-    var personal=versions.transition(versions.transition(frozen,"SUBMITTED",101L),"APPROVED",101L);
-    versions.state(repository.lockProduct(productId).orElseThrow(),person,personal.getId(),"APPROVED");
+    var personal=versions.transition(frozen,"SUBMITTED",101L);
+    versions.state(repository.lockProduct(productId).orElseThrow(),person,personal.getId(),"SUBMITTED");
     approved=versions.activate(repository.lockProduct(productId).orElseThrow(),101L);
-    jdbc.update("UPDATE lp_quote_tech_task SET task_status='APPROVED',review_status='PASSED' WHERE id=?",taskId);
-    when(workflow.approvalBasis(flowId)).thenReturn("approved-basis");
+    jdbc.update("UPDATE lp_quote_tech_task SET task_status='SUBMITTED',review_status='PENDING' WHERE id=?",taskId);
+    when(workflow.submissionBasis(flowId)).thenReturn("approved-basis");
     when(workflow.findFlow(flowId)).thenReturn(new TechnicalDataOaWorkflowRepository.Flow(flowId,"TEST","TEST",form.getId(),"2026-09",key,key,3,true,1L,json.canonicalHash("approved-basis")));
   }
 
-  @Test void workbookImportPreservesApprovalAndCostingUsesValidatedCodes() {
+  @Test void workbookImportPreservesSubmittedVersionAndCostingUsesValidatedCodes() {
     var before=snapshot();var view=get();assertThat(view.status()).isEqualTo("PENDING");
-    assertThatThrownBy(()->effective.resolve(itemId,"2026-09")).hasMessageContaining("辅料待财务归类");
+    assertThatThrownBy(()->effective.resolve(itemId,"2026-09"))
+        .isInstanceOfSatisfying(com.sanhua.marketingcost.service.EffectiveTechnicalDataException.class, failure -> {
+          assertThat(failure.errorCode()).isEqualTo("TECH_DATA_AUXILIARY_CLASSIFICATION_MISSING");
+          assertThat(failure.oaFormItemId()).isEqualTo(itemId);
+          assertThat(failure.accountingMonth()).isEqualTo("2026-09");
+          assertThat(failure.modules()).containsExactly("AUXILIARY");
+        }).hasMessageContaining("辅料待财务归类");
     var rows=filled(view);Collections.reverse(rows);
     var checked=service.preview(key,itemId,"2026-09",rows,ADMIN);assertThat(checked.valid()).isTrue();assertThat(checked.totals()).hasSize(1);
     var result=service.confirm(key,itemId,"2026-09",rows,checked.fingerprint(),ADMIN);
@@ -106,6 +120,23 @@ class TechnicalDataAuxiliaryClassificationIntegrationTest extends BomMapperTestB
     when(workflow.findFlow(flowId)).thenReturn(null);
     assertThat(get().status()).isEqualTo("WAIT_FINANCE");
     assertThatThrownBy(()->service.preview(key,itemId,"2026-09",List.of(),ADMIN)).hasMessageContaining("财务节点");
+  }
+
+  @Test void submittedCostKeepsClassifiedDetailsVisibleButClosesEditing() {
+    var rows=filled(get());var checked=service.preview(key,itemId,"2026-09",rows,ADMIN);
+    service.confirm(key,itemId,"2026-09",rows,checked.fingerprint(),ADMIN);
+    var before=get();
+    when(workflow.findFlow(flowId)).thenReturn(new TechnicalDataOaWorkflowRepository.Flow(
+        flowId,"TEST","TEST",items.selectById(itemId).getOaFormId(),
+        "2026-09",key,key,3,false,1L,null));
+
+    var after=get();
+    assertThat(after.status()).isEqualTo("CLASSIFIED");
+    assertThat(after.canClassify()).isFalse();
+    assertThat(after.items()).isEqualTo(before.items());
+    assertThat(after.totals()).isEqualTo(before.totals());
+    assertThatThrownBy(()->service.preview(key,itemId,"2026-09",rows,ADMIN))
+        .hasMessageContaining("财务节点");
   }
 
   @Test void onlyTheAssignedFinanceUserInTheCurrentBusinessUnitMayConfirm() {
@@ -139,10 +170,20 @@ class TechnicalDataAuxiliaryClassificationIntegrationTest extends BomMapperTestB
     assertThatThrownBy(()->effective.resolve(itemId,"2026-09")).hasMessageContaining("辅料待财务归类");
   }
 
-  @Test void duplicateNamesCannotBeSelectedAndNewApprovedVersionDoesNotInheritClassification() {
+  @Test void duplicateNamesCannotBeSelectedAndNewSubmittedVersionDoesNotInheritClassification() {
     var rows=filled(get());var checked=service.preview(key,itemId,"2026-09",rows,ADMIN);
     service.confirm(key,itemId,"2026-09",rows,checked.fingerprint(),ADMIN);
+    // 重复整理同一批资料不会新建版本；退回重提才产生新的冻结内容。
+    assertThat(versions.activate(repository.lockProduct(productId).orElseThrow(),101L).getId()).isEqualTo(approved.getId());
+    var person=new Recipient(1L,taskId,1,101L,"王工","wang","FILL",List.of("AUXILIARY"),1L,"todo","CONFIRMED","OPEN",null,"工程部","leader","王总",null,0,0,null,true,null,null,"T-TEST", null);
+    jdbc.update("UPDATE lp_quote_tech_task SET task_status='IN_PROGRESS' WHERE id=?",taskId);
+    versions.restoreSubmitted(repository.lockProduct(productId).orElseThrow(),person,101L);
+    var product=repository.lockProduct(productId).orElseThrow();
+    var frozen=versions.freeze(product,person,product.getRowVersion(),101L);
+    versions.transition(frozen,"SUBMITTED",101L);
+    versions.state(repository.lockProduct(productId).orElseThrow(),person,frozen.getId(),"SUBMITTED");
     var next=versions.activate(repository.lockProduct(productId).orElseThrow(),101L);
+    jdbc.update("UPDATE lp_quote_tech_task SET task_status='SUBMITTED' WHERE id=?",taskId);
     assertThat(next.getId()).isNotEqualTo(approved.getId());assertThat(get().status()).isEqualTo("PENDING");
     assertThat(service.preview(key,itemId,"2026-09",rows,ADMIN).valid()).isFalse();
     jdbc.update("INSERT INTO cms_subject_setting_raw(import_batch_id,row_no,first_subject_code,first_subject_name,second_subject_code,second_subject_name,third_subject_code,business_unit_type) VALUES(1,2,'02','辅助材料',?,?,?,'COMMERCIAL')",subjectCode+"X",subjectName,key+"4");

@@ -25,6 +25,11 @@ public class TechnicalDataPendingProductQuery {
   private record Query(String sql, List<Object> args) {}
 
   private Query scope(String accessMode, String businessUnit, String month, String keyword, String oaNo) {
+    return scope(accessMode, businessUnit, month, keyword, oaNo, null);
+  }
+
+  private Query scope(String accessMode, String businessUnit, String month, String keyword, String oaNo,
+      Long itemId) {
     StringBuilder sql = new StringBuilder("""
         FROM lp_quote_costing_workspace w
         JOIN oa_form_item i ON i.id=w.oa_form_item_id
@@ -37,13 +42,14 @@ public class TechnicalDataPendingProductQuery {
             WHERE m.required_flag=1 AND NOT EXISTS (
               SELECT 1 FROM JSON_TABLE(w.technical_check_json, '$.check.sharedModules[*]' COLUMNS (
                 module_type VARCHAR(40) PATH '$.moduleType', source_status VARCHAR(40) PATH '$.status')) s
-              WHERE s.module_type=m.module_type AND s.source_status='APPROVED'))
+              WHERE s.module_type=m.module_type AND s.source_status IN ('SUBMITTED','APPROVED')))
           AND NOT EXISTS (SELECT 1 FROM lp_quote_tech_task t
             WHERE t.oa_form_item_id=i.id AND BINARY t.accounting_month=BINARY w.period_month AND t.active_flag=1)
         """);
     List<Object> args = new ArrayList<>();
     if (!"ALL".equals(accessMode)) { sql.append(" AND f.business_unit_type=?"); args.add(businessUnit); }
     if (oaNo != null) { sql.append(" AND f.oa_no=?"); args.add(oaNo); }
+    if (itemId != null) { sql.append(" AND i.id=?"); args.add(itemId); }
     if (month != null) { sql.append(" AND w.period_month=?"); args.add(month); }
     if (keyword != null) {
       sql.append(" AND (f.oa_no LIKE ? OR i.material_no LIKE ? OR i.product_name LIKE ? OR i.sunl_model LIKE ?)");
@@ -56,6 +62,12 @@ public class TechnicalDataPendingProductQuery {
     if ("ASSIGNEE".equals(accessMode)) return 0;
     Query query = scope(accessMode, businessUnit, month, keyword, oaNo);
     return jdbc.queryForObject("SELECT COUNT(*) " + query.sql(), Long.class, query.args().toArray());
+  }
+
+  public boolean hasPendingItem(String oaNo, long itemId) {
+    Query query = scope("ALL", null, null, null, oaNo, itemId);
+    return jdbc.queryForObject("SELECT EXISTS(SELECT 1 " + query.sql() + ")",
+        Boolean.class, query.args().toArray());
   }
 
   public List<TechnicalDataWorkbenchRowResponse> page(String accessMode, String businessUnit,

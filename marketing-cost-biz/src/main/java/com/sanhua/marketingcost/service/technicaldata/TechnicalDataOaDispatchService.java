@@ -99,15 +99,21 @@ public class TechnicalDataOaDispatchService {
     for (var task : selected) {
       int previous = Objects.requireNonNullElse(task.getOaAssignmentVersion(), 0);
       var last = recipients.find(task.getId(), previous);
-      if (!recipients.current(task.getId()).isEmpty()) throw conflict(
-        "此产品已分派，请在原任务查看进度；调整分工需另行办理"
+      var current = recipients.current(task.getId());
+      boolean additional = !current.isEmpty();
+      if (additional && current.stream().anyMatch(row ->
+          !TechnicalDataSubmissionState.submittedTodo(row.todoStatus()))) throw conflict(
+        "原技术员尚有未完成办理，不能追加分派；请先完成原任务"
       );
-      if (last.stream().anyMatch(row -> !"REJECTED".equals(row.dispatchStatus()))) throw conflict(
+      if (!additional && last.stream().anyMatch(row -> !"REJECTED".equals(row.dispatchStatus()))) throw conflict(
         "上次分派尚未确认，请核实原请求"
       );
       Map<Long, List<String>> groups = new TreeMap<>();
       for (var module : modules.selectByTaskId(task.getId())) {
         if (!Integer.valueOf(1).equals(module.getRequiredFlag())) continue;
+        if (additional && (module.getAssigneeUserId() != null || module.getCurrentVersionId() != null
+            || !"PENDING".equals(module.getModuleStatus()) || !"MISSING".equals(module.getSourceAvailability())
+            || !Integer.valueOf(0).equals(module.getOaEditAllowed()))) continue;
         if ("PRICE".equals(module.getModuleType())) prices.claimForDispatch(module.getProductId());
         else sharedModules.requireOwnership(module.getProductId(), module.getModuleType());
         groups
@@ -129,6 +135,11 @@ public class TechnicalDataOaDispatchService {
         String employee = context.technicianEmployeeNo(group.getKey());
         group.getValue().sort(Comparator.comparingInt(TechnicalDataModuleType::orderOf));
         assignments.add(new OaTechnicalDispatchRequest.Assignment(employee, name, group.getValue()));
+        // 当前办理人保留先前板块的归属，本轮仅处理新缺口；未选中的其他人保持原待办。
+        List<String> owned = new ArrayList<>(group.getValue());
+        if (additional) current.stream().filter(row -> row.userId() == group.getKey())
+            .flatMap(row -> row.modules().stream()).filter(type -> !owned.contains(type)).forEach(owned::add);
+        owned.sort(Comparator.comparingInt(TechnicalDataModuleType::orderOf));
         long message = context.linkMessage(
           document,
           batchId,
@@ -143,10 +154,11 @@ public class TechnicalDataOaDispatchService {
           name,
           employee,
           "ASSIGN",
-          group.getValue(),
+          owned,
           message,
           "T-" + UUID.randomUUID()
         );
+        if (additional) recipients.prepareProcessingScope(message, group.getValue());
         if (firstMessage == null) firstMessage = message;
       }
       var flow = workflow.bindFlow(task, document.peer());

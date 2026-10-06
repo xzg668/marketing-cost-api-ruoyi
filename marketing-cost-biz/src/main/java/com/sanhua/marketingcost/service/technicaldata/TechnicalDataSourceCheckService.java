@@ -94,7 +94,7 @@ public class TechnicalDataSourceCheckService {
       if (!missingCodes.isEmpty()) {
         var otherOwners = missingCodes.stream().map(priceOwnership::find).filter(Objects::nonNull)
             .filter(owner -> product.isEmpty() || !Objects.equals(owner.productId(), product.get().getId()))
-            .filter(owner -> !"CANCELLED".equals(owner.taskStatus()) || "APPROVED".equals(owner.moduleStatus())).toList();
+            .filter(owner -> !"CANCELLED".equals(owner.taskStatus()) || TechnicalDataSubmissionState.submitted(owner.moduleStatus())).toList();
         if (!otherOwners.isEmpty()) evidence.put("PRICE_OWNERS", otherOwners);
         if (otherOwners.size() == missingCodes.size()) {
           String owners = otherOwners.stream().map(owner -> owner.materialNo() + " 已由" + Objects.toString(owner.assigneeName(), "原技术员")

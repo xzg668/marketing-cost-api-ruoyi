@@ -28,10 +28,20 @@ public class ElectronicDrawingCostingFallbackService {
   }
 
   public AttemptResult attempt(OaForm form, OaFormItem item, String periodMonth) {
-    if (form != null && item != null && preparation.prepareSharedDrawing(item.getId(), periodMonth)) {
-      return new AttemptResult(true, false, ElectronicDrawingWorkflowStage.COMPOSED, "沿用原产品已批准图库");
+    return attempt(form, item, periodMonth, false);
+  }
+
+  /** 已发布 BOM 仍可能有原材料修订；仅接续已组好的本单来源，不重新取图库。 */
+  public AttemptResult resumeComposed(OaForm form, OaFormItem item, String periodMonth) {
+    return attempt(form, item, periodMonth, true);
+  }
+
+  private AttemptResult attempt(OaForm form, OaFormItem item, String periodMonth,
+      boolean composedOnly) {
+    if (!composedOnly && form != null && item != null && preparation.prepareSharedDrawing(item.getId(), periodMonth)) {
+      return new AttemptResult(true, false, ElectronicDrawingWorkflowStage.COMPOSED, "沿用原产品已提交图库");
     }
-    if (form == null || item == null || !StringUtils.hasText(item.getCustomerDrawing())) {
+    if (form == null || item == null) {
       return AttemptResult.notAttempted();
     }
     try {
@@ -41,10 +51,16 @@ public class ElectronicDrawingCostingFallbackService {
       if (!StringUtils.hasText(businessUnit)) {
         return AttemptResult.failed("报价产品缺少业务单元，不能读取电子图库");
       }
+      String drawingNo = preparation.composedDrawingNo(
+          item.getId(), context.costPeriodMonth(), businessUnit,
+          context.organization().priceOrgCode());
+      if (composedOnly && !StringUtils.hasText(drawingNo)) return AttemptResult.notAttempted();
+      drawingNo = firstText(drawingNo, item.getCustomerDrawing());
+      if (!StringUtils.hasText(drawingNo)) return AttemptResult.notAttempted();
       ElectronicDrawingWorkflowOrchestrator.WorkflowResult result = orchestrator.process(
           new ElectronicDrawingWorkflowOrchestrator.WorkflowCommand(
               item.getId(), item.getId(), businessUnit,
-              context.organization().priceOrgCode(), item.getCustomerDrawing(),
+              context.organization().priceOrgCode(), drawingNo,
               null, "财务报价", context.costPeriodMonth()));
       return new AttemptResult(true, result.costingCanContinue(), result.stage(), result.message());
     } catch (ElectronicDrawingWorkflowRetryException exception) {

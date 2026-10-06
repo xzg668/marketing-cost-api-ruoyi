@@ -13,7 +13,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
-/** 把已审批价格来源接到现有固定价、联动计算和结果存储，逐次核验当前适用条件。 */
+/** 把已提交价格来源接到现有固定价、联动计算和结果存储，逐次核验当前适用条件。 */
 @Service
 public class TechnicalPriceSourceResolverImpl implements TechnicalPriceSourceResolver {
   private final PriceFixedItemMapper fixed;
@@ -49,7 +49,7 @@ public class TechnicalPriceSourceResolverImpl implements TechnicalPriceSourceRes
           row.getSourceKind(),row.getTechnicalVersionId(),row.getTechnicalPublicationStatus());
       if (issue != null) return PriceResolveResult.miss("TECH_PRICE_NOT_APPLICABLE", issue);
       if (row.getFixedPrice() == null || row.getFixedPrice().signum() <= 0) return PriceResolveResult.miss("TECH_PRICE_INVALID", "补录固定价不是有效正数");
-      return PriceResolveResult.hit(row.getFixedPrice(), "补录固定价", "技术审批版本=" + row.getTechnicalVersionId(), row.getId(),
+      return PriceResolveResult.hit(row.getFixedPrice(), "补录固定价", "技术提交版本=" + row.getTechnicalVersionId(), row.getId(),
           PriceResolveEvidenceFactory.create(row.getId(), "TECH:"+row.getTechnicalVersionId(), null,null,null,null,row.getEffectiveFrom(),null,context.getPriceAsOfTime()==null?null:context.getPriceAsOfTime().toLocalDate()));
     }
     var row = linked.selectById(sourceId);
@@ -75,7 +75,7 @@ public class TechnicalPriceSourceResolverImpl implements TechnicalPriceSourceRes
     if (!usable(calculated)) {
       return PriceResolveResult.miss("TECH_FORMULA_NOT_USABLE", Objects.toString(calculated.getCalcMessage(), "补录公式未取得有效单价"));
     }
-    return PriceResolveResult.hit(calculated.getPartUnitPrice(), "补录联动价", "技术审批版本="+row.getTechnicalVersionId(), calculated.getId(),
+    return PriceResolveResult.hit(calculated.getPartUnitPrice(), "补录联动价", "技术提交版本="+row.getTechnicalVersionId(), calculated.getId(),
         PriceResolveEvidenceFactory.create(row.getId(), "TECH:"+row.getTechnicalVersionId(), null,null,null,null,row.getEffectiveFrom(),null,
             context.getPriceAsOfTime()==null?null:context.getPriceAsOfTime().toLocalDate()));
   }
@@ -143,10 +143,10 @@ public class TechnicalPriceSourceResolverImpl implements TechnicalPriceSourceRes
     Integer active = jdbc.queryForObject("""
         SELECT COUNT(*) FROM lp_quote_tech_price_claim c JOIN lp_quote_tech_module m ON m.id=c.owner_module_id
         JOIN lp_quote_tech_data_version v ON v.id=m.current_version_id
-        WHERE c.material_code=? AND v.id=? AND v.version_status='APPROVED' AND m.module_status='APPROVED'
+        WHERE c.material_code=? AND v.id=? AND v.version_status IN ('SUBMITTED','APPROVED') AND m.module_status IN ('SUBMITTED','APPROVED')
         AND c.organization_code=? AND c.business_unit_type=? AND c.price_unit=? AND c.currency='CNY'
         """,Integer.class,code,version,org,businessUnit,unit);
-    if (active==null || active!=1) return "补录来源已退回、失效或尚未完成审批";
+    if (active==null || active!=1) return "补录来源已退回、失效或尚未成功提交";
     String requestedOrg = context.getPriceOrgCode()!=null?context.getPriceOrgCode():item.getPriceOrgCode();
     if (requestedOrg==null) requestedOrg = quotationOrganization(context);
     if (!Objects.equals(requestedOrg,org)) return "补录价格组织与本次报价组织不符";

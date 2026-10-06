@@ -24,6 +24,15 @@ public class TechnicalDataSubmissionRemark {
 
   /** productLabel 由调用方从提交关联的产品取得（料号；无料号时用明确的型号/明细行标识）。 */
   public String generate(String productLabel, QuoteTechSubmission submission) {
+    return generate(productLabel, submission, false);
+  }
+
+  /** OA 意见长度不足以容纳全部明细时，保留本次实际值的概要；完整冻结明细由地址查看。 */
+  public String generateBrief(String productLabel, QuoteTechSubmission submission) {
+    return generate(productLabel, submission, true);
+  }
+
+  private String generate(String productLabel, QuoteTechSubmission submission, boolean brief) {
     if (productLabel == null || productLabel.isBlank() || submission == null
         || !Integer.valueOf(2).equals(submission.getContentSchemaVersion())) {
       throw invalid("需要产品标识和九模块提交记录");
@@ -55,7 +64,7 @@ public class TechnicalDataSubmissionRemark {
 
     List<String> sections = new ArrayList<>();
     for (TechnicalDataModuleType type : scope) {
-      String value = switch (type) {
+      String value = brief ? brief(type, details, supplements) : switch (type) {
         case PROFILE -> profile(details, object(supplements, "productFees"));
         case DRAWING_BOM -> drawing(object(supplements, "drawingBom"));
         case MANUFACTURING -> manufacturing(object(supplements, "manufacturing"));
@@ -67,10 +76,86 @@ public class TechnicalDataSubmissionRemark {
         case PRICE -> prices(object(supplements, "prices"));
       };
       if (value.isBlank()) throw invalid(type.displayName() + "缺少实际内容");
-      sections.add(type.displayName() + "[" + value + "]");
+      String label = brief && type == TechnicalDataModuleType.DRAWING_BOM ? "图库" : type.displayName();
+      sections.add(label + "[" + value + "]");
     }
-    // 只压缩格式，不截断明细；OA 字段长度尚无明确契约，不能静默丢掉已提交内容。
+    // 意见只写能识别本次变更的摘要；完整字段和来源保存在冻结快照，通过工作台链接查看。
+    // 超出 OA 已知长度时由调用方明确拒绝，不能截断已生成的意见。
     return "产品" + compact(productLabel) + "：" + String.join("；", sections) + "。";
+  }
+
+  private String brief(TechnicalDataModuleType type, JsonNode details, JsonNode supplements) {
+    return switch (type) {
+      case PROFILE -> {
+        var fees = object(supplements, "productFees");
+        yield "属性" + requiredText(details, "productProperty")
+            + "，工装" + number(fees, "unitToolingFee") + "/模具" + number(fees, "unitMouldFee")
+            + "/认证" + number(fees, "unitCertificationFee") + "元/件";
+      }
+      case DRAWING_BOM -> {
+        var drawing = object(supplements, "drawingBom");
+        var nodes = rows(drawing, "nodes");
+        if (nodes.isEmpty()) throw invalid("图库没有实际明细");
+        String drawingNo = text(drawing.path("evidence"), "drawingNo");
+        yield (drawingNo.isEmpty() ? "" : "图号" + drawingNo + "，") + nodes.size() + "项明细";
+      }
+      case MANUFACTURING -> count(rows(object(supplements, "manufacturing"), "items"), "项原料");
+      case PACKAGE -> {
+        var packageContent = object(supplements, "packaging");
+        yield "母件" + requiredText(packageContent, "parentMaterialNo") + "×"
+            + number(packageContent, "parentQuantity") + "，子件"
+            + rows(details, "packageItems").size() + "项";
+      }
+      case AUXILIARY -> {
+        var items = rows(details, "auxiliaryItems");
+        if (items.isEmpty()) throw invalid("辅料没有实际明细");
+        BigDecimal total = BigDecimal.ZERO;
+        for (JsonNode item : items) total = total.add(decimal(item, "amount"));
+        yield items.size() == 1
+            ? requiredText(items.get(0), "auxiliaryName") + number(items.get(0), "amount") + "元/只"
+            : items.size() + "项合计" + total.stripTrailingZeros().toPlainString() + "元/只";
+      }
+      case SOLDER -> {
+        var items = rows(object(supplements, "solder"), "items");
+        if (items.isEmpty()) throw invalid("焊料没有实际明细");
+        yield items.size() == 1 ? requiredText(items.get(0), "materialNo") + "×"
+            + number(items.get(0), "quantityPerProduct") + requiredText(items.get(0), "unit") + "/件"
+            : items.size() + "项焊料";
+      }
+      case SALARY -> briefSalary(details);
+      case NET_LOSS -> decimal(object(supplements, "netLoss"), "rate")
+          .movePointRight(2).stripTrailingZeros().toPlainString() + "%";
+      case PRICE -> {
+        var items = rows(object(supplements, "prices"), "items");
+        if (items.isEmpty()) throw invalid("价格没有实际明细");
+        var first = items.get(0);
+        yield items.size() == 1 && "FIXED".equals(requiredText(first, "entryMode"))
+            ? requiredText(first, "materialNo") + "不含税" + number(first, "unitPrice")
+                + currency(first) + "/" + requiredText(first, "unit")
+            : items.size() + "项价格，首项" + requiredText(first, "materialNo");
+      }
+    };
+  }
+
+  private static String count(JsonNode rows, String unit) {
+    if (rows.isEmpty()) throw invalid("本次没有实际明细");
+    return rows.size() + unit;
+  }
+
+  private String briefSalary(JsonNode details) {
+    JsonNode salaries = rows(details, "salaryItems");
+    if (salaries.isEmpty()) throw invalid("工资没有实际明细");
+    List<String> amounts = new ArrayList<>();
+    for (JsonNode row : salaries) {
+      String label = switch (requiredText(row, "laborType")) {
+        case "DIRECT" -> "直接";
+        case "INDIRECT" -> "辅助";
+        default -> throw invalid("未知工资类型");
+      };
+      amounts.add(label + number(row, "amount"));
+    }
+    // 多板块时意见保留实际金额；参考来源仍在冻结详情中，避免重复说明挤占 OA 字段。
+    return String.join("/", amounts) + "元/只";
   }
 
   private String profile(JsonNode details, JsonNode fees) {
@@ -123,19 +208,22 @@ public class TechnicalDataSubmissionRemark {
 
   private String packaging(JsonNode details, JsonNode content) {
     List<String> fields = new ArrayList<>();
-    addText(fields, content, "referenceMaterialNo", "参考料号");
-    addText(fields, content, "parentMaterialNo", "母件");
-    fields.add("母件用量" + number(content, "parentQuantity") + "组件/件产品");
+    addText(fields, content, "referenceMaterialNo", "参考");
+    String parent = text(content, "parentMaterialNo");
+    fields.add("母件" + (parent.isEmpty() ? "" : parent) + "×" + number(content, "parentQuantity") + "/产品");
     for (JsonNode row : rows(details, "packageItems")) {
-      List<String> item = new ArrayList<>();
-      addText(item, row, "componentMaterialNo", "");
-      addText(item, row, "componentName", "");
+      String code = text(row, "componentMaterialNo");
+      String name = text(row, "componentName");
       JsonNode evidence = evidence(row);
-      if (!text(evidence, "model").equals(text(row, "componentMaterialNo"))) addText(item, evidence, "model", "型号");
-      addText(item, row, "componentSpec", "规格");
-      item.add("用量" + number(row, "quantity") + requiredText(row, "originalUnit") + "/组件");
-      addText(item, row, "remark", "备注");
-      fields.add("子件(" + join(item) + ")");
+      String identity = name + code;
+      if (code.isEmpty()) {
+        String model = text(evidence, "model");
+        String spec = text(row, "componentSpec");
+        if (!model.isEmpty()) identity += "/" + model;
+        if (!spec.isEmpty() && !spec.equals(model)) identity += "/" + spec;
+      }
+      if (identity.isEmpty()) throw invalid("包装子件缺少名称、料号或型号");
+      fields.add(identity + "×" + number(row, "quantity") + requiredText(row, "originalUnit") + "/组件");
     }
     return join(fields);
   }

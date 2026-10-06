@@ -28,11 +28,11 @@ public class OaHttpLoggingFilter extends OncePerRequestFilter {
         || path.equals("/integration/v1/workflow-events") || path.startsWith("/integration/v1/workflow-events/")
         || path.startsWith("/api/v1/integration/oa/")
         || path.equals("/api/v1/oa-forms") || path.startsWith("/api/v1/oa-forms/")
-        || path.startsWith("/api/v2/technical-data/access-tickets/")
+        || path.startsWith("/api/v1/auth/oa/")
         || path.equals("/api/v2/technical-data/returns") || path.startsWith("/api/v2/technical-data/returns/")
         || path.startsWith("/api/v2/technical-data/forms/")
         || path.equals("/api/v2/technical-data/assignees") || path.startsWith("/api/v2/technical-data/tasks/")
-        || path.matches("/api/v1/quote-requests/[^/]+/(?:final-submission|material-confirmation)(?:/.*)?");
+        || path.matches("/api/v1/quote-requests/[^/]+/(?:final-submission|costing-preparation)(?:/.*)?");
   }
 
   @Override protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,

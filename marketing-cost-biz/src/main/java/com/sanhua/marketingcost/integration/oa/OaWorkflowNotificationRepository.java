@@ -69,10 +69,10 @@ public class OaWorkflowNotificationRepository {
   }
 
   public void applied(Flow flow, Document document, String state, String reason, Quoter quoter) {
-    // LOCAL 前缀明确这是报价系统的资料办理轮次键，用于 I06 去重，不是 OA 待办 ID。
+    // LOCAL 前缀表示报价系统的办理轮次，用于校验退回回执和当前办理人。
     Object items = quoter == null ? List.of() : List.of(Map.of(
         "workItemId", "LOCAL-" + flow.id() + "-" + (flow.appliedVersion() + 1),
-        "nodeRole", "MATERIAL_REVIEW".equals(state) ? "MATERIAL" : "COSTING",
+        "nodeRole", "COSTING",
         "employeeNo", quoter.employeeNo()));
     jdbc.update("""
         UPDATE lp_oa_workflow_state SET applied_version=?,form_version=?,observed_form_version=?,state=?,

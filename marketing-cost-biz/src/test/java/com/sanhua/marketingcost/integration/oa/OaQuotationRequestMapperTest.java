@@ -13,6 +13,18 @@ class OaQuotationRequestMapperTest {
   static final OaPeer PEER = new OaPeer("WEAVER", "TEST", Set.of("COMMERCIAL"));
   final OaQuotationRequestMapper mapper = new OaQuotationRequestMapper(new OaMessageCodec(JSON));
 
+  @Test void rejectionNodeIsAnOpaqueSourceIdentifier() throws Exception {
+    var root = sample(1).put("RejectToNodeid", "001327000000123456789");
+    assertThat(mapper.map(root, PEER).quote().rejectToNodeId()).isEqualTo("001327000000123456789");
+    assertThat(mapper.map(sample(1), PEER).quote().rejectToNodeId()).isNull();
+    for (String value : new String[] {"", "node with space", "x".repeat(129)}) {
+      assertThatThrownBy(() -> mapper.map(root.deepCopy().put("RejectToNodeid", value), PEER))
+          .isInstanceOf(OaQuotationValidationException.class);
+    }
+    assertThatThrownBy(() -> mapper.map(root.deepCopy().put("RejectToNodeid", 123), PEER))
+        .isInstanceOf(OaQuotationValidationException.class);
+  }
+
   static ObjectNode sample(int n) throws Exception {
     try (var in =
         OaQuotationRequestMapperTest.class.getResourceAsStream(

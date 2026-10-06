@@ -21,8 +21,10 @@ class ElectronicDrawingCostingFallbackServiceTest {
   private final QuoteBomContextResolver contextResolver = mock(QuoteBomContextResolver.class);
   private final ElectronicDrawingWorkflowOrchestrator orchestrator =
       mock(ElectronicDrawingWorkflowOrchestrator.class);
+  private final ElectronicDrawingPreparationSource preparation =
+      mock(ElectronicDrawingPreparationSource.class);
   private final ElectronicDrawingCostingFallbackService service =
-      new ElectronicDrawingCostingFallbackService(contextResolver, orchestrator, mock(ElectronicDrawingPreparationSource.class));
+      new ElectronicDrawingCostingFallbackService(contextResolver, orchestrator, preparation);
 
   @BeforeEach
   void setUp() {
@@ -41,6 +43,47 @@ class ElectronicDrawingCostingFallbackServiceTest {
 
     assertThat(result.attempted()).isFalse();
     verify(orchestrator, never()).process(any());
+  }
+
+  @Test
+  void composedSourceResumesAfterClassificationWithoutCustomerDrawing() {
+    when(preparation.composedDrawingNo(10L, "2026-08", "COMMERCIAL", "210"))
+        .thenReturn("TECH-CONFIRMED-DRAWING");
+    when(orchestrator.process(any())).thenReturn(
+        new ElectronicDrawingWorkflowOrchestrator.WorkflowResult(
+            10L, 4, 91L, ElectronicDrawingWorkflowStage.PUBLISHED,
+            "电子图库BOM已发布", true, 12));
+
+    var result = service.attempt(form(), item(null), "2026-08");
+
+    assertThat(result.costingCanContinue()).isTrue();
+    var command = ArgumentCaptor.forClass(ElectronicDrawingWorkflowOrchestrator.WorkflowCommand.class);
+    verify(orchestrator).process(command.capture());
+    assertThat(command.getValue().drawingNo()).isEqualTo("TECH-CONFIRMED-DRAWING");
+    assertThat(command.getValue().accountingMonth()).isEqualTo("2026-08");
+  }
+
+  @Test
+  void noRevisionDoesNotAcquireDrawingAgainWhenResumingPublishedBom() {
+    var result = service.resumeComposed(form(), item("DRAW-001"), "2026-08");
+    assertThat(result.attempted()).isFalse();
+    verify(orchestrator, never()).process(any());
+    verify(preparation, never()).prepareSharedDrawing(any(), any());
+  }
+
+  @Test
+  void submittedRawRevisionResumesCompositionWithoutAcquiringAnotherSource() {
+    when(preparation.composedDrawingNo(10L, "2026-08", "COMMERCIAL", "210"))
+        .thenReturn("REVISION-DRAWING");
+    when(orchestrator.process(any())).thenReturn(
+        new ElectronicDrawingWorkflowOrchestrator.WorkflowResult(
+            10L, 5, 92L, ElectronicDrawingWorkflowStage.PUBLISHED, "修订已发布", true, 12));
+    var result = service.resumeComposed(form(), item("OLD-DRAWING"), "2026-08");
+    assertThat(result.costingCanContinue()).isTrue();
+    var command = ArgumentCaptor.forClass(ElectronicDrawingWorkflowOrchestrator.WorkflowCommand.class);
+    verify(orchestrator).process(command.capture());
+    assertThat(command.getValue().drawingNo()).isEqualTo("REVISION-DRAWING");
+    verify(preparation, never()).prepareSharedDrawing(any(), any());
   }
 
   @Test

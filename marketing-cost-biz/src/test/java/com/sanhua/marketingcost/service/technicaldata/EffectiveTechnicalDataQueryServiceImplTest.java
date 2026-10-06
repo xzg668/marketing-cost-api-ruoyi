@@ -135,8 +135,8 @@ class EffectiveTechnicalDataQueryServiceImplTest {
   }
 
   @Test
-  void submittedOrOtherProductVersionCannotBeUsedThroughEffectivePointer() {
-    v2.setVersionStatus(QuoteTechDataVersion.STATUS_SUBMITTED);
+  void frozenOrOtherProductVersionCannotBeUsedThroughEffectivePointer() {
+    v2.setVersionStatus("FROZEN");
     assertError("TECH_DATA_EFFECTIVE_VERSION_INVALID", null, () ->
         service.resolve(ITEM_ID, MONTH));
 

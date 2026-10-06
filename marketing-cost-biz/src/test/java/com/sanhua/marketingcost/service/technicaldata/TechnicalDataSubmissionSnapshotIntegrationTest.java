@@ -41,8 +41,6 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
   @Autowired private com.sanhua.marketingcost.mapper.QuoteTechSubmissionMapper submissionMapper;
   @Autowired private TechnicalDataOaSubmissionLifecycle lifecycle;
   @Autowired private com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaWorkflowRepository oaWorkflow;
-  @Autowired private com.sanhua.marketingcost.service.SysUserService userService;
-  @Autowired private TechnicalDataOaUserDirectory userDirectory;
   // 本组验证九模块快照及数据库不可变约束；真实原材料来源与组树见 ManufacturingIntegrationTest。
   @org.springframework.boot.test.mock.mockito.MockBean
   private TechnicalDataManufacturingApplicationService manufacturing;
@@ -76,28 +74,6 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
         org.mockito.ArgumentMatchers.any())).thenReturn(List.of());
   }
 
-  @Test void identityLookupAllowsSharedAdminButStillRejectsDisabledAndDeletedAccounts() {
-    long active = IDS.incrementAndGet(), disabled = IDS.incrementAndGet(), deleted = IDS.incrementAndGet();
-    for (long id : List.of(active, disabled, deleted)) {
-      jdbc.update("INSERT INTO sys_user(user_id,user_name,nick_name,password,business_unit_type,status,del_flag,create_time,update_time) VALUES(?,?,?,'test',NULL,?,?,NOW(),NOW())",
-          id, "tw04-identity-" + id, "公共账号", id == disabled ? "1" : "0", id == deleted ? "1" : "0");
-    }
-    var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("admin", null, List.of());
-    auth.setDetails(java.util.Map.of("businessUnitType", "COMMERCIAL"));
-    var context = org.springframework.security.core.context.SecurityContextHolder.getContext();
-    var previous = context.getAuthentication();
-    context.setAuthentication(auth);
-    try {
-      assertThat(userService.getById(active)).as("人员管理仍按事业部筛选").isNull();
-      assertThat(userDirectory.activeUser(active).getUserId()).isEqualTo(active);
-      for (long id : List.of(disabled, deleted)) {
-        assertThatThrownBy(() -> userDirectory.activeUser(id)).hasMessageContaining("已删除或停用");
-      }
-    } finally {
-      context.setAuthentication(previous);
-    }
-  }
-
   @Test void financeReturnFromApprovedTaskRestoresDraftAtomicallyUnderDatabaseGuards() {
     var fixture = fixture();
     var task = taskMapper.selectById(fixture.taskId());
@@ -115,7 +91,7 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
     recipients.state(person.id(), prepared.getId(), "PREPARED", "SUBMITTED", null);
     recipients.refreshTask(task.getId());
     task = taskMapper.selectById(task.getId());
-    lifecycle.approve(task, submissionMapper.selectById(prepared.getId()), person.messageId(), TECHNICIAN);
+    lifecycle.publishSubmitted(task, submissionMapper.selectById(prepared.getId()), TECHNICIAN.userId());
     assertThat(productMapper.selectById(fixture.productId()).getEffectiveVersionId()).isNotNull();
     recipients.requestReturn(person.id(), prepared.getId(), person.messageId(), 1L, "核对产品属性");
     lifecycle.financeReturned(taskMapper.selectById(task.getId()), submissionMapper.selectById(prepared.getId()), 1L, "核对产品属性");
@@ -123,8 +99,8 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
     assertThat(restored.getEffectiveVersionId()).isNull();
     assertThat(versionMapper.selectById(restored.getCurrentEditVersionId()).getVersionStatus()).isEqualTo("DRAFT");
     assertThat(recipients.current(task.getId()).getFirst().todoStatus()).isEqualTo("OPEN");
-    assertThat(versionMapper.selectById(frozen.getId()).getVersionStatus()).isEqualTo("APPROVED");
-    assertThat(submissionMapper.selectById(prepared.getId()).getSubmissionStatus()).isEqualTo("APPROVED");
+    assertThat(versionMapper.selectById(frozen.getId()).getVersionStatus()).isEqualTo("SUBMITTED");
+    assertThat(submissionMapper.selectById(prepared.getId()).getSubmissionStatus()).isEqualTo("SENT");
   }
 
   @Test void incompleteBomBlocksDependentPriceButAllowsIndependentProfile() {

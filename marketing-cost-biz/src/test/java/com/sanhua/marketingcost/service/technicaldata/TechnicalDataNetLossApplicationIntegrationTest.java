@@ -198,7 +198,7 @@ class TechnicalDataNetLossApplicationIntegrationTest extends BomMapperTestBase {
     var publicMissing = new TechnicalDataSourceFact(TechnicalDataModuleType.NET_LOSS, TechnicalDataAvailability.MISSING,
         "PUBLIC_MISSING", "公共配置缺失", null, LocalDateTime.now());
     var sharedInfo = sharedQuery.describe(target, "2026-10", List.of(publicMissing)).getFirst();
-    assertThat(sharedInfo.status()).isEqualTo("APPROVED");
+    assertThat(sharedInfo.status()).isEqualTo("SUBMITTED");
     assertThat(sharedInfo.sourceVersionId()).isEqualTo(approved.getId());
     assertThat(sharedInfo.sourceFingerprint()).isEqualTo(approved.getContentFingerprint());
     var fallback = service.get(productId, null, WANG);

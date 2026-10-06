@@ -25,6 +25,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class OaWorkflowClient {
   public static final String SUBMIT_PATH = "/openserver/api/workflow/core/paService/v1/submitRequest";
+  public static final String REJECT_PATH = "/openserver/api/workflow/core/paService/v1/rejectRequest";
   private static final int REMARK_MAX_LENGTH = 200;
 
   /** OA V2.8 的意见字段上限；在准备事务内检查，避免冻结无法发送的资料。 */
@@ -60,12 +61,26 @@ public class OaWorkflowClient {
   }
 
   public OaWorkflowResult submit(ObjectNode request) {
-    try (var call = OaInterfaceLog.start("OA_SUBMIT_REQUEST")) {
-      call.field("direction", "OUTBOUND").field("method", "POST").field("endpoint", SUBMIT_PATH).business(request);
+    return send(request, SUBMIT_PATH);
+  }
+
+  public OaWorkflowResult reject(ObjectNode request) {
+    if (request == null || !"0".equals(request.path("RejectToType").asText())
+        || !request.path("RejectToNodeid").isTextual()
+        || !request.path("RejectToNodeid").asText().matches("[A-Za-z0-9._:-]{1,128}")) {
+      throw new IllegalArgumentException("退回接口须提供 RejectToType=0 和有效的 RejectToNodeid");
+    }
+    return send(request, REJECT_PATH);
+  }
+
+  private OaWorkflowResult send(ObjectNode request, String endpoint) {
+    try (var call = OaInterfaceLog.start(REJECT_PATH.equals(endpoint) ? "OA_REJECT_REQUEST" : "OA_SUBMIT_REQUEST")) {
+      call.field("direction", "OUTBOUND").field("method", "POST").field("endpoint", endpoint).business(request);
+      if (REJECT_PATH.equals(endpoint)) call.field("rejectToNodeId", request.path("RejectToNodeid").asText());
       if (request != null) call.field("remarkChars", request.path("remark").asText().length())
           .field("dataKey", request.at("/formData/dataDetails/0/dataKey").asText());
       try {
-        var result = submitOnce(request, call.id());
+        var result = sendOnce(request, call.id(), endpoint);
         call.result(result.status().name(), result.httpStatus(), result.errorCode());
         return result;
       } catch (RuntimeException exception) {
@@ -75,7 +90,7 @@ public class OaWorkflowClient {
     }
   }
 
-  private OaWorkflowResult submitOnce(ObjectNode request, String callId) {
+  private OaWorkflowResult sendOnce(ObjectNode request, String callId, String endpoint) {
     if (request == null || !request.path("userid").isTextual() || request.path("userid").asText().isBlank()
         || !request.path("requestId").isTextual() || request.path("requestId").asText().isBlank()) {
       throw new IllegalArgumentException("OA 请求须提供文本类型的 userid 和原流程 requestId");
@@ -88,9 +103,10 @@ public class OaWorkflowClient {
     final HttpRequest httpRequest;
     try {
       auth.requireConfigured();
-      String baseUrl = properties.resolveBaseUrl(auth.getBaseUrl());
+      String baseUrl = REJECT_PATH.equals(endpoint)
+          ? properties.resolveRejectBaseUrl(auth.getBaseUrl()) : properties.resolveBaseUrl(auth.getBaseUrl());
       token = tokens.getAccessToken();
-      httpRequest = HttpRequest.newBuilder(URI.create(baseUrl + SUBMIT_PATH
+      httpRequest = HttpRequest.newBuilder(URI.create(baseUrl + endpoint
               + "?access_token=" + URLEncoder.encode(token, StandardCharsets.UTF_8) + "&userType=JOB_NUM"))
           .timeout(Duration.ofMillis(properties.getReadTimeoutMs()))
           .header("callSysCode", auth.getCallSysCode())
@@ -163,7 +179,7 @@ public class OaWorkflowClient {
     var result = new OaWorkflowResult(callId, status, httpStatus, code, message, requestId, response,
         Duration.ofNanos(System.nanoTime() - started).toMillis());
     (status == OaWorkflowResult.Status.SUCCESS ? log.atInfo() : log.atWarn())
-        .log("OA submitRequest result callId={} status={} httpStatus={} code={} response={}",
+        .log("OA workflow result callId={} status={} httpStatus={} code={} response={}",
         callId, status, httpStatus, code, response);
     return result;
   }

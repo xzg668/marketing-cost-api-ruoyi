@@ -108,7 +108,7 @@ public class TechnicalDataSubmissionSnapshotService {
   }
 
   private void requireAccess(QuoteTechTask task, TechnicalDataActor actor, Recipient person) {
-    if (task == null || actor == null || !actor.canEdit() || !actor.canAccessTask(task.getId())
+    if (task == null || actor == null || !actor.canEdit() || !actor.canAccessTask(task)
         || !Objects.equals(task.getActiveFlag(), 1)
         || person == null || !person.active() || person.taskId() != task.getId()
         || (actor.canViewSupplementOverview() || !Objects.equals(person.userId(), actor.userId()))) {
@@ -127,9 +127,9 @@ public class TechnicalDataSubmissionSnapshotService {
     if (result == null || !Objects.equals(result.getTaskId(), taskId)) {
       throw error(TechnicalDataTaskErrorCode.FORBIDDEN, "不能跨产品读取提交快照");
     }
-    boolean owner = !actor.canViewSupplementOverview() && Objects.equals(result.getAssigneeUserId(), actor.userId());
+    boolean owner = actor.userId() != null && !actor.canViewSupplementOverview() && Objects.equals(result.getAssigneeUserId(), actor.userId());
     boolean submitted = result.getSentAt()!=null && java.util.Set.of("SENT","APPROVED","RETURNED").contains(result.getSubmissionStatus());
-    if ((!owner && !actor.canCoordinateTask(task)) || (!owner && !submitted)) {
+    if ((!owner && !actor.canViewSubmittedTask(task)) || (!owner && !submitted)) {
       throw error(TechnicalDataTaskErrorCode.FORBIDDEN, "只能查看已提交的资料，草稿仅本人可见");
     }
     return result;

@@ -17,7 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class TechnicalDataWorkflowService {
   public record Status(List<Person> participants, boolean financeReady, boolean financeConfirmed,
-      boolean canFinanceReview, String approvalFingerprint, List<String> editableModules,
+      boolean canFinanceReview, String submissionFingerprint, List<String> editableModules,
       List<String> assignedModules, boolean canAdminister, boolean canViewSupplementOverview,
       List<TechnicalDataDependencies.Issue> dependencyIssues) {}
   public record Person(long recipientId, long assigneeUserId, String assigneeName, List<String> moduleTypes,
@@ -46,7 +46,8 @@ public class TechnicalDataWorkflowService {
     var task = tasks.selectById(taskId);
     if (actor == null || !actor.canReadTask(task, modules.selectByTaskId(taskId))) throw forbidden("无权读取此产品流程");
     var flow = task.getOaFlowId() == null ? null : workflow.findFlow(task.getOaFlowId());
-    boolean overview=actor.canViewSupplementOverview();
+    boolean overview=actor.canViewSupplementOverview() || actor.oaSession()
+        && actor.assignedModules(task, modules.selectByTaskId(taskId)).isEmpty();
     var people = recipients.current(taskId).stream()
         .filter(person -> overview || Objects.equals(person.userId(),actor.userId()))
         .map(person -> {
@@ -63,16 +64,16 @@ public class TechnicalDataWorkflowService {
     return new Status(people, ready, ready && Objects.equals(basis, flow.confirmedFingerprint()),
         canFinance(actor, flow), basis, modules.selectByTaskId(taskId).stream()
             .filter(module -> actor.canEditModule(task, module)).map(module -> module.getModuleType()).toList(),
-        actor.assignedModules(task, modules.selectByTaskId(taskId)), actor.admin(), actor.canViewSupplementOverview(),
-        dependencies.approvedIssues(modules.selectByTaskId(taskId)));
+        actor.assignedModules(task, modules.selectByTaskId(taskId)), actor.admin(), overview,
+        dependencies.submittedIssues(modules.selectByTaskId(taskId)));
   }
 
   private boolean canFinance(TechnicalDataActor actor, Flow flow) {
-    if (actor==null || actor.shortSession() || flow==null || !actor.canViewSupplementOverview()) return false;
+    if (actor==null || actor.oaSession() || flow==null || !actor.canViewSupplementOverview()) return false;
     var view=access.view(flow.oaFormId());
     return view!=null && view.canCost();
   }
-  private String fingerprint(long flowId) { return codec.canonicalHash(workflow.approvalBasis(flowId)); }
+  private String fingerprint(long flowId) { return codec.canonicalHash(workflow.submissionBasis(flowId)); }
   private TechnicalDataTaskException forbidden(String message) {
     return new TechnicalDataTaskException(TechnicalDataTaskErrorCode.FORBIDDEN,message);
   }

@@ -15,7 +15,7 @@ public final class OaInterfaceLog {
   private static final Set<String> FIELDS = Set.of("requestId", "workflowRequestId", "formNo", "processCode",
       "taskId", "submissionId", "resultSubmissionId", "eventType", "employeeNo", "userid", "userId",
       "messageId", "interfaceType", "sourceSystem", "environment", "mode", "direction", "method", "endpoint",
-      "version", "formVersion", "state", "attempt", "retryDelaySeconds", "stage", "itemCount", "page",
+      "version", "formVersion", "state", "attempt", "retryDelaySeconds", "stage", "step", "rejectToNodeId", "itemCount", "page",
       "total", "selectable", "batchId", "remarkChars", "dataKey", "cache", "exceptionType", "causeType",
       "location", "sqlState", "databaseCode", "field", "trigger", "expectedVersion", "appliedVersion");
   private static final Set<String> BUSINESS_FIELDS = Set.of("requestId", "workflowRequestId", "formNo", "processCode",

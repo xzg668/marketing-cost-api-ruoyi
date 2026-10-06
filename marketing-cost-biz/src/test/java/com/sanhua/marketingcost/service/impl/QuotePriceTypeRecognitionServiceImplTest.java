@@ -321,6 +321,26 @@ class QuotePriceTypeRecognitionServiceImplTest {
   }
 
   @Test
+  void packageParentReadsPublishedElectronicDrawingStructure() {
+    mockScope();
+    QuoteBomStatus drawingStatus = status();
+    drawingStatus.setBomSource("ELECTRONIC_DRAWING_BOM");
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(drawingStatus);
+    BomCostingRow parent = row(304L, "PKG-1");
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+        .thenReturn(List.of(parent));
+    when(itemClassifier.classify(any())).thenReturn(List.of(packagePlan(parent)));
+    when(packageSnapshotService.previewSnapshot(any())).thenReturn(packageSnapshot());
+
+    service.getRecognition("OA-001", 10L, null);
+
+    ArgumentCaptor<PackageSnapshotRequest> requestCaptor =
+        ArgumentCaptor.forClass(PackageSnapshotRequest.class);
+    verify(packageSnapshotService).previewSnapshot(requestCaptor.capture());
+    assertThat(requestCaptor.getValue().getSourceType()).isEqualTo("E_DRAWING");
+  }
+
+  @Test
   void priceTypePageReadUsesReadOnlyTransaction() throws Exception {
     Transactional transactional =
         QuotePriceTypeRecognitionServiceImpl.class

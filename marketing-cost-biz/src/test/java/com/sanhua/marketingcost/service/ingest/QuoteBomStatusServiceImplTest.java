@@ -131,7 +131,49 @@ class QuoteBomStatusServiceImplTest {
     assertThat(response.getItems().getFirst().getBomSource())
         .isEqualTo("ELECTRONIC_DRAWING_BOM");
     assertThat(response.getItems().getFirst().getSyncRecordId()).isEqualTo(7200L);
-    verify(supplementResolver, never()).resolve(any(), any(), any(), any());
+    verify(supplementResolver).resolve(eq(13L), eq("COMMERCIAL"), eq("2026-06"), any());
+    verify(snapshotMapper, never()).insert(any(QuoteBomMonthlySnapshot.class));
+  }
+
+  @Test
+  void newlyApprovedRevisionReplacesTheOldMonthlyCacheWithoutChangingItsHistory() {
+    OaFormItem item = item(13L, "MAT-MISSING", "BOX");
+    stubQuote("OA-4", "CUST-A", "2026-06", item);
+    QuoteBomMonthlySnapshot old = approvedSnapshot(7200L, "MAT-MISSING", "2026-06");
+    old.setBomBatchId("SUPPLEMENT_VERSION:31");
+    when(u9Gateway.read(any())).thenReturn(CurrentU9BomResult.notFound("本月U9无BOM").withMonthlySnapshot(7100L, false));
+    when(snapshotMapper.selectList(any())).thenReturn(List.of(old));
+    var revised = new BomAvailability();
+    revised.setAvailable(true); revised.setSource("ELECTRONIC_DRAWING_BOM");
+    revised.setBomVersion("ED-42"); revised.setSyncBatchId("SUPPLEMENT_VERSION:42");
+    when(supplementResolver.resolve(eq(13L), eq("COMMERCIAL"), eq("2026-06"), any())).thenReturn(revised);
+    doAnswer(call -> { ((QuoteBomMonthlySnapshot) call.getArgument(0)).setId(7300L); return 1; })
+        .when(snapshotMapper).insert(any(QuoteBomMonthlySnapshot.class));
+
+    var response = service.checkForCostRun("OA-4");
+
+    assertThat(response.getItems().getFirst().getBomVersion()).isEqualTo("ED-42");
+    assertThat(response.getItems().getFirst().getSyncRecordId()).isEqualTo(7300L);
+    var created = ArgumentCaptor.forClass(QuoteBomMonthlySnapshot.class);
+    verify(snapshotMapper).insert(created.capture());
+    assertThat(created.getValue().getBomBatchId()).isEqualTo("SUPPLEMENT_VERSION:42");
+    assertThat(old.getBomBatchId()).isEqualTo("SUPPLEMENT_VERSION:31");
+  }
+
+  @Test
+  void matchingApprovedSourceKeepsItsMonthlyCacheAndDoesNotCreateAnotherSnapshot() {
+    OaFormItem item = item(13L, "MAT-MISSING", "BOX");
+    stubQuote("OA-4", "CUST-A", "2026-06", item);
+    QuoteBomMonthlySnapshot approved = approvedSnapshot(7200L, "MAT-MISSING", "2026-06");
+    approved.setBomBatchId("SUPPLEMENT_VERSION:31");
+    when(u9Gateway.read(any())).thenReturn(CurrentU9BomResult.notFound("本月U9无BOM").withMonthlySnapshot(7100L, false));
+    when(snapshotMapper.selectList(any())).thenReturn(List.of(approved));
+    var same = new BomAvailability(); same.setAvailable(true); same.setSyncBatchId("SUPPLEMENT_VERSION:31");
+    when(supplementResolver.resolve(eq(13L), eq("COMMERCIAL"), eq("2026-06"), any())).thenReturn(same);
+
+    var response = service.checkForCostRun("OA-4");
+
+    assertThat(response.getItems().getFirst().getSyncRecordId()).isEqualTo(7200L);
     verify(snapshotMapper, never()).insert(any(QuoteBomMonthlySnapshot.class));
   }
 

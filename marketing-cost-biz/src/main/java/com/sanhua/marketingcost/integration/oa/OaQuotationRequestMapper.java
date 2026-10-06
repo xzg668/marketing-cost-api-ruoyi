@@ -35,11 +35,18 @@ public class OaQuotationRequestMapper {
         "$",
         Set.of(
             "requestId",
+            "RejectToNodeid",
             "formNo",
             "processCode",
             "mainData",
             "detailData"));
     String requestId = text(root, "requestId", 128);
+    String rejectToNodeId = null;
+    if (root.hasNonNull("RejectToNodeid")) {
+      rejectToNodeId = text(root, "RejectToNodeid", 128);
+      if (!rejectToNodeId.matches("[A-Za-z0-9._:-]+"))
+        fail("RejectToNodeid", "退回节点ID格式不正确");
+    }
     String formNo = text(root, "formNo", 64);
     String process = text(root, "processCode", 20);
     if (!Set.of("FI-SC-005", "FI-SC-006", "FI-SC-020", "FI-SR-005").contains(process))
@@ -143,7 +150,7 @@ public class OaQuotationRequestMapper {
     request.setItems(items);
     return new Mapped(
         requestId,
-        new OaQuoteRequest(requestId, "COMMERCIAL", request),
+        new OaQuoteRequest(requestId, "COMMERCIAL", request, rejectToNodeId),
         List.copyOf(lines),
         List.copyOf(issues));
   }

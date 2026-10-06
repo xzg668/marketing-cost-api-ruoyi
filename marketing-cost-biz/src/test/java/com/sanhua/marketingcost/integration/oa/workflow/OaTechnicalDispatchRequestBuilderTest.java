@@ -14,7 +14,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 class OaTechnicalDispatchRequestBuilderTest {
   private static final ValidatorFactory VALIDATION = Validation.buildDefaultValidatorFactory();
   private final ObjectMapper json = new ObjectMapper();
-  private final OaTechnicalDispatchRequestBuilder builder = new OaTechnicalDispatchRequestBuilder(json, VALIDATION.getValidator());
+  private final OaWorkflowProperties properties = new OaWorkflowProperties();
+  private final OaTechnicalDispatchRequestBuilder builder = new OaTechnicalDispatchRequestBuilder(json, VALIDATION.getValidator(), properties);
 
   @AfterAll static void close() { VALIDATION.close(); }
 
@@ -77,7 +78,29 @@ class OaTechnicalDispatchRequestBuilderTest {
   @Test void unconfirmedProcessKeyCannotFallBackToJsy() {
     var request = new OaTechnicalDispatchRequest("123", "FI-SC-006", null,
         command(product("1", "A", assignment("001", "甲", "SALARY"))).products());
-    assertThatThrownBy(() -> builder.build(request, "0009")).hasMessageContaining("其他流程须确认字段");
+    assertThatThrownBy(() -> builder.build(request, "0009")).hasMessageContaining("FI-SC-006").hasMessageContaining("请先确认OA字段");
+  }
+
+  @ParameterizedTest @ValueSource(strings = {"FI-SC-006", "FI-SC-020"})
+  void configuredProcessUsesItsOwnPeopleFieldWithoutChangingTheScope(String process) {
+    String field = "SIM_" + process.replace('-', '_') + "_JSY";
+    properties.getTechnicalPeopleDataKeys().put(process, field);
+    var request = new OaTechnicalDispatchRequest("123", process, null,
+        command(product("1", "A", assignment("001", "甲", "NET_LOSS"))).products());
+    var body = builder.build(request, "0009");
+    assertThat(body.at("/formData/dataDetails/0/dataKey").asText()).isEqualTo(field);
+    assertThat(body.at("/formData/dataDetails/0/dataOptions/0/optionId").asText()).isEqualTo("001");
+    assertThat(body.path("remark").asText()).isEqualTo("技术补录：产品A：甲（001）补净损失率。");
+  }
+
+  @Test void blankConfiguredFieldDoesNotInheritAnotherProcessAndControlCharactersAreRejected() {
+    properties.getTechnicalPeopleDataKeys().put("FI-SC-006", " ");
+    assertThatThrownBy(() -> properties.requireTechnicalPeopleDataKey("FI-SC-006"))
+        .hasMessageContaining("请先确认OA字段");
+    properties.getTechnicalPeopleDataKeys().put("FI-SC-020", "jsy\nother");
+    assertThatThrownBy(() -> properties.requireTechnicalPeopleDataKey("FI-SC-020"))
+        .hasMessageContaining("格式不正确");
+    assertThat(properties.requireTechnicalPeopleDataKey("FI-SC-005")).isEqualTo("jsy");
   }
 
   @ParameterizedTest @ValueSource(strings = {"", " ", "001\n002", "12&34", "中文"})

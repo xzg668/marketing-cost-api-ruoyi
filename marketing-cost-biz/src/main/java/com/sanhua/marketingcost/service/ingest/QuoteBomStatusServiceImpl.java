@@ -226,15 +226,18 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     }
 
     // U9 的 NOT_FOUND 已按月冻结；之后只在电子图库审核结果和人工补录链路内继续。
-    QuoteBomMonthlySnapshot approvedSnapshot =
-        findActiveApprovedSnapshot(key, context.organization());
-    if (approvedSnapshot != null) {
-      applyReusedSnapshot(status, approvedSnapshot, now);
-      return;
-    }
     BomAvailability noU9 = BomAvailability.unavailable(u9.message());
     BomAvailability supplement = supplementBomAvailabilityResolver.resolve(
         item.getId(), requiredBusinessUnit(form, item), key.getCostPeriodMonth(), noU9);
+    QuoteBomMonthlySnapshot approvedSnapshot =
+        findActiveApprovedSnapshot(key, context.organization());
+    // 同月退回修订会发布新的组树版本；本报价的当前已批准来源优先于旧月度缓存。
+    // 没有本报价专属来源时仍可复用已批准 BOM，正式 U9 仍在前面的独立分支处理。
+    if (approvedSnapshot != null && (supplement == null || !supplement.isAvailable()
+        || Objects.equals(approvedSnapshot.getBomBatchId(), supplement.getSyncBatchId()))) {
+      applyReusedSnapshot(status, approvedSnapshot, now);
+      return;
+    }
     if (supplement == null || !supplement.isAvailable()) {
       applyNoBomStatus(
           status,

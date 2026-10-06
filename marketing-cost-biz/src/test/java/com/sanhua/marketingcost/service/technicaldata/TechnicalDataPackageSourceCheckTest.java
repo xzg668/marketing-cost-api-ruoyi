@@ -30,9 +30,10 @@ class TechnicalDataPackageSourceCheckTest {
       "PRODUCT", "产品", null, null, "210", "COMMERCIAL", LocalDate.of(2026, 9, 1), LocalDateTime.now());
 
   @Test void existingBomWithoutPackageIsMissingButReadFailureIsNeverTreatedAsMissing() {
-    when(sources.forProduct("PRODUCT", "2026-09", "COMMERCIAL", "210")).thenReturn(List.of());
+    when(sources.inspectProduct("PRODUCT", "2026-09", "COMMERCIAL", "210"))
+        .thenReturn(new TechnicalDataPackageSourceQuery.ProductPackaging(List.of(), List.of()));
     assertThat(check.check(context, TechnicalDataAvailability.AVAILABLE).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
-    when(sources.forProduct(anyString(), anyString(), anyString(), anyString())).thenThrow(new IllegalStateException("timeout"));
+    when(sources.inspectProduct(anyString(), anyString(), anyString(), anyString())).thenThrow(new IllegalStateException("timeout"));
     assertThat(check.check(context, TechnicalDataAvailability.AVAILABLE).availability()).isEqualTo(TechnicalDataAvailability.ERROR);
   }
 
@@ -60,7 +61,27 @@ class TechnicalDataPackageSourceCheckTest {
     child.setMaterialCode("BOX"); child.setParentCode("PK"); child.setPath("/PRODUCT/PK/BOX/"); child.setLevel(2);
     when(details.selectList(any())).thenReturn(List.of(parent, child));
     var material = new com.sanhua.marketingcost.entity.MaterialMasterRaw(); material.setMaterialCode("PK");
-    when(materials.selectPackageComponentParentsByLatestBatch("包装组件", null, "COMMERCIAL")).thenReturn(List.of(material));
+    material.setMainCategoryName("包装组件");
+    when(materials.selectByLatestBatchAndCodes(java.util.Set.of("PK", "BOX"), null, "COMMERCIAL")).thenReturn(List.of(material));
     assertThat(check.check(context, TechnicalDataAvailability.MISSING).availability()).isEqualTo(TechnicalDataAvailability.AVAILABLE);
+    verify(materials).selectByLatestBatchAndCodes(java.util.Set.of("PK", "BOX"), null, "COMMERCIAL");
+    verify(materials, never()).selectPackageComponentParentsByLatestBatch(any(), any(), any());
+
+    var emptyParent = new com.sanhua.marketingcost.entity.QuoteBomSupplementDetail();
+    emptyParent.setMaterialCode("PK"); emptyParent.setPath("/PRODUCT/OTHER/PK/"); emptyParent.setLevel(2);
+    when(details.selectList(any())).thenReturn(List.of(parent, child, emptyParent));
+    var missing = check.check(context, TechnicalDataAvailability.MISSING);
+    assertThat(missing.availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+    assertThat(missing.reason()).contains("PK");
+    when(details.selectList(any())).thenReturn(List.of(parent, child));
+
+    material.setMainCategoryName("普通组件");
+    assertThat(check.check(context, TechnicalDataAvailability.MISSING).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+    material.setMainCategoryName("包装组件");
+    child.setParentCode("OTHER");
+    assertThat(check.check(context, TechnicalDataAvailability.MISSING).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+    when(materials.selectByLatestBatchAndCodes(anyCollection(), isNull(), eq("COMMERCIAL")))
+        .thenThrow(new IllegalStateException("source unavailable"));
+    assertThat(check.check(context, TechnicalDataAvailability.MISSING).availability()).isEqualTo(TechnicalDataAvailability.ERROR);
   }
 }

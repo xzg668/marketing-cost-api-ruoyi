@@ -60,6 +60,27 @@ class ApprovedElectronicBomRawSnapshotPublisherTest {
   }
 
   @Test
+  void preservesConvertedWeightAndNormalizesU9BaseBeforeDownstreamExpansion() {
+    var root = detail(1, 0, null, "P-1", "/P-1/");
+    var ball = detail(2, 1, "P-1", "BALL", "/P-1/BALL/");
+    ball.setQtyPerParent(new BigDecimal("0.00002"));
+    ball.setQtyPerTop(new BigDecimal("0.00002"));
+    var raw = u9Detail(3, 2, "BALL", "RAW", "/P-1/BALL/RAW/");
+    raw.setQtyPerParent(new BigDecimal("2"));
+    raw.setParentBaseQty(new BigDecimal("2"));
+    raw.setQtyPerTop(new BigDecimal("0.00002"));
+    when(detailMapper.selectList(any())).thenReturn(List.of(root, ball, raw));
+    when(rawMapper.selectList(any())).thenReturn(List.of());
+
+    publisher.publish(product());
+
+    ArgumentCaptor<BomRawHierarchy> rows = ArgumentCaptor.forClass(BomRawHierarchy.class);
+    verify(rawMapper, org.mockito.Mockito.times(3)).insert(rows.capture());
+    assertThat(rows.getAllValues().get(1).getQtyPerParent()).isEqualByComparingTo("0.00002");
+    assertThat(rows.getAllValues().get(2).getQtyPerParent()).isEqualByComparingTo("1");
+  }
+
+  @Test
   void determinesLeafByStructuralPathWhenSameMaterialAlsoAppearsAsParentElsewhere() {
     when(detailMapper.selectList(any())).thenReturn(List.of(
         detail(1, 0, null, "P-1", "/P-1/"),

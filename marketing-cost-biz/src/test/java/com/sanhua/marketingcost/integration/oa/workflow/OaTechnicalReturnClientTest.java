@@ -6,10 +6,13 @@ import static org.mockito.Mockito.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class OaTechnicalReturnClientTest {
   final OaWorkflowClient workflow = mock(OaWorkflowClient.class);
-  final OaTechnicalReturnClient client = new OaTechnicalReturnClient(new ObjectMapper(), workflow);
+  final OaWorkflowProperties properties = new OaWorkflowProperties();
+  final OaTechnicalReturnClient client = new OaTechnicalReturnClient(new ObjectMapper(), workflow, properties);
 
   OaTechnicalReturnClient.Request request(List<OaTechnicalReturnClient.Target> targets) {
     return new OaTechnicalReturnClient.Request(
@@ -18,6 +21,23 @@ class OaTechnicalReturnClientTest {
         "00101516",
         targets,
         "https://quote.test/technical-data/workbench?formId=1");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"FI-SC-006", "FI-SC-020"})
+  void returningUsesTheSameConfiguredPeopleFieldAsDispatch(String process) {
+    var original = request(List.of(new OaTechnicalReturnClient.Target(
+        "P1", List.of("NET_LOSS"), "001234", "张三", "调整净损失率")));
+    var command = new OaTechnicalReturnClient.Request(original.requestId(), process,
+        original.operatorEmployeeNo(), original.targets(), original.workbenchUrl());
+    assertThatThrownBy(() -> client.preview(command)).hasMessageContaining("请先确认OA字段");
+    properties.getTechnicalPeopleDataKeys().put(process, "SIM_" + process.replace('-', '_') + "_JSY");
+    var body = client.preview(command);
+    assertThat(body.at("/formData/dataDetails/0/dataKey").asText())
+        .isEqualTo(properties.requireTechnicalPeopleDataKey(process));
+    assertThat(body.at("/formData/dataDetails/0/dataOptions/0/optionId").asText()).isEqualTo("001234");
+    assertThat(body.path("remark").asText()).contains("退回修改", "净损失率", "调整净损失率");
+    verifyNoInteractions(workflow);
   }
 
   @Test

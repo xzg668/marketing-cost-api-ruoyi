@@ -17,6 +17,26 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 class RequestLoggingAspectTest {
 
   @Test
+  void oauthCallbackStringsAndHandoffUrlsAreNeverLogged() throws Throwable {
+    var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(RequestLoggingAspect.class);
+    var appender = new ListAppender<ILoggingEvent>(); appender.start(); logger.addAppender(appender);
+    var request = new org.springframework.mock.web.MockHttpServletRequest("GET", "/api/v1/auth/oa/callback");
+    org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+        new org.springframework.web.context.request.ServletRequestAttributes(request));
+    try {
+      var point = mock(ProceedingJoinPoint.class);
+      when(point.getArgs()).thenReturn(new Object[]{"private-code", "private-state"});
+      when(point.proceed()).thenReturn(Map.of("authorizeUrl", "http://oa.test?state=private-state", "ticket", "private-ticket"));
+      new RequestLoggingAspect(new ObjectMapper()).logRequest(point);
+      assertThat(appender.list).allSatisfy(event -> assertThat(event.getFormattedMessage())
+          .doesNotContain("private-code", "private-state", "private-ticket").contains("OAuth:redacted"));
+    } finally {
+      org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+      logger.detachAppender(appender); appender.stop();
+    }
+  }
+
+  @Test
   void redactsSecurityPrincipalAndNestedSecretsInRequestAndResponse() throws Throwable {
     ch.qos.logback.classic.Logger logger =
         (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(RequestLoggingAspect.class);

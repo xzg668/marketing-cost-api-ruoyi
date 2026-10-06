@@ -36,10 +36,10 @@ public class TechnicalDataPricePublication {
 
   @Transactional(propagation=Propagation.MANDATORY)
   public void publish(QuoteTechTask task, QuoteTechProduct product, QuoteTechDataVersion version) {
-    if (!"APPROVED".equals(version.getVersionStatus()) || !Objects.equals(product.getId(),version.getProductId())) throw new IllegalArgumentException("价格发布须使用本产品已审批版本");
+    if (!TechnicalDataSubmissionState.submitted(version.getVersionStatus()) || !Objects.equals(product.getId(),version.getProductId())) throw new IllegalArgumentException("价格发布须使用本产品已提交版本");
     String actual=codec.fingerprint(version,codec.readReferenceSnapshot(version.getReferenceSnapshotJson()),
         repository.findPackageItems(version.getId()),repository.findAuxItems(version.getId()),repository.findSalaryItems(version.getId()));
-    if(!Objects.equals(actual,version.getContentFingerprint())) throw new IllegalStateException("价格审批内容与冻结指纹不一致");
+    if(!Objects.equals(actual,version.getContentFingerprint())) throw new IllegalStateException("价格提交内容与冻结指纹不一致");
     var content=codec.prices(version);
     if (content==null || content.items()==null) return;
     for (var item:content.items()) {
@@ -49,7 +49,7 @@ public class TechnicalDataPricePublication {
       if(!issues.isEmpty()) throw new IllegalStateException(String.join("；",issues));
       if("FIXED".equals(item.entryMode())) publishFixed(task,version,item);
       else if("REFERENCE".equals(item.entryMode())) publishReference(task,product,version,item);
-      // MANUAL 不建立虚假可用记录，TW-17 由财务修正导入后关联原审批版本。
+      // MANUAL 不建立虚假可用记录，TW-17 由财务修正导入后关联原提交版本。
     }
   }
 
@@ -57,7 +57,7 @@ public class TechnicalDataPricePublication {
     var existing=fixed.selectList(Wrappers.lambdaQuery(PriceFixedItem.class).eq(PriceFixedItem::getTechnicalVersionId,version.getId()).eq(PriceFixedItem::getTechnicalItemKey,item.itemKey()));
     if(!existing.isEmpty()) return;
     var row=new PriceFixedItem(); row.setSourceKind("TECH_SUPPLEMENTAL"); row.setTechnicalVersionId(version.getId()); row.setTechnicalItemKey(item.itemKey());
-    row.setTechnicalPublicationStatus("AVAILABLE"); row.setTechnicalPublicationMessage("技术审批通过，固定不含税价可用");
+    row.setTechnicalPublicationStatus("AVAILABLE"); row.setTechnicalPublicationMessage("技术资料已提交，固定不含税价可用");
     row.setMaterialCode(item.materialNo()); row.setOrgCode(item.organizationCode()); row.setUnit(item.unit()); row.setBusinessUnitType(task.getBusinessUnitType());
     row.setSourceType("PURCHASE_FIXED"); row.setSourceName("技术补录"); row.setSourceSystem("TECH_SUPPLEMENTAL");
     row.setSourceBatchNo("TECH:"+version.getId()); row.setFixedPrice(item.unitPrice()); row.setTaxIncluded(0);
@@ -109,7 +109,7 @@ public class TechnicalDataPricePublication {
       var result=calculator.calculate(row,context);
       boolean usable="OK".equals(result.getCalcStatus()) && result.getPartUnitPrice()!=null && result.getPartUnitPrice().signum()>0;
       row.setTechnicalPublicationStatus(usable?"AVAILABLE":"FAILED");
-      row.setTechnicalPublicationMessage(usable?"技术审批通过，参考公式已通过实际计算":Objects.toString(result.getCalcMessage(),"参考公式未取得有效正数单价"));
+      row.setTechnicalPublicationMessage(usable?"技术资料已提交，参考公式已通过实际计算":Objects.toString(result.getCalcMessage(),"参考公式未取得有效正数单价"));
     } catch(RuntimeException exception) {
       log.warn("technical reference price publication failed: version={} material={}",version.getId(),item.materialNo(),exception);
       row.setTechnicalPublicationMessage(Objects.toString(exception.getMessage(),"参考公式计算失败"));
@@ -136,10 +136,10 @@ public class TechnicalDataPricePublication {
           if(previous==null || !"AVAILABLE".equals(previous.status()))published.put(row.getTechnicalItemKey(),new TechnicalDataPricePublicationStatus(row.getTechnicalItemKey(),row.getMaterialCode(),row.getTechnicalPublicationStatus(),row.getTechnicalPublicationMessage()));
         });
     return content.items().stream().map(item -> {
-      if(!"APPROVED".equals(version.getVersionStatus())) return new TechnicalDataPricePublicationStatus(item.itemKey(),item.materialNo(),version.getVersionStatus(),"尚未形成可用补录价格");
+      if(!TechnicalDataSubmissionState.submitted(version.getVersionStatus())) return new TechnicalDataPricePublicationStatus(item.itemKey(),item.materialNo(),version.getVersionStatus(),"尚未形成可用补录价格");
       if("MANUAL".equals(item.entryMode()) && published.containsKey(item.itemKey()))return published.get(item.itemKey());
-      if("MANUAL".equals(item.entryMode())) return new TechnicalDataPricePublicationStatus(item.itemKey(),item.materialNo(),"WAIT_FINANCE","技术审批已通过，等待报价员修正、导入并检查取价");
-      return published.getOrDefault(item.itemKey(),new TechnicalDataPricePublicationStatus(item.itemKey(),item.materialNo(),"UNPUBLISHED","已审批，尚未形成可用价格，请重新检查"));
+      if("MANUAL".equals(item.entryMode())) return new TechnicalDataPricePublicationStatus(item.itemKey(),item.materialNo(),"WAIT_FINANCE","技术资料已提交，等待报价员修正、导入并检查取价");
+      return published.getOrDefault(item.itemKey(),new TechnicalDataPricePublicationStatus(item.itemKey(),item.materialNo(),"UNPUBLISHED","已提交，尚未形成可用价格，请重新检查"));
     }).toList();
   }
 }

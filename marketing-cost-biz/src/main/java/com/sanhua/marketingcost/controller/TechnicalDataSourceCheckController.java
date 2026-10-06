@@ -43,7 +43,7 @@ public class TechnicalDataSourceCheckController {
 
   @PostMapping("/quote-items/{itemId}/check")
   public CommonResult<TechnicalDataSourceCheckResponse> check(@PathVariable Long itemId, @RequestParam String accountingMonth) {
-    if (actors.current().shortSession()) return CommonResult.error(403, "短时办理会话不能检查其他报价产品");
+    if (actors.current().oaSession()) return CommonResult.error(403, "OA 协作会话不能检查其他报价产品");
     try { return CommonResult.success(sources.recheck(itemId, accountingMonth)); }
     catch (TechnicalDataTaskException exception) {
       return CommonResult.error(exception.code().name().equals("FORBIDDEN") ? 403 : 409, exception.getMessage());
@@ -54,7 +54,7 @@ public class TechnicalDataSourceCheckController {
   public CommonResult<List<Assignee>> assignees(
       @RequestParam(defaultValue = "") String keyword,
       @RequestParam(defaultValue = "50") int limit) {
-    if (actors.current().shortSession()
+    if (actors.current().oaSession()
         || !"COMMERCIAL".equals(BusinessUnitContext.getCurrentBusinessUnitType())) {
       return CommonResult.error(403, "请选择业务单元后分派补录");
     }

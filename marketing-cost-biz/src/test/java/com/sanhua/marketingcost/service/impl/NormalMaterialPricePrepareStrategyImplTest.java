@@ -119,6 +119,32 @@ class NormalMaterialPricePrepareStrategyImplTest {
   }
 
   @Test
+  @DisplayName("公共联动公式缺失时，仍使用已提交的技术补录公式")
+  void submittedTechnicalFormulaSurvivesMissingPublicFormula() {
+    LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 9, 30, 9, 0);
+    PricePreparePlanItem planItem = planItem("MAT-TECH-LINK", new BigDecimal("3"));
+    PriceTypeRoute publicRoute = route("MAT-TECH-LINK", PriceTypeEnum.LINKED);
+    PriceTypeRoute technicalRoute = new PriceTypeRoute(
+        "MAT-TECH-LINK", MaterialFormAttrEnum.PURCHASED, PriceTypeEnum.LINKED,
+        2, null, null, "TECH_SUPPLEMENTAL", "联动价", "TECH_SUPPLEMENTAL", null);
+    when(routerService.listCandidates(eq("MAT-TECH-LINK"), eq("2026-09"), any(LocalDate.class)))
+        .thenReturn(List.of(publicRoute, technicalRoute));
+    LinkedPriceEnsureResult failed = new LinkedPriceEnsureResult();
+    failed.addFailedItem("MAT-TECH-LINK", "联动价公式不存在或为空");
+    when(linkedPriceEnsureService.ensure(any(LinkedPriceEnsureRequest.class))).thenReturn(failed);
+    when(linkedResolver.resolve(eq("OA-001"), any(CostRunPartItemDto.class), eq(technicalRoute),
+        any(CostRunContext.class)))
+        .thenReturn(PriceResolveResult.hit(new BigDecimal("15"), "补录联动价"));
+
+    NormalMaterialPricePrepareResult result = strategy.prepare(
+        "OA-001", "COMMERCIAL", "2026-09", priceAsOfTime, planItem);
+
+    assertThat(result.getStatus()).isEqualTo("READY");
+    assertThat(result.getUnitPrice()).isEqualByComparingTo("15");
+    verify(linkedResolver, never()).resolve(eq("OA-001"), any(), eq(publicRoute), any());
+  }
+
+  @Test
   @DisplayName("第四步联动价只在内存计算，不调用 ensure 或数据库 Resolver")
   void linkedPriceCalculateDoesNotPersist() {
     LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 11, 10, 15);

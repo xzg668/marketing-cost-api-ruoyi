@@ -40,42 +40,12 @@ public class OaIntegrationProperties {
         throw new IllegalStateException("OA client configuration does not match the active environment, mode or permissions");
       }
     });
-    if (outbound.enabled) {
-      if (mode != Mode.MOCK) {
-        throw new IllegalStateException("OA outbound REAL adapter is not configured; mock cannot serve REAL mode");
-      }
-      if (!clients.containsKey(outbound.clientId) || outbound.secret == null || outbound.secret.length() < 32
-          || outbound.connectTimeoutMs < 100 || outbound.connectTimeoutMs > 30000
-          || outbound.readTimeoutMs < 100 || outbound.readTimeoutMs > 60000) {
-        throw new IllegalStateException("OA outbound requires a configured peer, private key and bounded timeouts");
-      }
-      validateHttpUrl(outbound.baseUrl);
-      validateHttpUrl(outbound.frontendBaseUrl);
-    }
-  }
-
-  private static void validateHttpUrl(String value) {
-    try {
-      var uri = java.net.URI.create(value);
-      if (!Set.of("http", "https").contains(uri.getScheme()) || uri.getHost() == null
-          || uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null) {
-        throw new IllegalArgumentException();
-      }
-    } catch (RuntimeException exception) {
-      throw new IllegalStateException("OA outbound and frontend URLs must be explicit HTTP addresses");
-    }
   }
 
   @Getter
   @Setter
   public static class Outbound {
-    private boolean enabled;
-    private String clientId;
-    private String baseUrl;
-    private String secret;
     private String frontendBaseUrl;
-    private int connectTimeoutMs = 3000;
-    private int readTimeoutMs = 5000;
   }
 
   @Getter

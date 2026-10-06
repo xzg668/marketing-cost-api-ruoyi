@@ -88,11 +88,17 @@ public class TechnicalDataPackageSourceQuery {
   }
 
   public List<Source> forProduct(String code, String month, String businessUnit, String priceOrg) {
+    return inspectProduct(code, month, businessUnit, priceOrg).sources();
+  }
+
+  public record ProductPackaging(List<Source> sources, List<String> missingParents) {}
+
+  public ProductPackaging inspectProduct(String code, String month, String businessUnit, String priceOrg) {
     var organization = MaterialOrganization.fromPriceOrgCode(priceOrg).toQuoteDataOrganization();
     var bom = formalBom.read(code, month, null, YearMonth.parse(month).atDay(1), organization);
     if (bom == null) throw new IllegalStateException("正式 BOM 查询未返回结果");
     if (!bom.found()) {
-      if (bom.gapMessage() != null && bom.gapMessage().contains("未在 lp_bom_raw_hierarchy 找到正式 BOM")) return List.of();
+      if (bom.gapMessage() != null && bom.gapMessage().contains("未在 lp_bom_raw_hierarchy 找到正式 BOM")) return new ProductPackaging(List.of(), List.of());
       throw new IllegalStateException("正式 BOM 来源尚未核实：" + bom.gapMessage());
     }
     var lines = bom.lines();
@@ -100,6 +106,7 @@ public class TechnicalDataPackageSourceQuery {
     if (roots.size() != 1) throw new IllegalStateException("包装参考成品缺少唯一 BOM 根节点");
     var root = roots.getFirst();
     var result = new ArrayList<Source>();
+    var missingParents = new ArrayList<String>();
     for (var parent : lines) {
       if (!"包装组件".equals(parent.mainCategoryName())
           || !Objects.equals(parent.priceOrgCode(), organization.priceOrgCode())
@@ -111,7 +118,10 @@ public class TechnicalDataPackageSourceQuery {
           .map(child -> new Child(child.sourceRawHierarchyId(), child.materialCode(), child.materialName(),
               first(child.materialModel(), child.drawingNo()), child.materialSpec(), child.qtyPerParent(), child.unit(), child.path()))
           .sorted(Comparator.comparing(Child::path)).toList();
-      if (children.isEmpty()) continue;
+      if (children.isEmpty()) {
+        missingParents.add(parent.materialCode());
+        continue;
+      }
       String structure = json.canonicalHash(List.of(organization, parent.materialCode(),
           Objects.toString(parent.bomVersion(), ""), Objects.toString(parent.bomPurpose(), ""),
           children.stream().map(child -> List.of(Objects.toString(child.materialNo(), ""), Objects.toString(child.model(), ""),
@@ -128,7 +138,7 @@ public class TechnicalDataPackageSourceQuery {
           unsigned.bomPurpose(), unsigned.buildBatchId(), unsigned.parentPath(), structure, fingerprint);
       result.add(new Source(evidence, children));
     }
-    return List.copyOf(result);
+    return new ProductPackaging(List.copyOf(result), List.copyOf(missingParents));
   }
 
   private List<String> productCodes(QuoteTechTask task, QuoteTechProduct product, String query) {
@@ -140,11 +150,9 @@ public class TechnicalDataPackageSourceQuery {
   }
 
   private boolean immediateChild(QuoteBomSourceLineDto parent, QuoteBomSourceLineDto child) {
-    if (parent.path() == null || child.path() == null || child.level() == null || parent.level() == null) return false;
-    int end = child.path().lastIndexOf('/', child.path().length() - 2);
-    return child.level() == parent.level() + 1 && Objects.equals(child.parentCode(), parent.materialCode())
-        && end >= 0 && child.path().substring(0, end + 1).equals(parent.path())
-        && Objects.equals(parent.priceOrgCode(), child.priceOrgCode());
+    return TechnicalDataPackageStructure.immediateChild(
+        new TechnicalDataPackageStructure.Node(parent.materialCode(), parent.parentCode(), parent.path(), parent.level(), parent.priceOrgCode()),
+        new TechnicalDataPackageStructure.Node(child.materialCode(), child.parentCode(), child.path(), child.level(), child.priceOrgCode()));
   }
 
   private String keyword(String value) {

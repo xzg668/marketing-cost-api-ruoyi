@@ -260,10 +260,13 @@ public class ElectronicDrawingWorkflowOrchestrator {
     log.error(
         "electronic drawing validation blocked: opsAlert=true taskId={} drawingNo={}",
         context.workflowId(), command.drawingNo(), exception);
+    String message = exception instanceof ElectronicDrawingHybridBomException hybrid
+        && ElectronicDrawingHybridBomException.BOM_GAP.equals(hybrid.code())
+        ? hybrid.getMessage() : "电子图库资料暂无法完成校验，请稍后重新检查";
     record(context, "E_DRAWING_VALIDATION_FAILED",
-        "电子图库资料校验未通过，系统已记录并通知运维");
+        message);
     return result(context, ElectronicDrawingWorkflowStage.VALIDATION_FAILED,
-        "电子图库资料暂无法完成校验，请稍后重新检查", false, 0);
+        message, false, 0);
   }
 
   private ElectronicDrawingWorkContext safeStage(

@@ -36,7 +36,7 @@ class JwtAuthenticationFilterTest {
         jwtUtils = mock(JwtUtils.class);
         userDetailsService = mock(UserDetailsService.class);
         sysUserService = mock(SysUserService.class);
-        filter = new JwtAuthenticationFilter(jwtUtils, userDetailsService, sysUserService, new com.sanhua.marketingcost.integration.oa.OaIntegrationProperties());
+        filter = new JwtAuthenticationFilter(jwtUtils, userDetailsService, sysUserService, new com.sanhua.marketingcost.integration.oa.directory.OaPersonDirectoryProperties(), mock(com.sanhua.marketingcost.integration.oa.directory.OaPersonDirectoryRepository.class));
         filterChain = mock(FilterChain.class);
         SecurityContextHolder.clearContext();
     }

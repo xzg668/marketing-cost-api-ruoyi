@@ -81,7 +81,7 @@ class PriceLinkedStandardImportDispatchRegressionTest {
         mock(PriceLinkedType2ImportOrchestrator.class);
     PriceLinkedImportDispatchServiceImpl dispatch =
         new PriceLinkedImportDispatchServiceImpl(
-            new PriceLinkedWorkbookTypeDetectorImpl(), standard, type2, mock(com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService.class), new com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionWorkbook(mock(com.sanhua.marketingcost.formula.normalize.FormulaNormalizer.class),mock(com.sanhua.marketingcost.formula.normalize.FormulaValidator.class)), mock(com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionImportService.class), mock(com.sanhua.marketingcost.service.technicaldata.TechnicalDataActorProvider.class));
+            new PriceLinkedWorkbookTypeDetectorImpl(), standard, type2, mock(com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService.class), new com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionWorkbook(mock(com.sanhua.marketingcost.formula.normalize.FormulaNormalizer.class),mock(com.sanhua.marketingcost.formula.normalize.FormulaValidator.class),mock(com.sanhua.marketingcost.service.PriceLinkedFactorWorkbookParser.class)), mock(com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionImportService.class), mock(com.sanhua.marketingcost.service.technicaldata.TechnicalDataActorProvider.class));
     PriceItemImportResponse legacy = new PriceItemImportResponse();
     legacy.setLinkedCount(7);
     legacy.setFactorRecognizedCount(62);

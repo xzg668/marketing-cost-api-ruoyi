@@ -5,6 +5,7 @@ import com.sanhua.marketingcost.service.electronicdrawing.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -251,6 +252,57 @@ class ElectronicDrawingSourceImportServiceTest {
     assertThat(approved.getVersionStatus()).isEqualTo("APPROVED");
     assertThat(approved.getActiveFlag()).isOne();
     verify(versionMapper, never()).updateById(any(QuoteBomSupplementVersion.class));
+  }
+
+  @Test
+  void sameFileWithAdditionalPagesCreatesCompleteVersionWithoutChangingHistoricalRows() {
+    var historical = existingVersion(500L, 1, "APPROVED");
+    var historicalNode = storedNode();
+    historicalNode.setSupplementVersionId(500L);
+    context = context(500L);
+    arrangeBinding();
+    var first = parsed.nodes().getFirst();
+    var child = new ElectronicDrawingExcelParseResult.SourceNode(
+        "1.1", "1", 2, "CHILD", "下一页明细", "铜", "B", "B",
+        new BigDecimal("2"), new BigDecimal("3"), "g", null, 41);
+    when(parser.parse(eq("drawing.xlsx"), any())).thenReturn(
+        new ElectronicDrawingExcelParseResult("drawing.xlsx", "Sheet", List.of(first, child), List.of()));
+    when(preparationMapper.selectForElectronicDrawingImport(301L)).thenReturn(preparation);
+    when(versionMapper.selectList(any())).thenReturn(List.of(historical));
+    when(sourceNodeRepository.findByVersionId(500L)).thenReturn(List.of(historicalNode));
+    when(versionMapper.insert(any(QuoteBomSupplementVersion.class))).thenAnswer(invocation -> {
+      QuoteBomSupplementVersion version = invocation.getArgument(0);
+      version.setId(501L);
+      return 1;
+    });
+    when(contextPort.attachSourceVersion(eq(context), eq(501L), any())).thenReturn(context(501L));
+
+    var result = service.importSource(command(), acquired(DRAWING));
+
+    assertThat(result.reused()).isFalse();
+    assertThat(result.versionNo()).isEqualTo(2);
+    assertThat(result.sourceNodeCount()).isEqualTo(2);
+    assertThat(historical.getVersionStatus()).isEqualTo("APPROVED");
+    assertThat(historicalNode.getSourceSequence()).isEqualTo("1");
+    verify(versionMapper, never()).updateById(any(QuoteBomSupplementVersion.class));
+    verify(sourceNodeRepository).insertAll(eq(501L), argThat(rows -> rows.size() == 2));
+  }
+
+  @Test
+  void sameShaStillRejectsChangedHistoricalRows() {
+    arrangeBinding();
+    when(parser.parse(eq("drawing.xlsx"), any())).thenReturn(parsed);
+    when(preparationMapper.selectForElectronicDrawingImport(301L)).thenReturn(preparation);
+    when(versionMapper.selectList(any())).thenReturn(List.of(existingVersion(500L, 1, "APPROVED")));
+    var corrupt = storedNode();
+    corrupt.setQty(new BigDecimal("999"));
+    when(sourceNodeRepository.findByVersionId(500L)).thenReturn(List.of(corrupt));
+
+    assertThatThrownBy(() -> service.importSource(command(), acquired(DRAWING)))
+        .isInstanceOf(ElectronicDrawingSourceImportException.class).hasMessageContaining("原始行不一致");
+    verify(versionMapper, never()).insert(any(QuoteBomSupplementVersion.class));
+    verify(sourceNodeRepository, never()).insertAll(any(), any());
+    verify(contextPort, never()).attachSourceVersion(any(), any(), any());
   }
 
   @Test

@@ -1,9 +1,12 @@
 package com.sanhua.marketingcost.integration.oa;
 
+import com.sanhua.marketingcost.dto.ingest.QuoteIngestResponse;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestService;
 import com.sanhua.marketingcost.service.ingest.QuoteNormalizeService;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -40,25 +43,42 @@ public class OaQuoteIngestHandler {
       }
       return result(binding.oaFormId(), quote);
     }
-    List<Long> sameNumber = jdbc.queryForList("SELECT id FROM oa_form WHERE oa_no=? FOR UPDATE",
+    // 来源单据已有行锁；不存在的报价编号不加间隙锁，并发占号由 oa_no 唯一约束兜底。
+    List<Long> sameNumber = jdbc.queryForList("SELECT id FROM oa_form WHERE oa_no=?",
         Long.class, request.getOaNo());
     if (!sameNumber.isEmpty()) {
-      throw OaIntegrationException.conflict("QUOTE_NUMBER_OWNED", "该流程编号已存在，不能关联其他OA单据或覆盖原报价需求");
+      throw quotationNumberOwned();
     }
     // 接入日志的唯一键用内部报文 ID，避免不同 OA/环境使用相同短请求号而冲突。
     request.setRequestId("OA_MESSAGE:" + message.id());
     request.setIdempotencyKey("OA_MESSAGE:" + message.id());
     request.setRawPayload(Map.of("integrationMessageId", message.id()));
-    var response = ingest.ingestFromOa(request);
+    QuoteIngestResponse response;
+    try {
+      response = ingest.ingestFromOa(request);
+    } catch (DuplicateKeyException failure) {
+      // 另一个来源刚抢先提交同一编号，仍返回业务冲突；其他唯一约束错误不能冒充占号。
+      for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+        if (cause instanceof SQLException sql && sql.getErrorCode() == 1062
+            && sql.getMessage() != null && sql.getMessage().contains("uk_oa_form_oa_no")) {
+          throw quotationNumberOwned();
+        }
+      }
+      throw failure;
+    }
     if (!response.isAccepted() || response.getOaFormId() == null) {
       throw OaIntegrationException.invalid("QUOTE_INGEST_REJECTED", "报价接入未通过业务校验，请按请求编号查看处理记录");
     }
     jdbc.update("""
-        UPDATE lp_oa_quote_document SET oa_form_id=?,source_version=1,canonical_hash=?,latest_message_id=?,updated_at=NOW(3)
+        UPDATE lp_oa_quote_document SET oa_form_id=?,source_version=1,canonical_hash=?,latest_message_id=?,reject_to_node_id=?,updated_at=NOW(3)
         WHERE id=?
-        """, response.getOaFormId(), hash, message.id(), binding.id());
+        """, response.getOaFormId(), hash, message.id(), quote.rejectToNodeId(), binding.id());
     // source_version=1 是既有核算/审批关联所需的内部需求基线，不接受外部更新。
     return result(response.getOaFormId(), quote);
+  }
+
+  private OaIntegrationException quotationNumberOwned() {
+    return OaIntegrationException.conflict("QUOTE_NUMBER_OWNED", "该流程编号已存在，不能关联其他OA单据或覆盖原报价需求");
   }
 
   private Binding lockBinding(OaPeer peer, String documentId) {

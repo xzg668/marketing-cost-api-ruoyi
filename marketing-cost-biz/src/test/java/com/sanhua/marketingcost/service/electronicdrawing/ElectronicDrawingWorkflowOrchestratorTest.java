@@ -176,6 +176,23 @@ class ElectronicDrawingWorkflowOrchestratorTest {
     verify(acquisitionPort, never()).acquire(any());
   }
 
+  @Test
+  void missingDrawingWeightReturnsActionableGapAndNeverPublishes() {
+    current.set(context(3, 201L, ElectronicDrawingWorkflowStage.MAPPING_PENDING, "WAIT_TECH", true));
+    when(resolutionService.autoMatch(101L, "COMMERCIAL", "210", "2026-08"))
+        .thenReturn(resolution(true, 0, 0));
+    when(hybridBomService.compose(101L, "COMMERCIAL", "210", "2026-08"))
+        .thenThrow(new ElectronicDrawingHybridBomException(ElectronicDrawingHybridBomException.BOM_GAP,
+            "电子图库按重量计价的物料缺少有效单重：RFK-E04-064011"));
+
+    var result = orchestrator.resumeAfterMaterialSelection(101L, "COMMERCIAL", "210", "2026-08");
+
+    assertThat(result.stage()).isEqualTo(ElectronicDrawingWorkflowStage.VALIDATION_FAILED);
+    assertThat(result.message()).contains("缺少有效单重", "RFK-E04-064011");
+    assertThat(result.costingCanContinue()).isFalse();
+    verify(autoPublicationService, never()).publish(anyLong(), anyString(), anyString(), anyString());
+  }
+
   private ElectronicDrawingWorkflowOrchestrator.WorkflowCommand command() {
     return new ElectronicDrawingWorkflowOrchestrator.WorkflowCommand(
         101L, 11L, "COMMERCIAL", "210", "J40AH-40HY-03", 8L, "报价员", "2026-08");

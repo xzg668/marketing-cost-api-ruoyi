@@ -32,7 +32,7 @@ import java.util.List;
  * v1.3 改造：
  * <ul>
  *   <li>启用 {@link EnableMethodSecurity} 以支持 {@code @PreAuthorize("@ss.hasPermi(...)")} 方法级权限</li>
- *   <li>技术资料外部入口只接受一次性短票，不注册长期协作令牌认证链</li>
+ *   <li>OA 入口授权后使用当前单据范围的协作会话</li>
  * </ul>
  */
 @Configuration
@@ -64,7 +64,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/system/dict-data/type/*").permitAll()
                         .requestMatchers("/health").permitAll()
                         .requestMatchers(HttpMethod.POST,
-                                "/api/v2/technical-data/access-tickets/exchange").permitAll()
+                                "/api/v1/auth/oa/start", "/api/v1/auth/oa/exchange").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/auth/oa/callback").permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .anyRequest().authenticated()
                 )

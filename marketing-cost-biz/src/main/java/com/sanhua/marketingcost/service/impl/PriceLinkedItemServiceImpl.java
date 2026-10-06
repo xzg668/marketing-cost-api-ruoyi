@@ -673,8 +673,12 @@ public class PriceLinkedItemServiceImpl implements PriceLinkedItemService {
           response.setLinkedUpdatedCount(response.getLinkedUpdatedCount() + 1);
         }
         if (v2Context.enabled()) {
-          applyV2AutoBindings(item, v2Plan, month,
-              resolvedBusinessUnitType, excelRow, overwriteManualForStrategy(strategy, overwriteManual), response);
+          // Technical supplements carry a validated text formula. The ordinary Excel-cell
+          // auto-binding path must not report its deliberately empty unit-price cell as an error.
+          if (technicalRow == null || (v2Plan != null && v2Plan.formulaAvailable())) {
+            applyV2AutoBindings(item, v2Plan, month,
+                resolvedBusinessUnitType, excelRow, overwriteManualForStrategy(strategy, overwriteManual), response);
+          }
         } else {
           applyAutoBindings(item, row, normalizedFormula, autoBindingPlans.get(excelRow), month,
               excelRow, overwriteManualForStrategy(strategy, overwriteManual), response);

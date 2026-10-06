@@ -37,7 +37,7 @@ class OaWorkflowLiveTest {
       var command = new OaTechnicalDispatchRequest("NO_SUCH_FLOW_" + suffix, "FI-SC-005", invalidEmployee,
           List.of(new OaTechnicalDispatchRequest.Product("DEBUG-ROW", "DEBUG-PRODUCT", List.of(
               new OaTechnicalDispatchRequest.Assignment(invalidEmployee, "接口拒绝回执测试", List.of("SALARY"))))));
-      var body = new OaTechnicalDispatchRequestBuilder(json, validation.getValidator()).build(command, invalidEmployee);
+      var body = new OaTechnicalDispatchRequestBuilder(json, validation.getValidator(), new OaWorkflowProperties()).build(command, invalidEmployee);
       var result = new OaWorkflowClient(settings, auth, tokens, json).submit(body);
       System.out.println("OA_WORKFLOW_LIVE_RESULT=" + json.writeValueAsString(result));
       assertThat(result.status()).as("这里只验证真实拒绝回执，不能据此宣称真实成功办理已通过")

@@ -58,7 +58,8 @@ class ElectronicDrawingMaterialResolutionServiceTest {
   void setUp() {
     service = new ElectronicDrawingMaterialResolutionService(
         contextPort, versionMapper, sourceNodeRepository,
-        matcher, materialMapper, actorProvider);
+        matcher, materialMapper, actorProvider,
+        ElectronicDrawingTestScope.create(materialMapper, org.mockito.Mockito.mock(ElectronicDrawingU9SubBomPort.class)));
     context = context(4);
     version = version();
     finance = new ElectronicDrawingActor(8801L, "报价员甲");
@@ -232,6 +233,28 @@ class ElectronicDrawingMaterialResolutionServiceTest {
             error -> assertThat(error.code()).isEqualTo(
                 ElectronicDrawingMaterialResolutionException.MATERIAL_NOT_FOUND));
     verify(sourceNodeRepository, never()).updateResolution(any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void changingAnAlreadyConfirmedCodeInvalidatesTheDraftComposition() {
+    var before = copy(node(1L, "1", "D-1", ElectronicDrawingSourceNode.MATCH_UNMATCHED),
+        ElectronicDrawingSourceNode.MATCH_MANUAL, "1001", "报价员甲");
+    var after = copy(before, ElectronicDrawingSourceNode.MATCH_MANUAL, "1002", "报价员甲");
+    arrangeApply(List.of(before), List.of(after));
+    version.setCompositionFingerprint("old-composition");
+    when(materialMapper.selectByLatestBatchAndCodes(anyCollection(), eq(null), eq("COMMERCIAL")))
+        .thenReturn(List.of(material("1002")));
+    when(sourceNodeRepository.updateResolution(any(), any(), any(), any(), any(), any())).thenReturn(true);
+    when(versionMapper.updateElectronicDrawingCompositionFingerprint(eq(501L), eq("old-composition"),
+        eq(null), eq("COMMERCIAL"), any())).thenReturn(1);
+    when(contextPort.touch(any(), any(), any(), any(), any())).thenReturn(context(5));
+
+    var result = service.apply(101L, request(4, 501L, 1L, "1002"), "2026-08");
+
+    assertThat(result.items().getFirst().resolvedMaterialCode()).isEqualTo("1002");
+    assertThat(version.getCompositionFingerprint()).isNull();
+    verify(sourceNodeRepository).updateResolution(eq(1L), eq(ElectronicDrawingSourceNode.MATCH_MANUAL),
+        eq(ElectronicDrawingSourceNode.MATCH_MANUAL), eq("1002"), any(), any());
   }
 
   @Test

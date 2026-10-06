@@ -33,7 +33,7 @@ class OaTechnicalDispatchDebugServiceTest {
     user.setStatus("0"); user.setDelFlag("0");
     when(users.findByUsername("quoter")).thenReturn(user);
     service = new OaTechnicalDispatchDebugService(users,
-        new OaTechnicalDispatchRequestBuilder(new ObjectMapper(), validation.getValidator()), client);
+        new OaTechnicalDispatchRequestBuilder(new ObjectMapper(), validation.getValidator(), new OaWorkflowProperties()), client);
     SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
         "quoter", null, List.of(new SimpleGrantedAuthority("ROLE_admin"))));
   }

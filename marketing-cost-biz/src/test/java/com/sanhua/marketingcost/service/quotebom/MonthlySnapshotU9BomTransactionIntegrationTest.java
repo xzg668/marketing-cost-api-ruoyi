@@ -48,6 +48,7 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
   private static TransactionTemplate costing;
   private static QuoteBomMonthlySnapshotMapper mapper;
   private static CurrentU9BomGateway gateway;
+  private static MonthlyBomSnapshotDetailService details;
   private static final LiveU9BomGateway LIVE = mock(LiveU9BomGateway.class);
 
   @BeforeAll
@@ -61,6 +62,9 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
     jdbc.execute(migration.substring(createStart, migration.indexOf(';', createStart) + 1));
     jdbc.execute("ALTER TABLE lp_quote_bom_monthly_snapshot ADD price_org_code VARCHAR(32)");
     jdbc.execute(resource("db/V233__u9_monthly_first_query_snapshot.sql"));
+    jdbc.execute(resource("db/V293__quote_bom_monthly_snapshot_detail.sql"));
+    details = new MonthlyBomSnapshotDetailService(jdbc,
+        new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules(), null, null);
 
     var factory = new MybatisSqlSessionFactoryBean();
     factory.setDataSource(source);
@@ -76,6 +80,7 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
     spring.registerBean("transactionManager", DataSourceTransactionManager.class, () -> manager);
     spring.registerBean(QuoteBomMonthlySnapshotMapper.class, () -> mapper);
     spring.registerBean(LiveU9BomGateway.class, () -> LIVE);
+    spring.registerBean(MonthlyBomSnapshotDetailService.class, () -> mock(MonthlyBomSnapshotDetailService.class));
     spring.registerBean(MonthlySnapshotU9BomGateway.class);
     spring.refresh();
     gateway = spring.getBean(CurrentU9BomGateway.class);
@@ -85,12 +90,36 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
 
   @BeforeEach
   void clearIsolatedTestData() {
+    jdbc.execute("TRUNCATE TABLE lp_quote_bom_monthly_snapshot_detail");
     jdbc.execute("TRUNCATE TABLE lp_quote_bom_monthly_snapshot");
     reset(LIVE);
     when(LIVE.readLive(any())).thenAnswer(invocation -> {
       QuoteBomReadContext scope = invocation.getArgument(0);
       return CurrentU9BomResult.available("U9", "V1", "RAW-" + scope.accountingMonth(),
           42, "f".repeat(64));
+    });
+  }
+
+  @Test
+  void committedSnapshotDetailsRemainVisibleAlongsideTheirCurrentHeader() throws Exception {
+    costing.executeWithoutResult(tx -> {
+      assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_bom_monthly_snapshot_detail", Integer.class)).isZero();
+      // 另一个请求提交冻结明细，外层普通查询仍停留在旧读视图。
+      try (var pool = Executors.newSingleThreadExecutor()) {
+        var id = pool.submit(() -> costing.execute(other -> {
+          var snapshot = gateway.read(context("2026-09"));
+          var row = new com.sanhua.marketingcost.entity.BomRawHierarchy();
+          row.setMaterialCode("1053900000062"); row.setPath("/1053900000062/"); row.setLevel(0);
+          details.save(snapshot.monthlySnapshotId(), java.util.List.of(row));
+          return snapshot.monthlySnapshotId();
+        })).get(20, TimeUnit.SECONDS);
+        assertThat(mapper.selectCurrentById(id)).isNotNull();
+        assertThat(details.load(id)).as("复现旧读视图导致的假缺口").isEmpty();
+        assertThat(details.loadCurrent(id)).extracting(com.sanhua.marketingcost.entity.BomRawHierarchy::getMaterialCode)
+            .containsExactly("1053900000062");
+      } catch (Exception error) {
+        throw new IllegalStateException(error);
+      }
     });
   }
 

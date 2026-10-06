@@ -43,8 +43,6 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
  @Autowired OaMessageCodec codec;
  @Autowired com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaSubmissionLifecycle submissionLifecycle;
  @org.springframework.boot.test.mock.mockito.MockBean
- com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaGateway gateway;
- @org.springframework.boot.test.mock.mockito.MockBean
  com.sanhua.marketingcost.service.technicaldata.TechnicalDataAssigneeResolver assigneeResolver;
  record TechnicalFixture(String flow,String key,long taskId,long productId,long personId,long submissionId,String requestId,long frozenId,long draftId) {}
  private long outgoing(String requestId,String type) { return outgoing(requestId,type,"{}"); }
@@ -59,7 +57,6 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
    if(existing==null) quote(f);
    jdbc.update("INSERT IGNORE INTO sys_user(user_id,user_name,nick_name,employee_no,status,del_flag) VALUES(?,?,'回调验收技术员',?,'0','0')",userId,"callback-user-"+userId,employee);
    jdbc.update("UPDATE sys_user SET employee_no=? WHERE user_id=?",employee,userId);
-   jdbc.update("INSERT IGNORE INTO lp_oa_user_mapping(source_system,environment,external_user_id,user_id,updated_by) VALUES('WEAVER','I01_TEST','001001',1,1)");
    return new org.springframework.transaction.support.TransactionTemplate(transactionManager).execute(tx->{
      long form=jdbc.queryForObject("SELECT oa_form_id FROM lp_oa_quote_document WHERE external_document_id=?",Long.class,f);
      jdbc.update("INSERT INTO oa_form_item(oa_form_id,seq,material_no,product_name,business_unit_type,deleted) VALUES(?,99,?,'回调产品','COMMERCIAL',0)",form,"P-"+UUID.randomUUID());
@@ -92,12 +89,12 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
  @org.springframework.boot.test.mock.mockito.MockBean com.sanhua.marketingcost.service.QuoteBatchCostRunService costingBatches;
  @org.springframework.boot.test.mock.mockito.MockBean com.sanhua.marketingcost.service.BusinessUnitRepriceLockGuard repriceLock;
  @org.springframework.boot.test.mock.mockito.MockBean com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowClient nativeWorkflow;
- @Autowired com.sanhua.marketingcost.service.quoteconfirmation.QuoteMaterialConfirmationService materials;
- @Test void approvedTechnicalDataStillRequiresOneExplicitI06AndUsesSupplementRemark() throws Exception {
+ @Autowired com.sanhua.marketingcost.service.costing.QuoteCostingPreparationService materials;
+ @Test void submittedTechnicalDataIsAcceptedLocallyWithoutAnyApprovalCallback() throws Exception {
    var f=technical();
-   var approved=event(f.flow(),"TECH_APPROVED","001001");receive(approved);
+   accepted(f);
    jdbc.update("UPDATE sys_user SET employee_no='001001' WHERE user_id=1");
-   var authentication=new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("admin",null,List.of());
+   var authentication=new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("admin",null,List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ingest:quote:cost-run:execute")));
    authentication.setDetails(Map.of("businessUnitType","COMMERCIAL"));
    org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(authentication);
    try {
@@ -106,24 +103,24 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
      org.mockito.Mockito.when(costing.prepare(org.mockito.ArgumentMatchers.any())).thenAnswer(call->{
        com.sanhua.marketingcost.dto.quotecosting.ProductCostingRequest req=call.getArgument(0);
        var checked=new com.sanhua.marketingcost.dto.quotecosting.ProductCostingResult();checked.setOaNo(oaNo);
-       checked.setOaFormItemId(req.oaFormItemId());checked.setPipelineStatus("READY");checked.setSourceRevision("current-approved");return checked;
+       checked.setOaFormItemId(req.oaFormItemId());checked.setPipelineStatus("READY");checked.setSourceRevision("current-submitted");return checked;
      });
      org.mockito.Mockito.when(costingContexts.resolve(org.mockito.ArgumentMatchers.any())).thenAnswer(call->{
        com.sanhua.marketingcost.dto.quotecosting.ProductCostingRequest req=call.getArgument(0);
        var parent=new com.sanhua.marketingcost.entity.OaForm();parent.setId(formId);parent.setOaNo(oaNo);
        var item=new com.sanhua.marketingcost.entity.OaFormItem();item.setId(req.oaFormItemId());
-       return new com.sanhua.marketingcost.service.costing.ProductCostingContext(parent,item,"P",req.periodMonth(),"admin","current-approved");
+       return new com.sanhua.marketingcost.service.costing.ProductCostingContext(parent,item,"P",req.periodMonth(),"admin","current-submitted");
      });
      org.mockito.Mockito.when(costingContexts.resolveRevision(org.mockito.ArgumentMatchers.any())).thenAnswer(call->call.getArgument(0));
      org.mockito.Mockito.when(nativeWorkflow.submit(org.mockito.ArgumentMatchers.any())).thenReturn(new com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowResult(
          "call",com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowResult.Status.SUCCESS,200,"0","success",f.flow(),null,1));
      org.mockito.Mockito.when(costingBatches.submit(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyString())).thenReturn(new com.sanhua.marketingcost.dto.quotecosting.QuoteBatchCostRunResponse());
-     assertThat(materials.state(oaNo).needsConfirmation()).isTrue();
+     assertThat(materials.state(oaNo).canCost()).isTrue();
+     assertThatThrownBy(()->access.requireCostPublication(formId)).hasMessageContaining("技术资料已更新");
      org.mockito.Mockito.verifyNoInteractions(nativeWorkflow);
-     var outcome=materials.confirmAndCost(oaNo,new com.sanhua.marketingcost.service.quoteconfirmation.QuoteMaterialConfirmationService.Request("confirm",null,null,false),"admin");
-     assertThat(outcome.confirmation().status()).isEqualTo("SUCCESS");
-     var sent=org.mockito.ArgumentCaptor.forClass(ObjectNode.class);org.mockito.Mockito.verify(nativeWorkflow).submit(sent.capture());
-     assertThat(sent.getValue().path("remark").asText()).isEqualTo("补录资料已确认，同意继续核算");
+     var outcome=materials.prepareAndCost(oaNo,new com.sanhua.marketingcost.service.costing.QuoteCostingPreparationService.Request(null,null),"admin");
+     assertThat(outcome.preparation().status()).isEqualTo("AVAILABLE");
+     org.mockito.Mockito.verifyNoInteractions(nativeWorkflow);
      assertThat(jdbc.queryForObject("SELECT finance_confirmed_fingerprint FROM lp_oa_technical_flow WHERE oa_form_id=?",String.class,formId)).isNotBlank();
    } finally { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
  }
@@ -141,28 +138,40 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
 
 
  @Test void authenticationAndUnknownFlowFailWithoutCreatingBusinessData() throws Exception {
-   var notice=event(flow(),"TECH_APPROVED","001001");
+   var notice=event(flow(),"TECHNICAL","001001");
    http.perform(post(URL).contentType("application/json").content(notice.toString())).andExpect(status().isUnauthorized());
    http.perform(post(URL).header("Authorization",TOKEN).contentType("application/json").content(notice.toString()))
      .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("QUOTE_NOT_FOUND"));
    http.perform(post(URL).header("Authorization",TOKEN).contentType("application/json").content("{"))
      .andExpect(status().isBadRequest());
  }
- @Test void approvalTargetsAllOwnProductsAndWaitsForOtherTechnicians() throws Exception {
+ @Test void successfulSubmissionsNeedNoApprovalEventAndStillWaitForOtherTechnicians() throws Exception {
    var a=technical();var b=technical(a.flow(),1,"001001");var other=technical(a.flow(),9900002,"002002");
-   var approved=event(a.flow(),"TECH_APPROVED","001001");
-   assertThat(receive(approved)).isEqualTo("SUCCEEDED");
-   assertThat(submissionState(a)).isEqualTo("APPROVED");assertThat(submissionState(b)).isEqualTo("APPROVED");
-   assertThat(submissionState(other)).isEqualTo("SENDING");assertThat(flowState(a.flow())).isEqualTo("TECHNICAL");
-   long version=flowVersion(a.flow());
-   assertThat(receive(approved)).isEqualTo("SUCCEEDED");assertThat(flowVersion(a.flow())).isEqualTo(version);
-   assertThat(receive(event(a.flow(),"TECH_APPROVED","002002"))).isEqualTo("SUCCEEDED");
-   assertThat(flowState(a.flow())).isEqualTo("MATERIAL_REVIEW");
-   assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_material_confirmation WHERE oa_form_id=(SELECT oa_form_id FROM lp_quote_tech_task WHERE id=?)",Long.class,a.taskId())).isZero();
+   accepted(a);accepted(b);
+   long form=jdbc.queryForObject("SELECT oa_form_id FROM lp_quote_tech_task WHERE id=?",Long.class,a.taskId());
+   assertThat(costingSubmissions.hasPendingSubmissions(form)).isTrue();
+   accepted(other);
+   assertThat(costingSubmissions.hasPendingSubmissions(form)).isFalse();
+   assertThat(submissionState(a)).isEqualTo("SENT");
+   assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_workflow_state WHERE workflow_request_id=?",Long.class,a.flow())).isZero();
+ }
+ @Autowired com.sanhua.marketingcost.service.costing.QuoteCostingSubmissionService costingSubmissions;
+ private void accepted(TechnicalFixture f) {
+   new org.springframework.transaction.support.TransactionTemplate(transactionManager).executeWithoutResult(tx->{
+     var task=taskMapper.selectByIdForUpdate(f.taskId());
+     var person=people.findById(f.personId());
+     var product=productMapper.selectById(f.productId());
+     var version=versions.verified(f.frozenId(),f.productId());
+     versions.transition(version,"SUBMITTED",person.userId());
+     versions.state(product,person,version.getId(),"SUBMITTED");
+     technicalFlows.acceptSubmission(f.submissionId(),f.flow());
+     people.state(person.id(),f.submissionId(),"PREPARED","SUBMITTED",null);
+     submissionLifecycle.publishSubmitted(task,submissions.selectById(f.submissionId()),person.userId());
+   });
  }
  @Test void invalidPersonRollsBackTheEntireNotification() throws Exception {
    var a=technical();
-   assertThatThrownBy(()->receive(event(a.flow(),"TECH_APPROVED","001001","MISSING"))).hasMessageContaining("不属于本单");
+   assertThatThrownBy(()->receive(event(a.flow(),"TECHNICAL","001001","MISSING"))).hasMessageContaining("不属于本单");
    assertThat(submissionState(a)).isEqualTo("SENDING");
    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_workflow_state WHERE workflow_request_id=?",Long.class,a.flow())).isZero();
  }
@@ -175,15 +184,15 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
    assertThat(jdbc.queryForObject("SELECT version_status FROM lp_quote_tech_data_version WHERE id=?",String.class,a.frozenId())).isEqualTo("RETURNED");
    assertThat(jdbc.queryForObject("SELECT oa_edit_allowed FROM lp_quote_tech_module WHERE product_id=?",Integer.class,a.productId())).isEqualTo(1);
    long version=flowVersion(a.flow());receive(notice);assertThat(flowVersion(a.flow())).isEqualTo(version);
-   assertThatThrownBy(()->receive(event(a.flow(),"TECH_APPROVED","001001"))).hasMessageContaining("不是已发送待审批");
+   assertThatThrownBy(()->receive(event(a.flow(),"TECH_APPROVED","001001"))).hasMessageContaining("未知 eventType");
  }
- @Test void unknownDeliveryCanBeConfirmedByARealApprovalNotification() throws Exception {
+ @Test void unknownDeliveryCanBeConfirmedAndReturnedByTechnicalNotification() throws Exception {
    var a=technical();jdbc.update("UPDATE lp_quote_tech_submission SET submission_status='UNKNOWN' WHERE id=?",a.submissionId());
-   receive(event(a.flow(),"TECH_APPROVED","001001"));assertThat(submissionState(a)).isEqualTo("APPROVED");
+   receive(event(a.flow(),"TECHNICAL","001001"));assertThat(submissionState(a)).isEqualTo("RETURNED");
  }
- @Test void unsentDraftCannotBeApproved() throws Exception {
+ @Test void unsentDraftCannotBeReturned() throws Exception {
    var a=technical(null,1,"001001",false);
-   assertThatThrownBy(()->receive(event(a.flow(),"TECH_APPROVED","001001"))).hasMessageContaining("不是已发送待审批");
+   assertThatThrownBy(()->receive(event(a.flow(),"TECHNICAL","001001"))).hasMessageContaining("不是已发送");
    assertThat(submissionState(a)).isEqualTo("PREPARED");
  }
  @Test void resultReturnKeepsFrozenCostsAndCompletionNeedsAResubmission() throws Exception {
@@ -207,7 +216,7 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
  }
 
  @Autowired com.sanhua.marketingcost.integration.oa.workflow.OaTechnicalBatchRepository nativeBatches;
- @Test void approvalResolvesUnknownNativeBatchAndLateHttpCannotDowngradeIt() throws Exception {
+ @Test void returnResolvesUnknownNativeBatchAndLateHttpCannotDowngradeIt() throws Exception {
    var a=technical();var b=technical(a.flow(),1,"001001");
    long form=jdbc.queryForObject("SELECT oa_form_id FROM lp_quote_tech_task WHERE id=?",Long.class,a.taskId());
    String batch=UUID.randomUUID().toString();
@@ -216,15 +225,15 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
      jdbc.update("UPDATE lp_quote_tech_submission SET submission_status='UNKNOWN' WHERE id=?",f.submissionId());
      jdbc.update("UPDATE lp_oa_integration_message SET technical_batch_id=? WHERE id=(SELECT outbound_message_id FROM lp_quote_tech_submission WHERE id=?)",batch,f.submissionId());
    }
-   receive(event(a.flow(),"TECH_APPROVED","001001"));
+   receive(event(a.flow(),"TECHNICAL","001001"));
    assertThat(nativeBatches.find(batch,false).status()).isEqualTo("SUCCESS");
-   assertThat(submissionState(a)).isEqualTo("APPROVED");assertThat(submissionState(b)).isEqualTo("APPROVED");
+   assertThat(submissionState(a)).isEqualTo("RETURNED");assertThat(submissionState(b)).isEqualTo("RETURNED");
    new org.springframework.transaction.support.TransactionTemplate(transactionManager).executeWithoutResult(tx->nativeBatches.received(batch,
      new com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowResult("late",com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowResult.Status.UNKNOWN,null,"TIMEOUT","迟到超时",a.flow(),null,1)));
    assertThat(nativeBatches.find(batch,false).status()).isEqualTo("SUCCESS");
  }
  @Test void personnelNoticeCannotExpandAnAlreadyConfirmedI05ProductScope() throws Exception {
-   var a=technical();var b=technical(a.flow(),1,"001001");receive(event(a.flow(),"TECH_APPROVED","001001"));
+   var a=technical();var b=technical(a.flow(),1,"001001");accepted(a);accepted(b);
    long form=jdbc.queryForObject("SELECT oa_form_id FROM lp_quote_tech_task WHERE id=?",Long.class,a.taskId());
    String batch=UUID.randomUUID().toString();long message=outgoing("RETURN-"+batch,"TECH_RETURN",codec.write(Map.of("payload",Map.of("submissionId",a.submissionId()))));
    jdbc.update("INSERT INTO lp_oa_technical_batch(id,operation,oa_form_id,actor_user_id,request_key,input_fingerprint,status,request_json) VALUES(?,'I05',?,1,?,?,'SUCCESS','{}')",batch,form,batch,"a".repeat(64));
@@ -235,13 +244,13 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
    });
    receive(event(a.flow(),"TECHNICAL","001001"));
    assertThat(people.findById(a.personId()).todoStatus()).isEqualTo("OPEN");
-   assertThat(people.findById(b.personId()).todoStatus()).isEqualTo("DONE");
-   assertThat(submissionState(b)).isEqualTo("APPROVED");
+   assertThat(people.findById(b.personId()).todoStatus()).isEqualTo("SUBMITTED");
+   assertThat(submissionState(b)).isEqualTo("SENT");
    assertThat(flowState(a.flow())).isEqualTo("TECHNICAL");
  }
  @Autowired com.sanhua.marketingcost.mapper.QuoteTechSubmissionMapper submissions;
  @Test void simultaneousDuplicateNotificationsApplyOnlyOnce() throws Exception {
-   var a=technical();var notice=event(a.flow(),"TECH_APPROVED","001001");
+   var a=technical();var notice=event(a.flow(),"TECHNICAL","001001");
    try(var executor=java.util.concurrent.Executors.newFixedThreadPool(2)) {
      var jobs=executor.invokeAll(List.of((java.util.concurrent.Callable<String>)()->receive(notice),()->receive(notice)));
      for(var job:jobs) assertThat(job.get()).isEqualTo("SUCCEEDED");
@@ -251,7 +260,7 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
  }
 
  @Autowired OaWorkflowAccessPolicy access;
- @Test void firstMaterialReviewDoesNotRequireAnUnspecifiedInitialOaNotification() throws Exception {
+ @Test void firstCostingDoesNotRequireAnExtraOaNotification() throws Exception {
    String f=flow();quote(f);
    long form=jdbc.queryForObject("SELECT oa_form_id FROM lp_oa_quote_document WHERE external_document_id=?",Long.class,f);
    jdbc.update("UPDATE sys_user SET employee_no='001001' WHERE user_id=1");
@@ -259,9 +268,9 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
      List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ingest:quote:cost-run:execute")));
    org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(authentication);
    try {
-     assertThat(access.view(form).state()).isEqualTo("MATERIAL_REVIEW");
-     assertThat(access.materialNode(form).workItemId()).startsWith("LOCAL-INITIAL:");
-     assertThat(access.materialConfirmed(form)).isFalse();
+     assertThat(access.view(form).state()).isEqualTo("COSTING");
+     assertThat(access.quoterNode(form).workItemId()).startsWith("LOCAL-INITIAL:");
+     access.requireCostPublication(form);
    } finally {org.springframework.security.core.context.SecurityContextHolder.clearContext();}
  }
  private String submissionState(TechnicalFixture f){return jdbc.queryForObject("SELECT submission_status FROM lp_quote_tech_submission WHERE id=?",String.class,f.submissionId());}

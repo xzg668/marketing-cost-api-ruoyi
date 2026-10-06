@@ -24,6 +24,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 class OaHttpLoggingFilterTest {
@@ -110,7 +111,7 @@ class OaHttpLoggingFilterTest {
         .addFilters(new TraceIdFilter(), new OaHttpLoggingFilter()).build();
     mvc.perform(get("/api/v2/technical-data/tasks/1/submit"))
         .andExpect(status().isOk()).andExpect(jsonPath("$.code").value(403));
-    mvc.perform(get("/api/v2/technical-data/access-tickets/exchange"))
+    mvc.perform(post("/api/v1/auth/oa/exchange"))
         .andExpect(status().isOk()).andExpect(jsonPath("$.data.accessToken").value("PRIVATE_SESSION_TOKEN"));
     assertThat(messages()).contains("httpStatus=200", "errorCode=403", "status=REJECTED")
         .doesNotContain("PRIVATE_SESSION_TOKEN", "PRIVATE_ERROR_MESSAGE");
@@ -118,7 +119,7 @@ class OaHttpLoggingFilterTest {
 
   @ParameterizedTest @ValueSource(strings = {"/integration/v1/workflow-events",
       "/api/v1/integration/oa/debug/technical-dispatch/send", "/api/v1/oa-forms/WF1", "/api/v2/technical-data/assignees",
-      "/api/v1/quote-requests/WF1/final-submission", "/api/v2/technical-data/returns"})
+      "/api/v1/quote-requests/WF1/final-submission", "/api/v2/technical-data/returns", "/api/v1/auth/oa/callback"})
   void coversEachOaHttpEntryFamily(String path) { assertThat(OaHttpLoggingFilter.covers(path)).isTrue(); }
 
   @Test void unrelatedRequestsHaveNoOaLogsOrHeaders() throws Exception {
@@ -130,7 +131,7 @@ class OaHttpLoggingFilterTest {
 
   @RestController static class ResultController {
     @GetMapping("/api/v2/technical-data/tasks/1/submit") CommonResult<?> rejected() { return CommonResult.error(403, "PRIVATE_ERROR_MESSAGE"); }
-    @GetMapping("/api/v2/technical-data/access-tickets/exchange") CommonResult<?> token() { return CommonResult.success(Map.of("accessToken", "PRIVATE_SESSION_TOKEN")); }
+    @PostMapping("/api/v1/auth/oa/exchange") CommonResult<?> token() { return CommonResult.success(Map.of("accessToken", "PRIVATE_SESSION_TOKEN")); }
     @GetMapping("/unrelated") CommonResult<?> other() { return CommonResult.success("ok"); }
   }
 

@@ -51,6 +51,7 @@ public class ElectronicDrawingHybridBomService {
   private final MaterialMasterRawMapper materialMapper;
   private final ElectronicDrawingHybridBomAssembler assembler;
   private final TechnicalDataManufacturingBomSource manufacturing;
+  private final ElectronicDrawingBomScope scope;
 
   public ElectronicDrawingHybridBomService(
       ElectronicDrawingWorkflowContextPort contextPort,
@@ -58,7 +59,8 @@ public class ElectronicDrawingHybridBomService {
       QuoteBomSupplementDetailMapper detailMapper,
       ElectronicDrawingSourceNodeRepository sourceNodeRepository,
       MaterialMasterRawMapper materialMapper,
-      ElectronicDrawingHybridBomAssembler assembler, TechnicalDataManufacturingBomSource manufacturing) {
+      ElectronicDrawingHybridBomAssembler assembler, TechnicalDataManufacturingBomSource manufacturing,
+      ElectronicDrawingBomScope scope) {
     this.contextPort = contextPort;
     this.versionMapper = versionMapper;
     this.detailMapper = detailMapper;
@@ -66,6 +68,7 @@ public class ElectronicDrawingHybridBomService {
     this.materialMapper = materialMapper;
     this.assembler = assembler;
     this.manufacturing = manufacturing;
+    this.scope = scope;
   }
 
   @Transactional
@@ -93,19 +96,15 @@ public class ElectronicDrawingHybridBomService {
     if (sourceNodes.isEmpty()) {
       throw invalid(SOURCE_VERSION_INVALID, "电子图库源版本没有原始节点");
     }
-    ensureMappingComplete(sourceNodes);
-
-    Set<String> materialCodes = sourceNodes.stream()
-        .map(ElectronicDrawingSourceNode::getResolvedMaterialCode)
-        .collect(Collectors.toCollection(LinkedHashSet::new));
+    var plan = scope.inspect(context, sourceNodes, effectiveDate(version, context));
+    if (!plan.pendingIds().isEmpty()) throw invalid(MAPPING_INCOMPLETE, "实际参与核算的图库物料仍有待确认 U9 料号");
+    var blocked = plan.branches().values().stream().filter(branch -> branch.state() == ElectronicDrawingBomScope.State.ERROR).findFirst();
+    if (blocked.isPresent()) throw invalid(MAPPING_INCOMPLETE, blocked.get().message());
     String rootCode = rootMaterialCode(context, version);
-    materialCodes.add(rootCode);
     Map<String, MaterialMasterRaw> materials = currentMaterials(
-        materialCodes, context.materialOrgCode());
+        Set.of(rootCode), context.materialOrgCode());
     MaterialMasterRaw root = materials.get(normalize(rootCode));
-    List<ElectronicNode> electronicNodes = sourceNodes.stream()
-        .map(source -> electronicNode(source, materials))
-        .toList();
+    List<ElectronicNode> electronicNodes = plan.nodes();
     HybridBom hybrid = assembler.assemble(new AssembleCommand(
         version.getOaNo(), version.getOaFormItemId(), material(root),
         context.accountingMonth(), context.priceOrgCode(), context.materialOrgCode(),
@@ -171,20 +170,6 @@ public class ElectronicDrawingHybridBomService {
     return version;
   }
 
-  private void ensureMappingComplete(List<ElectronicDrawingSourceNode> sourceNodes) {
-    for (ElectronicDrawingSourceNode node : sourceNodes) {
-      boolean resolved = (ElectronicDrawingSourceNode.MATCH_AUTO.equals(node.getMatchStatus())
-          || ElectronicDrawingSourceNode.MATCH_MANUAL.equals(node.getMatchStatus()))
-          && text(node.getResolvedMaterialCode()) != null
-          && text(node.getResolvedBy()) != null
-          && node.getResolvedAt() != null;
-      if (!resolved) {
-        throw invalid(MAPPING_INCOMPLETE,
-            "电子图库仍有待确认物料：" + text(node.getDrawingCode()));
-      }
-    }
-  }
-
   private Map<String, MaterialMasterRaw> currentMaterials(
       Collection<String> codes, String materialOrganizationCode) {
     List<MaterialMasterRaw> rows = materialMapper.selectByLatestBatchAndCodes(
@@ -221,15 +206,6 @@ public class ElectronicDrawingHybridBomService {
     if (candidates.size() != 1) throw invalid(MAPPING_INCOMPLETE,
         "已取得图库，但图号和型号未对应唯一顶层 U9 料品，请财务核实料品档案后重新检查");
     return candidates.getFirst();
-  }
-
-  private ElectronicNode electronicNode(
-      ElectronicDrawingSourceNode source, Map<String, MaterialMasterRaw> materials) {
-    MaterialMasterRaw material = materials.get(normalize(source.getResolvedMaterialCode()));
-    return new ElectronicNode(
-        source.getId(), source.getSourceRowNo(), source.getSourceSequence(),
-        source.getParentSourceSequence(), source.getDrawingCode(), source.getSourceName(),
-        source.getQty(), source.getMatchStatus(), material(material));
   }
 
   private MaterialSnapshot material(MaterialMasterRaw row) {

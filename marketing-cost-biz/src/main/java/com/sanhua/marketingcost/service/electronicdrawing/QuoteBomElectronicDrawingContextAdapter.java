@@ -302,7 +302,8 @@ public class QuoteBomElectronicDrawingContextAdapter
   }
 
   private static String taskNo(OaForm form, OaFormItem item, String month) {
-    return "ED-" + form.getOaNo() + "-" + item.getId() + "-" + month;
+    // 内部任务以单据、明细和月份定位；OA单号是展示信息，其长度不能影响图库入库。
+    return "ED-" + form.getId() + "-" + item.getId() + "-" + month;
   }
 
   private static String firstText(String first, String second) {

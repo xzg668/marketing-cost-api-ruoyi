@@ -13,6 +13,7 @@ import com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService;
 import com.sanhua.marketingcost.service.MakePartScrapMappingService;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybridBomAssembler.Nature;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybridBomService;
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingManufacturingRevision;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkContext;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowContextPort;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowOrchestrator;
@@ -49,6 +50,7 @@ public class TechnicalDataManufacturingApplicationService {
   private final MakePartScrapMappingService scraps;
   private final MakePartNoScrapConfirmationService noScrap;
   private final ElectronicDrawingHybridBomService hybridBom;
+  private final ElectronicDrawingManufacturingRevision revisions;
   private final ElectronicDrawingWorkflowOrchestrator workflow;
   private final TransactionTemplate transaction;
   private final TechnicalDataMaterialPriceQuery prices;
@@ -59,7 +61,9 @@ public class TechnicalDataManufacturingApplicationService {
       TechnicalDataManufacturingSourceQuery sources, MaterialMasterRawMapper materials,
       MakePartScrapMappingService scraps, MakePartNoScrapConfirmationService noScrap,
       ElectronicDrawingHybridBomService hybridBom, ElectronicDrawingWorkflowOrchestrator workflow,
-      PlatformTransactionManager transactionManager, TechnicalDataMaterialPriceQuery prices, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy) {
+      PlatformTransactionManager transactionManager, TechnicalDataMaterialPriceQuery prices, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy,
+      ElectronicDrawingManufacturingRevision revisions) {
+    this.revisions = revisions;
     this.readPolicy=readPolicy;
     this.sharedModules = sharedModules;
     this.repository = repository; this.tasks = tasks; this.codec = codec; this.snapshots = snapshots;
@@ -170,7 +174,24 @@ public class TechnicalDataManufacturingApplicationService {
     var invalid = TechnicalDataManufacturingRules.validate(content, scope.product());
     if (!invalid.isEmpty()) throw invalid(invalid.getFirst());
     var issues = validate(scope.product(), content, assessment);
-    // 与草稿同一事务清除旧组树；已发布来源由服务明确拒绝，不能覆盖历史。
+    // 仅原材料被退回时，已确认的图库仍只读；重建使用独立来源，不能删除已发布树。
+    var revision = revisions.prepare(context);
+    if (!revision.sourceNodeIds().isEmpty()) {
+      context = revision.context();
+      var revisedSource = sources.inspect(context);
+      var revisedLines = new ArrayList<RawMaterial>();
+      for (var row : content.items()) {
+        Long nodeId = revision.sourceNodeIds().get(Long.valueOf(row.parentSourceNodeId()));
+        if (nodeId == null) throw invalid("制造件原材料没有对应的修订来源节点");
+        revisedLines.add(new RawMaterial("RAW:" + nodeId, nodeId.toString(), context.sourceVersionId(),
+            row.parentMaterialNo(), row.rawMaterialNo(), row.rawMaterialDrawingNo(), row.netWeightKg(),
+            row.quantityPerParent(), row.unit(), row.sourceReference(), row.grossWeightKg(), row.netLengthMm(), row.evidence()));
+      }
+      content = new Manufacturing(revisedLines, new ManufacturingEvidence(scope.product().getOaFormItemId(),
+          scope.product().getAccountingMonth(), context.sourceVersionId(), revisedSource.fingerprint(), now));
+      issues = validate(scope.product(), content, revisedSource);
+      assessment = revisedSource;
+    }
     hybridBom.invalidateDraftComposition(context);
     var draft = draft(scope.product(), actor, now);
     draft.setManufacturingJson(codec.manufacturingJson(content)); draft.setUpdatedBy(actor.userId());

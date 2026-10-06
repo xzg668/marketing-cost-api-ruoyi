@@ -120,9 +120,10 @@ public class TechnicalDataPriceApplicationService {
 
   @Transactional
   public TechnicalDataPriceResponse recheckPublication(Long productId, TechnicalDataActor actor) {
+    if (actor != null && actor.oaSession()) throw forbidden("OA 补录链接不能发布价格资料");
     var found = repository.findProduct(productId).orElseThrow(() -> invalid("补录产品不存在"));
     var scope = scope(productId, actor, found.getRowVersion());
-    if (!"APPROVED".equals(scope.module().getModuleStatus()) || scope.module().getCurrentVersionId() == null) throw conflict("价格尚未审批通过");
+    if (!TechnicalDataSubmissionState.submitted(scope.module().getModuleStatus()) || scope.module().getCurrentVersionId() == null) throw conflict("价格尚未成功提交");
     var version = repository.lockVersion(scope.module().getCurrentVersionId()).orElseThrow();
     publication.publish(scope.task(), scope.product(), version);
     return get(productId, null, actor);

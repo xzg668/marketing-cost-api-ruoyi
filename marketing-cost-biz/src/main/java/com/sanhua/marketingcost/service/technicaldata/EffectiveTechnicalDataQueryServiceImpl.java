@@ -29,7 +29,7 @@ import java.util.Objects;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Strict read boundary between reviewed technical data and costing. */
+/** Strict read boundary between submitted technical data and costing. */
 @Service
 public class EffectiveTechnicalDataQueryServiceImpl
     implements EffectiveTechnicalDataQueryService {
@@ -77,7 +77,7 @@ public class EffectiveTechnicalDataQueryServiceImpl
   }
 
   @Override
-  // 缺审批属于可展示的业务阻断，调用方检查后仍须保存本次 BOM/价格准备结果。
+  // 缺少已提交资料属于可展示的业务阻断，调用方检查后仍须保存本次 BOM/价格准备结果。
   @Transactional(noRollbackFor = EffectiveTechnicalDataException.class)
   public EffectiveTechnicalDataInput resolve(Long oaFormItemId, String accountingMonth) {
     requireScope(oaFormItemId, accountingMonth);
@@ -116,21 +116,19 @@ public class EffectiveTechnicalDataQueryServiceImpl
           oaFormItemId,
           accountingMonth,
           requiredModules,
-          "产品行需要技术补录，但尚无审核生效版本；缺少模块：" + requiredModules);
+          "产品行需要技术补录，但尚无已提交生效版本；缺少模块：" + requiredModules);
     }
-    requireApprovedProduct(product, accountingMonth, requiredModules);
+    requireSubmittedProduct(product, accountingMonth, requiredModules);
     QuoteTechTask task = taskMapper.selectById(product.getTaskId());
-    if (task == null
-        || !"APPROVED".equals(task.getTaskStatus())
-        || !"PASSED".equals(task.getReviewStatus())) {
+    if (task == null || !TechnicalDataSubmissionState.submitted(task.getTaskStatus())) {
       throw error(
-          "TECH_DATA_TASK_NOT_APPROVED",
+          "TECH_DATA_TASK_NOT_SUBMITTED",
           oaFormItemId,
           accountingMonth,
           requiredModules,
-          "技术资料任务尚未全部审核通过，不能用于成本核算");
+          "技术资料任务尚未全部提交，不能用于成本核算");
     }
-    // 本产品已批准资料用于 I06 前的整单检查；成本发布由统一流水线校验 I06 成功状态。
+    // 本产品已提交资料用于整单检查；成本发布时校验报价员采用的当前提交版本。
     QuoteTechDataVersion version = versionMapper.selectById(product.getEffectiveVersionId());
     if (version == null) {
       throw error(
@@ -141,13 +139,13 @@ public class EffectiveTechnicalDataQueryServiceImpl
           "技术资料生效版本指针悬空：" + product.getEffectiveVersionId());
     }
     if (!Objects.equals(version.getProductId(), product.getId())
-        || !QuoteTechDataVersion.STATUS_APPROVED.equals(version.getVersionStatus())) {
+        || !TechnicalDataSubmissionState.submitted(version.getVersionStatus())) {
       throw error(
           "TECH_DATA_EFFECTIVE_VERSION_INVALID",
           oaFormItemId,
           accountingMonth,
           requiredModules,
-          "技术资料生效指针未指向当前产品的 APPROVED 版本");
+          "技术资料生效指针未指向当前产品的已提交版本");
     }
 
     List<QuoteTechPackageItem> packageItems = packageItemMapper.selectByVersionId(version.getId());
@@ -205,7 +203,8 @@ public class EffectiveTechnicalDataQueryServiceImpl
     var auxiliary = sources.get("AUXILIARY");
     List<EffectiveTechnicalDataInput.AuxiliaryLine> auxiliaryLines = auxiliary == null ? List.of()
         : auxiliaryClassification.costingLines(auxiliary.version(), auxItemMapper.selectByVersionId(auxiliary.version().getId()),
-            selection.context().businessUnitType());
+            selection.context().businessUnitType(), selection.context().oaFormItemId(),
+            selection.context().accountingMonth());
     var salary = sources.get("SALARY");
     List<EffectiveTechnicalDataInput.SalaryLine> salaryLines = salary == null ? List.of()
         : salaryItemMapper.selectByVersionId(salary.version().getId()).stream().map(this::salaryLine).toList();
@@ -213,7 +212,7 @@ public class EffectiveTechnicalDataQueryServiceImpl
     var fees = profile == null ? null : TechnicalDataProductFeeRules.costingInput(contentCodec.productFees(profile.version()));
     var loss = sources.get("NET_LOSS");
     var lossRate = loss == null ? null : TechnicalDataNetLossRules.costingInput(contentCodec.netLoss(loss.version()));
-    // 各模块的批准版本与后处理映射进入输入指纹；取数时间不影响同输入复用。
+    // 各模块的提交版本与后处理映射进入输入指纹；取数时间不影响同输入复用。
     String fingerprint = oaCodec.canonicalHash(java.util.Arrays.asList(anchor.getContentFingerprint(), moduleSources,
         materials, auxiliaryLines, salaryLines, fees, lossRate, priceInputs));
     return new EffectiveTechnicalDataInput(anchor.getProductId(), anchor.getId(), anchor.getVersionNo(),
@@ -285,15 +284,15 @@ public class EffectiveTechnicalDataQueryServiceImpl
     return moduleOrder.stream().map(byType::get).toList();
   }
 
-  private void requireApprovedProduct(
+  private void requireSubmittedProduct(
       QuoteTechProduct product, String accountingMonth, List<String> requiredModules) {
-    if (!"APPROVED".equals(product.getProductStatus())) {
+    if (!TechnicalDataSubmissionState.submitted(product.getProductStatus())) {
       throw error(
-          "TECH_DATA_PRODUCT_NOT_APPROVED",
+          "TECH_DATA_PRODUCT_NOT_SUBMITTED",
           product.getOaFormItemId(),
           accountingMonth,
           requiredModules,
-          "技术资料产品状态不是 APPROVED，不能用于成本核算");
+          "技术资料产品尚未提交，不能用于成本核算");
     }
   }
 
@@ -307,17 +306,17 @@ public class EffectiveTechnicalDataQueryServiceImpl
     List<String> invalidModules = new ArrayList<>();
     for (QuoteTechModule module : modules) {
       if (Integer.valueOf(1).equals(module.getRequiredFlag())
-          && !"APPROVED".equals(module.getModuleStatus())) {
+          && !TechnicalDataSubmissionState.submitted(module.getModuleStatus())) {
         invalidModules.add(module.getModuleType());
       }
     }
     if (!invalidModules.isEmpty()) {
       throw error(
-          "TECH_DATA_MODULE_NOT_APPROVED",
+          "TECH_DATA_MODULE_NOT_SUBMITTED",
           product.getOaFormItemId(),
           product.getAccountingMonth(),
           invalidModules,
-          "技术资料模块未审核通过：" + invalidModules);
+          "技术资料模块尚未提交：" + invalidModules);
     }
     requireLines(product, modules, packageItems, auxiliaryItems, salaryItems);
     requireTotal(product, "PACKAGE", version.getPackageTotalAmount(),

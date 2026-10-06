@@ -41,6 +41,7 @@ public class OaTechnicalBatchDelivery {
       java.util.function.Consumer<OaTechnicalBatchRepository.Batch> validate) {
     boolean claimed = Boolean.TRUE.equals(transaction.execute(status -> {
       var prepared = batches.find(id, false);
+      if ("I05".equals(prepared.operation())) throw new IllegalArgumentException("I05须通过两步退回发送服务办理");
       if (!"PREPARED".equals(prepared.status())) return false;
       try {
         validate.accept(prepared);

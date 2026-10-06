@@ -55,6 +55,7 @@ public class TechnicalDataDocumentSubmissionService {
   private final TechnicalDataSubmissionValidationService validation;
   private final TechnicalDataSubmissionSnapshotService snapshots;
   private final TechnicalDataParticipantVersions versions;
+  private final TechnicalDataOaSubmissionLifecycle lifecycle;
   private final TechnicalDataSubmissionRemark remarks;
   private final TechnicalDataOaContext context;
   private final OaTechnicalSubmissionClient client;
@@ -76,6 +77,7 @@ public class TechnicalDataDocumentSubmissionService {
     TechnicalDataSubmissionSnapshotService snapshots,
     TechnicalDataParticipantVersions versions,
     TechnicalDataSubmissionRemark remarks,
+    TechnicalDataOaSubmissionLifecycle lifecycle,
     TechnicalDataOaContext context,
     OaTechnicalSubmissionClient client,
     OaTechnicalBatchRepository batches,
@@ -95,6 +97,7 @@ public class TechnicalDataDocumentSubmissionService {
     this.snapshots = snapshots;
     this.versions = versions;
     this.remarks = remarks;
+    this.lifecycle = lifecycle;
     this.context = context;
     this.client = client;
     this.batches = batches;
@@ -105,9 +108,10 @@ public class TechnicalDataDocumentSubmissionService {
 
   @Transactional(readOnly = true)
   public Workbench workbench(long formId, TechnicalDataActor actor) {
-    requireReader(actor);
+    requireReader(formId, actor);
     var ids = taskIds(formId, actor);
     if (ids.isEmpty()) throw forbidden("本张 OA 单据没有可查看的补录任务");
+    boolean readOnly = actor.canViewSupplementOverview() || actor.oaSession() && ownTaskIds(formId, actor).isEmpty();
     var views = ids
       .stream()
       .map(id -> taskViews.detail(id, actor))
@@ -159,18 +163,18 @@ public class TechnicalDataDocumentSubmissionService {
       formId,
       views.getFirst().oaNo(),
       actor.name(),
-      actor.canViewSupplementOverview(),
+      readOnly,
       views,
-      actor.canViewSupplementOverview() ? 0 : complete,
-      fingerprint(ids),
-      !actor.canViewSupplementOverview() && open && !pending && complete == ids.size(),
+      readOnly ? 0 : complete,
+      readOnly ? null : fingerprint(ids),
+      !readOnly && open && !pending && complete == ids.size(),
       last
     );
   }
 
   @Transactional(readOnly = true)
   public Workbench submitted(long formId, String batchId, TechnicalDataActor actor) {
-    requireReader(actor);
+    requireReader(formId, actor);
     var batch = batches.find(batchId, false);
     if (
       batch == null ||
@@ -205,7 +209,7 @@ public class TechnicalDataDocumentSubmissionService {
   }
 
   public Result submit(long formId, Request request, TechnicalDataActor actor) {
-    requireTechnician(actor);
+    requireTechnician(formId, actor);
     if (
       request == null ||
       request.idempotencyKey() == null ||
@@ -228,9 +232,9 @@ public class TechnicalDataDocumentSubmissionService {
       return previous.id();
     }
     var document = context.document(formId);
-    var ids = taskIds(formId, actor);
+    var ids = ownTaskIds(formId, actor);
     if (ids.isEmpty()) throw forbidden("本人在本张 OA 单据没有补录任务");
-    // 已批准且未退回的其他产品继续保留；本次只冻结本人待补录/待修改的产品。
+    // 已提交且未退回的其他产品继续保留；本次只冻结本人待补录/待修改的产品。
     var selected = ids.stream().map(tasks::selectByIdForUpdate)
         .filter(task -> "OPEN".equals(own(task.getId(), actor.userId()).todoStatus())).toList();
     if (selected.isEmpty()) throw conflict("本人没有待提交的补录或修订任务");
@@ -261,6 +265,7 @@ public class TechnicalDataDocumentSubmissionService {
     String batchId = UUID.randomUUID().toString();
     batches.insert(batchId, "I03", formId, actor.userId(), request.idempotencyKey(), request.fingerprint());
     List<String> lines = new ArrayList<>();
+    List<String> briefLines = new ArrayList<>();
     for (var task : selected) {
       var person = own(task.getId(), actor.userId());
       var product = products.lockActiveProducts(task.getId()).getFirst();
@@ -273,6 +278,7 @@ public class TechnicalDataDocumentSubmissionService {
         actor
       );
       lines.add(remarks.generate(product.getMaterialNo(), snapshot));
+      briefLines.add(remarks.generateBrief(product.getMaterialNo(), snapshot));
       long message = context.linkMessage(
         document,
         batchId,
@@ -287,12 +293,16 @@ public class TechnicalDataDocumentSubmissionService {
       new OaTechnicalSubmissionClient.Request(
         document.requestId(),
         employee,
-        String.join("\n", lines),
-        context.workbenchUrl(formId) + "?submission=" + batchId
+        fitsOaRemark(String.join("\n", lines)) ? String.join("\n", lines) : String.join("\n", briefLines),
+        context.workbenchUrl(formId)
       )
     );
     batches.prepared(batchId, body);
     return batchId;
+  }
+
+  private static boolean fitsOaRemark(String remark) {
+    return remark.codePointCount(0, remark.length()) <= 200;
   }
 
   private Result complete(String id) {
@@ -314,7 +324,7 @@ public class TechnicalDataDocumentSubmissionService {
         versions.state(product, person, version.getId(), "SUBMITTED");
         workflow.acceptSubmission(submission.getId(), batch.request().path("requestId").asText());
         recipients.state(person.id(), submission.getId(), "PREPARED", "SUBMITTED", null);
-        recipients.refreshTask(task.getId());
+        lifecycle.publishSubmitted(task, submissions.selectById(submission.getId()), batch.actorId());
       } else if (rejected) {
         workflow.rejectSubmission(submission.getId());
         recipients.state(person.id(), submission.getId(), "PREPARED", "OPEN", person.returnReason());
@@ -334,6 +344,13 @@ public class TechnicalDataDocumentSubmissionService {
       Long.class,
       formId
     );
+    var own = ownTaskIds(formId, actor);
+    if (!own.isEmpty() || !actor.oaSession()) return own;
+    return jdbc.queryForList("SELECT id FROM lp_quote_tech_task WHERE oa_form_id=? AND active_flag=1 ORDER BY id", Long.class, formId);
+  }
+
+  private List<Long> ownTaskIds(long formId, TechnicalDataActor actor) {
+    if (actor.userId() == null) return List.of();
     return jdbc.queryForList(
       """
       SELECT DISTINCT t.id FROM lp_quote_tech_task t JOIN lp_quote_tech_oa_recipient r ON r.task_id=t.id
@@ -367,7 +384,8 @@ public class TechnicalDataDocumentSubmissionService {
     );
   }
 
-  private Recipient own(long taskId, long userId) {
+  private Recipient own(long taskId, Long userId) {
+    if (userId == null) return null;
     return recipients
       .current(taskId)
       .stream()
@@ -380,14 +398,14 @@ public class TechnicalDataDocumentSubmissionService {
     return new Result(batch.id(), batch.status(), batch.result(), batch.requestKey());
   }
 
-  private void requireReader(TechnicalDataActor actor) {
-    if (actor == null || !actor.canReadTasks() || actor.shortSession()) throw forbidden(
+  private void requireReader(long formId, TechnicalDataActor actor) {
+    if (actor == null || !actor.canReadTasks() || !actor.canAccessForm(formId)) throw forbidden(
       "当前会话无权查看单据工作台"
     );
   }
 
-  private void requireTechnician(TechnicalDataActor actor) {
-    requireReader(actor);
+  private void requireTechnician(long formId, TechnicalDataActor actor) {
+    requireReader(formId, actor);
     if (!actor.canEdit() || actor.canViewSupplementOverview()) throw forbidden(
       "仅技术员本人可以提交已分派资料"
     );

@@ -5,9 +5,11 @@ import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceCorrection;
 import com.sanhua.marketingcost.formula.normalize.FormulaNormalizer;
 import com.sanhua.marketingcost.formula.normalize.FormulaValidator;
+import com.sanhua.marketingcost.service.PriceLinkedFactorWorkbookParser;
 import java.io.*;
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.regex.Pattern;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Component;
@@ -24,6 +26,9 @@ public class TechnicalPriceCorrectionWorkbook {
       List.of(
           KEY, "报价单号", "产品行ID", "核算月份", "业务单元", "技术审批版本", "审批内容指纹", "原料号", "原重量单位", "原费用单位",
           "技术说明");
+  private static final Pattern VARIABLE = Pattern.compile("\\[([^]]+)]");
+  private static final Set<String> ROW_PARAMETERS =
+      Set.of("process_fee", "agent_fee", "net_weight", "blank_weight", "__material", "__scrap");
 
   public record ImportRow(
       String itemKey,
@@ -44,11 +49,14 @@ public class TechnicalPriceCorrectionWorkbook {
 
   private final FormulaNormalizer normalizer;
   private final FormulaValidator validator;
+  private final PriceLinkedFactorWorkbookParser factorParser;
 
   public TechnicalPriceCorrectionWorkbook(
-      FormulaNormalizer normalizer, FormulaValidator validator) {
+      FormulaNormalizer normalizer, FormulaValidator validator,
+      PriceLinkedFactorWorkbookParser factorParser) {
     this.normalizer = normalizer;
     this.validator = validator;
+    this.factorParser = factorParser;
   }
 
   public byte[] export(
@@ -127,6 +135,11 @@ public class TechnicalPriceCorrectionWorkbook {
     }
   }
 
+  public int factorRowCount(byte[] bytes) {
+    return factorParser.parse(new ByteArrayInputStream(bytes), "补录公式.xlsx")
+        .getSheets().stream().mapToInt(sheet -> sheet.getRows().size()).sum();
+  }
+
   /** 归属错误整文件拒绝；可修正的公式／参数错误保留为逐行问题，允许其余有效行导入。 */
   public Plan validate(
       byte[] bytes, TechnicalPriceCorrectionService.Scope scope, String dataSheet, boolean type2) {
@@ -167,6 +180,7 @@ public class TechnicalPriceCorrectionWorkbook {
       if (sheet.getLastRowNum() > 5000) throw new IllegalArgumentException("补录修正文件不能超过 5000 行");
       Set<String> seen = new HashSet<>();
       var result = new ArrayList<ImportRow>();
+      boolean needsFactorSheet = false;
       for (int n = heading.getRowNum() + 1; n <= sheet.getLastRowNum(); n++) {
         var row = sheet.getRow(n);
         if (row == null) continue;
@@ -203,7 +217,9 @@ public class TechnicalPriceCorrectionWorkbook {
             issues.add("请明确是否含税（0 或 1）");
           try {
             if (model.getFormulaExpr().isBlank()) throw new IllegalArgumentException("联动公式不能为空");
-            validator.validate(normalizer.normalize(model.getFormulaExpr()));
+            String normalized = normalizer.normalize(model.getFormulaExpr());
+            validator.validate(normalized);
+            needsFactorSheet |= usesExternalFactor(normalized);
           } catch (RuntimeException error) {
             issues.add("公式：" + error.getMessage());
           }
@@ -220,10 +236,19 @@ public class TechnicalPriceCorrectionWorkbook {
         result.add(new ImportRow(key, dataSheet, n + 1, model, List.copyOf(issues)));
       }
       if (result.isEmpty()) throw new IllegalArgumentException("文件没有可关联的自行公式行");
+      if (needsFactorSheet && factorRowCount(bytes) == 0)
+        throw new IllegalArgumentException("联动公式使用影响因素，请同时导入含有效数据的影响因素 Sheet");
       return new Plan(scope, List.copyOf(result));
     } catch (IOException error) {
       throw new IllegalArgumentException("读取补录文件失败", error);
     }
+  }
+
+  private static boolean usesExternalFactor(String normalized) {
+    var variables = VARIABLE.matcher(normalized);
+    while (variables.find())
+      if (!ROW_PARAMETERS.contains(variables.group(1))) return true;
+    return false;
   }
 
   private static Map<String, Integer> header(Row row) {

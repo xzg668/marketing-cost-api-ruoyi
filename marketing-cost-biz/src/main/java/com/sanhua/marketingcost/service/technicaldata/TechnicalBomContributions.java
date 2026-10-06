@@ -43,8 +43,17 @@ public class TechnicalBomContributions {
         }));
     boolean replaceSolder = materialItems.stream().anyMatch(row -> "SOLDER".equals(row.moduleType()));
     // 无 U9 原始 BOM 时，技术确认的焊料清单代表本次全部焊料；不能再叠加图库原用量。
-    var removedPaths = original.stream().filter(row -> replaceSolder && isSolder(masters.get(row.getMaterialCode())))
-        .map(BomRawHierarchy::getPath).toList();
+    var removedPaths = new ArrayList<>(original.stream().filter(row -> replaceSolder && isSolder(masters.get(row.getMaterialCode())))
+        .map(BomRawHierarchy::getPath).toList());
+    if (materialItems.stream().anyMatch(row -> "PACKAGE".equals(row.moduleType()))) {
+      var packageCodes = masters.values().stream().filter(row -> "包装组件".equals(row.getMainCategoryName()))
+          .map(MaterialMasterRaw::getMaterialCode).collect(Collectors.toSet());
+      var nodes = original.stream().map(row -> new TechnicalDataPackageStructure.Node(row.getMaterialCode(),
+          row.getParentCode(), row.getPath(), row.getLevel(), row.getPriceOrgCode())).toList();
+      // 补录数量是每产品缺口的合计：替换无下级的包装节点，保留其他已有完整包装，避免叠加旧空壳。
+      removedPaths.addAll(TechnicalDataPackageStructure.missingParents(nodes, packageCodes).stream()
+          .map(TechnicalDataPackageStructure.Node::path).toList());
+    }
     List<BomRawHierarchy> result = new ArrayList<>(original.stream().filter(row ->
         removedPaths.stream().noneMatch(path -> row.getPath().startsWith(path))).toList());
     int sequence = original.stream().map(BomRawHierarchy::getSortSeq).filter(Objects::nonNull)

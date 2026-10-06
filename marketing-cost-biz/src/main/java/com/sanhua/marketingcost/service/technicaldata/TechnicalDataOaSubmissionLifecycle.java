@@ -3,9 +3,6 @@ package com.sanhua.marketingcost.service.technicaldata;
 import com.sanhua.marketingcost.entity.QuoteTechSubmission;
 import com.sanhua.marketingcost.entity.QuoteTechTask;
 import com.sanhua.marketingcost.integration.oa.OaIntegrationException;
-import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
-import com.sanhua.marketingcost.integration.oa.OaMessageRepository;
-import com.sanhua.marketingcost.integration.technicaldata.OaDeliveryUnknownException;
 import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository;
 import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository.Recipient;
 import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaWorkflowRepository;
@@ -14,27 +11,28 @@ import com.sanhua.marketingcost.mapper.QuoteTechTaskMapper;
 import java.util.Objects;
 import java.util.Set;
 import org.springframework.stereotype.Service;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 /** OA 回执只推进其对应的人员分支，其他人的草稿、审批和版本保持独立。 */
 @Service
 public class TechnicalDataOaSubmissionLifecycle {
+  private final JdbcTemplate jdbc;
   private final QuoteTechnicalDataRepository products;
   private final TechnicalDataParticipantVersions versions;
   private final QuoteTechSubmissionMapper submissions;
   private final QuoteTechTaskMapper tasks;
   private final TechnicalDataOaWorkflowRepository workflow;
   private final TechnicalDataOaRecipientRepository recipients;
-  private final OaMessageRepository messages;
-  private final OaMessageCodec codec;
   private final TechnicalDataAuditLogService audit;
   private final TechnicalDataPricePublication prices;
 
-  public TechnicalDataOaSubmissionLifecycle(QuoteTechnicalDataRepository products, TechnicalDataParticipantVersions versions,
+  public TechnicalDataOaSubmissionLifecycle(JdbcTemplate jdbc, QuoteTechnicalDataRepository products, TechnicalDataParticipantVersions versions,
       QuoteTechSubmissionMapper submissions, QuoteTechTaskMapper tasks, TechnicalDataOaWorkflowRepository workflow,
-      TechnicalDataOaRecipientRepository recipients, OaMessageRepository messages, OaMessageCodec codec, TechnicalDataAuditLogService audit, TechnicalDataPricePublication prices) {
+      TechnicalDataOaRecipientRepository recipients, TechnicalDataAuditLogService audit, TechnicalDataPricePublication prices) {
+    this.jdbc = jdbc;
     this.prices = prices;
     this.products = products; this.versions = versions; this.submissions = submissions; this.tasks = tasks;
-    this.workflow = workflow; this.recipients = recipients; this.messages = messages; this.codec = codec; this.audit = audit;
+    this.workflow = workflow; this.recipients = recipients; this.audit = audit;
   }
 
   /** 主动通知已证明OA受理：冻结快照已存在时，无须等待丢失的同步回执。 */
@@ -53,20 +51,37 @@ public class TechnicalDataOaSubmissionLifecycle {
     recipients.refreshTask(task.getId());
   }
 
-  public void approve(QuoteTechTask task, QuoteTechSubmission submission, long messageId, TechnicalDataActor operator) {
+  /** 只有 I03 成功回执才能发布冻结内容；此处不生成技术领导审批结论。 */
+  public void publishSubmitted(QuoteTechTask task, QuoteTechSubmission submission, long actorId) {
     var person = requireCurrent(task, submission);
+    if (!TechnicalDataSubmissionState.acceptedByOa(submission.getSubmissionStatus())
+        || !TechnicalDataSubmissionState.submittedTodo(person.todoStatus())) {
+      throw conflict("技术资料尚未成功提交 OA，不能作为正式资料");
+    }
     var product = products.lockProduct(submission.getProductId()).orElseThrow();
     var version = versions.verified(submission.getTechnicalVersionId(), product.getId());
-    workflow.decision(submission.getId(), "APPROVED", messageId);
-    var approved = versions.transition(version, "APPROVED", operator.userId());
-    versions.state(product, person, version.getId(), "APPROVED");
-    if (person.processingModules().contains("PRICE")) prices.publish(task, product, approved);
-    recipients.state(person.id(), submission.getId(), "SUBMITTED", "DONE", null);
+    if (!TechnicalDataSubmissionState.submitted(version.getVersionStatus())) throw conflict("技术资料尚未形成已提交版本");
+    if (person.processingModules().contains("PRICE")) prices.publish(task, product, version);
     recipients.refreshTask(task.getId());
-    versions.activate(product, operator.userId());
-    audit.record(task, product, submission.getId(), "PERSON_APPROVED", "SUBMITTED", "APPROVED",
-        person.name() + "第 " + submission.getSubmissionRound() + " 次提交获其部门领导通过", operator,
-        "oa-message:" + messageId, "TD-PERSON-APPROVED:" + submission.getId());
+    versions.activate(product, actorId);
+  }
+
+  /** 报价员检查时也整理已有 SENT 记录，覆盖升级前已提交但没有审批回调的资料。调用方持有报价单锁。 */
+  public void prepareSubmittedMaterials(long formId) {
+    prepareSubmittedMaterials(formId, null);
+  }
+
+  public void prepareSubmittedMaterials(long formId, Long itemId) {
+    for (long taskId : jdbc.queryForList("""
+        SELECT id FROM lp_quote_tech_task WHERE oa_form_id=? AND active_flag=1
+          AND (? IS NULL OR oa_form_item_id=?) AND task_status<>'UNASSIGNED' ORDER BY id
+        """, Long.class, formId, itemId, itemId)) {
+      var task = tasks.selectByIdForUpdate(taskId);
+      for (var person : recipients.current(taskId)) {
+        if (person.latestSubmissionId() == null) throw conflict("技术员尚未提交资料");
+        publishSubmitted(task, submissions.selectById(person.latestSubmissionId()), person.userId());
+      }
+    }
   }
 
   public void returned(QuoteTechTask task, QuoteTechSubmission submission, long messageId, TechnicalDataActor operator, String reason) {
@@ -74,16 +89,17 @@ public class TechnicalDataOaSubmissionLifecycle {
     if (reason == null || reason.isBlank()) throw conflict("退回必须提供原因");
     workflow.decision(submission.getId(), "RETURNED", messageId);
     var version = versions.verified(submission.getTechnicalVersionId(), submission.getProductId());
+    recipients.revisionScope(person.id(), person.modules());
+    restore(task, recipients.findById(person.id()), submission, operator.userId(), "SUBMITTED", reason);
     versions.transition(version, "RETURNED", operator.userId());
-    restore(task, person, submission, operator.userId(), "SUBMITTED", reason);
     audit.record(task, null, submission.getId(), "PERSON_RETURNED", "SUBMITTED", "OPEN",
         person.name() + "：" + reason, operator, "oa-message:" + messageId, "TD-PERSON-RETURNED:" + submission.getId());
   }
 
-  /** 财务定向退回经 OA 确认后调用；原 APPROVED 提交保留当时的审批结论。 */
+  /** 财务定向退回经 OA 确认后调用；原提交保留当时的冻结内容。 */
   public void financeReturned(QuoteTechTask task, QuoteTechSubmission submission, long operatorId, String reason) {
     var person = requireCurrent(task, submission);
-    if (!"APPROVED".equals(submission.getSubmissionStatus()) || reason == null || reason.isBlank()) throw conflict("财务退回须关联已批准提交和原因");
+    if (!TechnicalDataSubmissionState.acceptedByOa(submission.getSubmissionStatus()) || reason == null || reason.isBlank()) throw conflict("报价员退回须关联已成功提交资料和原因");
     restore(task, person, submission, operatorId, "RETURN_PENDING", reason);
   }
 
@@ -93,8 +109,7 @@ public class TechnicalDataOaSubmissionLifecycle {
     // 旧数据库仍以任务汇总状态保护已提交模块，不能在 APPROVED/SUBMITTED 状态下恢复编辑内容。
     recipients.state(person.id(), submission.getId(), from, "OPEN", reason);
     recipients.refreshTask(task.getId());
-    if ("RETURN_PENDING".equals(from)) versions.restoreApproved(product, person, operator);
-    else versions.restore(product, person, submission.getTechnicalVersionId(), operator);
+    versions.restoreSubmitted(product, person, operator);
     workflow.invalidateFinance(task.getOaFlowId());
   }
 

@@ -30,7 +30,7 @@ class TechnicalManufacturingInputsTest {
       mock(TechnicalDataVersionContentCodec.class);
   private final QuoteBomSupplementDetailMapper details = mock(QuoteBomSupplementDetailMapper.class);
   private final TechnicalManufacturingInputs service =
-      new TechnicalManufacturingInputs(sources, codec, details);
+      new TechnicalManufacturingInputs(sources, codec, details, mock(ElectronicDrawingManufacturingInputs.class));
   private final List<QuoteBomSupplementDetail> rows = new ArrayList<>();
   private QuoteBomSupplementDetail raw;
 

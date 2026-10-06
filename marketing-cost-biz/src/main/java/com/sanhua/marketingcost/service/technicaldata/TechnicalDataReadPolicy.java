@@ -18,7 +18,7 @@ public class TechnicalDataReadPolicy {
 
   public boolean ownsDraft(QuoteTechModule module, TechnicalDataActor actor) {
     return (
-      actor != null &&
+      actor != null && actor.userId() != null &&
       !actor.canViewSupplementOverview() &&
       Objects.equals(module.getAssigneeUserId(), actor.userId())
     );

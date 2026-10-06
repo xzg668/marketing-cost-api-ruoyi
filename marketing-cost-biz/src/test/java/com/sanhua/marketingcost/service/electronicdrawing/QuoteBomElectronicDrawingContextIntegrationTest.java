@@ -37,7 +37,7 @@ class QuoteBomElectronicDrawingContextIntegrationTest extends BomMapperTestBase 
     String oaNo = "ED-MONTH-" + UUID.randomUUID();
     jdbc.update("INSERT INTO oa_form(oa_no,accounting_period_month,business_unit_type) VALUES(?,'2026-09','COMMERCIAL')", oaNo);
     Long formId = jdbc.queryForObject("SELECT id FROM oa_form WHERE oa_no=?", Long.class, oaNo);
-    jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,customer_drawing,business_unit_type) VALUES(?,'ED-P','ED-DRAW','COMMERCIAL')", formId);
+    jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,product_name,customer_drawing,business_unit_type) VALUES(?,'ED-P','热力膨胀阀','ED-DRAW','COMMERCIAL')", formId);
     itemId = jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=?", Long.class, formId);
     augustId = preparation(formId, oaNo, "2026-08");
     septemberId = preparation(formId, oaNo, "2026-09");
@@ -60,6 +60,25 @@ class QuoteBomElectronicDrawingContextIntegrationTest extends BomMapperTestBase 
       assertThat(node.getReferenceWeightUnit()).isEqualTo("g");
       assertThat(node.getQty()).isEqualByComparingTo("2");
     });
+  }
+
+  @Test
+  void longQuoteNumberCanImportAndRecheckWithoutChangingTheDisplayedNumber() throws Exception {
+    String longOaNo = "OA-" + "X".repeat(61);
+    jdbc.update("UPDATE oa_form SET oa_no=? WHERE id=(SELECT oa_form_id FROM oa_form_item WHERE id=?)",
+        longOaNo, itemId);
+    jdbc.update("UPDATE lp_quote_bom_preparation_record SET oa_no=? WHERE oa_form_item_id=?",
+        longOaNo, itemId);
+
+    var imported = imports.importSource(command("2026-09"), acquired());
+    var context = adapter.load(itemId, "COMMERCIAL", "210", "2026-09");
+
+    assertThat(context.oaNo()).isEqualTo(longOaNo);
+    assertThat(context.taskNo()).hasSizeLessThanOrEqualTo(64);
+    assertThat(jdbc.queryForObject("SELECT task_no FROM lp_quote_bom_supplement_version WHERE id=?",
+        String.class, imported.supplementVersionId())).isEqualTo(context.taskNo());
+    assertThat(imports.importSource(command("2026-09"), acquired()).supplementVersionId())
+        .isEqualTo(imported.supplementVersionId());
   }
 
   @Test

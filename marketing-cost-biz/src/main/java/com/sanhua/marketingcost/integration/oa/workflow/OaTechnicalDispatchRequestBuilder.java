@@ -20,10 +20,12 @@ import org.springframework.stereotype.Component;
 public class OaTechnicalDispatchRequestBuilder {
   private final ObjectMapper json;
   private final Validator validator;
+  private final OaWorkflowProperties properties;
 
-  public OaTechnicalDispatchRequestBuilder(ObjectMapper json, Validator validator) {
+  public OaTechnicalDispatchRequestBuilder(ObjectMapper json, Validator validator, OaWorkflowProperties properties) {
     this.json = json;
     this.validator = validator;
+    this.properties = properties;
   }
 
   public ObjectNode build(OaTechnicalDispatchRequest command, String operatorEmployeeNo) {
@@ -34,9 +36,7 @@ public class OaTechnicalDispatchRequestBuilder {
           .map(item -> item.getPropertyPath() + ": " + item.getMessage()).sorted()
           .collect(Collectors.joining("；")));
     }
-    if (!"FI-SC-005".equals(command.processCode())) {
-      throw new IllegalArgumentException("当前仅已明确 FI-SC-005 的技术员字段 jsy，其他流程须确认字段后接入");
-    }
+    String peopleDataKey = properties.requireTechnicalPeopleDataKey(command.processCode());
     String operator = employeeNo(operatorEmployeeNo, "报价员工号");
     String requestId = command.requestId().trim();
     if (!requestId.matches("[A-Za-z0-9._:-]{1,128}")) {
@@ -88,7 +88,7 @@ public class OaTechnicalDispatchRequestBuilder {
     String remark = "技术补录：" + groupedProducts.entrySet().stream()
         .map(group -> String.join("、", group.getValue()) + "：" + group.getKey() + "。")
         .collect(Collectors.joining("\n"));
-    return OaTechnicalPeopleRequest.build(json, command.processCode(), requestId, operator, people.keySet(), remark);
+    return OaTechnicalPeopleRequest.build(json, peopleDataKey, requestId, operator, people.keySet(), remark);
   }
 
   private static String employeeNo(String value, String label) {

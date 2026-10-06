@@ -28,6 +28,7 @@ class QuoteFinalSubmissionServiceTest extends BomMapperTestBase {
   @Autowired QuoteFinalSubmissionService service;
   @Autowired QuoteFinalSubmissionRepository repository;
   @Autowired JdbcTemplate jdbc;
+  @Autowired OaWorkflowProperties workflowProperties;
   @MockBean ProductCostingContextResolver contexts;
   @MockBean ProductCostingSuccessLookup successes;
   @MockBean TechnicalDataOaContext oaContext;
@@ -62,7 +63,7 @@ class QuoteFinalSubmissionServiceTest extends BomMapperTestBase {
     });
     when(contexts.resolveRevision(any())).thenAnswer(call->call.getArgument(0));
     when(successes.find(any())).thenAnswer(call->{var v=versions.get(((ProductCostingContext)call.getArgument(0)).itemId());return v==null?Optional.empty():Optional.of(new ProductCostingSuccessLookup.ReusableCost(v,"prepare",0));});
-    when(oaContext.document(formId)).thenReturn(new TechnicalDataOaContext.Document(formId,requestId,"FI-SC-006",new OaPeer("I07","TEST",Set.of("COMMERCIAL"))));
+    when(oaContext.document(formId)).thenReturn(new TechnicalDataOaContext.Document(formId,requestId,"FI-SC-006",new OaPeer("I07","TEST",Set.of("COMMERCIAL")),null));
     when(oaContext.operatorEmployeeNo(1)).thenReturn("001001");
     when(oa.submit(any())).thenReturn(receipt(OaWorkflowResult.Status.SUCCESS));
   }
@@ -80,6 +81,10 @@ class QuoteFinalSubmissionServiceTest extends BomMapperTestBase {
     assertThat(body.getValue().path("requestId").asText()).isEqualTo(requestId);
     assertThat(body.getValue().path("userid").asText()).isEqualTo("001001");
     assertThat(body.getValue().at("/formData/dataDetails/0/content").asText()).isEqualTo("152.503400");
+    assertThat(body.getValue().at("/formData/dataDetails/0/subFormId").asText()).isEqualTo("1317497487388790985");
+    assertThat(body.getValue().at("/formData/dataDetails/1/subFormId").asText()).isEqualTo("1317497487388790985");
+    assertThat(body.getValue().at("/formData/dataDetails/0/dataIndex").asInt()).isEqualTo(1);
+    assertThat(body.getValue().at("/formData/dataDetails/1/dataIndex").asInt()).isEqualTo(2);
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_final_submission WHERE oa_form_id=?",Integer.class,formId)).isEqualTo(1);
   }
   @Test void incompleteQuoteStillShowsSuccessfulProductButCannotSubmit() {
@@ -94,10 +99,25 @@ class QuoteFinalSubmissionServiceTest extends BomMapperTestBase {
     var before=read();jdbc.update("UPDATE lp_oa_form_item_extra_field SET field_value='999' WHERE oa_form_item_id=? AND field_code='OA_ROW_ID'",items.getFirst());
     assertThatThrownBy(()->send(before.fingerprint(),key())).hasMessageContaining("已变化");verifyNoInteractions(oa);
   }
-  @Test void missingEmployeeAndInvalidSourceIdCannotBeSubmitted() {
-    when(oaContext.operatorEmployeeNo(1)).thenThrow(new IllegalArgumentException("当前账号未维护工号"));assertThat(read().canConfirm()).isFalse();
-    doReturn("001001").when(oaContext).operatorEmployeeNo(1);jdbc.update("UPDATE lp_oa_form_item_extra_field SET field_value='ROW-X' WHERE oa_form_item_id=?",items.getFirst());
-    var state=read();assertThat(state.error()).contains("subFormId");assertThatThrownBy(()->send(state.fingerprint(),key())).hasMessageContaining("subFormId");verifyNoInteractions(oa);
+  @Test void missingEmployeeCannotSubmitButSourceRowIdDoesNotDetermineTableId() {
+    when(oaContext.operatorEmployeeNo(1)).thenThrow(new IllegalArgumentException("当前账号未维护工号"));
+    assertThat(read().canConfirm()).isFalse();
+    assertThatThrownBy(()->send(read().fingerprint(),key())).hasMessageContaining("工号");
+    verifyNoInteractions(oa);
+    doReturn("001001").when(oaContext).operatorEmployeeNo(1);
+    jdbc.update("UPDATE lp_oa_form_item_extra_field SET field_value='ROW-X' WHERE oa_form_item_id=?",items.getFirst());
+    var state=read();assertThat(state.canConfirm()).isTrue();
+    assertThat(send(state.fingerprint(),key()).status()).isEqualTo("SUBMITTED");
+    var body=ArgumentCaptor.forClass(ObjectNode.class);verify(oa).submit(body.capture());
+    assertThat(body.getValue().at("/formData/dataDetails/0/subFormId").asText()).isEqualTo("1317497487388790985");
+  }
+  @Test void missingConfiguredTableBlocksBeforeFreezingOrSending() {
+    String previous=workflowProperties.getFinalCostSubFormIds().remove("FI-SC-006");
+    try {
+      var state=read();assertThat(state.canConfirm()).isFalse();assertThat(state.error()).contains("subFormId");
+      assertThatThrownBy(()->send(state.fingerprint(),key())).hasMessageContaining("subFormId");
+      assertThat(repository.latest(formId)).isNull();verifyNoInteractions(oa);
+    } finally {workflowProperties.getFinalCostSubFormIds().put("FI-SC-006",previous);}
   }
   @Test void timeoutIsUnknownAndNeitherRefreshNorNewRequestResends() {
     when(oa.submit(any())).thenReturn(receipt(OaWorkflowResult.Status.UNKNOWN));var before=read();

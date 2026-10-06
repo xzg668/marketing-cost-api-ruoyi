@@ -14,10 +14,9 @@ public record TechnicalDataActor(
     Long userId,
     String name,
     Set<String> authorities,
-    Long scopedTaskId,
-    String accessPurpose) {
+    Long scopedFormId) {
   public TechnicalDataActor(Long userId, String name, Set<String> authorities) {
-    this(userId, name, authorities, null, null);
+    this(userId, name, authorities, null);
   }
 
   public TechnicalDataActor {
@@ -52,19 +51,27 @@ public record TechnicalDataActor(
   }
 
   public boolean canViewSupplementOverview() {
-    return !shortSession() && (admin() || has("ingest:quote:cost-run:execute"));
+    return !oaSession() && (admin() || has("ingest:quote:cost-run:execute"));
   }
 
   /** 报价员只在当前业务单元内查看和分派；管理员可跨业务单元查看。 */
   public boolean canCoordinateTask(QuoteTechTask task) {
-    if (task == null || shortSession()) return false;
+    if (task == null || oaSession()) return false;
     return admin() || has("ingest:quote:cost-run:execute")
         && task.getBusinessUnitType() != null
         && Objects.equals(task.getBusinessUnitType(), BusinessUnitContext.getCurrentBusinessUnitType());
   }
 
-  public boolean canAccessTask(Long taskId) {
-    return scopedTaskId == null || scopedTaskId.equals(taskId);
+  public boolean canAccessTask(QuoteTechTask task) {
+    return task != null && canAccessForm(task.getOaFormId());
+  }
+
+  public boolean canAccessForm(Long formId) {
+    return scopedFormId == null || scopedFormId.equals(formId);
+  }
+
+  public boolean canViewSubmittedTask(QuoteTechTask task) {
+    return canCoordinateTask(task) || oaSession() && canAccessTask(task);
   }
 
   public boolean canReadTask(QuoteTechTask task) {
@@ -72,8 +79,8 @@ public record TechnicalDataActor(
   }
 
   public boolean canReadTask(QuoteTechTask task, Collection<QuoteTechModule> modules) {
-    if (task == null || !canAccessTask(task.getId())) return false;
-    if (canCoordinateTask(task)) return true;
+    if (task == null || !canAccessTask(task)) return false;
+    if (canViewSubmittedTask(task)) return true;
     if (!Objects.equals(task.getActiveFlag(), 1)) return false;
     if (!technician() && !canEdit()) return false;
     boolean usesTaskAssignee = modules.stream().noneMatch(module -> module.getAssigneeUserId() != null);
@@ -84,9 +91,9 @@ public record TechnicalDataActor(
 
   /** 只有实际办理人可以填写自己的模块；报价员和管理员只查看提交结果。 */
   public boolean canEditModule(QuoteTechTask task, QuoteTechModule module) {
-    if (canViewSupplementOverview()) return false;
+    if (userId == null || canViewSupplementOverview()) return false;
     if (task == null || module == null || Integer.valueOf(0).equals(module.getOaEditAllowed())
-        || !canEdit() || !canAccessTask(task.getId())
+        || !canEdit() || !canAccessTask(task)
         || !Integer.valueOf(1).equals(task.getActiveFlag())
         || !Integer.valueOf(1).equals(module.getRequiredFlag())
         || "CANCELLED".equals(task.getTaskStatus())
@@ -98,13 +105,15 @@ public record TechnicalDataActor(
   }
 
   public List<String> assignedModules(QuoteTechTask task, Collection<QuoteTechModule> modules) {
+    if (userId == null) return List.of();
     return modules.stream().filter(module -> Integer.valueOf(1).equals(module.getRequiredFlag())
+        && (module.getAssigneeUserId() != null || task.getOaAssignmentVersion() == null || task.getOaAssignmentVersion() == 0)
         && Objects.equals(module.getAssigneeUserId() == null ? task.getAssigneeUserId() : module.getAssigneeUserId(), userId))
         .map(QuoteTechModule::getModuleType).toList();
   }
 
-  public boolean shortSession() {
-    return scopedTaskId != null;
+  public boolean oaSession() {
+    return scopedFormId != null;
   }
 
   public boolean canPublish() {
@@ -112,7 +121,7 @@ public record TechnicalDataActor(
   }
 
   public boolean canEdit() {
-    return admin() || has("technical:data:task:edit");
+    return userId != null && (admin() || has("technical:data:task:edit"));
   }
 
   private Set<String> normalizedAuthorities() {

@@ -8,9 +8,12 @@ import com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.List;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,18 +31,26 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
       "lp_other_expense_rate",
       "lp_product_property",
       "lp_product_property_rule",
-      "lp_price_fixed_item",
-      "lp_price_linked_item",
-      "lp_price_range_item",
       "lp_price_range_factor_rule",
       "lp_price_settle",
-      "lp_price_settle_item",
       "lp_supplier_supply_ratio",
-      "lp_material_price_type",
       "lp_finance_base_price",
       "lp_quote_base_price_mapping_rule",
       "lp_bom_byproduct_cost_rule",
       "lp_cost_business_rule");
+
+  // 这些表按料号定价。其他产品的补价不应使本产品的成本版本失效。
+  private static final List<String> MATERIAL_PRICE_TABLES = List.of(
+      "lp_price_fixed_item", "lp_price_linked_item", "lp_price_range_item",
+      "lp_price_settle_item", "lp_material_price_type");
+  static final String MATERIAL_CODES_SQL =
+      "SELECT material_code FROM lp_price_prepare_item "
+          + "WHERE oa_form_item_id=? AND period_month=? AND current_flag=1 "
+          + "AND material_code IS NOT NULL "
+          + "UNION SELECT n.material_code FROM lp_quote_costing_workspace w "
+          + "JOIN lp_quote_effective_bom_node n ON n.build_batch_id=w.current_bom_build_batch_id "
+          + "WHERE w.oa_form_item_id=? AND w.period_month=? AND n.material_code IS NOT NULL "
+          + "ORDER BY material_code";
 
   private final JdbcTemplate jdbcTemplate;
   private final EffectiveTechnicalDataQueryService effectiveTechnicalDataQueryService;
@@ -114,6 +125,7 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
       String effectiveTechnicalFingerprint, String pricingMonth) {
     StringBuilder canonical = new StringBuilder(1024);
     append(canonical, "sources", sourceRevision);
+    append(canonical, "materialPrices", materialPriceRevision(item, pricingMonth));
     append(canonical, "effectiveTechnicalData", effectiveTechnicalFingerprint);
     // 下游退回要求真正生成新成本；只纳入本报价、本月的退回记录，不改旧成功版本。
     Long returned = jdbcTemplate.queryForObject("SELECT MAX(id) FROM lp_quote_final_submission WHERE oa_form_id=? AND accounting_month=? AND returned_at IS NOT NULL", Long.class, form.getId(), pricingMonth);
@@ -121,6 +133,46 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     appendForm(canonical, form);
     appendItem(canonical, item);
     return sha256(canonical.toString());
+  }
+
+  private String materialPriceRevision(OaFormItem item, String pricingMonth) {
+    List<String> materials = jdbcTemplate.queryForList(
+        MATERIAL_CODES_SQL, String.class,
+        item.getId(), pricingMonth, item.getId(), pricingMonth);
+    if (materials.isEmpty()) {
+      // 尚未建立本产品价格准备时无法确定涉及的料号，保守地检查整张价格表。
+      StringBuilder global = new StringBuilder();
+      for (String table : MATERIAL_PRICE_TABLES) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("CHECKSUM TABLE `" + table + "`");
+        append(global, table, rows.isEmpty() ? null : valueIgnoreCase(rows.get(0), "Checksum"));
+      }
+      return sha256(global.toString());
+    }
+
+    StringBuilder canonical = new StringBuilder();
+    List<String> distinctMaterials = new ArrayList<>(new TreeSet<>(materials));
+    distinctMaterials.forEach(material -> append(canonical, "material", material));
+    String placeholders = String.join(",", Collections.nCopies(distinctMaterials.size(), "?"));
+    for (String table : MATERIAL_PRICE_TABLES) {
+      append(canonical, "table", table);
+      List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+          "SELECT * FROM `" + table + "` WHERE material_code IN (" + placeholders + ") ORDER BY id",
+          distinctMaterials.toArray());
+      for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+        Map<String, Object> row = rows.get(rowIndex);
+        for (String column : new TreeSet<>(row.keySet())) {
+          appendPriceValue(canonical, column, row.get(column));
+        }
+        append(canonical, "rowEnd", rowIndex);
+      }
+    }
+    return sha256(canonical.toString());
+  }
+
+  private void appendPriceValue(StringBuilder target, String column, Object value) {
+    String text = value == null ? "" : value.toString();
+    target.append(column).append('=').append(value == null ? 'N' : 'V')
+        .append(text.length()).append(':').append(text).append('\u001f');
   }
 
   private String effectiveTechnicalFingerprint(OaFormItem item, String pricingMonth) {

@@ -18,7 +18,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
-/** 一张 OA 单的一次定向退回：选板块、关联原负责人、单次发送、成功后恢复编辑。 */
+/** 一张 OA 单的一次定向退回：关联原负责人，两步 OA 调用都确认成功后恢复所选板块编辑。 */
 @Service
 public class TechnicalDataReturnService {
   public record Target(long taskId, int expectedTaskVersion, List<String> modules, String reason) {
@@ -44,10 +44,12 @@ public class TechnicalDataReturnService {
       String productNo,
       int taskVersion,
       List<Module> modules,
-      Result lastReturn) {}
+      Result lastReturn,
+      String returnReason) {}
 
   public record Result(
-      String batchId, String requestKey, String status, OaWorkflowResult oaResult) {}
+      String batchId, String requestKey, String status, OaWorkflowResult oaResult,
+      String step, int attempt, boolean canRetry, long actorId) {}
 
   private final JdbcTemplate jdbc;
   private final QuoteTechTaskMapper tasks;
@@ -61,7 +63,7 @@ public class TechnicalDataReturnService {
   private final OaWorkflowAccessPolicy access;
   private final OaTechnicalReturnClient client;
   private final OaTechnicalBatchRepository batches;
-  private final OaTechnicalBatchDelivery delivery;
+  private final OaTechnicalReturnDelivery delivery;
   private final OaMessageRepository messages;
   private final OaMessageCodec codec;
   private final TechnicalDataAuditLogService audit;
@@ -80,7 +82,7 @@ public class TechnicalDataReturnService {
       OaWorkflowAccessPolicy access,
       OaTechnicalReturnClient client,
       OaTechnicalBatchRepository batches,
-      OaTechnicalBatchDelivery delivery,
+      OaTechnicalReturnDelivery delivery,
       OaMessageRepository messages,
       OaMessageCodec codec,
       TechnicalDataAuditLogService audit,
@@ -118,24 +120,31 @@ public class TechnicalDataReturnService {
       boolean allowed =
           view != null
               && view.canCost()
-              && "MATERIAL_REVIEW".equals(view.state())
-              && !access.materialConfirmed(formId);
+              && Set.of("COSTING", "RECOSTING", "TECHNICAL").contains(view.state());
       List<Module> choices = new ArrayList<>();
-      if (allowed)
-        for (var person : recipients.current(id)) {
-          if (!approved(person)) continue;
-          for (var module : modules.selectByTaskId(id)) {
-            if (Objects.equals(module.getAssigneeUserId(), person.userId())
-                && "APPROVED".equals(module.getModuleStatus())) {
-              choices.add(
-                  new Module(
-                      module.getModuleType(),
-                      TechnicalDataModuleType.valueOf(module.getModuleType()).displayName(),
-                      person.name(),
-                      person.externalUserId()));
-            }
+      String returnReason = null;
+      var currentPeople = recipients.current(id);
+      boolean pending = currentPeople.stream().anyMatch(person -> "RETURN_PENDING".equals(person.todoStatus()));
+      for (var person : currentPeople) {
+        Set<String> pendingModules = new HashSet<>();
+        if (pending) {
+          if (!"RETURN_PENDING".equals(person.todoStatus()) || person.returnMessageId() == null) continue;
+          var scope = payload(person.returnMessageId());
+          scope.path("moduleTypes").forEach(type -> pendingModules.add(type.asText()));
+          returnReason = scope.path("reason").asText();
+        } else if (!allowed || !submitted(person)) continue;
+        for (var module : modules.selectByTaskId(id)) {
+          if (Objects.equals(module.getAssigneeUserId(), person.userId())
+              && (pending ? pendingModules.contains(module.getModuleType()) : TechnicalDataSubmissionState.submitted(module.getModuleStatus()))) {
+            choices.add(
+                new Module(
+                    module.getModuleType(),
+                    TechnicalDataModuleType.valueOf(module.getModuleType()).displayName(),
+                    person.name(),
+                    person.externalUserId()));
           }
         }
+      }
       var product =
           products
               .findActiveProduct(task.getOaFormItemId(), task.getAccountingMonth())
@@ -157,7 +166,8 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
               product.getMaterialNo(),
               task.getTaskVersion(),
               choices,
-              last.isEmpty() ? null : result(batches.find(last.getFirst(), false))));
+              last.isEmpty() ? null : result(batches.find(last.getFirst(), false)),
+              returnReason));
     }
     return result;
   }
@@ -182,6 +192,89 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
         });
   }
 
+  public Result retryRejection(String id, int expectedAttempt, TechnicalDataActor actor) {
+    if (expectedAttempt < 1) throw invalid("退回重试次数无效");
+    transaction.executeWithoutResult(tx -> {
+      var batch = batches.find(id, false);
+      if (batch == null || !"I05".equals(batch.operation()) || batch.actorId() != actor.userId())
+        throw invalid("只能由原报价员继续本次退回");
+      for (long message : batches.messageIds(id)) requireTask(payload(message).path("taskId").asLong(), actor, false);
+    });
+    delivery.retryRejection(id, expectedAttempt, this::validateBeforeSending);
+    return Objects.requireNonNull(transaction.execute(tx -> complete(id)));
+  }
+
+  /** OA 没有人员修改结果查询接口；只有原报价员实际核实成功后，才能续办第二步。 */
+  public Result confirmPeople(String id, int expectedAttempt, String note, TechnicalDataActor actor) {
+    if (expectedAttempt < 1 || note == null || note.isBlank() || note.trim().length() > 500)
+      throw invalid("请填写核实 OA 人员更新成功的依据（1—500字）");
+    boolean confirmed = Boolean.TRUE.equals(transaction.execute(tx -> {
+      var original = batches.find(id, false);
+      if (original == null || !"I05".equals(original.operation()) || actor == null || original.actorId() != actor.userId())
+        throw invalid("只能由原报价员核实本次人员更新结果");
+      jdbc.queryForObject("SELECT id FROM oa_form WHERE id=? FOR UPDATE", Long.class, original.formId());
+      var batch = batches.find(id, true);
+      var linked = batches.messageIds(id);
+      if (linked.isEmpty()) throw invalid("退回记录缺少任务范围");
+      for (long message : linked) requireTask(payload(message).path("taskId").asLong(), actor, false);
+      var previousConfirmation = batch.peopleResult() == null || batch.peopleResult().response() == null
+          ? null : batch.peopleResult().response().get("manualConfirmation");
+      if (previousConfirmation != null && previousConfirmation.path("attempt").asInt() == expectedAttempt) return false;
+      if (!"UNKNOWN".equals(batch.status()) || !"PEOPLE".equals(batch.returnStep()) || batch.returnAttempt() != expectedAttempt)
+        throw invalid("当前并非本次人员更新结果未知，请刷新退回结果");
+      validateBeforeSending(batch);
+      var evidence = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+      evidence.set("originalResult", codec.read(codec.write(batch.peopleResult())));
+      evidence.putObject("manualConfirmation").put("actorId", actor.userId()).put("actorName", actor.name())
+          .put("attempt", expectedAttempt).put("note", note.trim())
+          .put("confirmedAt", java.time.Instant.now().toString());
+      var result = new OaWorkflowResult("MANUAL:" + id, OaWorkflowResult.Status.SUCCESS, null,
+          "MANUAL_CONFIRMED", "原报价员核实 OA 人员更新成功", batch.request().path("requestId").asText(), evidence, 0);
+      batches.confirmPeopleManually(batch, result);
+      for (long message : linked) {
+        var scope = payload(message);
+        var task = requireTask(scope.path("taskId").asLong(), actor, false);
+        audit.record(task, products.lockActiveProducts(task.getId()).getFirst(), scope.path("submissionId").asLong(),
+            "RETURN_PEOPLE_MANUALLY_CONFIRMED", "UNKNOWN", "REJECT_READY", note.trim(), actor, id,
+            "I05-CONFIRM-PEOPLE:" + message);
+      }
+      return true;
+    }));
+    if (confirmed) delivery.retryRejection(id, expectedAttempt, this::validateBeforeSending);
+    return Objects.requireNonNull(transaction.execute(tx -> complete(id)));
+  }
+
+  /** OA技术节点通知只确认已发送但回执未知的第二步，并沿用原退回产品/板块范围。 */
+  @Transactional
+  public void confirmFromNotification(String id, OaWorkflowNotification event, long notificationId) {
+    var original = batches.find(id, false);
+    if (original == null) throw invalid("退回记录不存在");
+    jdbc.queryForObject("SELECT id FROM oa_form WHERE id=? FOR UPDATE", Long.class, original.formId());
+    var batch = batches.find(id, true);
+    if (!event.technical() || !"I05".equals(batch.operation())
+        || !event.requestId().equals(batch.request().path("requestId").asText())
+        || !"UNKNOWN".equals(batch.status()) || !"REJECT".equals(batch.returnStep())
+        || batch.peopleResult() == null || batch.peopleResult().status() != OaWorkflowResult.Status.SUCCESS) {
+      throw invalid("退回人员尚未确认成功，或节点退回并非结果未知，不能用此通知开放编辑");
+    }
+    Set<String> expectedEmployees = new HashSet<>();
+    for (long message : batches.messageIds(id)) {
+      var scope = payload(message);
+      var person = recipients.findById(scope.path("recipientId").asLong());
+      if (person == null || !person.active() || !"RETURN_PENDING".equals(person.todoStatus())
+          || !Objects.equals(person.returnMessageId(), message)
+          || !Objects.equals(person.latestSubmissionId(), scope.path("submissionId").asLong())) {
+        throw invalid("原退回任务已变化，不能用通知确认其他轮次");
+      }
+      expectedEmployees.add(person.externalUserId());
+    }
+    if (expectedEmployees.isEmpty() || !new HashSet<>(event.employeeNos()).containsAll(expectedEmployees)) {
+      throw invalid("通知未覆盖本次退回的全部技术员，不能确认整批退回");
+    }
+    batches.confirmReturnNotification(batch, notificationId);
+    complete(id, true);
+  }
+
   private String prepare(Request request, TechnicalDataActor actor) {
     context.lockActor(actor);
     String fingerprint =
@@ -204,19 +297,16 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
     }
     var first = requireTask(request.targets().getFirst().taskId(), actor, false);
     var document = context.document(first.getOaFormId());
-    var node = access.materialNode(document.formId());
+    jdbc.queryForObject("SELECT id FROM oa_form WHERE id=? FOR UPDATE", Long.class, document.formId());
+    if (Boolean.TRUE.equals(jdbc.queryForObject("""
+        SELECT EXISTS(SELECT 1 FROM lp_oa_technical_batch WHERE oa_form_id=? AND operation='I05'
+          AND status IN ('PREPARED','SENDING','REJECT_READY','RETURN_FAILED','OA_ACCEPTED','UNKNOWN'))
+        """, Boolean.class, document.formId()))) {
+      throw invalid("本单已有退回等待 OA 完成，请先处理原退回");
+    }
+    var node = access.quoterNode(document.formId());
     if (node.actorId() != actor.userId()) throw invalid("当前账号与 OA 报价员身份不一致");
-    int confirming =
-        jdbc.queryForObject(
-            """
-            SELECT COUNT(*) FROM lp_oa_material_confirmation WHERE oa_form_id=? AND form_version=?
-              AND material_work_item_id=? AND status IN ('PREPARED','SENDING','SUCCESS','UNKNOWN')
-            """,
-            Integer.class,
-            node.formId(),
-            node.formVersion(),
-            node.workItemId());
-    if (confirming > 0) throw invalid("本轮资料已确认或正在确认，不能同时退回，请核实 OA 当前节点");
+    var rejection = client.previewRejection(document.requestId(), node.employeeNo(), document.rejectToNodeId());
     String id = UUID.randomUUID().toString();
     batches.insert(id, "I05", document.formId(), actor.userId(), request.requestKey(), fingerprint);
     List<OaTechnicalReturnClient.Target> commands = new ArrayList<>();
@@ -225,7 +315,7 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
       commands.addAll(
           prepareProductReturn(target, id, request.requestKey(), document, node, actor));
     }
-    batches.prepared(
+    batches.prepareReturn(
         id,
         client.preview(
             new OaTechnicalReturnClient.Request(
@@ -233,7 +323,7 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
                 document.processCode(),
                 node.employeeNo(),
                 commands,
-                context.workbenchUrl(document.formId()))));
+                context.workbenchUrl(document.formId()))), rejection);
     return id;
   }
 
@@ -243,7 +333,7 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
       String batchId,
       String requestKey,
       TechnicalDataOaContext.Document document,
-      OaWorkflowAccessPolicy.MaterialNode node,
+      OaWorkflowAccessPolicy.QuoterNode node,
       TechnicalDataActor actor) {
     List<OaTechnicalReturnClient.Target> commands = new ArrayList<>();
     var task = requireTask(target.taskId(), actor, true);
@@ -258,10 +348,10 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
               .filter(value -> code.equals(value.getModuleType()))
               .findFirst()
               .orElseThrow();
-      if (!"APPROVED".equals(module.getModuleStatus())
+      if (!TechnicalDataSubmissionState.submitted(module.getModuleStatus())
           || module.getAssigneeUserId() == null
           || !Integer.valueOf(1).equals(module.getRequiredFlag()))
-        throw invalid("只能退回已批准的补录板块：" + code);
+        throw invalid("只能退回已提交的补录板块：" + code);
       groups.computeIfAbsent(module.getAssigneeUserId(), ignored -> new ArrayList<>()).add(code);
     }
     var product = products.lockActiveProducts(task.getId()).getFirst();
@@ -271,7 +361,7 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
               .filter(row -> row.userId() == group.getKey())
               .findFirst()
               .orElseThrow();
-      if (!approved(person)) throw invalid("原技术员任务未批准，或已有退回等待 OA 确认");
+      if (!submitted(person)) throw invalid("原技术员任务尚未成功提交，或已有退回等待 OA 确认");
       var selected =
           group.getValue().stream()
               .sorted(Comparator.comparingInt(TechnicalDataModuleType::orderOf))
@@ -324,54 +414,48 @@ WHERE r.task_id=? AND r.active_flag=1 AND m.technical_batch_id IS NOT NULL ORDER
 
   private void validateBeforeSending(OaTechnicalBatchRepository.Batch batch) {
     jdbc.queryForObject("SELECT id FROM oa_form WHERE id=? FOR UPDATE", Long.class, batch.formId());
-    if (!"PREPARED".equals(batches.find(batch.id(), false).status())) return;
-    var node = access.materialNode(batch.formId());
+    var node = access.quoterNode(batch.formId());
     for (long message : batches.messageIds(batch.id())) {
       var scope = payload(message);
       if (node.actorId() != batch.actorId()
           || node.formVersion() != scope.path("formVersion").asLong()
           || !node.workItemId().equals(scope.path("materialWorkItemId").asText())) {
-        throw invalid("OA 资料节点或需求版本已变化，本次退回未发送");
+        throw invalid("OA 报价员办理状态或需求版本已变化，本次退回未发送");
       }
       var person = recipients.findById(scope.path("recipientId").asLong());
       if (person == null
           || !person.active()
           || !"RETURN_PENDING".equals(person.todoStatus())
-          || !Objects.equals(person.returnMessageId(), message)) throw invalid("原技术任务已变化，本次退回未发送");
+          || !Objects.equals(person.returnMessageId(), message)
+          || !Objects.equals(person.latestSubmissionId(), scope.path("submissionId").asLong()))
+        throw invalid("原技术任务已变化，本次退回未发送");
     }
   }
 
-  private void requireApplicableReceipt(OaTechnicalBatchRepository.Batch batch, JsonNode scope) {
+  private void requireApplicableReceipt(OaTechnicalBatchRepository.Batch batch, JsonNode scope, boolean notifiedByOa) {
     var view = access.view(batch.formId());
     long version =
         jdbc.queryForObject(
             "SELECT source_version FROM lp_oa_quote_document WHERE oa_form_id=?",
             Long.class,
             batch.formId());
-    boolean sameMaterialNode =
-        Boolean.TRUE.equals(
-            jdbc.queryForObject(
-                """
-SELECT EXISTS(SELECT 1 FROM lp_oa_quote_document d JOIN lp_oa_workflow_state s
-  ON s.source_system=d.source_system AND s.environment=d.environment
-  AND s.workflow_request_id=d.external_document_id,
-  JSON_TABLE(s.active_work_items_json,'$[*]' COLUMNS(
-    work_item VARCHAR(128) PATH '$.workItemId', role_name VARCHAR(32) PATH '$.nodeRole')) w
-WHERE d.oa_form_id=? AND w.role_name='MATERIAL' AND w.work_item=?)
-""",
-                Boolean.class,
-                batch.formId(),
-                scope.path("materialWorkItemId").asText()));
+    // OA 通知已核验原流程和退回范围，回调身份无需具备报价员的浏览器办理权限。
+    boolean sameQuoterNode = notifiedByOa || view != null && view.canCost()
+        && access.quoterNode(batch.formId()).workItemId().equals(scope.path("materialWorkItemId").asText());
     if (view == null
         || view.syncError() != null
-        || !Set.of("MATERIAL_REVIEW", "TECHNICAL").contains(view.state())
+        || !Set.of("COSTING", "RECOSTING", "TECHNICAL").contains(view.state())
         || version != scope.path("formVersion").asLong()
-        || "MATERIAL_REVIEW".equals(view.state()) && !sameMaterialNode) {
+        || Set.of("COSTING", "RECOSTING").contains(view.state()) && !sameQuoterNode) {
       throw invalid("OA 已接收退回，但当前流程或需求版本已变化，尚未开放编辑，请核实原请求");
     }
   }
 
   private Result complete(String id) {
+    return complete(id, false);
+  }
+
+  private Result complete(String id, boolean notifiedByOa) {
     var original = batches.find(id, false);
     jdbc.queryForObject(
         "SELECT id FROM oa_form WHERE id=? FOR UPDATE", Long.class, original.formId());
@@ -394,7 +478,10 @@ WHERE d.oa_form_id=? AND w.role_name='MATERIAL' AND w.work_item=?)
         throw invalid("原退回任务已变化，请核实 OA 回执，不能开放其他任务");
       }
       if (accepted) {
-        requireApplicableReceipt(batch, scope);
+        if (!"REJECT".equals(batch.returnStep()) || batch.peopleResult() == null
+            || batch.peopleResult().status() != OaWorkflowResult.Status.SUCCESS)
+          throw invalid("退回两步尚未全部确认，不能开放编辑");
+        requireApplicableReceipt(batch, scope, notifiedByOa);
         List<String> selected = new ArrayList<>();
         scope.path("moduleTypes").forEach(value -> selected.add(value.asText()));
         recipients.revisionScope(person.id(), selected);
@@ -421,7 +508,9 @@ SET m.oa_edit_allowed=1 WHERE p.task_id=? AND p.active_flag=1 AND m.module_type=
             batch.requestKey(),
             "I05-CONFIRMED:" + message);
       } else {
-        recipients.state(person.id(), person.latestSubmissionId(), "RETURN_PENDING", "DONE", null);
+        var submission = submissions.selectById(person.latestSubmissionId());
+        recipients.state(person.id(), person.latestSubmissionId(), "RETURN_PENDING",
+            "APPROVED".equals(submission.getSubmissionStatus()) ? "DONE" : "SUBMITTED", null);
         recipients.refreshTask(task.getId());
         workflow.refreshFinance(task.getOaFlowId());
       }
@@ -431,10 +520,10 @@ SET m.oa_edit_allowed=1 WHERE p.task_id=? AND p.active_flag=1 AND m.module_type=
     return result(batches.find(id, false));
   }
 
-  private boolean approved(Recipient person) {
-    if (!"DONE".equals(person.todoStatus()) || person.latestSubmissionId() == null) return false;
+  private boolean submitted(Recipient person) {
+    if (!TechnicalDataSubmissionState.submittedTodo(person.todoStatus()) || person.latestSubmissionId() == null) return false;
     var submission = submissions.selectById(person.latestSubmissionId());
-    return submission != null && "APPROVED".equals(submission.getSubmissionStatus());
+    return submission != null && TechnicalDataSubmissionState.acceptedByOa(submission.getSubmissionStatus());
   }
 
   private QuoteTechTask requireTask(long id, TechnicalDataActor actor, boolean lock) {
@@ -453,7 +542,9 @@ SET m.oa_edit_allowed=1 WHERE p.task_id=? AND p.active_flag=1 AND m.module_type=
   }
 
   private Result result(OaTechnicalBatchRepository.Batch batch) {
-    return new Result(batch.id(), batch.requestKey(), batch.status(), batch.result());
+    return new Result(batch.id(), batch.requestKey(), batch.status(), batch.result(),
+        batch.returnStep(), batch.returnAttempt(), "REJECT".equals(batch.returnStep())
+            && Set.of("RETURN_FAILED", "REJECT_READY").contains(batch.status()), batch.actorId());
   }
 
   private static IllegalArgumentException invalid(String message) {

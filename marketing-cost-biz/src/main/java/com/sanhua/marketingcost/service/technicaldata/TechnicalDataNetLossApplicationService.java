@@ -53,8 +53,8 @@ public class TechnicalDataNetLossApplicationService {
             materialOrg(scope.task()), year(scope.product()), scope.task().getBusinessUnitType()) : null;
     // 当前页展示公共优先的选择；查看明确历史版本时只展示原快照，不重算历史取值。
     var applicableRate = publicSource == null ? null : NetLossRateQuery.select(publicSource,
-        "MISSING".equals(publicSource.status()) && "APPROVED".equals(scope.module().getModuleStatus()) && version != null
-            && "APPROVED".equals(version.getVersionStatus())
+        "MISSING".equals(publicSource.status()) && TechnicalDataSubmissionState.submitted(scope.module().getModuleStatus()) && version != null
+            && TechnicalDataSubmissionState.submitted(version.getVersionStatus())
             ? TechnicalDataNetLossRules.costingInput(content) : null);
     return new TechnicalDataNetLossResponse(scope.task().getId(), productId, scope.product().getRowVersion(),
         selected, version == null ? null : version.getVersionStatus(), scope.module().getModuleStatus(),

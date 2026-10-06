@@ -21,9 +21,11 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
+import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
+import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
 import com.sanhua.marketingcost.service.FinancePricePrepareService;
 import com.sanhua.marketingcost.service.FinanceQuoteBasePriceService;
@@ -47,6 +49,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
 
   private OaFormMapper oaFormMapper;
   private OaFormItemMapper oaFormItemMapper;
+  private QuoteBomStatusMapper quoteBomStatusMapper;
   private QuotePriceTypeRecognitionService priceTypeRecognitionService;
   private PricePrepareService pricePrepareService;
   private FinancePricePrepareService financePricePrepareService;
@@ -59,6 +62,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
   void setUp() {
     oaFormMapper = mock(OaFormMapper.class);
     oaFormItemMapper = mock(OaFormItemMapper.class);
+    quoteBomStatusMapper = mock(QuoteBomStatusMapper.class);
     priceTypeRecognitionService = mock(QuotePriceTypeRecognitionService.class);
     pricePrepareService = mock(PricePrepareService.class);
     financePricePrepareService = mock(FinancePricePrepareService.class);
@@ -69,6 +73,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
         new QuotePricePrepareWorkbenchServiceImpl(
             oaFormMapper,
             oaFormItemMapper,
+            quoteBomStatusMapper,
             priceTypeRecognitionService,
             pricePrepareService,
             financePricePrepareService,
@@ -178,6 +183,30 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     org.assertj.core.api.Assertions.assertThat(response.getReadiness().getPrepareNo()).isNull();
     verify(pricePrepareService, org.mockito.Mockito.never()).generate(any());
     verify(financePricePrepareService, org.mockito.Mockito.never()).generateFromOa(any());
+  }
+
+  @Test
+  void electronicDrawingPricePreparationUsesPublishedDrawingStructure() {
+    prepareConfirmedScope();
+    QuoteBomStatus drawing = new QuoteBomStatus();
+    drawing.setBomSource("ELECTRONIC_DRAWING_BOM");
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(drawing);
+    PricePrepareCalculationResult calculation = new PricePrepareCalculationResult();
+    calculation.setSummary(generated("PPR-DRAWING", QuotePriceScenarioType.OA_LOCKED.name()));
+    calculation.setItems(List.of());
+    calculation.setGaps(List.of());
+    when(pricePrepareService.calculate(any())).thenReturn(calculation);
+    QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
+    request.setPeriodMonth(CURRENT_MONTH);
+
+    service.checkPriceSources("OA-WORKBENCH", 101L, request);
+
+    ArgumentCaptor<com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest> captor =
+        ArgumentCaptor.forClass(
+            com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest.class);
+    verify(pricePrepareService).calculate(captor.capture());
+    org.assertj.core.api.Assertions.assertThat(captor.getValue().getSourceType())
+        .isEqualTo("E_DRAWING");
   }
 
   @Test

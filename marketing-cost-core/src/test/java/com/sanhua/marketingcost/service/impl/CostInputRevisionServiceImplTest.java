@@ -43,6 +43,13 @@ class CostInputRevisionServiceImplTest {
     JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
     when(jdbcTemplate.queryForList(anyString()))
         .thenReturn(List.of(Map.of("Checksum", 12345L)));
+    when(jdbcTemplate.queryForList(anyString(), anyString())).thenReturn(List.of());
+    when(jdbcTemplate.queryForList(CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
+        String.class, 11L, null, 11L, null))
+        .thenReturn(List.of("A-M"));
+    when(jdbcTemplate.queryForList(CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
+        String.class, 12L, null, 12L, null))
+        .thenReturn(List.of("B-M"));
     CostInputRevisionServiceImpl service = new CostInputRevisionServiceImpl(jdbcTemplate);
 
     Map<Long, String> revisions =
@@ -50,7 +57,7 @@ class CostInputRevisionServiceImplTest {
 
     assertThat(revisions).hasSize(2);
     assertThat(revisions.get(11L)).isNotEqualTo(revisions.get(12L));
-    verify(jdbcTemplate, times(20)).queryForList(anyString());
+    verify(jdbcTemplate, times(15)).queryForList(anyString());
   }
 
   @Test
@@ -93,6 +100,41 @@ class CostInputRevisionServiceImplTest {
     when(jdbc.queryForList("CHECKSUM TABLE `lp_product_property_rule`"))
         .thenReturn(List.of(Map.of("Checksum", 200L)));
     assertThat(service.currentRevision(form(), item(11L,"P-1"))).isNotEqualTo(original);
+  }
+
+  @Test
+  void changingOnlyTheOtherProductsPriceKeepsTheCurrentCostRevision() {
+    JdbcTemplate jdbc = mock(JdbcTemplate.class);
+    when(jdbc.queryForList(anyString()))
+        .thenReturn(List.of(Map.of("Checksum", 100L)));
+    when(jdbc.queryForList(anyString(), anyString())).thenReturn(List.of());
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
+        String.class, 11L, "2026-08", 11L, "2026-08"))
+        .thenReturn(List.of("A-M"));
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
+        String.class, 12L, "2026-08", 12L, "2026-08"))
+        .thenReturn(List.of("B-M"));
+    String fixedSql = "SELECT * FROM `lp_price_fixed_item` WHERE material_code IN (?) ORDER BY id";
+    when(jdbc.queryForList(fixedSql, "A-M"))
+        .thenReturn(List.of(Map.of("id", 1L, "material_code", "A-M", "fixed_price", 10)));
+    when(jdbc.queryForList(fixedSql, "B-M"))
+        .thenReturn(List.of(Map.of("id", 2L, "material_code", "B-M", "fixed_price", 10)),
+            List.of(Map.of("id", 2L, "material_code", "B-M", "fixed_price", 15)));
+    var service = new CostInputRevisionServiceImpl(jdbc);
+    var form = form();
+    var items = List.of(item(11L, "A"), item(12L, "B"));
+
+    var before = service.currentRevisions(form, items, "2026-08");
+    var afterBPriceChange = service.currentRevisions(form, items, "2026-08");
+
+    assertThat(afterBPriceChange.get(11L)).isEqualTo(before.get(11L));
+    assertThat(afterBPriceChange.get(12L)).isNotEqualTo(before.get(12L));
+
+    when(jdbc.queryForList("CHECKSUM TABLE `lp_three_expense_rate`"))
+        .thenReturn(List.of(Map.of("Checksum", 200L)));
+    var afterSharedRateChange = service.currentRevisions(form, items, "2026-08");
+    assertThat(afterSharedRateChange.get(11L)).isNotEqualTo(afterBPriceChange.get(11L));
+    assertThat(afterSharedRateChange.get(12L)).isNotEqualTo(afterBPriceChange.get(12L));
   }
 
   @Test

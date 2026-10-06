@@ -62,6 +62,22 @@ class TechnicalBomContributionsTest {
         .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("单位");
   }
 
+  @Test void replacesOnlyIncompletePackageOccurrencesWhileKeepingCompletePackaging() {
+    use(List.of(line("PACKAGE","replacement","BOX","0.5","pcs")));
+    var packageMaster = master("PK","pcs","PACK"); packageMaster.setMainCategoryName("包装组件");
+    when(materials.selectByLatestBatchAndCodes(anyList(),isNull(),eq("COMMERCIAL")))
+        .thenReturn(List.of(packageMaster, master("BOX","pcs","PACK")));
+    var complete = row("PK",1,"/PRODUCT/PK@1/");
+    var child = row("CHILD",2,"/PRODUCT/PK@1/CHILD/"); child.setParentCode("PK");
+    var empty = row("PK",2,"/PRODUCT/MAKE/PK@2/"); empty.setParentCode("MAKE");
+    var result = service.merge(10L,"2026-09",List.of(row("PRODUCT",0,"/PRODUCT/"),complete,child,
+        row("MAKE",1,"/PRODUCT/MAKE/"),empty));
+    assertThat(result).extracting(BomRawHierarchy::getPath).contains(complete.getPath(),child.getPath())
+        .doesNotContain(empty.getPath());
+    assertThat(result.getLast().getQtyPerTop()).isEqualByComparingTo("0.5");
+    assertThat(result.stream().filter(row -> "TECH_PACKAGE".equals(row.getSourceType()))).hasSize(1);
+  }
+
   @Test void rejectsSolderWhoseCurrentMaterialClassificationChanged() {
     use(List.of(line("SOLDER","weld","WELD","1","kg")));
     when(materials.selectByLatestBatchAndCodes(anyList(),isNull(),eq("COMMERCIAL")))

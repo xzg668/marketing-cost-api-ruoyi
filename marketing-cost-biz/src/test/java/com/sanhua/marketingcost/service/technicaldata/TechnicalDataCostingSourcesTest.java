@@ -57,7 +57,7 @@ class TechnicalDataCostingSourcesTest {
     when(repository.findVersion(39L)).thenReturn(Optional.of(submitted));
     when(codec.fingerprint(any(),any(),anyList(),anyList(),anyList())).thenReturn("approved");
     when(workflow.findFlow(50L)).thenReturn(flow(true,"confirmed"));
-    when(workflow.approvalBasis(50L)).thenReturn("basis");
+    when(workflow.submissionBasis(50L)).thenReturn("basis");
     when(json.canonicalHash("basis")).thenReturn("confirmed");
     var module = new QuoteTechModule(); module.setModuleType("PACKAGE"); module.setCurrentVersionId(39L);
     when(modules.selectByProductId(20L)).thenReturn(List.of(module));
@@ -87,12 +87,12 @@ class TechnicalDataCostingSourcesTest {
     verifyNoInteractions(shared,repository);
   }
 
-  @Test void ownApprovedMaterialIsReadableForI06PreparationBeforeQuoterConfirmation() {
+  @Test void ownSubmittedMaterialIsReadableDuringPreparationBeforeQuoterAcceptance() {
     task.setOaFormId(1L);
     when(workflow.findFlow(50L)).thenReturn(flow(false, null));
     service.select(10L, "2026-09").requireReady();
     task.setTaskStatus("SUBMITTED");
-    assertBlocked("TECH_DATA_TASK_NOT_APPROVED");
+    service.select(10L, "2026-09").requireReady();
   }
 
   @Test void approvalDoesNotReplaceFinanceConfirmation() {
@@ -104,9 +104,9 @@ class TechnicalDataCostingSourcesTest {
     assertBlocked("TECH_DATA_FINANCE_CONFIRMATION_REQUIRED");
   }
 
-  @Test void otherUnapprovedRequiredParticipantsBlockConsumption() {
-    task.setTaskStatus("SUBMITTED");
-    assertBlocked("TECH_DATA_TASK_NOT_APPROVED");
+  @Test void otherUnsubmittedRequiredParticipantsBlockConsumption() {
+    task.setTaskStatus("IN_PROGRESS");
+    assertBlocked("TECH_DATA_TASK_NOT_SUBMITTED");
   }
 
   @Test void materialPriceOwnerUsesTheSameBusinessGateAndReadableErrors() {
@@ -117,10 +117,10 @@ class TechnicalDataCostingSourcesTest {
         .isInstanceOfSatisfying(EffectiveTechnicalDataException.class, error ->
             assertThat(error.errorCode()).isEqualTo("TECH_DATA_FINANCE_CONFIRMATION_REQUIRED"))
         .hasMessageContaining("价格");
-    task.setTaskStatus("SUBMITTED");
+    task.setTaskStatus("PREPARED");
     assertThatThrownBy(() -> service.requireSource(context, owner))
         .isInstanceOfSatisfying(EffectiveTechnicalDataException.class, error ->
-            assertThat(error.errorCode()).isEqualTo("TECH_DATA_TASK_NOT_APPROVED"));
+            assertThat(error.errorCode()).isEqualTo("TECH_DATA_TASK_NOT_SUBMITTED"));
   }
 
   @Test void organizationAndAnnualDataCannotBeSilentlyReused() {
@@ -146,13 +146,13 @@ class TechnicalDataCostingSourcesTest {
     task.setTaskStatus("EDITING");
     var draft = repository.findVersion(39L).orElseThrow(); draft.setProductId(20L); draft.setVersionStatus("DRAFT");
     assertThat(service.preparationSources(10L,"2026-09").get("PACKAGE").version().getId()).isEqualTo(39L);
-    assertBlocked("TECH_DATA_TASK_NOT_APPROVED");
+    assertBlocked("TECH_DATA_TASK_NOT_SUBMITTED");
   }
 
   @Test void anotherQuoteCannotUseAnUnapprovedOriginalDraftEvenForPreparation() {
     task.setTaskStatus("EDITING");
     assertThatThrownBy(() -> service.preparationSources(10L,"2026-09"))
-        .isInstanceOf(EffectiveTechnicalDataException.class).hasMessageContaining("尚未全部审批通过");
+        .isInstanceOf(EffectiveTechnicalDataException.class).hasMessageContaining("尚未全部提交");
   }
 
   private void assertBlocked(String code) {

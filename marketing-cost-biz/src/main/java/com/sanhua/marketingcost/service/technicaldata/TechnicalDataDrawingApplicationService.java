@@ -36,6 +36,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 public class TechnicalDataDrawingApplicationService {
   private final TechnicalDataReadPolicy readPolicy;
+  private final com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingBomScope bomScope;
   private final TechnicalDataSharedModules sharedModules;
   private final QuoteTechnicalDataRepository repository;
   private final TechnicalDataTaskRepository tasks;
@@ -53,8 +54,10 @@ public class TechnicalDataDrawingApplicationService {
       ElectronicDrawingWorkflowContextPort contexts, ElectronicDrawingWorkflowOrchestrator workflow,
       ElectronicDrawingProductLookup productLookup, ElectronicDrawingSourceNodeRepository sourceNodes,
       QuoteBomSupplementVersionMapper sources, TechnicalDataSourceSnapshotFactory snapshots,
-      PlatformTransactionManager transactionManager, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy) {
+      PlatformTransactionManager transactionManager, TechnicalDataSharedModules sharedModules, TechnicalDataReadPolicy readPolicy,
+      com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingBomScope bomScope) {
     this.readPolicy=readPolicy;
+    this.bomScope=bomScope;
     this.sharedModules = sharedModules;
     this.repository = repository; this.tasks = tasks; this.codec = codec; this.contexts = contexts;
     this.workflow = workflow; this.productLookup = productLookup; this.sourceNodes = sourceNodes;
@@ -73,7 +76,9 @@ public class TechnicalDataDrawingApplicationService {
     if (source != null && (!Objects.equals(source.getOaFormItemId(), scope.product().getOaFormItemId())
         || !Objects.equals(source.getPeriodMonth(), scope.product().getAccountingMonth()))) throw invalid("图库来源归属不一致");
     var nodes = source == null ? List.<ElectronicDrawingSourceNode>of() : sourceNodes.findByVersionId(source.getId());
-    boolean matched = !nodes.isEmpty() && nodes.stream().allMatch(TechnicalDataDrawingApplicationService::matched);
+    var plan = nodes.isEmpty() ? null : bomScope.inspect(context, nodes, source.getEffectiveFrom() == null
+        ? java.time.YearMonth.parse(context.accountingMonth()).atDay(1) : source.getEffectiveFrom());
+    boolean matched = plan != null && plan.pendingIds().isEmpty();
     boolean historical = versionId != null || version != null && !"DRAFT".equals(version.getVersionStatus());
     boolean acquired = TechnicalDataDrawingRules.validate(drawing, scope.product()).isEmpty()
         && (historical || "DRAWING_SOURCE_VERIFIED".equals(scope.module().getLastValidationCode()));
@@ -81,10 +86,12 @@ public class TechnicalDataDrawingApplicationService {
     return new TechnicalDataDrawingResponse(productId, scope.product().getRowVersion(), selected,
         scope.product().getAccountingMonth(), !historical && actor.canEditModule(scope.task(), scope.module()),
         acquired, historical ? "显示本次提交时的图库明细" : scope.module().getLastValidationMessage(),
-        matched, composed, composed && "APPROVED".equals(source.getVersionStatus()),
+        matched, composed, composed && TechnicalDataSubmissionState.submitted(source.getVersionStatus()),
         drawing != null && !Objects.equals(drawing.sourceVersionId(), context.sourceVersionId()),
         drawing, productLookup.options(context), nodes.stream().map(node -> new TechnicalDataDrawingResponse.Resolution(
-            node.getId().toString(), node.getResolvedMaterialCode(), node.getMatchStatus())).toList(),
+            node.getId().toString(), node.getResolvedMaterialCode(), node.getMatchStatus(),
+            plan.branches().containsKey(node.getId()) ? plan.branches().get(node.getId()).state().name() : null,
+            plan.branches().containsKey(node.getId()) ? plan.branches().get(node.getId()).message() : null)).toList(),
         context.workflowId(), actor.canViewSupplementOverview());
   }
 
@@ -220,11 +227,6 @@ public class TechnicalDataDrawingApplicationService {
 
   private void updateProduct(QuoteTechProduct product, LocalDateTime now) {
     if (repository.updateProductPointers(product, product.getRowVersion(), now) != 1) throw conflict("产品资料已变化");
-  }
-
-  private static boolean matched(ElectronicDrawingSourceNode node) {
-    return Set.of(ElectronicDrawingSourceNode.MATCH_AUTO, ElectronicDrawingSourceNode.MATCH_MANUAL).contains(Objects.toString(node.getMatchStatus(), ""))
-        && node.getResolvedMaterialCode() != null && !node.getResolvedMaterialCode().isBlank();
   }
 
   private static LocalDateTime now() { return LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE).truncatedTo(ChronoUnit.SECONDS); }
