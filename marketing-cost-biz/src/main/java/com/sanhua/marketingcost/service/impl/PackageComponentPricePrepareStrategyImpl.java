@@ -11,6 +11,7 @@ import com.sanhua.marketingcost.entity.PackageComponentPrice;
 import com.sanhua.marketingcost.entity.PackageComponentPriceDetail;
 import com.sanhua.marketingcost.service.PackageComponentPricePrepareStrategy;
 import com.sanhua.marketingcost.service.PackageComponentPriceService;
+import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -55,7 +56,7 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
         bomPurpose,
         sourceType,
         planItem,
-        true);
+        true, null);
   }
 
   @Override
@@ -75,7 +76,7 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
         bomPurpose,
         sourceType,
         planItem,
-        false);
+        false, null);
   }
 
   @Override
@@ -95,7 +96,23 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
         bomPurpose,
         sourceType,
         planItem,
-        true);
+        true, null);
+  }
+
+  @Override
+  public PackageComponentPricePrepareResult prepare(
+      String prepareNo, String oaNo, String periodMonth, LocalDateTime priceAsOfTime,
+      String bomPurpose, String sourceType, PricePreparePlanItem planItem,
+      PricePrepareScenarioContext scenarioContext) {
+    return execute(prepareNo, oaNo, periodMonth, priceAsOfTime, bomPurpose, sourceType, planItem, true, scenarioContext);
+  }
+
+  @Override
+  public PackageComponentPricePrepareResult calculate(
+      String prepareNo, String oaNo, String periodMonth, LocalDateTime priceAsOfTime,
+      String bomPurpose, String sourceType, PricePreparePlanItem planItem,
+      PricePrepareScenarioContext scenarioContext) {
+    return execute(prepareNo, oaNo, periodMonth, priceAsOfTime, bomPurpose, sourceType, planItem, false, scenarioContext);
   }
 
   private PackageComponentPricePrepareResult execute(
@@ -106,7 +123,7 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
       String bomPurpose,
       String sourceType,
       PricePreparePlanItem planItem,
-      boolean persist) {
+      boolean persist, PricePrepareScenarioContext scenarioContext) {
     String packageMaterialCode = planItem == null ? null : trimToNull(planItem.getMaterialCode());
     String topProductCode = planItem == null ? null : trimToNull(planItem.getTopProductCode());
     if (packageMaterialCode == null || topProductCode == null) {
@@ -122,6 +139,7 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
 
     PackagePriceRequest request = new PackagePriceRequest();
     request.setPackageMaterialCode(packageMaterialCode);
+    if (scenarioContext != null) request.setSupplierPriceReviewContext(scenarioContext.supplierReviews());
     request.setPriceOrgCode(requiredPriceOrgCode(planItem));
     request.setPeriodMonth(periodMonth);
     request.setOaNo(oaNo);

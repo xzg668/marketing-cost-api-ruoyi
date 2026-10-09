@@ -13,6 +13,8 @@ public class CostRunContext {
   public static final String SCENE_MONTHLY_REPRICE = "MONTHLY_REPRICE";
   public static final String BOM_SOURCE_POLICY_HISTORICAL_OA_BOM = "HISTORICAL_OA_BOM";
 
+  @JsonIgnore
+  private com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext supplierPriceReviewContext;
   private String scene;
   private String pricingMonth;
   private LocalDateTime priceAsOfTime;

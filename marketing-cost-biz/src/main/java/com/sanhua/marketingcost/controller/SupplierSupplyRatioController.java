@@ -47,6 +47,7 @@ public class SupplierSupplyRatioController {
       @RequestParam(required = false) String specModel,
       @RequestParam(required = false) String supplierName,
       @RequestParam(required = false) String sourceType,
+      @RequestParam(defaultValue = "1") Integer isActive,
       @RequestParam(required = false) String businessUnitType,
       @RequestParam(defaultValue = "1") int page,
       @RequestParam(defaultValue = "20") int pageSize) {
@@ -57,6 +58,7 @@ public class SupplierSupplyRatioController {
             specModel,
             supplierName,
             sourceType,
+            isActive,
             page,
             pageSize,
             resolveBusinessUnitType(businessUnitType)));
@@ -67,6 +69,7 @@ public class SupplierSupplyRatioController {
   public CommonResult<SupplierSupplyRatioImportResponse> importExcel(
       @RequestPart("file") MultipartFile file,
       @RequestParam(required = false) String businessUnitType,
+      @RequestParam(required = false) String sheetName,
       Authentication authentication) {
     if (file == null || file.isEmpty()) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "请上传供应商供货比例 Excel");
@@ -77,7 +80,7 @@ public class SupplierSupplyRatioController {
               file.getInputStream(),
               file.getOriginalFilename(),
               resolveBusinessUnitType(businessUnitType),
-              currentUsername(authentication)));
+              currentUsername(authentication), sheetName));
     } catch (IOException e) {
       return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "读取上传文件失败: " + e.getMessage());
     } catch (IllegalArgumentException e) {

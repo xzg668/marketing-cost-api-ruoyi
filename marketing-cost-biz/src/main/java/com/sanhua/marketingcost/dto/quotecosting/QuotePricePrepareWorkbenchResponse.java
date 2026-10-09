@@ -14,6 +14,7 @@ import lombok.Setter;
 @Setter
 public class QuotePricePrepareWorkbenchResponse {
   private com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceCorrection technicalPriceCorrection;
+  private java.util.List<com.sanhua.marketingcost.service.pricing.SupplierPriceReview> supplierPriceReviews = java.util.List.of();
   private String oaNo;
   private Long oaFormItemId;
   private String topProductCode;

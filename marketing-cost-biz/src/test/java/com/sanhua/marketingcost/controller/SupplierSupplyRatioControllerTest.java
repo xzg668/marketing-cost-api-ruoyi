@@ -52,19 +52,19 @@ class SupplierSupplyRatioControllerTest {
         new com.sanhua.marketingcost.dto.SupplierSupplyRatioImportResponse();
     response.setBatchNo("SSR-batch-1");
     response.setInsertedRows(2);
-    when(importService.importExcel(any(InputStream.class), eq("ratio.xls"), eq("COMMERCIAL"), eq("alice")))
+    when(importService.importExcel(any(InputStream.class), eq("ratio.xls"), eq("COMMERCIAL"), eq("alice"), eq(null)))
         .thenReturn(response);
 
     CommonResult<com.sanhua.marketingcost.dto.SupplierSupplyRatioImportResponse> result =
         controller.importExcel(
             new MockMultipartFile("file", "ratio.xls", "application/vnd.ms-excel", new byte[]{1}),
-            null,
+            null, null,
             new UsernamePasswordAuthenticationToken("alice", "N/A"));
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getBatchNo()).isEqualTo("SSR-batch-1");
     assertThat(result.getData().getInsertedRows()).isEqualTo(2);
-    verify(importService).importExcel(any(InputStream.class), eq("ratio.xls"), eq("COMMERCIAL"), eq("alice"));
+    verify(importService).importExcel(any(InputStream.class), eq("ratio.xls"), eq("COMMERCIAL"), eq("alice"), eq(null));
   }
 
   @AfterEach
@@ -76,28 +76,28 @@ class SupplierSupplyRatioControllerTest {
   @DisplayName("GET /supplier-supply-ratios：分页查询透传过滤条件和业务单元")
   void pagePassesFiltersToService() {
     SupplierSupplyRatio row = row(10L);
-    when(service.page("203", "小阀座", "SHF", "大新", "EXCEL", 2, 30, "HOUSEHOLD"))
+    when(service.page("203", "小阀座", "SHF", "大新", "EXCEL", 1, 2, 30, "HOUSEHOLD"))
         .thenReturn(new SupplierSupplyRatioPageResponse(1, List.of(row)));
 
     CommonResult<SupplierSupplyRatioPageResponse> result =
-        controller.page("203", "小阀座", "SHF", "大新", "EXCEL", " HOUSEHOLD ", 2, 30);
+        controller.page("203", "小阀座", "SHF", "大新", "EXCEL", 1, " HOUSEHOLD ", 2, 30);
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getTotal()).isEqualTo(1);
-    verify(service).page("203", "小阀座", "SHF", "大新", "EXCEL", 2, 30, "HOUSEHOLD");
+    verify(service).page("203", "小阀座", "SHF", "大新", "EXCEL", 1, 2, 30, "HOUSEHOLD");
   }
 
   @Test
   @DisplayName("GET /supplier-supply-ratios：未传业务单元时使用当前登录上下文")
   void pageUsesBusinessUnitContextWhenRequestParamMissing() {
-    when(service.page(null, null, null, null, null, 1, 20, "COMMERCIAL"))
+    when(service.page(null, null, null, null, null, 1, 1, 20, "COMMERCIAL"))
         .thenReturn(new SupplierSupplyRatioPageResponse(0, List.of()));
 
     CommonResult<SupplierSupplyRatioPageResponse> result =
-        controller.page(null, null, null, null, null, null, 1, 20);
+        controller.page(null, null, null, null, null, 1, null, 1, 20);
 
     assertThat(result.isSuccess()).isTrue();
-    verify(service).page(null, null, null, null, null, 1, 20, "COMMERCIAL");
+    verify(service).page(null, null, null, null, null, 1, 1, 20, "COMMERCIAL");
   }
 
   @Test
@@ -154,6 +154,7 @@ class SupplierSupplyRatioControllerTest {
             String.class,
             String.class,
             String.class,
+            Integer.class,
             String.class,
             int.class,
             int.class);
@@ -170,6 +171,7 @@ class SupplierSupplyRatioControllerTest {
         SupplierSupplyRatioController.class.getMethod(
             "importExcel",
             org.springframework.web.multipart.MultipartFile.class,
+            String.class,
             String.class,
             org.springframework.security.core.Authentication.class);
 

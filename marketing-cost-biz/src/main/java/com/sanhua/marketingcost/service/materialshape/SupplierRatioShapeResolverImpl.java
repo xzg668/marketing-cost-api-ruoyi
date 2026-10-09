@@ -187,6 +187,7 @@ public class SupplierRatioShapeResolverImpl
             new QueryWrapper<SupplierSupplyRatio>()
                 .eq("business_unit_type", first.materialOrganizationCode())
                 .in("material_code", materialCodes)
+                .eq("is_active", 1)
                 .eq("deleted", 0)
                 .and(
                     nested ->

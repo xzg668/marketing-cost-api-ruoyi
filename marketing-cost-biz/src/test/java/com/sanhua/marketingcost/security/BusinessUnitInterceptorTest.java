@@ -150,6 +150,34 @@ class BusinessUnitInterceptorTest {
         assertTrue(out.contains("business_unit_type = 'COMMERCIAL'"));
     }
 
+    @Test
+    void priceTypeLatestVersionLockKeepsOrderAndLimitBeforeLock() throws Exception {
+        String sql = "SELECT id FROM lp_material_price_type WHERE material_code = ? "
+                + "ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE";
+        String out = interceptor.appendBusinessUnitCondition(sql, "", "business_unit_type", "COMMERCIAL");
+        assertEquals("SELECT id FROM lp_material_price_type WHERE material_code = ? "
+                + "AND business_unit_type = 'COMMERCIAL' ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE", out);
+    }
+
+    @Test
+    void lockRenderingPreservesParametersSkipLockedAndQuotedText() throws Exception {
+        String sql = "SELECT id FROM lp_material_price_type WHERE source = 'FOR UPDATE LIMIT 1' "
+                + "AND material_code = ? ORDER BY id LIMIT ? OFFSET ? FOR UPDATE SKIP LOCKED";
+        String out = interceptor.appendBusinessUnitCondition(sql, "", "business_unit_type", "COMMERCIAL");
+        assertTrue(out.contains("source = 'FOR UPDATE LIMIT 1' AND material_code = ?"), out);
+        assertTrue(out.endsWith("ORDER BY id LIMIT ? OFFSET ? FOR UPDATE SKIP LOCKED"), out);
+        assertTrue(out.contains("business_unit_type = 'COMMERCIAL'"), out);
+    }
+
+    @Test
+    void nestedLockStaysInsideItsQuery() throws Exception {
+        String sql = "SELECT id FROM (SELECT id FROM lp_material_price_type "
+                + "ORDER BY id LIMIT 1 FOR UPDATE) t";
+        String out = interceptor.appendBusinessUnitCondition(sql, "", "business_unit_type", "COMMERCIAL");
+        assertTrue(out.endsWith("ORDER BY id LIMIT 1 FOR UPDATE) t"), out);
+        assertTrue(out.contains("WHERE business_unit_type = 'COMMERCIAL'"), out);
+    }
+
     // ========== 上下文判断 ==========
 
     /** 未登录 → businessUnitType 为 null，isAdmin 为 false */

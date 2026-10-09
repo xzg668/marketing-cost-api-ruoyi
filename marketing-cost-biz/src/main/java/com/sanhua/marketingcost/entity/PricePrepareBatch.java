@@ -12,11 +12,14 @@ import lombok.Setter;
 /** 价格准备批次表。 */
 @Getter
 @Setter
-@TableName("lp_price_prepare_batch")
+@TableName(value = "lp_price_prepare_batch", autoResultMap = true)
 public class PricePrepareBatch {
 
   @TableId(type = IdType.AUTO)
   private Long id;
+
+  @TableField(typeHandler = com.sanhua.marketingcost.persistence.SupplierPriceReviewsTypeHandler.class)
+  private java.util.List<com.sanhua.marketingcost.service.pricing.SupplierPriceReview> supplierPriceReviews;
 
   private String prepareNo;
   private String oaNo;

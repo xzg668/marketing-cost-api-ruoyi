@@ -8,6 +8,8 @@ import lombok.Setter;
 @Getter
 @Setter
 public class PackagePriceRequest {
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext supplierPriceReviewContext;
   private String packageMaterialCode;
   private String priceOrgCode;
   private String periodMonth;

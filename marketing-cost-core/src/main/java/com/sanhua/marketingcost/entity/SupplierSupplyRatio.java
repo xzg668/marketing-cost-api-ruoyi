@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.entity;
 
 import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
@@ -34,11 +35,13 @@ public class SupplierSupplyRatio {
   private String materialShape;
   private String supplierName;
   private String supplierCode;
+  @TableField(updateStrategy = FieldStrategy.ALWAYS)
   private BigDecimal supplyRatio;
   private LocalDate effectiveFrom;
   private LocalDate effectiveTo;
   private String sourceType;
   private String sourceBatchNo;
+  private Integer isActive;
   private String importFileName;
   private String importedBy;
   private LocalDateTime importedAt;

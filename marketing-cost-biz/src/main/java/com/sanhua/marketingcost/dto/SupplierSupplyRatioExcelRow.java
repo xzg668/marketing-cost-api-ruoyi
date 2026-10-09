@@ -16,5 +16,4 @@ public class SupplierSupplyRatioExcelRow {
   private String supplierName;
   private String supplierCode;
   private BigDecimal supplyRatio;
-  private String dedupeKey;
 }

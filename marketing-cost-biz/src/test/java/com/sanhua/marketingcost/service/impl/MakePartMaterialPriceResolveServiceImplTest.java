@@ -68,7 +68,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
     ratioService = mock(SupplierSupplyRatioResolveService.class);
     linkedPriceEnsureService = mock(LinkedPriceEnsureService.class);
     List<PriceResolver> resolvers = List.of(
-        new FixedPriceResolver(fixedMapper, new SupplierPreferredPriceSelector(ratioService), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class)),
+        new FixedPriceResolver(fixedMapper, new com.sanhua.marketingcost.service.pricing.SupplierPriceSelectionService(mock(com.sanhua.marketingcost.mapper.SupplierSupplyRatioMapper.class), mock(com.sanhua.marketingcost.mapper.SupplierPriceDecisionMapper.class)), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class)),
         new LinkedPriceResolver(linkedMapper, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class)),
         RangePriceResolverTestSupport.create(rangeMapper));
     service =
@@ -86,7 +86,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
 
     MakePartMaterialPriceResolveResult result =
         service.resolveMaterialUnitPrice(
-            " RAW-001 ", "2026-05", LocalDate.parse("2026-05-20"), "OA-001", "COMMERCIAL");
+            " RAW-001 ", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", new com.sanhua.marketingcost.service.PricePrepareScenarioContext(null, null, null, null).forOrganization("210"));
 
     assertThat(result.getStatus()).isEqualTo("OK");
     assertThat(result.getMaterialCode()).isEqualTo("RAW-001");
@@ -197,11 +197,11 @@ class MakePartMaterialPriceResolveServiceImplTest {
 
     MakePartMaterialPriceResolveResult result =
         service.resolveMaterialUnitPrice(
-            "MISS-PRICE", "2026-05", LocalDate.parse("2026-05-20"), "OA-001", "COMMERCIAL");
+            "MISS-PRICE", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", new com.sanhua.marketingcost.service.PricePrepareScenarioContext(null, null, null, null).forOrganization("210"));
 
     assertThat(result.getStatus()).isEqualTo("MISSING_PRICE");
     assertThat(result.getUnitPrice()).isNull();
-    assertThat(result.getRemark()).contains("lp_price_fixed_item 无记录", "MISS-PRICE");
+    assertThat(result.getRemark()).contains("固定价无有效报价", "MISS-PRICE");
   }
 
   @Test
@@ -239,6 +239,8 @@ class MakePartMaterialPriceResolveServiceImplTest {
     row.setMaterialName("原材料");
     row.setSpecModel("SPEC");
     row.setFixedPrice(new BigDecimal(price));
+    row.setSupplierCode("SUP-A");
+    row.setEffectiveTo(LocalDate.parse("2027-01-01"));
     row.setEffectiveFrom(LocalDate.parse("2026-05-01"));
     return row;
   }

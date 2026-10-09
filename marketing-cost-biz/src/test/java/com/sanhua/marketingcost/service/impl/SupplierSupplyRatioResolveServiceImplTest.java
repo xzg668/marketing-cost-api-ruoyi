@@ -46,6 +46,8 @@ class SupplierSupplyRatioResolveServiceImplTest {
     QueryWrapper<SupplierSupplyRatio> query = capturedQuery();
     assertThat(query.getSqlSegment()).contains(
         "supply_ratio DESC",
+        "supply_ratio IS NOT NULL",
+        "is_active",
         "updated_at",
         "id DESC",
         "LIMIT 1");

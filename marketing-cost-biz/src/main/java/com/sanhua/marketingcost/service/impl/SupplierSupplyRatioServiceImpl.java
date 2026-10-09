@@ -33,10 +33,15 @@ public class SupplierSupplyRatioServiceImpl implements SupplierSupplyRatioServic
       String specModel,
       String supplierName,
       String sourceType,
+      Integer isActive,
       int page,
       int pageSize,
       String businessUnitType) {
+    if (isActive != null && isActive != 0 && isActive != 1) {
+      throw new IllegalArgumentException("有效状态只能是0或1");
+    }
     QueryWrapper<SupplierSupplyRatio> query = activeQuery(businessUnitType)
+        .eq(isActive != null, "is_active", isActive)
         .like(StringUtils.hasText(materialCode), "material_code", trim(materialCode))
         .like(StringUtils.hasText(materialName), "material_name", trim(materialName))
         .like(StringUtils.hasText(specModel), "spec_model", trim(specModel))
@@ -63,15 +68,15 @@ public class SupplierSupplyRatioServiceImpl implements SupplierSupplyRatioServic
     if (request == null) {
       throw new IllegalArgumentException("更新内容不能为空");
     }
-    if (request.getSupplyRatio() == null) {
-      throw new IllegalArgumentException("供货比例不能为空");
-    }
-    if (request.getSupplyRatio().compareTo(BigDecimal.ZERO) < 0) {
+    if (request.getSupplyRatio() != null && request.getSupplyRatio().compareTo(BigDecimal.ZERO) < 0) {
       throw new IllegalArgumentException("供货比例不能小于 0");
+    }
+    if (request.getSupplyRatio() != null && request.getSupplyRatio().compareTo(BigDecimal.ONE) > 0) {
+      throw new IllegalArgumentException("供货比例不能大于 100%");
     }
     SupplierSupplyRatio existing = requireActive(id);
 
-    // 物料代码、供应商是 Excel 导入幂等键，不能在普通编辑里变更。
+    // 普通维护保留原物料、供应商名称及导入批次。
     existing.setUnit(trimToNull(request.getUnit()));
     existing.setMaterialShape(trimToNull(request.getMaterialShape()));
     existing.setSupplierCode(trimToNull(request.getSupplierCode()));
@@ -88,7 +93,7 @@ public class SupplierSupplyRatioServiceImpl implements SupplierSupplyRatioServic
   @Transactional(rollbackFor = Exception.class)
   public void delete(Long id, String operator) {
     SupplierSupplyRatio existing = requireActive(id);
-    existing.setDeleted(1);
+    existing.setIsActive(0);
     existing.setUpdatedBy(currentOperator(operator));
     existing.setUpdatedAt(LocalDateTime.now());
     mapper.updateById(existing);
@@ -99,9 +104,10 @@ public class SupplierSupplyRatioServiceImpl implements SupplierSupplyRatioServic
       throw new IllegalArgumentException("供货比例 id 不能为空");
     }
     SupplierSupplyRatio existing = mapper.selectOne(
-        new QueryWrapper<SupplierSupplyRatio>().eq("id", id).eq("deleted", 0));
+        new QueryWrapper<SupplierSupplyRatio>().eq("id", id).eq("deleted", 0)
+            .eq("is_active", 1).last("FOR UPDATE"));
     if (existing == null) {
-      throw new IllegalArgumentException("供货比例不存在或已删除：id=" + id);
+      throw new IllegalArgumentException("供货比例不存在或已失效：id=" + id);
     }
     return existing;
   }

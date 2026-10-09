@@ -1,9 +1,7 @@
 package com.sanhua.marketingcost.service;
 
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioExcelRow;
-import com.sanhua.marketingcost.dto.SupplierSupplyRatioImportRow;
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioImportResponse;
-import com.sanhua.marketingcost.enums.SupplierSupplyRatioSourceType;
 import java.io.InputStream;
 import java.util.List;
 
@@ -13,7 +11,8 @@ public interface SupplierSupplyRatioImportService {
       InputStream input,
       String sourceFileName,
       String businessUnitType,
-      String operator);
+      String operator,
+      String sheetName);
 
   SupplierSupplyRatioImportResponse importRows(
       List<SupplierSupplyRatioExcelRow> rows,
@@ -21,16 +20,4 @@ public interface SupplierSupplyRatioImportService {
       String businessUnitType,
       String operator);
 
-  SupplierSupplyRatioImportResponse upsertFromRows(
-      List<SupplierSupplyRatioImportRow> rows,
-      SupplierSupplyRatioSourceType sourceType,
-      String batchNo);
-
-  SupplierSupplyRatioImportResponse upsertFromRows(
-      List<SupplierSupplyRatioImportRow> rows,
-      SupplierSupplyRatioSourceType sourceType,
-      String batchNo,
-      String sourceFileName,
-      String businessUnitType,
-      String operator);
 }

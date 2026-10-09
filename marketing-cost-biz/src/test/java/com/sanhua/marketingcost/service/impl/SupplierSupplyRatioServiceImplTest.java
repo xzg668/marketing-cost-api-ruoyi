@@ -46,7 +46,7 @@ class SupplierSupplyRatioServiceImplTest {
         });
 
     SupplierSupplyRatioPageResponse response = service.page(
-        "203240251", "小阀座", "SHF", "大新", "EXCEL", 2, 30, "COMMERCIAL");
+        "203240251", "小阀座", "SHF", "大新", "EXCEL", 1, 2, 30, "COMMERCIAL");
 
     assertThat(response.getTotal()).isEqualTo(1);
     assertThat(response.getRecords()).containsExactly(row);
@@ -75,7 +75,7 @@ class SupplierSupplyRatioServiceImplTest {
     when(mapper.selectPage(any(Page.class), any(Wrapper.class)))
         .thenAnswer(invocation -> invocation.getArgument(0));
 
-    service.page(null, null, null, null, null, -3, 999, null);
+    service.page(null, null, null, null, null, 1, -3, 999, null);
 
     ArgumentCaptor<Page<SupplierSupplyRatio>> pageCaptor = ArgumentCaptor.forClass(Page.class);
     verify(mapper).selectPage(pageCaptor.capture(), any(Wrapper.class));
@@ -93,6 +93,17 @@ class SupplierSupplyRatioServiceImplTest {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("不能小于 0");
     verify(mapper, never()).updateById(any(SupplierSupplyRatio.class));
+  }
+
+  @Test
+  void updateCanKeepRatioUnfilledWithoutConvertingItToZero() {
+    SupplierSupplyRatio existing = row(10L);
+    existing.setSupplyRatio(new BigDecimal("0.5"));
+    when(mapper.selectOne(any(Wrapper.class))).thenReturn(existing);
+    SupplierSupplyRatioUpdateRequest request = new SupplierSupplyRatioUpdateRequest();
+    SupplierSupplyRatio result = service.update(10L, request, "alice");
+    assertThat(result.getSupplyRatio()).isNull();
+    verify(mapper).updateById(existing);
   }
 
   @Test
@@ -134,7 +145,8 @@ class SupplierSupplyRatioServiceImplTest {
 
     service.delete(10L, "bob");
 
-    assertThat(existing.getDeleted()).isEqualTo(1);
+    assertThat(existing.getIsActive()).isEqualTo(0);
+    assertThat(existing.getDeleted()).isEqualTo(0);
     assertThat(existing.getUpdatedBy()).isEqualTo("bob");
     verify(mapper).updateById(existing);
   }

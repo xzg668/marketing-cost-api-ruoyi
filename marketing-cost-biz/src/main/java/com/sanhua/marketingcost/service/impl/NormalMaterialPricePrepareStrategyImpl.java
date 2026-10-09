@@ -460,6 +460,13 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       context.setMaterialOrganizationCode(
           trimToNull(planItem.getBomRow().getMaterialOrganizationCode()));
     }
+    if (scenarioContext != null) {
+      context.setSupplierPriceReviewContext(scenarioContext.supplierReviews());
+      context.setOaFormItemId(scenarioContext.supplierReviews().oaFormItemId());
+      if (!StringUtils.hasText(context.getPriceOrgCode())) {
+        context.setPriceOrgCode(scenarioContext.supplierReviews().priceOrgCode());
+      }
+    }
     context.setPriceScenarioType(scenarioType(scenarioContext).name());
     context.setPriceVariableOverrides(scenarioContext == null ? Map.of() : scenarioContext.variableOverrides());
     return context;

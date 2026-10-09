@@ -60,6 +60,8 @@ public class SupplierSupplyRatioResolveServiceImpl implements SupplierSupplyRati
     QueryWrapper<SupplierSupplyRatio> query = new QueryWrapper<SupplierSupplyRatio>()
         .eq("business_unit_type", businessUnitType)
         .eq("material_code", materialCode)
+        .eq("is_active", 1)
+        .isNotNull("supply_ratio")
         .eq("deleted", 0);
     if (pricingDate != null) {
       query.and(w -> w.le("effective_from", pricingDate).or().isNull("effective_from"))

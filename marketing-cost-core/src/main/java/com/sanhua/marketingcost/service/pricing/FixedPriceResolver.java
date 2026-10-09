@@ -9,13 +9,16 @@ import com.sanhua.marketingcost.entity.PriceFixedItem;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.PriceFixedItemMapper;
 import com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.time.LocalDate;
 import java.util.List;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
- * 固定价 Resolver —— 查 lp_price_fixed_item，按 effective_from 倒序取最新一条。
+ * 固定价：先按组织、核算日期选择每家供应商的有效版本，再执行通用供货比率规则。
  *
  * <p>对应 Excel"价格来源 = 固定采购价"。
  */
@@ -26,19 +29,17 @@ public class FixedPriceResolver implements PriceResolver {
       List.of("PURCHASE_FIXED", "PURCHASE");
   private static final List<String> SETTLE_FIXED_SOURCE_TYPES =
       List.of("SETTLE_FIXED", "SETTLE");
-  private static final String U9_PAYABLE_PROCESS_NO = "U9C-应付单列表";
-  private static final String U9_SOURCE_SYSTEM = "U9";
 
   private final TechnicalPriceSourceResolver technicalPrices;
   private final PriceFixedItemMapper priceFixedItemMapper;
-  private final SupplierPreferredPriceSelector supplierPreferredPriceSelector;
+  private final SupplierPriceSelectionService supplierPriceSelectionService;
 
   public FixedPriceResolver(
       PriceFixedItemMapper priceFixedItemMapper,
-      SupplierPreferredPriceSelector supplierPreferredPriceSelector, TechnicalPriceSourceResolver technicalPrices) {
+      SupplierPriceSelectionService supplierPriceSelectionService, TechnicalPriceSourceResolver technicalPrices) {
     this.technicalPrices = technicalPrices;
     this.priceFixedItemMapper = priceFixedItemMapper;
-    this.supplierPreferredPriceSelector = supplierPreferredPriceSelector;
+    this.supplierPriceSelectionService = supplierPriceSelectionService;
   }
 
   @Override
@@ -60,66 +61,81 @@ public class FixedPriceResolver implements PriceResolver {
       return PriceResolveResult.miss("partCode 为空，无法查固定价");
     }
     FixedSourceKind sourceKind = resolveFixedSourceKind(route);
-    LocalDate priceDate = pricingDate(route, context);
+    LocalDate priceDate = pricingDate(sourceKind, route, context);
     String orgCode = priceOrgCode(item, context);
-    List<PriceFixedItem> rows = selectRows(code, sourceKind, priceDate, orgCode);
-    rows = rows.stream()
-        .filter(row -> row.getFixedPrice() != null)
-        .toList();
-    if (rows.isEmpty()) {
-      return PriceResolveResult.miss("lp_price_fixed_item 无记录: " + code);
+    if (sourceKind == FixedSourceKind.PURCHASE && (!StringUtils.hasText(orgCode) || priceDate == null)) {
+      return PriceResolveResult.miss("FIXED_PRICE_SCOPE_MISSING", "固定价缺少取价组织或核算日期：" + code);
     }
+    List<PriceFixedItem> rows = selectRows(code, sourceKind, priceDate, orgCode, context);
     if (sourceKind == FixedSourceKind.SETTLE) {
+      if (rows.isEmpty()) return PriceResolveResult.miss("结算固定价无记录：" + code);
       PriceFixedItem row = rows.get(0);
       return resolved(row, "结算固定价", settleTrace(row), priceDate, null);
     }
-    rows = preferApprovalRowsPerSupplier(rows);
-    SupplierPreferredPriceSelection<PriceFixedItem> selected =
-        supplierPreferredPriceSelector.select(
-            rows,
-            context != null && StringUtils.hasText(context.getBusinessUnitType())
-                ? context.getBusinessUnitType().trim()
-                : firstText(rows, PriceFixedItem::getBusinessUnitType),
-            code,
-            firstText(rows, PriceFixedItem::getMaterialName),
-            firstText(rows, PriceFixedItem::getSpecModel),
-            priceDate,
-            PriceFixedItem::getSupplierName,
-            PriceFixedItem::getSupplierCode);
-    if (selected.failed()) {
-      return PriceResolveResult.miss(selected.failureCode(), selected.failureMessage());
+    var bySupplier = new LinkedHashMap<String, PriceFixedItem>();
+    for (PriceFixedItem row : rows) {
+      // 再核验适配器边界，保证任何调用方都不能把过期价传进供应商比较。
+      if (row.getFixedPrice() == null || row.getEffectiveFrom() == null || row.getEffectiveTo() == null
+          || row.getEffectiveFrom().isAfter(priceDate) || !row.getEffectiveTo().isAfter(priceDate)) continue;
+      String supplier = SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode());
+      if (!StringUtils.hasText(supplier)) {
+        return PriceResolveResult.miss("FIXED_SUPPLIER_CODE_MISSING", "固定价缺供应商代码：" + code);
+      }
+      PriceFixedItem previous = bySupplier.get(supplier);
+      if (previous == null || compareVersion(row, previous) > 0) bySupplier.put(supplier, row);
+      else if (compareVersion(row, previous) == 0 && row.getFixedPrice().compareTo(previous.getFixedPrice()) != 0) {
+        return PriceResolveResult.miss("FIXED_PRICE_VERSION_CONFLICT", "同一供应商相同有效期存在不同价格：" + code + "/" + supplier);
+      }
     }
-    PriceFixedItem row = selected.row();
-    if (row == null || row.getFixedPrice() == null) {
-      return PriceResolveResult.miss("lp_price_fixed_item 无可用价格: " + code);
+    if (bySupplier.isEmpty()) return PriceResolveResult.miss("固定价无有效报价：" + code);
+    List<SupplierPriceCandidate> candidates = new ArrayList<>();
+    bySupplier.forEach((supplier, row) -> candidates.add(new SupplierPriceCandidate(supplier,
+        supplier, row.getSupplierName(), row.getFixedPrice(), row.getEffectiveFrom(), row.getEffectiveTo())));
+    String businessUnit = context != null && StringUtils.hasText(context.getBusinessUnitType())
+        ? context.getBusinessUnitType().trim() : firstText(rows, PriceFixedItem::getBusinessUnitType);
+    var reviewContext = context == null ? null : context.getSupplierPriceReviewContext();
+    Long itemId = reviewContext == null ? (context == null ? null : context.getOaFormItemId())
+        : reviewContext.oaFormItemId();
+    SupplierPriceScope scope = new SupplierPriceScope(businessUnit, oaNo, itemId,
+        context == null ? null : context.getPricingMonth(), priceDate, orgCode, code, "FIXED");
+    var selection = supplierPriceSelectionService.select(scope, candidates);
+    if (selection.review() != null && reviewContext != null) reviewContext.add(selection.review());
+    if (selection.candidate() == null) {
+      return PriceResolveResult.miss(SupplierPriceSelectionService.REVIEW_REQUIRED, selection.message());
     }
-    return resolved(row, "固定采购价", selected.traceMessage(), priceDate, selected);
+    return resolved(bySupplier.get(selection.candidate().key()), "固定采购价",
+        selection.message(), priceDate, selection);
   }
 
-  private List<PriceFixedItem> selectRows(
-      String code, FixedSourceKind sourceKind, LocalDate priceDate, String orgCode) {
-    List<String> sourceTypes = sourceTypes(sourceKind);
-    LambdaQueryWrapper<PriceFixedItem> query =
-        Wrappers.lambdaQuery(PriceFixedItem.class)
-            .eq(PriceFixedItem::getMaterialCode, code)
-            .eq(PriceFixedItem::getSourceKind, "PUBLIC")
-            // source_type 是固定采购价与结算固定价防串价的核心隔离条件。
-            // 同时兼容旧值：PURCHASE -> PURCHASE_FIXED，SETTLE -> SETTLE_FIXED。
-            .in(PriceFixedItem::getSourceType, sourceTypes)
-            .isNotNull(PriceFixedItem::getFixedPrice);
-    if (StringUtils.hasText(orgCode)) {
-      query.eq(PriceFixedItem::getOrgCode, orgCode);
+  private int compareVersion(PriceFixedItem a, PriceFixedItem b) {
+    return Comparator.comparing(PriceFixedItem::getEffectiveFrom)
+        .thenComparing(PriceFixedItem::getEffectiveTo).compare(a, b);
+  }
+
+  private List<PriceFixedItem> selectRows(String code, FixedSourceKind sourceKind,
+      LocalDate priceDate, String orgCode, CostRunContext context) {
+    LambdaQueryWrapper<PriceFixedItem> query = Wrappers.lambdaQuery(PriceFixedItem.class)
+        .eq(PriceFixedItem::getMaterialCode, code)
+        .eq(PriceFixedItem::getSourceKind, "PUBLIC")
+        .in(PriceFixedItem::getSourceType, sourceTypes(sourceKind))
+        .isNotNull(PriceFixedItem::getFixedPrice);
+    if (StringUtils.hasText(orgCode)) query.eq(PriceFixedItem::getOrgCode, orgCode);
+    if (context != null && StringUtils.hasText(context.getBusinessUnitType())) {
+      query.eq(PriceFixedItem::getBusinessUnitType, context.getBusinessUnitType());
     }
-    if (priceDate != null) {
-      query.and(q -> q.le(PriceFixedItem::getEffectiveFrom, priceDate)
-          .or()
-          .isNull(PriceFixedItem::getEffectiveFrom));
+    if (sourceKind == FixedSourceKind.PURCHASE) {
+      query.le(PriceFixedItem::getEffectiveFrom, priceDate)
+          .gt(PriceFixedItem::getEffectiveTo, priceDate)
+          .orderByDesc(PriceFixedItem::getEffectiveFrom)
+          .orderByDesc(PriceFixedItem::getEffectiveTo);
+    } else {
+      // 结算固定价尚未接入新规则，保留其现行版本筛选。
+      if (priceDate != null) query.and(q -> q.le(PriceFixedItem::getEffectiveFrom, priceDate)
+          .or().isNull(PriceFixedItem::getEffectiveFrom));
+      query.orderByDesc(PriceFixedItem::getEffectiveFrom);
     }
-    query.orderByDesc(PriceFixedItem::getEffectiveFrom)
-        .orderByDesc(PriceFixedItem::getImportedAt)
-        .orderByDesc(PriceFixedItem::getCreatedAt)
-        .orderByDesc(PriceFixedItem::getId);
-    return priceFixedItemMapper.selectList(query);
+    return priceFixedItemMapper.selectList(query.orderByDesc(PriceFixedItem::getImportedAt)
+        .orderByDesc(PriceFixedItem::getCreatedAt).orderByDesc(PriceFixedItem::getId));
   }
 
   private String priceOrgCode(CostRunPartItemDto item, CostRunContext context) {
@@ -129,45 +145,6 @@ public class FixedPriceResolver implements PriceResolver {
     return context != null && StringUtils.hasText(context.getPriceOrgCode())
         ? context.getPriceOrgCode().trim()
         : null;
-  }
-
-  /**
-   * 同一供应商有审批价时不再取 U9 应付单价；不得因其他供应商有审批价而删掉主供的 U9 价。
-   */
-  private List<PriceFixedItem> preferApprovalRowsPerSupplier(List<PriceFixedItem> rows) {
-    return rows.stream()
-        .filter(row -> !isU9PayableRow(row)
-            || rows.stream().noneMatch(approval ->
-                !isU9PayableRow(approval) && sameSupplier(row, approval)))
-        .toList();
-  }
-
-  private boolean sameSupplier(PriceFixedItem left, PriceFixedItem right) {
-    String leftCode = SupplierSupplyRatioNormalizeUtils.normalizeToNull(left.getSupplierCode());
-    String rightCode = SupplierSupplyRatioNormalizeUtils.normalizeToNull(right.getSupplierCode());
-    if (StringUtils.hasText(leftCode) && StringUtils.hasText(rightCode)) {
-      return leftCode.equals(rightCode);
-    }
-    String leftName = SupplierSupplyRatioNormalizeUtils.normalizeToNull(left.getSupplierName());
-    String rightName = SupplierSupplyRatioNormalizeUtils.normalizeToNull(right.getSupplierName());
-    if (StringUtils.hasText(leftName) || StringUtils.hasText(rightName)) {
-      return StringUtils.hasText(leftName) && leftName.equals(rightName);
-    }
-    return !StringUtils.hasText(leftCode) && !StringUtils.hasText(rightCode);
-  }
-
-  private boolean isU9PayableRow(PriceFixedItem row) {
-    if (row == null) {
-      return false;
-    }
-    String processNo = row.getProcessNo();
-    if (StringUtils.hasText(processNo)
-        && U9_PAYABLE_PROCESS_NO.equals(processNo.trim())) {
-      return true;
-    }
-    String sourceSystem = row.getSourceSystem();
-    return StringUtils.hasText(sourceSystem)
-        && U9_SOURCE_SYSTEM.equalsIgnoreCase(sourceSystem.trim());
   }
 
   private List<String> sourceTypes(FixedSourceKind sourceKind) {
@@ -213,19 +190,25 @@ public class FixedPriceResolver implements PriceResolver {
       String priceSource,
       String trace,
       LocalDate priceDate,
-      SupplierPreferredPriceSelection<PriceFixedItem> selection) {
+      SupplierPriceSelectionService.Selection selection) {
     // SRM固定采购价每天按全量快照替换，自增ID不具备稳定业务含义。
     Long evidenceRecordId = isDailySrmFixedPrice(row) ? null : row.getId();
     PriceResolveEvidence evidence = PriceResolveEvidenceFactory.create(
         evidenceRecordId,
         row.getSourceBatchNo(),
-        selection == null ? row.getSupplierName() : selection.mainSupplierName(),
-        selection == null ? row.getSupplierCode() : selection.mainSupplierCode(),
-        selection == null ? null : selection.supplyRatio(),
-        selection == null ? null : selection.supplyRatioRecordId(),
+        row.getSupplierName(),
+        row.getSupplierCode(),
+        selection == null || selection.ratio() == null ? null : selection.ratio().getSupplyRatio(),
+        selection == null || selection.ratio() == null ? null : selection.ratio().getId(),
         row.getEffectiveFrom(),
         row.getEffectiveTo(),
         priceDate);
+    if (selection != null && SupplierPriceSelectionService.FALLBACK_HIGH.equals(selection.rule())) {
+      evidence = new PriceResolveEvidence(evidence.sourcePriceRecordId(), evidence.sourceBatchNo(),
+          evidence.supplierName(), evidence.supplierCode(), evidence.supplyRatio(), evidence.supplyRatioRecordId(),
+          evidence.effectiveFrom(), evidence.effectiveTo(), false,
+          "供货比率不足，已确认按最高价取价，请关注成本偏高风险");
+    }
     String warning = evidence.warningMessage();
     String remark = StringUtils.hasText(warning)
         ? (StringUtils.hasText(trace) ? trace + "；" : "") + warning
@@ -241,11 +224,11 @@ public class FixedPriceResolver implements PriceResolver {
             || "PURCHASE".equalsIgnoreCase(row.getSourceType()));
   }
 
-  private LocalDate pricingDate(PriceTypeRoute route, CostRunContext context) {
+  private LocalDate pricingDate(FixedSourceKind sourceKind, PriceTypeRoute route, CostRunContext context) {
     if (context != null && context.getPriceAsOfTime() != null) {
       return context.getPriceAsOfTime().toLocalDate();
     }
-    return route == null ? null : route.effectiveFrom();
+    return sourceKind == FixedSourceKind.SETTLE && route != null ? route.effectiveFrom() : null;
   }
 
   private String firstText(List<PriceFixedItem> rows, java.util.function.Function<PriceFixedItem, String> getter) {

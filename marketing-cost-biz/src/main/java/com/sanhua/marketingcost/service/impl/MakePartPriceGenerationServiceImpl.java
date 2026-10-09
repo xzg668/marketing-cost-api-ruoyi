@@ -523,6 +523,12 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       weight = weightService.resolveWeights(parent.getMaterialCode(), child, processType.getItemProcessType(),
           period, quoteDate, businessUnitType, requireChildNetWeight);
     }
+    // 公共生成和工作台生成都以父结算节点的组织取子件价格。
+    PricePrepareScenarioContext parentScenario = plan.scenarioContext == null
+        ? new PricePrepareScenarioContext(QuotePriceScenarioType.OA_LOCKED, null, null, Map.of(),
+            new com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext(parent.getOaFormItemId()))
+        : plan.scenarioContext;
+    parentScenario = parentScenario.forOrganization(parent.getPriceOrgCode());
     MakePartMaterialPriceResolveResult rawPrice =
         resolveMaterialPrice(
             child.getChildMaterialNo(),
@@ -531,7 +537,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
             priceAsOfTime,
             parent.getOaNo(),
             businessUnitType,
-            plan.scenarioContext,
+            parentScenario,
             plan.persistLinkedPrices);
     List<MaterialScrapRef> scraps = plan.scraps(child.getChildMaterialNo());
     if (scraps.isEmpty()) {
@@ -569,7 +575,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
               priceAsOfTime,
               parent.getOaNo(),
               businessUnitType,
-              plan.scenarioContext,
+              parentScenario,
               plan.persistLinkedPrices);
       MakePartPriceCalcRow row =
           childBaseRow(calcBatchId, parent, child, businessUnitType, processType, weight, rawPrice, plan, technical);
@@ -992,18 +998,8 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
           businessUnitType,
           scenarioContext);
     }
-    if (scenarioType(scenarioContext) == QuotePriceScenarioType.FINANCE_QUOTE_BASE) {
-      return priceResolveService.resolveMaterialUnitPrice(
-          materialCode,
-          period,
-          quoteDate,
-          priceAsOfTime,
-          oaNo,
-          businessUnitType,
-          scenarioContext);
-    }
     return priceResolveService.resolveMaterialUnitPrice(
-        materialCode, period, quoteDate, priceAsOfTime, oaNo, businessUnitType);
+        materialCode, period, quoteDate, priceAsOfTime, oaNo, businessUnitType, scenarioContext);
   }
 
   private QuotePriceScenarioType scenarioType(PricePrepareScenarioContext scenarioContext) {

@@ -104,7 +104,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
         resolveScope(oaNo, oaFormItemId, request == null ? null : request.getPeriodMonth());
     requireRecognizedPriceTypes(scope);
     QuotePricePrepareWorkbenchResponse persisted = queryResponse(scope);
-    if (hasCompletedScenarioPair(persisted)) {
+    if (hasCompletedScenarioPair(persisted) && (request == null || !request.isRefreshCandidates())) {
       return persisted;
     }
     PricePrepareCalculationResult calculation =
@@ -191,6 +191,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     // 纯检查不落库，因此不会经过 pageGaps 的展示字段补齐；这里复用同一只读补齐逻辑，
     // 确保前端能按第三步确认结果正确区分固定价、联动价、区间价等缺口。
     pricePrepareQueryService.enrichGaps(gapRecords);
+    response.setSupplierPriceReviews(calculation == null ? List.of() : calculation.getSupplierPriceReviews());
     response.setItems(new PricePrepareItemPageResponse(items.size(), items));
     PricePrepareGapPageResponse gaps =
         new PricePrepareGapPageResponse(gapRecords.size(), gapRecords);
@@ -336,6 +337,8 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
         QuotePriceScenarioType.OA_LOCKED.name(), oaBatch);
     QuotePricePrepareScenarioResponse financeScenario = scenario(
         QuotePriceScenarioType.FINANCE_QUOTE_BASE.name(), financeBatch);
+    response.setSupplierPriceReviews(oaBatch == null || oaBatch.getSupplierPriceReviews() == null
+        ? List.of() : oaBatch.getSupplierPriceReviews());
     response.setOaScenario(oaScenario);
     response.setFinanceScenario(financeScenario);
     populateFinanceBase(response, scope.periodMonth());

@@ -12,7 +12,19 @@ public record PricePrepareScenarioContext(
     QuotePriceScenarioType scenarioType,
     String scenarioGroupNo,
     String sourcePrepareNo,
-    Map<String, BigDecimal> variableOverrides) {
+    Map<String, BigDecimal> variableOverrides,
+    com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext supplierReviews) {
+
+  public PricePrepareScenarioContext(QuotePriceScenarioType scenarioType, String scenarioGroupNo,
+      String sourcePrepareNo, Map<String, BigDecimal> variableOverrides) {
+    this(scenarioType, scenarioGroupNo, sourcePrepareNo, variableOverrides,
+        new com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext(null));
+  }
+
+  public PricePrepareScenarioContext forOrganization(String orgCode) {
+    return new PricePrepareScenarioContext(scenarioType, scenarioGroupNo, sourcePrepareNo,
+        variableOverrides, supplierReviews.forOrganization(orgCode));
+  }
 
   public PricePrepareScenarioContext {
     scenarioType = scenarioType == null ? QuotePriceScenarioType.OA_LOCKED : scenarioType;

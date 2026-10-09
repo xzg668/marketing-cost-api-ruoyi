@@ -1,33 +1,15 @@
 package com.sanhua.marketingcost.service.impl;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
-import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioExcelRow;
-import com.sanhua.marketingcost.dto.SupplierSupplyRatioImportRow;
-import com.sanhua.marketingcost.dto.SupplierSupplyRatioImportResponse;
 import com.sanhua.marketingcost.entity.SupplierSupplyRatio;
-import com.sanhua.marketingcost.enums.SupplierSupplyRatioSourceType;
 import com.sanhua.marketingcost.mapper.SupplierSupplyRatioMapper;
-import com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -35,468 +17,96 @@ class SupplierSupplyRatioImportServiceImplTest {
   private SupplierSupplyRatioMapper mapper;
   private SupplierSupplyRatioImportServiceImpl service;
 
-  @BeforeEach
-  void setUp() {
+  @BeforeEach void setUp() {
     mapper = mock(SupplierSupplyRatioMapper.class);
-    service = new SupplierSupplyRatioImportServiceImpl(
-        mapper, new SupplierSupplyRatioWorkbookParserImpl());
+    service = new SupplierSupplyRatioImportServiceImpl(mapper, new SupplierSupplyRatioWorkbookParserImpl(), org.mockito.Mockito.mock(org.springframework.context.ApplicationEventPublisher.class));
   }
 
-  @Test
-  @DisplayName("导入新增：有效行按 Excel 来源和批次号入库")
-  void importRowsInsertsNewRows() {
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null);
-
-    SupplierSupplyRatioImportResponse response =
-        service.importRows(List.of(row("203240251", "小阀座", "SHF-01", "供应商A", "0.6")),
-            "ratio.xls", "COMMERCIAL", "alice");
-
-    assertThat(response.getInsertedRows()).isEqualTo(1);
-    assertThat(response.getUpdatedRows()).isZero();
-    assertThat(response.getBatchNo()).startsWith("SSR-");
-
-    ArgumentCaptor<SupplierSupplyRatio> captor = ArgumentCaptor.forClass(SupplierSupplyRatio.class);
-    verify(mapper).insert(captor.capture());
-    SupplierSupplyRatio inserted = captor.getValue();
-    assertThat(inserted.getSourceType()).isEqualTo("EXCEL");
-    assertThat(inserted.getSourceBatchNo()).isEqualTo(response.getBatchNo());
-    assertThat(inserted.getImportFileName()).isEqualTo("ratio.xls");
-    assertThat(inserted.getImportedBy()).isEqualTo("alice");
-    assertThat(inserted.getBusinessUnitType()).isEqualTo("COMMERCIAL");
-  }
-
-  @Test
-  @DisplayName("重复导入同一业务键：第二次更新已有行，不新增重复行")
-  void repeatedImportUpdatesExistingRow() {
-    SupplierSupplyRatio existing = new SupplierSupplyRatio();
-    existing.setId(99L);
-    existing.setDeleted(0);
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null, existing);
-
-    SupplierSupplyRatioExcelRow row = row("203240251", "小阀座", "SHF-01", "供应商A", "0.6");
-    SupplierSupplyRatioImportResponse first =
-        service.importRows(List.of(row), "ratio.xls", "COMMERCIAL", "alice");
-    SupplierSupplyRatioImportResponse second =
-        service.importRows(List.of(row), "ratio.xls", "COMMERCIAL", "bob");
-
-    assertThat(first.getInsertedRows()).isEqualTo(1);
-    assertThat(second.getInsertedRows()).isZero();
-    assertThat(second.getUpdatedRows()).isEqualTo(1);
-    verify(mapper).insert(any(SupplierSupplyRatio.class));
-    verify(mapper).updateById(existing);
-    assertThat(existing.getUpdatedBy()).isEqualTo("bob");
-  }
-
-  @Test
-  @DisplayName("SRM 同步复用 upsert：同键更新已有行，不新增重复行")
-  void srmUpsertUpdatesExistingRowWithSameBusinessKey() {
-    SupplierSupplyRatio existing = new SupplierSupplyRatio();
-    existing.setId(120L);
-    existing.setDeleted(0);
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(existing);
-
-    SupplierSupplyRatioImportResponse response =
-        service.upsertFromRows(
-            List.of(importRow("203240251", "小阀座", "SHF-01", "供应商A", "0.75")),
-            SupplierSupplyRatioSourceType.SRM,
-            "SRM-20260518-001",
-            null,
-            "COMMERCIAL",
-            "srm-job");
-
-    assertThat(response.getInsertedRows()).isZero();
-    assertThat(response.getUpdatedRows()).isEqualTo(1);
-    assertThat(response.getBatchNo()).isEqualTo("SRM-20260518-001");
-    verify(mapper, never()).insert(any(SupplierSupplyRatio.class));
-    verify(mapper).updateById(existing);
-    assertThat(existing.getSourceType()).isEqualTo("SRM");
-    assertThat(existing.getSourceBatchNo()).isEqualTo("SRM-20260518-001");
-    assertThat(existing.getSupplyRatio()).isEqualByComparingTo("0.75");
-    assertThat(existing.getUpdatedBy()).isEqualTo("srm-job");
-  }
-
-  @Test
-  @DisplayName("Excel 与 SRM 先后写入同键：后写入者更新来源字段和供货比例")
-  void excelThenSrmUpdatesSourceAndSupplyRatio() {
-    SupplierSupplyRatio existing = new SupplierSupplyRatio();
-    existing.setId(121L);
-    existing.setDeleted(0);
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null, existing);
-
-    SupplierSupplyRatioImportResponse excelResponse =
-        service.importRows(
-            List.of(row("203240251", "小阀座", "SHF-01", "供应商A", "0.6")),
-            "ratio.xls",
-            "COMMERCIAL",
-            "alice");
-    SupplierSupplyRatioImportResponse srmResponse =
-        service.upsertFromRows(
-            List.of(importRow("203240251", "小阀座", "SHF-01", "供应商A", "0.8")),
-            SupplierSupplyRatioSourceType.SRM,
-            "SRM-20260518-002",
-            null,
-            "COMMERCIAL",
-            "srm-job");
-
-    assertThat(excelResponse.getInsertedRows()).isEqualTo(1);
-    assertThat(srmResponse.getInsertedRows()).isZero();
-    assertThat(srmResponse.getUpdatedRows()).isEqualTo(1);
-    verify(mapper).insert(any(SupplierSupplyRatio.class));
-    verify(mapper).updateById(existing);
-    assertThat(existing.getSourceType()).isEqualTo("SRM");
-    assertThat(existing.getSourceBatchNo()).isEqualTo("SRM-20260518-002");
-    assertThat(existing.getSupplyRatio()).isEqualByComparingTo("0.8");
-    assertThat(existing.getImportedBy()).isEqualTo("srm-job");
-  }
-
-  @Test
-  @DisplayName("同物料同型号不同供应商：保留多条供应商记录")
-  void sameMaterialDifferentSuppliersCanCoexist() {
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null);
-
-    SupplierSupplyRatioImportResponse response =
-        service.importRows(
-            List.of(
-                row("203240251", "小阀座", "SHF-01", "供应商A", "0.6"),
-                row("203240251", "小阀座", "SHF-01", "供应商B", "0.4")),
-            "ratio.xls", "COMMERCIAL", "alice");
-
-    assertThat(response.getInsertedRows()).isEqualTo(2);
-    ArgumentCaptor<SupplierSupplyRatio> captor = ArgumentCaptor.forClass(SupplierSupplyRatio.class);
-    verify(mapper, org.mockito.Mockito.times(2)).insert(captor.capture());
-    assertThat(captor.getAllValues())
-        .extracting(SupplierSupplyRatio::getSupplierName)
-        .containsExactly("供应商A", "供应商B");
-  }
-
-  @Test
-  @DisplayName("同物料同供应商不同型号：按新业务键更新同一条记录")
-  void sameMaterialAndSupplierWithDifferentSpecUpdatesSameRow() {
-    SupplierSupplyRatio existing = new SupplierSupplyRatio();
-    existing.setId(130L);
-    existing.setDeleted(0);
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null, existing);
-
-    SupplierSupplyRatioImportResponse first =
-        service.importRows(
-            List.of(row("203240251", "小阀座", "SHF-01", "供应商A", "0.6")),
-            "ratio.xls",
-            "COMMERCIAL",
-            "alice");
-    SupplierSupplyRatioImportResponse second =
-        service.importRows(
-            List.of(row("203240251", "小阀座改名", "SHF-02", "供应商A", "0.8")),
-            "ratio.xls",
-            "COMMERCIAL",
-            "bob");
-
-    assertThat(first.getInsertedRows()).isEqualTo(1);
-    assertThat(second.getInsertedRows()).isZero();
-    assertThat(second.getUpdatedRows()).isEqualTo(1);
-    verify(mapper).updateById(existing);
-    assertThat(existing.getMaterialName()).isEqualTo("小阀座改名");
-    assertThat(existing.getSpecModel()).isEqualTo("SHF-02");
-    assertThat(existing.getSupplyRatio()).isEqualByComparingTo("0.8");
-  }
-
-  @Test
-  @DisplayName("Excel 导入：60% 和 0.6 都解析为 0.6，错误行进入响应且不阻断有效行")
-  void importExcelParsesRatiosAndCollectsInvalidRows() throws Exception {
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null);
-
-    SupplierSupplyRatioImportResponse response =
-        service.importExcel(workbookWithMixedRows(), "ratio.xlsx", "COMMERCIAL", "alice");
-
-    assertThat(response.getInsertedRows()).isEqualTo(2);
-    assertThat(response.getUpdatedRows()).isZero();
-    assertThat(response.getSkippedRows()).isEqualTo(3);
-    assertThat(response.getErrorRows()).isEqualTo(3);
-    assertThat(response.getErrors())
-        .anySatisfy(error -> assertThat(error).contains("物料代码不能为空"))
-        .anySatisfy(error -> assertThat(error).contains("供应商不能为空"))
-        .anySatisfy(error -> assertThat(error).contains("供货比例数字格式不正确"));
-
-    ArgumentCaptor<SupplierSupplyRatio> captor = ArgumentCaptor.forClass(SupplierSupplyRatio.class);
-    verify(mapper, org.mockito.Mockito.times(2)).insert(captor.capture());
-    assertThat(captor.getAllValues())
-        .extracting(SupplierSupplyRatio::getSupplyRatio)
-        .allSatisfy(value -> assertThat(value).isEqualByComparingTo("0.6"));
-  }
-
-  @Test
-  @DisplayName("SSR-09 完整内存夹具重复导入：同业务键更新，不增加总行数")
-  void fullFixtureRepeatedImportIsIdempotentByBusinessKey() throws Exception {
-    SupplierSupplyRatioWorkbookParserImpl parser = new SupplierSupplyRatioWorkbookParserImpl();
-    List<SupplierSupplyRatioExcelRow> parsedRows;
-    try (var input = workbookWithValidRows(51)) {
-      parsedRows = parser.parse(input, "supply-ratio-fixture.xlsx").getRows();
-    }
-    assertThat(parsedRows).hasSize(51);
-    long uniqueKeys = parsedRows.stream().map(this::keyOf).distinct().count();
-    assertThat(uniqueKeys).isPositive();
-
-    Map<String, SupplierSupplyRatio> repo = new LinkedHashMap<>();
-    AtomicInteger selectIndex = new AtomicInteger();
-    AtomicLong idSequence = new AtomicLong(1);
-    when(mapper.selectOne(any(Wrapper.class))).thenAnswer(invocation -> {
-      SupplierSupplyRatioExcelRow current = parsedRows.get(selectIndex.getAndIncrement() % parsedRows.size());
-      return repo.get(keyOf(current));
+  @Test void replacesWholeMaterialGroupWithoutOverwritingHistoryOrOtherMaterials() {
+    when(mapper.deactivateMaterial(eq("COMMERCIAL"), eq("M1"), eq("alice"), any())).thenReturn(4);
+    var result = service.importRows(List.of(row("M1", "S1", "0.7"), row("M1", "S2", "0.7")),
+        "ratio.xlsx", "COMMERCIAL", "alice");
+    assertThat(result.getInsertedRows()).isEqualTo(2);
+    assertThat(result.getDeactivatedRows()).isEqualTo(4);
+    var order = inOrder(mapper);
+    order.verify(mapper).lockMaterial("COMMERCIAL", "M1");
+    order.verify(mapper).deactivateMaterial(eq("COMMERCIAL"), eq("M1"), eq("alice"), any());
+    ArgumentCaptor<SupplierSupplyRatio> capture = ArgumentCaptor.forClass(SupplierSupplyRatio.class);
+    verify(mapper, times(2)).insert(capture.capture());
+    assertThat(capture.getAllValues()).allSatisfy(r -> {
+      assertThat(r.getIsActive()).isEqualTo(1);
+      assertThat(r.getSourceBatchNo()).isEqualTo(result.getBatchNo());
+      assertThat(r.getImportedAt()).isNotNull();
+      assertThat(r.getSupplyRatio()).isEqualByComparingTo("0.7");
     });
-    when(mapper.insert(any(SupplierSupplyRatio.class))).thenAnswer(invocation -> {
-      SupplierSupplyRatio entity = invocation.getArgument(0);
-      entity.setId(idSequence.getAndIncrement());
-      repo.put(keyOf(entity), entity);
-      return 1;
-    });
-    when(mapper.updateById(any(SupplierSupplyRatio.class))).thenAnswer(invocation -> {
-      SupplierSupplyRatio entity = invocation.getArgument(0);
-      repo.put(keyOf(entity), entity);
-      return 1;
-    });
+    verify(mapper, never()).deactivateMaterial(eq("COMMERCIAL"), eq("M2"), anyString(), any());
+    verify(mapper, never()).updateById(any(SupplierSupplyRatio.class));
+  }
 
-    SupplierSupplyRatioImportResponse first;
-    try (var input = workbookWithValidRows(51)) {
-      first = service.importExcel(input, "supply-ratio-fixture.xlsx", "COMMERCIAL", "alice");
+  @Test void repeatedImportsCreateDistinctHistoricalBatches() {
+    var first = service.importRows(List.of(row("M1", "S1", "0.6")), "a.xlsx", "COMMERCIAL", "a");
+    var second = service.importRows(List.of(row("M1", "S1", "0.8")), "b.xlsx", "COMMERCIAL", "b");
+    assertThat(first.getBatchNo()).isNotEqualTo(second.getBatchNo());
+    verify(mapper, times(2)).insert(any(SupplierSupplyRatio.class));
+    verify(mapper, never()).updateById(any(SupplierSupplyRatio.class));
+  }
+
+  @Test void identicalDuplicatesOnlyInsertOnce() {
+    var result = service.importRows(List.of(row("M1", "S1", "0.65"), row("M1", "S1", "0.65")),
+        "duplicate.xlsx", "COMMERCIAL", "a");
+    assertThat(result.getInsertedRows()).isEqualTo(1);
+    assertThat(result.getDuplicateRows()).isEqualTo(1);
+  }
+
+  @Test void conflictingDuplicatesRejectEntireFileBeforeAnyChanges() {
+    assertThatThrownBy(() -> service.importRows(
+        List.of(row("M1", "S1", "0.3"), row("M2", "S2", "0.4"), row("M2", "S2", "0.6")),
+        "conflict.xlsx", "COMMERCIAL", "a")).hasMessageContaining("冲突");
+    verifyNoInteractions(mapper);
+  }
+
+  @Test void invalidRatioDoesNotSilentlyBecomeZero() {
+    for (String value : new String[] {"-0.1", "1.1"}) {
+      assertThatThrownBy(() -> service.importRows(List.of(row("M1", "S1", value)),
+          "invalid.xlsx", "COMMERCIAL", "a")).isInstanceOf(IllegalArgumentException.class);
     }
-    SupplierSupplyRatioImportResponse second;
-    try (var input = workbookWithValidRows(51)) {
-      second = service.importExcel(input, "supply-ratio-fixture.xlsx", "COMMERCIAL", "bob");
-    }
-
-    assertThat(first.getTotalRows()).isEqualTo(51);
-    assertThat(first.getInsertedRows()).isEqualTo((int) uniqueKeys);
-    assertThat(first.getUpdatedRows()).isEqualTo(parsedRows.size() - (int) uniqueKeys);
-    assertThat(first.getErrorRows()).isZero();
-    assertThat(repo).hasSize((int) uniqueKeys);
-    assertThat(second.getTotalRows()).isEqualTo(51);
-    assertThat(second.getInsertedRows()).isZero();
-    assertThat(second.getUpdatedRows()).isEqualTo(51);
-    assertThat(second.getErrorRows()).isZero();
-    assertThat(repo).hasSize((int) uniqueKeys);
-    assertThat(repo.values()).allSatisfy(row -> assertThat(row.getImportedBy()).isEqualTo("bob"));
+    verifyNoInteractions(mapper);
   }
 
-  @Test
-  @DisplayName("错误行测试：缺物料代码、缺供应商时跳过；供货比例为空按 0 入库")
-  void importRowsSkipsInvalidRows() {
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null);
-
-    SupplierSupplyRatioImportResponse response =
-        service.importRows(
-            List.of(
-                row(null, "小阀座", "SHF-01", "供应商A", "0.6"),
-                row("203240251", "小阀座", "SHF-01", null, "0.6"),
-                row("203240252", "小阀座", "SHF-01", "供应商B", null)),
-            "ratio.xls", "COMMERCIAL", "alice");
-
-    assertThat(response.getInsertedRows()).isEqualTo(1);
-    assertThat(response.getSkippedRows()).isEqualTo(2);
-    assertThat(response.getErrors()).hasSize(2);
-    ArgumentCaptor<SupplierSupplyRatio> captor = ArgumentCaptor.forClass(SupplierSupplyRatio.class);
-    verify(mapper).insert(captor.capture());
-    assertThat(captor.getValue().getSupplyRatio()).isEqualByComparingTo(BigDecimal.ZERO);
+  @Test void nullRatioIsInsertedAndDistinguishedFromZeroDuringDeduplication() {
+    var result = service.importRows(List.of(row("M1", "S1", null), row("M1", "S1", null),
+        row("M1", "S2", "0")), "a.xlsx", "COMMERCIAL", "a");
+    var records = ArgumentCaptor.forClass(SupplierSupplyRatio.class);
+    verify(mapper, times(2)).insert(records.capture());
+    assertThat(result.getInsertedRows()).isEqualTo(2);
+    assertThat(result.getUnfilledRatioRows()).isEqualTo(1);
+    assertThat(result.getDuplicateRows()).isEqualTo(1);
+    assertThat(records.getAllValues().get(0).getSupplyRatio()).isNull();
+    assertThat(records.getAllValues().get(1).getSupplyRatio()).isZero();
+    clearInvocations(mapper);
+    assertThatThrownBy(() -> service.importRows(List.of(row("M1", "S1", null),
+        row("M1", "S1", "0")), "conflict.xlsx", "COMMERCIAL", "a"))
+        .hasMessageContaining("冲突");
+    verifyNoInteractions(mapper);
   }
 
-  @Test
-  @DisplayName("RPI1-09 Excel可选供应商代码正确保存")
-  void excelSupplierCodeIsPersisted() {
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null);
-    SupplierSupplyRatioExcelRow coded =
-        row("201503873", "管件", "SPEC-A", "供应商A", "0.6");
-    coded.setSupplierCode(" S000 841 ");
-
-    SupplierSupplyRatioImportResponse response = service.importRows(
-        List.of(coded), "ratio-with-code.xlsx", "COMMERCIAL", "alice");
-
-    assertThat(response.getInsertedRows()).isOne();
-    ArgumentCaptor<SupplierSupplyRatio> captor = ArgumentCaptor.forClass(SupplierSupplyRatio.class);
-    verify(mapper).insert(captor.capture());
-    assertThat(captor.getValue().getSupplierCode()).isEqualTo("S000841");
+  @Test void locksMaterialsInStableOrder() {
+    service.importRows(List.of(row("M2", "S1", "0"), row("M1", "S1", "1")),
+        "ordered.xlsx", "PLATE", "a");
+    var order = inOrder(mapper);
+    order.verify(mapper).lockMaterial("PLATE", "M1");
+    order.verify(mapper).lockMaterial("PLATE", "M2");
   }
 
-  @Test
-  @DisplayName("RPI1-09 同物料同名称后来补代码时升级原记录而非新增")
-  void laterSupplierCodeUpgradesNameOnlyRecord() {
-    SupplierSupplyRatio existing = new SupplierSupplyRatio();
-    existing.setId(201L);
-    existing.setMaterialCode("201503873");
-    existing.setSupplierName("供应商A");
-    existing.setSupplierCode(null);
-    existing.setDeleted(0);
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null, existing);
-    SupplierSupplyRatioImportRow coded =
-        importRow("201503873", "管件", "SPEC-A", "供应商A", "0.8");
-    coded.setSupplierCode("S000841");
-
-    SupplierSupplyRatioImportResponse response = service.upsertFromRows(
-        List.of(coded),
-        SupplierSupplyRatioSourceType.SRM,
-        "RPI1-09-UPGRADE",
-        null,
-        "COMMERCIAL",
-        "srm-job");
-
-    assertThat(response.getInsertedRows()).isZero();
-    assertThat(response.getUpdatedRows()).isOne();
-    verify(mapper, never()).insert(any(SupplierSupplyRatio.class));
-    verify(mapper).updateById(existing);
-    assertThat(existing.getSupplierCode()).isEqualTo("S000841");
-  }
-
-  @Test
-  @DisplayName("RPI1-09 旧模板无代码再次导入时不清空已有供应商代码")
-  void legacyExcelDoesNotClearExistingSupplierCode() {
-    SupplierSupplyRatio existing = new SupplierSupplyRatio();
-    existing.setId(202L);
-    existing.setMaterialCode("201503873");
-    existing.setSupplierName("供应商A");
-    existing.setSupplierCode("S000841");
-    existing.setDeleted(0);
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(existing);
-
-    SupplierSupplyRatioImportResponse response = service.importRows(
-        List.of(row("201503873", "管件", "SPEC-A", "供应商A", "0.7")),
-        "legacy-ratio.xlsx",
-        "COMMERCIAL",
-        "alice");
-
-    assertThat(response.getUpdatedRows()).isOne();
-    assertThat(existing.getSupplierCode()).isEqualTo("S000841");
-  }
-
-  @Test
-  @DisplayName("RPI1-09 有代码时先按物料和代码查找已有关系")
-  void codedImportFindsExistingByCodeBeforeNameFallback() {
-    SupplierSupplyRatio existing = new SupplierSupplyRatio();
-    existing.setId(203L);
-    existing.setMaterialCode("201503873");
-    existing.setSupplierName("供应商旧名称");
-    existing.setSupplierCode("S000841");
-    existing.setDeleted(0);
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(existing);
-    SupplierSupplyRatioImportRow coded =
-        importRow("201503873", "管件", "SPEC-A", "供应商新名称", "0.9");
-    coded.setSupplierCode("S000841");
-
-    SupplierSupplyRatioImportResponse response = service.upsertFromRows(
-        List.of(coded), SupplierSupplyRatioSourceType.SRM, "RPI1-09-CODE");
-
-    assertThat(response.getUpdatedRows()).isOne();
-    assertThat(existing.getSupplierName()).isEqualTo("供应商新名称");
-    assertThat(existing.getSupplierCode()).isEqualTo("S000841");
-  }
-
-  private SupplierSupplyRatioExcelRow row(
-      String materialCode,
-      String materialName,
-      String specModel,
-      String supplierName,
-      String ratio) {
-    SupplierSupplyRatioExcelRow row = new SupplierSupplyRatioExcelRow();
+  private SupplierSupplyRatioExcelRow row(String material, String supplier, String ratio) {
+    var row = new SupplierSupplyRatioExcelRow();
     row.setRowNo(2);
-    row.setMaterialCode(materialCode);
-    row.setMaterialName(materialName);
-    row.setSpecModel(specModel);
-    row.setUnit("个");
-    row.setMaterialShape("B");
-    row.setSupplierName(supplierName);
+    row.setMaterialCode(material);
+    row.setMaterialName("物料");
+    row.setSupplierCode(supplier);
+    row.setSupplierName("供应商" + supplier);
+    row.setSpecModel("规格");
     row.setSupplyRatio(ratio == null ? null : new BigDecimal(ratio));
     return row;
-  }
-
-  private SupplierSupplyRatioImportRow importRow(
-      String materialCode,
-      String materialName,
-      String specModel,
-      String supplierName,
-      String ratio) {
-    SupplierSupplyRatioImportRow row = new SupplierSupplyRatioImportRow();
-    row.setRowNo(2);
-    row.setMaterialCode(materialCode);
-    row.setMaterialName(materialName);
-    row.setSpecModel(specModel);
-    row.setUnit("个");
-    row.setMaterialShape("B");
-    row.setSupplierName(supplierName);
-    row.setSupplierCode("SRM-A");
-    row.setSupplyRatio(ratio == null ? null : new BigDecimal(ratio));
-    return row;
-  }
-
-  private String keyOf(SupplierSupplyRatioExcelRow row) {
-    return SupplierSupplyRatioNormalizeUtils.buildDedupeKey(
-        row.getMaterialCode(), row.getMaterialName(), row.getSupplierName(), row.getSpecModel());
-  }
-
-  private String keyOf(SupplierSupplyRatio row) {
-    return SupplierSupplyRatioNormalizeUtils.buildDedupeKey(
-        row.getMaterialCode(), row.getMaterialName(), row.getSupplierName(), row.getSpecModel());
-  }
-
-  private ByteArrayInputStream workbookWithMixedRows() throws Exception {
-    try (XSSFWorkbook workbook = new XSSFWorkbook();
-        ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-      Sheet sheet = workbook.createSheet("供货比例-SRM");
-      Row header = sheet.createRow(0);
-      List<String> headers = List.of("物料代码", "物料名称", "型号", "单位", "物料形态属性", "供应商", "供货比例", "规则：取供货比例大的");
-      for (int i = 0; i < headers.size(); i++) {
-        header.createCell(i).setCellValue(headers.get(i));
-      }
-      excelRow(sheet, 1, "203240251", "小阀座", "SHF-01", "个", "B", "供应商A", "60%");
-      excelRow(sheet, 2, "203240251", "小阀座", "SHF-01", "个", "B", "供应商B", "0.6");
-      excelRow(sheet, 3, "", "小阀座", "SHF-01", "个", "B", "供应商C", "0.6");
-      excelRow(sheet, 4, "203240252", "小阀座", "SHF-01", "个", "B", "", "0.6");
-      excelRow(sheet, 5, "203240253", "小阀座", "SHF-01", "个", "B", "供应商D", "abc");
-      workbook.write(out);
-      return new ByteArrayInputStream(out.toByteArray());
-    }
-  }
-
-  private ByteArrayInputStream workbookWithValidRows(int rowCount) throws Exception {
-    try (XSSFWorkbook workbook = new XSSFWorkbook();
-        ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-      Sheet sheet = workbook.createSheet("供货比例-SRM");
-      Row header = sheet.createRow(0);
-      List<String> headers = List.of(
-          "物料代码", "物料名称", "型号", "单位", "物料形态属性", "供应商", "供货比例",
-          "规则：取供货比例大的");
-      for (int i = 0; i < headers.size(); i++) {
-        header.createCell(i).setCellValue(headers.get(i));
-      }
-      for (int i = 0; i < rowCount; i++) {
-        excelRow(
-            sheet,
-            i + 1,
-            "MAT-" + i,
-            "物料" + i,
-            "MODEL-" + i,
-            "只",
-            "采购件",
-            "供应商" + i,
-            i % 2 == 0 ? "60%" : "0.6");
-      }
-      workbook.write(out);
-      return new ByteArrayInputStream(out.toByteArray());
-    }
-  }
-
-  private void excelRow(
-      Sheet sheet,
-      int rowIndex,
-      String materialCode,
-      String materialName,
-      String specModel,
-      String unit,
-      String materialShape,
-      String supplierName,
-      String ratio) {
-    Row row = sheet.createRow(rowIndex);
-    row.createCell(0).setCellValue(materialCode);
-    row.createCell(1).setCellValue(materialName);
-    row.createCell(2).setCellValue(specModel);
-    row.createCell(3).setCellValue(unit);
-    row.createCell(4).setCellValue(materialShape);
-    row.createCell(5).setCellValue(supplierName);
-    row.createCell(6).setCellValue(ratio);
   }
 }

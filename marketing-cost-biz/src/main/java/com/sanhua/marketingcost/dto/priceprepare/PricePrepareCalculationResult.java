@@ -17,6 +17,7 @@ import lombok.Setter;
 @Setter
 public class PricePrepareCalculationResult {
 
+  private java.util.List<com.sanhua.marketingcost.service.pricing.SupplierPriceReview> supplierPriceReviews = java.util.List.of();
   private PricePrepareGenerateResult summary;
   private List<PricePrepareItem> items = new ArrayList<>();
   private List<PricePrepareGap> gaps = new ArrayList<>();

@@ -1,175 +1,91 @@
 package com.sanhua.marketingcost.service.impl;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-import com.sanhua.marketingcost.dto.SupplierSupplyRatioExcelRow;
-import com.sanhua.marketingcost.dto.SupplierSupplyRatioWorkbookParseResult;
-import com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils;
+import static org.assertj.core.api.Assertions.*;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.math.BigDecimal;
-import java.util.ArrayList;
 import java.util.List;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class SupplierSupplyRatioWorkbookParserImplTest {
-  private SupplierSupplyRatioWorkbookParserImpl parser;
+  private final SupplierSupplyRatioWorkbookParserImpl parser = new SupplierSupplyRatioWorkbookParserImpl();
+  private static final List<String> HEADERS =
+      List.of("供应商名称", "供应商代码", "物料名称", "物料代码", "规格型号", "比例");
 
-  @BeforeEach
-  void setUp() {
-    parser = new SupplierSupplyRatioWorkbookParserImpl();
-  }
-
-  @Test
-  void parsesSupplyRatioSheetHeaderAndFirstRows() {
-    SupplierSupplyRatioWorkbookParseResult result =
-        parser.parse(
-            workbook(
-                "供货比例-SRM",
-                List.of(
-                    List.of("物料代码", "物料名称", "型号", "单位", "物料形态属性", "供应商", "供货比例", "规则：取供货比例大的"),
-                    List.of("201800082", "滑碗", "SHF-000-042002", "只", "采购件", "A", "1", ""),
-                    List.of("203240246", "扁平头铆钉", "SHF-000-088002（商用专用）", "只", "采购件", "B", "1.0", ""),
-                    List.of("203240251", "小阀座", "SHF-000-036003（商用专用）", "只", "采购件", "新昌县大新机械厂", "60%", ""))),
-            "sample.xlsx");
-
-    assertThat(result.getErrors()).isEmpty();
-    assertThat(result.getSheetName()).isEqualTo("供货比例-SRM");
-    assertThat(result.getHeaderRowNumber()).isEqualTo(1);
-    assertThat(result.getHeaders()).containsExactly("物料代码", "物料名称", "型号", "单位", "物料形态属性", "供应商", "供货比例", "规则：取供货比例大的");
-    assertThat(result.getRows()).hasSize(3);
-    SupplierSupplyRatioExcelRow first = result.getRows().get(0);
-    assertThat(first.getRowNo()).isEqualTo(2);
-    assertThat(first.getMaterialCode()).isEqualTo("201800082");
-    assertThat(first.getMaterialName()).isEqualTo("滑碗");
-    assertThat(first.getSpecModel()).isEqualTo("SHF-000-042002");
-    assertThat(first.getSupplierName()).isEqualTo("A");
-    assertThat(first.getSupplierCode()).isNull();
-    assertThat(first.getSupplyRatio()).isEqualByComparingTo("1");
-    assertThat(result.getRows().get(2).getSupplyRatio()).isEqualByComparingTo("0.6");
-  }
-
-  @Test
-  void parsesOptionalSupplierCodeColumnWhenPresent() {
-    SupplierSupplyRatioWorkbookParseResult result =
-        parser.parse(
-            workbook(
-                "供货比例-SRM",
-                List.of(
-                    List.of("物料代码", "物料名称", "型号", "单位", "物料形态属性", "供应商", "供应商代码", "供货比例", "规则：取供货比例大的"),
-                    List.of("201503873", "管件", "SPEC-A", "只", "采购件", "公主岭市远达实业有限公司", " S000841 ", "60%", ""),
-                    List.of("201503874", "管件", "SPEC-B", "只", "采购件", "吉林省合信汽配有限公司", "", "40%", ""))),
-            "supplier-code.xlsx");
-
-    assertThat(result.getErrors()).isEmpty();
-    assertThat(result.getHeaders()).contains("供应商代码");
-    assertThat(result.getRows()).hasSize(2);
-    assertThat(result.getRows().get(0).getSupplierCode()).isEqualTo("S000841");
-    assertThat(result.getRows().get(1).getSupplierCode()).isNull();
-  }
-
-  @Test
-  void normalizesDedupeKeyByRemovingBlankCharacters() {
-    String key =
-        SupplierSupplyRatioNormalizeUtils.buildDedupeKey(
-            " 203 240\t251 ",
-            " 小　阀\n座 ",
-            " 新昌县 大新机械厂 ",
-            " SHF-000-036003\r\n（商用专用） ");
-
-    assertThat(key).isEqualTo("203240251|新昌县大新机械厂");
-  }
-
-  @Test
-  void blankSupplyRatioParsesAsZero() {
-    SupplierSupplyRatioWorkbookParseResult result =
-        parser.parse(
-            workbook(
-                "供货比例-SRM",
-                List.of(
-                    List.of("物料代码", "物料名称", "型号", "单位", "物料形态属性", "供应商", "供货比例", "规则：取供货比例大的"),
-                    List.of("203240251", "小阀座", "SHF-000-036003", "只", "采购件", "供应商A", "", ""))),
-            "sample.xlsx");
-
-    assertThat(result.getErrors()).isEmpty();
-    assertThat(result.getRows()).hasSize(1);
-    assertThat(result.getRows().get(0).getSupplyRatio()).isEqualByComparingTo(BigDecimal.ZERO);
-  }
-
-  @Test
-  void parsesSrmHeaderAliasesFromCurrentWorkbook() {
-    SupplierSupplyRatioWorkbookParseResult result =
-        parser.parse(
-            workbook(
-                "供货比例-SRM",
-                List.of(
-                    List.of("物料代码*", "物料名称*", "物料规格", "物料型号", "物料图号", "主分类代码", "主分类名称",
-                        "计量单位", "U9物料形态属性", "供应商", "供货比例", "规则：取供货比例大的"),
-                    List.of("721250208", "套管", "MDF-A03-020001", "MDF-A03-020001", "MDF-A03-020001",
-                        "121191304", "专用零部件", "只", "采购件", "丽水市丽凯制冷配件有限公司", "", ""))),
-            "srm-current.xlsx");
-
-    assertThat(result.getErrors()).isEmpty();
-    assertThat(result.getRows()).hasSize(1);
-    SupplierSupplyRatioExcelRow row = result.getRows().get(0);
-    assertThat(row.getMaterialCode()).isEqualTo("721250208");
-    assertThat(row.getSpecModel()).isEqualTo("MDF-A03-020001");
-    assertThat(row.getUnit()).isEqualTo("只");
-    assertThat(row.getMaterialShape()).isEqualTo("采购件");
-    assertThat(row.getSupplierName()).isEqualTo("丽水市丽凯制冷配件有限公司");
-    assertThat(row.getSupplyRatio()).isEqualByComparingTo(BigDecimal.ZERO);
-  }
-
-  @Test
-  void fullSizeSupplyRatioFixtureCanBeParsed() throws Exception {
-    List<List<String>> rows = new ArrayList<>();
-    rows.add(List.of(
-        "物料代码", "物料名称", "型号", "单位", "物料形态属性", "供应商", "供货比例",
-        "规则：取供货比例大的"));
-    for (int i = 0; i < 51; i++) {
-      rows.add(List.of(
-          i == 0 ? "201800082" : "MAT-" + i,
-          i == 0 ? "滑碗" : "物料" + i,
-          "MODEL-" + i,
-          "只",
-          "采购件",
-          "供应商" + i,
-          i == 0 ? "1" : "60%",
-          ""));
-    }
-
-    try (InputStream input = workbook("供货比例-SRM", rows)) {
-      SupplierSupplyRatioWorkbookParseResult result = parser.parse(input, "supply-ratio-fixture.xlsx");
-
+  @Test void findsMatchingSheetAtAnyPositionAndMapsActualTemplateHeaders() throws Exception {
+    for (String name : List.of("供货比例-3季度比例", "2026供货比率", "供货比利新版本")) {
+      var result = parser.parse(workbook(name, false, List.of(
+          List.of("供应商A", "S1", "物料A", "M1", "规格", "65%"))), "book.xlsx", null);
       assertThat(result.getErrors()).isEmpty();
-      assertThat(result.getSheetName()).isEqualTo("供货比例-SRM");
-      assertThat(result.getHeaders()).hasSize(8);
-      assertThat(result.getRows()).hasSize(51);
-      assertThat(result.getRows().get(0).getMaterialCode()).isEqualTo("201800082");
-      assertThat(result.getRows().get(0).getSupplyRatio()).isEqualByComparingTo(BigDecimal.ONE);
+      assertThat(result.getRows()).hasSize(1);
+      var row = result.getRows().getFirst();
+      assertThat(row.getSupplierCode()).isEqualTo("S1");
+      assertThat(row.getMaterialCode()).isEqualTo("M1");
+      assertThat(row.getSupplyRatio()).isEqualByComparingTo("0.65");
+      assertThat(row.getUnit()).isNull();
     }
   }
 
-  private InputStream workbook(String sheetName, List<List<String>> rows) {
-    try (XSSFWorkbook workbook = new XSSFWorkbook(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-      Sheet sheet = workbook.createSheet(sheetName);
-      for (int r = 0; r < rows.size(); r++) {
-        Row row = sheet.createRow(r);
-        List<String> values = rows.get(r);
-        for (int c = 0; c < values.size(); c++) {
-          row.createCell(c).setCellValue(values.get(c));
-        }
+  @Test void multipleMatchingSheetsRequireExplicitChoice() throws Exception {
+    var missing = parser.parse(workbook("供货比例本期", true, List.of()), "a.xlsx", null);
+    assertThat(missing.getErrors()).anySatisfy(e -> assertThat(e.getMessage()).contains("多个"));
+    var selected = parser.parse(workbook("供货比例本期", true, List.of(
+        List.of("供应商", "S1", "物料", "M1", "规格", "0.3"))),
+        "a.xlsx", "供货比例本期");
+    assertThat(selected.getRows()).hasSize(1);
+    assertThat(selected.getErrors()).isEmpty();
+  }
+
+  @Test void importsMissingRatiosAsNullAndKeepsExplicitZero() throws Exception {
+    var rows = List.of(
+        List.of("供应商A", "S1", "物料", "M1", "规格", "补充"),
+        List.of("供应商B", "S2", "物料", "M1", "规格", ""),
+        List.of("供应商C", "S3", "物料", "M1", "规格", "0"));
+    var result = parser.parse(workbook("供货比率", false, rows), "a.xlsx", null);
+    assertThat(result.getErrors()).isEmpty();
+    assertThat(result.getRows()).hasSize(3);
+    assertThat(result.getRows().get(0).getSupplyRatio()).isNull();
+    assertThat(result.getRows().get(1).getSupplyRatio()).isNull();
+    assertThat(result.getRows().get(2).getSupplyRatio()).isZero();
+  }
+
+  @Test void invalidTextAndOutOfRangeRatiosRejectImport() throws Exception {
+    var result = parser.parse(workbook("供货比率", false, List.of(
+        List.of("供应商", "S1", "物料", "M1", "规格", "abc"),
+        List.of("供应商", "S2", "物料", "M1", "规格", "110%"))), "a.xlsx", null);
+    assertThat(result.getErrors()).hasSize(2);
+    assertThat(result.getRows()).isEmpty();
+  }
+
+  @Test void numericPercentRetainsActualValueInsteadOfRoundedDisplay() throws Exception {
+    try (var book = new XSSFWorkbook(workbook("供货比例", false, List.of(
+        List.of("供应商", "S1", "物料", "M1", "规格", "0"))));
+        var out = new ByteArrayOutputStream()) {
+      var cell = book.getSheet("供货比例").getRow(1).getCell(5);
+      cell.setCellValue(0.123456);
+      var style = book.createCellStyle();
+      style.setDataFormat(book.createDataFormat().getFormat("0%"));
+      cell.setCellStyle(style);
+      book.write(out);
+      var result = parser.parse(new ByteArrayInputStream(out.toByteArray()), "a.xlsx", null);
+      assertThat(result.getRows().getFirst().getSupplyRatio()).isEqualByComparingTo("0.123456");
+    }
+  }
+
+  private ByteArrayInputStream workbook(String name, boolean multiple, List<List<String>> rows) throws Exception {
+    try (var workbook = new XSSFWorkbook(); var out = new ByteArrayOutputStream()) {
+      workbook.createSheet("其他资料1");
+      workbook.createSheet("其他资料2");
+      var sheet = workbook.createSheet(name);
+      if (multiple) workbook.createSheet("历史供货比例");
+      var header = sheet.createRow(0);
+      for (int i = 0; i < HEADERS.size(); i++) header.createCell(i).setCellValue(HEADERS.get(i));
+      for (int i = 0; i < rows.size(); i++) {
+        var row = sheet.createRow(i + 1);
+        for (int j = 0; j < rows.get(i).size(); j++) row.createCell(j).setCellValue(rows.get(i).get(j));
       }
-      workbook.write(output);
-      return new ByteArrayInputStream(output.toByteArray());
-    } catch (IOException e) {
-      throw new IllegalStateException(e);
+      workbook.write(out);
+      return new ByteArrayInputStream(out.toByteArray());
     }
   }
 }

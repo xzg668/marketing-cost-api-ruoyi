@@ -10,6 +10,8 @@ import lombok.Setter;
 @Getter
 @Setter
 public class QuotePricePrepareGenerateRequest {
+  /** 人工确认前必须重新读取候选价格，不能复用已生成快照。 */
+  private boolean refreshCandidates;
   private String periodMonth;
   private LocalDateTime priceAsOfTime;
   private QuotePriceScenarioType scenarioType;

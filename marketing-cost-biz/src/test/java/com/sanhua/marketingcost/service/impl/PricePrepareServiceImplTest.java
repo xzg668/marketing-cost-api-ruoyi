@@ -107,7 +107,8 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.any()))
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class)))
         .thenReturn(PackageComponentPricePrepareResult.ready(
             new BigDecimal("9.00"), new BigDecimal("22.500"), 900L, "包装组件价格准备完成"));
     when(makePartPricePrepareStrategy.prepare(
@@ -115,6 +116,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.any()))
         .thenReturn(MakePartPricePrepareResult.ready(
             new BigDecimal("18.60"), new BigDecimal("46.500"), 800L, "自制件价格准备完成"));
@@ -194,6 +196,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.eq("COMMERCIAL"),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
         .thenReturn(NormalMaterialPricePrepareResult.ready(
             new BigDecimal("12.30"), new BigDecimal("30.750"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
@@ -338,6 +341,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(item1)))
         .thenReturn(NormalMaterialPricePrepareResult.ready(
             new BigDecimal("1.20"), new BigDecimal("3.000"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
@@ -375,6 +379,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
         .thenReturn(NormalMaterialPricePrepareResult.ready(
             new BigDecimal("1.20"), new BigDecimal("3.000"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
@@ -409,6 +414,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.eq("COMMERCIAL"),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
         .thenReturn(NormalMaterialPricePrepareResult.ready(
             new BigDecimal("1.20"), new BigDecimal("3.000"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
@@ -452,6 +458,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(normalItem)))
         .thenReturn(NormalMaterialPricePrepareResult.ready(
             new BigDecimal("1.20"), new BigDecimal("3.000"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
@@ -511,7 +518,8 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
             org.mockito.ArgumentMatchers.eq("主制造"),
             org.mockito.ArgumentMatchers.eq("U9"),
-            org.mockito.ArgumentMatchers.eq(packageItem)))
+            org.mockito.ArgumentMatchers.eq(packageItem),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class)))
         .thenReturn(PackageComponentPricePrepareResult.ready(
             new BigDecimal("9.00"), new BigDecimal("22.500"), null, "包装组件只读计算完成"));
     when(makePartPricePrepareStrategy.calculate(
@@ -580,6 +588,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(item1)))
         .thenReturn(NormalMaterialPricePrepareResult.gap(
             "MISSING_PRICE",
@@ -643,6 +652,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
         .thenReturn(prepared);
 
@@ -700,7 +710,8 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("主制造"),
             org.mockito.ArgumentMatchers.eq("U9"),
-            org.mockito.ArgumentMatchers.eq(planItem));
+            org.mockito.ArgumentMatchers.eq(planItem),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class));
   }
 
   @Test
@@ -720,7 +731,8 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.eq(planItem)))
+            org.mockito.ArgumentMatchers.eq(planItem),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class)))
         .thenReturn(PackageComponentPricePrepareResult.notReady(
             "MISSING_STRUCTURE",
             "包装组件缺结构",
@@ -755,7 +767,8 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.eq(planItem)))
+            org.mockito.ArgumentMatchers.eq(planItem),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class)))
         .thenReturn(PackageComponentPricePrepareResult.notReady(
             "MISSING_PRICE",
             "包装组件存在子件缺价",
@@ -800,6 +813,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem));
   }
 
@@ -818,6 +832,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
         .thenReturn(MakePartPricePrepareResult.notReady(
             "MISSING_PRICE",
@@ -860,6 +875,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(normalItem)))
         .thenReturn(NormalMaterialPricePrepareResult.ready(
             new BigDecimal("1.20"), new BigDecimal("3.000"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
@@ -870,7 +886,8 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.eq(packageItem)))
+            org.mockito.ArgumentMatchers.eq(packageItem),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class)))
         .thenThrow(new IllegalStateException("包装生成失败"));
 
     PricePrepareGenerateResult result = service.generate(request);
@@ -906,6 +923,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
         .thenReturn(NormalMaterialPricePrepareResult.ready(
             new BigDecimal("12.30"),
@@ -950,6 +968,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
         .thenReturn(NormalMaterialPricePrepareResult.ready(
             new BigDecimal("11.00"),
@@ -1017,6 +1036,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.any(PricePreparePlanItem.class)))
         .thenReturn(NormalMaterialPricePrepareResult.ready(
             new BigDecimal("10.00"),
@@ -1056,6 +1076,7 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
+            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
         .thenReturn(NormalMaterialPricePrepareResult.ready(
             new BigDecimal("13.20"),

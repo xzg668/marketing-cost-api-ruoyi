@@ -38,4 +38,17 @@ public interface PackageComponentPricePrepareStrategy {
     return prepare(
         prepareNo, oaNo, periodMonth, priceAsOfTime, bomPurpose, sourceType, planItem);
   }
+  default PackageComponentPricePrepareResult prepare(
+      String prepareNo, String oaNo, String periodMonth, LocalDateTime priceAsOfTime,
+      String bomPurpose, String sourceType, PricePreparePlanItem planItem,
+      PricePrepareScenarioContext scenarioContext) {
+    return prepare(prepareNo, oaNo, periodMonth, priceAsOfTime, bomPurpose, sourceType, planItem);
+  }
+
+  default PackageComponentPricePrepareResult calculate(
+      String prepareNo, String oaNo, String periodMonth, LocalDateTime priceAsOfTime,
+      String bomPurpose, String sourceType, PricePreparePlanItem planItem,
+      PricePrepareScenarioContext scenarioContext) {
+    return calculate(prepareNo, oaNo, periodMonth, priceAsOfTime, bomPurpose, sourceType, planItem);
+  }
 }

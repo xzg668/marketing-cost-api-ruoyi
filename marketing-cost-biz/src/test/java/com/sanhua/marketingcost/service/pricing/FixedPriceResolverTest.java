@@ -2,221 +2,134 @@ package com.sanhua.marketingcost.service.pricing;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
-import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
-import com.sanhua.marketingcost.dto.CostRunContext;
-import com.sanhua.marketingcost.dto.CostRunPartItemDto;
-import com.sanhua.marketingcost.dto.PriceTypeRoute;
-import com.sanhua.marketingcost.entity.PriceFixedItem;
-import com.sanhua.marketingcost.enums.MaterialFormAttrEnum;
-import com.sanhua.marketingcost.enums.PriceTypeEnum;
-import com.sanhua.marketingcost.mapper.PriceFixedItemMapper;
-import com.sanhua.marketingcost.service.SupplierSupplyRatioResolveService;
+import com.sanhua.marketingcost.dto.*;
+import com.sanhua.marketingcost.entity.*;
+import com.sanhua.marketingcost.enums.*;
+import com.sanhua.marketingcost.mapper.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.List;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.mockito.ArgumentCaptor;
 
 class FixedPriceResolverTest {
+  private final PriceFixedItemMapper prices = mock(PriceFixedItemMapper.class);
+  private final SupplierSupplyRatioMapper ratios = mock(SupplierSupplyRatioMapper.class);
+  private final SupplierPriceDecisionMapper decisions = mock(SupplierPriceDecisionMapper.class);
+  private final FixedPriceResolver resolver = new FixedPriceResolver(prices,
+      new SupplierPriceSelectionService(ratios, decisions), mock(TechnicalPriceSourceResolver.class));
+  private final LocalDate date = LocalDate.parse("2026-10-08");
+  private CostRunContext context;
 
-  @BeforeAll
-  static void initTableInfo() {
-    TableInfoHelper.initTableInfo(
-        new MapperBuilderAssistant(new MybatisConfiguration(), ""), PriceFixedItem.class);
+  @BeforeAll static void metadata() {
+    var assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    TableInfoHelper.initTableInfo(assistant, PriceFixedItem.class);
+    TableInfoHelper.initTableInfo(assistant, SupplierSupplyRatio.class);
   }
-
-  @Test
-  @DisplayName("T23：固定采购价按月度 price_as_of_time 命中有效版本")
-  void monthlyPurchaseFixedUsesContextPriceAsOfTime() {
-    PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);
-    FixedPriceResolver resolver = resolver(mapper);
-    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(fixed("12.340000", "PURCHASE_FIXED")));
-    LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 10, 10, 30);
-
-    CostRunPartItemDto part = part("MAT-FIXED");
-    part.setPriceOrgCode("220");
-    PriceResolveResult result =
-        resolver.resolve(
-            "OA-001",
-            part,
-            route("固定采购价"),
-            monthlyContext(priceAsOfTime));
-
-    assertThat(result.unitPrice()).isEqualByComparingTo("12.340000");
-    ArgumentCaptor<Wrapper<PriceFixedItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
-    verify(mapper).selectList(captor.capture());
-    assertThat(captor.getValue().getCustomSqlSegment())
-        .contains("material_code", "source_type", "org_code", "effective_from")
-        .contains("ORDER BY", "effective_from", "imported_at", "created_at", "DESC")
-        .doesNotContain("effective_to");
-    assertThat(paramValues(captor.getValue())).contains("220", LocalDate.of(2026, 5, 10));
+  @BeforeEach void setup() {
+    context = new CostRunContext();
+    context.setBusinessUnitType("COMMERCIAL"); context.setPricingMonth("2026-10");
+    context.setPriceAsOfTime(date.atStartOfDay()); context.setPriceOrgCode("210");
+    context.setOaFormItemId(17L); context.setSupplierPriceReviewContext(new SupplierPriceReviewContext(17L));
   }
-
-  @Test
-  @DisplayName("固定采购价结束日当天仍是当前价，不标记历史沿用")
-  void fixedPriceEffectiveToDayIsNotCarriedForward() {
-    PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);
-    FixedPriceResolver resolver = resolver(mapper);
-    PriceFixedItem row = fixed("7.256637", "PURCHASE_FIXED");
-    row.setEffectiveTo(LocalDate.of(2026, 6, 30));
-    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(row));
-
-    PriceResolveResult result =
-        resolver.resolve(
-            "OA-001",
-            part("301990444"),
-            route("固定价"),
-            monthlyContext(LocalDateTime.of(2026, 6, 30, 23, 59, 59)));
-
-    assertThat(result.unitPrice()).isEqualByComparingTo("7.256637");
-    assertThat(result.carriedForward()).isFalse();
-    assertThat(result.warningMessage()).isNull();
-    ArgumentCaptor<Wrapper<PriceFixedItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
-    verify(mapper).selectList(captor.capture());
-    assertThat(captor.getValue().getCustomSqlSegment())
-        .doesNotContain("effective_to");
-    assertThat(paramValues(captor.getValue())).contains(LocalDate.of(2026, 6, 30));
+  @Test void missingAccountingDateCannotUseRouteStartAsDate() {
+    context.setPriceAsOfTime(null);
+    assertThat(resolve(twoPrices()).failureCode()).isEqualTo("FIXED_PRICE_SCOPE_MISSING");
+    verifyNoInteractions(ratios, decisions);
   }
-
-  @Test
-  @DisplayName("8月核算可沿用截止7月31日的最近审批价")
-  void expiredFixedPriceIsCarriedForwardWithWarning() {
-    PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);
-    FixedPriceResolver resolver = resolver(mapper);
-    PriceFixedItem row = fixed("7.256637", "PURCHASE_FIXED");
-    row.setId(88L);
-    row.setEffectiveTo(LocalDate.of(2026, 7, 31));
-    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(row));
-
-    PriceResolveResult result = resolver.resolve(
-        "OA-001",
-        part("301990444"),
-        route("固定价"),
-        monthlyContext(LocalDateTime.of(2026, 8, 18, 9, 0)));
-
-    assertThat(result.unitPrice()).isEqualByComparingTo("7.256637");
-    assertThat(result.resultRefId()).isEqualTo(88L);
-    assertThat(result.carriedForward()).isTrue();
-    assertThat(result.effectiveTo()).isEqualTo(LocalDate.of(2026, 7, 31));
-    assertThat(result.warningMessage()).contains("沿用历史价", "2026-07-31", "2026-08-18");
+  @Test void queriesOrganizationMaterialAndHalfOpenDates() {
+    resolve(List.of(row("A","12","2026-10-01","2027-01-01")));
+    ArgumentCaptor<Wrapper<PriceFixedItem>> query=ArgumentCaptor.forClass(Wrapper.class);
+    verify(prices).selectList(query.capture());
+    assertThat(query.getValue().getCustomSqlSegment()).contains("org_code", "material_code", "business_unit_type", "effective_from <=", "effective_to >");
+    verifyNoInteractions(ratios,decisions);
   }
-
-  @Test
-  @DisplayName("SRM每日全量固定采购价不把易变的数据库ID作为取价证据")
-  void dailySrmFixedPriceDoesNotExposeDatabaseIdAsEvidence() {
-    PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);
-    FixedPriceResolver resolver = resolver(mapper);
-    PriceFixedItem row = fixed("7.256637", "PURCHASE_FIXED");
-    row.setId(88L);
-    row.setSourceKind("PUBLIC");
-    row.setSourceSystem("SRM");
-    row.setSourceBatchNo("2026-09-20");
-    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(row));
-
-    PriceResolveResult result = resolver.resolve(
-        "OA-001",
-        part("301990444"),
-        route("固定采购价"),
-        monthlyContext(LocalDateTime.of(2026, 9, 20, 9, 0)));
-
-    assertThat(result.unitPrice()).isEqualByComparingTo("7.256637");
-    assertThat(result.resultRefId()).isNull();
-    assertThat(result.evidence().sourcePriceRecordId()).isNull();
-    assertThat(result.evidence().sourceBatchNo()).isEqualTo("2026-09-20");
+  @Test void effectiveStartIncludedAndEndExcluded() {
+    var result=resolve(List.of(row("A","12","2026-10-08","2027-01-01"),row("B","99","2026-01-01","2026-10-08")));
+    assertThat(result.unitPrice()).isEqualByComparingTo("12");
+    verifyNoInteractions(ratios);
   }
-
-  @Test
-  @DisplayName("T23：结算价使用 SETTLE 来源并按 price_as_of_time 过滤，不能直接取最新")
-  void monthlySettleFixedUsesSettleSourceAndContextPriceAsOfTime() {
-    PriceFixedItemMapper mapper = mock(PriceFixedItemMapper.class);
-    FixedPriceResolver resolver = resolver(mapper);
-    PriceFixedItem row = fixed("8.880000", "SETTLE_FIXED");
-    row.setPricingMonth("2026-05");
-    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(row));
-    LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 20, 14, 0);
-
-    PriceResolveResult result =
-        resolver.resolve(
-            "OA-001",
-            part("MAT-SETTLE"),
-            route("结算价"),
-            monthlyContext(priceAsOfTime));
-
-    assertThat(result.unitPrice()).isEqualByComparingTo("8.880000");
-    assertThat(result.priceSource()).isEqualTo("结算固定价");
-    assertThat(result.remark()).contains("结算期间=2026-05");
-    ArgumentCaptor<Wrapper<PriceFixedItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
-    verify(mapper).selectList(captor.capture());
-    assertThat(captor.getValue().getCustomSqlSegment())
-        .contains("source_type", "effective_from", "imported_at", "created_at")
-        .doesNotContain("effective_to");
-    assertThat(paramValues(captor.getValue()))
-        .contains("SETTLE_FIXED", "SETTLE", LocalDate.of(2026, 5, 20));
+  @Test void expiredPriceIsMissingWithoutCarryForward() {
+    var result=resolve(List.of(row("A","12","2026-01-01","2026-10-08")));
+    assertThat(result.unitPrice()).isNull(); assertThat(result.carriedForward()).isFalse();
   }
-
-  private static FixedPriceResolver resolver(PriceFixedItemMapper mapper) {
-    return new FixedPriceResolver(
-        mapper,
-        new SupplierPreferredPriceSelector(mock(SupplierSupplyRatioResolveService.class)), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class));
+  @Test void oneSupplierUsesLatestStartNotHighestPrice() {
+    var result=resolve(List.of(row("A","64.7","2026-04-01","2027-03-31"),row("A","62.9","2026-10-01","2027-09-30")));
+    assertThat(result.unitPrice()).isEqualByComparingTo("62.9");
   }
-
-  private static CostRunPartItemDto part(String code) {
-    CostRunPartItemDto item = new CostRunPartItemDto();
-    item.setPartCode(code);
-    return item;
+  @Test void equalStartsUseLatestEnd() {
+    var result=resolve(List.of(row("A","14.115","2026-05-01","2026-12-31"),row("A","14.2","2026-05-01","2027-04-30")));
+    assertThat(result.unitPrice()).isEqualByComparingTo("14.2");
   }
-
-  private static PriceTypeRoute route(String rawPriceType) {
-    return new PriceTypeRoute(
-        "MAT",
-        MaterialFormAttrEnum.PURCHASED,
-        PriceTypeEnum.FIXED,
-        1,
-        LocalDate.of(2026, 5, 1),
-        null,
-        "manual",
-        rawPriceType);
+  @Test void ambiguousSameVersionIsExplicitGap() {
+    var result=resolve(List.of(row("A","12","2026-01-01","2027-01-01"),row("A","13","2026-01-01","2027-01-01")));
+    assertThat(result.failureCode()).isEqualTo("FIXED_PRICE_VERSION_CONFLICT");
   }
-
-  private static CostRunContext monthlyContext(LocalDateTime priceAsOfTime) {
-    return CostRunContext.monthlyReprice(
-        "2026-05",
-        88L,
-        "MRP-001",
-        "COMMERCIAL",
-        priceAsOfTime,
-        CostRunContext.BOM_SOURCE_POLICY_HISTORICAL_OA_BOM,
-        "OA-001",
-        1L,
-        "P-001",
-        null,
-        null,
-        "OBJ-001");
+  @Test void ratioWinsBeforePrice() {
+    when(ratios.selectList(any(Wrapper.class))).thenReturn(List.of(ratio("A","0.7"),ratio("B","0.3")));
+    assertThat(resolve(twoPrices()).unitPrice()).isEqualByComparingTo("12");
   }
-
-  private static PriceFixedItem fixed(String price, String sourceType) {
-    PriceFixedItem item = new PriceFixedItem();
-    item.setMaterialCode("MAT");
-    item.setSourceType(sourceType);
-    item.setSupplierCode("S-001");
-    item.setFixedPrice(new BigDecimal(price));
-    item.setEffectiveFrom(LocalDate.of(2026, 5, 1));
-    return item;
+  @Test void equalLargestRatiosChooseHighestPrice() {
+    when(ratios.selectList(any(Wrapper.class))).thenReturn(List.of(ratio("A","0.5"),ratio("B","0.5")));
+    assertThat(resolve(twoPrices()).unitPrice()).isEqualByComparingTo("18");
   }
-
-  private static List<Object> paramValues(Wrapper<PriceFixedItem> wrapper) {
-    AbstractWrapper<?, ?, ?> abstractWrapper = (AbstractWrapper<?, ?, ?>) wrapper;
-    return List.copyOf(abstractWrapper.getParamNameValuePairs().values());
+  @Test void supplierWithoutValidPriceCannotBeChosen() {
+    when(ratios.selectList(any(Wrapper.class))).thenReturn(List.of(ratio("A","0.1"),ratio("B","0.2"),ratio("C","0.7")));
+    assertThat(resolve(twoPrices()).unitPrice()).isEqualByComparingTo("18");
   }
+  @Test void missingRatiosRequireReviewAndNoWrites() {
+    assertThat(resolve(twoPrices()).failureCode()).isEqualTo(SupplierPriceSelectionService.REVIEW_REQUIRED);
+    assertThat(context.getSupplierPriceReviewContext().reviews()).singleElement().satisfies(r -> {
+      assertThat(r.scope().oaFormItemId()).isEqualTo(17L); assertThat(r.status()).isEqualTo("PENDING");
+      assertThat(r.candidates()).allSatisfy(c -> assertThat(c.supplyRatio()).isNull());
+    });
+    verify(decisions,never()).insert(any(SupplierPriceDecision.class));
+  }
+  @Test void confirmedNoChoosesHighestAndReentryKeepsDecision() {
+    resolve(twoPrices()); var review=context.getSupplierPriceReviewContext().reviews().getFirst();
+    var decision=new SupplierPriceDecision(); decision.setDecision("FALLBACK_HIGH"); decision.setFingerprint(review.fingerprint());
+    when(decisions.latest(review.scopeKey())).thenReturn(decision);
+    var result=resolve(twoPrices()); assertThat(result.unitPrice()).isEqualByComparingTo("18");
+    assertThat(result.warningMessage()).contains("已确认按最高价");
+    assertThat(resolve(twoPrices()).unitPrice()).isEqualByComparingTo("18");
+  }
+  @Test void changedPriceInvalidatesPreviousConfirmation() {
+    resolve(twoPrices()); var review=context.getSupplierPriceReviewContext().reviews().getFirst();
+    var decision=new SupplierPriceDecision(); decision.setDecision("FALLBACK_HIGH"); decision.setFingerprint(review.fingerprint());
+    when(decisions.latest(review.scopeKey())).thenReturn(decision);
+    var changed=twoPrices(); changed.getFirst().setFixedPrice(new BigDecimal("19"));
+    assertThat(resolve(changed).unitPrice()).isNull();
+  }
+  @Test void waitingDecisionAutomaticallyResolvesAfterImport() {
+    var decision=new SupplierPriceDecision(); decision.setDecision("WAIT_IMPORT");
+    when(decisions.latest(any())).thenReturn(decision);
+    assertThat(resolve(twoPrices()).unitPrice()).isNull();
+    when(ratios.selectList(any(Wrapper.class))).thenReturn(List.of(ratio("A","1"),ratio("B",null)));
+    assertThat(resolve(twoPrices()).unitPrice()).isEqualByComparingTo("12");
+  }
+  @Test void srmEvidenceDoesNotUseVolatileId() {
+    var row=row("A","12","2026-01-01","2027-01-01");row.setId(123L);row.setSourceSystem("SRM");row.setSourceKind("PUBLIC");row.setSourceBatchNo("batch");
+    var result=resolve(List.of(row));assertThat(result.resultRefId()).isNull();assertThat(result.evidence().sourceBatchNo()).isEqualTo("batch");
+  }
+  @Test void settlementPriceBehaviorIsUnchanged() {
+    when(prices.selectList(any(Wrapper.class))).thenReturn(List.of(row("A","11","2026-01-01","2026-02-01")));
+    var result=resolver.resolve("OA-TEST",part(),route("结算价"),context);
+    assertThat(result.unitPrice()).isEqualByComparingTo("11");assertThat(result.priceSource()).isEqualTo("结算固定价");verifyNoInteractions(ratios);
+  }
+  private PriceResolveResult resolve(List<PriceFixedItem> rows) {
+    when(prices.selectList(any(Wrapper.class))).thenReturn(rows);return resolver.resolve("OA-TEST",part(),route("固定采购价"),context);
+  }
+  private CostRunPartItemDto part() {var p=new CostRunPartItemDto();p.setPartCode("MAT-1");return p;}
+  private PriceTypeRoute route(String type) {return new PriceTypeRoute("MAT-1",MaterialFormAttrEnum.PURCHASED,PriceTypeEnum.FIXED,1,date,null,"manual",type);}
+  private List<PriceFixedItem> twoPrices() {return List.of(row("A","12","2026-01-01","2027-01-01"),row("B","18","2026-01-01","2027-01-01"));}
+  private PriceFixedItem row(String supplier,String price,String start,String end) {
+    var r=new PriceFixedItem();r.setSupplierCode(supplier);r.setSourceType("PURCHASE_FIXED");r.setFixedPrice(new BigDecimal(price));r.setEffectiveFrom(LocalDate.parse(start));r.setEffectiveTo(LocalDate.parse(end));return r;
+  }
+  private SupplierSupplyRatio ratio(String supplier,String value) {var r=new SupplierSupplyRatio();r.setSupplierCode(supplier);r.setSupplyRatio(value==null?null:new BigDecimal(value));return r;}
 }

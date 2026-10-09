@@ -12,6 +12,7 @@ public interface SupplierSupplyRatioService {
       String specModel,
       String supplierName,
       String sourceType,
+      Integer isActive,
       int page,
       int pageSize,
       String businessUnitType);

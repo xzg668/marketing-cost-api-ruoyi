@@ -353,6 +353,8 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
         req.priceAsOfTime,
         null);
     context.setPriceOrgCode(req.priceOrgCode);
+    context.setSupplierPriceReviewContext(req.supplierReviews);
+    if (req.supplierReviews != null) context.setOaFormItemId(req.supplierReviews.oaFormItemId());
     context.setMaterialOrganizationCode(
         MaterialOrganization.fromPriceOrgCode(req.priceOrgCode).getCode());
     context.setBusinessUnitType(com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType());
@@ -713,7 +715,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
         priceAsOfTime,
         explicitPriceAsOfTime,
         trimToNull(request.getCalcBatchId()),
-        request.isForceRefresh());
+        request.isForceRefresh(), request.getSupplierPriceReviewContext());
   }
 
   private String requiredPriceOrgCode(String priceOrgCode) {
@@ -760,5 +762,6 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
       LocalDateTime priceAsOfTime,
       boolean explicitPriceAsOfTime,
       String calcBatchId,
-      boolean forceRefresh) {}
+      boolean forceRefresh,
+      com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext supplierReviews) {}
 }

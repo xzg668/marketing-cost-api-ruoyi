@@ -223,6 +223,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
         successCount++;
       }
     }
+    batch.setSupplierPriceReviews(req.scenarioContext().supplierReviews().reviews());
     String status = gapCount > 0 ? STATUS_PARTIAL : STATUS_SUCCESS;
     String message = gapCount > 0
         ? "已读取BOM结算明细并完成价格准备，存在待补充缺口"
@@ -347,7 +348,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
             req.priceAsOfTime(),
             req.bomPurpose(),
             req.sourceType(),
-            planItem);
+            planItem, req.scenarioContext().forOrganization(planItem.getBomRow().getPriceOrgCode()));
       }
       return packageComponentPricePrepareStrategy.prepare(
           batch.getPrepareNo(),
@@ -356,7 +357,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
           req.priceAsOfTime(),
           req.bomPurpose(),
           req.sourceType(),
-          planItem);
+          planItem, req.scenarioContext().forOrganization(planItem.getBomRow().getPriceOrgCode()));
     } catch (RuntimeException ex) {
       PackageComponentPricePrepareResult.Gap gap =
           new PackageComponentPricePrepareResult.Gap(
@@ -381,34 +382,12 @@ public class PricePrepareServiceImpl implements PricePrepareService {
             batch.getBusinessUnitType(),
             req.periodMonth(),
             req.priceAsOfTime(),
-            req.scenarioContext(),
+            req.scenarioContext().forOrganization(planItem.getBomRow().getPriceOrgCode()),
             planItem);
       }
-      if (req.scenarioContext().scenarioType() == QuotePriceScenarioType.FINANCE_QUOTE_BASE) {
-        NormalMaterialPricePrepareResult financeResult = normalMaterialPricePrepareStrategy.prepare(
-            req.oaNo(),
-            batch.getBusinessUnitType(),
-            req.periodMonth(),
-            req.priceAsOfTime(),
-            req.scenarioContext(),
-            planItem);
-        if (financeResult != null) {
-          return financeResult;
-        }
-        // 兼容尚未实现新默认方法的代理/测试桩；生产实现会走上面的财务场景方法。
-        return normalMaterialPricePrepareStrategy.prepare(
-            req.oaNo(),
-            batch.getBusinessUnitType(),
-            req.periodMonth(),
-            req.priceAsOfTime(),
-            planItem);
-      }
-      return normalMaterialPricePrepareStrategy.prepare(
-          req.oaNo(),
-          batch.getBusinessUnitType(),
-          req.periodMonth(),
-          req.priceAsOfTime(),
-          planItem);
+      return normalMaterialPricePrepareStrategy.prepare(req.oaNo(), batch.getBusinessUnitType(),
+          req.periodMonth(), req.priceAsOfTime(),
+          req.scenarioContext().forOrganization(planItem.getBomRow().getPriceOrgCode()), planItem);
     } catch (RuntimeException ex) {
       return NormalMaterialPricePrepareResult.gap(
           ITEM_STATUS_FAILED,
@@ -431,20 +410,12 @@ public class PricePrepareServiceImpl implements PricePrepareService {
             batch.getBusinessUnitType(),
             req.periodMonth(),
             req.priceAsOfTime(),
-            req.scenarioContext(),
+            req.scenarioContext().forOrganization(planItem.getBomRow().getPriceOrgCode()),
             planItem);
       }
-      if (req.scenarioContext().scenarioType() == QuotePriceScenarioType.FINANCE_QUOTE_BASE) {
-        return makePartPricePrepareStrategy.prepare(
-            req.oaNo(),
-            batch.getBusinessUnitType(),
-            req.periodMonth(),
-            req.priceAsOfTime(),
-            req.scenarioContext(),
-            planItem);
-      }
-      return makePartPricePrepareStrategy.prepare(
-          req.oaNo(), batch.getBusinessUnitType(), req.periodMonth(), req.priceAsOfTime(), planItem);
+      return makePartPricePrepareStrategy.prepare(req.oaNo(), batch.getBusinessUnitType(),
+          req.periodMonth(), req.priceAsOfTime(),
+          req.scenarioContext().forOrganization(planItem.getBomRow().getPriceOrgCode()), planItem);
     } catch (RuntimeException ex) {
       MakePartPricePrepareResult.Gap gap =
           new MakePartPricePrepareResult.Gap(
@@ -836,7 +807,8 @@ public class PricePrepareServiceImpl implements PricePrepareService {
         request.getScenarioType(),
         request.getScenarioGroupNo(),
         request.getSourcePrepareNo(),
-        request.getVariableOverrides());
+        request.getVariableOverrides(),
+        new com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext(oaFormItemId));
     // BOM 目的按已冻结口径固定主制造，忽略前端或调用方传入值，避免准备结果和结算行口径漂移。
     return new NormalizedGenerateRequest(
         request.getOaNo().trim(),
@@ -900,6 +872,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       currentStateService.finalizeBatch(batch);
     }
     PricePrepareCalculationResult calculation = new PricePrepareCalculationResult();
+    calculation.setSupplierPriceReviews(batch.getSupplierPriceReviews() == null ? List.of() : batch.getSupplierPriceReviews());
     calculation.setSummary(toResult(batch));
     calculation.setItems(List.copyOf(execution.items));
     calculation.setGaps(List.copyOf(execution.gaps));
