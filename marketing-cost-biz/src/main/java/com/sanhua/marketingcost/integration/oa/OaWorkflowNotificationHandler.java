@@ -189,7 +189,7 @@ public class OaWorkflowNotificationHandler {
         """, formId);
     jdbc.update("""
         UPDATE lp_oa_integration_message m SET m.status='REJECTED',m.error_code='FLOW_CLOSED',
-          m.error_message='OA流程已结束，停止旧办理',m.lease_token=NULL,m.lease_until=NULL
+          m.error_message='OA流程已结束，停止旧办理'
         WHERE m.direction='OUTBOUND' AND m.source_system=? AND m.environment=?
           AND m.status IN ('RECEIVED','PROCESSING','WAITING_HANDLER','FAILED')
           AND (JSON_UNQUOTE(JSON_EXTRACT(m.raw_payload,'$.payload.documentId'))=?
@@ -204,7 +204,7 @@ public class OaWorkflowNotificationHandler {
   private void confirmOutbound(Long id, long notificationId) {
     if (id == null) return;
     jdbc.update("""
-        UPDATE lp_oa_integration_message SET status='PROCESSED',lease_token=NULL,lease_until=NULL,processed_at=NOW(3),
+        UPDATE lp_oa_integration_message SET status='PROCESSED',processed_at=NOW(3),
           error_code=NULL,error_message=NULL,result_json=? WHERE id=? AND direction='OUTBOUND' AND status<>'PROCESSED'
         """, codec.write(java.util.Map.of("confirmedByNotificationId", notificationId)), id);
   }

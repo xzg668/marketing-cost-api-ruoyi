@@ -117,7 +117,7 @@ public class OaQuotationService {
       call.field("stage", "IDEMPOTENT_REPLAY");
       return codec.read(message.resultJson());
     }
-    // receive 的唯一键写入已持有行锁；事务提交前后台接收箱看不到尚未完成的新记录。
+    // receive 的唯一键写入已持有行锁；业务写入和成功回执在同一事务提交，防止重复请求重复建单。
     var result = handler.handle(message, mapped.quote());
     Map<String, String> ids =
         result.items().stream()

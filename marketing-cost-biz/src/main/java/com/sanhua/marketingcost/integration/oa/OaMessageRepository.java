@@ -9,12 +9,12 @@ import java.util.Set;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-/** 所有 claim/finish 均由应用层事务包围；业务写入和成功回执使用同一个数据库事务。 */
+/** 保存接口原文、校验请求幂等并记录回执；事务边界由调用方业务服务控制。 */
 @Repository
 public class OaMessageRepository {
   public record Message(long id, OaPeer peer, String requestId, String interfaceType,
       int schemaVersion, String rawPayload, String payloadHash, String status, int attemptCount,
-      String leaseToken, String errorStage, String errorCode, String errorMessage,
+      String errorStage, String errorCode, String errorMessage,
       String resultJson, LocalDateTime receivedAt, LocalDateTime processedAt) {}
 
   private final JdbcTemplate jdbc;
@@ -99,7 +99,7 @@ public class OaMessageRepository {
         row.getString("environment"), Set.copyOf(Arrays.asList(row.getString("allowed_business_units").split(",")))),
         row.getString("request_id"), row.getString("interface_type"), row.getInt("schema_version"),
         row.getString("raw_payload"), row.getString("payload_hash"), row.getString("status"),
-        row.getInt("attempt_count"), row.getString("lease_token"), row.getString("error_stage"),
+        row.getInt("attempt_count"), row.getString("error_stage"),
         row.getString("error_code"), row.getString("error_message"), row.getString("result_json"),
         row.getObject("received_at", LocalDateTime.class), row.getObject("processed_at", LocalDateTime.class));
   }

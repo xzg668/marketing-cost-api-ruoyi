@@ -5,9 +5,8 @@ integration:
   oa:
     mode: REAL
     environment: TEST
-    # 当前只开放 OA 调用报价系统的 I01/I04/I08，暂不启动出站队列。
+    # OA 调用报价系统的 I01/I04/I08 接口配置。
     max-body-bytes: 2097152
-    max-attempts: 5
     clients:
       oa:
         source-system: WEAVER
@@ -17,5 +16,3 @@ integration:
         business-units:
           - COMMERCIAL
           - HOUSEHOLD
-    outbound:
-      enabled: false
