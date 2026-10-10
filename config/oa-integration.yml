@@ -6,10 +6,7 @@ integration:
     mode: REAL
     environment: TEST
     # 当前只开放 OA 调用报价系统的 I01/I04/I08，暂不启动出站队列。
-    worker-enabled: false
     max-body-bytes: 2097152
-    batch-size: 20
-    lease-seconds: 60
     max-attempts: 5
     clients:
       oa:
