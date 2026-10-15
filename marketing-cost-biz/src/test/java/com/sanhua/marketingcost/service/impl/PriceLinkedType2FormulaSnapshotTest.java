@@ -76,7 +76,7 @@ class PriceLinkedType2FormulaSnapshotTest {
         .contains("[factor_identity_191]", "[factor_identity_192]", "/1000");
     assertThat(result.getReferences()).hasSize(11);
     assertThat(result.getFactorReplacements()).hasSize(2);
-    assertThat(result.getStrippedRoundScales()).containsExactly(4);
+    assertThat(result.getConvertedFormula()).startsWith("ROUND(").endsWith(",4)");
   }
 
   @Test

@@ -25,7 +25,6 @@ public class MonthlyRepriceCostRunAdapterImpl implements MonthlyRepriceCostRunAd
   private static final String PRICE_PREPARE_SUCCESS = "SUCCESS";
   private static final String PRICE_PREPARE_PARTIAL = "PARTIAL";
   private static final String PRICE_SOURCE_ERROR = "ERROR";
-  private static final String PRICE_SOURCE_NO_ROUTE = "NO_ROUTE";
 
   private final MonthlyRepriceBatchMapper batchMapper;
   private final PricePrepareService pricePrepareService;
@@ -54,7 +53,6 @@ public class MonthlyRepriceCostRunAdapterImpl implements MonthlyRepriceCostRunAd
     CostRunContext context =
         CostRunContext.monthlyReprice(
             firstText(task.getPricingMonth(), batch.getPricingMonth()),
-            batch.getAdjustBatchId(),
             task.getSourceNo(),
             firstText(task.getBusinessUnitType(), batch.getBusinessUnitType()),
             resolvePriceAsOfTime(batch),
@@ -169,25 +167,7 @@ public class MonthlyRepriceCostRunAdapterImpl implements MonthlyRepriceCostRunAd
         && item.getPartQty() != null
         && item.getPartQty().signum() != 0
         && (item.getUnitPrice() == null || item.getAmount() == null);
-    if (!missingResolvedPrice) {
-      return false;
-    }
-    return isCriticalMonthlySource(item)
-        || !PRICE_SOURCE_NO_ROUTE.equalsIgnoreCase(item.getPriceSource());
-  }
-
-  private boolean isCriticalMonthlySource(CostRunPartItemDto item) {
-    String text = (firstText(item.getPriceType(), "") + " "
-        + firstText(item.getPriceSource(), "") + " "
-        + firstText(item.getRemark(), "")).toUpperCase();
-    return text.contains("MAKE")
-        || text.contains("LINKED")
-        || text.contains("MONTHLY_ADJUST")
-        || text.contains("PACKAGE")
-        || text.contains("制造件")
-        || text.contains("自制件")
-        || text.contains("联动")
-        || text.contains("包装");
+    return missingResolvedPrice;
   }
 
   private String partMissingMessage(CostRunPartItemDto item) {

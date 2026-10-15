@@ -18,7 +18,7 @@ public record PriceTypeRoute(
     MaterialFormAttrEnum formAttr,
     /* 价格类型（4 桶之一） */
     PriceTypeEnum priceType,
-    /* 优先级；priority=1 为本次命中，>1 表示是降级候选 */
+    /* 配置优先级；实际命中由取价结果单独记录 */
     Integer priority,
     /* 生效起始（含），可为 null */
     LocalDate effectiveFrom,
@@ -29,11 +29,25 @@ public record PriceTypeRoute(
     /* 路由表原始价格类型文案；FIXED 桶用它区分固定采购价和结算固定价 */
     String rawPriceType,
     String sourceKind,
-    Long sourceRecordId) {
+    Long sourceRecordId,
+    com.sanhua.marketingcost.service.MaterialPricePriorityService.Configuration priorityConfiguration) {
+  public PriceTypeRoute(String materialCode, MaterialFormAttrEnum formAttr, PriceTypeEnum priceType,
+      Integer priority, LocalDate effectiveFrom, LocalDate effectiveTo, String sourceSystem,
+      String rawPriceType, String sourceKind, Long sourceRecordId) {
+    this(materialCode, formAttr, priceType, priority, effectiveFrom, effectiveTo, sourceSystem,
+        rawPriceType, sourceKind, sourceRecordId, null);
+  }
   public PriceTypeRoute(String materialCode, MaterialFormAttrEnum formAttr, PriceTypeEnum priceType,
       Integer priority, LocalDate effectiveFrom, LocalDate effectiveTo, String sourceSystem, String rawPriceType) {
     this(materialCode, formAttr, priceType, priority, effectiveFrom, effectiveTo, sourceSystem, rawPriceType, "PUBLIC", null);
   }
 
   public boolean supplemental() { return "TECH_SUPPLEMENTAL".equals(sourceKind); }
+
+  public String selectedSourceType() {
+    if (supplemental()) return priceType.name();
+    if (priceType == PriceTypeEnum.MAKE) return priceType.name();
+    return priorityConfiguration == null ? priceType.name()
+        : com.sanhua.marketingcost.enums.MaterialPriceSourceType.fromStored(rawPriceType).name();
+  }
 }

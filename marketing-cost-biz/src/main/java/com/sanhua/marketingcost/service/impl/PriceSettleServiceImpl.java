@@ -11,8 +11,6 @@ import com.sanhua.marketingcost.entity.PriceSettleItem;
 import com.sanhua.marketingcost.mapper.PriceSettleItemMapper;
 import com.sanhua.marketingcost.mapper.PriceSettleMapper;
 import com.sanhua.marketingcost.service.PriceSettleService;
-import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
-import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.RouteCommand;
 import java.util.ArrayList;
 import java.util.List;
 import org.springframework.stereotype.Service;
@@ -23,15 +21,12 @@ import org.springframework.transaction.annotation.Transactional;
 public class PriceSettleServiceImpl implements PriceSettleService {
   private final PriceSettleMapper settleMapper;
   private final PriceSettleItemMapper itemMapper;
-  private final MaterialPriceTypeRouteSyncService priceTypeRouteSyncService;
 
   public PriceSettleServiceImpl(
       PriceSettleMapper settleMapper,
-      PriceSettleItemMapper itemMapper,
-      MaterialPriceTypeRouteSyncService priceTypeRouteSyncService) {
+      PriceSettleItemMapper itemMapper) {
     this.settleMapper = settleMapper;
     this.itemMapper = itemMapper;
-    this.priceTypeRouteSyncService = priceTypeRouteSyncService;
   }
 
   @Override
@@ -127,7 +122,6 @@ public class PriceSettleServiceImpl implements PriceSettleService {
           fillItem(item, row);
           itemMapper.updateById(item);
         }
-        syncPriceType(item);
         items.add(item);
       }
     }
@@ -146,7 +140,6 @@ public class PriceSettleServiceImpl implements PriceSettleService {
     item.setBusinessUnitType(settle.getBusinessUnitType());
     mergeItem(item, request);
     itemMapper.insert(item);
-    syncPriceType(item);
     return item;
   }
 
@@ -158,7 +151,6 @@ public class PriceSettleServiceImpl implements PriceSettleService {
     if (existing == null) return null;
     mergeItem(existing, request);
     itemMapper.updateById(existing);
-    syncPriceType(existing);
     return existing;
   }
 
@@ -228,21 +220,4 @@ public class PriceSettleServiceImpl implements PriceSettleService {
     if (req.getRemark() != null) item.setRemark(req.getRemark());
   }
 
-  private void syncPriceType(PriceSettleItem item) {
-    if (item == null
-        || (item.getPlannedPrice() == null
-            && item.getBaseSettlePrice() == null
-            && item.getLinkedSettlePrice() == null)) {
-      return;
-    }
-    priceTypeRouteSyncService.sync(new RouteCommand(
-        item.getMaterialCode(),
-        item.getMaterialName(),
-        item.getModel(),
-        null,
-        item.getBusinessUnitType(),
-        "结算固定价",
-        "price_settle",
-        "FORMAL_SETTLE"));
-  }
 }

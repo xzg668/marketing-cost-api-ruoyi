@@ -56,6 +56,7 @@ class PackageComponentPriceServiceImplTest {
   private PackageComponentPriceMapper priceMapper;
   private PackageComponentPriceDetailMapper priceDetailMapper;
   private PackageComponentGapItemMapper gapItemMapper;
+  private com.sanhua.marketingcost.service.LinkedPriceEnsureService linkedPrices;
   private PackageComponentPriceServiceImpl service;
 
   @BeforeAll
@@ -73,6 +74,7 @@ class PackageComponentPriceServiceImplTest {
     priceMapper = mock(PackageComponentPriceMapper.class);
     priceDetailMapper = mock(PackageComponentPriceDetailMapper.class);
     gapItemMapper = mock(PackageComponentGapItemMapper.class);
+    linkedPrices = mock(com.sanhua.marketingcost.service.LinkedPriceEnsureService.class);
   }
 
   @Test
@@ -89,9 +91,9 @@ class PackageComponentPriceServiceImplTest {
       price.setId(500L);
       return 1;
     });
-    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), eq(LocalDate.parse("2026-05-21"))))
+    when(materialPriceRouterService.prepareCandidates(eq("A"), org.mockito.Mockito.any(), eq("2026-05"), eq(LocalDate.parse("2026-05-21")), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route("A")));
-    when(materialPriceRouterService.listCandidates(eq("B"), eq("2026-05"), eq(LocalDate.parse("2026-05-21"))))
+    when(materialPriceRouterService.prepareCandidates(eq("B"), org.mockito.Mockito.any(), eq("2026-05"), eq(LocalDate.parse("2026-05-21")), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route("B")));
 
     PackagePriceResult result = service.ensurePrice(request());
@@ -121,9 +123,9 @@ class PackageComponentPriceServiceImplTest {
         .thenReturn(snapshotResult(List.of(
             detail(101L, 1, "A", "2.000000"),
             detail(102L, 2, "B", "4.000000"))));
-    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), any(LocalDate.class)))
+    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route("A")));
-    when(materialPriceRouterService.listCandidates(eq("B"), eq("2026-05"), any(LocalDate.class)))
+    when(materialPriceRouterService.listCandidates(eq("B"), eq("2026-05"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route("B")));
 
     PackagePriceResult result = service.calculatePrice(request());
@@ -159,7 +161,7 @@ class PackageComponentPriceServiceImplTest {
       price.setId(510L);
       return 1;
     });
-    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), eq(LocalDate.parse("2026-05-26"))))
+    when(materialPriceRouterService.prepareCandidates(eq("A"), org.mockito.Mockito.any(), eq("2026-05"), eq(LocalDate.parse("2026-05-26")), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route("A")));
     PackagePriceRequest request = request();
     request.setAsOfDate(null);
@@ -182,7 +184,7 @@ class PackageComponentPriceServiceImplTest {
   }
 
   @Test
-  @DisplayName("缺价格类型：明细标 MISSING_ROUTE，主表不完整并写 gap")
+  @DisplayName("无可用价源：明细标 MISSING_PRICE，主表不完整并写 gap")
   void marksMissingRoute() {
     service = serviceWith(resolver(Map.of()));
     when(snapshotService.ensureSnapshot(any(PackageSnapshotRequest.class)))
@@ -193,7 +195,7 @@ class PackageComponentPriceServiceImplTest {
       price.setId(501L);
       return 1;
     });
-    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), eq(LocalDate.parse("2026-05-21"))))
+    when(materialPriceRouterService.prepareCandidates(eq("A"), org.mockito.Mockito.any(), eq("2026-05"), eq(LocalDate.parse("2026-05-21")), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of());
 
     PackagePriceResult result = service.ensurePrice(request());
@@ -205,14 +207,14 @@ class PackageComponentPriceServiceImplTest {
     ArgumentCaptor<PackageComponentPriceDetail> detailCaptor =
         ArgumentCaptor.forClass(PackageComponentPriceDetail.class);
     verify(priceDetailMapper).insert(detailCaptor.capture());
-    assertThat(detailCaptor.getValue().getPriceStatus()).isEqualTo("MISSING_ROUTE");
+    assertThat(detailCaptor.getValue().getPriceStatus()).isEqualTo("MISSING_PRICE");
     assertThat(detailCaptor.getValue().getChildUnitPrice()).isNull();
     assertThat(detailCaptor.getValue().getChildAmount()).isNull();
 
     ArgumentCaptor<PackageComponentGapItem> gapCaptor =
         ArgumentCaptor.forClass(PackageComponentGapItem.class);
     verify(gapItemMapper).insert(gapCaptor.capture());
-    assertThat(gapCaptor.getValue().getGapType()).isEqualTo("MISSING_ROUTE");
+    assertThat(gapCaptor.getValue().getGapType()).isEqualTo("MISSING_PRICE");
     assertThat(gapCaptor.getValue().getPeriodMonth()).isEqualTo("2026-05");
     assertThat(gapCaptor.getValue().getQuoteNo()).isEqualTo("Q-001");
     assertThat(gapCaptor.getValue().getOaNo()).isEqualTo("OA-001");
@@ -222,7 +224,7 @@ class PackageComponentPriceServiceImplTest {
     assertThat(gapCaptor.getValue().getChildMaterialCode()).isEqualTo("A");
     assertThat(gapCaptor.getValue().getPriceType()).isNull();
     assertThat(gapCaptor.getValue().getMissingMaterialCode()).isEqualTo("A");
-    assertThat(gapCaptor.getValue().getMissingReason()).contains("未配价格类型路由");
+    assertThat(gapCaptor.getValue().getMissingReason()).contains("没有可用价格来源");
     assertThat(gapCaptor.getValue().getStatus()).isEqualTo("PENDING_MAINTAIN");
     assertThat(gapCaptor.getValue().getOaPushStatus()).isEqualTo("NOT_PUSHED");
   }
@@ -239,7 +241,7 @@ class PackageComponentPriceServiceImplTest {
       price.setId(502L);
       return 1;
     });
-    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), eq(LocalDate.parse("2026-05-21"))))
+    when(materialPriceRouterService.prepareCandidates(eq("A"), org.mockito.Mockito.any(), eq("2026-05"), eq(LocalDate.parse("2026-05-21")), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route("A")));
 
     PackagePriceResult result = service.ensurePrice(request());
@@ -268,6 +270,25 @@ class PackageComponentPriceServiceImplTest {
   }
 
   @Test
+  @DisplayName("包装子件供货比率审核原因传递给报价缺口")
+  void keepsSupplierRatioFailureCodeForPackageChild() {
+    service = serviceWith(resolver(Map.of("A", PriceResolveResult.miss(
+        "SUPPLIER_RATIO_REVIEW_REQUIRED", "供货比率不足，请确认是否有新增审核"))));
+    when(snapshotService.previewSnapshot(any(PackageSnapshotRequest.class)))
+        .thenReturn(snapshotResult(List.of(detail(101L, 1, "A", "2.000000"))));
+    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), any(LocalDate.class),
+        org.mockito.Mockito.any(), org.mockito.Mockito.any())).thenReturn(List.of(route("A")));
+
+    PackagePriceResult result = service.calculatePrice(request());
+
+    assertThat(result.getStatus()).isEqualTo("MISSING_CHILD_PRICE");
+    assertThat(result.getDetails()).singleElement().satisfies(row -> {
+      assertThat(row.getPriceType()).isEqualTo("FIXED");
+      assertThat(row.getFailureCode()).isEqualTo("SUPPLIER_RATIO_REVIEW_REQUIRED");
+    });
+  }
+
+  @Test
   @DisplayName("缺价重复生成：复用既有 gap，不重复插入")
   void upsertsExistingGapWhenRegenerating() {
     service = serviceWith(resolver(Map.of()));
@@ -279,7 +300,7 @@ class PackageComponentPriceServiceImplTest {
       price.setId(505L);
       return 1;
     });
-    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), eq(LocalDate.parse("2026-05-21"))))
+    when(materialPriceRouterService.prepareCandidates(eq("A"), org.mockito.Mockito.any(), eq("2026-05"), eq(LocalDate.parse("2026-05-21")), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of());
     PackageComponentGapItem existingGap = new PackageComponentGapItem();
     existingGap.setId(800L);
@@ -293,7 +314,7 @@ class PackageComponentPriceServiceImplTest {
         ArgumentCaptor.forClass(PackageComponentGapItem.class);
     verify(gapItemMapper).updateById(gapCaptor.capture());
     assertThat(gapCaptor.getValue().getId()).isEqualTo(800L);
-    assertThat(gapCaptor.getValue().getGapType()).isEqualTo("MISSING_ROUTE");
+    assertThat(gapCaptor.getValue().getGapType()).isEqualTo("MISSING_PRICE");
     assertThat(gapCaptor.getValue().getLineNo()).isEqualTo(1);
     assertThat(gapCaptor.getValue().getChildMaterialCode()).isEqualTo("A");
     assertThat(gapCaptor.getValue().getStatus()).isEqualTo("PENDING_MAINTAIN");
@@ -314,7 +335,7 @@ class PackageComponentPriceServiceImplTest {
     existing.setPriceStatus("MISSING_CHILD_PRICE");
     existing.setPriceComplete(false);
     when(priceMapper.selectList(any(Wrapper.class))).thenReturn(List.of(existing));
-    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), eq(LocalDate.parse("2026-05-21"))))
+    when(materialPriceRouterService.prepareCandidates(eq("A"), org.mockito.Mockito.any(), eq("2026-05"), eq(LocalDate.parse("2026-05-21")), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route("A")));
 
     PackagePriceResult result = service.ensurePrice(request());
@@ -327,41 +348,22 @@ class PackageComponentPriceServiceImplTest {
   }
 
   @Test
-  @DisplayName("同月同成品同包装父料号已有完整价格：不同 OA 直接复用，不重新取子件价")
-  void reusesCompletePriceAcrossOaForSameMonthTopAndPackage() {
-    service = serviceWith(resolver(Map.of()));
-    PackageComponentPrice existing = new PackageComponentPrice();
-    existing.setId(507L);
-    existing.setPackageMaterialCode("9830000026238");
-    existing.setPeriodMonth("2026-05");
-    existing.setSourceTopProductCode("1079900000536");
-    existing.setOaNo("OA-OLD");
-    existing.setPriceStatus("PRICED");
-    existing.setPriceComplete(true);
-    existing.setTotalPrice(new BigDecimal("1.23000000"));
-    PackageComponentPriceDetail existingDetail = new PackageComponentPriceDetail();
-    existingDetail.setPriceId(507L);
-    existingDetail.setLineNo(1);
-    existingDetail.setChildMaterialCode("A");
-    existingDetail.setPriceStatus("PRICED");
+  @DisplayName("同月同组件的新OA必须按本次输入重新计算子件")
+  void newQuoteRecalculatesChildrenInsteadOfReusingOtherQuotePrice() {
+    service = serviceWith(resolver(Map.of("A", PriceResolveResult.hit(new BigDecimal("2"), "固定采购价"))));
+    var existing = new PackageComponentPrice(); existing.setId(507L);
+    existing.setPriceStatus("PRICED"); existing.setPriceComplete(true); existing.setTotalPrice(new BigDecimal("1.23"));
     when(priceMapper.selectList(any(Wrapper.class))).thenReturn(List.of(existing));
-    when(priceDetailMapper.selectList(any(Wrapper.class))).thenReturn(List.of(existingDetail));
-
-    PackagePriceRequest request = request();
-    request.setOaNo("OA-NEW");
-    PackagePriceResult result = service.ensurePrice(request);
-
-    assertThat(result.getStatus()).isEqualTo("PRICED");
-    assertThat(result.isComplete()).isTrue();
+    when(snapshotService.ensureSnapshot(any())).thenReturn(snapshotResult(List.of(detail(101L,1,"A","2"))));
+    when(materialPriceRouterService.prepareCandidates(any(), org.mockito.Mockito.any(), any(), any(), any(), any()))
+        .thenReturn(List.of(route("A")));
+    var request = request(); request.setOaNo("OA-NEW");
+    var result = service.ensurePrice(request);
     assertThat(result.getPrice().getId()).isEqualTo(507L);
-    assertThat(result.getPrice().getOaNo()).isEqualTo("OA-OLD");
-    assertThat(result.getDetails()).hasSize(1);
-    verify(snapshotService, never()).ensureSnapshot(any(PackageSnapshotRequest.class));
-    verify(materialPriceRouterService, never()).listCandidates(any(), any(), any());
-    verify(priceMapper, never()).insert(any(PackageComponentPrice.class));
-    verify(priceMapper, never()).updateById(any(PackageComponentPrice.class));
-    verify(priceDetailMapper, never()).delete(any(Wrapper.class));
-    verify(priceDetailMapper, never()).insert(any(PackageComponentPriceDetail.class));
+    assertThat(result.getPrice().getTotalPrice()).isEqualByComparingTo("4");
+    verify(materialPriceRouterService).prepareCandidates(eq("A"), org.mockito.Mockito.any(), any(), any(), any(), any());
+    verify(priceDetailMapper).delete(any(Wrapper.class));
+    verify(priceDetailMapper).insert(any(PackageComponentPriceDetail.class));
   }
 
   @Test
@@ -395,7 +397,7 @@ class PackageComponentPriceServiceImplTest {
       price.setId(518L);
       return 1;
     });
-    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), eq(LocalDate.parse("2026-05-21"))))
+    when(materialPriceRouterService.prepareCandidates(eq("A"), org.mockito.Mockito.any(), eq("2026-05"), eq(LocalDate.parse("2026-05-21")), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route("A")));
     PackagePriceRequest request = request();
     request.setPriceOrgCode("220");
@@ -416,7 +418,7 @@ class PackageComponentPriceServiceImplTest {
 
   @Test
   @DisplayName("并发生成撞唯一键：重查到完整包装价后直接复用，不删明细重算")
-  void reusesConcurrentCompletePriceAfterDuplicateKey() {
+  void recalculatesChildrenAfterConcurrentPriceInsert() {
     service = serviceWith(resolver(Map.of("A", PriceResolveResult.hit(new BigDecimal("2.000000"), "固定采购价"))));
     when(snapshotService.ensureSnapshot(any(PackageSnapshotRequest.class)))
         .thenReturn(snapshotResult(List.of(detail(101L, 1, "A", "2.000000"))));
@@ -434,11 +436,13 @@ class PackageComponentPriceServiceImplTest {
     existingDetail.setLineNo(1);
     existingDetail.setChildMaterialCode("A");
     existingDetail.setPriceStatus("PRICED");
-    when(priceMapper.selectList(any(Wrapper.class))).thenReturn(List.of(), List.of(), List.of(concurrent));
+    when(priceMapper.selectList(any(Wrapper.class))).thenReturn(List.of(), List.of(concurrent));
     when(priceMapper.insert(any(PackageComponentPrice.class)))
         .thenThrow(new DuplicateKeyException("duplicate package price"));
     when(priceDetailMapper.selectList(any(Wrapper.class))).thenReturn(List.of(existingDetail));
 
+    when(materialPriceRouterService.prepareCandidates(any(), org.mockito.Mockito.any(), any(), any(), any(), any()))
+        .thenReturn(List.of(route("A")));
     PackagePriceRequest request = request();
     request.setAsOfDate(null);
     request.setPriceAsOfTime(LocalDateTime.of(2026, 5, 26, 10, 30));
@@ -448,9 +452,9 @@ class PackageComponentPriceServiceImplTest {
     assertThat(result.isComplete()).isTrue();
     assertThat(result.getPrice().getId()).isEqualTo(508L);
     assertThat(result.getDetails()).hasSize(1);
-    verify(priceDetailMapper, never()).delete(any(Wrapper.class));
-    verify(priceDetailMapper, never()).insert(any(PackageComponentPriceDetail.class));
-    verify(priceMapper, never()).updateById(any(PackageComponentPrice.class));
+    verify(priceDetailMapper).delete(any(Wrapper.class));
+    verify(priceDetailMapper).insert(any(PackageComponentPriceDetail.class));
+    verify(priceMapper, times(2)).updateById(any(PackageComponentPrice.class));
   }
 
   @Test
@@ -478,10 +482,9 @@ class PackageComponentPriceServiceImplTest {
       price.setId(510L);
       return 1;
     });
-    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), eq(LocalDate.parse("2026-05-21"))))
+    when(materialPriceRouterService.prepareCandidates(eq("A"), org.mockito.Mockito.any(), eq("2026-05"), eq(LocalDate.parse("2026-05-21")), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route("A")));
     PackagePriceRequest request = request();
-    request.setForceRefresh(true);
 
     PackagePriceResult result = service.ensurePrice(request);
 
@@ -502,7 +505,7 @@ class PackageComponentPriceServiceImplTest {
       price.setId(503L);
       return 1;
     });
-    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), eq(LocalDate.parse("2026-05-21"))))
+    when(materialPriceRouterService.prepareCandidates(eq("A"), org.mockito.Mockito.any(), eq("2026-05"), eq(LocalDate.parse("2026-05-21")), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route("A")));
 
     PackagePriceResult result = service.ensurePrice(request());
@@ -535,9 +538,9 @@ class PackageComponentPriceServiceImplTest {
       price.setId(504L);
       return 1;
     });
-    when(materialPriceRouterService.listCandidates(eq("A"), eq("2026-05"), eq(LocalDate.parse("2026-05-21"))))
+    when(materialPriceRouterService.prepareCandidates(eq("A"), org.mockito.Mockito.any(), eq("2026-05"), eq(LocalDate.parse("2026-05-21")), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route("A")));
-    when(materialPriceRouterService.listCandidates(eq("B"), eq("2026-05"), eq(LocalDate.parse("2026-05-21"))))
+    when(materialPriceRouterService.prepareCandidates(eq("B"), org.mockito.Mockito.any(), eq("2026-05"), eq(LocalDate.parse("2026-05-21")), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route("B")));
 
     PackagePriceResult result = service.ensurePrice(request());
@@ -561,7 +564,7 @@ class PackageComponentPriceServiceImplTest {
         priceMapper,
         priceDetailMapper,
         gapItemMapper,
-        List.of(resolver));
+        List.of(resolver), linkedPrices);
   }
 
   private PriceResolver resolver(Map<String, PriceResolveResult> results) {
@@ -576,6 +579,53 @@ class PackageComponentPriceServiceImplTest {
         return results.getOrDefault(item.getPartCode(), PriceResolveResult.miss("无测试价格"));
       }
     };
+  }
+
+  @Test
+  void linkedChildUsesCurrentQuoteAndFinancialInputsForPreviewAndPreparation() {
+    var resolver = mock(PriceResolver.class);
+    when(resolver.priceType()).thenReturn(PriceTypeEnum.LINKED);
+    service = serviceWith(resolver);
+    var route = new PriceTypeRoute("A", MaterialFormAttrEnum.PURCHASED, PriceTypeEnum.LINKED,
+        1, null, null, "SYSTEM", "联动价");
+    var snapshot = snapshotResult(List.of(detail(101L, 1, "A", "2")));
+    when(snapshotService.previewSnapshot(any())).thenReturn(snapshot);
+    when(snapshotService.ensureSnapshot(any())).thenReturn(snapshot);
+    when(materialPriceRouterService.listCandidates(any(), any(), any(), any(), any())).thenReturn(List.of(route));
+    when(materialPriceRouterService.prepareCandidates(any(), org.mockito.Mockito.any(), any(), any(), any(), any())).thenReturn(List.of(route));
+    var row = new com.sanhua.marketingcost.entity.PriceLinkedCalcItem();
+    row.setItemCode("A"); row.setPartUnitPrice(new BigDecimal("99.12345678"));
+    row.setInputSnapshotJson("{\"ruleVersion\":3,\"customerCu\":90000.123456789}");
+    when(linkedPrices.calculate(any())).thenReturn(List.of(row));
+    var prepared = new com.sanhua.marketingcost.dto.LinkedPriceEnsureResult();
+    prepared.getItems().put("A", row);
+    when(linkedPrices.ensure(any())).thenReturn(prepared);
+    when(priceMapper.selectList(any())).thenReturn(List.of());
+    when(priceMapper.insert(any(PackageComponentPrice.class))).thenAnswer(call -> { ((PackageComponentPrice) call.getArgument(0)).setId(500L); return 1; });
+    var request = request();
+    request.setPriceScenarioType(com.sanhua.marketingcost.enums.QuotePriceScenarioType.FINANCE_QUOTE_BASE);
+    request.setVariableOverrides(Map.of("Cu", new BigDecimal("90.12")));
+    request.setSupplierPriceReviewContext(new com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext(19L));
+    var preview = service.calculatePrice(request);
+    assertThat(preview.getPrice().getTotalPrice()).isEqualByComparingTo("198.24691356");
+    assertThat(preview.getDetails().getFirst().getInputSnapshotJson()).isEqualTo(row.getInputSnapshotJson());
+    verify(linkedPrices, never()).ensure(any());
+    var result = service.ensurePrice(request);
+    assertThat(result.getPrice().getTotalPrice()).isEqualByComparingTo("198.24691356");
+    var captor = ArgumentCaptor.forClass(com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest.class);
+    verify(linkedPrices).ensure(captor.capture());
+    var actual = captor.getValue();
+    assertThat(actual.getOaNo()).isEqualTo("OA-001");
+    assertThat(actual.getBusinessUnitType()).isEqualTo("COMMERCIAL");
+    assertThat(actual.getPriceOrgCode()).isEqualTo("210");
+    assertThat(actual.getPricingMonth()).isEqualTo("2026-05");
+    assertThat(actual.getPriceScenarioType()).isEqualTo(request.getPriceScenarioType());
+    assertThat(actual.getVariableOverrides()).containsEntry("Cu", new BigDecimal("90.12"));
+    assertThat(actual.getSupplierPriceReviewContext()).isSameAs(request.getSupplierPriceReviewContext());
+    var checked = ArgumentCaptor.forClass(com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest.class);
+    verify(linkedPrices).calculate(checked.capture());
+    assertThat(checked.getValue().getSupplierPriceReviewContext()).isSameAs(request.getSupplierPriceReviewContext());
+    verify(resolver, never()).resolve(any(), any(), any(), any());
   }
 
   private PriceResolver contextAwareResolver(
@@ -604,6 +654,7 @@ class PackageComponentPriceServiceImplTest {
 
   private PackagePriceRequest request() {
     PackagePriceRequest request = new PackagePriceRequest();
+    request.setBusinessUnitType("COMMERCIAL");
     request.setPackageMaterialCode(" 9830000026238 ");
     request.setPeriodMonth("2026-05");
     request.setQuoteNo("Q-001");

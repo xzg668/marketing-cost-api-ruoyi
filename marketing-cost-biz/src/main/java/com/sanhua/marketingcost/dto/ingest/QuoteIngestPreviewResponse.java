@@ -192,6 +192,10 @@ public class QuoteIngestPreviewResponse extends QuoteIngestResponse {
     private BigDecimal steelPrice;
     private BigDecimal sus304Price;
     private BigDecimal sus316lPrice;
+
+    /** 最终是否招标需求（仅针对板换），OA编码sfzbxqjzdbhcp；null按否。 */
+    private Boolean boardTender;
+
     private BigDecimal silverPrice;
     private BigDecimal goldPrice;
     private String remark;
@@ -414,6 +418,14 @@ public class QuoteIngestPreviewResponse extends QuoteIngestResponse {
 
     public BigDecimal getSus316lPrice() {
       return sus316lPrice;
+    }
+
+    public Boolean getBoardTender() {
+      return boardTender;
+    }
+
+    public void setBoardTender(Boolean boardTender) {
+      this.boardTender = boardTender;
     }
 
     public void setSus316lPrice(BigDecimal sus316lPrice) {

@@ -125,7 +125,6 @@ public class MonthlyRepriceBatchServiceImpl implements MonthlyRepriceBatchServic
     batch.setPriceAsOfTime(now);
     batch.setBomSourcePolicy(BOM_SOURCE_POLICY);
     batch.setBusinessUnitType(businessUnitType);
-    batch.setAdjustBatchId(null);
     batch.setExecutionBackend(executionBackend);
     batch.setStatus(STATUS_CREATED);
     batch.setTotalCount(0);
@@ -170,7 +169,6 @@ public class MonthlyRepriceBatchServiceImpl implements MonthlyRepriceBatchServic
     snapshot.put("priceAsOfTime", batch.getPriceAsOfTime() == null ? null : batch.getPriceAsOfTime().toString());
     snapshot.put("bomSourcePolicy", batch.getBomSourcePolicy());
     snapshot.put("businessUnitType", batch.getBusinessUnitType());
-    snapshot.put("adjustBatchId", batch.getAdjustBatchId());
     snapshot.put("executionBackend", batch.getExecutionBackend());
     snapshot.put("status", batch.getStatus());
     try {

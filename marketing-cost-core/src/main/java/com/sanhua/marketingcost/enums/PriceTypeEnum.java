@@ -18,7 +18,7 @@ import java.util.Set;
  * <p>4 桶语义：
  * <ol>
  *   <li>FIXED  固定价 —— 一口价（lp_price_fixed_item，含 PURCHASE/SETTLE 两种 source_type）</li>
- *   <li>LINKED 联动价 —— 公式 + 月度基价实时算（lp_price_linked_item + lp_finance_base_price）</li>
+ *   <li>LINKED 联动价 —— 公式 + 月度基价实时算（lp_price_linked_item + 已发布财务因素）</li>
  *   <li>RANGE  区间价 —— 按数量段取价（lp_price_range_item）</li>
  *   <li>MAKE   自制件 —— 按 BOM 子树、净重、废料映射和正式价格准备结果算价</li>
  * </ol>

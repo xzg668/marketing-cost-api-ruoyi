@@ -6,11 +6,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
 import com.sanhua.marketingcost.dto.MonthlyRepriceLinkedPricePrepareResult;
-import com.sanhua.marketingcost.entity.FactorAdjustBatch;
 import com.sanhua.marketingcost.entity.MonthlyRepriceAuditLog;
 import com.sanhua.marketingcost.entity.MonthlyRepriceBatch;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
-import com.sanhua.marketingcost.mapper.FactorAdjustBatchMapper;
 import com.sanhua.marketingcost.mapper.MonthlyRepriceAuditLogMapper;
 import com.sanhua.marketingcost.mapper.MonthlyRepriceBatchMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
@@ -19,7 +17,6 @@ import com.sanhua.marketingcost.service.MonthlyRepriceAuditService;
 import com.sanhua.marketingcost.service.MonthlyRepriceLinkedPricePrepareService;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -31,12 +28,10 @@ import org.springframework.util.StringUtils;
 public class MonthlyRepriceLinkedPricePrepareServiceImpl
     implements MonthlyRepriceLinkedPricePrepareService {
 
-  private static final String ADJUST_TYPE_MONTHLY = "MONTHLY";
   private static final String STATUS_RUNNING = "RUNNING";
   private static final String STATUS_FAILED = "FAILED";
 
   private final MonthlyRepriceBatchMapper batchMapper;
-  private final FactorAdjustBatchMapper factorAdjustBatchMapper;
   private final PriceLinkedItemMapper priceLinkedItemMapper;
   private final LinkedPriceEnsureService linkedPriceEnsureService;
   private final MonthlyRepriceAuditLogMapper auditLogMapper;
@@ -45,14 +40,12 @@ public class MonthlyRepriceLinkedPricePrepareServiceImpl
 
   public MonthlyRepriceLinkedPricePrepareServiceImpl(
       MonthlyRepriceBatchMapper batchMapper,
-      FactorAdjustBatchMapper factorAdjustBatchMapper,
       PriceLinkedItemMapper priceLinkedItemMapper,
       LinkedPriceEnsureService linkedPriceEnsureService,
       MonthlyRepriceAuditLogMapper auditLogMapper,
       MonthlyRepriceAuditService auditService,
       ObjectMapper objectMapper) {
     this.batchMapper = batchMapper;
-    this.factorAdjustBatchMapper = factorAdjustBatchMapper;
     this.priceLinkedItemMapper = priceLinkedItemMapper;
     this.linkedPriceEnsureService = linkedPriceEnsureService;
     this.auditLogMapper = auditLogMapper;
@@ -65,78 +58,70 @@ public class MonthlyRepriceLinkedPricePrepareServiceImpl
   public MonthlyRepriceLinkedPricePrepareResult prepare(String repriceNo, String operator) {
     String normalizedRepriceNo = required("repriceNo", repriceNo);
     MonthlyRepriceBatch batch = findBatch(normalizedRepriceNo);
-    validateAdjustBatchIfPresent(batch);
-    Set<String> itemCodes = loadLinkedItemCodes(batch);
-
-    // 月度调价以批次 price_as_of_time 为总口径；影响因素批次只是兼容旧数据的可选覆盖。
-    LinkedPriceEnsureResult ensureResult = linkedPriceEnsureService.ensure(
-        LinkedPriceEnsureRequest.monthlyAdjust(
-            batch.getAdjustBatchId(),
-            batch.getBusinessUnitType(),
-            batch.getPricingMonth(),
-            itemCodes,
-            true,
-            batch.getPriceAsOfTime()));
+    var byOrganization = loadLinkedItemCodes(batch);
+    LinkedPriceEnsureResult ensureResult = new LinkedPriceEnsureResult();
+    for (var entry : byOrganization.entrySet()) {
+      var request =
+          LinkedPriceEnsureRequest.monthlyAdjust(
+              batch.getBusinessUnitType(),
+              batch.getPricingMonth(),
+              entry.getValue(),
+              true,
+              batch.getPriceAsOfTime());
+      request.setPriceOrgCode(entry.getKey());
+      var prepared = linkedPriceEnsureService.ensure(request);
+      ensureResult.setRequestedCount(
+          ensureResult.getRequestedCount() + prepared.getRequestedCount());
+      ensureResult.setCreatedCount(ensureResult.getCreatedCount() + prepared.getCreatedCount());
+      ensureResult.setUpdatedCount(ensureResult.getUpdatedCount() + prepared.getUpdatedCount());
+      ensureResult.setSkippedCount(ensureResult.getSkippedCount() + prepared.getSkippedCount());
+      for (var failure : prepared.getFailedItems())
+        ensureResult.addFailedItem(
+            failure.getItemCode(), failure.getReasonCode(), failure.getReason());
+    }
     String nextStatus = ensureResult.getFailedCount() > 0 ? STATUS_FAILED : STATUS_RUNNING;
     updateBatchStatus(batch, nextStatus);
     MonthlyRepriceLinkedPricePrepareResult result =
         MonthlyRepriceLinkedPricePrepareResult.of(
             batch.getRepriceNo(),
             batch.getPricingMonth(),
-            batch.getAdjustBatchId(),
             ensureResult,
             nextStatus);
     auditLogMapper.insert(buildAuditLog(batch, result, operator));
     if (STATUS_RUNNING.equals(nextStatus)) {
-      auditService.recordStartCalc(
-          batch,
-          operator,
-          "联动价准备完成，月度调价批次进入成本核算阶段");
+      auditService.recordStartCalc(batch, operator, "联动价准备完成，月度调价批次进入成本核算阶段");
     }
     return result;
   }
 
   private MonthlyRepriceBatch findBatch(String repriceNo) {
-    MonthlyRepriceBatch batch = batchMapper.selectOne(
-        Wrappers.lambdaQuery(MonthlyRepriceBatch.class)
-            .eq(MonthlyRepriceBatch::getRepriceNo, repriceNo));
+    MonthlyRepriceBatch batch =
+        batchMapper.selectOne(
+            Wrappers.lambdaQuery(MonthlyRepriceBatch.class)
+                .eq(MonthlyRepriceBatch::getRepriceNo, repriceNo));
     if (batch == null) {
       throw new IllegalArgumentException("月度调价批次不存在：" + repriceNo);
     }
     return batch;
   }
 
-  private void validateAdjustBatchIfPresent(MonthlyRepriceBatch batch) {
-    if (batch.getAdjustBatchId() == null) {
-      return;
-    }
-    FactorAdjustBatch adjustBatch = factorAdjustBatchMapper.selectById(batch.getAdjustBatchId());
-    if (adjustBatch == null || Integer.valueOf(1).equals(adjustBatch.getDeleted())) {
-      throw new IllegalArgumentException("影响因素调价批次不存在");
-    }
-    if (!ADJUST_TYPE_MONTHLY.equals(normalize(adjustBatch.getAdjustType()))) {
-      throw new IllegalArgumentException("月度调价只能引用 adjust_type = MONTHLY 的影响因素调价批次");
-    }
-    if (!normalize(batch.getPricingMonth()).equals(normalize(adjustBatch.getPricingMonth()))) {
-      throw new IllegalArgumentException("影响因素调价批次月份与月度调价批次不一致");
-    }
-    if (!normalize(batch.getBusinessUnitType()).equals(normalize(adjustBatch.getBusinessUnitType()))) {
-      throw new IllegalArgumentException("影响因素调价批次业务单元与月度调价批次不一致");
-    }
-  }
-
-  private Set<String> loadLinkedItemCodes(MonthlyRepriceBatch batch) {
-    var query = Wrappers.lambdaQuery(PriceLinkedItem.class).eq(PriceLinkedItem::getSourceKind, "PUBLIC")
-        .eq(PriceLinkedItem::getDeleted, 0)
-        .eq(PriceLinkedItem::getBusinessUnitType, batch.getBusinessUnitType())
-        .le(PriceLinkedItem::getPricingMonth, batch.getPricingMonth());
-    List<PriceLinkedItem> linkedItems = priceLinkedItemMapper.selectList(
-        query.orderByAsc(PriceLinkedItem::getMaterialCode)
-            .orderByAsc(PriceLinkedItem::getId));
-    Set<String> itemCodes = new LinkedHashSet<>();
+  private java.util.Map<String, Set<String>> loadLinkedItemCodes(MonthlyRepriceBatch batch) {
+    var query =
+        Wrappers.lambdaQuery(PriceLinkedItem.class)
+            .eq(PriceLinkedItem::getSourceKind, "PUBLIC")
+            .eq(PriceLinkedItem::getDeleted, 0)
+            .eq(PriceLinkedItem::getBusinessUnitType, batch.getBusinessUnitType())
+            .le(PriceLinkedItem::getPricingMonth, batch.getPricingMonth());
+    List<PriceLinkedItem> linkedItems =
+        priceLinkedItemMapper.selectList(
+            query.orderByAsc(PriceLinkedItem::getMaterialCode).orderByAsc(PriceLinkedItem::getId));
+    var itemCodes = new java.util.TreeMap<String, Set<String>>();
     for (PriceLinkedItem item : linkedItems) {
       if (item != null && StringUtils.hasText(item.getMaterialCode())) {
-        itemCodes.add(item.getMaterialCode().trim());
+        String org = item.getOrgCode() == null ? "" : item.getOrgCode().trim();
+        itemCodes
+            .computeIfAbsent(org, ignored -> new java.util.TreeSet<>())
+            .add(item.getMaterialCode().trim());
       }
     }
     return itemCodes;
@@ -153,9 +138,7 @@ public class MonthlyRepriceLinkedPricePrepareServiceImpl
   }
 
   private MonthlyRepriceAuditLog buildAuditLog(
-      MonthlyRepriceBatch batch,
-      MonthlyRepriceLinkedPricePrepareResult result,
-      String operator) {
+      MonthlyRepriceBatch batch, MonthlyRepriceLinkedPricePrepareResult result, String operator) {
     MonthlyRepriceAuditLog log = new MonthlyRepriceAuditLog();
     log.setRepriceNo(batch.getRepriceNo());
     log.setPricingMonth(batch.getPricingMonth());
@@ -169,11 +152,17 @@ public class MonthlyRepriceLinkedPricePrepareServiceImpl
     log.setTargetId(batch.getId() == null ? null : String.valueOf(batch.getId()));
     log.setTargetKey(batch.getRepriceNo());
     log.setAfterJson(afterJson(result));
-    log.setChangeSummary("准备 MONTHLY_ADJUST 联动价：料号 " + result.getItemCount()
-        + "，新增 " + result.getCreatedCount()
-        + "，更新 " + result.getUpdatedCount()
-        + "，跳过 " + result.getSkippedCount()
-        + "，失败 " + result.getFailedCount());
+    log.setChangeSummary(
+        "准备 MONTHLY_ADJUST 联动价：料号 "
+            + result.getItemCount()
+            + "，新增 "
+            + result.getCreatedCount()
+            + "，更新 "
+            + result.getUpdatedCount()
+            + "，跳过 "
+            + result.getSkippedCount()
+            + "，失败 "
+            + result.getFailedCount());
     return log;
   }
 
@@ -181,7 +170,6 @@ public class MonthlyRepriceLinkedPricePrepareServiceImpl
     Map<String, Object> snapshot = new LinkedHashMap<>();
     snapshot.put("repriceNo", result.getRepriceNo());
     snapshot.put("pricingMonth", result.getPricingMonth());
-    snapshot.put("adjustBatchId", result.getAdjustBatchId());
     snapshot.put("itemCount", result.getItemCount());
     snapshot.put("createdCount", result.getCreatedCount());
     snapshot.put("updatedCount", result.getUpdatedCount());
@@ -213,8 +201,6 @@ public class MonthlyRepriceLinkedPricePrepareServiceImpl
     if (!StringUtils.hasText(value)) {
       return "";
     }
-    return value.replace('\u00A0', ' ')
-        .replaceAll("\\s+", " ")
-        .trim();
+    return value.replace('\u00A0', ' ').replaceAll("\\s+", " ").trim();
   }
 }

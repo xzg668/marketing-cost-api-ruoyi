@@ -17,6 +17,33 @@ public class CostRunDetailDto {
    * 提供顶层字段是为了让前端不用扫数组。null 表示没算出（缺率导致 totalAmount=null）。
    */
   private java.math.BigDecimal total;
+  private java.math.BigDecimal financeCuPrice;
+  private java.math.BigDecimal cuMaterialAdjustment;
+  private java.math.BigDecimal finalQuoteAmount;
+
+  public java.math.BigDecimal getFinanceCuPrice() {
+    return financeCuPrice;
+  }
+
+  public void setFinanceCuPrice(java.math.BigDecimal financeCuPrice) {
+    this.financeCuPrice = financeCuPrice;
+  }
+
+  public java.math.BigDecimal getCuMaterialAdjustment() {
+    return cuMaterialAdjustment;
+  }
+
+  public void setCuMaterialAdjustment(java.math.BigDecimal cuMaterialAdjustment) {
+    this.cuMaterialAdjustment = cuMaterialAdjustment;
+  }
+
+  public java.math.BigDecimal getFinalQuoteAmount() {
+    return finalQuoteAmount;
+  }
+
+  public void setFinalQuoteAmount(java.math.BigDecimal finalQuoteAmount) {
+    this.finalQuoteAmount = finalQuoteAmount;
+  }
 
   public List<CostRunPartItemDto> getPartItems() {
     return partItems;

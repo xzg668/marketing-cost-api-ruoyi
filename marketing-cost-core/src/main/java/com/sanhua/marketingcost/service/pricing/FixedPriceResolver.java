@@ -63,8 +63,9 @@ public class FixedPriceResolver implements PriceResolver {
     FixedSourceKind sourceKind = resolveFixedSourceKind(route);
     LocalDate priceDate = pricingDate(sourceKind, route, context);
     String orgCode = priceOrgCode(item, context);
-    if (sourceKind == FixedSourceKind.PURCHASE && (!StringUtils.hasText(orgCode) || priceDate == null)) {
-      return PriceResolveResult.miss("FIXED_PRICE_SCOPE_MISSING", "固定价缺少取价组织或核算日期：" + code);
+    if (!StringUtils.hasText(orgCode) || priceDate == null || context == null
+        || !StringUtils.hasText(context.getBusinessUnitType())) {
+      return PriceResolveResult.miss("FIXED_PRICE_SCOPE_MISSING", "固定价缺少取价组织、业务单元或核算日期：" + code);
     }
     List<PriceFixedItem> rows = selectRows(code, sourceKind, priceDate, orgCode, context);
     if (sourceKind == FixedSourceKind.SETTLE) {
@@ -91,8 +92,7 @@ public class FixedPriceResolver implements PriceResolver {
     List<SupplierPriceCandidate> candidates = new ArrayList<>();
     bySupplier.forEach((supplier, row) -> candidates.add(new SupplierPriceCandidate(supplier,
         supplier, row.getSupplierName(), row.getFixedPrice(), row.getEffectiveFrom(), row.getEffectiveTo())));
-    String businessUnit = context != null && StringUtils.hasText(context.getBusinessUnitType())
-        ? context.getBusinessUnitType().trim() : firstText(rows, PriceFixedItem::getBusinessUnitType);
+    String businessUnit = context.getBusinessUnitType().trim();
     var reviewContext = context == null ? null : context.getSupplierPriceReviewContext();
     Long itemId = reviewContext == null ? (context == null ? null : context.getOaFormItemId())
         : reviewContext.oaFormItemId();
@@ -120,16 +120,18 @@ public class FixedPriceResolver implements PriceResolver {
         .in(PriceFixedItem::getSourceType, sourceTypes(sourceKind))
         .isNotNull(PriceFixedItem::getFixedPrice);
     if (StringUtils.hasText(orgCode)) query.eq(PriceFixedItem::getOrgCode, orgCode);
-    if (context != null && StringUtils.hasText(context.getBusinessUnitType())) {
-      query.eq(PriceFixedItem::getBusinessUnitType, context.getBusinessUnitType());
-    }
+    query.eq(PriceFixedItem::getBusinessUnitType, context.getBusinessUnitType().trim());
     if (sourceKind == FixedSourceKind.PURCHASE) {
       query.le(PriceFixedItem::getEffectiveFrom, priceDate)
           .gt(PriceFixedItem::getEffectiveTo, priceDate)
           .orderByDesc(PriceFixedItem::getEffectiveFrom)
           .orderByDesc(PriceFixedItem::getEffectiveTo);
     } else {
-      // 结算固定价尚未接入新规则，保留其现行版本筛选。
+      if (context == null || !StringUtils.hasText(context.getPricingMonth())) {
+        throw new IllegalArgumentException("结算固定价缺少核算月份");
+      }
+      query.le(PriceFixedItem::getPricingMonth, context.getPricingMonth())
+          .orderByDesc(PriceFixedItem::getPricingMonth);
       if (priceDate != null) query.and(q -> q.le(PriceFixedItem::getEffectiveFrom, priceDate)
           .or().isNull(PriceFixedItem::getEffectiveFrom));
       query.orderByDesc(PriceFixedItem::getEffectiveFrom);
@@ -229,16 +231,6 @@ public class FixedPriceResolver implements PriceResolver {
       return context.getPriceAsOfTime().toLocalDate();
     }
     return sourceKind == FixedSourceKind.SETTLE && route != null ? route.effectiveFrom() : null;
-  }
-
-  private String firstText(List<PriceFixedItem> rows, java.util.function.Function<PriceFixedItem, String> getter) {
-    for (PriceFixedItem row : rows) {
-      String value = getter.apply(row);
-      if (StringUtils.hasText(value)) {
-        return value.trim();
-      }
-    }
-    return null;
   }
 
   private enum FixedSourceKind {

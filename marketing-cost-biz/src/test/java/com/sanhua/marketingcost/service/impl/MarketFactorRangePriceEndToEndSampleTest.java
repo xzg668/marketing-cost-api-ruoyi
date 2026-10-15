@@ -143,7 +143,7 @@ class MarketFactorRangePriceEndToEndSampleTest {
   }
 
   @Test
-  @DisplayName("排水泵样例：导入区间铜价后工作台试算和底稿均命中 90000 铜价区间")
+  @DisplayName("排水泵样例：存量区间铜价工作台试算和底稿均命中 90000 铜价区间")
   void drainPumpSampleRunsThroughQuotePrepareCostRunAndTrace() {
     PriceRangeItemMapper rangeItemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper factorRuleMapper = mock(PriceRangeFactorRuleMapper.class);
@@ -163,12 +163,20 @@ class MarketFactorRangePriceEndToEndSampleTest {
     OaForm oaForm = sampleOaForm();
     when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(oaForm);
 
-    PriceRangeItemServiceImpl rangeImportService =
-        new PriceRangeItemServiceImpl(
-            rangeItemMapper,
-            factorRuleMapper,
-            mock(com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.class));
-    List<PriceRangeItem> imported = rangeImportService.importItems(factorRangeImportRequest());
+    // 迁移前已存在的行情记录仍须可核算；新的原稿发布由 OriginalRangeImportIntegrationTest 验收。
+    for (String code : SAMPLE_PART_CODES) {
+      var rule = new PriceRangeFactorRule();
+      rule.setBusinessUnitType(BUSINESS_UNIT_TYPE); rule.setMaterialCode(code); rule.setFactorCode("CU");
+      rule.setCurrentFlag(1); rule.setVersionNo(1); rule.setRuleStatus("LEGACY");
+      factorRuleMapper.insert(rule);
+      var band = new PriceRangeItem();
+      band.setMaterialCode(code); band.setBusinessUnitType(BUSINESS_UNIT_TYPE); band.setMaterialName(code + "-排水泵铜件");
+      band.setRangeBasis("FACTOR"); band.setFactorRuleId(rule.getId()); band.setFactorCode("CU");
+      band.setRangeLow(RANGE_LOW); band.setRangeHigh(RANGE_HIGH); band.setPriceExclTax(HIT_UNIT_PRICE);
+      band.setTaxIncluded(0); band.setCurrentFlag(1); band.setEffectiveFrom(LocalDate.of(2026, 7, 1));
+      rangeItemMapper.insert(band);
+    }
+    List<PriceRangeItem> imported = importedItems;
 
     assertThat(oaForm.getCopperPrice()).isEqualByComparingTo(QUOTE_COPPER_PRICE);
     assertThat(imported).hasSize(2);
@@ -195,7 +203,7 @@ class MarketFactorRangePriceEndToEndSampleTest {
         new NormalMaterialPricePrepareStrategyImpl(
             routerService, linkedPriceEnsureService, List.of(rangeResolver));
     SAMPLE_PART_CODES.forEach(code ->
-        when(routerService.listCandidates(eq(code), eq(PERIOD_MONTH), any(LocalDate.class)))
+        when(routerService.prepareCandidates(eq(code), any(), eq(PERIOD_MONTH), any(LocalDate.class), any(), any()))
             .thenReturn(List.of(rangeRoute(code))));
 
     List<PricePrepareItem> preparedItems = new ArrayList<>();
@@ -538,37 +546,6 @@ class MarketFactorRangePriceEndToEndSampleTest {
     assertThat(actual.subtract(EXPECTED_AMOUNT).abs()).isLessThanOrEqualTo(AMOUNT_TOLERANCE);
   }
 
-  private PriceRangeItemImportRequest factorRangeImportRequest() {
-    PriceRangeItemImportRequest request = new PriceRangeItemImportRequest();
-    request.setBusinessUnitType(BUSINESS_UNIT_TYPE);
-    request.setRangeBasis("FACTOR");
-    request.setFactorCode("CU");
-    request.setFactorName("电解铜");
-    request.setFactorUnit("元/吨");
-    request.setPriceUnit("元/件");
-    request.setSourceFile("/Users/xiexicheng/Desktop/demo6/3 产品成本计算表（6.25排水泵）.xls");
-    request.setSourceSheet("区间铜价");
-    request.setImportBatchNo("MFRP-08-DRAIN-PUMP-CU");
-    request.setRows(SAMPLE_PART_CODES.stream().map(this::factorRangeRow).toList());
-    return request;
-  }
-
-  private PriceRangeItemImportRequest.PriceRangeItemImportRow factorRangeRow(String materialCode) {
-    PriceRangeItemImportRequest.PriceRangeItemImportRow row =
-        new PriceRangeItemImportRequest.PriceRangeItemImportRow();
-    row.setMaterialCode(materialCode);
-    row.setMaterialName(materialCode + "-排水泵铜件");
-    row.setSpecModel("6.25 排水泵");
-    row.setUnit("PCS");
-    row.setRangeLow(RANGE_LOW);
-    row.setRangeHigh(RANGE_HIGH);
-    row.setPriceExclTax(HIT_UNIT_PRICE);
-    row.setTaxIncluded(false);
-    row.setFactorCode("CU");
-    row.setEffectiveFrom(LocalDate.of(2026, 7, 1));
-    return row;
-  }
-
   private PricePreparePlanItem planItem(BomCostingRow row) {
     PricePreparePlanItem item = new PricePreparePlanItem();
     item.setBomRow(row);
@@ -609,6 +586,8 @@ class MarketFactorRangePriceEndToEndSampleTest {
 
   private BomCostingRow bomRow(String materialCode) {
     BomCostingRow row = new BomCostingRow();
+    row.setPriceOrgCode("210");
+    row.setMaterialOrganizationCode("COMMERCIAL");
     row.setId("201850160".equals(materialCode) ? 7101L : 7102L);
     row.setOaNo(OA_NO);
     row.setOaFormItemId(OA_FORM_ITEM_ID);

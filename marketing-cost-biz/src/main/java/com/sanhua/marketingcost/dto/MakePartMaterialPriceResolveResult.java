@@ -27,8 +27,8 @@ public class MakePartMaterialPriceResolveResult {
     return result;
   }
 
-  public static MakePartMaterialPriceResolveResult missingRoute(String materialCode, String remark) {
-    return miss(materialCode, "MISSING_ROUTE", remark, null);
+  public static MakePartMaterialPriceResolveResult missingPrice(String materialCode, String remark) {
+    return miss(materialCode, "MISSING_PRICE", remark, null);
   }
 
   public static MakePartMaterialPriceResolveResult miss(

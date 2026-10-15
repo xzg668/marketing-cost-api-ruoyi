@@ -4,6 +4,52 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class StandardBindingCheckRequest {
+  private Long linkedItemId;
+  private String organizationCode;
+  private String pricingMonth;
+  private String unit;
+  private String specModel;
+
+  public Long getLinkedItemId() {
+    return linkedItemId;
+  }
+
+  public void setLinkedItemId(Long value) {
+    linkedItemId = value;
+  }
+
+  public String getOrganizationCode() {
+    return organizationCode;
+  }
+
+  public void setOrganizationCode(String value) {
+    organizationCode = value;
+  }
+
+  public String getPricingMonth() {
+    return pricingMonth;
+  }
+
+  public void setPricingMonth(String value) {
+    pricingMonth = value;
+  }
+
+  public String getUnit() {
+    return unit;
+  }
+
+  public void setUnit(String value) {
+    unit = value;
+  }
+
+  public String getSpecModel() {
+    return specModel;
+  }
+
+  public void setSpecModel(String value) {
+    specModel = value;
+  }
+
   private String businessUnitType;
   private String materialCode;
   private String supplierCode;

@@ -264,6 +264,8 @@ public class QuoteCostResultHistoryServiceImpl implements QuoteCostResultHistory
     row.setPeriodMonth(firstText(version.getResultPeriod(), version.getPricingMonth()));
     row.setStatus(version.getStatus());
     row.setTotalCost(version.getTotalCost());
+    row.setCuMaterialAdjustment(version.getCuMaterialAdjustment());
+    row.setFinalQuoteAmount(version.getFinalQuoteAmount());
     row.setCompletedAt(firstTime(version.getConfirmedAt(), version.getTrialFinishedAt(), version.getUpdatedAt()));
     row.setDefaultResult(original);
     row.setFullCostSheetAvailable(version.getTotalCost() != null);

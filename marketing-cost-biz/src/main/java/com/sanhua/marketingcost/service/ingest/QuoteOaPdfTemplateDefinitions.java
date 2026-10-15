@@ -12,7 +12,8 @@ public final class QuoteOaPdfTemplateDefinitions {
   private static final String TABLE_ITEM = "oa_form_item";
   private static final String TABLE_FEE = "lp_oa_form_extra_fee";
 
-  private static final Map<QuoteExcelTemplateType, QuoteOaPdfTemplateDefinition> DEFINITIONS = build();
+  private static final Map<QuoteExcelTemplateType, QuoteOaPdfTemplateDefinition> DEFINITIONS =
+      build();
 
   private QuoteOaPdfTemplateDefinitions() {}
 
@@ -33,14 +34,7 @@ public final class QuoteOaPdfTemplateDefinitions {
     QuoteOaPdfTableDefinition itemTable =
         new QuoteOaPdfTableDefinition(
             List.of("明细表", "成本明细表", "产品明细"),
-            List.of(
-                ">>辅助信息",
-                ">>技术员",
-                ">>资料员",
-                ">>审批信息",
-                ">>流程日志",
-                "成本核算员",
-                "接收人"),
+            List.of(">>辅助信息", ">>技术员", ">>资料员", ">>审批信息", ">>流程日志", "成本核算员", "接收人"),
             itemFields);
     List<String> sectionAnchors = List.of(">>基础信息", ">>业务信息", ">>明细表", ">>辅助信息");
 
@@ -172,6 +166,7 @@ public final class QuoteOaPdfTemplateDefinitions {
         header("copperPrice", "铜价", "业务信息", "核算时铜基价（含税，元/吨）", "铜", "铜价"),
         header("zincPrice", "锌价", "业务信息", "核算时锌基价（含税，元/吨）", "锌", "锌价"),
         header("aluminumPrice", "铝价", "业务信息", "核算时铝基价（含税，元/吨）", "铝", "铝价"),
+        header("boardTender", "最终是否招标需求", "业务信息", "是否招标需求（仅针对板换产品）", "是否招标需求"),
         header("sus304Price", "SUS304", "业务信息", "核算时SUS304基价（含税，元/吨）", "SUS304"),
         header("sus316lPrice", "SUS316", "业务信息", "核算时SUS316基价（含税，元/吨）", "SUS316", "SUS316L"),
         header("steelPrice", "不锈钢", "业务信息", "不锈钢", "钢"),
@@ -227,12 +222,14 @@ public final class QuoteOaPdfTemplateDefinitions {
         SCOPE_HEADER, fieldCode, fieldName, section, TABLE_HEADER, List.of(aliases));
   }
 
-  private static QuoteOaPdfFieldDefinition item(String fieldCode, String fieldName, String... aliases) {
+  private static QuoteOaPdfFieldDefinition item(
+      String fieldCode, String fieldName, String... aliases) {
     return new QuoteOaPdfFieldDefinition(
         SCOPE_ITEM, fieldCode, fieldName, "明细表", TABLE_ITEM, List.of(aliases));
   }
 
-  private static QuoteOaPdfFieldDefinition fee(String fieldCode, String fieldName, String... aliases) {
+  private static QuoteOaPdfFieldDefinition fee(
+      String fieldCode, String fieldName, String... aliases) {
     return new QuoteOaPdfFieldDefinition(
         SCOPE_ITEM, fieldCode, fieldName, "明细表", TABLE_FEE, List.of(aliases));
   }

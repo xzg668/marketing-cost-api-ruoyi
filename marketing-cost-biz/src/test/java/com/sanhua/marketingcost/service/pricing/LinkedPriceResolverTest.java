@@ -57,7 +57,7 @@ class LinkedPriceResolverTest {
             "OA-V3",
             item,
             null,
-            CostRunContext.quote(
+            scoped(CostRunContext.quote(
                 "OA-V3",
                 9L,
                 "P-001",
@@ -66,7 +66,7 @@ class LinkedPriceResolverTest {
                 "COMMERCIAL",
                 "2026-06",
                 priceAsOfTime,
-                "QUOTE:9"));
+                "QUOTE:9")));
 
     assertThat(result.unitPrice()).isEqualByComparingTo("72.000000");
     assertThat(result.priceSource()).isEqualTo("联动价");
@@ -92,6 +92,7 @@ class LinkedPriceResolverTest {
     when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(calc));
     CostRunContext context = CostRunContext.quote(
         "OA-1", 1L, "TOP", null, null, "COMMERCIAL", "2026-05", "KEY");
+    context.setPriceOrgCode("210");
     context.setPriceScenarioType(QuotePriceScenarioType.FINANCE_QUOTE_BASE.name());
     CostRunPartItemDto item = new CostRunPartItemDto();
     item.setPartCode("MAT-CU");
@@ -117,7 +118,7 @@ class LinkedPriceResolverTest {
     CostRunPartItemDto item = new CostRunPartItemDto();
     item.setPartCode("MAT-MISSING");
 
-    PriceResolveResult result = resolver.resolve("OA-V3", item, null);
+    PriceResolveResult result = resolver.resolve("OA-V3", item, null, scoped(CostRunContext.quote("OA-V3", 9L, "TOP", null, null, "COMMERCIAL", "2026-06", "KEY")));
 
     assertThat(result.unitPrice()).isNull();
     assertThat(result.remark())
@@ -127,8 +128,8 @@ class LinkedPriceResolverTest {
   }
 
   @Test
-  @DisplayName("T7：月度调价联动价按 MONTHLY_ADJUST + 调价批次读取，不读 OA QUOTE 结果")
-  void monthlyRepriceResolvesByAdjustBatchContext() {
+  @DisplayName("月度重算按场景、业务单元和月份读取联动价")
+  void monthlyRepriceResolvesByMonthAndBusinessContext() {
     PriceLinkedCalcItemMapper mapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
     LinkedPriceResolver resolver = new LinkedPriceResolver(mapper, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class));
 
@@ -145,9 +146,8 @@ class LinkedPriceResolverTest {
             "OA-V3",
             item,
             null,
-            CostRunContext.monthlyReprice(
+            scoped(CostRunContext.monthlyReprice(
                 "2026-05",
-                77L,
                 "MRP-001",
                 "COMMERCIAL",
                 "OA-V3",
@@ -155,14 +155,29 @@ class LinkedPriceResolverTest {
                 "P-001",
                 "箱装",
                 "客户A",
-                "OBJ-001"));
+                "OBJ-001")));
 
     assertThat(result.unitPrice()).isEqualByComparingTo("88.000000");
     assertThat(result.priceSource()).isEqualTo("月度调价联动价");
     ArgumentCaptor<Wrapper<PriceLinkedCalcItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(mapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment())
-        .contains("calc_scene", "adjust_batch_id", "business_unit_type", "pricing_month", "item_code")
+        .contains("calc_scene", "business_unit_type", "pricing_month", "item_code")
         .doesNotContain("oa_no");
   }
+  @Test
+  void absentOrganizationCannotReadAnotherOrganizationsCachedPrice() {
+    var mapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
+    var resolver = new LinkedPriceResolver(mapper, Mockito.mock(TechnicalPriceSourceResolver.class));
+    var item = new CostRunPartItemDto(); item.setPartCode("M1");
+    var context = CostRunContext.quote("OA", 9L, "TOP", null, null, "COMMERCIAL", "2026-10", "KEY");
+    assertThat(resolver.resolve("OA", item, null, context).failureCode()).isEqualTo("LINKED_PRICE_SCOPE_MISSING");
+    Mockito.verifyNoInteractions(mapper);
+  }
+
+  private CostRunContext scoped(CostRunContext context) {
+    context.setPriceOrgCode("210");
+    return context;
+  }
+
 }

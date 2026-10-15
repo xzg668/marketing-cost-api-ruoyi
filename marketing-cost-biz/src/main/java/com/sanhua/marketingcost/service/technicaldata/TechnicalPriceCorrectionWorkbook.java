@@ -52,7 +52,8 @@ public class TechnicalPriceCorrectionWorkbook {
   private final PriceLinkedFactorWorkbookParser factorParser;
 
   public TechnicalPriceCorrectionWorkbook(
-      FormulaNormalizer normalizer, FormulaValidator validator,
+      FormulaNormalizer normalizer,
+      FormulaValidator validator,
       PriceLinkedFactorWorkbookParser factorParser) {
     this.normalizer = normalizer;
     this.validator = validator;
@@ -136,8 +137,19 @@ public class TechnicalPriceCorrectionWorkbook {
   }
 
   public int factorRowCount(byte[] bytes) {
-    return factorParser.parse(new ByteArrayInputStream(bytes), "补录公式.xlsx")
-        .getSheets().stream().mapToInt(sheet -> sheet.getRows().size()).sum();
+    var parsed = factorParser.parse(new ByteArrayInputStream(bytes), "补录公式.xlsx");
+    for (var sheet : parsed.getSheets())
+      if (!sheet.getErrors().isEmpty()) {
+        var issue = sheet.getErrors().getFirst();
+        throw new IllegalArgumentException(
+            "影响因素 "
+                + sheet.getSheetName()
+                + " 第"
+                + issue.getRowNumber()
+                + "行："
+                + issue.getMessage());
+      }
+    return parsed.getValidRowCount();
   }
 
   /** 归属错误整文件拒绝；可修正的公式／参数错误保留为逐行问题，允许其余有效行导入。 */
@@ -246,8 +258,7 @@ public class TechnicalPriceCorrectionWorkbook {
 
   private static boolean usesExternalFactor(String normalized) {
     var variables = VARIABLE.matcher(normalized);
-    while (variables.find())
-      if (!ROW_PARAMETERS.contains(variables.group(1))) return true;
+    while (variables.find()) if (!ROW_PARAMETERS.contains(variables.group(1))) return true;
     return false;
   }
 

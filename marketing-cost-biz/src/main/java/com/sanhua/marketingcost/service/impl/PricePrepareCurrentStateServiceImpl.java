@@ -1,25 +1,25 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.sanhua.marketingcost.entity.PackageComponentPrice;
-import com.sanhua.marketingcost.entity.PackageComponentPriceDetail;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.entity.MakePartPriceGapItem;
+import com.sanhua.marketingcost.entity.PackageComponentPrice;
+import com.sanhua.marketingcost.entity.PackageComponentPriceDetail;
+import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
-import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
-import com.sanhua.marketingcost.mapper.PackageComponentPriceDetailMapper;
-import com.sanhua.marketingcost.mapper.PackageComponentPriceMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceGapItemMapper;
+import com.sanhua.marketingcost.mapper.PackageComponentPriceDetailMapper;
+import com.sanhua.marketingcost.mapper.PackageComponentPriceMapper;
+import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
-import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.PricePrepareCurrentStateService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
@@ -78,10 +78,7 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
     this.versionInvalidationService = versionInvalidationService;
   }
 
-  /**
-   * 发布动作必须与调用方已存在的事务合并：工作台同时生成 OA/财务批次时，财务失败会让
-   * OA 候选及指针一起回滚；直接生成时，本方法自身提供短事务边界。
-   */
+  /** 发布动作必须与调用方已存在的事务合并：工作台同时生成 OA/财务批次时，财务失败会让 OA 候选及指针一起回滚；直接生成时，本方法自身提供短事务边界。 */
   @Override
   @Transactional(rollbackFor = Exception.class)
   public void finalizeBatch(PricePrepareBatch batch) {
@@ -95,6 +92,20 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
             batch.getTopProductCode(),
             batch.getPeriodMonth(),
             batch.getBusinessUnitType());
+    if (StringUtils.hasText(workspace.getCurrentPrepareNo())
+        && !workspace.getCurrentPrepareNo().equals(batch.getPrepareNo())) {
+      var current =
+          batchMapper.selectOne(
+              Wrappers.<PricePrepareBatch>lambdaQuery()
+                  .eq(PricePrepareBatch::getPrepareNo, workspace.getCurrentPrepareNo())
+                  .last("FOR UPDATE"));
+      if (current != null
+          && current.getId() != null
+          && batch.getId() != null
+          && current.getId() > batch.getId()) {
+        throw new org.springframework.dao.ConcurrencyFailureException("较新的价格准备已发布，旧任务结果不再覆盖，请重试");
+      }
+    }
     if (isSuccessful(batch)) {
       publishSuccessfulBatch(batch, workspace);
     } else {
@@ -109,30 +120,39 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
     if (!StringUtils.hasText(prepareNo)) {
       return false;
     }
-    PricePrepareBatch batch = batchMapper.selectOne(
-        Wrappers.<PricePrepareBatch>lambdaQuery()
-            .eq(PricePrepareBatch::getPrepareNo, prepareNo.trim())
-            .last("LIMIT 1"));
-    if (batch == null || isSuccessful(batch) || STATUS_RUNNING.equalsIgnoreCase(batch.getStatus())) {
+    PricePrepareBatch batch =
+        batchMapper.selectOne(
+            Wrappers.<PricePrepareBatch>lambdaQuery()
+                .eq(PricePrepareBatch::getPrepareNo, prepareNo.trim())
+                .last("LIMIT 1"));
+    if (batch == null
+        || isSuccessful(batch)
+        || STATUS_RUNNING.equalsIgnoreCase(batch.getStatus())) {
       return false;
     }
-    QuoteCostingWorkspace workspace = workspaceService
-        .find(batch.getOaFormItemId(), batch.getPeriodMonth()).orElse(null);
+    QuoteCostingWorkspace workspace =
+        workspaceService.find(batch.getOaFormItemId(), batch.getPeriodMonth()).orElse(null);
     if (workspace != null && prepareNo.trim().equals(workspace.getCurrentPrepareNo())) {
       return false;
     }
-    Long costReferences = costVersionMapper.selectCount(
-        Wrappers.<QuoteCostRunVersion>lambdaQuery()
-            .and(query -> query
-                .eq(QuoteCostRunVersion::getPricePrepareNo, prepareNo.trim())
-                .or().eq(QuoteCostRunVersion::getOaPricePrepareNo, prepareNo.trim())
-                .or().eq(QuoteCostRunVersion::getFinancePricePrepareNo, prepareNo.trim())));
+    Long costReferences =
+        costVersionMapper.selectCount(
+            Wrappers.<QuoteCostRunVersion>lambdaQuery()
+                .and(
+                    query ->
+                        query
+                            .eq(QuoteCostRunVersion::getPricePrepareNo, prepareNo.trim())
+                            .or()
+                            .eq(QuoteCostRunVersion::getOaPricePrepareNo, prepareNo.trim())
+                            .or()
+                            .eq(QuoteCostRunVersion::getFinancePricePrepareNo, prepareNo.trim())));
     if (costReferences != null && costReferences > 0) {
       return false;
     }
-    Long childBatches = batchMapper.selectCount(
-        Wrappers.<PricePrepareBatch>lambdaQuery()
-            .eq(PricePrepareBatch::getSourcePrepareNo, prepareNo.trim()));
+    Long childBatches =
+        batchMapper.selectCount(
+            Wrappers.<PricePrepareBatch>lambdaQuery()
+                .eq(PricePrepareBatch::getSourcePrepareNo, prepareNo.trim()));
     if (childBatches != null && childBatches > 0) {
       return false;
     }
@@ -140,8 +160,7 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
     return true;
   }
 
-  private void publishSuccessfulBatch(
-      PricePrepareBatch batch, QuoteCostingWorkspace workspace) {
+  private void publishSuccessfulBatch(PricePrepareBatch batch, QuoteCostingWorkspace workspace) {
     deactivateCurrentItems(batch, batch.getPrepareNo());
     PricePrepareItem activeItem = new PricePrepareItem();
     activeItem.setCurrentFlag(ACTIVE);
@@ -172,8 +191,7 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
         batch.getPeriodMonth());
   }
 
-  private void publishFailedAttempt(
-      PricePrepareBatch batch, QuoteCostingWorkspace workspace) {
+  private void publishFailedAttempt(PricePrepareBatch batch, QuoteCostingWorkspace workspace) {
     // 半套候选明细不成为业务结果，也不长期保留；当前缺口保留给页面和协作使用。
     cleanupGeneratedArtifacts(batch);
     itemMapper.delete(
@@ -189,14 +207,12 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
             .eq(PricePrepareGap::getPrepareNo, batch.getPrepareNo()));
 
     int expectedLockVersion = valueOrZero(workspace.getLockVersion());
-    workspace.setWorkspaceStatus("FAILED".equalsIgnoreCase(batch.getStatus())
-        ? "PRICE_ERROR"
-        : "PRICE_BLOCKED");
+    workspace.setWorkspaceStatus(
+        "FAILED".equalsIgnoreCase(batch.getStatus()) ? "PRICE_ERROR" : "PRICE_BLOCKED");
     workspace.setCurrentStep("PRICE_PREPARE");
     workspace.setGapCount(Math.max(1, valueOrZero(batch.getGapCount())));
-    workspace.setStaleReasonCode("FAILED".equalsIgnoreCase(batch.getStatus())
-        ? "PRICE_PREPARE_FAILED"
-        : "PRICE_GAP");
+    workspace.setStaleReasonCode(
+        "FAILED".equalsIgnoreCase(batch.getStatus()) ? "PRICE_PREPARE_FAILED" : "PRICE_GAP");
     workspace.setLastErrorStep("PRICE_PREPARE");
     workspace.setLastErrorCode(workspace.getStaleReasonCode());
     workspace.setLastErrorMessage(batch.getMessage());
@@ -253,7 +269,10 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
                 .eq(PricePrepareBatch::getOaFormItemId, completedBatch.getOaFormItemId())
                 .eq(PricePrepareBatch::getTopProductCode, completedBatch.getTopProductCode())
                 .eq(PricePrepareBatch::getPeriodMonth, completedBatch.getPeriodMonth())
-                .lt(completedBatch.getId() != null, PricePrepareBatch::getId, completedBatch.getId())
+                .lt(
+                    completedBatch.getId() != null,
+                    PricePrepareBatch::getId,
+                    completedBatch.getId())
                 .ne(PricePrepareBatch::getStatus, STATUS_RUNNING));
     if (candidates == null || candidates.isEmpty()) {
       return;
@@ -290,7 +309,8 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
                 .eq(QuoteCostRunVersion::getProductCode, scope.getTopProductCode())
                 .eq(QuoteCostRunVersion::getPricingMonth, scope.getPeriodMonth()));
     Set<String> result = new HashSet<>();
-    for (QuoteCostRunVersion version : versions == null ? List.<QuoteCostRunVersion>of() : versions) {
+    for (QuoteCostRunVersion version :
+        versions == null ? List.<QuoteCostRunVersion>of() : versions) {
       addText(result, version.getPricePrepareNo());
       addText(result, version.getOaPricePrepareNo());
       addText(result, version.getFinancePricePrepareNo());
@@ -302,30 +322,27 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
     String prepareNo = batch.getPrepareNo();
     cleanupGeneratedArtifacts(batch);
     gapMapper.delete(
-        Wrappers.<PricePrepareGap>lambdaQuery()
-            .eq(PricePrepareGap::getPrepareNo, prepareNo));
+        Wrappers.<PricePrepareGap>lambdaQuery().eq(PricePrepareGap::getPrepareNo, prepareNo));
     itemMapper.delete(
-        Wrappers.<PricePrepareItem>lambdaQuery()
-            .eq(PricePrepareItem::getPrepareNo, prepareNo));
+        Wrappers.<PricePrepareItem>lambdaQuery().eq(PricePrepareItem::getPrepareNo, prepareNo));
     deletePackageCandidate(prepareNo);
     batchMapper.delete(
-        Wrappers.<PricePrepareBatch>lambdaQuery()
-            .eq(PricePrepareBatch::getPrepareNo, prepareNo));
+        Wrappers.<PricePrepareBatch>lambdaQuery().eq(PricePrepareBatch::getPrepareNo, prepareNo));
   }
 
   /**
-   * 删除未发布候选自己生成的中间结果。正式价格主数据不在这里，历史成本版本引用的批次也
-   * 会在调用本方法前被保护；因此这里只按 prepare_no 的精确引用和批次取价时点清理。
+   * 删除未发布候选自己生成的中间结果。正式价格主数据不在这里，历史成本版本引用的批次也 会在调用本方法前被保护。联动结果可被同一取价时点的新批次复用，删除旧批次时
+   * 必须同时保护其他批次仍引用的结果，不能把复用结果当成旧批次独占的数据。
    */
   private void cleanupGeneratedArtifacts(PricePrepareBatch batch) {
     if (batch == null || !StringUtils.hasText(batch.getPrepareNo())) {
       return;
     }
-    List<PricePrepareItem> prepareItems = itemMapper.selectList(
-        Wrappers.<PricePrepareItem>lambdaQuery()
-            .eq(PricePrepareItem::getPrepareNo, batch.getPrepareNo()));
-    List<PricePrepareItem> items =
-        prepareItems == null ? List.of() : prepareItems;
+    List<PricePrepareItem> prepareItems =
+        itemMapper.selectList(
+            Wrappers.<PricePrepareItem>lambdaQuery()
+                .eq(PricePrepareItem::getPrepareNo, batch.getPrepareNo()));
+    List<PricePrepareItem> items = prepareItems == null ? List.of() : prepareItems;
 
     Set<Long> directLinkedIds = new LinkedHashSet<>();
     Set<String> makePartCodes = new LinkedHashSet<>();
@@ -343,26 +360,45 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
     if (!directLinkedIds.isEmpty()) {
       linkedCalcItemMapper.delete(
           Wrappers.<PriceLinkedCalcItem>lambdaQuery()
-              .in(PriceLinkedCalcItem::getId, directLinkedIds));
+              .in(PriceLinkedCalcItem::getId, directLinkedIds)
+              .notExists(
+                  """
+                  SELECT 1 FROM lp_price_prepare_item retained
+                  WHERE retained.result_ref_type='LINKED_PRICE'
+                    AND retained.result_ref_id=lp_price_linked_calc_item.id
+                    AND retained.prepare_no <> {0}
+                  """,
+                  batch.getPrepareNo()));
     }
     if (makePartCodes.isEmpty() || batch.getPriceAsOfTime() == null) {
       return;
     }
 
-    List<MakePartPriceCalcRow> makeRows = makePartRowMapper.selectList(
-        Wrappers.<MakePartPriceCalcRow>lambdaQuery()
-            .eq(MakePartPriceCalcRow::getOaNo, batch.getOaNo())
-            .eq(MakePartPriceCalcRow::getBusinessUnitType, batch.getBusinessUnitType())
-            .eq(MakePartPriceCalcRow::getPricingMonth, batch.getPeriodMonth())
-            .eq(MakePartPriceCalcRow::getPriceAsOfTime, batch.getPriceAsOfTime())
-            .eq(MakePartPriceCalcRow::getPriceScenarioType, scenarioType(batch))
-            .in(MakePartPriceCalcRow::getParentMaterialNo, makePartCodes));
+    List<MakePartPriceCalcRow> makeRows =
+        makePartRowMapper.selectList(
+            Wrappers.<MakePartPriceCalcRow>lambdaQuery()
+                .eq(MakePartPriceCalcRow::getOaNo, batch.getOaNo())
+                .eq(MakePartPriceCalcRow::getBusinessUnitType, batch.getBusinessUnitType())
+                .eq(MakePartPriceCalcRow::getPricingMonth, batch.getPeriodMonth())
+                .eq(MakePartPriceCalcRow::getPriceAsOfTime, batch.getPriceAsOfTime())
+                .eq(MakePartPriceCalcRow::getPriceScenarioType, scenarioType(batch))
+                .in(MakePartPriceCalcRow::getParentMaterialNo, makePartCodes)
+                .notExists(
+                    """
+SELECT 1 FROM lp_price_prepare_item retained
+JOIN lp_make_part_price_calc_row referenced ON referenced.id=retained.result_ref_id
+WHERE retained.result_ref_type='MAKE_PART_PRICE'
+  AND retained.prepare_no <> {0}
+  AND referenced.calc_batch_id=lp_make_part_price_calc_row.calc_batch_id
+""",
+                    batch.getPrepareNo()));
     List<MakePartPriceCalcRow> rows = makeRows == null ? List.of() : makeRows;
-    Set<String> calcBatchIds = rows.stream()
-        .map(MakePartPriceCalcRow::getCalcBatchId)
-        .filter(StringUtils::hasText)
-        .map(String::trim)
-        .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    Set<String> calcBatchIds =
+        rows.stream()
+            .map(MakePartPriceCalcRow::getCalcBatchId)
+            .filter(StringUtils::hasText)
+            .map(String::trim)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
     if (!calcBatchIds.isEmpty()) {
       makePartGapMapper.delete(
           Wrappers.<MakePartPriceGapItem>lambdaQuery()
@@ -384,10 +420,9 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
         packagePriceMapper.selectList(
             Wrappers.<PackageComponentPrice>lambdaQuery()
                 .eq(PackageComponentPrice::getCalcBatchId, prepareNo));
-    List<Long> priceIds = (prices == null ? List.<PackageComponentPrice>of() : prices).stream()
-        .map(PackageComponentPrice::getId)
-        .filter(java.util.Objects::nonNull)
-        .toList();
+    List<Long> priceIds =
+        (prices == null ? List.<PackageComponentPrice>of() : prices)
+            .stream().map(PackageComponentPrice::getId).filter(java.util.Objects::nonNull).toList();
     if (!priceIds.isEmpty()) {
       packageDetailMapper.delete(
           Wrappers.<PackageComponentPriceDetail>lambdaQuery()

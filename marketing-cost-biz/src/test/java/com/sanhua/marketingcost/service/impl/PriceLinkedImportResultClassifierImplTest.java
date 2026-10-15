@@ -21,8 +21,11 @@ class PriceLinkedImportResultClassifierImplTest {
   void appendCountsNewHistoryAndAutoBinding() {
     PriceItemImportResponse response = new PriceItemImportResponse();
     PriceLinkedImportResultClassifyRequest request = baseRequest();
-    request.getStandardDecisions().add(decision(
-        PriceLinkedStandardBindingServiceImpl.ACTION_CREATE_HISTORY, 501L, null, 1001L));
+    request
+        .getStandardDecisions()
+        .add(
+            decision(
+                PriceLinkedStandardBindingServiceImpl.ACTION_CREATE_BINDING, 501L, null, 1001L));
     PriceLinkedAutoBindingWriteResult writeResult = new PriceLinkedAutoBindingWriteResult();
     writeResult.addWritten("材料含税价格", 9001L);
     request.setWriteResult(writeResult);
@@ -41,8 +44,9 @@ class PriceLinkedImportResultClassifierImplTest {
   void appendCountsConsistentHistory() {
     PriceItemImportResponse response = new PriceItemImportResponse();
     PriceLinkedImportResultClassifyRequest request = baseRequest();
-    request.getStandardDecisions().add(decision(
-        PriceLinkedStandardBindingServiceImpl.ACTION_CONSISTENT, 501L, 1001L, 1001L));
+    request
+        .getStandardDecisions()
+        .add(decision(PriceLinkedStandardBindingServiceImpl.ACTION_CONSISTENT, 501L, 1001L, 1001L));
 
     classifier.append(response, request);
 
@@ -56,8 +60,9 @@ class PriceLinkedImportResultClassifierImplTest {
   void appendConflictAddsBindingErrorWithOldAndNewIdentity() {
     PriceItemImportResponse response = new PriceItemImportResponse();
     PriceLinkedImportResultClassifyRequest request = baseRequest();
-    request.getStandardDecisions().add(decision(
-        PriceLinkedStandardBindingServiceImpl.ACTION_CONFLICT, 501L, 1001L, 9999L));
+    request
+        .getStandardDecisions()
+        .add(decision(PriceLinkedStandardBindingServiceImpl.ACTION_CONFLICT, 501L, 1001L, 9999L));
 
     classifier.append(response, request);
 
@@ -80,11 +85,11 @@ class PriceLinkedImportResultClassifierImplTest {
   void appendConflictWriteSkipDoesNotDuplicateBindingError() {
     PriceItemImportResponse response = new PriceItemImportResponse();
     PriceLinkedImportResultClassifyRequest request = baseRequest();
-    request.getStandardDecisions().add(decision(
-        PriceLinkedStandardBindingServiceImpl.ACTION_CONFLICT, 501L, 1001L, 9999L));
+    request
+        .getStandardDecisions()
+        .add(decision(PriceLinkedStandardBindingServiceImpl.ACTION_CONFLICT, 501L, 1001L, 9999L));
     PriceLinkedAutoBindingWriteResult writeResult = new PriceLinkedAutoBindingWriteResult();
-    writeResult.addConflictSkipped("材料含税价格",
-        "本次公式识别结果与历史标准关系不一致，默认不覆盖，请人工确认");
+    writeResult.addConflictSkipped("材料含税价格", "本次公式识别结果与历史标准关系不一致，默认不覆盖，请人工确认");
     request.setWriteResult(writeResult);
 
     classifier.append(response, request);
@@ -146,8 +151,7 @@ class PriceLinkedImportResultClassifierImplTest {
   }
 
   private PriceLinkedImportResultClassifyRequest baseRequest() {
-    PriceLinkedImportResultClassifyRequest request =
-        new PriceLinkedImportResultClassifyRequest();
+    PriceLinkedImportResultClassifyRequest request = new PriceLinkedImportResultClassifyRequest();
     request.setExcelRowNumber(3);
     request.setMaterialCode("MAT-1001");
     request.setFormula("ROUND($I$2*影响因素!$E$64/1000+K2,4)/1.13");
@@ -164,9 +168,10 @@ class PriceLinkedImportResultClassifierImplTest {
     decision.setStandardBindingId(standardBindingId);
     decision.setOldFactorIdentityId(oldIdentityId);
     decision.setNewFactorIdentityId(newIdentityId);
-    decision.setReason(action.equals(PriceLinkedStandardBindingServiceImpl.ACTION_CONFLICT)
-        ? "本次公式识别结果与历史标准关系不一致，默认不覆盖，请人工确认"
-        : "ok");
+    decision.setReason(
+        action.equals(PriceLinkedStandardBindingServiceImpl.ACTION_CONFLICT)
+            ? "本次公式识别结果与历史标准关系不一致，默认不覆盖，请人工确认"
+            : "ok");
     decision.setCandidate(candidate(newIdentityId));
     return decision;
   }

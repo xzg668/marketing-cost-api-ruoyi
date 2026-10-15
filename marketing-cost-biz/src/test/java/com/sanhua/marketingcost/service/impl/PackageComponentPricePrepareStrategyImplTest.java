@@ -64,7 +64,6 @@ class PackageComponentPricePrepareStrategyImplTest {
     assertThat(captor.getValue().getCalcBatchId()).isEqualTo("PPR-001");
     assertThat(captor.getValue().getAsOfDate())
         .isEqualTo(CostPricingPeriodUtils.currentPricingDate());
-    assertThat(captor.getValue().isForceRefresh()).isTrue();
   }
 
   @Test
@@ -124,6 +123,8 @@ class PackageComponentPricePrepareStrategyImplTest {
     missingDetail.setChildMaterialName("包装子件");
     missingDetail.setPriceStatus("MISSING_PRICE");
     missingDetail.setMissingReason("固定价无记录");
+    missingDetail.setPriceType("FIXED");
+    missingDetail.setFailureCode("SUPPLIER_RATIO_REVIEW_REQUIRED");
     when(packageComponentPriceService.ensurePrice(any(PackagePriceRequest.class)))
         .thenReturn(priceResult("MISSING_CHILD_PRICE", false, null, 702L, List.of(missingDetail)));
 
@@ -135,6 +136,8 @@ class PackageComponentPricePrepareStrategyImplTest {
     assertThat(result.getGaps().get(0).getGapType()).isEqualTo("MISSING_PRICE");
     assertThat(result.getGaps().get(0).getGapMaterialCode()).isEqualTo("CHILD-001");
     assertThat(result.getGaps().get(0).getMaterialName()).isEqualTo("包装子件");
+    assertThat(result.getGaps().get(0).getPriceType()).isEqualTo("FIXED");
+    assertThat(result.getGaps().get(0).getReasonCode()).isEqualTo("SUPPLIER_RATIO_REVIEW_REQUIRED");
     assertThat(result.getGaps().get(0).getMessage()).contains("固定价无记录");
   }
 

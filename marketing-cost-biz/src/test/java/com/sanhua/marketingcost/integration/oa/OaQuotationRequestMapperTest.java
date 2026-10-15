@@ -13,7 +13,8 @@ class OaQuotationRequestMapperTest {
   static final OaPeer PEER = new OaPeer("WEAVER", "TEST", Set.of("COMMERCIAL"));
   final OaQuotationRequestMapper mapper = new OaQuotationRequestMapper(new OaMessageCodec(JSON));
 
-  @Test void rejectionNodeIsAnOpaqueSourceIdentifier() throws Exception {
+  @Test
+  void rejectionNodeIsAnOpaqueSourceIdentifier() throws Exception {
     var root = sample(1).put("RejectToNodeid", "001327000000123456789");
     assertThat(mapper.map(root, PEER).quote().rejectToNodeId()).isEqualTo("001327000000123456789");
     assertThat(mapper.map(sample(1), PEER).quote().rejectToNodeId()).isNull();
@@ -23,6 +24,23 @@ class OaQuotationRequestMapperTest {
     }
     assertThatThrownBy(() -> mapper.map(root.deepCopy().put("RejectToNodeid", 123), PEER))
         .isInstanceOf(OaQuotationValidationException.class);
+  }
+
+  @Test
+  void onlyFinalBoardTenderFieldControlsTheNormalizedInput() throws Exception {
+    var root = sample(3);
+    var main = (ObjectNode) root.path("mainData");
+    main.put("ywycbqrsfzbxqjzdbhc", "是").putNull("sfzbxqjzdbhcp");
+    assertThat(mapper.map(root, PEER).quote().request().getHeader().getBoardTender()).isNull();
+    main.put("sfzbxqjzdbhcp", "否");
+    assertThat(mapper.map(root, PEER).quote().request().getHeader().getBoardTender()).isFalse();
+    main.put("ywycbqrsfzbxqjzdbhc", "否").put("sfzbxqjzdbhcp", "是");
+    assertThat(mapper.map(root, PEER).quote().request().getHeader().getBoardTender()).isTrue();
+    main.put("sfzbxqjzdbhcp", "未知");
+    assertThatThrownBy(() -> mapper.map(root, PEER))
+        .isInstanceOfSatisfying(
+            OaQuotationValidationException.class,
+            e -> assertThat(e.errors().getFirst().field()).isEqualTo("mainData.sfzbxqjzdbhcp"));
   }
 
   static ObjectNode sample(int n) throws Exception {
@@ -42,7 +60,8 @@ class OaQuotationRequestMapperTest {
     assertThat(mapped.quote().request().getVersion()).isEqualTo("1");
     for (String removed : new String[] {"workflowRequestId", "version"}) {
       var invalid = root.deepCopy().put(removed, "1");
-      assertThatThrownBy(() -> mapper.map(invalid, PEER)).isInstanceOf(OaQuotationValidationException.class);
+      assertThatThrownBy(() -> mapper.map(invalid, PEER))
+          .isInstanceOf(OaQuotationValidationException.class);
     }
   }
 

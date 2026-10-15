@@ -1,21 +1,21 @@
 package com.sanhua.marketingcost.service.impl;
 
-import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.CostRunContext;
+import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.dto.priceprepare.NormalMaterialPricePrepareResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePreparePlanItem;
+import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
+import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.NormalMaterialPricePrepareStrategy;
 import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
-import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
-import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
-import com.sanhua.marketingcost.service.pricing.PriceResolveResult;
 import com.sanhua.marketingcost.service.pricing.PriceResolveEvidence;
+import com.sanhua.marketingcost.service.pricing.PriceResolveResult;
 import com.sanhua.marketingcost.service.pricing.PriceResolver;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -36,12 +36,9 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
   private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
 
   static final String STATUS_READY = "READY";
-  static final String STATUS_MISSING_PRICE_TYPE = "MISSING_PRICE_TYPE";
   static final String STATUS_MISSING_PRICE = "MISSING_PRICE";
   static final String STATUS_FAILED = "FAILED";
-  static final String GAP_TYPE_MISSING_PRICE_TYPE = "MISSING_PRICE_TYPE";
   static final String GAP_TYPE_MISSING_PRICE = "MISSING_PRICE";
-  static final String SOURCE_TABLE_MATERIAL_PRICE_TYPE = "lp_material_price_type";
   static final String SOURCE_TABLE_PRICE_RESOLVER = "PriceResolver";
   static final String SOURCE_TABLE_LINKED_ENSURE = "LinkedPriceEnsureService";
 
@@ -68,16 +65,8 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
 
   @Override
   public NormalMaterialPricePrepareResult prepare(
-      String oaNo,
-      String businessUnitType,
-      String periodMonth,
-      PricePreparePlanItem planItem) {
-    return prepare(
-        oaNo,
-        businessUnitType,
-        periodMonth,
-        LocalDateTime.now(BUSINESS_ZONE),
-        planItem);
+      String oaNo, String businessUnitType, String periodMonth, PricePreparePlanItem planItem) {
+    return prepare(oaNo, businessUnitType, periodMonth, LocalDateTime.now(BUSINESS_ZONE), planItem);
   }
 
   @Override
@@ -87,8 +76,7 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       String periodMonth,
       LocalDateTime priceAsOfTime,
       PricePreparePlanItem planItem) {
-    return prepare(
-        oaNo, businessUnitType, periodMonth, priceAsOfTime, null, planItem);
+    return prepare(oaNo, businessUnitType, periodMonth, priceAsOfTime, null, planItem);
   }
 
   @Override
@@ -100,13 +88,7 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       PricePrepareScenarioContext scenarioContext,
       PricePreparePlanItem planItem) {
     return execute(
-        oaNo,
-        businessUnitType,
-        periodMonth,
-        priceAsOfTime,
-        scenarioContext,
-        planItem,
-        true);
+        oaNo, businessUnitType, periodMonth, priceAsOfTime, scenarioContext, planItem, true);
   }
 
   @Override
@@ -118,13 +100,145 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       PricePrepareScenarioContext scenarioContext,
       PricePreparePlanItem planItem) {
     return execute(
-        oaNo,
-        businessUnitType,
-        periodMonth,
-        priceAsOfTime,
-        scenarioContext,
-        planItem,
-        false);
+        oaNo, businessUnitType, periodMonth, priceAsOfTime, scenarioContext, planItem, false);
+  }
+
+  @Override
+  public Map<PricePreparePlanItem, NormalMaterialPricePrepareResult> prepareBatch(
+      String oaNo,
+      String businessUnitType,
+      String periodMonth,
+      LocalDateTime priceAsOfTime,
+      PricePrepareScenarioContext scenarioContext,
+      List<PricePreparePlanItem> items,
+      boolean persist) {
+    if (items == null || items.isEmpty()) return Map.of();
+    scenarioContext =
+        scenarioContext == null
+            ? PricePrepareScenarioContext.oaLocked(null, organization(items.getFirst()))
+            : scenarioContext;
+    priceAsOfTime = priceAsOfTime == null ? LocalDateTime.now(BUSINESS_ZONE) : priceAsOfTime;
+    LocalDate quoteDate = priceAsOfTime.toLocalDate();
+    var routes = new java.util.LinkedHashMap<MaterialScope, List<PriceTypeRoute>>();
+    var groups = new java.util.LinkedHashMap<String, Set<String>>();
+    for (var item : items) {
+      String code = item.getMaterialCode().trim();
+      var candidates =
+          routes.computeIfAbsent(
+              new MaterialScope(code, organization(item)),
+              ignored -> persist
+                  ? materialPriceRouterService.prepareCandidates(code, item.getMaterialName(), periodMonth,
+                      quoteDate, organization(item), businessUnitType)
+                  : materialPriceRouterService.listCandidates(code, periodMonth, quoteDate,
+                      organization(item), businessUnitType));
+      if (firstRouteIsPublicLinked(candidates))
+        groups.computeIfAbsent(organization(item), ignored -> new java.util.TreeSet<>()).add(code);
+    }
+    var linked = new java.util.LinkedHashMap<String, Map<String, PriceLinkedCalcItem>>();
+    for (var group : groups.entrySet()) {
+      var request =
+          LinkedPriceEnsureRequest.quote(oaNo, businessUnitType, periodMonth, group.getValue());
+      request.setPriceAsOfTime(priceAsOfTime);
+      applyScenario(request, scenarioContext.forOrganization(group.getKey()));
+      request.setPriceOrgCode(group.getKey());
+      var rows = new java.util.LinkedHashMap<String, PriceLinkedCalcItem>();
+      try {
+        if (persist) rows.putAll(linkedPriceEnsureService.ensure(request).getItems());
+        else
+          for (var row : linkedPriceEnsureService.calculate(request))
+            rows.put(row.getItemCode(), row);
+      } catch (org.springframework.dao.TransientDataAccessException retryable) {
+        throw retryable;
+      } catch (RuntimeException error) {
+        for (String code : group.getValue()) {
+          var failed = new PriceLinkedCalcItem();
+          failed.setItemCode(code);
+          failed.setFailureCode(LinkedPriceEnsureServiceImpl.LINKED_RULE_ERROR);
+          failed.setCalcMessage("联动价批量准备失败：" + error.getMessage());
+          rows.put(code, failed);
+        }
+      }
+      linked.put(group.getKey(), rows);
+    }
+    var rangeRequests =
+        new java.util.LinkedHashMap<
+            PricePreparePlanItem, com.sanhua.marketingcost.service.pricing.PriceResolveRequest>();
+    var rangeResolver = resolverMap.get(PriceTypeEnum.RANGE);
+    if (rangeResolver != null)
+      for (var item : items) {
+        var row =
+            linked.getOrDefault(organization(item), Map.of()).get(item.getMaterialCode().trim());
+        if (row != null && (row.getPartUnitPrice() != null || row.getFailureCode() != null))
+          continue;
+        for (var route : routes.getOrDefault(new MaterialScope(item.getMaterialCode().trim(), organization(item)), List.of())) {
+          if (route.priceType() == PriceTypeEnum.LINKED && !route.supplemental()) continue;
+          if (route.priceType() == PriceTypeEnum.RANGE) {
+            var context =
+                toResolveContext(
+                    oaNo,
+                    businessUnitType,
+                    periodMonth,
+                    priceAsOfTime,
+                    item,
+                    scenarioContext.forOrganization(organization(item)));
+            context.setPriceCheckOnly(!persist);
+            rangeRequests.put(
+                item,
+                new com.sanhua.marketingcost.service.pricing.PriceResolveRequest(
+                    toResolveItem(oaNo, item), route, context));
+          }
+          break;
+        }
+      }
+    var rangeResults =
+        rangeRequests.isEmpty()
+            ? Map
+                .<com.sanhua.marketingcost.service.pricing.PriceResolveRequest, PriceResolveResult>
+                    of()
+            : rangeResolver.resolveBatch(oaNo, List.copyOf(rangeRequests.values()));
+    var results =
+        new java.util.LinkedHashMap<PricePreparePlanItem, NormalMaterialPricePrepareResult>();
+    for (var item : items) {
+      var row =
+          linked.getOrDefault(organization(item), Map.of()).get(item.getMaterialCode().trim());
+      try {
+        results.put(
+            item,
+            execute(
+                oaNo,
+                businessUnitType,
+                periodMonth,
+                priceAsOfTime,
+                scenarioContext.forOrganization(organization(item)),
+                item,
+                persist,
+                routes.get(new MaterialScope(item.getMaterialCode().trim(), organization(item))),
+                row,
+                (rangeRequests.containsKey(item)
+                    ? rangeResults.get(rangeRequests.get(item))
+                    : null),
+                true));
+      } catch (org.springframework.dao.TransientDataAccessException retryable) {
+        throw retryable;
+      } catch (RuntimeException error) {
+        results.put(
+            item,
+            NormalMaterialPricePrepareResult.gap(
+                STATUS_FAILED,
+                GAP_TYPE_MISSING_PRICE,
+                PriceResolveResult.SOURCE_ERROR,
+                SOURCE_TABLE_PRICE_RESOLVER,
+                "普通料号取价失败：" + error.getMessage()));
+      }
+    }
+    return results;
+  }
+
+  private record MaterialScope(String materialCode, String priceOrgCode) {}
+
+  private String organization(PricePreparePlanItem item) {
+    String org = item.getBomRow() == null ? null : item.getBomRow().getPriceOrgCode();
+    return org == null ? "" : org.trim();
   }
 
   private NormalMaterialPricePrepareResult execute(
@@ -135,57 +249,73 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       PricePrepareScenarioContext scenarioContext,
       PricePreparePlanItem planItem,
       boolean persistLinkedPrice) {
+    return execute(
+        oaNo,
+        businessUnitType,
+        periodMonth,
+        priceAsOfTime,
+        scenarioContext,
+        planItem,
+        persistLinkedPrice,
+        null,
+        null,
+        null,
+        false);
+  }
+
+  private NormalMaterialPricePrepareResult execute(
+      String oaNo,
+      String businessUnitType,
+      String periodMonth,
+      LocalDateTime priceAsOfTime,
+      PricePrepareScenarioContext scenarioContext,
+      PricePreparePlanItem planItem,
+      boolean persistLinkedPrice,
+      List<PriceTypeRoute> preparedRoutes,
+      PriceLinkedCalcItem preparedLinked,
+      PriceResolveResult preparedRange,
+      boolean batchPrepared) {
     String materialCode = planItem == null ? null : trimToNull(planItem.getMaterialCode());
     if (materialCode == null) {
       return NormalMaterialPricePrepareResult.gap(
-          STATUS_FAILED, GAP_TYPE_MISSING_PRICE, PriceResolveResult.SOURCE_ERROR,
-          SOURCE_TABLE_PRICE_RESOLVER, "普通料号缺料号，无法取价");
+          STATUS_FAILED,
+          GAP_TYPE_MISSING_PRICE,
+          PriceResolveResult.SOURCE_ERROR,
+          SOURCE_TABLE_PRICE_RESOLVER,
+          "普通料号缺料号，无法取价");
     }
-    LocalDateTime resolvedPriceAsOfTime = priceAsOfTime == null
-        ? LocalDateTime.now(BUSINESS_ZONE)
-        : priceAsOfTime;
+    scenarioContext =
+        scenarioContext == null
+            ? PricePrepareScenarioContext.oaLocked(null, organization(planItem))
+            : scenarioContext.forOrganization(organization(planItem));
+    LocalDateTime resolvedPriceAsOfTime =
+        priceAsOfTime == null ? LocalDateTime.now(BUSINESS_ZONE) : priceAsOfTime;
     LocalDate quoteDate = resolvedPriceAsOfTime.toLocalDate();
     List<PriceTypeRoute> candidates =
-        materialPriceRouterService.listCandidates(materialCode, periodMonth, quoteDate);
+        batchPrepared
+            ? preparedRoutes
+            : persistLinkedPrice
+                ? materialPriceRouterService.prepareCandidates(materialCode, planItem.getMaterialName(),
+                    periodMonth, quoteDate, organization(planItem), businessUnitType)
+                : materialPriceRouterService.listCandidates(materialCode, periodMonth, quoteDate,
+                    organization(planItem), businessUnitType);
     if (candidates == null || candidates.isEmpty()) {
       return NormalMaterialPricePrepareResult.gap(
-          STATUS_MISSING_PRICE_TYPE,
-          GAP_TYPE_MISSING_PRICE_TYPE,
-          PriceResolveResult.SOURCE_NO_ROUTE,
-          SOURCE_TABLE_MATERIAL_PRICE_TYPE,
-          "未配价格类型路由：去价格类型表录入 " + materialCode);
+          STATUS_MISSING_PRICE,
+          GAP_TYPE_MISSING_PRICE,
+          PriceResolveResult.SOURCE_MISSING_PRICE,
+          SOURCE_TABLE_PRICE_RESOLVER,
+          "该月份和组织没有可用价格来源：" + materialCode);
     }
 
-    PriceLinkedCalcItem calculatedLinkedPrice = null;
+    PriceLinkedCalcItem calculatedLinkedPrice = preparedLinked;
     NormalMaterialPricePrepareResult ensureFailure = null;
-    if (persistLinkedPrice) {
-      ensureFailure = ensureLinkedPriceIfNeeded(
-              oaNo,
-              businessUnitType,
-              periodMonth,
-              resolvedPriceAsOfTime,
-              materialCode,
-              candidates,
-              scenarioContext);
-    } else if (hasLinkedRoute(candidates)) {
-      calculatedLinkedPrice = calculateLinkedPrice(
-          oaNo,
-          businessUnitType,
-          periodMonth,
-          resolvedPriceAsOfTime,
-          materialCode,
-          scenarioContext);
-    }
+    boolean linkedPrepared = batchPrepared && firstRouteIsPublicLinked(candidates);
 
     CostRunPartItemDto resolveItem = toResolveItem(oaNo, planItem);
     CostRunContext resolveContext =
         toResolveContext(
-            oaNo,
-            businessUnitType,
-            periodMonth,
-            resolvedPriceAsOfTime,
-            planItem,
-            scenarioContext);
+            oaNo, businessUnitType, periodMonth, resolvedPriceAsOfTime, planItem, scenarioContext);
     resolveContext.setPriceCheckOnly(!persistLinkedPrice);
     List<String> attemptedBuckets = new ArrayList<>(candidates.size());
     String lastMissReason = null;
@@ -200,85 +330,125 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
         continue;
       }
       attemptedBuckets.add(route.priceType().name());
+      // 走到本类型才计算；财务优先的固定价成功时不产生低优先级公式计算及写入。
+      if (route.priceType() == PriceTypeEnum.LINKED && !route.supplemental() && !linkedPrepared) {
+        if (persistLinkedPrice) {
+          ensureFailure = ensureLinkedPrice(oaNo, businessUnitType, periodMonth,
+              resolvedPriceAsOfTime, materialCode, scenarioContext);
+        } else {
+          calculatedLinkedPrice = calculateLinkedPrice(oaNo, businessUnitType, periodMonth,
+              resolvedPriceAsOfTime, materialCode, scenarioContext);
+        }
+        linkedPrepared = true;
+      }
       // A missing public formula must not prevent a submitted technical formula from being tried.
-      if (ensureFailure != null && route.priceType() == PriceTypeEnum.LINKED && !route.supplemental()) {
+      if (ensureFailure != null
+          && route.priceType() == PriceTypeEnum.LINKED
+          && !route.supplemental()) {
+        if (PriceResolveResult.isBlockingFailure(ensureFailure.getReasonCode())) {
+          ensureFailure.setPriceType(route.selectedSourceType());
+          return ensureFailure;
+        }
         continue;
       }
-      if (!persistLinkedPrice && route.priceType() == PriceTypeEnum.LINKED && !route.supplemental()) {
+      if (((batchPrepared && firstRouteIsPublicLinked(candidates)) || !persistLinkedPrice)
+          && route.priceType() == PriceTypeEnum.LINKED
+          && !route.supplemental()) {
         if (calculatedLinkedPrice != null && calculatedLinkedPrice.getPartUnitPrice() != null) {
           BigDecimal unitPrice = calculatedLinkedPrice.getPartUnitPrice();
-          BigDecimal amount = quantity(planItem) == null
-              ? null
-              : unitPrice.multiply(quantity(planItem));
+          BigDecimal amount =
+              quantity(planItem) == null ? null : unitPrice.multiply(quantity(planItem));
           PriceResolveResult linkedResult = linkedResult(calculatedLinkedPrice);
           return readyResult(
               linkedResult,
               amount,
-              route.priceType(),
+              route,
               resultRefType(route.priceType()),
-              "联动价只读计算完成");
+              persistLinkedPrice ? "联动价批量准备完成" : "联动价只读计算完成");
         }
-        if (calculatedLinkedPrice != null && calculatedLinkedPrice.getFailureCode() != null) {
-          return NormalMaterialPricePrepareResult.gap(STATUS_FAILED, GAP_TYPE_MISSING_PRICE, calculatedLinkedPrice.getFailureCode(),
-              PriceResolveResult.SOURCE_ERROR, SOURCE_TABLE_PRICE_RESOLVER, calculatedLinkedPrice.getCalcMessage());
+        if (calculatedLinkedPrice != null && PriceResolveResult.isBlockingFailure(calculatedLinkedPrice.getFailureCode())) {
+          var gap = NormalMaterialPricePrepareResult.gap(
+              STATUS_FAILED,
+              GAP_TYPE_MISSING_PRICE,
+              calculatedLinkedPrice.getFailureCode(),
+              PriceResolveResult.SOURCE_ERROR,
+              SOURCE_TABLE_PRICE_RESOLVER,
+              calculatedLinkedPrice.getCalcMessage());
+          gap.setPriceType(route.selectedSourceType());
+          return gap;
         }
-        lastMissReason = calculatedLinkedPrice == null
-            ? "联动价只读计算未返回结果"
-            : calculatedLinkedPrice.getCalcMessage();
-        lastMissCode = calculatedLinkedPrice == null
-            ? null
-            : calculatedLinkedPrice.getFailureCode();
+        lastMissReason =
+            calculatedLinkedPrice == null ? "联动价只读计算未返回结果" : calculatedLinkedPrice.getCalcMessage();
+        lastMissCode =
+            calculatedLinkedPrice == null ? null : calculatedLinkedPrice.getFailureCode();
         continue;
       }
-      PriceResolveResult result = resolver.resolve(oaNo, resolveItem, route, resolveContext);
+      PriceResolveResult result =
+          route.priceType() == PriceTypeEnum.RANGE && preparedRange != null
+              ? preparedRange
+              : resolver.resolve(oaNo, resolveItem, route, resolveContext);
       if (result != null && result.unitPrice() != null) {
-        BigDecimal amount = quantity(planItem) == null ? null : result.unitPrice().multiply(quantity(planItem));
+        BigDecimal amount =
+            quantity(planItem) == null ? null : result.unitPrice().multiply(quantity(planItem));
         return readyResult(
-            result,
-            amount,
-            route.priceType(),
-            resultRefType(route.priceType()),
-            "普通料号价格准备完成");
+            result, amount, route, resultRefType(route.priceType()), "普通料号价格准备完成");
       }
-      if (result != null && result.failureCode() != null) {
-        return NormalMaterialPricePrepareResult.gap(STATUS_FAILED, GAP_TYPE_MISSING_PRICE, result.failureCode(),
-            PriceResolveResult.SOURCE_ERROR, SOURCE_TABLE_PRICE_RESOLVER, result.remark());
+      if (result != null && result.hasBlockingFailure()) {
+        var gap = NormalMaterialPricePrepareResult.gap(
+            STATUS_FAILED,
+            GAP_TYPE_MISSING_PRICE,
+            result.failureCode(),
+            PriceResolveResult.SOURCE_ERROR,
+            SOURCE_TABLE_PRICE_RESOLVER,
+            result.remark());
+        gap.setPriceType(route.selectedSourceType());
+        return gap;
       }
       if (result != null && StringUtils.hasText(result.remark())) {
         lastMissReason = result.remark();
         lastMissCode = result.failureCode();
       }
     }
-    if (ensureFailure != null) return ensureFailure;
-    String message = "路由=" + attemptedBuckets + " 但桶内无该料号"
-        + (lastMissReason == null ? "" : ": " + lastMissReason);
-    return NormalMaterialPricePrepareResult.gap(
+    if (ensureFailure != null) {
+      ensureFailure.setPriceType(PriceTypeEnum.LINKED.name());
+      return ensureFailure;
+    }
+    String message =
+        "路由="
+            + attemptedBuckets
+            + " 但桶内无该料号"
+            + (lastMissReason == null ? "" : ": " + lastMissReason);
+    var gap = NormalMaterialPricePrepareResult.gap(
         STATUS_MISSING_PRICE,
         GAP_TYPE_MISSING_PRICE,
         lastMissCode,
         PriceResolveResult.SOURCE_ERROR,
         SOURCE_TABLE_PRICE_RESOLVER,
         message);
+    if (candidates.size() == 1) gap.setPriceType(candidates.getFirst().selectedSourceType());
+    return gap;
   }
 
   private NormalMaterialPricePrepareResult readyResult(
       PriceResolveResult resolved,
       BigDecimal amount,
-      PriceTypeEnum priceType,
+      PriceTypeRoute route,
       String resultRefType,
       String defaultMessage) {
     String message = StringUtils.hasText(resolved.remark()) ? resolved.remark() : defaultMessage;
-    NormalMaterialPricePrepareResult result = NormalMaterialPricePrepareResult.ready(
-        resolved.unitPrice(),
-        amount,
-        resolved.priceSource(),
-        resultRefType,
-        resolved.resultRefId(),
-        message);
-    PriceResolveEvidence evidence = resolved.evidence();
-    result.setPriceType(priceType == null ? null : priceType.name());
+    NormalMaterialPricePrepareResult result =
+        NormalMaterialPricePrepareResult.ready(
+            resolved.unitPrice(),
+            amount,
+            resolved.priceSource(),
+            resultRefType,
+            resolved.resultRefId(),
+            message);
+    PriceResolveEvidence evidence = resolved.evidence().withPriority(route);
+    result.setPriceType(route.selectedSourceType());
     result.setSourcePriceRecordId(evidence.sourcePriceRecordId());
     result.setSourcePriceBatchNo(evidence.sourceBatchNo());
+    result.setInputSnapshotJson(evidence.inputSnapshotJson());
     result.setSupplierName(evidence.supplierName());
     result.setSupplierCode(evidence.supplierCode());
     result.setSupplyRatio(evidence.supplyRatio());
@@ -291,51 +461,40 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
   }
 
   private PriceResolveResult linkedResult(PriceLinkedCalcItem item) {
-    PriceResolveEvidence evidence = new PriceResolveEvidence(
-        item.getSourcePriceRecordId(),
-        item.getSourcePriceBatchNo(),
-        item.getSupplierName(),
-        item.getSupplierCode(),
-        item.getSupplyRatio(),
-        item.getSupplyRatioRecordId(),
-        item.getSourceEffectiveFrom(),
-        item.getSourceEffectiveTo(),
-        Integer.valueOf(1).equals(item.getCarriedForward()),
-        item.getWarningMessage());
-    String message = StringUtils.hasText(item.getWarningMessage())
-        ? "联动价只读计算完成；" + item.getWarningMessage()
-        : "联动价只读计算完成";
-    return PriceResolveResult.hit(
-        item.getPartUnitPrice(), "联动价", message, item.getId(), evidence);
+    PriceResolveEvidence evidence =
+        new PriceResolveEvidence(
+            item.getSourcePriceRecordId(),
+            item.getSourcePriceBatchNo(),
+            item.getSupplierName(),
+            item.getSupplierCode(),
+            item.getSupplyRatio(),
+            item.getSupplyRatioRecordId(),
+            item.getSourceEffectiveFrom(),
+            item.getSourceEffectiveTo(),
+            Integer.valueOf(1).equals(item.getCarriedForward()),
+            item.getWarningMessage(),
+            item.getInputSnapshotJson());
+    String message =
+        StringUtils.hasText(item.getWarningMessage())
+            ? "联动价只读计算完成；" + item.getWarningMessage()
+            : "联动价只读计算完成";
+    return PriceResolveResult.hit(item.getPartUnitPrice(), "联动价", message, item.getId(), evidence);
   }
 
-  private NormalMaterialPricePrepareResult ensureLinkedPriceIfNeeded(
+  private NormalMaterialPricePrepareResult ensureLinkedPrice(
       String oaNo,
       String businessUnitType,
       String periodMonth,
       LocalDateTime priceAsOfTime,
       String materialCode,
-      List<PriceTypeRoute> candidates,
       PricePrepareScenarioContext scenarioContext) {
-    boolean hasLinkedRoute = false;
-    for (PriceTypeRoute route : candidates) {
-      if (route != null && route.priceType() == PriceTypeEnum.LINKED && !route.supplemental()) {
-        hasLinkedRoute = true;
-        break;
-      }
-    }
-    if (!hasLinkedRoute) {
-      return null;
-    }
     // 联动价生成是入口级准备动作，不能藏在 LinkedPriceResolver 里；Resolver 只读取已准备结果。
     try {
       LinkedPriceEnsureRequest request =
-          LinkedPriceEnsureRequest.quote(
-              oaNo, businessUnitType, periodMonth, Set.of(materialCode));
+          LinkedPriceEnsureRequest.quote(oaNo, businessUnitType, periodMonth, Set.of(materialCode));
       request.setPriceAsOfTime(priceAsOfTime);
       applyScenario(request, scenarioContext);
-      LinkedPriceEnsureResult result =
-          linkedPriceEnsureService.ensure(request);
+      LinkedPriceEnsureResult result = linkedPriceEnsureService.ensure(request);
       if (result != null && result.getFailedCount() > 0) {
         return NormalMaterialPricePrepareResult.gap(
             STATUS_MISSING_PRICE,
@@ -346,26 +505,23 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
             formatEnsureFailures(result));
       }
       return null;
+    } catch (org.springframework.dao.TransientDataAccessException retryable) {
+      throw retryable;
     } catch (RuntimeException ex) {
       return NormalMaterialPricePrepareResult.gap(
           STATUS_FAILED,
           GAP_TYPE_MISSING_PRICE,
+          LinkedPriceEnsureServiceImpl.LINKED_RULE_ERROR,
           PriceResolveResult.SOURCE_ERROR,
           SOURCE_TABLE_LINKED_ENSURE,
           "联动价按需确保失败：" + ex.getMessage());
     }
   }
 
-  private boolean hasLinkedRoute(List<PriceTypeRoute> candidates) {
-    if (candidates == null) {
-      return false;
-    }
-    for (PriceTypeRoute route : candidates) {
-      if (route != null && route.priceType() == PriceTypeEnum.LINKED && !route.supplemental()) {
-        return true;
-      }
-    }
-    return false;
+  private boolean firstRouteIsPublicLinked(List<PriceTypeRoute> candidates) {
+    if (candidates == null || candidates.isEmpty()) return false;
+    var first = candidates.getFirst();
+    return first.priceType() == PriceTypeEnum.LINKED && !first.supplemental();
   }
 
   private PriceLinkedCalcItem calculateLinkedPrice(
@@ -377,16 +533,18 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       PricePrepareScenarioContext scenarioContext) {
     try {
       LinkedPriceEnsureRequest request =
-          LinkedPriceEnsureRequest.quote(
-              oaNo, businessUnitType, periodMonth, Set.of(materialCode));
+          LinkedPriceEnsureRequest.quote(oaNo, businessUnitType, periodMonth, Set.of(materialCode));
       request.setPriceAsOfTime(priceAsOfTime);
       applyScenario(request, scenarioContext);
       List<PriceLinkedCalcItem> calculated = linkedPriceEnsureService.calculate(request);
       return calculated == null || calculated.isEmpty() ? null : calculated.get(0);
+    } catch (org.springframework.dao.TransientDataAccessException retryable) {
+      throw retryable;
     } catch (RuntimeException ex) {
       PriceLinkedCalcItem failed = new PriceLinkedCalcItem();
       failed.setItemCode(materialCode);
       failed.setCalcStatus("FAILED");
+      failed.setFailureCode(LinkedPriceEnsureServiceImpl.LINKED_RULE_ERROR);
       failed.setCalcMessage("联动价只读计算失败：" + ex.getMessage());
       return failed;
     }
@@ -401,13 +559,13 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       if (failedItem == null) {
         continue;
       }
-      String code = StringUtils.hasText(failedItem.getItemCode()) ? failedItem.getItemCode().trim() : "-";
-      String reason = StringUtils.hasText(failedItem.getReason()) ? failedItem.getReason().trim() : "未知原因";
+      String code =
+          StringUtils.hasText(failedItem.getItemCode()) ? failedItem.getItemCode().trim() : "-";
+      String reason =
+          StringUtils.hasText(failedItem.getReason()) ? failedItem.getReason().trim() : "未知原因";
       messages.add(code + ": " + reason);
     }
-    return messages.isEmpty()
-        ? "联动价按需确保失败：存在联动价计算失败"
-        : "联动价按需确保失败：" + String.join("; ", messages);
+    return messages.isEmpty() ? "联动价按需确保失败：存在联动价计算失败" : "联动价按需确保失败：" + String.join("; ", messages);
   }
 
   private String firstFailureCode(LinkedPriceEnsureResult result) {
@@ -445,16 +603,17 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       LocalDateTime priceAsOfTime,
       PricePreparePlanItem planItem,
       PricePrepareScenarioContext scenarioContext) {
-    CostRunContext context = CostRunContext.quote(
-        oaNo,
-        null,
-        planItem == null ? null : planItem.getTopProductCode(),
-        null,
-        null,
-        businessUnitType,
-        periodMonth,
-        priceAsOfTime,
-        "PRICE_PREPARE:" + (planItem == null ? "" : trimToNull(planItem.getMaterialCode())));
+    CostRunContext context =
+        CostRunContext.quote(
+            oaNo,
+            null,
+            planItem == null ? null : planItem.getTopProductCode(),
+            null,
+            null,
+            businessUnitType,
+            periodMonth,
+            priceAsOfTime,
+            "PRICE_PREPARE:" + (planItem == null ? "" : trimToNull(planItem.getMaterialCode())));
     if (planItem != null && planItem.getBomRow() != null) {
       context.setPriceOrgCode(trimToNull(planItem.getBomRow().getPriceOrgCode()));
       context.setMaterialOrganizationCode(
@@ -468,12 +627,16 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       }
     }
     context.setPriceScenarioType(scenarioType(scenarioContext).name());
-    context.setPriceVariableOverrides(scenarioContext == null ? Map.of() : scenarioContext.variableOverrides());
+    context.setPriceVariableOverrides(
+        scenarioContext == null ? Map.of() : scenarioContext.variableOverrides());
     return context;
   }
 
   private void applyScenario(
       LinkedPriceEnsureRequest request, PricePrepareScenarioContext scenarioContext) {
+    request.setSupplierPriceReviewContext(scenarioContext == null ? null : scenarioContext.supplierReviews());
+    request.setPriceOrgCode(
+        scenarioContext == null ? null : scenarioContext.supplierReviews().priceOrgCode());
     request.setPriceScenarioType(scenarioType(scenarioContext));
     request.setVariableOverrides(
         scenarioContext == null ? Map.of() : scenarioContext.variableOverrides());
@@ -486,7 +649,9 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
   }
 
   private BigDecimal quantity(PricePreparePlanItem planItem) {
-    return planItem == null || planItem.getBomRow() == null ? null : planItem.getBomRow().getQtyPerTop();
+    return planItem == null || planItem.getBomRow() == null
+        ? null
+        : planItem.getBomRow().getQtyPerTop();
   }
 
   private String resultRefType(PriceTypeEnum priceType) {

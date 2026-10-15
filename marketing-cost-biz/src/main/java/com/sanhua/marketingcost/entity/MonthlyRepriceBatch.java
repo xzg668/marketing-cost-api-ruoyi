@@ -26,7 +26,6 @@ public class MonthlyRepriceBatch {
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
 
-  private Long adjustBatchId;
   private String executionBackend;
   private String status;
   private Integer totalCount;

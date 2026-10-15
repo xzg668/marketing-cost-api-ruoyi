@@ -106,7 +106,7 @@ class QuotePricePreparePartItemProviderImplTest {
     CostRunContext withoutPrepare = quoteContext();
     withoutPrepare.setPricePrepareNo(null);
     CostRunContext monthly = CostRunContext.monthlyReprice(
-        "2026-06", 1L, "MR-1", "COMMERCIAL", "OA-001", 14L,
+        "2026-06", "MR-1", "COMMERCIAL", "OA-001", 14L,
         "1001900001090", "箱装", "客户A", "OBJ-1");
     monthly.setPricePrepareNo("PPR-001");
 

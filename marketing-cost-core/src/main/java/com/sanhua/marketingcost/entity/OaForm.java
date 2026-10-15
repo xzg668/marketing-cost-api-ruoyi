@@ -1,8 +1,8 @@
 package com.sanhua.marketingcost.entity;
 
 import com.baomidou.mybatisplus.annotation.FieldFill;
-import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableLogic;
 import com.baomidou.mybatisplus.annotation.TableName;
@@ -14,6 +14,7 @@ import java.time.LocalDateTime;
 public class OaForm {
   @TableId(type = IdType.AUTO)
   private Long id;
+
   private String sourceType;
   private String sourceSystem;
   private String externalFormNo;
@@ -45,6 +46,10 @@ public class OaForm {
   private BigDecimal goldPrice;
   private BigDecimal sus304Price;
   private BigDecimal sus316lPrice;
+
+  /** 最终是否招标需求（仅针对板换），OA编码sfzbxqjzdbhcp；null按否。 */
+  private Boolean boardTender;
+
   private BigDecimal otherMaterial;
   private BigDecimal baseShipping;
   private String calcStatus;
@@ -57,6 +62,7 @@ public class OaForm {
   /** V21 业务单元数据隔离：COMMERCIAL 商用 / HOUSEHOLD 家用 */
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;
+
   /** 申请日期所属月份，格式 YYYY-MM，用于三项费用等按月匹配。 */
   private String accountingPeriodMonth;
 
@@ -66,8 +72,7 @@ public class OaForm {
   @TableField(fill = FieldFill.INSERT_UPDATE)
   private LocalDateTime updatedAt;
 
-  @TableLogic
-  private Integer deleted;
+  @TableLogic private Integer deleted;
 
   public String getBusinessUnitType() {
     return businessUnitType;
@@ -335,6 +340,14 @@ public class OaForm {
 
   public BigDecimal getSus316lPrice() {
     return sus316lPrice;
+  }
+
+  public Boolean getBoardTender() {
+    return boardTender;
+  }
+
+  public void setBoardTender(Boolean boardTender) {
+    this.boardTender = boardTender;
   }
 
   public void setSus316lPrice(BigDecimal sus316lPrice) {

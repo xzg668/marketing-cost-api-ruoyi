@@ -60,7 +60,9 @@ public class QuoteImportPreviewBuilder {
     response.setHeaderSummary(toHeaderSummary(header));
     response.setItems(normalized.getItems().stream().map(this::toItemSummary).toList());
     response.setExtraFees(normalized.getExtraFees().stream().map(this::toFeeSummary).toList());
-    if (header != null && (request.getHeader() == null || !StringUtils.hasText(request.getHeader().getGoldPrice()))) {
+    if (header != null
+        && (request.getHeader() == null
+            || !StringUtils.hasText(request.getHeader().getGoldPrice()))) {
       response
           .getWarnings()
           .add(
@@ -135,6 +137,7 @@ public class QuoteImportPreviewBuilder {
     summary.setSteelPrice(header.getSteelPrice());
     summary.setSus304Price(header.getSus304Price());
     summary.setSus316lPrice(header.getSus316lPrice());
+    summary.setBoardTender(header.getBoardTender());
     summary.setSilverPrice(header.getSilverPrice());
     summary.setGoldPrice(header.getGoldPrice());
     summary.setRemark(header.getRemark());

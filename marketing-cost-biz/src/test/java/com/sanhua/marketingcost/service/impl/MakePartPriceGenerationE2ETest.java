@@ -43,6 +43,7 @@ import com.sanhua.marketingcost.service.MakePartWeightService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PackageComponentIdentifyService;
 import com.sanhua.marketingcost.service.PackageComponentPriceService;
+import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
 import com.sanhua.marketingcost.service.pricing.MakePartPriceCalcResolver;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
@@ -132,7 +133,7 @@ class MakePartPriceGenerationE2ETest {
     assertThat(missingWeight.getRemark()).contains("缺重量");
     MakePartPriceCalcRow missingRoute = onlyRow(rowsForParent(generatedRows, "MAKE-MISSING-ROUTE"));
     assertThat(missingRoute.getStatus()).isEqualTo(MakePartPriceCalculator.STATUS_MISSING_RAW_PRICE);
-    assertThat(missingRoute.getRemark()).contains("MISSING_ROUTE");
+    assertThat(missingRoute.getRemark()).contains("MISSING_PRICE");
     MakePartPriceCalcRow missingScrapPrice =
         onlyRow(rowsForParent(generatedRows, "MAKE-MISSING-SCRAP-PRICE"));
     assertThat(missingScrapPrice.getStatus())
@@ -223,8 +224,14 @@ class MakePartPriceGenerationE2ETest {
     when(scrapMappingService.listMappings("RAW-MISSING-SCRAP-PRICE", BU))
         .thenReturn(List.of(scrap("SCRAP-MISSING-PRICE")));
 
-    when(priceResolveService.resolveMaterialUnitPrice(anyString(), eq(PERIOD), any(), any(), eq(OA_NO), eq(BU)))
-        .thenAnswer(invocation -> priceFor(invocation.getArgument(0)));
+    when(priceResolveService.resolveMaterialUnitPrice(
+            anyString(), eq(PERIOD), any(), any(), eq(OA_NO), eq(BU),
+            any(PricePrepareScenarioContext.class)))
+        .thenAnswer(invocation -> {
+          PricePrepareScenarioContext scenario = invocation.getArgument(6);
+          assertThat(scenario.supplierReviews().priceOrgCode()).isEqualTo("210");
+          return priceFor(invocation.getArgument(0));
+        });
 
     return new MakePartPriceGenerationServiceImpl(
         sourceDataService,
@@ -251,7 +258,7 @@ class MakePartPriceGenerationE2ETest {
     when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(form);
     when(partMapper.selectBaseByOaNo(OA_NO))
         .thenReturn(List.of(costRunPart(SAMPLE_PARENT, "2")));
-    when(routerService.listCandidates(eq(SAMPLE_PARENT), any(), eq(currentDate)))
+    when(routerService.listCandidates(eq(SAMPLE_PARENT), any(), eq(currentDate), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(new PriceTypeRoute(
             SAMPLE_PARENT,
             MaterialFormAttrEnum.MANUFACTURED,
@@ -364,7 +371,7 @@ class MakePartPriceGenerationE2ETest {
 
   private MakePartMaterialPriceResolveResult priceFor(String materialCode) {
     if ("RAW-MISSING-ROUTE".equals(materialCode)) {
-      return MakePartMaterialPriceResolveResult.missingRoute(materialCode, "缺价格路由");
+      return MakePartMaterialPriceResolveResult.missingPrice(materialCode, "无可用价源");
     }
     if ("SCRAP-MISSING-PRICE".equals(materialCode)) {
       return MakePartMaterialPriceResolveResult.miss(

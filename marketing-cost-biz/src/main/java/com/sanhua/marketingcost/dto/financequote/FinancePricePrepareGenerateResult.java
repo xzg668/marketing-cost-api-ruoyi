@@ -10,4 +10,5 @@ public record FinancePricePrepareGenerateResult(
     String scenarioGroupNo,
     Long financeBasePriceId,
     BigDecimal financeCuPricePerKg,
-    PricePrepareGenerateResult prepareResult) {}
+    PricePrepareGenerateResult prepareResult,
+    Long financeFactorPriceId) {}

@@ -387,7 +387,6 @@ class CostRunTaskSubmissionServiceImplTest {
     request.setRepriceNo("MRP-001");
     request.setPricingMonth("2026-05");
     request.setBusinessUnitType("COMMERCIAL");
-    request.setAdjustBatchId(100L);
     request.setBomSourcePolicy("OA_CALCULATED");
     request.setCalcObjects(
         List.of(
@@ -401,7 +400,6 @@ class CostRunTaskSubmissionServiceImplTest {
     assertThat(result.getSkippedCount()).isEqualTo(1);
     assertThat(taskMapper.inserted).hasSize(1);
     CostRunTask task = taskMapper.inserted.get(0);
-    assertThat(task.getAdjustBatchId()).isEqualTo(100L);
     assertThat(task.getBomSourcePolicy()).isEqualTo("OA_CALCULATED");
     assertThat(task.getCalcObjectKey()).hasSize(64);
   }

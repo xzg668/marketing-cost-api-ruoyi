@@ -35,7 +35,6 @@ class PriceLinkedCalcItemMappingTest {
     assertThat(columnsByProperty)
         .containsEntry("calcScene", "calc_scene")
         .containsEntry("pricingMonth", "pricing_month")
-        .containsEntry("adjustBatchId", "adjust_batch_id")
         .containsEntry("factorSource", "factor_source")
         .containsEntry("calcFingerprint", "calc_fingerprint")
         .containsEntry("calcStatus", "calc_status")

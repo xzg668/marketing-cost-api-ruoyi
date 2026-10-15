@@ -10,13 +10,14 @@ import java.util.Map;
 /**
  * 变量解析上下文 —— 一次取价请求内共享的元数据与缓存。
  *
- * <p>使用 builder 风格设值：上下文实例可重用，调用方按需填充 oaNo/materialCode/quoteDate
- * 等字段；resolver 通过 ctx 拿到一次取价的"全部环境"，避免向每个 resolve 方法传 N 个参数。
+ * <p>使用 builder 风格设值：每次计算创建独立实例，调用方填充 oaNo/materialCode/quoteDate 等字段；resolver 通过 ctx
+ * 拿到一次取价的"全部环境"，避免向每个 resolve 方法传 N 个参数。
  *
  * <p>包含两类数据：
+ *
  * <ul>
- *   <li><b>请求范围</b>：oaNo / materialCode / quoteDate / pricingMonth — 由调用方传入</li>
- *   <li><b>已解析快照</b>：oaForm / linkedItem — 调用方提前批量加载，避免 resolver 内部 N+1</li>
+ *   <li><b>请求范围</b>：oaNo / materialCode / quoteDate / pricingMonth — 由调用方传入
+ *   <li><b>已解析快照</b>：oaForm / linkedItem — 调用方提前批量加载，避免 resolver 内部 N+1
  * </ul>
  *
  * <p>{@link #overrides} 用于显式覆盖某个变量值（测试 / 临时回填）。
@@ -28,17 +29,62 @@ public class VariableContext {
     MONTHLY_REPRICE
   }
 
+  // 限于本次计算；新请求（包括 worker）重新读取已提交定义和绑定。
+  Map<String, com.sanhua.marketingcost.entity.PriceVariable> variableDefinitions;
+  final Map<Long, Map<String, com.sanhua.marketingcost.entity.PriceVariableBinding>> bindings =
+      new HashMap<>();
+
   private String oaNo;
   private String materialCode;
   private LocalDate quoteDate;
   private String pricingMonth;
   private PriceContextType priceContextType = PriceContextType.DAILY_QUOTE;
-  private Long adjustBatchId;
   private OaForm oaForm;
   private PriceLinkedItem linkedItem;
+  private final Map<String, BigDecimal> primitiveInputs = new java.util.LinkedHashMap<>();
+  private final Map<String, Object> usedDefinitions = new java.util.LinkedHashMap<>();
+  private final java.util.Set<String> usedFinanceKeys = new java.util.LinkedHashSet<>();
+
+  public Map<String, BigDecimal> getPrimitiveInputs() {
+    return primitiveInputs;
+  }
+
+  public Map<String, Object> getUsedDefinitions() {
+    return usedDefinitions;
+  }
+
+  public java.util.Set<String> getUsedFinanceKeys() {
+    return usedFinanceKeys;
+  }
+
+  private boolean financeQuoteBase;
+  private com.sanhua.marketingcost.service.pricing.PriceFactorContext priceFactors;
+  private final Map<String, String> resolvedFactorKeys = new java.util.LinkedHashMap<>();
+
+  public boolean isFinanceQuoteBase() {
+    return financeQuoteBase;
+  }
+
+  public VariableContext financeQuoteBase(boolean value) {
+    financeQuoteBase = value;
+    return this;
+  }
+
+  public com.sanhua.marketingcost.service.pricing.PriceFactorContext getPriceFactors() {
+    return priceFactors;
+  }
+
+  public void setPriceFactors(com.sanhua.marketingcost.service.pricing.PriceFactorContext value) {
+    priceFactors = value;
+  }
+
+  public Map<String, String> getResolvedFactorKeys() {
+    return resolvedFactorKeys;
+  }
 
   /** 显式覆盖某变量值（优先级最高） */
   private final Map<String, BigDecimal> overrides = new HashMap<>();
+
   private final Map<String, String> overrideSources = new HashMap<>();
   private final Map<String, String> resolvedSources = new HashMap<>();
 
@@ -90,15 +136,6 @@ public class VariableContext {
 
   public boolean isMonthlyReprice() {
     return PriceContextType.MONTHLY_REPRICE.equals(priceContextType);
-  }
-
-  public Long getAdjustBatchId() {
-    return adjustBatchId;
-  }
-
-  public VariableContext adjustBatchId(Long adjustBatchId) {
-    this.adjustBatchId = adjustBatchId;
-    return this;
   }
 
   public OaForm getOaForm() {

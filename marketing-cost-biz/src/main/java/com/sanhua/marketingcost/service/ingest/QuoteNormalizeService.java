@@ -98,9 +98,11 @@ public class QuoteNormalizeService {
     header.setCustomer(trimToNull(headerRequest.getCustomer()));
     header.setApplicantUnit(trimToNull(headerRequest.getApplicantUnit()));
     header.setSourceCompany(trimToNull(headerRequest.getSourceCompany()));
-    header.setSourceBusinessDivision(sanitizeBusinessDivision(headerRequest.getSourceBusinessDivision()));
+    header.setSourceBusinessDivision(
+        sanitizeBusinessDivision(headerRequest.getSourceBusinessDivision()));
     header.setExpenseProductCategory(
-        coalesce(classification.getExpenseProductCategory(), headerRequest.getExpenseProductCategory()));
+        coalesce(
+            classification.getExpenseProductCategory(), headerRequest.getExpenseProductCategory()));
     header.setApplicantDept(trimToNull(headerRequest.getApplicantDept()));
     header.setApplicantOffice(trimToNull(headerRequest.getApplicantOffice()));
     header.setApplicantName(trimToNull(headerRequest.getApplicantName()));
@@ -118,6 +120,7 @@ public class QuoteNormalizeService {
     header.setGoldPrice(parseNumber(headerRequest.getGoldPrice()));
     header.setSus304Price(parseNumber(headerRequest.getSus304Price()));
     header.setSus316lPrice(parseNumber(headerRequest.getSus316lPrice()));
+    header.setBoardTender(headerRequest.getBoardTender());
     header.setOtherMaterial(parseNumber(headerRequest.getOtherMaterial()));
     header.setBaseShipping(parseNumber(headerRequest.getBaseShipping()));
     header.setSaleLink(trimToNull(headerRequest.getSaleLink()));
@@ -177,12 +180,15 @@ public class QuoteNormalizeService {
         continue;
       }
       int fallbackSeq = index + 1;
-      QuoteNormalizedItem item = normalizeItem(itemRequest, headerProductAttr, classification, fallbackSeq);
+      QuoteNormalizedItem item =
+          normalizeItem(itemRequest, headerProductAttr, classification, fallbackSeq);
       document.getItems().add(item);
 
       if (itemRequest.getExtraFees() != null) {
         for (QuoteExtraFeeRequest fee : itemRequest.getExtraFees()) {
-          document.getExtraFees().add(normalizeFee(fee, SCOPE_ITEM, item.getSeq(), item.getExternalLineId()));
+          document
+              .getExtraFees()
+              .add(normalizeFee(fee, SCOPE_ITEM, item.getSeq(), item.getExternalLineId()));
         }
       }
       if (itemRequest.getExtraFields() != null) {

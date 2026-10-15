@@ -77,14 +77,6 @@ class MonthlyRepriceModelContractTest {
     assertThat(task.getCalcObjectKey()).isEqualTo("hash-key");
   }
 
-  @Test
-  @DisplayName("影响因素调价批次实体暴露 adjustType 字段")
-  void factorAdjustBatchHasAdjustType() {
-    FactorAdjustBatch batch = new FactorAdjustBatch();
-    batch.setAdjustType("MONTHLY");
-    assertThat(batch.getAdjustType()).isEqualTo("MONTHLY");
-  }
-
   private static void assertMapperEntity(Class<?> mapperClass, Class<?> entityClass) {
     Class<?> actual =
         ResolvableType.forClass(mapperClass).as(BaseMapper.class).getGeneric(0).resolve();

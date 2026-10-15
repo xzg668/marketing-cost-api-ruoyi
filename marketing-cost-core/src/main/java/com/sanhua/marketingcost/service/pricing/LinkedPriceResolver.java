@@ -16,11 +16,10 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
- * 联动价 Resolver —— 查 lp_price_linked_calc_item，按 QUOTE + oaNo + itemCode + pricingMonth
- * 取最新成功计算结果。
+ * 联动价 Resolver —— 查 lp_price_linked_calc_item，按 QUOTE + oaNo + itemCode + pricingMonth 取最新成功计算结果。
  *
- * <p>对应 Excel"价格来源 = 联动价"。当前阶段沿用现有 PriceLinkedCalcServiceImpl 已写入的结果，
- * 公式引擎升级（任务 #6/#7）完成后再切到 TemplateEngine。
+ * <p>对应 Excel"价格来源 = 联动价"。当前阶段沿用现有 PriceLinkedCalcServiceImpl 已写入的结果， 公式引擎升级（任务 #6/#7）完成后再切到
+ * TemplateEngine。
  */
 @Component
 public class LinkedPriceResolver implements PriceResolver {
@@ -28,7 +27,9 @@ public class LinkedPriceResolver implements PriceResolver {
   private final TechnicalPriceSourceResolver technicalPrices;
   private final PriceLinkedCalcItemMapper priceLinkedCalcItemMapper;
 
-  public LinkedPriceResolver(PriceLinkedCalcItemMapper priceLinkedCalcItemMapper, TechnicalPriceSourceResolver technicalPrices) {
+  public LinkedPriceResolver(
+      PriceLinkedCalcItemMapper priceLinkedCalcItemMapper,
+      TechnicalPriceSourceResolver technicalPrices) {
     this.technicalPrices = technicalPrices;
     this.priceLinkedCalcItemMapper = priceLinkedCalcItemMapper;
   }
@@ -47,29 +48,44 @@ public class LinkedPriceResolver implements PriceResolver {
   public PriceResolveResult resolve(
       String oaNo, CostRunPartItemDto item, PriceTypeRoute route, CostRunContext context) {
     if (route != null && route.supplemental()) return technicalPrices.resolve(item, route, context);
+    if (context == null || !StringUtils.hasText(context.getBusinessUnitType())
+        || !StringUtils.hasText(context.getPriceOrgCode()) || !StringUtils.hasText(context.getPricingMonth())) {
+      return PriceResolveResult.miss("LINKED_PRICE_SCOPE_MISSING", "联动价缺少业务单元、取价组织或核算月份");
+    }
     if (context != null && CostRunContext.SCENE_MONTHLY_REPRICE.equals(context.getScene())) {
       return resolveMonthlyAdjust(item, context);
     }
     return resolveQuote(oaNo, item, context);
   }
 
-  private PriceResolveResult resolveQuote(String oaNo, CostRunPartItemDto item, CostRunContext context) {
+  private PriceResolveResult resolveQuote(
+      String oaNo, CostRunPartItemDto item, CostRunContext context) {
     String code = item == null ? null : item.getPartCode();
     if (!StringUtils.hasText(oaNo) || !StringUtils.hasText(code)) {
       return PriceResolveResult.miss("oaNo 或 partCode 为空，无法查联动价");
     }
     String pricingMonth = context == null ? null : context.getPricingMonth();
     var query =
-        Wrappers.lambdaQuery(PriceLinkedCalcItem.class).eq(PriceLinkedCalcItem::getSourceKind, "PUBLIC")
+        Wrappers.lambdaQuery(PriceLinkedCalcItem.class)
+            .eq(PriceLinkedCalcItem::getSourceKind, "PUBLIC")
+            .eq(PriceLinkedCalcItem::getBusinessUnitType, context.getBusinessUnitType().trim())
+            .eq(
+                context != null && StringUtils.hasText(context.getPriceOrgCode()),
+                PriceLinkedCalcItem::getPriceOrgCode,
+                context == null ? null : context.getPriceOrgCode())
             .eq(PriceLinkedCalcItem::getOaNo, oaNo.trim())
             .eq(PriceLinkedCalcItem::getItemCode, code.trim())
             // 普通报价只读 QUOTE 场景的联动价结果；月调结果必须由 MONTHLY_ADJUST 分支读取。
             .eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.QUOTE.getCode())
             .eq(PriceLinkedCalcItem::getFactorSource, quoteFactorSource(context))
-            .eq(StringUtils.hasText(pricingMonth), PriceLinkedCalcItem::getPricingMonth,
+            .eq(
+                StringUtils.hasText(pricingMonth),
+                PriceLinkedCalcItem::getPricingMonth,
                 pricingMonth == null ? null : pricingMonth.trim())
             .eq(PriceLinkedCalcItem::getCalcStatus, "OK")
-            .apply("(source_price_record_id IS NULL OR source_price_record_id IN (SELECT id FROM lp_price_linked_item WHERE source_kind='PUBLIC'))")
+            .apply(
+                "(source_price_record_id IS NULL OR source_price_record_id IN (SELECT id FROM"
+                    + " lp_price_linked_item WHERE source_kind='PUBLIC'))")
             .isNotNull(PriceLinkedCalcItem::getPartUnitPrice)
             .eq(
                 context != null && context.getPriceAsOfTime() != null,
@@ -77,8 +93,7 @@ public class LinkedPriceResolver implements PriceResolver {
                 context == null ? null : context.getPriceAsOfTime())
             .orderByDesc(PriceLinkedCalcItem::getId)
             .last("LIMIT 1");
-    List<PriceLinkedCalcItem> rows =
-        priceLinkedCalcItemMapper.selectList(query);
+    List<PriceLinkedCalcItem> rows = priceLinkedCalcItemMapper.selectList(query);
     if (rows.isEmpty() || rows.get(0).getPartUnitPrice() == null) {
       return PriceResolveResult.miss(
           "lp_price_linked_calc_item 无可用 OK 记录: oa="
@@ -100,19 +115,21 @@ public class LinkedPriceResolver implements PriceResolver {
         || !StringUtils.hasText(context.getPricingMonth())) {
       return PriceResolveResult.miss("月度调价联动价缺少料号、业务单元或月份");
     }
-    var query = Wrappers.lambdaQuery(PriceLinkedCalcItem.class).eq(PriceLinkedCalcItem::getSourceKind, "PUBLIC")
-        // 月调不能读 OA 锁价场景结果，必须读 MONTHLY_ADJUST 联动价结果。
-        .eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.MONTHLY_ADJUST.getCode())
-        .eq(PriceLinkedCalcItem::getBusinessUnitType, context.getBusinessUnitType().trim())
-        .eq(PriceLinkedCalcItem::getPricingMonth, context.getPricingMonth().trim())
-        .eq(PriceLinkedCalcItem::getItemCode, code.trim());
-    if (context.getAdjustBatchId() == null) {
-      query.isNull(PriceLinkedCalcItem::getAdjustBatchId);
-    } else {
-      query.eq(PriceLinkedCalcItem::getAdjustBatchId, context.getAdjustBatchId());
-    }
+    var query =
+        Wrappers.lambdaQuery(PriceLinkedCalcItem.class)
+            .eq(PriceLinkedCalcItem::getSourceKind, "PUBLIC")
+            .eq(
+                context != null && StringUtils.hasText(context.getPriceOrgCode()),
+                PriceLinkedCalcItem::getPriceOrgCode,
+                context == null ? null : context.getPriceOrgCode())
+            // 月调不能读 OA 锁价场景结果，必须读 MONTHLY_ADJUST 联动价结果。
+            .eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.MONTHLY_ADJUST.getCode())
+            .eq(PriceLinkedCalcItem::getBusinessUnitType, context.getBusinessUnitType().trim())
+            .eq(PriceLinkedCalcItem::getPricingMonth, context.getPricingMonth().trim())
+            .eq(PriceLinkedCalcItem::getItemCode, code.trim());
     List<PriceLinkedCalcItem> rows =
-        priceLinkedCalcItemMapper.selectList(query.orderByDesc(PriceLinkedCalcItem::getId).last("LIMIT 1"));
+        priceLinkedCalcItemMapper.selectList(
+            query.orderByDesc(PriceLinkedCalcItem::getId).last("LIMIT 1"));
     if (rows.isEmpty() || rows.get(0).getPartUnitPrice() == null) {
       return PriceResolveResult.miss(
           "MONTHLY_ADJUST 联动价无记录: businessUnit="
@@ -120,41 +137,48 @@ public class LinkedPriceResolver implements PriceResolver {
               + " pricingMonth="
               + context.getPricingMonth()
               + " code="
-              + code
-              + " adjustBatchId="
-              + context.getAdjustBatchId());
+              + code);
     }
     return resolved(rows.get(0), "月度调价联动价");
   }
 
   private PriceResolveResult resolved(PriceLinkedCalcItem row, String source) {
     boolean carriedForward = Integer.valueOf(1).equals(row.getCarriedForward());
-    PriceResolveEvidence evidence = new PriceResolveEvidence(
-        row.getSourcePriceRecordId(),
-        row.getSourcePriceBatchNo(),
-        row.getSupplierName(),
-        row.getSupplierCode(),
-        row.getSupplyRatio(),
-        row.getSupplyRatioRecordId(),
-        row.getSourceEffectiveFrom(),
-        row.getSourceEffectiveTo(),
-        carriedForward,
-        row.getWarningMessage());
+    PriceResolveEvidence evidence =
+        new PriceResolveEvidence(
+            row.getSourcePriceRecordId(),
+            row.getSourcePriceBatchNo(),
+            row.getSupplierName(),
+            row.getSupplierCode(),
+            row.getSupplyRatio(),
+            row.getSupplyRatioRecordId(),
+            row.getSourceEffectiveFrom(),
+            row.getSourceEffectiveTo(),
+            carriedForward,
+            row.getWarningMessage(),
+            row.getInputSnapshotJson());
     String remark = evidence.hasEvidence() ? traceMessage(row, carriedForward) : "";
     return PriceResolveResult.hit(row.getPartUnitPrice(), source, remark, row.getId(), evidence);
   }
 
   private String traceMessage(PriceLinkedCalcItem row, boolean carriedForward) {
-    StringBuilder trace = new StringBuilder("联动价底稿[")
-        .append("主供应商=").append(text(row.getSupplierName()))
-        .append("；供应商代码=").append(text(row.getSupplierCode()))
-        .append("；供货比例=").append(row.getSupplyRatio() == null ? "" : row.getSupplyRatio())
-        .append("；价格源记录ID=")
-        .append(row.getSourcePriceRecordId() == null ? "" : row.getSourcePriceRecordId())
-        .append("；生效期=").append(date(row.getSourceEffectiveFrom()))
-        .append("~").append(date(row.getSourceEffectiveTo()))
-        .append("；沿用历史价=").append(carriedForward ? "是" : "否")
-        .append("]");
+    StringBuilder trace =
+        new StringBuilder("联动价底稿[")
+            .append("主供应商=")
+            .append(text(row.getSupplierName()))
+            .append("；供应商代码=")
+            .append(text(row.getSupplierCode()))
+            .append("；供货比例=")
+            .append(row.getSupplyRatio() == null ? "" : row.getSupplyRatio())
+            .append("；价格源记录ID=")
+            .append(row.getSourcePriceRecordId() == null ? "" : row.getSourcePriceRecordId())
+            .append("；生效期=")
+            .append(date(row.getSourceEffectiveFrom()))
+            .append("~")
+            .append(date(row.getSourceEffectiveTo()))
+            .append("；沿用历史价=")
+            .append(carriedForward ? "是" : "否")
+            .append("]");
     if (StringUtils.hasText(row.getWarningMessage())) {
       trace.append("；").append(row.getWarningMessage().trim());
     }
@@ -171,7 +195,8 @@ public class LinkedPriceResolver implements PriceResolver {
 
   private String quoteFactorSource(CostRunContext context) {
     if (context != null
-        && QuotePriceScenarioType.FINANCE_QUOTE_BASE.name()
+        && QuotePriceScenarioType.FINANCE_QUOTE_BASE
+            .name()
             .equalsIgnoreCase(context.getPriceScenarioType())) {
       return LinkedPriceFactorSource.FINANCE_QUOTE_BASE.getCode();
     }

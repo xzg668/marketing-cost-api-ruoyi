@@ -15,6 +15,18 @@ class FactorCanonicalKeyServiceTest {
   @DisplayName("平均价和 Cu 简称生成 AVG|1#CU")
   void buildsCuAverageKey() {
     assertThat(service.build("平均价", "1#Cu")).isEqualTo("AVG|1#CU");
+    assertThat(service.build("月均价", "Cu")).isEqualTo("AVG|1#CU");
+    assertThat(service.build("平均价", " cU ")).isEqualTo("AVG|1#CU");
+    assertThat(service.normalizeExistingKey("AVG|Cu")).isEqualTo("AVG|1#CU");
+  }
+
+  @Test
+  void doesNotCollapsePcuOtherSourcesOrSteelSpecifications() {
+    assertThat(service.build("平均价", "Pcu")).isEqualTo("AVG|PCU");
+    assertThat(service.build("现货价", "Cu")).isEqualTo("SPOT|1#CU");
+    assertThat(service.build("平均价", "CuZn30")).isEqualTo("AVG|CUZN30");
+    assertThat(service.build("平均价", "304/2B/1219"))
+        .isNotEqualTo(service.build("平均价", "304/2B/1500"));
   }
 
   @Test

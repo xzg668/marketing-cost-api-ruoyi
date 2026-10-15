@@ -7,6 +7,38 @@ import java.util.List;
 /** 联动价 Excel 只读预检结果；该对象本身不承载任何数据库实体。 */
 public final class PriceLinkedType2ImportPreviewResponse {
 
+  private String previewFingerprint;
+  private String expressionVersion;
+  private java.util.Map<String, com.sanhua.marketingcost.service.pricing.PriceFactorContext>
+      financial = java.util.Map.of();
+
+  public java.util.Map<String, com.sanhua.marketingcost.service.pricing.PriceFactorContext>
+      getFinancial() {
+    return financial;
+  }
+
+  public void setFinancial(
+      java.util.Map<String, com.sanhua.marketingcost.service.pricing.PriceFactorContext>
+          financial) {
+    this.financial = java.util.Map.copyOf(financial);
+  }
+
+  public String getPreviewFingerprint() {
+    return previewFingerprint;
+  }
+
+  public void setPreviewFingerprint(String value) {
+    previewFingerprint = value;
+  }
+
+  public String getExpressionVersion() {
+    return expressionVersion;
+  }
+
+  public void setExpressionVersion(String value) {
+    expressionVersion = value;
+  }
+
   private String fileSha256;
   private String templateType;
   private boolean canConfirm;
@@ -271,6 +303,78 @@ public final class PriceLinkedType2ImportPreviewResponse {
   }
 
   public static final class RowPreview {
+
+    private String action;
+    private String ruleIdentity;
+    private String orgCode;
+    private String unit;
+    private String sourceCell;
+    private java.util.Map<String, BigDecimal> calculatedInputs = java.util.Map.of();
+    private List<OriginalFactor> originalFactors = List.of();
+
+    public record OriginalFactor(
+        String key,
+        String unit,
+        String sheet,
+        String cell,
+        BigDecimal originalPrice,
+        BigDecimal price) {}
+
+    public List<OriginalFactor> getOriginalFactors() {
+      return originalFactors;
+    }
+
+    public void setOriginalFactors(List<OriginalFactor> originalFactors) {
+      this.originalFactors = List.copyOf(originalFactors);
+    }
+
+    public String getAction() {
+      return action;
+    }
+
+    public void setAction(String action) {
+      this.action = action;
+    }
+
+    public String getRuleIdentity() {
+      return ruleIdentity;
+    }
+
+    public void setRuleIdentity(String ruleIdentity) {
+      this.ruleIdentity = ruleIdentity;
+    }
+
+    public String getOrgCode() {
+      return orgCode;
+    }
+
+    public void setOrgCode(String orgCode) {
+      this.orgCode = orgCode;
+    }
+
+    public String getUnit() {
+      return unit;
+    }
+
+    public void setUnit(String unit) {
+      this.unit = unit;
+    }
+
+    public String getSourceCell() {
+      return sourceCell;
+    }
+
+    public void setSourceCell(String sourceCell) {
+      this.sourceCell = sourceCell;
+    }
+
+    public java.util.Map<String, BigDecimal> getCalculatedInputs() {
+      return calculatedInputs;
+    }
+
+    public void setCalculatedInputs(java.util.Map<String, BigDecimal> calculatedInputs) {
+      this.calculatedInputs = java.util.Map.copyOf(calculatedInputs);
+    }
 
     private String sourceSheetName;
     private Integer sourceRowNumber;

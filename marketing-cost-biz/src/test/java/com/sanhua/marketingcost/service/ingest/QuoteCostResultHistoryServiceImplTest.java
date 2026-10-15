@@ -76,6 +76,8 @@ class QuoteCostResultHistoryServiceImplTest {
   @Test
   void keepsOriginalQuoteResultDefaultAndShowsConfirmedMonthlyResultSeparately() {
     QuoteCostRunVersion quote = quoteVersion();
+    quote.setCuMaterialAdjustment(new BigDecimal("-0.92920427"));
+    quote.setFinalQuoteAmount(new BigDecimal("150.13413673"));
     MonthlyRepriceResult monthly = monthlyResult();
     when(versionMapper.selectList(any())).thenReturn(List.of(quote));
     when(resultMapper.selectList(any())).thenReturn(List.of(monthly));
@@ -88,10 +90,14 @@ class QuoteCostResultHistoryServiceImplTest {
     assertThat(response.getResults().get(0).getResultTypeLabel()).isEqualTo("原报价结果");
     assertThat(response.getResults().get(0).getPeriodMonth()).isEqualTo("2026-03");
     assertThat(response.getResults().get(0).getTotalCost()).isEqualByComparingTo("151.063341");
+    assertThat(response.getResults().get(0).getCuMaterialAdjustment()).isEqualByComparingTo("-0.92920427");
+    assertThat(response.getResults().get(0).getFinalQuoteAmount()).isEqualByComparingTo("150.13413673");
     assertThat(response.getResults().get(0).isDefaultResult()).isTrue();
     assertThat(response.getResults().get(1).getResultTypeLabel()).isEqualTo("月度调价结果");
     assertThat(response.getResults().get(1).getPeriodMonth()).isEqualTo("2026-05");
     assertThat(response.getResults().get(1).getTotalCost()).isEqualByComparingTo("151.063345");
+    assertThat(response.getResults().get(1).getCuMaterialAdjustment()).isNull();
+    assertThat(response.getResults().get(1).getFinalQuoteAmount()).isNull();
     assertThat(response.getResults().get(1).isDefaultResult()).isFalse();
   }
 

@@ -12,7 +12,6 @@ public final class PriceLinkedType2FormulaConversionResult {
   private final String sourceFormula;
   private final String convertedFormula;
   private final boolean finalVatDivisorStripped;
-  private final List<Integer> strippedRoundScales;
   private final List<PriceLinkedType2CellSnapshot> inputSnapshots;
   private final List<PriceLinkedType2FormulaReference> references;
   private final List<PriceLinkedType2FormulaError> errors;
@@ -24,7 +23,6 @@ public final class PriceLinkedType2FormulaConversionResult {
       String sourceFormula,
       String convertedFormula,
       boolean finalVatDivisorStripped,
-      List<Integer> strippedRoundScales,
       List<PriceLinkedType2CellSnapshot> inputSnapshots,
       List<PriceLinkedType2FormulaReference> references,
       List<PriceLinkedType2FormulaError> errors) {
@@ -34,7 +32,6 @@ public final class PriceLinkedType2FormulaConversionResult {
     this.sourceFormula = sourceFormula;
     this.convertedFormula = convertedFormula;
     this.finalVatDivisorStripped = finalVatDivisorStripped;
-    this.strippedRoundScales = List.copyOf(strippedRoundScales);
     this.inputSnapshots = List.copyOf(inputSnapshots);
     this.references = List.copyOf(references);
     this.errors = List.copyOf(errors);
@@ -64,10 +61,6 @@ public final class PriceLinkedType2FormulaConversionResult {
     return finalVatDivisorStripped;
   }
 
-  public List<Integer> getStrippedRoundScales() {
-    return strippedRoundScales;
-  }
-
   public List<PriceLinkedType2CellSnapshot> getInputSnapshots() {
     return inputSnapshots;
   }
@@ -78,8 +71,9 @@ public final class PriceLinkedType2FormulaConversionResult {
 
   public List<PriceLinkedType2FormulaReference> getFactorReplacements() {
     return references.stream()
-        .filter(reference ->
-            reference.referenceType() == PriceLinkedType2FormulaReferenceType.FACTOR_DYNAMIC)
+        .filter(
+            reference ->
+                reference.referenceType() == PriceLinkedType2FormulaReferenceType.FACTOR_DYNAMIC)
         .toList();
   }
 

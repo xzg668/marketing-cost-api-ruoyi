@@ -12,6 +12,17 @@ import lombok.Setter;
 @Setter
 @TableName("lp_factor_row_ref")
 public class FactorRowRef {
+  /** PRC-01：原稿/财务版本契约；旧数据的未知来源保持为空。 */
+  private Integer sourceColumnNumber;
+  private String sourceCellRef;
+  private String schemeCode;
+  private String conditionCode;
+  private String sourceValueText;
+  private String sourceFormulaExpr;
+  private String sourceNumberFormat;
+  private String sourceUnit;
+  private String conversionBasis;
+
   @TableId(type = IdType.AUTO)
   private Long id;
   private Long factorUploadBatchId;

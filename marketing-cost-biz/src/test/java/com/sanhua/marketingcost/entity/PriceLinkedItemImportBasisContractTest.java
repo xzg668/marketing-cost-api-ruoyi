@@ -10,8 +10,6 @@ import com.sanhua.marketingcost.dto.PriceLinkedItemDto;
 import com.sanhua.marketingcost.formula.normalize.FormulaDisplayRenderer;
 import com.sanhua.marketingcost.formula.normalize.FormulaNormalizer;
 import com.sanhua.marketingcost.formula.normalize.FormulaValidator;
-import com.sanhua.marketingcost.formula.registry.FactorVariableRegistryImpl;
-import com.sanhua.marketingcost.mapper.FinanceBasePriceMapper;
 import com.sanhua.marketingcost.mapper.PriceFixedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
@@ -42,12 +40,9 @@ class PriceLinkedItemImportBasisContractTest {
     assertFieldMapping("sourceRowNumber", Integer.class, "source_row_number");
     assertFieldMapping("sourceFormulaCellRef", String.class, "source_formula_cell_ref");
     assertFieldMapping("sourceFormulaExpr", String.class, "source_formula_expr");
-    assertFieldMapping(
-        "sourceInputSnapshotJson", String.class, "source_input_snapshot_json");
-    assertFieldMapping(
-        "sourceTaxIncludedPrice", BigDecimal.class, "source_tax_included_price");
-    assertFieldMapping(
-        "sourceTaxExcludedPrice", BigDecimal.class, "source_tax_excluded_price");
+    assertFieldMapping("sourceInputSnapshotJson", String.class, "source_input_snapshot_json");
+    assertFieldMapping("sourceTaxIncludedPrice", BigDecimal.class, "source_tax_included_price");
+    assertFieldMapping("sourceTaxExcludedPrice", BigDecimal.class, "source_tax_excluded_price");
   }
 
   @Test
@@ -65,8 +60,7 @@ class PriceLinkedItemImportBasisContractTest {
     assertThat(legacy.getSourceInputSnapshotJson()).isNull();
     assertThat(legacy.getSourceTaxIncludedPrice()).isNull();
     assertThat(legacy.getSourceTaxExcludedPrice()).isNull();
-    assertThat(legacy.getFormulaExpr())
-        .isEqualTo("([factor_identity_191]+[process_fee])");
+    assertThat(legacy.getFormulaExpr()).isEqualTo("([factor_identity_191]+[process_fee])");
     assertThat(legacy.getTaxIncluded()).isZero();
   }
 
@@ -83,19 +77,17 @@ class PriceLinkedItemImportBasisContractTest {
     item.setSourceTaxIncludedPrice(new BigDecimal("100.12345678"));
     item.setSourceTaxExcludedPrice(new BigDecimal("88.60482899"));
 
-    PriceLinkedItemServiceImpl service = new PriceLinkedItemServiceImpl(
-        mock(PriceLinkedItemMapper.class),
-        mock(PriceFixedItemMapper.class),
-        mock(FinanceBasePriceMapper.class),
-        mock(PriceVariableMapper.class),
-        mock(PriceVariableBindingService.class),
-        mock(FactorVariableRegistryImpl.class),
-        mock(FormulaNormalizer.class),
-        mock(FormulaDisplayRenderer.class),
-        mock(FormulaValidator.class),
-        mock(com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.class));
-    Method toDto = PriceLinkedItemServiceImpl.class.getDeclaredMethod(
-        "toDto", PriceLinkedItem.class);
+    PriceLinkedItemServiceImpl service =
+        new PriceLinkedItemServiceImpl(
+            mock(PriceLinkedItemMapper.class),
+            mock(PriceFixedItemMapper.class),
+            mock(PriceVariableMapper.class),
+            mock(PriceVariableBindingService.class),
+            mock(FormulaNormalizer.class),
+            mock(FormulaDisplayRenderer.class),
+            mock(FormulaValidator.class));
+    Method toDto =
+        PriceLinkedItemServiceImpl.class.getDeclaredMethod("toDto", PriceLinkedItem.class);
     toDto.setAccessible(true);
 
     PriceLinkedItemDto dto = (PriceLinkedItemDto) toDto.invoke(service, item);

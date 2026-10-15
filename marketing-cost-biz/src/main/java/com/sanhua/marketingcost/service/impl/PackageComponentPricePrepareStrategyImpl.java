@@ -1,7 +1,5 @@
 package com.sanhua.marketingcost.service.impl;
 
-import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
-
 import com.sanhua.marketingcost.dto.PackagePriceRequest;
 import com.sanhua.marketingcost.dto.PackagePriceResult;
 import com.sanhua.marketingcost.dto.priceprepare.PackageComponentPricePrepareResult;
@@ -12,8 +10,8 @@ import com.sanhua.marketingcost.entity.PackageComponentPriceDetail;
 import com.sanhua.marketingcost.service.PackageComponentPricePrepareStrategy;
 import com.sanhua.marketingcost.service.PackageComponentPriceService;
 import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -21,7 +19,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 @Service
-public class PackageComponentPricePrepareStrategyImpl implements PackageComponentPricePrepareStrategy {
+public class PackageComponentPricePrepareStrategyImpl
+    implements PackageComponentPricePrepareStrategy {
 
   static final String STATUS_READY = "READY";
   static final String STATUS_MISSING_STRUCTURE = "MISSING_STRUCTURE";
@@ -49,14 +48,7 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
       String sourceType,
       PricePreparePlanItem planItem) {
     return execute(
-        prepareNo,
-        oaNo,
-        periodMonth,
-        null,
-        bomPurpose,
-        sourceType,
-        planItem,
-        true, null);
+        prepareNo, oaNo, periodMonth, null, bomPurpose, sourceType, planItem, true, null);
   }
 
   @Override
@@ -69,14 +61,7 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
       String sourceType,
       PricePreparePlanItem planItem) {
     return execute(
-        prepareNo,
-        oaNo,
-        periodMonth,
-        priceAsOfTime,
-        bomPurpose,
-        sourceType,
-        planItem,
-        false, null);
+        prepareNo, oaNo, periodMonth, priceAsOfTime, bomPurpose, sourceType, planItem, false, null);
   }
 
   @Override
@@ -89,6 +74,20 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
       String sourceType,
       PricePreparePlanItem planItem) {
     return execute(
+        prepareNo, oaNo, periodMonth, priceAsOfTime, bomPurpose, sourceType, planItem, true, null);
+  }
+
+  @Override
+  public PackageComponentPricePrepareResult prepare(
+      String prepareNo,
+      String oaNo,
+      String periodMonth,
+      LocalDateTime priceAsOfTime,
+      String bomPurpose,
+      String sourceType,
+      PricePreparePlanItem planItem,
+      PricePrepareScenarioContext scenarioContext) {
+    return execute(
         prepareNo,
         oaNo,
         periodMonth,
@@ -96,23 +95,30 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
         bomPurpose,
         sourceType,
         planItem,
-        true, null);
-  }
-
-  @Override
-  public PackageComponentPricePrepareResult prepare(
-      String prepareNo, String oaNo, String periodMonth, LocalDateTime priceAsOfTime,
-      String bomPurpose, String sourceType, PricePreparePlanItem planItem,
-      PricePrepareScenarioContext scenarioContext) {
-    return execute(prepareNo, oaNo, periodMonth, priceAsOfTime, bomPurpose, sourceType, planItem, true, scenarioContext);
+        true,
+        scenarioContext);
   }
 
   @Override
   public PackageComponentPricePrepareResult calculate(
-      String prepareNo, String oaNo, String periodMonth, LocalDateTime priceAsOfTime,
-      String bomPurpose, String sourceType, PricePreparePlanItem planItem,
+      String prepareNo,
+      String oaNo,
+      String periodMonth,
+      LocalDateTime priceAsOfTime,
+      String bomPurpose,
+      String sourceType,
+      PricePreparePlanItem planItem,
       PricePrepareScenarioContext scenarioContext) {
-    return execute(prepareNo, oaNo, periodMonth, priceAsOfTime, bomPurpose, sourceType, planItem, false, scenarioContext);
+    return execute(
+        prepareNo,
+        oaNo,
+        periodMonth,
+        priceAsOfTime,
+        bomPurpose,
+        sourceType,
+        planItem,
+        false,
+        scenarioContext);
   }
 
   private PackageComponentPricePrepareResult execute(
@@ -123,23 +129,31 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
       String bomPurpose,
       String sourceType,
       PricePreparePlanItem planItem,
-      boolean persist, PricePrepareScenarioContext scenarioContext) {
+      boolean persist,
+      PricePrepareScenarioContext scenarioContext) {
     String packageMaterialCode = planItem == null ? null : trimToNull(planItem.getMaterialCode());
     String topProductCode = planItem == null ? null : trimToNull(planItem.getTopProductCode());
     if (packageMaterialCode == null || topProductCode == null) {
-      List<PackageComponentPricePrepareResult.Gap> gaps = List.of(
-          new PackageComponentPricePrepareResult.Gap(
-              GAP_TYPE_MISSING_STRUCTURE,
-              packageMaterialCode,
-              "lp_bom_costing_row",
-              "包装组件价格准备缺少顶层产品或包装父料号上下文"));
+      List<PackageComponentPricePrepareResult.Gap> gaps =
+          List.of(
+              new PackageComponentPricePrepareResult.Gap(
+                  GAP_TYPE_MISSING_STRUCTURE,
+                  packageMaterialCode,
+                  "lp_bom_costing_row",
+                  "包装组件价格准备缺少顶层产品或包装父料号上下文"));
       return PackageComponentPricePrepareResult.notReady(
           STATUS_MISSING_STRUCTURE, "包装组件价格准备缺少必要上下文", gaps);
     }
 
     PackagePriceRequest request = new PackagePriceRequest();
     request.setPackageMaterialCode(packageMaterialCode);
-    if (scenarioContext != null) request.setSupplierPriceReviewContext(scenarioContext.supplierReviews());
+    request.setBusinessUnitType(planItem.getBomRow().getBusinessUnitType());
+    if (scenarioContext != null) {
+      request.setPriceScenarioType(scenarioContext.scenarioType());
+      request.setVariableOverrides(scenarioContext.variableOverrides());
+    }
+    if (scenarioContext != null)
+      request.setSupplierPriceReviewContext(scenarioContext.supplierReviews());
     request.setPriceOrgCode(requiredPriceOrgCode(planItem));
     request.setPeriodMonth(periodMonth);
     request.setOaNo(oaNo);
@@ -147,70 +161,79 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
     request.setBomPurpose(bomPurpose);
     request.setSourceType(sourceType);
     // 月度调价由批次固化 price_as_of_time；普通价格准备未传时继续沿用当前日期。
-    request.setAsOfDate(priceAsOfTime == null
-        ? CostPricingPeriodUtils.currentPricingDate() : priceAsOfTime.toLocalDate());
+    request.setAsOfDate(
+        priceAsOfTime == null
+            ? CostPricingPeriodUtils.currentPricingDate()
+            : priceAsOfTime.toLocalDate());
     request.setPriceAsOfTime(priceAsOfTime);
     request.setCalcBatchId(prepareNo);
-    request.setForceRefresh(true);
 
-    PackagePriceResult priceResult = persist
-        ? packageComponentPriceService.ensurePrice(request)
-        : packageComponentPriceService.calculatePrice(request);
+    PackagePriceResult priceResult =
+        persist
+            ? packageComponentPriceService.ensurePrice(request)
+            : packageComponentPriceService.calculatePrice(request);
     if (priceResult == null || priceResult.getPrice() == null) {
-      List<PackageComponentPricePrepareResult.Gap> gaps = List.of(
-          new PackageComponentPricePrepareResult.Gap(
-              GAP_TYPE_MISSING_STRUCTURE,
-              packageMaterialCode,
-              "PackageComponentPriceService",
-              "包装组件价格服务未返回价格结果"));
-      return PackageComponentPricePrepareResult.notReady(
-          STATUS_FAILED, "包装组件价格服务未返回价格结果", gaps);
+      List<PackageComponentPricePrepareResult.Gap> gaps =
+          List.of(
+              new PackageComponentPricePrepareResult.Gap(
+                  GAP_TYPE_MISSING_STRUCTURE,
+                  packageMaterialCode,
+                  "PackageComponentPriceService",
+                  "包装组件价格服务未返回价格结果"));
+      return PackageComponentPricePrepareResult.notReady(STATUS_FAILED, "包装组件价格服务未返回价格结果", gaps);
     }
 
     PackageComponentPrice price = priceResult.getPrice();
     if (priceResult.isComplete()
         && PRICE_STATUS_PRICED.equals(price.getPriceStatus())
         && price.getTotalPrice() != null) {
-      BigDecimal amount = quantity(planItem) == null ? null : price.getTotalPrice().multiply(quantity(planItem));
-      return PackageComponentPricePrepareResult.ready(
-          price.getTotalPrice(),
-          amount,
-          price.getId(),
-          "包装组件价格准备完成");
+      BigDecimal amount =
+          quantity(planItem) == null ? null : price.getTotalPrice().multiply(quantity(planItem));
+      var prepared =
+          PackageComponentPricePrepareResult.ready(
+              price.getTotalPrice(), amount, price.getId(), "包装组件价格准备完成");
+      var json =
+          new com.fasterxml.jackson.databind.ObjectMapper()
+              .findAndRegisterModules()
+              .enable(
+                  com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+      prepared.setInputSnapshotJson(
+          new PackageCalculationEvidence(json).capture(price, priceResult.getDetails()));
+      return prepared;
     }
 
     if (PRICE_STATUS_MISSING_STRUCTURE.equals(price.getPriceStatus())) {
-      List<PackageComponentPricePrepareResult.Gap> gaps = List.of(
-          new PackageComponentPricePrepareResult.Gap(
-              GAP_TYPE_MISSING_STRUCTURE,
-              packageMaterialCode,
-              "PackageComponentSnapshotService",
-              message(priceResult, "包装组件缺结构，无法生成价格")));
+      List<PackageComponentPricePrepareResult.Gap> gaps =
+          List.of(
+              new PackageComponentPricePrepareResult.Gap(
+                  GAP_TYPE_MISSING_STRUCTURE,
+                  packageMaterialCode,
+                  "PackageComponentSnapshotService",
+                  message(priceResult, "包装组件缺结构，无法生成价格")));
       return PackageComponentPricePrepareResult.notReady(
           STATUS_MISSING_STRUCTURE, message(priceResult, "包装组件缺结构，无法生成价格"), gaps);
     }
 
     if (PRICE_STATUS_MISSING_CHILD_PRICE.equals(price.getPriceStatus())) {
-      List<PackageComponentPricePrepareResult.Gap> gaps = childPriceGaps(packageMaterialCode, priceResult);
+      List<PackageComponentPricePrepareResult.Gap> gaps =
+          childPriceGaps(packageMaterialCode, priceResult);
       return PackageComponentPricePrepareResult.notReady(
-          STATUS_MISSING_PRICE,
-          message(priceResult, "包装组件存在子件缺价，当前阶段只记录不阻断"),
-          gaps);
+          STATUS_MISSING_PRICE, message(priceResult, "包装组件存在子件缺价，当前阶段只记录不阻断"), gaps);
     }
 
-    List<PackageComponentPricePrepareResult.Gap> gaps = List.of(
-        new PackageComponentPricePrepareResult.Gap(
-            GAP_TYPE_MISSING_PRICE,
-            packageMaterialCode,
-            "PackageComponentPriceService",
-            message(priceResult, "包装组件价格状态异常：" + price.getPriceStatus())));
+    List<PackageComponentPricePrepareResult.Gap> gaps =
+        List.of(
+            new PackageComponentPricePrepareResult.Gap(
+                GAP_TYPE_MISSING_PRICE,
+                packageMaterialCode,
+                "PackageComponentPriceService",
+                message(priceResult, "包装组件价格状态异常：" + price.getPriceStatus())));
     return PackageComponentPricePrepareResult.notReady(
         STATUS_FAILED, message(priceResult, "包装组件价格状态异常：" + price.getPriceStatus()), gaps);
   }
 
   private List<PackageComponentPricePrepareResult.Gap> childPriceGaps(
-      String packageMaterialCode,
-      PackagePriceResult priceResult) {
+      String packageMaterialCode, PackagePriceResult priceResult) {
     List<PackageComponentPricePrepareResult.Gap> gaps = new ArrayList<>();
     if (priceResult.getDetails() != null) {
       for (PackageComponentPriceDetail detail : priceResult.getDetails()) {
@@ -218,36 +241,46 @@ public class PackageComponentPricePrepareStrategyImpl implements PackageComponen
           continue;
         }
         String childCode = trimToNull(detail.getChildMaterialCode());
-        String message = StringUtils.hasText(detail.getMissingReason())
-            ? detail.getMissingReason().trim()
-            : "包装组件子件缺价";
-        gaps.add(new PackageComponentPricePrepareResult.Gap(
-            GAP_TYPE_MISSING_PRICE,
-            childCode == null ? packageMaterialCode : childCode,
-            childCode == null ? null : detail.getChildMaterialName(),
-            "lp_package_component_price_detail",
-            message));
+        String message =
+            StringUtils.hasText(detail.getMissingReason())
+                ? detail.getMissingReason().trim()
+                : "包装组件子件缺价";
+        var gap =
+            new PackageComponentPricePrepareResult.Gap(
+                GAP_TYPE_MISSING_PRICE,
+                childCode == null ? packageMaterialCode : childCode,
+                childCode == null ? null : detail.getChildMaterialName(),
+                "lp_package_component_price_detail",
+                message);
+        gap.setPriceType(detail.getPriceType());
+        gap.setReasonCode(detail.getFailureCode());
+        gaps.add(gap);
       }
     }
     if (gaps.isEmpty()) {
-      gaps.add(new PackageComponentPricePrepareResult.Gap(
-          GAP_TYPE_MISSING_PRICE,
-          packageMaterialCode,
-          "PackageComponentPriceService",
-          message(priceResult, "包装组件存在子件缺价")));
+      gaps.add(
+          new PackageComponentPricePrepareResult.Gap(
+              GAP_TYPE_MISSING_PRICE,
+              packageMaterialCode,
+              "PackageComponentPriceService",
+              message(priceResult, "包装组件存在子件缺价")));
     }
     return gaps;
   }
 
   private String message(PackagePriceResult priceResult, String fallback) {
-    if (priceResult != null && priceResult.getWarnings() != null && !priceResult.getWarnings().isEmpty()) {
+    if (priceResult != null
+        && priceResult.getWarnings() != null
+        && !priceResult.getWarnings().isEmpty()) {
       return String.join("；", priceResult.getWarnings());
     }
     return fallback;
   }
 
   private BigDecimal quantity(PricePreparePlanItem planItem) {
-    return planItem == null || planItem.getBomRow() == null ? null : planItem.getBomRow().getQtyPerTop();
+    return planItem == null || planItem.getBomRow() == null
+        ? null
+        : planItem.getBomRow().getQtyPerTop();
   }
 
   private String requiredPriceOrgCode(PricePreparePlanItem planItem) {

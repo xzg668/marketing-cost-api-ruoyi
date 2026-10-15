@@ -18,7 +18,7 @@ public class FactorCanonicalKeyServiceImpl implements FactorCanonicalKeyService 
   @Override
   public String build(String priceSource, String shortName) {
     String sourceKey = priceSourceKey(priceSource);
-    String shortKey = compact(textNormalizer.normalize(shortName));
+    String shortKey = normalizeShortName(shortName);
     if (!StringUtils.hasText(sourceKey) || !StringUtils.hasText(shortKey)) {
       return "";
     }
@@ -33,8 +33,13 @@ public class FactorCanonicalKeyServiceImpl implements FactorCanonicalKeyService 
       return normalized;
     }
     String source = priceSourceKey(normalized.substring(0, separator));
-    String shortName = normalized.substring(separator + 1);
+    String shortName = normalizeShortName(normalized.substring(separator + 1));
     return source + "|" + shortName;
+  }
+
+  private String normalizeShortName(String shortName) {
+    String normalized = compact(textNormalizer.normalize(shortName));
+    return "CU".equals(normalized) ? "1#CU" : normalized;
   }
 
   private String priceSourceKey(String priceSource) {

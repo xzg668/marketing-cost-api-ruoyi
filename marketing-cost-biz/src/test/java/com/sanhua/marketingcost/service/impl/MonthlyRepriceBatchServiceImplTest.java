@@ -22,7 +22,6 @@ import com.sanhua.marketingcost.mapper.MonthlyRepriceAuditLogMapper;
 import com.sanhua.marketingcost.mapper.MonthlyRepriceBatchMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.security.PermissionService;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -103,7 +102,6 @@ class MonthlyRepriceBatchServiceImplTest {
         ArgumentCaptor.forClass(MonthlyRepriceBatch.class);
     verify(batchMapper).insert(batchCaptor.capture());
     MonthlyRepriceBatch batch = batchCaptor.getValue();
-    assertThat(batch.getAdjustBatchId()).isNull();
     assertThat(batch.getPriceAsOfTime()).isNotNull();
     assertThat(batch.getBomSourcePolicy()).isEqualTo("HISTORICAL_OA_BOM");
     assertThat(batch.getCreatedBy()).isEqualTo("alice");
@@ -256,20 +254,6 @@ class MonthlyRepriceBatchServiceImplTest {
     assertThatThrownBy(() -> service.createBatch(request, "alice"))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("业务单元不一致");
-  }
-
-  @Test
-  @DisplayName("createBatch：不再要求影响因素调价批次，兼容旧字段但创建时忽略")
-  void createBatchIgnoresLegacyAdjustBatchId() {
-    MonthlyRepriceBatchCreateRequest request = request();
-    request.setAdjustBatchId(9001L);
-
-    service.createBatch(request, "alice");
-
-    ArgumentCaptor<MonthlyRepriceBatch> batchCaptor =
-        ArgumentCaptor.forClass(MonthlyRepriceBatch.class);
-    verify(batchMapper).insert(batchCaptor.capture());
-    assertThat(batchCaptor.getValue().getAdjustBatchId()).isNull();
   }
 
   @Test

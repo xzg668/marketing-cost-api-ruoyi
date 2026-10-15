@@ -161,9 +161,9 @@ public class QuoteFinalSubmissionService {
         if (match.isEmpty()) throw invalid("尚无与当前资料一致的核算结果，请先核算");
         var version = match.get().version();
         if (returnedVersions.contains(version.getId())) throw invalid("领导已退回，请重新核算");
-        if (version.getTotalCost() == null || version.getTotalCost().signum() < 0) throw invalid("核算成本缺失或为负数");
-        // TOTAL 在成本计算中已排除运费且为不含税口径；保留数据库精度，不使用前端计算值。
-        result.add(new CostLine(item.getId(), product, version.getId(), version.getVersionNo(), version.getTotalCost().toPlainString(),
+        if (version.getFinalQuoteAmount() == null || version.getFinalQuoteAmount().signum() < 0) throw invalid("最终成本缺失或为负数，请重新核算");
+        // 最终成本已包含一次材料费差额；TOTAL 仅为财务正常成本，不作为对外提交金额。
+        result.add(new CostLine(item.getId(), product, version.getId(), version.getVersionNo(), version.getFinalQuoteAmount().toPlainString(),
             version.getSourceRevision(), version.getTechDataInputJson(), item.getBusinessType(), rowIds.get(item.getId()), item.getSeq(), "READY", null));
       } catch (IllegalArgumentException | IllegalStateException | EffectiveTechnicalDataException failure) {
         result.add(new CostLine(item.getId(), product, null, null, null, null, null, item.getBusinessType(),

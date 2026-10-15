@@ -66,7 +66,7 @@ class PriceLinkedCalcControllerTest {
   }
 
   @Test
-  @DisplayName("/calc/results：只读结果查询透传场景、批次和来源过滤条件")
+  @DisplayName("/calc/results：只读结果查询透传场景、月份和来源过滤条件")
   void results_passesFiltersToService() {
     PriceLinkedCalcRow row = new PriceLinkedCalcRow();
     row.setCalcId(7L);
@@ -81,9 +81,8 @@ class PriceLinkedCalcControllerTest {
         "MAT",
         "MONTHLY_ADJUST",
         "2026-05",
-        88L,
         "FAILED",
-        "ADJUST_BATCH",
+        "MONTHLY_FACTOR",
         2,
         50))
         .thenReturn(page);
@@ -95,9 +94,8 @@ class PriceLinkedCalcControllerTest {
         "MAT",
         "MONTHLY_ADJUST",
         "2026-05",
-        88L,
         "FAILED",
-        "ADJUST_BATCH",
+        "MONTHLY_FACTOR",
         2,
         50);
 
@@ -111,9 +109,8 @@ class PriceLinkedCalcControllerTest {
         "MAT",
         "MONTHLY_ADJUST",
         "2026-05",
-        88L,
         "FAILED",
-        "ADJUST_BATCH",
+        "MONTHLY_FACTOR",
         2,
         50);
   }

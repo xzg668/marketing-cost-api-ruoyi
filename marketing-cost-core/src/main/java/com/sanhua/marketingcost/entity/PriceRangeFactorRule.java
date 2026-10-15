@@ -10,6 +10,35 @@ import java.time.LocalDateTime;
 
 @TableName("lp_price_range_factor_rule")
 public class PriceRangeFactorRule {
+  /** PRC-01：原稿/财务版本契约；旧数据的未知来源保持为空。 */
+  private String pricingMonth;
+  private String orgCode;
+  private String supplierCode;
+  private String supplierName;
+  private String ruleIdentityKey;
+  private String ruleStatus;
+  private Long sourceUploadBatchId;
+  private String sourceInputSnapshotJson;
+  private String extrapolationJson;
+  public String getPricingMonth() { return pricingMonth; }
+  public void setPricingMonth(String value) { pricingMonth = value; }
+  public String getOrgCode() { return orgCode; }
+  public void setOrgCode(String value) { orgCode = value; }
+  public String getSupplierCode() { return supplierCode; }
+  public void setSupplierCode(String value) { supplierCode = value; }
+  public String getSupplierName() { return supplierName; }
+  public void setSupplierName(String value) { supplierName = value; }
+  public String getRuleIdentityKey() { return ruleIdentityKey; }
+  public void setRuleIdentityKey(String value) { ruleIdentityKey = value; }
+  public String getRuleStatus() { return ruleStatus; }
+  public void setRuleStatus(String value) { ruleStatus = value; }
+  public Long getSourceUploadBatchId() { return sourceUploadBatchId; }
+  public void setSourceUploadBatchId(Long value) { sourceUploadBatchId = value; }
+  public String getSourceInputSnapshotJson() { return sourceInputSnapshotJson; }
+  public void setSourceInputSnapshotJson(String value) { sourceInputSnapshotJson = value; }
+  public String getExtrapolationJson() { return extrapolationJson; }
+  public void setExtrapolationJson(String value) { extrapolationJson = value; }
+
   @TableId(type = IdType.AUTO)
   private Long id;
 

@@ -8,7 +8,6 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -37,13 +36,13 @@ import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
-import com.sanhua.marketingcost.service.PricePrepareReadinessService;
-import com.sanhua.marketingcost.service.CostRunResultService;
 import com.sanhua.marketingcost.service.CostInputRevisionService;
+import com.sanhua.marketingcost.service.CostRunResultService;
+import com.sanhua.marketingcost.service.PricePrepareReadinessService;
 import com.sanhua.marketingcost.service.PricePrepareService;
-import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
+import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.io.ByteArrayInputStream;
@@ -84,8 +83,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
 
   @BeforeAll
   static void initTableInfo() {
-    MapperBuilderAssistant assistant =
-        new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
     TableInfoHelper.initTableInfo(assistant, OaForm.class);
     TableInfoHelper.initTableInfo(assistant, OaFormItem.class);
     TableInfoHelper.initTableInfo(assistant, QuoteCostRunVersion.class);
@@ -114,7 +112,8 @@ class QuoteCostRunWorkbenchServiceImplTest {
         .thenReturn(item(101L, "TOP-A"));
     QuoteCostingWorkspace workspace = workspace();
     when(workspaceService.find(101L, CURRENT_PERIOD)).thenReturn(Optional.of(workspace));
-    when(workspaceService.lockOrCreate(anyString(), anyLong(), anyString(), anyString(), anyString()))
+    when(workspaceService.lockOrCreate(
+            anyString(), anyLong(), anyString(), anyString(), anyString()))
         .thenReturn(workspace);
     when(workspaceService.update(any(QuoteCostingWorkspace.class), any(Integer.class)))
         .thenAnswer(invocation -> invocation.getArgument(0));
@@ -166,8 +165,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     var response = service.getCostRun("OA-001", 101L, CURRENT_PERIOD);
 
     assertThat(response.isCanStartTrial()).isFalse();
-    assertThat(response.getBlockingReasons())
-        .containsExactly("价格准备未完成，实时成本将继续，结果可能缺价");
+    assertThat(response.getBlockingReasons()).containsExactly("价格准备未完成，实时成本将继续，结果可能缺价");
   }
 
   @Test
@@ -200,11 +198,14 @@ class QuoteCostRunWorkbenchServiceImplTest {
     assertThat(response.getCurrentDisplayVersion().getVersionNo()).isEqualTo("COST-AUTO-V1");
     assertThat(version.getDataQualityStatus()).isEqualTo("COMPLETE");
     assertThat(version.getDataQualityWarningCount()).isZero();
-    assertThat(response.getVersions()).singleElement().satisfies(row -> {
-      assertThat(row.getDisplayStatus()).isEqualTo("当前成功");
-      assertThat(row.isCurrentConfirmed()).isTrue();
-      assertThat(row.isStale()).isFalse();
-    });
+    assertThat(response.getVersions())
+        .singleElement()
+        .satisfies(
+            row -> {
+              assertThat(row.getDisplayStatus()).isEqualTo("当前成功");
+              assertThat(row.isCurrentConfirmed()).isTrue();
+              assertThat(row.isStale()).isFalse();
+            });
     ArgumentCaptor<QuoteCuAdjustmentCalcRequest> requestCaptor =
         ArgumentCaptor.forClass(QuoteCuAdjustmentCalcRequest.class);
     verify(cuAdjustmentCalcService).calculate(requestCaptor.capture());
@@ -261,16 +262,50 @@ class QuoteCostRunWorkbenchServiceImplTest {
     QuoteCostRunVersion version = version(90L, "RUNNING-3", "RUNNING", "TOP-A");
     stubCalculation(version, "123.450000");
     when(inputRevisionService.currentRevision(
-        any(OaForm.class), any(OaFormItem.class), anyString()))
+            any(OaForm.class), any(OaFormItem.class), anyString()))
         .thenReturn("changed-revision");
     QuoteCostRunTrialRequest request = new QuoteCostRunTrialRequest();
     request.setSourceRevision("submitted-revision");
+    var prepared = PricePrepareReadinessResult.ready("PPR-1", CURRENT_PERIOD, "SUCCESS");
+    prepared.setSourceRevision("submitted-revision");
+    when(readinessService.check(anyString(), anyLong(), anyString(), anyString()))
+        .thenReturn(prepared);
 
     assertThatThrownBy(
             () -> revisionAwareService.runToSuccess("OA-001", 101L, request, "pipeline-user"))
-        .isInstanceOf(QuoteIngestException.class)
+        .isInstanceOf(org.springframework.dao.ConcurrencyFailureException.class)
         .hasMessageContaining("上游业务输入已变化");
 
+    verify(versionMapper, never()).update(any(QuoteCostRunVersion.class), any(Wrapper.class));
+  }
+
+  @Test
+  void directCostRequestWithoutRevisionStillRejectsInputsChangedDuringCalculation() {
+    var revisions = mock(CostInputRevisionService.class);
+    var guarded =
+        new QuoteCostRunWorkbenchServiceImpl(
+            oaFormMapper,
+            oaFormItemMapper,
+            versionMapper,
+            resultService,
+            partItemMapper,
+            costItemMapper,
+            readinessService,
+            versionNoGenerator,
+            cuAdjustmentCalcService,
+            workspaceService,
+            revisions);
+    stubCalculation(version(90L, "RUNNING-3", "RUNNING", "TOP-A"), "123.450000");
+    var prepared = PricePrepareReadinessResult.ready("PPR-1", CURRENT_PERIOD, "SUCCESS");
+    prepared.setSourceRevision("prepared-input");
+    when(readinessService.check(anyString(), anyLong(), anyString(), anyString()))
+        .thenReturn(prepared);
+    when(revisions.currentRevision(any(), any(), anyString()))
+        .thenReturn("prepared-input", "changed-input");
+    assertThatThrownBy(() -> guarded.runToSuccess("OA-001", 101L, null, "pipeline-user"))
+        .isInstanceOf(org.springframework.dao.ConcurrencyFailureException.class)
+        .hasMessageContaining("上游业务输入已变化");
+    verify(cuAdjustmentCalcService).calculate(any());
     verify(versionMapper, never()).update(any(QuoteCostRunVersion.class), any(Wrapper.class));
   }
 
@@ -321,10 +356,13 @@ class QuoteCostRunWorkbenchServiceImplTest {
 
     assertThat(response.getLatestTrial()).isNull();
     assertThat(response.getLatestConfirmed().getVersionNo()).isEqualTo("COST-20260609-0001-V1");
-    assertThat(response.getPartItems()).singleElement().satisfies(row -> {
-      assertThat(row.getPriceOrgCode()).isEqualTo("210");
-      assertThat(row.getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
-    });
+    assertThat(response.getPartItems())
+        .singleElement()
+        .satisfies(
+            row -> {
+              assertThat(row.getPriceOrgCode()).isEqualTo("210");
+              assertThat(row.getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
+            });
     assertThat(response.getCurrentDisplayVersion().getId()).isEqualTo(88L);
     assertThat(response.getResultHeader().getTotalCost()).isEqualByComparingTo("123.45");
     assertThat(response.getPartItems()).hasSize(1);
@@ -369,9 +407,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
 
     assertThat(response.getLatestTrial().getId()).isEqualTo(77L);
     assertThat(response.getCurrentDisplayVersion().getId()).isEqualTo(77L);
-    assertThat(response.getVersions())
-        .extracting("id")
-        .containsExactly(77L, 99L, 88L);
+    assertThat(response.getVersions()).extracting("id").containsExactly(77L, 99L, 88L);
     assertThat(response.getVersions().get(0).getDisplayStatus()).isEqualTo("历史试算");
     assertThat(response.getVersions().get(1).getDisplayStatus()).isEqualTo("当前成功");
     assertThat(response.getVersions().get(1).isCurrentConfirmed()).isTrue();
@@ -392,8 +428,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     trial.setCostItemCount(24);
     trial.setTrialFinishedAt(LocalDateTime.of(2026, 6, 18, 9, 6, 37));
     when(versionMapper.selectList(any(Wrapper.class))).thenReturn(List.of(trial));
-    when(versionMapper.selectOne(any(Wrapper.class)))
-        .thenReturn(trial, (QuoteCostRunVersion) null);
+    when(versionMapper.selectOne(any(Wrapper.class))).thenReturn(trial, (QuoteCostRunVersion) null);
     when(partItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
     when(costItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
@@ -544,7 +579,8 @@ class QuoteCostRunWorkbenchServiceImplTest {
     return workspace;
   }
 
-  private static QuoteCostRunVersion version(Long id, String costRunNo, String status, String productCode) {
+  private static QuoteCostRunVersion version(
+      Long id, String costRunNo, String status, String productCode) {
     QuoteCostRunVersion version = new QuoteCostRunVersion();
     version.setId(id);
     version.setCostRunNo(costRunNo);
@@ -561,8 +597,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
   private void authenticate(String businessUnitType) {
     UsernamePasswordAuthenticationToken authentication =
         new UsernamePasswordAuthenticationToken("fcq10.user", null, List.of());
-    authentication.setDetails(
-        Map.of(BusinessUnitContext.KEY_BUSINESS_UNIT_TYPE, businessUnitType));
+    authentication.setDetails(Map.of(BusinessUnitContext.KEY_BUSINESS_UNIT_TYPE, businessUnitType));
     SecurityContextHolder.getContext().setAuthentication(authentication);
   }
 
@@ -597,8 +632,9 @@ class QuoteCostRunWorkbenchServiceImplTest {
     version.setFinalQuoteAmount(finalQuoteAmount);
     version.setPartItemCount(1);
     version.setCostItemCount(1);
-    CostRunContext context = CostRunContext.quote(
-        "OA-001", 101L, "TOP-A", "BOX", "ACME", "COMMERCIAL", CURRENT_PERIOD, "QUOTE:101");
+    CostRunContext context =
+        CostRunContext.quote(
+            "OA-001", 101L, "TOP-A", "BOX", "ACME", "COMMERCIAL", CURRENT_PERIOD, "QUOTE:101");
     context.setCostRunVersionId(version.getId());
     context.setCostRunNo(version.getCostRunNo());
     CostRunResultDto resultDto = new CostRunResultDto();
@@ -607,22 +643,20 @@ class QuoteCostRunWorkbenchServiceImplTest {
     resultDto.setOaMaterialCost(new BigDecimal("102.000000"));
     resultDto.setCuMaterialAdjustment(adjustment);
     resultDto.setFinalQuoteAmount(finalQuoteAmount);
-    CostRunObjectResult costResult = CostRunObjectResult.of(
-        context,
-        null,
-        resultDto,
-        List.of(part("PART-1")),
-        List.of(total(totalAmount)));
+    CostRunObjectResult costResult =
+        CostRunObjectResult.of(
+            context, null, resultDto, List.of(part("PART-1")), List.of(total(totalAmount)));
     when(cuAdjustmentCalcService.calculate(any(QuoteCuAdjustmentCalcRequest.class)))
-        .thenReturn(new QuoteCuAdjustmentCalcResult(
-            version,
-            costResult,
-            null,
-            new BigDecimal("100.000000"),
-            new BigDecimal("102.000000"),
-            totalCost,
-            adjustment,
-            finalQuoteAmount));
+        .thenReturn(
+            new QuoteCuAdjustmentCalcResult(
+                version,
+                costResult,
+                null,
+                new BigDecimal("100.000000"),
+                new BigDecimal("102.000000"),
+                totalCost,
+                adjustment,
+                finalQuoteAmount));
   }
 
   private static CostRunCostItemDto total(String amount) {

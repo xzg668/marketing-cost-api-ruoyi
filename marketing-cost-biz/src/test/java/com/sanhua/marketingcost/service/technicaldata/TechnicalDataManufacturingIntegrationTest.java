@@ -99,7 +99,7 @@ class TechnicalDataManufacturingIntegrationTest extends BomMapperTestBase {
     var first = service.read(productId, null, WANG);
     assertThat(first.source().nodes()).extracting(node -> node.state().name()).containsExactly("U9_READY", "MISSING_RAW", "MISSING_RAW", "WAIT_FINANCE");
     var partial = service.save(productId, request(first, true), WANG);
-    assertThat(partial.priceRequirements()).hasSize(1).allSatisfy(row -> assertThat(row.status()).isEqualTo("MISSING_ROUTE"));
+    assertThat(partial.priceRequirements()).hasSize(1).allSatisfy(row -> assertThat(row.status()).isEqualTo("MISSING_PRICE"));
     assertThat(partial.issues()).isNotEmpty(); assertThat(partial.bomComposed()).isFalse();
     assertThat(validation.validate(taskId, 101L, WANG).valid()).isFalse();
     confirmC();

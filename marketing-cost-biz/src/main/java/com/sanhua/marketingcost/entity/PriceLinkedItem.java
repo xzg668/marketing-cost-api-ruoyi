@@ -12,6 +12,20 @@ import java.time.LocalDateTime;
 
 @TableName("lp_price_linked_item")
 public class PriceLinkedItem {
+  /** PRC-01：原稿/财务版本契约；旧数据的未知来源保持为空。 */
+  private String ruleIdentityKey;
+  private Integer ruleRevision;
+  private String ruleStatus;
+  private String expressionVersion;
+  public String getRuleIdentityKey() { return ruleIdentityKey; }
+  public void setRuleIdentityKey(String value) { ruleIdentityKey = value; }
+  public Integer getRuleRevision() { return ruleRevision; }
+  public void setRuleRevision(Integer value) { ruleRevision = value; }
+  public String getRuleStatus() { return ruleStatus; }
+  public void setRuleStatus(String value) { ruleStatus = value; }
+  public String getExpressionVersion() { return expressionVersion; }
+  public void setExpressionVersion(String value) { expressionVersion = value; }
+
   @TableId(type = IdType.AUTO)
   private Long id;
   private Integer technicalRevision;

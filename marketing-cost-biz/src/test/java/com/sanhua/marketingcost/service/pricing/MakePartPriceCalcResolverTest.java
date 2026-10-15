@@ -190,7 +190,6 @@ class MakePartPriceCalcResolverTest {
     when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(row));
     CostRunContext context = CostRunContext.monthlyReprice(
         "2026-05",
-        7L,
         "MR-001",
         "COMMERCIAL",
         priceAsOfTime,

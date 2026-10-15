@@ -18,6 +18,28 @@ class QuoteNormalizeServiceTest {
       new QuoteNormalizeService(new QuoteIngestRequestValidator(), new QuoteClassifyService());
 
   @Test
+  void finalBoardTenderSurvivesMappedExcelAndNormalizationWithCustomerSusUnits() {
+    for (String value : new String[] {"是", "否", ""}) {
+      var request = sampleRequest();
+      assertThat(QuoteIngestFieldBinder.applyHeaderField(request.getHeader(), "boardTender", value))
+          .isTrue();
+      request.getHeader().setSus304Price("20000");
+      request.getHeader().setSus316lPrice(null);
+      var document = service.normalize(request);
+      assertThat(document.getErrors()).isEmpty();
+      assertThat(document.getHeader().getBoardTender())
+          .isEqualTo(value.isEmpty() ? null : "是".equals(value));
+      assertThat(document.getHeader().getSus304Price()).isEqualByComparingTo("20000");
+      assertThat(document.getHeader().getSus316lPrice()).isNull();
+    }
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () ->
+                QuoteIngestFieldBinder.applyHeaderField(
+                    sampleRequest().getHeader(), "boardTender", "未知"))
+        .hasMessageContaining("最终是否招标需求");
+  }
+
+  @Test
   void normalizesHeaderItemsAmountsAndClassification() {
     QuoteNormalizedDocument document = service.normalize(sampleRequest());
 
@@ -66,9 +88,7 @@ class QuoteNormalizeServiceTest {
   @Test
   void sanitizesBusinessDivisionHintText() {
     QuoteIngestRequest request = sampleRequest();
-    request
-        .getHeader()
-        .setSourceBusinessDivision("事业部（当涉及到多事业部时，请选择型号多的事业部）商用部品事业部");
+    request.getHeader().setSourceBusinessDivision("事业部（当涉及到多事业部时，请选择型号多的事业部）商用部品事业部");
 
     QuoteNormalizedDocument document = service.normalize(request);
 
@@ -83,7 +103,8 @@ class QuoteNormalizeServiceTest {
     assertThat(document.getExtraFees()).hasSize(2);
     assertThat(document.getExtraFees().get(0).getScope()).isEqualTo("HEADER");
     assertThat(document.getExtraFees().get(0).getFeeCategory()).isEqualTo("MOLD");
-    assertThat(document.getExtraFees().get(0).getAmount()).isEqualByComparingTo(new BigDecimal("1234.56"));
+    assertThat(document.getExtraFees().get(0).getAmount())
+        .isEqualByComparingTo(new BigDecimal("1234.56"));
     assertThat(document.getExtraFees().get(1).getScope()).isEqualTo("ITEM");
     assertThat(document.getExtraFees().get(1).getItemSeq()).isEqualTo(1);
     assertThat(document.getExtraFees().get(1).getFeeCategory()).isEqualTo("CERTIFICATION");

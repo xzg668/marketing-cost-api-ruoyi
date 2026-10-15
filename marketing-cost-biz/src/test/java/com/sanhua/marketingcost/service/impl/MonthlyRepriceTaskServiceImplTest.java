@@ -45,7 +45,6 @@ class MonthlyRepriceTaskServiceImplTest {
     assertThat(request.getPricingMonth()).isEqualTo("2026-05");
     assertThat(request.getBusinessUnitType()).isEqualTo("COMMERCIAL");
     assertThat(request.getPriceAsOfTime()).isEqualTo(LocalDateTime.of(2026, 5, 27, 10, 0));
-    assertThat(request.getAdjustBatchId()).isEqualTo(100L);
     assertThat(request.getBomSourcePolicy()).isEqualTo("HISTORICAL_OA_BOM");
     assertThat(request.getCreatedBy()).isEqualTo("operator-1");
     assertThat(request.getCalcObjects()).hasSize(2);
@@ -57,7 +56,6 @@ class MonthlyRepriceTaskServiceImplTest {
     batch.setPricingMonth("2026-05");
     batch.setBusinessUnitType("COMMERCIAL");
     batch.setPriceAsOfTime(LocalDateTime.of(2026, 5, 27, 10, 0));
-    batch.setAdjustBatchId(100L);
     batch.setBomSourcePolicy("HISTORICAL_OA_BOM");
     batch.setCreatedBy("operator-1");
     batch.setCreatedName("张三");

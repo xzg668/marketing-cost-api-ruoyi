@@ -22,6 +22,24 @@ class QuoteOaPdfHeaderParserTest {
   private final QuoteOaPdfHeaderParser parser = new QuoteOaPdfHeaderParser();
 
   @Test
+  void boardTenderUsesFinalFieldAndNeverThePreliminarySalesConfirmation() {
+    var request = request(QuoteExcelTemplateType.FI_SC_020);
+    parser.parse(
+        context(QuoteExcelTemplateType.FI_SC_020, List.of(">>业务信息", "业务员初步确认是否招标需求（仅针对板换产品） 是")),
+        request);
+    assertThat(request.getHeader().getBoardTender()).isNull();
+    parser.parse(
+        context(
+            QuoteExcelTemplateType.FI_SC_020,
+            List.of(">>业务信息", "业务员初步确认是否招标需求（仅针对板换产品） 是", "是否招标需求（仅针对板换产品） 否")),
+        request);
+    assertThat(request.getHeader().getBoardTender()).isFalse();
+    parser.parse(
+        context(QuoteExcelTemplateType.FI_SC_020, List.of(">>业务信息", "是否招标需求（仅针对板换产品） 是")), request);
+    assertThat(request.getHeader().getBoardTender()).isTrue();
+  }
+
+  @Test
   void parsesSameLineHeaderFieldsAndStopsAtNextLabel() {
     QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SC_006);
     parser.parse(
@@ -54,7 +72,9 @@ class QuoteOaPdfHeaderParserTest {
     assertThat(request.getHeader().getExchangeRate()).isEqualTo("7.2000");
     assertThat(request.getHeader().getCopperPrice()).isEqualTo("90000.00");
     assertThat(request.getHeader().getSus304Price()).isEqualTo("20000.00");
-    assertThat(request.getExtraFields()).extracting("fieldCode").contains("processTitle", "employeeNo", "businessType");
+    assertThat(request.getExtraFields())
+        .extracting("fieldCode")
+        .contains("processTitle", "employeeNo", "businessType");
   }
 
   @Test
@@ -126,10 +146,7 @@ class QuoteOaPdfHeaderParserTest {
     parser.parse(
         context(
             QuoteExcelTemplateType.FI_SR_005_DERIVED,
-            List.of(
-                ">>业务信息",
-                "备注",
-                "号 费[元/只] 量[万只] 价格 总成本 运输费总 费（万 （万元） （万元） 元） 有效期")),
+            List.of(">>业务信息", "备注", "号 费[元/只] 量[万只] 价格 总成本 运输费总 费（万 （万元） （万元） 元） 有效期")),
         request);
 
     assertThat(request.getHeader().getRemark()).isNull();
@@ -171,10 +188,7 @@ class QuoteOaPdfHeaderParserTest {
                 cell("固定", 150),
                 cell("核算时铜基价（含税，元/吨）", 300),
                 cell("100,000.00", 405)),
-            row(
-                cell("核算时锌基价（含税，元/吨）", 40),
-                cell("23,714.00", 145),
-                cell("核算时铝基价（含税，元/吨）", 300)),
+            row(cell("核算时锌基价（含税，元/吨）", 40), cell("23,714.00", 145), cell("核算时铝基价（含税，元/吨）", 300)),
             row(cell("核算时SUS316基价（含税，元/", 40), cell("核算时SUS304基价（含税，元/", 300)),
             row(cell("32,500.00", 145), cell("20,000.00", 405)),
             row(cell("吨）", 40), cell("吨）", 300)));
@@ -197,7 +211,9 @@ class QuoteOaPdfHeaderParserTest {
         "FI-SC-006 desktop PDF sample must exist and be readable for T4");
     QuotePdfDocument document;
     try (InputStream inputStream = Files.newInputStream(FI_SC_006_PDF)) {
-      document = new PdfBoxQuotePdfTextExtractor().extract(inputStream, FI_SC_006_PDF.getFileName().toString());
+      document =
+          new PdfBoxQuotePdfTextExtractor()
+              .extract(inputStream, FI_SC_006_PDF.getFileName().toString());
     }
     QuoteIngestRequest request = request(QuoteExcelTemplateType.FI_SC_006);
 
@@ -242,7 +258,8 @@ class QuoteOaPdfHeaderParserTest {
     return context(templateType, document);
   }
 
-  private QuotePdfParseContext context(QuoteExcelTemplateType templateType, QuotePdfDocument document) {
+  private QuotePdfParseContext context(
+      QuoteExcelTemplateType templateType, QuotePdfDocument document) {
     QuotePdfParseContext context = new QuotePdfParseContext();
     context.setFileName(document.getFileName());
     context.setDocument(document);

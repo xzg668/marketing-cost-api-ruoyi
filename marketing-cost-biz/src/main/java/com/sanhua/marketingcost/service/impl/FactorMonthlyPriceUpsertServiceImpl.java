@@ -5,7 +5,6 @@ import com.sanhua.marketingcost.dto.FactorMonthlyPriceUpsertResult;
 import com.sanhua.marketingcost.dto.FactorRowParseResult;
 import com.sanhua.marketingcost.dto.FactorSheetParseResult;
 import com.sanhua.marketingcost.dto.FactorWorkbookParseResult;
-import com.sanhua.marketingcost.dto.QuoteBasePriceDetectResult;
 import com.sanhua.marketingcost.entity.FactorIdentity;
 import com.sanhua.marketingcost.entity.FactorMonthlyPrice;
 import com.sanhua.marketingcost.entity.FactorMonthlyPriceChangeLog;
@@ -16,7 +15,7 @@ import com.sanhua.marketingcost.mapper.FactorMonthlyPriceChangeLogMapper;
 import com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper;
 import com.sanhua.marketingcost.service.FactorCanonicalKeyService;
 import com.sanhua.marketingcost.service.FactorMonthlyPriceUpsertService;
-import com.sanhua.marketingcost.service.QuoteBasePriceMappingService;
+import com.sanhua.marketingcost.service.financefactor.FinanceFactorAuthority;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -42,22 +41,21 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
   private final FactorIdentityMapper factorIdentityMapper;
   private final FactorMonthlyPriceMapper factorMonthlyPriceMapper;
   private final FactorMonthlyPriceChangeLogMapper changeLogMapper;
-  @Autowired(required = false)
-  private QuoteBasePriceMappingService quoteBasePriceMappingService;
+
   @Autowired(required = false)
   private FactorCanonicalKeyService factorCanonicalKeyService;
+
+  private final FinanceFactorAuthority financeAuthority;
 
   public FactorMonthlyPriceUpsertServiceImpl(
       FactorIdentityMapper factorIdentityMapper,
       FactorMonthlyPriceMapper factorMonthlyPriceMapper,
-      FactorMonthlyPriceChangeLogMapper changeLogMapper) {
+      FactorMonthlyPriceChangeLogMapper changeLogMapper,
+      FinanceFactorAuthority financeAuthority) {
+    this.financeAuthority = financeAuthority;
     this.factorIdentityMapper = factorIdentityMapper;
     this.factorMonthlyPriceMapper = factorMonthlyPriceMapper;
     this.changeLogMapper = changeLogMapper;
-  }
-
-  void setQuoteBasePriceMappingService(QuoteBasePriceMappingService quoteBasePriceMappingService) {
-    this.quoteBasePriceMappingService = quoteBasePriceMappingService;
   }
 
   void setFactorCanonicalKeyService(FactorCanonicalKeyService factorCanonicalKeyService) {
@@ -72,7 +70,12 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
       String businessUnitType,
       String operator,
       Long sourceUploadBatchId) {
-    return upsert(parseResult, priceMonth, businessUnitType, operator, sourceUploadBatchId,
+    return upsert(
+        parseResult,
+        priceMonth,
+        businessUnitType,
+        operator,
+        sourceUploadBatchId,
         FactorPriceConflictStrategy.KEEP_EXISTING.getCode());
   }
 
@@ -87,13 +90,15 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
       String factorPriceConflictStrategy) {
     FactorMonthlyPriceUpsertResult result = new FactorMonthlyPriceUpsertResult();
     if (!StringUtils.hasText(priceMonth)) {
-      result.getErrors().add(new FactorMonthlyPriceUpsertResult.RowError(
-          null, null, "priceMonth 必填"));
+      result
+          .getErrors()
+          .add(new FactorMonthlyPriceUpsertResult.RowError(null, null, "priceMonth 必填"));
       return result;
     }
     if (!StringUtils.hasText(businessUnitType)) {
-      result.getErrors().add(new FactorMonthlyPriceUpsertResult.RowError(
-          null, null, "businessUnitType 必填"));
+      result
+          .getErrors()
+          .add(new FactorMonthlyPriceUpsertResult.RowError(null, null, "businessUnitType 必填"));
       return result;
     }
     if (parseResult == null || parseResult.getSheets().isEmpty()) {
@@ -109,8 +114,16 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
 
     for (FactorSheetParseResult sheet : parseResult.getSheets()) {
       for (FactorRowParseResult row : sheet.getRows()) {
-        processRow(row, normalizedMonth, normalizedBu, normalizedOperator,
-            sourceUploadBatchId, strategy, identityCache, priceCache, result);
+        processRow(
+            row,
+            normalizedMonth,
+            normalizedBu,
+            normalizedOperator,
+            sourceUploadBatchId,
+            strategy,
+            identityCache,
+            priceCache,
+            result);
       }
     }
     return result;
@@ -128,32 +141,48 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
       FactorMonthlyPriceUpsertResult result) {
     String validateError = validateRow(row);
     if (validateError != null) {
-      result.getErrors().add(new FactorMonthlyPriceUpsertResult.RowError(
-          row == null ? null : row.getSourceSheetName(),
-          row == null ? null : row.getSourceRowNumber(),
-          validateError));
+      result
+          .getErrors()
+          .add(
+              new FactorMonthlyPriceUpsertResult.RowError(
+                  row == null ? null : row.getSourceSheetName(),
+                  row == null ? null : row.getSourceRowNumber(),
+                  validateError));
       return;
     }
 
-    IdentityUpsertOutcome identityOutcome = upsertIdentity(
-        row, businessUnitType, operator, identityCache, result);
+    IdentityUpsertOutcome identityOutcome =
+        upsertIdentity(row, businessUnitType, operator, identityCache, result);
     FactorIdentity identity = identityOutcome.identity();
     if (identity == null || identity.getId() == null) {
-      result.getErrors().add(new FactorMonthlyPriceUpsertResult.RowError(
-          row.getSourceSheetName(), row.getSourceRowNumber(), "影响因素身份保存失败"));
+      result
+          .getErrors()
+          .add(
+              new FactorMonthlyPriceUpsertResult.RowError(
+                  row.getSourceSheetName(), row.getSourceRowNumber(), "影响因素身份保存失败"));
       return;
     }
 
-    PriceUpsertOutcome priceOutcome = upsertMonthlyPrice(
-        identity, row, priceMonth, operator, sourceUploadBatchId,
-        factorPriceConflictStrategy, priceCache, result);
+    PriceUpsertOutcome priceOutcome =
+        financeAuthority.manages(identity)
+            ? new PriceUpsertOutcome(null, "FINANCE_REFERENCE", null)
+            : upsertMonthlyPrice(
+                identity,
+                row,
+                priceMonth,
+                operator,
+                sourceUploadBatchId,
+                factorPriceConflictStrategy,
+                priceCache,
+                result);
 
     FactorMonthlyPriceUpsertResult.RowResult rowResult =
         new FactorMonthlyPriceUpsertResult.RowResult();
     rowResult.setSourceSheetName(row.getSourceSheetName());
     rowResult.setSourceRowNumber(row.getSourceRowNumber());
     rowResult.setFactorIdentityId(identity.getId());
-    rowResult.setFactorMonthlyPriceId(priceOutcome.monthlyPrice().getId());
+    rowResult.setFactorMonthlyPriceId(
+        priceOutcome.monthlyPrice() == null ? null : priceOutcome.monthlyPrice().getId());
     rowResult.setFactorSeqNo(identity.getFactorSeqNo());
     rowResult.setFactorName(identity.getFactorName());
     rowResult.setShortName(identity.getShortName());
@@ -161,39 +190,11 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
     rowResult.setIdentityAction(identityOutcome.action());
     rowResult.setMonthlyPriceAction(priceOutcome.action());
     rowResult.setOldPrice(priceOutcome.oldPrice());
-    rowResult.setNewPrice(priceOutcome.monthlyPrice().getPrice());
+    rowResult.setNewPrice(
+        priceOutcome.monthlyPrice() == null ? null : priceOutcome.monthlyPrice().getPrice());
     rowResult.setOriginalPrice(normalizePrice(row.getOriginalPrice()));
     rowResult.setUnit(normalize(row.getUnit()));
-    applyQuoteBaseDetect(identity.getId(), rowResult, result);
     result.getRows().add(rowResult);
-  }
-
-  private void applyQuoteBaseDetect(
-      Long factorIdentityId,
-      FactorMonthlyPriceUpsertResult.RowResult rowResult,
-      FactorMonthlyPriceUpsertResult result) {
-    if (quoteBasePriceMappingService == null || factorIdentityId == null) {
-      return;
-    }
-    QuoteBasePriceDetectResult detect =
-        quoteBasePriceMappingService.detectAndSaveFactorQuoteBaseMapping(factorIdentityId);
-    if (detect == null) {
-      return;
-    }
-    rowResult.setQuoteBaseDetectStatus(detect.getStatus());
-    rowResult.setQuoteBaseQuoteFieldCode(detect.getQuoteFieldCode());
-    rowResult.setQuoteBaseQuoteFieldName(detect.getQuoteFieldName());
-    rowResult.setQuoteBaseVariableCode(detect.getVariableCode());
-    rowResult.setQuoteBaseMatchedKeyword(detect.getMatchedKeyword());
-    rowResult.setQuoteBaseMatchSource("AUTO");
-    rowResult.setQuoteBaseDetectMessage(detect.getMessage());
-    if (detect.recognized()) {
-      result.setQuoteBaseRecognizedCount(result.getQuoteBaseRecognizedCount() + 1);
-    } else if (detect.conflict()) {
-      result.setQuoteBaseConflictCount(result.getQuoteBaseConflictCount() + 1);
-    } else {
-      result.setQuoteBaseUnrecognizedCount(result.getQuoteBaseUnrecognizedCount() + 1);
-    }
   }
 
   private IdentityUpsertOutcome upsertIdentity(
@@ -209,22 +210,22 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
       return new IdentityUpsertOutcome(cached, "REUSE");
     }
 
-    FactorIdentity existing = factorIdentityMapper.selectOne(
-        Wrappers.lambdaQuery(FactorIdentity.class)
-            .eq(FactorIdentity::getBusinessUnitType, businessUnitType)
-            .eq(FactorIdentity::getFactorSeqNo, normalize(row.getFactorSeqNo()))
-            .eq(FactorIdentity::getFactorName, normalize(row.getFactorName()))
-            .eq(FactorIdentity::getShortName, normalize(row.getShortName()))
-            .eq(FactorIdentity::getPriceSource, normalize(row.getPriceSource()))
-            .last("LIMIT 1"));
+    FactorIdentity existing =
+        factorIdentityMapper.selectOne(
+            Wrappers.lambdaQuery(FactorIdentity.class)
+                .eq(FactorIdentity::getBusinessUnitType, businessUnitType)
+                .eq(FactorIdentity::getFactorSeqNo, normalize(row.getFactorSeqNo()))
+                .eq(FactorIdentity::getFactorName, normalize(row.getFactorName()))
+                .eq(FactorIdentity::getShortName, normalize(row.getShortName()))
+                .eq(FactorIdentity::getPriceSource, normalize(row.getPriceSource()))
+                .last("LIMIT 1"));
     if (existing != null) {
       identityCache.put(key, existing);
       result.setIdentityReusedCount(result.getIdentityReusedCount() + 1);
       return new IdentityUpsertOutcome(existing, "REUSE");
     }
 
-    FactorIdentity canonicalIdentity =
-        findCanonicalIdentity(row, businessUnitType);
+    FactorIdentity canonicalIdentity = findCanonicalIdentity(row, businessUnitType);
     if (canonicalIdentity != null) {
       upgradeType2Identity(canonicalIdentity, row, key, operator);
       identityCache.put(key, canonicalIdentity);
@@ -251,52 +252,47 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
     return new IdentityUpsertOutcome(identity, "CREATE");
   }
 
-  private FactorIdentity findCanonicalIdentity(
-      FactorRowParseResult row, String businessUnitType) {
+  private FactorIdentity findCanonicalIdentity(FactorRowParseResult row, String businessUnitType) {
     if (factorCanonicalKeyService == null) {
       return null;
     }
-    String canonicalKey =
-        factorCanonicalKeyService.build(row.getPriceSource(), row.getShortName());
+    String canonicalKey = factorCanonicalKeyService.build(row.getPriceSource(), row.getShortName());
     if (!StringUtils.hasText(canonicalKey)) {
       return null;
     }
-    List<FactorIdentity> candidates = factorIdentityMapper.selectList(
-        Wrappers.lambdaQuery(FactorIdentity.class)
-            .eq(FactorIdentity::getBusinessUnitType, businessUnitType)
-            .eq(FactorIdentity::getCanonicalFactorKey, canonicalKey)
-            .eq(FactorIdentity::getStatus, STATUS_ACTIVE));
+    List<FactorIdentity> candidates =
+        factorIdentityMapper.selectList(
+            Wrappers.lambdaQuery(FactorIdentity.class)
+                .eq(FactorIdentity::getBusinessUnitType, businessUnitType)
+                .eq(FactorIdentity::getCanonicalFactorKey, canonicalKey)
+                .eq(FactorIdentity::getStatus, STATUS_ACTIVE));
     if (candidates == null || candidates.isEmpty()) {
       return null;
     }
-    Set<Long> masterIds = candidates.stream()
-        .map(FactorIdentity::getCanonicalFactorIdentityId)
-        .filter(Objects::nonNull)
-        .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    Set<Long> masterIds =
+        candidates.stream()
+            .map(FactorIdentity::getCanonicalFactorIdentityId)
+            .filter(Objects::nonNull)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
     if (masterIds.size() > 1) {
-      throw new IllegalStateException(
-          "统一因素 " + canonicalKey + " 存在多个主身份：" + masterIds);
+      throw new IllegalStateException("统一因素 " + canonicalKey + " 存在多个主身份：" + masterIds);
     }
     if (masterIds.size() == 1) {
       Long masterId = masterIds.iterator().next();
       return candidates.stream()
           .filter(candidate -> masterId.equals(candidate.getId()))
           .findFirst()
-          .orElseThrow(() -> new IllegalStateException(
-              "统一因素 " + canonicalKey + " 的主身份不存在：" + masterId));
+          .orElseThrow(
+              () -> new IllegalStateException("统一因素 " + canonicalKey + " 的主身份不存在：" + masterId));
     }
     if (candidates.size() == 1) {
       return candidates.getFirst();
     }
-    throw new IllegalStateException(
-        "统一因素 " + canonicalKey + " 存在多个候选但尚未确定主身份");
+    throw new IllegalStateException("统一因素 " + canonicalKey + " 存在多个候选但尚未确定主身份");
   }
 
   private void upgradeType2Identity(
-      FactorIdentity identity,
-      FactorRowParseResult row,
-      String identityKey,
-      String operator) {
+      FactorIdentity identity, FactorRowParseResult row, String identityKey, String operator) {
     if (!"TYPE2_AUTO_CREATE".equals(identity.getIdentityOrigin())) {
       return;
     }
@@ -324,20 +320,38 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
     FactorMonthlyPrice cached = priceCache.get(key);
     if (cached != null) {
       return handleExistingMonthlyPrice(
-          cached, identity.getId(), row.getPrice(), priceMonth, operator,
-          sourceUploadBatchId, factorPriceConflictStrategy, priceCache, result, key);
+          cached,
+          identity.getId(),
+          row.getPrice(),
+          priceMonth,
+          operator,
+          sourceUploadBatchId,
+          factorPriceConflictStrategy,
+          priceCache,
+          result,
+          key);
     }
 
-    FactorMonthlyPrice existing = factorMonthlyPriceMapper.selectOne(
-        Wrappers.lambdaQuery(FactorMonthlyPrice.class)
-            .eq(FactorMonthlyPrice::getFactorIdentityId, identity.getId())
-            .eq(FactorMonthlyPrice::getPriceMonth, priceMonth)
-            .last("LIMIT 1"));
+    FactorMonthlyPrice existing =
+        factorMonthlyPriceMapper.selectOne(
+            Wrappers.lambdaQuery(FactorMonthlyPrice.class)
+                .eq(FactorMonthlyPrice::getSchemeCode, "LEGACY")
+                .eq(FactorMonthlyPrice::getFactorIdentityId, identity.getId())
+                .eq(FactorMonthlyPrice::getPriceMonth, priceMonth)
+                .last("LIMIT 1"));
     if (existing != null) {
       priceCache.put(key, existing);
       return handleExistingMonthlyPrice(
-          existing, identity.getId(), row.getPrice(), priceMonth, operator,
-          sourceUploadBatchId, factorPriceConflictStrategy, priceCache, result, key);
+          existing,
+          identity.getId(),
+          row.getPrice(),
+          priceMonth,
+          operator,
+          sourceUploadBatchId,
+          factorPriceConflictStrategy,
+          priceCache,
+          result,
+          key);
     }
 
     LocalDateTime now = LocalDateTime.now();
@@ -355,8 +369,15 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
     factorMonthlyPriceMapper.insert(monthlyPrice);
     priceCache.put(key, monthlyPrice);
     result.setMonthlyPriceCreatedCount(result.getMonthlyPriceCreatedCount() + 1);
-    insertChangeLog(monthlyPrice.getId(), identity.getId(), priceMonth, null,
-        monthlyPrice.getPrice(), "CREATE", sourceUploadBatchId, operator);
+    insertChangeLog(
+        monthlyPrice.getId(),
+        identity.getId(),
+        priceMonth,
+        null,
+        monthlyPrice.getPrice(),
+        "CREATE",
+        sourceUploadBatchId,
+        operator);
     return new PriceUpsertOutcome(monthlyPrice, "CREATE", null);
   }
 
@@ -390,8 +411,15 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
     priceCache.put(cacheKey, existing);
     result.setMonthlyPriceUpdatedCount(result.getMonthlyPriceUpdatedCount() + 1);
     result.setMonthlyPriceOverwriteCount(result.getMonthlyPriceOverwriteCount() + 1);
-    insertChangeLog(existing.getId(), factorIdentityId, priceMonth, oldPrice,
-        newPrice, "UPDATE", sourceUploadBatchId, operator);
+    insertChangeLog(
+        existing.getId(),
+        factorIdentityId,
+        priceMonth,
+        oldPrice,
+        newPrice,
+        "UPDATE",
+        sourceUploadBatchId,
+        operator);
     return new PriceUpsertOutcome(existing, "UPDATE", oldPrice);
   }
 
@@ -460,7 +488,8 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
   }
 
   private String identityKey(String businessUnitType, FactorRowParseResult row) {
-    return String.join("|",
+    return String.join(
+        "|",
         normalize(businessUnitType),
         normalize(row.getFactorSeqNo()),
         normalize(row.getFactorName()),
@@ -472,9 +501,7 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
     if (!StringUtils.hasText(value)) {
       return "";
     }
-    return value.replace('\u00A0', ' ')
-        .replaceAll("\\s+", " ")
-        .trim();
+    return value.replace('\u00A0', ' ').replaceAll("\\s+", " ").trim();
   }
 
   private BigDecimal normalizePrice(BigDecimal price) {
@@ -498,9 +525,7 @@ public class FactorMonthlyPriceUpsertServiceImpl implements FactorMonthlyPriceUp
   }
 
   private record PriceUpsertOutcome(
-      FactorMonthlyPrice monthlyPrice, String action, BigDecimal oldPrice) {
-  }
+      FactorMonthlyPrice monthlyPrice, String action, BigDecimal oldPrice) {}
 
-  private record IdentityUpsertOutcome(FactorIdentity identity, String action) {
-  }
+  private record IdentityUpsertOutcome(FactorIdentity identity, String action) {}
 }

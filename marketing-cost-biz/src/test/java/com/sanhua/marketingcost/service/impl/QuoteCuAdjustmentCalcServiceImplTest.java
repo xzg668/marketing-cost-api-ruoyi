@@ -110,6 +110,26 @@ class QuoteCuAdjustmentCalcServiceImplTest {
   }
 
   @Test
+  void nativeFinanceFactorIdIsNeverWrittenAsLegacyFinancePriceId() {
+    var legacyFixture = financePrepare();
+    when(financePrepareService.loadPreparedFromOa("PPR-OA-1")).thenReturn(
+        new FinancePricePrepareGenerateResult("PPR-OA-1", "PPR-FIN-1", "FQG-1", null,
+            new BigDecimal("95"), legacyFixture.prepareResult(), 9001L));
+    service.calculate(request());
+    var scenarios = ArgumentCaptor.forClass(QuoteCostPriceScenario.class);
+    verify(scenarioMapper, times(2)).insert(scenarios.capture());
+    var finance = scenarios.getAllValues().stream()
+        .filter(row -> "FINANCE_QUOTE_BASE".equals(row.getScenarioType())).findFirst().orElseThrow();
+    assertThat(finance.getCuPriceSource()).isEqualTo("FINANCE_FACTOR");
+    assertThat(finance.getCuSourceRefId()).isEqualTo(9001L);
+    assertThat(finance.getCuPrice()).isEqualByComparingTo("95");
+    var versions = ArgumentCaptor.forClass(QuoteCostRunVersion.class);
+    verify(versionMapper, org.mockito.Mockito.atLeastOnce()).updateById(versions.capture());
+    assertThat(versions.getAllValues()).allSatisfy(version ->
+        assertThat(version.getFinanceBasePriceId()).isNull());
+  }
+
+  @Test
   @DisplayName("完整成功：只跑财务成本一次并保存正差额、双场景和最终报价")
   void calculatesPositiveAdjustmentAndPersistsAllSummaries() {
     var result = service.calculate(request());
@@ -366,7 +386,7 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     generated.setPriceAsOfTime(AS_OF);
     generated.setStatus("SUCCESS");
     return new FinancePricePrepareGenerateResult(
-        "PPR-OA-1", "PPR-FIN-1", "FQG-1", 900L, new BigDecimal("90"), generated);
+        "PPR-OA-1", "PPR-FIN-1", "FQG-1", 900L, new BigDecimal("90"), generated, null);
   }
 
   private QuoteCostRunVersion version(Long id) {

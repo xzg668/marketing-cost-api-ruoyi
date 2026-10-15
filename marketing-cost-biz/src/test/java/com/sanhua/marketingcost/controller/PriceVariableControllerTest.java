@@ -9,18 +9,16 @@ import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.VariableCatalogResponse;
 import com.sanhua.marketingcost.formula.registry.RowLocalPlaceholderRegistry;
 import com.sanhua.marketingcost.service.PriceVariableService;
-import java.math.BigDecimal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * PriceVariableController 单测 —— 沿用项目里 Controller 单测惯例：
- * 直接 new Controller + mock Service，不起 MockMvc。
+ * PriceVariableController 单测 —— 沿用项目里 Controller 单测惯例： 直接 new Controller + mock Service，不起 MockMvc。
  *
- * <p>核心断言 DoD：{@code /variables/catalog} 响应三组 key（{@code financeFactors}/
- * {@code partContexts}/{@code formulaRefs}）都齐全，并且 {@code partContexts.size() >= 9}
- * —— 这是 V24 seed 的内置部品上下文下限。
+ * <p>核心断言 DoD：{@code /variables/catalog} 响应三组 key（{@code financeFactors}/ {@code
+ * partContexts}/{@code formulaRefs}）都齐全，并且 {@code partContexts.size() >= 9} —— 这是 V24 seed
+ * 的内置部品上下文下限。
  */
 class PriceVariableControllerTest {
 
@@ -30,8 +28,8 @@ class PriceVariableControllerTest {
   @BeforeEach
   void setUp() {
     priceVariableService = mock(PriceVariableService.class);
-    controller = new PriceVariableController(
-        priceVariableService, mock(RowLocalPlaceholderRegistry.class));
+    controller =
+        new PriceVariableController(priceVariableService, mock(RowLocalPlaceholderRegistry.class));
   }
 
   @Test
@@ -52,7 +50,7 @@ class PriceVariableControllerTest {
     assertThat(data.getPartContexts()).hasSizeGreaterThanOrEqualTo(9);
     // 透传 —— 不做二次组装
     assertThat(data.getFinanceFactors().get(0).getCode()).isEqualTo("Cu");
-    assertThat(data.getFinanceFactors().get(0).getCurrentPrice()).isEqualByComparingTo("90");
+    assertThat(data.getFinanceFactors().get(0).getName()).isEqualTo("电解铜");
     assertThat(data.getFormulaRefs().get(0).getFormulaExpr()).isEqualTo("[Cu]/(1+[vat_rate])");
     verify(priceVariableService).catalog();
   }
@@ -64,24 +62,21 @@ class PriceVariableControllerTest {
     VariableCatalogResponse.FinanceFactor cu = new VariableCatalogResponse.FinanceFactor();
     cu.setCode("Cu");
     cu.setName("电解铜");
-    cu.setCurrentPrice(new BigDecimal("90"));
-    cu.setUnit("元/kg");
-    cu.setSource("上海有色网");
-    cu.setPricingMonth("2024-03");
     resp.getFinanceFactors().add(cu);
 
     // 9 条 PART_CONTEXT —— 与 V24 seed 一一对应，确保 DoD 下限
-    String[][] parts = new String[][] {
-        {"blank_weight", "下料重量"},
-        {"net_weight", "产品净重"},
-        {"process_fee", "加工费"},
-        {"process_fee_incl", "含税加工费"},
-        {"agent_fee", "代理费"},
-        {"material_price_incl", "材料含税价格"},
-        {"scrap_price_incl", "废料含税价格"},
-        {"copper_scrap_price", "铜沫价格"},
-        {"us_yellow_copper_price", "美国柜装黄铜价格"},
-    };
+    String[][] parts =
+        new String[][] {
+          {"blank_weight", "下料重量"},
+          {"net_weight", "产品净重"},
+          {"process_fee", "加工费"},
+          {"process_fee_incl", "含税加工费"},
+          {"agent_fee", "代理费"},
+          {"material_price_incl", "材料含税价格"},
+          {"scrap_price_incl", "废料含税价格"},
+          {"copper_scrap_price", "铜沫价格"},
+          {"us_yellow_copper_price", "美国柜装黄铜价格"},
+        };
     for (String[] row : parts) {
       VariableCatalogResponse.PartContext pc = new VariableCatalogResponse.PartContext();
       pc.setCode(row[0]);

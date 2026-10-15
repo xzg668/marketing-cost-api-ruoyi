@@ -12,6 +12,7 @@ public class QuotePriceTypeRecognitionRow {
   private Integer level;
   private String objectType;
   private String materialCode;
+  private String priceOrgCode;
   private String materialName;
   private String parentMaterialCode;
   private Long sourceBomRowId;
@@ -22,7 +23,6 @@ public class QuotePriceTypeRecognitionRow {
   private String typeStatus;
   private LocalDate effectiveFrom;
   private LocalDate effectiveTo;
-  private BigDecimal referenceUnitPrice;
   private String message;
   private List<QuotePriceTypeRecognitionRow> children = new ArrayList<>();
 }

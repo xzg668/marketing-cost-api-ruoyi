@@ -3,25 +3,20 @@ package com.sanhua.marketingcost.controller;
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
-import com.sanhua.marketingcost.dto.FactorUploadBatchDto;
-import com.sanhua.marketingcost.dto.FactorMonthlyPriceAdjustRequest;
-import com.sanhua.marketingcost.dto.FactorMonthlyPriceAdjustmentResponse;
-import com.sanhua.marketingcost.dto.FactorMonthlyPriceChangeLogDto;
+import com.sanhua.marketingcost.dto.LinkedImportedFileDto;
 import com.sanhua.marketingcost.dto.PriceItemImportResponse;
-import com.sanhua.marketingcost.dto.PriceLinkedImportBatchDetailDto;
 import com.sanhua.marketingcost.dto.PriceLinkedImportCommand;
 import com.sanhua.marketingcost.dto.PriceLinkedItemDto;
 import com.sanhua.marketingcost.dto.PriceLinkedItemImportRequest;
 import com.sanhua.marketingcost.dto.PriceLinkedItemUpdateRequest;
 import com.sanhua.marketingcost.dto.PriceLinkedType2ImportPreviewResponse;
-import com.sanhua.marketingcost.service.FactorMonthlyPriceAdjustmentService;
 import com.sanhua.marketingcost.service.PriceLinkedImportDispatchService;
 import com.sanhua.marketingcost.service.PriceLinkedItemService;
 import java.io.IOException;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.security.core.Authentication;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -41,24 +36,14 @@ import org.springframework.web.multipart.MultipartFile;
 @RequestMapping("/api/v1/price-linked")
 public class PriceLinkedItemController {
   private final PriceLinkedItemService priceLinkedItemService;
-  private final FactorMonthlyPriceAdjustmentService factorMonthlyPriceAdjustmentService;
   private final PriceLinkedImportDispatchService priceLinkedImportDispatchService;
 
   @Autowired
   public PriceLinkedItemController(
       PriceLinkedItemService priceLinkedItemService,
-      FactorMonthlyPriceAdjustmentService factorMonthlyPriceAdjustmentService,
       PriceLinkedImportDispatchService priceLinkedImportDispatchService) {
     this.priceLinkedItemService = priceLinkedItemService;
-    this.factorMonthlyPriceAdjustmentService = factorMonthlyPriceAdjustmentService;
     this.priceLinkedImportDispatchService = priceLinkedImportDispatchService;
-  }
-
-  /** 保留给现有轻量单测和非 Spring 调用，生产环境使用三参数构造器。 */
-  public PriceLinkedItemController(
-      PriceLinkedItemService priceLinkedItemService,
-      FactorMonthlyPriceAdjustmentService factorMonthlyPriceAdjustmentService) {
-    this(priceLinkedItemService, factorMonthlyPriceAdjustmentService, null);
   }
 
   /** 查询联动价格明细列表 */
@@ -112,13 +97,7 @@ public class PriceLinkedItemController {
     return CommonResult.success(priceLinkedItemService.importItems(request));
   }
 
-  /**
-   * 联动+固定 Excel 导入 —— T18 新增。
-   *
-   * <p>上传 "原材料(联动+固定)" / "联动价-部品" 等表，按 {@code 订单类型} 列分流到
-   * {@code lp_price_linked_item} / {@code lp_price_fixed_item}。联动行公式过
-   * {@code FormulaNormalizer} 校验；非法公式单行跳过不影响整批。
-   */
+  /** 公共原稿确认必须经过完整预检并整批发布；技术补录仍受原审批上下文约束。 */
   @PreAuthorize("@ss.hasPermi('price:linked-item:import')")
   @PostMapping("/items/import-excel")
   public CommonResult<PriceItemImportResponse> importExcel(
@@ -132,6 +111,7 @@ public class PriceLinkedItemController {
           String factorPriceConflictStrategy,
       @RequestParam(value = "previewFileSha256", required = false)
           String previewFileSha256,
+      @RequestParam(value = "previewFingerprint", required = false) String previewFingerprint,
       @RequestParam(value="technicalVersionId",required=false) Long technicalVersionId,
       @RequestParam(value="oaNo",required=false) String oaNo,
       @RequestParam(value="oaFormItemId",required=false) Long oaFormItemId) {
@@ -150,7 +130,7 @@ public class PriceLinkedItemController {
                 effectiveStrategy,
                 formulaEffectiveDate,
                 factorPriceConflictStrategy,
-                previewFileSha256).withTechnicalContext(technicalContext(technicalVersionId,oaNo,oaFormItemId))));
+                previewFileSha256).withPreviewFingerprint(previewFingerprint).withTechnicalContext(technicalContext(technicalVersionId,oaNo,oaFormItemId))));
       }
       throw new IllegalStateException("联动价导入服务不可用");
     } catch (IllegalArgumentException e) {
@@ -163,7 +143,7 @@ public class PriceLinkedItemController {
     }
   }
 
-  /** 类型2导入预检：只解析和计算，不写数据库。 */
+  /** 原稿/技术补录预检：只解析和计算，不写数据库。 */
   @PreAuthorize("@ss.hasPermi('price:linked-item:import')")
   @PostMapping("/items/import-excel/preview")
   public CommonResult<PriceLinkedType2ImportPreviewResponse> previewImportExcel(
@@ -236,89 +216,16 @@ public class PriceLinkedItemController {
         previewFileSha256);
   }
 
-  /** 查询月度联动价与影响因素 Excel 导入历史 */
+  /** 只查询指定月份已发布的公共联动原稿文件，不加载整批规则和日志。 */
   @PreAuthorize("@ss.hasPermi('price:linked-item:import-history:list')"
-      + " or @ss.hasPermi('price:linked-item:list')")
-  @GetMapping("/items/import-history")
-  public CommonResult<List<FactorUploadBatchDto>> listImportHistory(
-      @RequestParam(required = false) String pricingMonth,
+      + " or @ss.hasPermi('price:linked-item:list') or @ss.hasPermi('price:linked-item:import')")
+  @GetMapping("/items/imported-files")
+  public CommonResult<PageResult<LinkedImportedFileDto>> importedFiles(
+      @RequestParam String pricingMonth,
       @RequestParam(required = false) String businessUnitType,
-      @RequestParam(required = false) String uploadedBy,
-      @RequestParam(required = false, defaultValue = "false") Boolean includeAllUploaders,
-      @RequestParam(required = false) Integer limit) {
-    return CommonResult.success(
-        priceLinkedItemService.listImportHistory(
-            pricingMonth, businessUnitType, uploadedBy, includeAllUploaders, limit));
-  }
-
-  /** 查询某个导入批次的影响因素预览和自动绑定日志 */
-  @PreAuthorize("@ss.hasPermi('price:linked-item:import-history:list')"
-      + " or @ss.hasPermi('price:linked-item:list')")
-  @GetMapping("/items/import-history/{factorUploadBatchId}")
-  public CommonResult<PriceLinkedImportBatchDetailDto> getImportBatchDetail(
-      @PathVariable Long factorUploadBatchId) {
-    PriceLinkedImportBatchDetailDto detail =
-        priceLinkedItemService.getImportBatchDetail(factorUploadBatchId);
-    if (detail == null) {
-      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "import batch not found");
-    }
-    return CommonResult.success(detail);
-  }
-
-  /** 查询月度影响因素导入批次，供影响因素表菜单使用；数据仍来自 lp_factor_upload_batch。 */
-  @PreAuthorize("@ss.hasPermi('price:finance-base:batch:list')"
-      + " or @ss.hasPermi('price:finance-base:list')"
-      + " or @ss.hasPermi('price:linked-item:list')")
-  @GetMapping("/factors/import-batches")
-  public CommonResult<List<FactorUploadBatchDto>> listFactorImportBatches(
-      @RequestParam(required = false) String pricingMonth,
-      @RequestParam(required = false) String businessUnitType,
-      @RequestParam(required = false) String uploadedBy,
-      @RequestParam(required = false, defaultValue = "false") Boolean includeAllUploaders,
-      @RequestParam(required = false) Integer limit) {
-    return CommonResult.success(
-        priceLinkedItemService.listImportHistory(
-            pricingMonth, businessUnitType, uploadedBy, includeAllUploaders, limit));
-  }
-
-  /** 查询某个影响因素导入批次的行级来源明细，供影响因素表菜单做来源追溯。 */
-  @PreAuthorize("@ss.hasPermi('price:finance-base:batch:list')"
-      + " or @ss.hasPermi('price:finance-base:list')"
-      + " or @ss.hasPermi('price:linked-item:list')")
-  @GetMapping("/factors/import-batches/{factorUploadBatchId}")
-  public CommonResult<PriceLinkedImportBatchDetailDto> getFactorImportBatchDetail(
-      @PathVariable Long factorUploadBatchId) {
-    PriceLinkedImportBatchDetailDto detail =
-        priceLinkedItemService.getImportBatchDetail(factorUploadBatchId);
-    if (detail == null) {
-      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "import batch not found");
-    }
-    return CommonResult.success(detail);
-  }
-
-  /** 影响因素月度调价：只更新 lp_factor_monthly_price.price，不改变联动价变量绑定关系。 */
-  @PreAuthorize("@ss.hasPermi('price:finance-base:edit')")
-  @PatchMapping("/factors/monthly-prices/{factorMonthlyPriceId}/adjust")
-  public CommonResult<FactorMonthlyPriceAdjustmentResponse> adjustFactorMonthlyPrice(
-      @PathVariable Long factorMonthlyPriceId,
-      @RequestBody FactorMonthlyPriceAdjustRequest request,
-      Authentication authentication) {
-    try {
-      return CommonResult.success(
-          factorMonthlyPriceAdjustmentService.adjust(
-              factorMonthlyPriceId, request, currentUsername(authentication)));
-    } catch (IllegalArgumentException ex) {
-      return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(), ex.getMessage());
-    }
-  }
-
-  /** 查询某个影响因素月度价格的调价日志，供影响因素表页面做审计追溯。 */
-  @PreAuthorize("@ss.hasPermi('price:finance-base:list') or @ss.hasPermi('price:linked-item:list')")
-  @GetMapping("/factors/monthly-prices/{factorMonthlyPriceId}/change-logs")
-  public CommonResult<List<FactorMonthlyPriceChangeLogDto>> listFactorMonthlyPriceChangeLogs(
-      @PathVariable Long factorMonthlyPriceId) {
-    return CommonResult.success(
-        factorMonthlyPriceAdjustmentService.listChangeLogs(factorMonthlyPriceId));
+      @RequestParam(defaultValue = "1") int page,
+      @RequestParam(defaultValue = "20") int pageSize) {
+    return CommonResult.success(priceLinkedItemService.importedFiles(pricingMonth, businessUnitType, page, pageSize));
   }
 
   /** 新增联动价格明细 */

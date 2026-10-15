@@ -21,7 +21,6 @@ public class FactorMonthlyPriceChangeLog {
   private BigDecimal newPrice;
   private String changeType;
   private Long sourceUploadBatchId;
-  private Long adjustBatchId;
   private String sourceType;
   private String changedBy;
   private String remark;

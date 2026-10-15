@@ -13,9 +13,25 @@ class MakePartPriceCalculatorTest {
   private final MakePartPriceCalculator calculator = new MakePartPriceCalculator();
 
   @Test
+  void preservesRawAndScrapCalculationEvidence() {
+    var row = baseRow("SCRAP-1");
+    row.setRawInputSnapshotJson("{\"calculatorVersion\":\"ORIGINAL_V1\",\"ruleId\":11}");
+    row.setScrapInputSnapshotJson("{\"calculatorVersion\":\"RANGE_ORIGINAL_V1\",\"ruleId\":12}");
+    var result = calculator.calculate(List.of(row)).getFirst();
+    assertThat(result.getStatus()).isEqualTo("OK");
+    assertThat(result.getRawInputSnapshotJson()).isEqualTo(row.getRawInputSnapshotJson());
+    assertThat(result.getScrapInputSnapshotJson()).isEqualTo(row.getScrapInputSnapshotJson());
+    assertThat(result).isNotSameAs(row);
+  }
+
+  @Test
   void sameMaterialAtDifferentQuoteNodesKeepsIndependentTotals() {
-    var first = baseRow("SCRAP-1"); first.setItemProcessType(MakePartProcessTypePolicy.PROCESS_TYPE_RAW); first.setSourceCostingRowId(1L);
-    var second = baseRow("SCRAP-1"); second.setItemProcessType(MakePartProcessTypePolicy.PROCESS_TYPE_RAW); second.setSourceCostingRowId(2L);
+    var first = baseRow("SCRAP-1");
+    first.setItemProcessType(MakePartProcessTypePolicy.PROCESS_TYPE_RAW);
+    first.setSourceCostingRowId(1L);
+    var second = baseRow("SCRAP-1");
+    second.setItemProcessType(MakePartProcessTypePolicy.PROCESS_TYPE_RAW);
+    second.setSourceCostingRowId(2L);
     second.setGrossWeightG(new BigDecimal("100"));
     var results = calculator.calculate(List.of(first, second));
     assertThat(results.getFirst().getParentTotalCostPrice()).isEqualByComparingTo("4.7445");
@@ -35,7 +51,8 @@ class MakePartPriceCalculatorTest {
     assertThat(result.getPriceComplete()).isTrue();
     assertThat(result.getCostPrice()).isEqualByComparingTo("4.74450000");
     assertThat(result.getParentTotalCostPrice()).isEqualByComparingTo("4.74450000");
-    assertThat(result.getRemark()).contains("计算追溯", "gross_weight_g=80", "outsource_fee_ignored=99");
+    assertThat(result.getRemark())
+        .contains("计算追溯", "gross_weight_g=80", "outsource_fee_ignored=99");
   }
 
   @Test
@@ -63,10 +80,12 @@ class MakePartPriceCalculatorTest {
     List<MakePartPriceCalcRow> result = calculator.calculate(List.of(first, second));
 
     assertThat(result).hasSize(2);
-    assertThat(result).extracting(MakePartPriceCalcRow::getCostPrice)
+    assertThat(result)
+        .extracting(MakePartPriceCalcRow::getCostPrice)
         .containsExactly(new BigDecimal("4.74450000"), new BigDecimal("6.38600000"));
-    assertThat(result).allSatisfy(row ->
-        assertThat(row.getParentTotalCostPrice()).isEqualByComparingTo("11.13050000"));
+    assertThat(result)
+        .allSatisfy(
+            row -> assertThat(row.getParentTotalCostPrice()).isEqualByComparingTo("11.13050000"));
   }
 
   @Test
@@ -90,10 +109,12 @@ class MakePartPriceCalculatorTest {
 
     List<MakePartPriceCalcRow> result = calculator.calculate(List.of(stainless, copper));
 
-    assertThat(result).extracting(MakePartPriceCalcRow::getCostPrice)
+    assertThat(result)
+        .extracting(MakePartPriceCalcRow::getCostPrice)
         .containsExactly(new BigDecimal("0.76269553"), new BigDecimal("0.48814155"));
-    assertThat(result).allSatisfy(row ->
-        assertThat(row.getParentTotalCostPrice()).isEqualByComparingTo("1.25083708"));
+    assertThat(result)
+        .allSatisfy(
+            row -> assertThat(row.getParentTotalCostPrice()).isEqualByComparingTo("1.25083708"));
   }
 
   @Test
@@ -108,21 +129,23 @@ class MakePartPriceCalculatorTest {
     MakePartPriceCalcRow missingScrapMapping = baseRow(null);
 
     List<MakePartPriceCalcRow> result =
-        calculator.calculate(List.of(missingWeight, missingRawPrice, missingScrapPrice, missingScrapMapping));
+        calculator.calculate(
+            List.of(missingWeight, missingRawPrice, missingScrapPrice, missingScrapMapping));
 
-    assertThat(result).extracting(MakePartPriceCalcRow::getStatus)
+    assertThat(result)
+        .extracting(MakePartPriceCalcRow::getStatus)
         .containsExactly(
-            "MISSING_WEIGHT",
-            "MISSING_RAW_PRICE",
-            "MISSING_SCRAP_PRICE",
-            "MISSING_SCRAP_MAPPING");
-    assertThat(result).extracting(MakePartPriceCalcRow::getPriceComplete)
+            "MISSING_WEIGHT", "MISSING_RAW_PRICE", "MISSING_SCRAP_PRICE", "MISSING_SCRAP_MAPPING");
+    assertThat(result)
+        .extracting(MakePartPriceCalcRow::getPriceComplete)
         .containsExactly(true, false, false, true);
-    assertThat(result).allSatisfy(row -> {
-      assertThat(row.getCostPrice()).isNull();
-      assertThat(row.getParentTotalCostPrice()).isNull();
-      assertThat(row.getRemark()).isNotBlank();
-    });
+    assertThat(result)
+        .allSatisfy(
+            row -> {
+              assertThat(row.getCostPrice()).isNull();
+              assertThat(row.getParentTotalCostPrice()).isNull();
+              assertThat(row.getRemark()).isNotBlank();
+            });
   }
 
   @Test
@@ -165,9 +188,11 @@ class MakePartPriceCalculatorTest {
     withOutsource.setItemProcessType(MakePartProcessTypePolicy.PROCESS_TYPE_RAW);
     withOutsource.setOutsourceFee(new BigDecimal("999.000000"));
 
-    List<MakePartPriceCalcRow> result = calculator.calculate(List.of(withoutOutsource, withOutsource));
+    List<MakePartPriceCalcRow> result =
+        calculator.calculate(List.of(withoutOutsource, withOutsource));
 
-    assertThat(result).extracting(MakePartPriceCalcRow::getCostPrice)
+    assertThat(result)
+        .extracting(MakePartPriceCalcRow::getCostPrice)
         .containsExactly(new BigDecimal("4.74450000"), new BigDecimal("4.74450000"));
   }
 

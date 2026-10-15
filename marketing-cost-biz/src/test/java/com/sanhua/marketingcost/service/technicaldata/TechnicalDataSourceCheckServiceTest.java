@@ -115,12 +115,8 @@ class TechnicalDataSourceCheckServiceTest {
     verifyNoInteractions(prices);
   }
 
-  @Test void unresolvedPriceTypesWaitForConfirmationBeforeAttemptingPriceCalculation() {
+  @Test void historicalTypeGapStillChecksPricesWithDefaultPriority() {
     workspace.setWorkspaceStatus("WAIT_PRICE_TYPE");
-    assertThat(fact(TechnicalDataModuleType.PRICE).availability()).isEqualTo(TechnicalDataAvailability.UNCONFIRMED);
-    assertThat(fact(TechnicalDataModuleType.PRICE).reasonCode()).isEqualTo("PRICE_BASIS_UNCONFIRMED");
-    verifyNoInteractions(prices);
-    workspace.setWorkspaceStatus("RUNNING");
     assertThat(fact(TechnicalDataModuleType.PRICE).availability()).isEqualTo(TechnicalDataAvailability.AVAILABLE);
     verify(prices).calculate(any());
   }

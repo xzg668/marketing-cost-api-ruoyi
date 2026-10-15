@@ -11,6 +11,12 @@ public class PackagePriceRequest {
   @com.fasterxml.jackson.annotation.JsonIgnore
   private com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext supplierPriceReviewContext;
   private String packageMaterialCode;
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private String businessUnitType;
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private com.sanhua.marketingcost.enums.QuotePriceScenarioType priceScenarioType;
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private java.util.Map<String, java.math.BigDecimal> variableOverrides = java.util.Map.of();
   private String priceOrgCode;
   private String periodMonth;
   private String quoteNo;
@@ -21,5 +27,4 @@ public class PackagePriceRequest {
   private LocalDate asOfDate;
   private LocalDateTime priceAsOfTime;
   private String calcBatchId;
-  private boolean forceRefresh;
 }

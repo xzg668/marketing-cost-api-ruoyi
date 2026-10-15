@@ -14,7 +14,6 @@ public class MonthlyRepriceBatchCreateResponse {
   private LocalDateTime priceAsOfTime;
   private String bomSourcePolicy;
   private String businessUnitType;
-  private Long adjustBatchId;
   private String executionBackend;
   private String status;
   private Integer totalCount;
@@ -37,7 +36,6 @@ public class MonthlyRepriceBatchCreateResponse {
     response.setPriceAsOfTime(batch.getPriceAsOfTime());
     response.setBomSourcePolicy(batch.getBomSourcePolicy());
     response.setBusinessUnitType(batch.getBusinessUnitType());
-    response.setAdjustBatchId(batch.getAdjustBatchId());
     response.setExecutionBackend(batch.getExecutionBackend());
     response.setStatus(batch.getStatus());
     response.setTotalCount(batch.getTotalCount());

@@ -63,15 +63,16 @@ public class MakePartPriceCalculator {
 
     BigDecimal grossWeightG = row.getGrossWeightG();
     BigDecimal netWeightG = row.getNetWeightG();
-    BigDecimal scrapWeightKg = grossWeightG.subtract(netWeightG)
-        .divide(G_TO_KG, WEIGHT_SCALE, RoundingMode.HALF_UP);
+    BigDecimal scrapWeightKg =
+        grossWeightG.subtract(netWeightG).divide(G_TO_KG, WEIGHT_SCALE, RoundingMode.HALF_UP);
     BigDecimal scrapDeduction = scrapWeightKg.multiply(row.getScrapUnitPrice());
     BigDecimal cost;
     if (MakePartProcessTypePolicy.PROCESS_TYPE_RAW.equals(row.getItemProcessType())) {
       // 原材料加工：毛重/净重是 g，原材料价和废料价是元/kg，所以参与计算前必须 /1000 转 kg。
-      BigDecimal materialAmount = grossWeightG
-          .divide(G_TO_KG, WEIGHT_SCALE, RoundingMode.HALF_UP)
-          .multiply(row.getRawUnitPrice());
+      BigDecimal materialAmount =
+          grossWeightG
+              .divide(G_TO_KG, WEIGHT_SCALE, RoundingMode.HALF_UP)
+              .multiply(row.getRawUnitPrice());
       cost = materialAmount.subtract(scrapDeduction);
     } else {
       // 毛坯加工：采购单价按元/件，不再乘毛重；只有废料抵扣按 g 转 kg 计算。
@@ -106,7 +107,8 @@ public class MakePartPriceCalculator {
       missingRemarks.add("缺原材料价格(child_material_no=" + row.getChildMaterialNo() + ")");
       return STATUS_MISSING_RAW_PRICE;
     }
-    if (!StringUtils.hasText(row.getScrapCode()) && !Boolean.TRUE.equals(row.getNoScrapConfirmed())) {
+    if (!StringUtils.hasText(row.getScrapCode())
+        && !Boolean.TRUE.equals(row.getNoScrapConfirmed())) {
       missingRemarks.add("缺废料映射(child_material_no=" + row.getChildMaterialNo() + ")");
       return STATUS_MISSING_SCRAP_MAPPING;
     }
@@ -118,13 +120,20 @@ public class MakePartPriceCalculator {
   }
 
   private String calculationTrace(MakePartPriceCalcRow row, BigDecimal scrapWeightKg) {
-    return "计算追溯: item_process_type=" + row.getItemProcessType()
-        + ", gross_weight_g=" + format(row.getGrossWeightG())
-        + ", net_weight_g=" + format(row.getNetWeightG())
-        + ", scrap_weight_kg=" + format(scrapWeightKg)
-        + ", raw_unit_price=" + format(row.getRawUnitPrice())
-        + ", scrap_unit_price=" + format(row.getScrapUnitPrice())
-        + ", outsource_fee_ignored=" + format(row.getOutsourceFee());
+    return "计算追溯: item_process_type="
+        + row.getItemProcessType()
+        + ", gross_weight_g="
+        + format(row.getGrossWeightG())
+        + ", net_weight_g="
+        + format(row.getNetWeightG())
+        + ", scrap_weight_kg="
+        + format(scrapWeightKg)
+        + ", raw_unit_price="
+        + format(row.getRawUnitPrice())
+        + ", scrap_unit_price="
+        + format(row.getScrapUnitPrice())
+        + ", outsource_fee_ignored="
+        + format(row.getOutsourceFee());
   }
 
   private BigDecimal scale(BigDecimal value) {
@@ -133,9 +142,7 @@ public class MakePartPriceCalculator {
 
   private String parentKey(MakePartPriceCalcRow row) {
     if (row.getSourceCostingRowId() != null) return "ROW:" + row.getSourceCostingRowId();
-    return StringUtils.hasText(row.getParentMaterialNo())
-        ? row.getParentMaterialNo().trim()
-        : "";
+    return StringUtils.hasText(row.getParentMaterialNo()) ? row.getParentMaterialNo().trim() : "";
   }
 
   private String appendRemark(String oldRemark, String newRemark) {
@@ -162,8 +169,10 @@ public class MakePartPriceCalculator {
     row.setSourceCostingRowId(source.getSourceCostingRowId());
     row.setRawSourcePriceRecordId(source.getRawSourcePriceRecordId());
     row.setRawSourcePriceBatchNo(source.getRawSourcePriceBatchNo());
+    row.setRawInputSnapshotJson(source.getRawInputSnapshotJson());
     row.setScrapSourcePriceRecordId(source.getScrapSourcePriceRecordId());
     row.setScrapSourcePriceBatchNo(source.getScrapSourcePriceBatchNo());
+    row.setScrapInputSnapshotJson(source.getScrapInputSnapshotJson());
     row.setOaNo(source.getOaNo());
     row.setBusinessUnitType(source.getBusinessUnitType());
     row.setPricingMonth(source.getPricingMonth());

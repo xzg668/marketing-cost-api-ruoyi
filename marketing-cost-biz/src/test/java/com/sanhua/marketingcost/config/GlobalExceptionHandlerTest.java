@@ -76,4 +76,12 @@ class GlobalExceptionHandlerTest {
         assertNull(handler.handleDisabled(new DisabledException("")).getData());
         assertNull(handler.handleAccessDenied(new AccessDeniedException("")).getData());
     }
+
+    @Test
+    void missingEffectiveTechnicalInputPreservesBusinessReason() {
+        var response = handler.handleTechnicalData(new com.sanhua.marketingcost.service.EffectiveTechnicalDataException(
+                "NET_LOSS_SOURCE_MISSING", 180L, "2026-10", java.util.List.of("NET_LOSS"), "该裸品暂无本年度净损失率"));
+        assertEquals(400, response.getCode());
+        assertEquals("NET_LOSS_SOURCE_MISSING: 该裸品暂无本年度净损失率", response.getMsg());
+    }
 }

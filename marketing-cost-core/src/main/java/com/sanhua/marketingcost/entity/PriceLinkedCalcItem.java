@@ -11,11 +11,50 @@ import java.time.LocalDateTime;
 
 @TableName("lp_price_linked_calc_item")
 public class PriceLinkedCalcItem {
+  /** PRC-01：原稿/财务版本契约；旧数据的未知来源保持为空。 */
+  private String inputSnapshotJson;
+
+  private String priceOrgCode = "";
+
+  public String getPriceOrgCode() {
+    return priceOrgCode;
+  }
+
+  public void setPriceOrgCode(String value) {
+    priceOrgCode = value == null ? "" : value.trim();
+  }
+
+  private String calculatorVersion;
+
+  public String getInputSnapshotJson() {
+    return inputSnapshotJson;
+  }
+
+  public void setInputSnapshotJson(String value) {
+    inputSnapshotJson = value;
+  }
+
+  public String getCalculatorVersion() {
+    return calculatorVersion;
+  }
+
+  public void setCalculatorVersion(String value) {
+    calculatorVersion = value;
+  }
+
   @TableId(type = IdType.AUTO)
   private Long id;
+
   private String sourceKind = "PUBLIC";
-  public String getSourceKind() { return sourceKind; }
-  public void setSourceKind(String value) { sourceKind = value; }
+
+  public String getSourceKind() {
+    return sourceKind;
+  }
+
+  public void setSourceKind(String value) {
+    sourceKind = value;
+  }
+
   private String oaNo;
   private String itemCode;
   private String shapeAttr;
@@ -34,7 +73,6 @@ public class PriceLinkedCalcItem {
   private String pricingMonth;
 
   /** LPE-02：兼容旧月度调价影响因素批次上下文；按全价格源重算时为空。 */
-  private Long adjustBatchId;
 
   /** LPE-02：变量来源，QUOTE 默认为 OA_LOCKED，月度调价默认为 MONTHLY_FACTOR。 */
   private String factorSource;
@@ -53,6 +91,7 @@ public class PriceLinkedCalcItem {
 
   /** 本次公式计算实际使用的联动价主数据行。 */
   private Long sourcePriceRecordId;
+
   private String sourcePriceBatchNo;
   private String supplierName;
   private String supplierCode;
@@ -73,6 +112,17 @@ public class PriceLinkedCalcItem {
 
   @TableField(fill = FieldFill.INSERT_UPDATE)
   private LocalDateTime updatedAt;
+
+  /** 乐观写入版本；缺价和旧公式结果也需要防止旧任务覆盖。 */
+  private Long resultRevision = 0L;
+
+  public Long getResultRevision() {
+    return resultRevision;
+  }
+
+  public void setResultRevision(Long resultRevision) {
+    this.resultRevision = resultRevision;
+  }
 
   public String getBusinessUnitType() {
     return businessUnitType;
@@ -96,14 +146,6 @@ public class PriceLinkedCalcItem {
 
   public void setPricingMonth(String pricingMonth) {
     this.pricingMonth = pricingMonth;
-  }
-
-  public Long getAdjustBatchId() {
-    return adjustBatchId;
-  }
-
-  public void setAdjustBatchId(Long adjustBatchId) {
-    this.adjustBatchId = adjustBatchId;
   }
 
   public String getFactorSource() {

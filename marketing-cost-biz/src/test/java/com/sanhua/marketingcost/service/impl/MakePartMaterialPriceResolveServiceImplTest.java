@@ -28,9 +28,7 @@ import com.sanhua.marketingcost.service.SupplierSupplyRatioResolveService;
 import com.sanhua.marketingcost.service.pricing.FixedPriceResolver;
 import com.sanhua.marketingcost.service.pricing.LinkedPriceResolver;
 import com.sanhua.marketingcost.service.pricing.PriceResolver;
-import com.sanhua.marketingcost.service.pricing.RangePriceResolver;
 import com.sanhua.marketingcost.service.pricing.RangePriceResolverTestSupport;
-import com.sanhua.marketingcost.service.pricing.SupplierPreferredPriceSelector;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -67,26 +65,77 @@ class MakePartMaterialPriceResolveServiceImplTest {
     rangeMapper = mock(PriceRangeItemMapper.class);
     ratioService = mock(SupplierSupplyRatioResolveService.class);
     linkedPriceEnsureService = mock(LinkedPriceEnsureService.class);
-    List<PriceResolver> resolvers = List.of(
-        new FixedPriceResolver(fixedMapper, new com.sanhua.marketingcost.service.pricing.SupplierPriceSelectionService(mock(com.sanhua.marketingcost.mapper.SupplierSupplyRatioMapper.class), mock(com.sanhua.marketingcost.mapper.SupplierPriceDecisionMapper.class)), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class)),
-        new LinkedPriceResolver(linkedMapper, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class)),
-        RangePriceResolverTestSupport.create(rangeMapper));
+    List<PriceResolver> resolvers =
+        List.of(
+            new FixedPriceResolver(
+                fixedMapper,
+                new com.sanhua.marketingcost.service.pricing.SupplierPriceSelectionService(
+                    mock(com.sanhua.marketingcost.mapper.SupplierSupplyRatioMapper.class),
+                    mock(com.sanhua.marketingcost.mapper.SupplierPriceDecisionMapper.class)),
+                org.mockito.Mockito.mock(
+                    com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class)),
+            new LinkedPriceResolver(
+                linkedMapper,
+                org.mockito.Mockito.mock(
+                    com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class)),
+            RangePriceResolverTestSupport.create(rangeMapper));
     service =
         new MakePartMaterialPriceResolveServiceImpl(
             routerService, resolvers, linkedPriceEnsureService);
   }
 
   @Test
+  void failedLinkedFormulaCannotReadCachedResultOrFallThroughToRange() {
+    when(routerService.prepareCandidates("RAW-FAIL", null, "2026-05", LocalDate.parse("2026-05-20"), "210", "COMMERCIAL"))
+        .thenReturn(
+            List.of(
+                route("RAW-FAIL", PriceTypeEnum.LINKED, "联动价"),
+                route("RAW-FAIL", PriceTypeEnum.RANGE, "区间价")));
+    var failure = new com.sanhua.marketingcost.dto.LinkedPriceEnsureResult();
+    failure.addFailedItem("RAW-FAIL", "LINKED_RULE_ERROR", "变量Zn缺失");
+    when(linkedPriceEnsureService.ensure(any())).thenReturn(failure);
+    var result =
+        service.resolveMaterialUnitPrice(
+            "RAW-FAIL", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"));
+    assertThat(result.getUnitPrice()).isNull();
+    assertThat(result.getStatus()).isEqualTo("ERROR");
+    verifyNoInteractions(linkedMapper, rangeMapper);
+  }
+
+  @Test
+  void missingCurrentLinkedRuleSkipsCachedPriceAndUsesNextApplicableSource() {
+    when(routerService.prepareCandidates("RAW-001", null, "2026-05", LocalDate.parse("2026-05-20"), "210", "COMMERCIAL"))
+        .thenReturn(List.of(route("RAW-001", PriceTypeEnum.LINKED, "联动价"),
+            route("RAW-001", PriceTypeEnum.FIXED, "固定价")));
+    var missing = new com.sanhua.marketingcost.dto.LinkedPriceEnsureResult();
+    missing.addFailedItem("RAW-001", "MATERIAL_MONTH_PRICE_MISSING", "本月无原稿规则");
+    when(linkedPriceEnsureService.ensure(any())).thenReturn(missing);
+    when(fixedMapper.selectList(any(Wrapper.class))).thenReturn(List.of(fixedRow("RAW-001", "82.950000")));
+    var result = service.resolveMaterialUnitPrice("RAW-001", "2026-05", LocalDate.parse("2026-05-20"),
+        null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"));
+    assertThat(result.getStatus()).isEqualTo("OK");
+    assertThat(result.getUnitPrice()).isEqualByComparingTo("82.950000");
+    verifyNoInteractions(linkedMapper);
+  }
+
+  @Test
   @DisplayName("固定价路由：child_material_no 通过 lp_material_price_type 路由后取价成功")
   void resolvesFixedPriceForChildMaterial() {
-    when(routerService.listCandidates("RAW-001", "2026-05", LocalDate.parse("2026-05-20")))
+    when(routerService.prepareCandidates("RAW-001", null, "2026-05", LocalDate.parse("2026-05-20"), "210", "COMMERCIAL"))
         .thenReturn(List.of(route("RAW-001", PriceTypeEnum.FIXED, "固定价")));
     when(fixedMapper.selectList(any(Wrapper.class)))
         .thenReturn(List.of(fixedRow("RAW-001", "82.950000")));
 
     MakePartMaterialPriceResolveResult result =
         service.resolveMaterialUnitPrice(
-            " RAW-001 ", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", new com.sanhua.marketingcost.service.PricePrepareScenarioContext(null, null, null, null).forOrganization("210"));
+            " RAW-001 ",
+            "2026-05",
+            LocalDate.parse("2026-05-20"),
+            null,
+            "OA-001",
+            "COMMERCIAL",
+            new com.sanhua.marketingcost.service.PricePrepareScenarioContext(null, null, null, null)
+                .forOrganization("210"));
 
     assertThat(result.getStatus()).isEqualTo("OK");
     assertThat(result.getMaterialCode()).isEqualTo("RAW-001");
@@ -99,7 +148,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
   @Test
   @DisplayName("联动价路由：scrap_code 和原材料共用同一入口取价成功")
   void resolvesLinkedPriceForScrapCode() {
-    when(routerService.listCandidates("SCRAP-001", "2026-05", LocalDate.parse("2026-05-20")))
+    when(routerService.prepareCandidates("SCRAP-001", null, "2026-05", LocalDate.parse("2026-05-20"), "210", "COMMERCIAL"))
         .thenReturn(List.of(route("SCRAP-001", PriceTypeEnum.LINKED, "联动价")));
     PriceLinkedCalcItem calc = new PriceLinkedCalcItem();
     calc.setId(8L);
@@ -110,7 +159,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
 
     MakePartMaterialPriceResolveResult result =
         service.resolveMaterialUnitPrice(
-            "SCRAP-001", "2026-05", LocalDate.parse("2026-05-20"), "OA-001", "COMMERCIAL");
+            "SCRAP-001", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"));
 
     assertThat(result.getStatus()).isEqualTo("OK");
     assertThat(result.getPriceType()).isEqualTo("联动价");
@@ -126,34 +175,42 @@ class MakePartMaterialPriceResolveServiceImplTest {
   @Test
   @DisplayName("第四步自制件联动价直接使用内存计算结果，不 ensure 也不读取 calc_item")
   void calculatesLinkedPriceWithoutPersistenceOrCalcItemRead() {
-    when(routerService.listCandidates("SCRAP-001", "2026-05", LocalDate.parse("2026-05-20")))
+    when(routerService.listCandidates("SCRAP-001", "2026-05", LocalDate.parse("2026-05-20"), "210", "COMMERCIAL"))
         .thenReturn(List.of(route("SCRAP-001", PriceTypeEnum.LINKED, "联动价")));
     PriceLinkedCalcItem calculated = new PriceLinkedCalcItem();
     calculated.setItemCode("SCRAP-001");
     calculated.setPartUnitPrice(new BigDecimal("75.660000"));
     calculated.setCalcStatus("OK");
+    calculated.setInputSnapshotJson("{\"calculatorVersion\":\"ORIGINAL_V1\"}");
+    calculated.setSourcePriceRecordId(99L);
     when(linkedPriceEnsureService.calculate(any(LinkedPriceEnsureRequest.class)))
         .thenReturn(List.of(calculated));
 
-    MakePartMaterialPriceResolveResult result = service.calculateMaterialUnitPrice(
-        "SCRAP-001",
-        "2026-05",
-        LocalDate.parse("2026-05-20"),
-        LocalDate.parse("2026-05-20").atStartOfDay(),
-        "OA-001",
-        "COMMERCIAL",
-        null);
+    MakePartMaterialPriceResolveResult result =
+        service.calculateMaterialUnitPrice(
+            "SCRAP-001",
+            "2026-05",
+            LocalDate.parse("2026-05-20"),
+            LocalDate.parse("2026-05-20").atStartOfDay(),
+            "OA-001",
+            "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(18L, "210"));
 
     assertThat(result.getStatus()).isEqualTo("OK");
     assertThat(result.getUnitPrice()).isEqualByComparingTo("75.660000");
+    assertThat(result.getEvidence().inputSnapshotJson())
+        .isEqualTo(calculated.getInputSnapshotJson());
+    assertThat(result.getEvidence().sourcePriceRecordId()).isEqualTo(99L);
     verify(linkedPriceEnsureService, never()).ensure(any());
     verify(linkedMapper, never()).selectList(any());
+    var request = ArgumentCaptor.forClass(LinkedPriceEnsureRequest.class);
+    verify(linkedPriceEnsureService).calculate(request.capture());
+    assertThat(request.getValue().getSupplierPriceReviewContext().oaFormItemId()).isEqualTo(18L);
   }
 
   @Test
   @DisplayName("区间价路由：默认按数量 1 命中 lp_price_range_item")
   void resolvesRangePrice() {
-    when(routerService.listCandidates("RANGE-001", "2026-05", LocalDate.parse("2026-05-20")))
+    when(routerService.prepareCandidates("RANGE-001", null, "2026-05", LocalDate.parse("2026-05-20"), "210", "COMMERCIAL"))
         .thenReturn(List.of(route("RANGE-001", PriceTypeEnum.RANGE, "区间价")));
     PriceRangeItem row = new PriceRangeItem();
     row.setId(10L);
@@ -165,7 +222,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
 
     MakePartMaterialPriceResolveResult result =
         service.resolveMaterialUnitPrice(
-            "RANGE-001", "2026-05", LocalDate.parse("2026-05-20"), "OA-001", "COMMERCIAL");
+            "RANGE-001", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"));
 
     assertThat(result.getStatus()).isEqualTo("OK");
     assertThat(result.getPriceType()).isEqualTo("区间价");
@@ -174,30 +231,37 @@ class MakePartMaterialPriceResolveServiceImplTest {
   }
 
   @Test
-  @DisplayName("缺价格类型路由：返回 MISSING_ROUTE")
+  @DisplayName("无可用价源路由：返回 MISSING_PRICE")
   void missingRoute() {
-    when(routerService.listCandidates("NO-ROUTE", "2026-05", LocalDate.parse("2026-05-20")))
+    when(routerService.prepareCandidates("NO-ROUTE", null, "2026-05", LocalDate.parse("2026-05-20"), "210", "COMMERCIAL"))
         .thenReturn(List.of());
 
     MakePartMaterialPriceResolveResult result =
         service.resolveMaterialUnitPrice(
-            "NO-ROUTE", "2026-05", LocalDate.parse("2026-05-20"), "OA-001", "COMMERCIAL");
+            "NO-ROUTE", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"));
 
-    assertThat(result.getStatus()).isEqualTo("MISSING_ROUTE");
+    assertThat(result.getStatus()).isEqualTo("MISSING_PRICE");
     assertThat(result.getUnitPrice()).isNull();
-    assertThat(result.getRemark()).contains("缺价格类型路由", "NO-ROUTE");
+    assertThat(result.getRemark()).contains("没有可用价格来源", "NO-ROUTE");
   }
 
   @Test
   @DisplayName("有路由但价格表无有效价：返回 MISSING_PRICE")
   void routeExistsButPriceMissing() {
-    when(routerService.listCandidates("MISS-PRICE", "2026-05", LocalDate.parse("2026-05-20")))
+    when(routerService.prepareCandidates("MISS-PRICE", null, "2026-05", LocalDate.parse("2026-05-20"), "210", "COMMERCIAL"))
         .thenReturn(List.of(route("MISS-PRICE", PriceTypeEnum.FIXED, "固定价")));
     when(fixedMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
     MakePartMaterialPriceResolveResult result =
         service.resolveMaterialUnitPrice(
-            "MISS-PRICE", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", new com.sanhua.marketingcost.service.PricePrepareScenarioContext(null, null, null, null).forOrganization("210"));
+            "MISS-PRICE",
+            "2026-05",
+            LocalDate.parse("2026-05-20"),
+            null,
+            "OA-001",
+            "COMMERCIAL",
+            new com.sanhua.marketingcost.service.PricePrepareScenarioContext(null, null, null, null)
+                .forOrganization("210"));
 
     assertThat(result.getStatus()).isEqualTo("MISSING_PRICE");
     assertThat(result.getUnitPrice()).isNull();
@@ -207,12 +271,12 @@ class MakePartMaterialPriceResolveServiceImplTest {
   @Test
   @DisplayName("命中自制件价格类型：第一版不递归制造件取价")
   void makeRouteIsBlockedToAvoidRecursion() {
-    when(routerService.listCandidates("MAKE-RAW", "2026-05", LocalDate.parse("2026-05-20")))
+    when(routerService.prepareCandidates("MAKE-RAW", null, "2026-05", LocalDate.parse("2026-05-20"), "210", "COMMERCIAL"))
         .thenReturn(List.of(route("MAKE-RAW", PriceTypeEnum.MAKE, "自制件")));
 
     MakePartMaterialPriceResolveResult result =
         service.resolveMaterialUnitPrice(
-            "MAKE-RAW", "2026-05", LocalDate.parse("2026-05-20"), "OA-001", "COMMERCIAL");
+            "MAKE-RAW", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"));
 
     assertThat(result.getStatus()).isEqualTo("UNSUPPORTED_MAKE");
     assertThat(result.getUnitPrice()).isNull();

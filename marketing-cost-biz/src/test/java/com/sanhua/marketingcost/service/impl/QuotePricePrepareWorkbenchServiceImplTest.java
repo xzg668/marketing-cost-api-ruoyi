@@ -7,15 +7,16 @@ import static org.mockito.Mockito.when;
 
 import com.sanhua.marketingcost.dto.financequote.FinancePricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBatchPageResponse;
-import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareCalculationResult;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGapPageResponse;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGapQueryRequest;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareItemPageResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareItemQueryRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionSummary;
-import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
@@ -26,12 +27,12 @@ import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
-import com.sanhua.marketingcost.service.PricePrepareQueryService;
 import com.sanhua.marketingcost.service.FinancePricePrepareService;
-import com.sanhua.marketingcost.service.FinanceQuoteBasePriceService;
+import com.sanhua.marketingcost.service.PricePrepareQueryService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
 import com.sanhua.marketingcost.service.PricePrepareService;
 import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
+import com.sanhua.marketingcost.service.financefactor.QuoteFinanceFactorReader;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.YearMonth;
@@ -53,10 +54,11 @@ class QuotePricePrepareWorkbenchServiceImplTest {
   private QuotePriceTypeRecognitionService priceTypeRecognitionService;
   private PricePrepareService pricePrepareService;
   private FinancePricePrepareService financePricePrepareService;
-  private FinanceQuoteBasePriceService financeQuoteBasePriceService;
+  private QuoteFinanceFactorReader financeQuoteBasePriceService;
   private PricePrepareQueryService pricePrepareQueryService;
   private PricePrepareReadinessService pricePrepareReadinessService;
   private QuotePricePrepareWorkbenchServiceImpl service;
+  private PricePrepareInputRevisionService inputRevisions;
 
   @BeforeEach
   void setUp() {
@@ -66,9 +68,12 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     priceTypeRecognitionService = mock(QuotePriceTypeRecognitionService.class);
     pricePrepareService = mock(PricePrepareService.class);
     financePricePrepareService = mock(FinancePricePrepareService.class);
-    financeQuoteBasePriceService = mock(FinanceQuoteBasePriceService.class);
+    financeQuoteBasePriceService = mock(QuoteFinanceFactorReader.class);
+    when(financeQuoteBasePriceService.read(any(), any(), any(), any()))
+        .thenThrow(new IllegalArgumentException("未发布财务基价"));
     pricePrepareQueryService = mock(PricePrepareQueryService.class);
     pricePrepareReadinessService = mock(PricePrepareReadinessService.class);
+    inputRevisions = mock(PricePrepareInputRevisionService.class);
     service =
         new QuotePricePrepareWorkbenchServiceImpl(
             oaFormMapper,
@@ -79,7 +84,11 @@ class QuotePricePrepareWorkbenchServiceImplTest {
             financePricePrepareService,
             financeQuoteBasePriceService,
             pricePrepareQueryService,
-            pricePrepareReadinessService,mock(com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService.class));
+            pricePrepareReadinessService,
+            mock(
+                com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService
+                    .class),
+            inputRevisions);
   }
 
   @Test
@@ -105,13 +114,15 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     generated.setPeriodMonth(CURRENT_MONTH);
     generated.setScenarioType("FINANCE_QUOTE_BASE");
     when(financePricePrepareService.generateFromOa("PPR-OA-WORKBENCH"))
-        .thenReturn(new FinancePricePrepareGenerateResult(
-            "PPR-OA-WORKBENCH",
-            "PPR-FIN-WORKBENCH",
-            "SCG-WORKBENCH",
-            1L,
-            new java.math.BigDecimal("90"),
-            generated));
+        .thenReturn(
+            new FinancePricePrepareGenerateResult(
+                "PPR-OA-WORKBENCH",
+                "PPR-FIN-WORKBENCH",
+                "SCG-WORKBENCH",
+                1L,
+                new java.math.BigDecimal("90"),
+                generated,
+                null));
 
     QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
     request.setPeriodMonth(CURRENT_MONTH);
@@ -129,19 +140,21 @@ class QuotePricePrepareWorkbenchServiceImplTest {
   @DisplayName("最终价格生成一次完成OA锁价和财务基准两份快照")
   void oaGenerateAlsoCreatesFinanceComparison() {
     prepareConfirmedScope();
-    PricePrepareGenerateResult oaGenerated = generated(
-        "PPR-OA-WORKBENCH", QuotePriceScenarioType.OA_LOCKED.name());
-    PricePrepareGenerateResult financeGenerated = generated(
-        "PPR-FIN-WORKBENCH", QuotePriceScenarioType.FINANCE_QUOTE_BASE.name());
+    PricePrepareGenerateResult oaGenerated =
+        generated("PPR-OA-WORKBENCH", QuotePriceScenarioType.OA_LOCKED.name());
+    PricePrepareGenerateResult financeGenerated =
+        generated("PPR-FIN-WORKBENCH", QuotePriceScenarioType.FINANCE_QUOTE_BASE.name());
     when(pricePrepareService.generate(any())).thenReturn(oaGenerated);
     when(financePricePrepareService.generateFromOa("PPR-OA-WORKBENCH"))
-        .thenReturn(new FinancePricePrepareGenerateResult(
-            "PPR-OA-WORKBENCH",
-            "PPR-FIN-WORKBENCH",
-            "SCG-WORKBENCH",
-            1L,
-            new java.math.BigDecimal("90"),
-            financeGenerated));
+        .thenReturn(
+            new FinancePricePrepareGenerateResult(
+                "PPR-OA-WORKBENCH",
+                "PPR-FIN-WORKBENCH",
+                "SCG-WORKBENCH",
+                1L,
+                new java.math.BigDecimal("90"),
+                financeGenerated,
+                null));
 
     QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
     request.setPeriodMonth(CURRENT_MONTH);
@@ -162,8 +175,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
   void sourceCheckUsesTemporaryOaPreviewOnly() {
     prepareConfirmedScope();
     PricePrepareCalculationResult calculation = new PricePrepareCalculationResult();
-    calculation.setSummary(
-        generated("PPR-OA-WORKBENCH", QuotePriceScenarioType.OA_LOCKED.name()));
+    calculation.setSummary(generated("PPR-OA-WORKBENCH", QuotePriceScenarioType.OA_LOCKED.name()));
     calculation.setItems(List.of());
     calculation.setGaps(List.of());
     when(pricePrepareService.calculate(any())).thenReturn(calculation);
@@ -213,6 +225,8 @@ class QuotePricePrepareWorkbenchServiceImplTest {
   @DisplayName("价格源预检查为内存缺口补齐当前路由价格类型")
   void sourceCheckEnrichesPreviewGapPriceType() {
     prepareConfirmedScope();
+    when(priceTypeRecognitionService.getRecognition(any(), any(), any()))
+        .thenReturn(automaticTypeState(1));
     PricePrepareGap gap = new PricePrepareGap();
     gap.setMaterialCode("MAT-FIXED");
     gap.setGapMaterialCode("MAT-FIXED");
@@ -226,11 +240,14 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     calculation.setItems(List.of());
     calculation.setGaps(List.of(gap));
     when(pricePrepareService.calculate(any())).thenReturn(calculation);
-    org.mockito.Mockito.doAnswer(invocation -> {
-      List<PricePrepareGap> gaps = invocation.getArgument(0);
-      gaps.getFirst().setPriceType("固定价");
-      return null;
-    }).when(pricePrepareQueryService).enrichGaps(any());
+    org.mockito.Mockito.doAnswer(
+            invocation -> {
+              List<PricePrepareGap> gaps = invocation.getArgument(0);
+              gaps.getFirst().setPriceType("固定价");
+              return null;
+            })
+        .when(pricePrepareQueryService)
+        .enrichGaps(any());
     QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
     request.setPeriodMonth(CURRENT_MONTH);
 
@@ -241,6 +258,57 @@ class QuotePricePrepareWorkbenchServiceImplTest {
         .singleElement()
         .extracting(PricePrepareGap::getPriceType)
         .isEqualTo("固定价");
+  }
+
+  @Test
+  @DisplayName("工作台缺口超过单页时仍返回完整清单供分类统计")
+  void workbenchLoadsAllCurrentGapPages() {
+    prepareConfirmedScope();
+    List<PricePrepareGap> firstPage = java.util.stream.IntStream.range(0, 500)
+        .mapToObj(index -> {
+          PricePrepareGap gap = new PricePrepareGap();
+          gap.setId((long) index + 1);
+          return gap;
+        }).toList();
+    PricePrepareGap lastGap = new PricePrepareGap();
+    lastGap.setId(501L);
+    when(pricePrepareQueryService.pageGaps(any())).thenAnswer(invocation -> {
+      PricePrepareGapQueryRequest query = invocation.getArgument(0);
+      return new PricePrepareGapPageResponse(501,
+          query.getPage() == 1 ? firstPage : List.of(lastGap));
+    });
+
+    var response = service.getPricePrepare("OA-WORKBENCH", 101L, CURRENT_MONTH);
+
+    org.assertj.core.api.Assertions.assertThat(response.getGaps().getTotal()).isEqualTo(501);
+    org.assertj.core.api.Assertions.assertThat(response.getGaps().getRecords())
+        .hasSize(501).last().extracting(PricePrepareGap::getId).isEqualTo(501L);
+  }
+
+  @Test
+  void blockedPricesKeepLatestSupplierReviewWithoutDisplayingOldSuccessfulPrices() {
+    prepareConfirmedScope();
+    var oldBatch = batch("PPR-OLD", QuotePriceScenarioType.OA_LOCKED.name(), null);
+    var current = batch("PPR-REVIEW", QuotePriceScenarioType.OA_LOCKED.name(), null);
+    current.setStatus("PARTIAL");
+    current.setGapCount(1);
+    var review = new com.sanhua.marketingcost.service.pricing.SupplierPriceReview(
+        "scope", "current-candidates", null, List.of(), "PENDING", null, null, "待确认");
+    current.setSupplierPriceReviews(List.of(review));
+    when(pricePrepareQueryService.pageBatches(any()))
+        .thenReturn(new PricePrepareBatchPageResponse(2, List.of(current, oldBatch)));
+    when(pricePrepareReadinessService.check(any(), any(), any(), any()))
+        .thenReturn(PricePrepareReadinessResult.notReady(
+            "PARTIAL", false, true, "供货比率待确认", null, CURRENT_MONTH, "PARTIAL", 1, List.of()));
+
+    var response = service.getPricePrepare("OA-WORKBENCH", 101L, CURRENT_MONTH);
+
+    org.assertj.core.api.Assertions.assertThat(response.getSupplierPriceReviews()).containsExactly(review);
+    org.assertj.core.api.Assertions.assertThat(response.getOaScenario().getBatch()).isNull();
+    org.assertj.core.api.Assertions.assertThat(response.getFinanceScenario().getBatch()).isNull();
+    org.assertj.core.api.Assertions.assertThat(response.getItems().getRecords()).isEmpty();
+    verify(pricePrepareService, org.mockito.Mockito.never()).calculate(any());
+    verify(pricePrepareService, org.mockito.Mockito.never()).generate(any());
   }
 
   @Test
@@ -257,11 +325,13 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     when(pricePrepareQueryService.pageBatches(any()))
         .thenReturn(new PricePrepareBatchPageResponse(2, List.of(financeBatch, oaBatch)));
     when(pricePrepareReadinessService.check(any(), any(), any(), any()))
-        .thenReturn(PricePrepareReadinessResult.ready(
-            "PPR-OA-WORKBENCH", CURRENT_MONTH, "SUCCESS"));
+        .thenReturn(
+            PricePrepareReadinessResult.ready("PPR-OA-WORKBENCH", CURRENT_MONTH, "SUCCESS"));
+    preparedFinanceCopper("90", 9L, null);
     QuotePricePrepareGenerateRequest request = new QuotePricePrepareGenerateRequest();
     request.setPeriodMonth(CURRENT_MONTH);
 
+    when(inputRevisions.isCurrent(any(), any(), any(), any())).thenReturn(true);
     var response = service.checkPriceSources("OA-WORKBENCH", 101L, request);
 
     org.assertj.core.api.Assertions.assertThat(response.getOaScenario().getBatch().getPrepareNo())
@@ -272,6 +342,60 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     verify(pricePrepareService, org.mockito.Mockito.never()).generate(any());
     verify(pricePrepareService, org.mockito.Mockito.never()).calculate(any());
     verify(financePricePrepareService, org.mockito.Mockito.never()).generateFromOa(any());
+  }
+
+  @Test
+  void explicitSourceRecheckDoesNotPresentOldFinalPricesAsTheNewCalculation() {
+    prepareConfirmedScope();
+    var oa = batch("PPR-OA-WORKBENCH", "OA_LOCKED", null);
+    var finance = batch("PPR-FIN-WORKBENCH", "FINANCE_QUOTE_BASE", oa.getPrepareNo());
+    when(pricePrepareQueryService.pageBatches(any()))
+        .thenReturn(new PricePrepareBatchPageResponse(2, List.of(finance, oa)));
+    when(pricePrepareReadinessService.check(any(), any(), any(), any()))
+        .thenReturn(PricePrepareReadinessResult.ready(oa.getPrepareNo(), CURRENT_MONTH, "SUCCESS"));
+    preparedFinanceCopper("90", 9L, null);
+    var calculated = new PricePrepareCalculationResult();
+    calculated.setSummary(generated("PREVIEW", "OA_LOCKED"));
+    calculated.setItems(List.of(item("PREVIEW", "2", "2")));
+    calculated.setGaps(List.of());
+    when(pricePrepareService.calculate(any())).thenReturn(calculated);
+    var request = new QuotePricePrepareGenerateRequest();
+    request.setPeriodMonth(CURRENT_MONTH);
+    request.setRefreshCandidates(true);
+    var response = service.checkPriceSources("OA-WORKBENCH", 101L, request);
+    org.assertj.core.api.Assertions.assertThat(
+            response.getItems().getRecords().getFirst().getUnitPrice())
+        .isEqualByComparingTo("2");
+    org.assertj.core.api.Assertions.assertThat(response.getOaScenario().getBatch()).isNull();
+    org.assertj.core.api.Assertions.assertThat(response.getFinanceScenario().getBatch()).isNull();
+    org.assertj.core.api.Assertions.assertThat(response.getDifferences()).isEmpty();
+  }
+
+  @Test
+  void changedInputsRecheckWithoutAForceFlagInsteadOfReturningOldPrices() {
+    prepareConfirmedScope();
+    var oa = batch("PPR-OA-WORKBENCH", "OA_LOCKED", null);
+    var finance = batch("PPR-FIN-WORKBENCH", "FINANCE_QUOTE_BASE", oa.getPrepareNo());
+    when(pricePrepareQueryService.pageBatches(any()))
+        .thenReturn(new PricePrepareBatchPageResponse(2, List.of(finance, oa)));
+    when(pricePrepareReadinessService.check(any(), any(), any(), any()))
+        .thenReturn(PricePrepareReadinessResult.ready(oa.getPrepareNo(), CURRENT_MONTH, "SUCCESS"));
+    preparedFinanceCopper("90", 9L, null);
+    var calculated = new PricePrepareCalculationResult();
+    calculated.setSummary(generated("PREVIEW", "OA_LOCKED"));
+    calculated.setItems(List.of(item("PREVIEW", "2", "2")));
+    calculated.setGaps(List.of());
+    when(pricePrepareService.calculate(any())).thenReturn(calculated);
+    var request = new QuotePricePrepareGenerateRequest();
+    request.setPeriodMonth(CURRENT_MONTH);
+    when(inputRevisions.isCurrent(any(), any(), any(), any())).thenReturn(false);
+    var response = service.checkPriceSources("OA-WORKBENCH", 101L, request);
+    org.assertj.core.api.Assertions.assertThat(
+            response.getItems().getRecords().getFirst().getUnitPrice())
+        .isEqualByComparingTo("2");
+    org.assertj.core.api.Assertions.assertThat(response.getOaScenario().getBatch()).isNull();
+    org.assertj.core.api.Assertions.assertThat(response.getFinanceScenario().getBatch()).isNull();
+    org.assertj.core.api.Assertions.assertThat(response.getDifferences()).isEmpty();
   }
 
   @Test
@@ -294,50 +418,123 @@ class QuotePricePrepareWorkbenchServiceImplTest {
   @DisplayName("工作台按最新OA批次配对财务批次并返回逐料差异")
   void queryReturnsPairedScenarioDifference() {
     prepareConfirmedScope();
-    PricePrepareBatch checkOnlyBatch = batch(
-        "PPR-OA-CHECK-ONLY", QuotePriceScenarioType.OA_LOCKED.name(), null);
-    PricePrepareBatch oaBatch = batch(
-        "PPR-OA-WORKBENCH", QuotePriceScenarioType.OA_LOCKED.name(), null);
-    PricePrepareBatch financeBatch = batch(
-        "PPR-FIN-WORKBENCH",
-        QuotePriceScenarioType.FINANCE_QUOTE_BASE.name(),
-        "PPR-OA-WORKBENCH");
+    PricePrepareBatch checkOnlyBatch =
+        batch("PPR-OA-CHECK-ONLY", QuotePriceScenarioType.OA_LOCKED.name(), null);
+    PricePrepareBatch oaBatch =
+        batch("PPR-OA-WORKBENCH", QuotePriceScenarioType.OA_LOCKED.name(), null);
+    PricePrepareBatch financeBatch =
+        batch(
+            "PPR-FIN-WORKBENCH",
+            QuotePriceScenarioType.FINANCE_QUOTE_BASE.name(),
+            "PPR-OA-WORKBENCH");
     when(pricePrepareQueryService.pageBatches(any()))
         .thenReturn(
-            new PricePrepareBatchPageResponse(
-                3, List.of(checkOnlyBatch, financeBatch, oaBatch)));
+            new PricePrepareBatchPageResponse(3, List.of(checkOnlyBatch, financeBatch, oaBatch)));
     PricePrepareItem oaItem = item("PPR-OA-WORKBENCH", "102.039", "102.039");
     PricePrepareItem financeItem = item("PPR-FIN-WORKBENCH", "90", "90");
-    when(pricePrepareQueryService.pageItems(any())).thenAnswer(invocation -> {
-      PricePrepareItemQueryRequest query = invocation.getArgument(0);
-      if ("PPR-OA-WORKBENCH".equals(query.getPrepareNo())) {
-        return new PricePrepareItemPageResponse(1, List.of(oaItem));
-      }
-      if ("PPR-FIN-WORKBENCH".equals(query.getPrepareNo())) {
-        return new PricePrepareItemPageResponse(1, List.of(financeItem));
-      }
-      return new PricePrepareItemPageResponse(1, List.of(oaItem));
-    });
-    FinanceBasePrice financeBase = new FinanceBasePrice();
-    financeBase.setId(9L);
-    financeBase.setPrice(new BigDecimal("90"));
-    when(financeQuoteBasePriceService.getRequired(CURRENT_MONTH)).thenReturn(financeBase);
+    when(pricePrepareQueryService.pageItems(any()))
+        .thenAnswer(
+            invocation -> {
+              PricePrepareItemQueryRequest query = invocation.getArgument(0);
+              if ("PPR-OA-WORKBENCH".equals(query.getPrepareNo())) {
+                return new PricePrepareItemPageResponse(1, List.of(oaItem));
+              }
+              if ("PPR-FIN-WORKBENCH".equals(query.getPrepareNo())) {
+                return new PricePrepareItemPageResponse(1, List.of(financeItem));
+              }
+              return new PricePrepareItemPageResponse(1, List.of(oaItem));
+            });
+    preparedFinanceCopper("90", 9L, null);
 
     var response = service.getPricePrepare("OA-WORKBENCH", 101L, CURRENT_MONTH);
 
     org.assertj.core.api.Assertions.assertThat(response.getOaScenario().getBatch().getPrepareNo())
         .isEqualTo("PPR-OA-WORKBENCH");
     org.assertj.core.api.Assertions.assertThat(
-        response.getFinanceScenario().getBatch().getPrepareNo())
+            response.getFinanceScenario().getBatch().getPrepareNo())
         .isEqualTo("PPR-FIN-WORKBENCH");
     org.assertj.core.api.Assertions.assertThat(response.getDifferences()).hasSize(1);
     org.assertj.core.api.Assertions.assertThat(
-        response.getDifferences().getFirst().getUnitPriceDifference())
+            response.getDifferences().getFirst().getUnitPriceDifference())
         .isEqualByComparingTo("12.039");
-    org.assertj.core.api.Assertions.assertThat(response.getDifferenceSummary().getAmountDifference())
+    org.assertj.core.api.Assertions.assertThat(
+            response.getDifferenceSummary().getAmountDifference())
         .isEqualByComparingTo("12.039");
     org.assertj.core.api.Assertions.assertThat(response.getFinanceCuPricePerTon())
         .isEqualByComparingTo("90000");
+  }
+
+  @Test
+  void completedPricesDisplayTheirFinancialSnapshotInsteadOfLegacyCurrentCopper() {
+    prepareConfirmedScope();
+    PricePrepareBatch oa = batch("PPR-OA-WORKBENCH", "OA_LOCKED", null);
+    PricePrepareBatch finance = batch("PPR-FIN-WORKBENCH", "FINANCE_QUOTE_BASE", oa.getPrepareNo());
+    when(pricePrepareQueryService.pageBatches(any()))
+        .thenReturn(new PricePrepareBatchPageResponse(2, List.of(finance, oa)));
+    preparedFinanceCopper("95.123456789", null, 501L);
+
+    var response = service.getPricePrepare("OA-WORKBENCH", 101L, CURRENT_MONTH);
+
+    org.assertj.core.api.Assertions.assertThat(response.getFinanceCuPricePerKg())
+        .isEqualByComparingTo("95.123456789");
+    org.assertj.core.api.Assertions.assertThat(response.getFinanceCuPricePerTon())
+        .isEqualByComparingTo("95123.456789");
+    org.assertj.core.api.Assertions.assertThat(response.getFinanceBasePriceId()).isNull();
+    verify(financeQuoteBasePriceService, org.mockito.Mockito.never())
+        .read(any(), any(), any(), any());
+    when(financePricePrepareService.loadPreparedFromOa(oa.getPrepareNo()))
+        .thenThrow(new IllegalStateException("原稿财务计算快照损坏"));
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> service.getPricePrepare("OA-WORKBENCH", 101L, CURRENT_MONTH))
+        .hasMessage("原稿财务计算快照损坏");
+    verify(financeQuoteBasePriceService, org.mockito.Mockito.never())
+        .read(any(), any(), any(), any());
+  }
+
+  @Test
+  void currentMissingBandCannotDisplayAnOlderSuccessfulScenarioPair() {
+    prepareConfirmedScope();
+    var oa = batch("PPR-OA-WORKBENCH", "OA_LOCKED", null);
+    var finance = batch("PPR-FIN-WORKBENCH", "FINANCE_QUOTE_BASE", oa.getPrepareNo());
+    when(pricePrepareQueryService.pageBatches(any()))
+        .thenReturn(new PricePrepareBatchPageResponse(2, List.of(finance, oa)));
+    when(pricePrepareReadinessService.check(any(), any(), any(), any()))
+        .thenReturn(
+            com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult.notReady(
+                "PARTIAL",
+                false,
+                true,
+                "区间缺档",
+                null,
+                CURRENT_MONTH,
+                "PARTIAL",
+                1,
+                List.of("MAT-CU缺档")));
+    var response = service.getPricePrepare("OA-WORKBENCH", 101L, CURRENT_MONTH);
+    org.assertj.core.api.Assertions.assertThat(response.getReadiness().isBlocking()).isTrue();
+    org.assertj.core.api.Assertions.assertThat(response.getItems().getRecords()).isEmpty();
+    org.assertj.core.api.Assertions.assertThat(response.getOaScenario().getBatch()).isNull();
+    org.assertj.core.api.Assertions.assertThat(
+            response.getFinanceScenario().getItems().getRecords())
+        .isEmpty();
+    org.assertj.core.api.Assertions.assertThat(response.getDifferences()).isEmpty();
+    org.assertj.core.api.Assertions.assertThat(response.getBatches().getRecords())
+        .containsExactly(finance, oa);
+    verify(financePricePrepareService, org.mockito.Mockito.never()).loadPreparedFromOa(any());
+    verify(pricePrepareQueryService, org.mockito.Mockito.never()).pageItems(any());
+  }
+
+  private void preparedFinanceCopper(String price, Long legacyId, Long factorId) {
+    when(financePricePrepareService.loadPreparedFromOa("PPR-OA-WORKBENCH"))
+        .thenReturn(
+            new FinancePricePrepareGenerateResult(
+                "PPR-OA-WORKBENCH",
+                "PPR-FIN-WORKBENCH",
+                "SCG-WORKBENCH",
+                legacyId,
+                new BigDecimal(price),
+                generated("PPR-FIN-WORKBENCH", "FINANCE_QUOTE_BASE"),
+                factorId));
   }
 
   private void prepareConfirmedScope() {
@@ -369,8 +566,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
     return generated;
   }
 
-  private PricePrepareBatch batch(
-      String prepareNo, String scenarioType, String sourcePrepareNo) {
+  private PricePrepareBatch batch(String prepareNo, String scenarioType, String sourcePrepareNo) {
     PricePrepareBatch batch = new PricePrepareBatch();
     batch.setPrepareNo(prepareNo);
     batch.setScenarioType(scenarioType);
@@ -395,7 +591,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
 
   private QuotePriceTypeRecognitionResponse automaticTypeState(int missingCount) {
     QuotePriceTypeRecognitionSummary summary = new QuotePriceTypeRecognitionSummary();
-    summary.setMissingTypeCount(missingCount);
+    summary.setMissingSourceCount(missingCount);
     QuotePriceTypeRecognitionResponse response = new QuotePriceTypeRecognitionResponse();
     response.setSummary(summary);
     return response;

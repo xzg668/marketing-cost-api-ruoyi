@@ -7,6 +7,16 @@ import java.util.List;
 /** 实时成本计算前的价格准备就绪校验结果。 */
 public class PricePrepareReadinessResult {
 
+  private String sourceRevision;
+
+  public String getSourceRevision() {
+    return sourceRevision;
+  }
+
+  public void setSourceRevision(String value) {
+    sourceRevision = value;
+  }
+
   private String status;
   private boolean allowContinue;
   private boolean blocking;
@@ -58,11 +68,7 @@ public class PricePrepareReadinessResult {
   }
 
   public static PricePrepareReadinessResult readyWithWarnings(
-      String prepareNo,
-      String periodMonth,
-      String batchStatus,
-      int warningCount,
-      String message) {
+      String prepareNo, String periodMonth, String batchStatus, int warningCount, String message) {
     PricePrepareReadinessResult result = ready(prepareNo, periodMonth, batchStatus);
     result.setWarning(warningCount > 0);
     result.setWarningCount(warningCount);
@@ -155,7 +161,6 @@ public class PricePrepareReadinessResult {
   }
 
   public void setGapSummaries(List<String> gapSummaries) {
-    this.gapSummaries =
-        gapSummaries == null ? new ArrayList<>() : new ArrayList<>(gapSummaries);
+    this.gapSummaries = gapSummaries == null ? new ArrayList<>() : new ArrayList<>(gapSummaries);
   }
 }

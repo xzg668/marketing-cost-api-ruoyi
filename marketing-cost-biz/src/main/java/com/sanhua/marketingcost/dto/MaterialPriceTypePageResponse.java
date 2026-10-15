@@ -1,30 +1,11 @@
 package com.sanhua.marketingcost.dto;
 
-import com.sanhua.marketingcost.entity.MaterialPriceType;
+import com.sanhua.marketingcost.service.MaterialPricePriorityService.Configuration;
+import java.time.LocalDateTime;
 import java.util.List;
 
-public class MaterialPriceTypePageResponse {
-  private long total;
-  private List<MaterialPriceType> list;
-
-  public MaterialPriceTypePageResponse(long total, List<MaterialPriceType> list) {
-    this.total = total;
-    this.list = list;
-  }
-
-  public long getTotal() {
-    return total;
-  }
-
-  public void setTotal(long total) {
-    this.total = total;
-  }
-
-  public List<MaterialPriceType> getList() {
-    return list;
-  }
-
-  public void setList(List<MaterialPriceType> list) {
-    this.list = list;
-  }
+public record MaterialPriceTypePageResponse(long total, List<Row> list) {
+  public record Row(Long id, String materialName, Configuration configuration,
+      String latestPriceSource, String latestOaNo, LocalDateTime latestResolvedAt,
+      boolean currentPriorityApplied, Long priorityUpdatedBy, LocalDateTime priorityUpdatedAt) {}
 }

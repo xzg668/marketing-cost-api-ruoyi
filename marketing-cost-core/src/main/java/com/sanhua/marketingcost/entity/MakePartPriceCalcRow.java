@@ -28,8 +28,10 @@ public class MakePartPriceCalcRow {
   private Long sourceCostingRowId;
   private Long rawSourcePriceRecordId;
   private String rawSourcePriceBatchNo;
+  private String rawInputSnapshotJson;
   private Long scrapSourcePriceRecordId;
   private String scrapSourcePriceBatchNo;
+  private String scrapInputSnapshotJson;
   private String oaNo;
 
   @TableField(fill = FieldFill.INSERT)

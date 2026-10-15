@@ -254,7 +254,7 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     requireSame("财务价格准备", "来源批次", oaBatch.getPrepareNo(), financePrepare.sourcePrepareNo());
     requireText(financePrepare.financePrepareNo(), "financePricePrepareNo");
     requireText(financePrepare.scenarioGroupNo(), "scenarioGroupNo");
-    if (financePrepare.financeBasePriceId() == null
+    if ((financePrepare.financeBasePriceId() == null && financePrepare.financeFactorPriceId() == null)
         || financePrepare.financeCuPricePerKg() == null
         || financePrepare.financeCuPricePerKg().compareTo(BigDecimal.ZERO) <= 0) {
       throw new IllegalStateException("财务Cu基准结果不完整");
@@ -476,8 +476,9 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
         QuotePriceScenarioType.FINANCE_QUOTE_BASE,
         financePrepare.financePrepareNo(),
         money(financePrepare.financeCuPricePerKg()),
-        "FINANCE_QUOTE_BASE",
-        financePrepare.financeBasePriceId(),
+        financePrepare.financeFactorPriceId() == null ? "FINANCE_QUOTE_BASE" : "FINANCE_FACTOR",
+        financePrepare.financeFactorPriceId() == null
+            ? financePrepare.financeBasePriceId() : financePrepare.financeFactorPriceId(),
         financeMaterialCost,
         totalCost,
         inputHash);

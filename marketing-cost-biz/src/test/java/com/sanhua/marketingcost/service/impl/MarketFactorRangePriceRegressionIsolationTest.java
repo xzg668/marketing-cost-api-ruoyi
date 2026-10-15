@@ -82,8 +82,7 @@ class MarketFactorRangePriceRegressionIsolationTest {
     assertThat(result.unitPrice()).isEqualByComparingTo("6.000000");
     assertThat(result.remark()).contains("区间命中", "qty=6");
     verifyNoInteractions(oaFormMapper);
-    ArgumentCaptor<Wrapper<PriceRangeItem>> itemQuery =
-        ArgumentCaptor.forClass(Wrapper.class);
+    ArgumentCaptor<Wrapper<PriceRangeItem>> itemQuery = ArgumentCaptor.forClass(Wrapper.class);
     verify(itemMapper).selectList(itemQuery.capture());
     assertThat(itemQuery.getValue().getCustomSqlSegment())
         .contains("material_code", "range_basis", "IS NULL", "effective_from")
@@ -116,18 +115,20 @@ class MarketFactorRangePriceRegressionIsolationTest {
 
     assertThat(result.unitPrice()).isNull();
     assertThat(result.remark()).contains("未命中当前区间", "value=98000");
-    ArgumentCaptor<Wrapper<PriceRangeItem>> itemQuery =
-        ArgumentCaptor.forClass(Wrapper.class);
+    ArgumentCaptor<Wrapper<PriceRangeItem>> itemQuery = ArgumentCaptor.forClass(Wrapper.class);
     verify(itemMapper, times(1)).selectList(itemQuery.capture());
     assertThat(itemQuery.getValue().getCustomSqlSegment())
         .contains("range_basis", "factor_rule_id", "effective_from")
         .doesNotContain("material_code", "current_flag", "effective_to");
-    assertThat(paramValues(itemQuery.getValue())).contains(101L, new BigDecimal("98000"));
+    assertThat(paramValues(itemQuery.getValue()))
+        .contains(101L)
+        .doesNotContain(new BigDecimal("98000"));
+    assertThat(result.failureCode()).isEqualTo("RANGE_BAND_MISSING");
   }
 
   @Test
   @DisplayName("行情规则查询按 business_unit_type 隔离，且只取 current_flag=1")
-  void factorRuleLookupIsIsolatedByBusinessUnitAndCurrentFlag() {
+  void factorRuleLookupIsIsolatedByBusinessUnitAndPublicationStatus() {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
     OaFormMapper oaFormMapper = mock(OaFormMapper.class);
@@ -154,10 +155,11 @@ class MarketFactorRangePriceRegressionIsolationTest {
         ArgumentCaptor.forClass(Wrapper.class);
     verify(ruleMapper).selectList(ruleQuery.capture());
     assertThat(ruleQuery.getValue().getCustomSqlSegment())
-        .contains("business_unit_type", "material_code", "current_flag", "ORDER BY");
-    assertThat(paramValues(ruleQuery.getValue())).contains("HOUSEHOLD", "MAT-ZN", 1);
-    ArgumentCaptor<Wrapper<PriceRangeItem>> itemQuery =
-        ArgumentCaptor.forClass(Wrapper.class);
+        .contains("business_unit_type", "material_code", "rule_status")
+        .doesNotContain("current_flag");
+    assertThat(paramValues(ruleQuery.getValue()))
+        .contains("HOUSEHOLD", "MAT-ZN", "LEGACY", "PUBLISHED");
+    ArgumentCaptor<Wrapper<PriceRangeItem>> itemQuery = ArgumentCaptor.forClass(Wrapper.class);
     verify(itemMapper).selectList(itemQuery.capture());
     assertThat(itemQuery.getValue().getCustomSqlSegment())
         .contains("range_basis", "factor_rule_id", "effective_from")
@@ -181,14 +183,20 @@ class MarketFactorRangePriceRegressionIsolationTest {
     PriceTypeRoute settleRoute = route("MAT-MIX", PriceTypeEnum.FIXED, "结算价");
     PriceTypeRoute linkedRoute = route("MAT-MIX", PriceTypeEnum.LINKED, "联动价");
     PriceTypeRoute rangeRoute = route("MAT-MIX", PriceTypeEnum.RANGE, "区间价");
-    when(routerService.listCandidates(eq("MAT-MIX"), eq("2026-05"), any(LocalDate.class)))
+    when(routerService.prepareCandidates(eq("MAT-MIX"), any(), eq("2026-05"), any(LocalDate.class), any(), any()))
         .thenReturn(List.of(settleRoute, linkedRoute, rangeRoute));
     when(linkedEnsureService.ensure(any())).thenReturn(new LinkedPriceEnsureResult());
-    when(fixedResolver.resolve(eq("OA-MIX"), any(CostRunPartItemDto.class), eq(settleRoute),
-        any(CostRunContext.class)))
+    when(fixedResolver.resolve(
+            eq("OA-MIX"),
+            any(CostRunPartItemDto.class),
+            eq(settleRoute),
+            any(CostRunContext.class)))
         .thenReturn(PriceResolveResult.miss("结算固定价无记录"));
-    when(linkedResolver.resolve(eq("OA-MIX"), any(CostRunPartItemDto.class), eq(linkedRoute),
-        any(CostRunContext.class)))
+    when(linkedResolver.resolve(
+            eq("OA-MIX"),
+            any(CostRunPartItemDto.class),
+            eq(linkedRoute),
+            any(CostRunContext.class)))
         .thenReturn(PriceResolveResult.hit(new BigDecimal("7.000000"), "联动价"));
     when(rangeResolver.resolve(any(), any(), any(), any()))
         .thenReturn(PriceResolveResult.hit(new BigDecimal("99.000000"), "区间价"));
@@ -202,10 +210,20 @@ class MarketFactorRangePriceRegressionIsolationTest {
     assertThat(result.getAmount()).isEqualByComparingTo("14.000000");
     assertThat(result.getResultRefType()).isEqualTo("LINKED_PRICE");
     InOrder order = inOrder(fixedResolver, linkedResolver);
-    order.verify(fixedResolver).resolve(eq("OA-MIX"), any(CostRunPartItemDto.class),
-        eq(settleRoute), any(CostRunContext.class));
-    order.verify(linkedResolver).resolve(eq("OA-MIX"), any(CostRunPartItemDto.class),
-        eq(linkedRoute), any(CostRunContext.class));
+    order
+        .verify(fixedResolver)
+        .resolve(
+            eq("OA-MIX"),
+            any(CostRunPartItemDto.class),
+            eq(settleRoute),
+            any(CostRunContext.class));
+    order
+        .verify(linkedResolver)
+        .resolve(
+            eq("OA-MIX"),
+            any(CostRunPartItemDto.class),
+            eq(linkedRoute),
+            any(CostRunContext.class));
     verify(rangeResolver, never()).resolve(any(), any(), any(), any());
   }
 
@@ -214,20 +232,22 @@ class MarketFactorRangePriceRegressionIsolationTest {
   void failedFactorImportDoesNotPolluteExistingVersions() {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper ruleMapper = mock(PriceRangeFactorRuleMapper.class);
-    PriceRangeItemServiceImpl service = new PriceRangeItemServiceImpl(
-        itemMapper,
-        ruleMapper,
-        mock(com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.class));
+    PriceRangeItemServiceImpl service =
+        new PriceRangeItemServiceImpl(
+            itemMapper,
+            org.mockito.Mockito.mock(
+                com.sanhua.marketingcost.mapper.PriceRangeFactorRuleMapper.class));
     PriceRangeFactorRule existingRule = factorRule(301L, "COMMERCIAL", "MAT-FAIL", "CU");
     PriceRangeItem existingItem = factorRange(901L, 301L, "80000", "90000", "0.390000");
-    PriceRangeItemImportRequest request = factorRequest(
-        "CU",
-        importRow("MAT-FAIL", "87501", "92500", "0.392035"),
-        importRow("MAT-FAIL", "92400", "97500", "0.412035"));
+    PriceRangeItemImportRequest request =
+        factorRequest(
+            "CU",
+            importRow("MAT-FAIL", "87501", "92500", "0.392035"),
+            importRow("MAT-FAIL", "92400", "97500", "0.412035"));
 
     assertThatThrownBy(() -> service.importItems(request))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("区间重叠");
+        .hasMessageContaining("完整原稿");
 
     assertThat(existingRule.getCurrentFlag()).isOne();
     assertThat(existingRule.getEffectiveTo()).isNull();
@@ -251,7 +271,8 @@ class MarketFactorRangePriceRegressionIsolationTest {
     return item;
   }
 
-  private static PriceTypeRoute route(String materialCode, PriceTypeEnum priceType, String rawPriceType) {
+  private static PriceTypeRoute route(
+      String materialCode, PriceTypeEnum priceType, String rawPriceType) {
     return new PriceTypeRoute(
         materialCode,
         MaterialFormAttrEnum.PURCHASED,
@@ -264,7 +285,7 @@ class MarketFactorRangePriceRegressionIsolationTest {
   }
 
   private static CostRunContext quoteContext(String businessUnitType) {
-    return CostRunContext.quote(
+    var context = CostRunContext.quote(
         "OA",
         1L,
         "P-001",
@@ -274,12 +295,13 @@ class MarketFactorRangePriceRegressionIsolationTest {
         "2026-05",
         LocalDateTime.of(2026, 5, 26, 10, 0),
         "OBJ-001");
+    context.setPriceOrgCode("210");
+    return context;
   }
 
   private static CostRunContext monthlyContext(String businessUnitType) {
-    return CostRunContext.monthlyReprice(
+    var context = CostRunContext.monthlyReprice(
         "2026-05",
-        88L,
         "MRP-001",
         businessUnitType,
         LocalDateTime.of(2026, 5, 26, 10, 0),
@@ -290,10 +312,14 @@ class MarketFactorRangePriceRegressionIsolationTest {
         null,
         null,
         "OBJ-001");
+    context.setPriceOrgCode("210");
+    return context;
   }
 
   private static PricePreparePlanItem planItem(String materialCode, String quantity) {
     BomCostingRow row = new BomCostingRow();
+    row.setPriceOrgCode("210");
+    row.setMaterialOrganizationCode("COMMERCIAL");
     row.setOaNo("OA-MIX");
     row.setTopProductCode("TOP-001");
     row.setMaterialCode(materialCode);
@@ -310,7 +336,8 @@ class MarketFactorRangePriceRegressionIsolationTest {
     return item;
   }
 
-  private static PriceRangeItem qtyRange(String materialCode, String low, String high, String price) {
+  private static PriceRangeItem qtyRange(
+      String materialCode, String low, String high, String price) {
     PriceRangeItem item = new PriceRangeItem();
     item.setId(801L);
     item.setMaterialCode(materialCode);
@@ -322,11 +349,7 @@ class MarketFactorRangePriceRegressionIsolationTest {
   }
 
   private static PriceRangeItem factorRange(
-      Long id,
-      Long ruleId,
-      String low,
-      String high,
-      String price) {
+      Long id, Long ruleId, String low, String high, String price) {
     PriceRangeItem item = new PriceRangeItem();
     item.setId(id);
     item.setRangeBasis("FACTOR");
@@ -341,10 +364,7 @@ class MarketFactorRangePriceRegressionIsolationTest {
   }
 
   private static PriceRangeFactorRule factorRule(
-      Long id,
-      String businessUnitType,
-      String materialCode,
-      String factorCode) {
+      Long id, String businessUnitType, String materialCode, String factorCode) {
     PriceRangeFactorRule rule = new PriceRangeFactorRule();
     rule.setId(id);
     rule.setBusinessUnitType(businessUnitType);
@@ -357,27 +377,16 @@ class MarketFactorRangePriceRegressionIsolationTest {
   }
 
   private static PriceRangeItemImportRequest factorRequest(
-      String factorCode,
-      PriceRangeItemImportRequest.PriceRangeItemImportRow... rows) {
+      String factorCode, PriceRangeItemImportRequest.PriceRangeItemImportRow... rows) {
     PriceRangeItemImportRequest request = new PriceRangeItemImportRequest();
     request.setBusinessUnitType("COMMERCIAL");
     request.setRangeBasis("FACTOR");
-    request.setFactorCode(factorCode);
-    request.setFactorName("电解铜");
-    request.setFactorUnit("元/吨");
-    request.setPriceUnit("元/米");
-    request.setSourceFile("range-price.xlsx");
-    request.setSourceSheet("区间铜价");
-    request.setImportBatchNo("MFRP-09-FAIL");
     request.setRows(List.of(rows));
     return request;
   }
 
   private static PriceRangeItemImportRequest.PriceRangeItemImportRow importRow(
-      String materialCode,
-      String low,
-      String high,
-      String price) {
+      String materialCode, String low, String high, String price) {
     PriceRangeItemImportRequest.PriceRangeItemImportRow row =
         new PriceRangeItemImportRequest.PriceRangeItemImportRow();
     row.setMaterialCode(materialCode);

@@ -1,118 +1,78 @@
 package com.sanhua.marketingcost.service.impl;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
-import com.baomidou.mybatisplus.core.MybatisConfiguration;
-import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.sanhua.marketingcost.dto.MaterialPriceTypeImportRequest;
+import com.sanhua.marketingcost.dto.MaterialPriceTypeRequest;
 import com.sanhua.marketingcost.entity.MaterialPriceType;
+import com.sanhua.marketingcost.entity.SysUser;
+import com.sanhua.marketingcost.enums.MaterialPriceSourceType;
 import com.sanhua.marketingcost.mapper.MaterialPriceTypeMapper;
+import com.sanhua.marketingcost.service.MaterialPricePriorityService;
+import com.sanhua.marketingcost.service.MaterialPricePriorityService.Scope;
+import com.sanhua.marketingcost.service.SysUserService;
 import java.util.List;
-import org.apache.ibatis.builder.MapperBuilderAssistant;
-import org.junit.jupiter.api.BeforeAll;
+import java.util.Map;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
-import org.mockito.Mockito;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 class MaterialPriceTypeServiceImplTest {
+  private final MaterialPriceTypeMapper mapper=mock(MaterialPriceTypeMapper.class);
+  private final MaterialPricePriorityService priorities=mock(MaterialPricePriorityService.class);
+  private final SysUserService users=mock(SysUserService.class);
+  private final MaterialPriceTypeServiceImpl service=new MaterialPriceTypeServiceImpl(mapper,priorities,users,mock(JdbcTemplate.class));
 
-  @BeforeAll
-  static void initTableInfo() {
-    TableInfoHelper.initTableInfo(
-        new MapperBuilderAssistant(new MybatisConfiguration(), ""),
-        MaterialPriceType.class);
+  @AfterEach void clear(){SecurityContextHolder.clearContext();}
+
+  @Test void missingBusinessUnitCannotReadOrModifyAnotherBusinessUnit() {
+    assertThatThrownBy(()->service.page(null,"2026-10",null,1,20)).isInstanceOf(AccessDeniedException.class);
+    verifyNoInteractions(mapper);
   }
 
-  @Test
-  void firstImportAppendsNormalizedType() {
-    MaterialPriceTypeMapper mapper = Mockito.mock(MaterialPriceTypeMapper.class);
-    when(mapper.selectList(any())).thenReturn(List.of());
-
-    new MaterialPriceTypeServiceImpl(mapper).importItems(request("MAT-1", "固定采购价"));
-
-    ArgumentCaptor<MaterialPriceType> captor = ArgumentCaptor.forClass(MaterialPriceType.class);
-    verify(mapper).insert(captor.capture());
-    assertThat(captor.getValue().getMaterialCode()).isEqualTo("MAT-1");
-    assertThat(captor.getValue().getPriceType()).isEqualTo("固定价");
+  @Test void deletedOrInaccessibleScopeCannotBeModified() {
+    login();
+    assertThatThrownBy(()->service.update(7L,new MaterialPriceTypeRequest("v",MaterialPriceSourceType.DEFAULT_ORDER,false)))
+        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("无权");
+    verifyNoInteractions(priorities);
   }
 
-  @Test
-  void sameCurrentTypeDoesNotUpdateOrAppend() {
-    MaterialPriceTypeMapper mapper = Mockito.mock(MaterialPriceTypeMapper.class);
-    MaterialPriceType current = route(10L, "MAT-1", "联动价");
-    when(mapper.selectList(any())).thenReturn(List.of(current));
-
-    List<MaterialPriceType> result =
-        new MaterialPriceTypeServiceImpl(mapper).importItems(request("MAT-1", "LINKED"));
-
-    assertThat(result).containsExactly(current);
-    verify(mapper, never()).insert(any(MaterialPriceType.class));
-    verify(mapper, never()).updateById(any(MaterialPriceType.class));
+  @Test void invalidMonthsAreRejectedBeforeQuerying() {
+    login();
+    for (String month : new String[] {null, "", "2026-1", "2026-13", "2026-00", "+2026-10"}) {
+      assertThatThrownBy(() -> service.page(null, month, null, 1, 20))
+          .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("价格月份");
+    }
+    verifyNoInteractions(mapper, priorities);
   }
 
-  @Test
-  void changedTypeAppendsAndKeepsOldRouteUntouched() {
-    MaterialPriceTypeMapper mapper = Mockito.mock(MaterialPriceTypeMapper.class);
-    MaterialPriceType current = route(10L, "MAT-1", "固定价");
-    when(mapper.selectList(any())).thenReturn(List.of(current));
-
-    new MaterialPriceTypeServiceImpl(mapper).importItems(request("MAT-1", "联动价"));
-
-    ArgumentCaptor<MaterialPriceType> captor = ArgumentCaptor.forClass(MaterialPriceType.class);
-    verify(mapper).insert(captor.capture());
-    verify(mapper, never()).updateById(any(MaterialPriceType.class));
-    assertThat(captor.getValue().getId()).isNull();
-    assertThat(captor.getValue().getPriceType()).isEqualTo("联动价");
-    assertThat(current.getEffectiveTo()).isNull();
+  @Test void omittedOrderDoesNotAccidentallyRestoreDefault() {
+    assertThatThrownBy(()->service.update(7L,new MaterialPriceTypeRequest("v",null,false)))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(()->service.update(7L,new MaterialPriceTypeRequest("v",MaterialPriceSourceType.DEFAULT_ORDER,true)))
+        .isInstanceOf(IllegalArgumentException.class);
+    verifyNoInteractions(priorities);
   }
 
-  @Test
-  void settleAliasNormalizesToSettleFixed() {
-    MaterialPriceTypeMapper mapper = Mockito.mock(MaterialPriceTypeMapper.class);
-    when(mapper.selectList(any())).thenReturn(List.of());
-
-    new MaterialPriceTypeServiceImpl(mapper).importItems(request("MAT-2", "结算价"));
-
-    ArgumentCaptor<MaterialPriceType> captor = ArgumentCaptor.forClass(MaterialPriceType.class);
-    verify(mapper).insert(captor.capture());
-    assertThat(captor.getValue().getPriceType()).isEqualTo("结算固定价");
+  @Test void editingUsesStoredMonthAndOrganizationAndAuthenticatedOperator() {
+    login();
+    var row=new MaterialPriceType();row.setId(7L);row.setMaterialCode("M1");row.setPeriod("2026-10");
+    row.setPriceOrgCode("220");row.setBusinessUnitType("COMMERCIAL");
+    when(mapper.selectOne(any())).thenReturn(row);when(mapper.selectById(7L)).thenReturn(row);
+    var user=new SysUser();user.setUserId(9L);when(users.findByUsername("finance")).thenReturn(user);
+    var scope=new Scope("COMMERCIAL","2026-10","220","M1");
+    when(priorities.read(scope)).thenReturn(new MaterialPricePriorityService.Configuration(scope,List.of(),true,"new"));
+    service.update(7L,new MaterialPriceTypeRequest("v",MaterialPriceSourceType.DEFAULT_ORDER,false));
+    verify(priorities).change(scope,MaterialPriceSourceType.DEFAULT_ORDER,"v",9L);
   }
 
-  @Test
-  void pageReturnsHistory() {
-    MaterialPriceTypeMapper mapper = Mockito.mock(MaterialPriceTypeMapper.class);
-    Page<MaterialPriceType> page = new Page<>(1, 20);
-    page.setRecords(List.of(route(1L, "MAT-1", "固定价")));
-    page.setTotal(1);
-    when(mapper.selectPage(any(), any())).thenReturn(page);
-
-    Page<MaterialPriceType> result =
-        new MaterialPriceTypeServiceImpl(mapper).page(null, null, null, null, 1, 20);
-
-    assertThat(result.getTotal()).isOne();
-    assertThat(result.getRecords()).hasSize(1);
-  }
-
-  private MaterialPriceTypeImportRequest request(String materialCode, String priceType) {
-    MaterialPriceTypeImportRequest.MaterialPriceTypeRow row =
-        new MaterialPriceTypeImportRequest.MaterialPriceTypeRow();
-    row.setMaterialCode(materialCode);
-    row.setPriceType(priceType);
-    MaterialPriceTypeImportRequest request = new MaterialPriceTypeImportRequest();
-    request.setRows(List.of(row));
-    return request;
-  }
-
-  private MaterialPriceType route(Long id, String materialCode, String priceType) {
-    MaterialPriceType route = new MaterialPriceType();
-    route.setId(id);
-    route.setMaterialCode(materialCode);
-    route.setPriceType(priceType);
-    return route;
+  private void login(){
+    var auth=new UsernamePasswordAuthenticationToken("finance","",List.of());
+    auth.setDetails(Map.of("businessUnitType","COMMERCIAL"));
+    SecurityContextHolder.getContext().setAuthentication(auth);
   }
 }

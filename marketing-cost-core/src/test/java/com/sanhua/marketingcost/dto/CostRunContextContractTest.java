@@ -40,7 +40,6 @@ class CostRunContextContractTest {
     CostRunContext context =
         CostRunContext.monthlyReprice(
             "2026-05",
-            88L,
             "MRP-001",
             "COMMERCIAL",
             LocalDateTime.of(2026, 5, 1, 9, 30),
@@ -54,7 +53,6 @@ class CostRunContextContractTest {
 
     assertThat(context.getScene()).isEqualTo(CostRunContext.SCENE_MONTHLY_REPRICE);
     assertThat(context.getPricingMonth()).isEqualTo("2026-05");
-    assertThat(context.getAdjustBatchId()).isEqualTo(88L);
     assertThat(context.getRepriceNo()).isEqualTo("MRP-001");
     assertThat(context.getBusinessUnitType()).isEqualTo("COMMERCIAL");
     assertThat(context.getPriceAsOfTime()).isEqualTo(LocalDateTime.of(2026, 5, 1, 9, 30));

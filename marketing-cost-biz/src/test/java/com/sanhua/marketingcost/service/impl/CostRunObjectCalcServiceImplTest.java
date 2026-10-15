@@ -59,7 +59,7 @@ class CostRunObjectCalcServiceImplTest {
         new CostRunObjectCalcServiceImpl(partService, costService, List.of());
     CostRunContext context =
         CostRunContext.monthlyReprice(
-            "2026-05", 88L, "MRP-001", "COMMERCIAL",
+            "2026-05", "MRP-001", "COMMERCIAL",
             LocalDateTime.of(2026, 5, 1, 9, 30),
             CostRunContext.BOM_SOURCE_POLICY_HISTORICAL_OA_BOM,
             "OA-001", 7L, "P-001", "箱装", "客户A", "OBJ-001");

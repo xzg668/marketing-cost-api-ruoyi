@@ -58,7 +58,6 @@ public record CostRunTaskBatchPressurePlan(
                 normalized(task.getBusinessUnitType()),
                 normalized(task.getPricingMonth()),
                 task.getPriceAsOfTime(),
-                task.getAdjustBatchId(),
                 normalized(task.getBomSourcePolicy()));
         monthlyContexts.add(contextKey);
         MonthlyBatchKey batchKey = new MonthlyBatchKey(normalized(task.getBatchNo()), sourceNo);
@@ -122,14 +121,12 @@ public record CostRunTaskBatchPressurePlan(
       String businessUnitType,
       String pricingMonth,
       LocalDateTime priceAsOfTime,
-      Long adjustBatchId,
       String bomSourcePolicy) {
 
     String compact() {
       return "businessUnitType=" + businessUnitType
           + ",pricingMonth=" + pricingMonth
           + ",priceAsOfTime=" + priceAsOfTime
-          + ",adjustBatchId=" + adjustBatchId
           + ",bomSourcePolicy=" + bomSourcePolicy;
     }
   }

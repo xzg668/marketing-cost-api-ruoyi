@@ -11,6 +11,34 @@ import java.time.LocalDateTime;
 
 @TableName("lp_price_range_item")
 public class PriceRangeItem {
+  /** 列表展示沿所属规则读取行情单位，不复制为第二份持久化数据。 */
+  @TableField(exist = false)
+  private String factorUnit;
+  public String getFactorUnit() { return factorUnit; }
+  public void setFactorUnit(String value) { factorUnit = value; }
+  /** PRC-01：原稿/财务版本契约；旧数据的未知来源保持为空。 */
+  private Integer lowerInclusive;
+  private Integer upperInclusive;
+  private String sourceSheetName;
+  private String sourceCellRef;
+  private String sourceValueText;
+  private String sourceFormulaExpr;
+  private String sourceNumberFormat;
+  public Integer getLowerInclusive() { return lowerInclusive; }
+  public void setLowerInclusive(Integer value) { lowerInclusive = value; }
+  public Integer getUpperInclusive() { return upperInclusive; }
+  public void setUpperInclusive(Integer value) { upperInclusive = value; }
+  public String getSourceSheetName() { return sourceSheetName; }
+  public void setSourceSheetName(String value) { sourceSheetName = value; }
+  public String getSourceCellRef() { return sourceCellRef; }
+  public void setSourceCellRef(String value) { sourceCellRef = value; }
+  public String getSourceValueText() { return sourceValueText; }
+  public void setSourceValueText(String value) { sourceValueText = value; }
+  public String getSourceFormulaExpr() { return sourceFormulaExpr; }
+  public void setSourceFormulaExpr(String value) { sourceFormulaExpr = value; }
+  public String getSourceNumberFormat() { return sourceNumberFormat; }
+  public void setSourceNumberFormat(String value) { sourceNumberFormat = value; }
+
   @TableId(type = IdType.AUTO)
   private Long id;
   private String orgCode;

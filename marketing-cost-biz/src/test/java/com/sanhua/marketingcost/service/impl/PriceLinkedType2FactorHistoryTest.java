@@ -24,18 +24,17 @@ class PriceLinkedType2FactorHistoryTest {
   @Test
   @DisplayName("新月份新增价格且不改变上一月份")
   void newMonthCreatesPriceAndPreservesPreviousMonth() {
-    PriceLinkedType2FactorUpsertTestSupport support =
-        new PriceLinkedType2FactorUpsertTestSupport();
-    support.addIdentity(701L, "COMMERCIAL", "1", "铜价", "1#Cu", "平均价");
+    PriceLinkedType2FactorUpsertTestSupport support = new PriceLinkedType2FactorUpsertTestSupport();
+    support.addIdentity(701L, "COMMERCIAL", "1", "镍价", "1#Ni", "平均价");
     FactorMonthlyPrice july = support.addMonthlyPrice(801L, 701L, "2026-07", "90");
 
-    FactorMonthlyPriceUpsertResult result = support.service.upsert(
-        support.workbook(support.factor(
-            2, "1", "铜价", "1#Cu", "平均价", "91")),
-        "2026-08",
-        "COMMERCIAL",
-        "tester",
-        99021L);
+    FactorMonthlyPriceUpsertResult result =
+        support.service.upsert(
+            support.workbook(support.factor(2, "1", "镍价", "1#Ni", "平均价", "91")),
+            "2026-08",
+            "COMMERCIAL",
+            "tester",
+            99021L);
 
     assertThat(result.getErrors()).isEmpty();
     assertThat(result.getMonthlyPriceCreatedCount()).isEqualTo(1);
@@ -47,29 +46,28 @@ class PriceLinkedType2FactorHistoryTest {
         .singleElement()
         .extracting(FactorMonthlyPrice::getPrice)
         .isEqualTo(new BigDecimal("91"));
-    assertThat(support.changeLogs).singleElement()
+    assertThat(support.changeLogs)
+        .singleElement()
         .extracting("changeType", "priceMonth")
         .containsExactly("CREATE", "2026-08");
   }
 
   @Test
-  @DisplayName("只导入 Cu 不删除系统中未出现的其他因素和价格")
+  @DisplayName("只导入 Ni 不删除系统中未出现的其他因素和价格")
   void omittedFactorsRemainUntouched() {
-    PriceLinkedType2FactorUpsertTestSupport support =
-        new PriceLinkedType2FactorUpsertTestSupport();
-    support.addIdentity(702L, "COMMERCIAL", "1", "铜价", "1#Cu", "平均价");
-    support.addIdentity(703L, "COMMERCIAL", "2", "镍价", "1#Ni", "平均价");
+    PriceLinkedType2FactorUpsertTestSupport support = new PriceLinkedType2FactorUpsertTestSupport();
+    support.addIdentity(702L, "COMMERCIAL", "1", "镍价", "1#Ni", "平均价");
+    support.addIdentity(703L, "COMMERCIAL", "2", "铅价", "1#Pb", "平均价");
     support.addMonthlyPrice(802L, 702L, "2026-07", "90");
-    FactorMonthlyPrice nickel =
-        support.addMonthlyPrice(803L, 703L, "2026-07", "16.5");
+    FactorMonthlyPrice nickel = support.addMonthlyPrice(803L, 703L, "2026-07", "16.5");
 
-    FactorMonthlyPriceUpsertResult result = support.service.upsert(
-        support.workbook(support.factor(
-            2, "1", "铜价", "1#Cu", "平均价", "90")),
-        "2026-07",
-        "COMMERCIAL",
-        "tester",
-        99022L);
+    FactorMonthlyPriceUpsertResult result =
+        support.service.upsert(
+            support.workbook(support.factor(2, "1", "镍价", "1#Ni", "平均价", "90")),
+            "2026-07",
+            "COMMERCIAL",
+            "tester",
+            99022L);
 
     assertThat(result.getErrors()).isEmpty();
     assertThat(support.identities).hasSize(2);
@@ -80,11 +78,9 @@ class PriceLinkedType2FactorHistoryTest {
   @Test
   @DisplayName("类型2首次创建后，完整影响因素表复用同一身份并补全名称")
   void laterStandardFactorImportReusesType2Identity() {
-    PriceLinkedType2FactorUpsertTestSupport support =
-        new PriceLinkedType2FactorUpsertTestSupport();
+    PriceLinkedType2FactorUpsertTestSupport support = new PriceLinkedType2FactorUpsertTestSupport();
     support.service.upsert(
-        support.workbook(support.factor(
-            2, "1", "简化铜名称", "1#Cu", "平均价", "90")),
+        support.workbook(support.factor(2, "1", "简化镍名称", "1#Ni", "平均价", "90")),
         "2026-07",
         "COMMERCIAL",
         "tester",
@@ -98,47 +94,44 @@ class PriceLinkedType2FactorHistoryTest {
         .thenAnswer(invocation -> support.monthlyPrices.getFirst());
     FactorMonthlyPriceUpsertServiceImpl standardService =
         new FactorMonthlyPriceUpsertServiceImpl(
-            support.identityMapper, support.monthlyPriceMapper, support.changeLogMapper);
-    PriceLinkedType2TextNormalizerImpl textNormalizer =
-        new PriceLinkedType2TextNormalizerImpl();
-    standardService.setFactorCanonicalKeyService(
-        new FactorCanonicalKeyServiceImpl(textNormalizer));
+            support.identityMapper,
+            support.monthlyPriceMapper,
+            support.changeLogMapper,
+            support.financeAuthority);
+    PriceLinkedType2TextNormalizerImpl textNormalizer = new PriceLinkedType2TextNormalizerImpl();
+    standardService.setFactorCanonicalKeyService(new FactorCanonicalKeyServiceImpl(textNormalizer));
 
-    FactorMonthlyPriceUpsertResult standardResult = standardService.upsert(
-        standardWorkbook(
-            "5",
-            "上月16日至本月15日中华商务网长江现货市场1#电解铜含税平均价格",
-            "1#Cu",
-            "平均价",
-            "90"),
-        "2026-07",
-        "COMMERCIAL",
-        "finance",
-        99024L);
+    FactorMonthlyPriceUpsertResult standardResult =
+        standardService.upsert(
+            standardWorkbook("5", "上月16日至本月15日中华商务网长江现货市场1#电解镍含税平均价格", "1#Ni", "平均价", "90"),
+            "2026-07",
+            "COMMERCIAL",
+            "finance",
+            99024L);
 
     assertThat(standardResult.getErrors()).isEmpty();
     assertThat(standardResult.getIdentityReusedCount()).isEqualTo(1);
     assertThat(standardResult.getMonthlyPriceUnchangedCount()).isEqualTo(1);
     assertThat(standardResult.getRows().getFirst().getFactorIdentityId())
         .isEqualTo(stableIdentityId);
-    assertThat(support.identities).hasSize(1).singleElement().satisfies(identity -> {
-      assertThat(identity.getId()).isEqualTo(stableIdentityId);
-      assertThat(identity.getFactorSeqNo()).isEqualTo("5");
-      assertThat(identity.getFactorName()).contains("中华商务网长江现货市场");
-      assertThat(identity.getIdentityOrigin()).isEqualTo("STANDARD_IMPORT");
-      assertThat(identity.getCanonicalFactorKey()).isEqualTo("AVG|1#CU");
-    });
+    assertThat(support.identities)
+        .hasSize(1)
+        .singleElement()
+        .satisfies(
+            identity -> {
+              assertThat(identity.getId()).isEqualTo(stableIdentityId);
+              assertThat(identity.getFactorSeqNo()).isEqualTo("5");
+              assertThat(identity.getFactorName()).contains("中华商务网长江现货市场");
+              assertThat(identity.getIdentityOrigin()).isEqualTo("STANDARD_IMPORT");
+              assertThat(identity.getCanonicalFactorKey()).isEqualTo("AVG|1#NI");
+            });
     assertThat(support.monthlyPrices).hasSize(1);
     verify(support.identityMapper, times(1)).insert(any(FactorIdentity.class));
     verify(support.monthlyPriceMapper, times(1)).insert(any(FactorMonthlyPrice.class));
   }
 
   private FactorWorkbookParseResult standardWorkbook(
-      String seq,
-      String name,
-      String shortName,
-      String source,
-      String price) {
+      String seq, String name, String shortName, String source, String price) {
     FactorRowParseResult row = new FactorRowParseResult();
     row.setSourceSheetName("影响因素");
     row.setSourceRowNumber(7);

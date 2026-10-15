@@ -47,7 +47,6 @@ public class MonthlyRepriceTaskServiceImpl implements MonthlyRepriceTaskService 
     request.setPricingMonth(batch.getPricingMonth());
     request.setPriceAsOfTime(batch.getPriceAsOfTime());
     request.setBusinessUnitType(batch.getBusinessUnitType());
-    request.setAdjustBatchId(batch.getAdjustBatchId());
     request.setBomSourcePolicy(batch.getBomSourcePolicy());
     request.setCreatedBy(batch.getCreatedBy());
     request.setCreatedName(batch.getCreatedName());

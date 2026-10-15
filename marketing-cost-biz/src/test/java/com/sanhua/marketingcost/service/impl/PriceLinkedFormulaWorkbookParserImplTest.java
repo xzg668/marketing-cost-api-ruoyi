@@ -55,7 +55,7 @@ class PriceLinkedFormulaWorkbookParserImplTest {
     assertThat(row.getPriceCellFormula())
         .isEqualTo("ROUND($I$2*影响因素!$E$64/1000+K3,4)/1.13");
     assertThat(row.getExcelDerivedFormulaText())
-        .isEqualTo("($I$2*影响因素!$E$64/1000+K3)/1.13");
+        .isEqualTo("ROUND($I$2*影响因素!$E$64/1000+K3,4)/1.13");
     assertThat(row.getHasFormula()).isTrue();
   }
 
@@ -91,8 +91,8 @@ class PriceLinkedFormulaWorkbookParserImplTest {
         .getSheets().getFirst().getRows().getFirst();
 
     assertThat(row.getExcelDerivedFormulaText())
-        .isEqualTo("([blank_weight]*影响因素10!$E$64/1000-([blank_weight]-[net_weight])"
-            + "*影响因素10!$E$44/1000+[process_fee])/1.13");
+        .isEqualTo("ROUND([blank_weight]*影响因素10!$E$64/1000-([blank_weight]-[net_weight])"
+            + "*影响因素10!$E$44/1000+[process_fee],4)/1.13");
   }
 
   @Test

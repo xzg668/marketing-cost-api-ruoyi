@@ -8,17 +8,45 @@ import java.util.List;
  * 联动公式预览响应体 —— 给前端展示 Normalizer + Registry 逐步过程。
  *
  * <p>字段语义：
+ *
  * <ul>
- *   <li>{@code normalizedExpr}：规范化后的表达式（变量已 {@code [code]} 标签化）；
- *       解析失败时为 {@code null}</li>
- *   <li>{@code variables}：实际参与求值的变量明细；包含 {@code code/name/value/source}</li>
- *   <li>{@code result}：最终求值结果；解析失败或任一变量缺失严重时为 {@code null}</li>
- *   <li>{@code trace}：任务 #11 约定的 trace 数组结构（原样透传）</li>
- *   <li>{@code warnings}：非致命提示，如"未提供 materialCode 无法取部品上下文"</li>
- *   <li>{@code error}：致命错误信息（语法错误/循环引用），有值则 {@code result=null}</li>
+ *   <li>{@code normalizedExpr}：规范化后的表达式（变量已 {@code [code]} 标签化）； 解析失败时为 {@code null}
+ *   <li>{@code variables}：实际参与求值的变量明细；包含 {@code code/name/value/source}
+ *   <li>{@code result}：最终求值结果；解析失败或任一变量缺失严重时为 {@code null}
+ *   <li>{@code trace}：任务 #11 约定的 trace 数组结构（原样透传）
+ *   <li>{@code warnings}：非致命提示，如"未提供 materialCode 无法取部品上下文"
+ *   <li>{@code error}：致命错误信息（语法错误/循环引用），有值则 {@code result=null}
  * </ul>
  */
 public class PriceLinkedFormulaPreviewResponse {
+
+  private String inputSnapshotJson;
+  private String calcFingerprint;
+  private String calculatorVersion;
+
+  public String getInputSnapshotJson() {
+    return inputSnapshotJson;
+  }
+
+  public void setInputSnapshotJson(String value) {
+    inputSnapshotJson = value;
+  }
+
+  public String getCalcFingerprint() {
+    return calcFingerprint;
+  }
+
+  public void setCalcFingerprint(String value) {
+    calcFingerprint = value;
+  }
+
+  public String getCalculatorVersion() {
+    return calculatorVersion;
+  }
+
+  public void setCalculatorVersion(String value) {
+    calculatorVersion = value;
+  }
 
   private String normalizedExpr;
   private List<VariableDetail> variables = new ArrayList<>();
@@ -79,10 +107,13 @@ public class PriceLinkedFormulaPreviewResponse {
   public static class VariableDetail {
     /** 变量代码（Normalizer tag 的 {@code [xxx]} 里的 xxx） */
     private String code;
+
     /** 变量中文名（来自 {@code lp_price_variable.variable_name}），缺失时同 code */
     private String name;
+
     /** 解析出的取值 */
     private BigDecimal value;
+
     /** 来源分类：{@code FINANCE_FACTOR / PART_CONTEXT / FORMULA_REF / CONST / MISSING} */
     private String source;
 
@@ -123,6 +154,7 @@ public class PriceLinkedFormulaPreviewResponse {
   public static class TraceEntry {
     /** 阶段名：{@code normalize / resolve / evaluate / error} */
     private String step;
+
     /** 阶段细节（文本或 JSON 字符串） */
     private String detail;
 

@@ -163,11 +163,6 @@ cost:
     # 只在废料、上卷、加工费等会改变成本金额的算法变更时升级；普通发布不要修改。
     # 成功版本记录的算法版本与此值不一致时必须重算，避免程序修复后仍复用旧成本。
     algorithm-version: ${COST_RUN_ALGORITHM_VERSION:COST_V3}
-  # 联动价 parser 模式灰度（T08 配置）
-  #   legacy = 只走旧 evaluateExpression（保留 [中文] 包裹兼容）
-  #   dual   = legacy 主、new 并跑；差异 > dual-warn-threshold 写 WARN，返回 legacy 值
-  #   new（默认）= 只走新 FormulaNormalizer + VariableRegistry 管线；失败直接抛错
-  # V48 业务确认老 parser 有口径问题（不做含税转换），全量切到 new；trace 弹窗不再有 legacy/diff
   linked:
     # 采购价联动类型2导入总开关。异常回滚时设为 false，仅关闭类型2；
     # 原标准联动价模板仍走旧导入链路，不受影响。
@@ -178,6 +173,3 @@ cost:
     #   false        = 只导入联动价/固定价行，不自动写绑定，保留老流程可用
     excel-auto-binding:
       enabled: ${COST_LINKED_EXCEL_AUTO_BINDING_ENABLED:true}
-    parser:
-      mode: ${COST_LINKED_PARSER_MODE:new}
-      dual-warn-threshold: ${COST_LINKED_PARSER_DUAL_WARN_THRESHOLD:0.01}

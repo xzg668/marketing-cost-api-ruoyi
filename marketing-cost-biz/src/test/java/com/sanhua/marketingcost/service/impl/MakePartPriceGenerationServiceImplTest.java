@@ -1,9 +1,9 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -65,7 +65,8 @@ class MakePartPriceGenerationServiceImplTest {
   private MakePartPriceCalcRowMapper calcRowMapper;
   private MakePartPriceGapItemMapper gapItemMapper;
   private MakePartPriceGenerationServiceImpl service;
-  private com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs manufacturingInputs;
+  private com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs
+      manufacturingInputs;
 
   @BeforeEach
   void setUp() {
@@ -79,10 +80,11 @@ class MakePartPriceGenerationServiceImplTest {
     noScrapConfirmationService = mock(MakePartNoScrapConfirmationService.class);
     calcRowMapper = mock(MakePartPriceCalcRowMapper.class);
     gapItemMapper = mock(MakePartPriceGapItemMapper.class);
-    when(materialPriceRouterService.listCandidates(any(), any(), any())).thenReturn(List.of());
+    when(materialPriceRouterService.listCandidates(any(), any(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any())).thenReturn(List.of());
     when(linkedPriceEnsureService.ensure(any())).thenReturn(new LinkedPriceEnsureResult());
     when(noScrapConfirmationService.findEffective(any(), any(), any())).thenReturn(null);
-    manufacturingInputs = mock(com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.class);
+    manufacturingInputs =
+        mock(com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.class);
     service =
         new MakePartPriceGenerationServiceImpl(
             sourceDataService,
@@ -96,28 +98,61 @@ class MakePartPriceGenerationServiceImplTest {
             new MakePartPriceCalculator(),
             noScrapConfirmationService,
             calcRowMapper,
-            gapItemMapper, manufacturingInputs);
+            gapItemMapper,
+            manufacturingInputs);
   }
 
   @Test
   void technicalNodeUsesApprovedWeightsAndGramPricesWithoutMasterWeightFallback() {
     var parent = parent("MAKE-TECH");
-    parent.setId(501L); parent.setOaFormItemId(10L); parent.setPeriodMonth("2026-05");
-    parent.setBusinessUnitType("COMMERCIAL"); parent.setPath("/P/MAKE-TECH/");
-    var evidence = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.ManufacturingNodeEvidence(
-        "制造件", "DRAW", BigDecimal.ONE, new BigDecimal("10"), "g", "铜棒", "铜",
-        "MATCHED", List.of(new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.ManufacturingScrap("SCRAP", "废料", "克")));
-    var raw = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.RawMaterial(
-        "RAW:7", "7", 9L, "MAKE-TECH", "RAW", "DRAW-RAW", new BigDecimal(".01"), new BigDecimal("15"),
-        "克", null, new BigDecimal(".015"), new BigDecimal("120"), evidence);
-    when(manufacturingInputs.forParent(parent)).thenReturn(
-        new com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.Input(84L, parent.getPath(), raw));
-    when(sourceDataService.listDedupedChildren(eq("MAKE-TECH"), any(), eq("210"))).thenReturn(List.of());
-    var scrap = scrap("SCRAP"); scrap.setScrapUnit("克");
+    parent.setId(501L);
+    parent.setOaFormItemId(10L);
+    parent.setPeriodMonth("2026-05");
+    parent.setBusinessUnitType("COMMERCIAL");
+    parent.setPath("/P/MAKE-TECH/");
+    var evidence =
+        new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent
+            .ManufacturingNodeEvidence(
+            "制造件",
+            "DRAW",
+            BigDecimal.ONE,
+            new BigDecimal("10"),
+            "g",
+            "铜棒",
+            "铜",
+            "MATCHED",
+            List.of(
+                new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent
+                    .ManufacturingScrap("SCRAP", "废料", "克")));
+    var raw =
+        new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.RawMaterial(
+            "RAW:7",
+            "7",
+            9L,
+            "MAKE-TECH",
+            "RAW",
+            "DRAW-RAW",
+            new BigDecimal(".01"),
+            new BigDecimal("15"),
+            "克",
+            null,
+            new BigDecimal(".015"),
+            new BigDecimal("120"),
+            evidence);
+    when(manufacturingInputs.forParent(parent))
+        .thenReturn(
+            new com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.Input(
+                84L, parent.getPath(), raw));
+    when(sourceDataService.listDedupedChildren(eq("MAKE-TECH"), any(), eq("210")))
+        .thenReturn(List.of());
+    var scrap = scrap("SCRAP");
+    scrap.setScrapUnit("克");
     when(scrapMappingService.listMappings("RAW", "COMMERCIAL")).thenReturn(List.of(scrap));
-    when(priceResolveService.calculateMaterialUnitPrice(eq("RAW"), any(), any(), any(), any(), any(), any()))
+    when(priceResolveService.calculateMaterialUnitPrice(
+            eq("RAW"), any(), any(), any(), any(), any(), any()))
         .thenReturn(okPrice("RAW", ".066"));
-    when(priceResolveService.calculateMaterialUnitPrice(eq("SCRAP"), any(), any(), any(), any(), any(), any()))
+    when(priceResolveService.calculateMaterialUnitPrice(
+            eq("SCRAP"), any(), any(), any(), any(), any(), any()))
         .thenReturn(okPrice("SCRAP", ".005"));
 
     var result = service.calculateForBomRow(parent, priceAsOf(), null, false).getFirst();
@@ -135,34 +170,73 @@ class MakePartPriceGenerationServiceImplTest {
 
   @Test
   void identicalMaterialAtDifferentNodesKeepsItsOwnRawMaterialAndWeights() {
-    var first = parent("MAKE"); first.setId(501L); first.setPath("/P/A/");
-    var second = parent("MAKE"); second.setId(502L); second.setPath("/P/B/");
+    var first = parent("MAKE");
+    first.setId(501L);
+    first.setPath("/P/A/");
+    var second = parent("MAKE");
+    second.setId(502L);
+    second.setPath("/P/B/");
     for (var parent : List.of(first, second)) {
-      parent.setOaFormItemId(10L); parent.setPeriodMonth("2026-05"); parent.setBusinessUnitType("COMMERCIAL");
+      parent.setOaFormItemId(10L);
+      parent.setPeriodMonth("2026-05");
+      parent.setBusinessUnitType("COMMERCIAL");
       String rawCode = parent == first ? "RAW-A" : "RAW-B";
       var gross = new BigDecimal(parent == first ? ".015" : ".020");
-      var evidence = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.ManufacturingNodeEvidence(
-          "制造件", "DRAW", BigDecimal.ONE, new BigDecimal("10"), "g", "铜棒", "铜", "MATCHED",
-          List.of(new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.ManufacturingScrap("SCRAP", "废料", "kg")));
-      var raw = new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.RawMaterial(
-          rawCode, parent.getId().toString(), 9L, "MAKE", rawCode, "RAW-DRAW", new BigDecimal(".01"), gross,
-          "kg", null, gross, new BigDecimal("120"), evidence);
-      when(manufacturingInputs.forParent(parent)).thenReturn(
-          new com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.Input(84L, parent.getPath(), raw));
-      var scrap = scrap("SCRAP"); scrap.setScrapUnit("kg");
+      var evidence =
+          new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent
+              .ManufacturingNodeEvidence(
+              "制造件",
+              "DRAW",
+              BigDecimal.ONE,
+              new BigDecimal("10"),
+              "g",
+              "铜棒",
+              "铜",
+              "MATCHED",
+              List.of(
+                  new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent
+                      .ManufacturingScrap("SCRAP", "废料", "kg")));
+      var raw =
+          new com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.RawMaterial(
+              rawCode,
+              parent.getId().toString(),
+              9L,
+              "MAKE",
+              rawCode,
+              "RAW-DRAW",
+              new BigDecimal(".01"),
+              gross,
+              "kg",
+              null,
+              gross,
+              new BigDecimal("120"),
+              evidence);
+      when(manufacturingInputs.forParent(parent))
+          .thenReturn(
+              new com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.Input(
+                  84L, parent.getPath(), raw));
+      var scrap = scrap("SCRAP");
+      scrap.setScrapUnit("kg");
       when(scrapMappingService.listMappings(rawCode, "COMMERCIAL")).thenReturn(List.of(scrap));
-      when(priceResolveService.calculateMaterialUnitPrice(eq(rawCode), any(), any(), any(), any(), any(), any()))
+      when(priceResolveService.calculateMaterialUnitPrice(
+              eq(rawCode), any(), any(), any(), any(), any(), any()))
           .thenReturn(okPrice(rawCode, "66"));
     }
-    when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null)).thenReturn(List.of(first, second));
+    when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
+        .thenReturn(List.of(first, second));
     when(sourceDataService.listDedupedChildren(eq("MAKE"), any(), eq("210"))).thenReturn(List.of());
-    when(priceResolveService.calculateMaterialUnitPrice(eq("SCRAP"), any(), any(), any(), any(), any(), any()))
+    when(priceResolveService.calculateMaterialUnitPrice(
+            eq("SCRAP"), any(), any(), any(), any(), any(), any()))
         .thenReturn(okPrice("SCRAP", "5"));
 
     var result = service.calculateRowsByOa("OA-001", "COMMERCIAL", "2026-05", priceAsOf(), null);
 
-    assertThat(result).extracting(MakePartPriceCalcRow::getSourceCostingRowId).containsExactly(501L, 502L);
-    assertThat(result).extracting(MakePartPriceCalcRow::getChildMaterialNo).containsExactly("RAW-A", "RAW-B");
+    assertThat(result)
+        .extracting(MakePartPriceCalcRow::getSourceCostingRowId)
+        .containsExactly(501L, 502L);
+    assertThat(result)
+        .extracting(MakePartPriceCalcRow::getChildMaterialNo)
+        .containsExactly("RAW-A", "RAW-B");
     assertThat(result.get(0).getParentTotalCostPrice()).isEqualByComparingTo(".965");
     assertThat(result.get(1).getParentTotalCostPrice()).isEqualByComparingTo("1.270");
     org.mockito.Mockito.verifyNoInteractions(weightService);
@@ -178,13 +252,11 @@ class MakePartPriceGenerationServiceImplTest {
     normalSibling.setQtyPerParent(BigDecimal.ONE);
     BomU9Source rollupRaw = child("301220046", "kg");
     rollupRaw.setQtyPerParent(new BigDecimal("0.008"));
-    BomCostingRowSubRef ref = rollupRef(
-        501L, "301220046", "软磁不锈钢棒", "0.00786000");
+    BomCostingRowSubRef ref = rollupRef(501L, "301220046", "软磁不锈钢棒", "0.00786000");
 
     when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
         .thenReturn(List.of(parent));
-    when(sourceDataService.listDedupedChildren(
-            eq("2018000671211"), any(), eq("210")))
+    when(sourceDataService.listDedupedChildren(eq("2018000671211"), any(), eq("210")))
         .thenReturn(List.of(normalSibling, rollupRaw));
     when(bomCostingRowSubRefMapper.selectSpecialRollupChildren(List.of(501L)))
         .thenReturn(List.of(ref));
@@ -198,31 +270,35 @@ class MakePartPriceGenerationServiceImplTest {
             eq(LocalDate.of(2026, 5, 31)),
             eq("COMMERCIAL"),
             eq(false)))
-        .thenReturn(com.sanhua.marketingcost.dto.MakePartWeightResult.of(
-            "2018000671211",
-            "301220046",
-            "原材料加工",
-            new BigDecimal("7.86"),
-            new BigDecimal("5.50"),
-            "OK",
-            ""));
+        .thenReturn(
+            com.sanhua.marketingcost.dto.MakePartWeightResult.of(
+                "2018000671211",
+                "301220046",
+                "原材料加工",
+                new BigDecimal("7.86"),
+                new BigDecimal("5.50"),
+                "OK",
+                ""));
     when(priceResolveService.calculateMaterialUnitPrice(
             any(), any(), any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> okPrice(invocation.getArgument(0), "10"));
 
-    List<MakePartPriceCalcRow> rows = service.calculateRowsByOa(
-        "OA-001", "COMMERCIAL", "2026-05", priceAsOf(), null);
+    List<MakePartPriceCalcRow> rows =
+        service.calculateRowsByOa("OA-001", "COMMERCIAL", "2026-05", priceAsOf(), null);
 
-    assertThat(rows).singleElement().satisfies(row -> {
-      assertThat(row.getParentMaterialNo()).isEqualTo("2018000671211");
-      assertThat(row.getChildMaterialNo()).isEqualTo("301220046");
-      assertThat(row.getQtyPerParent()).isEqualByComparingTo("0.00786000");
-      assertThat(row.getScrapCode()).isEqualTo("301990752");
-    });
+    assertThat(rows)
+        .singleElement()
+        .satisfies(
+            row -> {
+              assertThat(row.getParentMaterialNo()).isEqualTo("2018000671211");
+              assertThat(row.getChildMaterialNo()).isEqualTo("301220046");
+              assertThat(row.getQtyPerParent()).isEqualByComparingTo("0.00786000");
+              assertThat(row.getScrapCode()).isEqualTo("301990752");
+            });
     verify(scrapMappingService).listMappings("301220046", "COMMERCIAL");
     verify(scrapMappingService, never()).listMappings("203240247", "COMMERCIAL");
-    verify(priceResolveService, never()).calculateMaterialUnitPrice(
-        eq("203240247"), any(), any(), any(), any(), any(), any());
+    verify(priceResolveService, never())
+        .calculateMaterialUnitPrice(eq("203240247"), any(), any(), any(), any(), any(), any());
   }
 
   @Test
@@ -238,19 +314,20 @@ class MakePartPriceGenerationServiceImplTest {
 
     when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
         .thenReturn(List.of(parent));
-    when(sourceDataService.listDedupedChildren(
-            eq("1053000301622"), any(), eq("210")))
+    when(sourceDataService.listDedupedChildren(eq("1053000301622"), any(), eq("210")))
         .thenReturn(List.of(raw));
     when(bomCostingRowSubRefMapper.selectSpecialRollupChildren(List.of(501L)))
-        .thenReturn(List.of(
-            rollupRef(501L, "301260124", "不锈钢板", "0.0053", "0.0212"),
-            rollupRef(501L, "301260124", "不锈钢板", "0.0053", "0.0212")));
+        .thenReturn(
+            List.of(
+                rollupRef(501L, "301260124", "不锈钢板", "0.0053", "0.0212"),
+                rollupRef(501L, "301260124", "不锈钢板", "0.0053", "0.0212")));
 
     List<MakePartPriceCalcRow> rows =
         service.previewStructureByOa("OA-001", "COMMERCIAL", "2026-05");
 
-    assertThat(rows).singleElement().satisfies(row ->
-        assertThat(row.getQtyPerParent()).isEqualByComparingTo("0.0053"));
+    assertThat(rows)
+        .singleElement()
+        .satisfies(row -> assertThat(row.getQtyPerParent()).isEqualByComparingTo("0.0053"));
   }
 
   @Test
@@ -265,19 +342,20 @@ class MakePartPriceGenerationServiceImplTest {
 
     when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
         .thenReturn(List.of(parent));
-    when(sourceDataService.listDedupedChildren(
-            eq("1053000301690"), any(), eq("210")))
+    when(sourceDataService.listDedupedChildren(eq("1053000301690"), any(), eq("210")))
         .thenReturn(List.of(raw));
     when(bomCostingRowSubRefMapper.selectSpecialRollupChildren(List.of(502L)))
-        .thenReturn(List.of(
-            rollupRef(502L, "301070047", "铜箔", "0.0056", "0.0056"),
-            rollupRef(502L, "301070047", "铜箔", "0.0056", "0.0112")));
+        .thenReturn(
+            List.of(
+                rollupRef(502L, "301070047", "铜箔", "0.0056", "0.0056"),
+                rollupRef(502L, "301070047", "铜箔", "0.0056", "0.0112")));
 
     List<MakePartPriceCalcRow> rows =
         service.previewStructureByOa("OA-001", "COMMERCIAL", "2026-05");
 
-    assertThat(rows).singleElement().satisfies(row ->
-        assertThat(row.getQtyPerParent()).isEqualByComparingTo("0.0056"));
+    assertThat(rows)
+        .singleElement()
+        .satisfies(row -> assertThat(row.getQtyPerParent()).isEqualByComparingTo("0.0056"));
   }
 
   @Test
@@ -294,20 +372,19 @@ class MakePartPriceGenerationServiceImplTest {
 
     when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
         .thenReturn(List.of(parent));
-    when(sourceDataService.listDedupedChildren(
-            eq("1053000301687"), any(), eq("210")))
+    when(sourceDataService.listDedupedChildren(eq("1053000301687"), any(), eq("210")))
         .thenReturn(List.of(steel, copper));
     when(bomCostingRowSubRefMapper.selectSpecialRollupChildren(List.of(503L)))
-        .thenReturn(List.of(
-            rollupRef(503L, "301240299", "不锈钢卷", "0.0379", "1.137"),
-            rollupRef(503L, "301070047", "铜箔", "0.0056", "0.168")));
+        .thenReturn(
+            List.of(
+                rollupRef(503L, "301240299", "不锈钢卷", "0.0379", "1.137"),
+                rollupRef(503L, "301070047", "铜箔", "0.0056", "0.168")));
 
     List<MakePartPriceCalcRow> rows =
         service.previewStructureByOa("OA-001", "COMMERCIAL", "2026-05");
 
-    assertThat(rows).extracting(
-            MakePartPriceCalcRow::getChildMaterialNo,
-            MakePartPriceCalcRow::getQtyPerParent)
+    assertThat(rows)
+        .extracting(MakePartPriceCalcRow::getChildMaterialNo, MakePartPriceCalcRow::getQtyPerParent)
         .containsExactly(
             org.assertj.core.groups.Tuple.tuple("301240299", new BigDecimal("0.0379")),
             org.assertj.core.groups.Tuple.tuple("301070047", new BigDecimal("0.0056")));
@@ -324,7 +401,8 @@ class MakePartPriceGenerationServiceImplTest {
     assertThat(response.getParentCount()).isEqualTo(1);
     assertThat(response.getRowCount()).isEqualTo(1);
     assertThat(response.getOkCount()).isEqualTo(1);
-    ArgumentCaptor<MakePartPriceCalcRow> captor = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    ArgumentCaptor<MakePartPriceCalcRow> captor =
+        ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
     verify(calcRowMapper).insert(captor.capture());
     MakePartPriceCalcRow row = captor.getValue();
     assertThat(row.getCalcBatchId()).startsWith("MPPG-");
@@ -344,12 +422,29 @@ class MakePartPriceGenerationServiceImplTest {
 
     service.generateByMaterial("MAKE-001", "COMMERCIAL", "2026-05", priceAsOfTime);
 
-    ArgumentCaptor<MakePartPriceCalcRow> captor = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    ArgumentCaptor<MakePartPriceCalcRow> captor =
+        ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
     verify(calcRowMapper).insert(captor.capture());
     assertThat(captor.getValue().getPricingMonth()).isEqualTo("2026-05");
     assertThat(captor.getValue().getPriceAsOfTime()).isEqualTo(priceAsOfTime);
-    verify(priceResolveService).resolveMaterialUnitPrice(eq("RAW-001"),eq("2026-05"),eq(LocalDate.parse("2026-05-26")),eq(priceAsOfTime),eq("OA-001"),eq("COMMERCIAL"), argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())));
-    verify(priceResolveService).resolveMaterialUnitPrice(eq("SCRAP-001"),eq("2026-05"),eq(LocalDate.parse("2026-05-26")),eq(priceAsOfTime),eq("OA-001"),eq("COMMERCIAL"), argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())));
+    verify(priceResolveService)
+        .resolveMaterialUnitPrice(
+            eq("RAW-001"),
+            eq("2026-05"),
+            eq(LocalDate.parse("2026-05-26")),
+            eq(priceAsOfTime),
+            eq("OA-001"),
+            eq("COMMERCIAL"),
+            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())));
+    verify(priceResolveService)
+        .resolveMaterialUnitPrice(
+            eq("SCRAP-001"),
+            eq("2026-05"),
+            eq(LocalDate.parse("2026-05-26")),
+            eq(priceAsOfTime),
+            eq("OA-001"),
+            eq("COMMERCIAL"),
+            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())));
   }
 
   @Test
@@ -376,21 +471,27 @@ class MakePartPriceGenerationServiceImplTest {
     when(sourceDataService.listDedupedChildren(eq("MAKE-001"), any(), eq("210")))
         .thenReturn(List.of(child("RAW-001", "kg")));
     when(weightService.resolveWeights(
-            eq("MAKE-001"), any(BomU9Source.class), eq("原材料加工"), any(),
-            any(), eq("COMMERCIAL"), anyBoolean()))
+            eq("MAKE-001"),
+            any(BomU9Source.class),
+            eq("原材料加工"),
+            any(),
+            any(),
+            eq("COMMERCIAL"),
+            anyBoolean()))
         .thenReturn(weight("RAW-001"));
     when(scrapMappingService.listMappings("RAW-001", "COMMERCIAL"))
         .thenReturn(List.of(scrap("SCRAP-001")));
-    when(priceResolveService.resolveMaterialUnitPrice(any(), any(), any(), any(), any(), any(), any()))
+    when(priceResolveService.resolveMaterialUnitPrice(
+            any(), any(), any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
 
-    MakePartPriceGenerateResponse response = service.generateByOaMaterial(
-        "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", priceAsOf(), null);
+    MakePartPriceGenerateResponse response =
+        service.generateByOaMaterial(
+            "OA-001", "MAKE-001", "COMMERCIAL", "2026-05", priceAsOf(), null);
 
     assertThat(response.getParentCount()).isEqualTo(1);
     assertThat(response.getTotalCount()).isEqualTo(1);
-    verify(sourceDataService, never())
-        .listDedupedChildren(eq("MAKE-002"), any(), any());
+    verify(sourceDataService, never()).listDedupedChildren(eq("MAKE-002"), any(), any());
     ArgumentCaptor<MakePartPriceCalcRow> captor =
         ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
     verify(calcRowMapper).insert(captor.capture());
@@ -412,11 +513,14 @@ class MakePartPriceGenerationServiceImplTest {
     List<MakePartPriceCalcRow> rows =
         service.previewStructureByOa("OA-001", "COMMERCIAL", "2026-05");
 
-    assertThat(rows).singleElement().satisfies(row -> {
-      assertThat(row.getParentMaterialNo()).isEqualTo("MAKE-001");
-      assertThat(row.getChildMaterialNo()).isEqualTo("RAW-001");
-      assertThat(row.getScrapCode()).isEqualTo("SCRAP-001");
-    });
+    assertThat(rows)
+        .singleElement()
+        .satisfies(
+            row -> {
+              assertThat(row.getParentMaterialNo()).isEqualTo("MAKE-001");
+              assertThat(row.getChildMaterialNo()).isEqualTo("RAW-001");
+              assertThat(row.getScrapCode()).isEqualTo("SCRAP-001");
+            });
     verify(calcRowMapper, never()).insert(any(MakePartPriceCalcRow.class));
     verify(calcRowMapper, never()).updateById(any(MakePartPriceCalcRow.class));
     verify(gapItemMapper, never()).insert(any(MakePartPriceGapItem.class));
@@ -436,15 +540,18 @@ class MakePartPriceGenerationServiceImplTest {
             any(), any(), any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
 
-    List<MakePartPriceCalcRow> rows = service.calculateRowsByOa(
-        "OA-001", "COMMERCIAL", "2026-05", priceAsOf(), null);
+    List<MakePartPriceCalcRow> rows =
+        service.calculateRowsByOa("OA-001", "COMMERCIAL", "2026-05", priceAsOf(), null);
 
-    assertThat(rows).singleElement().satisfies(row -> {
-      assertThat(row.getStatus()).isEqualTo("OK");
-      assertThat(row.getPriceComplete()).isTrue();
-      assertThat(row.getParentTotalCostPrice()).isNotNull();
-      assertThat(row.getId()).isNull();
-    });
+    assertThat(rows)
+        .singleElement()
+        .satisfies(
+            row -> {
+              assertThat(row.getStatus()).isEqualTo("OK");
+              assertThat(row.getPriceComplete()).isTrue();
+              assertThat(row.getParentTotalCostPrice()).isNotNull();
+              assertThat(row.getId()).isNull();
+            });
     verify(calcRowMapper, never()).insert(any(MakePartPriceCalcRow.class));
     verify(calcRowMapper, never()).updateById(any(MakePartPriceCalcRow.class));
     verify(gapItemMapper, never()).insert(any(MakePartPriceGapItem.class));
@@ -487,12 +594,12 @@ class MakePartPriceGenerationServiceImplTest {
     when(sourceDataService.listDedupedChildren(eq("MAKE-001"), any(), eq("210")))
         .thenReturn(List.of(child));
     when(weightService.resolveWeights(
-            "MAKE-001", child, "原材料加工", "2026-05",
-            LocalDate.of(2026, 5, 31), "COMMERCIAL", false))
+            "MAKE-001", child, "原材料加工", "2026-05", LocalDate.of(2026, 5, 31), "COMMERCIAL", false))
         .thenReturn(weight("RAW-001"));
     when(scrapMappingService.listMappings("RAW-001", "COMMERCIAL"))
         .thenReturn(List.of(scrap("SCRAP-001")));
-    when(priceResolveService.resolveMaterialUnitPrice(any(), any(), any(), any(), any(), any(), any()))
+    when(priceResolveService.resolveMaterialUnitPrice(
+            any(), any(), any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
 
     MakePartPriceGenerateResponse response =
@@ -500,7 +607,8 @@ class MakePartPriceGenerationServiceImplTest {
 
     assertThat(response.getParentCount()).isEqualTo(1);
     assertThat(response.getRowCount()).isEqualTo(1);
-    ArgumentCaptor<MakePartPriceCalcRow> captor = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    ArgumentCaptor<MakePartPriceCalcRow> captor =
+        ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
     verify(calcRowMapper).insert(captor.capture());
     MakePartPriceCalcRow row = captor.getValue();
     assertThat(row.getPricingMonth()).isEqualTo("2026-05");
@@ -517,7 +625,8 @@ class MakePartPriceGenerationServiceImplTest {
 
     service.generateByMaterial("MAKE-001", "COMMERCIAL", null);
 
-    ArgumentCaptor<MakePartPriceCalcRow> captor = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    ArgumentCaptor<MakePartPriceCalcRow> captor =
+        ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
     verify(calcRowMapper).insert(captor.capture());
     assertThat(captor.getValue().getPricingMonth()).isEqualTo(YearMonth.now().toString());
   }
@@ -538,7 +647,8 @@ class MakePartPriceGenerationServiceImplTest {
         .thenReturn(List.of(scrap("SCRAP-A1"), scrap("SCRAP-A2")));
     when(scrapMappingService.listMappings("RAW-B", "COMMERCIAL"))
         .thenReturn(List.of(scrap("SCRAP-B1")));
-    when(priceResolveService.resolveMaterialUnitPrice(any(), any(), any(), any(), any(), any(), any()))
+    when(priceResolveService.resolveMaterialUnitPrice(
+            any(), any(), any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
 
     MakePartPriceGenerateResponse response =
@@ -546,18 +656,21 @@ class MakePartPriceGenerationServiceImplTest {
 
     assertThat(response.getRowCount()).isEqualTo(3);
     assertThat(response.getOkCount()).isEqualTo(3);
-    ArgumentCaptor<MakePartPriceCalcRow> captor = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    ArgumentCaptor<MakePartPriceCalcRow> captor =
+        ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
     verify(calcRowMapper, times(3)).insert(captor.capture());
-    assertThat(captor.getAllValues()).extracting(MakePartPriceCalcRow::getScrapCode)
+    assertThat(captor.getAllValues())
+        .extracting(MakePartPriceCalcRow::getScrapCode)
         .containsExactly("SCRAP-A1", "SCRAP-A2", "SCRAP-B1");
-    assertThat(captor.getAllValues()).allSatisfy(row ->
-        assertThat(row.getParentTotalCostPrice()).isEqualByComparingTo("14.23350000"));
-    verify(weightService).resolveWeights(
-        "MAKE-001", rawA, "原材料加工", "2026-05",
-        LocalDate.of(2026, 5, 31), "COMMERCIAL", true);
-    verify(weightService).resolveWeights(
-        "MAKE-001", rawB, "原材料加工", "2026-05",
-        LocalDate.of(2026, 5, 31), "COMMERCIAL", true);
+    assertThat(captor.getAllValues())
+        .allSatisfy(
+            row -> assertThat(row.getParentTotalCostPrice()).isEqualByComparingTo("14.23350000"));
+    verify(weightService)
+        .resolveWeights(
+            "MAKE-001", rawA, "原材料加工", "2026-05", LocalDate.of(2026, 5, 31), "COMMERCIAL", true);
+    verify(weightService)
+        .resolveWeights(
+            "MAKE-001", rawB, "原材料加工", "2026-05", LocalDate.of(2026, 5, 31), "COMMERCIAL", true);
   }
 
   @Test
@@ -576,28 +689,65 @@ class MakePartPriceGenerationServiceImplTest {
         .thenReturn(List.of(scrap("SCRAP-CU-A")));
     when(scrapMappingService.listMappings("RAW-CU-B", "COMMERCIAL"))
         .thenReturn(List.of(scrap("SCRAP-CU-B")));
-    PricePrepareScenarioContext context = new PricePrepareScenarioContext(
-        QuotePriceScenarioType.FINANCE_QUOTE_BASE,
-        "GROUP-1",
-        "PPR-OA-1",
-        Map.of("Cu", new BigDecimal("90")));
+    PricePrepareScenarioContext context =
+        new PricePrepareScenarioContext(
+            QuotePriceScenarioType.FINANCE_QUOTE_BASE,
+            "GROUP-1",
+            "PPR-OA-1",
+            Map.of("Cu", new BigDecimal("90")));
     when(priceResolveService.resolveMaterialUnitPrice(
-            any(), any(), any(), any(), any(), any(), argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode()) && c.variableOverrides().equals(context.variableOverrides()))))
+            any(),
+            any(),
+            any(),
+            any(),
+            any(),
+            any(),
+            argThat(
+                c ->
+                    c != null
+                        && "210".equals(c.supplierReviews().priceOrgCode())
+                        && c.variableOverrides().equals(context.variableOverrides()))))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
 
-    MakePartPriceGenerateResponse response = service.generateByOa(
-        "OA-001", "COMMERCIAL", "2026-05", priceAsOf(), context);
+    MakePartPriceGenerateResponse response =
+        service.generateByOa("OA-001", "COMMERCIAL", "2026-05", priceAsOf(), context);
 
     assertThat(response.getRowCount()).isEqualTo(2);
     ArgumentCaptor<MakePartPriceCalcRow> rows = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
     verify(calcRowMapper, times(2)).insert(rows.capture());
-    assertThat(rows.getAllValues()).allSatisfy(row -> {
-      assertThat(row.getPriceScenarioType()).isEqualTo("FINANCE_QUOTE_BASE");
-      assertThat(row.getGrossWeightG()).isEqualByComparingTo("80");
-      assertThat(row.getNetWeightG()).isEqualByComparingTo("55");
-    });
-    verify(priceResolveService).resolveMaterialUnitPrice(eq("RAW-CU-A"),eq("2026-05"),eq(LocalDate.parse("2026-05-31")),eq(priceAsOf()),eq("OA-001"),eq("COMMERCIAL"), argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode()) && c.variableOverrides().equals(context.variableOverrides())));
-    verify(priceResolveService).resolveMaterialUnitPrice(eq("SCRAP-CU-A"),eq("2026-05"),eq(LocalDate.parse("2026-05-31")),eq(priceAsOf()),eq("OA-001"),eq("COMMERCIAL"), argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode()) && c.variableOverrides().equals(context.variableOverrides())));
+    assertThat(rows.getAllValues())
+        .allSatisfy(
+            row -> {
+              assertThat(row.getPriceScenarioType()).isEqualTo("FINANCE_QUOTE_BASE");
+              assertThat(row.getGrossWeightG()).isEqualByComparingTo("80");
+              assertThat(row.getNetWeightG()).isEqualByComparingTo("55");
+            });
+    verify(priceResolveService)
+        .resolveMaterialUnitPrice(
+            eq("RAW-CU-A"),
+            eq("2026-05"),
+            eq(LocalDate.parse("2026-05-31")),
+            eq(priceAsOf()),
+            eq("OA-001"),
+            eq("COMMERCIAL"),
+            argThat(
+                c ->
+                    c != null
+                        && "210".equals(c.supplierReviews().priceOrgCode())
+                        && c.variableOverrides().equals(context.variableOverrides())));
+    verify(priceResolveService)
+        .resolveMaterialUnitPrice(
+            eq("SCRAP-CU-A"),
+            eq("2026-05"),
+            eq(LocalDate.parse("2026-05-31")),
+            eq(priceAsOf()),
+            eq("OA-001"),
+            eq("COMMERCIAL"),
+            argThat(
+                c ->
+                    c != null
+                        && "210".equals(c.supplierReviews().priceOrgCode())
+                        && c.variableOverrides().equals(context.variableOverrides())));
   }
 
   @Test
@@ -606,14 +756,16 @@ class MakePartPriceGenerationServiceImplTest {
     BomCostingRow parent = parent("MAKE-ERR");
     when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
         .thenReturn(List.of(parent));
-    when(sourceDataService.listDedupedChildren(eq("MAKE-ERR"), any(), eq("210"))).thenReturn(List.of());
+    when(sourceDataService.listDedupedChildren(eq("MAKE-ERR"), any(), eq("210")))
+        .thenReturn(List.of());
 
     MakePartPriceGenerateResponse response =
         service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
 
     assertThat(response.getErrorCount()).isEqualTo(1);
     assertThat(response.getStatusSummary()).containsEntry("MISSING_BOM", 1);
-    ArgumentCaptor<MakePartPriceCalcRow> captor = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    ArgumentCaptor<MakePartPriceCalcRow> captor =
+        ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
     verify(calcRowMapper).insert(captor.capture());
     assertThat(captor.getValue().getStatus()).isEqualTo("MISSING_BOM");
     assertThat(captor.getValue().getItemProcessType()).isEqualTo("UNKNOWN");
@@ -626,13 +778,21 @@ class MakePartPriceGenerationServiceImplTest {
   @DisplayName("缺原材料价：主表保留原材料和废料关系，并生成 RAW 缺价清单")
   void missingRawPriceWritesRawGapItem() {
     stubHappyPath("MAKE-001", List.of(child("RAW-MISS", "kg")), List.of(scrap("SCRAP-001")));
-    when(priceResolveService.resolveMaterialUnitPrice(eq("RAW-MISS"),eq("2026-05"),eq(LocalDate.parse("2026-05-31")),eq(priceAsOf()),eq("OA-001"),eq("COMMERCIAL"), argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode()))))
-        .thenReturn(MakePartMaterialPriceResolveResult.miss(
-            "RAW-MISS", "MISSING_PRICE", "缺原材料价格", "固定价"));
+    when(priceResolveService.resolveMaterialUnitPrice(
+            eq("RAW-MISS"),
+            eq("2026-05"),
+            eq(LocalDate.parse("2026-05-31")),
+            eq(priceAsOf()),
+            eq("OA-001"),
+            eq("COMMERCIAL"),
+            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode()))))
+        .thenReturn(
+            MakePartMaterialPriceResolveResult.miss("RAW-MISS", "MISSING_PRICE", "缺原材料价格", "固定价"));
 
     service.generateByMaterial("MAKE-001", "COMMERCIAL", "2026-05");
 
-    ArgumentCaptor<MakePartPriceCalcRow> rowCaptor = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    ArgumentCaptor<MakePartPriceCalcRow> rowCaptor =
+        ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
     verify(calcRowMapper).insert(rowCaptor.capture());
     assertThat(rowCaptor.getValue().getChildMaterialNo()).isEqualTo("RAW-MISS");
     assertThat(rowCaptor.getValue().getScrapCode()).isEqualTo("SCRAP-001");
@@ -656,13 +816,21 @@ class MakePartPriceGenerationServiceImplTest {
   @DisplayName("缺废料价：主表保留原材料和废料关系，并生成 SCRAP 缺价清单")
   void missingScrapPriceWritesScrapGapItem() {
     stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-MISS")));
-    when(priceResolveService.resolveMaterialUnitPrice(eq("SCRAP-MISS"),eq("2026-05"),eq(LocalDate.parse("2026-05-31")),eq(priceAsOf()),eq("OA-001"),eq("COMMERCIAL"), argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode()))))
-        .thenReturn(MakePartMaterialPriceResolveResult.miss(
-            "SCRAP-MISS", "MISSING_PRICE", "缺废料价格", "固定价"));
+    when(priceResolveService.resolveMaterialUnitPrice(
+            eq("SCRAP-MISS"),
+            eq("2026-05"),
+            eq(LocalDate.parse("2026-05-31")),
+            eq(priceAsOf()),
+            eq("OA-001"),
+            eq("COMMERCIAL"),
+            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode()))))
+        .thenReturn(
+            MakePartMaterialPriceResolveResult.miss("SCRAP-MISS", "MISSING_PRICE", "缺废料价格", "固定价"));
 
     service.generateByMaterial("MAKE-001", "COMMERCIAL", "2026-05");
 
-    ArgumentCaptor<MakePartPriceCalcRow> rowCaptor = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    ArgumentCaptor<MakePartPriceCalcRow> rowCaptor =
+        ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
     verify(calcRowMapper).insert(rowCaptor.capture());
     assertThat(rowCaptor.getValue().getChildMaterialNo()).isEqualTo("RAW-001");
     assertThat(rowCaptor.getValue().getScrapCode()).isEqualTo("SCRAP-MISS");
@@ -683,12 +851,26 @@ class MakePartPriceGenerationServiceImplTest {
   @DisplayName("原材料价和废料价都缺：同一明细生成 RAW 与 SCRAP 两条缺价清单")
   void missingRawAndScrapPriceWritesTwoGapItems() {
     stubHappyPath("MAKE-001", List.of(child("RAW-MISS", "kg")), List.of(scrap("SCRAP-MISS")));
-    when(priceResolveService.resolveMaterialUnitPrice(eq("RAW-MISS"),eq("2026-05"),eq(LocalDate.parse("2026-05-31")),eq(priceAsOf()),eq("OA-001"),eq("COMMERCIAL"), argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode()))))
-        .thenReturn(MakePartMaterialPriceResolveResult.miss(
-            "RAW-MISS", "MISSING_PRICE", "缺原材料价格", null));
-    when(priceResolveService.resolveMaterialUnitPrice(eq("SCRAP-MISS"),eq("2026-05"),eq(LocalDate.parse("2026-05-31")),eq(priceAsOf()),eq("OA-001"),eq("COMMERCIAL"), argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode()))))
-        .thenReturn(MakePartMaterialPriceResolveResult.miss(
-            "SCRAP-MISS", "MISSING_PRICE", "缺废料价格", null));
+    when(priceResolveService.resolveMaterialUnitPrice(
+            eq("RAW-MISS"),
+            eq("2026-05"),
+            eq(LocalDate.parse("2026-05-31")),
+            eq(priceAsOf()),
+            eq("OA-001"),
+            eq("COMMERCIAL"),
+            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode()))))
+        .thenReturn(
+            MakePartMaterialPriceResolveResult.miss("RAW-MISS", "MISSING_PRICE", "缺原材料价格", null));
+    when(priceResolveService.resolveMaterialUnitPrice(
+            eq("SCRAP-MISS"),
+            eq("2026-05"),
+            eq(LocalDate.parse("2026-05-31")),
+            eq(priceAsOf()),
+            eq("OA-001"),
+            eq("COMMERCIAL"),
+            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode()))))
+        .thenReturn(
+            MakePartMaterialPriceResolveResult.miss("SCRAP-MISS", "MISSING_PRICE", "缺废料价格", null));
 
     service.generateByMaterial("MAKE-001", "COMMERCIAL", "2026-05");
 
@@ -710,7 +892,8 @@ class MakePartPriceGenerationServiceImplTest {
 
     service.generateByMaterial("MAKE-001", "COMMERCIAL", "2026-05");
 
-    ArgumentCaptor<MakePartPriceCalcRow> rowCaptor = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    ArgumentCaptor<MakePartPriceCalcRow> rowCaptor =
+        ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
     verify(calcRowMapper).insert(rowCaptor.capture());
     assertThat(rowCaptor.getValue().getChildMaterialNo()).isEqualTo("RAW-001");
     assertThat(rowCaptor.getValue().getScrapCode()).isEmpty();
@@ -785,10 +968,8 @@ class MakePartPriceGenerationServiceImplTest {
     existing.setId(99L);
     when(calcRowMapper.selectList(any())).thenReturn(List.of(), List.of(existing));
 
-    MakePartPriceGenerateResponse first =
-        service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
-    MakePartPriceGenerateResponse second =
-        service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
+    MakePartPriceGenerateResponse first = service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
+    MakePartPriceGenerateResponse second = service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
 
     assertThat(first.getCalcBatchId()).isNotEqualTo(second.getCalcBatchId());
     verify(calcRowMapper).insert(any(MakePartPriceCalcRow.class));
@@ -802,40 +983,60 @@ class MakePartPriceGenerationServiceImplTest {
   @DisplayName("原材料命中联动价时先 ensure，再正式取价")
   void linkedRawMaterialEnsuredBeforeResolvingPrice() {
     stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-001")));
-    when(materialPriceRouterService.listCandidates("RAW-001", "2026-05", LocalDate.parse("2026-05-31")))
+    when(materialPriceRouterService.listCandidates(
+            "RAW-001", "2026-05", LocalDate.parse("2026-05-31"), "210", "COMMERCIAL"))
         .thenReturn(List.of(linkedRoute("RAW-001")));
 
     service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
 
-    verify(linkedPriceEnsureService).ensure(argThat(request ->
-        request != null
-            && request.getCalcScene() != null
-            && "QUOTE".equals(request.getCalcScene().getCode())
-            && "OA-001".equals(request.getOaNo())
-            && request.normalizedItemCodes().contains("RAW-001")));
+    verify(linkedPriceEnsureService)
+        .ensure(
+            argThat(
+                request ->
+                    request != null
+                        && request.getCalcScene() != null
+                        && "QUOTE".equals(request.getCalcScene().getCode())
+                        && "OA-001".equals(request.getOaNo())
+                        && "210".equals(request.getPriceOrgCode())
+                        && request.normalizedItemCodes().contains("RAW-001")));
     InOrder inOrder = Mockito.inOrder(linkedPriceEnsureService, priceResolveService);
     inOrder.verify(linkedPriceEnsureService).ensure(any(LinkedPriceEnsureRequest.class));
-    inOrder.verify(priceResolveService).resolveMaterialUnitPrice(eq("RAW-001"),eq("2026-05"),eq(LocalDate.parse("2026-05-31")),eq(priceAsOf()),eq("OA-001"),eq("COMMERCIAL"), argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())));
+    inOrder
+        .verify(priceResolveService)
+        .resolveMaterialUnitPrice(
+            eq("RAW-001"),
+            eq("2026-05"),
+            eq(LocalDate.parse("2026-05-31")),
+            eq(priceAsOf()),
+            eq("OA-001"),
+            eq("COMMERCIAL"),
+            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())));
   }
 
   @Test
   @DisplayName("废料命中联动价时也会 ensure")
   void linkedScrapEnsuredBeforeResolvingPrice() {
     stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-001")));
-    when(materialPriceRouterService.listCandidates("SCRAP-001", "2026-05", LocalDate.parse("2026-05-31")))
+    when(materialPriceRouterService.listCandidates(
+            "SCRAP-001", "2026-05", LocalDate.parse("2026-05-31"), "210", "COMMERCIAL"))
         .thenReturn(List.of(linkedRoute("SCRAP-001")));
 
     service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
 
-    verify(linkedPriceEnsureService).ensure(argThat(request ->
-        request != null && request.normalizedItemCodes().contains("SCRAP-001")));
+    verify(linkedPriceEnsureService)
+        .ensure(
+            argThat(
+                request ->
+                    request != null
+                        && "210".equals(request.getPriceOrgCode())
+                        && request.normalizedItemCodes().contains("SCRAP-001")));
   }
 
   @Test
   @DisplayName("非联动价路由不调用 ensure")
   void nonLinkedRouteDoesNotEnsure() {
     stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-001")));
-    when(materialPriceRouterService.listCandidates(any(), any(), any()))
+    when(materialPriceRouterService.listCandidates(any(), any(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(fixedRoute("RAW-001")));
 
     service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
@@ -847,7 +1048,8 @@ class MakePartPriceGenerationServiceImplTest {
   @DisplayName("ensure 失败时结果行保留明确备注")
   void ensureFailureRemarkWrittenToRows() {
     stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-001")));
-    when(materialPriceRouterService.listCandidates("RAW-001", "2026-05", LocalDate.parse("2026-05-31")))
+    when(materialPriceRouterService.listCandidates(
+            "RAW-001", "2026-05", LocalDate.parse("2026-05-31"), "210", "COMMERCIAL"))
         .thenReturn(List.of(linkedRoute("RAW-001")));
     LinkedPriceEnsureResult ensureResult = new LinkedPriceEnsureResult();
     ensureResult.addFailedItem("RAW-001", "联动价公式缺失");
@@ -855,10 +1057,10 @@ class MakePartPriceGenerationServiceImplTest {
 
     service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
 
-    ArgumentCaptor<MakePartPriceCalcRow> captor = ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
+    ArgumentCaptor<MakePartPriceCalcRow> captor =
+        ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
     verify(calcRowMapper).insert(captor.capture());
-    assertThat(captor.getValue().getRemark())
-        .contains("原材料联动价 ensure 失败", "RAW-001", "联动价公式缺失");
+    assertThat(captor.getValue().getRemark()).contains("原材料联动价 ensure 失败", "RAW-001", "联动价公式缺失");
   }
 
   @Test
@@ -872,6 +1074,36 @@ class MakePartPriceGenerationServiceImplTest {
     assertThat(latest).isEqualTo("MPPG-latest");
   }
 
+  @Test
+  void groupsManufacturingLinkedInputsByQuoteAndPriceOrganization() {
+    var raw = child("RAW-001", "kg");
+    stubHappyPath("MAKE-001", List.of(raw), List.of(scrap("SCRAP-001")));
+    var other = parent("MAKE-002");
+    other.setPriceOrgCode("220");
+    when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
+        .thenReturn(List.of(parent("MAKE-001"), other));
+    when(sourceDataService.listDedupedChildren(eq("MAKE-002"), any(), eq("220")))
+        .thenReturn(List.of(raw));
+    when(weightService.resolveWeights(
+            eq("MAKE-002"), eq(raw), any(), any(), any(), any(), anyBoolean()))
+        .thenReturn(weight("RAW-001"));
+    when(materialPriceRouterService.listCandidates(any(), any(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
+        .thenAnswer(call -> List.of(linkedRoute(call.getArgument(0))));
+    service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
+    var requests = ArgumentCaptor.forClass(LinkedPriceEnsureRequest.class);
+    verify(linkedPriceEnsureService, Mockito.times(2)).ensure(requests.capture());
+    assertThat(requests.getAllValues())
+        .extracting(LinkedPriceEnsureRequest::getPriceOrgCode)
+        .containsExactly("210", "220");
+    assertThat(requests.getAllValues())
+        .allSatisfy(
+            request -> {
+              assertThat(request.getOaNo()).isEqualTo("OA-001");
+              assertThat(request.normalizedItemCodes())
+                  .containsExactlyInAnyOrder("RAW-001", "SCRAP-001");
+            });
+  }
+
   private void stubHappyPath(
       String parentCode, List<BomU9Source> children, List<MaterialScrapRef> scraps) {
     BomCostingRow parent = parent(parentCode);
@@ -879,16 +1111,17 @@ class MakePartPriceGenerationServiceImplTest {
         .thenReturn(List.of(parent));
     when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
         .thenReturn(List.of(parent));
-    when(sourceDataService.listDedupedChildren(eq(parentCode), any(), eq("210"))).thenReturn(children);
+    when(sourceDataService.listDedupedChildren(eq(parentCode), any(), eq("210")))
+        .thenReturn(children);
     for (BomU9Source child : children) {
       when(weightService.resolveWeights(
-              eq(parentCode), eq(child), eq("原材料加工"), any(),
-              any(), eq("COMMERCIAL"), anyBoolean()))
+              eq(parentCode), eq(child), eq("原材料加工"), any(), any(), eq("COMMERCIAL"), anyBoolean()))
           .thenReturn(weight(child.getChildMaterialNo()));
       when(scrapMappingService.listMappings(child.getChildMaterialNo(), "COMMERCIAL"))
           .thenReturn(scraps);
     }
-    when(priceResolveService.resolveMaterialUnitPrice(any(), any(), any(), any(), any(), any(), any()))
+    when(priceResolveService.resolveMaterialUnitPrice(
+            any(), any(), any(), any(), any(), any(), any()))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
   }
 
@@ -926,10 +1159,7 @@ class MakePartPriceGenerationServiceImplTest {
   }
 
   private BomCostingRowSubRef rollupRef(
-      Long costingRowId,
-      String materialCode,
-      String materialName,
-      String quantity) {
+      Long costingRowId, String materialCode, String materialName, String quantity) {
     BomCostingRowSubRef ref = new BomCostingRowSubRef();
     ref.setCostingRowId(costingRowId);
     ref.setRefType("SPECIAL_ROLLUP_CHILD");
@@ -953,13 +1183,7 @@ class MakePartPriceGenerationServiceImplTest {
 
   private com.sanhua.marketingcost.dto.MakePartWeightResult weight(String childCode) {
     return com.sanhua.marketingcost.dto.MakePartWeightResult.of(
-        "MAKE-001",
-        childCode,
-        "原材料加工",
-        new BigDecimal("80"),
-        new BigDecimal("55"),
-        "OK",
-        "");
+        "MAKE-001", childCode, "原材料加工", new BigDecimal("80"), new BigDecimal("55"), "OK", "");
   }
 
   private MakePartMaterialPriceResolveResult okPrice(String materialCode, String price) {

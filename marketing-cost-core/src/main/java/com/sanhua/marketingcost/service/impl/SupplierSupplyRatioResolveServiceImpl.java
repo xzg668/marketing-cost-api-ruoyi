@@ -24,6 +24,42 @@ public class SupplierSupplyRatioResolveServiceImpl implements SupplierSupplyRati
   }
 
   @Override
+  public java.util.Map<String, SupplierSupplyRatioResolveResult> resolveAll(
+      String businessUnitType, java.util.Set<String> materialCodes, LocalDate pricingDate) {
+    var result = new java.util.LinkedHashMap<String, SupplierSupplyRatioResolveResult>();
+    if (materialCodes == null || materialCodes.isEmpty()) return result;
+    var codes =
+        materialCodes.stream()
+            .map(this::normalized)
+            .filter(StringUtils::hasText)
+            .distinct()
+            .toList();
+    if (codes.isEmpty()) return result;
+    String bu =
+        StringUtils.hasText(businessUnitType) ? businessUnitType.trim() : DEFAULT_BUSINESS_UNIT;
+    var query =
+        new QueryWrapper<SupplierSupplyRatio>()
+            .eq("business_unit_type", bu)
+            .in("material_code", codes)
+            .eq("is_active", 1)
+            .eq("deleted", 0)
+            .isNotNull("supply_ratio");
+    if (pricingDate != null)
+      query
+          .and(w -> w.le("effective_from", pricingDate).or().isNull("effective_from"))
+          .and(w -> w.ge("effective_to", pricingDate).or().isNull("effective_to"));
+    query.last(
+        "ORDER BY material_code, supply_ratio DESC, IFNULL(updated_at, '1970-01-01 00:00:00') DESC,"
+            + " id DESC");
+    for (var row : mapper.selectList(query))
+      result.putIfAbsent(
+          normalized(row.getMaterialCode()), hit(row, "匹配 material_code，取供货比例最大供应商"));
+    for (String code : codes)
+      result.putIfAbsent(code, SupplierSupplyRatioResolveResult.miss("未命中供货比例：material_code 无数据"));
+    return result;
+  }
+
+  @Override
   public SupplierSupplyRatioResolveResult resolve(
       String businessUnitType,
       String materialCode,
@@ -35,7 +71,8 @@ public class SupplierSupplyRatioResolveServiceImpl implements SupplierSupplyRati
       return SupplierSupplyRatioResolveResult.miss("物料代码为空，未查询供货比例");
     }
 
-    String bu = StringUtils.hasText(businessUnitType) ? businessUnitType.trim() : DEFAULT_BUSINESS_UNIT;
+    String bu =
+        StringUtils.hasText(businessUnitType) ? businessUnitType.trim() : DEFAULT_BUSINESS_UNIT;
     SupplierSupplyRatio mainSupplier = selectMainSupplier(bu, code, pricingDate);
     if (mainSupplier != null) {
       return hit(mainSupplier, "匹配 material_code，取供货比例最大供应商");
@@ -50,25 +87,28 @@ public class SupplierSupplyRatioResolveServiceImpl implements SupplierSupplyRati
       String materialName,
       String specModel,
       String pricingMonth) {
-    return resolve(businessUnitType, materialCode, materialName, specModel, parseMonth(pricingMonth));
+    return resolve(
+        businessUnitType, materialCode, materialName, specModel, parseMonth(pricingMonth));
   }
 
   private SupplierSupplyRatio selectMainSupplier(
-      String businessUnitType,
-      String materialCode,
-      LocalDate pricingDate) {
-    QueryWrapper<SupplierSupplyRatio> query = new QueryWrapper<SupplierSupplyRatio>()
-        .eq("business_unit_type", businessUnitType)
-        .eq("material_code", materialCode)
-        .eq("is_active", 1)
-        .isNotNull("supply_ratio")
-        .eq("deleted", 0);
+      String businessUnitType, String materialCode, LocalDate pricingDate) {
+    QueryWrapper<SupplierSupplyRatio> query =
+        new QueryWrapper<SupplierSupplyRatio>()
+            .eq("business_unit_type", businessUnitType)
+            .eq("material_code", materialCode)
+            .eq("is_active", 1)
+            .isNotNull("supply_ratio")
+            .eq("deleted", 0);
     if (pricingDate != null) {
-      query.and(w -> w.le("effective_from", pricingDate).or().isNull("effective_from"))
+      query
+          .and(w -> w.le("effective_from", pricingDate).or().isNull("effective_from"))
           .and(w -> w.ge("effective_to", pricingDate).or().isNull("effective_to"));
     }
     // 主供选择只负责选供应商，不负责决定固定价/联动价/区间价；价格桶仍由后续取价链路决定。
-    query.last("ORDER BY supply_ratio DESC, IFNULL(updated_at, '1970-01-01 00:00:00') DESC, id DESC LIMIT 1");
+    query.last(
+        "ORDER BY supply_ratio DESC, IFNULL(updated_at, '1970-01-01 00:00:00') DESC, id DESC LIMIT"
+            + " 1");
     return mapper.selectOne(query);
   }
 
@@ -81,9 +121,13 @@ public class SupplierSupplyRatioResolveServiceImpl implements SupplierSupplyRati
     result.setSupplyRatio(row.getSupplyRatio());
     result.setSourceType(row.getSourceType());
     result.setSourceBatchNo(row.getSourceBatchNo());
-    result.setTraceMessage("命中供货比例主供应商：supplierName=" + row.getSupplierName()
-        + ", supplyRatio=" + row.getSupplyRatio()
-        + ", matchMode=" + matchMode);
+    result.setTraceMessage(
+        "命中供货比例主供应商：supplierName="
+            + row.getSupplierName()
+            + ", supplyRatio="
+            + row.getSupplyRatio()
+            + ", matchMode="
+            + matchMode);
     return result;
   }
 

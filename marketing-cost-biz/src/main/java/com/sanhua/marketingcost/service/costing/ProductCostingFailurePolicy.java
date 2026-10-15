@@ -24,9 +24,6 @@ public class ProductCostingFailurePolicy {
       if ("QUOTE_BOM".equals(stage) && isBomBusinessGap(exception)) {
         return new Failure("WAIT_BOM", stage, "BOM_MISSING", message(exception), 1, false);
       }
-      if ("PRICE_TYPE_CONFIRMATION".equals(stage) && isPriceTypeGap(exception)) {
-        return new Failure("WAIT_PRICE_TYPE", stage, "PRICE_TYPE_MISSING", message(exception), 1, false);
-      }
       if ("PRICE_PREPARE".equals(stage) && isPriceBusinessGap(exception)) {
         return new Failure("WAIT_PRICE", stage, priceErrorCode(exception), message(exception), 1, false);
       }
@@ -37,11 +34,6 @@ public class ProductCostingFailurePolicy {
   public record Failure(String status, String step, String errorCode,
       String message, int gapCount, boolean retryable) {
     public boolean blocked() { return !"SYSTEM_FAILED".equals(status); }
-  }
-
-  private boolean isPriceTypeGap(RuntimeException exception) {
-    String text = message(exception);
-    return text.contains("价格类型") || text.contains("无法识别");
   }
 
   private boolean isBomBusinessGap(RuntimeException exception) {
@@ -76,7 +68,6 @@ public class ProductCostingFailurePolicy {
   private String systemErrorCode(String stage) {
     return switch (stage) {
       case "QUOTE_BOM" -> "BOM_SYSTEM_ERROR";
-      case "PRICE_TYPE_CONFIRMATION" -> "PRICE_TYPE_SYSTEM_ERROR";
       case "PRICE_PREPARE" -> "PRICE_PREPARE_SYSTEM_ERROR";
       case "INPUT_CHECK" -> "INPUT_CHECK_SYSTEM_ERROR";
       default -> "COST_RUN_SYSTEM_ERROR";

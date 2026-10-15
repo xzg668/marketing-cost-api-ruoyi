@@ -21,8 +21,6 @@ import com.sanhua.marketingcost.entity.FactorUploadBatch;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.PriceLinkedImportBasisRepository;
 import com.sanhua.marketingcost.service.PriceLinkedImportBasisService;
-import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
-import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.RouteCommand;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -43,15 +41,12 @@ public class PriceLinkedImportBasisServiceImpl implements PriceLinkedImportBasis
 
   private final PriceLinkedImportBasisRepository repository;
   private final ObjectMapper objectMapper;
-  private final MaterialPriceTypeRouteSyncService priceTypeRouteSyncService;
 
   public PriceLinkedImportBasisServiceImpl(
       PriceLinkedImportBasisRepository repository,
-      ObjectMapper objectMapper,
-      MaterialPriceTypeRouteSyncService priceTypeRouteSyncService) {
+      ObjectMapper objectMapper) {
     this.repository = repository;
     this.objectMapper = objectMapper;
-    this.priceTypeRouteSyncService = priceTypeRouteSyncService;
   }
 
   @Override
@@ -62,7 +57,6 @@ public class PriceLinkedImportBasisServiceImpl implements PriceLinkedImportBasis
     PriceLinkedItem current = repository.findCurrentVersion(next);
 
     if (isSameType2Version(current, next)) {
-      syncPriceType(current);
       return new PriceLinkedImportBasisSaveResult(
           PriceLinkedImportBasisSaveResult.ACTION_DUPLICATE_SKIPPED,
           current.getId(),
@@ -85,7 +79,6 @@ public class PriceLinkedImportBasisServiceImpl implements PriceLinkedImportBasis
     for (PriceVariableBinding binding : bindings) {
       repository.insertBinding(binding);
     }
-    syncPriceType(next);
     return new PriceLinkedImportBasisSaveResult(
         PriceLinkedImportBasisSaveResult.ACTION_CREATED,
         next.getId(),
@@ -93,18 +86,6 @@ public class PriceLinkedImportBasisServiceImpl implements PriceLinkedImportBasis
         bindings.size());
   }
 
-  private void syncPriceType(PriceLinkedItem item) {
-    if("TECH_SUPPLEMENTAL".equals(item.getSourceKind()))return;
-    priceTypeRouteSyncService.sync(new RouteCommand(
-        item.getMaterialCode(),
-        item.getMaterialName(),
-        item.getSpecModel(),
-        item.getUnit(),
-        item.getBusinessUnitType(),
-        "联动价",
-        "price_linked_type2",
-        "FORMAL_LINKED"));
-  }
 
   @Override
   @Transactional(readOnly = true)
@@ -124,6 +105,34 @@ public class PriceLinkedImportBasisServiceImpl implements PriceLinkedImportBasis
       return response;
     }
 
+    if (OriginalLinkedRuleSnapshot.VERSION.equals(item.getExpressionVersion())) {
+      var saved = new OriginalLinkedRuleSnapshot(objectMapper).read(item);
+      var inputs = saved.compiled().sources().stream()
+          .map(cell -> new PriceLinkedImportBasisSnapshot.InputCell(
+              cell.address().sheet(), cell.address().cell(), cell.variable(), cell.rawValue(),
+              null, null, "BLANK".equals(cell.cellType()), cell.formula(),
+              cell.variable() == null ? null : saved.factors().get(cell.variable()).sourceUnit(),
+              cell.cellType()))
+          .toList();
+      var factors = saved.factors().entrySet().stream().map(entry -> {
+        var factor = entry.getValue();
+        return new PriceLinkedImportBasisSnapshot.FactorInput(
+            factor.address().sheet() + "!" + factor.address().cell(),
+            factor.sourceKey() + " → " + factor.canonicalKey(),
+            factor.address().sheet(), factor.address().cell(), null,
+            saved.compiled().sourceInputs().get(entry.getKey()), entry.getKey());
+      }).toList();
+      var tax = new PriceLinkedImportBasisSnapshot.TaxBasis(
+          Boolean.toString(saved.taxIncluded()), saved.taxIncluded() ? 1 : 0,
+          saved.taxIncluded() ? 1 : 0, false, saved.taxIncluded(), List.of());
+      var snapshot = new PriceLinkedImportBasisSnapshot(
+          saved.sourceFormula(), inputs, factors, tax, null);
+      response.setImportBasisAvailable(true);
+      response.setSnapshot(snapshot);
+      response.setFactorBindings(toFactorResponses(snapshot, List.of()));
+      response.setMessage("原稿来源与实际计算公式已保留；公共因素在取价时读取当前财务发布");
+      return response;
+    }
     response.setImportBasisAvailable(true);
     PriceLinkedImportBasisSnapshot snapshot = parseSnapshot(item, response);
     response.setSnapshot(snapshot);

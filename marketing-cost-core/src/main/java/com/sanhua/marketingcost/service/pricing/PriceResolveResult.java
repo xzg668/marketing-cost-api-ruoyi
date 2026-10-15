@@ -9,7 +9,7 @@ import java.time.LocalDate;
  * <ul>
  *   <li>unitPrice：命中时为有效价格，未命中或暂未实现为 null</li>
  *   <li>priceSource：见机表的"价格来源"列文案，例如"固定采购价"/"联动价"/"家用结算价"；
- *       缺价标红时为 "NO_ROUTE"（未配路由）/ "ERROR"（路由有但全 miss / 输入非法）</li>
+   *       无适用来源为 "MISSING_PRICE"，计算失败为 "ERROR"</li>
  *   <li>remark：调试 / 标红信息（fallback、缺数据、暂未实现等）</li>
  * </ul>
  *
@@ -36,8 +36,8 @@ public record PriceResolveResult(
     evidence = evidence == null ? PriceResolveEvidence.none() : evidence;
   }
 
-  /** 缺价标红：未配价格类型路由（路由表无该料号 × period 行）。 */
-  public static final String SOURCE_NO_ROUTE = "NO_ROUTE";
+  /** 当前范围没有可用价格来源。 */
+  public static final String SOURCE_MISSING_PRICE = "MISSING_PRICE";
   /** 缺价标红：路由有候选但全部 Resolver miss / 输入非法 / Resolver 未注册。 */
   public static final String SOURCE_ERROR = "ERROR";
 
@@ -63,7 +63,7 @@ public record PriceResolveResult(
   }
 
   /**
-   * 工厂：单个 Resolver 未命中。priceSource 留空，由上游 Service 汇总后改写为 ERROR / NO_ROUTE。
+   * 工厂：单个 Resolver 未命中。priceSource 留空，由上游汇总实际缺价或计算错误。
    * Resolver 内部使用，不直接进 DB。
    */
   public static PriceResolveResult miss(String reason) {
@@ -77,17 +77,14 @@ public record PriceResolveResult(
         null, "", reason, null, failureCode, PriceResolveEvidence.none());
   }
 
-  /**
-   * 工厂：路由表无候选 → 标 NO_ROUTE。
-   * 业务约定：缺路由是配置缺失，提示"去价格类型表录入"。
-   */
-  public static PriceResolveResult noRoute(String materialCode) {
+  /** 按完整顺序查找后没有候选来源。 */
+  public static PriceResolveResult noAvailablePrice(String materialCode) {
     return new PriceResolveResult(
         null,
-        SOURCE_NO_ROUTE,
-        "未配价格类型路由：去价格类型表录入 " + materialCode,
+        SOURCE_MISSING_PRICE,
+        "当前月份和组织没有可用价格来源：" + materialCode,
         null,
-        SOURCE_NO_ROUTE,
+        SOURCE_MISSING_PRICE,
         PriceResolveEvidence.none());
   }
 
@@ -102,6 +99,22 @@ public record PriceResolveResult(
 
   public boolean carriedForward() {
     return evidence.carriedForward();
+  }
+
+  /** 无适用规则或区间可继续查下一类型；已选规则计算和数据冲突必须阻断。 */
+  public static boolean isBlockingFailure(String code) {
+    return code != null && !java.util.Set.of(
+        MaterialPriceMonthSelector.MATERIAL_MONTH_PRICE_MISSING,
+        "RANGE_RULE_MISSING", "RANGE_BAND_MISSING").contains(code);
+  }
+
+  public boolean hasBlockingFailure() {
+    return isBlockingFailure(failureCode);
+  }
+
+  public PriceResolveResult withPriority(com.sanhua.marketingcost.dto.PriceTypeRoute route) {
+    return new PriceResolveResult(unitPrice, priceSource, remark, resultRefId, failureCode,
+        evidence.withPriority(route));
   }
 
   public LocalDate effectiveFrom() {

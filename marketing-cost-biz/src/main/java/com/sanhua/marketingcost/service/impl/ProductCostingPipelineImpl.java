@@ -11,7 +11,7 @@ import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkflowStatusResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionSummaryResponse;
+import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSourceCheckResponse;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.enums.QuoteCostRunStatus;
 import com.sanhua.marketingcost.service.MaterialMasterSyncService;
@@ -22,26 +22,27 @@ import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
 import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
 import com.sanhua.marketingcost.service.costing.ProductCostingContext;
 import com.sanhua.marketingcost.service.costing.ProductCostingContextResolver;
-import com.sanhua.marketingcost.service.costing.ProductCostingSuccessLookup;
 import com.sanhua.marketingcost.service.costing.ProductCostingFailurePolicy;
+import com.sanhua.marketingcost.service.costing.ProductCostingSuccessLookup;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataAvailability;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataQuoteSourceReader;
-import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSourceCheckResponse;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-/** 只编排BOM、价格类型、价格准备与成本发布；输入及失败规则由专职组件处理。 */
+/** 编排 BOM、价格准备与成本发布；输入及失败规则由专职组件处理。 */
 @Service
 public class ProductCostingPipelineImpl implements ProductCostingPipeline {
-  private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ProductCostingPipelineImpl.class);
+  private static final org.slf4j.Logger log =
+      org.slf4j.LoggerFactory.getLogger(ProductCostingPipelineImpl.class);
   private com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy oaWorkflowAccess;
+
   @org.springframework.beans.factory.annotation.Autowired
-  public void setOaWorkflowAccess(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy policy) {
+  public void setOaWorkflowAccess(
+      com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy policy) {
     this.oaWorkflowAccess = policy;
   }
 
   static final String STEP_BOM = "QUOTE_BOM";
-  static final String STEP_PRICE_TYPE = "PRICE_TYPE_CONFIRMATION";
   static final String STEP_PRICE = "PRICE_PREPARE";
   static final String STEP_COST = "COST_RUN";
 
@@ -54,7 +55,8 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   private final ProductCostingSuccessLookup successLookup;
   private final ProductCostingFailurePolicy failurePolicy;
   private final TechnicalDataQuoteSourceReader technicalSources;
-  private final com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService effectiveTechnicalData;
+  private final com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService
+      effectiveTechnicalData;
 
   public ProductCostingPipelineImpl(
       QuoteCostingWorkbenchService costingWorkbenchService,
@@ -99,8 +101,14 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
         var check = technicalSources.afterCosting(current);
         var blocked = technicalBlock(current, check);
         if (blocked != null) return blocked;
-        var result = success(current, summary(reusable.get().version()), reusable.get().prepareNo(),
-            reusable.get().warningCount(), true, "当前输入已核算成功，沿用现有成本版本");
+        var result =
+            success(
+                current,
+                summary(reusable.get().version()),
+                reusable.get().prepareNo(),
+                reusable.get().warningCount(),
+                true,
+                "当前输入已核算成功，沿用现有成本版本");
         result.setPipelineStatus("READY");
         result.setCurrentStep("MATERIAL_CHECK");
         result.setSourceRevision(current.sourceRevision());
@@ -115,14 +123,19 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
     return withSourceCheck(context, executeStages(context, true));
   }
 
-  private ProductCostingResult withSourceCheck(ProductCostingContext context, ProductCostingResult result) {
+  private ProductCostingResult withSourceCheck(
+      ProductCostingContext context, ProductCostingResult result) {
     if (result.getTechnicalDataCheck() != null) return result;
     try {
       result.setTechnicalDataCheck(technicalSources.afterCosting(context));
     } catch (RuntimeException exception) {
       // 来源检查未保存时不能让后续分派误用旧结论，核算原失败原因仍保留在工作区。
-      log.warn("核算后补录来源检查失败：oaNo={}, itemId={}, month={}",
-          context.form().getOaNo(), context.itemId(), context.periodMonth(), exception);
+      log.warn(
+          "核算后补录来源检查失败：oaNo={}, itemId={}, month={}",
+          context.form().getOaNo(),
+          context.itemId(),
+          context.periodMonth(),
+          exception);
       result.setMessage(result.getMessage() + "；补录来源检查未完成，请重新检查资料");
     }
     return result;
@@ -154,12 +167,6 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       // BOM 行生成后再同步本轮实际涉及的料号，避免前置同步读取上一轮成本行。
       materialMasterSyncService.syncByOaNoAndPeriod(scope.oaNo(), scope.periodMonth());
 
-      stage = STEP_PRICE_TYPE;
-      ProductCostingResult typeBlocked = priceTypeBlock(scope, workbench);
-      if (typeBlocked != null) {
-        return typeBlocked;
-      }
-
       stage = STEP_PRICE;
       QuotePricePrepareGenerateRequest priceRequest = new QuotePricePrepareGenerateRequest();
       priceRequest.setPeriodMonth(scope.periodMonth());
@@ -178,8 +185,12 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       var sourceCheck = technicalSources.afterCosting(scope);
       var technicalBlocked = technicalBlock(scope, sourceCheck);
       if (technicalBlocked != null) return technicalBlocked;
-      // 价格准备可能切换实际补录来源，成本版本必须绑定本轮最终输入。
-      scope = contextResolver.resolveRevision(scope);
+      // 使用价格准备事务记录的输入修订，不能把较晚的基价版本贴在旧价格上。
+      String priceRevision = required(prices.getSourceRevision(), "价格准备输入修订");
+      if (!priceRevision.equals(contextResolver.resolveRevision(scope).sourceRevision())) {
+        throw new org.springframework.dao.ConcurrencyFailureException("价格准备后上游业务输入已变化，请重新发起核算");
+      }
+      scope = scope.withRevision(priceRevision);
       if (preparationOnly) {
         var prepared = base(scope);
         prepared.setPipelineStatus("READY");
@@ -202,13 +213,14 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       if (version == null || !QuoteCostRunStatus.isCurrentSuccess(version.getStatus())) {
         throw new IllegalStateException("成本核算完成后没有生成当前成功版本");
       }
-      var result = success(
-          scope,
-          version,
-          prepareNo,
-          readiness.getWarningCount(),
-          false,
-          readiness.getWarningCount() > 0 ? readiness.getMessage() : "产品核算成功");
+      var result =
+          success(
+              scope,
+              version,
+              prepareNo,
+              readiness.getWarningCount(),
+              false,
+              readiness.getWarningCount() > 0 ? readiness.getMessage() : "产品核算成功");
       result.setTechnicalDataCheck(sourceCheck);
       return result;
     } catch (RuntimeException exception) {
@@ -217,10 +229,14 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   }
 
   private ProductCostingResult failure(
-      ProductCostingContext scope, String stage, RuntimeException exception, boolean preparationOnly) {
+      ProductCostingContext scope,
+      String stage,
+      RuntimeException exception,
+      boolean preparationOnly) {
     try {
       // 原补录退回或财务确认失效时，不能用失败前的输入版本冒充本次成功。
-      ProductCostingResult concurrent = preparationOnly ? null : reusableSuccess(contextResolver.resolveRevision(scope));
+      ProductCostingResult concurrent =
+          preparationOnly ? null : reusableSuccess(contextResolver.resolveRevision(scope));
       if (concurrent != null) return concurrent;
     } catch (RuntimeException lookupFailure) {
       // 故障后的并发结果探测不能覆盖本次真正的错误及其重试属性。
@@ -228,11 +244,21 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
     }
     var failure = failurePolicy.classify(stage, exception);
     if (failure.blocked()) {
-      return blocked(scope, failure.status(), failure.step(), failure.errorCode(),
-          failure.message(), failure.gapCount());
+      return blocked(
+          scope,
+          failure.status(),
+          failure.step(),
+          failure.errorCode(),
+          failure.message(),
+          failure.gapCount());
     }
-    stateService.markSystemFailed(scope.oaNo(), scope.itemId(), scope.periodMonth(),
-        failure.step(), failure.errorCode(), failure.message());
+    stateService.markSystemFailed(
+        scope.oaNo(),
+        scope.itemId(),
+        scope.periodMonth(),
+        failure.step(),
+        failure.errorCode(),
+        failure.message());
     ProductCostingResult result = base(scope);
     result.setPipelineStatus("FAILED");
     result.setBlockingStatus(failure.status());
@@ -246,8 +272,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   }
 
   private ProductCostingResult bomBlock(
-      ProductCostingContext scope,
-      QuoteCostingWorkbenchResponse workbench) {
+      ProductCostingContext scope, QuoteCostingWorkbenchResponse workbench) {
     QuoteCostingWorkflowStatusResponse workflow =
         workbench == null ? null : workbench.getWorkflowStatus();
     if (workflow != null && "DONE".equals(workflow.getQuoteBomStatus())) {
@@ -257,42 +282,22 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
     if (bom != null && "CHECK_FAILED".equals(bom.getBomStatus())) {
       throw new IllegalStateException(firstText(bom.getErrorMessage(), "BOM 来源检查失败，请核实后重试"));
     }
-    String message = firstText(
-        bom == null ? null : bom.getErrorMessage(),
-        "当前产品没有可用于核算的 BOM，请由产品技术补录后重试");
-    return blocked(
-        scope, "WAIT_BOM", STEP_BOM, "BOM_MISSING", message, 1);
-  }
-
-  private ProductCostingResult priceTypeBlock(
-      ProductCostingContext scope, QuoteCostingWorkbenchResponse workbench) {
-    QuoteCostingWorkflowStatusResponse workflow =
-        workbench == null ? null : workbench.getWorkflowStatus();
-    QuotePriceTypeRecognitionSummaryResponse type =
-        workbench == null ? null : workbench.getLatestPriceTypeRecognition();
-    int gaps = valueOrZero(type == null ? null : type.getGapCount());
-    if (workflow != null
-        && "DONE".equals(workflow.getPriceTypeConfirmationStatus())
-        && gaps == 0) {
-      return null;
-    }
-    String message = firstText(
-        type == null ? null : type.getMessage(),
-        gaps > 0 ? "存在 " + gaps + " 项物料无法识别价格类型" : "价格类型尚未识别完成");
-    return blocked(
-        scope,
-        "WAIT_PRICE_TYPE",
-        STEP_PRICE_TYPE,
-        "PRICE_TYPE_MISSING",
-        message,
-        Math.max(1, gaps));
+    String message =
+        firstText(bom == null ? null : bom.getErrorMessage(), "当前产品没有可用于核算的 BOM，请由产品技术补录后重试");
+    return blocked(scope, "WAIT_BOM", STEP_BOM, "BOM_MISSING", message, 1);
   }
 
   private ProductCostingResult priceBlock(
       ProductCostingContext scope, QuotePricePrepareWorkbenchResponse prices) {
-    var correction=prices==null?null:prices.getTechnicalPriceCorrection();
-    if(correction!=null && !correction.items().isEmpty())return blocked(scope,"WAIT_PRICE",STEP_PRICE,"TECH_PRICE_CORRECTION_REQUIRED",
-        "本产品有 "+correction.items().size()+" 项自行公式尚未形成可用价格，请在价格源维护下载修正后导入",correction.items().size());
+    var correction = prices == null ? null : prices.getTechnicalPriceCorrection();
+    if (correction != null && !correction.items().isEmpty())
+      return blocked(
+          scope,
+          "WAIT_PRICE",
+          STEP_PRICE,
+          "TECH_PRICE_CORRECTION_REQUIRED",
+          "本产品有 " + correction.items().size() + " 项自行公式尚未形成可用价格，请在价格源维护下载修正后导入",
+          correction.items().size());
     PricePrepareReadinessResult readiness = prices == null ? null : prices.getReadiness();
     if (readiness != null
         && "READY".equals(readiness.getStatus())
@@ -302,9 +307,8 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       return null;
     }
     int gaps = readiness == null ? 1 : Math.max(1, readiness.getGapCount());
-    String message = firstText(
-        readiness == null ? null : readiness.getMessage(),
-        "存在 " + gaps + " 项最终价格缺口");
+    String message =
+        firstText(readiness == null ? null : readiness.getMessage(), "存在 " + gaps + " 项最终价格缺口");
     return blocked(scope, "WAIT_PRICE", STEP_PRICE, "PRICE_MISSING", message, gaps);
   }
 
@@ -337,40 +341,74 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
 
   private ProductCostingResult reusableSuccess(ProductCostingContext scope) {
     oaWorkflowAccess.requireCostPublication(scope.form().getId(), scope.itemId());
-    return successLookup.find(scope)
-        .map(reused -> {
-          var check = technicalSources.afterCosting(scope);
-          var blocked = technicalBlock(scope, check);
-          if (blocked != null) return blocked;
-          var result = success(scope, summary(reused.version()), reused.prepareNo(),
-              reused.warningCount(), true, "当前输入已核算成功，本次直接复用现有版本");
-          result.setTechnicalDataCheck(check);
-          return result;
-        })
+    return successLookup
+        .find(scope)
+        .map(
+            reused -> {
+              var check = technicalSources.afterCosting(scope);
+              var blocked = technicalBlock(scope, check);
+              if (blocked != null) return blocked;
+              var result =
+                  success(
+                      scope,
+                      summary(reused.version()),
+                      reused.prepareNo(),
+                      reused.warningCount(),
+                      true,
+                      "当前输入已核算成功，本次直接复用现有版本");
+              result.setTechnicalDataCheck(check);
+              return result;
+            })
         .orElse(null);
   }
 
-  private ProductCostingResult technicalBlock(ProductCostingContext scope, TechnicalDataSourceCheckResponse check) {
+  private ProductCostingResult technicalBlock(
+      ProductCostingContext scope, TechnicalDataSourceCheckResponse check) {
     if (check == null) throw new IllegalStateException("补录来源检查没有返回有效结论");
-    var gaps = check.modules().stream().filter(module -> module.required()
-        || module.availability() == TechnicalDataAvailability.ERROR
-        || "SALARY".equals(module.moduleType()) && module.availability() == TechnicalDataAvailability.UNCONFIRMED).toList();
+    var gaps =
+        check.modules().stream()
+            .filter(
+                module ->
+                    module.required()
+                        || module.availability() == TechnicalDataAvailability.ERROR
+                        || "SALARY".equals(module.moduleType())
+                            && module.availability() == TechnicalDataAvailability.UNCONFIRMED)
+            .toList();
     if (gaps.isEmpty()) return null;
-    boolean queryError = gaps.stream().anyMatch(module -> module.availability() == TechnicalDataAvailability.ERROR)
-        || check.sharedModules().stream().anyMatch(source -> "ERROR".equals(source.status()));
+    boolean queryError =
+        gaps.stream().anyMatch(module -> module.availability() == TechnicalDataAvailability.ERROR)
+            || check.sharedModules().stream().anyMatch(source -> "ERROR".equals(source.status()));
     if (!queryError) {
       var input = effectiveTechnicalData.resolve(scope.itemId(), scope.periodMonth());
       if (input != null) {
-        var supplied = input.moduleSources().stream().map(
-            com.sanhua.marketingcost.dto.EffectiveTechnicalDataInput.ModuleSource::moduleType).toList();
+        var supplied =
+            input.moduleSources().stream()
+                .map(
+                    com.sanhua.marketingcost.dto.EffectiveTechnicalDataInput.ModuleSource
+                        ::moduleType)
+                .toList();
         if (gaps.stream().allMatch(gap -> supplied.contains(gap.moduleType()))) return null;
       }
     }
-    var result = blocked(scope, "WAIT_TECH_DATA", "TECHNICAL_DATA",
-        queryError ? "TECH_SOURCE_QUERY_FAILED" : "TECH_SOURCE_NOT_READY",
-        String.join("；", gaps.stream().map(module -> check.sharedModules().stream()
-            .filter(source -> source.moduleType().equals(module.moduleType()))
-            .map(source -> source.message()).findFirst().orElse(module.reason())).distinct().toList()), gaps.size());
+    var result =
+        blocked(
+            scope,
+            "WAIT_TECH_DATA",
+            "TECHNICAL_DATA",
+            queryError ? "TECH_SOURCE_QUERY_FAILED" : "TECH_SOURCE_NOT_READY",
+            String.join(
+                "；",
+                gaps.stream()
+                    .map(
+                        module ->
+                            check.sharedModules().stream()
+                                .filter(source -> source.moduleType().equals(module.moduleType()))
+                                .map(source -> source.message())
+                                .findFirst()
+                                .orElse(module.reason()))
+                    .distinct()
+                    .toList()),
+            gaps.size());
     result.setTechnicalDataCheck(check);
     return result;
   }
@@ -414,6 +452,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
     result.setOaFormItemId(scope.itemId());
     result.setProductCode(scope.productCode());
     result.setPeriodMonth(scope.periodMonth());
+    result.setSourceRevision(scope.sourceRevision());
     return result;
   }
 
@@ -436,5 +475,4 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   private int valueOrZero(Integer value) {
     return value == null ? 0 : value;
   }
-
 }

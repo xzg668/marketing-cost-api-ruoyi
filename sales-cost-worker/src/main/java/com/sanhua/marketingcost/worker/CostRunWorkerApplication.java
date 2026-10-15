@@ -3,7 +3,6 @@ package com.sanhua.marketingcost.worker;
 import com.sanhua.marketingcost.config.AsyncConfig;
 import com.sanhua.marketingcost.config.CacheConfig;
 import com.sanhua.marketingcost.config.ElectronicDrawingBomProperties;
-import com.sanhua.marketingcost.config.LinkedParserProperties;
 import com.sanhua.marketingcost.config.MetaObjectHandlerConfig;
 import com.sanhua.marketingcost.config.MybatisPlusConfig;
 import com.sanhua.marketingcost.config.PasswordEncodingConfig;
@@ -87,7 +86,6 @@ import org.springframework.scheduling.annotation.EnableScheduling;
     com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingPreparationSource.class,
     com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaWorkflowRepository.class,
     com.sanhua.marketingcost.integration.oa.OaMessageCodec.class,
-    LinkedParserProperties.class,
     MetaObjectHandlerConfig.class,
     MybatisPlusConfig.class,
     PasswordEncodingConfig.class,

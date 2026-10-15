@@ -1,46 +1,48 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBatchQueryRequest;
+import com.sanhua.marketingcost.dto.financequote.FinancePricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBatchPageResponse;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBatchQueryRequest;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareCalculationResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGapPageResponse;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGapQueryRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult;
-import com.sanhua.marketingcost.dto.priceprepare.PricePrepareCalculationResult;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareItemPageResponse;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareItemQueryRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
-import com.sanhua.marketingcost.dto.financequote.FinancePricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareDifferenceResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareDifferenceSummary;
-import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareScenarioResponse;
-import com.sanhua.marketingcost.dto.priceprepare.PricePrepareItemQueryRequest;
-import com.sanhua.marketingcost.dto.priceprepare.PricePrepareItemPageResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateRequest;
+import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareScenarioResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionResponse;
-import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
+import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
-import com.sanhua.marketingcost.service.PricePrepareQueryService;
 import com.sanhua.marketingcost.service.FinancePricePrepareService;
-import com.sanhua.marketingcost.service.FinanceQuoteBasePriceService;
+import com.sanhua.marketingcost.service.PricePrepareQueryService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
 import com.sanhua.marketingcost.service.PricePrepareService;
 import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
 import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
+import com.sanhua.marketingcost.service.financefactor.QuoteFinanceFactorReader;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
-import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
+import com.sanhua.marketingcost.service.pricing.FactorPriceUnit;
+import com.sanhua.marketingcost.service.pricing.PriceFactorContext;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.YearMonth;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -53,16 +55,19 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
 
   private static final int DEFAULT_PAGE = 1;
   private static final int DEFAULT_PAGE_SIZE = 200;
+  private static final int GAP_PAGE_SIZE = 500;
   private static final int SCENARIO_PAGE_SIZE = 500;
 
-  private final com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService technicalCorrections;
+  private final com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService
+      technicalCorrections;
+  private final PricePrepareInputRevisionService inputRevisions;
   private final OaFormMapper oaFormMapper;
   private final OaFormItemMapper oaFormItemMapper;
   private final QuoteBomStatusMapper quoteBomStatusMapper;
   private final QuotePriceTypeRecognitionService priceTypeRecognitionService;
   private final PricePrepareService pricePrepareService;
   private final FinancePricePrepareService financePricePrepareService;
-  private final FinanceQuoteBasePriceService financeQuoteBasePriceService;
+  private final QuoteFinanceFactorReader financeFactors;
   private final PricePrepareQueryService pricePrepareQueryService;
   private final PricePrepareReadinessService pricePrepareReadinessService;
 
@@ -73,25 +78,28 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       QuotePriceTypeRecognitionService priceTypeRecognitionService,
       PricePrepareService pricePrepareService,
       FinancePricePrepareService financePricePrepareService,
-      FinanceQuoteBasePriceService financeQuoteBasePriceService,
+      QuoteFinanceFactorReader financeFactors,
       PricePrepareQueryService pricePrepareQueryService,
       PricePrepareReadinessService pricePrepareReadinessService,
-      com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService technicalCorrections) {
-    this.technicalCorrections=technicalCorrections;
+      com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService
+          technicalCorrections,
+      PricePrepareInputRevisionService inputRevisions) {
+    this.inputRevisions = inputRevisions;
+    this.technicalCorrections = technicalCorrections;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
     this.priceTypeRecognitionService = priceTypeRecognitionService;
     this.pricePrepareService = pricePrepareService;
     this.financePricePrepareService = financePricePrepareService;
-    this.financeQuoteBasePriceService = financeQuoteBasePriceService;
+    this.financeFactors = financeFactors;
     this.pricePrepareQueryService = pricePrepareQueryService;
     this.pricePrepareReadinessService = pricePrepareReadinessService;
   }
 
   @Override
   public QuotePricePrepareWorkbenchResponse getPricePrepare(
-    String oaNo, Long oaFormItemId, String periodMonth) {
+      String oaNo, Long oaFormItemId, String periodMonth) {
     Scope scope = resolveScope(oaNo, oaFormItemId, periodMonth);
     return queryResponse(scope);
   }
@@ -102,9 +110,15 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       String oaNo, Long oaFormItemId, QuotePricePrepareGenerateRequest request) {
     Scope scope =
         resolveScope(oaNo, oaFormItemId, request == null ? null : request.getPeriodMonth());
-    requireRecognizedPriceTypes(scope);
+    verifyPriceRecognition(scope);
     QuotePricePrepareWorkbenchResponse persisted = queryResponse(scope);
-    if (hasCompletedScenarioPair(persisted) && (request == null || !request.isRefreshCandidates())) {
+    if (hasCompletedScenarioPair(persisted)
+        && (request == null || !request.isRefreshCandidates())
+        && inputRevisions.isCurrent(
+            scope.oaNo(),
+            scope.oaFormItemId(),
+            scope.periodMonth(),
+            persisted.getReadiness().getSourceRevision())) {
       return persisted;
     }
     PricePrepareCalculationResult calculation =
@@ -113,22 +127,32 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   }
 
   @Override
-  @Transactional(rollbackFor = Exception.class)
+  @Transactional(
+      rollbackFor = Exception.class,
+      isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
   public QuotePricePrepareWorkbenchResponse generate(
       String oaNo, Long oaFormItemId, QuotePricePrepareGenerateRequest request) {
-    Scope scope = resolveScope(oaNo, oaFormItemId, request == null ? null : request.getPeriodMonth());
-    requireRecognizedPriceTypes(scope);
-    if (request != null
-        && request.getScenarioType() == QuotePriceScenarioType.FINANCE_QUOTE_BASE) {
+    Scope scope =
+        resolveScope(oaNo, oaFormItemId, request == null ? null : request.getPeriodMonth());
+    verifyPriceRecognition(scope);
+    if (request != null && request.getScenarioType() == QuotePriceScenarioType.FINANCE_QUOTE_BASE) {
       if (request.getVariableOverrides() != null && !request.getVariableOverrides().isEmpty()) {
         throw new QuoteIngestException("财务Cu价格必须读取当月财务基准，不接受页面传价");
       }
-      FinancePricePrepareGenerateResult finance = financePricePrepareService.generateFromOa(
-          requireText(request.getSourcePrepareNo(), "OA价格准备批次号"));
+      FinancePricePrepareGenerateResult finance =
+          financePricePrepareService.generateFromOa(
+              requireText(request.getSourcePrepareNo(), "OA价格准备批次号"));
       PricePrepareGenerateResult result = finance.prepareResult();
       validateFinanceResult(scope, result);
       QuotePricePrepareWorkbenchResponse response = queryResponse(scope);
       response.setGeneratedResult(result);
+      response.setSourceRevision(
+          inputRevisions.bind(
+              scope.oaNo(),
+              scope.oaFormItemId(),
+              scope.periodMonth(),
+              request.getSourcePrepareNo(),
+              result.getPrepareNo()));
       return response;
     }
     com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest generateRequest =
@@ -139,7 +163,15 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       finance = financePricePrepareService.generateFromOa(result.getPrepareNo());
       validateFinanceResult(scope, finance.prepareResult());
     }
+    String inputRevision =
+        inputRevisions.bind(
+            scope.oaNo(),
+            scope.oaFormItemId(),
+            scope.periodMonth(),
+            result.getPrepareNo(),
+            finance == null ? null : finance.prepareResult().getPrepareNo());
     QuotePricePrepareWorkbenchResponse response = queryResponse(scope);
+    response.setSourceRevision(inputRevision);
     response.setGeneratedResult(result);
     if (finance != null) {
       response.setFinanceGeneratedResult(finance.prepareResult());
@@ -152,9 +184,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
 
   private com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest
       buildOaGenerateRequest(
-          Scope scope,
-          QuotePricePrepareGenerateRequest request,
-          boolean preview) {
+          Scope scope, QuotePricePrepareGenerateRequest request, boolean preview) {
     com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest generateRequest =
         new com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest();
     generateRequest.setOaNo(scope.oaNo());
@@ -177,27 +207,25 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   }
 
   private QuotePricePrepareWorkbenchResponse previewResponse(
-      Scope scope,
-      PricePrepareCalculationResult calculation) {
+      Scope scope, PricePrepareCalculationResult calculation) {
     QuotePricePrepareWorkbenchResponse response = queryResponse(scope);
     List<PricePrepareItem> items =
-        calculation == null || calculation.getItems() == null
-            ? List.of()
-            : calculation.getItems();
+        calculation == null || calculation.getItems() == null ? List.of() : calculation.getItems();
     List<PricePrepareGap> gapRecords =
-        calculation == null || calculation.getGaps() == null
-            ? List.of()
-            : calculation.getGaps();
+        calculation == null || calculation.getGaps() == null ? List.of() : calculation.getGaps();
     // 纯检查不落库，因此不会经过 pageGaps 的展示字段补齐；这里复用同一只读补齐逻辑，
     // 确保前端能按第三步确认结果正确区分固定价、联动价、区间价等缺口。
     pricePrepareQueryService.enrichGaps(gapRecords);
-    response.setSupplierPriceReviews(calculation == null ? List.of() : calculation.getSupplierPriceReviews());
     response.setItems(new PricePrepareItemPageResponse(items.size(), items));
     PricePrepareGapPageResponse gaps =
         new PricePrepareGapPageResponse(gapRecords.size(), gapRecords);
     response.setGaps(gaps);
     PricePrepareGenerateResult preview = calculation == null ? null : calculation.getSummary();
     response.setReadiness(previewReadiness(preview, gaps));
+    // 纯检查只返回本次候选明细，不把任何旧批次标为本次已生成的最终价格。
+    populateScenarioComparison(response, scope, new PricePrepareBatchPageResponse(0, List.of()));
+    response.setSupplierPriceReviews(
+        calculation == null ? List.of() : calculation.getSupplierPriceReviews());
     return response;
   }
 
@@ -239,8 +267,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
         .limit(5)
         .map(
             gap ->
-                firstText(
-                        firstText(gap.getGapMaterialCode(), gap.getMaterialCode()), "-")
+                firstText(firstText(gap.getGapMaterialCode(), gap.getMaterialCode()), "-")
                     + ": "
                     + firstText(gap.getMessage(), "未说明"))
         .toList();
@@ -255,8 +282,10 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
         && isSuccessfulBatch(response.getOaScenario().getBatch())
         && isSuccessfulBatch(response.getFinanceScenario().getBatch())
         && response.getReadiness().getPrepareNo() != null
-        && response.getReadiness().getPrepareNo().equals(
-            response.getOaScenario().getBatch().getPrepareNo());
+        && response
+            .getReadiness()
+            .getPrepareNo()
+            .equals(response.getOaScenario().getBatch().getPrepareNo());
   }
 
   private boolean shouldGenerateFinanceComparison(
@@ -267,9 +296,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
         && (request == null || !Boolean.FALSE.equals(request.getIncludeFinanceComparison()));
   }
 
-  private void validateFinanceResult(
-      Scope scope,
-      PricePrepareGenerateResult result) {
+  private void validateFinanceResult(Scope scope, PricePrepareGenerateResult result) {
     if (result == null
         || !scope.oaNo().equals(result.getOaNo())
         || !scope.oaFormItemId().equals(result.getOaFormItemId())
@@ -281,17 +308,15 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
 
   private QuotePricePrepareWorkbenchResponse queryResponse(Scope scope) {
     QuotePricePrepareWorkbenchResponse response = new QuotePricePrepareWorkbenchResponse();
-    response.setTechnicalPriceCorrection(technicalCorrections.get(scope.oaNo(),scope.oaFormItemId(),scope.periodMonth()));
+    response.setTechnicalPriceCorrection(
+        technicalCorrections.get(scope.oaNo(), scope.oaFormItemId(), scope.periodMonth()));
     response.setOaNo(scope.oaNo());
     response.setOaFormItemId(scope.oaFormItemId());
     response.setTopProductCode(scope.topProductCode());
     response.setPeriodMonth(scope.periodMonth());
     response.setReadiness(
         pricePrepareReadinessService.check(
-            scope.oaNo(),
-            scope.oaFormItemId(),
-            scope.topProductCode(),
-            scope.periodMonth()));
+            scope.oaNo(), scope.oaFormItemId(), scope.topProductCode(), scope.periodMonth()));
     PricePrepareBatchQueryRequest batchQuery = new PricePrepareBatchQueryRequest();
     batchQuery.setOaNo(scope.oaNo());
     batchQuery.setOaFormItemId(scope.oaFormItemId());
@@ -308,17 +333,34 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     itemQuery.setPeriodMonth(scope.periodMonth());
     itemQuery.setPage(DEFAULT_PAGE);
     itemQuery.setPageSize(DEFAULT_PAGE_SIZE);
-    response.setItems(pricePrepareQueryService.pageItems(itemQuery));
+    // 当前输入已缺价时，旧批次只能作为冻结历史保留，不能再冒充当前最终单价。
+    response.setItems(
+        currentPricesUnavailable(response)
+            ? new PricePrepareItemPageResponse(0, List.of())
+            : pricePrepareQueryService.pageItems(itemQuery));
     PricePrepareGapQueryRequest gapQuery = new PricePrepareGapQueryRequest();
     gapQuery.setOaNo(scope.oaNo());
     gapQuery.setOaFormItemId(scope.oaFormItemId());
     gapQuery.setTopProductCode(scope.topProductCode());
     gapQuery.setPeriodMonth(scope.periodMonth());
-    gapQuery.setPage(DEFAULT_PAGE);
-    gapQuery.setPageSize(DEFAULT_PAGE_SIZE);
-    response.setGaps(pricePrepareQueryService.pageGaps(gapQuery));
+    response.setGaps(allCurrentGaps(gapQuery));
     populateScenarioComparison(response, scope, batches);
     return response;
+  }
+
+  private PricePrepareGapPageResponse allCurrentGaps(PricePrepareGapQueryRequest query) {
+    query.setPageSize(GAP_PAGE_SIZE);
+    List<PricePrepareGap> records = new ArrayList<>();
+    long total;
+    int page = DEFAULT_PAGE;
+    do {
+      query.setPage(page++);
+      PricePrepareGapPageResponse result = pricePrepareQueryService.pageGaps(query);
+      if (result == null || result.getRecords() == null || result.getRecords().isEmpty()) break;
+      records.addAll(result.getRecords());
+      total = result.getTotal();
+    } while (records.size() < total);
+    return new PricePrepareGapPageResponse(records.size(), records);
   }
 
   private void populateScenarioComparison(
@@ -327,32 +369,61 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       PricePrepareBatchPageResponse batches) {
     List<PricePrepareBatch> records =
         batches == null || batches.getRecords() == null ? List.of() : batches.getRecords();
-    ScenarioPair pair = selectScenarioPair(
-        records,
-        response.getReadiness() == null ? null : response.getReadiness().getPrepareNo());
+    ScenarioPair pair =
+        currentPricesUnavailable(response)
+            ? null
+            : selectScenarioPair(
+                records,
+                response.getReadiness() == null ? null : response.getReadiness().getPrepareNo());
     PricePrepareBatch oaBatch = pair == null ? null : pair.oaBatch();
     PricePrepareBatch financeBatch = pair == null ? null : pair.financeBatch();
 
-    QuotePricePrepareScenarioResponse oaScenario = scenario(
-        QuotePriceScenarioType.OA_LOCKED.name(), oaBatch);
-    QuotePricePrepareScenarioResponse financeScenario = scenario(
-        QuotePriceScenarioType.FINANCE_QUOTE_BASE.name(), financeBatch);
-    response.setSupplierPriceReviews(oaBatch == null || oaBatch.getSupplierPriceReviews() == null
-        ? List.of() : oaBatch.getSupplierPriceReviews());
+    QuotePricePrepareScenarioResponse oaScenario =
+        scenario(QuotePriceScenarioType.OA_LOCKED.name(), oaBatch);
+    QuotePricePrepareScenarioResponse financeScenario =
+        scenario(QuotePriceScenarioType.FINANCE_QUOTE_BASE.name(), financeBatch);
+    // 缺价时隐藏旧成功单价，但本次未完成批次的审核事项仍是用户补齐价格的入口。
+    // 批次查询按最新在前返回；确认时还会重新校验当前候选指纹。
+    PricePrepareBatch reviewBatch =
+        currentPricesUnavailable(response)
+            ? records.stream().filter(this::isOaBatch).findFirst().orElse(null)
+            : oaBatch;
+    response.setSupplierPriceReviews(
+        reviewBatch == null || reviewBatch.getSupplierPriceReviews() == null
+            ? List.of()
+            : reviewBatch.getSupplierPriceReviews());
     response.setOaScenario(oaScenario);
     response.setFinanceScenario(financeScenario);
-    populateFinanceBase(response, scope.periodMonth());
+    if (isCompletedScenarioPair(pair)) {
+      FinancePricePrepareGenerateResult prepared =
+          financePricePrepareService.loadPreparedFromOa(oaBatch.getPrepareNo());
+      validateFinanceResult(scope, prepared.prepareResult());
+      if (!financeBatch.getPrepareNo().equals(prepared.financePrepareNo())) {
+        throw new QuoteIngestException("财务场景已变化，请重新读取价格准备结果");
+      }
+      // 页面与单价共用已完成批次的财务输入，不用另一张当前价格表覆盖快照。
+      response.setFinanceBasePriceId(prepared.financeBasePriceId());
+      response.setFinanceCuPricePerKg(prepared.financeCuPricePerKg());
+      response.setFinanceCuPricePerTon(toPerTon(prepared.financeCuPricePerKg()));
+    } else {
+      populateFinanceBase(response, scope);
+    }
     populateDifferences(response, oaScenario.getItems(), financeScenario.getItems());
   }
 
-  private QuotePricePrepareScenarioResponse scenario(
-      String scenarioType, PricePrepareBatch batch) {
+  private boolean currentPricesUnavailable(QuotePricePrepareWorkbenchResponse response) {
+    return response.getReadiness() != null
+        && !"READY".equalsIgnoreCase(response.getReadiness().getStatus());
+  }
+
+  private QuotePricePrepareScenarioResponse scenario(String scenarioType, PricePrepareBatch batch) {
     QuotePricePrepareScenarioResponse response = new QuotePricePrepareScenarioResponse();
     response.setScenarioType(scenarioType);
     response.setBatch(batch);
-    response.setItems(batch == null
-        ? new PricePrepareItemPageResponse(0, List.of())
-        : loadItems(batch.getPrepareNo()));
+    response.setItems(
+        batch == null
+            ? new PricePrepareItemPageResponse(0, List.of())
+            : loadItems(batch.getPrepareNo()));
     return response;
   }
 
@@ -381,11 +452,12 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       List<PricePrepareBatch> records, String currentOaPrepareNo) {
     if (StringUtils.hasText(currentOaPrepareNo)) {
       PricePrepareBatch currentOa =
-          (records == null ? List.<PricePrepareBatch>of() : records).stream()
-              .filter(this::isOaBatch)
-              .filter(batch -> currentOaPrepareNo.equals(batch.getPrepareNo()))
-              .findFirst()
-              .orElse(null);
+          (records == null ? List.<PricePrepareBatch>of() : records)
+              .stream()
+                  .filter(this::isOaBatch)
+                  .filter(batch -> currentOaPrepareNo.equals(batch.getPrepareNo()))
+                  .findFirst()
+                  .orElse(null);
       if (currentOa != null) {
         return new ScenarioPair(currentOa, findFinanceBatch(records, currentOa));
       }
@@ -412,14 +484,15 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     if (oaBatch == null) {
       return null;
     }
-    return (records == null ? List.<PricePrepareBatch>of() : records).stream()
-        .filter(batch -> isFinanceBatchFor(batch, oaBatch.getPrepareNo()))
-        .filter(
-            batch ->
-                !StringUtils.hasText(oaBatch.getScenarioGroupNo())
-                    || oaBatch.getScenarioGroupNo().equals(batch.getScenarioGroupNo()))
-        .findFirst()
-        .orElse(null);
+    return (records == null ? List.<PricePrepareBatch>of() : records)
+        .stream()
+            .filter(batch -> isFinanceBatchFor(batch, oaBatch.getPrepareNo()))
+            .filter(
+                batch ->
+                    !StringUtils.hasText(oaBatch.getScenarioGroupNo())
+                        || oaBatch.getScenarioGroupNo().equals(batch.getScenarioGroupNo()))
+            .findFirst()
+            .orElse(null);
   }
 
   private boolean isCompletedScenarioPair(ScenarioPair pair) {
@@ -434,17 +507,16 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
         && (batch.getGapCount() == null || batch.getGapCount() == 0);
   }
 
-  private void populateFinanceBase(
-      QuotePricePrepareWorkbenchResponse response, String periodMonth) {
+  private void populateFinanceBase(QuotePricePrepareWorkbenchResponse response, Scope scope) {
     try {
-      FinanceBasePrice base = financeQuoteBasePriceService.getRequired(periodMonth);
-      if (base != null) {
-        response.setFinanceBasePriceId(base.getId());
-        response.setFinanceCuPricePerKg(base.getPrice());
-        response.setFinanceCuPricePerTon(toPerTon(base.getPrice()));
-      }
+      var base =
+          financeFactors.read(
+              scope.oaNo(), scope.oaFormItemId(), scope.periodMonth(), scope.businessUnitType());
+      var price = base.requiredPrice(PriceFactorContext.COPPER, FactorPriceUnit.CNY_KG, true);
+      response.setFinanceCuPricePerKg(price);
+      response.setFinanceCuPricePerTon(toPerTon(price));
     } catch (IllegalArgumentException ignored) {
-      // 查询页面允许展示“未配置”；真正生成时仍由财务场景服务严格阻断。
+      // 查询页面允许展示“未配置”；生成时由财务场景服务严格阻断。
     }
   }
 
@@ -455,8 +527,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
     List<PricePrepareItem> oaItems = records(oaPage);
     List<PricePrepareItem> financeItems = records(financePage);
     if (oaItems.isEmpty() || financeItems.isEmpty()) {
-      QuotePricePrepareDifferenceSummary emptySummary =
-          new QuotePricePrepareDifferenceSummary();
+      QuotePricePrepareDifferenceSummary emptySummary = new QuotePricePrepareDifferenceSummary();
       emptySummary.setTotalCount(0);
       emptySummary.setDifferentCount(0);
       response.setDifferences(List.of());
@@ -471,21 +542,23 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       pairs.computeIfAbsent(comparisonKey(item), ignored -> new ItemPair()).finance = item;
     }
 
-    List<QuotePricePrepareDifferenceResponse> differences = pairs.values().stream()
-        .map(this::difference)
-        .toList();
+    List<QuotePricePrepareDifferenceResponse> differences =
+        pairs.values().stream().map(this::difference).toList();
     QuotePricePrepareDifferenceSummary summary = new QuotePricePrepareDifferenceSummary();
     summary.setTotalCount(differences.size());
-    summary.setDifferentCount((int) differences.stream().filter(
-        QuotePricePrepareDifferenceResponse::isDifferent).count());
-    summary.setFinanceTotalAmount(differences.stream()
-        .map(QuotePricePrepareDifferenceResponse::getFinanceAmount)
-        .map(this::zeroIfNull)
-        .reduce(BigDecimal.ZERO, BigDecimal::add));
-    summary.setOaTotalAmount(differences.stream()
-        .map(QuotePricePrepareDifferenceResponse::getOaAmount)
-        .map(this::zeroIfNull)
-        .reduce(BigDecimal.ZERO, BigDecimal::add));
+    summary.setDifferentCount(
+        (int)
+            differences.stream().filter(QuotePricePrepareDifferenceResponse::isDifferent).count());
+    summary.setFinanceTotalAmount(
+        differences.stream()
+            .map(QuotePricePrepareDifferenceResponse::getFinanceAmount)
+            .map(this::zeroIfNull)
+            .reduce(BigDecimal.ZERO, BigDecimal::add));
+    summary.setOaTotalAmount(
+        differences.stream()
+            .map(QuotePricePrepareDifferenceResponse::getOaAmount)
+            .map(this::zeroIfNull)
+            .reduce(BigDecimal.ZERO, BigDecimal::add));
     summary.setAmountDifference(
         summary.getOaTotalAmount().subtract(summary.getFinanceTotalAmount()));
     response.setDifferences(differences);
@@ -548,8 +621,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   }
 
   private BigDecimal value(
-      PricePrepareItem item,
-      java.util.function.Function<PricePrepareItem, BigDecimal> getter) {
+      PricePrepareItem item, java.util.function.Function<PricePrepareItem, BigDecimal> getter) {
     return item == null ? null : getter.apply(item);
   }
 
@@ -581,19 +653,18 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       throw new QuoteIngestException("报价产品行不存在或不属于当前报价单: " + oaFormItemId);
     }
     String topProductCode =
-        requireText(
-            QuoteProductIdentityUtils.resolveCostingCode(item),
-            "报价产品料号、型号或图号");
+        requireText(QuoteProductIdentityUtils.resolveCostingCode(item), "报价产品料号、型号或图号");
     String period =
         StringUtils.hasText(periodMonth)
             ? CostPricingPeriodUtils.requireCurrentPricingMonth(periodMonth)
             : resolveDefaultPeriod(form);
-    QuoteBomStatus bomStatus = quoteBomStatusMapper.selectOne(
-        Wrappers.<QuoteBomStatus>lambdaQuery()
-            .eq(QuoteBomStatus::getOaNo, oaNoValue)
-            .eq(QuoteBomStatus::getOaFormItemId, oaFormItemId)
-            .orderByDesc(QuoteBomStatus::getId)
-            .last("LIMIT 1"));
+    QuoteBomStatus bomStatus =
+        quoteBomStatusMapper.selectOne(
+            Wrappers.<QuoteBomStatus>lambdaQuery()
+                .eq(QuoteBomStatus::getOaNo, oaNoValue)
+                .eq(QuoteBomStatus::getOaFormItemId, oaFormItemId)
+                .orderByDesc(QuoteBomStatus::getId)
+                .last("LIMIT 1"));
     return new Scope(
         oaNoValue,
         oaFormItemId,
@@ -601,24 +672,18 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
         period,
         firstText(item.getBusinessUnitType(), form.getBusinessUnitType()),
         bomStatus != null && "ELECTRONIC_DRAWING_BOM".equals(bomStatus.getBomSource())
-            ? "E_DRAWING" : "U9");
+            ? "E_DRAWING"
+            : "U9");
   }
 
-  private QuotePriceTypeRecognitionResponse requireRecognizedPriceTypes(Scope scope) {
+  private void verifyPriceRecognition(Scope scope) {
     QuotePriceTypeRecognitionResponse current =
         priceTypeRecognitionService.getRecognition(
             scope.oaNo(), scope.oaFormItemId(), scope.periodMonth());
     if (current == null || current.getSummary() == null) {
       throw new QuoteIngestException("价格类型自动识别未返回结果，请稍后重试");
     }
-    int missingCount = current.getSummary().getMissingTypeCount() == null
-        ? 0
-        : current.getSummary().getMissingTypeCount();
-    if (missingCount > 0) {
-      throw new QuoteIngestException(
-          "当前产品有 " + missingCount + " 项价格类型无法自动识别，请先补充价格类型");
-    }
-    return current;
+    // 无可用来源应由价格准备记录真实缺价；不能把缺来源当成必须由财务导入类型配置。
   }
 
   private String resolveDefaultPeriod(OaForm form) {
@@ -626,7 +691,8 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       return CostPricingPeriodUtils.requireCurrentPricingMonth(form.getAccountingPeriodMonth());
     }
     if (form.getApplyDate() != null) {
-      return CostPricingPeriodUtils.requireCurrentPricingMonth(YearMonth.from(form.getApplyDate()).toString());
+      return CostPricingPeriodUtils.requireCurrentPricingMonth(
+          YearMonth.from(form.getApplyDate()).toString());
     }
     return CostPricingPeriodUtils.requireCurrentPricingMonth(null);
   }
@@ -653,6 +719,5 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       String businessUnitType,
       String bomSourceType) {}
 
-  private record ScenarioPair(
-      PricePrepareBatch oaBatch, PricePrepareBatch financeBatch) {}
+  private record ScenarioPair(PricePrepareBatch oaBatch, PricePrepareBatch financeBatch) {}
 }

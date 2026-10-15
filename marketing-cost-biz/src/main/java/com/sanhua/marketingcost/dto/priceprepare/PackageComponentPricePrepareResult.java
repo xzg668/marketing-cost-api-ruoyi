@@ -17,6 +17,7 @@ public class PackageComponentPricePrepareResult {
   private String resultRefType;
   private Long resultRefId;
   private String message;
+  private String inputSnapshotJson;
   private List<Gap> gaps = new ArrayList<>();
 
   public static PackageComponentPricePrepareResult ready(
@@ -52,6 +53,8 @@ public class PackageComponentPricePrepareResult {
     private String gapMaterialCode;
     private String materialName;
     private String sourceTable;
+    private String priceType;
+    private String reasonCode;
     private String message;
 
     public Gap() {

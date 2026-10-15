@@ -273,6 +273,13 @@ public class FormulaNormalizer {
     if (balance != 0) {
       throw new FormulaSyntaxException("括号不平衡（差值=" + balance + "），原文=" + collapsed);
     }
+    if (!collapsed.isBlank()) {
+      try {
+        com.sanhua.marketingcost.formula.registry.ExpressionEvaluator.validate(collapsed);
+      } catch (IllegalArgumentException error) {
+        throw new FormulaSyntaxException(error.getMessage());
+      }
+    }
     return collapsed;
   }
 

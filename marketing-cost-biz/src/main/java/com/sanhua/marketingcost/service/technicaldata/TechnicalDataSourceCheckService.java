@@ -47,11 +47,6 @@ public class TechnicalDataSourceCheckService {
       return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.UNCONFIRMED,
           "PRICE_BOM_NOT_READY", "先确定本产品实际 BOM 及计价物料，再检查价格", null);
     }
-    // 核算已确认价格类型有缺口，取价前提尚未成立；提前试算会把未配置的路线误报为查询失败。
-    if ("WAIT_PRICE_TYPE".equals(workspace.getWorkspaceStatus())) {
-      return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.UNCONFIRMED,
-          "PRICE_BASIS_UNCONFIRMED", "请先在价格类型识别页确认缺失的价格类型，再重新核算本产品", null);
-    }
     try {
       var request = new PricePrepareGenerateRequest();
       request.setOaNo(context.oaNo());
@@ -86,7 +81,7 @@ public class TechnicalDataSourceCheckService {
       boolean unresolved = gaps.stream().anyMatch(gap -> !"MISSING_PRICE".equals(gap.getGapType())
           || Objects.toString(gap.getReasonCode(), "").contains("CONFLICT"));
       if (unresolved) return fact(context, TechnicalDataModuleType.PRICE, TechnicalDataAvailability.UNCONFIRMED,
-          "PRICE_BASIS_UNCONFIRMED", "仍有价格类型、结构或来源冲突，请先在价格检查页处理", reference);
+          "PRICE_BASIS_UNCONFIRMED", "仍有取价范围、结构或来源冲突，请先在价格检查页处理", reference);
       var missingCodes = new java.util.HashSet<String>();
       gaps.forEach(gap -> missingCodes.add(gap.getGapMaterialCode()));
       if (additional != null) additional.items().stream().filter(row -> "MISSING".equals(row.status()))

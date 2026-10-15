@@ -10,6 +10,7 @@ import com.sanhua.marketingcost.service.FactorCanonicalKeyService;
 import com.sanhua.marketingcost.service.PriceLinkedType2FactorIdentityReadRepository;
 import com.sanhua.marketingcost.service.PriceLinkedType2FactorIdentityResolver;
 import com.sanhua.marketingcost.service.PriceLinkedType2TextNormalizer;
+import com.sanhua.marketingcost.service.financefactor.FinanceFactorAuthority;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -32,10 +33,14 @@ public class PriceLinkedType2FactorIdentityResolverImpl
   private final PriceLinkedType2TextNormalizer textNormalizer;
   private final PriceLinkedType2FactorIdentityReadRepository readRepository;
 
+  private final FinanceFactorAuthority financeAuthority;
+
   public PriceLinkedType2FactorIdentityResolverImpl(
       FactorCanonicalKeyService canonicalKeyService,
       PriceLinkedType2TextNormalizer textNormalizer,
-      PriceLinkedType2FactorIdentityReadRepository readRepository) {
+      PriceLinkedType2FactorIdentityReadRepository readRepository,
+      FinanceFactorAuthority financeAuthority) {
+    this.financeAuthority = financeAuthority;
     this.canonicalKeyService = canonicalKeyService;
     this.textNormalizer = textNormalizer;
     this.readRepository = readRepository;
@@ -43,16 +48,15 @@ public class PriceLinkedType2FactorIdentityResolverImpl
 
   @Override
   public PriceLinkedType2FactorIdentityResolution resolve(
-      PriceLinkedType2FactorRow factorRow,
-      String businessUnitType,
-      String priceMonth) {
+      PriceLinkedType2FactorRow factorRow, String businessUnitType, String priceMonth) {
     String normalizedBusinessUnit = textNormalizer.normalize(businessUnitType);
     String normalizedMonth = textNormalizer.normalize(priceMonth);
-    String canonicalKey = factorRow == null
-        ? ""
-        : canonicalKeyService.build(factorRow.getPriceSource(), factorRow.getShortName());
-    String validationError = validate(
-        factorRow, normalizedBusinessUnit, normalizedMonth, canonicalKey);
+    String canonicalKey =
+        factorRow == null
+            ? ""
+            : canonicalKeyService.build(factorRow.getPriceSource(), factorRow.getShortName());
+    String validationError =
+        validate(factorRow, normalizedBusinessUnit, normalizedMonth, canonicalKey);
     if (validationError != null) {
       return unselectedResult(
           factorRow,
@@ -73,9 +77,10 @@ public class PriceLinkedType2FactorIdentityResolverImpl
             .filter(identity -> identity.getId() != null)
             .filter(identity -> sameBusinessUnit(identity, normalizedBusinessUnit))
             .toList();
-    List<FactorIdentity> canonicalCandidates = allIdentities.stream()
-        .filter(identity -> canonicalKey.equals(canonicalKey(identity)))
-        .toList();
+    List<FactorIdentity> canonicalCandidates =
+        allIdentities.stream()
+            .filter(identity -> canonicalKey.equals(canonicalKey(identity)))
+            .toList();
     if (canonicalCandidates.isEmpty()) {
       return unselectedResult(
           factorRow,
@@ -90,27 +95,26 @@ public class PriceLinkedType2FactorIdentityResolverImpl
           "系统中不存在统一因素 " + canonicalKey + "，需要在确认阶段创建稳定身份");
     }
 
-    List<FactorIdentity> exactCandidates = canonicalCandidates.stream()
-        .filter(identity -> exactMatch(identity, factorRow))
-        .toList();
+    List<FactorIdentity> exactCandidates =
+        canonicalCandidates.stream().filter(identity -> exactMatch(identity, factorRow)).toList();
     boolean exactMatched = !exactCandidates.isEmpty();
-    List<FactorIdentity> selectionCandidates =
-        exactMatched ? exactCandidates : canonicalCandidates;
-    List<Long> candidateIds = canonicalCandidates.stream()
-        .map(FactorIdentity::getId)
-        .distinct()
-        .toList();
-    List<FactorMonthlyPrice> monthlyPrices = safe(
-        readRepository.findActiveMonthlyPrices(candidateIds, normalizedMonth));
-    Map<Long, Long> bindingCounts = safeMap(
-        readRepository.countActiveLegacyBindings(candidateIds));
-    Map<Long, List<BigDecimal>> pricesByIdentity =
-        pricesByIdentity(monthlyPrices, candidateIds);
-    List<PriceLinkedType2FactorIdentityCandidate> snapshots = candidateSnapshots(
-        canonicalCandidates, exactCandidates, pricesByIdentity, bindingCounts);
+    List<FactorIdentity> selectionCandidates = exactMatched ? exactCandidates : canonicalCandidates;
+    List<Long> candidateIds =
+        canonicalCandidates.stream().map(FactorIdentity::getId).distinct().toList();
+    boolean publicFactor =
+        financeAuthority.manages(
+            normalizedBusinessUnit, factorRow.getPriceSource(), factorRow.getShortName());
+    List<FactorMonthlyPrice> monthlyPrices =
+        publicFactor
+            ? List.of()
+            : safe(readRepository.findActiveMonthlyPrices(candidateIds, normalizedMonth));
+    Map<Long, Long> bindingCounts = safeMap(readRepository.countActiveLegacyBindings(candidateIds));
+    Map<Long, List<BigDecimal>> pricesByIdentity = pricesByIdentity(monthlyPrices, candidateIds);
+    List<PriceLinkedType2FactorIdentityCandidate> snapshots =
+        candidateSnapshots(canonicalCandidates, exactCandidates, pricesByIdentity, bindingCounts);
 
-    MasterDecision masterDecision = establishedMaster(
-        canonicalCandidates, allIdentities, canonicalKey);
+    MasterDecision masterDecision =
+        establishedMaster(canonicalCandidates, allIdentities, canonicalKey);
     if (masterDecision.conflictMessage() != null) {
       return unselectedResult(
           factorRow,
@@ -127,22 +131,22 @@ public class PriceLinkedType2FactorIdentityResolverImpl
 
     FactorIdentity selected = masterDecision.identity();
     if (selected == null) {
-      selected = selectionCandidates.stream()
-          .sorted(
-              Comparator
-                  .<FactorIdentity>comparingLong(
-                      identity -> bindingCounts.getOrDefault(identity.getId(), 0L))
-                  .reversed()
-                  .thenComparing(FactorIdentity::getId))
-          .findFirst()
-          .orElseThrow();
+      selected =
+          selectionCandidates.stream()
+              .sorted(
+                  Comparator.<FactorIdentity>comparingLong(
+                          identity -> bindingCounts.getOrDefault(identity.getId(), 0L))
+                      .reversed()
+                      .thenComparing(FactorIdentity::getId))
+              .findFirst()
+              .orElseThrow();
     }
-    Long canonicalMasterId = selected.getCanonicalFactorIdentityId() == null
-        ? selected.getId()
-        : selected.getCanonicalFactorIdentityId();
+    Long canonicalMasterId =
+        selected.getCanonicalFactorIdentityId() == null
+            ? selected.getId()
+            : selected.getCanonicalFactorIdentityId();
     Set<BigDecimal> systemPrices = distinctPrices(null, pricesByIdentity);
-    Set<BigDecimal> distinctPrices = distinctPrices(
-        factorRow.getPrice(), pricesByIdentity);
+    Set<BigDecimal> distinctPrices = distinctPrices(factorRow.getPrice(), pricesByIdentity);
     if (distinctPrices.size() > 1) {
       boolean overwriteAllowed = systemPrices.size() <= 1;
       return conflictResult(
@@ -155,17 +159,19 @@ public class PriceLinkedType2FactorIdentityResolverImpl
           overwriteAllowed,
           snapshots,
           metadataUpdates(canonicalCandidates, canonicalKey, canonicalMasterId),
-          "统一因素 " + canonicalKey + " 在 " + normalizedMonth
+          "统一因素 "
+              + canonicalKey
+              + " 在 "
+              + normalizedMonth
               + " 的系统候选价与本次 Excel 价格不一致："
               + distinctPrices.stream().map(BigDecimal::toPlainString).toList()
-              + (overwriteAllowed
-                  ? "；可在用户明确确认后覆盖"
-                  : "；候选内部已不一致，禁止自动覆盖"));
+              + (overwriteAllowed ? "；可在用户明确确认后覆盖" : "；候选内部已不一致，禁止自动覆盖"));
     }
     BigDecimal selectedPrice = onePrice(pricesByIdentity.get(selected.getId()));
-    PriceLinkedType2FactorIdentityResolutionStatus resolvedStatus = exactMatched
-        ? PriceLinkedType2FactorIdentityResolutionStatus.EXACT_MATCH
-        : PriceLinkedType2FactorIdentityResolutionStatus.CANONICAL_MATCH;
+    PriceLinkedType2FactorIdentityResolutionStatus resolvedStatus =
+        exactMatched
+            ? PriceLinkedType2FactorIdentityResolutionStatus.EXACT_MATCH
+            : PriceLinkedType2FactorIdentityResolutionStatus.CANONICAL_MATCH;
     return selectedResult(
         factorRow,
         normalizedBusinessUnit,
@@ -176,9 +182,9 @@ public class PriceLinkedType2FactorIdentityResolverImpl
         selectedPrice,
         snapshots,
         metadataUpdates(canonicalCandidates, canonicalKey, canonicalMasterId),
-        exactMatched
-            ? "完整名称、简称和取价来源命中已有身份"
-            : "完整名称未命中，已按统一因素键复用已有身份");
+        publicFactor
+            ? "引用财务基价；Excel价格仅保留原输入"
+            : exactMatched ? "完整名称、简称和取价来源命中已有身份" : "完整名称未命中，已按统一因素键复用已有身份");
   }
 
   private String validate(
@@ -210,19 +216,19 @@ public class PriceLinkedType2FactorIdentityResolverImpl
     return null;
   }
 
-  private boolean sameBusinessUnit(
-      FactorIdentity identity, String normalizedBusinessUnit) {
-    return normalizedBusinessUnit.equals(
-        textNormalizer.normalize(identity.getBusinessUnitType()));
+  private boolean sameBusinessUnit(FactorIdentity identity, String normalizedBusinessUnit) {
+    return normalizedBusinessUnit.equals(textNormalizer.normalize(identity.getBusinessUnitType()));
   }
 
-  private boolean exactMatch(
-      FactorIdentity identity, PriceLinkedType2FactorRow factorRow) {
-    return textNormalizer.normalize(identity.getFactorName())
+  private boolean exactMatch(FactorIdentity identity, PriceLinkedType2FactorRow factorRow) {
+    return textNormalizer
+            .normalize(identity.getFactorName())
             .equals(textNormalizer.normalize(factorRow.getFactorName()))
-        && textNormalizer.normalize(identity.getShortName())
+        && textNormalizer
+            .normalize(identity.getShortName())
             .equals(textNormalizer.normalize(factorRow.getShortName()))
-        && textNormalizer.normalize(identity.getPriceSource())
+        && textNormalizer
+            .normalize(identity.getPriceSource())
             .equals(textNormalizer.normalize(factorRow.getPriceSource()));
   }
 
@@ -243,7 +249,8 @@ public class PriceLinkedType2FactorIdentityResolverImpl
           || monthlyPrice.getPrice() == null) {
         continue;
       }
-      prices.computeIfAbsent(monthlyPrice.getFactorIdentityId(), ignored -> new ArrayList<>())
+      prices
+          .computeIfAbsent(monthlyPrice.getFactorIdentityId(), ignored -> new ArrayList<>())
           .add(normalizePrice(monthlyPrice.getPrice()));
     }
     return prices;
@@ -264,34 +271,32 @@ public class PriceLinkedType2FactorIdentityResolverImpl
   }
 
   private MasterDecision establishedMaster(
-      List<FactorIdentity> candidates,
-      List<FactorIdentity> allIdentities,
-      String canonicalKey) {
-    Set<Long> masterIds = candidates.stream()
-        .map(FactorIdentity::getCanonicalFactorIdentityId)
-        .filter(Objects::nonNull)
-        .collect(Collectors.toCollection(LinkedHashSet::new));
+      List<FactorIdentity> candidates, List<FactorIdentity> allIdentities, String canonicalKey) {
+    Set<Long> masterIds =
+        candidates.stream()
+            .map(FactorIdentity::getCanonicalFactorIdentityId)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
     if (masterIds.size() > 1) {
       return new MasterDecision(
-          null,
-          "统一因素 " + canonicalKey + " 已配置多个主身份 " + masterIds + "，必须人工处理");
+          null, "统一因素 " + canonicalKey + " 已配置多个主身份 " + masterIds + "，必须人工处理");
     }
     if (masterIds.isEmpty()) {
       return new MasterDecision(null, null);
     }
     Long masterId = masterIds.iterator().next();
-    Map<Long, FactorIdentity> identitiesById = allIdentities.stream()
-        .collect(Collectors.toMap(
-            FactorIdentity::getId,
-            Function.identity(),
-            (left, right) -> left,
-            LinkedHashMap::new));
+    Map<Long, FactorIdentity> identitiesById =
+        allIdentities.stream()
+            .collect(
+                Collectors.toMap(
+                    FactorIdentity::getId,
+                    Function.identity(),
+                    (left, right) -> left,
+                    LinkedHashMap::new));
     FactorIdentity master = identitiesById.get(masterId);
     if (master == null || !canonicalKey.equals(canonicalKey(master))) {
       return new MasterDecision(
-          null,
-          "统一因素 " + canonicalKey + " 指向的主身份 " + masterId
-              + " 不存在或统一因素键不一致");
+          null, "统一因素 " + canonicalKey + " 指向的主身份 " + masterId + " 不存在或统一因素键不一致");
     }
     return new MasterDecision(master, null);
   }
@@ -301,34 +306,34 @@ public class PriceLinkedType2FactorIdentityResolverImpl
       List<FactorIdentity> exactCandidates,
       Map<Long, List<BigDecimal>> pricesByIdentity,
       Map<Long, Long> bindingCounts) {
-    Set<Long> exactIds = exactCandidates.stream()
-        .map(FactorIdentity::getId)
-        .collect(Collectors.toSet());
+    Set<Long> exactIds =
+        exactCandidates.stream().map(FactorIdentity::getId).collect(Collectors.toSet());
     return candidates.stream()
         .sorted(Comparator.comparing(FactorIdentity::getId))
-        .map(identity -> new PriceLinkedType2FactorIdentityCandidate(
-            identity.getId(),
-            identity.getCanonicalFactorIdentityId(),
-            identity.getFactorName(),
-            identity.getShortName(),
-            identity.getPriceSource(),
-            canonicalKey(identity),
-            onePrice(pricesByIdentity.get(identity.getId())),
-            bindingCounts.getOrDefault(identity.getId(), 0L),
-            exactIds.contains(identity.getId())))
+        .map(
+            identity ->
+                new PriceLinkedType2FactorIdentityCandidate(
+                    identity.getId(),
+                    identity.getCanonicalFactorIdentityId(),
+                    identity.getFactorName(),
+                    identity.getShortName(),
+                    identity.getPriceSource(),
+                    canonicalKey(identity),
+                    onePrice(pricesByIdentity.get(identity.getId())),
+                    bindingCounts.getOrDefault(identity.getId(), 0L),
+                    exactIds.contains(identity.getId())))
         .toList();
   }
 
   private List<Long> metadataUpdates(
-      List<FactorIdentity> candidates,
-      String canonicalKey,
-      Long canonicalMasterId) {
+      List<FactorIdentity> candidates, String canonicalKey, Long canonicalMasterId) {
     return candidates.stream()
-        .filter(identity ->
-            !canonicalKey.equals(canonicalKeyService.normalizeExistingKey(
-                identity.getCanonicalFactorKey()))
-                || (canonicalMasterId != null
-                    && !canonicalMasterId.equals(identity.getCanonicalFactorIdentityId())))
+        .filter(
+            identity ->
+                !canonicalKey.equals(
+                        canonicalKeyService.normalizeExistingKey(identity.getCanonicalFactorKey()))
+                    || (canonicalMasterId != null
+                        && !canonicalMasterId.equals(identity.getCanonicalFactorIdentityId())))
         .map(FactorIdentity::getId)
         .toList();
   }
@@ -337,10 +342,7 @@ public class PriceLinkedType2FactorIdentityResolverImpl
     if (prices == null || prices.isEmpty()) {
       return null;
     }
-    return prices.stream()
-        .filter(Objects::nonNull)
-        .min(BigDecimal::compareTo)
-        .orElse(null);
+    return prices.stream().filter(Objects::nonNull).min(BigDecimal::compareTo).orElse(null);
   }
 
   private BigDecimal normalizePrice(BigDecimal price) {
@@ -359,11 +361,12 @@ public class PriceLinkedType2FactorIdentityResolverImpl
       List<Long> metadataUpdates,
       String message) {
     Long selectedId = selected == null ? null : selected.getId();
-    Long canonicalMasterId = selected == null
-        ? null
-        : selected.getCanonicalFactorIdentityId() == null
-            ? selected.getId()
-            : selected.getCanonicalFactorIdentityId();
+    Long canonicalMasterId =
+        selected == null
+            ? null
+            : selected.getCanonicalFactorIdentityId() == null
+                ? selected.getId()
+                : selected.getCanonicalFactorIdentityId();
     return new PriceLinkedType2FactorIdentityResolution(
         factorRow,
         businessUnitType,
@@ -445,6 +448,5 @@ public class PriceLinkedType2FactorIdentityResolverImpl
     return values == null ? Map.of() : values;
   }
 
-  private record MasterDecision(FactorIdentity identity, String conflictMessage) {
-  }
+  private record MasterDecision(FactorIdentity identity, String conflictMessage) {}
 }

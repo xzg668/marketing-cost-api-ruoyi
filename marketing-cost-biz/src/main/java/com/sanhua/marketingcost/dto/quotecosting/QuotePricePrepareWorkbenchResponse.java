@@ -13,12 +13,15 @@ import lombok.Setter;
 @Getter
 @Setter
 public class QuotePricePrepareWorkbenchResponse {
-  private com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceCorrection technicalPriceCorrection;
-  private java.util.List<com.sanhua.marketingcost.service.pricing.SupplierPriceReview> supplierPriceReviews = java.util.List.of();
+  private com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceCorrection
+      technicalPriceCorrection;
+  private java.util.List<com.sanhua.marketingcost.service.pricing.SupplierPriceReview>
+      supplierPriceReviews = java.util.List.of();
   private String oaNo;
   private Long oaFormItemId;
   private String topProductCode;
   private String periodMonth;
+  private String sourceRevision;
   private PricePrepareReadinessResult readiness;
   private PricePrepareBatchPageResponse batches;
   private PricePrepareItemPageResponse items;
@@ -29,9 +32,12 @@ public class QuotePricePrepareWorkbenchResponse {
   private QuotePricePrepareScenarioResponse oaScenario;
   private List<QuotePricePrepareDifferenceResponse> differences;
   private QuotePricePrepareDifferenceSummary differenceSummary;
+
   /** 数据库核算口径，单位元/公斤。 */
   private BigDecimal financeCuPricePerKg;
+
   /** 页面展示口径，单位元/吨。 */
   private BigDecimal financeCuPricePerTon;
+
   private Long financeBasePriceId;
 }

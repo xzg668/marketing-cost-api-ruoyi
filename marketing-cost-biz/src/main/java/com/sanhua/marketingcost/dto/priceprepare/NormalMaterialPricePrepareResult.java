@@ -19,6 +19,7 @@ public class NormalMaterialPricePrepareResult {
   private Long resultRefId;
   private Long sourcePriceRecordId;
   private String sourcePriceBatchNo;
+  private String inputSnapshotJson;
   private String supplierName;
   private String supplierCode;
   private BigDecimal supplyRatio;

@@ -45,7 +45,8 @@ public class QuoteOaPdfHeaderParser {
         continue;
       }
       if (!QuoteIngestFieldBinder.applyRequestField(request, field.getFieldCode(), value.value())
-          && !QuoteIngestFieldBinder.applyHeaderField(request.getHeader(), field.getFieldCode(), value.value())) {
+          && !QuoteIngestFieldBinder.applyHeaderField(
+              request.getHeader(), field.getFieldCode(), value.value())) {
         request.getExtraFields().add(toExtraField(field, value.value(), value.sourcePath()));
       }
     }
@@ -63,6 +64,9 @@ public class QuoteOaPdfHeaderParser {
       }
       for (String alias : aliases) {
         int labelIndex = line.indexOf(alias);
+        if ("boardTender".equals(field.getFieldCode())
+            && labelIndex >= 0
+            && line.substring(0, labelIndex).contains("初步")) continue;
         if (labelIndex < 0) {
           continue;
         }
@@ -73,7 +77,8 @@ public class QuoteOaPdfHeaderParser {
           continue;
         }
         int valueStart = skipSeparators(line, labelIndex + alias.length());
-        String value = trimToNull(line.substring(valueStart, nextLabelIndex(line, valueStart, allLabels)));
+        String value =
+            trimToNull(line.substring(valueStart, nextLabelIndex(line, valueStart, allLabels)));
         if (!StringUtils.hasText(value) && allowNextLineValue(field)) {
           value = nextLineValue(lines, lineIndex + 1, allLabels);
         }
@@ -170,7 +175,8 @@ public class QuoteOaPdfHeaderParser {
         && !text.contains("型号多");
   }
 
-  private String findCoordinateNumberValue(QuotePdfDocument document, QuoteOaPdfFieldDefinition field) {
+  private String findCoordinateNumberValue(
+      QuotePdfDocument document, QuoteOaPdfFieldDefinition field) {
     if (document.getPages() == null) {
       return null;
     }
@@ -270,9 +276,12 @@ public class QuoteOaPdfHeaderParser {
     return (left.getX() + right.getX()) / 2f;
   }
 
-  private boolean containsCoordinateLabelInColumn(List<QuotePdfToken> tokens, float left, float right) {
+  private boolean containsCoordinateLabelInColumn(
+      List<QuotePdfToken> tokens, float left, float right) {
     for (QuotePdfToken token : tokens) {
-      if (token.getX() > left && token.getX() < right && isAnyCoordinateNumberLabel(token.getText())) {
+      if (token.getX() > left
+          && token.getX() < right
+          && isAnyCoordinateNumberLabel(token.getText())) {
         return true;
       }
     }
@@ -573,8 +582,7 @@ public class QuoteOaPdfHeaderParser {
       case "sus316lPrice" -> header.setSus316lPrice(value);
       case "otherMaterial" -> header.setOtherMaterial(value);
       case "baseShipping" -> header.setBaseShipping(value);
-      default -> {
-      }
+      default -> {}
     }
   }
 

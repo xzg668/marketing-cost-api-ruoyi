@@ -37,31 +37,6 @@ public class TechnicalPriceCorrectionImportService {
     this.json = json;
   }
 
-  public List<TechnicalPriceImportResult> results(FactorUploadBatch batch) {
-    if (batch.getTechnicalResultJson() == null) return List.of();
-    var rows = json.read(batch.getTechnicalResultJson()).path("results");
-    var result = new ArrayList<TechnicalPriceImportResult>();
-    for (var row : rows)
-      result.add(
-          new TechnicalPriceImportResult(
-              row.path("itemKey").asText(),
-              row.path("sheetName").asText(),
-              row.path("rowNumber").asInt(),
-              row.path("materialNo").asText(),
-              row.path("linkedItemId").isNull() ? null : row.path("linkedItemId").asLong(),
-              row.path("status").asText(),
-              row.path("errorCode").isNull() ? null : row.path("errorCode").asText(),
-              row.path("message").asText()));
-    return List.copyOf(result);
-  }
-
-  public void restoreSummary(FactorUploadBatch batch, PriceLinkedImportBatchDetailDto detail) {
-    var summary = json.read(batch.getTechnicalResultJson()).path("summary");
-    detail.setLinkedVersionCreatedCount(summary.path("created").asInt());
-    detail.setLinkedUnchangedSkippedCount(summary.path("reused").asInt());
-    detail.setLinkedExpiredCount(summary.path("expired").asInt());
-  }
-
   public PriceLinkedItem current(Long version, String key) {
     return linked.selectOne(
         Wrappers.lambdaQuery(PriceLinkedItem.class)

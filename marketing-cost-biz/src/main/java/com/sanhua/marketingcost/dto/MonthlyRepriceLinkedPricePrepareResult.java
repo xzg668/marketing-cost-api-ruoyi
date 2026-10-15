@@ -13,7 +13,6 @@ public class MonthlyRepriceLinkedPricePrepareResult {
 
   private String repriceNo;
   private String pricingMonth;
-  private Long adjustBatchId;
   private int itemCount;
   private int createdCount;
   private int updatedCount;
@@ -25,14 +24,12 @@ public class MonthlyRepriceLinkedPricePrepareResult {
   public static MonthlyRepriceLinkedPricePrepareResult of(
       String repriceNo,
       String pricingMonth,
-      Long adjustBatchId,
       LinkedPriceEnsureResult ensureResult,
       String batchStatus) {
     MonthlyRepriceLinkedPricePrepareResult result =
         new MonthlyRepriceLinkedPricePrepareResult();
     result.setRepriceNo(repriceNo);
     result.setPricingMonth(pricingMonth);
-    result.setAdjustBatchId(adjustBatchId);
     result.setBatchStatus(batchStatus);
     if (ensureResult != null) {
       result.setItemCount(ensureResult.getRequestedCount());

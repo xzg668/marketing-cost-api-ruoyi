@@ -951,7 +951,6 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
           "businessUnitType", linkedCalc.getBusinessUnitType(),
           "calcScene", linkedCalc.getCalcScene(),
           "pricingMonth", linkedCalc.getPricingMonth(),
-          "adjustBatchId", linkedCalc.getAdjustBatchId(),
           "factorSource", linkedCalc.getFactorSource(),
           "calcFingerprint", linkedCalc.getCalcFingerprint(),
           "calcStatus", linkedCalc.getCalcStatus(),

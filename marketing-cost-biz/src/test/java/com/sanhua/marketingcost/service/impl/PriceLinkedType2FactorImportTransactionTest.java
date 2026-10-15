@@ -27,21 +27,23 @@ class PriceLinkedType2FactorImportTransactionTest {
   @Test
   @DisplayName("默认保留和明确覆盖两个写入入口都声明异常回滚事务边界")
   void bothUpsertEntrypointsDeclareRollbackForException() throws Exception {
-    Method defaultKeepMethod = PriceLinkedType2FactorMonthlyUpsertServiceImpl.class.getMethod(
-        "upsert",
-        com.sanhua.marketingcost.dto.PriceLinkedType2WorkbookParseResult.class,
-        String.class,
-        String.class,
-        String.class,
-        Long.class);
-    Method explicitStrategyMethod = PriceLinkedType2FactorMonthlyUpsertServiceImpl.class.getMethod(
-        "upsert",
-        com.sanhua.marketingcost.dto.PriceLinkedType2WorkbookParseResult.class,
-        String.class,
-        String.class,
-        String.class,
-        Long.class,
-        String.class);
+    Method defaultKeepMethod =
+        PriceLinkedType2FactorMonthlyUpsertServiceImpl.class.getMethod(
+            "upsert",
+            com.sanhua.marketingcost.dto.PriceLinkedType2WorkbookParseResult.class,
+            String.class,
+            String.class,
+            String.class,
+            Long.class);
+    Method explicitStrategyMethod =
+        PriceLinkedType2FactorMonthlyUpsertServiceImpl.class.getMethod(
+            "upsert",
+            com.sanhua.marketingcost.dto.PriceLinkedType2WorkbookParseResult.class,
+            String.class,
+            String.class,
+            String.class,
+            Long.class,
+            String.class);
 
     assertRollbackForException(defaultKeepMethod);
     assertRollbackForException(explicitStrategyMethod);
@@ -50,29 +52,28 @@ class PriceLinkedType2FactorImportTransactionTest {
   @Test
   @DisplayName("来源行保存异常向外抛出并触发事务管理器回滚")
   void rowReferenceFailureTriggersTransactionRollback() {
-    PriceLinkedType2FactorUpsertTestSupport support =
-        new PriceLinkedType2FactorUpsertTestSupport();
+    PriceLinkedType2FactorUpsertTestSupport support = new PriceLinkedType2FactorUpsertTestSupport();
     when(support.factorUploadBatchService.saveRowRefs(
-        anyLong(),
-        any(FactorWorkbookParseResult.class),
-        any(FactorMonthlyPriceUpsertResult.class)))
+            anyLong(),
+            any(FactorWorkbookParseResult.class),
+            any(FactorMonthlyPriceUpsertResult.class)))
         .thenThrow(new IllegalStateException("模拟来源行保存失败"));
-    CountingTransactionManager transactionManager =
-        new CountingTransactionManager();
-    TransactionInterceptor interceptor = new TransactionInterceptor(
-        transactionManager, new AnnotationTransactionAttributeSource());
+    CountingTransactionManager transactionManager = new CountingTransactionManager();
+    TransactionInterceptor interceptor =
+        new TransactionInterceptor(transactionManager, new AnnotationTransactionAttributeSource());
     ProxyFactory proxyFactory = new ProxyFactory(support.service);
     proxyFactory.addAdvice(interceptor);
     PriceLinkedType2FactorMonthlyUpsertService proxy =
         (PriceLinkedType2FactorMonthlyUpsertService) proxyFactory.getProxy();
 
-    assertThatThrownBy(() -> proxy.upsert(
-        support.workbook(support.factor(
-            2, "1", "铜价", "1#Cu", "平均价", "90")),
-        "2026-07",
-        "COMMERCIAL",
-        "tester",
-        99031L))
+    assertThatThrownBy(
+            () ->
+                proxy.upsert(
+                    support.workbook(support.factor(2, "1", "镍价", "1#Ni", "平均价", "90")),
+                    "2026-07",
+                    "COMMERCIAL",
+                    "tester",
+                    99031L))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("模拟来源行保存失败");
 
@@ -83,18 +84,17 @@ class PriceLinkedType2FactorImportTransactionTest {
   @Test
   @DisplayName("其他业务单元的同名因素不会被复用")
   void sameFactorInOtherBusinessUnitDoesNotLeak() {
-    PriceLinkedType2FactorUpsertTestSupport support =
-        new PriceLinkedType2FactorUpsertTestSupport();
-    support.addIdentity(901L, "BU-B", "1", "铜价", "1#Cu", "平均价");
+    PriceLinkedType2FactorUpsertTestSupport support = new PriceLinkedType2FactorUpsertTestSupport();
+    support.addIdentity(901L, "BU-B", "1", "镍价", "1#Ni", "平均价");
     support.addMonthlyPrice(902L, 901L, "2026-07", "90");
 
-    FactorMonthlyPriceUpsertResult result = support.service.upsert(
-        support.workbook(support.factor(
-            2, "1", "铜价", "1#Cu", "平均价", "90")),
-        "2026-07",
-        "BU-A",
-        "tester",
-        99032L);
+    FactorMonthlyPriceUpsertResult result =
+        support.service.upsert(
+            support.workbook(support.factor(2, "1", "镍价", "1#Ni", "平均价", "90")),
+            "2026-07",
+            "BU-A",
+            "tester",
+            99032L);
 
     assertThat(result.getErrors()).isEmpty();
     assertThat(result.getIdentityCreatedCount()).isEqualTo(1);
@@ -111,8 +111,7 @@ class PriceLinkedType2FactorImportTransactionTest {
     assertThat(annotation.rollbackFor()).contains(Exception.class);
   }
 
-  private static final class CountingTransactionManager
-      extends AbstractPlatformTransactionManager {
+  private static final class CountingTransactionManager extends AbstractPlatformTransactionManager {
 
     private final AtomicInteger commitCount = new AtomicInteger();
     private final AtomicInteger rollbackCount = new AtomicInteger();

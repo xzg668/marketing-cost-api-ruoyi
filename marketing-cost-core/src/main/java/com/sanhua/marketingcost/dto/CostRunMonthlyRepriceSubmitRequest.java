@@ -14,7 +14,6 @@ public class CostRunMonthlyRepriceSubmitRequest {
   private String pricingMonth;
   private LocalDateTime priceAsOfTime;
   private String businessUnitType;
-  private Long adjustBatchId;
   private String bomSourcePolicy;
   private String createdBy;
   private String createdName;

@@ -10,17 +10,11 @@ import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sanhua.marketingcost.entity.FactorAdjustPrice;
 import com.sanhua.marketingcost.entity.FactorMonthlyPrice;
-import com.sanhua.marketingcost.entity.FactorQuoteBaseMapping;
-import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
-import com.sanhua.marketingcost.mapper.FactorAdjustPriceMapper;
 import com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper;
-import com.sanhua.marketingcost.mapper.FactorQuoteBaseMappingMapper;
-import com.sanhua.marketingcost.mapper.FinanceBasePriceMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -32,60 +26,38 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-/**
- * {@link FactorVariableRegistryImpl} 单测（Plan B 重写版） ——
- * 直接按 {@code resolver_kind} + {@code resolver_params} 种子喂变量，验证 5 种 kind
- * 的成功/失败分支，以及环检 / overrides / 缓存等交叉场景。
- *
- * <p>与旧版测试的关键差异：
- * <ul>
- *   <li>构造器入参改 {@link FinanceBasePriceQuery}（包裹 mapper），不再直接传 mapper；</li>
- *   <li>种子变量不再读 {@code sourceTable / variableName-as-shortName / formulaExpr /
- *       defaultValue / contextBindingJson}，统一用 {@code resolverKind / resolverParams}；</li>
- *   <li>FINANCE 分支被 {@link FinanceBasePriceQuery} 的严格校验前置：pricingMonth / priceSource
- *       /（buScoped 时）bu 任何一项缺失都直接 empty；月份允许沿用不晚于核算月的正式价。</li>
- * </ul>
- */
+/** 验证变量分派、行内因素、私有月度调价、缺变量及递归缓存；发布范围由查询边界独立验证。 */
 class FactorVariableRegistryImplTest {
 
   private PriceVariableMapper priceVariableMapper;
-  private FinanceBasePriceMapper financeBasePriceMapper;
   private FactorMonthlyPriceMapper factorMonthlyPriceMapper;
-  private FactorQuoteBaseMappingMapper factorQuoteBaseMappingMapper;
-  private FactorAdjustPriceMapper factorAdjustPriceMapper;
-  private FinanceBasePriceQuery financeBasePriceQuery;
+  private FinanceFactorVariableQuery financeBasePriceQuery;
   private ObjectMapper objectMapper;
   private FactorVariableRegistryImpl registry;
 
   @BeforeAll
   static void initTableInfo() {
     // MP Lambda wrapper 依赖 TableInfo 缓存；单测不起 Spring 需要手工预热。
-    MapperBuilderAssistant assistant =
-        new MapperBuilderAssistant(new MybatisConfiguration(), "");
-    TableInfoHelper.initTableInfo(assistant, FinanceBasePrice.class);
+    MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
     TableInfoHelper.initTableInfo(assistant, PriceVariable.class);
     TableInfoHelper.initTableInfo(assistant, FactorMonthlyPrice.class);
-    TableInfoHelper.initTableInfo(assistant, FactorQuoteBaseMapping.class);
-    TableInfoHelper.initTableInfo(assistant, FactorAdjustPrice.class);
   }
 
   @BeforeEach
   void setUp() {
     priceVariableMapper = mock(PriceVariableMapper.class);
-    financeBasePriceMapper = mock(FinanceBasePriceMapper.class);
     factorMonthlyPriceMapper = mock(FactorMonthlyPriceMapper.class);
-    factorQuoteBaseMappingMapper = mock(FactorQuoteBaseMappingMapper.class);
-    factorAdjustPriceMapper = mock(FactorAdjustPriceMapper.class);
-    financeBasePriceQuery = new FinanceBasePriceQuery(financeBasePriceMapper);
+    financeBasePriceQuery = mock(FinanceFactorVariableQuery.class);
     objectMapper = new ObjectMapper();
     // 本测试类不涉及行局部占位符（__material/__scrap），传空注册表即可——
     // 默认 isKnown() 返回 false，resolve 直接走常规 variable 分支
-    registry = new FactorVariableRegistryImpl(
-        priceVariableMapper, financeBasePriceQuery, objectMapper,
-        mock(RowLocalPlaceholderRegistry.class));
+    registry =
+        new FactorVariableRegistryImpl(
+            priceVariableMapper,
+            financeBasePriceQuery,
+            objectMapper,
+            mock(RowLocalPlaceholderRegistry.class));
     registry.setFactorMonthlyPriceMapper(factorMonthlyPriceMapper);
-    registry.setFactorQuoteBaseMappingMapper(factorQuoteBaseMappingMapper);
-    registry.setFactorAdjustPriceMapper(factorAdjustPriceMapper);
   }
 
   // ============================ 种子工厂 ============================
@@ -94,8 +66,9 @@ class FactorVariableRegistryImplTest {
   private static PriceVariable financeByFactorCode(String code, String factorCode) {
     PriceVariable v = baseVar(code);
     v.setResolverKind("FINANCE");
-    v.setResolverParams(String.format(
-        "{\"factorCode\":\"%s\",\"priceSource\":\"平均价\",\"buScoped\":false}", factorCode));
+    v.setResolverParams(
+        String.format(
+            "{\"factorCode\":\"%s\",\"priceSource\":\"平均价\",\"buScoped\":false}", factorCode));
     return v;
   }
 
@@ -104,10 +77,11 @@ class FactorVariableRegistryImplTest {
       String code, Long factorIdentityId, Long factorMonthlyPriceId) {
     PriceVariable v = baseVar(code);
     v.setResolverKind("FINANCE");
-    v.setResolverParams(String.format(
-        "{\"factorIdentityId\":%d,\"factorMonthlyPriceId\":%d,"
-            + "\"priceSource\":\"平均价\",\"buScoped\":false}",
-        factorIdentityId, factorMonthlyPriceId));
+    v.setResolverParams(
+        String.format(
+            "{\"factorIdentityId\":%d,\"factorMonthlyPriceId\":%d,"
+                + "\"priceSource\":\"平均价\",\"buScoped\":false}",
+            factorIdentityId, factorMonthlyPriceId));
     return v;
   }
 
@@ -115,10 +89,12 @@ class FactorVariableRegistryImplTest {
   private static PriceVariable entityVar(String code, String field, String unitScale) {
     PriceVariable v = baseVar(code);
     v.setResolverKind("ENTITY");
-    v.setResolverParams(unitScale == null
-        ? String.format("{\"entity\":\"linkedItem\",\"field\":\"%s\"}", field)
-        : String.format("{\"entity\":\"linkedItem\",\"field\":\"%s\",\"unitScale\":\"%s\"}",
-            field, unitScale));
+    v.setResolverParams(
+        unitScale == null
+            ? String.format("{\"entity\":\"linkedItem\",\"field\":\"%s\"}", field)
+            : String.format(
+                "{\"entity\":\"linkedItem\",\"field\":\"%s\",\"unitScale\":\"%s\"}",
+                field, unitScale));
     return v;
   }
 
@@ -155,19 +131,6 @@ class FactorVariableRegistryImplTest {
     return v;
   }
 
-  private static FactorQuoteBaseMapping quoteBaseMapping(
-      Long factorIdentityId, String quoteFieldCode, String variableCode) {
-    FactorQuoteBaseMapping mapping = new FactorQuoteBaseMapping();
-    mapping.setId(1L);
-    mapping.setFactorIdentityId(factorIdentityId);
-    mapping.setQuoteFieldCode(quoteFieldCode);
-    mapping.setQuoteFieldName("铜基价");
-    mapping.setVariableCode(variableCode);
-    mapping.setEnabled(1);
-    mapping.setDeleted(0);
-    return mapping;
-  }
-
   private static FactorMonthlyPrice monthlyPrice(
       Long id, Long factorIdentityId, String month, String price) {
     FactorMonthlyPrice monthlyPrice = new FactorMonthlyPrice();
@@ -176,19 +139,8 @@ class FactorVariableRegistryImplTest {
     monthlyPrice.setPriceMonth(month);
     monthlyPrice.setPrice(new BigDecimal(price));
     monthlyPrice.setStatus("ACTIVE");
+    monthlyPrice.setSchemeCode("LEGACY");
     return monthlyPrice;
-  }
-
-  private static FactorAdjustPrice adjustPrice(
-      Long factorIdentityId, Long adjustBatchId, String adjustedPrice) {
-    FactorAdjustPrice price = new FactorAdjustPrice();
-    price.setId(1L);
-    price.setFactorIdentityId(factorIdentityId);
-    price.setAdjustBatchId(adjustBatchId);
-    price.setAdjustedPrice(new BigDecimal(adjustedPrice));
-    price.setStatus("SUCCESS");
-    price.setDeleted(0);
-    return price;
   }
 
   @SuppressWarnings("unchecked")
@@ -204,96 +156,36 @@ class FactorVariableRegistryImplTest {
   void financeHit() {
     seedVariables(financeByFactorCode("Cu", "Cu"));
 
-    FinanceBasePrice row = new FinanceBasePrice();
-    row.setPrice(new BigDecimal("90.00"));
-    when(financeBasePriceMapper.selectOne(any())).thenReturn(row);
+    when(financeBasePriceQuery.query(any(), any()))
+        .thenReturn(
+            Optional.of(
+                new FinanceFactorVariableQuery.Price(
+                    new BigDecimal("90.00"), "2026-04", 1L, "FINANCE_FACTOR")));
 
     VariableContext ctx = new VariableContext().pricingMonth("2026-04");
     assertThat(registry.resolve("Cu", ctx)).contains(new BigDecimal("90.00"));
   }
 
   @Test
-  @DisplayName("FINANCE：缺 pricingMonth → empty（严格模式不回退最新）")
-  void financeMissingPricingMonth() {
-    seedVariables(financeByFactorCode("Cu", "Cu"));
-    // ctx.pricingMonth 不设置 → 严格模式直接拒绝
-    assertThat(registry.resolve("Cu", new VariableContext())).isEmpty();
-  }
-
-  @Test
-  @DisplayName("FINANCE：resolver_params 缺 priceSource → empty")
-  void financeMissingPriceSource() {
-    PriceVariable v = baseVar("Cu");
-    v.setResolverKind("FINANCE");
-    v.setResolverParams("{\"factorCode\":\"Cu\",\"buScoped\":false}");
-    seedVariables(v);
-
-    VariableContext ctx = new VariableContext().pricingMonth("2026-04");
-    assertThat(registry.resolve("Cu", ctx)).isEmpty();
-  }
-
-  @Test
   @DisplayName("FINANCE：mapper 未命中 → empty")
   void financeMapperMiss() {
     seedVariables(financeByFactorCode("Cu", "Cu"));
-    when(financeBasePriceMapper.selectOne(any())).thenReturn(null);
+    when(financeBasePriceQuery.query(any(), any())).thenReturn(Optional.empty());
 
     VariableContext ctx = new VariableContext().pricingMonth("2026-04");
     assertThat(registry.resolve("Cu", ctx)).isEmpty();
   }
 
   @Test
-  @DisplayName("FINANCE：日常报价 factor_identity_xxx 命中 OA 铜基价锁价")
-  void factorIdentityDailyQuoteUsesOaQuoteBasePrice() {
-    seedVariables(financeByFactorIdentity("factor_identity_191", 191L, 6401L));
-    when(factorQuoteBaseMappingMapper.selectList(any()))
-        .thenReturn(List.of(quoteBaseMapping(191L, "copper_price", "Cu")));
-
-    OaForm oaForm = new OaForm();
-    oaForm.setCopperPrice(new BigDecimal("72000"));
-    VariableContext ctx = new VariableContext()
-        .pricingMonth("2026-05")
-        .oaForm(oaForm);
-
-    assertThat(registry.resolve("factor_identity_191", ctx))
-        .contains(new BigDecimal("72.000000"));
-  }
-
-  @Test
-  @DisplayName("FINANCE：factor_identity_xxx 优先使用对应语义变量的显式覆盖")
-  void factorIdentityDailyQuoteUsesSemanticFinanceOverrideBeforeOaQuoteBasePrice() {
-    seedVariables(financeByFactorIdentity("factor_identity_191", 191L, 6401L));
-    when(factorQuoteBaseMappingMapper.selectList(any()))
-        .thenReturn(List.of(quoteBaseMapping(191L, "copper_price", "Cu")));
-
-    OaForm oaForm = new OaForm();
-    oaForm.setCopperPrice(new BigDecimal("102039"));
-    VariableContext ctx = new VariableContext()
-        .pricingMonth("2026-07")
-        .oaForm(oaForm)
-        .override("Cu", new BigDecimal("90.000000"), "FINANCE_QUOTE_BASE");
-
-    assertThat(registry.resolve("factor_identity_191", ctx))
-        .contains(new BigDecimal("90.000000"));
-    assertThat(ctx.getResolvedSource("factor_identity_191"))
-        .isEqualTo("FINANCE_QUOTE_BASE");
-  }
-
-  @Test
-  @DisplayName("FINANCE：日常报价 OA 基价为空时回落月度影响因素价格")
+  @DisplayName("FINANCE：非公共技术因素按自身月价取值")
   void factorIdentityDailyQuoteFallsBackToMonthlyPrice() {
     seedVariables(financeByFactorIdentity("factor_identity_191", 191L, 6401L));
-    when(factorQuoteBaseMappingMapper.selectList(any()))
-        .thenReturn(List.of(quoteBaseMapping(191L, "copper_price", "Cu")));
     when(factorMonthlyPriceMapper.selectOne(any()))
         .thenReturn(monthlyPrice(6401L, 191L, "2026-05", "16.40"));
 
-    VariableContext ctx = new VariableContext()
-        .pricingMonth("2026-05")
-        .oaForm(new OaForm());
+    VariableContext ctx = new VariableContext().pricingMonth("2026-05").oaForm(new OaForm());
 
-    assertThat(registry.resolve("factor_identity_191", ctx))
-        .contains(new BigDecimal("16.40"));
+    assertThat(registry.resolve("factor_identity_191", ctx)).contains(new BigDecimal("16.40"));
     assertThat(ctx.getResolvedSource("factor_identity_191")).isEqualTo("FINANCE_FACTOR");
   }
 
@@ -301,108 +193,61 @@ class FactorVariableRegistryImplTest {
   @DisplayName("FINANCE：当月因素价缺失时沿用最近正式月并标记提醒来源")
   void factorIdentityDailyQuoteCarriesLatestPriorMonthlyPrice() {
     seedVariables(financeByFactorIdentity("factor_identity_209", 209L, 6409L));
-    when(factorQuoteBaseMappingMapper.selectList(any())).thenReturn(List.of());
     when(factorMonthlyPriceMapper.selectOne(any()))
         .thenReturn(monthlyPrice(6409L, 209L, "2026-07", "389.993"));
 
-    VariableContext ctx = new VariableContext()
-        .pricingMonth("2026-08")
-        .oaForm(new OaForm());
+    VariableContext ctx = new VariableContext().pricingMonth("2026-08").oaForm(new OaForm());
 
-    assertThat(registry.resolve("factor_identity_209", ctx))
-        .contains(new BigDecimal("389.993"));
+    assertThat(registry.resolve("factor_identity_209", ctx)).contains(new BigDecimal("389.993"));
     assertThat(ctx.getResolvedSource("factor_identity_209"))
         .isEqualTo("FINANCE_FACTOR_CARRIED_FORWARD");
   }
 
   @Test
-  @DisplayName("FINANCE：Zn/Al 配置影响因素表时跳过预注入的 OA 锁价")
+  @DisplayName("FINANCE：私有因素不经旧配置替换成客户其他金属价")
   void factorIdentityFactorMonthlyPolicySkipsPreloadedOaQuoteBasePrice() {
     seedVariables(financeByFactorIdentity("factor_identity_192", 192L, 6402L));
-    FactorQuoteBaseMapping mapping = quoteBaseMapping(192L, "zinc_price", "Zn");
-    mapping.setPricePolicy("FACTOR_MONTHLY");
-    when(factorQuoteBaseMappingMapper.selectList(any())).thenReturn(List.of(mapping));
     when(factorMonthlyPriceMapper.selectOne(any()))
         .thenReturn(monthlyPrice(6402L, 192L, "2026-07", "21.68"));
 
     OaForm oaForm = new OaForm();
     oaForm.setZincPrice(new BigDecimal("24586"));
-    VariableContext ctx = new VariableContext()
-        .pricingMonth("2026-07")
-        .oaForm(oaForm)
-        // 真实报价链路会先把 OA Zn 放进语义变量覆盖；规则仍应优先于该 OA 覆盖。
-        .override("Zn", new BigDecimal("24.586000"), "OA_LOCKED");
+    VariableContext ctx =
+        new VariableContext()
+            .pricingMonth("2026-07")
+            .oaForm(oaForm)
+            // 真实报价链路会先把 OA Zn 放进语义变量覆盖；规则仍应优先于该 OA 覆盖。
+            .override("Zn", new BigDecimal("24.586000"), "OA_LOCKED");
 
-    assertThat(registry.resolve("factor_identity_192", ctx))
-        .contains(new BigDecimal("21.68"));
+    assertThat(registry.resolve("factor_identity_192", ctx)).contains(new BigDecimal("21.68"));
   }
 
   @Test
-  @DisplayName("FINANCE：影响因素规则不拦截非 OA 的显式覆盖")
-  void factorIdentityFactorMonthlyPolicyKeepsNonOaExplicitOverride() {
-    seedVariables(financeByFactorIdentity("factor_identity_192", 192L, 6402L));
-    FactorQuoteBaseMapping mapping = quoteBaseMapping(192L, "zinc_price", "Zn");
-    mapping.setPricePolicy("FACTOR_MONTHLY");
-    when(factorQuoteBaseMappingMapper.selectList(any())).thenReturn(List.of(mapping));
-
-    VariableContext ctx = new VariableContext()
-        .pricingMonth("2026-07")
-        .oaForm(new OaForm())
-        .override("Zn", new BigDecimal("22.000000"), "MANUAL_OVERRIDE");
-
-    assertThat(registry.resolve("factor_identity_192", ctx))
-        .contains(new BigDecimal("22.000000"));
-    assertThat(ctx.getResolvedSource("factor_identity_192"))
-        .isEqualTo("MANUAL_OVERRIDE");
-  }
-
-  @Test
-  @DisplayName("FINANCE：月度调价场景不使用 OA 锁价，指定批次时取 adjusted_price")
-  void factorIdentityMonthlyRepriceUsesAdjustBatchPrice() {
-    seedVariables(financeByFactorIdentity("factor_identity_191", 191L, 6401L));
-    when(factorAdjustPriceMapper.selectOne(any()))
-        .thenReturn(adjustPrice(191L, 8801L, "18.20"));
-
-    OaForm oaForm = new OaForm();
-    oaForm.setCopperPrice(new BigDecimal("72000"));
-    VariableContext ctx = new VariableContext()
-        .pricingMonth("2026-05")
-        .priceContextType(VariableContext.PriceContextType.MONTHLY_REPRICE)
-        .adjustBatchId(8801L)
-        .oaForm(oaForm);
-
-    assertThat(registry.resolve("factor_identity_191", ctx))
-        .contains(new BigDecimal("18.20"));
-  }
-
-  @Test
-  @DisplayName("FINANCE：月度调价未指定批次时回落月度影响因素价格")
-  void factorIdentityMonthlyRepriceWithoutBatchFallsBackToMonthlyPrice() {
+  @DisplayName("FINANCE：月度重算读取技术私有因素月价")
+  void factorIdentityMonthlyRepriceUsesPrivateMonthlyPrice() {
     seedVariables(financeByFactorIdentity("factor_identity_191", 191L, 6401L));
     when(factorMonthlyPriceMapper.selectOne(any()))
         .thenReturn(monthlyPrice(6401L, 191L, "2026-05", "16.40"));
 
     OaForm oaForm = new OaForm();
     oaForm.setCopperPrice(new BigDecimal("72000"));
-    VariableContext ctx = new VariableContext()
-        .pricingMonth("2026-05")
-        .priceContextType(VariableContext.PriceContextType.MONTHLY_REPRICE)
-        .oaForm(oaForm);
+    VariableContext ctx =
+        new VariableContext()
+            .pricingMonth("2026-05")
+            .priceContextType(VariableContext.PriceContextType.MONTHLY_REPRICE)
+            .oaForm(oaForm);
 
-    assertThat(registry.resolve("factor_identity_191", ctx))
-        .contains(new BigDecimal("16.40"));
+    assertThat(registry.resolve("factor_identity_191", ctx)).contains(new BigDecimal("16.40"));
   }
 
   @Test
   @DisplayName("FINANCE：老公式 Cu 仍优先吃 overrides，不受 factor_identity 映射影响")
   void oldCuVariableStillUsesOverrides() {
     seedVariables(financeByFactorCode("Cu", "Cu"));
-    VariableContext ctx = new VariableContext()
-        .pricingMonth("2026-05")
-        .override("Cu", new BigDecimal("72.000000"));
+    VariableContext ctx =
+        new VariableContext().pricingMonth("2026-05").override("Cu", new BigDecimal("72.000000"));
 
-    assertThat(registry.resolve("Cu", ctx))
-        .contains(new BigDecimal("72.000000"));
+    assertThat(registry.resolve("Cu", ctx)).contains(new BigDecimal("72.000000"));
   }
 
   // ============================ ENTITY 分支 ============================
@@ -430,8 +275,7 @@ class FactorVariableRegistryImplTest {
     item.setProcessFee(new BigDecimal("3.73"));
     VariableContext ctx = new VariableContext().linkedItem(item);
 
-    assertThat(registry.resolve("process_fee", ctx))
-        .contains(new BigDecimal("3.73"));
+    assertThat(registry.resolve("process_fee", ctx)).contains(new BigDecimal("3.73"));
   }
 
   @Test
@@ -460,20 +304,20 @@ class FactorVariableRegistryImplTest {
   @DisplayName("DERIVED：未装配 DerivedContextResolver 时返回 empty（不抛）")
   void derivedWithoutResolver() {
     seedVariables(derivedVar("material_price_incl", "MAIN_MATERIAL_FINANCE"));
-    assertThat(registry.resolve("material_price_incl", new VariableContext()))
-        .isEmpty();
+    assertThat(registry.resolve("material_price_incl", new VariableContext())).isEmpty();
   }
 
   @Test
   @DisplayName("DERIVED：装配后透传 params，binding.strategy 正确")
   void derivedWithResolver() {
     seedVariables(derivedVar("material_price_incl", "MAIN_MATERIAL_FINANCE"));
-    registry.setDerivedContextResolver((variable, ctx, binding, sub) -> {
-      assertThat(variable.getVariableCode()).isEqualTo("material_price_incl");
-      assertThat(binding.get("strategy")).isEqualTo("MAIN_MATERIAL_FINANCE");
-      assertThat(sub).isNotNull();
-      return Optional.of(new BigDecimal("42"));
-    });
+    registry.setDerivedContextResolver(
+        (variable, ctx, binding, sub) -> {
+          assertThat(variable.getVariableCode()).isEqualTo("material_price_incl");
+          assertThat(binding.get("strategy")).isEqualTo("MAIN_MATERIAL_FINANCE");
+          assertThat(sub).isNotNull();
+          return Optional.of(new BigDecimal("42"));
+        });
     assertThat(registry.resolve("material_price_incl", new VariableContext()))
         .contains(new BigDecimal("42"));
   }
@@ -488,9 +332,11 @@ class FactorVariableRegistryImplTest {
         constVar("vat_rate", "0.13"),
         formulaVar("Cu_plus", "[Cu]+[vat_rate]"));
 
-    FinanceBasePrice row = new FinanceBasePrice();
-    row.setPrice(new BigDecimal("90.00"));
-    when(financeBasePriceMapper.selectOne(any())).thenReturn(row);
+    when(financeBasePriceQuery.query(any(), any()))
+        .thenReturn(
+            Optional.of(
+                new FinanceFactorVariableQuery.Price(
+                    new BigDecimal("90.00"), "2026-04", 1L, "FINANCE_FACTOR")));
 
     VariableContext ctx = new VariableContext().pricingMonth("2026-04");
     Optional<BigDecimal> result = registry.resolve("Cu_plus", ctx);
@@ -501,21 +347,15 @@ class FactorVariableRegistryImplTest {
   @Test
   @DisplayName("FORMULA：多层 A=[B]*2, B=[C], C=CONST=7 → 14")
   void formulaMultiLevel() {
-    seedVariables(
-        constVar("C", "7"),
-        formulaVar("B", "[C]"),
-        formulaVar("A", "[B]*2"));
+    seedVariables(constVar("C", "7"), formulaVar("B", "[C]"), formulaVar("A", "[B]*2"));
 
-    assertThat(registry.resolve("A", new VariableContext()))
-        .contains(new BigDecimal("14"));
+    assertThat(registry.resolve("A", new VariableContext())).contains(new BigDecimal("14"));
   }
 
   @Test
   @DisplayName("FORMULA：环检 A=[B], B=[A] 抛 CircularFormulaException")
   void formulaCycle() {
-    seedVariables(
-        formulaVar("A", "[B]"),
-        formulaVar("B", "[A]"));
+    seedVariables(formulaVar("A", "[B]"), formulaVar("B", "[A]"));
 
     assertThatThrownBy(() -> registry.resolve("A", new VariableContext()))
         .isInstanceOf(CircularFormulaException.class)
@@ -611,18 +451,18 @@ class FactorVariableRegistryImplTest {
   @Test
   @DisplayName("单次 resolve 内 request cache 去重：Cu 在 [Cu]+[Cu] 公式里只查一次 finance")
   void requestCacheDedupes() {
-    seedVariables(
-        financeByFactorCode("Cu", "Cu"),
-        formulaVar("combo", "[Cu]+[Cu]"));
+    seedVariables(financeByFactorCode("Cu", "Cu"), formulaVar("combo", "[Cu]+[Cu]"));
 
-    FinanceBasePrice row = new FinanceBasePrice();
-    row.setPrice(new BigDecimal("90"));
-    when(financeBasePriceMapper.selectOne(any())).thenReturn(row);
+    when(financeBasePriceQuery.query(any(), any()))
+        .thenReturn(
+            Optional.of(
+                new FinanceFactorVariableQuery.Price(
+                    new BigDecimal("90"), "2026-04", 1L, "FINANCE_FACTOR")));
 
     VariableContext ctx = new VariableContext().pricingMonth("2026-04");
     assertThat(registry.resolve("combo", ctx)).contains(new BigDecimal("180"));
     // Cu 只查一次 finance —— request cache 生效
-    org.mockito.Mockito.verify(financeBasePriceMapper, org.mockito.Mockito.times(1))
-        .selectOne(any());
+    org.mockito.Mockito.verify(financeBasePriceQuery, org.mockito.Mockito.times(1))
+        .query(any(), any());
   }
 }

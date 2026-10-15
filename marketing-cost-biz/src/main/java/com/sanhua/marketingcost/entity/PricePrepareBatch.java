@@ -18,8 +18,10 @@ public class PricePrepareBatch {
   @TableId(type = IdType.AUTO)
   private Long id;
 
-  @TableField(typeHandler = com.sanhua.marketingcost.persistence.SupplierPriceReviewsTypeHandler.class)
-  private java.util.List<com.sanhua.marketingcost.service.pricing.SupplierPriceReview> supplierPriceReviews;
+  @TableField(
+      typeHandler = com.sanhua.marketingcost.persistence.SupplierPriceReviewsTypeHandler.class)
+  private java.util.List<com.sanhua.marketingcost.service.pricing.SupplierPriceReview>
+      supplierPriceReviews;
 
   private String prepareNo;
   private String oaNo;
@@ -31,15 +33,19 @@ public class PricePrepareBatch {
   private String scenarioType;
   private String scenarioGroupNo;
   private String sourcePrepareNo;
+  private String sourceRevision;
   private String status;
   private Integer totalCount;
   private Integer successCount;
   private Integer warningCount;
   private Integer gapCount;
+
   /** 本批次所有价格源统一使用的取价时点。 */
   private LocalDateTime priceAsOfTime;
+
   /** 取价时点来源：CURRENT_TIME / REQUEST / LEGACY。 */
   private String priceAsOfSource;
+
   private LocalDateTime startedAt;
   private LocalDateTime finishedAt;
   private String message;

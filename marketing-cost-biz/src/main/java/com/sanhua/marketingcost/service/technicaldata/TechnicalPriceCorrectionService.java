@@ -7,6 +7,7 @@ import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaWorkflo
 import com.sanhua.marketingcost.mapper.*;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService;
+import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
@@ -61,10 +62,11 @@ public class TechnicalPriceCorrectionService {
     if (scope == null) return null;
     var pending = new ArrayList<TechnicalPriceCorrection.Item>();
     var now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
+    var scenario = PricePrepareScenarioContext.oaLocked(itemId, scope.task().getApplicableOrgCode());
     for (var row : scope.items()) {
       var price =
           prices.calculateMaterialUnitPrice(
-              row.materialNo(), month, now.toLocalDate(), now, oaNo, scope.businessUnit(), null);
+              row.materialNo(), month, now.toLocalDate(), now, oaNo, scope.businessUnit(), scenario);
       if (price == null) throw new IllegalStateException("取价检查未返回结果：" + row.materialNo());
       if ("OK".equals(price.getStatus())
           && price.getUnitPrice() != null

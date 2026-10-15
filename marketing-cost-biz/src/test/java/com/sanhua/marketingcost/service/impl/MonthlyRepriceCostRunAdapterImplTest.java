@@ -68,7 +68,6 @@ class MonthlyRepriceCostRunAdapterImplTest {
     assertThat(context.getScene()).isEqualTo("MONTHLY_REPRICE");
     assertThat(context.getRepriceNo()).isEqualTo("MRP-001");
     assertThat(context.getPricingMonth()).isEqualTo("2026-05");
-    assertThat(context.getAdjustBatchId()).isEqualTo(88L);
     assertThat(context.getPriceAsOfTime()).isEqualTo(LocalDateTime.of(2026, 5, 26, 10, 0));
     assertThat(context.getBomSourcePolicy()).isEqualTo(CostRunContext.BOM_SOURCE_POLICY_HISTORICAL_OA_BOM);
     assertThat(context.getProductCode()).isEqualTo("P-001");
@@ -101,7 +100,7 @@ class MonthlyRepriceCostRunAdapterImplTest {
   }
 
   @Test
-  void allowsPartialPricePrepareAndLegacyNoRouteItemsToMatchDailyQuote() {
+  void missingPriceCannotProduceSuccessfulMonthlyResultEvenWithLegacySourceCode() {
     MonthlyRepriceBatchMapper batchMapper = mock(MonthlyRepriceBatchMapper.class);
     PricePrepareService pricePrepareService = mock(PricePrepareService.class);
     CostRunEngine costRunEngine = mock(CostRunEngine.class);
@@ -124,9 +123,9 @@ class MonthlyRepriceCostRunAdapterImplTest {
     result.setPartItems(java.util.List.of(noRoute));
     when(costRunEngine.run(any(CostRunContext.class))).thenReturn(result);
 
-    adapter.execute(task(), "worker-node-1");
-
-    verify(writer).write(result);
+    assertThatThrownBy(() -> adapter.execute(task(), "worker-node-1"))
+        .isInstanceOf(IllegalStateException.class).hasMessageContaining("339953744");
+    verify(writer, never()).write(any());
   }
 
   @Test
@@ -215,7 +214,6 @@ class MonthlyRepriceCostRunAdapterImplTest {
     batch.setPriceAsOfTime(LocalDateTime.of(2026, 5, 26, 10, 0));
     batch.setBomSourcePolicy(CostRunContext.BOM_SOURCE_POLICY_HISTORICAL_OA_BOM);
     batch.setBusinessUnitType("COMMERCIAL");
-    batch.setAdjustBatchId(88L);
     return batch;
   }
 

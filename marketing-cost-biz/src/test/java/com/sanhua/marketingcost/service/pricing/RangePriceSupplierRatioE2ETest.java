@@ -59,10 +59,10 @@ class RangePriceSupplierRatioE2ETest extends BomMapperTestBase {
   private static final LocalDate EFFECTIVE_FROM = LocalDate.of(2025, 11, 1);
   private static final LocalDate EFFECTIVE_TO = LocalDate.of(2025, 11, 30);
 
-  @Autowired private PriceRangeItemService priceRangeItemService;
   @Autowired private PriceRangeItemMapper priceRangeItemMapper;
   @Autowired private PriceRangeFactorRuleMapper factorRuleMapper;
   @Autowired private SupplierPreferredPriceSelector supplierSelector;
+  @Autowired private MaterialPriceMonthSelector monthSelector;
   @Autowired private SupplierSupplyRatioResolveService ratioResolveService;
 
   @DynamicPropertySource
@@ -77,6 +77,10 @@ class RangePriceSupplierRatioE2ETest extends BomMapperTestBase {
               + "id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,"
               + "business_unit_type VARCHAR(20) NULL,"
               + "material_code VARCHAR(64) NOT NULL,"
+              + "pricing_month CHAR(7) NULL,org_code VARCHAR(16) NULL,"
+              + "supplier_code VARCHAR(64) NULL,supplier_name VARCHAR(128) NULL,"
+              + "rule_identity_key CHAR(64) NULL,rule_status VARCHAR(24) NOT NULL DEFAULT 'LEGACY',"
+              + "source_upload_batch_id BIGINT NULL,source_input_snapshot_json JSON NULL,extrapolation_json JSON NULL,"
               + "material_name VARCHAR(128) NULL,"
               + "spec_model VARCHAR(128) NULL,"
               + "factor_code VARCHAR(32) NOT NULL,"
@@ -114,6 +118,9 @@ class RangePriceSupplierRatioE2ETest extends BomMapperTestBase {
               + "agent_fee DECIMAL(20,8) NULL,"
               + "range_low DECIMAL(20,8) NOT NULL,"
               + "range_high DECIMAL(20,8) NOT NULL,"
+              + "lower_inclusive TINYINT NOT NULL DEFAULT 1,upper_inclusive TINYINT NOT NULL DEFAULT 1,"
+              + "source_sheet_name VARCHAR(128) NULL,source_cell_ref VARCHAR(32) NULL,"
+              + "source_value_text TEXT NULL,source_formula_expr TEXT NULL,source_number_format VARCHAR(128) NULL,"
               + "range_basis VARCHAR(16) NOT NULL DEFAULT 'QTY',"
               + "factor_rule_id BIGINT NULL,"
               + "factor_code VARCHAR(32) NULL,"
@@ -369,32 +376,26 @@ class RangePriceSupplierRatioE2ETest extends BomMapperTestBase {
   }
 
   private void seedMaterial(String materialCode) {
-    PriceRangeItemImportRequest request = new PriceRangeItemImportRequest();
-    request.setBusinessUnitType("COMMERCIAL");
-    request.setRangeBasis("FACTOR");
-    request.setFactorCode("CU");
-    request.setFactorName("电解铜");
-    request.setFactorUnit("元/吨");
-    request.setPriceUnit("只");
-    request.setSourceFile("RPI1-13-多供应商脱敏夹具.xlsx");
-    request.setSourceSheet("Sheet1");
-    request.setImportBatchNo("RPI1-13-" + materialCode);
-    List<PriceRangeItemImportRequest.PriceRangeItemImportRow> rows = new ArrayList<>();
-    for (String supplierCode : List.of(SUPPLIER_A_CODE, SUPPLIER_B_CODE)) {
-      for (int interval = 0; interval < 10; interval += 1) {
-        rows.add(priceRow(materialCode, supplierCode, interval));
-      }
+    // 此用例验证存量规则的供货比例选择；原稿发布另有真实MySQL事务验收。
+    var rule = new com.sanhua.marketingcost.entity.PriceRangeFactorRule();
+    rule.setBusinessUnitType("COMMERCIAL"); rule.setMaterialCode(materialCode); rule.setFactorCode("CU");
+    rule.setFactorName("电解铜"); rule.setFactorUnit("元/吨"); rule.setPriceUnit("只");
+    rule.setVersionNo(1); rule.setCurrentFlag(1); rule.setRuleStatus("LEGACY");
+    rule.setImportBatchNo("RPI1-13-" + materialCode); rule.setEffectiveFrom(EFFECTIVE_FROM);
+    factorRuleMapper.insert(rule);
+    for (String supplier : List.of(SUPPLIER_A_CODE, SUPPLIER_B_CODE)) for (int interval = 0; interval < 10; interval++) {
+      var row = priceRow(materialCode, supplier, interval);
+      row.setBusinessUnitType("COMMERCIAL"); row.setFactorRuleId(rule.getId()); row.setCurrentFlag(1);
+      row.setImportBatchNo(rule.getImportBatchNo()); priceRangeItemMapper.insert(row);
     }
-    request.setRows(rows);
-    assertThat(priceRangeItemService.importItems(request)).hasSize(20);
   }
 
-  private PriceRangeItemImportRequest.PriceRangeItemImportRow priceRow(
+  private com.sanhua.marketingcost.entity.PriceRangeItem priceRow(
       String materialCode, String supplierCode, int interval) {
     int rangeLow = 57001 + interval * 3000;
     int rangeHigh = 60000 + interval * 3000;
-    PriceRangeItemImportRequest.PriceRangeItemImportRow row =
-        new PriceRangeItemImportRequest.PriceRangeItemImportRow();
+    com.sanhua.marketingcost.entity.PriceRangeItem row =
+        new com.sanhua.marketingcost.entity.PriceRangeItem();
     row.setRangeBasis("FACTOR");
     row.setFactorCode("CU");
     row.setOrgCode("TEST-ORG");
@@ -413,7 +414,7 @@ class RangePriceSupplierRatioE2ETest extends BomMapperTestBase {
     row.setPriceInclTax(
         new BigDecimal(SUPPLIER_A_CODE.equals(supplierCode) ? "101" : "202")
             .add(BigDecimal.valueOf(interval)));
-    row.setTaxIncluded(false);
+    row.setTaxIncluded(0);
     row.setEffectiveFrom(EFFECTIVE_FROM);
     row.setEffectiveTo(EFFECTIVE_TO);
     row.setOrderType("VMI采购");
@@ -439,7 +440,7 @@ class RangePriceSupplierRatioE2ETest extends BomMapperTestBase {
     oaForm.setCopperPrice(new BigDecimal(copperPrice));
     when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(oaForm);
     return new RangePriceResolver(
-        priceRangeItemMapper, factorRuleMapper, oaFormMapper, supplierSelector);
+        priceRangeItemMapper, factorRuleMapper, oaFormMapper, supplierSelector, monthSelector, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.impl.OriginalRangePriceRuntime.class, org.mockito.Mockito.withSettings().mockMaker(org.mockito.MockMakers.INLINE)), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceSelectionService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.SupplierPriceSelectionService.class));
   }
 
   private void replaceRatios(String materialCode, String supplierARatio, String supplierBRatio)
@@ -558,9 +559,9 @@ class RangePriceSupplierRatioE2ETest extends BomMapperTestBase {
     when(partMapper.selectBaseByQuoteScope(
             eq("OA-RPI1-13"), eq(1L), eq("PRODUCT-RPI1-13"), eq("2025-11")))
         .thenAnswer(ignored -> costInputItems());
-    when(router.listCandidates(eq(MATERIAL_A), eq("2025-11"), eq(PRICE_DATE)))
+    when(router.listCandidates(eq(MATERIAL_A), eq("2025-11"), eq(PRICE_DATE), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(rangeRoute(MATERIAL_A)));
-    when(router.listCandidates(eq("OTHER-MATERIAL"), eq("2025-11"), eq(PRICE_DATE)))
+    when(router.listCandidates(eq("OTHER-MATERIAL"), eq("2025-11"), eq(PRICE_DATE), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(fixedRoute("OTHER-MATERIAL")));
     PriceResolver fixedResolver = new PriceResolver() {
       @Override

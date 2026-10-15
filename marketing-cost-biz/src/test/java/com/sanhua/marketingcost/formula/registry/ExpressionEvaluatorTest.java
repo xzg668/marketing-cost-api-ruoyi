@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.formula.registry;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 import java.math.BigDecimal;
@@ -64,17 +65,63 @@ class ExpressionEvaluatorTest {
   }
 
   @Test
-  @DisplayName("evaluate：缺失变量按 0 处理 + 一元负号")
+  @DisplayName("evaluate：缺失变量明确失败，真实0与一元负号可计算")
   void missingAndUnary() {
     Map<String, BigDecimal> values = Map.of("a", new BigDecimal("10"));
-    BigDecimal r = ExpressionEvaluator.evaluate("-a + missing", values);
-    assertThat(r).isCloseTo(new BigDecimal("-10"), within(TOLERANCE));
+    assertThatThrownBy(() -> ExpressionEvaluator.evaluate("-a + missing", values))
+        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("missing");
+    assertThat(ExpressionEvaluator.evaluate("--a + -+0", values)).isEqualByComparingTo("10");
   }
 
   @Test
-  @DisplayName("evaluate：除零返回 null")
+  @DisplayName("evaluate：除零明确失败")
   void divideByZero() {
     Map<String, BigDecimal> values = Map.of("a", new BigDecimal("10"), "b", BigDecimal.ZERO);
-    assertThat(ExpressionEvaluator.evaluate("a / b", values)).isNull();
+    assertThatThrownBy(() -> ExpressionEvaluator.evaluate("a / b", values))
+        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("除数为0");
+  }
+
+  @Test
+  void functionNamesAndScientificNotationAreNotVariables() {
+    assertThat(ExpressionEvaluator.extractVariables("ROUND([Cu]*1e-3+INT(-Zn),4)+[Cu]"))
+        .containsExactly("Cu", "Zn");
+  }
+
+  @Test
+  void roundingStaysAtItsOriginalPositionBeforeTaxDivision() {
+    assertThat(ExpressionEvaluator.evaluate("ROUND(20 + 1.23456,4) / 1.13", Map.of()))
+        .isEqualByComparingTo(new BigDecimal("21.2346").divide(new BigDecimal("1.13"), java.math.MathContext.DECIMAL128));
+    assertThat(ExpressionEvaluator.evaluate("ROUND(-1.235,2)+INT(-1.2)", Map.of()))
+        .isEqualByComparingTo("-3.24");
+    assertThat(ExpressionEvaluator.evaluate("ROUND(150,-2)+ROUND(2.345,2)", Map.of()))
+        .isEqualByComparingTo("202.35");
+  }
+
+  @Test
+  void rejectsUnsupportedOrIncompleteSyntaxInsteadOfIgnoringCharacters() {
+    for (String expression : java.util.List.of("1$+2", "1 2", "(1+2", "1+2)", "ROUND(1)",
+        "INT(1,2)", "SUM(1,2)", "[Cu", "Cu()", "1e+", "1.2.3", "1+")) {
+      assertThatThrownBy(() -> ExpressionEvaluator.validate(expression))
+          .as(expression).isInstanceOf(IllegalArgumentException.class);
+    }
+    assertThatThrownBy(() -> ExpressionEvaluator.evaluate("ROUND(1,2.2)", Map.of()))
+        .hasMessageContaining("整数");
+  }
+
+  @Test
+  void numericFunctionsAgreeWithIndependentExcelEvaluation() throws Exception {
+    try (var workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook()) {
+      var evaluator = workbook.getCreationHelper().createFormulaEvaluator();
+      var row = workbook.createSheet("计算").createRow(0);
+      java.util.List<String> formulas = java.util.List.of("ROUND(20+1.23456,4)/1.13",
+          "ROUND(ROUND(90*0.01967,5)*1.18,4)/1.13", "INT(90/7)+0.3", "INT(-1.2)",
+          "ROUND(-1.235,2)", "ROUND(150,-2)", "ROUND(2.345,2)", "1/3*3", "1.25E-3*90000");
+      for (int i = 0; i < formulas.size(); i++) {
+        var cell = row.createCell(i);
+        cell.setCellFormula(formulas.get(i));
+        assertThat(ExpressionEvaluator.evaluate(formulas.get(i), Map.of()).doubleValue())
+            .as(formulas.get(i)).isCloseTo(evaluator.evaluate(cell).getNumberValue(), within(1e-12));
+      }
+    }
   }
 }

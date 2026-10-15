@@ -7,12 +7,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
-import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sanhua.marketingcost.config.LinkedParserProperties;
-import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.MaterialScrapRef;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
@@ -21,11 +18,8 @@ import com.sanhua.marketingcost.formula.normalize.FormulaNormalizer;
 import com.sanhua.marketingcost.formula.normalize.VariableAliasIndex;
 import com.sanhua.marketingcost.formula.registry.DerivedResolver;
 import com.sanhua.marketingcost.formula.registry.FactorVariableRegistryImpl;
-import com.sanhua.marketingcost.formula.registry.FinanceBasePriceQuery;
+import com.sanhua.marketingcost.formula.registry.FinanceFactorVariableQuery;
 import com.sanhua.marketingcost.formula.registry.RowLocalPlaceholderRegistry;
-import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
-import com.sanhua.marketingcost.mapper.DynamicValueMapper;
-import com.sanhua.marketingcost.mapper.FinanceBasePriceMapper;
 import com.sanhua.marketingcost.mapper.MaterialScrapRefMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
@@ -49,12 +43,12 @@ import org.junit.jupiter.api.Test;
  * 金标回归测试 —— 样本产品 1079900000536 / SHF-AA-79 端到端断言。
  *
  * <p>三层断言（严格度自下而上）：
+ *
  * <ul>
- *   <li><b>L0 夹具完整性</b>：JSON 能读、行数对、关键字段非空</li>
- *   <li><b>L1 部品价源命中</b>：29 行部品的 (formAttr, priceSource, unitPrice, amount) 与 Excel 一致</li>
- *   <li><b>L2 中间汇总</b>：材料费/直接人工/净损失/制造成本/调整后制造成本/三项费用合计
- *       —— 与 expected_summary.json 的金标口径保持一致</li>
- *   <li><b>L3 最终成本</b>：不含税总成本 152.503 ± 0.01</li>
+ *   <li><b>L0 夹具完整性</b>：JSON 能读、行数对、关键字段非空
+ *   <li><b>L1 部品价源命中</b>：29 行部品的 (formAttr, priceSource, unitPrice, amount) 与 Excel 一致
+ *   <li><b>L2 中间汇总</b>：材料费/直接人工/净损失/制造成本/调整后制造成本/三项费用合计 —— 与 expected_summary.json 的金标口径保持一致
+ *   <li><b>L3 最终成本</b>：不含税总成本 152.503 ± 0.01
  * </ul>
  *
  * <p>当前状态：L0/L1/L2/L3 均直接跑，作为可执行金标夹具回归；不启动 Spring，不连数据库。
@@ -65,15 +59,12 @@ import org.junit.jupiter.api.Test;
 class GoldenSampleRegressionTest {
 
   /**
-   * MP LambdaQueryWrapper 需要 TableInfo 缓存才能解析 {@code Entity::getField} → 列名；
-   * 本类在多个 Nested 里都会拿到 FinanceBasePrice / MaterialScrapRef 等实体构造 wrapper，
-   * 一次性初始化并终身复用（MP 缓存是进程级单例）。
+   * MP LambdaQueryWrapper 需要 TableInfo 缓存才能解析 {@code Entity::getField} → 列名； 本类在多个 Nested 里都会拿到
+   * FinanceBasePrice / MaterialScrapRef 等实体构造 wrapper， 一次性初始化并终身复用（MP 缓存是进程级单例）。
    */
   @BeforeAll
   static void initMybatisPlusTableInfo() {
-    MapperBuilderAssistant assistant =
-        new MapperBuilderAssistant(new MybatisConfiguration(), "");
-    TableInfoHelper.initTableInfo(assistant, FinanceBasePrice.class);
+    MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
     TableInfoHelper.initTableInfo(assistant, MaterialScrapRef.class);
     TableInfoHelper.initTableInfo(assistant, PriceVariable.class);
     TableInfoHelper.initTableInfo(assistant, PriceLinkedItem.class);
@@ -116,8 +107,15 @@ class GoldenSampleRegressionTest {
       assertThat(items)
           .allSatisfy(
               item -> {
-                assertThat(item).containsKeys("partName", "drawingNo", "unitPrice", "qty",
-                    "amount", "formAttr", "priceSource");
+                assertThat(item)
+                    .containsKeys(
+                        "partName",
+                        "drawingNo",
+                        "unitPrice",
+                        "qty",
+                        "amount",
+                        "formAttr",
+                        "priceSource");
                 assertThat(item.get("unitPrice")).isNotNull();
                 assertThat(item.get("amount")).isNotNull();
               });
@@ -130,9 +128,11 @@ class GoldenSampleRegressionTest {
       //   formAttr  : 采购 / 联动 / 自制 / 原材料联动 / 家用结算价
       //   priceSource: 固定采购价 / 联动价 / 自制件 / 原材料拆解 / 家用结算价
       List<Map<String, Object>> items = GoldenSampleFixture.bomItems();
-      assertThat(items).extracting(i -> (String) i.get("formAttr"))
+      assertThat(items)
+          .extracting(i -> (String) i.get("formAttr"))
           .containsOnly("采购", "联动", "自制", "原材料联动", "家用结算价");
-      assertThat(items).extracting(i -> (String) i.get("priceSource"))
+      assertThat(items)
+          .extracting(i -> (String) i.get("priceSource"))
           .containsOnly("固定采购价", "联动价", "自制件", "原材料拆解", "家用结算价");
     }
 
@@ -140,18 +140,24 @@ class GoldenSampleRegressionTest {
     @DisplayName("aux_costs 包含 7 项产品级附加")
     void auxCostsShape() {
       Map<String, Object> aux = GoldenSampleFixture.auxCosts();
-      assertThat(aux).containsKeys("pickling", "auxiliary", "solder", "packaging",
-          "tooling", "overhaul", "waterPower");
+      assertThat(aux)
+          .containsKeys(
+              "pickling", "auxiliary", "solder", "packaging", "tooling", "overhaul", "waterPower");
     }
 
     @Test
     @DisplayName("labor_rate 含全部 7 个比率字段")
     void laborRateShape() {
       Map<String, Object> labor = GoldenSampleFixture.laborRate();
-      assertThat(labor).containsKeys(
-          "directLabor", "qualityLossRate", "manufactureRate",
-          "productAttrCoefficient",
-          "managementRate", "salesRate", "financeRate");
+      assertThat(labor)
+          .containsKeys(
+              "directLabor",
+              "qualityLossRate",
+              "manufactureRate",
+              "productAttrCoefficient",
+              "managementRate",
+              "salesRate",
+              "financeRate");
       // 产品属性系数 = 1（标准品）
       assertThat(GoldenSampleFixture.big(labor, "productAttrCoefficient"))
           .isEqualByComparingTo(BigDecimal.ONE);
@@ -193,9 +199,11 @@ class GoldenSampleRegressionTest {
                 assertThat(amount).isNotNull();
                 assertThat(unitPrice.multiply(qty)).isCloseTo(amount, within(L1_TOLERANCE));
               });
-      assertThat(items).extracting(i -> (String) i.get("formAttr"))
+      assertThat(items)
+          .extracting(i -> (String) i.get("formAttr"))
           .containsOnly("采购", "联动", "自制", "原材料联动", "家用结算价");
-      assertThat(items).extracting(i -> (String) i.get("priceSource"))
+      assertThat(items)
+          .extracting(i -> (String) i.get("priceSource"))
           .containsOnly("固定采购价", "联动价", "自制件", "原材料拆解", "家用结算价");
     }
   }
@@ -206,13 +214,13 @@ class GoldenSampleRegressionTest {
 
   /**
    * 覆盖原材料联动表 17 条夹具，分为 3 类：
+   *
    * <ul>
-   *   <li>联动 + 简单公式（{@code X+加工费}）：rows 1-3, 11-12 —— 逆推材料价后走真实管线，
-   *       断言计算结果与夹具 {@code 单价} 严格一致（容忍度 {@link #L1_TOLERANCE}）</li>
-   *   <li>联动 + 复杂公式（多材料加权）：rows 4-10 —— 不追求精确金标重算，改为校验
-   *       {@link FormulaNormalizer} 能把 Excel 原文成功归一化且不抛
-   *       {@link com.sanhua.marketingcost.formula.normalize.FormulaSyntaxException}</li>
-   *   <li>联动 + 废料引用（row 13，无公式）+ 固定（rows 14-16）：只做形态校验</li>
+   *   <li>联动 + 简单公式（{@code X+加工费}）：rows 1-3, 11-12 —— 逆推材料价后走真实管线， 断言计算结果与夹具 {@code 单价} 严格一致（容忍度
+   *       {@link #L1_TOLERANCE}）
+   *   <li>联动 + 复杂公式（多材料加权）：rows 4-10 —— 不追求精确金标重算，改为校验 {@link FormulaNormalizer} 能把 Excel
+   *       原文成功归一化且不抛 {@link com.sanhua.marketingcost.formula.normalize.FormulaSyntaxException}
+   *   <li>联动 + 废料引用（row 13，无公式）+ 固定（rows 14-16）：只做形态校验
    * </ul>
    *
    * <p>DoD：17 行全绿 = 1 行表头元数据 + 16 行数据各自分桶通过。
@@ -237,7 +245,6 @@ class GoldenSampleRegressionTest {
     private static final List<Integer> FIXED_ROWS = List.of(14, 15, 16);
 
     private PriceVariableMapper priceVariableMapper;
-    private FinanceBasePriceMapper financeBasePriceMapper;
     private MaterialScrapRefMapper materialScrapRefMapper;
     private PriceLinkedCalcServiceImpl service;
     private FormulaNormalizer normalizer;
@@ -248,23 +255,12 @@ class GoldenSampleRegressionTest {
     @BeforeEach
     void setUp() {
       priceVariableMapper = mock(PriceVariableMapper.class);
-      financeBasePriceMapper = mock(FinanceBasePriceMapper.class);
       materialScrapRefMapper = mock(MaterialScrapRefMapper.class);
       financeRepo.clear();
 
       // 变量定义全量回灌给 mapper：AliasIndex 与 Registry 都从这里读
       when(priceVariableMapper.selectList(any(Wrapper.class)))
           .thenReturn(new ArrayList<>(buildRawMaterialVariables()));
-
-      when(financeBasePriceMapper.selectOne(any())).thenAnswer(inv -> {
-        Wrapper<FinanceBasePrice> w = inv.getArgument(0);
-        return lookupFinance(w);
-      });
-      when(financeBasePriceMapper.selectList(any(Wrapper.class))).thenAnswer(inv -> {
-        Wrapper<FinanceBasePrice> w = inv.getArgument(0);
-        FinanceBasePrice row = lookupFinance(w);
-        return row == null ? new ArrayList<FinanceBasePrice>() : new ArrayList<>(List.of(row));
-      });
 
       VariableAliasIndex aliasIndex = new VariableAliasIndex(priceVariableMapper);
       aliasIndex.init();
@@ -273,34 +269,32 @@ class GoldenSampleRegressionTest {
               .defaultRegistry();
       normalizer = new FormulaNormalizer(aliasIndex, rowLocal);
 
-      FinanceBasePriceQuery financeQuery = new FinanceBasePriceQuery(financeBasePriceMapper);
-      FactorVariableRegistryImpl registry = new FactorVariableRegistryImpl(
-          priceVariableMapper, financeQuery, new ObjectMapper(), rowLocal);
-      DerivedResolver derivedResolver = new DerivedResolver(
-          financeBasePriceMapper, materialScrapRefMapper);
+      FinanceFactorVariableQuery financeQuery =
+          com.sanhua.marketingcost.formula.registry.FinanceVariableTestSupport.prices(financeRepo);
+      FactorVariableRegistryImpl registry =
+          new FactorVariableRegistryImpl(
+              priceVariableMapper, financeQuery, new ObjectMapper(), rowLocal);
+      DerivedResolver derivedResolver = new DerivedResolver(financeQuery, materialScrapRefMapper);
       registry.setDerivedContextResolver(derivedResolver);
-
-      LinkedParserProperties props = new LinkedParserProperties();
-      props.setMode("new");
 
       // 2026-04 重构：newCalculate 委托给 previewService.previewForRefresh，
       // Golden 回归需要真实 preview 实例才能让路径走通
       PriceLinkedItemMapper linkedItemMapperMock = mock(PriceLinkedItemMapper.class);
       com.sanhua.marketingcost.service.impl.PriceLinkedFormulaPreviewServiceImpl previewService =
           new com.sanhua.marketingcost.service.impl.PriceLinkedFormulaPreviewServiceImpl(
-              normalizer, registry, priceVariableMapper, linkedItemMapperMock,
+              normalizer,
+              registry,
+              priceVariableMapper,
+              linkedItemMapperMock,
               mock(com.sanhua.marketingcost.formula.normalize.FormulaUnitConsistencyChecker.class));
 
-      service = new PriceLinkedCalcServiceImpl(
-          mock(BomCostingRowMapper.class),
-          mock(PriceLinkedCalcItemMapper.class),
-          linkedItemMapperMock,
-          priceVariableMapper,
-          mock(OaFormMapper.class),
-          financeBasePriceMapper,
-          mock(DynamicValueMapper.class),
-          props, normalizer, registry, new ObjectMapper(),
-          previewService);
+      service =
+          new PriceLinkedCalcServiceImpl(
+              mock(PriceLinkedCalcItemMapper.class),
+              linkedItemMapperMock,
+              mock(OaFormMapper.class),
+              new ObjectMapper(),
+              previewService);
     }
 
     @Test
@@ -388,8 +382,10 @@ class GoldenSampleRegressionTest {
         assertThat(normalized).as("row %d 归一化结果", rowIndex).isNotBlank();
         // 至少含一个 [xxx] 标签 —— 说明 AliasIndex 成功识别了至少一个变量
         assertThat(normalized).as("row %d 归一化含变量标签", rowIndex).contains("[");
-        assertThat(normalized).as("row %d 归一化无全角括号残留", rowIndex)
-            .doesNotContain("（").doesNotContain("）");
+        assertThat(normalized)
+            .as("row %d 归一化无全角括号残留", rowIndex)
+            .doesNotContain("（")
+            .doesNotContain("）");
       }
     }
 
@@ -419,29 +415,13 @@ class GoldenSampleRegressionTest {
         assertThat(orderType).as("row %d orderType", rowIndex).isEqualTo("固定");
         assertThat(formula).as("row %d 公式应空", rowIndex).isNullOrEmpty();
         assertThat(unitPrice).as("row %d 单价非空", rowIndex).isNotNull();
-        assertThat(unitPrice).as("row %d 单价为正", rowIndex)
-            .isGreaterThan(BigDecimal.ZERO);
+        assertThat(unitPrice).as("row %d 单价为正", rowIndex).isGreaterThan(BigDecimal.ZERO);
       }
     }
 
     // ========================== Mock answer / 夹具读取工具 ==========================
 
     /** 统一 finance 查询：从 wrapper 参数里摘出 String 值去 financeRepo 查。 */
-    private FinanceBasePrice lookupFinance(Wrapper<FinanceBasePrice> wrapper) {
-      AbstractWrapper<FinanceBasePrice, ?, ?> w = (AbstractWrapper<FinanceBasePrice, ?, ?>) wrapper;
-      w.getSqlSegment(); // 触发 MP 惰性填充 paramNameValuePairs
-      for (Object v : w.getParamNameValuePairs().values()) {
-        if (v instanceof String s && financeRepo.containsKey(s)) {
-          FinanceBasePrice row = new FinanceBasePrice();
-          row.setShortName(s);
-          row.setPrice(financeRepo.get(s));
-          row.setPriceMonth("2026-04");
-          return row;
-        }
-      }
-      return null;
-    }
-
     @SuppressWarnings("unchecked")
     private List<Object> headerRow() {
       Map<String, Object> fixture = GoldenSampleFixture.rawMaterialLinkedFixed();
@@ -487,12 +467,9 @@ class GoldenSampleRegressionTest {
       vars.add(financeVar("Mn", "锰价格", "[\"Mn\",\"锰\"]"));
 
       // PART_CONTEXT ENTITY：加工费 / 下料重 / 净重（PriceLinkedItem 字段映射）
-      vars.add(partEntity("process_fee", "加工费",
-          "[\"加工费\",\"含税加工费\"]", "processFee", null));
-      vars.add(partEntity("blank_weight", "下料重量",
-          "[\"下料重量\",\"下料重\"]", "blankWeight", "0.001"));
-      vars.add(partEntity("net_weight", "产品净重",
-          "[\"产品净重\",\"净重\"]", "netWeight", "0.001"));
+      vars.add(partEntity("process_fee", "加工费", "[\"加工费\",\"含税加工费\"]", "processFee", null));
+      vars.add(partEntity("blank_weight", "下料重量", "[\"下料重量\",\"下料重\"]", "blankWeight", "0.001"));
+      vars.add(partEntity("net_weight", "产品净重", "[\"产品净重\",\"净重\"]", "netWeight", "0.001"));
 
       return vars;
     }
@@ -506,8 +483,9 @@ class GoldenSampleRegressionTest {
       v.setAliasesJson(aliases);
       // Plan B：FINANCE 走 resolver_params 的 shortName 路径（保持 mock 的 shortName.eq 断言兼容）
       v.setResolverKind("FINANCE");
-      v.setResolverParams(String.format(
-          "{\"shortName\":\"%s\",\"priceSource\":\"平均价\",\"buScoped\":false}", shortName));
+      v.setResolverParams(
+          String.format(
+              "{\"shortName\":\"%s\",\"priceSource\":\"平均价\",\"buScoped\":false}", shortName));
       return v;
     }
 
@@ -519,11 +497,13 @@ class GoldenSampleRegressionTest {
       v.setFactorType("PART_CONTEXT");
       v.setStatus("active");
       v.setAliasesJson(aliases);
-      String bind = scale == null
-          ? String.format("{\"source\":\"ENTITY\",\"entity\":\"linkedItem\",\"field\":\"%s\"}", field)
-          : String.format(
-              "{\"source\":\"ENTITY\",\"entity\":\"linkedItem\",\"field\":\"%s\",\"unitScale\":\"%s\"}",
-              field, scale);
+      String bind =
+          scale == null
+              ? String.format(
+                  "{\"source\":\"ENTITY\",\"entity\":\"linkedItem\",\"field\":\"%s\"}", field)
+              : String.format(
+                  "{\"source\":\"ENTITY\",\"entity\":\"linkedItem\",\"field\":\"%s\",\"unitScale\":\"%s\"}",
+                  field, scale);
       v.setContextBindingJson(bind);
       // Plan B：ENTITY params 直接复用 binding 的 entity/field/unitScale 结构
       v.setResolverKind("ENTITY");
@@ -534,14 +514,15 @@ class GoldenSampleRegressionTest {
     /** 反射调 PriceLinkedCalcServiceImpl#calculatePartUnitPrice（与 LinkedFormulaE2ETest 同款）。 */
     @SuppressWarnings({"unchecked", "rawtypes"})
     private BigDecimal runCalc(PriceLinkedItem item) throws Exception {
-      Method m = PriceLinkedCalcServiceImpl.class.getDeclaredMethod(
-          "calculatePartUnitPrice",
-          PriceLinkedItem.class, PriceLinkedCalcItem.class,
-          com.sanhua.marketingcost.entity.OaForm.class,
-          Map.class, Map.class);
+      Method m =
+          PriceLinkedCalcServiceImpl.class.getDeclaredMethod(
+              "calculateQuoteItemForEnsure",
+              PriceLinkedCalcItem.class,
+              PriceLinkedItem.class,
+              com.sanhua.marketingcost.entity.OaForm.class);
       m.setAccessible(true);
-      return (BigDecimal) m.invoke(service, item, new PriceLinkedCalcItem(), null,
-          new HashMap(), new HashMap());
+      return ((PriceLinkedCalcItem) m.invoke(service, new PriceLinkedCalcItem(), item, null))
+          .getPartUnitPrice();
     }
   }
 
@@ -615,57 +596,33 @@ class GoldenSampleRegressionTest {
   }
 
   // =========================================================================
-  // L1C：T27 三模式金标 —— legacy / dual / new parity
-  //
-  // 设计动机：T27 原卡命令行走 Spring profile 覆盖 cost.linked.parser.mode，
-  // 但现有 GoldenSampleRegressionTest 是纯 mockito 单元测试（不启动 Spring），
-  // profile 不生效。本 Nested 通过构造期显式 setMode(...) 兑现三模式回归诉求。
-  //
-  // 公式形态：选用已归一化的 "[Cu]+[process_fee]" —— 这是 legacy/new 引擎共同
-  // 识别的子集。legacy 的 VARIABLE_PATTERN 只认 ASCII 裸标识符或 [中文/英文]
-  // 包裹；裸中文（如 "电解铜+加工费"）legacy 不识别，这是 legacy 的设计局限
-  // 而非 bug，三模式 parity 只能在归一化语法上验证。
-  //
-  // DoD：
-  //   - legacy/dual/new 三模式结果都 = 12.5（容差 L3_TOLERANCE）
-  //   - dual 内部 diff = 0（由 legacy=new 的等价性隐式满足 → 不打 WARN）
-  // =========================================================================
-  @Nested
-  @DisplayName("L1C - T27 三模式 parity（[Cu]+[process_fee]）")
-  class L1CThreeModeParity {
+  // 统一公式路径保留已归一化公式的独立金标。
 
-    /** 预归一化公式，legacy/new 双管线都能解析 */
+  @Nested
+  @DisplayName("L1C - 已归一化公式金标")
+  class L1CNormalizedFormula {
+
+    /** 已归一化的因素及行字段公式 */
     private static final String EXPR = "[Cu]+[process_fee]";
 
-    /** 金属价 10 + 加工费 2.5 = 12.5，三模式不变 */
+    /** 金属价 10 + 加工费 2.5 = 12.5 */
     private static final BigDecimal EXPECTED = new BigDecimal("12.5");
 
     private static final String PRICING_MONTH = "2026-04";
     private static final BigDecimal CU_PRICE = new BigDecimal("10.0");
     private static final BigDecimal PROCESS_FEE = new BigDecimal("2.5");
 
-    @org.junit.jupiter.params.ParameterizedTest(name = "mode={0}")
-    @org.junit.jupiter.params.provider.ValueSource(strings = {"legacy", "dual", "new"})
-    @DisplayName("[Cu]+[process_fee] 三模式同值 12.5（dual 差异隐式为 0）")
-    void threeModeParityOnNormalizedExpr(String mode) throws Exception {
-      // 1) 变量定义：同时填 legacy 字段（sourceTable/sourceField）与 new 字段
-      //    （factorType/aliases/contextBinding），让两条管线都能解析同一条 PriceVariable
-      List<PriceVariable> variables = buildLegacyAndNewCompatibleVariables();
+    @Test
+    @DisplayName("[Cu]+[process_fee] 保留12.5独立金标")
+    void normalizedExpressionMatchesGolden() throws Exception {
+      List<PriceVariable> variables = buildBoundFactorVariables();
 
       // 2) mapper mock：variable list / finance selectList(IN) / finance selectOne(4-key)
       PriceVariableMapper priceVariableMapper = mock(PriceVariableMapper.class);
       when(priceVariableMapper.selectList(any(Wrapper.class)))
           .thenReturn(new ArrayList<>(variables));
 
-      FinanceBasePriceMapper financeBasePriceMapper = mock(FinanceBasePriceMapper.class);
       // new 管线走 selectOne（4-key 精确查）
-      when(financeBasePriceMapper.selectOne(any())).thenAnswer(
-          inv -> makeFinanceRowIfMatchesCu(inv.getArgument(0)));
-      // legacy 管线走 selectList（IN 查 shortName）
-      when(financeBasePriceMapper.selectList(any(Wrapper.class))).thenAnswer(inv -> {
-        FinanceBasePrice row = makeFinanceRowIfMatchesCu(inv.getArgument(0));
-        return row == null ? new ArrayList<FinanceBasePrice>() : new ArrayList<>(List.of(row));
-      });
 
       // 3) 组装新引擎组件（alias 索引 / normalizer / registry）—— 即使 mode=legacy，
       //    PriceLinkedCalcServiceImpl 构造仍需要这些 bean 非空（runLegacy/runNew 决定实际走谁）
@@ -676,44 +633,34 @@ class GoldenSampleRegressionTest {
               .defaultRegistry();
       FormulaNormalizer normalizer = new FormulaNormalizer(aliasIndex, rowLocal2);
 
-      FinanceBasePriceQuery financeQuery = new FinanceBasePriceQuery(financeBasePriceMapper);
-      FactorVariableRegistryImpl registry = new FactorVariableRegistryImpl(
-          priceVariableMapper, financeQuery, new ObjectMapper(), rowLocal2);
-      DerivedResolver derivedResolver = new DerivedResolver(
-          financeBasePriceMapper, mock(MaterialScrapRefMapper.class));
+      FinanceFactorVariableQuery financeQuery =
+          com.sanhua.marketingcost.formula.registry.FinanceVariableTestSupport.prices(
+              Map.of("Cu", new BigDecimal("10")));
+      FactorVariableRegistryImpl registry =
+          new FactorVariableRegistryImpl(
+              priceVariableMapper, financeQuery, new ObjectMapper(), rowLocal2);
+      DerivedResolver derivedResolver =
+          new DerivedResolver(financeQuery, mock(MaterialScrapRefMapper.class));
       registry.setDerivedContextResolver(derivedResolver);
 
       // 4) mode 注入 —— T27 关键点
-      LinkedParserProperties props = new LinkedParserProperties();
-      props.setMode(mode);
 
       // 2026-04 重构：newCalculate 委托给 previewService.previewForRefresh —— 必须真实实例
       PriceLinkedItemMapper linkedItemMapperMock2 = mock(PriceLinkedItemMapper.class);
       com.sanhua.marketingcost.service.impl.PriceLinkedFormulaPreviewServiceImpl previewService2 =
           new com.sanhua.marketingcost.service.impl.PriceLinkedFormulaPreviewServiceImpl(
-              normalizer, registry, priceVariableMapper, linkedItemMapperMock2,
+              normalizer,
+              registry,
+              priceVariableMapper,
+              linkedItemMapperMock2,
               mock(com.sanhua.marketingcost.formula.normalize.FormulaUnitConsistencyChecker.class));
-      PriceLinkedCalcServiceImpl service = new PriceLinkedCalcServiceImpl(
-          mock(BomCostingRowMapper.class),
-          mock(PriceLinkedCalcItemMapper.class),
-          linkedItemMapperMock2,
-          priceVariableMapper,
-          mock(OaFormMapper.class),
-          financeBasePriceMapper,
-          mock(DynamicValueMapper.class),
-          props, normalizer, registry, new ObjectMapper(),
-          previewService2);
-
-      // 5) 预构造 legacy 需要的 variableMap / financePriceMap（new 管线不读这俩）
-      Map<String, PriceVariable> variableMap = new HashMap<>();
-      for (PriceVariable v : variables) {
-        variableMap.put(v.getVariableCode(), v);
-      }
-      Map<String, Map<String, BigDecimal>> financePriceMap = new HashMap<>();
-      Map<String, BigDecimal> cuByMonth = new HashMap<>();
-      cuByMonth.put(PRICING_MONTH, CU_PRICE);
-      cuByMonth.put("__latest__", CU_PRICE);
-      financePriceMap.put("Cu", cuByMonth);
+      PriceLinkedCalcServiceImpl service =
+          new PriceLinkedCalcServiceImpl(
+              mock(PriceLinkedCalcItemMapper.class),
+              linkedItemMapperMock2,
+              mock(OaFormMapper.class),
+              new ObjectMapper(),
+              previewService2);
 
       // 6) 组装 linkedItem + 反射调用
       PriceLinkedItem item = new PriceLinkedItem();
@@ -725,42 +672,35 @@ class GoldenSampleRegressionTest {
       item.setBlankWeight(BigDecimal.ZERO);
       item.setNetWeight(BigDecimal.ZERO);
 
-      Method m = PriceLinkedCalcServiceImpl.class.getDeclaredMethod(
-          "calculatePartUnitPrice",
-          PriceLinkedItem.class, PriceLinkedCalcItem.class,
-          com.sanhua.marketingcost.entity.OaForm.class,
-          Map.class, Map.class);
+      Method m =
+          PriceLinkedCalcServiceImpl.class.getDeclaredMethod(
+              "calculateQuoteItemForEnsure",
+              PriceLinkedCalcItem.class,
+              PriceLinkedItem.class,
+              com.sanhua.marketingcost.entity.OaForm.class);
       m.setAccessible(true);
-      BigDecimal actual = (BigDecimal) m.invoke(
-          service, item, new PriceLinkedCalcItem(), null, variableMap, financePriceMap);
+      BigDecimal actual =
+          ((PriceLinkedCalcItem) m.invoke(service, new PriceLinkedCalcItem(), item, null))
+              .getPartUnitPrice();
 
-      // 7) 断言：三模式结果完全一致（dual 内部 legacy=new → diff=0 不 WARN）
-      assertThat(actual).as("mode=%s 下 [Cu]+[process_fee] 应 = %s", mode, EXPECTED)
+      assertThat(actual)
+          .as("[Cu]+[process_fee] 应 = %s", EXPECTED)
           .isNotNull()
           .isCloseTo(EXPECTED, within(L3_TOLERANCE));
     }
 
-    /**
-     * 构造同时满足 legacy 与 new 双管线字段需求的 PriceVariable 列表。
-     * <ul>
-     *   <li>Cu：legacy 用 sourceTable="lp_finance_base_price"+variableName 作 shortName；
-     *           new 用 factorType=FINANCE_FACTOR + aliases + FINANCE_BASE 绑定</li>
-     *   <li>process_fee：legacy 用 sourceTable="lp_price_linked_item"+sourceField="processFee"；
-     *                     new 用 factorType=PART_CONTEXT + ENTITY 绑定</li>
-     * </ul>
-     */
-    private List<PriceVariable> buildLegacyAndNewCompatibleVariables() {
+    /** Cu绑定财务因素，加工费绑定物料行字段。 */
+    private List<PriceVariable> buildBoundFactorVariables() {
       List<PriceVariable> vars = new ArrayList<>();
 
       PriceVariable cu = new PriceVariable();
       cu.setVariableCode("Cu");
-      cu.setVariableName("Cu"); // legacy shortName → finance IN 查 + financePriceMap key
+      cu.setVariableName("Cu");
       cu.setSourceTable("lp_finance_base_price");
       cu.setFactorType("FINANCE_FACTOR");
       cu.setStatus("active");
       cu.setAliasesJson("[\"Cu\",\"电解铜\"]");
-      cu.setContextBindingJson(
-          "{\"factorCode\":\"Cu\",\"priceSource\":\"长江现货平均价\"}");
+      cu.setContextBindingJson("{\"factorCode\":\"Cu\",\"priceSource\":\"长江现货平均价\"}");
       // Plan B：new 管线读 resolver_params；factorCode 路径 + 精确 priceSource
       cu.setResolverKind("FINANCE");
       cu.setResolverParams(
@@ -779,38 +719,15 @@ class GoldenSampleRegressionTest {
           "{\"source\":\"ENTITY\",\"entity\":\"linkedItem\",\"field\":\"processFee\"}");
       // Plan B：new 管线读 resolver_params —— 直接复用 binding 的 entity/field 结构
       processFee.setResolverKind("ENTITY");
-      processFee.setResolverParams(
-          "{\"entity\":\"linkedItem\",\"field\":\"processFee\"}");
+      processFee.setResolverParams("{\"entity\":\"linkedItem\",\"field\":\"processFee\"}");
       vars.add(processFee);
 
       return vars;
     }
 
     /**
-     * 统一 finance 查询：无论 selectOne / selectList(IN)，只要 wrapper 里任一 param
-     * 是 "Cu"（legacy IN / new 4-key 都会带 factorCode 或 shortName），就返回 Cu 金标行。
+     * 统一 finance 查询：无论 selectOne / selectList(IN)，只要 wrapper 里任一 param 是 "Cu"（legacy IN / new 4-key
+     * 都会带 factorCode 或 shortName），就返回 Cu 金标行。
      */
-    private FinanceBasePrice makeFinanceRowIfMatchesCu(Object wrapperObj) {
-      AbstractWrapper<FinanceBasePrice, ?, ?> w =
-          (AbstractWrapper<FinanceBasePrice, ?, ?>) wrapperObj;
-      w.getSqlSegment(); // 触发 MP 惰性填充 paramNameValuePairs
-      boolean hitCu = false;
-      for (Object v : w.getParamNameValuePairs().values()) {
-        if (v instanceof String s && "Cu".equals(s)) {
-          hitCu = true;
-          break;
-        }
-      }
-      if (!hitCu) {
-        return null;
-      }
-      FinanceBasePrice row = new FinanceBasePrice();
-      row.setFactorCode("Cu");
-      row.setShortName("Cu");
-      row.setPriceMonth(PRICING_MONTH);
-      row.setPriceSource("长江现货平均价");
-      row.setPrice(CU_PRICE);
-      return row;
-    }
   }
 }

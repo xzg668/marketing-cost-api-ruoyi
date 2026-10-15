@@ -52,8 +52,7 @@ public class PricePrepareGap {
   @TableField(exist = false)
   private String actionMaterialNo;
 
-  /** 已确认的价格类型，仅用于缺口接口返回，不对应 lp_price_prepare_gap 表字段。 */
-  @TableField(exist = false)
+  /** 实际尝试的取价类型；历史缺口或无可用路由时为空。 */
   private String priceType;
 
   @TableField(exist = false)

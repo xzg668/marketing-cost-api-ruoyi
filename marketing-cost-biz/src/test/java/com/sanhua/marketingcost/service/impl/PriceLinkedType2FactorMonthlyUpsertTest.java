@@ -17,19 +17,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
 @DisplayName("PLI2-06 类型2影响因素月度价格写入")
 class PriceLinkedType2FactorMonthlyUpsertTest {
 
-  private static final Path TYPE2_SAMPLE = Path.of(
-      "/Users/xiexicheng/Desktop/price/采购价表二次开发导入模板-股份251115联动价格导入类型2.xls");
+  private static final Path TYPE2_SAMPLE =
+      Path.of("/Users/xiexicheng/Desktop/price/采购价表二次开发导入模板-股份251115联动价格导入类型2.xls");
 
   @Test
-  @DisplayName("真实 Excel 的 Cu=90、Zn=21.68 复用现有身份和月度价格")
+  @DisplayName("真实 Excel 的 Cu 只引用财务身份，尚未公共维护的 Zn 复用技术月价")
   void realCuAndZnReuseExistingPricesAndSaveSourceRows() throws Exception {
-    PriceLinkedType2FactorUpsertTestSupport support =
-        new PriceLinkedType2FactorUpsertTestSupport();
+    PriceLinkedType2FactorUpsertTestSupport support = new PriceLinkedType2FactorUpsertTestSupport();
     support.addIdentity(191L, "COMMERCIAL", "5", "旧长江铜名称", "1#Cu", "平均价");
     support.addIdentity(193L, "COMMERCIAL", "7", "旧SMM铜名称", "1#Cu", "平均价");
     support.addIdentity(208L, "COMMERCIAL", "22", "旧月长江铜名称", "1#Cu", "平均价");
@@ -52,13 +50,13 @@ class PriceLinkedType2FactorMonthlyUpsertTest {
                 new ByteArrayInputStream(Files.readAllBytes(TYPE2_SAMPLE)),
                 TYPE2_SAMPLE.getFileName().toString());
 
-    FactorMonthlyPriceUpsertResult result = support.service.upsert(
-        workbook, "2026-07", "COMMERCIAL", "tester", 99001L);
+    FactorMonthlyPriceUpsertResult result =
+        support.service.upsert(workbook, "2026-07", "COMMERCIAL", "tester", 99001L);
 
     assertThat(result.getErrors()).isEmpty();
     assertThat(result.getIdentityCreatedCount()).isZero();
     assertThat(result.getIdentityReusedCount()).isEqualTo(2);
-    assertThat(result.getMonthlyPriceUnchangedCount()).isEqualTo(2);
+    assertThat(result.getMonthlyPriceUnchangedCount()).isEqualTo(1);
     assertThat(result.getMonthlyPriceCreatedCount()).isZero();
     assertThat(result.getMonthlyPriceUpdatedCount()).isZero();
     assertThat(result.getRows())
@@ -69,7 +67,7 @@ class PriceLinkedType2FactorMonthlyUpsertTest {
         .containsOnly("REUSE");
     assertThat(result.getRows())
         .extracting(FactorMonthlyPriceUpsertResult.RowResult::getMonthlyPriceAction)
-        .containsOnly("NO_CHANGE");
+        .containsExactly("FINANCE_REFERENCE", "NO_CHANGE");
     assertThat(support.changeLogs).isEmpty();
     verify(support.monthlyPriceMapper, never()).insert(any(FactorMonthlyPrice.class));
     verify(support.monthlyPriceMapper, never()).updateById(any(FactorMonthlyPrice.class));
@@ -89,10 +87,11 @@ class PriceLinkedType2FactorMonthlyUpsertTest {
     assertThat(savedSource.getSheets().getFirst().getRows().get(1).getPrice())
         .isEqualByComparingTo("21.68");
 
-    FactorIdentity cuMaster = support.identities.stream()
-        .filter(identity -> Long.valueOf(191L).equals(identity.getId()))
-        .findFirst()
-        .orElseThrow();
+    FactorIdentity cuMaster =
+        support.identities.stream()
+            .filter(identity -> Long.valueOf(191L).equals(identity.getId()))
+            .findFirst()
+            .orElseThrow();
     assertThat(cuMaster.getCanonicalFactorKey()).isEqualTo("AVG|1#CU");
     assertThat(cuMaster.getCanonicalFactorIdentityId()).isEqualTo(191L);
     assertThat(support.identities)
@@ -104,57 +103,65 @@ class PriceLinkedType2FactorMonthlyUpsertTest {
   @Test
   @DisplayName("系统首次无因素时创建稳定身份、当月价格、日志和来源行")
   void createsIdentityPriceLogAndRowReferenceWhenMissing() {
-    PriceLinkedType2FactorUpsertTestSupport support =
-        new PriceLinkedType2FactorUpsertTestSupport();
+    PriceLinkedType2FactorUpsertTestSupport support = new PriceLinkedType2FactorUpsertTestSupport();
 
-    FactorMonthlyPriceUpsertResult result = support.service.upsert(
-        support.workbook(support.factor(
-            2, "1", "新铜价完整名称", "1#Cu", "平均价", "90")),
-        "2026-07",
-        "COMMERCIAL",
-        "tester",
-        99002L);
+    FactorMonthlyPriceUpsertResult result =
+        support.service.upsert(
+            support.workbook(support.factor(2, "1", "新镍价完整名称", "1#Ni", "平均价", "90")),
+            "2026-07",
+            "COMMERCIAL",
+            "tester",
+            99002L);
 
     assertThat(result.getErrors()).isEmpty();
     assertThat(result.getIdentityCreatedCount()).isEqualTo(1);
     assertThat(result.getMonthlyPriceCreatedCount()).isEqualTo(1);
     assertThat(result.getRows().getFirst().getIdentityAction()).isEqualTo("CREATE");
-    assertThat(support.identities).singleElement().satisfies(identity -> {
-      assertThat(identity.getCanonicalFactorKey()).isEqualTo("AVG|1#CU");
-      assertThat(identity.getCanonicalFactorIdentityId()).isEqualTo(identity.getId());
-      assertThat(identity.getIdentityOrigin()).isEqualTo("TYPE2_AUTO_CREATE");
-      assertThat(identity.getIdentityHash()).hasSize(64);
-    });
-    assertThat(support.monthlyPrices).singleElement().satisfies(price -> {
-      assertThat(price.getPriceMonth()).isEqualTo("2026-07");
-      assertThat(price.getPrice()).isEqualByComparingTo("90");
-      assertThat(price.getSourceUploadBatchId()).isEqualTo(99002L);
-      assertThat(price.getSourceTag()).isEqualTo("EXCEL_IMPORT");
-    });
-    assertThat(support.changeLogs).singleElement().satisfies(log -> {
-      assertThat(log.getChangeType()).isEqualTo("CREATE");
-      assertThat(log.getOldPrice()).isNull();
-      assertThat(log.getNewPrice()).isEqualByComparingTo("90");
-      assertThat(log.getSourceType()).isEqualTo("EXCEL_IMPORT");
-    });
-    verify(support.factorUploadBatchService, times(1)).saveRowRefs(
-        org.mockito.ArgumentMatchers.eq(99002L),
-        any(FactorWorkbookParseResult.class),
-        any(FactorMonthlyPriceUpsertResult.class));
+    assertThat(support.identities)
+        .singleElement()
+        .satisfies(
+            identity -> {
+              assertThat(identity.getCanonicalFactorKey()).isEqualTo("AVG|1#NI");
+              assertThat(identity.getCanonicalFactorIdentityId()).isEqualTo(identity.getId());
+              assertThat(identity.getIdentityOrigin()).isEqualTo("TYPE2_AUTO_CREATE");
+              assertThat(identity.getIdentityHash()).hasSize(64);
+            });
+    assertThat(support.monthlyPrices)
+        .singleElement()
+        .satisfies(
+            price -> {
+              assertThat(price.getPriceMonth()).isEqualTo("2026-07");
+              assertThat(price.getPrice()).isEqualByComparingTo("90");
+              assertThat(price.getSourceUploadBatchId()).isEqualTo(99002L);
+              assertThat(price.getSourceTag()).isEqualTo("EXCEL_IMPORT");
+            });
+    assertThat(support.changeLogs)
+        .singleElement()
+        .satisfies(
+            log -> {
+              assertThat(log.getChangeType()).isEqualTo("CREATE");
+              assertThat(log.getOldPrice()).isNull();
+              assertThat(log.getNewPrice()).isEqualByComparingTo("90");
+              assertThat(log.getSourceType()).isEqualTo("EXCEL_IMPORT");
+            });
+    verify(support.factorUploadBatchService, times(1))
+        .saveRowRefs(
+            org.mockito.ArgumentMatchers.eq(99002L),
+            any(FactorWorkbookParseResult.class),
+            any(FactorMonthlyPriceUpsertResult.class));
   }
 
   @Test
   @DisplayName("同一类型2因素再次导入同月同价不重复创建")
   void secondType2ImportReusesCreatedIdentityAndPrice() {
-    PriceLinkedType2FactorUpsertTestSupport support =
-        new PriceLinkedType2FactorUpsertTestSupport();
-    PriceLinkedType2WorkbookParseResult workbook = support.workbook(support.factor(
-        2, "1", "新铜价完整名称", "1#Cu", "平均价", "90"));
+    PriceLinkedType2FactorUpsertTestSupport support = new PriceLinkedType2FactorUpsertTestSupport();
+    PriceLinkedType2WorkbookParseResult workbook =
+        support.workbook(support.factor(2, "1", "新镍价完整名称", "1#Ni", "平均价", "90"));
 
-    FactorMonthlyPriceUpsertResult first = support.service.upsert(
-        workbook, "2026-07", "COMMERCIAL", "alice", 99003L);
-    FactorMonthlyPriceUpsertResult second = support.service.upsert(
-        workbook, "2026-07", "COMMERCIAL", "bob", 99004L);
+    FactorMonthlyPriceUpsertResult first =
+        support.service.upsert(workbook, "2026-07", "COMMERCIAL", "alice", 99003L);
+    FactorMonthlyPriceUpsertResult second =
+        support.service.upsert(workbook, "2026-07", "COMMERCIAL", "bob", 99004L);
 
     assertThat(first.getIdentityCreatedCount()).isEqualTo(1);
     assertThat(second.getIdentityReusedCount()).isEqualTo(1);
@@ -165,5 +172,37 @@ class PriceLinkedType2FactorMonthlyUpsertTest {
     assertThat(support.changeLogs).hasSize(1);
     verify(support.identityMapper, times(1)).insert(any(FactorIdentity.class));
     verify(support.monthlyPriceMapper, times(1)).insert(any(FactorMonthlyPrice.class));
+  }
+
+  @Test
+  void publicFactorNeverCreatesOrOverwritesMonthlyPriceEvenWithOverwriteRequested() {
+    var support = new PriceLinkedType2FactorUpsertTestSupport();
+    support.addIdentity(701L, "COMMERCIAL", "1", "铜", "1#Cu", "平均价");
+    var historical = support.addMonthlyPrice(801L, 701L, "2026-10", "109.114");
+    var imported =
+        support.service.upsert(
+            support.workbook(
+                support.factor(2, "1", "铜", "Cu", "平均价", "120"),
+                support.factor(3, "2", "铜原输入", "1#Cu", "平均价", "130")),
+            "2026-10",
+            "COMMERCIAL",
+            "tester",
+            9001L,
+            "OVERWRITE");
+    assertThat(imported.getErrors()).isEmpty();
+    assertThat(imported.getRows())
+        .hasSize(2)
+        .allSatisfy(
+            row -> {
+              assertThat(row.getFactorIdentityId()).isEqualTo(701L);
+              assertThat(row.getFactorMonthlyPriceId()).isNull();
+              assertThat(row.getNewPrice()).isNull();
+              assertThat(row.getMonthlyPriceAction()).isEqualTo("FINANCE_REFERENCE");
+            });
+    assertThat(historical.getPrice()).isEqualByComparingTo("109.114");
+    assertThat(support.changeLogs).isEmpty();
+    verify(support.monthlyPriceMapper, never()).insert(any(FactorMonthlyPrice.class));
+    verify(support.monthlyPriceMapper, never()).updateById(any(FactorMonthlyPrice.class));
+    assertThat(support.savedRowRefWorkbook.get().getValidRowCount()).isEqualTo(2);
   }
 }

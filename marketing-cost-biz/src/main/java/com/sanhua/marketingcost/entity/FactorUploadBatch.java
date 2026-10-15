@@ -11,8 +11,18 @@ import lombok.Setter;
 @Setter
 @TableName("lp_factor_upload_batch")
 public class FactorUploadBatch {
+  /** PRC-01：原稿/财务版本契约；旧数据的未知来源保持为空。 */
+  private String priceOrgCode;
+
+  private Integer publicationRevision;
+  private String defaultSchemeCode;
+  private String parserVersion;
+  private LocalDateTime publishedAt;
+  private String publicationNote;
+
   @TableId(type = IdType.AUTO)
   private Long id;
+
   private Long technicalVersionId;
   private String technicalResultJson;
   private String batchNo;
@@ -23,6 +33,12 @@ public class FactorUploadBatch {
   private String businessUnitType;
   private String fileName;
   private String fileSha256;
+
+  /** 只在原稿发布绑定时显式读取，批次列表和API不返回原始文件内容。 */
+  @com.baomidou.mybatisplus.annotation.TableField(select = false)
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private byte[] sourceWorkbook;
+
   private String contentHash;
   private String uploadedBy;
   private String status;

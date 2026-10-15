@@ -60,8 +60,8 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
   static final String OBJECT_PACKAGE_PARENT = "PACKAGE_PARENT";
   static final String OBJECT_PACKAGE_CHILD = "PACKAGE_CHILD";
   static final String STATUS_RECOGNIZED = "RECOGNIZED";
-  static final String STATUS_MISSING_TYPE = "MISSING_TYPE";
-  static final String STATUS_CHILD_MISSING_TYPE = "CHILD_MISSING_TYPE";
+  static final String STATUS_NO_SOURCE = "NO_SOURCE";
+  static final String STATUS_CHILD_GAP = "CHILD_GAP";
   private static final String ROW_TYPE_SPECIAL_ROLLUP_PARENT = "SPECIAL_ROLLUP_PARENT";
 
   private final OaFormMapper oaFormMapper;
@@ -369,7 +369,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
                         && plan.getMaterialCode().equals(calcRow.getParentMaterialNo()))
             .toList();
     if (calcRows.isEmpty()) {
-      parent.setTypeStatus(STATUS_CHILD_MISSING_TYPE);
+      parent.setTypeStatus(STATUS_CHILD_GAP);
       parent.setMessage("缺制造件价格生成结果，无法展开原材料/废料");
       return parent;
     }
@@ -436,7 +436,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
           .accept(ref);
     }
     if (rawMaterials.isEmpty()) {
-      parent.setTypeStatus(STATUS_CHILD_MISSING_TYPE);
+      parent.setTypeStatus(STATUS_CHILD_GAP);
       parent.setMessage("缺上卷命中子件快照，无法展开原材料/废料");
       return parent;
     }
@@ -520,7 +520,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     request.setAsOfDate(row == null ? null : row.getAsOfDate());
     PackageSnapshotResult snapshot = packageSnapshotService.previewSnapshot(request);
     if (snapshot == null || snapshot.getDetails() == null || snapshot.getDetails().isEmpty()) {
-      parent.setTypeStatus(STATUS_CHILD_MISSING_TYPE);
+      parent.setTypeStatus(STATUS_CHILD_GAP);
       parent.setMessage("包装组件结构缺失，无法展开包装子件");
       return parent;
     }
@@ -554,6 +554,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     parent.setLevel(row == null ? 0 : row.getLevel());
     parent.setObjectType(objectType);
     parent.setMaterialCode(materialCode);
+    parent.setPriceOrgCode(row == null ? null : row.getPriceOrgCode());
     parent.setMaterialName(firstText(materialName, row == null ? null : row.getMaterialName()));
     parent.setParentMaterialCode(row == null ? null : row.getParentCode());
     parent.setSourceBomRowId(row == null ? null : row.getId());
@@ -587,6 +588,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     dto.setLevel(row == null ? 0 : row.getLevel());
     dto.setObjectType(objectType);
     dto.setMaterialCode(materialCode);
+    dto.setPriceOrgCode(row == null ? null : row.getPriceOrgCode());
     String sameMaterialRowName =
         row != null
                 && java.util.Objects.equals(
@@ -598,37 +600,39 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     dto.setSourceBomRowId(bomRowId);
     dto.setSourceText(objectType);
     dto.setQuantity(quantityOverride == null ? (row == null ? null : row.getQtyPerParent()) : quantityOverride);
+    if (row == null || !StringUtils.hasText(row.getPriceOrgCode())) {
+      dto.setTypeStatus("SCOPE_MISSING");
+      dto.setMessage("缺少取价组织");
+      return dto;
+    }
     Optional<PriceTypeRoute> route =
-        materialPriceRouterService.resolve(
-            materialCode, scope.periodMonth(), CostPricingPeriodUtils.currentPricingDate());
+        materialPriceRouterService.resolve(materialCode, scope.periodMonth(),
+            CostPricingPeriodUtils.currentPricingDate(), row.getPriceOrgCode(), scope.businessUnitType());
     if (route.isPresent()) {
       PriceTypeRoute hit = route.get();
       dto.setPriceType(normalizePersistedPriceType(firstText(hit.rawPriceType(), hit.priceType().getDbText())));
-      dto.setPriceTypeSource(
-          hit.sourceSystem() != null && hit.sourceSystem().startsWith("PRICE_SOURCE_INFERRED:")
-              ? "FORMAL_PRICE_SOURCE"
-              : "MATERIAL_PRICE_TYPE");
+      dto.setPriceTypeSource(hit.supplemental() ? "TECHNICAL_SUPPLEMENT" : "FORMAL_PRICE_SOURCE");
       dto.setTypeStatus(STATUS_RECOGNIZED);
       dto.setEffectiveFrom(hit.effectiveFrom());
       dto.setEffectiveTo(hit.effectiveTo());
     } else {
-      dto.setTypeStatus(STATUS_MISSING_TYPE);
-      dto.setMessage("缺价格类型");
+      dto.setTypeStatus(STATUS_NO_SOURCE);
+      dto.setMessage("当前月份和组织暂无候选价格来源，准备时按完整顺序检查");
     }
     return dto;
   }
 
   private void aggregateParent(QuotePriceTypeRecognitionRow parent) {
     if (parent.getChildren().isEmpty()) {
-      parent.setTypeStatus(STATUS_CHILD_MISSING_TYPE);
+      parent.setTypeStatus(STATUS_CHILD_GAP);
       parent.setMessage("未展开到可维护取价对象");
       return;
     }
     boolean missing =
         parent.getChildren().stream()
             .anyMatch(child -> !STATUS_RECOGNIZED.equals(child.getTypeStatus()));
-    parent.setTypeStatus(missing ? STATUS_CHILD_MISSING_TYPE : STATUS_RECOGNIZED);
-    parent.setMessage(missing ? "存在子项缺价格类型" : "子项价格类型已配置");
+    parent.setTypeStatus(missing ? STATUS_CHILD_GAP : STATUS_RECOGNIZED);
+    parent.setMessage(missing ? "子项取价来源或范围待检查" : "子项候选来源已识别");
   }
 
   private QuotePriceTypeRecognitionSummary summary(
@@ -642,7 +646,6 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     int priceable = 0;
     int configured = 0;
     int missing = 0;
-    int reference = 0;
     for (QuotePriceTypeRecognitionRow row : flat) {
       if (!isPriceable(row)) {
         continue;
@@ -653,14 +656,10 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
       } else {
         missing++;
       }
-      if (row.getReferenceUnitPrice() != null) {
-        reference++;
-      }
     }
-    summary.setReadyForPricePrepareCount(priceable);
-    summary.setConfiguredTypeCount(configured);
-    summary.setMissingTypeCount(missing);
-    summary.setReferencePriceCount(reference);
+    summary.setPriceableCount(priceable);
+    summary.setCandidateSourceCount(configured);
+    summary.setMissingSourceCount(missing);
     return summary;
   }
 

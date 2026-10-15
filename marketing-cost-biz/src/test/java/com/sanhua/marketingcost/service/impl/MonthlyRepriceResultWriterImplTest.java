@@ -164,7 +164,6 @@ class MonthlyRepriceResultWriterImplTest {
   private CostRunContext context() {
     return CostRunContext.monthlyReprice(
         "2026-05",
-        88L,
         "MRP-001",
         "COMMERCIAL",
         "OA-001",

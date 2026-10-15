@@ -50,6 +50,14 @@ class CostRunDetailControllerTest {
     QuoteCostRunVersion requested = new QuoteCostRunVersion();
     requested.setId(7L);
     requested.setCostRunNo("TRIAL-V1");
+    requested.setCuMaterialAdjustment(new BigDecimal("139.65634237"));
+    requested.setFinalQuoteAmount(new BigDecimal("240.66634237"));
+    requested.setOaCuPrice(new BigDecimal("100"));
+    requested.setFinanceCuPrice(new BigDecimal("90"));
+    var currentForm = new com.sanhua.marketingcost.entity.OaForm();
+    currentForm.setId(1L);
+    currentForm.setCopperPrice(new BigDecimal("110"));
+    when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(currentForm);
     var frozenHeader = new com.sanhua.marketingcost.dto.CostRunResultDto();
     frozenHeader.setProductAttr("非标品");
     when(resultService.getResult(7L)).thenReturn(frozenHeader);
@@ -79,6 +87,10 @@ class CostRunDetailControllerTest {
     assertThat(response.getData().getCostItems()).extracting(CostRunCostItemDto::getId)
         .containsExactly(601L);
     assertThat(response.getData().getTotal()).isEqualByComparingTo("101.01");
+    assertThat(response.getData().getCuMaterialAdjustment()).isEqualByComparingTo("139.65634237");
+    assertThat(response.getData().getFinalQuoteAmount()).isEqualByComparingTo("240.66634237");
+    assertThat(response.getData().getCopperPrice()).isEqualByComparingTo("100");
+    assertThat(response.getData().getFinanceCuPrice()).isEqualByComparingTo("90");
     verify(partService).listAggregatedByCostRunNo(eq("TRIAL-V1"), eq("P-1"));
     verify(costService).listStoredByCostRunNo(eq("TRIAL-V1"));
     verify(partService, never()).listAggregatedByOaNo(any(), any());
@@ -123,6 +135,8 @@ class CostRunDetailControllerTest {
     assertThat(response.getData().getVersionNo()).isEqualTo("V3");
     assertThat(response.getData().getPartItems()).hasSize(1);
     assertThat(response.getData().getTotal()).isEqualByComparingTo("12.34");
+    assertThat(response.getData().getCuMaterialAdjustment()).isNull();
+    assertThat(response.getData().getFinalQuoteAmount()).isNull();
     verify(partService).listAggregatedByCostRunNo(eq("TRIAL-LATEST"), eq("P-1"));
     verify(costService).listStoredByCostRunNo(eq("TRIAL-LATEST"));
     verify(partService, never()).listAggregatedByOaNo(any(), any());

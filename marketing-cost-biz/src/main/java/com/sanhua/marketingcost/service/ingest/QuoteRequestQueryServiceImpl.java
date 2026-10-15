@@ -22,22 +22,22 @@ import com.sanhua.marketingcost.entity.OaFormExtraFee;
 import com.sanhua.marketingcost.entity.OaFormHeaderExtraField;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.OaFormItemExtraField;
-import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
+import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
-import com.sanhua.marketingcost.enums.QuoteCostRunStatus;
 import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
 import com.sanhua.marketingcost.entity.QuoteIngestLog;
 import com.sanhua.marketingcost.enums.QuoteBomStatusCode;
 import com.sanhua.marketingcost.enums.QuoteClassificationStatus;
+import com.sanhua.marketingcost.enums.QuoteCostRunStatus;
 import com.sanhua.marketingcost.enums.QuoteIngestStatus;
 import com.sanhua.marketingcost.mapper.OaFormExtraFeeMapper;
 import com.sanhua.marketingcost.mapper.OaFormHeaderExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
+import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteIngestLogMapper;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
@@ -55,10 +55,13 @@ import org.springframework.util.StringUtils;
 @Service
 public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   private com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy oaWorkflowAccess;
+
   @org.springframework.beans.factory.annotation.Autowired
-  public void setOaWorkflowAccess(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy policy) {
+  public void setOaWorkflowAccess(
+      com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy policy) {
     this.oaWorkflowAccess = policy;
   }
+
   private static final int DEFAULT_PAGE_NO = 1;
   private static final int DEFAULT_PAGE_SIZE = 20;
   private static final int MAX_PAGE_SIZE = 200;
@@ -140,16 +143,14 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   public QuoteRequestDetailResponse confirmClassification(
       String oaNo, QuoteRequestConfirmClassificationRequest request) {
     OaForm form = requireForm(oaNo);
-    String quoteScenario =
-        trimToNull(request == null ? null : request.getQuoteScenario());
+    String quoteScenario = trimToNull(request == null ? null : request.getQuoteScenario());
     if (quoteScenario == null) {
       quoteScenario = trimToNull(form.getQuoteScenario());
     }
     if (quoteScenario == null) {
       throw new QuoteIngestException("报价场景不能为空，无法确认分类");
     }
-    String businessUnitType =
-        trimToNull(request == null ? null : request.getBusinessUnitType());
+    String businessUnitType = trimToNull(request == null ? null : request.getBusinessUnitType());
     if (businessUnitType == null) {
       businessUnitType = trimToNull(form.getBusinessUnitType());
     }
@@ -189,7 +190,10 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     LambdaQueryWrapper<QuoteIngestLog> query =
         Wrappers.lambdaQuery(QuoteIngestLog.class)
             .like(StringUtils.hasText(oaNo), QuoteIngestLog::getOaNo, trimToNull(oaNo))
-            .eq(StringUtils.hasText(sourceType), QuoteIngestLog::getSourceType, trimToNull(sourceType))
+            .eq(
+                StringUtils.hasText(sourceType),
+                QuoteIngestLog::getSourceType,
+                trimToNull(sourceType))
             .eq(
                 StringUtils.hasText(ingestStatus),
                 QuoteIngestLog::getIngestStatus,
@@ -320,6 +324,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     response.setGoldPrice(form.getGoldPrice());
     response.setSus304Price(form.getSus304Price());
     response.setSus316lPrice(form.getSus316lPrice());
+    response.setBoardTender(form.getBoardTender());
     response.setOtherMaterial(form.getOtherMaterial());
     response.setBaseShipping(form.getBaseShipping());
     response.setCalcStatus(form.getCalcStatus());
@@ -394,19 +399,20 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   }
 
   private Map<Long, QuoteBomPreparationRecord> preparationByItemId(List<OaFormItem> items) {
-    List<Long> itemIds = items == null ? List.of() : items.stream()
-        .map(OaFormItem::getId)
-        .filter(id -> id != null)
-        .distinct()
-        .toList();
+    List<Long> itemIds =
+        items == null
+            ? List.of()
+            : items.stream().map(OaFormItem::getId).filter(id -> id != null).distinct().toList();
     if (itemIds.isEmpty()) return Map.of();
-    List<QuoteBomPreparationRecord> rows = quoteBomPreparationRecordMapper.selectList(
-        new QueryWrapper<QuoteBomPreparationRecord>()
-            .in("oa_form_item_id", itemIds)
-            .eq("active_flag", 1)
-            .orderByDesc("id"));
+    List<QuoteBomPreparationRecord> rows =
+        quoteBomPreparationRecordMapper.selectList(
+            new QueryWrapper<QuoteBomPreparationRecord>()
+                .in("oa_form_item_id", itemIds)
+                .eq("active_flag", 1)
+                .orderByDesc("id"));
     Map<Long, QuoteBomPreparationRecord> result = new LinkedHashMap<>();
-    for (QuoteBomPreparationRecord row : rows == null ? List.<QuoteBomPreparationRecord>of() : rows) {
+    for (QuoteBomPreparationRecord row :
+        rows == null ? List.<QuoteBomPreparationRecord>of() : rows) {
       if (row != null && row.getOaFormItemId() != null) {
         result.putIfAbsent(row.getOaFormItemId(), row);
       }
@@ -419,11 +425,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     List<Long> itemIds =
         items == null
             ? List.of()
-            : items.stream()
-                .map(OaFormItem::getId)
-                .filter(id -> id != null)
-                .distinct()
-                .toList();
+            : items.stream().map(OaFormItem::getId).filter(id -> id != null).distinct().toList();
     if (itemIds.isEmpty()) {
       return Map.of();
     }
@@ -442,11 +444,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     List<Long> itemIds =
         items == null
             ? List.of()
-            : items.stream()
-                .map(OaFormItem::getId)
-                .filter(id -> id != null)
-                .distinct()
-                .toList();
+            : items.stream().map(OaFormItem::getId).filter(id -> id != null).distinct().toList();
     if (itemIds.isEmpty()) {
       return Map.of();
     }
@@ -472,9 +470,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   }
 
   private String resolveItemCalcStatus(
-      OaFormItem item,
-      QuoteCostRunVersion latestCostRun,
-      QuoteCostingWorkspace workspace) {
+      OaFormItem item, QuoteCostRunVersion latestCostRun, QuoteCostingWorkspace workspace) {
     if (workspace != null
         && ("QUEUED".equals(workspace.getWorkspaceStatus())
             || "RUNNING".equals(workspace.getWorkspaceStatus()))) {
@@ -482,8 +478,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     }
     String itemStatus = normalizeCalcStatus(item.getCalcStatus(), false);
     if ("试算中".equals(itemStatus)
-        || (latestCostRun != null
-            && QuoteCostRunStatus.isInProgress(latestCostRun.getStatus()))) {
+        || (latestCostRun != null && QuoteCostRunStatus.isInProgress(latestCostRun.getStatus()))) {
       return "试算中";
     }
     boolean hasConfirmedCost =
@@ -510,9 +505,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
               ? QuoteBomStatusCode.NOT_CHECKED.getCode()
               : QuoteBomStatusCode.NO_BOM.getCode());
       response.setErrorMessage(
-          StringUtils.hasText(item.getMaterialNo())
-              ? null
-              : "新品暂无正式料号，请先由技术补齐完整BOM");
+          StringUtils.hasText(item.getMaterialNo()) ? null : "新品暂无正式料号，请先由技术补齐完整BOM");
       return response;
     }
     response.setId(status.getId());
@@ -532,9 +525,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   }
 
   private QuoteCostingWorkspaceResponse toWorkspaceResponse(
-      OaFormItem item,
-      QuoteCostRunVersion latestCostRun,
-      QuoteCostingWorkspace workspace) {
+      OaFormItem item, QuoteCostRunVersion latestCostRun, QuoteCostingWorkspace workspace) {
     Long historicalVersionId =
         item.getConfirmedCostVersionId() != null
             ? item.getConfirmedCostVersionId()
@@ -556,10 +547,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
         workspace == null
             ? QuoteProductIdentityUtils.resolveCostingCode(item)
             : workspace.getProductCode());
-    response.setPeriodMonth(
-        workspace == null
-            ? currentPeriodMonth
-            : workspace.getPeriodMonth());
+    response.setPeriodMonth(workspace == null ? currentPeriodMonth : workspace.getPeriodMonth());
     if (workspace == null) {
       response.setWorkspaceStatus(historicalPeriodChanged ? "STALE" : "SUCCESS");
       response.setCurrentStep(historicalPeriodChanged ? "PRODUCT_DETAIL" : "COST_RUN");
@@ -866,7 +854,12 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
       return "未核算";
     }
     for (OaFormItem item : items) {
-      if (item == null || !"已核算".equals(normalizeCalcStatus(item.getCalcStatus(), item.getCalcAt() != null || item.getConfirmedCostVersionId() != null))) {
+      if (item == null
+          || !"已核算"
+              .equals(
+                  normalizeCalcStatus(
+                      item.getCalcStatus(),
+                      item.getCalcAt() != null || item.getConfirmedCostVersionId() != null))) {
         return "未核算";
       }
     }

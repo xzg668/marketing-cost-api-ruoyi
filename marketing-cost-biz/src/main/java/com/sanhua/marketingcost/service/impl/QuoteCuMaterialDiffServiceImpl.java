@@ -2,10 +2,11 @@ package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sanhua.marketingcost.dto.financequote.QuoteCuMaterialDiffResult;
 import com.sanhua.marketingcost.dto.financequote.QuoteCuMaterialDiffItemResult;
+import com.sanhua.marketingcost.dto.financequote.QuoteCuMaterialDiffResult;
 import com.sanhua.marketingcost.entity.FactorQuoteBaseMapping;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
@@ -24,6 +25,8 @@ import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.PricePrepareSettlementKeyGenerator;
 import com.sanhua.marketingcost.service.QuoteCuMaterialDiffService;
+import com.sanhua.marketingcost.service.pricing.FactorPriceUnit;
+import com.sanhua.marketingcost.service.pricing.PriceFactorContext;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -110,9 +113,21 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     }
 
     Map<String, LinkedEvidence> oaLinked =
-        loadLinkedEvidence(oaBatch, linkedCodes, LinkedPriceFactorSource.OA_LOCKED.getCode());
-    Map<String, LinkedEvidence> financeLinked = loadLinkedEvidence(
-        financeBatch, linkedCodes, LinkedPriceFactorSource.FINANCE_QUOTE_BASE.getCode());
+        loadLinkedEvidence(
+            oaBatch,
+            linkedCodes,
+            LinkedPriceFactorSource.OA_LOCKED.getCode(),
+            oaItems.values(),
+            makePairs,
+            true);
+    Map<String, LinkedEvidence> financeLinked =
+        loadLinkedEvidence(
+            financeBatch,
+            linkedCodes,
+            LinkedPriceFactorSource.FINANCE_QUOTE_BASE.getCode(),
+            financeItems.values(),
+            makePairs,
+            false);
     Set<String> cuVariableCodes = resolveCuVariableCodes(oaLinked, financeLinked);
     validateScenarioCu("OA", oaLinked, version.getOaCuPrice(), cuVariableCodes);
     validateScenarioCu("财务", financeLinked, version.getFinanceCuPrice(), cuVariableCodes);
@@ -122,28 +137,30 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
       PricePrepareItem oa = oaItems.get(settlementKey);
       PricePrepareItem finance = financeItems.get(settlementKey);
       if (REF_MAKE_PART.equals(oa.getResultRefType())) {
-        rows.addAll(buildMakeRows(
-            version,
-            oaBatch,
-            financeBatch,
-            settlementKey,
-            oa,
-            finance,
-            makePairs.get(settlementKey),
-            oaLinked,
-            financeLinked,
-            cuVariableCodes));
+        rows.addAll(
+            buildMakeRows(
+                version,
+                oaBatch,
+                financeBatch,
+                settlementKey,
+                oa,
+                finance,
+                makePairs.get(settlementKey),
+                oaLinked,
+                financeLinked,
+                cuVariableCodes));
       } else {
-        rows.add(buildSettlementRow(
-            version,
-            oaBatch,
-            financeBatch,
-            settlementKey,
-            oa,
-            finance,
-            oaLinked,
-            financeLinked,
-            cuVariableCodes));
+        rows.add(
+            buildSettlementRow(
+                version,
+                oaBatch,
+                financeBatch,
+                settlementKey,
+                oa,
+                finance,
+                oaLinked,
+                financeLinked,
+                cuVariableCodes));
       }
     }
 
@@ -197,10 +214,11 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
 
   private PricePrepareBatch loadBatch(String prepareNo, String label) {
     String normalized = requireText(prepareNo, label + "价格准备批次号");
-    PricePrepareBatch batch = batchMapper.selectOne(
-        Wrappers.lambdaQuery(PricePrepareBatch.class)
-            .eq(PricePrepareBatch::getPrepareNo, normalized)
-            .last("LIMIT 1"));
+    PricePrepareBatch batch =
+        batchMapper.selectOne(
+            Wrappers.lambdaQuery(PricePrepareBatch.class)
+                .eq(PricePrepareBatch::getPrepareNo, normalized)
+                .last("LIMIT 1"));
     if (batch == null) {
       throw new IllegalStateException(label + "价格准备批次不存在: " + normalized);
     }
@@ -245,12 +263,12 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     requireSame("成本版本", "业务单元", version.getBusinessUnitType(), oa.getBusinessUnitType());
   }
 
-  private Map<String, PricePrepareItem> loadAndIndexItems(
-      PricePrepareBatch batch, String label) {
-    List<PricePrepareItem> items = itemMapper.selectList(
-        Wrappers.lambdaQuery(PricePrepareItem.class)
-            .eq(PricePrepareItem::getPrepareNo, batch.getPrepareNo())
-            .orderByAsc(PricePrepareItem::getId));
+  private Map<String, PricePrepareItem> loadAndIndexItems(PricePrepareBatch batch, String label) {
+    List<PricePrepareItem> items =
+        itemMapper.selectList(
+            Wrappers.lambdaQuery(PricePrepareItem.class)
+                .eq(PricePrepareItem::getPrepareNo, batch.getPrepareNo())
+                .orderByAsc(PricePrepareItem::getId));
     if (items == null || items.isEmpty()) {
       throw new IllegalStateException(label + "价格准备批次没有结算明细");
     }
@@ -269,20 +287,16 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     return indexed;
   }
 
-  private void validateItemScope(
-      PricePrepareBatch batch, PricePrepareItem item, String label) {
+  private void validateItemScope(PricePrepareBatch batch, PricePrepareItem item, String label) {
     if (item.getId() == null) {
       throw new IllegalStateException(label + "价格准备明细缺ID");
     }
     requireSame(label + "明细", "prepare_no", batch.getPrepareNo(), item.getPrepareNo());
     requireSame(label + "明细", "oa_no", batch.getOaNo(), item.getOaNo());
-    requireSame(
-        label + "明细", "OA产品行ID", batch.getOaFormItemId(), item.getOaFormItemId());
-    requireSame(
-        label + "明细", "顶层产品", batch.getTopProductCode(), item.getTopProductCode());
+    requireSame(label + "明细", "OA产品行ID", batch.getOaFormItemId(), item.getOaFormItemId());
+    requireSame(label + "明细", "顶层产品", batch.getTopProductCode(), item.getTopProductCode());
     requireSame(label + "明细", "计价月份", batch.getPeriodMonth(), item.getPeriodMonth());
-    requireSame(
-        label + "明细", "业务单元", batch.getBusinessUnitType(), item.getBusinessUnitType());
+    requireSame(label + "明细", "业务单元", batch.getBusinessUnitType(), item.getBusinessUnitType());
     requireText(item.getResultRefType(), label + "价格结果类型");
   }
 
@@ -310,20 +324,19 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
 
   private MakeRowsPair loadAndValidateMakeRows(
       String settlementKey, PricePrepareItem oaItem, PricePrepareItem financeItem) {
-    List<MakePartPriceCalcRow> oaRows =
-        loadMakeRows(oaItem, QuotePriceScenarioType.OA_LOCKED);
+    List<MakePartPriceCalcRow> oaRows = loadMakeRows(oaItem, QuotePriceScenarioType.OA_LOCKED);
     List<MakePartPriceCalcRow> financeRows =
         loadMakeRows(financeItem, QuotePriceScenarioType.FINANCE_QUOTE_BASE);
     Map<String, MakePartPriceCalcRow> oaMap = indexMakeRows(oaRows, "OA", settlementKey);
-    Map<String, MakePartPriceCalcRow> financeMap =
-        indexMakeRows(financeRows, "财务", settlementKey);
+    Map<String, MakePartPriceCalcRow> financeMap = indexMakeRows(financeRows, "财务", settlementKey);
     if (!oaMap.keySet().equals(financeMap.keySet())) {
       throw new IllegalStateException("制造件组件范围不一致: " + settlementKey);
     }
     for (String componentIdentity : oaMap.keySet()) {
       MakePartPriceCalcRow oa = oaMap.get(componentIdentity);
       MakePartPriceCalcRow finance = financeMap.get(componentIdentity);
-      requireSame(componentIdentity, "父制造件", oa.getParentMaterialNo(), finance.getParentMaterialNo());
+      requireSame(
+          componentIdentity, "父制造件", oa.getParentMaterialNo(), finance.getParentMaterialNo());
       requireSame(componentIdentity, "子材料", oa.getChildMaterialNo(), finance.getChildMaterialNo());
       requireSame(componentIdentity, "废料", oa.getScrapCode(), finance.getScrapCode());
       requireSame(componentIdentity, "加工类型", oa.getItemProcessType(), finance.getItemProcessType());
@@ -354,11 +367,12 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     if (!expectedScenario.name().equals(referenced.getPriceScenarioType())) {
       throw new IllegalStateException("制造件价格结果引用场景不正确: " + item.getResultRefId());
     }
-    List<MakePartPriceCalcRow> rows = makePartRowMapper.selectList(
-        Wrappers.lambdaQuery(MakePartPriceCalcRow.class)
-            .eq(MakePartPriceCalcRow::getCalcBatchId, referenced.getCalcBatchId())
-            .eq(MakePartPriceCalcRow::getParentMaterialNo, referenced.getParentMaterialNo())
-            .orderByAsc(MakePartPriceCalcRow::getId));
+    List<MakePartPriceCalcRow> rows =
+        makePartRowMapper.selectList(
+            Wrappers.lambdaQuery(MakePartPriceCalcRow.class)
+                .eq(MakePartPriceCalcRow::getCalcBatchId, referenced.getCalcBatchId())
+                .eq(MakePartPriceCalcRow::getParentMaterialNo, referenced.getParentMaterialNo())
+                .orderByAsc(MakePartPriceCalcRow::getId));
     if (rows == null || rows.isEmpty()) {
       throw new IllegalStateException("制造件价格结果没有组件明细: " + item.getResultRefId());
     }
@@ -387,18 +401,12 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
   }
 
   private void validateMakeTotals(
-      String settlementKey,
-      PricePrepareItem item,
-      List<MakePartPriceCalcRow> rows,
-      String label) {
+      String settlementKey, PricePrepareItem item, List<MakePartPriceCalcRow> rows, String label) {
     BigDecimal unitTotal = BigDecimal.ZERO;
     for (MakePartPriceCalcRow row : rows) {
       unitTotal = unitTotal.add(row.getCostPrice());
       requireDecimal(
-          settlementKey,
-          label + "制造件父项总单价",
-          item.getUnitPrice(),
-          row.getParentTotalCostPrice());
+          settlementKey, label + "制造件父项总单价", item.getUnitPrice(), row.getParentTotalCostPrice());
     }
     requireDecimal(settlementKey, label + "制造件组件单价之和", item.getUnitPrice(), money(unitTotal));
   }
@@ -415,25 +423,32 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
   }
 
   private Map<String, LinkedEvidence> loadLinkedEvidence(
-      PricePrepareBatch batch, Set<String> materialCodes, String factorSource) {
+      PricePrepareBatch batch,
+      Set<String> materialCodes,
+      String factorSource,
+      java.util.Collection<PricePrepareItem> items,
+      Map<String, MakeRowsPair> makePairs,
+      boolean oaSide) {
     if (materialCodes.isEmpty()) {
       return Map.of();
     }
-    List<PriceLinkedCalcItem> rows = linkedCalcItemMapper.selectList(
-        Wrappers.lambdaQuery(PriceLinkedCalcItem.class)
-            .eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.QUOTE.getCode())
-            .eq(PriceLinkedCalcItem::getFactorSource, factorSource)
-            .eq(PriceLinkedCalcItem::getOaNo, batch.getOaNo())
-            .eq(PriceLinkedCalcItem::getBusinessUnitType, batch.getBusinessUnitType())
-            .eq(PriceLinkedCalcItem::getPricingMonth, batch.getPeriodMonth())
-            .eq(PriceLinkedCalcItem::getPriceAsOfTime, batch.getPriceAsOfTime())
-            .eq(PriceLinkedCalcItem::getCalcStatus, "OK")
-            .in(PriceLinkedCalcItem::getItemCode, materialCodes)
-            .orderByDesc(PriceLinkedCalcItem::getId));
+    List<PriceLinkedCalcItem> rows =
+        linkedCalcItemMapper.selectList(
+            Wrappers.lambdaQuery(PriceLinkedCalcItem.class)
+                .eq(PriceLinkedCalcItem::getCalcScene, LinkedPriceCalcScene.QUOTE.getCode())
+                .eq(PriceLinkedCalcItem::getFactorSource, factorSource)
+                .eq(PriceLinkedCalcItem::getOaNo, batch.getOaNo())
+                .eq(PriceLinkedCalcItem::getBusinessUnitType, batch.getBusinessUnitType())
+                .eq(PriceLinkedCalcItem::getPricingMonth, batch.getPeriodMonth())
+                .eq(PriceLinkedCalcItem::getPriceAsOfTime, batch.getPriceAsOfTime())
+                .eq(PriceLinkedCalcItem::getCalcStatus, "OK")
+                .in(PriceLinkedCalcItem::getItemCode, materialCodes)
+                .orderByDesc(PriceLinkedCalcItem::getId));
     Map<String, LinkedEvidence> indexed = new LinkedHashMap<>();
     if (rows != null) {
       for (PriceLinkedCalcItem row : rows) {
         String code = requireText(row.getItemCode(), "联动价结果料号");
+        if (!matchesCapturedResult(row, items, makePairs, oaSide)) continue;
         if (indexed.putIfAbsent(code, parseLinkedEvidence(row)) != null) {
           throw new IllegalStateException("同一场景联动价结果重复: " + factorSource + "/" + code);
         }
@@ -441,10 +456,105 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     }
     for (String code : materialCodes) {
       if (!indexed.containsKey(code)) {
-        throw new IllegalStateException("缺联动价计算证据: " + factorSource + "/" + code);
+        throw new IllegalStateException(
+            "缺联动价计算证据: " + factorSource + "/" + code + "；请核对价格准备或制造件联动输入快照");
       }
     }
     return indexed;
+  }
+
+  private boolean matchesCapturedResult(
+      PriceLinkedCalcItem row,
+      java.util.Collection<PricePrepareItem> items,
+      Map<String, MakeRowsPair> makePairs,
+      boolean oaSide) {
+    boolean hasCapturedReference = false;
+    for (var item : items) {
+      if (REF_LINKED_PRICE.equals(item.getResultRefType())
+          && java.util.Objects.equals(row.getItemCode(), item.getMaterialCode())) {
+        hasCapturedReference = true;
+        if (java.util.Objects.equals(row.getId(), item.getResultRefId())) return true;
+      }
+    }
+    for (var pair : makePairs.values()) {
+      for (var component : (oaSide ? pair.oaRows() : pair.financeRows()).values()) {
+        String captured = null;
+        if (isLinkedPriceType(component.getRawPriceType())
+            && java.util.Objects.equals(row.getItemCode(), component.getChildMaterialNo()))
+          captured = component.getRawInputSnapshotJson();
+        if (isLinkedPriceType(component.getScrapPriceType())
+            && java.util.Objects.equals(row.getItemCode(), component.getScrapCode()))
+          captured = component.getScrapInputSnapshotJson();
+        if (StringUtils.hasText(captured)) {
+          hasCapturedReference = true;
+          try {
+            if (StringUtils.hasText(row.getInputSnapshotJson())
+                && linkedCalculationSnapshot(captured)
+                    .equals(linkedCalculationSnapshot(row.getInputSnapshotJson()))) return true;
+          } catch (JsonProcessingException error) {
+            throw new IllegalStateException("制造件联动依据损坏", error);
+          }
+        }
+      }
+    }
+    return !hasCapturedReference;
+  }
+
+  private JsonNode linkedCalculationSnapshot(String serialized) throws JsonProcessingException {
+    JsonNode snapshot = objectMapper.reader()
+        .with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).readTree(serialized);
+    if (snapshot instanceof com.fasterxml.jackson.databind.node.ObjectNode object) {
+      // 统一取价在原始计算底稿外附加路由依据；它不属于联动计算结果表的底稿。
+      // 仅移除这三个明确的附加字段，原稿、财务版本、供应商、输入及金额仍逐字段匹配。
+      object.remove(List.of("pricePriority", "selectedPriceType", "selectedPriceSourceKind"));
+    }
+    return snapshot;
+  }
+
+  private LinkedEvidence technicalLinkedEvidence(
+      PriceLinkedCalcItem row, String formula, JsonNode trace) throws JsonProcessingException {
+    JsonNode snapshot =
+        objectMapper
+            .reader()
+            .with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+            .readTree(row.getInputSnapshotJson());
+    if (!TechnicalFormulaCalculationEvidence.VERSION.equals(
+            snapshot.path("calculatorVersion").asText())
+        || !snapshot.path("context").path("financial").isObject()
+        || !snapshot.path("primitiveInputs").isObject()
+        || !snapshot.path("definitions").isObject()
+        || row.getSourcePriceRecordId() == null
+        || row.getSourcePriceRecordId() != snapshot.path("ruleId").asLong()
+        || !formula.equals(snapshot.path("expression").asText()))
+      throw new IllegalStateException("技术公式计算依据不完整：" + row.getId());
+    var primitive = decimalVariables(snapshot.path("primitiveInputs"), row.getId());
+    Map<String, BigDecimal> values = new LinkedHashMap<>();
+    Map<String, String> sources = new LinkedHashMap<>();
+    for (var entry : primitive.entrySet()) {
+      String key = snapshot.path("factorKeys").path(entry.getKey()).asText();
+      // token 规范化后忽略大小写；从同一快照记录的因素身份确认 Cu。
+      if (key.isBlank()) {
+        var names = snapshot.path("factorKeys").fields();
+        while (names.hasNext()) {
+          var name = names.next();
+          if (variableCode(name.getKey()).equals(entry.getKey())) key = name.getValue().asText();
+        }
+      }
+      String code = PriceFactorContext.COPPER.equals(key) ? CU_VARIABLE_CODE : entry.getKey();
+      BigDecimal old = values.putIfAbsent(code, entry.getValue());
+      if (old != null) requireDecimal(row.getItemCode(), code, old, entry.getValue());
+      sources.put(code, CU_VARIABLE_CODE.equals(code) ? row.getFactorSource() : "TECH_INPUT");
+    }
+    for (var used : snapshot.path("usedFinanceKeys")) {
+      if (PriceFactorContext.COPPER.equals(used.asText())) {
+        var context = objectMapper.treeToValue(snapshot.path("context"), PriceFactorContext.class);
+        values.put(
+            CU_VARIABLE_CODE,
+            context.requiredPrice(PriceFactorContext.COPPER, FactorPriceUnit.CNY_KG, true));
+        sources.put(CU_VARIABLE_CODE, row.getFactorSource());
+      }
+    }
+    return new LinkedEvidence(row, formula, values, sources, trace, snapshot);
   }
 
   private LinkedEvidence parseLinkedEvidence(PriceLinkedCalcItem row) {
@@ -463,12 +573,63 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
       if (!StringUtils.hasText(formula)) {
         throw new IllegalStateException("联动价trace缺公式: " + row.getId());
       }
+      if (OriginalLinkedRuleSnapshot.VERSION.equals(row.getCalculatorVersion())) {
+        return originalLinkedEvidence(row, formula.trim(), trace);
+      }
+      if (TechnicalFormulaCalculationEvidence.VERSION.equals(row.getCalculatorVersion()))
+        return technicalLinkedEvidence(row, formula.trim(), trace);
       Map<String, BigDecimal> variables = decimalVariables(trace.get("variables"), row.getId());
       Map<String, String> sources = variableSources(trace.get("variableDetails"), row.getId());
-      return new LinkedEvidence(row, formula.trim(), variables, sources, trace);
+      return new LinkedEvidence(row, formula.trim(), variables, sources, trace, null);
     } catch (JsonProcessingException ex) {
       throw new IllegalStateException("联动价trace不是合法JSON: " + row.getId(), ex);
     }
+  }
+
+  /** 原稿变量名仅在单条规则内有效；按保存的因素身份和单位比较，不能全局把factor_0当成Cu。 */
+  private LinkedEvidence originalLinkedEvidence(
+      PriceLinkedCalcItem row, String formula, JsonNode trace) throws JsonProcessingException {
+    if (!StringUtils.hasText(row.getInputSnapshotJson())) {
+      throw new IllegalStateException("原稿联动缺计算输入快照: " + row.getId());
+    }
+    JsonNode snapshot =
+        objectMapper
+            .reader()
+            .with(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+            .readTree(row.getInputSnapshotJson());
+    JsonNode bindings = snapshot.path("factorBindings");
+    JsonNode inputs = snapshot.path("inputs");
+    if (!OriginalLinkedRuleSnapshot.VERSION.equals(snapshot.path("calculatorVersion").asText())
+        || !bindings.isObject()
+        || !inputs.isObject()
+        || bindings.size() != inputs.size()
+        || row.getSourcePriceRecordId() == null
+        || row.getSourcePriceRecordId() != snapshot.path("ruleId").asLong()
+        || !formula.equals(snapshot.path("expression").asText())) {
+      throw new IllegalStateException("原稿联动计算因素快照不完整: " + row.getId());
+    }
+    Map<String, BigDecimal> variables = new LinkedHashMap<>();
+    Map<String, String> sources = new LinkedHashMap<>();
+    var fields = bindings.fields();
+    while (fields.hasNext()) {
+      var entry = fields.next();
+      String identity = requireText(entry.getValue().path("canonicalKey").asText(), "原稿因素身份");
+      JsonNode value = inputs.get(entry.getKey());
+      if (value == null || !value.isNumber()) {
+        throw new IllegalStateException("原稿联动因素值缺失: " + row.getId() + "/" + entry.getKey());
+      }
+      var unit = FactorPriceUnit.valueOf(entry.getValue().path("unit").asText());
+      boolean copper = PriceFactorContext.COPPER.equals(identity);
+      String code = copper ? CU_VARIABLE_CODE : variableCode(identity);
+      BigDecimal normalized = unit.convert(value.decimalValue(), FactorPriceUnit.CNY_KG);
+      BigDecimal previous = variables.putIfAbsent(code, normalized);
+      if (previous != null) requireDecimal(row.getItemCode(), identity, previous, normalized);
+      sources.put(code, copper ? row.getFactorSource() : "FINANCE_FACTOR");
+    }
+    if (!snapshot.path("context").path("financial").isObject()) {
+      throw new IllegalStateException("原稿联动缺财务版本快照: " + row.getId());
+    }
+    return new LinkedEvidence(row, formula, variables, sources, trace, snapshot);
   }
 
   private Map<String, BigDecimal> decimalVariables(JsonNode node, Long refId) {
@@ -479,16 +640,18 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     if (!node.isObject()) {
       throw new IllegalStateException("联动价trace.variables格式错误: " + refId);
     }
-    node.fields().forEachRemaining(entry -> {
-      String code = variableCode(entry.getKey());
-      JsonNode value = entry.getValue();
-      if (value == null || !value.isNumber()) {
-        throw new IllegalStateException("联动价变量不是数字: " + entry.getKey());
-      }
-      if (variables.putIfAbsent(code, value.decimalValue()) != null) {
-        throw new IllegalStateException("联动价变量重复: " + entry.getKey());
-      }
-    });
+    node.fields()
+        .forEachRemaining(
+            entry -> {
+              String code = variableCode(entry.getKey());
+              JsonNode value = entry.getValue();
+              if (value == null || !value.isNumber()) {
+                throw new IllegalStateException("联动价变量不是数字: " + entry.getKey());
+              }
+              if (variables.putIfAbsent(code, value.decimalValue()) != null) {
+                throw new IllegalStateException("联动价变量重复: " + entry.getKey());
+              }
+            });
     return variables;
   }
 
@@ -514,10 +677,57 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
   }
 
   private boolean validateLinkedPair(
-      String context,
-      LinkedEvidence oa,
-      LinkedEvidence finance,
-      Set<String> cuVariableCodes) {
+      String context, LinkedEvidence oa, LinkedEvidence finance, Set<String> cuVariableCodes) {
+    requireSame(
+        context,
+        "联动规则来源",
+        oa.row().getSourcePriceRecordId(),
+        finance.row().getSourcePriceRecordId());
+    requireSame(
+        context, "联动原稿批次", oa.row().getSourcePriceBatchNo(), finance.row().getSourcePriceBatchNo());
+    requireSame(context, "供应商", oa.row().getSupplierCode(), finance.row().getSupplierCode());
+    requireSame(context, "供应商名称", oa.row().getSupplierName(), finance.row().getSupplierName());
+    requireSame(
+        context,
+        "供货比例依据",
+        oa.row().getSupplyRatioRecordId(),
+        finance.row().getSupplyRatioRecordId());
+    requireDecimal(context, "供货比例", oa.row().getSupplyRatio(), finance.row().getSupplyRatio());
+    requireSame(context, "取价组织", oa.row().getPriceOrgCode(), finance.row().getPriceOrgCode());
+    if (oa.originalInputs() != null || finance.originalInputs() != null) {
+      if (oa.originalInputs() == null || finance.originalInputs() == null) {
+        throw new IllegalStateException("OA与财务联动计算版本不同: " + context);
+      }
+      for (String field :
+          List.of(
+              "calculatorVersion",
+              "ruleId",
+              "ruleRevision",
+              "ruleIdentity",
+              "ruleMonth",
+              "factorBindings",
+              "factorKeys",
+              "definitions",
+              "technicalVersionId",
+              "taxIncluded")) {
+        requireSame(
+            context,
+            "原稿" + field,
+            oa.originalInputs().get(field),
+            finance.originalInputs().get(field));
+      }
+      requireSame(
+          context,
+          "原稿财务输入版本",
+          oa.originalInputs().path("context").path("financial"),
+          finance.originalInputs().path("context").path("financial"));
+    }
+    if (oa.originalInputs() != null && finance.originalInputs() != null)
+      requireSame(
+          context,
+          "板换SUS及招标条件",
+          oa.originalInputs().path("context").path("boardInputs"),
+          finance.originalInputs().path("context").path("boardInputs"));
     requireSame(context, "联动价公式", oa.formula(), finance.formula());
     boolean oaHasCu = containsCu(oa.variables(), cuVariableCodes);
     boolean financeHasCu = containsCu(finance.variables(), cuVariableCodes);
@@ -558,7 +768,7 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
       }
     }
     if (versionCuPrice != null && scenarioCu != null) {
-      requireDecimal(label + "场景", "成本版本Cu价格", versionCuPrice, scenarioCu);
+      requireDecimal(label + "场景", "成本版本Cu价格", versionCuPrice, money(scenarioCu));
     }
   }
 
@@ -580,21 +790,36 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
       String code = requireText(oa.getMaterialCode(), "联动价料号");
       oaEvidence = requireEvidence(oaLinked, code, "OA");
       financeEvidence = requireEvidence(financeLinked, code, "财务");
+      requireSame(settlementKey, "OA联动价结果引用", oa.getResultRefId(), oaEvidence.row().getId());
       requireSame(
-          settlementKey, "OA联动价结果引用", oa.getResultRefId(), oaEvidence.row().getId());
-      requireSame(
-          settlementKey,
-          "财务联动价结果引用",
-          finance.getResultRefId(),
-          financeEvidence.row().getId());
-      requireDecimal(settlementKey, "OA联动价单价", oa.getUnitPrice(), oaEvidence.row().getPartUnitPrice());
+          settlementKey, "财务联动价结果引用", finance.getResultRefId(), financeEvidence.row().getId());
+      requireDecimal(
+          settlementKey, "OA联动价单价", oa.getUnitPrice(), oaEvidence.row().getPartUnitPrice());
       requireDecimal(
           settlementKey,
           "财务联动价单价",
           finance.getUnitPrice(),
           financeEvidence.row().getPartUnitPrice());
+      cuAffected = validateLinkedPair(settlementKey, oaEvidence, financeEvidence, cuVariableCodes);
+    }
+    if ("RANGE_PRICE".equals(oa.getResultRefType())
+        && (StringUtils.hasText(oa.getInputSnapshotJson())
+            || StringUtils.hasText(finance.getInputSnapshotJson()))) {
       cuAffected =
-          validateLinkedPair(settlementKey, oaEvidence, financeEvidence, cuVariableCodes);
+          new OriginalRangeCalculationEvidence(objectMapper)
+              .validatePair(
+                  oa.getMaterialCode(),
+                  oa.getInputSnapshotJson(),
+                  finance.getInputSnapshotJson(),
+                  oa.getUnitPrice(),
+                  finance.getUnitPrice(),
+                  version.getOaCuPrice(),
+                  version.getFinanceCuPrice());
+    }
+    if (oa.getResultRefType().startsWith("PACKAGE")) {
+      cuAffected =
+          new PackageCalculationEvidence(objectMapper)
+              .validatePair(oa, finance, version.getOaCuPrice(), version.getFinanceCuPrice());
     }
     if (diff.signum() != 0 && !cuAffected) {
       throw new IllegalStateException("非Cu结算行出现非零差异: " + settlementKey);
@@ -611,13 +836,25 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     row.setCuAffected(cuAffected ? 1 : 0);
     row.setPriceFormulaRefType(finance.getResultRefType());
     row.setPriceFormulaRefId(finance.getResultRefId());
-    row.setTraceJson(json(Map.of(
-        "detailLevel", DETAIL_SETTLEMENT,
-        "oaPrepareNo", oaBatch.getPrepareNo(),
-        "financePrepareNo", financeBatch.getPrepareNo(),
-        "formula", "diff_amount = oa_amount - finance_amount",
-        "oaLinkedTrace", traceOrNull(oaEvidence),
-        "financeLinkedTrace", traceOrNull(financeEvidence))));
+    row.setTraceJson(
+        json(
+            Map.of(
+                "detailLevel",
+                DETAIL_SETTLEMENT,
+                "oaPrepareNo",
+                oaBatch.getPrepareNo(),
+                "financePrepareNo",
+                financeBatch.getPrepareNo(),
+                "formula",
+                "diff_amount = oa_amount - finance_amount",
+                "oaLinkedTrace",
+                traceOrNull(oaEvidence),
+                "financeLinkedTrace",
+                traceOrNull(financeEvidence),
+                "oaRangeTrace",
+                oa.getInputSnapshotJson() == null ? "" : oa.getInputSnapshotJson(),
+                "financeRangeTrace",
+                finance.getInputSnapshotJson() == null ? "" : finance.getInputSnapshotJson())));
     return row;
   }
 
@@ -640,24 +877,32 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     for (String identity : pair.oaRows().keySet()) {
       MakePartPriceCalcRow oa = pair.oaRows().get(identity);
       MakePartPriceCalcRow finance = pair.financeRows().get(identity);
-      boolean rawCu = validateMakeMaterialPrice(
-          identity + "/原材料",
-          oa.getChildMaterialNo(),
-          oa.getRawPriceType(),
-          oa.getRawUnitPrice(),
-          finance.getRawUnitPrice(),
-          oaLinked,
-          financeLinked,
-          cuVariableCodes);
-      boolean scrapCu = validateMakeMaterialPrice(
-          identity + "/废料",
-          oa.getScrapCode(),
-          oa.getScrapPriceType(),
-          oa.getScrapUnitPrice(),
-          finance.getScrapUnitPrice(),
-          oaLinked,
-          financeLinked,
-          cuVariableCodes);
+      boolean rawCu =
+          validateMakeMaterialPrice(
+              identity + "/原材料",
+              oa.getChildMaterialNo(),
+              oa.getRawPriceType(),
+              oa.getRawUnitPrice(),
+              finance.getRawUnitPrice(),
+              oa.getRawInputSnapshotJson(),
+              finance.getRawInputSnapshotJson(),
+              version,
+              oaLinked,
+              financeLinked,
+              cuVariableCodes);
+      boolean scrapCu =
+          validateMakeMaterialPrice(
+              identity + "/废料",
+              oa.getScrapCode(),
+              oa.getScrapPriceType(),
+              oa.getScrapUnitPrice(),
+              finance.getScrapUnitPrice(),
+              oa.getScrapInputSnapshotJson(),
+              finance.getScrapInputSnapshotJson(),
+              version,
+              oaLinked,
+              financeLinked,
+              cuVariableCodes);
       boolean componentCuAffected = rawCu || scrapCu;
       BigDecimal oaAmount = money(oaItem.getQuantity().multiply(oa.getCostPrice()));
       BigDecimal financeAmount = money(financeItem.getQuantity().multiply(finance.getCostPrice()));
@@ -665,12 +910,11 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
       if (diff.signum() != 0 && !componentCuAffected) {
         throw new IllegalStateException("非Cu制造件组件出现非零差异: " + identity);
       }
-      String componentKey = PricePrepareSettlementKeyGenerator.componentKey(
-          settlementKey,
-          oa.getParentMaterialNo(),
-          oa.getChildMaterialNo(),
-          identity);
-      QuoteCuMaterialDiffItemResult component = baseDiffRow(version, componentKey, oaItem, financeItem);
+      String componentKey =
+          PricePrepareSettlementKeyGenerator.componentKey(
+              settlementKey, oa.getParentMaterialNo(), oa.getChildMaterialNo(), identity);
+      QuoteCuMaterialDiffItemResult component =
+          baseDiffRow(version, componentKey, oaItem, financeItem);
       component.setParentSettlementKey(settlementKey);
       component.setDetailLevel(DETAIL_RAW_COMPONENT);
       component.setContributesToAdjustment(0);
@@ -686,15 +930,10 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
       component.setCuAffected(componentCuAffected ? 1 : 0);
       component.setPriceFormulaRefType("MAKE_PART_COMPONENT");
       component.setPriceFormulaRefId(finance.getId());
-      component.setTraceJson(json(makeComponentTrace(
-          oaBatch,
-          financeBatch,
-          oa,
-          finance,
-          rawCu,
-          scrapCu,
-          oaLinked,
-          financeLinked)));
+      component.setTraceJson(
+          json(
+              makeComponentTrace(
+                  oaBatch, financeBatch, oa, finance, rawCu, scrapCu, oaLinked, financeLinked)));
       components.add(component);
       settlementCuAffected |= componentCuAffected;
       oaComponentTotal = oaComponentTotal.add(oaAmount);
@@ -704,19 +943,18 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     oaComponentTotal = money(oaComponentTotal);
     financeComponentTotal = money(financeComponentTotal);
     componentDiffTotal = money(componentDiffTotal);
-    requireDecimal(settlementKey, "OA制造件组件金额之和", money(oaItem.getAmount()), oaComponentTotal);
-    requireDecimal(
-        settlementKey,
-        "财务制造件组件金额之和",
-        money(financeItem.getAmount()),
-        financeComponentTotal);
+    // 实际结算层是父件；解释子项各自舍入可能与父件汇总后舍入相差末位。
+    // 单价之和已在 validateMakeTotals 校验，保留两侧舍入差而不再次入账。
+    BigDecimal oaRoundingAdjustment = money(oaItem.getAmount()).subtract(oaComponentTotal);
+    BigDecimal financeRoundingAdjustment =
+        money(financeItem.getAmount()).subtract(financeComponentTotal);
     BigDecimal settlementDiff = difference(oaItem.getAmount(), financeItem.getAmount());
-    requireDecimal(settlementKey, "制造件父项差异与组件解释之和", settlementDiff, componentDiffTotal);
     if (settlementDiff.signum() != 0 && !settlementCuAffected) {
       throw new IllegalStateException("非Cu制造件结算行出现非零差异: " + settlementKey);
     }
 
-    QuoteCuMaterialDiffItemResult settlement = baseDiffRow(version, settlementKey, oaItem, financeItem);
+    QuoteCuMaterialDiffItemResult settlement =
+        baseDiffRow(version, settlementKey, oaItem, financeItem);
     settlement.setDetailLevel(DETAIL_SETTLEMENT);
     settlement.setContributesToAdjustment(1);
     settlement.setParentMaterialCode(oaItem.getMaterialCode());
@@ -728,13 +966,25 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     settlement.setCuAffected(settlementCuAffected ? 1 : 0);
     settlement.setPriceFormulaRefType(REF_MAKE_PART);
     settlement.setPriceFormulaRefId(financeItem.getResultRefId());
-    settlement.setTraceJson(json(Map.of(
-        "detailLevel", DETAIL_SETTLEMENT,
-        "oaPrepareNo", oaBatch.getPrepareNo(),
-        "financePrepareNo", financeBatch.getPrepareNo(),
-        "componentKeys", components.stream().map(QuoteCuMaterialDiffItemResult::getSettlementKey).toList(),
-        "componentDiffTotal", componentDiffTotal,
-        "contributesToAdjustment", true)));
+    settlement.setTraceJson(
+        json(
+            Map.of(
+                "detailLevel",
+                DETAIL_SETTLEMENT,
+                "oaPrepareNo",
+                oaBatch.getPrepareNo(),
+                "financePrepareNo",
+                financeBatch.getPrepareNo(),
+                "componentKeys",
+                components.stream().map(QuoteCuMaterialDiffItemResult::getSettlementKey).toList(),
+                "componentDiffTotal",
+                componentDiffTotal,
+                "oaRoundingAdjustment",
+                oaRoundingAdjustment,
+                "financeRoundingAdjustment",
+                financeRoundingAdjustment,
+                "contributesToAdjustment",
+                true)));
     List<QuoteCuMaterialDiffItemResult> result = new ArrayList<>();
     result.add(settlement);
     result.addAll(components);
@@ -747,6 +997,9 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
       String priceType,
       BigDecimal oaPrice,
       BigDecimal financePrice,
+      String oaRangeSnapshot,
+      String financeRangeSnapshot,
+      QuoteCostRunVersion version,
       Map<String, LinkedEvidence> oaLinked,
       Map<String, LinkedEvidence> financeLinked,
       Set<String> cuVariableCodes) {
@@ -757,6 +1010,20 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
       }
       return false;
     }
+    if (!isLinkedPriceType(priceType)
+        && (PriceTypeEnum.fromDbText(priceType).orElse(null) == PriceTypeEnum.RANGE
+            || "RANGE_PRICE".equals(priceType))
+        && (StringUtils.hasText(oaRangeSnapshot) || StringUtils.hasText(financeRangeSnapshot))) {
+      return new OriginalRangeCalculationEvidence(objectMapper)
+          .validatePair(
+              materialCode,
+              oaRangeSnapshot,
+              financeRangeSnapshot,
+              oaPrice,
+              financePrice,
+              version.getOaCuPrice(),
+              version.getFinanceCuPrice());
+    }
     if (!isLinkedPriceType(priceType)) {
       if (different(oaPrice, financePrice)) {
         throw new IllegalStateException("非Cu制造件价格出现非零差异: " + context);
@@ -766,14 +1033,26 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     String code = materialCode.trim();
     LinkedEvidence oaEvidence = requireEvidence(oaLinked, code, "OA");
     LinkedEvidence financeEvidence = requireEvidence(financeLinked, code, "财务");
+    validateMakeLinkedSnapshot(context, oaRangeSnapshot, oaEvidence);
+    validateMakeLinkedSnapshot(context, financeRangeSnapshot, financeEvidence);
     requireDecimal(context, "OA联动单价", oaPrice, oaEvidence.row().getPartUnitPrice());
     requireDecimal(context, "财务联动单价", financePrice, financeEvidence.row().getPartUnitPrice());
-    boolean cuAffected =
-        validateLinkedPair(context, oaEvidence, financeEvidence, cuVariableCodes);
+    boolean cuAffected = validateLinkedPair(context, oaEvidence, financeEvidence, cuVariableCodes);
     if (different(oaPrice, financePrice) && !cuAffected) {
       throw new IllegalStateException("非Cu联动价出现非零差异: " + context);
     }
     return cuAffected;
+  }
+
+  private void validateMakeLinkedSnapshot(
+      String context, String snapshot, LinkedEvidence evidence) {
+    if (evidence.originalInputs() == null && !StringUtils.hasText(snapshot)) return;
+    try {
+      JsonNode input = linkedCalculationSnapshot(requireText(snapshot, "制造件联动输入快照"));
+      requireSame(context, "制造件联动输入快照", evidence.originalInputs(), input);
+    } catch (JsonProcessingException error) {
+      throw new IllegalStateException("制造件联动输入快照损坏: " + context, error);
+    }
   }
 
   private Map<String, Object> makeComponentTrace(
@@ -801,15 +1080,22 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     trace.put("financeRawUnitPrice", finance.getRawUnitPrice());
     trace.put("oaScrapUnitPrice", oa.getScrapUnitPrice());
     trace.put("financeScrapUnitPrice", finance.getScrapUnitPrice());
+    trace.put("oaRawRangeTrace", oa.getRawInputSnapshotJson());
+    trace.put("financeRawRangeTrace", finance.getRawInputSnapshotJson());
+    trace.put("oaScrapRangeTrace", oa.getScrapInputSnapshotJson());
+    trace.put("financeScrapRangeTrace", finance.getScrapInputSnapshotJson());
     trace.put("rawCuAffected", rawCu);
     trace.put("scrapCuAffected", scrapCu);
-    if (rawCu) {
-      trace.put("oaRawLinkedTrace", requireEvidence(oaLinked, oa.getChildMaterialNo(), "OA").trace());
+    if (rawCu && isLinkedPriceType(oa.getRawPriceType())) {
+      trace.put(
+          "oaRawLinkedTrace", requireEvidence(oaLinked, oa.getChildMaterialNo(), "OA").trace());
       trace.put(
           "financeRawLinkedTrace",
           requireEvidence(financeLinked, finance.getChildMaterialNo(), "财务").trace());
     }
-    if (scrapCu && StringUtils.hasText(oa.getScrapCode())) {
+    if (scrapCu
+        && isLinkedPriceType(oa.getScrapPriceType())
+        && StringUtils.hasText(oa.getScrapCode())) {
       trace.put("oaScrapLinkedTrace", requireEvidence(oaLinked, oa.getScrapCode(), "OA").trace());
       trace.put(
           "financeScrapLinkedTrace",
@@ -854,8 +1140,7 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
   }
 
   private Set<String> resolveCuVariableCodes(
-      Map<String, LinkedEvidence> oaEvidence,
-      Map<String, LinkedEvidence> financeEvidence) {
+      Map<String, LinkedEvidence> oaEvidence, Map<String, LinkedEvidence> financeEvidence) {
     Set<String> result = new LinkedHashSet<>();
     result.add(CU_VARIABLE_CODE);
     Set<Long> factorIdentityIds = new LinkedHashSet<>();
@@ -884,8 +1169,7 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     return result;
   }
 
-  private void collectFactorIdentityIds(
-      Map<String, LinkedEvidence> evidence, Set<Long> target) {
+  private void collectFactorIdentityIds(Map<String, LinkedEvidence> evidence, Set<Long> target) {
     if (evidence == null || evidence.isEmpty()) {
       return;
     }
@@ -914,15 +1198,12 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     }
   }
 
-  private boolean containsCu(
-      Map<String, BigDecimal> variables, Set<String> cuVariableCodes) {
+  private boolean containsCu(Map<String, BigDecimal> variables, Set<String> cuVariableCodes) {
     return variables.keySet().stream().anyMatch(cuVariableCodes::contains);
   }
 
   private BigDecimal cuValue(
-      String context,
-      Map<String, BigDecimal> variables,
-      Set<String> cuVariableCodes) {
+      String context, Map<String, BigDecimal> variables, Set<String> cuVariableCodes) {
     BigDecimal result = null;
     for (Map.Entry<String, BigDecimal> entry : variables.entrySet()) {
       if (!cuVariableCodes.contains(entry.getKey())) {
@@ -939,22 +1220,24 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
   private Map<String, BigDecimal> withoutCu(
       Map<String, BigDecimal> source, Set<String> cuVariableCodes) {
     Map<String, BigDecimal> result = new LinkedHashMap<>();
-    source.forEach((key, value) -> {
-      if (!cuVariableCodes.contains(key)) {
-        result.put(key, value);
-      }
-    });
+    source.forEach(
+        (key, value) -> {
+          if (!cuVariableCodes.contains(key)) {
+            result.put(key, value);
+          }
+        });
     return result;
   }
 
   private Map<String, String> withoutCuText(
       Map<String, String> source, Set<String> cuVariableCodes) {
     Map<String, String> result = new LinkedHashMap<>();
-    source.forEach((key, value) -> {
-      if (!cuVariableCodes.contains(key)) {
-        result.put(key, value);
-      }
-    });
+    source.forEach(
+        (key, value) -> {
+          if (!cuVariableCodes.contains(key)) {
+            result.put(key, value);
+          }
+        });
     return result;
   }
 
@@ -1039,13 +1322,13 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
   }
 
   private record MakeRowsPair(
-      Map<String, MakePartPriceCalcRow> oaRows,
-      Map<String, MakePartPriceCalcRow> financeRows) {}
+      Map<String, MakePartPriceCalcRow> oaRows, Map<String, MakePartPriceCalcRow> financeRows) {}
 
   private record LinkedEvidence(
       PriceLinkedCalcItem row,
       String formula,
       Map<String, BigDecimal> variables,
       Map<String, String> variableSources,
-      JsonNode trace) {}
+      JsonNode trace,
+      JsonNode originalInputs) {}
 }

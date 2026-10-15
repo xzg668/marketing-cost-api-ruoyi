@@ -11,7 +11,6 @@ import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedExtraField;
 import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedHeader;
 import com.sanhua.marketingcost.dto.ingest.QuoteNormalizedItem;
 import com.sanhua.marketingcost.dto.ingest.QuoteValidationError;
-import com.sanhua.marketingcost.dto.ingest.QuoteValidationWarning;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormExtraFee;
 import com.sanhua.marketingcost.entity.OaFormHeaderExtraField;
@@ -97,8 +96,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     return ingestDocument(request, true);
   }
 
-  private QuoteIngestResponse ingestDocument(
-      QuoteIngestRequest request, boolean oaSource) {
+  private QuoteIngestResponse ingestDocument(QuoteIngestRequest request, boolean oaSource) {
     String requestId = resolveRequestId(request);
     String idempotencyKey = resolveIdempotencyKey(request);
     String payloadJson = toJson(request);
@@ -114,7 +112,13 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     QuoteIngestLog log =
         existingLog == null
             ? quoteIngestLogService.createReceived(
-                request, normalized, requestId, idempotencyKey, payloadHash, payloadJson, normalizedJson)
+                request,
+                normalized,
+                requestId,
+                idempotencyKey,
+                payloadHash,
+                payloadJson,
+                normalizedJson)
             : existingLog;
     if (existingLog != null) {
       quoteIngestLogService.refreshReceived(
@@ -128,10 +132,14 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
 
     String oaNo = resolveOaNo(normalized.getHeader(), request);
     OaForm existingForm = oaSource ? null : findExistingForm(oaNo, request);
-    if (!oaSource && existingForm != null
+    if (!oaSource
+        && existingForm != null
         && oaFormMapper.countOaSourceBindings(existingForm.getId()) > 0) {
-      normalized.getErrors().add(new QuoteValidationError("oaNo", "OA_SOURCE_MANAGED",
-          "该报价已绑定 OA 正式需求，不能重新导入覆盖或替换产品行"));
+      normalized
+          .getErrors()
+          .add(
+              new QuoteValidationError(
+                  "oaNo", "OA_SOURCE_MANAGED", "该报价已绑定 OA 正式需求，不能重新导入覆盖或替换产品行"));
       quoteIngestLogService.markRejected(log, normalized, "OA 来源单据禁止重新导入覆盖");
       return rejectedResponse(log, normalized, "OA 来源单据禁止重新导入覆盖");
     }
@@ -139,9 +147,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     if (!oaSource && isCalculated(existingForm)) {
       normalized
           .getErrors()
-          .add(
-              new QuoteValidationError(
-                  "oaNo", "CALCULATED_FORM_LOCKED", "单据已核算，默认禁止通过接入覆盖关键字段"));
+          .add(new QuoteValidationError("oaNo", "CALCULATED_FORM_LOCKED", "单据已核算，默认禁止通过接入覆盖关键字段"));
       quoteIngestLogService.markRejected(log, normalized, "单据已核算，拒绝覆盖");
       return rejectedResponse(log, normalized, "单据已核算，拒绝覆盖");
     }
@@ -201,6 +207,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     form.setGoldPrice(header.getGoldPrice());
     form.setSus304Price(header.getSus304Price());
     form.setSus316lPrice(header.getSus316lPrice());
+    form.setBoardTender(header.getBoardTender());
     form.setOtherMaterial(header.getOtherMaterial());
     form.setBaseShipping(header.getBaseShipping());
     form.setSaleLink(header.getSaleLink());
@@ -235,8 +242,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
         Wrappers.lambdaQuery(OaFormItem.class).eq(OaFormItem::getOaFormId, formId));
   }
 
-  private ItemInsertResult insertItems(
-      OaForm form, QuoteNormalizedDocument normalized) {
+  private ItemInsertResult insertItems(OaForm form, QuoteNormalizedDocument normalized) {
     Map<String, Long> itemIdMap = new HashMap<>();
     List<Long> itemIdsByPosition = new ArrayList<>();
     for (QuoteNormalizedItem source : normalized.getItems()) {
@@ -369,7 +375,8 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     oaFormItemExtraFieldMapper.insert(field);
   }
 
-  private void applyExtraFieldValue(OaFormHeaderExtraField field, QuoteNormalizedExtraField source) {
+  private void applyExtraFieldValue(
+      OaFormHeaderExtraField field, QuoteNormalizedExtraField source) {
     field.setFieldValue(source.getFieldValue());
     field.setFieldValueNumber(source.getFieldValueNumber());
     field.setFieldValueDate(source.getFieldValueDate());
@@ -389,7 +396,8 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       QuoteNormalizedItem source = normalized.getItems().get(index);
       // 原单可先保存缺识别资料的行；不能创建没有产品身份的 BOM 检查记录。
       if (QuoteProductIdentityUtils.resolveCostingCode(
-          source.getMaterialNo(), source.getSunlModel(), source.getCustomerDrawing()) == null) continue;
+              source.getMaterialNo(), source.getSunlModel(), source.getCustomerDrawing())
+          == null) continue;
       QuoteBomStatus status = new QuoteBomStatus();
       status.setOaFormId(form.getId());
       status.setOaFormItemId(itemIdsByPosition.get(index));
@@ -437,9 +445,7 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
   }
 
   private QuoteIngestResponse importedResponse(
-      QuoteIngestLog log,
-      QuoteNormalizedDocument normalized,
-      OaForm form) {
+      QuoteIngestLog log, QuoteNormalizedDocument normalized, OaForm form) {
     QuoteIngestResponse response = baseResponse(log, normalized);
     response.setAccepted(true);
     response.setOaFormId(form.getId());
@@ -480,7 +486,8 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
     response.setProcessCode(header == null ? null : header.getProcessCode());
     response.setQuoteScenario(header == null ? null : header.getQuoteScenario());
     response.setClassificationStatus(header == null ? null : header.getClassificationStatus());
-    response.setItemCount(normalized == null || normalized.getItems() == null ? 0 : normalized.getItems().size());
+    response.setItemCount(
+        normalized == null || normalized.getItems() == null ? 0 : normalized.getItems().size());
     response.setErrors(
         normalized == null || normalized.getErrors() == null
             ? new ArrayList<>()
@@ -504,7 +511,8 @@ public class QuoteIngestServiceImpl implements QuoteIngestService {
       return request.getIdempotencyKey().trim();
     }
     // 幂等键使用来源 + 外部单号 + 版本；Excel 与未来泛微都会适配成同一 DTO，避免同一外部单据重复入库。
-    String sourceType = request == null ? "UNKNOWN" : defaultCode(request.getSourceType(), "UNKNOWN");
+    String sourceType =
+        request == null ? "UNKNOWN" : defaultCode(request.getSourceType(), "UNKNOWN");
     String formNo =
         request == null
             ? "UNKNOWN"

@@ -977,15 +977,16 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       }
       // Router 给出全部候选；按 priority 升序逐桶尝试，直到首个 Resolver 成功
       List<PriceTypeRoute> candidates =
-          materialPriceRouterService.listCandidates(code, period, quoteDate);
+          materialPriceRouterService.listCandidates(code, period, quoteDate, organization.priceOrgCode(),
+              context == null ? com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType() : context.getBusinessUnitType());
       if (candidates.isEmpty()) {
         if (isManufacturedItem(item)) {
-          // 制造件价格源来自“制造件价格生成”结果表；缺价格类型路由不能阻断制造件取价。
+          // 制造件价格源来自“制造件价格生成”结果表；公共价源无候选不能阻断制造件取价。
           // 成本试算只消费已生成结果，不在这里触发制造件价格生成。
           candidates = List.of(syntheticMakeRoute(code));
         } else {
-          // 缺路由：非制造件仍要求业务侧补价格类型表配置
-          results.put(i, PriceResolveResult.noRoute(code));
+          // 当前范围没有候选价源，如实报告缺价
+          results.put(i, PriceResolveResult.noAvailablePrice(code));
           continue;
         }
       }
@@ -1004,17 +1005,17 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
         attemptedBuckets.add(route.priceType().name());
         PriceResolveResult result = resolver.resolve(oaNoValue, item, route, context);
         if (result == null) {
-          result = resolver.resolve(oaNoValue, item, route);
+          throw new IllegalStateException("Price resolver returned no result: " + route.priceType());
         }
         if (result.unitPrice() != null) {
-          hit = result;
+          hit = result.withPriority(route);
           hitRoute = route;
           break;
         }
         if (StringUtils.hasText(result.remark())) {
           lastMissReason = result.remark();
         }
-        if (result.failureCode() != null) break;
+        if (result.hasBlockingFailure()) break;
       }
       if (hit != null) {
         results.put(i, hit);
@@ -1072,6 +1073,13 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       CostRunPartItemDto item) {
     PackagePriceRequest request = new PackagePriceRequest();
     request.setPackageMaterialCode(item.getPartCode().trim());
+    request.setBusinessUnitType(context == null
+        ? com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType() : context.getBusinessUnitType());
+    if (context != null) {
+      request.setPriceScenarioType(com.sanhua.marketingcost.enums.QuotePriceScenarioType.valueOf(
+          StringUtils.hasText(context.getPriceScenarioType()) ? context.getPriceScenarioType() : "OA_LOCKED"));
+      request.setVariableOverrides(context.getPriceVariableOverrides());
+    }
     request.setPriceOrgCode(organization.priceOrgCode());
     request.setPeriodMonth(period);
     request.setOaNo(oaNoValue);

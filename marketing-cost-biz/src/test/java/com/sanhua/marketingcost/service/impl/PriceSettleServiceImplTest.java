@@ -9,7 +9,6 @@ import com.sanhua.marketingcost.dto.PriceSettleItemUpdateRequest;
 import com.sanhua.marketingcost.entity.PriceSettle;
 import com.sanhua.marketingcost.mapper.PriceSettleItemMapper;
 import com.sanhua.marketingcost.mapper.PriceSettleMapper;
-import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
 import java.math.BigDecimal;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -17,11 +16,10 @@ import org.mockito.ArgumentCaptor;
 class PriceSettleServiceImplTest {
 
   @Test
-  void formalSettleItemSynchronizesSettleFixedType() {
+  void formalSettleItemRetainsMaterialAndBusinessUnit() {
     PriceSettleMapper settleMapper = mock(PriceSettleMapper.class);
     PriceSettleItemMapper itemMapper = mock(PriceSettleItemMapper.class);
-    MaterialPriceTypeRouteSyncService routeSync =
-        mock(MaterialPriceTypeRouteSyncService.class);
+
     PriceSettle settle = new PriceSettle();
     settle.setId(1L);
     settle.setBusinessUnitType("HOUSEHOLD");
@@ -31,13 +29,10 @@ class PriceSettleServiceImplTest {
     request.setMaterialName("结算物料");
     request.setPlannedPrice(new BigDecimal("10.00"));
 
-    new PriceSettleServiceImpl(settleMapper, itemMapper, routeSync).createItem(1L, request);
+    var item = new PriceSettleServiceImpl(settleMapper, itemMapper).createItem(1L, request);
+    assertThat(item.getMaterialCode()).isEqualTo("MAT-SETTLE");
+    assertThat(item.getBusinessUnitType()).isEqualTo("HOUSEHOLD");
+    verify(itemMapper).insert(item);
 
-    ArgumentCaptor<MaterialPriceTypeRouteSyncService.RouteCommand> captor =
-        ArgumentCaptor.forClass(MaterialPriceTypeRouteSyncService.RouteCommand.class);
-    verify(routeSync).sync(captor.capture());
-    assertThat(captor.getValue().materialCode()).isEqualTo("MAT-SETTLE");
-    assertThat(captor.getValue().businessUnitType()).isEqualTo("HOUSEHOLD");
-    assertThat(captor.getValue().priceType()).isEqualTo("结算固定价");
   }
 }

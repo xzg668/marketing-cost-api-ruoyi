@@ -1,9 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -13,11 +11,9 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
 import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
-import com.sanhua.marketingcost.entity.FactorAdjustBatch;
 import com.sanhua.marketingcost.entity.MonthlyRepriceAuditLog;
 import com.sanhua.marketingcost.entity.MonthlyRepriceBatch;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
-import com.sanhua.marketingcost.mapper.FactorAdjustBatchMapper;
 import com.sanhua.marketingcost.mapper.MonthlyRepriceAuditLogMapper;
 import com.sanhua.marketingcost.mapper.MonthlyRepriceBatchMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
@@ -35,7 +31,6 @@ import org.mockito.Mockito;
 class MonthlyRepriceLinkedPricePrepareServiceImplTest {
 
   private MonthlyRepriceBatchMapper batchMapper;
-  private FactorAdjustBatchMapper factorAdjustBatchMapper;
   private PriceLinkedItemMapper priceLinkedItemMapper;
   private LinkedPriceEnsureService linkedPriceEnsureService;
   private MonthlyRepriceAuditLogMapper auditLogMapper;
@@ -44,36 +39,32 @@ class MonthlyRepriceLinkedPricePrepareServiceImplTest {
 
   @BeforeAll
   static void initTableInfo() {
-    MapperBuilderAssistant assistant =
-        new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
     TableInfoHelper.initTableInfo(assistant, PriceLinkedItem.class);
   }
 
   @BeforeEach
   void setUp() {
     batchMapper = Mockito.mock(MonthlyRepriceBatchMapper.class);
-    factorAdjustBatchMapper = Mockito.mock(FactorAdjustBatchMapper.class);
     priceLinkedItemMapper = Mockito.mock(PriceLinkedItemMapper.class);
     linkedPriceEnsureService = Mockito.mock(LinkedPriceEnsureService.class);
     auditLogMapper = Mockito.mock(MonthlyRepriceAuditLogMapper.class);
     auditService = Mockito.mock(MonthlyRepriceAuditService.class);
-    service = new MonthlyRepriceLinkedPricePrepareServiceImpl(
-        batchMapper,
-        factorAdjustBatchMapper,
-        priceLinkedItemMapper,
-        linkedPriceEnsureService,
-        auditLogMapper,
-        auditService,
-        new ObjectMapper());
+    service =
+        new MonthlyRepriceLinkedPricePrepareServiceImpl(
+            batchMapper,
+            priceLinkedItemMapper,
+            linkedPriceEnsureService,
+            auditLogMapper,
+            auditService,
+            new ObjectMapper());
   }
 
   @Test
   void prepareCreatesMonthlyAdjustResultsAndMarksBatchRunning() {
     when(batchMapper.selectOne(any())).thenReturn(batch());
-    when(priceLinkedItemMapper.selectList(any())).thenReturn(List.of(
-        linkedItem("MAT-2"),
-        linkedItem("MAT-1"),
-        linkedItem(" MAT-1 ")));
+    when(priceLinkedItemMapper.selectList(any()))
+        .thenReturn(List.of(linkedItem("MAT-2"), linkedItem("MAT-1"), linkedItem(" MAT-1 ")));
     LinkedPriceEnsureResult ensureResult = new LinkedPriceEnsureResult();
     ensureResult.setRequestedCount(2);
     ensureResult.setCreatedCount(1);
@@ -90,11 +81,10 @@ class MonthlyRepriceLinkedPricePrepareServiceImplTest {
     verify(linkedPriceEnsureService).ensure(requestCaptor.capture());
     LinkedPriceEnsureRequest request = requestCaptor.getValue();
     assertThat(request.getCalcScene().getCode()).isEqualTo("MONTHLY_ADJUST");
-    assertThat(request.getAdjustBatchId()).isNull();
     assertThat(request.getBusinessUnitType()).isEqualTo("COMMERCIAL");
     assertThat(request.getPricingMonth()).isEqualTo("2026-05");
     assertThat(request.getPriceAsOfTime()).isEqualTo(LocalDateTime.of(2026, 5, 27, 10, 30));
-    assertThat(request.normalizedItemCodes()).containsExactly("MAT-2", "MAT-1");
+    assertThat(request.normalizedItemCodes()).containsExactly("MAT-1", "MAT-2");
     ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
     verify(priceLinkedItemMapper).selectList(queryCaptor.capture());
     assertThat(queryCaptor.getValue().getSqlSegment())
@@ -102,7 +92,6 @@ class MonthlyRepriceLinkedPricePrepareServiceImplTest {
         .contains("business_unit_type =")
         .doesNotContain("effective_from")
         .doesNotContain("effective_to");
-    verify(factorAdjustBatchMapper, never()).selectById(any());
 
     ArgumentCaptor<MonthlyRepriceBatch> batchCaptor =
         ArgumentCaptor.forClass(MonthlyRepriceBatch.class);
@@ -114,7 +103,9 @@ class MonthlyRepriceLinkedPricePrepareServiceImplTest {
     verify(auditLogMapper).insert(auditCaptor.capture());
     assertThat(auditCaptor.getValue().getOperationType()).isEqualTo("PREPARE_LINKED_PRICE");
     assertThat(auditCaptor.getValue().getAfterJson()).contains("\"batchStatus\":\"RUNNING\"");
-    verify(auditService).recordStartCalc(any(MonthlyRepriceBatch.class), org.mockito.ArgumentMatchers.eq("alice"), any());
+    verify(auditService)
+        .recordStartCalc(
+            any(MonthlyRepriceBatch.class), org.mockito.ArgumentMatchers.eq("alice"), any());
   }
 
   @Test
@@ -139,15 +130,31 @@ class MonthlyRepriceLinkedPricePrepareServiceImplTest {
   }
 
   @Test
-  void prepareRejectsNormalAdjustBatch() {
-    MonthlyRepriceBatch batch = batch();
-    batch.setAdjustBatchId(88L);
-    when(batchMapper.selectOne(any())).thenReturn(batch);
-    when(factorAdjustBatchMapper.selectById(88L)).thenReturn(adjustBatch("NORMAL"));
-
-    assertThatThrownBy(() -> service.prepare("MRP-001", "alice"))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("adjust_type = MONTHLY");
+  void prepareKeepsSameMaterialInDifferentOrganizationsSeparate() {
+    when(batchMapper.selectOne(any())).thenReturn(batch());
+    var first = linkedItem("MAT-1");
+    first.setOrgCode("210");
+    var second = linkedItem("MAT-1");
+    second.setOrgCode("220");
+    when(priceLinkedItemMapper.selectList(any())).thenReturn(List.of(second, first));
+    when(linkedPriceEnsureService.ensure(any()))
+        .thenAnswer(
+            call -> {
+              var result = new LinkedPriceEnsureResult();
+              result.setRequestedCount(1);
+              result.setCreatedCount(1);
+              return result;
+            });
+    var result = service.prepare("MRP-001", "alice");
+    assertThat(result.getItemCount()).isEqualTo(2);
+    assertThat(result.getCreatedCount()).isEqualTo(2);
+    var requests = ArgumentCaptor.forClass(LinkedPriceEnsureRequest.class);
+    verify(linkedPriceEnsureService, Mockito.times(2)).ensure(requests.capture());
+    assertThat(requests.getAllValues())
+        .extracting(LinkedPriceEnsureRequest::getPriceOrgCode)
+        .containsExactly("210", "220");
+    for (var request : requests.getAllValues())
+      assertThat(request.normalizedItemCodes()).containsExactly("MAT-1");
   }
 
   private MonthlyRepriceBatch batch() {
@@ -156,21 +163,8 @@ class MonthlyRepriceLinkedPricePrepareServiceImplTest {
     batch.setRepriceNo("MRP-001");
     batch.setPricingMonth("2026-05");
     batch.setBusinessUnitType("COMMERCIAL");
-    batch.setAdjustBatchId(null);
     batch.setStatus("CREATED");
     batch.setPriceAsOfTime(LocalDateTime.of(2026, 5, 27, 10, 30));
-    return batch;
-  }
-
-  private FactorAdjustBatch adjustBatch(String adjustType) {
-    FactorAdjustBatch batch = new FactorAdjustBatch();
-    batch.setId(88L);
-    batch.setAdjustBatchNo("ADJ-001");
-    batch.setAdjustType(adjustType);
-    batch.setPricingMonth("2026-05");
-    batch.setBusinessUnitType("COMMERCIAL");
-    batch.setStatus("SUCCESS");
-    batch.setDeleted(0);
     return batch;
   }
 

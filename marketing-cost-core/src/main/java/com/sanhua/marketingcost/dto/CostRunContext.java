@@ -19,7 +19,6 @@ public class CostRunContext {
   private String pricingMonth;
   private LocalDateTime priceAsOfTime;
   private String bomSourcePolicy;
-  private Long adjustBatchId;
   private String repriceNo;
   private String businessUnitType;
   private String priceOrgCode;
@@ -97,7 +96,6 @@ public class CostRunContext {
 
   public static CostRunContext monthlyReprice(
       String pricingMonth,
-      Long adjustBatchId,
       String repriceNo,
       String businessUnitType,
       String oaNo,
@@ -108,7 +106,6 @@ public class CostRunContext {
       String calcObjectKey) {
     return monthlyReprice(
         pricingMonth,
-        adjustBatchId,
         repriceNo,
         businessUnitType,
         null,
@@ -123,7 +120,6 @@ public class CostRunContext {
 
   public static CostRunContext monthlyReprice(
       String pricingMonth,
-      Long adjustBatchId,
       String repriceNo,
       String businessUnitType,
       LocalDateTime priceAsOfTime,
@@ -137,7 +133,6 @@ public class CostRunContext {
     CostRunContext context = new CostRunContext();
     context.setScene(SCENE_MONTHLY_REPRICE);
     context.setPricingMonth(pricingMonth);
-    context.setAdjustBatchId(adjustBatchId);
     context.setRepriceNo(repriceNo);
     context.setBusinessUnitType(businessUnitType);
     context.setPriceAsOfTime(priceAsOfTime);

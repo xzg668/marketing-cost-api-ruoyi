@@ -31,30 +31,52 @@ public class SupplierPreferredPriceSelector {
       LocalDate pricingDate,
       Function<T, String> supplierNameGetter,
       Function<T, String> supplierCodeGetter) {
+    return select(
+        candidates,
+        businessUnitType,
+        materialCode,
+        materialName,
+        specModel,
+        pricingDate,
+        supplierNameGetter,
+        supplierCodeGetter,
+        null);
+  }
+
+  public java.util.Map<String, SupplierSupplyRatioResolveResult> prepareSuppliers(
+      String businessUnit, java.util.Set<String> materialCodes, LocalDate pricingDate) {
+    return resolveService.resolveAll(businessUnit, materialCodes, pricingDate);
+  }
+
+  public <T> SupplierPreferredPriceSelection<T> select(
+      List<T> candidates,
+      String businessUnitType,
+      String materialCode,
+      String materialName,
+      String specModel,
+      LocalDate pricingDate,
+      Function<T, String> supplierNameGetter,
+      Function<T, String> supplierCodeGetter,
+      SupplierSupplyRatioResolveResult preparedSupplier) {
     if (candidates == null || candidates.isEmpty()) {
       return selection(null, "", 0, null, null, null, "NONE", "", "");
     }
     T first = candidates.get(0);
-    int candidateSupplierCount = distinctSupplierCount(
-        candidates, supplierNameGetter, supplierCodeGetter);
+    int candidateSupplierCount =
+        distinctSupplierCount(candidates, supplierNameGetter, supplierCodeGetter);
     if (candidateSupplierCount == 0) {
       return selection(
-          first,
-          "价格源无供应商维度，按价格版本规则取价",
-          0,
-          null,
-          null,
-          null,
-          "NO_SUPPLIER_DIMENSION",
-          "",
-          "");
+          first, "价格源无供应商维度，按价格版本规则取价", 0, null, null, null, "NO_SUPPLIER_DIMENSION", "", "");
     }
     if (candidateSupplierCount == 1) {
-      T onlySupplierRow = candidates.stream()
-          .filter(candidate -> StringUtils.hasText(
-              supplierKey(candidate, supplierNameGetter, supplierCodeGetter)))
-          .findFirst()
-          .orElse(first);
+      T onlySupplierRow =
+          candidates.stream()
+              .filter(
+                  candidate ->
+                      StringUtils.hasText(
+                          supplierKey(candidate, supplierNameGetter, supplierCodeGetter)))
+              .findFirst()
+              .orElse(first);
       return selection(
           onlySupplierRow,
           "单一供应商价格，直接取该供应商最新已生效价格",
@@ -68,8 +90,10 @@ public class SupplierPreferredPriceSelector {
     }
 
     SupplierSupplyRatioResolveResult mainSupplier =
-        resolveService.resolve(
-            businessUnitType, materialCode, materialName, specModel, pricingDate);
+        preparedSupplier != null
+            ? preparedSupplier
+            : resolveService.resolve(
+                businessUnitType, materialCode, materialName, specModel, pricingDate);
     if (mainSupplier == null || !mainSupplier.isMatched()) {
       String message = "物料 " + materialCode + " 存在多个供应商价格，但未维护供货比例";
       return selection(
@@ -85,8 +109,8 @@ public class SupplierPreferredPriceSelector {
     }
 
     for (T candidate : candidates) {
-      String matchMode = supplierMatchMode(
-          candidate, mainSupplier, supplierNameGetter, supplierCodeGetter);
+      String matchMode =
+          supplierMatchMode(candidate, mainSupplier, supplierNameGetter, supplierCodeGetter);
       if (matchMode != null) {
         return selection(
             candidate,
@@ -102,8 +126,7 @@ public class SupplierPreferredPriceSelector {
       }
     }
 
-    String message = "主供应商无价格：物料=" + materialCode
-        + "，主供应商=" + displaySupplier(mainSupplier);
+    String message = "主供应商无价格：物料=" + materialCode + "，主供应商=" + displaySupplier(mainSupplier);
     return selection(
         null,
         message,
@@ -121,11 +144,12 @@ public class SupplierPreferredPriceSelector {
       List<T> candidates,
       Function<T, String> supplierNameGetter,
       Function<T, String> supplierCodeGetter) {
-    return Math.toIntExact(candidates.stream()
-        .map(candidate -> supplierKey(candidate, supplierNameGetter, supplierCodeGetter))
-        .filter(StringUtils::hasText)
-        .distinct()
-        .count());
+    return Math.toIntExact(
+        candidates.stream()
+            .map(candidate -> supplierKey(candidate, supplierNameGetter, supplierCodeGetter))
+            .filter(StringUtils::hasText)
+            .distinct()
+            .count());
   }
 
   private <T> String supplierMatchMode(
@@ -141,8 +165,8 @@ public class SupplierPreferredPriceSelector {
       return Objects.equals(candidateCode, mainCode) ? "CODE" : null;
     }
     return StringUtils.hasText(candidateName)
-        && StringUtils.hasText(mainName)
-        && Objects.equals(candidateName, mainName)
+            && StringUtils.hasText(mainName)
+            && Objects.equals(candidateName, mainName)
         ? "NAME_FALLBACK"
         : null;
   }
@@ -198,12 +222,10 @@ public class SupplierPreferredPriceSelector {
     if (supplier == null) {
       return "";
     }
-    String name = StringUtils.hasText(supplier.getSupplierName())
-        ? supplier.getSupplierName().trim()
-        : "";
-    String code = StringUtils.hasText(supplier.getSupplierCode())
-        ? supplier.getSupplierCode().trim()
-        : "";
+    String name =
+        StringUtils.hasText(supplier.getSupplierName()) ? supplier.getSupplierName().trim() : "";
+    String code =
+        StringUtils.hasText(supplier.getSupplierCode()) ? supplier.getSupplierCode().trim() : "";
     if (StringUtils.hasText(name) && StringUtils.hasText(code)) {
       return name + "(" + code + ")";
     }
@@ -211,9 +233,7 @@ public class SupplierPreferredPriceSelector {
   }
 
   private <T> String supplierKey(
-      T candidate,
-      Function<T, String> supplierNameGetter,
-      Function<T, String> supplierCodeGetter) {
+      T candidate, Function<T, String> supplierNameGetter, Function<T, String> supplierCodeGetter) {
     String code = normalized(supplierCodeGetter.apply(candidate));
     if (StringUtils.hasText(code)) {
       return "CODE:" + code;

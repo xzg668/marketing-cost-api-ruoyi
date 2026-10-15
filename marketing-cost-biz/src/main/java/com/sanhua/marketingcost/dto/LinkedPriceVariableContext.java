@@ -13,7 +13,17 @@ public class LinkedPriceVariableContext {
   private static final BigDecimal TON_TO_KG_DIVISOR = new BigDecimal("1000");
 
   private final LinkedPriceCalcScene calcScene;
-  private Long adjustBatchId;
+  private String factorSource;
+
+  public String getFactorSource() {
+    return factorSource;
+  }
+
+  public LinkedPriceVariableContext factorSource(String value) {
+    factorSource = value;
+    return this;
+  }
+
   private String pricingMonth;
   private final Map<String, BigDecimal> variableValues = new LinkedHashMap<>();
   private final Map<String, String> variableSources = new LinkedHashMap<>();
@@ -27,30 +37,19 @@ public class LinkedPriceVariableContext {
     if (oaForm == null) {
       return context;
     }
-    // 正常报价只能使用 OA 表头锁价作为显式覆盖；未锁价的变量才允许继续走后续基价回落。
+    // 客户场景仅覆盖 Cu；板换 SUS 由统一因素上下文按规格和招标条件读取。
     context.putOaLockedKg("Cu", oaForm.getCopperPrice());
-    context.putOaLockedKg("Zn", oaForm.getZincPrice());
-    context.putOaLockedKg("Al", oaForm.getAluminumPrice());
-    context.putOaLockedKg("Ag", oaForm.getSilverPrice());
-    context.putOaLockedKg("Au", oaForm.getGoldPrice());
-    context.putOaLockedKg("SUS304", oaForm.getSus304Price());
-    context.putOaLockedKg("SUS316L", oaForm.getSus316lPrice());
     return context;
   }
 
-  public static LinkedPriceVariableContext monthlyAdjust(Long adjustBatchId) {
+  public static LinkedPriceVariableContext monthlyAdjust() {
     LinkedPriceVariableContext context =
         new LinkedPriceVariableContext(LinkedPriceCalcScene.MONTHLY_ADJUST);
-    context.adjustBatchId = adjustBatchId;
     return context;
   }
 
   public LinkedPriceCalcScene getCalcScene() {
     return calcScene;
-  }
-
-  public Long getAdjustBatchId() {
-    return adjustBatchId;
   }
 
   public String getPricingMonth() {
@@ -74,13 +73,8 @@ public class LinkedPriceVariableContext {
     return code == null ? null : variableSources.get(code);
   }
 
-  /**
-   * 在已加载的 OA 锁价之上覆盖单个“元/公斤”变量。
-   *
-   * <p>财务场景只调用本方法覆盖 Cu，因此不会清空或改写 OA 中的 Zn、Al 等锁价。
-   */
-  public LinkedPriceVariableContext overrideKg(
-      String code, BigDecimal value, String source) {
+  /** 设置已确认单位为元/公斤的场景输入。 */
+  public LinkedPriceVariableContext overrideKg(String code, BigDecimal value, String source) {
     if (code == null || code.trim().isEmpty()) {
       throw new IllegalArgumentException("变量编码不能为空");
     }

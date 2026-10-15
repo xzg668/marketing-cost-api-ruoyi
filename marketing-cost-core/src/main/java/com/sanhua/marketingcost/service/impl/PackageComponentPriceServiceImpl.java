@@ -49,7 +49,6 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
   private static final String PRICE_STATUS_MISSING_STRUCTURE = "MISSING_STRUCTURE";
   private static final String PRICE_STATUS_MISSING_CHILD_PRICE = "MISSING_CHILD_PRICE";
   private static final String DETAIL_STATUS_PRICED = "PRICED";
-  private static final String DETAIL_STATUS_MISSING_ROUTE = "MISSING_ROUTE";
   private static final String DETAIL_STATUS_MISSING_PRICE = "MISSING_PRICE";
   private static final String GAP_STATUS_PENDING_MAINTAIN = "PENDING_MAINTAIN";
   private static final String OA_PUSH_STATUS_NOT_PUSHED = "NOT_PUSHED";
@@ -61,6 +60,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
   private final PackageComponentPriceDetailMapper priceDetailMapper;
   private final PackageComponentGapItemMapper gapItemMapper;
   private final Map<PriceTypeEnum, PriceResolver> resolverMap;
+  private final com.sanhua.marketingcost.service.LinkedPriceEnsureService linkedPrices;
 
   public PackageComponentPriceServiceImpl(
       PackageComponentSnapshotService snapshotService,
@@ -68,12 +68,14 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
       PackageComponentPriceMapper priceMapper,
       PackageComponentPriceDetailMapper priceDetailMapper,
       PackageComponentGapItemMapper gapItemMapper,
-      List<PriceResolver> priceResolvers) {
+      List<PriceResolver> priceResolvers,
+      com.sanhua.marketingcost.service.LinkedPriceEnsureService linkedPrices) {
     this.snapshotService = snapshotService;
     this.materialPriceRouterService = materialPriceRouterService;
     this.priceMapper = priceMapper;
     this.priceDetailMapper = priceDetailMapper;
     this.gapItemMapper = gapItemMapper;
+    this.linkedPrices = linkedPrices;
     Map<PriceTypeEnum, PriceResolver> map = new EnumMap<>(PriceTypeEnum.class);
     for (PriceResolver resolver : priceResolvers) {
       map.put(resolver.priceType(), resolver);
@@ -104,7 +106,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     BigDecimal total = BigDecimal.ZERO;
     boolean complete = true;
     for (PackageComponentSnapshotDetail snapshotDetail : snapshotResult.getDetails()) {
-      ResolvedChild child = resolveChild(req, price, snapshot, snapshotDetail);
+      ResolvedChild child = resolveChild(req, price, snapshot, snapshotDetail, false);
       details.add(child.detail());
       if (DETAIL_STATUS_PRICED.equals(child.detail().getPriceStatus())) {
         total = total.add(child.detail().getChildAmount());
@@ -129,21 +131,11 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
   @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
   public PackagePriceResult ensurePrice(PackagePriceRequest request) {
     NormalizedRequest req = normalize(request);
-    if (!req.forceRefresh) {
-      PackageComponentPrice reusable =
-          selectReusableCompletePrice(req);
-      if (reusable != null) {
-        return PackagePriceResult.of(reusable, loadDetails(reusable.getId()), null);
-      }
-    }
-
+    // 月价行无法代表不同OA的锁价输入和最新财务顺序；每次准备重新取子件价格。
     PackageSnapshotResult snapshotResult = snapshotService.ensureSnapshot(toSnapshotRequest(req));
     PackageComponentSnapshot snapshot = snapshotResult.getSnapshot();
     StoredPrice stored = ensurePriceRow(req, snapshot);
     PackageComponentPrice price = stored.price();
-    if (!req.forceRefresh && isReusableCompletePrice(price)) {
-      return PackagePriceResult.of(price, loadDetails(price.getId()), snapshotResult);
-    }
     // 新主记录尚无明细。外层核算事务可能是 REPEATABLE READ，对空范围 DELETE
     // 会持有间隙锁，使不同报价的首次包装明细插入互相死锁。
     if (!stored.created()) deleteDetails(price.getId());
@@ -160,7 +152,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     BigDecimal total = BigDecimal.ZERO;
     boolean complete = true;
     for (PackageComponentSnapshotDetail snapshotDetail : snapshotResult.getDetails()) {
-      ResolvedChild child = resolveChild(req, price, snapshot, snapshotDetail);
+      ResolvedChild child = resolveChild(req, price, snapshot, snapshotDetail, true);
       priceDetailMapper.insert(child.detail());
       details.add(child.detail());
       if (DETAIL_STATUS_PRICED.equals(child.detail().getPriceStatus())) {
@@ -206,25 +198,29 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
       NormalizedRequest req,
       PackageComponentPrice price,
       PackageComponentSnapshot snapshot,
-      PackageComponentSnapshotDetail snapshotDetail) {
+      PackageComponentSnapshotDetail snapshotDetail, boolean persist) {
     PackageComponentPriceDetail detail = baseDetail(price, snapshotDetail);
     String childCode = trimToNull(snapshotDetail.getChildMaterialCode());
     if (childCode == null) {
-      markMissing(detail, DETAIL_STATUS_MISSING_ROUTE, null, null, "子件料号为空");
+      markMissing(detail, DETAIL_STATUS_MISSING_PRICE, null, null, "子件料号为空");
       return new ResolvedChild(detail);
     }
 
     List<PriceTypeRoute> candidates =
-        materialPriceRouterService.listCandidates(childCode, req.periodMonth, req.quoteDate);
+        persist ? materialPriceRouterService.prepareCandidates(childCode, snapshotDetail.getChildMaterialName(),
+            req.periodMonth, req.quoteDate, req.priceOrgCode, priceContext(req).getBusinessUnitType())
+            : materialPriceRouterService.listCandidates(childCode, req.periodMonth, req.quoteDate,
+                req.priceOrgCode, priceContext(req).getBusinessUnitType());
     if (candidates.isEmpty()) {
-      PriceResolveResult noRoute = PriceResolveResult.noRoute(childCode);
-      markMissing(detail, DETAIL_STATUS_MISSING_ROUTE, null, null, noRoute.remark());
+      PriceResolveResult noRoute = PriceResolveResult.noAvailablePrice(childCode);
+      markMissing(detail, DETAIL_STATUS_MISSING_PRICE, null, null, noRoute.remark());
       detail.setPriceSource(noRoute.priceSource());
       return new ResolvedChild(detail);
     }
 
     List<String> attempted = new ArrayList<>();
     String lastMissReason = null;
+    String lastMissCode = null;
     PriceTypeRoute lastRoute = null;
     for (PriceTypeRoute route : candidates) {
       lastRoute = route;
@@ -237,20 +233,54 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
       }
       attempted.add(routeLabel(route));
       CostRunPartItemDto item = toCostRunItem(req, snapshot, snapshotDetail);
-      PriceResolveResult resolved = resolver.resolve(req.oaNo, item, route, priceContext(req));
+      PriceResolveResult resolved = route.priceType() == PriceTypeEnum.LINKED && !route.supplemental()
+          ? prepareLinkedChild(req, childCode, persist)
+          : resolver.resolve(req.oaNo, item, route, priceContext(req));
       if (resolved.unitPrice() != null) {
         return new ResolvedChild(applyHit(detail, route, resolved));
       }
       if (StringUtils.hasText(resolved.remark())) {
         lastMissReason = resolved.remark();
       }
-      if (resolved.failureCode() != null) break;
+      lastMissCode = resolved.failureCode();
+      if (resolved.hasBlockingFailure()) break;
     }
 
     String reason = "路由=" + attempted + " 但未取到有效价格"
         + (lastMissReason == null ? "" : ": " + lastMissReason);
     markMissing(detail, DETAIL_STATUS_MISSING_PRICE, lastRoute, PriceResolveResult.SOURCE_ERROR, reason);
+    detail.setFailureCode(lastMissCode);
     return new ResolvedChild(detail);
+  }
+
+  private PriceResolveResult prepareLinkedChild(NormalizedRequest req, String code, boolean persist) {
+    var context = priceContext(req);
+    var request = com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest.quote(
+        req.oaNo, context.getBusinessUnitType(), req.periodMonth, java.util.Set.of(code));
+    request.setPriceOrgCode(req.priceOrgCode);
+    request.setPriceAsOfTime(req.priceAsOfTime);
+    request.setPriceScenarioType(req.priceScenarioType);
+    request.setSupplierPriceReviewContext(req.supplierReviews);
+    request.setVariableOverrides(req.variableOverrides);
+    com.sanhua.marketingcost.entity.PriceLinkedCalcItem row;
+    if (persist) {
+      var prepared = linkedPrices.ensure(request);
+      row = prepared.getItems().get(code);
+      if (row == null) {
+        var failure = prepared.getFailedItems().stream().filter(item -> code.equals(item.getItemCode())).findFirst();
+        return failure.isPresent() ? PriceResolveResult.miss(failure.get().getReasonCode(), failure.get().getReason())
+            : PriceResolveResult.miss("联动价无适用记录：" + code);
+      }
+    } else {
+      row = linkedPrices.calculate(request).stream().filter(item -> code.equals(item.getItemCode())).findFirst().orElse(null);
+      if (row == null) return PriceResolveResult.miss("联动价无适用记录：" + code);
+    }
+    if (row.getPartUnitPrice() == null) return PriceResolveResult.miss(row.getFailureCode(), row.getCalcMessage());
+    var evidence = new com.sanhua.marketingcost.service.pricing.PriceResolveEvidence(
+        row.getSourcePriceRecordId(), row.getSourcePriceBatchNo(), row.getSupplierName(), row.getSupplierCode(),
+        row.getSupplyRatio(), row.getSupplyRatioRecordId(), row.getSourceEffectiveFrom(), row.getSourceEffectiveTo(),
+        Integer.valueOf(1).equals(row.getCarriedForward()), row.getWarningMessage(), row.getInputSnapshotJson());
+    return PriceResolveResult.hit(row.getPartUnitPrice(), "联动价", row.getCalcMessage(), row.getId(), evidence);
   }
 
   private PackageComponentPriceDetail applyHit(
@@ -268,6 +298,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     }
     detail.setChildAmount(effectiveQty.multiply(resolved.unitPrice()));
     detail.setPriceSource(resolved.priceSource());
+    detail.setInputSnapshotJson(resolved.evidence().withPriority(route).inputSnapshotJson());
     detail.setPriceStatus(DETAIL_STATUS_PRICED);
     detail.setMissingReason(null);
     return detail;
@@ -305,7 +336,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     if (route == null) {
       return;
     }
-    detail.setPriceType(route.priceType() == null ? null : route.priceType().getDbText());
+    detail.setPriceType(route.priceType() == null ? null : route.selectedSourceType());
     detail.setSourcePriceTypeText(priceTypeText(route));
   }
 
@@ -333,6 +364,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     item.setOaNo(req.oaNo);
     item.setProductCode(snapshot.getSourceTopProductCode());
     item.setPartCode(snapshotDetail.getChildMaterialCode());
+    item.setPriceOrgCode(req.priceOrgCode);
     item.setPartName(snapshotDetail.getChildMaterialName());
     item.setPartQty(snapshotDetail.getQtyPerParent());
     item.setPartDrawingNo(snapshotDetail.getChildMaterialSpec());
@@ -357,7 +389,8 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     if (req.supplierReviews != null) context.setOaFormItemId(req.supplierReviews.oaFormItemId());
     context.setMaterialOrganizationCode(
         MaterialOrganization.fromPriceOrgCode(req.priceOrgCode).getCode());
-    context.setBusinessUnitType(com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType());
+    context.setBusinessUnitType(req.businessUnitType);
+    context.setPriceScenarioType(req.priceScenarioType.name());
     context.setPriceCheckOnly(true);
     return context;
   }
@@ -405,9 +438,6 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
       PackageComponentPrice concurrent =
           selectByUniqueKey(req);
       if (concurrent != null) {
-        if (!req.forceRefresh && isReusableCompletePrice(concurrent)) {
-          return new StoredPrice(concurrent, false);
-        }
         concurrent.setSnapshotId(snapshot == null ? null : snapshot.getId());
         concurrent.setPriceOrgCode(req.priceOrgCode);
         concurrent.setPackageMaterialName(snapshot == null ? concurrent.getPackageMaterialName() : snapshot.getPackageMaterialName());
@@ -605,50 +635,6 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
             .eq(PackageComponentPriceDetail::getPriceId, priceId));
   }
 
-  private List<PackageComponentPriceDetail> loadDetails(Long priceId) {
-    if (priceId == null) {
-      return List.of();
-    }
-    return priceDetailMapper.selectList(
-        Wrappers.<PackageComponentPriceDetail>lambdaQuery()
-            .eq(PackageComponentPriceDetail::getPriceId, priceId)
-            .orderByAsc(PackageComponentPriceDetail::getLineNo));
-  }
-
-  private PackageComponentPrice selectReusableCompletePrice(NormalizedRequest req) {
-    PackageComponentPrice existing = selectByPeriodPackageAndTop(req);
-    if (existing == null) {
-      return null;
-    }
-    return isReusableCompletePrice(existing) ? existing : null;
-  }
-
-  private boolean isReusableCompletePrice(PackageComponentPrice existing) {
-    if (existing == null) {
-      return false;
-    }
-    boolean complete = Boolean.TRUE.equals(existing.getPriceComplete());
-    boolean priced = PRICE_STATUS_PRICED.equals(existing.getPriceStatus());
-    return complete && priced && existing.getTotalPrice() != null;
-  }
-
-  private PackageComponentPrice selectByPeriodPackageAndTop(NormalizedRequest req) {
-    var query = Wrappers.<PackageComponentPrice>lambdaQuery()
-        .eq(PackageComponentPrice::getPeriodMonth, req.periodMonth)
-        .eq(PackageComponentPrice::getPackageMaterialCode, req.packageMaterialCode)
-        .eq(PackageComponentPrice::getPriceOrgCode, req.priceOrgCode)
-        .eq(PackageComponentPrice::getSourceTopProductCode, req.topProductCode);
-    if (req.explicitPriceAsOfTime) {
-      // 月度调价重试只复用同一 price_as_of_time 的包装价，不能读到后续刷新出的当前价。
-      query.eq(PackageComponentPrice::getPriceAsOfTime, req.priceAsOfTime);
-    }
-    List<PackageComponentPrice> rows = priceMapper.selectList(
-        query.orderByDesc(PackageComponentPrice::getGeneratedAt)
-            .orderByDesc(PackageComponentPrice::getId)
-            .last("LIMIT 1"));
-    return rows == null || rows.isEmpty() ? null : rows.get(0);
-  }
-
   private PackageComponentPrice selectByUniqueKey(NormalizedRequest req) {
     List<PackageComponentPrice> rows = priceMapper.selectList(
         Wrappers.<PackageComponentPrice>lambdaQuery()
@@ -715,7 +701,11 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
         priceAsOfTime,
         explicitPriceAsOfTime,
         trimToNull(request.getCalcBatchId()),
-        request.isForceRefresh(), request.getSupplierPriceReviewContext());
+        request.getSupplierPriceReviewContext(),
+        StringUtils.hasText(request.getBusinessUnitType()) ? request.getBusinessUnitType().trim()
+            : com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType(),
+        request.getPriceScenarioType() == null ? com.sanhua.marketingcost.enums.QuotePriceScenarioType.OA_LOCKED : request.getPriceScenarioType(),
+        request.getVariableOverrides() == null ? Map.of() : Map.copyOf(request.getVariableOverrides()));
   }
 
   private String requiredPriceOrgCode(String priceOrgCode) {
@@ -762,6 +752,8 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
       LocalDateTime priceAsOfTime,
       boolean explicitPriceAsOfTime,
       String calcBatchId,
-      boolean forceRefresh,
-      com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext supplierReviews) {}
+      com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext supplierReviews,
+      String businessUnitType,
+      com.sanhua.marketingcost.enums.QuotePriceScenarioType priceScenarioType,
+      Map<String, BigDecimal> variableOverrides) {}
 }

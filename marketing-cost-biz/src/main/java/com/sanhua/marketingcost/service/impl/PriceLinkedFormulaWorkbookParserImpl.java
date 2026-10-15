@@ -190,66 +190,8 @@ public class PriceLinkedFormulaWorkbookParserImpl implements PriceLinkedFormulaW
     if (derived.startsWith("=")) {
       derived = derived.substring(1);
     }
-    derived = stripRoundFunctions(derived);
     derived = replaceLocalCellRefs(derived, columns);
     return StringUtils.hasText(derived) ? derived : null;
-  }
-
-  private String stripRoundFunctions(String formula) {
-    String result = formula;
-    while (true) {
-      int roundStart = indexOfIgnoreCase(result, "ROUND(");
-      if (roundStart < 0) {
-        return result;
-      }
-      int open = roundStart + "ROUND".length();
-      int close = findMatchingParen(result, open);
-      if (close < 0) {
-        return result;
-      }
-      int comma = findTopLevelComma(result, open + 1, close);
-      if (comma < 0) {
-        return result;
-      }
-      String inner = result.substring(open + 1, comma);
-      result = result.substring(0, roundStart) + "(" + inner + ")" + result.substring(close + 1);
-    }
-  }
-
-  private int indexOfIgnoreCase(String text, String needle) {
-    return text == null ? -1
-        : text.toLowerCase(java.util.Locale.ROOT).indexOf(needle.toLowerCase(java.util.Locale.ROOT));
-  }
-
-  private int findMatchingParen(String text, int openIndex) {
-    int depth = 0;
-    for (int i = openIndex; i < text.length(); i++) {
-      char c = text.charAt(i);
-      if (c == '(') {
-        depth++;
-      } else if (c == ')') {
-        depth--;
-        if (depth == 0) {
-          return i;
-        }
-      }
-    }
-    return -1;
-  }
-
-  private int findTopLevelComma(String text, int startInclusive, int endExclusive) {
-    int depth = 0;
-    for (int i = startInclusive; i < endExclusive; i++) {
-      char c = text.charAt(i);
-      if (c == '(') {
-        depth++;
-      } else if (c == ')') {
-        depth--;
-      } else if (c == ',' && depth == 0) {
-        return i;
-      }
-    }
-    return -1;
   }
 
   private String replaceLocalCellRefs(String formula, Map<String, Integer> columns) {

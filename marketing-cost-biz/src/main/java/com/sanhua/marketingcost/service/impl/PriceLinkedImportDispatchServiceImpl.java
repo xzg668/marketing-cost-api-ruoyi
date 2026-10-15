@@ -19,6 +19,7 @@ import org.springframework.util.StringUtils;
 @Service
 public class PriceLinkedImportDispatchServiceImpl implements PriceLinkedImportDispatchService {
 
+  private final OriginalLinkedImportService originals;
   private final TechnicalPriceCorrectionService corrections;
   private final TechnicalPriceCorrectionWorkbook workbook;
   private final TechnicalPriceCorrectionImportService technicalImport;
@@ -37,7 +38,9 @@ public class PriceLinkedImportDispatchServiceImpl implements PriceLinkedImportDi
       TechnicalPriceCorrectionService corrections,
       TechnicalPriceCorrectionWorkbook workbook,
       TechnicalPriceCorrectionImportService technicalImport,
-      TechnicalDataActorProvider actors) {
+      TechnicalDataActorProvider actors,
+      OriginalLinkedImportService originals) {
+    this.originals = originals;
     this.corrections = corrections;
     this.workbook = workbook;
     this.technicalImport = technicalImport;
@@ -51,6 +54,11 @@ public class PriceLinkedImportDispatchServiceImpl implements PriceLinkedImportDi
   @Transactional(readOnly = true)
   public PriceLinkedType2ImportPreviewResponse preview(PriceLinkedImportCommand command) {
     byte[] bytes = requireBytes(command);
+    if (command.getTechnicalContext() == null) {
+      if (workbook.hasAssociation(bytes))
+        throw new IllegalArgumentException("补录修正文件必须从原产品核算页进入，并携带审批上下文");
+      return originals.preview(command);
+    }
     PriceLinkedWorkbookDetectionResult detection =
         detector.detect(new ByteArrayInputStream(bytes), command.getSourceFileName());
     command = prepare(command, detection, false);
@@ -62,8 +70,9 @@ public class PriceLinkedImportDispatchServiceImpl implements PriceLinkedImportDi
       return response;
     }
     PriceLinkedType2ImportPreviewResponse response =
-        detectionOnlyPreview(detection, PriceLinkedImportFileDigest.sha256(bytes));
-    response.setCanConfirm(detection.getType() == PriceLinkedWorkbookType.STANDARD);
+        technicalPreviewMetadata(detection, PriceLinkedImportFileDigest.sha256(bytes));
+    response.setCanConfirm(
+        command.getTechnicalPlan().rows().stream().anyMatch(row -> row.issues().isEmpty()));
     if (!response.isCanConfirm()) {
       response
           .getErrors()
@@ -77,25 +86,18 @@ public class PriceLinkedImportDispatchServiceImpl implements PriceLinkedImportDi
   @Transactional(rollbackFor = Exception.class)
   public PriceItemImportResponse confirm(PriceLinkedImportCommand command) {
     byte[] bytes = requireBytes(command);
+    if (command.getTechnicalContext() == null) {
+      if (workbook.hasAssociation(bytes))
+        throw new IllegalArgumentException("补录修正文件必须从原产品核算页进入，并携带审批上下文");
+      return originals.confirm(command);
+    }
     String actualSha256 = PriceLinkedImportFileDigest.sha256(bytes);
     PriceLinkedWorkbookDetectionResult detection =
         detector.detect(new ByteArrayInputStream(bytes), command.getSourceFileName());
     command = prepare(command, detection, true);
-    if (command.getTechnicalPlan() != null)
-      requireMatchingPreviewHash(command.getExpectedPreviewSha256(), actualSha256);
+    requireMatchingPreviewHash(command.getExpectedPreviewSha256(), actualSha256);
     if (detection.getType() == PriceLinkedWorkbookType.STANDARD) {
-      PriceItemImportResponse response =
-          command.getTechnicalPlan() == null
-              ? standardImportService.importExcel(
-                  new ByteArrayInputStream(bytes),
-                  command.getPricingMonth(),
-                  command.isOverwriteManual(),
-                  command.getBusinessUnitType(),
-                  command.getSourceFileName(),
-                  command.getEffectiveStrategy(),
-                  command.getFormulaEffectiveDate(),
-                  command.getFactorPriceConflictStrategy())
-              : standardImportService.importExcel(command);
+      PriceItemImportResponse response = standardImportService.importExcel(command);
       response.setTemplateType(PriceLinkedWorkbookType.STANDARD.name());
       response.setFileSha256(actualSha256);
       response.setImportDataSheetName(first(detection.getStandardCandidateSheets()));
@@ -120,11 +122,6 @@ public class PriceLinkedImportDispatchServiceImpl implements PriceLinkedImportDi
       PriceLinkedImportCommand command,
       PriceLinkedWorkbookDetectionResult detection,
       boolean lock) {
-    if (command.getTechnicalContext() == null) {
-      if (workbook.hasAssociation(command.getFileBytes()))
-        throw new IllegalArgumentException("补录修正文件必须从原产品核算页进入，并携带审批上下文");
-      return command;
-    }
     if (detection.getType() != PriceLinkedWorkbookType.STANDARD
         && detection.getType() != PriceLinkedWorkbookType.TYPE2)
       throw new IllegalArgumentException("补录文件模板无法识别，请核对表头");
@@ -171,7 +168,7 @@ public class PriceLinkedImportDispatchServiceImpl implements PriceLinkedImportDi
         response.isCanConfirm() && plan.rows().stream().anyMatch(row -> row.issues().isEmpty()));
   }
 
-  private PriceLinkedType2ImportPreviewResponse detectionOnlyPreview(
+  private PriceLinkedType2ImportPreviewResponse technicalPreviewMetadata(
       PriceLinkedWorkbookDetectionResult detection, String sha256) {
     PriceLinkedType2ImportPreviewResponse response = new PriceLinkedType2ImportPreviewResponse();
     response.setFileSha256(sha256);

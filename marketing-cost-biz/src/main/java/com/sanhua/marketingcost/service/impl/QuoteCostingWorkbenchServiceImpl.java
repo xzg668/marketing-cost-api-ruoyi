@@ -14,8 +14,8 @@ import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchRollupComp
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchTabResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkflowStatusResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareSummaryResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionResponse;
+import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionSummaryResponse;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
@@ -23,6 +23,8 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
+import com.sanhua.marketingcost.enums.QuoteBomStatusCode;
+import com.sanhua.marketingcost.enums.QuoteCostRunStatus;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
@@ -30,21 +32,18 @@ import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostingWorkbenchSummaryMapper;
-import com.sanhua.marketingcost.enums.QuoteBomStatusCode;
-import com.sanhua.marketingcost.enums.QuoteCostRunStatus;
-import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
-import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
+import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
+import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.QuoteEffectiveBomCostingService;
 import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
 import com.sanhua.marketingcost.service.QuoteProductBomPreparationService;
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingCostingFallbackService;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
-import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingCostingFallbackService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -162,15 +161,18 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       electronic = electronicDrawingFallbackService.attempt(form, item, periodMonth);
     }
     if (electronic.attempted()) {
-      drawingDraftReady = com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowStage.COMPOSED.equals(electronic.stage());
+      drawingDraftReady =
+          com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowStage.COMPOSED
+              .equals(electronic.stage());
       if (electronic.costingCanContinue()) {
-        checked = quoteBomStatusService.checkItemForCostRun(
-            form.getOaNo(), item.getId(), periodMonth);
+        checked =
+            quoteBomStatusService.checkItemForCostRun(form.getOaNo(), item.getId(), periodMonth);
       }
     }
     if (drawingDraftReady) {
       // 草稿只形成计价对象/缺价检查；正式核算仍由有效技术资料门槛拦截。
-      QuoteBomCostingBuildResponse build = effectiveBomCostingService.prepareCurrent(form.getOaNo(), item.getId());
+      QuoteBomCostingBuildResponse build =
+          effectiveBomCostingService.prepareCurrent(form.getOaNo(), item.getId());
       generated = true;
       buildBatchId = build.buildBatchId();
     } else if (isCostReadyBomStatus(checked == null ? null : checked.getBomStatus())) {
@@ -207,13 +209,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       String buildBatchId,
       QuoteCostingWorkspace workspace) {
     QuotePriceTypeRecognitionSummaryResponse latestPriceTypeRecognition =
-        automaticPriceTypeSummary(
-            form,
-            item,
-            productCode,
-            periodMonth,
-            rows,
-            workspace);
+        automaticPriceTypeSummary(form, item, productCode, periodMonth, rows, workspace);
     QuotePricePrepareSummaryResponse latestPricePrepare =
         currentPricePrepare(form, item, productCode, periodMonth, workspace);
     QuoteCostRunSummaryResponse latestCostRun =
@@ -221,11 +217,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
             form.getOaNo(), item.getId(), productCode, periodMonth);
     QuoteCostingWorkflowStatusResponse workflowStatus =
         workflowStatus(
-            rows,
-            workspace,
-            latestPriceTypeRecognition,
-            latestPricePrepare,
-            latestCostRun);
+            rows, workspace, latestPriceTypeRecognition, latestPricePrepare, latestCostRun);
 
     QuoteCostingWorkbenchResponse response = new QuoteCostingWorkbenchResponse();
     response.setHeader(toHeader(form, periodMonth));
@@ -263,9 +255,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
         form.getOaNo(), item.getId(), productCode, periodMonth);
   }
 
-  /**
-   * 第三步直接读取当前 BOM 对应的价格类型路由，不生成 OA 价格类型确认批次。
-   */
+  /** 第三步直接读取当前 BOM 对应的价格类型路由，不生成 OA 价格类型确认批次。 */
   private QuotePriceTypeRecognitionSummaryResponse automaticPriceTypeSummary(
       OaForm form,
       OaFormItem item,
@@ -289,13 +279,12 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     response.setProductCode(productCode);
     response.setPeriodMonth(periodMonth);
     response.setBomBuildBatchId(recognition.getBomBuildBatchId());
-    response.setTotalCount(summary.getReadyForPricePrepareCount());
-    response.setConfirmedCount(summary.getConfiguredTypeCount());
-    response.setGapCount(summary.getMissingTypeCount());
-    response.setReferencePriceCount(summary.getReferencePriceCount());
-    boolean ready = !positive(summary.getMissingTypeCount());
-    response.setStatus(ready ? "AUTO_READY" : "MISSING_PRICE_TYPE");
-    response.setMessage(ready ? "价格类型已自动识别" : "存在缺失价格类型");
+    response.setTotalCount(summary.getPriceableCount());
+    response.setConfirmedCount(summary.getCandidateSourceCount());
+    response.setGapCount(summary.getMissingSourceCount());
+    response.setStatus("AUTO_READY");
+    response.setMessage(positive(summary.getMissingSourceCount())
+        ? "部分物料暂无候选来源，将在价格准备时按顺序检查" : "候选取价来源已识别");
 
     return response;
   }
@@ -397,6 +386,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     response.setGoldPrice(form.getGoldPrice());
     response.setSus304Price(form.getSus304Price());
     response.setSus316lPrice(form.getSus316lPrice());
+    response.setBoardTender(form.getBoardTender());
     response.setOtherMaterial(form.getOtherMaterial());
     response.setBaseShipping(form.getBaseShipping());
     response.setCalcStatus(form.getCalcStatus());
@@ -495,16 +485,14 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     for (BomCostingRow row : sourceRows) {
       QuoteCostingWorkbenchBomRowResponse response = toBomRow(row);
       response.setRollupComponents(
-          row.getId() == null
-              ? List.of()
-              : componentsByRowId.getOrDefault(row.getId(), List.of()));
+          row.getId() == null ? List.of() : componentsByRowId.getOrDefault(row.getId(), List.of()));
       result.add(response);
     }
     return result;
   }
 
-  private Map<Long, List<QuoteCostingWorkbenchRollupComponentResponse>>
-      loadRollupDisplayComponents(List<BomCostingRow> rows) {
+  private Map<Long, List<QuoteCostingWorkbenchRollupComponentResponse>> loadRollupDisplayComponents(
+      List<BomCostingRow> rows) {
     List<Long> rowIds =
         rows.stream()
             .filter(row -> "SPECIAL_ROLLUP_PARENT".equals(row.getSettlementRowType()))
@@ -514,8 +502,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     if (rowIds.isEmpty()) {
       return Map.of();
     }
-    List<BomCostingRowSubRef> refs =
-        bomCostingRowSubRefMapper.selectSpecialRollupChildren(rowIds);
+    List<BomCostingRowSubRef> refs = bomCostingRowSubRefMapper.selectSpecialRollupChildren(rowIds);
     if (refs == null || refs.isEmpty()) {
       return Map.of();
     }
@@ -557,8 +544,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       List<MaterialMasterRaw> archives =
           materialMasterRawMapper.selectByLatestBatchAndCodes(
               entry.getValue(), null, entry.getKey());
-      for (MaterialMasterRaw archive :
-          archives == null ? List.<MaterialMasterRaw>of() : archives) {
+      for (MaterialMasterRaw archive : archives == null ? List.<MaterialMasterRaw>of() : archives) {
         String code = trimToNull(archive == null ? null : archive.getMaterialCode());
         if (code != null) {
           archiveByKey.put(materialArchiveKey(entry.getKey(), code), archive);
@@ -566,8 +552,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       }
     }
 
-    Map<Long, List<QuoteCostingWorkbenchRollupComponentResponse>> result =
-        new LinkedHashMap<>();
+    Map<Long, List<QuoteCostingWorkbenchRollupComponentResponse>> result = new LinkedHashMap<>();
     for (Map.Entry<Long, LinkedHashMap<String, RollupDisplayComponentTotal>> entry :
         totalsByRow.entrySet()) {
       BomCostingRow parent = rowById.get(entry.getKey());
@@ -575,8 +560,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
           trimToNull(parent == null ? null : parent.getMaterialOrganizationCode());
       MaterialMasterRaw parentArchive =
           archiveByKey.get(
-              materialArchiveKey(
-                  organization, parent == null ? null : parent.getMaterialCode()));
+              materialArchiveKey(organization, parent == null ? null : parent.getMaterialCode()));
       List<QuoteCostingWorkbenchRollupComponentResponse> components = new ArrayList<>();
       for (RollupDisplayComponentTotal total : entry.getValue().values()) {
         MaterialMasterRaw childArchive =
@@ -586,20 +570,16 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
         component.setChildCode(total.childCode);
         component.setChildName(
             firstText(
-                total.childName,
-                childArchive == null ? null : childArchive.getMaterialName()));
+                total.childName, childArchive == null ? null : childArchive.getMaterialName()));
         component.setChildSpec(
             childArchive == null ? null : trimToNull(childArchive.getMaterialSpec()));
         component.setChildModel(
             firstText(
                 childArchive == null ? null : childArchive.getMaterialModel(),
                 childArchive == null ? null : childArchive.getDrawingNo()));
-        component.setChildUnit(
-            childArchive == null ? null : trimToNull(childArchive.getUnit()));
+        component.setChildUnit(childArchive == null ? null : trimToNull(childArchive.getUnit()));
         component.setChildMaterialAttribute(
-            childArchive == null
-                ? null
-                : trimToNull(childArchive.getGlobalSeg4Material()));
+            childArchive == null ? null : trimToNull(childArchive.getGlobalSeg4Material()));
         component.setChildShapeAttribute(
             childArchive == null ? null : trimToNull(childArchive.getShapeAttr()));
         component.setParentSpec(
@@ -700,8 +680,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       QuoteCostRunSummaryResponse costRun) {
     String quoteBomStatus = quoteBomStatus(rows, workspace);
     String priceTypeStatus = priceTypeStatus(quoteBomStatus, priceTypeRecognition);
-    String pricePrepareStatus =
-        pricePrepareStatus(priceTypeStatus, workspace, pricePrepare);
+    String pricePrepareStatus = pricePrepareStatus(priceTypeStatus, workspace, pricePrepare);
     String costRunStatus = costRunStatus(pricePrepareStatus, pricePrepare, costRun);
 
     QuoteCostingWorkflowStatusResponse response = new QuoteCostingWorkflowStatusResponse();
@@ -715,8 +694,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     return response;
   }
 
-  private String quoteBomStatus(
-      List<BomCostingRow> rows, QuoteCostingWorkspace workspace) {
+  private String quoteBomStatus(List<BomCostingRow> rows, QuoteCostingWorkspace workspace) {
     if (workspace != null && "STALE".equalsIgnoreCase(trimToNull(workspace.getWorkspaceStatus()))) {
       return TAB_STALE;
     }
@@ -740,11 +718,6 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     }
     if ("STALE".equalsIgnoreCase(trimToNull(confirmation.getStatus()))) {
       return TAB_STALE;
-    }
-    if (positive(confirmation.getGapCount())
-        || "MISSING_TYPE".equalsIgnoreCase(trimToNull(confirmation.getStatus()))
-        || "MISSING_PRICE_TYPE".equalsIgnoreCase(trimToNull(confirmation.getStatus()))) {
-      return TAB_PARTIAL;
     }
     if ("AUTO_READY".equalsIgnoreCase(trimToNull(confirmation.getStatus()))
         || "CONFIRMED".equalsIgnoreCase(trimToNull(confirmation.getStatus()))) {
@@ -837,7 +810,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     tabs.add(
         tab(
             "PRICE_TYPE_CONFIRMATION",
-            "价格类型识别",
+            "取价来源",
             status.getPriceTypeConfirmationStatus(),
             blockedReason(status.getPriceTypeConfirmationStatus(), "请先生成报价物料")));
     tabs.add(
@@ -845,7 +818,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
             "PRICE_PREPARE",
             "价格准备",
             status.getPricePrepareStatus(),
-            blockedReason(status.getPricePrepareStatus(), "请先补齐价格类型")));
+            blockedReason(status.getPricePrepareStatus(), "请先生成报价物料")));
     tabs.add(
         tab(
             "COST_RUN",
@@ -884,5 +857,4 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   private static String trimToNull(String value) {
     return StringUtils.hasText(value) ? value.trim() : null;
   }
-
 }

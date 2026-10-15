@@ -15,10 +15,16 @@ import java.util.List;
  * </ul>
  */
 public class PriceItemImportResponse {
+  @lombok.Getter @lombok.Setter private String effectivePriceStatus;
+  @lombok.Getter @lombok.Setter private int effectivePriceGeneratedCount;
+  @lombok.Getter @lombok.Setter private int effectivePriceWaitingCount;
 
   private List<com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportResult> technicalResults = new ArrayList<>();
   public List<com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportResult> getTechnicalResults() { return technicalResults; }
   public void setTechnicalResults(List<com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportResult> values) { technicalResults=values; }
+  private List<Long> sourceUploadBatchIds = List.of();
+  public List<Long> getSourceUploadBatchIds() { return sourceUploadBatchIds; }
+  public void setSourceUploadBatchIds(List<Long> values) { sourceUploadBatchIds=List.copyOf(values); }
   private String batchId;
   private Long factorUploadBatchId;
   private String fileSha256;

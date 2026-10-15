@@ -4,6 +4,7 @@ import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstant
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
@@ -115,6 +116,23 @@ public class GlobalExceptionHandler {
         log.warn("业务参数非法: {}", ex.getMessage());
         return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(),
                 ex.getMessage() == null ? "参数非法" : ex.getMessage());
+    }
+
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public CommonResult<Void> handleOptimisticLock(OptimisticLockingFailureException ex) {
+        log.warn("编辑版本冲突: {}", ex.getMessage());
+        return CommonResult.error(HttpStatus.CONFLICT.value(),
+                ex.getMessage() == null ? "数据已被修改，请刷新后重试" : ex.getMessage());
+    }
+
+    @ExceptionHandler(com.sanhua.marketingcost.service.EffectiveTechnicalDataException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public CommonResult<Void> handleTechnicalData(com.sanhua.marketingcost.service.EffectiveTechnicalDataException ex) {
+        log.warn("核算资料未就绪: itemId={}, month={}, code={}",
+                ex.oaFormItemId(), ex.accountingMonth(), ex.errorCode());
+        return CommonResult.error(GlobalErrorCodeConstants.BAD_REQUEST.getCode(),
+                ex.errorCode() + ": " + ex.getMessage());
     }
 
     @ExceptionHandler(Exception.class)

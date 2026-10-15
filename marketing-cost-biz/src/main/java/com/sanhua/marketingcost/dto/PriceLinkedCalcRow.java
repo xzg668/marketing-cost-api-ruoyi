@@ -24,7 +24,6 @@ public class PriceLinkedCalcRow {
   private String supplierName;
   private String pricingMonth;
   private String calcScene;
-  private Long adjustBatchId;
   private String factorSource;
   private String shapeAttr;
   private BigDecimal bomQty;
@@ -108,14 +107,6 @@ public class PriceLinkedCalcRow {
 
   public void setCalcScene(String calcScene) {
     this.calcScene = calcScene;
-  }
-
-  public Long getAdjustBatchId() {
-    return adjustBatchId;
-  }
-
-  public void setAdjustBatchId(Long adjustBatchId) {
-    this.adjustBatchId = adjustBatchId;
   }
 
   public String getFactorSource() {

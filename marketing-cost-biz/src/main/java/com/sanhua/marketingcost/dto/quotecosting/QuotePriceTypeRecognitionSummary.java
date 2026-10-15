@@ -8,8 +8,7 @@ public class QuotePriceTypeRecognitionSummary {
   private Integer normalCount;
   private Integer makePartCount;
   private Integer packageComponentCount;
-  private Integer missingTypeCount;
-  private Integer configuredTypeCount;
-  private Integer referencePriceCount;
-  private Integer readyForPricePrepareCount;
+  private Integer missingSourceCount;
+  private Integer candidateSourceCount;
+  private Integer priceableCount;
 }

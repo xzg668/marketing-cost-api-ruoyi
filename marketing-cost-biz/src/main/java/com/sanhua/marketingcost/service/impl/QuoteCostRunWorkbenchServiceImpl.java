@@ -9,8 +9,8 @@ import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareReadinessResult;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunTrialRequest;
-import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunWorkbenchResponse.CostRunVersionItemResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunWorkbenchResponse;
+import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunWorkbenchResponse.CostRunVersionItemResponse;
 import com.sanhua.marketingcost.entity.CostRunCostItem;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
 import com.sanhua.marketingcost.entity.OaForm;
@@ -24,13 +24,13 @@ import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
-import com.sanhua.marketingcost.service.CostRunResultService;
 import com.sanhua.marketingcost.service.CostInputRevisionService;
+import com.sanhua.marketingcost.service.CostRunResultService;
 import com.sanhua.marketingcost.service.PricePrepareReadinessService;
-import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
 import com.sanhua.marketingcost.service.QuoteCostRunWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
+import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
@@ -50,8 +50,8 @@ import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
-import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -132,7 +132,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
 
   @Override
   @Transactional(readOnly = true)
-  public QuoteCostRunWorkbenchResponse getCostRun(String oaNo, Long oaFormItemId, String periodMonth) {
+  public QuoteCostRunWorkbenchResponse getCostRun(
+      String oaNo, Long oaFormItemId, String periodMonth) {
     return getCostRun(oaNo, oaFormItemId, periodMonth, null);
   }
 
@@ -147,7 +148,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     QuoteCostRunSummaryResponse latestTrial = latestInProgressVersion(scope);
     QuoteCostRunSummaryResponse latestConfirmed = latestSuccessfulVersion(scope);
     QuoteCostRunWorkbenchResponse response = baseResponse(scope, latestTrial, latestConfirmed);
-    QuoteCostRunSummaryResponse displayVersion = latestTrial != null ? latestTrial : latestConfirmed;
+    QuoteCostRunSummaryResponse displayVersion =
+        latestTrial != null ? latestTrial : latestConfirmed;
     response.setCurrentDisplayVersion(displayVersion);
     if (displayVersion != null) {
       fillResultRows(response, displayVersion.getId());
@@ -159,8 +161,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
       String oaNo, Long oaFormItemId, Long versionId) {
     Scope accessScope = requireScope(oaNo, oaFormItemId, null);
     QuoteCostRunVersion selected = requireOwnedVersion(accessScope, versionId, null);
-    String pricingMonth =
-        CostPricingPeriodUtils.normalizePricingMonth(selected.getPricingMonth());
+    String pricingMonth = CostPricingPeriodUtils.normalizePricingMonth(selected.getPricingMonth());
     Scope scope =
         new Scope(
             accessScope.form(),
@@ -179,13 +180,13 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   }
 
   @Override
-  @Transactional(rollbackFor = Exception.class)
+  @Transactional(
+      rollbackFor = Exception.class,
+      isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
   public QuoteCostRunWorkbenchResponse runToSuccess(
-      String oaNo,
-      Long oaFormItemId,
-      QuoteCostRunTrialRequest request,
-      String completedBy) {
-    Scope scope = requireScope(oaNo, oaFormItemId, request == null ? null : request.getPeriodMonth());
+      String oaNo, Long oaFormItemId, QuoteCostRunTrialRequest request, String completedBy) {
+    request = request == null ? new QuoteCostRunTrialRequest() : request;
+    Scope scope = requireScope(oaNo, oaFormItemId, request.getPeriodMonth());
     QuoteCuAdjustmentCalcResult calculation = calculate(scope, request, true);
     QuoteCostRunVersion version = calculation.version();
     completeVersion(
@@ -203,12 +204,19 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
       Scope scope, QuoteCostRunTrialRequest request, boolean automaticCompletion) {
     PricePrepareReadinessResult readiness =
         pricePrepareReadinessService.check(
-            scope.oaNo(),
-            scope.oaFormItemId(),
-            scope.productCode(),
-            scope.periodMonth());
+            scope.oaNo(), scope.oaFormItemId(), scope.productCode(), scope.periodMonth());
     requireReady(readiness);
     String pricePrepareNo = requireCurrentPricePrepareNo(readiness, request);
+    if (inputRevisionService != null) {
+      if (!StringUtils.hasText(readiness.getSourceRevision()))
+        throw new QuoteIngestException("最终价格缺少输入修订，请重新生成最终价格");
+      resolveAndVerifySourceRevision(scope, readiness.getSourceRevision(), scope.item());
+      if (request != null
+          && StringUtils.hasText(request.getSourceRevision())
+          && !readiness.getSourceRevision().equals(request.getSourceRevision()))
+        throw new org.springframework.dao.ConcurrencyFailureException("请求与最终价格的输入修订不一致，请重新发起核算");
+      request.setSourceRevision(readiness.getSourceRevision());
+    }
     return cuAdjustmentCalcService.calculate(
         new QuoteCuAdjustmentCalcRequest(
             scope.form(),
@@ -256,11 +264,11 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
             .find(scope.oaFormItemId(), scope.periodMonth())
             .orElseThrow(() -> new QuoteIngestException("当前核算工作区不存在，成本版本不能完成"));
     if (!Objects.equals(
-        trimToNull(version.getOaPricePrepareNo()),
-        trimToNull(workspace.getCurrentPrepareNo()))) {
+        trimToNull(version.getOaPricePrepareNo()), trimToNull(workspace.getCurrentPrepareNo()))) {
       throw new QuoteIngestException("最终价格版本已更新，本次成本结果已回滚，请重新核算");
     }
-    String sourceRevision = resolveAndVerifySourceRevision(scope, expectedSourceRevision);
+    String sourceRevision =
+        resolveAndVerifySourceRevision(scope, expectedSourceRevision, lockedItem);
     DataQuality dataQuality = requireCompleteVersionResult(version);
 
     LocalDateTime now = LocalDateTime.now();
@@ -288,7 +296,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
       throw new QuoteIngestException("成本版本已失效或状态已变化，请重新核算");
     }
 
-    movePreviousCurrentVersionToHistory(scope, lockedItem.getConfirmedCostVersionId(), version.getId());
+    movePreviousCurrentVersionToHistory(
+        scope, lockedItem.getConfirmedCostVersionId(), version.getId());
     markConfirmedCostRun(scope, version.getId(), now);
     markWorkspaceSuccess(
         workspace, version.getId(), inputFingerprint, sourceRevision, dataQuality, now);
@@ -328,9 +337,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
             historyPatch,
             Wrappers.lambdaUpdate(QuoteCostRunVersion.class)
                 .eq(QuoteCostRunVersion::getId, previousVersionId)
-                .in(
-                    QuoteCostRunVersion::getStatus,
-                    List.of(STATUS_SUCCESS, STATUS_CONFIRMED)));
+                .in(QuoteCostRunVersion::getStatus, List.of(STATUS_SUCCESS, STATUS_CONFIRMED)));
     if (historyCount != 1) {
       throw new QuoteIngestException("原当前成功版本已变化，本次核算未切换");
     }
@@ -362,8 +369,10 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
         warnings.add(firstText(cost.getCostCode(), cost.getCostName(), "未知费用项") + " 金额为空");
       }
       if (isQualityWarningRemark(cost.getRemark())) {
-        warnings.add(firstText(cost.getCostCode(), cost.getCostName(), "未知费用项")
-            + "：" + cost.getRemark().trim());
+        warnings.add(
+            firstText(cost.getCostCode(), cost.getCostName(), "未知费用项")
+                + "："
+                + cost.getRemark().trim());
       }
     }
     for (CostRunPartItem part : parts) {
@@ -371,15 +380,17 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
         warnings.add(firstText(part.getPartCode(), part.getPartName(), "未知部品") + " 金额为空");
       }
       if (isQualityWarningRemark(part.getRemark())) {
-        warnings.add(firstText(part.getPartCode(), part.getPartName(), "未知部品")
-            + "：" + part.getRemark().trim());
+        warnings.add(
+            firstText(part.getPartCode(), part.getPartName(), "未知部品")
+                + "："
+                + part.getRemark().trim());
       }
     }
-    String summary = warnings.isEmpty()
-        ? "成本汇总、部品明细和费用明细完整"
-        : truncateQualitySummary(String.join("；", warnings));
-    return new DataQuality(
-        warnings.isEmpty() ? "COMPLETE" : "WARNING", warnings.size(), summary);
+    String summary =
+        warnings.isEmpty()
+            ? "成本汇总、部品明细和费用明细完整"
+            : truncateQualitySummary(String.join("；", warnings));
+    return new DataQuality(warnings.isEmpty() ? "COMPLETE" : "WARNING", warnings.size(), summary);
   }
 
   private boolean isQualityWarningRemark(String remark) {
@@ -388,32 +399,26 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     }
     String text = remark.trim();
     String riskText = NEGATED_HISTORICAL_PRICE_PATTERN.matcher(text).replaceAll("");
-    return List.of(
-            "缺失",
-            "缺少",
-            "失败",
-            "异常",
-            "为空",
-            "未找到",
-            "未配置",
-            "沿用历史",
-            "已过期",
-            "不完整",
-            "请财务关注",
-            "警告")
+    return List.of("缺失", "缺少", "失败", "异常", "为空", "未找到", "未配置", "沿用历史", "已过期", "不完整", "请财务关注", "警告")
         .stream()
         .anyMatch(riskText::contains);
   }
 
-  private String resolveAndVerifySourceRevision(Scope scope, String expectedSourceRevision) {
+  private String resolveAndVerifySourceRevision(
+      Scope scope, String expectedSourceRevision, OaFormItem currentItem) {
     if (inputRevisionService == null) {
       return trimToNull(expectedSourceRevision);
     }
-    String current = inputRevisionService.currentRevision(
-        scope.form(), scope.item(), scope.periodMonth());
+    OaForm currentForm =
+        oaFormMapper.selectOne(
+            Wrappers.<OaForm>lambdaQuery().eq(OaForm::getId, scope.form().getId()));
+    if (currentForm == null) throw new QuoteIngestException("报价表头已不存在，成本不能完成");
+    String current =
+        inputRevisionService.currentRevision(currentForm, currentItem, scope.periodMonth());
     if (StringUtils.hasText(expectedSourceRevision)
         && !Objects.equals(expectedSourceRevision.trim(), current)) {
-      throw new QuoteIngestException("核算期间上游业务输入已变化，本次结果已回滚，请重新发起核算");
+      throw new org.springframework.dao.ConcurrencyFailureException(
+          "核算期间上游业务输入已变化，本次结果已回滚，请重新发起核算");
     }
     return current;
   }
@@ -540,10 +545,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   private List<String> readinessBlockingReasons(Scope scope) {
     PricePrepareReadinessResult readiness =
         pricePrepareReadinessService.check(
-            scope.oaNo(),
-            scope.oaFormItemId(),
-            scope.productCode(),
-            scope.periodMonth());
+            scope.oaNo(), scope.oaFormItemId(), scope.productCode(), scope.periodMonth());
     if (isReady(readiness)) {
       return List.of();
     }
@@ -573,8 +575,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     if (currentPrepareNo == null) {
       throw new QuoteIngestException("最终价格快照不存在，请先生成最终价格");
     }
-    String requestedPrepareNo =
-        trimToNull(request == null ? null : request.getPricePrepareNo());
+    String requestedPrepareNo = trimToNull(request == null ? null : request.getPricePrepareNo());
     if (requestedPrepareNo != null && !currentPrepareNo.equals(requestedPrepareNo)) {
       throw new QuoteIngestException("最终价格版本已更新，请刷新页面后重新开始核算");
     }
@@ -617,8 +618,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
         StringUtils.hasText(periodMonth)
             ? CostPricingPeriodUtils.requireCurrentPricingMonth(periodMonth)
             : CostPricingPeriodUtils.currentPricingMonth();
-    return new Scope(
-        form, item, oaNoValue, oaFormItemId, productCode, period, currentBusinessUnit);
+    return new Scope(form, item, oaNoValue, oaFormItemId, productCode, period, currentBusinessUnit);
   }
 
   private String currentBusinessUnit() {
@@ -629,8 +629,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     return value.trim();
   }
 
-  private QuoteCostRunVersion requireOwnedVersion(
-      Scope scope, Long versionId, String costRunNo) {
+  private QuoteCostRunVersion requireOwnedVersion(Scope scope, Long versionId, String costRunNo) {
     QuoteCostRunVersion version;
     if (versionId != null) {
       if (versionId <= 0) {
@@ -723,7 +722,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     item.setVersionNo(version.getVersionNo());
     item.setDisplayVersionNo(firstText(version.getVersionNo(), version.getCostRunNo()));
     item.setStatus(version.getStatus());
-    item.setDisplayStatus(displayVersionStatus(version.getStatus(), version.getId(), confirmedVersionId));
+    item.setDisplayStatus(
+        displayVersionStatus(version.getStatus(), version.getId(), confirmedVersionId));
     item.setTotalCost(version.getTotalCost());
     item.setPartItemCount(version.getPartItemCount());
     item.setCostItemCount(version.getCostItemCount());
@@ -735,7 +735,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
         !QuoteCostRunStatus.isInProgress(version.getStatus())
             && StringUtils.hasText(version.getCostRunNo()));
     item.setCurrentConfirmed(version.getId() != null && version.getId().equals(confirmedVersionId));
-    item.setStale(!QuoteCostRunStatus.isInProgress(version.getStatus()) && !item.isCurrentConfirmed());
+    item.setStale(
+        !QuoteCostRunStatus.isInProgress(version.getStatus()) && !item.isCurrentConfirmed());
     return item;
   }
 
@@ -755,7 +756,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     return firstText(status, "-");
   }
 
-  private int compareVersionItem(CostRunVersionItemResponse left, CostRunVersionItemResponse right) {
+  private int compareVersionItem(
+      CostRunVersionItemResponse left, CostRunVersionItemResponse right) {
     int rank = Integer.compare(versionSortRank(left), versionSortRank(right));
     if (rank != 0) {
       return rank;
@@ -922,7 +924,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     row = writeSummaryRow(sheet, row, "OA锁价材料费", version.getOaMaterialCost());
     row = writeSummaryRow(sheet, row, "Cu材料费差额", version.getCuMaterialAdjustment());
     row = writeSummaryRow(sheet, row, "财务基准不含税总成本", version.getTotalCost());
-    row = writeSummaryRow(sheet, row, "最终报价", version.getFinalQuoteAmount());
+    row = writeSummaryRow(sheet, row, "最终成本（不含税）", version.getFinalQuoteAmount());
     row = writeSummaryRow(sheet, row, "OA价格准备批次", version.getOaPricePrepareNo());
     writeSummaryRow(sheet, row, "财务价格准备批次", version.getFinancePricePrepareNo());
     autoSize(sheet, 2);
@@ -938,16 +940,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   private void writePartSheet(
       Workbook workbook, CellStyle headerStyle, List<CostRunPartItem> parts) {
     Sheet sheet = workbook.createSheet("成本部品");
-    writeHeader(
-        sheet.createRow(0),
-        headerStyle,
-        "部品料号",
-        "部品名称",
-        "数量",
-        "单价",
-        "金额",
-        "价格来源",
-        "备注");
+    writeHeader(sheet.createRow(0), headerStyle, "部品料号", "部品名称", "数量", "单价", "金额", "价格来源", "备注");
     int rowIndex = 1;
     for (CostRunPartItem part : parts) {
       Row row = sheet.createRow(rowIndex++);
@@ -965,16 +958,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   private void writeCostSheet(
       Workbook workbook, CellStyle headerStyle, List<CostRunCostItem> costs) {
     Sheet sheet = workbook.createSheet("成本项目");
-    writeHeader(
-        sheet.createRow(0),
-        headerStyle,
-        "成本编码",
-        "成本名称",
-        "基数",
-        "费率",
-        "金额",
-        "分类",
-        "备注");
+    writeHeader(sheet.createRow(0), headerStyle, "成本编码", "成本名称", "基数", "费率", "金额", "分类", "备注");
     int rowIndex = 1;
     for (CostRunCostItem cost : costs) {
       Row row = sheet.createRow(rowIndex++);

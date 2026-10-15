@@ -11,14 +11,31 @@ public interface TechnicalPriceSourceMapper {
 
   @Select("""
       SELECT DISTINCT kind FROM (
-        SELECT 'LINKED' kind FROM lp_price_linked_item WHERE material_code=#{code} AND source_kind='PUBLIC' AND deleted=0
-          AND pricing_month<=#{month} AND (business_unit_type=#{businessUnit} OR business_unit_type IS NULL OR business_unit_type='')
+        SELECT 'LINKED' kind FROM lp_price_linked_item WHERE material_code=#{code}
+          AND source_kind='PUBLIC' AND deleted=0 AND rule_status IN ('LEGACY','PUBLISHED')
+          AND pricing_month=#{sourceMonth} AND org_code=#{org} AND business_unit_type=#{businessUnit}
         UNION ALL
-        SELECT 'FIXED' kind FROM lp_price_fixed_item WHERE material_code=#{code} AND source_kind='PUBLIC'
-          AND source_type IN ('PURCHASE','PURCHASE_FIXED') AND (business_unit_type=#{businessUnit} OR business_unit_type IS NULL OR business_unit_type='')
-      ) p ORDER BY CASE kind WHEN 'LINKED' THEN 0 ELSE 1 END
+        SELECT 'RANGE' kind FROM lp_price_range_factor_rule WHERE material_code=#{code}
+          AND rule_status IN ('LEGACY','PUBLISHED') AND pricing_month=#{sourceMonth}
+          AND org_code=#{org} AND business_unit_type=#{businessUnit}
+        UNION ALL
+        SELECT 'RANGE' kind FROM lp_price_range_item WHERE material_code=#{code}
+          AND (range_basis='QTY' OR range_basis IS NULL)
+          AND (effective_from IS NULL OR effective_from<=#{date})
+          AND org_code=#{org} AND business_unit_type=#{businessUnit}
+        UNION ALL
+        SELECT CASE WHEN source_type IN ('SETTLE','SETTLE_FIXED') THEN 'SETTLE_FIXED' ELSE 'FIXED' END kind
+          FROM lp_price_fixed_item WHERE material_code=#{code} AND source_kind='PUBLIC'
+          AND org_code=#{org} AND business_unit_type=#{businessUnit} AND (
+            (source_type IN ('PURCHASE','PURCHASE_FIXED') AND effective_from<=#{date} AND effective_to>#{date})
+            OR (source_type IN ('SETTLE','SETTLE_FIXED') AND pricing_month<=#{month}
+              AND (effective_from IS NULL OR effective_from<=#{date})))
+      ) p
       """)
-  List<String> publicKinds(@Param("code") String code, @Param("month") String month, @Param("businessUnit") String businessUnit);
+  List<String> publicKinds(@Param("code") String code, @Param("month") String month,
+      @Param("sourceMonth") String sourceMonth,
+      @Param("businessUnit") String businessUnit, @Param("org") String org,
+      @Param("date") java.time.LocalDate date);
 
   @Select("""
       SELECT p.price_type AS priceType,p.id AS recordId FROM (

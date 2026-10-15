@@ -7,8 +7,6 @@ import com.sanhua.marketingcost.dto.PriceFixedItemImportResponse;
 import com.sanhua.marketingcost.dto.PriceFixedItemUpdateRequest;
 import com.sanhua.marketingcost.entity.PriceFixedItem;
 import com.sanhua.marketingcost.mapper.PriceFixedItemMapper;
-import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
-import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService.RouteCommand;
 import com.sanhua.marketingcost.service.PriceFixedItemService;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -26,13 +24,10 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
   private static final String SOURCE_SYSTEM_EXCEL = "EXCEL";
 
   private final PriceFixedItemMapper itemMapper;
-  private final MaterialPriceTypeRouteSyncService priceTypeRouteSyncService;
 
   public PriceFixedItemServiceImpl(
-      PriceFixedItemMapper itemMapper,
-      MaterialPriceTypeRouteSyncService priceTypeRouteSyncService) {
+      PriceFixedItemMapper itemMapper) {
     this.itemMapper = itemMapper;
-    this.priceTypeRouteSyncService = priceTypeRouteSyncService;
   }
 
   @Override
@@ -45,11 +40,13 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     if (StringUtils.hasText(supplierCode)) {
       query.like(PriceFixedItem::getSupplierCode, supplierCode.trim());
     }
-    // V46：来源类型 + 结算期间精确匹配（前端 tab + 月份选择器联动）
-    if (StringUtils.hasText(sourceType)) {
-      query.eq(PriceFixedItem::getSourceType, sourceType.trim());
+    String normalizedSourceType = trimToNull(sourceType);
+    if (normalizedSourceType != null) {
+      query.eq(PriceFixedItem::getSourceType, normalizedSourceType);
     }
-    if (StringUtils.hasText(pricingMonth)) {
+    // 固定采购价按生效/失效日期管理；结算固定价仍按结算期间查询。
+    if (StringUtils.hasText(pricingMonth)
+        && !SOURCE_TYPE_PURCHASE_FIXED.equals(normalizedSourceType)) {
       query.eq(PriceFixedItem::getPricingMonth, pricingMonth.trim());
     }
     query.orderByDesc(PriceFixedItem::getId);
@@ -71,7 +68,6 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     }
     closePreviousVersions(item);
     itemMapper.insert(item);
-    syncPriceType(item);
     return item;
   }
 
@@ -89,7 +85,6 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     merge(existing, request);
     fillDefaults(existing);
     itemMapper.updateById(existing);
-    syncPriceType(existing);
     return existing;
   }
 
@@ -152,7 +147,6 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
         response.incrementUpdatedCount();
       }
       response.addItem(item);
-      syncPriceType(item);
     }
     return response;
   }
@@ -404,12 +398,11 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     if (StringUtils.hasText(item.getSpecModel())) {
       item.setSpecModel(item.getSpecModel().trim());
     }
-    // V46 默认 source_type=PURCHASE / pricing_month=2026-03（兜住前端没传的场景）
     if (!StringUtils.hasText(item.getSourceType())) {
       item.setSourceType("PURCHASE");
     }
     if (!StringUtils.hasText(item.getPricingMonth())) {
-      item.setPricingMonth("2026-03");
+      item.setPricingMonth(SOURCE_TYPE_PURCHASE_FIXED.equals(item.getSourceType()) ? "" : "2026-03");
     }
     if (item.getEffectiveFrom() == null) {
       item.setEffectiveFrom(defaultEffectiveFrom(item.getPricingMonth()));
@@ -461,22 +454,6 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     }
   }
 
-  private void syncPriceType(PriceFixedItem item) {
-    if (item == null || item.getFixedPrice() == null) {
-      return;
-    }
-    String sourceType = upperTrim(item.getSourceType());
-    boolean settle = SOURCE_TYPE_SETTLE_FIXED.equals(sourceType) || "SETTLE".equals(sourceType);
-    priceTypeRouteSyncService.sync(new RouteCommand(
-        item.getMaterialCode(),
-        item.getMaterialName(),
-        item.getSpecModel(),
-        item.getUnit(),
-        item.getBusinessUnitType(),
-        settle ? "结算固定价" : "固定价",
-        settle ? "price_settle_fixed" : "price_fixed",
-        firstText(item.getSourceSystem(), "FORMAL_FIXED")));
-  }
 
   private LocalDate defaultEffectiveFrom(String pricingMonth) {
     if (StringUtils.hasText(pricingMonth)) {

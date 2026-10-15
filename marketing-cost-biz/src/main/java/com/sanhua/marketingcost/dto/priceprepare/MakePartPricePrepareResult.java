@@ -17,6 +17,7 @@ public class MakePartPricePrepareResult {
   private String resultRefType;
   private Long resultRefId;
   private String message;
+  private String inputSnapshotJson;
   private List<Gap> gaps = new ArrayList<>();
 
   public static MakePartPricePrepareResult ready(

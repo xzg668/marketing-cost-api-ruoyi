@@ -51,6 +51,7 @@ public class PriceLinkedType2FactorIdentityReadRepositoryImpl
     }
     return factorMonthlyPriceMapper.selectList(
         Wrappers.lambdaQuery(FactorMonthlyPrice.class)
+            .eq(FactorMonthlyPrice::getSchemeCode, "LEGACY")
             .in(FactorMonthlyPrice::getFactorIdentityId, ids)
             .eq(FactorMonthlyPrice::getPriceMonth, priceMonth)
             .eq(FactorMonthlyPrice::getStatus, STATUS_ACTIVE));

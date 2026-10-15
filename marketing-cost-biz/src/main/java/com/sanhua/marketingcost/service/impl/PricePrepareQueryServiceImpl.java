@@ -33,6 +33,7 @@ import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
 import com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareQueryService;
+import com.sanhua.marketingcost.service.pricing.SupplierPriceSelectionService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.sql.Timestamp;
@@ -313,26 +314,63 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
     if (gaps == null || gaps.isEmpty()) {
       return;
     }
-    Map<String, String> automaticTypes = new HashMap<>();
+    List<PricePrepareGap> unresolved = new ArrayList<>();
+    Set<String> prepareNos = new LinkedHashSet<>();
+    Set<String> parentMaterials = new LinkedHashSet<>();
     for (PricePrepareGap gap : gaps) {
-      if (gap == null || StringUtils.hasText(gap.getPriceType())) {
-        continue;
+      if (gap == null) continue;
+      // 旧批次的失败缺口没有保存价格类型，且失败批次可能没有准备明细可供反查。
+      if (LinkedPriceEnsureServiceImpl.LINKED_RULE_ERROR.equals(gap.getReasonCode())) {
+        gap.setPriceType("LINKED");
       }
+      if (!StringUtils.hasText(gap.getReasonCode())
+          && "lp_package_component_price_detail".equals(gap.getSourceTable())
+          && containsText(gap.getMessage(), "供货比率不足，请确认是否有新增审核")) {
+        gap.setReasonCode(SupplierPriceSelectionService.REVIEW_REQUIRED);
+      }
+      if (!StringUtils.hasText(gap.getPriceType())
+          && StringUtils.hasText(gap.getPrepareNo())
+          && StringUtils.hasText(gap.getMaterialCode())) {
+        unresolved.add(gap);
+        prepareNos.add(gap.getPrepareNo());
+        parentMaterials.add(gap.getMaterialCode());
+      }
+    }
+    if (unresolved.isEmpty()) return;
+    Map<PreparedItemKey, Set<String>> organizationsByItem = new HashMap<>();
+    List<PricePrepareItem> preparedItems = itemMapper.selectList(
+        Wrappers.lambdaQuery(PricePrepareItem.class)
+            .in(PricePrepareItem::getPrepareNo, prepareNos)
+            .in(PricePrepareItem::getMaterialCode, parentMaterials)
+            .select(PricePrepareItem::getPrepareNo, PricePrepareItem::getMaterialCode,
+                PricePrepareItem::getPriceOrgCode));
+    for (PricePrepareItem item : preparedItems) {
+      if (StringUtils.hasText(item.getPriceOrgCode())) {
+        organizationsByItem.computeIfAbsent(
+            new PreparedItemKey(item.getPrepareNo(), item.getMaterialCode()),
+            ignored -> new LinkedHashSet<>()).add(item.getPriceOrgCode());
+      }
+    }
+    Map<String, String> automaticTypes = new HashMap<>();
+    for (PricePrepareGap gap : unresolved) {
       String materialCode = firstText(gap.getGapMaterialCode(), gap.getMaterialCode());
-      if (!StringUtils.hasText(materialCode)) {
-        continue;
-      }
-      String priceType = automaticTypes.computeIfAbsent(
-          materialCode,
-          code -> materialPriceRouterService.resolve(
-              code, gap.getPeriodMonth(), CostPricingPeriodUtils.currentPricingDate())
-              .map(route -> route.priceType().getDbText())
-              .orElse(""));
+      if (!StringUtils.hasText(materialCode)) continue;
+      Set<String> organizations = organizationsByItem.getOrDefault(
+          new PreparedItemKey(gap.getPrepareNo(), gap.getMaterialCode()), Set.of());
+      if (organizations.size() != 1) continue;
+      String org = organizations.iterator().next();
+      String cacheKey = gap.getBusinessUnitType() + ":" + gap.getPeriodMonth() + ":" + org + ":" + materialCode;
+      String priceType = automaticTypes.computeIfAbsent(cacheKey,
+          ignored -> materialPriceRouterService.resolve(materialCode, gap.getPeriodMonth(),
+              CostPricingPeriodUtils.currentPricingDate(), org, gap.getBusinessUnitType())
+              .map(PriceTypeRoute -> PriceTypeRoute.rawPriceType()).orElse(""));
       if (StringUtils.hasText(priceType)) {
         gap.setPriceType(priceType);
       }
     }
   }
+
+  private record PreparedItemKey(String prepareNo, String materialCode) {}
 
   private void enrichNoScrapConfirmations(List<PricePrepareGap> gaps) {
     if (gaps == null || gaps.isEmpty()) {

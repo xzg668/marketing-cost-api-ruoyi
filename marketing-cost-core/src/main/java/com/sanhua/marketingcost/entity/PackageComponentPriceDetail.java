@@ -34,9 +34,15 @@ public class PackageComponentPriceDetail {
   private BigDecimal childUnitPrice;
   private BigDecimal childAmount;
   private String priceSource;
+  /** 本次计算底稿随报价价格准备冻结，不写回可复用的包装月价明细。 */
+  @TableField(exist = false)
+  private String inputSnapshotJson;
   private Long priceSourceId;
   private String priceStatus;
   private String missingReason;
+  /** 当前计算返回的结构化失败原因，供报价缺口归类；不写入可复用月价明细。 */
+  @TableField(exist = false)
+  private String failureCode;
 
   @TableField(fill = FieldFill.INSERT)
   private String businessUnitType;

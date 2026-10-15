@@ -3,55 +3,43 @@ package com.sanhua.marketingcost.formula.registry;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sanhua.marketingcost.entity.FactorAdjustPrice;
-import com.sanhua.marketingcost.entity.FactorQuoteBaseMapping;
-import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.FactorMonthlyPrice;
-import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.entity.PriceVariableBinding;
 import com.sanhua.marketingcost.enums.LinkedPriceFactorSource;
-import com.sanhua.marketingcost.enums.MetalBasePricePolicy;
-import com.sanhua.marketingcost.mapper.FactorAdjustPriceMapper;
 import com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper;
-import com.sanhua.marketingcost.mapper.FactorQuoteBaseMappingMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableBindingMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
-import com.sanhua.marketingcost.security.BusinessUnitContext;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
- * {@link FactorVariableRegistry} 默认实现 ——
- * Plan B 改造：按 {@code resolver_kind} 分派，参数一律来自 {@code resolver_params} JSON。
+ * {@link FactorVariableRegistry} 默认实现 —— Plan B 改造：按 {@code resolver_kind} 分派，参数一律来自 {@code
+ * resolver_params} JSON。
  *
  * <p>与旧版（按 {@code factor_type} + 一二代列散装读取）相比的关键差异：
+ *
  * <ol>
- *   <li>分发键从 {@code factor_type}（兼做 UI 分组 + 解析路由）拆分：
- *       {@code factor_type} 只做前端 catalog 分组；后端解析严格走 {@code resolver_kind}。</li>
- *   <li>FINANCE 分支不再把 {@code variable_name} 当 short_name 查，
- *       改走 {@link FinanceBasePriceQuery} 的严格身份匹配
- *       （factorCode|shortName + priceSource + bu），并在不晚于核算月的正式价中取最新一条，
- *       与 legacy 计算路径口径完全一致 —— 修复 /items/{id}/trace 返回 0 的根因。</li>
- *   <li>ENTITY/DERIVED/FORMULA/CONST 四种 kind 的参数通通从同一个
- *       {@code resolver_params} JSON 读，不再读 {@code context_binding_json} /
- *       {@code formula_expr} / {@code default_value} 三套散列。</li>
+ *   <li>分发键从 {@code factor_type}（兼做 UI 分组 + 解析路由）拆分： {@code factor_type} 只做前端 catalog 分组；后端解析严格走
+ *       {@code resolver_kind}。
+ *   <li>FINANCE 分支不再把 {@code variable_name} 当 short_name 查， 改走 {@link FinanceFactorVariableQuery}
+ *       的身份、组织、月份和方案匹配；公共因素使用财务发布，私有因素使用其有效月价。
+ *   <li>ENTITY/DERIVED/FORMULA/CONST 四种 kind 的参数通通从同一个 {@code resolver_params} JSON 读，不再读 {@code
+ *       context_binding_json} / {@code formula_expr} / {@code default_value} 三套散列。
  * </ol>
  *
- * <p>环检：{@code visiting} LinkedHashSet 作为递归参数传递，重复加入即环，
- * 抛 {@link CircularFormulaException} 并带完整环路径。
+ * <p>环检：{@code visiting} LinkedHashSet 作为递归参数传递，重复加入即环， 抛 {@link CircularFormulaException} 并带完整环路径。
  *
  * <p>变量元数据缓存：volatile 懒加载，运维改完 {@code resolver_params} 后重启服务即生效。
  */
@@ -62,58 +50,39 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
 
   /** resolver_kind 常量 —— 与 V31 回填脚本保持一致 */
   private static final String KIND_FINANCE = "FINANCE";
+
   private static final String KIND_ENTITY = "ENTITY";
   private static final String KIND_DERIVED = "DERIVED";
   private static final String KIND_FORMULA = "FORMULA";
   private static final String KIND_CONST = "CONST";
-  private static final BigDecimal TON_TO_KG_DIVISOR = new BigDecimal("1000");
 
   private static final TypeReference<Map<String, Object>> PARAMS_TYPE = new TypeReference<>() {};
 
   private final PriceVariableMapper priceVariableMapper;
-  private final FinanceBasePriceQuery financeBasePriceQuery;
+  private final FinanceFactorVariableQuery financeBasePriceQuery;
   private final ObjectMapper objectMapper;
 
   /**
-   * V36 行局部占位符注册表 —— 取代过去的 {@code ROW_LOCAL_TOKEN_NAMES} 静态表，
-   * 改由 {@code lp_row_local_placeholder} DB 表驱动，新增占位符无需重新发版。
+   * V36 行局部占位符注册表 —— 取代过去的 {@code ROW_LOCAL_TOKEN_NAMES} 静态表， 改由 {@code lp_row_local_placeholder}
+   * DB 表驱动，新增占位符无需重新发版。
    */
   private final RowLocalPlaceholderRegistry rowLocalPlaceholderRegistry;
 
   /**
-   * V34 行局部绑定 mapper —— 可选注入（独立单测场景可不装配）。
-   * 如果公式里用了 {@code [__material]} 但该 mapper 为 null，
-   * {@link #resolveRowLocalToken} 会抛 {@link IllegalStateException}。
+   * V34 行局部绑定 mapper —— 可选注入（独立单测场景可不装配）。 如果公式里用了 {@code [__material]} 但该 mapper 为 null， {@link
+   * #resolveRowLocalToken} 会抛 {@link IllegalStateException}。
    */
   private PriceVariableBindingMapper priceVariableBindingMapper;
 
   /** V2-15：新行级绑定优先按影响因素身份读取月度价格；未注入时自动回退老逻辑。 */
   private FactorMonthlyPriceMapper factorMonthlyPriceMapper;
 
-  /** V3-06：factor_identity_xxx 日常报价可由 OA 表头基价锁价覆盖。 */
-  private FactorQuoteBaseMappingMapper factorQuoteBaseMappingMapper;
-
-  /** V3-06：月度调价重算指定批次时，优先读取批次调价价。 */
-  private FactorAdjustPriceMapper factorAdjustPriceMapper;
-
-  /**
-   * linked_item_id → (token_name → 当前生效 binding) 二级缓存。
-   * 进程内 ConcurrentHashMap，写路径（Service 层）通过
-   * {@link #invalidateBinding(Long)} 主动失效。和 {@link #variableCache} 同风格——
-   * 重启兜底 + 写触发失效，不加 TTL。
-   */
-  private final Map<Long, Map<String, PriceVariableBinding>> bindingCache =
-      new ConcurrentHashMap<>();
-
   /** PART_CONTEXT DERIVED 委托解析器，Spring 装配 DerivedResolver bean 后生效 */
   private DerivedContextResolver derivedContextResolver;
 
-  /** variableCode → PriceVariable 懒加载缓存 */
-  private volatile Map<String, PriceVariable> variableCache;
-
   public FactorVariableRegistryImpl(
       PriceVariableMapper priceVariableMapper,
-      FinanceBasePriceQuery financeBasePriceQuery,
+      FinanceFactorVariableQuery financeBasePriceQuery,
       ObjectMapper objectMapper,
       RowLocalPlaceholderRegistry rowLocalPlaceholderRegistry) {
     this.priceVariableMapper = priceVariableMapper;
@@ -128,10 +97,7 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     this.derivedContextResolver = derivedContextResolver;
   }
 
-  /**
-   * V34 延迟注入 —— 独立单测场景（FactorVariableRegistryImplTest）可不装配；
-   * 生产运行时 Spring 会自动注入。
-   */
+  /** V34 延迟注入 —— 独立单测场景（FactorVariableRegistryImplTest）可不装配； 生产运行时 Spring 会自动注入。 */
   @Autowired(required = false)
   public void setPriceVariableBindingMapper(PriceVariableBindingMapper mapper) {
     this.priceVariableBindingMapper = mapper;
@@ -142,36 +108,33 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     this.factorMonthlyPriceMapper = mapper;
   }
 
-  @Autowired(required = false)
-  public void setFactorQuoteBaseMappingMapper(FactorQuoteBaseMappingMapper mapper) {
-    this.factorQuoteBaseMappingMapper = mapper;
-  }
-
-  @Autowired(required = false)
-  public void setFactorAdjustPriceMapper(FactorAdjustPriceMapper mapper) {
-    this.factorAdjustPriceMapper = mapper;
-  }
-
   @Override
   public Optional<BigDecimal> resolve(String variableCode, VariableContext ctx) {
     if (variableCode == null || variableCode.isBlank()) {
       return Optional.empty();
     }
     return resolveInternal(
-        variableCode.trim(), ctx, new LinkedHashSet<>(), new HashMap<>());
+        variableCode.trim(),
+        ctx == null ? new VariableContext() : ctx,
+        new LinkedHashSet<>(),
+        new HashMap<>());
   }
 
-  /**
-   * 递归解析入口 —— FormulaRef / DerivedResolver 会在子变量上重入本方法
-   * 以继承 visiting 栈与缓存，保证跨层环路 A→B→C→A 也能被捕获。
-   */
+  /** 递归解析入口 —— FormulaRef / DerivedResolver 会在子变量上重入本方法 以继承 visiting 栈与缓存，保证跨层环路 A→B→C→A 也能被捕获。 */
   Optional<BigDecimal> resolveInternal(
       String code,
       VariableContext ctx,
       LinkedHashSet<String> visiting,
       Map<String, Optional<BigDecimal>> cache) {
     // 上下文 overrides 优先级最高（测试覆盖与手工临时兜底都靠它）
-    if (ctx != null && ctx.getOverrides().containsKey(code)) {
+    // 技术公式的 Cu 也经权威因素查询：在那里应用客户覆盖并保留同一因素身份和定义。
+    boolean technicalCopper =
+        "Cu".equals(code)
+            && ctx != null
+            && ctx.getLinkedItem() != null
+            && "TECH_SUPPLEMENTAL".equals(ctx.getLinkedItem().getSourceKind());
+    if (ctx != null && ctx.getOverrides().containsKey(code) && !technicalCopper) {
+      if ("Cu".equals(code)) ctx.getPrimitiveInputs().put(code, ctx.getOverrides().get(code));
       return Optional.ofNullable(ctx.getOverrides().get(code));
     }
     if (cache.containsKey(code)) {
@@ -194,7 +157,7 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
       throw new CircularFormulaException(cycle);
     }
     try {
-      PriceVariable variable = lookup(code);
+      PriceVariable variable = lookup(code, ctx);
       if (variable == null) {
         log.debug("FactorVariableRegistry 未找到变量定义: code={}", code);
         return putAndReturn(cache, code, Optional.empty());
@@ -206,8 +169,13 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
         return putAndReturn(cache, code, Optional.empty());
       }
       Map<String, Object> params = parseParams(variable);
-      Optional<BigDecimal> result = dispatch(
-          variable, kind.trim().toUpperCase(), params, ctx, visiting, cache);
+      if (ctx != null) ctx.getUsedDefinitions().put(code, Map.of("kind", kind, "params", params));
+      Optional<BigDecimal> result =
+          dispatch(variable, kind.trim().toUpperCase(), params, ctx, visiting, cache);
+      if (ctx != null
+          && result.isPresent()
+          && Set.of(KIND_FINANCE, KIND_ENTITY, KIND_CONST).contains(kind.toUpperCase()))
+        ctx.getPrimitiveInputs().put(code, result.get());
       return putAndReturn(cache, code, result);
     } finally {
       visiting.remove(code);
@@ -234,8 +202,7 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
       case KIND_CONST:
         return resolveConst(variable, params);
       default:
-        log.warn("变量 {} 的 resolver_kind={} 未知，返回 empty",
-            variable.getVariableCode(), kind);
+        log.warn("变量 {} 的 resolver_kind={} 未知，返回 empty", variable.getVariableCode(), kind);
         return Optional.empty();
     }
   }
@@ -244,6 +211,7 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
    * FINANCE：严格匹配因素、价源和业务单元，并取不晚于核算月的最新正式价。
    *
    * <p>params 契约：
+   *
    * <pre>{"factorCode":"Cu","priceSource":"平均价","buScoped":true}
    *      或 {"shortName":"美国柜装黄铜","priceSource":"平均价","buScoped":true}</pre>
    */
@@ -253,34 +221,23 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
       log.warn("FINANCE 变量 {} 缺 resolver_params", variable.getVariableCode());
       return Optional.empty();
     }
-    String factorCode = asString(params.get("factorCode"));
-    String shortName = asString(params.get("shortName"));
-    String priceSource = asString(params.get("priceSource"));
     Long factorIdentityId = asLong(params.get("factorIdentityId"));
     Long factorMonthlyPriceId = asLong(params.get("factorMonthlyPriceId"));
-    boolean buScoped = asBoolean(params.get("buScoped"), false);
     String pricingMonth = ctx == null ? null : ctx.getPricingMonth();
-    String bu = BusinessUnitContext.getCurrentBusinessUnitType();
-
-    if (ctx != null && ctx.isMonthlyReprice()) {
-      Optional<BigDecimal> adjustedPrice =
-          resolveAdjustBatchPrice(factorIdentityId, ctx.getAdjustBatchId());
-      if (adjustedPrice.isPresent()) {
-        ctx.resolvedSource(variable.getVariableCode(), LinkedPriceFactorSource.ADJUST_BATCH.getCode());
-        return adjustedPrice;
-      }
-    } else {
-      Optional<BigDecimal> quoteBasePrice =
-          resolveQuoteBaseLockPrice(variable, factorIdentityId, ctx);
-      if (quoteBasePrice.isPresent()) {
-        if (ctx.getResolvedSource(variable.getVariableCode()) == null) {
-          ctx.resolvedSource(
-              variable.getVariableCode(), LinkedPriceFactorSource.OA_LOCKED.getCode());
-        }
-        return quoteBasePrice;
-      }
+    var published = financeBasePriceQuery.query(params, ctx);
+    if (published.isPresent()) {
+      var value = published.get();
+      if (ctx != null && value.canonicalKey() != null)
+        ctx.getResolvedFactorKeys().put(variable.getVariableCode(), value.canonicalKey());
+      if (ctx != null)
+        ctx.resolvedSource(
+            variable.getVariableCode(),
+            "FINANCE_FACTOR".equals(value.source())
+                    && isEarlierMonth(value.sourceMonth(), pricingMonth)
+                ? "FINANCE_FACTOR_CARRIED_FORWARD"
+                : value.source());
+      return Optional.of(value.price());
     }
-
     Optional<FactorMonthlyPrice> monthlyPrice =
         resolveMonthlyFactorPrice(factorIdentityId, factorMonthlyPriceId, pricingMonth);
     if (monthlyPrice.isPresent()) {
@@ -289,9 +246,10 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
       if (ctx != null) {
         String source;
         if (ctx.isMonthlyReprice()) {
-          source = carriedForward
-              ? "MONTHLY_FACTOR_CARRIED_FORWARD"
-              : LinkedPriceFactorSource.MONTHLY_FACTOR.getCode();
+          source =
+              carriedForward
+                  ? "MONTHLY_FACTOR_CARRIED_FORWARD"
+                  : LinkedPriceFactorSource.MONTHLY_FACTOR.getCode();
         } else {
           source = carriedForward ? "FINANCE_FACTOR_CARRIED_FORWARD" : "FINANCE_FACTOR";
         }
@@ -300,114 +258,25 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
       return Optional.of(price.getPrice());
     }
 
-    Optional<FinanceBasePrice> row = financeBasePriceQuery.queryLatestBasePrice(
-        factorCode, shortName, priceSource, buScoped, pricingMonth, bu,
-        variable.getVariableCode());
-    row.ifPresent(price -> {
-      if (ctx != null) {
-        ctx.resolvedSource(
-            variable.getVariableCode(),
-            isEarlierMonth(price.getPriceMonth(), pricingMonth)
-                ? "FINANCE_FACTOR_CARRIED_FORWARD"
-                : "FINANCE_FACTOR");
-      }
-    });
-    return row.map(FinanceBasePrice::getPrice);
-  }
-
-  private Optional<BigDecimal> resolveQuoteBaseLockPrice(
-      PriceVariable variable, Long factorIdentityId, VariableContext ctx) {
-    if (factorIdentityId == null || ctx == null || factorQuoteBaseMappingMapper == null) {
-      return Optional.empty();
-    }
-    List<FactorQuoteBaseMapping> mappings = factorQuoteBaseMappingMapper.selectList(
-        Wrappers.lambdaQuery(FactorQuoteBaseMapping.class)
-            .eq(FactorQuoteBaseMapping::getFactorIdentityId, factorIdentityId)
-            .eq(FactorQuoteBaseMapping::getEnabled, 1)
-            .eq(FactorQuoteBaseMapping::getDeleted, 0)
-            .orderByAsc(FactorQuoteBaseMapping::getId));
-    // factor_identity_xxx 是导入公式的稳定身份编码，而财务场景显式覆盖使用
-    // Cu/Zn/Al 等业务变量编码。先借助映射表把两者对齐，确保显式覆盖仍保持
-    // 最高优先级；否则会继续从 OA 表头读到锁价，导致财务与 OA 场景完全相同。
-    for (FactorQuoteBaseMapping mapping : mappings) {
-      String variableCode = mapping == null ? null : mapping.getVariableCode();
-      if (variableCode == null
-          || variableCode.isBlank()
-          || !ctx.getOverrides().containsKey(variableCode.trim())) {
-        continue;
-      }
-      BigDecimal override = ctx.getOverrides().get(variableCode.trim());
-      if (override == null) {
-        continue;
-      }
-      String source = ctx.getOverrideSource(variableCode.trim());
-      // 报价上下文会把 OA 表头的 Cu/Zn/Al 预先放入语义变量 overrides。
-      // 当规则配置为“影响因素表”时，这类 OA_LOCKED 覆盖也必须跳过，
-      // 否则会在下方 price_policy 判断之前提前返回，导致页面配置形同虚设。
-      // 非 OA 的显式覆盖（例如财务 Cu 月度基准）仍保持最高优先级。
-      if (isFactorMonthlyPolicy(mapping)
-          && LinkedPriceFactorSource.OA_LOCKED.getCode().equalsIgnoreCase(source)) {
-        continue;
-      }
-      if (variable != null) {
-        ctx.resolvedSource(variable.getVariableCode(), source);
-      }
-      return Optional.of(override);
-    }
-    if (ctx.getOaForm() == null) {
-      return Optional.empty();
-    }
-    for (FactorQuoteBaseMapping mapping : mappings) {
-      if (isFactorMonthlyPolicy(mapping)) {
-        continue;
-      }
-      BigDecimal tonPrice = readOaQuoteBasePrice(ctx.getOaForm(), mapping.getQuoteFieldCode());
-      if (tonPrice != null) {
-        // OA 表头基价按元/吨存储；公式变量沿用老 Cu/Zn/Al 口径，统一转成元/kg。
-        return Optional.of(tonPrice.divide(TON_TO_KG_DIVISOR, 6, RoundingMode.HALF_UP));
-      }
-    }
     return Optional.empty();
   }
 
-  private boolean isFactorMonthlyPolicy(FactorQuoteBaseMapping mapping) {
-    return mapping != null
-        && MetalBasePricePolicy.FACTOR_MONTHLY.name()
-            .equalsIgnoreCase(mapping.getPricePolicy());
-  }
-
-  private Optional<BigDecimal> resolveAdjustBatchPrice(
-      Long factorIdentityId, Long adjustBatchId) {
-    if (factorIdentityId == null || adjustBatchId == null || factorAdjustPriceMapper == null) {
-      return Optional.empty();
-    }
-    FactorAdjustPrice price = factorAdjustPriceMapper.selectOne(
-        Wrappers.lambdaQuery(FactorAdjustPrice.class)
-            .eq(FactorAdjustPrice::getAdjustBatchId, adjustBatchId)
-            .eq(FactorAdjustPrice::getFactorIdentityId, factorIdentityId)
-            .ne(FactorAdjustPrice::getStatus, "FAILED")
-            .eq(FactorAdjustPrice::getDeleted, 0)
-            .orderByDesc(FactorAdjustPrice::getId)
-            .last("LIMIT 1"));
-    return price == null ? Optional.empty() : Optional.ofNullable(price.getAdjustedPrice());
-  }
-
   private Optional<FactorMonthlyPrice> resolveMonthlyFactorPrice(
-      Long factorIdentityId,
-      Long factorMonthlyPriceId,
-      String pricingMonth) {
-    if (factorMonthlyPriceMapper == null) {
+      Long factorIdentityId, Long factorMonthlyPriceId, String pricingMonth) {
+    if (factorMonthlyPriceMapper == null || factorIdentityId == null) {
       return Optional.empty();
     }
     if (factorIdentityId != null && pricingMonth != null && !pricingMonth.isBlank()) {
-      FactorMonthlyPrice monthlyPrice = factorMonthlyPriceMapper.selectOne(
-          Wrappers.lambdaQuery(FactorMonthlyPrice.class)
-              .eq(FactorMonthlyPrice::getFactorIdentityId, factorIdentityId)
-              .le(FactorMonthlyPrice::getPriceMonth, pricingMonth.trim())
-              .eq(FactorMonthlyPrice::getStatus, "ACTIVE")
-              .orderByDesc(FactorMonthlyPrice::getPriceMonth)
-              .orderByDesc(FactorMonthlyPrice::getId)
-              .last("LIMIT 1"));
+      FactorMonthlyPrice monthlyPrice =
+          factorMonthlyPriceMapper.selectOne(
+              Wrappers.lambdaQuery(FactorMonthlyPrice.class)
+                  .eq(FactorMonthlyPrice::getSchemeCode, "LEGACY")
+                  .eq(FactorMonthlyPrice::getFactorIdentityId, factorIdentityId)
+                  .le(FactorMonthlyPrice::getPriceMonth, pricingMonth.trim())
+                  .eq(FactorMonthlyPrice::getStatus, "ACTIVE")
+                  .orderByDesc(FactorMonthlyPrice::getPriceMonth)
+                  .orderByDesc(FactorMonthlyPrice::getId)
+                  .last("LIMIT 1"));
       if (monthlyPrice != null && monthlyPrice.getPrice() != null) {
         return Optional.of(monthlyPrice);
       }
@@ -415,6 +284,9 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     if (factorMonthlyPriceId != null) {
       FactorMonthlyPrice monthlyPrice = factorMonthlyPriceMapper.selectById(factorMonthlyPriceId);
       if (monthlyPrice != null
+          && factorIdentityId.equals(monthlyPrice.getFactorIdentityId())
+          && "LEGACY".equals(monthlyPrice.getSchemeCode())
+          && "ACTIVE".equals(monthlyPrice.getStatus())
           && monthlyPrice.getPrice() != null
           && matchesPricingMonth(monthlyPrice, pricingMonth)) {
         return Optional.of(monthlyPrice);
@@ -435,6 +307,7 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
    * ENTITY：按 {@code entity + field + unitScale} 反射读 {@link PriceLinkedItem} 字段。
    *
    * <p>params 契约：
+   *
    * <pre>{"entity":"linkedItem","field":"blankWeight","unitScale":0.001}</pre>
    */
   Optional<BigDecimal> resolveEntity(
@@ -447,8 +320,7 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     }
     // 当前阶段只支持 linkedItem；后续扩展到 calcItem 再加分支
     if (!"linkedItem".equalsIgnoreCase(entity)) {
-      log.warn("ENTITY 变量 {} 暂只支持 entity=linkedItem，实际={}",
-          variable.getVariableCode(), entity);
+      log.warn("ENTITY 变量 {} 暂只支持 entity=linkedItem，实际={}", variable.getVariableCode(), entity);
       return Optional.empty();
     }
     PriceLinkedItem item = ctx == null ? null : ctx.getLinkedItem();
@@ -470,6 +342,7 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
    * DERIVED：委托给 {@link DerivedContextResolver}，params 原样透传。
    *
    * <p>params 契约（4 种 strategy 之一）：
+   *
    * <pre>{"strategy":"MAIN_MATERIAL_FINANCE"}
    *      {"strategy":"SCRAP_REF"}
    *      {"strategy":"FORMULA_REF","formulaRef":"[Cu]*0.59+[Zn]*0.41"}
@@ -482,19 +355,15 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
       LinkedHashSet<String> visiting,
       Map<String, Optional<BigDecimal>> cache) {
     if (derivedContextResolver == null) {
-      log.info("DERIVED 变量 {} 但 DerivedResolver 未装配（独立单测场景？），返回 empty",
-          variable.getVariableCode());
+      log.info("DERIVED 变量 {} 但 DerivedResolver 未装配（独立单测场景？），返回 empty", variable.getVariableCode());
       return Optional.empty();
     }
     // 子变量递归：FORMULA_REF 策略里的 [Cu][Zn] 等要走完整 registry 解析路径
-    DerivedContextResolver.SubResolver sub =
-        code -> resolveInternal(code, ctx, visiting, cache);
+    DerivedContextResolver.SubResolver sub = code -> resolveInternal(code, ctx, visiting, cache);
     return derivedContextResolver.resolve(variable, ctx, params, sub);
   }
 
-  /**
-   * FORMULA：对 {@code params.expr} 中的 {@code [变量]} 递归求值并代入表达式计算。
-   */
+  /** FORMULA：对 {@code params.expr} 中的 {@code [变量]} 递归求值并代入表达式计算。 */
   Optional<BigDecimal> resolveFormula(
       PriceVariable variable,
       Map<String, Object> params,
@@ -511,7 +380,10 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     for (String token : tokens) {
       // 子变量递归：继承 visiting 栈 + cache 以保证多层环 A→B→C→A 能被捕获
       Optional<BigDecimal> sub = resolveInternal(token, ctx, visiting, cache);
-      values.put(token, sub.orElse(BigDecimal.ZERO));
+      if (sub.isEmpty()) {
+        throw new IllegalArgumentException("派生变量=" + variable.getVariableCode() + "，缺少依赖=" + token);
+      }
+      values.put(token, sub.get());
     }
     BigDecimal result = ExpressionEvaluator.evaluate(expr, values);
     return Optional.ofNullable(result);
@@ -535,66 +407,32 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     try {
       return objectMapper.readValue(json, PARAMS_TYPE);
     } catch (Exception e) {
-      log.warn("变量 {} resolver_params JSON 解析失败: {} —— {}",
-          variable.getVariableCode(), json, e.getMessage());
+      log.warn(
+          "变量 {} resolver_params JSON 解析失败: {} —— {}",
+          variable.getVariableCode(),
+          json,
+          e.getMessage());
       return Map.of();
     }
   }
 
-  /** 变量元数据懒加载 —— 首次访问拉全量 status=active */
-  PriceVariable lookup(String code) {
-    Map<String, PriceVariable> cache = variableCache;
-    if (cache == null) {
-      synchronized (this) {
-        cache = variableCache;
-        if (cache == null) {
-          cache = loadAll();
-          variableCache = cache;
-        }
-      }
-    }
-    return cache.get(code);
+  private PriceVariable lookup(String code, VariableContext ctx) {
+    if (ctx.variableDefinitions == null) ctx.variableDefinitions = loadAll();
+    return ctx.variableDefinitions.get(code);
   }
 
   private Map<String, PriceVariable> loadAll() {
-    List<PriceVariable> rows = priceVariableMapper.selectList(
-        Wrappers.lambdaQuery(PriceVariable.class)
-            .eq(PriceVariable::getStatus, "active"));
+    List<PriceVariable> rows =
+        priceVariableMapper.selectList(
+            Wrappers.lambdaQuery(PriceVariable.class).eq(PriceVariable::getStatus, "active"));
     Map<String, PriceVariable> map = new HashMap<>();
     for (PriceVariable row : rows) {
       if (row.getVariableCode() != null) {
         map.put(row.getVariableCode().trim(), row);
       }
     }
-    log.info("FactorVariableRegistry 加载 {} 个变量定义", map.size());
+    log.debug("FactorVariableRegistry 加载 {} 个变量定义", map.size());
     return map;
-  }
-
-  /**
-   * 清空缓存 —— 下一次 {@link #lookup(String)} 会重新从 DB 拉全量。
-   *
-   * <p>使用时机：
-   * <ul>
-   *   <li>单测清场：同一 JVM 多次跑用例需手动失效缓存</li>
-   *   <li>运维 CRUD：PriceVariableService 写后调用本方法；否则新增/停用的变量要等到下次重启才生效</li>
-   * </ul>
-   */
-  public void invalidate() {
-    this.variableCache = null;
-    this.bindingCache.clear();
-  }
-
-  /**
-   * 按 linked_item_id 清空行局部绑定缓存 —— PriceVariableBindingService 写后调用。
-   *
-   * @param linkedItemId null 时清空全部
-   */
-  public void invalidateBinding(Long linkedItemId) {
-    if (linkedItemId == null) {
-      this.bindingCache.clear();
-    } else {
-      this.bindingCache.remove(linkedItemId);
-    }
   }
 
   // ============================ V34 行局部绑定解析 ============================
@@ -605,11 +443,12 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
    * <p>前置：{@code code} 形如 {@code __material} / {@code __scrap}（不含方括号）。
    *
    * <p>失败模式：
+   *
    * <ul>
-   *   <li>{@code ctx.linkedItem} 为 null → IllegalStateException（编排错误，不该发生）</li>
-   *   <li>mapper 未注入但有 {@code __xxx} → IllegalStateException</li>
-   *   <li>DB 里查不到当前生效 binding → {@link UnboundRowLocalTokenException}</li>
-   *   <li>binding 指向的 factor_code 在 lp_price_variable 查不到 → 子递归返回 empty（WARN）</li>
+   *   <li>{@code ctx.linkedItem} 为 null → IllegalStateException（编排错误，不该发生）
+   *   <li>mapper 未注入但有 {@code __xxx} → IllegalStateException
+   *   <li>DB 里查不到当前生效 binding → {@link UnboundRowLocalTokenException}
+   *   <li>binding 指向的 factor_code 在 lp_price_variable 查不到 → 子递归返回 empty（WARN）
    * </ul>
    */
   Optional<BigDecimal> resolveRowLocalToken(
@@ -620,22 +459,28 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     PriceLinkedItem item = ctx == null ? null : ctx.getLinkedItem();
     if (item == null || item.getId() == null) {
       throw new IllegalStateException(
-          "解析行局部 token [" + code + "] 需要 ctx.linkedItem.id，但未提供 —— "
+          "解析行局部 token ["
+              + code
+              + "] 需要 ctx.linkedItem.id，但未提供 —— "
               + "检查调用方是否在 VariableContext 里塞了联动行实体");
     }
     if (priceVariableBindingMapper == null) {
       throw new IllegalStateException(
-          "公式使用了行局部 token [" + code + "] 但 PriceVariableBindingMapper 未注入 —— "
+          "公式使用了行局部 token ["
+              + code
+              + "] 但 PriceVariableBindingMapper 未注入 —— "
               + "检查 Spring 装配或单测 fixture");
     }
     Long itemId = item.getId();
-    Map<String, PriceVariableBinding> bindings = bindingCache.computeIfAbsent(
-        itemId, this::loadBindings);
+    Map<String, PriceVariableBinding> bindings =
+        ctx.bindings.computeIfAbsent(itemId, this::loadBindings);
     List<String> candidateTokenNames = rowLocalPlaceholderRegistry.tokenNames().get(code);
     if (candidateTokenNames == null || candidateTokenNames.isEmpty()) {
       // 理论上不会走到：isKnown(code) 已保证 code 在注册表里，且有 tokenNames
       throw new IllegalStateException(
-          "行局部占位符 [" + code + "] 在 lp_row_local_placeholder 未配置 token_names —— "
+          "行局部占位符 ["
+              + code
+              + "] 在 lp_row_local_placeholder 未配置 token_names —— "
               + "请在占位符表中填写 token_names_json");
     }
     PriceVariableBinding hit = null;
@@ -648,32 +493,42 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     }
     if (hit == null) {
       throw new UnboundRowLocalTokenException(
-          itemId, code,
+          itemId,
+          code,
           String.format(
               "linked_item_id=%d 的行局部 token [%s]（候选 token_name=%s）在 "
                   + "lp_price_variable_binding 里没有当前生效的绑定——请在"
-                  + "价格变量维护页 -> 变量绑定 tab 配置，或提交供管部 CSV。",
+                  + "联动价格明细中配置变量绑定。",
               itemId, code, candidateTokenNames));
     }
-    Optional<BigDecimal> monthlyPrice = resolveBoundMonthlyPrice(hit, ctx);
-    if (monthlyPrice.isPresent()) {
-      return monthlyPrice;
+    if (hit.getFactorIdentityId() != null) {
+      var bound = new PriceVariable();
+      bound.setVariableCode(code);
+      Map<String, Object> identity = new HashMap<>();
+      identity.put("factorIdentityId", hit.getFactorIdentityId());
+      if (hit.getFactorMonthlyPriceId() != null)
+        identity.put("factorMonthlyPriceId", hit.getFactorMonthlyPriceId());
+      ctx.getUsedDefinitions().put(code, Map.of("kind", KIND_FINANCE, "params", identity));
+      var resolved = resolveFinance(bound, identity, ctx);
+      resolved.ifPresent(value -> ctx.getPrimitiveInputs().put(code, value));
+      return resolved;
     }
 
     String factorCode = hit.getFactorCode();
     if (factorCode == null || factorCode.isBlank()) {
       throw new UnboundRowLocalTokenException(
-          itemId, code,
+          itemId,
+          code,
           String.format(
-              "linked_item_id=%d 的 binding id=%d 未配置 factor_code —— "
-                  + "binding 数据整合性异常，请联系运维核查。",
+              "linked_item_id=%d 的 binding id=%d 未配置 factor_code —— " + "binding 数据整合性异常，请联系运维核查。",
               itemId, hit.getId()));
     }
     // binding 的 factor_code 必须在 lp_price_variable 已登记；否则属于供管部映射与
     // 变量表漂移（如变量被停用但 binding 未跟随更新），fail-fast 暴露而不是静默 0。
-    if (lookup(factorCode) == null) {
+    if (lookup(factorCode, ctx) == null) {
       throw new UnboundRowLocalTokenException(
-          itemId, code,
+          itemId,
+          code,
           String.format(
               "linked_item_id=%d 的 binding[%s] 指向 factor_code=%s，"
                   + "但 lp_price_variable 里未登记该变量 —— "
@@ -684,53 +539,16 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     return resolveInternal(factorCode, ctx, visiting, cache);
   }
 
-  /**
-   * V2-15：自动绑定保存的是影响因素身份，不是当时价格值。
-   *
-   * <p>因此成本计算优先通过 binding.factor_identity_id + ctx.pricingMonth 去读
-   * {@code lp_factor_monthly_price.price}。财务调价只更新这张表的 price，binding 行保持不变，
-   * 下次重新计算自然取到新价格。若老数据没有新字段，则回退后面的 factor_code 老逻辑。
-   */
-  private Optional<BigDecimal> resolveBoundMonthlyPrice(
-      PriceVariableBinding binding, VariableContext ctx) {
-    if (factorMonthlyPriceMapper == null || binding == null) {
-      return Optional.empty();
-    }
-    String pricingMonth = ctx == null ? null : ctx.getPricingMonth();
-    if (binding.getFactorIdentityId() != null && pricingMonth != null && !pricingMonth.isBlank()) {
-      FactorMonthlyPrice monthlyPrice = factorMonthlyPriceMapper.selectOne(
-          Wrappers.lambdaQuery(FactorMonthlyPrice.class)
-              .eq(FactorMonthlyPrice::getFactorIdentityId, binding.getFactorIdentityId())
-              .eq(FactorMonthlyPrice::getPriceMonth, pricingMonth.trim())
-              .eq(FactorMonthlyPrice::getStatus, "ACTIVE")
-              .orderByDesc(FactorMonthlyPrice::getId)
-              .last("LIMIT 1"));
-      if (monthlyPrice != null && monthlyPrice.getPrice() != null) {
-        return Optional.of(monthlyPrice.getPrice());
-      }
-    }
-    if (binding.getFactorMonthlyPriceId() != null) {
-      FactorMonthlyPrice monthlyPrice =
-          factorMonthlyPriceMapper.selectById(binding.getFactorMonthlyPriceId());
-      if (monthlyPrice != null
-          && monthlyPrice.getPrice() != null
-          && matchesPricingMonth(monthlyPrice, pricingMonth)) {
-        return Optional.of(monthlyPrice.getPrice());
-      }
-    }
-    return Optional.empty();
-  }
-
   private boolean matchesPricingMonth(FactorMonthlyPrice monthlyPrice, String pricingMonth) {
     if (pricingMonth == null || pricingMonth.isBlank()) {
-      return true;
+      return false;
     }
     return pricingMonth.trim().equals(monthlyPrice.getPriceMonth());
   }
 
   /**
-   * 从 DB 加载某联动行的全部当前生效 binding，键为 token_name。
-   * 同一 (linked_item_id, token_name) 理论上 UNIQUE（V34 表约束），故 put 安全。
+   * 从 DB 加载某联动行的全部当前生效 binding，键为 token_name。 同一 (linked_item_id, token_name) 理论上 UNIQUE（V34 表约束），故
+   * put 安全。
    */
   private Map<String, PriceVariableBinding> loadBindings(Long linkedItemId) {
     List<PriceVariableBinding> rows =
@@ -777,32 +595,6 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
       log.debug("反射读字段 {} 失败: {}", field, e.getMessage());
       return null;
     }
-  }
-
-  private static BigDecimal readOaQuoteBasePrice(OaForm oaForm, String quoteFieldCode) {
-    if (oaForm == null || quoteFieldCode == null || quoteFieldCode.isBlank()) {
-      return null;
-    }
-    return readDecimalByGetter(oaForm, snakeToCamel(quoteFieldCode.trim()));
-  }
-
-  private static String snakeToCamel(String value) {
-    StringBuilder builder = new StringBuilder();
-    boolean upperNext = false;
-    for (int i = 0; i < value.length(); i++) {
-      char ch = value.charAt(i);
-      if (ch == '_') {
-        upperNext = true;
-        continue;
-      }
-      if (upperNext) {
-        builder.append(Character.toUpperCase(ch));
-        upperNext = false;
-      } else {
-        builder.append(ch);
-      }
-    }
-    return builder.toString();
   }
 
   private static String asString(Object o) {
@@ -853,20 +645,20 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
   /**
    * PART_CONTEXT DERIVED 派生策略解析抽象 —— T10 新增实现。
    *
-   * <p>保留接口与旧版完全一致：实现类（{@link DerivedResolver}）读 params map 里的
-   * {@code strategy} / {@code formulaRef} / {@code factorCode} 等键，和 V31 回填的
-   * {@code resolver_params} JSON 结构完全对齐，所以改造无需动实现类。
+   * <p>保留接口与旧版完全一致：实现类（{@link DerivedResolver}）读 params map 里的 {@code strategy} / {@code
+   * formulaRef} / {@code factorCode} 等键，和 V31 回填的 {@code resolver_params} JSON 结构完全对齐，所以改造无需动实现类。
    */
   public interface DerivedContextResolver {
     /**
      * @param variable 变量元数据
      * @param ctx 请求上下文（含 linkedItem / oaForm）
      * @param binding 解析后的参数 Map —— Plan B 之后来自 {@code resolver_params}
-     * @param subResolver 子变量递归解析回调；派生公式里的 [Cu][Zn] 等子变量靠它回到
-     *     registry 主路径，继承 visiting 栈和缓存
+     * @param subResolver 子变量递归解析回调；派生公式里的 [Cu][Zn] 等子变量靠它回到 registry 主路径，继承 visiting 栈和缓存
      */
     Optional<BigDecimal> resolve(
-        PriceVariable variable, VariableContext ctx, Map<String, Object> binding,
+        PriceVariable variable,
+        VariableContext ctx,
+        Map<String, Object> binding,
         SubResolver subResolver);
 
     /** 子变量解析器 —— registry 传入，封装 resolveInternal(code, ctx, visiting, cache) */

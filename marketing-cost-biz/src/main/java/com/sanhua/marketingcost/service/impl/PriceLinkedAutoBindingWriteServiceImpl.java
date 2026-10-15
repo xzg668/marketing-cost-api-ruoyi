@@ -10,7 +10,6 @@ import com.sanhua.marketingcost.dto.StandardBindingDecision;
 import com.sanhua.marketingcost.entity.ExcelAutoBindingImportLog;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.entity.PriceVariableBinding;
-import com.sanhua.marketingcost.formula.registry.FactorVariableRegistryImpl;
 import com.sanhua.marketingcost.mapper.ExcelAutoBindingImportLogMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableBindingMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
@@ -27,7 +26,8 @@ import org.springframework.util.StringUtils;
 public class PriceLinkedAutoBindingWriteServiceImpl implements PriceLinkedAutoBindingWriteService {
 
   private static final Set<String> WRITABLE_DECISIONS =
-      Set.of(PriceLinkedStandardBindingServiceImpl.ACTION_CREATE_HISTORY,
+      Set.of(
+          PriceLinkedStandardBindingServiceImpl.ACTION_CREATE_BINDING,
           PriceLinkedStandardBindingServiceImpl.ACTION_CONSISTENT);
   private static final String SOURCE_EXCEL_FORMULA = "EXCEL_FORMULA";
   private static final String SOURCE_MANUAL = "MANUAL";
@@ -35,19 +35,17 @@ public class PriceLinkedAutoBindingWriteServiceImpl implements PriceLinkedAutoBi
   private final PriceVariableBindingMapper bindingMapper;
   private final PriceVariableMapper priceVariableMapper;
   private final PriceVariableBindingService priceVariableBindingService;
-  private final FactorVariableRegistryImpl factorVariableRegistry;
   private final ExcelAutoBindingImportLogMapper autoBindingImportLogMapper;
 
   public PriceLinkedAutoBindingWriteServiceImpl(
       PriceVariableBindingMapper bindingMapper,
       PriceVariableMapper priceVariableMapper,
       PriceVariableBindingService priceVariableBindingService,
-      FactorVariableRegistryImpl factorVariableRegistry,
       ExcelAutoBindingImportLogMapper autoBindingImportLogMapper) {
     this.bindingMapper = bindingMapper;
     this.priceVariableMapper = priceVariableMapper;
     this.priceVariableBindingService = priceVariableBindingService;
-    this.factorVariableRegistry = factorVariableRegistry;
+
     this.autoBindingImportLogMapper = autoBindingImportLogMapper;
   }
 
@@ -73,49 +71,62 @@ public class PriceLinkedAutoBindingWriteServiceImpl implements PriceLinkedAutoBi
       PriceLinkedAutoBindingWriteResult result) {
     String tokenName = decision == null ? null : decision.getTokenName();
     if (decision == null) {
-      insertImportLog(request, decision, null, "SKIPPED", "FAILED",
-          "历史关系校验未通过，不能写入行级绑定");
+      insertImportLog(request, decision, null, "SKIPPED", "FAILED", "历史关系校验未通过，不能写入行级绑定");
       result.addError(tokenName, "历史关系校验未通过，不能写入行级绑定");
       return;
     }
     if (PriceLinkedStandardBindingServiceImpl.ACTION_CONFLICT.equals(decision.getAction())) {
-      insertImportLog(request, decision, decision.getCandidate(), "SKIPPED_CONFLICT", "WARNING",
+      insertImportLog(
+          request,
+          decision,
+          decision.getCandidate(),
+          "SKIPPED_CONFLICT",
+          "WARNING",
           decision.getReason());
       result.addConflictSkipped(tokenName, decision.getReason());
       return;
     }
     if (!WRITABLE_DECISIONS.contains(decision.getAction())) {
-      String reason = StringUtils.hasText(decision.getReason())
-          ? decision.getReason()
-          : "历史关系校验未通过，不能写入行级绑定";
+      String reason =
+          StringUtils.hasText(decision.getReason()) ? decision.getReason() : "历史关系校验未通过，不能写入行级绑定";
       insertImportLog(request, decision, decision.getCandidate(), "SKIPPED", "FAILED", reason);
       result.addError(tokenName, reason);
       return;
     }
     BindingCandidate candidate = decision.getCandidate();
     if (candidate == null || candidate.getSourceRef() == null) {
-      insertImportLog(request, decision, candidate, "SKIPPED", "FAILED",
-          "绑定候选缺少影响因素来源，不能写入行级绑定");
+      insertImportLog(request, decision, candidate, "SKIPPED", "FAILED", "绑定候选缺少影响因素来源，不能写入行级绑定");
       result.addError(tokenName, "绑定候选缺少影响因素来源，不能写入行级绑定");
       return;
     }
-    PriceVariableBinding current = bindingMapper.findCurrentByLinkedItemIdAndToken(
-        request.getLinkedItemId(), candidate.getTokenName());
-    if (current != null && SOURCE_MANUAL.equalsIgnoreCase(current.getSource())
+    PriceVariableBinding current =
+        bindingMapper.findCurrentByLinkedItemIdAndToken(
+            request.getLinkedItemId(), candidate.getTokenName());
+    if (current != null
+        && SOURCE_MANUAL.equalsIgnoreCase(current.getSource())
         && !Boolean.TRUE.equals(request.getOverwriteManualBinding())) {
-      insertImportLog(request, decision, candidate, "SKIPPED_MANUAL", "WARNING",
+      insertImportLog(
+          request,
+          decision,
+          candidate,
+          "SKIPPED_MANUAL",
+          "WARNING",
           "当前已有 MANUAL 人工绑定，默认不覆盖，bindingId=" + current.getId());
-      result.addManualSkipped(candidate.getTokenName(),
-          "当前已有 MANUAL 人工绑定，默认不覆盖");
+      result.addManualSkipped(candidate.getTokenName(), "当前已有 MANUAL 人工绑定，默认不覆盖");
       return;
     }
 
     try {
       String factorCode = ensureFinanceVariable(candidate.getSourceRef());
-      PriceVariableBindingRequest bindingRequest = buildBindingRequest(
-          request, decision, candidate, factorCode, effectiveDate);
+      PriceVariableBindingRequest bindingRequest =
+          buildBindingRequest(request, decision, candidate, factorCode, effectiveDate);
       Long bindingId = priceVariableBindingService.save(bindingRequest);
-      insertImportLog(request, decision, candidate, "AUTO_BOUND", "SUCCESS",
+      insertImportLog(
+          request,
+          decision,
+          candidate,
+          "AUTO_BOUND",
+          "SUCCESS",
           successMessage(current, bindingId));
       result.addWritten(candidate.getTokenName(), bindingId);
     } catch (RuntimeException e) {
@@ -155,10 +166,11 @@ public class PriceLinkedAutoBindingWriteServiceImpl implements PriceLinkedAutoBi
       throw new IllegalArgumentException("影响因素缺少简称，不能登记公式变量");
     }
     String variableCode = sourceRef.getShortName().trim();
-    PriceVariable existing = priceVariableMapper.selectOne(
-        Wrappers.lambdaQuery(PriceVariable.class)
-            .eq(PriceVariable::getVariableCode, variableCode)
-            .last("LIMIT 1"));
+    PriceVariable existing =
+        priceVariableMapper.selectOne(
+            Wrappers.lambdaQuery(PriceVariable.class)
+                .eq(PriceVariable::getVariableCode, variableCode)
+                .last("LIMIT 1"));
     if (existing != null) {
       return variableCode;
     }
@@ -166,7 +178,7 @@ public class PriceLinkedAutoBindingWriteServiceImpl implements PriceLinkedAutoBi
     variable.setVariableCode(variableCode);
     variable.setVariableName(variableCode);
     variable.setSourceType("FACTOR");
-    variable.setSourceTable("lp_finance_base_price");
+    variable.setSourceTable("lp_factor_monthly_price");
     variable.setSourceField("price");
     variable.setScope("BASE_PRICE");
     variable.setStatus("active");
@@ -174,11 +186,14 @@ public class PriceLinkedAutoBindingWriteServiceImpl implements PriceLinkedAutoBi
     variable.setFactorType("FINANCE_FACTOR");
     variable.setAliasesJson("[\"" + jsonEscape(variableCode) + "\"]");
     variable.setResolverKind("FINANCE");
-    variable.setResolverParams("{\"shortName\":\"" + jsonEscape(variableCode)
-        + "\",\"priceSource\":\"" + jsonEscape(defaultPriceSource(sourceRef.getPriceSource()))
-        + "\",\"buScoped\":true}");
+    variable.setResolverParams(
+        "{\"shortName\":\""
+            + jsonEscape(variableCode)
+            + "\",\"priceSource\":\""
+            + jsonEscape(defaultPriceSource(sourceRef.getPriceSource()))
+            + "\",\"buScoped\":true}");
     priceVariableMapper.insert(variable);
-    factorVariableRegistry.invalidate();
+
     return variableCode;
   }
 
@@ -193,9 +208,8 @@ public class PriceLinkedAutoBindingWriteServiceImpl implements PriceLinkedAutoBi
     if (sourceRef == null || sourceRef.getRowNumber() == null) {
       return null;
     }
-    String column = StringUtils.hasText(sourceRef.getColumnName())
-        ? sourceRef.getColumnName().trim()
-        : "E";
+    String column =
+        StringUtils.hasText(sourceRef.getColumnName()) ? sourceRef.getColumnName().trim() : "E";
     return column + sourceRef.getRowNumber();
   }
 
@@ -221,15 +235,20 @@ public class PriceLinkedAutoBindingWriteServiceImpl implements PriceLinkedAutoBi
     ExcelAutoBindingImportLog importLog = new ExcelAutoBindingImportLog();
     importLog.setFactorUploadBatchId(request == null ? null : request.getFactorUploadBatchId());
     importLog.setLinkedItemId(request == null ? null : request.getLinkedItemId());
-    importLog.setMaterialCode(candidate != null ? candidate.getMaterialCode()
-        : decision == null ? null : decision.getMaterialCode());
+    importLog.setMaterialCode(
+        candidate != null
+            ? candidate.getMaterialCode()
+            : decision == null ? null : decision.getMaterialCode());
     importLog.setSupplierCode(candidate == null ? null : supplierCode(candidate));
-    importLog.setTokenName(candidate != null ? candidate.getTokenName()
-        : decision == null ? null : decision.getTokenName());
+    importLog.setTokenName(
+        candidate != null
+            ? candidate.getTokenName()
+            : decision == null ? null : decision.getTokenName());
     importLog.setAction(action);
     importLog.setStatus(status);
     importLog.setFactorIdentityId(candidate == null ? null : candidate.getFactorIdentityId());
-    importLog.setFactorMonthlyPriceId(candidate == null ? null : candidate.getFactorMonthlyPriceId());
+    importLog.setFactorMonthlyPriceId(
+        candidate == null ? null : candidate.getFactorMonthlyPriceId());
     importLog.setSourceWorkbookName(sourceRef == null ? null : sourceRef.getWorkbookName());
     importLog.setSourceSheetName(sourceRef == null ? null : sourceRef.getSheetName());
     importLog.setSourceCellRef(sourceRef == null ? null : cellRef(sourceRef));
@@ -249,10 +268,14 @@ public class PriceLinkedAutoBindingWriteServiceImpl implements PriceLinkedAutoBi
 
   private String successMessage(PriceVariableBinding oldBinding, Long newBindingId) {
     if (oldBinding != null && SOURCE_MANUAL.equalsIgnoreCase(oldBinding.getSource())) {
-      return "覆盖 MANUAL 绑定：oldBindingId=" + oldBinding.getId()
-          + ", oldFactorIdentityId=" + oldBinding.getFactorIdentityId()
-          + ", oldFactorCode=" + oldBinding.getFactorCode()
-          + ", newBindingId=" + newBindingId;
+      return "覆盖 MANUAL 绑定：oldBindingId="
+          + oldBinding.getId()
+          + ", oldFactorIdentityId="
+          + oldBinding.getFactorIdentityId()
+          + ", oldFactorCode="
+          + oldBinding.getFactorCode()
+          + ", newBindingId="
+          + newBindingId;
     }
     return "自动绑定成功，bindingId=" + newBindingId;
   }

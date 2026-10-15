@@ -13,6 +13,5 @@ public class QuotePriceTypeRecognitionSummaryResponse {
   private Integer totalCount;
   private Integer confirmedCount;
   private Integer gapCount;
-  private Integer referencePriceCount;
   private String message;
 }

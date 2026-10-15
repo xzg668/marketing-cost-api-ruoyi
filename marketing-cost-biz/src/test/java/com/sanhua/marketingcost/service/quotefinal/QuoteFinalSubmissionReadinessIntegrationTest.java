@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
+import com.sanhua.marketingcost.db.OriginalPricingIntegrationTestBase;
 import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
 import com.sanhua.marketingcost.service.costing.ProductCostingContextResolver;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataActor;
@@ -25,7 +25,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @Tag("integration")
-class QuoteFinalSubmissionReadinessIntegrationTest extends BomMapperTestBase {
+class QuoteFinalSubmissionReadinessIntegrationTest extends OriginalPricingIntegrationTestBase {
   @Autowired QuoteFinalSubmissionService service;
   @Autowired JdbcTemplate jdbc;
   @Autowired PlatformTransactionManager transactions;

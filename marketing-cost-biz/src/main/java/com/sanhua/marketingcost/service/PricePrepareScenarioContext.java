@@ -1,6 +1,8 @@
 package com.sanhua.marketingcost.service;
 
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
+import com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext;
 import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -24,6 +26,14 @@ public record PricePrepareScenarioContext(
   public PricePrepareScenarioContext forOrganization(String orgCode) {
     return new PricePrepareScenarioContext(scenarioType, scenarioGroupNo, sourcePrepareNo,
         variableOverrides, supplierReviews.forOrganization(orgCode));
+  }
+
+  /** 补录价格检查沿用原报价明细的组织范围，不能从登录业务单元推断。 */
+  public static PricePrepareScenarioContext oaLocked(Long itemId, String orgCode) {
+    var organization = MaterialOrganization.fromPriceOrgCode(orgCode);
+    var reviews = new SupplierPriceReviewContext(itemId)
+        .forOrganization(organization.getPriceOrgCode());
+    return new PricePrepareScenarioContext(QuotePriceScenarioType.OA_LOCKED, null, null, Map.of(), reviews);
   }
 
   public PricePrepareScenarioContext {

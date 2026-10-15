@@ -16,8 +16,7 @@ public class PriceLinkedImportResultClassifierImpl implements PriceLinkedImportR
 
   @Override
   public void append(
-      PriceItemImportResponse response,
-      PriceLinkedImportResultClassifyRequest request) {
+      PriceItemImportResponse response, PriceLinkedImportResultClassifyRequest request) {
     if (response == null || request == null) {
       return;
     }
@@ -30,8 +29,7 @@ public class PriceLinkedImportResultClassifierImpl implements PriceLinkedImportR
   }
 
   private void appendResolvedRefErrors(
-      PriceItemImportResponse response,
-      PriceLinkedImportResultClassifyRequest request) {
+      PriceItemImportResponse response, PriceLinkedImportResultClassifyRequest request) {
     for (ResolvedFactorRef ref : request.getResolvedRefs()) {
       if (ref == null || ref.isResolved() || !StringUtils.hasText(ref.getErrorMessage())) {
         continue;
@@ -45,14 +43,13 @@ public class PriceLinkedImportResultClassifierImpl implements PriceLinkedImportR
   }
 
   private void appendStandardDecisions(
-      PriceItemImportResponse response,
-      PriceLinkedImportResultClassifyRequest request) {
+      PriceItemImportResponse response, PriceLinkedImportResultClassifyRequest request) {
     for (StandardBindingDecision decision : request.getStandardDecisions()) {
       if (decision == null) {
         continue;
       }
       switch (decision.getAction()) {
-        case PriceLinkedStandardBindingServiceImpl.ACTION_CREATE_HISTORY ->
+        case PriceLinkedStandardBindingServiceImpl.ACTION_CREATE_BINDING ->
             response.setNewHistoryBindingCount(response.getNewHistoryBindingCount() + 1);
         case PriceLinkedStandardBindingServiceImpl.ACTION_CONSISTENT ->
             response.setConsistentHistoryBindingCount(
@@ -73,8 +70,7 @@ public class PriceLinkedImportResultClassifierImpl implements PriceLinkedImportR
   }
 
   private void appendWriteResult(
-      PriceItemImportResponse response,
-      PriceLinkedImportResultClassifyRequest request) {
+      PriceItemImportResponse response, PriceLinkedImportResultClassifyRequest request) {
     PriceLinkedAutoBindingWriteResult writeResult = request.getWriteResult();
     if (writeResult == null) {
       return;
@@ -101,8 +97,7 @@ public class PriceLinkedImportResultClassifierImpl implements PriceLinkedImportR
   }
 
   private BindingError errorFromDecision(
-      PriceLinkedImportResultClassifyRequest request,
-      StandardBindingDecision decision) {
+      PriceLinkedImportResultClassifyRequest request, StandardBindingDecision decision) {
     BindingError error = baseError(request, decision.getReason());
     error.setTokenName(decision.getTokenName());
     error.setExistingFactorIdentity(decision.getOldFactorIdentityId());
@@ -115,8 +110,7 @@ public class PriceLinkedImportResultClassifierImpl implements PriceLinkedImportR
     return error;
   }
 
-  private BindingError baseError(
-      PriceLinkedImportResultClassifyRequest request, String reason) {
+  private BindingError baseError(PriceLinkedImportResultClassifyRequest request, String reason) {
     BindingError error = new BindingError();
     error.setExcelRowNumber(request.getExcelRowNumber());
     error.setMaterialCode(request.getMaterialCode());

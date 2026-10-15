@@ -125,9 +125,9 @@ class QuotePriceTypeRecognitionServiceImplTest {
     when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
         .thenReturn(List.of(ok, missing));
     when(itemClassifier.classify(any())).thenReturn(List.of(normalPlan(ok), normalPlan(missing)));
-    when(materialPriceRouterService.resolve(eq("MAT-OK"), eq("2026-06"), any(LocalDate.class)))
+    when(materialPriceRouterService.resolve(eq("MAT-OK"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(Optional.of(route(PriceTypeEnum.FIXED)));
-    when(materialPriceRouterService.resolve(eq("MAT-MISS"), eq("2026-06"), any(LocalDate.class)))
+    when(materialPriceRouterService.resolve(eq("MAT-MISS"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(Optional.empty());
 
     QuotePriceTypeRecognitionResponse response =
@@ -136,9 +136,9 @@ class QuotePriceTypeRecognitionServiceImplTest {
     assertThat(response.getBomBuildBatchId()).isEqualTo("BOM-BUILD-001");
     assertThat(response.getRows()).extracting("materialCode").containsExactly("MAT-OK", "MAT-MISS");
     assertThat(response.getRows()).extracting("typeStatus")
-        .containsExactly("RECOGNIZED", "MISSING_TYPE");
-    assertThat(response.getSummary().getConfiguredTypeCount()).isEqualTo(1);
-    assertThat(response.getSummary().getMissingTypeCount()).isEqualTo(1);
+        .containsExactly("RECOGNIZED", "NO_SOURCE");
+    assertThat(response.getSummary().getCandidateSourceCount()).isEqualTo(1);
+    assertThat(response.getSummary().getMissingSourceCount()).isEqualTo(1);
   }
 
   @Test
@@ -157,7 +157,7 @@ class QuotePriceTypeRecognitionServiceImplTest {
     master.setMaterialName("接管");
     when(materialMasterMapper.selectList(any())).thenReturn(List.of(master));
     when(materialPriceRouterService.resolve(
-            eq("205686659"), eq("2026-06"), any(LocalDate.class)))
+            eq("205686659"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(Optional.of(route(PriceTypeEnum.FIXED)));
 
     QuotePriceTypeRecognitionResponse response =
@@ -176,22 +176,22 @@ class QuotePriceTypeRecognitionServiceImplTest {
     when(makePartPriceGenerationService.previewStructureByOa(
             "OA-001", "COMMERCIAL", "2026-06"))
         .thenReturn(List.of(makeCalcRow()));
-    when(materialPriceRouterService.resolve(eq("RAW-1"), eq("2026-06"), any(LocalDate.class)))
+    when(materialPriceRouterService.resolve(eq("RAW-1"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(Optional.empty());
-    when(materialPriceRouterService.resolve(eq("SCRAP-1"), eq("2026-06"), any(LocalDate.class)))
+    when(materialPriceRouterService.resolve(eq("SCRAP-1"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(Optional.of(route(PriceTypeEnum.LINKED)));
 
     QuotePriceTypeRecognitionResponse response =
         service.getRecognition("OA-001", 10L, null);
 
     assertThat(response.getRows().get(0).getObjectType()).isEqualTo("MAKE_PARENT");
-    assertThat(response.getRows().get(0).getTypeStatus()).isEqualTo("CHILD_MISSING_TYPE");
+    assertThat(response.getRows().get(0).getTypeStatus()).isEqualTo("CHILD_GAP");
     assertThat(response.getRows().get(0).getChildren()).extracting("objectType")
         .containsExactly("MAKE_RAW", "MAKE_SCRAP");
     verify(makePartPriceGenerationService)
         .previewStructureByOa("OA-001", "COMMERCIAL", "2026-06");
     assertThat(response.getSummary().getMakePartCount()).isEqualTo(1);
-    assertThat(response.getSummary().getMissingTypeCount()).isEqualTo(1);
+    assertThat(response.getSummary().getMissingSourceCount()).isEqualTo(1);
   }
 
   @Test
@@ -212,13 +212,13 @@ class QuotePriceTypeRecognitionServiceImplTest {
     when(makePartScrapMappingService.listMappings("301220046", "COMMERCIAL"))
         .thenReturn(List.of(scrapRef("301220046", "301990752", "废软磁不锈铁沫")));
     when(materialPriceRouterService.resolve(
-            eq("301220046"), eq("2026-06"), any(LocalDate.class)))
+            eq("301220046"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(Optional.empty());
     when(materialPriceRouterService.resolve(
-            eq("301990752"), eq("2026-06"), any(LocalDate.class)))
+            eq("301990752"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(Optional.of(route(PriceTypeEnum.LINKED)));
     when(materialPriceRouterService.resolve(
-            eq("203240247"), eq("2026-06"), any(LocalDate.class)))
+            eq("203240247"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(Optional.of(route(PriceTypeEnum.FIXED)));
 
     QuotePriceTypeRecognitionResponse response =
@@ -254,7 +254,7 @@ class QuotePriceTypeRecognitionServiceImplTest {
     when(makePartScrapMappingService.listMappings("301260124", "COMMERCIAL"))
         .thenReturn(List.of());
     when(materialPriceRouterService.resolve(
-            eq("301260124"), eq("2026-06"), any(LocalDate.class)))
+            eq("301260124"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(Optional.of(route(PriceTypeEnum.LINKED)));
 
     QuotePriceTypeRecognitionResponse response =
@@ -276,17 +276,17 @@ class QuotePriceTypeRecognitionServiceImplTest {
         .thenReturn(List.of(parent));
     when(itemClassifier.classify(any())).thenReturn(List.of(packagePlan(parent)));
     when(packageSnapshotService.previewSnapshot(any())).thenReturn(packageSnapshot());
-    when(materialPriceRouterService.resolve(eq("PKG-CHILD-1"), eq("2026-06"), any(LocalDate.class)))
+    when(materialPriceRouterService.resolve(eq("PKG-CHILD-1"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(Optional.empty());
 
     QuotePriceTypeRecognitionResponse response =
         service.getRecognition("OA-001", 10L, null);
 
     assertThat(response.getRows().get(0).getObjectType()).isEqualTo("PACKAGE_PARENT");
-    assertThat(response.getRows().get(0).getTypeStatus()).isEqualTo("CHILD_MISSING_TYPE");
+    assertThat(response.getRows().get(0).getTypeStatus()).isEqualTo("CHILD_GAP");
     assertThat(response.getRows().get(0).getChildren().get(0).getObjectType()).isEqualTo("PACKAGE_CHILD");
     assertThat(response.getSummary().getPackageComponentCount()).isEqualTo(1);
-    assertThat(response.getSummary().getMissingTypeCount()).isEqualTo(1);
+    assertThat(response.getSummary().getMissingSourceCount()).isEqualTo(1);
     ArgumentCaptor<PackageSnapshotRequest> requestCaptor =
         ArgumentCaptor.forClass(PackageSnapshotRequest.class);
     verify(packageSnapshotService).previewSnapshot(requestCaptor.capture());
@@ -309,7 +309,7 @@ class QuotePriceTypeRecognitionServiceImplTest {
         .thenReturn(List.of(parent));
     when(itemClassifier.classify(any())).thenReturn(List.of(packagePlan(parent)));
     when(packageSnapshotService.previewSnapshot(any())).thenReturn(packageSnapshot());
-    when(materialPriceRouterService.resolve(eq("PKG-CHILD-1"), eq("2026-06"), any(LocalDate.class)))
+    when(materialPriceRouterService.resolve(eq("PKG-CHILD-1"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(Optional.empty());
 
     service.getRecognition("OA-001", 10L, null);

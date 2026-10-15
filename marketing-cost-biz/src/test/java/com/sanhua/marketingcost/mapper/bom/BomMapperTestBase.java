@@ -253,6 +253,7 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V301__unify_quotation_costing_stage.sql", "V301");
       runScriptViaMysqlCli("/db/V302__oa_technical_return_two_steps.sql", "V302");
       runScriptViaMysqlCli("/db/V303__technical_submission_without_approval_callback.sql", "V303");
+      runScriptViaMysqlCli("/db/V307__remove_obsolete_oa_queue_columns.sql", "V307");
     } catch (Exception e) {
       // 把 root cause 的文字信息拼进 message，避免 surefire 只保留 Caused by 的短描述
       Throwable root = e;

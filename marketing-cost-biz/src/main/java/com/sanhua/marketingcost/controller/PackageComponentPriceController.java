@@ -225,7 +225,6 @@ public class PackageComponentPriceController {
         StringUtils.hasText(request.getSourceType()) ? trim(request.getSourceType()) : DEFAULT_SOURCE_TYPE);
     priceRequest.setAsOfDate(request.getAsOfDate());
     priceRequest.setPriceAsOfTime(request.getPriceAsOfTime());
-    priceRequest.setForceRefresh(request.isForceRefresh());
     return priceRequest;
   }
 

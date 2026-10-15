@@ -1,7 +1,6 @@
 package com.sanhua.marketingcost.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.sanhua.marketingcost.dto.FactorLinkedItemReferenceDto;
 import com.sanhua.marketingcost.entity.PriceVariableBinding;
 import java.time.LocalDate;
 import java.util.List;
@@ -13,27 +12,44 @@ import org.apache.ibatis.annotations.Update;
 /**
  * 行局部变量绑定 Mapper。
  *
- * <p>注意：BaseMapper 继承后 {@code @TableLogic} 生效，常规 selectById/selectList
- * 自动过滤 {@code deleted=0}；历史查询需要绕过软删过滤，故用 {@code @Select} 自定义 SQL。
+ * <p>注意：BaseMapper 继承后 {@code @TableLogic} 生效，常规 selectById/selectList 自动过滤 {@code
+ * deleted=0}；历史查询需要绕过软删过滤，故用 {@code @Select} 自定义 SQL。
  */
 @Mapper
 public interface PriceVariableBindingMapper extends BaseMapper<PriceVariableBinding> {
 
+  /** 冲突检查直接读取之前规则的实际绑定，不再维护第二份标准关系。 */
+  @Select(
+      """
+SELECT b.factor_identity_id FROM lp_price_linked_item li
+JOIN lp_price_variable_binding b ON b.linked_item_id=li.id
+WHERE li.business_unit_type=#{scope.businessUnitType}
+  AND li.org_code=#{scope.organizationCode} AND li.material_code=#{scope.materialCode}
+  AND COALESCE(li.supplier_code,'')=COALESCE(#{scope.supplierCode},'')
+  AND COALESCE(li.unit,'')=COALESCE(#{scope.unit},'')
+  AND COALESCE(li.spec_model,'')=COALESCE(#{scope.specModel},'')
+  AND li.pricing_month <= #{scope.pricingMonth} AND li.id <= #{scope.linkedItemId}
+  AND li.deleted=0 AND b.deleted=0 AND b.expiry_date IS NULL
+  AND b.token_name=#{tokenName} AND b.factor_identity_id IS NOT NULL
+  AND (li.id=#{scope.linkedItemId} OR li.source_kind='PUBLIC' OR li.technical_publication_status='AVAILABLE')
+ORDER BY li.pricing_month DESC,li.id DESC,b.id DESC LIMIT 1
+""")
+  Long findPreviousFactorIdentity(
+      @Param("scope") com.sanhua.marketingcost.dto.StandardBindingCheckRequest scope,
+      @Param("tokenName") String tokenName);
+
   /**
    * 查一条联动行"当前生效"的所有 token 绑定。
    *
-   * <p>当前生效 = {@code expiry_date IS NULL AND deleted=0}。
-   * evaluator 缓存按 linked_item_id 缓存这个列表。
+   * <p>当前生效 = {@code expiry_date IS NULL AND deleted=0}。 evaluator 缓存按 linked_item_id 缓存这个列表。
    */
-  @Select("SELECT id, linked_item_id, token_name, factor_code, price_source,"
-      + " factor_identity_id, factor_monthly_price_id, factor_upload_batch_id, standard_binding_id,"
-      + " excel_source_sheet_name, excel_source_cell_ref, excel_formula, bu_scoped,"
-      + " effective_date, expiry_date, source, confirmed_by, confirmed_at, remark,"
-      + " created_by, created_at, updated_by, updated_at, deleted"
-      + " FROM lp_price_variable_binding"
-      + " WHERE linked_item_id = #{linkedItemId}"
-      + "   AND expiry_date IS NULL"
-      + "   AND deleted = 0")
+  @Select(
+      "SELECT id, linked_item_id, token_name, factor_code, price_source, factor_identity_id,"
+          + " factor_monthly_price_id, factor_upload_batch_id, standard_binding_id,"
+          + " excel_source_sheet_name, excel_source_cell_ref, excel_formula, bu_scoped,"
+          + " effective_date, expiry_date, source, confirmed_by, confirmed_at, remark, created_by,"
+          + " created_at, updated_by, updated_at, deleted FROM lp_price_variable_binding WHERE"
+          + " linked_item_id = #{linkedItemId}   AND expiry_date IS NULL   AND deleted = 0")
   List<PriceVariableBinding> findCurrentByLinkedItemId(@Param("linkedItemId") Long linkedItemId);
 
   /**
@@ -41,93 +57,51 @@ public interface PriceVariableBindingMapper extends BaseMapper<PriceVariableBind
    *
    * <p>用于"变量绑定历史"抽屉展示修改轨迹，不走 @TableLogic 过滤。
    */
-  @Select("SELECT id, linked_item_id, token_name, factor_code, price_source,"
-      + " factor_identity_id, factor_monthly_price_id, factor_upload_batch_id, standard_binding_id,"
-      + " excel_source_sheet_name, excel_source_cell_ref, excel_formula, bu_scoped,"
-      + " effective_date, expiry_date, source, confirmed_by, confirmed_at, remark,"
-      + " created_by, created_at, updated_by, updated_at, deleted"
-      + " FROM lp_price_variable_binding"
-      + " WHERE linked_item_id = #{linkedItemId}"
-      + "   AND token_name = #{tokenName}"
-      + " ORDER BY effective_date DESC, id DESC")
+  @Select(
+      "SELECT id, linked_item_id, token_name, factor_code, price_source, factor_identity_id,"
+          + " factor_monthly_price_id, factor_upload_batch_id, standard_binding_id,"
+          + " excel_source_sheet_name, excel_source_cell_ref, excel_formula, bu_scoped,"
+          + " effective_date, expiry_date, source, confirmed_by, confirmed_at, remark, created_by,"
+          + " created_at, updated_by, updated_at, deleted FROM lp_price_variable_binding WHERE"
+          + " linked_item_id = #{linkedItemId}   AND token_name = #{tokenName} ORDER BY"
+          + " effective_date DESC, id DESC")
   List<PriceVariableBinding> findHistory(
-      @Param("linkedItemId") Long linkedItemId,
-      @Param("tokenName") String tokenName);
+      @Param("linkedItemId") Long linkedItemId, @Param("tokenName") String tokenName);
 
   /**
    * 查当前生效的同 (linked_item_id, token_name) 记录（用于写入前检查是否需要版本切换）。
    *
-   * <p>命中 0 条 → 首次绑定；命中 1 条且 effective_date 相同 → 原地更新；
-   * 命中 1 条但 effective_date 不同 → 版本切换（旧行 expiry_date = new - 1d）。
+   * <p>命中 0 条 → 首次绑定；命中 1 条且 effective_date 相同 → 原地更新； 命中 1 条但 effective_date 不同 → 版本切换（旧行
+   * expiry_date = new - 1d）。
    */
-  @Select("SELECT id, linked_item_id, token_name, factor_code, price_source,"
-      + " factor_identity_id, factor_monthly_price_id, factor_upload_batch_id, standard_binding_id,"
-      + " excel_source_sheet_name, excel_source_cell_ref, excel_formula, bu_scoped,"
-      + " effective_date, expiry_date, source, confirmed_by, confirmed_at, remark,"
-      + " created_by, created_at, updated_by, updated_at, deleted"
-      + " FROM lp_price_variable_binding"
-      + " WHERE linked_item_id = #{linkedItemId}"
-      + "   AND token_name = #{tokenName}"
-      + "   AND expiry_date IS NULL"
-      + "   AND deleted = 0"
-      + " LIMIT 1")
+  @Select(
+      "SELECT id, linked_item_id, token_name, factor_code, price_source, factor_identity_id,"
+          + " factor_monthly_price_id, factor_upload_batch_id, standard_binding_id,"
+          + " excel_source_sheet_name, excel_source_cell_ref, excel_formula, bu_scoped,"
+          + " effective_date, expiry_date, source, confirmed_by, confirmed_at, remark, created_by,"
+          + " created_at, updated_by, updated_at, deleted FROM lp_price_variable_binding WHERE"
+          + " linked_item_id = #{linkedItemId}   AND token_name = #{tokenName}   AND expiry_date IS"
+          + " NULL   AND deleted = 0 LIMIT 1")
   PriceVariableBinding findCurrentByLinkedItemIdAndToken(
-      @Param("linkedItemId") Long linkedItemId,
-      @Param("tokenName") String tokenName);
-
-  /**
-   * 反查某个影响因素身份当前影响哪些联动价行。
-   *
-   * <p>页面会传当前月份和业务单元；这里仍允许为空，方便后续审计场景看全量。
-   */
-  @Select("SELECT"
-      + " b.id AS bindingId,"
-      + " b.linked_item_id AS linkedItemId,"
-      + " b.factor_identity_id AS factorIdentityId,"
-      + " li.pricing_month AS pricingMonth,"
-      + " li.business_unit_type AS businessUnitType,"
-      + " li.material_code AS materialCode,"
-      + " li.material_name AS materialName,"
-      + " li.supplier_name AS supplierName,"
-      + " li.supplier_code AS supplierCode,"
-      + " li.formula_expr AS formulaExpr,"
-      + " li.formula_expr_cn AS formulaExprCn,"
-      + " b.token_name AS tokenName,"
-      + " b.source AS bindingSource"
-      + " FROM lp_price_variable_binding b"
-      + " JOIN lp_price_linked_item li ON li.id = b.linked_item_id"
-      + " WHERE b.factor_identity_id = #{factorIdentityId}"
-      + "   AND b.expiry_date IS NULL"
-      + "   AND b.deleted = 0"
-      + "   AND li.deleted = 0"
-      + "   AND li.effective_to IS NULL"
-      + "   AND (#{pricingMonth} IS NULL OR #{pricingMonth} = ''"
-      + "        OR li.pricing_month = #{pricingMonth})"
-      + "   AND (#{businessUnitType} IS NULL OR #{businessUnitType} = ''"
-      + "        OR li.business_unit_type = #{businessUnitType})"
-      + " ORDER BY li.pricing_month DESC, li.business_unit_type ASC,"
-      + "          li.material_code ASC, b.token_name ASC, b.id ASC")
-  List<FactorLinkedItemReferenceDto> findLinkedItemReferencesByFactorIdentity(
-      @Param("factorIdentityId") Long factorIdentityId,
-      @Param("pricingMonth") String pricingMonth,
-      @Param("businessUnitType") String businessUnitType);
+      @Param("linkedItemId") Long linkedItemId, @Param("tokenName") String tokenName);
 
   /**
    * 把旧版本的 {@code expiry_date} 设为指定日期（版本切换时调）。
    *
-   * @param id         旧行 id
+   * @param id 旧行 id
    * @param expiryDate new.effective_date - 1 day
    */
-  @Update("UPDATE lp_price_variable_binding SET expiry_date = #{expiryDate},"
-      + " updated_at = CURRENT_TIMESTAMP"
-      + " WHERE id = #{id}")
+  @Update(
+      "UPDATE lp_price_variable_binding SET expiry_date = #{expiryDate},"
+          + " updated_at = CURRENT_TIMESTAMP"
+          + " WHERE id = #{id}")
   int expireById(@Param("id") Long id, @Param("expiryDate") LocalDate expiryDate);
 
   /**
    * 列出公式中可能含行局部占位符但无当前绑定的联动行。
    *
-   * <p>用于"待绑定"徽章：前端 /price/linked/result 顶部提示。
-   * SQL 语义：
+   * <p>用于"待绑定"徽章：前端 /price/linked/result 顶部提示。 SQL 语义：
+   *
    * <pre>
    *   select li.id, li.material_code, li.spec_model, li.formula_expr
    *   from lp_price_linked_item li
@@ -140,30 +114,29 @@ public interface PriceVariableBindingMapper extends BaseMapper<PriceVariableBind
    *     )
    * </pre>
    *
-   * <p>V36：从硬编码的 {@code [__material]} / {@code [__scrap]} 升级为通配
-   * {@code [__%}。依赖约定"行局部占位符统一用两下划线前缀"（见
-   * {@link com.sanhua.marketingcost.entity.RowLocalPlaceholder} 注释），
+   * <p>V36：从硬编码的 {@code [__material]} / {@code [__scrap]} 升级为通配 {@code
+   * [__%}。依赖约定"行局部占位符统一用两下划线前缀"（见 {@link com.sanhua.marketingcost.entity.RowLocalPlaceholder} 注释），
    * 只要有新 {@code __packaging} / {@code __coating} 之类录入 DB，这条 SQL 即自动覆盖。
    *
-   * <p>{@code ESCAPE '!'} 子句：MySQL 里 {@code _} 是 LIKE 通配符（匹配任一字符），
-   * 必须转义才能表达字面下划线。用 {@code !} 当转义符（规避 {@code \} 在 Java 源码里
-   * 的双层转义噪音）。
+   * <p>{@code ESCAPE '!'} 子句：MySQL 里 {@code _} 是 LIKE 通配符（匹配任一字符）， 必须转义才能表达字面下划线。用 {@code !}
+   * 当转义符（规避 {@code \} 在 Java 源码里 的双层转义噪音）。
    *
-   * <p>已删除 {@code formula_expr_cn} 相关的中文 LIKE —— 该列自 T6 起是
-   * {@link com.sanhua.marketingcost.formula.normalize.FormulaDisplayRenderer} 派生的
-   * 展示字段，不再是数据源头；扫源头 {@code formula_expr} 即可。
+   * <p>已删除 {@code formula_expr_cn} 相关的中文 LIKE —— 该列自 T6 起是 {@link
+   * com.sanhua.marketingcost.formula.normalize.FormulaDisplayRenderer} 派生的 展示字段，不再是数据源头；扫源头 {@code
+   * formula_expr} 即可。
    */
-  @Select("SELECT li.id, li.material_code, li.spec_model, li.formula_expr, li.formula_expr_cn"
-      + " FROM lp_price_linked_item li"
-      + " WHERE li.deleted = 0 AND li.source_kind = 'PUBLIC'"
-      + "   AND li.effective_to IS NULL"
-      + "   AND li.formula_expr LIKE '%[!_!_%' ESCAPE '!'"
-      + "   AND NOT EXISTS ("
-      + "     SELECT 1 FROM lp_price_variable_binding b"
-      + "      WHERE b.linked_item_id = li.id"
-      + "        AND b.deleted = 0"
-      + "        AND b.expiry_date IS NULL)"
-      + " ORDER BY li.id")
+  @Select(
+      "SELECT li.id, li.material_code, li.spec_model, li.formula_expr, li.formula_expr_cn"
+          + " FROM lp_price_linked_item li"
+          + " WHERE li.deleted = 0 AND li.source_kind = 'PUBLIC'"
+          + "   AND li.effective_to IS NULL"
+          + "   AND li.formula_expr LIKE '%[!_!_%' ESCAPE '!'"
+          + "   AND NOT EXISTS ("
+          + "     SELECT 1 FROM lp_price_variable_binding b"
+          + "      WHERE b.linked_item_id = li.id"
+          + "        AND b.deleted = 0"
+          + "        AND b.expiry_date IS NULL)"
+          + " ORDER BY li.id")
   List<PendingItemRow> findPendingItems();
 
   /** 结果视图：pending 列表只需要几列，不完整 entity。 */

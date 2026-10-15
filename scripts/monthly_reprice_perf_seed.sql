@@ -16,13 +16,13 @@
 --   - @perf_seed_results = 0 会只生成 PENDING 任务，用于 Worker 抢任务/恢复压测。
 -- =============================================================================
 
-SET NAMES utf8mb4;
+SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
 SET SESSION cte_max_recursion_depth = 1000000;
 
-SET @perf_reprice_no = COALESCE(NULLIF(@perf_reprice_no, ''), CONCAT('PERF-', DATE_FORMAT(NOW(), '%Y%m%d%H%i%s')));
-SET @perf_pricing_month = COALESCE(NULLIF(@perf_pricing_month, ''), DATE_FORMAT(CURRENT_DATE, '%Y-%m'));
-SET @perf_business_unit_type = COALESCE(NULLIF(@perf_business_unit_type, ''), 'PERF_BU');
-SET @perf_adjust_batch_id = COALESCE(@perf_adjust_batch_id, 1);
+SET @perf_reprice_no = COALESCE(NULLIF(@perf_reprice_no, ''), CONCAT('PERF-', DATE_FORMAT(NOW(), '%Y%m%d%H%i%s'))) COLLATE utf8mb4_unicode_ci;
+SET @perf_pricing_month = COALESCE(NULLIF(@perf_pricing_month, ''), DATE_FORMAT(CURRENT_DATE, '%Y-%m')) COLLATE utf8mb4_unicode_ci;
+SET @perf_business_unit_type = COALESCE(NULLIF(@perf_business_unit_type, ''), 'PERF_BU') COLLATE utf8mb4_unicode_ci;
+SET @perf_price_as_of_time = COALESCE(@perf_price_as_of_time, NOW());
 SET @perf_object_count = COALESCE(@perf_object_count, 10000);
 SET @perf_bom_lines = COALESCE(@perf_bom_lines, 30);
 SET @perf_seed_results = COALESCE(@perf_seed_results, 1);
@@ -37,11 +37,11 @@ DELETE FROM lp_cost_run_batch WHERE scene = 'MONTHLY_REPRICE' AND source_no = @p
 DELETE FROM lp_monthly_reprice_batch WHERE reprice_no = @perf_reprice_no;
 
 INSERT INTO lp_monthly_reprice_batch (
-  reprice_no, pricing_month, business_unit_type, adjust_batch_id, execution_backend,
+  reprice_no, pricing_month, business_unit_type, price_as_of_time, bom_source_policy, execution_backend,
   status, total_count, success_count, failed_count, skipped_count, cost_engine_version,
   price_version, rule_version, created_by, created_name, started_at, finished_at, remark
 ) VALUES (
-  @perf_reprice_no, @perf_pricing_month, @perf_business_unit_type, @perf_adjust_batch_id, 'LOCAL_WORKER',
+  @perf_reprice_no, @perf_pricing_month, @perf_business_unit_type, @perf_price_as_of_time, 'HISTORICAL_OA_BOM', 'LOCAL_WORKER',
   IF(@perf_seed_results = 1, 'WAIT_CONFIRM', 'RUNNING'),
   @perf_object_count,
   IF(@perf_seed_results = 1, @perf_object_count - FLOOR(@perf_object_count / 997), 0),
@@ -56,7 +56,7 @@ INSERT INTO lp_cost_run_batch (
   status, total_count, success_count, failed_count, skipped_count, progress,
   request_snapshot_json, created_by, created_name, started_at, finished_at
 ) VALUES (
-  @perf_cost_batch_no, 'MONTHLY_REPRICE', @perf_reprice_no, @perf_pricing_month, NOW(),
+  @perf_cost_batch_no, 'MONTHLY_REPRICE', @perf_reprice_no, @perf_pricing_month, @perf_price_as_of_time,
   @perf_business_unit_type,
   IF(@perf_seed_results = 1, IF(FLOOR(@perf_object_count / 997) > 0, 'PARTIAL_FAILED', 'SUCCESS'), 'PENDING'),
   @perf_object_count,
@@ -71,7 +71,7 @@ INSERT INTO lp_cost_run_batch (
 INSERT INTO lp_cost_run_task (
   batch_no, scene, source_no, calc_object_key, oa_no, oa_form_item_id, product_code,
   package_method, customer_name, business_unit_type, pricing_month, price_as_of_time,
-  adjust_batch_id, bom_source_policy, status, progress, retry_count, max_retry_count,
+  bom_source_policy, status, progress, retry_count, max_retry_count,
   request_snapshot_json, error_message
 )
 WITH RECURSIVE seq(n) AS (
@@ -91,8 +91,7 @@ SELECT
   CONCAT('压测客户-', LPAD((n % 200) + 1, 3, '0')),
   @perf_business_unit_type,
   @perf_pricing_month,
-  NOW(),
-  @perf_adjust_batch_id,
+  @perf_price_as_of_time,
   'HISTORICAL_OA_BOM',
   IF(@perf_seed_results = 1, IF(n % 997 = 0, 'FAILED', 'SUCCESS'), 'PENDING'),
   IF(@perf_seed_results = 1, 100, 0),

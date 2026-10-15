@@ -16,8 +16,8 @@ import com.sanhua.marketingcost.dto.CostRunPartItemDto;
 import com.sanhua.marketingcost.dto.PackagePriceRequest;
 import com.sanhua.marketingcost.dto.PackagePriceResult;
 import com.sanhua.marketingcost.dto.PriceTypeRoute;
-import com.sanhua.marketingcost.dto.RollupPartComponentDto;
 import com.sanhua.marketingcost.dto.RollupDisplaySnapshot;
+import com.sanhua.marketingcost.dto.RollupPartComponentDto;
 import com.sanhua.marketingcost.entity.CostRunPartItem;
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.OaForm;
@@ -90,7 +90,7 @@ class CostRunPartItemServiceImplTest {
   void routerFallsBackToLowerPriority() {
     when(costRunPartItemMapper.selectBaseByOaNo("OA-001"))
         .thenReturn(new ArrayList<>(List.of(part("MAT-A"))));
-    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-A"), anyString(), any()))
+    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-A"), anyString(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route(PriceTypeEnum.RANGE), route(PriceTypeEnum.FIXED)));
 
     PriceResolver rangeResolver =
@@ -112,7 +112,7 @@ class CostRunPartItemServiceImplTest {
   void monthlyRepricePartItemsDoNotPersistDailyTable() {
     when(costRunPartItemMapper.selectBaseByOaNo("OA-MRP"))
         .thenReturn(new ArrayList<>(List.of(part("MAT-A"))));
-    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-A"), anyString(), any()))
+    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-A"), anyString(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route(PriceTypeEnum.FIXED)));
     PriceResolver fixedResolver =
         stubResolver(PriceTypeEnum.FIXED, PriceResolveResult.hit(new BigDecimal("8.88"), "固定采购价"));
@@ -123,7 +123,7 @@ class CostRunPartItemServiceImplTest {
             "OA-MRP",
             LocalDate.of(2026, 5, 1),
             CostRunContext.monthlyReprice(
-                "2026-05", 88L, "MRP-001", "COMMERCIAL", "OA-MRP", 1L, "P-001", null, null, "OBJ"),
+                "2026-05", "MRP-001", "COMMERCIAL", "OA-MRP", 1L, "P-001", null, null, "OBJ"),
             false,
             ignored -> {});
 
@@ -140,7 +140,7 @@ class CostRunPartItemServiceImplTest {
     current.setProductCode("TOP-001");
     when(costRunPartItemMapper.selectBaseByQuoteScope("OA-QUOTE", 180L, "TOP-001", "2026-06"))
         .thenReturn(new ArrayList<>(List.of(current)));
-    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-CURRENT"), anyString(), any()))
+    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-CURRENT"), anyString(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route(PriceTypeEnum.FIXED)));
     PriceResolver fixedResolver =
         stubResolver(PriceTypeEnum.FIXED, PriceResolveResult.hit(new BigDecimal("5.00"), "固定采购价"));
@@ -176,7 +176,7 @@ class CostRunPartItemServiceImplTest {
   void allResolversMissMarksRed() {
     when(costRunPartItemMapper.selectBaseByOaNo("OA-002"))
         .thenReturn(new ArrayList<>(List.of(part("MAT-B"))));
-    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-B"), anyString(), any()))
+    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-B"), anyString(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route(PriceTypeEnum.MAKE)));
 
     PriceResolver makeResolver =
@@ -198,7 +198,7 @@ class CostRunPartItemServiceImplTest {
     p.setPartQty(new BigDecimal("2"));
     when(costRunPartItemMapper.selectBaseByOaNo("OA-MAKE-MISS"))
         .thenReturn(new ArrayList<>(List.of(p)));
-    when(routerService.listCandidates(eqIgnoreCaseSafe("MAKE-MISS-RAW"), anyString(), any()))
+    when(routerService.listCandidates(eqIgnoreCaseSafe("MAKE-MISS-RAW"), anyString(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route(PriceTypeEnum.MAKE)));
 
     PriceResolver makeResolver =
@@ -220,21 +220,21 @@ class CostRunPartItemServiceImplTest {
   }
 
   @Test
-  @DisplayName("Router 无候选 → priceSource=NO_ROUTE + remark 提示去配路由")
+  @DisplayName("Router 无候选 → priceSource=MISSING_PRICE + remark 提示检查价格源")
   void noRouteAvailable() {
     CostRunPartItemDto p = part("MAT-C");
     p.setShapeAttr("采购件");
     when(costRunPartItemMapper.selectBaseByOaNo("OA-003"))
         .thenReturn(new ArrayList<>(List.of(p)));
-    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-C"), anyString(), any()))
+    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-C"), anyString(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(Collections.emptyList());
 
     CostRunPartItemServiceImpl service = build(List.of());
     List<CostRunPartItemDto> items = service.listByOaNo("OA-003");
 
     assertThat(items.get(0).getUnitPrice()).isNull();
-    assertThat(items.get(0).getPriceSource()).isEqualTo("NO_ROUTE");
-    assertThat(items.get(0).getRemark()).contains("未配价格类型路由");
+    assertThat(items.get(0).getPriceSource()).isEqualTo("MISSING_PRICE");
+    assertThat(items.get(0).getRemark()).contains("没有可用价格来源");
     assertThat(items.get(0).getRemark()).contains("MAT-C");
   }
 
@@ -250,7 +250,7 @@ class CostRunPartItemServiceImplTest {
         .thenReturn(new ArrayList<>(List.of(p)));
     when(packageComponentIdentifyService.batchIdentify(any(), eq("COMMERCIAL")))
         .thenReturn(Map.of("PKG-PARENT", true));
-    when(routerService.listCandidates(eqIgnoreCaseSafe("PKG-PARENT"), anyString(), any()))
+    when(routerService.listCandidates(eqIgnoreCaseSafe("PKG-PARENT"), anyString(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route(PriceTypeEnum.FIXED)));
     when(packageComponentPriceService.ensurePrice(any(PackagePriceRequest.class)))
         .thenReturn(packagePrice("PRICED", true, "12.345678", List.of()));
@@ -265,7 +265,7 @@ class CostRunPartItemServiceImplTest {
     assertThat(items.get(0).getAmount()).isEqualByComparingTo("37.037034");
     assertThat(items.get(0).getPriceSource()).isEqualTo("包装组件价格");
     assertThat(items.get(0).getRemark()).isEmpty();
-    verify(routerService, never()).listCandidates(eqIgnoreCaseSafe("PKG-PARENT"), anyString(), any());
+    verify(routerService, never()).listCandidates(eqIgnoreCaseSafe("PKG-PARENT"), anyString(), any(), any(), any());
 
     ArgumentCaptor<PackagePriceRequest> requestCaptor =
         ArgumentCaptor.forClass(PackagePriceRequest.class);
@@ -323,7 +323,6 @@ class CostRunPartItemServiceImplTest {
         LocalDate.of(2026, 5, 26),
         CostRunContext.monthlyReprice(
             "2026-04",
-            88L,
             "MRP-001",
             "COMMERCIAL",
             priceAsOfTime,
@@ -354,7 +353,7 @@ class CostRunPartItemServiceImplTest {
         .thenReturn(new ArrayList<>(List.of(p)));
     when(packageComponentIdentifyService.batchIdentify(any(), eq("COMMERCIAL")))
         .thenReturn(Map.of("NORMAL-MAT", false));
-    when(routerService.listCandidates(eqIgnoreCaseSafe("NORMAL-MAT"), anyString(), any()))
+    when(routerService.listCandidates(eqIgnoreCaseSafe("NORMAL-MAT"), anyString(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route(PriceTypeEnum.FIXED)));
 
     PriceResolver fixedResolver =
@@ -393,7 +392,7 @@ class CostRunPartItemServiceImplTest {
         .contains("包装组件价格未完整")
         .contains("MISSING_CHILD_PRICE")
         .contains("当前阶段不阻断");
-    verify(routerService, never()).listCandidates(eqIgnoreCaseSafe("PKG-MISSING"), anyString(), any());
+    verify(routerService, never()).listCandidates(eqIgnoreCaseSafe("PKG-MISSING"), anyString(), any(), any(), any());
   }
 
   @Test
@@ -421,7 +420,7 @@ class CostRunPartItemServiceImplTest {
     p.setPartQty(new BigDecimal("2"));
     when(costRunPartItemMapper.selectBaseByOaNo("OA-MAKE-HIT"))
         .thenReturn(new ArrayList<>(List.of(p)));
-    when(routerService.listCandidates(eqIgnoreCaseSafe("MAKE-PART"), anyString(), any()))
+    when(routerService.listCandidates(eqIgnoreCaseSafe("MAKE-PART"), anyString(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(Collections.emptyList());
 
     PriceResolver makeResolver =
@@ -445,7 +444,7 @@ class CostRunPartItemServiceImplTest {
     p.setMaterialShape("制造件");
     when(costRunPartItemMapper.selectBaseByOaNo("OA-MAKE-MISS-RESULT"))
         .thenReturn(new ArrayList<>(List.of(p)));
-    when(routerService.listCandidates(eqIgnoreCaseSafe("MAKE-MISSING"), anyString(), any()))
+    when(routerService.listCandidates(eqIgnoreCaseSafe("MAKE-MISSING"), anyString(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(Collections.emptyList());
 
     PriceResolver makeResolver =
@@ -487,7 +486,7 @@ class CostRunPartItemServiceImplTest {
     p.setPartQty(new BigDecimal("3"));
     when(costRunPartItemMapper.selectBaseByOaNo("OA-004"))
         .thenReturn(new ArrayList<>(List.of(p)));
-    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-D"), anyString(), any()))
+    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-D"), anyString(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route(PriceTypeEnum.FIXED)));
 
     PriceResolver fixedResolver =
@@ -507,7 +506,7 @@ class CostRunPartItemServiceImplTest {
     p.setPartQty(new BigDecimal("0.655"));
     when(costRunPartItemMapper.selectBaseByOaNo("OA-RANGE-AMOUNT"))
         .thenReturn(new ArrayList<>(List.of(p)));
-    when(routerService.listCandidates(eqIgnoreCaseSafe("RANGE-MAT"), anyString(), any()))
+    when(routerService.listCandidates(eqIgnoreCaseSafe("RANGE-MAT"), anyString(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route(PriceTypeEnum.RANGE)));
 
     PriceResolver rangeResolver =
@@ -537,7 +536,7 @@ class CostRunPartItemServiceImplTest {
     p.setPartQty(new BigDecimal("2"));
     when(costRunPartItemMapper.selectBaseByOaNo("OA-CURRENT"))
         .thenReturn(new ArrayList<>(List.of(p)));
-    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-CURRENT"), eq(currentPeriod), eq(currentDate)))
+    when(routerService.listCandidates(eqIgnoreCaseSafe("MAT-CURRENT"), eq(currentPeriod), eq(currentDate), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
         .thenReturn(List.of(route(PriceTypeEnum.FIXED)));
 
     PriceResolver fixedResolver =
@@ -548,7 +547,7 @@ class CostRunPartItemServiceImplTest {
 
     assertThat(items.get(0).getUnitPrice()).isEqualByComparingTo("5.00");
     assertThat(items.get(0).getAmount()).isEqualByComparingTo("10.00");
-    verify(routerService).listCandidates(eqIgnoreCaseSafe("MAT-CURRENT"), eq(currentPeriod), eq(currentDate));
+    verify(routerService).listCandidates(eqIgnoreCaseSafe("MAT-CURRENT"), eq(currentPeriod), eq(currentDate), any(), any());
   }
 
   @Test

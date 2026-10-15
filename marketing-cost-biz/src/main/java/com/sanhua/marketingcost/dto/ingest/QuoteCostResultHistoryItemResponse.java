@@ -16,6 +16,8 @@ public class QuoteCostResultHistoryItemResponse {
   private String periodMonth;
   private String status;
   private BigDecimal totalCost;
+  private BigDecimal cuMaterialAdjustment;
+  private BigDecimal finalQuoteAmount;
   private BigDecimal materialCost;
   private BigDecimal laborCost;
   private BigDecimal auxiliaryCost;

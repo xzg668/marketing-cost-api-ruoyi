@@ -40,34 +40,35 @@ final class PriceLinkedType2FactorUpsertTestSupport {
   final FactorMonthlyPriceMapper monthlyPriceMapper = mock(FactorMonthlyPriceMapper.class);
   final FactorMonthlyPriceChangeLogMapper changeLogMapper =
       mock(FactorMonthlyPriceChangeLogMapper.class);
-  final FactorUploadBatchService factorUploadBatchService =
-      mock(FactorUploadBatchService.class);
-  final AtomicReference<FactorWorkbookParseResult> savedRowRefWorkbook =
-      new AtomicReference<>();
-  final AtomicReference<FactorMonthlyPriceUpsertResult> savedRowRefUpsert =
-      new AtomicReference<>();
+  final FactorUploadBatchService factorUploadBatchService = mock(FactorUploadBatchService.class);
+  final AtomicReference<FactorWorkbookParseResult> savedRowRefWorkbook = new AtomicReference<>();
+  final AtomicReference<FactorMonthlyPriceUpsertResult> savedRowRefUpsert = new AtomicReference<>();
   final PriceLinkedType2FactorMonthlyUpsertServiceImpl service;
+  final com.sanhua.marketingcost.service.financefactor.FinanceFactorAuthority financeAuthority;
 
   private final AtomicLong identityId = new AtomicLong(1000L);
   private final AtomicLong monthlyPriceId = new AtomicLong(2000L);
   private final AtomicLong logId = new AtomicLong(3000L);
 
   PriceLinkedType2FactorUpsertTestSupport() {
-    PriceLinkedType2TextNormalizerImpl textNormalizer =
-        new PriceLinkedType2TextNormalizerImpl();
+    PriceLinkedType2TextNormalizerImpl textNormalizer = new PriceLinkedType2TextNormalizerImpl();
     FactorCanonicalKeyServiceImpl canonicalKeyService =
         new FactorCanonicalKeyServiceImpl(textNormalizer);
-    PriceLinkedType2FactorIdentityReadRepository readRepository =
-        new InMemoryReadRepository();
+    financeAuthority =
+        new com.sanhua.marketingcost.service.financefactor.FinanceFactorAuthority(
+            identityMapper, monthlyPriceMapper, canonicalKeyService);
+    PriceLinkedType2FactorIdentityReadRepository readRepository = new InMemoryReadRepository();
     PriceLinkedType2FactorIdentityResolverImpl resolver =
         new PriceLinkedType2FactorIdentityResolverImpl(
-            canonicalKeyService, textNormalizer, readRepository);
-    service = new PriceLinkedType2FactorMonthlyUpsertServiceImpl(
-        resolver,
-        identityMapper,
-        monthlyPriceMapper,
-        changeLogMapper,
-        factorUploadBatchService);
+            canonicalKeyService, textNormalizer, readRepository, financeAuthority);
+    service =
+        new PriceLinkedType2FactorMonthlyUpsertServiceImpl(
+            resolver,
+            identityMapper,
+            monthlyPriceMapper,
+            changeLogMapper,
+            factorUploadBatchService,
+            financeAuthority);
     configureMappers();
   }
 
@@ -91,8 +92,7 @@ final class PriceLinkedType2FactorUpsertTestSupport {
     return identity;
   }
 
-  FactorMonthlyPrice addMonthlyPrice(
-      long id, long factorIdentityId, String month, String price) {
+  FactorMonthlyPrice addMonthlyPrice(long id, long factorIdentityId, String month, String price) {
     FactorMonthlyPrice monthlyPrice = new FactorMonthlyPrice();
     monthlyPrice.setId(id);
     monthlyPrice.setFactorIdentityId(factorIdentityId);
@@ -107,24 +107,11 @@ final class PriceLinkedType2FactorUpsertTestSupport {
 
   PriceLinkedType2WorkbookParseResult workbook(PriceLinkedType2FactorRow... rows) {
     return new PriceLinkedType2WorkbookParseResult(
-        "type2.xls",
-        "Sheet1",
-        5,
-        "importdata1",
-        1,
-        List.of(rows),
-        List.of(),
-        List.of(),
-        List.of());
+        "type2.xls", "Sheet1", 5, "importdata1", 1, List.of(rows), List.of(), List.of(), List.of());
   }
 
   PriceLinkedType2FactorRow factor(
-      int rowNumber,
-      String seq,
-      String name,
-      String shortName,
-      String source,
-      String price) {
+      int rowNumber, String seq, String name, String shortName, String source, String price) {
     return new PriceLinkedType2FactorRow(
         "Sheet1",
         rowNumber,
@@ -138,62 +125,79 @@ final class PriceLinkedType2FactorUpsertTestSupport {
   }
 
   private void configureMappers() {
-    doAnswer(invocation -> {
-      FactorIdentity value = invocation.getArgument(0);
-      if (value.getId() == null) {
-        value.setId(identityId.getAndIncrement());
-      }
-      replaceIdentity(value);
-      return 1;
-    }).when(identityMapper).insert(any(FactorIdentity.class));
-    doAnswer(invocation -> {
-      FactorIdentity value = invocation.getArgument(0);
-      replaceIdentity(value);
-      return 1;
-    }).when(identityMapper).updateById(any(FactorIdentity.class));
+    doAnswer(
+            invocation -> {
+              FactorIdentity value = invocation.getArgument(0);
+              if (value.getId() == null) {
+                value.setId(identityId.getAndIncrement());
+              }
+              replaceIdentity(value);
+              return 1;
+            })
+        .when(identityMapper)
+        .insert(any(FactorIdentity.class));
+    doAnswer(
+            invocation -> {
+              FactorIdentity value = invocation.getArgument(0);
+              replaceIdentity(value);
+              return 1;
+            })
+        .when(identityMapper)
+        .updateById(any(FactorIdentity.class));
     when(identityMapper.selectById(any()))
         .thenAnswer(invocation -> findIdentity(((Number) invocation.getArgument(0)).longValue()));
 
-    doAnswer(invocation -> {
-      FactorMonthlyPrice value = invocation.getArgument(0);
-      if (value.getId() == null) {
-        value.setId(monthlyPriceId.getAndIncrement());
-      }
-      replaceMonthlyPrice(value);
-      return 1;
-    }).when(monthlyPriceMapper).insert(any(FactorMonthlyPrice.class));
-    doAnswer(invocation -> {
-      FactorMonthlyPrice value = invocation.getArgument(0);
-      replaceMonthlyPrice(value);
-      return 1;
-    }).when(monthlyPriceMapper).updateById(any(FactorMonthlyPrice.class));
+    doAnswer(
+            invocation -> {
+              FactorMonthlyPrice value = invocation.getArgument(0);
+              if (value.getId() == null) {
+                value.setId(monthlyPriceId.getAndIncrement());
+              }
+              replaceMonthlyPrice(value);
+              return 1;
+            })
+        .when(monthlyPriceMapper)
+        .insert(any(FactorMonthlyPrice.class));
+    doAnswer(
+            invocation -> {
+              FactorMonthlyPrice value = invocation.getArgument(0);
+              replaceMonthlyPrice(value);
+              return 1;
+            })
+        .when(monthlyPriceMapper)
+        .updateById(any(FactorMonthlyPrice.class));
     when(monthlyPriceMapper.findActiveByIdentityAndMonth(anyLong(), anyString()))
-        .thenAnswer(invocation -> findMonthlyPrice(
-            invocation.getArgument(0), invocation.getArgument(1)));
+        .thenAnswer(
+            invocation -> findMonthlyPrice(invocation.getArgument(0), invocation.getArgument(1)));
 
-    doAnswer(invocation -> {
-      FactorMonthlyPriceChangeLog value = invocation.getArgument(0);
-      if (value.getId() == null) {
-        value.setId(logId.getAndIncrement());
-      }
-      changeLogs.add(value);
-      return 1;
-    }).when(changeLogMapper).insert(any(FactorMonthlyPriceChangeLog.class));
+    doAnswer(
+            invocation -> {
+              FactorMonthlyPriceChangeLog value = invocation.getArgument(0);
+              if (value.getId() == null) {
+                value.setId(logId.getAndIncrement());
+              }
+              changeLogs.add(value);
+              return 1;
+            })
+        .when(changeLogMapper)
+        .insert(any(FactorMonthlyPriceChangeLog.class));
 
     when(factorUploadBatchService.saveRowRefs(
-        anyLong(), any(FactorWorkbookParseResult.class),
-        any(FactorMonthlyPriceUpsertResult.class)))
-        .thenAnswer(invocation -> {
-          Long batchId = invocation.getArgument(0);
-          FactorWorkbookParseResult workbook = invocation.getArgument(1);
-          FactorMonthlyPriceUpsertResult upsert = invocation.getArgument(2);
-          savedRowRefWorkbook.set(workbook);
-          savedRowRefUpsert.set(upsert);
-          FactorRowRefSaveResult result = new FactorRowRefSaveResult();
-          result.setFactorUploadBatchId(batchId);
-          result.setInsertedCount(upsert.getRows().size());
-          return result;
-        });
+            anyLong(),
+            any(FactorWorkbookParseResult.class),
+            any(FactorMonthlyPriceUpsertResult.class)))
+        .thenAnswer(
+            invocation -> {
+              Long batchId = invocation.getArgument(0);
+              FactorWorkbookParseResult workbook = invocation.getArgument(1);
+              FactorMonthlyPriceUpsertResult upsert = invocation.getArgument(2);
+              savedRowRefWorkbook.set(workbook);
+              savedRowRefUpsert.set(upsert);
+              FactorRowRefSaveResult result = new FactorRowRefSaveResult();
+              result.setFactorUploadBatchId(batchId);
+              result.setInsertedCount(upsert.getRows().size());
+              return result;
+            });
   }
 
   private FactorIdentity findIdentity(long id) {
@@ -244,8 +248,7 @@ final class PriceLinkedType2FactorUpsertTestSupport {
     }
 
     @Override
-    public Map<Long, Long> countActiveLegacyBindings(
-        Collection<Long> factorIdentityIds) {
+    public Map<Long, Long> countActiveLegacyBindings(Collection<Long> factorIdentityIds) {
       Map<Long, Long> result = new LinkedHashMap<>();
       for (Long identityId : factorIdentityIds) {
         result.put(identityId, bindingCounts.getOrDefault(identityId, 0L));

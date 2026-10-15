@@ -7,7 +7,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import com.sanhua.marketingcost.dto.technicaldata.*;
 import com.sanhua.marketingcost.entity.*;
-import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
+import com.sanhua.marketingcost.db.OriginalPricingIntegrationTestBase;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -17,7 +17,7 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.transaction.annotation.Transactional;
 
 @Tag("integration") @Transactional
-class TechnicalDataPriceApplicationIntegrationTest extends BomMapperTestBase {
+class TechnicalDataPriceApplicationIntegrationTest extends OriginalPricingIntegrationTestBase {
   private static final TechnicalDataActor WANG = new TechnicalDataActor(101L, "王工", Set.of("technical:data:task:edit"));
   private static final TechnicalDataActor LI = new TechnicalDataActor(102L, "李工", Set.of("technical:data:task:edit"));
   @Autowired TechnicalDataPriceApplicationService service;
@@ -38,9 +38,16 @@ class TechnicalDataPriceApplicationIntegrationTest extends BomMapperTestBase {
   @MockBean TechnicalDataPriceRequirements requirements;
   @MockBean TechnicalDataPriceReferences references;
   private Long productId;
+  @Autowired com.sanhua.marketingcost.service.financefactor.FinanceFactorPublicationService finance;
   private String material;
 
-  @BeforeEach void fixture() {
+  @BeforeEach void fixture() throws Exception {
+    try (var input = getClass().getResourceAsStream("/finance-factor/commercial-original.xlsx")) {
+      byte[] bytes = Objects.requireNonNull(input).readAllBytes();
+      var scope = new com.sanhua.marketingcost.dto.FinanceFactorImportContext("COMMERCIAL","210","2026-09",null,"CU_90000");
+      var preview = finance.preview(bytes,"财务.xlsx",scope);
+      finance.publish(bytes,"财务.xlsx",scope,preview.previewFingerprint(),"integration");
+    }
     material = "TW15-" + UUID.randomUUID().toString().substring(0,8);
     productId = product(101L, "王工", "2026-09");
     when(requirements.check(any(), any())).thenReturn(check("MISSING", "basis"));
@@ -131,7 +138,7 @@ class TechnicalDataPriceApplicationIntegrationTest extends BomMapperTestBase {
       var approved=versions.transition(versions.transition(frozen,"SUBMITTED",101L),"APPROVED",101L);
       versions.state(repository.lockProduct(productId).orElseThrow(),person,approved.getId(),"APPROVED");
       publication.publish(task,product,approved); publication.publish(task,product,approved);
-      var routes=router.listCandidates(material,"2027-12",java.time.LocalDate.of(2027,12,1));
+      var routes=router.listCandidates(material,"2027-12",java.time.LocalDate.of(2027,12,1), "210", "COMMERCIAL");
       assertThat(routes).hasSize(1); assertThat(routes.getFirst().supplemental()).isTrue();
       var item=new com.sanhua.marketingcost.dto.CostRunPartItemDto(); item.setPartCode(material); item.setPriceOrgCode("210");
       var context=new com.sanhua.marketingcost.dto.CostRunContext(); context.setBusinessUnitType("COMMERCIAL"); context.setPriceOrgCode("210"); context.setPricingMonth("2027-12");
@@ -139,8 +146,11 @@ class TechnicalDataPriceApplicationIntegrationTest extends BomMapperTestBase {
       context.setPriceOrgCode("220");
       assertThat(fixedResolver.resolve("OTHER-QUOTE",item,routes.getFirst(),context).unitPrice()).isNull();
       context.setPriceOrgCode("210");
-      var publicPrice=new PriceFixedItem(); publicPrice.setMaterialCode(material); publicPrice.setSourceKind("PUBLIC"); publicPrice.setBusinessUnitType("COMMERCIAL"); publicPrice.setOrgCode("210"); publicPrice.setFixedPrice(BigDecimal.TEN); publicPrice.setSourceType("PURCHASE_FIXED"); fixed.insert(publicPrice);
-      var preferred=router.listCandidates(material,"2027-12",java.time.LocalDate.of(2027,12,1));
+      var publicPrice=new PriceFixedItem(); publicPrice.setMaterialCode(material); publicPrice.setSourceKind("PUBLIC"); publicPrice.setBusinessUnitType("COMMERCIAL"); publicPrice.setOrgCode("210"); publicPrice.setFixedPrice(BigDecimal.TEN); publicPrice.setSourceType("PURCHASE_FIXED");
+      publicPrice.setSupplierCode("TEST-SUP");publicPrice.setEffectiveFrom(java.time.LocalDate.of(2027,1,1));
+      publicPrice.setEffectiveTo(java.time.LocalDate.of(2028,1,1));
+      context.setPriceAsOfTime(LocalDateTime.of(2027,12,1,12,0));fixed.insert(publicPrice);
+      var preferred=router.listCandidates(material,"2027-12",java.time.LocalDate.of(2027,12,1), "210", "COMMERCIAL");
       assertThat(preferred).hasSize(3); assertThat(preferred.getFirst().supplemental()).isFalse();
       assertThat(fixedResolver.resolve("OTHER-QUOTE",item,preferred.getFirst(),context).unitPrice()).isEqualByComparingTo("10");
       assertThat(codec.prices(repository.findVersion(approved.getId()).orElseThrow()).items().getFirst().unitPrice()).isEqualByComparingTo("12.123456789");

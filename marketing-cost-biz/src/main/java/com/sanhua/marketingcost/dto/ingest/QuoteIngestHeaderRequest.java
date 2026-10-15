@@ -28,6 +28,10 @@ public class QuoteIngestHeaderRequest {
   private String goldPrice;
   private String sus304Price;
   private String sus316lPrice;
+
+  /** 最终是否招标需求（仅针对板换），OA编码sfzbxqjzdbhcp；null按否。 */
+  private Boolean boardTender;
+
   private String otherMaterial;
   private String baseShipping;
   private String saleLink;
@@ -244,6 +248,14 @@ public class QuoteIngestHeaderRequest {
 
   public String getSus316lPrice() {
     return sus316lPrice;
+  }
+
+  public Boolean getBoardTender() {
+    return boardTender;
+  }
+
+  public void setBoardTender(Boolean boardTender) {
+    this.boardTender = boardTender;
   }
 
   public void setSus316lPrice(String sus316lPrice) {

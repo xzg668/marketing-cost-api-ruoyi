@@ -44,8 +44,7 @@ public class FactorUploadBatchServiceImpl implements FactorUploadBatchService {
   private final FactorRowRefMapper factorRowRefMapper;
 
   public FactorUploadBatchServiceImpl(
-      FactorUploadBatchMapper factorUploadBatchMapper,
-      FactorRowRefMapper factorRowRefMapper) {
+      FactorUploadBatchMapper factorUploadBatchMapper, FactorRowRefMapper factorRowRefMapper) {
     this.factorUploadBatchMapper = factorUploadBatchMapper;
     this.factorRowRefMapper = factorRowRefMapper;
   }
@@ -63,9 +62,10 @@ public class FactorUploadBatchServiceImpl implements FactorUploadBatchService {
 
     FactorUploadBatch batch = new FactorUploadBatch();
     batch.setBatchNo(nextBatchNo());
-    batch.setImportType(StringUtils.hasText(request.getImportType())
-        ? normalize(request.getImportType())
-        : DEFAULT_IMPORT_TYPE);
+    batch.setImportType(
+        StringUtils.hasText(request.getImportType())
+            ? normalize(request.getImportType())
+            : DEFAULT_IMPORT_TYPE);
     batch.setImportPurpose(normalize(request.getImportPurpose()));
     batch.setEffectiveStrategy(normalize(request.getEffectiveStrategy()));
     batch.setPriceMonth(normalize(priceMonth));
@@ -98,8 +98,9 @@ public class FactorUploadBatchServiceImpl implements FactorUploadBatchService {
     FactorRowRefSaveResult result = new FactorRowRefSaveResult();
     result.setFactorUploadBatchId(factorUploadBatchId);
     if (factorUploadBatchId == null) {
-      result.getErrors().add(new FactorRowRefSaveResult.RowError(
-          null, null, "factorUploadBatchId 必填"));
+      result
+          .getErrors()
+          .add(new FactorRowRefSaveResult.RowError(null, null, "factorUploadBatchId 必填"));
       return result;
     }
     if (upsertResult == null || upsertResult.getRows().isEmpty()) {
@@ -117,9 +118,7 @@ public class FactorUploadBatchServiceImpl implements FactorUploadBatchService {
 
   @Override
   public FactorRowRef findRowRef(
-      Long factorUploadBatchId,
-      String sourceSheetName,
-      Integer sourceRowNumber) {
+      Long factorUploadBatchId, String sourceSheetName, Integer sourceRowNumber) {
     if (factorUploadBatchId == null
         || !StringUtils.hasText(sourceSheetName)
         || sourceRowNumber == null) {
@@ -127,6 +126,7 @@ public class FactorUploadBatchServiceImpl implements FactorUploadBatchService {
     }
     return factorRowRefMapper.selectOne(
         Wrappers.lambdaQuery(FactorRowRef.class)
+            .eq(FactorRowRef::getSchemeCode, "LEGACY")
             .eq(FactorRowRef::getFactorUploadBatchId, factorUploadBatchId)
             .eq(FactorRowRef::getSourceSheetName, normalize(sourceSheetName))
             .eq(FactorRowRef::getSourceRowNumber, sourceRowNumber)
@@ -139,27 +139,38 @@ public class FactorUploadBatchServiceImpl implements FactorUploadBatchService {
       FactorMonthlyPriceUpsertResult.RowResult rowResult,
       Map<String, FactorRowParseResult> parseRows,
       FactorRowRefSaveResult result) {
-    if (rowResult.getFactorIdentityId() == null || rowResult.getFactorMonthlyPriceId() == null) {
+    if (rowResult.getFactorIdentityId() == null
+        || (rowResult.getFactorMonthlyPriceId() == null
+            && !"FINANCE_REFERENCE".equals(rowResult.getMonthlyPriceAction()))) {
       result.setSkippedCount(result.getSkippedCount() + 1);
-      result.getErrors().add(new FactorRowRefSaveResult.RowError(
-          rowResult.getSourceSheetName(), rowResult.getSourceRowNumber(),
-          "影响因素身份或月度价格 id 为空"));
+      result
+          .getErrors()
+          .add(
+              new FactorRowRefSaveResult.RowError(
+                  rowResult.getSourceSheetName(),
+                  rowResult.getSourceRowNumber(),
+                  "影响因素身份或月度价格 id 为空"));
       return;
     }
     String sheetName = normalize(rowResult.getSourceSheetName());
     Integer rowNumber = rowResult.getSourceRowNumber();
     if (!StringUtils.hasText(sheetName) || rowNumber == null) {
       result.setSkippedCount(result.getSkippedCount() + 1);
-      result.getErrors().add(new FactorRowRefSaveResult.RowError(
-          rowResult.getSourceSheetName(), rowResult.getSourceRowNumber(),
-          "sheetName 或 rowNumber 为空"));
+      result
+          .getErrors()
+          .add(
+              new FactorRowRefSaveResult.RowError(
+                  rowResult.getSourceSheetName(),
+                  rowResult.getSourceRowNumber(),
+                  "sheetName 或 rowNumber 为空"));
       return;
     }
 
     FactorRowParseResult parseRow = parseRows.get(cellKey(sheetName, rowNumber));
     FactorRowRef rowRef = new FactorRowRef();
     rowRef.setFactorUploadBatchId(factorUploadBatchId);
-    rowRef.setSourceWorkbookName(parseResult == null ? null : normalize(parseResult.getSourceFileName()));
+    rowRef.setSourceWorkbookName(
+        parseResult == null ? null : normalize(parseResult.getSourceFileName()));
     rowRef.setSourceSheetName(sheetName);
     rowRef.setSourceRowNumber(rowNumber);
     rowRef.setFactorIdentityId(rowResult.getFactorIdentityId());
@@ -190,8 +201,9 @@ public class FactorUploadBatchServiceImpl implements FactorUploadBatchService {
   private void updateBatchStatus(Long factorUploadBatchId, FactorRowRefSaveResult result) {
     FactorUploadBatch batch = factorUploadBatchMapper.selectById(factorUploadBatchId);
     if (batch == null) {
-      result.getErrors().add(new FactorRowRefSaveResult.RowError(
-          null, null, "上传批次不存在：" + factorUploadBatchId));
+      result
+          .getErrors()
+          .add(new FactorRowRefSaveResult.RowError(null, null, "上传批次不存在：" + factorUploadBatchId));
       return;
     }
     int errorCount = nullToZero(batch.getErrorCount()) + result.getErrors().size();
@@ -231,21 +243,21 @@ public class FactorUploadBatchServiceImpl implements FactorUploadBatchService {
   }
 
   private String contentHash(
-      FactorWorkbookParseResult parseResult,
-      String priceMonth,
-      String businessUnitType) {
+      FactorWorkbookParseResult parseResult, String priceMonth, String businessUnitType) {
     List<String> parts = new ArrayList<>();
     parts.add(normalize(priceMonth));
     parts.add(normalize(businessUnitType));
     if (parseResult != null) {
       for (FactorSheetParseResult sheet : parseResult.getSheets()) {
         for (FactorRowParseResult row : sheet.getRows()) {
-          parts.add(String.join("|",
-              normalize(row.getFactorSeqNo()),
-              normalize(row.getFactorName()),
-              normalize(row.getShortName()),
-              normalize(row.getPriceSource()),
-              normalizePriceText(row.getPrice())));
+          parts.add(
+              String.join(
+                  "|",
+                  normalize(row.getFactorSeqNo()),
+                  normalize(row.getFactorName()),
+                  normalize(row.getShortName()),
+                  normalize(row.getPriceSource()),
+                  normalizePriceText(row.getPrice())));
         }
       }
     }
@@ -273,9 +285,7 @@ public class FactorUploadBatchServiceImpl implements FactorUploadBatchService {
     if (!StringUtils.hasText(value)) {
       return "";
     }
-    return value.replace('\u00A0', ' ')
-        .replaceAll("\\s+", " ")
-        .trim();
+    return value.replace('\u00A0', ' ').replaceAll("\\s+", " ").trim();
   }
 
   private BigDecimal normalizePrice(BigDecimal price) {

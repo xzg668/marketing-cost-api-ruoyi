@@ -5,5 +5,5 @@ import com.sanhua.marketingcost.dto.StandardBindingDecision;
 import java.util.List;
 
 public interface PriceLinkedStandardBindingService {
-  List<StandardBindingDecision> checkAndRecord(StandardBindingCheckRequest request);
+  List<StandardBindingDecision> checkAgainstPreviousRule(StandardBindingCheckRequest request);
 }

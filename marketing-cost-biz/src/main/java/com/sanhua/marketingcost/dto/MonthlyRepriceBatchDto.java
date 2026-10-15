@@ -14,7 +14,6 @@ public class MonthlyRepriceBatchDto {
   private LocalDateTime priceAsOfTime;
   private String bomSourcePolicy;
   private String businessUnitType;
-  private Long adjustBatchId;
   private String executionBackend;
   private String status;
   private Integer totalCount;
@@ -46,7 +45,6 @@ public class MonthlyRepriceBatchDto {
     dto.setPriceAsOfTime(batch.getPriceAsOfTime());
     dto.setBomSourcePolicy(batch.getBomSourcePolicy());
     dto.setBusinessUnitType(batch.getBusinessUnitType());
-    dto.setAdjustBatchId(batch.getAdjustBatchId());
     dto.setExecutionBackend(batch.getExecutionBackend());
     dto.setStatus(batch.getStatus());
     dto.setTotalCount(batch.getTotalCount());

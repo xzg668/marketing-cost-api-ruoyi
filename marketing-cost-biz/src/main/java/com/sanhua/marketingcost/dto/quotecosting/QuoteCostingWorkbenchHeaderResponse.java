@@ -29,6 +29,10 @@ public class QuoteCostingWorkbenchHeaderResponse {
   private BigDecimal goldPrice;
   private BigDecimal sus304Price;
   private BigDecimal sus316lPrice;
+
+  /** 最终是否招标需求（仅针对板换），OA编码sfzbxqjzdbhcp；null按否。 */
+  private Boolean boardTender;
+
   private BigDecimal otherMaterial;
   private BigDecimal baseShipping;
   private String calcStatus;

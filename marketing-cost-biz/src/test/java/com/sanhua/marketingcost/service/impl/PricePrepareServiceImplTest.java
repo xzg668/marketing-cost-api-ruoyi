@@ -9,9 +9,12 @@ import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.sanhua.marketingcost.dto.priceprepare.MakePartPricePrepareResult;
+import com.sanhua.marketingcost.dto.priceprepare.NormalMaterialPricePrepareResult;
+import com.sanhua.marketingcost.dto.priceprepare.PackageComponentPricePrepareResult;
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareCalculationResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult;
-import com.sanhua.marketingcost.dto.priceprepare.PricePrepareCalculationResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePreparePlanItem;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
@@ -21,15 +24,12 @@ import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
-import com.sanhua.marketingcost.dto.priceprepare.MakePartPricePrepareResult;
-import com.sanhua.marketingcost.dto.priceprepare.NormalMaterialPricePrepareResult;
-import com.sanhua.marketingcost.dto.priceprepare.PackageComponentPricePrepareResult;
 import com.sanhua.marketingcost.service.MakePartPricePrepareStrategy;
 import com.sanhua.marketingcost.service.NormalMaterialPricePrepareStrategy;
 import com.sanhua.marketingcost.service.PackageComponentPricePrepareStrategy;
 import com.sanhua.marketingcost.service.PricePrepareBomItemLoader;
-import com.sanhua.marketingcost.service.PricePrepareItemClassifier;
 import com.sanhua.marketingcost.service.PricePrepareCurrentStateService;
+import com.sanhua.marketingcost.service.PricePrepareItemClassifier;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -52,10 +52,8 @@ class PricePrepareServiceImplTest {
 
   private static final String CURRENT_PERIOD = CostPricingPeriodUtils.currentPricingMonth();
   private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
-  private static final LocalDateTime PRICE_AS_OF_TIME =
-      LocalDateTime.of(2026, 7, 14, 21, 30);
-  private static final LocalDateTime CLOCK_TIME_WITH_NANOS =
-      PRICE_AS_OF_TIME.withNano(818_787_000);
+  private static final LocalDateTime PRICE_AS_OF_TIME = LocalDateTime.of(2026, 7, 14, 21, 30);
+  private static final LocalDateTime CLOCK_TIME_WITH_NANOS = PRICE_AS_OF_TIME.withNano(818_787_000);
 
   private PricePrepareBatchMapper batchMapper;
   private PricePrepareItemMapper itemMapper;
@@ -70,8 +68,7 @@ class PricePrepareServiceImplTest {
 
   @BeforeAll
   static void initTableInfo() {
-    MapperBuilderAssistant assistant =
-        new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
     TableInfoHelper.initTableInfo(assistant, PricePrepareBatch.class);
     TableInfoHelper.initTableInfo(assistant, PricePrepareItem.class);
     TableInfoHelper.initTableInfo(assistant, PricePrepareGap.class);
@@ -86,20 +83,25 @@ class PricePrepareServiceImplTest {
     bomItemLoader = mock(PricePrepareBomItemLoader.class);
     itemClassifier = mock(PricePrepareItemClassifier.class);
     normalMaterialPricePrepareStrategy = mock(NormalMaterialPricePrepareStrategy.class);
+    org.mockito.Mockito.doCallRealMethod()
+        .when(normalMaterialPricePrepareStrategy)
+        .prepareBatch(
+            any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean());
     packageComponentPricePrepareStrategy = mock(PackageComponentPricePrepareStrategy.class);
     makePartPricePrepareStrategy = mock(MakePartPricePrepareStrategy.class);
     currentStateService = mock(PricePrepareCurrentStateService.class);
-    service = new PricePrepareServiceImpl(
-        batchMapper,
-        itemMapper,
-        gapMapper,
-        bomItemLoader,
-        itemClassifier,
-        normalMaterialPricePrepareStrategy,
-        packageComponentPricePrepareStrategy,
-        makePartPricePrepareStrategy,
-        Clock.fixed(CLOCK_TIME_WITH_NANOS.atZone(BUSINESS_ZONE).toInstant(), BUSINESS_ZONE),
-        currentStateService);
+    service =
+        new PricePrepareServiceImpl(
+            batchMapper,
+            itemMapper,
+            gapMapper,
+            bomItemLoader,
+            itemClassifier,
+            normalMaterialPricePrepareStrategy,
+            packageComponentPricePrepareStrategy,
+            makePartPricePrepareStrategy,
+            Clock.fixed(CLOCK_TIME_WITH_NANOS.atZone(BUSINESS_ZONE).toInstant(), BUSINESS_ZONE),
+            currentStateService);
     when(packageComponentPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
@@ -108,18 +110,22 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class)))
-        .thenReturn(PackageComponentPricePrepareResult.ready(
-            new BigDecimal("9.00"), new BigDecimal("22.500"), 900L, "包装组件价格准备完成"));
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class)))
+        .thenReturn(
+            PackageComponentPricePrepareResult.ready(
+                new BigDecimal("9.00"), new BigDecimal("22.500"), 900L, "包装组件价格准备完成"));
     when(makePartPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.any()))
-        .thenReturn(MakePartPricePrepareResult.ready(
-            new BigDecimal("18.60"), new BigDecimal("46.500"), 800L, "自制件价格准备完成"));
+        .thenReturn(
+            MakePartPricePrepareResult.ready(
+                new BigDecimal("18.60"), new BigDecimal("46.500"), 800L, "自制件价格准备完成"));
   }
 
   @Test
@@ -133,20 +139,25 @@ class PricePrepareServiceImplTest {
   }
 
   @Test
-  @DisplayName("事务边界：价格准备编排不套顶层事务，避免内部事务异常被吞后 rollback-only")
-  void generateDoesNotUseTopLevelTransaction() throws Exception {
-    assertThat(PricePrepareServiceImpl.class.getDeclaredMethod(
-            "generate", PricePrepareGenerateRequest.class)
-        .getAnnotation(Transactional.class))
-        .isNull();
+  @DisplayName("价格准备在同一事务快照完成，防止料号间混用新旧基价")
+  void generateUsesOneRepeatableReadSnapshot() throws Exception {
+    var transaction =
+        PricePrepareServiceImpl.class
+            .getDeclaredMethod("generate", PricePrepareGenerateRequest.class)
+            .getAnnotation(Transactional.class);
+    assertThat(transaction).isNotNull();
+    assertThat(transaction.isolation())
+        .isEqualTo(org.springframework.transaction.annotation.Isolation.REPEATABLE_READ);
+    assertThat(transaction.rollbackFor()).contains(Exception.class);
   }
 
   @Test
   @DisplayName("第四步纯计算入口使用只读事务")
   void calculateUsesReadOnlyTransaction() throws Exception {
-    Transactional transactional = PricePrepareServiceImpl.class.getDeclaredMethod(
-            "calculate", PricePrepareGenerateRequest.class)
-        .getAnnotation(Transactional.class);
+    Transactional transactional =
+        PricePrepareServiceImpl.class
+            .getDeclaredMethod("calculate", PricePrepareGenerateRequest.class)
+            .getAnnotation(Transactional.class);
 
     assertThat(transactional).isNotNull();
     assertThat(transactional.readOnly()).isTrue();
@@ -196,10 +207,17 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.eq("COMMERCIAL"),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
-        .thenReturn(NormalMaterialPricePrepareResult.ready(
-            new BigDecimal("12.30"), new BigDecimal("30.750"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
+        .thenReturn(
+            NormalMaterialPricePrepareResult.ready(
+                new BigDecimal("12.30"),
+                new BigDecimal("30.750"),
+                "固定采购价",
+                "FIXED_PRICE",
+                null,
+                "普通料号价格准备完成"));
     UsernamePasswordAuthenticationToken auth =
         new UsernamePasswordAuthenticationToken("tester", "N/A");
     auth.setDetails(Map.of("businessUnitType", "COMMERCIAL"));
@@ -213,7 +231,8 @@ class PricePrepareServiceImplTest {
     assertThat(result.getTotalCount()).isEqualTo(1);
     assertThat(result.getPrepareNo()).startsWith("PPR-");
     assertThat(result.getMessage()).contains("价格准备");
-    ArgumentCaptor<PricePrepareBatch> batchCaptor = ArgumentCaptor.forClass(PricePrepareBatch.class);
+    ArgumentCaptor<PricePrepareBatch> batchCaptor =
+        ArgumentCaptor.forClass(PricePrepareBatch.class);
     verify(batchMapper).insert(batchCaptor.capture());
     verify(batchMapper).updateById(batchCaptor.getValue());
     assertThat(batchCaptor.getValue().getBusinessUnitType()).isEqualTo("COMMERCIAL");
@@ -248,8 +267,7 @@ class PricePrepareServiceImplTest {
     PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
     request.setOaNo("OA-BOM-FAIL");
     request.setPeriodMonth(CURRENT_PERIOD);
-    when(bomItemLoader.loadByOaNo("OA-BOM-FAIL"))
-        .thenThrow(new IllegalStateException("U9明细读取失败"));
+    when(bomItemLoader.loadByOaNo("OA-BOM-FAIL")).thenThrow(new IllegalStateException("U9明细读取失败"));
 
     PricePrepareGenerateResult result = service.generate(request);
 
@@ -258,8 +276,10 @@ class PricePrepareServiceImplTest {
     assertThat(result.getSuccessCount()).isZero();
     assertThat(result.getGapCount()).isZero();
     assertThat(result.getMessage()).contains("读取BOM结算明细失败");
-    verify(itemClassifier, org.mockito.Mockito.never()).classify(org.mockito.ArgumentMatchers.any());
-    ArgumentCaptor<PricePrepareBatch> batchCaptor = ArgumentCaptor.forClass(PricePrepareBatch.class);
+    verify(itemClassifier, org.mockito.Mockito.never())
+        .classify(org.mockito.ArgumentMatchers.any());
+    ArgumentCaptor<PricePrepareBatch> batchCaptor =
+        ArgumentCaptor.forClass(PricePrepareBatch.class);
     verify(batchMapper).insert(batchCaptor.capture());
     verify(batchMapper).updateById(batchCaptor.getValue());
     assertThat(batchCaptor.getValue().getStatus()).isEqualTo("FAILED");
@@ -273,15 +293,16 @@ class PricePrepareServiceImplTest {
     request.setPeriodMonth(CURRENT_PERIOD);
     BomCostingRow row = bomRow(1L, "TOP-A", "MAT-A", "采购件");
     when(bomItemLoader.loadByOaNo("OA-CLASSIFY-FAIL")).thenReturn(List.of(row));
-    when(itemClassifier.classify(List.of(row)))
-        .thenThrow(new IllegalStateException("料号分类失败"));
+    when(itemClassifier.classify(List.of(row))).thenThrow(new IllegalStateException("料号分类失败"));
 
     PricePrepareGenerateResult result = service.generate(request);
 
     assertThat(result.getStatus()).isEqualTo("FAILED");
     assertThat(result.getMessage()).contains("价格准备分类失败");
-    verify(itemMapper, org.mockito.Mockito.never()).insert(org.mockito.ArgumentMatchers.any(PricePrepareItem.class));
-    verify(gapMapper, org.mockito.Mockito.never()).insert(org.mockito.ArgumentMatchers.any(PricePrepareGap.class));
+    verify(itemMapper, org.mockito.Mockito.never())
+        .insert(org.mockito.ArgumentMatchers.any(PricePrepareItem.class));
+    verify(gapMapper, org.mockito.Mockito.never())
+        .insert(org.mockito.ArgumentMatchers.any(PricePrepareGap.class));
   }
 
   @Test
@@ -320,8 +341,7 @@ class PricePrepareServiceImplTest {
 
     PricePrepareGenerateResult result = service.generate(request);
 
-    assertThat(result.getPriceAsOfTime())
-        .isEqualTo(LocalDateTime.of(2026, 7, 14, 22, 7, 4));
+    assertThat(result.getPriceAsOfTime()).isEqualTo(LocalDateTime.of(2026, 7, 14, 22, 7, 4));
     assertThat(result.getPriceAsOfSource()).isEqualTo("REQUEST");
   }
 
@@ -341,10 +361,17 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(item1)))
-        .thenReturn(NormalMaterialPricePrepareResult.ready(
-            new BigDecimal("1.20"), new BigDecimal("3.000"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
+        .thenReturn(
+            NormalMaterialPricePrepareResult.ready(
+                new BigDecimal("1.20"),
+                new BigDecimal("3.000"),
+                "固定采购价",
+                "FIXED_PRICE",
+                null,
+                "普通料号价格准备完成"));
 
     PricePrepareGenerateResult result = service.generate(request);
 
@@ -379,16 +406,22 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
-        .thenReturn(NormalMaterialPricePrepareResult.ready(
-            new BigDecimal("1.20"), new BigDecimal("3.000"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
+        .thenReturn(
+            NormalMaterialPricePrepareResult.ready(
+                new BigDecimal("1.20"),
+                new BigDecimal("3.000"),
+                "固定采购价",
+                "FIXED_PRICE",
+                null,
+                "普通料号价格准备完成"));
 
     PricePrepareGenerateResult result = service.generate(request);
 
     assertThat(result.getStatus()).isEqualTo("SUCCESS");
-    verify(bomItemLoader)
-        .loadByOaNoAndTopProducts("OA-LINE", List.of("TOP-A", "TOP-B"));
+    verify(bomItemLoader).loadByOaNoAndTopProducts("OA-LINE", List.of("TOP-A", "TOP-B"));
     verify(bomItemLoader, org.mockito.Mockito.never()).loadByOaNo("OA-LINE");
     verify(currentStateService).finalizeBatch(any(PricePrepareBatch.class));
   }
@@ -414,10 +447,17 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.eq("COMMERCIAL"),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
-        .thenReturn(NormalMaterialPricePrepareResult.ready(
-            new BigDecimal("1.20"), new BigDecimal("3.000"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
+        .thenReturn(
+            NormalMaterialPricePrepareResult.ready(
+                new BigDecimal("1.20"),
+                new BigDecimal("3.000"),
+                "固定采购价",
+                "FIXED_PRICE",
+                null,
+                "普通料号价格准备完成"));
 
     PricePrepareGenerateResult result = service.generate(request);
 
@@ -426,7 +466,8 @@ class PricePrepareServiceImplTest {
     assertThat(result.getTopProductCode()).isEqualTo("TOP-SAME");
     verify(bomItemLoader).loadByQuoteItem("OA-LINE", 101L, "TOP-SAME", CURRENT_PERIOD);
     verify(bomItemLoader, org.mockito.Mockito.never()).loadByOaNo("OA-LINE");
-    ArgumentCaptor<PricePrepareBatch> batchCaptor = ArgumentCaptor.forClass(PricePrepareBatch.class);
+    ArgumentCaptor<PricePrepareBatch> batchCaptor =
+        ArgumentCaptor.forClass(PricePrepareBatch.class);
     verify(batchMapper).insert(batchCaptor.capture());
     assertThat(batchCaptor.getValue().getOaFormItemId()).isEqualTo(101L);
     assertThat(batchCaptor.getValue().getTopProductCode()).isEqualTo("TOP-SAME");
@@ -458,10 +499,17 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(normalItem)))
-        .thenReturn(NormalMaterialPricePrepareResult.ready(
-            new BigDecimal("1.20"), new BigDecimal("3.000"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
+        .thenReturn(
+            NormalMaterialPricePrepareResult.ready(
+                new BigDecimal("1.20"),
+                new BigDecimal("3.000"),
+                "固定采购价",
+                "FIXED_PRICE",
+                null,
+                "普通料号价格准备完成"));
 
     PricePrepareGenerateResult result = service.generate(request);
 
@@ -475,7 +523,8 @@ class PricePrepareServiceImplTest {
     assertThat(itemCaptor.getAllValues())
         .extracting(PricePrepareItem::getItemType)
         .containsExactly("NORMAL", "PACKAGE_COMPONENT", "MAKE_PART");
-    verify(gapMapper, org.mockito.Mockito.never()).insert(org.mockito.ArgumentMatchers.any(PricePrepareGap.class));
+    verify(gapMapper, org.mockito.Mockito.never())
+        .insert(org.mockito.ArgumentMatchers.any(PricePrepareGap.class));
   }
 
   @Test
@@ -492,8 +541,7 @@ class PricePrepareServiceImplTest {
     PricePreparePlanItem normalItem = planItem(normalRow, "NORMAL", "READY");
     PricePreparePlanItem packageItem = planItem(packageRow, "PACKAGE_COMPONENT", "READY");
     PricePreparePlanItem makeItem = planItem(makeRow, "MAKE_PART", "READY");
-    when(bomItemLoader.loadByQuoteItem(
-            "OA-CALCULATE-ONLY", 101L, "TOP-A", CURRENT_PERIOD))
+    when(bomItemLoader.loadByQuoteItem("OA-CALCULATE-ONLY", 101L, "TOP-A", CURRENT_PERIOD))
         .thenReturn(List.of(normalRow, packageRow, makeRow));
     when(itemClassifier.classify(List.of(normalRow, packageRow, makeRow)))
         .thenReturn(List.of(normalItem, packageItem, makeItem));
@@ -504,13 +552,14 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(normalItem)))
-        .thenReturn(NormalMaterialPricePrepareResult.ready(
-            new BigDecimal("1.20"),
-            new BigDecimal("3.000"),
-            "固定采购价",
-            "FIXED_PRICE",
-            null,
-            "普通料号价格只读计算完成"));
+        .thenReturn(
+            NormalMaterialPricePrepareResult.ready(
+                new BigDecimal("1.20"),
+                new BigDecimal("3.000"),
+                "固定采购价",
+                "FIXED_PRICE",
+                null,
+                "普通料号价格只读计算完成"));
     when(packageComponentPricePrepareStrategy.calculate(
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("OA-CALCULATE-ONLY"),
@@ -519,9 +568,11 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.eq("主制造"),
             org.mockito.ArgumentMatchers.eq("U9"),
             org.mockito.ArgumentMatchers.eq(packageItem),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class)))
-        .thenReturn(PackageComponentPricePrepareResult.ready(
-            new BigDecimal("9.00"), new BigDecimal("22.500"), null, "包装组件只读计算完成"));
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class)))
+        .thenReturn(
+            PackageComponentPricePrepareResult.ready(
+                new BigDecimal("9.00"), new BigDecimal("22.500"), null, "包装组件只读计算完成"));
     when(makePartPricePrepareStrategy.calculate(
             org.mockito.ArgumentMatchers.eq("OA-CALCULATE-ONLY"),
             org.mockito.ArgumentMatchers.any(),
@@ -529,8 +580,9 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(makeItem)))
-        .thenReturn(MakePartPricePrepareResult.ready(
-            new BigDecimal("18.60"), new BigDecimal("46.500"), null, "自制件只读计算完成"));
+        .thenReturn(
+            MakePartPricePrepareResult.ready(
+                new BigDecimal("18.60"), new BigDecimal("46.500"), null, "自制件只读计算完成"));
 
     PricePrepareCalculationResult result = service.calculate(request);
 
@@ -582,21 +634,24 @@ class PricePrepareServiceImplTest {
     PricePreparePlanItem item2 = planItem(row2, "PACKAGE_COMPONENT", "READY");
     PricePreparePlanItem item3 = planItem(row3, "MAKE_PART", "READY");
     when(bomItemLoader.loadByOaNo("OA-NORMAL-GAP")).thenReturn(List.of(row1, row2, row3));
-    when(itemClassifier.classify(List.of(row1, row2, row3))).thenReturn(List.of(item1, item2, item3));
+    when(itemClassifier.classify(List.of(row1, row2, row3)))
+        .thenReturn(List.of(item1, item2, item3));
     when(normalMaterialPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.eq("OA-NORMAL-GAP"),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(item1)))
-        .thenReturn(NormalMaterialPricePrepareResult.gap(
-            "MISSING_PRICE",
-            "MISSING_PRICE",
-            "PRIMARY_SUPPLIER_PRICE_MISSING",
-            "ERROR",
-            "PriceResolver",
-            "主供应商没有价格"));
+        .thenReturn(
+            NormalMaterialPricePrepareResult.gap(
+                "MISSING_PRICE",
+                "MISSING_PRICE",
+                "PRIMARY_SUPPLIER_PRICE_MISSING",
+                "ERROR",
+                "PriceResolver",
+                "主供应商没有价格"));
 
     PricePrepareGenerateResult result = service.generate(request);
 
@@ -612,8 +667,7 @@ class PricePrepareServiceImplTest {
     ArgumentCaptor<PricePrepareGap> gapCaptor = ArgumentCaptor.forClass(PricePrepareGap.class);
     verify(gapMapper).insert(gapCaptor.capture());
     assertThat(gapCaptor.getValue().getGapType()).isEqualTo("MISSING_PRICE");
-    assertThat(gapCaptor.getValue().getReasonCode())
-        .isEqualTo("PRIMARY_SUPPLIER_PRICE_MISSING");
+    assertThat(gapCaptor.getValue().getReasonCode()).isEqualTo("PRIMARY_SUPPLIER_PRICE_MISSING");
     assertThat(gapCaptor.getValue().getMaterialName()).isEqualTo("MAT-MISS-name");
     assertThat(gapCaptor.getValue().getOaPushStatus()).isEqualTo("PENDING");
   }
@@ -652,7 +706,8 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
         .thenReturn(prepared);
 
@@ -695,7 +750,12 @@ class PricePrepareServiceImplTest {
 
     assertThat(result.getStatus()).isEqualTo("SUCCESS");
     verify(normalMaterialPricePrepareStrategy, org.mockito.Mockito.never())
-        .prepare(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        .prepare(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any());
     ArgumentCaptor<PricePrepareItem> itemCaptor = ArgumentCaptor.forClass(PricePrepareItem.class);
     verify(itemMapper).insert(itemCaptor.capture());
     assertThat(itemCaptor.getValue().getStatus()).isEqualTo("READY");
@@ -711,7 +771,8 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.eq("主制造"),
             org.mockito.ArgumentMatchers.eq("U9"),
             org.mockito.ArgumentMatchers.eq(planItem),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class));
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class));
   }
 
   @Test
@@ -732,12 +793,18 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(planItem),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class)))
-        .thenReturn(PackageComponentPricePrepareResult.notReady(
-            "MISSING_STRUCTURE",
-            "包装组件缺结构",
-            List.of(new PackageComponentPricePrepareResult.Gap(
-                "MISSING_STRUCTURE", "PKG-001", "PackageComponentSnapshotService", "包装组件缺结构"))));
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class)))
+        .thenReturn(
+            PackageComponentPricePrepareResult.notReady(
+                "MISSING_STRUCTURE",
+                "包装组件缺结构",
+                List.of(
+                    new PackageComponentPricePrepareResult.Gap(
+                        "MISSING_STRUCTURE",
+                        "PKG-001",
+                        "PackageComponentSnapshotService",
+                        "包装组件缺结构"))));
 
     PricePrepareGenerateResult result = service.generate(request);
 
@@ -768,12 +835,19 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(planItem),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class)))
-        .thenReturn(PackageComponentPricePrepareResult.notReady(
-            "MISSING_PRICE",
-            "包装组件存在子件缺价",
-            List.of(new PackageComponentPricePrepareResult.Gap(
-                "MISSING_PRICE", "CHILD-001", "包装子件", "lp_package_component_price_detail", "子件缺价"))));
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class)))
+        .thenReturn(
+            PackageComponentPricePrepareResult.notReady(
+                "MISSING_PRICE",
+                "包装组件存在子件缺价",
+                List.of(
+                    new PackageComponentPricePrepareResult.Gap(
+                        "MISSING_PRICE",
+                        "CHILD-001",
+                        "包装子件",
+                        "lp_package_component_price_detail",
+                        "子件缺价"))));
 
     PricePrepareGenerateResult result = service.generate(request);
 
@@ -801,7 +875,12 @@ class PricePrepareServiceImplTest {
 
     assertThat(result.getStatus()).isEqualTo("SUCCESS");
     verify(normalMaterialPricePrepareStrategy, org.mockito.Mockito.never())
-        .prepare(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        .prepare(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any());
     ArgumentCaptor<PricePrepareItem> itemCaptor = ArgumentCaptor.forClass(PricePrepareItem.class);
     verify(itemMapper).insert(itemCaptor.capture());
     assertThat(itemCaptor.getValue().getStatus()).isEqualTo("READY");
@@ -813,7 +892,8 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem));
   }
 
@@ -832,13 +912,20 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
-        .thenReturn(MakePartPricePrepareResult.notReady(
-            "MISSING_PRICE",
-            "自制件价格生成结果存在缺口",
-            List.of(new MakePartPricePrepareResult.Gap(
-                "MISSING_PRICE", "SCRAP-001", "废料一", "lp_make_part_price_gap_item", "缺废料价格"))));
+        .thenReturn(
+            MakePartPricePrepareResult.notReady(
+                "MISSING_PRICE",
+                "自制件价格生成结果存在缺口",
+                List.of(
+                    new MakePartPricePrepareResult.Gap(
+                        "MISSING_PRICE",
+                        "SCRAP-001",
+                        "废料一",
+                        "lp_make_part_price_gap_item",
+                        "缺废料价格"))));
 
     PricePrepareGenerateResult result = service.generate(request);
 
@@ -875,10 +962,17 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(normalItem)))
-        .thenReturn(NormalMaterialPricePrepareResult.ready(
-            new BigDecimal("1.20"), new BigDecimal("3.000"), "固定采购价", "FIXED_PRICE", null, "普通料号价格准备完成"));
+        .thenReturn(
+            NormalMaterialPricePrepareResult.ready(
+                new BigDecimal("1.20"),
+                new BigDecimal("3.000"),
+                "固定采购价",
+                "FIXED_PRICE",
+                null,
+                "普通料号价格准备完成"));
     when(packageComponentPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq("OA-STRATEGY-FAIL"),
@@ -887,7 +981,8 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(packageItem),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class)))
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class)))
         .thenThrow(new IllegalStateException("包装生成失败"));
 
     PricePrepareGenerateResult result = service.generate(request);
@@ -904,7 +999,8 @@ class PricePrepareServiceImplTest {
     ArgumentCaptor<PricePrepareGap> gapCaptor = ArgumentCaptor.forClass(PricePrepareGap.class);
     verify(gapMapper).insert(gapCaptor.capture());
     assertThat(gapCaptor.getValue().getGapType()).isEqualTo("MISSING_PRICE");
-    assertThat(gapCaptor.getValue().getSourceTable()).isEqualTo("PackageComponentPricePrepareStrategy");
+    assertThat(gapCaptor.getValue().getSourceTable())
+        .isEqualTo("PackageComponentPricePrepareStrategy");
   }
 
   @Test
@@ -923,15 +1019,17 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
-        .thenReturn(NormalMaterialPricePrepareResult.ready(
-            new BigDecimal("12.30"),
-            new BigDecimal("30.750"),
-            "OA锁价联动价",
-            "LINKED_PRICE",
-            701L,
-            "普通料号价格准备完成"));
+        .thenReturn(
+            NormalMaterialPricePrepareResult.ready(
+                new BigDecimal("12.30"),
+                new BigDecimal("30.750"),
+                "OA锁价联动价",
+                "LINKED_PRICE",
+                701L,
+                "普通料号价格准备完成"));
 
     PricePrepareGenerateResult result = service.generate(request);
 
@@ -942,14 +1040,11 @@ class PricePrepareServiceImplTest {
     assertThat(batchCaptor.getValue().getScenarioType()).isEqualTo("OA_LOCKED");
     assertThat(batchCaptor.getValue().getScenarioGroupNo()).isNull();
     assertThat(batchCaptor.getValue().getSourcePrepareNo()).isNull();
-    ArgumentCaptor<PricePrepareItem> itemCaptor =
-        ArgumentCaptor.forClass(PricePrepareItem.class);
+    ArgumentCaptor<PricePrepareItem> itemCaptor = ArgumentCaptor.forClass(PricePrepareItem.class);
     verify(itemMapper).insert(itemCaptor.capture());
     assertThat(itemCaptor.getValue().getUnitPrice()).isEqualByComparingTo("12.30");
     assertThat(itemCaptor.getValue().getAmount()).isEqualByComparingTo("30.750");
-    assertThat(itemCaptor.getValue().getSettlementKey())
-        .startsWith("SET:v1:")
-        .hasSize(71);
+    assertThat(itemCaptor.getValue().getSettlementKey()).startsWith("SET:v1:").hasSize(71);
   }
 
   @Test
@@ -959,8 +1054,7 @@ class PricePrepareServiceImplTest {
     row.setOaFormItemId(901L);
     row.setPath("/TOP-SCENE/PARENT/MAT-CU/");
     PricePreparePlanItem planItem = planItem(row, "NORMAL", "READY");
-    when(bomItemLoader.loadByQuoteItem(
-            "OA-SCENE", 901L, "TOP-SCENE", CURRENT_PERIOD))
+    when(bomItemLoader.loadByQuoteItem("OA-SCENE", 901L, "TOP-SCENE", CURRENT_PERIOD))
         .thenReturn(List.of(row));
     when(itemClassifier.classify(List.of(row))).thenReturn(List.of(planItem));
     when(normalMaterialPricePrepareStrategy.prepare(
@@ -968,22 +1062,23 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
-        .thenReturn(NormalMaterialPricePrepareResult.ready(
-            new BigDecimal("11.00"),
-            new BigDecimal("27.500"),
-            "联动价",
-            "LINKED_PRICE",
-            702L,
-            "准备完成"));
+        .thenReturn(
+            NormalMaterialPricePrepareResult.ready(
+                new BigDecimal("11.00"),
+                new BigDecimal("27.500"),
+                "联动价",
+                "LINKED_PRICE",
+                702L,
+                "准备完成"));
 
     PricePrepareGenerateRequest oa = quoteItemRequest("OA-SCENE", 901L, "TOP-SCENE");
     oa.setScenarioGroupNo(" GROUP-901 ");
     PricePrepareGenerateResult oaResult = service.generate(oa);
 
-    PricePrepareGenerateRequest finance =
-        quoteItemRequest("OA-SCENE", 901L, "TOP-SCENE");
+    PricePrepareGenerateRequest finance = quoteItemRequest("OA-SCENE", 901L, "TOP-SCENE");
     finance.setScenarioType(QuotePriceScenarioType.FINANCE_QUOTE_BASE);
     finance.setScenarioGroupNo("GROUP-901");
     finance.setSourcePrepareNo(" " + oaResult.getPrepareNo() + " ");
@@ -1000,8 +1095,7 @@ class PricePrepareServiceImplTest {
     assertThat(batchCaptor.getAllValues())
         .extracting(PricePrepareBatch::getScenarioType)
         .containsExactly("OA_LOCKED", "FINANCE_QUOTE_BASE");
-    ArgumentCaptor<PricePrepareItem> itemCaptor =
-        ArgumentCaptor.forClass(PricePrepareItem.class);
+    ArgumentCaptor<PricePrepareItem> itemCaptor = ArgumentCaptor.forClass(PricePrepareItem.class);
     verify(itemMapper, org.mockito.Mockito.times(2)).insert(itemCaptor.capture());
     assertThat(itemCaptor.getAllValues())
         .extracting(PricePrepareItem::getSettlementKey)
@@ -1029,28 +1123,28 @@ class PricePrepareServiceImplTest {
     PricePreparePlanItem leftPlan = planItem(left, "NORMAL", "READY");
     PricePreparePlanItem rightPlan = planItem(right, "NORMAL", "READY");
     when(bomItemLoader.loadByOaNo("OA-DUP-POSITION")).thenReturn(List.of(left, right));
-    when(itemClassifier.classify(List.of(left, right)))
-        .thenReturn(List.of(leftPlan, rightPlan));
+    when(itemClassifier.classify(List.of(left, right))).thenReturn(List.of(leftPlan, rightPlan));
     when(normalMaterialPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.eq("OA-DUP-POSITION"),
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.any(PricePreparePlanItem.class)))
-        .thenReturn(NormalMaterialPricePrepareResult.ready(
-            new BigDecimal("10.00"),
-            new BigDecimal("25.000"),
-            "固定价",
-            "FIXED_PRICE",
-            null,
-            "准备完成"));
+        .thenReturn(
+            NormalMaterialPricePrepareResult.ready(
+                new BigDecimal("10.00"),
+                new BigDecimal("25.000"),
+                "固定价",
+                "FIXED_PRICE",
+                null,
+                "准备完成"));
 
     PricePrepareGenerateResult result = service.generate(request);
 
     assertThat(result.getTotalCount()).isEqualTo(2);
-    ArgumentCaptor<PricePrepareItem> itemCaptor =
-        ArgumentCaptor.forClass(PricePrepareItem.class);
+    ArgumentCaptor<PricePrepareItem> itemCaptor = ArgumentCaptor.forClass(PricePrepareItem.class);
     verify(itemMapper, org.mockito.Mockito.times(2)).insert(itemCaptor.capture());
     assertThat(itemCaptor.getAllValues())
         .extracting(PricePrepareItem::getBomRowId)
@@ -1067,8 +1161,7 @@ class PricePrepareServiceImplTest {
     row.setOaFormItemId(903L);
     row.setPath("/TOP-RERUN/PARENT/MAT-RERUN/");
     PricePreparePlanItem planItem = planItem(row, "NORMAL", "READY");
-    when(bomItemLoader.loadByQuoteItem(
-            "OA-RERUN", 903L, "TOP-RERUN", CURRENT_PERIOD))
+    when(bomItemLoader.loadByQuoteItem("OA-RERUN", 903L, "TOP-RERUN", CURRENT_PERIOD))
         .thenReturn(List.of(row));
     when(itemClassifier.classify(List.of(row))).thenReturn(List.of(planItem));
     when(normalMaterialPricePrepareStrategy.prepare(
@@ -1076,17 +1169,18 @@ class PricePrepareServiceImplTest {
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.eq(CURRENT_PERIOD),
             org.mockito.ArgumentMatchers.eq(PRICE_AS_OF_TIME),
-            org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
+            org.mockito.ArgumentMatchers.any(
+                com.sanhua.marketingcost.service.PricePrepareScenarioContext.class),
             org.mockito.ArgumentMatchers.eq(planItem)))
-        .thenReturn(NormalMaterialPricePrepareResult.ready(
-            new BigDecimal("13.20"),
-            new BigDecimal("33.000"),
-            "OA锁价联动价",
-            "LINKED_PRICE",
-            703L,
-            "准备完成"));
-    PricePrepareGenerateRequest request =
-        quoteItemRequest("OA-RERUN", 903L, "TOP-RERUN");
+        .thenReturn(
+            NormalMaterialPricePrepareResult.ready(
+                new BigDecimal("13.20"),
+                new BigDecimal("33.000"),
+                "OA锁价联动价",
+                "LINKED_PRICE",
+                703L,
+                "准备完成"));
+    PricePrepareGenerateRequest request = quoteItemRequest("OA-RERUN", 903L, "TOP-RERUN");
 
     PricePrepareGenerateResult first = service.generate(request);
     PricePrepareGenerateResult second = service.generate(request);
@@ -1094,8 +1188,7 @@ class PricePrepareServiceImplTest {
     assertThat(first.getPrepareNo()).isNotEqualTo(second.getPrepareNo());
     assertThat(first.getScenarioType()).isEqualTo("OA_LOCKED");
     assertThat(second.getScenarioType()).isEqualTo("OA_LOCKED");
-    ArgumentCaptor<PricePrepareItem> itemCaptor =
-        ArgumentCaptor.forClass(PricePrepareItem.class);
+    ArgumentCaptor<PricePrepareItem> itemCaptor = ArgumentCaptor.forClass(PricePrepareItem.class);
     verify(itemMapper, org.mockito.Mockito.times(2)).insert(itemCaptor.capture());
     assertThat(itemCaptor.getAllValues())
         .extracting(PricePrepareItem::getSettlementKey)
@@ -1124,7 +1217,8 @@ class PricePrepareServiceImplTest {
     return request;
   }
 
-  private BomCostingRow bomRow(Long id, String topProductCode, String materialCode, String shapeAttr) {
+  private BomCostingRow bomRow(
+      Long id, String topProductCode, String materialCode, String shapeAttr) {
     BomCostingRow row = new BomCostingRow();
     row.setId(id);
     row.setOaNo("OA-001");

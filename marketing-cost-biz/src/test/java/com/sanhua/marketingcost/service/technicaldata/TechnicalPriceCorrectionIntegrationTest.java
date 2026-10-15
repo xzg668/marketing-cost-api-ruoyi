@@ -9,7 +9,7 @@ import com.sanhua.marketingcost.dto.technicaldata.*;
 import com.sanhua.marketingcost.entity.*;
 import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaWorkflowRepository;
 import com.sanhua.marketingcost.mapper.*;
-import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
+import com.sanhua.marketingcost.db.OriginalPricingIntegrationTestBase;
 import com.sanhua.marketingcost.service.PriceLinkedImportDispatchService;
 import java.io.*;
 import java.time.LocalDateTime;
@@ -22,7 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Tag("integration")
 @Transactional
-class TechnicalPriceCorrectionIntegrationTest extends BomMapperTestBase {
+class TechnicalPriceCorrectionIntegrationTest extends OriginalPricingIntegrationTestBase {
   private static final TechnicalDataActor WANG =
       new TechnicalDataActor(101L, "王工", Set.of("technical:data:task:edit"));
   private static final TechnicalDataActor ADMIN =
@@ -31,7 +31,6 @@ class TechnicalPriceCorrectionIntegrationTest extends BomMapperTestBase {
   @Autowired TechnicalPriceCorrectionService corrections;
   @Autowired TechnicalPriceCorrectionWorkbook workbook;
   @Autowired PriceLinkedImportDispatchService imports;
-  @Autowired com.sanhua.marketingcost.service.PriceLinkedItemService linkedItems;
   @Autowired QuoteTechnicalDataPersistenceService persistence;
   @Autowired QuoteTechnicalDataRepository repository;
   @Autowired TechnicalDataParticipantVersions versions;
@@ -43,12 +42,16 @@ class TechnicalPriceCorrectionIntegrationTest extends BomMapperTestBase {
   @MockBean TechnicalDataPriceRequirements requirements;
   @MockBean TechnicalDataActorProvider actors;
   @MockBean TechnicalDataOaWorkflowRepository workflow;
+  @Autowired com.sanhua.marketingcost.service.financefactor.FinanceFactorPublicationService finance;
   private String key, material;
   private Long itemId, productId, taskId, flowId, versionId;
   private String frozen;
+  @Autowired com.sanhua.marketingcost.service.impl.TechnicalPriceSourceResolverImpl technicalResolver;
+  @Autowired PriceLinkedCalcItemMapper calculations;
+  @Autowired com.fasterxml.jackson.databind.ObjectMapper json;
 
   @BeforeEach
-  void fixture(TestInfo test) {
+  void fixture(TestInfo test) throws Exception {
     var auth =
         new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
             "test",
@@ -59,6 +62,12 @@ class TechnicalPriceCorrectionIntegrationTest extends BomMapperTestBase {
     org.springframework.security.core.context.SecurityContextHolder.getContext()
         .setAuthentication(auth);
     when(actors.current()).thenReturn(ADMIN);
+    try (var input = getClass().getResourceAsStream("/finance-factor/commercial-original.xlsx")) {
+      byte[] bytes = Objects.requireNonNull(input).readAllBytes();
+      var scope = new com.sanhua.marketingcost.dto.FinanceFactorImportContext("COMMERCIAL","210","2026-09",null,"CU_90000");
+      var preview = finance.preview(bytes,"财务.xlsx",scope);
+      finance.publish(bytes,"财务.xlsx",scope,preview.previewFingerprint(),"integration");
+    }
     key = "TW17-" + UUID.randomUUID().toString().substring(0, 8);
     material = key + "-M";
     var form = new OaForm();
@@ -264,6 +273,44 @@ class TechnicalPriceCorrectionIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
+  @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+  void publicationChangesTechnicalInputsAtTheSameQuotationTimeAndKeepsOldResult() throws Exception {
+    // 常量公式也必须保留共用财务基准；修订后输入版本变化，材料单价仍为12。
+    byte[] file = edited("12", null, null);
+    var preview = imports.preview(command(file, null));
+    var imported = imports.confirm(command(file, preview.getFileSha256()));
+    var published = imported.getTechnicalResults().getFirst();
+    assertThat(published.status()).as(published.message()).isEqualTo("AVAILABLE");
+    var route = new PriceTypeRoute(material, null, com.sanhua.marketingcost.enums.PriceTypeEnum.LINKED,
+        1, null, null, "TECH_SUPPLEMENTAL", "联动价", "TECH_SUPPLEMENTAL", published.linkedItemId());
+    var part = new CostRunPartItemDto();
+    part.setPartCode(material);
+    var context = CostRunContext.quote(key, itemId, key, null, null, "COMMERCIAL", "2026-09",
+        LocalDateTime.of(2026, 9, 15, 12, 0), null);
+    context.setPriceOrgCode("210");
+    context.setPriceScenarioType("FINANCE_QUOTE_BASE");
+    var first = technicalResolver.resolve(part, route, context);
+    assertThat(first.unitPrice()).as(first.remark()).isPositive();
+    var saved = calculations.selectById(first.resultRefId());
+    assertThat(technicalResolver.resolve(part, route, context).resultRefId()).isEqualTo(first.resultRefId());
+    try (var input = getClass().getResourceAsStream("/finance-factor/commercial-original.xlsx")) {
+      var bytes = Objects.requireNonNull(input).readAllBytes();
+      var scope = new FinanceFactorImportContext("COMMERCIAL", "210", "2026-09", null, "CU_100000");
+      var before = finance.preview(bytes, "财务.xlsx", scope);
+      finance.publish(bytes, "财务.xlsx", scope, before.previewFingerprint(), "integration");
+    }
+    var revised = technicalResolver.resolve(part, route, context);
+    assertThat(revised.unitPrice()).as(revised.remark()).isEqualByComparingTo(first.unitPrice());
+    assertThat(revised.resultRefId()).isNotEqualTo(first.resultRefId());
+    assertThat(calculations.selectById(first.resultRefId())).usingRecursiveComparison().isEqualTo(saved);
+    var oldBasis = json.readTree(saved.getInputSnapshotJson()).path("context").path("financial").path("factors").path("AVG|1#CU");
+    var newBasis = json.readTree(calculations.selectById(revised.resultRefId()).getInputSnapshotJson()).path("context").path("financial").path("factors").path("AVG|1#CU");
+    assertThat(new java.math.BigDecimal(oldBasis.path("price").asText())).isEqualByComparingTo("90");
+    assertThat(new java.math.BigDecimal(newBasis.path("price").asText())).isEqualByComparingTo("100");
+    assertThat(repository.findVersion(versionId).orElseThrow().getPriceItemsJson()).isEqualTo(frozen);
+  }
+
+  @Test
   void actualImportComputesPriceReturnsIdsAndKeepsFrozenApproval() throws Exception {
     var view = corrections.get(key, itemId, "2026-09");
     assertThat(view.items()).hasSize(1);
@@ -306,9 +353,11 @@ class TechnicalPriceCorrectionIntegrationTest extends BomMapperTestBase {
     assertThat(repeated.getTechnicalResults().getFirst().linkedItemId())
         .isEqualTo(row.linkedItemId());
     assertThat(repeated.getTechnicalResults().getFirst().status()).isEqualTo("REUSED");
-    var history = linkedItems.getImportBatchDetail(repeated.getFactorUploadBatchId());
-    assertThat(history.getLinkedVersionCreatedCount()).isZero();
-    assertThat(history.getLinkedUnchangedSkippedCount()).isEqualTo(1);
+    var persistedSummary = json.readTree(jdbc.queryForObject(
+        "SELECT technical_result_json FROM lp_factor_upload_batch WHERE id=?",
+        String.class, repeated.getFactorUploadBatchId())).path("summary");
+    assertThat(persistedSummary.path("created").asInt()).isZero();
+    assertThat(persistedSummary.path("reused").asInt()).isEqualTo(1);
     assertThat(
             jdbc.queryForObject(
                 "SELECT COUNT(*) FROM lp_price_linked_item WHERE technical_version_id=?",
@@ -476,8 +525,8 @@ class TechnicalPriceCorrectionIntegrationTest extends BomMapperTestBase {
   void publicFixedPriceResolvesReminderWithoutInventingImport() {
     jdbc.update(
         "INSERT INTO"
-            + " lp_price_fixed_item(material_code,org_code,unit,business_unit_type,source_kind,source_type,fixed_price,tax_included,effective_from,created_at,updated_at)"
-            + " VALUES(?,'210','只','COMMERCIAL','PUBLIC','PURCHASE_FIXED',10,0,'2026-01-01',NOW(),NOW())",
+            + " lp_price_fixed_item(material_code,org_code,unit,business_unit_type,source_kind,source_type,fixed_price,tax_included,effective_from,effective_to,supplier_code,created_at,updated_at)"
+            + " VALUES(?,'210','只','COMMERCIAL','PUBLIC','PURCHASE_FIXED',10,0,'2026-01-01','2027-01-01','TEST-SUP',NOW(),NOW())",
         material);
     assertThat(corrections.get(key, itemId, "2026-09").items()).isEmpty();
     assertThat(

@@ -7,7 +7,6 @@ import com.sanhua.marketingcost.dto.PriceLinkedImportBasisSaveResult;
 import com.sanhua.marketingcost.dto.PriceLinkedImportBasisSnapshot;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariableBinding;
-import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
 import java.lang.reflect.Method;
 import java.time.LocalDate;
 import org.junit.jupiter.api.DisplayName;
@@ -60,10 +59,6 @@ class PriceLinkedImportBasisPersistenceTest {
     assertThat(binding.getExcelSourceSheetName()).isEqualTo("Sheet1");
     assertThat(binding.getExcelSourceCellRef()).isEqualTo("E2");
     assertThat(binding.getSource()).isEqualTo("TYPE2_IMPORT");
-    ArgumentCaptor<MaterialPriceTypeRouteSyncService.RouteCommand> routeCaptor =
-        ArgumentCaptor.forClass(MaterialPriceTypeRouteSyncService.RouteCommand.class);
-    verify(support.priceTypeRouteSyncService).sync(routeCaptor.capture());
-    assertThat(routeCaptor.getValue().priceType()).isEqualTo("联动价");
   }
 
   @Test

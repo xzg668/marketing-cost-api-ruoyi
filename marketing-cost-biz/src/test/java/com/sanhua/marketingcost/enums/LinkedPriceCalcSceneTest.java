@@ -15,7 +15,6 @@ class LinkedPriceCalcSceneTest {
     assertEquals("正常报价", LinkedPriceCalcScene.QUOTE.getLabel());
     assertEquals(LinkedPriceFactorSource.OA_LOCKED, LinkedPriceCalcScene.QUOTE.getDefaultFactorSource());
     assertTrue(LinkedPriceCalcScene.QUOTE.requiresOaNo());
-    assertFalse(LinkedPriceCalcScene.QUOTE.requiresAdjustBatchId());
   }
 
   @Test
@@ -26,7 +25,6 @@ class LinkedPriceCalcSceneTest {
         LinkedPriceFactorSource.MONTHLY_FACTOR,
         LinkedPriceCalcScene.MONTHLY_ADJUST.getDefaultFactorSource());
     assertFalse(LinkedPriceCalcScene.MONTHLY_ADJUST.requiresOaNo());
-    assertFalse(LinkedPriceCalcScene.MONTHLY_ADJUST.requiresAdjustBatchId());
   }
 
   @Test

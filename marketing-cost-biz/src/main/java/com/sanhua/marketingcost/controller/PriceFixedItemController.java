@@ -35,8 +35,7 @@ public class PriceFixedItemController {
   /**
    * 查询固定价格列表。
    *
-   * <p>V46 新增筛选：sourceType（PURCHASE/MAKE/SETTLE/SCRAP）+ pricingMonth（YYYY-MM）。
-   * 前端按 source_type tab 切换 + 月份选择器联动这俩参数。
+   * <p>固定采购价按物料和供应商查询；结算固定价等月度价格支持 pricingMonth（YYYY-MM）筛选。
    */
   @PreAuthorize("@ss.hasPermi('price:fixed:list')")
   @GetMapping

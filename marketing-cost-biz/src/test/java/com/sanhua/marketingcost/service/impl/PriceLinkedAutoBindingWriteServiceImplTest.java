@@ -19,13 +19,11 @@ import com.sanhua.marketingcost.dto.StandardBindingDecision;
 import com.sanhua.marketingcost.entity.ExcelAutoBindingImportLog;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.entity.PriceVariableBinding;
-import com.sanhua.marketingcost.formula.registry.FactorVariableRegistryImpl;
 import com.sanhua.marketingcost.mapper.ExcelAutoBindingImportLogMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableBindingMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
 import com.sanhua.marketingcost.service.PriceVariableBindingService;
 import java.time.LocalDate;
-import java.util.List;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,14 +36,12 @@ class PriceLinkedAutoBindingWriteServiceImplTest {
   private PriceVariableBindingMapper bindingMapper;
   private PriceVariableMapper priceVariableMapper;
   private PriceVariableBindingService priceVariableBindingService;
-  private FactorVariableRegistryImpl factorVariableRegistry;
   private ExcelAutoBindingImportLogMapper autoBindingImportLogMapper;
   private PriceLinkedAutoBindingWriteServiceImpl service;
 
   @BeforeAll
   static void initTableInfo() {
-    MapperBuilderAssistant assistant =
-        new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
     TableInfoHelper.initTableInfo(assistant, PriceVariable.class);
     TableInfoHelper.initTableInfo(assistant, PriceVariableBinding.class);
     TableInfoHelper.initTableInfo(assistant, ExcelAutoBindingImportLog.class);
@@ -56,11 +52,13 @@ class PriceLinkedAutoBindingWriteServiceImplTest {
     bindingMapper = mock(PriceVariableBindingMapper.class);
     priceVariableMapper = mock(PriceVariableMapper.class);
     priceVariableBindingService = mock(PriceVariableBindingService.class);
-    factorVariableRegistry = mock(FactorVariableRegistryImpl.class);
     autoBindingImportLogMapper = mock(ExcelAutoBindingImportLogMapper.class);
-    service = new PriceLinkedAutoBindingWriteServiceImpl(
-        bindingMapper, priceVariableMapper, priceVariableBindingService, factorVariableRegistry,
-        autoBindingImportLogMapper);
+    service =
+        new PriceLinkedAutoBindingWriteServiceImpl(
+            bindingMapper,
+            priceVariableMapper,
+            priceVariableBindingService,
+            autoBindingImportLogMapper);
   }
 
   @Test
@@ -68,10 +66,15 @@ class PriceLinkedAutoBindingWriteServiceImplTest {
   void writeCreatesExcelFormulaBinding() {
     when(bindingMapper.findCurrentByLinkedItemIdAndToken(88L, "材料含税价格")).thenReturn(null);
     when(priceVariableMapper.selectOne(any(Wrapper.class))).thenReturn(variable("SUS304/2B"));
-    when(priceVariableBindingService.save(any(PriceVariableBindingRequest.class))).thenReturn(9001L);
+    when(priceVariableBindingService.save(any(PriceVariableBindingRequest.class)))
+        .thenReturn(9001L);
 
-    PriceLinkedAutoBindingWriteResult result = service.write(request(false,
-        decision(PriceLinkedStandardBindingServiceImpl.ACTION_CREATE_HISTORY, "材料含税价格", 501L)));
+    PriceLinkedAutoBindingWriteResult result =
+        service.write(
+            request(
+                false,
+                decision(
+                    PriceLinkedStandardBindingServiceImpl.ACTION_CREATE_BINDING, "材料含税价格", 501L)));
 
     assertThat(result.getWrittenCount()).isEqualTo(1);
     assertThat(result.getManualSkippedCount()).isZero();
@@ -112,10 +115,14 @@ class PriceLinkedAutoBindingWriteServiceImplTest {
   void writeConsistentDecision() {
     when(bindingMapper.findCurrentByLinkedItemIdAndToken(88L, "废料含税价格")).thenReturn(null);
     when(priceVariableMapper.selectOne(any(Wrapper.class))).thenReturn(variable("SUS304/2B"));
-    when(priceVariableBindingService.save(any(PriceVariableBindingRequest.class))).thenReturn(9002L);
+    when(priceVariableBindingService.save(any(PriceVariableBindingRequest.class)))
+        .thenReturn(9002L);
 
-    PriceLinkedAutoBindingWriteResult result = service.write(request(false,
-        decision(PriceLinkedStandardBindingServiceImpl.ACTION_CONSISTENT, "废料含税价格", 502L)));
+    PriceLinkedAutoBindingWriteResult result =
+        service.write(
+            request(
+                false,
+                decision(PriceLinkedStandardBindingServiceImpl.ACTION_CONSISTENT, "废料含税价格", 502L)));
 
     assertThat(result.getWrittenCount()).isEqualTo(1);
     verify(priceVariableBindingService).save(any(PriceVariableBindingRequest.class));
@@ -129,8 +136,11 @@ class PriceLinkedAutoBindingWriteServiceImplTest {
     current.setSource("MANUAL");
     when(bindingMapper.findCurrentByLinkedItemIdAndToken(88L, "材料含税价格")).thenReturn(current);
 
-    PriceLinkedAutoBindingWriteResult result = service.write(request(false,
-        decision(PriceLinkedStandardBindingServiceImpl.ACTION_CONSISTENT, "材料含税价格", 501L)));
+    PriceLinkedAutoBindingWriteResult result =
+        service.write(
+            request(
+                false,
+                decision(PriceLinkedStandardBindingServiceImpl.ACTION_CONSISTENT, "材料含税价格", 501L)));
 
     assertThat(result.getWrittenCount()).isZero();
     assertThat(result.getManualSkippedCount()).isEqualTo(1);
@@ -152,10 +162,14 @@ class PriceLinkedAutoBindingWriteServiceImplTest {
     current.setSource("MANUAL");
     when(bindingMapper.findCurrentByLinkedItemIdAndToken(88L, "材料含税价格")).thenReturn(current);
     when(priceVariableMapper.selectOne(any(Wrapper.class))).thenReturn(variable("SUS304/2B"));
-    when(priceVariableBindingService.save(any(PriceVariableBindingRequest.class))).thenReturn(9003L);
+    when(priceVariableBindingService.save(any(PriceVariableBindingRequest.class)))
+        .thenReturn(9003L);
 
-    PriceLinkedAutoBindingWriteResult result = service.write(request(true,
-        decision(PriceLinkedStandardBindingServiceImpl.ACTION_CONSISTENT, "材料含税价格", 501L)));
+    PriceLinkedAutoBindingWriteResult result =
+        service.write(
+            request(
+                true,
+                decision(PriceLinkedStandardBindingServiceImpl.ACTION_CONSISTENT, "材料含税价格", 501L)));
 
     assertThat(result.getWrittenCount()).isEqualTo(1);
     assertThat(result.getManualSkippedCount()).isZero();
@@ -169,8 +183,11 @@ class PriceLinkedAutoBindingWriteServiceImplTest {
   @Test
   @DisplayName("write：冲突决策不写入行级绑定")
   void writeSkipsConflictDecision() {
-    PriceLinkedAutoBindingWriteResult result = service.write(request(false,
-        decision(PriceLinkedStandardBindingServiceImpl.ACTION_CONFLICT, "材料含税价格", 501L)));
+    PriceLinkedAutoBindingWriteResult result =
+        service.write(
+            request(
+                false,
+                decision(PriceLinkedStandardBindingServiceImpl.ACTION_CONFLICT, "材料含税价格", 501L)));
 
     assertThat(result.getWrittenCount()).isZero();
     assertThat(result.getConflictSkippedCount()).isEqualTo(1);
@@ -190,10 +207,14 @@ class PriceLinkedAutoBindingWriteServiceImplTest {
   void writeCreatesMissingFinanceVariable() {
     when(bindingMapper.findCurrentByLinkedItemIdAndToken(88L, "材料含税价格")).thenReturn(null);
     when(priceVariableMapper.selectOne(any(Wrapper.class))).thenReturn(null);
-    when(priceVariableBindingService.save(any(PriceVariableBindingRequest.class))).thenReturn(9004L);
+    when(priceVariableBindingService.save(any(PriceVariableBindingRequest.class)))
+        .thenReturn(9004L);
 
-    PriceLinkedAutoBindingWriteResult result = service.write(request(false,
-        decision(PriceLinkedStandardBindingServiceImpl.ACTION_CONSISTENT, "材料含税价格", 501L)));
+    PriceLinkedAutoBindingWriteResult result =
+        service.write(
+            request(
+                false,
+                decision(PriceLinkedStandardBindingServiceImpl.ACTION_CONSISTENT, "材料含税价格", 501L)));
 
     assertThat(result.getWrittenCount()).isEqualTo(1);
     ArgumentCaptor<PriceVariable> captor = ArgumentCaptor.forClass(PriceVariable.class);
@@ -201,7 +222,6 @@ class PriceLinkedAutoBindingWriteServiceImplTest {
     assertThat(captor.getValue().getVariableCode()).isEqualTo("SUS304/2B");
     assertThat(captor.getValue().getResolverKind()).isEqualTo("FINANCE");
     assertThat(captor.getValue().getResolverParams()).contains("\"shortName\":\"SUS304/2B\"");
-    verify(factorVariableRegistry).invalidate();
   }
 
   private PriceLinkedAutoBindingWriteRequest request(
@@ -216,7 +236,8 @@ class PriceLinkedAutoBindingWriteServiceImplTest {
     return request;
   }
 
-  private StandardBindingDecision decision(String action, String tokenName, Long standardBindingId) {
+  private StandardBindingDecision decision(
+      String action, String tokenName, Long standardBindingId) {
     BindingCandidate candidate = new BindingCandidate();
     candidate.setMaterialCode("MAT-1001");
     candidate.setLinkedItemImportKey("MAT-1001|S001|SPEC");

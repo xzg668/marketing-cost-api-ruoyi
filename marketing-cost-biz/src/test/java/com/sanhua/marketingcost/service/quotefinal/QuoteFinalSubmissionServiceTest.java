@@ -8,7 +8,7 @@ import com.sanhua.marketingcost.dto.quotecosting.ProductCostingRequest;
 import com.sanhua.marketingcost.entity.*;
 import com.sanhua.marketingcost.integration.oa.*;
 import com.sanhua.marketingcost.integration.oa.workflow.*;
-import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
+import com.sanhua.marketingcost.db.OriginalPricingIntegrationTestBase;
 import com.sanhua.marketingcost.service.costing.*;
 import com.sanhua.marketingcost.service.technicaldata.*;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
@@ -24,7 +24,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContextHolder;
 
 @Tag("integration")
-class QuoteFinalSubmissionServiceTest extends BomMapperTestBase {
+class QuoteFinalSubmissionServiceTest extends OriginalPricingIntegrationTestBase {
   @Autowired QuoteFinalSubmissionService service;
   @Autowired QuoteFinalSubmissionRepository repository;
   @Autowired JdbcTemplate jdbc;
@@ -55,7 +55,7 @@ class QuoteFinalSubmissionServiceTest extends BomMapperTestBase {
     items=jdbc.queryForList("SELECT id FROM oa_form_item WHERE oa_form_id=? ORDER BY id",Long.class,formId);
     for (long id : items) {
       jdbc.update("INSERT INTO lp_oa_form_item_extra_field(oa_form_id,oa_form_item_id,field_code,field_name,field_value,business_unit_type) VALUES(?,?,'OA_ROW_ID','原明细行',?,'COMMERCIAL')",formId,id,String.valueOf(1137224760702033920L+items.indexOf(id)));
-      var v=new QuoteCostRunVersion();v.setId(id*100);v.setVersionNo("V1");v.setTotalCost(new BigDecimal("152.503400"));v.setSourceRevision("revision");versions.put(id,v);
+      var v=new QuoteCostRunVersion();v.setId(id*100);v.setVersionNo("V1");v.setTotalCost(new BigDecimal("152.503400"));v.setFinalQuoteAmount(new BigDecimal("152.503400"));v.setSourceRevision("revision");versions.put(id,v);
     }
     when(contexts.resolve(any())).thenAnswer(call->{
       ProductCostingRequest req=call.getArgument(0);var form=new OaForm();form.setId(formId);form.setOaNo(oaNo);
@@ -91,8 +91,39 @@ class QuoteFinalSubmissionServiceTest extends BomMapperTestBase {
     versions.remove(items.get(1));var state=read();assertThat(state.readyProducts()).isEqualTo(1);assertThat(state.costs()).hasSize(2);assertThat(state.canConfirm()).isFalse();
     assertThatThrownBy(()->send(state.fingerprint(),key())).hasMessageContaining("尚未完成");verifyNoInteractions(oa);
   }
+  @Test void sendsFrozenFinalCostsIncludingPositiveAndNegativeMaterialDifferences() {
+    var first = versions.get(items.getFirst());
+    first.setCuMaterialAdjustment(new BigDecimal("139.65634237"));
+    first.setFinalQuoteAmount(new BigDecimal("292.15974237"));
+    var second = versions.get(items.getLast());
+    second.setCuMaterialAdjustment(new BigDecimal("-0.92920427"));
+    second.setFinalQuoteAmount(new BigDecimal("151.57419573"));
+    var ready = read();
+    assertThat(ready.costs()).extracting(QuoteFinalSubmissionService.CostLine::totalCost)
+        .containsExactly("292.15974237", "151.57419573");
+    var submitted = send(ready.fingerprint(), key());
+    var body = ArgumentCaptor.forClass(ObjectNode.class);
+    verify(oa).submit(body.capture());
+    assertThat(body.getValue().at("/formData/dataDetails/0/content").asText()).isEqualTo("292.15974237");
+    assertThat(body.getValue().at("/formData/dataDetails/1/content").asText()).isEqualTo("151.57419573");
+    first.setFinalQuoteAmount(new BigDecimal("999"));
+    assertThat(read().costs()).isEqualTo(submitted.costs());
+  }
+  @Test void missingFinalCostCannotSubmitTheFinancialBaseAsAFallback() {
+    versions.get(items.getFirst()).setFinalQuoteAmount(null);
+    var state = read();
+    assertThat(state.canConfirm()).isFalse();
+    assertThat(state.costs().getFirst().message()).contains("最终成本缺失");
+    assertThatThrownBy(() -> send(state.fingerprint(), key())).hasMessageContaining("尚未完成");
+    verifyNoInteractions(oa);
+  }
+  @Test void negativeFinalCostCannotBeSubmitted() {
+    versions.get(items.getFirst()).setFinalQuoteAmount(new BigDecimal("-0.01"));
+    assertThat(read().canConfirm()).isFalse();
+    verifyNoInteractions(oa);
+  }
   @Test void changedCostOrPositionIsRejectedBeforeSending() {
-    var before=read();versions.get(items.getFirst()).setTotalCost(new BigDecimal("100"));
+    var before=read();versions.get(items.getFirst()).setFinalQuoteAmount(new BigDecimal("100"));
     assertThatThrownBy(()->send(before.fingerprint(),key())).hasMessageContaining("已变化");verifyNoInteractions(oa);
   }
   @Test void sourceRowChangeAfterReadIsRejected() {

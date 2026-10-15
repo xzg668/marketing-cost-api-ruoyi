@@ -72,7 +72,7 @@ class PackageComponentPriceConcurrencyIntegrationTest extends BomMapperTestBase 
       selected.setSourceTopProductCode(request.getTopProductCode());
       return PackageSnapshotResult.of(selected, List.of(child), false);
     });
-    when(router.listCandidates(anyString(), anyString(), any())).thenReturn(List.of(new PriceTypeRoute(
+    when(router.prepareCandidates(anyString(), any(), anyString(), any(), any(), any())).thenReturn(List.of(new PriceTypeRoute(
         child.getChildMaterialCode(), MaterialFormAttrEnum.PURCHASED, PriceTypeEnum.FIXED,
         1, null, null, "manual", "固定采购价")));
     var resolver = new PriceResolver() {
@@ -87,7 +87,7 @@ class PackageComponentPriceConcurrencyIntegrationTest extends BomMapperTestBase 
         return PriceResolveResult.hit(new BigDecimal("3"), "固定采购价");
       }
     };
-    var service = new PackageComponentPriceServiceImpl(snapshots, router, prices, details, gaps, List.of(resolver));
+    var service = new PackageComponentPriceServiceImpl(snapshots, router, prices, details, gaps, List.of(resolver), mock(com.sanhua.marketingcost.service.LinkedPriceEnsureService.class));
     var transaction = new TransactionTemplate(transactions);
     transaction.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
     try (var pool = Executors.newFixedThreadPool(2)) {

@@ -27,6 +27,6 @@ public final class RangePriceResolverTestSupport {
         itemMapper,
         factorRuleMapper,
         oaFormMapper,
-        new SupplierPreferredPriceSelector(ratioService));
+        new SupplierPreferredPriceSelector(ratioService), mock(MaterialPriceMonthSelector.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.impl.OriginalRangePriceRuntime.class, org.mockito.Mockito.withSettings().mockMaker(org.mockito.MockMakers.INLINE)), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceSelectionService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.SupplierPriceSelectionService.class));
   }
 }

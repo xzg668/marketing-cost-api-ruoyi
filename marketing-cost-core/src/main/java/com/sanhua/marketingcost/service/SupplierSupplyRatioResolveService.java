@@ -5,6 +5,9 @@ import java.time.LocalDate;
 
 public interface SupplierSupplyRatioResolveService {
 
+  java.util.Map<String, SupplierSupplyRatioResolveResult> resolveAll(
+      String businessUnitType, java.util.Set<String> materialCodes, LocalDate pricingDate);
+
   SupplierSupplyRatioResolveResult resolve(
       String businessUnitType,
       String materialCode,

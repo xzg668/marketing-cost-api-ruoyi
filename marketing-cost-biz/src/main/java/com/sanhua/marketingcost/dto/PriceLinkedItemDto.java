@@ -5,6 +5,12 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 public class PriceLinkedItemDto {
+  private String expressionVersion;
+  private Integer ruleRevision;
+  public String getExpressionVersion() { return expressionVersion; }
+  public void setExpressionVersion(String value) { expressionVersion=value; }
+  public Integer getRuleRevision() { return ruleRevision; }
+  public void setRuleRevision(Integer value) { ruleRevision=value; }
   private Long id;
   private String pricingMonth;
   private String orgCode;

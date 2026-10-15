@@ -15,5 +15,4 @@ public class PackageComponentBulkGenerateRequest {
   private String sourceType;
   private LocalDate asOfDate;
   private LocalDateTime priceAsOfTime;
-  private boolean forceRefresh = true;
 }

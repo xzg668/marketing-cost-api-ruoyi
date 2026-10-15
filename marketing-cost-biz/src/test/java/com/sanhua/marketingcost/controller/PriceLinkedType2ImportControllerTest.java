@@ -10,7 +10,6 @@ import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.PriceItemImportResponse;
 import com.sanhua.marketingcost.dto.PriceLinkedImportCommand;
 import com.sanhua.marketingcost.dto.PriceLinkedType2ImportPreviewResponse;
-import com.sanhua.marketingcost.service.FactorMonthlyPriceAdjustmentService;
 import com.sanhua.marketingcost.service.PriceLinkedImportDispatchService;
 import com.sanhua.marketingcost.service.PriceLinkedItemService;
 import java.lang.reflect.Method;
@@ -67,7 +66,7 @@ class PriceLinkedType2ImportControllerTest {
         "APPEND_ONLY",
         "2026-07-01",
         "KEEP_EXISTING",
-        "sha-from-preview",null,null,null);
+        "sha-from-preview","version-from-preview",null,null,null);
 
     assertThat(result.isSuccess()).isTrue();
     ArgumentCaptor<PriceLinkedImportCommand> captor =
@@ -75,6 +74,7 @@ class PriceLinkedType2ImportControllerTest {
     verify(fixture.dispatch).confirm(captor.capture());
     assertThat(captor.getValue().getExpectedPreviewSha256())
         .isEqualTo("sha-from-preview");
+    assertThat(captor.getValue().getPreviewFingerprint()).isEqualTo("version-from-preview");
   }
 
   @Test
@@ -92,7 +92,7 @@ class PriceLinkedType2ImportControllerTest {
         null,
         null,
         null,
-        "wrong-sha",null,null,null);
+        "wrong-sha",null,null,null,null);
 
     assertThat(result.isSuccess()).isFalse();
     assertThat(result.getMsg()).contains("SHA-256");
@@ -119,7 +119,7 @@ class PriceLinkedType2ImportControllerTest {
         String.class,
         String.class,
         String.class,
-        String.class,Long.class,String.class,Long.class);
+        String.class,String.class,Long.class,String.class,Long.class);
 
     assertThat(preview.getAnnotation(PostMapping.class).value())
         .containsExactly("/items/import-excel/preview");
@@ -132,12 +132,10 @@ class PriceLinkedType2ImportControllerTest {
   private static final class Fixture {
 
     private final PriceLinkedItemService standard = mock(PriceLinkedItemService.class);
-    private final FactorMonthlyPriceAdjustmentService adjustment =
-        mock(FactorMonthlyPriceAdjustmentService.class);
     private final PriceLinkedImportDispatchService dispatch =
         mock(PriceLinkedImportDispatchService.class);
     private final PriceLinkedItemController controller =
-        new PriceLinkedItemController(standard, adjustment, dispatch);
+        new PriceLinkedItemController(standard, dispatch);
 
     private MockMultipartFile file() {
       return new MockMultipartFile(

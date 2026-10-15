@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.formula.workbook.ExcelCellReferences;
+
 import com.sanhua.marketingcost.dto.PriceLinkedType2CellSnapshot;
 import com.sanhua.marketingcost.dto.PriceLinkedType2FormulaError;
 import com.sanhua.marketingcost.dto.PriceLinkedType2FormulaFactorBinding;
@@ -38,9 +40,9 @@ public class PriceLinkedType2FormulaReferenceClassifierImpl
         snapshots(productRow.getReferencedCells(), errors);
     Map<String, PriceLinkedType2FormulaFactorBinding> bindings =
         bindings(factorBindings, errors);
-    List<PriceLinkedType2FormulaReferenceSyntax.ReferenceToken> tokens;
+    List<ExcelCellReferences.ReferenceToken> tokens;
     try {
-      tokens = PriceLinkedType2FormulaReferenceSyntax.parse(
+      tokens = ExcelCellReferences.parse(
           productRow.getTaxIncludedFormula(), productRow.getSourceSheetName());
     } catch (RuntimeException ex) {
       errors.add(error(
@@ -52,10 +54,10 @@ public class PriceLinkedType2FormulaReferenceClassifierImpl
     }
 
     Set<String> seen = new LinkedHashSet<>();
-    String formulaCellKey = PriceLinkedType2FormulaReferenceSyntax.key(
+    String formulaCellKey = ExcelCellReferences.key(
         productRow.getSourceSheetName(), productRow.getFormulaCellRef());
-    for (PriceLinkedType2FormulaReferenceSyntax.ReferenceToken token : tokens) {
-      String key = PriceLinkedType2FormulaReferenceSyntax.key(
+    for (ExcelCellReferences.ReferenceToken token : tokens) {
+      String key = ExcelCellReferences.key(
           token.sheetName(), token.cellRef());
       if (!seen.add(key)) {
         continue;
@@ -178,7 +180,7 @@ public class PriceLinkedType2FormulaReferenceClassifierImpl
       if (snapshot == null) {
         continue;
       }
-      String key = PriceLinkedType2FormulaReferenceSyntax.key(
+      String key = ExcelCellReferences.key(
           snapshot.getSheetName(), snapshot.getCellRef());
       PriceLinkedType2CellSnapshot previous = result.putIfAbsent(key, snapshot);
       if (previous != null && !sameSnapshot(previous, snapshot)) {
@@ -203,7 +205,7 @@ public class PriceLinkedType2FormulaReferenceClassifierImpl
       if (binding == null) {
         continue;
       }
-      String key = PriceLinkedType2FormulaReferenceSyntax.key(
+      String key = ExcelCellReferences.key(
           binding.sheetName(), binding.cellRef());
       PriceLinkedType2FormulaFactorBinding previous = result.putIfAbsent(key, binding);
       if (previous != null
@@ -224,9 +226,9 @@ public class PriceLinkedType2FormulaReferenceClassifierImpl
       return false;
     }
     try {
-      return PriceLinkedType2FormulaReferenceSyntax.parse(
+      return ExcelCellReferences.parse(
               snapshot.getFormula(), snapshot.getSheetName()).stream()
-          .map(token -> PriceLinkedType2FormulaReferenceSyntax.key(
+          .map(token -> ExcelCellReferences.key(
               token.sheetName(), token.cellRef()))
           .anyMatch(formulaCellKey::equals);
     } catch (RuntimeException ex) {

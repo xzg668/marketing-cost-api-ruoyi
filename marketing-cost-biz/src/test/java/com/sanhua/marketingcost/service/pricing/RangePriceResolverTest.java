@@ -47,6 +47,63 @@ class RangePriceResolverTest {
   }
 
   @Test
+  void copperScenariosSelectSupplierOnceBeforeLookingForTargetRange() {
+    var ratio = mock(SupplierSupplyRatioResolveService.class);
+    var resolver = factorResolver(mock(PriceRangeItemMapper.class),
+        mock(PriceRangeFactorRuleMapper.class), mock(OaFormMapper.class), ratio);
+    var rule = factorRule("CU", 101L);
+    rule.setMaterialCode("MAT-01");
+    rule.setOrgCode("210");
+    rule.setPricingMonth("2026-10");
+    rule.setFactorUnit("元/吨");
+    var a90 = factorRange(801L, "主供应商", "SUP-A", "1", null, null);
+    var a100 = factorRange(802L, "主供应商", "SUP-A", "2", null, null);
+    a100.setRangeLow(new BigDecimal("95000"));
+    a100.setRangeHigh(new BigDecimal("105000"));
+    var b = factorRange(803L, "另一家", "SUP-B", "0.01", null, null);
+    b.setRangeLow(BigDecimal.ZERO);
+    b.setRangeHigh(new BigDecimal("999999"));
+    var rows = List.of(a90, a100, b);
+    rows.forEach(row -> row.setMaterialCode("MAT-01"));
+    when(ratio.resolve(any(), any(), any(), any(), any()))
+        .thenReturn(mainSupplier("主供应商", "SUP-A", "0.7"));
+    var pair = resolver.resolveFactorScenarios(rule, rows, PriceFactorContextTest.financial(),
+        new BigDecimal("100000"), LocalDate.of(2026,11,1));
+    assertThat(pair.financialPrice().unitPrice()).isEqualByComparingTo("1");
+    assertThat(pair.customerPrice().unitPrice()).isEqualByComparingTo("2");
+    assertThat(pair.financialInputs().financial()).isSameAs(pair.customerInputs().financial());
+    assertThat(pair.ruleMonths()).isEqualTo(new PriceMonthSelection("2026-11", "2026-10"));
+    verify(ratio, times(1)).resolve(any(), any(), any(), any(), any());
+
+    var missing = resolver.resolveFactorScenarios(rule, List.of(a90, b), PriceFactorContextTest.financial(),
+        new BigDecimal("100000"), LocalDate.of(2026,11,1));
+    assertThat(missing.financialPrice().unitPrice()).isEqualByComparingTo("1");
+    assertThat(missing.customerPrice().unitPrice()).isNull();
+    assertThat(missing.customerPrice().remark()).contains("未命中当前区间", "SUP-A", "100000");
+  }
+
+  @Test
+  void targetBandFromOtherSupplierCannotHideMissingPrimaryBandInNormalResolver() {
+    var items = mock(PriceRangeItemMapper.class);
+    var rules = mock(PriceRangeFactorRuleMapper.class);
+    var forms = mock(OaFormMapper.class);
+    var ratio = mock(SupplierSupplyRatioResolveService.class);
+    stubCopperFactor(rules, forms);
+    var primary = factorRange(901L, "主供", "SUP-A", "1", null, null);
+    primary.setRangeHigh(new BigDecimal("89999"));
+    var other = factorRange(902L, "其他", "SUP-B", "2", null, null);
+    when(items.selectList(any(Wrapper.class))).thenReturn(List.of(primary, other));
+    when(ratio.resolve(any(), any(), any(), any(), any())).thenReturn(mainSupplier("主供", "SUP-A", "0.9"));
+    var result = factorResolver(items, rules, forms, ratio).resolve("OA-001",
+        part("201850160", "1"), route(), quoteContext("COMMERCIAL"));
+    assertThat(result.unitPrice()).isNull();
+    assertThat(result.remark()).contains("SUP-A", "未命中当前区间");
+    var capture = ArgumentCaptor.forClass(Wrapper.class);
+    verify(items).selectList(capture.capture());
+    assertThat(capture.getValue().getCustomSqlSegment()).doesNotContain("range_low", "range_high", "price_excl_tax");
+  }
+
+  @Test
   @DisplayName("T23：区间价按 price_as_of_time 和数量命中有效区间")
   void monthlyRangeUsesContextPriceAsOfTimeAndQuantity() {
     PriceRangeItemMapper mapper = mock(PriceRangeItemMapper.class);
@@ -95,28 +152,14 @@ class RangePriceResolverTest {
   }
 
   @Test
-  @DisplayName("MFRP-00：无上下文时使用路由 effectiveFrom 过滤有效期")
-  void routeEffectiveFromFiltersWhenContextMissing() {
-    PriceRangeItemMapper mapper = mock(PriceRangeItemMapper.class);
-    RangePriceResolver resolver = RangePriceResolverTestSupport.create(mapper);
-    when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(range("0", "99", "3.140000")));
-    LocalDate routeEffectiveFrom = LocalDate.of(2026, 6, 1);
-
-    PriceResolveResult result =
-        resolver.resolve(
-            "OA-001",
-            part("MAT-RANGE", "12"),
-            route(routeEffectiveFrom),
-            null);
-
-    assertThat(result.unitPrice()).isEqualByComparingTo("3.140000");
-    ArgumentCaptor<Wrapper<PriceRangeItem>> captor = ArgumentCaptor.forClass(Wrapper.class);
-    verify(mapper).selectList(captor.capture());
-    assertThat(captor.getValue().getCustomSqlSegment())
-        .contains("effective_from", "<=")
-        .contains("ORDER BY", "effective_from", "DESC", "id", "DESC")
-        .doesNotContain("effective_to");
-    assertThat(paramValues(captor.getValue())).contains(routeEffectiveFrom);
+  @DisplayName("PTP-03：缺少上下文时不能凭路由日期猜取价组织")
+  void missingContextCannotQueryQuantityPricesAcrossOrganizations() {
+    var mapper = mock(PriceRangeItemMapper.class);
+    var resolver = RangePriceResolverTestSupport.create(mapper);
+    var result = resolver.resolve("OA-001", part("MAT-RANGE", "12"), route(LocalDate.of(2026, 6, 1)), null);
+    assertThat(result.unitPrice()).isNull();
+    assertThat(result.failureCode()).isEqualTo("RANGE_PRICE_SCOPE_MISSING");
+    verifyNoInteractions(mapper);
   }
 
   @Test
@@ -374,7 +417,8 @@ class RangePriceResolverTest {
         "OA-001", part("201850160", "1"), route(), quoteContext("COMMERCIAL"));
 
     assertThat(result.unitPrice()).isNull();
-    assertThat(result.remark()).contains("未命中当前区间");
+    assertThat(result.failureCode()).isEqualTo("RANGE_PRICE_MISSING");
+    assertThat(result.remark()).contains("缺少不含税价");
     verifyNoInteractions(ratioService);
   }
 
@@ -474,8 +518,66 @@ class RangePriceResolverTest {
     ArgumentCaptor<Wrapper<PriceRangeFactorRule>> captor = ArgumentCaptor.forClass(Wrapper.class);
     verify(ruleMapper).selectList(captor.capture());
     assertThat(captor.getValue().getCustomSqlSegment())
-        .contains("business_unit_type", "current_flag", "ORDER BY");
+        .contains("business_unit_type", "rule_status")
+        .doesNotContain("current_flag");
     assertThat(paramValues(captor.getValue())).contains("COMMERCIAL");
+  }
+
+  @Test
+  void partialMonthRejectsHistoricalRangeBeforeReadingBandsOrOaFactors() {
+    var items = mock(PriceRangeItemMapper.class);
+    var rules = mock(PriceRangeFactorRuleMapper.class);
+    var forms = mock(OaFormMapper.class);
+    var selector = mock(MaterialPriceMonthSelector.class);
+    var ratio = mock(SupplierSupplyRatioResolveService.class);
+    var historical = factorRule("CU", 101L);
+    historical.setPricingMonth("2026-10"); historical.setOrgCode("210");
+    historical.setRuleIdentityKey("history");
+    when(rules.selectList(any(Wrapper.class))).thenReturn(List.of(historical));
+    when(selector.select("COMMERCIAL", "210", "2026-11"))
+        .thenReturn(new PriceMonthSelection("2026-11", "2026-11"));
+    var context = quoteContext("COMMERCIAL");
+    context.setPricingMonth("2026-11"); context.setPriceOrgCode("210");
+    var resolver = new RangePriceResolver(items, rules, forms, new SupplierPreferredPriceSelector(ratio), selector, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.impl.OriginalRangePriceRuntime.class, org.mockito.Mockito.withSettings().mockMaker(org.mockito.MockMakers.INLINE)), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceSelectionService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.SupplierPriceSelectionService.class));
+    var result = resolver.resolve("OA-1", part("MAT-B", "1"), route(), context);
+    assertThat(result.unitPrice()).isNull();
+    assertThat(result.failureCode()).isEqualTo("MATERIAL_MONTH_PRICE_MISSING");
+    assertThat(result.remark()).contains("MAT-B", "210", "2026-11", "不沿用");
+    verifyNoInteractions(items, forms, ratio);
+  }
+
+  @Test
+  void wholeMissingMonthUsesHistoricalRangeRevisionRegardlessOfCurrentFlag() {
+    var items = mock(PriceRangeItemMapper.class);
+    var rules = mock(PriceRangeFactorRuleMapper.class);
+    var forms = mock(OaFormMapper.class);
+    var selector = mock(MaterialPriceMonthSelector.class);
+    var ratio = mock(SupplierSupplyRatioResolveService.class);
+    var historical = factorRule("CU", 101L);
+    historical.setPricingMonth("2026-10"); historical.setOrgCode("210");
+    historical.setRuleIdentityKey("history"); historical.setVersionNo(2); historical.setCurrentFlag(0);
+    historical.setSupplierCode("SUP-A"); historical.setSupplierName("主供");
+    var future = factorRule("CU", 102L);
+    future.setPricingMonth("2026-12"); future.setOrgCode("210");
+    future.setRuleIdentityKey("history"); future.setVersionNo(3); future.setCurrentFlag(1);
+    when(rules.selectList(any(Wrapper.class))).thenReturn(List.of(future,historical));
+    when(selector.select("COMMERCIAL", "210", "2026-11"))
+        .thenReturn(new PriceMonthSelection("2026-11", "2026-10"));
+    when(items.selectList(any(Wrapper.class))).thenReturn(List.of(factorRange(900L, "主供", "SUP-A", "1.25", null, null)));
+    var form = new OaForm(); form.setCopperPrice(new BigDecimal("90000"));
+    when(forms.selectOne(any(Wrapper.class))).thenReturn(form);
+    var context = quoteContext("COMMERCIAL");
+    context.setPricingMonth("2026-11"); context.setPriceOrgCode("210");
+    var resolver = new RangePriceResolver(items, rules, forms, new SupplierPreferredPriceSelector(ratio), selector, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.impl.OriginalRangePriceRuntime.class, org.mockito.Mockito.withSettings().mockMaker(org.mockito.MockMakers.INLINE)), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceSelectionService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.SupplierPriceSelectionService.class));
+    var result = resolver.resolve("OA-1", part("MAT-B", "1"), route(), context);
+    assertThat(result.unitPrice()).isEqualByComparingTo("1.25");
+    assertThat(result.carriedForward()).isTrue();
+    assertThat(result.remark()).contains("核算月=2026-11", "原稿月份=2026-10");
+    var query = ArgumentCaptor.forClass(Wrapper.class);
+    verify(items).selectList(query.capture());
+    assertThat(query.getValue().getSqlSegment()).doesNotContain("effective_from <=");
+    assertThat(paramValues(query.getValue())).contains(101L).doesNotContain(102L);
+    verifyNoInteractions(ratio); // 单供应商可直接确定，不读供货比例。
   }
 
   private static CostRunPartItemDto part(String code, String qty) {
@@ -502,9 +604,8 @@ class RangePriceResolverTest {
   }
 
   private static CostRunContext monthlyContext(LocalDateTime priceAsOfTime) {
-    return CostRunContext.monthlyReprice(
+    var context = CostRunContext.monthlyReprice(
         "2026-05",
-        88L,
         "MRP-001",
         "COMMERCIAL",
         priceAsOfTime,
@@ -515,6 +616,8 @@ class RangePriceResolverTest {
         null,
         null,
         "OBJ-001");
+    context.setPriceOrgCode("210");
+    return context;
   }
 
   private static CostRunContext quoteContext(String businessUnitType) {
@@ -524,7 +627,7 @@ class RangePriceResolverTest {
   private static CostRunContext quoteContextAt(
       String businessUnitType,
       LocalDateTime priceAsOfTime) {
-    return CostRunContext.quote(
+    var context = CostRunContext.quote(
         "OA-001",
         1L,
         "P-001",
@@ -534,6 +637,8 @@ class RangePriceResolverTest {
         String.format("%04d-%02d", priceAsOfTime.getYear(), priceAsOfTime.getMonthValue()),
         priceAsOfTime,
         "OBJ-001");
+    context.setPriceOrgCode("210");
+    return context;
   }
 
   private static PriceRangeItem range(String low, String high, String price) {
@@ -605,7 +710,7 @@ class RangePriceResolverTest {
         itemMapper,
         ruleMapper,
         oaFormMapper,
-        new SupplierPreferredPriceSelector(ratioService));
+        new SupplierPreferredPriceSelector(ratioService), mock(MaterialPriceMonthSelector.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.impl.OriginalRangePriceRuntime.class, org.mockito.Mockito.withSettings().mockMaker(org.mockito.MockMakers.INLINE)), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceSelectionService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.SupplierPriceSelectionService.class));
   }
 
   private static void stubCopperFactor(

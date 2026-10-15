@@ -8,8 +8,8 @@ import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import java.math.BigDecimal;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class LinkedPriceEnsureRequestTest {
@@ -29,16 +29,14 @@ class LinkedPriceEnsureRequestTest {
   }
 
   @Test
-  void monthlyAdjustFactory_should_allow_optional_adjust_batch_and_pass_validation() {
+  void monthlyAdjustFactory_should_pass_validation() {
     LinkedPriceEnsureRequest request =
         LinkedPriceEnsureRequest.monthlyAdjust(
-            18L,
             "HOUSEHOLD",
             "2026-05",
             new LinkedHashSet<>(List.of("MAT-1", " MAT-2 ")));
 
     assertEquals(LinkedPriceCalcScene.MONTHLY_ADJUST, request.getCalcScene());
-    assertEquals(18L, request.getAdjustBatchId());
     assertEquals(Set.of("MAT-1", "MAT-2"), request.normalizedItemCodes());
     assertTrue(request.validate().isEmpty());
   }
@@ -68,10 +66,9 @@ class LinkedPriceEnsureRequestTest {
   }
 
   @Test
-  void validate_monthlyAdjust_should_allow_missing_adjust_batch_id() {
+  void validate_monthlyAdjust_should_not_require_oa() {
     LinkedPriceEnsureRequest request =
         LinkedPriceEnsureRequest.monthlyAdjust(
-            null,
             "COMMERCIAL",
             "2026-05",
             new LinkedHashSet<>(List.of("MAT-1")));

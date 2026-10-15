@@ -33,19 +33,12 @@ public class OaQuotationRequestMapper {
     object(
         root,
         "$",
-        Set.of(
-            "requestId",
-            "RejectToNodeid",
-            "formNo",
-            "processCode",
-            "mainData",
-            "detailData"));
+        Set.of("requestId", "RejectToNodeid", "formNo", "processCode", "mainData", "detailData"));
     String requestId = text(root, "requestId", 128);
     String rejectToNodeId = null;
     if (root.hasNonNull("RejectToNodeid")) {
       rejectToNodeId = text(root, "RejectToNodeid", 128);
-      if (!rejectToNodeId.matches("[A-Za-z0-9._:-]+"))
-        fail("RejectToNodeid", "退回节点ID格式不正确");
+      if (!rejectToNodeId.matches("[A-Za-z0-9._:-]+")) fail("RejectToNodeid", "退回节点ID格式不正确");
     }
     String formNo = text(root, "formNo", 64);
     String process = text(root, "processCode", 20);
@@ -179,6 +172,7 @@ public class OaQuotationRequestMapper {
     h.setAluminumPrice(value(m, !sr && !sc5 && !sc6 ? "hssljj" : "hssljjhs"));
     h.setSus304Price(value(m, sc5 ? "hsssus304jjh" : "hsssus304jj0"));
     h.setSus316lPrice(value(m, sc5 ? "hsssus316jjh" : "hsssus316jj0"));
+    h.setBoardTender(bool(m, "sfzbxqjzdbhcp"));
     if (sr) {
       h.setSteelPrice(value(m, "hssbxgjjhs"));
       h.setSilverPrice(value(m, "hssyjjhs"));

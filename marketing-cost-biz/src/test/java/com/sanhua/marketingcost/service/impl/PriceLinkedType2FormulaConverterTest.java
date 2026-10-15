@@ -80,8 +80,8 @@ class PriceLinkedType2FormulaConverterTest {
   }
 
   @Test
-  @DisplayName("外层 ROUND 按系统精度规范移除并记录小数位")
-  void stripsOuterRoundAndRecordsScale() {
+  @DisplayName("原稿ROUND及其位置保持不变")
+  void preservesRoundAtItsOriginalPosition() {
     PriceLinkedType2FormulaConversionResult result = converter().convert(
         row(6, "ROUND(G6*$E$2/1000+H6,4)",
             value("G6", "毛重", "10"),
@@ -90,8 +90,7 @@ class PriceLinkedType2FormulaConverterTest {
         List.of(factor("E2", "1#Cu", 191L, "90")));
 
     assertThat(result.getConvertedFormula())
-        .isEqualTo("(10*[factor_identity_191]/1000+1)");
-    assertThat(result.getStrippedRoundScales()).containsExactly(4);
+        .isEqualTo("ROUND(10*[factor_identity_191]/1000+1,4)");
   }
 
   @Test
@@ -104,7 +103,7 @@ class PriceLinkedType2FormulaConverterTest {
         List.of(factor("E2", "1#Cu", 191L, "90")));
 
     assertThat(result.getConvertedFormula())
-        .isEqualTo("(10*[factor_identity_191])");
+        .isEqualTo("ROUND(10*[factor_identity_191],4)");
     assertThat(result.isFinalVatDivisorStripped()).isTrue();
   }
 

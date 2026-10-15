@@ -22,6 +22,7 @@ public class PricePrepareItem {
 
   private String prepareNo;
   private String periodMonth;
+  private String priceOrgCode;
   private String oaNo;
   private Long oaFormItemId;
   private String topProductCode;
@@ -39,6 +40,8 @@ public class PricePrepareItem {
   private Long resultRefId;
   private Long sourcePriceRecordId;
   private String sourcePriceBatchNo;
+  /** 原稿行情取价的规则、财务输入及选档快照；历史准备记录不随新发布改变。 */
+  private String inputSnapshotJson;
   private String supplierName;
   private String supplierCode;
   private BigDecimal supplyRatio;

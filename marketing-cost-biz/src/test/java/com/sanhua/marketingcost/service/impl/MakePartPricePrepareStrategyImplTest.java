@@ -66,6 +66,26 @@ class MakePartPricePrepareStrategyImplTest {
     verifyNoInteractions(generation);
   }
 
+  @Test void parentPreparationKeepsIndependentRawAndScrapEvidenceWithExactAmounts() throws Exception {
+    var item = item();
+    var ready = row("OK", "RAW", "SCRAP");
+    ready.setPriceComplete(true); ready.setParentTotalCostPrice(BigDecimal.ONE);
+    ready.setRawUnitPrice(new BigDecimal("123.123456789012"));
+    ready.setScrapUnitPrice(new BigDecimal("9.987654321098"));
+    ready.setRawInputSnapshotJson("{\"pricePriority\":{\"revision\":\"raw-v\"},\"factor\":90.123456789012}");
+    ready.setScrapInputSnapshotJson("{\"pricePriority\":{\"revision\":\"scrap-v\"}}");
+    when(generation.calculateForBomRow(any(), any(), any(), eq(true))).thenReturn(List.of(ready));
+    var result = service.prepare("OA", "COMMERCIAL", "2026-09", item);
+    var json = new com.fasterxml.jackson.databind.ObjectMapper()
+        .enable(com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+    var snapshot = json.readTree(result.getInputSnapshotJson());
+    assertThat(snapshot.at("/components/0/inputs/pricePriority/revision").asText()).isEqualTo("raw-v");
+    assertThat(snapshot.at("/components/1/inputs/pricePriority/revision").asText()).isEqualTo("scrap-v");
+    assertThat(snapshot.at("/components/0/unitPrice").decimalValue()).isEqualByComparingTo("123.123456789012");
+    assertThat(snapshot.at("/components/0/inputs/factor").decimalValue()).isEqualByComparingTo("90.123456789012");
+    assertThat(ready.getRawInputSnapshotJson()).contains("raw-v");
+  }
+
   private PricePreparePlanItem item() {
     var row = new BomCostingRow(); row.setId(1L); row.setOaFormItemId(2L); row.setOaNo("OA");
     row.setPeriodMonth("2026-09"); row.setBusinessUnitType("COMMERCIAL"); row.setMaterialCode("MAKE"); row.setQtyPerTop(new BigDecimal("2"));

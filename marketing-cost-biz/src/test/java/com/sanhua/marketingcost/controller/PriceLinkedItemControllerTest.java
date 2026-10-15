@@ -10,11 +10,8 @@ import static org.mockito.Mockito.when;
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
-import com.sanhua.marketingcost.dto.FactorUploadBatchDto;
 import com.sanhua.marketingcost.dto.PriceItemImportResponse;
-import com.sanhua.marketingcost.dto.PriceLinkedImportBatchDetailDto;
 import com.sanhua.marketingcost.dto.PriceLinkedItemDto;
-import com.sanhua.marketingcost.service.FactorMonthlyPriceAdjustmentService;
 import com.sanhua.marketingcost.service.PriceLinkedItemService;
 import java.io.InputStream;
 import java.util.List;
@@ -36,17 +33,13 @@ import org.springframework.mock.web.MockMultipartFile;
 class PriceLinkedItemControllerTest {
 
   private PriceLinkedItemService priceLinkedItemService;
-  private FactorMonthlyPriceAdjustmentService factorMonthlyPriceAdjustmentService;
   private PriceLinkedItemController controller;
 
   @BeforeEach
   void setUp() {
     priceLinkedItemService = mock(PriceLinkedItemService.class);
-    factorMonthlyPriceAdjustmentService = mock(FactorMonthlyPriceAdjustmentService.class);
-    controller = new PriceLinkedItemController(
-        priceLinkedItemService, factorMonthlyPriceAdjustmentService);
     var dispatch=mock(com.sanhua.marketingcost.service.PriceLinkedImportDispatchService.class);
-    org.springframework.test.util.ReflectionTestUtils.setField(controller,"priceLinkedImportDispatchService",dispatch);
+    controller = new PriceLinkedItemController(priceLinkedItemService, dispatch);
     when(dispatch.confirm(any())).thenAnswer(invocation -> {
       com.sanhua.marketingcost.dto.PriceLinkedImportCommand command=invocation.getArgument(0);
       return priceLinkedItemService.importExcel(new java.io.ByteArrayInputStream(command.getFileBytes()),command.getPricingMonth(),command.isOverwriteManual(),command.getBusinessUnitType(),command.getSourceFileName(),command.getEffectiveStrategy(),command.getFormulaEffectiveDate(),command.getFactorPriceConflictStrategy());
@@ -67,6 +60,18 @@ class PriceLinkedItemControllerTest {
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData()).hasSize(1);
     verify(priceLinkedItemService).list("2026-05", "M001", true);
+  }
+
+  @Test
+  void importedFilesReturnsPagedFileSummary() {
+    var row = new com.sanhua.marketingcost.dto.LinkedImportedFileDto(
+        12L, "原稿.xls", "210", 123, "alice", java.time.LocalDateTime.of(2026, 10, 13, 8, 0));
+    when(priceLinkedItemService.importedFiles("2026-10", "COMMERCIAL", 3, 20))
+        .thenReturn(new PageResult<>(List.of(row), 61L));
+    var response = controller.importedFiles("2026-10", "COMMERCIAL", 3, 20);
+    assertThat(response.isSuccess()).isTrue();
+    assertThat(response.getData().getTotal()).isEqualTo(61);
+    assertThat(response.getData().getList()).containsExactly(row);
   }
 
   @Test
@@ -105,7 +110,7 @@ class PriceLinkedItemControllerTest {
 
     CommonResult<PriceItemImportResponse> result =
         controller.importExcel(
-            file, "2026-02", "COMMERCIAL", false, null, "2026-02-01", "KEEP_EXISTING",null,null,null,null);
+            file, "2026-02", "COMMERCIAL", false, null, "2026-02-01", "KEEP_EXISTING",null,null,null,null,null);
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getBatchId()).isEqualTo("batch-uuid-lp-1");
@@ -133,7 +138,7 @@ class PriceLinkedItemControllerTest {
         new byte[]{1, 2, 3});
 
     CommonResult<PriceItemImportResponse> result =
-        controller.importExcel(file, "2026-02", "COMMERCIAL", false, "APPEND_ONLY", null, null,null,null,null,null);
+        controller.importExcel(file, "2026-02", "COMMERCIAL", false, "APPEND_ONLY", null, null,null,null,null,null,null);
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getFormulaEffectiveDate()).isEqualTo("2026-02-01");
@@ -165,7 +170,7 @@ class PriceLinkedItemControllerTest {
 
     CommonResult<PriceItemImportResponse> result =
         controller.importExcel(
-            file, "2026-02", "COMMERCIAL", true, "OVERRIDE_EFFECTIVE", "2026-02-01", "OVERWRITE",null,null,null,null);
+            file, "2026-02", "COMMERCIAL", true, "OVERRIDE_EFFECTIVE", "2026-02-01", "OVERWRITE",null,null,null,null,null);
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getSkipped()).isEqualTo(1);
@@ -182,7 +187,7 @@ class PriceLinkedItemControllerTest {
         new byte[0]);
 
     CommonResult<PriceItemImportResponse> result =
-        controller.importExcel(empty, "2026-02", "COMMERCIAL", false, null, null, null,null,null,null,null);
+        controller.importExcel(empty, "2026-02", "COMMERCIAL", false, null, null, null,null,null,null,null,null);
 
     assertThat(result.isSuccess()).isFalse();
     assertThat(result.getCode()).isEqualTo(GlobalErrorCodeConstants.BAD_REQUEST.getCode());
@@ -205,48 +210,11 @@ class PriceLinkedItemControllerTest {
 
     CommonResult<PriceItemImportResponse> result =
         controller.importExcel(
-            file, "2026-02", "COMMERCIAL", false, null, "bad-date", "KEEP_EXISTING",null,null,null,null);
+            file, "2026-02", "COMMERCIAL", false, null, "bad-date", "KEEP_EXISTING",null,null,null,null,null);
 
     assertThat(result.isSuccess()).isFalse();
     assertThat(result.getCode()).isEqualTo(GlobalErrorCodeConstants.BAD_REQUEST.getCode());
     assertThat(result.getMsg()).contains("formulaEffectiveDate 格式错误");
   }
 
-  @Test
-  @DisplayName("/factors/import-batches：影响因素菜单批次列表复用后端持久化批次")
-  void listFactorImportBatches_delegatesToService() {
-    FactorUploadBatchDto batch = new FactorUploadBatchDto();
-    batch.setId(77L);
-    batch.setPriceMonth("2026-05");
-    batch.setBusinessUnitType("COMMERCIAL");
-    batch.setUploadedBy("alice");
-    when(priceLinkedItemService.listImportHistory(
-        eq("2026-05"), eq("COMMERCIAL"), eq("alice"), eq(false), eq(10)))
-        .thenReturn(List.of(batch));
-
-    CommonResult<List<FactorUploadBatchDto>> result =
-        controller.listFactorImportBatches("2026-05", "COMMERCIAL", "alice", false, 10);
-
-    assertThat(result.isSuccess()).isTrue();
-    assertThat(result.getData()).hasSize(1);
-    assertThat(result.getData().getFirst().getId()).isEqualTo(77L);
-    verify(priceLinkedItemService)
-        .listImportHistory("2026-05", "COMMERCIAL", "alice", false, 10);
-  }
-
-  @Test
-  @DisplayName("/factors/import-batches/{id}：影响因素菜单批次明细复用持久化行级来源")
-  void getFactorImportBatchDetail_delegatesToService() {
-    PriceLinkedImportBatchDetailDto detail = new PriceLinkedImportBatchDetailDto();
-    detail.setFactorUploadBatchId(77L);
-    detail.setBatchId("77");
-    when(priceLinkedItemService.getImportBatchDetail(77L)).thenReturn(detail);
-
-    CommonResult<PriceLinkedImportBatchDetailDto> result =
-        controller.getFactorImportBatchDetail(77L);
-
-    assertThat(result.isSuccess()).isTrue();
-    assertThat(result.getData().getFactorUploadBatchId()).isEqualTo(77L);
-    verify(priceLinkedItemService).getImportBatchDetail(77L);
-  }
 }

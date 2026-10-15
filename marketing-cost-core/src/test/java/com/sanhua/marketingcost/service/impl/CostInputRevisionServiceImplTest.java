@@ -10,8 +10,8 @@ import static org.mockito.Mockito.when;
 
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
-import com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService;
 import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
+import com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -24,7 +24,8 @@ class CostInputRevisionServiceImplTest {
   void revisionChangesForBusinessInputButIgnoresCalculationOutputState() {
     JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
     when(jdbcTemplate.queryForList(anyString()))
-        .thenAnswer(invocation -> List.of(Map.of("Checksum", invocation.getArgument(0).hashCode())));
+        .thenAnswer(
+            invocation -> List.of(Map.of("Checksum", invocation.getArgument(0).hashCode())));
     CostInputRevisionServiceImpl service = new CostInputRevisionServiceImpl(jdbcTemplate);
     OaForm form = form();
     OaFormItem item = item(11L, "P-1");
@@ -41,14 +42,13 @@ class CostInputRevisionServiceImplTest {
   @Test
   void batchRevisionReadsSharedSourceTablesOnlyOnce() {
     JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-    when(jdbcTemplate.queryForList(anyString()))
-        .thenReturn(List.of(Map.of("Checksum", 12345L)));
+    when(jdbcTemplate.queryForList(anyString())).thenReturn(List.of(Map.of("Checksum", 12345L)));
     when(jdbcTemplate.queryForList(anyString(), anyString())).thenReturn(List.of());
-    when(jdbcTemplate.queryForList(CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
-        String.class, 11L, null, 11L, null))
+    when(jdbcTemplate.queryForList(
+            CostInputRevisionServiceImpl.MATERIAL_CODES_SQL, String.class, 11L, null, 11L, null))
         .thenReturn(List.of("A-M"));
-    when(jdbcTemplate.queryForList(CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
-        String.class, 12L, null, 12L, null))
+    when(jdbcTemplate.queryForList(
+            CostInputRevisionServiceImpl.MATERIAL_CODES_SQL, String.class, 12L, null, 12L, null))
         .thenReturn(List.of("B-M"));
     CostInputRevisionServiceImpl service = new CostInputRevisionServiceImpl(jdbcTemplate);
 
@@ -57,7 +57,10 @@ class CostInputRevisionServiceImplTest {
 
     assertThat(revisions).hasSize(2);
     assertThat(revisions.get(11L)).isNotEqualTo(revisions.get(12L));
-    verify(jdbcTemplate, times(15)).queryForList(anyString());
+    verify(jdbcTemplate, times(12)).queryForList(anyString());
+    verify(jdbcTemplate, org.mockito.Mockito.never())
+        .queryForList(
+            org.mockito.ArgumentMatchers.argThat(sql -> sql.contains("lp_finance_base_price")));
   }
 
   @Test
@@ -69,8 +72,9 @@ class CostInputRevisionServiceImplTest {
     org.springframework.beans.factory.ObjectProvider<EffectiveTechnicalDataQueryService> provider =
         mock(org.springframework.beans.factory.ObjectProvider.class);
     when(provider.getIfAvailable()).thenReturn(technical);
-    var missing = new EffectiveTechnicalDataException("TECH_DATA_EFFECTIVE_VERSION_MISSING",
-        11L, "2026-08", List.of("PACKAGE"), "包装未生效");
+    var missing =
+        new EffectiveTechnicalDataException(
+            "TECH_DATA_EFFECTIVE_VERSION_MISSING", 11L, "2026-08", List.of("PACKAGE"), "包装未生效");
     when(technical.effectiveFingerprint(11L, "2026-08")).thenThrow(missing);
     when(technical.effectiveFingerprint(12L, "2026-08")).thenReturn("TECH-12");
     var service = new CostInputRevisionServiceImpl(jdbc, provider);
@@ -78,15 +82,17 @@ class CostInputRevisionServiceImplTest {
 
     var revisions = service.currentRevisions(form(), items, "2026-08");
     assertThat(revisions).containsOnlyKeys(12L);
-    verify(jdbc, times(20)).queryForList(anyString());
-    assertThat(revisions.get(12L)).isEqualTo(service.currentRevision(form(), items.get(1), "2026-08"));
+    verify(jdbc, times(17)).queryForList(anyString());
+    assertThat(revisions.get(12L))
+        .isEqualTo(service.currentRevision(form(), items.get(1), "2026-08"));
     assertThatThrownBy(() -> service.currentRevision(form(), items.get(0), "2026-08"))
         .isSameAs(missing);
 
     org.mockito.Mockito.doReturn("TECH-11").when(technical).effectiveFingerprint(11L, "2026-08");
     assertThat(service.currentRevisions(form(), items, "2026-08")).containsKeys(11L, 12L);
     org.mockito.Mockito.doThrow(new org.springframework.dao.QueryTimeoutException("DB timeout"))
-        .when(technical).effectiveFingerprint(11L, "2026-08");
+        .when(technical)
+        .effectiveFingerprint(11L, "2026-08");
     assertThatThrownBy(() -> service.currentRevisions(form(), items, "2026-08"))
         .isInstanceOf(org.springframework.dao.QueryTimeoutException.class);
   }
@@ -96,29 +102,39 @@ class CostInputRevisionServiceImplTest {
     JdbcTemplate jdbc = mock(JdbcTemplate.class);
     when(jdbc.queryForList(anyString())).thenReturn(List.of(Map.of("Checksum", 100L)));
     var service = new CostInputRevisionServiceImpl(jdbc);
-    var original = service.currentRevision(form(), item(11L,"P-1"));
+    var original = service.currentRevision(form(), item(11L, "P-1"));
     when(jdbc.queryForList("CHECKSUM TABLE `lp_product_property_rule`"))
         .thenReturn(List.of(Map.of("Checksum", 200L)));
-    assertThat(service.currentRevision(form(), item(11L,"P-1"))).isNotEqualTo(original);
+    assertThat(service.currentRevision(form(), item(11L, "P-1"))).isNotEqualTo(original);
   }
 
   @Test
   void changingOnlyTheOtherProductsPriceKeepsTheCurrentCostRevision() {
     JdbcTemplate jdbc = mock(JdbcTemplate.class);
-    when(jdbc.queryForList(anyString()))
-        .thenReturn(List.of(Map.of("Checksum", 100L)));
+    when(jdbc.queryForList(anyString())).thenReturn(List.of(Map.of("Checksum", 100L)));
     when(jdbc.queryForList(anyString(), anyString())).thenReturn(List.of());
-    when(jdbc.queryForList(CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
-        String.class, 11L, "2026-08", 11L, "2026-08"))
+    when(jdbc.queryForList(
+            CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
+            String.class,
+            11L,
+            "2026-08",
+            11L,
+            "2026-08"))
         .thenReturn(List.of("A-M"));
-    when(jdbc.queryForList(CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
-        String.class, 12L, "2026-08", 12L, "2026-08"))
+    when(jdbc.queryForList(
+            CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
+            String.class,
+            12L,
+            "2026-08",
+            12L,
+            "2026-08"))
         .thenReturn(List.of("B-M"));
     String fixedSql = "SELECT * FROM `lp_price_fixed_item` WHERE material_code IN (?) ORDER BY id";
     when(jdbc.queryForList(fixedSql, "A-M"))
         .thenReturn(List.of(Map.of("id", 1L, "material_code", "A-M", "fixed_price", 10)));
     when(jdbc.queryForList(fixedSql, "B-M"))
-        .thenReturn(List.of(Map.of("id", 2L, "material_code", "B-M", "fixed_price", 10)),
+        .thenReturn(
+            List.of(Map.of("id", 2L, "material_code", "B-M", "fixed_price", 10)),
             List.of(Map.of("id", 2L, "material_code", "B-M", "fixed_price", 15)));
     var service = new CostInputRevisionServiceImpl(jdbc);
     var form = form();
@@ -141,12 +157,198 @@ class CostInputRevisionServiceImplTest {
   void downstreamReturnRequiresNewCostOnlyForTheSameQuotationAndMonth() {
     var jdbc = mock(JdbcTemplate.class);
     var service = new CostInputRevisionServiceImpl(jdbc);
-    String query = "SELECT MAX(id) FROM lp_quote_final_submission WHERE oa_form_id=? AND accounting_month=? AND returned_at IS NOT NULL";
+    String query =
+        "SELECT MAX(id) FROM lp_quote_final_submission WHERE oa_form_id=? AND accounting_month=?"
+            + " AND returned_at IS NOT NULL";
     var original = service.currentRevision(form(), item(11L, "P-1"), "2026-09");
     var otherMonth = service.currentRevision(form(), item(11L, "P-1"), "2026-08");
     when(jdbc.queryForObject(query, Long.class, 1L, "2026-09")).thenReturn(91L);
     assertThat(service.currentRevision(form(), item(11L, "P-1"), "2026-09")).isNotEqualTo(original);
     assertThat(service.currentRevision(form(), item(11L, "P-1"), "2026-08")).isEqualTo(otherMonth);
+  }
+
+  @Test
+  void financialPublicationChangesInvalidateNativeRulesWithoutChangingMaterialFiles() {
+    var jdbc = mock(JdbcTemplate.class);
+    when(jdbc.queryForList(anyString())).thenReturn(List.of(Map.of("Checksum", 100L)));
+    when(jdbc.queryForList(
+            CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
+            String.class,
+            11L,
+            "2026-10",
+            11L,
+            "2026-10"))
+        .thenReturn(List.of("M1"));
+    when(jdbc.queryForList(
+            CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
+            String.class,
+            12L,
+            "2026-10",
+            12L,
+            "2026-10"))
+        .thenReturn(List.of("FIXED"));
+    when(jdbc.queryForList(
+            "SELECT * FROM `lp_price_linked_item` WHERE material_code IN (?) ORDER BY id", "M1"))
+        .thenReturn(
+            List.of(
+                Map.of(
+                    "id",
+                    1L,
+                    "material_code",
+                    "M1",
+                    "business_unit_type",
+                    "COMMERCIAL",
+                    "org_code",
+                    "210",
+                    "pricing_month",
+                    "2026-10",
+                    "expression_version",
+                    "ORIGINAL_V1",
+                    "rule_status",
+                    "PUBLISHED")));
+    var publication = new java.util.concurrent.atomic.AtomicLong(38L);
+    when(jdbc.queryForList(
+            org.mockito.ArgumentMatchers.startsWith("SELECT b.id"),
+            org.mockito.ArgumentMatchers.any(Object[].class)))
+        .thenAnswer(
+            invocation -> List.of(Map.of("id", publication.get(), "price_org_code", "210")));
+    var service = new CostInputRevisionServiceImpl(jdbc);
+    var form = form();
+    var nativeItem = item(11L, "NATIVE");
+    var fixedItem = item(12L, "FIXED");
+    String nativeBefore = service.currentRevision(form, nativeItem, "2026-10");
+    String fixedBefore = service.currentRevision(form, fixedItem, "2026-10");
+    publication.set(52L);
+    assertThat(service.currentRevision(form, nativeItem, "2026-10")).isNotEqualTo(nativeBefore);
+    assertThat(service.currentRevision(form, fixedItem, "2026-10")).isEqualTo(fixedBefore);
+  }
+
+  @Test
+  void financialPublicationChangesInvalidateNativeRangeRulesWithoutChangingMaterialFiles() {
+    var jdbc = mock(JdbcTemplate.class);
+    when(jdbc.queryForList(anyString())).thenReturn(List.of(Map.of("Checksum", 100L)));
+    when(jdbc.queryForList(
+            CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
+            String.class,
+            11L,
+            "2026-10",
+            11L,
+            "2026-10"))
+        .thenReturn(List.of("M1"));
+    when(jdbc.queryForList(
+            CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
+            String.class,
+            12L,
+            "2026-10",
+            12L,
+            "2026-10"))
+        .thenReturn(List.of("FIXED"));
+    when(jdbc.queryForList(
+            "SELECT * FROM `lp_price_range_factor_rule` WHERE material_code IN (?) ORDER BY id",
+            "M1"))
+        .thenReturn(
+            List.of(
+                Map.of(
+                    "id",
+                    1L,
+                    "material_code",
+                    "M1",
+                    "business_unit_type",
+                    "COMMERCIAL",
+                    "org_code",
+                    "210",
+                    "pricing_month",
+                    "2026-10",
+                    "source_upload_batch_id",
+                    37L,
+                    "rule_status",
+                    "PUBLISHED")));
+    var publication = new java.util.concurrent.atomic.AtomicLong(38L);
+    when(jdbc.queryForList(
+            org.mockito.ArgumentMatchers.startsWith("SELECT b.id"),
+            org.mockito.ArgumentMatchers.any(Object[].class)))
+        .thenAnswer(
+            invocation -> List.of(Map.of("id", publication.get(), "price_org_code", "210")));
+    var service = new CostInputRevisionServiceImpl(jdbc);
+    var form = form();
+    var nativeItem = item(11L, "NATIVE");
+    var fixedItem = item(12L, "FIXED");
+    String nativeBefore = service.currentRevision(form, nativeItem, "2026-10");
+    String fixedBefore = service.currentRevision(form, fixedItem, "2026-10");
+    publication.set(52L);
+    assertThat(service.currentRevision(form, nativeItem, "2026-10")).isNotEqualTo(nativeBefore);
+    assertThat(service.currentRevision(form, fixedItem, "2026-10")).isEqualTo(fixedBefore);
+  }
+
+  @Test
+  void sameFinancialRowCorrectionInvalidatesEvenWhenPublicationIdAndHashStayUnchanged() {
+    var jdbc = mock(JdbcTemplate.class);
+    when(jdbc.queryForList(
+            org.mockito.ArgumentMatchers.startsWith("SELECT b.id"),
+            org.mockito.ArgumentMatchers.any(Object[].class)))
+        .thenReturn(List.of(Map.of("id", 38L, "content_hash", "unchanged")));
+    var price = new java.util.concurrent.atomic.AtomicReference<>(new BigDecimal("90"));
+    when(jdbc.queryForList(
+            org.mockito.ArgumentMatchers.startsWith("SELECT p.*"),
+            org.mockito.ArgumentMatchers.eq(38L)))
+        .thenAnswer(
+            invocation ->
+                List.of(
+                    Map.of(
+                        "id",
+                        101L,
+                        "price",
+                        price.get(),
+                        "unit",
+                        "CNY_KG",
+                        "tax_included",
+                        1,
+                        "canonical_factor_key",
+                        "Cu")));
+    var service = new CostInputRevisionServiceImpl(jdbc);
+    var before = service.financePublicationRevision("COMMERCIAL", "2026-10", null);
+    assertThat(service.financePublicationRevision("COMMERCIAL", "2026-10", null)).isEqualTo(before);
+    price.set(new BigDecimal("100"));
+    assertThat(service.financePublicationRevision("COMMERCIAL", "2026-10", null))
+        .isNotEqualTo(before);
+  }
+
+  @Test
+  void partialNewMonthInvalidatesOlderSuccessEvenWhenThisMaterialsRuleIsUnchanged() {
+    var jdbc = mock(JdbcTemplate.class);
+    when(jdbc.queryForList(MATERIAL_CODES_SQL(), String.class, 11L, "2026-11", 11L, "2026-11"))
+        .thenReturn(List.of("M1"));
+    when(jdbc.queryForList(
+            "SELECT * FROM `lp_price_linked_item` WHERE material_code IN (?) ORDER BY id", "M1"))
+        .thenReturn(
+            List.of(
+                Map.of(
+                    "id",
+                    1L,
+                    "business_unit_type",
+                    "COMMERCIAL",
+                    "org_code",
+                    "210",
+                    "pricing_month",
+                    "2026-10",
+                    "expression_version",
+                    "ORIGINAL_V1",
+                    "rule_status",
+                    "PUBLISHED")));
+    var month = new java.util.concurrent.atomic.AtomicReference<>("2026-10");
+    when(jdbc.queryForObject(
+            org.mockito.ArgumentMatchers.startsWith("SELECT MAX(pricing_month)"),
+            org.mockito.ArgumentMatchers.eq(String.class),
+            org.mockito.ArgumentMatchers.any(Object[].class)))
+        .thenAnswer(invocation -> month.get());
+    var service = new CostInputRevisionServiceImpl(jdbc);
+    var before = service.currentRevision(form(), item(11L, "P1"), "2026-11");
+    month.set("2026-11");
+    assertThat(service.currentRevision(form(), item(11L, "P1"), "2026-11")).isNotEqualTo(before);
+  }
+
+  private static String MATERIAL_CODES_SQL() {
+    return CostInputRevisionServiceImpl.MATERIAL_CODES_SQL;
   }
 
   private OaForm form() {

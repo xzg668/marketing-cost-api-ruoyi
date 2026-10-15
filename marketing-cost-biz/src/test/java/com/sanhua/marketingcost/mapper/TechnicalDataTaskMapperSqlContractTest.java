@@ -27,14 +27,15 @@ class TechnicalDataTaskMapperSqlContractTest {
   void workbenchQueriesScopeRowsByActiveProductAndAssignee() throws Exception {
     String productCountSql = sql(QuoteTechProductMapper.class.getMethod(
         "countAccessibleWorkbenchRows", String.class, Long.class, String.class,
-        String.class, String.class, String.class));
+        String.class, String.class, String.class, String.class));
     String productPageSql = sql(QuoteTechProductMapper.class.getMethod(
         "selectAccessibleWorkbenchPage", String.class, Long.class, String.class,
-        String.class, String.class, String.class, int.class, int.class));
+        String.class, String.class, String.class, String.class, int.class, int.class));
     assertThat(productCountSql)
         .contains("JOIN lp_quote_tech_task")
         .contains("product.active_flag=1 AND task.active_flag=1")
         .contains("task.assignee_user_id=#{userId}")
+        .contains("task.oa_no=#{oaNo}")
         .contains("product.material_no LIKE CONCAT");
     assertThat(productPageSql)
         .contains("SELECT product.*")

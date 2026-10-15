@@ -18,9 +18,10 @@ import com.sanhua.marketingcost.enums.PriceLinkedType2FactorIdentityResolutionSt
 import com.sanhua.marketingcost.mapper.FactorIdentityMapper;
 import com.sanhua.marketingcost.mapper.FactorMonthlyPriceChangeLogMapper;
 import com.sanhua.marketingcost.mapper.FactorMonthlyPriceMapper;
+import com.sanhua.marketingcost.service.FactorUploadBatchService;
 import com.sanhua.marketingcost.service.PriceLinkedType2FactorIdentityResolver;
 import com.sanhua.marketingcost.service.PriceLinkedType2FactorMonthlyUpsertService;
-import com.sanhua.marketingcost.service.FactorUploadBatchService;
+import com.sanhua.marketingcost.service.financefactor.FinanceFactorAuthority;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -53,12 +54,16 @@ public class PriceLinkedType2FactorMonthlyUpsertServiceImpl
   private final FactorMonthlyPriceChangeLogMapper changeLogMapper;
   private final FactorUploadBatchService factorUploadBatchService;
 
+  private final FinanceFactorAuthority financeAuthority;
+
   public PriceLinkedType2FactorMonthlyUpsertServiceImpl(
       PriceLinkedType2FactorIdentityResolver identityResolver,
       FactorIdentityMapper factorIdentityMapper,
       FactorMonthlyPriceMapper factorMonthlyPriceMapper,
       FactorMonthlyPriceChangeLogMapper changeLogMapper,
-      FactorUploadBatchService factorUploadBatchService) {
+      FactorUploadBatchService factorUploadBatchService,
+      FinanceFactorAuthority financeAuthority) {
+    this.financeAuthority = financeAuthority;
     this.identityResolver = identityResolver;
     this.factorIdentityMapper = factorIdentityMapper;
     this.factorMonthlyPriceMapper = factorMonthlyPriceMapper;
@@ -97,11 +102,10 @@ public class PriceLinkedType2FactorMonthlyUpsertServiceImpl
     String normalizedOperator = normalize(operator);
     String strategy = normalizeStrategy(factorPriceConflictStrategy);
     FactorMonthlyPriceUpsertResult result = new FactorMonthlyPriceUpsertResult();
-    String requestError = validateRequest(
-        parseResult, normalizedMonth, normalizedBusinessUnit, sourceUploadBatchId);
+    String requestError =
+        validateRequest(parseResult, normalizedMonth, normalizedBusinessUnit, sourceUploadBatchId);
     if (requestError != null) {
-      result.getErrors().add(
-          new FactorMonthlyPriceUpsertResult.RowError(null, null, requestError));
+      result.getErrors().add(new FactorMonthlyPriceUpsertResult.RowError(null, null, requestError));
       return result;
     }
 
@@ -117,35 +121,39 @@ public class PriceLinkedType2FactorMonthlyUpsertServiceImpl
     Map<String, FactorIdentity> createdIdentityByCanonicalKey = new HashMap<>();
     Set<Long> metadataUpdatedIdentityIds = new LinkedHashSet<>();
     for (PriceLinkedType2FactorIdentityResolution resolution : resolutions) {
-      IdentityOutcome identityOutcome = resolveIdentityForWrite(
-          resolution,
-          normalizedBusinessUnit,
-          normalizedOperator,
-          createdIdentityByCanonicalKey,
-          metadataUpdatedIdentityIds,
-          result);
+      IdentityOutcome identityOutcome =
+          resolveIdentityForWrite(
+              resolution,
+              normalizedBusinessUnit,
+              normalizedOperator,
+              createdIdentityByCanonicalKey,
+              metadataUpdatedIdentityIds,
+              result);
       FactorIdentity identity = identityOutcome.identity();
-      MonthlyPriceOutcome priceOutcome = upsertMonthlyPrice(
-          identity,
-          resolution.getSourceRow().getPrice(),
-          normalizedMonth,
-          normalizedOperator,
-          sourceUploadBatchId,
-          strategy,
-          result);
-      result.getRows().add(toRowResult(
-          resolution.getSourceRow(), identityOutcome, priceOutcome));
+      MonthlyPriceOutcome priceOutcome =
+          financeAuthority.manages(identity)
+              ? new MonthlyPriceOutcome(null, "FINANCE_REFERENCE", null)
+              : upsertMonthlyPrice(
+                  identity,
+                  resolution.getSourceRow().getPrice(),
+                  normalizedMonth,
+                  normalizedOperator,
+                  sourceUploadBatchId,
+                  strategy,
+                  result);
+      result.getRows().add(toRowResult(resolution.getSourceRow(), identityOutcome, priceOutcome));
     }
 
     FactorWorkbookParseResult factorParseResult = toFactorWorkbook(parseResult);
-    FactorRowRefSaveResult rowRefResult = factorUploadBatchService.saveRowRefs(
-        sourceUploadBatchId, factorParseResult, result);
+    FactorRowRefSaveResult rowRefResult =
+        factorUploadBatchService.saveRowRefs(sourceUploadBatchId, factorParseResult, result);
     if (rowRefResult != null && !rowRefResult.getErrors().isEmpty()) {
-      String message = rowRefResult.getErrors().stream()
-          .map(FactorRowRefSaveResult.RowError::getMessage)
-          .filter(StringUtils::hasText)
-          .findFirst()
-          .orElse("类型 2 影响因素来源行保存失败");
+      String message =
+          rowRefResult.getErrors().stream()
+              .map(FactorRowRefSaveResult.RowError::getMessage)
+              .filter(StringUtils::hasText)
+              .findFirst()
+              .orElse("类型 2 影响因素来源行保存失败");
       throw new IllegalStateException(message);
     }
     return result;
@@ -183,28 +191,39 @@ public class PriceLinkedType2FactorMonthlyUpsertServiceImpl
     Map<String, Map<String, List<PriceLinkedType2FactorIdentityResolution>>> grouped =
         new LinkedHashMap<>();
     for (PriceLinkedType2FactorIdentityResolution resolution : resolutions) {
+      var source = resolution.getSourceRow();
+      if (source != null
+          && financeAuthority.manages(
+              resolution.getBusinessUnitType(), source.getPriceSource(), source.getShortName()))
+        continue;
       String canonicalKey = normalize(resolution.getCanonicalFactorKey());
-      String price = normalizePriceText(
-          resolution.getSourceRow() == null ? null : resolution.getSourceRow().getPrice());
-      grouped.computeIfAbsent(canonicalKey, ignored -> new LinkedHashMap<>())
+      String price =
+          normalizePriceText(
+              resolution.getSourceRow() == null ? null : resolution.getSourceRow().getPrice());
+      grouped
+          .computeIfAbsent(canonicalKey, ignored -> new LinkedHashMap<>())
           .computeIfAbsent(price, ignored -> new ArrayList<>())
           .add(resolution);
     }
-    for (Map.Entry<String, Map<String, List<PriceLinkedType2FactorIdentityResolution>>> entry
-        : grouped.entrySet()) {
+    for (Map.Entry<String, Map<String, List<PriceLinkedType2FactorIdentityResolution>>> entry :
+        grouped.entrySet()) {
       if (StringUtils.hasText(entry.getKey()) && entry.getValue().size() > 1) {
-        List<Integer> rows = entry.getValue().values().stream()
-            .flatMap(List::stream)
-            .map(PriceLinkedType2FactorIdentityResolution::getSourceRow)
-            .filter(Objects::nonNull)
-            .map(PriceLinkedType2FactorRow::getSourceRowNumber)
-            .filter(Objects::nonNull)
-            .toList();
+        List<Integer> rows =
+            entry.getValue().values().stream()
+                .flatMap(List::stream)
+                .map(PriceLinkedType2FactorIdentityResolution::getSourceRow)
+                .filter(Objects::nonNull)
+                .map(PriceLinkedType2FactorRow::getSourceRowNumber)
+                .filter(Objects::nonNull)
+                .toList();
         result.setMonthlyPriceConflictCount(result.getMonthlyPriceConflictCount() + 1);
-        result.getErrors().add(new FactorMonthlyPriceUpsertResult.RowError(
-            null,
-            rows.isEmpty() ? null : rows.getFirst(),
-            "同一统一因素 " + entry.getKey() + " 在 Excel 中出现不同价格，来源行 " + rows));
+        result
+            .getErrors()
+            .add(
+                new FactorMonthlyPriceUpsertResult.RowError(
+                    null,
+                    rows.isEmpty() ? null : rows.getFirst(),
+                    "同一统一因素 " + entry.getKey() + " 在 Excel 中出现不同价格，来源行 " + rows));
       }
     }
   }
@@ -216,8 +235,7 @@ public class PriceLinkedType2FactorMonthlyUpsertServiceImpl
     for (PriceLinkedType2FactorIdentityResolution resolution : resolutions) {
       PriceLinkedType2FactorIdentityResolutionStatus status = resolution.getStatus();
       if (status == PriceLinkedType2FactorIdentityResolutionStatus.INVALID_REQUEST
-          || status
-              == PriceLinkedType2FactorIdentityResolutionStatus.CANONICAL_MASTER_CONFLICT) {
+          || status == PriceLinkedType2FactorIdentityResolutionStatus.CANONICAL_MASTER_CONFLICT) {
         addResolutionError(resolution, result);
         continue;
       }
@@ -234,13 +252,15 @@ public class PriceLinkedType2FactorMonthlyUpsertServiceImpl
   }
 
   private void addResolutionError(
-      PriceLinkedType2FactorIdentityResolution resolution,
-      FactorMonthlyPriceUpsertResult result) {
+      PriceLinkedType2FactorIdentityResolution resolution, FactorMonthlyPriceUpsertResult result) {
     PriceLinkedType2FactorRow row = resolution.getSourceRow();
-    result.getErrors().add(new FactorMonthlyPriceUpsertResult.RowError(
-        row == null ? null : row.getSourceSheetName(),
-        row == null ? null : row.getSourceRowNumber(),
-        resolution.getMessage()));
+    result
+        .getErrors()
+        .add(
+            new FactorMonthlyPriceUpsertResult.RowError(
+                row == null ? null : row.getSourceSheetName(),
+                row == null ? null : row.getSourceRowNumber(),
+                resolution.getMessage()));
   }
 
   private IdentityOutcome resolveIdentityForWrite(
@@ -250,42 +270,37 @@ public class PriceLinkedType2FactorMonthlyUpsertServiceImpl
       Map<String, FactorIdentity> createdIdentityByCanonicalKey,
       Set<Long> metadataUpdatedIdentityIds,
       FactorMonthlyPriceUpsertResult result) {
-    if (resolution.getStatus()
-        == PriceLinkedType2FactorIdentityResolutionStatus.CREATE_REQUIRED) {
-      FactorIdentity cached = createdIdentityByCanonicalKey.get(
-          resolution.getCanonicalFactorKey());
+    if (resolution.getStatus() == PriceLinkedType2FactorIdentityResolutionStatus.CREATE_REQUIRED) {
+      FactorIdentity cached = createdIdentityByCanonicalKey.get(resolution.getCanonicalFactorKey());
       if (cached != null) {
         result.setIdentityReusedCount(result.getIdentityReusedCount() + 1);
         return new IdentityOutcome(cached, "REUSE");
       }
-      FactorIdentity created = createIdentity(
-          resolution.getSourceRow(),
-          resolution.getCanonicalFactorKey(),
-          businessUnitType,
-          operator);
+      FactorIdentity created =
+          createIdentity(
+              resolution.getSourceRow(),
+              resolution.getCanonicalFactorKey(),
+              businessUnitType,
+              operator);
       createdIdentityByCanonicalKey.put(resolution.getCanonicalFactorKey(), created);
       metadataUpdatedIdentityIds.add(created.getId());
       result.setIdentityCreatedCount(result.getIdentityCreatedCount() + 1);
       return new IdentityOutcome(created, "CREATE");
     }
 
-    Long identityId = resolution.getStatus()
-            == PriceLinkedType2FactorIdentityResolutionStatus.PRICE_CONFLICT
-        ? resolution.getRecommendedFactorIdentityId()
-        : resolution.getSelectedFactorIdentityId();
+    Long identityId =
+        resolution.getStatus() == PriceLinkedType2FactorIdentityResolutionStatus.PRICE_CONFLICT
+            ? resolution.getRecommendedFactorIdentityId()
+            : resolution.getSelectedFactorIdentityId();
     FactorIdentity identity = factorIdentityMapper.selectById(identityId);
     if (identity == null) {
       throw new IllegalStateException("统一影响因素身份不存在：" + identityId);
     }
-    Long canonicalMasterId = resolution.getStatus()
-            == PriceLinkedType2FactorIdentityResolutionStatus.PRICE_CONFLICT
-        ? resolution.getRecommendedCanonicalFactorIdentityId()
-        : resolution.getSelectedCanonicalFactorIdentityId();
-    backfillCanonicalMetadata(
-        resolution,
-        canonicalMasterId,
-        operator,
-        metadataUpdatedIdentityIds);
+    Long canonicalMasterId =
+        resolution.getStatus() == PriceLinkedType2FactorIdentityResolutionStatus.PRICE_CONFLICT
+            ? resolution.getRecommendedCanonicalFactorIdentityId()
+            : resolution.getSelectedCanonicalFactorIdentityId();
+    backfillCanonicalMetadata(resolution, canonicalMasterId, operator, metadataUpdatedIdentityIds);
     result.setIdentityReusedCount(result.getIdentityReusedCount() + 1);
     return new IdentityOutcome(factorIdentityMapper.selectById(identityId), "REUSE");
   }
@@ -371,8 +386,7 @@ public class PriceLinkedType2FactorMonthlyUpsertServiceImpl
       if (created.getId() == null) {
         throw new IllegalStateException("类型 2 月度价格创建后未返回 ID");
       }
-      insertChangeLog(
-          created, null, normalizedIncoming, "CREATE", sourceUploadBatchId, operator);
+      insertChangeLog(created, null, normalizedIncoming, "CREATE", sourceUploadBatchId, operator);
       result.setMonthlyPriceCreatedCount(result.getMonthlyPriceCreatedCount() + 1);
       return new MonthlyPriceOutcome(created, "CREATE", null);
     }
@@ -383,8 +397,7 @@ public class PriceLinkedType2FactorMonthlyUpsertServiceImpl
       return new MonthlyPriceOutcome(existing, "NO_CHANGE", oldPrice);
     }
     if (!FactorPriceConflictStrategy.OVERWRITE.getCode().equals(strategy)) {
-      throw new IllegalStateException(
-          "影响因素价格在写入前发生变化，已停止并回滚：" + identity.getId());
+      throw new IllegalStateException("影响因素价格在写入前发生变化，已停止并回滚：" + identity.getId());
     }
 
     existing.setPrice(normalizedIncoming);
@@ -432,7 +445,8 @@ public class PriceLinkedType2FactorMonthlyUpsertServiceImpl
     result.setSourceSheetName(row.getSourceSheetName());
     result.setSourceRowNumber(row.getSourceRowNumber());
     result.setFactorIdentityId(identity.getId());
-    result.setFactorMonthlyPriceId(priceOutcome.monthlyPrice().getId());
+    result.setFactorMonthlyPriceId(
+        priceOutcome.monthlyPrice() == null ? null : priceOutcome.monthlyPrice().getId());
     result.setFactorSeqNo(identity.getFactorSeqNo());
     result.setFactorName(identity.getFactorName());
     result.setShortName(identity.getShortName());
@@ -440,14 +454,14 @@ public class PriceLinkedType2FactorMonthlyUpsertServiceImpl
     result.setIdentityAction(identityOutcome.action());
     result.setMonthlyPriceAction(priceOutcome.action());
     result.setOldPrice(priceOutcome.oldPrice());
-    result.setNewPrice(priceOutcome.monthlyPrice().getPrice());
+    result.setNewPrice(
+        priceOutcome.monthlyPrice() == null ? null : priceOutcome.monthlyPrice().getPrice());
     result.setOriginalPrice(normalizePrice(row.getPrice()));
     result.setUnit(normalize(row.getUnit()));
     return result;
   }
 
-  private FactorWorkbookParseResult toFactorWorkbook(
-      PriceLinkedType2WorkbookParseResult type2) {
+  private FactorWorkbookParseResult toFactorWorkbook(PriceLinkedType2WorkbookParseResult type2) {
     FactorWorkbookParseResult workbook = new FactorWorkbookParseResult();
     workbook.setSourceFileName(type2.getSourceFileName());
     FactorSheetParseResult sheet = new FactorSheetParseResult();
@@ -528,9 +542,7 @@ public class PriceLinkedType2FactorMonthlyUpsertServiceImpl
   }
 
   private record MonthlyPriceOutcome(
-      FactorMonthlyPrice monthlyPrice, String action, BigDecimal oldPrice) {
-  }
+      FactorMonthlyPrice monthlyPrice, String action, BigDecimal oldPrice) {}
 
-  private record IdentityOutcome(FactorIdentity identity, String action) {
-  }
+  private record IdentityOutcome(FactorIdentity identity, String action) {}
 }

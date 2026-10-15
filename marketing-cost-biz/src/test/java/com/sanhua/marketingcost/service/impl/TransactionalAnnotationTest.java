@@ -9,33 +9,27 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * 验证所有需要事务保护的 Service 方法都正确标注了 @Transactional。
- * 这是一个反射测试，确保注解不会被意外删除。
- */
+/** 验证所有需要事务保护的 Service 方法都正确标注了 @Transactional。 这是一个反射测试，确保注解不会被意外删除。 */
 class TransactionalAnnotationTest {
 
-  private static final List<MethodRef> REQUIRED = List.of(
-      new MethodRef(MaterialMasterServiceImpl.class, "importItems"),
-      new MethodRef(PriceRangeItemServiceImpl.class, "importItems"),
-      new MethodRef(BomManualItemServiceImpl.class, "importItems"),
-      new MethodRef(ProductPropertyServiceImpl.class, "importExcel"),
-      new MethodRef(PriceFixedItemServiceImpl.class, "importItems"),
-      new MethodRef(MaterialPriceTypeServiceImpl.class, "importItems"),
-      new MethodRef(MaterialPriceTypeRouteSyncServiceImpl.class, "sync"),
-      new MethodRef(PriceLinkedItemServiceImpl.class, "importItems"),
-      new MethodRef(OtherExpenseRateServiceImpl.class, "importItems"),
-      new MethodRef(QualityLossRateServiceImpl.class, "importItems"),
-      new MethodRef(ManufactureRateServiceImpl.class, "importItems"),
-      new MethodRef(DepartmentFundRateServiceImpl.class, "importItems"),
-      new MethodRef(ThreeExpenseRateServiceImpl.class, "importItems"),
-      new MethodRef(FinanceBasePriceServiceImpl.class, "importPrices"),
-      new MethodRef(PriceSettleServiceImpl.class, "delete"),
-      new MethodRef(PriceSettleServiceImpl.class, "importSettle"),
-      // T5.5：BomManageItemServiceImpl.refresh 已整体下线为 no-op（见类注释），
-      // 不再涉及写库，@Transactional 没有语义，故从 REQUIRED 名单里移除。
-      new MethodRef(PriceLinkedCalcServiceImpl.class, "refresh")
-  );
+  private static final List<MethodRef> REQUIRED =
+      List.of(
+          new MethodRef(MaterialMasterServiceImpl.class, "importItems"),
+          new MethodRef(PriceRangeItemServiceImpl.class, "importItems"),
+          new MethodRef(BomManualItemServiceImpl.class, "importItems"),
+          new MethodRef(ProductPropertyServiceImpl.class, "importExcel"),
+          new MethodRef(PriceFixedItemServiceImpl.class, "importItems"),
+          new MethodRef(MaterialPriceTypeServiceImpl.class, "update"),
+
+          new MethodRef(PriceLinkedItemServiceImpl.class, "importItems"),
+          new MethodRef(OtherExpenseRateServiceImpl.class, "importItems"),
+          new MethodRef(QualityLossRateServiceImpl.class, "importItems"),
+          new MethodRef(ManufactureRateServiceImpl.class, "importItems"),
+          new MethodRef(DepartmentFundRateServiceImpl.class, "importItems"),
+          new MethodRef(ThreeExpenseRateServiceImpl.class, "importItems"),
+          new MethodRef(PriceSettleServiceImpl.class, "delete"),
+          new MethodRef(PriceSettleServiceImpl.class, "importSettle"),
+          new MethodRef(FinancePricePrepareServiceImpl.class, "generateFromOa"));
 
   @Test
   @DisplayName("所有写操作方法必须标注 @Transactional")
@@ -57,8 +51,11 @@ class TransactionalAnnotationTest {
                 break;
               }
             }
-            assertTrue(hasRollback,
-                ref.clazz.getSimpleName() + "." + ref.methodName
+            assertTrue(
+                hasRollback,
+                ref.clazz.getSimpleName()
+                    + "."
+                    + ref.methodName
                     + " @Transactional 缺少 rollbackFor = Exception.class");
           }
           break;
@@ -69,8 +66,7 @@ class TransactionalAnnotationTest {
       }
     }
 
-    assertTrue(missing.isEmpty(),
-        "以下方法缺少 @Transactional 注解: " + String.join(", ", missing));
+    assertTrue(missing.isEmpty(), "以下方法缺少 @Transactional 注解: " + String.join(", ", missing));
   }
 
   private record MethodRef(Class<?> clazz, String methodName) {}

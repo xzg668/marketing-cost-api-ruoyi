@@ -368,6 +368,44 @@ class PricePrepareQueryServiceImplTest {
   }
 
   @Test
+  @DisplayName("旧失败批次没有准备明细时仍显示联动价和包装供货比率类别")
+  void enrichesLegacyFailureKindsWithoutPreparedItems() {
+    PricePrepareGap linked = new PricePrepareGap();
+    linked.setReasonCode("LINKED_RULE_ERROR");
+    linked.setMaterialCode("LINKED-1");
+    linked.setGapMaterialCode("LINKED-1");
+    PricePrepareGap packageRatio = new PricePrepareGap();
+    packageRatio.setSourceTable("lp_package_component_price_detail");
+    packageRatio.setMaterialCode("PACKAGE-1");
+    packageRatio.setGapMaterialCode("FIXED-1");
+    packageRatio.setMessage("路由=[固定价] 但未取到有效价格: 供货比率不足，请确认是否有新增审核");
+    when(itemMapper.selectList(any())).thenReturn(List.of());
+
+    service.enrichGaps(List.of(linked, packageRatio));
+
+    assertThat(linked.getPriceType()).isEqualTo("LINKED");
+    assertThat(packageRatio.getReasonCode()).isEqualTo("SUPPLIER_RATIO_REVIEW_REQUIRED");
+  }
+
+  @Test
+  @DisplayName("同批次多个历史缺口只批量读取一次准备明细")
+  void enrichesGapTypesWithOnePreparedItemQuery() {
+    PricePrepareGap first = new PricePrepareGap();
+    first.setPrepareNo("PPR-1");
+    first.setMaterialCode("MAT-1");
+    first.setGapMaterialCode("MAT-1");
+    PricePrepareGap second = new PricePrepareGap();
+    second.setPrepareNo("PPR-1");
+    second.setMaterialCode("MAT-2");
+    second.setGapMaterialCode("MAT-2");
+    when(itemMapper.selectList(any())).thenReturn(List.of());
+
+    service.enrichGaps(List.of(first, second));
+
+    verify(itemMapper).selectList(any());
+  }
+
+  @Test
   @DisplayName("缺废料映射缺口：按料号和价格月份回填有效无废料确认")
   void pageGapsEnrichesEffectiveNoScrapConfirmation() {
     PricePrepareGap gap = new PricePrepareGap();

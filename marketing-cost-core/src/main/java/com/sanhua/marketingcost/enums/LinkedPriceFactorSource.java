@@ -7,9 +7,7 @@ public enum LinkedPriceFactorSource {
   /** 财务报价：只把明确传入的 Cu 覆盖为财务月度报价基准。 */
   FINANCE_QUOTE_BASE("FINANCE_QUOTE_BASE", "财务报价基准"),
   /** 月度价：变量取影响因素表指定月份价格。 */
-  MONTHLY_FACTOR("MONTHLY_FACTOR", "影响因素月度价"),
-  /** 月度调价：变量取指定调价批次价格。 */
-  ADJUST_BATCH("ADJUST_BATCH", "月度调价批次价");
+  MONTHLY_FACTOR("MONTHLY_FACTOR", "因素月度价");
 
   private final String code;
   private final String label;

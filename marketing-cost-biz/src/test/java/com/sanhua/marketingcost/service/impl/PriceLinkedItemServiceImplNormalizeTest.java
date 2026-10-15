@@ -9,10 +9,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.PriceLinkedItemDto;
 import com.sanhua.marketingcost.dto.PriceLinkedItemUpdateRequest;
 import com.sanhua.marketingcost.entity.PriceFixedItem;
@@ -24,15 +24,12 @@ import com.sanhua.marketingcost.formula.normalize.FormulaNormalizer;
 import com.sanhua.marketingcost.formula.normalize.FormulaSyntaxException;
 import com.sanhua.marketingcost.formula.normalize.FormulaValidator;
 import com.sanhua.marketingcost.formula.normalize.VariableAliasIndex;
-import com.sanhua.marketingcost.formula.registry.FactorVariableRegistryImpl;
 import com.sanhua.marketingcost.formula.registry.RowLocalPlaceholderRegistry;
-import com.sanhua.marketingcost.mapper.FinanceBasePriceMapper;
 import com.sanhua.marketingcost.mapper.PriceFixedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedFormulaChangeLogMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
 import com.sanhua.marketingcost.service.PriceVariableBindingService;
-import com.sanhua.marketingcost.service.MaterialPriceTypeRouteSyncService;
 import java.util.List;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
@@ -42,16 +39,16 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 /**
- * Plan B T6 —— PriceLinkedItemServiceImpl 手工新增/编辑路径的 normalize-on-save
- * 与 formulaExprCn 派生专项测试。
+ * Plan B T6 —— PriceLinkedItemServiceImpl 手工新增/编辑路径的 normalize-on-save 与 formulaExprCn 派生专项测试。
  *
  * <p>覆盖：
+ *
  * <ol>
- *   <li>{@code create()} 输入中文公式 → 存 {@code [code]} 形式</li>
- *   <li>{@code update()} 输入中文公式 → 存 {@code [code]} 形式</li>
- *   <li>输入含未知 token 的公式 → 抛 {@link FormulaSyntaxException}（不静默兜底）</li>
- *   <li>{@code toDto} 生成的 {@code formulaExprCn} 由 renderer 派生，与 DB 原值无关</li>
- *   <li>request 传入 {@code formulaExprCn} 被忽略（写入不生效）</li>
+ *   <li>{@code create()} 输入中文公式 → 存 {@code [code]} 形式
+ *   <li>{@code update()} 输入中文公式 → 存 {@code [code]} 形式
+ *   <li>输入含未知 token 的公式 → 抛 {@link FormulaSyntaxException}（不静默兜底）
+ *   <li>{@code toDto} 生成的 {@code formulaExprCn} 由 renderer 派生，与 DB 原值无关
+ *   <li>request 传入 {@code formulaExprCn} 被忽略（写入不生效）
  * </ol>
  */
 class PriceLinkedItemServiceImplNormalizeTest {
@@ -63,13 +60,12 @@ class PriceLinkedItemServiceImplNormalizeTest {
   private FormulaNormalizer normalizer;
   private FormulaDisplayRenderer renderer;
   private FormulaValidator validator;
-  private MaterialPriceTypeRouteSyncService priceTypeRouteSyncService;
+
   private PriceLinkedItemServiceImpl service;
 
   @BeforeAll
   static void initTableInfo() {
-    MapperBuilderAssistant assistant =
-        new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
     TableInfoHelper.initTableInfo(assistant, PriceLinkedItem.class);
     TableInfoHelper.initTableInfo(assistant, PriceFixedItem.class);
     TableInfoHelper.initTableInfo(assistant, PriceVariable.class);
@@ -82,36 +78,35 @@ class PriceLinkedItemServiceImplNormalizeTest {
     fixedItemMapper = mock(PriceFixedItemMapper.class);
     formulaChangeLogMapper = mock(PriceLinkedFormulaChangeLogMapper.class);
     priceVariableMapper = mock(PriceVariableMapper.class);
-    priceTypeRouteSyncService = mock(MaterialPriceTypeRouteSyncService.class);
+
 
     // Renderer 读同一份 priceVariableMapper —— 保证写回读取语义一致
-    when(priceVariableMapper.selectList(any(Wrapper.class))).thenReturn(List.of(
-        variable("Cu", "电解铜", "[\"电解铜\",\"Cu\"]"),
-        variable("blank_weight", "下料重量", "[\"下料重量\"]")));
+    when(priceVariableMapper.selectList(any(Wrapper.class)))
+        .thenReturn(
+            List.of(
+                variable("Cu", "电解铜", "[\"电解铜\",\"Cu\"]"),
+                variable("blank_weight", "下料重量", "[\"下料重量\"]")));
 
     // Normalizer：用真实 VariableAliasIndex 跑，保证中英文 → [code] 映射正确
     VariableAliasIndex aliasIndex = new VariableAliasIndex(priceVariableMapper);
     aliasIndex.init();
     RowLocalPlaceholderRegistry rowLocal =
-        com.sanhua.marketingcost.formula.registry.RowLocalPlaceholderTestSupport
-            .defaultRegistry();
+        com.sanhua.marketingcost.formula.registry.RowLocalPlaceholderTestSupport.defaultRegistry();
     normalizer = new FormulaNormalizer(aliasIndex, rowLocal);
     renderer = new FormulaDisplayRenderer(priceVariableMapper, rowLocal);
     // Validator：跟上游同一份 mapper —— 白名单含 Cu / blank_weight，toDto 中的公式健康检查据此判定
     validator = new FormulaValidator(priceVariableMapper, rowLocal);
     validator.init();
 
-    service = new PriceLinkedItemServiceImpl(
-        itemMapper,
-        fixedItemMapper,
-        mock(FinanceBasePriceMapper.class),
-        priceVariableMapper,
-        mock(PriceVariableBindingService.class),
-        mock(FactorVariableRegistryImpl.class),
-        normalizer,
-        renderer,
-        validator,
-        priceTypeRouteSyncService);
+    service =
+        new PriceLinkedItemServiceImpl(
+            itemMapper,
+            fixedItemMapper,
+            priceVariableMapper,
+            mock(PriceVariableBindingService.class),
+            normalizer,
+            renderer,
+            validator);
     service.setFormulaChangeLogMapper(formulaChangeLogMapper);
   }
 
@@ -125,9 +120,11 @@ class PriceLinkedItemServiceImplNormalizeTest {
     var request = new PriceLinkedItemUpdateRequest();
     request.setFormulaExpr("99");
     assertThatThrownBy(() -> service.update(91L, request))
-        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("原补录任务");
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("原补录任务");
     assertThatThrownBy(() -> service.delete(91L))
-        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("原补录任务");
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("原补录任务");
     assertThat(approved.getFormulaExpr()).isEqualTo("[process_fee]");
     verify(itemMapper, org.mockito.Mockito.times(2)).selectById(91L);
     org.mockito.Mockito.verifyNoMoreInteractions(itemMapper);
@@ -146,12 +143,7 @@ class PriceLinkedItemServiceImplNormalizeTest {
     ArgumentCaptor<PriceLinkedItem> captor = ArgumentCaptor.forClass(PriceLinkedItem.class);
     verify(itemMapper).insert(captor.capture());
     // DB 里只留 [code] 形式 —— 再也没有中文 token 漂移风险
-    assertThat(captor.getValue().getFormulaExpr())
-        .isEqualTo("[blank_weight]*0.001+[Cu]*2");
-    ArgumentCaptor<MaterialPriceTypeRouteSyncService.RouteCommand> routeCaptor =
-        ArgumentCaptor.forClass(MaterialPriceTypeRouteSyncService.RouteCommand.class);
-    verify(priceTypeRouteSyncService).sync(routeCaptor.capture());
-    assertThat(routeCaptor.getValue().priceType()).isEqualTo("联动价");
+    assertThat(captor.getValue().getFormulaExpr()).isEqualTo("[blank_weight]*0.001+[Cu]*2");
   }
 
   @Test
@@ -168,8 +160,7 @@ class PriceLinkedItemServiceImplNormalizeTest {
 
     ArgumentCaptor<PriceLinkedItem> captor = ArgumentCaptor.forClass(PriceLinkedItem.class);
     verify(itemMapper).updateById(captor.capture());
-    assertThat(captor.getValue().getFormulaExpr())
-        .isEqualTo("[blank_weight]*0.001");
+    assertThat(captor.getValue().getFormulaExpr()).isEqualTo("[blank_weight]*0.001");
   }
 
   @Test
@@ -207,8 +198,7 @@ class PriceLinkedItemServiceImplNormalizeTest {
     // "神秘金属" 不在 alias 索引里 → FormulaNormalizer 抛 FormulaSyntaxException
     req.setFormulaExpr("神秘金属*2");
 
-    assertThatThrownBy(() -> service.create(req))
-        .isInstanceOf(FormulaSyntaxException.class);
+    assertThatThrownBy(() -> service.create(req)).isInstanceOf(FormulaSyntaxException.class);
     verify(itemMapper, never()).insert(any(PriceLinkedItem.class));
   }
 
@@ -307,8 +297,31 @@ class PriceLinkedItemServiceImplNormalizeTest {
     // DB 里 formulaExprCn 不再是 null 而是 Renderer 反向生成的一致值。
     // 前端传入的 "攻击者尝试手填的漂移值" 被无条件丢弃 —— 派生值和它毫无关系。
     assertThat(captor.getValue().getFormulaExprCn()).isEqualTo("电解铜*2");
-    assertThat(captor.getValue().getFormulaExprCn())
-        .isNotEqualTo("攻击者尝试手填的漂移值");
+    assertThat(captor.getValue().getFormulaExprCn()).isNotEqualTo("攻击者尝试手填的漂移值");
+  }
+
+  @Test
+  void publishedOriginalRulesAreReadableButCannotBeEditedOrDeleted() {
+    var item = new PriceLinkedItem();
+    item.setId(301L);
+    item.setSourceKind("PUBLIC");
+    item.setMaterialCode("M-ORIGINAL");
+    item.setPricingMonth("2026-10");
+    item.setExpressionVersion(OriginalLinkedRuleSnapshot.VERSION);
+    item.setRuleRevision(2);
+    item.setFormulaExpr("ROUND([factor_0],4)/1.13");
+    item.setSourceFormulaExpr("ROUND(因素!E2,4)/1.13");
+    when(itemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(item));
+    when(itemMapper.selectById(301L)).thenReturn(item);
+    var row = service.list("2026-10", "M-ORIGINAL", false).getFirst();
+    assertThat(row.getFormulaValid()).isTrue();
+    assertThat(row.getExpressionVersion()).isEqualTo("ORIGINAL_V1");
+    assertThat(row.getFormulaExprCn()).isEqualTo(item.getSourceFormulaExpr());
+    assertThatThrownBy(() -> service.update(301L, new PriceLinkedItemUpdateRequest()))
+        .hasMessageContaining("不可修改或删除");
+    assertThatThrownBy(() -> service.delete(301L)).hasMessageContaining("不可修改或删除");
+    verify(itemMapper, never()).updateById(any(PriceLinkedItem.class));
+    verify(itemMapper, never()).delete(any(Wrapper.class));
   }
 
   private static PriceVariable variable(String code, String name, String aliasesJson) {

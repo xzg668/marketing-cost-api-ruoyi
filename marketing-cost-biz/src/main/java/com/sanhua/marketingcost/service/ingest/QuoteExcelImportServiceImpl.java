@@ -11,7 +11,6 @@ import com.sanhua.marketingcost.dto.ingest.QuoteValidationError;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import org.apache.poi.ss.usermodel.Cell;
@@ -101,7 +100,8 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
       }
       String oaNo = cell(row, columns, "报价单号", formatter, evaluator);
       QuoteIngestRequest request = new QuoteIngestRequest();
-      request.setSourceType(defaultValue(cell(row, columns, "来源类型", formatter, evaluator), "EXCEL"));
+      request.setSourceType(
+          defaultValue(cell(row, columns, "来源类型", formatter, evaluator), "EXCEL"));
       request.setSourceSystem("EXCEL_TEMPLATE");
       request.setOaNo(oaNo);
       request.setExternalFormNo(oaNo);
@@ -110,7 +110,8 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
         request.setIdempotencyKey("EXCEL:" + oaNo.trim() + ":1");
       }
       request.setHeader(readHeader(row, columns, formatter, evaluator));
-      request.setRawPayload(Map.of("fileName", nullToEmpty(parsed.fileName), "headerRow", rowIndex + 1));
+      request.setRawPayload(
+          Map.of("fileName", nullToEmpty(parsed.fileName), "headerRow", rowIndex + 1));
       parsed.requests.put(requestKey(oaNo, rowIndex), request);
       parsed.formCount++;
     }
@@ -142,6 +143,9 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
     header.setSteelPrice(cell(row, columns, "不锈钢基价", formatter, evaluator));
     header.setSus304Price(cell(row, columns, "SUS304 基价", formatter, evaluator));
     header.setSus316lPrice(cell(row, columns, "SUS316L 基价", formatter, evaluator));
+    header.setBoardTender(
+        QuoteIngestFieldBinder.parseBoardTender(
+            cell(row, columns, "是否招标需求（仅针对板换产品）", formatter, evaluator)));
     header.setSilverPrice(cell(row, columns, "白银基价", formatter, evaluator));
     header.setGoldPrice(cell(row, columns, "黄金基价", formatter, evaluator));
     header.setRemark(cell(row, columns, "备注", formatter, evaluator));
@@ -182,7 +186,8 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
     item.setSpec(cell(row, columns, "规格", formatter, evaluator));
     item.setProductAttr(cell(row, columns, "产品属性", formatter, evaluator));
     item.setFirstQuoteFlag(parseBoolean(cell(row, columns, "是否首次报价", formatter, evaluator)));
-    item.setCertificationRequired(parseBoolean(cell(row, columns, "是否有认证需求", formatter, evaluator)));
+    item.setCertificationRequired(
+        parseBoolean(cell(row, columns, "是否有认证需求", formatter, evaluator)));
     item.setOriginCountry(cell(row, columns, "起运国", formatter, evaluator));
     item.setTechnicianName(cell(row, columns, "技术员", formatter, evaluator));
     item.setPackageType(cell(row, columns, "包装类型", formatter, evaluator));
@@ -202,9 +207,12 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
     item.setManufacturingCost(cell(row, columns, "制造费用", formatter, evaluator));
     item.setManagementCost(cell(row, columns, "企业管理费", formatter, evaluator));
     item.setValidMonth(firstCell(row, columns, formatter, evaluator, "成本有效期(月)"));
-    item.setValidDate(firstCell(row, columns, formatter, evaluator, "成本失效日期", "失效日期", "有效期至", "成本有效期"));
-    item.setSus304WeightG(firstCell(row, columns, formatter, evaluator, "不锈钢SUS304(克)", "SUS304(克)"));
-    item.setSus316WeightG(firstCell(row, columns, formatter, evaluator, "不锈钢SUS316(克)", "SUS316(克)"));
+    item.setValidDate(
+        firstCell(row, columns, formatter, evaluator, "成本失效日期", "失效日期", "有效期至", "成本有效期"));
+    item.setSus304WeightG(
+        firstCell(row, columns, formatter, evaluator, "不锈钢SUS304(克)", "SUS304(克)"));
+    item.setSus316WeightG(
+        firstCell(row, columns, formatter, evaluator, "不锈钢SUS316(克)", "SUS316(克)"));
     item.setCopperWeightG(firstCell(row, columns, formatter, evaluator, "铜重(克)", "铜重量(克)"));
     return item;
   }
@@ -232,14 +240,9 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
       } else {
         QuoteIngestItemRequest item = findItemBySeq(request, seq);
         if (item == null) {
-          parsed
-              .errors
-              .add(
-                  new QuoteValidationError(
-                      FEE_SHEET + ".行号",
-                      "FEE_ITEM_NOT_FOUND",
-                      "额外费用指定的产品行不存在",
-                      rowIndex + 1));
+          parsed.errors.add(
+              new QuoteValidationError(
+                  FEE_SHEET + ".行号", "FEE_ITEM_NOT_FOUND", "额外费用指定的产品行不存在", rowIndex + 1));
         } else {
           item.getExtraFees().add(fee);
         }
@@ -264,16 +267,14 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
   private QuoteIngestRequest findRequest(
       QuoteParsedExcel parsed, String oaNo, int rowNo, String sheetName) {
     if (!StringUtils.hasText(oaNo)) {
-      parsed
-          .errors
-          .add(new QuoteValidationError(sheetName + ".报价单号", "FORM_NO_REQUIRED", "报价单号不能为空", rowNo));
+      parsed.errors.add(
+          new QuoteValidationError(sheetName + ".报价单号", "FORM_NO_REQUIRED", "报价单号不能为空", rowNo));
       return null;
     }
     QuoteIngestRequest request = parsed.requests.get(oaNo.trim());
     if (request == null) {
-      parsed
-          .errors
-          .add(new QuoteValidationError(sheetName + ".报价单号", "HEADER_NOT_FOUND", "未找到对应报价单表头", rowNo));
+      parsed.errors.add(
+          new QuoteValidationError(sheetName + ".报价单号", "HEADER_NOT_FOUND", "未找到对应报价单表头", rowNo));
     }
     return request;
   }
@@ -397,5 +398,4 @@ public class QuoteExcelImportServiceImpl implements QuoteExcelImportService {
   private String requestKey(String oaNo, int rowIndex) {
     return StringUtils.hasText(oaNo) ? oaNo.trim() : "$ROW_" + rowIndex;
   }
-
 }

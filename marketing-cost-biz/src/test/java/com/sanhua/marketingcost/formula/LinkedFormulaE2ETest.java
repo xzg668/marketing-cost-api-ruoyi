@@ -10,8 +10,6 @@ import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sanhua.marketingcost.config.LinkedParserProperties;
-import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.MaterialScrapRef;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
@@ -21,11 +19,8 @@ import com.sanhua.marketingcost.formula.normalize.FormulaNormalizer;
 import com.sanhua.marketingcost.formula.normalize.VariableAliasIndex;
 import com.sanhua.marketingcost.formula.registry.DerivedResolver;
 import com.sanhua.marketingcost.formula.registry.FactorVariableRegistryImpl;
-import com.sanhua.marketingcost.formula.registry.FinanceBasePriceQuery;
+import com.sanhua.marketingcost.formula.registry.FinanceFactorVariableQuery;
 import com.sanhua.marketingcost.formula.registry.RowLocalPlaceholderRegistry;
-import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
-import com.sanhua.marketingcost.mapper.DynamicValueMapper;
-import com.sanhua.marketingcost.mapper.FinanceBasePriceMapper;
 import com.sanhua.marketingcost.mapper.MaterialScrapRefMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
@@ -46,28 +41,27 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * 联动价端到端 E2E 测试（T12）—— 把真实的 Normalizer + AliasIndex + FactorVariableRegistryImpl
- * + DerivedResolver + ExpressionEvaluator 串起来跑多种公式形态，只 mock mapper 层返回数据。
+ * 联动价端到端 E2E 测试（T12）—— 把真实的 Normalizer + AliasIndex + FactorVariableRegistryImpl + DerivedResolver
+ * + ExpressionEvaluator 串起来跑多种公式形态，只 mock mapper 层返回数据。
  *
  * <p>覆盖场景（取自生产 Excel fixtures 典型形态）：
+ *
  * <ol>
- *   <li>材料+废料+加工费：{@code 下料重量*材料含税价格-(下料重量-产品净重)*废料含税价格+含税加工费}</li>
- *   <li>Cu/Zn 权重 + 加工费：{@code (Cu*0.59+Zn*0.41)*下料重量+加工费}</li>
- *   <li>单位内嵌（元/Kg）+ 中文括号：{@code 下料重量×（50元/Kg）+加工费}</li>
- *   <li>派生铜沫（formulaRef）：{@code (下料重量-产品净重)*铜沫价格} —— 复用 ctx.override 的 Cu/Zn</li>
- *   <li>多层派生（SCRAP_REF）ratio=0.92</li>
- *   <li>无公式 → null</li>
- *   <li>finance 空数据 → 按 0 处理，不抛异常</li>
+ *   <li>材料+废料+加工费：{@code 下料重量*材料含税价格-(下料重量-产品净重)*废料含税价格+含税加工费}
+ *   <li>Cu/Zn 权重 + 加工费：{@code (Cu*0.59+Zn*0.41)*下料重量+加工费}
+ *   <li>单位内嵌（元/Kg）+ 中文括号：{@code 下料重量×（50元/Kg）+加工费}
+ *   <li>派生铜沫（formulaRef）：{@code (下料重量-产品净重)*铜沫价格} —— 复用 ctx.override 的 Cu/Zn
+ *   <li>多层派生（SCRAP_REF）ratio=0.92
+ *   <li>无公式 → null
+ *   <li>finance 空数据 → 无有效计算结果，不用0价伪造成功
  * </ol>
  *
- * <p>Mock 策略：financeBasePriceMapper.selectOne/List 用 {@code thenAnswer} 单一入口，
- * 通过检查 {@link Wrapper#getParamNameValuePairs()} 里的字符串值做 shortName / factorCode 分派，
- * 避免多条 {@code when()} 互相覆盖。
+ * <p>Mock 策略：financeBasePriceMapper.selectOne/List 用 {@code thenAnswer} 单一入口， 通过检查 {@link
+ * Wrapper#getParamNameValuePairs()} 里的字符串值做 shortName / factorCode 分派， 避免多条 {@code when()} 互相覆盖。
  */
 class LinkedFormulaE2ETest {
 
   private PriceVariableMapper priceVariableMapper;
-  private FinanceBasePriceMapper financeBasePriceMapper;
   private MaterialScrapRefMapper materialScrapRefMapper;
   private PriceVariableBindingMapper priceVariableBindingMapper;
   private PriceLinkedCalcServiceImpl service;
@@ -82,15 +76,13 @@ class LinkedFormulaE2ETest {
   private static final BigDecimal TOLERANCE = new BigDecimal("0.01");
 
   /**
-   * 预注册 MyBatis-Plus TableInfo 缓存 —— 让 LambdaQueryWrapper 能解析
-   * {@code FinanceBasePrice::getShortName} 到列名，否则 Wrapper 构建时会报
-   * {@code "can not find lambda cache for this entity"}。
+   * 预注册 MyBatis-Plus TableInfo 缓存 —— 让 LambdaQueryWrapper 能解析 {@code
+   * FinanceBasePrice::getShortName} 到列名，否则 Wrapper 构建时会报 {@code "can not find lambda cache for this
+   * entity"}。
    */
   @BeforeAll
   static void initTableInfo() {
-    MapperBuilderAssistant assistant =
-        new MapperBuilderAssistant(new MybatisConfiguration(), "");
-    TableInfoHelper.initTableInfo(assistant, FinanceBasePrice.class);
+    MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
     TableInfoHelper.initTableInfo(assistant, MaterialScrapRef.class);
     TableInfoHelper.initTableInfo(assistant, PriceVariable.class);
     TableInfoHelper.initTableInfo(assistant, PriceLinkedItem.class);
@@ -99,7 +91,6 @@ class LinkedFormulaE2ETest {
   @BeforeEach
   void setUp() {
     priceVariableMapper = mock(PriceVariableMapper.class);
-    financeBasePriceMapper = mock(FinanceBasePriceMapper.class);
     materialScrapRefMapper = mock(MaterialScrapRefMapper.class);
     priceVariableBindingMapper = mock(PriceVariableBindingMapper.class);
     financeRepo.clear();
@@ -109,70 +100,63 @@ class LinkedFormulaE2ETest {
     seedVariables(buildVariables());
 
     // finance mapper：统一 thenAnswer 根据 wrapper params 里的字符串匹配 financeRepo
-    when(financeBasePriceMapper.selectOne(any())).thenAnswer(inv -> {
-      Wrapper<FinanceBasePrice> w = inv.getArgument(0);
-      return lookupFinance(w);
-    });
-    when(financeBasePriceMapper.selectList(any(Wrapper.class))).thenAnswer(inv -> {
-      Wrapper<FinanceBasePrice> w = inv.getArgument(0);
-      FinanceBasePrice row = lookupFinance(w);
-      return row == null ? new ArrayList<FinanceBasePrice>() : new ArrayList<>(List.of(row));
-    });
 
     // scrap_ref mapper：按 materialCode 查表（同样需要触发 getSqlSegment 填充 params）
-    when(materialScrapRefMapper.selectOne(any())).thenAnswer(inv -> {
-      AbstractWrapper<MaterialScrapRef, ?, ?> w = inv.getArgument(0);
-      w.getSqlSegment();
-      for (Object v : w.getParamNameValuePairs().values()) {
-        if (v instanceof String s && scrapRefRepo.containsKey(s)) {
-          return scrapRefRepo.get(s);
-        }
-      }
-      return null;
-    });
+    when(materialScrapRefMapper.selectOne(any()))
+        .thenAnswer(
+            inv -> {
+              AbstractWrapper<MaterialScrapRef, ?, ?> w = inv.getArgument(0);
+              w.getSqlSegment();
+              for (Object v : w.getParamNameValuePairs().values()) {
+                if (v instanceof String s && scrapRefRepo.containsKey(s)) {
+                  return scrapRefRepo.get(s);
+                }
+              }
+              return null;
+            });
 
     // 手动组装真实 Normalizer 链：AliasIndex → FormulaNormalizer
     VariableAliasIndex aliasIndex = new VariableAliasIndex(priceVariableMapper);
     aliasIndex.init();
     RowLocalPlaceholderRegistry rowLocal =
-        com.sanhua.marketingcost.formula.registry.RowLocalPlaceholderTestSupport
-            .defaultRegistry();
+        com.sanhua.marketingcost.formula.registry.RowLocalPlaceholderTestSupport.defaultRegistry();
     FormulaNormalizer normalizer = new FormulaNormalizer(aliasIndex, rowLocal);
 
-    // 真实 Registry + DerivedResolver 注入；FINANCE 分支经 FinanceBasePriceQuery 严格四键查
-    FinanceBasePriceQuery financeQuery = new FinanceBasePriceQuery(financeBasePriceMapper);
-    FactorVariableRegistryImpl registry = new FactorVariableRegistryImpl(
-        priceVariableMapper, financeQuery, new ObjectMapper(), rowLocal);
+    // 真实 Registry + DerivedResolver 注入；FINANCE 分支经 FinanceFactorVariableQuery 严格四键查
+    FinanceFactorVariableQuery financeQuery =
+        com.sanhua.marketingcost.formula.registry.FinanceVariableTestSupport.prices(financeRepo);
+    FactorVariableRegistryImpl registry =
+        new FactorVariableRegistryImpl(
+            priceVariableMapper, financeQuery, new ObjectMapper(), rowLocal);
     registry.setPriceVariableBindingMapper(priceVariableBindingMapper);
-    DerivedResolver derivedResolver = new DerivedResolver(
-        financeBasePriceMapper, materialScrapRefMapper);
+    DerivedResolver derivedResolver = new DerivedResolver(financeQuery, materialScrapRefMapper);
     registry.setDerivedContextResolver(derivedResolver);
-    when(priceVariableBindingMapper.findCurrentByLinkedItemId(101L)).thenReturn(List.of(
-        binding(1L, "材料含税价格", "material_price_incl"),
-        binding(2L, "废料含税价格", "scrap_price_incl")));
+    when(priceVariableBindingMapper.findCurrentByLinkedItemId(101L))
+        .thenReturn(
+            List.of(
+                binding(1L, "材料含税价格", "material_price_incl"),
+                binding(2L, "废料含税价格", "scrap_price_incl")));
 
     // service 只依赖上述真实管线 + 其它 mapper mock（不会被新路径触达）
-    LinkedParserProperties props = new LinkedParserProperties();
-    props.setMode("new"); // 新管线断言
 
     // 2026-04 重构：newCalculate 委托给 previewService.previewForRefresh，
     // E2E 测试需要真实 preview 实例（用相同的 normalizer + registry），否则路径打不通
     PriceLinkedItemMapper linkedItemMapperMock = mock(PriceLinkedItemMapper.class);
     com.sanhua.marketingcost.service.impl.PriceLinkedFormulaPreviewServiceImpl previewService =
         new com.sanhua.marketingcost.service.impl.PriceLinkedFormulaPreviewServiceImpl(
-            normalizer, registry, priceVariableMapper, linkedItemMapperMock,
+            normalizer,
+            registry,
+            priceVariableMapper,
+            linkedItemMapperMock,
             mock(com.sanhua.marketingcost.formula.normalize.FormulaUnitConsistencyChecker.class));
 
-    service = new PriceLinkedCalcServiceImpl(
-        mock(BomCostingRowMapper.class),
-        mock(PriceLinkedCalcItemMapper.class),
-        linkedItemMapperMock,
-        priceVariableMapper,
-        mock(OaFormMapper.class),
-        financeBasePriceMapper,
-        mock(DynamicValueMapper.class),
-        props, normalizer, registry, new ObjectMapper(),
-        previewService);
+    service =
+        new PriceLinkedCalcServiceImpl(
+            mock(PriceLinkedCalcItemMapper.class),
+            linkedItemMapperMock,
+            mock(OaFormMapper.class),
+            new ObjectMapper(),
+            previewService);
   }
 
   // ==========================================================================
@@ -192,12 +176,13 @@ class LinkedFormulaE2ETest {
     //   blankWeight=300g=0.3kg; netWeight=150g=0.15kg; processFee=0.74806
     //   expected = 0.3 × 52.81885 - 0.15 × 57.119 + 0.74806
     //            = 15.845655 - 8.56785 + 0.74806 = 8.025865
-    PriceLinkedItem item = partPart(
-        "C3604A科宇",
-        "下料重量*材料含税价格-(下料重量-产品净重)*废料含税价格+含税加工费",
-        new BigDecimal("300"),
-        new BigDecimal("150"),
-        new BigDecimal("0.74806"));
+    PriceLinkedItem item =
+        partPart(
+            "C3604A科宇",
+            "下料重量*材料含税价格-(下料重量-产品净重)*废料含税价格+含税加工费",
+            new BigDecimal("300"),
+            new BigDecimal("150"),
+            new BigDecimal("0.74806"));
 
     BigDecimal result = runCalc(item);
     assertThat(result).isNotNull();
@@ -213,9 +198,13 @@ class LinkedFormulaE2ETest {
     // (90×0.59 + 21.6836×0.41) × 0.3 + 0.5
     //  = (53.1 + 8.890276) × 0.3 + 0.5
     //  = 61.990276 × 0.3 + 0.5 = 18.5970828 + 0.5 = 19.0970828
-    PriceLinkedItem item = partPart(
-        "X", "(Cu*0.59+Zn*0.41)*下料重量+加工费",
-        new BigDecimal("300"), new BigDecimal("150"), new BigDecimal("0.5"));
+    PriceLinkedItem item =
+        partPart(
+            "X",
+            "(Cu*0.59+Zn*0.41)*下料重量+加工费",
+            new BigDecimal("300"),
+            new BigDecimal("150"),
+            new BigDecimal("0.5"));
 
     BigDecimal result = runCalc(item);
     assertThat(result).isCloseTo(new BigDecimal("19.097083"), within(TOLERANCE));
@@ -225,9 +214,8 @@ class LinkedFormulaE2ETest {
   @DisplayName("场景3 单位内嵌 + 中文括号：下料重量×（50元/Kg）+加工费")
   void partUnitAnnotationAndChineseBracket() throws Exception {
     // 纯常量公式 + 剥单位；0.3 × 50 + 0.2 = 15.2
-    PriceLinkedItem item = partPart(
-        "X", "下料重量*（50元/Kg）+加工费",
-        new BigDecimal("300"), null, new BigDecimal("0.2"));
+    PriceLinkedItem item =
+        partPart("X", "下料重量*（50元/Kg）+加工费", new BigDecimal("300"), null, new BigDecimal("0.2"));
 
     BigDecimal result = runCalc(item);
     assertThat(result).isCloseTo(new BigDecimal("15.2"), within(TOLERANCE));
@@ -242,9 +230,8 @@ class LinkedFormulaE2ETest {
 
     // 铜沫 = 90×0.59 + 21.6836×0.41 = 53.1 + 8.890276 = 61.990276
     // 结果 = (0.3 - 0.15) × 61.990276 = 9.298541
-    PriceLinkedItem item = partPart(
-        "X", "(下料重量-产品净重)*铜沫价格",
-        new BigDecimal("300"), new BigDecimal("150"), null);
+    PriceLinkedItem item =
+        partPart("X", "(下料重量-产品净重)*铜沫价格", new BigDecimal("300"), new BigDecimal("150"), null);
 
     BigDecimal result = runCalc(item);
     assertThat(result).isCloseTo(new BigDecimal("9.298541"), within(TOLERANCE));
@@ -261,10 +248,13 @@ class LinkedFormulaE2ETest {
     //   material=52.81885; scrap=57.119×0.92=52.54948
     //   = 0.3×52.81885 - 0.15×52.54948
     //   = 15.845655 - 7.882422 = 7.963233
-    PriceLinkedItem item = partPart(
-        "C3604A科宇",
-        "下料重量*材料含税价格-(下料重量-产品净重)*废料含税价格",
-        new BigDecimal("300"), new BigDecimal("150"), null);
+    PriceLinkedItem item =
+        partPart(
+            "C3604A科宇",
+            "下料重量*材料含税价格-(下料重量-产品净重)*废料含税价格",
+            new BigDecimal("300"),
+            new BigDecimal("150"),
+            null);
 
     BigDecimal result = runCalc(item);
     assertThat(result).isCloseTo(new BigDecimal("7.963233"), within(TOLERANCE));
@@ -279,16 +269,15 @@ class LinkedFormulaE2ETest {
   }
 
   @Test
-  @DisplayName("场景7 Cu 缺失（finance 查空）：按 0 处理，不抛异常")
+  @DisplayName("场景7 Cu 缺失（finance 查空）：不产生单价")
   void missingFinancePrice() throws Exception {
     // financeRepo 不放 Cu；mock 的 answer 会返回 null（selectOne）+ 空列表（selectList）
-    // Cu×2 + 加工费 = 0×2 + 0.5 = 0.5
-    PriceLinkedItem item = partPart(
-        "X", "Cu*2+加工费",
-        new BigDecimal("100"), null, new BigDecimal("0.5"));
+    // 缺少Cu时不能只返回加工费。
+    PriceLinkedItem item =
+        partPart("X", "Cu*2+加工费", new BigDecimal("100"), null, new BigDecimal("0.5"));
 
     BigDecimal result = runCalc(item);
-    assertThat(result).isCloseTo(new BigDecimal("0.5"), within(TOLERANCE));
+    assertThat(result).isNull();
   }
 
   // ==========================================================================
@@ -297,26 +286,8 @@ class LinkedFormulaE2ETest {
 
   /**
    * 检查 wrapper 的 paramNameValuePairs 里是否有字符串匹配 financeRepo 的 key（shortName/factorCode），
-   * 并要求有月份值（2026-04）或 wrapper 根本不含月份字段时才返回。
-   * —— 简化实现：只要有 key 命中就返回对应 FinanceBasePrice。
+   * 并要求有月份值（2026-04）或 wrapper 根本不含月份字段时才返回。 —— 简化实现：只要有 key 命中就返回对应 FinanceBasePrice。
    */
-  private FinanceBasePrice lookupFinance(Wrapper<FinanceBasePrice> wrapper) {
-    AbstractWrapper<FinanceBasePrice, ?, ?> w = (AbstractWrapper<FinanceBasePrice, ?, ?>) wrapper;
-    // MP lambda wrapper 的参数是延迟填充的 —— 必须先触发一次 getSqlSegment() 才会把
-    // eq() 过来的值写进 paramNameValuePairs（侧副作用），这是 MP 3.5.14 的实现行为。
-    w.getSqlSegment();
-    Map<String, Object> params = w.getParamNameValuePairs();
-    for (Object v : params.values()) {
-      if (v instanceof String s && financeRepo.containsKey(s)) {
-        FinanceBasePrice row = new FinanceBasePrice();
-        row.setShortName(s);
-        row.setPrice(financeRepo.get(s));
-        row.setPriceMonth("2026-04");
-        return row;
-      }
-    }
-    return null;
-  }
 
   // ==========================================================================
   // 变量定义构造 & mapper seed
@@ -328,27 +299,32 @@ class LinkedFormulaE2ETest {
     // FINANCE_FACTOR：Cu / Zn / 美国柜装黄铜
     vars.add(financeVar("Cu", "电解铜价格", "[\"Cu\",\"电解铜价格\",\"铜价\"]"));
     vars.add(financeVar("Zn", "锌价格", "[\"Zn\",\"锌价格\",\"锌\"]"));
-    vars.add(financeVar("us_copper", "美国柜装黄铜",
-        "[\"美国柜装黄铜\",\"美国柜装黄铜价格\"]"));
+    vars.add(financeVar("us_copper", "美国柜装黄铜", "[\"美国柜装黄铜\",\"美国柜装黄铜价格\"]"));
 
     // PART_CONTEXT ENTITY：下料重量 / 产品净重 / 加工费
-    vars.add(partEntity("blank_weight", "下料重量",
-        "[\"下料重量\"]", "blankWeight", "0.001"));
-    vars.add(partEntity("net_weight", "产品净重",
-        "[\"产品净重\"]", "netWeight", "0.001"));
-    vars.add(partEntity("process_fee", "加工费",
-        "[\"加工费\",\"含税加工费\"]", "processFee", null));
+    vars.add(partEntity("blank_weight", "下料重量", "[\"下料重量\"]", "blankWeight", "0.001"));
+    vars.add(partEntity("net_weight", "产品净重", "[\"产品净重\"]", "netWeight", "0.001"));
+    vars.add(partEntity("process_fee", "加工费", "[\"加工费\",\"含税加工费\"]", "processFee", null));
 
     // PART_CONTEXT DERIVED：材料含税价格 / 废料含税价格 / 铜沫价格
-    vars.add(partDerived("material_price_incl", "材料含税价格",
-        "[\"材料含税价格\"]",
-        "{\"source\":\"DERIVED\",\"strategy\":\"MAIN_MATERIAL_FINANCE\"}"));
-    vars.add(partDerived("scrap_price_incl", "废料含税价格",
-        "[\"废料含税价格\"]",
-        "{\"source\":\"DERIVED\",\"strategy\":\"SCRAP_REF\"}"));
-    vars.add(partDerived("copper_scrap_price", "铜沫价格",
-        "[\"铜沫价格\"]",
-        "{\"source\":\"DERIVED\",\"strategy\":\"FORMULA_REF\",\"formulaRef\":\"[Cu]*0.59+[Zn]*0.41\"}"));
+    vars.add(
+        partDerived(
+            "material_price_incl",
+            "材料含税价格",
+            "[\"材料含税价格\"]",
+            "{\"source\":\"DERIVED\",\"strategy\":\"MAIN_MATERIAL_FINANCE\"}"));
+    vars.add(
+        partDerived(
+            "scrap_price_incl",
+            "废料含税价格",
+            "[\"废料含税价格\"]",
+            "{\"source\":\"DERIVED\",\"strategy\":\"SCRAP_REF\"}"));
+    vars.add(
+        partDerived(
+            "copper_scrap_price",
+            "铜沫价格",
+            "[\"铜沫价格\"]",
+            "{\"source\":\"DERIVED\",\"strategy\":\"FORMULA_REF\",\"formulaRef\":\"[Cu]*0.59+[Zn]*0.41\"}"));
 
     return vars;
   }
@@ -362,8 +338,9 @@ class LinkedFormulaE2ETest {
     v.setAliasesJson(aliases);
     // Plan B：resolver_params 走 shortName 路径 —— 保持 mock 的 shortName.eq 断言不变
     v.setResolverKind("FINANCE");
-    v.setResolverParams(String.format(
-        "{\"shortName\":\"%s\",\"priceSource\":\"平均价\",\"buScoped\":false}", shortName));
+    v.setResolverParams(
+        String.format(
+            "{\"shortName\":\"%s\",\"priceSource\":\"平均价\",\"buScoped\":false}", shortName));
     return v;
   }
 
@@ -375,9 +352,13 @@ class LinkedFormulaE2ETest {
     v.setFactorType("PART_CONTEXT");
     v.setStatus("active");
     v.setAliasesJson(aliases);
-    String bind = scale == null
-        ? String.format("{\"source\":\"ENTITY\",\"entity\":\"linkedItem\",\"field\":\"%s\"}", field)
-        : String.format("{\"source\":\"ENTITY\",\"entity\":\"linkedItem\",\"field\":\"%s\",\"unitScale\":\"%s\"}", field, scale);
+    String bind =
+        scale == null
+            ? String.format(
+                "{\"source\":\"ENTITY\",\"entity\":\"linkedItem\",\"field\":\"%s\"}", field)
+            : String.format(
+                "{\"source\":\"ENTITY\",\"entity\":\"linkedItem\",\"field\":\"%s\",\"unitScale\":\"%s\"}",
+                field, scale);
     v.setContextBindingJson(bind);
     // Plan B：resolver_params 直接复用 context_binding_json 的 entity/field/unitScale 结构
     v.setResolverKind("ENTITY");
@@ -403,14 +384,16 @@ class LinkedFormulaE2ETest {
   /** 把 variableMapper 全量 selectList 绑定到给定变量列表（AliasIndex + Registry 共享） */
   @SuppressWarnings("unchecked")
   private void seedVariables(List<PriceVariable> vars) {
-    when(priceVariableMapper.selectList(any(Wrapper.class)))
-        .thenReturn(new ArrayList<>(vars));
+    when(priceVariableMapper.selectList(any(Wrapper.class))).thenReturn(new ArrayList<>(vars));
   }
 
   /** 构造联动部品；重量 g → 克，由 unitScale=0.001 换算为 kg */
   private PriceLinkedItem partPart(
-      String materialCode, String formula,
-      BigDecimal blankWeightG, BigDecimal netWeightG, BigDecimal processFee) {
+      String materialCode,
+      String formula,
+      BigDecimal blankWeightG,
+      BigDecimal netWeightG,
+      BigDecimal processFee) {
     PriceLinkedItem item = new PriceLinkedItem();
     item.setId(101L);
     item.setMaterialCode(materialCode);
@@ -446,14 +429,15 @@ class LinkedFormulaE2ETest {
   /** 反射调 private calculatePartUnitPrice */
   @SuppressWarnings({"unchecked", "rawtypes"})
   private BigDecimal runCalc(PriceLinkedItem item) throws Exception {
-    Method m = PriceLinkedCalcServiceImpl.class.getDeclaredMethod(
-        "calculatePartUnitPrice",
-        PriceLinkedItem.class, PriceLinkedCalcItem.class,
-        com.sanhua.marketingcost.entity.OaForm.class,
-        Map.class, Map.class);
+    Method m =
+        PriceLinkedCalcServiceImpl.class.getDeclaredMethod(
+            "calculateQuoteItemForEnsure",
+            PriceLinkedCalcItem.class,
+            PriceLinkedItem.class,
+            com.sanhua.marketingcost.entity.OaForm.class);
     m.setAccessible(true);
-    return (BigDecimal) m.invoke(service, item, new PriceLinkedCalcItem(), null,
-        new HashMap(), new HashMap());
+    return ((PriceLinkedCalcItem) m.invoke(service, new PriceLinkedCalcItem(), item, null))
+        .getPartUnitPrice();
   }
 
   private static org.assertj.core.data.Offset<BigDecimal> within(BigDecimal tol) {

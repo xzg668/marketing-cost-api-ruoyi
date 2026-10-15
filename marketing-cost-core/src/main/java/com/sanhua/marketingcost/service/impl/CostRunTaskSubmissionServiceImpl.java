@@ -19,12 +19,12 @@ import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostingWorkspaceMapper;
-import com.sanhua.marketingcost.service.CostingAlgorithmVersionProvider;
 import com.sanhua.marketingcost.service.CostInputRevisionService;
 import com.sanhua.marketingcost.service.CostRunTaskSubmissionService;
+import com.sanhua.marketingcost.service.CostingAlgorithmVersionProvider;
 import com.sanhua.marketingcost.service.QuoteCurrentSuccessMatcher;
-import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
+import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -535,7 +535,6 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     task.setProductCode(productCode);
     task.setPackageMethod(packageMethod);
     task.setCustomerName(customerName);
-    task.setAdjustBatchId(request.getAdjustBatchId());
     task.setBomSourcePolicy(normalizeToNull(request.getBomSourcePolicy()));
     task.setRequestSnapshotJson(monthlyRepriceTaskSnapshot(request, object));
     return task;
@@ -681,7 +680,6 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
         "repriceNo", request.getRepriceNo(),
         "pricingMonth", request.getPricingMonth(),
         "businessUnitType", request.getBusinessUnitType(),
-        "adjustBatchId", request.getAdjustBatchId() == null ? null : String.valueOf(request.getAdjustBatchId()),
         "bomSourcePolicy", normalizeToNull(request.getBomSourcePolicy()));
   }
 

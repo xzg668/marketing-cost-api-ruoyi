@@ -24,8 +24,7 @@ class CostRunTaskBatchPressurePlanTest {
             "OA-" + String.format("%03d", oaIndex),
             "P-" + String.format("%03d-%03d", oaIndex, productIndex),
             "2026-05",
-            priceAsOfTime,
-            8801L));
+            priceAsOfTime));
       }
     }
 
@@ -40,7 +39,6 @@ class CostRunTaskBatchPressurePlanTest {
         .satisfies(key -> {
           assertThat(key.pricingMonth()).isEqualTo("2026-05");
           assertThat(key.priceAsOfTime()).isEqualTo(priceAsOfTime);
-          assertThat(key.adjustBatchId()).isEqualTo(8801L);
         });
     assertThat(plan.contextViolations()).isEmpty();
     assertThat(plan.recommendedClaimBatches(100)).isEqualTo(400);
@@ -51,9 +49,9 @@ class CostRunTaskBatchPressurePlanTest {
     LocalDateTime firstTime = LocalDateTime.of(2026, 5, 27, 0, 0);
     LocalDateTime secondTime = LocalDateTime.of(2026, 6, 1, 0, 0);
     CostRunTask first = monthlyTask(
-        1L, "BATCH-MRP-202605", "MRP-202605", "OA-001", "P-001", "2026-05", firstTime, 8801L);
+        1L, "BATCH-MRP-202605", "MRP-202605", "OA-001", "P-001", "2026-05", firstTime);
     CostRunTask second = monthlyTask(
-        2L, "BATCH-MRP-202605", "MRP-202605", "OA-002", "P-002", "2026-06", secondTime, 8802L);
+        2L, "BATCH-MRP-202605", "MRP-202605", "OA-002", "P-002", "2026-06", secondTime);
 
     CostRunTaskBatchPressurePlan plan = CostRunTaskBatchPressurePlan.from(List.of(first, second));
 
@@ -65,9 +63,7 @@ class CostRunTaskBatchPressurePlanTest {
           assertThat(violation.contexts()).hasSize(2);
           assertThat(String.join("\n", violation.contexts()))
               .contains("pricingMonth=2026-05")
-              .contains("pricingMonth=2026-06")
-              .contains("adjustBatchId=8801")
-              .contains("adjustBatchId=8802");
+              .contains("pricingMonth=2026-06");
         });
   }
 
@@ -80,8 +76,7 @@ class CostRunTaskBatchPressurePlanTest {
         "OA-001",
         "P-001",
         "2026-05",
-        LocalDateTime.of(2026, 5, 27, 0, 0),
-        8801L);
+        LocalDateTime.of(2026, 5, 27, 0, 0));
     CostRunTask second = monthlyTask(
         2L,
         "BATCH-MRP-202606",
@@ -89,8 +84,7 @@ class CostRunTaskBatchPressurePlanTest {
         "OA-001",
         "P-001",
         "2026-06",
-        LocalDateTime.of(2026, 6, 27, 0, 0),
-        9901L);
+        LocalDateTime.of(2026, 6, 27, 0, 0));
 
     CostRunTaskBatchPressurePlan plan = CostRunTaskBatchPressurePlan.from(List.of(first, second));
 
@@ -106,8 +100,7 @@ class CostRunTaskBatchPressurePlanTest {
       String oaNo,
       String productCode,
       String pricingMonth,
-      LocalDateTime priceAsOfTime,
-      Long adjustBatchId) {
+      LocalDateTime priceAsOfTime) {
     CostRunTask task = new CostRunTask();
     task.setId(id);
     task.setBatchNo(batchNo);
@@ -119,7 +112,6 @@ class CostRunTaskBatchPressurePlanTest {
     task.setBusinessUnitType("COMMERCIAL");
     task.setPricingMonth(pricingMonth);
     task.setPriceAsOfTime(priceAsOfTime);
-    task.setAdjustBatchId(adjustBatchId);
     task.setBomSourcePolicy("HISTORICAL");
     return task;
   }

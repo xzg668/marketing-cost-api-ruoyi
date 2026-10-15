@@ -1,9 +1,8 @@
 package com.sanhua.marketingcost.service;
 
+import com.sanhua.marketingcost.dto.LinkedImportedFileDto;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import com.sanhua.marketingcost.dto.PriceItemImportResponse;
-import com.sanhua.marketingcost.dto.FactorUploadBatchDto;
-import com.sanhua.marketingcost.dto.PriceLinkedImportBatchDetailDto;
 import com.sanhua.marketingcost.dto.PriceLinkedItemDto;
 import com.sanhua.marketingcost.dto.PriceLinkedItemImportRequest;
 import com.sanhua.marketingcost.dto.PriceLinkedItemUpdateRequest;
@@ -12,6 +11,9 @@ import java.io.InputStream;
 import java.util.List;
 
 public interface PriceLinkedItemService {
+  PageResult<LinkedImportedFileDto> importedFiles(
+      String pricingMonth, String businessUnitType, int page, int pageSize);
+
   List<PriceLinkedItemDto> list(String pricingMonth, String materialCode);
 
   default List<PriceLinkedItemDto> list(
@@ -82,24 +84,6 @@ public interface PriceLinkedItemService {
       String factorPriceConflictStrategy) {
     return importExcel(
         input, pricingMonth, overwriteManual, businessUnitType, sourceFileName, effectiveStrategy);
-  }
-
-  default List<FactorUploadBatchDto> listImportHistory(
-      String pricingMonth, String businessUnitType, Integer limit) {
-    return List.of();
-  }
-
-  default List<FactorUploadBatchDto> listImportHistory(
-      String pricingMonth,
-      String businessUnitType,
-      String uploadedBy,
-      Boolean includeAllUploaders,
-      Integer limit) {
-    return listImportHistory(pricingMonth, businessUnitType, limit);
-  }
-
-  default PriceLinkedImportBatchDetailDto getImportBatchDetail(Long factorUploadBatchId) {
-    return null;
   }
 
   default PriceItemImportResponse importExcel(com.sanhua.marketingcost.dto.PriceLinkedImportCommand command) {

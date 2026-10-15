@@ -5,33 +5,25 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.PriceVariableRequest;
 import com.sanhua.marketingcost.dto.VariableCatalogResponse;
-import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.formula.normalize.FormulaNormalizer;
 import com.sanhua.marketingcost.formula.normalize.FormulaSyntaxException;
 import com.sanhua.marketingcost.formula.normalize.FormulaValidator;
-import com.sanhua.marketingcost.formula.registry.FactorVariableRegistryImpl;
-import com.sanhua.marketingcost.mapper.FinanceBasePriceMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
 import com.sanhua.marketingcost.service.PriceVariableService;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 /**
- * 价格变量服务实现 —— {@link #list(String)} 给后台管理页平铺，
- * {@link #catalog()} 给前端公式编辑器做三分组树。
+ * 价格变量服务实现 —— {@link #list(String)} 给后台管理页平铺， {@link #catalog()} 给前端公式编辑器做三分组树。
  *
- * <p>Plan B T9a：新增 CRUD（{@link #create}/{@link #update}/{@link #softDelete}），
- * 每次写入后触发 {@link FactorVariableRegistryImpl#invalidate()} 让缓存重新加载，
- * 避免"改了变量但要等到重启才生效"的旧 bug。
+ * <p>计算按请求读取已提交的变量定义，API 与 worker 不共享进程缓存。
  */
 @Service
 public class PriceVariableServiceImpl implements PriceVariableService {
@@ -40,6 +32,7 @@ public class PriceVariableServiceImpl implements PriceVariableService {
 
   /** 仅展示启用态 —— V24 seed 里 status 取值是小写 {@code 'active'}。 */
   private static final String STATUS_ACTIVE = "active";
+
   private static final String STATUS_INACTIVE = "inactive";
 
   /** factor_type 合法值 —— 严格与 V24 seed / catalog 三分组保持一致 */
@@ -55,24 +48,21 @@ public class PriceVariableServiceImpl implements PriceVariableService {
       Set.of("MAIN_MATERIAL_FINANCE", "SCRAP_REF", "FORMULA_REF", "FINANCE_FACTOR");
 
   private final PriceVariableMapper priceVariableMapper;
-  private final FinanceBasePriceMapper financeBasePriceMapper;
-  private final FactorVariableRegistryImpl factorVariableRegistry;
   private final ObjectMapper objectMapper;
+
   /** 公式 normalize 管线 —— 把 FORMULA.expr / DERIVED.formulaRef 的中文/全角/单位剥干净，统一到 {@code [code]} 形式 */
   private final FormulaNormalizer formulaNormalizer;
+
   /** 公式结构 & code 白名单校验 —— 拦相邻 value 缺算符 / 未知 code 等脏点，避免求值期悄悄算成 0 */
   private final FormulaValidator formulaValidator;
 
   public PriceVariableServiceImpl(
       PriceVariableMapper priceVariableMapper,
-      FinanceBasePriceMapper financeBasePriceMapper,
-      FactorVariableRegistryImpl factorVariableRegistry,
       ObjectMapper objectMapper,
       FormulaNormalizer formulaNormalizer,
       FormulaValidator formulaValidator) {
     this.priceVariableMapper = priceVariableMapper;
-    this.financeBasePriceMapper = financeBasePriceMapper;
-    this.factorVariableRegistry = factorVariableRegistry;
+
     this.objectMapper = objectMapper;
     this.formulaNormalizer = formulaNormalizer;
     this.formulaValidator = formulaValidator;
@@ -93,10 +83,11 @@ public class PriceVariableServiceImpl implements PriceVariableService {
     VariableCatalogResponse resp = new VariableCatalogResponse();
 
     // 阶段 1：拉启用态变量并按 factor_type 分桶；CONST 不展示。
-    List<PriceVariable> enabled = priceVariableMapper.selectList(
-        Wrappers.lambdaQuery(PriceVariable.class)
-            .eq(PriceVariable::getStatus, STATUS_ACTIVE)
-            .orderByAsc(PriceVariable::getId));
+    List<PriceVariable> enabled =
+        priceVariableMapper.selectList(
+            Wrappers.lambdaQuery(PriceVariable.class)
+                .eq(PriceVariable::getStatus, STATUS_ACTIVE)
+                .orderByAsc(PriceVariable::getId));
 
     List<PriceVariable> financeVars = new ArrayList<>();
     List<PriceVariable> partVars = new ArrayList<>();
@@ -113,13 +104,9 @@ public class PriceVariableServiceImpl implements PriceVariableService {
       // CONST 无需进入前端下拉
     }
 
-    // 阶段 2：批量预取财务因素最新价格 —— 一次 IN 查询，按 short_name 取最早出现者（已按月份倒序）。
-    Map<String, FinanceBasePrice> latestByShortName =
-        loadLatestFinancePrices(financeVars);
-
-    // 阶段 3：组装三组
+    // 目录只提供变量身份；没有组织和月份，不能把任意最新价当作本次价格。
     for (PriceVariable v : financeVars) {
-      resp.getFinanceFactors().add(toFinanceFactor(v, latestByShortName.get(v.getVariableName())));
+      resp.getFinanceFactors().add(toFinanceFactor(v));
     }
     for (PriceVariable v : partVars) {
       resp.getPartContexts().add(toPartContext(v));
@@ -143,9 +130,10 @@ public class PriceVariableServiceImpl implements PriceVariableService {
   public Long create(PriceVariableRequest request) {
     validate(request, true);
     // 唯一性检查 —— 同 code 已存在直接拒
-    Long existing = priceVariableMapper.selectCount(
-        Wrappers.lambdaQuery(PriceVariable.class)
-            .eq(PriceVariable::getVariableCode, request.getVariableCode()));
+    Long existing =
+        priceVariableMapper.selectCount(
+            Wrappers.lambdaQuery(PriceVariable.class)
+                .eq(PriceVariable::getVariableCode, request.getVariableCode()));
     if (existing != null && existing > 0) {
       throw new IllegalArgumentException("变量编码已存在：" + request.getVariableCode());
     }
@@ -157,9 +145,12 @@ public class PriceVariableServiceImpl implements PriceVariableService {
       entity.setStatus(STATUS_ACTIVE);
     }
     priceVariableMapper.insert(entity);
-    factorVariableRegistry.invalidate();
-    log.info("新增价格变量：id={} code={} kind={}", entity.getId(),
-        entity.getVariableCode(), entity.getResolverKind());
+
+    log.info(
+        "新增价格变量：id={} code={} kind={}",
+        entity.getId(),
+        entity.getVariableCode(),
+        entity.getResolverKind());
     return entity.getId();
   }
 
@@ -173,9 +164,12 @@ public class PriceVariableServiceImpl implements PriceVariableService {
     }
     copyRequestToEntity(request, existing);
     priceVariableMapper.updateById(existing);
-    factorVariableRegistry.invalidate();
-    log.info("更新价格变量：id={} code={} kind={}", existing.getId(),
-        existing.getVariableCode(), existing.getResolverKind());
+
+    log.info(
+        "更新价格变量：id={} code={} kind={}",
+        existing.getId(),
+        existing.getVariableCode(),
+        existing.getResolverKind());
   }
 
   @Override
@@ -183,7 +177,7 @@ public class PriceVariableServiceImpl implements PriceVariableService {
     PriceVariable existing = getById(id);
     existing.setStatus(STATUS_INACTIVE);
     priceVariableMapper.updateById(existing);
-    factorVariableRegistry.invalidate();
+
     log.info("软删价格变量：id={} code={}", id, existing.getVariableCode());
   }
 
@@ -192,8 +186,8 @@ public class PriceVariableServiceImpl implements PriceVariableService {
   /**
    * 统一把 request 拷到 entity —— 新增 / 更新共用。
    *
-   * <p>resolverParams 由 Map 再序列化成字符串存到 {@code resolver_params} TEXT 列，
-   * 保持与 MyBatis Plus 现状一致（不引入 TypeHandler 改造）。
+   * <p>resolverParams 由 Map 再序列化成字符串存到 {@code resolver_params} TEXT 列， 保持与 MyBatis Plus 现状一致（不引入
+   * TypeHandler 改造）。
    */
   private void copyRequestToEntity(PriceVariableRequest req, PriceVariable entity) {
     entity.setVariableCode(req.getVariableCode().trim());
@@ -249,8 +243,7 @@ public class PriceVariableServiceImpl implements PriceVariableService {
         boolean hasFactorCode = hasText(params.get("factorCode"));
         boolean hasShortName = hasText(params.get("shortName"));
         if (!hasFactorCode && !hasShortName) {
-          throw new IllegalArgumentException(
-              "FINANCE 参数：factorCode 和 shortName 至少填一个");
+          throw new IllegalArgumentException("FINANCE 参数：factorCode 和 shortName 至少填一个");
         }
         if (!hasText(params.get("priceSource"))) {
           throw new IllegalArgumentException("FINANCE 参数：priceSource 必填");
@@ -272,16 +265,15 @@ public class PriceVariableServiceImpl implements PriceVariableService {
         }
         if ("FORMULA_REF".equals(strategy)) {
           if (!hasText(params.get("formulaRef"))) {
-            throw new IllegalArgumentException(
-                "DERIVED strategy=FORMULA_REF 时 formulaRef 必填");
+            throw new IllegalArgumentException("DERIVED strategy=FORMULA_REF 时 formulaRef 必填");
           }
           // 走一次规范化 + 结构校验，把 params.formulaRef 写成 [code] 正则形
-          params.put("formulaRef", normalizeAndValidate(
-              params.get("formulaRef").toString(), "DERIVED.formulaRef"));
+          params.put(
+              "formulaRef",
+              normalizeAndValidate(params.get("formulaRef").toString(), "DERIVED.formulaRef"));
         }
         if ("FINANCE_FACTOR".equals(strategy) && !hasText(params.get("factorCode"))) {
-          throw new IllegalArgumentException(
-              "DERIVED strategy=FINANCE_FACTOR 时 factorCode 必填");
+          throw new IllegalArgumentException("DERIVED strategy=FINANCE_FACTOR 时 factorCode 必填");
         }
       }
       case "FORMULA" -> {
@@ -289,8 +281,7 @@ public class PriceVariableServiceImpl implements PriceVariableService {
           throw new IllegalArgumentException("FORMULA 参数：expr 必填");
         }
         // 同 DERIVED.formulaRef：入库前把 expr 规范化为 [code] 形式并做结构校验
-        params.put("expr", normalizeAndValidate(
-            params.get("expr").toString(), "FORMULA.expr"));
+        params.put("expr", normalizeAndValidate(params.get("expr").toString(), "FORMULA.expr"));
       }
       case "CONST" -> {
         if (params.get("value") == null) {
@@ -306,18 +297,17 @@ public class PriceVariableServiceImpl implements PriceVariableService {
   }
 
   /**
-   * 把用户提交的原始公式（可能含中文别名、全角字符、单位注释）规范化成 {@code [code]} 形式，
-   * 再用 {@link FormulaValidator} 拦一轮结构/白名单错误。
+   * 把用户提交的原始公式（可能含中文别名、全角字符、单位注释）规范化成 {@code [code]} 形式， 再用 {@link FormulaValidator} 拦一轮结构/白名单错误。
    *
    * <p>为什么入库前必须做这一步：
+   *
    * <ul>
-   *   <li>不规范化 → DB 里会出现中英文混排字符串（历史 bug：{@code 下料重量*Cu}），
-   *       求值期遇到未知 token 只能静默算 0，调试极难；</li>
-   *   <li>不校验 → 用户可写 {@code [Cu][Zn]}（缺算符）或 {@code [typo_code]}（白名单外），
-   *       求值期同样静默出错。</li>
+   *   <li>不规范化 → DB 里会出现中英文混排字符串（历史 bug：{@code 下料重量*Cu}）， 求值期遇到未知 token 只能静默算 0，调试极难；
+   *   <li>不校验 → 用户可写 {@code [Cu][Zn]}（缺算符）或 {@code [typo_code]}（白名单外）， 求值期同样静默出错。
    * </ul>
-   * 抛 {@link IllegalArgumentException}（由 {@link FormulaSyntaxException} 转译），
-   * 让 GlobalExceptionHandler 统一返回 400 并带上原因。
+   *
+   * 抛 {@link IllegalArgumentException}（由 {@link FormulaSyntaxException} 转译）， 让
+   * GlobalExceptionHandler 统一返回 400 并带上原因。
    *
    * @param raw 用户提交的原始公式
    * @param location 字段定位串（用于错误消息，如 {@code "FORMULA.expr"}）
@@ -329,53 +319,14 @@ public class PriceVariableServiceImpl implements PriceVariableService {
       formulaValidator.validate(normalized);
       return normalized;
     } catch (FormulaSyntaxException e) {
-      throw new IllegalArgumentException(
-          location + " 公式非法：" + e.getMessage(), e);
+      throw new IllegalArgumentException(location + " 公式非法：" + e.getMessage(), e);
     }
   }
 
-  /**
-   * 批量拉 FINANCE_FACTOR 变量对应的最新基准价。
-   *
-   * <p>按 {@code lp_finance_base_price.short_name IN (...)} 一次查完，再按
-   * {@code price_month desc, id desc} 排序，遇到新 shortName 先写入即是该因素最新一期，
-   * 相同 shortName 后续记录忽略。避免 N+1 查询。
-   */
-  private Map<String, FinanceBasePrice> loadLatestFinancePrices(List<PriceVariable> financeVars) {
-    if (financeVars.isEmpty()) {
-      return Map.of();
-    }
-    List<String> shortNames = financeVars.stream()
-        .map(PriceVariable::getVariableName)
-        .filter(StringUtils::hasText)
-        .distinct()
-        .collect(Collectors.toList());
-    if (shortNames.isEmpty()) {
-      return Map.of();
-    }
-    List<FinanceBasePrice> rows = financeBasePriceMapper.selectList(
-        Wrappers.lambdaQuery(FinanceBasePrice.class)
-            .in(FinanceBasePrice::getShortName, shortNames)
-            .orderByDesc(FinanceBasePrice::getPriceMonth)
-            .orderByDesc(FinanceBasePrice::getId));
-    Map<String, FinanceBasePrice> result = new HashMap<>();
-    for (FinanceBasePrice row : rows) {
-      result.putIfAbsent(row.getShortName(), row);
-    }
-    return result;
-  }
-
-  private VariableCatalogResponse.FinanceFactor toFinanceFactor(
-      PriceVariable v, FinanceBasePrice latest) {
-    VariableCatalogResponse.FinanceFactor item = new VariableCatalogResponse.FinanceFactor();
-    item.setCode(v.getVariableCode());
-    item.setName(v.getVariableName());
-    if (latest != null) {
-      item.setCurrentPrice(latest.getPrice());
-      item.setUnit(latest.getUnit());
-      item.setSource(latest.getPriceSource());
-      item.setPricingMonth(latest.getPriceMonth());
-    }
+  private VariableCatalogResponse.FinanceFactor toFinanceFactor(PriceVariable variable) {
+    var item = new VariableCatalogResponse.FinanceFactor();
+    item.setCode(variable.getVariableCode());
+    item.setName(variable.getVariableName());
     return item;
   }
 

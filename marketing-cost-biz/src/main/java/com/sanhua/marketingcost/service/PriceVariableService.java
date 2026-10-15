@@ -18,7 +18,7 @@ public interface PriceVariableService {
    *
    * <p>按 {@code factor_type} 分三组返回，仅包含 {@code status='active'} 的变量；
    * {@code CONST} 不暴露给前端编辑器。对 {@code FINANCE_FACTOR}，
-   * 会批量回查 {@code lp_finance_base_price} 带出最新一期基准价信息。
+   * 仅提供因素身份；预览与核算按具体组织和月份读取发布基价。
    */
   VariableCatalogResponse catalog();
 

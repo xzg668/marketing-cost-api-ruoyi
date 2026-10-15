@@ -101,6 +101,12 @@ public class CostRunDetailController {
     dto.setCostItems(costItems);
     // T12：从 costItems 抽 TOTAL 给顶层 total，省得前端扫数组
     dto.setTotal(extractTotal(costItems));
+    if (version != null) {
+      dto.setCuMaterialAdjustment(version.getCuMaterialAdjustment());
+      dto.setFinalQuoteAmount(version.getFinalQuoteAmount());
+      dto.setCopperPrice(version.getOaCuPrice());
+      dto.setFinanceCuPrice(version.getFinanceCuPrice());
+    }
     MaterialMaster materialMaster =
         materialMasterMapper.selectOne(
             Wrappers.lambdaQuery(MaterialMaster.class)
@@ -119,7 +125,9 @@ public class CostRunDetailController {
         oaFormMapper.selectOne(
             Wrappers.lambdaQuery(OaForm.class).eq(OaForm::getOaNo, oaNo.trim()).last("LIMIT 1"));
     if (form != null) {
-      dto.setCopperPrice(form.getCopperPrice());
+      if (version == null) {
+        dto.setCopperPrice(form.getCopperPrice());
+      }
       dto.setZincPrice(form.getZincPrice());
       OaFormItem formItem =
           oaFormItemMapper.selectOne(

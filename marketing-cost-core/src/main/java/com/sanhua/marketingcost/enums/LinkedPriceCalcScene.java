@@ -36,10 +36,6 @@ public enum LinkedPriceCalcScene {
     return this == QUOTE;
   }
 
-  public boolean requiresAdjustBatchId() {
-    return false;
-  }
-
   public static Optional<LinkedPriceCalcScene> fromCode(String code) {
     if (code == null || code.trim().isEmpty()) {
       return Optional.empty();

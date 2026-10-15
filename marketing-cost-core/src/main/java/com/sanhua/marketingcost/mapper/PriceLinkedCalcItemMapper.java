@@ -5,7 +5,9 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.sanhua.marketingcost.annotation.DataScope;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import java.util.List;
+import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
 
 @Mapper
@@ -15,4 +17,33 @@ public interface PriceLinkedCalcItemMapper extends BaseMapper<PriceLinkedCalcIte
   @DataScope
   @Override
   List<PriceLinkedCalcItem> selectList(@Param("ew") Wrapper<PriceLinkedCalcItem> queryWrapper);
+
+  /** 仅插入新结果；唯一键冲突使事务回滚，不能覆盖其他任务已写入的版本。 */
+  @Insert(
+      """
+      <script>
+      INSERT INTO lp_price_linked_calc_item (
+        source_kind, oa_no, item_code, shape_attr, bom_qty, part_unit_price, part_amount,
+        business_unit_type, calc_scene, pricing_month, factor_source,
+        calc_fingerprint, calc_status, calc_message, price_as_of_time, price_org_code,
+        source_price_record_id, source_price_batch_no, supplier_name, supplier_code,
+        supply_ratio, supply_ratio_record_id, source_effective_from, source_effective_to,
+        carried_forward, warning_message, failure_code, trace_json, input_snapshot_json,
+        calculator_version, result_revision, created_at, updated_at
+      ) VALUES
+      <foreach collection="rows" item="r" separator=",">
+        (#{r.sourceKind}, #{r.oaNo}, #{r.itemCode}, #{r.shapeAttr}, #{r.bomQty},
+         #{r.partUnitPrice}, #{r.partAmount}, #{r.businessUnitType}, #{r.calcScene},
+         #{r.pricingMonth}, #{r.factorSource}, #{r.calcFingerprint},
+         #{r.calcStatus}, #{r.calcMessage}, #{r.priceAsOfTime}, #{r.priceOrgCode},
+         #{r.sourcePriceRecordId}, #{r.sourcePriceBatchNo}, #{r.supplierName}, #{r.supplierCode},
+         #{r.supplyRatio}, #{r.supplyRatioRecordId}, #{r.sourceEffectiveFrom},
+         #{r.sourceEffectiveTo}, #{r.carriedForward}, #{r.warningMessage}, #{r.failureCode},
+         #{r.traceJson}, #{r.inputSnapshotJson}, #{r.calculatorVersion}, #{r.resultRevision},
+         #{r.createdAt}, #{r.updatedAt})
+      </foreach>
+      </script>
+      """)
+  @Options(useGeneratedKeys = true, keyProperty = "rows.id")
+  int insertResults(@Param("rows") List<PriceLinkedCalcItem> rows);
 }

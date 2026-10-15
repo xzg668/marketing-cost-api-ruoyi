@@ -8,36 +8,28 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
-import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sanhua.marketingcost.config.LinkedParserProperties;
 import com.sanhua.marketingcost.dto.LinkedPriceVariableContext;
 import com.sanhua.marketingcost.dto.PriceLinkedCalcRow;
 import com.sanhua.marketingcost.dto.PriceLinkedCalcTraceResponse;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewResponse;
 import com.sanhua.marketingcost.dto.PriceLinkedFormulaPreviewResponse.VariableDetail;
-import com.sanhua.marketingcost.service.PriceLinkedFormulaPreviewService;
-import com.sanhua.marketingcost.entity.BomCostingRow;
-import com.sanhua.marketingcost.entity.FinanceBasePrice;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
-import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.formula.normalize.FormulaNormalizer;
 import com.sanhua.marketingcost.formula.registry.FactorVariableRegistry;
 import com.sanhua.marketingcost.formula.registry.VariableContext;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.DynamicValueMapper;
-import com.sanhua.marketingcost.mapper.FinanceBasePriceMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
-import java.lang.reflect.Method;
+import com.sanhua.marketingcost.service.PriceLinkedFormulaPreviewService;
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
@@ -50,101 +42,8 @@ class PriceLinkedCalcServiceImplTest {
 
   @BeforeAll
   static void initTableInfo() {
-    MapperBuilderAssistant assistant =
-        new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
     TableInfoHelper.initTableInfo(assistant, PriceLinkedItem.class);
-  }
-
-  @Test
-  void page_returnsPagedRecords() {
-    // V48：分页数据源切到联动价主表，OA BOM 仅作为用量上下文。
-    BomCostingRowMapper mapper = Mockito.mock(BomCostingRowMapper.class);
-    PriceLinkedCalcItemMapper calcMapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
-    PriceLinkedItemMapper linkedItemMapper = Mockito.mock(PriceLinkedItemMapper.class);
-    PriceVariableMapper variableMapper = Mockito.mock(PriceVariableMapper.class);
-    OaFormMapper oaFormMapper = Mockito.mock(OaFormMapper.class);
-    FinanceBasePriceMapper financeBasePriceMapper = Mockito.mock(FinanceBasePriceMapper.class);
-    DynamicValueMapper dynamicValueMapper = Mockito.mock(DynamicValueMapper.class);
-    PriceLinkedCalcServiceImpl service =
-        new PriceLinkedCalcServiceImpl(
-            mapper,
-            calcMapper,
-            linkedItemMapper,
-            variableMapper,
-            oaFormMapper,
-            financeBasePriceMapper,
-            dynamicValueMapper,
-            new LinkedParserProperties(),
-            Mockito.mock(FormulaNormalizer.class),
-            Mockito.mock(FactorVariableRegistry.class),
-            new ObjectMapper(),
-            Mockito.mock(PriceLinkedFormulaPreviewService.class));
-
-    PriceLinkedItem record = new PriceLinkedItem();
-    record.setMaterialCode("MAT-1");
-    record.setMaterialName("联动价物料");
-
-    Page<PriceLinkedItem> page = new Page<>(1, 20);
-    page.setRecords(List.of(record));
-    page.setTotal(1);
-
-    when(linkedItemMapper.selectPage(any(), any())).thenReturn(page);
-    when(mapper.selectList(any())).thenReturn(List.of());
-    when(calcMapper.selectList(any())).thenReturn(List.of());
-
-    var result = service.page("OA-001", null, null, null, null, null, null, null, 1, 20);
-
-    assertEquals(1, result.getTotal());
-    assertEquals("MAT-1", result.getRecords().get(0).getItemCode());
-    ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
-    Mockito.verify(linkedItemMapper).selectPage(any(), queryCaptor.capture());
-    assertThat(queryCaptor.getValue().getSqlSegment()).contains("effective_to IS NULL");
-  }
-
-  @Test
-  @SuppressWarnings("unchecked")
-  void fetchLinkedItemsDefaultsToCurrentVersionAndPrefersNewestEffectiveFrom() throws Exception {
-    BomCostingRowMapper mapper = Mockito.mock(BomCostingRowMapper.class);
-    PriceLinkedCalcItemMapper calcMapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
-    PriceLinkedItemMapper linkedItemMapper = Mockito.mock(PriceLinkedItemMapper.class);
-    PriceLinkedCalcServiceImpl service =
-        new PriceLinkedCalcServiceImpl(
-            mapper,
-            calcMapper,
-            linkedItemMapper,
-            Mockito.mock(PriceVariableMapper.class),
-            Mockito.mock(OaFormMapper.class),
-            Mockito.mock(FinanceBasePriceMapper.class),
-            Mockito.mock(DynamicValueMapper.class),
-            new LinkedParserProperties(),
-            Mockito.mock(FormulaNormalizer.class),
-            Mockito.mock(FactorVariableRegistry.class),
-            new ObjectMapper(),
-            Mockito.mock(PriceLinkedFormulaPreviewService.class));
-
-    PriceLinkedItem oldVersion = new PriceLinkedItem();
-    oldVersion.setId(1L);
-    oldVersion.setMaterialCode("MAT-1");
-    oldVersion.setEffectiveFrom(LocalDate.of(2026, 5, 1));
-    PriceLinkedItem newVersion = new PriceLinkedItem();
-    newVersion.setId(2L);
-    newVersion.setMaterialCode("MAT-1");
-    newVersion.setEffectiveFrom(LocalDate.of(2026, 6, 1));
-    when(linkedItemMapper.selectList(any())).thenReturn(List.of(oldVersion, newVersion));
-
-    BomCostingRow bomRow = new BomCostingRow();
-    bomRow.setMaterialCode("MAT-1");
-    Method method = PriceLinkedCalcServiceImpl.class
-        .getDeclaredMethod("fetchLinkedItems", List.class);
-    method.setAccessible(true);
-
-    Map<String, PriceLinkedItem> result =
-        (Map<String, PriceLinkedItem>) method.invoke(service, List.of(bomRow));
-
-    assertThat(result.get("MAT-1").getId()).isEqualTo(2L);
-    ArgumentCaptor<Wrapper<PriceLinkedItem>> queryCaptor = ArgumentCaptor.forClass(Wrapper.class);
-    Mockito.verify(linkedItemMapper).selectList(queryCaptor.capture());
-    assertThat(queryCaptor.getValue().getSqlSegment()).contains("effective_to IS NULL");
   }
 
   @Test
@@ -154,25 +53,18 @@ class PriceLinkedCalcServiceImplTest {
     PriceLinkedItemMapper linkedItemMapper = Mockito.mock(PriceLinkedItemMapper.class);
     PriceVariableMapper variableMapper = Mockito.mock(PriceVariableMapper.class);
     OaFormMapper oaFormMapper = Mockito.mock(OaFormMapper.class);
-    FinanceBasePriceMapper financeBasePriceMapper = Mockito.mock(FinanceBasePriceMapper.class);
     DynamicValueMapper dynamicValueMapper = Mockito.mock(DynamicValueMapper.class);
     PriceLinkedCalcServiceImpl service =
         new PriceLinkedCalcServiceImpl(
-            mapper,
             calcMapper,
             linkedItemMapper,
-            variableMapper,
             oaFormMapper,
-            financeBasePriceMapper,
-            dynamicValueMapper,
-            new LinkedParserProperties(),
-            Mockito.mock(FormulaNormalizer.class),
-            Mockito.mock(FactorVariableRegistry.class),
             new ObjectMapper(),
             Mockito.mock(PriceLinkedFormulaPreviewService.class));
 
     PriceLinkedCalcItem quote = new PriceLinkedCalcItem();
     quote.setId(1L);
+    quote.setSourcePriceRecordId(11L);
     quote.setOaNo("OA-001");
     quote.setBusinessUnitType("COMMERCIAL");
     quote.setItemCode("MAT-1");
@@ -184,13 +76,13 @@ class PriceLinkedCalcServiceImplTest {
 
     PriceLinkedCalcItem monthly = new PriceLinkedCalcItem();
     monthly.setId(2L);
+    monthly.setSourcePriceRecordId(12L);
     monthly.setOaNo("OA-001");
     monthly.setBusinessUnitType("COMMERCIAL");
     monthly.setItemCode("MAT-1");
     monthly.setCalcScene("MONTHLY_ADJUST");
     monthly.setPricingMonth("2026-05");
-    monthly.setAdjustBatchId(88L);
-    monthly.setFactorSource("ADJUST_BATCH");
+    monthly.setFactorSource("MONTHLY_FACTOR");
     monthly.setCalcStatus("FAILED");
     monthly.setCalcMessage("影响因素缺失");
 
@@ -206,24 +98,68 @@ class PriceLinkedCalcServiceImplTest {
 
     PriceLinkedItem linkedItem = new PriceLinkedItem();
     linkedItem.setMaterialCode("MAT-1");
+    linkedItem.setId(11L);
+    linkedItem.setSupplierName("供应商A");
     linkedItem.setMaterialName("联动价物料");
     linkedItem.setBusinessUnitType("COMMERCIAL");
     linkedItem.setPricingMonth("2026-05");
     when(linkedItemMapper.selectList(any())).thenReturn(List.of(linkedItem));
 
     Page<PriceLinkedCalcRow> result =
-        service.resultPage(null, null, null, "MAT-1", null, null, null, null, null, 1, 20);
+        service.resultPage(null, null, null, "MAT-1", null, null, null, null, 1, 20);
 
     assertEquals(2, result.getTotal());
+    assertEquals("联动价物料", result.getRecords().get(0).getMaterialName());
+    assertEquals("供应商A", result.getRecords().get(0).getSupplierName());
+    assertNull(result.getRecords().get(1).getMaterialName());
     assertEquals("QUOTE", result.getRecords().get(0).getCalcScene());
     assertEquals("OA_LOCKED", result.getRecords().get(0).getFactorSource());
     assertEquals(1, result.getRecords().get(0).getVariableSourceSummary().get("OA_LOCKED"));
     assertEquals("MONTHLY_ADJUST", result.getRecords().get(1).getCalcScene());
-    assertEquals(88L, result.getRecords().get(1).getAdjustBatchId());
     assertEquals("影响因素缺失", result.getRecords().get(1).getCalcMessage());
     Mockito.verify(calcMapper, never()).insert(any(PriceLinkedCalcItem.class));
     Mockito.verify(calcMapper, never()).updateById(any(PriceLinkedCalcItem.class));
     Mockito.verifyNoInteractions(mapper);
+  }
+
+  @Test
+  void resultPage_preservesHistoricalRowsWithoutSourceRuleIds() {
+    var calcMapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
+    var ruleMapper = Mockito.mock(PriceLinkedItemMapper.class);
+    var oaMapper = Mockito.mock(OaFormMapper.class);
+    var preview = Mockito.mock(PriceLinkedFormulaPreviewService.class);
+    var service = new PriceLinkedCalcServiceImpl(
+        calcMapper, ruleMapper, oaMapper, new ObjectMapper(), preview);
+
+    var saved = new PriceLinkedCalcItem();
+    saved.setId(995L);
+    saved.setItemCode("301070047");
+    saved.setPartUnitPrice(new BigDecimal("12.345678"));
+    saved.setCalcStatus("OK");
+    saved.setTraceJson("{\"rawExpr\":\"[Cu]*0.965\",\"variableDetails\":[{\"code\":\"Cu\",\"source\":\"OA_LOCKED\"}]}");
+    var failed = new PriceLinkedCalcItem();
+    failed.setId(960L);
+    failed.setItemCode("9990000050429");
+    failed.setCalcStatus("FAILED");
+    failed.setCalcMessage("联动价公式不存在或为空");
+    var page = new Page<PriceLinkedCalcItem>(28, 20);
+    page.setTotal(1105);
+    page.setRecords(List.of(saved, failed));
+    when(calcMapper.selectPage(any(), any())).thenReturn(page);
+
+    var result = service.resultPage(null, null, null, null, null, null, null, null, 28, 20);
+
+    assertEquals(1105, result.getTotal());
+    assertEquals(2, result.getRecords().size());
+    assertEquals("[Cu]*0.965", result.getRecords().getFirst().getFormulaExpr());
+    assertEquals(saved.getPartUnitPrice(), result.getRecords().getFirst().getPartUnitPrice());
+    assertEquals(1, result.getRecords().getFirst().getVariableSourceSummary().get("OA_LOCKED"));
+    assertEquals("FAILED", result.getRecords().getLast().getCalcStatus());
+    assertEquals(failed.getCalcMessage(), result.getRecords().getLast().getCalcMessage());
+    assertNull(result.getRecords().getLast().getPartUnitPrice());
+    Mockito.verifyNoInteractions(ruleMapper, preview);
+    Mockito.verify(calcMapper, never()).insert(any(PriceLinkedCalcItem.class));
+    Mockito.verify(calcMapper, never()).updateById(any(PriceLinkedCalcItem.class));
   }
 
   @Test
@@ -232,16 +168,9 @@ class PriceLinkedCalcServiceImplTest {
         Mockito.mock(PriceLinkedFormulaPreviewService.class);
     PriceLinkedCalcServiceImpl service =
         new PriceLinkedCalcServiceImpl(
-            Mockito.mock(BomCostingRowMapper.class),
             Mockito.mock(PriceLinkedCalcItemMapper.class),
             Mockito.mock(PriceLinkedItemMapper.class),
-            Mockito.mock(PriceVariableMapper.class),
             Mockito.mock(OaFormMapper.class),
-            Mockito.mock(FinanceBasePriceMapper.class),
-            Mockito.mock(DynamicValueMapper.class),
-            new LinkedParserProperties(),
-            Mockito.mock(FormulaNormalizer.class),
-            Mockito.mock(FactorVariableRegistry.class),
             new ObjectMapper(),
             previewService);
     PriceLinkedItem linkedItem = new PriceLinkedItem();
@@ -252,12 +181,10 @@ class PriceLinkedCalcServiceImplTest {
     PriceLinkedFormulaPreviewResponse response = new PriceLinkedFormulaPreviewResponse();
     response.setResult(new BigDecimal("12.3456784"));
     when(previewService.previewForRefresh(
-        any(PriceLinkedItem.class),
-        any(LinkedPriceVariableContext.class),
-        Mockito.isNull())).thenReturn(response);
+            any(PriceLinkedItem.class), any(LinkedPriceVariableContext.class), Mockito.isNull()))
+        .thenReturn(response);
 
     PriceLinkedCalcItem calcItem = new PriceLinkedCalcItem();
-    calcItem.setAdjustBatchId(88L);
     calcItem.setBusinessUnitType("COMMERCIAL");
     calcItem.setPricingMonth("2026-06");
     calcItem.setItemCode("MAT-1");
@@ -267,13 +194,12 @@ class PriceLinkedCalcServiceImplTest {
 
     ArgumentCaptor<LinkedPriceVariableContext> contextCaptor =
         ArgumentCaptor.forClass(LinkedPriceVariableContext.class);
-    Mockito.verify(previewService).previewForRefresh(
-        any(PriceLinkedItem.class), contextCaptor.capture(), Mockito.isNull());
+    Mockito.verify(previewService)
+        .previewForRefresh(any(PriceLinkedItem.class), contextCaptor.capture(), Mockito.isNull());
     LinkedPriceVariableContext context = contextCaptor.getValue();
     assertEquals("MONTHLY_ADJUST", context.getCalcScene().getCode());
-    assertEquals(88L, context.getAdjustBatchId());
     assertEquals("2026-06", context.getPricingMonth());
-    assertEquals("ADJUST_BATCH", calcItem.getFactorSource());
+    assertEquals("MONTHLY_FACTOR", calcItem.getFactorSource());
     assertEquals("OK", calcItem.getCalcStatus());
     assertThat(calcItem.getPartUnitPrice()).isEqualByComparingTo("12.345678");
   }
@@ -284,16 +210,9 @@ class PriceLinkedCalcServiceImplTest {
         Mockito.mock(PriceLinkedFormulaPreviewService.class);
     PriceLinkedCalcServiceImpl service =
         new PriceLinkedCalcServiceImpl(
-            Mockito.mock(BomCostingRowMapper.class),
             Mockito.mock(PriceLinkedCalcItemMapper.class),
             Mockito.mock(PriceLinkedItemMapper.class),
-            Mockito.mock(PriceVariableMapper.class),
             Mockito.mock(OaFormMapper.class),
-            Mockito.mock(FinanceBasePriceMapper.class),
-            Mockito.mock(DynamicValueMapper.class),
-            new LinkedParserProperties(),
-            Mockito.mock(FormulaNormalizer.class),
-            Mockito.mock(FactorVariableRegistry.class),
             new ObjectMapper(),
             previewService);
     PriceLinkedItem linkedItem = new PriceLinkedItem();
@@ -304,9 +223,8 @@ class PriceLinkedCalcServiceImplTest {
     PriceLinkedFormulaPreviewResponse response = new PriceLinkedFormulaPreviewResponse();
     response.setResult(new BigDecimal("12.3456784"));
     when(previewService.previewForRefresh(
-        any(PriceLinkedItem.class),
-        any(LinkedPriceVariableContext.class),
-        Mockito.any())).thenReturn(response);
+            any(PriceLinkedItem.class), any(LinkedPriceVariableContext.class), Mockito.any()))
+        .thenReturn(response);
 
     PriceLinkedCalcItem calcItem = new PriceLinkedCalcItem();
     calcItem.setBusinessUnitType("COMMERCIAL");
@@ -318,8 +236,9 @@ class PriceLinkedCalcServiceImplTest {
 
     ArgumentCaptor<LinkedPriceVariableContext> contextCaptor =
         ArgumentCaptor.forClass(LinkedPriceVariableContext.class);
-    Mockito.verify(previewService).previewForRefresh(
-        any(PriceLinkedItem.class), contextCaptor.capture(), Mockito.same(oaForm));
+    Mockito.verify(previewService)
+        .previewForRefresh(
+            any(PriceLinkedItem.class), contextCaptor.capture(), Mockito.same(oaForm));
     LinkedPriceVariableContext context = contextCaptor.getValue();
     assertEquals("QUOTE", context.getCalcScene().getCode());
     assertEquals("2026-06", context.getPricingMonth());
@@ -334,15 +253,13 @@ class PriceLinkedCalcServiceImplTest {
     VariableContext[] capturedContext = new VariableContext[1];
     when(normalizer.normalize(any())).thenReturn("[Cu]");
     when(registry.resolve(any(String.class), any(VariableContext.class)))
-        .thenAnswer(invocation -> {
-          capturedContext[0] = invocation.getArgument(1);
-          return java.util.Optional.of(new BigDecimal("12.3456784"));
-        });
+        .thenAnswer(
+            invocation -> {
+              capturedContext[0] = invocation.getArgument(1);
+              return java.util.Optional.of(new BigDecimal("12.3456784"));
+            });
 
-    LinkedParserProperties props = new LinkedParserProperties();
-    props.setMode("new");
-    PriceLinkedCalcServiceImpl service =
-        buildServiceWithRealPreview(props, normalizer, registry);
+    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(normalizer, registry);
 
     PriceLinkedItem linkedItem = new PriceLinkedItem();
     linkedItem.setMaterialCode("MAT-1");
@@ -364,90 +281,18 @@ class PriceLinkedCalcServiceImplTest {
   }
 
   @Test
-  void refresh_insertsCalculatedItems() {
-    // T5.5：数据源切到 BomCostingRowMapper；bomQty 映射到 qtyPerTop
-    BomCostingRowMapper mapper = Mockito.mock(BomCostingRowMapper.class);
-    PriceLinkedCalcItemMapper calcMapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
-    PriceLinkedItemMapper linkedItemMapper = Mockito.mock(PriceLinkedItemMapper.class);
-    PriceVariableMapper variableMapper = Mockito.mock(PriceVariableMapper.class);
-    OaFormMapper oaFormMapper = Mockito.mock(OaFormMapper.class);
-    FinanceBasePriceMapper financeBasePriceMapper = Mockito.mock(FinanceBasePriceMapper.class);
-    DynamicValueMapper dynamicValueMapper = Mockito.mock(DynamicValueMapper.class);
-    PriceLinkedCalcServiceImpl service =
-        new PriceLinkedCalcServiceImpl(
-            mapper,
-            calcMapper,
-            linkedItemMapper,
-            variableMapper,
-            oaFormMapper,
-            financeBasePriceMapper,
-            dynamicValueMapper,
-            new LinkedParserProperties(),
-            Mockito.mock(FormulaNormalizer.class),
-            Mockito.mock(FactorVariableRegistry.class),
-            new ObjectMapper(),
-            Mockito.mock(PriceLinkedFormulaPreviewService.class));
-
-    BomCostingRow item = new BomCostingRow();
-    item.setOaNo("OA-001");
-    item.setMaterialCode("MAT-1");
-    item.setShapeAttr("制造件");
-    item.setQtyPerTop(new BigDecimal("2.5"));
-
-    when(mapper.selectList(any())).thenReturn(List.of(item));
-    when(calcMapper.selectList(any())).thenReturn(List.of());
-    when(linkedItemMapper.selectList(any())).thenReturn(List.of());
-    when(variableMapper.selectList(any())).thenReturn(List.of());
-    when(oaFormMapper.selectOne(any())).thenReturn(null);
-    when(financeBasePriceMapper.selectList(any())).thenReturn(List.of());
-
-    int inserted = service.refresh("OA-001");
-
-    assertEquals(1, inserted);
-    ArgumentCaptor<com.sanhua.marketingcost.entity.PriceLinkedCalcItem> captor =
-        ArgumentCaptor.forClass(com.sanhua.marketingcost.entity.PriceLinkedCalcItem.class);
-    Mockito.verify(calcMapper).insert(captor.capture());
-    var saved = captor.getValue();
-    assertEquals(new BigDecimal("2.5"), saved.getBomQty());
-    assertEquals("QUOTE", saved.getCalcScene());
-    assertEquals("OA_LOCKED", saved.getFactorSource());
-    assertEquals("OK", saved.getCalcStatus());
-    assertEquals(null, saved.getPartUnitPrice());
-    assertEquals(null, saved.getPartAmount());
-  }
-
-  /**
-   * {@code getTrace} 三分支覆盖 —— id=null / linked_item 不存在 / 存在。
-   *
-   * <p>重构后 trace 不再读 calc_item，而是按 linked_item.id 当场跑 preview；
-   * 所以 mock 目标改成 {@code linkedItemMapper.selectById}
-   * + {@code previewService.previewForRefresh}，确保同料号多供应商不会串用行上下文。
-   */
-  @Test
   void getTrace_covers_null_missing_and_present() {
     BomCostingRowMapper mapper = Mockito.mock(BomCostingRowMapper.class);
     PriceLinkedCalcItemMapper calcMapper = Mockito.mock(PriceLinkedCalcItemMapper.class);
     PriceLinkedItemMapper linkedItemMapper = Mockito.mock(PriceLinkedItemMapper.class);
     PriceVariableMapper variableMapper = Mockito.mock(PriceVariableMapper.class);
     OaFormMapper oaFormMapper = Mockito.mock(OaFormMapper.class);
-    FinanceBasePriceMapper financeBasePriceMapper = Mockito.mock(FinanceBasePriceMapper.class);
     DynamicValueMapper dynamicValueMapper = Mockito.mock(DynamicValueMapper.class);
     PriceLinkedFormulaPreviewService previewService =
         Mockito.mock(PriceLinkedFormulaPreviewService.class);
     PriceLinkedCalcServiceImpl service =
         new PriceLinkedCalcServiceImpl(
-            mapper,
-            calcMapper,
-            linkedItemMapper,
-            variableMapper,
-            oaFormMapper,
-            financeBasePriceMapper,
-            dynamicValueMapper,
-            new LinkedParserProperties(),
-            Mockito.mock(FormulaNormalizer.class),
-            Mockito.mock(FactorVariableRegistry.class),
-            new ObjectMapper(),
-            previewService);
+            calcMapper, linkedItemMapper, oaFormMapper, new ObjectMapper(), previewService);
 
     // 分支 1：id=null 直接返 null，不触达任何依赖
     assertNull(service.getTrace(null));
@@ -483,8 +328,7 @@ class PriceLinkedCalcServiceImplTest {
     fee.setValue(new BigDecimal("5.00"));
     fee.setSource("PART_CONTEXT");
     previewResp.setVariables(List.of(cu, fee));
-    when(previewService.previewForRefresh(linked, Map.of()))
-        .thenReturn(previewResp);
+    when(previewService.previewForRefresh(linked, Map.of())).thenReturn(previewResp);
 
     PriceLinkedCalcTraceResponse trace = service.getTrace(42L);
     assertThat(trace).isNotNull();
@@ -498,140 +342,33 @@ class PriceLinkedCalcServiceImplTest {
     assertThat(trace.getTraceJson()).contains("\"source\":\"FINANCE\"");
     assertThat(trace.getTraceJson()).contains("\"result\":93.73");
     Mockito.verify(previewService).previewForRefresh(linked, Map.of());
+    linked.setExpressionVersion(OriginalLinkedRuleSnapshot.VERSION);
+    Mockito.clearInvocations(previewService);
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.getTrace(42L))
+        .hasMessageContaining("财务有效价详情");
+    Mockito.verifyNoInteractions(previewService);
   }
 
   // ================== V28 收尾：OA 锁价 + 基价回落 单测 ==================
 
   /** 构造一个带所有必要 mock 依赖的 service 实例，便于多个 case 复用。 */
-  private PriceLinkedCalcServiceImpl buildService(FinanceBasePriceMapper financeBasePriceMapper) {
-    return new PriceLinkedCalcServiceImpl(
-        Mockito.mock(BomCostingRowMapper.class),
-        Mockito.mock(PriceLinkedCalcItemMapper.class),
-        Mockito.mock(PriceLinkedItemMapper.class),
-        Mockito.mock(PriceVariableMapper.class),
-        Mockito.mock(OaFormMapper.class),
-        financeBasePriceMapper,
-        Mockito.mock(DynamicValueMapper.class),
-        new LinkedParserProperties(),
-        Mockito.mock(FormulaNormalizer.class),
-        Mockito.mock(FactorVariableRegistry.class),
-        new ObjectMapper(),
-        Mockito.mock(PriceLinkedFormulaPreviewService.class));
-  }
-
-  /**
-   * 反射调用 private applyOaLockPrice —— 不改可见性，避免只为测试污染生产 API。
-   */
-  private void invokeApplyOaLockPrice(
-      PriceLinkedCalcServiceImpl service, VariableContext ctx, OaForm oaForm) throws Exception {
-    Method m = PriceLinkedCalcServiceImpl.class
-        .getDeclaredMethod("applyOaLockPrice", VariableContext.class, OaForm.class);
-    m.setAccessible(true);
-    m.invoke(service, ctx, oaForm);
-  }
-
-  /** 反射调用 private resolveFinanceFallback */
-  private BigDecimal invokeResolveFinanceFallback(
-      PriceLinkedCalcServiceImpl service, PriceVariable variable, PriceLinkedItem linkedItem)
-      throws Exception {
-    Method m = PriceLinkedCalcServiceImpl.class
-        .getDeclaredMethod("resolveFinanceFallback", PriceVariable.class, PriceLinkedItem.class);
-    m.setAccessible(true);
-    return (BigDecimal) m.invoke(service, variable, linkedItem);
-  }
-
-  @Test
-  void applyOaLockPrice_filledCopper_putsDivided() throws Exception {
-    PriceLinkedCalcServiceImpl service = buildService(Mockito.mock(FinanceBasePriceMapper.class));
-
-    // OA 单锁了 Cu=72000 元/吨（= 72 元/千克），其它金属未填
-    OaForm oaForm = new OaForm();
-    oaForm.setCopperPrice(new BigDecimal("72000"));
-
-    VariableContext ctx = new VariableContext();
-    invokeApplyOaLockPrice(service, ctx, oaForm);
-
-    assertThat(ctx.getOverrides()).containsKey("Cu");
-    assertThat(ctx.getOverrides().get("Cu")).isEqualByComparingTo(new BigDecimal("72"));
-    assertThat(ctx.getOverrideSource("Cu")).isEqualTo("OA_LOCKED");
-    // 未填字段不应出现在 overrides，让 FinanceBaseResolver 走基价回落
-    assertThat(ctx.getOverrides()).doesNotContainKeys("Zn", "Al");
-  }
-
-  @Test
-  void applyOaLockPrice_nullOaForm_noop() throws Exception {
-    PriceLinkedCalcServiceImpl service = buildService(Mockito.mock(FinanceBasePriceMapper.class));
-    VariableContext ctx = new VariableContext();
-    invokeApplyOaLockPrice(service, ctx, null);
-    assertThat(ctx.getOverrides()).isEmpty();
-  }
-
-  @Test
-  void resolveFinanceFallback_hits_returnsPrice() throws Exception {
-    FinanceBasePriceMapper financeBasePriceMapper = Mockito.mock(FinanceBasePriceMapper.class);
-
-    FinanceBasePrice row = new FinanceBasePrice();
-    row.setPrice(new BigDecimal("70"));
-    when(financeBasePriceMapper.selectOne(any())).thenReturn(row);
-
-    PriceLinkedCalcServiceImpl service = buildService(financeBasePriceMapper);
-
-    // variable_code=Cu 对应 lp_finance_base_price.factor_code=Cu
-    PriceVariable variable = new PriceVariable();
-    variable.setVariableCode("Cu");
-
-    PriceLinkedItem linkedItem = new PriceLinkedItem();
-    linkedItem.setPricingMonth("2026-03");
-
-    BigDecimal result = invokeResolveFinanceFallback(service, variable, linkedItem);
-    assertThat(result).isEqualByComparingTo(new BigDecimal("70"));
-  }
-
-  @Test
-  void resolveFinanceFallback_miss_returnsNull() throws Exception {
-    FinanceBasePriceMapper financeBasePriceMapper = Mockito.mock(FinanceBasePriceMapper.class);
-    when(financeBasePriceMapper.selectOne(any())).thenReturn(null);
-
-    PriceLinkedCalcServiceImpl service = buildService(financeBasePriceMapper);
-
-    PriceVariable variable = new PriceVariable();
-    variable.setVariableCode("Cu");
-    PriceLinkedItem linkedItem = new PriceLinkedItem();
-    linkedItem.setPricingMonth("2026-03");
-
-    assertNull(invokeResolveFinanceFallback(service, variable, linkedItem));
-  }
-
-  @Test
-  void resolveFinanceFallback_missingMonth_returnsNull() throws Exception {
-    PriceLinkedCalcServiceImpl service = buildService(Mockito.mock(FinanceBasePriceMapper.class));
-
-    PriceVariable variable = new PriceVariable();
-    variable.setVariableCode("Cu");
-    // linkedItem.pricingMonth=null → 无法查基价，直接返 null，避免无条件全表扫
-    PriceLinkedItem linkedItem = new PriceLinkedItem();
-
-    assertNull(invokeResolveFinanceFallback(service, variable, linkedItem));
-  }
-
   @Test
   void quoteSceneRecalculateChangesWhenOaCopperChanges() throws Exception {
     FactorVariableRegistry registry = Mockito.mock(FactorVariableRegistry.class);
     FormulaNormalizer normalizer = Mockito.mock(FormulaNormalizer.class);
     when(normalizer.normalize(any())).thenReturn("[Cu]");
     when(registry.resolve(any(String.class), any(VariableContext.class)))
-        .thenAnswer(inv -> {
-          String code = inv.getArgument(0);
-          VariableContext ctx = inv.getArgument(1);
-          if (ctx.getOverrides().containsKey(code)) {
-            return java.util.Optional.of(ctx.getOverrides().get(code));
-          }
-          return java.util.Optional.of(new BigDecimal("999"));
-        });
+        .thenAnswer(
+            inv -> {
+              String code = inv.getArgument(0);
+              VariableContext ctx = inv.getArgument(1);
+              if (ctx.getOverrides().containsKey(code)) {
+                return java.util.Optional.of(ctx.getOverrides().get(code));
+              }
+              return java.util.Optional.of(new BigDecimal("999"));
+            });
 
-    LinkedParserProperties props = new LinkedParserProperties();
-    props.setMode("new");
-    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(props, normalizer, registry);
+    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(normalizer, registry);
 
     PriceLinkedItem linkedItem = new PriceLinkedItem();
     linkedItem.setFormulaExpr("[Cu]");
@@ -639,13 +376,13 @@ class PriceLinkedCalcServiceImplTest {
 
     OaForm firstOa = new OaForm();
     firstOa.setCopperPrice(new BigDecimal("90000"));
-    BigDecimal first = invokeCalculatePartUnitPrice(
-        service, linkedItem, new PriceLinkedCalcItem(), firstOa);
+    BigDecimal first =
+        invokeCalculatePartUnitPrice(service, linkedItem, new PriceLinkedCalcItem(), firstOa);
 
     OaForm secondOa = new OaForm();
     secondOa.setCopperPrice(new BigDecimal("92000"));
-    BigDecimal second = invokeCalculatePartUnitPrice(
-        service, linkedItem, new PriceLinkedCalcItem(), secondOa);
+    BigDecimal second =
+        invokeCalculatePartUnitPrice(service, linkedItem, new PriceLinkedCalcItem(), secondOa);
 
     assertThat(first).isEqualByComparingTo("90.000000");
     assertThat(second).isEqualByComparingTo("92.000000");
@@ -657,19 +394,18 @@ class PriceLinkedCalcServiceImplTest {
     FormulaNormalizer normalizer = Mockito.mock(FormulaNormalizer.class);
     when(normalizer.normalize(any())).thenReturn("[Cu]");
     when(registry.resolve(any(String.class), any(VariableContext.class)))
-        .thenAnswer(inv -> {
-          String code = inv.getArgument(0);
-          VariableContext ctx = inv.getArgument(1);
-          if (ctx.getOverrides().containsKey(code)) {
-            return java.util.Optional.of(ctx.getOverrides().get(code));
-          }
-          // 模拟同月影响因素价已变化；QUOTE 有 OA 锁价时不应读到这里的值。
-          return java.util.Optional.of(new BigDecimal("999"));
-        });
+        .thenAnswer(
+            inv -> {
+              String code = inv.getArgument(0);
+              VariableContext ctx = inv.getArgument(1);
+              if (ctx.getOverrides().containsKey(code)) {
+                return java.util.Optional.of(ctx.getOverrides().get(code));
+              }
+              // 模拟同月影响因素价已变化；QUOTE 有 OA 锁价时不应读到这里的值。
+              return java.util.Optional.of(new BigDecimal("999"));
+            });
 
-    LinkedParserProperties props = new LinkedParserProperties();
-    props.setMode("new");
-    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(props, normalizer, registry);
+    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(normalizer, registry);
 
     PriceLinkedItem linkedItem = new PriceLinkedItem();
     linkedItem.setFormulaExpr("[Cu]");
@@ -687,28 +423,37 @@ class PriceLinkedCalcServiceImplTest {
   }
 
   @Test
-  void financeQuoteOverridesOnlyCuAndKeepsOaZnAl() {
+  void financeQuoteUsesPublishedZnAlAndOnlyCustomerCu() {
     FactorVariableRegistry registry = Mockito.mock(FactorVariableRegistry.class);
     FormulaNormalizer normalizer = Mockito.mock(FormulaNormalizer.class);
     when(normalizer.normalize(any())).thenReturn("[Cu]+[Zn]+[Al]");
     when(registry.resolve(any(String.class), any(VariableContext.class)))
-        .thenAnswer(inv -> {
-          String code = inv.getArgument(0);
-          VariableContext ctx = inv.getArgument(1);
-          return java.util.Optional.ofNullable(ctx.getOverrides().get(code));
-        });
+        .thenAnswer(
+            inv -> {
+              String code = inv.getArgument(0);
+              VariableContext ctx = inv.getArgument(1);
+              if (ctx.getOverrides().containsKey("Zn")) assertThat(ctx.getOverrides().get("Zn")).isEqualByComparingTo("21.684");
+              if (ctx.getOverrides().containsKey("Al")) assertThat(ctx.getOverrides().get("Al")).isEqualByComparingTo("18.88");
+              if ("Cu".equals(code) && !ctx.isFinanceQuoteBase())
+                return java.util.Optional.ofNullable(ctx.getOverrides().get(code));
+              ctx.resolvedSource(code, "Cu".equals(code) ? "FINANCE_QUOTE_BASE" : "FINANCE_FACTOR");
+              return java.util.Optional.of(switch (code) {
+                case "Cu" -> new BigDecimal("90.000000");
+                case "Zn" -> new BigDecimal("21.684000");
+                case "Al" -> new BigDecimal("18.880000");
+                default -> throw new AssertionError(code);
+              });
+            });
 
-    LinkedParserProperties props = new LinkedParserProperties();
-    props.setMode("new");
-    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(props, normalizer, registry);
+    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(normalizer, registry);
     PriceLinkedItem linkedItem = new PriceLinkedItem();
     linkedItem.setFormulaExpr("[Cu]+[Zn]+[Al]");
     linkedItem.setMaterialCode("MAT-CU-ZN-AL");
     linkedItem.setPricingMonth("2026-05");
     OaForm oaForm = new OaForm();
     oaForm.setCopperPrice(new BigDecimal("102039"));
-    oaForm.setZincPrice(new BigDecimal("21684"));
-    oaForm.setAluminumPrice(new BigDecimal("18880"));
+    oaForm.setZincPrice(new BigDecimal("99999"));
+    oaForm.setAluminumPrice(new BigDecimal("88888"));
 
     PriceLinkedCalcItem oa = new PriceLinkedCalcItem();
     oa.setPricingMonth("2026-05");
@@ -733,7 +478,7 @@ class PriceLinkedCalcServiceImplTest {
         .contains("\"Al\":18.880000")
         .contains("\"code\":\"Cu\"")
         .contains("\"source\":\"FINANCE_QUOTE_BASE\"")
-        .contains("\"source\":\"OA_LOCKED\"");
+        .contains("\"source\":\"FINANCE_FACTOR\"");
   }
 
   @Test
@@ -742,23 +487,32 @@ class PriceLinkedCalcServiceImplTest {
     FormulaNormalizer normalizer = Mockito.mock(FormulaNormalizer.class);
     when(normalizer.normalize(any())).thenReturn("[Zn]+[Al]");
     when(registry.resolve(any(String.class), any(VariableContext.class)))
-        .thenAnswer(inv -> {
-          String code = inv.getArgument(0);
-          VariableContext ctx = inv.getArgument(1);
-          return java.util.Optional.ofNullable(ctx.getOverrides().get(code));
-        });
+        .thenAnswer(
+            inv -> {
+              String code = inv.getArgument(0);
+              VariableContext ctx = inv.getArgument(1);
+              if (ctx.getOverrides().containsKey("Zn")) assertThat(ctx.getOverrides().get("Zn")).isEqualByComparingTo("21.684");
+              if (ctx.getOverrides().containsKey("Al")) assertThat(ctx.getOverrides().get("Al")).isEqualByComparingTo("18.88");
+              if ("Cu".equals(code) && !ctx.isFinanceQuoteBase())
+                return java.util.Optional.ofNullable(ctx.getOverrides().get(code));
+              ctx.resolvedSource(code, "Cu".equals(code) ? "FINANCE_QUOTE_BASE" : "FINANCE_FACTOR");
+              return java.util.Optional.of(switch (code) {
+                case "Cu" -> new BigDecimal("90.000000");
+                case "Zn" -> new BigDecimal("21.684000");
+                case "Al" -> new BigDecimal("18.880000");
+                default -> throw new AssertionError(code);
+              });
+            });
 
-    LinkedParserProperties props = new LinkedParserProperties();
-    props.setMode("new");
-    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(props, normalizer, registry);
+    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(normalizer, registry);
     PriceLinkedItem linkedItem = new PriceLinkedItem();
     linkedItem.setFormulaExpr("[Zn]+[Al]");
     linkedItem.setMaterialCode("MAT-ZN-AL");
     linkedItem.setPricingMonth("2026-05");
     OaForm oaForm = new OaForm();
     oaForm.setCopperPrice(new BigDecimal("102039"));
-    oaForm.setZincPrice(new BigDecimal("21684"));
-    oaForm.setAluminumPrice(new BigDecimal("18880"));
+    oaForm.setZincPrice(new BigDecimal("99999"));
+    oaForm.setAluminumPrice(new BigDecimal("88888"));
 
     PriceLinkedCalcItem oa = new PriceLinkedCalcItem();
     oa.setPricingMonth("2026-05");
@@ -788,23 +542,14 @@ class PriceLinkedCalcServiceImplTest {
       PriceLinkedCalcServiceImpl service,
       PriceLinkedItem linkedItem,
       PriceLinkedCalcItem calcItem,
-      OaForm oaForm) throws Exception {
-    Method m = PriceLinkedCalcServiceImpl.class.getDeclaredMethod(
-        "calculatePartUnitPrice",
-        PriceLinkedItem.class,
-        PriceLinkedCalcItem.class,
-        OaForm.class,
-        java.util.Map.class,
-        java.util.Map.class);
-    m.setAccessible(true);
-    return (BigDecimal) m.invoke(
-        service, linkedItem, calcItem, oaForm, java.util.Map.of(), java.util.Map.of());
+      OaForm oaForm)
+      throws Exception {
+    return service.calculateQuoteItemForEnsure(calcItem, linkedItem, oaForm).getPartUnitPrice();
   }
 
   /**
-   * tax_included=0 + vat_rate 解析失败 → newCalculate 抛 IllegalStateException，
-   * 被外层 catch 吞成 trace.error，calcItem.traceJson 里必须包含 vat_rate 错误线索，
-   * 且返回 null（避免写错的 partUnitPrice）。
+   * tax_included=0 + vat_rate 解析失败 → newCalculate 抛 IllegalStateException， 被外层 catch 吞成
+   * trace.error，calcItem.traceJson 里必须包含 vat_rate 错误线索， 且返回 null（避免写错的 partUnitPrice）。
    *
    * <p>这是风险 2 的核心：以前 WARN 跳过会让结果偷偷偏高 13%；现在硬错，前端能看到。
    */
@@ -814,20 +559,17 @@ class PriceLinkedCalcServiceImplTest {
     FormulaNormalizer normalizer = Mockito.mock(FormulaNormalizer.class);
     // 让其他变量都能 resolve，只让 vat_rate 返回 empty —— 精准触发目标分支
     when(registry.resolve(any(String.class), any(VariableContext.class)))
-        .thenAnswer(inv -> {
-          String code = inv.getArgument(0);
-          if ("vat_rate".equals(code)) {
-            return java.util.Optional.empty();
-          }
-          return java.util.Optional.of(new BigDecimal("88"));
-        });
+        .thenAnswer(
+            inv -> {
+              String code = inv.getArgument(0);
+              if ("vat_rate".equals(code)) {
+                return java.util.Optional.empty();
+              }
+              return java.util.Optional.of(new BigDecimal("88"));
+            });
     when(normalizer.normalize(any())).thenReturn("[Cu]");
 
-    LinkedParserProperties props = new LinkedParserProperties();
-    props.setMode("new"); // 纯 new 路径，避免 legacy 兜底掩盖 new 的错误
-
-    PriceLinkedCalcServiceImpl service =
-        buildServiceWithRealPreview(props, normalizer, registry);
+    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(normalizer, registry);
 
     PriceLinkedItem linkedItem = new PriceLinkedItem();
     linkedItem.setFormulaExpr("[Cu]");
@@ -848,56 +590,45 @@ class PriceLinkedCalcServiceImplTest {
 
   /** 2026-04 重构后：newCalculate 委托给 previewService，测试需要真实 preview 实例。 */
   private PriceLinkedCalcServiceImpl buildServiceWithRealPreview(
-      LinkedParserProperties props,
-      FormulaNormalizer normalizer,
-      FactorVariableRegistry registry) {
+      FormulaNormalizer normalizer, FactorVariableRegistry registry) {
     PriceLinkedItemMapper linkedItemMapper = Mockito.mock(PriceLinkedItemMapper.class);
     PriceVariableMapper priceVariableMapperForPreview = Mockito.mock(PriceVariableMapper.class);
     when(priceVariableMapperForPreview.selectList(any()))
         .thenReturn(java.util.List.of()); // loadVariableMeta 空，用 token 做名字即可
     com.sanhua.marketingcost.service.impl.PriceLinkedFormulaPreviewServiceImpl previewService =
         new com.sanhua.marketingcost.service.impl.PriceLinkedFormulaPreviewServiceImpl(
-            normalizer, registry, priceVariableMapperForPreview, linkedItemMapper,
-            Mockito.mock(com.sanhua.marketingcost.formula.normalize.FormulaUnitConsistencyChecker.class));
+            normalizer,
+            registry,
+            priceVariableMapperForPreview,
+            linkedItemMapper,
+            Mockito.mock(
+                com.sanhua.marketingcost.formula.normalize.FormulaUnitConsistencyChecker.class));
     return new PriceLinkedCalcServiceImpl(
-        Mockito.mock(BomCostingRowMapper.class),
         Mockito.mock(PriceLinkedCalcItemMapper.class),
         linkedItemMapper,
-        Mockito.mock(PriceVariableMapper.class),
         Mockito.mock(OaFormMapper.class),
-        Mockito.mock(FinanceBasePriceMapper.class),
-        Mockito.mock(DynamicValueMapper.class),
-        props,
-        normalizer,
-        registry,
         new ObjectMapper(),
         previewService);
   }
 
-  /**
-   * tax_included=0 + vat_rate 解析成功 → 正常做 1/(1+vat_rate) 转换，返回不含税值。
-   * 对照组，保证改动没破坏正常路径。
-   */
+  /** tax_included=0 + vat_rate 解析成功 → 正常做 1/(1+vat_rate) 转换，返回不含税值。 对照组，保证改动没破坏正常路径。 */
   @Test
   void newCalculate_taxIncludedZero_vatRatePresent_appliesConversion() throws Exception {
     FactorVariableRegistry registry = Mockito.mock(FactorVariableRegistry.class);
     FormulaNormalizer normalizer = Mockito.mock(FormulaNormalizer.class);
     when(registry.resolve(any(String.class), any(VariableContext.class)))
-        .thenAnswer(inv -> {
-          String code = inv.getArgument(0);
-          if ("vat_rate".equals(code)) {
-            return java.util.Optional.of(new BigDecimal("0.13"));
-          }
-          // [Cu]=113 → 公式结果 113，/ 1.13 = 100
-          return java.util.Optional.of(new BigDecimal("113"));
-        });
+        .thenAnswer(
+            inv -> {
+              String code = inv.getArgument(0);
+              if ("vat_rate".equals(code)) {
+                return java.util.Optional.of(new BigDecimal("0.13"));
+              }
+              // [Cu]=113 → 公式结果 113，/ 1.13 = 100
+              return java.util.Optional.of(new BigDecimal("113"));
+            });
     when(normalizer.normalize(any())).thenReturn("[Cu]");
 
-    LinkedParserProperties props = new LinkedParserProperties();
-    props.setMode("new");
-
-    PriceLinkedCalcServiceImpl service =
-        buildServiceWithRealPreview(props, normalizer, registry);
+    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(normalizer, registry);
 
     PriceLinkedItem linkedItem = new PriceLinkedItem();
     linkedItem.setFormulaExpr("[Cu]");
@@ -915,28 +646,23 @@ class PriceLinkedCalcServiceImplTest {
     // 所以这里只断言 result 本身正确 = 转换已生效
   }
 
-  /**
-   * tax_included=1（含税结算口径）+ vat_rate 即便缺失也不应触发硬错 —— 这个路径不做转换。
-   */
+  /** tax_included=1（含税结算口径）+ vat_rate 即便缺失也不应触发硬错 —— 这个路径不做转换。 */
   @Test
   void newCalculate_taxIncludedOne_skipsVatRateCheck() throws Exception {
     FactorVariableRegistry registry = Mockito.mock(FactorVariableRegistry.class);
     FormulaNormalizer normalizer = Mockito.mock(FormulaNormalizer.class);
     when(registry.resolve(any(String.class), any(VariableContext.class)))
-        .thenAnswer(inv -> {
-          String code = inv.getArgument(0);
-          if ("vat_rate".equals(code)) {
-            return java.util.Optional.empty(); // 故意让 vat_rate 空，证明不会触达这行
-          }
-          return java.util.Optional.of(new BigDecimal("50"));
-        });
+        .thenAnswer(
+            inv -> {
+              String code = inv.getArgument(0);
+              if ("vat_rate".equals(code)) {
+                return java.util.Optional.empty(); // 故意让 vat_rate 空，证明不会触达这行
+              }
+              return java.util.Optional.of(new BigDecimal("50"));
+            });
     when(normalizer.normalize(any())).thenReturn("[Cu]");
 
-    LinkedParserProperties props = new LinkedParserProperties();
-    props.setMode("new");
-
-    PriceLinkedCalcServiceImpl service =
-        buildServiceWithRealPreview(props, normalizer, registry);
+    PriceLinkedCalcServiceImpl service = buildServiceWithRealPreview(normalizer, registry);
 
     PriceLinkedItem linkedItem = new PriceLinkedItem();
     linkedItem.setFormulaExpr("[Cu]");

@@ -81,6 +81,7 @@ final class OaQuotationFields {
           new Field("mxs", "40只柜可装数量", true, false));
   static final List<Field> SC006_MAIN =
       List.of(
+          new Field("sfzbxqjzdbhcp", "是否招标需求（仅针对板换产品）", false, true),
           new Field("sqr", "申请人", false, false),
           new Field("sqsj", "申请时间", false, false),
           new Field("gh", "工号", false, false),
@@ -148,6 +149,8 @@ final class OaQuotationFields {
           new Field("mxs", "40只柜可装数量", true, false));
   static final List<Field> SC020_MAIN =
       List.of(
+          new Field("sfzbxqjzdbhcp", "是否招标需求（仅针对板换产品）", false, true),
+          new Field("ywycbqrsfzbxqjzdbhc", "业务员初步确认是否招标需求（仅针对板换产品）", false, true),
           new Field("sqr", "申请人", false, false),
           new Field("sqsj", "申请时间", false, false),
           new Field("gh", "工号", false, false),

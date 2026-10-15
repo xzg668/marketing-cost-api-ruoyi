@@ -10,31 +10,31 @@ import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
-import com.sanhua.marketingcost.entity.PackageComponentPrice;
-import com.sanhua.marketingcost.entity.PackageComponentPriceDetail;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.entity.MakePartPriceGapItem;
+import com.sanhua.marketingcost.entity.PackageComponentPrice;
+import com.sanhua.marketingcost.entity.PackageComponentPriceDetail;
+import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
-import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.entity.QuoteCostingWorkspace;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
-import com.sanhua.marketingcost.mapper.PackageComponentPriceDetailMapper;
-import com.sanhua.marketingcost.mapper.PackageComponentPriceMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceGapItemMapper;
+import com.sanhua.marketingcost.mapper.PackageComponentPriceDetailMapper;
+import com.sanhua.marketingcost.mapper.PackageComponentPriceMapper;
+import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
-import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
-import java.time.LocalDateTime;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -104,12 +104,25 @@ class PricePrepareCurrentStateServiceImplTest {
   }
 
   @Test
+  void olderSlowPreparationCannotReplaceNewerCurrentBatch() {
+    var older = batch(20L, "OLDER", "SUCCESS", 0);
+    var newer = batch(21L, "NEWER", "SUCCESS", 0);
+    var workspace = workspace("NEWER");
+    when(workspaceService.lockOrCreate(any(), any(), any(), any(), any())).thenReturn(workspace);
+    when(batchMapper.selectOne(any())).thenReturn(newer);
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.finalizeBatch(older))
+        .isInstanceOf(org.springframework.dao.ConcurrencyFailureException.class)
+        .hasMessageContaining("旧任务结果不再覆盖");
+    assertThat(workspace.getCurrentPrepareNo()).isEqualTo("NEWER");
+    org.mockito.Mockito.verifyNoInteractions(itemMapper, invalidationService);
+  }
+
+  @Test
   @DisplayName("成功候选原子切为当前最终价格并只在此时作废旧试算")
   void successfulCandidatePromotesWorkspace() {
     PricePrepareBatch batch = batch(20L, "PPR-NEW", "SUCCESS", 0);
     QuoteCostingWorkspace workspace = workspace("PPR-OLD");
-    when(workspaceService.lockOrCreate(any(), any(), any(), any(), any()))
-        .thenReturn(workspace);
+    when(workspaceService.lockOrCreate(any(), any(), any(), any(), any())).thenReturn(workspace);
 
     service.finalizeBatch(batch);
 
@@ -122,8 +135,7 @@ class PricePrepareCurrentStateServiceImplTest {
     assertThat(published.getCurrentStep()).isEqualTo("COST_RUN");
     assertThat(published.getGapCount()).isZero();
     verify(itemMapper, times(2)).update(any(), any());
-    verify(invalidationService)
-        .invalidateProduct("OA-1", 101L, "TOP-1", "2026-08");
+    verify(invalidationService).invalidateProduct("OA-1", 101L, "TOP-1", "2026-08");
   }
 
   @Test
@@ -131,8 +143,7 @@ class PricePrepareCurrentStateServiceImplTest {
   void failedCandidateKeepsPreviousPointer() {
     PricePrepareBatch batch = batch(21L, "PPR-FAILED", "PARTIAL", 3);
     QuoteCostingWorkspace workspace = workspace("PPR-OLD");
-    when(workspaceService.lockOrCreate(any(), any(), any(), any(), any()))
-        .thenReturn(workspace);
+    when(workspaceService.lockOrCreate(any(), any(), any(), any(), any())).thenReturn(workspace);
     PricePrepareItem makeItem = new PricePrepareItem();
     makeItem.setItemType("MAKE_PART");
     makeItem.setMaterialCode("MAKE-1");
@@ -153,6 +164,13 @@ class PricePrepareCurrentStateServiceImplTest {
     verify(itemMapper).delete(any());
     verify(makePartGapMapper).delete(any());
     verify(makePartRowMapper).delete(any());
+    var makeGuard = ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.Wrapper.class);
+    verify(makePartRowMapper).selectList(makeGuard.capture());
+    assertThat(makeGuard.getValue().getSqlSegment())
+        .contains(
+            "NOT EXISTS",
+            "MAKE_PART_PRICE",
+            "referenced.calc_batch_id=lp_make_part_price_calc_row.calc_batch_id");
     verify(gapMapper, times(2)).update(any(), any());
     verify(invalidationService, never()).invalidateProduct(any(), any(), any(), any());
   }
@@ -163,8 +181,7 @@ class PricePrepareCurrentStateServiceImplTest {
     PricePrepareBatch current = batch(30L, "PPR-NEW", "SUCCESS", 0);
     PricePrepareBatch old = batch(10L, "PPR-TEMP", "PARTIAL", 2);
     QuoteCostingWorkspace workspace = workspace("PPR-OLD");
-    when(workspaceService.lockOrCreate(any(), any(), any(), any(), any()))
-        .thenReturn(workspace);
+    when(workspaceService.lockOrCreate(any(), any(), any(), any(), any())).thenReturn(workspace);
     when(batchMapper.selectList(any())).thenReturn(List.of(old));
     when(versionMapper.selectList(any())).thenReturn(List.of());
 
@@ -183,8 +200,7 @@ class PricePrepareCurrentStateServiceImplTest {
     QuoteCostingWorkspace workspace = workspace("PPR-HISTORY");
     QuoteCostRunVersion version = new QuoteCostRunVersion();
     version.setPricePrepareNo("PPR-HISTORY");
-    when(workspaceService.lockOrCreate(any(), any(), any(), any(), any()))
-        .thenReturn(workspace);
+    when(workspaceService.lockOrCreate(any(), any(), any(), any(), any())).thenReturn(workspace);
     when(batchMapper.selectList(any())).thenReturn(List.of(old));
     when(versionMapper.selectList(any())).thenReturn(List.of(version));
 
@@ -220,6 +236,33 @@ class PricePrepareCurrentStateServiceImplTest {
 
     verify(gapMapper, never()).delete(any());
     verify(batchMapper, never()).delete(any());
+  }
+
+  @Test
+  void deletingOldBatchMustNotDeleteLinkedEvidenceReferencedByAnotherBatch() {
+    var current = batch(30L, "PPR-NEW", "SUCCESS", 0);
+    var old = batch(10L, "PPR-OLD", "SUCCESS", 0);
+    when(workspaceService.lockOrCreate(any(), any(), any(), any(), any()))
+        .thenReturn(workspace("PPR-OLD"));
+    when(batchMapper.selectList(any())).thenReturn(List.of(old));
+    var item = new PricePrepareItem();
+    item.setResultRefType("LINKED_PRICE");
+    item.setResultRefId(1724L);
+    when(itemMapper.selectList(any())).thenReturn(List.of(item));
+    service.finalizeBatch(current);
+    var guard = ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.Wrapper.class);
+    verify(linkedCalcItemMapper).delete(guard.capture());
+    assertThat(guard.getValue().getSqlSegment())
+        .contains(
+            "NOT EXISTS",
+            "retained.result_ref_id=lp_price_linked_calc_item.id",
+            "retained.prepare_no <>");
+    assertThat(
+            ((com.baomidou.mybatisplus.core.conditions.AbstractWrapper<?, ?, ?>) guard.getValue())
+                .getParamNameValuePairs()
+                .values())
+        .contains("PPR-OLD", 1724L);
+    verify(batchMapper).delete(any());
   }
 
   private PricePrepareBatch batch(Long id, String prepareNo, String status, int gapCount) {

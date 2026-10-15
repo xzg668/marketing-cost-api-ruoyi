@@ -7,8 +7,8 @@ import com.sanhua.marketingcost.dto.ingest.QuoteIngestRequest;
 /**
  * 报价单接入字段编码绑定器。
  *
- * <p>Excel 隐藏 Sheet 和未来泛微 payload 都必须使用同一套 field_code，这里集中维护字段编码到
- * QuoteIngestRequest 的绑定关系，避免不同入口各自猜字段。
+ * <p>Excel 隐藏 Sheet 和未来泛微 payload 都必须使用同一套 field_code，这里集中维护字段编码到 QuoteIngestRequest
+ * 的绑定关系，避免不同入口各自猜字段。
  */
 final class QuoteIngestFieldBinder {
   private QuoteIngestFieldBinder() {}
@@ -118,6 +118,9 @@ final class QuoteIngestFieldBinder {
         return true;
       case "goldPrice":
         header.setGoldPrice(value);
+        return true;
+      case "boardTender":
+        header.setBoardTender(parseBoardTender(value));
         return true;
       case "sus304Price":
         header.setSus304Price(value);
@@ -267,6 +270,13 @@ final class QuoteIngestFieldBinder {
     } catch (NumberFormatException ex) {
       return null;
     }
+  }
+
+  static Boolean parseBoardTender(String value) {
+    Boolean result = parseBoolean(value);
+    if (result == null && trimToNull(value) != null)
+      throw new IllegalArgumentException("最终是否招标需求必须为是、否或空值");
+    return result;
   }
 
   private static Boolean parseBoolean(String value) {

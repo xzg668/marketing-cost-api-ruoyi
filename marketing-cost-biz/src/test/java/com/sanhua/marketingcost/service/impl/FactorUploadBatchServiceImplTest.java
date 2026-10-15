@@ -40,8 +40,7 @@ class FactorUploadBatchServiceImplTest {
 
   @BeforeAll
   static void initTableInfo() {
-    MapperBuilderAssistant assistant =
-        new MapperBuilderAssistant(new MybatisConfiguration(), "");
+    MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
     TableInfoHelper.initTableInfo(assistant, FactorUploadBatch.class);
     TableInfoHelper.initTableInfo(assistant, FactorRowRef.class);
   }
@@ -52,22 +51,29 @@ class FactorUploadBatchServiceImplTest {
     rowRefMapper = mock(FactorRowRefMapper.class);
     service = new FactorUploadBatchServiceImpl(batchMapper, rowRefMapper);
 
-    doAnswer(invocation -> {
-      FactorUploadBatch batch = invocation.getArgument(0);
-      batch.setId(batch.getId() == null ? 9001L : batch.getId());
-      return 1;
-    }).when(batchMapper).insert(any(FactorUploadBatch.class));
-    doAnswer(invocation -> {
-      FactorRowRef rowRef = invocation.getArgument(0);
-      rowRef.setId(rowRef.getId() == null ? 3001L : rowRef.getId());
-      return 1;
-    }).when(rowRefMapper).insert(any(FactorRowRef.class));
+    doAnswer(
+            invocation -> {
+              FactorUploadBatch batch = invocation.getArgument(0);
+              batch.setId(batch.getId() == null ? 9001L : batch.getId());
+              return 1;
+            })
+        .when(batchMapper)
+        .insert(any(FactorUploadBatch.class));
+    doAnswer(
+            invocation -> {
+              FactorRowRef rowRef = invocation.getArgument(0);
+              rowRef.setId(rowRef.getId() == null ? 3001L : rowRef.getId());
+              return 1;
+            })
+        .when(rowRefMapper)
+        .insert(any(FactorRowRef.class));
   }
 
   @Test
   @DisplayName("createFactorBatch：每次上传都生成新批次，内容 hash 相同也不复用批次")
   void createFactorBatchAlwaysCreatesNewBatch() {
-    FactorWorkbookParseResult workbook = workbook(row(64, "64", "SUS304全名", "SUS304", "出厂价", "16.40"));
+    FactorWorkbookParseResult workbook =
+        workbook(row(64, "64", "SUS304全名", "SUS304", "出厂价", "16.40"));
     FactorUploadBatchCreateRequest request = request(workbook);
 
     FactorUploadBatch first = service.createFactorBatch(request);
@@ -88,7 +94,8 @@ class FactorUploadBatchServiceImplTest {
   @Test
   @DisplayName("createFactorBatch：记录导入用途和生效策略")
   void createFactorBatchPersistsPurposeAndEffectiveStrategy() {
-    FactorWorkbookParseResult workbook = workbook(row(64, "64", "SUS304全名", "SUS304", "出厂价", "16.40"));
+    FactorWorkbookParseResult workbook =
+        workbook(row(64, "64", "SUS304全名", "SUS304", "出厂价", "16.40"));
     FactorUploadBatchCreateRequest request = request(workbook);
     request.setImportPurpose("LINKED_APPEND_ONLY");
     request.setEffectiveStrategy("APPEND_ONLY");
@@ -105,7 +112,8 @@ class FactorUploadBatchServiceImplTest {
   @Test
   @DisplayName("saveRowRefs：即使身份和月度价格来自复用结果，也保存本次 sheet 行号映射")
   void saveRowRefsPersistsCurrentUploadRowMapping() {
-    FactorWorkbookParseResult workbook = workbook(row(64, "64", "SUS304全名", "SUS304", "出厂价", "16.40"));
+    FactorWorkbookParseResult workbook =
+        workbook(row(64, "64", "SUS304全名", "SUS304", "出厂价", "16.40"));
     FactorMonthlyPriceUpsertResult upsertResult = upsertRows(rowResult("影响因素", 64, 100L, 200L));
     when(rowRefMapper.selectOne(any(Wrapper.class))).thenReturn(null);
     when(batchMapper.selectById(eq(9001L))).thenReturn(batch(9001L));
@@ -139,7 +147,8 @@ class FactorUploadBatchServiceImplTest {
   @Test
   @DisplayName("saveRowRefs：同一批次同 sheet 行号再次保存时更新原映射，不重复插入")
   void saveRowRefsUpdatesExistingMappingInSameBatch() {
-    FactorWorkbookParseResult workbook = workbook(row(64, "64", "SUS304全名", "SUS304", "出厂价", "16.80"));
+    FactorWorkbookParseResult workbook =
+        workbook(row(64, "64", "SUS304全名", "SUS304", "出厂价", "16.80"));
     FactorMonthlyPriceUpsertResult upsertResult = upsertRows(rowResult("影响因素", 64, 101L, 201L));
     FactorRowRef existing = new FactorRowRef();
     existing.setId(3001L);
@@ -182,7 +191,8 @@ class FactorUploadBatchServiceImplTest {
   @Test
   @DisplayName("saveRowRefs：缺少身份或月度价格 id 时跳过并把批次置为失败")
   void saveRowRefsSkipsInvalidRowResult() {
-    FactorWorkbookParseResult workbook = workbook(row(64, "64", "SUS304全名", "SUS304", "出厂价", "16.40"));
+    FactorWorkbookParseResult workbook =
+        workbook(row(64, "64", "SUS304全名", "SUS304", "出厂价", "16.40"));
     FactorMonthlyPriceUpsertResult upsertResult = upsertRows(rowResult("影响因素", 64, null, 200L));
     when(batchMapper.selectById(eq(9001L))).thenReturn(batch(9001L));
 
@@ -227,10 +237,7 @@ class FactorUploadBatchServiceImplTest {
   }
 
   private FactorMonthlyPriceUpsertResult.RowResult rowResult(
-      String sheetName,
-      Integer rowNumber,
-      Long factorIdentityId,
-      Long factorMonthlyPriceId) {
+      String sheetName, Integer rowNumber, Long factorIdentityId, Long factorMonthlyPriceId) {
     FactorMonthlyPriceUpsertResult.RowResult row = new FactorMonthlyPriceUpsertResult.RowResult();
     row.setSourceSheetName(sheetName);
     row.setSourceRowNumber(rowNumber);
@@ -270,5 +277,20 @@ class FactorUploadBatchServiceImplTest {
     row.setPriceSource(priceSource);
     row.setPrice(new BigDecimal(price));
     return row;
+  }
+
+  @Test
+  void publicFactorKeepsSourceWithoutFabricatingMonthlyPriceId() {
+    var workbook = workbook(row(2, "1", "铜", "1#Cu", "平均价", "109.114"));
+    var reference = rowResult("影响因素", 2, 100L, null);
+    reference.setMonthlyPriceAction("FINANCE_REFERENCE");
+    when(batchMapper.selectById(9001L)).thenReturn(batch(9001L));
+    var result = service.saveRowRefs(9001L, workbook, upsertRows(reference));
+    assertThat(result.getErrors()).isEmpty();
+    var saved = ArgumentCaptor.forClass(FactorRowRef.class);
+    verify(rowRefMapper).insert(saved.capture());
+    assertThat(saved.getValue().getFactorIdentityId()).isEqualTo(100L);
+    assertThat(saved.getValue().getFactorMonthlyPriceId()).isNull();
+    assertThat(saved.getValue().getPrice()).isEqualByComparingTo("109.114");
   }
 }

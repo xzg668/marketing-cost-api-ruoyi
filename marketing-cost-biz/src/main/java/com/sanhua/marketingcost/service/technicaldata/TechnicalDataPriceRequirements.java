@@ -10,6 +10,7 @@ import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService;
 import com.sanhua.marketingcost.service.PricePrepareService;
+import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -81,6 +82,7 @@ public class TechnicalDataPriceRequirements {
 
   private TechnicalDataPriceRequirementsResponse resolve(QuoteTechTask task, QuoteTechProduct product, Map<String, Set<String>> demands, List<String> issues) {
     var now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
+    var scenario = PricePrepareScenarioContext.oaLocked(product.getOaFormItemId(), task.getApplicableOrgCode());
     List<TechnicalDataPriceRequirement> result = new ArrayList<>();
     for (var demand : demands.entrySet()) {
       String code = demand.getKey();
@@ -97,12 +99,12 @@ public class TechnicalDataPriceRequirements {
       BigDecimal price = null;
       try {
         var resolved = prices.calculateMaterialUnitPrice(code, product.getAccountingMonth(), now.toLocalDate(), now,
-            task.getOaNo(), task.getBusinessUnitType(), null);
+            task.getOaNo(), task.getBusinessUnitType(), scenario);
         if (resolved == null) throw new IllegalStateException("取价未返回结果");
         price = resolved.getUnitPrice();
         if ("OK".equals(resolved.getStatus()) && price != null && price.signum() > 0) {
           status = "AVAILABLE";
-        } else if (price == null && Set.of("MISSING_PRICE", "MISSING_ROUTE").contains(resolved.getStatus())) {
+        } else if (price == null && "MISSING_PRICE".equals(resolved.getStatus())) {
           status = "MISSING";
         } else {
           status = "ERROR";

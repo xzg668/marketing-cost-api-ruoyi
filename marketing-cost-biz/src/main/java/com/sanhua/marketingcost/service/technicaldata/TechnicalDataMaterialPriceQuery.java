@@ -5,6 +5,7 @@ import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent
 import com.sanhua.marketingcost.entity.QuoteTechTask;
 import com.sanhua.marketingcost.entity.QuoteTechProduct;
 import com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService;
+import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkContext;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
@@ -37,21 +38,23 @@ public class TechnicalDataMaterialPriceQuery {
         for (var scrap : row.evidence().scrapMappings()) demands.putIfAbsent(scrap.materialNo(), "SCRAP");
       }
     }
-    return check(context.oaNo(), context.oaFormItemId(), context.accountingMonth(), context.businessUnitType(), demands);
+    return check(context.oaNo(), context.oaFormItemId(), context.accountingMonth(), context.businessUnitType(), context.applicableOrgCode(), demands);
   }
 
   public List<PriceRequirement> check(QuoteTechTask task, QuoteTechProduct product, Solder content) {
     if (content == null || content.items() == null) return List.of();
     var demands = new LinkedHashMap<String, String>();
     content.items().forEach(row -> demands.put(row.materialNo(), "SOLDER"));
-    return check(task.getOaNo(), product.getOaFormItemId(), product.getAccountingMonth(), task.getBusinessUnitType(), demands);
+    return check(task.getOaNo(), product.getOaFormItemId(), product.getAccountingMonth(), task.getBusinessUnitType(), task.getApplicableOrgCode(), demands);
   }
 
-  private List<PriceRequirement> check(String oaNo, Long itemId, String month, String businessUnit, Map<String, String> demands) {
+  private List<PriceRequirement> check(String oaNo, Long itemId, String month, String businessUnit, String orgCode, Map<String, String> demands) {
+    if (demands.isEmpty()) return List.of();
     LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
+    var scenario = PricePrepareScenarioContext.oaLocked(itemId, orgCode);
     return demands.entrySet().stream().map(entry -> {
       try {
-        var result = prices.calculateMaterialUnitPrice(entry.getKey(), month, now.toLocalDate(), now, oaNo, businessUnit, null);
+        var result = prices.calculateMaterialUnitPrice(entry.getKey(), month, now.toLocalDate(), now, oaNo, businessUnit, scenario);
         if (result == null) throw new IllegalStateException("取价服务未返回结果");
         return new PriceRequirement(entry.getKey(), entry.getValue(), result.getStatus(),
             result.getUnitPrice(), result.getPriceType(), result.getRemark());

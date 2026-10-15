@@ -606,11 +606,11 @@ class QuoteCostingWorkbenchServiceImplTest {
     assertThat(response.getTabs())
         .filteredOn(tab -> "PRICE_TYPE_CONFIRMATION".equals(tab.getCode()))
         .extracting("name", "status")
-        .containsExactly(org.assertj.core.groups.Tuple.tuple("价格类型识别", "DONE"));
+        .containsExactly(org.assertj.core.groups.Tuple.tuple("取价来源", "DONE"));
   }
 
   @Test
-  void priceTypeGapMakesPriceTypePartial() {
+  void missingCandidatesDoNotBlockPricePreparation() {
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
     when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
@@ -621,8 +621,9 @@ class QuoteCostingWorkbenchServiceImplTest {
 
     QuoteCostingWorkbenchResponse response = service.getWorkbench("OA-001", 10L);
 
-    assertThat(response.getWorkflowStatus().getPriceTypeConfirmationStatus()).isEqualTo("PARTIAL");
-    assertThat(response.getWorkflowStatus().getPricePrepareStatus()).isEqualTo("BLOCKED");
+    assertThat(response.getLatestPriceTypeRecognition().getGapCount()).isEqualTo(2);
+    assertThat(response.getWorkflowStatus().getPriceTypeConfirmationStatus()).isEqualTo("DONE");
+    assertThat(response.getWorkflowStatus().getPricePrepareStatus()).isEqualTo("PENDING");
   }
 
   @Test
@@ -855,10 +856,9 @@ class QuoteCostingWorkbenchServiceImplTest {
 
   private QuotePriceTypeRecognitionResponse recognition(int gaps) {
     QuotePriceTypeRecognitionSummary summary = new QuotePriceTypeRecognitionSummary();
-    summary.setReadyForPricePrepareCount(3);
-    summary.setConfiguredTypeCount(3 - gaps);
-    summary.setMissingTypeCount(gaps);
-    summary.setReferencePriceCount(2);
+    summary.setPriceableCount(3);
+    summary.setCandidateSourceCount(3 - gaps);
+    summary.setMissingSourceCount(gaps);
     QuotePriceTypeRecognitionResponse response = new QuotePriceTypeRecognitionResponse();
     response.setOaNo("OA-001");
     response.setOaFormItemId(10L);
