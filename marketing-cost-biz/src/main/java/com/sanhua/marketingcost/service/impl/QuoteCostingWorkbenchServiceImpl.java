@@ -38,6 +38,7 @@ import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.QuoteEffectiveBomCostingService;
 import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
 import com.sanhua.marketingcost.service.QuoteProductBomPreparationService;
+import com.sanhua.marketingcost.service.concurrent.RetryOnConcurrency;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingCostingFallbackService;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
@@ -134,14 +135,15 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @RetryOnConcurrency
   public QuoteCostingWorkbenchResponse launchWorkbench(String oaNo, Long oaFormItemId) {
+    oaFormItemMapper.selectForCostingWrite(oaFormItemId);
     OaForm form = requireForm(oaNo);
     OaFormItem item = requireItem(form, oaFormItemId);
     String productCode = QuoteProductIdentityUtils.resolveCostingCode(item);
     if (productCode == null) {
       throw new QuoteIngestException("当前产品行料号、型号和图号均为空，无法发起核算");
     }
-    oaFormMapper.selectIdForCostingUpdate(form.getOaNo());
     String periodMonth = CostPricingPeriodUtils.currentPricingMonth();
     // 用户明确发起或重新发起当前月核算时，旧的未确认试算不能继续显示为可确认。
     // 仅将同产品、同月份的未完成试算标记为 STALE，历史成功版本保持不变。

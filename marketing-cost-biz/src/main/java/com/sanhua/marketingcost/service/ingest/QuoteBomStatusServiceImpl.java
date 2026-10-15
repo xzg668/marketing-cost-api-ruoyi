@@ -195,6 +195,8 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     } else {
       try {
         u9 = u9BomGateway.read(scanContext(form, item, context, now));
+      } catch (org.springframework.dao.DataAccessException databaseFailure) {
+        throw databaseFailure;
       } catch (RuntimeException exception) {
         applyCheckFailure(status, "U9月度BOM查询失败：" + exceptionMessage(exception), now);
         return;
@@ -419,7 +421,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       throw new QuoteIngestException("U9月度BOM结果缺少快照ID");
     }
     QuoteBomMonthlySnapshot snapshot =
-        quoteBomMonthlySnapshotMapper.selectCurrentById(u9.monthlySnapshotId());
+        quoteBomMonthlySnapshotMapper.selectById(u9.monthlySnapshotId());
     if (snapshot == null || !StringUtils.hasText(snapshot.getSnapshotIdentityKey())) {
       throw new QuoteIngestException("U9月度BOM快照不存在或身份无效");
     }

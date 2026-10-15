@@ -42,7 +42,6 @@ import com.sanhua.marketingcost.service.settlement.BomByproductSettlementReadRes
 import com.sanhua.marketingcost.service.settlement.BomSettlementRowBuildEngine;
 import java.math.BigDecimal;
 import java.util.List;
-import java.util.Map;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -465,14 +464,20 @@ class QuoteEffectiveBomToCostingRowsTest {
     legacyCurrentRow.setId(801L);
     legacyCurrentRow.setManualModified(1);
     when(costingRowMapper.selectList(any())).thenReturn(List.of(legacyCurrentRow));
+    var sub = new com.sanhua.marketingcost.entity.BomCostingRowSubRef();
+    sub.setId(802L);
+    var source = new com.sanhua.marketingcost.entity.BomCostingRowSourceRef();
+    source.setId(803L);
+    when(subRefMapper.selectList(any())).thenReturn(List.of(sub));
+    when(sourceRefMapper.selectList(any())).thenReturn(List.of(source));
 
     QuoteBomCostingBuildResponse response =
         service.buildFromEffectiveBom(10L, "qeb_BUILD_1");
 
     assertThat(response.costingRowsWritten()).isOne();
-    verify(subRefMapper).delete(any());
-    verify(sourceRefMapper).delete(any());
-    verify(costingRowMapper).delete(any());
+    verify(subRefMapper).deleteBatchIds(List.of(802L));
+    verify(sourceRefMapper).deleteBatchIds(List.of(803L));
+    verify(costingRowMapper).deleteBatchIds(List.of(801L));
     verify(costingRowMapper).insert(any(BomCostingRow.class));
   }
 

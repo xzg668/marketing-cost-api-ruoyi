@@ -91,6 +91,9 @@ class ProductCostingPipelineImplTest {
     form.setOaNo("OA-1");
     when(formMapper.selectOne(any())).thenReturn(form);
     when(revisionService.currentRevision(any(), any(), eq(MONTH))).thenReturn("SOURCE-1");
+    var guard = mock(com.sanhua.marketingcost.service.costing.ProductCostingExecutionGuard.class);
+    when(guard.execute(any(), any()))
+        .thenAnswer(call -> ((java.util.function.Supplier<?>) call.getArgument(1)).get());
     pipeline =
         new ProductCostingPipelineImpl(
             workbenchService,
@@ -103,7 +106,8 @@ class ProductCostingPipelineImplTest {
                 workspaceService, itemMapper, versionMapper, algorithmVersion()),
             new ProductCostingFailurePolicy(),
             technicalSources,
-            mock(com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService.class));
+            mock(com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService.class),
+            guard);
     pipeline.setOaWorkflowAccess(
         mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
     when(itemMapper.selectById(11L)).thenReturn(item(null));
@@ -486,7 +490,16 @@ class ProductCostingPipelineImplTest {
   }
 
   @Test
+  void newProductSkipsReuseValidationButStillChecksRevisionBeforeCostPublication() {
+    stubReadyStages(0);
+    assertThat(pipeline.execute(request(false)).getPipelineStatus()).isEqualTo("SUCCESS");
+    verify(revisionService, org.mockito.Mockito.times(1)).currentRevision(any(), any(), eq(MONTH));
+    verify(costService).runToSuccess(eq("OA-1"), eq(11L), any(), any());
+  }
+
+  @Test
   void transientRevisionFailureReturnsRetryableInputFailure() {
+    when(workspaceService.find(11L, MONTH)).thenReturn(Optional.of(workspace()));
     when(revisionService.currentRevision(any(), any(), eq(MONTH)))
         .thenThrow(new org.springframework.dao.QueryTimeoutException("读取输入超时"));
     var result = pipeline.execute(request(false));

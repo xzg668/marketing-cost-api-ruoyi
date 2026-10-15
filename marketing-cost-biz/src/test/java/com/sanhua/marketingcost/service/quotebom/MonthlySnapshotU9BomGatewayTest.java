@@ -9,8 +9,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.sanhua.marketingcost.entity.QuoteBomMonthlySnapshot;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
+import com.sanhua.marketingcost.entity.QuoteBomMonthlySnapshot;
 import com.sanhua.marketingcost.mapper.QuoteBomMonthlySnapshotMapper;
 import java.time.Clock;
 import java.time.Instant;
@@ -33,7 +33,7 @@ class MonthlySnapshotU9BomGatewayTest {
   @BeforeEach
   void setUp() {
     gateway = new MonthlySnapshotU9BomGateway(mapper, live, details, clock);
-    when(details.loadCurrent(any())).thenReturn(List.of(new BomRawHierarchy()));
+    when(details.load(any())).thenReturn(List.of(new BomRawHierarchy()));
   }
 
   @Test
@@ -86,11 +86,13 @@ class MonthlySnapshotU9BomGatewayTest {
     old.setBomBatchId("OLD-DELETED-BATCH");
     when(mapper.selectU9MonthlyByIdentity(any())).thenReturn(old);
     when(mapper.selectU9MonthlyByIdentityForUpdate(any())).thenReturn(old);
-    when(details.loadCurrent(301L)).thenReturn(List.of());
-    org.mockito.Mockito.doThrow(new MonthlyBomSnapshotDetailService.SourceUnavailableException("旧批次已不存在"))
-        .when(details).captureU9(eq(301L), any(), eq("OLD-DELETED-BATCH"));
-    when(live.readLive(any())).thenReturn(
-        CurrentU9BomResult.available("U9", "NEW", "CURRENT-BATCH", 4));
+    when(details.load(301L)).thenReturn(List.of());
+    org.mockito.Mockito.doThrow(
+            new MonthlyBomSnapshotDetailService.SourceUnavailableException("旧批次已不存在"))
+        .when(details)
+        .captureU9(eq(301L), any(), eq("OLD-DELETED-BATCH"));
+    when(live.readLive(any()))
+        .thenReturn(CurrentU9BomResult.available("U9", "NEW", "CURRENT-BATCH", 4));
     when(mapper.retireUnavailableU9MonthlySnapshot(eq(301L), any(), any())).thenReturn(1);
     doAnswer(invocation -> {
       QuoteBomMonthlySnapshot claim = invocation.getArgument(0);
@@ -154,15 +156,15 @@ class MonthlySnapshotU9BomGatewayTest {
   }
 
   @Test
-  void concurrentSourceSwitchReusesWinnerInsteadOfCreatingAnotherSnapshot() {
+  void concurrentSourceSwitchRequiresFreshTransactionBeforeReusingWinner() {
     var winner = stored(106L, "SUCCESS");
     winner.setBomBatchId("U9-WINNER");
     when(mapper.selectU9MonthlyByIdentity(any())).thenReturn(stored(102L, "NOT_FOUND"));
     when(live.readLive(any())).thenReturn(CurrentU9BomResult.available("U9", "NEW", "U9-LATER", 5));
     when(mapper.selectU9MonthlyByIdentityForUpdate(any())).thenReturn(winner);
-    var result = gateway.read(context("OA-NEW", 16L, "2026-08"));
-    assertThat(result.monthlySnapshotId()).isEqualTo(106L);
-    assertThat(result.syncBatchId()).isEqualTo("U9-WINNER");
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+        () -> gateway.read(context("OA-NEW", 16L, "2026-08")))
+        .isInstanceOf(org.springframework.dao.ConcurrencyFailureException.class);
     verify(mapper, never()).insertU9MonthlyClaim(any());
     verify(mapper, never()).retireMissingU9MonthlySnapshot(any(), any(), any());
   }
@@ -186,16 +188,11 @@ class MonthlySnapshotU9BomGatewayTest {
   }
 
   @Test
-  void concurrentLoserWaitsForWinnerAndNeverRunsSecondLiveQuery() {
-    QuoteBomMonthlySnapshot winner = stored(104L, "NOT_FOUND");
-    winner.setErrorMessage("winner not found");
+  void concurrentLoserRestartsReadViewAndNeverRunsSecondLiveQuery() {
     when(mapper.insertU9MonthlyClaim(any())).thenReturn(0);
-    when(mapper.selectU9MonthlyByIdentityForUpdate(any())).thenReturn(winner);
-
-    CurrentU9BomResult result = gateway.read(context("OA-CONCURRENT", 14L, "2026-08"));
-
-    assertThat(result.status()).isEqualTo(CurrentU9BomResult.Status.NOT_FOUND);
-    assertThat(result.monthlySnapshotId()).isEqualTo(104L);
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> gateway.read(context("OA-CONCURRENT", 14L, "2026-08")))
+        .isInstanceOf(org.springframework.dao.ConcurrencyFailureException.class);
     verify(live, never()).readLive(any());
   }
 

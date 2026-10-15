@@ -28,6 +28,23 @@ class MaterialPriceRouterServiceTest {
   private final LocalDate date = LocalDate.of(2026,10,13);
   private final Scope scope = new Scope("COMMERCIAL","2026-10","210","M1");
 
+  @Test void batchUsesTheSameDecisionRulesAndRereadsOnTheNextCall() {
+    var fixed = new MaterialMaster(); fixed.setMaterialCode("M1"); fixed.setShapeAttr("外购件");
+    var make = new MaterialMaster(); make.setMaterialCode("M2"); make.setShapeAttr("制造件");
+    when(masters.selectList(any())).thenReturn(List.of(fixed, make));
+    when(sources.publicKindsBatch(any(), eq("2026-10"), isNull(), eq("COMMERCIAL"), eq("210"), eq(date)))
+        .thenReturn(List.of(new TechnicalPriceSourceMapper.MaterialKind("M1", "FIXED")))
+        .thenReturn(List.of(new TechnicalPriceSourceMapper.MaterialKind("M1", "LINKED")));
+    var before = router.listCandidatesBatch(List.of("M2", "M1", "M1"), "2026-10", date, "210", "COMMERCIAL");
+    assertThat(before.get("M1").getFirst().priceType()).isEqualTo(PriceTypeEnum.FIXED);
+    assertThat(before.get("M2").getFirst().priceType()).isEqualTo(PriceTypeEnum.MAKE);
+    var after = router.listCandidatesBatch(List.of("M1", "M2"), "2026-10", date, "210", "COMMERCIAL");
+    assertThat(after.get("M1").getFirst().priceType()).isEqualTo(PriceTypeEnum.LINKED);
+    verify(sources, times(2)).publicKindsBatch(eq(List.of("M1", "M2")), any(), any(), any(), any(), any());
+    verify(sources, never()).publicKinds(any(), any(), any(), any(), any(), any());
+    verify(configs, never()).insertDefaults(any(), any(), any());
+  }
+
   @Test void defaultOrderUsesDistinctSettlementFixedAndNeverInventsSettlementLinkedSource() {
     when(sources.publicKinds("M1","2026-10",null,"COMMERCIAL","210",date))
         .thenReturn(List.of("FIXED","SETTLE_FIXED","RANGE","LINKED","SETTLE_LINKED"));

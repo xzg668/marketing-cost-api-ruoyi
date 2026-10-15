@@ -63,7 +63,7 @@ public class CostRunResultWriterImpl implements CostRunResultWriter {
 
   private void overwritePartItems(CostRunObjectResult result, String oaNo, String productCode) {
     String costRunNo = result.getContext().getCostRunNo().trim();
-    costRunPartItemMapper.deleteQuoteItemsByCostRunNo(costRunNo);
+    costRunPartItemMapper.deleteQuoteVersionItems(oaNo, result.getContext().getOaFormItemId(), costRunNo);
     List<CostRunPartItemDto> partItems = result.getPartItems();
     if (partItems == null || partItems.isEmpty()) {
       return;
@@ -100,7 +100,7 @@ public class CostRunResultWriterImpl implements CostRunResultWriter {
 
   private void overwriteCostItems(CostRunObjectResult result, String oaNo, String productCode) {
     String costRunNo = result.getContext().getCostRunNo().trim();
-    costRunCostItemMapper.deleteQuoteItemsByCostRunNo(costRunNo);
+    costRunCostItemMapper.deleteQuoteVersionItems(oaNo, result.getContext().getOaFormItemId(), costRunNo);
     List<CostRunCostItemDto> costItems = result.getCostItems();
     if (costItems == null || costItems.isEmpty()) {
       return;

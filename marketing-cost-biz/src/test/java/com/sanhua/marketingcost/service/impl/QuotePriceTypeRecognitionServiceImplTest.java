@@ -72,6 +72,13 @@ class QuotePriceTypeRecognitionServiceImplTest {
     bomCostingRowSubRefMapper = mock(BomCostingRowSubRefMapper.class);
     materialMasterMapper = mock(MaterialMasterMapper.class);
     materialPriceRouterService = mock(MaterialPriceRouterService.class);
+    when(materialPriceRouterService.listCandidatesBatch(any(), any(), any(), any(), any())).thenAnswer(call -> {
+      var result = new java.util.LinkedHashMap<String, List<PriceTypeRoute>>();
+      for (String code : (java.util.Collection<String>) call.getArgument(0))
+        result.put(code, materialPriceRouterService.resolve(code, call.getArgument(1), call.getArgument(2), call.getArgument(3), call.getArgument(4)).stream().toList());
+      return result;
+    });
+
     itemClassifier = mock(PricePrepareItemClassifier.class);
     packageSnapshotService = mock(PackageComponentSnapshotService.class);
     makePartPriceGenerationService = mock(MakePartPriceGenerationService.class);

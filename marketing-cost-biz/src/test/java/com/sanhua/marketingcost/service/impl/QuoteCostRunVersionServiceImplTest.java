@@ -3,7 +3,6 @@ package com.sanhua.marketingcost.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -17,7 +16,6 @@ import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DuplicateKeyException;
 
 @DisplayName("QWB-06 成本试算版本服务")
@@ -31,56 +29,38 @@ class QuoteCostRunVersionServiceImplTest {
   }
 
   @Test
-  @DisplayName("cost_run_no 按当前时间前缀序号递增，version_no 按产品行递增 Vn")
+  @DisplayName("cost_run_no 跨进程唯一，version_no 保留每日序号及产品 Vn")
   void generatorBuildsRunNoAndVersionNo() {
     QuoteCostRunVersionMapper mapper = mock(QuoteCostRunVersionMapper.class);
-    when(mapper.selectCount(any())).thenReturn(0L, 4L, 2L);
-    QuoteCostRunVersionNoGenerator generator = new QuoteCostRunVersionNoGeneratorImpl(mapper);
+    when(mapper.selectCount(any())).thenReturn(2L);
+    var sequence = mock(com.sanhua.marketingcost.service.costing.QuoteCostVersionSequence.class);
+    when(sequence.next(any(), any())).thenReturn(5L);
+    QuoteCostRunVersionNoGenerator generator =
+        new QuoteCostRunVersionNoGeneratorImpl(mapper, sequence);
 
     String costRunNo = generator.nextCostRunNo();
     String versionNo = generator.nextVersionNo(101L, " P-001 ");
 
-    assertThat(costRunNo).startsWith("TRIAL-").endsWith("-0001");
+    assertThat(costRunNo).matches("TRIAL-[0-9]{8}-[0-9]{6}-[a-f0-9]{32}");
+    assertThat(generator.nextCostRunNo()).isNotEqualTo(costRunNo);
     assertThat(versionNo).startsWith("COST-").endsWith("-0005-V3");
   }
 
   @Test
-  @DisplayName("数据库唯一约束冲突时重新生成 cost_run_no 并重试")
-  void createTrialRetriesWhenCostRunNoConflicts() {
+  @DisplayName("意外唯一键冲突原样退出，不在同一事务中反复写入")
+  void unexpectedUniqueConflictPropagates() {
     QuoteCostRunVersionMapper mapper = mock(QuoteCostRunVersionMapper.class);
     QuoteCostRunVersionNoGenerator generator = mock(QuoteCostRunVersionNoGenerator.class);
-    when(generator.nextCostRunNo()).thenReturn("RUN-1", "RUN-2");
+    when(generator.nextCostRunNo()).thenReturn("RUN-1");
     when(mapper.insert(any(QuoteCostRunVersion.class)))
-        .thenThrow(new DuplicateKeyException("duplicate"))
-        .thenAnswer(invocation -> {
-          QuoteCostRunVersion version = invocation.getArgument(0);
-          version.setId(88L);
-          return 1;
-        });
-    QuoteCostRunVersionServiceImpl service =
-        new QuoteCostRunVersionServiceImpl(mapper, generator, algorithmVersion());
-
-    QuoteCostRunVersion version =
-        service.createTrial(
-            " OA-001 ",
-            101L,
-            " P-001 ",
-            "2026-06",
-            "2026-06",
-            "PPR-1",
-            "COMMERCIAL");
-
-    assertThat(version.getId()).isEqualTo(88L);
-    assertThat(version.getCostRunNo()).isEqualTo("RUN-2");
-    assertThat(version.getOaNo()).isEqualTo("OA-001");
-    assertThat(version.getProductCode()).isEqualTo("P-001");
-    assertThat(version.getAlgorithmVersion())
-        .isEqualTo(CostingAlgorithmVersionProvider.DEFAULT_VERSION);
-    assertThat(version.getStatus()).isEqualTo("TRIAL");
-    verify(generator, times(2)).nextCostRunNo();
-    ArgumentCaptor<QuoteCostRunVersion> captor = ArgumentCaptor.forClass(QuoteCostRunVersion.class);
-    verify(mapper, times(2)).insert(captor.capture());
-    assertThat(captor.getAllValues().get(1).getPricePrepareNo()).isEqualTo("PPR-1");
+        .thenThrow(new DuplicateKeyException("duplicate"));
+    var service = new QuoteCostRunVersionServiceImpl(mapper, generator, algorithmVersion());
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () ->
+                service.createTrial(
+                    "OA-001", 101L, "P-001", "2026-06", "2026-06", "PPR-1", "COMMERCIAL"))
+        .isInstanceOf(DuplicateKeyException.class);
+    verify(mapper).insert(any(QuoteCostRunVersion.class));
   }
 
   @Test

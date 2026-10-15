@@ -33,6 +33,7 @@ import com.sanhua.marketingcost.service.PricePrepareReadinessService;
 import com.sanhua.marketingcost.service.PricePrepareService;
 import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
 import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
+import com.sanhua.marketingcost.service.concurrent.RetryOnConcurrency;
 import com.sanhua.marketingcost.service.financefactor.QuoteFinanceFactorReader;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.pricing.FactorPriceUnit;
@@ -130,10 +131,11 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   @Transactional(
       rollbackFor = Exception.class,
       isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
+  @RetryOnConcurrency
   public QuotePricePrepareWorkbenchResponse generate(
       String oaNo, Long oaFormItemId, QuotePricePrepareGenerateRequest request) {
     Scope scope =
-        resolveScope(oaNo, oaFormItemId, request == null ? null : request.getPeriodMonth());
+        resolveScope(oaNo, oaFormItemId, request == null ? null : request.getPeriodMonth(), true);
     verifyPriceRecognition(scope);
     if (request != null && request.getScenarioType() == QuotePriceScenarioType.FINANCE_QUOTE_BASE) {
       if (request.getVariableOverrides() != null && !request.getVariableOverrides().isEmpty()) {
@@ -639,6 +641,11 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   }
 
   private Scope resolveScope(String oaNo, Long oaFormItemId, String periodMonth) {
+    return resolveScope(oaNo, oaFormItemId, periodMonth, false);
+  }
+
+  private Scope resolveScope(String oaNo, Long oaFormItemId, String periodMonth, boolean lock) {
+    if (lock) oaFormItemMapper.selectForCostingWrite(oaFormItemId);
     String oaNoValue = requireText(oaNo, "报价单号");
     OaForm form =
         oaFormMapper.selectOne(Wrappers.<OaForm>lambdaQuery().eq(OaForm::getOaNo, oaNoValue));

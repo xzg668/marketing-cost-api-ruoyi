@@ -23,12 +23,24 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 public class QuoteCostingPreparationService {
   public record Request(Long itemId, String periodMonth) {}
-  public record State(long formId, String status, String oaState, boolean canCost,
-      boolean hasSupplement, int totalProducts, String message) {}
-  public record Outcome(State preparation, List<ProductCostingResult> checks,
-      QuoteBatchCostRunResponse batch, ProductCostingResult product) {}
 
-  private final com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaSubmissionLifecycle lifecycle;
+  public record State(
+      long formId,
+      String status,
+      String oaState,
+      boolean canCost,
+      boolean hasSupplement,
+      int totalProducts,
+      String message) {}
+
+  public record Outcome(
+      State preparation,
+      List<ProductCostingResult> checks,
+      QuoteBatchCostRunResponse batch,
+      ProductCostingResult product) {}
+
+  private final com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaSubmissionLifecycle
+      lifecycle;
   private final JdbcTemplate jdbc;
   private final OaWorkflowAccessPolicy access;
   private final ProductCostingPipeline pipeline;
@@ -73,13 +85,26 @@ public class QuoteCostingPreparationService {
     else if (view != null && !view.canCost()) {
       message = view.syncError() != null ? view.syncError() : "当前为" + view.label() + "，暂不能核算";
     }
-    boolean supplement = Boolean.TRUE.equals(jdbc.queryForObject(
-        "SELECT EXISTS(SELECT 1 FROM lp_quote_tech_task WHERE oa_form_id=? AND (? IS NULL OR oa_form_item_id=?))",
-        Boolean.class, formId, itemId, itemId));
-    return new State(formId, allowed ? "AVAILABLE" : "WAITING", view == null ? null : view.state(), allowed,
-        supplement || (itemId == null ? pendingProducts.count("ALL", null, null, null, oaNo) > 0
-            : pendingProducts.hasPendingItem(oaNo, itemId)),
-        itemId == null ? items.size() : 1, message);
+    boolean supplement =
+        Boolean.TRUE.equals(
+            jdbc.queryForObject(
+                "SELECT EXISTS(SELECT 1 FROM lp_quote_tech_task WHERE oa_form_id=? AND (? IS NULL"
+                    + " OR oa_form_item_id=?))",
+                Boolean.class,
+                formId,
+                itemId,
+                itemId));
+    return new State(
+        formId,
+        allowed ? "AVAILABLE" : "WAITING",
+        view == null ? null : view.state(),
+        allowed,
+        supplement
+            || (itemId == null
+                ? pendingProducts.count("ALL", null, null, null, oaNo) > 0
+                : pendingProducts.hasPendingItem(oaNo, itemId)),
+        itemId == null ? items.size() : 1,
+        message);
   }
 
   public Outcome prepareAndCost(String oaNo, Request request, String operatorName) {
@@ -111,12 +136,30 @@ public class QuoteCostingPreparationService {
     }
     if (checks.stream().anyMatch(check -> !"READY".equals(check.getPipelineStatus()))) {
       var current = state(oaNo, itemId);
-      return new Outcome(new State(formId, "WAITING_INPUT", current.oaState(), current.canCost(),
-          current.hasSupplement() || checks.stream().anyMatch(check -> check.getTechnicalDataCheck() != null
-              && check.getTechnicalDataCheck().modules().stream().anyMatch(module -> module.required())),
-          selectedItems.size(), itemId == null
-              ? "整单资料尚未齐全，请处理缺口；需补录的产品可到补录工作台分派"
-              : "本产品资料尚未齐全，请处理缺口；需补录时可到补录工作台分派"), checks, null, null);
+      long failed =
+          checks.stream().filter(check -> "FAILED".equals(check.getPipelineStatus())).count();
+      String message =
+          failed > 0
+              ? failed + " 个产品检查发生系统错误，请重试核算；具体原因见产品检查结果"
+              : itemId == null ? "整单资料尚未齐全，请处理缺口；需补录的产品可到补录工作台分派" : "本产品资料尚未齐全，请处理缺口；需补录时可到补录工作台分派";
+      return new Outcome(
+          new State(
+              formId,
+              failed > 0 ? "FAILED" : "WAITING_INPUT",
+              current.oaState(),
+              current.canCost(),
+              current.hasSupplement()
+                  || checks.stream()
+                      .anyMatch(
+                          check ->
+                              check.getTechnicalDataCheck() != null
+                                  && check.getTechnicalDataCheck().modules().stream()
+                                      .anyMatch(module -> module.required())),
+              selectedItems.size(),
+              message),
+          checks,
+          null,
+          null);
     }
     transaction.executeWithoutResult(status -> {
       jdbc.queryForObject("SELECT id FROM oa_form WHERE id=? AND deleted=0 FOR UPDATE", Long.class, formId);
@@ -124,9 +167,11 @@ public class QuoteCostingPreparationService {
       if (!items.equals(activeItems(formId)) || node != null && !node.equals(access.quoterNode(formId))) {
         throw new IllegalArgumentException("整单需求或报价员办理状态已变化，请重新检查");
       }
+      var currentContexts = checks.stream().map(check -> contexts.resolve(
+          new ProductCostingRequest(oaNo, check.getOaFormItemId(), month, operatorName, false))).toList();
+      var currentRevisions = contexts.resolveRevisions(currentContexts);
       for (var check : checks) {
-        var context = contexts.resolve(new ProductCostingRequest(oaNo, check.getOaFormItemId(), month, operatorName, false));
-        if (!Objects.equals(check.getSourceRevision(), contexts.resolveRevision(context).sourceRevision())) {
+        if (!Objects.equals(check.getSourceRevision(), currentRevisions.get(check.getOaFormItemId()))) {
           throw new IllegalArgumentException("产品 " + check.getProductCode() + " 的核算资料已变化，请重新检查");
         }
       }

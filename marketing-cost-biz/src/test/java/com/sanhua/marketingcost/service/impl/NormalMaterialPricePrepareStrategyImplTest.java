@@ -45,6 +45,19 @@ class NormalMaterialPricePrepareStrategyImplTest {
   @BeforeEach
   void setUp() {
     routerService = mock(MaterialPriceRouterService.class);
+    when(routerService.listCandidatesBatch(any(), any(), any(), any(), any())).thenAnswer(call -> {
+      var result = new java.util.LinkedHashMap<String, List<PriceTypeRoute>>();
+      for (String code : (java.util.Collection<String>) call.getArgument(0))
+        result.put(code, routerService.listCandidates(code, call.getArgument(1), call.getArgument(2), call.getArgument(3), call.getArgument(4)));
+      return result;
+    });
+    when(routerService.prepareCandidatesBatch(any(), any(), any(), any(), any())).thenAnswer(call -> {
+      var result = new java.util.LinkedHashMap<String, List<PriceTypeRoute>>();
+      ((java.util.Map<String, String>) call.getArgument(0)).forEach((code, title) ->
+        result.put(code, routerService.prepareCandidates(code, title, call.getArgument(1), call.getArgument(2), call.getArgument(3), call.getArgument(4))));
+      return result;
+    });
+
     linkedPriceEnsureService = mock(LinkedPriceEnsureService.class);
     fixedResolver = mock(PriceResolver.class);
     linkedResolver = mock(PriceResolver.class);

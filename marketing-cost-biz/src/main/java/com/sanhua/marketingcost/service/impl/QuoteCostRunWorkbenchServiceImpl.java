@@ -31,6 +31,7 @@ import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
 import com.sanhua.marketingcost.service.QuoteCostRunWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
+import com.sanhua.marketingcost.service.concurrent.RetryOnConcurrency;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
@@ -183,8 +184,10 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   @Transactional(
       rollbackFor = Exception.class,
       isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
+  @RetryOnConcurrency
   public QuoteCostRunWorkbenchResponse runToSuccess(
       String oaNo, Long oaFormItemId, QuoteCostRunTrialRequest request, String completedBy) {
+    oaFormItemMapper.selectForCostingWrite(oaFormItemId);
     request = request == null ? new QuoteCostRunTrialRequest() : request;
     Scope scope = requireScope(oaNo, oaFormItemId, request.getPeriodMonth());
     QuoteCuAdjustmentCalcResult calculation = calculate(scope, request, true);

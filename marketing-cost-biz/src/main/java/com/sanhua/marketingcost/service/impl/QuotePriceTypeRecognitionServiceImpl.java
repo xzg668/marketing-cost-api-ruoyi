@@ -43,7 +43,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -113,6 +112,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     Scope scope = requireScope(oaNo, oaFormItemId, periodMonth);
     List<BomCostingRow> rows = loadRows(scope);
     List<QuotePriceTypeRecognitionRow> resultRows = buildRows(scope, rows);
+    fillPriceTypes(scope, resultRows);
     fillMissingMaterialNames(resultRows);
 
     QuotePriceTypeRecognitionResponse response = new QuotePriceTypeRecognitionResponse();
@@ -605,21 +605,39 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
       dto.setMessage("缺少取价组织");
       return dto;
     }
-    Optional<PriceTypeRoute> route =
-        materialPriceRouterService.resolve(materialCode, scope.periodMonth(),
-            CostPricingPeriodUtils.currentPricingDate(), row.getPriceOrgCode(), scope.businessUnitType());
-    if (route.isPresent()) {
-      PriceTypeRoute hit = route.get();
-      dto.setPriceType(normalizePersistedPriceType(firstText(hit.rawPriceType(), hit.priceType().getDbText())));
-      dto.setPriceTypeSource(hit.supplemental() ? "TECHNICAL_SUPPLEMENT" : "FORMAL_PRICE_SOURCE");
-      dto.setTypeStatus(STATUS_RECOGNIZED);
-      dto.setEffectiveFrom(hit.effectiveFrom());
-      dto.setEffectiveTo(hit.effectiveTo());
-    } else {
-      dto.setTypeStatus(STATUS_NO_SOURCE);
-      dto.setMessage("当前月份和组织暂无候选价格来源，准备时按完整顺序检查");
-    }
     return dto;
+  }
+
+  private void fillPriceTypes(Scope scope, List<QuotePriceTypeRecognitionRow> roots) {
+    var rows = flatten(roots);
+    var codesByOrg = new java.util.TreeMap<String, Set<String>>();
+    var priced = rows.stream().filter(row -> Set.of(OBJECT_NORMAL, OBJECT_MAKE_RAW,
+        OBJECT_MAKE_SCRAP, OBJECT_PACKAGE_CHILD).contains(row.getObjectType()))
+        .filter(row -> !"SCOPE_MISSING".equals(row.getTypeStatus())).toList();
+    for (var row : priced) if (StringUtils.hasText(row.getMaterialCode()))
+      codesByOrg.computeIfAbsent(row.getPriceOrgCode(), ignored -> new java.util.TreeSet<>())
+          .add(row.getMaterialCode().trim());
+    var candidates = new LinkedHashMap<String, Map<String, List<PriceTypeRoute>>>();
+    codesByOrg.forEach((org, codes) -> candidates.put(org,
+        materialPriceRouterService.listCandidatesBatch(codes, scope.periodMonth(),
+            CostPricingPeriodUtils.currentPricingDate(), org, scope.businessUnitType())));
+    for (var row : priced) {
+      var routes = !StringUtils.hasText(row.getMaterialCode()) ? List.<PriceTypeRoute>of()
+          : candidates.getOrDefault(row.getPriceOrgCode(), Map.of()).getOrDefault(row.getMaterialCode().trim(), List.of());
+      if (!routes.isEmpty()) {
+        var hit = routes.getFirst();
+        row.setPriceType(normalizePersistedPriceType(firstText(hit.rawPriceType(), hit.priceType().getDbText())));
+        row.setPriceTypeSource(hit.supplemental() ? "TECHNICAL_SUPPLEMENT" : "FORMAL_PRICE_SOURCE");
+        row.setTypeStatus(STATUS_RECOGNIZED);
+        row.setEffectiveFrom(hit.effectiveFrom());
+        row.setEffectiveTo(hit.effectiveTo());
+      } else {
+        row.setTypeStatus(STATUS_NO_SOURCE);
+        row.setMessage("当前月份和组织暂无候选价格来源，准备时按完整顺序检查");
+      }
+    }
+    for (int i = rows.size() - 1; i >= 0; i--)
+      if (!rows.get(i).getChildren().isEmpty()) aggregateParent(rows.get(i));
   }
 
   private void aggregateParent(QuotePriceTypeRecognitionRow parent) {

@@ -251,6 +251,13 @@ class MakePartPriceGenerationE2ETest {
   private CostRunPartItemServiceImpl buildCostRunService(MakePartPriceCalcRowMapper calcRowMapper) {
     CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
     MaterialPriceRouterService routerService = mock(MaterialPriceRouterService.class);
+    when(routerService.listCandidatesBatch(any(), any(), any(), any(), any())).thenAnswer(call -> {
+      var result = new java.util.LinkedHashMap<String, List<PriceTypeRoute>>();
+      for (String code : (java.util.Collection<String>) call.getArgument(0))
+        result.put(code, routerService.listCandidates(code, call.getArgument(1), call.getArgument(2), call.getArgument(3), call.getArgument(4)));
+      return result;
+    });
+
     OaFormMapper oaFormMapper = mock(OaFormMapper.class);
     LocalDate currentDate = CostPricingPeriodUtils.currentPricingDate();
     OaForm form = new OaForm();

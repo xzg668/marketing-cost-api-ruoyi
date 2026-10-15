@@ -957,6 +957,20 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
     List<QuoteDataOrganization> itemOrganizations =
         resolveItemOrganizations(items, context, "包装组件识别");
     Map<String, Boolean> packageFlags = identifyPackageComponents(items, itemOrganizations);
+    var codesByOrg = new java.util.TreeMap<String, Set<String>>();
+    for (int i = 0; i < items.size(); i++) {
+      String code = items.get(i).getPartCode();
+      var organization = itemOrganizations.get(i);
+      if (StringUtils.hasText(code) && !Boolean.TRUE.equals(packageFlags.get(
+          packageFlagKey(organization.materialOrganizationCode(), code.trim())))) {
+        codesByOrg.computeIfAbsent(organization.priceOrgCode(), ignored -> new java.util.TreeSet<>()).add(code.trim());
+      }
+    }
+    var routesByOrg = new HashMap<String, Map<String, List<PriceTypeRoute>>>();
+    codesByOrg.forEach((org, codes) -> routesByOrg.put(org,
+        materialPriceRouterService.listCandidatesBatch(codes, period, quoteDate, org,
+            context == null ? com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType()
+                : context.getBusinessUnitType())));
     int total = Math.max(1, items.size());
     for (int i = 0; i < items.size(); i++) {
       CostRunPartItemDto item = items.get(i);
@@ -977,8 +991,7 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       }
       // Router 给出全部候选；按 priority 升序逐桶尝试，直到首个 Resolver 成功
       List<PriceTypeRoute> candidates =
-          materialPriceRouterService.listCandidates(code, period, quoteDate, organization.priceOrgCode(),
-              context == null ? com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType() : context.getBusinessUnitType());
+          routesByOrg.getOrDefault(organization.priceOrgCode(), Map.of()).getOrDefault(normalizedCode, List.of());
       if (candidates.isEmpty()) {
         if (isManufacturedItem(item)) {
           // 制造件价格源来自“制造件价格生成”结果表；公共价源无候选不能阻断制造件取价。

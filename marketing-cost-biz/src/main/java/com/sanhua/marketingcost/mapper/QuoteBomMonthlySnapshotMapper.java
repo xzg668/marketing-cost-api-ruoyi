@@ -13,14 +13,8 @@ import org.apache.ibatis.annotations.Update;
 @Mapper
 public interface QuoteBomMonthlySnapshotMapper extends BaseMapper<QuoteBomMonthlySnapshot> {
 
-  /** 并发核算复用刚提交的快照时，按已知 ID 当前读，避免外层 REPEATABLE READ 的旧读视图。 */
-  @Select("""
-      SELECT * FROM lp_quote_bom_monthly_snapshot WHERE id = #{id} FOR SHARE
-      """)
-  @Options(useCache = false, flushCache = Options.FlushCachePolicy.TRUE)
-  QuoteBomMonthlySnapshot selectCurrentById(@Param("id") Long id);
-
-  @Insert("""
+  @Insert(
+      """
       INSERT IGNORE INTO lp_quote_bom_monthly_snapshot (
         product_code, price_org_code, business_unit_type, material_organization_code,
         snapshot_identity_key, customer_code, package_method, cost_period_month,

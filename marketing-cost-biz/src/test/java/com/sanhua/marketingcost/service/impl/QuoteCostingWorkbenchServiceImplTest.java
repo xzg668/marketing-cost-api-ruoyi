@@ -13,14 +13,13 @@ import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse;
 import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
 import com.sanhua.marketingcost.dto.quotebom.QuoteProductBomPreparationPreview;
-import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostRunSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchBomRowResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareSummaryResponse;
-import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionSummaryResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionSummary;
 import com.sanhua.marketingcost.entity.BomCostingRow;
@@ -37,14 +36,14 @@ import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostingWorkbenchSummaryMapper;
-import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
-import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
+import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.QuoteEffectiveBomCostingService;
+import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
 import com.sanhua.marketingcost.service.QuoteProductBomPreparationService;
-import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingCostingFallbackService;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowStage;
+import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -96,6 +95,8 @@ class QuoteCostingWorkbenchServiceImplTest {
   void setUp() {
     oaFormMapper = mock(OaFormMapper.class);
     oaFormItemMapper = mock(OaFormItemMapper.class);
+    when(oaFormItemMapper.selectForCostCompletion(any(), any(), any()))
+        .thenAnswer(call -> oaFormItemMapper.selectById((Long) call.getArgument(0)));
     quoteBomStatusMapper = mock(QuoteBomStatusMapper.class);
     bomCostingRowMapper = mock(BomCostingRowMapper.class);
     bomCostingRowSubRefMapper = mock(BomCostingRowSubRefMapper.class);
@@ -325,7 +326,7 @@ class QuoteCostingWorkbenchServiceImplTest {
 
     QuoteCostingWorkbenchResponse response = service.launchWorkbench("OA-001", 10L);
 
-    verify(oaFormMapper).selectIdForCostingUpdate("OA-001");
+    verify(oaFormItemMapper).selectForCostingWrite(10L);
     assertThat(response.getSnapshotGenerated()).isTrue();
     assertThat(response.getBomRows()).hasSize(1);
     assertThat(response.getBomRows().get(0).getChildCode()).isEqualTo("MAT-NEW");

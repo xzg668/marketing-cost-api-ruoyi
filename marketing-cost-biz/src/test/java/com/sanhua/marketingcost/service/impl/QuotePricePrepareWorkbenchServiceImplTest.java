@@ -64,6 +64,8 @@ class QuotePricePrepareWorkbenchServiceImplTest {
   void setUp() {
     oaFormMapper = mock(OaFormMapper.class);
     oaFormItemMapper = mock(OaFormItemMapper.class);
+    when(oaFormItemMapper.selectForCostCompletion(any(), any(), any()))
+        .thenAnswer(call -> oaFormItemMapper.selectById((Long) call.getArgument(0)));
     quoteBomStatusMapper = mock(QuoteBomStatusMapper.class);
     priceTypeRecognitionService = mock(QuotePriceTypeRecognitionService.class);
     pricePrepareService = mock(PricePrepareService.class);

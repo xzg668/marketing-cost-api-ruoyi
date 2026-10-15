@@ -20,12 +20,24 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 class CostInputRevisionServiceImplTest {
 
+  private static List<Map<String, Object>> checksums(long value) {
+    return CostInputRevisionServiceImpl.SOURCE_TABLES.stream()
+        .map(table -> Map.<String, Object>of("Table", "test." + table, "Checksum", value)).toList();
+  }
+
+  @Test void incompleteSourceCheckCannotBeTreatedAsAValidRevision() {
+    var jdbc = mock(JdbcTemplate.class);
+    when(jdbc.queryForList(anyString())).thenReturn(List.of());
+    assertThatThrownBy(() -> new CostInputRevisionServiceImpl(jdbc).currentRevision(form(), item(11L, "P-1")))
+        .isInstanceOf(IllegalStateException.class).hasMessageContaining("公共核算资料校验失败");
+  }
+
   @Test
   void revisionChangesForBusinessInputButIgnoresCalculationOutputState() {
     JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
     when(jdbcTemplate.queryForList(anyString()))
         .thenAnswer(
-            invocation -> List.of(Map.of("Checksum", invocation.getArgument(0).hashCode())));
+            invocation -> checksums(100L));
     CostInputRevisionServiceImpl service = new CostInputRevisionServiceImpl(jdbcTemplate);
     OaForm form = form();
     OaFormItem item = item(11L, "P-1");
@@ -42,7 +54,7 @@ class CostInputRevisionServiceImplTest {
   @Test
   void batchRevisionReadsSharedSourceTablesOnlyOnce() {
     JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
-    when(jdbcTemplate.queryForList(anyString())).thenReturn(List.of(Map.of("Checksum", 12345L)));
+    when(jdbcTemplate.queryForList(anyString())).thenReturn(checksums(12345L));
     when(jdbcTemplate.queryForList(anyString(), anyString())).thenReturn(List.of());
     when(jdbcTemplate.queryForList(
             CostInputRevisionServiceImpl.MATERIAL_CODES_SQL, String.class, 11L, null, 11L, null))
@@ -57,7 +69,7 @@ class CostInputRevisionServiceImplTest {
 
     assertThat(revisions).hasSize(2);
     assertThat(revisions.get(11L)).isNotEqualTo(revisions.get(12L));
-    verify(jdbcTemplate, times(12)).queryForList(anyString());
+    verify(jdbcTemplate, times(1)).queryForList(anyString());
     verify(jdbcTemplate, org.mockito.Mockito.never())
         .queryForList(
             org.mockito.ArgumentMatchers.argThat(sql -> sql.contains("lp_finance_base_price")));
@@ -67,7 +79,7 @@ class CostInputRevisionServiceImplTest {
   @SuppressWarnings("unchecked")
   void missingTechnicalDataIsIsolatedPerProductButSystemFailuresStillAbort() {
     JdbcTemplate jdbc = mock(JdbcTemplate.class);
-    when(jdbc.queryForList(anyString())).thenReturn(List.of(Map.of("Checksum", 12345L)));
+    when(jdbc.queryForList(anyString())).thenReturn(checksums(12345L));
     var technical = mock(EffectiveTechnicalDataQueryService.class);
     org.springframework.beans.factory.ObjectProvider<EffectiveTechnicalDataQueryService> provider =
         mock(org.springframework.beans.factory.ObjectProvider.class);
@@ -82,7 +94,7 @@ class CostInputRevisionServiceImplTest {
 
     var revisions = service.currentRevisions(form(), items, "2026-08");
     assertThat(revisions).containsOnlyKeys(12L);
-    verify(jdbc, times(17)).queryForList(anyString());
+    verify(jdbc, times(6)).queryForList(anyString());
     assertThat(revisions.get(12L))
         .isEqualTo(service.currentRevision(form(), items.get(1), "2026-08"));
     assertThatThrownBy(() -> service.currentRevision(form(), items.get(0), "2026-08"))
@@ -100,18 +112,18 @@ class CostInputRevisionServiceImplTest {
   @Test
   void changingAnnualPropertyRulesInvalidatesNewCosting() {
     JdbcTemplate jdbc = mock(JdbcTemplate.class);
-    when(jdbc.queryForList(anyString())).thenReturn(List.of(Map.of("Checksum", 100L)));
+    when(jdbc.queryForList(anyString())).thenReturn(checksums(100L));
     var service = new CostInputRevisionServiceImpl(jdbc);
     var original = service.currentRevision(form(), item(11L, "P-1"));
-    when(jdbc.queryForList("CHECKSUM TABLE `lp_product_property_rule`"))
-        .thenReturn(List.of(Map.of("Checksum", 200L)));
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL))
+        .thenReturn(checksums(200L));
     assertThat(service.currentRevision(form(), item(11L, "P-1"))).isNotEqualTo(original);
   }
 
   @Test
   void changingOnlyTheOtherProductsPriceKeepsTheCurrentCostRevision() {
     JdbcTemplate jdbc = mock(JdbcTemplate.class);
-    when(jdbc.queryForList(anyString())).thenReturn(List.of(Map.of("Checksum", 100L)));
+    when(jdbc.queryForList(anyString())).thenReturn(checksums(100L));
     when(jdbc.queryForList(anyString(), anyString())).thenReturn(List.of());
     when(jdbc.queryForList(
             CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
@@ -146,8 +158,8 @@ class CostInputRevisionServiceImplTest {
     assertThat(afterBPriceChange.get(11L)).isEqualTo(before.get(11L));
     assertThat(afterBPriceChange.get(12L)).isNotEqualTo(before.get(12L));
 
-    when(jdbc.queryForList("CHECKSUM TABLE `lp_three_expense_rate`"))
-        .thenReturn(List.of(Map.of("Checksum", 200L)));
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL))
+        .thenReturn(checksums(200L));
     var afterSharedRateChange = service.currentRevisions(form, items, "2026-08");
     assertThat(afterSharedRateChange.get(11L)).isNotEqualTo(afterBPriceChange.get(11L));
     assertThat(afterSharedRateChange.get(12L)).isNotEqualTo(afterBPriceChange.get(12L));
@@ -156,6 +168,7 @@ class CostInputRevisionServiceImplTest {
   @Test
   void downstreamReturnRequiresNewCostOnlyForTheSameQuotationAndMonth() {
     var jdbc = mock(JdbcTemplate.class);
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL)).thenReturn(checksums(100L));
     var service = new CostInputRevisionServiceImpl(jdbc);
     String query =
         "SELECT MAX(id) FROM lp_quote_final_submission WHERE oa_form_id=? AND accounting_month=?"
@@ -170,7 +183,7 @@ class CostInputRevisionServiceImplTest {
   @Test
   void financialPublicationChangesInvalidateNativeRulesWithoutChangingMaterialFiles() {
     var jdbc = mock(JdbcTemplate.class);
-    when(jdbc.queryForList(anyString())).thenReturn(List.of(Map.of("Checksum", 100L)));
+    when(jdbc.queryForList(anyString())).thenReturn(checksums(100L));
     when(jdbc.queryForList(
             CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
             String.class,
@@ -226,7 +239,7 @@ class CostInputRevisionServiceImplTest {
   @Test
   void financialPublicationChangesInvalidateNativeRangeRulesWithoutChangingMaterialFiles() {
     var jdbc = mock(JdbcTemplate.class);
-    when(jdbc.queryForList(anyString())).thenReturn(List.of(Map.of("Checksum", 100L)));
+    when(jdbc.queryForList(anyString())).thenReturn(checksums(100L));
     when(jdbc.queryForList(
             CostInputRevisionServiceImpl.MATERIAL_CODES_SQL,
             String.class,
@@ -316,6 +329,7 @@ class CostInputRevisionServiceImplTest {
   @Test
   void partialNewMonthInvalidatesOlderSuccessEvenWhenThisMaterialsRuleIsUnchanged() {
     var jdbc = mock(JdbcTemplate.class);
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL)).thenReturn(checksums(100L));
     when(jdbc.queryForList(MATERIAL_CODES_SQL(), String.class, 11L, "2026-11", 11L, "2026-11"))
         .thenReturn(List.of("M1"));
     when(jdbc.queryForList(

@@ -9,33 +9,40 @@ import org.apache.ibatis.annotations.Select;
 public interface TechnicalPriceSourceMapper {
   record Source(String priceType, Long recordId) {}
 
+  default List<String> publicKinds(String code, String month, String sourceMonth,
+      String businessUnit, String org, java.time.LocalDate date) {
+    return publicKindsBatch(List.of(code), month, sourceMonth, businessUnit, org, date).stream()
+        .map(MaterialKind::kind).distinct().toList();
+  }
+
+  record MaterialKind(String materialCode, String kind) {}
+
   @Select("""
-      SELECT DISTINCT kind FROM (
-        SELECT 'LINKED' kind FROM lp_price_linked_item WHERE material_code=#{code}
+      <script>SELECT DISTINCT material_code AS materialCode,kind FROM (
+        SELECT CONVERT(material_code USING utf8mb4) COLLATE utf8mb4_bin AS material_code,'LINKED' kind FROM lp_price_linked_item WHERE material_code IN <foreach collection="codes" item="code" open="(" close=")" separator=",">#{code}</foreach>
           AND source_kind='PUBLIC' AND deleted=0 AND rule_status IN ('LEGACY','PUBLISHED')
           AND pricing_month=#{sourceMonth} AND org_code=#{org} AND business_unit_type=#{businessUnit}
         UNION ALL
-        SELECT 'RANGE' kind FROM lp_price_range_factor_rule WHERE material_code=#{code}
+        SELECT CONVERT(material_code USING utf8mb4) COLLATE utf8mb4_bin AS material_code,'RANGE' kind FROM lp_price_range_factor_rule WHERE material_code IN <foreach collection="codes" item="code" open="(" close=")" separator=",">#{code}</foreach>
           AND rule_status IN ('LEGACY','PUBLISHED') AND pricing_month=#{sourceMonth}
           AND org_code=#{org} AND business_unit_type=#{businessUnit}
         UNION ALL
-        SELECT 'RANGE' kind FROM lp_price_range_item WHERE material_code=#{code}
+        SELECT CONVERT(material_code USING utf8mb4) COLLATE utf8mb4_bin AS material_code,'RANGE' kind FROM lp_price_range_item WHERE material_code IN <foreach collection="codes" item="code" open="(" close=")" separator=",">#{code}</foreach>
           AND (range_basis='QTY' OR range_basis IS NULL)
-          AND (effective_from IS NULL OR effective_from<=#{date})
+          AND (effective_from IS NULL OR effective_from&lt;=#{date})
           AND org_code=#{org} AND business_unit_type=#{businessUnit}
         UNION ALL
-        SELECT CASE WHEN source_type IN ('SETTLE','SETTLE_FIXED') THEN 'SETTLE_FIXED' ELSE 'FIXED' END kind
-          FROM lp_price_fixed_item WHERE material_code=#{code} AND source_kind='PUBLIC'
+        SELECT CONVERT(material_code USING utf8mb4) COLLATE utf8mb4_bin AS material_code,CASE WHEN source_type IN ('SETTLE','SETTLE_FIXED') THEN 'SETTLE_FIXED' ELSE 'FIXED' END kind
+          FROM lp_price_fixed_item WHERE material_code IN <foreach collection="codes" item="code" open="(" close=")" separator=",">#{code}</foreach> AND source_kind='PUBLIC'
           AND org_code=#{org} AND business_unit_type=#{businessUnit} AND (
-            (source_type IN ('PURCHASE','PURCHASE_FIXED') AND effective_from<=#{date} AND effective_to>#{date})
-            OR (source_type IN ('SETTLE','SETTLE_FIXED') AND pricing_month<=#{month}
-              AND (effective_from IS NULL OR effective_from<=#{date})))
-      ) p
+            (source_type IN ('PURCHASE','PURCHASE_FIXED') AND effective_from&lt;=#{date} AND effective_to>#{date})
+            OR (source_type IN ('SETTLE','SETTLE_FIXED') AND pricing_month&lt;=#{month}
+              AND (effective_from IS NULL OR effective_from&lt;=#{date})))
+      ) p</script>
       """)
-  List<String> publicKinds(@Param("code") String code, @Param("month") String month,
-      @Param("sourceMonth") String sourceMonth,
-      @Param("businessUnit") String businessUnit, @Param("org") String org,
-      @Param("date") java.time.LocalDate date);
+  List<MaterialKind> publicKindsBatch(@Param("codes") List<String> codes, @Param("month") String month,
+      @Param("sourceMonth") String sourceMonth, @Param("businessUnit") String businessUnit,
+      @Param("org") String org, @Param("date") java.time.LocalDate date);
 
   @Select("""
       SELECT p.price_type AS priceType,p.id AS recordId FROM (

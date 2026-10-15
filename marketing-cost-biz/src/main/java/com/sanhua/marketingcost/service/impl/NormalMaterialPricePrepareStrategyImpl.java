@@ -120,17 +120,23 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
     priceAsOfTime = priceAsOfTime == null ? LocalDateTime.now(BUSINESS_ZONE) : priceAsOfTime;
     LocalDate quoteDate = priceAsOfTime.toLocalDate();
     var routes = new java.util.LinkedHashMap<MaterialScope, List<PriceTypeRoute>>();
-    var groups = new java.util.LinkedHashMap<String, Set<String>>();
+    var namesByOrg = new java.util.TreeMap<String, Map<String, String>>();
+    for (var item : items) {
+      namesByOrg.computeIfAbsent(organization(item), ignored -> new java.util.TreeMap<>())
+          .putIfAbsent(item.getMaterialCode().trim(), item.getMaterialName());
+    }
+    for (var group : namesByOrg.entrySet()) {
+      var candidates = persist
+          ? materialPriceRouterService.prepareCandidatesBatch(group.getValue(), periodMonth,
+              quoteDate, group.getKey(), businessUnitType)
+          : materialPriceRouterService.listCandidatesBatch(group.getValue().keySet(), periodMonth,
+              quoteDate, group.getKey(), businessUnitType);
+      candidates.forEach((code, values) -> routes.put(new MaterialScope(code, group.getKey()), values));
+    }
+    var groups = new java.util.TreeMap<String, Set<String>>();
     for (var item : items) {
       String code = item.getMaterialCode().trim();
-      var candidates =
-          routes.computeIfAbsent(
-              new MaterialScope(code, organization(item)),
-              ignored -> persist
-                  ? materialPriceRouterService.prepareCandidates(code, item.getMaterialName(), periodMonth,
-                      quoteDate, organization(item), businessUnitType)
-                  : materialPriceRouterService.listCandidates(code, periodMonth, quoteDate,
-                      organization(item), businessUnitType));
+      var candidates = routes.getOrDefault(new MaterialScope(code, organization(item)), List.of());
       if (firstRouteIsPublicLinked(candidates))
         groups.computeIfAbsent(organization(item), ignored -> new java.util.TreeSet<>()).add(code);
     }
@@ -147,8 +153,8 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
         else
           for (var row : linkedPriceEnsureService.calculate(request))
             rows.put(row.getItemCode(), row);
-      } catch (org.springframework.dao.TransientDataAccessException retryable) {
-        throw retryable;
+      } catch (org.springframework.dao.DataAccessException databaseFailure) {
+        throw databaseFailure;
       } catch (RuntimeException error) {
         for (String code : group.getValue()) {
           var failed = new PriceLinkedCalcItem();
@@ -218,8 +224,8 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
                     ? rangeResults.get(rangeRequests.get(item))
                     : null),
                 true));
-      } catch (org.springframework.dao.TransientDataAccessException retryable) {
-        throw retryable;
+      } catch (org.springframework.dao.DataAccessException databaseFailure) {
+        throw databaseFailure;
       } catch (RuntimeException error) {
         results.put(
             item,
@@ -505,8 +511,8 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
             formatEnsureFailures(result));
       }
       return null;
-    } catch (org.springframework.dao.TransientDataAccessException retryable) {
-      throw retryable;
+    } catch (org.springframework.dao.DataAccessException databaseFailure) {
+      throw databaseFailure;
     } catch (RuntimeException ex) {
       return NormalMaterialPricePrepareResult.gap(
           STATUS_FAILED,
@@ -538,8 +544,8 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
       applyScenario(request, scenarioContext);
       List<PriceLinkedCalcItem> calculated = linkedPriceEnsureService.calculate(request);
       return calculated == null || calculated.isEmpty() ? null : calculated.get(0);
-    } catch (org.springframework.dao.TransientDataAccessException retryable) {
-      throw retryable;
+    } catch (org.springframework.dao.DataAccessException databaseFailure) {
+      throw databaseFailure;
     } catch (RuntimeException ex) {
       PriceLinkedCalcItem failed = new PriceLinkedCalcItem();
       failed.setItemCode(materialCode);

@@ -108,7 +108,9 @@ class OriginalPriceVersionContractIntegrationTest {
             PriceRangeFactorRuleMapper.class,
             PriceRangeItemMapper.class,
             PriceLinkedCalcItemMapper.class,
-            MaterialPriceMonthMapper.class)) {
+            MaterialPriceMonthMapper.class,
+            PricePrepareItemMapper.class,
+            PricePrepareGapMapper.class)) {
       config.addMapper(mapper);
     }
     sessions = new MybatisSqlSessionFactoryBuilder().build(config);
@@ -609,7 +611,8 @@ VALUES (15,'2026-09','OLD-M','Cu / 1.13','COMMERCIAL','2026-09-15',NOW(),NOW())
   }
 
   @Test
-  void deletingAnObsoletePrepareBatchPreservesSharedLinkedEvidenceInRealMysql() throws Exception {
+  void deletingAnObsoleteBatchPreservesEvidenceEvenBeforeAnotherTransactionReferencesIt()
+      throws Exception {
     execute(
         "CREATE TABLE lp_price_prepare_item (id BIGINT PRIMARY KEY,prepare_no"
             + " VARCHAR(64),result_ref_type VARCHAR(32),result_ref_id BIGINT)");
@@ -625,6 +628,7 @@ VALUES (15,'2026-09','OLD-M','Cu / 1.13','COMMERCIAL','2026-09-15',NOW(),NOW())
       var items = Mockito.mock(PricePrepareItemMapper.class);
       var workspace = Mockito.mock(QuoteCostingWorkspaceService.class);
       var old = new PricePrepareBatch();
+      old.setId(1L);
       old.setPrepareNo("OLD");
       old.setStatus("PARTIAL");
       old.setOaFormItemId(1L);
@@ -632,9 +636,11 @@ VALUES (15,'2026-09','OLD-M','Cu / 1.13','COMMERCIAL','2026-09-15',NOW(),NOW())
       Mockito.when(batches.selectOne(ArgumentMatchers.any())).thenReturn(old);
       Mockito.when(workspace.find(1L, "2026-10")).thenReturn(java.util.Optional.empty());
       var shared = new PricePrepareItem();
+      shared.setId(1L);
       shared.setResultRefType("LINKED_PRICE");
       shared.setResultRefId(14L);
       var orphan = new PricePrepareItem();
+      orphan.setId(3L);
       orphan.setResultRefType("LINKED_PRICE");
       orphan.setResultRefId(16L);
       Mockito.when(items.selectList(ArgumentMatchers.any())).thenReturn(List.of(shared, orphan));
@@ -648,16 +654,15 @@ VALUES (15,'2026-09','OLD-M','Cu / 1.13','COMMERCIAL','2026-09-15',NOW(),NOW())
               Mockito.mock(PackageComponentPriceDetailMapper.class),
               Mockito.mock(MakePartPriceCalcRowMapper.class),
               Mockito.mock(MakePartPriceGapItemMapper.class),
-              session.getMapper(PriceLinkedCalcItemMapper.class),
               workspace,
               Mockito.mock(QuoteCostRunVersionInvalidationService.class));
       assertThat(cleaner.discardPromotedFailedAttempt("OLD")).isTrue();
       assertThat(session.getMapper(PriceLinkedCalcItemMapper.class).selectById(14)).isNotNull();
-      assertThat(session.getMapper(PriceLinkedCalcItemMapper.class).selectById(16)).isNull();
+      assertThat(session.getMapper(PriceLinkedCalcItemMapper.class).selectById(16)).isNotNull();
       execute("DELETE FROM lp_price_prepare_item WHERE prepare_no='NEW'");
       session.clearCache();
       assertThat(cleaner.discardPromotedFailedAttempt("OLD")).isTrue();
-      assertThat(session.getMapper(PriceLinkedCalcItemMapper.class).selectById(14)).isNull();
+      assertThat(session.getMapper(PriceLinkedCalcItemMapper.class).selectById(14)).isNotNull();
     }
   }
 

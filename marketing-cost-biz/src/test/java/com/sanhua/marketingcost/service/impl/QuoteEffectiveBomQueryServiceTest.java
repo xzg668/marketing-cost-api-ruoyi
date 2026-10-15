@@ -4,9 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -19,8 +19,8 @@ import com.sanhua.marketingcost.dto.quotebom.QuoteEffectiveBomResponse;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
-import com.sanhua.marketingcost.entity.QuoteBomMonthlySnapshot;
 import com.sanhua.marketingcost.entity.QuoteBomAlternativeSelection;
+import com.sanhua.marketingcost.entity.QuoteBomMonthlySnapshot;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.enums.QuoteMaterialShape;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
@@ -46,22 +46,22 @@ import com.sanhua.marketingcost.service.ingest.QuoteBomContext;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
 import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.ResolvedCustomerKey;
-import com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService;
-import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeResolution;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeRequest;
+import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeResolution;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeResolver;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeSource;
-import com.sanhua.marketingcost.service.materialshape.SupplierRatioShapeResolver;
 import com.sanhua.marketingcost.service.materialshape.SupplierRatioResolution;
+import com.sanhua.marketingcost.service.materialshape.SupplierRatioShapeResolver;
+import com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -213,7 +213,7 @@ class QuoteEffectiveBomQueryServiceTest {
   void readsFrozenMonthlyRowsAfterFormalTableWasReplaced() {
     when(monthlyMapper.selectList(any(Wrapper.class))).thenReturn(List.of(snapshot));
     when(monthlyDetails.load(snapshot.getId())).thenReturn(rawRows());
-    when(monthlyDetails.loadCurrent(snapshot.getId())).thenReturn(rawRows());
+    when(monthlyDetails.load(snapshot.getId())).thenReturn(rawRows());
 
     QuoteEffectiveBomResponse result = service.getEffectiveBom("OA-QEB-11", 42L);
 
@@ -512,7 +512,7 @@ class QuoteEffectiveBomQueryServiceTest {
     checked.setSyncRecordId(snapshot.getId());
     when(quoteBomStatusService.checkItemForCostRun("OA-QEB-11", 42L, CURRENT_PERIOD))
         .thenReturn(checked);
-    when(monthlyMapper.selectCurrentById(snapshot.getId())).thenReturn(snapshot);
+    when(monthlyMapper.selectById(snapshot.getId())).thenReturn(snapshot);
     when(rawMapper.selectList(any(Wrapper.class))).thenReturn(rawRows());
 
     var result = service.getEffectiveBom("OA-QEB-11", 42L);
@@ -534,7 +534,7 @@ class QuoteEffectiveBomQueryServiceTest {
     var result = service.getEffectiveBom("OA-QEB-11", 42L);
 
     assertThat(result.state()).isEqualTo("BLOCKED");
-    verify(monthlyMapper, never()).selectCurrentById(any());
+    verify(monthlyMapper, never()).selectById(any());
     verifyNoInteractions(rawMapper);
   }
 

@@ -31,7 +31,9 @@ public abstract class OriginalPricingIntegrationTestBase extends BomMapperTestBa
             "V320__technical_calculation_input_versions.sql",
             "V321__retire_factor_adjustment.sql",
             "V325__finance_effective_price.sql",
-            "V326__original_workbook_source.sql")) {
+            "V326__original_workbook_source.sql",
+            "V328__quote_linked_result_input_versions.sql",
+            "V329__quote_cost_version_sequence.sql")) {
       try {
         MYSQL.copyFileToContainer(
             MountableFile.forClasspathResource("db/" + script), "/tmp/" + script);

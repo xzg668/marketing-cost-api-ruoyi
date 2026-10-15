@@ -48,6 +48,21 @@ public class MaterialPricePriorityService {
     return configuration(scope, mapper.selectScope(scope, false));
   }
 
+  /** 调用方按组织和月份分批；已有顺序一次读取，缺失项仍由原短事务安全初始化。 */
+  public java.util.Map<String, Configuration> readBatch(Scope scope,
+      java.util.Map<String, String> names, boolean initializeMissing) {
+    var rows = mapper.selectScopes(scope, List.copyOf(names.keySet()));
+    var grouped = rows.stream().collect(java.util.stream.Collectors.groupingBy(MaterialPriceType::getMaterialCode));
+    var result = new java.util.LinkedHashMap<String, Configuration>();
+    for (var entry : names.entrySet()) {
+      var itemScope = new Scope(scope.businessUnitType(), scope.period(), scope.priceOrgCode(), entry.getKey());
+      var existing = grouped.getOrDefault(entry.getKey(), List.of());
+      result.put(entry.getKey(), initializeMissing && existing.isEmpty()
+          ? initialize(itemScope, entry.getValue()) : configuration(itemScope, existing));
+    }
+    return result;
+  }
+
   /** 只在实际准备价格时调用。唯一键解决并发首次生成，不更新已有财务顺序。 */
   public Configuration initialize(Scope scope, String materialName) {
     // 默认对照属于可独立复用的主数据。短事务提交，避免报价长事务互相持有首次插入锁。

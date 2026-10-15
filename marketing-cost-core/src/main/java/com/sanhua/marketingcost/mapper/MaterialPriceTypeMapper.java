@@ -26,6 +26,15 @@ public interface MaterialPriceTypeMapper extends BaseMapper<MaterialPriceType> {
       """)
   List<MaterialPriceType> selectScope(@Param("scope") Scope scope, @Param("lock") boolean lock);
 
+  @Select("""
+      <script>SELECT * FROM lp_material_price_type
+      WHERE business_unit_type=#{scope.businessUnitType} AND period=#{scope.period}
+        AND price_org_code=#{scope.priceOrgCode} AND material_code IN
+        <foreach collection="codes" item="code" open="(" close=")" separator=",">#{code}</foreach>
+      ORDER BY material_code,priority,id</script>
+      """)
+  List<MaterialPriceType> selectScopes(@Param("scope") Scope scope, @Param("codes") List<String> codes);
+
   @Insert("""
       <script>INSERT INTO lp_material_price_type
         (business_unit_type,period,price_org_code,material_code,material_name,price_type,

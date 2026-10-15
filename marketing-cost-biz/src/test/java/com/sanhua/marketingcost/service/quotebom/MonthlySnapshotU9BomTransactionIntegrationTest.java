@@ -76,7 +76,10 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
         .getMapper(QuoteBomMonthlySnapshotMapper.class);
     var manager = new DataSourceTransactionManager(source);
     spring = new AnnotationConfigApplicationContext();
-    spring.register(Transactions.class);
+    spring.register(
+        Transactions.class,
+        RetryingCosting.class,
+        com.sanhua.marketingcost.service.concurrent.CostingConcurrencyRetryAspect.class);
     spring.registerBean("transactionManager", DataSourceTransactionManager.class, () -> manager);
     spring.registerBean(QuoteBomMonthlySnapshotMapper.class, () -> mapper);
     spring.registerBean(LiveU9BomGateway.class, () -> LIVE);
@@ -101,26 +104,54 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
   }
 
   @Test
-  void committedSnapshotDetailsRemainVisibleAlongsideTheirCurrentHeader() throws Exception {
-    costing.executeWithoutResult(tx -> {
-      assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_bom_monthly_snapshot_detail", Integer.class)).isZero();
-      // 另一个请求提交冻结明细，外层普通查询仍停留在旧读视图。
-      try (var pool = Executors.newSingleThreadExecutor()) {
-        var id = pool.submit(() -> costing.execute(other -> {
-          var snapshot = gateway.read(context("2026-09"));
-          var row = new com.sanhua.marketingcost.entity.BomRawHierarchy();
-          row.setMaterialCode("1053900000062"); row.setPath("/1053900000062/"); row.setLevel(0);
-          details.save(snapshot.monthlySnapshotId(), java.util.List.of(row));
-          return snapshot.monthlySnapshotId();
-        })).get(20, TimeUnit.SECONDS);
-        assertThat(mapper.selectCurrentById(id)).isNotNull();
-        assertThat(details.load(id)).as("复现旧读视图导致的假缺口").isEmpty();
-        assertThat(details.loadCurrent(id)).extracting(com.sanhua.marketingcost.entity.BomRawHierarchy::getMaterialCode)
-            .containsExactly("1053900000062");
-      } catch (Exception error) {
-        throw new IllegalStateException(error);
-      }
-    });
+  void concurrentSnapshotIsReadTogetherWithItsDetailsAfterFreshTransactionRetry() {
+    var attempts = new java.util.concurrent.atomic.AtomicInteger();
+    var id =
+        spring
+            .getBean(RetryingCosting.class)
+            .run(
+                () -> {
+                  if (attempts.incrementAndGet() == 1) {
+                    assertThat(
+                            jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM lp_quote_bom_monthly_snapshot_detail",
+                                Integer.class))
+                        .isZero();
+                    try (var pool = Executors.newSingleThreadExecutor()) {
+                      pool.submit(
+                              () ->
+                                  costing.execute(
+                                      other -> {
+                                        var snapshot = gateway.read(context("2026-09"));
+                                        var row =
+                                            new com.sanhua.marketingcost.entity.BomRawHierarchy();
+                                        row.setMaterialCode("1053900000062");
+                                        row.setPath("/1053900000062/");
+                                        row.setLevel(0);
+                                        details.save(
+                                            snapshot.monthlySnapshotId(), java.util.List.of(row));
+                                        return null;
+                                      }))
+                          .get(20, TimeUnit.SECONDS);
+                    } catch (Exception failure) {
+                      throw new IllegalStateException(failure);
+                    }
+                  }
+                  var result = gateway.read(context("2026-09"));
+                  assertThat(mapper.selectById(result.monthlySnapshotId())).isNotNull();
+                  assertThat(details.load(result.monthlySnapshotId()))
+                      .extracting(com.sanhua.marketingcost.entity.BomRawHierarchy::getMaterialCode)
+                      .containsExactly("1053900000062");
+                  return result.monthlySnapshotId();
+                });
+    assertThat(attempts).hasValue(2);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM lp_quote_bom_monthly_snapshot_detail WHERE"
+                    + " monthly_snapshot_id=?",
+                Integer.class,
+                id))
+        .isOne();
   }
 
   @Test
@@ -178,20 +209,32 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
   void concurrentFirstCostingsBothReadTheSingleCommittedMonthlySnapshot() throws Exception {
     var start = new CyclicBarrier(2);
     try (var pool = Executors.newFixedThreadPool(2)) {
-      java.util.concurrent.Callable<Long> launch = () -> costing.execute(tx -> {
-        assertThat(jdbc.queryForObject(
-            "SELECT COUNT(*) FROM lp_quote_bom_monthly_snapshot", Integer.class)).isZero();
-        try {
-          start.await(10, TimeUnit.SECONDS);
-        } catch (Exception exception) {
-          throw new IllegalStateException(exception);
-        }
-        var result = gateway.read(context("2026-09"));
-        var visible = mapper.selectCurrentById(result.monthlySnapshotId());
-        assertThat(visible).as("并发复用不能把另一个请求刚提交的快照误报为缺失").isNotNull();
-        assertThat(visible.getSyncStatus()).isEqualTo("SUCCESS");
-        return visible.getId();
-      });
+      java.util.concurrent.Callable<Long> launch =
+          () -> {
+            var attempts = new java.util.concurrent.atomic.AtomicInteger();
+            return spring
+                .getBean(RetryingCosting.class)
+                .run(
+                    () -> {
+                      if (attempts.incrementAndGet() == 1) {
+                        assertThat(
+                                jdbc.queryForObject(
+                                    "SELECT COUNT(*) FROM lp_quote_bom_monthly_snapshot",
+                                    Integer.class))
+                            .isZero();
+                        try {
+                          start.await(10, TimeUnit.SECONDS);
+                        } catch (Exception failure) {
+                          throw new IllegalStateException(failure);
+                        }
+                      }
+                      var result = gateway.read(context("2026-09"));
+                      var visible = mapper.selectById(result.monthlySnapshotId());
+                      assertThat(visible).as("重试后的同一读视图必须看到表头及其明细").isNotNull();
+                      assertThat(visible.getSyncStatus()).isEqualTo("SUCCESS");
+                      return visible.getId();
+                    });
+          };
       var first = pool.submit(launch);
       var second = pool.submit(launch);
       assertThat(first.get(20, TimeUnit.SECONDS)).isEqualTo(second.get(20, TimeUnit.SECONDS));
@@ -212,12 +255,33 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
   }
 
   private static QuoteBomReadContext context(String month) {
-    return new QuoteBomReadContext(22L, 282L, "OA-MONTHLY-TEST", month,
-        "COMMERCIAL", "1053900000062", "板式热交换器", "规格", "型号", "220", "PLATE",
-        LocalDate.parse(month + "-06"), LocalDateTime.parse(month + "-06T12:00:00"));
+    return new QuoteBomReadContext(
+        22L,
+        282L,
+        "OA-MONTHLY-TEST",
+        month,
+        "COMMERCIAL",
+        "1053900000062",
+        "板式热交换器",
+        "规格",
+        "型号",
+        "220",
+        "PLATE",
+        LocalDate.parse(month + "-06"),
+        LocalDateTime.parse(month + "-06T12:00:00"));
+  }
+
+  public static class RetryingCosting {
+    @com.sanhua.marketingcost.service.concurrent.RetryOnConcurrency
+    @org.springframework.transaction.annotation.Transactional(
+        isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
+    public <T> T run(java.util.function.Supplier<T> operation) {
+      return operation.get();
+    }
   }
 
   @Configuration
+  @org.springframework.context.annotation.EnableAspectJAutoProxy(proxyTargetClass = true)
   @EnableTransactionManagement
   static class Transactions {}
 }

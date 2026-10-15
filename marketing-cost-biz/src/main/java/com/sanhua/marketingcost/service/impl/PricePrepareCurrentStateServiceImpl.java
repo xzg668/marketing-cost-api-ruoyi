@@ -5,7 +5,6 @@ import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.entity.MakePartPriceGapItem;
 import com.sanhua.marketingcost.entity.PackageComponentPrice;
 import com.sanhua.marketingcost.entity.PackageComponentPriceDetail;
-import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.PricePrepareGap;
 import com.sanhua.marketingcost.entity.PricePrepareItem;
@@ -16,7 +15,6 @@ import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceGapItemMapper;
 import com.sanhua.marketingcost.mapper.PackageComponentPriceDetailMapper;
 import com.sanhua.marketingcost.mapper.PackageComponentPriceMapper;
-import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareGapMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
@@ -49,7 +47,6 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
   private final PackageComponentPriceDetailMapper packageDetailMapper;
   private final MakePartPriceCalcRowMapper makePartRowMapper;
   private final MakePartPriceGapItemMapper makePartGapMapper;
-  private final PriceLinkedCalcItemMapper linkedCalcItemMapper;
   private final QuoteCostingWorkspaceService workspaceService;
   private final QuoteCostRunVersionInvalidationService versionInvalidationService;
 
@@ -62,7 +59,6 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
       PackageComponentPriceDetailMapper packageDetailMapper,
       MakePartPriceCalcRowMapper makePartRowMapper,
       MakePartPriceGapItemMapper makePartGapMapper,
-      PriceLinkedCalcItemMapper linkedCalcItemMapper,
       QuoteCostingWorkspaceService workspaceService,
       QuoteCostRunVersionInvalidationService versionInvalidationService) {
     this.batchMapper = batchMapper;
@@ -73,7 +69,6 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
     this.packageDetailMapper = packageDetailMapper;
     this.makePartRowMapper = makePartRowMapper;
     this.makePartGapMapper = makePartGapMapper;
-    this.linkedCalcItemMapper = linkedCalcItemMapper;
     this.workspaceService = workspaceService;
     this.versionInvalidationService = versionInvalidationService;
   }
@@ -162,12 +157,10 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
 
   private void publishSuccessfulBatch(PricePrepareBatch batch, QuoteCostingWorkspace workspace) {
     deactivateCurrentItems(batch, batch.getPrepareNo());
-    PricePrepareItem activeItem = new PricePrepareItem();
-    activeItem.setCurrentFlag(ACTIVE);
-    itemMapper.update(
-        activeItem,
-        Wrappers.<PricePrepareItem>lambdaUpdate()
-            .eq(PricePrepareItem::getPrepareNo, batch.getPrepareNo()));
+    setItemFlags(
+        Wrappers.<PricePrepareItem>lambdaQuery()
+            .eq(PricePrepareItem::getPrepareNo, batch.getPrepareNo()),
+        ACTIVE);
     deactivateCurrentGaps(batch, null);
 
     int expectedLockVersion = valueOrZero(workspace.getLockVersion());
@@ -194,17 +187,13 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
   private void publishFailedAttempt(PricePrepareBatch batch, QuoteCostingWorkspace workspace) {
     // 半套候选明细不成为业务结果，也不长期保留；当前缺口保留给页面和协作使用。
     cleanupGeneratedArtifacts(batch);
-    itemMapper.delete(
-        Wrappers.<PricePrepareItem>lambdaQuery()
-            .eq(PricePrepareItem::getPrepareNo, batch.getPrepareNo()));
+    deletePrepareItems(batch.getPrepareNo());
     deletePackageCandidate(batch.getPrepareNo());
     deactivateCurrentGaps(batch, batch.getPrepareNo());
-    PricePrepareGap activeGap = new PricePrepareGap();
-    activeGap.setCurrentFlag(ACTIVE);
-    gapMapper.update(
-        activeGap,
-        Wrappers.<PricePrepareGap>lambdaUpdate()
-            .eq(PricePrepareGap::getPrepareNo, batch.getPrepareNo()));
+    setGapFlags(
+        Wrappers.<PricePrepareGap>lambdaQuery()
+            .eq(PricePrepareGap::getPrepareNo, batch.getPrepareNo()),
+        ACTIVE);
 
     int expectedLockVersion = valueOrZero(workspace.getLockVersion());
     workspace.setWorkspaceStatus(
@@ -221,28 +210,58 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
   }
 
   private void deactivateCurrentItems(PricePrepareBatch batch, String exceptPrepareNo) {
-    PricePrepareItem history = new PricePrepareItem();
-    history.setCurrentFlag(HISTORY);
     var query = currentItemScope(batch);
     if (StringUtils.hasText(exceptPrepareNo)) {
       query.ne(PricePrepareItem::getPrepareNo, exceptPrepareNo);
     }
-    itemMapper.update(history, query);
+    setItemFlags(query, HISTORY);
   }
 
   private void deactivateCurrentGaps(PricePrepareBatch batch, String exceptPrepareNo) {
-    PricePrepareGap history = new PricePrepareGap();
-    history.setCurrentFlag(HISTORY);
     var query = currentGapScope(batch);
     if (StringUtils.hasText(exceptPrepareNo)) {
       query.ne(PricePrepareGap::getPrepareNo, exceptPrepareNo);
     }
-    gapMapper.update(history, query);
+    setGapFlags(query, HISTORY);
   }
 
-  private com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<PricePrepareItem>
+  // The workspace serializes publication for one product/month. Discover existing IDs
+  // without locking gaps, then write in primary-key order; an empty scope needs no UPDATE.
+  private void setItemFlags(
+      com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PricePrepareItem> scope,
+      int flag) {
+    var ids =
+        itemMapper
+            .selectList(scope.select(PricePrepareItem::getId).orderByAsc(PricePrepareItem::getId))
+            .stream()
+            .map(PricePrepareItem::getId)
+            .toList();
+    if (ids.isEmpty()) return;
+    PricePrepareItem patch = new PricePrepareItem();
+    patch.setCurrentFlag(flag);
+    itemMapper.update(
+        patch, Wrappers.<PricePrepareItem>lambdaUpdate().in(PricePrepareItem::getId, ids));
+  }
+
+  private void setGapFlags(
+      com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PricePrepareGap> scope,
+      int flag) {
+    var ids =
+        gapMapper
+            .selectList(scope.select(PricePrepareGap::getId).orderByAsc(PricePrepareGap::getId))
+            .stream()
+            .map(PricePrepareGap::getId)
+            .toList();
+    if (ids.isEmpty()) return;
+    PricePrepareGap patch = new PricePrepareGap();
+    patch.setCurrentFlag(flag);
+    gapMapper.update(
+        patch, Wrappers.<PricePrepareGap>lambdaUpdate().in(PricePrepareGap::getId, ids));
+  }
+
+  private com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PricePrepareItem>
       currentItemScope(PricePrepareBatch batch) {
-    return Wrappers.<PricePrepareItem>lambdaUpdate()
+    return Wrappers.<PricePrepareItem>lambdaQuery()
         .eq(PricePrepareItem::getOaNo, batch.getOaNo())
         .eq(PricePrepareItem::getOaFormItemId, batch.getOaFormItemId())
         .eq(PricePrepareItem::getTopProductCode, batch.getTopProductCode())
@@ -250,9 +269,9 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
         .eq(PricePrepareItem::getCurrentFlag, ACTIVE);
   }
 
-  private com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<PricePrepareGap>
+  private com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<PricePrepareGap>
       currentGapScope(PricePrepareBatch batch) {
-    return Wrappers.<PricePrepareGap>lambdaUpdate()
+    return Wrappers.<PricePrepareGap>lambdaQuery()
         .eq(PricePrepareGap::getOaNo, batch.getOaNo())
         .eq(PricePrepareGap::getOaFormItemId, batch.getOaFormItemId())
         .eq(PricePrepareGap::getTopProductCode, batch.getTopProductCode())
@@ -321,19 +340,37 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
   private void deletePrepareBatch(PricePrepareBatch batch) {
     String prepareNo = batch.getPrepareNo();
     cleanupGeneratedArtifacts(batch);
-    gapMapper.delete(
-        Wrappers.<PricePrepareGap>lambdaQuery().eq(PricePrepareGap::getPrepareNo, prepareNo));
-    itemMapper.delete(
-        Wrappers.<PricePrepareItem>lambdaQuery().eq(PricePrepareItem::getPrepareNo, prepareNo));
+    var gapIds =
+        gapMapper
+            .selectList(
+                Wrappers.<PricePrepareGap>lambdaQuery()
+                    .select(PricePrepareGap::getId)
+                    .eq(PricePrepareGap::getPrepareNo, prepareNo)
+                    .orderByAsc(PricePrepareGap::getId))
+            .stream()
+            .map(PricePrepareGap::getId)
+            .toList();
+    if (!gapIds.isEmpty()) gapMapper.deleteBatchIds(gapIds);
+    deletePrepareItems(prepareNo);
     deletePackageCandidate(prepareNo);
-    batchMapper.delete(
-        Wrappers.<PricePrepareBatch>lambdaQuery().eq(PricePrepareBatch::getPrepareNo, prepareNo));
+    batchMapper.deleteById(batch.getId());
   }
 
-  /**
-   * 删除未发布候选自己生成的中间结果。正式价格主数据不在这里，历史成本版本引用的批次也 会在调用本方法前被保护。联动结果可被同一取价时点的新批次复用，删除旧批次时
-   * 必须同时保护其他批次仍引用的结果，不能把复用结果当成旧批次独占的数据。
-   */
+  private void deletePrepareItems(String prepareNo) {
+    var ids =
+        itemMapper
+            .selectList(
+                Wrappers.<PricePrepareItem>lambdaQuery()
+                    .select(PricePrepareItem::getId)
+                    .eq(PricePrepareItem::getPrepareNo, prepareNo)
+                    .orderByAsc(PricePrepareItem::getId))
+            .stream()
+            .map(PricePrepareItem::getId)
+            .toList();
+    if (!ids.isEmpty()) itemMapper.deleteBatchIds(ids);
+  }
+
+  /** 删除未发布候选自己生成的中间结果。历史成本版本引用的批次会在调用前被保护。 联动计算依据按输入版本共享，其他事务可能已经读取但尚未写入引用，因此不随准备批次清理。 */
   private void cleanupGeneratedArtifacts(PricePrepareBatch batch) {
     if (batch == null || !StringUtils.hasText(batch.getPrepareNo())) {
       return;
@@ -344,31 +381,14 @@ public class PricePrepareCurrentStateServiceImpl implements PricePrepareCurrentS
                 .eq(PricePrepareItem::getPrepareNo, batch.getPrepareNo()));
     List<PricePrepareItem> items = prepareItems == null ? List.of() : prepareItems;
 
-    Set<Long> directLinkedIds = new LinkedHashSet<>();
     Set<String> makePartCodes = new LinkedHashSet<>();
     for (PricePrepareItem item : items) {
       if (item == null) {
         continue;
       }
-      if ("LINKED_PRICE".equals(item.getResultRefType()) && item.getResultRefId() != null) {
-        directLinkedIds.add(item.getResultRefId());
-      }
       if ("MAKE_PART".equals(item.getItemType()) && StringUtils.hasText(item.getMaterialCode())) {
         makePartCodes.add(item.getMaterialCode().trim());
       }
-    }
-    if (!directLinkedIds.isEmpty()) {
-      linkedCalcItemMapper.delete(
-          Wrappers.<PriceLinkedCalcItem>lambdaQuery()
-              .in(PriceLinkedCalcItem::getId, directLinkedIds)
-              .notExists(
-                  """
-                  SELECT 1 FROM lp_price_prepare_item retained
-                  WHERE retained.result_ref_type='LINKED_PRICE'
-                    AND retained.result_ref_id=lp_price_linked_calc_item.id
-                    AND retained.prepare_no <> {0}
-                  """,
-                  batch.getPrepareNo()));
     }
     if (makePartCodes.isEmpty() || batch.getPriceAsOfTime() == null) {
       return;
@@ -422,15 +442,25 @@ WHERE retained.result_ref_type='MAKE_PART_PRICE'
                 .eq(PackageComponentPrice::getCalcBatchId, prepareNo));
     List<Long> priceIds =
         (prices == null ? List.<PackageComponentPrice>of() : prices)
-            .stream().map(PackageComponentPrice::getId).filter(java.util.Objects::nonNull).toList();
+            .stream()
+                .map(PackageComponentPrice::getId)
+                .filter(java.util.Objects::nonNull)
+                .sorted()
+                .toList();
     if (!priceIds.isEmpty()) {
-      packageDetailMapper.delete(
-          Wrappers.<PackageComponentPriceDetail>lambdaQuery()
-              .in(PackageComponentPriceDetail::getPriceId, priceIds));
+      var detailIds =
+          packageDetailMapper
+              .selectList(
+                  Wrappers.<PackageComponentPriceDetail>lambdaQuery()
+                      .select(PackageComponentPriceDetail::getId)
+                      .in(PackageComponentPriceDetail::getPriceId, priceIds)
+                      .orderByAsc(PackageComponentPriceDetail::getId))
+              .stream()
+              .map(PackageComponentPriceDetail::getId)
+              .toList();
+      if (!detailIds.isEmpty()) packageDetailMapper.deleteBatchIds(detailIds);
+      packagePriceMapper.deleteBatchIds(priceIds);
     }
-    packagePriceMapper.delete(
-        Wrappers.<PackageComponentPrice>lambdaQuery()
-            .eq(PackageComponentPrice::getCalcBatchId, prepareNo));
   }
 
   private boolean isScopedOaBatch(PricePrepareBatch batch) {

@@ -33,9 +33,10 @@ public interface CostRunPartItemMapper extends BaseMapper<CostRunPartItem> {
   @Delete(
       """
           DELETE FROM lp_cost_run_part_item
-          WHERE cost_run_no = #{costRunNo}
+          WHERE oa_no = #{oaNo} AND oa_form_item_id <=> #{itemId} AND cost_run_no = #{costRunNo}
           """)
-  int deleteQuoteItemsByCostRunNo(@Param("costRunNo") String costRunNo);
+  int deleteQuoteVersionItems(@Param("oaNo") String oaNo, @Param("itemId") Long itemId,
+      @Param("costRunNo") String costRunNo);
 
   /**
    * 拉取试算所需的部品基础数据 —— 只查 BOM 结算行 + 物料主档，不预 JOIN 路由表。

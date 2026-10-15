@@ -1,8 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingPreparationSource;
-
 import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.quotebom.QuoteEffectiveBomAlternativeResponse;
 import com.sanhua.marketingcost.dto.quotebom.QuoteEffectiveBomExclusionSummaryResponse;
@@ -33,32 +31,33 @@ import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelect
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelectionRepository;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelectionScope;
 import com.sanhua.marketingcost.service.bomalternative.QuoteBomAlternativeSelectionService;
+import com.sanhua.marketingcost.service.concurrent.RetryOnConcurrency;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomBlockIssue;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomBuildRequest;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomBuildResult;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomExclusion;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomNodeDraft;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomShapeDecision;
-import com.sanhua.marketingcost.service.effectivebom.EffectiveBomVariantInput;
 import com.sanhua.marketingcost.service.effectivebom.EffectiveBomVariantHasher;
+import com.sanhua.marketingcost.service.effectivebom.EffectiveBomVariantInput;
 import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomBuilder;
 import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomCostingCandidate;
 import com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomQueryException;
-import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingPreparationSource;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContext;
 import com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver;
+import com.sanhua.marketingcost.service.ingest.QuoteBomStatusService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
-import com.sanhua.marketingcost.service.quotebom.U9MonthlySnapshotIdentity;
-import com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeRequest;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeResolution;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeResolver;
 import com.sanhua.marketingcost.service.materialshape.MaterialQuoteShapeSource;
 import com.sanhua.marketingcost.service.materialshape.SupplierRatioResolution;
-import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import com.sanhua.marketingcost.service.materialshape.SupplierRatioShapeResolver;
+import com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService;
+import com.sanhua.marketingcost.service.quotebom.U9MonthlySnapshotIdentity;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -148,6 +147,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @RetryOnConcurrency
   public QuoteEffectiveBomResponse getEffectiveBom(String oaNo, Long oaFormItemId) {
     QueryContext context = requireContext(oaNo, oaFormItemId);
     QuoteBomMonthlySnapshot snapshot = findOrPrepareMonthlySnapshot(context);
@@ -156,6 +156,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @RetryOnConcurrency
   public QuoteEffectiveBomResponse rebuildPreview(String oaNo, Long oaFormItemId) {
     QueryContext context = requireContext(oaNo, oaFormItemId);
     QuoteBomMonthlySnapshot snapshot = findOrPrepareMonthlySnapshot(context);
@@ -164,6 +165,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @RetryOnConcurrency
   public QuoteEffectiveBomResponse previewAlternative(
       String oaNo,
       Long oaFormItemId,
@@ -187,8 +189,8 @@ public class QuoteEffectiveBomApplicationServiceImpl
 
   @Override
   @Transactional(rollbackFor = Exception.class)
-  public QuoteEffectiveBomCostingCandidate prepareCostingCandidate(
-      String oaNo, Long oaFormItemId) {
+  @RetryOnConcurrency
+  public QuoteEffectiveBomCostingCandidate prepareCostingCandidate(String oaNo, Long oaFormItemId) {
     QueryContext context = requireContext(oaNo, oaFormItemId);
     QuoteBomMonthlySnapshot snapshot = findOrPrepareMonthlySnapshot(context);
     DraftEvaluation evaluation = evaluateDraft(context, snapshot);
@@ -505,10 +507,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
     return rows == null || rows.isEmpty() ? null : rows.getFirst();
   }
 
-  /**
-   * 历史报价可能已有原始 BOM，但尚未建立新流程使用的内部月度关系。页面打开或刷新时只为当前
-   * 产品补齐这层技术关系，业务无需返回产品列表再次执行 BOM 同步。
-   */
+  /** 历史报价可能已有原始 BOM，但尚未建立新流程使用的内部月度关系。页面打开或刷新时只为当前 产品补齐这层技术关系，业务无需返回产品列表再次执行 BOM 同步。 */
   private QuoteBomMonthlySnapshot findOrPrepareMonthlySnapshot(QueryContext context) {
     QuoteBomMonthlySnapshot snapshot = findMonthlySnapshot(context);
     if (snapshot != null && !"U9".equals(snapshot.getBomSource())) {
@@ -521,21 +520,24 @@ public class QuoteEffectiveBomApplicationServiceImpl
         || !monthlyDetails.load(snapshot.getId()).isEmpty())) {
       return snapshot;
     }
-    var checked = quoteBomStatusService.checkItemForCostRun(
-        context.oaNo(), context.oaFormItemId(), context.costPeriodMonth());
-    // 并发请求可能刚提交同月快照，普通 SELECT 仍受外层旧读视图影响。
-    // 只对本次检查返回的已知记录当前读，首次未建快照时不提前加间隙锁。
-    if (checked != null && checked.getSyncRecordId() != null
-        && List.of("SYNCED", "REUSED_CURRENT_MONTH", "MANUAL_ENTERED").contains(checked.getBomStatus())) {
-      QuoteBomMonthlySnapshot current =
-          monthlySnapshotMapper.selectCurrentById(checked.getSyncRecordId());
-      if (current != null && "SUCCESS".equals(current.getSyncStatus())
+    var checked =
+        quoteBomStatusService.checkItemForCostRun(
+            context.oaNo(), context.oaFormItemId(), context.costPeriodMonth());
+    // 使用本次检查返回的快照，并在同一事务读视图内读取其不可变明细。
+    // 并发首次创建的冲突由外层事务重试，不能混用新表头和旧明细读视图。
+    if (checked != null
+        && checked.getSyncRecordId() != null
+        && List.of("SYNCED", "REUSED_CURRENT_MONTH", "MANUAL_ENTERED")
+            .contains(checked.getBomStatus())) {
+      QuoteBomMonthlySnapshot current = monthlySnapshotMapper.selectById(checked.getSyncRecordId());
+      if (current != null
+          && "SUCCESS".equals(current.getSyncStatus())
           && Objects.equals(current.getActiveFlag(), ACTIVE)
           && Objects.equals(current.getProductCode(), context.topProductCode())
           && Objects.equals(current.getCostPeriodMonth(), context.costPeriodMonth())
           && Objects.equals(current.getPriceOrgCode(), context.organization().priceOrgCode())
           && (!"U9".equals(current.getBomSource())
-              || !monthlyDetails.loadCurrent(current.getId()).isEmpty())) {
+              || !monthlyDetails.load(current.getId()).isEmpty())) {
         return current;
       }
     }
@@ -547,9 +549,8 @@ public class QuoteEffectiveBomApplicationServiceImpl
         context.businessUnit(), context.organization().priceOrgCode(), context.customerKey(), context.packageMethod());
   }
 
-  private RawSnapshot loadRawSnapshot(
-      QueryContext context, QuoteBomMonthlySnapshot snapshot) {
-    List<BomRawHierarchy> frozenRows = monthlyDetails.loadCurrent(snapshot.getId());
+  private RawSnapshot loadRawSnapshot(QueryContext context, QuoteBomMonthlySnapshot snapshot) {
+    List<BomRawHierarchy> frozenRows = monthlyDetails.load(snapshot.getId());
     if (!frozenRows.isEmpty()) {
       return new RawSnapshot(
           technicalContributions.merge(context.oaFormItemId(), context.costPeriodMonth(), frozenRows),

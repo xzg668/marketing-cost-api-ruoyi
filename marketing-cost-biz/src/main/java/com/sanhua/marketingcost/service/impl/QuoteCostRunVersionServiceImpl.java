@@ -7,14 +7,11 @@ import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionService;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 @Service
 public class QuoteCostRunVersionServiceImpl implements QuoteCostRunVersionService {
-
-  private static final int MAX_RETRY = 5;
 
   private final QuoteCostRunVersionMapper versionMapper;
   private final QuoteCostRunVersionNoGenerator noGenerator;
@@ -85,31 +82,22 @@ public class QuoteCostRunVersionServiceImpl implements QuoteCostRunVersionServic
     String productCodeValue = required("productCode", productCode);
     String pricingMonthValue = required("pricingMonth", pricingMonth);
     String resultPeriodValue = required("resultPeriod", resultPeriod);
-    for (int i = 0; i < MAX_RETRY; i++) {
-      QuoteCostRunVersion version = new QuoteCostRunVersion();
-      version.setCostRunNo(noGenerator.nextCostRunNo());
-      version.setOaNo(oaNoValue);
-      version.setOaFormItemId(oaFormItemId);
-      version.setProductCode(productCodeValue);
-      version.setPricingMonth(pricingMonthValue);
-      version.setResultPeriod(resultPeriodValue);
-      version.setPricePrepareNo(trimToNull(pricePrepareNo));
-      version.setAlgorithmVersion(algorithmVersionProvider.currentVersion());
-      version.setStatus(status);
-      version.setPartItemCount(0);
-      version.setCostItemCount(0);
-      version.setTrialStartedAt(LocalDateTime.now());
-      version.setBusinessUnitType(trimToNull(businessUnitType));
-      try {
-        versionMapper.insert(version);
-        return version;
-      } catch (DuplicateKeyException ex) {
-        if (i == MAX_RETRY - 1) {
-          throw ex;
-        }
-      }
-    }
-    throw new IllegalStateException("成本试算版本号生成失败");
+    QuoteCostRunVersion version = new QuoteCostRunVersion();
+    version.setCostRunNo(noGenerator.nextCostRunNo());
+    version.setOaNo(oaNoValue);
+    version.setOaFormItemId(oaFormItemId);
+    version.setProductCode(productCodeValue);
+    version.setPricingMonth(pricingMonthValue);
+    version.setResultPeriod(resultPeriodValue);
+    version.setPricePrepareNo(trimToNull(pricePrepareNo));
+    version.setAlgorithmVersion(algorithmVersionProvider.currentVersion());
+    version.setStatus(status);
+    version.setPartItemCount(0);
+    version.setCostItemCount(0);
+    version.setTrialStartedAt(LocalDateTime.now());
+    version.setBusinessUnitType(trimToNull(businessUnitType));
+    versionMapper.insert(version);
+    return version;
   }
 
   @Override

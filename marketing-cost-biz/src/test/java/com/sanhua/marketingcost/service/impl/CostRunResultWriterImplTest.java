@@ -37,8 +37,8 @@ class CostRunResultWriterImplTest {
     writer.writeQuoteResult(result);
     writer.writeQuoteResult(result);
 
-    verify(partMapper, times(2)).deleteQuoteItemsByCostRunNo("RUN-101");
-    verify(costMapper, times(2)).deleteQuoteItemsByCostRunNo("RUN-101");
+    verify(partMapper, times(2)).deleteQuoteVersionItems("OA-001", 101L, "RUN-101");
+    verify(costMapper, times(2)).deleteQuoteVersionItems("OA-001", 101L, "RUN-101");
     ArgumentCaptor<CostRunPartItem> part = ArgumentCaptor.forClass(CostRunPartItem.class);
     verify(partMapper, times(2)).insert(part.capture());
     assertThat(part.getValue().getCostRunVersionId()).isEqualTo(1001L);

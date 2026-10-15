@@ -22,6 +22,7 @@ import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
 import com.sanhua.marketingcost.service.QuotePricePrepareWorkbenchService;
 import com.sanhua.marketingcost.service.costing.ProductCostingContext;
 import com.sanhua.marketingcost.service.costing.ProductCostingContextResolver;
+import com.sanhua.marketingcost.service.costing.ProductCostingExecutionGuard;
 import com.sanhua.marketingcost.service.costing.ProductCostingFailurePolicy;
 import com.sanhua.marketingcost.service.costing.ProductCostingSuccessLookup;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataAvailability;
@@ -54,6 +55,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   private final ProductCostingContextResolver contextResolver;
   private final ProductCostingSuccessLookup successLookup;
   private final ProductCostingFailurePolicy failurePolicy;
+  private final ProductCostingExecutionGuard executionGuard;
   private final TechnicalDataQuoteSourceReader technicalSources;
   private final com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService
       effectiveTechnicalData;
@@ -68,7 +70,8 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       ProductCostingSuccessLookup successLookup,
       ProductCostingFailurePolicy failurePolicy,
       TechnicalDataQuoteSourceReader technicalSources,
-      com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService effectiveTechnicalData) {
+      com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService effectiveTechnicalData,
+      ProductCostingExecutionGuard executionGuard) {
     this.costingWorkbenchService = costingWorkbenchService;
     this.pricePrepareService = pricePrepareService;
     this.costRunService = costRunService;
@@ -77,6 +80,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
     this.contextResolver = contextResolver;
     this.successLookup = successLookup;
     this.failurePolicy = failurePolicy;
+    this.executionGuard = executionGuard;
     this.technicalSources = technicalSources;
     this.effectiveTechnicalData = effectiveTechnicalData;
   }
@@ -85,16 +89,26 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   public ProductCostingResult execute(ProductCostingRequest request) {
     // 请求归属错误直接拒绝；验证通过后，所有阶段故障均返回同一产品的结构化结果。
     ProductCostingContext context = contextResolver.resolve(request);
-    oaWorkflowAccess.requireCosting(context.form().getId());
-    ProductCostingResult result = executeResolved(context, request.force());
-    return withSourceCheck(context, result);
+    return executionGuard.execute(
+        context,
+        () -> {
+          ProductCostingContext current = contextResolver.resolve(request);
+          oaWorkflowAccess.requireCosting(current.form().getId());
+          return withSourceCheck(current, executeResolved(current, request.force()));
+        });
   }
 
   @Override
   public ProductCostingResult prepare(ProductCostingRequest request) {
     ProductCostingContext context = contextResolver.resolve(request);
+    return executionGuard.execute(context, () -> prepareResolved(contextResolver.resolve(request)));
+  }
+
+  private ProductCostingResult prepareResolved(ProductCostingContext context) {
     oaWorkflowAccess.requireCosting(context.form().getId());
     try {
+      if (!successLookup.hasCurrentVersion(context))
+        return withSourceCheck(context, executeStages(context, true));
       ProductCostingContext current = contextResolver.resolveRevision(context);
       var reusable = successLookup.find(current);
       if (reusable.isPresent()) {
@@ -143,8 +157,10 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
 
   private ProductCostingResult executeResolved(ProductCostingContext context, boolean force) {
     try {
+      // 新产品没有成功版本可复用，直接进入正式检查；价格和成本发布边界仍完整校验。
+      if (force || !successLookup.hasCurrentVersion(context)) return executeStages(context, false);
       context = contextResolver.resolveRevision(context);
-      ProductCostingResult reusable = force ? null : reusableSuccess(context);
+      ProductCostingResult reusable = reusableSuccess(context);
       if (reusable != null) return reusable;
     } catch (com.sanhua.marketingcost.service.EffectiveTechnicalDataException pendingApproval) {
       // 审批尚未齐全仍可检查 BOM/价格缺口；正式成本阶段必须再次核验批准输入。
@@ -299,6 +315,9 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
           "本产品有 " + correction.items().size() + " 项自行公式尚未形成可用价格，请在价格源维护下载修正后导入",
           correction.items().size());
     PricePrepareReadinessResult readiness = prices == null ? null : prices.getReadiness();
+    if (readiness != null && "FAILED".equals(readiness.getBatchStatus())) {
+      throw new IllegalStateException(firstText(readiness.getMessage(), "价格准备执行失败，请重试"));
+    }
     if (readiness != null
         && "READY".equals(readiness.getStatus())
         && "SUCCESS".equals(readiness.getBatchStatus())

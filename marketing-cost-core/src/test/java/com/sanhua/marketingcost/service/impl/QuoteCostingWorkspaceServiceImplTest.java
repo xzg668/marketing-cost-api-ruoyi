@@ -34,7 +34,7 @@ class QuoteCostingWorkspaceServiceImplTest {
   @DisplayName("首次创建只写一条初始工作区并按产品月份返回")
   void createsInitialWorkspace() {
     QuoteCostingWorkspace stored = workspace(9L, 180L, "2026-08", 0);
-    when(mapper.selectByItemAndMonth(180L, "2026-08")).thenReturn(stored);
+    when(mapper.selectByItemAndMonthForUpdate(180L, "2026-08")).thenReturn(stored);
 
     QuoteCostingWorkspace result =
         service.getOrCreate(" OA-1 ", 180L, " P-1 ", "2026-08", " COMMERCIAL ");
@@ -58,10 +58,19 @@ class QuoteCostingWorkspaceServiceImplTest {
   void reusesWorkspaceWhenInsertIsIgnored() {
     QuoteCostingWorkspace stored = workspace(9L, 180L, "2026-08", 3);
     when(mapper.insertIgnore(any())).thenReturn(0);
-    when(mapper.selectByItemAndMonth(180L, "2026-08")).thenReturn(stored);
+    when(mapper.selectByItemAndMonthForUpdate(180L, "2026-08")).thenReturn(stored);
 
-    assertThat(service.getOrCreate("OA-1", 180L, "P-1", "2026-08", "COMMERCIAL"))
-        .isSameAs(stored);
+    assertThat(service.getOrCreate("OA-1", 180L, "P-1", "2026-08", "COMMERCIAL")).isSameAs(stored);
+  }
+
+  @Test
+  void existingWorkspaceNeedsNoInsertOrWriteLock() {
+    var stored = workspace(9L, 180L, "2026-08", 3);
+    when(mapper.selectByItemAndMonth(180L, "2026-08")).thenReturn(stored);
+    assertThat(service.getOrCreate("OA-1", 180L, "P-1", "2026-08", "COMMERCIAL")).isSameAs(stored);
+    org.mockito.Mockito.verify(mapper, org.mockito.Mockito.never()).insertIgnore(any());
+    org.mockito.Mockito.verify(mapper, org.mockito.Mockito.never())
+        .selectByItemAndMonthForUpdate(any(), any());
   }
 
   @Test

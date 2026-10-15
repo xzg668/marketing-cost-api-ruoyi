@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.quotebom;
 
 import com.sanhua.marketingcost.entity.QuoteBomMonthlySnapshot;
 import com.sanhua.marketingcost.mapper.QuoteBomMonthlySnapshotMapper;
+import com.sanhua.marketingcost.service.concurrent.RetryOnConcurrency;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.Clock;
 import java.time.LocalDateTime;
@@ -46,6 +47,7 @@ public class MonthlySnapshotU9BomGateway implements CurrentU9BomGateway {
   // 月度快照必须与发起核算共用事务。MySQL REPEATABLE READ 下，独立事务提交的新快照
   // 对已建立读视图的外层事务不可见，会让首次核算在后续 BOM 状态和有效树查询中误报缺失。
   @Transactional(rollbackFor = Exception.class)
+  @RetryOnConcurrency
   public CurrentU9BomResult read(QuoteBomReadContext context) {
     U9MonthlySnapshotIdentity identity = U9MonthlySnapshotIdentity.from(context);
     QuoteBomMonthlySnapshot existing = mapper.selectU9MonthlyByIdentity(identity.identityKey());
@@ -59,16 +61,22 @@ public class MonthlySnapshotU9BomGateway implements CurrentU9BomGateway {
     return createSnapshot(context, identity, null);
   }
 
-  private CurrentU9BomResult reuseAvailable(QuoteBomReadContext context,
-      U9MonthlySnapshotIdentity identity, QuoteBomMonthlySnapshot existing) {
-    if (!details.loadCurrent(existing.getId()).isEmpty()) return restored(existing);
+  private CurrentU9BomResult reuseAvailable(
+      QuoteBomReadContext context,
+      U9MonthlySnapshotIdentity identity,
+      QuoteBomMonthlySnapshot existing) {
+    if (!details.load(existing.getId()).isEmpty()) return restored(existing);
     // Pre-migration headers stored only a batch ID. Backfill while that exact batch still exists.
     // If EasyData already removed it, preserve the old header for history and start a new card
     // from the current BOM; the lost historical structure cannot be reconstructed.
-    QuoteBomMonthlySnapshot locked = mapper.selectU9MonthlyByIdentityForUpdate(identity.identityKey());
-    if (locked == null) return CurrentU9BomResult.error("U9月度卡片并发更新，请重试");
-    if (!STATUS_SUCCESS.equals(locked.getSyncStatus())) return restored(locked);
-    if (!details.loadCurrent(locked.getId()).isEmpty()) return restored(locked);
+    QuoteBomMonthlySnapshot locked =
+        mapper.selectU9MonthlyByIdentityForUpdate(identity.identityKey());
+    if (locked == null
+        || !existing.getId().equals(locked.getId())
+        || !STATUS_SUCCESS.equals(locked.getSyncStatus())) {
+      throw new org.springframework.dao.ConcurrencyFailureException("U9月度卡片已变化，重新读取完整快照");
+    }
+    if (!details.load(locked.getId()).isEmpty()) return restored(locked);
     try {
       details.captureU9(locked.getId(), context, locked.getBomBatchId());
       return restored(locked);
@@ -94,8 +102,13 @@ public class MonthlySnapshotU9BomGateway implements CurrentU9BomGateway {
     // 当前读串行切换月度索引；旧的“无 BOM”证据保留，新可用结构另存快照。
     var current = mapper.selectU9MonthlyByIdentityForUpdate(identity.identityKey());
     if (current == null) throw new IllegalStateException("U9月度来源切换期间记录丢失，请重试");
-    if (!STATUS_NOT_FOUND.equals(current.getSyncStatus())) return restored(current);
-    if (mapper.retireMissingU9MonthlySnapshot(current.getId(), identity.identityKey(), LocalDateTime.now(clock)) != 1) {
+    if (!previous.getId().equals(current.getId())
+        || !STATUS_NOT_FOUND.equals(current.getSyncStatus())) {
+      throw new org.springframework.dao.ConcurrencyFailureException("U9月度来源已由并发任务补齐，重新读取完整快照");
+    }
+    if (mapper.retireMissingU9MonthlySnapshot(
+            current.getId(), identity.identityKey(), LocalDateTime.now(clock))
+        != 1) {
       throw new IllegalStateException("U9原缺失记录已变化，请重试");
     }
     return createSnapshot(context, identity, live);
@@ -106,11 +119,9 @@ public class MonthlySnapshotU9BomGateway implements CurrentU9BomGateway {
     LocalDateTime now = LocalDateTime.now(clock);
     QuoteBomMonthlySnapshot claim = claim(identity, context, now);
     if (mapper.insertU9MonthlyClaim(claim) == 0) {
-      QuoteBomMonthlySnapshot winner =
-          mapper.selectU9MonthlyByIdentityForUpdate(identity.identityKey());
-      return winner == null
-          ? CurrentU9BomResult.error("U9月度快照并发创建失败，请重试")
-          : restored(winner);
+      // The winner is newer than this transaction's read view. A fresh transaction
+      // must read its header and immutable details together.
+      throw new org.springframework.dao.ConcurrencyFailureException("U9月度快照已由并发任务创建，请重新读取");
     }
 
     CurrentU9BomResult live = verified == null ? liveGateway.readLive(context) : verified;

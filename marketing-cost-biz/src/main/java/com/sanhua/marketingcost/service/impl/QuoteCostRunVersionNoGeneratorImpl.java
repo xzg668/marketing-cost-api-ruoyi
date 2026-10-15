@@ -1,11 +1,10 @@
 package com.sanhua.marketingcost.service.impl;
 
-import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
-
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionNoGenerator;
+import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -21,31 +20,26 @@ public class QuoteCostRunVersionNoGeneratorImpl implements QuoteCostRunVersionNo
       DateTimeFormatter.ofPattern("yyyyMMdd");
 
   private final QuoteCostRunVersionMapper versionMapper;
+  private final com.sanhua.marketingcost.service.costing.QuoteCostVersionSequence sequence;
 
-  public QuoteCostRunVersionNoGeneratorImpl(QuoteCostRunVersionMapper versionMapper) {
+  public QuoteCostRunVersionNoGeneratorImpl(
+      QuoteCostRunVersionMapper versionMapper,
+      com.sanhua.marketingcost.service.costing.QuoteCostVersionSequence sequence) {
     this.versionMapper = versionMapper;
+    this.sequence = sequence;
   }
 
   @Override
   public String nextCostRunNo() {
     String prefix = "TRIAL-" + LocalDateTime.now().format(RUN_TIME_FORMAT) + "-";
-    Long count =
-        versionMapper.selectCount(
-            Wrappers.lambdaQuery(QuoteCostRunVersion.class)
-                .likeRight(QuoteCostRunVersion::getCostRunNo, prefix));
-    long next = count == null ? 1L : count + 1L;
-    return prefix + String.format("%04d", next);
+    return prefix + java.util.UUID.randomUUID().toString().replace("-", "");
   }
 
   @Override
   public String nextVersionNo(Long oaFormItemId, String productCode) {
-    String prefix = "COST-"
-        + CostPricingPeriodUtils.currentPricingDate().format(VERSION_DATE_FORMAT) + "-";
-    Long dailyCount =
-        versionMapper.selectCount(
-            Wrappers.lambdaQuery(QuoteCostRunVersion.class)
-                .likeRight(QuoteCostRunVersion::getVersionNo, prefix));
-    long dailySeq = dailyCount == null ? 1L : dailyCount + 1L;
+    LocalDate day = CostPricingPeriodUtils.currentPricingDate();
+    String prefix = "COST-" + day.format(VERSION_DATE_FORMAT) + "-";
+    long dailySeq = sequence.next(day, prefix);
 
     var wrapper = Wrappers.lambdaQuery(QuoteCostRunVersion.class)
         .eq(oaFormItemId != null, QuoteCostRunVersion::getOaFormItemId, oaFormItemId)

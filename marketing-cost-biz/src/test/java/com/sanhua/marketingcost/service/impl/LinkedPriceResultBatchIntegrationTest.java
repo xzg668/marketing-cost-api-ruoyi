@@ -34,41 +34,164 @@ class LinkedPriceResultBatchIntegrationTest extends OriginalPricingIntegrationTe
   @Autowired com.sanhua.marketingcost.mapper.PriceLinkedItemMapper rules;
 
   @Autowired com.sanhua.marketingcost.mapper.PriceVariableBindingMapper bindings;
+  @Autowired com.sanhua.marketingcost.mapper.TechnicalPriceSourceMapper priceSources;
+
+  @Test
+  void batchPriceKindsRespectHistoricalTablesAndOrganizationScopes() {
+    new TransactionTemplate(transactions).executeWithoutResult(status -> {
+      jdbc.update("""
+          INSERT INTO lp_price_linked_item(business_unit_type,org_code,material_code,pricing_month,
+            rule_status,source_kind,formula_expr,effective_from,created_at,updated_at)
+          VALUES('COMMERCIAL','210','BATCH-KINDS-L','2037-10','PUBLISHED','PUBLIC','1','2037-10-01',NOW(),NOW()),
+            ('HOUSEHOLD','210','BATCH-KINDS-OTHER','2037-10','PUBLISHED','PUBLIC','1','2037-10-01',NOW(),NOW())
+          """);
+      jdbc.update("""
+          INSERT INTO lp_price_range_factor_rule(business_unit_type,org_code,material_code,
+            pricing_month,rule_status,factor_code,import_batch_no,effective_from,created_at,updated_at)
+          VALUES('COMMERCIAL','210','BATCH-KINDS-R','2037-10','PUBLISHED','Cu','KINDS','2037-10-01',NOW(),NOW())
+          """);
+      var codes = List.of("BATCH-KINDS-L", "BATCH-KINDS-R", "BATCH-KINDS-OTHER", "BATCH-KINDS-MISSING");
+      for (String org : List.of("210", "220")) {
+        var batch = priceSources.publicKindsBatch(codes, "2037-10", "2037-10", "COMMERCIAL", org, LocalDate.of(2037, 10, 15));
+        assertThat(batch).containsExactlyInAnyOrderElementsOf("210".equals(org)
+            ? List.of(new com.sanhua.marketingcost.mapper.TechnicalPriceSourceMapper.MaterialKind("BATCH-KINDS-L", "LINKED"),
+                new com.sanhua.marketingcost.mapper.TechnicalPriceSourceMapper.MaterialKind("BATCH-KINDS-R", "RANGE")) : List.of());
+      }
+      status.setRollbackOnly();
+    });
+  }
+
+  @Test
+  void concurrentImmutableBatchesReuseTheWinnerDespiteAnOlderRepeatableReadSnapshot() throws Exception {
+    var ready = new java.util.concurrent.CyclicBarrier(2);
+    try (var pool = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+      var jobs = new java.util.ArrayList<java.util.concurrent.Future<List<Long>>>();
+      for (int index = 0; index < 2; index++) jobs.add(pool.submit(() -> {
+        var transaction = new TransactionTemplate(transactions);
+        transaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        return transaction.execute(status -> {
+          var rows = List.of(row("IMMUTABLE-RACE-A", "OA_LOCKED"), row("IMMUTABLE-RACE-B", "OA_LOCKED"));
+          assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_price_linked_calc_item WHERE item_code LIKE 'IMMUTABLE-RACE-%'", Integer.class)).isZero();
+          try { ready.await(10, java.util.concurrent.TimeUnit.SECONDS); }
+          catch (Exception failure) { throw new IllegalStateException(failure); }
+          mapper.insertOrReuseResults(rows);
+          var saved = mapper.selectReusedResults(rows);
+          assertThat(saved).hasSize(2).allSatisfy(value -> {
+            assertThat(value.getPartUnitPrice()).isEqualByComparingTo("84.070796");
+            assertThat(value.getSupplierCode()).isEqualTo("S1");
+          });
+          return saved.stream().map(PriceLinkedCalcItem::getId).sorted().toList();
+        });
+      }));
+      var first = jobs.getFirst().get(30, java.util.concurrent.TimeUnit.SECONDS);
+      assertThat(jobs.getLast().get(30, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(first);
+      new TransactionTemplate(transactions).executeWithoutResult(status -> {
+        var before = mapper.selectById(first.getFirst());
+        var conflict = row(before.getItemCode(), "OA_LOCKED");
+        conflict.setPartUnitPrice(BigDecimal.ONE);
+        conflict.setInputSnapshotJson("{\"changed\":true}");
+        mapper.insertOrReuseResults(List.of(conflict));
+        assertThat(mapper.selectReusedResults(List.of(conflict)).getFirst())
+            .usingRecursiveComparison().isEqualTo(before);
+        conflict.setCalcFingerprint("another-input");
+        mapper.insertOrReuseResults(List.of(conflict));
+        assertThat(mapper.selectReusedResults(List.of(conflict)).getFirst().getId()).isNotIn(first);
+        status.setRollbackOnly();
+      });
+      assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_price_linked_calc_item WHERE item_code LIKE 'IMMUTABLE-RACE-%'", Integer.class)).isEqualTo(2);
+    } finally {
+      jdbc.update("DELETE FROM lp_price_linked_calc_item WHERE item_code LIKE 'IMMUTABLE-RACE-%'");
+    }
+  }
+
+  @Test
+  void publicQuoteInputVersionsAppendAndOldEvidenceCannotBeOverwrittenByAnotherInput() {
+    new TransactionTemplate(transactions)
+        .executeWithoutResult(
+            status -> {
+              var old = row("PUBLIC-INPUT-VERSION", "OA_LOCKED");
+              old.setCalcFingerprint("input-A");
+              mapper.insert(old);
+              var before = mapper.selectById(old.getId());
+              var changed = row("PUBLIC-INPUT-VERSION", "OA_LOCKED");
+              changed.setCalcFingerprint("input-B");
+              changed.setPartUnitPrice(new BigDecimal("123.456789"));
+              mapper.insert(changed);
+              assertThat(changed.getId()).isNotEqualTo(old.getId());
+              assertThat(mapper.selectById(old.getId()))
+                  .usingRecursiveComparison()
+                  .isEqualTo(before);
+              var duplicate = row("PUBLIC-INPUT-VERSION", "OA_LOCKED");
+              duplicate.setCalcFingerprint("input-A");
+              assertThatThrownBy(() -> mapper.insert(duplicate))
+                  .isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
+              assertThat(
+                      jdbc.queryForObject(
+                          "SELECT COUNT(*) FROM lp_price_linked_calc_item WHERE"
+                              + " item_code='PUBLIC-INPUT-VERSION'",
+                          Integer.class))
+                  .isEqualTo(2);
+              status.setRollbackOnly();
+            });
+  }
 
   @Test
   void retirementRemovesOnlyOldAdjustmentStorage() {
-    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('lp_factor_adjust_batch','lp_factor_adjust_price')", Integer.class)).isZero();
-    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND column_name IN ('adjust_batch_id','latest_adjust_batch_id')", Integer.class)).isZero();
-    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('lp_factor_monthly_price','lp_factor_monthly_price_change_log','lp_factor_upload_batch')", Integer.class)).isEqualTo(3);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND"
+                    + " table_name IN ('lp_factor_adjust_batch','lp_factor_adjust_price')",
+                Integer.class))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND"
+                    + " column_name IN ('adjust_batch_id','latest_adjust_batch_id')",
+                Integer.class))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND"
+                    + " table_name IN"
+                    + " ('lp_factor_monthly_price','lp_factor_monthly_price_change_log','lp_factor_upload_batch')",
+                Integer.class))
+        .isEqualTo(3);
   }
 
   @Test
   void monthlyResultsWithoutOaKeepTimeOrganizationAndTechnicalInputUniqueness() {
-    new TransactionTemplate(transactions).executeWithoutResult(status -> {
-      var original = row("MONTHLY-RETIRED-ADJUST", "MONTHLY_FACTOR");
-      original.setCalcScene("MONTHLY_ADJUST");
-      original.setOaNo(null);
-      mapper.insert(original);
-      original.setId(null);
-      assertThatThrownBy(() -> mapper.insert(original))
-          .isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
-      original.setPriceAsOfTime(original.getPriceAsOfTime().plusDays(1));
-      mapper.insert(original);
-      original.setId(null);
-      original.setPriceOrgCode("220");
-      mapper.insert(original);
-      original.setId(null);
-      original.setSourceKind("TECH_SUPPLEMENTAL");
-      original.setCalcFingerprint("input-v1");
-      mapper.insert(original);
-      original.setId(null);
-      assertThatThrownBy(() -> mapper.insert(original))
-          .isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
-      original.setCalcFingerprint("input-v2");
-      mapper.insert(original);
-      assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_price_linked_calc_item WHERE item_code='MONTHLY-RETIRED-ADJUST'", Integer.class)).isEqualTo(5);
-      status.setRollbackOnly();
-    });
+    new TransactionTemplate(transactions)
+        .executeWithoutResult(
+            status -> {
+              var original = row("MONTHLY-RETIRED-ADJUST", "MONTHLY_FACTOR");
+              original.setCalcScene("MONTHLY_ADJUST");
+              original.setOaNo(null);
+              mapper.insert(original);
+              original.setId(null);
+              assertThatThrownBy(() -> mapper.insert(original))
+                  .isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
+              original.setPriceAsOfTime(original.getPriceAsOfTime().plusDays(1));
+              mapper.insert(original);
+              original.setId(null);
+              original.setPriceOrgCode("220");
+              mapper.insert(original);
+              original.setId(null);
+              original.setSourceKind("TECH_SUPPLEMENTAL");
+              original.setCalcFingerprint("input-v1");
+              mapper.insert(original);
+              original.setId(null);
+              assertThatThrownBy(() -> mapper.insert(original))
+                  .isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
+              original.setCalcFingerprint("input-v2");
+              mapper.insert(original);
+              assertThat(
+                      jdbc.queryForObject(
+                          "SELECT COUNT(*) FROM lp_price_linked_calc_item WHERE"
+                              + " item_code='MONTHLY-RETIRED-ADJUST'",
+                          Integer.class))
+                  .isEqualTo(5);
+              status.setRollbackOnly();
+            });
   }
 
   @Test
@@ -155,6 +278,10 @@ class LinkedPriceResultBatchIntegrationTest extends OriginalPricingIntegrationTe
                 mapper.insert(publicRow);
                 publicRow.setId(null);
                 publicRow.setCalcFingerprint("new-financial-input");
+                if ("QUOTE".equals(scene)) {
+                  mapper.insert(publicRow);
+                  publicRow.setId(null);
+                }
                 assertThatThrownBy(() -> mapper.insert(publicRow))
                     .isInstanceOf(org.springframework.dao.DuplicateKeyException.class);
               }

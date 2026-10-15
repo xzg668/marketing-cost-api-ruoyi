@@ -74,10 +74,13 @@ public class QuoteCostingWorkspaceServiceImpl implements QuoteCostingWorkspaceSe
     candidate.setLockVersion(0);
     candidate.setCreatedAt(now);
     candidate.setUpdatedAt(now);
+    QuoteCostingWorkspace existing =
+        workspaceMapper.selectByItemAndMonth(normalizedItemId, normalizedPeriodMonth);
+    if (existing != null) return existing;
     workspaceMapper.insertIgnore(candidate);
 
     QuoteCostingWorkspace stored =
-        workspaceMapper.selectByItemAndMonth(normalizedItemId, normalizedPeriodMonth);
+        workspaceMapper.selectByItemAndMonthForUpdate(normalizedItemId, normalizedPeriodMonth);
     if (stored == null) {
       throw new IllegalStateException(
           "核算工作区创建后未找到：" + normalizedItemId + "/" + normalizedPeriodMonth);

@@ -25,6 +25,7 @@ import com.sanhua.marketingcost.service.PricePrepareItemClassifier;
 import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
 import com.sanhua.marketingcost.service.PricePrepareService;
 import com.sanhua.marketingcost.service.PricePrepareSettlementKeyGenerator;
+import com.sanhua.marketingcost.service.concurrent.RetryOnConcurrency;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -138,6 +139,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   @Transactional(
       rollbackFor = Exception.class,
       isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
+  @RetryOnConcurrency
   public PricePrepareGenerateResult generate(PricePrepareGenerateRequest request) {
     return execute(request, true).getSummary();
   }
@@ -157,8 +159,8 @@ public class PricePrepareServiceImpl implements PricePrepareService {
               ? loadLegacyBomRows(req)
               : bomItemLoader.loadByQuoteItem(
                   req.oaNo(), req.oaFormItemId(), req.topProductCode(), req.periodMonth());
-    } catch (org.springframework.dao.TransientDataAccessException retryable) {
-      throw retryable;
+    } catch (org.springframework.dao.DataAccessException databaseFailure) {
+      throw databaseFailure;
     } catch (RuntimeException ex) {
       setBatchSummary(batch, 0, 0, 0, 0, STATUS_FAILED, "读取BOM结算明细失败：" + exceptionMessage(ex));
       return finishExecution(batch, execution);
@@ -173,8 +175,8 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     List<PricePreparePlanItem> planItems;
     try {
       planItems = itemClassifier.classify(bomRows);
-    } catch (org.springframework.dao.TransientDataAccessException retryable) {
-      throw retryable;
+    } catch (org.springframework.dao.DataAccessException databaseFailure) {
+      throw databaseFailure;
     } catch (RuntimeException ex) {
       setBatchSummary(batch, 0, 0, 0, 0, STATUS_FAILED, "价格准备分类失败：" + exceptionMessage(ex));
       return finishExecution(batch, execution);
@@ -381,8 +383,8 @@ public class PricePrepareServiceImpl implements PricePrepareService {
           req.sourceType(),
           planItem,
           req.scenarioContext().forOrganization(planItem.getBomRow().getPriceOrgCode()));
-    } catch (org.springframework.dao.TransientDataAccessException retryable) {
-      throw retryable;
+    } catch (org.springframework.dao.DataAccessException databaseFailure) {
+      throw databaseFailure;
     } catch (RuntimeException ex) {
       PackageComponentPricePrepareResult.Gap gap =
           new PackageComponentPricePrepareResult.Gap(
@@ -417,8 +419,8 @@ public class PricePrepareServiceImpl implements PricePrepareService {
           req.priceAsOfTime(),
           req.scenarioContext().forOrganization(planItem.getBomRow().getPriceOrgCode()),
           planItem);
-    } catch (org.springframework.dao.TransientDataAccessException retryable) {
-      throw retryable;
+    } catch (org.springframework.dao.DataAccessException databaseFailure) {
+      throw databaseFailure;
     } catch (RuntimeException ex) {
       MakePartPricePrepareResult.Gap gap =
           new MakePartPricePrepareResult.Gap(

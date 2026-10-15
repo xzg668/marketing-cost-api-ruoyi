@@ -15,6 +15,9 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Collection;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,6 +34,57 @@ public class MaterialPriceRouterServiceImpl implements MaterialPriceRouterServic
     this.masters = masters;
     this.sources = sources;
     this.months = months;
+  }
+
+  @Override
+  public Map<String, List<PriceTypeRoute>> listCandidatesBatch(Collection<String> codes,
+      String month, LocalDate date, String org, String businessUnit) {
+    var names = new java.util.TreeMap<String, String>();
+    for (String code : codes) if (code != null && !code.isBlank()) names.put(code.trim(), null);
+    return candidatesBatch(names, month, date, org, businessUnit, false);
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public Map<String, List<PriceTypeRoute>> prepareCandidatesBatch(Map<String, String> materialNames,
+      String month, LocalDate date, String org, String businessUnit) {
+    var names = new java.util.TreeMap<String, String>();
+    materialNames.forEach((code, name) -> {
+      var scope = new Scope(businessUnit, month, org, code);
+      names.put(scope.materialCode(), name);
+    });
+    return candidatesBatch(names, month, date, org, businessUnit, true);
+  }
+
+  private Map<String, List<PriceTypeRoute>> candidatesBatch(Map<String, String> names,
+      String month, LocalDate date, String org, String businessUnit, boolean initialize) {
+    if (names.isEmpty()) return Map.of();
+    if (date == null) throw new IllegalArgumentException("取价日期不能为空");
+    var scope = new Scope(businessUnit, month, org, names.keySet().iterator().next());
+    var selected = months.select(scope.businessUnitType(), scope.priceOrgCode(), scope.period());
+    var codes = List.copyOf(names.keySet());
+    var result = new java.util.LinkedHashMap<String, List<PriceTypeRoute>>();
+    // 只复用本次读取，跨事务、下一次核算和发布前校验均重新取数。
+    for (int offset = 0; offset < codes.size(); offset += 200) {
+      var batch = codes.subList(offset, Math.min(offset + 200, codes.size()));
+      var batchNames = new java.util.LinkedHashMap<String, String>();
+      batch.forEach(code -> batchNames.put(code, names.get(code)));
+      var configurations = priorities.readBatch(scope, batchNames, initialize);
+      var forms = new java.util.HashMap<String, MaterialFormAttrEnum>();
+      for (var master : masters.selectList(Wrappers.lambdaQuery(MaterialMaster.class)
+          .in(MaterialMaster::getMaterialCode, batch)
+          .eq(MaterialMaster::getBusinessUnitType, scope.businessUnitType()))) {
+        forms.put(master.getMaterialCode(), MaterialFormAttrEnum.fromDbText(master.getShapeAttr()).orElse(null));
+      }
+      var available = new java.util.HashMap<String, Set<String>>();
+      for (var row : sources.publicKindsBatch(batch, scope.period(),
+          selected == null ? null : selected.sourceMonth(), scope.businessUnitType(), scope.priceOrgCode(), date)) {
+        available.computeIfAbsent(row.materialCode(), ignored -> new HashSet<>()).add(row.kind());
+      }
+      for (String code : batch) result.put(code,
+          candidates(configurations.get(code), forms.get(code), available.getOrDefault(code, Set.of())));
+    }
+    return result;
   }
 
   @Override
@@ -62,6 +116,12 @@ public class MaterialPriceRouterServiceImpl implements MaterialPriceRouterServic
     var selectedMonth = months.select(scope.businessUnitType(), scope.priceOrgCode(), scope.period());
     var available = new HashSet<>(sources.publicKinds(scope.materialCode(), scope.period(),
         selectedMonth == null ? null : selectedMonth.sourceMonth(), scope.businessUnitType(), scope.priceOrgCode(), date));
+    return candidates(configuration, form, available);
+  }
+
+  private List<PriceTypeRoute> candidates(MaterialPricePriorityService.Configuration configuration,
+      MaterialFormAttrEnum form, Set<String> available) {
+    var scope = configuration.scope();
     var result = new ArrayList<PriceTypeRoute>();
     for (var entry : configuration.order()) {
       var type = entry.type();

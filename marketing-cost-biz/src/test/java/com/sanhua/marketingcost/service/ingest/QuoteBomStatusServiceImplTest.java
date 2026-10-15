@@ -60,10 +60,11 @@ class QuoteBomStatusServiceImplTest {
     OaFormItem item = item(10L, "MAT-1", "BOX");
     stubQuote("OA-1", "CUST-A", "2026-06", item);
     QuoteBomMonthlySnapshot snapshot = u9Snapshot(7001L, "MAT-1", "2026-06", "SUCCESS");
-    when(snapshotMapper.selectCurrentById(7001L)).thenReturn(snapshot);
-    when(u9Gateway.read(any())).thenReturn(
-        CurrentU9BomResult.available("U9", "V1", "BUILD-1", 8, "F1")
-            .withMonthlySnapshot(7001L, true));
+    when(snapshotMapper.selectById(7001L)).thenReturn(snapshot);
+    when(u9Gateway.read(any()))
+        .thenReturn(
+            CurrentU9BomResult.available("U9", "V1", "BUILD-1", 8, "F1")
+                .withMonthlySnapshot(7001L, true));
 
     QuoteBomStatusResponse response = service.checkForCostRun("OA-1");
 
@@ -84,10 +85,11 @@ class QuoteBomStatusServiceImplTest {
     OaFormItem item = item(11L, "MAT-1", "PALLET");
     stubQuote("OA-2", "OTHER-CUSTOMER", "2026-06", item);
     QuoteBomMonthlySnapshot snapshot = u9Snapshot(7001L, "MAT-1", "2026-06", "SUCCESS");
-    when(snapshotMapper.selectCurrentById(7001L)).thenReturn(snapshot);
-    when(u9Gateway.read(any())).thenReturn(
-        CurrentU9BomResult.available("U9", "V1", "BUILD-1", 8, "F1")
-            .withMonthlySnapshot(7001L, false));
+    when(snapshotMapper.selectById(7001L)).thenReturn(snapshot);
+    when(u9Gateway.read(any()))
+        .thenReturn(
+            CurrentU9BomResult.available("U9", "V1", "BUILD-1", 8, "F1")
+                .withMonthlySnapshot(7001L, false));
 
     QuoteBomStatusResponse response = service.checkForCostRun("OA-2");
 
@@ -222,10 +224,11 @@ class QuoteBomStatusServiceImplTest {
     stubQuote("OA-7", "CUST-A", "2026-06", item);
     when(itemMapper.selectById(16L)).thenReturn(item);
     QuoteBomMonthlySnapshot snapshot = u9Snapshot(7400L, "MAT-AUG", "2026-08", "SUCCESS");
-    when(snapshotMapper.selectCurrentById(7400L)).thenReturn(snapshot);
-    when(u9Gateway.read(any())).thenReturn(
-        CurrentU9BomResult.available("U9", "V2", "BUILD-AUG", 5)
-            .withMonthlySnapshot(7400L, true));
+    when(snapshotMapper.selectById(7400L)).thenReturn(snapshot);
+    when(u9Gateway.read(any()))
+        .thenReturn(
+            CurrentU9BomResult.available("U9", "V2", "BUILD-AUG", 5)
+                .withMonthlySnapshot(7400L, true));
 
     QuoteBomStatusItemResponse response =
         service.checkItemForCostRun("OA-7", 16L, "2026-08");

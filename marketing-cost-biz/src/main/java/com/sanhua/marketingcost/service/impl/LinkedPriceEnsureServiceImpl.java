@@ -17,6 +17,7 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
+import com.sanhua.marketingcost.service.concurrent.RetryOnConcurrency;
 import com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceSelectionService;
 import com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService;
 import com.sanhua.marketingcost.service.pricing.MaterialPriceMonthSelector;
@@ -143,6 +144,7 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @RetryOnConcurrency
   public LinkedPriceEnsureResult ensure(LinkedPriceEnsureRequest request) {
     if (request == null) {
       throw new IllegalArgumentException("联动价 ensure 请求不能为空");
@@ -165,7 +167,12 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
     if (request.getCalcScene() != LinkedPriceCalcScene.QUOTE) {
       throw new IllegalArgumentException("不支持的联动价计算场景：" + request.getCalcScene());
     }
-    return ensureQuote(request, itemCodes, result);
+    try {
+      return ensureQuote(request, itemCodes, result);
+    } catch (org.springframework.dao.DuplicateKeyException concurrentInsert) {
+      throw new org.springframework.dao.ConcurrencyFailureException(
+          "联动价输入版本已由并发任务保存，重新读取并核对输入", concurrentInsert);
+    }
   }
 
   private LinkedPriceEnsureResult ensureQuote(
@@ -175,7 +182,7 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
     String pricingMonth = request.getPricingMonth().trim();
     LocalDateTime priceAsOfTime = resolvedPriceAsOfTime(request);
     String factorSource = quoteFactorSource(request);
-    Map<String, PriceLinkedCalcItem> existingMap =
+    Map<String, List<PriceLinkedCalcItem>> existingMap =
         fetchExistingQuoteResults(
             oaNo,
             businessUnitType,
@@ -198,16 +205,16 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
 
     List<PriceLinkedCalcItem> newResults = new ArrayList<>();
     for (String itemCode : itemCodes) {
-      PriceLinkedCalcItem existing = existingMap.get(itemCode);
       LinkedPriceCandidate candidate = linkedItemMap.get(itemCode);
       String fingerprint = quoteFingerprint(candidate, request, oaForm, bomMap.get(itemCode));
+      var versions = existingMap.getOrDefault(itemCode, List.of());
+      PriceLinkedCalcItem existing = matchingInput(versions, fingerprint);
       if (canSkip(existing, fingerprint, request.isForceRefresh())) {
         result.setSkippedCount(result.getSkippedCount() + 1);
         result.getItems().put(itemCode, existing);
         continue;
       }
-      boolean created = existing == null;
-      PriceLinkedCalcItem calcItem = created ? new PriceLinkedCalcItem() : existing;
+      PriceLinkedCalcItem calcItem = new PriceLinkedCalcItem();
       calcItem.setPriceOrgCode(request.getPriceOrgCode());
       populateQuoteContext(
           calcItem,
@@ -218,39 +225,69 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
           factorSource,
           itemCode,
           bomMap);
-      String previousFingerprint = existing == null ? null : existing.getCalcFingerprint();
-      long previousRevision =
-          existing == null || existing.getResultRevision() == null
-              ? 0L
-              : existing.getResultRevision();
       calculateQuoteItem(calcItem, candidate, oaForm, request, factorSource);
       calcItem.setCalcFingerprint(
           CALC_STATUS_OK.equals(calcItem.getCalcStatus()) ? fingerprint : null);
-      if (created) {
-        newResults.add(calcItem);
-      } else {
-        // 新旧结果混合时也按料号顺序写入，避免多个任务采用相反的加锁顺序。
-        persistNewQuoteResults(newResults);
-        newResults = new ArrayList<>();
-        persist(calcItem, false, previousFingerprint, previousRevision);
+      existing = matchingInput(versions, calcItem.getCalcFingerprint());
+      if (existing != null && calcItem.getCalcFingerprint() != null) {
+        // Forced recalculation still cannot rewrite a result already referenced by another quote.
+        requireSameCalculation(existing, calcItem);
+        result.setSkippedCount(result.getSkippedCount() + 1);
+        result.getItems().put(itemCode, existing);
+        continue;
       }
-      result.getItems().put(itemCode, calcItem);
-      if (created) {
+      if (existing == null) {
+        newResults.add(calcItem);
         result.setCreatedCount(result.getCreatedCount() + 1);
       } else {
+        // Legacy formulas and failed attempts have no complete fingerprint; keep their
+        // established mutable slot and optimistic revision check, never reuse them as valid input.
+        persistNewQuoteResults(newResults);
+        newResults = new ArrayList<>();
+        calcItem.setId(existing.getId());
+        calcItem.setCreatedAt(existing.getCreatedAt());
+        persist(
+            calcItem,
+            false,
+            existing.getCalcFingerprint(),
+            existing.getResultRevision() == null ? 0L : existing.getResultRevision());
         result.setUpdatedCount(result.getUpdatedCount() + 1);
       }
-      if (CALC_STATUS_FAILED.equalsIgnoreCase(calcItem.getCalcStatus())) {
+      result.getItems().put(itemCode, calcItem);
+      if (CALC_STATUS_FAILED.equalsIgnoreCase(calcItem.getCalcStatus()))
         result.addFailedItem(itemCode, calcItem.getFailureCode(), calcItem.getCalcMessage());
-      }
     }
     persistNewQuoteResults(newResults);
     return result;
   }
 
+  private PriceLinkedCalcItem matchingInput(
+      List<PriceLinkedCalcItem> versions, String fingerprint) {
+    return versions.stream()
+        .filter(row -> java.util.Objects.equals(fingerprint, row.getCalcFingerprint()))
+        .findFirst()
+        .orElse(null);
+  }
+
+  private void requireSameCalculation(PriceLinkedCalcItem saved, PriceLinkedCalcItem calculated) {
+    if (!CALC_STATUS_OK.equals(saved.getCalcStatus())
+        || !sameNumber(saved.getPartUnitPrice(), calculated.getPartUnitPrice())
+        || !sameNumber(saved.getBomQty(), calculated.getBomQty())
+        || !sameNumber(saved.getPartAmount(), calculated.getPartAmount())
+        || !java.util.Objects.equals(
+            saved.getSourcePriceRecordId(), calculated.getSourcePriceRecordId())
+        || !java.util.Objects.equals(saved.getSupplierCode(), calculated.getSupplierCode())) {
+      throw new IllegalStateException("相同联动输入产生不同结果，保留原版本并停止发布：" + saved.getItemCode());
+    }
+  }
+
+  private boolean sameNumber(BigDecimal left, BigDecimal right) {
+    return left == null ? right == null : right != null && left.compareTo(right) == 0;
+  }
+
   private void persistNewQuoteResults(List<PriceLinkedCalcItem> rows) {
     if (rows.isEmpty()) return;
-    if (rows.size() == 1) {
+    if (rows.size() == 1 && rows.getFirst().getCalcFingerprint() == null) {
       persist(rows.getFirst(), true, null, 0L);
       return;
     }
@@ -263,7 +300,25 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
     // 控制单条SQL和快照的大小；所有分批写入仍属于同一核算事务。
     for (int from = 0; from < rows.size(); from += 100) {
       var batch = rows.subList(from, Math.min(from + 100, rows.size()));
-      if (priceLinkedCalcItemMapper.insertResults(batch) != batch.size())
+      var immutable = batch.stream().filter(row -> row.getCalcFingerprint() != null).toList();
+      var mutable = batch.stream().filter(row -> row.getCalcFingerprint() == null).toList();
+      if (!immutable.isEmpty()) {
+        priceLinkedCalcItemMapper.insertOrReuseResults(immutable);
+        var saved = priceLinkedCalcItemMapper.selectReusedResults(immutable).stream()
+            .collect(java.util.stream.Collectors.toMap(PriceLinkedCalcItem::getItemCode, row -> row));
+        for (var calculated : immutable) {
+          var persisted = saved.get(calculated.getItemCode());
+          if (persisted == null || !java.util.Objects.equals(
+              persisted.getCalcFingerprint(), calculated.getCalcFingerprint())) {
+            throw new IllegalStateException("联动价输入版本未完整写入，请重试");
+          }
+          requireSameCalculation(persisted, calculated);
+          // 返回胜出版本的完整证据和 ID，不能把本地计算证据冒充成已保存版本。
+          org.springframework.beans.BeanUtils.copyProperties(persisted, calculated);
+        }
+      }
+      // 不完整指纹和失败结果不能按不可变版本复用，保留原冲突重试语义。
+      if (!mutable.isEmpty() && priceLinkedCalcItemMapper.insertResults(mutable) != mutable.size())
         throw new IllegalStateException("联动价新结果未完整写入，请重试");
     }
   }
@@ -312,7 +367,7 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
     return result;
   }
 
-  private Map<String, PriceLinkedCalcItem> fetchExistingQuoteResults(
+  private Map<String, List<PriceLinkedCalcItem>> fetchExistingQuoteResults(
       String oaNo,
       String businessUnitType,
       String pricingMonth,
@@ -335,10 +390,10 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
     }
     List<PriceLinkedCalcItem> rows =
         priceLinkedCalcItemMapper.selectList(query.orderByDesc(PriceLinkedCalcItem::getId));
-    Map<String, PriceLinkedCalcItem> map = new LinkedHashMap<>();
+    Map<String, List<PriceLinkedCalcItem>> map = new LinkedHashMap<>();
     for (PriceLinkedCalcItem row : rows) {
       if (StringUtils.hasText(row.getItemCode())) {
-        map.putIfAbsent(row.getItemCode().trim(), row);
+        map.computeIfAbsent(row.getItemCode().trim(), ignored -> new ArrayList<>()).add(row);
       }
     }
     return map;
@@ -828,8 +883,8 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
       if (linkedItem != null && CALC_STATUS_FAILED.equals(calcItem.getCalcStatus())) {
         calcItem.setFailureCode(LINKED_RULE_ERROR);
       }
-    } catch (org.springframework.dao.TransientDataAccessException retryable) {
-      throw retryable;
+    } catch (org.springframework.dao.DataAccessException databaseFailure) {
+      throw databaseFailure;
     } catch (RuntimeException ex) {
       markFailed(calcItem, LINKED_RULE_ERROR, ex.getMessage());
     }
@@ -850,8 +905,8 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
           && CALC_STATUS_FAILED.equals(calcItem.getCalcStatus())) {
         calcItem.setFailureCode(LINKED_RULE_ERROR);
       }
-    } catch (org.springframework.dao.TransientDataAccessException retryable) {
-      throw retryable;
+    } catch (org.springframework.dao.DataAccessException databaseFailure) {
+      throw databaseFailure;
     } catch (RuntimeException ex) {
       markFailed(calcItem, LINKED_RULE_ERROR, ex.getMessage());
     }
@@ -1005,6 +1060,7 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
       String previousFingerprint,
       long previousRevision) {
     calcItem.setResultRevision(created ? 0L : previousRevision + 1);
+    calcItem.setUpdatedAt(LocalDateTime.now());
     if (created) {
       priceLinkedCalcItemMapper.insert(calcItem);
     } else {

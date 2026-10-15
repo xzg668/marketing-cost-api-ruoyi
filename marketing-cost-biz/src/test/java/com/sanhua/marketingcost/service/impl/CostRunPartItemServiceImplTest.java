@@ -76,6 +76,13 @@ class CostRunPartItemServiceImplTest {
   void setUp() {
     costRunPartItemMapper = Mockito.mock(CostRunPartItemMapper.class);
     routerService = Mockito.mock(MaterialPriceRouterService.class);
+    when(routerService.listCandidatesBatch(any(), any(), any(), any(), any())).thenAnswer(call -> {
+      var result = new java.util.LinkedHashMap<String, List<PriceTypeRoute>>();
+      for (String code : (java.util.Collection<String>) call.getArgument(0))
+        result.put(code, routerService.listCandidates(code, call.getArgument(1), call.getArgument(2), call.getArgument(3), call.getArgument(4)));
+      return result;
+    });
+
     packageComponentIdentifyService = Mockito.mock(PackageComponentIdentifyService.class);
     packageComponentPriceService = Mockito.mock(PackageComponentPriceService.class);
     oaFormMapper = Mockito.mock(OaFormMapper.class);

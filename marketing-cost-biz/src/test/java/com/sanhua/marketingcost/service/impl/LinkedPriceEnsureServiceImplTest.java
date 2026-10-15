@@ -68,6 +68,7 @@ class LinkedPriceEnsureServiceImplTest {
     when(calcItemMapper.update(any(), any())).thenReturn(1);
     when(calcItemMapper.insertResults(any()))
         .thenAnswer(call -> ((List<?>) call.getArgument(0)).size());
+    when(calcItemMapper.selectReusedResults(any())).thenAnswer(call -> call.getArgument(0));
     linkedItemMapper = Mockito.mock(PriceLinkedItemMapper.class);
     bomCostingRowMapper = Mockito.mock(BomCostingRowMapper.class);
     oaFormMapper = Mockito.mock(OaFormMapper.class);
@@ -112,7 +113,26 @@ class LinkedPriceEnsureServiceImplTest {
     var existing = new PriceLinkedCalcItem();
     existing.setId(201L);
     existing.setItemCode("MAT-1");
-    when(calcItemMapper.selectList(any())).thenReturn(List.of(existing));
+    var stored = new java.util.ArrayList<PriceLinkedCalcItem>();
+    stored.add(existing);
+    when(calcItemMapper.selectList(any())).thenAnswer(call -> List.copyOf(stored));
+    when(calcItemMapper.insertOrReuseResults(any())).thenAnswer(call -> {
+      for (var row : (List<PriceLinkedCalcItem>) call.getArgument(0)) {
+        row.setId(200L + stored.size());
+        stored.add(row);
+      }
+      return ((List<?>) call.getArgument(0)).size();
+    });
+
+    Mockito.doAnswer(
+            call -> {
+              PriceLinkedCalcItem row = call.getArgument(0);
+              row.setId(200L + stored.size());
+              stored.add(row);
+              return 1;
+            })
+        .when(calcItemMapper)
+        .insert(any(PriceLinkedCalcItem.class));
     when(linkedItemMapper.selectPricingCandidates(any())).thenReturn(List.of(source));
     var effective = new FinanceEffectivePrice();
     effective.setOriginalId(101L);
@@ -150,22 +170,29 @@ class LinkedPriceEnsureServiceImplTest {
         .applyEffectiveQuotePrice(any(), any(), any());
     var request =
         LinkedPriceEnsureRequest.quote("OA-001", "COMMERCIAL", "2026-05", Set.of("MAT-1"));
-    assertThat(service.ensure(request).getUpdatedCount()).isOne();
-    String first = existing.getCalcFingerprint();
+    var firstResult = service.ensure(request);
+    assertThat(firstResult.getCreatedCount()).isOne();
+    var firstVersion = firstResult.getItems().get("MAT-1");
+    String first = firstVersion.getCalcFingerprint();
     assertThat(service.ensure(request).getSkippedCount()).isOne();
     effective.setInputFingerprint("INPUT-B");
-    assertThat(service.ensure(request).getUpdatedCount()).isOne();
-    assertThat(existing.getCalcFingerprint()).isNotEqualTo(first);
+    var revised = service.ensure(request);
+    assertThat(revised.getCreatedCount()).isOne();
+    assertThat(revised.getItems().get("MAT-1").getCalcFingerprint()).isNotEqualTo(first);
+    assertThat(firstVersion.getCalcFingerprint()).isEqualTo(first);
+    effective.setInputFingerprint("INPUT-A");
+    assertThat(service.ensure(request).getItems().get("MAT-1")).isSameAs(firstVersion);
+    verify(calcItemMapper, never()).update(any(), any());
     verify(calcService, Mockito.times(2)).applyEffectiveQuotePrice(any(), any(), any());
     verify(calcService, never()).calculateQuoteItemForEnsure(any(), any(), any());
   }
 
   @Test
-  void olderTaskCannotOverwriteAnUpdatedInputFingerprint() {
+  void legacySlotStillRejectsConcurrentRevisionChanges() {
     var existing = new PriceLinkedCalcItem();
     existing.setId(201L);
     existing.setItemCode("MAT-1");
-    existing.setCalcFingerprint("older-input");
+    existing.setResultRevision(4L);
     when(calcItemMapper.selectList(any())).thenReturn(List.of(existing));
     when(linkedItemMapper.selectPricingCandidates(any())).thenReturn(List.of(linkedItem("MAT-1")));
     when(calcItemMapper.update(any(), any())).thenReturn(0);
@@ -321,7 +348,9 @@ class LinkedPriceEnsureServiceImplTest {
                         .map(PriceLinkedCalcItem::getItemCode)
                         .toList()
                         .equals(List.of("MAT-A", "MAT-B"))));
-    order.verify(calcItemMapper).update(Mockito.eq(existing), any());
+    order
+        .verify(calcItemMapper)
+        .update(Mockito.argThat(row -> row.getId().equals(existing.getId())), any());
     order
         .verify(calcItemMapper)
         .insert(Mockito.argThat((PriceLinkedCalcItem row) -> row.getItemCode().equals("MAT-D")));
@@ -919,10 +948,12 @@ class LinkedPriceEnsureServiceImplTest {
         .isEqualTo("MATERIAL_MONTH_PRICE_MISSING");
     assertThat(result.getFailedItems().getFirst().getReason())
         .contains("MAT-B", "210", "2026-11", "不沿用");
-    assertThat(existing.getPartUnitPrice()).isNull();
-    assertThat(existing.getSourcePriceRecordId()).isNull();
-    assertThat(existing.getCalcStatus()).isEqualTo("FAILED");
-    verify(calcItemMapper).update(org.mockito.ArgumentMatchers.same(existing), any());
+    var failed = result.getItems().get("MAT-B");
+    assertThat(failed.getPartUnitPrice()).isNull();
+    assertThat(failed.getSourcePriceRecordId()).isNull();
+    assertThat(failed.getCalcStatus()).isEqualTo("FAILED");
+    assertThat(failed.getId()).isEqualTo(existing.getId());
+    verify(calcItemMapper).update(org.mockito.ArgumentMatchers.same(failed), any());
     verifyNoInteractions(calcService);
     var query = ArgumentCaptor.forClass(Wrapper.class);
     verify(linkedItemMapper).selectPricingCandidates(query.capture());

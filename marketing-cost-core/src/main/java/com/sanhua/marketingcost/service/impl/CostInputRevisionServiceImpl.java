@@ -22,7 +22,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class CostInputRevisionServiceImpl implements CostInputRevisionService {
 
-  private static final List<String> SOURCE_TABLES =
+  static final List<String> SOURCE_TABLES =
       List.of(
           "cms_cost_source_effective",
           "lp_department_fund_rate",
@@ -36,6 +36,9 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
           "lp_supplier_supply_ratio",
           "lp_bom_byproduct_cost_rule",
           "lp_cost_business_rule");
+
+  static final String SOURCE_CHECKSUM_SQL = "CHECKSUM TABLE " + SOURCE_TABLES.stream()
+      .map(table -> "`" + table + "`").collect(java.util.stream.Collectors.joining(","));
 
   // 这些表按料号定价。其他产品的补价不应使本产品的成本版本失效。
   private static final List<String> MATERIAL_PRICE_TABLES =
@@ -156,9 +159,14 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
 
   private String sourceRevision() {
     StringBuilder canonical = new StringBuilder(1024);
+    var checksums = new LinkedHashMap<String, Object>();
+    for (var row : jdbcTemplate.queryForList(SOURCE_CHECKSUM_SQL)) {
+      String name = String.valueOf(valueIgnoreCase(row, "Table"));
+      checksums.put(name.substring(name.lastIndexOf('.') + 1), valueIgnoreCase(row, "Checksum"));
+    }
     for (String table : SOURCE_TABLES) {
-      List<Map<String, Object>> rows = jdbcTemplate.queryForList("CHECKSUM TABLE `" + table + "`");
-      Object checksum = rows.isEmpty() ? null : valueIgnoreCase(rows.get(0), "Checksum");
+      Object checksum = checksums.get(table);
+      if (checksum == null) throw new IllegalStateException("公共核算资料校验失败：" + table);
       append(canonical, table, checksum);
     }
     return sha256(canonical.toString());

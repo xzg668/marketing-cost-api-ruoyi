@@ -1,8 +1,8 @@
 package com.sanhua.marketingcost.service.costing;
 
 import static org.assertj.core.api.Assertions.*;
-import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 import com.sanhua.marketingcost.dto.quotecosting.*;
 import com.sanhua.marketingcost.entity.*;
@@ -10,7 +10,6 @@ import com.sanhua.marketingcost.integration.oa.*;
 import com.sanhua.marketingcost.integration.oa.workflow.*;
 import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
 import com.sanhua.marketingcost.service.*;
-import com.sanhua.marketingcost.service.costing.*;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.util.*;
 import org.junit.jupiter.api.*;
@@ -45,32 +44,85 @@ class QuoteCostingPreparationIntegrationTest extends BomMapperTestBase {
   @BeforeEach void fixture() {
     actor();
     jdbc.update("UPDATE sys_user SET employee_no='001001' WHERE user_id=1");
-    oaNo="LOCAL-COST-"+UUID.randomUUID(); requestId="REQ-"+UUID.randomUUID(); workItem="MAT-"+UUID.randomUUID();
-    jdbc.update("INSERT INTO oa_form(oa_no,source_type,business_unit_type) VALUES(?,'OA','COMMERCIAL')",oaNo);
-    formId=jdbc.queryForObject("SELECT id FROM oa_form WHERE oa_no=?",Long.class,oaNo);
-    for(int n=1;n<=2;n++) jdbc.update("INSERT INTO oa_form_item(oa_form_id,seq,material_no) VALUES(?,?,?)",formId,n,"P"+n);
-    items=jdbc.queryForList("SELECT id FROM oa_form_item WHERE oa_form_id=? ORDER BY id",Long.class,formId);
-    jdbc.update("INSERT INTO lp_oa_quote_document(source_system,environment,external_document_id,oa_form_id,source_version) VALUES('LOCAL-COST','TEST',?,?,1)",requestId,formId);
-    jdbc.update("INSERT INTO lp_oa_workflow_state(source_system,environment,workflow_request_id,applied_version,form_version,observed_form_version,state,active_work_items_json) VALUES('LOCAL-COST','TEST',?,1,1,1,'COSTING',?)",requestId,todo(workItem));
-    when(contexts.resolve(any())).thenAnswer(call->{
-      ProductCostingRequest req=call.getArgument(0);
-      var form=new OaForm();form.setId(formId);form.setOaNo(oaNo);
-      var item=new OaFormItem();item.setId(req.oaFormItemId());item.setOaFormId(formId);
-      return new ProductCostingContext(form,item,"P"+req.oaFormItemId(),month,"admin","revision");
-    });
-    when(contexts.resolveRevision(any())).thenAnswer(call->call.getArgument(0));
-    when(pipeline.prepare(any())).thenAnswer(call->{
-      ProductCostingRequest req=call.getArgument(0);return check(req.oaFormItemId(),"READY");
-    });
-    when(pipeline.execute(any())).thenAnswer(call->check(((ProductCostingRequest)call.getArgument(0)).oaFormItemId(),"SUCCESS"));
-    when(batches.submit(anyString(),any(),anyString())).thenReturn(new QuoteBatchCostRunResponse());
+    oaNo = "LOCAL-COST-" + UUID.randomUUID();
+    requestId = "REQ-" + UUID.randomUUID();
+    workItem = "MAT-" + UUID.randomUUID();
+    jdbc.update(
+        "INSERT INTO oa_form(oa_no,source_type,business_unit_type) VALUES(?,'OA','COMMERCIAL')",
+        oaNo);
+    formId = jdbc.queryForObject("SELECT id FROM oa_form WHERE oa_no=?", Long.class, oaNo);
+    for (int n = 1; n <= 2; n++)
+      jdbc.update(
+          "INSERT INTO oa_form_item(oa_form_id,seq,material_no) VALUES(?,?,?)", formId, n, "P" + n);
+    items =
+        jdbc.queryForList(
+            "SELECT id FROM oa_form_item WHERE oa_form_id=? ORDER BY id", Long.class, formId);
+    jdbc.update(
+        "INSERT INTO"
+            + " lp_oa_quote_document(source_system,environment,external_document_id,oa_form_id,source_version)"
+            + " VALUES('LOCAL-COST','TEST',?,?,1)",
+        requestId,
+        formId);
+    jdbc.update(
+        "INSERT INTO"
+            + " lp_oa_workflow_state(source_system,environment,workflow_request_id,applied_version,form_version,observed_form_version,state,active_work_items_json)"
+            + " VALUES('LOCAL-COST','TEST',?,1,1,1,'COSTING',?)",
+        requestId,
+        todo(workItem));
+    when(contexts.resolve(any()))
+        .thenAnswer(
+            call -> {
+              ProductCostingRequest req = call.getArgument(0);
+              var form = new OaForm();
+              form.setId(formId);
+              form.setOaNo(oaNo);
+              var item = new OaFormItem();
+              item.setId(req.oaFormItemId());
+              item.setOaFormId(formId);
+              return new ProductCostingContext(
+                  form, item, "P" + req.oaFormItemId(), month, "admin", "revision");
+            });
+    when(contexts.resolveRevisions(any())).thenAnswer(call ->
+        ((List<ProductCostingContext>) call.getArgument(0)).stream().collect(java.util.stream.Collectors.toMap(
+            ProductCostingContext::itemId, ProductCostingContext::sourceRevision)));
+    when(pipeline.prepare(any()))
+        .thenAnswer(
+            call -> {
+              ProductCostingRequest req = call.getArgument(0);
+              return check(req.oaFormItemId(), "READY");
+            });
+    when(pipeline.execute(any()))
+        .thenAnswer(
+            call -> check(((ProductCostingRequest) call.getArgument(0)).oaFormItemId(), "SUCCESS"));
+    when(batches.submit(anyString(), any(), anyString()))
+        .thenReturn(new QuoteBatchCostRunResponse());
   }
-  @AfterEach void clear() { SecurityContextHolder.clearContext(); }
-  String todo(String id) {return "[{\"workItemId\":\""+id+"\",\"nodeRole\":\"COSTING\",\"employeeNo\":\"001001\"}]";}
-  ProductCostingResult check(long id,String status){var r=new ProductCostingResult();r.setOaNo(oaNo);r.setOaFormItemId(id);r.setProductCode("P"+id);r.setPipelineStatus(status);r.setSourceRevision("revision");return r;}
-  QuoteCostingPreparationService.Request request(Long item){return new QuoteCostingPreparationService.Request(item,month);}
 
-  @Test void wholeOrderChecksAllProductsAndSingleProductChecksOnlyItsOwnInputs() {
+  @AfterEach
+  void clear() {
+    SecurityContextHolder.clearContext();
+  }
+
+  String todo(String id) {
+    return "[{\"workItemId\":\"" + id + "\",\"nodeRole\":\"COSTING\",\"employeeNo\":\"001001\"}]";
+  }
+
+  ProductCostingResult check(long id, String status) {
+    var r = new ProductCostingResult();
+    r.setOaNo(oaNo);
+    r.setOaFormItemId(id);
+    r.setProductCode("P" + id);
+    r.setPipelineStatus(status);
+    r.setSourceRevision("revision");
+    return r;
+  }
+
+  QuoteCostingPreparationService.Request request(Long item) {
+    return new QuoteCostingPreparationService.Request(item, month);
+  }
+
+  @Test
+  void wholeOrderChecksAllProductsAndSingleProductChecksOnlyItsOwnInputs() {
     assertThat(service.state(oaNo).status()).isEqualTo("AVAILABLE");
     verifyNoInteractions(oa,pipeline);
     var first=service.prepareAndCost(oaNo,request(null),"admin");
@@ -93,24 +145,57 @@ class QuoteCostingPreparationIntegrationTest extends BomMapperTestBase {
     verifyNoInteractions(oa,batches);
     verify(pipeline,times(1)).execute(any());
   }
-  @Test void anotherProductsPendingTechnicalTaskDoesNotBlockSingleProduct() {
-    long otherItem=items.getLast();
-    jdbc.update("INSERT INTO lp_quote_tech_task(task_no,oa_form_id,oa_no,accounting_month,business_unit_type,applicable_org_code,assignee_user_id,assignee_name,task_status,oa_form_item_id,active_lock_key) VALUES(?,?,?,?,'COMMERCIAL','210',1,'技术员','SUBMITTED',?,?)",oaNo,formId,oaNo,month,otherItem,"ITEM:"+otherItem+":MONTH:"+month);
+
+  @Test
+  void systemFailureIsReportedSeparatelyFromMissingInputs() {
+    doReturn(check(items.getLast(), "FAILED"))
+        .when(pipeline)
+        .prepare(argThat(r -> r != null && r.oaFormItemId().equals(items.getLast())));
+    var outcome = service.prepareAndCost(oaNo, request(null), "admin");
+    assertThat(outcome.preparation().status()).isEqualTo("FAILED");
+    assertThat(outcome.preparation().message()).contains("系统错误", "重试核算").doesNotContain("尚未齐全");
+    verifyNoInteractions(oa, batches);
+  }
+
+  @Test
+  void anotherProductsPendingTechnicalTaskDoesNotBlockSingleProduct() {
+    long otherItem = items.getLast();
+    jdbc.update(
+        "INSERT INTO"
+            + " lp_quote_tech_task(task_no,oa_form_id,oa_no,accounting_month,business_unit_type,applicable_org_code,assignee_user_id,assignee_name,task_status,oa_form_item_id,active_lock_key)"
+            + " VALUES(?,?,?,?,'COMMERCIAL','210',1,'技术员','SUBMITTED',?,?)",
+        oaNo,
+        formId,
+        oaNo,
+        month,
+        otherItem,
+        "ITEM:" + otherItem + ":MONTH:" + month);
     assertThat(service.state(oaNo).canCost()).isFalse();
     assertThat(service.state(oaNo,items.getFirst()).canCost()).isTrue();
     var single=service.prepareAndCost(oaNo,request(items.getFirst()),"admin");
     assertThat(single.product().getPipelineStatus()).isEqualTo("SUCCESS");
     assertThatThrownBy(()->service.prepareAndCost(oaNo,request(null),"admin")).hasMessageContaining("尚未全部成功提交");
   }
-  @Test void taskWithoutSuccessfulSubmissionBlocksEvenIfPublicSourcesBecameReady() {
-    jdbc.update("INSERT INTO lp_quote_tech_task(task_no,oa_form_id,oa_no,accounting_month,business_unit_type,applicable_org_code,assignee_user_id,assignee_name,task_status,oa_form_item_id,active_lock_key) VALUES(?,?,?,?,'COMMERCIAL','210',1,'技术员','SUBMITTED',?,?)",oaNo,formId,oaNo,month,items.getFirst(),"ITEM:"+items.getFirst()+":MONTH:"+month);
+
+  @Test
+  void taskWithoutSuccessfulSubmissionBlocksEvenIfPublicSourcesBecameReady() {
+    jdbc.update(
+        "INSERT INTO"
+            + " lp_quote_tech_task(task_no,oa_form_id,oa_no,accounting_month,business_unit_type,applicable_org_code,assignee_user_id,assignee_name,task_status,oa_form_item_id,active_lock_key)"
+            + " VALUES(?,?,?,?,'COMMERCIAL','210',1,'技术员','SUBMITTED',?,?)",
+        oaNo,
+        formId,
+        oaNo,
+        month,
+        items.getFirst(),
+        "ITEM:" + items.getFirst() + ":MONTH:" + month);
     assertThat(service.state(oaNo).canCost()).isFalse();
     assertThatThrownBy(()->service.prepareAndCost(oaNo,request(null),"admin")).hasMessageContaining("尚未全部成功提交");
     assertThatThrownBy(()->access.requireCostPublication(formId)).hasMessageContaining("尚未全部成功提交");
     verifyNoInteractions(oa,batches);
   }
   @Test void materialChangeAfterPreparationDoesNotStartCosting() {
-    when(contexts.resolveRevision(any())).thenAnswer(call->((ProductCostingContext)call.getArgument(0)).withRevision("changed"));
+    when(contexts.resolveRevisions(any())).thenReturn(java.util.Map.of());
     assertThatThrownBy(()->service.prepareAndCost(oaNo,request(null),"admin")).hasMessageContaining("资料已变化");
     verifyNoInteractions(oa,batches);verify(pipeline,never()).execute(any());
   }

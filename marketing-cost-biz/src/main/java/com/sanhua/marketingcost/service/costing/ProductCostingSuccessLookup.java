@@ -27,6 +27,11 @@ public class ProductCostingSuccessLookup {
     this.algorithmVersionProvider = algorithmVersionProvider;
   }
 
+  public boolean hasCurrentVersion(ProductCostingContext context) {
+    return workspaceService.find(context.itemId(), context.periodMonth())
+        .map(workspace -> workspace.getCurrentCostVersionId() != null).orElse(false);
+  }
+
   public Optional<ReusableCost> find(ProductCostingContext context) {
     if (!StringUtils.hasText(context.sourceRevision())) return Optional.empty();
     var workspace = workspaceService.find(context.itemId(), context.periodMonth()).orElse(null);

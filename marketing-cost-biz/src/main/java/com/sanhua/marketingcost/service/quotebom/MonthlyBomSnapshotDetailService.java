@@ -10,9 +10,12 @@ import com.sanhua.marketingcost.service.impl.PlateCommercialMakeBomExpansionServ
 import java.sql.SQLException;
 import java.time.LocalDate;
 import java.util.List;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.ConcurrencyFailureException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /** Owns the immutable hierarchy rows belonging to one product/organization/accounting month. */
 @Service
@@ -35,19 +38,12 @@ public class MonthlyBomSnapshotDetailService {
   }
 
   public List<BomRawHierarchy> load(Long snapshotId) {
-    return load(snapshotId, false);
-  }
-
-  /** 已确认的月快照可能由并发请求提交；明细必须与当前读取的表头保持一致。 */
-  public List<BomRawHierarchy> loadCurrent(Long snapshotId) {
-    return load(snapshotId, true);
-  }
-
-  private List<BomRawHierarchy> load(Long snapshotId, boolean currentRead) {
     if (snapshotId == null) return List.of();
-    return jdbc.query("SELECT raw_node_json FROM lp_quote_bom_monthly_snapshot_detail "
-            + "WHERE monthly_snapshot_id = ? ORDER BY line_no" + (currentRead ? " FOR SHARE" : ""),
-        (rs, rowNum) -> decode(rs.getString(1)), snapshotId);
+    return jdbc.query(
+        "SELECT raw_node_json FROM lp_quote_bom_monthly_snapshot_detail "
+            + "WHERE monthly_snapshot_id = ? ORDER BY line_no",
+        (rs, rowNum) -> decode(rs.getString(1)),
+        snapshotId);
   }
 
   /** Called within the same transaction that claims/completes the monthly header. */
@@ -83,26 +79,41 @@ public class MonthlyBomSnapshotDetailService {
     save(snapshotId, expanded.rows());
   }
 
+  @Transactional(rollbackFor = Exception.class)
   public void save(Long snapshotId, List<BomRawHierarchy> rows) {
     if (snapshotId == null || rows == null || rows.isEmpty()) {
       throw new IllegalArgumentException("月度BOM明细不能为空");
     }
-    if (!loadCurrent(snapshotId).isEmpty()) return;
-    jdbc.batchUpdate("INSERT INTO lp_quote_bom_monthly_snapshot_detail "
-        + "(monthly_snapshot_id, line_no, raw_node_json) VALUES (?, ?, ?)",
-        new BatchPreparedStatementSetter() {
-          @Override
-          public void setValues(java.sql.PreparedStatement statement, int index) throws SQLException {
-            statement.setLong(1, snapshotId);
-            statement.setInt(2, index);
-            statement.setString(3, encode(rows.get(index)));
-          }
+    // Serialize only writers of this immutable snapshot. Locking an empty detail range
+    // also blocks unrelated snapshots being inserted into the same index gap.
+    jdbc.queryForObject(
+        "SELECT id FROM lp_quote_bom_monthly_snapshot WHERE id=? FOR UPDATE",
+        Long.class,
+        snapshotId);
+    if (!load(snapshotId).isEmpty()) return;
+    try {
+      jdbc.batchUpdate(
+          "INSERT INTO lp_quote_bom_monthly_snapshot_detail "
+              + "(monthly_snapshot_id, line_no, raw_node_json) VALUES (?, ?, ?)",
+          new BatchPreparedStatementSetter() {
+            @Override
+            public void setValues(java.sql.PreparedStatement statement, int index)
+                throws SQLException {
+              statement.setLong(1, snapshotId);
+              statement.setInt(2, index);
+              statement.setString(3, encode(rows.get(index)));
+            }
 
-          @Override
-          public int getBatchSize() {
-            return rows.size();
-          }
-        });
+            @Override
+            public int getBatchSize() {
+              return rows.size();
+            }
+          });
+    } catch (DuplicateKeyException concurrentBackfill) {
+      // An old REPEATABLE READ view may predate another writer's backfill. Restart the
+      // owning transaction to read header and details together, never overwrite them.
+      throw new ConcurrencyFailureException("月度BOM明细已由并发任务保存，请重新读取", concurrentBackfill);
+    }
   }
 
   private String encode(BomRawHierarchy row) {

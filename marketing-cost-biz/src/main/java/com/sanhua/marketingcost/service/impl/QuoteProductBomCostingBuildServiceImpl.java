@@ -6,19 +6,19 @@ import com.sanhua.marketingcost.dto.quotebom.QuoteBomCostingBuildResponse;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomCostingRowSourceRef;
 import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
+import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuoteEffectiveBomNode;
-import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.QuoteMaterialShape;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowSourceRefMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
+import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
+import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
-import com.sanhua.marketingcost.mapper.OaFormItemMapper;
-import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.BomByproductCostRuleQueryService;
 import com.sanhua.marketingcost.service.BomSettlementRuleQueryService;
@@ -161,7 +161,7 @@ public class QuoteProductBomCostingBuildServiceImpl
     QuoteBomStatus status = record.getQuoteBomStatusId() == null
         ? null : statusMapper.selectById(record.getQuoteBomStatusId());
     List<com.sanhua.marketingcost.entity.BomRawHierarchy> frozen =
-        status == null ? List.of() : monthlyDetails.loadCurrent(status.getSyncRecordId());
+        status == null ? List.of() : monthlyDetails.load(status.getSyncRecordId());
     if (!frozen.isEmpty()) {
       for (com.sanhua.marketingcost.entity.BomRawHierarchy row : frozen) {
         if (row.getId() != null) rawById.put(row.getId(), row);
@@ -271,8 +271,8 @@ public class QuoteProductBomCostingBuildServiceImpl
   }
 
   /**
-   * 最终有效 BOM 内部使用稳定英文形态编码，但现有结算引擎及其下游快照沿用 U9 中文形态契约。
-   * 在唯一接入边界完成转换，保证无形态覆盖时最终 BOM 替换原始 BOM 后的结算行为完全一致。
+   * 最终有效 BOM 内部使用稳定英文形态编码，但现有结算引擎及其下游快照沿用 U9 中文形态契约。 在唯一接入边界完成转换，保证无形态覆盖时最终 BOM 替换原始 BOM
+   * 后的结算行为完全一致。
    */
   private static String settlementShapeLabel(QuoteEffectiveBomNode node) {
     String effectiveShape = node == null ? null : trimToNull(node.getEffectiveMaterialShape());
@@ -602,31 +602,38 @@ public class QuoteProductBomCostingBuildServiceImpl
                 .eq(BomCostingRow::getOaNo, record.getOaNo())
                 .eq(BomCostingRow::getOaFormItemId, record.getOaFormItemId())
                 .eq(BomCostingRow::getTopProductCode, record.getQuoteProductCode())
-                .eq(BomCostingRow::getPeriodMonth, periodMonth));
+                .eq(BomCostingRow::getPeriodMonth, periodMonth)
+                .orderByAsc(BomCostingRow::getId));
     List<Long> existingRowIds = new ArrayList<>();
     for (BomCostingRow row : existingRows == null ? List.<BomCostingRow>of() : existingRows) {
       if (row.getId() != null) {
         existingRowIds.add(row.getId());
       }
     }
-    if (!existingRowIds.isEmpty()) {
-      subRefMapper.delete(
-          Wrappers.<BomCostingRowSubRef>lambdaQuery()
-              .in(BomCostingRowSubRef::getCostingRowId, existingRowIds));
-    }
-    if (!existingRowIds.isEmpty()) {
-      sourceRefMapper.delete(
-          Wrappers.<BomCostingRowSourceRef>lambdaQuery()
-              .in(
-                  BomCostingRowSourceRef::getCostingRowId,
-                  existingRowIds));
-    }
-    costingRowMapper.delete(
-        Wrappers.<BomCostingRow>lambdaQuery()
-            .eq(BomCostingRow::getOaNo, record.getOaNo())
-            .eq(BomCostingRow::getOaFormItemId, record.getOaFormItemId())
-            .eq(BomCostingRow::getTopProductCode, record.getQuoteProductCode())
-            .eq(BomCostingRow::getPeriodMonth, periodMonth));
+    if (existingRowIds.isEmpty()) return;
+    var subIds =
+        subRefMapper
+            .selectList(
+                Wrappers.<BomCostingRowSubRef>lambdaQuery()
+                    .select(BomCostingRowSubRef::getId)
+                    .in(BomCostingRowSubRef::getCostingRowId, existingRowIds)
+                    .orderByAsc(BomCostingRowSubRef::getId))
+            .stream()
+            .map(BomCostingRowSubRef::getId)
+            .toList();
+    if (!subIds.isEmpty()) subRefMapper.deleteBatchIds(subIds);
+    var sourceIds =
+        sourceRefMapper
+            .selectList(
+                Wrappers.<BomCostingRowSourceRef>lambdaQuery()
+                    .select(BomCostingRowSourceRef::getId)
+                    .in(BomCostingRowSourceRef::getCostingRowId, existingRowIds)
+                    .orderByAsc(BomCostingRowSourceRef::getId))
+            .stream()
+            .map(BomCostingRowSourceRef::getId)
+            .toList();
+    if (!sourceIds.isEmpty()) sourceRefMapper.deleteBatchIds(sourceIds);
+    costingRowMapper.deleteBatchIds(existingRowIds);
   }
 
   private QuoteBomPreparationRecord loadActiveRecordByItem(Long oaFormItemId, String periodMonth) {

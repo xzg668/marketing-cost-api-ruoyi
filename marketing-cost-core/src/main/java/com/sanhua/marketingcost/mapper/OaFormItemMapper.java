@@ -15,6 +15,12 @@ import org.apache.ibatis.annotations.Update;
 @Mapper
 public interface OaFormItemMapper extends BaseMapper<OaFormItem> {
 
+  /**
+   * Acquire the product row before opening a snapshot read view; caller then verifies its owner.
+   */
+  @Select("SELECT * FROM oa_form_item WHERE id=#{itemId} AND COALESCE(deleted,0)=0 FOR UPDATE")
+  OaFormItem selectForCostingWrite(@Param("itemId") Long itemId);
+
   /** V21：selectList 走数据隔离 */
   @DataScope
   @Override
@@ -23,9 +29,8 @@ public interface OaFormItemMapper extends BaseMapper<OaFormItem> {
   /**
    * 锁定待完成核算的产品行。
    *
-   * <p>这里使用显式 SQL，而不通过 {@code selectOne + last("LIMIT 1 FOR UPDATE")}：
-   * {@link DataScope} 的 SQL 重写会把锁子句序列化到 LIMIT 前面，形成 MySQL 不接受的
-   * {@code FOR UPDATE LIMIT 1}。主键和 OA 表头共同限定唯一行，并显式带入业务单元，既保持
+   * <p>这里使用显式 SQL，而不通过 {@code selectOne + last("LIMIT 1 FOR UPDATE")}： {@link DataScope} 的 SQL
+   * 重写会把锁子句序列化到 LIMIT 前面，形成 MySQL 不接受的 {@code FOR UPDATE LIMIT 1}。主键和 OA 表头共同限定唯一行，并显式带入业务单元，既保持
    * 数据隔离，也保证锁语句稳定为 {@code LIMIT 1 FOR UPDATE}。
    */
   @Select("""

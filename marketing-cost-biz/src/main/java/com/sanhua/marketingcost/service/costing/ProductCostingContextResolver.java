@@ -71,4 +71,18 @@ public class ProductCostingContextResolver {
     return context.withRevision(revisionService.currentRevision(
         context.form(), context.item(), context.periodMonth()));
   }
+
+  /** 整单确认时共享一次公共资料校验；每个产品的价格、BOM 和补录输入仍独立核验。 */
+  public java.util.Map<Long, String> resolveRevisions(java.util.List<ProductCostingContext> contexts) {
+    if (contexts.isEmpty()) return java.util.Map.of();
+    var first = contexts.getFirst();
+    for (var context : contexts) {
+      if (!java.util.Objects.equals(first.form().getId(), context.form().getId())
+          || !java.util.Objects.equals(first.periodMonth(), context.periodMonth())) {
+        throw new IllegalArgumentException("批量输入校验必须属于同一报价单和核算月");
+      }
+    }
+    return revisionService.currentRevisions(first.form(),
+        contexts.stream().map(ProductCostingContext::item).toList(), first.periodMonth());
+  }
 }
