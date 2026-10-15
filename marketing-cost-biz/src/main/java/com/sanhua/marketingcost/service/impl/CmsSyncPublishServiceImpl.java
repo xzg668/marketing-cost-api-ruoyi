@@ -238,13 +238,13 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
       throw new IllegalArgumentException("cost_year 不能为空");
     }
     String businessUnitType = normalizeBusinessUnit(signal.getBusinessUnitType());
-    deleteDefaultEffectiveSources(signal.getCostYear(), businessUnitType);
     CmsEffectiveSourceGenerateResponse salary =
-        salaryEffectiveService.generateDefaultSources(signal.getCostYear(), OPERATOR, businessUnitType);
+        salaryEffectiveService.synchronizeDefaultSources(signal.getCostYear(), OPERATOR, businessUnitType);
     CmsEffectiveSourceGenerateResponse aux =
-        auxEffectiveService.generateDefaultSources(signal.getCostYear(), OPERATOR, businessUnitType);
+        auxEffectiveService.synchronizeDefaultSources(signal.getCostYear(), OPERATOR, businessUnitType);
     response.setEffectiveInsertedCount(salary.getInsertedCount() + aux.getInsertedCount());
     response.setEffectiveUpdatedCount(salary.getUpdatedCount() + aux.getUpdatedCount());
+    response.setEffectiveRemovedCount(salary.getRemovedCount() + aux.getRemovedCount());
     response.setEffectiveSkippedCount(salary.getSkippedCount() + aux.getSkippedCount());
     response.setEffectiveBlockedCount(salary.getBlockedCount() + aux.getBlockedCount());
     response.setEffectiveErrorCount(salary.getErrorCount() + aux.getErrorCount());
@@ -351,20 +351,6 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
         + businessUnitLiveFilter(businessUnitType, "COMMERCIAL");
   }
 
-  private void deleteDefaultEffectiveSources(int costYear, String businessUnitType) {
-    if (!StringUtils.hasText(businessUnitType)) {
-      jdbcTemplate.update(
-          "DELETE FROM cms_cost_source_effective WHERE cost_year = ? AND default_flag = 1",
-          costYear);
-      return;
-    }
-    jdbcTemplate.update(
-        "DELETE FROM cms_cost_source_effective "
-            + "WHERE cost_year = ? AND business_unit_type = ? AND default_flag = 1",
-        costYear,
-        businessUnitType);
-  }
-
   private void markSignal(Long signalId, String status, String message) {
     signalMapper.update(
         null,
@@ -380,6 +366,8 @@ public class CmsSyncPublishServiceImpl implements CmsSyncPublishService {
         + response.getEffectiveInsertedCount()
         + ", updated="
         + response.getEffectiveUpdatedCount()
+        + ", removed="
+        + response.getEffectiveRemovedCount()
         + ", skipped="
         + response.getEffectiveSkippedCount()
         + ", blocked="

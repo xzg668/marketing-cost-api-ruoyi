@@ -19,6 +19,7 @@ public class CmsSyncPublishRunResponse {
   private Map<String, Integer> publishedCounts = new LinkedHashMap<>();
   private int effectiveInsertedCount;
   private int effectiveUpdatedCount;
+  private int effectiveRemovedCount;
   private int effectiveSkippedCount;
   private int effectiveBlockedCount;
   private int effectiveErrorCount;

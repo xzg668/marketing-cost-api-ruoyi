@@ -8,6 +8,10 @@ public interface CmsAuxSubjectSourceEffectiveService {
   CmsEffectiveSourceGenerateResponse generateDefaultSources(
       int costYear, String operator, String businessUnitType);
 
+  /** 同步默认来源，只记录业务值变化并撤销本次已失效的默认来源。 */
+  CmsEffectiveSourceGenerateResponse synchronizeDefaultSources(
+      int costYear, String operator, String businessUnitType);
+
   CmsEffectiveSourceGenerateResponse ensureDefaultSources(
       int costYear, String operator, String businessUnitType);
 

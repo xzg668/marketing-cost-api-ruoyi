@@ -9,6 +9,7 @@ public class CmsEffectiveSourceGenerateResponse {
   private Integer costYear;
   private int insertedCount;
   private int updatedCount;
+  private int removedCount;
   private int skippedCount;
   private int blockedCount;
   private int errorCount;

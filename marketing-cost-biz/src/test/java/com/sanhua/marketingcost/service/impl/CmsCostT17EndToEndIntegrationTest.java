@@ -56,6 +56,10 @@ class CmsCostT17EndToEndIntegrationTest extends BomMapperTestBase {
       runScriptViaMysqlCli("/db/V59__quote_ingest_schema.sql", "V59_T17");
       runScriptViaMysqlCli("/db/V64__cms_cost_source_schema.sql", "V64_T17");
       runScriptViaMysqlCli("/db/V66__cms_subject_setting_source.sql", "V66_T17");
+      // 旧 CMS 测试基线需要跟上当前实体，保持下游核算回归可执行。
+      ensureTestColumn("oa_form", "board_tender", "TINYINT(1) NULL");
+      ensureTestColumn("lp_product_property", "source_type", "VARCHAR(32) NULL");
+      ensureTestColumn("lp_product_property", "source_batch_no", "VARCHAR(128) NULL");
     } catch (Exception e) {
       throw new IllegalStateException("T17 初始化迁移失败: " + e.getMessage(), e);
     }
@@ -502,6 +506,14 @@ class CmsCostT17EndToEndIntegrationTest extends BomMapperTestBase {
           logTag + " mysql CLI 执行失败: exit=" + result.getExitCode()
               + "\nstdout:\n" + result.getStdout()
               + "\nstderr:\n" + result.getStderr());
+    }
+  }
+
+  private static void ensureTestColumn(String table, String column, String definition) throws Exception {
+    if (!columnExists(table, column)) {
+      try (Connection connection = openConnection(); Statement statement = connection.createStatement()) {
+        statement.executeUpdate("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition);
+      }
     }
   }
 

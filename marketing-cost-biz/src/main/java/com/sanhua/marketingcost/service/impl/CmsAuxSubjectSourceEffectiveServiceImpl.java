@@ -59,18 +59,32 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
   @Transactional
   public CmsEffectiveSourceGenerateResponse generateDefaultSources(
       int costYear, String operator, String businessUnitType) {
-    return applyDefaultSources(costYear, operator, businessUnitType, true);
+    return applyDefaultSources(costYear, operator, businessUnitType, true, null);
   }
 
   @Override
   @Transactional
   public CmsEffectiveSourceGenerateResponse ensureDefaultSources(
       int costYear, String operator, String businessUnitType) {
-    return applyDefaultSources(costYear, operator, businessUnitType, false);
+    return applyDefaultSources(costYear, operator, businessUnitType, false, null);
+  }
+
+  @Override
+  @Transactional
+  public CmsEffectiveSourceGenerateResponse synchronizeDefaultSources(
+      int costYear, String operator, String businessUnitType) {
+    CmsDefaultSourceSync sync = new CmsDefaultSourceSync(
+        effectiveMapper, logMapper, costYear, normalizeBusinessUnit(businessUnitType),
+        List.of(AUX_SUBJECT), operator);
+    CmsEffectiveSourceGenerateResponse response =
+        applyDefaultSources(costYear, operator, businessUnitType, true, sync);
+    sync.removeMissingDefaults(response);
+    return response;
   }
 
   private CmsEffectiveSourceGenerateResponse applyDefaultSources(
-      int costYear, String operator, String businessUnitType, boolean updateExistingDefault) {
+      int costYear, String operator, String businessUnitType, boolean updateExistingDefault,
+      CmsDefaultSourceSync sync) {
     CmsEffectiveSourceGenerateResponse response = new CmsEffectiveSourceGenerateResponse();
     response.setCostYear(costYear);
     Map<String, Aggregate> aggregates = aggregateAux(costYear, businessUnitType);
@@ -95,7 +109,9 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
           break;
         }
         response.setBlockedCount(response.getBlockedCount() + 1);
-        insertLog(null, costYear, candidate, null, "BLOCKED", eligibility.getReason(), operator, businessUnitType);
+        if (sync == null) {
+          insertLog(null, costYear, candidate, null, "BLOCKED", eligibility.getReason(), operator, businessUnitType);
+        }
       }
       if (selected == null) {
         continue;
@@ -110,12 +126,16 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
       CmsCostSourceEffective oldSnapshot = copyEffective(existing);
       CmsCostSourceEffective saved =
           upsert(existing, costYear, selected, 1, selectedEligibility.getReason(), operator, businessUnitType);
-      if (existing == null) {
-        response.setInsertedCount(response.getInsertedCount() + 1);
+      if (sync != null) {
+        sync.recordSelection(oldSnapshot, saved, response);
       } else {
-        response.setUpdatedCount(response.getUpdatedCount() + 1);
+        if (existing == null) {
+          response.setInsertedCount(response.getInsertedCount() + 1);
+        } else {
+          response.setUpdatedCount(response.getUpdatedCount() + 1);
+        }
+        insertLog(saved.getId(), costYear, selected, oldSnapshot, "DEFAULT", selectedEligibility.getReason(), operator, businessUnitType);
       }
-      insertLog(saved.getId(), costYear, selected, oldSnapshot, "DEFAULT", selectedEligibility.getReason(), operator, businessUnitType);
     }
     return response;
   }
@@ -395,6 +415,9 @@ public class CmsAuxSubjectSourceEffectiveServiceImpl implements CmsAuxSubjectSou
     copy.setId(source.getId());
     copy.setPeriod(source.getPeriod());
     copy.setAmountYuan(source.getAmountYuan());
+    copy.setSubjectCode(source.getSubjectCode());
+    copy.setSubjectName(source.getSubjectName());
+    copy.setSourceTable(source.getSourceTable());
     return copy;
   }
 

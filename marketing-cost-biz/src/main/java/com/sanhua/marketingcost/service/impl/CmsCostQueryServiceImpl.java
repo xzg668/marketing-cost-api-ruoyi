@@ -238,7 +238,9 @@ public class CmsCostQueryServiceImpl implements CmsCostQueryService {
     QueryWrapper<CmsCostSourceEffectiveLog> query =
         new QueryWrapper<CmsCostSourceEffectiveLog>()
             .eq(costYear != null, "cost_year", costYear)
-            .eq(StringUtils.hasText(period), "new_period", trim(period))
+            .and(StringUtils.hasText(period), condition -> condition
+                .eq("new_period", trim(period))
+                .or(cancelled -> cancelled.eq("action_type", "CANCEL").eq("old_period", trim(period))))
             .eq(StringUtils.hasText(sourceType), "source_type", trim(sourceType))
             .eq(StringUtils.hasText(subjectCode), "subject_code", trim(subjectCode))
             .eq(StringUtils.hasText(actionType), "action_type", trim(actionType))

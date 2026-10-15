@@ -70,8 +70,25 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
       int costYear, String operator, String businessUnitType) {
     CmsEffectiveSourceGenerateResponse response = new CmsEffectiveSourceGenerateResponse();
     response.setCostYear(costYear);
-    applyAggregates(response, costYear, SALARY_DIRECT, aggregateDirect(costYear, businessUnitType), operator, businessUnitType, true);
-    applyAggregates(response, costYear, SALARY_INDIRECT, aggregateIndirect(costYear, businessUnitType), operator, businessUnitType, true);
+    applyAggregates(response, costYear, SALARY_DIRECT, aggregateDirect(costYear, businessUnitType), operator, businessUnitType, true, null);
+    applyAggregates(response, costYear, SALARY_INDIRECT, aggregateIndirect(costYear, businessUnitType), operator, businessUnitType, true, null);
+    return response;
+  }
+
+  @Override
+  @Transactional
+  public CmsEffectiveSourceGenerateResponse synchronizeDefaultSources(
+      int costYear, String operator, String businessUnitType) {
+    CmsEffectiveSourceGenerateResponse response = new CmsEffectiveSourceGenerateResponse();
+    response.setCostYear(costYear);
+    CmsDefaultSourceSync sync = new CmsDefaultSourceSync(
+        effectiveMapper, logMapper, costYear, normalizeBusinessUnit(businessUnitType),
+        List.of(SALARY_DIRECT, SALARY_INDIRECT), operator);
+    applyAggregates(response, costYear, SALARY_DIRECT, aggregateDirect(costYear, businessUnitType),
+        operator, businessUnitType, true, sync);
+    applyAggregates(response, costYear, SALARY_INDIRECT, aggregateIndirect(costYear, businessUnitType),
+        operator, businessUnitType, true, sync);
+    sync.removeMissingDefaults(response);
     return response;
   }
 
@@ -81,8 +98,8 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
       int costYear, String operator, String businessUnitType) {
     CmsEffectiveSourceGenerateResponse response = new CmsEffectiveSourceGenerateResponse();
     response.setCostYear(costYear);
-    applyAggregates(response, costYear, SALARY_DIRECT, aggregateDirect(costYear, businessUnitType), operator, businessUnitType, false);
-    applyAggregates(response, costYear, SALARY_INDIRECT, aggregateIndirect(costYear, businessUnitType), operator, businessUnitType, false);
+    applyAggregates(response, costYear, SALARY_DIRECT, aggregateDirect(costYear, businessUnitType), operator, businessUnitType, false, null);
+    applyAggregates(response, costYear, SALARY_INDIRECT, aggregateIndirect(costYear, businessUnitType), operator, businessUnitType, false, null);
     return response;
   }
 
@@ -184,7 +201,8 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
       Map<String, Aggregate> aggregates,
       String operator,
       String businessUnitType,
-      boolean updateExistingDefault) {
+      boolean updateExistingDefault,
+      CmsDefaultSourceSync sync) {
     Map<String, List<Aggregate>> byParent = new LinkedHashMap<>();
     for (Aggregate aggregate : aggregates.values()) {
       byParent.computeIfAbsent(aggregate.parentCode, ignored -> new ArrayList<>()).add(aggregate);
@@ -208,7 +226,10 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
           break;
         }
         response.setBlockedCount(response.getBlockedCount() + 1);
-        insertLog(null, costYear, sourceType, candidate, null, "BLOCKED", eligibility.getReason(), operator, businessUnitType);
+        // 自动同步在批次汇总中记录阻断数量，避免每次扫描都追加相同的阻断明细。
+        if (sync == null) {
+          insertLog(null, costYear, sourceType, candidate, null, "BLOCKED", eligibility.getReason(), operator, businessUnitType);
+        }
       }
       if (selected == null) {
         continue;
@@ -223,12 +244,16 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
       CmsCostSourceEffective oldSnapshot = copyEffective(existing);
       CmsCostSourceEffective saved =
           upsert(existing, costYear, sourceType, selected, 1, selectedEligibility.getReason(), operator, businessUnitType);
-      if (existing == null) {
-        response.setInsertedCount(response.getInsertedCount() + 1);
+      if (sync != null) {
+        sync.recordSelection(oldSnapshot, saved, response);
       } else {
-        response.setUpdatedCount(response.getUpdatedCount() + 1);
+        if (existing == null) {
+          response.setInsertedCount(response.getInsertedCount() + 1);
+        } else {
+          response.setUpdatedCount(response.getUpdatedCount() + 1);
+        }
+        insertLog(saved.getId(), costYear, sourceType, selected, oldSnapshot, "DEFAULT", selectedEligibility.getReason(), operator, businessUnitType);
       }
-      insertLog(saved.getId(), costYear, sourceType, selected, oldSnapshot, "DEFAULT", selectedEligibility.getReason(), operator, businessUnitType);
     }
   }
 
@@ -465,6 +490,9 @@ public class CmsSalaryCostSourceEffectiveServiceImpl implements CmsSalaryCostSou
     copy.setId(source.getId());
     copy.setPeriod(source.getPeriod());
     copy.setAmountYuan(source.getAmountYuan());
+    copy.setSubjectCode(source.getSubjectCode());
+    copy.setSubjectName(source.getSubjectName());
+    copy.setSourceTable(source.getSourceTable());
     return copy;
   }
 
