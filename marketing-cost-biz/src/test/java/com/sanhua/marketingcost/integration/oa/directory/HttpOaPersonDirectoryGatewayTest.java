@@ -122,6 +122,41 @@ class HttpOaPersonDirectoryGatewayTest {
   }
 
   @Test
+  void mergesRepeatedEmployeeAcrossDepartmentsBeforeLoadingDetails() {
+    replaceEmployees("""
+        {"message":{"errcode":0},"data":{"total":3,"data":[
+          {"id":"U1","department":["3"],"username":"张三","job_num":"E001"},
+          {"id":"U1","department":["4"],"username":"张三","job_num":"E001"},
+          {"id":"U1","department":["4"],"username":"张三","job_num":"E001"}
+        ]}}
+        """);
+    assertThat(gateway().load().people()).singleElement().satisfies(person -> {
+      assertThat(person.employeeNo()).isEqualTo("E001");
+      assertThat(person.oaDepartmentIds()).containsExactlyInAnyOrder("3", "4");
+      assertThat(person.actualDepartmentPaths()).hasSize(2);
+    });
+    assertThat(detailRequests.get()).isEqualTo(1);
+  }
+
+  @Test
+  void rejectsAmbiguousEmployeeNumberInsteadOfChoosingAnArbitraryIdentity() {
+    replaceEmployees("""
+        {"message":{"errcode":0},"data":{"total":2,"data":[
+          {"id":"U1","department":["4"],"username":"张三","job_num":"E001"},
+          {"id":"U2","department":["4"],"username":"张三","job_num":"E001"}
+        ]}}
+        """);
+    assertThatThrownBy(() -> gateway().load()).isInstanceOf(OaPersonDirectoryException.class)
+        .hasMessageContaining("同一工号匹配到多个 OA 人员 ID");
+    assertThat(detailRequests.get()).isZero();
+  }
+
+  private void replaceEmployees(String response) {
+    server.removeContext("/openserver/api/hrm/restful/queryEmployee");
+    server.createContext("/openserver/api/hrm/restful/queryEmployee", exchange -> respond(exchange, response));
+  }
+
+  @Test
   void rejectsWholeSnapshotWhenAnyPersonDetailFails() {
     failDetail.set(true);
 

@@ -37,8 +37,8 @@ integration:
       "[FI-SC-020]": "${OA_I07_SC020_SUBFORM_ID:1315726685492431674}"
   # 每日全量读取 OA 后原子替换本地人员目录；报价页面不直连 OA。
   oa-person-directory:
-    enabled: ${OA_PERSON_DIRECTORY_ENABLED:false}
-    run-at-startup: ${OA_PERSON_DIRECTORY_RUN_AT_STARTUP:false}
+    enabled: ${OA_PERSON_DIRECTORY_ENABLED:true}
+    run-at-startup: ${OA_PERSON_DIRECTORY_RUN_AT_STARTUP:true}
     source-system: ${OA_PERSON_DIRECTORY_SOURCE_SYSTEM:HZ_KG_OA_TST}
     environment: ${OA_PERSON_DIRECTORY_ENVIRONMENT:TEST}
     query-base-url: ${OA_PERSON_DIRECTORY_QUERY_BASE_URL:}

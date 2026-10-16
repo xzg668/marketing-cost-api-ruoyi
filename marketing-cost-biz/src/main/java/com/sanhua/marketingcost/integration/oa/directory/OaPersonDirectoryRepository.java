@@ -143,7 +143,9 @@ public class OaPersonDirectoryRepository {
 
   private UserLink resolveSystemUser(
       OaDirectoryPerson person, long collaboratorRoleId, LocalDateTime now) {
-    Long linkedUserId = linkedUserId(person.oaUserId());
+    rejectReassignedOaIdentity(person);
+    // 工号是人员业务身份；OA 内部 ID 更新时，保留已分派任务使用的系统账号。
+    Long linkedUserId = linkedUserId(person.employeeNo());
     if (linkedUserId != null) {
       UserLink linked = inspectUser(linkedUserId);
       if (linked != null && "COMMERCIAL".equals(linked.businessUnitType())
@@ -157,7 +159,10 @@ public class OaPersonDirectoryRepository {
       }
     }
 
-    UserLink existing = inspectUserByName(person.employeeNo());
+    UserLink existing = inspectUserByEmployeeNo(person.employeeNo());
+    if (existing == null) {
+      existing = inspectUserByName(person.employeeNo());
+    }
     if (existing != null && existing.active() && "COMMERCIAL".equals(existing.businessUnitType())
         && hasTechnicalPermission(existing.userId())) {
       updateManagedUser(existing, person, now);
@@ -181,13 +186,38 @@ public class OaPersonDirectoryRepository {
     return managed;
   }
 
-  private Long linkedUserId(String oaUserId) {
+  private Long linkedUserId(String employeeNo) {
     var rows = jdbc.query("""
         SELECT system_user_id FROM lp_oa_person_directory
-         WHERE source_system=? AND environment=? AND oa_user_id=? LIMIT 1
+         WHERE source_system=? AND environment=? AND employee_no=? LIMIT 1
         """, (row, rowNum) -> row.getLong(1),
-        properties.getSourceSystem(), properties.getEnvironment(), oaUserId);
+        properties.getSourceSystem(), properties.getEnvironment(), employeeNo);
     return rows.isEmpty() ? null : rows.getFirst();
+  }
+
+  private void rejectReassignedOaIdentity(OaDirectoryPerson person) {
+    Integer count = jdbc.queryForObject("""
+        SELECT COUNT(*) FROM lp_oa_person_directory
+         WHERE source_system=? AND environment=? AND oa_user_id=? AND employee_no<>?
+        """, Integer.class, properties.getSourceSystem(), properties.getEnvironment(),
+        person.oaUserId(), person.employeeNo());
+    if (count != null && count > 0) {
+      throw new OaPersonDirectoryException("OA 人员 ID 已关联其他工号，拒绝覆盖原人员身份");
+    }
+  }
+
+  private UserLink inspectUserByEmployeeNo(String employeeNo) {
+    var rows = jdbc.query("""
+        SELECT user_id,business_unit_type,status,del_flag,remark FROM sys_user
+         WHERE employee_no=? AND business_unit_type='COMMERCIAL' AND status='0' AND del_flag='0'
+        """, (row, rowNum) -> userLink(row.getLong("user_id"),
+            row.getString("business_unit_type"), row.getString("status"),
+            row.getString("del_flag"), row.getString("remark")), employeeNo);
+    var eligible = rows.stream().filter(user -> hasTechnicalPermission(user.userId())).toList();
+    if (eligible.size() > 1) {
+      throw new OaPersonDirectoryException("同一工号关联了多个有效技术协作账号：" + employeeNo);
+    }
+    return eligible.isEmpty() ? null : eligible.getFirst();
   }
 
   private UserLink inspectUserByName(String username) {
@@ -285,8 +315,8 @@ public class OaPersonDirectoryRepository {
       return;
     }
     jdbc.update("""
-        UPDATE sys_user SET nick_name=?,update_by='oa-directory',update_time=? WHERE user_id=?
-        """, truncate(person.name(), 64), Timestamp.valueOf(now), user.userId());
+        UPDATE sys_user SET nick_name=?,employee_no=?,update_by='oa-directory',update_time=? WHERE user_id=?
+        """, truncate(person.name(), 64), person.employeeNo(), Timestamp.valueOf(now), user.userId());
   }
 
   private void ensureRole(long userId, long roleId) {

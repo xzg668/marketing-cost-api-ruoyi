@@ -82,8 +82,9 @@ integration:
       "[FI-SC-006]": "${OA_I07_SC006_SUBFORM_ID:1317497487388790985}"
       "[FI-SC-020]": "${OA_I07_SC020_SUBFORM_ID:1315726685492431674}"
   oa-person-directory:
-    enabled: ${OA_PERSON_DIRECTORY_ENABLED:false}
-    run-at-startup: ${OA_PERSON_DIRECTORY_RUN_AT_STARTUP:false}
+    # API 启动同步一次，此后每日同步；本地和服务器均需配置 OA 出站鉴权与查询地址。
+    enabled: ${OA_PERSON_DIRECTORY_ENABLED:true}
+    run-at-startup: ${OA_PERSON_DIRECTORY_RUN_AT_STARTUP:true}
     source-system: ${OA_PERSON_DIRECTORY_SOURCE_SYSTEM:HZ_KG_OA_TST}
     environment: ${OA_PERSON_DIRECTORY_ENVIRONMENT:TEST}
     query-base-url: ${OA_PERSON_DIRECTORY_QUERY_BASE_URL:}
