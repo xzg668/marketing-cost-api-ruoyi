@@ -195,7 +195,7 @@ class QuoteCostingPreparationIntegrationTest extends BomMapperTestBase {
     verifyNoInteractions(oa,batches);
   }
   @Test void materialChangeAfterPreparationDoesNotStartCosting() {
-    when(contexts.resolveRevisions(any())).thenReturn(java.util.Map.of());
+    doReturn(java.util.Map.of()).when(contexts).resolveRevisions(any());
     assertThatThrownBy(()->service.prepareAndCost(oaNo,request(null),"admin")).hasMessageContaining("资料已变化");
     verifyNoInteractions(oa,batches);verify(pipeline,never()).execute(any());
   }
