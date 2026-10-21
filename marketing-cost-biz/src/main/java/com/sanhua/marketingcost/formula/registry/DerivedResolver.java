@@ -5,6 +5,7 @@ import com.sanhua.marketingcost.entity.MaterialScrapRef;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
 import com.sanhua.marketingcost.entity.PriceVariable;
 import com.sanhua.marketingcost.mapper.MaterialScrapRefMapper;
+import com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService;
 import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.Map;
@@ -26,11 +27,15 @@ public class DerivedResolver implements FactorVariableRegistryImpl.DerivedContex
 
   private final FinanceFactorVariableQuery financeFactors;
   private final MaterialScrapRefMapper materialScrapRefMapper;
+  private final ScrapPriceSelectionService scrapPrices;
 
   public DerivedResolver(
-      FinanceFactorVariableQuery financeFactors, MaterialScrapRefMapper materialScrapRefMapper) {
+      FinanceFactorVariableQuery financeFactors,
+      MaterialScrapRefMapper materialScrapRefMapper,
+      ScrapPriceSelectionService scrapPrices) {
     this.financeFactors = financeFactors;
     this.materialScrapRefMapper = materialScrapRefMapper;
+    this.scrapPrices = scrapPrices;
   }
 
   @Override
@@ -48,7 +53,7 @@ public class DerivedResolver implements FactorVariableRegistryImpl.DerivedContex
       case STRATEGY_MAIN_MATERIAL:
         return resolveMainMaterialFinance(variable, ctx);
       case STRATEGY_SCRAP_REF:
-        return resolveScrapRef(variable, ctx);
+        return resolveScrapRef(variable, ctx, subResolver);
       case STRATEGY_FORMULA_REF:
         return resolveFormulaRef(variable, ctx, binding, subResolver);
       case STRATEGY_FINANCE_FACTOR:
@@ -70,38 +75,80 @@ public class DerivedResolver implements FactorVariableRegistryImpl.DerivedContex
     return financeFactors.queryName(item.getMaterialCode().trim(), ctx);
   }
 
-  /** 废料派生：materialCode → scrap_ref.scrap_code → 财务因素，最后乘 ratio */
-  Optional<BigDecimal> resolveScrapRef(PriceVariable variable, VariableContext ctx) {
+  /** 映射只提供废料身份和比例；价格与税价依据来自独立废料快照。 */
+  Optional<BigDecimal> resolveScrapRef(
+      PriceVariable variable, VariableContext ctx, SubResolver subResolver) {
     PriceLinkedItem item = ctx == null ? null : ctx.getLinkedItem();
     if (item == null || isBlank(item.getMaterialCode())) {
       log.debug("SCRAP_REF 变量 {} 缺 linkedItem.materialCode", variable.getVariableCode());
       return Optional.empty();
     }
     String materialCode = item.getMaterialCode().trim();
-    MaterialScrapRef ref =
-        materialScrapRefMapper.selectOne(
+    String businessUnit = item.getBusinessUnitType();
+    String month = ctx.getPricingMonth();
+    var date =
+        ctx.getQuoteDate() == null ? java.time.YearMonth.parse(month).atDay(1) : ctx.getQuoteDate();
+    var references =
+        materialScrapRefMapper.selectList(
             Wrappers.lambdaQuery(MaterialScrapRef.class)
                 .eq(MaterialScrapRef::getMaterialCode, materialCode)
-                .orderByDesc(MaterialScrapRef::getId)
-                .last("LIMIT 1"));
-    if (ref == null || isBlank(ref.getScrapCode())) {
+                .eq(MaterialScrapRef::getBusinessUnitType, businessUnit)
+                .and(
+                    q ->
+                        q.isNull(MaterialScrapRef::getEffectiveFrom)
+                            .or()
+                            .le(MaterialScrapRef::getEffectiveFrom, date))
+                .and(
+                    q ->
+                        q.isNull(MaterialScrapRef::getEffectiveTo)
+                            .or()
+                            .ge(MaterialScrapRef::getEffectiveTo, date))
+                .orderByAsc(MaterialScrapRef::getId));
+    if (references.isEmpty()) {
       log.debug(
           "SCRAP_REF 变量 {} 未在 lp_material_scrap_ref 找到 {} 的映射",
           variable.getVariableCode(),
           materialCode);
       return Optional.empty();
     }
-    Optional<BigDecimal> priceOpt = financeFactors.queryName(ref.getScrapCode().trim(), ctx);
-    if (priceOpt.isEmpty()) {
-      return Optional.empty();
+    MaterialScrapRef ref = references.getFirst();
+    BigDecimal ratio = ref.getRatio() == null ? BigDecimal.ONE : ref.getRatio();
+    if (isBlank(ref.getScrapCode()) || ratio.signum() < 0)
+      throw new IllegalArgumentException("废料映射缺料号或抵减比例无效：" + materialCode);
+    for (var other : references) {
+      BigDecimal otherRatio = other.getRatio() == null ? BigDecimal.ONE : other.getRatio();
+      if (!ref.getScrapCode().equals(other.getScrapCode()) || ratio.compareTo(otherRatio) != 0)
+        throw new IllegalArgumentException("公式废料变量存在多个有效映射，请明确废料：" + materialCode);
     }
-    BigDecimal ratio = ref.getRatio();
-    BigDecimal base = priceOpt.get();
-    if (ratio != null) ctx.getPrimitiveInputs().put(variable.getVariableCode() + ":ratio", ratio);
-    if (ratio == null) {
-      return Optional.of(base);
+    String oaNo =
+        ctx.getOaNo() == null && ctx.getOaForm() != null
+            ? ctx.getOaForm().getOaNo()
+            : ctx.getOaNo();
+    var selection =
+        scrapPrices.selectForFormula(
+            businessUnit,
+            month,
+            ref.getScrapCode().trim(),
+            item.getOrgCode(),
+            oaNo,
+            date,
+            ctx.isFinanceQuoteBase(),
+            ctx.getSupplierReviews());
+    BigDecimal taxMultiplier = BigDecimal.ONE;
+    if ("INCL".equals(variable.getTaxMode())) {
+      BigDecimal vat = subResolver == null ? null : subResolver.resolve("vat_rate").orElse(null);
+      if (vat == null || vat.signum() < 0 || vat.compareTo(BigDecimal.ONE) > 0)
+        throw new IllegalArgumentException("废料含税变量缺少有效vat_rate：" + variable.getVariableCode());
+      taxMultiplier = BigDecimal.ONE.add(vat);
+    } else if (!"EXCL".equals(variable.getTaxMode())) {
+      throw new IllegalArgumentException("废料价格变量必须声明INCL或EXCL税价口径：" + variable.getVariableCode());
     }
-    return Optional.of(base.multiply(ratio));
+    ctx.getPrimitiveInputs().put(variable.getVariableCode() + ":ratio", ratio);
+    ctx.getPrimitiveInputs().put(variable.getVariableCode() + ":taxMultiplier", taxMultiplier);
+    ctx.getScrapPriceInputs()
+        .put(variable.getVariableCode(), selection.evidence().inputSnapshotJson());
+    ctx.resolvedSource(variable.getVariableCode(), "SCRAP_PRICE");
+    return Optional.of(selection.unitPrice().multiply(taxMultiplier).multiply(ratio));
   }
 
   /**

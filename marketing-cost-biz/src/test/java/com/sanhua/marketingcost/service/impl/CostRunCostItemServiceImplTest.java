@@ -280,6 +280,26 @@ class CostRunCostItemServiceImplTest {
     assertThat(findItem(withFees, "LOSS").getBaseAmount()).isEqualByComparingTo(findItem(items, "LOSS").getBaseAmount());
     assertThat(findItem(withFees, "TOTAL").getAmount().subtract(findItem(withoutFees, "TOTAL").getAmount()))
         .isEqualByComparingTo("0.45");
+    var withFeesInput = context.getEffectiveTechnicalData();
+    for (String materialValue : List.of("水氟SUS304", "水氟316L", "氟氟SUS304", "氟氟316L", "水水SUS304", "水水316L")) {
+      context.setEffectiveTechnicalData(new EffectiveTechnicalDataInput(
+          withFeesInput.productId(), withFeesInput.versionId(), withFeesInput.versionNo(), withFeesInput.accountingMonth(),
+          withFeesInput.sourceType(), withFeesInput.contentFingerprint(), withFeesInput.retrievedAt(),
+          withFeesInput.packageRequired(), withFeesInput.auxiliaryRequired(), withFeesInput.salaryRequired(),
+          withFeesInput.packageTotalAmount(), withFeesInput.auxiliaryTotalAmount(), withFeesInput.salaryTotalAmount(),
+          withFeesInput.packageItems(), withFeesInput.auxiliaryItems(), withFeesInput.salaryItems(),
+          withFeesInput.productFees(), withFeesInput.netLossRate(), withFeesInput.productProperty(),
+          withFeesInput.moduleSources(), withFeesInput.materialItems(), withFeesInput.priceSources(),
+          new EffectiveTechnicalDataInput.PlateMaterialEvidence("MANUAL_REQUIRED", materialValue,
+              "a".repeat(64), "COMMERCIAL", "PMM-COST", "PLATE", null, null, List.of(1L))));
+      var materialItems = svc.listByMaterialCodes(form.getOaNo(), formItem.getMaterialNo(),
+          Set.of(formItem.getMaterialNo()), context, null, false, ignored -> {});
+      assertThat(materialItems).as(materialValue).extracting(CostRunCostItemDto::getCostCode,
+          CostRunCostItemDto::getAmount, CostRunCostItemDto::getBaseAmount)
+          .containsExactlyElementsOf(withFees.stream().map(row -> org.assertj.core.groups.Tuple.tuple(
+              row.getCostCode(), row.getAmount(), row.getBaseAmount())).toList());
+    }
+    context.setEffectiveTechnicalData(withFeesInput);
     var lookup = (CostRunCacheLookupService)
         org.springframework.test.util.ReflectionTestUtils.getField(svc, "cacheLookup");
     var publicMouldFee = new com.sanhua.marketingcost.entity.OtherExpenseRate();

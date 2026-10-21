@@ -27,6 +27,7 @@ import com.sanhua.marketingcost.service.PricePrepareSettlementKeyGenerator;
 import com.sanhua.marketingcost.service.QuoteCuMaterialDiffService;
 import com.sanhua.marketingcost.service.pricing.FactorPriceUnit;
 import com.sanhua.marketingcost.service.pricing.PriceFactorContext;
+import com.sanhua.marketingcost.service.scrap.ScrapPriceCalculationEvidence;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -304,7 +305,12 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     if (item.getQuantity() == null || item.getUnitPrice() == null || item.getAmount() == null) {
       throw new IllegalStateException(label + "缺数量、单价或金额");
     }
-    BigDecimal expected = money(item.getQuantity().multiply(item.getUnitPrice()));
+    BigDecimal calculationPrice = item.getUnitPrice();
+    if (com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceReader.RESULT_REF_TYPE.equals(item.getResultRefType())) {
+      calculationPrice = new com.sanhua.marketingcost.service.settlement.SettlementCalculationEvidence(objectMapper)
+          .read(item).path("unitPrice").decimalValue();
+    }
+    BigDecimal expected = money(item.getQuantity().multiply(calculationPrice));
     requireDecimal(label, "金额=数量×单价", expected, money(item.getAmount()));
   }
 
@@ -413,10 +419,13 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
 
   private void collectMakeLinkedCodes(MakeRowsPair pair, Set<String> linkedCodes) {
     for (MakePartPriceCalcRow row : pair.oaRows().values()) {
-      if (isLinkedPriceType(row.getRawPriceType())) {
+      if (isLinkedPriceType(row.getRawPriceType())
+          && !ScrapPriceCalculationEvidence.isScrap(row.getRawInputSnapshotJson())) {
         linkedCodes.add(requireText(row.getChildMaterialNo(), "制造件联动价子材料"));
       }
-      if (isLinkedPriceType(row.getScrapPriceType()) && StringUtils.hasText(row.getScrapCode())) {
+      if (isLinkedPriceType(row.getScrapPriceType())
+          && StringUtils.hasText(row.getScrapCode())
+          && !ScrapPriceCalculationEvidence.isScrap(row.getScrapInputSnapshotJson())) {
         linkedCodes.add(row.getScrapCode().trim());
       }
     }
@@ -678,6 +687,7 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
 
   private boolean validateLinkedPair(
       String context, LinkedEvidence oa, LinkedEvidence finance, Set<String> cuVariableCodes) {
+    boolean scrapCu = validateFormulaScrapPair(oa.originalInputs(), finance.originalInputs());
     requireSame(
         context,
         "联动规则来源",
@@ -747,7 +757,37 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     if (!oaSources.equals(financeSources)) {
       throw new IllegalStateException("OA与财务联动价非Cu变量来源不一致: " + context);
     }
-    return oaHasCu;
+    return oaHasCu || scrapCu;
+  }
+
+  private boolean validateFormulaScrapPair(JsonNode oa, JsonNode finance) {
+    var oaInputs = oa == null ? objectMapper.createObjectNode() : oa.path("scrapPriceInputs");
+    var financeInputs =
+        finance == null ? objectMapper.createObjectNode() : finance.path("scrapPriceInputs");
+    var keys = new java.util.TreeSet<String>();
+    oaInputs.fieldNames().forEachRemaining(keys::add);
+    var otherKeys = new java.util.TreeSet<String>();
+    financeInputs.fieldNames().forEachRemaining(otherKeys::add);
+    if (!keys.equals(otherKeys)) throw new IllegalStateException("两侧公式的废料变量范围不一致");
+    boolean copper = false;
+    var evidence = new ScrapPriceCalculationEvidence(objectMapper);
+    for (String key : keys) {
+      var customer = evidence.read(oaInputs.path(key).asText());
+      var base = evidence.read(financeInputs.path(key).asText());
+      BigDecimal cu =
+          customer.context() == null || customer.context().customerCopperPricePerTon() == null
+              ? null
+              : customer.context().customerCopperPricePerTon().movePointLeft(3);
+      copper |=
+          evidence.validatePair(
+              customer.rule().materialCode(),
+              oaInputs.path(key).asText(),
+              financeInputs.path(key).asText(),
+              customer.unitPrice(),
+              base.unitPrice(),
+              cu);
+    }
+    return copper;
   }
 
   private void validateScenarioCu(
@@ -757,6 +797,22 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
       Set<String> cuVariableCodes) {
     BigDecimal scenarioCu = null;
     for (Map.Entry<String, LinkedEvidence> entry : evidence.entrySet()) {
+      var original = entry.getValue().originalInputs();
+      if (original != null && "OA".equals(label)) {
+        for (var encoded : original.path("scrapPriceInputs")) {
+          var scrap = new ScrapPriceCalculationEvidence(objectMapper).read(encoded.asText());
+          if (scrap.rule().factorBindings().containsValue(PriceFactorContext.COPPER)) {
+            var customer = scrap.context().customerCopperPricePerTon();
+            if (customer == null || versionCuPrice == null)
+              throw new IllegalStateException("公式废料变量缺少客户Cu版本依据");
+            requireDecimal(
+                entry.getKey(),
+                "公式废料客户Cu",
+                money(versionCuPrice),
+                money(customer.movePointLeft(3)));
+          }
+        }
+      }
       BigDecimal current = cuValue(entry.getKey(), entry.getValue().variables(), cuVariableCodes);
       if (current == null) {
         continue;
@@ -801,6 +857,17 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
           finance.getUnitPrice(),
           financeEvidence.row().getPartUnitPrice());
       cuAffected = validateLinkedPair(settlementKey, oaEvidence, financeEvidence, cuVariableCodes);
+    }
+    if (ScrapPriceCalculationEvidence.SOURCE.equals(oa.getResultRefType())) {
+      cuAffected =
+          new ScrapPriceCalculationEvidence(objectMapper)
+              .validatePair(
+                  oa.getMaterialCode(),
+                  oa.getInputSnapshotJson(),
+                  finance.getInputSnapshotJson(),
+                  oa.getUnitPrice(),
+                  finance.getUnitPrice(),
+                  version.getOaCuPrice());
     }
     if ("RANGE_PRICE".equals(oa.getResultRefType())
         && (StringUtils.hasText(oa.getInputSnapshotJson())
@@ -1010,6 +1077,17 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
       }
       return false;
     }
+    if (ScrapPriceCalculationEvidence.isScrap(oaRangeSnapshot)
+        || ScrapPriceCalculationEvidence.isScrap(financeRangeSnapshot)) {
+      return new ScrapPriceCalculationEvidence(objectMapper)
+          .validatePair(
+              materialCode,
+              oaRangeSnapshot,
+              financeRangeSnapshot,
+              oaPrice,
+              financePrice,
+              version.getOaCuPrice());
+    }
     if (!isLinkedPriceType(priceType)
         && (PriceTypeEnum.fromDbText(priceType).orElse(null) == PriceTypeEnum.RANGE
             || "RANGE_PRICE".equals(priceType))
@@ -1086,7 +1164,9 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     trace.put("financeScrapRangeTrace", finance.getScrapInputSnapshotJson());
     trace.put("rawCuAffected", rawCu);
     trace.put("scrapCuAffected", scrapCu);
-    if (rawCu && isLinkedPriceType(oa.getRawPriceType())) {
+    if (rawCu
+        && isLinkedPriceType(oa.getRawPriceType())
+        && !ScrapPriceCalculationEvidence.isScrap(oa.getRawInputSnapshotJson())) {
       trace.put(
           "oaRawLinkedTrace", requireEvidence(oaLinked, oa.getChildMaterialNo(), "OA").trace());
       trace.put(
@@ -1094,6 +1174,7 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
           requireEvidence(financeLinked, finance.getChildMaterialNo(), "财务").trace());
     }
     if (scrapCu
+        && !ScrapPriceCalculationEvidence.isScrap(oa.getScrapInputSnapshotJson())
         && isLinkedPriceType(oa.getScrapPriceType())
         && StringUtils.hasText(oa.getScrapCode())) {
       trace.put("oaScrapLinkedTrace", requireEvidence(oaLinked, oa.getScrapCode(), "OA").trace());

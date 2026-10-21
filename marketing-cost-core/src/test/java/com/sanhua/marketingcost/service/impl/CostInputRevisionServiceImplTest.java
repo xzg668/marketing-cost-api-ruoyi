@@ -94,7 +94,7 @@ class CostInputRevisionServiceImplTest {
 
     var revisions = service.currentRevisions(form(), items, "2026-08");
     assertThat(revisions).containsOnlyKeys(12L);
-    verify(jdbc, times(6)).queryForList(anyString());
+    verify(jdbc, times(5)).queryForList(anyString());
     assertThat(revisions.get(12L))
         .isEqualTo(service.currentRevision(form(), items.get(1), "2026-08"));
     assertThatThrownBy(() -> service.currentRevision(form(), items.get(0), "2026-08"))

@@ -49,7 +49,11 @@ public class TechnicalDataSubmissionSummary {
     JsonNode details = snapshot.path("details");
     JsonNode supplements = snapshot.path("supplements");
     switch (type) {
-      case "PROFILE" -> { content.set("productProperty", details.path("productProperty")); content.set("productFees", supplements.path("productFees")); }
+      case "PROFILE" -> {
+        content.set("productProperty", details.path("productProperty"));
+        content.set("productFees", supplements.path("productFees"));
+        if (supplements.hasNonNull("plateMaterial")) content.set("plateMaterial", supplements.path("plateMaterial"));
+      }
       case "DRAWING_BOM" -> content.set("drawingBom", supplements.path("drawingBom"));
       case "MANUFACTURING" -> content.set("manufacturing", supplements.path("manufacturing"));
       case "PACKAGE" -> { content.set("packaging", supplements.path("packaging")); content.set("items", details.path("packageItems")); }

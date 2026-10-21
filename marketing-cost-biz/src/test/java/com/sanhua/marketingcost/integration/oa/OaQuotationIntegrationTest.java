@@ -228,6 +228,38 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
+  void failedDatabaseTransactionStillLeavesRequestAndResponseInDedicatedFileLog() throws Exception {
+    var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(
+        com.sanhua.marketingcost.integration.logging.ExternalInterfaceLog.class);
+    var events = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    events.start();
+    logger.addAppender(events);
+    try {
+      assertThat(logger.isAdditive()).isFalse();
+      assertThat(logger.getAppender("EXTERNAL_INTERFACE"))
+          .isInstanceOf(ch.qos.logback.core.rolling.RollingFileAppender.class);
+      var r = request(2);
+      doThrow(new DataIntegrityViolationException("test storage failure"))
+          .when(repository).completeQuotation(anyLong(), anyString());
+      var response = http.perform(post(URL).header("Authorization", TOKEN).contentType("application/json")
+              .content(r.toString()))
+          .andExpect(status().isServiceUnavailable())
+          .andExpect(jsonPath("$.code").value("STORAGE_UNAVAILABLE"))
+          .andExpect(header().exists("X-Interface-Call-Id")).andReturn();
+      assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM oa_form WHERE oa_no=?", Integer.class,
+          r.path("formNo").asText())).isZero();
+      var logged = json.readTree(events.list.getLast().getFormattedMessage());
+      assertThat(logged.at("/request/json/requestId").asText()).isEqualTo(r.path("requestId").asText());
+      assertThat(logged.at("/response/json/code").asText()).isEqualTo("STORAGE_UNAVAILABLE");
+      assertThat(logged.path("callId").asText()).isEqualTo(response.getResponse().getHeader("X-Interface-Call-Id"));
+      assertThat(logged.toString()).doesNotContain(TOKEN.substring(7));
+    } finally {
+      logger.detachAppender(events);
+      events.stop();
+    }
+  }
+
+  @Test
   void concurrentDifferentDocumentsCannotClaimTheSameQuotationNumber() throws Exception {
     var first = request(1);
     var second = request(1).put("formNo", first.path("formNo").asText());

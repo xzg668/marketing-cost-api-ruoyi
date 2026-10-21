@@ -190,7 +190,7 @@ class PriceLinkedCalcServiceImplTest {
     calcItem.setItemCode("MAT-1");
     calcItem.setCalcScene("MONTHLY_ADJUST");
 
-    service.calculateMonthlyAdjustItemForEnsure(calcItem, linkedItem);
+    service.calculateMonthlyAdjustItemForEnsure(calcItem, linkedItem, null);
 
     ArgumentCaptor<LinkedPriceVariableContext> contextCaptor =
         ArgumentCaptor.forClass(LinkedPriceVariableContext.class);
@@ -232,7 +232,7 @@ class PriceLinkedCalcServiceImplTest {
     calcItem.setItemCode("MAT-1");
 
     OaForm oaForm = new OaForm();
-    service.calculateQuoteItemForEnsure(calcItem, linkedItem, oaForm);
+    service.calculateQuoteItemForEnsure(calcItem, linkedItem, oaForm, null);
 
     ArgumentCaptor<LinkedPriceVariableContext> contextCaptor =
         ArgumentCaptor.forClass(LinkedPriceVariableContext.class);
@@ -271,10 +271,15 @@ class PriceLinkedCalcServiceImplTest {
     calcItem.setPricingMonth("2026-06");
     calcItem.setItemCode("MAT-1");
 
-    service.calculateQuoteItemForEnsure(calcItem, linkedItem, new OaForm());
+    var reviews = new com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext(171L)
+        .forOrganization("220");
+    calcItem.setPriceAsOfTime(java.time.LocalDateTime.of(2026, 6, 19, 12, 0));
+    service.calculateQuoteItemForEnsure(calcItem, linkedItem, new OaForm(), reviews);
 
     assertThat(capturedContext[0]).isNotNull();
     assertThat(capturedContext[0].getPricingMonth()).isEqualTo("2026-06");
+    assertThat(capturedContext[0].getSupplierReviews()).isSameAs(reviews);
+    assertThat(capturedContext[0].getQuoteDate()).isEqualTo(java.time.LocalDate.of(2026, 6, 19));
     assertThat(calcItem.getTraceJson()).contains("\"formulaPriceMonth\":\"2026-05\"");
     assertThat(calcItem.getTraceJson()).contains("\"calculationPriceMonth\":\"2026-06\"");
     assertThat(calcItem.getPartUnitPrice()).isEqualByComparingTo("12.345678");
@@ -457,7 +462,7 @@ class PriceLinkedCalcServiceImplTest {
 
     PriceLinkedCalcItem oa = new PriceLinkedCalcItem();
     oa.setPricingMonth("2026-05");
-    service.calculateQuoteItemForEnsure(oa, linkedItem, oaForm);
+    service.calculateQuoteItemForEnsure(oa, linkedItem, oaForm, null);
     PriceLinkedCalcItem finance = new PriceLinkedCalcItem();
     finance.setPricingMonth("2026-05");
     service.calculateQuoteItemForEnsure(
@@ -465,7 +470,7 @@ class PriceLinkedCalcServiceImplTest {
         linkedItem,
         oaForm,
         Map.of("Cu", new BigDecimal("90.000000")),
-        "FINANCE_QUOTE_BASE");
+        "FINANCE_QUOTE_BASE", null);
 
     assertThat(oa.getPartUnitPrice()).isEqualByComparingTo("142.603000");
     assertThat(finance.getPartUnitPrice()).isEqualByComparingTo("130.564000");
@@ -516,7 +521,7 @@ class PriceLinkedCalcServiceImplTest {
 
     PriceLinkedCalcItem oa = new PriceLinkedCalcItem();
     oa.setPricingMonth("2026-05");
-    service.calculateQuoteItemForEnsure(oa, linkedItem, oaForm);
+    service.calculateQuoteItemForEnsure(oa, linkedItem, oaForm, null);
     PriceLinkedCalcItem finance = new PriceLinkedCalcItem();
     finance.setPricingMonth("2026-05");
     service.calculateQuoteItemForEnsure(
@@ -524,7 +529,7 @@ class PriceLinkedCalcServiceImplTest {
         linkedItem,
         oaForm,
         Map.of("Cu", new BigDecimal("90.000000")),
-        "FINANCE_QUOTE_BASE");
+        "FINANCE_QUOTE_BASE", null);
 
     assertThat(oa.getPartUnitPrice()).isEqualByComparingTo("40.564000");
     assertThat(finance.getPartUnitPrice()).isEqualByComparingTo(oa.getPartUnitPrice());
@@ -544,7 +549,7 @@ class PriceLinkedCalcServiceImplTest {
       PriceLinkedCalcItem calcItem,
       OaForm oaForm)
       throws Exception {
-    return service.calculateQuoteItemForEnsure(calcItem, linkedItem, oaForm).getPartUnitPrice();
+    return service.calculateQuoteItemForEnsure(calcItem, linkedItem, oaForm, null).getPartUnitPrice();
   }
 
   /**

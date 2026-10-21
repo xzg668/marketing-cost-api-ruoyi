@@ -81,6 +81,32 @@ class QuoteCuMaterialDiffServiceImplTest {
   }
 
   @Test
+  void settlementAmountUsesCapturedPrecisionBeforeFinalAmountRounding() throws Exception {
+    var oa = fixedItem(11L, "PPR-OA", "SET:SETTLEMENT", "SETTLEMENT", "3", "4.84102471", "14.52307412");
+    var finance = fixedItem(21L, "PPR-FIN", "SET:SETTLEMENT", "SETTLEMENT", "3", "4.84102471", "14.52307412");
+    var rule = new com.sanhua.marketingcost.service.settlement.SettlementPriceRecord();
+    rule.setId(300L); rule.setBusinessUnitType("COMMERCIAL"); rule.setMaterialCode("SETTLEMENT");
+    rule.setPriceType(com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceType.SETTLE_FIXED);
+    rule.setPriceMonth("2026-05"); rule.setRevisionNo(1); rule.setActive(true);
+    rule.setGivenPrice(new BigDecimal("4.841024707965"));
+    var captured = objectMapper.createObjectNode();
+    captured.put("sourceTable", "lp_settlement_price"); captured.put("resultRefType", "SETTLEMENT_PRICE");
+    captured.put("sourceRecordId", 300); captured.put("priceType", "SETTLE_FIXED");
+    captured.put("accountingMonth", "2026-05"); captured.put("consumerOrgCode", "210");
+    captured.put("mode", "FIXED_GIVEN"); captured.put("calculatorVersion", "SETTLEMENT_PRICE_V1");
+    captured.put("unitPrice", rule.getGivenPrice()); captured.set("rule", objectMapper.valueToTree(rule));
+    for (var item : List.of(oa, finance)) {
+      item.setPriceOrgCode("210"); item.setResultRefType("SETTLEMENT_PRICE");
+      item.setPriceSource("结算固定价"); item.setInputSnapshotJson(captured.toString());
+    }
+    stubBase(List.of(oa), List.of(finance));
+    assertThat(service.calculate(VERSION_ID).adjustmentAmount()).isEqualByComparingTo("0");
+    finance.setAmount(new BigDecimal("14.52307413"));
+    stubBase(List.of(oa), List.of(finance));
+    assertThatThrownBy(() -> service.calculate(VERSION_ID)).hasMessageContaining("金额=数量×单价");
+  }
+
+  @Test
   void packageCopperDifferenceIsIncludedOnlyOnceAtTheSettlementParent() throws Exception {
     objectMapper.findAndRegisterModules();
     var oa = fixedItem(11L, "PPR-OA", "SET:PACK", "PACK", "3", "13", "39");
@@ -146,6 +172,55 @@ class QuoteCuMaterialDiffServiceImplTest {
   }
 
   @Test
+  void boardByproductUsesCapturedCommercialBasisAndNegativeDeductionWithoutOrdinaryLinkedRows()
+      throws Exception {
+    objectMapper.findAndRegisterModules();
+    var customer =
+        com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.captured(
+            "2026-05", "95", "110000");
+    var base =
+        com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.captured(
+            "2026-05", "95", null);
+    var oa =
+        item(
+            11L,
+            "PPR-OA",
+            "BYPRODUCT",
+            "SCRAP",
+            "-2",
+            customer.unitPrice().toPlainString(),
+            customer.unitPrice().multiply(new BigDecimal("-2")).toPlainString());
+    var finance =
+        item(
+            21L,
+            "PPR-FIN",
+            "BYPRODUCT",
+            "SCRAP",
+            "-2",
+            base.unitPrice().toPlainString(),
+            base.unitPrice().multiply(new BigDecimal("-2")).toPlainString());
+    oa.setResultRefType("SCRAP_PRICE");
+    finance.setResultRefType("SCRAP_PRICE");
+    oa.setInputSnapshotJson(objectMapper.writeValueAsString(customer));
+    finance.setInputSnapshotJson(objectMapper.writeValueAsString(base));
+    stubBase(List.of(oa), List.of(finance));
+    var version = version();
+    version.setOaCuPrice(new BigDecimal("110"));
+    version.setFinanceCuPrice(new BigDecimal("90")); // 普通板换价与商用废料基准可以不同。
+    when(versionMapper.selectById(VERSION_ID)).thenReturn(version);
+    var result = service.calculate(VERSION_ID);
+    assertThat(result.cuAffectedSettlementCount()).isOne();
+    assertThat(result.adjustmentAmount())
+        .isEqualByComparingTo(
+            new BigDecimal("15")
+                .multiply(new BigDecimal("0.982"))
+                .divide(new BigDecimal("1.13"), 18, java.math.RoundingMode.HALF_UP)
+                .multiply(new BigDecimal("-2"))
+                .setScale(8, java.math.RoundingMode.HALF_UP));
+    verify(linkedCalcItemMapper, never()).selectList(any());
+  }
+
+  @Test
   void technicalFormulaKeepsCapturedResultAfterARecalculationAtTheSameTime() throws Exception {
     var oa = linkedItem(11L, "PPR-OA", "SET-TECH", "TECH", "2", "130", "260", 501L);
     var finance = linkedItem(21L, "PPR-FIN", "SET-TECH", "TECH", "2", "100", "200", 601L);
@@ -178,6 +253,85 @@ class QuoteCuMaterialDiffServiceImplTest {
     stubBase(List.of(oa), List.of(finance));
     when(linkedCalcItemMapper.selectList(any())).thenReturn(List.of(customer), List.of(base));
     assertThatThrownBy(() -> service.calculate(VERSION_ID)).hasMessageContaining("非Cu变量");
+  }
+
+  @Test
+  void technicalFormulaScrapUsesItsOwnCommercialBasisAndValidatesCustomerAndRatio()
+      throws Exception {
+    objectMapper.findAndRegisterModules();
+    var customer = technicalScrapLinked(501L, "120000");
+    var base = technicalScrapLinked(601L, null);
+    String oaPrice = customer.getPartUnitPrice().toPlainString();
+    String basePrice = base.getPartUnitPrice().toPlainString();
+    var oa = linkedItem(11L, "PPR-OA", "SET-TECH", "TECH", "1", oaPrice, oaPrice, 501L);
+    var finance = linkedItem(21L, "PPR-FIN", "SET-TECH", "TECH", "1", basePrice, basePrice, 601L);
+    stubBase(List.of(oa), List.of(finance));
+    var version = version();
+    version.setOaCuPrice(new BigDecimal("120"));
+    version.setFinanceCuPrice(new BigDecimal("90"));
+    when(versionMapper.selectById(VERSION_ID)).thenReturn(version);
+    when(linkedCalcItemMapper.selectList(any())).thenReturn(List.of(customer), List.of(base));
+    var result = service.calculate(VERSION_ID);
+    assertThat(result.cuAffectedSettlementCount()).isOne();
+    // Outer formula = 200 - scrap; actual saved linked prices have six decimal places.
+    assertThat(result.adjustmentAmount()).isEqualByComparingTo("-21.725664");
+
+    stubBase(List.of(oa), List.of(finance));
+    version.setOaCuPrice(new BigDecimal("119"));
+    when(versionMapper.selectById(VERSION_ID)).thenReturn(version);
+    when(linkedCalcItemMapper.selectList(any())).thenReturn(List.of(customer), List.of(base));
+    assertThatThrownBy(() -> service.calculate(VERSION_ID)).hasMessageContaining("公式废料客户Cu");
+
+    var changed =
+        (com.fasterxml.jackson.databind.node.ObjectNode)
+            objectMapper.readTree(base.getInputSnapshotJson());
+    ((com.fasterxml.jackson.databind.node.ObjectNode) changed.path("primitiveInputs"))
+        .put("Scrap:ratio", new BigDecimal("2"));
+    base.setInputSnapshotJson(objectMapper.writeValueAsString(changed));
+    stubBase(List.of(oa), List.of(finance));
+    version.setOaCuPrice(new BigDecimal("120"));
+    when(versionMapper.selectById(VERSION_ID)).thenReturn(version);
+    when(linkedCalcItemMapper.selectList(any())).thenReturn(List.of(customer), List.of(base));
+    assertThatThrownBy(() -> service.calculate(VERSION_ID)).hasMessageContaining("非Cu变量");
+  }
+
+  private PriceLinkedCalcItem technicalScrapLinked(long id, String customerCu) throws Exception {
+    var scrap =
+        com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.captured(
+            "2026-05", "95", customerCu);
+    String side = customerCu == null ? "FINANCE_QUOTE_BASE" : "OA_LOCKED";
+    var result =
+        new BigDecimal("200")
+            .subtract(scrap.unitPrice())
+            .setScale(6, java.math.RoundingMode.HALF_UP);
+    var row =
+        linked(
+            id,
+            "TECH",
+            result.toPlainString(),
+            "200-[Scrap]",
+            Map.of("Scrap", scrap.unitPrice()),
+            side);
+    row.setCalculatorVersion("TECH_FORMULA_V1");
+    row.setSourcePriceRecordId(900L);
+    var snapshot = new LinkedHashMap<String, Object>();
+    snapshot.put("calculatorVersion", "TECH_FORMULA_V1");
+    snapshot.put("ruleId", 900L);
+    snapshot.put("technicalVersionId", 81L);
+    snapshot.put("expression", "200-[Scrap]");
+    snapshot.put(
+        "definitions", Map.of("Scrap", Map.of("strategy", "SCRAP_REF", "taxMode", "EXCL")));
+    snapshot.put("factorKeys", Map.of());
+    snapshot.put("usedFinanceKeys", List.of());
+    snapshot.put("primitiveInputs", vars("Scrap:ratio", "1", "Scrap:taxMultiplier", "1"));
+    snapshot.put("scrapPriceInputs", Map.of("Scrap", objectMapper.writeValueAsString(scrap)));
+    snapshot.put(
+        "context",
+        objectMapper
+            .readTree(rangeSnapshot("AVG|1#CU", "90000", customerCu, result.toPlainString()))
+            .path("context"));
+    row.setInputSnapshotJson(objectMapper.writeValueAsString(snapshot));
+    return row;
   }
 
   private PriceLinkedCalcItem technicalLinked(

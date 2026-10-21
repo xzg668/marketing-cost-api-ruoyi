@@ -382,6 +382,30 @@ class CostRunTraceSnapshotBuilderImplTest {
             "\"included\":true");
   }
 
+  @Test void legacySettlementTraceUsesOnlyTheCapturedSourceIdAndNeverGuessesByMaterial() {
+    for (boolean hasReference : List.of(false, true)) {
+      var parts = mock(CostRunPartItemMapper.class);
+      var costs = mock(CostRunCostItemMapper.class);
+      var prepared = mock(PricePrepareItemMapper.class);
+      var fixed = mock(PriceFixedItemMapper.class);
+      var builder = new CostRunTraceSnapshotBuilderImpl(parts, costs, prepared,
+          mock(MakePartPriceCalcRowMapper.class), mock(PriceLinkedCalcItemMapper.class),
+          mock(PriceLinkedItemMapper.class), fixed, mock(PriceRangeItemMapper.class), new ObjectMapper());
+      when(parts.selectList(any(Wrapper.class))).thenReturn(List.of(part(11L, 101L, "结算固定价", "MAT-FIX", "旧结算")));
+      when(costs.selectList(any(Wrapper.class))).thenReturn(List.of());
+      when(prepared.selectList(any(Wrapper.class))).thenReturn(List.of(prepare(101L, "FIXED", "结算固定价", hasReference ? 9001L : null)));
+      var legacy = fixedItem(); legacy.setSourceType("SETTLE_FIXED");
+      when(fixed.selectById(9001L)).thenReturn(legacy);
+      var traces = builder.build(version());
+      assertThat(traces).anySatisfy(trace -> {
+        assertThat(trace.getSourceType()).isEqualTo("SETTLE_FIXED_PRICE");
+        assertThat(trace.getUnitPrice()).isEqualByComparingTo("3");
+      });
+      org.mockito.Mockito.verify(fixed, org.mockito.Mockito.never()).selectList(any(Wrapper.class));
+      if (hasReference) org.mockito.Mockito.verify(fixed).selectById(9001L);
+    }
+  }
+
   private QuoteCostRunVersion version() {
     QuoteCostRunVersion version = new QuoteCostRunVersion();
     version.setId(1001L);

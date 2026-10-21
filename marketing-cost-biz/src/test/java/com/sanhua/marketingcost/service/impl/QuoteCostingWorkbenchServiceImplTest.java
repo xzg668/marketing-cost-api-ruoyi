@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -9,6 +10,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -136,7 +138,35 @@ class QuoteCostingWorkbenchServiceImplTest {
             costRunVersionInvalidationService,
             quoteBomStatusService,
             priceTypeRecognitionService,
-            electronicDrawingFallbackService);
+            electronicDrawingFallbackService, inputRevisions);
+  }
+
+  private final com.sanhua.marketingcost.service.CostInputRevisionService inputRevisions =
+      mock(com.sanhua.marketingcost.service.CostInputRevisionService.class);
+
+  @Test
+  void readingChangedPriceInputsMarksTheViewStaleWithoutRewritingPublishedState() {
+    when(oaFormMapper.selectOne(any())).thenReturn(form());
+    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
+    when(quoteBomStatusMapper.selectOne(any())).thenReturn(status(SAMPLE_PERIOD_MONTH));
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", SAMPLE_PERIOD_MONTH))
+        .thenReturn(List.of(row(10L, "FIN-001", "MAT-1")));
+    var workspace = new QuoteCostingWorkspace();
+    workspace.setWorkspaceStatus("SUCCESS");
+    workspace.setSourceRevision("old-settlement-base");
+    workspace.setLastSuccessSourceRevision("old-settlement-base");
+    workspace.setCurrentCostVersionId(77L);
+    when(workspaceService.find(10L, SAMPLE_PERIOD_MONTH)).thenReturn(Optional.of(workspace));
+    when(inputRevisions.currentRevision(any(), any(), eq(SAMPLE_PERIOD_MONTH)))
+        .thenReturn("new-settlement-base");
+    var result = service.getWorkbench("OA-001", 10L);
+    assertThat(result.getCostingWorkspace().getInputChanged()).isTrue();
+    assertThat(result.getCostingWorkspace().getAttentionCode()).isEqualTo("INPUT_CHANGED");
+    assertThat(result.getWorkflowStatus().getPricePrepareStatus()).isEqualTo("STALE");
+    assertThat(workspace.getWorkspaceStatus()).isEqualTo("SUCCESS");
+    assertThat(workspace.getCurrentCostVersionId()).isEqualTo(77L);
+    verify(workspaceService, never()).update(any(), anyInt());
+    verifyNoInteractions(costRunVersionInvalidationService);
   }
 
   @Test

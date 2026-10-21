@@ -56,6 +56,8 @@ class MaterialPriceSourceScopeIntegrationTest {
           org_code VARCHAR(32),source_kind VARCHAR(32) DEFAULT 'PUBLIC',source_type VARCHAR(32),
           pricing_month CHAR(7),effective_from DATE,effective_to DATE)
         """);
+    new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
+        new org.springframework.core.io.ClassPathResource("db/V332__settlement_price_versions.sql")).execute(data);
     var config = new MybatisConfiguration();
     config.setEnvironment(new Environment("sources", new SpringManagedTransactionFactory(), data));
     config.addMapper(TechnicalPriceSourceMapper.class);
@@ -70,17 +72,25 @@ class MaterialPriceSourceScopeIntegrationTest {
   @BeforeEach
   void clear() {
     for (String table : List.of("lp_price_linked_item", "lp_price_range_factor_rule",
-        "lp_price_range_item", "lp_price_fixed_item")) jdbc.update("DELETE FROM " + table);
+        "lp_price_range_item", "lp_price_fixed_item", "lp_settlement_price")) jdbc.update("DELETE FROM " + table);
   }
 
   @Test
-  void fourAvailableTypesAreDistinctAndSettlementLinkedHasNoSource() {
+  void fiveSourcesAreDistinctAndLegacySettlementRowsDoNotSupplyCurrentPrices() {
     linked("M1", "2026-10", "210", "COMMERCIAL");
     range("M1", "2026-10", "210", "COMMERCIAL");
     fixed("M1", "SETTLE_FIXED", "2026-10", null, null, "210", "COMMERCIAL");
     fixed("M1", "PURCHASE_FIXED", null, "2026-10-01", "2026-11-01", "210", "COMMERCIAL");
     assertThat(kinds("M1", "2026-10", "210", "COMMERCIAL"))
-        .containsExactlyInAnyOrder("LINKED", "RANGE", "SETTLE_FIXED", "FIXED");
+        .containsExactlyInAnyOrder("LINKED", "RANGE", "FIXED");
+    settlement("M1", "SETTLE_FIXED", "2026-09", "COMMERCIAL");
+    settlement("M1", "SETTLE_LINKED", "2026-10", "COMMERCIAL");
+    assertThat(kinds("M1", "2026-10", "210", "COMMERCIAL"))
+        .containsExactlyInAnyOrder("LINKED", "SETTLE_LINKED", "RANGE", "SETTLE_FIXED", "FIXED");
+    assertThat(kinds("M1", "2026-11", "220", "COMMERCIAL"))
+        .containsExactlyInAnyOrder("SETTLE_LINKED", "SETTLE_FIXED");
+    assertThat(kinds("M1", "2026-11", "210", "HOUSEHOLD")).isEmpty();
+    assertThat(kinds("M1", "2026-11", "999", "COMMERCIAL")).isEmpty();
   }
 
   @Test
@@ -162,5 +172,14 @@ class MaterialPriceSourceScopeIntegrationTest {
 
   private void fixed(String code, String type, String month, String from, String to, String org, String unit) {
     jdbc.update("INSERT INTO lp_price_fixed_item(material_code,source_type,pricing_month,effective_from,effective_to,org_code,business_unit_type) VALUES (?,?,?,?,?,?,?)", code, type, month, from, to, org, unit);
+  }
+
+  private void settlement(String code, String type, String month, String unit) {
+    jdbc.update("""
+        INSERT INTO lp_settlement_price(business_unit_type,material_code,material_name,price_type,price_month,
+          revision_no,given_price,planned_price,markup_ratio,budget_cu,budget_zn,tax_divisor,expression,
+          formula_version,source_system,source_rows_json,content_hash,created_by)
+        VALUES(?,?,'测试',?,?,1,1,1,1.2,78,22,1.13,'stored formula','SETTLEMENT_CU_ZN_V1','TEST','[]',REPEAT('a',64),'test')
+        """, unit, code, type, month);
   }
 }

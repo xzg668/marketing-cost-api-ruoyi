@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -39,6 +40,8 @@ import com.sanhua.marketingcost.service.MakePartSourceDataService;
 import com.sanhua.marketingcost.service.MakePartWeightService;
 import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
+import com.sanhua.marketingcost.service.scrap.ScrapPriceScopeReader;
+import com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -65,6 +68,7 @@ class MakePartPriceGenerationServiceImplTest {
   private MakePartPriceCalcRowMapper calcRowMapper;
   private MakePartPriceGapItemMapper gapItemMapper;
   private MakePartPriceGenerationServiceImpl service;
+  private ScrapPriceSelectionService scrapPrices;
   private com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs
       manufacturingInputs;
 
@@ -85,6 +89,7 @@ class MakePartPriceGenerationServiceImplTest {
     when(noScrapConfirmationService.findEffective(any(), any(), any())).thenReturn(null);
     manufacturingInputs =
         mock(com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.class);
+    scrapPrices = mock(ScrapPriceSelectionService.class);
     service =
         new MakePartPriceGenerationServiceImpl(
             sourceDataService,
@@ -99,7 +104,20 @@ class MakePartPriceGenerationServiceImplTest {
             noScrapConfirmationService,
             calcRowMapper,
             gapItemMapper,
-            manufacturingInputs);
+            manufacturingInputs, scrapPrices);
+  }
+
+  @Test
+  void standaloneGenerationAlwaysReleasesTheBatchPriceView() {
+    var batch = mock(ScrapPriceScopeReader.Batch.class);
+    when(scrapPrices.openBatch()).thenReturn(batch);
+    when(sourceDataService.listManufacturedParents(any(), any(), any()))
+        .thenReturn(List.of()).thenThrow(new IllegalArgumentException("BOM unavailable"));
+    service.generateByOa("OA", "COMMERCIAL", "2026-10", null);
+    assertThatThrownBy(() -> service.generateByOa("OA", "COMMERCIAL", "2026-10", null))
+        .hasMessage("BOM unavailable");
+    verify(scrapPrices, times(2)).openBatch();
+    verify(batch, times(2)).close();
   }
 
   @Test
@@ -149,10 +167,10 @@ class MakePartPriceGenerationServiceImplTest {
     scrap.setScrapUnit("克");
     when(scrapMappingService.listMappings("RAW", "COMMERCIAL")).thenReturn(List.of(scrap));
     when(priceResolveService.calculateMaterialUnitPrice(
-            eq("RAW"), any(), any(), any(), any(), any(), any()))
+            eq("RAW"), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenReturn(okPrice("RAW", ".066"));
     when(priceResolveService.calculateMaterialUnitPrice(
-            eq("SCRAP"), any(), any(), any(), any(), any(), any()))
+            eq("SCRAP"), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenReturn(okPrice("SCRAP", ".005"));
 
     var result = service.calculateForBomRow(parent, priceAsOf(), null, false).getFirst();
@@ -219,14 +237,14 @@ class MakePartPriceGenerationServiceImplTest {
       scrap.setScrapUnit("kg");
       when(scrapMappingService.listMappings(rawCode, "COMMERCIAL")).thenReturn(List.of(scrap));
       when(priceResolveService.calculateMaterialUnitPrice(
-              eq(rawCode), any(), any(), any(), any(), any(), any()))
+              eq(rawCode), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
           .thenReturn(okPrice(rawCode, "66"));
     }
     when(sourceDataService.listManufacturedParents("OA-001", "COMMERCIAL", null))
         .thenReturn(List.of(first, second));
     when(sourceDataService.listDedupedChildren(eq("MAKE"), any(), eq("210"))).thenReturn(List.of());
     when(priceResolveService.calculateMaterialUnitPrice(
-            eq("SCRAP"), any(), any(), any(), any(), any(), any()))
+            eq("SCRAP"), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenReturn(okPrice("SCRAP", "5"));
 
     var result = service.calculateRowsByOa("OA-001", "COMMERCIAL", "2026-05", priceAsOf(), null);
@@ -280,7 +298,7 @@ class MakePartPriceGenerationServiceImplTest {
                 "OK",
                 ""));
     when(priceResolveService.calculateMaterialUnitPrice(
-            any(), any(), any(), any(), any(), any(), any()))
+            any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenAnswer(invocation -> okPrice(invocation.getArgument(0), "10"));
 
     List<MakePartPriceCalcRow> rows =
@@ -298,7 +316,7 @@ class MakePartPriceGenerationServiceImplTest {
     verify(scrapMappingService).listMappings("301220046", "COMMERCIAL");
     verify(scrapMappingService, never()).listMappings("203240247", "COMMERCIAL");
     verify(priceResolveService, never())
-        .calculateMaterialUnitPrice(eq("203240247"), any(), any(), any(), any(), any(), any());
+        .calculateMaterialUnitPrice(eq("203240247"), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class));
   }
 
   @Test
@@ -435,7 +453,7 @@ class MakePartPriceGenerationServiceImplTest {
             eq(priceAsOfTime),
             eq("OA-001"),
             eq("COMMERCIAL"),
-            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())));
+            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class));
     verify(priceResolveService)
         .resolveMaterialUnitPrice(
             eq("SCRAP-001"),
@@ -444,7 +462,7 @@ class MakePartPriceGenerationServiceImplTest {
             eq(priceAsOfTime),
             eq("OA-001"),
             eq("COMMERCIAL"),
-            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())));
+            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class));
   }
 
   @Test
@@ -482,7 +500,7 @@ class MakePartPriceGenerationServiceImplTest {
     when(scrapMappingService.listMappings("RAW-001", "COMMERCIAL"))
         .thenReturn(List.of(scrap("SCRAP-001")));
     when(priceResolveService.resolveMaterialUnitPrice(
-            any(), any(), any(), any(), any(), any(), any()))
+            any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
 
     MakePartPriceGenerateResponse response =
@@ -528,7 +546,7 @@ class MakePartPriceGenerationServiceImplTest {
     verify(weightService, never())
         .resolveWeights(any(), any(), any(), any(), any(), any(), anyBoolean());
     verify(priceResolveService, never())
-        .resolveMaterialUnitPrice(any(), any(), any(), any(), any(), any(), any());
+        .resolveMaterialUnitPrice(any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class));
     verify(linkedPriceEnsureService, never()).ensure(any(LinkedPriceEnsureRequest.class));
   }
 
@@ -537,7 +555,7 @@ class MakePartPriceGenerationServiceImplTest {
   void calculateRowsByOaDoesNotPersist() {
     stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-001")));
     when(priceResolveService.calculateMaterialUnitPrice(
-            any(), any(), any(), any(), any(), any(), any()))
+            any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
 
     List<MakePartPriceCalcRow> rows =
@@ -558,7 +576,7 @@ class MakePartPriceGenerationServiceImplTest {
     verify(gapItemMapper, never()).updateById(any(MakePartPriceGapItem.class));
     verify(linkedPriceEnsureService, never()).ensure(any(LinkedPriceEnsureRequest.class));
     verify(priceResolveService, never())
-        .resolveMaterialUnitPrice(any(), any(), any(), any(), any(), any(), any());
+        .resolveMaterialUnitPrice(any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class));
   }
 
   @Test
@@ -599,7 +617,7 @@ class MakePartPriceGenerationServiceImplTest {
     when(scrapMappingService.listMappings("RAW-001", "COMMERCIAL"))
         .thenReturn(List.of(scrap("SCRAP-001")));
     when(priceResolveService.resolveMaterialUnitPrice(
-            any(), any(), any(), any(), any(), any(), any()))
+            any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
 
     MakePartPriceGenerateResponse response =
@@ -648,7 +666,7 @@ class MakePartPriceGenerationServiceImplTest {
     when(scrapMappingService.listMappings("RAW-B", "COMMERCIAL"))
         .thenReturn(List.of(scrap("SCRAP-B1")));
     when(priceResolveService.resolveMaterialUnitPrice(
-            any(), any(), any(), any(), any(), any(), any()))
+            any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
 
     MakePartPriceGenerateResponse response =
@@ -706,7 +724,7 @@ class MakePartPriceGenerationServiceImplTest {
                 c ->
                     c != null
                         && "210".equals(c.supplierReviews().priceOrgCode())
-                        && c.variableOverrides().equals(context.variableOverrides()))))
+                        && c.variableOverrides().equals(context.variableOverrides())), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
 
     MakePartPriceGenerateResponse response =
@@ -734,7 +752,7 @@ class MakePartPriceGenerationServiceImplTest {
                 c ->
                     c != null
                         && "210".equals(c.supplierReviews().priceOrgCode())
-                        && c.variableOverrides().equals(context.variableOverrides())));
+                        && c.variableOverrides().equals(context.variableOverrides())), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class));
     verify(priceResolveService)
         .resolveMaterialUnitPrice(
             eq("SCRAP-CU-A"),
@@ -747,7 +765,7 @@ class MakePartPriceGenerationServiceImplTest {
                 c ->
                     c != null
                         && "210".equals(c.supplierReviews().priceOrgCode())
-                        && c.variableOverrides().equals(context.variableOverrides())));
+                        && c.variableOverrides().equals(context.variableOverrides())), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class));
   }
 
   @Test
@@ -785,7 +803,7 @@ class MakePartPriceGenerationServiceImplTest {
             eq(priceAsOf()),
             eq("OA-001"),
             eq("COMMERCIAL"),
-            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode()))))
+            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenReturn(
             MakePartMaterialPriceResolveResult.miss("RAW-MISS", "MISSING_PRICE", "缺原材料价格", "固定价"));
 
@@ -823,7 +841,7 @@ class MakePartPriceGenerationServiceImplTest {
             eq(priceAsOf()),
             eq("OA-001"),
             eq("COMMERCIAL"),
-            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode()))))
+            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenReturn(
             MakePartMaterialPriceResolveResult.miss("SCRAP-MISS", "MISSING_PRICE", "缺废料价格", "固定价"));
 
@@ -858,7 +876,7 @@ class MakePartPriceGenerationServiceImplTest {
             eq(priceAsOf()),
             eq("OA-001"),
             eq("COMMERCIAL"),
-            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode()))))
+            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenReturn(
             MakePartMaterialPriceResolveResult.miss("RAW-MISS", "MISSING_PRICE", "缺原材料价格", null));
     when(priceResolveService.resolveMaterialUnitPrice(
@@ -868,7 +886,7 @@ class MakePartPriceGenerationServiceImplTest {
             eq(priceAsOf()),
             eq("OA-001"),
             eq("COMMERCIAL"),
-            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode()))))
+            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenReturn(
             MakePartMaterialPriceResolveResult.miss("SCRAP-MISS", "MISSING_PRICE", "缺废料价格", null));
 
@@ -1010,12 +1028,12 @@ class MakePartPriceGenerationServiceImplTest {
             eq(priceAsOf()),
             eq("OA-001"),
             eq("COMMERCIAL"),
-            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())));
+            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class));
   }
 
   @Test
-  @DisplayName("废料命中联动价时也会 ensure")
-  void linkedScrapEnsuredBeforeResolvingPrice() {
+  @DisplayName("映射废料进入独立价源，不预热普通联动价")
+  void mappedScrapSkipsOrdinaryLinkedEnsure() {
     stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-001")));
     when(materialPriceRouterService.listCandidates(
             "SCRAP-001", "2026-05", LocalDate.parse("2026-05-31"), "210", "COMMERCIAL"))
@@ -1023,13 +1041,9 @@ class MakePartPriceGenerationServiceImplTest {
 
     service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
 
-    verify(linkedPriceEnsureService)
-        .ensure(
-            argThat(
-                request ->
-                    request != null
-                        && "210".equals(request.getPriceOrgCode())
-                        && request.normalizedItemCodes().contains("SCRAP-001")));
+    verify(linkedPriceEnsureService, never()).ensure(any());
+    verify(priceResolveService).resolveMaterialUnitPrice(eq("SCRAP-001"), any(), any(), any(), any(), any(), any(),
+        eq(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.SCRAP));
   }
 
   @Test
@@ -1100,7 +1114,7 @@ class MakePartPriceGenerationServiceImplTest {
             request -> {
               assertThat(request.getOaNo()).isEqualTo("OA-001");
               assertThat(request.normalizedItemCodes())
-                  .containsExactlyInAnyOrder("RAW-001", "SCRAP-001");
+                  .containsExactlyInAnyOrder("RAW-001");
             });
   }
 
@@ -1121,7 +1135,7 @@ class MakePartPriceGenerationServiceImplTest {
           .thenReturn(scraps);
     }
     when(priceResolveService.resolveMaterialUnitPrice(
-            any(), any(), any(), any(), any(), any(), any()))
+            any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
   }
 

@@ -32,7 +32,6 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
           "lp_other_expense_rate",
           "lp_product_property",
           "lp_product_property_rule",
-          "lp_price_settle",
           "lp_supplier_supply_ratio",
           "lp_bom_byproduct_cost_rule",
           "lp_cost_business_rule");
@@ -46,8 +45,7 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
           "lp_price_fixed_item",
           "lp_price_linked_item",
           "lp_price_range_item",
-          "lp_price_range_factor_rule",
-          "lp_price_settle_item");
+          "lp_price_range_factor_rule");
   // 历史业务表与 JSON_TABLE 可能使用不同字符集/排序规则；业务编码统一按精确值去重。
   static final String MATERIAL_CODES_SQL =
       """
@@ -246,11 +244,13 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
           global,
           "financeFactors",
           financePublicationRevision(item.getBusinessUnitType(), pricingMonth, null));
+      append(global, "settlementPrices", settlementRevision(item.getBusinessUnitType(), pricingMonth, List.of()));
       return sha256(global.toString());
     }
 
     StringBuilder canonical = new StringBuilder();
     List<String> distinctMaterials = new ArrayList<>(new TreeSet<>(materials));
+    append(canonical, "settlementPrices", settlementRevision(item.getBusinessUnitType(), pricingMonth, distinctMaterials));
     java.util.Set<String> originalOrganizations = new TreeSet<>();
     distinctMaterials.forEach(material -> append(canonical, "material", material));
     String placeholders = String.join(",", Collections.nCopies(distinctMaterials.size(), "?"));
@@ -295,6 +295,39 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
           "financeFactors",
           financePublicationRevision(
               item.getBusinessUnitType(), pricingMonth, originalOrganizations));
+    }
+    return sha256(canonical.toString());
+  }
+
+  /** 与结算选月规则一致：只跟踪该业务单元、核算月可用的最新原稿及实际需要的成组基价。 */
+  private String settlementRevision(String businessUnit, String month, List<String> materials) {
+    if (month == null || month.isBlank()) return "NO_PRICING_MONTH";
+    var parameters = new ArrayList<Object>(java.util.Arrays.asList(businessUnit, month));
+    String filter = "business_unit_type=? AND price_month<=? AND active=1";
+    if (!materials.isEmpty()) {
+      filter += " AND material_code IN (" + String.join(",", Collections.nCopies(materials.size(), "?")) + ")";
+      parameters.addAll(materials);
+    }
+    var rows = jdbcTemplate.queryForList(
+        "SELECT ranked.* FROM (SELECT p.*,ROW_NUMBER() OVER (PARTITION BY material_code,price_type "
+            + "ORDER BY price_month DESC,revision_no DESC) AS ranking FROM lp_settlement_price p WHERE "
+            + filter + ") ranked WHERE ranking=1 ORDER BY material_code,price_type", parameters.toArray());
+    StringBuilder canonical = new StringBuilder();
+    boolean requiresBase = false;
+    for (var row : rows) {
+      for (String column : new TreeSet<>(row.keySet())) appendPriceValue(canonical, column, row.get(column));
+      Object confirmed = valueIgnoreCase(row, "weights_confirmed");
+      requiresBase |= "SETTLE_LINKED".equals(valueIgnoreCase(row, "price_type"))
+          && (Boolean.TRUE.equals(confirmed) || "1".equals(String.valueOf(confirmed)))
+          && valueIgnoreCase(row, "copper_weight_g") != null
+          && valueIgnoreCase(row, "zinc_weight_g") != null;
+    }
+    if (requiresBase) {
+      var bases = jdbcTemplate.queryForList(
+          "SELECT * FROM lp_settlement_base_price WHERE business_unit_type=? AND price_month<=? AND active=1 "
+              + "ORDER BY price_month DESC,revision_no DESC LIMIT 1", businessUnit, month);
+      for (var row : bases)
+        for (String column : new TreeSet<>(row.keySet())) appendPriceValue(canonical, column, row.get(column));
     }
     return sha256(canonical.toString());
   }

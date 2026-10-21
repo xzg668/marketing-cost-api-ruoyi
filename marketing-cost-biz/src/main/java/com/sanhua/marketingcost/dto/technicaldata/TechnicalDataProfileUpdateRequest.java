@@ -5,7 +5,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** 仅接收技术确认的属性与单件费用；OA 来源字段不接受回写。 */
+/** 仅接收技术确认的属性、单件费用和板片材质；OA 来源字段不接受回写。 */
 public final class TechnicalDataProfileUpdateRequest {
   private String productProperty;
   private Boolean hasAdditionalFees;
@@ -13,6 +13,8 @@ public final class TechnicalDataProfileUpdateRequest {
   private String unitMouldFee;
   private String unitCertificationFee;
   private Integer expectedVersion;
+  private String plateMaterial;
+  private String expectedPlateMaterialRevision;
   private final Map<String, Object> unknownFields = new LinkedHashMap<>();
 
   public String getProductProperty() { return productProperty; }
@@ -27,6 +29,10 @@ public final class TechnicalDataProfileUpdateRequest {
   public void setUnitCertificationFee(String value) { unitCertificationFee = value; }
   public Integer getExpectedVersion() { return expectedVersion; }
   public void setExpectedVersion(Integer value) { expectedVersion = value; }
+  public String getPlateMaterial() { return plateMaterial; }
+  public void setPlateMaterial(String value) { plateMaterial = value; }
+  public String getExpectedPlateMaterialRevision() { return expectedPlateMaterialRevision; }
+  public void setExpectedPlateMaterialRevision(String value) { expectedPlateMaterialRevision = value; }
 
   @JsonAnySetter
   public void captureUnknownField(String name, Object value) { unknownFields.put(name, value); }

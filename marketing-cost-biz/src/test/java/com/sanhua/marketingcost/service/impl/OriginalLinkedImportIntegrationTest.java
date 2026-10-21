@@ -44,7 +44,8 @@ class OriginalLinkedImportIntegrationTest {
     "V309__finance_factor_publication_note.sql",
     "V311__original_linked_expression_capacity.sql",
     "V325__finance_effective_price.sql",
-    "V326__original_workbook_source.sql"
+    "V326__original_workbook_source.sql",
+          "V330__scrap_price_monthly.sql"
   };
   private static FactorIdentityMapper identities;
   private static FactorUploadBatchMapper batches;
@@ -75,6 +76,7 @@ class OriginalLinkedImportIntegrationTest {
         List.of(
             com.sanhua.marketingcost.mapper.FinanceEffectivePriceMapper.class,
             com.sanhua.marketingcost.mapper.PriceRangeFactorRuleMapper.class,
+            com.sanhua.marketingcost.mapper.ScrapPriceMapper.class,
             FactorIdentityMapper.class,
             FactorUploadBatchMapper.class,
             FactorMonthlyPriceMapper.class,
@@ -125,7 +127,8 @@ class OriginalLinkedImportIntegrationTest {
             json,
             transactions,
             com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceTestSupport.service(
-                effectiveSessions, json));
+                effectiveSessions, json),
+            com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.service(effectiveSessions, transactions, json));
     publishFinance("CU_90000");
     service = service(items);
   }
@@ -391,8 +394,8 @@ class OriginalLinkedImportIntegrationTest {
         item,
         oa,
         java.util.Map.of("Cu", new java.math.BigDecimal("888")),
-        "FINANCE_QUOTE_BASE");
-    calc.calculateQuoteItemForEnsure(p1, item, oa);
+        "FINANCE_QUOTE_BASE", null);
+    calc.calculateQuoteItemForEnsure(p1, item, oa, null);
     assertThat(p0.getCalcStatus()).isEqualTo("OK");
     assertThat(p1.getCalcStatus()).isEqualTo("OK");
     assertThat(p0.getPartUnitPrice()).isEqualByComparingTo("111.636291");
@@ -433,7 +436,7 @@ class OriginalLinkedImportIntegrationTest {
     assertThat(items.selectById(item.getId()).getSourceInputSnapshotJson())
         .isEqualTo(item.getSourceInputSnapshotJson());
     item.setSourceInputSnapshotJson("{}");
-    calc.calculateQuoteItemForEnsure(p0, item, oa);
+    calc.calculateQuoteItemForEnsure(p0, item, oa, null);
     assertThat(p0.getCalcStatus()).isEqualTo("FAILED");
     assertThat(p0.getPartUnitPrice()).isNull();
     assertThat(p0.getInputSnapshotJson()).isNull();

@@ -98,6 +98,24 @@ class FinancePricePrepareServiceImplTest {
   }
 
   @Test
+  void settlementAmountsCannotChangeWithOrdinaryFinancialCopper() {
+    var source = sourceBatch();
+    when(batchMapper.selectOne(any())).thenReturn(source);
+    when(batchMapper.updateById(source)).thenReturn(1);
+    var oa = item("SET:SETTLEMENT", "SETTLEMENT", "SETTLEMENT_PRICE", "10", "20");
+    var finance = item("SET:SETTLEMENT", "SETTLEMENT", "SETTLEMENT_PRICE", "11", "22");
+    when(itemMapper.selectList(any())).thenReturn(List.of(oa), List.of(finance));
+    when(financeBasePriceService.read("OA-1", 101L, "2026-05", "COMMERCIAL")).thenReturn(financeBasePrice());
+    var generated = new PricePrepareGenerateResult();
+    generated.setPrepareNo("PPR-FIN-SETTLEMENT");
+    generated.setStatus("SUCCESS");
+    generated.setPriceAsOfTime(source.getPriceAsOfTime());
+    when(pricePrepareService.generate(any())).thenReturn(generated);
+    assertThatThrownBy(() -> service.generateFromOa("PPR-OA-1"))
+        .isInstanceOf(IllegalStateException.class).hasMessageContaining("非Cu单价");
+  }
+
+  @Test
   void generatesSingleProductFinanceBatchWithOnlyCuOverrideAndSameInputs() {
     PricePrepareBatch source = sourceBatch();
     when(batchMapper.selectOne(any())).thenReturn(source);
@@ -270,6 +288,28 @@ class FinancePricePrepareServiceImplTest {
     assertThat(request.getValue().getVariableOverrides())
         .containsOnlyKeys("Cu")
         .containsEntry("Cu", new BigDecimal("95.1234567890123456"));
+  }
+
+  @Test
+  void ordinaryMaterialsKeepTheirFinancialBasisWhenScrapUsesDifferentCommercialCopper() throws Exception {
+    var json = new ObjectMapper().findAndRegisterModules();
+    var source = sourceBatch(); source.setScenarioGroupNo("GROUP-SCRAP");
+    when(batchMapper.selectOne(any())).thenReturn(source);
+    var ordinary = item("SET:CU", "MAT-CU", "LINKED_PRICE", "110", "220");
+    ordinary.setInputSnapshotJson(originalCalculation("90").getInputSnapshotJson());
+    var ordinaryBase = item("SET:CU", "MAT-CU", "LINKED_PRICE", "90", "180");
+    var captured = com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.captured("2026-05", "95", "110000");
+    var base = com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.captured("2026-05", "95", null);
+    var scrap = item("SET:SCRAP", "SCRAP", "SCRAP_PRICE", captured.unitPrice().toPlainString(), "-1");
+    scrap.setInputSnapshotJson(json.writeValueAsString(captured));
+    var scrapBase = item("SET:SCRAP", "SCRAP", "SCRAP_PRICE", base.unitPrice().toPlainString(), "-1");
+    scrapBase.setInputSnapshotJson(json.writeValueAsString(base));
+    when(itemMapper.selectList(any())).thenReturn(List.of(scrap, ordinary), List.of(scrapBase, ordinaryBase));
+    var generated = new PricePrepareGenerateResult(); generated.setPrepareNo("PPR-FIN-SCRAP");
+    generated.setStatus("SUCCESS"); generated.setPriceAsOfTime(source.getPriceAsOfTime());
+    when(pricePrepareService.generate(any())).thenReturn(generated);
+    assertThat(service.generateFromOa("PPR-OA-1").financeCuPricePerKg()).isEqualByComparingTo("90");
+    verify(financeBasePriceService, never()).read(any(), any(), any(), any());
   }
 
   @Test

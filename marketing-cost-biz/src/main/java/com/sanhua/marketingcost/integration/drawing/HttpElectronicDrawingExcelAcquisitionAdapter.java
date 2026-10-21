@@ -11,6 +11,7 @@ import java.net.URI;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
+import com.sanhua.marketingcost.integration.logging.ExternalInterfaceLog;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
@@ -86,53 +87,64 @@ public class HttpElectronicDrawingExcelAcquisitionAdapter
     String drawingNo = requiredQueryDrawingNo(query);
     String requestId = requestId(query);
     HttpRequest request = request(drawingNo, requestId);
-    try {
-      HttpResponse<InputStream> response = client.send(
-          request, HttpResponse.BodyHandlers.ofInputStream());
-      try (InputStream body = response.body()) {
-        return switch (response.statusCode()) {
-          case 200 -> success(response, body, drawingNo, requestId);
-          case 401, 403 -> throw failure(
-              ElectronicDrawingExcelAcquisitionException.ACCESS_DENIED,
-              false,
-              "电子图库拒绝当前接口凭证");
-          case 404 -> throw failure(
-              ElectronicDrawingExcelAcquisitionException.BOM_NOT_FOUND,
-              false,
-              "电子图库没有该图号的 BOM 明细");
-          default -> {
-            if (response.statusCode() >= 500) {
-              throw failure(
-                  ElectronicDrawingExcelAcquisitionException.QUERY_RETRY,
-                  true,
-                  "电子图库服务暂时不可用");
-            }
-            throw failure(
-                ElectronicDrawingExcelAcquisitionException.RESPONSE_INVALID,
+    try (var exchange = ExternalInterfaceLog.start("ELECTRONIC_DRAWING_EXCEL", "OUTBOUND", request.method(), request.uri(), request.headers().map())) {
+      exchange.request(null);
+      try {
+        HttpResponse<InputStream> response = client.send(
+            request, HttpResponse.BodyHandlers.ofInputStream());
+        exchange.response(response.statusCode(), response.headers().map(), null);
+        exchange.responseUnavailable("BINARY_STREAM_METADATA_ONLY");
+        try (InputStream body = response.body()) {
+          return switch (response.statusCode()) {
+            case 200 -> success(response, body, drawingNo, requestId);
+            case 401, 403 -> throw failure(
+                ElectronicDrawingExcelAcquisitionException.ACCESS_DENIED,
                 false,
-                "电子图库返回了不支持的 HTTP 状态");
-          }
-        };
+                "电子图库拒绝当前接口凭证");
+            case 404 -> throw failure(
+                ElectronicDrawingExcelAcquisitionException.BOM_NOT_FOUND,
+                false,
+                "电子图库没有该图号的 BOM 明细");
+            default -> {
+              if (response.statusCode() >= 500) {
+                throw failure(
+                    ElectronicDrawingExcelAcquisitionException.QUERY_RETRY,
+                    true,
+                    "电子图库服务暂时不可用");
+              }
+              throw failure(
+                  ElectronicDrawingExcelAcquisitionException.RESPONSE_INVALID,
+                  false,
+                  "电子图库返回了不支持的 HTTP 状态");
+            }
+          };
+        }
+      } catch (HttpTimeoutException exception) {
+        exchange.failure(exception);
+        throw failure(
+            ElectronicDrawingExcelAcquisitionException.QUERY_RETRY,
+            true,
+            "电子图库查询超时",
+            exception);
+      } catch (InterruptedException exception) {
+        exchange.failure(exception);
+        Thread.currentThread().interrupt();
+        throw failure(
+            ElectronicDrawingExcelAcquisitionException.QUERY_RETRY,
+            true,
+            "电子图库查询被中断",
+            exception);
+      } catch (IOException exception) {
+        exchange.failure(exception);
+        throw failure(
+            ElectronicDrawingExcelAcquisitionException.QUERY_RETRY,
+            true,
+            "电子图库网络连接失败",
+            exception);
+      } catch (RuntimeException failure) {
+        exchange.failure(failure);
+        throw failure;
       }
-    } catch (HttpTimeoutException exception) {
-      throw failure(
-          ElectronicDrawingExcelAcquisitionException.QUERY_RETRY,
-          true,
-          "电子图库查询超时",
-          exception);
-    } catch (InterruptedException exception) {
-      Thread.currentThread().interrupt();
-      throw failure(
-          ElectronicDrawingExcelAcquisitionException.QUERY_RETRY,
-          true,
-          "电子图库查询被中断",
-          exception);
-    } catch (IOException exception) {
-      throw failure(
-          ElectronicDrawingExcelAcquisitionException.QUERY_RETRY,
-          true,
-          "电子图库网络连接失败",
-          exception);
     }
   }
 

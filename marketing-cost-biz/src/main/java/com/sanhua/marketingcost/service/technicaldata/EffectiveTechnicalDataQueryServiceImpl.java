@@ -221,7 +221,18 @@ public class EffectiveTechnicalDataQueryServiceImpl
         null, auxiliaryLines.stream().map(EffectiveTechnicalDataInput.AuxiliaryLine::amount).reduce(BigDecimal.ZERO, BigDecimal::add),
         salaryLines.stream().map(EffectiveTechnicalDataInput.SalaryLine::amount).reduce(BigDecimal.ZERO, BigDecimal::add),
         List.of(), auxiliaryLines, salaryLines, fees, lossRate,
-        profile == null ? null : profile.version().getProductProperty(), moduleSources, materials, priceInputs);
+        profile == null ? null : profile.version().getProductProperty(), moduleSources, materials, priceInputs,
+        profile == null ? null : plateMaterialEvidence(profile.version()));
+  }
+
+  private EffectiveTechnicalDataInput.PlateMaterialEvidence plateMaterialEvidence(QuoteTechDataVersion version) {
+    var value = contentCodec.plateMaterial(version);
+    if (value == null) return null;
+    var source = value.source();
+    return new EffectiveTechnicalDataInput.PlateMaterialEvidence(value.mode().name(),
+        value.material() == null ? null : value.material().value(), value.revision(),
+        source.businessUnitType(), source.normalizedModel(), source.materialOrganizationCode(),
+        source.mappingId(), source.mappingVersion(), source.materialMasterIds());
   }
 
   @Override

@@ -8,6 +8,8 @@ import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.entity.PriceFixedItem;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.PriceFixedItemMapper;
+import com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceReader;
+import com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceRequest;
 import com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -27,19 +29,20 @@ public class FixedPriceResolver implements PriceResolver {
 
   private static final List<String> PURCHASE_FIXED_SOURCE_TYPES =
       List.of("PURCHASE_FIXED", "PURCHASE");
-  private static final List<String> SETTLE_FIXED_SOURCE_TYPES =
-      List.of("SETTLE_FIXED", "SETTLE");
 
   private final TechnicalPriceSourceResolver technicalPrices;
   private final PriceFixedItemMapper priceFixedItemMapper;
   private final SupplierPriceSelectionService supplierPriceSelectionService;
+  private final SettlementPriceReader settlementPrices;
 
   public FixedPriceResolver(
       PriceFixedItemMapper priceFixedItemMapper,
-      SupplierPriceSelectionService supplierPriceSelectionService, TechnicalPriceSourceResolver technicalPrices) {
+      SupplierPriceSelectionService supplierPriceSelectionService, TechnicalPriceSourceResolver technicalPrices,
+      SettlementPriceReader settlementPrices) {
     this.technicalPrices = technicalPrices;
     this.priceFixedItemMapper = priceFixedItemMapper;
     this.supplierPriceSelectionService = supplierPriceSelectionService;
+    this.settlementPrices = settlementPrices;
   }
 
   @Override
@@ -56,23 +59,19 @@ public class FixedPriceResolver implements PriceResolver {
   public PriceResolveResult resolve(
       String oaNo, CostRunPartItemDto item, PriceTypeRoute route, CostRunContext context) {
     if (route != null && route.supplemental()) return technicalPrices.resolve(item, route, context);
+    if (route != null && route.settlement()) return settlementPrices.resolve(SettlementPriceRequest.from(item, route, context));
     String code = item.getPartCode();
     if (!StringUtils.hasText(code)) {
       return PriceResolveResult.miss("partCode 为空，无法查固定价");
     }
-    FixedSourceKind sourceKind = resolveFixedSourceKind(route);
-    LocalDate priceDate = pricingDate(sourceKind, route, context);
+    LocalDate priceDate = context == null || context.getPriceAsOfTime() == null
+        ? null : context.getPriceAsOfTime().toLocalDate();
     String orgCode = priceOrgCode(item, context);
     if (!StringUtils.hasText(orgCode) || priceDate == null || context == null
         || !StringUtils.hasText(context.getBusinessUnitType())) {
       return PriceResolveResult.miss("FIXED_PRICE_SCOPE_MISSING", "固定价缺少取价组织、业务单元或核算日期：" + code);
     }
-    List<PriceFixedItem> rows = selectRows(code, sourceKind, priceDate, orgCode, context);
-    if (sourceKind == FixedSourceKind.SETTLE) {
-      if (rows.isEmpty()) return PriceResolveResult.miss("结算固定价无记录：" + code);
-      PriceFixedItem row = rows.get(0);
-      return resolved(row, "结算固定价", settleTrace(row), priceDate, null);
-    }
+    List<PriceFixedItem> rows = selectRows(code, priceDate, orgCode, context);
     var bySupplier = new LinkedHashMap<String, PriceFixedItem>();
     for (PriceFixedItem row : rows) {
       // 再核验适配器边界，保证任何调用方都不能把过期价传进供应商比较。
@@ -112,30 +111,19 @@ public class FixedPriceResolver implements PriceResolver {
         .thenComparing(PriceFixedItem::getEffectiveTo).compare(a, b);
   }
 
-  private List<PriceFixedItem> selectRows(String code, FixedSourceKind sourceKind,
+  private List<PriceFixedItem> selectRows(String code,
       LocalDate priceDate, String orgCode, CostRunContext context) {
     LambdaQueryWrapper<PriceFixedItem> query = Wrappers.lambdaQuery(PriceFixedItem.class)
         .eq(PriceFixedItem::getMaterialCode, code)
         .eq(PriceFixedItem::getSourceKind, "PUBLIC")
-        .in(PriceFixedItem::getSourceType, sourceTypes(sourceKind))
+        .in(PriceFixedItem::getSourceType, PURCHASE_FIXED_SOURCE_TYPES)
         .isNotNull(PriceFixedItem::getFixedPrice);
     if (StringUtils.hasText(orgCode)) query.eq(PriceFixedItem::getOrgCode, orgCode);
     query.eq(PriceFixedItem::getBusinessUnitType, context.getBusinessUnitType().trim());
-    if (sourceKind == FixedSourceKind.PURCHASE) {
-      query.le(PriceFixedItem::getEffectiveFrom, priceDate)
+    query.le(PriceFixedItem::getEffectiveFrom, priceDate)
           .gt(PriceFixedItem::getEffectiveTo, priceDate)
           .orderByDesc(PriceFixedItem::getEffectiveFrom)
           .orderByDesc(PriceFixedItem::getEffectiveTo);
-    } else {
-      if (context == null || !StringUtils.hasText(context.getPricingMonth())) {
-        throw new IllegalArgumentException("结算固定价缺少核算月份");
-      }
-      query.le(PriceFixedItem::getPricingMonth, context.getPricingMonth())
-          .orderByDesc(PriceFixedItem::getPricingMonth);
-      if (priceDate != null) query.and(q -> q.le(PriceFixedItem::getEffectiveFrom, priceDate)
-          .or().isNull(PriceFixedItem::getEffectiveFrom));
-      query.orderByDesc(PriceFixedItem::getEffectiveFrom);
-    }
     return priceFixedItemMapper.selectList(query.orderByDesc(PriceFixedItem::getImportedAt)
         .orderByDesc(PriceFixedItem::getCreatedAt).orderByDesc(PriceFixedItem::getId));
   }
@@ -147,44 +135,6 @@ public class FixedPriceResolver implements PriceResolver {
     return context != null && StringUtils.hasText(context.getPriceOrgCode())
         ? context.getPriceOrgCode().trim()
         : null;
-  }
-
-  private List<String> sourceTypes(FixedSourceKind sourceKind) {
-    return sourceKind == FixedSourceKind.SETTLE
-        ? SETTLE_FIXED_SOURCE_TYPES
-        : PURCHASE_FIXED_SOURCE_TYPES;
-  }
-
-  private FixedSourceKind resolveFixedSourceKind(PriceTypeRoute route) {
-    String rawPriceType = route == null ? null : route.rawPriceType();
-    if (StringUtils.hasText(rawPriceType)) {
-      String text = rawPriceType.trim();
-      if ("结算价".equals(text) || "家用结算价".equals(text) || "结算固定价".equals(text)) {
-        return FixedSourceKind.SETTLE;
-      }
-      if ("固定采购价".equals(text) || "采购固定价".equals(text)) {
-        return FixedSourceKind.PURCHASE;
-      }
-    }
-    return FixedSourceKind.PURCHASE;
-  }
-
-  private String settleTrace(PriceFixedItem row) {
-    List<String> parts = new java.util.ArrayList<>();
-    if (StringUtils.hasText(row.getSourceSystem())) {
-      parts.add("来源系统=" + row.getSourceSystem().trim());
-    }
-    if (StringUtils.hasText(row.getPricingMonth())) {
-      parts.add("结算期间=" + row.getPricingMonth().trim());
-    }
-    if (row.getPlannedPrice() != null) {
-      parts.add("计划价=" + row.getPlannedPrice());
-    }
-    if (row.getMarkupRatio() != null) {
-      parts.add("上浮比例=" + row.getMarkupRatio());
-    }
-    parts.add("单价字段=最后一列铜价/锌价列");
-    return String.join("；", parts);
   }
 
   private PriceResolveResult resolved(
@@ -226,15 +176,4 @@ public class FixedPriceResolver implements PriceResolver {
             || "PURCHASE".equalsIgnoreCase(row.getSourceType()));
   }
 
-  private LocalDate pricingDate(FixedSourceKind sourceKind, PriceTypeRoute route, CostRunContext context) {
-    if (context != null && context.getPriceAsOfTime() != null) {
-      return context.getPriceAsOfTime().toLocalDate();
-    }
-    return sourceKind == FixedSourceKind.SETTLE && route != null ? route.effectiveFrom() : null;
-  }
-
-  private enum FixedSourceKind {
-    PURCHASE,
-    SETTLE
-  }
 }

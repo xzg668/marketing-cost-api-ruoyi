@@ -39,6 +39,8 @@ final class TechnicalFormulaCalculationEvidence {
     evidence.put("definitions", context.getUsedDefinitions());
     evidence.put("usedFinanceKeys", context.getUsedFinanceKeys().stream().sorted().toList());
     evidence.put("factorKeys", context.getResolvedFactorKeys());
+    if (!context.getScrapPriceInputs().isEmpty())
+      evidence.put("scrapPriceInputs", context.getScrapPriceInputs());
     evidence.put("result", response.getResult());
     try {
       String serialized =

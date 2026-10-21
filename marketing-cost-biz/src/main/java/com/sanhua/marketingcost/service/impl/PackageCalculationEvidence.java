@@ -45,7 +45,7 @@ final class PackageCalculationEvidence {
         row.put("unitPrice", detail.getChildUnitPrice());
         row.put("amount", detail.getChildAmount());
         if (detail.getInputSnapshotJson() != null)
-          row.set("inputs", json.readTree(detail.getInputSnapshotJson()));
+          row.set("inputs", read(detail.getInputSnapshotJson()));
       }
       return json.writeValueAsString(snapshot);
     } catch (Exception error) {
@@ -126,6 +126,35 @@ final class PackageCalculationEvidence {
     var snapshot = read(serialized);
     if (!VERSION.equals(snapshot.path("calculatorVersion").asText())) return List.of();
     return components(snapshot).values().stream().filter(r -> r.path("inputs").isObject()).toList();
+  }
+
+  /** 当前包装底稿从价格准备读取，不能追到可被重算覆盖的月度包装价格表。 */
+  JsonNode trace(PricePrepareItem prepared) {
+    var snapshot = read(prepared.getInputSnapshotJson());
+    if (!VERSION.equals(snapshot.path("calculatorVersion").asText())) return null;
+    same(prepared.getMaterialCode(), snapshot.path("materialCode").asText(), "包装料号");
+    same(prepared.getBusinessUnitType(), snapshot.path("businessUnitType").asText(), "包装业务单元");
+    same(prepared.getPriceOrgCode(), snapshot.path("priceOrgCode").asText(), "包装组织");
+    same(prepared.getPeriodMonth(), snapshot.path("periodMonth").asText(), "包装月份");
+    BigDecimal total = BigDecimal.ZERO;
+    for (var component : components(snapshot).values()) {
+      total = total.add(amount(component));
+      String type = component.path("priceType").asText();
+      if ("SETTLE_FIXED".equals(type) || "SETTLE_LINKED".equals(type)) {
+        var inputs = component.path("inputs");
+        var child = new PricePrepareItem();
+        child.setMaterialCode(component.path("materialCode").asText());
+        child.setBusinessUnitType(prepared.getBusinessUnitType());
+        child.setPeriodMonth(prepared.getPeriodMonth());
+        child.setPriceOrgCode(prepared.getPriceOrgCode());
+        child.setResultRefId(inputs.path("sourceRecordId").longValue());
+        child.setUnitPrice(decimal(component, "unitPrice"));
+        child.setInputSnapshotJson(inputs.toString());
+        new com.sanhua.marketingcost.service.settlement.SettlementCalculationEvidence(json).read(child);
+      }
+    }
+    samePrice(prepared.getUnitPrice(), parentPrice(total, snapshot), "包装单价");
+    return snapshot;
   }
 
   private boolean linked(JsonNode a, JsonNode b, BigDecimal customerCu, BigDecimal financeCu) {

@@ -4,6 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.sanhua.marketingcost.integration.oa.OaInterfaceLog;
 import com.sanhua.marketingcost.integration.oa.auth.OaAccessTokenProvider;
 import com.sanhua.marketingcost.integration.oa.auth.OaAuthProperties;
 import com.sun.net.httpserver.HttpExchange;
@@ -13,6 +18,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
@@ -20,6 +26,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.slf4j.LoggerFactory;
 
 class HttpOaPersonDirectoryGatewayTest {
   private HttpServer server;
@@ -32,9 +39,16 @@ class HttpOaPersonDirectoryGatewayTest {
   private final List<String> detailQueries = new ArrayList<>();
   private int rejectFirstDetail;
   private boolean alwaysRejectDetail;
+  private final Logger logger = (Logger) LoggerFactory.getLogger(HttpOaPersonDirectoryGateway.class);
+  private final ListAppender<ILoggingEvent> events = new ListAppender<>();
+  private Level previousLevel;
 
   @BeforeEach
   void startServer() throws Exception {
+    previousLevel = logger.getLevel();
+    logger.setLevel(Level.INFO);
+    events.start();
+    logger.addAppender(events);
     server = HttpServer.create(new InetSocketAddress(0), 0);
     server.createContext("/openserver/oauth2/authorize", exchange -> respond(exchange,
         "{\"errcode\":0,\"code\":\"AUTH_CODE\"}"));
@@ -99,6 +113,60 @@ class HttpOaPersonDirectoryGatewayTest {
   @AfterEach
   void stopServer() {
     server.stop(0);
+    logger.detachAppender(events);
+    logger.setLevel(previousLevel);
+    events.stop();
+  }
+
+  @Test
+  void logsAggregateProgressAtHundredsAndFinalRemainder() throws Exception {
+    var json = new ObjectMapper();
+    var people = java.util.stream.IntStream.rangeClosed(1, 205).mapToObj(index -> Map.of(
+        "id", "U" + index, "department", List.of("4"), "username", "测试人员" + index,
+        "job_num", "E" + index)).toList();
+    replaceEmployees(json.writeValueAsString(Map.of("message", Map.of("errcode", 0),
+        "data", Map.of("total", 205, "data", people))));
+    server.removeContext("/openserver/user/v3/findUser");
+    server.createContext("/openserver/user/v3/findUser", exchange -> {
+      detailRequests.incrementAndGet();
+      String number = exchange.getRequestURI().getRawQuery().split("jobNum=E")[1];
+      respond(exchange, json.writeValueAsString(Map.of("message", Map.of("errcode", 0),
+          "data", List.of(Map.of("userid", "U" + number, "jobNum", "E" + number, "status", "normal")))));
+    });
+    String batchCallId;
+    try (var batch = OaInterfaceLog.start("OA_DIRECTORY_SYNC")) {
+      batchCallId = batch.id();
+      assertThat(gateway().load().people()).hasSize(205);
+      batch.success();
+    }
+    assertThat(detailRequests.get()).isEqualTo(205);
+    List<String> progress = progressMessages();
+    assertThat(progress).hasSize(6).allSatisfy(message -> assertThat(message)
+        .contains("callId=" + batchCallId, "durationMs=").doesNotContain("测试人员", "TOKEN-", "jobNum"));
+    assertThat(progress.get(0)).contains("stage=ORGANIZATIONS completed=4 total=4");
+    assertThat(progress.get(1)).contains("stage=EMPLOYEES completed=205 total=205");
+    assertThat(progress.subList(2, 6)).satisfiesExactly(
+        message -> assertThat(message).contains("stage=DETAILS completed=0 total=205"),
+        message -> assertThat(message).contains("stage=DETAILS completed=100 total=205"),
+        message -> assertThat(message).contains("stage=DETAILS completed=200 total=205"),
+        message -> assertThat(message).contains("stage=DETAILS completed=205 total=205"));
+    assertThat(events.list).allSatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.INFO));
+  }
+
+  @Test
+  void noSelectedPeopleReportsZeroOnceWithoutDetailRequests() {
+    replaceEmployees("""
+        {"message":{"errcode":0},"data":{"total":0,"data":[]}}
+        """);
+    assertThat(gateway().load().people()).isEmpty();
+    assertThat(detailRequests.get()).isZero();
+    assertThat(progressMessages()).filteredOn(message -> message.contains("stage=DETAILS"))
+        .singleElement().asString().contains("completed=0 total=0");
+  }
+
+  private List<String> progressMessages() {
+    return events.list.stream().map(ILoggingEvent::getFormattedMessage)
+        .filter(message -> message.startsWith("OA_DIRECTORY_PROGRESS")).toList();
   }
 
   @Test
@@ -165,6 +233,10 @@ class HttpOaPersonDirectoryGatewayTest {
         .hasMessageContaining("JK-03");
     assertThat(tokenRequests.get()).isEqualTo(1);
     assertThat(detailRequests.get()).isEqualTo(1);
+    assertThat(progressMessages()).anySatisfy(message -> assertThat(message)
+        .contains("stage=DETAILS completed=0 total=1"));
+    assertThat(progressMessages()).noneSatisfy(message -> assertThat(message)
+        .contains("stage=DETAILS completed=1 total=1"));
   }
 
   @Test

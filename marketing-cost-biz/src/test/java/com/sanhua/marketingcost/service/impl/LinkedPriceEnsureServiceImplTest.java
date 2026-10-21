@@ -100,8 +100,9 @@ class LinkedPriceEnsureServiceImplTest {
                 com.sanhua.marketingcost.service.pricing.SupplierPriceSelectionService.class));
   }
 
-  @Test
-  void nativeReuseTracksSavedPriceVersionWithoutExecutingPublicFormula() {
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"1", "0.00831015", "-0.00831065"})
+  void nativeReuseTracksSavedPriceVersionWithoutExecutingPublicFormula(String bomQuantity) {
     var source = linkedItem("MAT-1");
     source.setId(101L);
     source.setOrgCode("210");
@@ -115,14 +116,38 @@ class LinkedPriceEnsureServiceImplTest {
     existing.setItemCode("MAT-1");
     var stored = new java.util.ArrayList<PriceLinkedCalcItem>();
     stored.add(existing);
+    var bom = new BomCostingRow();
+    bom.setMaterialCode("MAT-1");
+    bom.setQtyPerTop(new BigDecimal(bomQuantity));
+    when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bom));
     when(calcItemMapper.selectList(any())).thenAnswer(call -> List.copyOf(stored));
-    when(calcItemMapper.insertOrReuseResults(any())).thenAnswer(call -> {
-      for (var row : (List<PriceLinkedCalcItem>) call.getArgument(0)) {
-        row.setId(200L + stored.size());
-        stored.add(row);
-      }
-      return ((List<?>) call.getArgument(0)).size();
-    });
+    when(calcItemMapper.insertOrReuseResults(any()))
+        .thenAnswer(
+            call -> {
+              for (var row : (List<PriceLinkedCalcItem>) call.getArgument(0)) {
+                row.setId(200L + stored.size());
+                var persisted = new PriceLinkedCalcItem();
+                org.springframework.beans.BeanUtils.copyProperties(row, persisted);
+                // MySQL stores bom_qty as DECIMAL(18,6), while the actual BOM retains 16 places.
+                persisted.setBomQty(row.getBomQty().setScale(6, java.math.RoundingMode.HALF_UP));
+                stored.add(persisted);
+              }
+              return ((List<?>) call.getArgument(0)).size();
+            });
+    when(calcItemMapper.selectReusedResults(any()))
+        .thenAnswer(
+            call -> {
+              List<PriceLinkedCalcItem> requested = call.getArgument(0);
+              return stored.stream()
+                  .filter(
+                      row ->
+                          requested.stream()
+                              .anyMatch(
+                                  input ->
+                                      java.util.Objects.equals(
+                                          input.getCalcFingerprint(), row.getCalcFingerprint())))
+                  .toList();
+            });
 
     Mockito.doAnswer(
             call -> {
@@ -181,10 +206,26 @@ class LinkedPriceEnsureServiceImplTest {
     assertThat(revised.getItems().get("MAT-1").getCalcFingerprint()).isNotEqualTo(first);
     assertThat(firstVersion.getCalcFingerprint()).isEqualTo(first);
     effective.setInputFingerprint("INPUT-A");
-    assertThat(service.ensure(request).getItems().get("MAT-1")).isSameAs(firstVersion);
+    assertThat(service.ensure(request).getItems().get("MAT-1").getId())
+        .isEqualTo(firstVersion.getId());
     verify(calcItemMapper, never()).update(any(), any());
     verify(calcService, Mockito.times(2)).applyEffectiveQuotePrice(any(), any(), any());
-    verify(calcService, never()).calculateQuoteItemForEnsure(any(), any(), any());
+    verify(calcService, never()).calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any());
+    request.setForceRefresh(true);
+    assertThat(service.ensure(request).getSkippedCount()).isOne();
+    Mockito.doAnswer(
+            call -> {
+              PriceLinkedCalcItem row = call.getArgument(0);
+              row.setCalcStatus("OK");
+              row.setPartUnitPrice(new BigDecimal("10.000001"));
+              return row;
+            })
+        .when(calcService)
+        .applyEffectiveQuotePrice(any(), any(), any());
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.ensure(request))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("相同联动输入产生不同结果");
+    assertThat(firstVersion.getPartUnitPrice()).isEqualByComparingTo("10");
   }
 
   @Test
@@ -245,7 +286,7 @@ class LinkedPriceEnsureServiceImplTest {
     assertThat(result.getSkippedCount()).isZero();
     assertThat(result.getCreatedCount()).isZero();
     assertThat(result.getUpdatedCount()).isOne();
-    verify(calcService).calculateQuoteItemForEnsure(any(), any(), any());
+    verify(calcService).calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any());
     verify(calcItemMapper, never()).insert(any(PriceLinkedCalcItem.class));
     verify(calcItemMapper).update(any(PriceLinkedCalcItem.class), any());
   }
@@ -259,7 +300,7 @@ class LinkedPriceEnsureServiceImplTest {
     OaForm oaForm = new OaForm();
     oaForm.setOaNo("OA-001");
     when(oaFormMapper.selectOne(any())).thenReturn(oaForm);
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -293,7 +334,7 @@ class LinkedPriceEnsureServiceImplTest {
     when(bomCostingRowMapper.selectList(any()))
         .thenReturn(List.of(bomRow("MAT-B"), bomRow("MAT-A")));
     when(oaFormMapper.selectOne(any())).thenReturn(new OaForm());
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -317,7 +358,7 @@ class LinkedPriceEnsureServiceImplTest {
   void quoteBatchesAreBoundedAndIncompleteWritesFail() {
     var codes = new java.util.TreeSet<String>();
     for (int i = 0; i < 205; i++) codes.add(String.format("MAT-%03d", i));
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(call -> call.getArgument(0));
     var request = LinkedPriceEnsureRequest.quote("OA-001", "COMMERCIAL", "2026-05", codes);
     assertThat(service.ensure(request).getCreatedCount()).isEqualTo(205);
@@ -362,7 +403,7 @@ class LinkedPriceEnsureServiceImplTest {
     when(linkedItemMapper.selectPricingCandidates(any())).thenReturn(List.of(linkedItem("MAT-1")));
     when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("MAT-1")));
     when(oaFormMapper.selectOne(any())).thenReturn(new OaForm());
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -388,7 +429,7 @@ class LinkedPriceEnsureServiceImplTest {
     when(linkedItemMapper.selectPricingCandidates(any())).thenReturn(List.of(linkedItem));
     when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("MAT-1")));
     when(oaFormMapper.selectOne(any())).thenReturn(null);
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -431,7 +472,7 @@ class LinkedPriceEnsureServiceImplTest {
         .thenReturn(List.of(older, latest, sameTime));
     when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("MAT-1")));
     when(oaFormMapper.selectOne(any())).thenReturn(null);
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -448,7 +489,7 @@ class LinkedPriceEnsureServiceImplTest {
     assertThat(queryCaptor.getValue().getSqlSegment())
         .contains("pricing_month <=", "source_kind", "business_unit_type")
         .doesNotContain("effective_from", "effective_to", "updated_at");
-    verify(calcService).calculateQuoteItemForEnsure(any(), Mockito.same(latest), any());
+    verify(calcService).calculateQuoteItemForEnsure(any(), Mockito.same(latest), any(), org.mockito.ArgumentMatchers.any());
   }
 
   @Test
@@ -472,7 +513,7 @@ class LinkedPriceEnsureServiceImplTest {
     when(oaFormMapper.selectOne(any())).thenReturn(null);
     when(supplyRatioResolveService.resolve(any(), any(), any(), any(), any()))
         .thenReturn(mainSupplier("S1", "供应商1", "0.80"));
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -496,7 +537,7 @@ class LinkedPriceEnsureServiceImplTest {
     ArgumentCaptor<PriceLinkedItem> linkedItemCaptor =
         ArgumentCaptor.forClass(PriceLinkedItem.class);
     verify(calcService)
-        .calculateQuoteItemForEnsure(calcItemCaptor.capture(), linkedItemCaptor.capture(), any());
+        .calculateQuoteItemForEnsure(calcItemCaptor.capture(), linkedItemCaptor.capture(), any(), org.mockito.ArgumentMatchers.any());
     assertThat(calcItemCaptor.getValue().getPricingMonth()).isEqualTo("2026-06");
     assertThat(linkedItemCaptor.getValue().getPricingMonth()).isEqualTo("2026-06");
     assertThat(linkedItemCaptor.getValue().getSupplierCode()).isEqualTo("S1");
@@ -521,7 +562,7 @@ class LinkedPriceEnsureServiceImplTest {
     when(oaFormMapper.selectOne(any())).thenReturn(null);
     when(supplyRatioResolveService.resolve(any(), any(), any(), any(), any()))
         .thenReturn(mainSupplier("S1", "供应商1", "0.80"));
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -541,7 +582,7 @@ class LinkedPriceEnsureServiceImplTest {
 
     ArgumentCaptor<PriceLinkedItem> linkedItemCaptor =
         ArgumentCaptor.forClass(PriceLinkedItem.class);
-    verify(calcService).calculateQuoteItemForEnsure(any(), linkedItemCaptor.capture(), any());
+    verify(calcService).calculateQuoteItemForEnsure(any(), linkedItemCaptor.capture(), any(), org.mockito.ArgumentMatchers.any());
     assertThat(linkedItemCaptor.getValue().getSupplierCode()).isEqualTo("S1");
   }
 
@@ -556,7 +597,7 @@ class LinkedPriceEnsureServiceImplTest {
     when(linkedItemMapper.selectPricingCandidates(any())).thenReturn(List.of(onlySupplier));
     when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("721250208")));
     when(oaFormMapper.selectOne(any())).thenReturn(null);
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -573,7 +614,7 @@ class LinkedPriceEnsureServiceImplTest {
     assertThat(result.getFailedCount()).isZero();
     ArgumentCaptor<PriceLinkedItem> linkedItemCaptor =
         ArgumentCaptor.forClass(PriceLinkedItem.class);
-    verify(calcService).calculateQuoteItemForEnsure(any(), linkedItemCaptor.capture(), any());
+    verify(calcService).calculateQuoteItemForEnsure(any(), linkedItemCaptor.capture(), any(), org.mockito.ArgumentMatchers.any());
     assertThat(linkedItemCaptor.getValue().getSupplierCode()).isEqualTo("S000219");
     org.mockito.Mockito.verifyNoInteractions(supplyRatioResolveService);
   }
@@ -595,7 +636,7 @@ class LinkedPriceEnsureServiceImplTest {
     when(linkedItemMapper.selectPricingCandidates(any())).thenReturn(List.of(latest, history));
     when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("301990317")));
     when(oaFormMapper.selectOne(any())).thenReturn(null);
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -612,7 +653,7 @@ class LinkedPriceEnsureServiceImplTest {
 
     assertThat(result.getFailedCount()).isZero();
     ArgumentCaptor<PriceLinkedItem> selected = ArgumentCaptor.forClass(PriceLinkedItem.class);
-    verify(calcService).calculateQuoteItemForEnsure(any(), selected.capture(), any());
+    verify(calcService).calculateQuoteItemForEnsure(any(), selected.capture(), any(), org.mockito.ArgumentMatchers.any());
     assertThat(selected.getValue()).isSameAs(latest);
     assertThat(selected.getValue().getManualPrice()).isEqualByComparingTo("76.8584");
     org.mockito.Mockito.verifyNoInteractions(supplyRatioResolveService);
@@ -649,7 +690,7 @@ class LinkedPriceEnsureServiceImplTest {
     when(oaFormMapper.selectOne(any())).thenReturn(null);
     when(supplyRatioResolveService.resolve(any(), any(), any(), any(), any()))
         .thenReturn(mainSupplier("SUP-B", "供应商B", "0.70"));
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -664,7 +705,7 @@ class LinkedPriceEnsureServiceImplTest {
 
     assertThat(result.getFailedCount()).isZero();
     ArgumentCaptor<PriceLinkedItem> selected = ArgumentCaptor.forClass(PriceLinkedItem.class);
-    verify(calcService).calculateQuoteItemForEnsure(any(), selected.capture(), any());
+    verify(calcService).calculateQuoteItemForEnsure(any(), selected.capture(), any(), org.mockito.ArgumentMatchers.any());
     assertThat(selected.getValue()).isSameAs(supplierBNew);
     assertThat(selected.getValue().getFormulaExpr()).isEqualTo("B2");
   }
@@ -687,7 +728,7 @@ class LinkedPriceEnsureServiceImplTest {
     when(oaFormMapper.selectOne(any())).thenReturn(null);
     when(supplyRatioResolveService.resolve(any(), any(), any(), any(), any()))
         .thenReturn(mainSupplier("S9", "供应商9", "0.90"));
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -704,7 +745,7 @@ class LinkedPriceEnsureServiceImplTest {
     assertThat(result.getFailedItems().get(0).getReasonCode())
         .isEqualTo(SupplierPreferredPriceSelector.PRIMARY_SUPPLIER_PRICE_MISSING);
     assertThat(result.getFailedItems().get(0).getReason()).contains("主供应商无价格");
-    verify(calcService, never()).calculateQuoteItemForEnsure(any(), any(), any());
+    verify(calcService, never()).calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any());
   }
 
   @Test
@@ -717,7 +758,7 @@ class LinkedPriceEnsureServiceImplTest {
     when(linkedItemMapper.selectPricingCandidates(any())).thenReturn(List.of(priorFormula));
     when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("MAT-1")));
     when(oaFormMapper.selectOne(any())).thenReturn(null);
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -734,7 +775,7 @@ class LinkedPriceEnsureServiceImplTest {
     ArgumentCaptor<PriceLinkedItem> linkedItemCaptor =
         ArgumentCaptor.forClass(PriceLinkedItem.class);
     verify(calcService)
-        .calculateQuoteItemForEnsure(calcItemCaptor.capture(), linkedItemCaptor.capture(), any());
+        .calculateQuoteItemForEnsure(calcItemCaptor.capture(), linkedItemCaptor.capture(), any(), org.mockito.ArgumentMatchers.any());
     assertThat(calcItemCaptor.getValue().getPricingMonth()).isEqualTo("2026-06");
     assertThat(linkedItemCaptor.getValue().getPricingMonth()).isEqualTo("2026-05");
   }
@@ -763,7 +804,7 @@ class LinkedPriceEnsureServiceImplTest {
     when(linkedItemMapper.selectPricingCandidates(any())).thenReturn(List.of(oldImport, newImport));
     when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("MAT-1")));
     when(oaFormMapper.selectOne(any())).thenReturn(null);
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -787,7 +828,7 @@ class LinkedPriceEnsureServiceImplTest {
     ArgumentCaptor<PriceLinkedCalcItem> calcItemCaptor =
         ArgumentCaptor.forClass(PriceLinkedCalcItem.class);
     verify(calcService)
-        .calculateQuoteItemForEnsure(calcItemCaptor.capture(), linkedItemCaptor.capture(), any());
+        .calculateQuoteItemForEnsure(calcItemCaptor.capture(), linkedItemCaptor.capture(), any(), org.mockito.ArgumentMatchers.any());
     assertThat(calcItemCaptor.getValue().getPriceAsOfTime())
         .isEqualTo(LocalDateTime.of(2026, 6, 20, 12, 0));
     assertThat(linkedItemCaptor.getValue()).isSameAs(newImport);
@@ -801,7 +842,7 @@ class LinkedPriceEnsureServiceImplTest {
   void ensureCreatesMonthlyAdjustResultWithoutOaContext() {
     when(calcItemMapper.selectList(any())).thenReturn(List.of());
     when(linkedItemMapper.selectPricingCandidates(any())).thenReturn(List.of(linkedItem("MAT-1")));
-    when(calcService.calculateMonthlyAdjustItemForEnsure(any(), any()))
+    when(calcService.calculateMonthlyAdjustItemForEnsure(any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -832,7 +873,7 @@ class LinkedPriceEnsureServiceImplTest {
   void ensureMonthlyAdjustDoesNotFilterLinkedFormulaByEffectiveDates() {
     when(calcItemMapper.selectList(any())).thenReturn(List.of());
     when(linkedItemMapper.selectPricingCandidates(any())).thenReturn(List.of(linkedItem("MAT-1")));
-    when(calcService.calculateMonthlyAdjustItemForEnsure(any(), any()))
+    when(calcService.calculateMonthlyAdjustItemForEnsure(any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -859,7 +900,7 @@ class LinkedPriceEnsureServiceImplTest {
         .thenReturn(List.of(linkedItem("MAT-FAIL")));
     when(bomCostingRowMapper.selectList(any())).thenReturn(List.of());
     when(oaFormMapper.selectOne(any())).thenReturn(null);
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -886,7 +927,7 @@ class LinkedPriceEnsureServiceImplTest {
     when(linkedItemMapper.selectPricingCandidates(any())).thenReturn(List.of(linkedItem("MAT-CU")));
     when(bomCostingRowMapper.selectList(any())).thenReturn(List.of(bomRow("MAT-CU")));
     when(oaFormMapper.selectOne(any())).thenReturn(new OaForm());
-    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), any(), any()))
+    when(calcService.calculateQuoteItemForEnsure(any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any()))
         .thenAnswer(
             invocation -> {
               PriceLinkedCalcItem calcItem = invocation.getArgument(0);
@@ -898,6 +939,9 @@ class LinkedPriceEnsureServiceImplTest {
         LinkedPriceEnsureRequest.quote("OA-001", "COMMERCIAL", "2026-05", Set.of("MAT-CU"));
     request.setPriceScenarioType(QuotePriceScenarioType.FINANCE_QUOTE_BASE);
     request.setVariableOverrides(Map.of("Cu", new BigDecimal("90.000000")));
+    var reviews = new com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext(171L)
+        .forOrganization("220");
+    request.setSupplierPriceReviewContext(reviews);
 
     var result = service.ensure(request);
 
@@ -909,7 +953,7 @@ class LinkedPriceEnsureServiceImplTest {
             any(),
             any(),
             overrides.capture(),
-            org.mockito.ArgumentMatchers.eq("FINANCE_QUOTE_BASE"));
+            org.mockito.ArgumentMatchers.eq("FINANCE_QUOTE_BASE"), org.mockito.ArgumentMatchers.same(reviews));
     assertThat(overrides.getValue()).containsOnlyKeys("Cu");
     ArgumentCaptor<PriceLinkedCalcItem> saved = ArgumentCaptor.forClass(PriceLinkedCalcItem.class);
     verify(calcItemMapper).insert(saved.capture());
@@ -985,7 +1029,7 @@ class LinkedPriceEnsureServiceImplTest {
     service.calculate(
         LinkedPriceEnsureRequest.quote("OA-1", "COMMERCIAL", "2026-11", Set.of("MAT-B")));
     verify(calcService)
-        .calculateQuoteItemForEnsure(any(), org.mockito.ArgumentMatchers.isNull(), any());
+        .calculateQuoteItemForEnsure(any(), org.mockito.ArgumentMatchers.isNull(), any(), org.mockito.ArgumentMatchers.any());
   }
 
   @Test
@@ -1006,7 +1050,7 @@ class LinkedPriceEnsureServiceImplTest {
     service.calculate(
         LinkedPriceEnsureRequest.quote("OA-1", "COMMERCIAL", "2026-05", Set.of("MAT-1")));
     verify(calcService)
-        .calculateQuoteItemForEnsure(any(), org.mockito.ArgumentMatchers.same(first), any());
+        .calculateQuoteItemForEnsure(any(), org.mockito.ArgumentMatchers.same(first), any(), org.mockito.ArgumentMatchers.any());
     Mockito.clearInvocations(calcService);
     older.setRuleIdentityKey("other-unit");
     older.setUnit("米");

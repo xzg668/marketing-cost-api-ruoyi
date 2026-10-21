@@ -201,7 +201,7 @@ class MarketFactorRangePriceEndToEndSampleTest {
         RangePriceResolverTestSupport.create(rangeItemMapper, factorRuleMapper, oaFormMapper);
     NormalMaterialPricePrepareStrategyImpl prepareStrategy =
         new NormalMaterialPricePrepareStrategyImpl(
-            routerService, linkedPriceEnsureService, List.of(rangeResolver));
+            routerService, linkedPriceEnsureService, List.of(rangeResolver), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceReader.class));
     SAMPLE_PART_CODES.forEach(code ->
         when(routerService.prepareCandidates(eq(code), any(), eq(PERIOD_MONTH), any(LocalDate.class), any(), any()))
             .thenReturn(List.of(rangeRoute(code))));

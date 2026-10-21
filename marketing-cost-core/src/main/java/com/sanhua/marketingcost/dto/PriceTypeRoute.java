@@ -26,7 +26,7 @@ public record PriceTypeRoute(
     LocalDate effectiveTo,
     /* 数据来源系统（srm/oa/u9/cms/manual），用于日志追溯 */
     String sourceSystem,
-    /* 路由表原始价格类型文案；FIXED 桶用它区分固定采购价和结算固定价 */
+    /* 保留独立来源身份；FIXED/LINKED 桶均须区分普通价与结算价 */
     String rawPriceType,
     String sourceKind,
     Long sourceRecordId,
@@ -44,9 +44,25 @@ public record PriceTypeRoute(
 
   public boolean supplemental() { return "TECH_SUPPLEMENTAL".equals(sourceKind); }
 
+  public boolean settlement() {
+    return selectedSourceType().equals("SETTLE_FIXED") || selectedSourceType().equals("SETTLE_LINKED");
+  }
+
+  /** 只有普通公共联动价才需要生成 lp_price_linked_calc_item。 */
+  public boolean ordinaryLinked() {
+    return priceType == PriceTypeEnum.LINKED && !supplemental() && !settlement();
+  }
+
   public String selectedSourceType() {
     if (supplemental()) return priceType.name();
     if (priceType == PriceTypeEnum.MAKE) return priceType.name();
+    // 老调用方尚未附带顺序配置时，也不能丢失结算来源身份。
+    if (rawPriceType != null) {
+      switch (rawPriceType.trim()) {
+        case "SETTLE_LINKED", "结算联动价": return "SETTLE_LINKED";
+        case "SETTLE_FIXED", "结算固定价", "结算价", "家用结算价": return "SETTLE_FIXED";
+      }
+    }
     return priorityConfiguration == null ? priceType.name()
         : com.sanhua.marketingcost.enums.MaterialPriceSourceType.fromStored(rawPriceType).name();
   }

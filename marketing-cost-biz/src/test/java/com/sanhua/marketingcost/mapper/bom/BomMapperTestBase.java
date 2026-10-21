@@ -254,6 +254,10 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V302__oa_technical_return_two_steps.sql", "V302");
       runScriptViaMysqlCli("/db/V303__technical_submission_without_approval_callback.sql", "V303");
       runScriptViaMysqlCli("/db/V307__remove_obsolete_oa_queue_columns.sql", "V307");
+      // 当前报价实体读取板换投标标记；补录任务集成测试必须使用相同字段契约。
+      runScriptViaMysqlCli("/db/V313__board_final_tender_input.sql", "V313");
+      runScriptViaMysqlCli("/db/V335__plate_material_mapping.sql", "V335");
+      runScriptViaMysqlCli("/db/V336__plate_material_master_lookup_index.sql", "V336");
     } catch (Exception e) {
       // 把 root cause 的文字信息拼进 message，避免 surefire 只保留 Caused by 的短描述
       Throwable root = e;

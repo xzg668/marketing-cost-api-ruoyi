@@ -1016,7 +1016,15 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
           continue;
         }
         attemptedBuckets.add(route.priceType().name());
-        PriceResolveResult result = resolver.resolve(oaNoValue, item, route, context);
+        CostRunContext priceContext = context;
+        if (route.settlement() && priceContext == null) {
+          // 旧的整单试算入口不带产品上下文，结算范围仍必须明确绑定登录业务单元和本次月份。
+          priceContext = new CostRunContext();
+          priceContext.setBusinessUnitType(com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType());
+          priceContext.setPricingMonth(period);
+          priceContext.setPriceOrgCode(organization.priceOrgCode());
+        }
+        PriceResolveResult result = resolver.resolve(oaNoValue, item, route, priceContext);
         if (result == null) {
           throw new IllegalStateException("Price resolver returned no result: " + route.priceType());
         }
@@ -1028,7 +1036,11 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
         if (StringUtils.hasText(result.remark())) {
           lastMissReason = result.remark();
         }
-        if (result.hasBlockingFailure()) break;
+        if (result.hasBlockingFailure()) {
+          hit = result.withPriority(route);
+          hitRoute = route;
+          break;
+        }
       }
       if (hit != null) {
         results.put(i, hit);
@@ -1263,7 +1275,9 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       // 命中时回填路由审计字段（JJB 导出的"价格类型"列依赖 priceType）
       PriceTypeRoute route = winningRoutes.get(i);
       if (route != null) {
-        item.setPriceType(route.priceType().getDbText());
+        item.setPriceType(route.settlement()
+            ? com.sanhua.marketingcost.enums.MaterialPriceSourceType.fromStored(route.selectedSourceType()).label()
+            : route.priceType().getDbText());
         item.setMaterialShape(route.formAttr() == null ? null : route.formAttr().getDbText());
         item.setPriority(route.priority());
         item.setEffectiveFrom(route.effectiveFrom());

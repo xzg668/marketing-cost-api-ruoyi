@@ -698,25 +698,6 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
     return a != null && a.equals(b);
   }
 
-  private String normalizePriceTypeText(String value) {
-    String text = trimToNull(value);
-    if (text == null) {
-      return null;
-    }
-    return switch (text.toUpperCase()) {
-      case "FIXED" -> "固定价";
-      case "SETTLE_FIXED" -> "结算固定价";
-      case "LINKED" -> "联动价";
-      case "RANGE" -> "区间价";
-      case "MAKE", "MAKE_PART" -> "自制件";
-      default -> switch (text) {
-        case "固定采购价", "采购固定价" -> "固定价";
-        case "结算价", "结算固定价", "家用结算价" -> "结算固定价";
-        default -> text;
-      };
-    };
-  }
-
   private boolean containsText(String value, String expected) {
     return StringUtils.hasText(value) && value.contains(expected);
   }

@@ -22,8 +22,9 @@ class FixedPriceResolverTest {
   private final PriceFixedItemMapper prices = mock(PriceFixedItemMapper.class);
   private final SupplierSupplyRatioMapper ratios = mock(SupplierSupplyRatioMapper.class);
   private final SupplierPriceDecisionMapper decisions = mock(SupplierPriceDecisionMapper.class);
+  private final com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceReader settlement = mock(com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceReader.class);
   private final FixedPriceResolver resolver = new FixedPriceResolver(prices,
-      new SupplierPriceSelectionService(ratios, decisions), mock(TechnicalPriceSourceResolver.class));
+      new SupplierPriceSelectionService(ratios, decisions), mock(TechnicalPriceSourceResolver.class), settlement);
   private final LocalDate date = LocalDate.parse("2026-10-08");
   private CostRunContext context;
 
@@ -117,10 +118,12 @@ class FixedPriceResolverTest {
     var row=row("A","12","2026-01-01","2027-01-01");row.setId(123L);row.setSourceSystem("SRM");row.setSourceKind("PUBLIC");row.setSourceBatchNo("batch");
     var result=resolve(List.of(row));assertThat(result.resultRefId()).isNull();assertThat(result.evidence().sourceBatchNo()).isEqualTo("batch");
   }
-  @Test void settlementPriceBehaviorIsUnchanged() {
-    when(prices.selectList(any(Wrapper.class))).thenReturn(List.of(row("A","11","2026-01-01","2026-02-01")));
+  @Test void settlementUsesIndependentReaderAndNeverQueriesLegacyPricesOrSupplierRatios() {
+    when(settlement.resolve(any())).thenReturn(PriceResolveResult.hit(new BigDecimal("11"), "结算固定价"));
     var result=resolver.resolve("OA-TEST",part(),route("结算价"),context);
-    assertThat(result.unitPrice()).isEqualByComparingTo("11");assertThat(result.priceSource()).isEqualTo("结算固定价");verifyNoInteractions(ratios);
+    assertThat(result.unitPrice()).isEqualByComparingTo("11");assertThat(result.priceSource()).isEqualTo("结算固定价");verifyNoInteractions(prices,ratios,decisions);
+    verify(settlement).resolve(new com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceRequest(
+        "COMMERCIAL", "MAT-1", "2026-10", "210", com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceType.SETTLE_FIXED));
   }
   private PriceResolveResult resolve(List<PriceFixedItem> rows) {
     when(prices.selectList(any(Wrapper.class))).thenReturn(rows);return resolver.resolve("OA-TEST",part(),route("固定采购价"),context);

@@ -12,6 +12,8 @@ import java.time.LocalDateTime;
 import java.util.Objects;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
+import com.sanhua.marketingcost.service.platematerial.PlateMaterialSnapshot;
 
 @Service
 public class TechnicalDataProfileApplicationServiceImpl
@@ -21,10 +23,13 @@ public class TechnicalDataProfileApplicationServiceImpl
   private final TechnicalDataProfileRepository repository;
   private final TechnicalDataSourceSnapshotFactory snapshotFactory;
   private final TechnicalDataVersionContentCodec contentCodec;
+  private final TechnicalDataPlateMaterialProfile plateMaterials;
 
   public TechnicalDataProfileApplicationServiceImpl(
       TechnicalDataProfileRepository repository, TechnicalDataSourceSnapshotFactory snapshotFactory,
-      TechnicalDataVersionContentCodec contentCodec, TechnicalDataSharedModules sharedModules) {
+      TechnicalDataVersionContentCodec contentCodec, TechnicalDataSharedModules sharedModules,
+      TechnicalDataPlateMaterialProfile plateMaterials) {
+    this.plateMaterials = plateMaterials;
     this.sharedModules = sharedModules;
     this.repository = repository;
     this.snapshotFactory = snapshotFactory;
@@ -32,7 +37,7 @@ public class TechnicalDataProfileApplicationServiceImpl
   }
 
   @Override
-  @Transactional
+  @Transactional(isolation = Isolation.READ_COMMITTED)
   public TechnicalDataProfileResponse save(
       Long productId,
       TechnicalDataProfileUpdateRequest request,
@@ -62,10 +67,12 @@ public class TechnicalDataProfileApplicationServiceImpl
       throw forbidden("当前产品资料模块未分派给本人，或 OA 分派尚未确认");
     }
     sharedModules.requireOwnership(productId, "PROFILE");
+    PlateMaterialSnapshot plateMaterial = plateMaterials.save(product, request.getPlateMaterial(),
+        request.getExpectedPlateMaterialRevision());
     LocalDateTime now = LocalDateTime.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
     QuoteTechDataVersion draft = product.getCurrentEditVersionId() == null
-        ? createDraft(product, command, actor, now)
-        : updateDraft(product, command, actor, now);
+        ? createDraft(product, command, plateMaterial, actor, now)
+        : updateDraft(product, command, plateMaterial, actor, now);
 
     if (repository.updateProfileModule(
         profileModule.getId(), draft.getId(), profileModule.getRowVersion(), now) != 1) {
@@ -84,6 +91,7 @@ public class TechnicalDataProfileApplicationServiceImpl
   private QuoteTechDataVersion createDraft(
       QuoteTechProduct product,
       Command command,
+      PlateMaterialSnapshot plateMaterial,
       TechnicalDataActor actor,
       LocalDateTime now) {
     QuoteTechDataVersion draft = new QuoteTechDataVersion();
@@ -96,6 +104,7 @@ public class TechnicalDataProfileApplicationServiceImpl
     draft.setProductProperty(command.productProperty());
     draft.setNewProductFlag(Boolean.TRUE.equals(snapshotFactory.readProfile(product.getSourceSnapshotJson()).newProduct()) ? 1 : 0);
     draft.setProductFeesJson(contentCodec.productFeesJson(command.fees()));
+    draft.setPlateMaterialJson(contentCodec.plateMaterialJson(plateMaterial));
     draft.setPackageTotalAmount(BigDecimal.ZERO);
     draft.setAuxiliaryTotalAmount(BigDecimal.ZERO);
     draft.setSalaryTotalAmount(BigDecimal.ZERO);
@@ -110,6 +119,7 @@ public class TechnicalDataProfileApplicationServiceImpl
   private QuoteTechDataVersion updateDraft(
       QuoteTechProduct product,
       Command command,
+      PlateMaterialSnapshot plateMaterial,
       TechnicalDataActor actor,
       LocalDateTime now) {
     QuoteTechDataVersion draft = repository.lockVersion(product.getCurrentEditVersionId())
@@ -128,6 +138,7 @@ public class TechnicalDataProfileApplicationServiceImpl
     draft.setProductProperty(command.productProperty());
     draft.setNewProductFlag(Boolean.TRUE.equals(snapshotFactory.readProfile(product.getSourceSnapshotJson()).newProduct()) ? 1 : 0);
     draft.setProductFeesJson(contentCodec.productFeesJson(command.fees()));
+    draft.setPlateMaterialJson(contentCodec.plateMaterialJson(plateMaterial));
     draft.setUpdatedBy(actor.userId());
     if (repository.updateDraftProfile(draft, draftVersion, now) != 1) {
       throw conflict(product.getRowVersion());
@@ -183,7 +194,7 @@ public class TechnicalDataProfileApplicationServiceImpl
         snapshotFactory.readProfile(product.getSourceSnapshotJson()).newProduct(),
         fees.includesNewToolingMouldCertificationFee(), TechnicalDataProductFeeRules.display(fees.unitToolingFee()),
         TechnicalDataProductFeeRules.display(fees.unitMouldFee()), TechnicalDataProductFeeRules.display(fees.unitCertificationFee()), expectedVersion,
-        version.getRowVersion(), updatedAt);
+        version.getRowVersion(), updatedAt, plateMaterials.savedView(version));
   }
 
   private void requireActor(TechnicalDataActor actor) {

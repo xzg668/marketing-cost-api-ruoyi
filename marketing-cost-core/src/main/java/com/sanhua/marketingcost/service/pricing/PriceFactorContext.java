@@ -8,7 +8,9 @@ public record PriceFactorContext(
     String materialCode,
     PriceMonthSelection months,
     FactorPriceSnapshot financial,
-    BigDecimal customerCopperPricePerTon,
+    @com.fasterxml.jackson.annotation.JsonFormat(
+            shape = com.fasterxml.jackson.annotation.JsonFormat.Shape.STRING)
+        BigDecimal customerCopperPricePerTon,
     BoardPriceInputs boardInputs) {
   public static final String COPPER = "AVG|1#CU";
 

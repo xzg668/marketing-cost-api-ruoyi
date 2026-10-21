@@ -8,6 +8,7 @@ import com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper;
 import com.sanhua.marketingcost.service.QuoteProductTypeResolveService;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowContextPort;
 import com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
@@ -22,12 +23,13 @@ public class TechnicalDataPackageSourceCheck {
   private final QuoteBomSupplementDetailMapper details;
   private final MaterialMasterRawMapper materials;
   private final OaMessageCodec json;
+  private final TechnicalDataSharedModules shared;
 
   public TechnicalDataPackageSourceCheck(TechnicalDataPackageSourceQuery sources, QuoteProductTypeResolveService productTypes,
       ElectronicDrawingWorkflowContextPort drawings, QuoteBomSupplementDetailMapper details,
-      MaterialMasterRawMapper materials, OaMessageCodec json) {
+      MaterialMasterRawMapper materials, OaMessageCodec json, TechnicalDataSharedModules shared) {
     this.sources = sources; this.productTypes = productTypes; this.drawings = drawings;
-    this.details = details; this.materials = materials; this.json = json;
+    this.details = details; this.materials = materials; this.json = json; this.shared = shared;
   }
 
   public TechnicalDataSourceFact check(QuoteBomReadContext context, TechnicalDataAvailability original) {
@@ -41,7 +43,18 @@ public class TechnicalDataPackageSourceCheck {
             json.write(packaging.sources().stream().map(row -> row.evidence()).toList()));
       }
       var type = productTypes.resolve(context.productCode(), context.materialOrganizationCode());
-      var drawing = drawings.load(context.oaFormItemId(), context.businessUnitType(), context.priceOrgCode(), context.accountingMonth());
+      var owner = shared.find(context.productCode(), context.oaFormItemId(), "DRAWING_BOM");
+      boolean sharedSource = owner != null && (!Objects.equals(owner.quoteItemId(), context.oaFormItemId())
+          || !Objects.equals(owner.accountingMonth(), context.accountingMonth()));
+      if (sharedSource && (!Objects.equals(owner.organization(), context.priceOrgCode())
+          || !Objects.equals(owner.businessUnit(), context.businessUnitType()))) {
+        return fact(context, TechnicalDataAvailability.ERROR, "原图库组织与本报价不一致，请核实来源", null);
+      }
+      // 包装关系属于实际采用的图库。共享办理时新报价行没有独立图库准备记录，
+      // 必须沿原报价行/月检查；共享版本是否可消费仍由核算来源校验统一保证。
+      var drawing = drawings.load(sharedSource ? owner.quoteItemId() : context.oaFormItemId(),
+          context.businessUnitType(), context.priceOrgCode(),
+          sharedSource ? owner.accountingMonth() : context.accountingMonth());
       if (drawing == null || drawing.sourceVersionId() == null || drawing.compositionFingerprint() == null) {
         if (type != null && type.productType() == QuoteProductType.BARE) {
           return fact(context, TechnicalDataAvailability.MISSING, "本产品为裸品，需要补录本次包装", "BARE:" + context.productCode());

@@ -45,11 +45,11 @@ class MaterialPriceRouterServiceTest {
     verify(configs, never()).insertDefaults(any(), any(), any());
   }
 
-  @Test void defaultOrderUsesDistinctSettlementFixedAndNeverInventsSettlementLinkedSource() {
+  @Test void defaultOrderUsesAllFiveIndependentSources() {
     when(sources.publicKinds("M1","2026-10",null,"COMMERCIAL","210",date))
         .thenReturn(List.of("FIXED","SETTLE_FIXED","RANGE","LINKED","SETTLE_LINKED"));
     assertThat(candidates()).filteredOn(route -> !route.supplemental())
-        .extracting(PriceTypeRoute::rawPriceType).containsExactly("联动价","区间价","结算固定价","固定价");
+        .extracting(PriceTypeRoute::rawPriceType).containsExactly("联动价","结算联动价","区间价","结算固定价","固定价");
     verify(configs,never()).insertDefaults(any(),any(),any());
   }
 

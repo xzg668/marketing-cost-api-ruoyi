@@ -41,6 +41,7 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
   @Autowired TechnicalDataProfileApplicationService profiles;
   @Autowired TechnicalDataTaskApplicationService views;
   @Autowired TechnicalDataReadPolicy readPolicy;
+  @Autowired com.sanhua.marketingcost.service.platematerial.PlateMaterialMappingService plateMappings;
   @Autowired OaIntegrationProperties properties;
   @MockBean OaWorkflowClient oa;
   @MockBean SysUserService users;
@@ -102,7 +103,10 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
       task.setAccountingMonth("2026-09");task.setBusinessUnitType("COMMERCIAL");task.setApplicableOrgCode("210");task.setAssigneeUserId(i<dingProducts?101L:102L);task.setAssigneeName("技术员");
       task=persistence.createTask(task); ids.add(task.getId());
       var product=new QuoteTechProduct();product.setTaskId(task.getId());product.setOaFormItemId(item);product.setMaterialNo("P"+item);product.setProductName("测试产品");product.setQuoteNo(oaNo);product.setAccountingMonth("2026-09");product.setContentSchemaVersion(2);
-      product.setSourceSnapshotJson("{\"productModel\":\"M\",\"newProduct\":false}");product.setSourceFingerprint("b".repeat(64));product=persistence.createProduct(product);
+      product.setSourceModel("PMM-NATIVE-" + item);
+      product.setSourceSnapshotJson("{\"sourceModel\":\"PMM-NATIVE-" + item
+          + "\",\"newProduct\":false,\"businessUnitType\":\"COMMERCIAL\",\"materialOrganizationCode\":\"COMMERCIAL\"}");
+      product.setSourceFingerprint("b".repeat(64));product=persistence.createProduct(product);
       for (String type:TechnicalDataModuleType.codesForVersion(2)) {
         boolean required="PROFILE".equals(type) || extraModule && "NET_LOSS".equals(type);
         var module=new QuoteTechModule();module.setProductId(product.getId());module.setModuleType(type);module.setRequiredFlag(required?1:0);
@@ -124,11 +128,62 @@ class TechnicalDataNativeChainIntegrationTest extends BomMapperTestBase {
     var product=repository.findProducts(taskId).getFirst();
     var request=new TechnicalDataProfileUpdateRequest();request.setExpectedVersion(product.getRowVersion());request.setProductProperty("非标品");
     request.setHasAdditionalFees(true);request.setUnitToolingFee(amount);request.setUnitMouldFee("/");request.setUnitCertificationFee("/");
+    // Supply a genuine revision even for forged saves, so the save itself must reject the wrong actor.
+    long owner = repository.findModules(product.getId()).stream().filter(m -> "PROFILE".equals(m.getModuleType()))
+        .findFirst().orElseThrow().getAssigneeUserId();
+    var plate = views.detail(taskId, owner == DING.userId() ? DING : PAN).products().getFirst().profile().plateMaterial();
+    if (plate != null) request.setExpectedPlateMaterialRevision(plate.revision());
     profiles.save(product.getId(),request,actor);
   }
 
   private TechnicalDataDocumentSubmissionService.Request request(long form,TechnicalDataActor actor) {
     return new TechnicalDataDocumentSubmissionService.Request(UUID.randomUUID().toString(),documents.workbench(form,actor).fingerprint());
+  }
+
+  @Test void plateMaterialIsRetainedAcrossDocumentSubmissionAndDirectedReturn() {
+    var f = dispatched(1, false); long task = f.taskIds().getFirst();
+    var product = repository.findProducts(task).getFirst();
+    var mapping = plateMappings.create("COMMERCIAL", product.getSourceModel(), "水氟316L", 1);
+    save(task, DING, "2.50");
+    var first = documents.submit(f.formId(), request(f.formId(), DING), DING);
+    assertThat(first.status()).isEqualTo("SUCCESS");
+    var historical = jdbc.queryForList("SELECT * FROM lp_quote_tech_submission WHERE task_id=?", task);
+    var frozen = views.detail(task, ADMIN).products().getFirst().profile().plateMaterial();
+    assertThat(frozen.value().value()).isEqualTo("水氟316L");
+    assertThat(frozen.historical()).isTrue();
+    plateMappings.update("COMMERCIAL", mapping.getId(), product.getSourceModel(), "水水316L", 0, 1);
+    assertThat(views.detail(task, ADMIN).products().getFirst().profile().plateMaterial()).isEqualTo(frozen);
+    materialActor();
+    assertThat(returns.submit(returnRequest(task, "PROFILE"), ADMIN).status()).isEqualTo("SUCCESS");
+    assertThat(views.detail(task, DING).products().getFirst().profile().plateMaterial().sourceChanged()).isTrue();
+    assertThat(documents.workbench(f.formId(), DING).canSubmit()).isFalse();
+    save(task, DING, "2.50");
+    assertThat(documents.submit(f.formId(), request(f.formId(), DING), DING).status()).isEqualTo("SUCCESS");
+    assertThat(views.detail(task, ADMIN).products().getFirst().profile().plateMaterial().value().value())
+        .isEqualTo("水水316L");
+    for (var row : historical) {
+      assertThat(jdbc.queryForObject("SELECT content_snapshot_json FROM lp_quote_tech_submission WHERE id=?",
+          String.class, row.get("id"))).isEqualTo(row.get("content_snapshot_json"));
+      assertThat(jdbc.queryForObject("SELECT content_fingerprint FROM lp_quote_tech_submission WHERE id=?",
+          String.class, row.get("id"))).isEqualTo(row.get("content_fingerprint"));
+    }
+  }
+
+  @Test void configurationChangedAfterWorkbenchBlocksSubmissionBeforeAnyOaRequest() {
+    var f = dispatched(1, false); long task = f.taskIds().getFirst();
+    var product = repository.findProducts(task).getFirst();
+    var mapping = plateMappings.create("COMMERCIAL", product.getSourceModel(), "水氟316L", 1);
+    save(task, DING, "2.50");
+    assertThat(documents.workbench(f.formId(), DING).canSubmit()).isTrue();
+    var request = request(f.formId(), DING);
+    plateMappings.update("COMMERCIAL", mapping.getId(), product.getSourceModel(), "水水316L", 0, 1);
+    assertThat(documents.workbench(f.formId(), DING).canSubmit()).isFalse();
+    clearInvocations(oa);
+    assertThatThrownBy(() -> documents.submit(f.formId(), request, DING)).hasMessageContaining("来源已变化");
+    verifyNoInteractions(oa);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_tech_submission WHERE task_id=?", Integer.class, task)).isZero();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_technical_batch WHERE oa_form_id=? AND operation='I03'",
+        Integer.class, f.formId())).isZero();
   }
 
   @Test void twoProductsUseOneI03AndDraftIsPrivateAndOverwritten() {

@@ -19,6 +19,7 @@ import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.service.PriceLinkedCalcService;
 import com.sanhua.marketingcost.service.PriceLinkedFormulaPreviewService;
+import com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -341,9 +342,12 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
   }
 
   PriceLinkedCalcItem calculateQuoteItemForEnsure(
-      PriceLinkedCalcItem item, PriceLinkedItem rule, OaForm oa) {
+      PriceLinkedCalcItem item,
+      PriceLinkedItem rule,
+      OaForm oa,
+      SupplierPriceReviewContext supplierReviews) {
     return calculateQuoteItemForEnsure(
-        item, rule, oa, Map.of(), LinkedPriceFactorSource.OA_LOCKED.getCode());
+        item, rule, oa, Map.of(), LinkedPriceFactorSource.OA_LOCKED.getCode(), supplierReviews);
   }
 
   PriceLinkedCalcItem calculateQuoteItemForEnsure(
@@ -351,35 +355,30 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       PriceLinkedItem rule,
       OaForm oa,
       Map<String, BigDecimal> overrides,
-      String factorSource) {
+      String factorSource,
+      SupplierPriceReviewContext supplierReviews) {
     if (item == null) throw new IllegalArgumentException("calcItem不能为空");
     item.setCalcScene(LinkedPriceCalcScene.QUOTE.getCode());
     item.setFactorSource(
         StringUtils.hasText(factorSource)
             ? factorSource.trim()
             : LinkedPriceFactorSource.OA_LOCKED.getCode());
-    return applyCalculation(item, rule, oa, overrides);
+    return applyCalculation(item, rule, oa, overrides, null, supplierReviews);
   }
 
   PriceLinkedCalcItem calculateMonthlyAdjustItemForEnsure(
-      PriceLinkedCalcItem item, PriceLinkedItem rule) {
+      PriceLinkedCalcItem item,
+      PriceLinkedItem rule,
+      SupplierPriceReviewContext supplierReviews) {
     if (item == null) throw new IllegalArgumentException("calcItem不能为空");
     item.setCalcScene(LinkedPriceCalcScene.MONTHLY_ADJUST.getCode());
     item.setFactorSource(LinkedPriceFactorSource.MONTHLY_FACTOR.getCode());
-    return applyCalculation(item, rule, null, Map.of());
-  }
-
-  private PriceLinkedCalcItem applyCalculation(
-      PriceLinkedCalcItem item,
-      PriceLinkedItem rule,
-      OaForm oa,
-      Map<String, BigDecimal> overrides) {
-    return applyCalculation(item, rule, oa, overrides, null);
+    return applyCalculation(item, rule, null, Map.of(), null, supplierReviews);
   }
 
   PriceLinkedCalcItem applyEffectiveQuotePrice(
       PriceLinkedCalcItem item, PriceLinkedItem rule, PriceLinkedFormulaPreviewResponse response) {
-    return applyCalculation(item, rule, null, Map.of(), java.util.Objects.requireNonNull(response));
+    return applyCalculation(item, rule, null, Map.of(), java.util.Objects.requireNonNull(response), null);
   }
 
   private PriceLinkedCalcItem applyCalculation(
@@ -387,7 +386,8 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       PriceLinkedItem rule,
       OaForm oa,
       Map<String, BigDecimal> overrides,
-      PriceLinkedFormulaPreviewResponse prepared) {
+      PriceLinkedFormulaPreviewResponse prepared,
+      SupplierPriceReviewContext supplierReviews) {
     // 重算失败时旧价格及原稿依据必须同时清空，不能保留上次成功的输入。
     item.setPartUnitPrice(null);
     item.setPartAmount(null);
@@ -398,7 +398,7 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     item.setCalcStatus("FAILED");
     item.setCalcMessage("联动计算未完成");
     FormulaOutcome outcome =
-        calculateFormula(rule, item, oa, overrides, item.getFactorSource(), prepared);
+        calculateFormula(rule, item, oa, overrides, item.getFactorSource(), prepared, supplierReviews);
     writeTraceJson(item, outcome.trace());
     String error = (String) outcome.trace().get("error");
     if (StringUtils.hasText(error) || outcome.value() == null) {
@@ -419,7 +419,8 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
       OaForm oaForm,
       Map<String, BigDecimal> variableOverrides,
       String factorSource,
-      PriceLinkedFormulaPreviewResponse prepared) {
+      PriceLinkedFormulaPreviewResponse prepared,
+      SupplierPriceReviewContext supplierReviews) {
     Map<String, Object> trace = new LinkedHashMap<>();
     if (linkedItem == null || !StringUtils.hasText(linkedItem.getFormulaExpr())) {
       trace.put("error", "linkedItem 或 formulaExpr 为空");
@@ -430,7 +431,12 @@ public class PriceLinkedCalcServiceImpl implements PriceLinkedCalcService {
     trace.put("calculationPriceMonth", calculationPricingMonth(calcItem, linkedItem));
 
     LinkedPriceVariableContext variableContext =
-        buildVariableContext(calcItem, oaForm, trace, variableOverrides, factorSource);
+        buildVariableContext(calcItem, oaForm, trace, variableOverrides, factorSource)
+            .supplierReviews(supplierReviews)
+            .pricingDate(
+                calcItem.getPriceAsOfTime() == null
+                    ? null
+                    : calcItem.getPriceAsOfTime().toLocalDate());
     OaForm contextOaForm =
         variableContext.getCalcScene() == LinkedPriceCalcScene.MONTHLY_ADJUST ? null : oaForm;
 

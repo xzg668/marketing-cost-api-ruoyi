@@ -1,8 +1,12 @@
 package com.sanhua.marketingcost.integration.oa.directory;
 
+import com.sanhua.marketingcost.integration.logging.ExternalHttpExchange;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.sanhua.marketingcost.integration.oa.OaInterfaceLog;
 import org.slf4j.MDC;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.integration.oa.auth.OaAccessTokenProvider;
 import com.sanhua.marketingcost.integration.oa.auth.OaAuthProperties;
@@ -42,6 +46,8 @@ import org.springframework.util.StringUtils;
  */
 @Component
 public class HttpOaPersonDirectoryGateway implements OaPersonDirectoryGateway {
+  private static final Logger log = LoggerFactory.getLogger(HttpOaPersonDirectoryGateway.class);
+  private static final int PROGRESS_INTERVAL = 100;
   private static final Set<Integer> RETRYABLE_STATUS = Set.of(404, 502, 503, 504);
   private static final String QUERY_ORG = "/openserver/api/hrm/restful/queryOrg";
   private static final String QUERY_EMPLOYEE = "/openserver/api/hrm/restful/queryEmployee";
@@ -81,14 +87,14 @@ public class HttpOaPersonDirectoryGateway implements OaPersonDirectoryGateway {
     if (!properties.isEnabled()) {
       throw new OaPersonDirectoryException("OA 人员目录同步未启用");
     }
-    List<JsonNode> organizations = fetchAll(QUERY_ORG, Map.of());
+    List<JsonNode> organizations = fetchAll("ORGANIZATIONS", QUERY_ORG, Map.of());
     Map<String, List<String>> organizationPaths = buildOrganizationPaths(organizations);
     TargetResolution targets = resolveTargets(organizationPaths);
     if (targets.resolved().isEmpty()) {
       throw new OaPersonDirectoryException("目标大部门在 OA 组织树中均未找到");
     }
 
-    List<JsonNode> employees = fetchAll(QUERY_EMPLOYEE,
+    List<JsonNode> employees = fetchAll("EMPLOYEES", QUERY_EMPLOYEE,
         Map.of("returnFieldList", List.of("id", "department", "username", "job_num")));
     Map<PersonKey, MutablePerson> selected = selectPeople(employees, organizationPaths, targets.resolved());
     addPersonDetails(selected);
@@ -101,7 +107,8 @@ public class HttpOaPersonDirectoryGateway implements OaPersonDirectoryGateway {
         organizations.size(), employees.size(), people, targets.missing());
   }
 
-  private List<JsonNode> fetchAll(String endpoint, Map<String, Object> extra) {
+  private List<JsonNode> fetchAll(String stage, String endpoint, Map<String, Object> extra) {
+    long started = System.nanoTime();
     int pageSize = properties.getPageSize();
     Map<String, Object> requestBody = new LinkedHashMap<>(extra);
     requestBody.put("current", 1);
@@ -117,6 +124,7 @@ public class HttpOaPersonDirectoryGateway implements OaPersonDirectoryGateway {
       throw new OaPersonDirectoryException(
           endpoint + " 分页数量与 total 不一致：" + rows.size() + "/" + first.total());
     }
+    progress(stage, rows.size(), first.total(), started);
     return rows;
   }
 
@@ -144,7 +152,7 @@ public class HttpOaPersonDirectoryGateway implements OaPersonDirectoryGateway {
         endpoint + "?access_token=" + encode(token))
         .header("Content-Type", "application/json; charset=UTF-8")
         .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
-        .build(), endpoint + " 第 " + current + " 页");
+        .build(), endpoint + " 第 " + current + " 页", body);
     requireMessageSuccess(result, endpoint);
     JsonNode data = result.path("data");
     if (!data.isObject() || !data.path("total").canConvertToInt() || data.path("total").asInt() < 0
@@ -262,6 +270,9 @@ public class HttpOaPersonDirectoryGateway implements OaPersonDirectoryGateway {
   }
 
   private void addPersonDetails(Map<PersonKey, MutablePerson> selected) {
+    long started = System.nanoTime();
+    progress("DETAILS", 0, selected.size(), started);
+    if (selected.isEmpty()) return;
     ExecutorService executor = Executors.newFixedThreadPool(properties.getDetailConcurrency());
     Map<String, String> context = MDC.getCopyOfContextMap();
     try {
@@ -294,10 +305,20 @@ public class HttpOaPersonDirectoryGateway implements OaPersonDirectoryGateway {
         person.positionName = detail.positionName();
         person.positionId = detail.positionId();
         person.employmentStatus = detail.employmentStatus();
+        // 已成功读取并应用的详情才计入进度；最后不足 100 人也汇总一次。
+        if (index % PROGRESS_INTERVAL == 0 || index == selected.size()) {
+          progress("DETAILS", index, selected.size(), started);
+        }
       }
     } finally {
       executor.shutdownNow();
     }
+  }
+
+  private void progress(String stage, int completed, int total, long started) {
+    log.info("OA_DIRECTORY_PROGRESS stage={} completed={} total={} durationMs={} callId={}",
+        stage, completed, total, (System.nanoTime() - started) / 1_000_000,
+        OaInterfaceLog.identifier(MDC.get("oaCallId")));
   }
 
   private PersonDetail fetchPersonDetail(PersonKey key) {
@@ -314,7 +335,7 @@ public class HttpOaPersonDirectoryGateway implements OaPersonDirectoryGateway {
   private PersonDetail readPersonDetail(PersonKey key) {
     JsonNode result = executeRead(token -> requestBuilder(properties.getDetailBaseUrl(),
         FIND_USER + "?access_token=" + encode(token) + "&jobNum=" + encode(key.employeeNo()))
-        .GET().build(), "JK-03 查询工号 " + key.employeeNo());
+        .GET().build(), "JK-03 查询工号 " + key.employeeNo(), null);
     requireMessageSuccess(result, "JK-03");
     JsonNode data = result.path("data");
     if (!data.isArray()) {
@@ -351,10 +372,10 @@ public class HttpOaPersonDirectoryGateway implements OaPersonDirectoryGateway {
   }
 
   /** 这里的 POST 分页接口也是只读查询，明确的 token 失效允许刷新后重试一次。 */
-  private JsonNode executeRead(Function<String, HttpRequest> requestFactory, String operation) {
+  private JsonNode executeRead(Function<String, HttpRequest> requestFactory, String operation, String requestBody) {
     for (int attempt = 0; attempt < 2; attempt++) {
       String token = tokenProvider.getAccessToken();
-      OaResponse response = execute(requestFactory.apply(token), operation);
+      OaResponse response = execute(requestFactory.apply(token), operation, requestBody);
       boolean rejected = response.status() == 401
           || "200007".equals(text(response.body(), "errcode"))
           || (response.body() != null
@@ -367,13 +388,14 @@ public class HttpOaPersonDirectoryGateway implements OaPersonDirectoryGateway {
     throw new OaPersonDirectoryException(operation + " 访问令牌更新后仍被 OA 拒绝");
   }
 
-  private OaResponse execute(HttpRequest request, String operation) {
+  private OaResponse execute(HttpRequest request, String operation, String requestBody) {
     for (int attempt = 1; attempt <= properties.getMaxAttempts(); attempt++) {
       try (var call = OaInterfaceLog.start("OA_DIRECTORY_HTTP")) {
         call.field("direction", "OUTBOUND").field("method", request.method())
             .field("endpoint", request.uri().getPath()).field("attempt", attempt);
         try {
-          HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+          HttpResponse<String> response = ExternalHttpExchange.sendJson("OA_DIRECTORY", http, request, requestBody,
+              authProperties.getAppSecret(), authProperties.getAppKey(), authProperties.getCorpId());
           call.result("HTTP_RECEIVED", response.statusCode(), null);
           if (response.statusCode() == 401) {
             call.result("REJECTED", 401, "TOKEN_REJECTED");

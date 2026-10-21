@@ -69,7 +69,7 @@ class NormalMaterialPricePrepareStrategyImplTest {
         new NormalMaterialPricePrepareStrategyImpl(
             routerService,
             linkedPriceEnsureService,
-            List.of(fixedResolver, linkedResolver, rangeResolver));
+            List.of(fixedResolver, linkedResolver, rangeResolver), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceReader.class));
   }
 
   @Test

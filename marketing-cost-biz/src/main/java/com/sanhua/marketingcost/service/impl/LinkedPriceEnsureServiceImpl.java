@@ -272,7 +272,7 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
   private void requireSameCalculation(PriceLinkedCalcItem saved, PriceLinkedCalcItem calculated) {
     if (!CALC_STATUS_OK.equals(saved.getCalcStatus())
         || !sameNumber(saved.getPartUnitPrice(), calculated.getPartUnitPrice())
-        || !sameNumber(saved.getBomQty(), calculated.getBomQty())
+        || !sameStoredQuantity(saved.getBomQty(), calculated.getBomQty())
         || !sameNumber(saved.getPartAmount(), calculated.getPartAmount())
         || !java.util.Objects.equals(
             saved.getSourcePriceRecordId(), calculated.getSourcePriceRecordId())
@@ -283,6 +283,13 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
 
   private boolean sameNumber(BigDecimal left, BigDecimal right) {
     return left == null ? right == null : right != null && left.compareTo(right) == 0;
+  }
+
+  private boolean sameStoredQuantity(BigDecimal saved, BigDecimal calculated) {
+    // BOM保留16位，结果表bom_qty只保留6位。按落库精度校验，金额仍使用完整BOM数量计算。
+    // 完整数量已进入输入指纹，不能通过这里的舍入复用其他BOM输入。
+    return sameNumber(
+        saved, calculated == null ? null : calculated.setScale(6, java.math.RoundingMode.HALF_UP));
   }
 
   private void persistNewQuoteResults(List<PriceLinkedCalcItem> rows) {
@@ -352,7 +359,7 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
           existing == null || existing.getResultRevision() == null
               ? 0L
               : existing.getResultRevision();
-      calculateMonthlyAdjustItem(calcItem, candidate);
+      calculateMonthlyAdjustItem(calcItem, candidate, request);
       persist(calcItem, created, previousFingerprint, previousRevision);
       result.getItems().put(itemCode, calcItem);
       if (created) {
@@ -874,9 +881,11 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
         priceLinkedCalcService.applyEffectiveQuotePrice(calcItem, linkedItem, response);
       } else if (request.getPriceScenarioType() == QuotePriceScenarioType.FINANCE_QUOTE_BASE) {
         priceLinkedCalcService.calculateQuoteItemForEnsure(
-            calcItem, linkedItem, oaForm, request.normalizedVariableOverrides(), factorSource);
+            calcItem, linkedItem, oaForm, request.normalizedVariableOverrides(), factorSource,
+            request.getSupplierPriceReviewContext());
       } else {
-        priceLinkedCalcService.calculateQuoteItemForEnsure(calcItem, linkedItem, oaForm);
+        priceLinkedCalcService.calculateQuoteItemForEnsure(
+            calcItem, linkedItem, oaForm, request.getSupplierPriceReviewContext());
       }
       applySelectionEvidence(calcItem, candidate);
       applyFormulaCarryForwardWarning(calcItem);
@@ -891,13 +900,13 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
   }
 
   private void calculateMonthlyAdjustItem(
-      PriceLinkedCalcItem calcItem, LinkedPriceCandidate candidate) {
+      PriceLinkedCalcItem calcItem, LinkedPriceCandidate candidate, LinkedPriceEnsureRequest request) {
     if (applySelectionFailure(calcItem, candidate)) {
       return;
     }
     try {
       priceLinkedCalcService.calculateMonthlyAdjustItemForEnsure(
-          calcItem, candidate == null ? null : candidate.row());
+          calcItem, candidate == null ? null : candidate.row(), request.getSupplierPriceReviewContext());
       applySelectionEvidence(calcItem, candidate);
       applyFormulaCarryForwardWarning(calcItem);
       if (candidate != null

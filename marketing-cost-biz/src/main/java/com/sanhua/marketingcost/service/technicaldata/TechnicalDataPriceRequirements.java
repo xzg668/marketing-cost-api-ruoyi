@@ -1,16 +1,16 @@
 package com.sanhua.marketingcost.service.technicaldata;
 
+import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPriceRequirement;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataPriceRequirementsResponse;
-import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest;
 import com.sanhua.marketingcost.entity.*;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService;
-import com.sanhua.marketingcost.service.PricePrepareService;
 import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
+import com.sanhua.marketingcost.service.PricePrepareService;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -59,22 +59,28 @@ public class TechnicalDataPriceRequirements {
       Long versionId = module.getCurrentVersionId();
       if (versionId == null) continue;
       var version = versions.findVersion(versionId).orElseThrow();
-      if (!Objects.equals(version.getProductId(), product.getId())) throw new IllegalStateException("价格依据版本不属于本产品");
+      if (!Objects.equals(version.getProductId(), product.getId()))
+        throw new IllegalStateException("价格依据版本不属于本产品");
       switch (module.getModuleType()) {
         case "MANUFACTURING" -> {
           var value = content.manufacturing(version);
           if (value != null && value.items() != null) for (var row : value.items()) {
             add(demands, row.rawMaterialNo(), "RAW");
             if (row.evidence() != null && "MATCHED".equals(row.evidence().scrapStatus())) {
-              for (var scrap : row.evidence().scrapMappings()) add(demands, scrap.materialNo(), "SCRAP");
+                for (var scrap : row.evidence().scrapMappings())
+                  add(demands, scrap.materialNo(), "SCRAP");
             }
           }
         }
         case "SOLDER" -> {
           var value = content.solder(version);
-          if (value != null && value.items() != null) value.items().forEach(row -> add(demands, row.materialNo(), "SOLDER"));
+          if (value != null && value.items() != null)
+            value.items().forEach(row -> add(demands, row.materialNo(), "SOLDER"));
         }
-        case "PACKAGE" -> versions.findPackageItems(versionId).forEach(row -> add(demands, row.getComponentMaterialNo(), "PACKAGE"));
+        case "PACKAGE" ->
+            versions
+                .findPackageItems(versionId)
+                .forEach(row -> add(demands, row.getComponentMaterialNo(), "PACKAGE"));
         default -> { }
       }
     }
@@ -94,12 +100,24 @@ public class TechnicalDataPriceRequirements {
       }
       var master = masters.getFirst();
       String unit = master.getUnit().trim();
-      String key = json.canonicalHash(List.of(code, task.getApplicableOrgCode(), task.getBusinessUnitType(), unit, "CNY"));
+      String key =
+          json.canonicalHash(
+              List.of(code, task.getApplicableOrgCode(), task.getBusinessUnitType(), unit, "CNY"));
       String status, message;
       BigDecimal price = null;
       try {
-        var resolved = prices.calculateMaterialUnitPrice(code, product.getAccountingMonth(), now.toLocalDate(), now,
-            task.getOaNo(), task.getBusinessUnitType(), scenario);
+        var resolved =
+            prices.calculateMaterialUnitPrice(
+                code,
+                product.getAccountingMonth(),
+                now.toLocalDate(),
+                now,
+                task.getOaNo(),
+                task.getBusinessUnitType(),
+                scenario,
+                demand.getValue().contains("SCRAP")
+                    ? MakePartMaterialPriceResolveService.Purpose.SCRAP
+                    : MakePartMaterialPriceResolveService.Purpose.MATERIAL);
         if (resolved == null) throw new IllegalStateException("取价未返回结果");
         price = resolved.getUnitPrice();
         if ("OK".equals(resolved.getStatus()) && price != null && price.signum() > 0) {
@@ -111,7 +129,12 @@ public class TechnicalDataPriceRequirements {
         }
         message = resolved.getRemark();
       } catch (RuntimeException exception) {
-        log.warn("technical price requirement failed: task={} product={} material={}", task.getId(), product.getId(), code, exception);
+        log.warn(
+            "technical price requirement failed: task={} product={} material={}",
+            task.getId(),
+            product.getId(),
+            code,
+            exception);
         status = "ERROR"; message = "取价检查失败，请重试";
       }
       result.add(new TechnicalDataPriceRequirement(key, code, master.getMaterialName(), master.getMaterialModel(), task.getApplicableOrgCode(),
@@ -122,8 +145,12 @@ public class TechnicalDataPriceRequirements {
   }
 
   private void addBom(QuoteTechTask task, QuoteTechProduct product, Map<String, Set<String>> demands, List<String> issues) {
-    var batches = jdbc.queryForList("SELECT current_bom_build_batch_id FROM lp_quote_costing_workspace WHERE oa_form_item_id=? AND period_month=?",
-        product.getOaFormItemId(), product.getAccountingMonth());
+    var batches =
+        jdbc.queryForList(
+            "SELECT current_bom_build_batch_id FROM lp_quote_costing_workspace WHERE"
+                + " oa_form_item_id=? AND period_month=?",
+            product.getOaFormItemId(),
+            product.getAccountingMonth());
     if (batches.isEmpty() || batches.getFirst().get("current_bom_build_batch_id") == null) {
       issues.add("请先完成本产品 BOM 及计价对象检查");
       return;
@@ -139,7 +166,8 @@ public class TechnicalDataPriceRequirements {
         issues.add("BOM 价格检查失败，请核对后重新检查"); return;
       }
       for (var gap : prepared.getGaps()) {
-        if (!"MISSING_PRICE".equals(gap.getGapType()) || Objects.toString(gap.getReasonCode(), "").contains("CONFLICT")) {
+        if (!"MISSING_PRICE".equals(gap.getGapType())
+            || Objects.toString(gap.getReasonCode(), "").contains("CONFLICT")) {
           issues.add(Objects.toString(gap.getMessage(), "尚有结构或价格来源问题"));
         } else {
           add(demands, gap.getGapMaterialCode(), "BOM");

@@ -111,7 +111,11 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
        var item=new com.sanhua.marketingcost.entity.OaFormItem();item.setId(req.oaFormItemId());
        return new com.sanhua.marketingcost.service.costing.ProductCostingContext(parent,item,"P",req.periodMonth(),"admin","current-submitted");
      });
-     org.mockito.Mockito.when(costingContexts.resolveRevision(org.mockito.ArgumentMatchers.any())).thenAnswer(call->call.getArgument(0));
+     org.mockito.Mockito.when(costingContexts.resolveRevisions(org.mockito.ArgumentMatchers.any())).thenAnswer(call ->
+         ((List<com.sanhua.marketingcost.service.costing.ProductCostingContext>) call.getArgument(0)).stream()
+             .collect(java.util.stream.Collectors.toMap(
+                 com.sanhua.marketingcost.service.costing.ProductCostingContext::itemId,
+                 com.sanhua.marketingcost.service.costing.ProductCostingContext::sourceRevision)));
      org.mockito.Mockito.when(nativeWorkflow.submit(org.mockito.ArgumentMatchers.any())).thenReturn(new com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowResult(
          "call",com.sanhua.marketingcost.integration.oa.workflow.OaWorkflowResult.Status.SUCCESS,200,"0","success",f.flow(),null,1));
      org.mockito.Mockito.when(costingBatches.submit(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyString())).thenReturn(new com.sanhua.marketingcost.dto.quotecosting.QuoteBatchCostRunResponse());

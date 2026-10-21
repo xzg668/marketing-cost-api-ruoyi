@@ -32,12 +32,15 @@ public interface TechnicalPriceSourceMapper {
           AND (effective_from IS NULL OR effective_from&lt;=#{date})
           AND org_code=#{org} AND business_unit_type=#{businessUnit}
         UNION ALL
-        SELECT CONVERT(material_code USING utf8mb4) COLLATE utf8mb4_bin AS material_code,CASE WHEN source_type IN ('SETTLE','SETTLE_FIXED') THEN 'SETTLE_FIXED' ELSE 'FIXED' END kind
+        SELECT CONVERT(material_code USING utf8mb4) COLLATE utf8mb4_bin AS material_code,'FIXED' kind
           FROM lp_price_fixed_item WHERE material_code IN <foreach collection="codes" item="code" open="(" close=")" separator=",">#{code}</foreach> AND source_kind='PUBLIC'
-          AND org_code=#{org} AND business_unit_type=#{businessUnit} AND (
-            (source_type IN ('PURCHASE','PURCHASE_FIXED') AND effective_from&lt;=#{date} AND effective_to>#{date})
-            OR (source_type IN ('SETTLE','SETTLE_FIXED') AND pricing_month&lt;=#{month}
-              AND (effective_from IS NULL OR effective_from&lt;=#{date})))
+          AND org_code=#{org} AND business_unit_type=#{businessUnit}
+          AND source_type IN ('PURCHASE','PURCHASE_FIXED') AND effective_from&lt;=#{date} AND effective_to>#{date}
+        UNION ALL
+        SELECT CONVERT(material_code USING utf8mb4) COLLATE utf8mb4_bin AS material_code,price_type kind
+          FROM lp_settlement_price WHERE material_code IN <foreach collection="codes" item="code" open="(" close=")" separator=",">#{code}</foreach>
+          AND business_unit_type=#{businessUnit} AND price_month&lt;=#{month} AND active=1
+          AND #{org} IN ('210','220')
       ) p</script>
       """)
   List<MaterialKind> publicKindsBatch(@Param("codes") List<String> codes, @Param("month") String month,

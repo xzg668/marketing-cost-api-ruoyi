@@ -721,6 +721,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
           switch (normalized.toUpperCase()) {
             case "FIXED" -> "固定价";
             case "SETTLE_FIXED" -> "结算固定价";
+            case "SETTLE_LINKED" -> "结算联动价";
             case "LINKED" -> "联动价";
             case "RANGE" -> "区间价";
             case "MAKE", "MAKE_PART" -> "自制件";

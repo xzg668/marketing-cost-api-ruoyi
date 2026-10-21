@@ -10,14 +10,14 @@ import java.util.Set;
  *
  * <p>历史变更（V48+）：6 桶 → 4 桶
  * <ul>
- *   <li>原 SETTLE 结算价 → 合并到 FIXED（家用结算价归 lp_price_fixed_item.source_type=SETTLE）</li>
+ *   <li>旧 SETTLE 文本保留 FIXED 桶兼容；当前结算由 PriceTypeRoute 保留独立来源并读取 lp_settlement_price</li>
  *   <li>原 BOM_CALC → 改名 MAKE（自制件按当前 BOM 子树和正式价格准备结果算价）</li>
  *   <li>原 RAW_BREAKDOWN → 合并到 MAKE（原材料拆解本质是自制件配方公式的一种）</li>
  * </ul>
  *
  * <p>4 桶语义：
  * <ol>
- *   <li>FIXED  固定价 —— 一口价（lp_price_fixed_item，含 PURCHASE/SETTLE 两种 source_type）</li>
+ *   <li>FIXED 固定价桶 —— 普通采购读取 lp_price_fixed_item；结算固定由独立来源端口读取</li>
  *   <li>LINKED 联动价 —— 公式 + 月度基价实时算（lp_price_linked_item + 已发布财务因素）</li>
  *   <li>RANGE  区间价 —— 按数量段取价（lp_price_range_item）</li>
  *   <li>MAKE   自制件 —— 按 BOM 子树、净重、废料映射和正式价格准备结果算价</li>

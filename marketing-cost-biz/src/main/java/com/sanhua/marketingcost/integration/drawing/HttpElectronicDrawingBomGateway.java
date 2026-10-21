@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.integration.drawing;
 
+import com.sanhua.marketingcost.integration.logging.ExternalHttpExchange;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -64,16 +66,17 @@ public class HttpElectronicDrawingBomGateway implements ElectronicDrawingBomGate
       put(body, "bomPurpose", query.bomPurpose());
       if (query.asOfDate() != null) body.put("asOfDate", query.asOfDate().toString());
       put(body, "requestId", query.requestId());
+      String requestBody = objectMapper.writeValueAsString(body);
       HttpRequest.Builder request = HttpRequest.newBuilder(uri)
           .timeout(Duration.ofMillis(properties.getReadTimeoutMs()))
           .header("Content-Type", "application/json")
           .header("Accept", "application/json")
-          .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
+          .POST(HttpRequest.BodyPublishers.ofString(requestBody));
       if (StringUtils.hasText(properties.getAuthorization())) {
         request.header("Authorization", properties.getAuthorization().trim());
       }
-      HttpResponse<String> response = client.send(
-          request.build(), HttpResponse.BodyHandlers.ofString());
+      HttpResponse<String> response = ExternalHttpExchange.sendJson("ELECTRONIC_DRAWING", client, request.build(), requestBody,
+          HttpResponse.BodyHandlers.ofString());
       return switch (response.statusCode()) {
         case 200 -> parse(response.body());
         case 401, 403 -> ElectronicBomFetchResult.failure(

@@ -86,7 +86,7 @@ class PriceLinkedFormulaPreviewServiceImplTest {
     FactorVariableRegistryImpl registry =
         new FactorVariableRegistryImpl(
             priceVariableMapper, financeQuery, new ObjectMapper(), rowLocal);
-    registry.setDerivedContextResolver(new DerivedResolver(financeQuery, materialScrapRefMapper));
+    registry.setDerivedContextResolver(new DerivedResolver(financeQuery, materialScrapRefMapper, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService.class)));
 
     service =
         new PriceLinkedFormulaPreviewServiceImpl(

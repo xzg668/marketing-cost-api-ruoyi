@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.integration.oa;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -17,9 +18,64 @@ import org.springframework.dao.DataIntegrityViolationException;
 class OaInterfaceLogTest {
   private final Logger logger = (Logger) LoggerFactory.getLogger(OaInterfaceLog.class);
   private final ListAppender<ILoggingEvent> events = new ListAppender<>();
+  private Level previousLevel;
 
-  @BeforeEach void start() { events.start(); logger.addAppender(events); }
-  @AfterEach void stop() { logger.detachAppender(events); events.stop(); MDC.clear(); }
+  @BeforeEach void start() {
+    previousLevel = logger.getLevel();
+    logger.setLevel(Level.INFO);
+    events.start();
+    logger.addAppender(events);
+  }
+  @AfterEach void stop() {
+    logger.detachAppender(events);
+    logger.setLevel(previousLevel);
+    events.stop();
+    MDC.clear();
+  }
+
+  @Test void successfulDirectoryDetailsAreQuietAtInfoAndTraceableAtDebug() {
+    String[] operations = {"OA_DIRECTORY_PAGE", "OA_DIRECTORY_HTTP", "JK03_PERSON_DETAIL"};
+    MDC.put("oaCallId", "directory-batch");
+    for (String operation : operations) {
+      try (var call = OaInterfaceLog.start(operation)) { call.success(); }
+    }
+    assertThat(events.list).isEmpty();
+    assertThat(MDC.get("oaCallId")).isEqualTo("directory-batch");
+
+    logger.setLevel(Level.DEBUG);
+    for (String operation : operations) {
+      try (var call = OaInterfaceLog.start(operation)) { call.success(); }
+    }
+    assertThat(events.list).hasSize(6).allSatisfy(event -> {
+      assertThat(event.getLevel()).isEqualTo(Level.DEBUG);
+      assertThat(event.getFormattedMessage()).contains("parentCallId=directory-batch");
+    });
+    assertThat(messages()).contains("phase=START", "phase=END", "status=SUCCESS", "durationMs=");
+  }
+
+  @Test void directoryWarningsAndFailuresRemainVisibleWithoutDebug() {
+    for (String status : new String[] {"RETRY", "REJECTED", "UNKNOWN", "UNCONFIRMED", "NOT_SENT"}) {
+      try (var call = OaInterfaceLog.start("OA_DIRECTORY_HTTP")) {
+        call.result(status, 503, "RETRYABLE_HTTP");
+      }
+    }
+    try (var call = OaInterfaceLog.start("JK03_PERSON_DETAIL")) {
+      call.failure(new IllegalStateException("PRIVATE_SECRET"));
+    }
+    assertThat(events.list).hasSize(6);
+    assertThat(events.list.subList(0, 5)).allSatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.WARN));
+    assertThat(events.list.getLast().getLevel()).isEqualTo(Level.ERROR);
+    assertThat(messages()).contains("status=FAILED", "status=RETRY", "status=REJECTED")
+        .doesNotContain("PRIVATE_SECRET");
+  }
+
+  @Test void batchAndWorkflowCallsKeepTheirInfoMilestones() {
+    for (String operation : new String[] {"OA_DIRECTORY_SYNC", "I02", "I03", "OA_HTTP"}) {
+      try (var call = OaInterfaceLog.start(operation)) { call.success(); }
+    }
+    assertThat(events.list).hasSize(8)
+        .allSatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.INFO));
+  }
 
   @Test void nestedCallsCarryParentAndRestoreContextAfterExceptions() {
     MDC.put("traceId", "trace-001");

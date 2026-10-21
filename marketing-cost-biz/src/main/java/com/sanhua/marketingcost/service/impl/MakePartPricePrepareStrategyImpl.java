@@ -29,10 +29,12 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
   static final String STATUS_MISSING_BOM = "MISSING_BOM";
 
   private final MakePartPriceGenerationService generationService;
+  private final MakePartCalculationEvidence evidence;
 
   public MakePartPricePrepareStrategyImpl(
-      MakePartPriceGenerationService generationService) {
+      MakePartPriceGenerationService generationService, com.fasterxml.jackson.databind.ObjectMapper json) {
     this.generationService = generationService;
+    this.evidence = new MakePartCalculationEvidence(json);
   }
 
   @Override
@@ -132,7 +134,7 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
         && Boolean.TRUE.equals(row.getPriceComplete()) && row.getParentTotalCostPrice() != null).findFirst();
     if (ready.isPresent() && rows.stream().allMatch(row -> STATUS_OK.equals(row.getStatus()))) {
       var result = readyResult(ready.get(), planItem, "本报价制造节点价格计算完成");
-      result.setInputSnapshotJson(componentSnapshot(rows));
+      result.setInputSnapshotJson(evidence.capture(parent, rows));
       return result;
     }
     var gaps = buildGaps(parentMaterialNo, rows);
@@ -150,34 +152,6 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
         amount,
         row.getId(),
         message);
-  }
-
-  private String componentSnapshot(List<MakePartPriceCalcRow> rows) {
-    var json = new com.fasterxml.jackson.databind.ObjectMapper()
-        .enable(com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
-    var snapshot = json.createObjectNode();
-    var components = snapshot.putArray("components");
-    try {
-      for (var row : rows) {
-        if (StringUtils.hasText(row.getRawInputSnapshotJson())) {
-          var raw = components.addObject();
-          raw.put("kind", "RAW");
-          raw.put("materialCode", row.getChildMaterialNo());
-          raw.put("unitPrice", row.getRawUnitPrice());
-          raw.set("inputs", json.readTree(row.getRawInputSnapshotJson()));
-        }
-        if (StringUtils.hasText(row.getScrapInputSnapshotJson())) {
-          var scrap = components.addObject();
-          scrap.put("kind", "SCRAP");
-          scrap.put("materialCode", row.getScrapCode());
-          scrap.put("unitPrice", row.getScrapUnitPrice());
-          scrap.set("inputs", json.readTree(row.getScrapInputSnapshotJson()));
-        }
-      }
-      return json.writeValueAsString(snapshot);
-    } catch (com.fasterxml.jackson.core.JsonProcessingException invalid) {
-      throw new IllegalStateException("制造件材料取价底稿保存失败", invalid);
-    }
   }
 
   private List<MakePartPricePrepareResult.Gap> buildGaps(

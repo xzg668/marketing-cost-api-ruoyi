@@ -14,6 +14,7 @@ import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.SourceFactSnapshot;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.SourceSnapshot;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.SupplementSnapshot;
+import com.sanhua.marketingcost.service.platematerial.PlateMaterialSnapshot;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -156,6 +157,14 @@ public class TechnicalDataVersionContentCodec {
 
   public String productFeesJson(TechnicalDataSupplementContent.ProductFees fees) { return write(fees); }
 
+  public PlateMaterialSnapshot plateMaterial(QuoteTechDataVersion version) {
+    return version == null ? null : read(version.getPlateMaterialJson(), PlateMaterialSnapshot.class);
+  }
+
+  public String plateMaterialJson(PlateMaterialSnapshot value) {
+    return value == null ? null : write(value);
+  }
+
   public TechnicalDataSupplementContent.DrawingBom drawingBom(QuoteTechDataVersion version) {
     return version == null ? null : read(version.getDrawingBomJson(), TechnicalDataSupplementContent.DrawingBom.class);
   }
@@ -184,7 +193,8 @@ public class TechnicalDataVersionContentCodec {
         read(version.getSolderItemsJson(), TechnicalDataSupplementContent.Solder.class),
         read(version.getNetLossJson(), TechnicalDataSupplementContent.NetLoss.class),
         read(version.getPriceItemsJson(), TechnicalDataSupplementContent.Prices.class),
-        read(version.getSourceFactsJson(), SourceSnapshot.class));
+        read(version.getSourceFactsJson(), SourceSnapshot.class),
+        plateMaterial(version));
   }
 
   public String sourceFactsJson(String productSourceJson, List<QuoteTechModule> modules) {
@@ -222,7 +232,8 @@ public class TechnicalDataVersionContentCodec {
     if (schema == 1 && (version.getProductFeesJson() != null || version.getDrawingBomJson() != null
         || version.getManufacturingJson() != null || version.getPackagingJson() != null
         || version.getSolderItemsJson() != null || version.getNetLossJson() != null
-        || version.getPriceItemsJson() != null || version.getSourceFactsJson() != null)) {
+        || version.getPriceItemsJson() != null || version.getSourceFactsJson() != null
+        || version.getPlateMaterialJson() != null)) {
       throw new IllegalArgumentException("旧版本结构不能包含未计入指纹的新模块内容");
     }
     return schema;

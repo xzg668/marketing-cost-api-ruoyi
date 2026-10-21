@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.integration.oa.auth;
 
+import com.sanhua.marketingcost.integration.logging.ExternalHttpExchange;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.sanhua.marketingcost.integration.oa.OaInterfaceLog;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -147,8 +149,7 @@ public class OaAccessTokenProvider {
 
   private JsonNode executeHttp(HttpRequest request, String operation, OaInterfaceLog.Call call) {
     try {
-      HttpResponse<String> response = http.send(request,
-          HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+      HttpResponse<String> response = ExternalHttpExchange.sendJson("OA_AUTH", http, request, null);
       call.result("HTTP_RECEIVED", response.statusCode(), null);
       if (RETRYABLE_STATUS.contains(response.statusCode())) {
         throw new RetryableAuthenticationException(operation + " HTTP " + response.statusCode());

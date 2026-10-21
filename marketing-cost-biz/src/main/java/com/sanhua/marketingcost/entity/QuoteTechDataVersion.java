@@ -33,6 +33,7 @@ public class QuoteTechDataVersion {
   /** 1 为旧四模块实际内容；2 为九模块内容，不补造旧历史字段。 */
   private Integer contentSchemaVersion;
   private String productFeesJson;
+  private String plateMaterialJson;
   private String drawingBomJson;
   private String manufacturingJson;
   private String packagingJson;

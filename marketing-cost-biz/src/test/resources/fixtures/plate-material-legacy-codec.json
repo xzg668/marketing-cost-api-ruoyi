@@ -1,0 +1,15 @@
+{
+  "origin": "PMM-00 compiled codec before adding plateMaterial",
+  "cases": [
+    {
+      "schema": 1,
+      "json": "{\"auxiliaryItems\":[],\"auxiliaryTotalAmount\":0,\"modules\":[],\"newProduct\":false,\"packageItems\":[],\"packageTotalAmount\":0,\"productModel\":\"HISTORICAL-MODEL\",\"productProperty\":\"标准品\",\"salaryItems\":[],\"salaryTotalAmount\":0}",
+      "sha256": "c1a2f1a8d5e269b18fbc698db4612caf4b22db37b3e7fd0127444e3b58744d10"
+    },
+    {
+      "schema": 2,
+      "json": "{\"details\":{\"auxiliaryItems\":[],\"auxiliaryTotalAmount\":0,\"modules\":[],\"newProduct\":false,\"packageItems\":[],\"packageTotalAmount\":0,\"productModel\":\"HISTORICAL-MODEL\",\"productProperty\":\"标准品\",\"salaryItems\":[],\"salaryTotalAmount\":0},\"schemaVersion\":2,\"supplements\":{\"drawingBom\":null,\"manufacturing\":null,\"netLoss\":null,\"packaging\":null,\"prices\":null,\"productFees\":{\"currency\":\"CNY\",\"includesNewToolingMouldCertificationFee\":false,\"unitCertificationFee\":null,\"unitMouldFee\":null,\"unitToolingFee\":0.25},\"solder\":null,\"sources\":null}}",
+      "sha256": "8b3fb381ee060459397ad18a996fd3c6b0ff1c11f4c77d4965f79bcdc8545af1"
+    }
+  ]
+}

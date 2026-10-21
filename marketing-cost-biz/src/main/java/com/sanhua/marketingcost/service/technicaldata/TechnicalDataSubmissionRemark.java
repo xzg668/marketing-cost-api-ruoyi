@@ -65,7 +65,7 @@ public class TechnicalDataSubmissionRemark {
     List<String> sections = new ArrayList<>();
     for (TechnicalDataModuleType type : scope) {
       String value = brief ? brief(type, details, supplements) : switch (type) {
-        case PROFILE -> profile(details, object(supplements, "productFees"));
+        case PROFILE -> profile(details, object(supplements, "productFees")) + plateMaterial(supplements);
         case DRAWING_BOM -> drawing(object(supplements, "drawingBom"));
         case MANUFACTURING -> manufacturing(object(supplements, "manufacturing"));
         case PACKAGE -> packaging(details, object(supplements, "packaging"));
@@ -90,7 +90,7 @@ public class TechnicalDataSubmissionRemark {
         var fees = object(supplements, "productFees");
         yield "属性" + requiredText(details, "productProperty")
             + "，工装" + number(fees, "unitToolingFee") + "/模具" + number(fees, "unitMouldFee")
-            + "/认证" + number(fees, "unitCertificationFee") + "元/件";
+            + "/认证" + number(fees, "unitCertificationFee") + "元/件" + plateMaterial(supplements);
       }
       case DRAWING_BOM -> {
         var drawing = object(supplements, "drawingBom");
@@ -169,6 +169,11 @@ public class TechnicalDataSubmissionRemark {
     fields.add("模具" + number(fees, "unitMouldFee") + unit);
     fields.add("认证" + number(fees, "unitCertificationFee") + unit);
     return join(fields);
+  }
+
+  private String plateMaterial(JsonNode supplements) {
+    String material = text(supplements.path("plateMaterial"), "material");
+    return material.isEmpty() ? "" : "，板片材质" + material;
   }
 
   private String drawing(JsonNode content) {

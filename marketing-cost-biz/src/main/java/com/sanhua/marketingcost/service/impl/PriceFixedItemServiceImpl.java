@@ -19,7 +19,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class PriceFixedItemServiceImpl implements PriceFixedItemService {
   private static final int DEFAULT_TAX_INCLUDED = 1;
   private static final String SOURCE_TYPE_PURCHASE_FIXED = "PURCHASE_FIXED";
-  private static final String SOURCE_TYPE_SETTLE_FIXED = "SETTLE_FIXED";
   private static final String SOURCE_SYSTEM_U9 = "U9";
   private static final String SOURCE_SYSTEM_EXCEL = "EXCEL";
 
@@ -33,7 +32,9 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
   @Override
   public Page<PriceFixedItem> page(String materialCode, String supplierCode, String sourceType,
       String pricingMonth, int page, int pageSize) {
-    var query = Wrappers.lambdaQuery(PriceFixedItem.class).eq(PriceFixedItem::getSourceKind, "PUBLIC");
+    requireCurrentSource(sourceType);
+    var query = Wrappers.lambdaQuery(PriceFixedItem.class).eq(PriceFixedItem::getSourceKind, "PUBLIC")
+        .apply("(source_type IS NULL OR UPPER(TRIM(source_type)) NOT LIKE 'SETTLE%')");
     if (StringUtils.hasText(materialCode)) {
       query.like(PriceFixedItem::getMaterialCode, materialCode.trim());
     }
@@ -44,7 +45,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     if (normalizedSourceType != null) {
       query.eq(PriceFixedItem::getSourceType, normalizedSourceType);
     }
-    // 固定采购价按生效/失效日期管理；结算固定价仍按结算期间查询。
+    // 固定采购价按生效/失效日期管理；其他旧类型保留原有月份查询。
     if (StringUtils.hasText(pricingMonth)
         && !SOURCE_TYPE_PURCHASE_FIXED.equals(normalizedSourceType)) {
       query.eq(PriceFixedItem::getPricingMonth, pricingMonth.trim());
@@ -60,6 +61,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     if (request == null) {
       return null;
     }
+    requireCurrentSource(request.getSourceType());
     PriceFixedItem item = new PriceFixedItem();
     merge(item, request);
     fillDefaults(item);
@@ -82,6 +84,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
       return null;
     }
     requirePublicSource(existing);
+    if (request != null) requireCurrentSource(request.getSourceType());
     merge(existing, request);
     fillDefaults(existing);
     itemMapper.updateById(existing);
@@ -102,6 +105,8 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     if (request == null || request.getRows() == null || request.getRows().isEmpty()) {
       return response;
     }
+    // 先检查整批类型，混入旧结算行时不允许任何部分写入。
+    request.getRows().stream().filter(java.util.Objects::nonNull).forEach(row -> requireCurrentSource(row.getSourceType()));
     for (var row : request.getRows()) {
       if (row == null) {
         response.incrementSkippedCount();
@@ -121,18 +126,13 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
             "固定采购价非 U9 行缺少 externalRowId，已跳过");
         continue;
       }
-      normalizeMixedSettleReference(row);
-      if (row.getFixedPrice() == null && !StringUtils.hasText(row.getSettleReferenceText())) {
+      if (row.getFixedPrice() == null) {
         response.incrementSkippedCount();
         response.addError(row.getSourceRowNo(), materialCode, "固定价为空，已跳过");
         continue;
       }
-      if (row.getFixedPrice() == null && StringUtils.hasText(row.getSettleReferenceText())) {
-        // 家用结算价9 最后一列是“价格或备注”混合列：备注行保留，但不参与取价。
-        response.addWarning(row.getSourceRowNo(), materialCode,
-            "结算固定价最后一列为备注，fixedPrice 为空，不参与取价");
-      }
       PriceFixedItem item = findExisting(row);
+      requirePublicSource(item);
       if (item == null) {
         item = new PriceFixedItem();
         fillItem(item, row, request);
@@ -151,16 +151,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     return response;
   }
 
-  /**
-   * FPT-03 幂等规则：
-   *
-   * <p>1. 固定采购价非 U9：source_type + source_system + external_row_id。
-   * 2. 固定采购价5 的 U9 行归结算固定价：source_type + source_system + material_code。
-   * 3. 家用结算价9：source_type + source_system + material_code。
-   *
-   * <p>source_type 是业务强隔离边界，固定采购价和结算固定价不能只按料号互相覆盖。
-   * 旧 PURCHASE/SETTLE 请求暂保留 V46 兼容查找，等前端全量切到新菜单后再清理。
-   */
+  /** 固定采购价按来源/外部行标识幂等；U9按来源/料号匹配，其余旧类型保持既有身份。 */
   private PriceFixedItem findExisting(PriceFixedItemImportRequest.PriceFixedItemImportRow row) {
     if (isPurchaseFixed(row) && isU9Source(row)) {
       return itemMapper.selectOne(
@@ -178,15 +169,6 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
               .eq(PriceFixedItem::getExternalRowId, trimToNull(row.getExternalRowId()))
               .last("LIMIT 1"));
     }
-    if (isSettleFixed(row) && (isU9Source(row) || SOURCE_SYSTEM_EXCEL.equals(row.getSourceSystem()))) {
-      return itemMapper.selectOne(
-          Wrappers.lambdaQuery(PriceFixedItem.class).eq(PriceFixedItem::getSourceKind, "PUBLIC")
-              .eq(PriceFixedItem::getSourceType, row.getSourceType())
-              .eq(PriceFixedItem::getSourceSystem, row.getSourceSystem())
-              .eq(PriceFixedItem::getMaterialCode, row.getMaterialCode().trim())
-              .last("LIMIT 1"));
-    }
-
     var query = Wrappers.lambdaQuery(PriceFixedItem.class).eq(PriceFixedItem::getSourceKind, "PUBLIC")
         .eq(PriceFixedItem::getMaterialCode, row.getMaterialCode().trim());
     String supplierCode = trimToNull(row.getSupplierCode());
@@ -409,7 +391,15 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     }
   }
 
+  private void requireCurrentSource(String sourceType) {
+    String normalized = upperTrim(sourceType);
+    if (normalized != null && normalized.startsWith("SETTLE")) {
+      throw new IllegalArgumentException("旧结算来源已停止维护，请使用新结算价格入口；历史记录保留用于原核算追溯");
+    }
+  }
+
   private void requirePublicSource(PriceFixedItem item) {
+    if (item != null) requireCurrentSource(item.getSourceType());
     if (item != null && "TECH_SUPPLEMENTAL".equals(item.getSourceKind())) {
       throw new IllegalArgumentException("技术审批价格不能在公共价格页面修改或删除，请查看原补录任务");
     }
@@ -481,15 +471,6 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     return trimToNull(second);
   }
 
-  private void normalizeMixedSettleReference(PriceFixedItemImportRequest.PriceFixedItemImportRow row) {
-    if (row.getFixedPrice() == null && row.getSettleReferencePrice() != null) {
-      row.setFixedPrice(row.getSettleReferencePrice());
-    }
-    if (row.getSettleReferencePrice() == null && row.getFixedPrice() != null) {
-      row.setSettleReferencePrice(row.getFixedPrice());
-    }
-  }
-
   private void normalizeSourceFields(PriceFixedItemImportRequest.PriceFixedItemImportRow row) {
     String sourceType = upperTrim(row.getSourceType());
     if (sourceType != null) {
@@ -499,8 +480,7 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     if (sourceSystem == null && isU9ProcessNo(row.getProcessNo())) {
       sourceSystem = SOURCE_SYSTEM_U9;
     }
-    if (sourceSystem == null && (SOURCE_TYPE_PURCHASE_FIXED.equals(sourceType)
-        || SOURCE_TYPE_SETTLE_FIXED.equals(sourceType))) {
+    if (sourceSystem == null && SOURCE_TYPE_PURCHASE_FIXED.equals(sourceType)) {
       sourceSystem = SOURCE_SYSTEM_EXCEL;
     }
     if (sourceSystem != null) {
@@ -515,10 +495,6 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
     return SOURCE_TYPE_PURCHASE_FIXED.equals(row.getSourceType());
   }
 
-  private boolean isSettleFixed(PriceFixedItemImportRequest.PriceFixedItemImportRow row) {
-    return SOURCE_TYPE_SETTLE_FIXED.equals(row.getSourceType());
-  }
-
   private boolean isU9Source(PriceFixedItemImportRequest.PriceFixedItemImportRow row) {
     return SOURCE_SYSTEM_U9.equals(row.getSourceSystem());
   }
@@ -530,6 +506,6 @@ public class PriceFixedItemServiceImpl implements PriceFixedItemService {
 
   private String upperTrim(String value) {
     String trimmed = trimToNull(value);
-    return trimmed == null ? null : trimmed.toUpperCase();
+    return trimmed == null ? null : trimmed.toUpperCase(java.util.Locale.ROOT);
   }
 }

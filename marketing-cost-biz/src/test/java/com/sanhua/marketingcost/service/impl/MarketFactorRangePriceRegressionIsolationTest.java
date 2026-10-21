@@ -179,7 +179,7 @@ class MarketFactorRangePriceRegressionIsolationTest {
         new NormalMaterialPricePrepareStrategyImpl(
             routerService,
             linkedEnsureService,
-            List.of(rangeResolver, linkedResolver, fixedResolver));
+            List.of(rangeResolver, linkedResolver, fixedResolver), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceReader.class));
     PriceTypeRoute settleRoute = route("MAT-MIX", PriceTypeEnum.FIXED, "结算价");
     PriceTypeRoute linkedRoute = route("MAT-MIX", PriceTypeEnum.LINKED, "联动价");
     PriceTypeRoute rangeRoute = route("MAT-MIX", PriceTypeEnum.RANGE, "区间价");

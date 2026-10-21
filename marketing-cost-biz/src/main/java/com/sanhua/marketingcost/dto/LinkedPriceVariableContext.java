@@ -2,8 +2,10 @@ package com.sanhua.marketingcost.dto;
 
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.enums.LinkedPriceCalcScene;
+import com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -25,8 +27,28 @@ public class LinkedPriceVariableContext {
   }
 
   private String pricingMonth;
+  private LocalDate pricingDate;
+  private SupplierPriceReviewContext supplierReviews;
   private final Map<String, BigDecimal> variableValues = new LinkedHashMap<>();
   private final Map<String, String> variableSources = new LinkedHashMap<>();
+
+  public LocalDate getPricingDate() {
+    return pricingDate;
+  }
+
+  public LinkedPriceVariableContext pricingDate(LocalDate value) {
+    pricingDate = value;
+    return this;
+  }
+
+  public SupplierPriceReviewContext getSupplierReviews() {
+    return supplierReviews;
+  }
+
+  public LinkedPriceVariableContext supplierReviews(SupplierPriceReviewContext value) {
+    supplierReviews = value;
+    return this;
+  }
 
   private LinkedPriceVariableContext(LinkedPriceCalcScene calcScene) {
     this.calcScene = calcScene;

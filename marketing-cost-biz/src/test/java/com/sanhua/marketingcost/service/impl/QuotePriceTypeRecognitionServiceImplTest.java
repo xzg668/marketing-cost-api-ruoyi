@@ -148,6 +148,22 @@ class QuotePriceTypeRecognitionServiceImplTest {
     assertThat(response.getSummary().getMissingSourceCount()).isEqualTo(1);
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({"SETTLE_FIXED,FIXED,结算固定价", "SETTLE_LINKED,LINKED,结算联动价"})
+  void settlementRecognitionKeepsTheIndependentSourceIdentity(String source, PriceTypeEnum bucket, String label) {
+    mockScope();
+    var row = row(301L, "MAT-SETTLE");
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+        .thenReturn(List.of(row));
+    when(itemClassifier.classify(any())).thenReturn(List.of(normalPlan(row)));
+    var candidate = new PriceTypeRoute("MAT-SETTLE", null, bucket, 1, null, null, "SYSTEM", source);
+    when(materialPriceRouterService.resolve(eq("MAT-SETTLE"), eq("2026-06"), any(LocalDate.class), any(), any()))
+        .thenReturn(Optional.of(candidate));
+    var recognized = service.getRecognition("OA-001", 10L, null).getRows().getFirst();
+    assertThat(recognized.getTypeStatus()).isEqualTo("RECOGNIZED");
+    assertThat(recognized.getPriceType()).isEqualTo(label);
+  }
+
   @Test
   void missingSnapshotNameFallsBackToMaterialMasterByTheSameMaterialCode() {
     mockScope();

@@ -159,7 +159,8 @@ public class TechnicalPriceSourceResolverImpl implements TechnicalPriceSourceRes
     }
     var value = calculationScope(source, context);
     if (CostRunContext.SCENE_MONTHLY_REPRICE.equals(context.getScene())) {
-      calculator.calculateMonthlyAdjustItemForEnsure(value, source);
+      calculator.calculateMonthlyAdjustItemForEnsure(
+          value, source, context.getSupplierPriceReviewContext());
     } else {
       if (context.getOaNo() == null) throw new IllegalArgumentException("补录公式计算缺少报价来源");
       var formsFound =
@@ -171,7 +172,8 @@ public class TechnicalPriceSourceResolverImpl implements TechnicalPriceSourceRes
           source,
           formsFound.getFirst(),
           context.getPriceVariableOverrides(),
-          value.getFactorSource());
+          value.getFactorSource(),
+          context.getSupplierPriceReviewContext());
     }
     value.setSourcePriceRecordId(source.getId());
     value.setSourcePriceBatchNo("TECH:" + source.getTechnicalVersionId());

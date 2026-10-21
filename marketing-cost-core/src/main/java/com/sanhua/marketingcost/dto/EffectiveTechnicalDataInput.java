@@ -27,7 +27,9 @@ public record EffectiveTechnicalDataInput(
     String productProperty,
     List<ModuleSource> moduleSources,
     List<MaterialLine> materialItems,
-    List<PriceSource> priceSources) {
+    List<PriceSource> priceSources,
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    PlateMaterialEvidence plateMaterial) {
 
   public static final String SOURCE_EFFECTIVE_VERSION = "QUOTE_TECH_EFFECTIVE_VERSION";
 
@@ -62,7 +64,16 @@ public record EffectiveTechnicalDataInput(
     this(productId, versionId, versionNo, accountingMonth, sourceType, contentFingerprint, retrievedAt,
         packageRequired, auxiliaryRequired, salaryRequired, packageTotalAmount, auxiliaryTotalAmount,
         salaryTotalAmount, packageItems, auxiliaryItems, salaryItems, productFees, netLossRate,
-        productProperty, moduleSources, materialItems, List.of());
+        productProperty, moduleSources, materialItems, List.of(), null);
+  }
+
+  /** Collected PROFILE evidence only; no material-specific price or fee rule is implied. */
+  public record PlateMaterialEvidence(String mode, String material, String revision,
+      String businessUnitType, String model, String materialOrganizationCode,
+      Long mappingId, Integer mappingVersion, List<Long> materialMasterIds) {
+    public PlateMaterialEvidence {
+      materialMasterIds = materialMasterIds == null ? List.of() : List.copyOf(materialMasterIds);
+    }
   }
 
   public record PriceSource(String materialNo, String priceType, Long priceRecordId,

@@ -233,7 +233,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
       }
       attempted.add(routeLabel(route));
       CostRunPartItemDto item = toCostRunItem(req, snapshot, snapshotDetail);
-      PriceResolveResult resolved = route.priceType() == PriceTypeEnum.LINKED && !route.supplemental()
+      PriceResolveResult resolved = route.ordinaryLinked()
           ? prepareLinkedChild(req, childCode, persist)
           : resolver.resolve(req.oaNo, item, route, priceContext(req));
       if (resolved.unitPrice() != null) {
@@ -343,6 +343,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
   private PackageComponentPriceDetail baseDetail(
       PackageComponentPrice price, PackageComponentSnapshotDetail snapshotDetail) {
     PackageComponentPriceDetail detail = new PackageComponentPriceDetail();
+    detail.setBusinessUnitType(price.getBusinessUnitType());
     detail.setPriceId(price.getId());
     detail.setSnapshotDetailId(snapshotDetail.getId());
     detail.setPackageMaterialCode(price.getPackageMaterialCode());
@@ -417,6 +418,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     }
 
     PackageComponentPrice price = new PackageComponentPrice();
+    price.setBusinessUnitType(req.businessUnitType);
     price.setSnapshotId(snapshot == null ? null : snapshot.getId());
     price.setPackageMaterialCode(req.packageMaterialCode);
     price.setPriceOrgCode(req.priceOrgCode);
@@ -476,6 +478,7 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
   private PackageComponentPrice transientPrice(
       NormalizedRequest req, PackageComponentSnapshot snapshot) {
     PackageComponentPrice price = new PackageComponentPrice();
+    price.setBusinessUnitType(req.businessUnitType);
     price.setSnapshotId(snapshot == null ? null : snapshot.getId());
     price.setPackageMaterialCode(req.packageMaterialCode);
     price.setPriceOrgCode(req.priceOrgCode);

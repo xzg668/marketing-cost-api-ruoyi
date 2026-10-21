@@ -28,6 +28,7 @@ public interface QuoteTechDataVersionMapper extends BaseMapper<QuoteTechDataVers
              new_product_flag = #{version.newProductFlag},
              content_schema_version = #{version.contentSchemaVersion},
              product_fees_json = #{version.productFeesJson},
+             plate_material_json = #{version.plateMaterialJson},
              drawing_bom_json = #{version.drawingBomJson},
              manufacturing_json = #{version.manufacturingJson},
              packaging_json = #{version.packagingJson},

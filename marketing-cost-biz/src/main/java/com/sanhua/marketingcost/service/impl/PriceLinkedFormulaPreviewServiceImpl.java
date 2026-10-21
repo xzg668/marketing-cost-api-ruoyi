@@ -277,6 +277,10 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
             .pricingMonth(pricingMonth)
             .oaForm(oaForm)
             .linkedItem(linkedItem);
+    if (variableContext != null) {
+      ctx.quoteDate(variableContext.getPricingDate())
+          .supplierReviews(variableContext.getSupplierReviews());
+    }
     if (variableContext != null
         && variableContext.getCalcScene() == LinkedPriceCalcScene.MONTHLY_ADJUST) {
       // 月度重算读取财务发布及技术私有因素的有效月价。

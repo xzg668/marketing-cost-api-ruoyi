@@ -29,11 +29,17 @@ public class TechnicalDataParticipantVersions {
   private final TechnicalDataSalaryApplicationService salary;
   private final TechnicalDataNetLossApplicationService netLoss;
   private final TechnicalDataPriceApplicationService prices;
+  private final TechnicalDataPlateMaterialProfile plateMaterials;
+  private final TechnicalDataPlateMaterialPublication plateMaterialPublication;
 
   public TechnicalDataParticipantVersions(QuoteTechnicalDataRepository repository, TechnicalDataVersionContentCodec codec,
       TechnicalDataDependencies dependencies, TechnicalDataManufacturingApplicationService manufacturing,
       TechnicalDataPackageApplicationService packaging, TechnicalDataAuxiliaryApplicationService auxiliary,
-      TechnicalDataSolderApplicationService solder, TechnicalDataSalaryApplicationService salary, TechnicalDataNetLossApplicationService netLoss, TechnicalDataSharedModules sharedModules, TechnicalDataPriceApplicationService prices) {
+      TechnicalDataSolderApplicationService solder, TechnicalDataSalaryApplicationService salary, TechnicalDataNetLossApplicationService netLoss, TechnicalDataSharedModules sharedModules, TechnicalDataPriceApplicationService prices,
+      TechnicalDataPlateMaterialProfile plateMaterials,
+      TechnicalDataPlateMaterialPublication plateMaterialPublication) {
+    this.plateMaterials = plateMaterials;
+    this.plateMaterialPublication = plateMaterialPublication;
     this.sharedModules = sharedModules;
     this.repository = repository;
     this.codec = codec;
@@ -62,6 +68,10 @@ public class TechnicalDataParticipantVersions {
     Set<String> types = Set.copyOf(person.processingModules());
     if (types.contains("PROFILE") && !TechnicalDataProductFeeRules.validate(codec.productFees(draft)).isEmpty()) {
       throw conflict("本人负责模块的产品费用尚未填写完整，不能冻结提交");
+    }
+    if (types.contains("PROFILE")) {
+      var issues = plateMaterials.validateCurrent(product, draft);
+      if (!issues.isEmpty()) throw conflict(String.join("；", issues));
     }
     if (types.contains("DRAWING_BOM") && !TechnicalDataDrawingRules.validate(codec.drawingBom(draft), product).isEmpty()) {
       throw conflict("电子图库明细尚未通过实际取数校验，不能冻结提交");
@@ -187,7 +197,7 @@ public class TechnicalDataParticipantVersions {
     if (sourceIds.size() == 1 && sourceIds.getFirst() != null) {
       var submitted = verified(sourceIds.getFirst(), product.getId());
       if (!TechnicalDataSubmissionState.submitted(submitted.getVersionStatus())) throw conflict("汇总模块没有已提交版本");
-      activateProduct(product, submitted);
+      activateProduct(product, submitted, modules);
       return submitted;
     }
     var current = draft(product);
@@ -205,11 +215,15 @@ public class TechnicalDataParticipantVersions {
     sources.forEach((type, sourceId) -> copyDetails(aggregate.getId(), sourceId, Set.of(type)));
     var frozen = freezeCopy(aggregate.getId(), actorId);
     var submitted = transition(frozen, "SUBMITTED", actorId);
-    activateProduct(product, submitted);
+    activateProduct(product, submitted, modules);
     return submitted;
   }
 
-  private void activateProduct(QuoteTechProduct product, QuoteTechDataVersion submitted) {
+  private void activateProduct(QuoteTechProduct product, QuoteTechDataVersion submitted,
+      List<QuoteTechModule> modules) {
+    modules.stream().filter(module -> "PROFILE".equals(module.getModuleType())
+        && Integer.valueOf(1).equals(module.getRequiredFlag())).findFirst()
+        .ifPresent(profile -> plateMaterialPublication.publish(product, submitted, profile));
     product.setEffectiveVersionId(submitted.getId());
     product.setEffectiveAt(now());
     product.setEffectiveReviewRound(submitted.getVersionNo());

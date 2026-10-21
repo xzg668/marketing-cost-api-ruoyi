@@ -90,7 +90,10 @@ class EffectiveTechnicalDataCostingIntegrationTest extends BomMapperTestBase {
     assertThat(input.auxiliaryTotalAmount()).isEqualByComparingTo("0.70400000");
     assertThat(input.packageTotalAmount()).isEqualByComparingTo("3.50000000");
     assertThat(input.versionId()).isNotIn(fixture.v1Id(), fixture.v3Id());
-    assertThat(queryService.resolve(ITEM_ID, "2026-09")).isNull();
+    // This legacy fixture has no OA item for a new costing context. Current source selection
+    // explicitly rejects it; it must never borrow the approved version from another month.
+    assertThatThrownBy(() -> queryService.resolve(ITEM_ID, "2026-09"))
+        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("报价产品行不存在");
   }
 
   @Test

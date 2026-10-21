@@ -78,7 +78,7 @@ class FinanceFactorPublicationIntegrationTest {
         MountableFile.forClasspathResource("db/V318__technical_factor_source_reference.sql"),
         "/tmp/technical-source.sql");
     for (String name :
-        List.of("V325__finance_effective_price.sql", "V326__original_workbook_source.sql"))
+        List.of("V325__finance_effective_price.sql", "V326__original_workbook_source.sql", "V330__scrap_price_monthly.sql"))
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/" + name), "/tmp/" + name);
     var dataSource =
         new DriverManagerDataSource(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
@@ -92,6 +92,7 @@ class FinanceFactorPublicationIntegrationTest {
             com.sanhua.marketingcost.mapper.FinanceEffectivePriceMapper.class,
             com.sanhua.marketingcost.mapper.PriceLinkedItemMapper.class,
             com.sanhua.marketingcost.mapper.PriceRangeFactorRuleMapper.class,
+            com.sanhua.marketingcost.mapper.ScrapPriceMapper.class,
             FactorIdentityMapper.class,
             FactorUploadBatchMapper.class,
             FactorMonthlyPriceMapper.class,
@@ -124,6 +125,7 @@ class FinanceFactorPublicationIntegrationTest {
     script("/tmp/technical-source.sql");
     script("/tmp/V325__finance_effective_price.sql");
     script("/tmp/V326__original_workbook_source.sql");
+    script("/tmp/V330__scrap_price_monthly.sql");
     service = service(sources);
   }
 
@@ -802,7 +804,8 @@ class FinanceFactorPublicationIntegrationTest {
         new ObjectMapper(),
         transactions,
         com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceTestSupport.service(
-            effectiveSessions, new ObjectMapper().findAndRegisterModules()));
+            effectiveSessions, new ObjectMapper().findAndRegisterModules()),
+            com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.service(effectiveSessions, transactions, new ObjectMapper().findAndRegisterModules()));
   }
 
   private static FactorPriceScope scope(String org, String scheme, Condition condition) {

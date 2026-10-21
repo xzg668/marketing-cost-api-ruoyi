@@ -73,15 +73,15 @@ class MakePartMaterialPriceResolveServiceImplTest {
                     mock(com.sanhua.marketingcost.mapper.SupplierSupplyRatioMapper.class),
                     mock(com.sanhua.marketingcost.mapper.SupplierPriceDecisionMapper.class)),
                 org.mockito.Mockito.mock(
-                    com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class)),
+                    com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceReader.class)),
             new LinkedPriceResolver(
                 linkedMapper,
                 org.mockito.Mockito.mock(
-                    com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class)),
+                    com.sanhua.marketingcost.service.pricing.TechnicalPriceSourceResolver.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceReader.class)),
             RangePriceResolverTestSupport.create(rangeMapper));
     service =
         new MakePartMaterialPriceResolveServiceImpl(
-            routerService, resolvers, linkedPriceEnsureService);
+            routerService, resolvers, linkedPriceEnsureService, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService.class));
   }
 
   @Test
@@ -96,7 +96,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
     when(linkedPriceEnsureService.ensure(any())).thenReturn(failure);
     var result =
         service.resolveMaterialUnitPrice(
-            "RAW-FAIL", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"));
+            "RAW-FAIL", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"), com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.MATERIAL);
     assertThat(result.getUnitPrice()).isNull();
     assertThat(result.getStatus()).isEqualTo("ERROR");
     verifyNoInteractions(linkedMapper, rangeMapper);
@@ -112,7 +112,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
     when(linkedPriceEnsureService.ensure(any())).thenReturn(missing);
     when(fixedMapper.selectList(any(Wrapper.class))).thenReturn(List.of(fixedRow("RAW-001", "82.950000")));
     var result = service.resolveMaterialUnitPrice("RAW-001", "2026-05", LocalDate.parse("2026-05-20"),
-        null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"));
+        null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"), com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.MATERIAL);
     assertThat(result.getStatus()).isEqualTo("OK");
     assertThat(result.getUnitPrice()).isEqualByComparingTo("82.950000");
     verifyNoInteractions(linkedMapper);
@@ -135,7 +135,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
             "OA-001",
             "COMMERCIAL",
             new com.sanhua.marketingcost.service.PricePrepareScenarioContext(null, null, null, null)
-                .forOrganization("210"));
+                .forOrganization("210"), com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.MATERIAL);
 
     assertThat(result.getStatus()).isEqualTo("OK");
     assertThat(result.getMaterialCode()).isEqualTo("RAW-001");
@@ -159,7 +159,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
 
     MakePartMaterialPriceResolveResult result =
         service.resolveMaterialUnitPrice(
-            "SCRAP-001", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"));
+            "SCRAP-001", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"), com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.MATERIAL);
 
     assertThat(result.getStatus()).isEqualTo("OK");
     assertThat(result.getPriceType()).isEqualTo("联动价");
@@ -193,7 +193,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
             LocalDate.parse("2026-05-20"),
             LocalDate.parse("2026-05-20").atStartOfDay(),
             "OA-001",
-            "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(18L, "210"));
+            "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(18L, "210"), com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.MATERIAL);
 
     assertThat(result.getStatus()).isEqualTo("OK");
     assertThat(result.getUnitPrice()).isEqualByComparingTo("75.660000");
@@ -222,7 +222,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
 
     MakePartMaterialPriceResolveResult result =
         service.resolveMaterialUnitPrice(
-            "RANGE-001", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"));
+            "RANGE-001", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"), com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.MATERIAL);
 
     assertThat(result.getStatus()).isEqualTo("OK");
     assertThat(result.getPriceType()).isEqualTo("区间价");
@@ -238,7 +238,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
 
     MakePartMaterialPriceResolveResult result =
         service.resolveMaterialUnitPrice(
-            "NO-ROUTE", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"));
+            "NO-ROUTE", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"), com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.MATERIAL);
 
     assertThat(result.getStatus()).isEqualTo("MISSING_PRICE");
     assertThat(result.getUnitPrice()).isNull();
@@ -261,7 +261,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
             "OA-001",
             "COMMERCIAL",
             new com.sanhua.marketingcost.service.PricePrepareScenarioContext(null, null, null, null)
-                .forOrganization("210"));
+                .forOrganization("210"), com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.MATERIAL);
 
     assertThat(result.getStatus()).isEqualTo("MISSING_PRICE");
     assertThat(result.getUnitPrice()).isNull();
@@ -276,7 +276,7 @@ class MakePartMaterialPriceResolveServiceImplTest {
 
     MakePartMaterialPriceResolveResult result =
         service.resolveMaterialUnitPrice(
-            "MAKE-RAW", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"));
+            "MAKE-RAW", "2026-05", LocalDate.parse("2026-05-20"), null, "OA-001", "COMMERCIAL", com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(null, "210"), com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.MATERIAL);
 
     assertThat(result.getStatus()).isEqualTo("UNSUPPORTED_MAKE");
     assertThat(result.getUnitPrice()).isNull();

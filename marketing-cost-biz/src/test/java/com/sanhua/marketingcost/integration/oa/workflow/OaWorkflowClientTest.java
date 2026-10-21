@@ -216,7 +216,7 @@ class OaWorkflowClientTest {
     assertThat(client.submit(request()).status()).isEqualTo(OaWorkflowResult.Status.SUCCESS);
   }
 
-  @Test void interfaceLogsRetainBusinessIdsAndErrorCodeWithoutCredentialsOrRemark() {
+  @Test void interfaceSummaryOmitsRemarkWhileDedicatedPayloadLogKeepsItWithoutCredentials() {
     var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
     var events = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
     events.start(); logger.addAppender(events);
@@ -224,10 +224,17 @@ class OaWorkflowClientTest {
       response = "{\"message\":{\"errcode\":1200302,\"errmsg\":\"PRIVATE_SECRET access_token=HIDDEN_TOKEN\"}}";
       var result = client.submit(request().put("remark", "CONFIDENTIAL_ACTUAL_SALARY_AND_PRICE"));
       assertThat(result.status()).isEqualTo(OaWorkflowResult.Status.REJECTED);
-      String logged = events.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+      String logged = events.list.stream()
+          .filter(event -> !event.getLoggerName().equals("com.sanhua.marketingcost.integration.logging.ExternalInterfaceLog"))
+          .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
           .reduce("", (left, right) -> left + "\n" + right);
       assertThat(logged).contains("requestId=00123", "userid=0001", "errorCode=1200302", "durationMs=", result.callId())
           .doesNotContain("PRIVATE_SECRET", "HIDDEN_TOKEN", "TOKEN +&中文", "CONFIDENTIAL_ACTUAL_SALARY_AND_PRICE");
+      String payload = events.list.stream()
+          .filter(event -> event.getLoggerName().equals("com.sanhua.marketingcost.integration.logging.ExternalInterfaceLog"))
+          .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage).reduce("", String::concat);
+      assertThat(payload).contains("CONFIDENTIAL_ACTUAL_SALARY_AND_PRICE", "1200302", result.callId())
+          .doesNotContain("PRIVATE_SECRET", "HIDDEN_TOKEN", "TOKEN +&中文");
     } finally {
       logger.detachAppender(events); events.stop();
     }

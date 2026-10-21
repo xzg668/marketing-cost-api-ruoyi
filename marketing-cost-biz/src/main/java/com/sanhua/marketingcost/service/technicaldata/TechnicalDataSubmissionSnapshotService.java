@@ -43,7 +43,7 @@ public class TechnicalDataSubmissionSnapshotService {
     this.summary = summary;
   }
 
-  @Transactional
+  @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
   public QuoteTechSubmission prepare(
       Long taskId, String requestId, int expectedTaskVersion, int expectedProductVersion, Recipient person,
       TechnicalDataActor actor) {

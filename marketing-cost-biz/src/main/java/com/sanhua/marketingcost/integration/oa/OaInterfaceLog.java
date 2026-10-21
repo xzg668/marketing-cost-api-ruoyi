@@ -8,10 +8,14 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.slf4j.event.Level;
 
 /** OA 边界日志：只记录明确的业务标识和结果，不序列化报文、凭证、意见或异常正文。 */
 public final class OaInterfaceLog {
   private static final Logger log = LoggerFactory.getLogger(OaInterfaceLog.class);
+  // 人员全量同步按页、按人调用；正常明细留给 DEBUG，批次和异常仍在日常日志中可见。
+  private static final Set<String> DIRECTORY_DETAIL_OPERATIONS =
+      Set.of("OA_DIRECTORY_PAGE", "OA_DIRECTORY_HTTP", "JK03_PERSON_DETAIL");
   private static final Set<String> FIELDS = Set.of("requestId", "workflowRequestId", "formNo", "processCode",
       "taskId", "submissionId", "resultSubmissionId", "eventType", "employeeNo", "userid", "userId",
       "messageId", "interfaceType", "sourceSystem", "environment", "mode", "direction", "method", "endpoint",
@@ -46,7 +50,8 @@ public final class OaInterfaceLog {
     private Call(String operation) {
       this.operation = identifier(operation);
       MDC.put("oaCallId", callId);
-      log.info("OA_INTERFACE phase=START operation={} callId={} parentCallId={}",
+      log.atLevel(DIRECTORY_DETAIL_OPERATIONS.contains(this.operation) ? Level.DEBUG : Level.INFO)
+          .log("OA_INTERFACE phase=START operation={} callId={} parentCallId={}",
           this.operation, callId, identifier(parentCallId));
     }
 
@@ -101,14 +106,19 @@ public final class OaInterfaceLog {
 
     @Override public void close() {
       try {
-        var event = "FAILED".equals(status) ? log.atError()
-            : Set.of("REJECTED", "UNKNOWN", "UNCONFIRMED", "RETRY", "NOT_SENT").contains(status) ? log.atWarn() : log.atInfo();
-        event.log("OA_INTERFACE phase=END operation={} callId={} parentCallId={} status={} httpStatus={} errorCode={} durationMs={} context={}",
+        log.atLevel(endLevel()).log("OA_INTERFACE phase=END operation={} callId={} parentCallId={} status={} httpStatus={} errorCode={} durationMs={} context={}",
             operation, callId, identifier(parentCallId), status, httpStatus, code,
             (System.nanoTime() - started) / 1_000_000, fields);
       } finally {
         if (parentCallId == null) MDC.remove("oaCallId"); else MDC.put("oaCallId", parentCallId);
       }
+    }
+
+    private Level endLevel() {
+      if ("FAILED".equals(status)) return Level.ERROR;
+      if (Set.of("REJECTED", "UNKNOWN", "UNCONFIRMED", "RETRY", "NOT_SENT").contains(status)) return Level.WARN;
+      if ("SUCCESS".equals(status) && DIRECTORY_DETAIL_OPERATIONS.contains(operation)) return Level.DEBUG;
+      return Level.INFO;
     }
   }
 }

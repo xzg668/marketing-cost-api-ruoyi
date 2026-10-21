@@ -30,6 +30,7 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
   @Autowired private TechnicalDataProfileApplicationService profiles;
   @Autowired private TechnicalDataTaskApplicationService tasks;
   @Autowired private TechnicalDataVersionContentCodec codec;
+  @Autowired private TechnicalDataPlateMaterialProfile plateMaterials;
   @Autowired private QuoteTechDataVersionMapper versionMapper;
   @Autowired private QuoteTechProductMapper productMapper;
   @Autowired private JdbcTemplate jdbc;
@@ -40,6 +41,7 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
   @Autowired private com.sanhua.marketingcost.mapper.QuoteTechTaskMapper taskMapper;
   @Autowired private com.sanhua.marketingcost.mapper.QuoteTechSubmissionMapper submissionMapper;
   @Autowired private TechnicalDataOaSubmissionLifecycle lifecycle;
+  @Autowired private com.sanhua.marketingcost.service.platematerial.PlateMaterialMappingService plateMappings;
   @Autowired private com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaWorkflowRepository oaWorkflow;
   // 本组验证九模块快照及数据库不可变约束；真实原材料来源与组树见 ManufacturingIntegrationTest。
   @org.springframework.boot.test.mock.mockito.MockBean
@@ -260,6 +262,7 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
         .hasMessageContaining("OA只读字段");
     var valid = new TechnicalDataProfileUpdateRequest();
     valid.setProductProperty("非标品"); valid.setHasAdditionalFees(false); valid.setExpectedVersion(0);
+    valid.setExpectedPlateMaterialRevision(tasks.detail(fixture.taskId(), TECHNICIAN).products().getFirst().profile().plateMaterial().revision());
     profiles.save(fixture.productId(), valid, TECHNICIAN);
     var saved = versionMapper.selectById(fixture.versionId());
     assertThat(saved.getProductProperty()).isEqualTo("非标品");
@@ -308,6 +311,65 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
     }
   }
 
+  @Test void completeAggregatePublishesProfileOwnerMaterialOnceAndOtherModuleReturnDoesNotRepublishIt() {
+    var fixture = fixture(true);
+    splitPriceToSecondPerson(fixture);
+    var people = recipients.current(fixture.taskId());
+    var profileOwner = people.get(0);
+    var priceOwner = people.get(1);
+    var other = new TechnicalDataActor(102L, "李工", TECHNICIAN.authorities());
+    var profileSubmission = snapshots.prepare(fixture.taskId(), "PROFILE-FINAL", 0, 0, profileOwner, TECHNICIAN);
+    accept(fixture, profileSubmission, TECHNICIAN);
+    assertThat(productMapper.selectById(fixture.productId()).getEffectiveVersionId()).isNull();
+    String model = productMapper.selectById(fixture.productId()).getSourceModel();
+    assertThat(plateMappings.list("COMMERCIAL", model, null, 1, 20).records()).isEmpty();
+
+    var priceSubmission = snapshots.prepare(fixture.taskId(), "PRICE-FINAL",
+        jdbc.queryForObject("SELECT task_version FROM lp_quote_tech_task WHERE id=?", Integer.class, fixture.taskId()),
+        productMapper.selectById(fixture.productId()).getRowVersion(), priceOwner, other);
+    accept(fixture, priceSubmission, other);
+    var effectiveId = productMapper.selectById(fixture.productId()).getEffectiveVersionId();
+    assertThat(effectiveId).isNotNull().isNotIn(profileSubmission.getTechnicalVersionId(), priceSubmission.getTechnicalVersionId());
+    var effective = participantVersions.verified(effectiveId, fixture.productId());
+    assertThat(codec.plateMaterial(effective).material().value()).isEqualTo("水水316L");
+    var mapping = plateMappings.list("COMMERCIAL", model, null, 1, 20).records().getFirst();
+    assertThat(mapping.getCreatedBy()).isEqualTo(101L);
+    String eventKey = "TD-PLATE-MATERIAL:" + profileSubmission.getTechnicalVersionId();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_business_change_log WHERE idempotency_key=?",
+        Integer.class, eventKey)).isEqualTo(1);
+
+    // Only PRICE is returned; the previously published PROFILE version remains the same.
+    plateMappings.update("COMMERCIAL", mapping.getId(), model, "氟氟316L", mapping.getRowVersion(), 1);
+    recipients.state(priceOwner.id(), priceSubmission.getId(), "SUBMITTED", "OPEN", "重新确认价格");
+    recipients.refreshTask(fixture.taskId());
+    participantVersions.restoreSubmitted(productMapper.selectById(fixture.productId()),
+        recipients.findById(priceOwner.id()), 102L);
+    var resubmitted = snapshots.prepare(fixture.taskId(), "PRICE-REVISED",
+        jdbc.queryForObject("SELECT task_version FROM lp_quote_tech_task WHERE id=?", Integer.class, fixture.taskId()),
+        productMapper.selectById(fixture.productId()).getRowVersion(), recipients.findById(priceOwner.id()), other);
+    accept(fixture, resubmitted, other);
+    assertThat(productMapper.selectById(fixture.productId()).getEffectiveVersionId()).isNotEqualTo(effectiveId);
+    assertThat(plateMappings.list("COMMERCIAL", model, null, 1, 20).records().getFirst().getPlateMaterial())
+        .isEqualTo("氟氟316L");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_business_change_log WHERE idempotency_key=?",
+        Integer.class, eventKey)).isEqualTo(1);
+    assertThat(codec.plateMaterial(participantVersions.verified(effectiveId, fixture.productId())).material().value())
+        .isEqualTo("水水316L");
+  }
+
+  private void accept(Fixture fixture, QuoteTechSubmission submission, TechnicalDataActor actor) {
+    var person = recipients.findById(submission.getRecipientId());
+    participantVersions.transition(versionMapper.selectById(submission.getTechnicalVersionId()), "SUBMITTED", actor.userId());
+    participantVersions.state(productMapper.selectById(fixture.productId()), person,
+        submission.getTechnicalVersionId(), "SUBMITTED");
+    oaWorkflow.markSending(submission.getId());
+    oaWorkflow.acceptSubmission(submission.getId(), "PMM-AGGREGATE-" + fixture.taskId());
+    recipients.state(person.id(), submission.getId(), "PREPARED", "SUBMITTED", null);
+    recipients.refreshTask(fixture.taskId());
+    lifecycle.publishSubmitted(taskMapper.selectById(fixture.taskId()),
+        submissionMapper.selectById(submission.getId()), actor.userId());
+  }
+
   private void splitPriceToSecondPerson(Fixture fixture) {
     jdbc.update("UPDATE lp_quote_tech_module SET assignee_user_id=102,assignee_name='李工' WHERE product_id=? AND module_type='PRICE'", fixture.productId());
     jdbc.update("UPDATE lp_quote_tech_oa_recipient SET module_types_json='[\"PROFILE\",\"DRAWING_BOM\",\"MANUFACTURING\",\"SOLDER\",\"NET_LOSS\"]' WHERE task_id=?", fixture.taskId());
@@ -318,6 +380,10 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
   }
 
   private Fixture fixture() {
+    return fixture(false);
+  }
+
+  private Fixture fixture(boolean manualPlateMaterial) {
     long itemId = IDS.incrementAndGet();
     QuoteTechTask task = new QuoteTechTask(); task.setTaskNo("TW01-V-" + UUID.randomUUID());
     task.setOaFormId(itemId + 1000); task.setOaFormItemId(itemId); task.setOaNo("TW01-V-" + itemId);
@@ -325,10 +391,11 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
     task.setAssigneeUserId(101L); task.setAssigneeName("技术员101"); task = persistence.createTask(task);
     QuoteTechProduct product = new QuoteTechProduct(); product.setTaskId(task.getId()); product.setOaFormItemId(itemId);
     product.setAccountingMonth("2026-09"); product.setQuoteNo(task.getOaNo()); product.setContentSchemaVersion(2);
-    product.setSourceModel("SOURCE-MODEL"); product.setSourceSnapshotJson("{\"sourceModel\":\"SOURCE-MODEL\",\"newProduct\":true}");
+    String sourceModel = manualPlateMaterial ? "PMM-AGGREGATE-" + UUID.randomUUID() : "SOURCE-MODEL";
+    product.setSourceModel(sourceModel); product.setSourceSnapshotJson("{\"sourceModel\":\"" + sourceModel + "\",\"newProduct\":true,\"businessUnitType\":\"COMMERCIAL\",\"materialOrganizationCode\":\"COMMERCIAL\"}");
     product.setSourceFingerprint("a".repeat(64)); product = persistence.createProduct(product);
     QuoteTechDataVersion draft = new QuoteTechDataVersion(); draft.setProductId(product.getId()); draft.setVersionNo(1);
-    draft.setContentSchemaVersion(2); draft.setProductModel("SOURCE-MODEL"); draft.setProductProperty("标准品"); draft.setNewProductFlag(1);
+    draft.setContentSchemaVersion(2); draft.setProductModel(sourceModel); draft.setProductProperty("标准品"); draft.setNewProductFlag(1);
     draft.setProductFeesJson("{\"includesNewToolingMouldCertificationFee\":false,\"unitToolingFee\":0,\"unitMouldFee\":0,\"unitCertificationFee\":0,\"currency\":\"CNY\"}");
     draft.setDrawingBomJson("{\"sourceVersionId\":5,\"nodes\":[{\"itemKey\":\"N-1\",\"sourceNodeId\":\"N-1\","
         + "\"drawingNo\":\"DRAW-1\",\"name\":\"接管\",\"materialNo\":\"MAT\",\"quantityPerParent\":2,\"unit\":\"件\"}],"
@@ -339,6 +406,13 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
     draft.setSolderItemsJson("{\"items\":[{\"itemKey\":\"S-1\",\"materialNo\":\"311990182\",\"drawingNo\":\"D-1\",\"quantityPerProduct\":0.002,\"unit\":\"kg\"}]}");
     draft.setNetLossJson("{\"bareMaterialNo\":\"BARE\",\"rate\":0.0125,\"entryMode\":\"MANUAL\"}");
     draft.setPriceItemsJson("{\"items\":[{\"itemKey\":\"P-1\",\"materialNo\":\"MAT\",\"unit\":\"kg\",\"currency\":\"CNY\",\"entryMode\":\"MANUAL\",\"unitPrice\":12}]}");
+    if (manualPlateMaterial) jdbc.update("""
+        INSERT INTO lp_material_master_raw(organization_code,material_code,material_model,production_division,active_flag,import_batch_id)
+        VALUES('COMMERCIAL',?,?,'板换事业部',1,'PMM_AGGREGATE_TEST')
+        """, sourceModel, sourceModel);
+    var decision = plateMaterials.current(List.of(product)).get(product.getId());
+    draft.setPlateMaterialJson(codec.plateMaterialJson(plateMaterials.save(product,
+        manualPlateMaterial ? "水水316L" : null, decision.revision())));
     draft = persistence.createVersion(draft);
     jdbc.update("UPDATE lp_quote_tech_product SET current_edit_version_id=? WHERE id=?", draft.getId(), product.getId());
     for (String type : TechnicalDataModuleType.orderedCodes()) {

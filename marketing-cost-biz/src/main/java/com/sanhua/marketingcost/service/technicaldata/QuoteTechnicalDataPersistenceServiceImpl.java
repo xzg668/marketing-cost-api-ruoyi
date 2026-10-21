@@ -26,10 +26,12 @@ public class QuoteTechnicalDataPersistenceServiceImpl
     implements QuoteTechnicalDataPersistenceService {
   private final QuoteTechnicalDataRepository repository;
   private final TechnicalDataVersionContentCodec contentCodec;
+  private final TechnicalDataPlateMaterialProfile plateMaterials;
 
   public QuoteTechnicalDataPersistenceServiceImpl(
       QuoteTechnicalDataRepository repository,
-      TechnicalDataVersionContentCodec contentCodec) {
+      TechnicalDataVersionContentCodec contentCodec, TechnicalDataPlateMaterialProfile plateMaterials) {
+    this.plateMaterials = plateMaterials;
     this.repository = repository;
     this.contentCodec = contentCodec;
   }
@@ -166,7 +168,7 @@ public class QuoteTechnicalDataPersistenceServiceImpl
   }
 
   @Override
-  @Transactional
+  @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
   public QuoteTechDataVersion transitionVersion(
       Long versionId,
       String expectedStatus,
@@ -213,7 +215,7 @@ public class QuoteTechnicalDataPersistenceServiceImpl
   }
 
   @Override
-  @Transactional
+  @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
   public QuoteTechDataVersion freezeDraftForSubmission(
       Long productId, int expectedProductVersion, Long actorId) {
     requiredId("productId", productId);
@@ -233,6 +235,11 @@ public class QuoteTechnicalDataPersistenceServiceImpl
     List<QuoteTechAuxItem> auxiliaries = repository.findAuxItems(draftId);
     List<QuoteTechSalaryItem> salaries = repository.findSalaryItems(draftId);
     requireCompleteModules(draft, modules, packages, auxiliaries, salaries);
+    if (contentCodec.schemaVersion(draft) == 2 && modules.stream().anyMatch(module ->
+        "PROFILE".equals(module.getModuleType()) && Integer.valueOf(1).equals(module.getRequiredFlag()))) {
+      var issues = plateMaterials.validateCurrent(product, draft);
+      if (!issues.isEmpty()) throw new IllegalStateException(String.join("；", issues));
+    }
 
     draft.setPackageTotalAmount(sumPackageAmount(packages));
     draft.setAuxiliaryTotalAmount(sumAuxAmount(auxiliaries));

@@ -10,28 +10,30 @@ import com.sanhua.marketingcost.enums.LinkedPriceFactorSource;
 import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.PriceLinkedCalcItemMapper;
+import com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceReader;
+import com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceRequest;
 import java.time.LocalDate;
 import java.util.List;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
- * 联动价 Resolver —— 查 lp_price_linked_calc_item，按 QUOTE + oaNo + itemCode + pricingMonth 取最新成功计算结果。
- *
- * <p>对应 Excel"价格来源 = 联动价"。当前阶段沿用现有 PriceLinkedCalcServiceImpl 已写入的结果， 公式引擎升级（任务 #6/#7）完成后再切到
- * TemplateEngine。
+ * 联动来源入口：普通联动读取已准备的计算结果，结算联动调用独立月度读取器。
+ * 技术补录保留其版本范围；三种来源的公式、基价和结果记录不互用。
  */
 @Component
 public class LinkedPriceResolver implements PriceResolver {
 
   private final TechnicalPriceSourceResolver technicalPrices;
   private final PriceLinkedCalcItemMapper priceLinkedCalcItemMapper;
+  private final SettlementPriceReader settlementPrices;
 
   public LinkedPriceResolver(
       PriceLinkedCalcItemMapper priceLinkedCalcItemMapper,
-      TechnicalPriceSourceResolver technicalPrices) {
+      TechnicalPriceSourceResolver technicalPrices, SettlementPriceReader settlementPrices) {
     this.technicalPrices = technicalPrices;
     this.priceLinkedCalcItemMapper = priceLinkedCalcItemMapper;
+    this.settlementPrices = settlementPrices;
   }
 
   @Override
@@ -48,6 +50,7 @@ public class LinkedPriceResolver implements PriceResolver {
   public PriceResolveResult resolve(
       String oaNo, CostRunPartItemDto item, PriceTypeRoute route, CostRunContext context) {
     if (route != null && route.supplemental()) return technicalPrices.resolve(item, route, context);
+    if (route != null && route.settlement()) return settlementPrices.resolve(SettlementPriceRequest.from(item, route, context));
     if (context == null || !StringUtils.hasText(context.getBusinessUnitType())
         || !StringUtils.hasText(context.getPriceOrgCode()) || !StringUtils.hasText(context.getPricingMonth())) {
       return PriceResolveResult.miss("LINKED_PRICE_SCOPE_MISSING", "联动价缺少业务单元、取价组织或核算月份");

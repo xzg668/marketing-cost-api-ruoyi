@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.integration.oa.workflow;
 
+import com.sanhua.marketingcost.integration.logging.ExternalHttpExchange;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -118,7 +120,8 @@ public class OaWorkflowClient {
           "未发送：OA 鉴权或接口配置失败，请核对公共鉴权与流程接口配置", null, null, started);
     }
     try {
-      HttpResponse<String> response = http.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+      HttpResponse<String> response = ExternalHttpExchange.sendJson("OA_WORKFLOW", http, httpRequest, body,
+          auth.getAppSecret(), auth.getAppKey(), auth.getCorpId());
       int status = response.statusCode();
       JsonNode raw;
       try {

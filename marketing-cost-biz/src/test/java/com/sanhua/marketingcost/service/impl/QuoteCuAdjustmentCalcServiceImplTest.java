@@ -205,6 +205,30 @@ class QuoteCuAdjustmentCalcServiceImplTest {
         .contains("\"versionId\":9002", "\"auxiliaryTotalAmount\":0.704", "\"salaryTotalAmount\":18.90");
   }
 
+  @Test void costVersionSerializesPlateMaterialEvidenceAlongsideExistingInput() throws Exception {
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+    var tree = mapper.valueToTree(effectiveTechnicalV2());
+    ((com.fasterxml.jackson.databind.node.ObjectNode) tree).set("plateMaterial", mapper.valueToTree(
+        new EffectiveTechnicalDataInput.PlateMaterialEvidence("CONFIG_LOCKED", "水水316L",
+            "a".repeat(64), "COMMERCIAL", "B12-8H-V20", "PLATE", 77L, 3, List.of())));
+    var input = mapper.treeToValue(tree, EffectiveTechnicalDataInput.class);
+    when(costRunEngine.run(any())).thenAnswer(invocation -> {
+      CostRunContext context = invocation.getArgument(0);
+      context.setEffectiveTechnicalData(input);
+      return costResult(context, "100", "140");
+    });
+    var result = service.calculate(request());
+    assertThat(result.totalCost()).isEqualByComparingTo("140");
+    assertThat(result.finalQuoteAmount()).isEqualByComparingTo("152");
+    var patches = ArgumentCaptor.forClass(QuoteCostRunVersion.class);
+    verify(versionMapper, times(2)).updateById(patches.capture());
+    var snapshot = mapper.readTree(patches.getAllValues().getLast().getTechDataInputJson());
+    assertThat(snapshot.at("/plateMaterial/material").asText()).isEqualTo("水水316L");
+    assertThat(snapshot.at("/plateMaterial/mappingVersion").asInt()).isEqualTo(3);
+    assertThat(snapshot.at("/plateMaterial/model").asText()).isEqualTo("B12-8H-V20");
+    assertThat(snapshot.path("salaryTotalAmount").decimalValue()).isEqualByComparingTo("18.90");
+  }
+
   @Test
   @DisplayName("自动完成模式创建 RUNNING 而不是人工 TRIAL 版本")
   void automaticCompletionCreatesRunningVersion() {

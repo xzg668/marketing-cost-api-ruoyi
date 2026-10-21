@@ -52,19 +52,7 @@ class PriceFixedItemServiceImplTest {
     verify(mapper).selectPage(any(), any());
   }
 
-  @Test
-  void settlementFixedQueryStillFiltersByMonth() {
-    var mapper = Mockito.mock(PriceFixedItemMapper.class);
-    when(mapper.selectPage(any(), any())).thenAnswer(invocation -> {
-      LambdaQueryWrapper<PriceFixedItem> query = invocation.getArgument(1);
-      assertThat(query.getSqlSegment()).contains("pricing_month");
-      assertThat(query.getParamNameValuePairs().values()).contains("SETTLE_FIXED", "2026-05");
-      return invocation.getArgument(0);
-    });
 
-    service(mapper).page(null, null, "SETTLE_FIXED", "2026-05", 1, 20);
-    verify(mapper).selectPage(any(), any());
-  }
 
   @Test
   void newPurchaseFixedPriceDoesNotFabricateAMonth() {
@@ -184,72 +172,9 @@ class PriceFixedItemServiceImplTest {
     assertEquals(1, result.getUpdatedCount());
   }
 
-  @Test
-  void importItems_mapsSettleReferenceNumericPrice() {
-    PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = service(mapper);
 
-    PriceFixedItemImportRequest.PriceFixedItemImportRow row =
-        new PriceFixedItemImportRequest.PriceFixedItemImportRow();
-    row.setMaterialCode("203259840");
-    row.setMaterialName("芯铁");
-    row.setSourceType("SETTLE_FIXED");
-    row.setSourceSystem("EXCEL");
-    row.setSourceSheetName("家用结算价9");
-    row.setSourceRowNo(97);
-    row.setSettleReferenceHeader("铜价（90000元/吨、锌价21680元/吨）");
-    row.setSettleReferencePrice(new BigDecimal("0.340314"));
 
-    PriceFixedItemImportRequest request = new PriceFixedItemImportRequest();
-    request.setImportFileName("3 产品成本计算表（3.29- 提供）5.15改.xls");
-    request.setSourceBatchNo("BATCH-001");
-    request.setRows(List.of(row));
 
-    when(mapper.selectOne(any())).thenReturn(null);
-
-    PriceFixedItemImportResponse result = service.importItems(request);
-
-    ArgumentCaptor<PriceFixedItem> captor = ArgumentCaptor.forClass(PriceFixedItem.class);
-    verify(mapper).insert(captor.capture());
-    PriceFixedItem inserted = captor.getValue();
-    assertEquals(new BigDecimal("0.340314"), inserted.getFixedPrice());
-    assertEquals(new BigDecimal("0.340314"), inserted.getSettleReferencePrice());
-    assertEquals("家用结算价9", inserted.getSourceSheetName());
-    assertEquals("BATCH-001", inserted.getSourceBatchNo());
-    assertEquals(1, result.getCreatedCount());
-    assertEquals(0, result.getWarnings().size());
-  }
-
-  @Test
-  void importItems_keepsSettleReferenceTextWithoutFixedPrice() {
-    PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = service(mapper);
-
-    PriceFixedItemImportRequest.PriceFixedItemImportRow row =
-        new PriceFixedItemImportRequest.PriceFixedItemImportRow();
-    row.setMaterialCode("203240001");
-    row.setMaterialName("测试料");
-    row.setSourceType("SETTLE_FIXED");
-    row.setSourceSystem("EXCEL");
-    row.setSourceSheetName("家用结算价9");
-    row.setSourceRowNo(40);
-    row.setSettleReferenceText("不用提供");
-
-    PriceFixedItemImportRequest request = new PriceFixedItemImportRequest();
-    request.setRows(List.of(row));
-
-    when(mapper.selectOne(any())).thenReturn(null);
-
-    PriceFixedItemImportResponse result = service.importItems(request);
-
-    ArgumentCaptor<PriceFixedItem> captor = ArgumentCaptor.forClass(PriceFixedItem.class);
-    verify(mapper).insert(captor.capture());
-    PriceFixedItem inserted = captor.getValue();
-    assertNull(inserted.getFixedPrice());
-    assertEquals("不用提供", inserted.getSettleReferenceText());
-    assertEquals(1, result.getCreatedCount());
-    assertEquals(1, result.getWarnings().size());
-  }
 
   @Test
   void importItems_purchaseFixedSameExternalRowIdUpdates() {
@@ -350,83 +275,11 @@ class PriceFixedItemServiceImplTest {
     assertEquals(0, result.getSkippedCount());
   }
 
-  @Test
-  void importItems_u9SettleFixedSameMaterialUpdates() {
-    PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = service(mapper);
 
-    PriceFixedItem existing = new PriceFixedItem();
-    existing.setId(11L);
-    existing.setMaterialCode("301220046");
-    existing.setSourceType("SETTLE_FIXED");
-    existing.setSourceSystem("U9");
 
-    PriceFixedItemImportRequest.PriceFixedItemImportRow row =
-        settleFixedRow("301220046", "U9", new BigDecimal("27.1858"), null);
-    PriceFixedItemImportRequest request = new PriceFixedItemImportRequest();
-    request.setRows(List.of(row));
 
-    when(mapper.selectOne(any())).thenReturn(existing);
 
-    PriceFixedItemImportResponse result = service.importItems(request);
 
-    verify(mapper).updateById(any(PriceFixedItem.class));
-    assertEquals(0, result.getCreatedCount());
-    assertEquals(1, result.getUpdatedCount());
-  }
-
-  @Test
-  void importItems_excelSettleFixedSameMaterialUpdates() {
-    PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = service(mapper);
-
-    PriceFixedItem existing = new PriceFixedItem();
-    existing.setId(12L);
-    existing.setMaterialCode("203259840");
-    existing.setSourceType("SETTLE_FIXED");
-    existing.setSourceSystem("EXCEL");
-
-    PriceFixedItemImportRequest.PriceFixedItemImportRow row =
-        settleFixedRow("203259840", "EXCEL", new BigDecimal("0.340314"), null);
-    PriceFixedItemImportRequest request = new PriceFixedItemImportRequest();
-    request.setRows(List.of(row));
-
-    when(mapper.selectOne(any())).thenReturn(existing);
-
-    PriceFixedItemImportResponse result = service.importItems(request);
-
-    verify(mapper).updateById(any(PriceFixedItem.class));
-    assertEquals(0, result.getCreatedCount());
-    assertEquals(1, result.getUpdatedCount());
-  }
-
-  @Test
-  void importItems_householdSettleKeeps95RowsWith57PricedAnd38RemarkRows() {
-    PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
-    PriceFixedItemServiceImpl service = service(mapper);
-
-    List<PriceFixedItemImportRequest.PriceFixedItemImportRow> rows = new ArrayList<>();
-    for (int i = 0; i < 95; i++) {
-      String materialCode = "20" + String.format("%07d", i);
-      if (i < 57) {
-        rows.add(settleFixedRow(materialCode, "EXCEL", new BigDecimal("1.000000"), null));
-      } else {
-        rows.add(settleFixedRow(materialCode, "EXCEL", null, "不用提供"));
-      }
-    }
-    PriceFixedItemImportRequest request = new PriceFixedItemImportRequest();
-    request.setRows(rows);
-
-    when(mapper.selectOne(any())).thenReturn(null);
-
-    PriceFixedItemImportResponse result = service.importItems(request);
-
-    verify(mapper, times(95)).insert(any(PriceFixedItem.class));
-    assertEquals(95, result.getCreatedCount());
-    assertEquals(38, result.getWarnings().size());
-    assertEquals(57, result.getItems().stream().filter(item -> item.getFixedPrice() != null).count());
-    assertEquals(38, result.getItems().stream().filter(item -> item.getFixedPrice() == null).count());
-  }
 
   @Test
   void page_returnsPagedRecords() {
@@ -465,19 +318,41 @@ class PriceFixedItemServiceImplTest {
     return row;
   }
 
-  @Test
-  void formalSettlementPriceImportRetainsSourceType() {
-    PriceFixedItemMapper mapper = Mockito.mock(PriceFixedItemMapper.class);
 
-    PriceFixedItemServiceImpl service = new PriceFixedItemServiceImpl(mapper);
-    PriceFixedItemImportRequest request = new PriceFixedItemImportRequest();
-    request.setRows(List.of(settleFixedRow(
-        "MAT-SETTLE", "EXCEL", new BigDecimal("12.34"), null)));
 
-    service.importItems(request);
-    ArgumentCaptor<PriceFixedItem> saved = ArgumentCaptor.forClass(PriceFixedItem.class);
-    verify(mapper).insert(saved.capture());
-    assertEquals("SETTLE_FIXED", saved.getValue().getSourceType());
+  @Test void legacySettlementCannotBeListedCreatedEditedDeletedOrMixedIntoAnImport() {
+    var mapper = Mockito.mock(PriceFixedItemMapper.class);
+    var service = service(mapper);
+    for (String type : List.of("SETTLE", "SETTLE_FIXED", " settle_linked ")) {
+      var create = new PriceFixedItemUpdateRequest();
+      create.setSourceType(type); create.setMaterialCode("LEGACY"); create.setFixedPrice(BigDecimal.ONE);
+      org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.create(create)).hasMessageContaining("新结算价格");
+      org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.page(null, null, type, "2026-10", 1, 20)).hasMessageContaining("新结算价格");
+      var legacy = new PriceFixedItem(); legacy.setId(1L); legacy.setSourceType(type); legacy.setSourceKind("PUBLIC");
+      when(mapper.selectById(1L)).thenReturn(legacy);
+      org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.update(1L, new PriceFixedItemUpdateRequest())).hasMessageContaining("新结算价格");
+      org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.delete(1L)).hasMessageContaining("新结算价格");
+      var bad = settleFixedRow("LEGACY", "EXCEL", BigDecimal.ONE, null); bad.setSourceType(type);
+      var request = new PriceFixedItemImportRequest(); request.setRows(List.of(purchaseFixedRow("VALID", "SRM1"), bad));
+      org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.importItems(request)).hasMessageContaining("新结算价格");
+    }
+    verify(mapper, Mockito.never()).insert(any(PriceFixedItem.class));
+    verify(mapper, Mockito.never()).updateById(any(PriceFixedItem.class));
+    verify(mapper, Mockito.never()).delete(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
+  }
+
+  @Test void ordinaryRowCannotBeConvertedIntoLegacySettlementAndUnfilteredListExcludesLegacy() {
+    var mapper = Mockito.mock(PriceFixedItemMapper.class);
+    var item = new PriceFixedItem(); item.setSourceType("PURCHASE_FIXED"); item.setSourceKind("PUBLIC");
+    when(mapper.selectById(2L)).thenReturn(item);
+    var change = new PriceFixedItemUpdateRequest(); change.setSourceType("SETTLE_FIXED");
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> service(mapper).update(2L, change)).hasMessageContaining("新结算价格");
+    assertEquals("PURCHASE_FIXED", item.getSourceType());
+    when(mapper.selectPage(any(), any())).thenAnswer(call -> {
+      LambdaQueryWrapper<PriceFixedItem> query = call.getArgument(1);
+      assertThat(query.getSqlSegment()).contains("NOT LIKE 'SETTLE%'"); return call.getArgument(0);
+    });
+    service(mapper).page(null, null, null, null, 1, 20);
   }
 
   private PriceFixedItemImportRequest.PriceFixedItemImportRow settleFixedRow(

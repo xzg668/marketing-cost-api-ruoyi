@@ -66,7 +66,14 @@ public class TechnicalPriceCorrectionService {
     for (var row : scope.items()) {
       var price =
           prices.calculateMaterialUnitPrice(
-              row.materialNo(), month, now.toLocalDate(), now, oaNo, scope.businessUnit(), scenario);
+              row.materialNo(),
+              month,
+              now.toLocalDate(),
+              now,
+              oaNo,
+              scope.businessUnit(),
+              scenario,
+              MakePartMaterialPriceResolveService.Purpose.MATERIAL);
       if (price == null) throw new IllegalStateException("取价检查未返回结果：" + row.materialNo());
       if ("OK".equals(price.getStatus())
           && price.getUnitPrice() != null

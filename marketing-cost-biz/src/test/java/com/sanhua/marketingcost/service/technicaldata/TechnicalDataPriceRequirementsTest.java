@@ -40,7 +40,7 @@ class TechnicalDataPriceRequirementsTest {
       var master = new MaterialMasterRaw(); master.setMaterialCode(((List<String>)call.getArgument(0)).getFirst());
       master.setMaterialName("料件"); master.setUnit("只"); return List.of(master);
     });
-    when(prices.calculateMaterialUnitPrice(anyString(),eq("2026-09"),any(),any(),eq("OA"),eq("COMMERCIAL"),any()))
+    when(prices.calculateMaterialUnitPrice(anyString(),eq("2026-09"),any(),any(),eq("OA"),eq("COMMERCIAL"),any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenAnswer(call -> MakePartMaterialPriceResolveResult.miss(call.getArgument(0),"MISSING_PRICE","缺价",null));
   }
 
@@ -80,7 +80,7 @@ class TechnicalDataPriceRequirementsTest {
     when(materials.selectByLatestBatchAndCodes(List.of("PACK"), null, "PLATE")).thenReturn(List.of(master));
     when(prices.calculateMaterialUnitPrice(eq("PACK"), eq("2026-09"), any(), any(), eq("OA"), eq("COMMERCIAL"),
         argThat(scope -> scope != null && Long.valueOf(42L).equals(scope.supplierReviews().oaFormItemId())
-            && "220".equals(scope.supplierReviews().priceOrgCode()))))
+            && "220".equals(scope.supplierReviews().priceOrgCode())), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenReturn(MakePartMaterialPriceResolveResult.ok("PACK", "固定价", BigDecimal.TEN, "有效固定价", null));
     var result = service.checkModuleReferences(task, product);
     assertThat(result.issues()).isEmpty();
@@ -95,7 +95,7 @@ class TechnicalDataPriceRequirementsTest {
     when(tasks.findModules(2L)).thenReturn(List.of(module("SOLDER")));
     when(content.solder(draft)).thenReturn(solder("SOLDER"));
     var missing=service.checkModuleReferences(task,product);
-    when(prices.calculateMaterialUnitPrice(anyString(),any(),any(),any(),any(),any(),any()))
+    when(prices.calculateMaterialUnitPrice(anyString(),any(),any(),any(),any(),any(),any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenReturn(MakePartMaterialPriceResolveResult.ok("SOLDER","FIXED",BigDecimal.TEN,"公共固定价",null));
     var available=service.checkModuleReferences(task,product);
     assertThat(available.items().getFirst().itemKey()).isEqualTo(missing.items().getFirst().itemKey());
@@ -107,12 +107,12 @@ class TechnicalDataPriceRequirementsTest {
     when(tasks.findModules(2L)).thenReturn(List.of(module("SOLDER")));
     when(content.solder(draft)).thenReturn(solder("SOLDER"));
     for (var price : List.of(BigDecimal.ZERO,BigDecimal.ONE.negate())) {
-      when(prices.calculateMaterialUnitPrice(anyString(),any(),any(),any(),any(),any(),any()))
+      when(prices.calculateMaterialUnitPrice(anyString(),any(),any(),any(),any(),any(),any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
           .thenReturn(MakePartMaterialPriceResolveResult.ok("SOLDER","FIXED",price,"价格异常",null));
       var result=service.checkModuleReferences(task,product);
       assertThat(result.items().getFirst().status()).isEqualTo("ERROR"); assertThat(result.issues()).isNotEmpty();
     }
-    when(prices.calculateMaterialUnitPrice(anyString(),any(),any(),any(),any(),any(),any())).thenThrow(new IllegalStateException("查询失败"));
+    when(prices.calculateMaterialUnitPrice(anyString(),any(),any(),any(),any(),any(),any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class))).thenThrow(new IllegalStateException("查询失败"));
     assertThat(service.checkModuleReferences(task,product).items().getFirst().status()).isEqualTo("ERROR");
   }
 
@@ -129,7 +129,7 @@ class TechnicalDataPriceRequirementsTest {
     when(content.solder(draft)).thenReturn(solder("SOLDER"));
     var failed = MakePartMaterialPriceResolveResult.miss("SOLDER","ERROR","来源校验失败",null);
     failed.setUnitPrice(BigDecimal.TEN);
-    when(prices.calculateMaterialUnitPrice(anyString(),any(),any(),any(),any(),any(),any())).thenReturn(failed);
+    when(prices.calculateMaterialUnitPrice(anyString(),any(),any(),any(),any(),any(),any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class))).thenReturn(failed);
     var result = service.checkModuleReferences(task,product);
     assertThat(result.items().getFirst().status()).isEqualTo("ERROR");
     assertThat(result.issues()).contains("SOLDER：来源校验失败");

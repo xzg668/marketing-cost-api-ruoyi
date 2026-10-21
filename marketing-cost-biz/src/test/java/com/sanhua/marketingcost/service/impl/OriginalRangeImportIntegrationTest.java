@@ -40,7 +40,8 @@ class OriginalRangeImportIntegrationTest {
     "V309__finance_factor_publication_note.sql",
     "V311__original_linked_expression_capacity.sql",
     "V325__finance_effective_price.sql",
-    "V326__original_workbook_source.sql"
+    "V326__original_workbook_source.sql",
+          "V330__scrap_price_monthly.sql"
   };
   private static FactorIdentityMapper identities;
   private static FactorUploadBatchMapper batches;
@@ -72,6 +73,7 @@ class OriginalRangeImportIntegrationTest {
         List.of(
             com.sanhua.marketingcost.mapper.FinanceEffectivePriceMapper.class,
             com.sanhua.marketingcost.mapper.PriceLinkedItemMapper.class,
+            com.sanhua.marketingcost.mapper.ScrapPriceMapper.class,
             FactorIdentityMapper.class,
             FactorUploadBatchMapper.class,
             FactorMonthlyPriceMapper.class,
@@ -124,7 +126,8 @@ class OriginalRangeImportIntegrationTest {
             json,
             transactions,
             com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceTestSupport.service(
-                effectiveSessions, json));
+                effectiveSessions, json),
+            com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.service(effectiveSessions, transactions, json));
     publishFinance("CU_90000");
     service = service(bands);
   }

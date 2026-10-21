@@ -34,6 +34,7 @@ final class TechnicalDataVersionCopies {
         to.setProductProperty(from.getProductProperty());
         to.setNewProductFlag(from.getNewProductFlag());
         to.setProductFeesJson(from.getProductFeesJson());
+        to.setPlateMaterialJson(from.getPlateMaterialJson());
       }
       case DRAWING_BOM -> to.setDrawingBomJson(from.getDrawingBomJson());
       case MANUFACTURING -> to.setManufacturingJson(from.getManufacturingJson());
@@ -63,6 +64,7 @@ final class TechnicalDataVersionCopies {
     draft.setNewProductFlag(source.getNewProductFlag());
     draft.setContentSchemaVersion(source.getContentSchemaVersion());
     draft.setProductFeesJson(source.getProductFeesJson());
+    draft.setPlateMaterialJson(source.getPlateMaterialJson());
     draft.setDrawingBomJson(source.getDrawingBomJson());
     draft.setManufacturingJson(source.getManufacturingJson());
     draft.setPackagingJson(source.getPackagingJson());

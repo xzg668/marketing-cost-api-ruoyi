@@ -240,6 +240,36 @@ class EffectiveTechnicalDataQueryServiceImplTest {
     assertError("TECH_DATA_FINANCE_CONFIRMATION_REQUIRED", "PRICE", () -> service.resolve(ITEM_ID, MONTH));
   }
 
+  @Test void sharedProfileKeepsItsSavedMaterialAndFeesInCostInput() throws Exception {
+    // Another quotation consumes the approved PROFILE; there is no current product or configuration lookup.
+    when(productMapper.selectActiveCandidatesByItemAndMonth(ITEM_ID, MONTH)).thenReturn(List.of());
+    var source = new TechnicalDataCostingSources.Source("PROFILE", new QuoteTechTask(), product, v2, 201L);
+    when(costingSources.select(ITEM_ID, MONTH)).thenReturn(new TechnicalDataCostingSources.Selection(
+        selection(List.of()).context(), java.util.Map.of("PROFILE", source), List.of(), List.of()));
+    var saved = new com.sanhua.marketingcost.service.platematerial.PlateMaterialSnapshot(
+        com.sanhua.marketingcost.service.platematerial.PlateMaterialMode.CONFIG_LOCKED,
+        com.sanhua.marketingcost.service.platematerial.PlateMaterial.WATER_WATER_316L,
+        new com.sanhua.marketingcost.service.platematerial.PlateMaterialSnapshot.Source(
+            "COMMERCIAL", "B12-8H-V20", "PLATE", 77L, 3, List.of()), "a".repeat(64));
+    when(contentCodec.plateMaterial(v2)).thenReturn(saved);
+    when(contentCodec.productFees(v2)).thenReturn(TechnicalDataProductFeeRules.parse(true, "0.1", "0.3", "/"));
+    v2.setProductProperty("非标品");
+    var input = service.resolve(ITEM_ID, MONTH);
+    assertThat(input.plateMaterial().material()).isEqualTo("水水316L");
+    assertThat(input.plateMaterial().mappingId()).isEqualTo(77L);
+    assertThat(input.plateMaterial().mappingVersion()).isEqualTo(3);
+    assertThat(input.plateMaterial().model()).isEqualTo("B12-8H-V20");
+    assertThat(input.plateMaterial().revision()).isEqualTo("a".repeat(64));
+    assertThat(input.sourceVersionId("PROFILE")).isEqualTo(v2.getId());
+    assertThat(input.productProperty()).isEqualTo("非标品");
+    assertThat(input.productFees().unitMouldFee()).isEqualByComparingTo("0.3");
+    var json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+    assertThat(json.readTree(json.writeValueAsString(input)).at("/plateMaterial/material").asText()).isEqualTo("水水316L");
+    // Uncollected historical inputs keep their old JSON shape and remain usable.
+    when(contentCodec.plateMaterial(v2)).thenReturn(null);
+    assertThat(json.writeValueAsString(service.resolve(ITEM_ID, MONTH))).doesNotContain("plateMaterial");
+  }
+
   private TechnicalDataCostingSources.Selection selection(List<TechnicalDataCostingSources.Issue> issues) {
     return new TechnicalDataCostingSources.Selection(new com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext(
         1L, ITEM_ID, "OA", MONTH, "COMMERCIAL", "PRODUCT", null, null, null, "210", "COMMERCIAL",

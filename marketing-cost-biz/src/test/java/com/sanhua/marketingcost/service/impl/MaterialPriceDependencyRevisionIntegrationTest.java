@@ -41,6 +41,8 @@ class MaterialPriceDependencyRevisionIntegrationTest {
     MYSQL.start();
     var data = new DriverManagerDataSource(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
     jdbc = new JdbcTemplate(data);
+    new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
+        new org.springframework.core.io.ClassPathResource("db/V332__settlement_price_versions.sql")).execute(data);
     jdbc.execute("""
         CREATE TABLE lp_material_price_type (
           id BIGINT AUTO_INCREMENT PRIMARY KEY,business_unit_type VARCHAR(32),period CHAR(7),

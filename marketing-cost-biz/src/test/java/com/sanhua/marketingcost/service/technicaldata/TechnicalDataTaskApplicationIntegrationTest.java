@@ -36,6 +36,7 @@ class TechnicalDataTaskApplicationIntegrationTest extends BomMapperTestBase {
   @Autowired private JdbcTemplate jdbc;
   @Autowired private TechnicalDataQuoteSourceReader sources;
   @Autowired private com.sanhua.marketingcost.mapper.QuoteTechModuleMapper modules;
+  @Autowired private com.sanhua.marketingcost.mapper.QuoteTechTaskMapper taskMapper;
   @Autowired private TechnicalDataRequirementRefreshService refresh;
   @Autowired private org.springframework.transaction.PlatformTransactionManager transactions;
   @MockBean private SysUserService users;
@@ -152,7 +153,9 @@ class TechnicalDataTaskApplicationIntegrationTest extends BomMapperTestBase {
     var task=service.publish(request(products(1),101L),ADMIN).items().getFirst().task();
     var before=modules.selectByTaskId(task.id()).stream().filter(m -> m.getRequiredFlag()==1).map(m -> m.getModuleType()).toList();
     new org.springframework.transaction.support.TransactionTemplate(transactions).executeWithoutResult(status -> {
-      var loaded=new com.sanhua.marketingcost.entity.QuoteTechTask();loaded.setId(task.id());loaded.setOaAssignmentVersion(1);
+      var loaded = taskMapper.selectByIdForUpdate(task.id());
+      assertThat(loaded.getOaAssignmentVersion()).isPositive();
+      assertThat(loaded.getExternalTaskStatus()).isEqualTo("PUBLISHED");
       refresh.refresh(loaded,List.of(new TechnicalDataModuleRequirement("PROFILE",false,"AVAILABLE","新来源",
           TechnicalDataAvailability.AVAILABLE,"new",java.time.LocalDateTime.now())));
     });

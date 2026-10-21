@@ -104,6 +104,8 @@ public class TechnicalDataDocumentSubmissionService {
     this.delivery = delivery;
     this.codec = codec;
     this.transaction = new TransactionTemplate(manager);
+    // Each product is revalidated at freeze; concurrent public-source edits must be visible.
+    this.transaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
   }
 
   @Transactional(readOnly = true)
@@ -136,8 +138,12 @@ public class TechnicalDataDocumentSubmissionService {
           .getFirst()
           .id()
       );
+      var plate = views.stream().filter(view -> view.id() == id).findFirst().orElseThrow()
+          .products().getFirst().profile().plateMaterial();
+      boolean plateConfirmed = !person.processingModules().contains("PROFILE") || plate == null
+          || plate.historical() || plate.saved() != null && !plate.sourceChanged();
       if (
-        !person.processingModules().isEmpty() &&
+        plateConfirmed && !person.processingModules().isEmpty() &&
         person
           .processingModules()
           .stream()

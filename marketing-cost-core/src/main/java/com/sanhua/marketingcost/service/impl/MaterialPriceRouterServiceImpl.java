@@ -125,8 +125,7 @@ public class MaterialPriceRouterServiceImpl implements MaterialPriceRouterServic
     var result = new ArrayList<PriceTypeRoute>();
     for (var entry : configuration.order()) {
       var type = entry.type();
-      // 结算联动价保留独立顺序；正式数据源接入前不可套用普通联动价或区间价。
-      if (type.calculator() == null || !available.contains(type.name())) continue;
+      if (!available.contains(type.name())) continue;
       result.add(new PriceTypeRoute(scope.materialCode(), form, type.calculator(), entry.priority(),
           null, null, configuration.manual() ? "FINANCE" : "SYSTEM", type.label(),
           "PUBLIC", null, configuration));

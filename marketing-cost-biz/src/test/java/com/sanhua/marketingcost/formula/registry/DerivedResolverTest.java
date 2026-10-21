@@ -23,18 +23,25 @@ class DerivedResolverTest {
   private FinanceFactorVariableQuery financeQuery;
   private MaterialScrapRefMapper materialScrapRefMapper;
   private DerivedResolver resolver;
+  private com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService scrapPrices;
 
   @BeforeEach
   void setUp() {
     financeQuery = mock(FinanceFactorVariableQuery.class);
     materialScrapRefMapper = mock(MaterialScrapRefMapper.class);
-    resolver = new DerivedResolver(financeQuery, materialScrapRefMapper);
+    scrapPrices = mock(com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService.class);
+    when(scrapPrices.selectForFormula(any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService.Selection("FIXED",
+            new BigDecimal("60.00"), new com.sanhua.marketingcost.service.pricing.PriceResolveEvidence(
+                1L, "SCRAP", null, null, null, null, null, null, false, null, "{}"), "废料月价"));
+    resolver = new DerivedResolver(financeQuery, materialScrapRefMapper, scrapPrices);
   }
 
   private static PriceVariable var(String code) {
     PriceVariable v = new PriceVariable();
     v.setVariableCode(code);
     v.setFactorType("PART_CONTEXT");
+    v.setTaxMode("EXCL");
     return v;
   }
 
@@ -75,30 +82,36 @@ class DerivedResolverTest {
     MaterialScrapRef ref = new MaterialScrapRef();
     ref.setScrapCode("铜沫");
     ref.setRatio(new BigDecimal("0.92"));
-    when(materialScrapRefMapper.selectOne(any())).thenReturn(ref);
+    when(materialScrapRefMapper.selectList(any())).thenReturn(java.util.List.of(ref));
 
-    // scrap_ref 查到后，先走 shortName 路径 selectOne
-    when(financeQuery.queryName(any(), any())).thenReturn(Optional.of(new BigDecimal("60.00")));
 
     PriceLinkedItem item = new PriceLinkedItem();
     item.setMaterialCode("HPb59-1");
-    VariableContext ctx = new VariableContext().pricingMonth("2026-04").linkedItem(item);
+    item.setBusinessUnitType("COMMERCIAL");
+    item.setOrgCode("220");
+    var reviews = new com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext(171L)
+        .forOrganization("220");
+    var date = java.time.LocalDate.of(2026, 4, 19);
+    VariableContext ctx = new VariableContext().pricingMonth("2026-04").linkedItem(item)
+        .oaNo("CURRENT-OA").quoteDate(date).supplierReviews(reviews);
 
     Optional<BigDecimal> result =
         resolver.resolve(var("scrap_price_incl"), ctx, Map.of("strategy", "SCRAP_REF"), null);
     // 60 × 0.92 = 55.20
     assertThat(result).isPresent();
     assertThat(result.get()).isEqualByComparingTo(new BigDecimal("55.20"));
+    org.mockito.Mockito.verify(scrapPrices).selectForFormula(
+        "COMMERCIAL", "2026-04", "铜沫", "220", "CURRENT-OA", date, false, reviews);
   }
 
   @Test
   @DisplayName("SCRAP_REF：映射表无记录返回 empty")
   void scrapRefMissingMapping() {
-    when(materialScrapRefMapper.selectOne(any())).thenReturn(null);
+    when(materialScrapRefMapper.selectList(any())).thenReturn(java.util.List.of());
 
     PriceLinkedItem item = new PriceLinkedItem();
     item.setMaterialCode("未知部品");
-    VariableContext ctx = new VariableContext().linkedItem(item);
+    VariableContext ctx = new VariableContext().pricingMonth("2026-10").linkedItem(item);
 
     Optional<BigDecimal> result =
         resolver.resolve(var("scrap_price_incl"), ctx, Map.of("strategy", "SCRAP_REF"), null);
@@ -106,23 +119,42 @@ class DerivedResolverTest {
   }
 
   @Test
-  @DisplayName("SCRAP_REF：ratio 为空时按 1 处理（直接返 finance 价）")
+  @DisplayName("SCRAP_REF：ratio 为空时按 1 处理（直接返独立废料价）")
   @SuppressWarnings("unchecked")
   void scrapRefNullRatio() {
     MaterialScrapRef ref = new MaterialScrapRef();
     ref.setScrapCode("铜沫");
     ref.setRatio(null);
-    when(materialScrapRefMapper.selectOne(any())).thenReturn(ref);
+    when(materialScrapRefMapper.selectList(any())).thenReturn(java.util.List.of(ref));
 
-    when(financeQuery.queryName(any(), any())).thenReturn(Optional.of(new BigDecimal("60.00")));
 
     PriceLinkedItem item = new PriceLinkedItem();
     item.setMaterialCode("X");
-    VariableContext ctx = new VariableContext().linkedItem(item);
+    VariableContext ctx = new VariableContext().pricingMonth("2026-10").linkedItem(item);
 
     assertThat(
             resolver.resolve(var("scrap_price_incl"), ctx, Map.of("strategy", "SCRAP_REF"), null))
         .contains(new BigDecimal("60.00"));
+  }
+
+  @Test
+  void declaredInclusiveVariableUsesConfiguredVatOnceAndRejectsAmbiguousMappings() {
+    var ref = new MaterialScrapRef(); ref.setScrapCode("SCRAP");
+    when(materialScrapRefMapper.selectList(any())).thenReturn(java.util.List.of(ref));
+    var item = new PriceLinkedItem(); item.setMaterialCode("RAW");
+    var context = new VariableContext().pricingMonth("2026-10").linkedItem(item);
+    var variable = var("scrap_price_incl"); variable.setTaxMode("INCL");
+    assertThat(resolver.resolve(variable, context, Map.of("strategy", "SCRAP_REF"),
+        code -> Optional.of(new BigDecimal("0.13")))).contains(new BigDecimal("67.8000"));
+    assertThat(context.getPrimitiveInputs().get("scrap_price_incl:taxMultiplier")).isEqualByComparingTo("1.13");
+    assertThat(context.getScrapPriceInputs()).containsKey("scrap_price_incl");
+    assertThatThrownBy(() -> resolver.resolve(variable, context, Map.of("strategy", "SCRAP_REF"), code -> Optional.empty()))
+        .hasMessageContaining("vat_rate");
+    var second = new MaterialScrapRef(); second.setScrapCode("OTHER");
+    when(materialScrapRefMapper.selectList(any())).thenReturn(java.util.List.of(ref, second));
+    assertThatThrownBy(() -> resolver.resolve(variable, context, Map.of("strategy", "SCRAP_REF"), null))
+        .hasMessageContaining("多个有效映射");
+    org.mockito.Mockito.verifyNoInteractions(financeQuery);
   }
 
   @Test

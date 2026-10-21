@@ -274,7 +274,7 @@ class GoldenSampleRegressionTest {
       FactorVariableRegistryImpl registry =
           new FactorVariableRegistryImpl(
               priceVariableMapper, financeQuery, new ObjectMapper(), rowLocal);
-      DerivedResolver derivedResolver = new DerivedResolver(financeQuery, materialScrapRefMapper);
+      DerivedResolver derivedResolver = new DerivedResolver(financeQuery, materialScrapRefMapper, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService.class));
       registry.setDerivedContextResolver(derivedResolver);
 
       // 2026-04 重构：newCalculate 委托给 previewService.previewForRefresh，
@@ -519,9 +519,10 @@ class GoldenSampleRegressionTest {
               "calculateQuoteItemForEnsure",
               PriceLinkedCalcItem.class,
               PriceLinkedItem.class,
-              com.sanhua.marketingcost.entity.OaForm.class);
+              com.sanhua.marketingcost.entity.OaForm.class,
+              com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext.class);
       m.setAccessible(true);
-      return ((PriceLinkedCalcItem) m.invoke(service, new PriceLinkedCalcItem(), item, null))
+      return ((PriceLinkedCalcItem) m.invoke(service, new PriceLinkedCalcItem(), item, null, null))
           .getPartUnitPrice();
     }
   }
@@ -640,7 +641,7 @@ class GoldenSampleRegressionTest {
           new FactorVariableRegistryImpl(
               priceVariableMapper, financeQuery, new ObjectMapper(), rowLocal2);
       DerivedResolver derivedResolver =
-          new DerivedResolver(financeQuery, mock(MaterialScrapRefMapper.class));
+          new DerivedResolver(financeQuery, mock(MaterialScrapRefMapper.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService.class));
       registry.setDerivedContextResolver(derivedResolver);
 
       // 4) mode 注入 —— T27 关键点
@@ -677,10 +678,11 @@ class GoldenSampleRegressionTest {
               "calculateQuoteItemForEnsure",
               PriceLinkedCalcItem.class,
               PriceLinkedItem.class,
-              com.sanhua.marketingcost.entity.OaForm.class);
+              com.sanhua.marketingcost.entity.OaForm.class,
+              com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext.class);
       m.setAccessible(true);
       BigDecimal actual =
-          ((PriceLinkedCalcItem) m.invoke(service, new PriceLinkedCalcItem(), item, null))
+          ((PriceLinkedCalcItem) m.invoke(service, new PriceLinkedCalcItem(), item, null, null))
               .getPartUnitPrice();
 
       assertThat(actual)

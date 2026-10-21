@@ -33,6 +33,7 @@ import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostingWorkbenchSummaryMapper;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionInvalidationService;
+import com.sanhua.marketingcost.service.CostInputRevisionService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkbenchService;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
 import com.sanhua.marketingcost.service.QuoteEffectiveBomCostingService;
@@ -82,6 +83,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   private final QuoteBomStatusService quoteBomStatusService;
   private final QuotePriceTypeRecognitionService priceTypeRecognitionService;
   private final ElectronicDrawingCostingFallbackService electronicDrawingFallbackService;
+  private final CostInputRevisionService inputRevisions;
 
   public QuoteCostingWorkbenchServiceImpl(
       OaFormMapper oaFormMapper,
@@ -97,7 +99,8 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       QuoteCostRunVersionInvalidationService costRunVersionInvalidationService,
       QuoteBomStatusService quoteBomStatusService,
       QuotePriceTypeRecognitionService priceTypeRecognitionService,
-      ElectronicDrawingCostingFallbackService electronicDrawingFallbackService) {
+      ElectronicDrawingCostingFallbackService electronicDrawingFallbackService,
+      CostInputRevisionService inputRevisions) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
@@ -112,6 +115,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     this.quoteBomStatusService = quoteBomStatusService;
     this.priceTypeRecognitionService = priceTypeRecognitionService;
     this.electronicDrawingFallbackService = electronicDrawingFallbackService;
+    this.inputRevisions = inputRevisions;
   }
 
   @Override
@@ -234,8 +238,28 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     response.setLatestPricePrepare(latestPricePrepare);
     response.setLatestCostRun(latestCostRun);
     response.setBomRows(toBomRows(rows));
+    reflectChangedInputs(form, item, periodMonth, workspace, response);
     response.setTabs(tabs(workflowStatus));
     return response;
+  }
+
+  /** 读取时核对当前修订，只投影待重算状态；已确认版本和工作区原记录保持不变。 */
+  private void reflectChangedInputs(OaForm form, OaFormItem item, String month,
+      QuoteCostingWorkspace workspace, QuoteCostingWorkbenchResponse response) {
+    if (workspace == null) return;
+    String captured = firstText(workspace.getLastSuccessSourceRevision(), workspace.getSourceRevision());
+    if (!StringUtils.hasText(captured)
+        || captured.equals(inputRevisions.currentRevision(form, item, month))) return;
+    var view = response.getCostingWorkspace();
+    view.setInputChanged(true);
+    view.setAttentionCode("INPUT_CHANGED");
+    view.setStaleReasonCode("SOURCE_CHANGED");
+    view.setWorkspaceStatus(TAB_STALE);
+    var workflow = response.getWorkflowStatus();
+    workflow.setPricePrepareStatus(TAB_STALE);
+    workflow.setCostRunStatus(TAB_BLOCKED);
+    workflow.setOverallStatus(TAB_STALE);
+    workflow.setCurrentBlockedStep("PRICE_PREPARE");
   }
 
   private QuotePricePrepareSummaryResponse currentPricePrepare(

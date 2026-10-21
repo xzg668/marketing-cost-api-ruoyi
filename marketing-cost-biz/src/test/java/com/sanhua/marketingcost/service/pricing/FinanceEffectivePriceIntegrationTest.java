@@ -44,7 +44,8 @@ class FinanceEffectivePriceIntegrationTest {
           "V309__finance_factor_publication_note.sql",
           "V311__original_linked_expression_capacity.sql",
           "V325__finance_effective_price.sql",
-          "V326__original_workbook_source.sql");
+          "V326__original_workbook_source.sql",
+          "V330__scrap_price_monthly.sql");
   static SqlSessionTemplate sql;
   static DataSourceTransactionManager manager;
   static JdbcTemplate jdbc;
@@ -87,6 +88,7 @@ class FinanceEffectivePriceIntegrationTest {
         new Environment("effective", new SpringManagedTransactionFactory(), data));
     for (var mapper :
         List.of(
+            com.sanhua.marketingcost.mapper.ScrapPriceMapper.class,
             FactorIdentityMapper.class,
             FactorMonthlyPriceMapper.class,
             FactorUploadBatchMapper.class,
@@ -142,7 +144,8 @@ class FinanceEffectivePriceIntegrationTest {
             sources,
             json,
             manager,
-            mock(FinanceEffectivePriceService.class));
+            mock(FinanceEffectivePriceService.class),
+            com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.service(sql, manager, json));
     snapshots = new OriginalLinkedRuleSnapshot(json);
     calculator =
         mock(
@@ -1050,7 +1053,8 @@ class FinanceEffectivePriceIntegrationTest {
             sql.getMapper(FactorRowRefMapper.class),
             json,
             manager,
-            service);
+            service,
+            com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.service(sql, manager, json));
   }
 
   OriginalLinkedImportService linkedImporter(FinanceEffectivePriceService generation) {

@@ -55,6 +55,7 @@ public class TechnicalDataTaskApplicationServiceImpl
   private final com.sanhua.marketingcost.integration.oa.OaMessageCodec messageCodec;
   private final TechnicalDataRequirementRefreshService requirementRefresh;
   private final TechnicalDataPendingProductQuery pendingProducts;
+  private final TechnicalDataPlateMaterialProfile plateMaterials;
 
   public TechnicalDataTaskApplicationServiceImpl(
       TechnicalDataTaskRepository repository,
@@ -66,7 +67,8 @@ public class TechnicalDataTaskApplicationServiceImpl
       TechnicalDataVersionContentCodec contentCodec, TechnicalDataOaDispatchService oaDispatch,
       com.sanhua.marketingcost.integration.oa.OaMessageCodec messageCodec,
       TechnicalDataRequirementRefreshService requirementRefresh, TechnicalDataPendingProductQuery pendingProducts,
-      TechnicalDataReadPolicy readPolicy) {
+      TechnicalDataReadPolicy readPolicy, TechnicalDataPlateMaterialProfile plateMaterials) {
+    this.plateMaterials = plateMaterials;
     this.readPolicy=readPolicy;
     this.pendingProducts = pendingProducts;
     this.repository = repository;
@@ -431,9 +433,18 @@ public class TechnicalDataTaskApplicationServiceImpl
       com.sanhua.marketingcost.entity.QuoteTechSubmission submission) {
     Set<String> submittedTypes=new java.util.HashSet<>();
     if (submission!=null) messageCodec.read(submission.getModuleTypesJson()).forEach(node -> submittedTypes.add(node.asText()));
+    var modulesByProduct = repository.findModules(products.stream().map(QuoteTechProduct::getId).toList())
+        .stream().collect(Collectors.groupingBy(QuoteTechModule::getProductId));
+    var editableProfiles = products.stream().filter(product -> submission == null
+        && Integer.valueOf(2).equals(product.getContentSchemaVersion())
+        && modulesByProduct.getOrDefault(product.getId(), List.of()).stream().anyMatch(module ->
+            "PROFILE".equals(module.getModuleType()) && Integer.valueOf(1).equals(module.getRequiredFlag())
+                && readPolicy.ownsDraft(module, actor)
+                && !Set.of("FROZEN", "SUBMITTED", "APPROVED").contains(module.getModuleStatus()))).toList();
+    var plateDecisions = plateMaterials.current(editableProfiles);
     Map<Long,TechnicalDataProductResponse> result=new LinkedHashMap<>();
     for (var product:products) {
-      var modules=repository.findModules(product.getId()).stream()
+      var modules=modulesByProduct.getOrDefault(product.getId(), List.of()).stream()
           .filter(module -> submission==null || submittedTypes.contains(module.getModuleType())).toList();
       Map<String,QuoteTechDataVersion> visible=new LinkedHashMap<>();
       for (var module:modules) {
@@ -453,7 +464,7 @@ public class TechnicalDataTaskApplicationServiceImpl
           contentCodec.productFees(profileVersion),contentCodec.drawingBom(visible.get("DRAWING_BOM")),
           contentCodec.manufacturing(visible.get("MANUFACTURING")),contentCodec.packaging(visible.get("PACKAGE")),
           contentCodec.solder(visible.get("SOLDER")),contentCodec.netLoss(visible.get("NET_LOSS")),
-          contentCodec.prices(visible.get("PRICE")),null);
+          contentCodec.prices(visible.get("PRICE")),null,contentCodec.plateMaterial(profileVersion));
       boolean ownDraft=submission==null && modules.stream().anyMatch(module -> readPolicy.ownsDraft(module,actor));
       String state=ownDraft?product.getProductStatus():visible.isEmpty()?"PENDING":"SUBMITTED";
       Long latest=visible.values().stream().filter(version -> !"DRAFT".equals(version.getVersionStatus()))
@@ -463,7 +474,7 @@ public class TechnicalDataTaskApplicationServiceImpl
           product.getSourceModel(),product.getSourceSpec(),source.annualVolume(),source.annualVolumeUnit(),
           product.getQuoteNo(),product.getAccountingMonth(),product.getSourceSnapshotJson(),product.getSourceFingerprint(),
           state,ownDraft?product.getCurrentEditVersionId():null,latest,product.getEffectiveVersionId(),
-          product.getRowVersion(),profile(product,profileVersion),modules.stream().sorted(Comparator.comparingInt(
+          product.getRowVersion(),profile(product,profileVersion,plateDecisions.get(product.getId())),modules.stream().sorted(Comparator.comparingInt(
               module -> TechnicalDataModuleType.orderOf(module.getModuleType()))).map(this::module).toList(),
           product.getContentSchemaVersion(),supplements));
     }
@@ -490,7 +501,8 @@ public class TechnicalDataTaskApplicationServiceImpl
   }
 
   private TechnicalDataProfileResponse profile(
-      QuoteTechProduct product, QuoteTechDataVersion version) {
+      QuoteTechProduct product, QuoteTechDataVersion version,
+      com.sanhua.marketingcost.service.platematerial.PlateMaterialResolver.Decision plateDecision) {
     var source = snapshotFactory.readProfile(product.getSourceSnapshotJson());
     var fees = contentCodec.productFees(version);
     return new TechnicalDataProfileResponse(
@@ -502,7 +514,7 @@ public class TechnicalDataTaskApplicationServiceImpl
         fees == null ? null : TechnicalDataProductFeeRules.display(fees.unitMouldFee()),
         fees == null ? null : TechnicalDataProductFeeRules.display(fees.unitCertificationFee()),
         product.getRowVersion(), version == null ? null : version.getRowVersion(),
-        version == null ? product.getUpdatedAt() : version.getUpdatedAt());
+        version == null ? product.getUpdatedAt() : version.getUpdatedAt(), plateMaterials.view(version, plateDecision));
   }
 
   private TechnicalDataModuleResponse module(QuoteTechModule module) {

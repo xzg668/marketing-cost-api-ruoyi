@@ -27,8 +27,6 @@ class TransactionalAnnotationTest {
           new MethodRef(ManufactureRateServiceImpl.class, "importItems"),
           new MethodRef(DepartmentFundRateServiceImpl.class, "importItems"),
           new MethodRef(ThreeExpenseRateServiceImpl.class, "importItems"),
-          new MethodRef(PriceSettleServiceImpl.class, "delete"),
-          new MethodRef(PriceSettleServiceImpl.class, "importSettle"),
           new MethodRef(FinancePricePrepareServiceImpl.class, "generateFromOa"));
 
   @Test

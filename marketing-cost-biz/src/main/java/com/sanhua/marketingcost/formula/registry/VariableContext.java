@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.formula.registry;
 
 import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.PriceLinkedItem;
+import com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.HashMap;
@@ -41,9 +42,24 @@ public class VariableContext {
   private PriceContextType priceContextType = PriceContextType.DAILY_QUOTE;
   private OaForm oaForm;
   private PriceLinkedItem linkedItem;
+  private SupplierPriceReviewContext supplierReviews;
+
+  public SupplierPriceReviewContext getSupplierReviews() {
+    return supplierReviews;
+  }
+
+  public VariableContext supplierReviews(SupplierPriceReviewContext value) {
+    supplierReviews = value;
+    return this;
+  }
   private final Map<String, BigDecimal> primitiveInputs = new java.util.LinkedHashMap<>();
   private final Map<String, Object> usedDefinitions = new java.util.LinkedHashMap<>();
   private final java.util.Set<String> usedFinanceKeys = new java.util.LinkedHashSet<>();
+  private final Map<String, String> scrapPriceInputs = new java.util.LinkedHashMap<>();
+
+  public Map<String, String> getScrapPriceInputs() {
+    return scrapPriceInputs;
+  }
 
   public Map<String, BigDecimal> getPrimitiveInputs() {
     return primitiveInputs;

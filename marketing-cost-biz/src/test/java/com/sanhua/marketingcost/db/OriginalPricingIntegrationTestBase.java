@@ -9,12 +9,20 @@ public abstract class OriginalPricingIntegrationTestBase extends BomMapperTestBa
   static {
     for (String script :
         List.of(
+            "V51__add_unique_keys_to_high_risk_tables.sql",
             "V52__price_linked_calc_item_precision_6.sql",
+            "V56__cost_run_cost_item_add_remark.sql",
+            "V171__cost_run_cost_item_remark_text.sql",
             "V83__factor_monthly_price_adjust_columns_repair.sql",
             "V89__supplier_supply_ratio_schema.sql",
             "V152__supplier_supply_ratio_dedupe_key.sql",
+            "V155__make_part_no_scrap_calc_row_fields.sql",
             "V177__market_factor_range_price_schema.sql",
+            "V186__make_part_child_net_weight.sql",
             "V226__linked_price_import_version_selection.sql",
+            "V233__u9_monthly_first_query_snapshot.sql",
+            "V240__replace_product_property_with_business_import_rules.sql",
+            "V293__quote_bom_monthly_snapshot_detail.sql",
             "V304__supplier_supply_ratio_active_batches.sql",
             "V305__supplier_supply_ratio_nullable_value.sql",
             "V306__supplier_price_decision.sql",
@@ -30,10 +38,13 @@ public abstract class OriginalPricingIntegrationTestBase extends BomMapperTestBa
             "V318__technical_factor_source_reference.sql",
             "V320__technical_calculation_input_versions.sql",
             "V321__retire_factor_adjustment.sql",
+            "V323__monthly_material_price_priority.sql",
             "V325__finance_effective_price.sql",
             "V326__original_workbook_source.sql",
             "V328__quote_linked_result_input_versions.sql",
-            "V329__quote_cost_version_sequence.sql")) {
+            "V329__quote_cost_version_sequence.sql",
+            "V330__scrap_price_monthly.sql",
+            "V332__settlement_price_versions.sql")) {
       try {
         MYSQL.copyFileToContainer(
             MountableFile.forClasspathResource("db/" + script), "/tmp/" + script);
@@ -42,6 +53,8 @@ public abstract class OriginalPricingIntegrationTestBase extends BomMapperTestBa
                 "sh",
                 "-c",
                 "MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot --default-character-set=utf8mb4"
+                    // 仅 Testcontainers 初始演示种子；不对业务库开放旧顺序重置。
+                    + (script.startsWith("V323__") ? " --init-command='SET @allow_material_price_type_reset=1'" : "")
                     + " marketing_cost < /tmp/"
                     + script);
         if (result.getExitCode() != 0)

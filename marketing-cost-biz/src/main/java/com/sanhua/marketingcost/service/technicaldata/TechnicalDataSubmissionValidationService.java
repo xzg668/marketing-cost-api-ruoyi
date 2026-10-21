@@ -32,13 +32,16 @@ public class TechnicalDataSubmissionValidationService {
   private final TechnicalDataSalaryApplicationService salary;
   private final TechnicalDataNetLossApplicationService netLoss;
   private final TechnicalDataPriceApplicationService prices;
+  private final TechnicalDataPlateMaterialProfile plateMaterials;
 
   public TechnicalDataSubmissionValidationService(QuoteTechnicalDataRepository repository,
       TechnicalDataTaskRepository taskRepository, TechnicalDataVersionContentCodec codec, TechnicalDataDependencies dependencies,
       TechnicalDataManufacturingApplicationService manufacturing, TechnicalDataPackageApplicationService packaging,
       TechnicalDataAuxiliaryApplicationService auxiliary, TechnicalDataSolderApplicationService solder,
       TechnicalDataSalaryApplicationService salary, TechnicalDataNetLossApplicationService netLoss, TechnicalDataPriceApplicationService prices,
-      com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository recipients) {
+      com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository recipients,
+      TechnicalDataPlateMaterialProfile plateMaterials) {
+    this.plateMaterials = plateMaterials;
     this.recipients = recipients;
     this.repository = repository; this.taskRepository = taskRepository; this.codec = codec;
     this.dependencies = dependencies;
@@ -192,6 +195,11 @@ public class TechnicalDataSubmissionValidationService {
     }
     for (var issue : TechnicalDataProductFeeRules.validate(codec.productFees(version))) {
       add(issues, product, "PROFILE", issue.field(), null, "FIELD_INVALID", issue.message(), anchor(product, "PROFILE"));
+    }
+    if (!frozen) {
+      for (String message : plateMaterials.validateCurrent(product, version)) {
+        add(issues, product, "PROFILE", "plateMaterial", null, "PLATE_MATERIAL_INVALID", message, anchor(product, "PROFILE"));
+      }
     }
     return issues.size() == before;
   }

@@ -15,6 +15,7 @@ import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
 import com.sanhua.marketingcost.service.pricing.PriceResolveResult;
 import com.sanhua.marketingcost.service.pricing.PriceResolver;
+import com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -33,11 +34,13 @@ public class MakePartMaterialPriceResolveServiceImpl
   private final MaterialPriceRouterService materialPriceRouterService;
   private final Map<PriceTypeEnum, PriceResolver> resolverMap;
   private final LinkedPriceEnsureService linkedPriceEnsureService;
+  private final ScrapPriceSelectionService scrapPrices;
 
   public MakePartMaterialPriceResolveServiceImpl(
       MaterialPriceRouterService materialPriceRouterService,
       List<PriceResolver> priceResolvers,
-      LinkedPriceEnsureService linkedPriceEnsureService) {
+      LinkedPriceEnsureService linkedPriceEnsureService,
+      ScrapPriceSelectionService scrapPrices) {
     this.materialPriceRouterService = materialPriceRouterService;
     Map<PriceTypeEnum, PriceResolver> map = new EnumMap<>(PriceTypeEnum.class);
     for (PriceResolver resolver : priceResolvers) {
@@ -45,6 +48,7 @@ public class MakePartMaterialPriceResolveServiceImpl
     }
     this.resolverMap = Map.copyOf(map);
     this.linkedPriceEnsureService = linkedPriceEnsureService;
+    this.scrapPrices = scrapPrices;
   }
 
   /** Resolve raw material and scrap prices using the complete request scope. */
@@ -56,7 +60,8 @@ public class MakePartMaterialPriceResolveServiceImpl
       LocalDateTime priceAsOfTime,
       String oaNo,
       String businessUnitType,
-      PricePrepareScenarioContext scenarioContext) {
+      PricePrepareScenarioContext scenarioContext,
+      Purpose purpose) {
     return execute(
         materialCode,
         period,
@@ -65,7 +70,8 @@ public class MakePartMaterialPriceResolveServiceImpl
         oaNo,
         businessUnitType,
         scenarioContext,
-        true);
+        true,
+        purpose);
   }
 
   @Override
@@ -76,7 +82,8 @@ public class MakePartMaterialPriceResolveServiceImpl
       LocalDateTime priceAsOfTime,
       String oaNo,
       String businessUnitType,
-      PricePrepareScenarioContext scenarioContext) {
+      PricePrepareScenarioContext scenarioContext,
+      Purpose purpose) {
     return execute(
         materialCode,
         period,
@@ -85,7 +92,8 @@ public class MakePartMaterialPriceResolveServiceImpl
         oaNo,
         businessUnitType,
         scenarioContext,
-        false);
+        false,
+        purpose);
   }
 
   private MakePartMaterialPriceResolveResult execute(
@@ -96,7 +104,8 @@ public class MakePartMaterialPriceResolveServiceImpl
       String oaNo,
       String businessUnitType,
       PricePrepareScenarioContext scenarioContext,
-      boolean persistLinkedPrice) {
+      boolean persistLinkedPrice,
+      Purpose purpose) {
     String code = trimToNull(materialCode);
     if (code == null) {
       return MakePartMaterialPriceResolveResult.miss(
@@ -105,6 +114,34 @@ public class MakePartMaterialPriceResolveServiceImpl
     String priceOrgCode = scenarioContext == null ? null : scenarioContext.supplierReviews().priceOrgCode();
     if (!StringUtils.hasText(priceOrgCode)) {
       throw new IllegalArgumentException("制造件材料取价缺少取价组织");
+    }
+    try {
+      var scrap =
+          scrapPrices.select(
+              businessUnitType,
+              period,
+              code,
+              priceOrgCode,
+              oaNo,
+              quoteDate,
+              scenarioContext,
+              persistLinkedPrice,
+              purpose == Purpose.SCRAP);
+      if (scrap.isPresent()) {
+        var selected = scrap.get();
+        var result =
+            MakePartMaterialPriceResolveResult.ok(
+                code,
+                selected.priceType(),
+                selected.unitPrice(),
+                selected.message(),
+                "SCRAP_PRICE");
+        result.setEvidence(selected.evidence());
+        return result;
+      }
+    } catch (IllegalArgumentException failure) {
+      return MakePartMaterialPriceResolveResult.miss(
+          code, "MISSING_PRICE", failure.getMessage(), "SCRAP_PRICE");
     }
     List<PriceTypeRoute> candidates = persistLinkedPrice
         ? materialPriceRouterService.prepareCandidates(code, null, trimToNull(period), quoteDate,
@@ -141,9 +178,7 @@ public class MakePartMaterialPriceResolveServiceImpl
         lastMissReason = "价格类型无 Resolver(price_type=" + priceTypeText + ")";
         continue;
       }
-      if (route.priceType() == PriceTypeEnum.LINKED
-          && !route.supplemental()
-          && !linkedPriceEnsured) {
+      if (route.ordinaryLinked() && !linkedPriceEnsured) {
         if (persistLinkedPrice) {
           var preparationFailure =
               ensureLinkedPrice(code, period, oaNo, businessUnitType, context, scenarioContext);
@@ -193,9 +228,7 @@ public class MakePartMaterialPriceResolveServiceImpl
         }
         linkedPriceEnsured = true;
       }
-      if (!persistLinkedPrice
-          && route.priceType() == PriceTypeEnum.LINKED
-          && !route.supplemental()) {
+      if (!persistLinkedPrice && route.ordinaryLinked()) {
         continue;
       }
       PriceResolveResult resolved = resolver.resolve(oaNo, item, route, context);
@@ -211,8 +244,11 @@ public class MakePartMaterialPriceResolveServiceImpl
         return result;
       }
       if (resolved.hasBlockingFailure()) {
-        return MakePartMaterialPriceResolveResult.miss(
+        var failure = MakePartMaterialPriceResolveResult.miss(
             code, "ERROR", resolved.remark(), String.join(" -> ", traceParts));
+        failure.setPriceType(priceTypeText);
+        failure.setEvidence(resolved.evidence().withPriority(route));
+        return failure;
       }
       if (StringUtils.hasText(resolved.remark())) {
         lastMissReason = resolved.remark();

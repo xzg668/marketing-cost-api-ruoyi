@@ -43,6 +43,7 @@ public class FinanceFactorPublicationService {
   private final TransactionTemplate transaction;
   private final com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService
       effectivePrices;
+  private final com.sanhua.marketingcost.service.scrap.ScrapPriceGenerationService scrapPrices;
 
   public FinanceFactorPublicationService(
       FinanceFactorWorkbookParser parser,
@@ -53,7 +54,8 @@ public class FinanceFactorPublicationService {
       FactorRowRefMapper sources,
       ObjectMapper json,
       PlatformTransactionManager transactions,
-      com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService effectivePrices) {
+      com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService effectivePrices,
+      com.sanhua.marketingcost.service.scrap.ScrapPriceGenerationService scrapPrices) {
     this.parser = parser;
     this.canonicalKeys = canonicalKeys;
     this.identities = identities;
@@ -63,6 +65,7 @@ public class FinanceFactorPublicationService {
     this.json = json;
     this.transaction = new TransactionTemplate(transactions);
     this.effectivePrices = effectivePrices;
+    this.scrapPrices = scrapPrices;
   }
 
   public FinanceFactorImportPreview preview(
@@ -136,12 +139,13 @@ public class FinanceFactorPublicationService {
                         previous.getPublicationRevision(),
                         true,
                         previous.getFactorRowCount()),
-                    context);
+                    context,
+                    operator.trim());
               }
               if (!checked.previewFingerprint().equals(previewFingerprint)) {
                 throw new IllegalArgumentException("文件、默认方案或有效财务版本已变化，请重新预检后发布");
               }
-              return complete(save(checked, catalog, operator.trim()), context);
+              return complete(save(checked, catalog, operator.trim()), context, operator.trim());
             });
       } catch (PessimisticLockingFailureException conflict) {
         if (attempt == 2) throw conflict;
@@ -163,9 +167,12 @@ public class FinanceFactorPublicationService {
             .last("LIMIT 1"));
   }
 
-  private Publication complete(Publication publication, FinanceFactorImportContext context) {
+  private Publication complete(
+      Publication publication, FinanceFactorImportContext context, String operator) {
     var generated =
         effectivePrices.generateScope(context.businessUnitType(), context.priceOrgCode());
+    if ("210".equals(context.priceOrgCode()))
+      scrapPrices.refreshInTransaction(context.businessUnitType(), context.priceMonth(), operator);
     return new Publication(
         publication.batchId(),
         publication.revision(),

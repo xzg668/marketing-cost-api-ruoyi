@@ -26,6 +26,9 @@ import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
 import com.sanhua.marketingcost.mapper.PriceRangeItemMapper;
 import com.sanhua.marketingcost.service.CostRunTraceSnapshotBuilder;
+import com.sanhua.marketingcost.service.scrap.ScrapPriceCalculationEvidence;
+import com.sanhua.marketingcost.service.settlement.SettlementCalculationEvidence;
+import com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceReader;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
@@ -187,7 +190,9 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
 
   private void freezeRollupComponents(CostRunTraceSnapshot snapshot, List<RollupPartComponentDto> components) {
     try {
-      ObjectNode source = (ObjectNode) objectMapper.readTree(snapshot.getSourceSnapshotJson());
+      ObjectNode source = (ObjectNode) objectMapper.reader()
+          .with(com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+          .readTree(snapshot.getSourceSnapshotJson());
       source.set("rollupDisplayComponents", objectMapper.valueToTree(components));
       // 重算会重建 BOM 子件引用；展示所用数量、成本分项及来源必须随本次底稿保留。
       snapshot.setSourceSnapshotJson(objectMapper.writeValueAsString(source));
@@ -233,7 +238,54 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     snapshot.setQuantity(part.getQty());
     snapshot.setAmount(part.getAmount());
     snapshot.setSummary(partSummary(part, prepareItem));
-    if (SOURCE_TYPE_LINKED_PRICE.equals(sourceType)) {
+    if (SettlementPriceReader.RESULT_REF_TYPE.equals(sourceType)) {
+      var captured = new SettlementCalculationEvidence(objectMapper).read(prepareItem);
+      if (!Objects.equals(part.getPartCode(), prepareItem.getMaterialCode())
+          || !Objects.equals(version.getPricingMonth(), prepareItem.getPeriodMonth())
+          || !Objects.equals(version.getBusinessUnitType(), prepareItem.getBusinessUnitType()))
+        throw new IllegalStateException("结算底稿与成本版本范围不一致");
+      // 原稿及原单元格可能较长；完整来源不能走展示摘要的截断逻辑。
+      snapshot.setSourceSnapshotJson(captured.toString());
+      var rule = captured.path("rule");
+      snapshot.setFormulaSnapshotJson(json(mapOf(
+          "mode", captured.path("mode"), "formulaVersion", rule.path("formulaVersion"),
+          "formula", rule.path("expression"), "sourceFormula", rule.path("sourceFormula"),
+          "unitBasis", rule.path("unitBasis"), "materialUnit", rule.path("materialUnit"))));
+      snapshot.setVariablesJson(json(mapOf("rule", rule, "base", captured.path("base"),
+          "accountingMonth", captured.path("accountingMonth"))));
+      snapshot.setStepsJson(json(List.of(mapOf(
+          "step", "结算单价乘以 BOM 用量", "mode", captured.path("mode"),
+          "calculatedUnitPrice", captured.path("unitPrice"), "unitPrice", part.getUnitPrice(),
+          "quantity", part.getQty(), "amount", part.getAmount()))));
+    } else if (ScrapPriceCalculationEvidence.SOURCE.equals(sourceType)) {
+      var captured =
+          new ScrapPriceCalculationEvidence(objectMapper).read(prepareItem.getInputSnapshotJson());
+      snapshot.setSourceSnapshotJson(json(captured));
+      snapshot.setFormulaSnapshotJson(
+          json(
+              mapOf(
+                  "formula",
+                  captured.rule().expression(),
+                  "fixedPrice",
+                  captured.rule().fixedPrice(),
+                  "displayFormula",
+                  captured.rule().sourceFormula(),
+                  "unitNote",
+                  "单价为不含税元/kg")));
+      snapshot.setVariablesJson(json(captured.inputs()));
+      snapshot.setStepsJson(
+          json(
+              List.of(
+                  mapOf(
+                      "step",
+                      "按废料规则取价",
+                      "unitPrice",
+                      captured.unitPrice(),
+                      "quantity",
+                      part.getQty(),
+                      "amount",
+                      part.getAmount()))));
+    } else if (SOURCE_TYPE_LINKED_PRICE.equals(sourceType)) {
       PriceLinkedCalcItem linkedCalc = loadLinkedCalc(version, part, prepareItem);
       PriceLinkedItem linkedItem = loadLinkedItem(version, part, prepareItem, linkedCalc);
       Map<String, Object> trace = linkedTraceMap(linkedCalc);
@@ -270,7 +322,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
       snapshot.setFormulaSnapshotJson(json(makePartAggregateFormula(part)));
       snapshot.setVariablesJson(json(makePartAggregateVariables(part, prepareItem, rows)));
       snapshot.setStepsJson(json(makePartAggregateSteps(part, rows)));
-      snapshot.setChildrenJson(json(makePartChildren(rows, part.getPricePrepareItemId())));
+      snapshot.setChildrenJson(objectMapper.valueToTree(makePartChildren(rows, part.getPricePrepareItemId())).toString());
     } else {
       snapshot.setSourceSnapshotJson(json(partSourceSnapshot(part, prepareItem)));
       snapshot.setFormulaSnapshotJson(json(partFormula(part)));
@@ -278,9 +330,19 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
       snapshot.setStepsJson(json(partSteps(part)));
     }
     if (SOURCE_TYPE_PACKAGE_COMPONENT.equals(sourceType)) {
-      snapshot.setChildrenJson(json(List.of(pendingDetail(
-          "T5 后续按包装组件来源补充子件或公式明细",
-          part.getPricePrepareItemId()))));
+      var captured = prepareItem == null ? null : new PackageCalculationEvidence(objectMapper).trace(prepareItem);
+      if (captured != null) {
+        snapshot.setSourceSnapshotJson(captured.toString());
+        snapshot.setChildrenJson(captured.path("components").toString());
+        snapshot.setFormulaSnapshotJson(json(mapOf("formula",
+            "包装单价 = Σ(子件单价 × 子件用量 ÷ 子件母件基数) ÷ 包装母件基数",
+            "amountFormula", "包装金额 = 包装单价 × BOM 用量")));
+        snapshot.setVariablesJson(json(mapOf("parentBaseQty", captured.path("parentBaseQty"),
+            "unitPrice", part.getUnitPrice(), "quantity", part.getQty(), "amount", part.getAmount())));
+      } else {
+        snapshot.setChildrenJson(json(List.of(pendingDetail(
+            "旧包装结果未保存子件计算依据", part.getPricePrepareItemId()))));
+      }
     }
     return snapshot;
   }
@@ -343,6 +405,11 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
   }
 
   private String partSourceType(CostRunPartItem part, PricePrepareItem prepareItem) {
+    if (prepareItem != null && SettlementPriceReader.RESULT_REF_TYPE.equals(prepareItem.getResultRefType()))
+      return SettlementPriceReader.RESULT_REF_TYPE;
+    if (prepareItem != null
+        && ScrapPriceCalculationEvidence.SOURCE.equals(prepareItem.getResultRefType()))
+      return ScrapPriceCalculationEvidence.SOURCE;
     String raw =
         firstText(
             prepareItem == null ? null : prepareItem.getPriceSource(),
@@ -472,24 +539,26 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
       CostRunPartItem part,
       PricePrepareItem prepareItem,
       String sourceType) {
+    boolean legacySettlement = SOURCE_TYPE_SETTLE_FIXED_PRICE.equals(sourceType);
     if (prepareItem != null && prepareItem.getResultRefId() != null) {
       PriceFixedItem row = priceFixedItemMapper.selectById(prepareItem.getResultRefId());
-      if (row != null) {
+      if (row != null && (!legacySettlement || ("SETTLE_FIXED".equals(row.getSourceType()) || "SETTLE".equals(row.getSourceType())))) {
         return row;
       }
     }
+    // 旧结算只解释已经捕获的来源ID；无引用时保留底稿原金额，不按料号猜测旧来源。
+    if (legacySettlement) return null;
     String materialCode =
         firstText(part.getPartCode(), prepareItem == null ? null : prepareItem.getMaterialCode());
     if (materialCode == null) {
       return null;
     }
-    boolean settle = SOURCE_TYPE_SETTLE_FIXED_PRICE.equals(sourceType);
     LambdaQueryWrapper<PriceFixedItem> query =
         Wrappers.lambdaQuery(PriceFixedItem.class).eq(PriceFixedItem::getSourceKind, "PUBLIC")
             .eq(PriceFixedItem::getMaterialCode, materialCode)
             .in(
                 PriceFixedItem::getSourceType,
-                settle ? List.of("SETTLE_FIXED", "SETTLE") : List.of("PURCHASE_FIXED", "PURCHASE"))
+                List.of("PURCHASE_FIXED", "PURCHASE"))
             .isNotNull(PriceFixedItem::getFixedPrice);
     LocalDate priceDate = priceDate(version, prepareItem);
     if (priceDate != null) {
@@ -1195,7 +1264,9 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
 
   private Map<String, Object> makePartAggregateFormula(CostRunPartItem part) {
     return mapOf(
-        "formula", "partAmount = makePartFinalUnitPrice * bomQuantity; makePartFinalUnitPrice = sum(makePartRow.costPrice)",
+        "formula",
+            "partAmount = makePartFinalUnitPrice * bomQuantity; makePartFinalUnitPrice ="
+                + " sum(makePartRow.costPrice)",
         "displayFormula", "部品价格 = 自制件最终单价 × BOM 用量；自制件最终单价 = Σ 制造件生成明细行成本",
         "amountFormula", "amount = unitPrice * quantity",
         "finalUnitPriceFormula", "unitPrice = sum(children.costPrice)",
@@ -1270,6 +1341,8 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
 
   private List<MakePartPriceCalcRow> loadMakePartCalcRows(
       QuoteCostRunVersion version, CostRunPartItem part, PricePrepareItem prepareItem) {
+    var captured = new MakePartCalculationEvidence(objectMapper).rows(prepareItem);
+    if (captured != null) return captured;
     MakePartPriceCalcRow anchor = null;
     if (prepareItem != null && prepareItem.getResultRefId() != null) {
       anchor = makePartPriceCalcRowMapper.selectById(prepareItem.getResultRefId());
@@ -1362,6 +1435,8 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     payload.put("rawSourcePriceBatchNo", row.getRawSourcePriceBatchNo());
     payload.put("scrapSourcePriceRecordId", row.getScrapSourcePriceRecordId());
     payload.put("scrapSourcePriceBatchNo", row.getScrapSourcePriceBatchNo());
+    payload.put("rawInputSnapshotJson", row.getRawInputSnapshotJson());
+    payload.put("scrapInputSnapshotJson", row.getScrapInputSnapshotJson());
     payload.put("calcBatchId", row.getCalcBatchId());
     payload.put("oaNo", row.getOaNo());
     payload.put("pricingMonth", row.getPricingMonth());
@@ -1406,9 +1481,12 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     }
     return mapOf(
         "formula",
-        "(grossWeightG / 1000) * rawUnitPrice - ((grossWeightG - netWeightG) / 1000) * scrapUnitPrice",
-        "displayFormula", "明细行成本 = 毛重(kg) × 原材料价 - 废料重(kg) × 废料价",
-        "unitNote", "重量字段为 g，参与元/kg 价格计算前除以 1000");
+        "(grossWeightG / 1000) * rawUnitPrice - ((grossWeightG - netWeightG) / 1000) *"
+            + " scrapUnitPrice",
+        "displayFormula",
+        "明细行成本 = 毛重(kg) × 原材料价 - 废料重(kg) × 废料价",
+        "unitNote",
+        "重量字段为 g，参与元/kg 价格计算前除以 1000");
   }
 
   private Map<String, Object> makePartVariables(MakePartPriceCalcRow row) {

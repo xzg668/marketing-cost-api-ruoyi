@@ -332,7 +332,7 @@ class TechnicalPriceCorrectionIntegrationTest extends OriginalPricingIntegration
             LocalDateTime.of(2027, 12, 1, 12, 0),
             key,
             "COMMERCIAL",
-            null);
+            null, com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.MATERIAL);
     assertThat(future.getStatus()).withFailMessage(future.getRemark()).isEqualTo("OK");
     assertThat(future.getUnitPrice()).isPositive();
     assertThat(repository.findVersion(versionId).orElseThrow().getPriceItemsJson())

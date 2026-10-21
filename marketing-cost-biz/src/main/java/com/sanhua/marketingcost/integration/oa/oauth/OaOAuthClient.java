@@ -1,5 +1,7 @@
 package com.sanhua.marketingcost.integration.oa.oauth;
 
+import com.sanhua.marketingcost.integration.logging.ExternalHttpExchange;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.integration.oa.OaInterfaceLog;
@@ -65,7 +67,7 @@ public class OaOAuthClient {
         var request = HttpRequest.newBuilder(URI.create(base() + PREFIX + operation + "?" + query))
             .timeout(Duration.ofMillis(properties.getReadTimeoutMs())).header("Accept", "application/json")
             .POST(HttpRequest.BodyPublishers.noBody()).build();
-        var response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        var response = ExternalHttpExchange.sendJson("OA_OAUTH", http, request, null);
         if (response.statusCode() != 200) {
           call.result("REJECTED", response.statusCode(), "HTTP_ERROR");
           throw new OaOAuthException("HTTP_ERROR", "OA 免登接口请求失败，请重新进入或联系管理员");

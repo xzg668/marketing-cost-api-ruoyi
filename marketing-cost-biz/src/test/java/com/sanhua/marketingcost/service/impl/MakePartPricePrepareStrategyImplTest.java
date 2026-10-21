@@ -19,7 +19,8 @@ import org.junit.jupiter.params.provider.CsvSource;
 
 class MakePartPricePrepareStrategyImplTest {
   final MakePartPriceGenerationService generation = mock(MakePartPriceGenerationService.class);
-  final MakePartPricePrepareStrategyImpl service = new MakePartPricePrepareStrategyImpl(generation);
+  final MakePartPricePrepareStrategyImpl service = new MakePartPricePrepareStrategyImpl(generation,
+      new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules());
 
   @Test void usesExactNodeResultAndMultipliesQuantityOnce() {
     var item = item(); var ready = row("OK", "RAW", "SCRAP");
@@ -79,6 +80,9 @@ class MakePartPricePrepareStrategyImplTest {
     var json = new com.fasterxml.jackson.databind.ObjectMapper()
         .enable(com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
     var snapshot = json.readTree(result.getInputSnapshotJson());
+    assertThat(snapshot.path("calculatorVersion").asText()).isEqualTo("MAKE_PART_V1");
+    assertThat(snapshot.path("rows")).hasSize(1);
+    assertThat(snapshot.at("/rows/0/rawUnitPrice").decimalValue()).isEqualByComparingTo("123.123456789012");
     assertThat(snapshot.at("/components/0/inputs/pricePriority/revision").asText()).isEqualTo("raw-v");
     assertThat(snapshot.at("/components/1/inputs/pricePriority/revision").asText()).isEqualTo("scrap-v");
     assertThat(snapshot.at("/components/0/unitPrice").decimalValue()).isEqualByComparingTo("123.123456789012");

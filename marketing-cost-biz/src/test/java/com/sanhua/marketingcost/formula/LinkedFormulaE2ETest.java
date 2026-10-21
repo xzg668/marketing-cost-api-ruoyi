@@ -102,17 +102,17 @@ class LinkedFormulaE2ETest {
     // finance mapper：统一 thenAnswer 根据 wrapper params 里的字符串匹配 financeRepo
 
     // scrap_ref mapper：按 materialCode 查表（同样需要触发 getSqlSegment 填充 params）
-    when(materialScrapRefMapper.selectOne(any()))
+    when(materialScrapRefMapper.selectList(any()))
         .thenAnswer(
             inv -> {
               AbstractWrapper<MaterialScrapRef, ?, ?> w = inv.getArgument(0);
               w.getSqlSegment();
               for (Object v : w.getParamNameValuePairs().values()) {
                 if (v instanceof String s && scrapRefRepo.containsKey(s)) {
-                  return scrapRefRepo.get(s);
+                  return List.of(scrapRefRepo.get(s));
                 }
               }
-              return null;
+              return List.of();
             });
 
     // 手动组装真实 Normalizer 链：AliasIndex → FormulaNormalizer
@@ -129,7 +129,11 @@ class LinkedFormulaE2ETest {
         new FactorVariableRegistryImpl(
             priceVariableMapper, financeQuery, new ObjectMapper(), rowLocal);
     registry.setPriceVariableBindingMapper(priceVariableBindingMapper);
-    DerivedResolver derivedResolver = new DerivedResolver(financeQuery, materialScrapRefMapper);
+    var scrapPrices = mock(com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService.class);
+    when(scrapPrices.selectForFormula(any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), org.mockito.ArgumentMatchers.any()))
+        .thenAnswer(call -> new com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService.Selection(
+            "FIXED", financeRepo.get(call.getArgument(2)), com.sanhua.marketingcost.service.pricing.PriceResolveEvidence.none(), "废料测试月价"));
+    DerivedResolver derivedResolver = new DerivedResolver(financeQuery, materialScrapRefMapper, scrapPrices);
     registry.setDerivedContextResolver(derivedResolver);
     when(priceVariableBindingMapper.findCurrentByLinkedItemId(101L))
         .thenReturn(
@@ -376,6 +380,7 @@ class LinkedFormulaE2ETest {
     v.setAliasesJson(aliases);
     v.setContextBindingJson(binding);
     // Plan B：DERIVED 的 params 原样复用 binding（含 strategy/formulaRef/factorCode 等键）
+    v.setTaxMode("EXCL");
     v.setResolverKind("DERIVED");
     v.setResolverParams(binding);
     return v;
@@ -434,9 +439,10 @@ class LinkedFormulaE2ETest {
             "calculateQuoteItemForEnsure",
             PriceLinkedCalcItem.class,
             PriceLinkedItem.class,
-            com.sanhua.marketingcost.entity.OaForm.class);
+            com.sanhua.marketingcost.entity.OaForm.class,
+              com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext.class);
     m.setAccessible(true);
-    return ((PriceLinkedCalcItem) m.invoke(service, new PriceLinkedCalcItem(), item, null))
+    return ((PriceLinkedCalcItem) m.invoke(service, new PriceLinkedCalcItem(), item, null, null))
         .getPartUnitPrice();
   }
 

@@ -115,6 +115,21 @@ class PricePrepareQueryServiceImplTest {
   }
 
   @Test
+  void settlementGapsRetainTheirTypeAndSpecificFailureForNavigation() {
+    var formula = new PricePrepareGap();
+    formula.setPriceType("SETTLE_LINKED");
+    formula.setReasonCode("SETTLEMENT_FORMULA_INVALID");
+    var base = new PricePrepareGap();
+    base.setPriceType("SETTLE_LINKED");
+    base.setReasonCode("SETTLEMENT_BASE_MISSING");
+    service.enrichGaps(List.of(formula, base));
+    assertThat(formula.getPriceType()).isEqualTo("SETTLE_LINKED");
+    assertThat(formula.getReasonCode()).isEqualTo("SETTLEMENT_FORMULA_INVALID");
+    assertThat(base.getPriceType()).isEqualTo("SETTLE_LINKED");
+    assertThat(base.getReasonCode()).isEqualTo("SETTLEMENT_BASE_MISSING");
+  }
+
+  @Test
   @DisplayName("明细分页：默认分页并过滤料号类型和状态")
   void pageItemsUsesFilters() {
     when(itemMapper.selectPage(any(), any())).thenAnswer(invocation -> {

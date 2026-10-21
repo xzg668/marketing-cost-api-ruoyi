@@ -139,7 +139,9 @@ public final class TechnicalDataSupplementContent {
       TechnicalDataSupplementContent.Solder solder,
       TechnicalDataSupplementContent.NetLoss netLoss,
       TechnicalDataSupplementContent.Prices prices,
-      SourceSnapshot sources) {}
+      SourceSnapshot sources,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+      com.sanhua.marketingcost.service.platematerial.PlateMaterialSnapshot plateMaterial) {}
 
   private static <T> List<T> immutable(List<T> values) {
     return values == null ? null : List.copyOf(values);

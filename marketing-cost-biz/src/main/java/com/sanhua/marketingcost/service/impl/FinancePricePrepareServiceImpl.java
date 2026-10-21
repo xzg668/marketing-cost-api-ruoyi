@@ -21,6 +21,7 @@ import com.sanhua.marketingcost.service.PricePrepareService;
 import com.sanhua.marketingcost.service.financefactor.QuoteFinanceFactorReader;
 import com.sanhua.marketingcost.service.pricing.FactorPriceUnit;
 import com.sanhua.marketingcost.service.pricing.PriceFactorContext;
+import com.sanhua.marketingcost.service.scrap.ScrapPriceCalculationEvidence;
 import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -195,6 +196,15 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
   private CopperBasis evidenceBasis(
       PricePrepareBatch batch, String material, String priceType, String serialized) {
     if (!StringUtils.hasText(serialized)) return null;
+    if (ScrapPriceCalculationEvidence.isScrap(serialized)) {
+      var scrap = new ScrapPriceCalculationEvidence(objectMapper).read(serialized);
+      if (!java.util.Objects.equals(material, scrap.rule().materialCode()))
+        throw new IllegalStateException("废料快照与价格准备料号不一致：" + material);
+      if (scrap.context() == null) return null;
+      var basis = contextBasis(batch, scrap.context());
+      return new CopperBasis(
+          basis.legacyPriceId(), basis.factorPriceId(), basis.pricePerKg(), basis.context(), true);
+    }
     if (!linkedPriceType(priceType) && !rangePriceType(priceType)) return null;
     PriceFactorContext context;
     if (rangePriceType(priceType)) {
@@ -236,10 +246,13 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
         context.requiredPrice(PriceFactorContext.COPPER, FactorPriceUnit.CNY_KG, true);
     Long id = context.financial().required(PriceFactorContext.COPPER).monthlyPriceId();
     if (id == null || price.signum() <= 0) throw new IllegalStateException("财务Cu来源不完整");
-    return new CopperBasis(null, id, price, context);
+    return new CopperBasis(null, id, price, context, false);
   }
 
   private CopperBasis mergeBasis(CopperBasis selected, CopperBasis next) {
+    // 废料共用210；板换普通材料仍保留220基准。只有废料时才采用其商用依据。
+    if (selected != null && next != null && selected.sharedScrap() != next.sharedScrap())
+      return selected.sharedScrap() ? next : selected;
     if (selected != null
         && next != null
         && selected.pricePerKg().compareTo(next.pricePerKg()) != 0) {
@@ -322,7 +335,8 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
               factor ? null : scenario.getCuSourceRefId(),
               factor ? scenario.getCuSourceRefId() : null,
               scenario.getCuPrice(),
-              null);
+              null,
+              false);
       if (historical != null
           && (!java.util.Objects.equals(historical.legacyPriceId(), value.legacyPriceId())
               || !java.util.Objects.equals(historical.factorPriceId(), value.factorPriceId()))) {
@@ -347,7 +361,11 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
   }
 
   private record CopperBasis(
-      Long legacyPriceId, Long factorPriceId, BigDecimal pricePerKg, PriceFactorContext context) {}
+      Long legacyPriceId,
+      Long factorPriceId,
+      BigDecimal pricePerKg,
+      PriceFactorContext context,
+      boolean sharedScrap) {}
 
   private PricePrepareBatch loadSourceBatch(String prepareNo) {
     PricePrepareBatch batch =
@@ -513,7 +531,8 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
 
   private boolean mustRemainExact(PricePrepareItem item) {
     String refType = item == null ? null : item.getResultRefType();
-    return refType == null || "FIXED_PRICE".equals(refType) || "RANGE_PRICE".equals(refType);
+    return refType == null || "FIXED_PRICE".equals(refType) || "RANGE_PRICE".equals(refType)
+        || com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceReader.RESULT_REF_TYPE.equals(refType);
   }
 
   private void validateMakePartInputs(

@@ -226,7 +226,7 @@ class MakePartPriceGenerationE2ETest {
 
     when(priceResolveService.resolveMaterialUnitPrice(
             anyString(), eq(PERIOD), any(), any(), eq(OA_NO), eq(BU),
-            any(PricePrepareScenarioContext.class)))
+            any(PricePrepareScenarioContext.class), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenAnswer(invocation -> {
           PricePrepareScenarioContext scenario = invocation.getArgument(6);
           assertThat(scenario.supplierReviews().priceOrgCode()).isEqualTo("210");
@@ -245,7 +245,7 @@ class MakePartPriceGenerationE2ETest {
         new MakePartPriceCalculator(),
         mock(com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService.class),
         calcRowMapper,
-        mock(MakePartPriceGapItemMapper.class), mock(com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.class));
+        mock(MakePartPriceGapItemMapper.class), mock(com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService.class));
   }
 
   private CostRunPartItemServiceImpl buildCostRunService(MakePartPriceCalcRowMapper calcRowMapper) {

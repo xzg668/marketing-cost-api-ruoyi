@@ -2,8 +2,8 @@ package com.sanhua.marketingcost.service.technicaldata;
 
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.Manufacturing;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.Solder;
-import com.sanhua.marketingcost.entity.QuoteTechTask;
 import com.sanhua.marketingcost.entity.QuoteTechProduct;
+import com.sanhua.marketingcost.entity.QuoteTechTask;
 import com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService;
 import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkContext;
@@ -16,9 +16,11 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /** 原材料、废料和焊料使用同一次取价检查；需求随当前明细重建，不另存一套缺价表。 */
 @Service
+@Transactional(readOnly = true)
 public class TechnicalDataMaterialPriceQuery {
   public record PriceRequirement(String materialNo, String role, String status,
       BigDecimal unitPrice, String priceType, String message) {}
@@ -35,7 +37,8 @@ public class TechnicalDataMaterialPriceQuery {
     for (var row : content.items()) {
       demands.put(row.rawMaterialNo(), "RAW");
       if (row.evidence() != null && "MATCHED".equals(row.evidence().scrapStatus())) {
-        for (var scrap : row.evidence().scrapMappings()) demands.putIfAbsent(scrap.materialNo(), "SCRAP");
+        for (var scrap : row.evidence().scrapMappings())
+          demands.putIfAbsent(scrap.materialNo(), "SCRAP");
       }
     }
     return check(context.oaNo(), context.oaFormItemId(), context.accountingMonth(), context.businessUnitType(), context.applicableOrgCode(), demands);
@@ -52,16 +55,41 @@ public class TechnicalDataMaterialPriceQuery {
     if (demands.isEmpty()) return List.of();
     LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     var scenario = PricePrepareScenarioContext.oaLocked(itemId, orgCode);
-    return demands.entrySet().stream().map(entry -> {
-      try {
-        var result = prices.calculateMaterialUnitPrice(entry.getKey(), month, now.toLocalDate(), now, oaNo, businessUnit, scenario);
-        if (result == null) throw new IllegalStateException("取价服务未返回结果");
-        return new PriceRequirement(entry.getKey(), entry.getValue(), result.getStatus(),
-            result.getUnitPrice(), result.getPriceType(), result.getRemark());
-      } catch (RuntimeException exception) {
-        log.warn("technical material price check failed: itemId={} month={} material={}", itemId, month, entry.getKey(), exception);
-        return new PriceRequirement(entry.getKey(), entry.getValue(), "ERROR", null, null, "取价检查失败，请重新检查");
-      }
-    }).toList();
+    return demands.entrySet().stream()
+        .map(
+            entry -> {
+              try {
+                var result =
+                    prices.calculateMaterialUnitPrice(
+                        entry.getKey(),
+                        month,
+                        now.toLocalDate(),
+                        now,
+                        oaNo,
+                        businessUnit,
+                        scenario,
+                        "SCRAP".equals(entry.getValue())
+                            ? MakePartMaterialPriceResolveService.Purpose.SCRAP
+                            : MakePartMaterialPriceResolveService.Purpose.MATERIAL);
+                if (result == null) throw new IllegalStateException("取价服务未返回结果");
+                return new PriceRequirement(
+                    entry.getKey(),
+                    entry.getValue(),
+                    result.getStatus(),
+                    result.getUnitPrice(),
+                    result.getPriceType(),
+                    result.getRemark());
+              } catch (RuntimeException exception) {
+                log.warn(
+                    "technical material price check failed: itemId={} month={} material={}",
+                    itemId,
+                    month,
+                    entry.getKey(),
+                    exception);
+                return new PriceRequirement(
+                    entry.getKey(), entry.getValue(), "ERROR", null, null, "取价检查失败，请重新检查");
+              }
+            })
+        .toList();
   }
 }

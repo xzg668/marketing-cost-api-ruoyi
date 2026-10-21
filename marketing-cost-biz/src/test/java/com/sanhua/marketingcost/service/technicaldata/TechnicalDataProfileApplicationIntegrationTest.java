@@ -29,6 +29,7 @@ class TechnicalDataProfileApplicationIntegrationTest extends BomMapperTestBase {
   @Autowired private TechnicalDataSubmissionSnapshotService snapshots;
   @Autowired private com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository recipients;
   @Autowired private JdbcTemplate jdbc;
+  private String plateRevision;
 
   @Test void optionalOaFieldsDoNotDefaultChoicesOrBlockSavingCompleteProductData() {
     var product = fixture();
@@ -203,7 +204,7 @@ class TechnicalDataProfileApplicationIntegrationTest extends BomMapperTestBase {
     jdbc.update("""
         INSERT INTO lp_quote_tech_product(task_id,oa_form_item_id,level_no,source_model,quote_no,accounting_month,
           source_snapshot_json,source_fingerprint,active_flag,active_lock_key,content_schema_version)
-        VALUES(?,?,1,'OA-MODEL',?,'2026-09','{"sourceModel":"OA-MODEL"}',REPEAT('a',64),1,?,2)
+        VALUES(?,?,1,'OA-MODEL',?,'2026-09','{"sourceModel":"OA-MODEL","businessUnitType":"COMMERCIAL","materialOrganizationCode":"COMMERCIAL"}',REPEAT('a',64),1,?,2)
         """, taskId, itemId, key, activeKey);
     Long productId = jdbc.queryForObject("SELECT id FROM lp_quote_tech_product WHERE task_id=?", Long.class, taskId);
     for (String type : TechnicalDataModuleType.orderedCodes()) {
@@ -217,14 +218,17 @@ class TechnicalDataProfileApplicationIntegrationTest extends BomMapperTestBase {
     jdbc.update("INSERT INTO lp_oa_integration_message(source_system,environment,direction,request_id,interface_type,schema_version,occurred_at,raw_payload,payload_hash,allowed_business_units) VALUES('TEST','UNIT','OUTBOUND',?,'TASK_DISPATCH',1,NOW(3),'{}',REPEAT('b',64),'COMMERCIAL')", key);
     Long messageId = jdbc.queryForObject("SELECT id FROM lp_oa_integration_message WHERE request_id=?", Long.class, key);
     jdbc.update("INSERT INTO lp_quote_tech_oa_recipient(task_id,assignment_version,assignee_user_id,assignee_name,external_user_id,module_types_json,outbound_message_id,external_task_id,dispatch_status,todo_status,active_flag,leader_external_id) VALUES(?,1,101,'王工','oa-tech-1','[\"PROFILE\"]',?,'PROFILE-TODO','CONFIRMED','OPEN',1,'oa-leader-1')", taskId, messageId);
-    return tasks.detail(taskId, TECH).products().getFirst();
+    var result = tasks.detail(taskId, TECH).products().getFirst();
+    plateRevision = result.profile().plateMaterial().revision();
+    return result;
   }
 
   private TechnicalDataProfileUpdateRequest update(Boolean included, String tooling, String mould, String certification, int version) {
     var request = new TechnicalDataProfileUpdateRequest();
     request.setProductProperty("非标品"); request.setHasAdditionalFees(included);
     request.setUnitToolingFee(tooling); request.setUnitMouldFee(mould); request.setUnitCertificationFee(certification);
-    request.setExpectedVersion(version); return request;
+    request.setExpectedVersion(version);
+    request.setExpectedPlateMaterialRevision(plateRevision); return request;
   }
 
   private void invalid(Long productId, TechnicalDataProfileUpdateRequest request, String message) {

@@ -55,7 +55,7 @@ class PriceLinkedCalculationTest {
     when(preview.previewForRefresh(any(), any(LinkedPriceVariableContext.class), any()))
         .thenReturn(response);
     var item = previousSuccess();
-    service(new ObjectMapper()).calculateQuoteItemForEnsure(item, rule(), null);
+    service(new ObjectMapper()).calculateQuoteItemForEnsure(item, rule(), null, null);
     assertThat(item.getCalcStatus()).isEqualTo("FAILED");
     assertThat(item.getCalcMessage()).isEqualTo("缺少Cu，原格E6");
     assertThat(item.getPartUnitPrice()).isNull();
@@ -70,7 +70,7 @@ class PriceLinkedCalculationTest {
   @Test
   void missingRuleFailsBeforePreviewAndClearsTheOldAmount() {
     var item = previousSuccess();
-    service(new ObjectMapper()).calculateQuoteItemForEnsure(item, null, null);
+    service(new ObjectMapper()).calculateQuoteItemForEnsure(item, null, null, null);
     assertThat(item.getCalcStatus()).isEqualTo("FAILED");
     assertThat(item.getPartUnitPrice()).isNull();
     assertThat(item.getPartAmount()).isNull();
@@ -84,7 +84,7 @@ class PriceLinkedCalculationTest {
     when(preview.previewForRefresh(any(), any(LinkedPriceVariableContext.class), any()))
         .thenReturn(response);
     var item = previousSuccess();
-    service(new ObjectMapper()).calculateQuoteItemForEnsure(item, rule(), null);
+    service(new ObjectMapper()).calculateQuoteItemForEnsure(item, rule(), null, null);
     assertThat(item.getCalcStatus()).isEqualTo("OK");
     assertThat(item.getCalcMessage()).isNull();
     assertThat(item.getPartUnitPrice()).isEqualByComparingTo("0");
@@ -100,7 +100,7 @@ class PriceLinkedCalculationTest {
     when(preview.previewForRefresh(any(), any(LinkedPriceVariableContext.class), any()))
         .thenReturn(response);
     var item = previousSuccess();
-    assertThatThrownBy(() -> service(json).calculateQuoteItemForEnsure(item, rule(), null))
+    assertThatThrownBy(() -> service(json).calculateQuoteItemForEnsure(item, rule(), null, null))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("M-001");
     assertThat(item.getPartUnitPrice()).isNull();
