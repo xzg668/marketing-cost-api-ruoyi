@@ -24,8 +24,8 @@ class SettlementCommercialFinanceIntegrationTest extends OriginalPricingIntegrat
   @Autowired SettlementPriceImportService imports;
   @Autowired SettlementPriceReader reader;
   @Autowired SettlementPriceRepository prices;
+  @Autowired SettlementRuleRevisionFactory ruleRevisions;
   @Autowired FinanceFactorPublicationService finance;
-  @Autowired SettlementWeightService weights;
   @Autowired ObjectMapper json;
   @Autowired JdbcTemplate jdbc;
   private final SettlementScope october = new SettlementScope("COMMERCIAL", "2026-10");
@@ -127,10 +127,9 @@ class SettlementCommercialFinanceIntegrationTest extends OriginalPricingIntegrat
     assertThat(jdbc.queryForList("SELECT * FROM lp_settlement_price ORDER BY id")).isEqualTo(before);
   }
 
-  @Test void identicalBlankSourceReimportPreservesManualWeightsWhileChangedSourceAppendsRevision() throws Exception {
+  @Test void identicalBlankSourcePreservesLegacyWeightsWhileChangedSourceAppendsRevision() throws Exception {
     var initial = prices.effective(october, "201600446", SettlementPriceType.SETTLE_LINKED).getFirst();
-    var confirmed = weights.confirm("COMMERCIAL", initial.getId(), new SettlementWeightService.Change(
-        new BigDecimal("1.4"), new BigDecimal("0.2"), initial.getRevisionNo(), "财务复核实测重量"), "finance");
+    var confirmed = SettlementRuleTestSupport.legacyWeights(prices, ruleRevisions, initial, "1.4", "0.2");
     byte[] original = getClass().getResourceAsStream("/settlement/final-20261021.xls").readAllBytes();
     var replay = imports.confirm(original, "最终结算价格.xls", october,
         imports.preview(original, "最终结算价格.xls", october).fingerprint(), "finance");
@@ -167,7 +166,14 @@ class SettlementCommercialFinanceIntegrationTest extends OriginalPricingIntegrat
     assertThat(candidate.isWeightsConfirmed()).isFalse();
     assertThat(candidate.getCopperWeightG()).isNull();
     assertThatThrownBy(() -> new SettlementPriceCalculator().calculate(candidate, null))
-        .isInstanceOf(SettlementPriceCalculator.CalculationException.class).hasMessageContaining("缺少已确认");
+        .isInstanceOf(SettlementPriceCalculator.CalculationException.class).hasMessageContaining("请修正原稿后重新导入");
+    // 已有可计算版本遇到新原稿铜重缺失，也不能沿用旧重量掩盖缺口。
+    imports.confirm(blankCopper, "缺铜重.xls", october,
+        imports.preview(blankCopper, "缺铜重.xls", october).fingerprint(), "finance");
+    assertThat(reader.resolve(request("201600446", "210")).failureCode()).isEqualTo("SETTLEMENT_WEIGHTS_MISSING");
+    var missing = prices.effective(october, "201600446", SettlementPriceType.SETTLE_LINKED).getFirst();
+    assertThat(missing.getCopperWeightG()).isNull();
+    assertThat(missing.isWeightsConfirmed()).isFalse();
     try (var workbook = WorkbookFactory.create(new ByteArrayInputStream(original)); var output = new ByteArrayOutputStream()) {
       workbook.getSheetAt(0).getRow(14).createCell(7).setCellValue("待补");
       workbook.write(output);

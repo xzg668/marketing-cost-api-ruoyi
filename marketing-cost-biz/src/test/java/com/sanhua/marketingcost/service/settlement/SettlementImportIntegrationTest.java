@@ -6,7 +6,6 @@ import static org.assertj.core.api.Assertions.*;
 
 import com.sanhua.marketingcost.service.pricing.settlement.SettlementScope;
 import com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceType;
-import java.math.BigDecimal;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.List;
@@ -33,10 +32,10 @@ import org.springframework.test.context.DynamicPropertySource;
 class SettlementImportIntegrationTest extends OriginalPricingIntegrationTestBase {
   @Autowired SettlementPriceImportService imports;
   @Autowired SettlementPriceRepository prices;
+  @Autowired SettlementRuleRevisionFactory ruleRevisions;
   @Autowired SettlementFinanceBaseReader bases;
   @Autowired com.sanhua.marketingcost.service.financefactor.FinanceFactorPublicationService finance;
   @Autowired JdbcTemplate jdbc;
-  @Autowired SettlementWeightService weights;
   @Autowired SettlementPriceController controller;
   private static final java.nio.file.Path ARCHIVE;
   static {
@@ -101,10 +100,10 @@ class SettlementImportIntegrationTest extends OriginalPricingIntegrationTestBase
     assertThat(prices.effective(october, "201809648", SettlementPriceType.SETTLE_FIXED).getFirst().getGivenPrice()).isEqualByComparingTo("99");
   }
 
-  @Test void financeConfirmedWeightsSurviveBlankOriginalReimportAndHistoryStaysIntact() throws Exception {
+  @Test void legacyWeightsSurviveIdenticalOriginalReimportAndHistoryStaysIntact() throws Exception {
     upload(original(), october);
     var initial = linked();
-    var confirmed = weights.confirm("COMMERCIAL", initial.getId(), weightChange(1), "finance");
+    var confirmed = SettlementRuleTestSupport.legacyWeights(prices, ruleRevisions, initial, "8", "1.5");
     assertThat(confirmed.getRevisionNo()).isEqualTo(2);
     assertThat(confirmed.weights().completeAndConfirmed()).isTrue();
     assertThat(confirmed.getOriginalCopperWeightG()).isEqualByComparingTo("7.8");
@@ -112,26 +111,19 @@ class SettlementImportIntegrationTest extends OriginalPricingIntegrationTestBase
     assertThat(upload(original(), october).unchanged()).isEqualTo(37);
     assertThat(linked().getId()).isEqualTo(confirmed.getId());
     assertThat(linked().getCopperWeightG()).isEqualByComparingTo("8");
-    assertThat(weights.confirm("COMMERCIAL", confirmed.getId(), weightChange(2), "finance").getId()).isEqualTo(confirmed.getId());
-    assertThatThrownBy(() -> weights.confirm("HOUSEHOLD", confirmed.getId(), weightChange(2), "finance"))
-        .isInstanceOf(IllegalArgumentException.class);
-    assertThatThrownBy(() -> weights.confirm("COMMERCIAL", initial.getId(), weightChange(1), "finance"))
-        .isInstanceOf(OptimisticLockingFailureException.class);
   }
 
-  @Test void missingWeightAndExcessPrecisionCannotBeConfirmedButExplicitZerosCan() throws Exception {
+  @Test void correctedOriginalUsesExplicitZeroWeightsWithoutSeparateConfirmation() throws Exception {
     upload(original(), october);
-    var initial = linked();
-    for (var change : List.of(new SettlementWeightService.Change(null, BigDecimal.ZERO, 1, "test"),
-        new SettlementWeightService.Change(new BigDecimal("0.0000000000001"), BigDecimal.ZERO, 1, "test")))
-      assertThatThrownBy(() -> weights.confirm("COMMERCIAL", initial.getId(), change, "finance")).isInstanceOf(IllegalArgumentException.class);
-    var zero = weights.confirm("COMMERCIAL", initial.getId(), new SettlementWeightService.Change(BigDecimal.ZERO, BigDecimal.ZERO, 1, "财务确认无铜锌"), "finance");
-    assertThat(zero.weights().completeAndConfirmed()).isTrue();
-    assertThat(zero.getCopperWeightG()).isZero();
-    assertThat(zero.getZincWeightG()).isZero();
+    var previous = linked();
+    SettlementRuleTestSupport.importWeights(imports, october, "203240646", 0, 0);
+    assertThat(linked().getCopperWeightG()).isZero();
+    assertThat(linked().getZincWeightG()).isZero();
+    assertThat(linked().weights().completeAndConfirmed()).isTrue();
+    assertThat(prices.byId("COMMERCIAL", previous.getId()).orElseThrow().isWeightsConfirmed()).isFalse();
   }
 
-  @Test void databaseFailureAfterEarlierRowsRollsBackWholeImportAndBaseInitialization() throws Exception {
+  @Test void databaseFailureAfterEarlierRowsRollsBackWholeImport() throws Exception {
     jdbc.execute("""
         CREATE TRIGGER stp_reject_import BEFORE INSERT ON lp_settlement_price FOR EACH ROW
         BEGIN
@@ -168,13 +160,12 @@ class SettlementImportIntegrationTest extends OriginalPricingIntegrationTestBase
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_settlement_base_price", Integer.class)).isZero();
   }
 
-  @Test void importAndWeightPermissionsAreSeparateAndOriginalDownloadIsBusinessScoped() throws Exception {
+  @Test void importRequiresOwnPermissionAndOriginalDownloadIsBusinessScoped() throws Exception {
     var file = new MockMultipartFile("file", "original.xls", "application/vnd.ms-excel", original());
     authenticate("price:settlement:list");
     assertThat(controller.list("2026-10", null, null).getData()).isEmpty();
     assertThat(controller.pricing("2026-10", null, null).getData()).isEmpty();
     assertThatThrownBy(() -> controller.preview(file, "2026-10")).isInstanceOf(AccessDeniedException.class);
-    assertThatThrownBy(() -> controller.confirmWeights(1L, weightChange(1), () -> "finance")).isInstanceOf(AccessDeniedException.class);
     authenticate("price:settlement:import");
     var preview = controller.preview(file, "2026-10").getData();
     assertThatThrownBy(() -> controller.confirm(file, "2026-10", preview.fingerprint(), null)).hasMessageContaining("登录");
@@ -222,28 +213,28 @@ class SettlementImportIntegrationTest extends OriginalPricingIntegrationTestBase
     SecurityContextHolder.getContext().setAuthentication(auth);
   }
 
-  @Test void simultaneousUploadAndWeightConfirmationHaveOneWinnerAndSafeRetryPreservesBothChanges() throws Exception {
+  @Test void simultaneousOriginalCorrectionsHaveOneWinnerAndCanRetryWithoutLosingHistory() throws Exception {
     upload(original(), october);
-    var initial = linked();
-    byte[] changed = edited(sheet -> sheet.getRow(9).getCell(8).setCellValue(4.941));
-    var preview = imports.preview(changed, "changed.xls", october);
+    byte[] first = edited(sheet -> sheet.getRow(9).getCell(8).setCellValue(4.941));
+    byte[] second = edited(sheet -> sheet.getRow(9).getCell(8).setCellValue(5.041));
+    var previewA = imports.preview(first, "a.xls", october);
+    var previewB = imports.preview(second, "b.xls", october);
     var start = new CountDownLatch(1);
     try (var pool = Executors.newFixedThreadPool(2)) {
-      var upload = pool.submit(() -> { start.await(); try {
-        imports.confirm(changed, "changed.xls", october, preview.fingerprint(), "finance"); return true;
+      var a = pool.submit(() -> { start.await(); try {
+        imports.confirm(first, "a.xls", october, previewA.fingerprint(), "finance"); return true;
       } catch (OptimisticLockingFailureException conflict) { return false; } });
-      var weight = pool.submit(() -> { start.await(); try {
-        weights.confirm("COMMERCIAL", initial.getId(), weightChange(1), "finance"); return true;
+      var b = pool.submit(() -> { start.await(); try {
+        imports.confirm(second, "b.xls", october, previewB.fingerprint(), "finance"); return true;
       } catch (OptimisticLockingFailureException conflict) { return false; } });
       start.countDown();
-      assertThat(List.of(upload.get(15, TimeUnit.SECONDS), weight.get(15, TimeUnit.SECONDS))).containsExactlyInAnyOrder(true, false);
+      assertThat(List.of(a.get(15, TimeUnit.SECONDS), b.get(15, TimeUnit.SECONDS))).containsExactlyInAnyOrder(true, false);
     }
-    upload(changed, october);
-    var current = linked();
-    if (!current.isWeightsConfirmed()) weights.confirm("COMMERCIAL", current.getId(), weightChange(current.getRevisionNo()), "finance");
-    assertThat(linked().getGivenPrice()).isEqualByComparingTo("4.941");
-    assertThat(linked().getCopperWeightG()).isEqualByComparingTo("8");
-    assertThat(linked().getZincWeightG()).isEqualByComparingTo("1.5");
+    var winner = linked();
+    upload(second, october);
+    assertThat(linked().getGivenPrice()).isEqualByComparingTo("5.041");
+    assertThat(prices.byId("COMMERCIAL", winner.getId()).orElseThrow()).usingRecursiveComparison().isEqualTo(winner);
+    assertThat(upload(second, october).unchanged()).isEqualTo(37);
   }
 
   private String protectedChecksums() {
@@ -252,9 +243,6 @@ class SettlementImportIntegrationTest extends OriginalPricingIntegrationTestBase
   }
 
   private SettlementPriceRecord linked() { return prices.effective(october, "203240646", SettlementPriceType.SETTLE_LINKED).getFirst(); }
-  private SettlementWeightService.Change weightChange(int expected) {
-    return new SettlementWeightService.Change(new BigDecimal("8"), new BigDecimal("1.5"), expected, "财务实测确认");
-  }
   private SettlementPriceImportService.ImportResult upload(byte[] bytes, SettlementScope scope) {
     var preview = imports.preview(bytes, "original.xls", scope);
     return imports.confirm(bytes, "original.xls", scope, preview.fingerprint(), "finance");

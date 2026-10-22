@@ -70,7 +70,7 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
   @Autowired MakePartMaterialPriceResolveService materials;
   @Autowired SettlementPriceImportService imports;
   @Autowired SettlementPriceRepository prices;
-  @Autowired SettlementWeightService weights;
+  @Autowired SettlementRuleRevisionFactory ruleRevisions;
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper json;
   @Autowired PackageComponentPriceService packages;
@@ -117,7 +117,7 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
     var scope = new SettlementScope("COMMERCIAL", "2026-10");
     imports.confirm(bytes, "original.xls", scope, imports.preview(bytes, "original.xls", scope).fingerprint(), "finance");
     var row = prices.effective(scope, "203240646", SettlementPriceType.SETTLE_LINKED).getFirst();
-    weights.confirm("COMMERCIAL", row.getId(), new SettlementWeightService.Change(new BigDecimal("7.8"), new BigDecimal("1.48"), 1, "隔离测试明确确认"), "finance");
+    SettlementRuleTestSupport.legacyWeights(prices, ruleRevisions, row, "7.8", "1.48");
   }
 
   @ParameterizedTest
@@ -275,7 +275,7 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
     else assertThat(afterBase).isEqualTo(before);
     if (!code.equals("809633")) {
       var rule = prices.effective(new SettlementScope("COMMERCIAL", "2026-11"), code, SettlementPriceType.SETTLE_LINKED).getFirst();
-      weights.confirm("COMMERCIAL", rule.getId(), new SettlementWeightService.Change(new BigDecimal("8"), new BigDecimal("2"), rule.getRevisionNo(), "财务更新实测重量"), "finance");
+      SettlementRuleTestSupport.importWeights(imports, new SettlementScope("COMMERCIAL", rule.getPriceMonth()), code, 8, 2);
       assertThat(revisions.currentRevision(form, item, "2026-11")).isNotEqualTo(afterBase);
     }
     assertThat(json.readTree(preparations.selectById(prep.getId()).getInputSnapshotJson()))
@@ -358,8 +358,7 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
     var updated = reader.resolve(new SettlementPriceRequest("COMMERCIAL", codes[2], "2026-11", org, SettlementPriceType.SETTLE_LINKED));
     assertThat(updated.unitPrice()).isEqualByComparingTo("4.888708672566");
     var givenRule = prices.effective(new SettlementScope("COMMERCIAL", "2026-11"), codes[1], SettlementPriceType.SETTLE_LINKED).getFirst();
-    weights.confirm("COMMERCIAL", givenRule.getId(), new SettlementWeightService.Change(
-        new BigDecimal("8"), new BigDecimal("2"), givenRule.getRevisionNo(), "隔离测试补齐实际重量"), "finance");
+    SettlementRuleTestSupport.importWeights(imports, new SettlementScope("COMMERCIAL", givenRule.getPriceMonth()), codes[1], 8, 2);
     var nowFormula = reader.resolve(new SettlementPriceRequest("COMMERCIAL", codes[1], "2026-11", org, SettlementPriceType.SETTLE_LINKED));
     assertThat(json.readTree(nowFormula.evidence().inputSnapshotJson()).path("mode").asText()).isEqualTo("LINKED_FORMULA");
     byte[] revised;

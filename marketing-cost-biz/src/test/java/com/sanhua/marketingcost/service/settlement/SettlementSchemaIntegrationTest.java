@@ -29,23 +29,23 @@ class SettlementSchemaIntegrationTest {
     new ResourceDatabasePopulator(new ClassPathResource("db/V332__settlement_price_versions.sql"))
         .execute(jdbc.getDataSource());
     jdbc.update("DELETE FROM lp_settlement_price");
-    jdbc.update("DELETE FROM lp_settlement_base_price");
+    jdbc.execute("DROP TABLE IF EXISTS lp_settlement_base_price");
   }
 
   @Test void emptyDatabaseAndUpgradeAreRepeatableWithoutChangingExistingData() {
     var migration = new ClassPathResource("db/V332__settlement_price_versions.sql");
     assertThat(migration.exists()).as("settlement forward migration").isTrue();
-    jdbc.execute("DROP TABLE lp_settlement_price,lp_settlement_base_price");
+    jdbc.execute("DROP TABLE lp_settlement_price");
     var runner = new ResourceDatabasePopulator(migration);
     runner.execute(jdbc.getDataSource());
-    assertThat(jdbc.queryForList("SHOW TABLES")).hasSize(2);
+    assertThat(jdbc.queryForList("SHOW TABLES")).hasSize(1);
     jdbc.execute("CREATE TABLE protected_prices(id BIGINT PRIMARY KEY, price DECIMAL(24,12), notes TEXT)");
     jdbc.update("INSERT INTO protected_prices VALUES(1, 4.841, 'existing source')");
     var before = jdbc.queryForList("SELECT * FROM protected_prices");
     var ddl = jdbc.queryForMap("SHOW CREATE TABLE protected_prices");
     runner.execute(jdbc.getDataSource());
     runner.execute(jdbc.getDataSource());
-    assertThat(jdbc.queryForList("SHOW TABLES")).hasSize(3);
+    assertThat(jdbc.queryForList("SHOW TABLES")).hasSize(2);
     assertThat(jdbc.queryForList("SELECT * FROM protected_prices")).isEqualTo(before);
     assertThat(jdbc.queryForMap("SHOW CREATE TABLE protected_prices")).isEqualTo(ddl);
     jdbc.execute("DROP TABLE protected_prices");
@@ -82,15 +82,18 @@ class SettlementSchemaIntegrationTest {
           .isInstanceOf(org.springframework.dao.DataAccessException.class);
   }
 
-  @Test void basePairIsCompleteAndPreciselyStoredAsItsOwnMonthlyRevision() {
+  @Test void upgradePreservesLegacyBaseDataWithoutRecreatingOrUsingIt() {
+    new ResourceDatabasePopulator(new ClassPathResource("settlement/legacy-base-schema.sql"))
+        .execute(jdbc.getDataSource());
     jdbc.update("INSERT INTO lp_settlement_base_price(business_unit_type,price_month,revision_no,copper_price,zinc_price,"
-        + "source_kind,change_reason,created_by) VALUES('COMMERCIAL','2026-10',1,104.526,24.51,'FINANCE','source','test')");
-    assertThat(jdbc.queryForObject("SELECT copper_price FROM lp_settlement_base_price", java.math.BigDecimal.class))
-        .isEqualByComparingTo("104.526");
-    for (String update : List.of("copper_price=NULL", "zinc_price=NULL", "copper_price=-1", "unit='CNY/T'",
-        "price_month='2026-13'", "revision_no=0"))
-      assertThatThrownBy(() -> jdbc.update("UPDATE lp_settlement_base_price SET " + update))
-          .as(update).isInstanceOf(org.springframework.dao.DataAccessException.class);
+        + "source_kind,change_reason,created_by) VALUES('COMMERCIAL','2026-10',1,104.526,24.51,'FINANCE','legacy','test')");
+    var before = jdbc.queryForList("SELECT * FROM lp_settlement_base_price");
+    var ddl = jdbc.queryForMap("SHOW CREATE TABLE lp_settlement_base_price");
+    var migration = new ResourceDatabasePopulator(new ClassPathResource("db/V332__settlement_price_versions.sql"));
+    migration.execute(jdbc.getDataSource());
+    migration.execute(jdbc.getDataSource());
+    assertThat(jdbc.queryForList("SELECT * FROM lp_settlement_base_price")).isEqualTo(before);
+    assertThat(jdbc.queryForMap("SHOW CREATE TABLE lp_settlement_base_price")).isEqualTo(ddl);
   }
 
   @Test void effectiveMonthOrderingExcludesFutureAndOtherBusinessUnits() {

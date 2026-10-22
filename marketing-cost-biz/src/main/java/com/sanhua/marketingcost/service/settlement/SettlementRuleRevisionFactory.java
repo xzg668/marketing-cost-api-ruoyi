@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sanhua.marketingcost.service.pricing.settlement.SettlementScope;
-import com.sanhua.marketingcost.service.pricing.settlement.SettlementWeights;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
@@ -13,7 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import org.springframework.stereotype.Component;
 
-/** 构造待追加的业务修订；原稿值和财务已确认重量在这里明确合并。 */
+/** 按原稿追加业务修订；相同原稿重导时保留已存历史重量，原稿重量变化时采用新值。 */
 @Component
 public class SettlementRuleRevisionFactory {
   private final ObjectMapper json;
@@ -61,7 +60,7 @@ public class SettlementRuleRevisionFactory {
           + (rule.weights().originalZincG() == null ? "；原稿锌重为空，按原公式以0克计算" : ""));
       row.setWeightsConfirmedBy(actor);
       row.setWeightsConfirmedAt(LocalDateTime.now().truncatedTo(ChronoUnit.MICROS));
-    } else if (previous != null && previous.isWeightsConfirmed()) {
+    } else if (!changedSource && previous != null && previous.isWeightsConfirmed()) {
       row.setCopperWeightG(previous.getCopperWeightG());
       row.setZincWeightG(previous.getZincWeightG());
       row.setWeightsConfirmed(true);
@@ -80,23 +79,6 @@ public class SettlementRuleRevisionFactory {
     row.setSourceFormula(rule.sources().getFirst().resolvedSourceFormula());
     row.setRemark(rule.remark());
     row.setCreatedBy(actor);
-    validateNumbers(row);
-    row.setContentHash(contentHash(row));
-    return row;
-  }
-
-  public SettlementPriceRecord withConfirmedWeights(SettlementPriceRecord current, SettlementWeights weights, String actor) {
-    var row = current.copy();
-    row.setId(null);
-    row.setRevisionNo(current.getRevisionNo() + 1);
-    row.setCopperWeightG(weights.copperG());
-    row.setZincWeightG(weights.zincG());
-    row.setWeightsConfirmed(true);
-    row.setWeightConfirmationNote(weights.confirmationNote());
-    row.setWeightsConfirmedBy(actor);
-    row.setWeightsConfirmedAt(LocalDateTime.now().truncatedTo(ChronoUnit.MICROS));
-    row.setCreatedBy(actor);
-    row.setCreatedAt(null);
     validateNumbers(row);
     row.setContentHash(contentHash(row));
     return row;

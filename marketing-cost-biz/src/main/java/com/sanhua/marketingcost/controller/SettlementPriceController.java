@@ -22,14 +22,12 @@ import org.springframework.web.multipart.MultipartFile;
 public class SettlementPriceController {
   private final SettlementPriceRepository prices;
   private final SettlementPriceImportService imports;
-  private final SettlementWeightService weights;
   private final SettlementPriceQuery query;
 
-  public SettlementPriceController(SettlementPriceRepository prices, SettlementPriceImportService imports, SettlementWeightService weights,
+  public SettlementPriceController(SettlementPriceRepository prices, SettlementPriceImportService imports,
       SettlementPriceQuery query) {
     this.prices = prices;
     this.imports = imports;
-    this.weights = weights;
     this.query = query;
   }
 
@@ -81,14 +79,6 @@ public class SettlementPriceController {
       @RequestParam String priceMonth, @RequestParam String previewFingerprint, Principal principal) throws IOException {
     return CommonResult.success(imports.confirm(file.getBytes(), file.getOriginalFilename(),
         new SettlementScope(unit(), priceMonth), previewFingerprint, actor(principal)));
-  }
-
-  @PatchMapping("/{id}/weights")
-  @PreAuthorize("@ss.hasPermi('price:settlement:edit')")
-  @OperationLog(module = "结算重量", operationType = OperationType.UPDATE)
-  public CommonResult<SettlementPriceRecord> confirmWeights(@PathVariable long id,
-      @RequestBody SettlementWeightService.Change change, Principal principal) {
-    return CommonResult.success(weights.confirm(unit(), id, change, actor(principal)));
   }
 
   @ExceptionHandler(OptimisticLockingFailureException.class)

@@ -36,7 +36,7 @@ class SettlementRoutingIntegrationTest extends OriginalPricingIntegrationTestBas
   @Autowired ObjectMapper json;
   @Autowired List<PriceResolver> resolvers;
   @Autowired SettlementPriceRepository prices;
-  @Autowired SettlementWeightService weights;
+  @Autowired SettlementRuleRevisionFactory ruleRevisions;
   @Autowired MaterialPricePriorityService priorities;
   private static final Path ARCHIVE;
   private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 11, 15, 10, 0);
@@ -81,7 +81,7 @@ class SettlementRoutingIntegrationTest extends OriginalPricingIntegrationTestBas
   @Test void manualPriorityWinsAndLowerSettlementFailureOnlyBlocksWhenSelected() {
     fiveSources();
     var rule = prices.effective(new SettlementScope("COMMERCIAL", "2026-10"), "203240646", SettlementPriceType.SETTLE_LINKED).getFirst();
-    weights.confirm("COMMERCIAL", rule.getId(), new SettlementWeightService.Change(BigDecimal.ONE, BigDecimal.ONE, 1, "测试确认"), "finance");
+    SettlementRuleTestSupport.legacyWeights(prices, ruleRevisions, rule, "1", "1");
     jdbc.update("UPDATE lp_settlement_price SET expression='broken expression' WHERE material_code='203240646' AND revision_no=2");
     var scope = new MaterialPricePriorityService.Scope("COMMERCIAL", "2026-11", "210", "203240646");
     priorities.initialize(scope, "测试");

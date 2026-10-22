@@ -27,7 +27,7 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
   @Autowired SettlementPriceQuery query;
   @Autowired SettlementPriceImportService imports;
   @Autowired SettlementPriceRepository prices;
-  @Autowired SettlementWeightService weights;
+  @Autowired SettlementRuleRevisionFactory ruleRevisions;
   @Autowired SettlementFinanceBaseReader bases;
   @Autowired com.sanhua.marketingcost.service.financefactor.FinanceFactorPublicationService finance;
   @Autowired JdbcTemplate jdbc;
@@ -210,8 +210,7 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
 
   private void confirmSampleWeights() {
     var row = prices.effective(october, "203240646", SettlementPriceType.SETTLE_LINKED).getFirst();
-    weights.confirm("COMMERCIAL", row.getId(), new SettlementWeightService.Change(new BigDecimal("7.8"), new BigDecimal("1.48"),
-        row.getRevisionNo(), "隔离测试中明确确认样例，用于独立公式算术验证"), "test-finance");
+    SettlementRuleTestSupport.legacyWeights(prices, ruleRevisions, row, "7.8", "1.48");
   }
 
   private static class CountingDataSource extends DelegatingDataSource {

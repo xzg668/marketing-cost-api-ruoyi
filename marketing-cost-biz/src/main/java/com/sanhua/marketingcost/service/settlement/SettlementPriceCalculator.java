@@ -36,7 +36,7 @@ public class SettlementPriceCalculator {
     nonnegative(rule.getGivenPrice(), "给定价");
     if (mode != SettlementPriceMode.LINKED_FORMULA) return new Calculation(mode, rounded(rule.getGivenPrice()));
     if (!rule.isWeightsConfirmed() || rule.getCopperWeightG() == null || rule.getZincWeightG() == null)
-      throw new CalculationException("SETTLEMENT_WEIGHTS_MISSING", "结算联动价缺少已确认的铜锌重量：" + rule.getMaterialCode());
+      throw new CalculationException("SETTLEMENT_WEIGHTS_MISSING", "结算联动价原稿铜锌重量不完整，请修正原稿后重新导入：" + rule.getMaterialCode());
     boolean roundedFormula = SettlementFormula.ROUNDED_VERSION.equals(rule.getFormulaVersion());
     if (!(roundedFormula ? SettlementFormula.ROUNDED_EXPRESSION.equals(rule.getExpression())
         : SettlementFormula.VERSION.equals(rule.getFormulaVersion()) && SettlementFormula.EXPRESSION.equals(rule.getExpression())))
@@ -44,11 +44,11 @@ public class SettlementPriceCalculator {
     nonnegative(rule.getPlannedPrice(), "计划价");
     nonnegative(rule.getBudgetCu(), "预算铜价");
     nonnegative(rule.getBudgetZn(), "预算锌价");
-    nonnegative(rule.getCopperWeightG(), "确认铜重");
-    nonnegative(rule.getZincWeightG(), "确认锌重");
+    nonnegative(rule.getCopperWeightG(), "计算铜重");
+    nonnegative(rule.getZincWeightG(), "计算锌重");
     positive(rule.getMarkupRatio(), "上浮倍率");
     positive(rule.getTaxDivisor(), "税除数");
-    if (base == null) throw new CalculationException("SETTLEMENT_BASE_MISSING", "重量已确认，但尚未发布适用的商用财务铜锌基价：" + rule.getMaterialCode());
+    if (base == null) throw new CalculationException("SETTLEMENT_BASE_MISSING", "尚未发布适用的商用财务铜锌基价：" + rule.getMaterialCode());
     if (!rule.getBusinessUnitType().equals(base.businessUnitType()) || !base.active()
         || !"CNY/KG".equals(base.unit()) || !"BEFORE_FORMULA_TAX".equals(base.taxBasis()))
       throw invalid("结算基价范围、状态或单位无效");

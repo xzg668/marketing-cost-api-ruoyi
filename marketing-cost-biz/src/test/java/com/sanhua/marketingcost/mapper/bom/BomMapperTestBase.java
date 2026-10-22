@@ -269,6 +269,8 @@ public abstract class BomMapperTestBase {
       // 制造件取价现在同时查询废料月价；真实测试库必须具备该依赖结构。
       runScriptViaMysqlCli("/db/V330__scrap_price_monthly.sql", "V330");
       runScriptViaMysqlCli("/db/V332__settlement_price_versions.sql", "V332");
+      // 仅模拟升级前的历史表，正式初始化不再创建独立基价表。
+      runScriptViaMysqlCli("/settlement/legacy-base-schema.sql", "legacy-settlement-base-fixture");
       runScriptViaMysqlCli("/db/V335__plate_material_mapping.sql", "V335");
       runScriptViaMysqlCli("/db/V336__plate_material_master_lookup_index.sql", "V336");
       runScriptViaMysqlCli("/db/V338__drawing_verification_evidence.sql", "V338");
