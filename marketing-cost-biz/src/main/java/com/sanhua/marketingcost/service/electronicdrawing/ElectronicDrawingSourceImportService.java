@@ -1,448 +1,264 @@
 package com.sanhua.marketingcost.service.electronicdrawing;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.sanhua.marketingcost.entity.ElectronicDrawingSourceNode;
-import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.entity.DrawingVerificationTask;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteBomSupplementVersion;
+import com.sanhua.marketingcost.integration.drawing.DrawingVerificationCodec;
+import com.sanhua.marketingcost.mapper.DrawingVerificationResultMapper;
+import com.sanhua.marketingcost.mapper.DrawingVerificationTaskMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
-import java.io.ByteArrayInputStream;
-import java.math.BigDecimal;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
-import java.time.format.DateTimeParseException;
-import java.util.HexFormat;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-/**
- * 把接口取得的电子图库 Excel 绑定到报价产品并保存不可变源版本。
- *
- * <p>本服务只负责解析和源证据入库，不查询 U9、不发布 BOM、也不触发价格核算。
- */
+/** 从已提交的 PDF 结果创建来源；不联网、不伪造文件证据、不改写旧来源。 */
 @Service
 public class ElectronicDrawingSourceImportService {
-  private static final String BOM_SOURCE = "ELECTRONIC_DRAWING_EXCEL";
-  private static final String VERSION_DRAFT = "DRAFT";
-
-  private final ElectronicDrawingExcelParser parser;
-  private final ElectronicDrawingWorkflowContextPort contextPort;
-  private final OaFormItemMapper oaFormItemMapper;
-  private final QuoteBomPreparationRecordMapper preparationMapper;
-  private final QuoteBomSupplementVersionMapper versionMapper;
-  private final ElectronicDrawingSourceNodeRepository sourceNodeRepository;
-  private final ElectronicDrawingProductLookup productLookup;
+  private static final Logger log =
+      LoggerFactory.getLogger(ElectronicDrawingSourceImportService.class);
+  private final ElectronicDrawingWorkflowContextPort contexts;
+  private final OaFormItemMapper items;
+  private final QuoteBomPreparationRecordMapper preparations;
+  private final QuoteBomSupplementVersionMapper versions;
+  private final ElectronicDrawingSourceNodeRepository nodes;
+  private final DrawingVerificationTaskMapper tasks;
+  private final DrawingVerificationResultMapper results;
+  private final DrawingVerificationCodec codec;
+  private final DrawingVerificationService verifications;
 
   public ElectronicDrawingSourceImportService(
-      ElectronicDrawingExcelParser parser,
-      ElectronicDrawingWorkflowContextPort contextPort,
-      OaFormItemMapper oaFormItemMapper,
-      QuoteBomPreparationRecordMapper preparationMapper,
-      QuoteBomSupplementVersionMapper versionMapper,
-      ElectronicDrawingSourceNodeRepository sourceNodeRepository,
-      ElectronicDrawingProductLookup productLookup) {
-    this.parser = parser;
-    this.contextPort = contextPort;
-    this.oaFormItemMapper = oaFormItemMapper;
-    this.preparationMapper = preparationMapper;
-    this.versionMapper = versionMapper;
-    this.sourceNodeRepository = sourceNodeRepository;
-    this.productLookup = productLookup;
+      ElectronicDrawingWorkflowContextPort contexts,
+      OaFormItemMapper items,
+      QuoteBomPreparationRecordMapper preparations,
+      QuoteBomSupplementVersionMapper versions,
+      ElectronicDrawingSourceNodeRepository nodes,
+      DrawingVerificationTaskMapper tasks,
+      DrawingVerificationResultMapper results,
+      DrawingVerificationCodec codec,
+      DrawingVerificationService verifications) {
+    this.contexts = contexts;
+    this.items = items;
+    this.preparations = preparations;
+    this.versions = versions;
+    this.nodes = nodes;
+    this.tasks = tasks;
+    this.results = results;
+    this.codec = codec;
+    this.verifications = verifications;
   }
 
   @Transactional
-  public ImportResult importSource(
-      ImportCommand command, ElectronicDrawingExcelAcquisitionPort.AcquiredExcel acquired) {
-    ValidCommand validCommand = validateCommand(command);
-    byte[] content = validateAcquired(validCommand.requestedDrawingNo(), acquired);
-    ElectronicDrawingWorkContext context = contextPort.load(
-        validCommand.workflowId(), validCommand.businessUnitType(),
-        validCommand.applicableOrgCode(), validCommand.accountingMonth());
-    validateContext(context);
-
-    OaFormItem quoteItem = oaFormItemMapper.selectById(context.oaFormItemId());
-    validateQuoteBinding(context, quoteItem);
-    String quoteDrawingNo = productLookup.requireDrawing(context, validCommand.requestedDrawingNo());
-    requireSameDrawing(validCommand.requestedDrawingNo(), acquired.drawingNo(), "请求图号与接口响应图号不一致");
-    requireSameDrawing(validCommand.requestedDrawingNo(), quoteDrawingNo, "请求图号与报价产品图号不一致");
-
-    ElectronicDrawingExcelParseResult parsed = parser.parse(
-        acquired.fileName(), new ByteArrayInputStream(content));
-    if (!parsed.valid()) {
-      throw new ElectronicDrawingSourceImportException(
-          ElectronicDrawingSourceImportException.PARSE_INVALID,
-          "电子图库 Excel 解析失败：" + parsed.issues().getFirst().message(),
-          parsed.issues());
+  public ImportResult importSource(ElectronicDrawingWorkContext expected, Long resultId) {
+    if (expected == null
+        || expected.workflowId() == null
+        || expected.oaFormItemId() == null
+        || resultId == null) {
+      throw invalid("导入缺少报价上下文或已接收结果");
     }
-
-    QuoteBomPreparationRecord preparation = preparationMapper
-        .selectForElectronicDrawingImport(context.preparationId());
+    // 锁是事务的首次读取；并发确认/报价修改之后再建立一致性快照。
+    items.selectForCostingWrite(expected.oaFormItemId());
+    var context =
+        contexts.load(
+            expected.workflowId(),
+            expected.businessUnitType(),
+            expected.applicableOrgCode(),
+            expected.accountingMonth());
+    var result = results.findById(resultId);
+    if (result == null) throw invalid("已接收的电子图库结果不存在");
+    var known = tasks.selectById(result.getVerificationTaskId());
+    if (known == null || !Objects.equals(known.getOaFormItemId(), expected.oaFormItemId())) {
+      throw invalid("电子图库结果没有对应的报价产品任务");
+    }
+    var task = tasks.selectForUpdate(known.getId());
+    validateBinding(context, task, resultId);
+    var preparation = preparations.selectForElectronicDrawingImport(context.preparationId());
     validatePreparation(context, preparation);
-    String supplementScope = supplementScope(context);
-
-    QuoteBomSupplementVersion existing = findSameSource(
-        preparation.getId(), supplementScope, context, quoteDrawingNo, acquired.sha256());
-    if (existing != null) {
-      List<ElectronicDrawingSourceNode> storedNodes = sourceNodeRepository.findByVersionId(existing.getId());
-      boolean sameNodes = sameImmutableNodes(storedNodes, parsed.nodes());
-      // 旧解析器在第一页页脚停止。原文件SHA和全部已存行一致，仅增加后续页时
-      // 创建完整来源的新版本；不覆盖旧节点、料号选择或已提交资料的历史引用。
-      boolean completedPages = !sameNodes && !storedNodes.isEmpty()
-          && storedNodes.size() < parsed.nodes().size()
-          && sameImmutableNodes(storedNodes, parsed.nodes().subList(0, storedNodes.size()));
-      if (!sameNodes && !completedPages) {
-        throw error(ElectronicDrawingSourceImportException.SOURCE_INVALID,
-            "相同 SHA 的电子图库源版本与已保存原始行不一致");
-      }
-      if (sameNodes && sameWeightUnits(storedNodes, parsed.nodes())) {
-        boolean current = Objects.equals(context.sourceVersionId(), existing.getId());
-        if (!current) {
-          attach(context, existing.getId());
-          current = true;
-        }
-        return result(existing, storedNodes.size(), true, current);
-      }
-      // 同一文件按新单位约定重查时另存版本，不回填或覆盖旧源节点及其审批引用。
+    var payload = codec.parse(result.getRawSummaryJson());
+    if (DrawingVerificationStore.INITIAL.equals(result.getEventType())
+        && payload.summary().differenceCount() != 0) {
+      throw invalid("有差异的首次结果必须等待人工确认");
     }
-
-    LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
-    QuoteBomSupplementVersion version = newVersion(
-        context, preparation, parsed, acquired, quoteDrawingNo, supplementScope, now);
-    if (versionMapper.insert(version) != 1 || version.getId() == null) {
-      throw error(ElectronicDrawingSourceImportException.SOURCE_INVALID, "电子图库源版本创建失败");
+    String scope = "NON_BARE_FULL_BOM";
+    var existing =
+        versions.selectList(
+            Wrappers.<QuoteBomSupplementVersion>lambdaQuery()
+                .eq(QuoteBomSupplementVersion::getPreparationId, preparation.getId())
+                .eq(QuoteBomSupplementVersion::getDrawingResultId, resultId)
+                .eq(QuoteBomSupplementVersion::getSupplementScope, scope)
+                .eq(QuoteBomSupplementVersion::getBomSource, ElectronicDrawingSourceKind.PDF)
+                .orderByDesc(QuoteBomSupplementVersion::getVersionNo)
+                .orderByDesc(QuoteBomSupplementVersion::getId)
+                .last("LIMIT 1"));
+    if (!existing.isEmpty()) {
+      var version = existing.getFirst();
+      if (!Objects.equals(context.sourceVersionId(), version.getId()))
+        attach(context, version.getId());
+      complete(task, resultId);
+      logCommitted(task, version, true);
+      return receipt(version, nodes.findByVersionId(version.getId()).size(), true);
     }
-    List<ElectronicDrawingSourceNode> sourceNodes = parsed.nodes().stream()
-        .map(node -> sourceNode(version.getId(), node, now))
-        .toList();
-    sourceNodeRepository.insertAll(version.getId(), sourceNodes);
+    // 多组原文完整保存在结果中；只有核实归属的产品组成为本报价的 BOM 行。
+    var sourceNodes = DrawingJsonNodes.forProduct(payload.summary(), task.getDrawingNo());
+    var now = now();
+    var version = newVersion(context, task, resultId, scope, result.getReceivedAt(), now);
+    if (versions.insert(version) != 1 || version.getId() == null) throw invalid("电子图库来源版本创建失败");
+    sourceNodes.forEach(
+        node -> {
+          node.setSupplementVersionId(version.getId());
+          node.setCreatedAt(now);
+          node.setUpdatedAt(now);
+        });
+    nodes.insertAll(version.getId(), sourceNodes);
     attach(context, version.getId());
-    return result(version, sourceNodes.size(), false, true);
+    complete(task, resultId);
+    logCommitted(task, version, false);
+    return receipt(version, sourceNodes.size(), false);
   }
 
-  private ValidCommand validateCommand(ImportCommand command) {
-    if (command == null || command.workflowId() == null || command.workflowId() <= 0) {
-      throw error(ElectronicDrawingSourceImportException.COMMAND_INVALID, "电子图库工作上下文ID不能为空");
-    }
-    return new ValidCommand(
-        command.workflowId(),
-        requiredText(command.businessUnitType(), "业务单元",
-            ElectronicDrawingSourceImportException.COMMAND_INVALID),
-        requiredText(command.applicableOrgCode(), "适用组织",
-            ElectronicDrawingSourceImportException.COMMAND_INVALID),
-        requiredText(command.requestedDrawingNo(), "请求图号",
-            ElectronicDrawingSourceImportException.COMMAND_INVALID),
-        parseMonth(command.accountingMonth()).toString());
+  private void logCommitted(
+      DrawingVerificationTask task, QuoteBomSupplementVersion source, boolean reused) {
+    if (!TransactionSynchronizationManager.isSynchronizationActive()) return;
+    TransactionSynchronizationManager.registerSynchronization(
+        new TransactionSynchronization() {
+          @Override
+          public void afterCommit() {
+            log.info(
+                "drawing source committed: requestId={} localTaskId={} externalTaskId={}"
+                    + " resultId={} sourceVersionId={} oaNo={} itemId={} month={} reused={}",
+                task.getRequestId(),
+                task.getId(),
+                task.getExternalTaskId(),
+                source.getDrawingResultId(),
+                source.getId(),
+                source.getOaNo(),
+                source.getOaFormItemId(),
+                source.getPeriodMonth(),
+                reused);
+          }
+        });
   }
 
-  private byte[] validateAcquired(
-      String requestedDrawingNo, ElectronicDrawingExcelAcquisitionPort.AcquiredExcel acquired) {
-    if (acquired == null) {
-      throw error(ElectronicDrawingSourceImportException.SOURCE_INVALID, "电子图库接口响应不能为空");
-    }
-    requireSameDrawing(requestedDrawingNo, acquired.drawingNo(), "请求图号与接口响应图号不一致");
-    byte[] content = acquired.content();
-    if (content.length == 0 || acquired.fileSize() != content.length) {
-      throw error(ElectronicDrawingSourceImportException.SOURCE_INVALID, "电子图库文件大小证据不一致");
-    }
-    String fileName = requiredText(
-        acquired.fileName(), "电子图库文件名", ElectronicDrawingSourceImportException.SOURCE_INVALID);
-    if (!fileName.toLowerCase(Locale.ROOT).endsWith(".xlsx")) {
-      throw error(ElectronicDrawingSourceImportException.SOURCE_INVALID, "电子图库文件必须为 xlsx");
-    }
-    String expectedSha = requiredText(
-        acquired.sha256(), "电子图库文件 SHA-256", ElectronicDrawingSourceImportException.SOURCE_INVALID)
-        .toLowerCase(Locale.ROOT);
-    if (!expectedSha.matches("[0-9a-f]{64}") || !expectedSha.equals(sha256(content))) {
-      throw error(ElectronicDrawingSourceImportException.SOURCE_INVALID, "电子图库文件 SHA-256 证据不一致");
-    }
-    requiredText(acquired.requestId(), "电子图库请求标识",
-        ElectronicDrawingSourceImportException.SOURCE_INVALID);
-    if (acquired.acquiredAt() == null) {
-      throw error(ElectronicDrawingSourceImportException.SOURCE_INVALID, "电子图库取数时间不能为空");
-    }
-    return content;
-  }
-
-  private void validateContext(ElectronicDrawingWorkContext context) {
-    if (context == null || !context.bomRequired() || !context.active()) {
-      throw error(ElectronicDrawingSourceImportException.BINDING_INVALID,
-          "当前报价产品不是活动的 BOM 处理对象");
-    }
-    if (context.preparationId() == null || context.revision() == null
-        || context.oaFormItemId() == null || context.oaFormId() == null) {
-      throw error(ElectronicDrawingSourceImportException.BINDING_INVALID,
-          "报价产品缺少 BOM 准备记录、报价产品行或上下文版本");
-    }
-    requiredText(context.taskNo(), "业务任务号",
-        ElectronicDrawingSourceImportException.BINDING_INVALID);
-    requiredText(context.quoteProductCode(), "顶层料号",
-        ElectronicDrawingSourceImportException.BINDING_INVALID);
-    requiredText(context.materialOrgCode(), "物料组织",
-        ElectronicDrawingSourceImportException.BINDING_INVALID);
-    parseMonth(context.accountingMonth());
-  }
-
-  private void validateQuoteBinding(
-      ElectronicDrawingWorkContext context,
-      OaFormItem quoteItem) {
-    if (quoteItem == null
-        || !Objects.equals(quoteItem.getId(), context.oaFormItemId())
-        || !Objects.equals(quoteItem.getOaFormId(), context.oaFormId())
-        || !sameText(quoteItem.getBusinessUnitType(), context.businessUnitType())
-        || !sameText(com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(quoteItem),
-            context.quoteProductCode())) {
-      throw error(ElectronicDrawingSourceImportException.BINDING_INVALID,
-          "电子图库上下文、报价产品行和顶层料号绑定不一致");
+  private void validateBinding(
+      ElectronicDrawingWorkContext context, DrawingVerificationTask task, Long resultId) {
+    if (task == null
+        || !"RECEIVED".equals(task.getTaskState())
+        || task.getActiveScopeKey() == null
+        || !Objects.equals(resultId, task.getCurrentResultId())
+        || !Objects.equals(task.getOaFormItemId(), context.oaFormItemId())
+        || !Objects.equals(task.getOaNo(), context.oaNo())
+        || !Objects.equals(task.getBusinessUnitType(), context.businessUnitType())
+        || !Objects.equals(task.getMaterialOrgCode(), context.materialOrgCode())
+        || !Objects.equals(task.getPriceOrgCode(), context.priceOrgCode())
+        || !Objects.equals(task.getAccountingMonth(), context.accountingMonth())
+        || !context.active()
+        || !context.bomRequired()
+        || context.preparationId() == null
+        || !"FULL_BOM".equals(context.primaryScope())
+        || !verifications.inputsStillMatch(context, task)) {
+      throw invalid("电子图库结果已过期或与当前报价产品、月份、组织及输入不一致");
     }
   }
 
   private void validatePreparation(
-      ElectronicDrawingWorkContext context,
-      QuoteBomPreparationRecord preparation) {
+      ElectronicDrawingWorkContext context, QuoteBomPreparationRecord preparation) {
     if (preparation == null
-        || !Objects.equals(preparation.getId(), context.preparationId())
         || !Objects.equals(preparation.getOaFormItemId(), context.oaFormItemId())
         || !Objects.equals(preparation.getOaFormId(), context.oaFormId())
-        || !sameText(preparation.getOaNo(), context.oaNo())
-        || !sameText(preparation.getQuoteProductCode(), context.quoteProductCode())
-        || !sameText(preparation.getCostPeriodMonth(), context.accountingMonth())
-        || !sameText(preparation.getMaterialOrganizationCode(), context.materialOrgCode())
-        || Objects.equals(preparation.getActiveFlag(), 0)) {
-      throw error(ElectronicDrawingSourceImportException.BINDING_INVALID,
-          "BOM 准备记录与报价产品行、物料组织或核算月份不一致");
+        || !Objects.equals(preparation.getQuoteProductCode(), context.quoteProductCode())
+        || !Objects.equals(preparation.getCostPeriodMonth(), context.accountingMonth())
+        || !Objects.equals(preparation.getMaterialOrganizationCode(), context.materialOrgCode())
+        || !Objects.equals(preparation.getActiveFlag(), 1)) {
+      throw invalid("图库来源与当前 BOM 准备记录不一致");
     }
-    requiredText(preparation.getProductType(), "产品类型",
-        ElectronicDrawingSourceImportException.BINDING_INVALID);
-  }
-
-  private QuoteBomSupplementVersion findSameSource(
-      Long preparationId,
-      String supplementScope,
-      ElectronicDrawingWorkContext context,
-      String drawingNo,
-      String sha) {
-    List<QuoteBomSupplementVersion> rows = versionMapper.selectList(
-        Wrappers.<QuoteBomSupplementVersion>lambdaQuery()
-            .eq(QuoteBomSupplementVersion::getPreparationId, preparationId)
-            .eq(QuoteBomSupplementVersion::getSupplementScope, supplementScope)
-            .eq(QuoteBomSupplementVersion::getBomSource, BOM_SOURCE)
-            .eq(QuoteBomSupplementVersion::getTaskNo, context.taskNo())
-            .eq(QuoteBomSupplementVersion::getPeriodMonth, context.accountingMonth())
-            .eq(QuoteBomSupplementVersion::getElectronicDrawingNo, drawingNo)
-            .eq(QuoteBomSupplementVersion::getMaterialOrgCode, context.materialOrgCode())
-            .eq(QuoteBomSupplementVersion::getSourceFileSha256, sha.toLowerCase(Locale.ROOT))
-            .orderByDesc(QuoteBomSupplementVersion::getVersionNo)
-            .orderByDesc(QuoteBomSupplementVersion::getId)
-            .last("LIMIT 1"));
-    return rows.isEmpty() ? null : rows.getFirst();
   }
 
   private QuoteBomSupplementVersion newVersion(
       ElectronicDrawingWorkContext context,
-      QuoteBomPreparationRecord preparation,
-      ElectronicDrawingExcelParseResult parsed,
-      ElectronicDrawingExcelAcquisitionPort.AcquiredExcel acquired,
-      String quoteDrawingNo,
-      String supplementScope,
+      DrawingVerificationTask task,
+      Long resultId,
+      String scope,
+      LocalDateTime receivedAt,
       LocalDateTime now) {
-    QuoteBomSupplementVersion version = new QuoteBomSupplementVersion();
-    version.setPreparationId(preparation.getId());
+    var version = new QuoteBomSupplementVersion();
+    version.setPreparationId(context.preparationId());
     version.setTaskNo(context.taskNo());
     version.setOaNo(context.oaNo());
     version.setOaFormItemId(context.oaFormItemId());
-    version.setQuoteProductCode(context.quoteProductCode().trim());
+    version.setQuoteProductCode(context.quoteProductCode());
     version.setProductType("NON_BARE");
-    version.setSupplementScope(supplementScope);
-    version.setBomSource(BOM_SOURCE);
-    version.setElectronicDrawingNo(quoteDrawingNo.trim());
-    version.setSourceFileName(acquired.fileName().trim());
-    version.setSourceFileSha256(acquired.sha256().trim().toLowerCase(Locale.ROOT));
-    version.setSourceFileSize(acquired.fileSize());
-    version.setSourceSheetName(parsed.sourceSheetName());
-    version.setSourceAcquiredAt(acquired.acquiredAt());
-    version.setSourceRequestId(acquired.requestId().trim());
-    version.setMaterialOrgCode(context.materialOrgCode().trim());
-    version.setVersionNo(nextVersionNo(preparation.getId(), supplementScope));
-    version.setVersionStatus(VERSION_DRAFT);
+    version.setSupplementScope(scope);
+    version.setBomSource(ElectronicDrawingSourceKind.PDF);
+    version.setElectronicDrawingNo(task.getDrawingNo());
+    version.setDrawingResultId(resultId);
+    version.setSourceRequestId(task.getRequestId());
+    version.setSourceAcquiredAt(receivedAt);
+    version.setMaterialOrgCode(context.materialOrgCode());
+    version.setPeriodMonth(context.accountingMonth());
+    version.setEffectiveFrom(YearMonth.parse(context.accountingMonth()).atDay(1));
+    List<QuoteBomSupplementVersion> latest =
+        versions.selectList(
+            Wrappers.<QuoteBomSupplementVersion>lambdaQuery()
+                .eq(QuoteBomSupplementVersion::getPreparationId, context.preparationId())
+                .eq(QuoteBomSupplementVersion::getSupplementScope, scope)
+                .orderByDesc(QuoteBomSupplementVersion::getVersionNo)
+                .last("LIMIT 1"));
+    version.setVersionNo(latest.isEmpty() ? 1 : Math.addExact(latest.getFirst().getVersionNo(), 1));
+    version.setVersionStatus("DRAFT");
     version.setActiveFlag(1);
-    version.setPeriodMonth(context.accountingMonth().trim());
-    version.setEffectiveFrom(parseMonth(context.accountingMonth()).atDay(1));
     version.setCreatedAt(now);
     version.setUpdatedAt(now);
     return version;
   }
 
-  private int nextVersionNo(Long preparationId, String supplementScope) {
-    List<QuoteBomSupplementVersion> rows = versionMapper.selectList(
-        Wrappers.<QuoteBomSupplementVersion>lambdaQuery()
-            .eq(QuoteBomSupplementVersion::getPreparationId, preparationId)
-            .eq(QuoteBomSupplementVersion::getSupplementScope, supplementScope)
-            .orderByDesc(QuoteBomSupplementVersion::getVersionNo)
-            .last("LIMIT 1"));
-    return rows.isEmpty() || rows.getFirst().getVersionNo() == null
-        ? 1 : Math.addExact(rows.getFirst().getVersionNo(), 1);
+  private void attach(ElectronicDrawingWorkContext context, Long sourceId) {
+    contexts.attachSourceVersion(context, sourceId, now());
   }
 
-  private ElectronicDrawingSourceNode sourceNode(
-      Long versionId, ElectronicDrawingExcelParseResult.SourceNode source, LocalDateTime now) {
-    ElectronicDrawingSourceNode node = new ElectronicDrawingSourceNode();
-    node.setSupplementVersionId(versionId);
-    node.setSourceRowNo(source.sourceRowNumber());
-    node.setSourceSequence(source.sourceSequence());
-    node.setParentSourceSequence(source.parentSourceSequence());
-    node.setDrawingCode(source.drawingCode());
-    node.setSourceName(source.sourceName());
-    node.setQty(source.quantity());
-    node.setMaterial(source.sourceMaterial());
-    node.setImportanceClass(source.importanceClass());
-    node.setHsfRiskClass(source.hsfRiskClass());
-    node.setReferenceWeight(source.referenceWeight());
-    node.setReferenceWeightUnit(source.referenceWeightUnit());
-    node.setSourceRemark(source.remark());
-    node.setMatchStatus(ElectronicDrawingSourceNode.MATCH_UNMATCHED);
-    node.setCreatedAt(now);
-    node.setUpdatedAt(now);
-    return node;
-  }
-
-  private void attach(ElectronicDrawingWorkContext context, Long versionId) {
-    LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
-    try {
-      contextPort.attachSourceVersion(context, versionId, now);
-    } catch (ElectronicDrawingWorkflowRetryException exception) {
-      throw error(ElectronicDrawingSourceImportException.TASK_VERSION_CONFLICT,
-          "产品任务版本已变化，请重新检查后重试");
+  private void complete(DrawingVerificationTask task, Long resultId) {
+    if (Objects.equals(task.getConsumedResultId(), resultId)
+        && "COMPLETE".equals(task.getConsumptionState())) return;
+    if (tasks.completeConsumption(task.getId(), resultId, now()) != 1) {
+      throw new ElectronicDrawingWorkflowRetryException("图库确认结果已变化，请读取最新结果后继续");
     }
   }
 
-  private boolean sameWeightUnits(
-      List<ElectronicDrawingSourceNode> stored,
-      List<ElectronicDrawingExcelParseResult.SourceNode> parsed) {
-    for (int index = 0; index < stored.size(); index++) {
-      if (!Objects.equals(stored.get(index).getReferenceWeightUnit(),
-          parsed.get(index).referenceWeightUnit())) return false;
-    }
-    return true;
-  }
-
-  private boolean sameImmutableNodes(
-      List<ElectronicDrawingSourceNode> stored,
-      List<ElectronicDrawingExcelParseResult.SourceNode> parsed) {
-    if (stored.size() != parsed.size()) return false;
-    for (int index = 0; index < stored.size(); index++) {
-      ElectronicDrawingSourceNode left = stored.get(index);
-      ElectronicDrawingExcelParseResult.SourceNode right = parsed.get(index);
-      if (!Objects.equals(left.getSourceRowNo(), right.sourceRowNumber())
-          || !Objects.equals(left.getSourceSequence(), right.sourceSequence())
-          || !Objects.equals(left.getParentSourceSequence(), right.parentSourceSequence())
-          || !Objects.equals(left.getDrawingCode(), right.drawingCode())
-          || !Objects.equals(left.getSourceName(), right.sourceName())
-          || !decimalEquals(left.getQty(), right.quantity())
-          || !Objects.equals(left.getMaterial(), right.sourceMaterial())
-          || !Objects.equals(left.getImportanceClass(), right.importanceClass())
-          || !Objects.equals(left.getHsfRiskClass(), right.hsfRiskClass())
-          || !decimalEquals(left.getReferenceWeight(), right.referenceWeight())
-          || !Objects.equals(left.getSourceRemark(), right.remark())) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  private static ImportResult result(
-      QuoteBomSupplementVersion version, int nodeCount, boolean reused, boolean current) {
+  private ImportResult receipt(QuoteBomSupplementVersion version, int count, boolean reused) {
     return new ImportResult(
-        version.getId(), version.getVersionNo(), version.getVersionStatus(), nodeCount,
-        version.getSourceFileSha256(), reused, current);
+        version.getId(),
+        version.getVersionNo(),
+        version.getVersionStatus(),
+        count,
+        version.getDrawingResultId(),
+        reused,
+        true);
   }
 
-  private static void requireSameDrawing(String left, String right, String message) {
-    if (!sameText(left, right)) {
-      throw error(ElectronicDrawingSourceImportException.DRAWING_MISMATCH, message);
-    }
+  private static LocalDateTime now() {
+    return LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
   }
 
-  private static YearMonth parseMonth(String value) {
-    try {
-      return YearMonth.parse(requiredText(value, "核算月份",
-          ElectronicDrawingSourceImportException.BINDING_INVALID));
-    } catch (DateTimeParseException exception) {
-      throw error(ElectronicDrawingSourceImportException.BINDING_INVALID,
-          "核算月份格式必须为 YYYY-MM");
-    }
+  private static ElectronicDrawingSourceImportException invalid(String message) {
+    return new ElectronicDrawingSourceImportException(
+        ElectronicDrawingSourceImportException.BINDING_INVALID, message);
   }
-
-  private static String supplementScope(ElectronicDrawingWorkContext context) {
-    if (context == null || !"FULL_BOM".equalsIgnoreCase(context.primaryScope())) {
-      throw error(ElectronicDrawingSourceImportException.BINDING_INVALID,
-          "电子图库兜底只允许处理 U9 根 BOM 明确缺失的完整 BOM 任务");
-    }
-    // 电子图库兜底得到的是本次报价的完整混合 BOM。即使 U9 料品主档把顶层料号归为裸品，
-    // 也不能再次要求包装参考，否则已合成的 18+10 计价叶会在六步核算入口被错误阻断。
-    return "NON_BARE_FULL_BOM";
-  }
-
-  private static boolean decimalEquals(BigDecimal left, BigDecimal right) {
-    return left == null ? right == null : right != null && left.compareTo(right) == 0;
-  }
-
-  private static boolean sameText(String left, String right) {
-    String normalizedLeft = trim(left);
-    String normalizedRight = trim(right);
-    return normalizedLeft != null && normalizedRight != null
-        && normalizedLeft.equalsIgnoreCase(normalizedRight);
-  }
-
-  private static String requiredText(String value, String label, String code) {
-    String normalized = trim(value);
-    if (normalized == null) throw error(code, label + "不能为空");
-    return normalized;
-  }
-
-  private static String trim(String value) {
-    return value == null || value.isBlank() ? null : value.trim();
-  }
-
-  private static String sha256(byte[] content) {
-    try {
-      return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));
-    } catch (NoSuchAlgorithmException exception) {
-      throw new IllegalStateException("JVM 不支持 SHA-256", exception);
-    }
-  }
-
-  private static ElectronicDrawingSourceImportException error(String code, String message) {
-    return new ElectronicDrawingSourceImportException(code, message);
-  }
-
-  public record ImportCommand(
-      Long workflowId,
-      String businessUnitType,
-      String applicableOrgCode,
-      String requestedDrawingNo,
-      String accountingMonth) {}
 
   public record ImportResult(
       Long supplementVersionId,
       Integer versionNo,
       String versionStatus,
       int sourceNodeCount,
-      String sourceFileSha256,
+      Long drawingResultId,
       boolean reused,
       boolean currentVersion) {}
-
-  private record ValidCommand(
-      Long workflowId,
-      String businessUnitType,
-      String applicableOrgCode,
-      String requestedDrawingNo,
-      String accountingMonth) {}
 }

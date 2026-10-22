@@ -1,429 +1,204 @@
 package com.sanhua.marketingcost.service.electronicdrawing;
 
-import com.sanhua.marketingcost.service.electronicdrawing.*;
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.argThat;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
-import static org.mockito.Mockito.when;
-
-import com.sanhua.marketingcost.entity.ElectronicDrawingSourceNode;
-import com.sanhua.marketingcost.entity.OaFormItem;
-import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
-import com.sanhua.marketingcost.entity.QuoteBomSupplementVersion;
-import com.sanhua.marketingcost.mapper.OaFormItemMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
-import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
-import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sanhua.marketingcost.entity.*;
+import com.sanhua.marketingcost.integration.drawing.DrawingVerificationCodec;
+import com.sanhua.marketingcost.integration.drawing.DrawingVerificationFixtures;
+import com.sanhua.marketingcost.mapper.*;
 import java.time.LocalDateTime;
-import java.util.HexFormat;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 
-@ExtendWith(MockitoExtension.class)
-@DisplayName("电子图库源版本导入服务")
 class ElectronicDrawingSourceImportServiceTest {
-  private static final String DRAWING = "J40AH-40HY-03";
-  private static final LocalDateTime ACQUIRED_AT = LocalDateTime.of(2026, 8, 30, 10, 30);
-
-  @Mock private ElectronicDrawingExcelParser parser;
-  @Mock private ElectronicDrawingWorkflowContextPort contextPort;
-  @Mock private OaFormItemMapper oaFormItemMapper;
-  @Mock private QuoteBomPreparationRecordMapper preparationMapper;
-  @Mock private QuoteBomSupplementVersionMapper versionMapper;
-  @Mock private ElectronicDrawingSourceNodeRepository sourceNodeRepository;
-
-  private ElectronicDrawingSourceImportService service;
-  private ElectronicDrawingWorkContext context;
-  private OaFormItem quoteItem;
-  private QuoteBomPreparationRecord preparation;
-  private ElectronicDrawingExcelParseResult parsed;
+  final ElectronicDrawingWorkflowContextPort contexts =
+      mock(ElectronicDrawingWorkflowContextPort.class);
+  final OaFormItemMapper items = mock(OaFormItemMapper.class);
+  final QuoteBomPreparationRecordMapper preparations = mock(QuoteBomPreparationRecordMapper.class);
+  final QuoteBomSupplementVersionMapper versions = mock(QuoteBomSupplementVersionMapper.class);
+  final ElectronicDrawingSourceNodeRepository nodes =
+      mock(ElectronicDrawingSourceNodeRepository.class);
+  final DrawingVerificationTaskMapper tasks = mock(DrawingVerificationTaskMapper.class);
+  final DrawingVerificationResultMapper results = mock(DrawingVerificationResultMapper.class);
+  final DrawingVerificationService verifications = mock(DrawingVerificationService.class);
+  final DrawingVerificationCodec codec = new DrawingVerificationCodec(new ObjectMapper());
+  final ElectronicDrawingSourceImportService service =
+      new ElectronicDrawingSourceImportService(
+          contexts, items, preparations, versions, nodes, tasks, results, codec, verifications);
+  DrawingVerificationTask task;
+  DrawingVerificationResult result;
+  ElectronicDrawingWorkContext scope;
 
   @BeforeEach
-  void setUp() {
-    service = new ElectronicDrawingSourceImportService(
-        parser, contextPort, oaFormItemMapper, preparationMapper, versionMapper,
-        sourceNodeRepository, new ElectronicDrawingProductLookup(oaFormItemMapper,
-            org.mockito.Mockito.mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class)));
-    context = context(null);
-    quoteItem = quoteItem();
-    preparation = preparation();
-    parsed = parsed();
+  void setup() {
+    scope =
+        new ElectronicDrawingWorkContext(
+            101L,
+            0,
+            301L,
+            null,
+            10L,
+            101L,
+            "TASK",
+            "OA",
+            "P",
+            null,
+            "Product",
+            null,
+            null,
+            "NON_BARE",
+            "FULL_BOM",
+            "2026-08",
+            "210",
+            "COMMERCIAL",
+            "COMMERCIAL",
+            "210",
+            true,
+            true,
+            "NEED_TECH",
+            null,
+            null,
+            null,
+            null);
+    task = new DrawingVerificationTask();
+    task.setId(501L);
+    task.setOaFormItemId(101L);
+    task.setOaNo("OA");
+    task.setBusinessUnitType("COMMERCIAL");
+    task.setMaterialOrgCode("COMMERCIAL");
+    task.setPriceOrgCode("210");
+    task.setAccountingMonth("2026-08");
+    task.setDrawingNo("DRAW-01");
+    task.setTaskState("RECEIVED");
+    task.setActiveScopeKey("active");
+    task.setCurrentResultId(601L);
+    task.setRequestId("request");
+    result = new DrawingVerificationResult();
+    result.setId(601L);
+    result.setVerificationTaskId(501L);
+    result.setEventType("INITIAL");
+    result.setReceivedAt(LocalDateTime.of(2026, 8, 1, 1, 1));
+    result.setRawSummaryJson(DrawingVerificationFixtures.initial("external").toString());
+    var preparation = new QuoteBomPreparationRecord();
+    preparation.setId(301L);
+    preparation.setOaFormItemId(101L);
+    preparation.setOaFormId(10L);
+    preparation.setQuoteProductCode("P");
+    preparation.setCostPeriodMonth("2026-08");
+    preparation.setMaterialOrganizationCode("COMMERCIAL");
+    preparation.setActiveFlag(1);
+    when(contexts.load(101L, "COMMERCIAL", "210", "2026-08")).thenReturn(scope);
+    when(results.findById(601L)).thenReturn(result);
+    when(tasks.selectById(501L)).thenReturn(task);
+    when(tasks.selectForUpdate(501L)).thenReturn(task);
+    when(preparations.selectForElectronicDrawingImport(301L)).thenReturn(preparation);
+    when(verifications.inputsStillMatch(scope, task)).thenReturn(true);
+    when(versions.selectList(any())).thenReturn(List.of());
+    when(versions.insert(any(QuoteBomSupplementVersion.class)))
+        .thenAnswer(
+            call -> {
+              ((QuoteBomSupplementVersion) call.getArgument(0)).setId(701L);
+              return 1;
+            });
+    when(tasks.completeConsumption(eq(501L), eq(601L), any())).thenReturn(1);
   }
 
   @Test
-  void rejectsRequestAndResponseDrawingMismatchBeforeDatabaseReadOrWrite() {
-    assertThatThrownBy(() -> service.importSource(command(), acquired("OTHER-DRAWING")))
-        .isInstanceOfSatisfying(ElectronicDrawingSourceImportException.class,
-            error -> assertThat(error.getCode())
-                .isEqualTo(ElectronicDrawingSourceImportException.DRAWING_MISMATCH));
+  void importsOnlyVerifiedGroupWithDistinctRowsAndRealJsonEvidence() {
+    var imported = service.importSource(scope, 601L);
+    var capture = ArgumentCaptor.forClass(QuoteBomSupplementVersion.class);
+    verify(versions).insert(capture.capture());
+    var source = capture.getValue();
+    assertThat(source.getBomSource()).isEqualTo(ElectronicDrawingSourceKind.PDF);
+    assertThat(source.getDrawingResultId()).isEqualTo(601L);
+    assertThat(source.getSourceFileName()).isNull();
+    assertThat(source.getSourceFileSha256()).isNull();
+    assertThat(source.getSourceFileSize()).isNull();
+    assertThat(source.getSourceSheetName()).isNull();
+    assertThat(imported.sourceNodeCount()).isEqualTo(2);
+    verify(nodes)
+        .insertAll(
+            eq(701L),
+            argThat(
+                rows ->
+                    rows.size() == 2
+                        && rows.get(0).getSourceSequence().equals("G1:R1")
+                        && rows.get(1).getSourceSequence().equals("G1:R2")
+                        && rows.stream()
+                            .allMatch(
+                                row ->
+                                    row.getParentSourceSequence() == null
+                                        && row.getReferenceWeightUnit() == null)));
+    assertThat(result.getRawSummaryJson()).contains("DRAW-02", "PART-002");
+    verify(tasks).completeConsumption(eq(501L), eq(601L), any());
+  }
 
-    verifyNoInteractions(contextPort, preparationMapper, versionMapper, sourceNodeRepository);
+  @ParameterizedTest
+  @ValueSource(strings = {"WAIT_REVIEW", "SUPERSEDED", "REQUESTING", "FAILED"})
+  void doesNotImportUnadoptedTask(String state) {
+    task.setTaskState(state);
+    assertThatThrownBy(() -> service.importSource(scope, 601L)).hasMessageContaining("不一致");
+    verifyNoInteractions(nodes);
+    verify(versions, never()).insert(any(QuoteBomSupplementVersion.class));
   }
 
   @Test
-  void rejectsQuoteDrawingMismatchWithoutCreatingVersionOrNodes() {
-    quoteItem.setCustomerDrawing("OTHER-DRAWING");
-    arrangeBinding();
-
-    assertThatThrownBy(() -> service.importSource(command(), acquired(DRAWING)))
-        .isInstanceOfSatisfying(ElectronicDrawingSourceImportException.class,
-            error -> assertThat(error.getCode())
-                .isEqualTo(ElectronicDrawingSourceImportException.DRAWING_MISMATCH));
-
-    verifyNoInteractions(preparationMapper, versionMapper, sourceNodeRepository);
+  void changedQuoteInputsAreNotImported() {
+    when(verifications.inputsStillMatch(scope, task)).thenReturn(false);
+    assertThatThrownBy(() -> service.importSource(scope, 601L)).hasMessageContaining("输入不一致");
+    verifyNoInteractions(nodes);
   }
 
   @Test
-  void rejectsTaskQuoteAndPreparationBindingMismatchWithoutWriting() {
-    arrangeBinding();
-    preparation.setMaterialOrganizationCode("OTHER-ORG");
-    when(parser.parse(eq("drawing.xlsx"), any())).thenReturn(parsed);
-    when(preparationMapper.selectForElectronicDrawingImport(301L)).thenReturn(preparation);
-
-    assertThatThrownBy(() -> service.importSource(command(), acquired(DRAWING)))
-        .isInstanceOfSatisfying(ElectronicDrawingSourceImportException.class,
-            error -> assertThat(error.getCode())
-                .isEqualTo(ElectronicDrawingSourceImportException.BINDING_INVALID));
-
-    verify(versionMapper, never()).insert(any(QuoteBomSupplementVersion.class));
-    verifyNoInteractions(sourceNodeRepository);
+  void neverImportsResultFromAnotherQuote() {
+    task.setOaFormItemId(999L);
+    assertThatThrownBy(() -> service.importSource(scope, 601L)).hasMessageContaining("对应的报价产品");
+    verifyNoInteractions(nodes);
   }
 
   @Test
-  void rejectsParserIssuesBeforePreparationLockOrWrite() {
-    arrangeBinding();
-    ElectronicDrawingExcelParseResult invalid = new ElectronicDrawingExcelParseResult(
-        "drawing.xlsx", null, List.of(), List.of(
-            new ElectronicDrawingExcelParseResult.Issue(
-                "PARENT_MISSING", 8, "1.1", "缺少父节点")));
-    when(parser.parse(eq("drawing.xlsx"), any())).thenReturn(invalid);
+  void failedPointerUpdateThrowsSoTransactionCanRollback() {
+    when(tasks.completeConsumption(eq(501L), eq(601L), any())).thenReturn(0);
+    assertThatThrownBy(() -> service.importSource(scope, 601L))
+        .isInstanceOf(ElectronicDrawingWorkflowRetryException.class);
+  }
 
-    assertThatThrownBy(() -> service.importSource(command(), acquired(DRAWING)))
-        .isInstanceOfSatisfying(ElectronicDrawingSourceImportException.class, error -> {
-          assertThat(error.getCode()).isEqualTo(ElectronicDrawingSourceImportException.PARSE_INVALID);
-          assertThat(error.getParseIssues()).hasSize(1);
-        });
-
-    verifyNoInteractions(preparationMapper, versionMapper, sourceNodeRepository);
+  @ParameterizedTest
+  @NullAndEmptySource
+  @ValueSource(strings = {" ", "0", "-1", "two", "0.000000001", "1000000000000"})
+  void invalidCalculationQuantityNeverCreatesSource(String quantity) {
+    var body = DrawingVerificationFixtures.initial("external");
+    ((com.fasterxml.jackson.databind.node.ObjectNode)
+            body.path("data").path("DRAW-01").path("params").path("items").get(0))
+        .put("qty", quantity);
+    result.setRawSummaryJson(body.toString());
+    assertThatThrownBy(() -> service.importSource(scope, 601L))
+        .isInstanceOf(ElectronicDrawingSourceImportException.class)
+        .hasMessageContaining("数量");
+    verifyNoInteractions(nodes);
+    verify(versions, never()).insert(any(QuoteBomSupplementVersion.class));
   }
 
   @Test
-  void createsBoundDraftAndPersistsOnlyOriginalSourceFields() {
-    preparation.setProductType("BARE");
-    arrangeValidNewSource(List.of());
-    when(versionMapper.insert(any(QuoteBomSupplementVersion.class))).thenAnswer(invocation -> {
-      QuoteBomSupplementVersion version = invocation.getArgument(0);
-      version.setId(501L);
-      return 1;
-    });
-    when(contextPort.attachSourceVersion(eq(context), eq(501L), any()))
-        .thenReturn(context(501L));
-
-    ElectronicDrawingSourceImportService.ImportResult result =
-        service.importSource(command(), acquired(DRAWING));
-
-    assertThat(result.supplementVersionId()).isEqualTo(501L);
-    assertThat(result.versionNo()).isOne();
-    assertThat(result.sourceNodeCount()).isOne();
-    assertThat(result.reused()).isFalse();
-    ArgumentCaptor<QuoteBomSupplementVersion> versionCaptor =
-        ArgumentCaptor.forClass(QuoteBomSupplementVersion.class);
-    verify(versionMapper).insert(versionCaptor.capture());
-    assertThat(versionCaptor.getValue()).satisfies(version -> {
-      assertThat(version.getTaskNo()).isEqualTo("QCPT-101");
-      assertThat(version.getOaNo()).isEqualTo("OA-101");
-      assertThat(version.getOaFormItemId()).isEqualTo(201L);
-      assertThat(version.getQuoteProductCode()).isEqualTo("1053100052030");
-      assertThat(version.getProductType()).isEqualTo("NON_BARE");
-      assertThat(version.getSupplementScope()).isEqualTo("NON_BARE_FULL_BOM");
-      assertThat(version.getElectronicDrawingNo()).isEqualTo(DRAWING);
-      assertThat(version.getMaterialOrgCode()).isEqualTo("COMMERCIAL");
-      assertThat(version.getPeriodMonth()).isEqualTo("2026-08");
-      assertThat(version.getSourceAcquiredAt()).isEqualTo(ACQUIRED_AT);
-      assertThat(version.getVersionStatus()).isEqualTo("DRAFT");
-    });
-    @SuppressWarnings("unchecked")
-    ArgumentCaptor<List<ElectronicDrawingSourceNode>> nodesCaptor =
-        ArgumentCaptor.forClass(List.class);
-    verify(sourceNodeRepository).insertAll(eq(501L), nodesCaptor.capture());
-    assertThat(nodesCaptor.getValue()).singleElement().satisfies(node -> {
-      assertThat(node.getSourceRowNo()).isEqualTo(2);
-      assertThat(node.getSourceSequence()).isEqualTo("1");
-      assertThat(node.getParentSourceSequence()).isNull();
-      assertThat(node.getDrawingCode()).isEqualTo("S040A-29804");
-      assertThat(node.getQty()).isEqualByComparingTo("1");
-      assertThat(node.getReferenceWeight()).isEqualByComparingTo("6621.13");
-      assertThat(node.getReferenceWeightUnit()).isEqualTo("g");
-      assertThat(node.getMatchStatus()).isEqualTo(ElectronicDrawingSourceNode.MATCH_UNMATCHED);
-      assertThat(node.getResolvedMaterialCode()).isNull();
-    });
-  }
-
-  @Test
-  void sameShaIsIdempotentAndDoesNotCreateOrReattach() {
-    arrangeBinding();
-    when(parser.parse(eq("drawing.xlsx"), any())).thenReturn(parsed);
-    when(preparationMapper.selectForElectronicDrawingImport(301L)).thenReturn(preparation);
-    QuoteBomSupplementVersion existing = existingVersion(501L, 1, "DRAFT");
-    context = context(501L);
-    when(contextPort.load(101L, "COMMERCIAL", "210", "2026-08")).thenReturn(context);
-    when(versionMapper.selectList(any())).thenReturn(List.of(existing));
-    when(sourceNodeRepository.findByVersionId(501L)).thenReturn(List.of(storedNode()));
-
-    ElectronicDrawingSourceImportService.ImportResult result =
-        service.importSource(command(), acquired(DRAWING));
-
-    assertThat(result.reused()).isTrue();
-    assertThat(result.currentVersion()).isTrue();
-    assertThat(result.sourceNodeCount()).isOne();
-    verify(versionMapper, never()).insert(any(QuoteBomSupplementVersion.class));
-    verify(sourceNodeRepository, never()).insertAll(any(), any());
-    verify(contextPort, never()).attachSourceVersion(any(), any(), any());
-  }
-
-  @Test
-  void sameFileWithNewWeightUnitCreatesVersionAndPreservesHistoricalSource() {
-    var historical = existingVersion(500L, 1, "APPROVED");
-    var historicalNode = storedNode();
-    historicalNode.setSupplementVersionId(500L);
-    historicalNode.setReferenceWeightUnit(null);
-    context = context(500L);
-    arrangeBinding();
-    when(parser.parse(eq("drawing.xlsx"), any())).thenReturn(parsed);
-    when(preparationMapper.selectForElectronicDrawingImport(301L)).thenReturn(preparation);
-    when(versionMapper.selectList(any())).thenReturn(List.of(historical));
-    when(sourceNodeRepository.findByVersionId(500L)).thenReturn(List.of(historicalNode));
-    when(versionMapper.insert(any(QuoteBomSupplementVersion.class))).thenAnswer(invocation -> {
-      QuoteBomSupplementVersion version = invocation.getArgument(0);
-      version.setId(501L);
-      return 1;
-    });
-    when(contextPort.attachSourceVersion(eq(context), eq(501L), any())).thenReturn(context(501L));
-
-    var result = service.importSource(command(), acquired(DRAWING));
-
-    assertThat(result.reused()).isFalse();
-    assertThat(result.versionNo()).isEqualTo(2);
-    assertThat(result.supplementVersionId()).isEqualTo(501L);
-    assertThat(historical.getVersionStatus()).isEqualTo("APPROVED");
-    assertThat(historicalNode.getReferenceWeightUnit()).isNull();
-    assertThat(historicalNode.getReferenceWeight()).isEqualByComparingTo("6621.13");
-    verify(versionMapper, never()).updateById(any(QuoteBomSupplementVersion.class));
-    @SuppressWarnings("unchecked")
-    ArgumentCaptor<List<ElectronicDrawingSourceNode>> nodes = ArgumentCaptor.forClass(List.class);
-    verify(sourceNodeRepository).insertAll(eq(501L), nodes.capture());
-    assertThat(nodes.getValue()).singleElement().satisfies(node -> {
-      assertThat(node.getReferenceWeight()).isEqualByComparingTo("6621.13");
-      assertThat(node.getReferenceWeightUnit()).isEqualTo("g");
-    });
-  }
-
-  @Test
-  void changedShaCreatesNextVersionWithoutOverwritingPublishedVersion() {
-    QuoteBomSupplementVersion approved = existingVersion(500L, 1, "APPROVED");
-    context = context(500L);
-    arrangeValidNewSource(List.of(approved));
-    when(versionMapper.insert(any(QuoteBomSupplementVersion.class))).thenAnswer(invocation -> {
-      QuoteBomSupplementVersion version = invocation.getArgument(0);
-      version.setId(501L);
-      return 1;
-    });
-    when(contextPort.attachSourceVersion(eq(context), eq(501L), any()))
-        .thenReturn(context(501L));
-
-    ElectronicDrawingSourceImportService.ImportResult result =
-        service.importSource(command(), acquired(DRAWING));
-
-    assertThat(result.versionNo()).isEqualTo(2);
-    assertThat(approved.getVersionStatus()).isEqualTo("APPROVED");
-    assertThat(approved.getActiveFlag()).isOne();
-    verify(versionMapper, never()).updateById(any(QuoteBomSupplementVersion.class));
-  }
-
-  @Test
-  void sameFileWithAdditionalPagesCreatesCompleteVersionWithoutChangingHistoricalRows() {
-    var historical = existingVersion(500L, 1, "APPROVED");
-    var historicalNode = storedNode();
-    historicalNode.setSupplementVersionId(500L);
-    context = context(500L);
-    arrangeBinding();
-    var first = parsed.nodes().getFirst();
-    var child = new ElectronicDrawingExcelParseResult.SourceNode(
-        "1.1", "1", 2, "CHILD", "下一页明细", "铜", "B", "B",
-        new BigDecimal("2"), new BigDecimal("3"), "g", null, 41);
-    when(parser.parse(eq("drawing.xlsx"), any())).thenReturn(
-        new ElectronicDrawingExcelParseResult("drawing.xlsx", "Sheet", List.of(first, child), List.of()));
-    when(preparationMapper.selectForElectronicDrawingImport(301L)).thenReturn(preparation);
-    when(versionMapper.selectList(any())).thenReturn(List.of(historical));
-    when(sourceNodeRepository.findByVersionId(500L)).thenReturn(List.of(historicalNode));
-    when(versionMapper.insert(any(QuoteBomSupplementVersion.class))).thenAnswer(invocation -> {
-      QuoteBomSupplementVersion version = invocation.getArgument(0);
-      version.setId(501L);
-      return 1;
-    });
-    when(contextPort.attachSourceVersion(eq(context), eq(501L), any())).thenReturn(context(501L));
-
-    var result = service.importSource(command(), acquired(DRAWING));
-
-    assertThat(result.reused()).isFalse();
-    assertThat(result.versionNo()).isEqualTo(2);
-    assertThat(result.sourceNodeCount()).isEqualTo(2);
-    assertThat(historical.getVersionStatus()).isEqualTo("APPROVED");
-    assertThat(historicalNode.getSourceSequence()).isEqualTo("1");
-    verify(versionMapper, never()).updateById(any(QuoteBomSupplementVersion.class));
-    verify(sourceNodeRepository).insertAll(eq(501L), argThat(rows -> rows.size() == 2));
-  }
-
-  @Test
-  void sameShaStillRejectsChangedHistoricalRows() {
-    arrangeBinding();
-    when(parser.parse(eq("drawing.xlsx"), any())).thenReturn(parsed);
-    when(preparationMapper.selectForElectronicDrawingImport(301L)).thenReturn(preparation);
-    when(versionMapper.selectList(any())).thenReturn(List.of(existingVersion(500L, 1, "APPROVED")));
-    var corrupt = storedNode();
-    corrupt.setQty(new BigDecimal("999"));
-    when(sourceNodeRepository.findByVersionId(500L)).thenReturn(List.of(corrupt));
-
-    assertThatThrownBy(() -> service.importSource(command(), acquired(DRAWING)))
-        .isInstanceOf(ElectronicDrawingSourceImportException.class).hasMessageContaining("原始行不一致");
-    verify(versionMapper, never()).insert(any(QuoteBomSupplementVersion.class));
-    verify(sourceNodeRepository, never()).insertAll(any(), any());
-    verify(contextPort, never()).attachSourceVersion(any(), any(), any());
-  }
-
-  @Test
-  void taskVersionConflictFailsAfterSourceWriteSoOuterTransactionCanRollBack() {
-    arrangeValidNewSource(List.of());
-    when(versionMapper.insert(any(QuoteBomSupplementVersion.class))).thenAnswer(invocation -> {
-      QuoteBomSupplementVersion version = invocation.getArgument(0);
-      version.setId(501L);
-      return 1;
-    });
-    when(contextPort.attachSourceVersion(eq(context), eq(501L), any()))
-        .thenThrow(new ElectronicDrawingWorkflowRetryException("conflict"));
-
-    assertThatThrownBy(() -> service.importSource(command(), acquired(DRAWING)))
-        .isInstanceOfSatisfying(ElectronicDrawingSourceImportException.class,
-            error -> assertThat(error.getCode())
-                .isEqualTo(ElectronicDrawingSourceImportException.TASK_VERSION_CONFLICT));
-    verify(sourceNodeRepository).insertAll(eq(501L), any());
-  }
-
-  private void arrangeBinding() {
-    when(contextPort.load(101L, "COMMERCIAL", "210", "2026-08")).thenReturn(context);
-    when(oaFormItemMapper.selectById(201L)).thenReturn(quoteItem);
-  }
-
-  private void arrangeValidNewSource(List<QuoteBomSupplementVersion> latestVersions) {
-    arrangeBinding();
-    when(parser.parse(eq("drawing.xlsx"), any())).thenReturn(parsed);
-    when(preparationMapper.selectForElectronicDrawingImport(301L)).thenReturn(preparation);
-    when(versionMapper.selectList(any())).thenReturn(List.of(), latestVersions);
-  }
-
-  private ElectronicDrawingSourceImportService.ImportCommand command() {
-    return new ElectronicDrawingSourceImportService.ImportCommand(
-        101L, "COMMERCIAL", "210", DRAWING, "2026-08");
-  }
-
-  private ElectronicDrawingExcelAcquisitionPort.AcquiredExcel acquired(String responseDrawing) {
-    byte[] bytes = "valid-test-content".getBytes(StandardCharsets.UTF_8);
-    return new ElectronicDrawingExcelAcquisitionPort.AcquiredExcel(
-        bytes, "drawing.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        bytes.length, sha256(bytes), responseDrawing, "request-1", "MOCK", ACQUIRED_AT);
-  }
-
-  private ElectronicDrawingWorkContext context(Long sourceVersionId) {
-    return new ElectronicDrawingWorkContext(
-        101L, 4, 301L, sourceVersionId, 200L, 201L, "QCPT-101", "OA-101",
-        "1053100052030", null, "产品", null, null, null, "FULL_BOM", "2026-08",
-        "210", "COMMERCIAL", "COMMERCIAL", "210", true, true,
-        "BOM_IN_PROGRESS", ElectronicDrawingWorkflowStage.PARSING,
-        null, "系统处理中", null);
-  }
-
-  private OaFormItem quoteItem() {
-    OaFormItem value = new OaFormItem();
-    value.setId(201L);
-    value.setOaFormId(200L);
-    value.setMaterialNo("1053100052030");
-    value.setCustomerDrawing(DRAWING);
-    value.setBusinessUnitType("COMMERCIAL");
-    return value;
-  }
-
-  private QuoteBomPreparationRecord preparation() {
-    QuoteBomPreparationRecord value = new QuoteBomPreparationRecord();
-    value.setId(301L);
-    value.setOaFormId(200L);
-    value.setOaFormItemId(201L);
-    value.setOaNo("OA-101");
-    value.setQuoteProductCode("1053100052030");
-    value.setMaterialOrganizationCode("COMMERCIAL");
-    value.setProductType("NON_BARE");
-    value.setCostPeriodMonth("2026-08");
-    value.setActiveFlag(1);
-    return value;
-  }
-
-  private ElectronicDrawingExcelParseResult parsed() {
-    return new ElectronicDrawingExcelParseResult(
-        "drawing.xlsx", "Sheet", List.of(new ElectronicDrawingExcelParseResult.SourceNode(
-            "1", null, 1, "S040A-29804", "040A板换部件", "316L+T2",
-            "/", "/", BigDecimal.ONE, new BigDecimal("6621.13"), "g", "自制", 2)), List.of());
-  }
-
-  private ElectronicDrawingSourceNode storedNode() {
-    ElectronicDrawingExcelParseResult.SourceNode source = parsed.nodes().getFirst();
-    ElectronicDrawingSourceNode node = new ElectronicDrawingSourceNode();
-    node.setSupplementVersionId(501L);
-    node.setSourceRowNo(source.sourceRowNumber());
-    node.setSourceSequence(source.sourceSequence());
-    node.setParentSourceSequence(source.parentSourceSequence());
-    node.setDrawingCode(source.drawingCode());
-    node.setSourceName(source.sourceName());
-    node.setQty(source.quantity());
-    node.setMaterial(source.sourceMaterial());
-    node.setImportanceClass(source.importanceClass());
-    node.setHsfRiskClass(source.hsfRiskClass());
-    node.setReferenceWeight(source.referenceWeight());
-    node.setReferenceWeightUnit(source.referenceWeightUnit());
-    node.setSourceRemark(source.remark());
-    node.setMatchStatus(ElectronicDrawingSourceNode.MATCH_UNMATCHED);
-    return node;
-  }
-
-  private QuoteBomSupplementVersion existingVersion(Long id, int versionNo, String status) {
-    QuoteBomSupplementVersion version = new QuoteBomSupplementVersion();
-    version.setId(id);
-    version.setPreparationId(301L);
-    version.setVersionNo(versionNo);
-    version.setVersionStatus(status);
-    version.setActiveFlag(1);
-    version.setSourceFileSha256(acquired(DRAWING).sha256());
-    return version;
-  }
-
-  private static String sha256(byte[] bytes) {
-    try {
-      return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
-    } catch (Exception exception) {
-      throw new IllegalStateException(exception);
-    }
+  void repeatedResultReusesExistingSourceWithoutMutatingHistoricalRows() {
+    var existing = new QuoteBomSupplementVersion();
+    existing.setId(700L);
+    existing.setVersionNo(1);
+    existing.setVersionStatus("APPROVED");
+    existing.setDrawingResultId(601L);
+    when(versions.selectList(any())).thenReturn(List.of(existing));
+    when(nodes.findByVersionId(700L)).thenReturn(List.of(new ElectronicDrawingSourceNode()));
+    assertThat(service.importSource(scope, 601L).supplementVersionId()).isEqualTo(700L);
+    verify(versions, never()).insert(any(QuoteBomSupplementVersion.class));
+    verify(versions, never()).updateById(any(QuoteBomSupplementVersion.class));
+    verify(nodes, never()).insertAll(any(), any());
   }
 }

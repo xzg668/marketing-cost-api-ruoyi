@@ -19,7 +19,7 @@ public interface QuoteBomSupplementDetailMapper extends BaseMapper<QuoteBomSuppl
         ON version.id = detail.supplement_version_id
       WHERE detail.supplement_version_id = #{supplementVersionId}
         AND version.version_status = 'DRAFT'
-        AND version.bom_source = 'ELECTRONIC_DRAWING_EXCEL'
+        AND version.bom_source IN ('ELECTRONIC_DRAWING_EXCEL','ELECTRONIC_DRAWING_PDF')
       """)
   int deleteElectronicDrawingHybridDraft(@Param("supplementVersionId") Long supplementVersionId);
 

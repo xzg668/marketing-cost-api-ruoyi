@@ -41,6 +41,9 @@ public interface QuoteBomPreparationRecordMapper extends BaseMapper<QuoteBomPrep
   @Update("""
       UPDATE lp_quote_bom_preparation_record
          SET electronic_source_version_id=#{sourceVersionId},
+             electronic_composition_fingerprint=NULL,
+             electronic_workflow_stage='E_DRAWING_RECEIVED',
+             preparation_status='NEED_TECH',review_status='NOT_SUBMITTED',
              electronic_workflow_version=electronic_workflow_version+1,
              updated_at=#{updatedAt}
        WHERE id=#{preparationId}

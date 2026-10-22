@@ -18,9 +18,9 @@ import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybri
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybridBomAssembler.HybridBom;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybridBomAssembler.MaterialSnapshot;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybridBomAssembler.Node;
+import com.sanhua.marketingcost.service.technicaldata.TechnicalDataManufacturingBomSource;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
-import com.sanhua.marketingcost.service.technicaldata.TechnicalDataManufacturingBomSource;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -41,7 +41,6 @@ import org.springframework.transaction.annotation.Transactional;
 /** 把料号已就绪的电子图库源版本合成为同版本的活动混合 BOM 明细。 */
 @Service
 public class ElectronicDrawingHybridBomService {
-  private static final String BOM_SOURCE = "ELECTRONIC_DRAWING_EXCEL";
   private static final String VERSION_DRAFT = "DRAFT";
 
   private final ElectronicDrawingWorkflowContextPort contextPort;
@@ -52,6 +51,7 @@ public class ElectronicDrawingHybridBomService {
   private final ElectronicDrawingHybridBomAssembler assembler;
   private final TechnicalDataManufacturingBomSource manufacturing;
   private final ElectronicDrawingBomScope scope;
+  private final ElectronicDrawingProductLookup productLookup;
 
   public ElectronicDrawingHybridBomService(
       ElectronicDrawingWorkflowContextPort contextPort,
@@ -59,8 +59,10 @@ public class ElectronicDrawingHybridBomService {
       QuoteBomSupplementDetailMapper detailMapper,
       ElectronicDrawingSourceNodeRepository sourceNodeRepository,
       MaterialMasterRawMapper materialMapper,
-      ElectronicDrawingHybridBomAssembler assembler, TechnicalDataManufacturingBomSource manufacturing,
-      ElectronicDrawingBomScope scope) {
+      ElectronicDrawingHybridBomAssembler assembler,
+      TechnicalDataManufacturingBomSource manufacturing,
+      ElectronicDrawingBomScope scope,
+      ElectronicDrawingProductLookup productLookup) {
     this.contextPort = contextPort;
     this.versionMapper = versionMapper;
     this.detailMapper = detailMapper;
@@ -69,27 +71,37 @@ public class ElectronicDrawingHybridBomService {
     this.assembler = assembler;
     this.manufacturing = manufacturing;
     this.scope = scope;
+    this.productLookup = productLookup;
   }
 
   @Transactional
   public void invalidateDraftComposition(ElectronicDrawingWorkContext context) {
     QuoteBomSupplementVersion version = validateVersion(context);
     LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
-    if (versionMapper.updateElectronicDrawingCompositionFingerprint(version.getId(),
-        version.getCompositionFingerprint(), null, context.materialOrgCode(), now) != 1) {
+    if (versionMapper.updateElectronicDrawingCompositionFingerprint(
+            version.getId(),
+            version.getCompositionFingerprint(),
+            null,
+            context.materialOrgCode(),
+            now)
+        != 1) {
       throw invalid(TASK_VERSION_CONFLICT, "电子图库来源已变化，请刷新后保存原材料");
     }
     detailMapper.deleteElectronicDrawingHybridDraft(version.getId());
-    contextPort.updateStage(context, ElectronicDrawingWorkflowStage.MATCHED,
-        context.assigneeUserId(), context.assigneeName(), now);
+    contextPort.updateStage(
+        context,
+        ElectronicDrawingWorkflowStage.MATCHED,
+        context.assigneeUserId(),
+        context.assigneeName(),
+        now);
   }
 
   // 组树缺口发生在任何明细写入之前；持久化失败仍须回滚整个替换事务。
   @Transactional(noRollbackFor = ElectronicDrawingHybridBomValidationException.class)
   public CompositionResult compose(
       Long workflowId, String businessUnitType, String applicableOrgCode, String accountingMonth) {
-    ElectronicDrawingWorkContext context = contextPort.load(
-        workflowId, businessUnitType, applicableOrgCode, accountingMonth);
+    ElectronicDrawingWorkContext context =
+        contextPort.load(workflowId, businessUnitType, applicableOrgCode, accountingMonth);
     QuoteBomSupplementVersion version = validateVersion(context);
     List<ElectronicDrawingSourceNode> sourceNodes =
         sourceNodeRepository.findByVersionId(version.getId());
@@ -98,23 +110,35 @@ public class ElectronicDrawingHybridBomService {
     }
     var plan = scope.inspect(context, sourceNodes, effectiveDate(version, context));
     if (!plan.pendingIds().isEmpty()) throw invalid(MAPPING_INCOMPLETE, "实际参与核算的图库物料仍有待确认 U9 料号");
-    var blocked = plan.branches().values().stream().filter(branch -> branch.state() == ElectronicDrawingBomScope.State.ERROR).findFirst();
+    var blocked =
+        plan.branches().values().stream()
+            .filter(branch -> branch.state() == ElectronicDrawingBomScope.State.ERROR)
+            .findFirst();
     if (blocked.isPresent()) throw invalid(MAPPING_INCOMPLETE, blocked.get().message());
     String rootCode = rootMaterialCode(context, version);
-    Map<String, MaterialMasterRaw> materials = currentMaterials(
-        Set.of(rootCode), context.materialOrgCode());
+    Map<String, MaterialMasterRaw> materials =
+        currentMaterials(Set.of(rootCode), context.materialOrgCode());
     MaterialMasterRaw root = materials.get(normalize(rootCode));
     List<ElectronicNode> electronicNodes = plan.nodes();
-    HybridBom hybrid = assembler.assemble(new AssembleCommand(
-        version.getOaNo(), version.getOaFormItemId(), material(root),
-        context.accountingMonth(), context.priceOrgCode(), context.materialOrgCode(),
-        context.businessUnitType(), null, effectiveDate(version, context), electronicNodes, manufacturing.load(context)));
+    HybridBom hybrid =
+        assembler.assemble(
+            new AssembleCommand(
+                version.getOaNo(),
+                version.getOaFormItemId(),
+                material(root),
+                context.accountingMonth(),
+                context.priceOrgCode(),
+                context.materialOrgCode(),
+                context.businessUnitType(),
+                null,
+                effectiveDate(version, context),
+                electronicNodes,
+                manufacturing.load(context)));
 
     List<QuoteBomSupplementDetail> existing = details(version.getId());
     if (Objects.equals(version.getCompositionFingerprint(), hybrid.compositionFingerprint())) {
       if (!sameDetails(existing, hybrid.nodes(), version)) {
-        throw invalid(PERSISTENCE_INVALID,
-            "混合 BOM 指纹与已保存明细不一致，禁止静默覆盖");
+        throw invalid(PERSISTENCE_INVALID, "混合 BOM 指纹与已保存明细不一致，禁止静默覆盖");
       }
       return result(context, version, hybrid, true);
     }
@@ -126,8 +150,12 @@ public class ElectronicDrawingHybridBomService {
       throw invalid(PERSISTENCE_INVALID, "混合 BOM 明细批量写入数量不一致");
     }
     if (versionMapper.updateElectronicDrawingCompositionFingerprint(
-        version.getId(), version.getCompositionFingerprint(), hybrid.compositionFingerprint(),
-        context.materialOrgCode(), now) != 1) {
+            version.getId(),
+            version.getCompositionFingerprint(),
+            hybrid.compositionFingerprint(),
+            context.materialOrgCode(),
+            now)
+        != 1) {
       throw invalid(TASK_VERSION_CONFLICT, "电子图库源版本已变化，请重新合成");
     }
     ElectronicDrawingWorkContext refreshed;
@@ -153,17 +181,18 @@ public class ElectronicDrawingHybridBomService {
       throw invalid(SOURCE_VERSION_INVALID, "当前报价产品没有可合成的电子图库源版本");
     }
     QuoteBomSupplementVersion version = versionMapper.selectById(context.sourceVersionId());
-    boolean valid = version != null
-        && Objects.equals(version.getPreparationId(), context.preparationId())
-        && same(version.getTaskNo(), context.taskNo())
-        && same(version.getQuoteProductCode(), context.quoteProductCode())
-        && same(version.getPeriodMonth(), context.accountingMonth())
-        && same(version.getMaterialOrgCode(), context.materialOrgCode())
-        && BOM_SOURCE.equals(version.getBomSource())
-        && VERSION_DRAFT.equals(version.getVersionStatus())
-        && Objects.equals(version.getActiveFlag(), 1)
-        && text(version.getOaNo()) != null
-        && version.getOaFormItemId() != null;
+    boolean valid =
+        version != null
+            && Objects.equals(version.getPreparationId(), context.preparationId())
+            && same(version.getTaskNo(), context.taskNo())
+            && same(version.getQuoteProductCode(), context.quoteProductCode())
+            && same(version.getPeriodMonth(), context.accountingMonth())
+            && same(version.getMaterialOrgCode(), context.materialOrgCode())
+            && ElectronicDrawingSourceKind.isDrawing(version.getBomSource())
+            && VERSION_DRAFT.equals(version.getVersionStatus())
+            && Objects.equals(version.getActiveFlag(), 1)
+            && text(version.getOaNo()) != null
+            && version.getOaFormItemId() != null;
     if (!valid) {
       throw invalid(SOURCE_VERSION_INVALID, "当前电子图库源版本与产品任务不一致或不可编辑");
     }
@@ -172,55 +201,76 @@ public class ElectronicDrawingHybridBomService {
 
   private Map<String, MaterialMasterRaw> currentMaterials(
       Collection<String> codes, String materialOrganizationCode) {
-    List<MaterialMasterRaw> rows = materialMapper.selectByLatestBatchAndCodes(
-        codes, null, materialOrganizationCode);
-    Map<String, List<MaterialMasterRaw>> grouped = rows.stream()
-        .filter(row -> text(row.getMaterialCode()) != null)
-        .collect(Collectors.groupingBy(
-            row -> normalize(row.getMaterialCode()), LinkedHashMap::new, Collectors.toList()));
-    Set<String> requested = codes.stream().map(ElectronicDrawingHybridBomService::normalize)
-        .collect(Collectors.toCollection(LinkedHashSet::new));
+    List<MaterialMasterRaw> rows =
+        materialMapper.selectByLatestBatchAndCodes(codes, null, materialOrganizationCode);
+    Map<String, List<MaterialMasterRaw>> grouped =
+        rows.stream()
+            .filter(row -> text(row.getMaterialCode()) != null)
+            .collect(
+                Collectors.groupingBy(
+                    row -> normalize(row.getMaterialCode()),
+                    LinkedHashMap::new,
+                    Collectors.toList()));
+    Set<String> requested =
+        codes.stream()
+            .map(ElectronicDrawingHybridBomService::normalize)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
     if (!grouped.keySet().equals(requested)
         || grouped.values().stream().anyMatch(group -> group.size() != 1)) {
-      throw invalid(MAPPING_INCOMPLETE,
-          "电子图库映射料号或顶层产品不是当前物料组织中的唯一正常料品");
+      throw invalid(MAPPING_INCOMPLETE, "电子图库映射料号或顶层产品不是当前物料组织中的唯一正常料品");
     }
-    return grouped.entrySet().stream().collect(Collectors.toMap(
-        Map.Entry::getKey, entry -> entry.getValue().getFirst(),
-        (first, ignored) -> first, LinkedHashMap::new));
+    return grouped.entrySet().stream()
+        .collect(
+            Collectors.toMap(
+                Map.Entry::getKey,
+                entry -> entry.getValue().getFirst(),
+                (first, ignored) -> first,
+                LinkedHashMap::new));
   }
 
-  /** 无正式料号的报价保留内部核算身份，组树时按已选图号和来源型号找到真实顶层料品。 */
-  private String rootMaterialCode(ElectronicDrawingWorkContext context, QuoteBomSupplementVersion version) {
+  /** 无正式料号的报价保留内部核算身份，顶层料品复用取图时的优先级和所选实际图号。 */
+  private String rootMaterialCode(
+      ElectronicDrawingWorkContext context, QuoteBomSupplementVersion version) {
     String quoteCode = required(context.quoteProductCode(), "报价产品标识");
-    String temporaryCode = QuoteProductIdentityUtils.resolveCostingCode(
-        null, context.productModel(), version.getElectronicDrawingNo());
+    String temporaryCode =
+        QuoteProductIdentityUtils.resolveCostingCode(
+            null, context.productModel(), version.getElectronicDrawingNo());
     if (!same(quoteCode, temporaryCode)) return quoteCode;
-    var direct = materialMapper.selectByLatestBatchAndCodes(Set.of(quoteCode), null, context.materialOrgCode());
+    var direct =
+        materialMapper.selectByLatestBatchAndCodes(
+            Set.of(quoteCode), null, context.materialOrgCode());
     if (!direct.isEmpty()) return quoteCode;
-    var candidates = materialMapper.selectByDrawingIdentities(Set.of(normalize(version.getElectronicDrawingNo())),
-        null, context.materialOrgCode(), 1000).stream()
-        .filter(row -> same(row.getDrawingNo(), version.getElectronicDrawingNo())
-            && (text(context.productModel()) == null || same(row.getMaterialModel(), context.productModel())))
-        .map(MaterialMasterRaw::getMaterialCode).filter(Objects::nonNull).distinct().toList();
-    if (candidates.size() != 1) throw invalid(MAPPING_INCOMPLETE,
-        "已取得图库，但图号和型号未对应唯一顶层 U9 料品，请财务核实料品档案后重新检查");
+    var candidates =
+        productLookup.options(context).stream()
+            .filter(row -> same(row.drawingNo(), version.getElectronicDrawingNo()))
+            .map(ElectronicDrawingProductLookup.Option::materialNo)
+            .filter(Objects::nonNull)
+            .distinct()
+            .toList();
+    if (candidates.size() != 1)
+      throw invalid(MAPPING_INCOMPLETE, "已取得图库，但本产品匹配结果未对应唯一顶层 U9 料品，请财务核实料品档案后重新检查");
     return candidates.getFirst();
   }
 
   private MaterialSnapshot material(MaterialMasterRaw row) {
     if (row == null) throw invalid(MAPPING_INCOMPLETE, "当前组织料品档案不存在");
     return new MaterialSnapshot(
-        text(row.getMaterialCode()), text(row.getMaterialName()), text(row.getMaterialSpec()),
-        text(row.getMaterialModel()), text(row.getDrawingNo()), text(row.getShapeAttr()),
-        text(row.getMainCategoryCode()), text(row.getProductionCategory()),
-        text(row.getCostElement()), text(row.getUnit()));
+        text(row.getMaterialCode()),
+        text(row.getMaterialName()),
+        text(row.getMaterialSpec()),
+        text(row.getMaterialModel()),
+        text(row.getDrawingNo()),
+        text(row.getShapeAttr()),
+        text(row.getMainCategoryCode()),
+        text(row.getProductionCategory()),
+        text(row.getCostElement()),
+        text(row.getUnit()));
   }
 
   private List<QuoteBomSupplementDetail> toDetails(
       QuoteBomSupplementVersion version, List<Node> nodes, LocalDateTime now) {
-    Map<String, Node> byKey = nodes.stream().collect(Collectors.toMap(
-        Node::nodeKey, Function.identity()));
+    Map<String, Node> byKey =
+        nodes.stream().collect(Collectors.toMap(Node::nodeKey, Function.identity()));
     List<QuoteBomSupplementDetail> result = new java.util.ArrayList<>(nodes.size());
     for (int index = 0; index < nodes.size(); index++) {
       Node node = nodes.get(index);
@@ -257,8 +307,12 @@ public class ElectronicDrawingHybridBomService {
       detail.setNodeSourceType(node.nodeSourceType());
       detail.setSourceElectronicNodeId(node.sourceElectronicNodeId());
       detail.setMappingStatus(node.mappingStatus());
-      detail.setManualFlag(ElectronicDrawingSourceNode.MATCH_MANUAL.equals(node.mappingStatus())
-          || ElectronicDrawingHybridBomAssembler.SOURCE_TECHNICAL_RAW.equals(node.nodeSourceType()) ? 1 : 0);
+      detail.setManualFlag(
+          ElectronicDrawingSourceNode.MATCH_MANUAL.equals(node.mappingStatus())
+                  || ElectronicDrawingHybridBomAssembler.SOURCE_TECHNICAL_RAW.equals(
+                      node.nodeSourceType())
+              ? 1
+              : 0);
       detail.setRemark(node.nodeSourceType() + ":" + node.nodeKey());
       detail.setCreatedAt(now);
       detail.setUpdatedAt(now);
@@ -268,9 +322,10 @@ public class ElectronicDrawingHybridBomService {
   }
 
   private List<QuoteBomSupplementDetail> details(Long versionId) {
-    return detailMapper.selectList(Wrappers.<QuoteBomSupplementDetail>lambdaQuery()
-        .eq(QuoteBomSupplementDetail::getSupplementVersionId, versionId)
-        .orderByAsc(QuoteBomSupplementDetail::getLineNo));
+    return detailMapper.selectList(
+        Wrappers.<QuoteBomSupplementDetail>lambdaQuery()
+            .eq(QuoteBomSupplementDetail::getSupplementVersionId, versionId)
+            .orderByAsc(QuoteBomSupplementDetail::getLineNo));
   }
 
   private boolean sameDetails(
@@ -278,15 +333,19 @@ public class ElectronicDrawingHybridBomService {
       List<Node> assembled,
       QuoteBomSupplementVersion version) {
     if (stored.size() != assembled.size()) return false;
-    Map<String, Node> byKey = assembled.stream().collect(Collectors.toMap(
-        Node::nodeKey, Function.identity()));
+    Map<String, Node> byKey =
+        assembled.stream().collect(Collectors.toMap(Node::nodeKey, Function.identity()));
     for (int index = 0; index < stored.size(); index++) {
       QuoteBomSupplementDetail left = stored.get(index);
       Node right = assembled.get(index);
       Node parent = right.parentNodeKey() == null ? null : byKey.get(right.parentNodeKey());
       String expectedRemark = right.nodeSourceType() + ":" + right.nodeKey();
-      int expectedManual = ElectronicDrawingSourceNode.MATCH_MANUAL.equals(right.mappingStatus())
-          || ElectronicDrawingHybridBomAssembler.SOURCE_TECHNICAL_RAW.equals(right.nodeSourceType()) ? 1 : 0;
+      int expectedManual =
+          ElectronicDrawingSourceNode.MATCH_MANUAL.equals(right.mappingStatus())
+                  || ElectronicDrawingHybridBomAssembler.SOURCE_TECHNICAL_RAW.equals(
+                      right.nodeSourceType())
+              ? 1
+              : 0;
       // 导入行 ID 仅是当时的来源记录，不参与跨批次业务内容比较。
       if (!Objects.equals(left.getSupplementVersionId(), version.getId())
           || !Objects.equals(left.getPreparationId(), version.getPreparationId())
@@ -331,10 +390,18 @@ public class ElectronicDrawingHybridBomService {
       HybridBom hybrid,
       boolean idempotent) {
     return new CompositionResult(
-        context.workflowId(), context.revision(), version.getId(), version.getVersionNo(),
-        hybrid.compositionFingerprint(), hybrid.nodes().size(), hybrid.u9PurchaseLeafCount(),
-        hybrid.electronicDrawingPurchaseLeafCount(), hybrid.quotationLeafCount(),
-        hybrid.replacedElectronicDescendantCount(), hybrid.u9QueryCount(), idempotent,
+        context.workflowId(),
+        context.revision(),
+        version.getId(),
+        version.getVersionNo(),
+        hybrid.compositionFingerprint(),
+        hybrid.nodes().size(),
+        hybrid.u9PurchaseLeafCount(),
+        hybrid.electronicDrawingPurchaseLeafCount(),
+        hybrid.quotationLeafCount(),
+        hybrid.replacedElectronicDescendantCount(),
+        hybrid.u9QueryCount(),
+        idempotent,
         hybrid.nodes());
   }
 

@@ -17,7 +17,7 @@ public interface QuoteBomSupplementVersionMapper extends BaseMapper<QuoteBomSupp
       SET composition_fingerprint = #{compositionFingerprint}, updated_at = #{updatedAt}
       WHERE id = #{id}
         AND version_status = 'DRAFT'
-        AND bom_source = 'ELECTRONIC_DRAWING_EXCEL'
+        AND bom_source IN ('ELECTRONIC_DRAWING_EXCEL','ELECTRONIC_DRAWING_PDF')
         AND material_org_code = #{materialOrgCode}
         AND
         <choose>

@@ -31,6 +31,8 @@ import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
+import com.sanhua.marketingcost.mapper.DrawingVerificationTaskMapper;
+import com.sanhua.marketingcost.entity.DrawingVerificationTask;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteIngestLogMapper;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
@@ -52,6 +54,7 @@ class QuoteRequestQueryServiceImplTest {
   private OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper;
   private QuoteBomStatusMapper quoteBomStatusMapper;
   private QuoteBomPreparationRecordMapper quoteBomPreparationRecordMapper;
+  private DrawingVerificationTaskMapper drawingVerificationTaskMapper;
   private QuoteCostRunVersionMapper quoteCostRunVersionMapper;
   private QuoteIngestLogMapper quoteIngestLogMapper;
   private QuoteCostingWorkspaceService quoteCostingWorkspaceService;
@@ -66,6 +69,7 @@ class QuoteRequestQueryServiceImplTest {
     oaFormItemExtraFieldMapper = mock(OaFormItemExtraFieldMapper.class);
     quoteBomStatusMapper = mock(QuoteBomStatusMapper.class);
     quoteBomPreparationRecordMapper = mock(QuoteBomPreparationRecordMapper.class);
+    drawingVerificationTaskMapper = mock(DrawingVerificationTaskMapper.class);
     quoteCostRunVersionMapper = mock(QuoteCostRunVersionMapper.class);
     quoteIngestLogMapper = mock(QuoteIngestLogMapper.class);
     quoteCostingWorkspaceService = mock(QuoteCostingWorkspaceService.class);
@@ -81,6 +85,7 @@ class QuoteRequestQueryServiceImplTest {
             oaFormItemExtraFieldMapper,
             quoteBomStatusMapper,
             quoteBomPreparationRecordMapper,
+            drawingVerificationTaskMapper,
             quoteCostRunVersionMapper,
             quoteIngestLogMapper,
             quoteCostingWorkspaceService);
@@ -197,6 +202,29 @@ class QuoteRequestQueryServiceImplTest {
     QuoteRequestDetailResponse detail = service.getRequestDetail("OA-T8-CALC");
 
     assertThat(detail.getCalcStatus()).isEqualTo("未核算");
+  }
+
+  @Test
+  void waitingDrawingExposesItsMonthBeforeAnyBomPreparationExists() {
+    OaForm form = form("OA-DRAWING-WAIT", "FI-SC-020", "CONFIRMED");
+    when(oaFormMapper.selectOne(any())).thenReturn(form);
+    when(oaFormItemMapper.selectList(any())).thenReturn(List.of(item(13L, "MAT-WAIT")));
+    when(quoteBomStatusMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormExtraFeeMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormHeaderExtraFieldMapper.selectList(any())).thenReturn(List.of());
+    when(oaFormItemExtraFieldMapper.selectList(any())).thenReturn(List.of());
+    var task = new DrawingVerificationTask();
+    task.setOaFormItemId(13L);
+    String month = com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+    task.setAccountingMonth(month);
+    task.setTaskState("WAIT_REVIEW");
+    when(drawingVerificationTaskMapper.findActiveForQuote("OA-DRAWING-WAIT", month, form.getBusinessUnitType()))
+        .thenReturn(List.of(task));
+
+    var result = service.getRequestDetail("OA-DRAWING-WAIT").getItems().getFirst();
+    assertThat(result.getElectronicDrawingAccountingMonth()).isEqualTo(month);
+    assertThat(result.getElectronicDrawingWorkflowId()).isNull();
+    verify(drawingVerificationTaskMapper).findActiveForQuote("OA-DRAWING-WAIT", month, form.getBusinessUnitType());
   }
 
   @Test

@@ -62,16 +62,14 @@ class MaterialMasterRawMapperSqlTest {
   @DisplayName("电子图库图号批量匹配只查当前组织和当前有效行")
   void drawingIdentityQueryUsesOrganizationAndExactIdentityFields() throws Exception {
     String sql = selectSql(
-        "selectByDrawingIdentities", java.util.Collection.class, String.class, String.class, int.class);
+        "selectByDrawingNumbers", java.util.Collection.class, String.class);
 
     assertThat(sql).contains(
         "active_flag = 1",
         "organization_code = #{organizationCode}",
         "UPPER(TRIM(drawing_no)) IN",
-        "UPPER(TRIM(material_spec)) IN",
-        "UPPER(TRIM(material_model)) IN",
-        "<foreach collection='drawingCodes'",
-        "LIMIT #{limit}");
+        "<foreach collection='drawingCodes'");
+    assertThat(sql).doesNotContain("material_spec", "material_model", "LIMIT");
     assertThat(sql).doesNotContain("SELECT MAX(import_batch_id)");
   }
 

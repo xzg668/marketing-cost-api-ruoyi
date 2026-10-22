@@ -11,7 +11,6 @@ import com.sanhua.marketingcost.entity.*;
 import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaRecipientRepository.Recipient;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
 import com.sanhua.marketingcost.mapper.bom.BomMapperTestBase;
-import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingExcelAcquisitionPort;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingU9SubBomPort;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingU9SubBomPort.*;
 import java.io.ByteArrayOutputStream;
@@ -36,7 +35,6 @@ class TechnicalDataManufacturingIntegrationTest extends BomMapperTestBase {
   private static final TechnicalDataActor LI = new TechnicalDataActor(102L, "李工", Set.of("technical:data:task:edit"));
   private static final TechnicalDataActor ADMIN = new TechnicalDataActor(1L, "管理员", Set.of("*:*:*"));
   @Autowired private TechnicalDataManufacturingApplicationService service;
-  @Autowired private TechnicalDataDrawingApplicationService drawings;
   @Autowired private QuoteTechnicalDataPersistenceService persistence;
   @Autowired private QuoteTechnicalDataRepository repository;
   @Autowired private TechnicalDataSubmissionValidationService validation;
@@ -48,7 +46,8 @@ class TechnicalDataManufacturingIntegrationTest extends BomMapperTestBase {
   @Autowired private com.sanhua.marketingcost.mapper.QuoteTechModuleMapper moduleMapper;
   @Autowired private com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowContextPort contexts;
   @Autowired private TechnicalDataManufacturingBomSource manufacturingBom;
-  @MockBean private ElectronicDrawingExcelAcquisitionPort acquisition;
+  @Autowired private com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper drawingVersions;
+  @Autowired private com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingMaterialResolutionService resolution;
   @MockBean private ElectronicDrawingU9SubBomPort u9;
   private Long taskId, productId, itemId, sourceId;
   private String key;
@@ -90,9 +89,7 @@ class TechnicalDataManufacturingIntegrationTest extends BomMapperTestBase {
           key + "-RAW", "已有原料", "T2", null, key + "-DR", "采购件", "111001008", "RAW", "RAW",
           "主制造", "V1", new BigDecimal("0.015"), BigDecimal.ONE, "kg", 1)));
     });
-    when(acquisition.acquire(any())).thenReturn(excel());
-    var input = new TechnicalDataDrawingRecheckRequest(); input.setExpectedVersion(0); input.setMaintained(true); input.setDrawingNo(key);
-    sourceId = drawings.recheck(productId, input, WANG).drawing().sourceVersionId();
+    sourceId = attachHistoricalDrawing();
   }
 
   @Test void partialSaveSurvivesFinanceResolutionAndComposesExactParentsWithoutMultiplyingSingleWeightTwice() {
@@ -184,7 +181,7 @@ class TechnicalDataManufacturingIntegrationTest extends BomMapperTestBase {
     jdbc.update("INSERT INTO lp_material_master_raw(material_code,drawing_no,material_name,shape_attr,unit,organization_code,import_batch_id,source_type,active_flag,main_category_code) VALUES(?,?,?,?,?,'COMMERCIAL',?,'EXCEL',1,'111001008')", code, drawing, code, shape, unit, key);
   }
 
-  private ElectronicDrawingExcelAcquisitionPort.AcquiredExcel excel() throws Exception {
+  private byte[] historicalWorkbook() throws Exception {
     byte[] bytes;
     try (var workbook = new XSSFWorkbook(); var out = new ByteArrayOutputStream()) {
       var sheet = workbook.createSheet("明细");
@@ -196,7 +193,52 @@ class TechnicalDataManufacturingIntegrationTest extends BomMapperTestBase {
       }
       workbook.write(out); bytes = out.toByteArray();
     }
-    return new ElectronicDrawingExcelAcquisitionPort.AcquiredExcel(bytes, "drawing.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        bytes.length, HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)), key, key, "TEST", LocalDateTime.now());
+    return bytes;
+  }
+
+  /** 已存的旧 g 单位来源仍须可核算；不再通过已经退役的 Excel 获取/解析接口造来源。 */
+  private Long attachHistoricalDrawing() throws Exception {
+    var context = contexts.load(itemId, "COMMERCIAL", "210", "2026-09");
+    byte[] workbook = historicalWorkbook();
+    var source = new QuoteBomSupplementVersion();
+    source.setPreparationId(context.preparationId()); source.setTaskNo(context.taskNo()); source.setOaNo(key);
+    source.setOaFormItemId(itemId); source.setQuoteProductCode(key); source.setProductType("NON_BARE");
+    source.setSupplementScope("NON_BARE_FULL_BOM"); source.setBomSource("ELECTRONIC_DRAWING_EXCEL");
+    source.setElectronicDrawingNo(key); source.setSourceFileName("historical-drawing.xlsx");
+    source.setSourceFileSha256(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(workbook)));
+    source.setSourceFileSize((long) workbook.length); source.setSourceSheetName("明细");
+    source.setSourceRequestId(key); source.setSourceAcquiredAt(LocalDateTime.of(2026,9,1,0,0));
+    source.setMaterialOrgCode("COMMERCIAL"); source.setVersionNo(1); source.setVersionStatus("DRAFT"); source.setActiveFlag(1);
+    source.setPeriodMonth("2026-09"); source.setEffectiveFrom(java.time.LocalDate.of(2026,9,1));
+    drawingVersions.insert(source);
+    var rows = new java.util.ArrayList<ElectronicDrawingSourceNode>();
+    for (int row = 1; row <= 4; row++) {
+      var node = new ElectronicDrawingSourceNode(); node.setSupplementVersionId(source.getId());
+      node.setSourceRowNo(row+1); node.setSourceSequence(Integer.toString(row));
+      node.setDrawingCode(key + (row == 1 ? "-DA" : row == 4 ? "-DC" : "-DB"));
+      node.setSourceName("接管"+row); node.setMaterial("铜"); node.setImportanceClass("B"); node.setHsfRiskClass("B");
+      node.setQty(new BigDecimal(row == 2 ? "4" : "3")); node.setReferenceWeight(BigDecimal.TEN);
+      node.setReferenceWeightUnit("g"); node.setSourceRemark(""); node.setMatchStatus("UNMATCHED"); rows.add(node);
+    }
+    sourceNodes.insertAll(source.getId(), rows);
+    context = contexts.attachSourceVersion(context, source.getId(), LocalDateTime.now());
+    resolution.autoMatch(itemId,"COMMERCIAL","210","2026-09");
+    context = contexts.load(itemId,"COMMERCIAL","210","2026-09");
+    context = contexts.updateStage(context,"E_DRAWING_MAPPING_PENDING",1L,"报价员",LocalDateTime.now());
+    var drawing = TechnicalDataDrawingSnapshot.from(context,source,sourceNodes.findByVersionId(source.getId()));
+    var draft = new QuoteTechDataVersion(); draft.setProductId(productId); draft.setVersionNo(1);
+    draft.setVersionStatus("DRAFT"); draft.setContentSchemaVersion(2); draft.setProductModel("OA-MODEL");
+    draft.setPackageTotalAmount(BigDecimal.ZERO); draft.setAuxiliaryTotalAmount(BigDecimal.ZERO); draft.setSalaryTotalAmount(BigDecimal.ZERO);
+    draft.setDrawingBomJson(codec.drawingBomJson(drawing)); draft.setRowVersion(0); draft.setCreatedBy(101L); draft.setUpdatedBy(101L);
+    repository.insertVersion(draft);
+    var module = moduleMapper.selectByTaskId(taskId).stream().filter(row -> "DRAWING_BOM".equals(row.getModuleType())).findFirst().orElseThrow();
+    module.setCurrentVersionId(draft.getId()); module.setModuleStatus("READY"); module.setReferenceSourceType("ELECTRONIC_DRAWING_EXCEL");
+    module.setReferenceSourceId(source.getId().toString()); module.setReferenceFingerprint(source.getSourceFileSha256());
+    module.setLastValidationCode("DRAWING_SOURCE_VERIFIED");
+    assertThat(repository.updateModule(module,module.getRowVersion(),LocalDateTime.now())).isEqualTo(1);
+    var product = repository.lockProduct(productId).orElseThrow(); product.setCurrentEditVersionId(draft.getId()); product.setProductStatus("EDITING");
+    assertThat(repository.updateProductPointers(product,product.getRowVersion(),LocalDateTime.now())).isEqualTo(1);
+    repository.markTaskInProgress(taskId,101L,LocalDateTime.now());
+    return source.getId();
   }
 }

@@ -13,10 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-/**
- * 已完成料号解析及组树的电子图库 BOM，通过补录审批和报价确认门槛后由系统发布。
- * 版本生效、原始层快照、缺口关闭、产品和报价关联放行处于同一事务，任一步失败整体回滚。
- */
+/** 已完成料号解析及组树的电子图库 BOM，通过补录审批和报价确认门槛后由系统发布。 版本生效、原始层快照、缺口关闭、产品和报价关联放行处于同一事务，任一步失败整体回滚。 */
 @Service
 public class ElectronicDrawingAutoPublicationService {
 
@@ -43,8 +40,10 @@ public class ElectronicDrawingAutoPublicationService {
   }
 
   @Transactional(rollbackFor = Exception.class)
-  public PublicationResult publish(Long workflowId, String businessUnitType, String orgCode, String accountingMonth) {
-    ElectronicDrawingWorkContext context = contextPort.load(workflowId, businessUnitType, orgCode, accountingMonth);
+  public PublicationResult publish(
+      Long workflowId, String businessUnitType, String orgCode, String accountingMonth) {
+    ElectronicDrawingWorkContext context =
+        contextPort.load(workflowId, businessUnitType, orgCode, accountingMonth);
     validateIdentity(context);
     String blocked = blockingReason(context);
     if (blocked != null) throw new IllegalStateException(blocked);
@@ -53,9 +52,11 @@ public class ElectronicDrawingAutoPublicationService {
     if (context.published()) {
       requireAlreadyPublished(version, context);
       String batchId = rawSnapshotPublisher.publish(publicationContext(context));
-      ElectronicDrawingWorkContext refreshed = contextPort.completePublication(
-          context, version.getCompositionFingerprint(),
-          LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE));
+      ElectronicDrawingWorkContext refreshed =
+          contextPort.completePublication(
+              context,
+              version.getCompositionFingerprint(),
+              LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE));
       return new PublicationResult(refreshed, batchId, true);
     }
     if (!ElectronicDrawingWorkflowStage.COMPOSED.equals(context.workflowStage())) {
@@ -66,15 +67,14 @@ public class ElectronicDrawingAutoPublicationService {
 
     if (!"APPROVED".equals(version.getVersionStatus())) {
       if (!"DRAFT".equals(version.getVersionStatus())) {
-        throw new IllegalStateException("电子图库源版本当前状态不能自动发布："
-            + version.getVersionStatus());
+        throw new IllegalStateException("电子图库源版本当前状态不能自动发布：" + version.getVersionStatus());
       }
       approve(version, context);
     }
     String batchId = rawSnapshotPublisher.publish(publicationContext(context));
     LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
-    ElectronicDrawingWorkContext published = contextPort.completePublication(
-        context, fingerprint, now);
+    ElectronicDrawingWorkContext published =
+        contextPort.completePublication(context, fingerprint, now);
     return new PublicationResult(published, batchId, false);
   }
 
@@ -97,14 +97,15 @@ public class ElectronicDrawingAutoPublicationService {
       throw new IllegalStateException("电子图库报价产品缺少源版本");
     }
     QuoteBomSupplementVersion version = versionMapper.selectById(context.sourceVersionId());
-    boolean valid = version != null
-        && Objects.equals(version.getId(), context.sourceVersionId())
-        && Objects.equals(version.getPreparationId(), context.preparationId())
-        && Objects.equals(version.getQuoteProductCode(), context.quoteProductCode())
-        && Objects.equals(version.getPeriodMonth(), context.accountingMonth())
-        && Objects.equals(version.getMaterialOrgCode(), context.materialOrgCode())
-        && "ELECTRONIC_DRAWING_EXCEL".equals(version.getBomSource())
-        && Objects.equals(version.getActiveFlag(), 1);
+    boolean valid =
+        version != null
+            && Objects.equals(version.getId(), context.sourceVersionId())
+            && Objects.equals(version.getPreparationId(), context.preparationId())
+            && Objects.equals(version.getQuoteProductCode(), context.quoteProductCode())
+            && Objects.equals(version.getPeriodMonth(), context.accountingMonth())
+            && Objects.equals(version.getMaterialOrgCode(), context.materialOrgCode())
+            && ElectronicDrawingSourceKind.isDrawing(version.getBomSource())
+            && Objects.equals(version.getActiveFlag(), 1);
     if (!valid) throw new IllegalStateException("电子图库源版本与产品任务不一致");
     return version;
   }
@@ -117,28 +118,34 @@ public class ElectronicDrawingAutoPublicationService {
     }
   }
 
-  private void ensureResolvedScope(ElectronicDrawingWorkContext context, QuoteBomSupplementVersion version) {
-    LocalDate date = version.getEffectiveFrom() == null
-        ? YearMonth.parse(context.accountingMonth()).atDay(1) : version.getEffectiveFrom();
+  private void ensureResolvedScope(
+      ElectronicDrawingWorkContext context, QuoteBomSupplementVersion version) {
+    LocalDate date =
+        version.getEffectiveFrom() == null
+            ? YearMonth.parse(context.accountingMonth()).atDay(1)
+            : version.getEffectiveFrom();
     var plan = scope.inspect(context, sourceNodeRepository.findByVersionId(version.getId()), date);
     if (!plan.pendingIds().isEmpty())
       throw new IllegalStateException("实际参与核算的图库物料仍未选择 U9 料号，不能自动发布");
-    plan.branches().values().stream().filter(branch -> branch.state() == ElectronicDrawingBomScope.State.ERROR)
-        .findFirst().ifPresent(branch -> { throw new IllegalStateException(branch.message()); });
+    plan.branches().values().stream()
+        .filter(branch -> branch.state() == ElectronicDrawingBomScope.State.ERROR)
+        .findFirst()
+        .ifPresent(
+            branch -> {
+              throw new IllegalStateException(branch.message());
+            });
   }
 
   private void validateIdentity(ElectronicDrawingWorkContext context) {
-    if (context == null || !"FULL_BOM".equals(context.primaryScope())
-        || !context.bomRequired()) {
+    if (context == null || !"FULL_BOM".equals(context.primaryScope()) || !context.bomRequired()) {
       throw new IllegalArgumentException("当前报价产品不是电子图库完整 BOM 对象");
     }
   }
 
-  private void approve(
-      QuoteBomSupplementVersion version, ElectronicDrawingWorkContext context) {
+  private void approve(QuoteBomSupplementVersion version, ElectronicDrawingWorkContext context) {
     LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
-    LocalDate reuseValidUntil = YearMonth.parse(context.accountingMonth())
-        .atDay(1).plusMonths(6).minusDays(1);
+    LocalDate reuseValidUntil =
+        YearMonth.parse(context.accountingMonth()).atDay(1).plusMonths(6).minusDays(1);
     version.setVersionStatus("APPROVED");
     version.setActiveFlag(1);
     version.setReviewerUserId(0L);
@@ -156,8 +163,12 @@ public class ElectronicDrawingAutoPublicationService {
 
   private PublicationContext publicationContext(ElectronicDrawingWorkContext context) {
     return new PublicationContext(
-        context.sourceVersionId(), context.quoteProductCode(), context.temporaryProductKey(),
-        context.priceOrgCode(), context.businessUnitType(), context.accountingMonth());
+        context.sourceVersionId(),
+        context.quoteProductCode(),
+        context.temporaryProductKey(),
+        context.priceOrgCode(),
+        context.businessUnitType(),
+        context.accountingMonth());
   }
 
   private String required(String value, String label) {

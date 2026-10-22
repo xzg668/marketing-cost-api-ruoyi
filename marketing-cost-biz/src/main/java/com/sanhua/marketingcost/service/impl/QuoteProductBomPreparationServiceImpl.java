@@ -54,7 +54,6 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
   static final String SCOPE_BARE_BODY_BOM = "BARE_BODY_BOM";
   static final String SCOPE_PACKAGE_REFERENCE = "PACKAGE_REFERENCE";
   static final String SOURCE_ELECTRONIC_DRAWING_BOM = "ELECTRONIC_DRAWING_BOM";
-  static final String SOURCE_ELECTRONIC_DRAWING_EXCEL = "ELECTRONIC_DRAWING_EXCEL";
   static final int ACTIVE = 1;
 
   private final OaFormItemMapper oaFormItemMapper;
@@ -230,7 +229,7 @@ public class QuoteProductBomPreparationServiceImpl implements QuoteProductBomPre
         productCode, QuoteProductType.NON_BARE.getCode(),
         SCOPE_NON_BARE_FULL_BOM, periodMonth);
     return result != null && result.found()
-        && SOURCE_ELECTRONIC_DRAWING_EXCEL.equalsIgnoreCase(trimToNull(result.bomSource()))
+        && com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingSourceKind.isDrawing(trimToNull(result.bomSource()))
         ? result : null;
   }
 

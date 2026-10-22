@@ -33,11 +33,10 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * 在产品任务冻结的物料组织内解析电子图库料号。
  *
- * <p>自动匹配只认图号、规格、型号的严格唯一值；财务报价员的搜索结果只在主动输入后返回。
+ * <p>自动匹配只认档案图号的严格唯一值；财务报价员的搜索结果只在主动输入后返回。
  */
 @Service
 public class ElectronicDrawingMaterialResolutionService {
-  private static final String BOM_SOURCE = "ELECTRONIC_DRAWING_EXCEL";
   private static final String VERSION_DRAFT = "DRAFT";
   private static final int DEFAULT_SEARCH_LIMIT = 30;
   private static final int MAX_SEARCH_LIMIT = 100;
@@ -56,7 +55,8 @@ public class ElectronicDrawingMaterialResolutionService {
       ElectronicDrawingSourceNodeRepository sourceNodeRepository,
       ElectronicDrawingMaterialMatcher matcher,
       MaterialMasterRawMapper materialMapper,
-      ElectronicDrawingActorProvider actorProvider, ElectronicDrawingBomScope scope) {
+      ElectronicDrawingActorProvider actorProvider,
+      ElectronicDrawingBomScope scope) {
     this.contextPort = contextPort;
     this.versionMapper = versionMapper;
     this.sourceNodeRepository = sourceNodeRepository;
@@ -70,19 +70,23 @@ public class ElectronicDrawingMaterialResolutionService {
   @Transactional
   public ElectronicDrawingMaterialResolutionResponse autoMatch(
       Long workflowId, String businessUnitType, String applicableOrgCode, String accountingMonth) {
-    ElectronicDrawingWorkContext context = contextPort.load(
-        workflowId, businessUnitType, applicableOrgCode, accountingMonth);
+    ElectronicDrawingWorkContext context =
+        contextPort.load(workflowId, businessUnitType, applicableOrgCode, accountingMonth);
     Target target = target(context, true);
-    List<ElectronicDrawingSourceNode> pending = sourceNodeRepository
-        .findPendingByVersionId(target.version().getId());
+    List<ElectronicDrawingSourceNode> pending =
+        sourceNodeRepository.findPendingByVersionId(target.version().getId());
     if (pending.isEmpty()) return response(context, target.version(), target.nodes());
 
-    Map<String, ElectronicDrawingSourceNode> nodeBySequence = pending.stream()
-        .collect(Collectors.toMap(ElectronicDrawingSourceNode::getSourceSequence,
-            Function.identity(), (first, ignored) -> first, LinkedHashMap::new));
-    List<ElectronicDrawingExcelParseResult.SourceNode> matchInputs = pending.stream()
-        .map(ElectronicDrawingMaterialResolutionService::matchInput)
-        .toList();
+    Map<String, ElectronicDrawingSourceNode> nodeBySequence =
+        pending.stream()
+            .collect(
+                Collectors.toMap(
+                    ElectronicDrawingSourceNode::getSourceSequence,
+                    Function.identity(),
+                    (first, ignored) -> first,
+                    LinkedHashMap::new));
+    List<ElectronicDrawingMaterialMatcher.Input> matchInputs =
+        pending.stream().map(ElectronicDrawingMaterialResolutionService::matchInput).toList();
     List<ElectronicDrawingMaterialMatcher.Match> matches =
         matcher.match(context.materialOrgCode(), matchInputs);
     LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
@@ -90,29 +94,40 @@ public class ElectronicDrawingMaterialResolutionService {
     for (ElectronicDrawingMaterialMatcher.Match match : matches) {
       ElectronicDrawingSourceNode node = nodeBySequence.get(match.sourceSequence());
       if (node == null) throw error(SOURCE_NODE_INVALID, "自动匹配结果未对应电子图库源节点");
-      String targetStatus = switch (match.status()) {
-        case AUTO_MATCHED -> ElectronicDrawingSourceNode.MATCH_AUTO;
-        case AMBIGUOUS -> ElectronicDrawingSourceNode.MATCH_AMBIGUOUS;
-        case UNMATCHED -> ElectronicDrawingSourceNode.MATCH_UNMATCHED;
-        default -> throw error(SOURCE_NODE_INVALID, "自动匹配产生了不允许的状态");
-      };
-      String materialCode = match.status() == ElectronicDrawingMaterialMatcher.Status.AUTO_MATCHED
-          ? required(match.selectedMaterialCode(), "自动匹配料号") : null;
+      String targetStatus =
+          switch (match.status()) {
+            case AUTO_MATCHED -> ElectronicDrawingSourceNode.MATCH_AUTO;
+            case AMBIGUOUS -> ElectronicDrawingSourceNode.MATCH_AMBIGUOUS;
+            case UNMATCHED -> ElectronicDrawingSourceNode.MATCH_UNMATCHED;
+            default -> throw error(SOURCE_NODE_INVALID, "自动匹配产生了不允许的状态");
+          };
+      String materialCode =
+          match.status() == ElectronicDrawingMaterialMatcher.Status.AUTO_MATCHED
+              ? required(match.selectedMaterialCode(), "自动匹配料号")
+              : null;
       if (sameResolution(node, targetStatus, materialCode)) continue;
-      boolean updated = sourceNodeRepository.updateResolution(
-          node.getId(), node.getMatchStatus(), targetStatus, materialCode,
-          materialCode == null ? null : "SYSTEM", materialCode == null ? null : now);
+      boolean updated =
+          sourceNodeRepository.updateResolution(
+              node.getId(),
+              node.getMatchStatus(),
+              targetStatus,
+              materialCode,
+              materialCode == null ? null : "SYSTEM",
+              materialCode == null ? null : now);
       if (!updated) throw conflict();
       changed = true;
     }
     if (changed) touch(context, target.version().getId(), 0L, "SYSTEM", now);
     ElectronicDrawingWorkContext refreshed = changed ? reload(context) : context;
-    return response(refreshed, target.version(),
+    return response(
+        refreshed,
+        target.version(),
         sourceNodeRepository.findByVersionId(target.version().getId()));
   }
 
   @Transactional(readOnly = true)
-  public ElectronicDrawingMaterialResolutionResponse state(Long workflowId, String accountingMonth) {
+  public ElectronicDrawingMaterialResolutionResponse state(
+      Long workflowId, String accountingMonth) {
     ElectronicDrawingWorkContext context = userContext(workflowId, accountingMonth);
     Target target = target(context, false);
     return response(context, target.version(), target.nodes());
@@ -124,7 +139,8 @@ public class ElectronicDrawingMaterialResolutionService {
       Long expectedSourceVersionId,
       String searchType,
       String keyword,
-      Integer limit, String accountingMonth) {
+      Integer limit,
+      String accountingMonth) {
     ElectronicDrawingWorkContext context = userContext(workflowId, accountingMonth);
     Target target = target(context, true);
     if (!Objects.equals(target.version().getId(), expectedSourceVersionId)) {
@@ -132,12 +148,17 @@ public class ElectronicDrawingMaterialResolutionService {
     }
     SearchType type = SearchType.parse(searchType);
     String query = text(keyword);
-    int safeLimit = limit == null ? DEFAULT_SEARCH_LIMIT : Math.max(1, Math.min(limit, MAX_SEARCH_LIMIT));
-    List<ElectronicDrawingMaterialSearchResponse.Option> options = query == null ? List.of()
-        : materialMapper.selectElectronicDrawingOptions(
-                type.name(), query, null, context.materialOrgCode(), safeLimit).stream()
-            .map(ElectronicDrawingMaterialResolutionService::searchOption)
-            .toList();
+    int safeLimit =
+        limit == null ? DEFAULT_SEARCH_LIMIT : Math.max(1, Math.min(limit, MAX_SEARCH_LIMIT));
+    List<ElectronicDrawingMaterialSearchResponse.Option> options =
+        query == null
+            ? List.of()
+            : materialMapper
+                .selectElectronicDrawingOptions(
+                    type.name(), query, null, context.materialOrgCode(), safeLimit)
+                .stream()
+                .map(ElectronicDrawingMaterialResolutionService::searchOption)
+                .toList();
     return new ElectronicDrawingMaterialSearchResponse(
         context.workflowId(), target.version().getId(), type.name(), query, options);
   }
@@ -161,8 +182,9 @@ public class ElectronicDrawingMaterialResolutionService {
       return response(context, target.version(), target.nodes());
     }
 
-    Map<Long, ElectronicDrawingSourceNode> nodes = target.nodes().stream()
-        .collect(Collectors.toMap(ElectronicDrawingSourceNode::getId, Function.identity()));
+    Map<Long, ElectronicDrawingSourceNode> nodes =
+        target.nodes().stream()
+            .collect(Collectors.toMap(ElectronicDrawingSourceNode::getId, Function.identity()));
     Set<Long> selectedNodeIds = new LinkedHashSet<>();
     Set<String> requestedCodes = new LinkedHashSet<>();
     for (ValidSelection selection : valid.selections()) {
@@ -176,13 +198,19 @@ public class ElectronicDrawingMaterialResolutionService {
       requestedCodes.add(selection.normalizedMaterialCode());
     }
 
-    List<MaterialMasterRaw> materialRows = materialMapper.selectByLatestBatchAndCodes(
-        valid.selections().stream().map(ValidSelection::materialCode).toList(),
-        null, context.materialOrgCode());
-    Map<String, List<MaterialMasterRaw>> materialGroups = materialRows.stream()
-        .filter(row -> text(row.getMaterialCode()) != null)
-        .collect(Collectors.groupingBy(
-            row -> normalize(row.getMaterialCode()), LinkedHashMap::new, Collectors.toList()));
+    List<MaterialMasterRaw> materialRows =
+        materialMapper.selectByLatestBatchAndCodes(
+            valid.selections().stream().map(ValidSelection::materialCode).toList(),
+            null,
+            context.materialOrgCode());
+    Map<String, List<MaterialMasterRaw>> materialGroups =
+        materialRows.stream()
+            .filter(row -> text(row.getMaterialCode()) != null)
+            .collect(
+                Collectors.groupingBy(
+                    row -> normalize(row.getMaterialCode()),
+                    LinkedHashMap::new,
+                    Collectors.toList()));
     if (!materialGroups.keySet().equals(requestedCodes)
         || materialGroups.values().stream().anyMatch(rows -> rows.size() != 1)) {
       throw error(MATERIAL_NOT_FOUND, "所选 U9 料号不是当前物料组织中的唯一正常料品，请重新搜索");
@@ -193,22 +221,37 @@ public class ElectronicDrawingMaterialResolutionService {
     LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     for (ValidSelection selection : valid.selections()) {
       ElectronicDrawingSourceNode node = nodes.get(selection.sourceNodeId());
-      String actualCode = materialGroups.get(selection.normalizedMaterialCode())
-          .getFirst().getMaterialCode().trim();
+      String actualCode =
+          materialGroups
+              .get(selection.normalizedMaterialCode())
+              .getFirst()
+              .getMaterialCode()
+              .trim();
       if (!sourceNodeRepository.updateResolution(
-          node.getId(), node.getMatchStatus(), ElectronicDrawingSourceNode.MATCH_MANUAL,
-          actualCode, resolvedBy, now)) {
+          node.getId(),
+          node.getMatchStatus(),
+          ElectronicDrawingSourceNode.MATCH_MANUAL,
+          actualCode,
+          resolvedBy,
+          now)) {
         throw conflict();
       }
     }
     if (target.version().getCompositionFingerprint() != null) {
-      if (versionMapper.updateElectronicDrawingCompositionFingerprint(target.version().getId(),
-          target.version().getCompositionFingerprint(), null, context.materialOrgCode(), now) != 1) throw conflict();
+      if (versionMapper.updateElectronicDrawingCompositionFingerprint(
+              target.version().getId(),
+              target.version().getCompositionFingerprint(),
+              null,
+              context.materialOrgCode(),
+              now)
+          != 1) throw conflict();
       target.version().setCompositionFingerprint(null);
     }
     touch(context, target.version().getId(), actor.userId(), actor.userName(), now);
     ElectronicDrawingWorkContext refreshed = reload(context);
-    return response(refreshed, target.version(),
+    return response(
+        refreshed,
+        target.version(),
         sourceNodeRepository.findByVersionId(target.version().getId()));
   }
 
@@ -233,16 +276,17 @@ public class ElectronicDrawingMaterialResolutionService {
       throw error(SOURCE_VERSION_INVALID, "当前报价产品没有可用的电子图库源版本");
     }
     QuoteBomSupplementVersion version = versionMapper.selectById(context.sourceVersionId());
-    boolean valid = version != null
-        && Objects.equals(version.getId(), context.sourceVersionId())
-        && Objects.equals(version.getPreparationId(), context.preparationId())
-        && same(version.getTaskNo(), context.taskNo())
-        && same(version.getQuoteProductCode(), context.quoteProductCode())
-        && same(version.getPeriodMonth(), context.accountingMonth())
-        && same(version.getMaterialOrgCode(), context.materialOrgCode())
-        && BOM_SOURCE.equals(version.getBomSource())
-        && Objects.equals(version.getActiveFlag(), 1)
-        && (!requireDraft || VERSION_DRAFT.equals(version.getVersionStatus()));
+    boolean valid =
+        version != null
+            && Objects.equals(version.getId(), context.sourceVersionId())
+            && Objects.equals(version.getPreparationId(), context.preparationId())
+            && same(version.getTaskNo(), context.taskNo())
+            && same(version.getQuoteProductCode(), context.quoteProductCode())
+            && same(version.getPeriodMonth(), context.accountingMonth())
+            && same(version.getMaterialOrgCode(), context.materialOrgCode())
+            && ElectronicDrawingSourceKind.isDrawing(version.getBomSource())
+            && Objects.equals(version.getActiveFlag(), 1)
+            && (!requireDraft || VERSION_DRAFT.equals(version.getVersionStatus()));
     if (!valid) throw error(SOURCE_VERSION_INVALID, "当前电子图库源版本与产品任务不一致或不可编辑");
     List<ElectronicDrawingSourceNode> nodes = sourceNodeRepository.findByVersionId(version.getId());
     if (nodes.isEmpty()) throw error(SOURCE_VERSION_INVALID, "当前电子图库源版本没有明细节点");
@@ -256,35 +300,51 @@ public class ElectronicDrawingMaterialResolutionService {
       String updatedByName,
       LocalDateTime updatedAt) {
     try {
-      contextPort.touch(context, sourceVersionId, updatedBy,
-          required(updatedByName, "操作人名称"), updatedAt);
+      contextPort.touch(
+          context, sourceVersionId, updatedBy, required(updatedByName, "操作人名称"), updatedAt);
     } catch (ElectronicDrawingWorkflowRetryException exception) {
       throw conflict();
     }
   }
 
   private ElectronicDrawingWorkContext reload(ElectronicDrawingWorkContext context) {
-    return contextPort.load(context.workflowId(), context.businessUnitType(),
-        context.applicableOrgCode(), context.accountingMonth());
+    return contextPort.load(
+        context.workflowId(),
+        context.businessUnitType(),
+        context.applicableOrgCode(),
+        context.accountingMonth());
   }
 
   private ElectronicDrawingMaterialResolutionResponse response(
       ElectronicDrawingWorkContext context,
       QuoteBomSupplementVersion version,
       List<ElectronicDrawingSourceNode> nodes) {
-    var plan = scope.inspect(context, nodes, version.getEffectiveFrom() == null
-        ? java.time.YearMonth.parse(context.accountingMonth()).atDay(1) : version.getEffectiveFrom());
-    Set<String> resolvedCodes = nodes.stream()
-        .map(ElectronicDrawingSourceNode::getResolvedMaterialCode)
-        .map(ElectronicDrawingMaterialResolutionService::text)
-        .filter(Objects::nonNull)
-        .collect(Collectors.toCollection(LinkedHashSet::new));
-    Map<String, MaterialMasterRaw> materials = resolvedCodes.isEmpty() ? Map.of()
-        : materialMapper.selectByLatestBatchAndCodes(
-                resolvedCodes, null, context.materialOrgCode()).stream()
-            .filter(row -> text(row.getMaterialCode()) != null)
-            .collect(Collectors.toMap(row -> normalize(row.getMaterialCode()), Function.identity(),
-                (first, ignored) -> first, LinkedHashMap::new));
+    var plan =
+        scope.inspect(
+            context,
+            nodes,
+            version.getEffectiveFrom() == null
+                ? java.time.YearMonth.parse(context.accountingMonth()).atDay(1)
+                : version.getEffectiveFrom());
+    Set<String> resolvedCodes =
+        nodes.stream()
+            .map(ElectronicDrawingSourceNode::getResolvedMaterialCode)
+            .map(ElectronicDrawingMaterialResolutionService::text)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+    Map<String, MaterialMasterRaw> materials =
+        resolvedCodes.isEmpty()
+            ? Map.of()
+            : materialMapper
+                .selectByLatestBatchAndCodes(resolvedCodes, null, context.materialOrgCode())
+                .stream()
+                .filter(row -> text(row.getMaterialCode()) != null)
+                .collect(
+                    Collectors.toMap(
+                        row -> normalize(row.getMaterialCode()),
+                        Function.identity(),
+                        (first, ignored) -> first,
+                        LinkedHashMap::new));
     int auto = 0;
     int manual = 0;
     int unmatched = 0;
@@ -294,67 +354,119 @@ public class ElectronicDrawingMaterialResolutionService {
       switch (node.getMatchStatus()) {
         case ElectronicDrawingSourceNode.MATCH_AUTO -> auto++;
         case ElectronicDrawingSourceNode.MATCH_MANUAL -> manual++;
-        case ElectronicDrawingSourceNode.MATCH_AMBIGUOUS -> { if (plan.pendingIds().contains(node.getId())) ambiguous++; }
-        default -> { if (plan.pendingIds().contains(node.getId())) unmatched++; }
+        case ElectronicDrawingSourceNode.MATCH_AMBIGUOUS -> {
+          if (plan.pendingIds().contains(node.getId())) ambiguous++;
+        }
+        default -> {
+          if (plan.pendingIds().contains(node.getId())) unmatched++;
+        }
       }
       String materialCode = normalize(node.getResolvedMaterialCode());
       MaterialMasterRaw material = materialCode == null ? null : materials.get(materialCode);
-      items.add(item(node, material, plan.branches().get(node.getId()), plan.pendingIds().contains(node.getId()),
-          VERSION_DRAFT.equals(version.getVersionStatus()) && !context.published()));
+      items.add(
+          item(
+              node,
+              material,
+              plan.branches().get(node.getId()),
+              plan.pendingIds().contains(node.getId()),
+              VERSION_DRAFT.equals(version.getVersionStatus()) && !context.published()));
     }
     return new ElectronicDrawingMaterialResolutionResponse(
-        context.workflowId(), context.revision(), version.getId(), version.getVersionNo(),
-        version.getVersionStatus(), version.getElectronicDrawingNo(), context.materialOrgCode(),
-        nodes.size(), auto, manual, unmatched, ambiguous, plan.pendingIds().isEmpty(), items,
-        context.accountingMonth(), context.workflowStage(), version.getCompositionFingerprint() != null,
+        context.workflowId(),
+        context.revision(),
+        version.getId(),
+        version.getVersionNo(),
+        version.getVersionStatus(),
+        version.getElectronicDrawingNo(),
+        context.materialOrgCode(),
+        nodes.size(),
+        auto,
+        manual,
+        unmatched,
+        ambiguous,
+        plan.pendingIds().isEmpty(),
+        items,
+        context.accountingMonth(),
+        context.workflowStage(),
+        version.getCompositionFingerprint() != null,
         context.published());
   }
 
   private static ElectronicDrawingMaterialResolutionResponse.Item item(
-      ElectronicDrawingSourceNode node, MaterialMasterRaw material, ElectronicDrawingBomScope.Branch branch,
-      boolean requiresAction, boolean canModify) {
+      ElectronicDrawingSourceNode node,
+      MaterialMasterRaw material,
+      ElectronicDrawingBomScope.Branch branch,
+      boolean requiresAction,
+      boolean canModify) {
     return new ElectronicDrawingMaterialResolutionResponse.Item(
-        node.getId(), node.getSourceRowNo(), node.getSourceSequence(),
-        node.getParentSourceSequence(), node.getDrawingCode(), node.getSourceName(), node.getQty(),
-        node.getMaterial(), node.getMatchStatus(), requiresAction,
-        node.getResolvedMaterialCode(), material == null ? null : material.getMaterialName(),
+        node.getId(),
+        node.getSourceRowNo(),
+        node.getSourceSequence(),
+        node.getParentSourceSequence(),
+        node.getDrawingCode(),
+        node.getSourceName(),
+        node.getQty(),
+        node.getMaterial(),
+        node.getMatchStatus(),
+        requiresAction,
+        node.getResolvedMaterialCode(),
+        material == null ? null : material.getMaterialName(),
         material == null ? null : material.getMaterialSpec(),
         material == null ? null : material.getMaterialModel(),
         material == null ? null : material.getDrawingNo(),
         material == null ? null : material.getShapeAttr(),
-        material == null ? null : material.getUnit(), node.getResolvedBy(), node.getResolvedAt(),
-        branch == null ? null : branch.state().name(), branch == null ? null : branch.message(), canModify);
+        material == null ? null : material.getUnit(),
+        node.getResolvedBy(),
+        node.getResolvedAt(),
+        branch == null ? null : branch.state().name(),
+        branch == null ? null : branch.message(),
+        canModify);
   }
 
-  private static ElectronicDrawingMaterialSearchResponse.Option searchOption(MaterialMasterRaw row) {
+  private static ElectronicDrawingMaterialSearchResponse.Option searchOption(
+      MaterialMasterRaw row) {
     return new ElectronicDrawingMaterialSearchResponse.Option(
-        text(row.getMaterialCode()), text(row.getMaterialName()), text(row.getMaterialSpec()),
-        text(row.getMaterialModel()), text(row.getDrawingNo()), text(row.getShapeAttr()),
-        text(row.getUnit()), text(row.getMainCategoryCode()), text(row.getMainCategoryName()));
+        text(row.getMaterialCode()),
+        text(row.getMaterialName()),
+        text(row.getMaterialSpec()),
+        text(row.getMaterialModel()),
+        text(row.getDrawingNo()),
+        text(row.getShapeAttr()),
+        text(row.getUnit()),
+        text(row.getMainCategoryCode()),
+        text(row.getMainCategoryName()));
   }
 
-  private static ElectronicDrawingExcelParseResult.SourceNode matchInput(
+  private static ElectronicDrawingMaterialMatcher.Input matchInput(
       ElectronicDrawingSourceNode node) {
-    return new ElectronicDrawingExcelParseResult.SourceNode(
-        node.getSourceSequence(), node.getParentSourceSequence(), 0, node.getDrawingCode(),
-        node.getSourceName(), node.getMaterial(), node.getImportanceClass(), node.getHsfRiskClass(),
-        node.getQty(), node.getReferenceWeight(), node.getReferenceWeightUnit(),
-        node.getSourceRemark(), node.getSourceRowNo());
+    return new ElectronicDrawingMaterialMatcher.Input(
+        node.getSourceSequence(),
+        node.getSourceRowNo(),
+        node.getDrawingCode(),
+        node.getSourceName());
   }
 
   private static ValidRequest validate(ElectronicDrawingMaterialResolutionRequest request) {
-    if (request == null || request.expectedTaskVersion() == null
-        || request.expectedTaskVersion() < 0 || request.expectedSourceVersionId() == null
+    if (request == null
+        || request.expectedTaskVersion() == null
+        || request.expectedTaskVersion() < 0
+        || request.expectedSourceVersionId() == null
         || request.expectedSourceVersionId() <= 0) {
       throw error(COMMAND_INVALID, "任务版本和电子图库源版本不能为空");
     }
-    List<ValidSelection> selections = request.selections().stream().map(selection -> {
-      if (selection == null || selection.sourceNodeId() == null || selection.sourceNodeId() <= 0) {
-        throw error(COMMAND_INVALID, "电子图库源节点ID不能为空");
-      }
-      String code = required(selection.materialCode(), "U9料号");
-      return new ValidSelection(selection.sourceNodeId(), code, normalize(code));
-    }).toList();
+    List<ValidSelection> selections =
+        request.selections().stream()
+            .map(
+                selection -> {
+                  if (selection == null
+                      || selection.sourceNodeId() == null
+                      || selection.sourceNodeId() <= 0) {
+                    throw error(COMMAND_INVALID, "电子图库源节点ID不能为空");
+                  }
+                  String code = required(selection.materialCode(), "U9料号");
+                  return new ValidSelection(selection.sourceNodeId(), code, normalize(code));
+                })
+            .toList();
     return new ValidRequest(
         request.expectedTaskVersion(), request.expectedSourceVersionId(), selections);
   }
@@ -421,9 +533,7 @@ public class ElectronicDrawingMaterialResolutionService {
       QuoteBomSupplementVersion version, List<ElectronicDrawingSourceNode> nodes) {}
 
   private record ValidRequest(
-      Integer expectedTaskVersion,
-      Long expectedSourceVersionId,
-      List<ValidSelection> selections) {}
+      Integer expectedTaskVersion, Long expectedSourceVersionId, List<ValidSelection> selections) {}
 
   private record ValidSelection(
       Long sourceNodeId, String materialCode, String normalizedMaterialCode) {}

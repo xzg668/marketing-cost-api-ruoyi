@@ -218,8 +218,10 @@ class OaWorkflowClientTest {
 
   @Test void interfaceSummaryOmitsRemarkWhileDedicatedPayloadLogKeepsItWithoutCredentials() {
     var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+    var payloadLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(
+        com.sanhua.marketingcost.integration.logging.ExternalInterfaceLog.class);
     var events = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
-    events.start(); logger.addAppender(events);
+    events.start(); logger.addAppender(events); payloadLogger.addAppender(events);
     try {
       response = "{\"message\":{\"errcode\":1200302,\"errmsg\":\"PRIVATE_SECRET access_token=HIDDEN_TOKEN\"}}";
       var result = client.submit(request().put("remark", "CONFIDENTIAL_ACTUAL_SALARY_AND_PRICE"));
@@ -236,7 +238,7 @@ class OaWorkflowClientTest {
       assertThat(payload).contains("CONFIDENTIAL_ACTUAL_SALARY_AND_PRICE", "1200302", result.callId())
           .doesNotContain("PRIVATE_SECRET", "HIDDEN_TOKEN", "TOKEN +&中文");
     } finally {
-      logger.detachAppender(events); events.stop();
+      logger.detachAppender(events); payloadLogger.detachAppender(events); events.stop();
     }
   }
 

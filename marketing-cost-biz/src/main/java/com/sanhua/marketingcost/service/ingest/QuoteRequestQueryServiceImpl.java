@@ -37,6 +37,7 @@ import com.sanhua.marketingcost.mapper.OaFormItemExtraFieldMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomPreparationRecordMapper;
+import com.sanhua.marketingcost.mapper.DrawingVerificationTaskMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteIngestLogMapper;
@@ -77,6 +78,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   private final OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper;
   private final QuoteBomStatusMapper quoteBomStatusMapper;
   private final QuoteBomPreparationRecordMapper quoteBomPreparationRecordMapper;
+  private final DrawingVerificationTaskMapper drawingVerificationTaskMapper;
   private final QuoteCostRunVersionMapper quoteCostRunVersionMapper;
   private final QuoteIngestLogMapper quoteIngestLogMapper;
   private final QuoteCostingWorkspaceService quoteCostingWorkspaceService;
@@ -89,6 +91,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
       OaFormItemExtraFieldMapper oaFormItemExtraFieldMapper,
       QuoteBomStatusMapper quoteBomStatusMapper,
       QuoteBomPreparationRecordMapper quoteBomPreparationRecordMapper,
+      DrawingVerificationTaskMapper drawingVerificationTaskMapper,
       QuoteCostRunVersionMapper quoteCostRunVersionMapper,
       QuoteIngestLogMapper quoteIngestLogMapper,
       QuoteCostingWorkspaceService quoteCostingWorkspaceService) {
@@ -99,6 +102,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     this.oaFormItemExtraFieldMapper = oaFormItemExtraFieldMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
     this.quoteBomPreparationRecordMapper = quoteBomPreparationRecordMapper;
+    this.drawingVerificationTaskMapper = drawingVerificationTaskMapper;
     this.quoteCostRunVersionMapper = quoteCostRunVersionMapper;
     this.quoteIngestLogMapper = quoteIngestLogMapper;
     this.quoteCostingWorkspaceService = quoteCostingWorkspaceService;
@@ -276,6 +280,16 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
                   latestCostRunByItemId.get(item.getId()),
                   workspaceByItemId.get(item.getId()),
                   preparationByItemId.get(item.getId())));
+    }
+    // 待人工确认时尚未生成 BOM 准备记录；从当前取图任务补上真实月份，产品行才能展示修正入口。
+    var drawingTasks = drawingVerificationTaskMapper.findActiveForQuote(
+        form.getOaNo(), CostPricingPeriodUtils.currentPricingMonth(), form.getBusinessUnitType());
+    if (drawingTasks != null) {
+      var byItem = new java.util.HashMap<Long, String>();
+      drawingTasks.forEach(task -> byItem.putIfAbsent(task.getOaFormItemId(), task.getAccountingMonth()));
+      response.getItems().forEach(row -> {
+        if (byItem.containsKey(row.getId())) row.setElectronicDrawingAccountingMonth(byItem.get(row.getId()));
+      });
     }
     for (OaFormExtraFee fee : listExtraFees(form.getId())) {
       response.getExtraFees().add(toExtraFee(fee));

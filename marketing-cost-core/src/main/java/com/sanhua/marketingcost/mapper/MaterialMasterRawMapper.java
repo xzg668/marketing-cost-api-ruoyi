@@ -148,33 +148,35 @@ public interface MaterialMasterRawMapper extends BaseMapper<MaterialMasterRaw> {
       @Param("organizationCode") String organizationCode,
       @Param("limit") int limit);
 
-  /** 电子图库图号匹配：一次批量查询当前组织内 drawing/spec/model 精确相等的候选。 */
+  /** 产品取图候选；业务层依次选择料号、型号加规格或仅型号，不使用报价图号约束。 */
   @Select({
       "<script>",
-      "SELECT *",
-      "FROM lp_material_master_raw",
-      "WHERE active_flag = 1",
-      "  AND organization_code = #{organizationCode}",
-      "<if test='sourceType != null and sourceType != \"\"'>",
-      "  AND source_type = #{sourceType}",
-      "</if>",
-      "  AND (",
-      "    UPPER(TRIM(drawing_no)) IN",
-      "    <foreach collection='drawingCodes' item='code' open='(' separator=',' close=')'>#{code}</foreach>",
-      "    OR UPPER(TRIM(material_spec)) IN",
-      "    <foreach collection='drawingCodes' item='code' open='(' separator=',' close=')'>#{code}</foreach>",
-      "    OR UPPER(TRIM(material_model)) IN",
-      "    <foreach collection='drawingCodes' item='code' open='(' separator=',' close=')'>#{code}</foreach>",
-      "  )",
-      "ORDER BY material_code ASC",
-      "LIMIT #{limit}",
+      "SELECT * FROM lp_material_master_raw",
+      "WHERE active_flag = 1 AND organization_code = #{organizationCode}",
+      "<if test='materialCode != null'>AND material_code = #{materialCode}</if>",
+      "<if test='model != null'>AND BINARY UPPER(TRIM(material_model)) = UPPER(#{model})</if>",
+      "<if test='specification != null'>AND BINARY UPPER(TRIM(material_spec)) = UPPER(#{specification})</if>",
+      "<if test='materialCode == null and model == null'>AND 1 = 0</if>",
+      "ORDER BY material_code",
       "</script>"
   })
-  List<MaterialMasterRaw> selectByDrawingIdentities(
+  List<MaterialMasterRaw> selectDrawingProductCandidates(
+      @Param("materialCode") String materialCode, @Param("model") String model,
+      @Param("specification") String specification, @Param("organizationCode") String organizationCode);
+
+  /** 明细代号就是图号；不跨字段降级，不截断结果后判断唯一性。 */
+  @Select({
+      "<script>",
+      "SELECT * FROM lp_material_master_raw",
+      "WHERE active_flag = 1 AND organization_code = #{organizationCode}",
+      "AND BINARY UPPER(TRIM(drawing_no)) IN",
+      "<foreach collection='drawingCodes' item='code' open='(' separator=',' close=')'>#{code}</foreach>",
+      "ORDER BY material_code",
+      "</script>"
+  })
+  List<MaterialMasterRaw> selectByDrawingNumbers(
       @Param("drawingCodes") Collection<String> drawingCodes,
-      @Param("sourceType") String sourceType,
-      @Param("organizationCode") String organizationCode,
-      @Param("limit") int limit);
+      @Param("organizationCode") String organizationCode);
 
   /** 电子图库待处理页主动搜索；空关键字由服务层直接返回空集合，SQL 不允许跨字段预加载。 */
   @Select({

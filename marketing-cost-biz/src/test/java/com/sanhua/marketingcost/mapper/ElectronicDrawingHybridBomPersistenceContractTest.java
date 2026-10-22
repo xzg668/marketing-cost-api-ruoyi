@@ -26,7 +26,7 @@ class ElectronicDrawingHybridBomPersistenceContractTest {
         "INNER JOIN lp_quote_bom_supplement_version",
         "detail.supplement_version_id = #{supplementVersionId}",
         "version.version_status = 'DRAFT'",
-        "version.bom_source = 'ELECTRONIC_DRAWING_EXCEL'");
+        "version.bom_source IN ('ELECTRONIC_DRAWING_EXCEL','ELECTRONIC_DRAWING_PDF')");
   }
 
   @Test
@@ -59,7 +59,7 @@ class ElectronicDrawingHybridBomPersistenceContractTest {
         "composition_fingerprint = #{compositionFingerprint}",
         "updated_at = #{updatedAt}",
         "version_status = 'DRAFT'",
-        "bom_source = 'ELECTRONIC_DRAWING_EXCEL'",
+        "bom_source IN ('ELECTRONIC_DRAWING_EXCEL','ELECTRONIC_DRAWING_PDF')",
         "material_org_code = #{materialOrgCode}",
         "composition_fingerprint IS NULL",
         "composition_fingerprint = #{expectedFingerprint}");

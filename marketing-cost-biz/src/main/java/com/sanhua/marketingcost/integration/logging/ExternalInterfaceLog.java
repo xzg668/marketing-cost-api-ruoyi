@@ -17,6 +17,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -32,9 +33,11 @@ public final class ExternalInterfaceLog {
   private static final String REDACTED = "[REDACTED]";
   private static final Set<String> SENSITIVE = Set.of("authorization", "proxyauthorization", "cookie", "setcookie",
       "password", "passwd", "pwd", "credentials", "secret", "appkey", "apikey", "clientsecret", "privatekey",
-      "token", "accesstoken", "acesstoken", "refreshtoken", "jwt", "authorizationcode");
+      "token", "accesstoken", "acesstoken", "refreshtoken", "jwt", "authorizationcode",
+      "signature", "sig", "credential", "awsaccesskeyid", "ossaccesskeyid", "authkey", "policy", "keypairid");
   private static final Set<String> SAFE_HEADERS = Set.of("content-type", "content-length", "x-request-id",
-      "x-trace-id", "x-oa-call-id", "x-file-sha256", "x-drawing-no", "x-source");
+      "x-trace-id", "x-oa-call-id", "x-file-sha256", "x-drawing-no", "x-source", "x-review-task", "idempotency-key");
+  private static final Pattern URL_IN_TEXT = Pattern.compile("(?i)https?://[^\\s\\\"<>]+");
 
   private ExternalInterfaceLog() {}
 
@@ -73,6 +76,12 @@ public final class ExternalInterfaceLog {
     }
 
     public String id() { return (String) event.get("callId"); }
+
+    public void correlate(String key, Object value) {
+      if (value != null) event.put(key, value);
+    }
+
+    public void result(String result) { event.put("businessOutcome", result); }
 
     /** 同时遮蔽对端在错误文字中回显的本应用凭据。 */
     public void redactSecrets(String... values) {
@@ -183,6 +192,18 @@ public final class ExternalInterfaceLog {
         } else collectSecrets(entry.getValue());
       });
       else if (node.isArray()) node.forEach(this::collectSecrets);
+      else if (node.isTextual()) {
+        var urls = URL_IN_TEXT.matcher(node.asText());
+        while (urls.find()) {
+          try {
+            URI uri = URI.create(urls.group());
+            query(uri.getRawQuery()); // 收集签名，连同错误文字中的回显一起脱敏。
+            remember(uri.getRawUserInfo());
+          } catch (IllegalArgumentException ignored) {
+            // 无法解析的链接由 redactUrls 整体隐藏。
+          }
+        }
+      }
     }
 
     private JsonNode sanitize(JsonNode node) {
@@ -221,8 +242,30 @@ public final class ExternalInterfaceLog {
       for (String secret : secrets) {
         safe = safe.replace(secret, REDACTED).replace(URLEncoder.encode(secret, StandardCharsets.UTF_8), REDACTED);
       }
-      return safe.replaceAll("(?i)(Bearer\\s+)[A-Za-z0-9._~+/=-]+", "$1[REDACTED]")
+      return redactUrls(safe).replaceAll("(?i)(Bearer\\s+)[A-Za-z0-9._~+/=-]+", "$1[REDACTED]")
           .replaceAll("(?i)((?:access_?token|acesstoken|refresh_?token|app_?secret|app_?key|client_?secret|password|authorization)[\\\"']?\\s*[:=]\\s*[\\\"']?)[^\\s\\\"'&<>]+", "$1[REDACTED]");
+    }
+
+    /** 日志保留文件主机和路径；URL 查询串可能是任意厂商的下载授权，统一隐藏参数值。 */
+    private String redactUrls(String text) {
+      return URL_IN_TEXT.matcher(text).replaceAll(match -> {
+        try {
+          URI uri = URI.create(match.group());
+          String safe = uri.getScheme() + "://" + uri.getHost()
+              + (uri.getPort() < 0 ? "" : ":" + uri.getPort()) + uri.getRawPath();
+          if (uri.getRawQuery() != null) {
+            var parts = new ArrayList<String>();
+            for (String pair : uri.getRawQuery().split("&")) {
+              parts.add(pair.split("=", 2)[0] + "=" + REDACTED);
+            }
+            safe += "?" + String.join("&", parts);
+          }
+          if (uri.getRawFragment() != null) safe += "#" + REDACTED;
+          return java.util.regex.Matcher.quoteReplacement(safe);
+        } catch (IllegalArgumentException invalidUrl) {
+          return REDACTED;
+        }
+      });
     }
 
     @Override public void close() {
@@ -242,6 +285,7 @@ public final class ExternalInterfaceLog {
   private static boolean sensitive(String key) {
     String normalized = key.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
     return SENSITIVE.contains(normalized) || normalized.endsWith("authorization") || normalized.endsWith("apikey") || normalized.endsWith("password")
-        || normalized.endsWith("token") || normalized.endsWith("secret");
+        || normalized.endsWith("token") || normalized.endsWith("secret")
+        || normalized.endsWith("signature") || normalized.endsWith("credential");
   }
 }

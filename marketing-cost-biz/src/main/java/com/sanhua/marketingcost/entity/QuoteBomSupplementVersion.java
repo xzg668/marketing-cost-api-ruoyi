@@ -23,6 +23,8 @@ public class QuoteBomSupplementVersion {
   private String supplementScope;
   private String bomSource;
   private String electronicDrawingNo;
+  /** PDF 不可变核验/确认结果；旧 Excel 历史为空。 */
+  private Long drawingResultId;
   private String sourceFileName;
   private String sourceFileSha256;
   private Long sourceFileSize;

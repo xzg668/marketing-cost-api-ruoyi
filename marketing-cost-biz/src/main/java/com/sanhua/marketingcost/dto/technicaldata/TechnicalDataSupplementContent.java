@@ -22,7 +22,17 @@ public final class TechnicalDataSupplementContent {
   }
 
   public record DrawingEvidence(Long oaFormItemId, String accountingMonth, String drawingNo,
-      String fileSha256, String requestId, LocalDateTime acquiredAt) {}
+      String fileSha256, String requestId, LocalDateTime acquiredAt,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+      String sourceType,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+      Long drawingResultId) {
+    /** 旧冻结快照维持原字段和序列化指纹。 */
+    public DrawingEvidence(Long oaFormItemId, String accountingMonth, String drawingNo,
+        String fileSha256, String requestId, LocalDateTime acquiredAt) {
+      this(oaFormItemId, accountingMonth, drawingNo, fileSha256, requestId, acquiredAt, null, null);
+    }
+  }
 
   public record DrawingNode(
       String itemKey, String parentItemKey, String sourceNodeId,

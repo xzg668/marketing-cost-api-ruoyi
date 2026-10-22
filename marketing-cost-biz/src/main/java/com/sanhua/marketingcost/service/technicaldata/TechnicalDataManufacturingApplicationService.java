@@ -199,7 +199,7 @@ public class TechnicalDataManufacturingApplicationService {
     var module = scope.module();
     module.setCurrentVersionId(draft.getId()); module.setEntryMode("MANUAL");
     module.setModuleStatus(issues.isEmpty() ? "READY" : "EDITING");
-    module.setReferenceSourceType("ELECTRONIC_DRAWING_EXCEL");
+    module.setReferenceSourceType(sources.sourceKind(assessment.sourceVersionId()));
     module.setReferenceSourceId(assessment.sourceVersionId().toString()); module.setReferenceFingerprint(assessment.fingerprint());
     module.setReferencedAt(now); module.setLastValidationCode(issues.isEmpty() ? "MANUFACTURING_VERIFIED" : "MANUFACTURING_INCOMPLETE");
     module.setLastValidationMessage(issues.isEmpty() ? "制造件原材料关系已核实，资料按单件保存" : issues.getFirst());

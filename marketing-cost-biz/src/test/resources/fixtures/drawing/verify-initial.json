@@ -1,0 +1,92 @@
+{
+  "taskId": "EDP-TEST-TASK",
+  "status": "reviewRequired",
+  "differenceCount": 0,
+  "data": {
+    "DRAW-01": {
+      "company": null,
+      "params": {
+        "items": [
+          {
+            "no": "001",
+            "code": "PART-001",
+            "name": "零件",
+            "qty": "2.0000",
+            "mat": null,
+            "grade": "重要",
+            "hsf": "低",
+            "weight": "0.50",
+            "note": ""
+          },
+          {
+            "no": "001",
+            "code": "PART-001",
+            "name": "零件",
+            "qty": "0.1250",
+            "mat": "",
+            "grade": null,
+            "hsf": null,
+            "weight": null,
+            "note": "重复行保留"
+          }
+        ]
+      }
+    },
+    "DRAW-02": {
+      "company": "第二公司",
+      "params": {
+        "items": [
+          {
+            "no": null,
+            "code": "PART-002",
+            "name": null,
+            "qty": "3",
+            "mat": "钢",
+            "grade": null,
+            "hsf": null,
+            "weight": "0.0100",
+            "note": null
+          }
+        ]
+      }
+    }
+  },
+  "plm_data": [
+    {
+      "drawingNo": "DRAW-01",
+      "createTime": 1792550000000,
+      "fileUrl": "https://files.example.test/a?signature=secret-fixture",
+      "plmVersion": "V002",
+      "departmentName": "技术部",
+      "extension": {
+        "nested": [
+          null,
+          "",
+          {
+            "keep": "0007"
+          }
+        ]
+      }
+    },
+    {
+      "drawingNo": "DRAW-01",
+      "createTime": 1792540000000,
+      "plmVersion": "V001",
+      "fileUrl": "https://files.example.test/old?token=old-fixture"
+    }
+  ],
+  "verificationStatus": "incomplete",
+  "editUrl": "http://127.0.0.1:18087/edit/EDP-TEST-TASK",
+  "reviewReasons": [
+    "missingFields"
+  ],
+  "expiresAt": 1792636440495,
+  "revision": 1,
+  "confirmedAt": null,
+  "deliveryStatus": "notRequested",
+  "deliveryAttempts": 0,
+  "engine": null,
+  "drafts": {},
+  "draftEngine": null,
+  "schemaVersion": 2
+}

@@ -149,6 +149,34 @@ class ExternalInterfaceLoggingTest {
     assertThat(events.list).isEmpty();
   }
 
+  @Test void reviewTaskHeadersAreTraceableWithoutLoggingAuthenticationHeaders() throws Exception {
+    try (var call = ExternalInterfaceLog.start("DRAWING_PDF", "INBOUND", "POST",
+        URI.create("/integration/v1/drawings/review-results"), Map.of(
+            "X-Review-Task", List.of("task-001"), "Idempotency-Key", List.of("task-001"),
+            "X-Request-ID", List.of("attempt-002"), "Authorization", List.of("Bearer CALLBACK_SECRET")))) {
+      call.request("{\"taskId\":\"task-001\"}");
+      call.response(200, Map.of(), "{\"accepted\":true}");
+      call.result("CONFIRMED");
+    }
+    assertThat(last().at("/requestHeaders/X-Review-Task/0").asText()).isEqualTo("task-001");
+    assertThat(last().at("/requestHeaders/Idempotency-Key/0").asText()).isEqualTo("task-001");
+    assertThat(last().at("/requestHeaders/X-Request-ID/0").asText()).isEqualTo("attempt-002");
+    assertThat(messages()).doesNotContain("CALLBACK_SECRET");
+    assertThat(events.list).hasSize(1);
+  }
+
+  @Test void signedLinksAndErrorEchoesAreSanitizedWithoutChangingTheInput() throws Exception {
+    String body = "{\"fileUrl\":\"https://files.example.test/original.pdf?signature=SIGNED%2BSECRET&vendorKey=VENDOR_SECRET\","
+        + "\"extension\":{\"X-Amz-Credential\":\"CREDENTIAL_SECRET\"}}";
+    try (var call = ExternalInterfaceLog.start("DRAWING_PDF", "OUTBOUND", "POST", URI.create("http://example.test/verify"), Map.of())) {
+      call.request("{\"drawingNo\":\"REAL-DRAWING\"}");
+      call.response(200, Map.of(), body);
+    }
+    assertThat(messages()).contains("original.pdf", "REAL-DRAWING")
+        .doesNotContain("SIGNED", "VENDOR_SECRET", "CREDENTIAL_SECRET");
+    assertThat(body).contains("SIGNED%2BSECRET", "VENDOR_SECRET", "CREDENTIAL_SECRET");
+  }
+
   private JsonNode last() throws Exception { return json.readTree(events.list.getLast().getFormattedMessage()); }
   private String messages() { return events.list.stream().map(ILoggingEvent::getFormattedMessage).reduce("", (a, b) -> a + b); }
 

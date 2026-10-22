@@ -254,10 +254,24 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V302__oa_technical_return_two_steps.sql", "V302");
       runScriptViaMysqlCli("/db/V303__technical_submission_without_approval_callback.sql", "V303");
       runScriptViaMysqlCli("/db/V307__remove_obsolete_oa_queue_columns.sql", "V307");
+      // 核对缺价也会走真实联动/区间价查询，补齐当前规则契约。
+      runScriptViaMysqlCli("/db/V177__market_factor_range_price_schema.sql", "V177");
+      runScriptViaMysqlCli("/db/V308__original_price_version_contract.sql", "V308");
+      runScriptViaMysqlCli("/db/V315__original_price_month_lookup_indexes.sql", "V315");
+      runScriptViaMysqlCli("/db/V326__original_workbook_source.sql", "V326");
       // 当前报价实体读取板换投标标记；补录任务集成测试必须使用相同字段契约。
       runScriptViaMysqlCli("/db/V313__board_final_tender_input.sql", "V313");
+      // 仅新建 Testcontainers 库的历史种子；允许 V323 替换过时排序夹具。
+      runScriptViaMysqlCli("/fixtures/material-price-priority-pre-v323.sql", "priority-pre-v323");
+      runScriptViaMysqlCli("/db/V323__monthly_material_price_priority.sql", "V323",
+          "SET @allow_material_price_type_reset=1");
+      runScriptViaMysqlCli("/db/V325__finance_effective_price.sql", "V325");
+      // 制造件取价现在同时查询废料月价；真实测试库必须具备该依赖结构。
+      runScriptViaMysqlCli("/db/V330__scrap_price_monthly.sql", "V330");
+      runScriptViaMysqlCli("/db/V332__settlement_price_versions.sql", "V332");
       runScriptViaMysqlCli("/db/V335__plate_material_mapping.sql", "V335");
       runScriptViaMysqlCli("/db/V336__plate_material_master_lookup_index.sql", "V336");
+      runScriptViaMysqlCli("/db/V338__drawing_verification_evidence.sql", "V338");
     } catch (Exception e) {
       // 把 root cause 的文字信息拼进 message，避免 surefire 只保留 Caused by 的短描述
       Throwable root = e;
@@ -338,13 +352,20 @@ public abstract class BomMapperTestBase {
    * 解析，与手工 {@code docker exec ... mysql < file.sql} 行为一致（已手工验证）。
    */
   private static void runScriptViaMysqlCli(String classpathResource, String logTag) throws Exception {
+    runScriptViaMysqlCli(classpathResource, logTag, "");
+  }
+
+  private static void runScriptViaMysqlCli(
+      String classpathResource, String logTag, String sessionInitialization) throws Exception {
     MYSQL.copyFileToContainer(
         MountableFile.forClasspathResource(classpathResource), "/tmp/" + logTag + ".sql");
     ExecResult result =
         MYSQL.execInContainer(
             "sh",
             "-c",
-            "mysql --default-character-set=utf8mb4 -uroot -p" + MYSQL.getPassword()
+            "mysql --default-character-set=utf8mb4 "
+                + (sessionInitialization.isEmpty() ? "" : "--init-command='" + sessionInitialization + "' ")
+                + "-uroot -p" + MYSQL.getPassword()
                 + " " + MYSQL.getDatabaseName() + " < /tmp/" + logTag + ".sql");
     if (result.getExitCode() != 0) {
       throw new IllegalStateException(

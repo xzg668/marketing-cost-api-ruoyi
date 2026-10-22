@@ -2,7 +2,7 @@ package com.sanhua.marketingcost.worker;
 
 import com.sanhua.marketingcost.config.AsyncConfig;
 import com.sanhua.marketingcost.config.CacheConfig;
-import com.sanhua.marketingcost.config.ElectronicDrawingBomProperties;
+import com.sanhua.marketingcost.integration.drawing.DrawingVerificationProperties;
 import com.sanhua.marketingcost.config.MetaObjectHandlerConfig;
 import com.sanhua.marketingcost.config.MybatisPlusConfig;
 import com.sanhua.marketingcost.config.PasswordEncodingConfig;
@@ -76,7 +76,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @Import({
     AsyncConfig.class,
     CacheConfig.class,
-    ElectronicDrawingBomProperties.class,
+    DrawingVerificationProperties.class,
     EffectiveTechnicalDataQueryServiceImpl.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataCostingSources.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCostingSources.class,

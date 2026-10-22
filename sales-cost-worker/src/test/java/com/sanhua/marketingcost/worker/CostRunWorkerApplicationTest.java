@@ -2,7 +2,7 @@ package com.sanhua.marketingcost.worker;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.sanhua.marketingcost.config.ElectronicDrawingBomProperties;
+import com.sanhua.marketingcost.integration.drawing.DrawingVerificationProperties;
 import com.sanhua.marketingcost.config.PasswordEncodingConfig;
 import com.sanhua.marketingcost.integration.oa.directory.OaPersonDirectorySyncScheduler;
 import com.sanhua.marketingcost.service.impl.BusinessUnitRepriceLockGuardImpl;
@@ -71,7 +71,7 @@ class CostRunWorkerApplicationTest {
 
     assertThat(annotation.value())
         .contains(
-            ElectronicDrawingBomProperties.class,
+            DrawingVerificationProperties.class,
             EffectiveTechnicalDataQueryServiceImpl.class,
             PasswordEncodingConfig.class,
             TechnicalDataVersionContentCodec.class);

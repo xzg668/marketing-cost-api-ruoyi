@@ -32,7 +32,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
-/** 财务料号确认、制造缺口检查和组树共用的图库可达范围；源 Excel 节点始终保留。 */
+/** 财务料号确认、制造缺口检查和组树共用的图库可达范围；原始来源节点始终保留。 */
 @Service
 public class ElectronicDrawingBomScope {
   public static final String DRAWING_NODE = "E_DRAWING_NODE";

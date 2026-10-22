@@ -57,6 +57,9 @@ import java.util.Objects;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 @Service
@@ -84,6 +87,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   private final QuotePriceTypeRecognitionService priceTypeRecognitionService;
   private final ElectronicDrawingCostingFallbackService electronicDrawingFallbackService;
   private final CostInputRevisionService inputRevisions;
+  private final TransactionTemplate transaction;
 
   public QuoteCostingWorkbenchServiceImpl(
       OaFormMapper oaFormMapper,
@@ -100,7 +104,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       QuoteBomStatusService quoteBomStatusService,
       QuotePriceTypeRecognitionService priceTypeRecognitionService,
       ElectronicDrawingCostingFallbackService electronicDrawingFallbackService,
-      CostInputRevisionService inputRevisions) {
+      CostInputRevisionService inputRevisions, PlatformTransactionManager transactionManager) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
@@ -116,6 +120,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     this.priceTypeRecognitionService = priceTypeRecognitionService;
     this.electronicDrawingFallbackService = electronicDrawingFallbackService;
     this.inputRevisions = inputRevisions;
+    this.transaction = new TransactionTemplate(transactionManager);
   }
 
   @Override
@@ -138,42 +143,52 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   }
 
   @Override
-  @Transactional(rollbackFor = Exception.class)
+  @Transactional(propagation = Propagation.NEVER)
   @RetryOnConcurrency
   public QuoteCostingWorkbenchResponse launchWorkbench(String oaNo, Long oaFormItemId) {
-    oaFormItemMapper.selectForCostingWrite(oaFormItemId);
+    Launch launch = Objects.requireNonNull(transaction.execute(status -> beginLaunch(oaNo, oaFormItemId)));
+    ElectronicDrawingCostingFallbackService.AttemptResult electronic = null;
+    QuoteBomStatusItemResponse checked = launch.checked();
+    if (checked != null && QuoteBomStatusCode.NO_BOM.getCode().equals(checked.getBomStatus())) {
+      electronic = electronicDrawingFallbackService.attempt(launch.form(), launch.item(), launch.month());
+    } else if (checked != null && Set.of("ELECTRONIC_DRAWING_EXCEL", "ELECTRONIC_DRAWING_PDF")
+        .contains(checked.getBomSource() == null ? "" : checked.getBomSource())) {
+      // 只有 U9 已确认缺失、当前实际来源为图库时，才接续其已组好的修订。
+      electronic = electronicDrawingFallbackService.resumeComposed(launch.form(), launch.item(), launch.month());
+    }
+    var result = electronic;
+    return transaction.execute(status -> finishLaunch(launch, result));
+  }
+
+  private Launch beginLaunch(String oaNo, Long itemId) {
+    oaFormItemMapper.selectForCostingWrite(itemId);
     OaForm form = requireForm(oaNo);
-    OaFormItem item = requireItem(form, oaFormItemId);
+    OaFormItem item = requireItem(form, itemId);
     String productCode = QuoteProductIdentityUtils.resolveCostingCode(item);
-    if (productCode == null) {
-      throw new QuoteIngestException("当前产品行料号、型号和图号均为空，无法发起核算");
+    if (productCode == null) throw new QuoteIngestException("当前产品行料号、型号和图号均为空，无法发起核算");
+    String month = CostPricingPeriodUtils.currentPricingMonth();
+    costRunVersionInvalidationService.invalidateProduct(form.getOaNo(), item.getId(), productCode, month);
+    var checked = quoteBomStatusService.checkItemForCostRun(form.getOaNo(), item.getId(), month);
+    return new Launch(form, item, productCode, month, checked, quoteInputs(form, item));
+  }
+
+  private QuoteCostingWorkbenchResponse finishLaunch(Launch launch,
+      ElectronicDrawingCostingFallbackService.AttemptResult electronic) {
+    oaFormItemMapper.selectForCostingWrite(launch.item().getId());
+    OaForm form = requireForm(launch.form().getOaNo());
+    OaFormItem item = requireItem(form, launch.item().getId());
+    if (!launch.inputs().equals(quoteInputs(form, item))) {
+      throw new QuoteIngestException("取图期间报价产品已变化，已保留原取图任务，请刷新后按当前产品继续");
     }
-    String periodMonth = CostPricingPeriodUtils.currentPricingMonth();
-    // 用户明确发起或重新发起当前月核算时，旧的未确认试算不能继续显示为可确认。
-    // 仅将同产品、同月份的未完成试算标记为 STALE，历史成功版本保持不变。
-    costRunVersionInvalidationService.invalidateProduct(
-        form.getOaNo(), item.getId(), productCode, periodMonth);
+    String productCode = launch.productCode();
+    String periodMonth = launch.month();
+    QuoteBomStatusItemResponse checked = launch.checked();
     boolean generated = false;
-    boolean drawingDraftReady = false;
+    boolean drawingDraftReady = electronic != null && electronic.attempted()
+        && com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowStage.COMPOSED.equals(electronic.stage());
     String buildBatchId = null;
-    QuoteBomStatusItemResponse checked =
-        quoteBomStatusService.checkItemForCostRun(form.getOaNo(), item.getId(), periodMonth);
-    ElectronicDrawingCostingFallbackService.AttemptResult electronic =
-        electronicDrawingFallbackService.resumeComposed(form, item, periodMonth);
-    if (!electronic.attempted()
-        && !isCostReadyBomStatus(checked == null ? null : checked.getBomStatus())
-        && checked != null
-        && QuoteBomStatusCode.NO_BOM.getCode().equals(checked.getBomStatus())) {
-      electronic = electronicDrawingFallbackService.attempt(form, item, periodMonth);
-    }
-    if (electronic.attempted()) {
-      drawingDraftReady =
-          com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowStage.COMPOSED
-              .equals(electronic.stage());
-      if (electronic.costingCanContinue()) {
-        checked =
-            quoteBomStatusService.checkItemForCostRun(form.getOaNo(), item.getId(), periodMonth);
-      }
+    if (electronic != null && electronic.costingCanContinue()) {
+      checked = quoteBomStatusService.checkItemForCostRun(form.getOaNo(), item.getId(), periodMonth);
     }
     if (drawingDraftReady) {
       // 草稿只形成计价对象/缺价检查；正式核算仍由有效技术资料门槛拦截。
@@ -203,6 +218,21 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     return buildWorkbenchResponse(
         form, item, status, productCode, periodMonth, rows, generated, buildBatchId, workspace);
   }
+
+  private QuoteInputs quoteInputs(OaForm form, OaFormItem item) {
+    return new QuoteInputs(form.getId(), form.getOaNo(), form.getBusinessUnitType(),
+        item.getOaFormId(), item.getBusinessUnitType(), item.getMaterialNo(), item.getSunlModel(),
+        item.getCustomerDrawing(), item.getProductName(), item.getSpec(), item.getCustomerCode(),
+        item.getPackageMethod(), item.getPackageType(), item.getUpdatedAt());
+  }
+
+  private record Launch(OaForm form, OaFormItem item, String productCode, String month,
+      QuoteBomStatusItemResponse checked, QuoteInputs inputs) {}
+
+  private record QuoteInputs(Long formId, String oaNo, String formBusinessUnit, Long itemFormId,
+      String itemBusinessUnit, String materialNo, String model, String drawingNo, String productName,
+      String specification, String customerCode, String packagingMethod, String packagingType,
+      LocalDateTime updatedAt) {}
 
   private QuoteCostingWorkbenchResponse buildWorkbenchResponse(
       OaForm form,

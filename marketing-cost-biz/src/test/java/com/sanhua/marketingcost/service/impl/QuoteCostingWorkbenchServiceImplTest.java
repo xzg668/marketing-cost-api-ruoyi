@@ -138,7 +138,7 @@ class QuoteCostingWorkbenchServiceImplTest {
             costRunVersionInvalidationService,
             quoteBomStatusService,
             priceTypeRecognitionService,
-            electronicDrawingFallbackService, inputRevisions);
+            electronicDrawingFallbackService, inputRevisions, mock(org.springframework.transaction.PlatformTransactionManager.class));
   }
 
   private final com.sanhua.marketingcost.service.CostInputRevisionService inputRevisions =
@@ -356,7 +356,7 @@ class QuoteCostingWorkbenchServiceImplTest {
 
     QuoteCostingWorkbenchResponse response = service.launchWorkbench("OA-001", 10L);
 
-    verify(oaFormItemMapper).selectForCostingWrite(10L);
+    verify(oaFormItemMapper, org.mockito.Mockito.times(2)).selectForCostingWrite(10L);
     assertThat(response.getSnapshotGenerated()).isTrue();
     assertThat(response.getBomRows()).hasSize(1);
     assertThat(response.getBomRows().get(0).getChildCode()).isEqualTo("MAT-NEW");
@@ -436,6 +436,9 @@ class QuoteCostingWorkbenchServiceImplTest {
 
   @Test
   void rawMaterialRevisionPreparesCurrentDrawingDespiteOldPublishedBomStatus() {
+    var electronicStatus = new QuoteBomStatusItemResponse();
+    electronicStatus.setBomStatus("SYNCED"); electronicStatus.setBomSource("ELECTRONIC_DRAWING_EXCEL");
+    when(quoteBomStatusService.checkItemForCostRun(anyString(), anyLong(), anyString())).thenReturn(electronicStatus);
     when(oaFormMapper.selectOne(any())).thenReturn(form());
     when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
     when(electronicDrawingFallbackService.resumeComposed(any(), any(), eq(SAMPLE_PERIOD_MONTH)))
@@ -501,6 +504,28 @@ class QuoteCostingWorkbenchServiceImplTest {
     assertThat(response.getCostingWorkspace().getWorkspaceStatus()).isEqualTo("WAIT_BOM");
     assertThat(workspace.getLastErrorCode()).isEqualTo("BOM_MISSING");
     verify(effectiveBomCostingService, never()).prepareCurrent(anyString(), anyLong());
+  }
+
+  @Test
+  void availableU9NeverTouchesDrawingEvenWhenAComposedDrawingExists() {
+    when(oaFormMapper.selectOne(any())).thenReturn(form());
+    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
+    var u9 = new QuoteBomStatusItemResponse(); u9.setBomStatus("SYNCED"); u9.setBomSource("U9");
+    when(quoteBomStatusService.checkItemForCostRun(anyString(), anyLong(), anyString())).thenReturn(u9);
+    when(effectiveBomCostingService.prepareCurrent("OA-001", 10L)).thenReturn(buildResponse("u9-build"));
+    service.launchWorkbench("OA-001", 10L);
+    verifyNoInteractions(electronicDrawingFallbackService);
+  }
+
+  @Test
+  void u9FailureNeverBecomesAnElectronicDrawingAttempt() {
+    when(oaFormMapper.selectOne(any())).thenReturn(form());
+    when(oaFormItemMapper.selectById(10L)).thenReturn(item(10L, "FIN-001"));
+    when(quoteBomStatusService.checkItemForCostRun(anyString(), anyLong(), anyString()))
+        .thenThrow(new IllegalStateException("U9 unavailable"));
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.launchWorkbench("OA-001", 10L))
+        .hasMessageContaining("U9 unavailable");
+    verifyNoInteractions(electronicDrawingFallbackService);
   }
 
   private QuoteProductBomPreparationPreview preparation(boolean ready) {

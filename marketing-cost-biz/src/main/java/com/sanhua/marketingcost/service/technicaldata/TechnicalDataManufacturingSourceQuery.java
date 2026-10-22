@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.technicaldata;
 
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingSourceKind;
 import com.sanhua.marketingcost.entity.ElectronicDrawingSourceNode;
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
@@ -51,7 +52,7 @@ public class TechnicalDataManufacturingSourceQuery {
         || !Objects.equals(version.getPeriodMonth(), context.accountingMonth())
         || !Objects.equals(version.getMaterialOrgCode(), context.materialOrgCode())
         || !Objects.equals(version.getActiveFlag(), 1)
-        || !"ELECTRONIC_DRAWING_EXCEL".equals(version.getBomSource())) {
+        || !ElectronicDrawingSourceKind.isDrawing(version.getBomSource())) {
       return assessment(context, List.of(), "图库来源与本产品、月份或物料组织不一致");
     }
     // 与混合组树使用同一来源版本生效日；未记录时按本核算月首日检查。
@@ -78,6 +79,14 @@ public class TechnicalDataManufacturingSourceQuery {
     } catch (IllegalArgumentException | IllegalStateException exception) {
       return assessment(context, List.of(), exception.getMessage());
     }
+  }
+
+  public String sourceKind(Long sourceVersionId) {
+    var source = versions.selectById(sourceVersionId);
+    if (source == null || !ElectronicDrawingSourceKind.isDrawing(source.getBomSource())) {
+      throw new IllegalArgumentException("电子图库来源版本不存在");
+    }
+    return source.getBomSource();
   }
 
   private Assessment assessment(ElectronicDrawingWorkContext context, List<Node> nodes, String reason) {

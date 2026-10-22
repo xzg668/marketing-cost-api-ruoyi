@@ -66,6 +66,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST,
                                 "/api/v1/auth/oa/start", "/api/v1/auth/oa/exchange").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/auth/oa/callback").permitAll()
+                        // PDF 服务的内网回传仅开放这一 POST；任务双头用于绑定，不是登录凭据。
+                        .requestMatchers(HttpMethod.POST, "/integration/v1/drawings/review-results").permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .anyRequest().authenticated()
                 )

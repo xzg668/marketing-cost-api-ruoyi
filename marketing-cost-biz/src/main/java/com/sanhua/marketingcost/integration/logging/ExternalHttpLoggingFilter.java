@@ -11,6 +11,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -24,6 +25,14 @@ import org.springframework.web.util.ContentCachingResponseWrapper;
 @Order(Ordered.HIGHEST_PRECEDENCE + 2)
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class ExternalHttpLoggingFilter extends OncePerRequestFilter {
+  private static final String EXCHANGE_ATTRIBUTE = ExternalHttpLoggingFilter.class.getName() + ".exchange";
+
+  /** Controller 只补充业务结果和关联号；请求/回执正文仍由本 Filter 记录一次。 */
+  public static Optional<ExternalInterfaceLog.Exchange> exchange(HttpServletRequest request) {
+    Object value = request.getAttribute(EXCHANGE_ATTRIBUTE);
+    return value instanceof ExternalInterfaceLog.Exchange exchange ? Optional.of(exchange) : Optional.empty();
+  }
+
   @Override protected boolean shouldNotFilter(HttpServletRequest request) {
     String path = request.getRequestURI().substring(request.getContextPath().length());
     return !(path.startsWith("/open-api/") || path.startsWith("/integration/")
@@ -38,6 +47,7 @@ public class ExternalHttpLoggingFilter extends OncePerRequestFilter {
     Collections.list(request.getHeaderNames()).forEach(name -> requestHeaders.put(name, Collections.list(request.getHeaders(name))));
     String address = request.getRequestURI() + (request.getQueryString() == null ? "" : "?" + request.getQueryString());
     try (var log = ExternalInterfaceLog.start("EXTERNAL", "INBOUND", request.getMethod(), URI.create(address), requestHeaders)) {
+      capturedRequest.setAttribute(EXCHANGE_ATTRIBUTE, log);
       response.setHeader("X-Interface-Call-Id", log.id());
       try {
         chain.doFilter(capturedRequest, capturedResponse);

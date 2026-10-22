@@ -17,6 +17,29 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 class RequestLoggingAspectTest {
 
   @Test
+  void drawingHistoryLogsReferencesWithoutSignedPlmOrEditUrls() throws Throwable {
+    var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(RequestLoggingAspect.class);
+    var appender = new ListAppender<ILoggingEvent>(); appender.start(); logger.addAppender(appender);
+    var request = new org.springframework.mock.web.MockHttpServletRequest("GET", "/api/v1/quote-requests/OA-07/items/7/drawing-verifications/results/9");
+    org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+        new org.springframework.web.context.request.ServletRequestAttributes(request));
+    try {
+      var point = mock(ProceedingJoinPoint.class);
+      when(point.getArgs()).thenReturn(new Object[]{"OA-07",7L,9L,"2026-10"});
+      var response = Map.of("plmData",List.of(Map.of("fileUrl","https://files.test/a?signature=private-signature")),
+          "editUrl","http://drawing.test/edit?token=private-edit-token");
+      when(point.proceed()).thenReturn(response);
+      assertThat(new RequestLoggingAspect(new ObjectMapper()).logRequest(point)).isSameAs(response);
+      String text=appender.list.stream().map(ILoggingEvent::getFormattedMessage).collect(java.util.stream.Collectors.joining("\n"));
+      assertThat(text).contains("OA-07/items/7/drawing-verifications/results/9", "DrawingEvidence:body omitted")
+          .doesNotContain("private-signature","private-edit-token");
+    } finally {
+      org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+      logger.detachAppender(appender); appender.stop();
+    }
+  }
+
+  @Test
   void oauthCallbackStringsAndHandoffUrlsAreNeverLogged() throws Throwable {
     var logger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(RequestLoggingAspect.class);
     var appender = new ListAppender<ILoggingEvent>(); appender.start(); logger.addAppender(appender);

@@ -55,6 +55,9 @@ public class RequestLoggingAspect {
 
         // OAuth 回调参数是字符串，不能依赖 JSON 字段名脱敏；本组端点整体省略正文。
         boolean oauth = uri.startsWith("/api/v1/auth/oa/");
+        // 图库查询含完整 PLM 签名链接；协议日志已统一脱敏，此处只记访问定位。
+        boolean drawingEvidence = uri.startsWith("/api/v1/quote-requests/")
+                && uri.contains("/drawing-verifications");
         String params = oauth ? "[OAuth:redacted]" : serializeArgs(joinPoint.getArgs(), PARAM_MAX_LENGTH);
         log.info(">>> {} {} | params={}", method, uri, params);
 
@@ -62,7 +65,9 @@ public class RequestLoggingAspect {
         Object result = joinPoint.proceed();
         long duration = System.currentTimeMillis() - start;
 
-        String responseStr = oauth ? "[OAuth:redacted]" : truncate(toJson(result), RESPONSE_MAX_LENGTH);
+        String responseStr = oauth ? "[OAuth:redacted]" : drawingEvidence
+                ? "[DrawingEvidence:body omitted; use task/result references]"
+                : truncate(toJson(result), RESPONSE_MAX_LENGTH);
         if (duration >= SLOW_THRESHOLD_MS) {
             log.warn("<<< {} {} | {}ms (SLOW) | response={}", method, uri, duration, responseStr);
         } else {

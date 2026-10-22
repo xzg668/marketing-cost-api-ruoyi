@@ -41,6 +41,8 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
  @Autowired com.sanhua.marketingcost.mapper.QuoteTechProductMapper productMapper;
  @Autowired OaMessageRepository messages;
  @Autowired OaMessageCodec codec;
+ @Autowired com.sanhua.marketingcost.service.technicaldata.TechnicalDataPlateMaterialProfile plateMaterials;
+ @Autowired com.sanhua.marketingcost.service.technicaldata.TechnicalDataVersionContentCodec technicalCodec;
  @Autowired com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaSubmissionLifecycle submissionLifecycle;
  @org.springframework.boot.test.mock.mockito.MockBean
  com.sanhua.marketingcost.service.technicaldata.TechnicalDataAssigneeResolver assigneeResolver;
@@ -66,9 +68,10 @@ class OaWorkflowNotificationIntegrationTest extends BomMapperTestBase {
      var flow=technicalFlows.bindFlow(task,PEER);
      jdbc.update("UPDATE lp_oa_technical_flow SET external_flow_id=? WHERE id=?",f,flow.id());
      jdbc.update("UPDATE lp_quote_tech_task SET oa_flow_id=?,external_task_status='PUBLISHED',oa_assignment_version=1 WHERE id=?",flow.id(),task.getId());
-     var product=new com.sanhua.marketingcost.entity.QuoteTechProduct();product.setTaskId(task.getId());product.setOaFormItemId(item);product.setQuoteNo(f);product.setAccountingMonth("2026-09");product.setContentSchemaVersion(2);product.setSourceSnapshotJson("{}");product.setSourceFingerprint("b".repeat(64));product=persistence.createProduct(product);
+     var product=new com.sanhua.marketingcost.entity.QuoteTechProduct();product.setTaskId(task.getId());product.setOaFormItemId(item);product.setQuoteNo(f);product.setAccountingMonth("2026-09");product.setContentSchemaVersion(2);product.setSourceModel("TEST");product.setSourceSnapshotJson("{\"businessUnitType\":\"COMMERCIAL\",\"materialOrganizationCode\":\"COMMERCIAL\"}");product.setSourceFingerprint("b".repeat(64));product=persistence.createProduct(product);
      var draft=new com.sanhua.marketingcost.entity.QuoteTechDataVersion();draft.setProductId(product.getId());draft.setVersionNo(1);draft.setContentSchemaVersion(2);draft.setProductModel("TEST");draft.setProductProperty("标准品");draft.setNewProductFlag(0);
-     draft.setProductFeesJson("{\"includesNewToolingMouldCertificationFee\":false,\"unitToolingFee\":0,\"unitMouldFee\":0,\"unitCertificationFee\":0,\"currency\":\"CNY\"}");draft=persistence.createVersion(draft);
+     draft.setProductFeesJson("{\"includesNewToolingMouldCertificationFee\":false,\"unitToolingFee\":0,\"unitMouldFee\":0,\"unitCertificationFee\":0,\"currency\":\"CNY\"}");var plateDecision=plateMaterials.current(List.of(product)).get(product.getId());
+     draft.setPlateMaterialJson(technicalCodec.plateMaterialJson(plateMaterials.save(product,null,plateDecision.revision())));draft=persistence.createVersion(draft);
      jdbc.update("UPDATE lp_quote_tech_product SET current_edit_version_id=? WHERE id=?",draft.getId(),product.getId());product.setCurrentEditVersionId(draft.getId());
      var module=new com.sanhua.marketingcost.entity.QuoteTechModule();module.setProductId(product.getId());module.setModuleType("PROFILE");module.setRequiredFlag(1);module.setRequirementReasonCode("TEST");module.setRequirementReason("测试补录");module.setSourceAvailability("MISSING");module.setSourceCheckedAt(java.time.LocalDateTime.now());module=persistence.createModule(module);
      jdbc.update("UPDATE lp_quote_tech_module SET current_version_id=?,module_status='READY',entry_mode='MANUAL',last_validation_code='VALID',assignee_user_id=?,assignee_name='测试技术员' WHERE id=?",draft.getId(),userId,module.getId());

@@ -68,7 +68,8 @@ public class ElectronicDrawingPreparationSource {
       String customer,
       String packageMethod) {
     var shared = technicalSources.sharedDrawing(itemId, month);
-    if (shared != null) return sharedSnapshot(itemId, month, businessUnit, org, customer, packageMethod, shared);
+    if (shared != null)
+      return sharedSnapshot(itemId, month, businessUnit, org, customer, packageMethod, shared);
     var context = contexts.load(itemId, businessUnit, org, month);
     if (!ElectronicDrawingWorkflowStage.COMPOSED.equals(context.workflowStage())
         || context.published()) return null;
@@ -90,7 +91,7 @@ public class ElectronicDrawingPreparationSource {
     result.setCustomerCode(customer);
     result.setPackageMethod(packageMethod);
     result.setCostPeriodMonth(month);
-    result.setBomSource("ELECTRONIC_DRAWING_EXCEL");
+    result.setBomSource(versions.selectById(context.sourceVersionId()).getBomSource());
     result.setBomPurpose("主制造");
     result.setBomVersion("ED-" + context.sourceVersionId());
     result.setSyncType("TECH_PREPARATION");
@@ -202,7 +203,7 @@ public class ElectronicDrawingPreparationSource {
     snapshot.setCustomerCode(customer);
     snapshot.setPackageMethod(packageMethod);
     snapshot.setCostPeriodMonth(month);
-    snapshot.setBomSource("ELECTRONIC_DRAWING_EXCEL");
+    snapshot.setBomSource(versions.selectById(original.sourceVersionId()).getBomSource());
     snapshot.setBomPurpose("主制造");
     snapshot.setBomVersion("ED-" + original.sourceVersionId());
     snapshot.setSyncType("TECH_PREPARATION");

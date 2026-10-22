@@ -1,7 +1,5 @@
 package com.sanhua.marketingcost.service.electronicdrawing;
 
-import com.sanhua.marketingcost.service.electronicdrawing.*;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -46,6 +44,7 @@ class ElectronicDrawingHybridBomServiceTest {
   @Mock private ElectronicDrawingSourceNodeRepository sourceNodeRepository;
   @Mock private MaterialMasterRawMapper materialMapper;
   @Mock private ElectronicDrawingHybridBomAssembler assembler;
+  @Mock private ElectronicDrawingProductLookup productLookup;
 
   private ElectronicDrawingHybridBomService service;
   private ElectronicDrawingWorkContext context;
@@ -55,11 +54,20 @@ class ElectronicDrawingHybridBomServiceTest {
 
   @BeforeEach
   void setUp() {
-    service = new ElectronicDrawingHybridBomService(
-        contextPort, versionMapper, detailMapper,
-        sourceNodeRepository, materialMapper, assembler,
-        org.mockito.Mockito.mock(com.sanhua.marketingcost.service.technicaldata.TechnicalDataManufacturingBomSource.class),
-        ElectronicDrawingTestScope.create(materialMapper, org.mockito.Mockito.mock(ElectronicDrawingU9SubBomPort.class)));
+    service =
+        new ElectronicDrawingHybridBomService(
+            contextPort,
+            versionMapper,
+            detailMapper,
+            sourceNodeRepository,
+            materialMapper,
+            assembler,
+            org.mockito.Mockito.mock(
+                com.sanhua.marketingcost.service.technicaldata.TechnicalDataManufacturingBomSource
+                    .class),
+            ElectronicDrawingTestScope.create(
+                materialMapper, org.mockito.Mockito.mock(ElectronicDrawingU9SubBomPort.class)),
+            productLookup);
     context = context(4);
     version = version();
     source = source(ElectronicDrawingSourceNode.MATCH_AUTO, "P");
@@ -73,7 +81,8 @@ class ElectronicDrawingHybridBomServiceTest {
     when(detailMapper.insertElectronicDrawingHybridBatch(anyList()))
         .thenAnswer(invocation -> ((List<?>) invocation.getArgument(0)).size());
     when(versionMapper.updateElectronicDrawingCompositionFingerprint(
-        eq(501L), eq(null), eq(FINGERPRINT), eq("COMMERCIAL"), any())).thenReturn(1);
+            eq(501L), eq(null), eq(FINGERPRINT), eq("COMMERCIAL"), any()))
+        .thenReturn(1);
     when(contextPort.touch(eq(context), eq(501L), eq(0L), eq("SYSTEM"), any()))
         .thenReturn(context(5));
     LocalDateTime before = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE).minusSeconds(1);
@@ -88,20 +97,24 @@ class ElectronicDrawingHybridBomServiceTest {
     ArgumentCaptor<List<QuoteBomSupplementDetail>> rows = ArgumentCaptor.forClass(List.class);
     verify(detailMapper).insertElectronicDrawingHybridBatch(rows.capture());
     assertThat(rows.getValue()).hasSize(2);
-    assertThat(rows.getValue().getFirst()).satisfies(root -> {
-      assertThat(root.getMaterialCode()).isEqualTo("TOP");
-      assertThat(root.getLevel()).isZero();
-      assertThat(root.getNodeSourceType()).isEqualTo("E_DRAWING");
-      assertThat(root.getCreatedAt()).isAfterOrEqualTo(before);
-    });
-    assertThat(rows.getValue().get(1)).satisfies(leaf -> {
-      assertThat(leaf.getMaterialCode()).isEqualTo("P");
-      assertThat(leaf.getSourceElectronicNodeId()).isEqualTo(701L);
-      assertThat(leaf.getMappingStatus()).isEqualTo(ElectronicDrawingSourceNode.MATCH_AUTO);
-      assertThat(leaf.getManualFlag()).isZero();
-      assertThat(leaf.getQtyPerTop()).isEqualByComparingTo("2");
-      assertThat(leaf.getCreatedAt()).isAfterOrEqualTo(before);
-    });
+    assertThat(rows.getValue().getFirst())
+        .satisfies(
+            root -> {
+              assertThat(root.getMaterialCode()).isEqualTo("TOP");
+              assertThat(root.getLevel()).isZero();
+              assertThat(root.getNodeSourceType()).isEqualTo("E_DRAWING");
+              assertThat(root.getCreatedAt()).isAfterOrEqualTo(before);
+            });
+    assertThat(rows.getValue().get(1))
+        .satisfies(
+            leaf -> {
+              assertThat(leaf.getMaterialCode()).isEqualTo("P");
+              assertThat(leaf.getSourceElectronicNodeId()).isEqualTo(701L);
+              assertThat(leaf.getMappingStatus()).isEqualTo(ElectronicDrawingSourceNode.MATCH_AUTO);
+              assertThat(leaf.getManualFlag()).isZero();
+              assertThat(leaf.getQtyPerTop()).isEqualByComparingTo("2");
+              assertThat(leaf.getCreatedAt()).isAfterOrEqualTo(before);
+            });
   }
 
   @Test
@@ -116,27 +129,64 @@ class ElectronicDrawingHybridBomServiceTest {
     assertThat(result.taskVersion()).isEqualTo(4);
     verify(detailMapper, never()).deleteElectronicDrawingHybridDraft(any());
     verify(detailMapper, never()).insertElectronicDrawingHybridBatch(anyList());
-    verify(versionMapper, never()).updateElectronicDrawingCompositionFingerprint(
-        any(), any(), any(), any(), any());
+    verify(versionMapper, never())
+        .updateElectronicDrawingCompositionFingerprint(any(), any(), any(), any(), any());
     verify(contextPort, never()).touch(any(), any(), any(), any(), any());
   }
 
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.NullSource
-  @org.junit.jupiter.params.provider.ValueSource(strings = {"MODEL", "LONG-MODEL-ABCDEFGHIJKLMNOPQRSTUVWXYZ-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789"})
-  void quoteWithoutMaterialUsesTheRealRootMatchingSelectedDrawingWithoutChangingQuoteIdentity(String model) {
-    String quoteCode = com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(null, model, "DRAW-TOP");
-    context = new ElectronicDrawingWorkContext(101L, 4, 301L, 501L, 100L, 201L, "QCPT-101", "OA-101",
-        quoteCode, null, null, null, model, null, "FULL_BOM", "2026-08", "210", "COMMERCIAL",
-        "COMMERCIAL", "210", true, true, "BOM_IN_PROGRESS", ElectronicDrawingWorkflowStage.COMPOSING, null, null, null);
-    version.setQuoteProductCode(quoteCode); version.setElectronicDrawingNo("DRAW-TOP");
+  @org.junit.jupiter.params.provider.ValueSource(
+      strings = {
+        "MODEL",
+        "LONG-MODEL-ABCDEFGHIJKLMNOPQRSTUVWXYZ-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789"
+      })
+  void quoteWithoutMaterialUsesTheRealRootMatchingSelectedDrawingWithoutChangingQuoteIdentity(
+      String model) {
+    String quoteCode =
+        com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(
+            null, model, "DRAW-TOP");
+    context =
+        new ElectronicDrawingWorkContext(
+            101L,
+            4,
+            301L,
+            501L,
+            100L,
+            201L,
+            "QCPT-101",
+            "OA-101",
+            quoteCode,
+            null,
+            null,
+            null,
+            model,
+            null,
+            "FULL_BOM",
+            "2026-08",
+            "210",
+            "COMMERCIAL",
+            "COMMERCIAL",
+            "210",
+            true,
+            true,
+            "BOM_IN_PROGRESS",
+            ElectronicDrawingWorkflowStage.COMPOSING,
+            null,
+            null,
+            null);
+    version.setQuoteProductCode(quoteCode);
+    version.setElectronicDrawingNo("DRAW-TOP");
     version.setCompositionFingerprint(FINGERPRINT);
     arrangeReadAndAssembly();
-    when(materialMapper.selectByLatestBatchAndCodes(eq(java.util.Set.of(quoteCode)), eq(null), eq("COMMERCIAL")))
+    when(materialMapper.selectByLatestBatchAndCodes(
+            eq(java.util.Set.of(quoteCode)), eq(null), eq("COMMERCIAL")))
         .thenReturn(List.of());
-    var root = material("TOP", "制造件"); root.setMaterialModel(model); root.setDrawingNo("DRAW-TOP");
-    when(materialMapper.selectByDrawingIdentities(eq(java.util.Set.of("DRAW-TOP")), eq(null), eq("COMMERCIAL"), eq(1000)))
-        .thenReturn(List.of(root));
+    when(productLookup.options(context))
+        .thenReturn(
+            List.of(
+                new ElectronicDrawingProductLookup.Option(
+                    "DRAW-TOP", "TOP", "顶层料品", model, "MATERIAL_MASTER")));
     when(detailMapper.selectList(any())).thenReturn(stored(version, hybrid.nodes()));
     assertThat(service.compose(101L, "COMMERCIAL", "210", "2026-08").idempotent()).isTrue();
     ArgumentCaptor<AssembleCommand> command = ArgumentCaptor.forClass(AssembleCommand.class);
@@ -152,9 +202,11 @@ class ElectronicDrawingHybridBomServiceTest {
     when(detailMapper.selectList(any())).thenReturn(List.of());
 
     assertThatThrownBy(() -> service.compose(101L, "COMMERCIAL", "210", "2026-08"))
-        .isInstanceOfSatisfying(ElectronicDrawingHybridBomException.class,
-            error -> assertThat(error.code()).isEqualTo(
-                ElectronicDrawingHybridBomException.PERSISTENCE_INVALID));
+        .isInstanceOfSatisfying(
+            ElectronicDrawingHybridBomException.class,
+            error ->
+                assertThat(error.code())
+                    .isEqualTo(ElectronicDrawingHybridBomException.PERSISTENCE_INVALID));
     verify(detailMapper, never()).deleteElectronicDrawingHybridDraft(any());
   }
 
@@ -166,9 +218,11 @@ class ElectronicDrawingHybridBomServiceTest {
     when(sourceNodeRepository.findByVersionId(501L)).thenReturn(List.of(source));
 
     assertThatThrownBy(() -> service.compose(101L, "COMMERCIAL", "210", "2026-08"))
-        .isInstanceOfSatisfying(ElectronicDrawingHybridBomException.class,
-            error -> assertThat(error.code()).isEqualTo(
-                ElectronicDrawingHybridBomException.MAPPING_INCOMPLETE));
+        .isInstanceOfSatisfying(
+            ElectronicDrawingHybridBomException.class,
+            error ->
+                assertThat(error.code())
+                    .isEqualTo(ElectronicDrawingHybridBomException.MAPPING_INCOMPLETE));
     verifyNoInteractions(materialMapper, assembler, detailMapper);
     verify(contextPort, never()).touch(any(), any(), any(), any(), any());
   }
@@ -178,13 +232,15 @@ class ElectronicDrawingHybridBomServiceTest {
     when(contextPort.load(101L, "COMMERCIAL", "210", "2026-08")).thenReturn(context);
     when(versionMapper.selectById(501L)).thenReturn(version);
     when(sourceNodeRepository.findByVersionId(501L)).thenReturn(List.of(source));
-    when(materialMapper.selectByLatestBatchAndCodes(
-        anyCollection(), eq(null), eq("COMMERCIAL"))).thenReturn(List.of(material("TOP", "制造件")));
+    when(materialMapper.selectByLatestBatchAndCodes(anyCollection(), eq(null), eq("COMMERCIAL")))
+        .thenReturn(List.of(material("TOP", "制造件")));
 
     assertThatThrownBy(() -> service.compose(101L, "COMMERCIAL", "210", "2026-08"))
-        .isInstanceOfSatisfying(ElectronicDrawingHybridBomException.class,
-            error -> assertThat(error.code()).isEqualTo(
-                ElectronicDrawingHybridBomException.MAPPING_INCOMPLETE));
+        .isInstanceOfSatisfying(
+            ElectronicDrawingHybridBomException.class,
+            error ->
+                assertThat(error.code())
+                    .isEqualTo(ElectronicDrawingHybridBomException.MAPPING_INCOMPLETE));
     verifyNoInteractions(assembler, detailMapper);
     verify(contextPort, never()).touch(any(), any(), any(), any(), any());
   }
@@ -195,14 +251,17 @@ class ElectronicDrawingHybridBomServiceTest {
     when(detailMapper.selectList(any())).thenReturn(List.of());
     when(detailMapper.insertElectronicDrawingHybridBatch(anyList())).thenReturn(2);
     when(versionMapper.updateElectronicDrawingCompositionFingerprint(
-        eq(501L), eq(null), eq(FINGERPRINT), eq("COMMERCIAL"), any())).thenReturn(1);
+            eq(501L), eq(null), eq(FINGERPRINT), eq("COMMERCIAL"), any()))
+        .thenReturn(1);
     when(contextPort.touch(any(), any(), any(), any(), any()))
         .thenThrow(new ElectronicDrawingWorkflowRetryException("conflict"));
 
     assertThatThrownBy(() -> service.compose(101L, "COMMERCIAL", "210", "2026-08"))
-        .isInstanceOfSatisfying(ElectronicDrawingHybridBomException.class,
-            error -> assertThat(error.code()).isEqualTo(
-                ElectronicDrawingHybridBomException.TASK_VERSION_CONFLICT));
+        .isInstanceOfSatisfying(
+            ElectronicDrawingHybridBomException.class,
+            error ->
+                assertThat(error.code())
+                    .isEqualTo(ElectronicDrawingHybridBomException.TASK_VERSION_CONFLICT));
     verify(detailMapper).insertElectronicDrawingHybridBatch(anyList());
   }
 
@@ -213,9 +272,11 @@ class ElectronicDrawingHybridBomServiceTest {
     when(versionMapper.selectById(501L)).thenReturn(version);
 
     assertThatThrownBy(() -> service.compose(101L, "COMMERCIAL", "210", "2026-08"))
-        .isInstanceOfSatisfying(ElectronicDrawingHybridBomException.class,
-            error -> assertThat(error.code()).isEqualTo(
-                ElectronicDrawingHybridBomException.SOURCE_VERSION_INVALID));
+        .isInstanceOfSatisfying(
+            ElectronicDrawingHybridBomException.class,
+            error ->
+                assertThat(error.code())
+                    .isEqualTo(ElectronicDrawingHybridBomException.SOURCE_VERSION_INVALID));
     verifyNoInteractions(sourceNodeRepository, materialMapper, assembler, detailMapper);
   }
 
@@ -227,23 +288,46 @@ class ElectronicDrawingHybridBomServiceTest {
     when(contextPort.load(101L, "COMMERCIAL", "210", "2026-08")).thenReturn(context);
     when(versionMapper.selectById(501L)).thenReturn(version);
     when(sourceNodeRepository.findByVersionId(501L)).thenReturn(List.of(source));
-    when(materialMapper.selectByLatestBatchAndCodes(
-        anyCollection(), eq(null), eq("COMMERCIAL")))
-        .thenAnswer(call -> {
-          java.util.Collection<String> codes = call.getArgument(0);
-          return List.of(material("TOP", "制造件"), material("P", "采购件")).stream()
-              .filter(row -> codes.contains(row.getMaterialCode())).toList();
-        });
+    when(materialMapper.selectByLatestBatchAndCodes(anyCollection(), eq(null), eq("COMMERCIAL")))
+        .thenAnswer(
+            call -> {
+              java.util.Collection<String> codes = call.getArgument(0);
+              return List.of(material("TOP", "制造件"), material("P", "采购件")).stream()
+                  .filter(row -> codes.contains(row.getMaterialCode()))
+                  .toList();
+            });
     when(assembler.assemble(any(AssembleCommand.class))).thenReturn(hybrid);
   }
 
   private ElectronicDrawingWorkContext context(int revision) {
     return new ElectronicDrawingWorkContext(
-        101L, revision, 301L, 501L, 100L, 201L, "QCPT-101", "OA-101",
-        "TOP", null, "产品", null, null, null, "FULL_BOM", "2026-08",
-        "210", "COMMERCIAL", "COMMERCIAL", "210", true, true,
-        "BOM_IN_PROGRESS", ElectronicDrawingWorkflowStage.COMPOSING,
-        null, "系统处理中", null);
+        101L,
+        revision,
+        301L,
+        501L,
+        100L,
+        201L,
+        "QCPT-101",
+        "OA-101",
+        "TOP",
+        null,
+        "产品",
+        null,
+        null,
+        null,
+        "FULL_BOM",
+        "2026-08",
+        "210",
+        "COMMERCIAL",
+        "COMMERCIAL",
+        "210",
+        true,
+        true,
+        "BOM_IN_PROGRESS",
+        ElectronicDrawingWorkflowStage.COMPOSING,
+        null,
+        "系统处理中",
+        null);
   }
 
   private QuoteBomSupplementVersion version() {
@@ -300,24 +384,70 @@ class ElectronicDrawingHybridBomServiceTest {
   }
 
   private HybridBom hybrid() {
-    Node root = new Node(
-        "ROOT:TOP", null, 0, "TOP", "名称TOP", "规格TOP", "型号TOP", "图号TOP",
-        "制造件", "CAT", "生产分类", "成本要素", null, null,
-        BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, "件", "/TOP/", 1,
-        "E_DRAWING", null, null, null, null);
-    Node leaf = new Node(
-        "ED:701", "ROOT:TOP", 1, "P", "名称P", "规格P", "型号P", "DRAW-P",
-        "采购件", "CAT", "生产分类", "成本要素", null, null,
-        new BigDecimal("2"), new BigDecimal("2"), BigDecimal.ONE, "件",
-        "/TOP/ED:701/", 2, "E_DRAWING", 701L, null, null,
-        ElectronicDrawingSourceNode.MATCH_AUTO);
+    Node root =
+        new Node(
+            "ROOT:TOP",
+            null,
+            0,
+            "TOP",
+            "名称TOP",
+            "规格TOP",
+            "型号TOP",
+            "图号TOP",
+            "制造件",
+            "CAT",
+            "生产分类",
+            "成本要素",
+            null,
+            null,
+            BigDecimal.ONE,
+            BigDecimal.ONE,
+            BigDecimal.ONE,
+            "件",
+            "/TOP/",
+            1,
+            "E_DRAWING",
+            null,
+            null,
+            null,
+            null);
+    Node leaf =
+        new Node(
+            "ED:701",
+            "ROOT:TOP",
+            1,
+            "P",
+            "名称P",
+            "规格P",
+            "型号P",
+            "DRAW-P",
+            "采购件",
+            "CAT",
+            "生产分类",
+            "成本要素",
+            null,
+            null,
+            new BigDecimal("2"),
+            new BigDecimal("2"),
+            BigDecimal.ONE,
+            "件",
+            "/TOP/ED:701/",
+            2,
+            "E_DRAWING",
+            701L,
+            null,
+            null,
+            ElectronicDrawingSourceNode.MATCH_AUTO);
     return new HybridBom(List.of(root, leaf), FINGERPRINT, 0, 1, 0, 0);
   }
 
   private List<QuoteBomSupplementDetail> stored(
       QuoteBomSupplementVersion version, List<Node> nodes) {
-    java.util.Map<String, Node> byKey = nodes.stream().collect(
-        java.util.stream.Collectors.toMap(Node::nodeKey, java.util.function.Function.identity()));
+    java.util.Map<String, Node> byKey =
+        nodes.stream()
+            .collect(
+                java.util.stream.Collectors.toMap(
+                    Node::nodeKey, java.util.function.Function.identity()));
     java.util.ArrayList<QuoteBomSupplementDetail> result = new java.util.ArrayList<>();
     for (int index = 0; index < nodes.size(); index++) {
       Node node = nodes.get(index);
@@ -354,7 +484,8 @@ class ElectronicDrawingHybridBomServiceTest {
       detail.setNodeSourceType(node.nodeSourceType());
       detail.setSourceElectronicNodeId(node.sourceElectronicNodeId());
       detail.setMappingStatus(node.mappingStatus());
-      detail.setManualFlag(ElectronicDrawingSourceNode.MATCH_MANUAL.equals(node.mappingStatus()) ? 1 : 0);
+      detail.setManualFlag(
+          ElectronicDrawingSourceNode.MATCH_MANUAL.equals(node.mappingStatus()) ? 1 : 0);
       detail.setRemark(node.nodeSourceType() + ":" + node.nodeKey());
       result.add(detail);
     }

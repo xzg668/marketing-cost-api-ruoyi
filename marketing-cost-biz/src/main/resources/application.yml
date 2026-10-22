@@ -2,22 +2,15 @@ server:
   port: ${SERVER_PORT:8081}
 
 quote:
+  drawing-verification:
+    enabled: ${DRAWING_PDF_ENABLED:false}
+    base-url: ${DRAWING_PDF_BASE_URL:http://10.10.206.115:8011}
+    verify-path: ${DRAWING_PDF_VERIFY_PATH:/api/drawings/verify}
+    connect-timeout: ${DRAWING_PDF_CONNECT_TIMEOUT:5s}
+    request-timeout: ${DRAWING_PDF_REQUEST_TIMEOUT:5m}
   technical-data:
     # 辅料原表随审批版本保留；部署时挂载持久目录并纳入备份。
     attachments-root: ${TECHNICAL_DATA_ATTACHMENTS_ROOT:./data/technical-data}
-  electronic-drawing:
-    # 电子图库是报价 BOM 的独立补充来源，不属于协作任务私有配置。
-    # 未配置真实电子图库时失败关闭；禁止把报价系统草稿当成电子图库正式结果。
-    mode: ${QUOTE_ELECTRONIC_DRAWING_MODE:DISABLED}
-    base-url: ${QUOTE_ELECTRONIC_DRAWING_BASE_URL:}
-    current-bom-path: ${QUOTE_ELECTRONIC_DRAWING_CURRENT_BOM_PATH:/api/v1/boms/current}
-    excel-bom-path: ${QUOTE_ELECTRONIC_DRAWING_EXCEL_BOM_PATH:/api/v1/electronic-drawing/bom-excel}
-    authorization: ${QUOTE_ELECTRONIC_DRAWING_AUTHORIZATION:}
-    connect-timeout-ms: ${QUOTE_ELECTRONIC_DRAWING_CONNECT_TIMEOUT_MS:3000}
-    read-timeout-ms: ${QUOTE_ELECTRONIC_DRAWING_READ_TIMEOUT_MS:10000}
-    max-excel-file-size-bytes: ${QUOTE_ELECTRONIC_DRAWING_MAX_EXCEL_FILE_SIZE_BYTES:10485760}
-    retry-max-attempts: ${QUOTE_ELECTRONIC_DRAWING_RETRY_MAX_ATTEMPTS:3}
-    retry-initial-backoff-ms: ${QUOTE_ELECTRONIC_DRAWING_RETRY_INITIAL_BACKOFF_MS:500}
 
 spring:
   application:

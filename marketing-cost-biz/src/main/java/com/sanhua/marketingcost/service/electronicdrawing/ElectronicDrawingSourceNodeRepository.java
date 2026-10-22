@@ -4,7 +4,7 @@ import com.sanhua.marketingcost.entity.ElectronicDrawingSourceNode;
 import java.time.LocalDateTime;
 import java.util.List;
 
-/** 电子图库源节点仓储；不暴露可覆盖 Excel 原始字段的更新操作。 */
+/** 电子图库源节点仓储；不暴露可覆盖原始来源字段的更新操作。 */
 public interface ElectronicDrawingSourceNodeRepository {
 
   void insertAll(Long supplementVersionId, List<ElectronicDrawingSourceNode> sourceNodes);
