@@ -34,7 +34,9 @@ public class SettlementWorkbookParser {
   private record Header(Sheet sheet, int row, int code, int name, int model, int planned, int markup,
       int base, int copper, int zinc, int given, int remark, int type, int formula) {}
   private record Factor(int row, int column, BigDecimal budget, BigDecimal reference) {}
-  private record FormulaSource(BigDecimal taxDivisor, String cell, String expression) {}
+  private record FormulaSource(BigDecimal taxDivisor, String cell, String expression) {
+    boolean rounded() { return expression.replaceAll("\\s", "").startsWith("ROUND("); }
+  }
 
   public ParsedWorkbook parse(byte[] bytes, String fileName) {
     if (bytes == null || bytes.length == 0) throw new IllegalArgumentException(fileName + "：工作簿为空");
@@ -110,8 +112,8 @@ public class SettlementWorkbookParser {
       tax = formulaSource.taxDivisor();
     }
     var formula = new FormulaInputs(planned, markup, base, cu.budget(), zn.budget(), cu.reference(), zn.reference(), tax,
-        type == SettlementPriceType.SETTLE_LINKED ? SettlementFormula.EXPRESSION : null,
-        type == SettlementPriceType.SETTLE_LINKED ? SettlementFormula.VERSION : null);
+        formulaSource == null ? null : formulaSource.rounded() ? SettlementFormula.ROUNDED_EXPRESSION : SettlementFormula.EXPRESSION,
+        formulaSource == null ? null : formulaSource.rounded() ? SettlementFormula.ROUNDED_VERSION : SettlementFormula.VERSION);
     var weights = new SettlementWeights(numeric(row, h.copper(), h, file, false), numeric(row, h.zinc(), h, file, false),
         null, null, false, null);
     Map<String, CellValue> cells = new LinkedHashMap<>();
@@ -127,6 +129,11 @@ public class SettlementWorkbookParser {
 
   private BigDecimal taxDivisor(Row row, Header h, Factor cu, Factor zn, String file) {
     String actual = normalize(formulaText(row.getCell(h.formula())));
+    if (actual.startsWith("ROUND(")) {
+      if (!actual.endsWith(",4)"))
+        throw error(file, h.sheet(), row.getRowNum(), h.formula(), "结算ROUND公式只支持最终单价保留4位小数");
+      actual = actual.substring(6, actual.length() - 3);
+    }
     var tail = FORMULA_TAIL.matcher(actual);
     if (!tail.find()) throw error(file, h.sheet(), row.getRowNum(), h.formula(), "缺失或不支持的结算铜锌公式：" + actual);
     BigDecimal tax = new BigDecimal(tail.group(1));
@@ -137,7 +144,8 @@ public class SettlementWorkbookParser {
         + address(row.getRowNum(), h.zinc()) + ")/1000/" + tail.group(1);
     String base = address(row.getRowNum(), h.base()) + "+";
     // BIFF 的显式括号在 POI 中保留；两种结构数学等价，其他运算分组仍须拒绝。
-    Set<String> accepted = Set.of(base + difference + "*" + tail.group(2), base + "(" + difference + ")*" + tail.group(2));
+    Set<String> accepted = Set.of(base + difference + "*" + tail.group(2),
+        base + "(" + difference + ")*" + tail.group(2));
     if (!accepted.contains(actual) || tax.signum() <= 0 || new BigDecimal(tail.group(2)).compareTo(markup) != 0)
       throw error(file, h.sheet(), row.getRowNum(), h.formula(), "公式必须引用本行计划/重量及本表铜锌基价，倍率需与本行一致");
     return tax;
@@ -204,7 +212,7 @@ public class SettlementWorkbookParser {
       if (number.signum() < 0) throw new NumberFormatException("negative");
       return number.stripTrailingZeros();
     } catch (NumberFormatException invalid) {
-      throw error(file, cell.getSheet(), cell.getRowIndex(), cell.getColumnIndex(), "必须是非负数，空值不作为零");
+      throw error(file, cell.getSheet(), cell.getRowIndex(), cell.getColumnIndex(), "必须是非负数");
     }
   }
   private CellValue cellValue(Cell cell, String file) {

@@ -28,7 +28,8 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
   @Autowired SettlementPriceImportService imports;
   @Autowired SettlementPriceRepository prices;
   @Autowired SettlementWeightService weights;
-  @Autowired SettlementBasePriceService bases;
+  @Autowired SettlementFinanceBaseReader bases;
+  @Autowired com.sanhua.marketingcost.service.financefactor.FinanceFactorPublicationService finance;
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper json;
   private static final Path ARCHIVE;
@@ -42,6 +43,8 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
   private final SettlementScope october = new SettlementScope("COMMERCIAL", "2026-10");
 
   @BeforeEach void importedOriginal() throws Exception {
+    SettlementFinanceTestSupport.clear(jdbc);
+    SettlementFinanceTestSupport.publish(finance, october, "104.526", "24.51");
     jdbc.update("DELETE FROM lp_settlement_price");
     jdbc.update("DELETE FROM lp_settlement_base_price");
     byte[] bytes;
@@ -79,7 +82,7 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
     assertThat(carried.unitPrice()).isEqualByComparingTo("4.841024707965");
     assertThat(json.readTree(carried.evidence().inputSnapshotJson()).path("base").path("priceMonth").asText()).isEqualTo("2026-10");
     var november = new SettlementScope("COMMERCIAL", "2026-11");
-    bases.save(november, new SettlementBasePriceService.Change(new BigDecimal("110"), new BigDecimal("26"), "CNY/KG", 0, "十一月"), "finance");
+    SettlementFinanceTestSupport.publish(finance, november, "110", "26");
     var current = reader.resolve(request);
     assertThat(current.unitPrice()).isEqualByComparingTo("4.888708672566");
     var proof = json.readTree(current.evidence().inputSnapshotJson());
@@ -89,7 +92,7 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
     assertThat(proof.path("base").path("priceMonth").asText()).isEqualTo("2026-11");
     assertThat(proof.path("mode").asText()).isEqualTo("LINKED_FORMULA");
     var december = new SettlementScope("COMMERCIAL", "2026-12");
-    bases.save(december, new SettlementBasePriceService.Change(new BigDecimal("999"), new BigDecimal("999"), "CNY/KG", 0, "十二月"), "finance");
+    SettlementFinanceTestSupport.publish(finance, december, "999", "999");
     byte[] bytes;
     try (var input = getClass().getResourceAsStream("/settlement/original-20261017.xls")) { bytes = input.readAllBytes(); }
     var preview = imports.preview(bytes, "december.xls", december);
@@ -106,7 +109,7 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
     assertThat(absent.hasBlockingFailure()).isFalse();
     assertThat(reader.resolve(new SettlementPriceRequest("HOUSEHOLD", "203240646", "2026-11", "210", SettlementPriceType.SETTLE_LINKED)).unitPrice()).isNull();
     confirmSampleWeights();
-    jdbc.update("DELETE FROM lp_settlement_base_price");
+    SettlementFinanceTestSupport.clear(jdbc);
     var request = request("203240646", "2026-11", "210", SettlementPriceType.SETTLE_LINKED);
     var missingBase = reader.resolve(request);
     assertThat(missingBase.failureCode()).isEqualTo("SETTLEMENT_BASE_MISSING");
@@ -122,8 +125,9 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
   @Test void batchAndSingleAgreeWithOneRuleReadAndAtMostOneBaseReadRegardlessOfRequestCount() {
     var data = new CountingDataSource(jdbc.getDataSource());
     var countedJdbc = new JdbcTemplate(data);
+    var countedBases = org.mockito.Mockito.spy(bases);
     var counted = new SettlementPriceReaderImpl(new SettlementPriceRepository(countedJdbc),
-        new SettlementBasePriceRepository(countedJdbc), new SettlementPriceCalculator(), json);
+        countedBases, new SettlementPriceCalculator(), json);
     List<SettlementPriceRequest> requests = new ArrayList<>();
     for (int i = 0; i < 100; i++) for (String code : List.of("203240646", "203259534", "203240247", "203240446", "201200143", "721250136"))
       requests.add(request(code, "2026-11", i % 2 == 0 ? "210" : "220", SettlementPriceType.SETTLE_LINKED));
@@ -134,8 +138,8 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
     confirmSampleWeights();
     data.selects.clear();
     var calculated = counted.resolveBatch(requests);
-    assertThat(data.selects).hasSize(2);
-    assertThat(data.selects.stream().filter(sql -> sql.contains("lp_settlement_base_price"))).hasSize(1);
+    assertThat(data.selects).hasSize(1);
+    org.mockito.Mockito.verify(countedBases, org.mockito.Mockito.times(1)).effective(org.mockito.ArgumentMatchers.any());
     calculated.forEach((request, result) -> assertThat(reader.resolve(request)).isEqualTo(result));
     assertThat(calculated.get(request("203240646", "2026-11", "210", SettlementPriceType.SETTLE_LINKED)).unitPrice())
         .isEqualByComparingTo("4.841024707965");
@@ -154,7 +158,7 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
     assertThat(calculated.mode()).isEqualTo("LINKED_FORMULA");
     assertThat(calculated.base().path("priceMonth").asText()).isEqualTo("2026-10");
     assertThat(calculated.baseCarriedForward()).isTrue();
-    jdbc.update("DELETE FROM lp_settlement_base_price");
+    SettlementFinanceTestSupport.clear(jdbc);
     var missing = query.list(october, "203240646", null).getFirst();
     assertThat(missing.unitPrice()).isNull();
     assertThat(missing.failureCode()).isEqualTo("SETTLEMENT_BASE_MISSING");
@@ -170,7 +174,7 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
     assertThat(result.base().path("copperPrice").isTextual()).isTrue();
   }
 
-  @Test void representativeLargeBomUsesTwoReadsForOneThousandDistinctMaterialsAcrossBothOrganizations() throws Exception {
+  @Test void representativeLargeBomReadsOnePublicationForOneThousandDistinctMaterialsAcrossBothOrganizations() throws Exception {
     confirmSampleWeights();
     var linked = prices.effective(october, "203240646", SettlementPriceType.SETTLE_LINKED).getFirst();
     var fixed = prices.effective(october, "809633", SettlementPriceType.SETTLE_FIXED).getFirst();
@@ -183,13 +187,15 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
       for (String org : List.of("210", "220")) requests.add(request(row.getMaterialCode(), "2026-11", org, row.getPriceType()));
     }
     var data = new CountingDataSource(jdbc.getDataSource());
+    var countedBases = org.mockito.Mockito.spy(bases);
     var counted = new SettlementPriceReaderImpl(new SettlementPriceRepository(new JdbcTemplate(data)),
-        new SettlementBasePriceRepository(new JdbcTemplate(data)), new SettlementPriceCalculator(), json);
+        countedBases, new SettlementPriceCalculator(), json);
     jdbc.queryForList("ANALYZE TABLE lp_settlement_price");
     long start = System.nanoTime();
     var result = counted.resolveBatch(requests);
     long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
-    assertThat(result).hasSize(2000); assertThat(data.selects).hasSize(2);
+    assertThat(result).hasSize(2000); assertThat(data.selects).hasSize(1);
+    org.mockito.Mockito.verify(countedBases, org.mockito.Mockito.times(1)).effective(org.mockito.ArgumentMatchers.any());
     result.forEach((request, price) -> assertThat(price.unitPrice()).isEqualByComparingTo(
         request.priceType() == SettlementPriceType.SETTLE_LINKED ? "4.841024707965" : "4.1658"));
     // EXPLAIN the exact captured batched SQL. IN ordering is immaterial to its plan.

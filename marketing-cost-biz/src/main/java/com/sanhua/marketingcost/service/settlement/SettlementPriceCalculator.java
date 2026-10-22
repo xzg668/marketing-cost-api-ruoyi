@@ -10,7 +10,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class SettlementPriceCalculator {
   public static final int UNIT_PRICE_SCALE = 12;
-  public static final String CALCULATOR_VERSION = "SETTLEMENT_PRICE_V1";
+  public static final String LEGACY_CALCULATOR_VERSION = "SETTLEMENT_PRICE_V1";
+  public static final String CALCULATOR_VERSION = "SETTLEMENT_PRICE_V2";
   public record Calculation(SettlementPriceMode mode, BigDecimal unitPrice) {}
   public static class CalculationException extends RuntimeException {
     private final String code;
@@ -21,8 +22,10 @@ public class SettlementPriceCalculator {
   public SettlementPriceMode mode(SettlementPriceRecord rule) {
     if (rule.getPriceType() == SettlementPriceType.SETTLE_FIXED) return SettlementPriceMode.FIXED_GIVEN;
     if (rule.getPriceType() != SettlementPriceType.SETTLE_LINKED) throw invalid("结算价格类型无效");
-    if (!rule.isWeightsConfirmed() || rule.getCopperWeightG() == null || rule.getZincWeightG() == null)
+    if (!rule.isWeightsConfirmed() || rule.getCopperWeightG() == null || rule.getZincWeightG() == null) {
+      if (SettlementFormula.ROUNDED_VERSION.equals(rule.getFormulaVersion())) return SettlementPriceMode.LINKED_FORMULA;
       return SettlementPriceMode.LINKED_GIVEN;
+    }
     return SettlementPriceMode.LINKED_FORMULA;
   }
 
@@ -32,7 +35,11 @@ public class SettlementPriceCalculator {
       throw new CalculationException("SETTLEMENT_GIVEN_PRICE_MISSING", "结算原稿缺少给定价：" + rule.getMaterialCode());
     nonnegative(rule.getGivenPrice(), "给定价");
     if (mode != SettlementPriceMode.LINKED_FORMULA) return new Calculation(mode, rounded(rule.getGivenPrice()));
-    if (!SettlementFormula.VERSION.equals(rule.getFormulaVersion()) || !SettlementFormula.EXPRESSION.equals(rule.getExpression()))
+    if (!rule.isWeightsConfirmed() || rule.getCopperWeightG() == null || rule.getZincWeightG() == null)
+      throw new CalculationException("SETTLEMENT_WEIGHTS_MISSING", "结算联动价缺少已确认的铜锌重量：" + rule.getMaterialCode());
+    boolean roundedFormula = SettlementFormula.ROUNDED_VERSION.equals(rule.getFormulaVersion());
+    if (!(roundedFormula ? SettlementFormula.ROUNDED_EXPRESSION.equals(rule.getExpression())
+        : SettlementFormula.VERSION.equals(rule.getFormulaVersion()) && SettlementFormula.EXPRESSION.equals(rule.getExpression())))
       throw new CalculationException("SETTLEMENT_FORMULA_INVALID", "结算公式版本或表达式无效：" + rule.getMaterialCode());
     nonnegative(rule.getPlannedPrice(), "计划价");
     nonnegative(rule.getBudgetCu(), "预算铜价");
@@ -41,7 +48,7 @@ public class SettlementPriceCalculator {
     nonnegative(rule.getZincWeightG(), "确认锌重");
     positive(rule.getMarkupRatio(), "上浮倍率");
     positive(rule.getTaxDivisor(), "税除数");
-    if (base == null) throw new CalculationException("SETTLEMENT_BASE_MISSING", "重量已确认，但缺少适用的结算铜锌基价：" + rule.getMaterialCode());
+    if (base == null) throw new CalculationException("SETTLEMENT_BASE_MISSING", "重量已确认，但尚未发布适用的商用财务铜锌基价：" + rule.getMaterialCode());
     if (!rule.getBusinessUnitType().equals(base.businessUnitType()) || !base.active()
         || !"CNY/KG".equals(base.unit()) || !"BEFORE_FORMULA_TAX".equals(base.taxBasis()))
       throw invalid("结算基价范围、状态或单位无效");
@@ -53,7 +60,8 @@ public class SettlementPriceCalculator {
     // 通分后只在最终单价除法舍入，避免中间除税或倍率放大舍入误差。
     BigDecimal numerator = rule.getPlannedPrice().multiply(denominator).add(adjustment).multiply(rule.getMarkupRatio());
     if (numerator.signum() < 0) throw invalid("结算公式计算得到负价格，请核查计划价、重量及基价");
-    return new Calculation(mode, rounded(numerator.divide(denominator, UNIT_PRICE_SCALE, RoundingMode.HALF_UP)));
+    return new Calculation(mode, rounded(numerator.divide(denominator,
+        roundedFormula ? 4 : UNIT_PRICE_SCALE, RoundingMode.HALF_UP)));
   }
 
   private BigDecimal rounded(BigDecimal value) {

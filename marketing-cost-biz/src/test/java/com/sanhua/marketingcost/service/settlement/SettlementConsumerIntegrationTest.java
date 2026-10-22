@@ -81,7 +81,7 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
   @Autowired BomCostingRowMapper bomRows;
   @Autowired TechnicalDataMaterialPriceQuery technicalPrices;
   @Autowired SettlementPriceReader reader;
-  @Autowired SettlementBasePriceService bases;
+  @Autowired com.sanhua.marketingcost.service.financefactor.FinanceFactorPublicationService finance;
   @Autowired PricePrepareItemMapper preparations;
   @Autowired CostRunPartItemMapper storedParts;
   @Autowired CostRunTraceSnapshotMapper traces;
@@ -108,6 +108,8 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
   }
 
   @BeforeEach void source() throws Exception {
+    SettlementFinanceTestSupport.clear(jdbc);
+    SettlementFinanceTestSupport.publish(finance, new SettlementScope("COMMERCIAL", "2026-10"), "104.526", "24.51");
     jdbc.update("DELETE FROM lp_settlement_price");
     jdbc.update("DELETE FROM lp_settlement_base_price");
     byte[] bytes;
@@ -264,13 +266,10 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
     item.setBusinessUnitType("COMMERCIAL");
     var revisions = new CostInputRevisionServiceImpl(jdbc);
     String before = revisions.currentRevision(form, item, "2026-11");
-    bases.save(new SettlementScope("COMMERCIAL", "2026-12"),
-        new SettlementBasePriceService.Change(new BigDecimal("120"), new BigDecimal("30"), "CNY/KG", 0, "未来月份"), "finance");
-    bases.save(new SettlementScope("HOUSEHOLD", "2026-11"),
-        new SettlementBasePriceService.Change(new BigDecimal("130"), new BigDecimal("31"), "CNY/KG", 0, "其他业务单元"), "finance");
+    SettlementFinanceTestSupport.publish(finance, new SettlementScope("COMMERCIAL", "2026-12"), "120", "30");
+    SettlementFinanceTestSupport.publish(finance, new SettlementScope("HOUSEHOLD", "2026-11"), "130", "31");
     assertThat(revisions.currentRevision(form, item, "2026-11")).isEqualTo(before);
-    bases.save(new SettlementScope("COMMERCIAL", "2026-11"),
-        new SettlementBasePriceService.Change(new BigDecimal("110"), new BigDecimal("26"), "CNY/KG", 0, "本月基价"), "finance");
+    SettlementFinanceTestSupport.publish(finance, new SettlementScope("COMMERCIAL", "2026-11"), "110", "26");
     String afterBase = revisions.currentRevision(form, item, "2026-11");
     if (formula) assertThat(afterBase).isNotEqualTo(before);
     else assertThat(afterBase).isEqualTo(before);
@@ -355,8 +354,7 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
       }
     }
     var before = saved.stream().map(CostRunTraceSnapshot::getSourceSnapshotJson).toList();
-    bases.save(new SettlementScope("COMMERCIAL", "2026-11"),
-        new SettlementBasePriceService.Change(new BigDecimal("110"), new BigDecimal("26"), "CNY/KG", 0, "隔离测试新基价"), "finance");
+    SettlementFinanceTestSupport.publish(finance, new SettlementScope("COMMERCIAL", "2026-11"), "110", "26");
     var updated = reader.resolve(new SettlementPriceRequest("COMMERCIAL", codes[2], "2026-11", org, SettlementPriceType.SETTLE_LINKED));
     assertThat(updated.unitPrice()).isEqualByComparingTo("4.888708672566");
     var givenRule = prices.effective(new SettlementScope("COMMERCIAL", "2026-11"), codes[1], SettlementPriceType.SETTLE_LINKED).getFirst();
@@ -590,8 +588,7 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
       assertThat(children.get(i).path("inputs").path("mode").asText()).isEqualTo(modes[i]);
       assertThat(children.get(i).path("unitPrice").decimalValue()).isEqualByComparingTo(expected[i]);
     }
-    bases.save(new SettlementScope("COMMERCIAL", "2026-11"),
-        new SettlementBasePriceService.Change(new BigDecimal("110"), new BigDecimal("26"), "CNY/KG", 0, "包装后改基价"), "finance");
+    SettlementFinanceTestSupport.publish(finance, new SettlementScope("COMMERCIAL", "2026-11"), "110", "26");
     assertThat(packages.ensurePrice(request).getPrice().getTotalPrice()).isEqualByComparingTo("27.13181735");
     assertThat(traceBuilder.build(traceVersion).getFirst().getChildrenJson()).isEqualTo(frozen.getChildrenJson());
   }

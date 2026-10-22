@@ -21,6 +21,23 @@ class SettlementCalculationEvidenceTest {
     assertThat(captured.path("rule").path("givenPrice").decimalValue()).isEqualByComparingTo("999999999999.123456789012");
   }
 
+  @Test void legacyFormulaSnapshotStillUsesItsCapturedIndependentBaseAndOriginalPrecision() throws Exception {
+    var prepared = prepared();
+    var rule = SettlementPriceCalculatorTest.rule();
+    rule.setId(7L); rule.setMaterialCode("PRECISE"); rule.setPriceMonth("2026-10");
+    rule.setRevisionNo(1); rule.setActive(true); rule.setWeightsConfirmed(true);
+    rule.setCopperWeightG(new BigDecimal("7.8")); rule.setZincWeightG(new BigDecimal("1.48"));
+    var captured = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(prepared.getInputSnapshotJson());
+    captured.put("priceType", "SETTLE_LINKED"); captured.put("mode", "LINKED_FORMULA");
+    captured.put("unitPrice", new BigDecimal("4.841024707965"));
+    captured.set("rule", json.valueToTree(rule));
+    captured.set("base", json.valueToTree(SettlementPriceCalculatorTest.base("104.526", "24.51")));
+    prepared.setInputSnapshotJson(captured.toString());
+    prepared.setUnitPrice(new BigDecimal("4.84102471"));
+    assertThat(new SettlementCalculationEvidence(json).read(prepared).path("unitPrice").decimalValue())
+        .isEqualByComparingTo("4.841024707965");
+  }
+
   @ParameterizedTest
   @CsvSource({"sourceTable,lp_price_fixed_item", "accountingMonth,2026-12", "consumerOrgCode,220", "mode,LINKED_FORMULA"})
   void refusesConflictingNamespaceScopeOrCalculationMode(String field, String value) throws Exception {

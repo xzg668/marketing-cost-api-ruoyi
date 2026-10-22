@@ -16,11 +16,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class SettlementPriceReaderImpl implements SettlementPriceReader {
   public static final String SOURCE_TABLE = "lp_settlement_price";
   private final SettlementPriceRepository prices;
-  private final SettlementBasePriceRepository bases;
+  private final SettlementFinanceBaseReader bases;
   private final SettlementPriceCalculator calculator;
   private final ObjectMapper json;
 
-  public SettlementPriceReaderImpl(SettlementPriceRepository prices, SettlementBasePriceRepository bases,
+  public SettlementPriceReaderImpl(SettlementPriceRepository prices, SettlementFinanceBaseReader bases,
       SettlementPriceCalculator calculator, ObjectMapper json) {
     this.prices = prices;
     this.bases = bases;
@@ -44,8 +44,14 @@ public class SettlementPriceReaderImpl implements SettlementPriceReader {
     Map<SettlementPriceRequest, PriceResolveResult> results = new LinkedHashMap<>();
     for (var group : groups.entrySet()) {
       var rows = prices.effectiveBatch(group.getKey(), group.getValue().stream().map(this::key).toList());
-      boolean needsBase = rows.values().stream().anyMatch(row -> calculator.mode(row) == SettlementPriceMode.LINKED_FORMULA);
-      var base = needsBase ? bases.effective(group.getKey()).orElse(null) : null;
+      boolean needsBase = rows.values().stream().anyMatch(row -> row.getPriceType() == SettlementPriceType.SETTLE_LINKED
+          && row.weights().completeAndConfirmed());
+      SettlementBasePrice base = null;
+      String baseFailure = null;
+      if (needsBase) {
+        try { base = bases.effective(group.getKey()).orElse(null); }
+        catch (IllegalArgumentException | IllegalStateException invalid) { baseFailure = invalid.getMessage(); }
+      }
       for (var request : group.getValue()) {
         var row = rows.get(key(request));
         if (row == null) {
@@ -53,18 +59,21 @@ public class SettlementPriceReaderImpl implements SettlementPriceReader {
               "不晚于 " + request.accountingMonth() + " 的" + request.priceType().label() + "无适用原稿：" + request.materialCode()));
           continue;
         }
-        results.put(request, resolveRow(request, row, base));
+        results.put(request, resolveRow(request, row, base, baseFailure));
       }
     }
     return Collections.unmodifiableMap(results);
   }
 
-  private PriceResolveResult resolveRow(SettlementPriceRequest request, SettlementPriceRecord row, SettlementBasePrice selectedBase) {
+  private PriceResolveResult resolveRow(SettlementPriceRequest request, SettlementPriceRecord row,
+      SettlementBasePrice selectedBase, String baseFailure) {
     var mode = calculator.mode(row);
     var base = mode == SettlementPriceMode.LINKED_FORMULA ? selectedBase : null;
     try {
+      if (mode == SettlementPriceMode.LINKED_FORMULA && row.weights().completeAndConfirmed() && baseFailure != null)
+        throw new SettlementPriceCalculator.CalculationException("SETTLEMENT_FINANCE_BASE_INVALID", baseFailure);
       var calculation = calculator.calculate(row, base);
-      String description = mode == SettlementPriceMode.LINKED_FORMULA ? "按结算铜锌基价计算" : "采用原稿给定价";
+      String description = mode == SettlementPriceMode.LINKED_FORMULA ? "按商用财务铜锌基价计算" : "采用原稿给定价";
       return PriceResolveResult.hit(calculation.unitPrice(), request.priceType().label(), description, row.getId(),
           evidence(request, row, base, mode, calculation.unitPrice()));
     } catch (SettlementPriceCalculator.CalculationException invalid) {
@@ -79,7 +88,7 @@ public class SettlementPriceReaderImpl implements SettlementPriceReader {
     boolean baseCarry = base != null && base.priceMonth().compareTo(request.accountingMonth()) < 0;
     List<String> notes = new ArrayList<>();
     if (ruleCarry) notes.add("沿用 " + rule.getPriceMonth() + " 结算原稿");
-    if (baseCarry) notes.add("沿用 " + base.priceMonth() + " 结算基价");
+    if (baseCarry) notes.add("沿用 " + base.priceMonth() + " 商用财务基价");
     String snapshot;
     try {
       ObjectNode source = json.valueToTree(rule);

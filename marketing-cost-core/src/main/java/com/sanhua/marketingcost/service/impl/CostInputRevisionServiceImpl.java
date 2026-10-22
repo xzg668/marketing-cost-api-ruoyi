@@ -323,11 +323,7 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
           && valueIgnoreCase(row, "zinc_weight_g") != null;
     }
     if (requiresBase) {
-      var bases = jdbcTemplate.queryForList(
-          "SELECT * FROM lp_settlement_base_price WHERE business_unit_type=? AND price_month<=? AND active=1 "
-              + "ORDER BY price_month DESC,revision_no DESC LIMIT 1", businessUnit, month);
-      for (var row : bases)
-        for (String column : new TreeSet<>(row.keySet())) appendPriceValue(canonical, column, row.get(column));
+      append(canonical, "settlementCommercialFinance", financePublicationRevision(businessUnit, month, java.util.Set.of("210")));
     }
     return sha256(canonical.toString());
   }

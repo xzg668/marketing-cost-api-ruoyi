@@ -13,6 +13,42 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
 
 class SettlementWorkbookParserTest {
+  @Test void finalWorkbookPreservesAll46RowsAndDistinguishesRoundedFormulaFromHouseholdGivenPrice() throws Exception {
+    byte[] bytes = getClass().getResourceAsStream("/settlement/final-20261021.xls").readAllBytes();
+    var result = new SettlementWorkbookParser().parse(bytes, "final.xls");
+    assertThat(result.sha256()).isEqualTo("cc01502625c678912275c7f2f4bba8d43426a8bbb264afa265fefa5944c5b239");
+    assertThat(result.sourceRows()).hasSize(46);
+    assertThat(result.rules()).hasSize(46);
+    var linked = result.rules().stream().filter(r -> r.priceType() == SettlementPriceType.SETTLE_LINKED).toList();
+    assertThat(linked).hasSize(11);
+    assertThat(linked).allSatisfy(r -> {
+      assertThat(r.formula().version()).isEqualTo("SETTLEMENT_CU_ZN_ROUND4_V2");
+      assertThat(r.formula().expression()).startsWith("ROUND(").endsWith(", 4)");
+      assertThat(r.sources().getFirst().resolvedSourceFormula()).startsWith("ROUND(");
+    });
+    assertThat(linked.stream().filter(r -> r.weights().originalZincG() == null)).hasSize(7);
+    var valve = linked.stream().filter(r -> r.materialCode().equals("101303761")).findFirst().orElseThrow();
+    assertThat(valve.givenPrice()).isEqualByComparingTo("8.7763");
+    assertThat(valve.sources().getFirst().cells().get("L").number()).isEqualByComparingTo("8.7764");
+    assertThat(result.referenceCu()).isEqualByComparingTo("108.352");
+    assertThat(result.referenceZn()).isEqualByComparingTo("25.597");
+  }
+
+  @Test void roundedFormulaRejectsOtherPrecisionWrongRowsAndDifferentGrouping() throws Exception {
+    byte[] original = getClass().getResourceAsStream("/settlement/final-20261021.xls").readAllBytes();
+    for (String formula : java.util.List.of(
+        "ROUND(F10+((($P$2-$O$2)*G10+($P$3-$O$3)*H10)/1000/1.13)*1.2,3)",
+        "ROUND(F10+((($P$2-$O$2)*G14+($P$3-$O$3)*H10)/1000/1.13)*1.2,4)",
+        "ROUND((F10+($P$2-$O$2)*G10+($P$3-$O$3)*H10)/1000/1.13*1.2,4)")) {
+      try (var book = WorkbookFactory.create(new ByteArrayInputStream(original))) {
+        book.getSheetAt(0).getRow(9).getCell(11).setCellFormula(formula);
+        var output = new ByteArrayOutputStream(); book.write(output);
+        assertThatThrownBy(() -> new SettlementWorkbookParser().parse(output.toByteArray(), "invalid.xls"))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("L10").hasMessageContaining("公式");
+      }
+    }
+  }
+
   @Test void actualXlsPreservesEverySourceAndSixGivenLinkedPrices() throws Exception {
     byte[] bytes;
     try (var file = getClass().getResourceAsStream("/settlement/original-20261017.xls")) { bytes = file.readAllBytes(); }

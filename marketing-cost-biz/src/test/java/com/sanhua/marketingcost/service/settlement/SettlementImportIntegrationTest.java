@@ -33,7 +33,8 @@ import org.springframework.test.context.DynamicPropertySource;
 class SettlementImportIntegrationTest extends OriginalPricingIntegrationTestBase {
   @Autowired SettlementPriceImportService imports;
   @Autowired SettlementPriceRepository prices;
-  @Autowired SettlementBasePriceService bases;
+  @Autowired SettlementFinanceBaseReader bases;
+  @Autowired com.sanhua.marketingcost.service.financefactor.FinanceFactorPublicationService finance;
   @Autowired JdbcTemplate jdbc;
   @Autowired SettlementWeightService weights;
   @Autowired SettlementPriceController controller;
@@ -67,7 +68,7 @@ class SettlementImportIntegrationTest extends OriginalPricingIntegrationTestBase
     var rows = prices.effective(october, null, null);
     assertThat(rows).hasSize(37);
     assertThat(rows.stream().filter(r -> r.getPriceType().name().equals("SETTLE_FIXED"))).hasSize(31);
-    assertThat(bases.effective(october).orElseThrow().copperPrice()).isEqualByComparingTo("104.526");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_settlement_base_price", Integer.class)).isZero();
     var duplicate = rows.stream().filter(r -> r.getMaterialCode().equals("809633")).findFirst().orElseThrow();
     assertThat(duplicate.getSourceRowsJson()).contains("39", "40", "CA-SH-00420260801-0017", "CA-SH-00420260828-2824");
     assertThat(imports.original("COMMERCIAL", duplicate.getId()).bytes()).isEqualTo(bytes);
@@ -141,27 +142,30 @@ class SettlementImportIntegrationTest extends OriginalPricingIntegrationTestBase
         """);
     assertThatThrownBy(() -> upload(original(), october)).hasMessageContaining("stp failure after earlier rows");
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_settlement_price", Integer.class)).isZero();
-    assertThat(bases.history(october)).isEmpty();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_settlement_base_price", Integer.class)).isZero();
   }
 
   @Test void maintainedBasesAndAllAdjacentPriceSourcesArePreserved() throws Exception {
-    bases.save(october, new SettlementBasePriceService.Change(new BigDecimal("120"), new BigDecimal("30"), "CNY/KG", 0, "财务确认"), "finance");
+    SettlementFinanceTestSupport.clear(jdbc);
+    SettlementFinanceTestSupport.publish(finance, october, "120", "30");
     var checksum = jdbc.queryForList(protectedChecksums());
     upload(original(), october);
     assertThat(bases.effective(october).orElseThrow().copperPrice()).isEqualByComparingTo("120");
-    assertThat(bases.history(october)).hasSize(1);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_settlement_base_price", Integer.class)).isZero();
     assertThat(jdbc.queryForList(protectedChecksums())).isEqualTo(checksum);
     assertThat(linked().getReferenceCu()).isEqualByComparingTo("104.526");
     assertThat(linked().getBudgetCu()).isEqualByComparingTo("78");
   }
 
-  @Test void stalePreviewCannotOverwriteAConcurrentFinanceEdit() throws Exception {
+  @Test void importingRulesAfterFinancePublicationDoesNotOverwriteOrDuplicateFinancialInputs() throws Exception {
     byte[] bytes = original();
     var preview = imports.preview(bytes, "original.xls", october);
-    bases.save(october, new SettlementBasePriceService.Change(new BigDecimal("120"), new BigDecimal("30"), "CNY/KG", 0, "财务确认"), "finance");
-    assertThatThrownBy(() -> imports.confirm(bytes, "original.xls", october, preview.fingerprint(), "finance"))
-        .isInstanceOf(OptimisticLockingFailureException.class);
-    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_settlement_price", Integer.class)).isZero();
+    SettlementFinanceTestSupport.clear(jdbc);
+    SettlementFinanceTestSupport.publish(finance, october, "120", "30");
+    var before = bases.effective(october).orElseThrow();
+    assertThat(imports.confirm(bytes, "original.xls", october, preview.fingerprint(), "finance").inserted()).isEqualTo(37);
+    assertThat(bases.effective(october).orElseThrow()).isEqualTo(before);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_settlement_base_price", Integer.class)).isZero();
   }
 
   @Test void importAndWeightPermissionsAreSeparateAndOriginalDownloadIsBusinessScoped() throws Exception {

@@ -9,6 +9,20 @@ import org.junit.jupiter.api.Test;
 class SettlementPriceCalculatorTest {
   private final SettlementPriceCalculator calculator = new SettlementPriceCalculator();
 
+  @Test void finalWorkbookRoundsOnlyAfterUsingCommercialBasesAndNeverFallsBackToHouseholdGivenPrice() {
+    var row = rule();
+    row.setFormulaVersion("SETTLEMENT_CU_ZN_ROUND4_V2");
+    row.setExpression("ROUND(" + SettlementFormula.EXPRESSION + ", 4)");
+    row.setGivenPrice(new BigDecimal("4.8648"));
+    row.setWeightsConfirmed(true);
+    row.setCopperWeightG(new BigDecimal("7.6384"));
+    row.setZincWeightG(new BigDecimal("0.3306"));
+    assertThat(calculator.calculate(row, base("90", "21.6362912421045")).unitPrice()).isEqualByComparingTo("4.7146");
+    assertThat(calculator.calculate(row, base("108.352", "25.597")).unitPrice()).isEqualByComparingTo("4.8648");
+    row.setWeightsConfirmed(false);
+    assertCode(() -> calculator.calculate(row, base("90", "21.6362912421045")), "SETTLEMENT_WEIGHTS_MISSING");
+  }
+
   @Test void suppliedPricesAreValidWithoutAnyBaseWhenFixedOrWeightsAreUnconfirmed() {
     var row = rule();
     var given = calculator.calculate(row, null);

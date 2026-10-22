@@ -24,7 +24,9 @@ public final class SettlementCalculationEvidence {
       if (!(node instanceof ObjectNode snapshot)) throw invalid("不是 JSON 对象");
       same(SettlementPriceReader.RESULT_REF_TYPE, snapshot.path("resultRefType").asText(), "来源类型");
       same(SettlementPriceReaderImpl.SOURCE_TABLE, snapshot.path("sourceTable").asText(), "来源表");
-      same(SettlementPriceCalculator.CALCULATOR_VERSION, snapshot.path("calculatorVersion").asText(), "计算版本");
+      String version = snapshot.path("calculatorVersion").asText();
+      boolean legacy = SettlementPriceCalculator.LEGACY_CALCULATOR_VERSION.equals(version);
+      if (!legacy) same(SettlementPriceCalculator.CALCULATOR_VERSION, version, "计算版本");
       same(prepared.getResultRefId(), snapshot.path("sourceRecordId").longValue(), "来源 ID");
       if (!(snapshot.get("rule") instanceof ObjectNode capturedRule)) throw invalid("缺少原稿版本");
       var ruleData = capturedRule.deepCopy();
@@ -45,6 +47,18 @@ public final class SettlementCalculationEvidence {
           ? json.treeToValue(snapshot.get("base"), SettlementBasePrice.class) : null;
       if (base != null && (base.id() <= 0 || base.revisionNo() < 1
           || base.priceMonth().compareTo(prepared.getPeriodMonth()) > 0)) throw invalid("基价月份或修订无效");
+      if (!legacy && base != null) {
+        if (base.financial() == null) throw invalid("缺少商用财务发布依据");
+        var expected = SettlementBasePrice.fromFinancial(base.financial());
+        same(expected.id(), base.id(), "财务发布ID");
+        same(expected.businessUnitType(), base.businessUnitType(), "财务业务单元");
+        same(expected.priceMonth(), base.priceMonth(), "财务月份");
+        same(expected.revisionNo(), base.revisionNo(), "财务修订");
+        same(expected.sourceKind(), base.sourceKind(), "财务来源类型");
+        if (base.copperPrice().compareTo(expected.copperPrice()) != 0
+            || base.zincPrice().compareTo(expected.zincPrice()) != 0) throw invalid("铜锌值与财务发布不一致");
+      }
+      if (legacy && SettlementFormula.ROUNDED_VERSION.equals(rule.getFormulaVersion())) throw invalid("旧版本不支持新舍入公式");
       var calculated = new SettlementPriceCalculator().calculate(rule, base);
       same(calculated.mode().name(), snapshot.path("mode").asText(), "取价模式");
       if (!snapshot.path("unitPrice").isNumber()

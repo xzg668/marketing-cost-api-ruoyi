@@ -10,27 +10,25 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
-/** 原件、规则和基价的发布边界。预览只读，确认在一个数据库事务内追加修订。 */
+/** 原件和结算规则的导入边界。预览只读，确认在一个数据库事务内追加修订。 */
 @Service
 public class SettlementPriceImportService {
   public record Preview(SettlementWorkbookParser.ParsedWorkbook workbook, String fingerprint) {}
-  public record ImportResult(int inserted, int revised, int unchanged, int sourceRows, List<Long> ruleIds, long baseId) {
+  public record ImportResult(int inserted, int revised, int unchanged, int sourceRows, List<Long> ruleIds) {
     public ImportResult { ruleIds = List.copyOf(ruleIds); }
   }
   public record OriginalFile(String fileName, byte[] bytes) {}
   private final SettlementWorkbookParser parser;
   private final SettlementPriceRepository prices;
-  private final SettlementBasePriceRepository bases;
   private final SettlementRuleRevisionFactory revisions;
   private final SettlementWorkbookStore files;
   private final TransactionTemplate transaction;
 
   public SettlementPriceImportService(SettlementWorkbookParser parser, SettlementPriceRepository prices,
-      SettlementBasePriceRepository bases, SettlementRuleRevisionFactory revisions, SettlementWorkbookStore files,
+      SettlementRuleRevisionFactory revisions, SettlementWorkbookStore files,
       PlatformTransactionManager transactions) {
     this.parser = parser;
     this.prices = prices;
-    this.bases = bases;
     this.revisions = revisions;
     this.files = files;
     this.transaction = new TransactionTemplate(transactions);
@@ -39,7 +37,7 @@ public class SettlementPriceImportService {
 
   public Preview preview(byte[] bytes, String fileName, SettlementScope scope) {
     var book = parser.parse(bytes, SettlementScope.required(fileName, "原件文件名", 255));
-    return new Preview(book, fingerprint(book, scope, heads(book, scope), bases.latest(scope).orElse(null)));
+    return new Preview(book, fingerprint(book, scope, heads(book, scope)));
   }
 
   public ImportResult confirm(byte[] bytes, String fileName, SettlementScope scope, String expectedFingerprint, String actor) {
@@ -48,8 +46,7 @@ public class SettlementPriceImportService {
     try {
       return transaction.execute(status -> {
         var current = heads(book, scope);
-        var base = bases.latest(scope).orElse(null);
-        if (!fingerprint(book, scope, current, base).equals(expectedFingerprint)) throw conflict();
+        if (!fingerprint(book, scope, current).equals(expectedFingerprint)) throw conflict();
         // 不变内容的归档可共享；数据库回滚时可留下未引用原件，绝不发布部分价格。
         files.save(scope.businessUnitType(), bytes);
         int inserted = 0, revised = 0, unchanged = 0;
@@ -67,11 +64,7 @@ public class SettlementPriceImportService {
             if (sameMonth) revised++; else inserted++;
           }
         }
-        if (base == null) base = bases.insert(scope, 1,
-            SettlementBasePriceService.normalizePrice(book.referenceCu(), "CNY/KG"),
-            SettlementBasePriceService.normalizePrice(book.referenceZn(), "CNY/KG"),
-            "IMPORT_REFERENCE", book.sha256(), "原稿参考铜锌基价首次建立", operator);
-        return new ImportResult(inserted, revised, unchanged, book.sourceRows().size(), ids, base.id());
+        return new ImportResult(inserted, revised, unchanged, book.sourceRows().size(), ids);
       });
     } catch (DuplicateKeyException | ConcurrencyFailureException changed) { throw conflict(); }
   }
@@ -86,11 +79,10 @@ public class SettlementPriceImportService {
   }
 
   private String fingerprint(SettlementWorkbookParser.ParsedWorkbook book, SettlementScope scope,
-      Map<SettlementPriceRepository.RuleKey, SettlementPriceRecord> heads, SettlementBasePrice base) {
+      Map<SettlementPriceRepository.RuleKey, SettlementPriceRecord> heads) {
     Map<String, Object> values = new TreeMap<>();
     values.put("scope", scope);
     values.put("file", book.sha256());
-    values.put("baseId", base == null ? null : base.id());
     var versions = heads.values().stream().sorted(Comparator.comparing(SettlementPriceRecord::getId))
         .map(row -> Map.of("id", row.getId(), "hash", row.getContentHash())).toList();
     values.put("versions", versions);
@@ -98,6 +90,6 @@ public class SettlementPriceImportService {
   }
 
   private OptimisticLockingFailureException conflict() {
-    return new OptimisticLockingFailureException("结算原稿或重量、基价已变化，请重新预览后导入");
+    return new OptimisticLockingFailureException("结算原稿或重量已变化，请重新预览后导入");
   }
 }

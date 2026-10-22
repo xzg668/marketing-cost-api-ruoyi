@@ -45,7 +45,23 @@ public class SettlementRuleRevisionFactory {
     row.setFormulaVersion(formula.version());
     row.setOriginalCopperWeightG(rule.weights().originalCopperG());
     row.setOriginalZincWeightG(rule.weights().originalZincG());
-    if (previous != null && previous.isWeightsConfirmed()) {
+    // 财务确认：新版原稿的空白锌重遵循 Excel 乘法语义，以 0 克计算；原始字段仍保留空白。
+    boolean usableSourceWeights = rule.weights().originalCopperG() != null;
+    BigDecimal sourceZincWeight = rule.weights().originalZincG() == null
+        ? BigDecimal.ZERO : rule.weights().originalZincG();
+    boolean changedSource = previous == null
+        || !sameNumber(previous.getOriginalCopperWeightG(), rule.weights().originalCopperG())
+        || !sameNumber(previous.getOriginalZincWeightG(), rule.weights().originalZincG());
+    if (SettlementFormula.ROUNDED_VERSION.equals(formula.version()) && usableSourceWeights
+        && (changedSource || !previous.isWeightsConfirmed())) {
+      row.setCopperWeightG(rule.weights().originalCopperG());
+      row.setZincWeightG(sourceZincWeight);
+      row.setWeightsConfirmed(true);
+      row.setWeightConfirmationNote("确认导入最终结算原稿重量：" + book.fileName() + " / 第" + rule.sources().getFirst().row() + "行"
+          + (rule.weights().originalZincG() == null ? "；原稿锌重为空，按原公式以0克计算" : ""));
+      row.setWeightsConfirmedBy(actor);
+      row.setWeightsConfirmedAt(LocalDateTime.now().truncatedTo(ChronoUnit.MICROS));
+    } else if (previous != null && previous.isWeightsConfirmed()) {
       row.setCopperWeightG(previous.getCopperWeightG());
       row.setZincWeightG(previous.getZincWeightG());
       row.setWeightsConfirmed(true);
@@ -94,6 +110,10 @@ public class SettlementRuleRevisionFactory {
     for (var value : new BigDecimal[]{row.getMarkupRatio(), row.getBudgetCu(), row.getBudgetZn(), row.getReferenceCu(),
         row.getReferenceZn(), row.getOriginalCopperWeightG(), row.getOriginalZincWeightG(), row.getCopperWeightG(),
         row.getZincWeightG(), row.getTaxDivisor()}) validateDecimal(value, 24, 12, row.getMaterialCode());
+  }
+
+  private boolean sameNumber(BigDecimal first, BigDecimal second) {
+    return first == null ? second == null : second != null && first.compareTo(second) == 0;
   }
 
   private void validateDecimal(BigDecimal value, int precision, int scale, String material) {
