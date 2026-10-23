@@ -42,6 +42,7 @@ class SettlementCommercialFinanceIntegrationTest extends OriginalPricingIntegrat
   }
 
   @BeforeEach void source() throws Exception {
+    jdbc.update("DELETE FROM lp_settlement_effective_price");
     jdbc.update("DELETE FROM lp_settlement_price");
     jdbc.update("DELETE FROM lp_settlement_base_price");
     SettlementFinanceTestSupport.clear(jdbc);
@@ -228,6 +229,7 @@ class SettlementCommercialFinanceIntegrationTest extends OriginalPricingIntegrat
   }
 
   @Test void finalSourceReplacesOlderSampleWeightsAndIdenticalReimportPreservesConfirmedVersion() throws Exception {
+    jdbc.update("DELETE FROM lp_settlement_effective_price");
     jdbc.update("DELETE FROM lp_settlement_price");
     byte[] old = getClass().getResourceAsStream("/settlement/original-20261017.xls").readAllBytes();
     imports.confirm(old, "旧原稿.xls", october, imports.preview(old, "旧原稿.xls", october).fingerprint(), "finance");

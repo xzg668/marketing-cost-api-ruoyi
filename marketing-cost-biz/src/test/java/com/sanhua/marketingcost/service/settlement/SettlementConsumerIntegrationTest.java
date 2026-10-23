@@ -81,6 +81,8 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
   @Autowired BomCostingRowMapper bomRows;
   @Autowired TechnicalDataMaterialPriceQuery technicalPrices;
   @Autowired SettlementPriceReader reader;
+  @Autowired SettlementEffectivePriceService effectivePrices;
+  @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
   @Autowired com.sanhua.marketingcost.service.financefactor.FinanceFactorPublicationService finance;
   @Autowired PricePrepareItemMapper preparations;
   @Autowired CostRunPartItemMapper storedParts;
@@ -108,9 +110,10 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
   }
 
   @BeforeEach void source() throws Exception {
+    jdbc.update("DELETE FROM lp_settlement_effective_price");
+    jdbc.update("DELETE FROM lp_settlement_price");
     SettlementFinanceTestSupport.clear(jdbc);
     SettlementFinanceTestSupport.publish(finance, new SettlementScope("COMMERCIAL", "2026-10"), "104.526", "24.51");
-    jdbc.update("DELETE FROM lp_settlement_price");
     jdbc.update("DELETE FROM lp_settlement_base_price");
     byte[] bytes;
     try (var input = getClass().getResourceAsStream("/settlement/original-20261017.xls")) { bytes = input.readAllBytes(); }
@@ -118,6 +121,7 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
     imports.confirm(bytes, "original.xls", scope, imports.preview(bytes, "original.xls", scope).fingerprint(), "finance");
     var row = prices.effective(scope, "203240646", SettlementPriceType.SETTLE_LINKED).getFirst();
     SettlementRuleTestSupport.legacyWeights(prices, ruleRevisions, row, "7.8", "1.48");
+    new org.springframework.transaction.support.TransactionTemplate(transactions).execute(status -> effectivePrices.generate("COMMERCIAL", "test-fixture"));
   }
 
   @ParameterizedTest

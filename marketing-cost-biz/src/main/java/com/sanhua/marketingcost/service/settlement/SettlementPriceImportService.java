@@ -14,7 +14,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 public class SettlementPriceImportService {
   public record Preview(SettlementWorkbookParser.ParsedWorkbook workbook, String fingerprint) {}
-  public record ImportResult(int inserted, int revised, int unchanged, int sourceRows, List<Long> ruleIds) {
+  public record ImportResult(int inserted, int revised, int unchanged, int sourceRows, List<Long> ruleIds, SettlementEffectivePriceService.Generation effectivePrices) {
     public ImportResult { ruleIds = List.copyOf(ruleIds); }
   }
   public record OriginalFile(String fileName, byte[] bytes) {}
@@ -23,10 +23,12 @@ public class SettlementPriceImportService {
   private final SettlementRuleRevisionFactory revisions;
   private final SettlementWorkbookStore files;
   private final TransactionTemplate transaction;
+  private final SettlementEffectivePriceService effectivePrices;
 
   public SettlementPriceImportService(SettlementWorkbookParser parser, SettlementPriceRepository prices,
       SettlementRuleRevisionFactory revisions, SettlementWorkbookStore files,
-      PlatformTransactionManager transactions) {
+      PlatformTransactionManager transactions, SettlementEffectivePriceService effectivePrices) {
+    this.effectivePrices = effectivePrices;
     this.parser = parser;
     this.prices = prices;
     this.revisions = revisions;
@@ -45,6 +47,7 @@ public class SettlementPriceImportService {
     String operator = SettlementScope.required(actor, "导入人", 64);
     try {
       return transaction.execute(status -> {
+        effectivePrices.lock(scope.businessUnitType());
         var current = heads(book, scope);
         if (!fingerprint(book, scope, current).equals(expectedFingerprint)) throw conflict();
         // 不变内容的归档可共享；数据库回滚时可留下未引用原件，绝不发布部分价格。
@@ -64,7 +67,8 @@ public class SettlementPriceImportService {
             if (sameMonth) revised++; else inserted++;
           }
         }
-        return new ImportResult(inserted, revised, unchanged, book.sourceRows().size(), ids);
+        return new ImportResult(inserted, revised, unchanged, book.sourceRows().size(), ids,
+            effectivePrices.generate(scope.businessUnitType(), operator));
       });
     } catch (DuplicateKeyException | ConcurrencyFailureException changed) { throw conflict(); }
   }

@@ -18,13 +18,15 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class SettlementPriceQuery {
   public record Entry(JsonNode rule, String unitPrice, String mode, JsonNode base,
-      boolean ruleCarriedForward, boolean baseCarriedForward, String failureCode, String message) {}
+      boolean ruleCarriedForward, boolean baseCarriedForward, String failureCode, String message, JsonNode effectivePrice) {}
 
   private final SettlementPriceRepository prices;
   private final SettlementPriceReader reader;
   private final ObjectMapper json;
+  private final SettlementEffectivePriceRepository saved;
 
-  public SettlementPriceQuery(SettlementPriceRepository prices, SettlementPriceReader reader, ObjectMapper json) {
+  public SettlementPriceQuery(SettlementPriceRepository prices, SettlementPriceReader reader, ObjectMapper json, SettlementEffectivePriceRepository saved) {
+    this.saved = saved;
     this.prices = prices;
     this.reader = reader;
     this.json = json;
@@ -36,6 +38,24 @@ public class SettlementPriceQuery {
         new SettlementPriceRequest(scope.businessUnitType(), row.getMaterialCode(), scope.priceMonth(), "210", row.getPriceType())).toList();
     var results = reader.resolveBatch(requests);
     return requests.stream().map(request -> entry(results.get(request))).toList();
+  }
+
+  public record MonthlyRevision(long id, String priceMonth, int revisionNo, String unitPrice,
+      String ruleMonth, int ruleRevision, String financeMonth, Integer financeRevision, java.time.LocalDateTime createdAt) {}
+
+  @Transactional(readOnly = true)
+  public List<MonthlyRevision> history(SettlementScope scope, long ruleId) {
+    var rule = prices.byId(scope.businessUnitType(), ruleId).orElseThrow(() -> new IllegalArgumentException("结算价格不存在"));
+    return saved.history(scope.businessUnitType(), rule.getMaterialCode(), rule.getPriceType().name(), scope.priceMonth())
+        .stream().map(row -> {
+          try {
+            var captured = json.readTree(row.calculationJson());
+            var base = captured.path("base");
+            return new MonthlyRevision(row.id(), row.effectiveMonth(), row.revisionNo(), row.unitPrice().toPlainString(),
+                captured.path("rule").path("priceMonth").asText(), captured.path("rule").path("revisionNo").asInt(),
+                base.isNull() ? null : base.path("priceMonth").asText(), base.isNull() ? null : base.path("revisionNo").asInt(), row.createdAt());
+          } catch (JsonProcessingException invalid) { throw new IllegalStateException("结算结果历史依据读取失败", invalid); }
+        }).toList();
   }
 
   private Entry entry(PriceResolveResult result) {
@@ -51,7 +71,7 @@ public class SettlementPriceQuery {
       return new Entry(snapshot.path("rule"), result.unitPrice() == null ? null : result.unitPrice().toPlainString(),
           snapshot.path("mode").asText(), base.isNull() ? null : base,
           snapshot.path("ruleCarriedForward").asBoolean(), snapshot.path("baseCarriedForward").asBoolean(),
-          result.failureCode(), result.remark());
+          result.failureCode(), result.remark(), snapshot.path("effectivePrice"));
     } catch (JsonProcessingException invalid) {
       throw new IllegalStateException("结算价格维护依据读取失败", invalid);
     }

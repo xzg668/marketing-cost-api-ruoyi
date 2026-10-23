@@ -78,7 +78,7 @@ class FinanceFactorPublicationIntegrationTest {
         MountableFile.forClasspathResource("db/V318__technical_factor_source_reference.sql"),
         "/tmp/technical-source.sql");
     for (String name :
-        List.of("V325__finance_effective_price.sql", "V326__original_workbook_source.sql", "V330__scrap_price_monthly.sql"))
+        List.of("V325__finance_effective_price.sql", "V326__original_workbook_source.sql", "V330__scrap_price_monthly.sql", "V332__settlement_price_versions.sql", "V341__settlement_effective_price.sql"))
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/" + name), "/tmp/" + name);
     var dataSource =
         new DriverManagerDataSource(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
@@ -126,6 +126,8 @@ class FinanceFactorPublicationIntegrationTest {
     script("/tmp/V325__finance_effective_price.sql");
     script("/tmp/V326__original_workbook_source.sql");
     script("/tmp/V330__scrap_price_monthly.sql");
+    script("/tmp/V332__settlement_price_versions.sql");
+    script("/tmp/V341__settlement_effective_price.sql");
     service = service(sources);
   }
 
@@ -805,7 +807,8 @@ class FinanceFactorPublicationIntegrationTest {
         transactions,
         com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceTestSupport.service(
             effectiveSessions, new ObjectMapper().findAndRegisterModules()),
-            com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.service(effectiveSessions, transactions, new ObjectMapper().findAndRegisterModules()));
+            com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.service(effectiveSessions, transactions, new ObjectMapper().findAndRegisterModules()),
+            com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceTestSupport.service(effectiveSessions, new ObjectMapper().findAndRegisterModules()));
   }
 
   private static FactorPriceScope scope(String org, String scheme, Condition condition) {

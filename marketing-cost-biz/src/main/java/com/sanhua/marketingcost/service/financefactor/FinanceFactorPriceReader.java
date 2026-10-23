@@ -133,6 +133,18 @@ public class FinanceFactorPriceReader {
     private final Map<SnapshotKey, FactorPriceSnapshot> values = new LinkedHashMap<>();
   }
 
+  public java.util.SortedSet<String> publishedMonths(String businessUnit, String organization) {
+    return batches.selectList(Wrappers.lambdaQuery(FactorUploadBatch.class)
+        .select(FactorUploadBatch::getPriceMonth)
+        .eq(FactorUploadBatch::getBusinessUnitType, businessUnit)
+        .eq(FactorUploadBatch::getPriceOrgCode, organization)
+        .eq(FactorUploadBatch::getImportType, "FINANCE_BASE")
+        .eq(FactorUploadBatch::getStatus, "PUBLISHED")
+        .isNotNull(FactorUploadBatch::getPublicationRevision)
+        .isNotNull(FactorUploadBatch::getPublishedAt)).stream().map(FactorUploadBatch::getPriceMonth)
+        .collect(java.util.stream.Collectors.toCollection(java.util.TreeSet::new));
+  }
+
   private FactorPriceSnapshot readPublication(
       FinanceFactorImportContext context,
       Condition condition,

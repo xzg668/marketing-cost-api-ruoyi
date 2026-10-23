@@ -56,6 +56,13 @@ public class SettlementPriceController {
     return CommonResult.success(prices.history(new SettlementScope(unit(), row.getPriceMonth()), row.getMaterialCode(), row.getPriceType()));
   }
 
+  @GetMapping("/{id}/effective-history")
+  @PreAuthorize("@ss.hasPermi('price:settlement:list')")
+  public CommonResult<List<SettlementPriceQuery.MonthlyRevision>> effectiveHistory(@PathVariable long id,
+      @RequestParam String priceMonth) {
+    return CommonResult.success(query.history(new SettlementScope(unit(), priceMonth), id));
+  }
+
   @GetMapping("/{id}/original")
   @PreAuthorize("@ss.hasPermi('price:settlement:list')")
   public ResponseEntity<byte[]> original(@PathVariable long id) {

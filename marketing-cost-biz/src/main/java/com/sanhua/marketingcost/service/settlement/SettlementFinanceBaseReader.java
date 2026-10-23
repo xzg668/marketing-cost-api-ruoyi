@@ -14,6 +14,8 @@ public class SettlementFinanceBaseReader {
 
   public SettlementFinanceBaseReader(FinanceFactorPriceReader finance) { this.finance = finance; }
 
+  public java.util.SortedSet<String> publishedMonths(String unit) { return finance.publishedMonths(unit, "210"); }
+
   public Optional<SettlementBasePrice> effective(SettlementScope scope) {
     try {
       var context = new FinanceFactorImportContext(scope.businessUnitType(), "210", scope.priceMonth(), null, null);

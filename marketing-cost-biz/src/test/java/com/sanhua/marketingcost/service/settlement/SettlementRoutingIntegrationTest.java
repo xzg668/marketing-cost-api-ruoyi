@@ -36,6 +36,8 @@ class SettlementRoutingIntegrationTest extends OriginalPricingIntegrationTestBas
   @Autowired ObjectMapper json;
   @Autowired List<PriceResolver> resolvers;
   @Autowired SettlementPriceRepository prices;
+  @Autowired SettlementEffectivePriceService effectivePrices;
+  @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
   @Autowired SettlementRuleRevisionFactory ruleRevisions;
   @Autowired MaterialPricePriorityService priorities;
   private static final Path ARCHIVE;
@@ -52,6 +54,7 @@ class SettlementRoutingIntegrationTest extends OriginalPricingIntegrationTestBas
     for (String table : List.of("lp_price_linked_item", "lp_price_range_item", "lp_price_fixed_item", "lp_material_price_type"))
       jdbc.update("DELETE FROM " + table + " WHERE material_code='203240646'");
     jdbc.update("DELETE FROM lp_price_linked_calc_item WHERE oa_no='STP-ROUTE'");
+    jdbc.update("DELETE FROM lp_settlement_effective_price");
     jdbc.update("DELETE FROM lp_settlement_price");
     jdbc.update("DELETE FROM lp_settlement_base_price");
     byte[] bytes;
@@ -82,6 +85,7 @@ class SettlementRoutingIntegrationTest extends OriginalPricingIntegrationTestBas
     fiveSources();
     var rule = prices.effective(new SettlementScope("COMMERCIAL", "2026-10"), "203240646", SettlementPriceType.SETTLE_LINKED).getFirst();
     SettlementRuleTestSupport.legacyWeights(prices, ruleRevisions, rule, "1", "1");
+    new org.springframework.transaction.support.TransactionTemplate(transactions).execute(status -> effectivePrices.generate("COMMERCIAL", "test-fixture"));
     jdbc.update("UPDATE lp_settlement_price SET expression='broken expression' WHERE material_code='203240646' AND revision_no=2");
     var scope = new MaterialPricePriorityService.Scope("COMMERCIAL", "2026-11", "210", "203240646");
     priorities.initialize(scope, "测试");
@@ -118,6 +122,7 @@ class SettlementRoutingIntegrationTest extends OriginalPricingIntegrationTestBas
     fixed.setId(null);
     fixed.setMaterialCode("203240646");
     prices.insert(fixed);
+    new org.springframework.transaction.support.TransactionTemplate(transactions).execute(status -> effectivePrices.generate("COMMERCIAL", "test-fixture"));
     jdbc.update("""
         INSERT INTO lp_price_linked_item(business_unit_type,org_code,material_code,pricing_month,
           rule_status,source_kind,formula_expr,effective_from,created_at,updated_at)

@@ -38,9 +38,7 @@ public class SettlementPriceCalculator {
     if (!rule.isWeightsConfirmed() || rule.getCopperWeightG() == null || rule.getZincWeightG() == null)
       throw new CalculationException("SETTLEMENT_WEIGHTS_MISSING", "结算联动价原稿铜锌重量不完整，请修正原稿后重新导入：" + rule.getMaterialCode());
     boolean roundedFormula = SettlementFormula.ROUNDED_VERSION.equals(rule.getFormulaVersion());
-    if (!(roundedFormula ? SettlementFormula.ROUNDED_EXPRESSION.equals(rule.getExpression())
-        : SettlementFormula.VERSION.equals(rule.getFormulaVersion()) && SettlementFormula.EXPRESSION.equals(rule.getExpression())))
-      throw new CalculationException("SETTLEMENT_FORMULA_INVALID", "结算公式版本或表达式无效：" + rule.getMaterialCode());
+    validateFormula(rule);
     nonnegative(rule.getPlannedPrice(), "计划价");
     nonnegative(rule.getBudgetCu(), "预算铜价");
     nonnegative(rule.getBudgetZn(), "预算锌价");
@@ -62,6 +60,13 @@ public class SettlementPriceCalculator {
     if (numerator.signum() < 0) throw invalid("结算公式计算得到负价格，请核查计划价、重量及基价");
     return new Calculation(mode, rounded(numerator.divide(denominator,
         roundedFormula ? 4 : UNIT_PRICE_SCALE, RoundingMode.HALF_UP)));
+  }
+
+  public void validateFormula(SettlementPriceRecord rule) {
+    boolean roundedFormula = SettlementFormula.ROUNDED_VERSION.equals(rule.getFormulaVersion());
+    if (!(roundedFormula ? SettlementFormula.ROUNDED_EXPRESSION.equals(rule.getExpression())
+        : SettlementFormula.VERSION.equals(rule.getFormulaVersion()) && SettlementFormula.EXPRESSION.equals(rule.getExpression())))
+      throw new CalculationException("SETTLEMENT_FORMULA_INVALID", "结算公式版本或表达式无效：" + rule.getMaterialCode());
   }
 
   private BigDecimal rounded(BigDecimal value) {

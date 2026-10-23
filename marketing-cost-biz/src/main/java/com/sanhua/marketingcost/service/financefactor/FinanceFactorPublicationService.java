@@ -33,6 +33,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** 预检不写库；确认时在一个事务中保存整个财务发布及所有来源，已发布行只追加修订。 */
 @Service
 public class FinanceFactorPublicationService {
+  private final com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceService settlementPrices;
   private final FinanceFactorWorkbookParser parser;
   private final FactorCanonicalKeyService canonicalKeys;
   private final FactorIdentityMapper identities;
@@ -55,7 +56,9 @@ public class FinanceFactorPublicationService {
       ObjectMapper json,
       PlatformTransactionManager transactions,
       com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService effectivePrices,
-      com.sanhua.marketingcost.service.scrap.ScrapPriceGenerationService scrapPrices) {
+      com.sanhua.marketingcost.service.scrap.ScrapPriceGenerationService scrapPrices,
+      com.sanhua.marketingcost.service.settlement.SettlementEffectivePriceService settlementPrices) {
+    this.settlementPrices = settlementPrices;
     this.parser = parser;
     this.canonicalKeys = canonicalKeys;
     this.identities = identities;
@@ -127,6 +130,7 @@ public class FinanceFactorPublicationService {
       try {
         return transaction.execute(
             status -> {
+              if ("210".equals(context.priceOrgCode())) settlementPrices.lock(context.businessUnitType());
               List<FactorIdentity> catalog =
                   new ArrayList<>(identities.lockForFinancePublication(context.businessUnitType()));
               FactorUploadBatch previous = latest(context);
@@ -173,6 +177,7 @@ public class FinanceFactorPublicationService {
         effectivePrices.generateScope(context.businessUnitType(), context.priceOrgCode());
     if ("210".equals(context.priceOrgCode()))
       scrapPrices.refreshInTransaction(context.businessUnitType(), context.priceMonth(), operator);
+    if ("210".equals(context.priceOrgCode())) settlementPrices.generate(context.businessUnitType(), operator);
     return new Publication(
         publication.batchId(),
         publication.revision(),

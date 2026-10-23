@@ -49,6 +49,7 @@ class SettlementImportIntegrationTest extends OriginalPricingIntegrationTestBase
 
   @BeforeEach void clearSettlement() {
     jdbc.execute("DROP TRIGGER IF EXISTS stp_reject_import");
+    jdbc.update("DELETE FROM lp_settlement_effective_price");
     jdbc.update("DELETE FROM lp_settlement_price");
     jdbc.update("DELETE FROM lp_settlement_base_price");
   }

@@ -51,6 +51,12 @@ public class SettlementPriceRepository {
     return result;
   }
 
+  public List<SettlementPriceRecord> generationRules(String unit) {
+    return jdbc.query("SELECT ranked.* FROM (SELECT p.*,ROW_NUMBER() OVER (PARTITION BY material_code,price_type,price_month "
+        + "ORDER BY revision_no DESC) ranking FROM lp_settlement_price p WHERE business_unit_type=:unit AND active=1) ranked "
+        + "WHERE ranking=1 ORDER BY price_month,material_code,price_type", Map.of("unit", unit), ROW);
+  }
+
   private List<SettlementPriceRecord> selectHeads(SettlementScope scope, boolean activeOnly,
       Collection<String> codes, SettlementPriceType type) {
     var parameters = new MapSqlParameterSource("bu", scope.businessUnitType()).addValue("month", scope.priceMonth());

@@ -24,6 +24,8 @@ import org.springframework.test.context.DynamicPropertySource;
 @Tag("integration")
 class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTestBase {
   @Autowired SettlementPriceReader reader;
+  @Autowired SettlementEffectivePriceService effectivePrices;
+  @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
   @Autowired SettlementPriceQuery query;
   @Autowired SettlementPriceImportService imports;
   @Autowired SettlementPriceRepository prices;
@@ -43,9 +45,10 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
   private final SettlementScope october = new SettlementScope("COMMERCIAL", "2026-10");
 
   @BeforeEach void importedOriginal() throws Exception {
+    jdbc.update("DELETE FROM lp_settlement_effective_price");
+    jdbc.update("DELETE FROM lp_settlement_price");
     SettlementFinanceTestSupport.clear(jdbc);
     SettlementFinanceTestSupport.publish(finance, october, "104.526", "24.51");
-    jdbc.update("DELETE FROM lp_settlement_price");
     jdbc.update("DELETE FROM lp_settlement_base_price");
     byte[] bytes;
     try (var input = getClass().getResourceAsStream("/settlement/original-20261017.xls")) { bytes = input.readAllBytes(); }
@@ -118,6 +121,8 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
     jdbc.update("UPDATE lp_settlement_price SET expression='bad formula' WHERE material_code='203240646' AND revision_no=2");
     var malformed = reader.resolve(request);
     assertThat(malformed.failureCode()).isEqualTo("SETTLEMENT_FORMULA_INVALID");
+    assertThatThrownBy(() -> SettlementFinanceTestSupport.publish(finance, october, "104.526", "24.51"))
+        .hasMessageContaining("结算公式版本或表达式无效");
     assertThat(malformed.hasBlockingFailure()).isTrue();
     assertThat(malformed.unitPrice()).isNull();
   }
@@ -127,18 +132,18 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
     var countedJdbc = new JdbcTemplate(data);
     var countedBases = org.mockito.Mockito.spy(bases);
     var counted = new SettlementPriceReaderImpl(new SettlementPriceRepository(countedJdbc),
-        countedBases, new SettlementPriceCalculator(), json);
+        countedBases, new SettlementPriceCalculator(), new SettlementEffectivePriceRepository(new JdbcTemplate(data)), new SettlementPriceEvidence(json));
     List<SettlementPriceRequest> requests = new ArrayList<>();
     for (int i = 0; i < 100; i++) for (String code : List.of("203240646", "203259534", "203240247", "203240446", "201200143", "721250136"))
       requests.add(request(code, "2026-11", i % 2 == 0 ? "210" : "220", SettlementPriceType.SETTLE_LINKED));
     var given = counted.resolveBatch(requests);
     assertThat(given).hasSize(12);
-    assertThat(data.selects).hasSize(1);
+    assertThat(data.selects).hasSize(2);
     assertThat(data.selects.getFirst()).contains("lp_settlement_price").doesNotContain("lp_settlement_base_price");
     confirmSampleWeights();
     data.selects.clear();
     var calculated = counted.resolveBatch(requests);
-    assertThat(data.selects).hasSize(1);
+    assertThat(data.selects).hasSize(2);
     org.mockito.Mockito.verify(countedBases, org.mockito.Mockito.times(1)).effective(org.mockito.ArgumentMatchers.any());
     calculated.forEach((request, result) -> assertThat(reader.resolve(request)).isEqualTo(result));
     assertThat(calculated.get(request("203240646", "2026-11", "210", SettlementPriceType.SETTLE_LINKED)).unitPrice())
@@ -167,7 +172,9 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
 
   @Test void maintenanceDecimalsRoundTripWithoutJavascriptPrecisionLoss() {
     confirmSampleWeights();
-    jdbc.update("UPDATE lp_settlement_price SET copper_weight_g=123456789.123456789012 WHERE material_code='203240646' AND revision_no=2");
+    var prior = prices.effective(october, "203240646", SettlementPriceType.SETTLE_LINKED).getFirst();
+    SettlementRuleTestSupport.legacyWeights(prices, ruleRevisions, prior, "123456789.123456789012", "1.48");
+    new org.springframework.transaction.support.TransactionTemplate(transactions).execute(status -> effectivePrices.generate("COMMERCIAL", "test-fixture"));
     var result = query.list(october, "203240646", null).getFirst();
     assertThat(result.rule().path("copperWeightG").isTextual()).isTrue();
     assertThat(result.rule().path("copperWeightG").asText()).isEqualTo("123456789.123456789012");
@@ -186,15 +193,16 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
       prices.insert(row); codes.add(row.getMaterialCode());
       for (String org : List.of("210", "220")) requests.add(request(row.getMaterialCode(), "2026-11", org, row.getPriceType()));
     }
+    new org.springframework.transaction.support.TransactionTemplate(transactions).execute(status -> effectivePrices.generate("COMMERCIAL", "test-fixture"));
     var data = new CountingDataSource(jdbc.getDataSource());
     var countedBases = org.mockito.Mockito.spy(bases);
     var counted = new SettlementPriceReaderImpl(new SettlementPriceRepository(new JdbcTemplate(data)),
-        countedBases, new SettlementPriceCalculator(), json);
+        countedBases, new SettlementPriceCalculator(), new SettlementEffectivePriceRepository(new JdbcTemplate(data)), new SettlementPriceEvidence(json));
     jdbc.queryForList("ANALYZE TABLE lp_settlement_price");
     long start = System.nanoTime();
     var result = counted.resolveBatch(requests);
     long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
-    assertThat(result).hasSize(2000); assertThat(data.selects).hasSize(1);
+    assertThat(result).hasSize(2000); assertThat(data.selects).hasSize(2);
     org.mockito.Mockito.verify(countedBases, org.mockito.Mockito.times(1)).effective(org.mockito.ArgumentMatchers.any());
     result.forEach((request, price) -> assertThat(price.unitPrice()).isEqualByComparingTo(
         request.priceType() == SettlementPriceType.SETTLE_LINKED ? "4.841024707965" : "4.1658"));
@@ -204,13 +212,14 @@ class SettlementPriceReaderIntegrationTest extends OriginalPricingIntegrationTes
     var indexes = jdbc.queryForList("SHOW INDEX FROM lp_settlement_price");
     assertThat(indexes).anySatisfy(index -> assertThat(index.get("Column_name")).isEqualTo("material_code"));
     System.out.println("STP_PERFORMANCE " + json.writeValueAsString(java.util.Map.of(
-        "distinctMaterials", 1000, "requests", 2000, "ruleQueries", 1, "baseQueries", 1,
+        "distinctMaterials", 1000, "requests", 2000, "ruleQueries", 1, "resultQueries", 1, "baseQueries", 1,
         "elapsedMs", elapsedMs, "plan", plan, "indexes", indexes)));
   }
 
   private void confirmSampleWeights() {
     var row = prices.effective(october, "203240646", SettlementPriceType.SETTLE_LINKED).getFirst();
     SettlementRuleTestSupport.legacyWeights(prices, ruleRevisions, row, "7.8", "1.48");
+    new org.springframework.transaction.support.TransactionTemplate(transactions).execute(status -> effectivePrices.generate("COMMERCIAL", "test-fixture"));
   }
 
   private static class CountingDataSource extends DelegatingDataSource {
