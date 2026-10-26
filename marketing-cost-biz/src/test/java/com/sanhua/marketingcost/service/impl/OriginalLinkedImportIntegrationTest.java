@@ -68,6 +68,7 @@ class OriginalLinkedImportIntegrationTest {
       MYSQL.copyFileToContainer(MountableFile.forClasspathResource("db/" + name), "/tmp/" + name);
     var data =
         new DriverManagerDataSource(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
+    new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(new org.springframework.core.io.ClassPathResource("monthly-pricing/ods-price-source-schema.sql")).execute(data);
     transactions = new DataSourceTransactionManager(data);
     var config = new MybatisConfiguration();
     config.setMapUnderscoreToCamelCase(true);
@@ -138,7 +139,7 @@ class OriginalLinkedImportIntegrationTest {
   void financialRevisionSelectionIgnoresFutureHistoryAndOtherOrganizations() throws Exception {
     var revisions =
         new CostInputRevisionServiceImpl(
-            new org.springframework.jdbc.core.JdbcTemplate(transactions.getDataSource()));
+            new org.springframework.jdbc.core.JdbcTemplate(transactions.getDataSource()), (ignoredForm, ignoredItem, ignoredMonth) -> com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope.unprepared());
     var org = java.util.Set.of("210");
     String a = revisions.financePublicationRevision("COMMERCIAL", "2026-10", org);
     publishFinance("CU_100000");

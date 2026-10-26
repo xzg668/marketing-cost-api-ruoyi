@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.sanhua.marketingcost.entity.BomCostingRow;
+import com.sanhua.marketingcost.service.pricing.monthly.MonthlyQuotationBomPricing;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -64,6 +65,11 @@ final class BomCostingRowAggregation {
   }
 
   private static void merge(BomCostingRow target, BomCostingRow source) {
+    if (target.getCurrentSubRefs() != null && source.getCurrentSubRefs() != null) {
+      var refs = new ArrayList<>(target.getCurrentSubRefs());
+      refs.addAll(source.getCurrentSubRefs());
+      target.setCurrentSubRefs(refs);
+    }
     target.setQtyPerParent(add(target.getQtyPerParent(), source.getQtyPerParent()));
     target.setQtyPerTop(add(target.getQtyPerTop(), source.getQtyPerTop()));
     target.setSubtreeCostRequired(maxFlag(target.getSubtreeCostRequired(), source.getSubtreeCostRequired()));
@@ -116,7 +122,8 @@ final class BomCostingRowAggregation {
       String topProductCode,
       String materialCode,
       String periodMonth,
-      java.time.LocalDate asOfDate) {
+      java.time.LocalDate asOfDate,
+      String householdOccurrence) {
 
     static Key of(BomCostingRow row) {
       return new Key(
@@ -125,7 +132,11 @@ final class BomCostingRowAggregation {
           normalize(row.getTopProductCode()),
           normalize(row.getMaterialCode()),
           normalize(row.getPeriodMonth()),
-          row.getAsOfDate());
+          row.getAsOfDate(),
+          // 家用按原始路径截断子树；采用计划与来源引用不能被普通同料号聚合丢失。
+          (MonthlyQuotationBomPricing.HOUSEHOLD_ROW.equals(row.getSettlementRowType())
+              || !row.getHouseholdChildPaths().isEmpty())
+              ? normalize(row.getPath()) : null);
     }
 
     private static String normalize(String value) {

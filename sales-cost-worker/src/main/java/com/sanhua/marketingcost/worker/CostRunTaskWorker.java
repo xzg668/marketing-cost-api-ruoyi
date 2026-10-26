@@ -62,11 +62,13 @@ public class CostRunTaskWorker {
       log.debug("cost run worker disabled");
       return 0;
     }
+    Set<CostRunTaskScene> scenes = properties.getScenes();
+    if (scenes.isEmpty()) return 0;
     String workerId = properties.resolvedWorkerId();
     List<CostRunTask> tasks =
         taskClaimService.claimTasks(
             workerId,
-            properties.getScenes(),
+            scenes,
             properties.getClaimBatchSize(),
             properties.getLockTimeoutMinutes());
     if (tasks.isEmpty()) {

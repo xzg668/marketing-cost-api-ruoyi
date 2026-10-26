@@ -119,10 +119,17 @@ class ProductCostingPipelineImplTest {
   @Test
   void preparationChecksCurrentSourcesWithoutCreatingAnyCostVersion() {
     stubReadyStages(0);
+    var preview = new QuotePricePrepareWorkbenchResponse();
+    preview.setReadiness(PricePrepareReadinessResult.ready(null, MONTH, "SUCCESS"));
+    when(priceService.checkPriceSources(anyString(), anyLong(), any())).thenReturn(preview);
     var result = pipeline.prepare(request(false));
     assertThat(result.getPipelineStatus()).isEqualTo("READY");
     assertThat(result.getSourceRevision()).isNotBlank();
     assertThat(result.getCostVersionId()).isNull();
+    assertThat(result.getPricePrepareNo()).isNull();
+    verify(priceService).checkPriceSources(anyString(), anyLong(), any());
+    verify(priceService, never()).generate(anyString(), anyLong(), any());
+    verify(stateService, never()).bindCurrentPriceFingerprint(anyString(), anyLong(), anyString(), anyString());
     verify(costService, never()).runToSuccess(anyString(), anyLong(), any(), anyString());
   }
 

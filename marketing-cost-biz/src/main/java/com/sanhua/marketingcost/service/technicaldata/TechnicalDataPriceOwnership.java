@@ -30,7 +30,7 @@ public class TechnicalDataPriceOwnership {
   @Transactional(propagation = Propagation.MANDATORY)
   public void require(long moduleId, String businessUnit, List<TechnicalDataPriceRequirement> requirements) {
     // 所有入口按料号排序加锁，两个产品含多项相同料号时保持同一锁序。
-    for (var item : requirements.stream().filter(r -> "MISSING".equals(r.status()))
+    for (var item : requirements.stream().filter(TechnicalDataPriceRequirement::requiresEntry)
         .sorted(java.util.Comparator.comparing(TechnicalDataPriceRequirement::materialNo)).toList()) {
       jdbc.update("""
           INSERT INTO lp_quote_tech_price_claim(material_code,owner_module_id,organization_code,business_unit_type,price_unit,currency)

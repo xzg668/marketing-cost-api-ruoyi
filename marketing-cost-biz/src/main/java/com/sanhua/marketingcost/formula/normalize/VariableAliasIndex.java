@@ -63,8 +63,20 @@ public class VariableAliasIndex {
    * 构建过程只读不写，出错（冲突别名）直接抛异常让调用方决定是否继续。
    */
   public synchronized void refresh() {
+    if (priceVariableMapper == null) throw new IllegalStateException("Captured aliases cannot be refreshed from current sources");
     List<PriceVariable> rows = priceVariableMapper.selectList(
         Wrappers.lambdaQuery(PriceVariable.class).eq(PriceVariable::getStatus, "active"));
+    rebuild(rows);
+  }
+
+  /** Uses the same alias/trie policy with already captured active variable rows. */
+  public static VariableAliasIndex captured(List<PriceVariable> rows) {
+    var result = new VariableAliasIndex(null);
+    result.rebuild(List.copyOf(rows));
+    return result;
+  }
+
+  private void rebuild(List<PriceVariable> rows) {
     TrieNode newRoot = new TrieNode();
     // 记录每个别名字符串已经绑定的 variable_code，用于冲突检测
     Map<String, String> aliasOwner = new HashMap<>();

@@ -168,66 +168,6 @@ class MarketFactorRangePriceRegressionIsolationTest {
   }
 
   @Test
-  @DisplayName("固定价/联动价/结算价路由不受 RANGE Resolver 注册顺序影响")
-  void typedResolverDispatchKeepsFixedLinkedAndSettleIsolatedFromRangeResolver() {
-    MaterialPriceRouterService routerService = mock(MaterialPriceRouterService.class);
-    LinkedPriceEnsureService linkedEnsureService = mock(LinkedPriceEnsureService.class);
-    PriceResolver rangeResolver = resolver(PriceTypeEnum.RANGE);
-    PriceResolver linkedResolver = resolver(PriceTypeEnum.LINKED);
-    PriceResolver fixedResolver = resolver(PriceTypeEnum.FIXED);
-    NormalMaterialPricePrepareStrategyImpl strategy =
-        new NormalMaterialPricePrepareStrategyImpl(
-            routerService,
-            linkedEnsureService,
-            List.of(rangeResolver, linkedResolver, fixedResolver), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceReader.class));
-    PriceTypeRoute settleRoute = route("MAT-MIX", PriceTypeEnum.FIXED, "结算价");
-    PriceTypeRoute linkedRoute = route("MAT-MIX", PriceTypeEnum.LINKED, "联动价");
-    PriceTypeRoute rangeRoute = route("MAT-MIX", PriceTypeEnum.RANGE, "区间价");
-    when(routerService.prepareCandidates(eq("MAT-MIX"), any(), eq("2026-05"), any(LocalDate.class), any(), any()))
-        .thenReturn(List.of(settleRoute, linkedRoute, rangeRoute));
-    when(linkedEnsureService.ensure(any())).thenReturn(new LinkedPriceEnsureResult());
-    when(fixedResolver.resolve(
-            eq("OA-MIX"),
-            any(CostRunPartItemDto.class),
-            eq(settleRoute),
-            any(CostRunContext.class)))
-        .thenReturn(PriceResolveResult.miss("结算固定价无记录"));
-    when(linkedResolver.resolve(
-            eq("OA-MIX"),
-            any(CostRunPartItemDto.class),
-            eq(linkedRoute),
-            any(CostRunContext.class)))
-        .thenReturn(PriceResolveResult.hit(new BigDecimal("7.000000"), "联动价"));
-    when(rangeResolver.resolve(any(), any(), any(), any()))
-        .thenReturn(PriceResolveResult.hit(new BigDecimal("99.000000"), "区间价"));
-
-    NormalMaterialPricePrepareResult result =
-        strategy.prepare("OA-MIX", "COMMERCIAL", "2026-05", planItem("MAT-MIX", "2"));
-
-    assertThat(PriceTypeEnum.fromDbText("结算价")).contains(PriceTypeEnum.FIXED);
-    assertThat(result.getStatus()).isEqualTo("READY");
-    assertThat(result.getUnitPrice()).isEqualByComparingTo("7.000000");
-    assertThat(result.getAmount()).isEqualByComparingTo("14.000000");
-    assertThat(result.getResultRefType()).isEqualTo("LINKED_PRICE");
-    InOrder order = inOrder(fixedResolver, linkedResolver);
-    order
-        .verify(fixedResolver)
-        .resolve(
-            eq("OA-MIX"),
-            any(CostRunPartItemDto.class),
-            eq(settleRoute),
-            any(CostRunContext.class));
-    order
-        .verify(linkedResolver)
-        .resolve(
-            eq("OA-MIX"),
-            any(CostRunPartItemDto.class),
-            eq(linkedRoute),
-            any(CostRunContext.class));
-    verify(rangeResolver, never()).resolve(any(), any(), any(), any());
-  }
-
-  @Test
   @DisplayName("批量 FACTOR 导入校验失败不会插入新版本或污染旧版本")
   void failedFactorImportDoesNotPolluteExistingVersions() {
     PriceRangeItemMapper itemMapper = mock(PriceRangeItemMapper.class);
@@ -256,12 +196,6 @@ class MarketFactorRangePriceRegressionIsolationTest {
     verifyNoInteractions(ruleMapper);
     verify(itemMapper, never()).insert(any(PriceRangeItem.class));
     verify(itemMapper, never()).updateById(any(PriceRangeItem.class));
-  }
-
-  private static PriceResolver resolver(PriceTypeEnum priceType) {
-    PriceResolver resolver = mock(PriceResolver.class);
-    when(resolver.priceType()).thenReturn(priceType);
-    return resolver;
   }
 
   private static CostRunPartItemDto part(String code, String qty) {
@@ -316,25 +250,6 @@ class MarketFactorRangePriceRegressionIsolationTest {
     return context;
   }
 
-  private static PricePreparePlanItem planItem(String materialCode, String quantity) {
-    BomCostingRow row = new BomCostingRow();
-    row.setPriceOrgCode("210");
-    row.setMaterialOrganizationCode("COMMERCIAL");
-    row.setOaNo("OA-MIX");
-    row.setTopProductCode("TOP-001");
-    row.setMaterialCode(materialCode);
-    row.setMaterialName(materialCode + "-name");
-    row.setShapeAttr("采购件");
-    row.setQtyPerTop(new BigDecimal(quantity));
-    PricePreparePlanItem item = new PricePreparePlanItem();
-    item.setBomRow(row);
-    item.setTopProductCode(row.getTopProductCode());
-    item.setMaterialCode(materialCode);
-    item.setMaterialName(row.getMaterialName());
-    item.setItemType("NORMAL");
-    item.setStatus("READY");
-    return item;
-  }
 
   private static PriceRangeItem qtyRange(
       String materialCode, String low, String high, String price) {

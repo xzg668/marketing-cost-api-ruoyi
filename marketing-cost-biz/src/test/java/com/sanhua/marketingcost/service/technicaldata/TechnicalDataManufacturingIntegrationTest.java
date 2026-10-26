@@ -30,7 +30,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Tag("integration")
 @Transactional
-class TechnicalDataManufacturingIntegrationTest extends BomMapperTestBase {
+class TechnicalDataManufacturingIntegrationTest extends com.sanhua.marketingcost.db.OriginalPricingIntegrationTestBase {
   private static final TechnicalDataActor WANG = new TechnicalDataActor(101L, "王工", Set.of("technical:data:task:edit"));
   private static final TechnicalDataActor LI = new TechnicalDataActor(102L, "李工", Set.of("technical:data:task:edit"));
   private static final TechnicalDataActor ADMIN = new TechnicalDataActor(1L, "管理员", Set.of("*:*:*"));
@@ -48,6 +48,8 @@ class TechnicalDataManufacturingIntegrationTest extends BomMapperTestBase {
   @Autowired private TechnicalDataManufacturingBomSource manufacturingBom;
   @Autowired private com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper drawingVersions;
   @Autowired private com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingMaterialResolutionService resolution;
+  @Autowired private com.sanhua.marketingcost.service.MakePartPricePrepareStrategy monthlyManufacturing;
+  @Autowired private com.sanhua.marketingcost.mapper.BomCostingRowMapper costingRows;
   @MockBean private ElectronicDrawingU9SubBomPort u9;
   private Long taskId, productId, itemId, sourceId;
   private String key;
@@ -159,6 +161,44 @@ class TechnicalDataManufacturingIntegrationTest extends BomMapperTestBase {
     var viewed = service.read(productId, null, WANG);
     assertThat(viewed.editable()).isFalse(); assertThat(viewed.issues()).isEmpty();
     assertThat(viewed.saved()).isEqualTo(saved.saved());
+  }
+
+  @Test void monthlyManufacturingPreviewKeepsGramPurchasesAndKilogramScrapInTheirActualUnits() {
+    String scrap = key + "-SCRAP";
+    jdbc.update("UPDATE lp_material_master_raw SET unit='克' WHERE material_code=? AND organization_code='COMMERCIAL'", key + "-RAW");
+    jdbc.update("INSERT INTO lp_price_fixed_item(org_code,material_code,material_name,unit,fixed_price,tax_included,supplier_code,effective_from,effective_to,business_unit_type,source_kind,source_type,source_system,created_at,updated_at) "
+        + "VALUES('210',?,'gram purchase','克',0.066,0,'MPP12-S','2026-09-01','2027-01-01','COMMERCIAL','PUBLIC','PURCHASE_FIXED','SRM',NOW(),NOW())",key+"-RAW");
+    jdbc.update("INSERT INTO lp_scrap_price(business_unit_type,price_month,material_code,material_name,price_type,fixed_price,factor_bindings_json,origin_type,rule_source_month,content_hash,created_by,created_at,updated_by,updated_at) "
+        + "VALUES('COMMERCIAL','2026-09',?,'kg scrap','FIXED',5,'{}','IMPORT','2026-09',?,'MPP12',NOW(),'MPP12',NOW())",scrap,"e".repeat(64));
+    jdbc.update("INSERT INTO lp_material_scrap_ref(material_code,scrap_code,scrap_unit,ratio,business_unit_type,created_at,updated_at) VALUES(?,?,'克',1,'COMMERCIAL',NOW(),NOW())",key+"-RAW",scrap);
+    confirmC();
+    var saved = service.save(productId, request(service.read(productId, null, WANG), true), WANG);
+    assertThat(saved.issues()).isEmpty();
+    var source = jdbc.queryForMap("SELECT path,qty_per_top FROM lp_quote_bom_supplement_detail WHERE supplement_version_id=? AND material_code=? ORDER BY line_no LIMIT 1",sourceId,key+"-B");
+    var date = LocalDateTime.of(2026,9,24,12,0);
+    var parent = new BomCostingRow(); parent.setOaNo(key); parent.setOaFormItemId(itemId); parent.setTopProductCode(key);
+    parent.setMaterialCode(key+"-B"); parent.setMaterialName("technical parent"); parent.setUnit("只"); parent.setPath(source.get("path").toString());
+    parent.setQtyPerTop((BigDecimal)source.get("qty_per_top")); parent.setQtyPerParent(parent.getQtyPerTop()); parent.setPriceOrgCode("210");
+    parent.setMaterialOrganizationCode("COMMERCIAL"); parent.setBusinessUnitType("COMMERCIAL"); parent.setPeriodMonth("2026-09");
+    parent.setBuildBatchId(key); parent.setBuiltAt(date); parent.setAsOfDate(date.toLocalDate()); parent.setBomPurpose("主制造");
+    parent.setIsCostingRow(1); parent.setRawVersionEffectiveFrom(date.toLocalDate()); parent.setSubtreeCostRequired(1);
+    parent.setSettlementRowType("MAKE_PARENT"); parent.setShapeAttr("制造件"); parent.setLevel(1); costingRows.insert(parent);
+    var plan = new com.sanhua.marketingcost.dto.priceprepare.PricePreparePlanItem(); plan.setBomRow(parent);
+    plan.setMaterialCode(parent.getMaterialCode()); plan.setItemType("MAKE"); plan.setStatus("READY");
+    var scenario = com.sanhua.marketingcost.service.PricePrepareScenarioContext.oaLocked(itemId,"210");
+    var calculated = monthlyManufacturing.calculate(key,"COMMERCIAL","2026-09",date,scenario,plan);
+    assertThat(calculated.getStatus()).as(calculated.getMessage()).isEqualTo("READY");
+    assertThat(calculated.getUnitPrice()).isEqualByComparingTo("0.782");
+    assertThat(calculated.getAmount()).isEqualByComparingTo("3.128");
+    var uses = scenario.monthlyPrices().get().plan().uses();
+    assertThat(uses).hasSize(2);
+    var rawUse = uses.stream().filter(use -> use.request().family().materialCode().equals(key+"-RAW")).findFirst().orElseThrow();
+    var scrapUse = uses.stream().filter(use -> use.request().family().materialCode().equals(scrap)).findFirst().orElseThrow();
+    assertThat(rawUse.request().family().unit()).isEqualTo("克");
+    assertThat(rawUse.cumulativeQuantity()).isEqualByComparingTo("48");
+    assertThat(scrapUse.request().family().unit()).isEqualTo("KG");
+    assertThat(scrapUse.cumulativeQuantity()).isEqualByComparingTo("0.008");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code IN (?,?)",Integer.class,key+"-RAW",scrap)).isZero();
   }
 
   private void confirmC() {

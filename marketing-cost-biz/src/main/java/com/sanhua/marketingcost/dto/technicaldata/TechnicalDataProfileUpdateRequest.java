@@ -12,6 +12,7 @@ public final class TechnicalDataProfileUpdateRequest {
   private String unitToolingFee;
   private String unitMouldFee;
   private String unitCertificationFee;
+  private String unitDepreciationFee;
   private Integer expectedVersion;
   private String plateMaterial;
   private String expectedPlateMaterialRevision;
@@ -27,6 +28,8 @@ public final class TechnicalDataProfileUpdateRequest {
   public void setUnitMouldFee(String value) { unitMouldFee = value; }
   public String getUnitCertificationFee() { return unitCertificationFee; }
   public void setUnitCertificationFee(String value) { unitCertificationFee = value; }
+  public String getUnitDepreciationFee() { return unitDepreciationFee; }
+  public void setUnitDepreciationFee(String value) { unitDepreciationFee = value; }
   public Integer getExpectedVersion() { return expectedVersion; }
   public void setExpectedVersion(Integer value) { expectedVersion = value; }
   public String getPlateMaterial() { return plateMaterial; }

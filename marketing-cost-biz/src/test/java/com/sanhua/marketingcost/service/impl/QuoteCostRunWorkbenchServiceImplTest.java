@@ -80,6 +80,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
   private QuoteCuAdjustmentCalcService cuAdjustmentCalcService;
   private QuoteCostingWorkspaceService workspaceService;
   private QuoteCostRunWorkbenchServiceImpl service;
+  private com.sanhua.marketingcost.service.JjbExportService sheetExporter;
 
   @BeforeAll
   static void initTableInfo() {
@@ -127,6 +128,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     prepareResult.setPeriodMonth(CURRENT_PERIOD);
     prepareResult.setStatus("SUCCESS");
     when(pricePrepareService.generate(any())).thenReturn(prepareResult);
+    sheetExporter = mock(com.sanhua.marketingcost.service.JjbExportService.class);
     service =
         new QuoteCostRunWorkbenchServiceImpl(
             oaFormMapper,
@@ -138,7 +140,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
             readinessService,
             versionNoGenerator,
             cuAdjustmentCalcService,
-            workspaceService);
+            workspaceService, null, mockSheetReader(), sheetExporter);
   }
 
   @AfterEach
@@ -258,7 +260,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
             versionNoGenerator,
             cuAdjustmentCalcService,
             workspaceService,
-            inputRevisionService);
+            inputRevisionService, mockSheetReader(), sheetExporter);
     QuoteCostRunVersion version = version(90L, "RUNNING-3", "RUNNING", "TOP-A");
     stubCalculation(version, "123.450000");
     when(inputRevisionService.currentRevision(
@@ -294,7 +296,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
             versionNoGenerator,
             cuAdjustmentCalcService,
             workspaceService,
-            revisions);
+            revisions, mockSheetReader(), sheetExporter);
     stubCalculation(version(90L, "RUNNING-3", "RUNNING", "TOP-A"), "123.450000");
     var prepared = PricePrepareReadinessResult.ready("PPR-1", CURRENT_PERIOD, "SUCCESS");
     prepared.setSourceRevision("prepared-input");
@@ -445,7 +447,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
   @Test
   @DisplayName("历史版本按 versionId 定向读取并返回完整冻结汇总")
   void getCostRunReadsHistoricalVersionSnapshot() {
-    QuoteCostRunVersion selected = version(88L, "TRIAL-HISTORY", "VOIDED", "TOP-A");
+    QuoteCostRunVersion selected = version(88L, "TRIAL-HISTORY", "VOIDED", "TOP-OLD");
     selected.setPricingMonth("2026-05");
     selected.setVersionNo("COST-HISTORY-V1");
     selected.setFinanceCuPrice(new BigDecimal("90.00000000"));
@@ -467,6 +469,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     var response = service.getCostRun("OA-001", 101L, null, 88L);
 
     assertThat(response.getPeriodMonth()).isEqualTo("2026-05");
+    assertThat(response.getProductCode()).isEqualTo("TOP-OLD");
     assertThat(response.getCurrentDisplayVersion().getId()).isEqualTo(88L);
     assertThat(response.getCurrentDisplayVersion().getFinanceCuPricePerTon())
         .isEqualByComparingTo("90000.00000000");
@@ -496,51 +499,15 @@ class QuoteCostRunWorkbenchServiceImplTest {
   }
 
   @Test
-  @DisplayName("导出按 versionId 读取冻结快照，不重复导出第五步Cu差异")
+  @DisplayName("工作台将明确版本交给统一导出服务，不重复查询或计算")
   void exportReadsVersionRows() throws Exception {
-    QuoteCostRunVersion version = version(88L, "TRIAL-1", "CONFIRMED", "TOP-A");
-    version.setVersionNo("COST-1");
-    version.setBusinessUnitType("COMMERCIAL");
-    version.setFinanceCuPrice(new BigDecimal("90.00000000"));
-    version.setOaCuPrice(new BigDecimal("102.03900000"));
-    version.setFinanceMaterialCost(new BigDecimal("261.12800000"));
-    version.setOaMaterialCost(new BigDecimal("285.20600000"));
-    version.setCuMaterialAdjustment(new BigDecimal("24.07800000"));
-    version.setTotalCost(new BigDecimal("123.45"));
-    version.setFinalQuoteAmount(new BigDecimal("147.52800000"));
-    version.setOaPricePrepareNo("PPR-OA-OLD");
-    version.setFinancePricePrepareNo("PPR-FIN-OLD");
-    when(versionMapper.selectById(88L)).thenReturn(version);
-    CostRunPartItem part = new CostRunPartItem();
-    part.setPartCode("PART-1");
-    part.setPartName("部品1");
-    part.setAmount(new BigDecimal("10"));
-    when(partItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(part));
-    CostRunCostItem cost = new CostRunCostItem();
-    cost.setCostCode("TOTAL");
-    cost.setCostName("不含税总成本");
-    cost.setAmount(new BigDecimal("123.45"));
-    when(costItemMapper.selectList(any(Wrapper.class))).thenReturn(List.of(cost));
     ByteArrayOutputStream out = new ByteArrayOutputStream();
-
-    int rows = service.exportVersion("OA-001", 101L, 88L, out);
-
-    assertThat(rows).isEqualTo(3);
-    try (var workbook = WorkbookFactory.create(new ByteArrayInputStream(out.toByteArray()))) {
-      assertThat(workbook.getNumberOfSheets()).isEqualTo(3);
-      assertThat(workbook.getSheet("汇总").getRow(7).getCell(1).getStringCellValue())
-          .isEqualTo("90000.00000000");
-      assertThat(workbook.getSheet("汇总").getRow(11).getCell(1).getStringCellValue())
-          .isEqualTo("24.07800000");
-      assertThat(workbook.getSheet("汇总").getRow(13).getCell(1).getStringCellValue())
-          .isEqualTo("147.52800000");
-      assertThat(workbook.getSheet("成本部品").getRow(1).getCell(0).getStringCellValue())
-          .isEqualTo("PART-1");
-      assertThat(workbook.getSheet("成本项目").getRow(1).getCell(0).getStringCellValue())
-          .isEqualTo("TOTAL");
-      assertThat(workbook.getSheet("Cu材料费差异")).isNull();
-    }
+    when(sheetExporter.exportVersion("OA-001", 101L, 88L, out)).thenReturn(17);
+    assertThat(service.exportVersion("OA-001", 101L, 88L, out)).isEqualTo(17);
+    verify(sheetExporter).exportVersion("OA-001", 101L, 88L, out);
     verify(cuAdjustmentCalcService, never()).calculate(any());
+    verify(partItemMapper, never()).selectList(any(Wrapper.class));
+    verify(costItemMapper, never()).selectList(any(Wrapper.class));
   }
 
   private static OaForm form() {
@@ -585,6 +552,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
     version.setId(id);
     version.setCostRunNo(costRunNo);
     version.setOaNo("OA-001");
+    version.setBusinessUnitType("COMMERCIAL");
     version.setOaFormItemId(101L);
     version.setProductCode(productCode);
     version.setPricingMonth(CURRENT_PERIOD);
@@ -665,5 +633,10 @@ class QuoteCostRunWorkbenchServiceImplTest {
     item.setCostName("不含税总成本");
     item.setAmount(new BigDecimal(amount));
     return item;
+  }
+  private static com.sanhua.marketingcost.service.jjb.JjbReadService mockSheetReader() {
+    var reader = mock(com.sanhua.marketingcost.service.jjb.JjbReadService.class);
+    when(reader.read(any(), any(), any())).thenReturn(new com.sanhua.marketingcost.service.jjb.JjbReadService.View(null, List.of(), List.of()));
+    return reader;
   }
 }

@@ -10,6 +10,8 @@ import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.service.pricing.PriceFactorContext;
 import com.sanhua.marketingcost.service.pricing.PriceResolveEvidence;
 import com.sanhua.marketingcost.service.pricing.SupplierPriceSelectionService;
+import com.sanhua.marketingcost.service.pricing.monthly.MonthlyPreparationPrice;
+import com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec;
 import java.math.BigDecimal;
 import java.util.Map;
 import org.springframework.stereotype.Component;
@@ -19,6 +21,7 @@ import org.springframework.stereotype.Component;
 public class ScrapPriceCalculationEvidence {
   public static final String SOURCE = "SCRAP_PRICE";
   private static final ObjectMapper SOURCE_READER = new ObjectMapper();
+  private static final MonthlyPriceDocumentCodec MONTHLY_DOCUMENTS = new MonthlyPriceDocumentCodec(SOURCE_READER);
   private final ObjectMapper json;
   private final ScrapPriceRuleCodec rules;
   private final ScrapPriceCalculator calculator;
@@ -136,7 +139,16 @@ public class ScrapPriceCalculationEvidence {
     // 只是价源识别；真正读取时仍做完整结构与金额校验。
     if (encoded == null || !encoded.contains(SOURCE)) return false;
     try {
-      return SOURCE.equals(SOURCE_READER.readTree(encoded).path("priceSource").asText());
+      var snapshot = SOURCE_READER.readTree(encoded);
+      if (snapshot.path("document").isTextual()) {
+        var input = SOURCE_READER.readTree(snapshot.path("document").asText());
+        if (MonthlyPreparationPrice.KIND.equals(input.path("sourceKind").asText())) {
+          var captured = MONTHLY_DOCUMENTS.decode(encoded, MonthlyPreparationPrice.class);
+          return SOURCE.equals(SOURCE_READER.readTree(captured.selection().fact().evidence().json())
+              .path("sourceKind").asText());
+        }
+      }
+      return SOURCE.equals(snapshot.path("priceSource").asText());
     } catch (JsonProcessingException error) {
       throw new IllegalArgumentException("废料价格快照损坏", error);
     }

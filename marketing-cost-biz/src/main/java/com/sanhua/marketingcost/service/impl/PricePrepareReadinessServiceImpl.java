@@ -267,9 +267,9 @@ public class PricePrepareReadinessServiceImpl implements PricePrepareReadinessSe
     List<PricePrepareItem> items =
         itemMapper.selectList(
             Wrappers.<PricePrepareItem>lambdaQuery()
+                .select(PricePrepareItem::getStatus)
                 .eq(PricePrepareItem::getPrepareNo, prepareNo)
-                .eq(PricePrepareItem::getCurrentFlag, 1)
-                .orderByAsc(PricePrepareItem::getId));
+                .eq(PricePrepareItem::getCurrentFlag, 1));
     int readyCount =
         (int)
             (items == null ? List.<PricePrepareItem>of() : items)

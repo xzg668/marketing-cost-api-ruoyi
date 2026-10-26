@@ -8,6 +8,7 @@ import lombok.Setter;
 @Getter
 @Setter
 public class CostRunTraceListResponse {
+  private com.sanhua.marketingcost.dto.jjb.JjbReadModel sheet;
   private Long costRunVersionId;
   private String costRunNo;
   private String versionNo;

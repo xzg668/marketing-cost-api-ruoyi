@@ -269,7 +269,7 @@ class CostRunCostItemServiceImplTest {
         original.packageTotalAmount(), original.auxiliaryTotalAmount(), original.salaryTotalAmount(),
         original.packageItems(), original.auxiliaryItems(), original.salaryItems(),
         new EffectiveTechnicalDataInput.ProductFees(true, new BigDecimal("0.10"),
-            new BigDecimal("0.30"), new BigDecimal("0.05"), "CNY"), original.netLossRate()));
+            new BigDecimal("0.30"), new BigDecimal("0.05"), "CNY", new BigDecimal("1.234567"), 2), original.netLossRate()));
     var withFees = svc.listByMaterialCodes(form.getOaNo(), formItem.getMaterialNo(),
         Set.of(formItem.getMaterialNo()), context, null, false, ignored -> {});
     assertThat(findItem(withFees, "OTHER_EXP_TECH_TOOLING").getAmount()).isEqualByComparingTo("0.10");
@@ -279,7 +279,7 @@ class CostRunCostItemServiceImplTest {
     assertThat(findItem(withFees, "MATERIAL").getAmount()).isEqualByComparingTo(material.getAmount());
     assertThat(findItem(withFees, "LOSS").getBaseAmount()).isEqualByComparingTo(findItem(items, "LOSS").getBaseAmount());
     assertThat(findItem(withFees, "TOTAL").getAmount().subtract(findItem(withoutFees, "TOTAL").getAmount()))
-        .isEqualByComparingTo("0.45");
+        .isEqualByComparingTo("1.684567");
     var withFeesInput = context.getEffectiveTechnicalData();
     for (String materialValue : List.of("水氟SUS304", "水氟316L", "氟氟SUS304", "氟氟316L", "水水SUS304", "水水316L")) {
       context.setEffectiveTechnicalData(new EffectiveTechnicalDataInput(
@@ -310,13 +310,15 @@ class CostRunCostItemServiceImplTest {
     var withPublicFee = svc.listByMaterialCodes(form.getOaNo(), formItem.getMaterialNo(),
         Set.of(formItem.getMaterialNo()), context, null, false, ignored -> {});
     assertThat(withPublicFee).filteredOn(row -> "模具费".equals(row.getCostName()))
-        .singleElement().satisfies(row -> assertThat(row.getAmount()).isEqualByComparingTo("0.70"));
+        .singleElement().satisfies(row -> assertThat(row.getAmount()).isEqualByComparingTo("0.30"));
     assertThat(findItem(withPublicFee, "TOTAL").getAmount().subtract(findItem(withoutFees, "TOTAL").getAmount()))
-        .isEqualByComparingTo("0.85");
+        .isEqualByComparingTo("1.684567");
     publicMouldFee.setExpenseAmount(null);
-    org.assertj.core.api.Assertions.assertThatThrownBy(() -> svc.listByMaterialCodes(
-        form.getOaNo(), formItem.getMaterialNo(), Set.of(formItem.getMaterialNo()), context, null, false, ignored -> {}))
-        .hasMessageContaining("公共模具费金额异常");
+    var ignoredPublicFee = svc.listByMaterialCodes(form.getOaNo(), formItem.getMaterialNo(),
+        Set.of(formItem.getMaterialNo()), context, null, false, ignored -> {});
+    assertThat(findItem(ignoredPublicFee, "TOTAL").getAmount()).isEqualByComparingTo(findItem(withFees, "TOTAL").getAmount());
+    assertThat(findItem(withFees, "OTHER_EXP_TECH_DEPRECIATION").getAmount()).isEqualByComparingTo("1.234567");
+    assertThat(withoutFees).noneMatch(row -> row.getCostCode().startsWith("OTHER_EXP_TECH_"));
     verifyNoInteractions(effectiveMapper, auxMapper);
   }
 

@@ -26,8 +26,9 @@ class TechnicalDataPriceRequirementsTest {
   private final QuoteTechnicalDataRepository repository = mock(QuoteTechnicalDataRepository.class);
   private final TechnicalDataTaskRepository tasks = mock(TechnicalDataTaskRepository.class);
   private final TechnicalDataVersionContentCodec content = mock(TechnicalDataVersionContentCodec.class);
+  private final JdbcTemplate jdbc = mock(JdbcTemplate.class);
   private final TechnicalDataPriceRequirements service = new TechnicalDataPriceRequirements(preparation, prices, materials,
-      repository, tasks, content, new OaMessageCodec(new ObjectMapper().findAndRegisterModules()), mock(JdbcTemplate.class));
+      repository, tasks, content, new OaMessageCodec(new ObjectMapper().findAndRegisterModules()), jdbc);
   private final QuoteTechTask task = new QuoteTechTask();
   private final QuoteTechProduct product = new QuoteTechProduct();
   private final QuoteTechDataVersion draft = new QuoteTechDataVersion();
@@ -68,6 +69,30 @@ class TechnicalDataPriceRequirementsTest {
     when(content.solder(draft)).thenReturn(solder());
     var second=service.checkModuleReferences(task,product);
     assertThat(second.items()).isEmpty(); assertThat(second.fingerprint()).isNotEqualTo(first.fingerprint());
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+  void onlyOriginalOwnedPriceRemainsEditableAfterMonthlyPriceResolvesTheGap(boolean owned) {
+    product.setLatestSubmittedVersionId(3L);
+    var module = module("PRICE"); module.setId(4L); module.setModuleStatus("RETURNED");
+    when(tasks.findModules(2L)).thenReturn(List.of(module));
+    String key = new OaMessageCodec(new ObjectMapper()).canonicalHash(List.of("PART", "210", "COMMERCIAL", "只", "CNY"));
+    when(content.prices(draft)).thenReturn(new Prices(List.of(new PriceItem(key, "PART", "210", "只", "CNY",
+        "FIXED", new BigDecimal("13.75"), null, null, null, null, null, null))));
+    when(jdbc.queryForObject(anyString(), eq(Integer.class), eq("PART"), eq(4L), eq("210"), eq("COMMERCIAL"), eq("只"), eq("CNY")))
+        .thenReturn(owned ? 1 : 0);
+    when(prices.calculateMaterialUnitPrice(anyString(), any(), any(), any(), any(), any(), any(), any()))
+        .thenReturn(MakePartMaterialPriceResolveResult.ok("PART", "MONTHLY_PRICE", new BigDecimal("13.75"), "已采用", null));
+    var rows = service.check(task, product).items();
+    if (owned) assertThat(rows).singleElement().satisfies(row -> {
+      assertThat(row.status()).isEqualTo("REVISION"); assertThat(row.requiresEntry()).isTrue();
+      assertThat(row.unitPrice()).isEqualByComparingTo("13.75");
+      assertThat(row.message()).contains("月价保持不变");
+    });
+    else assertThat(rows).isEmpty();
+    assertThat(service.checkModuleReferences(task, product).items()).isEmpty();
+    verify(preparation, never()).generate(any());
   }
 
   @Test void packagePriceCheckPreservesQuoteItemAndPriceOrganizationAcrossBusinessUnits() {

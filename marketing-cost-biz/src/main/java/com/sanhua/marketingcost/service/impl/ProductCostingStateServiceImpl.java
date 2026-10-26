@@ -31,18 +31,23 @@ public class ProductCostingStateServiceImpl implements ProductCostingStateServic
   private final PricePrepareItemMapper priceItemMapper;
   private final QuoteCostingWorkspaceService workspaceService;
   private final QuoteCostingInputFingerprintService fingerprintService;
+  private final com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec monthlyCodec;
+  private final com.sanhua.marketingcost.service.pricing.monthly.MonthlyPreparationEvidence monthlyEvidence;
 
   public ProductCostingStateServiceImpl(
       OaFormMapper formMapper,
       OaFormItemMapper itemMapper,
       PricePrepareItemMapper priceItemMapper,
       QuoteCostingWorkspaceService workspaceService,
-      QuoteCostingInputFingerprintService fingerprintService) {
+      QuoteCostingInputFingerprintService fingerprintService,
+      com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec monthlyCodec) {
     this.formMapper = formMapper;
     this.itemMapper = itemMapper;
     this.priceItemMapper = priceItemMapper;
     this.workspaceService = workspaceService;
     this.fingerprintService = fingerprintService;
+    this.monthlyCodec = monthlyCodec;
+    this.monthlyEvidence = new com.sanhua.marketingcost.service.pricing.monthly.MonthlyPreparationEvidence(monthlyCodec);
   }
 
   @Override
@@ -90,8 +95,8 @@ public class ProductCostingStateServiceImpl implements ProductCostingStateServic
                 item.getPackageQty() == null ? null : item.getPackageQty().toPlainString(),
                 item.getProductAttr(),
                 item.getBusinessType(),
-                // 上一阶段输入指纹已包含 BOM来源、规则和替代料选择；将其作为本层稳定输入。
-                workspace.getInputFingerprint(),
+                // 冻结的有效变体已包含替代料选择；反复绑定不能再次散列上次最终指纹。
+                workspace.getBomSourceFingerprint(),
                 workspace.getBomRuleFingerprint(),
                 List.of(),
                 references,
@@ -195,6 +200,12 @@ public class ProductCostingStateServiceImpl implements ProductCostingStateServic
   }
 
   private String priceEvidence(PricePrepareItem price) {
+    var monthly = monthlyEvidence.read(price);
+    if (monthly != null) {
+      return monthlyCodec.unwrap(monthlyCodec.encode(java.util.List.of(
+          text(price.getSettlementKey()), text(price.getMaterialCode()), text(price.getQuantity()),
+          text(price.getUnitPrice()), com.sanhua.marketingcost.service.pricing.monthly.MonthlyPreparationFingerprint.of(monthly))));
+    }
     return String.join(
         "|",
         text(price.getSettlementKey()),

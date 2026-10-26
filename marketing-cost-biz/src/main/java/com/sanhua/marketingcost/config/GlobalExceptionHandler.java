@@ -126,6 +126,12 @@ public class GlobalExceptionHandler {
                 ex.getMessage() == null ? "数据已被修改，请刷新后重试" : ex.getMessage());
     }
 
+    @ExceptionHandler(com.sanhua.marketingcost.service.jjb.CostVersionRequiredException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public CommonResult<Void> handleCostVersionRequired(com.sanhua.marketingcost.service.jjb.CostVersionRequiredException ex) {
+        return CommonResult.error(HttpStatus.CONFLICT.value(), ex.getMessage());
+    }
+
     @ExceptionHandler(com.sanhua.marketingcost.service.EffectiveTechnicalDataException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public CommonResult<Void> handleTechnicalData(com.sanhua.marketingcost.service.EffectiveTechnicalDataException ex) {

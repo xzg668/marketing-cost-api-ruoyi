@@ -1584,7 +1584,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
         "costName", cost.getCostName(),
         "baseAmount", cost.getBaseAmount(),
         "rate", cost.getRate(),
-        "amount", cost.getAmount(),
+        "amount", costTraceAmount(cost),
         "sourceTable", cost.getSourceTable(),
         "sourceId", cost.getSourceId(),
         "sourceType", costSourceType(cost),
@@ -1598,7 +1598,10 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
     boolean technical = "QUOTE_TECH_EFFECTIVE_VERSION".equals(costSourceType(cost));
     String formula;
     String display;
-    if (technical && costCode != null && costCode.startsWith("AUX_TECH_")) {
+    if (technical && isProductFee(costCode)) {
+      formula = "effectiveProfile.unitFee";
+      display = "单件费用 = 本次有效产品资料单件金额（不乘除数量或属性系数）";
+    } else if (technical && costCode != null && costCode.startsWith("AUX_TECH_")) {
       formula = "sum(approvedAuxiliary.amount by subjectCode)";
       display = "辅料费 = 同一二级科目编码的已审批金额之和";
     } else if (COST_MATERIAL.equals(costCode)) {
@@ -1665,7 +1668,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
         "costName", trimToNull(cost.getCostName()),
         "baseAmount", cost.getBaseAmount(),
         "rate", cost.getRate(),
-        "amount", cost.getAmount(),
+        "amount", costTraceAmount(cost),
         "sourceTable", cost.getSourceTable(),
         "sourceId", cost.getSourceId(),
         "sourceDescription", costSourceDescription(trimToNull(cost.getCostCode())),
@@ -1680,7 +1683,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
         "displayFormula", formula.get("displayFormula"),
         "baseAmount", cost.getBaseAmount(),
         "rate", cost.getRate(),
-        "amount", cost.getAmount(),
+        "amount", costTraceAmount(cost),
         "sourceTable", cost.getSourceTable(),
         "sourceId", cost.getSourceId(),
         "sourceDescription", costSourceDescription(costCode),
@@ -1771,7 +1774,7 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
         "costName", item.getCostName(),
         "baseAmount", item.getBaseAmount(),
         "rate", item.getRate(),
-        "amount", item.getAmount(),
+        "amount", costTraceAmount(item),
         "sourceTable", item.getSourceTable(),
         "sourceId", item.getSourceId(),
         "category", item.getCategory(),
@@ -1780,7 +1783,19 @@ public class CostRunTraceSnapshotBuilderImpl implements CostRunTraceSnapshotBuil
         "remark", item.getRemark());
   }
 
+  private boolean isProductFee(String costCode) {
+    return java.util.Arrays.stream(com.sanhua.marketingcost.dto.costing.ProductFeeCode.values())
+        .anyMatch(fee -> fee.costCode().equals(costCode));
+  }
+
+  private Object costTraceAmount(CostRunCostItem item) {
+    // Keep the permitted 12+6 digits intact when browser readers parse embedded JSON.
+    return isProductFee(item.getCostCode()) && item.getAmount() != null
+        ? item.getAmount().toPlainString() : item.getAmount();
+  }
+
   private String costSourceDescription(String costCode) {
+    if (isProductFee(costCode)) return "本次有效 PROFILE 单件费用";
     if (COST_DIRECT_LABOR.equals(costCode)) {
       return "CMS直接人工工资有效来源";
     }

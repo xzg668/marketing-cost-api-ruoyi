@@ -20,6 +20,39 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 class CostInputRevisionServiceImplTest {
 
+  @Test
+  void adoptedPriceRevisionIgnoresMutablePriceSourcesButStillTracksProductInputs() {
+    var jdbc = mock(JdbcTemplate.class);
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL)).thenReturn(checksums(100L));
+    var service = new CostInputRevisionServiceImpl(jdbc, (form, item, month) ->
+        new com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope("saved-price-17", java.util.Set.of(), java.util.Set.of(), true));
+    var form = form();
+    var item = item(11L, "P-1");
+    var original = service.currentRevision(form, item, "2026-10");
+    when(jdbc.queryForList("SELECT * FROM `lp_price_fixed_item` WHERE material_code IN (?) ORDER BY id", "M1"))
+        .thenReturn(List.of(Map.of("fixed_price", 999)));
+    assertThat(service.currentRevision(form, item, "2026-10")).isEqualTo(original);
+    verify(jdbc, org.mockito.Mockito.never()).queryForList(CostInputRevisionServiceImpl.PRIORITY_SCOPES_SQL, 11L, "2026-10", 11L, "2026-10");
+    assertThat(CostInputRevisionServiceImpl.SOURCE_TABLES).doesNotContain("lp_supplier_supply_ratio");
+    item.setPackageQty(new BigDecimal("2.5"));
+    assertThat(service.currentRevision(form, item, "2026-10")).isNotEqualTo(original);
+    item.setPackageQty(null);
+    form.setCopperPrice(new BigDecimal("98000"));
+    assertThat(service.currentRevision(form, item, "2026-10")).isNotEqualTo(original);
+  }
+
+  @Test
+  void unadoptedHouseholdOrRatioAvailabilityChangesTheRevision() {
+    var jdbc = mock(JdbcTemplate.class);
+    when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL)).thenReturn(checksums(100L));
+    var service = new CostInputRevisionServiceImpl(jdbc, (form, item, month) ->
+        new com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope("missing", java.util.Set.of("M1"), java.util.Set.of(), true));
+    var original = service.currentRevision(form(), item(11L, "P-1"), "2026-10");
+    when(jdbc.queryForList("SELECT * FROM `lp_supplier_supply_ratio` WHERE business_unit_type=? AND material_code IN (?) ORDER BY id", "COMMERCIAL", "M1"))
+        .thenReturn(List.of(Map.of("id", 1, "supply_ratio", 1)));
+    assertThat(service.currentRevision(form(), item(11L, "P-1"), "2026-10")).isNotEqualTo(original);
+  }
+
   private static List<Map<String, Object>> checksums(long value) {
     return CostInputRevisionServiceImpl.SOURCE_TABLES.stream()
         .map(table -> Map.<String, Object>of("Table", "test." + table, "Checksum", value)).toList();
@@ -28,7 +61,7 @@ class CostInputRevisionServiceImplTest {
   @Test void incompleteSourceCheckCannotBeTreatedAsAValidRevision() {
     var jdbc = mock(JdbcTemplate.class);
     when(jdbc.queryForList(anyString())).thenReturn(List.of());
-    assertThatThrownBy(() -> new CostInputRevisionServiceImpl(jdbc).currentRevision(form(), item(11L, "P-1")))
+    assertThatThrownBy(() -> new CostInputRevisionServiceImpl(jdbc, (ignoredForm, ignoredItem, ignoredMonth) -> com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope.unprepared()).currentRevision(form(), item(11L, "P-1")))
         .isInstanceOf(IllegalStateException.class).hasMessageContaining("公共核算资料校验失败");
   }
 
@@ -38,7 +71,7 @@ class CostInputRevisionServiceImplTest {
     when(jdbcTemplate.queryForList(anyString()))
         .thenAnswer(
             invocation -> checksums(100L));
-    CostInputRevisionServiceImpl service = new CostInputRevisionServiceImpl(jdbcTemplate);
+    CostInputRevisionServiceImpl service = new CostInputRevisionServiceImpl(jdbcTemplate, (ignoredForm, ignoredItem, ignoredMonth) -> com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope.unprepared());
     OaForm form = form();
     OaFormItem item = item(11L, "P-1");
 
@@ -62,7 +95,7 @@ class CostInputRevisionServiceImplTest {
     when(jdbcTemplate.queryForList(
             CostInputRevisionServiceImpl.MATERIAL_CODES_SQL, String.class, 12L, null, 12L, null))
         .thenReturn(List.of("B-M"));
-    CostInputRevisionServiceImpl service = new CostInputRevisionServiceImpl(jdbcTemplate);
+    CostInputRevisionServiceImpl service = new CostInputRevisionServiceImpl(jdbcTemplate, (ignoredForm, ignoredItem, ignoredMonth) -> com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope.unprepared());
 
     Map<Long, String> revisions =
         service.currentRevisions(form(), List.of(item(11L, "P-1"), item(12L, "P-2")));
@@ -87,9 +120,9 @@ class CostInputRevisionServiceImplTest {
     var missing =
         new EffectiveTechnicalDataException(
             "TECH_DATA_EFFECTIVE_VERSION_MISSING", 11L, "2026-08", List.of("PACKAGE"), "包装未生效");
-    when(technical.effectiveFingerprint(11L, "2026-08")).thenThrow(missing);
-    when(technical.effectiveFingerprint(12L, "2026-08")).thenReturn("TECH-12");
-    var service = new CostInputRevisionServiceImpl(jdbc, provider);
+    when(technical.effectiveNonPriceFingerprint(11L, "2026-08")).thenThrow(missing);
+    when(technical.effectiveNonPriceFingerprint(12L, "2026-08")).thenReturn("TECH-12");
+    var service = new CostInputRevisionServiceImpl(jdbc, provider, (ignoredForm, ignoredItem, ignoredMonth) -> com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope.unprepared());
     var items = List.of(item(11L, "P-1"), item(12L, "P-2"));
 
     var revisions = service.currentRevisions(form(), items, "2026-08");
@@ -100,11 +133,11 @@ class CostInputRevisionServiceImplTest {
     assertThatThrownBy(() -> service.currentRevision(form(), items.get(0), "2026-08"))
         .isSameAs(missing);
 
-    org.mockito.Mockito.doReturn("TECH-11").when(technical).effectiveFingerprint(11L, "2026-08");
+    org.mockito.Mockito.doReturn("TECH-11").when(technical).effectiveNonPriceFingerprint(11L, "2026-08");
     assertThat(service.currentRevisions(form(), items, "2026-08")).containsKeys(11L, 12L);
     org.mockito.Mockito.doThrow(new org.springframework.dao.QueryTimeoutException("DB timeout"))
         .when(technical)
-        .effectiveFingerprint(11L, "2026-08");
+        .effectiveNonPriceFingerprint(11L, "2026-08");
     assertThatThrownBy(() -> service.currentRevisions(form(), items, "2026-08"))
         .isInstanceOf(org.springframework.dao.QueryTimeoutException.class);
   }
@@ -113,7 +146,7 @@ class CostInputRevisionServiceImplTest {
   void changingAnnualPropertyRulesInvalidatesNewCosting() {
     JdbcTemplate jdbc = mock(JdbcTemplate.class);
     when(jdbc.queryForList(anyString())).thenReturn(checksums(100L));
-    var service = new CostInputRevisionServiceImpl(jdbc);
+    var service = new CostInputRevisionServiceImpl(jdbc, (ignoredForm, ignoredItem, ignoredMonth) -> com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope.unprepared());
     var original = service.currentRevision(form(), item(11L, "P-1"));
     when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL))
         .thenReturn(checksums(200L));
@@ -148,7 +181,7 @@ class CostInputRevisionServiceImplTest {
         .thenReturn(
             List.of(Map.of("id", 2L, "material_code", "B-M", "fixed_price", 10)),
             List.of(Map.of("id", 2L, "material_code", "B-M", "fixed_price", 15)));
-    var service = new CostInputRevisionServiceImpl(jdbc);
+    var service = new CostInputRevisionServiceImpl(jdbc, (ignoredForm, ignoredItem, ignoredMonth) -> com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope.unprepared());
     var form = form();
     var items = List.of(item(11L, "A"), item(12L, "B"));
 
@@ -169,7 +202,7 @@ class CostInputRevisionServiceImplTest {
   void downstreamReturnRequiresNewCostOnlyForTheSameQuotationAndMonth() {
     var jdbc = mock(JdbcTemplate.class);
     when(jdbc.queryForList(CostInputRevisionServiceImpl.SOURCE_CHECKSUM_SQL)).thenReturn(checksums(100L));
-    var service = new CostInputRevisionServiceImpl(jdbc);
+    var service = new CostInputRevisionServiceImpl(jdbc, (ignoredForm, ignoredItem, ignoredMonth) -> com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope.unprepared());
     String query =
         "SELECT MAX(id) FROM lp_quote_final_submission WHERE oa_form_id=? AND accounting_month=?"
             + " AND returned_at IS NOT NULL";
@@ -225,7 +258,7 @@ class CostInputRevisionServiceImplTest {
             org.mockito.ArgumentMatchers.any(Object[].class)))
         .thenAnswer(
             invocation -> List.of(Map.of("id", publication.get(), "price_org_code", "210")));
-    var service = new CostInputRevisionServiceImpl(jdbc);
+    var service = new CostInputRevisionServiceImpl(jdbc, (ignoredForm, ignoredItem, ignoredMonth) -> com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope.unprepared());
     var form = form();
     var nativeItem = item(11L, "NATIVE");
     var fixedItem = item(12L, "FIXED");
@@ -282,7 +315,7 @@ class CostInputRevisionServiceImplTest {
             org.mockito.ArgumentMatchers.any(Object[].class)))
         .thenAnswer(
             invocation -> List.of(Map.of("id", publication.get(), "price_org_code", "210")));
-    var service = new CostInputRevisionServiceImpl(jdbc);
+    var service = new CostInputRevisionServiceImpl(jdbc, (ignoredForm, ignoredItem, ignoredMonth) -> com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope.unprepared());
     var form = form();
     var nativeItem = item(11L, "NATIVE");
     var fixedItem = item(12L, "FIXED");
@@ -318,7 +351,7 @@ class CostInputRevisionServiceImplTest {
                         1,
                         "canonical_factor_key",
                         "Cu")));
-    var service = new CostInputRevisionServiceImpl(jdbc);
+    var service = new CostInputRevisionServiceImpl(jdbc, (ignoredForm, ignoredItem, ignoredMonth) -> com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope.unprepared());
     var before = service.financePublicationRevision("COMMERCIAL", "2026-10", null);
     assertThat(service.financePublicationRevision("COMMERCIAL", "2026-10", null)).isEqualTo(before);
     price.set(new BigDecimal("100"));
@@ -355,7 +388,7 @@ class CostInputRevisionServiceImplTest {
             org.mockito.ArgumentMatchers.eq(String.class),
             org.mockito.ArgumentMatchers.any(Object[].class)))
         .thenAnswer(invocation -> month.get());
-    var service = new CostInputRevisionServiceImpl(jdbc);
+    var service = new CostInputRevisionServiceImpl(jdbc, (ignoredForm, ignoredItem, ignoredMonth) -> com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope.unprepared());
     var before = service.currentRevision(form(), item(11L, "P1"), "2026-11");
     month.set("2026-11");
     assertThat(service.currentRevision(form(), item(11L, "P1"), "2026-11")).isNotEqualTo(before);

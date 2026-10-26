@@ -68,12 +68,14 @@ public class QuotePricePreparePartItemProviderImpl implements CostRunPreparedPar
                     PricePrepareItem::getOaFormItemId, context.getOaFormItemId())
                 .eq(StringUtils.hasText(productCode), PricePrepareItem::getTopProductCode, productCode)
                 .eq(StringUtils.hasText(context.getPricingMonth()),
-                    PricePrepareItem::getPeriodMonth, context.getPricingMonth().trim())
-                .orderByAsc(PricePrepareItem::getBomRowId)
-                .orderByAsc(PricePrepareItem::getId));
+                    PricePrepareItem::getPeriodMonth, context.getPricingMonth().trim()));
     if (items == null || items.isEmpty()) {
       throw new IllegalStateException("价格源快照 " + prepareNo + " 缺少部品明细，不能发起报价成本核算");
     }
+    // Full saved evidence can be large; avoid MySQL filesort of JSON documents.
+    items = items.stream().sorted(java.util.Comparator.comparing(PricePrepareItem::getBomRowId,
+        java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder()))
+        .thenComparing(PricePrepareItem::getId)).toList();
 
     Map<Long, BomCostingRow> bomRows = loadBomRows(items);
     Map<String, MaterialMaster> masters = loadMasters(items, bomRows);
@@ -187,6 +189,7 @@ public class QuotePricePreparePartItemProviderImpl implements CostRunPreparedPar
         bomRow == null ? null : bomRow.getMaterialSpec(),
         bomRow == null ? null : bomRow.getMaterialAttribute()));
     dto.setPriceSource(trimToNull(item.getPriceSource()));
+    dto.setMonthlyPricingType(item.getMonthlyPricingType());
     dto.setUnitPrice(item.getUnitPrice());
     dto.setAmount(item.getAmount());
     dto.setRemark(remark(item));

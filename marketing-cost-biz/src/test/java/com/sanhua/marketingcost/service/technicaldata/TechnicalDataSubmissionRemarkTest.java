@@ -21,6 +21,18 @@ class TechnicalDataSubmissionRemarkTest {
   private final TechnicalDataVersionContentCodec codec = new TechnicalDataVersionContentCodec(json);
   private final TechnicalDataSubmissionRemark remarks = new TechnicalDataSubmissionRemark(json);
 
+  @Test void rendersHighPrecisionV2FeeTextInFullAndBriefSubmission() throws Exception {
+    var submission = fixture();
+    submission.setModuleTypesJson("[\"PROFILE\"]");
+    var root = tree(submission);
+    var fee = "999999999900.999999";
+    var fees = TechnicalDataProductFeeRules.parse(null, fee, fee, fee, fee);
+    ((ObjectNode) root.path("supplements")).set("productFees", json.readTree(codec.productFeesJson(fees)));
+    submission.setContentSnapshotJson(root.toString());
+    assertThat(remarks.generate("P1", submission)).contains("工装" + fee, "模具" + fee, "认证" + fee, "折旧" + fee);
+    assertThat(remarks.generateBrief("P1", submission)).contains("工装" + fee, "模具" + fee, "认证" + fee, "折旧" + fee);
+  }
+
   @Test void rendersAllNineModulesFromTheProductionSnapshotFormat() throws Exception {
     var submission = fixture();
     String result = remarks.generate("1053900000078", submission);

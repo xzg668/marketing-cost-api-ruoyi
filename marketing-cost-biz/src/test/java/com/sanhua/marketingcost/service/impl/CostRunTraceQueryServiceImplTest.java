@@ -23,7 +23,7 @@ class CostRunTraceQueryServiceImplTest {
   @Test
   void listByCostRunNoMapsHeaderAndRecordsThroughDataScopedSelectList() {
     CostRunTraceSnapshotMapper mapper = mock(CostRunTraceSnapshotMapper.class);
-    CostRunTraceQueryServiceImpl service = new CostRunTraceQueryServiceImpl(mapper);
+    CostRunTraceQueryServiceImpl service = new CostRunTraceQueryServiceImpl(mapper, reader());
     CostRunTraceSnapshot part = snapshot(11L, "RUN-8", "PART_PRICE", "PART:1");
     part.setMaterialCode("MAT-1");
     part.setMaterialName("不锈钢棒");
@@ -53,7 +53,7 @@ class CostRunTraceQueryServiceImplTest {
   @Test
   void detailRequiresTraceIdToBelongToCostRunNoAndMapsJsonFields() {
     CostRunTraceSnapshotMapper mapper = mock(CostRunTraceSnapshotMapper.class);
-    CostRunTraceQueryServiceImpl service = new CostRunTraceQueryServiceImpl(mapper);
+    CostRunTraceQueryServiceImpl service = new CostRunTraceQueryServiceImpl(mapper, reader());
     CostRunTraceSnapshot row = snapshot(22L, "RUN-8", "PART_PRICE", "PART:2");
     row.setSourceSnapshotJson("{\"source\":\"MAKE_PART\"}");
     row.setFormulaSnapshotJson("{\"formula\":\"grossWeight\"}");
@@ -77,7 +77,7 @@ class CostRunTraceQueryServiceImplTest {
   @Test
   void detailReturnsNullWhenTraceDoesNotBelongToCostRunNoOrIsFilteredByDataScope() {
     CostRunTraceSnapshotMapper mapper = mock(CostRunTraceSnapshotMapper.class);
-    CostRunTraceQueryServiceImpl service = new CostRunTraceQueryServiceImpl(mapper);
+    CostRunTraceQueryServiceImpl service = new CostRunTraceQueryServiceImpl(mapper, reader());
     when(mapper.selectList(any())).thenReturn(List.of());
 
     assertThat(service.getByCostRunNoAndId("RUN-8", 22L)).isNull();
@@ -87,7 +87,7 @@ class CostRunTraceQueryServiceImplTest {
   @Test
   void rejectsBlankCostRunNo() {
     CostRunTraceSnapshotMapper mapper = mock(CostRunTraceSnapshotMapper.class);
-    CostRunTraceQueryServiceImpl service = new CostRunTraceQueryServiceImpl(mapper);
+    CostRunTraceQueryServiceImpl service = new CostRunTraceQueryServiceImpl(mapper, reader());
 
     assertThatThrownBy(() -> service.listByCostRunNo(" "))
         .isInstanceOf(IllegalArgumentException.class)
@@ -110,5 +110,12 @@ class CostRunTraceQueryServiceImplTest {
     snapshot.setCreatedAt(LocalDateTime.of(2026, 6, 18, 10, 0));
     snapshot.setUpdatedAt(LocalDateTime.of(2026, 6, 18, 10, 1));
     return snapshot;
+  }
+  private com.sanhua.marketingcost.service.jjb.JjbReadService reader() {
+    var reader=mock(com.sanhua.marketingcost.service.jjb.JjbReadService.class);
+    var identity=new com.sanhua.marketingcost.dto.jjb.JjbReadModel.Identity(1001L,"RUN-8","V1","OA-1",101L,"P-1","COMMERCIAL","2026-06","COST_V3",null,"SUCCESS",false);
+    var sheet=new com.sanhua.marketingcost.dto.jjb.JjbReadModel(identity,null,List.of(),List.of(),null,List.of());
+    when(reader.byRun(any())).thenReturn(new com.sanhua.marketingcost.service.jjb.JjbReadService.View(sheet,List.of(),List.of()));
+    return reader;
   }
 }

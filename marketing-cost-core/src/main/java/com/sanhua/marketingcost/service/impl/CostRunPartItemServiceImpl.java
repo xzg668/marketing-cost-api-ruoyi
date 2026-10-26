@@ -1098,6 +1098,8 @@ public class CostRunPartItemServiceImpl implements CostRunPartItemService {
       CostRunPartItemDto item) {
     PackagePriceRequest request = new PackagePriceRequest();
     request.setPackageMaterialCode(item.getPartCode().trim());
+    request.setOaFormItemId(context == null ? null : context.getOaFormItemId());
+    request.setSupplierPriceReviewContext(context == null ? null : context.getSupplierPriceReviewContext());
     request.setBusinessUnitType(context == null
         ? com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType() : context.getBusinessUnitType());
     if (context != null) {

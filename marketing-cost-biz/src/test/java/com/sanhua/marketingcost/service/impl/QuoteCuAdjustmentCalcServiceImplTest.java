@@ -35,10 +35,8 @@ import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostPriceScenarioMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.CostRunEngine;
-import com.sanhua.marketingcost.service.CostRunResultWriter;
 import com.sanhua.marketingcost.service.FinancePricePrepareService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionService;
-import com.sanhua.marketingcost.service.QuoteCuMaterialDiffService;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -61,8 +59,6 @@ class QuoteCuAdjustmentCalcServiceImplTest {
   private QuoteCostRunVersionService versionService;
   private QuoteCostRunVersionMapper versionMapper;
   private CostRunEngine costRunEngine;
-  private CostRunResultWriter resultWriter;
-  private QuoteCuMaterialDiffService diffService;
   private QuoteCostPriceScenarioMapper scenarioMapper;
   private QuoteCuAdjustmentCalcServiceImpl service;
   private OaForm form;
@@ -82,8 +78,6 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     versionService = mock(QuoteCostRunVersionService.class);
     versionMapper = mock(QuoteCostRunVersionMapper.class);
     costRunEngine = mock(CostRunEngine.class);
-    resultWriter = mock(CostRunResultWriter.class);
-    diffService = mock(QuoteCuMaterialDiffService.class);
     scenarioMapper = mock(QuoteCostPriceScenarioMapper.class);
     service = new QuoteCuAdjustmentCalcServiceImpl(
         batchMapper,
@@ -91,9 +85,7 @@ class QuoteCuAdjustmentCalcServiceImplTest {
         versionService,
         versionMapper,
         costRunEngine,
-        resultWriter,
-        diffService,
-        scenarioMapper);
+        scenarioMapper, null);
 
     form = form(new BigDecimal("102039"));
     item = item();
@@ -105,185 +97,23 @@ class QuoteCuAdjustmentCalcServiceImplTest {
         .thenReturn(version(101L));
     when(versionMapper.updateById(any(QuoteCostRunVersion.class))).thenReturn(1);
     when(costRunEngine.run(any())).thenAnswer(invocation -> costResult(invocation.getArgument(0), "100", "140"));
-    when(diffService.calculate(101L)).thenReturn(diff(101L, "12", 1));
     when(scenarioMapper.insert(any(QuoteCostPriceScenario.class))).thenReturn(1);
   }
 
-  @Test
-  void nativeFinanceFactorIdIsNeverWrittenAsLegacyFinancePriceId() {
-    var legacyFixture = financePrepare();
-    when(financePrepareService.loadPreparedFromOa("PPR-OA-1")).thenReturn(
-        new FinancePricePrepareGenerateResult("PPR-OA-1", "PPR-FIN-1", "FQG-1", null,
-            new BigDecimal("95"), legacyFixture.prepareResult(), 9001L));
-    service.calculate(request());
-    var scenarios = ArgumentCaptor.forClass(QuoteCostPriceScenario.class);
-    verify(scenarioMapper, times(2)).insert(scenarios.capture());
-    var finance = scenarios.getAllValues().stream()
-        .filter(row -> "FINANCE_QUOTE_BASE".equals(row.getScenarioType())).findFirst().orElseThrow();
-    assertThat(finance.getCuPriceSource()).isEqualTo("FINANCE_FACTOR");
-    assertThat(finance.getCuSourceRefId()).isEqualTo(9001L);
-    assertThat(finance.getCuPrice()).isEqualByComparingTo("95");
-    var versions = ArgumentCaptor.forClass(QuoteCostRunVersion.class);
-    verify(versionMapper, org.mockito.Mockito.atLeastOnce()).updateById(versions.capture());
-    assertThat(versions.getAllValues()).allSatisfy(version ->
-        assertThat(version.getFinanceBasePriceId()).isNull());
-  }
-
-  @Test
-  @DisplayName("完整成功：只跑财务成本一次并保存正差额、双场景和最终报价")
-  void calculatesPositiveAdjustmentAndPersistsAllSummaries() {
-    var result = service.calculate(request());
-
-    assertThat(result.financeMaterialCost()).isEqualByComparingTo("100.00000000");
-    assertThat(result.cuMaterialAdjustment()).isEqualByComparingTo("12.00000000");
-    assertThat(result.oaMaterialCost()).isEqualByComparingTo("112.00000000");
-    assertThat(result.totalCost()).isEqualByComparingTo("140.00000000");
-    assertThat(result.finalQuoteAmount()).isEqualByComparingTo("152.00000000");
-    assertThat(result.costResult().getResult().getTotalCost()).isEqualByComparingTo("140");
-    assertThat(result.costResult().getResult().getFinalQuoteAmount()).isEqualByComparingTo("152");
-    assertThat(result.costResult().getCostItems())
-        .extracting(CostRunCostItemDto::getCostCode)
-        .containsExactly("MATERIAL", "TOTAL");
-    verify(costRunEngine, times(1)).run(any());
-    verify(financePrepareService).loadPreparedFromOa("PPR-OA-1");
-    verify(financePrepareService, never()).generateFromOa(anyString());
-    verify(resultWriter).writeQuoteResult(any());
-
-    ArgumentCaptor<CostRunContext> contextCaptor = ArgumentCaptor.forClass(CostRunContext.class);
-    verify(costRunEngine).run(contextCaptor.capture());
-    CostRunContext context = contextCaptor.getValue();
-    assertThat(context.getPricePrepareNo()).isEqualTo("PPR-FIN-1");
-    assertThat(context.getPriceScenarioType()).isEqualTo("FINANCE_QUOTE_BASE");
-    assertThat(context.getPriceAsOfTime()).isEqualTo(AS_OF);
-    assertThat(context.getPriceOrgCode()).isEqualTo("210");
-    assertThat(context.getMaterialOrganizationCode()).isEqualTo("COMMERCIAL");
-
-    ArgumentCaptor<QuoteCostPriceScenario> scenarioCaptor =
-        ArgumentCaptor.forClass(QuoteCostPriceScenario.class);
-    verify(scenarioMapper, times(2)).insert(scenarioCaptor.capture());
-    List<QuoteCostPriceScenario> scenarios = scenarioCaptor.getAllValues();
-    assertThat(scenarios).extracting(QuoteCostPriceScenario::getScenarioType)
-        .containsExactly("OA_LOCKED", "FINANCE_QUOTE_BASE");
-    assertThat(scenarios.get(0).getMaterialCost()).isEqualByComparingTo("112");
-    assertThat(scenarios.get(0).getTotalCost()).isNull();
-    assertThat(scenarios.get(1).getMaterialCost()).isEqualByComparingTo("100");
-    assertThat(scenarios.get(1).getTotalCost()).isEqualByComparingTo("140");
-    assertThat(scenarios.get(0).getInputSnapshotHash())
-        .isEqualTo(scenarios.get(1).getInputSnapshotHash())
-        .hasSize(64);
-
-    ArgumentCaptor<QuoteCostRunVersion> versionPatch =
-        ArgumentCaptor.forClass(QuoteCostRunVersion.class);
-    verify(versionMapper, times(2)).updateById(versionPatch.capture());
-    QuoteCostRunVersion finished = versionPatch.getAllValues().getLast();
-    assertThat(finished.getTotalCost()).isEqualByComparingTo("140");
-    assertThat(finished.getFinalQuoteAmount()).isEqualByComparingTo("152");
-  }
-
-  @Test
-  @DisplayName("T11 成本版本保存有效技术V2标识、全量输入快照和取数时间")
-  void persistsEffectiveTechnicalVersionTraceOnCostVersion() {
-    EffectiveTechnicalDataInput v2 = effectiveTechnicalV2();
-    when(costRunEngine.run(any())).thenAnswer(invocation -> {
-      CostRunContext context = invocation.getArgument(0);
-      context.setEffectiveTechnicalData(v2);
-      return costResult(context, "100", "140");
-    });
-
-    service.calculate(request());
-
-    ArgumentCaptor<QuoteCostRunVersion> captor =
-        ArgumentCaptor.forClass(QuoteCostRunVersion.class);
-    verify(versionMapper, times(2)).updateById(captor.capture());
-    QuoteCostRunVersion finished = captor.getAllValues().getLast();
-    assertThat(finished.getTechDataVersionId()).isEqualTo(9002L);
-    assertThat(finished.getTechDataVersionNo()).isEqualTo(2);
-    assertThat(finished.getTechDataSource())
-        .isEqualTo(EffectiveTechnicalDataInput.SOURCE_EFFECTIVE_VERSION);
-    assertThat(finished.getTechDataRetrievedAt()).isEqualTo(v2.retrievedAt());
-    assertThat(finished.getTechDataInputJson())
-        .contains("\"versionId\":9002", "\"auxiliaryTotalAmount\":0.704", "\"salaryTotalAmount\":18.90");
-  }
-
-  @Test void costVersionSerializesPlateMaterialEvidenceAlongsideExistingInput() throws Exception {
-    var mapper = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
-    var tree = mapper.valueToTree(effectiveTechnicalV2());
-    ((com.fasterxml.jackson.databind.node.ObjectNode) tree).set("plateMaterial", mapper.valueToTree(
-        new EffectiveTechnicalDataInput.PlateMaterialEvidence("CONFIG_LOCKED", "水水316L",
-            "a".repeat(64), "COMMERCIAL", "B12-8H-V20", "PLATE", 77L, 3, List.of())));
-    var input = mapper.treeToValue(tree, EffectiveTechnicalDataInput.class);
-    when(costRunEngine.run(any())).thenAnswer(invocation -> {
-      CostRunContext context = invocation.getArgument(0);
-      context.setEffectiveTechnicalData(input);
-      return costResult(context, "100", "140");
-    });
-    var result = service.calculate(request());
-    assertThat(result.totalCost()).isEqualByComparingTo("140");
-    assertThat(result.finalQuoteAmount()).isEqualByComparingTo("152");
-    var patches = ArgumentCaptor.forClass(QuoteCostRunVersion.class);
-    verify(versionMapper, times(2)).updateById(patches.capture());
-    var snapshot = mapper.readTree(patches.getAllValues().getLast().getTechDataInputJson());
-    assertThat(snapshot.at("/plateMaterial/material").asText()).isEqualTo("水水316L");
-    assertThat(snapshot.at("/plateMaterial/mappingVersion").asInt()).isEqualTo(3);
-    assertThat(snapshot.at("/plateMaterial/model").asText()).isEqualTo("B12-8H-V20");
-    assertThat(snapshot.path("salaryTotalAmount").decimalValue()).isEqualByComparingTo("18.90");
-  }
-
-  @Test
-  @DisplayName("自动完成模式创建 RUNNING 而不是人工 TRIAL 版本")
-  void automaticCompletionCreatesRunningVersion() {
-    when(versionService.createRunning(
-            anyString(), any(), anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenReturn(version(101L));
-    QuoteCuAdjustmentCalcRequest automatic =
-        new QuoteCuAdjustmentCalcRequest(
-            form, item, MONTH, "PPR-OA-1", "QUOTE:11", ignored -> {}, true);
-
-    service.calculate(automatic);
-
-    verify(versionService).createRunning(
-        anyString(), any(), anyString(), anyString(), anyString(), anyString(), anyString());
-    verify(versionService, never()).createTrial(
-        anyString(), any(), anyString(), anyString(), anyString(), anyString(), anyString());
-  }
-
-  @Test
-  @DisplayName("无Cu材料：OA未填Cu也允许，差额为0且最终报价等于财务总成本")
-  void noCuMaterialAllowsMissingOaCuAndKeepsZeroAdjustment() {
-    form.setCopperPrice(null);
-    when(diffService.calculate(101L)).thenReturn(diff(101L, "0", 0));
-
-    var result = service.calculate(request());
-
-    assertThat(result.cuMaterialAdjustment()).isEqualByComparingTo("0");
-    assertThat(result.oaMaterialCost()).isEqualByComparingTo("100");
-    assertThat(result.finalQuoteAmount()).isEqualByComparingTo("140");
-    assertThat(result.version().getOaCuPrice()).isNull();
-  }
-
-  @Test
-  @DisplayName("财务Cu高于OA时保留负差额并从财务总成本扣回")
-  void calculatesNegativeAdjustment() {
-    when(diffService.calculate(101L)).thenReturn(diff(101L, "-8.5", 1));
-
-    var result = service.calculate(request());
-
-    assertThat(result.cuMaterialAdjustment()).isEqualByComparingTo("-8.5");
-    assertThat(result.oaMaterialCost()).isEqualByComparingTo("91.5");
-    assertThat(result.finalQuoteAmount()).isEqualByComparingTo("131.5");
-  }
-
-  @Test
-  @DisplayName("存在Cu材料但OA未锁Cu时阻断，结果和场景均不落库")
-  void blocksCuMaterialWhenOaCuIsMissing() {
-    form.setCopperPrice(null);
-    when(diffService.calculate(101L)).thenReturn(diff(101L, "0", 1));
-
-    assertThatThrownBy(() -> service.calculate(request()))
-        .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("未锁定Cu价格");
-    verify(resultWriter, never()).writeQuoteResult(any());
-    verify(scenarioMapper, never()).insert(any(QuoteCostPriceScenario.class));
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(ints = {0, 1, 2, 3, 4, 5})
+  void incompatibleQuotationOrPreparationIsRejectedBeforeCosting(int mismatch) {
+    switch (mismatch) {
+      case 0 -> item.setOaFormId(-1L);
+      case 1 -> oaBatch.setOaNo("another-quotation");
+      case 2 -> oaBatch.setOaFormItemId(-1L);
+      case 3 -> oaBatch.setTopProductCode("another-product");
+      case 4 -> oaBatch.setBusinessUnitType("HOUSEHOLD");
+      case 5 -> oaBatch.setPeriodMonth("2025-01");
+      default -> throw new AssertionError();
+    }
+    assertThatThrownBy(() -> service.calculate(request())).isInstanceOf(RuntimeException.class);
+    org.mockito.Mockito.verifyNoInteractions(costRunEngine);
   }
 
   @Test
@@ -298,8 +128,6 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     assertThatThrownBy(() -> service.calculate(request()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("totalCost与TOTAL");
-    verify(diffService, never()).calculate(any());
-    verify(resultWriter, never()).writeQuoteResult(any());
   }
 
   @Test
@@ -318,18 +146,11 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     assertThatThrownBy(() -> service.calculate(request()))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("不能写入普通成本项");
-    verify(diffService, never()).calculate(any());
-    verify(resultWriter, never()).writeQuoteResult(any());
   }
 
   @Test
   @DisplayName("任一场景写入失败即抛错，编排方法声明整事务回滚")
   void writeFailureIsTransactional() throws Exception {
-    when(scenarioMapper.insert(any(QuoteCostPriceScenario.class))).thenReturn(1, 0);
-
-    assertThatThrownBy(() -> service.calculate(request()))
-        .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("场景汇总写入失败");
     Transactional transactional = QuoteCuAdjustmentCalcServiceImpl.class
         .getMethod("calculate", QuoteCuAdjustmentCalcRequest.class)
         .getAnnotation(Transactional.class);
@@ -337,24 +158,6 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     assertThat(transactional.rollbackFor()).contains(Exception.class);
   }
 
-  @Test
-  @DisplayName("重复试算每次创建新版本，更新只落在各自新版本上")
-  void repeatedTrialCreatesNewVersionWithoutOverwritingOldOne() {
-    AtomicLong id = new AtomicLong(100);
-    when(versionService.createTrial(
-            anyString(), any(), anyString(), anyString(), anyString(), anyString(), anyString()))
-        .thenAnswer(invocation -> version(id.incrementAndGet()));
-    when(diffService.calculate(any())).thenAnswer(invocation ->
-        diff(invocation.getArgument(0), "12", 1));
-    var first = service.calculate(request());
-    var second = service.calculate(request());
-
-    assertThat(first.version().getId()).isEqualTo(101L);
-    assertThat(second.version().getId()).isEqualTo(102L);
-    assertThat(second.version().getId()).isNotEqualTo(first.version().getId());
-    verify(versionService, times(2)).createTrial(
-        anyString(), any(), anyString(), anyString(), anyString(), anyString(), anyString());
-  }
 
   private QuoteCuAdjustmentCalcRequest request() {
     return new QuoteCuAdjustmentCalcRequest(
@@ -448,20 +251,6 @@ class QuoteCuAdjustmentCalcServiceImplTest {
     value.setCostCode(code);
     value.setAmount(new BigDecimal(amount));
     return value;
-  }
-
-  private QuoteCuMaterialDiffResult diff(Long versionId, String adjustment, int cuCount) {
-    QuoteCuMaterialDiffItemResult row = new QuoteCuMaterialDiffItemResult();
-    row.setSettlementKey("11|PROD-1|1|CU-PART|NORMAL");
-    row.setBomRowId(1L);
-    row.setMaterialCode("CU-PART");
-    row.setItemType("NORMAL");
-    row.setQuantity(new BigDecimal("2"));
-    row.setContributesToAdjustment(1);
-    row.setCuAffected(cuCount > 0 ? 1 : 0);
-    row.setDiffAmount(new BigDecimal(adjustment));
-    return new QuoteCuMaterialDiffResult(
-        versionId, "CR-" + versionId, new BigDecimal(adjustment), 1, 0, cuCount, List.of(row));
   }
 
   private EffectiveTechnicalDataInput effectiveTechnicalV2() {

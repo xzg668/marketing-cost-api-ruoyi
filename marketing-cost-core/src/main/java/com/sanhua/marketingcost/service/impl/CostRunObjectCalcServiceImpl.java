@@ -67,6 +67,9 @@ public class CostRunObjectCalcServiceImpl implements CostRunObjectCalcService {
 
   private List<CostRunPartItemDto> loadPartItems(
       CostRunContext context, String oaNo, java.util.function.IntConsumer progress) {
+    if (CostRunContext.SCENE_QUOTE.equals(context.getScene())
+        && !StringUtils.hasText(context.getPricePrepareNo()))
+      throw new IllegalArgumentException("报价成本核算必须使用已完成的月价准备批次");
     if (requiresPreparedPartItems(context)) {
       for (CostRunPreparedPartItemProvider provider : preparedPartItemProviders) {
         if (provider != null && provider.supports(context)) {
@@ -82,8 +85,7 @@ public class CostRunObjectCalcServiceImpl implements CostRunObjectCalcService {
       throw new IllegalStateException(
           "报价成本核算缺少价格源快照读取器，prepareNo=" + context.getPricePrepareNo());
     }
-    // 统一引擎必须重新拿 BOM/价格/费率等原料计算，不能用历史结果表复制出“新结果”。
-    // 报价工作台已确认价格源时会走上面的快照读取；无快照的旧调用和月度调价继续走实时计算。
+    // The separate monthly-reprice scene retains its existing input contract.
     return costRunPartItemService.listByOaNo(
         oaNo,
         resolveQuoteDate(context),

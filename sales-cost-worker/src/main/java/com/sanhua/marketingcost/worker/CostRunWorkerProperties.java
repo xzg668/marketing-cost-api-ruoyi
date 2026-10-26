@@ -24,7 +24,7 @@ public class CostRunWorkerProperties {
   private int writeBatchSize = 100;
   private long pollIntervalMs = 5000L;
   private Set<CostRunTaskScene> scenes =
-      EnumSet.of(CostRunTaskScene.QUOTE, CostRunTaskScene.MONTHLY_REPRICE);
+      EnumSet.of(CostRunTaskScene.QUOTE);
   private String generatedId;
 
   public boolean isEnabled() {
@@ -95,7 +95,10 @@ public class CostRunWorkerProperties {
     if (scenes == null || scenes.isEmpty()) {
       return defaultScenes();
     }
-    return EnumSet.copyOf(scenes);
+    // Old deployment settings must not resume retired monthly-repricing tasks.
+    EnumSet<CostRunTaskScene> active = EnumSet.copyOf(scenes);
+    active.retainAll(defaultScenes());
+    return active;
   }
 
   public void setScenes(Set<CostRunTaskScene> scenes) {
@@ -119,7 +122,7 @@ public class CostRunWorkerProperties {
   }
 
   private EnumSet<CostRunTaskScene> defaultScenes() {
-    return EnumSet.of(CostRunTaskScene.QUOTE, CostRunTaskScene.MONTHLY_REPRICE);
+    return EnumSet.of(CostRunTaskScene.QUOTE);
   }
 
   private String defaultWorkerId() {

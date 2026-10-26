@@ -83,6 +83,13 @@ public class PricePrepareItemClassifierImpl implements PricePrepareItemClassifie
       item.setMessage("BOM结算行缺料号，无法进入价格准备");
       return item;
     }
+    if (com.sanhua.marketingcost.service.pricing.monthly.MonthlyQuotationBomPricing.HOUSEHOLD_ROW
+        .equals(row.getSettlementRowType())) {
+      item.setItemType(ITEM_TYPE_NORMAL);
+      item.setStatus(STATUS_READY);
+      item.setMessage("家用询价整体计价");
+      return item;
+    }
     if (Boolean.TRUE.equals(packageFlags.get(
         scopedKey(organization.materialOrganizationCode(), materialCode)))) {
       item.setItemType(ITEM_TYPE_PACKAGE_COMPONENT);

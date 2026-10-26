@@ -16,8 +16,10 @@ import org.springframework.util.StringUtils;
 public class CostRunTraceQueryServiceImpl implements CostRunTraceQueryService {
 
   private final CostRunTraceSnapshotMapper traceSnapshotMapper;
+  private final com.sanhua.marketingcost.service.jjb.JjbReadService reader;
 
-  public CostRunTraceQueryServiceImpl(CostRunTraceSnapshotMapper traceSnapshotMapper) {
+  public CostRunTraceQueryServiceImpl(CostRunTraceSnapshotMapper traceSnapshotMapper, com.sanhua.marketingcost.service.jjb.JjbReadService reader) {
+    this.reader = reader;
     this.traceSnapshotMapper = traceSnapshotMapper;
   }
 
@@ -25,18 +27,25 @@ public class CostRunTraceQueryServiceImpl implements CostRunTraceQueryService {
   @Transactional(readOnly = true)
   public CostRunTraceListResponse listByCostRunNo(String costRunNo) {
     String runNo = requireCostRunNo(costRunNo);
+    var sheet = reader.byRun(runNo).sheet();
     List<CostRunTraceSnapshot> snapshots =
         traceSnapshotMapper.selectList(
             Wrappers.lambdaQuery(CostRunTraceSnapshot.class)
                 .eq(CostRunTraceSnapshot::getCostRunNo, runNo)
+                .eq(CostRunTraceSnapshot::getCostRunVersionId, sheet.identity().versionId())
+                .eq(CostRunTraceSnapshot::getBusinessUnitType, sheet.identity().businessUnitType())
                 .orderByAsc(CostRunTraceSnapshot::getTraceType)
                 .orderByAsc(CostRunTraceSnapshot::getId));
     CostRunTraceListResponse response = new CostRunTraceListResponse();
     response.setCostRunNo(runNo);
+    response.setSheet(sheet);
+    response.setCostRunVersionId(sheet.identity().versionId());
+    response.setVersionNo(sheet.identity().versionNo());
+    response.setOaNo(sheet.identity().oaNo());
+    response.setOaFormItemId(sheet.identity().oaFormItemId());
+    response.setProductCode(sheet.identity().productCode());
+    response.setPricingMonth(sheet.identity().pricingMonth());
     response.setTotal(snapshots.size());
-    if (!snapshots.isEmpty()) {
-      fillHeader(response, snapshots.get(0));
-    }
     response.setRecords(snapshots.stream().map(this::toListItem).toList());
     return response;
   }
@@ -45,6 +54,7 @@ public class CostRunTraceQueryServiceImpl implements CostRunTraceQueryService {
   @Transactional(readOnly = true)
   public CostRunTraceDetailDto getByCostRunNoAndId(String costRunNo, Long traceId) {
     String runNo = requireCostRunNo(costRunNo);
+    var sheet = reader.byRun(runNo).sheet();
     if (traceId == null || traceId <= 0) {
       return null;
     }
@@ -52,6 +62,8 @@ public class CostRunTraceQueryServiceImpl implements CostRunTraceQueryService {
         traceSnapshotMapper.selectList(
             Wrappers.lambdaQuery(CostRunTraceSnapshot.class)
                 .eq(CostRunTraceSnapshot::getCostRunNo, runNo)
+                .eq(CostRunTraceSnapshot::getCostRunVersionId, sheet.identity().versionId())
+                .eq(CostRunTraceSnapshot::getBusinessUnitType, sheet.identity().businessUnitType())
                 .eq(CostRunTraceSnapshot::getId, traceId)
                 .last("LIMIT 1"));
     if (snapshots.isEmpty()) {
@@ -65,15 +77,6 @@ public class CostRunTraceQueryServiceImpl implements CostRunTraceQueryService {
       throw new IllegalArgumentException("costRunNo is required");
     }
     return costRunNo.trim();
-  }
-
-  private void fillHeader(CostRunTraceListResponse response, CostRunTraceSnapshot snapshot) {
-    response.setCostRunVersionId(snapshot.getCostRunVersionId());
-    response.setVersionNo(snapshot.getVersionNo());
-    response.setOaNo(snapshot.getOaNo());
-    response.setOaFormItemId(snapshot.getOaFormItemId());
-    response.setProductCode(snapshot.getProductCode());
-    response.setPricingMonth(snapshot.getPricingMonth());
   }
 
   private CostRunTraceListItemDto toListItem(CostRunTraceSnapshot snapshot) {

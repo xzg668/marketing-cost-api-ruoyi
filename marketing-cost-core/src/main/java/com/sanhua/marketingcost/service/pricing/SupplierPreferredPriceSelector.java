@@ -48,6 +48,13 @@ public class SupplierPreferredPriceSelector {
     return resolveService.resolveAll(businessUnit, materialCodes, pricingDate);
   }
 
+  /** Uses the captured rows for both primary choice and immutable source evidence. */
+  public java.util.Map<String, SupplierSupplyRatioResolveResult> prepareSuppliers(
+      String businessUnit, java.util.Set<String> materialCodes, LocalDate pricingDate,
+      java.util.Map<String, ? extends java.util.Collection<? extends com.sanhua.marketingcost.entity.SupplierSupplyRatio>> capturedRows) {
+    return resolveService.resolveAll(businessUnit, materialCodes, pricingDate, capturedRows);
+  }
+
   public <T> SupplierPreferredPriceSelection<T> select(
       List<T> candidates,
       String businessUnitType,

@@ -5,7 +5,6 @@ import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.PackageSnapshotRequest;
 import com.sanhua.marketingcost.dto.PackageSnapshotResult;
-import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.dto.priceprepare.PricePreparePlanItem;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionResponse;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionRow;
@@ -19,14 +18,17 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PackageComponentSnapshotDetail;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
-import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
 import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
-import com.sanhua.marketingcost.service.MaterialPriceRouterService;
+import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
+import com.sanhua.marketingcost.service.pricing.monthly.*;
+import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
+import com.sanhua.marketingcost.entity.MaterialMasterRaw;
+import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.service.MakePartPriceGenerationService;
 import com.sanhua.marketingcost.service.MakePartScrapMappingService;
 import com.sanhua.marketingcost.service.PackageComponentSnapshotService;
@@ -35,9 +37,7 @@ import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.time.YearMonth;
-import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -69,11 +69,14 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
   private final BomCostingRowMapper bomCostingRowMapper;
   private final BomCostingRowSubRefMapper bomCostingRowSubRefMapper;
   private final MaterialMasterMapper materialMasterMapper;
-  private final MaterialPriceRouterService materialPriceRouterService;
+  private final MonthlyQuotationSessions monthlySessions;
+  private final MaterialMasterRawMapper rawMaterials;
+  private final MonthlyPriceDocumentCodec monthlyCodec;
   private final PricePrepareItemClassifier itemClassifier;
   private final PackageComponentSnapshotService packageSnapshotService;
   private final MakePartPriceGenerationService makePartPriceGenerationService;
   private final MakePartScrapMappingService makePartScrapMappingService;
+  private final com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService costingBoms;
 
   public QuotePriceTypeRecognitionServiceImpl(
       OaFormMapper oaFormMapper,
@@ -82,22 +85,28 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
       BomCostingRowMapper bomCostingRowMapper,
       BomCostingRowSubRefMapper bomCostingRowSubRefMapper,
       MaterialMasterMapper materialMasterMapper,
-      MaterialPriceRouterService materialPriceRouterService,
+      MonthlyQuotationSessions monthlySessions,
+      MaterialMasterRawMapper rawMaterials,
+      MonthlyPriceDocumentCodec monthlyCodec,
       PricePrepareItemClassifier itemClassifier,
       PackageComponentSnapshotService packageSnapshotService,
       MakePartPriceGenerationService makePartPriceGenerationService,
-      MakePartScrapMappingService makePartScrapMappingService) {
+      MakePartScrapMappingService makePartScrapMappingService,
+      com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService costingBoms) {
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
     this.bomCostingRowMapper = bomCostingRowMapper;
     this.bomCostingRowSubRefMapper = bomCostingRowSubRefMapper;
     this.materialMasterMapper = materialMasterMapper;
-    this.materialPriceRouterService = materialPriceRouterService;
+    this.monthlySessions = monthlySessions;
+    this.rawMaterials = rawMaterials;
+    this.monthlyCodec = monthlyCodec;
     this.itemClassifier = itemClassifier;
     this.packageSnapshotService = packageSnapshotService;
     this.makePartPriceGenerationService = makePartPriceGenerationService;
     this.makePartScrapMappingService = makePartScrapMappingService;
+    this.costingBoms = costingBoms;
   }
 
   @Override
@@ -111,8 +120,10 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
       String oaNo, Long oaFormItemId, String periodMonth) {
     Scope scope = requireScope(oaNo, oaFormItemId, periodMonth);
     List<BomCostingRow> rows = loadRows(scope);
-    List<QuotePriceTypeRecognitionRow> resultRows = buildRows(scope, rows);
-    fillPriceTypes(scope, resultRows);
+    var packageInputs = new java.util.IdentityHashMap<QuotePriceTypeRecognitionRow, PackagePriceBasis>();
+    var currentRows = new java.util.IdentityHashMap<QuotePriceTypeRecognitionRow, BomCostingRow>();
+    List<QuotePriceTypeRecognitionRow> resultRows = buildRows(scope, rows, packageInputs, currentRows);
+    fillPriceTypes(scope, resultRows, packageInputs, currentRows);
     fillMissingMaterialNames(resultRows);
 
     QuotePriceTypeRecognitionResponse response = new QuotePriceTypeRecognitionResponse();
@@ -203,7 +214,16 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
   }
 
   private List<BomCostingRow> loadRows(Scope scope) {
-    return scope.bomRows();
+    // Recognition must use the same current monthly scope as preparation, including a
+    // household parent published after the persisted settlement tree was generated.
+    var rows = costingBoms.previewFromEffectiveBom(scope.oaFormItemId(), scope.bomReferenceNo()).rows();
+    for (var row : rows) {
+      scope.bomRows().stream().filter(old -> java.util.Objects.equals(old.getPath(), row.getPath())
+          && java.util.Objects.equals(old.getMaterialCode(), row.getMaterialCode())
+          && java.util.Objects.equals(old.getSettlementRowType(), row.getSettlementRowType()))
+          .findFirst().ifPresent(old -> row.setId(old.getId()));
+    }
+    return rows;
   }
 
   private String latestBuildBatchId(List<BomCostingRow> rows) {
@@ -224,7 +244,9 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     return buildBatchIds.getFirst();
   }
 
-  private List<QuotePriceTypeRecognitionRow> buildRows(Scope scope, List<BomCostingRow> rows) {
+  private List<QuotePriceTypeRecognitionRow> buildRows(Scope scope, List<BomCostingRow> rows,
+      Map<QuotePriceTypeRecognitionRow, PackagePriceBasis> packageInputs,
+      Map<QuotePriceTypeRecognitionRow, BomCostingRow> currentRows) {
     List<PricePreparePlanItem> plans = itemClassifier.classify(rows);
     if (plans == null || plans.isEmpty()) {
       plans = defaultPlans(rows);
@@ -245,14 +267,15 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     for (PricePreparePlanItem plan : plans) {
       String type = trimToNull(plan.getItemType());
       if (PricePrepareItemClassifierImpl.ITEM_TYPE_PACKAGE_COMPONENT.equals(type)) {
-        result.add(packageParentRow(scope, plan));
+        result.add(packageParentRow(scope, plan, packageInputs));
       } else if (PricePrepareItemClassifierImpl.ITEM_TYPE_MAKE_PART.equals(type)) {
         result.add(
             makeParentRow(
                 scope,
                 plan,
                 makePartStructureRows,
-                rollupChildrenByRowId.getOrDefault(plan.getBomRowId(), List.of())));
+                plan.getBomRow().getCurrentSubRefs() != null ? plan.getBomRow().getCurrentSubRefs()
+                    : rollupChildrenByRowId.getOrDefault(plan.getBomRowId(), List.of())));
       } else {
         result.add(
             priceableRow(
@@ -264,6 +287,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
                 null,
                 plan.getBomRowId()));
       }
+      flatten(List.of(result.getLast())).forEach(dto -> currentRows.put(dto, plan.getBomRow()));
     }
     return result;
   }
@@ -310,6 +334,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
             ? List.of()
             : plans.stream()
                 .filter(this::isSpecialRollupParent)
+                .filter(plan -> plan.getBomRow().getCurrentSubRefs() == null)
                 .map(PricePreparePlanItem::getBomRowId)
                 .filter(java.util.Objects::nonNull)
                 .distinct()
@@ -487,7 +512,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
       String parentMaterialCode,
       Long bomRowId) {
     QuotePriceTypeRecognitionRow dto = new QuotePriceTypeRecognitionRow();
-    dto.setRowKey(OBJECT_MAKE_NO_SCRAP + ":" + parentMaterialCode + ":" + (bomRowId == null ? "" : bomRowId));
+    dto.setRowKey(OBJECT_MAKE_NO_SCRAP + ":" + parentMaterialCode + ":" + (bomRowId == null ? row == null ? "" : row.getPath() : bomRowId));
     dto.setLevel(row == null ? 0 : row.getLevel());
     dto.setObjectType(OBJECT_MAKE_NO_SCRAP);
     dto.setMaterialCode(firstText(calcRow == null ? null : calcRow.getChildMaterialNo(), "-"));
@@ -505,7 +530,10 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     return dto;
   }
 
-  private QuotePriceTypeRecognitionRow packageParentRow(Scope scope, PricePreparePlanItem plan) {
+  private record PackagePriceBasis(BigDecimal quantity, String specification) {}
+
+  private QuotePriceTypeRecognitionRow packageParentRow(Scope scope, PricePreparePlanItem plan,
+      Map<QuotePriceTypeRecognitionRow, PackagePriceBasis> packageInputs) {
     BomCostingRow row = plan.getBomRow();
     QuotePriceTypeRecognitionRow parent =
         parentRow(row, OBJECT_PACKAGE_PARENT, plan.getMaterialCode(), plan.getMaterialName());
@@ -518,6 +546,10 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     request.setBomPurpose(row == null ? null : row.getBomPurpose());
     request.setSourceType(scope.bomSourceType());
     request.setAsOfDate(row == null ? null : row.getAsOfDate());
+    if (!row.getHouseholdChildPaths().isEmpty()) {
+      request.setSourceParentPath(row.getCurrentSourcePath());
+      request.setSourceParentHierarchyId(row.getRawHierarchyNodeId());
+    }
     PackageSnapshotResult snapshot = packageSnapshotService.previewSnapshot(request);
     if (snapshot == null || snapshot.getDetails() == null || snapshot.getDetails().isEmpty()) {
       parent.setTypeStatus(STATUS_CHILD_GAP);
@@ -525,15 +557,13 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
       return parent;
     }
     for (PackageComponentSnapshotDetail detail : snapshot.getDetails()) {
-      parent.getChildren().add(
-          priceableRow(
-              scope,
-              row,
-              OBJECT_PACKAGE_CHILD,
-              detail.getChildMaterialCode(),
-              detail.getChildMaterialName(),
-              plan.getMaterialCode(),
-              plan.getBomRowId()));
+      // Household occurrences are already independent preview rows. Their children
+      // must not introduce ordinary gaps or duplicate price recognition here.
+      if (detail.getSourcePath() != null && row.getHouseholdChildPaths().containsKey(detail.getSourcePath())) continue;
+      var child = priceableRow(scope, row, OBJECT_PACKAGE_CHILD, detail.getChildMaterialCode(),
+          detail.getChildMaterialName(), plan.getMaterialCode(), plan.getBomRowId(), detail.getQtyPerParent());
+      parent.getChildren().add(child);
+      packageInputs.put(child, new PackagePriceBasis(detail.getQtyPerParent(), detail.getChildMaterialSpec()));
     }
     aggregateParent(parent);
     return parent;
@@ -550,7 +580,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
   private QuotePriceTypeRecognitionRow parentRow(
       BomCostingRow row, String objectType, String materialCode, String materialName) {
     QuotePriceTypeRecognitionRow parent = new QuotePriceTypeRecognitionRow();
-    parent.setRowKey(objectType + ":" + materialCode + ":" + (row == null ? "" : row.getId()));
+    parent.setRowKey(objectType + ":" + materialCode + ":" + (row == null ? "" : row.getId() == null ? row.getPath() : row.getId()));
     parent.setLevel(row == null ? 0 : row.getLevel());
     parent.setObjectType(objectType);
     parent.setMaterialCode(materialCode);
@@ -584,7 +614,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
       Long bomRowId,
       java.math.BigDecimal quantityOverride) {
     QuotePriceTypeRecognitionRow dto = new QuotePriceTypeRecognitionRow();
-    dto.setRowKey(objectType + ":" + materialCode + ":" + (bomRowId == null ? "" : bomRowId));
+    dto.setRowKey(objectType + ":" + materialCode + ":" + (bomRowId == null ? row == null ? "" : row.getPath() : bomRowId));
     dto.setLevel(row == null ? 0 : row.getLevel());
     dto.setObjectType(objectType);
     dto.setMaterialCode(materialCode);
@@ -608,36 +638,103 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     return dto;
   }
 
-  private void fillPriceTypes(Scope scope, List<QuotePriceTypeRecognitionRow> roots) {
+  private void fillPriceTypes(Scope scope, List<QuotePriceTypeRecognitionRow> roots,
+      Map<QuotePriceTypeRecognitionRow, PackagePriceBasis> packageInputs,
+      Map<QuotePriceTypeRecognitionRow, BomCostingRow> originals) {
     var rows = flatten(roots);
-    var codesByOrg = new java.util.TreeMap<String, Set<String>>();
     var priced = rows.stream().filter(row -> Set.of(OBJECT_NORMAL, OBJECT_MAKE_RAW,
         OBJECT_MAKE_SCRAP, OBJECT_PACKAGE_CHILD).contains(row.getObjectType()))
         .filter(row -> !"SCOPE_MISSING".equals(row.getTypeStatus())).toList();
-    for (var row : priced) if (StringUtils.hasText(row.getMaterialCode()))
-      codesByOrg.computeIfAbsent(row.getPriceOrgCode(), ignored -> new java.util.TreeSet<>())
-          .add(row.getMaterialCode().trim());
-    var candidates = new LinkedHashMap<String, Map<String, List<PriceTypeRoute>>>();
-    codesByOrg.forEach((org, codes) -> candidates.put(org,
-        materialPriceRouterService.listCandidatesBatch(codes, scope.periodMonth(),
-            CostPricingPeriodUtils.currentPricingDate(), org, scope.businessUnitType())));
+    if (priced.isEmpty()) return;
+    var masters = pricingMasters(priced, originals);
+    var session = monthlySessions.open(scope.oaNo(), scope.businessUnitType(), scope.periodMonth(),
+        java.time.LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE),
+        PricePrepareScenarioContext.oaLocked(scope.oaFormItemId(), priced.getFirst().getPriceOrgCode()));
+    var inputs = new LinkedHashMap<QuotePriceTypeRecognitionRow, QuotationPriceSession.Input>();
     for (var row : priced) {
-      var routes = !StringUtils.hasText(row.getMaterialCode()) ? List.<PriceTypeRoute>of()
-          : candidates.getOrDefault(row.getPriceOrgCode(), Map.of()).getOrDefault(row.getMaterialCode().trim(), List.of());
-      if (!routes.isEmpty()) {
-        var hit = routes.getFirst();
-        row.setPriceType(normalizePersistedPriceType(firstText(hit.rawPriceType(), hit.priceType().getDbText())));
-        row.setPriceTypeSource(hit.supplemental() ? "TECHNICAL_SUPPLEMENT" : "FORMAL_PRICE_SOURCE");
-        row.setTypeStatus(STATUS_RECOGNIZED);
-        row.setEffectiveFrom(hit.effectiveFrom());
-        row.setEffectiveTo(hit.effectiveTo());
-      } else {
-        row.setTypeStatus(STATUS_NO_SOURCE);
-        row.setMessage("当前月份和组织暂无候选价格来源，准备时按完整顺序检查");
+      var original = originals.get(row);
+      boolean ordinary = OBJECT_NORMAL.equals(row.getObjectType());
+      boolean scrap = OBJECT_MAKE_SCRAP.equals(row.getObjectType()) || ordinary && original != null
+          && ("BYPRODUCT_EXTRA".equals(original.getSettlementRowType()) || "副产品".equals(original.getShapeAttr()));
+      var master = masters.get(row.getPriceOrgCode() + "|" + row.getMaterialCode());
+      var packaging = packageInputs.get(row);
+      BigDecimal quantity = ordinary ? original == null ? null : original.getQtyPerTop()
+          : packaging == null ? BigDecimal.ONE : packaging.quantity();
+      if (quantity != null && quantity.signum() == 0) {
+        row.setTypeStatus(STATUS_RECOGNIZED); row.setPriceType("零用量");
+        row.setPriceTypeSource("ZERO_USAGE"); row.setMessage("零用量不取价、不采用月价");
+        continue;
       }
+      String unit = scrap ? "KG" : ordinary && original != null && StringUtils.hasText(original.getUnit())
+          ? original.getUnit() : master == null ? null : master.getUnit();
+      String specification = ordinary && original != null ? original.getMaterialSpec()
+          : packaging != null && StringUtils.hasText(packaging.specification()) ? packaging.specification()
+          : master == null ? null : master.getMaterialSpec();
+      if (!StringUtils.hasText(row.getMaterialCode()) || !StringUtils.hasText(unit) || quantity == null) {
+        row.setTypeStatus(STATUS_NO_SOURCE);
+        row.setMessage("缺少明确的物料计价单位或用量，请核实当前报价物料");
+        continue;
+      }
+      inputs.put(row, new QuotationPriceSession.Input(row.getMaterialCode(), row.getPriceOrgCode(),
+          unit, specification, scrap ? TaxBasis.EXCLUDED : null, null, session.conditions(row.getPriceOrgCode()),
+          quantity.abs(), scrap ? QuotationPriceSession.Purpose.SCRAP : QuotationPriceSession.Purpose.MATERIAL));
     }
+    var read = session.read(inputs.values());
+    inputs.forEach((row, input) -> {
+      var value = read.values().get(input);
+      if (value == null) {
+        var problem = java.util.Objects.requireNonNull(read.problems().get(input), "月价识别缺少读取结果");
+        row.setTypeStatus(STATUS_NO_SOURCE); row.setMessage(problem.message());
+        return;
+      }
+      var selection = value.selection();
+      var source = monthlyCodec.decode(monthlyCodec.wrap(selection.fact().evidence().json()),
+          com.fasterxml.jackson.databind.JsonNode.class);
+      row.setPriceType(monthlyPriceType(source.path("sourceKind").asText()));
+      row.setPriceTypeSource(selection.monthlyPriceId() == null
+          ? "TECH_FIXED".equals(source.path("sourceKind").asText()) ? "TECHNICAL_SUPPLEMENT" : "FORMAL_PRICE_SOURCE"
+          : "MONTHLY_PRICE");
+      row.setTypeStatus(STATUS_RECOGNIZED);
+    });
     for (int i = rows.size() - 1; i >= 0; i--)
       if (!rows.get(i).getChildren().isEmpty()) aggregateParent(rows.get(i));
+  }
+
+  private Map<String, MaterialMasterRaw> pricingMasters(List<QuotePriceTypeRecognitionRow> rows,
+      Map<QuotePriceTypeRecognitionRow, BomCostingRow> originals) {
+    var requested = new java.util.TreeMap<String, Set<String>>();
+    for (var row : rows) {
+      var original = originals.get(row);
+      boolean needsMaster = !OBJECT_NORMAL.equals(row.getObjectType())
+          || original == null || !StringUtils.hasText(original.getUnit());
+      if (needsMaster && StringUtils.hasText(row.getMaterialCode()))
+        requested.computeIfAbsent(row.getPriceOrgCode(), ignored -> new LinkedHashSet<>()).add(row.getMaterialCode());
+    }
+    var result = new LinkedHashMap<String, MaterialMasterRaw>();
+    requested.forEach((org, codes) -> {
+      for (var master : rawMaterials.selectByLatestBatchAndCodes(codes, null,
+          MaterialOrganization.fromPriceOrgCode(org).getCode())) {
+        String key = org + "|" + master.getMaterialCode();
+        if (result.putIfAbsent(key, master) != null)
+          throw new QuoteIngestException("物料计价单位不唯一：" + master.getMaterialCode());
+      }
+    });
+    return result;
+  }
+
+  private String monthlyPriceType(String sourceKind) {
+    return switch (sourceKind) {
+      case "PURCHASE_FIXED", "TECH_FIXED" -> "固定价";
+      case "ODS_ORDER" -> "订单价";
+      case "ODS_TIER" -> "阶梯价";
+      case "LINKED", "LINKED_LEGACY" -> "联动价";
+      case "RANGE_QTY", "RANGE_FACTOR", "RANGE_LEGACY_FACTOR" -> "区间价";
+      case "SETTLE_FIXED" -> "结算固定价";
+      case "SETTLE_LINKED" -> "结算联动价";
+      case "SCRAP_PRICE" -> "废料价格";
+      case "HOUSEHOLD_INQUIRY" -> "家用部件询价";
+      default -> throw new IllegalStateException("无法识别保存的月价来源：" + sourceKind);
+    };
   }
 
   private void aggregateParent(QuotePriceTypeRecognitionRow parent) {
@@ -712,43 +809,6 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
 
   private boolean isDisplayOnlyObject(String objectType) {
     return OBJECT_MAKE_NO_SCRAP.equals(objectType);
-  }
-
-  private String normalizePersistedPriceType(String value) {
-    String normalized = trimToNull(value);
-    if (normalized != null) {
-      normalized =
-          switch (normalized.toUpperCase()) {
-            case "FIXED" -> "固定价";
-            case "SETTLE_FIXED" -> "结算固定价";
-            case "SETTLE_LINKED" -> "结算联动价";
-            case "LINKED" -> "联动价";
-            case "RANGE" -> "区间价";
-            case "MAKE", "MAKE_PART" -> "自制件";
-            default -> switch (normalized) {
-              case "固定采购价", "采购固定价" -> "固定价";
-              case "结算价", "结算固定价", "家用结算价" -> "结算固定价";
-              default -> normalized;
-            };
-          };
-    }
-    return normalized;
-  }
-
-  private LocalDate parseMonth(String value) {
-    try {
-      String text = requireText(value, "effectiveFrom");
-      if (text.length() >= 7) {
-        text = text.substring(0, 7);
-      }
-      return YearMonth.parse(text).atDay(1);
-    } catch (DateTimeParseException ex) {
-      throw new QuoteIngestException("effectiveFrom 格式必须为 YYYY-MM 或 YYYY-MM-DD: " + value);
-    }
-  }
-
-  private LocalDate firstDay(String periodMonth) {
-    return parseMonth(periodMonth);
   }
 
   private String requireText(String value, String fieldName) {

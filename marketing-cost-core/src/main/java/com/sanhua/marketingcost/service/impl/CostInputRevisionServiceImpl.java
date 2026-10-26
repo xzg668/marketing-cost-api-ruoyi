@@ -5,6 +5,7 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.service.CostInputRevisionService;
 import com.sanhua.marketingcost.service.EffectiveTechnicalDataException;
 import com.sanhua.marketingcost.service.EffectiveTechnicalDataQueryService;
+import com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -32,7 +33,6 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
           "lp_other_expense_rate",
           "lp_product_property",
           "lp_product_property_rule",
-          "lp_supplier_supply_ratio",
           "lp_bom_byproduct_cost_rule",
           "lp_cost_business_rule");
 
@@ -92,18 +92,22 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
 
   private final JdbcTemplate jdbcTemplate;
   private final EffectiveTechnicalDataQueryService effectiveTechnicalDataQueryService;
+  private final QuotationMonthlyPriceInputs monthlyInputs;
 
   @Autowired
   public CostInputRevisionServiceImpl(
       JdbcTemplate jdbcTemplate,
-      ObjectProvider<EffectiveTechnicalDataQueryService> technicalDataProvider) {
+      ObjectProvider<EffectiveTechnicalDataQueryService> technicalDataProvider,
+      QuotationMonthlyPriceInputs monthlyInputs) {
     this.jdbcTemplate = jdbcTemplate;
     this.effectiveTechnicalDataQueryService = technicalDataProvider.getIfAvailable();
+    this.monthlyInputs = java.util.Objects.requireNonNull(monthlyInputs);
   }
 
-  public CostInputRevisionServiceImpl(JdbcTemplate jdbcTemplate) {
+  public CostInputRevisionServiceImpl(JdbcTemplate jdbcTemplate, QuotationMonthlyPriceInputs monthlyInputs) {
     this.jdbcTemplate = jdbcTemplate;
     this.effectiveTechnicalDataQueryService = null;
+    this.monthlyInputs = java.util.Objects.requireNonNull(monthlyInputs);
   }
 
   @Override
@@ -181,10 +185,15 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
         canonical,
         "pricingCalculator",
         com.sanhua.marketingcost.service.pricing.OriginalPriceCalculationVersion.CURRENT);
+    append(canonical, "productFeePolicy",
+        com.sanhua.marketingcost.service.costing.ProductFeeContract.POLICY_VERSION);
     append(canonical, "sources", sourceRevision);
-    append(canonical, "materialPrices", materialPriceRevision(item, pricingMonth));
+    var monthly = monthlyInputs.read(form, item, pricingMonth);
+    append(canonical, "monthlyPrices", monthly.evidence());
+    append(canonical, "materialPrices", materialPriceRevision(item, pricingMonth, monthly));
     append(canonical, "pricePriorityPolicy", "MONTH_ORG_V1");
-    append(canonical, "pricePriority", priorityRevision(item, pricingMonth));
+    append(canonical, "pricePriority", priorityRevision(item, pricingMonth, monthly));
+    append(canonical, "householdScope", householdRevision(item.getBusinessUnitType(), monthly.householdObservers()));
     append(canonical, "effectiveTechnicalData", effectiveTechnicalFingerprint);
     // 下游退回要求真正生成新成本；只纳入本报价、本月的退回记录，不改旧成功版本。
     Long returned =
@@ -200,14 +209,22 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     return sha256(canonical.toString());
   }
 
-  private String priorityRevision(OaFormItem item, String month) {
+  private String priorityRevision(OaFormItem item, String month, QuotationMonthlyPriceInputs.Scope monthly) {
+    if (monthly.preparationKnown() && monthly.unadoptedMaterials().isEmpty()) return "ADOPTED";
     var scopes = jdbcTemplate.queryForList(PRIORITY_SCOPES_SQL, item.getId(), month, item.getId(), month);
+    if (monthly.preparationKnown()) scopes = scopes.stream().filter(scope ->
+        monthly.unadoptedMaterials().contains(String.valueOf(valueIgnoreCase(scope, "material_code")))).toList();
     String sql = "SELECT price_org_code,material_code,price_type,manual_priority,priority_updated_by,"
         + "priority_updated_at FROM lp_material_price_type WHERE business_unit_type=? AND period=?"
         + " AND priority_updated_at IS NOT NULL";
     var parameters = new ArrayList<Object>();
     parameters.add(item.getBusinessUnitType());
     parameters.add(month);
+    if (monthly.preparationKnown()) {
+      var materials = new TreeSet<>(monthly.unadoptedMaterials());
+      sql += " AND material_code IN (" + String.join(",", Collections.nCopies(materials.size(), "?")) + ")";
+      parameters.addAll(materials);
+    }
     if (!scopes.isEmpty()) {
       sql += " AND (" + String.join(" OR ", Collections.nCopies(scopes.size(), "(material_code=? AND price_org_code=?)")) + ")";
       for (var scope : scopes) {
@@ -223,8 +240,9 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     return sha256(canonical.toString());
   }
 
-  private String materialPriceRevision(OaFormItem item, String pricingMonth) {
-    List<String> materials =
+  private String materialPriceRevision(OaFormItem item, String pricingMonth, QuotationMonthlyPriceInputs.Scope monthly) {
+    if (monthly.preparationKnown() && monthly.unadoptedMaterials().isEmpty()) return "ADOPTED";
+    List<String> materials = monthly.preparationKnown() ? new ArrayList<>(monthly.unadoptedMaterials()) :
         jdbcTemplate.queryForList(
             MATERIAL_CODES_SQL,
             String.class,
@@ -245,6 +263,8 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
           "financeFactors",
           financePublicationRevision(item.getBusinessUnitType(), pricingMonth, null));
       append(global, "settlementPrices", settlementRevision(item.getBusinessUnitType(), pricingMonth, List.of()));
+      append(global, "unadoptedSources", additionalPriceRevision(item.getBusinessUnitType(), List.of()));
+      append(global, "unadoptedDependencies", unadoptedDependencies(item.getBusinessUnitType(), pricingMonth, List.of()));
       return sha256(global.toString());
     }
 
@@ -253,6 +273,8 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     append(canonical, "settlementPrices", settlementRevision(item.getBusinessUnitType(), pricingMonth, distinctMaterials));
     java.util.Set<String> originalOrganizations = new TreeSet<>();
     distinctMaterials.forEach(material -> append(canonical, "material", material));
+    append(canonical, "unadoptedSources", additionalPriceRevision(item.getBusinessUnitType(), distinctMaterials));
+    append(canonical, "unadoptedDependencies", unadoptedDependencies(item.getBusinessUnitType(), pricingMonth, distinctMaterials));
     String placeholders = String.join(",", Collections.nCopies(distinctMaterials.size(), "?"));
     for (String table : MATERIAL_PRICE_TABLES) {
       append(canonical, "table", table);
@@ -295,6 +317,107 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
           "financeFactors",
           financePublicationRevision(
               item.getBusinessUnitType(), pricingMonth, originalOrganizations));
+    }
+    return sha256(canonical.toString());
+  }
+
+  /** These mutable sources matter only until a material's applicable monthly fact has been adopted. */
+  private String unadoptedDependencies(String unit, String month, List<String> materials) {
+    var inputs = new UnadoptedPriceSourceRevision(jdbcTemplate);
+    var canonical = new StringBuilder();
+    append(canonical,"odsSources",inputs.ods(unit,materials));
+    var technical = new TreeSet<String>();
+    var legacyRuleIds = new TreeSet<Long>();
+    var financialOrganizations = new TreeSet<String>();
+    boolean legacyRange = false;
+    for (String table : List.of("lp_price_fixed_item", "lp_price_linked_item", "lp_price_range_factor_rule")) {
+      var parameters = new ArrayList<Object>(); parameters.add(unit);
+      String columns = switch (table) {
+        case "lp_price_fixed_item" -> "id,material_code,pricing_month,source_kind";
+        case "lp_price_linked_item" -> "id,material_code,pricing_month,org_code,expression_version";
+        default -> "id,material_code,pricing_month,org_code,source_upload_batch_id";
+      };
+      // Only dependency identities are needed here; sorting full source JSON can exhaust MySQL's sort buffer.
+      String sql = "SELECT " + columns + " FROM " + table + " WHERE business_unit_type=?";
+      if (!materials.isEmpty()) {
+        sql += " AND material_code IN (" + String.join(",", Collections.nCopies(materials.size(), "?")) + ")";
+        parameters.addAll(materials);
+      }
+      for (var row : jdbcTemplate.queryForList(sql, parameters.toArray())) {
+        var sourceMonth = valueIgnoreCase(row, "pricing_month");
+        if (sourceMonth != null && month != null && sourceMonth.toString().compareTo(month) > 0) continue;
+        var code = valueIgnoreCase(row, "material_code");
+        if (table.equals("lp_price_fixed_item")) {
+          if (code != null && "TECH_SUPPLEMENTAL".equals(valueIgnoreCase(row, "source_kind"))) technical.add(code.toString());
+          continue;
+        }
+        var organization = valueIgnoreCase(row, "org_code");
+        // Undated legacy range rules are legitimately shared across the existing two price organizations.
+        if (organization == null) financialOrganizations.addAll(List.of("210", "220"));
+        else financialOrganizations.add(organization.toString());
+        if (table.equals("lp_price_linked_item") && !"ORIGINAL_V1".equals(valueIgnoreCase(row, "expression_version"))) {
+          var id = valueIgnoreCase(row, "id"); if (id != null) legacyRuleIds.add(Long.valueOf(id.toString()));
+        }
+        if (table.equals("lp_price_range_factor_rule") && valueIgnoreCase(row, "source_upload_batch_id") == null) legacyRange = true;
+      }
+    }
+    if (!technical.isEmpty()) append(canonical, "technicalApprovals", inputs.technical(unit, technical));
+    if (!legacyRuleIds.isEmpty() || legacyRange) append(canonical, "legacyInputs", inputs.legacyFormula(unit, month, legacyRuleIds));
+    var scrapCodes = new TreeSet<String>(materials);
+    // Both ordinary legacy formulas and MAKE use these material-to-scrap dependencies.
+    var dependencies = inputs.scrapDependencies(unit, materials);
+    append(canonical, "scrapMappings", dependencies.revision());
+    scrapCodes.addAll(dependencies.materialCodes());
+    if (!dependencies.materialCodes().isEmpty()) append(canonical, "scrapSources", additionalPriceRevision(unit, new ArrayList<>(dependencies.materialCodes())));
+    var parameters = new ArrayList<Object>(); parameters.add(unit);
+    String sql = "SELECT id FROM lp_scrap_price WHERE business_unit_type=? AND price_type='LINKED'";
+    if (!scrapCodes.isEmpty()) {
+      sql += " AND material_code IN (" + String.join(",", Collections.nCopies(scrapCodes.size(), "?")) + ")";
+      parameters.addAll(scrapCodes);
+    }
+    if (!jdbcTemplate.queryForList(sql + " LIMIT 1", parameters.toArray()).isEmpty()) financialOrganizations.add("210");
+    if (!financialOrganizations.isEmpty()) append(canonical, "financialInputs", financePublicationRevision(unit, month, financialOrganizations));
+    return sha256(canonical.toString());
+  }
+
+  private String additionalPriceRevision(String businessUnit, List<String> materials) {
+    StringBuilder canonical = new StringBuilder();
+    for (String table : List.of("lp_supplier_supply_ratio", "lp_scrap_price", "lp_finance_effective_price")) {
+      String sql = "SELECT * FROM `" + table + "` WHERE business_unit_type=?";
+      var parameters = new ArrayList<Object>();
+      parameters.add(businessUnit);
+      if (!materials.isEmpty()) {
+        sql += " AND material_code IN (" + String.join(",", Collections.nCopies(materials.size(), "?")) + ")";
+        parameters.addAll(materials);
+      }
+      sql += " ORDER BY id";
+      append(canonical, "table", table);
+      for (var row : jdbcTemplate.queryForList(sql, parameters.toArray())) {
+        for (String column : new TreeSet<>(row.keySet())) appendPriceValue(canonical, column, row.get(column));
+      }
+    }
+    append(canonical, "household", householdRevision(businessUnit, new TreeSet<>(materials), materials.isEmpty()));
+    return sha256(canonical.toString());
+  }
+
+  private String householdRevision(String businessUnit, java.util.Set<String> materials) {
+    return householdRevision(businessUnit, materials, false);
+  }
+
+  private String householdRevision(String businessUnit, java.util.Set<String> materials, boolean all) {
+    if (materials.isEmpty() && !all) return "NO_UNPRICED_STRUCTURE";
+    String sql = "SELECT id,material_code,revision_no,pricing_fingerprint,record_fingerprint FROM lp_household_inquiry_price"
+        + " WHERE business_unit_type=? AND current_flag=1";
+    var parameters = new ArrayList<Object>();
+    parameters.add(businessUnit);
+    if (!all) {
+      sql += " AND material_code IN (" + String.join(",", Collections.nCopies(materials.size(), "?")) + ")";
+      parameters.addAll(new TreeSet<>(materials));
+    }
+    sql += " ORDER BY material_code,id";
+    StringBuilder canonical = new StringBuilder();
+    for (var row : jdbcTemplate.queryForList(sql, parameters.toArray())) {
+      for (String column : new TreeSet<>(row.keySet())) appendPriceValue(canonical, column, row.get(column));
     }
     return sha256(canonical.toString());
   }
@@ -426,7 +549,7 @@ SELECT MAX(pricing_month) FROM (
         || pricingMonth.isBlank()) {
       return "NO_EFFECTIVE_TECHNICAL_DATA";
     }
-    return effectiveTechnicalDataQueryService.effectiveFingerprint(
+    return effectiveTechnicalDataQueryService.effectiveNonPriceFingerprint(
         item.getId(), pricingMonth.trim());
   }
 

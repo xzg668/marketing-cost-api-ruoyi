@@ -177,18 +177,14 @@ public class QuoteRequestController {
       @PathVariable("versionId") Long versionId,
       HttpServletResponse response)
       throws IOException {
+    java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+    quoteCostRunWorkbenchService.exportVersion(oaNo, oaFormItemId, versionId, output);
     String fileName = "cost-run_" + oaNo + "_" + oaFormItemId + "_" + versionId + ".xlsx";
     String encoded = URLEncoder.encode(fileName, StandardCharsets.UTF_8).replace("+", "%20");
     response.setContentType(
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     response.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + encoded);
-    try {
-      quoteCostRunWorkbenchService.exportVersion(
-          oaNo, oaFormItemId, versionId, response.getOutputStream());
-    } catch (QuoteIngestException | IllegalArgumentException ex) {
-      response.reset();
-      response.sendError(HttpServletResponse.SC_BAD_REQUEST, ex.getMessage());
-    }
+    output.writeTo(response.getOutputStream());
   }
 
   @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")

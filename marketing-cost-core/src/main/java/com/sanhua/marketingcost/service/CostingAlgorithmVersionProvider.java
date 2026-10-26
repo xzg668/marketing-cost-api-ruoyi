@@ -8,7 +8,8 @@ import org.springframework.util.StringUtils;
 @Component
 public class CostingAlgorithmVersionProvider {
 
-  public static final String DEFAULT_VERSION = "COST_V3";
+  public static final String DEFAULT_VERSION =
+      com.sanhua.marketingcost.service.costing.MonthlyProductCost.ALGORITHM_VERSION;
 
   private final String currentVersion;
 

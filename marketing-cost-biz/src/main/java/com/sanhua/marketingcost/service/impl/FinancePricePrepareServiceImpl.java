@@ -5,7 +5,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sanhua.marketingcost.dto.financequote.FinancePricePrepareGenerateResult;
-import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
@@ -17,8 +16,7 @@ import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostPriceScenarioMapper;
 import com.sanhua.marketingcost.service.FinancePricePrepareService;
-import com.sanhua.marketingcost.service.PricePrepareService;
-import com.sanhua.marketingcost.service.financefactor.QuoteFinanceFactorReader;
+import com.sanhua.marketingcost.service.pricing.monthly.*;
 import com.sanhua.marketingcost.service.pricing.FactorPriceUnit;
 import com.sanhua.marketingcost.service.pricing.PriceFactorContext;
 import com.sanhua.marketingcost.service.scrap.ScrapPriceCalculationEvidence;
@@ -42,26 +40,24 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
   private final PricePrepareBatchMapper batchMapper;
   private final PricePrepareItemMapper itemMapper;
   private final MakePartPriceCalcRowMapper makePartRowMapper;
-  private final QuoteFinanceFactorReader financeFactors;
-  private final PricePrepareService pricePrepareService;
   private final QuoteCostPriceScenarioMapper scenarioMapper;
   private final ObjectMapper objectMapper;
+  private final MonthlyPriceDocumentCodec monthlyCodec;
+  private final MonthlyPreparationEvidence monthlyEvidence;
 
   public FinancePricePrepareServiceImpl(
       PricePrepareBatchMapper batchMapper,
       PricePrepareItemMapper itemMapper,
       MakePartPriceCalcRowMapper makePartRowMapper,
-      QuoteFinanceFactorReader financeFactors,
-      PricePrepareService pricePrepareService,
       QuoteCostPriceScenarioMapper scenarioMapper,
       ObjectMapper objectMapper) {
     this.batchMapper = batchMapper;
     this.itemMapper = itemMapper;
     this.makePartRowMapper = makePartRowMapper;
-    this.financeFactors = financeFactors;
-    this.pricePrepareService = pricePrepareService;
     this.scenarioMapper = scenarioMapper;
     this.objectMapper = objectMapper;
+    this.monthlyCodec = new MonthlyPriceDocumentCodec(objectMapper);
+    this.monthlyEvidence = new MonthlyPreparationEvidence(monthlyCodec);
   }
 
   @Override
@@ -73,32 +69,33 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
     List<PricePrepareItem> sourceItems = loadItems(normalizedSourceNo);
     validateSourceItems(sourceItems);
 
-    Map<Long, List<MakePartPriceCalcRow>> makeRows = new LinkedHashMap<>();
-    CopperBasis financeBase = currentCopperBasis(source, sourceItems, makeRows);
-
+    requireMonthlyInputs(sourceItems);
     String scenarioGroupNo = ensureScenarioGroup(source);
-    PricePrepareGenerateRequest request = financeRequest(source, scenarioGroupNo, financeBase);
-    PricePrepareGenerateResult generated = pricePrepareService.generate(request);
-    if (generated == null || !STATUS_SUCCESS.equals(generated.getStatus())) {
-      throw new IllegalStateException(
-          "财务Cu价格准备未成功：" + (generated == null ? "无生成结果" : generated.getMessage()));
-    }
-    if (!source.getPriceAsOfTime().equals(generated.getPriceAsOfTime())) {
-      throw new IllegalStateException("财务与OA价格准备的取价时点不一致");
-    }
-
-    List<PricePrepareItem> financeItems = loadItems(generated.getPrepareNo());
+    // OA and finance are one workbench transaction. Never adopt again after OA preparation
+    // inserts have acquired the monthly-reference trigger locks on this same connection.
+    // Each P0 comes from the exact immutable evidence already saved with the OA calculation.
+    var projection = new MonthlyPreparationFinanceProjection(objectMapper, monthlyCodec);
+    List<PricePrepareItem> financeItems = sourceItems.stream().map(projection::project).toList();
     validateSameInputs(sourceItems, financeItems);
-    validateMakePartInputs(sourceItems, financeItems, makeRows);
-    saveCopperBasis(source, generated.getPrepareNo(), financeBase);
-    return new FinancePricePrepareGenerateResult(
-        normalizedSourceNo,
-        generated.getPrepareNo(),
-        scenarioGroupNo,
-        financeBase.legacyPriceId(),
-        financeBase.pricePerKg(),
-        generated,
-        financeBase.factorPriceId());
+    validateMakePartInputs(sourceItems, financeItems, new LinkedHashMap<>());
+
+    var now = java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai"));
+    var finance = new PricePrepareBatch();
+    org.springframework.beans.BeanUtils.copyProperties(source, finance);
+    finance.setId(null); finance.setPrepareNo("PPR-" + UUID.randomUUID());
+    finance.setScenarioType(QuotePriceScenarioType.FINANCE_QUOTE_BASE.name());
+    finance.setScenarioGroupNo(scenarioGroupNo); finance.setSourcePrepareNo(source.getPrepareNo());
+    finance.setStartedAt(now); finance.setFinishedAt(now);
+    finance.setCreatedAt(null); finance.setUpdatedAt(null);
+    finance.setMessage("财务价格已按本次 OA 保存的月价依据投影");
+    if (batchMapper.insert(finance) != 1) throw new IllegalStateException("财务价格准备批次保存失败");
+    for (var item : financeItems) {
+      item.setId(null); item.setPrepareNo(finance.getPrepareNo()); item.setCurrentFlag(0);
+      item.setCreatedAt(null); item.setUpdatedAt(null);
+      if (itemMapper.insert(item) != 1) throw new IllegalStateException("财务价格准备明细保存失败");
+    }
+    return new FinancePricePrepareGenerateResult(normalizedSourceNo, finance.getPrepareNo(),
+        scenarioGroupNo, null, null, toGenerateResult(finance), null);
   }
 
   @Override
@@ -130,6 +127,12 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
     List<PricePrepareItem> financeItems = loadItems(finance.getPrepareNo());
     validateSameInputs(sourceItems, financeItems);
     validateMakePartInputs(sourceItems, financeItems, makeRows);
+
+    if (hasMonthlyInputs(sourceItems)) {
+      requireMonthlyInputs(financeItems);
+      return new FinancePricePrepareGenerateResult(normalizedSourceNo, finance.getPrepareNo(),
+          scenarioGroupNo, null, null, toGenerateResult(finance), null);
+    }
 
     CopperBasis financeBase = savedCopperBasis(finance, financeItems, makeRows);
     return new FinancePricePrepareGenerateResult(
@@ -259,36 +262,6 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
       throw new IllegalStateException("同一报价采用了不同财务Cu基准，请重新准备价格");
     }
     return selected == null ? next : selected;
-  }
-
-  private CopperBasis currentCopperBasis(
-      PricePrepareBatch batch,
-      List<PricePrepareItem> items,
-      Map<Long, List<MakePartPriceCalcRow>> makeRows) {
-    var captured = itemCopperBasis(batch, items, makeRows);
-    if (captured != null) return captured;
-    return contextBasis(
-        batch,
-        financeFactors.read(
-            batch.getOaNo(),
-            batch.getOaFormItemId(),
-            batch.getPeriodMonth(),
-            batch.getBusinessUnitType()));
-  }
-
-  private void saveCopperBasis(
-      PricePrepareBatch source, String financePrepareNo, CopperBasis basis) {
-    try {
-      var saved =
-          new SavedFinanceBasis(source.getOaNo(), source.getOaFormItemId(), basis.context());
-      if (batchMapper.saveFinanceFactorSnapshot(
-              financePrepareNo, objectMapper.writeValueAsString(saved))
-          != 1) {
-        throw new IllegalStateException("财务基价依据保存失败：" + financePrepareNo);
-      }
-    } catch (JsonProcessingException error) {
-      throw new IllegalStateException("财务基价依据无法序列化：" + financePrepareNo, error);
-    }
   }
 
   private CopperBasis savedCopperBasis(
@@ -443,9 +416,11 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
     List<PricePrepareItem> items =
         itemMapper.selectList(
             Wrappers.lambdaQuery(PricePrepareItem.class)
-                .eq(PricePrepareItem::getPrepareNo, prepareNo)
-                .orderByAsc(PricePrepareItem::getId));
-    return items == null ? List.of() : items;
+                .eq(PricePrepareItem::getPrepareNo, prepareNo));
+    // Sorting full calculator JSON in MySQL can exhaust its sort buffer even for a
+    // small batch. The batch predicate is indexed; order the fetched rows in memory.
+    return items == null ? List.of() : items.stream().sorted(java.util.Comparator.comparing(
+        PricePrepareItem::getId, java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder()))).toList();
   }
 
   private void validateSourceItems(List<PricePrepareItem> sourceItems) {
@@ -461,25 +436,6 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
         throw new IllegalStateException("OA价格准备存在未就绪明细: " + item.getSettlementKey());
       }
     }
-  }
-
-  private PricePrepareGenerateRequest financeRequest(
-      PricePrepareBatch source, String scenarioGroupNo, CopperBasis financeBase) {
-    PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
-    request.setOaNo(source.getOaNo());
-    request.setOaFormItemId(source.getOaFormItemId());
-    request.setTopProductCode(source.getTopProductCode());
-    request.setPeriodMonth(source.getPeriodMonth());
-    request.setPriceAsOfTime(source.getPriceAsOfTime());
-    request.setBusinessUnitType(source.getBusinessUnitType());
-    request.setBomPurpose(source.getBomPurpose());
-    request.setSourceType(source.getSourceType());
-    request.setScenarioType(QuotePriceScenarioType.FINANCE_QUOTE_BASE);
-    request.setScenarioGroupNo(scenarioGroupNo);
-    request.setSourcePrepareNo(source.getPrepareNo());
-    // 数据库价格口径已经是元/公斤；这里只传 Cu 一个键，绝不清空或覆盖 Zn/Al。
-    request.setVariableOverrides(Map.of("Cu", financeBase.pricePerKg()));
-    return request;
   }
 
   private String ensureScenarioGroup(PricePrepareBatch source) {
@@ -508,6 +464,20 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
       requireSame(key, "明细类型", oa.getItemType(), finance.getItemType());
       requireSame(key, "价格结果类型", oa.getResultRefType(), finance.getResultRefType());
       requireSame(key, "数量", oa.getQuantity(), finance.getQuantity());
+      var monthly = monthlyEvidence.read(oa);
+      if (monthly != null) {
+        requireSame(key, "已采用月价及实际用量", monthly, monthlyEvidence.read(finance));
+        if (MonthlyPreparationPrice.KIND.equals(oa.getResultRefType())) {
+          var customer = monthlyCodec.decode(oa.getInputSnapshotJson(), MonthlyPreparationPrice.class);
+          var financial = monthlyCodec.decode(finance.getInputSnapshotJson(), MonthlyPreparationPrice.class);
+          requireSame(key, "捕获的双场景价格", customer, financial);
+          requireAmount(oa.getUnitPrice(), customer.customerPrice(), "客户 P1");
+          requireAmount(finance.getUnitPrice(), customer.financialPrice(), "财务 P0");
+          requireAmount(oa.getAmount(), oa.getQuantity().multiply(customer.customerPrice()), "客户材料金额");
+          requireAmount(finance.getAmount(), finance.getQuantity().multiply(customer.financialPrice()), "财务材料金额");
+          continue;
+        }
+      }
       if ("RANGE_PRICE".equals(oa.getResultRefType())
           && (StringUtils.hasText(oa.getInputSnapshotJson())
               || StringUtils.hasText(finance.getInputSnapshotJson()))) {
@@ -527,6 +497,36 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
         requireSame(key, "非Cu金额", oa.getAmount(), finance.getAmount());
       }
     }
+  }
+
+  private boolean hasMonthlyInputs(List<PricePrepareItem> rows) {
+    return rows.stream().allMatch(row -> zeroUse(row) || monthlyEvidence.read(row) != null);
+  }
+
+  private void requireMonthlyInputs(List<PricePrepareItem> rows) {
+    if (!hasMonthlyInputs(rows)) throw new IllegalStateException("当前财务准备需要完整月价依据，请先重新生成本报价价格准备");
+    for (var row : rows) {
+      if (zeroUse(row)) continue;
+      var inputs = monthlyEvidence.read(row);
+      if (inputs.uses().isEmpty() || row.getQuantity() == null)
+        throw new IllegalStateException("已计价明细缺少月价实际用量");
+      for (var price : inputs.prices()) if (price.selection().monthlyPriceId() == null
+          || price.selection().monthlyPriceId() <= 0
+          || !row.getPeriodMonth().equals(price.request().family().month().toString())
+          || !row.getBusinessUnitType().equals(price.request().family().businessUnitType()))
+        throw new IllegalStateException("准备月价尚未采用或不属于本报价月份／业务单元");
+    }
+  }
+
+  private static boolean zeroUse(PricePrepareItem row) {
+    return row.getQuantity() != null && row.getQuantity().signum() == 0
+        && row.getAmount() != null && row.getAmount().signum() == 0;
+  }
+
+  private static void requireAmount(BigDecimal actual, BigDecimal expected, String field) {
+    if (actual == null || expected == null || actual.setScale(8, java.math.RoundingMode.HALF_UP)
+        .compareTo(expected.setScale(8, java.math.RoundingMode.HALF_UP)) != 0)
+      throw new IllegalStateException(field + "与保存月价不一致");
   }
 
   private boolean mustRemainExact(PricePrepareItem item) {
@@ -558,12 +558,39 @@ public class FinancePricePrepareServiceImpl implements FinancePricePrepareServic
         requireSame(componentKey, "子项数量", oa.getQtyPerParent(), finance.getQtyPerParent());
         requireSame(componentKey, "毛重", oa.getGrossWeightG(), finance.getGrossWeightG());
         requireSame(componentKey, "净重", oa.getNetWeightG(), finance.getNetWeightG());
+        if (monthlyEvidence.read(sourceItem) != null) {
+          validateMonthlyMakePrice(sourceItem, oa.getChildMaterialNo(), oa.getRawInputSnapshotJson(),
+              finance.getRawInputSnapshotJson(), oa.getRawUnitPrice(), finance.getRawUnitPrice());
+          if (!Boolean.TRUE.equals(oa.getNoScrapConfirmed()))
+            validateMonthlyMakePrice(sourceItem, oa.getScrapCode(), oa.getScrapInputSnapshotJson(),
+                finance.getScrapInputSnapshotJson(), oa.getScrapUnitPrice(), finance.getScrapUnitPrice());
+        }
+      }
+      if (monthlyEvidence.read(sourceItem) != null) {
+        requireAmount(sourceItem.getAmount(), sourceItem.getQuantity().multiply(sourceItem.getUnitPrice()), "客户制造件金额");
+        requireAmount(financeItem.getAmount(), financeItem.getQuantity().multiply(financeItem.getUnitPrice()), "财务制造件金额");
       }
     }
   }
 
+  private void validateMonthlyMakePrice(PricePrepareItem parent, String code, String source,
+      String finance, BigDecimal p1, BigDecimal p0) {
+    var captured = monthlyCodec.decode(source, MonthlyPreparationPrice.class);
+    requireSame(code, "制造基础月价", captured, monthlyCodec.decode(finance, MonthlyPreparationPrice.class));
+    requireSame(code, "制造基础料号", code, captured.request().family().materialCode());
+    requireSame(code, "制造基础采用依据", captured.selection(),
+        monthlyEvidence.read(parent).plan().selections().get(captured.request()));
+    requireAmount(p1, captured.customerPrice().multiply(captured.unitPriceMultiplier()), "制造基础 P1");
+    requireAmount(p0, captured.financialPrice().multiply(captured.unitPriceMultiplier()), "制造基础 P0");
+  }
+
   private List<MakePartPriceCalcRow> loadMakeRows(
       PricePrepareItem item, Map<Long, List<MakePartPriceCalcRow>> cache) {
+    if (item != null && monthlyEvidence.read(item) != null) {
+      var captured = new MakePartCalculationEvidence(objectMapper).rows(item);
+      if (captured == null) throw new IllegalStateException("月价制造准备缺少完整计算底稿");
+      return captured;
+    }
     if (item == null || item.getResultRefId() == null)
       throw new IllegalStateException("制造件价格准备缺结果引用");
     return cache.computeIfAbsent(item.getResultRefId(), ignored -> loadMakeRows(item));

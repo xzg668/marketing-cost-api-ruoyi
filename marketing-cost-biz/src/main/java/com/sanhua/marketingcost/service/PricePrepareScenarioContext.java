@@ -15,7 +15,14 @@ public record PricePrepareScenarioContext(
     String scenarioGroupNo,
     String sourcePrepareNo,
     Map<String, BigDecimal> variableOverrides,
-    com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext supplierReviews) {
+    com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext supplierReviews,
+    com.sanhua.marketingcost.service.pricing.monthly.QuotationPriceSession.Scope monthlyPrices) {
+
+  public PricePrepareScenarioContext(QuotePriceScenarioType scenarioType, String scenarioGroupNo,
+      String sourcePrepareNo, Map<String, BigDecimal> variableOverrides, SupplierPriceReviewContext supplierReviews) {
+    this(scenarioType, scenarioGroupNo, sourcePrepareNo, variableOverrides, supplierReviews,
+        new com.sanhua.marketingcost.service.pricing.monthly.QuotationPriceSession.Scope());
+  }
 
   public PricePrepareScenarioContext(QuotePriceScenarioType scenarioType, String scenarioGroupNo,
       String sourcePrepareNo, Map<String, BigDecimal> variableOverrides) {
@@ -25,7 +32,7 @@ public record PricePrepareScenarioContext(
 
   public PricePrepareScenarioContext forOrganization(String orgCode) {
     return new PricePrepareScenarioContext(scenarioType, scenarioGroupNo, sourcePrepareNo,
-        variableOverrides, supplierReviews.forOrganization(orgCode));
+        variableOverrides, supplierReviews.forOrganization(orgCode), monthlyPrices);
   }
 
   /** 补录价格检查沿用原报价明细的组织范围，不能从登录业务单元推断。 */
@@ -47,7 +54,7 @@ public record PricePrepareScenarioContext(
             "FINANCE_QUOTE_BASE场景必须提供scenarioGroupNo和sourcePrepareNo");
       }
       BigDecimal cu = variableOverrides.get("Cu");
-      if (variableOverrides.size() != 1 || cu == null || cu.compareTo(BigDecimal.ZERO) <= 0) {
+      if (!variableOverrides.isEmpty() && (variableOverrides.size() != 1 || cu == null || cu.compareTo(BigDecimal.ZERO) <= 0)) {
         throw new IllegalArgumentException("FINANCE_QUOTE_BASE场景只允许覆盖大于0的Cu");
       }
     } else if (!variableOverrides.isEmpty()) {

@@ -47,7 +47,7 @@ class PricePrepareNoScrapConfirmationControllerTest {
     pricePrepareService = mock(PricePrepareService.class);
     queryService = mock(PricePrepareQueryService.class);
     noScrapService = mock(MakePartNoScrapConfirmationService.class);
-    controller = new PricePrepareController(pricePrepareService, queryService, noScrapService);
+    controller = new PricePrepareController(queryService, noScrapService);
   }
 
   @AfterEach
@@ -233,7 +233,7 @@ class PricePrepareNoScrapConfirmationControllerTest {
         PricePrepareQueryService queryService,
         MakePartNoScrapConfirmationService noScrapConfirmationService) {
       return new PricePrepareController(
-          pricePrepareService, queryService, noScrapConfirmationService);
+          queryService, noScrapConfirmationService);
     }
   }
 }

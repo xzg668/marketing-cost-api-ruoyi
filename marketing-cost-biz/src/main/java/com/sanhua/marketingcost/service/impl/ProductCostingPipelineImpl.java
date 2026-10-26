@@ -187,36 +187,41 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
       QuotePricePrepareGenerateRequest priceRequest = new QuotePricePrepareGenerateRequest();
       priceRequest.setPeriodMonth(scope.periodMonth());
       QuotePricePrepareWorkbenchResponse prices =
-          pricePrepareService.generate(scope.oaNo(), scope.itemId(), priceRequest);
-      ProductCostingResult priceBlocked = priceBlock(scope, prices);
+          preparationOnly
+              ? pricePrepareService.checkPriceSources(scope.oaNo(), scope.itemId(), priceRequest)
+              : pricePrepareService.generate(scope.oaNo(), scope.itemId(), priceRequest);
+      ProductCostingResult priceBlocked = priceBlock(scope, prices, preparationOnly);
       if (priceBlocked != null) {
         return priceBlocked;
       }
       PricePrepareReadinessResult readiness = prices.getReadiness();
-      String prepareNo = required(readiness.getPrepareNo(), "最终价格批次");
-      stateService.bindCurrentPriceFingerprint(
-          scope.oaNo(), scope.itemId(), scope.periodMonth(), prepareNo);
+      String prepareNo = null;
+      if (!preparationOnly) {
+        prepareNo = required(readiness.getPrepareNo(), "最终价格批次");
+        stateService.bindCurrentPriceFingerprint(
+            scope.oaNo(), scope.itemId(), scope.periodMonth(), prepareNo);
+      }
 
       stage = STEP_COST;
       var sourceCheck = technicalSources.afterCosting(scope);
       var technicalBlocked = technicalBlock(scope, sourceCheck);
       if (technicalBlocked != null) return technicalBlocked;
+      if (preparationOnly) {
+        scope = contextResolver.resolveRevision(scope);
+        var prepared = base(scope);
+        prepared.setPipelineStatus("READY");
+        prepared.setCurrentStep("MATERIAL_CHECK");
+        prepared.setMessage("本产品资料检查通过");
+        prepared.setSourceRevision(scope.sourceRevision());
+        prepared.setTechnicalDataCheck(sourceCheck);
+        return prepared;
+      }
       // 使用价格准备事务记录的输入修订，不能把较晚的基价版本贴在旧价格上。
       String priceRevision = required(prices.getSourceRevision(), "价格准备输入修订");
       if (!priceRevision.equals(contextResolver.resolveRevision(scope).sourceRevision())) {
         throw new org.springframework.dao.ConcurrencyFailureException("价格准备后上游业务输入已变化，请重新发起核算");
       }
       scope = scope.withRevision(priceRevision);
-      if (preparationOnly) {
-        var prepared = base(scope);
-        prepared.setPipelineStatus("READY");
-        prepared.setCurrentStep("MATERIAL_CHECK");
-        prepared.setMessage("本产品资料检查通过");
-        prepared.setPricePrepareNo(prepareNo);
-        prepared.setSourceRevision(scope.sourceRevision());
-        prepared.setTechnicalDataCheck(sourceCheck);
-        return prepared;
-      }
       oaWorkflowAccess.requireCostPublication(scope.form().getId(), scope.itemId());
       QuoteCostRunTrialRequest costRequest = new QuoteCostRunTrialRequest();
       costRequest.setPeriodMonth(scope.periodMonth());
@@ -304,7 +309,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   }
 
   private ProductCostingResult priceBlock(
-      ProductCostingContext scope, QuotePricePrepareWorkbenchResponse prices) {
+      ProductCostingContext scope, QuotePricePrepareWorkbenchResponse prices, boolean preparationOnly) {
     var correction = prices == null ? null : prices.getTechnicalPriceCorrection();
     if (correction != null && !correction.items().isEmpty())
       return blocked(
@@ -322,7 +327,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
         && "READY".equals(readiness.getStatus())
         && "SUCCESS".equals(readiness.getBatchStatus())
         && readiness.getGapCount() == 0
-        && StringUtils.hasText(readiness.getPrepareNo())) {
+        && (preparationOnly || StringUtils.hasText(readiness.getPrepareNo()))) {
       return null;
     }
     int gaps = readiness == null ? 1 : Math.max(1, readiness.getGapCount());

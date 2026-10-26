@@ -16,6 +16,15 @@ import lombok.Setter;
 @TableName("lp_package_component_price_detail")
 public class PackageComponentPriceDetail {
 
+  /** Independent original-tree household occurrence; deliberately has no ordinary price/amount. */
+  public static final String HOUSEHOLD_EXCLUDED = "HOUSEHOLD_EXCLUDED";
+  @TableField(exist = false)
+  private com.sanhua.marketingcost.service.pricing.monthly.MonthlyAdoptionPlan.Use householdUse;
+  @TableField(exist = false)
+  private String sourcePath;
+  @TableField(exist = false)
+  private Long sourceHierarchyId;
+
   @TableId(type = IdType.AUTO)
   private Long id;
 

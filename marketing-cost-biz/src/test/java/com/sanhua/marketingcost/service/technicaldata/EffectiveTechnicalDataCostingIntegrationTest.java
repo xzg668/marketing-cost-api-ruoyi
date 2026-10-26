@@ -86,6 +86,7 @@ class EffectiveTechnicalDataCostingIntegrationTest extends BomMapperTestBase {
 
     assertThat(input.versionId()).isEqualTo(fixture.v2Id());
     assertThat(input.versionNo()).isEqualTo(2);
+    assertThat(input.productFees()).isNull();
     assertThat(input.salaryTotalAmount()).isEqualByComparingTo("18.90000000");
     assertThat(input.auxiliaryTotalAmount()).isEqualByComparingTo("0.70400000");
     assertThat(input.packageTotalAmount()).isEqualByComparingTo("3.50000000");

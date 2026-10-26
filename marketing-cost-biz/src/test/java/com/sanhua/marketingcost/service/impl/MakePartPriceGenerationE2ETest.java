@@ -224,7 +224,7 @@ class MakePartPriceGenerationE2ETest {
     when(scrapMappingService.listMappings("RAW-MISSING-SCRAP-PRICE", BU))
         .thenReturn(List.of(scrap("SCRAP-MISSING-PRICE")));
 
-    when(priceResolveService.resolveMaterialUnitPrice(
+    when(priceResolveService.calculateMaterialUnitPrice(
             anyString(), eq(PERIOD), any(), any(), eq(OA_NO), eq(BU),
             any(PricePrepareScenarioContext.class), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenAnswer(invocation -> {
@@ -239,13 +239,11 @@ class MakePartPriceGenerationE2ETest {
         new MakePartProcessTypePolicy(),
         weightService,
         scrapMappingService,
-        mock(MaterialPriceRouterService.class),
-        mock(LinkedPriceEnsureService.class),
         priceResolveService,
         new MakePartPriceCalculator(),
         mock(com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService.class),
         calcRowMapper,
-        mock(MakePartPriceGapItemMapper.class), mock(com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService.class));
+        mock(MakePartPriceGapItemMapper.class), mock(com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.class), new com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec(new com.fasterxml.jackson.databind.ObjectMapper()));
   }
 
   private CostRunPartItemServiceImpl buildCostRunService(MakePartPriceCalcRowMapper calcRowMapper) {

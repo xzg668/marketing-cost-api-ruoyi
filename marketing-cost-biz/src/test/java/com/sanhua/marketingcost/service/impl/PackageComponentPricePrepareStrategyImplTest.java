@@ -39,19 +39,14 @@ class PackageComponentPricePrepareStrategyImplTest {
   }
 
   @Test
-  @DisplayName("包装组件：自动从 BOM 计划行传 topProductCode + packageMaterialCode")
-  void passesTopProductAndPackageCode() {
+  @DisplayName("包装组件：传递报价范围，拒绝没有月价输入的完整结果")
+  void passesTopProductAndPackageCodeAndRejectsUncapturedResult() {
     when(packageComponentPriceService.ensurePrice(any(PackagePriceRequest.class)))
         .thenReturn(priceResult("PRICED", true, new BigDecimal("4.50"), 700L, List.of()));
 
-    PackageComponentPricePrepareResult result =
-        strategy.prepare("PPR-001", "OA-001", "2026-05", "主制造", "U9", planItem());
-
-    assertThat(result.getStatus()).isEqualTo("READY");
-    assertThat(result.getUnitPrice()).isEqualByComparingTo("4.50");
-    assertThat(result.getAmount()).isEqualByComparingTo("11.250");
-    assertThat(result.getResultRefType()).isEqualTo("PACKAGE_PRICE");
-    assertThat(result.getResultRefId()).isEqualTo(700L);
+    org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+        strategy.prepare("PPR-001", "OA-001", "2026-05", "主制造", "U9", planItem()))
+        .hasMessageContaining("包装件缺少月价输入会话");
     ArgumentCaptor<PackagePriceRequest> captor = ArgumentCaptor.forClass(PackagePriceRequest.class);
     verify(packageComponentPriceService).ensurePrice(captor.capture());
     assertThat(captor.getValue().getTopProductCode()).isEqualTo("TOP-001");
@@ -70,7 +65,7 @@ class PackageComponentPricePrepareStrategyImplTest {
   @DisplayName("包装组件：价格准备按 BOM 行业务线传递组织")
   void usesBomRowBusinessUnitForPriceOrganization() {
     when(packageComponentPriceService.ensurePrice(any(PackagePriceRequest.class)))
-        .thenReturn(priceResult("PRICED", true, new BigDecimal("4.50"), 704L, List.of()));
+        .thenReturn(priceResult("MISSING_STRUCTURE", false, null, 704L, List.of()));
     PricePreparePlanItem item = planItem();
     item.getBomRow().setPriceOrgCode("220");
 
@@ -86,12 +81,12 @@ class PackageComponentPricePrepareStrategyImplTest {
   void monthlyPreparePassesPriceAsOfTime() {
     LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 26, 10, 30);
     when(packageComponentPriceService.ensurePrice(any(PackagePriceRequest.class)))
-        .thenReturn(priceResult("PRICED", true, new BigDecimal("4.50"), 703L, List.of()));
+        .thenReturn(priceResult("MISSING_STRUCTURE", false, null, 703L, List.of()));
 
     PackageComponentPricePrepareResult result =
         strategy.prepare("MR-001", "OA-001", "2026-05", priceAsOfTime, "主制造", "U9", planItem());
 
-    assertThat(result.getStatus()).isEqualTo("READY");
+    assertThat(result.getStatus()).isEqualTo("MISSING_STRUCTURE");
     ArgumentCaptor<PackagePriceRequest> captor = ArgumentCaptor.forClass(PackagePriceRequest.class);
     verify(packageComponentPriceService).ensurePrice(captor.capture());
     assertThat(captor.getValue().getPriceAsOfTime()).isEqualTo(priceAsOfTime);

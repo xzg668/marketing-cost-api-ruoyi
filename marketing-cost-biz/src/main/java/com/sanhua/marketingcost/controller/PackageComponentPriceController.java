@@ -214,6 +214,8 @@ public class PackageComponentPriceController {
   private PackagePriceRequest toPackagePriceRequest(
       PackageComponentBulkGenerateRequest request, BomCostingRow row) {
     PackagePriceRequest priceRequest = new PackagePriceRequest();
+    priceRequest.setOaFormItemId(row.getOaFormItemId());
+    priceRequest.setBusinessUnitType(row.getBusinessUnitType());
     priceRequest.setPackageMaterialCode(row.getMaterialCode());
     priceRequest.setPriceOrgCode(priceOrgCodeFor(row));
     priceRequest.setPeriodMonth(effectivePeriodMonth(request, row));

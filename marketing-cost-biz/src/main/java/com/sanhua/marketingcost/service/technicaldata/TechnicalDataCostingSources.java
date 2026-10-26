@@ -3,6 +3,10 @@ package com.sanhua.marketingcost.service.technicaldata;
 import com.sanhua.marketingcost.entity.QuoteTechDataVersion;
 import com.sanhua.marketingcost.entity.QuoteTechProduct;
 import com.sanhua.marketingcost.entity.QuoteTechTask;
+import com.sanhua.marketingcost.entity.QuoteTechModule;
+import com.sanhua.marketingcost.entity.QuoteTechPackageItem;
+import com.sanhua.marketingcost.entity.QuoteTechAuxItem;
+import com.sanhua.marketingcost.entity.QuoteTechSalaryItem;
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import com.sanhua.marketingcost.integration.technicaldata.TechnicalDataOaWorkflowRepository;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
@@ -29,6 +33,38 @@ import org.springframework.transaction.annotation.Transactional;
 public class TechnicalDataCostingSources {
   public record Source(String moduleType, QuoteTechTask task, QuoteTechProduct product,
       QuoteTechDataVersion version, Long moduleVersionId) {}
+  /** Owned batch read capture. Empty queried details must have explicit map entries. */
+  public record Captured(QuoteTechTask task,QuoteTechProduct product,Map<Long,QuoteTechDataVersion> versions,
+      List<QuoteTechModule> modules,Map<Long,List<QuoteTechPackageItem>> packageItems,
+      Map<Long,List<QuoteTechAuxItem>> auxiliaryItems,Map<Long,List<QuoteTechSalaryItem>> salaryItems,
+      TechnicalDataOaWorkflowRepository.Flow flow,String submissionBasis) {
+    public Captured {
+      Objects.requireNonNull(task);Objects.requireNonNull(product);
+      versions=Map.copyOf(versions);modules=List.copyOf(modules);
+      packageItems=capturedRows(packageItems);auxiliaryItems=capturedRows(auxiliaryItems);salaryItems=capturedRows(salaryItems);
+    }
+    QuoteTechDataVersion version(Long id){
+      var value=Objects.requireNonNull(versions.get(id),"Missing captured technical version: "+id);
+      if(!Objects.equals(id,value.getId()))throw new IllegalArgumentException("Mismatched captured technical version: "+id);
+      return value;
+    }
+    private static <T> Map<Long,List<T>> capturedRows(Map<Long,List<T>> values) {
+      var result=new LinkedHashMap<Long,List<T>>();values.forEach((id,rows)->result.put(id,List.copyOf(rows)));return Map.copyOf(result);
+    }
+    private static <T> List<T> details(Map<Long,List<T>> values,Long id) {
+      var rows=Objects.requireNonNull(values.get(id),"Missing captured technical details: "+id);
+      for(Object row:rows) {
+        Long version=switch(row) {
+          case QuoteTechPackageItem item -> item.getVersionId();
+          case QuoteTechAuxItem item -> item.getVersionId();
+          case QuoteTechSalaryItem item -> item.getVersionId();
+          default -> throw new IllegalArgumentException("Unknown captured technical detail");
+        };
+        if(!Objects.equals(id,version))throw new IllegalArgumentException("Mismatched captured technical detail version: "+id);
+      }
+      return rows;
+    }
+  }
   public record Issue(String moduleType, String code, String message) {}
   public record Selection(QuoteBomReadContext context, Map<String, Source> sources,
       List<TechnicalDataSourceFact> publicFacts, List<Issue> issues) {
@@ -168,6 +204,17 @@ public class TechnicalDataCostingSources {
   }
 
   public Source requireSource(QuoteBomReadContext context, TechnicalDataSharedModuleRepository.Owner owner) {
+    return requireSource(context,owner,null);
+  }
+
+  /** Same final-source rules with no repository, mapper or workflow reads. */
+  public Source requireCapturedSource(QuoteBomReadContext context,TechnicalDataSharedModuleRepository.Owner owner,
+      Captured captured) {
+    return requireSource(context,owner,Objects.requireNonNull(captured));
+  }
+
+  private Source requireSource(QuoteBomReadContext context,TechnicalDataSharedModuleRepository.Owner owner,
+      Captured captured) {
     String type = owner.moduleType();
     String label = "PRICE".equals(type) ? "价格" : TechnicalDataSharedModules.label(type);
     if (!Objects.equals(owner.businessUnit(), context.businessUnitType())
@@ -176,38 +223,73 @@ public class TechnicalDataCostingSources {
             && YearMonth.parse(owner.accountingMonth()).getYear() != YearMonth.parse(context.accountingMonth()).getYear()) {
       throw error(context, type, "TECH_DATA_SOURCE_SCOPE_MISMATCH", "原补录组织、业务单元或年度不适用于本次报价，请核实原资料");
     }
-    var product = repository.findProduct(owner.productId()).orElseThrow();
-    var task = repository.findTask(owner.taskId()).orElseThrow();
+    var product = captured==null?repository.findProduct(owner.productId()).orElseThrow():captured.product();
+    var task = captured==null?repository.findTask(owner.taskId()).orElseThrow():captured.task();
+    if(captured!=null && (!Objects.equals(product.getId(),owner.productId()) || !Objects.equals(task.getId(),owner.taskId())
+        || !Objects.equals(product.getTaskId(),task.getId())))
+      throw error(context,type,"TECH_DATA_EFFECTIVE_VERSION_INVALID","原补录捕获的产品与任务身份不一致");
+    if(captured!=null && (!Objects.equals(task.getBusinessUnitType(),owner.businessUnit())
+        || !Objects.equals(task.getApplicableOrgCode(),owner.organization())
+        || !Objects.equals(product.getAccountingMonth(),owner.accountingMonth())))
+      throw error(context,type,"TECH_DATA_SOURCE_SCOPE_MISMATCH","捕获的原任务业务单元、组织或原产品月份与办理来源不一致");
     if (!Integer.valueOf(1).equals(product.getActiveFlag()) || !Integer.valueOf(1).equals(task.getActiveFlag())
         || !TechnicalDataSubmissionState.submitted(task.getTaskStatus())
         || !TechnicalDataSubmissionState.submitted(product.getProductStatus()) || product.getEffectiveVersionId() == null
         || !TechnicalDataSubmissionState.submitted(owner.moduleStatus()) || !TechnicalDataSubmissionState.submitted(owner.versionStatus())) {
       throw error(context, type, "TECH_DATA_TASK_NOT_SUBMITTED", "原补录尚未全部提交：" + label);
     }
-    var flow = task.getOaFlowId() == null ? null : workflow.findFlow(task.getOaFlowId());
+    var flow = captured==null?(task.getOaFlowId()==null?null:workflow.findFlow(task.getOaFlowId())):captured.flow();
+    if(captured!=null && !Objects.equals(task.getOaFormId(),context.oaFormId()) && flow!=null) {
+      if(!Objects.equals(task.getOaFlowId(),flow.id()) || !Objects.equals(task.getOaFormId(),flow.oaFormId()))
+        throw error(context,type,"TECH_DATA_FINANCE_CONFIRMATION_REQUIRED","捕获的资料确认不属于原补录流程");
+      Objects.requireNonNull(captured.submissionBasis(),"Missing captured technical submission basis");
+    }
     // 本单资料确认前须能检查已提交内容；成本发布另行校验报价员本次确认采用的整单资料。
     // 其他报价复用时仍要求原报价员已认可资料，避免把待退回内容当作公共有效依据。
     if (!Objects.equals(task.getOaFormId(), context.oaFormId())
         && (flow == null || !flow.financeReady() || flow.confirmedFingerprint() == null
-        || !flow.confirmedFingerprint().equals(json.canonicalHash(workflow.submissionBasis(flow.id()))))) {
+        || !flow.confirmedFingerprint().equals(json.canonicalHash(captured==null?workflow.submissionBasis(flow.id()):captured.submissionBasis())))) {
       throw error(context, type, "TECH_DATA_FINANCE_CONFIRMATION_REQUIRED", "原补录尚未到财务节点并完成资料确认：" + label);
     }
-    var version = repository.findVersion(product.getEffectiveVersionId()).orElseThrow();
+    var version = captured==null?repository.findVersion(product.getEffectiveVersionId()).orElseThrow():captured.version(product.getEffectiveVersionId());
     if (!Objects.equals(version.getProductId(), product.getId()) || !TechnicalDataSubmissionState.submitted(version.getVersionStatus())) {
       throw error(context, type, "TECH_DATA_EFFECTIVE_VERSION_INVALID", "原补录有效版本指针异常");
     }
     var actual = content.fingerprint(version, content.readReferenceSnapshot(version.getReferenceSnapshotJson()),
-        repository.findPackageItems(version.getId()), repository.findAuxItems(version.getId()), repository.findSalaryItems(version.getId()));
+        captured==null?repository.findPackageItems(version.getId()):Captured.details(captured.packageItems(),version.getId()),
+        captured==null?repository.findAuxItems(version.getId()):Captured.details(captured.auxiliaryItems(),version.getId()),
+        captured==null?repository.findSalaryItems(version.getId()):Captured.details(captured.salaryItems(),version.getId()));
     if (!Objects.equals(actual, version.getContentFingerprint())) {
       throw error(context, type, "TECH_DATA_CONTENT_FINGERPRINT_MISMATCH", "原补录内容与提交指纹不一致");
     }
-    var moduleVersions = modules.selectByProductId(product.getId());
+    var moduleVersions = captured==null?modules.selectByProductId(product.getId()):captured.modules();
+    if(captured!=null) {
+      var actualTypes=moduleVersions.stream().map(QuoteTechModule::getModuleType).collect(java.util.stream.Collectors.toSet());
+      if(actualTypes.size()!=moduleVersions.size() || !actualTypes.equals(TechnicalDataModuleType.codesForVersion(version.getContentSchemaVersion())))
+        throw error(context,type,"TECH_DATA_MODULE_SET_INVALID","原补录模块捕获不完整或重复");
+      if(moduleVersions.stream().anyMatch(row->!Objects.equals(row.getProductId(),product.getId())))
+        throw error(context,type,"TECH_DATA_EFFECTIVE_VERSION_INVALID","捕获的模块不属于原补录产品");
+    }
+    if(captured!=null && moduleVersions.stream().anyMatch(row->Integer.valueOf(1).equals(row.getRequiredFlag())
+        && !TechnicalDataSubmissionState.submitted(row.getModuleStatus())))
+      throw error(context,type,"TECH_DATA_TASK_NOT_SUBMITTED","捕获的原补录仍有未提交必要模块："+label);
     var module = moduleVersions.stream().filter(row -> type.equals(row.getModuleType())).findFirst().orElseThrow();
     if (!Objects.equals(module.getCurrentVersionId(), owner.versionId())) {
       throw error(context, type, "TECH_DATA_SOURCE_CHANGED", "原补录模块版本已变化，请重新检查");
     }
-    var submitted = repository.findVersion(owner.versionId()).orElseThrow();
-    if (dependencies.stale(submitted, moduleVersions).stream().anyMatch(issue -> type.equals(issue.moduleType()))) {
+    var submitted = captured==null?repository.findVersion(owner.versionId()).orElseThrow():captured.version(owner.versionId());
+    if(captured!=null) {
+      if(!Objects.equals(submitted.getProductId(),product.getId()) || !TechnicalDataSubmissionState.submitted(submitted.getVersionStatus())
+          || !Objects.equals(module.getId(),owner.moduleId()) || !Objects.equals(module.getProductId(),product.getId()))
+        throw error(context,type,"TECH_DATA_EFFECTIVE_VERSION_INVALID","捕获的个人提交版与原产品不一致或尚未提交");
+      var submittedHash=content.fingerprint(submitted,content.readReferenceSnapshot(submitted.getReferenceSnapshotJson()),
+          Captured.details(captured.packageItems(),submitted.getId()),Captured.details(captured.auxiliaryItems(),submitted.getId()),Captured.details(captured.salaryItems(),submitted.getId()));
+      if(!Objects.equals(submittedHash,submitted.getContentFingerprint()))
+        throw error(context,type,"TECH_DATA_CONTENT_FINGERPRINT_MISMATCH","原个人提交内容与冻结指纹不一致");
+    }
+    var stale=captured==null?dependencies.stale(submitted,moduleVersions)
+        :dependencies.stale(submitted,moduleVersions,captured.versions(),captured.packageItems());
+    if (stale.stream().anyMatch(issue -> type.equals(issue.moduleType()))) {
       throw error(context, type, "TECH_DATA_SOURCE_CHANGED", "原提交补录的引用依据已经变化，请退回原办理人核实");
     }
     return new Source(type, task, product, version, owner.versionId());

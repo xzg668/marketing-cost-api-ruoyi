@@ -26,6 +26,7 @@ import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
 import com.sanhua.marketingcost.service.PricePrepareService;
 import com.sanhua.marketingcost.service.PricePrepareSettlementKeyGenerator;
 import com.sanhua.marketingcost.service.concurrent.RetryOnConcurrency;
+import com.sanhua.marketingcost.service.pricing.monthly.*;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -79,6 +80,12 @@ public class PricePrepareServiceImpl implements PricePrepareService {
   private final MakePartPricePrepareStrategy makePartPricePrepareStrategy;
   private final Clock clock;
   private final PricePrepareCurrentStateService currentStateService;
+  private final MonthlyQuotationSessions monthlySessions;
+  private final MonthlyAdoptionExecutor monthlyAdoption;
+  private final MonthlyPriceStorage monthlyStorage;
+  private final MonthlyPriceDocumentCodec monthlyCodec;
+  private final com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomRepository effectiveBoms;
+  private final com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService costingBoms;
 
   @Autowired
   public PricePrepareServiceImpl(
@@ -90,31 +97,29 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       NormalMaterialPricePrepareStrategy normalMaterialPricePrepareStrategy,
       PackageComponentPricePrepareStrategy packageComponentPricePrepareStrategy,
       MakePartPricePrepareStrategy makePartPricePrepareStrategy,
-      PricePrepareCurrentStateService currentStateService) {
-    this(
-        batchMapper,
-        itemMapper,
-        gapMapper,
-        bomItemLoader,
-        itemClassifier,
-        normalMaterialPricePrepareStrategy,
-        packageComponentPricePrepareStrategy,
-        makePartPricePrepareStrategy,
-        Clock.system(BUSINESS_ZONE),
-        currentStateService);
+      PricePrepareCurrentStateService currentStateService,
+      MonthlyQuotationSessions monthlySessions, MonthlyAdoptionExecutor monthlyAdoption,
+      MonthlyPriceStorage monthlyStorage, MonthlyPriceDocumentCodec monthlyCodec,
+      com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomRepository effectiveBoms,
+      com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService costingBoms) {
+    this(batchMapper, itemMapper, gapMapper, bomItemLoader, itemClassifier,
+        normalMaterialPricePrepareStrategy, packageComponentPricePrepareStrategy, makePartPricePrepareStrategy,
+        Clock.system(BUSINESS_ZONE), currentStateService, monthlySessions, monthlyAdoption,
+        monthlyStorage, monthlyCodec, effectiveBoms, costingBoms);
   }
 
   PricePrepareServiceImpl(
-      PricePrepareBatchMapper batchMapper,
-      PricePrepareItemMapper itemMapper,
-      PricePrepareGapMapper gapMapper,
-      PricePrepareBomItemLoader bomItemLoader,
+      PricePrepareBatchMapper batchMapper, PricePrepareItemMapper itemMapper,
+      PricePrepareGapMapper gapMapper, PricePrepareBomItemLoader bomItemLoader,
       PricePrepareItemClassifier itemClassifier,
       NormalMaterialPricePrepareStrategy normalMaterialPricePrepareStrategy,
       PackageComponentPricePrepareStrategy packageComponentPricePrepareStrategy,
-      MakePartPricePrepareStrategy makePartPricePrepareStrategy,
-      Clock clock,
-      PricePrepareCurrentStateService currentStateService) {
+      MakePartPricePrepareStrategy makePartPricePrepareStrategy, Clock clock,
+      PricePrepareCurrentStateService currentStateService,
+      MonthlyQuotationSessions monthlySessions, MonthlyAdoptionExecutor monthlyAdoption,
+      MonthlyPriceStorage monthlyStorage, MonthlyPriceDocumentCodec monthlyCodec,
+      com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomRepository effectiveBoms,
+      com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService costingBoms) {
     this.batchMapper = batchMapper;
     this.itemMapper = itemMapper;
     this.gapMapper = gapMapper;
@@ -123,8 +128,14 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     this.normalMaterialPricePrepareStrategy = normalMaterialPricePrepareStrategy;
     this.packageComponentPricePrepareStrategy = packageComponentPricePrepareStrategy;
     this.makePartPricePrepareStrategy = makePartPricePrepareStrategy;
-    this.clock = clock == null ? Clock.system(BUSINESS_ZONE) : clock;
+    this.clock = java.util.Objects.requireNonNull(clock);
     this.currentStateService = currentStateService;
+    this.monthlySessions = java.util.Objects.requireNonNull(monthlySessions);
+    this.monthlyAdoption = java.util.Objects.requireNonNull(monthlyAdoption);
+    this.monthlyStorage = java.util.Objects.requireNonNull(monthlyStorage);
+    this.monthlyCodec = java.util.Objects.requireNonNull(monthlyCodec);
+    this.effectiveBoms = java.util.Objects.requireNonNull(effectiveBoms);
+    this.costingBoms = java.util.Objects.requireNonNull(costingBoms);
   }
 
   @Override
@@ -141,13 +152,73 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
   @RetryOnConcurrency
   public PricePrepareGenerateResult generate(PricePrepareGenerateRequest request) {
-    return execute(request, true).getSummary();
+    var req = normalize(request, currentTime());
+    if (req.scenarioContext().scenarioType()
+        == com.sanhua.marketingcost.enums.QuotePriceScenarioType.FINANCE_QUOTE_BASE)
+      throw new IllegalArgumentException("财务价格准备必须从已保存的 OA 月价依据投影，不能重复采用月价");
+    List<BomCostingRow> rows;
+    try {
+      rows = bomItemLoader.loadByQuoteItem(
+          req.oaNo(), req.oaFormItemId(), req.topProductCode(), req.periodMonth());
+    } catch (org.springframework.dao.DataAccessException databaseFailure) {
+      throw databaseFailure;
+    } catch (RuntimeException unavailableBom) {
+      return execute(req, true).getSummary();
+    }
+    if (rows == null || rows.isEmpty()) return execute(req, true).getSummary();
+    var scope = monthlySessions.open(req.oaNo(), req.businessUnitType(), req.periodMonth(),
+        req.priceAsOfTime(), req.scenarioContext().forOrganization(rows.getFirst().getPriceOrgCode()));
+    MonthlyAdoptionPlan adopted;
+    try {
+      adopted = monthlyAdoption.execute(scope.context(), remaining -> {
+        var attempt = freshPrices(req);
+        var preview = execute(attempt, false);
+        if (!STATUS_SUCCESS.equals(preview.getSummary().getStatus())) throw new PreviewNotReady();
+        var session = attempt.scenarioContext().monthlyPrices().get();
+        return session == null ? new MonthlyAdoptionPlan(Map.of(), List.of(), Set.of()) : session.plan();
+      }).plan();
+    } catch (PreviewNotReady pending) {
+      refreshSettlementScope(req);
+      var failed = execute(freshPrices(req), true).getSummary();
+      if (STATUS_SUCCESS.equals(failed.getStatus()))
+        throw new org.springframework.dao.ConcurrencyFailureException("价格来源已补齐，需要重新执行整组月价采用");
+      return failed;
+    }
+    refreshSettlementScope(req);
+    var finalRequest = freshPrices(req);
+    var result = execute(finalRequest, true);
+    var session = finalRequest.scenarioContext().monthlyPrices().get();
+    var finalPlan = session == null ? new MonthlyAdoptionPlan(Map.of(), List.of(), Set.of()) : session.plan();
+    if (!STATUS_SUCCESS.equals(result.getSummary().getStatus()) || !adopted.equals(finalPlan))
+      throw new org.springframework.dao.ConcurrencyFailureException("月价采用后计价范围变化，请重新准备当前报价");
+    for (var item : result.getItems()) if (MonthlyPreparationPrice.KIND.equals(item.getResultRefType())) {
+      var evidence = monthlyCodec.decode(item.getInputSnapshotJson(), MonthlyPreparationPrice.class);
+      var selected = finalPlan.selections().get(evidence.request());
+      if (selected == null || !selected.equals(evidence.selection()) || selected.monthlyPriceId() == null)
+        throw new IllegalStateException("准备明细缺少本次采用的月价依据");
+      monthlyStorage.attachPreparation(req.businessUnitType(), item.getId(), selected.monthlyPriceId(), selected.fact().type());
+    }
+    return result.getSummary();
   }
+
+  private static NormalizedGenerateRequest freshPrices(NormalizedGenerateRequest req) {
+    var scenario = req.scenarioContext();
+    return new NormalizedGenerateRequest(req.oaNo(), req.oaFormItemId(), req.topProductCode(),
+        req.topProductCodes(), req.periodMonth(), req.priceAsOfTime(), req.priceAsOfSource(),
+        req.businessUnitType(), req.bomPurpose(), req.sourceType(), new PricePrepareScenarioContext(
+            scenario.scenarioType(), scenario.scenarioGroupNo(), scenario.sourcePrepareNo(),
+            scenario.variableOverrides(), scenario.supplierReviews()));
+  }
+
+  private static final class PreviewNotReady extends RuntimeException {}
 
   private PricePrepareCalculationResult execute(
       PricePrepareGenerateRequest request, boolean persist) {
+    return execute(normalize(request, currentTime()), persist);
+  }
+
+  private PricePrepareCalculationResult execute(NormalizedGenerateRequest req, boolean persist) {
     LocalDateTime now = currentTime();
-    NormalizedGenerateRequest req = normalize(request, now);
     Execution execution = new Execution(persist);
 
     PricePrepareBatch batch = initBatch(req, now, persist);
@@ -155,9 +226,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     List<BomCostingRow> bomRows;
     try {
       bomRows =
-          req.oaFormItemId() == null
-              ? loadLegacyBomRows(req)
-              : bomItemLoader.loadByQuoteItem(
+          bomItemLoader.loadByQuoteItem(
                   req.oaNo(), req.oaFormItemId(), req.topProductCode(), req.periodMonth());
     } catch (org.springframework.dao.DataAccessException databaseFailure) {
       throw databaseFailure;
@@ -172,11 +241,19 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       return finishExecution(batch, execution);
     }
 
+    var preview = previewSettlementScope(req, bomRows);
+    if (!persist) bomRows = preview.rows();
+
     List<PricePreparePlanItem> planItems;
     try {
-      planItems = itemClassifier.classify(bomRows);
+      bindBomScope(req, bomRows, preview);
+      // Preview carries the current household exclusions and rollup references. Its rows already
+      // have persisted IDs when the complete settlement shape matches the saved tree.
+      planItems = itemClassifier.classify(preview.rows());
     } catch (org.springframework.dao.DataAccessException databaseFailure) {
       throw databaseFailure;
+    } catch (MonthlyPriceProblem scopeChanged) {
+      throw scopeChanged;
     } catch (RuntimeException ex) {
       setBatchSummary(batch, 0, 0, 0, 0, STATUS_FAILED, "价格准备分类失败：" + exceptionMessage(ex));
       return finishExecution(batch, execution);
@@ -246,11 +323,100 @@ public class PricePrepareServiceImpl implements PricePrepareService {
         successCount++;
       }
     }
+    captureMonthlyInputs(batch, req, planItems, execution);
     batch.setSupplierPriceReviews(req.scenarioContext().supplierReviews().reviews());
     String status = gapCount > 0 ? STATUS_PARTIAL : STATUS_SUCCESS;
     String message = gapCount > 0 ? "已读取BOM结算明细并完成价格准备，存在待补充缺口" : "已读取BOM结算明细并完成价格准备";
     setBatchSummary(batch, planItems.size(), successCount, warningCount, gapCount, status, message);
     return finishExecution(batch, execution);
+  }
+
+  /** Every adoption attempt plans against the original tree, never a previously cut settlement tree. */
+  private com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService.Preview previewSettlementScope(
+      NormalizedGenerateRequest req, List<BomCostingRow> stored) {
+    String build = effectiveBuild(req, stored);
+    var preview = costingBoms.previewFromEffectiveBom(req.oaFormItemId(), build);
+    // Matching persisted rows may supply their original subtree references. A changed scope must
+    // carry its own preview evidence; borrowing an old row would reintroduce suppressed materials.
+    if (settlementShape(preview.rows()).equals(settlementShape(stored))) {
+      var byPath = new LinkedHashMap<String, BomCostingRow>();
+      stored.forEach(row -> byPath.put(row.getPath(), row));
+      for (var row : preview.rows()) {
+        var old = byPath.get(row.getPath());
+        if (old != null) row.setId(old.getId());
+      }
+    }
+    return preview;
+  }
+
+  private void refreshSettlementScope(NormalizedGenerateRequest req) {
+    var stored = bomItemLoader.loadByQuoteItem(req.oaNo(), req.oaFormItemId(), req.topProductCode(), req.periodMonth());
+    String build = effectiveBuild(req, stored);
+    if (!settlementShape(stored).equals(settlementShape(
+        costingBoms.previewFromEffectiveBom(req.oaFormItemId(), build).rows())))
+      costingBoms.buildFromEffectiveBom(req.oaFormItemId(), build);
+  }
+
+  private String effectiveBuild(NormalizedGenerateRequest req, List<BomCostingRow> rows) {
+    if (rows == null || rows.isEmpty())
+      throw invalidBomScope("当前报价结算明细已变化，请重新生成报价物料");
+    if (rows.stream().anyMatch(row -> row == null || !StringUtils.hasText(row.getBuildBatchId())))
+      throw invalidBomScope("报价结算明细缺少原始有效 BOM 构建身份，请重新生成报价物料");
+    var batches = rows.stream().map(BomCostingRow::getBuildBatchId).distinct().toList();
+    if (batches.size() != 1)
+      throw invalidBomScope("报价结算明细混用多个原始有效 BOM 构建，请重新生成报价物料");
+    var original = effectiveBoms.findNodesByBuildBatchId(batches.getFirst());
+    if (original == null || original.isEmpty())
+      throw invalidBomScope("缺少本产品原始有效 BOM，不能准备月价，请重新生成报价物料");
+    if (original.stream().anyMatch(node -> !req.topProductCode().equals(node.getTopProductCode())
+        || !req.periodMonth().equals(node.getCostPeriodMonth())
+        || !batches.getFirst().equals(node.getBuildBatchId())))
+      throw invalidBomScope("原始有效 BOM 与当前报价产品或月份不一致");
+    return batches.getFirst();
+  }
+
+  private MonthlyPriceProblem invalidBomScope(String message) {
+    return new MonthlyPriceProblem(MonthlyAdoptionRetryPolicy.Failure.INVALID_PLAN, message);
+  }
+
+  private record SettlementShape(String path, String code, String organization, String unit,
+      String specification, BigDecimal quantity, String type, Integer subtreeRequired) {}
+
+  private static Set<SettlementShape> settlementShape(List<BomCostingRow> rows) {
+    return rows.stream().map(row -> new SettlementShape(row.getPath(), row.getMaterialCode(),
+        row.getPriceOrgCode(), row.getUnit(), row.getMaterialSpec(),
+        row.getQtyPerTop() == null ? null : row.getQtyPerTop().stripTrailingZeros(),
+        row.getSettlementRowType(), row.getSubtreeCostRequired())).collect(java.util.stream.Collectors.toSet());
+  }
+
+  private void bindBomScope(NormalizedGenerateRequest req, List<BomCostingRow> rows,
+      com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService.Preview preview) {
+    if (!settlementShape(rows).equals(settlementShape(preview.rows())))
+      throw new MonthlyPriceProblem(MonthlyAdoptionRetryPolicy.Failure.REPLAN_REQUIRED,
+          "当前结算树与月价计价范围不一致，需要从原始有效树重建");
+    String org = rows.getFirst().getPriceOrgCode();
+    monthlySessions.open(req.oaNo(), req.businessUnitType(), req.periodMonth(), req.priceAsOfTime(),
+        req.scenarioContext().forOrganization(org)).bindScope(preview.pricingScope());
+  }
+
+  private void captureMonthlyInputs(PricePrepareBatch batch, NormalizedGenerateRequest req,
+      List<PricePreparePlanItem> plans, Execution execution) {
+    var session = req.scenarioContext().monthlyPrices().get();
+    if (session == null) return;
+    var roots = new LinkedHashMap<String, String>();
+    plans.forEach(plan -> roots.put(currentItemKey(batch, plan), plan.getBomRow().getPath()));
+    var adoptedInputs = session.plan();
+    var evidence = new MonthlyPreparationEvidence(monthlyCodec);
+    for (var row : execution.items) {
+      if (!ITEM_STATUS_READY.equals(row.getStatus()) || row.getQuantity() == null || row.getQuantity().signum() == 0) continue;
+      var inputs = MonthlyPreparationInputs.capture(adoptedInputs, roots.get(row.getSettlementKey()));
+      if (inputs.uses().isEmpty()) throw new IllegalStateException("已计价准备缺少实际月价输入：" + row.getMaterialCode());
+      row.setInputSnapshotJson(evidence.attach(row, inputs));
+      if (execution.persist) {
+        var patch = new PricePrepareItem(); patch.setId(row.getId()); patch.setInputSnapshotJson(row.getInputSnapshotJson());
+        if (itemMapper.updateById(patch) != 1) throw new IllegalStateException("准备月价依据保存失败");
+      }
+    }
   }
 
   private List<PricePreparePlanItem> mergePlanItems(
@@ -383,6 +549,8 @@ public class PricePrepareServiceImpl implements PricePrepareService {
           req.sourceType(),
           planItem,
           req.scenarioContext().forOrganization(planItem.getBomRow().getPriceOrgCode()));
+    } catch (MonthlyPriceProblem retryableMonthlyPrice) {
+      throw retryableMonthlyPrice;
     } catch (org.springframework.dao.DataAccessException databaseFailure) {
       throw databaseFailure;
     } catch (RuntimeException ex) {
@@ -419,6 +587,8 @@ public class PricePrepareServiceImpl implements PricePrepareService {
           req.priceAsOfTime(),
           req.scenarioContext().forOrganization(planItem.getBomRow().getPriceOrgCode()),
           planItem);
+    } catch (MonthlyPriceProblem retryableMonthlyPrice) {
+      throw retryableMonthlyPrice;
     } catch (org.springframework.dao.DataAccessException databaseFailure) {
       throw databaseFailure;
     } catch (RuntimeException ex) {
@@ -757,12 +927,6 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     return row == null ? null : row.getQtyPerTop();
   }
 
-  private List<BomCostingRow> loadLegacyBomRows(NormalizedGenerateRequest req) {
-    return req.topProductCodes().isEmpty()
-        ? bomItemLoader.loadByOaNo(req.oaNo())
-        : bomItemLoader.loadByOaNoAndTopProducts(req.oaNo(), req.topProductCodes());
-  }
-
   private void applyBatchScope(PricePrepareGap gap, PricePrepareBatch batch) {
     gap.setPrepareNo(batch.getPrepareNo());
     gap.setPeriodMonth(batch.getPeriodMonth());
@@ -814,10 +978,13 @@ public class PricePrepareServiceImpl implements PricePrepareService {
             ? List.of(topProductCode)
             : normalizeTopProductCodes(request.getTopProductCodes());
     Long oaFormItemId = request.getOaFormItemId();
-    if (oaFormItemId != null && !StringUtils.hasText(topProductCode)) {
-      throw new IllegalArgumentException(
-          "topProductCode is required when oaFormItemId is provided");
-    }
+    if (oaFormItemId == null || oaFormItemId <= 0)
+      throw new IllegalArgumentException("oaFormItemId is required; 请从报价产品工作台准备价格");
+    if (!StringUtils.hasText(topProductCode))
+      throw new IllegalArgumentException("topProductCode is required when oaFormItemId is provided");
+    var requestedProducts = normalizeTopProductCodes(request.getTopProductCodes());
+    if (requestedProducts.size() > 1 || !requestedProducts.isEmpty() && !requestedProducts.getFirst().equals(topProductCode))
+      throw new IllegalArgumentException("价格准备必须限定单一报价产品，不能混用 topProductCodes");
     LocalDateTime requestedPriceAsOfTime = request.getPriceAsOfTime();
     LocalDateTime priceAsOfTime =
         requestedPriceAsOfTime == null

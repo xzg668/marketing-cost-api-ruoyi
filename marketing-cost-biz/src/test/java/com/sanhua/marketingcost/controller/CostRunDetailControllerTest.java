@@ -1,146 +1,33 @@
 package com.sanhua.marketingcost.controller;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-
-import cn.iocoder.yudao.framework.common.pojo.CommonResult;
-import com.baomidou.mybatisplus.core.conditions.Wrapper;
-import com.sanhua.marketingcost.dto.CostRunCostItemDto;
-import com.sanhua.marketingcost.dto.CostRunDetailDto;
-import com.sanhua.marketingcost.dto.CostRunPartItemDto;
-import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
-import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
-import com.sanhua.marketingcost.mapper.OaFormItemMapper;
-import com.sanhua.marketingcost.mapper.OaFormMapper;
-import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
-import com.sanhua.marketingcost.service.CostRunCostItemService;
-import com.sanhua.marketingcost.service.CostRunPartItemService;
-import com.sanhua.marketingcost.service.CostRunResultService;
-import java.math.BigDecimal;
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
+import com.sanhua.marketingcost.dto.jjb.JjbReadModel;
+import com.sanhua.marketingcost.service.jjb.JjbReadService;
 import java.util.List;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 class CostRunDetailControllerTest {
-
-  @Test
-  @DisplayName("传入 costRunNo 时，成本一览表只查询该成本批次明细")
-  void detailUsesRequestedCostRunNo() {
-    CostRunPartItemService partService = mock(CostRunPartItemService.class);
-    CostRunCostItemService costService = mock(CostRunCostItemService.class);
-    CostRunResultService resultService = mock(CostRunResultService.class);
-    MaterialMasterMapper materialMasterMapper = mock(MaterialMasterMapper.class);
-    OaFormMapper oaFormMapper = mock(OaFormMapper.class);
-    OaFormItemMapper oaFormItemMapper = mock(OaFormItemMapper.class);
-    QuoteCostRunVersionMapper versionMapper = mock(QuoteCostRunVersionMapper.class);
-    CostRunDetailController controller =
-        new CostRunDetailController(
-            partService,
-            costService,
-            resultService,
-            materialMasterMapper,
-            oaFormMapper,
-            oaFormItemMapper,
-            versionMapper);
-    QuoteCostRunVersion requested = new QuoteCostRunVersion();
-    requested.setId(7L);
-    requested.setCostRunNo("TRIAL-V1");
-    requested.setCuMaterialAdjustment(new BigDecimal("139.65634237"));
-    requested.setFinalQuoteAmount(new BigDecimal("240.66634237"));
-    requested.setOaCuPrice(new BigDecimal("100"));
-    requested.setFinanceCuPrice(new BigDecimal("90"));
-    var currentForm = new com.sanhua.marketingcost.entity.OaForm();
-    currentForm.setId(1L);
-    currentForm.setCopperPrice(new BigDecimal("110"));
-    when(oaFormMapper.selectOne(any(Wrapper.class))).thenReturn(currentForm);
-    var frozenHeader = new com.sanhua.marketingcost.dto.CostRunResultDto();
-    frozenHeader.setProductAttr("非标品");
-    when(resultService.getResult(7L)).thenReturn(frozenHeader);
-    requested.setVersionNo("COST-V1");
-    when(versionMapper.selectOne(any(Wrapper.class))).thenReturn(requested);
-    CostRunPartItemDto part = new CostRunPartItemDto();
-    part.setId(501L);
-    part.setPartCode("MAT-V1");
-    CostRunCostItemDto total = new CostRunCostItemDto();
-    total.setId(601L);
-    total.setCostCode("TOTAL");
-    total.setAmount(new BigDecimal("101.01"));
-    when(partService.listAggregatedByCostRunNo("TRIAL-V1", "P-1")).thenReturn(List.of(part));
-    when(costService.listStoredByCostRunNo("TRIAL-V1")).thenReturn(List.of(total));
-
-    CommonResult<CostRunDetailDto> response =
-        controller.getDetail("OA-1", "P-1", "TRIAL-V1");
-
-    assertThat(response.getData().getProductAttr()).isEqualTo("非标品");
-    verify(resultService, never()).getResult(any(String.class), any(String.class));
-    assertThat(response.getData().getCostRunNo()).isEqualTo("TRIAL-V1");
-    assertThat(response.getData().getVersionNo()).isEqualTo("COST-V1");
-    assertThat(response.getData().getPartItems()).extracting(CostRunPartItemDto::getPartCode)
-        .containsExactly("MAT-V1");
-    assertThat(response.getData().getPartItems()).extracting(CostRunPartItemDto::getId)
-        .containsExactly(501L);
-    assertThat(response.getData().getCostItems()).extracting(CostRunCostItemDto::getId)
-        .containsExactly(601L);
-    assertThat(response.getData().getTotal()).isEqualByComparingTo("101.01");
-    assertThat(response.getData().getCuMaterialAdjustment()).isEqualByComparingTo("139.65634237");
-    assertThat(response.getData().getFinalQuoteAmount()).isEqualByComparingTo("240.66634237");
-    assertThat(response.getData().getCopperPrice()).isEqualByComparingTo("100");
-    assertThat(response.getData().getFinanceCuPrice()).isEqualByComparingTo("90");
-    verify(partService).listAggregatedByCostRunNo(eq("TRIAL-V1"), eq("P-1"));
-    verify(costService).listStoredByCostRunNo(eq("TRIAL-V1"));
-    verify(partService, never()).listAggregatedByOaNo(any(), any());
-    verify(costService, never()).listStoredByOaNo(any(), any());
+  @Test void explicitSelectorsAreForwardedTogetherAndSavedPrecisionIsPreserved() {
+    var reader=mock(JjbReadService.class);var sheet=sheet();
+    when(reader.resolve("OA-1","P-1",9L,7L,"RUN-7")).thenReturn(new JjbReadService.View(sheet,List.of(),List.of()));
+    var result=new CostRunDetailController(reader).getDetail("OA-1","P-1","RUN-7",9L,7L).getData();
+    assertThat(result.getSheet()).isSameAs(sheet);assertThat(result.getCostRunNo()).isEqualTo("RUN-7");
+    assertThat(result.getFinalQuoteAmount()).isEqualByComparingTo("999999999973.140060");
+    assertThat(result.getCuMaterialAdjustment()).isEqualByComparingTo("0.000000");
+    verify(reader).resolve("OA-1","P-1",9L,7L,"RUN-7");verifyNoMoreInteractions(reader);
   }
-
-  @Test
-  @DisplayName("旧链接未传 costRunNo 时，默认解析最新版本并只查询该版本明细")
-  void detailDefaultsToLatestCostRunVersion() {
-    CostRunPartItemService partService = mock(CostRunPartItemService.class);
-    CostRunCostItemService costService = mock(CostRunCostItemService.class);
-    CostRunResultService resultService = mock(CostRunResultService.class);
-    MaterialMasterMapper materialMasterMapper = mock(MaterialMasterMapper.class);
-    OaFormMapper oaFormMapper = mock(OaFormMapper.class);
-    OaFormItemMapper oaFormItemMapper = mock(OaFormItemMapper.class);
-    QuoteCostRunVersionMapper versionMapper = mock(QuoteCostRunVersionMapper.class);
-    CostRunDetailController controller =
-        new CostRunDetailController(
-            partService,
-            costService,
-            resultService,
-            materialMasterMapper,
-            oaFormMapper,
-            oaFormItemMapper,
-            versionMapper);
-    QuoteCostRunVersion latest = new QuoteCostRunVersion();
-    latest.setCostRunNo("TRIAL-LATEST");
-    latest.setVersionNo("V3");
-    when(versionMapper.selectOne(any(Wrapper.class))).thenReturn(latest);
-    CostRunPartItemDto part = new CostRunPartItemDto();
-    part.setPartCode("MAT-1");
-    CostRunCostItemDto total = new CostRunCostItemDto();
-    total.setCostCode("TOTAL");
-    total.setAmount(new BigDecimal("12.34"));
-    when(partService.listAggregatedByCostRunNo("TRIAL-LATEST", "P-1"))
-        .thenReturn(List.of(part));
-    when(costService.listStoredByCostRunNo("TRIAL-LATEST")).thenReturn(List.of(total));
-
-    CommonResult<CostRunDetailDto> response = controller.getDetail("OA-1", "P-1", null);
-
-    assertThat(response.getData().getCostRunNo()).isEqualTo("TRIAL-LATEST");
-    assertThat(response.getData().getVersionNo()).isEqualTo("V3");
-    assertThat(response.getData().getPartItems()).hasSize(1);
-    assertThat(response.getData().getTotal()).isEqualByComparingTo("12.34");
-    assertThat(response.getData().getCuMaterialAdjustment()).isNull();
-    assertThat(response.getData().getFinalQuoteAmount()).isNull();
-    verify(partService).listAggregatedByCostRunNo(eq("TRIAL-LATEST"), eq("P-1"));
-    verify(costService).listStoredByCostRunNo(eq("TRIAL-LATEST"));
-    verify(partService, never()).listAggregatedByOaNo(any(), any());
-    verify(costService, never()).listStoredByOaNo(any(), any());
+  @Test void legacyUrlUsesTheSameResolverWithoutInventingAnExplicitVersion() {
+    var reader=mock(JjbReadService.class);when(reader.resolve("OA-1","P-1",null,null,null)).thenReturn(new JjbReadService.View(sheet(),List.of(),List.of()));
+    new CostRunDetailController(reader).getDetail("OA-1","P-1",null,null,null);
+    verify(reader).resolve("OA-1","P-1",null,null,null);
   }
-
+  @Test void invalidExplicitVersionDoesNotRetryOrReadLatest() {
+    var reader=mock(JjbReadService.class);when(reader.resolve("OA-1","P-1",9L,8L,"RUN-7")).thenThrow(new org.springframework.security.access.AccessDeniedException("scope"));
+    assertThatThrownBy(()->new CostRunDetailController(reader).getDetail("OA-1","P-1","RUN-7",9L,8L)).isInstanceOf(org.springframework.security.access.AccessDeniedException.class);
+    verify(reader).resolve("OA-1","P-1",9L,8L,"RUN-7");verifyNoMoreInteractions(reader);
+  }
+  private JjbReadModel sheet() {return new JjbReadModel(new JjbReadModel.Identity(7L,"RUN-7","V7","OA-1",9L,"P-1","COMMERCIAL","2026-10","MONTHLY_PRODUCT_COST_V1","FEE_PROFILE_OPTIONAL_V2","SUCCESS",true),
+      new JjbReadModel.Header("产品","型号","客户","客户码","图号","保存版本","90.000000","100.000000","元/公斤","标准品","1"),List.of(),List.of(),
+      new JjbReadModel.Totals("999999999973.140060","0.000000","999999999973.140060"),List.of());}
 }

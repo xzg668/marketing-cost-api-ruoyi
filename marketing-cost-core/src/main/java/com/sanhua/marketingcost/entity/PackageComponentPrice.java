@@ -15,6 +15,10 @@ import lombok.Setter;
 @Setter
 @TableName("lp_package_component_price")
 public class PackageComponentPrice {
+  @TableField(exist = false)
+  private Long sourceRawHierarchyId;
+  @TableField(exist = false)
+  private String sourcePath;
 
   @TableId(type = IdType.AUTO)
   private Long id;

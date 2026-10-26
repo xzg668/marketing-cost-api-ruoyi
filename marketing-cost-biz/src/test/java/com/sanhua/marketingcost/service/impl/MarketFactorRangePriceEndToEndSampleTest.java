@@ -148,8 +148,6 @@ class MarketFactorRangePriceEndToEndSampleTest {
     PriceRangeItemMapper rangeItemMapper = mock(PriceRangeItemMapper.class);
     PriceRangeFactorRuleMapper factorRuleMapper = mock(PriceRangeFactorRuleMapper.class);
     OaFormMapper oaFormMapper = mock(OaFormMapper.class);
-    MaterialPriceRouterService routerService = mock(MaterialPriceRouterService.class);
-    LinkedPriceEnsureService linkedPriceEnsureService = mock(LinkedPriceEnsureService.class);
     PricePrepareItemMapper prepareItemMapper = mock(PricePrepareItemMapper.class);
     BomCostingRowMapper bomCostingRowMapper = mock(BomCostingRowMapper.class);
     MaterialMasterMapper materialMasterMapper = mock(MaterialMasterMapper.class);
@@ -199,24 +197,24 @@ class MarketFactorRangePriceEndToEndSampleTest {
 
     RangePriceResolver rangeResolver =
         RangePriceResolverTestSupport.create(rangeItemMapper, factorRuleMapper, oaFormMapper);
-    NormalMaterialPricePrepareStrategyImpl prepareStrategy =
-        new NormalMaterialPricePrepareStrategyImpl(
-            routerService, linkedPriceEnsureService, List.of(rangeResolver), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService.class), org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceReader.class));
-    SAMPLE_PART_CODES.forEach(code ->
-        when(routerService.prepareCandidates(eq(code), any(), eq(PERIOD_MONTH), any(LocalDate.class), any(), any()))
-            .thenReturn(List.of(rangeRoute(code))));
-
     List<PricePrepareItem> preparedItems = new ArrayList<>();
     Map<String, BomCostingRow> bomRows =
         SAMPLE_PART_CODES.stream().collect(Collectors.toMap(code -> code, this::bomRow));
     long prepareItemId = 12001L;
     for (String code : SAMPLE_PART_CODES) {
-      NormalMaterialPricePrepareResult prepareResult =
-          prepareStrategy.prepare(
-              OA_NO,
-              BUSINESS_UNIT_TYPE,
-              PERIOD_MONTH,
-              planItem(bomRows.get(code)));
+      // Build a historical saved-preparation fixture from the retained range resolver.
+      // New quotation preparation uses MonthlyQuotationSessions and is tested in the monthly suites.
+      CostRunPartItemDto part = new CostRunPartItemDto();
+      part.setPartCode(code); part.setPartQty(BOM_QTY); part.setPriceOrgCode("210");
+      part.setMaterialOrganizationCode("COMMERCIAL");
+      CostRunContext pricing = CostRunContext.quote(OA_NO, OA_FORM_ITEM_ID, PRODUCT_CODE,
+          null, null, BUSINESS_UNIT_TYPE, PERIOD_MONTH, PRODUCT_CODE);
+      pricing.setPriceOrgCode("210"); pricing.setMaterialOrganizationCode("COMMERCIAL");
+      pricing.setPriceAsOfTime(LocalDateTime.of(2026, 7, 14, 12, 0));
+      var resolved = rangeResolver.resolve(OA_NO, part, rangeRoute(code), pricing);
+      NormalMaterialPricePrepareResult prepareResult = NormalMaterialPricePrepareResult.ready(
+          resolved.unitPrice(), resolved.unitPrice().multiply(BOM_QTY), resolved.priceSource(),
+          "RANGE_PRICE", resolved.resultRefId(), resolved.remark());
       assertReadyRangePrice(code, prepareResult);
       preparedItems.add(toPrepareItem(prepareItemId++, bomRows.get(code), prepareResult));
     }
@@ -462,7 +460,7 @@ class MarketFactorRangePriceEndToEndSampleTest {
         readinessService,
         versionNoGenerator,
         cuAdjustmentCalcService,
-        workspaceService);
+        workspaceService, null, mockSheetReader(), mock(com.sanhua.marketingcost.service.JjbExportService.class));
   }
 
   private List<CostRunTraceSnapshot> buildTraceSnapshots(
@@ -544,17 +542,6 @@ class MarketFactorRangePriceEndToEndSampleTest {
   private void assertAmountWithinTolerance(BigDecimal actual) {
     assertThat(actual).isNotNull();
     assertThat(actual.subtract(EXPECTED_AMOUNT).abs()).isLessThanOrEqualTo(AMOUNT_TOLERANCE);
-  }
-
-  private PricePreparePlanItem planItem(BomCostingRow row) {
-    PricePreparePlanItem item = new PricePreparePlanItem();
-    item.setBomRow(row);
-    item.setTopProductCode(PRODUCT_CODE);
-    item.setMaterialCode(row.getMaterialCode());
-    item.setMaterialName(row.getMaterialName());
-    item.setItemType("NORMAL");
-    item.setStatus("READY");
-    return item;
   }
 
   private PricePrepareItem toPrepareItem(
@@ -675,5 +662,10 @@ class MarketFactorRangePriceEndToEndSampleTest {
     wrapper.getCustomSqlSegment();
     AbstractWrapper<?, ?, ?> abstractWrapper = (AbstractWrapper<?, ?, ?>) wrapper;
     return List.copyOf(abstractWrapper.getParamNameValuePairs().values());
+  }
+  private static com.sanhua.marketingcost.service.jjb.JjbReadService mockSheetReader() {
+    var reader = mock(com.sanhua.marketingcost.service.jjb.JjbReadService.class);
+    when(reader.read(any(), any(), any())).thenReturn(new com.sanhua.marketingcost.service.jjb.JjbReadService.View(null, List.of(), List.of()));
+    return reader;
   }
 }

@@ -124,21 +124,24 @@ class QuoteCostRunWorkbenchQueryIntegrationTest extends BomMapperTestBase {
   void exportsSummaryAndRejectsCrossBusinessUnit() throws Exception {
     QuoteCostRunVersion storedVersion = versionMapper.selectById(versionId);
     ByteArrayOutputStream output = new ByteArrayOutputStream();
-    assertThat(service.exportVersion(oaNo, itemId, versionId, output)).isEqualTo(1);
+    assertThat(service.exportVersion(oaNo, itemId, versionId, output)).isPositive();
 
     try (var workbook = WorkbookFactory.create(new ByteArrayInputStream(output.toByteArray()))) {
-      assertThat(workbook.getSheet("汇总").getRow(11).getCell(1).getStringCellValue())
-          .isEqualTo(storedVersion.getCuMaterialAdjustment().toPlainString());
-      assertThat(workbook.getSheet("汇总").getRow(13).getCell(1).getStringCellValue())
-          .isEqualTo(storedVersion.getFinalQuoteAmount().toPlainString());
+      var sheet=workbook.getSheet("见机表3");
+      com.sanhua.marketingcost.service.jjb.JjbExcelRendererTest.amount(sheet.getRow(
+          com.sanhua.marketingcost.service.jjb.JjbExcelRendererTest.find(sheet,"材料成本差异").getRowIndex()).getCell(5),
+          storedVersion.getCuMaterialAdjustment().setScale(6).toPlainString());
+      com.sanhua.marketingcost.service.jjb.JjbExcelRendererTest.amount(sheet.getRow(
+          com.sanhua.marketingcost.service.jjb.JjbExcelRendererTest.find(sheet,"不含税总成本2").getRowIndex()).getCell(5),
+          storedVersion.getFinalQuoteAmount().setScale(6).toPlainString());
       assertThat(workbook.getSheet("Cu材料费差异")).isNull();
     }
 
     authenticate("HOUSEHOLD");
     assertThatThrownBy(
             () -> service.exportVersion(oaNo, itemId, versionId, new ByteArrayOutputStream()))
-        .isInstanceOf(QuoteIngestException.class)
-        .hasMessageMatching(".*(无权访问|不存在).*");
+        .isInstanceOf(org.springframework.security.access.AccessDeniedException.class)
+        .hasMessageMatching(".*(不属于|不存在).*");
   }
 
   private void authenticate(String businessUnitType) {

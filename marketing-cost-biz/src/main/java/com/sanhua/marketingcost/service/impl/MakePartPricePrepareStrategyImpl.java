@@ -7,6 +7,7 @@ import com.sanhua.marketingcost.service.MakePartPriceCalculator;
 import com.sanhua.marketingcost.service.MakePartPriceGenerationService;
 import com.sanhua.marketingcost.service.MakePartPricePrepareStrategy;
 import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
+import com.sanhua.marketingcost.service.pricing.monthly.*;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -30,11 +31,13 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
 
   private final MakePartPriceGenerationService generationService;
   private final MakePartCalculationEvidence evidence;
+  private final MonthlyPriceDocumentCodec monthlyCodec;
 
   public MakePartPricePrepareStrategyImpl(
       MakePartPriceGenerationService generationService, com.fasterxml.jackson.databind.ObjectMapper json) {
     this.generationService = generationService;
     this.evidence = new MakePartCalculationEvidence(json);
+    this.monthlyCodec = new MonthlyPriceDocumentCodec(json);
   }
 
   @Override
@@ -129,10 +132,13 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
         || !normalizedPeriod.equals(parent.getPeriodMonth()) || !parentMaterialNo.equals(parent.getMaterialCode())) {
       throw new IllegalArgumentException("制造件计划行与本报价、月份或业务单元不一致");
     }
+    if (scenarioContext == null) scenarioContext = PricePrepareScenarioContext.oaLocked(
+        parent.getOaFormItemId(), parent.getPriceOrgCode());
     var rows = generationService.calculateForBomRow(parent, priceAsOfTime, scenarioContext, persist);
     var ready = rows.stream().filter(row -> STATUS_OK.equals(row.getStatus())
         && Boolean.TRUE.equals(row.getPriceComplete()) && row.getParentTotalCostPrice() != null).findFirst();
     if (ready.isPresent() && rows.stream().allMatch(row -> STATUS_OK.equals(row.getStatus()))) {
+      recordBaseUses(parent, rows, scenarioContext);
       var result = readyResult(ready.get(), planItem, "本报价制造节点价格计算完成");
       result.setInputSnapshotJson(evidence.capture(parent, rows));
       return result;
@@ -140,6 +146,36 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
     var gaps = buildGaps(parentMaterialNo, rows);
     return MakePartPricePrepareResult.notReady(hasOnlyStructureGaps(gaps) ? STATUS_MISSING_STRUCTURE : STATUS_MISSING_PRICE,
         "本报价制造节点尚有未解决输入", gaps);
+  }
+
+  private void recordBaseUses(com.sanhua.marketingcost.entity.BomCostingRow parent,
+      List<MakePartPriceCalcRow> rows, PricePrepareScenarioContext scenario) {
+    var session = java.util.Objects.requireNonNull(scenario.monthlyPrices().get(), "制造件缺少月价输入会话");
+    var parentQuantity = java.util.Objects.requireNonNull(parent.getQtyPerTop(), "制造件缺少实际用量");
+    String parentPath = MonthlyBomPricingScope.pathKey(parent.getPath());
+    for (int index = 0; index < rows.size(); index++) {
+      var row = rows.get(index);
+      String path = parentPath + "/make-" + index;
+      BigDecimal rawQuantity = com.sanhua.marketingcost.service.MakePartProcessTypePolicy.PROCESS_TYPE_RAW.equals(row.getItemProcessType())
+          ? row.getGrossWeightG().movePointLeft(3) : BigDecimal.ONE;
+      consumeBase(session, scenario, row.getRawInputSnapshotJson(), row.getRawUnitPrice(),
+          path + "/raw", rawQuantity.multiply(parentQuantity));
+      if (!Boolean.TRUE.equals(row.getNoScrapConfirmed())) {
+        BigDecimal scrapQuantity = row.getGrossWeightG().subtract(row.getNetWeightG()).movePointLeft(3);
+        consumeBase(session, scenario, row.getScrapInputSnapshotJson(), row.getScrapUnitPrice(),
+            path + "/scrap", scrapQuantity.multiply(parentQuantity));
+      }
+    }
+  }
+
+  private void consumeBase(QuotationPriceSession session, PricePrepareScenarioContext scenario,
+      String encoded, BigDecimal calculatedPrice, String path, BigDecimal quantity) {
+    var captured = monthlyCodec.decode(encoded, MonthlyPreparationPrice.class);
+    var expected = scenario.scenarioType() == com.sanhua.marketingcost.enums.QuotePriceScenarioType.FINANCE_QUOTE_BASE
+        ? captured.financialPrice() : captured.customerPrice();
+    if (calculatedPrice == null || expected.multiply(captured.unitPriceMultiplier()).compareTo(calculatedPrice) != 0)
+      throw new IllegalArgumentException("制造件基础价格与捕获月价不一致");
+    if (quantity.signum() != 0) session.consume(path, captured.value(), quantity.abs().multiply(captured.unitPriceMultiplier()));
   }
 
   private MakePartPricePrepareResult readyResult(

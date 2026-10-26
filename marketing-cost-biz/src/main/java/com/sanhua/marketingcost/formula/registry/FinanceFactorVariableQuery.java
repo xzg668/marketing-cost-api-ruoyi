@@ -36,15 +36,17 @@ public class FinanceFactorVariableQuery {
 
   public Optional<Price> query(Map<String, Object> binding, VariableContext request) {
     var context = context(request);
-    String key = key(binding, context.financial().scope().businessUnitType());
+    String key = key(binding, context.financial().scope().businessUnitType(), request);
     if (!context.financial().factors().containsKey(key)) {
       // 某因素一旦由财务正式发布维护，当月方案缺行就必须报缺价，不能回到技术上传旧值。
       if (PriceFactorContext.COPPER.equals(key)
-          || prices.countPublishedFactorKey(
+          || (request.getPreparedInputs() != null
+              ? request.getPreparedInputs().isManaged(key)
+              : prices.countPublishedFactorKey(
                   context.financial().scope().businessUnitType(),
                   context.financial().scope().priceOrgCode(),
                   key)
-              > 0) {
+                  > 0)) {
         throw new IllegalArgumentException("财务方案缺少因素：" + key);
       }
       return Optional.empty();
@@ -79,34 +81,25 @@ public class FinanceFactorVariableQuery {
         : Optional.of(context.requiredPrice(matches.getFirst(), FactorPriceUnit.CNY_KG, true));
   }
 
-  private String key(Map<String, Object> binding, String businessUnit) {
-    Object identityId = binding.get("factorIdentityId");
-    if (identityId != null) {
-      var identity = identities.selectById(Long.valueOf(identityId.toString()));
-      if (identity == null
-          || !businessUnit.equals(identity.getBusinessUnitType())
-          || !"ACTIVE".equals(identity.getStatus())) {
-        throw new IllegalArgumentException("因素身份不存在、已停用或不属于当前业务单元：" + identityId);
-      }
-      String canonical =
-          StringUtils.hasText(identity.getCanonicalFactorKey())
-              ? canonicalKeys.normalizeExistingKey(identity.getCanonicalFactorKey())
-              : canonicalKeys.build(identity.getPriceSource(), identity.getShortName());
-      if (!StringUtils.hasText(canonical))
-        throw new IllegalArgumentException("因素身份缺少简称或价源：" + identityId);
-      return canonical;
-    }
-    String code = text(binding.get("factorCode"));
-    String name = StringUtils.hasText(code) ? code : text(binding.get("shortName"));
-    String source = text(binding.get("priceSource"));
-    String key = canonicalKeys.build(source, name);
-    if (!StringUtils.hasText(key)) throw new IllegalArgumentException("财务变量必须配置因素身份及价源");
+  private String key(Map<String, Object> binding, String businessUnit, VariableContext request) {
+    Long id = FinanceFactorBinding.identityId(binding);
+    var identity = id == null ? null : request.getPreparedInputs() == null
+        ? identities.selectById(id) : request.getPreparedInputs().capturedIdentity(id);
+    String key = FinanceFactorBinding.canonicalKey(
+        binding, businessUnit, identity, canonicalKeys);
+    if (request.getPreparedInputs() != null && identity != null)
+      request.getUsedFactorIdentities().put(id, identity);
     return key;
   }
 
   public PriceFactorContext context(VariableContext request) {
     var item = request == null ? null : request.getLinkedItem();
     if (item == null) throw new IllegalArgumentException("财务变量取价缺少规则及组织上下文");
+    if (request.getPreparedInputs() != null) {
+      var captured = request.getPreparedInputs().requireFinancial(item, request.getPricingMonth());
+      request.setPriceFactors(captured);
+      return captured;
+    }
     String business = item.getBusinessUnitType();
     String callerBusiness = BusinessUnitContext.getCurrentBusinessUnitType();
     if (StringUtils.hasText(callerBusiness) && !callerBusiness.equals(business))
@@ -144,10 +137,6 @@ public class FinanceFactorVariableQuery {
     }
     request.setPriceFactors(context);
     return context;
-  }
-
-  private static String text(Object value) {
-    return value == null ? null : value.toString();
   }
 
   public record Price(

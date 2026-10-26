@@ -8,6 +8,16 @@ import lombok.Setter;
 @Getter
 @Setter
 public class PackagePriceRequest {
+  private Long oaFormItemId;
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private java.util.Map<String, String> householdChildPaths = java.util.Map.of();
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private String sourceParentPath;
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private Long sourceParentHierarchyId;
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private com.sanhua.marketingcost.service.pricing.monthly.QuotationPriceSession.Scope monthlyPrices =
+      new com.sanhua.marketingcost.service.pricing.monthly.QuotationPriceSession.Scope();
   @com.fasterxml.jackson.annotation.JsonIgnore
   private com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext supplierPriceReviewContext;
   private String packageMaterialCode;

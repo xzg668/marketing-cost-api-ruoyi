@@ -38,6 +38,7 @@ public class QuoteCostRunVersion {
   private String techDataInputJson;
   private LocalDateTime techDataRetrievedAt;
   private String algorithmVersion;
+  private String feePolicyVersion;
   private String dataQualityStatus;
   private Integer dataQualityWarningCount;
   private String dataQualitySummary;

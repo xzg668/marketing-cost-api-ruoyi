@@ -111,7 +111,7 @@ public interface QuoteTechModuleMapper extends BaseMapper<QuoteTechModule> {
                WHEN required_flag=1 THEN 'READY' ELSE 'NOT_REQUIRED' END,
              current_version_id=#{versionId},
              last_validation_code='PROFILE_COMPLETE',
-             last_validation_message='产品属性、新增费用选项和三项单件费用完整',
+             last_validation_message='产品属性已核实，四项可选单件费用已校验',
              row_version=row_version+1,
              updated_at=#{updatedAt}
        WHERE id=#{moduleId} AND row_version=#{expectedVersion}

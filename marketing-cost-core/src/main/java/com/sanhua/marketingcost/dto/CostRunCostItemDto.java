@@ -61,6 +61,7 @@ public class CostRunCostItemDto {
     this.rate = rate;
   }
 
+  @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
   public BigDecimal getAmount() {
     return amount;
   }

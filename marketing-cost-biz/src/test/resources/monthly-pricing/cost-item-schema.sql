@@ -1,0 +1,28 @@
+-- Actual local DDL read-only, 2026-10-24; no source or history rows.
+CREATE TABLE `lp_cost_run_cost_item` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `oa_no` varchar(64) NOT NULL,
+  `oa_form_item_id` bigint DEFAULT NULL COMMENT 'OA产品明细行ID',
+  `cost_run_version_id` bigint DEFAULT NULL COMMENT '成本试算版本ID',
+  `cost_run_no` varchar(64) DEFAULT NULL COMMENT '试算批次号',
+  `business_unit_type` varchar(20) DEFAULT NULL COMMENT '业务单元',
+  `product_code` varchar(64) NOT NULL,
+  `category` varchar(20) NOT NULL DEFAULT 'EXPENSE' COMMENT 'EXPENSE=传统费用项(参与累加) / BOM_BUCKET=见机表汇总(仅展示)',
+  `line_no` int DEFAULT NULL,
+  `cost_code` varchar(40) NOT NULL,
+  `cost_name` varchar(120) NOT NULL,
+  `base_amount` decimal(18,6) DEFAULT NULL,
+  `rate` decimal(10,6) DEFAULT NULL,
+  `amount` decimal(18,6) DEFAULT NULL,
+  `source_table` varchar(64) DEFAULT NULL,
+  `source_id` bigint DEFAULT NULL,
+  `remark` text COMMENT '缺率/异常/缺价说明',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_cost_run_cost` (`oa_no`,`product_code`),
+  KEY `idx_cost_run_cost_code` (`cost_code`),
+  KEY `idx_cost_run_cost_but` (`business_unit_type`),
+  KEY `idx_oa_product_category` (`oa_no`,`product_code`,`category`),
+  KEY `idx_cost_item_quote_run` (`oa_no`,`oa_form_item_id`,`product_code`,`cost_run_no`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

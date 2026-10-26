@@ -1,6 +1,8 @@
 package com.sanhua.marketingcost.dto.technicaldata;
 
 import java.math.BigDecimal;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.sanhua.marketingcost.dto.costing.ProductFeeAmountSerializer;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -10,8 +12,12 @@ public final class TechnicalDataSupplementContent {
 
   public record ProductFees(
       Boolean includesNewToolingMouldCertificationFee,
-      BigDecimal unitToolingFee, BigDecimal unitMouldFee,
-      BigDecimal unitCertificationFee, String currency) {}
+      @JsonSerialize(using = ProductFeeAmountSerializer.class) BigDecimal unitToolingFee, @JsonSerialize(using = ProductFeeAmountSerializer.class) BigDecimal unitMouldFee,
+      @JsonSerialize(using = ProductFeeAmountSerializer.class) BigDecimal unitCertificationFee, String currency,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+      @JsonSerialize(using = ProductFeeAmountSerializer.class) BigDecimal unitDepreciationFee,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+      Integer encodingVersion) implements ProductFeeAmountSerializer.VersionedFees {}
 
   public record DrawingBom(
       Long sourceVersionId, Long supplementVersionId, String materialMatchStatus,

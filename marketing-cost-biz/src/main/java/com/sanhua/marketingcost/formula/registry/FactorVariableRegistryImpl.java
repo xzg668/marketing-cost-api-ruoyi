@@ -144,7 +144,8 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     // 这些 code 不存在于 lp_price_variable，按 linked_item_id 查 lp_price_variable_binding
     // 拿到 factor_code 后再递归走主路径。
     // V36：占位符列表改由 lp_row_local_placeholder DB 表驱动，支持运维自助扩展。
-    if (rowLocalPlaceholderRegistry.isKnown(code)) {
+    if ((ctx.getPreparedInputs() == null ? rowLocalPlaceholderRegistry
+        : ctx.getPreparedInputs().placeholders()).isKnown(code)) {
       Optional<BigDecimal> resolved = resolveRowLocalToken(code, ctx, visiting, cache);
       return putAndReturn(cache, code, resolved);
     }
@@ -168,7 +169,8 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
         log.warn("变量 {} 未声明 resolver_kind（数据未配置），返回 empty", code);
         return putAndReturn(cache, code, Optional.empty());
       }
-      Map<String, Object> params = parseParams(variable);
+      Map<String, Object> params = ctx.getPreparedInputs() == null
+          ? parseParams(variable) : ctx.getPreparedInputs().calculationParameters(variable);
       if (ctx != null) ctx.getUsedDefinitions().put(code, Map.of("kind", kind, "params", params));
       Optional<BigDecimal> result =
           dispatch(variable, kind.trim().toUpperCase(), params, ctx, visiting, cache);
@@ -239,11 +241,15 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
       return Optional.of(value.price());
     }
     Optional<FactorMonthlyPrice> monthlyPrice =
-        resolveMonthlyFactorPrice(factorIdentityId, factorMonthlyPriceId, pricingMonth);
+        ctx.getPreparedInputs() == null
+            ? resolveMonthlyFactorPrice(factorIdentityId, factorMonthlyPriceId, pricingMonth)
+            : ctx.getPreparedInputs().privateFactor(factorIdentityId, factorMonthlyPriceId, pricingMonth);
     if (monthlyPrice.isPresent()) {
       FactorMonthlyPrice price = monthlyPrice.get();
       boolean carriedForward = isEarlierMonth(price.getPriceMonth(), pricingMonth);
       if (ctx != null) {
+        if (ctx.getPreparedInputs() != null)
+          ctx.getUsedPrivateFactors().put(variable.getVariableCode(), price);
         String source;
         if (ctx.isMonthlyReprice()) {
           source =
@@ -464,7 +470,7 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
               + "] 需要 ctx.linkedItem.id，但未提供 —— "
               + "检查调用方是否在 VariableContext 里塞了联动行实体");
     }
-    if (priceVariableBindingMapper == null) {
+    if (priceVariableBindingMapper == null && ctx.getPreparedInputs() == null) {
       throw new IllegalStateException(
           "公式使用了行局部 token ["
               + code
@@ -473,8 +479,11 @@ public class FactorVariableRegistryImpl implements FactorVariableRegistry {
     }
     Long itemId = item.getId();
     Map<String, PriceVariableBinding> bindings =
-        ctx.bindings.computeIfAbsent(itemId, this::loadBindings);
-    List<String> candidateTokenNames = rowLocalPlaceholderRegistry.tokenNames().get(code);
+        ctx.getPreparedInputs() == null
+            ? ctx.bindings.computeIfAbsent(itemId, this::loadBindings)
+            : ctx.getPreparedInputs().calculationBindings(itemId);
+    List<String> candidateTokenNames = (ctx.getPreparedInputs() == null ? rowLocalPlaceholderRegistry
+        : ctx.getPreparedInputs().placeholders()).tokenNames().get(code);
     if (candidateTokenNames == null || candidateTokenNames.isEmpty()) {
       // 理论上不会走到：isKnown(code) 已保证 code 在注册表里，且有 tokenNames
       throw new IllegalStateException(

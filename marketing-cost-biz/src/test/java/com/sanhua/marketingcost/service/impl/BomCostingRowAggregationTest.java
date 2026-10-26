@@ -28,6 +28,38 @@ class BomCostingRowAggregationTest {
   }
 
   @Test
+  void keepsHouseholdOccurrencesWhileOrdinaryMaterialsStillAggregate() {
+    BomCostingRow first = row("/P/H@1/", "H", "1.25", LocalDate.of(2026, 8, 1));
+    BomCostingRow second = row("/P/H@2/", "H", "2.5", LocalDate.of(2026, 8, 1));
+    first.setSettlementRowType("HOUSEHOLD_INQUIRY");
+    second.setSettlementRowType("HOUSEHOLD_INQUIRY");
+    BomCostingRow ordinaryFirst = row("/P/N@1/", "N", "1", LocalDate.of(2026, 8, 1));
+    BomCostingRow ordinarySecond = row("/P/N@2/", "N", "2", LocalDate.of(2026, 8, 1));
+
+    var result = BomCostingRowAggregation.aggregate(
+        List.of(first, ordinaryFirst, second, ordinarySecond));
+
+    assertThat(result.rows()).containsExactly(first, ordinaryFirst, second);
+    assertThat(first.getQtyPerTop()).isEqualByComparingTo("1.25");
+    assertThat(second.getQtyPerTop()).isEqualByComparingTo("2.5");
+    assertThat(ordinaryFirst.getQtyPerTop()).isEqualByComparingTo("3");
+    assertThat(result.pathAliases())
+        .containsEntry(first.getPath(), first.getPath())
+        .containsEntry(second.getPath(), second.getPath())
+        .containsEntry(ordinarySecond.getPath(), ordinaryFirst.getPath());
+  }
+
+  @Test
+  void doesNotMergeHouseholdAndOrdinaryOccurrencesOfTheSameMaterial() {
+    BomCostingRow household = row("/P/H@1/", "H", "1.25", LocalDate.of(2026, 8, 1));
+    household.setSettlementRowType("HOUSEHOLD_INQUIRY");
+    BomCostingRow ordinary = row("/P/H@2/", "H", "2.5", LocalDate.of(2026, 8, 1));
+
+    assertThat(BomCostingRowAggregation.aggregate(List.of(household, ordinary)).rows())
+        .containsExactly(household, ordinary);
+  }
+
+  @Test
   @DisplayName("同一报价料号下同一结算料号多路径出现时按用量累加")
   void aggregatesSameMaterialAcrossBomPaths() {
     BomCostingRow first = row(

@@ -33,6 +33,7 @@ public class CostRunTraceDetailDto {
   private BigDecimal quantity;
   private BigDecimal baseAmount;
   private BigDecimal rate;
+  @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = com.fasterxml.jackson.databind.ser.std.ToStringSerializer.class)
   private BigDecimal amount;
   private String summary;
   private String sourceSnapshotJson;

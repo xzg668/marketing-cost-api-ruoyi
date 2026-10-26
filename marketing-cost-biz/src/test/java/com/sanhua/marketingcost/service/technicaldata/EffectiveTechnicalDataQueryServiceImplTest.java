@@ -252,7 +252,7 @@ class EffectiveTechnicalDataQueryServiceImplTest {
         new com.sanhua.marketingcost.service.platematerial.PlateMaterialSnapshot.Source(
             "COMMERCIAL", "B12-8H-V20", "PLATE", 77L, 3, List.of()), "a".repeat(64));
     when(contentCodec.plateMaterial(v2)).thenReturn(saved);
-    when(contentCodec.productFees(v2)).thenReturn(TechnicalDataProductFeeRules.parse(true, "0.1", "0.3", "/"));
+    when(contentCodec.productFees(v2)).thenReturn(TechnicalDataProductFeeRules.parse(false, null, "0.3", "/", "1.234567"));
     v2.setProductProperty("非标品");
     var input = service.resolve(ITEM_ID, MONTH);
     assertThat(input.plateMaterial().material()).isEqualTo("水水316L");
@@ -263,6 +263,10 @@ class EffectiveTechnicalDataQueryServiceImplTest {
     assertThat(input.sourceVersionId("PROFILE")).isEqualTo(v2.getId());
     assertThat(input.productProperty()).isEqualTo("非标品");
     assertThat(input.productFees().unitMouldFee()).isEqualByComparingTo("0.3");
+    assertThat(input.productFees().unitDepreciationFee()).isEqualByComparingTo("1.234567");
+    assertThat(input.productFees().unitToolingFee()).isNull();
+    assertThat(input.productFees().unitCertificationFee()).isZero();
+    assertThat(input.productFees().encodingVersion()).isEqualTo(2);
     var json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
     assertThat(json.readTree(json.writeValueAsString(input)).at("/plateMaterial/material").asText()).isEqualTo("水水316L");
     // Uncollected historical inputs keep their old JSON shape and remain usable.

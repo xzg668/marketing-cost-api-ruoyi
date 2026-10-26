@@ -122,7 +122,9 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
     PackageComponentSnapshot existing =
         selectByPackagePeriodAndTop(
             req.packageMaterialCode, req.periodMonth, req.topProductCode, req.priceOrgCode);
-    if (existing != null) {
+    if (existing != null && (req.sourceParentPath == null
+        || (req.sourceParentPath.equals(existing.getSourcePath())
+            && java.util.Objects.equals(req.sourceParentHierarchyId, existing.getSourceRawHierarchyId())))) {
       List<PackageComponentSnapshotDetail> existingDetails = selectDetails(existing.getId());
       if (SNAPSHOT_STATUS_NORMAL.equals(existing.getStatus()) || !existingDetails.isEmpty()) {
         return PackageSnapshotResult.of(existing, existingDetails, false);
@@ -337,6 +339,8 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
         bomRawHierarchyMapper.selectList(
             Wrappers.<BomRawHierarchy>lambdaQuery()
                 .eq(BomRawHierarchy::getMaterialCode, req.packageMaterialCode)
+                .eq(req.sourceParentPath != null, BomRawHierarchy::getPath, req.sourceParentPath)
+                .eq(req.sourceParentHierarchyId != null, BomRawHierarchy::getId, req.sourceParentHierarchyId)
                 .eq(BomRawHierarchy::getPriceOrgCode, req.priceOrgCode)
                 .eq(BomRawHierarchy::getSourceType, req.sourceType)
                 .eq(StringUtils.hasText(req.topProductCode),
@@ -366,6 +370,7 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
                 .eq(BomRawHierarchy::getTopProductCode, parent.getTopProductCode())
                 .eq(BomRawHierarchy::getPriceOrgCode, req.priceOrgCode)
                 .eq(BomRawHierarchy::getSourceType, parent.getSourceType())
+                .eq(req.sourceParentPath != null, BomRawHierarchy::getBuildBatchId, parent.getBuildBatchId())
                 .eq(StringUtils.hasText(parent.getBomPurpose()),
                     BomRawHierarchy::getBomPurpose, parent.getBomPurpose())
                 .isNull(!StringUtils.hasText(parent.getBomPurpose()), BomRawHierarchy::getBomPurpose)
@@ -459,7 +464,7 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
         requiredPriceOrgCode(request.getPriceOrgCode()),
         DEFAULT_BOM_PURPOSE,
         trimToNull(request.getSourceType()) == null ? DEFAULT_BOM_SOURCE_TYPE : trimToNull(request.getSourceType()),
-        request.getAsOfDate());
+        request.getAsOfDate(), trimToNull(request.getSourceParentPath()), request.getSourceParentHierarchyId());
   }
 
   private String requiredPriceOrgCode(String priceOrgCode) {
@@ -482,5 +487,7 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
       String priceOrgCode,
       String bomPurpose,
       String sourceType,
-      LocalDate asOfDate) {}
+      LocalDate asOfDate,
+      String sourceParentPath,
+      Long sourceParentHierarchyId) {}
 }

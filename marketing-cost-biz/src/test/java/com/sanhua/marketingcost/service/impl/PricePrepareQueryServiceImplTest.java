@@ -184,9 +184,11 @@ class PricePrepareQueryServiceImplTest {
   @DisplayName("明细分页：指定历史批次时兼容settlementKey为空的旧数据")
   void pageItemsKeepsHistoricalRowsWithoutSettlementKey() {
     PricePrepareItem historical = new PricePrepareItem();
+    historical.setId(1L);
     historical.setPrepareNo("PPR-HISTORY");
     historical.setMaterialCode("MAT-HISTORY");
     historical.setSettlementKey(null);
+    when(itemMapper.selectList(any())).thenReturn(List.of(historical));
     when(itemMapper.selectPage(any(), any())).thenAnswer(invocation -> {
       Page<PricePrepareItem> page = invocation.getArgument(0);
       page.setTotal(1);

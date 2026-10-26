@@ -1,13 +1,10 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
-import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
 import com.sanhua.marketingcost.dto.MakePartMaterialPriceResolveResult;
 import com.sanhua.marketingcost.dto.MakePartPriceGenerateResponse;
 import com.sanhua.marketingcost.dto.MakePartProcessTypeResult;
 import com.sanhua.marketingcost.dto.MakePartWeightResult;
-import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.dto.priceprepare.NoScrapConfirmResponse;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
@@ -15,12 +12,10 @@ import com.sanhua.marketingcost.entity.BomU9Source;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.entity.MakePartPriceGapItem;
 import com.sanhua.marketingcost.entity.MaterialScrapRef;
-import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceGapItemMapper;
-import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService;
 import com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService;
 import com.sanhua.marketingcost.service.MakePartPriceCalculator;
@@ -29,10 +24,10 @@ import com.sanhua.marketingcost.service.MakePartProcessTypePolicy;
 import com.sanhua.marketingcost.service.MakePartScrapMappingService;
 import com.sanhua.marketingcost.service.MakePartSourceDataService;
 import com.sanhua.marketingcost.service.MakePartWeightService;
-import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
 import com.sanhua.marketingcost.service.scrap.ScrapPriceCalculationEvidence;
-import com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService;
+import com.sanhua.marketingcost.service.pricing.monthly.MonthlyPreparationPrice;
+import com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -41,10 +36,8 @@ import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -62,14 +55,12 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
   private final MakePartProcessTypePolicy processTypePolicy;
   private final MakePartWeightService weightService;
   private final MakePartScrapMappingService scrapMappingService;
-  private final MaterialPriceRouterService materialPriceRouterService;
-  private final LinkedPriceEnsureService linkedPriceEnsureService;
   private final MakePartMaterialPriceResolveService priceResolveService;
-  private final ScrapPriceSelectionService scrapPrices;
   private final MakePartPriceCalculator calculator;
   private final MakePartNoScrapConfirmationService noScrapConfirmationService;
   private final MakePartPriceCalcRowMapper calcRowMapper;
   private final MakePartPriceGapItemMapper gapItemMapper;
+  private final MonthlyPriceDocumentCodec monthlyCodec;
   private final com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs
       manufacturingInputs;
 
@@ -79,8 +70,6 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       MakePartProcessTypePolicy processTypePolicy,
       MakePartWeightService weightService,
       MakePartScrapMappingService scrapMappingService,
-      MaterialPriceRouterService materialPriceRouterService,
-      LinkedPriceEnsureService linkedPriceEnsureService,
       MakePartMaterialPriceResolveService priceResolveService,
       MakePartPriceCalculator calculator,
       MakePartNoScrapConfirmationService noScrapConfirmationService,
@@ -88,21 +77,19 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       MakePartPriceGapItemMapper gapItemMapper,
       com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs
           manufacturingInputs,
-      ScrapPriceSelectionService scrapPrices) {
+      MonthlyPriceDocumentCodec monthlyCodec) {
     this.sourceDataService = sourceDataService;
     this.bomCostingRowSubRefMapper = bomCostingRowSubRefMapper;
     this.processTypePolicy = processTypePolicy;
     this.weightService = weightService;
     this.scrapMappingService = scrapMappingService;
-    this.materialPriceRouterService = materialPriceRouterService;
-    this.linkedPriceEnsureService = linkedPriceEnsureService;
     this.priceResolveService = priceResolveService;
-    this.scrapPrices = scrapPrices;
     this.calculator = calculator;
     this.noScrapConfirmationService = noScrapConfirmationService;
     this.calcRowMapper = calcRowMapper;
     this.gapItemMapper = gapItemMapper;
     this.manufacturingInputs = manufacturingInputs;
+    this.monthlyCodec = monthlyCodec;
   }
 
   @Override
@@ -111,7 +98,8 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       LocalDateTime requestedTime,
       PricePrepareScenarioContext scenarioContext,
       boolean persist) {
-    if (parent == null || parent.getId() == null || parent.getOaFormItemId() == null) {
+    if (parent == null || parent.getOaFormItemId() == null
+        || (parent.getId() == null && (persist || parent.getCurrentSubRefs() == null))) {
       throw new IllegalArgumentException("制造件计算必须提供本报价结算节点");
     }
     String month = pricingPeriod(parent.getPeriodMonth());
@@ -123,8 +111,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
             month,
             time.toLocalDate(),
             time,
-            scenarioContext,
-            persist);
+            scenarioContext);
     var rows =
         calculator.calculate(
             buildRowsForParent(
@@ -272,8 +259,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
             trim(period),
             priceAsOfTime,
             null,
-            scenarioContext,
-            false)
+            scenarioContext)
         .rows();
   }
 
@@ -291,8 +277,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
             trim(period),
             priceAsOfTime,
             trim(parentMaterialNo),
-            scenarioContext,
-            false)
+            scenarioContext)
         .rows();
   }
 
@@ -322,8 +307,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
             period,
             requestedPriceAsOfTime,
             parentMaterialNo,
-            scenarioContext,
-            true);
+            scenarioContext);
     upsertRows(calculation.rows());
     upsertGapItems(buildGapItems(calculation.rows(), LocalDateTime.now()));
     return summarize(calculation.calcBatchId(), calculation.parentCount(), calculation.rows());
@@ -335,39 +319,35 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       String period,
       LocalDateTime requestedPriceAsOfTime,
       String parentMaterialNo,
-      PricePrepareScenarioContext scenarioContext,
-      boolean persistLinkedPrices) {
-    try (var ignored = scrapPrices.openBatch()) {
-      String calcBatchId = newCalcBatchId();
-      String pricingPeriod = pricingPeriod(period);
-      LocalDateTime priceAsOfTime = priceAsOfTime(pricingPeriod, requestedPriceAsOfTime);
-      LocalDate quoteDate = priceAsOfTime.toLocalDate();
-      List<BomCostingRow> parents =
-          scopedManufacturedParents(oaNo, businessUnitType, pricingPeriod, parentMaterialNo);
-      MakePartGenerationPlan plan =
-          buildGenerationPlan(
-              parents,
+      PricePrepareScenarioContext scenarioContext) {
+    String calcBatchId = newCalcBatchId();
+    String pricingPeriod = pricingPeriod(period);
+    LocalDateTime priceAsOfTime = priceAsOfTime(pricingPeriod, requestedPriceAsOfTime);
+    LocalDate quoteDate = priceAsOfTime.toLocalDate();
+    List<BomCostingRow> parents =
+        scopedManufacturedParents(oaNo, businessUnitType, pricingPeriod, parentMaterialNo);
+    MakePartGenerationPlan plan =
+        buildGenerationPlan(
+            parents,
+            businessUnitType,
+            pricingPeriod,
+            quoteDate,
+            priceAsOfTime,
+            scenarioContext);
+    List<MakePartPriceCalcRow> rows = new ArrayList<>();
+    for (BomCostingRow parent : parents) {
+      rows.addAll(
+          buildRowsForParent(
+              calcBatchId,
+              parent,
               businessUnitType,
               pricingPeriod,
               quoteDate,
               priceAsOfTime,
-              scenarioContext,
-              persistLinkedPrices);
-      List<MakePartPriceCalcRow> rows = new ArrayList<>();
-      for (BomCostingRow parent : parents) {
-        rows.addAll(
-            buildRowsForParent(
-                calcBatchId,
-                parent,
-                businessUnitType,
-                pricingPeriod,
-                quoteDate,
-                priceAsOfTime,
-                plan));
-      }
-      List<MakePartPriceCalcRow> calculatedRows = calculator.calculate(rows);
-      return new MakePartCalculation(calcBatchId, parents.size(), calculatedRows);
+              plan));
     }
+    List<MakePartPriceCalcRow> calculatedRows = calculator.calculate(rows);
+    return new MakePartCalculation(calcBatchId, parents.size(), calculatedRows);
   }
 
   private List<BomCostingRow> scopedManufacturedParents(
@@ -608,7 +588,6 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
             parent.getOaNo(),
             businessUnitType,
             parentScenario,
-            plan.persistLinkedPrices,
             MakePartMaterialPriceResolveService.Purpose.MATERIAL);
     List<MaterialScrapRef> scraps = plan.scraps(child.getChildMaterialNo());
     if (scraps.isEmpty()) {
@@ -657,8 +636,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
               parent.getOaNo(),
               businessUnitType,
               parentScenario,
-              plan.persistLinkedPrices,
-              MakePartMaterialPriceResolveService.Purpose.SCRAP);
+                MakePartMaterialPriceResolveService.Purpose.SCRAP);
       MakePartPriceCalcRow row =
           childBaseRow(
               calcBatchId,
@@ -680,17 +658,15 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
         row.setScrapInputSnapshotJson(scrapPrice.getEvidence().inputSnapshotJson());
       }
       if (technical != null
-          && !ScrapPriceCalculationEvidence.isScrap(row.getScrapInputSnapshotJson()))
-        row.setScrapUnitPrice(
-            com.sanhua.marketingcost.service.technicaldata.TechnicalDataManufacturingUnits
-                .pricePerKg(row.getScrapUnitPrice(), scrap.getScrapUnit()));
+          && !ScrapPriceCalculationEvidence.isScrap(row.getScrapInputSnapshotJson())) {
+        var converted = pricePerKg(row.getScrapUnitPrice(), row.getScrapInputSnapshotJson(), scrap.getScrapUnit());
+        row.setScrapUnitPrice(converted.price());
+        row.setScrapInputSnapshotJson(converted.evidence());
+      }
       row.setNoScrapConfirmed(false);
       row.setNoScrapConfirmationId(null);
       row.setStatus(firstNonOk(processType.getStatus(), weight.getStatus()));
       row.setRemark(appendRemark(row.getRemark(), priceRemark("废料", scrapPrice)));
-      row.setRemark(
-          appendRemark(
-              row.getRemark(), linkedEnsureRemark("废料", scrap.getScrapCode(), parent, plan)));
       rows.add(row);
     }
     return rows;
@@ -741,20 +717,32 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     }
     if (technical != null) {
       row.setDrawingNo(technical.material().evidence().parentDrawingNo());
-      if (!ScrapPriceCalculationEvidence.isScrap(row.getRawInputSnapshotJson()))
-        row.setRawUnitPrice(
-            com.sanhua.marketingcost.service.technicaldata.TechnicalDataManufacturingUnits
-                .pricePerKg(row.getRawUnitPrice(), technical.material().unit()));
+      if (!ScrapPriceCalculationEvidence.isScrap(row.getRawInputSnapshotJson())) {
+        var converted = pricePerKg(row.getRawUnitPrice(), row.getRawInputSnapshotJson(), technical.material().unit());
+        row.setRawUnitPrice(converted.price());
+        row.setRawInputSnapshotJson(converted.evidence());
+      }
       row.setStockUnit("kg");
       row.setQtyPerParent(technical.material().grossWeightKg());
     }
     row.setOutsourceFee(BigDecimal.ZERO);
     row.setRemark(appendRemark(processType.getRemark(), weight.getRemark()));
     row.setRemark(appendRemark(row.getRemark(), priceRemark("原材料", rawPrice)));
-    row.setRemark(
-        appendRemark(
-            row.getRemark(), linkedEnsureRemark("原材料", child.getChildMaterialNo(), parent, plan)));
     return row;
+  }
+
+  private record ConvertedPrice(BigDecimal price, String evidence) {}
+
+  private ConvertedPrice pricePerKg(BigDecimal price, String encoded, String purchasingUnit) {
+    MonthlyPreparationPrice input = StringUtils.hasText(encoded)
+        ? monthlyCodec.decode(encoded, MonthlyPreparationPrice.class) : null;
+    String unit = input == null ? purchasingUnit : input.request().family().unit();
+    BigDecimal converted = com.sanhua.marketingcost.service.technicaldata.TechnicalDataManufacturingUnits.pricePerKg(price, unit);
+    if (input != null) {
+      BigDecimal multiplier = com.sanhua.marketingcost.service.technicaldata.TechnicalDataManufacturingUnits.pricePerKg(BigDecimal.ONE, unit);
+      encoded = monthlyCodec.encode(input.withUnitPriceMultiplier(multiplier));
+    }
+    return new ConvertedPrice(converted, encoded);
   }
 
   private List<MakePartPriceGapItem> buildGapItems(
@@ -847,13 +835,11 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       String period,
       LocalDate quoteDate,
       LocalDateTime priceAsOfTime,
-      PricePrepareScenarioContext scenarioContext,
-      boolean persistLinkedPrices) {
+      PricePrepareScenarioContext scenarioContext) {
     MakePartGenerationPlan plan = new MakePartGenerationPlan();
     plan.period = period;
     plan.priceAsOfTime = priceAsOfTime;
     plan.scenarioContext = scenarioContext;
-    plan.persistLinkedPrices = persistLinkedPrices;
     if (parents == null || parents.isEmpty()) {
       return plan;
     }
@@ -864,22 +850,11 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       plan.childrenByParent.put(parent, children == null ? List.of() : children);
       for (BomU9Source child : plan.children(parent)) {
         String childCode = trim(child.getChildMaterialNo());
-        collectLinkedEnsureCode(
-            plan,
-            trim(parent.getOaNo()),
-            parent.getPriceOrgCode(),
-            businessUnitType,
-            period,
-            quoteDate,
-            childCode);
         List<MaterialScrapRef> scraps =
             scrapMappingService.listMappings(childCode, businessUnitType);
         plan.scrapsByChild.put(childCode, scraps == null ? List.of() : scraps);
 
       }
-    }
-    if (persistLinkedPrices) {
-      ensureLinkedPrices(plan, businessUnitType, period);
     }
     return plan;
   }
@@ -922,8 +897,8 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       return normalizedChildren;
     }
 
-    List<BomCostingRowSubRef> refs =
-        parent.getId() == null
+    List<BomCostingRowSubRef> refs = parent.getCurrentSubRefs() != null
+        ? parent.getCurrentSubRefs() : parent.getId() == null
             ? List.of()
             : rollupChildrenByRowId.getOrDefault(parent.getId(), List.of());
     if (refs.isEmpty() || normalizedChildren.isEmpty()) {
@@ -975,6 +950,7 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
         (parents == null ? List.<BomCostingRow>of() : parents)
             .stream()
                 .filter(this::isSpecialRollupParent)
+                .filter(parent -> parent.getCurrentSubRefs() == null)
                 .map(BomCostingRow::getId)
                 .filter(java.util.Objects::nonNull)
                 .distinct()
@@ -1000,121 +976,6 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
         && ROW_TYPE_SPECIAL_ROLLUP_PARENT.equals(trim(parent.getSettlementRowType()));
   }
 
-  private void collectLinkedEnsureCode(
-      MakePartGenerationPlan plan,
-      String oaNo,
-      String priceOrgCode,
-      String businessUnitType,
-      String period,
-      LocalDate quoteDate,
-      String materialCode) {
-    String code = trim(materialCode);
-    if (code == null
-        || scrapPrices.isManaged(businessUnitType, period, code, plan.persistLinkedPrices)
-        || !firstRouteIsPublicLinked(code, period, quoteDate, priceOrgCode, businessUnitType)) {
-      return;
-    }
-    if (!StringUtils.hasText(oaNo)) {
-      plan.ensureFailures.put(
-          new LinkedMaterialScope(oaNo, trim(priceOrgCode), code),
-          "联动价 ensure 失败：QUOTE 场景缺 OA 单号(material_code=" + code + ")");
-      return;
-    }
-    if (!StringUtils.hasText(businessUnitType) || !StringUtils.hasText(period)) {
-      plan.ensureFailures.put(
-          new LinkedMaterialScope(oaNo, trim(priceOrgCode), code),
-          "联动价 ensure 失败：缺业务单元或期间(material_code=" + code + ")");
-      return;
-    }
-    plan.linkedCodesByScope
-        .computeIfAbsent(
-            new LinkedInputScope(oaNo, trim(priceOrgCode)), ignored -> new LinkedHashSet<>())
-        .add(code);
-  }
-
-  private boolean firstRouteIsPublicLinked(String materialCode, String period, LocalDate quoteDate, String priceOrgCode, String businessUnitType) {
-    List<PriceTypeRoute> routes =
-        materialPriceRouterService.listCandidates(materialCode, period, quoteDate, priceOrgCode, businessUnitType);
-    if (routes == null || routes.isEmpty()) {
-      return false;
-    }
-    var first = routes.getFirst();
-    return first.ordinaryLinked() && !first.supplemental();
-  }
-
-  private void ensureLinkedPrices(
-      MakePartGenerationPlan plan, String businessUnitType, String period) {
-    for (Map.Entry<LinkedInputScope, Set<String>> entry : plan.linkedCodesByScope.entrySet()) {
-      String oaNo = entry.getKey().oaNo();
-      Set<String> itemCodes = entry.getValue();
-      if (itemCodes == null || itemCodes.isEmpty()) {
-        continue;
-      }
-      try {
-        // 自制件生成是业务入口前置 ensure：只确保本次会取价的联动价料号，不做全量预生成。
-        LinkedPriceEnsureResult result =
-            linkedPriceEnsureService.ensure(
-                linkedEnsureRequest(
-                    oaNo,
-                    entry.getKey().priceOrgCode(),
-                    businessUnitType,
-                    period,
-                    itemCodes,
-                    plan));
-        if (result != null && result.getFailedItems() != null) {
-          for (LinkedPriceEnsureResult.FailedItem failed : result.getFailedItems()) {
-            if (failed != null && StringUtils.hasText(failed.getItemCode())) {
-              plan.ensureFailures.put(
-                  new LinkedMaterialScope(oaNo, entry.getKey().priceOrgCode(), trim(failed.getItemCode())),
-                  "联动价 ensure 失败(material_code="
-                      + trim(failed.getItemCode())
-                      + "): "
-                      + failed.getReason());
-            }
-          }
-        }
-      } catch (RuntimeException ex) {
-        for (String code : itemCodes) {
-          plan.ensureFailures.put(
-              new LinkedMaterialScope(oaNo, entry.getKey().priceOrgCode(), code),
-              "联动价 ensure 异常(material_code=" + code + "): " + ex.getMessage());
-        }
-      }
-    }
-  }
-
-  private String linkedEnsureRemark(
-      String label, String materialCode, BomCostingRow parent, MakePartGenerationPlan plan) {
-    if (plan == null) {
-      return null;
-    }
-    String code = trim(materialCode);
-    if (code == null) {
-      return null;
-    }
-    String failure = plan.ensureFailures.get(new LinkedMaterialScope(parent.getOaNo(), trim(parent.getPriceOrgCode()), code));
-    return StringUtils.hasText(failure) ? label + failure : null;
-  }
-
-  private LinkedPriceEnsureRequest linkedEnsureRequest(
-      String oaNo,
-      String priceOrgCode,
-      String businessUnitType,
-      String period,
-      Set<String> itemCodes,
-      MakePartGenerationPlan plan) {
-    LinkedPriceEnsureRequest request =
-        LinkedPriceEnsureRequest.quote(oaNo, businessUnitType, period, itemCodes);
-    request.setPriceOrgCode(priceOrgCode);
-    request.setPriceAsOfTime(plan == null ? null : plan.priceAsOfTime);
-    PricePrepareScenarioContext scenarioContext = plan == null ? null : plan.scenarioContext;
-    request.setPriceScenarioType(scenarioType(scenarioContext));
-      request.setSupplierPriceReviewContext(scenarioContext == null ? null : scenarioContext.supplierReviews());
-    request.setVariableOverrides(
-        scenarioContext == null ? Map.of() : scenarioContext.variableOverrides());
-    return request;
-  }
-
   private MakePartMaterialPriceResolveResult resolveMaterialPrice(
       String materialCode,
       String period,
@@ -1123,28 +984,9 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       String oaNo,
       String businessUnitType,
       PricePrepareScenarioContext scenarioContext,
-      boolean persistLinkedPrice,
       MakePartMaterialPriceResolveService.Purpose purpose) {
-    if (!persistLinkedPrice) {
-      return priceResolveService.calculateMaterialUnitPrice(
-          materialCode,
-          period,
-          quoteDate,
-          priceAsOfTime,
-          oaNo,
-          businessUnitType,
-          scenarioContext,
-          purpose);
-    }
-    return priceResolveService.resolveMaterialUnitPrice(
-        materialCode,
-        period,
-        quoteDate,
-        priceAsOfTime,
-        oaNo,
-        businessUnitType,
-        scenarioContext,
-        purpose);
+    return priceResolveService.calculateMaterialUnitPrice(
+        materialCode, period, quoteDate, priceAsOfTime, oaNo, businessUnitType, scenarioContext, purpose);
   }
 
   private QuotePriceScenarioType scenarioType(PricePrepareScenarioContext scenarioContext) {
@@ -1245,19 +1087,12 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
   private record ParentIdentity(
       String oaNo, Long itemId, String month, String path, String materialCode) {}
 
-  private record LinkedMaterialScope(String oaNo, String priceOrgCode, String materialCode) {}
-
-  private record LinkedInputScope(String oaNo, String priceOrgCode) {}
-
   private static class MakePartGenerationPlan {
     private String period;
     private LocalDateTime priceAsOfTime;
     private PricePrepareScenarioContext scenarioContext;
-    private boolean persistLinkedPrices;
     private final Map<BomCostingRow, List<BomU9Source>> childrenByParent = new LinkedHashMap<>();
     private final Map<String, List<MaterialScrapRef>> scrapsByChild = new LinkedHashMap<>();
-    private final Map<LinkedInputScope, Set<String>> linkedCodesByScope = new LinkedHashMap<>();
-    private final Map<LinkedMaterialScope, String> ensureFailures = new LinkedHashMap<>();
 
     private List<BomU9Source> children(BomCostingRow parent) {
       return childrenByParent.getOrDefault(parent, List.of());

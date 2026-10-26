@@ -47,7 +47,7 @@ monthly:
 cost:
   run:
     # 必须与 API 保持一致；worker 会把实际执行核算时的算法版本固化到成本版本。
-    algorithm-version: ${COST_RUN_ALGORITHM_VERSION:COST_V3}
+    algorithm-version: ${COST_RUN_ALGORITHM_VERSION:MONTHLY_PRODUCT_COST_V1}
     worker:
       enabled: ${COST_RUN_WORKER_ENABLED:true}
       id: ${COST_RUN_WORKER_ID:${WORKER_ID:}}
@@ -57,7 +57,7 @@ cost:
       poll-interval-ms: ${COST_RUN_WORKER_POLL_INTERVAL_MS:5000}
       lock-timeout-minutes: ${COST_RUN_WORKER_LOCK_TIMEOUT_MINUTES:10}
       max-retry-count: ${COST_RUN_WORKER_MAX_RETRY_COUNT:3}
-      scenes: ${COST_RUN_WORKER_SCENES:QUOTE,MONTHLY_REPRICE}
+      scenes: ${COST_RUN_WORKER_SCENES:QUOTE}
   linked:
     excel-auto-binding:
       enabled: ${COST_LINKED_EXCEL_AUTO_BINDING_ENABLED:true}

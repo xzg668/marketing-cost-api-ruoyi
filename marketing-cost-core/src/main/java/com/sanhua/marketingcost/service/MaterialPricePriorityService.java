@@ -13,7 +13,7 @@ import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** 按月份、组织和料号维护完整顺序。默认生成与财务调整分别写入，互不覆盖。 */
+/** 按月份、组织和料号保存默认顺序；财务手工配置的首项表示唯一指定类型。 */
 @Service
 public class MaterialPricePriorityService {
   private final MaterialPriceTypeMapper mapper;

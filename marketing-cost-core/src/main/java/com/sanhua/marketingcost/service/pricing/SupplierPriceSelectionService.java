@@ -46,6 +46,18 @@ public class SupplierPriceSelectionService {
       SupplierPriceScope scope,
       List<SupplierPriceCandidate> candidates,
       List<SupplierSupplyRatio> active) {
+    return selectPolicy(scope,candidates,active,()->scope.oaFormItemId()==null?null:decisions.latest(scopeKey(scope)));
+  }
+
+  /** Same selection policy with batch-loaded review input; this operation performs no SQL. */
+  public Selection selectPrepared(SupplierPriceScope scope,List<SupplierPriceCandidate> candidates,
+      List<SupplierSupplyRatio> active,SupplierPriceDecision decision){
+    if(decision!=null && !Objects.equals(scopeKey(scope),decision.getScopeKey()))throw new IllegalArgumentException("Prepared supplier decision belongs to another consumer scope");
+    return selectPolicy(scope,candidates,active,()->scope.oaFormItemId()==null?null:decision);
+  }
+
+  private Selection selectPolicy(SupplierPriceScope scope,List<SupplierPriceCandidate> candidates,
+      List<SupplierSupplyRatio> active,java.util.function.Supplier<SupplierPriceDecision> readDecision){
     if (candidates.isEmpty()) return new Selection(null, null, "NO_PRICE", "没有有效价格", null);
     if (candidates.size() == 1) {
       return new Selection(candidates.get(0), null, "SINGLE", "单一供应商，直接取价", null);
@@ -58,8 +70,7 @@ public class SupplierPriceSelectionService {
     }
     String scopeKey = scopeKey(scope);
     String fingerprint = fingerprint(candidates, active);
-    SupplierPriceDecision decision =
-        scope.oaFormItemId() == null ? null : decisions.latest(scopeKey);
+    SupplierPriceDecision decision = readDecision.get();
     boolean fallback =
         decision != null
             && FALLBACK_HIGH.equals(decision.getDecision())

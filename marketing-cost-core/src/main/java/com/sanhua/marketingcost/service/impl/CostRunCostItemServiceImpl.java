@@ -337,13 +337,18 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     }
     // T16：calculateItems 是原子计算，开始/结束各报一次进度（中途无明确切片节点）
     progress.accept(0);
+    // Household contributions are calculated after ordinary fees from their saved P/H.
+    // Keep them out of every ordinary material/package bucket and fee base.
+    List<CostRunPartItemDto> ordinaryPartItems = currentPartItems == null ? null
+        : currentPartItems.stream().filter(item -> item == null
+            || !"HOUSEHOLD_INQUIRY".equals(item.getMonthlyPricingType())).toList();
     List<CostRunCostItemDto> result =
         calculateItems(
             oaNo.trim(),
             productCode.trim(),
             materialCodes,
             resolveCostSourceContext(oaNo.trim(), productCode.trim(), context, currentPartItems),
-            currentPartItems,
+            ordinaryPartItems,
             persistDailyResult);
     progress.accept(100);
     return result;
@@ -447,81 +452,35 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     RateLookup lossLookup = findLossRate(productCodeValue, costSourceContext, technicalData);
     BigDecimal lossRate = lossLookup.rate();
     String lossRemark = lossLookup.remark();
-    BigDecimal lossBase = materialTotal.add(directTotal).add(indirectTotal);
-    BigDecimal lossAmount =
-        lossRate == null
-            ? null
-            : lossBase.multiply(lossRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
     RateLookup manufactureLookup =
         findManufactureRate(productCodeValue, materialCodes, costSourceContext);
     BigDecimal manufactureRate = manufactureLookup.rate();
     String manufactureRemark = manufactureLookup.remark();
-    BigDecimal lossAmountValue = lossAmount == null ? BigDecimal.ZERO : lossAmount;
-    BigDecimal manufactureBase =
-        materialTotal.add(directTotal).add(indirectTotal).add(lossAmountValue);
-    BigDecimal manufactureCost = null;
-    BigDecimal manufactureFee = null;
-    if (manufactureRate != null) {
-      BigDecimal denominator = BigDecimal.ONE.subtract(manufactureRate);
-      if (denominator.compareTo(BigDecimal.ZERO) > 0) {
-        manufactureCost =
-            manufactureBase.divide(denominator, AMOUNT_SCALE, RoundingMode.HALF_UP);
-        manufactureFee =
-            manufactureCost.multiply(manufactureRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
-      } else {
-        // T10：denominator <= 0（rate>=1）数据异常 → 也算 miss
-        manufactureRemark =
-            "lp_manufacture_rate.fee_rate=" + manufactureRate + " 不在 (0,1) 范围";
-      }
+    if (manufactureRate != null && manufactureRate.compareTo(BigDecimal.ONE) >= 0) {
+      manufactureRemark = "lp_manufacture_rate.fee_rate=" + manufactureRate + " 不在 (0,1) 范围";
     }
-    // Task #9：产品属性系数 → 调整后制造成本 = 制造成本 × 系数；作为三项费用基数
     ProductCoefficientLookup coefficientLookup =
         lookupProductCoefficient(productCodeValue, costSourceContext);
     BigDecimal coefficient = coefficientLookup.coefficient();
-    String adjustedManufactureRemark =
-        joinRemarks(manufactureRemark, coefficientLookup.remark());
-    BigDecimal adjustedManufactureCost =
-        manufactureCost == null
-            ? null
-            : manufactureCost.multiply(coefficient).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
-
+    String adjustedManufactureRemark = joinRemarks(manufactureRemark, coefficientLookup.remark());
     ThreeExpenseLookup threeExpLookup = findThreeExpenseRate(costSourceContext);
     ThreeExpenseRate threeExpenseRate = threeExpLookup.rate();
     String threeExpRemark = threeExpLookup.remark();
     BigDecimal mgmtRate = threeExpenseRate == null ? null : threeExpenseRate.getManagementExpenseRate();
     BigDecimal salesRate = threeExpenseRate == null ? null : threeExpenseRate.getSalesExpenseRate();
     BigDecimal financeRate = threeExpenseRate == null ? null : threeExpenseRate.getFinanceExpenseRate();
-    // 三项费用基数从 manufactureCost 改成 adjustedManufactureCost（系数=1 时等价旧逻辑）
-    BigDecimal mgmtAmount =
-        adjustedManufactureCost == null || mgmtRate == null
-            ? null
-            : adjustedManufactureCost.multiply(mgmtRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
-    BigDecimal salesAmount =
-        adjustedManufactureCost == null || salesRate == null
-            ? null
-            : adjustedManufactureCost.multiply(salesRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
-    BigDecimal financeAmount =
-        adjustedManufactureCost == null || financeRate == null
-            ? null
-            : adjustedManufactureCost.multiply(financeRate).setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
-    BigDecimal totalAmount = null;
-    if (adjustedManufactureCost != null) {
-      // 不含税总成本 = 调整后制造成本 + 三项费用 + 其他费用（与 Excel 一致）
-      totalAmount = adjustedManufactureCost;
-      if (mgmtAmount != null) {
-        totalAmount = totalAmount.add(mgmtAmount);
-      }
-      if (salesAmount != null) {
-        totalAmount = totalAmount.add(salesAmount);
-      }
-      if (financeAmount != null) {
-        totalAmount = totalAmount.add(financeAmount);
-      }
-      if (otherExpenseTotal.compareTo(BigDecimal.ZERO) != 0) {
-        totalAmount = totalAmount.add(otherExpenseTotal);
-      }
-      totalAmount = totalAmount.setScale(AMOUNT_SCALE, RoundingMode.HALF_UP);
-    }
+    var amounts = com.sanhua.marketingcost.service.costing.OrdinaryCostAmounts.calculate(
+        materialTotal, directTotal, indirectTotal, lossRate, manufactureRate, coefficient,
+        mgmtRate, salesRate, financeRate, otherExpenseTotal);
+    BigDecimal lossBase = amounts.lossBase();
+    BigDecimal lossAmount = amounts.loss();
+    BigDecimal manufactureCost = amounts.manufactureCost();
+    BigDecimal manufactureFee = amounts.manufactureFee();
+    BigDecimal adjustedManufactureCost = amounts.adjustedManufactureCost();
+    BigDecimal mgmtAmount = amounts.management();
+    BigDecimal salesAmount = amounts.sales();
+    BigDecimal financeAmount = amounts.finance();
+    BigDecimal totalAmount = amounts.total();
 
     List<CostRunCostItemDto> items = new ArrayList<>();
     items.add(buildItem(MATERIAL, "材料费", null, null, materialTotal));
@@ -1835,37 +1794,29 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
 
   private void appendTechnicalProductFees(
       List<CostRunCostItemDto> items, EffectiveTechnicalDataInput technicalData) {
-    if (technicalData == null || technicalData.productFees() == null) {
-      return;
-    }
-    var fees = technicalData.productFees();
+    var fees = technicalData == null ? null : technicalData.productFees();
+    if (fees == null) return;
     if (!"CNY".equals(fees.currency())) {
       throw new IllegalArgumentException("产品单件费用必须以人民币元/件计入成本");
     }
-    appendTechnicalProductFee(items, technicalData, "TOOLING", "工装费", fees.unitToolingFee());
-    appendTechnicalProductFee(items, technicalData, "MOULD", "模具费", fees.unitMouldFee());
-    appendTechnicalProductFee(items, technicalData, "CERTIFICATION", "认证费", fees.unitCertificationFee());
-  }
-
-  private void appendTechnicalProductFee(
-      List<CostRunCostItemDto> items, EffectiveTechnicalDataInput technicalData,
-      String code, String name, BigDecimal amount) {
-    // 公共单件费用已有适用记录时沿用，不能与补录再加一遍；金额异常不能当作缺失。
-    var publicFees = items.stream().filter(item -> name.equals(item.getCostName())).toList();
-    if (!publicFees.isEmpty()) {
-      if (publicFees.stream().anyMatch(item -> item.getAmount() == null || item.getAmount().signum() < 0)) {
-        throw new IllegalArgumentException("公共" + name + "金额异常，请先核实来源");
-      }
-      return;
+    for (var code : com.sanhua.marketingcost.dto.costing.ProductFeeCode.values()) {
+      BigDecimal amount = switch (code) {
+        case MOULD -> fees.unitMouldFee();
+        case CERTIFICATION -> fees.unitCertificationFee();
+        case DEPRECIATION -> fees.unitDepreciationFee();
+        case TOOLING -> fees.unitToolingFee();
+      };
+      var state = com.sanhua.marketingcost.service.costing.ProductFeeContract.state(
+          amount, fees.encodingVersion());
+      if (amount == null) continue;
+      Long versionId = technicalData.sourceVersionId("PROFILE");
+      String source = technicalSourceRemark(technicalData, "PROFILE");
+      items.add(buildItem(code.costCode(), code.displayName(), null, null,
+          amount.setScale(AMOUNT_SCALE, RoundingMode.HALF_UP),
+          source + "；" + com.sanhua.marketingcost.service.costing.ProductFeeContract.POLICY_VERSION
+              + "；" + state + "；单件金额直接计入，不按数量或属性系数分摊",
+          "lp_quote_tech_data_version", versionId));
     }
-    if (amount == null || amount.signum() < 0) {
-      throw new IllegalArgumentException(name + "缺少已确认的有效单件金额");
-    }
-    items.add(buildItem(
-        OTHER_EXP_PREFIX + "TECH_" + code, name, null, null,
-        amount.setScale(AMOUNT_SCALE, RoundingMode.HALF_UP),
-        technicalSourceRemark(technicalData, "PROFILE") + "；直接计入单件成本，不按年用量分摊",
-        "lp_quote_tech_data_version", technicalData.sourceVersionId("PROFILE")));
   }
 
   private List<CostRunCostItemDto> buildOtherExpenseItems(String productCode) {
@@ -1881,7 +1832,9 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
     int fallbackIndex = 1;
     for (OtherExpenseRate rate : rates) {
       String expenseType = trimToNull(rate.getExpenseType());
-      if (isFreightExpenseType(expenseType)) {
+      if (isFreightExpenseType(expenseType)
+          || Set.of("模具费", "认证费", "折旧费", "工装费", "工装夹具费").contains(
+              expenseType == null ? "" : expenseType)) {
         continue;
       }
       String codeSuffix =

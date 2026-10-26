@@ -1,0 +1,12 @@
+{
+  "ordinaryRows": 1000,
+  "householdRows": 100,
+  "material": "3186.420000",
+  "loss": "31.984200",
+  "F": "4038.005250",
+  "C": "4239.905513",
+  "AiSum": "6455.155600",
+  "AH": "6777.913380",
+  "total1": "12586.583932",
+  "oracle": "Python fractions; integer HALF_UP"
+}

@@ -12,11 +12,8 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.sanhua.marketingcost.dto.LinkedPriceEnsureRequest;
-import com.sanhua.marketingcost.dto.LinkedPriceEnsureResult;
 import com.sanhua.marketingcost.dto.MakePartMaterialPriceResolveResult;
 import com.sanhua.marketingcost.dto.MakePartPriceGenerateResponse;
-import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.dto.priceprepare.NoScrapConfirmResponse;
 import com.sanhua.marketingcost.entity.BomCostingRow;
 import com.sanhua.marketingcost.entity.BomCostingRowSubRef;
@@ -25,12 +22,10 @@ import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.entity.MakePartPriceGapItem;
 import com.sanhua.marketingcost.entity.MaterialScrapRef;
 import com.sanhua.marketingcost.enums.MaterialFormAttrEnum;
-import com.sanhua.marketingcost.enums.PriceTypeEnum;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.MakePartPriceGapItemMapper;
-import com.sanhua.marketingcost.service.LinkedPriceEnsureService;
 import com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService;
 import com.sanhua.marketingcost.service.MakePartNoScrapConfirmationService;
 import com.sanhua.marketingcost.service.MakePartPriceCalculator;
@@ -38,10 +33,7 @@ import com.sanhua.marketingcost.service.MakePartProcessTypePolicy;
 import com.sanhua.marketingcost.service.MakePartScrapMappingService;
 import com.sanhua.marketingcost.service.MakePartSourceDataService;
 import com.sanhua.marketingcost.service.MakePartWeightService;
-import com.sanhua.marketingcost.service.MaterialPriceRouterService;
 import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
-import com.sanhua.marketingcost.service.scrap.ScrapPriceScopeReader;
-import com.sanhua.marketingcost.service.scrap.ScrapPriceSelectionService;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -52,7 +44,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InOrder;
 import org.mockito.Mockito;
 
 class MakePartPriceGenerationServiceImplTest {
@@ -61,14 +52,11 @@ class MakePartPriceGenerationServiceImplTest {
   private BomCostingRowSubRefMapper bomCostingRowSubRefMapper;
   private MakePartWeightService weightService;
   private MakePartScrapMappingService scrapMappingService;
-  private MaterialPriceRouterService materialPriceRouterService;
-  private LinkedPriceEnsureService linkedPriceEnsureService;
   private MakePartMaterialPriceResolveService priceResolveService;
   private MakePartNoScrapConfirmationService noScrapConfirmationService;
   private MakePartPriceCalcRowMapper calcRowMapper;
   private MakePartPriceGapItemMapper gapItemMapper;
   private MakePartPriceGenerationServiceImpl service;
-  private ScrapPriceSelectionService scrapPrices;
   private com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs
       manufacturingInputs;
 
@@ -78,18 +66,13 @@ class MakePartPriceGenerationServiceImplTest {
     bomCostingRowSubRefMapper = mock(BomCostingRowSubRefMapper.class);
     weightService = mock(MakePartWeightService.class);
     scrapMappingService = mock(MakePartScrapMappingService.class);
-    materialPriceRouterService = mock(MaterialPriceRouterService.class);
-    linkedPriceEnsureService = mock(LinkedPriceEnsureService.class);
     priceResolveService = mock(MakePartMaterialPriceResolveService.class);
     noScrapConfirmationService = mock(MakePartNoScrapConfirmationService.class);
     calcRowMapper = mock(MakePartPriceCalcRowMapper.class);
     gapItemMapper = mock(MakePartPriceGapItemMapper.class);
-    when(materialPriceRouterService.listCandidates(any(), any(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any())).thenReturn(List.of());
-    when(linkedPriceEnsureService.ensure(any())).thenReturn(new LinkedPriceEnsureResult());
     when(noScrapConfirmationService.findEffective(any(), any(), any())).thenReturn(null);
     manufacturingInputs =
         mock(com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs.class);
-    scrapPrices = mock(ScrapPriceSelectionService.class);
     service =
         new MakePartPriceGenerationServiceImpl(
             sourceDataService,
@@ -97,27 +80,12 @@ class MakePartPriceGenerationServiceImplTest {
             new MakePartProcessTypePolicy(),
             weightService,
             scrapMappingService,
-            materialPriceRouterService,
-            linkedPriceEnsureService,
             priceResolveService,
             new MakePartPriceCalculator(),
             noScrapConfirmationService,
             calcRowMapper,
             gapItemMapper,
-            manufacturingInputs, scrapPrices);
-  }
-
-  @Test
-  void standaloneGenerationAlwaysReleasesTheBatchPriceView() {
-    var batch = mock(ScrapPriceScopeReader.Batch.class);
-    when(scrapPrices.openBatch()).thenReturn(batch);
-    when(sourceDataService.listManufacturedParents(any(), any(), any()))
-        .thenReturn(List.of()).thenThrow(new IllegalArgumentException("BOM unavailable"));
-    service.generateByOa("OA", "COMMERCIAL", "2026-10", null);
-    assertThatThrownBy(() -> service.generateByOa("OA", "COMMERCIAL", "2026-10", null))
-        .hasMessage("BOM unavailable");
-    verify(scrapPrices, times(2)).openBatch();
-    verify(batch, times(2)).close();
+            manufacturingInputs, new com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec(new com.fasterxml.jackson.databind.ObjectMapper()));
   }
 
   @Test
@@ -446,7 +414,7 @@ class MakePartPriceGenerationServiceImplTest {
     assertThat(captor.getValue().getPricingMonth()).isEqualTo("2026-05");
     assertThat(captor.getValue().getPriceAsOfTime()).isEqualTo(priceAsOfTime);
     verify(priceResolveService)
-        .resolveMaterialUnitPrice(
+        .calculateMaterialUnitPrice(
             eq("RAW-001"),
             eq("2026-05"),
             eq(LocalDate.parse("2026-05-26")),
@@ -455,7 +423,7 @@ class MakePartPriceGenerationServiceImplTest {
             eq("COMMERCIAL"),
             argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class));
     verify(priceResolveService)
-        .resolveMaterialUnitPrice(
+        .calculateMaterialUnitPrice(
             eq("SCRAP-001"),
             eq("2026-05"),
             eq(LocalDate.parse("2026-05-26")),
@@ -499,7 +467,7 @@ class MakePartPriceGenerationServiceImplTest {
         .thenReturn(weight("RAW-001"));
     when(scrapMappingService.listMappings("RAW-001", "COMMERCIAL"))
         .thenReturn(List.of(scrap("SCRAP-001")));
-    when(priceResolveService.resolveMaterialUnitPrice(
+    when(priceResolveService.calculateMaterialUnitPrice(
             any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
 
@@ -546,8 +514,7 @@ class MakePartPriceGenerationServiceImplTest {
     verify(weightService, never())
         .resolveWeights(any(), any(), any(), any(), any(), any(), anyBoolean());
     verify(priceResolveService, never())
-        .resolveMaterialUnitPrice(any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class));
-    verify(linkedPriceEnsureService, never()).ensure(any(LinkedPriceEnsureRequest.class));
+        .calculateMaterialUnitPrice(any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class));
   }
 
   @Test
@@ -574,9 +541,7 @@ class MakePartPriceGenerationServiceImplTest {
     verify(calcRowMapper, never()).updateById(any(MakePartPriceCalcRow.class));
     verify(gapItemMapper, never()).insert(any(MakePartPriceGapItem.class));
     verify(gapItemMapper, never()).updateById(any(MakePartPriceGapItem.class));
-    verify(linkedPriceEnsureService, never()).ensure(any(LinkedPriceEnsureRequest.class));
-    verify(priceResolveService, never())
-        .resolveMaterialUnitPrice(any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class));
+
   }
 
   @Test
@@ -616,7 +581,7 @@ class MakePartPriceGenerationServiceImplTest {
         .thenReturn(weight("RAW-001"));
     when(scrapMappingService.listMappings("RAW-001", "COMMERCIAL"))
         .thenReturn(List.of(scrap("SCRAP-001")));
-    when(priceResolveService.resolveMaterialUnitPrice(
+    when(priceResolveService.calculateMaterialUnitPrice(
             any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
 
@@ -665,7 +630,7 @@ class MakePartPriceGenerationServiceImplTest {
         .thenReturn(List.of(scrap("SCRAP-A1"), scrap("SCRAP-A2")));
     when(scrapMappingService.listMappings("RAW-B", "COMMERCIAL"))
         .thenReturn(List.of(scrap("SCRAP-B1")));
-    when(priceResolveService.resolveMaterialUnitPrice(
+    when(priceResolveService.calculateMaterialUnitPrice(
             any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
 
@@ -713,7 +678,7 @@ class MakePartPriceGenerationServiceImplTest {
             "GROUP-1",
             "PPR-OA-1",
             Map.of("Cu", new BigDecimal("90")));
-    when(priceResolveService.resolveMaterialUnitPrice(
+    when(priceResolveService.calculateMaterialUnitPrice(
             any(),
             any(),
             any(),
@@ -741,7 +706,7 @@ class MakePartPriceGenerationServiceImplTest {
               assertThat(row.getNetWeightG()).isEqualByComparingTo("55");
             });
     verify(priceResolveService)
-        .resolveMaterialUnitPrice(
+        .calculateMaterialUnitPrice(
             eq("RAW-CU-A"),
             eq("2026-05"),
             eq(LocalDate.parse("2026-05-31")),
@@ -754,7 +719,7 @@ class MakePartPriceGenerationServiceImplTest {
                         && "210".equals(c.supplierReviews().priceOrgCode())
                         && c.variableOverrides().equals(context.variableOverrides())), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class));
     verify(priceResolveService)
-        .resolveMaterialUnitPrice(
+        .calculateMaterialUnitPrice(
             eq("SCRAP-CU-A"),
             eq("2026-05"),
             eq(LocalDate.parse("2026-05-31")),
@@ -796,7 +761,7 @@ class MakePartPriceGenerationServiceImplTest {
   @DisplayName("缺原材料价：主表保留原材料和废料关系，并生成 RAW 缺价清单")
   void missingRawPriceWritesRawGapItem() {
     stubHappyPath("MAKE-001", List.of(child("RAW-MISS", "kg")), List.of(scrap("SCRAP-001")));
-    when(priceResolveService.resolveMaterialUnitPrice(
+    when(priceResolveService.calculateMaterialUnitPrice(
             eq("RAW-MISS"),
             eq("2026-05"),
             eq(LocalDate.parse("2026-05-31")),
@@ -834,7 +799,7 @@ class MakePartPriceGenerationServiceImplTest {
   @DisplayName("缺废料价：主表保留原材料和废料关系，并生成 SCRAP 缺价清单")
   void missingScrapPriceWritesScrapGapItem() {
     stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-MISS")));
-    when(priceResolveService.resolveMaterialUnitPrice(
+    when(priceResolveService.calculateMaterialUnitPrice(
             eq("SCRAP-MISS"),
             eq("2026-05"),
             eq(LocalDate.parse("2026-05-31")),
@@ -869,7 +834,7 @@ class MakePartPriceGenerationServiceImplTest {
   @DisplayName("原材料价和废料价都缺：同一明细生成 RAW 与 SCRAP 两条缺价清单")
   void missingRawAndScrapPriceWritesTwoGapItems() {
     stubHappyPath("MAKE-001", List.of(child("RAW-MISS", "kg")), List.of(scrap("SCRAP-MISS")));
-    when(priceResolveService.resolveMaterialUnitPrice(
+    when(priceResolveService.calculateMaterialUnitPrice(
             eq("RAW-MISS"),
             eq("2026-05"),
             eq(LocalDate.parse("2026-05-31")),
@@ -879,7 +844,7 @@ class MakePartPriceGenerationServiceImplTest {
             argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenReturn(
             MakePartMaterialPriceResolveResult.miss("RAW-MISS", "MISSING_PRICE", "缺原材料价格", null));
-    when(priceResolveService.resolveMaterialUnitPrice(
+    when(priceResolveService.calculateMaterialUnitPrice(
             eq("SCRAP-MISS"),
             eq("2026-05"),
             eq(LocalDate.parse("2026-05-31")),
@@ -998,83 +963,13 @@ class MakePartPriceGenerationServiceImplTest {
   }
 
   @Test
-  @DisplayName("原材料命中联动价时先 ensure，再正式取价")
-  void linkedRawMaterialEnsuredBeforeResolvingPrice() {
-    stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-001")));
-    when(materialPriceRouterService.listCandidates(
-            "RAW-001", "2026-05", LocalDate.parse("2026-05-31"), "210", "COMMERCIAL"))
-        .thenReturn(List.of(linkedRoute("RAW-001")));
-
-    service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
-
-    verify(linkedPriceEnsureService)
-        .ensure(
-            argThat(
-                request ->
-                    request != null
-                        && request.getCalcScene() != null
-                        && "QUOTE".equals(request.getCalcScene().getCode())
-                        && "OA-001".equals(request.getOaNo())
-                        && "210".equals(request.getPriceOrgCode())
-                        && request.normalizedItemCodes().contains("RAW-001")));
-    InOrder inOrder = Mockito.inOrder(linkedPriceEnsureService, priceResolveService);
-    inOrder.verify(linkedPriceEnsureService).ensure(any(LinkedPriceEnsureRequest.class));
-    inOrder
-        .verify(priceResolveService)
-        .resolveMaterialUnitPrice(
-            eq("RAW-001"),
-            eq("2026-05"),
-            eq(LocalDate.parse("2026-05-31")),
-            eq(priceAsOf()),
-            eq("OA-001"),
-            eq("COMMERCIAL"),
-            argThat(c -> c != null && "210".equals(c.supplierReviews().priceOrgCode())), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class));
-  }
-
-  @Test
   @DisplayName("映射废料进入独立价源，不预热普通联动价")
-  void mappedScrapSkipsOrdinaryLinkedEnsure() {
+  void mappedScrapIsReadWithExplicitScrapPurpose() {
     stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-001")));
-    when(materialPriceRouterService.listCandidates(
-            "SCRAP-001", "2026-05", LocalDate.parse("2026-05-31"), "210", "COMMERCIAL"))
-        .thenReturn(List.of(linkedRoute("SCRAP-001")));
-
     service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
 
-    verify(linkedPriceEnsureService, never()).ensure(any());
-    verify(priceResolveService).resolveMaterialUnitPrice(eq("SCRAP-001"), any(), any(), any(), any(), any(), any(),
+    verify(priceResolveService).calculateMaterialUnitPrice(eq("SCRAP-001"), any(), any(), any(), any(), any(), any(),
         eq(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.SCRAP));
-  }
-
-  @Test
-  @DisplayName("非联动价路由不调用 ensure")
-  void nonLinkedRouteDoesNotEnsure() {
-    stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-001")));
-    when(materialPriceRouterService.listCandidates(any(), any(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
-        .thenReturn(List.of(fixedRoute("RAW-001")));
-
-    service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
-
-    verify(linkedPriceEnsureService, never()).ensure(any(LinkedPriceEnsureRequest.class));
-  }
-
-  @Test
-  @DisplayName("ensure 失败时结果行保留明确备注")
-  void ensureFailureRemarkWrittenToRows() {
-    stubHappyPath("MAKE-001", List.of(child("RAW-001", "kg")), List.of(scrap("SCRAP-001")));
-    when(materialPriceRouterService.listCandidates(
-            "RAW-001", "2026-05", LocalDate.parse("2026-05-31"), "210", "COMMERCIAL"))
-        .thenReturn(List.of(linkedRoute("RAW-001")));
-    LinkedPriceEnsureResult ensureResult = new LinkedPriceEnsureResult();
-    ensureResult.addFailedItem("RAW-001", "联动价公式缺失");
-    when(linkedPriceEnsureService.ensure(any())).thenReturn(ensureResult);
-
-    service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
-
-    ArgumentCaptor<MakePartPriceCalcRow> captor =
-        ArgumentCaptor.forClass(MakePartPriceCalcRow.class);
-    verify(calcRowMapper).insert(captor.capture());
-    assertThat(captor.getValue().getRemark()).contains("原材料联动价 ensure 失败", "RAW-001", "联动价公式缺失");
   }
 
   @Test
@@ -1089,7 +984,7 @@ class MakePartPriceGenerationServiceImplTest {
   }
 
   @Test
-  void groupsManufacturingLinkedInputsByQuoteAndPriceOrganization() {
+  void keepsManufacturingPriceInputsInEachParentsOrganization() {
     var raw = child("RAW-001", "kg");
     stubHappyPath("MAKE-001", List.of(raw), List.of(scrap("SCRAP-001")));
     var other = parent("MAKE-002");
@@ -1101,21 +996,12 @@ class MakePartPriceGenerationServiceImplTest {
     when(weightService.resolveWeights(
             eq("MAKE-002"), eq(raw), any(), any(), any(), any(), anyBoolean()))
         .thenReturn(weight("RAW-001"));
-    when(materialPriceRouterService.listCandidates(any(), any(), any(), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
-        .thenAnswer(call -> List.of(linkedRoute(call.getArgument(0))));
     service.generateByOa("OA-001", "COMMERCIAL", "2026-05");
-    var requests = ArgumentCaptor.forClass(LinkedPriceEnsureRequest.class);
-    verify(linkedPriceEnsureService, Mockito.times(2)).ensure(requests.capture());
-    assertThat(requests.getAllValues())
-        .extracting(LinkedPriceEnsureRequest::getPriceOrgCode)
+    var contexts = ArgumentCaptor.forClass(PricePrepareScenarioContext.class);
+    verify(priceResolveService, times(4)).calculateMaterialUnitPrice(any(), any(), any(), any(),
+        eq("OA-001"), eq("COMMERCIAL"), contexts.capture(), any(MakePartMaterialPriceResolveService.Purpose.class));
+    assertThat(contexts.getAllValues().stream().map(value -> value.supplierReviews().priceOrgCode()).distinct())
         .containsExactly("210", "220");
-    assertThat(requests.getAllValues())
-        .allSatisfy(
-            request -> {
-              assertThat(request.getOaNo()).isEqualTo("OA-001");
-              assertThat(request.normalizedItemCodes())
-                  .containsExactlyInAnyOrder("RAW-001");
-            });
   }
 
   private void stubHappyPath(
@@ -1134,7 +1020,7 @@ class MakePartPriceGenerationServiceImplTest {
       when(scrapMappingService.listMappings(child.getChildMaterialNo(), "COMMERCIAL"))
           .thenReturn(scraps);
     }
-    when(priceResolveService.resolveMaterialUnitPrice(
+    when(priceResolveService.calculateMaterialUnitPrice(
             any(), any(), any(), any(), any(), any(), any(), org.mockito.ArgumentMatchers.any(com.sanhua.marketingcost.service.MakePartMaterialPriceResolveService.Purpose.class)))
         .thenAnswer(invocation -> okPriceByCode(invocation.getArgument(0)));
   }
@@ -1227,27 +1113,7 @@ class MakePartPriceGenerationServiceImplTest {
     return LocalDateTime.of(2026, 5, 31, 23, 59, 59);
   }
 
-  private PriceTypeRoute linkedRoute(String materialCode) {
-    return new PriceTypeRoute(
-        materialCode,
-        MaterialFormAttrEnum.PURCHASED,
-        PriceTypeEnum.LINKED,
-        1,
-        null,
-        null,
-        "manual",
-        "联动价");
-  }
 
-  private PriceTypeRoute fixedRoute(String materialCode) {
-    return new PriceTypeRoute(
-        materialCode,
-        MaterialFormAttrEnum.PURCHASED,
-        PriceTypeEnum.FIXED,
-        1,
-        null,
-        null,
-        "manual",
-        "固定价");
-  }
+
+
 }

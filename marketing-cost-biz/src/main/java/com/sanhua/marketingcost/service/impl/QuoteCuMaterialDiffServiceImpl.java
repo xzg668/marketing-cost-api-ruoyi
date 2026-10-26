@@ -61,7 +61,10 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
   private final PriceLinkedCalcItemMapper linkedCalcItemMapper;
   private final FactorQuoteBaseMappingMapper factorQuoteBaseMappingMapper;
   private final ObjectMapper objectMapper;
+  private final com.sanhua.marketingcost.service.costing.MonthlyCostVersionService monthlyVersions;
+  private final com.sanhua.marketingcost.service.costing.MonthlyQuotationCosting monthlyCosting;
 
+  @org.springframework.beans.factory.annotation.Autowired
   public QuoteCuMaterialDiffServiceImpl(
       QuoteCostRunVersionMapper versionMapper,
       PricePrepareBatchMapper batchMapper,
@@ -69,7 +72,9 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
       MakePartPriceCalcRowMapper makePartRowMapper,
       PriceLinkedCalcItemMapper linkedCalcItemMapper,
       FactorQuoteBaseMappingMapper factorQuoteBaseMappingMapper,
-      ObjectMapper objectMapper) {
+      ObjectMapper objectMapper,
+      com.sanhua.marketingcost.service.costing.MonthlyCostVersionService monthlyVersions,
+      com.sanhua.marketingcost.service.costing.MonthlyQuotationCosting monthlyCosting) {
     this.versionMapper = versionMapper;
     this.batchMapper = batchMapper;
     this.itemMapper = itemMapper;
@@ -77,6 +82,17 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     this.linkedCalcItemMapper = linkedCalcItemMapper;
     this.factorQuoteBaseMappingMapper = factorQuoteBaseMappingMapper;
     this.objectMapper = objectMapper;
+    this.monthlyVersions = monthlyVersions;
+    this.monthlyCosting = monthlyCosting;
+  }
+
+  /** Historical calculation tests exercise only their saved legacy evidence. */
+  public QuoteCuMaterialDiffServiceImpl(QuoteCostRunVersionMapper versionMapper,
+      PricePrepareBatchMapper batchMapper, PricePrepareItemMapper itemMapper,
+      MakePartPriceCalcRowMapper makePartRowMapper, PriceLinkedCalcItemMapper linkedCalcItemMapper,
+      FactorQuoteBaseMappingMapper factorQuoteBaseMappingMapper, ObjectMapper objectMapper) {
+    this(versionMapper, batchMapper, itemMapper, makePartRowMapper, linkedCalcItemMapper,
+        factorQuoteBaseMappingMapper, objectMapper, null, null);
   }
 
   @Override
@@ -87,6 +103,10 @@ public class QuoteCuMaterialDiffServiceImpl implements QuoteCuMaterialDiffServic
     }
     QuoteCostRunVersion version = versionMapper.selectById(costRunVersionId);
     validateVersion(version, costRunVersionId);
+    if (com.sanhua.marketingcost.service.costing.MonthlyProductCost.ALGORITHM_VERSION.equals(version.getAlgorithmVersion())) {
+      return Objects.requireNonNull(monthlyCosting, "月价成本必须使用保存的差异依据")
+          .difference(Objects.requireNonNull(monthlyVersions).read(version.getBusinessUnitType(), costRunVersionId));
+    }
     PricePrepareBatch oaBatch = loadBatch(version.getOaPricePrepareNo(), "OA");
     PricePrepareBatch financeBatch = loadBatch(version.getFinancePricePrepareNo(), "财务");
     validateBatchPair(version, oaBatch, financeBatch);

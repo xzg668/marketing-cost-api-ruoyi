@@ -43,6 +43,22 @@ public class VariableContext {
   private OaForm oaForm;
   private PriceLinkedItem linkedItem;
   private SupplierPriceReviewContext supplierReviews;
+  private PreparedFormulaInputs preparedInputs;
+  private final Map<String, com.sanhua.marketingcost.entity.FactorMonthlyPrice> usedPrivateFactors = new java.util.LinkedHashMap<>();
+  private final Map<Long, com.sanhua.marketingcost.entity.FactorIdentity> usedFactorIdentities = new java.util.LinkedHashMap<>();
+  private final Map<String, java.util.List<com.sanhua.marketingcost.entity.MaterialScrapRef>> usedScrapReferences = new java.util.LinkedHashMap<>();
+
+  public Map<String, com.sanhua.marketingcost.entity.FactorMonthlyPrice> getUsedPrivateFactors() { return usedPrivateFactors; }
+  public Map<Long, com.sanhua.marketingcost.entity.FactorIdentity> getUsedFactorIdentities() { return usedFactorIdentities; }
+  public Map<String, java.util.List<com.sanhua.marketingcost.entity.MaterialScrapRef>> getUsedScrapReferences() { return usedScrapReferences; }
+
+  public PreparedFormulaInputs getPreparedInputs() { return preparedInputs; }
+
+  public VariableContext preparedInputs(PreparedFormulaInputs value) {
+    preparedInputs = java.util.Objects.requireNonNull(value);
+    variableDefinitions = value.calculationVariables();
+    return this;
+  }
 
   public SupplierPriceReviewContext getSupplierReviews() {
     return supplierReviews;

@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.service.technicaldata;
 import com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.Dependency;
 import com.sanhua.marketingcost.entity.QuoteTechDataVersion;
 import com.sanhua.marketingcost.entity.QuoteTechModule;
+import com.sanhua.marketingcost.entity.QuoteTechPackageItem;
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -10,6 +11,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 import org.springframework.stereotype.Service;
 
 /** 冻结实际引用依据；依据变化时保留原审批记录，由财务定向退回受影响人员。 */
@@ -53,13 +56,33 @@ public class TechnicalDataDependencies {
   }
 
   public List<Issue> stale(QuoteTechDataVersion frozen, List<QuoteTechModule> modules) {
+    return stale(frozen,modules,this::basis);
+  }
+
+  public List<Issue> stale(QuoteTechDataVersion frozen,List<QuoteTechModule> modules,
+      Map<Long,QuoteTechDataVersion> versions,Map<Long,List<QuoteTechPackageItem>> packages) {
+    return stale(frozen,modules,(target,source)->basis(target,source,id->{
+      var version=Objects.requireNonNull(versions.get(id),"Missing captured dependency version: "+id);
+      if(!Objects.equals(id,version.getId()) || !Objects.equals(source.getProductId(),version.getProductId()))
+        throw new IllegalArgumentException("Mismatched captured dependency version: "+id);
+      return version;
+    },id->{
+      var rows=Objects.requireNonNull(packages.get(id),"Missing captured package details: "+id);
+      if(rows.stream().anyMatch(row->!Objects.equals(id,row.getVersionId())))
+        throw new IllegalArgumentException("Mismatched captured package detail version: "+id);
+      return rows;
+    }));
+  }
+
+  private List<Issue> stale(QuoteTechDataVersion frozen,List<QuoteTechModule> modules,
+      BiFunction<String,QuoteTechModule,Object> sourceBasis) {
     var snapshot = content.supplementContent(frozen);
     var dependencies = snapshot == null || snapshot.sources() == null ? null : snapshot.sources().dependencies();
     if (dependencies == null || dependencies.isEmpty()) return List.of();
     List<Issue> result = new ArrayList<>();
     for (var dependency : dependencies) {
       var source = module(modules, dependency.sourceModuleType());
-      Object currentBasis = ready(source) ? basis(dependency.moduleType(), source) : null;
+      Object currentBasis = ready(source) ? sourceBasis.apply(dependency.moduleType(), source) : null;
       String currentHash = currentBasis == null ? null : json.dataFingerprint(currentBasis);
       if (!ready(source)
           || !json.matchesDataFingerprint(dependency.contentHash(), currentBasis)) {
@@ -80,11 +103,16 @@ public class TechnicalDataDependencies {
   }
 
   private Object basis(String target, QuoteTechModule source) {
+    return basis(target,source,id->repository.findVersion(id).orElseThrow(),repository::findPackageItems);
+  }
+
+  private Object basis(String target,QuoteTechModule source,Function<Long,QuoteTechDataVersion> versions,
+      Function<Long,List<QuoteTechPackageItem>> packages) {
     if (!Integer.valueOf(1).equals(source.getRequiredFlag())) {
       return Map.of("availability", source.getSourceAvailability(),
           "sourceReference", Objects.toString(source.getSourceReference(), ""));
     }
-    var version = repository.findVersion(source.getCurrentVersionId()).orElseThrow();
+    var version = versions.apply(source.getCurrentVersionId());
     var snapshot = content.supplementContent(version);
     // 单价依据是料号和单位；单纯调整数量不应使另一人的已批单价作废。
     Object basis = switch (source.getModuleType()) {
@@ -98,7 +126,7 @@ public class TechnicalDataDependencies {
           .distinct().sorted().toList();
       case "SOLDER" -> snapshot.solder().items().stream()
           .map(item -> key(item.materialNo(), item.unit())).distinct().sorted().toList();
-      case "PACKAGE" -> repository.findPackageItems(version.getId()).stream()
+      case "PACKAGE" -> packages.apply(version.getId()).stream()
           .map(item -> key(item.getComponentMaterialNo(), item.getOriginalUnit())).distinct().sorted().toList();
       default -> throw new IllegalArgumentException("未定义的资料依赖：" + source.getModuleType());
     };

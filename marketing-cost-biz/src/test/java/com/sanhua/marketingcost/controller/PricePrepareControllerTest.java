@@ -48,135 +48,22 @@ class PricePrepareControllerTest {
     queryService = mock(PricePrepareQueryService.class);
     noScrapConfirmationService = mock(MakePartNoScrapConfirmationService.class);
     controller =
-        new PricePrepareController(pricePrepareService, queryService, noScrapConfirmationService);
+        new PricePrepareController(queryService, noScrapConfirmationService);
   }
 
-  @Test
-  @DisplayName("生成接口：参数合法时委托 Service")
-  void generateDelegatesService() {
-    PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
-    request.setOaNo("OA-001");
-    PricePrepareGenerateResult mocked = new PricePrepareGenerateResult();
-    mocked.setPrepareNo("PPR-1");
-    when(pricePrepareService.generate(request)).thenReturn(mocked);
-
-    CommonResult<PricePrepareGenerateResult> result = controller.generate(request);
-
-    assertThat(result.isSuccess()).isTrue();
-    assertThat(result.getData()).isSameAs(mocked);
-    verify(pricePrepareService).generate(request);
+  @Test void legacyGenerateCannotAdoptEvenWithAnExplicitItem() {
+    var request = new PricePrepareGenerateRequest(); request.setOaNo("OA-001"); request.setOaFormItemId(1L);
+    var result = controller.generate(request);
+    assertThat(result.isSuccess()).isFalse(); assertThat(result.getMsg()).contains("单产品核算工作台");
+    org.mockito.Mockito.verifyNoInteractions(pricePrepareService, queryService);
   }
 
-  @Test
-  @DisplayName("生成接口：OA 单号缺失时返回参数错误")
-  void generateReturnsBadRequestWhenOaMissing() {
-    PricePrepareGenerateRequest request = new PricePrepareGenerateRequest();
-    when(pricePrepareService.generate(request))
-        .thenThrow(new IllegalArgumentException("oaNo is required"));
-
-    CommonResult<PricePrepareGenerateResult> result = controller.generate(request);
-
-    assertThat(result.isSuccess()).isFalse();
-    assertThat(result.getMsg()).contains("oaNo");
-  }
-
-  @Test
-  @DisplayName("批量生成：每个 OA 独立委托单 OA 生成并返回 OA 汇总状态")
-  void generateBulkDelegatesEachOa() {
-    PricePrepareBulkGenerateRequest request = new PricePrepareBulkGenerateRequest();
-    request.setOaNos(List.of("OA-001", "OA-002", "OA-001"));
-    request.setPeriodMonth("2026-05");
-    when(pricePrepareService.generate(any())).thenAnswer(invocation -> {
-      PricePrepareGenerateRequest single = invocation.getArgument(0);
-      PricePrepareGenerateResult result = new PricePrepareGenerateResult();
-      result.setOaNo(single.getOaNo());
-      result.setPeriodMonth(single.getPeriodMonth());
-      result.setStatus("SUCCESS");
-      result.setTotalCount(2);
-      result.setSuccessCount(2);
-      return result;
-    });
-    when(queryService.pageOaSummaries(any())).thenAnswer(invocation -> {
-      PricePrepareOaSummaryQueryRequest summaryRequest = invocation.getArgument(0);
-      PricePrepareOaSummaryResponse row = new PricePrepareOaSummaryResponse();
-      row.setOaNo(summaryRequest.getOaNo());
-      row.setTopProductCount(1);
-      row.setReadyTopProductCount(1);
-      row.setTotalCount(2);
-      row.setReadyCount(2);
-      row.setStatus("READY");
-      return new PricePrepareOaSummaryPageResponse(1, List.of(row));
-    });
-
-    CommonResult<PricePrepareBulkGenerateResponse> result = controller.generateBulk(request);
-
-    assertThat(result.isSuccess()).isTrue();
-    assertThat(result.getData().getTotalCount()).isEqualTo(2);
-    assertThat(result.getData().getSuccessCount()).isEqualTo(2);
-    assertThat(result.getData().getRecords()).extracting("oaNo").containsExactly("OA-001", "OA-002");
-    assertThat(result.getData().getRecords().get(0).getStatus()).isEqualTo("READY");
-  }
-
-  @Test
-  @DisplayName("批量生成：targets 按 OA+成品去重并传递行级范围")
-  void generateBulkUsesTargetsWhenProvided() {
-    PricePrepareBulkGenerateRequest request = new PricePrepareBulkGenerateRequest();
-    request.setOaNos(List.of("OA-LEGACY"));
-    request.setTargets(List.of(
-        target("OA-001", "TOP-A"),
-        target("OA-001", "TOP-A"),
-        target("OA-001", "TOP-B"),
-        target("OA-002", "TOP-C")));
-    request.setPeriodMonth("2026-05");
-    when(pricePrepareService.generate(any())).thenAnswer(invocation -> {
-      PricePrepareGenerateRequest single = invocation.getArgument(0);
-      PricePrepareGenerateResult result = new PricePrepareGenerateResult();
-      result.setOaNo(single.getOaNo());
-      result.setPeriodMonth(single.getPeriodMonth());
-      result.setStatus("SUCCESS");
-      result.setTotalCount(single.getTopProductCodes().size());
-      result.setSuccessCount(single.getTopProductCodes().size());
-      return result;
-    });
-    when(queryService.pageOaSummaries(any())).thenReturn(
-        new PricePrepareOaSummaryPageResponse(0, List.of()));
-
-    CommonResult<PricePrepareBulkGenerateResponse> result = controller.generateBulk(request);
-
-    assertThat(result.isSuccess()).isTrue();
-    assertThat(result.getData().getTotalCount()).isEqualTo(2);
-    ArgumentCaptor<PricePrepareGenerateRequest> captor =
-        ArgumentCaptor.forClass(PricePrepareGenerateRequest.class);
-    verify(pricePrepareService, org.mockito.Mockito.times(2)).generate(captor.capture());
-    assertThat(captor.getAllValues()).extracting(PricePrepareGenerateRequest::getOaNo)
-        .containsExactly("OA-001", "OA-002");
-    assertThat(captor.getAllValues().get(0).getTopProductCodes()).containsExactly("TOP-A", "TOP-B");
-    assertThat(captor.getAllValues().get(1).getTopProductCodes()).containsExactly("TOP-C");
-  }
-
-  @Test
-  @DisplayName("批量生成：单个 target 返回顶级产品汇总")
-  void generateBulkFillsTopProductSummaryForSingleTarget() {
-    PricePrepareBulkGenerateRequest request = new PricePrepareBulkGenerateRequest();
+  @Test void legacyBulkCannotAdoptAnyOaOrTarget() {
+    var request = new PricePrepareBulkGenerateRequest(); request.setOaNos(List.of("OA-001", "OA-002"));
     request.setTargets(List.of(target("OA-001", "TOP-A")));
-    request.setPeriodMonth("2026-05");
-    when(pricePrepareService.generate(any())).thenReturn(new PricePrepareGenerateResult());
-    PricePrepareTopProductSummaryResponse summary = new PricePrepareTopProductSummaryResponse();
-    summary.setOaNo("OA-001");
-    summary.setTopProductCode("TOP-A");
-    summary.setTotalCount(3);
-    summary.setReadyCount(3);
-    summary.setGapCount(0);
-    summary.setStatus("READY");
-    when(queryService.pageTopProductSummaries(any()))
-        .thenReturn(new PricePrepareTopProductSummaryPageResponse(1, List.of(summary)));
-
-    CommonResult<PricePrepareBulkGenerateResponse> result = controller.generateBulk(request);
-
-    assertThat(result.isSuccess()).isTrue();
-    assertThat(result.getData().getRecords().get(0).getTopProductCode()).isEqualTo("TOP-A");
-    assertThat(result.getData().getRecords().get(0).getStatus()).isEqualTo("READY");
-    verify(queryService).pageTopProductSummaries(any());
+    var result = controller.generateBulk(request);
+    assertThat(result.isSuccess()).isFalse(); assertThat(result.getMsg()).contains("单产品核算工作台");
+    org.mockito.Mockito.verifyNoInteractions(pricePrepareService, queryService);
   }
 
   @Test

@@ -7,6 +7,10 @@ import lombok.Setter;
 @Getter
 @Setter
 public class PackageSnapshotRequest {
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private String sourceParentPath;
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private Long sourceParentHierarchyId;
   private String packageMaterialCode;
   private String periodMonth;
   private String quoteNo;

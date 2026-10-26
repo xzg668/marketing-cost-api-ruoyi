@@ -156,7 +156,7 @@ cost:
   run:
     # 只在废料、上卷、加工费等会改变成本金额的算法变更时升级；普通发布不要修改。
     # 成功版本记录的算法版本与此值不一致时必须重算，避免程序修复后仍复用旧成本。
-    algorithm-version: ${COST_RUN_ALGORITHM_VERSION:COST_V3}
+    algorithm-version: ${COST_RUN_ALGORITHM_VERSION:MONTHLY_PRODUCT_COST_V1}
   linked:
     # 采购价联动类型2导入总开关。异常回滚时设为 false，仅关闭类型2；
     # 原标准联动价模板仍走旧导入链路，不受影响。

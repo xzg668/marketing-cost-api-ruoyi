@@ -158,6 +158,21 @@ class TechnicalDataPriceApplicationIntegrationTest extends OriginalPricingIntegr
     } finally { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
   }
 
+  @Test void ownedSourceRevisionSavesNewInputWithoutPublishingOrTakingAnotherClaim() {
+    var initial=input("FIXED",0); initial.getItems().getFirst().setUnitPrice(new BigDecimal("13.75"));
+    var saved=service.save(productId,initial,WANG);
+    var owner=ownership.find(material);
+    when(requirements.check(any(),any())).thenReturn(check("REVISION","revision"));
+    var revised=input("FIXED",saved.expectedVersion()); revised.setRequirementsFingerprint("revision");
+    revised.getItems().getFirst().setUnitPrice(new BigDecimal("18.25"));
+    var reopened=service.save(productId,revised,WANG);
+    assertThat(reopened.content().items().getFirst().unitPrice()).isEqualByComparingTo("18.25");
+    assertThat(reopened.issues()).isEmpty();
+    assertThat(ownership.find(material).moduleId()).isEqualTo(owner.moduleId());
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_price_fixed_item WHERE material_code=?",Integer.class,material)).isZero();
+    assertThatThrownBy(()->service.save(productId,revised,LI)).isInstanceOf(TechnicalDataTaskException.class);
+  }
+
   @Test void approvedManualFormulaWaitsForFinanceAndDoesNotPublishPrice() {
     var request=input("MANUAL",0); request.getItems().getFirst().setFormula("铜价 + 加工费");
     var approved=approve(service.save(productId,request,WANG));

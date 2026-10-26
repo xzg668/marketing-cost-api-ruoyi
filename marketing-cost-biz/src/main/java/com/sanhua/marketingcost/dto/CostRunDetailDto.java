@@ -3,6 +3,9 @@ package com.sanhua.marketingcost.dto;
 import java.util.List;
 
 public class CostRunDetailDto {
+  private com.sanhua.marketingcost.dto.jjb.JjbReadModel sheet;
+  public com.sanhua.marketingcost.dto.jjb.JjbReadModel getSheet() { return sheet; }
+  public void setSheet(com.sanhua.marketingcost.dto.jjb.JjbReadModel value) { sheet = value; }
   private List<CostRunPartItemDto> partItems;
   private List<CostRunCostItemDto> costItems;
   private String productAttr;

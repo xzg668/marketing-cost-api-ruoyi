@@ -45,12 +45,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
-import org.apache.poi.ss.usermodel.CellStyle;
-import org.apache.poi.ss.usermodel.Font;
-import org.apache.poi.ss.usermodel.Row;
-import org.apache.poi.ss.usermodel.Sheet;
-import org.apache.poi.ss.usermodel.Workbook;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -79,6 +73,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   private final QuoteCuAdjustmentCalcService cuAdjustmentCalcService;
   private final QuoteCostingWorkspaceService workspaceService;
   private final CostInputRevisionService inputRevisionService;
+  private final com.sanhua.marketingcost.service.jjb.JjbReadService sheetReader;
+  private final com.sanhua.marketingcost.service.JjbExportService sheetExporter;
 
   @Autowired
   public QuoteCostRunWorkbenchServiceImpl(
@@ -92,7 +88,11 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
       QuoteCostRunVersionNoGenerator versionNoGenerator,
       QuoteCuAdjustmentCalcService cuAdjustmentCalcService,
       QuoteCostingWorkspaceService workspaceService,
-      CostInputRevisionService inputRevisionService) {
+      CostInputRevisionService inputRevisionService,
+      com.sanhua.marketingcost.service.jjb.JjbReadService sheetReader,
+      com.sanhua.marketingcost.service.JjbExportService sheetExporter) {
+    this.sheetExporter = sheetExporter;
+    this.sheetReader = sheetReader;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.versionMapper = versionMapper;
@@ -104,31 +104,6 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     this.cuAdjustmentCalcService = cuAdjustmentCalcService;
     this.workspaceService = workspaceService;
     this.inputRevisionService = inputRevisionService;
-  }
-
-  QuoteCostRunWorkbenchServiceImpl(
-      OaFormMapper oaFormMapper,
-      OaFormItemMapper oaFormItemMapper,
-      QuoteCostRunVersionMapper versionMapper,
-      CostRunResultService costRunResultService,
-      CostRunPartItemMapper partItemMapper,
-      CostRunCostItemMapper costItemMapper,
-      PricePrepareReadinessService pricePrepareReadinessService,
-      QuoteCostRunVersionNoGenerator versionNoGenerator,
-      QuoteCuAdjustmentCalcService cuAdjustmentCalcService,
-      QuoteCostingWorkspaceService workspaceService) {
-    this(
-        oaFormMapper,
-        oaFormItemMapper,
-        versionMapper,
-        costRunResultService,
-        partItemMapper,
-        costItemMapper,
-        pricePrepareReadinessService,
-        versionNoGenerator,
-        cuAdjustmentCalcService,
-        workspaceService,
-        null);
   }
 
   @Override
@@ -160,6 +135,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
 
   private QuoteCostRunWorkbenchResponse getHistoricalCostRun(
       String oaNo, Long oaFormItemId, Long versionId) {
+    var sheet = sheetReader.read(oaNo, oaFormItemId, versionId).sheet();
     Scope accessScope = requireScope(oaNo, oaFormItemId, null);
     QuoteCostRunVersion selected = requireOwnedVersion(accessScope, versionId, null);
     String pricingMonth = CostPricingPeriodUtils.normalizePricingMonth(selected.getPricingMonth());
@@ -169,14 +145,14 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
             accessScope.item(),
             accessScope.oaNo(),
             accessScope.oaFormItemId(),
-            accessScope.productCode(),
+            selected.getProductCode(),
             pricingMonth,
             accessScope.businessUnitType());
     QuoteCostRunSummaryResponse latestTrial = latestInProgressVersion(scope);
     QuoteCostRunSummaryResponse latestConfirmed = latestSuccessfulVersion(scope);
     QuoteCostRunWorkbenchResponse response = baseResponse(scope, latestTrial, latestConfirmed);
     response.setCurrentDisplayVersion(summary(selected, selected.getTotalCost()));
-    fillResultRows(response, selected.getId());
+    fillResultRows(response, selected.getId(), sheet);
     return response;
   }
 
@@ -244,6 +220,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     response.setResultHeader(result.getResult());
     response.setPartItems(new ArrayList<>(result.getPartItems()));
     response.setCostItems(new ArrayList<>(result.getCostItems()));
+    response.setSheet(sheetReader.read(scope.oaNo(), scope.oaFormItemId(), version.getId()).sheet());
     return response;
   }
 
@@ -504,18 +481,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   @Transactional(readOnly = true)
   public int exportVersion(String oaNo, Long oaFormItemId, Long versionId, OutputStream output)
       throws IOException {
-    Scope scope = requireScope(oaNo, oaFormItemId, null);
-    QuoteCostRunVersion version = requireOwnedVersion(scope, versionId, null);
-    List<CostRunPartItem> parts = partRows(versionId);
-    List<CostRunCostItem> costs = costRows(versionId);
-    try (Workbook workbook = new XSSFWorkbook()) {
-      CellStyle headerStyle = headerStyle(workbook);
-      writeSummarySheet(workbook, headerStyle, version);
-      writePartSheet(workbook, headerStyle, parts);
-      writeCostSheet(workbook, headerStyle, costs);
-      workbook.write(output);
-    }
-    return 1 + parts.size() + costs.size();
+    return sheetExporter.exportVersion(oaNo, oaFormItemId, versionId, output);
   }
 
   private QuoteCostRunWorkbenchResponse baseResponse(
@@ -537,6 +503,12 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
   }
 
   private void fillResultRows(QuoteCostRunWorkbenchResponse response, Long versionId) {
+    fillResultRows(response, versionId, sheetReader.read(response.getOaNo(), response.getOaFormItemId(), versionId).sheet());
+  }
+
+  private void fillResultRows(QuoteCostRunWorkbenchResponse response, Long versionId,
+      com.sanhua.marketingcost.dto.jjb.JjbReadModel sheet) {
+    response.setSheet(sheet);
     CostRunResultDto result = costRunResultService.getResult(versionId);
     if (result != null) {
       response.setResultHeader(result);
@@ -649,9 +621,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     if (version == null
         || !scope.oaNo().equals(version.getOaNo())
         || !scope.oaFormItemId().equals(version.getOaFormItemId())
-        || !scope.productCode().equals(version.getProductCode())
-        || (StringUtils.hasText(version.getBusinessUnitType())
-            && !scope.businessUnitType().equals(version.getBusinessUnitType().trim()))) {
+        || !scope.businessUnitType().equals(version.getBusinessUnitType())) {
       throw new QuoteIngestException("成本版本不属于当前产品行或当前业务单元");
     }
     return version;
@@ -728,6 +698,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     item.setDisplayStatus(
         displayVersionStatus(version.getStatus(), version.getId(), confirmedVersionId));
     item.setTotalCost(version.getTotalCost());
+    item.setFinalQuoteAmount(com.sanhua.marketingcost.service.jjb.JjbProjection.money(version.getFinalQuoteAmount()));
+    item.setAlgorithmVersion(version.getAlgorithmVersion());
     item.setPartItemCount(version.getPartItemCount());
     item.setCostItemCount(version.getCostItemCount());
     item.setTrialFinishedAt(version.getTrialFinishedAt());
@@ -898,110 +870,6 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     dto.setRemark(item.getRemark());
     dto.setCategory(item.getCategory());
     return dto;
-  }
-
-  private CellStyle headerStyle(Workbook workbook) {
-    CellStyle style = workbook.createCellStyle();
-    Font font = workbook.createFont();
-    font.setBold(true);
-    style.setFont(font);
-    style.setWrapText(true);
-    return style;
-  }
-
-  private void writeSummarySheet(
-      Workbook workbook, CellStyle headerStyle, QuoteCostRunVersion version) {
-    Sheet sheet = workbook.createSheet("汇总");
-    Row header = sheet.createRow(0);
-    writeHeader(header, headerStyle, "指标", "快照值");
-    int row = 1;
-    row = writeSummaryRow(sheet, row, "OA单号", version.getOaNo());
-    row = writeSummaryRow(sheet, row, "OA产品行ID", version.getOaFormItemId());
-    row = writeSummaryRow(sheet, row, "产品料号", version.getProductCode());
-    row = writeSummaryRow(sheet, row, "成本核算批次", version.getCostRunNo());
-    row = writeSummaryRow(sheet, row, "成本版本", version.getVersionNo());
-    row = writeSummaryRow(sheet, row, "状态", version.getStatus());
-    row = writeSummaryRow(sheet, row, "财务Cu基准（元/吨）", toPerTon(version.getFinanceCuPrice()));
-    row = writeSummaryRow(sheet, row, "OA锁定Cu（元/吨）", toPerTon(version.getOaCuPrice()));
-    row = writeSummaryRow(sheet, row, "财务基准材料费", version.getFinanceMaterialCost());
-    row = writeSummaryRow(sheet, row, "OA锁价材料费", version.getOaMaterialCost());
-    row = writeSummaryRow(sheet, row, "Cu材料费差额", version.getCuMaterialAdjustment());
-    row = writeSummaryRow(sheet, row, "财务基准不含税总成本", version.getTotalCost());
-    row = writeSummaryRow(sheet, row, "最终成本（不含税）", version.getFinalQuoteAmount());
-    row = writeSummaryRow(sheet, row, "OA价格准备批次", version.getOaPricePrepareNo());
-    writeSummaryRow(sheet, row, "财务价格准备批次", version.getFinancePricePrepareNo());
-    autoSize(sheet, 2);
-  }
-
-  private int writeSummaryRow(Sheet sheet, int rowIndex, String label, Object value) {
-    Row row = sheet.createRow(rowIndex);
-    writeCell(row, 0, label);
-    writeCell(row, 1, value);
-    return rowIndex + 1;
-  }
-
-  private void writePartSheet(
-      Workbook workbook, CellStyle headerStyle, List<CostRunPartItem> parts) {
-    Sheet sheet = workbook.createSheet("成本部品");
-    writeHeader(sheet.createRow(0), headerStyle, "部品料号", "部品名称", "数量", "单价", "金额", "价格来源", "备注");
-    int rowIndex = 1;
-    for (CostRunPartItem part : parts) {
-      Row row = sheet.createRow(rowIndex++);
-      writeCell(row, 0, part.getPartCode());
-      writeCell(row, 1, part.getPartName());
-      writeCell(row, 2, part.getQty());
-      writeCell(row, 3, part.getUnitPrice());
-      writeCell(row, 4, part.getAmount());
-      writeCell(row, 5, part.getPriceSource());
-      writeCell(row, 6, part.getRemark());
-    }
-    autoSize(sheet, 7);
-  }
-
-  private void writeCostSheet(
-      Workbook workbook, CellStyle headerStyle, List<CostRunCostItem> costs) {
-    Sheet sheet = workbook.createSheet("成本项目");
-    writeHeader(sheet.createRow(0), headerStyle, "成本编码", "成本名称", "基数", "费率", "金额", "分类", "备注");
-    int rowIndex = 1;
-    for (CostRunCostItem cost : costs) {
-      Row row = sheet.createRow(rowIndex++);
-      writeCell(row, 0, cost.getCostCode());
-      writeCell(row, 1, cost.getCostName());
-      writeCell(row, 2, cost.getBaseAmount());
-      writeCell(row, 3, cost.getRate());
-      writeCell(row, 4, cost.getAmount());
-      writeCell(row, 5, cost.getCategory());
-      writeCell(row, 6, cost.getRemark());
-    }
-    autoSize(sheet, 7);
-  }
-
-  private void writeHeader(Row row, CellStyle headerStyle, String... labels) {
-    for (int i = 0; i < labels.length; i++) {
-      var cell = row.createCell(i);
-      cell.setCellValue(labels[i]);
-      cell.setCellStyle(headerStyle);
-    }
-  }
-
-  private void writeCell(Row row, int column, Object value) {
-    var cell = row.createCell(column);
-    if (value == null) {
-      cell.setBlank();
-    } else if (value instanceof BigDecimal decimal) {
-      cell.setCellValue(decimal.toPlainString());
-    } else if (value instanceof Boolean bool) {
-      cell.setCellValue(bool ? "是" : "否");
-    } else {
-      cell.setCellValue(String.valueOf(value));
-    }
-  }
-
-  private void autoSize(Sheet sheet, int columnCount) {
-    for (int column = 0; column < columnCount; column++) {
-      sheet.autoSizeColumn(column);
-      sheet.setColumnWidth(column, Math.min(sheet.getColumnWidth(column) + 512, 80 * 256));
-    }
   }
 
   private String required(String field, String value) {

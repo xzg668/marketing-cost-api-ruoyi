@@ -12,12 +12,12 @@ import org.springframework.mock.env.MockEnvironment;
 class CostRunWorkerPropertiesTest {
 
   @Test
-  void costRunWorkerIsEnabledForQuoteAndMonthlyRepriceByDefault() {
+  void costRunWorkerIsEnabledForQuoteOnlyByDefault() {
     CostRunWorkerProperties properties = new CostRunWorkerProperties();
 
     assertThat(properties.isEnabled()).isTrue();
     assertThat(properties.getScenes())
-        .containsExactlyInAnyOrder(CostRunTaskScene.QUOTE, CostRunTaskScene.MONTHLY_REPRICE);
+        .containsExactly(CostRunTaskScene.QUOTE);
   }
 
   @Test
@@ -46,7 +46,7 @@ class CostRunWorkerPropertiesTest {
     assertThat(properties.getWriteBatchSize()).isEqualTo(200);
     assertThat(properties.getPollIntervalMs()).isEqualTo(2000L);
     assertThat(properties.getScenes())
-        .containsExactlyInAnyOrder(CostRunTaskScene.QUOTE, CostRunTaskScene.MONTHLY_REPRICE);
+        .containsExactly(CostRunTaskScene.QUOTE);
   }
 
   @Test
@@ -67,7 +67,7 @@ class CostRunWorkerPropertiesTest {
     assertThat(properties.getWriteBatchSize()).isEqualTo(100);
     assertThat(properties.getPollIntervalMs()).isEqualTo(5000L);
     assertThat(properties.getScenes())
-        .containsExactlyInAnyOrder(CostRunTaskScene.QUOTE, CostRunTaskScene.MONTHLY_REPRICE);
+        .containsExactly(CostRunTaskScene.QUOTE);
   }
 
   @Test

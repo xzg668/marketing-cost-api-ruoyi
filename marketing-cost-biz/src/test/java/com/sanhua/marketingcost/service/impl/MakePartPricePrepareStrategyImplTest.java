@@ -22,24 +22,21 @@ class MakePartPricePrepareStrategyImplTest {
   final MakePartPricePrepareStrategyImpl service = new MakePartPricePrepareStrategyImpl(generation,
       new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules());
 
-  @Test void usesExactNodeResultAndMultipliesQuantityOnce() {
+  @Test void readyRowsWithoutCapturedMonthlyInputsCannotBePublished() {
     var item = item(); var ready = row("OK", "RAW", "SCRAP");
-    ready.setId(55L); ready.setPriceComplete(true); ready.setParentTotalCostPrice(new BigDecimal(".965"));
-    when(generation.calculateForBomRow(item.getBomRow(), null, null, true)).thenReturn(List.of(ready));
-    var result = service.prepare("OA", "COMMERCIAL", "2026-09", item);
-    assertThat(result.getStatus()).isEqualTo("READY");
-    assertThat(result.getUnitPrice()).isEqualByComparingTo(".965");
-    assertThat(result.getAmount()).isEqualByComparingTo("1.930");
-    verify(generation).calculateForBomRow(item.getBomRow(), null, null, true);
+    ready.setPriceComplete(true); ready.setParentTotalCostPrice(new BigDecimal(".965"));
+    when(generation.calculateForBomRow(eq(item.getBomRow()), isNull(), any(), eq(true))).thenReturn(List.of(ready));
+    assertThatThrownBy(() -> service.prepare("OA", "COMMERCIAL", "2026-09", item))
+        .hasMessageContaining("月价输入会话");
   }
 
   @Test void readonlyAndFinanceScenarioReachSameNodeWithExactContext() {
-    var item = item(); var ready = row("OK", "RAW", "SCRAP");
+    var item = item(); var ready = row("MISSING_RAW_PRICE", "RAW", "SCRAP");
     ready.setPriceComplete(true); ready.setParentTotalCostPrice(BigDecimal.ONE);
     var time = LocalDateTime.of(2026,9,17,10,0);
     var context = new PricePrepareScenarioContext(QuotePriceScenarioType.FINANCE_QUOTE_BASE, "GROUP", "PPR", Map.of("Cu",new BigDecimal("90")));
     when(generation.calculateForBomRow(item.getBomRow(), time, context, false)).thenReturn(List.of(ready));
-    assertThat(service.calculate("OA", "COMMERCIAL", "2026-09", time, context, item).getStatus()).isEqualTo("READY");
+    assertThat(service.calculate("OA", "COMMERCIAL", "2026-09", time, context, item).getStatus()).isEqualTo("MISSING_PRICE");
     verify(generation).calculateForBomRow(item.getBomRow(), time, context, false);
   }
 
@@ -75,11 +72,9 @@ class MakePartPricePrepareStrategyImplTest {
     ready.setScrapUnitPrice(new BigDecimal("9.987654321098"));
     ready.setRawInputSnapshotJson("{\"pricePriority\":{\"revision\":\"raw-v\"},\"factor\":90.123456789012}");
     ready.setScrapInputSnapshotJson("{\"pricePriority\":{\"revision\":\"scrap-v\"}}");
-    when(generation.calculateForBomRow(any(), any(), any(), eq(true))).thenReturn(List.of(ready));
-    var result = service.prepare("OA", "COMMERCIAL", "2026-09", item);
     var json = new com.fasterxml.jackson.databind.ObjectMapper()
         .enable(com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
-    var snapshot = json.readTree(result.getInputSnapshotJson());
+    var snapshot = json.readTree(new MakePartCalculationEvidence(json).capture(item.getBomRow(), List.of(ready)));
     assertThat(snapshot.path("calculatorVersion").asText()).isEqualTo("MAKE_PART_V1");
     assertThat(snapshot.path("rows")).hasSize(1);
     assertThat(snapshot.at("/rows/0/rawUnitPrice").decimalValue()).isEqualByComparingTo("123.123456789012");
@@ -92,6 +87,7 @@ class MakePartPricePrepareStrategyImplTest {
 
   private PricePreparePlanItem item() {
     var row = new BomCostingRow(); row.setId(1L); row.setOaFormItemId(2L); row.setOaNo("OA");
+    row.setPriceOrgCode("210"); row.setPath("/P/MAKE/");
     row.setPeriodMonth("2026-09"); row.setBusinessUnitType("COMMERCIAL"); row.setMaterialCode("MAKE"); row.setQtyPerTop(new BigDecimal("2"));
     var item = new PricePreparePlanItem(); item.setBomRow(row); item.setBomRowId(1L); item.setMaterialCode("MAKE"); return item;
   }

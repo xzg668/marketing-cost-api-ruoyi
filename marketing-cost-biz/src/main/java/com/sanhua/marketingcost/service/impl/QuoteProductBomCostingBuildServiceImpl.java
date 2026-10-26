@@ -74,6 +74,7 @@ public class QuoteProductBomCostingBuildServiceImpl
   private final BomRawHierarchyMapper rawHierarchyMapper;
   private final MonthlyBomSnapshotDetailService monthlyDetails;
   private final com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs manufacturingInputs;
+  private final com.sanhua.marketingcost.service.pricing.monthly.MonthlyQuotationBomPricing monthlyPricing;
 
   public QuoteProductBomCostingBuildServiceImpl(
       BomSettlementRuleQueryService settlementRuleQueryService,
@@ -89,7 +90,8 @@ public class QuoteProductBomCostingBuildServiceImpl
       QuoteEffectiveBomRepository effectiveBomRepository,
       BomRawHierarchyMapper rawHierarchyMapper,
       MonthlyBomSnapshotDetailService monthlyDetails,
-      com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs manufacturingInputs) {
+      com.sanhua.marketingcost.service.technicaldata.TechnicalManufacturingInputs manufacturingInputs,
+      com.sanhua.marketingcost.service.pricing.monthly.MonthlyQuotationBomPricing monthlyPricing) {
     this.settlementRuleQueryService = settlementRuleQueryService;
     this.byproductRuleQueryService = byproductRuleQueryService;
     this.byproductSettlementAdapter = byproductSettlementAdapter;
@@ -104,12 +106,36 @@ public class QuoteProductBomCostingBuildServiceImpl
     this.rawHierarchyMapper = rawHierarchyMapper;
     this.monthlyDetails = monthlyDetails;
     this.manufacturingInputs = manufacturingInputs;
+    this.monthlyPricing = monthlyPricing;
   }
 
   @Override
   @Transactional(rollbackFor = Exception.class)
   public QuoteBomCostingBuildResponse buildFromEffectiveBom(
       Long oaFormItemId, String effectiveBuildBatchId) {
+    BuildPlan plan = planFromEffectiveBom(oaFormItemId, effectiveBuildBatchId);
+    cleanupExisting(plan.record(), plan.periodMonth());
+    Map<String, Long> costingRowIdByPath = new HashMap<>();
+    int rowsWritten = writeBuiltRows(plan.rows().rows(), costingRowIdByPath);
+    aliasCostingRowIds(plan.rows().pathAliases(), costingRowIdByPath);
+    writeBuiltSubRefs(plan.subRefs(), costingRowIdByPath);
+    SourceRefWriteResult sourceRefs = writeBuiltSourceRefs(plan.sourceRefs(), costingRowIdByPath);
+    updateBuildBatch(plan.record(), plan.buildBatchId(), plan.periodMonth());
+    return response(
+        plan.record(), plan.buildBatchId(), rowsWritten, sourceRefs.sourceRefsWritten(),
+        countSubtreeRequired(plan.rows().rows()), sourceRefs.sourceTypeCounts(),
+        plan.warnings(), plan.periodMonth());
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Preview previewFromEffectiveBom(
+      Long oaFormItemId, String effectiveBuildBatchId) {
+    var plan = planFromEffectiveBom(oaFormItemId, effectiveBuildBatchId);
+    return new Preview(plan.rows().rows(), plan.pricingScope());
+  }
+
+  private BuildPlan planFromEffectiveBom(Long oaFormItemId, String effectiveBuildBatchId) {
     if (oaFormItemId == null) {
       throw new QuoteIngestException("报价产品行 ID 不能为空");
     }
@@ -135,24 +161,14 @@ public class QuoteProductBomCostingBuildServiceImpl
     requireBuildable(record, nodes);
     validateEffectiveNodes(record, buildBatchId, periodMonth, nodes);
     List<PreparedLine> lines = effectiveLines(record, nodes);
-    cleanupExisting(record, periodMonth);
-    DirectBuildResult built =
-        applyRulesAndWrite(
+    return applyRules(
             record,
             YearMonth.parse(periodMonth).atDay(1),
             periodMonth,
             lines,
-            buildBatchId);
-    updateBuildBatch(record, buildBatchId, periodMonth);
-    return response(
-        record,
-        built.buildBatchId(),
-        built.rowsWritten(),
-        built.sourceRefsWritten(),
-        built.subtreeRequiredCount(),
-        built.sourceTypeCounts(),
-        built.warnings(),
-        periodMonth);
+            buildBatchId,
+            nodes.stream().filter(node -> node.getMaterialUnit() != null && !node.getMaterialUnit().isBlank())
+                .collect(java.util.stream.Collectors.toMap(QuoteEffectiveBomNode::getNodePath, QuoteEffectiveBomNode::getMaterialUnit)));
   }
 
   private List<PreparedLine> effectiveLines(
@@ -335,12 +351,13 @@ public class QuoteProductBomCostingBuildServiceImpl
     }
   }
 
-  private DirectBuildResult applyRulesAndWrite(
+  private BuildPlan applyRules(
       QuoteBomPreparationRecord record,
       LocalDate quoteDate,
       String periodMonth,
       List<PreparedLine> inputLines,
-      String requiredBuildBatchId) {
+      String requiredBuildBatchId,
+      Map<String, String> frozenUnits) {
     List<PreparedLine> lines =
         inputLines.stream()
             .filter(line -> trimToNull(line.materialCode()) != null)
@@ -353,7 +370,6 @@ public class QuoteProductBomCostingBuildServiceImpl
         childrenByParentPath.computeIfAbsent(parentPath, ignored -> new ArrayList<>()).add(line);
       }
     }
-
     String buildBatchId = requiredText(requiredBuildBatchId, "最终有效BOM构建编号");
     LocalDateTime builtAt = LocalDateTime.now();
     QuoteDataOrganization organization = requiredOrganization(record);
@@ -366,6 +382,10 @@ public class QuoteProductBomCostingBuildServiceImpl
       nodes.add(toSettlementNode(record, line, settlementScope,
           childrenByParentPath.getOrDefault(line.path(), List.of()).isEmpty()));
     }
+    var pricing = monthlyPricing.select(record.getOaNo(), record.getOaFormItemId(), settlementScope, periodMonth,
+        organization.priceOrgCode(), quoteDate.atStartOfDay(), nodes, frozenUnits);
+    var originalNodes = List.copyOf(nodes);
+    nodes = new ArrayList<>(pricing.visible());
     BomByproductSettlementReadResult byproductRead =
         byproductSettlementAdapter.read(
             nodes, quoteDate, organization.priceOrgCode(), settlementScope, "主制造");
@@ -384,32 +404,44 @@ public class QuoteProductBomCostingBuildServiceImpl
             settlementRuleQueryService.listEnabledCandidates(),
             byproductRead.byproducts(),
             byproductRead.scrapRefs(),
-            byproductRuleQueryService.listEnabledCandidates()));
+            byproductRuleQueryService.listEnabledCandidates()),
+        pricing.scope().household().stream().map(use ->
+            com.sanhua.marketingcost.service.pricing.monthly.MonthlyBomPricingScope.pathKey(use.path()))
+            .collect(java.util.stream.Collectors.toSet()));
+    monthlyPricing.stamp(built, pricing);
 
     List<BomCostingRow> costingRows = stampRowsForQuoteItem(record, built.costingRows());
+    for (var row : costingRows) {
+      row.setCurrentSubRefs(built.subRefs().stream()
+          .filter(ref -> java.util.Objects.equals(ref.costingRowPath(), row.getPath()))
+          .map(com.sanhua.marketingcost.service.settlement.BomSettlementSubRefCandidate::subRef).toList());
+      String root = com.sanhua.marketingcost.service.pricing.monthly.MonthlyBomPricingScope.pathKey(row.getPath());
+      originalNodes.stream().filter(node -> root.equals(
+          com.sanhua.marketingcost.service.pricing.monthly.MonthlyBomPricingScope.pathKey(node.path())))
+          .filter(node -> node.sourceRef() != null)
+          .findFirst().ifPresent(node -> row.setCurrentSourcePath(node.sourceRef().sourcePath()));
+      var householdChildren = new java.util.LinkedHashMap<String, String>();
+      for (var use : pricing.scope().household()) {
+        String path = com.sanhua.marketingcost.service.pricing.monthly.MonthlyBomPricingScope.pathKey(use.path());
+        if (!path.startsWith(root + "/")) continue;
+        originalNodes.stream().filter(node -> path.equals(
+            com.sanhua.marketingcost.service.pricing.monthly.MonthlyBomPricingScope.pathKey(node.path())))
+            .filter(node -> node.sourceRef() != null && node.sourceRef().sourcePath() != null)
+            .forEach(node -> householdChildren.put(node.sourceRef().sourcePath(), path));
+      }
+      row.setHouseholdChildPaths(householdChildren);
+    }
     boolean preserveElectronicDrawingOccurrences =
         lines.stream()
             .anyMatch(line -> SOURCE_ELECTRONIC_DRAWING.equals(line.sourceBomType()));
     BomCostingRowAggregation.Result aggregatedRows = preserveElectronicDrawingOccurrences
         ? BomCostingRowAggregation.preserveOccurrences(costingRows)
         : BomCostingRowAggregation.aggregate(costingRows);
-    Map<String, Long> costingRowIdByPath = new HashMap<>();
-    int rowsWritten = writeBuiltRows(aggregatedRows.rows(), costingRowIdByPath);
-    aliasCostingRowIds(aggregatedRows.pathAliases(), costingRowIdByPath);
-    int subRefsWritten = writeBuiltSubRefs(built.subRefs(), costingRowIdByPath);
-    SourceRefWriteResult sourceRefResult =
-        writeBuiltSourceRefs(built.sourceRefs(), costingRowIdByPath);
-
     List<String> warnings = new ArrayList<>();
     warnings.addAll(byproductRead.warnings());
     warnings.addAll(built.warnings());
-    return new DirectBuildResult(
-        buildBatchId,
-        rowsWritten,
-        sourceRefResult.sourceRefsWritten(),
-        countSubtreeRequired(aggregatedRows.rows()),
-        sourceRefResult.sourceTypeCounts(),
-        warnings);
+    return new BuildPlan(record, periodMonth, buildBatchId, aggregatedRows,
+        built.subRefs(), built.sourceRefs(), List.copyOf(warnings), pricing.scope());
   }
 
   private List<BomCostingRow> stampRowsForQuoteItem(
@@ -758,13 +790,15 @@ public class QuoteProductBomCostingBuildServiceImpl
       String materialOrganizationCode,
       String sourceBomType) {}
 
-  private record DirectBuildResult(
+  private record BuildPlan(
+      QuoteBomPreparationRecord record,
+      String periodMonth,
       String buildBatchId,
-      int rowsWritten,
-      int sourceRefsWritten,
-      int subtreeRequiredCount,
-      Map<String, Integer> sourceTypeCounts,
-      List<String> warnings) {}
+      BomCostingRowAggregation.Result rows,
+      List<BomSettlementSubRefCandidate> subRefs,
+      List<BomSettlementSourceRefCandidate> sourceRefs,
+      List<String> warnings,
+      com.sanhua.marketingcost.service.pricing.monthly.MonthlyBomPricingScope.Scope pricingScope) {}
 
   private record SourceRefWriteResult(
       int sourceRefsWritten,

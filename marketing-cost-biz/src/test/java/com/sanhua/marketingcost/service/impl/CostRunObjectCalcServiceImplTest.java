@@ -27,28 +27,13 @@ import org.junit.jupiter.api.Test;
 class CostRunObjectCalcServiceImplTest {
 
   @Test
-  void quoteRecalculatesFromCurrentInputsAndFiltersOtherProducts() {
+  void quoteWithoutAdoptedPreparationCannotFallBackToCurrentSources() {
     CostRunPartItemService partService = mock(CostRunPartItemService.class);
     CostRunCostItemService costService = mock(CostRunCostItemService.class);
-    CostRunObjectCalcServiceImpl service =
-        new CostRunObjectCalcServiceImpl(partService, costService, List.of());
-    CostRunContext context = quoteContext();
-    context.setCostRunVersionId(99L);
-    when(partService.listByOaNo(
-            eq("OA-001"), any(LocalDate.class), eq(context), eq(false), any()))
-        .thenReturn(List.of(part("P-001", "PART-1"), part("P-002", "PART-2")));
-    when(costService.listByMaterialCodes(
-            eq("OA-001"), eq("P-001"), eq(Set.of("P-001")), eq(context), any(), eq(false), any()))
-        .thenReturn(List.of(cost("TOTAL", "120.000000")));
-
-    var result = service.calculate(context);
-
-    assertThat(result.getSourceCostVersionId()).isEqualTo(99L);
-    assertThat(result.getResult().getTotalCost()).isEqualByComparingTo("120.000000");
-    assertThat(result.getPartItems()).extracting(CostRunPartItemDto::getPartCode)
-        .containsExactly("PART-1");
-    verify(partService, never()).listStoredByOaNo(any());
-    verify(costService, never()).listStoredByOaNo(any(), any(), any());
+    var service = new CostRunObjectCalcServiceImpl(partService, costService, List.of());
+    assertThatThrownBy(() -> service.calculate(quoteContext()))
+        .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("月价准备批次");
+    verifyNoInteractions(partService, costService);
   }
 
   @Test
@@ -89,12 +74,13 @@ class CostRunObjectCalcServiceImplTest {
     prepared.setUnitPrice(new BigDecimal("50.000000"));
     prepared.setPriceSource("联动价");
     when(provider.supports(context)).thenReturn(true);
-    when(provider.listPreparedPartItems(context)).thenReturn(List.of(prepared));
+    when(provider.listPreparedPartItems(context)).thenReturn(List.of(prepared, part("P-OTHER", "OTHER")));
     when(costService.listByMaterialCodes(any(), any(), any(), any(), any(), anyBoolean(), any()))
         .thenReturn(List.of(cost("TOTAL", "137.806000")));
 
     var result = service.calculate(context);
 
+    assertThat(result.getPartItems()).hasSize(1);
     assertThat(result.getPartItems().get(0).getPartCode()).isEqualTo("PART-PREPARED");
     assertThat(result.getPartItems().get(0).getUnitPrice()).isEqualByComparingTo("50.000000");
     assertThat(result.getPartItems().get(0).getPriceSource()).isEqualTo("联动价");

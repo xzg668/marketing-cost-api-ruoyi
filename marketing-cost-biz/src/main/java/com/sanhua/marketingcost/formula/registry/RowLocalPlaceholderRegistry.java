@@ -96,6 +96,17 @@ public class RowLocalPlaceholderRegistry {
             .eq(RowLocalPlaceholder::getStatus, "active")
             .orderByAsc(RowLocalPlaceholder::getSortOrder)
             .orderByAsc(RowLocalPlaceholder::getId));
+    return buildSnapshot(rows);
+  }
+
+  /** A calculation-local snapshot with the normal parsing policy and no database access. */
+  public static RowLocalPlaceholderRegistry captured(List<RowLocalPlaceholder> rows, ObjectMapper json) {
+    var result = new RowLocalPlaceholderRegistry(null, json);
+    result.snapshot = result.buildSnapshot(List.copyOf(rows));
+    return result;
+  }
+
+  private Snapshot buildSnapshot(List<RowLocalPlaceholder> rows) {
     Map<String, String> display = new LinkedHashMap<>();
     Map<String, List<String>> tokens = new LinkedHashMap<>();
     for (RowLocalPlaceholder row : rows) {

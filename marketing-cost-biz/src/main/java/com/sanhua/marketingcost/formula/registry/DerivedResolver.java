@@ -89,7 +89,9 @@ public class DerivedResolver implements FactorVariableRegistryImpl.DerivedContex
     var date =
         ctx.getQuoteDate() == null ? java.time.YearMonth.parse(month).atDay(1) : ctx.getQuoteDate();
     var references =
-        materialScrapRefMapper.selectList(
+        ctx.getPreparedInputs() != null
+            ? ctx.getPreparedInputs().scrap().referencesFor(materialCode)
+            : materialScrapRefMapper.selectList(
             Wrappers.lambdaQuery(MaterialScrapRef.class)
                 .eq(MaterialScrapRef::getMaterialCode, materialCode)
                 .eq(MaterialScrapRef::getBusinessUnitType, businessUnit)
@@ -120,7 +122,15 @@ public class DerivedResolver implements FactorVariableRegistryImpl.DerivedContex
       if (!ref.getScrapCode().equals(other.getScrapCode()) || ratio.compareTo(otherRatio) != 0)
         throw new IllegalArgumentException("公式废料变量存在多个有效映射，请明确废料：" + materialCode);
     }
-    String oaNo =
+    BigDecimal selectedPrice;
+    String priceEvidence;
+    if (ctx.getPreparedInputs() != null) {
+      var selected = ctx.getPreparedInputs().scrap().priceFor(ref.getScrapCode().trim());
+      selectedPrice = selected.cnyAmount();
+      priceEvidence = selected.evidence().json();
+      ctx.getUsedScrapReferences().put(materialCode, references);
+    } else {
+      String oaNo =
         ctx.getOaNo() == null && ctx.getOaForm() != null
             ? ctx.getOaForm().getOaNo()
             : ctx.getOaNo();
@@ -134,6 +144,9 @@ public class DerivedResolver implements FactorVariableRegistryImpl.DerivedContex
             date,
             ctx.isFinanceQuoteBase(),
             ctx.getSupplierReviews());
+      selectedPrice = selection.unitPrice();
+      priceEvidence = selection.evidence().inputSnapshotJson();
+    }
     BigDecimal taxMultiplier = BigDecimal.ONE;
     if ("INCL".equals(variable.getTaxMode())) {
       BigDecimal vat = subResolver == null ? null : subResolver.resolve("vat_rate").orElse(null);
@@ -146,9 +159,9 @@ public class DerivedResolver implements FactorVariableRegistryImpl.DerivedContex
     ctx.getPrimitiveInputs().put(variable.getVariableCode() + ":ratio", ratio);
     ctx.getPrimitiveInputs().put(variable.getVariableCode() + ":taxMultiplier", taxMultiplier);
     ctx.getScrapPriceInputs()
-        .put(variable.getVariableCode(), selection.evidence().inputSnapshotJson());
+        .put(variable.getVariableCode(), priceEvidence);
     ctx.resolvedSource(variable.getVariableCode(), "SCRAP_PRICE");
-    return Optional.of(selection.unitPrice().multiply(taxMultiplier).multiply(ratio));
+    return Optional.of(selectedPrice.multiply(taxMultiplier).multiply(ratio));
   }
 
   /**

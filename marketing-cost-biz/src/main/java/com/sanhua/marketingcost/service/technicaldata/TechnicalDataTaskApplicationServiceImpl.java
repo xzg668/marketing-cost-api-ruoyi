@@ -513,6 +513,8 @@ public class TechnicalDataTaskApplicationServiceImpl
         fees == null ? null : TechnicalDataProductFeeRules.display(fees.unitToolingFee()),
         fees == null ? null : TechnicalDataProductFeeRules.display(fees.unitMouldFee()),
         fees == null ? null : TechnicalDataProductFeeRules.display(fees.unitCertificationFee()),
+        fees == null ? null : TechnicalDataProductFeeRules.display(fees.unitDepreciationFee()),
+        fees == null ? null : fees.encodingVersion(),
         product.getRowVersion(), version == null ? null : version.getRowVersion(),
         version == null ? product.getUpdatedAt() : version.getUpdatedAt(), plateMaterials.view(version, plateDecision));
   }

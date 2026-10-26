@@ -6,7 +6,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -22,6 +24,7 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.QuoteBomPreparationRecord;
 import com.sanhua.marketingcost.entity.QuoteBomStatus;
 import com.sanhua.marketingcost.entity.QuoteEffectiveBomNode;
+import com.sanhua.marketingcost.service.pricing.monthly.*;
 import com.sanhua.marketingcost.mapper.BomCostingRowMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowSourceRefMapper;
 import com.sanhua.marketingcost.mapper.BomCostingRowSubRefMapper;
@@ -61,6 +64,7 @@ class QuoteEffectiveBomToCostingRowsTest {
   private com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService monthlyDetails;
   private BomSettlementRuleQueryService settlementRules;
   private QuoteProductBomCostingBuildServiceImpl service;
+  private final java.util.Set<String> householdMaterials = new java.util.HashSet<>();
 
   @BeforeAll
   static void initTableInfo() {
@@ -74,6 +78,7 @@ class QuoteEffectiveBomToCostingRowsTest {
 
   @BeforeEach
   void setUp() {
+    householdMaterials.clear();
     preparationMapper = mock(QuoteBomPreparationRecordMapper.class);
     statusMapper = mock(QuoteBomStatusMapper.class);
     costingRowMapper = mock(BomCostingRowMapper.class);
@@ -116,7 +121,8 @@ class QuoteEffectiveBomToCostingRowsTest {
             effectiveRepository,
             rawMapper,
             monthlyDetails,
-            manufacturingInputs);
+            manufacturingInputs,
+            noHouseholdPrices(objectMapper));
     when(settlementRules.listEnabledCandidates()).thenReturn(List.of());
     when(byproductRules.listEnabledCandidates()).thenReturn(List.of());
     when(byproductAdapter.read(any(), any(), any(), any(), any()))
@@ -154,6 +160,68 @@ class QuoteEffectiveBomToCostingRowsTest {
     assertThat(rows.getValue().getMaterialCode()).isEqualTo("T");
     assertThat(rows.getValue().getBuildBatchId()).isEqualTo("qeb_BUILD_1");
     assertThat(rows.getValue().getShapeAttr()).isEqualTo("采购件");
+  }
+
+  @Test
+  void previewUsesTheSameEffectiveInputsWithoutWritingAnyRows() {
+    var record = preparation();
+    record.setCostingBuildBatchId("BEFORE-PREVIEW");
+    when(preparationMapper.selectOne(any())).thenReturn(record);
+    when(effectiveRepository.findNodesByBuildBatchId("qeb_BUILD_1"))
+        .thenReturn(List.of(root(), selectedAlternative()));
+    when(rawMapper.selectBatchIds(any())).thenReturn(List.of(raw(1L, "P"), raw(2L, "T")));
+
+    var preview = service.previewFromEffectiveBom(10L, "qeb_BUILD_1").rows();
+
+    assertThat(preview).hasSize(1);
+    var row = preview.getFirst();
+    assertThat(row.getId()).isNull();
+    assertThat(row.getOaFormItemId()).isEqualTo(10L);
+    assertThat(row.getPeriodMonth()).isEqualTo("2026-08");
+    assertThat(row.getUnit()).isEqualTo("件");
+    assertThat(row.getRawHierarchyNodeId()).isEqualTo(2L);
+    assertThat(record.getCostingBuildBatchId()).isEqualTo("BEFORE-PREVIEW");
+    verifyNoInteractions(costingRowMapper, sourceRefMapper, subRefMapper);
+    verify(preparationMapper, never()).updateById(any(QuoteBomPreparationRecord.class));
+    verify(statusMapper, never()).updateById(any(QuoteBomStatus.class));
+
+    service.buildFromEffectiveBom(10L, "qeb_BUILD_1");
+    var written = ArgumentCaptor.forClass(BomCostingRow.class);
+    verify(costingRowMapper).insert(written.capture());
+    assertThat(written.getValue()).usingRecursiveComparison()
+        .ignoringFields("id", "builtAt").isEqualTo(row);
+  }
+
+  @Test
+  void u9HouseholdOccurrencesKeepTheirPathsQuantitiesAndOriginalReferences() {
+    householdMaterials.add("H");
+    var first = node(2L, "H1", "ROOT", 1, "/P/H@1/", "H", "MANUFACTURE");
+    var second = node(4L, "H2", "ROOT", 1, "/P/H@2/", "H", "MANUFACTURE");
+    first.setQtyPerParent(new BigDecimal("1.25")); first.setQtyPerTop(new BigDecimal("1.25"));
+    second.setQtyPerParent(new BigDecimal("2.5")); second.setQtyPerTop(new BigDecimal("2.5"));
+    var firstChild = node(3L, "C1", "H1", 2, "/P/H@1/C/", "C", "PURCHASE");
+    var secondChild = node(5L, "C2", "H2", 2, "/P/H@2/C/", "C", "PURCHASE");
+    when(effectiveRepository.findNodesByBuildBatchId("qeb_BUILD_1"))
+        .thenReturn(List.of(root(), first, firstChild, second, secondChild));
+    when(rawMapper.selectBatchIds(any())).thenReturn(List.of(
+        raw(1L, "P"), raw(2L, "H"), raw(3L, "C"), raw(4L, "H"), raw(5L, "C")));
+
+    var preview = service.previewFromEffectiveBom(10L, "qeb_BUILD_1").rows();
+    assertThat(preview).extracting(BomCostingRow::getPath).containsExactly("/P/H@1/", "/P/H@2/");
+    assertThat(preview).extracting(BomCostingRow::getSettlementRowType)
+        .containsOnly("HOUSEHOLD_INQUIRY");
+    assertThat(preview.get(0).getQtyPerTop()).isEqualByComparingTo("1.25");
+    assertThat(preview.get(1).getQtyPerTop()).isEqualByComparingTo("2.5");
+    verifyNoInteractions(costingRowMapper, sourceRefMapper, subRefMapper);
+
+    var built = service.buildFromEffectiveBom(10L, "qeb_BUILD_1");
+    assertThat(built.costingRowsWritten()).isEqualTo(2);
+    var rows = ArgumentCaptor.forClass(BomCostingRow.class);
+    verify(costingRowMapper, times(2)).insert(rows.capture());
+    assertThat(rows.getAllValues()).extracting(BomCostingRow::getRawHierarchyNodeId)
+        .containsExactly(2L, 4L);
+    verify(sourceRefMapper, times(2)).insert(any(BomCostingRowSourceRef.class));
+    verify(subRefMapper, never()).insert(any(BomCostingRowSubRef.class));
   }
 
   @Test
@@ -238,7 +306,7 @@ class QuoteEffectiveBomToCostingRowsTest {
     when(preparationMapper.selectOne(any())).thenReturn(platePreparation);
     OaFormItem plateItem = new OaFormItem();
     plateItem.setId(10L);
-    plateItem.setBusinessUnitType("PLATE");
+    plateItem.setBusinessUnitType("COMMERCIAL");
     when(itemMapper.selectById(10L)).thenReturn(plateItem);
 
     QuoteEffectiveBomNode plateRoot = root();
@@ -519,6 +587,45 @@ class QuoteEffectiveBomToCostingRowsTest {
     return status;
   }
 
+  /** Existing settlement examples have no adopted or household prices at the public price ports. */
+  private MonthlyQuotationBomPricing noHouseholdPrices(ObjectMapper json) {
+    var module = mock(MonthlyMaterialPrices.class);
+    when(module.lookup(org.mockito.ArgumentMatchers.anySet())).thenAnswer(call -> {
+      java.util.Set<MonthlyPriceRequest> requests = call.getArgument(0);
+      var found = new java.util.HashMap<MonthlyPriceRequest, MonthlyAdoptionPlan.Selection>();
+      for (var request : requests) {
+        if (householdMaterials.contains(request.family().materialCode())
+            && request.family().taxBasis() == TaxBasis.EXCLUDED) {
+          found.put(request, new MonthlyAdoptionPlan.Selection(500L,
+              new MonthlyPriceCoverage(java.util.Set.of(request.priceOrgCode()),
+                  QuantityInterval.all(), ConditionDomain.any()),
+              MonthlyAdoptionPlan.PriceFact.household(new BigDecimal("20.9853"),
+                  new BigDecimal("0.085"), new MonthlyAdoptionPlan.SourceEvidence("{\"source\":\"household-occurrence-fixture\"}"))));
+        }
+      }
+      var missing = new java.util.HashSet<>(requests); missing.removeAll(found.keySet());
+      return new MonthlyMaterialPrices.Lookup(found, missing);
+    });
+    var codec = new MonthlyPriceDocumentCodec(json);
+    var source = new HouseholdMonthlyPriceSource(new HouseholdInquiryStorage(
+        mock(com.sanhua.marketingcost.mapper.monthly.HouseholdInquiryStorageMapper.class), codec), codec, org.mockito.Mockito.mock(com.sanhua.marketingcost.service.MaterialPricePriorityService.class));
+    QuotationPriceSessions sessions = request -> new QuotationPriceSession() {
+      @Override public MonthlyMaterialPrices.Context context() {
+        return new MonthlyMaterialPrices.Context(request.businessUnit(), request.oaNo(), request.supplierReviews().oaFormItemId(),
+            request.productCode(), java.time.YearMonth.parse(request.month()), request.priceAsOfTime(), "settlement-fixture",
+            request.supplierReviews().priceOrgCode(), request.supplierReviews());
+      }
+      @Override public NonCuConditions conditions(String organization) { return NonCuConditions.empty(); }
+      @Override public void bindScope(MonthlyBomPricingScope.Scope scope) { throw new AssertionError("BOM preview cannot adopt"); }
+      @Override public Read read(java.util.Collection<Input> inputs) { throw new AssertionError("BOM preview cannot price ordinary inputs"); }
+      @Override public void consume(String path, Input input, java.math.BigDecimal quantity) { throw new AssertionError("BOM preview cannot adopt"); }
+      @Override public void consume(String path, Value value, java.math.BigDecimal quantity) { throw new AssertionError("BOM preview cannot adopt"); }
+      @Override public MonthlyAdoptionPlan plan() { throw new AssertionError("BOM preview cannot adopt"); }
+    };
+    return new MonthlyQuotationBomPricing(new MonthlyQuotationPrices(module, source), sessions,
+        mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class));
+  }
+
   private QuoteEffectiveBomNode root() {
     return node(1L, "ROOT", null, 0, "/P/", "P", "MANUFACTURE");
   }
@@ -552,6 +659,7 @@ class QuoteEffectiveBomToCostingRowsTest {
     node.setSortSeq(level + 1);
     node.setNodePath(path);
     node.setMaterialCode(material);
+    node.setMaterialUnit("件");
     node.setMaterialName(material + " name");
     node.setQtyPerParent(BigDecimal.ONE);
     node.setQtyPerTop(BigDecimal.ONE);

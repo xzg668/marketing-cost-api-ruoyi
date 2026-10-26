@@ -272,6 +272,8 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
   }
 
   @Override
+  @org.springframework.transaction.annotation.Transactional(readOnly = true,
+      isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
   public PricePrepareItemPageResponse pageItems(PricePrepareItemQueryRequest request) {
     PricePrepareItemQueryRequest safe =
         request == null ? new PricePrepareItemQueryRequest() : request;
@@ -282,9 +284,18 @@ public class PricePrepareQueryServiceImpl implements PricePrepareQueryService {
         itemMapper.selectPage(
             new Page<>(pageNo(safe.getPage()), pageSize(safe.getPageSize())),
             buildItemQuery(safe)
+                .select(PricePrepareItem::getId)
                 .orderByAsc(PricePrepareItem::getBomRowId)
                 .orderByAsc(PricePrepareItem::getId));
-    return new PricePrepareItemPageResponse(page.getTotal(), page.getRecords());
+    if (page.getRecords().isEmpty()) return new PricePrepareItemPageResponse(page.getTotal(), List.of());
+    // Sort only identities in MySQL. Large immutable MAKE/PACK JSON evidence must not
+    // enter its filesort buffer; fetch this bounded page in the same read snapshot.
+    var ids = page.getRecords().stream().map(PricePrepareItem::getId).toList();
+    var byId = itemMapper.selectList(Wrappers.<PricePrepareItem>lambdaQuery()
+        .in(PricePrepareItem::getId, ids)).stream().collect(java.util.stream.Collectors.toMap(
+            PricePrepareItem::getId, java.util.function.Function.identity()));
+    return new PricePrepareItemPageResponse(page.getTotal(), ids.stream().map(id ->
+        java.util.Objects.requireNonNull(byId.get(id), "价格准备分页明细不存在")).toList());
   }
 
   @Override

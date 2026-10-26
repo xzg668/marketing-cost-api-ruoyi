@@ -1,13 +1,10 @@
 package com.sanhua.marketingcost.service.impl;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.CostRunContext;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunObjectResult;
 import com.sanhua.marketingcost.dto.CostRunResultDto;
-import com.sanhua.marketingcost.dto.EffectiveTechnicalDataInput;
 import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.financequote.FinancePricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest;
@@ -18,18 +15,15 @@ import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
 import com.sanhua.marketingcost.entity.QuoteCostPriceScenario;
 import com.sanhua.marketingcost.entity.QuoteCostRunVersion;
-import com.sanhua.marketingcost.dto.financequote.QuoteCuMaterialDiffItemResult;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.QuotePriceScenarioType;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostPriceScenarioMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.service.CostRunEngine;
-import com.sanhua.marketingcost.service.CostRunResultWriter;
 import com.sanhua.marketingcost.service.FinancePricePrepareService;
 import com.sanhua.marketingcost.service.QuoteCostRunVersionService;
 import com.sanhua.marketingcost.service.QuoteCuAdjustmentCalcService;
-import com.sanhua.marketingcost.service.QuoteCuMaterialDiffService;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -43,7 +37,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
@@ -60,53 +53,18 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
   private final QuoteCostRunVersionService versionService;
   private final QuoteCostRunVersionMapper versionMapper;
   private final CostRunEngine costRunEngine;
-  private final CostRunResultWriter resultWriter;
-  private final QuoteCuMaterialDiffService materialDiffService;
   private final QuoteCostPriceScenarioMapper scenarioMapper;
-  private final ObjectMapper objectMapper;
+  private final com.sanhua.marketingcost.service.costing.MonthlyQuotationCosting monthlyCosting;
 
-  @Autowired
   public QuoteCuAdjustmentCalcServiceImpl(
-      PricePrepareBatchMapper batchMapper,
-      FinancePricePrepareService financePricePrepareService,
-      QuoteCostRunVersionService versionService,
-      QuoteCostRunVersionMapper versionMapper,
-      CostRunEngine costRunEngine,
-      CostRunResultWriter resultWriter,
-      QuoteCuMaterialDiffService materialDiffService,
-      QuoteCostPriceScenarioMapper scenarioMapper,
-      ObjectMapper objectMapper) {
-    this.batchMapper = batchMapper;
-    this.financePricePrepareService = financePricePrepareService;
-    this.versionService = versionService;
-    this.versionMapper = versionMapper;
-    this.costRunEngine = costRunEngine;
-    this.resultWriter = resultWriter;
-    this.materialDiffService = materialDiffService;
-    this.scenarioMapper = scenarioMapper;
-    this.objectMapper = objectMapper;
-  }
-
-  /** Focused unit-test constructor retained for tests that do not start Spring. */
-  QuoteCuAdjustmentCalcServiceImpl(
-      PricePrepareBatchMapper batchMapper,
-      FinancePricePrepareService financePricePrepareService,
-      QuoteCostRunVersionService versionService,
-      QuoteCostRunVersionMapper versionMapper,
-      CostRunEngine costRunEngine,
-      CostRunResultWriter resultWriter,
-      QuoteCuMaterialDiffService materialDiffService,
-      QuoteCostPriceScenarioMapper scenarioMapper) {
-    this(
-        batchMapper,
-        financePricePrepareService,
-        versionService,
-        versionMapper,
-        costRunEngine,
-        resultWriter,
-        materialDiffService,
-        scenarioMapper,
-        new ObjectMapper().findAndRegisterModules());
+      PricePrepareBatchMapper batchMapper, FinancePricePrepareService financePricePrepareService,
+      QuoteCostRunVersionService versionService, QuoteCostRunVersionMapper versionMapper,
+      CostRunEngine costRunEngine, QuoteCostPriceScenarioMapper scenarioMapper,
+      com.sanhua.marketingcost.service.costing.MonthlyQuotationCosting monthlyCosting) {
+    this.batchMapper = batchMapper; this.financePricePrepareService = financePricePrepareService;
+    this.versionService = versionService; this.versionMapper = versionMapper;
+    this.costRunEngine = costRunEngine; this.scenarioMapper = scenarioMapper;
+    this.monthlyCosting = monthlyCosting;
   }
 
   @Override
@@ -127,18 +85,16 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     BigDecimal totalCost = uniqueCostAmount(costResult, COST_CODE_TOTAL);
     validateResultTotal(costResult, totalCost);
 
-    QuoteCuMaterialDiffResult materialDiff = materialDiffService.calculate(version.getId());
-    BigDecimal adjustment = money(materialDiff.adjustmentAmount());
-    validateMaterialDiff(scope.oaCuPrice(), materialDiff, adjustment);
-    BigDecimal oaMaterialCost = money(financeMaterialCost.add(adjustment));
-    BigDecimal finalQuoteAmount = money(totalCost.add(adjustment));
-    validateIdentities(
-        financeMaterialCost,
-        oaMaterialCost,
-        totalCost,
-        adjustment,
-        finalQuoteAmount,
-        materialDiff);
+    var stored = Objects.requireNonNull(monthlyCosting, "报价核算必须配置月价成本存储")
+        .save(version, costResult, scope.form().getCopperPrice());
+    version = stored.version();
+    var calculation = stored.snapshot().calculation();
+    financeMaterialCost = calculation.financeMaterialCost();
+    totalCost = calculation.totalCost();
+    QuoteCuMaterialDiffResult materialDiff = monthlyCosting.difference(stored);
+    BigDecimal adjustment = calculation.cuMaterialAdjustment();
+    BigDecimal oaMaterialCost = financeMaterialCost.add(adjustment);
+    BigDecimal finalQuoteAmount = calculation.finalQuoteAmount();
 
     fillResultSummary(
         costResult.getResult(),
@@ -147,7 +103,20 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
         totalCost,
         adjustment,
         finalQuoteAmount);
-    resultWriter.writeQuoteResult(costResult);
+    costResult.setPartItems(stored.parts().stream().map(part -> {
+      var row = new com.sanhua.marketingcost.dto.CostRunPartItemDto();
+      row.setId(part.getId()); row.setBomRowId(part.getBomRowId()); row.setPricePrepareItemId(part.getPricePrepareItemId());
+      row.setOaNo(part.getOaNo()); row.setProductCode(part.getProductCode()); row.setPartCode(part.getPartCode());
+      row.setPartName(part.getPartName()); row.setPartQty(part.getQty()); row.setUnitPrice(part.getUnitPrice());
+      row.setAmount(part.getAmount()); row.setPriceSource(part.getPriceSource()); row.setPriceOrgCode(part.getPriceOrgCode());
+      row.setMaterialOrganizationCode(part.getMaterialOrganizationCode()); return row;
+    }).toList());
+    costResult.setCostItems(stored.costs().stream().map(cost -> {
+      var row = new CostRunCostItemDto(); row.setId(cost.getId()); row.setCostCode(cost.getCostCode());
+      row.setCostName(cost.getCostName()); row.setAmount(cost.getAmount()); row.setBaseAmount(cost.getBaseAmount());
+      row.setRate(cost.getRate()); row.setCategory(cost.getCategory()); row.setRemark(cost.getRemark());
+      row.setSourceTable(cost.getSourceTable()); row.setSourceId(cost.getSourceId()); return row;
+    }).toList());
     persistScenarios(
         version,
         oaBatch,
@@ -157,17 +126,6 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
         financeMaterialCost,
         oaMaterialCost,
         totalCost);
-    finishVersion(
-        version,
-        financeMaterialCost,
-        oaMaterialCost,
-        totalCost,
-        adjustment,
-        finalQuoteAmount,
-        size(costResult.getPartItems()),
-        size(costResult.getCostItems()),
-        costResult.getContext().getEffectiveTechnicalData());
-
     return new QuoteCuAdjustmentCalcResult(
         version,
         costResult,
@@ -254,11 +212,6 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     requireSame("财务价格准备", "来源批次", oaBatch.getPrepareNo(), financePrepare.sourcePrepareNo());
     requireText(financePrepare.financePrepareNo(), "financePricePrepareNo");
     requireText(financePrepare.scenarioGroupNo(), "scenarioGroupNo");
-    if ((financePrepare.financeBasePriceId() == null && financePrepare.financeFactorPriceId() == null)
-        || financePrepare.financeCuPricePerKg() == null
-        || financePrepare.financeCuPricePerKg().compareTo(BigDecimal.ZERO) <= 0) {
-      throw new IllegalStateException("财务Cu基准结果不完整");
-    }
     requireSame(
         "财务价格准备",
         "场景",
@@ -317,7 +270,7 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     patch.setPricePrepareNo(financePrepare.financePrepareNo());
     patch.setOaPricePrepareNo(oaBatch.getPrepareNo());
     patch.setFinancePricePrepareNo(financePrepare.financePrepareNo());
-    patch.setFinanceCuPrice(money(financePrepare.financeCuPricePerKg()));
+    patch.setFinanceCuPrice(financePrepare.financeCuPricePerKg());
     patch.setOaCuPrice(scope.oaCuPrice());
     patch.setFinanceBasePriceId(financePrepare.financeBasePriceId());
     if (versionMapper.updateById(patch) != 1) {
@@ -405,38 +358,6 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     }
   }
 
-  private void validateMaterialDiff(
-      BigDecimal oaCuPrice, QuoteCuMaterialDiffResult diff, BigDecimal adjustment) {
-    if (diff == null) {
-      throw new IllegalStateException("Cu材料费差异计算没有返回结果");
-    }
-    if (diff.cuAffectedSettlementCount() > 0 && oaCuPrice == null) {
-      throw new IllegalStateException("当前产品存在Cu材料，但OA报价单未锁定Cu价格");
-    }
-    if (diff.cuAffectedSettlementCount() == 0 && adjustment.signum() != 0) {
-      throw new IllegalStateException("当前产品没有Cu材料，Cu材料费差额必须为0");
-    }
-  }
-
-  private void validateIdentities(
-      BigDecimal financeMaterialCost,
-      BigDecimal oaMaterialCost,
-      BigDecimal totalCost,
-      BigDecimal adjustment,
-      BigDecimal finalQuoteAmount,
-      QuoteCuMaterialDiffResult diff) {
-    BigDecimal detailSum = diff.items().stream()
-        .filter(Objects::nonNull)
-        .filter(item -> Integer.valueOf(1).equals(item.getContributesToAdjustment()))
-        .map(QuoteCuMaterialDiffItemResult::getDiffAmount)
-        .filter(Objects::nonNull)
-        .reduce(BigDecimal.ZERO, BigDecimal::add);
-    requireDecimal("D_CU=差异结算行之和", adjustment, money(detailSum));
-    requireDecimal("M_OA=M_FIN+D_CU", oaMaterialCost, money(financeMaterialCost.add(adjustment)));
-    requireDecimal("D_CU=M_OA-M_FIN", adjustment, money(oaMaterialCost.subtract(financeMaterialCost)));
-    requireDecimal("Q_FINAL=T_FIN+D_CU", finalQuoteAmount, money(totalCost.add(adjustment)));
-  }
-
   private void fillResultSummary(
       CostRunResultDto result,
       BigDecimal financeMaterialCost,
@@ -475,8 +396,8 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
         version,
         QuotePriceScenarioType.FINANCE_QUOTE_BASE,
         financePrepare.financePrepareNo(),
-        money(financePrepare.financeCuPricePerKg()),
-        financePrepare.financeFactorPriceId() == null ? "FINANCE_QUOTE_BASE" : "FINANCE_FACTOR",
+        financePrepare.financeCuPricePerKg(),
+        "MONTHLY_MATERIAL",
         financePrepare.financeFactorPriceId() == null
             ? financePrepare.financeBasePriceId() : financePrepare.financeFactorPriceId(),
         financeMaterialCost,
@@ -536,67 +457,14 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
             .append('|').append(item.getBomRowId())
             .append('|').append(text(item.getMaterialCode()))
             .append('|').append(text(item.getItemType()))
-            .append('|').append(item.getQuantity()));
+            .append('|').append(item.getQuantity())
+            .append('|').append(text(item.getTraceJson())));
     try {
       byte[] digest = MessageDigest.getInstance("SHA-256")
           .digest(input.toString().getBytes(StandardCharsets.UTF_8));
       return HexFormat.of().formatHex(digest);
     } catch (NoSuchAlgorithmException ex) {
       throw new IllegalStateException("当前JVM不支持SHA-256", ex);
-    }
-  }
-
-  private void finishVersion(
-      QuoteCostRunVersion version,
-      BigDecimal financeMaterialCost,
-      BigDecimal oaMaterialCost,
-      BigDecimal totalCost,
-      BigDecimal adjustment,
-      BigDecimal finalQuoteAmount,
-      int partItemCount,
-      int costItemCount,
-      EffectiveTechnicalDataInput technicalData) {
-    LocalDateTime finishedAt = LocalDateTime.now();
-    QuoteCostRunVersion patch = new QuoteCostRunVersion();
-    patch.setId(version.getId());
-    patch.setFinanceMaterialCost(financeMaterialCost);
-    patch.setOaMaterialCost(oaMaterialCost);
-    patch.setCuMaterialAdjustment(adjustment);
-    patch.setFinalQuoteAmount(finalQuoteAmount);
-    patch.setTotalCost(totalCost);
-    patch.setPartItemCount(partItemCount);
-    patch.setCostItemCount(costItemCount);
-    patch.setTrialFinishedAt(finishedAt);
-    if (technicalData != null) {
-      patch.setTechDataVersionId(technicalData.versionId());
-      patch.setTechDataVersionNo(technicalData.versionNo());
-      patch.setTechDataSource(technicalData.sourceType());
-      patch.setTechDataInputJson(technicalInputJson(technicalData));
-      patch.setTechDataRetrievedAt(technicalData.retrievedAt());
-    }
-    if (versionMapper.updateById(patch) != 1) {
-      throw new IllegalStateException("成本版本双场景汇总写入失败");
-    }
-    version.setFinanceMaterialCost(financeMaterialCost);
-    version.setOaMaterialCost(oaMaterialCost);
-    version.setCuMaterialAdjustment(adjustment);
-    version.setFinalQuoteAmount(finalQuoteAmount);
-    version.setTotalCost(totalCost);
-    version.setPartItemCount(partItemCount);
-    version.setCostItemCount(costItemCount);
-    version.setTrialFinishedAt(finishedAt);
-    version.setTechDataVersionId(patch.getTechDataVersionId());
-    version.setTechDataVersionNo(patch.getTechDataVersionNo());
-    version.setTechDataSource(patch.getTechDataSource());
-    version.setTechDataInputJson(patch.getTechDataInputJson());
-    version.setTechDataRetrievedAt(patch.getTechDataRetrievedAt());
-  }
-
-  private String technicalInputJson(EffectiveTechnicalDataInput technicalData) {
-    try {
-      return objectMapper.writeValueAsString(technicalData);
-    } catch (JsonProcessingException exception) {
-      throw new IllegalStateException("成本技术资料输入快照序列化失败", exception);
     }
   }
 
@@ -614,18 +482,8 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     return value.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
   }
 
-  private int size(List<?> values) {
-    return values == null ? 0 : values.size();
-  }
-
   private int value(Integer value) {
     return value == null ? 0 : value;
-  }
-
-  private void requireDecimal(String identity, BigDecimal expected, BigDecimal actual) {
-    if (expected == null || actual == null || expected.compareTo(actual) != 0) {
-      throw new IllegalStateException(identity + "校验失败");
-    }
   }
 
   private void requireSame(String context, String field, Object expected, Object actual) {

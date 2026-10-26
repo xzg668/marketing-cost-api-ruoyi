@@ -3,6 +3,7 @@ package com.sanhua.marketingcost.controller;
 import com.sanhua.marketingcost.service.JjbExportService;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import org.slf4j.Logger;
@@ -41,19 +42,24 @@ public class CostRunExportController {
   public void exportJjb(
       @PathVariable("oaNo") String oaNo,
       @RequestParam("productCode") String productCode,
+      @RequestParam(value = "oaFormItemId", required = false) Long oaFormItemId,
+      @RequestParam(value = "versionId", required = false) Long versionId,
+      @RequestParam(value = "costRunNo", required = false) String costRunNo,
       HttpServletResponse response)
       throws IOException {
     if (!StringUtils.hasText(oaNo) || !StringUtils.hasText(productCode)) {
       response.sendError(HttpServletResponse.SC_BAD_REQUEST, "oaNo / productCode required");
       return;
     }
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    int rows = jjbExportService.export(oaNo, productCode, oaFormItemId, versionId, costRunNo, output);
     String fileName = "JJB_" + oaNo.trim() + "_" + productCode.trim() + ".xlsx";
     String encoded = URLEncoder.encode(fileName, StandardCharsets.UTF_8).replace("+", "%20");
     response.setContentType(CONTENT_TYPE_XLSX);
     response.setCharacterEncoding(StandardCharsets.UTF_8.name());
     response.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + encoded);
 
-    int rows = jjbExportService.export(oaNo, productCode, response.getOutputStream());
+    output.writeTo(response.getOutputStream());
     log.info("见机表导出 oaNo={} productCode={} 部品行数={}", oaNo, productCode, rows);
   }
 }

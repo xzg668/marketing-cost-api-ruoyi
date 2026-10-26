@@ -28,6 +28,31 @@ import java.time.LocalDateTime;
 @TableName("lp_bom_costing_row")
 public class BomCostingRow {
 
+  /** Current immutable-tree preview provenance. Null means this row was loaded without a preview. */
+  @TableField(exist = false)
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private java.util.List<BomCostingRowSubRef> currentSubRefs;
+
+  /** Original snapshot source path -> independently priced household occurrence path. */
+  @TableField(exist = false)
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private java.util.Map<String, String> householdChildPaths = java.util.Map.of();
+
+  @TableField(exist = false)
+  @com.fasterxml.jackson.annotation.JsonIgnore
+  private String currentSourcePath;
+  public String getCurrentSourcePath() { return currentSourcePath; }
+  public void setCurrentSourcePath(String value) { currentSourcePath = value; }
+
+  public java.util.List<BomCostingRowSubRef> getCurrentSubRefs() { return currentSubRefs; }
+  public void setCurrentSubRefs(java.util.List<BomCostingRowSubRef> value) {
+    currentSubRefs = value == null ? null : java.util.List.copyOf(value);
+  }
+  public java.util.Map<String, String> getHouseholdChildPaths() { return householdChildPaths; }
+  public void setHouseholdChildPaths(java.util.Map<String, String> value) {
+    householdChildPaths = java.util.Map.copyOf(value);
+  }
+
   @TableId(type = IdType.AUTO)
   private Long id;
 

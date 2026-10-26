@@ -51,11 +51,11 @@ public class SupplierSupplyRatioResolveServiceImpl implements SupplierSupplyRati
     query.last(
         "ORDER BY material_code, supply_ratio DESC, IFNULL(updated_at, '1970-01-01 00:00:00') DESC,"
             + " id DESC");
-    for (var row : mapper.selectList(query))
-      result.putIfAbsent(
-          normalized(row.getMaterialCode()), hit(row, "匹配 material_code，取供货比例最大供应商"));
-    for (String code : codes)
-      result.putIfAbsent(code, SupplierSupplyRatioResolveResult.miss("未命中供货比例：material_code 无数据"));
+    var captured=new java.util.LinkedHashMap<String,java.util.List<SupplierSupplyRatio>>();
+    for(var row:mapper.selectList(query))captured.computeIfAbsent(normalized(row.getMaterialCode()),ignored->new java.util.ArrayList<>()).add(row);
+    result.putAll(com.sanhua.marketingcost.service.pricing.SupplierPrimaryRatioPolicy.resolve(
+        bu,captured.keySet(),pricingDate,captured));
+    for(String code:codes)result.putIfAbsent(code,SupplierSupplyRatioResolveResult.miss("未命中供货比例：material_code 无数据"));
     return result;
   }
 
@@ -113,22 +113,7 @@ public class SupplierSupplyRatioResolveServiceImpl implements SupplierSupplyRati
   }
 
   private SupplierSupplyRatioResolveResult hit(SupplierSupplyRatio row, String matchMode) {
-    SupplierSupplyRatioResolveResult result = new SupplierSupplyRatioResolveResult();
-    result.setMatched(true);
-    result.setId(row.getId());
-    result.setSupplierName(row.getSupplierName());
-    result.setSupplierCode(row.getSupplierCode());
-    result.setSupplyRatio(row.getSupplyRatio());
-    result.setSourceType(row.getSourceType());
-    result.setSourceBatchNo(row.getSourceBatchNo());
-    result.setTraceMessage(
-        "命中供货比例主供应商：supplierName="
-            + row.getSupplierName()
-            + ", supplyRatio="
-            + row.getSupplyRatio()
-            + ", matchMode="
-            + matchMode);
-    return result;
+    return com.sanhua.marketingcost.service.pricing.SupplierPrimaryRatioPolicy.hit(row, matchMode);
   }
 
   private LocalDate parseMonth(String pricingMonth) {

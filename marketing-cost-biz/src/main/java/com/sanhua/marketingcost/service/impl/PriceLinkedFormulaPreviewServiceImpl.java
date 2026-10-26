@@ -17,6 +17,7 @@ import com.sanhua.marketingcost.formula.normalize.FormulaUnitConsistencyChecker;
 import com.sanhua.marketingcost.formula.registry.ExpressionEvaluator;
 import com.sanhua.marketingcost.formula.registry.FactorVariableRegistry;
 import com.sanhua.marketingcost.formula.registry.VariableContext;
+import com.sanhua.marketingcost.formula.registry.PreparedFormulaInputs;
 import com.sanhua.marketingcost.mapper.PriceLinkedItemMapper;
 import com.sanhua.marketingcost.mapper.PriceVariableMapper;
 import com.sanhua.marketingcost.service.PriceLinkedFormulaPreviewService;
@@ -184,6 +185,29 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
         variableContext);
   }
 
+  /** Uses the existing calculation pipeline with captured P0 inputs and no current source reads. */
+  public PriceLinkedFormulaPreviewResponse previewPrepared(
+      PriceLinkedItem rule, String pricingMonth, java.time.LocalDate priceDate, PreparedFormulaInputs inputs) {
+    try {
+      java.util.Objects.requireNonNull(inputs, "公式预取输入必填");
+      java.util.Objects.requireNonNull(priceDate, "公式取价日期必填");
+      java.time.YearMonth.parse(pricingMonth);
+      inputs.validate(rule, pricingMonth);
+      if (OriginalLinkedRuleSnapshot.VERSION.equals(rule.getExpressionVersion()))
+        throw new IllegalArgumentException("原稿规则应使用原稿运行时");
+      var scope = LinkedPriceVariableContext.quote(null).factorSource("FINANCE_QUOTE_BASE")
+          .pricingMonth(pricingMonth).pricingDate(priceDate);
+      var response = doCompute(rule.getFormulaExpr(), rule.getMaterialCode(), pricingMonth,
+          rule.getTaxIncluded(), rule, null, null, null, scope, inputs);
+      if (StringUtils.hasText(response.getError())) response.setResult(null);
+      return response;
+    } catch (RuntimeException invalid) {
+      var response = new PriceLinkedFormulaPreviewResponse();
+      response.setError("预取公式输入无效：" + invalid.getMessage());
+      return response;
+    }
+  }
+
   private String calculationPricingMonth(
       PriceLinkedItem linkedItem, LinkedPriceVariableContext variableContext) {
     if (variableContext != null && StringUtils.hasText(variableContext.getPricingMonth())) {
@@ -231,6 +255,20 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
       Map<String, BigDecimal> overrides,
       Map<String, String> overrideSources,
       LinkedPriceVariableContext variableContext) {
+    return doCompute(rawExpr, materialCode, pricingMonth, taxIncluded, preloadedItem,
+        oaForm, overrides, overrideSources, variableContext, null);
+  }
+
+  private PriceLinkedFormulaPreviewResponse doCompute(
+      String rawExpr,
+      String materialCode,
+      String pricingMonth,
+      Integer taxIncluded,
+      PriceLinkedItem preloadedItem,
+      OaForm oaForm,
+      Map<String, BigDecimal> overrides,
+      Map<String, String> overrideSources,
+      LinkedPriceVariableContext variableContext, PreparedFormulaInputs prepared) {
     PriceLinkedFormulaPreviewResponse response = new PriceLinkedFormulaPreviewResponse();
 
     // 阶段 1：规范化
@@ -241,7 +279,7 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
     // 异常会绕过 catch 直接炸服务。
     String normalized;
     try {
-      normalized = formulaNormalizer.normalize(rawExpr);
+      normalized = prepared == null ? formulaNormalizer.normalize(rawExpr) : prepared.normalize(rawExpr);
       response.setNormalizedExpr(normalized);
       response.getTrace().add(new TraceEntry("normalize", normalized));
     } catch (FormulaSyntaxException e) {
@@ -277,6 +315,7 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
             .pricingMonth(pricingMonth)
             .oaForm(oaForm)
             .linkedItem(linkedItem);
+    if (prepared != null) ctx.preparedInputs(prepared);
     if (variableContext != null) {
       ctx.quoteDate(variableContext.getPricingDate())
           .supplierReviews(variableContext.getSupplierReviews());
@@ -310,7 +349,7 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
     // 阶段 3：变量逐个解析
     LinkedHashSet<String> tokens = ExpressionEvaluator.extractVariables(normalized);
     Map<String, BigDecimal> values = new LinkedHashMap<>();
-    Map<String, PriceVariable> variableMeta = loadVariableMeta(tokens);
+    Map<String, PriceVariable> variableMeta = prepared == null ? loadVariableMeta(tokens) : prepared.variableMetadata(tokens);
     for (String token : tokens) {
       Optional<BigDecimal> resolved;
       try {
@@ -396,7 +435,9 @@ public class PriceLinkedFormulaPreviewServiceImpl implements PriceLinkedFormulaP
                   String.format("不含税结算：%s / (1+%s) = %s", result, vatRate, adjusted)));
     }
 
-    if (technical)
+    if (prepared != null)
+      PreparedFormulaCalculationEvidence.capture(linkedItem, ctx, values, response, objectMapper);
+    else if (technical)
       TechnicalFormulaCalculationEvidence.capture(linkedItem, ctx, values, response, objectMapper);
     return response;
   }

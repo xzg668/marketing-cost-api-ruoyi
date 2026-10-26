@@ -35,6 +35,8 @@ public class PricePrepareItem {
   private BigDecimal amount;
   private String priceSource;
   private String priceType;
+  private Long monthlyPriceId;
+  private String monthlyPricingType;
   private String status;
   private String resultRefType;
   private Long resultRefId;

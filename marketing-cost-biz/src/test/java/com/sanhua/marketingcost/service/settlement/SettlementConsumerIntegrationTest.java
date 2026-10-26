@@ -99,6 +99,7 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
   @Autowired OaFormItemMapper formItems;
   @Autowired CurrentU9BomGateway currentBom;
   @Autowired MakePartPricePrepareStrategy makePreparation;
+  @Autowired com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec monthlyCodec;
   private static final LocalDateTime AS_OF = LocalDateTime.of(2026, 11, 15, 10, 0);
   private static final Path ARCHIVE;
   static {
@@ -110,6 +111,8 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
   }
 
   @BeforeEach void source() throws Exception {
+    jdbc.update("DELETE FROM lp_material_master_raw WHERE import_batch_id LIKE 'STP-%'");
+    jdbc.update("DELETE FROM lp_price_fixed_item WHERE source_type='SETTLE_FIXED' AND material_code IN ('809633','203259534','203240646')");
     jdbc.update("DELETE FROM lp_settlement_effective_price");
     jdbc.update("DELETE FROM lp_settlement_price");
     SettlementFinanceTestSupport.clear(jdbc);
@@ -185,6 +188,8 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
       master.setImportBatchId(parentCode);
       master.setOrganizationCode(masterOrg);
       master.setGlobalSeg3TheoreticalNetWeight("10");
+      master.setUnit("只");
+      master.setActiveFlag(1);
       rawMaterials.insert(master);
       var weight = new MakePartChildNetWeight();
       weight.setMaterialOrganizationCode(masterOrg);
@@ -212,7 +217,8 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
         product.getProductName(), null, null, org, masterOrg, AS_OF.toLocalDate(), AS_OF));
     assertThat(source.status().name()).describedAs(source.message()).isEqualTo("AVAILABLE");
     var scenario = new PricePrepareScenarioContext(QuotePriceScenarioType.FINANCE_QUOTE_BASE,
-        "STP-GROUP", "STP-SOURCE", Map.of("Cu", new BigDecimal("999"))).forOrganization(org);
+        "STP-GROUP", "STP-SOURCE", Map.of("Cu", new BigDecimal("999")),
+        new com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext(product.getId()).forOrganization(org));
     for (boolean persist : new boolean[] {false, true}) {
       var rows = generation.calculateForBomRow(parent, AS_OF, scenario, persist);
       assertThat(rows).hasSize(3);
@@ -223,7 +229,7 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
         assertThat(row.getRawUnitPrice()).isEqualByComparingTo(values[i]);
         assertThat(row.getCostPrice()).isEqualByComparingTo(new BigDecimal(values[i]).setScale(8, java.math.RoundingMode.HALF_UP));
         assertThat(row.getParentTotalCostPrice()).isEqualByComparingTo("13.51822471");
-        assertThat(json.readTree(row.getRawInputSnapshotJson()).path("mode").asText()).isEqualTo(modes[i]);
+        assertThat(settlementEvidence(row.getRawInputSnapshotJson()).path("mode").asText()).isEqualTo(modes[i]);
         if (persist) assertThat(row.getId()).isPositive();
       }
     }
@@ -268,7 +274,7 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
     item.setId(itemId);
     item.setOaFormId(itemId);
     item.setBusinessUnitType("COMMERCIAL");
-    var revisions = new CostInputRevisionServiceImpl(jdbc);
+    var revisions = new CostInputRevisionServiceImpl(jdbc, (ignoredForm, ignoredItem, ignoredMonth) -> com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope.unprepared());
     String before = revisions.currentRevision(form, item, "2026-11");
     SettlementFinanceTestSupport.publish(finance, new SettlementScope("COMMERCIAL", "2026-12"), "120", "30");
     SettlementFinanceTestSupport.publish(finance, new SettlementScope("HOUSEHOLD", "2026-11"), "130", "31");
@@ -392,18 +398,20 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
 
   @ParameterizedTest
   @org.junit.jupiter.params.provider.ValueSource(strings = {"210", "220"})
-  void costingAndTechnicalChecksKeepSourceIdentityAndAmounts(String org) {
+  void costingAndTechnicalChecksKeepSourceIdentityAndAmounts(String org) throws Exception {
     String oa = "STP-PART-" + java.util.UUID.randomUUID().toString().substring(0, 8);
     String[] codes = {"809633", "203259534", "203240646"};
     String[] values = {"4.1658", "4.5114", "4.841024707965"};
+    var quotation = quotation(oa, oa + "-TOP", org);
     var solderItems = new java.util.ArrayList<TechnicalDataSupplementContent.SolderItem>();
     var plans = new java.util.ArrayList<PricePreparePlanItem>();
     for (int i = 0; i < codes.length; i++) {
       var row = new BomCostingRow();
       row.setOaNo(oa);
-      row.setOaFormItemId(90001L);
+      row.setOaFormItemId(quotation.getId());
       row.setTopProductCode(oa + "-TOP");
       row.setMaterialCode(codes[i]);
+      row.setUnit("只");
       row.setLevel(1);
       row.setPath("/" + oa + "/" + codes[i] + "/");
       row.setQtyPerParent(new BigDecimal("3"));
@@ -426,7 +434,7 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
       solderItems.add(new TechnicalDataSupplementContent.SolderItem(
           codes[i], codes[i], null, new BigDecimal("3"), "只", "隔离测试", codes[i], null));
     }
-    var context = CostRunContext.quote(oa, 90001L, oa + "-TOP",
+    var context = CostRunContext.quote(oa, quotation.getId(), oa + "-TOP",
         null, null, "COMMERCIAL", "2026-11", AS_OF, oa);
     context.setPriceOrgCode(org);
     context.setMaterialOrganizationCode("210".equals(org) ? "COMMERCIAL" : "PLATE");
@@ -450,7 +458,7 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
     task.setBusinessUnitType("COMMERCIAL");
     task.setApplicableOrgCode(org);
     var product = new QuoteTechProduct();
-    product.setOaFormItemId(90001L);
+    product.setOaFormItemId(quotation.getId());
     product.setAccountingMonth("2026-11");
     var checks = technicalPrices.check(task, product,
         new TechnicalDataSupplementContent.Solder(solderItems, "MANUAL", null));
@@ -458,7 +466,8 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
     assertThat(checks).hasSize(3);
     var prepared = normalPreparation.prepareBatch(oa, "COMMERCIAL", "2026-11", AS_OF,
         new PricePrepareScenarioContext(QuotePriceScenarioType.FINANCE_QUOTE_BASE,
-            "STP-GROUP", "STP-SOURCE", Map.of("Cu", new BigDecimal("999"))).forOrganization(org), plans, true);
+            "STP-GROUP", "STP-SOURCE", Map.of("Cu", new BigDecimal("999")),
+            new com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext(quotation.getId()).forOrganization(org)), plans, true);
     for (int i = 0; i < codes.length; i++) {
       assertThat(actual.get(i).getPartCode()).isEqualTo(codes[i]);
       assertThat(actual.get(i).getUnitPrice()).isEqualByComparingTo(values[i]);
@@ -466,11 +475,12 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
       assertThat(actual.get(i).getPriceType()).isEqualTo(i == 0 ? "结算固定价" : "结算联动价");
       assertThat(checks.get(i).status()).isEqualTo("OK");
       assertThat(checks.get(i).unitPrice()).isEqualByComparingTo(values[i]);
-      assertThat(checks.get(i).priceType()).isEqualTo(actual.get(i).getPriceType());
+      assertThat(checks.get(i).priceType()).isEqualTo("NORMAL");
       assertThat(prepared.get(plans.get(i)).getStatus()).isEqualTo("READY");
       assertThat(prepared.get(plans.get(i)).getUnitPrice()).isEqualByComparingTo(values[i]);
       assertThat(prepared.get(plans.get(i)).getAmount()).isEqualByComparingTo(actual.get(i).getAmount());
-      assertThat(prepared.get(plans.get(i)).getResultRefType()).isEqualTo("SETTLEMENT_PRICE");
+      assertThat(prepared.get(plans.get(i)).getResultRefType()).isEqualTo("MONTHLY_PRICE");
+      assertThat(settlementEvidence(prepared.get(plans.get(i)).getInputSnapshotJson()).path("rule").path("materialCode").asText()).isEqualTo(codes[i]);
     }
   }
 
@@ -484,29 +494,35 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
       "220,203240646,4.841024707965,LINKED_FORMULA,结算联动价"})
   void manufacturingReadAndPreparationUseAllSettlementModesWithoutOrdinaryCopperOverride(
       String org, String code, String expected, String mode, String type) throws Exception {
-    var oa = PricePrepareScenarioContext.oaLocked(90001L, org);
+    String oaNo = "STP-READ-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+    var quotation = quotation(oaNo, oaNo, org);
+    var oa = PricePrepareScenarioContext.oaLocked(quotation.getId(), org);
     var finance = new PricePrepareScenarioContext(QuotePriceScenarioType.FINANCE_QUOTE_BASE,
-        "STP-GROUP", "STP-SOURCE", Map.of("Cu", new BigDecimal("999"))).forOrganization(org);
+        "STP-GROUP", "STP-SOURCE", Map.of("Cu", new BigDecimal("999")),
+        new com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext(quotation.getId()).forOrganization(org));
     var read = materials.calculateMaterialUnitPrice(code, "2026-11", AS_OF.toLocalDate(), AS_OF,
-        "STP-CONSUMER", "COMMERCIAL", oa, MakePartMaterialPriceResolveService.Purpose.MATERIAL);
-    var prepared = materials.resolveMaterialUnitPrice(code, "2026-11", AS_OF.toLocalDate(), AS_OF,
-        "STP-CONSUMER", "COMMERCIAL", finance, MakePartMaterialPriceResolveService.Purpose.MATERIAL);
+        oaNo, "COMMERCIAL", oa, MakePartMaterialPriceResolveService.Purpose.MATERIAL);
+    var prepared = materials.calculateMaterialUnitPrice(code, "2026-11", AS_OF.toLocalDate(), AS_OF,
+        oaNo, "COMMERCIAL", finance, MakePartMaterialPriceResolveService.Purpose.MATERIAL);
     for (var result : java.util.List.of(read, prepared)) {
       assertThat(result.getStatus()).describedAs(result.getRemark()).isEqualTo("OK");
-      assertThat(result.getPriceType()).isEqualTo(type);
+      assertThat(result.getPriceType()).isEqualTo("NORMAL");
       assertThat(result.getUnitPrice()).isEqualByComparingTo(expected);
-      var evidence = json.readTree(result.getEvidence().inputSnapshotJson());
+      var evidence = settlementEvidence(result.getEvidence().inputSnapshotJson());
       assertThat(evidence.path("mode").asText()).isEqualTo(mode);
       assertThat(evidence.path("sourceTable").asText()).isEqualTo("lp_settlement_price");
       assertThat(evidence.path("rule").path("priceMonth").asText()).isEqualTo("2026-10");
     }
-    assertThat(read.getEvidence().sourcePriceRecordId()).isEqualTo(prepared.getEvidence().sourcePriceRecordId());
+    assertThat(settlementEvidence(read.getEvidence().inputSnapshotJson()).path("rule").path("id"))
+        .isEqualTo(settlementEvidence(prepared.getEvidence().inputSnapshotJson()).path("rule").path("id"));
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code=?", Integer.class, code)).isZero();
   }
 
   @ParameterizedTest
   @org.junit.jupiter.params.provider.ValueSource(strings = {"210", "220"})
   void packagingReadsRealStructureAndPricesAllThreeModesWithCorrectQuantity(String org) throws Exception {
     String packageCode = "STP-PKG-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+    var quotation = quotation(packageCode, packageCode + "-TOP", org);
     var snapshot = new PackageComponentSnapshot();
     snapshot.setPackageMaterialCode(packageCode);
     snapshot.setPackageMaterialName("结算包装");
@@ -538,8 +554,9 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
     request.setPackageMaterialCode(packageCode);
     request.setTopProductCode(snapshot.getSourceTopProductCode());
     request.setPeriodMonth("2026-11");
-    request.setOaNo("STP-CONSUMER");
-    request.setQuoteNo("STP-CONSUMER");
+    request.setOaNo(packageCode);
+    request.setOaFormItemId(quotation.getId());
+    request.setQuoteNo(packageCode);
     request.setBusinessUnitType("COMMERCIAL");
     request.setPriceOrgCode(org);
     request.setPriceAsOfTime(AS_OF);
@@ -556,15 +573,17 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
         var detail = result.getDetails().get(i);
         assertThat(detail.getChildMaterialCode()).isEqualTo(codes[i]);
         assertThat(detail.getChildUnitPrice()).isEqualByComparingTo(expected[i]);
-        assertThat(detail.getPriceType()).isEqualTo(i == 0 ? "SETTLE_FIXED" : "SETTLE_LINKED");
-        assertThat(json.readTree(detail.getInputSnapshotJson()).path("mode").asText()).isEqualTo(modes[i]);
+        assertThat(detail.getPriceType()).isEqualTo("NORMAL");
+        assertThat(settlementEvidence(detail.getInputSnapshotJson()).path("mode").asText()).isEqualTo(modes[i]);
       }
     }
     var stored = packages.getPriceDetail(prepared.getPrice().getId());
     assertThat(stored.getPrice().getTotalPrice()).isEqualByComparingTo("27.03644942");
     assertThat(stored.getDetails()).hasSize(3);
-    // 可复用月价只存结果；报价准备负责把本次子件完整依据冻结到报价快照。
+    // 此处是只读候选计算；报价准备捕获本次子件完整依据，正式月价采用由应用入口负责。
     var bom = new BomCostingRow();
+    bom.setOaFormItemId(quotation.getId());
+    bom.setPath("/" + packageCode + "/pack/");
     bom.setBusinessUnitType("COMMERCIAL");
     bom.setPriceOrgCode(org);
     bom.setQtyPerTop(new BigDecimal("3"));
@@ -572,13 +591,13 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
     plan.setMaterialCode(packageCode);
     plan.setTopProductCode(snapshot.getSourceTopProductCode());
     plan.setBomRow(bom);
-    var quote = packagePreparation.prepare(packageCode, "STP-CONSUMER", "2026-11", AS_OF, "主制造", "U9", plan);
+    var quote = packagePreparation.prepare(packageCode, packageCode, "2026-11", AS_OF, "主制造", "U9", plan);
     assertThat(quote.getStatus()).describedAs(quote.getMessage()).isEqualTo("READY");
     assertThat(quote.getAmount()).isEqualByComparingTo("81.10934826");
     var captured = json.readTree(quote.getInputSnapshotJson());
     for (int i = 0; i < modes.length; i++) {
-      assertThat(captured.path("components").get(i).path("inputs").path("mode").asText()).isEqualTo(modes[i]);
-      assertThat(captured.path("components").get(i).path("inputs").path("rule").path("priceMonth").asText()).isEqualTo("2026-10");
+      assertThat(settlementEvidence(captured.path("components").get(i).path("inputs").toString()).path("mode").asText()).isEqualTo(modes[i]);
+      assertThat(settlementEvidence(captured.path("components").get(i).path("inputs").toString()).path("rule").path("priceMonth").asText()).isEqualTo("2026-10");
     }
     var traceVersion = storeTraceInput(packageCode, org, "PACKAGE_COMPONENT", "PACKAGE_PRICE",
         prepared.getPrice().getId(), quote.getUnitPrice(), quote.getAmount(), quote.getInputSnapshotJson());
@@ -588,12 +607,40 @@ class SettlementConsumerIntegrationTest extends OriginalPricingIntegrationTestBa
     assertThat(children).hasSize(3);
     for (int i = 0; i < modes.length; i++) {
       assertThat(children.get(i).path("materialCode").asText()).isEqualTo(codes[i]);
-      assertThat(children.get(i).path("inputs").path("mode").asText()).isEqualTo(modes[i]);
+      assertThat(settlementEvidence(children.get(i).path("inputs").toString()).path("mode").asText()).isEqualTo(modes[i]);
       assertThat(children.get(i).path("unitPrice").decimalValue()).isEqualByComparingTo(expected[i]);
     }
     SettlementFinanceTestSupport.publish(finance, new SettlementScope("COMMERCIAL", "2026-11"), "110", "26");
+    // One in-flight preparation keeps its captured candidates. A new operation with no adopted
+    // monthly fact reads the newly published source; old captured quotation evidence stays intact.
+    assertThat(packages.ensurePrice(request).getPrice().getTotalPrice()).isEqualByComparingTo("27.03644942");
+    request.setMonthlyPrices(new com.sanhua.marketingcost.service.pricing.monthly.QuotationPriceSession.Scope());
     assertThat(packages.ensurePrice(request).getPrice().getTotalPrice()).isEqualByComparingTo("27.13181735");
     assertThat(traceBuilder.build(traceVersion).getFirst().getChildrenJson()).isEqualTo(frozen.getChildrenJson());
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code IN ('809633','203259534','203240646')", Integer.class)).isZero();
+  }
+
+  private OaFormItem quotation(String oaNo, String productCode, String organization) {
+    var form = new OaForm(); form.setOaNo(oaNo); form.setBusinessUnitType("COMMERCIAL"); forms.insert(form);
+    var item = new OaFormItem(); item.setOaFormId(form.getId()); item.setMaterialNo(productCode);
+    item.setProductName("220".equals(organization) ? "板式换热器" : "商用测试产品");
+    item.setBusinessUnitType("COMMERCIAL"); formItems.insert(item);
+    for (String code : java.util.List.of("809633", "203259534", "203240646")) {
+      var master = new MaterialMasterRaw(); master.setMaterialCode(code); master.setUnit("只");
+      master.setOrganizationCode("210".equals(organization) ? "COMMERCIAL" : "PLATE");
+      master.setImportBatchId(oaNo); master.setActiveFlag(1); master.setGlobalSeg3TheoreticalNetWeight("10");
+      rawMaterials.insert(master);
+    }
+    return item;
+  }
+
+  private com.fasterxml.jackson.databind.JsonNode settlementEvidence(String input) throws Exception {
+    var prepared = monthlyCodec.decode(input,
+        com.sanhua.marketingcost.service.pricing.monthly.MonthlyPreparationPrice.class);
+    assertThat(prepared.selection().fact().type().name()).isEqualTo("NORMAL");
+    var source = json.readTree(prepared.selection().fact().evidence().json());
+    assertThat(source.path("sourceKind").asText()).isIn("SETTLE_FIXED", "SETTLE_LINKED");
+    return source.path("source");
   }
 
   private QuoteCostRunVersion storeTraceInput(

@@ -45,13 +45,40 @@ public class TechnicalDataPriceRequirements {
     List<String> issues = new ArrayList<>();
     addBom(task, product, demands, issues);
     addModules(product, demands);
-    return resolve(task, product, demands, issues);
+    var revisions = ownedRevisions(task, product);
+    revisions.values().forEach(row -> add(demands, row.materialNo(), "SOURCE_REVISION"));
+    return resolve(task, product, demands, issues, revisions.keySet());
   }
 
   public TechnicalDataPriceRequirementsResponse checkModuleReferences(QuoteTechTask task, QuoteTechProduct product) {
     var demands = new TreeMap<String, Set<String>>();
     addModules(product, demands);
-    return resolve(task, product, demands, new ArrayList<>());
+    return resolve(task, product, demands, new ArrayList<>(), Set.of());
+  }
+
+  /** Reopening an owned source does not make an already adopted quotation price missing. */
+  private Map<String, com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.PriceItem>
+      ownedRevisions(QuoteTechTask task, QuoteTechProduct product) {
+    var result = new LinkedHashMap<String, com.sanhua.marketingcost.dto.technicaldata.TechnicalDataSupplementContent.PriceItem>();
+    if (product.getLatestSubmittedVersionId() == null) return result;
+    var submitted = versions.findVersion(product.getLatestSubmittedVersionId()).orElseThrow();
+    if (!Objects.equals(submitted.getProductId(), product.getId())) throw new IllegalStateException("原价格版本不属于本产品");
+    var original = content.prices(submitted);
+    if (original == null || original.items() == null) return result;
+    for (var module : tasks.findModules(product.getId())) {
+      if (!"PRICE".equals(module.getModuleType())
+          || !Set.of("RETURNED", "EDITING", "READY").contains(Objects.toString(module.getModuleStatus(), ""))) continue;
+      for (var row : original.items()) {
+        Integer owned = jdbc.queryForObject("""
+            SELECT COUNT(*) FROM lp_quote_tech_price_claim
+            WHERE material_code=? AND owner_module_id=? AND organization_code=?
+              AND business_unit_type=? AND price_unit=? AND currency=?
+            """, Integer.class, row.materialNo(), module.getId(), row.organizationCode(),
+            task.getBusinessUnitType(), row.unit(), row.currency());
+        if (Integer.valueOf(1).equals(owned)) result.put(row.itemKey(), row);
+      }
+    }
+    return result;
   }
 
   private void addModules(QuoteTechProduct product, Map<String, Set<String>> demands) {
@@ -86,7 +113,7 @@ public class TechnicalDataPriceRequirements {
     }
   }
 
-  private TechnicalDataPriceRequirementsResponse resolve(QuoteTechTask task, QuoteTechProduct product, Map<String, Set<String>> demands, List<String> issues) {
+  private TechnicalDataPriceRequirementsResponse resolve(QuoteTechTask task, QuoteTechProduct product, Map<String, Set<String>> demands, List<String> issues, Set<String> revisionKeys) {
     var now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     var scenario = PricePrepareScenarioContext.oaLocked(product.getOaFormItemId(), task.getApplicableOrgCode());
     List<TechnicalDataPriceRequirement> result = new ArrayList<>();
@@ -136,6 +163,10 @@ public class TechnicalDataPriceRequirements {
             code,
             exception);
         status = "ERROR"; message = "取价检查失败，请重试";
+      }
+      if (!"ERROR".equals(status) && revisionKeys.contains(key)) {
+        status = "REVISION";
+        message = "修改原补录来源；已采用的月价保持不变";
       }
       result.add(new TechnicalDataPriceRequirement(key, code, master.getMaterialName(), master.getMaterialModel(), task.getApplicableOrgCode(),
           unit, "CNY", List.copyOf(demand.getValue()), status, price, message));

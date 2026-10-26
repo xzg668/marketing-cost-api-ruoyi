@@ -23,4 +23,22 @@ public interface EffectiveTechnicalDataQueryService {
         ? "NO_EFFECTIVE_TECHNICAL_DATA"
         : input.versionId() + ":" + input.contentFingerprint();
   }
+
+  /** Public material prices have their own adoption revision; product modules remain current inputs. */
+  default String effectiveNonPriceFingerprint(Long oaFormItemId, String accountingMonth) {
+    var input = resolve(oaFormItemId, accountingMonth);
+    if (input == null) return "NO_EFFECTIVE_TECHNICAL_DATA";
+    var codec = new com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec(
+        new com.fasterxml.jackson.databind.ObjectMapper());
+    var modules = input.moduleSources().stream().filter(source -> !"PRICE".equals(source.moduleType()))
+        .map(source -> java.util.Arrays.asList(source.moduleType(), source.productId(), source.approvedModuleVersionId()))
+        .sorted(java.util.Comparator.comparing(Object::toString)).toList();
+    // PRICE-only resubmission also changes the composed anchor and whole-version hash. Neither is
+    // a non-price input; module approval identities and actual product values provide this boundary.
+    return com.sanhua.marketingcost.service.pricing.monthly.MonthlyPriceDocumentCodec.sha256(codec.unwrap(codec.encode(
+        java.util.Arrays.asList(input.accountingMonth(), modules, input.packageRequired(), input.auxiliaryRequired(),
+            input.salaryRequired(), input.packageTotalAmount(), input.auxiliaryTotalAmount(), input.salaryTotalAmount(),
+            input.packageItems(), input.auxiliaryItems(), input.salaryItems(), input.productFees(), input.netLossRate(),
+            input.productProperty(), input.materialItems(), input.plateMaterial()))));
+  }
 }

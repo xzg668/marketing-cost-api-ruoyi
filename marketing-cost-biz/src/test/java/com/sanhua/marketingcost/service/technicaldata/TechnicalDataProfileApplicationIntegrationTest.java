@@ -48,8 +48,8 @@ class TechnicalDataProfileApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(saved.productModel()).isEqualTo("OA-MODEL");
     assertThat(saved.hasAdditionalFees()).isFalse();
     assertThat(saved.unitMouldFee()).isEqualTo("0.3");
-    assertThat(saved.unitToolingFee()).isEqualTo("/");
-    assertThat(saved.unitCertificationFee()).isEqualTo("/");
+    assertThat(saved.unitToolingFee()).isNull();
+    assertThat(saved.unitCertificationFee()).isNull();
     assertThat(saved.expectedVersion()).isOne();
     var reloaded = tasks.detail(taskId(product), TECH).products().getFirst();
     assertThat(reloaded.profile()).isEqualTo(saved);
@@ -64,10 +64,8 @@ class TechnicalDataProfileApplicationIntegrationTest extends BomMapperTestBase {
     var product = fixture();
     var noProperty = update(false, null, null, null, 0); noProperty.setProductProperty(null);
     invalid(product.id(), noProperty, "产品属性");
-    invalid(product.id(), update(null, null, null, null, 0), "请选择是否含");
-    invalid(product.id(), update(true, "0.1", null, "/", 0), "模具费请填写");
-    for (String value : new String[]{"0", "-1", "NaN", "1e2", "1.1234567", "1000000000000"}) {
-      invalid(product.id(), update(false, value, null, null, 0), "工装费");
+    for (String value : new String[]{"-1", "NaN", "1e2", "1.1234567", "1000000000000"}) {
+      invalid(product.id(), update(false, value, null, null, 0), "工装夹具费");
     }
     var readonly = new ObjectMapper().readValue("""
         {"productProperty":"非标品","hasAdditionalFees":false,"expectedVersion":0,
@@ -150,17 +148,15 @@ class TechnicalDataProfileApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(frozen.getContentSnapshotJson()).contains("unitMouldFee", "0.3").doesNotContain("\"moduleType\":\"SALARY\"");
   }
 
-  @Test void incompletePersistedFeeCannotPassSubmissionAndAdminCannotAccessDraft() {
+  @Test void absentLegacyFeeJsonDoesNotBlockSubmissionAndAdminCannotAccessDraft() {
     var product = fixture();
     var saved = profiles.save(product.id(), update(false, null, null, null, 0), TECH);
-    // Simulates a pre-upgrade incomplete draft; submit must validate contents, not trust READY.
+    // Legacy PROFILE has no fee object; its required product data remains valid.
     jdbc.update("UPDATE lp_quote_tech_data_version SET product_fees_json=NULL WHERE id=?", saved.versionId());
     var latest = tasks.detail(taskId(product), TECH);
     var checked = validation.validate(taskId(product), 101L, TECH);
-    assertThat(checked.valid()).isFalse();
-    assertThat(checked.issues()).anyMatch(issue -> "hasAdditionalFees".equals(issue.field()));
-    assertThatThrownBy(() -> snapshots.prepare(taskId(product), "MISSING-" + TECH.userId(), latest.taskVersion(), latest.products().getFirst().rowVersion(), recipients.current(taskId(product)).getFirst(), TECH))
-        .hasMessageContaining("本人负责模块");
+    assertThat(checked.valid()).isTrue();
+    assertThat(checked.issues()).isEmpty();
     assertThatThrownBy(() -> validation.validate(taskId(product), 101L, ADMIN))
         .isInstanceOfSatisfying(TechnicalDataTaskException.class, error -> assertThat(error.code()).isEqualTo(TechnicalDataTaskErrorCode.FORBIDDEN));
     var adminView = tasks.detail(taskId(product), ADMIN).products().getFirst();
@@ -184,6 +180,54 @@ class TechnicalDataProfileApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(jdbc.queryForObject("SELECT product_property FROM lp_quote_tech_data_version WHERE id=?", String.class, draft.versionId())).isEqualTo("非标品");
     assertThat(jdbc.queryForObject("SELECT module_status FROM lp_quote_tech_module WHERE product_id=? AND module_type='PROFILE'", String.class, reviewed.id())).isEqualTo("FROZEN");
     assertThat(jdbc.queryForObject("SELECT content_snapshot_json FROM lp_quote_tech_submission WHERE id=?", String.class, frozen.getId())).isEqualTo(original);
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings={"EMPTY","ONE","ALL","NONE","HIGH"})
+  void optionalFourFeesPersistFreezeAndCopyWithoutLosingNulls(String scenario) throws Exception {
+    var product = fixture();
+    var request = update(null, null, null, null, 0);
+    if (scenario.equals("ONE")) request.setUnitDepreciationFee("1.234567");
+    if (scenario.equals("HIGH")) request.setUnitDepreciationFee("999999999900.999999");
+    if (scenario.equals("ALL")) {
+      request.setUnitToolingFee("1"); request.setUnitMouldFee("2");
+      request.setUnitCertificationFee("3"); request.setUnitDepreciationFee("4");
+    }
+    if (scenario.equals("NONE")) {
+      request.setUnitToolingFee("/"); request.setUnitMouldFee("0");
+      request.setUnitCertificationFee("/"); request.setUnitDepreciationFee("0.000000");
+    }
+    var saved = profiles.save(product.id(), request, TECH);
+    assertThat(saved.feeEncodingVersion()).isEqualTo(2);
+    assertThat(saved.hasAdditionalFees()).isNull();
+    if (scenario.equals("ONE")) {
+      assertThat(saved.unitDepreciationFee()).isEqualTo("1.234567");
+      assertThat(saved.unitMouldFee()).isNull();
+    }
+    if (scenario.equals("EMPTY")) assertThat(saved.unitDepreciationFee()).isNull();
+    if (scenario.equals("HIGH")) assertThat(saved.unitDepreciationFee()).isEqualTo("999999999900.999999");
+    if (scenario.equals("NONE")) assertThat(saved.unitDepreciationFee()).isEqualTo("/");
+    assertThat(tasks.detail(taskId(product),TECH).products().getFirst().profile()).isEqualTo(saved);
+    assertThat(validation.validate(taskId(product),101L,TECH).valid()).isTrue();
+    var latest = tasks.detail(taskId(product),TECH);
+    var frozen = snapshots.prepare(taskId(product), "MPP07-"+product.id(), latest.taskVersion(),
+        latest.products().getFirst().rowVersion(),recipients.current(taskId(product)).getFirst(),TECH);
+    var json = new ObjectMapper().readTree(frozen.getContentSnapshotJson());
+    var fees = json.at("/supplements/productFees");
+    assertThat(fees.path("encodingVersion").asInt()).isEqualTo(2);
+    if (scenario.equals("EMPTY") || scenario.equals("ONE")) assertThat(fees.path("unitMouldFee").isNull()).isTrue();
+    if (scenario.equals("ONE")) assertThat(fees.path("unitDepreciationFee").decimalValue()).isEqualByComparingTo("1.234567");
+    if (scenario.equals("HIGH")) {
+      assertThat(fees.path("unitDepreciationFee").isTextual()).isTrue();
+      assertThat(fees.path("unitDepreciationFee").asText()).isEqualTo("999999999900.999999");
+    }
+    String stored = jdbc.queryForObject("SELECT product_fees_json FROM lp_quote_tech_data_version WHERE id=?",String.class,saved.versionId());
+    var source = new com.sanhua.marketingcost.entity.QuoteTechDataVersion(); source.setProductFeesJson(stored);
+    var copied = new com.sanhua.marketingcost.entity.QuoteTechDataVersion();
+    TechnicalDataVersionCopies.copyModule(source, copied, "PROFILE");
+    assertThat(copied.getProductFeesJson()).isEqualTo(stored);
+    assertThatThrownBy(() -> jdbc.update("UPDATE lp_quote_tech_data_version SET product_fees_json='{}' WHERE id=?",frozen.getTechnicalVersionId()))
+        .isInstanceOf(org.springframework.dao.DataAccessException.class);
   }
 
   private Long taskId(TechnicalDataProductResponse product) {

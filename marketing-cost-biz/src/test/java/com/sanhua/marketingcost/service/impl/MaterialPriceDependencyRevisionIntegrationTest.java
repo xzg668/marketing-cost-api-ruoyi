@@ -40,6 +40,7 @@ class MaterialPriceDependencyRevisionIntegrationTest {
   static void start() {
     MYSQL.start();
     var data = new DriverManagerDataSource(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
+    new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(new org.springframework.core.io.ClassPathResource("monthly-pricing/ods-price-source-schema.sql")).execute(data);
     jdbc = new JdbcTemplate(data);
     new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
         new org.springframework.core.io.ClassPathResource("db/V332__settlement_price_versions.sql")).execute(data);
@@ -67,8 +68,17 @@ class MaterialPriceDependencyRevisionIntegrationTest {
         "lp_cost_business_rule")) jdbc.execute("CREATE TABLE " + table + " (id BIGINT PRIMARY KEY)");
     for (String table : List.of("lp_price_fixed_item", "lp_price_linked_item", "lp_price_range_item",
         "lp_price_range_factor_rule", "lp_price_settle_item")) {
-      jdbc.execute("CREATE TABLE " + table + " (id BIGINT PRIMARY KEY,material_code VARCHAR(64),fixed_price DECIMAL(24,12))");
+      jdbc.execute("CREATE TABLE " + table + " (id BIGINT PRIMARY KEY,material_code VARCHAR(64),fixed_price DECIMAL(24,12),business_unit_type VARCHAR(32))");
     }
+    jdbc.execute("ALTER TABLE lp_price_fixed_item ADD pricing_month CHAR(7), ADD source_kind VARCHAR(32)");
+    jdbc.execute("ALTER TABLE lp_price_linked_item ADD pricing_month CHAR(7), ADD org_code VARCHAR(32), ADD expression_version VARCHAR(32)");
+    jdbc.execute("ALTER TABLE lp_price_range_factor_rule ADD pricing_month CHAR(7), ADD org_code VARCHAR(32), ADD source_upload_batch_id BIGINT");
+    jdbc.execute("ALTER TABLE lp_supplier_supply_ratio ADD business_unit_type VARCHAR(32), ADD material_code VARCHAR(64)");
+    for (String table : List.of("lp_scrap_price", "lp_finance_effective_price"))
+      jdbc.execute("CREATE TABLE " + table + " (id BIGINT PRIMARY KEY,business_unit_type VARCHAR(32),material_code VARCHAR(64))");
+    jdbc.execute("ALTER TABLE lp_scrap_price ADD price_type VARCHAR(32)");
+    jdbc.execute("CREATE TABLE lp_material_scrap_ref (id BIGINT PRIMARY KEY,business_unit_type VARCHAR(32),material_code VARCHAR(64),scrap_code VARCHAR(64))");
+    jdbc.execute("CREATE TABLE lp_household_inquiry_price (id BIGINT PRIMARY KEY,business_unit_type VARCHAR(32),material_code VARCHAR(64),revision_no INT,pricing_fingerprint VARCHAR(64),record_fingerprint VARCHAR(64),current_flag TINYINT)");
     var config = new MybatisConfiguration();
     config.setMapUnderscoreToCamelCase(true);
     config.setEnvironment(new Environment("dependencies", new SpringManagedTransactionFactory(), data));
@@ -77,7 +87,7 @@ class MaterialPriceDependencyRevisionIntegrationTest {
     var transactions = new DataSourceTransactionManager(data);
     transaction = new TransactionTemplate(transactions);
     priorities = new MaterialPricePriorityService(session.getMapper(MaterialPriceTypeMapper.class), transactions);
-    revisions = new CostInputRevisionServiceImpl(jdbc);
+    revisions = new CostInputRevisionServiceImpl(jdbc, (ignoredForm, ignoredItem, ignoredMonth) -> com.sanhua.marketingcost.service.QuotationMonthlyPriceInputs.Scope.unprepared());
   }
 
   @AfterAll static void stop() { MYSQL.stop(); }
@@ -135,10 +145,23 @@ class MaterialPriceDependencyRevisionIntegrationTest {
   @Test
   void componentSourcePriceChangeAlsoInvalidatesParent() {
     prepare(1L, "2026-10", "210", "{\"components\":[{\"materialCode\":\"CHILD\"}]}");
-    jdbc.update("INSERT INTO lp_price_fixed_item VALUES (1,'CHILD',10)");
+    jdbc.update("INSERT INTO lp_price_fixed_item(id,material_code,fixed_price,business_unit_type) VALUES (1,'CHILD',10,'COMMERCIAL')");
     String before = revisions.currentRevision(form(), item(1L), "2026-10");
     jdbc.update("UPDATE lp_price_fixed_item SET fixed_price=20 WHERE id=1");
     assertThat(revisions.currentRevision(form(), item(1L), "2026-10")).isNotEqualTo(before);
+  }
+
+  @Test void latestOdsPartitionAndScopedPriceChangesInvalidateUnadoptedInputs() {
+    String code="ODS-REV-"+java.util.UUID.randomUUID();
+    prepare(1L,"2026-10","210","{\"components\":[{\"materialCode\":\""+code+"\"}]}");
+    jdbc.update("INSERT INTO ods_sy_v_mm_material_order_price_cg05_df(company_name,material_code,price,dt) VALUES('浙江三花商用制冷有限公司',?,10,'2030-01-01')",code);
+    String before=revisions.currentRevision(form(),item(1L),"2026-10");
+    jdbc.update("UPDATE ods_sy_v_mm_material_order_price_cg05_df SET price=20 WHERE material_code=?",code);
+    String changed=revisions.currentRevision(form(),item(1L),"2026-10");assertThat(changed).isNotEqualTo(before);
+    jdbc.update("INSERT INTO ods_sy_v_mm_material_order_price_cg05_df(company_name,material_code,price,dt) VALUES('浙江三花商用制冷有限公司','OTHER-CODE',30,'2030-01-02')");
+    String partitionChanged=revisions.currentRevision(form(),item(1L),"2026-10");assertThat(partitionChanged).isNotEqualTo(changed);
+    jdbc.update("UPDATE ods_sy_v_mm_material_order_price_cg05_df SET price=99 WHERE material_code=?",code);
+    assertThat(revisions.currentRevision(form(),item(1L),"2026-10")).isEqualTo(partitionChanged);
   }
 
   private void prepare(Long item, String month, String org, String snapshot) {

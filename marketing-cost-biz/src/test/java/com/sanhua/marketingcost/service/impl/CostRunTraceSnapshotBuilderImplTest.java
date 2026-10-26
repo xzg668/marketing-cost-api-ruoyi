@@ -406,6 +406,35 @@ class CostRunTraceSnapshotBuilderImplTest {
     }
   }
 
+  @Test
+  void optionalProductFeeTraceKeepsExactDecimalAndEffectiveProfileEvidence() throws Exception {
+    var partMapper = mock(CostRunPartItemMapper.class);
+    var costMapper = mock(CostRunCostItemMapper.class);
+    var json = new ObjectMapper();
+    var builder = new CostRunTraceSnapshotBuilderImpl(partMapper, costMapper,
+        mock(PricePrepareItemMapper.class), mock(MakePartPriceCalcRowMapper.class),
+        mock(PriceLinkedCalcItemMapper.class), mock(PriceLinkedItemMapper.class),
+        mock(PriceFixedItemMapper.class), mock(PriceRangeItemMapper.class), json);
+    when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of());
+    var fee = sourcedCost(101L, 1, "OTHER_EXP_TECH_DEPRECIATION", "折旧费", null, null,
+        "999999999999.999999", "lp_quote_tech_data_version", 164L, "有效 PROFILE");
+    when(costMapper.selectList(any(Wrapper.class))).thenReturn(List.of(fee,
+        cost(102L, 2, "TOTAL", "不含税总成本", null, null, "999999999999.999999")));
+    var rows = builder.build(version());
+    var trace = rows.stream().filter(row -> "OTHER_EXP_TECH_DEPRECIATION".equals(row.getCostCode())).findFirst().orElseThrow();
+    assertThat(trace.getSourceType()).isEqualTo("QUOTE_TECH_EFFECTIVE_VERSION");
+    assertThat(trace.getSourceRefId()).isEqualTo(164L);
+    assertThat(trace.getFormulaSnapshotJson()).contains("effectiveProfile.unitFee", "不乘除数量或属性系数");
+    for (String text : List.of(trace.getVariablesJson(), trace.getSourceSnapshotJson())) {
+      assertThat(json.readTree(text).path("amount").isTextual()).isTrue();
+      assertThat(json.readTree(text).path("amount").asText()).isEqualTo("999999999999.999999");
+      assertThat(json.readTree(text).path("sourceDescription").asText()).isEqualTo("本次有效 PROFILE 单件费用");
+    }
+    assertThat(json.readTree(trace.getStepsJson()).get(0).path("amount").asText()).isEqualTo("999999999999.999999");
+    var total = rows.stream().filter(row -> "TOTAL".equals(row.getCostCode())).findFirst().orElseThrow();
+    assertThat(json.readTree(total.getChildrenJson()).get(0).path("amount").isTextual()).isTrue();
+  }
+
   private QuoteCostRunVersion version() {
     QuoteCostRunVersion version = new QuoteCostRunVersion();
     version.setId(1001L);

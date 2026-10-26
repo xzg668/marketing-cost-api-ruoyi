@@ -72,6 +72,11 @@ public class BomSettlementRowBuildEngine {
   }
 
   public BomSettlementRowBuildResult build(BomSettlementBuildRequest request) {
+    return build(request, Set.of());
+  }
+
+  /** Household occurrences are selected from the original tree before ordinary structural rules. */
+  public BomSettlementRowBuildResult build(BomSettlementBuildRequest request, Set<String> householdPaths) {
     List<String> warnings = new ArrayList<>();
     if (request == null) {
       warnings.add("REQUEST_NULL: BOM 结算行生成请求为空");
@@ -107,6 +112,13 @@ public class BomSettlementRowBuildEngine {
     Set<String> emittedProcessFeePaths = new HashSet<>();
 
     for (BomSettlementNode node : nodes) {
+      if (householdPaths.contains(com.sanhua.marketingcost.service.pricing.monthly.MonthlyBomPricingScope.pathKey(node.path()))) {
+        BomCostingRow row = toCostingRow(request, node, null, "HOUSEHOLD_INQUIRY", false);
+        normalRows.add(row);
+        addSourceRefCandidate(node, row.getPath(), sourceRefs);
+        stoppedPaths.add(node.path());
+        continue;
+      }
       if (isUnderStoppedSubtree(node.path(), stoppedPaths) || consumedLeafPaths.contains(node.path())) {
         continue;
       }
@@ -144,6 +156,13 @@ public class BomSettlementRowBuildEngine {
       // 排除优先于上卷、包装停止和附加行，避免同一节点同时命中时被低序号规则抢先输出。
       if (exclusionHit.isPresent() && shouldExcludeNode(node, exclusionHit.get())) {
         stoppedPaths.add(node.path());
+        continue;
+      }
+
+      if (isPackageComponentParent(node) && !children.isEmpty()
+          && children.stream().allMatch(child -> householdPaths.contains(
+              com.sanhua.marketingcost.service.pricing.monthly.MonthlyBomPricingScope.pathKey(child.path())))) {
+        // Every pricing child is independent household scope; this structure has no ordinary input.
         continue;
       }
 
@@ -901,7 +920,8 @@ public class BomSettlementRowBuildEngine {
     return effectiveTo == null || !asOfDate.isAfter(effectiveTo);
   }
 
-  private static boolean isPackageComponentParent(BomSettlementNode node) {
+  /** Existing package calculator consumes the direct children of these structural nodes. */
+  public static boolean isPackageComponentParent(BomSettlementNode node) {
     return isVirtualShape(node)
         && StringUtils.hasText(node.materialCategoryCode())
         && node.materialCategoryCode().startsWith(CATEGORY_PACKAGE_COMPONENT_PREFIX);

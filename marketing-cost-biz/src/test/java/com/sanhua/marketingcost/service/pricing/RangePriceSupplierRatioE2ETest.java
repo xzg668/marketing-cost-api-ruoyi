@@ -559,10 +559,10 @@ class RangePriceSupplierRatioE2ETest extends BomMapperTestBase {
     when(partMapper.selectBaseByQuoteScope(
             eq("OA-RPI1-13"), eq(1L), eq("PRODUCT-RPI1-13"), eq("2025-11")))
         .thenAnswer(ignored -> costInputItems());
-    when(router.listCandidates(eq(MATERIAL_A), eq("2025-11"), eq(PRICE_DATE), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
-        .thenReturn(List.of(rangeRoute(MATERIAL_A)));
-    when(router.listCandidates(eq("OTHER-MATERIAL"), eq("2025-11"), eq(PRICE_DATE), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
-        .thenReturn(List.of(fixedRoute("OTHER-MATERIAL")));
+    when(router.listCandidatesBatch(org.mockito.ArgumentMatchers.anyCollection(),
+            eq("2025-11"), eq(PRICE_DATE), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
+        .thenReturn(java.util.Map.of(MATERIAL_A, List.of(rangeRoute(MATERIAL_A)),
+            "OTHER-MATERIAL", List.of(fixedRoute("OTHER-MATERIAL"))));
     PriceResolver fixedResolver = new PriceResolver() {
       @Override
       public PriceTypeEnum priceType() {

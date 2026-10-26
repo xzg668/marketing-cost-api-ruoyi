@@ -65,7 +65,7 @@ public class TechnicalDataSubmissionRemark {
     List<String> sections = new ArrayList<>();
     for (TechnicalDataModuleType type : scope) {
       String value = brief ? brief(type, details, supplements) : switch (type) {
-        case PROFILE -> profile(details, object(supplements, "productFees")) + plateMaterial(supplements);
+        case PROFILE -> profile(details, optionalFees(supplements)) + plateMaterial(supplements);
         case DRAWING_BOM -> drawing(object(supplements, "drawingBom"));
         case MANUFACTURING -> manufacturing(object(supplements, "manufacturing"));
         case PACKAGE -> packaging(details, object(supplements, "packaging"));
@@ -87,10 +87,11 @@ public class TechnicalDataSubmissionRemark {
   private String brief(TechnicalDataModuleType type, JsonNode details, JsonNode supplements) {
     return switch (type) {
       case PROFILE -> {
-        var fees = object(supplements, "productFees");
+        var fees = optionalFees(supplements);
         yield "属性" + requiredText(details, "productProperty")
-            + "，工装" + number(fees, "unitToolingFee") + "/模具" + number(fees, "unitMouldFee")
-            + "/认证" + number(fees, "unitCertificationFee") + "元/件" + plateMaterial(supplements);
+            + "，工装" + optionalFee(fees, "unitToolingFee") + "/模具" + optionalFee(fees, "unitMouldFee")
+            + "/认证" + optionalFee(fees, "unitCertificationFee")
+            + (fees.hasNonNull("unitDepreciationFee") ? "/折旧" + optionalFee(fees, "unitDepreciationFee") : "") + "元/件" + plateMaterial(supplements);
       }
       case DRAWING_BOM -> {
         var drawing = object(supplements, "drawingBom");
@@ -161,13 +162,11 @@ public class TechnicalDataSubmissionRemark {
   private String profile(JsonNode details, JsonNode fees) {
     List<String> fields = new ArrayList<>();
     fields.add("属性" + requiredText(details, "productProperty"));
-    JsonNode included = fees.path("includesNewToolingMouldCertificationFee");
-    if (!included.isBoolean()) throw invalid("产品费用选项缺失");
-    fields.add("新增工装模具认证费" + (included.asBoolean() ? "是" : "否"));
-    String unit = currency(fees) + "/件";
-    fields.add("工装" + number(fees, "unitToolingFee") + unit);
-    fields.add("模具" + number(fees, "unitMouldFee") + unit);
-    fields.add("认证" + number(fees, "unitCertificationFee") + unit);
+    String unit = (fees.isNull() || fees.isMissingNode() ? "元" : currency(fees)) + "/件";
+    fields.add("工装" + optionalFee(fees, "unitToolingFee") + unit);
+    fields.add("模具" + optionalFee(fees, "unitMouldFee") + unit);
+    fields.add("认证" + optionalFee(fees, "unitCertificationFee") + unit);
+    fields.add("折旧" + optionalFee(fees, "unitDepreciationFee") + unit);
     return join(fields);
   }
 
@@ -386,6 +385,23 @@ public class TechnicalDataSubmissionRemark {
 
   private static String number(JsonNode row, String field) {
     return decimal(row, field).stripTrailingZeros().toPlainString();
+  }
+
+  private static JsonNode optionalFees(JsonNode supplements) {
+    var fees = supplements.path("productFees");
+    if (!fees.isNull() && !fees.isMissingNode() && !fees.isObject()) throw invalid("产品费用格式错误");
+    return fees;
+  }
+
+  private static String optionalFee(JsonNode fees, String field) {
+    JsonNode value = fees.path(field);
+    if (value.isMissingNode() || value.isNull()) return "未填";
+    if (fees.path("encodingVersion").asInt(1) == 2 && value.isTextual()) {
+      var amount = com.sanhua.marketingcost.service.costing.ProductFeeContract.parseAmount(value.textValue());
+      if (amount == null) throw invalid(field + "数值缺失或格式错误");
+      return amount.toPlainString();
+    }
+    return number(fees, field);
   }
 
   private static String currency(JsonNode row) {

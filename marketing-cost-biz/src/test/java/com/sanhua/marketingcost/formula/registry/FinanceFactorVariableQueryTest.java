@@ -165,6 +165,34 @@ class FinanceFactorVariableQueryTest {
     assertThat(query.queryName("Cu", context)).contains(new BigDecimal("90.1234567890123456"));
   }
 
+  @Test
+  void conflictingBindingFieldsKeepFactorCodePriority() {
+    assertThat(query.query(
+            Map.of("factorCode", "Cu", "shortName", "1#Zn", "priceSource", "平均价"), context)
+        .orElseThrow().price()).isEqualByComparingTo("90.1234567890123456");
+  }
+
+  @Test
+  void legacyIdentityCanResolveItsOwnSourceAndShortNameWithoutStoredCanonicalKey() {
+    var identity = new FactorIdentity();
+    identity.setId(77L);
+    identity.setBusinessUnitType("COMMERCIAL");
+    identity.setStatus("ACTIVE");
+    identity.setShortName("Cu");
+    identity.setPriceSource("平均价");
+    when(identities.selectById(77L)).thenReturn(identity);
+    assertThat(query.query(Map.of("factorIdentityId", 77L), context).orElseThrow().price())
+        .isEqualByComparingTo("90.1234567890123456");
+  }
+
+  @Test
+  void fractionalIdentityCannotReadAnotherIntegerIdentity() {
+    assertThatThrownBy(() -> query.query(
+        Map.of("factorIdentityId", new BigDecimal("99.9")), context))
+        .isInstanceOf(NumberFormatException.class);
+    verify(identities, never()).selectById(any(java.io.Serializable.class));
+  }
+
   private FactorPriceSnapshot.FactorValue factor(String price) {
     return new FactorPriceSnapshot.FactorValue(
         1L,

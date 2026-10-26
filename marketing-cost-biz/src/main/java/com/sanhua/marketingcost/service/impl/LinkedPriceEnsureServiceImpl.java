@@ -689,27 +689,8 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
 
   /** 已固定范围月份后，同一完整业务身份取最新修订；历史导入行按导入时间排序。 */
   private List<PriceLinkedItem> currentSupplierFormulas(List<PriceLinkedItem> candidates) {
-    if (candidates == null || candidates.isEmpty()) {
-      return List.of();
-    }
-    Map<List<String>, PriceLinkedItem> latestByIdentity = new LinkedHashMap<>();
-    for (PriceLinkedItem candidate : candidates) {
-      List<String> identity =
-          StringUtils.hasText(candidate.getRuleIdentityKey())
-              ? List.of("PUBLISHED", candidate.getRuleIdentityKey())
-              : List.of(
-                  "LEGACY",
-                  linkedSupplierKey(candidate),
-                  text(candidate.getSpecModel()),
-                  text(candidate.getUnit()));
-      PriceLinkedItem current = latestByIdentity.get(identity);
-      if (current == null || importedAfter(candidate, current)) {
-        latestByIdentity.put(identity, candidate);
-      }
-    }
-    return latestByIdentity.values().stream()
-        .sorted((left, right) -> compareImportVersion(right, left))
-        .toList();
+    return candidates == null ? List.of()
+        : com.sanhua.marketingcost.service.pricing.LinkedPriceRuleVersions.current(candidates);
   }
 
   private static String text(String value) {
@@ -727,31 +708,6 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
         SupplierSupplyRatioNormalizeUtils.normalizeKeyPart(
             item == null ? null : item.getSupplierName());
     return StringUtils.hasText(supplierName) ? "NAME:" + supplierName : "NO_SUPPLIER";
-  }
-
-  private boolean importedAfter(PriceLinkedItem candidate, PriceLinkedItem current) {
-    return compareImportVersion(candidate, current) > 0;
-  }
-
-  private int compareImportVersion(PriceLinkedItem left, PriceLinkedItem right) {
-    if (left != null
-        && right != null
-        && left.getRuleRevision() != null
-        && right.getRuleRevision() != null) {
-      int revisionOrder = Integer.compare(left.getRuleRevision(), right.getRuleRevision());
-      if (revisionOrder != 0) return revisionOrder;
-    }
-    LocalDateTime leftCreatedAt = left == null ? null : left.getCreatedAt();
-    LocalDateTime rightCreatedAt = right == null ? null : right.getCreatedAt();
-    int createdAtCompare =
-        java.util.Comparator.nullsFirst(LocalDateTime::compareTo)
-            .compare(leftCreatedAt, rightCreatedAt);
-    if (createdAtCompare != 0) {
-      return createdAtCompare;
-    }
-    Long leftId = left == null ? null : left.getId();
-    Long rightId = right == null ? null : right.getId();
-    return java.util.Comparator.nullsFirst(Long::compareTo).compare(leftId, rightId);
   }
 
   private Map<String, BomSnapshot> fetchBomSnapshots(

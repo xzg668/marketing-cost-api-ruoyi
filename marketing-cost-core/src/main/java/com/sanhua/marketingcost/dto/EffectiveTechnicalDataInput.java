@@ -1,6 +1,8 @@
 package com.sanhua.marketingcost.dto;
 
 import java.math.BigDecimal;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.sanhua.marketingcost.dto.costing.ProductFeeAmountSerializer;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -92,13 +94,17 @@ public record EffectiveTechnicalDataInput(
   public record MaterialLine(String moduleType, String itemKey, String materialNo, String name,
       BigDecimal quantityPerProduct, String unit, Long versionId) {}
 
-  /** 已核对的三项单件金额；0 表示明确无费用，不按年用量再分摊。 */
+  /** 最终有效 PROFILE 的四项可空单件金额；编码版本保留历史零值含义。 */
   public record ProductFees(
-      boolean hasAdditionalFees,
-      BigDecimal unitToolingFee,
-      BigDecimal unitMouldFee,
-      BigDecimal unitCertificationFee,
-      String currency) {}
+      Boolean hasAdditionalFees,
+      @JsonSerialize(using = ProductFeeAmountSerializer.class) BigDecimal unitToolingFee,
+      @JsonSerialize(using = ProductFeeAmountSerializer.class) BigDecimal unitMouldFee,
+      @JsonSerialize(using = ProductFeeAmountSerializer.class) BigDecimal unitCertificationFee,
+      String currency,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+      @JsonSerialize(using = ProductFeeAmountSerializer.class) BigDecimal unitDepreciationFee,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+      Integer encodingVersion) implements ProductFeeAmountSerializer.VersionedFees {}
 
   public record PackageLine(
       Long id,

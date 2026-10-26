@@ -91,6 +91,7 @@ public class QuoteCostRunVersionServiceImpl implements QuoteCostRunVersionServic
     version.setResultPeriod(resultPeriodValue);
     version.setPricePrepareNo(trimToNull(pricePrepareNo));
     version.setAlgorithmVersion(algorithmVersionProvider.currentVersion());
+    version.setFeePolicyVersion(com.sanhua.marketingcost.service.costing.ProductFeeContract.POLICY_VERSION);
     version.setStatus(status);
     version.setPartItemCount(0);
     version.setCostItemCount(0);

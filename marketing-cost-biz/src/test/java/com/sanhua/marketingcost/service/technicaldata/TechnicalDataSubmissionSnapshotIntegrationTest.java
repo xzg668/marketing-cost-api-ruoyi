@@ -198,6 +198,9 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
 
   @Test void returnedCopyRetainsAllContentButHasIndependentDraftAndFingerprint() {
     var fixture = fixture();
+    var profileDraft = versionMapper.selectById(fixture.versionId());
+    profileDraft.setProductFeesJson(codec.productFeesJson(TechnicalDataProductFeeRules.parse(null,null,"2","/","1.234567")));
+    versionMapper.updateById(profileDraft);
     var prepared = snapshots.prepare(fixture.taskId(), UUID.randomUUID().toString(), 0, 0, recipients.current(fixture.taskId()).getFirst(), TECHNICIAN);
     var frozen = versionMapper.selectById(prepared.getTechnicalVersionId());
     // 这里只构造已明确送达并退回的版本状态，OA 事件处理在 TW-04 验收。
@@ -211,6 +214,10 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
     assertThat(copied.getContentFingerprint()).isNull();
     assertThat(codec.supplementContent(copied).solder()).isEqualTo(codec.supplementContent(returned).solder());
     assertThat(copied.getNewProductFlag()).isEqualTo(returned.getNewProductFlag());
+    assertThat(copied.getProductFeesJson()).isEqualTo(returned.getProductFeesJson());
+    assertThat(codec.productFees(copied).unitDepreciationFee()).isEqualByComparingTo("1.234567");
+    assertThat(codec.productFees(copied).unitToolingFee()).isNull();
+    assertThat(codec.productFees(copied).encodingVersion()).isEqualTo(2);
     copied.setSolderItemsJson("{\"items\":[{\"itemKey\":\"S-1\",\"materialNo\":\"311990182\",\"drawingNo\":\"D-1\",\"quantityPerProduct\":0.004,\"unit\":\"kg\"}]}");
     persistence.updateDraft(copied, copied.getRowVersion());
     assertThat(versionMapper.selectById(returned.getId()).getSolderItemsJson()).isEqualTo(returned.getSolderItemsJson());
@@ -221,6 +228,7 @@ class TechnicalDataSubmissionSnapshotIntegrationTest extends BomMapperTestBase {
     var resubmitted = snapshots.prepare(fixture.taskId(), "RESUBMIT-" + fixture.taskId(), taskVersion, product.getRowVersion(), recipients.current(fixture.taskId()).getFirst(), TECHNICIAN);
     assertThat(resubmitted.getSubmissionRound()).isEqualTo(2);
     assertThat(resubmitted.getTechnicalVersionId()).isNotEqualTo(returned.getId());
+    assertThat(versionMapper.selectById(resubmitted.getTechnicalVersionId()).getProductFeesJson()).isEqualTo(returned.getProductFeesJson());
   }
 
   @Test void unknownSourcesBlockFreezeWithoutLosingDraft() {

@@ -3,7 +3,6 @@ package com.sanhua.marketingcost.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -13,7 +12,6 @@ import static org.mockito.Mockito.when;
 
 import com.sanhua.marketingcost.dto.PackageSnapshotRequest;
 import com.sanhua.marketingcost.dto.PackageSnapshotResult;
-import com.sanhua.marketingcost.dto.PriceTypeRoute;
 import com.sanhua.marketingcost.dto.priceprepare.PricePreparePlanItem;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePriceTypeRecognitionResponse;
 import com.sanhua.marketingcost.entity.BomCostingRow;
@@ -33,7 +31,10 @@ import com.sanhua.marketingcost.mapper.MaterialMasterMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import com.sanhua.marketingcost.mapper.OaFormMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
-import com.sanhua.marketingcost.service.MaterialPriceRouterService;
+import com.sanhua.marketingcost.service.pricing.monthly.*;
+import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
+import java.util.Map;
+import java.util.Set;
 import com.sanhua.marketingcost.service.MakePartPriceGenerationService;
 import com.sanhua.marketingcost.service.MakePartScrapMappingService;
 import com.sanhua.marketingcost.service.PackageComponentSnapshotService;
@@ -42,7 +43,6 @@ import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -56,11 +56,15 @@ class QuotePriceTypeRecognitionServiceImplTest {
   private BomCostingRowMapper bomCostingRowMapper;
   private BomCostingRowSubRefMapper bomCostingRowSubRefMapper;
   private MaterialMasterMapper materialMasterMapper;
-  private MaterialPriceRouterService materialPriceRouterService;
+  private MonthlyQuotationSessions monthlySessions;
+  private QuotationPriceSession session;
+  private MaterialMasterRawMapper rawMaterials;
+  private final Map<String, String> priceKinds = new java.util.HashMap<>();
   private PricePrepareItemClassifier itemClassifier;
   private PackageComponentSnapshotService packageSnapshotService;
   private MakePartPriceGenerationService makePartPriceGenerationService;
   private MakePartScrapMappingService makePartScrapMappingService;
+  private com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService costingBoms;
   private QuotePriceTypeRecognitionServiceImpl service;
 
   @BeforeEach
@@ -71,18 +75,50 @@ class QuotePriceTypeRecognitionServiceImplTest {
     bomCostingRowMapper = mock(BomCostingRowMapper.class);
     bomCostingRowSubRefMapper = mock(BomCostingRowSubRefMapper.class);
     materialMasterMapper = mock(MaterialMasterMapper.class);
-    materialPriceRouterService = mock(MaterialPriceRouterService.class);
-    when(materialPriceRouterService.listCandidatesBatch(any(), any(), any(), any(), any())).thenAnswer(call -> {
-      var result = new java.util.LinkedHashMap<String, List<PriceTypeRoute>>();
-      for (String code : (java.util.Collection<String>) call.getArgument(0))
-        result.put(code, materialPriceRouterService.resolve(code, call.getArgument(1), call.getArgument(2), call.getArgument(3), call.getArgument(4)).stream().toList());
-      return result;
+    monthlySessions = mock(MonthlyQuotationSessions.class, org.mockito.Mockito.withSettings().mockMaker(org.mockito.MockMakers.INLINE));
+    session = mock(QuotationPriceSession.class);
+    rawMaterials = mock(MaterialMasterRawMapper.class);
+    priceKinds.clear();
+    when(monthlySessions.open(anyString(), anyString(), anyString(), any(), any())).thenReturn(session);
+    when(session.conditions(anyString())).thenReturn(NonCuConditions.empty());
+    when(session.read(any())).thenAnswer(call -> {
+      var values = new java.util.LinkedHashMap<QuotationPriceSession.Input, QuotationPriceSession.Value>();
+      var problems = new java.util.LinkedHashMap<QuotationPriceSession.Input, MonthlyMaterialPrices.Problem>();
+      for (var input : (java.util.Collection<QuotationPriceSession.Input>) call.getArgument(0)) {
+        String kind = priceKinds.get(input.materialCode());
+        if (kind == null) {
+          problems.put(input, new MonthlyMaterialPrices.Problem(MonthlyAdoptionRetryPolicy.Failure.MISSING, "没有适用价格"));
+          continue;
+        }
+        var request = new MonthlyPriceRequest(new MonthlyPriceFamilyKey(java.time.YearMonth.parse("2026-06"),
+            "COMMERCIAL", input.materialCode(), input.specification(), input.unit(), "CNY", TaxBasis.EXCLUDED, null),
+            input.organization(), input.conditions(), input.basisQuantity());
+        var evidence = MonthlyAdoptionPlan.SourceEvidence.ofJson("{\"sourceKind\":\"" + kind + "\"}");
+        var fact = "HOUSEHOLD_INQUIRY".equals(kind)
+            ? MonthlyAdoptionPlan.PriceFact.household(BigDecimal.ONE, BigDecimal.ZERO, evidence)
+            : MonthlyAdoptionPlan.PriceFact.normal(BigDecimal.ONE, evidence, Set.of());
+        var selection = new MonthlyAdoptionPlan.Selection(1L, new MonthlyPriceCoverage(Set.of(input.organization()),
+            QuantityInterval.all(), ConditionDomain.any()), fact);
+        values.put(input, new QuotationPriceSession.Value(request, selection, BigDecimal.ONE, BigDecimal.ONE));
+      }
+      return new QuotationPriceSession.Read(values, problems);
+    });
+    when(rawMaterials.selectByLatestBatchAndCodes(any(), any(), any())).thenAnswer(call -> {
+      return ((java.util.Collection<String>) call.getArgument(0)).stream().map(code -> {
+        var material = new com.sanhua.marketingcost.entity.MaterialMasterRaw();
+        material.setMaterialCode(code); material.setUnit("件"); return material;
+      }).toList();
     });
 
     itemClassifier = mock(PricePrepareItemClassifier.class);
     packageSnapshotService = mock(PackageComponentSnapshotService.class);
     makePartPriceGenerationService = mock(MakePartPriceGenerationService.class);
     makePartScrapMappingService = mock(MakePartScrapMappingService.class);
+    costingBoms = mock(com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService.class);
+    when(costingBoms.previewFromEffectiveBom(any(), any())).thenAnswer(call ->
+        new com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService.Preview(
+            bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"),
+            new MonthlyBomPricingScope.Scope(List.of(), List.of(), List.of(), Set.of())));
     service =
         new QuotePriceTypeRecognitionServiceImpl(
             oaFormMapper,
@@ -91,11 +127,11 @@ class QuotePriceTypeRecognitionServiceImplTest {
             bomCostingRowMapper,
             bomCostingRowSubRefMapper,
             materialMasterMapper,
-            materialPriceRouterService,
+            monthlySessions, rawMaterials, new MonthlyPriceDocumentCodec(new com.fasterxml.jackson.databind.ObjectMapper()),
             itemClassifier,
             packageSnapshotService,
             makePartPriceGenerationService,
-            makePartScrapMappingService);
+            makePartScrapMappingService, costingBoms);
   }
 
   @Test
@@ -125,6 +161,28 @@ class QuotePriceTypeRecognitionServiceImplTest {
   }
 
   @Test
+  void newlyApplicableHouseholdScopeReplacesTheOldPackagingViewWithoutWritingIt() {
+    mockScope();
+    var old = row(301L, "MAT-HH"); old.setPath("/FIN-001/MAT-HH/");
+    old.setSettlementRowType("PACKAGE_PARENT");
+    when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
+        .thenReturn(List.of(old));
+    var current = row(null, "MAT-HH"); current.setPath(old.getPath());
+    current.setSettlementRowType("HOUSEHOLD_INQUIRY");
+    when(costingBoms.previewFromEffectiveBom(10L, "BOM-BUILD-001")).thenReturn(
+        new com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService.Preview(List.of(current),
+            new MonthlyBomPricingScope.Scope(List.of(), List.of(), List.of(), Set.of())));
+    priceKinds.put("MAT-HH", "HOUSEHOLD_INQUIRY");
+    var recognized = service.getRecognition("OA-001", 10L, null).getRows().getFirst();
+    assertThat(recognized.getPriceType()).isEqualTo("家用部件询价");
+    assertThat(recognized.getChildren()).isEmpty();
+    assertThat(current.getId()).isNull();
+    assertThat(old.getSettlementRowType()).isEqualTo("PACKAGE_PARENT");
+    verify(packageSnapshotService, never()).previewSnapshot(any());
+    verify(costingBoms, never()).buildFromEffectiveBom(any(), any());
+  }
+
+  @Test
   void normalRowsShowConfiguredAndMissingType() {
     mockScope();
     BomCostingRow ok = row(301L, "MAT-OK");
@@ -132,10 +190,8 @@ class QuotePriceTypeRecognitionServiceImplTest {
     when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
         .thenReturn(List.of(ok, missing));
     when(itemClassifier.classify(any())).thenReturn(List.of(normalPlan(ok), normalPlan(missing)));
-    when(materialPriceRouterService.resolve(eq("MAT-OK"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
-        .thenReturn(Optional.of(route(PriceTypeEnum.FIXED)));
-    when(materialPriceRouterService.resolve(eq("MAT-MISS"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
-        .thenReturn(Optional.empty());
+    priceKinds.put("MAT-OK", "PURCHASE_FIXED");
+
 
     QuotePriceTypeRecognitionResponse response =
         service.getRecognition("OA-001", 10L, null);
@@ -156,9 +212,7 @@ class QuotePriceTypeRecognitionServiceImplTest {
     when(bomCostingRowMapper.selectQuoteCostingSnapshot("OA-001", 10L, "FIN-001", "2026-06"))
         .thenReturn(List.of(row));
     when(itemClassifier.classify(any())).thenReturn(List.of(normalPlan(row)));
-    var candidate = new PriceTypeRoute("MAT-SETTLE", null, bucket, 1, null, null, "SYSTEM", source);
-    when(materialPriceRouterService.resolve(eq("MAT-SETTLE"), eq("2026-06"), any(LocalDate.class), any(), any()))
-        .thenReturn(Optional.of(candidate));
+    priceKinds.put("MAT-SETTLE", source);
     var recognized = service.getRecognition("OA-001", 10L, null).getRows().getFirst();
     assertThat(recognized.getTypeStatus()).isEqualTo("RECOGNIZED");
     assertThat(recognized.getPriceType()).isEqualTo(label);
@@ -179,9 +233,7 @@ class QuotePriceTypeRecognitionServiceImplTest {
     master.setMaterialCode("205686659");
     master.setMaterialName("接管");
     when(materialMasterMapper.selectList(any())).thenReturn(List.of(master));
-    when(materialPriceRouterService.resolve(
-            eq("205686659"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
-        .thenReturn(Optional.of(route(PriceTypeEnum.FIXED)));
+    priceKinds.put("205686659", "PURCHASE_FIXED");
 
     QuotePriceTypeRecognitionResponse response =
         service.getRecognition("OA-001", 10L, null);
@@ -199,10 +251,8 @@ class QuotePriceTypeRecognitionServiceImplTest {
     when(makePartPriceGenerationService.previewStructureByOa(
             "OA-001", "COMMERCIAL", "2026-06"))
         .thenReturn(List.of(makeCalcRow()));
-    when(materialPriceRouterService.resolve(eq("RAW-1"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
-        .thenReturn(Optional.empty());
-    when(materialPriceRouterService.resolve(eq("SCRAP-1"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
-        .thenReturn(Optional.of(route(PriceTypeEnum.LINKED)));
+
+    priceKinds.put("SCRAP-1", "LINKED");
 
     QuotePriceTypeRecognitionResponse response =
         service.getRecognition("OA-001", 10L, null);
@@ -234,15 +284,9 @@ class QuotePriceTypeRecognitionServiceImplTest {
         .thenReturn(List.of(rollupRef(305L, "301220046", "软磁不锈钢棒", "0.00786000")));
     when(makePartScrapMappingService.listMappings("301220046", "COMMERCIAL"))
         .thenReturn(List.of(scrapRef("301220046", "301990752", "废软磁不锈铁沫")));
-    when(materialPriceRouterService.resolve(
-            eq("301220046"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
-        .thenReturn(Optional.empty());
-    when(materialPriceRouterService.resolve(
-            eq("301990752"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
-        .thenReturn(Optional.of(route(PriceTypeEnum.LINKED)));
-    when(materialPriceRouterService.resolve(
-            eq("203240247"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
-        .thenReturn(Optional.of(route(PriceTypeEnum.FIXED)));
+
+    priceKinds.put("301990752", "LINKED");
+    priceKinds.put("203240247", "PURCHASE_FIXED");
 
     QuotePriceTypeRecognitionResponse response =
         service.getRecognition("OA-001", 10L, null);
@@ -276,9 +320,7 @@ class QuotePriceTypeRecognitionServiceImplTest {
                 rollupRef(307L, "301260124", "不锈钢板", "0.0053", "0.0106")));
     when(makePartScrapMappingService.listMappings("301260124", "COMMERCIAL"))
         .thenReturn(List.of());
-    when(materialPriceRouterService.resolve(
-            eq("301260124"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
-        .thenReturn(Optional.of(route(PriceTypeEnum.LINKED)));
+    priceKinds.put("301260124", "LINKED");
 
     QuotePriceTypeRecognitionResponse response =
         service.getRecognition("OA-001", 10L, null);
@@ -299,8 +341,7 @@ class QuotePriceTypeRecognitionServiceImplTest {
         .thenReturn(List.of(parent));
     when(itemClassifier.classify(any())).thenReturn(List.of(packagePlan(parent)));
     when(packageSnapshotService.previewSnapshot(any())).thenReturn(packageSnapshot());
-    when(materialPriceRouterService.resolve(eq("PKG-CHILD-1"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
-        .thenReturn(Optional.empty());
+
 
     QuotePriceTypeRecognitionResponse response =
         service.getRecognition("OA-001", 10L, null);
@@ -332,8 +373,7 @@ class QuotePriceTypeRecognitionServiceImplTest {
         .thenReturn(List.of(parent));
     when(itemClassifier.classify(any())).thenReturn(List.of(packagePlan(parent)));
     when(packageSnapshotService.previewSnapshot(any())).thenReturn(packageSnapshot());
-    when(materialPriceRouterService.resolve(eq("PKG-CHILD-1"), eq("2026-06"), any(LocalDate.class), org.mockito.Mockito.any(), org.mockito.Mockito.any()))
-        .thenReturn(Optional.empty());
+
 
     service.getRecognition("OA-001", 10L, null);
 
@@ -421,6 +461,8 @@ class QuotePriceTypeRecognitionServiceImplTest {
     row.setMaterialCode(materialCode);
     row.setMaterialName(materialCode + " name");
     row.setQtyPerParent(BigDecimal.ONE);
+    row.setQtyPerTop(BigDecimal.ONE);
+    row.setUnit("件");
     row.setPeriodMonth("2026-06");
     row.setLevel(1);
     row.setPriceOrgCode("210");
@@ -448,11 +490,6 @@ class QuotePriceTypeRecognitionServiceImplTest {
     plan.setMaterialName(row.getMaterialName());
     plan.setItemType(itemType);
     return plan;
-  }
-
-  private PriceTypeRoute route(PriceTypeEnum type) {
-    return new PriceTypeRoute(
-        "MAT", null, type, 1, LocalDate.parse("2026-06-01"), null, "manual", type.getDbText());
   }
 
   private MakePartPriceCalcRow makeCalcRow() {
@@ -514,6 +551,7 @@ class QuotePriceTypeRecognitionServiceImplTest {
     detail.setPeriodMonth("2026-06");
     detail.setChildMaterialCode("PKG-CHILD-1");
     detail.setChildMaterialName("包装子件1");
+    detail.setQtyPerParent(BigDecimal.ONE);
     return PackageSnapshotResult.of(snapshot, List.of(detail), false);
   }
 }

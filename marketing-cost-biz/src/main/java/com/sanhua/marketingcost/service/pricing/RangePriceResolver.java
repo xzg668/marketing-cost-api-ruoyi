@@ -366,6 +366,27 @@ public class RangePriceResolver implements PriceResolver {
       PriceResolveResult financialPrice,
       PriceResolveResult customerPrice) {}
 
+  /** Reuses the existing band calculation with captured inputs; performs no source or OA reads. */
+  public PriceResolveResult resolveFactorPrepared(
+      PriceRangeFactorRule rule,
+      List<PriceRangeItem> rows,
+      BigDecimal factorValue,
+      LocalDate priceDate,
+      SupplierPreferredPriceSelection<PriceRangeItem> selection) {
+    Objects.requireNonNull(rule, "区间规则必填");
+    Objects.requireNonNull(factorValue, "行情因素值必填");
+    Objects.requireNonNull(selection, "供应商选择依据必填");
+    var captured = List.copyOf(rows);
+    if (captured.stream().anyMatch(row ->
+        !Objects.equals(rule.getId(), row.getFactorRuleId())
+            || !Objects.equals(rule.getMaterialCode(), row.getMaterialCode())
+            || !Objects.equals(rule.getBusinessUnitType(), row.getBusinessUnitType()))) {
+      throw new IllegalArgumentException("区间明细不属于选定规则：" + rule.getId());
+    }
+    return resolveSelectedFactorRange(
+        rule.getMaterialCode(), rule, factorValue, priceDate, captured, selection);
+  }
+
   private PriceResolveResult resolveSelectedFactorRange(
       String materialCode,
       PriceRangeFactorRule factorRule,

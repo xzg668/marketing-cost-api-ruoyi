@@ -10,6 +10,7 @@ import com.sanhua.marketingcost.entity.PackageComponentPriceDetail;
 import com.sanhua.marketingcost.service.PackageComponentPricePrepareStrategy;
 import com.sanhua.marketingcost.service.PackageComponentPriceService;
 import com.sanhua.marketingcost.service.PricePrepareScenarioContext;
+import com.sanhua.marketingcost.service.pricing.monthly.*;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -146,6 +147,15 @@ public class PackageComponentPricePrepareStrategyImpl
     }
 
     PackagePriceRequest request = new PackagePriceRequest();
+    var parent = java.util.Objects.requireNonNull(planItem.getBomRow(), "包装准备缺少报价 BOM 行");
+    if (scenarioContext == null) scenarioContext = PricePrepareScenarioContext.oaLocked(parent.getOaFormItemId(), requiredPriceOrgCode(planItem));
+    request.setOaFormItemId(parent.getOaFormItemId());
+    request.setHouseholdChildPaths(parent.getHouseholdChildPaths());
+    if (!parent.getHouseholdChildPaths().isEmpty()) {
+      request.setSourceParentPath(parent.getCurrentSourcePath());
+      request.setSourceParentHierarchyId(parent.getRawHierarchyNodeId());
+    }
+    request.setMonthlyPrices(scenarioContext.monthlyPrices());
     request.setPackageMaterialCode(packageMaterialCode);
     request.setBusinessUnitType(planItem.getBomRow().getBusinessUnitType());
     if (scenarioContext != null) {
@@ -197,6 +207,7 @@ public class PackageComponentPricePrepareStrategyImpl
               .findAndRegisterModules()
               .enable(
                   com.fasterxml.jackson.databind.DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+      recordBaseUses(planItem, scenarioContext, priceResult, new MonthlyPriceDocumentCodec(json));
       prepared.setInputSnapshotJson(
           new PackageCalculationEvidence(json).capture(price, priceResult.getDetails()));
       return prepared;
@@ -232,12 +243,37 @@ public class PackageComponentPricePrepareStrategyImpl
         STATUS_FAILED, message(priceResult, "包装组件价格状态异常：" + price.getPriceStatus()), gaps);
   }
 
+  private void recordBaseUses(PricePreparePlanItem plan, PricePrepareScenarioContext scenario,
+      PackagePriceResult result, MonthlyPriceDocumentCodec codec) {
+    var session = java.util.Objects.requireNonNull(scenario.monthlyPrices().get(), "包装件缺少月价输入会话");
+    var parentQuantity = java.util.Objects.requireNonNull(quantity(plan), "包装母件缺少实际用量");
+    String parentPath = MonthlyBomPricingScope.pathKey(plan.getBomRow().getPath());
+    BigDecimal base = result.getPrice().getPackageParentBaseQty();
+    for (var detail : result.getDetails()) {
+      if (detail.getHouseholdUse() != null) continue;
+      BigDecimal use = detail.getQtyPerParent();
+      if (detail.getChildParentBaseQty() != null)
+        use = use.divide(detail.getChildParentBaseQty(), 8, java.math.RoundingMode.HALF_UP);
+      if (base != null && base.signum() != 0) use = use.divide(base, 8, java.math.RoundingMode.HALF_UP);
+      use = use.multiply(parentQuantity);
+      if (use.signum() == 0) continue;
+      var captured = codec.decode(detail.getInputSnapshotJson(), MonthlyPreparationPrice.class);
+      var expected = scenario.scenarioType() == com.sanhua.marketingcost.enums.QuotePriceScenarioType.FINANCE_QUOTE_BASE
+          ? captured.financialPrice() : captured.customerPrice();
+      if (expected.compareTo(detail.getChildUnitPrice()) != 0)
+        throw new IllegalArgumentException("包装基础价格与捕获月价不一致");
+      session.consume(parentPath + "/pack-" + detail.getLineNo(), captured.value(), use.abs());
+    }
+  }
+
   private List<PackageComponentPricePrepareResult.Gap> childPriceGaps(
       String packageMaterialCode, PackagePriceResult priceResult) {
     List<PackageComponentPricePrepareResult.Gap> gaps = new ArrayList<>();
     if (priceResult.getDetails() != null) {
       for (PackageComponentPriceDetail detail : priceResult.getDetails()) {
-        if (detail == null || PRICE_STATUS_PRICED.equals(detail.getPriceStatus())) {
+        if (detail == null || PRICE_STATUS_PRICED.equals(detail.getPriceStatus())
+            || (PackageComponentPriceDetail.HOUSEHOLD_EXCLUDED.equals(detail.getPriceStatus())
+                && detail.getHouseholdUse() != null)) {
           continue;
         }
         String childCode = trimToNull(detail.getChildMaterialCode());

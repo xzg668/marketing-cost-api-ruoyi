@@ -47,7 +47,7 @@ public class TechnicalDataPriceApplicationService {
     var content = codec.prices(version);
     var issues = !historical && check != null ? issues(content, check) : List.<String>of();
     var owners = check == null ? List.<TechnicalDataPriceOwner>of() : check.items().stream()
-        .filter(row -> "MISSING".equals(row.status())).map(row -> ownership.find(row.materialNo())).filter(Objects::nonNull)
+        .filter(TechnicalDataPriceRequirement::requiresEntry).map(row -> ownership.find(row.materialNo())).filter(Objects::nonNull)
         .filter(owner -> Objects.equals(owner.businessUnit(), scope.task().getBusinessUnitType())
             && Objects.equals(owner.organizationCode(), scope.task().getApplicableOrgCode())).toList();
     return new TechnicalDataPriceResponse(scope.task().getId(), productId, scope.product().getRowVersion(), selected,
@@ -70,7 +70,7 @@ public class TechnicalDataPriceApplicationService {
     var check = requirements.check(scope.task(), scope.product());
     if (!Objects.equals(request.getRequirementsFingerprint(), check.fingerprint())) throw conflict("价格需求或来源已变化，请重新检查；本次输入仍保留");
     if (!check.issues().isEmpty()) throw invalid(String.join("；", check.issues()));
-    var missing = check.items().stream().filter(row -> "MISSING".equals(row.status())).toList();
+    var missing = check.items().stream().filter(TechnicalDataPriceRequirement::requiresEntry).toList();
     if (missing.isEmpty()) throw conflict("当前已无缺价，无需继续补录，请重新检查资料");
     ownership.require(scope.module().getId(), scope.task().getBusinessUnitType(), missing);
     Map<String, TechnicalDataPriceRequirement> byKey = new LinkedHashMap<>();
@@ -158,7 +158,7 @@ public class TechnicalDataPriceApplicationService {
     List<String> result = new ArrayList<>(check.issues());
     Map<String, PriceItem> entries = new HashMap<>();
     if (content != null && content.items() != null) content.items().forEach(row -> entries.put(row.itemKey(), row));
-    for (var demand : check.items()) if ("MISSING".equals(demand.status())) {
+    for (var demand : check.items()) if (demand.requiresEntry()) {
       for (String issue : TechnicalDataPriceRules.validate(entries.get(demand.itemKey()))) result.add(demand.materialNo() + "：" + issue);
     }
     return List.copyOf(result);

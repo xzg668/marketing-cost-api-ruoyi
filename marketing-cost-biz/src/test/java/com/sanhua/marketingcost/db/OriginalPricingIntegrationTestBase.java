@@ -7,6 +7,14 @@ import org.testcontainers.utility.MountableFile;
 /** 在已有完整测试库上执行原稿取价迁移，保持公共 BOM 测试基类不变。 */
 public abstract class OriginalPricingIntegrationTestBase extends BomMapperTestBase {
   static {
+    // V223's column is needed by current gap consumers. This fresh test database has no
+    // historical gaps to backfill; avoid its legacy cross-collation data-update statements.
+    try {
+      var added = MYSQL.execInContainer("sh", "-c",
+          "MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot marketing_cost -e "
+              + "'ALTER TABLE lp_price_prepare_gap ADD COLUMN material_name VARCHAR(255) NULL AFTER gap_material_code'");
+      if (added.getExitCode() != 0) throw new IllegalStateException(added.getStderr());
+    } catch (Exception failure) { throw new ExceptionInInitializerError(failure); }
     for (String script :
         List.of(
             "V51__add_unique_keys_to_high_risk_tables.sql",
@@ -15,13 +23,18 @@ public abstract class OriginalPricingIntegrationTestBase extends BomMapperTestBa
             "V171__cost_run_cost_item_remark_text.sql",
             "V83__factor_monthly_price_adjust_columns_repair.sql",
             "V89__supplier_supply_ratio_schema.sql",
+            "V122__three_expense_accounting_dimension.sql",
+            "V124__three_expense_rate_title_matrix_year_schema.sql",
+            "V125__drop_three_expense_rate_raw_period.sql",
             "V152__supplier_supply_ratio_dedupe_key.sql",
             "V155__make_part_no_scrap_calc_row_fields.sql",
             "V177__market_factor_range_price_schema.sql",
             "V186__make_part_child_net_weight.sql",
+            "V217__department_fund_rate_calculation_mode.sql",
             "V226__linked_price_import_version_selection.sql",
             "V233__u9_monthly_first_query_snapshot.sql",
             "V240__replace_product_property_with_business_import_rules.sql",
+            "V243__costing_row_preserve_bom_occurrence.sql",
             "V293__quote_bom_monthly_snapshot_detail.sql",
             "V304__supplier_supply_ratio_active_batches.sql",
             "V305__supplier_supply_ratio_nullable_value.sql",
@@ -41,6 +54,7 @@ public abstract class OriginalPricingIntegrationTestBase extends BomMapperTestBa
             "V323__monthly_material_price_priority.sql",
             "V325__finance_effective_price.sql",
             "V326__original_workbook_source.sql",
+            "V327__price_prepare_gap_price_type.sql",
             "V328__quote_linked_result_input_versions.sql",
             "V329__quote_cost_version_sequence.sql",
             "V330__scrap_price_monthly.sql",

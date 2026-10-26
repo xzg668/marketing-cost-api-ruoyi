@@ -23,6 +23,7 @@ public class CostRunPartItemDto {
   private String material;
   private String priceType;
   private String priceSource;
+  private String monthlyPricingType;
   private String remark;
   private BigDecimal unitPrice;
   private BigDecimal amount;
@@ -179,6 +180,10 @@ public class CostRunPartItemDto {
   public String getPriceSource() {
     return priceSource;
   }
+
+  public String getMonthlyPricingType() { return monthlyPricingType; }
+
+  public void setMonthlyPricingType(String value) { monthlyPricingType = value; }
 
   public void setPriceSource(String priceSource) {
     this.priceSource = priceSource;

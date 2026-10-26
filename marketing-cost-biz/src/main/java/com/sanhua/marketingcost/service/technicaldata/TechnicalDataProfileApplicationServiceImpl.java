@@ -173,7 +173,8 @@ public class TechnicalDataProfileApplicationServiceImpl
     ProductFees fees;
     try {
       fees = TechnicalDataProductFeeRules.parse(request.getHasAdditionalFees(),
-          request.getUnitToolingFee(), request.getUnitMouldFee(), request.getUnitCertificationFee());
+          request.getUnitToolingFee(), request.getUnitMouldFee(), request.getUnitCertificationFee(),
+          request.getUnitDepreciationFee());
     } catch (IllegalArgumentException exception) {
       throw invalid(exception.getMessage());
     }
@@ -193,7 +194,8 @@ public class TechnicalDataProfileApplicationServiceImpl
         version.getProductModel(), version.getProductProperty(),
         snapshotFactory.readProfile(product.getSourceSnapshotJson()).newProduct(),
         fees.includesNewToolingMouldCertificationFee(), TechnicalDataProductFeeRules.display(fees.unitToolingFee()),
-        TechnicalDataProductFeeRules.display(fees.unitMouldFee()), TechnicalDataProductFeeRules.display(fees.unitCertificationFee()), expectedVersion,
+        TechnicalDataProductFeeRules.display(fees.unitMouldFee()), TechnicalDataProductFeeRules.display(fees.unitCertificationFee()),
+        TechnicalDataProductFeeRules.display(fees.unitDepreciationFee()), fees.encodingVersion(), expectedVersion,
         version.getRowVersion(), updatedAt, plateMaterials.savedView(version));
   }
 

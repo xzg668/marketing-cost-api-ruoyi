@@ -31,23 +31,40 @@ final class MakePartCalculationEvidence {
       snapshot.put("priceOrgCode", parent.getPriceOrgCode());
       snapshot.put("periodMonth", parent.getPeriodMonth());
       snapshot.put("sourceCostingRowId", parent.getId());
-      snapshot.set("rows", json.valueToTree(rows));
-      var components = snapshot.putArray("components");
-      for (var row : rows) {
-        for (String kind : List.of("RAW", "SCRAP")) {
-          boolean raw = "RAW".equals(kind);
-          String inputs = raw ? row.getRawInputSnapshotJson() : row.getScrapInputSnapshotJson();
-          if (!StringUtils.hasText(inputs)) continue;
-          var component = components.addObject();
-          component.put("kind", kind);
-          component.put("materialCode", raw ? row.getChildMaterialNo() : row.getScrapCode());
-          component.put("unitPrice", raw ? row.getRawUnitPrice() : row.getScrapUnitPrice());
-          component.set("inputs", read(inputs));
-        }
-      }
+      replaceRows(snapshot, rows);
       return snapshot.toString();
     } catch (Exception failure) {
       throw new IllegalStateException("制造件计算底稿保存失败", failure);
+    }
+  }
+
+  /** Retains the saved scope/monthly inputs while using the existing calculator's projected rows. */
+  String withRows(String serialized, List<MakePartPriceCalcRow> rows) {
+    try {
+      var snapshot = read(serialized);
+      if (!(snapshot instanceof com.fasterxml.jackson.databind.node.ObjectNode object)
+          || !VERSION.equals(snapshot.path("calculatorVersion").asText()))
+        throw new IllegalStateException("制造件财务投影缺少保存的原计算底稿");
+      replaceRows(object, rows);
+      return object.toString();
+    } catch (Exception failure) {
+      throw new IllegalStateException("制造件财务计算底稿保存失败", failure);
+    }
+  }
+
+  private void replaceRows(com.fasterxml.jackson.databind.node.ObjectNode snapshot,
+      List<MakePartPriceCalcRow> rows) throws Exception {
+    snapshot.set("rows", json.valueToTree(rows));
+    var components = snapshot.putArray("components");
+    for (var row : rows) for (String kind : List.of("RAW", "SCRAP")) {
+      boolean raw = "RAW".equals(kind);
+      String inputs = raw ? row.getRawInputSnapshotJson() : row.getScrapInputSnapshotJson();
+      if (!StringUtils.hasText(inputs)) continue;
+      var component = components.addObject();
+      component.put("kind", kind);
+      component.put("materialCode", raw ? row.getChildMaterialNo() : row.getScrapCode());
+      component.put("unitPrice", raw ? row.getRawUnitPrice() : row.getScrapUnitPrice());
+      component.set("inputs", read(inputs));
     }
   }
 

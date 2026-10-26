@@ -78,6 +78,13 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    void ambiguousCostVersionReturnsConflictInsteadOfSilentlySelectingOne() {
+        var response = handler.handleCostVersionRequired(new com.sanhua.marketingcost.service.jjb.CostVersionRequiredException());
+        assertEquals(409, response.getCode());
+        assertTrue(response.getMsg().startsWith("COST_VERSION_REQUIRED"));
+    }
+
+    @Test
     void missingEffectiveTechnicalInputPreservesBusinessReason() {
         var response = handler.handleTechnicalData(new com.sanhua.marketingcost.service.EffectiveTechnicalDataException(
                 "NET_LOSS_SOURCE_MISSING", 180L, "2026-10", java.util.List.of("NET_LOSS"), "该裸品暂无本年度净损失率"));

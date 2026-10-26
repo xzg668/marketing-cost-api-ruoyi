@@ -1,0 +1,138 @@
+[
+  {
+    "row": 3,
+    "material": "208200507",
+    "name": "线圈组件",
+    "specification": "MQ-D04012-001002",
+    "price": "20.9853",
+    "rate": "0.085"
+  },
+  {
+    "row": 4,
+    "material": "208200049",
+    "name": "线圈部件",
+    "specification": "MQ-A0322G-010002",
+    "price": "17.8966",
+    "rate": "0.085"
+  },
+  {
+    "row": 5,
+    "material": "208200063",
+    "name": "线圈部件",
+    "specification": "MQ-D03024-010002",
+    "price": "19.6935",
+    "rate": "0.085"
+  },
+  {
+    "row": 6,
+    "material": "208200047",
+    "name": "线圈部件",
+    "specification": "MQ-A0311A-010002",
+    "price": "17.7993",
+    "rate": "0.085"
+  },
+  {
+    "row": 7,
+    "material": "208200231",
+    "name": "线圈部件",
+    "specification": "MQ-A1122G-010001",
+    "price": "18.9403",
+    "rate": "0.085"
+  },
+  {
+    "row": 8,
+    "material": "208200385",
+    "name": "线圈部件",
+    "specification": "MQ-A0322G-010024",
+    "price": "17.8966",
+    "rate": "0.085"
+  },
+  {
+    "row": 9,
+    "material": "1108100051695",
+    "name": "线圈部件",
+    "specification": "MQ-A07200-000001",
+    "price": "19.7282",
+    "rate": "0.085"
+  },
+  {
+    "row": 10,
+    "material": "1108900000590",
+    "name": "电子膨胀阀线圈",
+    "specification": "PQ-M24012-000009",
+    "price": "20.4826",
+    "rate": "0.085"
+  },
+  {
+    "row": 11,
+    "material": "1108900000586",
+    "name": "电子膨胀阀线圈",
+    "specification": "PQ-M24012-000008",
+    "price": "14.2443",
+    "rate": "0.085"
+  },
+  {
+    "row": 12,
+    "material": "1108900000583",
+    "name": "电子膨胀阀线圈",
+    "specification": "PQ-M24012-000007",
+    "price": "10.9461",
+    "rate": "0.085"
+  },
+  {
+    "row": 13,
+    "material": "1108900030547",
+    "name": "电子膨胀阀线圈",
+    "specification": "PQ-M24012-000065",
+    "price": "7.5673",
+    "rate": "0.085"
+  },
+  {
+    "row": 14,
+    "material": "208200141",
+    "name": "线圈部件",
+    "specification": "MQ-A0322F-016002",
+    "price": "18.2238",
+    "rate": "0.085"
+  },
+  {
+    "row": 15,
+    "material": "208200216",
+    "name": "线圈部件",
+    "specification": "MQ-A0322G-010019",
+    "price": "17.8966",
+    "rate": "0.085"
+  },
+  {
+    "row": 16,
+    "material": "208200413",
+    "name": "线圈部件",
+    "specification": "MQ-A0322G-011005",
+    "price": "17.8966",
+    "rate": "0.085"
+  },
+  {
+    "row": 17,
+    "material": "1108900000135",
+    "name": "线圈部件",
+    "specification": "MQ-A0311A-011003",
+    "price": "19.2165",
+    "rate": "0.085"
+  },
+  {
+    "row": 18,
+    "material": "1108100051738",
+    "name": "线圈部件",
+    "specification": "SQ-D31012-001020",
+    "price": "10.7688",
+    "rate": "0.085"
+  },
+  {
+    "row": 19,
+    "material": "1108100051737",
+    "name": "线圈部件",
+    "specification": "SQ-D31012-001018",
+    "price": "10.7688",
+    "rate": "0.085"
+  }
+]

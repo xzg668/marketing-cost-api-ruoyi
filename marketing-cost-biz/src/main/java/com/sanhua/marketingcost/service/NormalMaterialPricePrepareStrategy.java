@@ -4,10 +4,10 @@ import com.sanhua.marketingcost.dto.priceprepare.NormalMaterialPricePrepareResul
 import com.sanhua.marketingcost.dto.priceprepare.PricePreparePlanItem;
 import java.time.LocalDateTime;
 
-/** 普通料号价格准备策略：只消费现有价格类型路由和 Resolver，不生成包装组件或自制件结果。 */
+/** 普通料号价格准备策略：消费本次月价会话，保留每个 BOM 结算项的数量与来源。 */
 public interface NormalMaterialPricePrepareStrategy {
 
-  /** 同批普通料号按组织集合准备联动价，返回值仍逐BOM结算项保留数量与证据。 */
+  /** 同批普通料号批量读取月价并记录实际使用；正式采用由价格准备应用操作持有。 */
   default java.util.Map<PricePreparePlanItem, NormalMaterialPricePrepareResult> prepareBatch(
       String oaNo,
       String businessUnitType,
@@ -51,7 +51,7 @@ public interface NormalMaterialPricePrepareStrategy {
     return prepare(oaNo, businessUnitType, periodMonth, priceAsOfTime, planItem);
   }
 
-  /** 与正式准备同口径取价，但联动价只在内存计算，不生成联动价结果行。 */
+  /** 与正式准备消费同一月价口径，不首次采用或保存准备明细。 */
   default NormalMaterialPricePrepareResult calculate(
       String oaNo,
       String businessUnitType,

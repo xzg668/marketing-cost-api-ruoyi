@@ -11,16 +11,6 @@ public interface MakePartMaterialPriceResolveService {
     SCRAP
   }
 
-  MakePartMaterialPriceResolveResult resolveMaterialUnitPrice(
-      String materialCode,
-      String period,
-      LocalDate quoteDate,
-      LocalDateTime priceAsOfTime,
-      String oaNo,
-      String businessUnitType,
-      PricePrepareScenarioContext scenarioContext,
-      Purpose purpose);
-
   /** 预览不写价格及优先级配置。 */
   MakePartMaterialPriceResolveResult calculateMaterialUnitPrice(
       String materialCode,

@@ -275,6 +275,11 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V335__plate_material_mapping.sql", "V335");
       runScriptViaMysqlCli("/db/V336__plate_material_master_lookup_index.sql", "V336");
       runScriptViaMysqlCli("/db/V338__drawing_verification_evidence.sql", "V338");
+      runScriptViaMysqlCli("/db/V342__monthly_material_price_storage.sql", "V342");
+      runScriptViaMysqlCli("/monthly-pricing/ods-price-source-schema.sql", "ODS-raw-source-fixtures");
+      runScriptViaMysqlCli("/db/V344__monthly_material_price_single_table.sql", "V344");
+      // One-time initialization of this fresh disposable database, including monthly reverse reads.
+      runScriptViaMysqlCli("/db/V345__monthly_price_reference_lookup_index.sql", "V345");
     } catch (Exception e) {
       // 把 root cause 的文字信息拼进 message，避免 surefire 只保留 Caused by 的短描述
       Throwable root = e;

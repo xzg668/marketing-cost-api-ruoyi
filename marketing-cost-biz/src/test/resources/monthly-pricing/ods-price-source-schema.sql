@@ -1,0 +1,45 @@
+-- Isolated test tables matching the verified ODS source DDL. Never apply as a local migration.
+CREATE TABLE `ods_sy_v_mm_material_order_price_cg05_df` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `company_name` varchar(255) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '公司名称',
+  `material_code` varchar(128) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '物料编码',
+  `material_name` text COLLATE utf8mb4_bin COMMENT '物料名称',
+  `spec` text COLLATE utf8mb4_bin COMMENT '规格',
+  `supply_code` varchar(128) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '供应商编码',
+  `supply_name` text COLLATE utf8mb4_bin COMMENT '供应商名称',
+  `unit` varchar(64) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '单位',
+  `price` decimal(32,8) DEFAULT NULL COMMENT '未含税单价',
+  `eff_date` varchar(64) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '生效日期原文',
+  `exp_date` varchar(64) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '失效日期原文',
+  `source` text COLLATE utf8mb4_bin COMMENT '来源',
+  `order_no` varchar(128) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '订单编码',
+  `order_line_no` varchar(64) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '订单行号',
+  `dt` varchar(32) COLLATE utf8mb4_bin NOT NULL COMMENT 'EasyData源分区值',
+  `synced_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '写入MySQL时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_order_dt_material_supplier` (`dt`,`material_code`,`supply_code`),
+  KEY `idx_order_dt_company` (`dt`,`company_name`),
+  KEY `idx_order_dt_order_line` (`dt`,`order_no`,`order_line_no`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin ROW_FORMAT=DYNAMIC COMMENT='EasyData订单价格每日原始快照';
+
+CREATE TABLE `ods_sy_v_mm_material_jt_price_cg05_df` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `company_name` varchar(255) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '公司名称',
+  `material_code` varchar(128) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '物料编码',
+  `material_name` text COLLATE utf8mb4_bin COMMENT '物料名称',
+  `spec` text COLLATE utf8mb4_bin COMMENT '规格',
+  `supply_code` varchar(128) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '供应商编码',
+  `supply_name` text COLLATE utf8mb4_bin COMMENT '供应商名称',
+  `unit` varchar(64) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '单位',
+  `price` decimal(32,8) DEFAULT NULL COMMENT '未含税单价',
+  `eff_date` varchar(64) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '生效日期原文',
+  `exp_date` varchar(64) COLLATE utf8mb4_bin DEFAULT NULL COMMENT '失效日期原文',
+  `source` text COLLATE utf8mb4_bin COMMENT '来源',
+  `jieti_down` decimal(18,6) DEFAULT NULL COMMENT '数量下限',
+  `jieti_up` decimal(18,6) DEFAULT NULL COMMENT '数量上限',
+  `dt` varchar(32) COLLATE utf8mb4_bin NOT NULL COMMENT 'EasyData源分区值',
+  `synced_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '写入MySQL时间',
+  PRIMARY KEY (`id`),
+  KEY `idx_jt_dt_material_supplier` (`dt`,`material_code`,`supply_code`),
+  KEY `idx_jt_dt_company` (`dt`,`company_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin ROW_FORMAT=DYNAMIC;

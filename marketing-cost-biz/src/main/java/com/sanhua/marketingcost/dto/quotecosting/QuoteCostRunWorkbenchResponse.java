@@ -11,6 +11,7 @@ import lombok.Data;
 
 @Data
 public class QuoteCostRunWorkbenchResponse {
+  private com.sanhua.marketingcost.dto.jjb.JjbReadModel sheet;
   private String oaNo;
   private Long oaFormItemId;
   private String productCode;
@@ -32,8 +33,10 @@ public class QuoteCostRunWorkbenchResponse {
     private String versionNo;
     private String displayVersionNo;
     private String status;
+    private String algorithmVersion;
     private String displayStatus;
     private BigDecimal totalCost;
+    private String finalQuoteAmount;
     private Integer partItemCount;
     private Integer costItemCount;
     private LocalDateTime trialFinishedAt;

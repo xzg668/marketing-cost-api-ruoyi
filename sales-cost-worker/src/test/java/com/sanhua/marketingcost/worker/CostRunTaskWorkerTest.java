@@ -20,6 +20,20 @@ import org.springframework.beans.factory.ObjectProvider;
 class CostRunTaskWorkerTest {
 
   @Test
+  void retiredMonthlySceneFromOldConfigurationDoesNotClaimOrChangeTasks() {
+    var claimService = new FakeClaimService();
+    var progressService = new FakeProgressService();
+    var properties = enabledProperties();
+    properties.setScenes(EnumSet.of(CostRunTaskScene.MONTHLY_REPRICE));
+    var worker = new CostRunTaskWorker(claimService, progressService, emptyProvider(),
+        new CostRunTaskExecutorRegistry(List.of(new FakeExecutor(CostRunTaskScene.QUOTE))), properties);
+
+    assertThat(worker.scanOnce()).isZero();
+    assertThat(claimService.callCount).isZero();
+    assertThat(progressService.refreshedBatchNos).isEmpty();
+  }
+
+  @Test
   void disabledWorkerDoesNotClaimTasks() {
     FakeClaimService claimService = new FakeClaimService();
     FakeProgressService progressService = new FakeProgressService();

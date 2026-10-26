@@ -10,8 +10,6 @@ import static org.mockito.Mockito.when;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest;
-import com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateResult;
 import com.sanhua.marketingcost.entity.MakePartPriceCalcRow;
 import com.sanhua.marketingcost.entity.PriceLinkedCalcItem;
 import com.sanhua.marketingcost.entity.PricePrepareBatch;
@@ -21,8 +19,6 @@ import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareBatchMapper;
 import com.sanhua.marketingcost.mapper.PricePrepareItemMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostPriceScenarioMapper;
-import com.sanhua.marketingcost.service.PricePrepareService;
-import com.sanhua.marketingcost.service.financefactor.QuoteFinanceFactorReader;
 import com.sanhua.marketingcost.service.pricing.FactorPriceScope;
 import com.sanhua.marketingcost.service.pricing.FactorPriceSnapshot;
 import com.sanhua.marketingcost.service.pricing.PriceFactorContext;
@@ -34,15 +30,12 @@ import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 class FinancePricePrepareServiceImplTest {
   private PricePrepareBatchMapper batchMapper;
   private PricePrepareItemMapper itemMapper;
   private MakePartPriceCalcRowMapper makePartRowMapper;
-  private QuoteFinanceFactorReader financeBasePriceService;
-  private PricePrepareService pricePrepareService;
   private FinancePricePrepareServiceImpl service;
   private QuoteCostPriceScenarioMapper scenarioMapper;
 
@@ -61,112 +54,38 @@ class FinancePricePrepareServiceImplTest {
     batchMapper = Mockito.mock(PricePrepareBatchMapper.class);
     itemMapper = Mockito.mock(PricePrepareItemMapper.class);
     makePartRowMapper = Mockito.mock(MakePartPriceCalcRowMapper.class);
-    financeBasePriceService = Mockito.mock(QuoteFinanceFactorReader.class);
-    pricePrepareService = Mockito.mock(PricePrepareService.class);
     scenarioMapper = Mockito.mock(QuoteCostPriceScenarioMapper.class);
-    when(batchMapper.saveFinanceFactorSnapshot(any(), any())).thenReturn(1);
     service =
         new FinancePricePrepareServiceImpl(
             batchMapper,
             itemMapper,
             makePartRowMapper,
-            financeBasePriceService,
-            pricePrepareService,
             scenarioMapper,
             new ObjectMapper().findAndRegisterModules());
   }
 
-  @Test
-  void packageFinancialPreparationValidatesItsRangeChildrenInsteadOfForcingSameTotal()
-      throws Exception {
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"FIXED_PRICE", "RANGE_PRICE", "LINKED_PRICE", "MAKE_PART_PRICE", "PACKAGE_COMPONENT_PRICE", "SETTLEMENT_PRICE"})
+  void oldPreparationsCannotGenerateNewFinanceWithoutMonthlyEvidence(String type) {
     var source = sourceBatch();
     when(batchMapper.selectOne(any())).thenReturn(source);
-    when(batchMapper.updateById(source)).thenReturn(1);
-    when(itemMapper.selectList(any()))
-        .thenReturn(
-            List.of(PackageCalculationEvidenceTest.item("RANGE", true)),
-            List.of(PackageCalculationEvidenceTest.item("RANGE", false)));
-    var generated = new PricePrepareGenerateResult();
-    generated.setPrepareNo("PPR-FIN-1");
-    generated.setStatus("SUCCESS");
-    generated.setPriceAsOfTime(source.getPriceAsOfTime());
-    when(pricePrepareService.generate(any())).thenReturn(generated);
-    var result = service.generateFromOa("PPR-OA-1");
-    assertThat(result.financeCuPricePerKg()).isEqualByComparingTo("90");
-    assertThat(result.financeFactorPriceId()).isEqualTo(2L);
-    verify(financeBasePriceService, never()).read(any(), any(), any(), any());
+    when(itemMapper.selectList(any())).thenReturn(List.of(item("OLD", "MAT", type, "10", "20")));
+    assertThatThrownBy(() -> service.generateFromOa(source.getPrepareNo()))
+        .isInstanceOf(IllegalStateException.class).hasMessageContaining("完整月价依据");
+    verify(batchMapper, never()).insert(any(PricePrepareBatch.class));
+    verify(itemMapper, never()).insert(any(PricePrepareItem.class));
   }
 
   @Test
   void settlementAmountsCannotChangeWithOrdinaryFinancialCopper() {
     var source = sourceBatch();
-    when(batchMapper.selectOne(any())).thenReturn(source);
-    when(batchMapper.updateById(source)).thenReturn(1);
+    source.setScenarioGroupNo("GROUP-1");
+    when(batchMapper.selectOne(any())).thenReturn(source, financeBatch(source));
     var oa = item("SET:SETTLEMENT", "SETTLEMENT", "SETTLEMENT_PRICE", "10", "20");
     var finance = item("SET:SETTLEMENT", "SETTLEMENT", "SETTLEMENT_PRICE", "11", "22");
     when(itemMapper.selectList(any())).thenReturn(List.of(oa), List.of(finance));
-    when(financeBasePriceService.read("OA-1", 101L, "2026-05", "COMMERCIAL")).thenReturn(financeBasePrice());
-    var generated = new PricePrepareGenerateResult();
-    generated.setPrepareNo("PPR-FIN-SETTLEMENT");
-    generated.setStatus("SUCCESS");
-    generated.setPriceAsOfTime(source.getPriceAsOfTime());
-    when(pricePrepareService.generate(any())).thenReturn(generated);
-    assertThatThrownBy(() -> service.generateFromOa("PPR-OA-1"))
+    assertThatThrownBy(() -> service.loadPreparedFromOa("PPR-OA-1"))
         .isInstanceOf(IllegalStateException.class).hasMessageContaining("非Cu单价");
-  }
-
-  @Test
-  void generatesSingleProductFinanceBatchWithOnlyCuOverrideAndSameInputs() {
-    PricePrepareBatch source = sourceBatch();
-    when(batchMapper.selectOne(any())).thenReturn(source);
-    when(batchMapper.updateById(source)).thenReturn(1);
-    PricePrepareItem oaFixed = item("SET:FIXED", "MAT-FIXED", "FIXED_PRICE", "12.30", "30.75");
-    PricePrepareItem oaRange = item("SET:RANGE", "MAT-RANGE", "RANGE_PRICE", "8.80", "17.60");
-    PricePrepareItem oaLinked = item("SET:CU", "MAT-CU", "LINKED_PRICE", "102.039", "204.078");
-    PricePrepareItem oaPackage =
-        item("SET:PACKAGE", "PKG-1", "PACKAGE_COMPONENT_PRICE", "5.00", "10.00");
-    oaPackage.setItemType("PACKAGE_COMPONENT");
-    PricePrepareItem financeFixed = item("SET:FIXED", "MAT-FIXED", "FIXED_PRICE", "12.30", "30.75");
-    PricePrepareItem financeRange = item("SET:RANGE", "MAT-RANGE", "RANGE_PRICE", "8.80", "17.60");
-    PricePrepareItem financeLinked = item("SET:CU", "MAT-CU", "LINKED_PRICE", "90.000", "180.000");
-    PricePrepareItem financePackage =
-        item("SET:PACKAGE", "PKG-1", "PACKAGE_COMPONENT_PRICE", "5.00", "10.00");
-    financePackage.setItemType("PACKAGE_COMPONENT");
-    when(itemMapper.selectList(any()))
-        .thenReturn(List.of(oaFixed, oaRange, oaLinked, oaPackage))
-        .thenReturn(List.of(financeFixed, financeRange, financeLinked, financePackage));
-    PriceFactorContext basePrice = financeBasePrice();
-    when(financeBasePriceService.read("OA-1", 101L, "2026-05", "COMMERCIAL")).thenReturn(basePrice);
-    PricePrepareGenerateResult generated = new PricePrepareGenerateResult();
-    generated.setPrepareNo("PPR-FIN-1");
-    generated.setStatus("SUCCESS");
-    generated.setPriceAsOfTime(source.getPriceAsOfTime());
-    when(pricePrepareService.generate(any())).thenReturn(generated);
-
-    var result = service.generateFromOa(" PPR-OA-1 ");
-
-    assertThat(result.sourcePrepareNo()).isEqualTo("PPR-OA-1");
-    assertThat(result.financePrepareNo()).isEqualTo("PPR-FIN-1");
-    assertThat(result.financeBasePriceId()).isNull();
-    assertThat(result.financeFactorPriceId()).isEqualTo(9001L);
-    assertThat(result.financeCuPricePerKg()).isEqualByComparingTo("90");
-    assertThat(result.scenarioGroupNo()).startsWith("FQG-");
-    ArgumentCaptor<PricePrepareGenerateRequest> request =
-        ArgumentCaptor.forClass(PricePrepareGenerateRequest.class);
-    verify(pricePrepareService).generate(request.capture());
-    assertThat(request.getValue().getScenarioType().name()).isEqualTo("FINANCE_QUOTE_BASE");
-    assertThat(request.getValue().getSourcePrepareNo()).isEqualTo("PPR-OA-1");
-    assertThat(request.getValue().getVariableOverrides())
-        .containsOnlyKeys("Cu")
-        .containsEntry("Cu", new BigDecimal("90.000000"));
-    assertThat(request.getValue().getPriceAsOfTime()).isEqualTo(source.getPriceAsOfTime());
-    assertThat(request.getValue().getOaFormItemId()).isEqualTo(101L);
-    assertThat(request.getValue().getTopProductCode()).isEqualTo("TOP-1");
-    var evidence = ArgumentCaptor.forClass(String.class);
-    verify(batchMapper).saveFinanceFactorSnapshot(Mockito.eq("PPR-FIN-1"), evidence.capture());
-    assertThat(evidence.getValue()).contains("9001", "CU_90000", "90.000000", "OA-1");
-    when(batchMapper.saveFinanceFactorSnapshot(any(), any())).thenReturn(0);
-    assertThatThrownBy(() -> service.generateFromOa("PPR-OA-1")).hasMessageContaining("财务基价依据保存失败");
   }
 
   @Test
@@ -196,44 +115,21 @@ class FinancePricePrepareServiceImplTest {
     assertThat(result.financeCuPricePerKg()).isEqualByComparingTo("88.765432");
     assertThat(result.financeBasePriceId()).isEqualTo(701L);
     assertThat(result.financeFactorPriceId()).isNull();
-    verify(financeBasePriceService, never()).read(any(), any(), any(), any());
-    verify(pricePrepareService, never()).generate(any());
+    verify(batchMapper, never()).insert(any(PricePrepareBatch.class));
+    verify(itemMapper, never()).insert(any(PricePrepareItem.class));
     verify(batchMapper, never()).updateById(any(PricePrepareBatch.class));
   }
 
   @Test
-  void missingFinanceCuBaseBlocksBeforeGeneratingFinanceBatch() {
+  void validatesMultiChildMakePartQuantityGrossNetAndScrapIdentity() throws Exception {
     PricePrepareBatch source = sourceBatch();
     source.setScenarioGroupNo("GROUP-1");
-    when(batchMapper.selectOne(any())).thenReturn(source);
-    when(itemMapper.selectList(any()))
-        .thenReturn(List.of(item("SET:FIXED", "MAT-FIXED", "FIXED_PRICE", "12.30", "30.75")));
-    when(financeBasePriceService.read("OA-1", 101L, "2026-05", "COMMERCIAL"))
-        .thenThrow(new IllegalArgumentException("未维护2026-05财务报价Cu基准"));
-
-    assertThatThrownBy(() -> service.generateFromOa("PPR-OA-1"))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("未维护2026-05财务报价Cu基准");
-    verify(pricePrepareService, never()).generate(any());
-  }
-
-  @Test
-  void validatesMultiChildMakePartQuantityGrossNetAndScrapIdentity() {
-    PricePrepareBatch source = sourceBatch();
-    source.setScenarioGroupNo("GROUP-1");
-    when(batchMapper.selectOne(any())).thenReturn(source);
+    when(batchMapper.selectOne(any())).thenReturn(source, financeBatch(source));
     PricePrepareItem oaMake = item("SET:MAKE", "MAKE-1", "MAKE_PART_PRICE", "20", "40");
     oaMake.setResultRefId(10L);
     PricePrepareItem financeMake = item("SET:MAKE", "MAKE-1", "MAKE_PART_PRICE", "18", "36");
     financeMake.setResultRefId(20L);
     when(itemMapper.selectList(any())).thenReturn(List.of(oaMake)).thenReturn(List.of(financeMake));
-    when(financeBasePriceService.read("OA-1", 101L, "2026-05", "COMMERCIAL"))
-        .thenReturn(financeBasePrice());
-    PricePrepareGenerateResult generated = new PricePrepareGenerateResult();
-    generated.setPrepareNo("PPR-FIN-MAKE");
-    generated.setStatus("SUCCESS");
-    generated.setPriceAsOfTime(source.getPriceAsOfTime());
-    when(pricePrepareService.generate(any())).thenReturn(generated);
     MakePartPriceCalcRow oaRef = makeRow(10L, "BATCH-OA", "RAW-A", "SCRAP-A");
     MakePartPriceCalcRow financeRef = makeRow(20L, "BATCH-FIN", "RAW-A", "SCRAP-A");
     when(makePartRowMapper.selectById(10L)).thenReturn(oaRef);
@@ -242,9 +138,11 @@ class FinancePricePrepareServiceImplTest {
         .thenReturn(List.of(oaRef, makeRow(11L, "BATCH-OA", "RAW-B", "SCRAP-B")))
         .thenReturn(List.of(financeRef, makeRow(21L, "BATCH-FIN", "RAW-B", "SCRAP-B")));
 
-    var result = service.generateFromOa("PPR-OA-1");
+    when(batchMapper.selectFinanceFactorSnapshot(any())).thenReturn(new ObjectMapper().findAndRegisterModules()
+        .writeValueAsString(java.util.Map.of("oaNo", "OA-1", "oaFormItemId", 101L, "context", financeBasePrice())));
+    var result = service.loadPreparedFromOa("PPR-OA-1");
 
-    assertThat(result.financePrepareNo()).isEqualTo("PPR-FIN-MAKE");
+    assertThat(result.financePrepareNo()).isEqualTo("PPR-FIN-EXISTING");
     verify(makePartRowMapper).selectById(10L);
     verify(makePartRowMapper).selectById(20L);
   }
@@ -259,85 +157,8 @@ class FinancePricePrepareServiceImplTest {
     assertThatThrownBy(() -> service.generateFromOa("PPR-OA-1"))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("只支持一个产品");
-    verify(financeBasePriceService, never()).read(any(), any(), any(), any());
-    verify(pricePrepareService, never()).generate(any());
-  }
-
-  @Test
-  void originalQuoteUsesCapturedFinancialCopperAndKeepsNewIdentitySeparate() throws Exception {
-    var source = sourceBatch();
-    source.setScenarioGroupNo("GROUP-1");
-    when(batchMapper.selectOne(any())).thenReturn(source);
-    var oa = item("SET:CU", "MAT-CU", "LINKED_PRICE", "100", "200");
-    var finance = item("SET:CU", "MAT-CU", "LINKED_PRICE", "95", "190");
-    when(itemMapper.selectList(any())).thenReturn(List.of(oa), List.of(finance));
-    var snapshot = originalCalculation("95.1234567890123456");
-    oa.setInputSnapshotJson(snapshot.getInputSnapshotJson());
-    var generated = new PricePrepareGenerateResult();
-    generated.setPrepareNo("PPR-FIN-NATIVE");
-    generated.setStatus("SUCCESS");
-    generated.setPriceAsOfTime(source.getPriceAsOfTime());
-    when(pricePrepareService.generate(any())).thenReturn(generated);
-    var result = service.generateFromOa("PPR-OA-1");
-    assertThat(result.financeCuPricePerKg()).isEqualByComparingTo("95.1234567890123456");
-    assertThat(result.financeBasePriceId()).isNull();
-    assertThat(result.financeFactorPriceId()).isEqualTo(9001L);
-    verify(financeBasePriceService, never()).read(any(), any(), any(), any());
-    var request = ArgumentCaptor.forClass(PricePrepareGenerateRequest.class);
-    verify(pricePrepareService).generate(request.capture());
-    assertThat(request.getValue().getVariableOverrides())
-        .containsOnlyKeys("Cu")
-        .containsEntry("Cu", new BigDecimal("95.1234567890123456"));
-  }
-
-  @Test
-  void ordinaryMaterialsKeepTheirFinancialBasisWhenScrapUsesDifferentCommercialCopper() throws Exception {
-    var json = new ObjectMapper().findAndRegisterModules();
-    var source = sourceBatch(); source.setScenarioGroupNo("GROUP-SCRAP");
-    when(batchMapper.selectOne(any())).thenReturn(source);
-    var ordinary = item("SET:CU", "MAT-CU", "LINKED_PRICE", "110", "220");
-    ordinary.setInputSnapshotJson(originalCalculation("90").getInputSnapshotJson());
-    var ordinaryBase = item("SET:CU", "MAT-CU", "LINKED_PRICE", "90", "180");
-    var captured = com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.captured("2026-05", "95", "110000");
-    var base = com.sanhua.marketingcost.service.scrap.ScrapPriceTestSupport.captured("2026-05", "95", null);
-    var scrap = item("SET:SCRAP", "SCRAP", "SCRAP_PRICE", captured.unitPrice().toPlainString(), "-1");
-    scrap.setInputSnapshotJson(json.writeValueAsString(captured));
-    var scrapBase = item("SET:SCRAP", "SCRAP", "SCRAP_PRICE", base.unitPrice().toPlainString(), "-1");
-    scrapBase.setInputSnapshotJson(json.writeValueAsString(base));
-    when(itemMapper.selectList(any())).thenReturn(List.of(scrap, ordinary), List.of(scrapBase, ordinaryBase));
-    var generated = new PricePrepareGenerateResult(); generated.setPrepareNo("PPR-FIN-SCRAP");
-    generated.setStatus("SUCCESS"); generated.setPriceAsOfTime(source.getPriceAsOfTime());
-    when(pricePrepareService.generate(any())).thenReturn(generated);
-    assertThat(service.generateFromOa("PPR-OA-1").financeCuPricePerKg()).isEqualByComparingTo("90");
-    verify(financeBasePriceService, never()).read(any(), any(), any(), any());
-  }
-
-  @Test
-  void nonCopperFormulaEvidenceStillProvidesTheCapturedQuoteCopperBasis() throws Exception {
-    var source = sourceBatch();
-    source.setScenarioGroupNo("GROUP-NON-COPPER");
-    when(batchMapper.selectOne(any())).thenReturn(source);
-    var oa = item("SET:CU", "MAT-CU", "LINKED_PRICE", "100", "200");
-    var financeItem = item("SET:CU", "MAT-CU", "LINKED_PRICE", "95", "190");
-    when(itemMapper.selectList(any())).thenReturn(List.of(oa), List.of(financeItem));
-    var snapshot = originalCalculation("95.1234567890123456");
-    var json = new ObjectMapper().findAndRegisterModules();
-    var evidence =
-        (com.fasterxml.jackson.databind.node.ObjectNode)
-            json.readTree(snapshot.getInputSnapshotJson());
-    var context = json.treeToValue(evidence.path("context"), PriceFactorContext.class);
-    evidence.set("context", json.valueToTree(context.evidenceForFactors(java.util.Set.of())));
-    snapshot.setInputSnapshotJson(json.writeValueAsString(evidence));
-    oa.setInputSnapshotJson(snapshot.getInputSnapshotJson());
-    var generated = new PricePrepareGenerateResult();
-    generated.setPrepareNo("PPR-FIN-NON-COPPER");
-    generated.setStatus("SUCCESS");
-    generated.setPriceAsOfTime(source.getPriceAsOfTime());
-    when(pricePrepareService.generate(any())).thenReturn(generated);
-    var result = service.generateFromOa("PPR-OA-1");
-    assertThat(result.financeCuPricePerKg()).isEqualByComparingTo("95.1234567890123456");
-    assertThat(result.financeFactorPriceId()).isEqualTo(9001L);
-    verify(financeBasePriceService, never()).read(any(), any(), any(), any());
+    verify(batchMapper, never()).insert(any(PricePrepareBatch.class));
+    verify(itemMapper, never()).insert(any(PricePrepareItem.class));
   }
 
   @Test
@@ -352,58 +173,8 @@ class FinancePricePrepareServiceImplTest {
     var result = service.loadPreparedFromOa("PPR-OA-1");
     assertThat(result.financeCuPricePerKg()).isEqualByComparingTo("95");
     assertThat(result.financeFactorPriceId()).isEqualTo(9001L);
-    verify(financeBasePriceService, never()).read(any(), any(), any(), any());
-    verify(pricePrepareService, never()).generate(any());
-  }
-
-  @Test
-  void corruptOriginalFinancialSnapshotCannotFallBackToLegacyPrice() throws Exception {
-    var source = sourceBatch();
-    source.setScenarioGroupNo("GROUP-1");
-    when(batchMapper.selectOne(any())).thenReturn(source);
-    when(itemMapper.selectList(any()))
-        .thenReturn(List.of(item("SET:CU", "MAT-CU", "LINKED_PRICE", "100", "200")));
-    var broken = originalCalculation("95");
-    broken.setInputSnapshotJson("{}");
-    var brokenItem = item("SET:CU", "MAT-CU", "LINKED_PRICE", "100", "200");
-    brokenItem.setInputSnapshotJson(broken.getInputSnapshotJson());
-    when(itemMapper.selectList(any())).thenReturn(List.of(brokenItem));
-    assertThatThrownBy(() -> service.generateFromOa("PPR-OA-1"))
-        .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("快照");
-    verify(financeBasePriceService, never()).read(any(), any(), any(), any());
-    verify(pricePrepareService, never()).generate(any());
-  }
-
-  @Test
-  void manufacturingLinkedSnapshotIsNotParsedAsRangeEvidence() throws Exception {
-    var source = sourceBatch();
-    source.setScenarioGroupNo("GROUP-1");
-    when(batchMapper.selectOne(any())).thenReturn(source);
-    var oa = item("SET:MAKE", "MAKE-1", "MAKE_PART_PRICE", "20", "40");
-    oa.setResultRefId(10L);
-    var finance = item("SET:MAKE", "MAKE-1", "MAKE_PART_PRICE", "18", "36");
-    finance.setResultRefId(20L);
-    when(itemMapper.selectList(any())).thenReturn(List.of(oa), List.of(finance));
-    var linked = originalCalculation("95");
-    var rawOa = makeRow(10L, "BATCH-OA", "MAT-CU", "SCRAP-A");
-    var rawFinance = makeRow(20L, "BATCH-FIN", "MAT-CU", "SCRAP-A");
-    rawOa.setRawPriceType("联动价");
-    rawFinance.setRawPriceType("联动价");
-    rawOa.setRawInputSnapshotJson(linked.getInputSnapshotJson());
-    rawFinance.setRawInputSnapshotJson(linked.getInputSnapshotJson());
-    when(makePartRowMapper.selectById(10L)).thenReturn(rawOa);
-    when(makePartRowMapper.selectById(20L)).thenReturn(rawFinance);
-    when(makePartRowMapper.selectList(any())).thenReturn(List.of(rawOa), List.of(rawFinance));
-    var generated = new PricePrepareGenerateResult();
-    generated.setPrepareNo("PPR-FIN-MAKE");
-    generated.setStatus("SUCCESS");
-    generated.setPriceAsOfTime(source.getPriceAsOfTime());
-    when(pricePrepareService.generate(any())).thenReturn(generated);
-    var result = service.generateFromOa("PPR-OA-1");
-    assertThat(result.financeCuPricePerKg()).isEqualByComparingTo("95");
-    assertThat(result.financeFactorPriceId()).isEqualTo(9001L);
-    verify(financeBasePriceService, never()).read(any(), any(), any(), any());
+    verify(batchMapper, never()).insert(any(PricePrepareBatch.class));
+    verify(itemMapper, never()).insert(any(PricePrepareItem.class));
   }
 
   @Test
@@ -425,12 +196,10 @@ class FinancePricePrepareServiceImplTest {
         .thenReturn(
             json.writeValueAsString(
                 java.util.Map.of("oaNo", "OA-1", "oaFormItemId", 101L, "context", captured)));
-    when(financeBasePriceService.read(any(), any(), any(), any()))
-        .thenThrow(new AssertionError("历史批次禁止读取当前发布"));
     var result = service.loadPreparedFromOa(source.getPrepareNo());
     assertThat(result.financeCuPricePerKg()).isEqualByComparingTo("91.1234567890123456");
     assertThat(result.financeFactorPriceId()).isEqualTo(9001L);
-    Mockito.verifyNoInteractions(scenarioMapper, financeBasePriceService, pricePrepareService);
+    Mockito.verifyNoInteractions(scenarioMapper);
     verify(batchMapper, never()).saveFinanceFactorSnapshot(any(), any());
   }
 
@@ -444,7 +213,8 @@ class FinancePricePrepareServiceImplTest {
     assertThatThrownBy(() -> service.loadPreparedFromOa(source.getPrepareNo()))
         .hasMessageContaining("未保存财务基价依据")
         .hasMessageContaining("重新生成");
-    Mockito.verifyNoInteractions(financeBasePriceService, pricePrepareService);
+    verify(batchMapper, never()).insert(any(PricePrepareBatch.class));
+    verify(itemMapper, never()).insert(any(PricePrepareItem.class));
   }
 
   @Test
@@ -457,7 +227,7 @@ class FinancePricePrepareServiceImplTest {
     when(batchMapper.selectFinanceFactorSnapshot(any())).thenReturn("{broken");
     assertThatThrownBy(() -> service.loadPreparedFromOa(source.getPrepareNo()))
         .hasMessageContaining("财务基价依据损坏");
-    Mockito.verifyNoInteractions(scenarioMapper, financeBasePriceService, pricePrepareService);
+    Mockito.verifyNoInteractions(scenarioMapper);
   }
 
   @Test
@@ -476,7 +246,7 @@ class FinancePricePrepareServiceImplTest {
                         "oaNo", "OA-1", "oaFormItemId", 999L, "context", financeBasePrice())));
     assertThatThrownBy(() -> service.loadPreparedFromOa(source.getPrepareNo()))
         .hasMessageContaining("与报价产品不一致");
-    Mockito.verifyNoInteractions(scenarioMapper, financeBasePriceService, pricePrepareService);
+    Mockito.verifyNoInteractions(scenarioMapper);
   }
 
   private PriceLinkedCalcItem originalCalculation(String price) throws Exception {
