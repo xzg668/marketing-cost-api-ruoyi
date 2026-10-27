@@ -16,7 +16,7 @@ public class DrawingVerificationProperties {
   private boolean enabled;
   /** 默认从料品档案取图号；联调实例关闭后直接使用报价产品行的客户图号。 */
   private boolean useMaterialMaster = true;
-  private URI baseUrl = URI.create("http://10.10.206.115:8011");
+  private URI baseUrl = URI.create("http://10.10.204.99:8011");
   private String verifyPath = "/api/drawings/verify";
   private Duration connectTimeout = Duration.ofSeconds(5);
   private Duration requestTimeout = Duration.ofMinutes(5);

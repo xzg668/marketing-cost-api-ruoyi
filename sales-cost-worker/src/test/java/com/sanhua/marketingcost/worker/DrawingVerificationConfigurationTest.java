@@ -40,7 +40,7 @@ class DrawingVerificationConfigurationTest {
   void retiredExcelModeCannotEnablePdfAcquisition() {
     var properties = bind(environment().withProperty("QUOTE_ELECTRONIC_DRAWING_MODE", "HTTP"));
     assertThat(properties.isEnabled()).isFalse();
-    assertThat(properties.endpoint().toString()).isEqualTo("http://10.10.206.115:8011/api/drawings/verify");
+    assertThat(properties.endpoint().toString()).isEqualTo("http://10.10.204.99:8011/api/drawings/verify");
   }
 
   private MockEnvironment environment() {

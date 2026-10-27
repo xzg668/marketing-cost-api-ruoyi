@@ -18,3 +18,4 @@ __pycache__/
 /data/
 /marketing-cost-biz/data/
 /config/oa-runtime.properties
+/config/application.properties

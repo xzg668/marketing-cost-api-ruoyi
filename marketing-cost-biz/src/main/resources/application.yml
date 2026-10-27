@@ -5,7 +5,7 @@ quote:
   drawing-verification:
     enabled: ${DRAWING_PDF_ENABLED:false}
     use-material-master: ${DRAWING_PDF_USE_MATERIAL_MASTER:true}
-    base-url: ${DRAWING_PDF_BASE_URL:http://10.10.206.115:8011}
+    base-url: ${DRAWING_PDF_BASE_URL:http://10.10.204.99:8011}
     verify-path: ${DRAWING_PDF_VERIFY_PATH:/api/drawings/verify}
     connect-timeout: ${DRAWING_PDF_CONNECT_TIMEOUT:5s}
     request-timeout: ${DRAWING_PDF_REQUEST_TIMEOUT:5m}
