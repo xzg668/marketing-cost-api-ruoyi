@@ -121,9 +121,8 @@ public class QuoteCostingPreparationService {
     access.requireCosting(formId);
     technicalSubmissions.requireSubmitted(formId, itemId);
     repriceLock.assertCostRunAllowed(oaNo);
-    var node = access.view(formId) == null ? null : access.quoterNode(formId);
-    long actorId = node != null ? node.actorId() : jdbc.queryForObject(
-        "SELECT user_id FROM sys_user WHERE user_name=? AND status='0' AND del_flag='0'", Long.class, operatorName);
+    var scope = access.costingScope(formId);
+    long actorId = scope.actorId();
     transaction.executeWithoutResult(status -> {
       jdbc.queryForObject("SELECT id FROM oa_form WHERE id=? AND deleted=0 FOR UPDATE", Long.class, formId);
       technicalSubmissions.requireSubmitted(formId, itemId);
@@ -164,7 +163,7 @@ public class QuoteCostingPreparationService {
     transaction.executeWithoutResult(status -> {
       jdbc.queryForObject("SELECT id FROM oa_form WHERE id=? AND deleted=0 FOR UPDATE", Long.class, formId);
       access.requireCosting(formId);
-      if (!items.equals(activeItems(formId)) || node != null && !node.equals(access.quoterNode(formId))) {
+      if (!items.equals(activeItems(formId)) || !scope.equals(access.costingScope(formId))) {
         throw new IllegalArgumentException("整单需求或报价员办理状态已变化，请重新检查");
       }
       var currentContexts = checks.stream().map(check -> contexts.resolve(

@@ -114,7 +114,8 @@ public class PriceLinkedItemController {
       @RequestParam(value = "previewFingerprint", required = false) String previewFingerprint,
       @RequestParam(value="technicalVersionId",required=false) Long technicalVersionId,
       @RequestParam(value="oaNo",required=false) String oaNo,
-      @RequestParam(value="oaFormItemId",required=false) Long oaFormItemId) {
+      @RequestParam(value="oaFormItemId",required=false) Long oaFormItemId,
+      @RequestParam(value="priceOrgCode",required=false) String priceOrgCode) {
     if (file == null || file.isEmpty()) {
       return CommonResult.error(
           GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "file is required");
@@ -130,7 +131,7 @@ public class PriceLinkedItemController {
                 effectiveStrategy,
                 formulaEffectiveDate,
                 factorPriceConflictStrategy,
-                previewFileSha256).withPreviewFingerprint(previewFingerprint).withTechnicalContext(technicalContext(technicalVersionId,oaNo,oaFormItemId))));
+                previewFileSha256).withPreviewFingerprint(previewFingerprint).withTechnicalContext(technicalContext(technicalVersionId,oaNo,oaFormItemId)).withPriceOrgCode(priceOrgCode)));
       }
       throw new IllegalStateException("联动价导入服务不可用");
     } catch (IllegalArgumentException e) {
@@ -158,7 +159,8 @@ public class PriceLinkedItemController {
           String factorPriceConflictStrategy,
       @RequestParam(value="technicalVersionId",required=false) Long technicalVersionId,
       @RequestParam(value="oaNo",required=false) String oaNo,
-      @RequestParam(value="oaFormItemId",required=false) Long oaFormItemId) {
+      @RequestParam(value="oaFormItemId",required=false) Long oaFormItemId,
+      @RequestParam(value="priceOrgCode",required=false) String priceOrgCode) {
     if (file == null || file.isEmpty()) {
       return CommonResult.error(
           GlobalErrorCodeConstants.BAD_REQUEST.getCode(), "file is required");
@@ -178,7 +180,7 @@ public class PriceLinkedItemController {
               effectiveStrategy,
               formulaEffectiveDate,
               factorPriceConflictStrategy,
-              null).withTechnicalContext(technicalContext(technicalVersionId,oaNo,oaFormItemId))));
+              null).withTechnicalContext(technicalContext(technicalVersionId,oaNo,oaFormItemId)).withPriceOrgCode(priceOrgCode)));
     } catch (IllegalArgumentException exception) {
       return CommonResult.error(
           GlobalErrorCodeConstants.BAD_REQUEST.getCode(), exception.getMessage());

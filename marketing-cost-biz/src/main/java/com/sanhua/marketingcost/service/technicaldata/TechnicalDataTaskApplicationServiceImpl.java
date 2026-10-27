@@ -118,7 +118,7 @@ public class TechnicalDataTaskApplicationServiceImpl
     // 一个本地事务：某项归属或数据校验失败时整批回滚，调用方不会遇到半批成功。
     for (Long itemId : command.itemIds()) {
       var source = sourceReader.lockAndRead(itemId, command.accountingMonth());
-      oaWorkflowAccess.requireCosting(source.product().oaFormId());
+      oaWorkflowAccess.requireOaHandling(source.product().oaFormId());
       requireCurrentCheck(request.getCheckFingerprints().get(itemId), source, "分派");
       requireSupplementGap(source);
       QuoteTechTask task = repository.lockActiveTask(itemId, command.accountingMonth()).orElse(null);

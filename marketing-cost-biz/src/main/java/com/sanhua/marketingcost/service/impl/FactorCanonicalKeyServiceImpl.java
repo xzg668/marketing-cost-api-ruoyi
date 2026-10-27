@@ -39,7 +39,11 @@ public class FactorCanonicalKeyServiceImpl implements FactorCanonicalKeyService 
 
   private String normalizeShortName(String shortName) {
     String normalized = compact(textNormalizer.normalize(shortName));
-    return "CU".equals(normalized) ? "1#CU" : normalized;
+    return switch (normalized) {
+      case "CU" -> "1#CU";
+      case "SN" -> "1#SN";
+      default -> normalized;
+    };
   }
 
   private String priceSourceKey(String priceSource) {

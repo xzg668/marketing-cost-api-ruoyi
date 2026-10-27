@@ -6,12 +6,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 
-/** 退回、结束通知控制办理范围；原报价员依据 OA 待办主动核算，不推断技术领导的审批结果。 */
+/** 开通账号可核算；OA 办理身份仅用于推动外部流程，结束及提交状态仍保护已提交结果。 */
 @Service
 public class OaWorkflowAccessPolicy {
   public record View(String state,String label,String reason,String syncError,boolean canCost,boolean canArrange) {}
   public record QuoterNode(long formId, long formVersion, long workflowVersion, String requestId,
       String workItemId, long actorId, String employeeNo) {}
+  public record CostingScope(long actorId, Long formVersion, Long workflowVersion) {}
   private final com.sanhua.marketingcost.service.costing.QuoteCostingSubmissionService technicalSubmissions;
   private final JdbcTemplate jdbc;
   private final OaMessageCodec codec;
@@ -41,18 +42,53 @@ public class OaWorkflowAccessPolicy {
     var employee=jdbc.queryForList("SELECT employee_no FROM sys_user WHERE user_name=? AND status='0' AND del_flag='0' AND employee_no IS NOT NULL AND employee_no<>''",String.class,username);
     Set<String> roles=new HashSet<>();
     if(error==null && row.get("active_work_items_json")!=null) codec.read(row.get("active_work_items_json").toString()).forEach(w->{if(employee.contains(w.path("employeeNo").asText())) roles.add(w.path("nodeRole").asText());});
-    boolean canCost=error==null && ((initial && !employee.isEmpty() && permissions.hasPermi("ingest:quote:cost-run:execute"))
+    boolean canArrange=error==null && ((initial && !employee.isEmpty() && permissions.hasPermi("ingest:quote:cost-run:execute"))
         || (Set.of("COSTING","RECOSTING").contains(state) && roles.contains("COSTING"))
         || ("TECHNICAL".equals(state) && isOriginalQuoter(formId, username)
             && permissions.hasPermi("ingest:quote:cost-run:execute")));
+    boolean canCost = error == null && Set.of("COSTING", "RECOSTING", "TECHNICAL").contains(state)
+        && hasActiveAccount();
     String submitted = finalSubmissionState(formId);
     if (submitted != null) {
       canCost = false;
+      canArrange = false;
       if ("SUBMITTED".equals(submitted)) state = "RESULT_APPROVAL";
       else if ("COMPLETED".equals(submitted)) state = "COMPLETED";
       else error = "本单成本正在提交或 OA 结果待确认，暂不能修改核算结果";
     }
-    return new View(state,label(state),Objects.toString(row.get("reason"),null),error,canCost,canCost);
+    return new View(state,label(state),Objects.toString(row.get("reason"),null),error,canCost,canArrange);
+  }
+
+  public boolean hasActiveAccount() {
+    return currentAccount().size() == 1;
+  }
+
+  private List<Map<String, Object>> currentAccount() {
+    var authentication = SecurityContextHolder.getContext().getAuthentication();
+    if (authentication == null || !authentication.isAuthenticated()
+        || authentication instanceof org.springframework.security.authentication.AnonymousAuthenticationToken) return List.of();
+    String username = authentication.getPrincipal() instanceof UserDetails user
+        ? user.getUsername() : authentication.getName();
+    return jdbc.queryForList("SELECT user_id,employee_no FROM sys_user WHERE user_name=? AND status='0' AND del_flag='0'", username);
+  }
+
+  /** 核算只记录真实系统账号和资料轮次，不要求或伪造 OA 工号、待办。 */
+  public CostingScope costingScope(long formId) {
+    requireCosting(formId);
+    var people = currentAccount();
+    if (people.size() != 1) throw new IllegalArgumentException("当前账号未开通或已停用，不能核算");
+    long actorId = ((Number) people.getFirst().get("user_id")).longValue();
+    var rows = jdbc.queryForList("""
+        SELECT d.source_version,COALESCE(s.applied_version,0) AS workflow_version
+        FROM lp_oa_quote_document d LEFT JOIN lp_oa_workflow_state s
+          ON s.source_system=d.source_system AND s.environment=d.environment
+          AND s.workflow_request_id=d.external_document_id WHERE d.oa_form_id=?
+        """, formId);
+    if (rows.isEmpty()) return new CostingScope(actorId, null, null);
+    if (rows.size() != 1) throw new IllegalArgumentException("报价单 OA 关联不唯一，请核实");
+    var row = rows.getFirst();
+    return new CostingScope(actorId, ((Number) row.get("source_version")).longValue(),
+        ((Number) row.get("workflow_version")).longValue());
   }
   public void requireCosting(String oaNo) {
     var ids=jdbc.queryForList("SELECT id FROM oa_form WHERE oa_no=? AND deleted=0",Long.class,oaNo);
@@ -64,7 +100,7 @@ public class OaWorkflowAccessPolicy {
     // 无浏览器身份的后台执行仅再次校验流程是否仍允许核算；排队入口已经校验实际办理人。
     if(view!=null && SecurityContextHolder.getContext().getAuthentication()==null && view.syncError()==null
         && Set.of("COSTING","RECOSTING","TECHNICAL").contains(view.state())) return;
-    if(view!=null && !view.canCost()) throw new IllegalArgumentException(view.syncError()!=null?view.syncError():"OA当前状态为"+view.label()+"，或本人不是有效办理人，不能核算或提交");
+    if(view!=null && !view.canCost()) throw new IllegalArgumentException(view.syncError()!=null?view.syncError():"OA当前状态为"+view.label()+"，或当前账号未开通，不能核算");
   }
 
   private String finalSubmissionState(long formId) {
@@ -89,7 +125,7 @@ public class OaWorkflowAccessPolicy {
 
   /** 后台根据本地办理轮次及当前账号确定身份，不接受页面自报节点或工号。 */
   public QuoterNode quoterNode(long formId) {
-    requireCosting(formId);
+    requireOaHandling(formId);
     var rows = jdbc.queryForList("""
         SELECT d.external_document_id,d.source_version,s.applied_version,s.state,s.active_work_items_json
         FROM lp_oa_quote_document d LEFT JOIN lp_oa_workflow_state s
@@ -135,6 +171,12 @@ public class OaWorkflowAccessPolicy {
     return new QuoterNode(formId, ((Number) row.get("source_version")).longValue(),
         ((Number) row.get("applied_version")).longValue(), row.get("external_document_id").toString(),
         workItems.getFirst(), ((Number) person.get("user_id")).longValue(), employee);
+  }
+
+  public void requireOaHandling(long formId) {
+    requireCosting(formId);
+    var view = view(formId);
+    if (view != null && !view.canArrange()) throw new IllegalArgumentException("当前账号不是 OA 有效办理人，不能推动 OA 流程");
   }
 
   private boolean isOriginalQuoter(long formId, String username) {

@@ -4,6 +4,7 @@ import static com.sanhua.marketingcost.formula.workbook.OriginalPriceTable.*;
 
 import com.sanhua.marketingcost.formula.registry.ExpressionEvaluator;
 import com.sanhua.marketingcost.formula.workbook.OriginalPriceTable.Header;
+import com.sanhua.marketingcost.formula.workbook.LinkedApprovalTable;
 import com.sanhua.marketingcost.formula.workbook.WorkbookFormulaCompiler;
 import com.sanhua.marketingcost.formula.workbook.WorkbookFormulaCompiler.Address;
 import com.sanhua.marketingcost.formula.workbook.WorkbookFormulaCompiler.CompiledFormula;
@@ -28,7 +29,7 @@ import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.apache.poi.ss.util.CellReference;
 import org.springframework.stereotype.Component;
 
-/** 公共原稿主表与因素识别；辅助Sheet只提供依赖，不额外生成物料价格行。 */
+/** 既有原稿使用唯一主表；加工费审批原稿按各物料工作表读取，因素区只提供依赖。 */
 @Component
 public final class OriginalLinkedWorkbookParser {
   private final FactorCanonicalKeyService canonicalKeys;
@@ -48,98 +49,112 @@ public final class OriginalLinkedWorkbookParser {
       String fileName,
       String businessUnit,
       java.util.function.Function<String, Set<String>> catalog) {
+    return parseWithCatalog(bytes, fileName, businessUnit, catalog, new ImportContext(null, Map.of()));
+  }
+
+  public record ImportContext(String orgCode, Map<String, String> materialUnits) {
+    public ImportContext { materialUnits = Map.copyOf(materialUnits); }
+  }
+
+  public ParsedWorkbook parseWithCatalog(
+      byte[] bytes, String fileName, String businessUnit,
+      java.util.function.Function<String, Set<String>> catalog, ImportContext context) {
     List<Rule> rules = new ArrayList<>();
     List<RowError> errors = new ArrayList<>();
     try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(bytes))) {
-      Header main = mainSheet(workbook);
+      var layouts = LinkedApprovalTable.layouts(workbook);
       Map<SourceRow, String> factorProblems = new LinkedHashMap<>();
       Map<Address, FactorCell> candidates = factorCells(workbook, factorProblems);
+      addApprovalFactors(layouts, candidates);
       Map<String, Bindings> byOrganization = new LinkedHashMap<>();
-      for (int index = main.row() + 1; index <= main.sheet().getLastRowNum(); index++) {
-        Row row = main.sheet().getRow(index);
-        String material = null;
-        try {
-          material = materialCode(at(row, main, "物料代码"));
-          if (material.isBlank()) continue;
-          if ("固定".equals(text(at(row, main, "订单类型")))) {
-            throw new IllegalArgumentException("联动原稿中包含固定价记录，请通过固定价入口导入；本批不发布任何记录");
+      for (var layout : layouts) {
+        Header main = layout.header();
+        for (int index = main.row() + 1; index <= main.sheet().getLastRowNum(); index++) {
+          Row row = main.sheet().getRow(index);
+          String material = null;
+          try {
+            material = materialCode(at(row, main, "物料代码"));
+            if (material.isBlank()) continue;
+            if ("固定".equals(text(at(row, main, "订单类型")))) {
+              throw new IllegalArgumentException("联动原稿中包含固定价记录，请通过固定价入口导入；本批不发布任何记录");
+            }
+            Cell price = at(row, main, "单价");
+            if (price == null || price.getCellType() != CellType.FORMULA) {
+              throw new IllegalArgumentException("主价格格缺少实际公式，不能用文字说明或缓存价替代");
+            }
+            var identity =
+                new MaterialPriceRuleKey(
+                    businessUnit,
+                    layout.approval() ? context.orgCode() : text(at(row, main, "组织")),
+                    material,
+                    text(at(row, main, "供应商代码")),
+                    text(at(row, main, "供应商名称")),
+                    text(at(row, main, "规格型号")),
+                    layout.approval() ? LinkedApprovalTable.unit(row, main, context.materialUnits()) : text(at(row, main, "单位")));
+            Bindings binding =
+                byOrganization.computeIfAbsent(
+                    identity.orgCode(),
+                    org ->
+                        bindings(
+                            workbook, fileName, candidates, catalog.apply(org), "220".equals(org)));
+            CompiledFormula compiled =
+                binding
+                    .compiler()
+                    .compile(
+                        new Address(
+                            main.sheet().getSheetName(), price.getAddress().formatAsString()));
+            for (var source : compiled.sources()) {
+              var sourceRow =
+                  new SourceRow(
+                      source.address().sheet(), new CellReference(source.address().cell()).getRow());
+              String problem = factorProblems.get(sourceRow);
+              if (problem != null)
+                throw new IllegalArgumentException(source.address() + "：" + problem);
+            }
+            Map<String, FactorInput> required = new LinkedHashMap<>();
+            for (String variable : compiled.sourceInputs().keySet()) {
+              FactorCell factor = binding.factors().get(variable);
+              required.put(
+                  variable,
+                  new FactorInput(
+                      factor.canonicalKey(),
+                      factor.address(),
+                      unit(factor.unit()),
+                      factor.unit(),
+                      factor.sourceKey(),
+                      factor.bindingBasis()));
+            }
+            if ("220".equals(identity.orgCode()))
+              validateBoardGrade(identity, text(at(row, main, "物料名称")), required);
+            BigDecimal original =
+                ExpressionEvaluator.evaluate(compiled.expression(), compiled.sourceInputs());
+            BigDecimal cached = numeric(price);
+            if (cached == null
+                || original.subtract(cached).abs().compareTo(new BigDecimal("0.00000001")) > 0) {
+              throw new IllegalArgumentException("原输入复算与原稿缓存价不一致：复算=" + original + "，原稿=" + cached);
+            }
+            rules.add(
+                new Rule(
+                    identity,
+                    text(at(row, main, "物料名称")),
+                    main.sheet().getSheetName(),
+                    index + 1,
+                    price.getAddress().formatAsString(),
+                    price.getCellFormula(),
+                    text(at(row, main, "联动公式")),
+                    price.getCellStyle().getDataFormatString(),
+                    layout.approval() ? LinkedApprovalTable.taxIncluded(row, main) : taxIncluded(at(row, main, "是否含税")),
+                    compiled,
+                    Map.copyOf(required),
+                    original));
+          } catch (RuntimeException error) {
+            errors.add(
+                new RowError(main.sheet().getSheetName(), index + 1, material, error.getMessage()));
           }
-          Cell price = at(row, main, "单价");
-          if (price == null || price.getCellType() != CellType.FORMULA) {
-            throw new IllegalArgumentException("主价格格缺少实际公式，不能用文字说明或缓存价替代");
-          }
-          var identity =
-              new MaterialPriceRuleKey(
-                  businessUnit,
-                  text(at(row, main, "组织")),
-                  material,
-                  text(at(row, main, "供应商代码")),
-                  text(at(row, main, "供应商名称")),
-                  text(at(row, main, "规格型号")),
-                  text(at(row, main, "单位")));
-          Bindings binding =
-              byOrganization.computeIfAbsent(
-                  identity.orgCode(),
-                  org ->
-                      bindings(
-                          workbook, fileName, candidates, catalog.apply(org), "220".equals(org)));
-          CompiledFormula compiled =
-              binding
-                  .compiler()
-                  .compile(
-                      new Address(
-                          main.sheet().getSheetName(), price.getAddress().formatAsString()));
-          for (var source : compiled.sources()) {
-            var sourceRow =
-                new SourceRow(
-                    source.address().sheet(), new CellReference(source.address().cell()).getRow());
-            String problem = factorProblems.get(sourceRow);
-            if (problem != null)
-              throw new IllegalArgumentException(source.address() + "：" + problem);
-          }
-          Map<String, FactorInput> required = new LinkedHashMap<>();
-          for (String variable : compiled.sourceInputs().keySet()) {
-            FactorCell factor = binding.factors().get(variable);
-            required.put(
-                variable,
-                new FactorInput(
-                    factor.canonicalKey(),
-                    factor.address(),
-                    unit(factor.unit()),
-                    factor.unit(),
-                    factor.sourceKey(),
-                    factor.bindingBasis()));
-          }
-          if ("220".equals(identity.orgCode()))
-            validateBoardGrade(identity, text(at(row, main, "物料名称")), required);
-          BigDecimal original =
-              ExpressionEvaluator.evaluate(compiled.expression(), compiled.sourceInputs());
-          BigDecimal cached = numeric(price);
-          if (cached == null
-              || original.subtract(cached).abs().compareTo(new BigDecimal("0.00000001")) > 0) {
-            throw new IllegalArgumentException("原输入复算与原稿缓存价不一致：复算=" + original + "，原稿=" + cached);
-          }
-          rules.add(
-              new Rule(
-                  identity,
-                  text(at(row, main, "物料名称")),
-                  main.sheet().getSheetName(),
-                  index + 1,
-                  price.getAddress().formatAsString(),
-                  price.getCellFormula(),
-                  text(at(row, main, "联动公式")),
-                  price.getCellStyle().getDataFormatString(),
-                  taxIncluded(at(row, main, "是否含税")),
-                  compiled,
-                  Map.copyOf(required),
-                  original));
-        } catch (RuntimeException error) {
-          errors.add(
-              new RowError(main.sheet().getSheetName(), index + 1, material, error.getMessage()));
         }
       }
       if (rules.isEmpty() && errors.isEmpty())
-        errors.add(new RowError(main.sheet().getSheetName(), null, null, "未读取到主价格记录"));
+        errors.add(new RowError(null, null, null, "未读取到主价格记录"));
     } catch (Exception error) {
       errors.add(new RowError(null, null, null, fileName + "：" + error.getMessage()));
     }
@@ -147,18 +162,24 @@ public final class OriginalLinkedWorkbookParser {
   }
 
   /** 只读取主表组织，确保财务目录按原稿实际组织隔离。 */
-  public Set<String> organizations(byte[] bytes) {
+  public Set<String> organizations(byte[] bytes) { return organizations(bytes, null); }
+
+  public Set<String> organizations(byte[] bytes, String approvalOrgCode) {
     try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(bytes))) {
-      Header main = mainSheet(workbook);
       Set<String> result = new LinkedHashSet<>();
-      for (int i = main.row() + 1; i <= main.sheet().getLastRowNum(); i++) {
-        Row row = main.sheet().getRow(i);
-        Cell material = at(row, main, "物料代码");
-        if (!materialCode(material).isBlank())
-          result.add(
-              com.sanhua.marketingcost.enums.MaterialOrganization.fromPriceOrgCode(
-                      text(at(row, main, "组织")))
-                  .getPriceOrgCode());
+      for (var layout : LinkedApprovalTable.layouts(workbook)) {
+        if (layout.approval() && (approvalOrgCode == null || approvalOrgCode.isBlank()))
+          throw new IllegalArgumentException("审批原稿未列组织，请选择适用组织（商用或板换）");
+        Header main = layout.header();
+        for (int i = main.row() + 1; i <= main.sheet().getLastRowNum(); i++) {
+          Row row = main.sheet().getRow(i);
+          Cell material = at(row, main, "物料代码");
+          if (!materialCode(material).isBlank())
+            result.add(
+                com.sanhua.marketingcost.enums.MaterialOrganization.fromPriceOrgCode(
+                        layout.approval() ? approvalOrgCode : text(at(row, main, "组织")))
+                    .getPriceOrgCode());
+        }
       }
       if (result.isEmpty()) throw new IllegalArgumentException("原稿没有联动物料主价记录");
       return java.util.Collections.unmodifiableSet(result);
@@ -180,7 +201,8 @@ public final class OriginalLinkedWorkbookParser {
     for (var entry : candidates.entrySet()) {
       FactorCell factor = entry.getValue();
       if (!publicKeys.contains(factor.canonicalKey())
-          && !(board && BoardStainlessGrade.fromFactorKey(factor.canonicalKey()) != null)) continue;
+          && !(board && BoardStainlessGrade.fromFactorKey(factor.canonicalKey()) != null)
+          && !"APPROVAL_PUBLIC_FACTOR".equals(factor.bindingBasis())) continue;
       // 每个源格独立保留原输入；多个Cu源格在运行时指向同一个财务身份。
       String variable = "factor_" + variables.size();
       variables.put(entry.getKey(), variable);
@@ -297,6 +319,35 @@ public final class OriginalLinkedWorkbookParser {
       case "克", "G", "元/克", "元/G" -> FactorPriceUnit.CNY_G;
       default -> throw new IllegalArgumentException("因素单位无法识别：" + sourceUnit);
     };
+  }
+
+  /** 只在明确的加工费审批物料区右侧识别行情块，行加工费始终沿实际公式读取。 */
+  private void addApprovalFactors(
+      List<LinkedApprovalTable.Layout> layouts, Map<Address, FactorCell> factors) {
+    for (var layout : layouts) {
+      if (!layout.approval()) continue;
+      Header main = layout.header();
+      for (Row row : main.sheet()) {
+        for (Cell label : row) {
+          if (label.getColumnIndex() <= main.columns().get("单价")) continue;
+          String name = text(label).toUpperCase(java.util.Locale.ROOT).replace(" ", "");
+          String key = switch (name) {
+            case "CU", "1#CU" -> "AVG|1#CU";
+            case "SN", "1#SN" -> "AVG|1#SN";
+            case "黄金AU9999" -> "AVG|黄金AU9999";
+            default -> null;
+          };
+          if (key == null) continue;
+          var address = new Address(main.sheet().getSheetName(),
+              new CellReference(row.getRowNum(), label.getColumnIndex() + 1).formatAsString());
+          String unit = key.equals("AVG|黄金AU9999") ? "元/克" : "元/公斤";
+          var factor = new FactorCell(address, key, unit, key, "APPROVAL_PUBLIC_FACTOR");
+          var previous = factors.putIfAbsent(address, factor);
+          if (previous != null && !previous.canonicalKey().equals(key))
+            throw new IllegalArgumentException("审批表因素格身份冲突：" + address);
+        }
+      }
+    }
   }
 
   private record FactorCell(

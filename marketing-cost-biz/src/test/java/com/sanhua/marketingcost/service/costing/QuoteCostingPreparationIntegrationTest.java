@@ -13,6 +13,9 @@ import com.sanhua.marketingcost.service.*;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.util.*;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -199,13 +202,41 @@ class QuoteCostingPreparationIntegrationTest extends BomMapperTestBase {
     assertThatThrownBy(()->service.prepareAndCost(oaNo,request(null),"admin")).hasMessageContaining("资料已变化");
     verifyNoInteractions(oa,batches);verify(pipeline,never()).execute(any());
   }
-  @Test void currentActorAndSourceVersionAreRequired() {
+  @ParameterizedTest
+  @ValueSource(strings = {"bu_staff", "bu_director", "admin"})
+  void openedAccountWithoutEmployeeCanCostWholeQuoteAndProduct(String role) {
+    jdbc.update("DELETE FROM lp_oa_workflow_state WHERE workflow_request_id=?", requestId);
+    jdbc.update("UPDATE sys_user SET employee_no=NULL WHERE user_id=1");
+    var authentication = new UsernamePasswordAuthenticationToken("admin", null,
+        List.of(new SimpleGrantedAuthority("ROLE_" + role)));
+    authentication.setDetails(Map.of("businessUnitType", "COMMERCIAL"));
+    SecurityContextHolder.getContext().setAuthentication(authentication);
+    assertThat(service.state(oaNo).canCost()).isTrue();
+    assertThat(service.state(oaNo, items.getFirst()).canCost()).isTrue();
+    assertThat(service.prepareAndCost(oaNo, request(null), "admin").batch()).isNotNull();
+    assertThat(service.prepareAndCost(oaNo, request(items.getFirst()), "admin").product().getPipelineStatus()).isEqualTo("SUCCESS");
+    assertThat(access.costingScope(formId).actorId()).isEqualTo(1L);
+    assertThatThrownBy(() -> access.quoterNode(formId)).hasMessageContaining("OA 有效办理人");
+    verifyNoInteractions(oa);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_workflow_state WHERE workflow_request_id=?", Long.class, requestId)).isZero();
+  }
+
+  @Test void costingDoesNotRequireAssignedOaActorButStillRequiresCurrentSourceVersion() {
     jdbc.update("UPDATE sys_user SET employee_no='other' WHERE user_id=1");
-    assertThatThrownBy(()->service.prepareAndCost(oaNo,request(null),"admin")).hasMessageContaining("有效办理人");
+    assertThat(service.prepareAndCost(oaNo,request(null),"admin").batch()).isNotNull();
+    clearInvocations(pipeline,batches);
     jdbc.update("UPDATE sys_user SET employee_no='001001' WHERE user_id=1");
     jdbc.update("UPDATE lp_oa_workflow_state SET observed_form_version=2 WHERE workflow_request_id=?",requestId);
     assertThatThrownBy(()->service.prepareAndCost(oaNo,request(null),"admin")).hasMessageContaining("未同步");
     verifyNoInteractions(oa,pipeline,batches);
+  }
+  @Test void disabledAccountCannotCostEvenWithAdministratorRole() {
+    jdbc.update("UPDATE sys_user SET status='1' WHERE user_id=1");
+    try {
+      assertThat(service.state(oaNo).canCost()).isFalse();
+      assertThatThrownBy(() -> service.prepareAndCost(oaNo, request(null), "admin")).hasMessageContaining("账号未开通");
+      verifyNoInteractions(oa,pipeline,batches);
+    } finally { jdbc.update("UPDATE sys_user SET status='0' WHERE user_id=1"); }
   }
   @Test void costingFailureCanRetryLocallyWithoutAnyOaSubmission() {
     when(batches.submit(anyString(),any(),anyString())).thenThrow(new IllegalStateException("队列暂不可用"))

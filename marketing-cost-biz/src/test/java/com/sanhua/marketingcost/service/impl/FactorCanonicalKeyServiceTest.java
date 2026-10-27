@@ -12,6 +12,16 @@ class FactorCanonicalKeyServiceTest {
       new FactorCanonicalKeyServiceImpl(new PriceLinkedType2TextNormalizerImpl());
 
   @Test
+  void tinAliasesShareOneFinancialIdentity() {
+    for (String name : new String[] {"Sn", "sn", "SN", "1#Sn", " 1＃ｓｎ "}) {
+      assertThat(service.build("平均价", name)).isEqualTo("AVG|1#SN");
+      assertThat(service.normalizeExistingKey("AVG|" + name)).isEqualTo("AVG|1#SN");
+    }
+    assertThat(service.build("现货价", "Sn")).isEqualTo("SPOT|1#SN");
+    assertThat(service.build("平均价", "SnAg" )).isEqualTo("AVG|SNAG");
+  }
+
+  @Test
   @DisplayName("平均价和 Cu 简称生成 AVG|1#CU")
   void buildsCuAverageKey() {
     assertThat(service.build("平均价", "1#Cu")).isEqualTo("AVG|1#CU");

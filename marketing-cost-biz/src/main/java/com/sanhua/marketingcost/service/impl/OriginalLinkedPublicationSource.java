@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class OriginalLinkedPublicationSource {
   public static final String VERSION = "ORIGINAL_WORKBOOK_V1";
+  private final com.sanhua.marketingcost.mapper.PriceLinkedItemMapper items;
   private final OriginalLinkedWorkbookParser parser;
   private final OriginalLinkedRuleSnapshot snapshots;
   private final FactorUploadBatchMapper batches;
@@ -23,10 +24,42 @@ public class OriginalLinkedPublicationSource {
       OriginalLinkedRuleSnapshot snapshots,
       FactorUploadBatchMapper batches,
       FactorIdentityMapper identities) {
+    this(parser, snapshots, batches, identities, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public OriginalLinkedPublicationSource(
+      OriginalLinkedWorkbookParser parser,
+      OriginalLinkedRuleSnapshot snapshots,
+      FactorUploadBatchMapper batches,
+      FactorIdentityMapper identities,
+      com.sanhua.marketingcost.mapper.PriceLinkedItemMapper items) {
+    this.items = items;
     this.parser = parser;
     this.snapshots = snapshots;
     this.batches = batches;
     this.identities = identities;
+  }
+
+  /** 重新绑定公共因素时复用导入时保存的单位，不受后来料品档案修改影响。 */
+  private OriginalLinkedWorkbookParser.ImportContext savedContext(byte[] bytes, String orgCode, Long batchId) {
+    try (var book = org.apache.poi.ss.usermodel.WorkbookFactory.create(new java.io.ByteArrayInputStream(bytes))) {
+      boolean approval = com.sanhua.marketingcost.formula.workbook.LinkedApprovalTable.layouts(book)
+          .stream().anyMatch(com.sanhua.marketingcost.formula.workbook.LinkedApprovalTable.Layout::approval);
+      if (!approval) return new OriginalLinkedWorkbookParser.ImportContext(null, Map.of());
+    } catch (java.io.IOException error) {
+      throw new IllegalArgumentException("读取已保存原稿失败", error);
+    }
+    if (items == null) throw new IllegalArgumentException("审批原稿缺少已保存规则读取器");
+    Map<String, String> units = new LinkedHashMap<>();
+    for (var row : items.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.lambdaQuery(PriceLinkedItem.class)
+        .eq(PriceLinkedItem::getSourceUploadBatchId, batchId))) {
+      var key = snapshots.read(row).identity();
+      String previous = units.putIfAbsent(key.materialCode(), key.unit());
+      if (previous != null && !previous.equals(key.unit()))
+        throw new IllegalArgumentException("已保存审批原稿单位冲突：" + key.materialCode());
+    }
+    return new OriginalLinkedWorkbookParser.ImportContext(orgCode, units);
   }
 
   public static final class BindingBatch {
@@ -64,7 +97,8 @@ public class OriginalLinkedPublicationSource {
                               ignored ->
                                   Set.copyOf(
                                       identities.findFinanceManagedKeys(
-                                          item.getBusinessUnitType(), org))));
+                                          item.getBusinessUnitType(), org))),
+                      savedContext(bytes, item.getOrgCode(), id));
               if (!workbook.errors().isEmpty()) {
                 var error = workbook.errors().getFirst();
                 throw new IllegalArgumentException(

@@ -22,6 +22,10 @@ import com.sanhua.marketingcost.service.ingest.QuoteRequestQueryService;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy;
+import com.sanhua.marketingcost.service.costing.QuoteCostingPreparationService;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -72,10 +76,11 @@ class QuoteRequestControllerSecurityTest {
   }
 
   @Test
-  void submitProductCostRunDeniesWithoutQuotePermission() {
+  void submitProductCostRunDeniesInactiveAccount() {
     try (AnnotationConfigApplicationContext context =
         new AnnotationConfigApplicationContext(TestSecurityConfig.class)) {
       QuoteRequestController controller = context.getBean(QuoteRequestController.class);
+      when(context.getBean(OaWorkflowAccessPolicy.class).hasActiveAccount()).thenReturn(false);
       SecurityContextHolder.getContext()
           .setAuthentication(
               new UsernamePasswordAuthenticationToken(
@@ -84,6 +89,24 @@ class QuoteRequestControllerSecurityTest {
       assertThatThrownBy(
               () -> controller.submitProductCostRun("OA-1", 1L, new QuoteProductCostRunRequest()))
           .isInstanceOf(AccessDeniedException.class);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"bu_staff", "bu_director", "admin"})
+  void activeAccountsCanUseWholeAndProductCostingWithoutRolePermission(String role) {
+    try (var context = new AnnotationConfigApplicationContext(TestSecurityConfig.class)) {
+      var authentication = new UsernamePasswordAuthenticationToken("account", null,
+          List.of(new SimpleGrantedAuthority("ROLE_" + role)));
+      SecurityContextHolder.getContext().setAuthentication(authentication);
+      var controller = context.getBean(QuoteRequestController.class);
+      assertThat(controller.submitBatchCostRun("OA-1", null).isSuccess()).isTrue();
+      assertThat(controller.submitProductCostRun("OA-1", 1L, null).isSuccess()).isTrue();
+      var preparation = context.getBean(QuoteCostingPreparationController.class);
+      var body = new QuoteCostingPreparationService.Request(null, "2026-10");
+      assertThat(preparation.state("OA-1", null).isSuccess()).isTrue();
+      assertThat(preparation.prepareAndCost("OA-1", body, authentication).isSuccess()).isTrue();
+      assertThat(preparation.prepareAndCost("OA-1", new QuoteCostingPreparationService.Request(1L, "2026-10"), authentication).isSuccess()).isTrue();
     }
   }
 
@@ -117,6 +140,17 @@ class QuoteRequestControllerSecurityTest {
   @Configuration
   @EnableMethodSecurity
   static class TestSecurityConfig {
+    @Bean OaWorkflowAccessPolicy oaWorkflowAccessPolicy() {
+      var access = mock(OaWorkflowAccessPolicy.class);
+      when(access.hasActiveAccount()).thenReturn(true);
+      return access;
+    }
+    @Bean QuoteCostingPreparationService quoteCostingPreparationService() {
+      return mock(QuoteCostingPreparationService.class);
+    }
+    @Bean QuoteCostingPreparationController quoteCostingPreparationController(QuoteCostingPreparationService service) {
+      return new QuoteCostingPreparationController(service);
+    }
     @Bean("ss")
     PermissionService permissionService() {
       return new PermissionService();

@@ -37,7 +37,7 @@ class PriceLinkedType2ImportControllerTest {
     CommonResult<PriceLinkedType2ImportPreviewResponse> result =
         fixture.controller.previewImportExcel(
             fixture.file(), "2026-07", "COMMERCIAL", false,
-            "APPEND_ONLY", "2026-07-01", "KEEP_EXISTING",null,null,null);
+            "APPEND_ONLY", "2026-07-01", "KEEP_EXISTING",null,null,null,null);
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getFileSha256()).isEqualTo("abc123");
@@ -66,7 +66,7 @@ class PriceLinkedType2ImportControllerTest {
         "APPEND_ONLY",
         "2026-07-01",
         "KEEP_EXISTING",
-        "sha-from-preview","version-from-preview",null,null,null);
+        "sha-from-preview","version-from-preview",null,null,null,null);
 
     assertThat(result.isSuccess()).isTrue();
     ArgumentCaptor<PriceLinkedImportCommand> captor =
@@ -92,7 +92,7 @@ class PriceLinkedType2ImportControllerTest {
         null,
         null,
         null,
-        "wrong-sha",null,null,null,null);
+        "wrong-sha",null,null,null,null,null);
 
     assertThat(result.isSuccess()).isFalse();
     assertThat(result.getMsg()).contains("SHA-256");
@@ -109,7 +109,7 @@ class PriceLinkedType2ImportControllerTest {
         boolean.class,
         String.class,
         String.class,
-        String.class,Long.class,String.class,Long.class);
+        String.class,Long.class,String.class,Long.class,String.class);
     Method confirm = PriceLinkedItemController.class.getMethod(
         "importExcel",
         org.springframework.web.multipart.MultipartFile.class,
@@ -119,7 +119,7 @@ class PriceLinkedType2ImportControllerTest {
         String.class,
         String.class,
         String.class,
-        String.class,String.class,Long.class,String.class,Long.class);
+        String.class,String.class,Long.class,String.class,Long.class,String.class);
 
     assertThat(preview.getAnnotation(PostMapping.class).value())
         .containsExactly("/items/import-excel/preview");

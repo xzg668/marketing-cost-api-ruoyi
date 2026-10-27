@@ -33,6 +33,7 @@ public final class FinanceEffectivePriceTestSupport {
         new OriginalLinkedRuleCalculator(),
         new OriginalRangeRuleCalculator(),
         json,
-        new OriginalLinkedPublicationSource(parser, snapshots, batches, identities));
+        new OriginalLinkedPublicationSource(parser, snapshots, batches, identities,
+            sql.getMapper(PriceLinkedItemMapper.class)));
   }
 }

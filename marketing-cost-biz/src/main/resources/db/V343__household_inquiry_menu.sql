@@ -22,6 +22,7 @@ INSERT INTO sys_role_menu(role_id,menu_id)
 SELECT role.role_id,menu.menu_id FROM sys_role role JOIN sys_menu menu
   ON menu.perms IN ('price:household-inquiry:list','price:household-inquiry:query',
                    'price:household-inquiry:import','price:household-inquiry:download')
-WHERE role.role_key='admin'
+-- 报价处长=bu_director，报价员=bu_staff；不向技术协作者或补录财务审核员默认开放。
+WHERE role.role_key IN ('admin','bu_director','bu_staff') AND role.status='0' AND role.del_flag='0'
   AND NOT EXISTS (SELECT 1 FROM sys_role_menu existing WHERE existing.role_id=role.role_id AND existing.menu_id=menu.menu_id);
 COMMIT;

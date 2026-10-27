@@ -38,6 +38,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 public class OriginalLinkedImportService {
   private static final BigDecimal VAT = new BigDecimal("1.13");
+  private final LinkedApprovalImportContext approvalContext;
   private final OriginalLinkedWorkbookParser parser;
   private final OriginalLinkedRuleCalculator calculator;
   private final OriginalLinkedRuleSnapshot snapshots;
@@ -61,6 +62,24 @@ public class OriginalLinkedImportService {
       ObjectMapper json,
       PlatformTransactionManager transactions,
       com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService effectivePrices) {
+    this(parser, calculator, snapshots, finance, identities, batches, items, json, transactions,
+        effectivePrices, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public OriginalLinkedImportService(
+      OriginalLinkedWorkbookParser parser,
+      OriginalLinkedRuleCalculator calculator,
+      OriginalLinkedRuleSnapshot snapshots,
+      FinanceFactorPriceReader finance,
+      FactorIdentityMapper identities,
+      FactorUploadBatchMapper batches,
+      PriceLinkedItemMapper items,
+      ObjectMapper json,
+      PlatformTransactionManager transactions,
+      com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceService effectivePrices,
+      LinkedApprovalImportContext approvalContext) {
+    this.approvalContext = approvalContext;
     this.parser = parser;
     this.calculator = calculator;
     this.snapshots = snapshots;
@@ -180,7 +199,10 @@ public class OriginalLinkedImportService {
             command.getFileBytes(),
             command.getSourceFileName(),
             scope.businessUnit(),
-            keysByOrg::get);
+            keysByOrg::get,
+            approvalContext == null
+                ? new OriginalLinkedWorkbookParser.ImportContext(command.getPriceOrgCode(), Map.of())
+                : approvalContext.read(command.getFileBytes(), command.getPriceOrgCode()));
     for (var issue : parsed.errors())
       error(preview, command, issue.sheet(), issue.row(), issue.materialCode(), issue.message());
     var previous = latest(scope);
@@ -299,7 +321,8 @@ public class OriginalLinkedImportService {
                 scope,
                 OriginalLinkedRuleSnapshot.VERSION));
     preview.setPreviewFingerprint(
-        hash(List.of(inputVersionFingerprint, previousIds, financeVersions, keysByOrg)));
+        hash(List.of(inputVersionFingerprint, previousIds, financeVersions, keysByOrg,
+            parsed.rules().stream().map(Rule::identity).toList())));
     preview.setFinancial(financialByOrg);
     var sourceIds =
         previous.values().stream()
@@ -377,7 +400,8 @@ public class OriginalLinkedImportService {
       batch.setLinkedRowCount(
           (int) checked.rules().stream().filter(r -> r.identity().orgCode().equals(org)).count());
       batch.setFactorRowCount(checked.preview().getFactorRowCount());
-      batch.setLinkedSheetCount(1);
+      batch.setLinkedSheetCount((int) checked.rules().stream()
+          .filter(r -> r.identity().orgCode().equals(org)).map(Rule::sheet).distinct().count());
       batch.setErrorCount(0);
       batch.setWarningCount(0);
       batch.setStartedAt(now);
@@ -484,7 +508,7 @@ public class OriginalLinkedImportService {
     selected = selected.trim().toUpperCase(Locale.ROOT);
     if (current != null && !BusinessUnitContext.isAdmin() && !current.equalsIgnoreCase(selected))
       throw new IllegalArgumentException("不能为其他业务单元导入原稿");
-    var orgs = parser.organizations(command.getFileBytes());
+    var orgs = parser.organizations(command.getFileBytes(), command.getPriceOrgCode());
     var context =
         new FinanceFactorImportContext(
             selected, orgs.iterator().next(), command.getPricingMonth(), null, null);

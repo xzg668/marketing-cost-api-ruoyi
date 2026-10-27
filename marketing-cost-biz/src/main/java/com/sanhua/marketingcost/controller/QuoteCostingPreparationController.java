@@ -16,13 +16,13 @@ public class QuoteCostingPreparationController {
   public QuoteCostingPreparationController(QuoteCostingPreparationService service) { this.service = service; }
 
   @GetMapping
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list','ingest:quote:cost-run:execute')")
+  @PreAuthorize("@oaWorkflowAccessPolicy.hasActiveAccount()")
   public CommonResult<State> state(@PathVariable String oaNo, @RequestParam(required = false) Long itemId) {
     return CommonResult.success(service.state(oaNo, itemId));
   }
 
   @PostMapping
-  @PreAuthorize("@ss.hasPermi('ingest:quote:cost-run:execute')")
+  @PreAuthorize("@oaWorkflowAccessPolicy.hasActiveAccount()")
   public CommonResult<Outcome> prepareAndCost(@PathVariable String oaNo, @RequestBody Request request,
       Authentication authentication) {
     try {

@@ -525,6 +525,10 @@ class OriginalLinkedImportIntegrationTest {
   }
 
   private OriginalLinkedImportService service(PriceLinkedItemMapper mapper) {
+    return service(mapper, null);
+  }
+
+  private OriginalLinkedImportService service(PriceLinkedItemMapper mapper, LinkedApprovalImportContext defaults) {
     return new OriginalLinkedImportService(
         new OriginalLinkedWorkbookParser(canonical),
         new OriginalLinkedRuleCalculator(),
@@ -536,7 +540,46 @@ class OriginalLinkedImportIntegrationTest {
         json,
         transactions,
         com.sanhua.marketingcost.service.pricing.FinanceEffectivePriceTestSupport.service(
-            effectiveSessions, json));
+            effectiveSessions, json), defaults);
+  }
+
+  @Test
+  void approvalSheetsPublishTogetherReplayAndUseSavedUnitsOnFinancialRevision() throws Exception {
+    var fixture = new LinkedApprovalWorkbookParserTest();
+    byte[] bytes;
+    try (var book = fixture.workbook()) { bytes = fixture.bytes(book); }
+    var materials = mock(MaterialMasterRawMapper.class);
+    var unitRows = new java.util.ArrayList<com.sanhua.marketingcost.entity.MaterialMasterRaw>();
+    for (String material : List.of("M1", "M2")) {
+      var row = new com.sanhua.marketingcost.entity.MaterialMasterRaw();
+      row.setMaterialCode(material);
+      row.setUnit("千克");
+      unitRows.add(row);
+    }
+    when(materials.selectByLatestBatchAndCodes(any(), isNull(), eq("COMMERCIAL"))).thenReturn(unitRows);
+    var defaults = new LinkedApprovalImportContext(materials);
+    var approvalService = service(items, defaults);
+    var command = command(bytes).withPriceOrgCode("210");
+    var preview = approvalService.preview(command);
+    assertThat(preview.getErrors()).isEmpty();
+    assertThat(preview.getBusinessRowCount()).isEqualTo(4);
+    assertThat(count("lp_price_linked_item")).isZero();
+    var confirmed = confirmed(command, preview).withPriceOrgCode("210");
+    var response = approvalService.confirm(confirmed);
+    assertThat(response.getLinkedVersionCreatedCount()).isEqualTo(4);
+    assertThat(count("lp_price_linked_item")).isEqualTo(4);
+    var source = batches.selectById(response.getFactorUploadBatchId());
+    assertThat(source.getLinkedSheetCount()).isEqualTo(2);
+    assertThat(batches.findSourceWorkbook(response.getFactorUploadBatchId()).getSourceWorkbook()).isEqualTo(bytes);
+    assertThat(approvalService.confirm(confirmed).getLinkedUnchangedSkippedCount()).isEqualTo(4);
+    assertThat(count("lp_price_linked_item")).isEqualTo(4);
+    // 后续财务基价修订不再依赖导入时补单位的料品查询。
+    clearInvocations(materials);
+    publishFinance("CU_100000");
+    verifyNoInteractions(materials);
+    assertThat(count("lp_price_linked_item")).isEqualTo(4);
+    assertThat(items.selectList(null)).extracting(PriceLinkedItem::getUnit)
+        .containsExactlyInAnyOrder("千克", "千克", "卷", "卷");
   }
 
   @Test

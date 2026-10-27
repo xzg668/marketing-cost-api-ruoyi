@@ -17,6 +17,7 @@ WHERE NOT EXISTS (SELECT 1 FROM sys_menu existing WHERE existing.perms=action.pe
 INSERT INTO sys_role_menu(role_id,menu_id)
 SELECT role.role_id,menu.menu_id FROM sys_role role JOIN sys_menu menu
   ON menu.perms IN ('price:monthly-material:list','price:monthly-material:query','price:monthly-material:references')
-WHERE role.role_key='admin'
+-- 与既有价格管理角色一致：管理员、报价处长、报价员。
+WHERE role.role_key IN ('admin','bu_director','bu_staff') AND role.status='0' AND role.del_flag='0'
   AND NOT EXISTS (SELECT 1 FROM sys_role_menu existing WHERE existing.role_id=role.role_id AND existing.menu_id=menu.menu_id);
 COMMIT;

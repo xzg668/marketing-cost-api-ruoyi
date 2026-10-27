@@ -34,7 +34,7 @@ public final class PriceLinkedImportCommand {
         expectedPreviewSha256,
         previewFingerprint,
         context,
-        null);
+        null, priceOrgCode);
   }
 
   public PriceLinkedImportCommand withTechnicalPlan(
@@ -51,7 +51,16 @@ public final class PriceLinkedImportCommand {
         expectedPreviewSha256,
         previewFingerprint,
         technicalContext,
-        plan);
+        plan, priceOrgCode);
+  }
+
+  private final String priceOrgCode;
+  public String getPriceOrgCode() { return priceOrgCode; }
+
+  public PriceLinkedImportCommand withPriceOrgCode(String org) {
+    return new PriceLinkedImportCommand(fileBytes, sourceFileName, pricingMonth, businessUnitType,
+        overwriteManual, effectiveStrategy, formulaEffectiveDate, factorPriceConflictStrategy,
+        expectedPreviewSha256, previewFingerprint, technicalContext, technicalPlan, org);
   }
 
   private final String previewFingerprint;
@@ -73,7 +82,7 @@ public final class PriceLinkedImportCommand {
         expectedPreviewSha256,
         fingerprint,
         technicalContext,
-        technicalPlan);
+        technicalPlan, priceOrgCode);
   }
 
   private final byte[] fileBytes;
@@ -108,7 +117,7 @@ public final class PriceLinkedImportCommand {
         expectedPreviewSha256,
         null,
         null,
-        null);
+        null, null);
   }
 
   private PriceLinkedImportCommand(
@@ -124,7 +133,8 @@ public final class PriceLinkedImportCommand {
       String previewFingerprint,
       com.sanhua.marketingcost.dto.technicaldata.TechnicalPriceImportContext technicalContext,
       com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionWorkbook.Plan
-          technicalPlan) {
+          technicalPlan, String priceOrgCode) {
+    this.priceOrgCode = priceOrgCode;
     this.previewFingerprint = previewFingerprint;
     this.technicalContext = technicalContext;
     this.technicalPlan = technicalPlan;

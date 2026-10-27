@@ -83,7 +83,9 @@ public final class ExpressionEvaluator {
       try {
         if (take('+')) return unary();
         if (take('-')) return unary().negate();
-        return primary();
+        BigDecimal result = primary();
+        while (take('%')) result = result.movePointLeft(2);
+        return result;
       } finally {
         depth--;
       }

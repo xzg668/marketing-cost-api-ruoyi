@@ -72,6 +72,7 @@ public class QuoteFinalSubmissionService {
     try {
       if (costs.isEmpty()) throw invalid("报价单没有产品");
       access.requireCostPublication(form.getId());
+      access.requireOaHandling(form.getId());
       requireRecalculation(repository.returnedBaseline(form.getId()), costs);
       if (!repository.linked(form.getId())) throw invalid("本单未关联 OA 原流程，可查看核算成本，暂不能提交 OA");
       if (error == null) preview(form, costs, oaContext.operatorEmployeeNo(actor.userId()));
@@ -120,6 +121,7 @@ public class QuoteFinalSubmissionService {
     var prior = repository.latest(form.getId());
     if (prior != null && FROZEN.contains(prior.status())) return new Prepared(prior, null, false);
     access.requireCostPublication(form.getId());
+    access.requireOaHandling(form.getId());
     var costs = currentCosts(form, period, actor.name());
     if (costs.isEmpty() || costs.stream().anyMatch(c -> !"READY".equals(c.status()))) {
       throw invalid("仍有产品尚未完成有效核算，请处理后重新确认");

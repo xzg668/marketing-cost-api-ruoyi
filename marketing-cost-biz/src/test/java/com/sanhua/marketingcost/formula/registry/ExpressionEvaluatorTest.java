@@ -19,6 +19,14 @@ class ExpressionEvaluatorTest {
   private static final BigDecimal TOLERANCE = new BigDecimal("0.0001");
 
   @Test
+  void percentKeepsItsExcelPostfixPrecedenceAndExactDecimalMeaning() {
+    assertThat(ExpressionEvaluator.evaluate("(1+7.08%)*100", Map.of())).isEqualByComparingTo("107.08");
+    assertThat(ExpressionEvaluator.evaluate("200*(5+5)%", Map.of())).isEqualByComparingTo("20");
+    assertThat(ExpressionEvaluator.evaluate("-10%+50%%", Map.of())).isEqualByComparingTo("-0.095");
+    assertThat(ExpressionEvaluator.extractVariables("[金价]*(1+[损耗]%)")).containsExactly("金价", "损耗");
+  }
+
+  @Test
   @DisplayName("extractVariables：纯 ASCII 表达式抽取")
   void asciiExtract() {
     LinkedHashSet<String> tokens = ExpressionEvaluator.extractVariables("Cu * blank_weight + fee");

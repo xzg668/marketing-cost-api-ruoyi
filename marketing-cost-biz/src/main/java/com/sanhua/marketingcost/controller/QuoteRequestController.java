@@ -73,7 +73,7 @@ public class QuoteRequestController {
     this.repriceLockGuard = repriceLockGuard;
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:cost-run:execute')")
+  @PreAuthorize("@oaWorkflowAccessPolicy.hasActiveAccount()")
   @PostMapping("/{oaNo}/cost-runs")
   public CommonResult<QuoteBatchCostRunResponse> submitBatchCostRun(
       @PathVariable("oaNo") String oaNo,
@@ -145,7 +145,7 @@ public class QuoteRequestController {
     }
   }
 
-  @PreAuthorize("@ss.hasAnyPermi('ingest:quote:cost-run:execute')")
+  @PreAuthorize("@oaWorkflowAccessPolicy.hasActiveAccount()")
   @PostMapping("/{oaNo}/items/{oaFormItemId}/cost-runs")
   public CommonResult<ProductCostingResult> submitProductCostRun(
       @PathVariable("oaNo") String oaNo,
