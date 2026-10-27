@@ -61,10 +61,10 @@ class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
         formId,
         key,
         key,
-        key + "-DRAW");
+        key + "-DRAW-MX");
     itemId =
         jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=?", Long.class, formId);
-    material(key, key + "-DRAW", "制造件");
+    material(key, key + "-DRAW-MX", "制造件");
     material(key + "-PART", key + "-PART-DRAW", "采购件");
     var preparation = new QuoteBomPreparationRecord();
     preparation.setOaFormId(formId);
@@ -244,14 +244,14 @@ class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
         key + "-PART",
         key + "-PART");
     if ("SPEC-A".equals(specification)) {
-      material(key + "-OTHER", key + "-DRAW", "制造件");
+      material(key + "-OTHER", key + "-DRAW-MX", "制造件");
       jdbc.update(
           "UPDATE lp_material_master_raw SET material_spec='SPEC-B' WHERE material_code=?",
           key + "-OTHER");
     }
     var task = start();
     var outcome = consumer.consume(task.getId());
-    assertThat(task.getDrawingNo()).isEqualTo(key + "-DRAW");
+    assertThat(task.getDrawingNo()).isEqualTo(key + "-DRAW-MX");
     assertThat(outcome.consumptionState()).isEqualTo("COMPLETE");
     assertThat(outcome.workflowStage()).isEqualTo(ElectronicDrawingWorkflowStage.COMPOSED);
     Long sourceId =
@@ -272,7 +272,7 @@ class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
                 String.class,
                 sourceId))
         .isEqualTo(key);
-    verify(client, times(1)).verify(argThat(query -> (key + "-DRAW").equals(query.drawingNo())));
+    verify(client, times(1)).verify(argThat(query -> (key + "-DRAW-MX").equals(query.drawingNo())));
   }
 
   @Test
@@ -400,7 +400,7 @@ class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
     body.put("revision", 3);
     body.putArray("plm_data");
     ((com.fasterxml.jackson.databind.node.ObjectNode)
-            body.path("data").path(key + "-DRAW").path("params").path("items").get(0))
+            body.path("data").path(key + "-DRAW-MX").path("params").path("items").get(0))
         .put("qty", "4.0000");
     var confirmed = reviews.receive(codec.parse(body.toString()));
     var outcome = consumer.consume(task.getId());
@@ -470,7 +470,7 @@ class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
             call -> {
               var body = payload("invalid-" + UUID.randomUUID());
               ((com.fasterxml.jackson.databind.node.ObjectNode)
-                      body.path("data").path(key + "-DRAW").path("params").path("items").get(0))
+                      body.path("data").path(key + "-DRAW-MX").path("params").path("items").get(0))
                   .put("qty", "not-a-number");
               return codec.parse(body.toString());
             })
@@ -553,7 +553,7 @@ class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
               .isEqualTo(
                   new com.fasterxml.jackson.databind.ObjectMapper()
                       .createObjectNode()
-                      .put("drawingNo", key + "-DRAW")
+                      .put("drawingNo", key + "-DRAW-MX")
                       .toString());
           byte[] body = initial.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
           exchange.getResponseHeaders().set("Content-Type", "application/json");
@@ -649,7 +649,7 @@ class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
   private com.fasterxml.jackson.databind.node.ObjectNode payload(String id) {
     return DrawingVerificationFixtures.drawing(
         id,
-        key + "-DRAW",
+        key + "-DRAW-MX",
         List.of(
             List.of("001", key + "-PART-DRAW", "接管", "2.0000", "铜", "B", "B", "0.50", ""),
             List.of("001", key + "-PART-DRAW", "接管", "0.1250", "铜", "B", "B", "0.50", "")));

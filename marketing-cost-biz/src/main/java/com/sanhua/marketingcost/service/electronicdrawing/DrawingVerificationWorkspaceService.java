@@ -185,7 +185,7 @@ public class DrawingVerificationWorkspaceService {
         history,
         scope.workflowStage(),
         scope.sourceVersionId(),
-        drawings.options(scope).stream()
+        drawings.drawingOptions(scope).stream()
             .map(
                 row ->
                     new DrawingOption(row.drawingNo(), row.materialNo(), row.name(), row.model()))

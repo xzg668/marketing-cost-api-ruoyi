@@ -92,6 +92,36 @@ class MonthlyOriginalLinkedPriceSourceIntegrationTest {
   @Test void financeAndEffectivePublicationAreRequiredAndPureReadsNeverGenerateThem(){
     String month="2026-01";String code=code();rule(code,"HOUSEHOLD",month,"210","S1","[cu]+5",false);var c=context("HOUSEHOLD",month,"210");var r=request(code,"HOUSEHOLD",month,"210",NonCuConditions.empty());var waiting=operation.resolveCandidates(c,Set.of(r));assertThat(waiting.problems().get(r).reason()).isEqualTo(MonthlyAdoptionRetryPolicy.Failure.WAITING);publication("HOUSEHOLD",month,"210");long before=jdbc.queryForObject("SELECT COUNT(*) FROM lp_finance_effective_price",Long.class);assertThat(operation.resolveCandidates(c,Set.of(r)).problems().get(r).reason()).isEqualTo(MonthlyAdoptionRetryPolicy.Failure.WAITING);assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_finance_effective_price",Long.class)).isEqualTo(before);publish("HOUSEHOLD","210");assertThat(operation.resolveCandidates(c,Set.of(r)).values().get(r).selection().fact().price()).isEqualByComparingTo("105");
   }
+  @Test void realSupplierRatioRowsSupportPreviewAdoptionAndSavedCopperProjection() {
+    String month="2035-01";
+    String code=code();
+    publication("COMMERCIAL",month,"210");
+    rule(code,"COMMERCIAL",month,"210","S1","[cu]+5",false);
+    rule(code,"COMMERCIAL",month,"210","S2","[cu]+6",false);
+    for(String supplier:List.of("S1","S2")) {
+      jdbc.update("INSERT INTO lp_supplier_supply_ratio(business_unit_type,material_code,material_name,spec_model,unit,supplier_name,supplier_code,supply_ratio,is_active,deleted) VALUES('COMMERCIAL',?,'ratio regression','SPEC','件',?,?,?,1,0)",
+          code,supplier,supplier,supplier.equals("S1")?new BigDecimal("0.8"):new BigDecimal("0.2"));
+    }
+    publish("COMMERCIAL","210");
+    var request=request(code,"COMMERCIAL",month,"210",NonCuConditions.empty());
+    var context=context("COMMERCIAL",month,"210");
+    var selected=operation.resolveCandidates(context,Set.of(request));
+    assertThat(selected.problems()).isEmpty();
+    var selection=selected.values().get(request).selection();
+    var evidence=codec.decode(codec.wrap(selection.fact().evidence().json()),MonthlyOriginalLinkedPriceSource.Snapshot.class);
+    assertThat(evidence.source().ratios()).hasSize(2);
+    assertThat(evidence.source().ratios().getFirst().getMaterialCode()).isEqualTo(code);
+    assertThat(selection.fact().evidence().json()).doesNotContain("requestedMaterialCode");
+    var projection=MonthlyScenarioTestSupport.create(null);
+    var preview=projection.preview(Map.of(request,selection),new BigDecimal("80000"),Map.of(request,context.priceAsOfTime().toLocalDate())).get(request);
+    assertThat(preview.financialPrice()).isEqualByComparingTo("105");
+    assertThat(preview.customerPrice()).isEqualByComparingTo("85");
+    var saved=operation.adopt(context,plan(request,selection));
+    long id=saved.plan().selections().get(request).monthlyPriceId();
+    var restored=projection.calculate(Map.of(request,operation.readByIds("COMMERCIAL",Set.of(id)).get(id)),new BigDecimal("80000")).get(id);
+    assertThat(restored.financialPrice()).isEqualByComparingTo("105");
+    assertThat(restored.customerPrice()).isEqualByComparingTo("85");
+  }
   @Test void wholeScopeMonthCannotFallBackPerMaterialAndZeroIsARealPrice(){
     String month="2026-03";String code=code();publication("HOUSEHOLD",month,"210");rule(code,"HOUSEHOLD",month,"210","S1","[cu]*0",false);publish("HOUSEHOLD","210");var c=context("HOUSEHOLD",month,"210");var r=request(code,"HOUSEHOLD",month,"210",NonCuConditions.empty());assertThat(operation.resolveCandidates(c,Set.of(r)).values().get(r).selection().fact().price()).isZero();rule(code(),"HOUSEHOLD","2026-04","210","S1","[cu]+5",false);var next=request(code,"HOUSEHOLD","2026-04","210",NonCuConditions.empty());var missing=source.read(context("HOUSEHOLD","2026-04","210"),Set.of(next));assertThat(missing.values()).isEmpty();assertThat(missing.problems().get(next).reason()).isEqualTo(MonthlyAdoptionRetryPolicy.Failure.MISSING);
   }

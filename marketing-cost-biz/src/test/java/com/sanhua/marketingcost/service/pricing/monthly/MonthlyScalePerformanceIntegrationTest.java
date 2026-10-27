@@ -171,8 +171,7 @@ class MonthlyScalePerformanceIntegrationTest {
         MonthlyAcceptanceSqlDriver.reset(); long start = System.nanoTime(),allocationStart=allocated();
         int parsesBefore=MonthlyLocalAcceptance.workbookParses.get();
         var preview = fixture.inquiries.preview("COMMERCIAL", "MPP13", bytes,
-            size == 17 ? "real-20261023.xls" : "MPP13-synthetic-1000.xls", "2026-10",
-            new PriceContext("件", "CNY", TaxBasis.EXCLUDED));
+            size == 17 ? "real-20261023.xls" : "MPP13-synthetic-1000.xls", "2026-10");
         double previewMs = (System.nanoTime() - start) / 1e6;
         if(sample>=0)previewAllocated+=allocated()-allocationStart;
         assertThat(MonthlyLocalAcceptance.workbookParses.get()-parsesBefore).isEqualTo(1);

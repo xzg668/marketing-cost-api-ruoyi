@@ -49,7 +49,7 @@ class HouseholdInquiryPublicationIntegrationTest {
     var book=HouseholdInquiryWorkbookParserTest.workbook();var row=book.getSheetAt(0).getRow(2);row.getCell(0).setCellValue(material);row.getCell(4).setCellValue(price);
     return HouseholdInquiryWorkbookParserTest.bytes(book);
   }
-  static Preview preview(String material,String price) throws Exception {return service.preview("COMMERCIAL","finance",source(material,price),"synthetic.xls","2026-10",CONTEXT);}
+  static Preview preview(String material,String price) throws Exception {return service.preview("COMMERCIAL","finance",source(material,price),"synthetic.xls","2026-10");}
   static PublishRequest request(Preview p){return new PublishRequest(p.previewId(),p.publishRequestId(),p.previewFingerprint());}
   static PublishResult publish(Preview p){return service.publish("COMMERCIAL","finance",request(p));}
   static String material(){return "001Ab-"+UUID.randomUUID().toString().substring(0,8);}
@@ -58,26 +58,31 @@ class HouseholdInquiryPublicationIntegrationTest {
   @Test void realOriginalPreviewsSeventeenRowsAndPublishesWithoutWritingAnyMonthlyPrice() throws Exception {
     byte[] original=HouseholdInquiryPublicationIntegrationTest.class.getResourceAsStream("/household-inquiry/real-20261023.xls").readAllBytes();
     long versions=jdbc.queryForObject("SELECT COUNT(*) FROM lp_household_inquiry_price",Long.class);
-    var p=service.preview("COMMERCIAL","finance",original,"real.xls","2026-10",CONTEXT);
+    var p=service.preview("COMMERCIAL","finance",original,"real.xls","2026-10");
     assertThat(p.content().rows()).hasSize(17);assertThat(p.content().workbook().errors()).isEmpty();
+    assertThat(p.content().priceContext()).isEqualTo(CONTEXT);
+    var batch=storage.batch("COMMERCIAL",p.previewId()).orElseThrow();
+    assertThat(batch.getPricingUnit()).isEqualTo("件");assertThat(batch.getCurrency()).isEqualTo("CNY");assertThat(batch.getTaxBasis()).isEqualTo("EXCLUDED");
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_household_inquiry_price",Long.class)).isEqualTo(versions);
     var r=publish(p);assertThat(r.newVersions()).isEqualTo(17);assertThat(r.rows()).allSatisfy(row->assertThat(row.action()).isEqualTo(Action.CREATE));
     for(var row:p.content().rows()) {
       var view=service.current("COMMERCIAL",row.source().materialCode(),1,20).rows().getFirst();
       assertThat(view.unitPrice()).isEqualTo(row.source().unitPrice());assertThat(view.householdRate()).isEqualTo("0.085");
+      assertThat(view.priceContext()).isEqualTo(CONTEXT);
+      assertThat(service.financial("COMMERCIAL",view.id()).evidence().priceContext()).isEqualTo(CONTEXT);
       assertThat(service.original("COMMERCIAL",view.id()).bytes()).isEqualTo(original);
     }
     for(String t:List.of("lp_material_monthly_family","lp_material_monthly_price","lp_material_monthly_adoption","lp_material_monthly_price_ref")) assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM "+t,Long.class)).isZero();
   }
   @Test void sameValuesAreObservationsAndReplayingAnOlderFileCreatesANewVersion() throws Exception {
-    String m=material();byte[] original=source(m,"10.000");var first=service.preview("COMMERCIAL","finance",original,"first.xls","2026-10",CONTEXT);var a=publish(first);
+    String m=material();byte[] original=source(m,"10.000");var first=service.preview("COMMERCIAL","finance",original,"first.xls","2026-10");var a=publish(first);
     var same=preview(m,"10.000");assertThat(publish(same).newVersions()).isZero();
     var observation=service.importDetails("COMMERCIAL","another-finance",same.batchId());
     assertThat(observation.publication().rows().getFirst().versionId()).isEqualTo(a.rows().getFirst().versionId());
     assertThat(observation.publication().newVersions()).isZero();assertThat(observation.preview().batchId()).isEqualTo(same.batchId());
     assertThat(service.financial("COMMERCIAL",a.rows().getFirst().versionId()).fileName()).isEqualTo("first.xls");
     assertThat(service.history("COMMERCIAL",m,1,100).rows()).hasSize(1);
-    var b=publish(preview(m,"11"));var back=service.preview("COMMERCIAL","finance",original,"same-old-bytes.xls","2026-10",CONTEXT);assertThat(back.content().workbook().sha256()).isEqualTo(first.content().workbook().sha256());assertThat(back.content().rows().getFirst().historicalValue()).isTrue();
+    var b=publish(preview(m,"11"));var back=service.preview("COMMERCIAL","finance",original,"same-old-bytes.xls","2026-10");assertThat(back.content().workbook().sha256()).isEqualTo(first.content().workbook().sha256());assertThat(back.content().rows().getFirst().historicalValue()).isTrue();
     var c=publish(back);assertThat(c.rows().getFirst().revisionNo()).isEqualTo(3);assertThat(c.rows().getFirst().versionId()).isNotEqualTo(a.rows().getFirst().versionId());
     assertThat(service.publish("COMMERCIAL","finance",request(first))).isEqualTo(a);
     assertThat(service.current("COMMERCIAL",m,1,20).rows().getFirst().id()).isEqualTo(c.rows().getFirst().versionId());
@@ -89,14 +94,14 @@ class HouseholdInquiryPublicationIntegrationTest {
     var book=HouseholdInquiryWorkbookParserTest.workbook();var sheet=book.getSheetAt(0);sheet.getRow(2).getCell(0).setCellValue(m);sheet.getRow(2).getCell(4).setCellValue("12");
     var style=book.createCellStyle();style.setDataFormat(book.createDataFormat().getFormat("0.0000"));
     sheet.getRow(2).createCell(25,org.apache.poi.ss.usermodel.CellType.BLANK).setCellStyle(style);sheet.getRow(1).createCell(25,org.apache.poi.ss.usermodel.CellType.BLANK).setCellStyle(style);
-    var p=service.preview("COMMERCIAL","finance",HouseholdInquiryWorkbookParserTest.bytes(book),"style-only.xls","2026-10",CONTEXT);
+    var p=service.preview("COMMERCIAL","finance",HouseholdInquiryWorkbookParserTest.bytes(book),"style-only.xls","2026-10");
     assertThat(p.content().rows().getFirst().action()).isEqualTo(Action.UNCHANGED);
     assertThat(publish(p).newVersions()).isZero();assertThat(service.history("COMMERCIAL",m,1,100).rows()).hasSize(1);
   }
 
   @Test void metadataChangesCreateAReferenceVersionWithoutClaimingAPriceChange() throws Exception {
     String m=material();publish(preview(m,"12"));
-    var p=service.preview("COMMERCIAL","finance",source(m,"12.0"),"changed-month.xls","2026-09",CONTEXT);
+    var p=service.preview("COMMERCIAL","finance",source(m,"12.0"),"changed-month.xls","2026-09");
     assertThat(p.content().rows().getFirst().action()).isEqualTo(Action.NEW_VERSION);assertThat(p.content().rows().getFirst().priceChanged()).isFalse();
     var r=publish(p);assertThat(r.newVersions()).isEqualTo(1);assertThat(service.current("COMMERCIAL",m,1,20).rows().getFirst().sourceMonth()).isEqualTo("2026-09");
   }
@@ -121,7 +126,7 @@ class HouseholdInquiryPublicationIntegrationTest {
   }
   @Test void partialInvalidFilesCannotPublishAnyOtherwiseValidRows() throws Exception {
     var book=HouseholdInquiryWorkbookParserTest.workbook();var row=book.getSheetAt(0).createRow(3);row.createCell(0).setCellValue(material());row.createCell(4).setCellValue("-1");row.createCell(13).setCellValue(8.5);
-    var p=service.preview("COMMERCIAL","finance",HouseholdInquiryWorkbookParserTest.bytes(book),"invalid.xls","2026-10",CONTEXT);
+    var p=service.preview("COMMERCIAL","finance",HouseholdInquiryWorkbookParserTest.bytes(book),"invalid.xls","2026-10");
     long count=jdbc.queryForObject("SELECT COUNT(*) FROM lp_household_inquiry_price",Long.class);
     failure(()->publish(p),"PREVIEW_HAS_ERRORS");assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_household_inquiry_price",Long.class)).isEqualTo(count);
   }
@@ -142,7 +147,7 @@ class HouseholdInquiryPublicationIntegrationTest {
     String first="A-"+material(),second="Z-"+material();publish(preview(first,"1"));publish(preview(second,"2"));
     var book=HouseholdInquiryWorkbookParserTest.workbook();var sheet=book.getSheetAt(0);sheet.getRow(2).getCell(0).setCellValue(first);sheet.getRow(2).getCell(4).setCellValue("3");
     var next=sheet.createRow(3);for(var cell:sheet.getRow(2)){var c=next.createCell(cell.getColumnIndex());if(cell.getCellType()==org.apache.poi.ss.usermodel.CellType.STRING)c.setCellValue(cell.getStringCellValue());else c.setCellValue(cell.getNumericCellValue());}next.getCell(0).setCellValue(second);
-    var p=service.preview("COMMERCIAL","finance",HouseholdInquiryWorkbookParserTest.bytes(book),"atomic.xls","2026-10",CONTEXT);
+    var p=service.preview("COMMERCIAL","finance",HouseholdInquiryWorkbookParserTest.bytes(book),"atomic.xls","2026-10");
     jdbc.execute("CREATE TRIGGER mpp03_injected_failure BEFORE INSERT ON lp_household_inquiry_price FOR EACH ROW BEGIN IF NEW.material_code='"+second+"' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='MPP03_INJECTED_SECOND_ROW'; END IF; END");
     try{assertThatThrownBy(()->publish(p)).isInstanceOf(org.springframework.dao.DataAccessException.class).hasStackTraceContaining("MPP03_INJECTED_SECOND_ROW");}finally{jdbc.execute("DROP TRIGGER mpp03_injected_failure");}
     assertThat(service.history("COMMERCIAL",first,1,100).rows()).hasSize(1);assertThat(service.history("COMMERCIAL",second,1,100).rows()).hasSize(1);
@@ -239,7 +244,7 @@ class HouseholdInquiryPublicationIntegrationTest {
   @Test void oversizedFinalSourceEvidenceIsARowErrorDuringPreview() throws Exception {
     var book=HouseholdInquiryWorkbookParserTest.workbook();var row=book.getSheetAt(0).getRow(2);row.getCell(0).setCellValue(material());
     for(int c=0;c<19;c++)if(!Set.of(0,1,2,4,13).contains(c)) {var cell=row.getCell(c);if(cell==null)cell=row.createCell(c);cell.setCellValue("财".repeat(16000));}
-    var p=service.preview("COMMERCIAL","finance",HouseholdInquiryWorkbookParserTest.bytes(book),"oversized-evidence.xls","2026-10",CONTEXT);
+    var p=service.preview("COMMERCIAL","finance",HouseholdInquiryWorkbookParserTest.bytes(book),"oversized-evidence.xls","2026-10");
     assertThat(p.content().workbook().errors()).singleElement().satisfies(e->{assertThat(e.excelRow()).isEqualTo(3);assertThat(e.column()).isEqualTo("A:S");});
     failure(()->publish(p),"PREVIEW_HAS_ERRORS");
   }
@@ -261,11 +266,11 @@ class HouseholdInquiryPublicationIntegrationTest {
   @Test void partialImportsPreserveAbsentMaterialsAndReferenceAndRateChangesAreDistinct() throws Exception {
     String absent=material(),changed=material();var untouched=publish(preview(absent,"4"));var original=publish(preview(changed,"5"));
     var book=HouseholdInquiryWorkbookParserTest.workbook();var row=book.getSheetAt(0).getRow(2);row.getCell(0).setCellValue(changed);row.getCell(4).setCellValue("5.0");row.getCell(17).setCellValue("888");
-    var p=service.preview("COMMERCIAL","finance",HouseholdInquiryWorkbookParserTest.bytes(book),"reference-only.xls","2026-10",CONTEXT);assertThat(p.content().rows().getFirst().priceChanged()).isFalse();
+    var p=service.preview("COMMERCIAL","finance",HouseholdInquiryWorkbookParserTest.bytes(book),"reference-only.xls","2026-10");assertThat(p.content().rows().getFirst().priceChanged()).isFalse();
     assertThat(publish(p).newVersions()).isEqualTo(1);assertThat(service.financial("COMMERCIAL",original.rows().getFirst().versionId()).evidence().source().financialReference().get("R").value()).isEqualTo("999999");
     assertThat(service.current("COMMERCIAL",absent,1,20).rows().getFirst().id()).isEqualTo(untouched.rows().getFirst().versionId());
     book=HouseholdInquiryWorkbookParserTest.workbook();row=book.getSheetAt(0).getRow(2);row.getCell(0).setCellValue(changed);row.getCell(4).setCellValue("5");row.getCell(13).setCellValue("9.25%");
-    var rate=service.preview("COMMERCIAL","finance",HouseholdInquiryWorkbookParserTest.bytes(book),"rate-change.xls","2026-10",CONTEXT);assertThat(rate.content().rows().getFirst().priceChanged()).isTrue();publish(rate);
+    var rate=service.preview("COMMERCIAL","finance",HouseholdInquiryWorkbookParserTest.bytes(book),"rate-change.xls","2026-10");assertThat(rate.content().rows().getFirst().priceChanged()).isTrue();publish(rate);
     assertThat(service.current("COMMERCIAL",changed,1,20).rows().getFirst().householdRate()).isEqualTo("0.0925");
   }
   @Test void oppositeFileOrdersCannotProduceAMixtureOfTwoCompetingMultiMaterialBatches() throws Exception {
@@ -273,7 +278,7 @@ class HouseholdInquiryPublicationIntegrationTest {
     for(int variant=0;variant<2;variant++) {
       var book=HouseholdInquiryWorkbookParserTest.workbook();var sheet=book.getSheetAt(0);var row=sheet.getRow(2);row.getCell(0).setCellValue(variant==0?a:b);row.getCell(4).setCellValue(Integer.toString(variant+1));
       var next=sheet.createRow(3);for(var cell:row){var copy=next.createCell(cell.getColumnIndex());if(cell.getCellType()==org.apache.poi.ss.usermodel.CellType.STRING)copy.setCellValue(cell.getStringCellValue());else copy.setCellValue(cell.getNumericCellValue());}next.getCell(0).setCellValue(variant==0?b:a);
-      previews.add(service.preview("COMMERCIAL","finance",HouseholdInquiryWorkbookParserTest.bytes(book),"opposite-order.xls","2026-10",CONTEXT));
+      previews.add(service.preview("COMMERCIAL","finance",HouseholdInquiryWorkbookParserTest.bytes(book),"opposite-order.xls","2026-10"));
     }
     var ready=new CountDownLatch(2);
     try(var pool=Executors.newFixedThreadPool(2)) {

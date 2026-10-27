@@ -14,7 +14,10 @@ public interface QuoteRequestQueryService {
       String oaNo,
       String processCode,
       String sourceType,
-      String classificationStatus);
+      String classificationStatus,
+      String customer,
+      String quoteScenario,
+      String completionStatus);
 
   QuoteRequestDetailResponse getRequestDetail(String oaNo);
 

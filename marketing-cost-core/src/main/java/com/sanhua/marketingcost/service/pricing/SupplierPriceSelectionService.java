@@ -39,7 +39,8 @@ public class SupplierPriceSelectionService {
   }
 
   public Selection select(SupplierPriceScope scope, List<SupplierPriceCandidate> candidates) {
-    return select(scope, candidates, candidates.size() > 1 ? activeRatios(scope) : List.of());
+    return select(scope, candidates,
+        candidates.size() > 1 && !samePrice(candidates) ? activeRatios(scope) : List.of());
   }
 
   public Selection select(
@@ -61,6 +62,11 @@ public class SupplierPriceSelectionService {
     if (candidates.isEmpty()) return new Selection(null, null, "NO_PRICE", "没有有效价格", null);
     if (candidates.size() == 1) {
       return new Selection(candidates.get(0), null, "SINGLE", "单一供应商，直接取价", null);
+    }
+    if (samePrice(candidates)) {
+      // 同一有效取价范围内价格一致，不需要供货比率或人工确认；沿用稳定的供应商并列顺序。
+      return new Selection(SupplierRatioPricePolicy.highest(candidates), null,
+          "SAME_PRICE", "各供应商有效单价相同，直接取价", null);
     }
     var bySupplier = SupplierRatioPricePolicy.index(active);
     SupplierPriceCandidate chosen = SupplierRatioPricePolicy.choose(candidates, active);
@@ -106,6 +112,13 @@ public class SupplierPriceSelectionService {
         status,
         message,
         review);
+  }
+
+  private static boolean samePrice(List<SupplierPriceCandidate> candidates) {
+    if (candidates.size() < 2 || candidates.get(0).unitPrice() == null) return false;
+    BigDecimal price = candidates.get(0).unitPrice();
+    return price.signum() >= 0 && candidates.stream()
+        .allMatch(candidate -> candidate.unitPrice() != null && price.compareTo(candidate.unitPrice()) == 0);
   }
 
   public List<SupplierSupplyRatio> activeRatios(SupplierPriceScope scope) {

@@ -123,7 +123,7 @@ class MonthlyCostVersionIntegrationTest {
     try(var stream=MonthlyCostVersionIntegrationTest.class.getResourceAsStream("/household-inquiry/real-20261023.xls");var book=org.apache.poi.ss.usermodel.WorkbookFactory.create(stream);var bytes=new java.io.ByteArrayOutputStream()){
       var sheet=book.getSheet("10月线圈询价");for(int row=sheet.getLastRowNum();row>2;row--)if(sheet.getRow(row)!=null)sheet.removeRow(sheet.getRow(row));
       sheet.getRow(2).getCell(0).setCellValue(code);sheet.getRow(2).getCell(4).setCellValue(price);book.write(bytes);
-      var preview=inquiries.preview("COMMERCIAL","test",bytes.toByteArray(),"mpp08-controlled-input.xls","2026-10",new PriceContext("件","CNY",TaxBasis.EXCLUDED));
+      var preview=inquiries.preview("COMMERCIAL","test",bytes.toByteArray(),"mpp08-controlled-input.xls","2026-10");
       inquiries.publish("COMMERCIAL","test",new PublishRequest(preview.previewId(),preview.publishRequestId(),preview.previewFingerprint()));
     }
   }

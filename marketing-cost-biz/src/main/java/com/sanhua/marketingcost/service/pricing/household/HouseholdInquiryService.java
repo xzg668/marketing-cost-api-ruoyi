@@ -19,6 +19,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** Source maintenance only. No monthly adoption or costing dependency enters this module. */
 @Service
 public class HouseholdInquiryService {
+  private static final PriceContext IMPORT_PRICE_CONTEXT=new PriceContext("件","CNY",TaxBasis.EXCLUDED);
   private final HouseholdInquiryQueryMapper queries;
   private final HouseholdInquiryStorage storage;
   private final HouseholdInquiryWorkbookParser parser;
@@ -44,8 +45,9 @@ public class HouseholdInquiryService {
     transaction=new TransactionTemplate(manager);transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);transaction.setTimeout(8);
   }
 
-  public Preview preview(String unit,String actor,byte[] bytes,String fileName,String sourceMonth,PriceContext context) {
-    scope(unit);actor(actor);Objects.requireNonNull(context,"来源价格口径不能为空");month(sourceMonth);
+  public Preview preview(String unit,String actor,byte[] bytes,String fileName,String sourceMonth) {
+    scope(unit);actor(actor);month(sourceMonth);
+    var context=IMPORT_PRICE_CONTEXT;
     var workbook=validateEvidence(parser.parse(bytes,fileName),context,sourceMonth);
     String key=files.save(unit,bytes); // Completely durable and SHA-verified before inserting a batch.
     if(!key.equals(unit+"/"+workbook.sha256()))throw new IllegalStateException("解析原件与已归档原件摘要不一致");

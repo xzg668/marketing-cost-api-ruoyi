@@ -76,7 +76,7 @@ class ElectronicDrawingMaterialMapperIntegrationTest extends BomMapperTestBase {
     insert(code, "COMMERCIAL", "ACTUAL-DRAW", "ACTUAL-SPEC", "ACTUAL-MODEL", 1);
     insert("EDX-" + suffix + "-B", "COMMERCIAL", "OTHER-DRAW", "QUOTE-SPEC", "QUOTE-MODEL", 1);
     var context = quote(code, "QUOTE-MODEL", "QUOTE-SPEC", "QUOTE-DRAW");
-    assertThat(lookup.requireDrawing(context, null)).isEqualTo("ACTUAL-DRAW");
+    assertThat(lookup.requireDrawing(context, null)).isEqualTo("ACTUAL-DRAW-MX");
     assertThat(lookup.options(context))
         .singleElement()
         .satisfies(option -> assertThat(option.materialNo()).isEqualTo(code));
@@ -91,7 +91,7 @@ class ElectronicDrawingMaterialMapperIntegrationTest extends BomMapperTestBase {
     assertThat(lookup.options(context))
         .singleElement()
         .satisfies(option -> assertThat(option.materialNo()).endsWith("-B"));
-    assertThat(lookup.requireDrawing(context, null)).isEqualTo("SHARED-DRAW");
+    assertThat(lookup.requireDrawing(context, null)).isEqualTo("SHARED-DRAW-MX");
   }
 
   @Test
@@ -102,7 +102,7 @@ class ElectronicDrawingMaterialMapperIntegrationTest extends BomMapperTestBase {
     insert("EDX-" + suffix + "-OTHER", "PLATE", "OTHER-DRAW", "UNKNOWN", model, 1);
     insert("EDX-" + suffix + "-INACTIVE", "COMMERCIAL", "INACTIVE-DRAW", "UNKNOWN", model, 0);
     assertThat(lookup.requireDrawing(quote(null, model, "UNKNOWN", null), null))
-        .isEqualTo("FALLBACK-DRAW");
+        .isEqualTo("FALLBACK-DRAW-MX");
   }
 
   @Test
@@ -110,10 +110,30 @@ class ElectronicDrawingMaterialMapperIntegrationTest extends BomMapperTestBase {
     String model = "MODEL-" + suffix;
     insert("EDX-" + suffix + "-A", "COMMERCIAL", "DRAW-A", "SPEC-A", model, 1);
     var context = quote(null, model, " ", null);
-    assertThat(lookup.requireDrawing(context, null)).isEqualTo("DRAW-A");
+    assertThat(lookup.requireDrawing(context, null)).isEqualTo("DRAW-A-MX");
     insert("EDX-" + suffix + "-B", "COMMERCIAL", "DRAW-B", "SPEC-B", model, 1);
     assertThat(lookup.options(context)).hasSize(2);
-    assertThatThrownBy(() -> lookup.requireDrawing(context, null)).hasMessageContaining("唯一料品");
+    assertThatThrownBy(() -> lookup.requireDrawing(context, null)).hasMessageContaining("唯一图号");
+  }
+
+  @Test
+  void actualLookupUsesOneDrawingWhileRetainingBothMaterialCandidates() {
+    String model = "MODEL-" + suffix;
+    String drawing = "DRAW-" + suffix;
+    insert("EDX-" + suffix + "-A", "COMMERCIAL", drawing, "SPEC-A", model, 1);
+    insert("EDX-" + suffix + "-B", "COMMERCIAL", drawing, "SPEC-A", model, 1);
+    insert("EDX-" + suffix + "-OTHER", "PLATE", "OTHER-DRAW", "SPEC-A", model, 1);
+    insert("EDX-" + suffix + "-INACTIVE", "COMMERCIAL", "INACTIVE-DRAW", "SPEC-A", model, 0);
+    var context = quote(null, model, "SPEC-A", null);
+    assertThat(lookup.options(context)).hasSize(2);
+    assertThat(lookup.drawingOptions(context))
+        .singleElement()
+        .satisfies(option -> {
+          assertThat(option.drawingNo()).isEqualTo(drawing + "-MX");
+          assertThat(option.materialNo()).isNull();
+        });
+    assertThat(lookup.requireDrawing(context, null)).isEqualTo(drawing + "-MX");
+    assertThat(lookup.requireDrawing(context, drawing)).isEqualTo(drawing + "-MX");
   }
 
   @Test
@@ -124,7 +144,7 @@ class ElectronicDrawingMaterialMapperIntegrationTest extends BomMapperTestBase {
     insert("EDX-" + suffix + "-C", "COMMERCIAL", "DRAW-C", "SPEC-C", model, 1);
     var context = quote(null, model, "SPEC-A", null);
     assertThat(lookup.options(context)).hasSize(2);
-    assertThatThrownBy(() -> lookup.requireDrawing(context, null)).hasMessageContaining("唯一料品");
+    assertThatThrownBy(() -> lookup.requireDrawing(context, null)).hasMessageContaining("唯一图号");
   }
 
   @Test

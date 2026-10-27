@@ -131,7 +131,7 @@ public class TechnicalDataDrawingApplicationService {
         composed && TechnicalDataSubmissionState.submitted(source.getVersionStatus()),
         drawing != null && !Objects.equals(drawing.sourceVersionId(), context.sourceVersionId()),
         drawing,
-        productLookup.options(context),
+        productLookup.drawingOptions(context),
         nodes.stream()
             .map(
                 node ->

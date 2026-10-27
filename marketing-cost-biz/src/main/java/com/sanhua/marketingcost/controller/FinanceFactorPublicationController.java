@@ -7,11 +7,17 @@ import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.financefactor.FinanceFactorCuAdjustmentService;
 import com.sanhua.marketingcost.service.financefactor.FinanceFactorPriceReader;
 import com.sanhua.marketingcost.service.financefactor.FinanceFactorPublicationService;
+import com.sanhua.marketingcost.service.financefactor.FinanceFactorWorkbookExportService;
 import com.sanhua.marketingcost.service.pricing.FactorPriceScope.Condition;
 import com.sanhua.marketingcost.service.pricing.FactorPriceSnapshot;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.security.Principal;
+import java.nio.charset.StandardCharsets;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -29,14 +35,29 @@ public class FinanceFactorPublicationController {
   private final FinanceFactorPublicationService service;
   private final FinanceFactorPriceReader reader;
   private final FinanceFactorCuAdjustmentService copper;
+  private final FinanceFactorWorkbookExportService exports;
 
   public FinanceFactorPublicationController(
       FinanceFactorPublicationService service,
       FinanceFactorPriceReader reader,
-      FinanceFactorCuAdjustmentService copper) {
+      FinanceFactorCuAdjustmentService copper,
+      FinanceFactorWorkbookExportService exports) {
     this.service = service;
     this.reader = reader;
     this.copper = copper;
+    this.exports = exports;
+  }
+
+  @PreAuthorize("@ss.hasPermi('price:finance-base:import')")
+  @GetMapping("/export-previous-month")
+  public ResponseEntity<byte[]> exportPreviousMonth(@RequestParam String priceMonth, @RequestParam String priceOrgCode) {
+    var file = exports.previousMonth(context(priceMonth, priceOrgCode, null, null));
+    return ResponseEntity.ok()
+        .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+        .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(file.fileName(), StandardCharsets.UTF_8).build().toString())
+        .header("X-Finance-Source-Month", file.sourceMonth())
+        .header("X-Finance-Revision", Integer.toString(file.revision()))
+        .body(file.bytes());
   }
 
   @PreAuthorize("@ss.hasPermi('cost:finance-cu-base:edit')")

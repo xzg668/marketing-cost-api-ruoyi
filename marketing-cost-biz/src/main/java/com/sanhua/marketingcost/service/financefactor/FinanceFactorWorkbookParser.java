@@ -45,6 +45,13 @@ public class FinanceFactorWorkbookParser {
     if (bytes == null || bytes.length == 0) throw new IllegalArgumentException("财务基价文件不能为空");
     MaterialOrganization organization = MaterialOrganization.fromPriceOrgCode(orgCode);
     try (Workbook workbook = WorkbookFactory.create(new ByteArrayInputStream(bytes))) {
+      var editable = FinanceFactorEditWorkbook.parseIfSupported(workbook, bytes, fileName, orgCode, requestedSheet, canonicalKeys);
+      if (editable != null) {
+        var problems = new ArrayList<>(editable.problems());
+        validateDuplicateFactors(editable.sheetName(), editable.values(), problems);
+        return new FinanceFactorWorkbook(editable.fileName(), editable.fileSha256(), editable.sheetName(),
+            editable.parserVersion(), editable.schemes(), editable.values(), problems);
+      }
       Header header = findHeader(workbook, organization, requestedSheet);
       FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
       List<Problem> problems = new ArrayList<>();
@@ -100,11 +107,7 @@ public class FinanceFactorWorkbookParser {
               }
               normalizedUnit = "CNY/KG";
             }
-            if (effective.signum() < 0) throw new IllegalArgumentException("财务基价不能为负数");
-            if (effective.stripTrailingZeros().scale() > 16
-                || effective.precision() - effective.scale() > 18) {
-              throw new IllegalArgumentException("有效基价超出精确存储范围，不允许静默舍入");
-            }
+            validatePrice(effective);
             values.add(
                 new Value(
                     key,
@@ -132,7 +135,7 @@ public class FinanceFactorWorkbookParser {
       }
       if (values.isEmpty())
         problems.add(new Problem(header.sheet().getSheetName(), null, "未找到有效基价行"));
-      validateDuplicateFactors(header, values, problems);
+      validateDuplicateFactors(header.sheet().getSheetName(), values, problems);
       return new FinanceFactorWorkbook(
           fileName,
           sha256(bytes),
@@ -255,7 +258,7 @@ public class FinanceFactorWorkbookParser {
         new SchemeColumn("BOARD", "板换固定基价", tender, Condition.TENDER));
   }
 
-  private void validateDuplicateFactors(Header header, List<Value> values, List<Problem> problems) {
+  private void validateDuplicateFactors(String sheetName, List<Value> values, List<Problem> problems) {
     Map<String, Value> byIdentity = new LinkedHashMap<>();
     for (Value value : values) {
       String key = value.canonicalKey() + "|" + value.schemeCode() + "|" + value.condition();
@@ -266,14 +269,14 @@ public class FinanceFactorWorkbookParser {
               || previous.taxIncluded() != value.taxIncluded())) {
         problems.add(
             new Problem(
-                header.sheet().getSheetName(),
+                sheetName,
                 value.cellRef(),
                 "同一因素/方案/条件存在冲突值，与" + previous.cellRef() + "不一致：" + value.canonicalKey()));
       }
     }
   }
 
-  private static BigDecimal number(Cell cell, FormulaEvaluator evaluator) {
+  static BigDecimal number(Cell cell, FormulaEvaluator evaluator) {
     if (blank(cell)) throw new IllegalArgumentException("方案和本表上月均价均缺值");
     if (cell.getCellType() == CellType.NUMERIC) {
       return new BigDecimal(
@@ -296,7 +299,7 @@ public class FinanceFactorWorkbookParser {
     throw new IllegalArgumentException("基价单元格类型无效：" + cell.getCellType());
   }
 
-  private static String unit(String value) {
+  static String unit(String value) {
     return switch (compact(value).toUpperCase(java.util.Locale.ROOT)) {
       case "元/公斤", "元/千克", "公斤", "千克", "KG", "CNY/KG" -> "CNY/KG";
       case "元/吨", "吨", "CNY/TON" -> "CNY/TON";
@@ -344,7 +347,7 @@ public class FinanceFactorWorkbookParser {
     return value.replaceAll("\\s+", "").replace('（', '(').replace('）', ')');
   }
 
-  private static String rawValue(Cell cell, BigDecimal evaluated) {
+  static String rawValue(Cell cell, BigDecimal evaluated) {
     if (cell instanceof XSSFCell xssf
         && xssf.getRawValue() != null
         && (cell.getCellType() == CellType.NUMERIC || cell.getCellType() == CellType.FORMULA))
@@ -352,6 +355,12 @@ public class FinanceFactorWorkbookParser {
     return cell.getCellType() == CellType.STRING
         ? cell.getStringCellValue()
         : evaluated.toPlainString();
+  }
+
+  static void validatePrice(BigDecimal price) {
+    if (price.signum() < 0) throw new IllegalArgumentException("财务基价不能为负数");
+    if (price.stripTrailingZeros().scale() > 16 || price.precision() - price.scale() > 18)
+      throw new IllegalArgumentException("有效基价超出精确存储范围，不允许静默舍入");
   }
 
   public static String sha256(byte[] value) {

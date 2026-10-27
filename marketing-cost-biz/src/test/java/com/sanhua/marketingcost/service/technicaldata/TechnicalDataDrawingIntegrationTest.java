@@ -54,7 +54,7 @@ class TechnicalDataDrawingIntegrationTest extends BomMapperTestBase {
   @BeforeEach
   void fixture() throws Exception {
     String key = "TW08-" + UUID.randomUUID();
-    drawingNo = key;
+    drawingNo = key + "-MX";
     jdbc.update(
         "INSERT INTO oa_form(oa_no,accounting_period_month,business_unit_type)"
             + " VALUES(?,'2026-09','COMMERCIAL')",
@@ -327,10 +327,12 @@ class TechnicalDataDrawingIntegrationTest extends BomMapperTestBase {
 
   @Test
   void missingMasterDrawingStopsBeforeAcquisitionAndVersionWrite() {
-    jdbc.update(
+    String material = jdbc.queryForObject(
+        "SELECT material_no FROM oa_form_item WHERE id=?", String.class, itemId);
+    assertThat(jdbc.update(
         "UPDATE lp_material_master_raw SET drawing_no=NULL WHERE material_code=? AND"
             + " organization_code='COMMERCIAL'",
-        drawingNo);
+        material)).isEqualTo(1);
     assertThatThrownBy(() -> service.recheck(productId, request(0), WANG))
         .hasMessageContaining("未查到");
     verifyNoInteractions(acquisition);

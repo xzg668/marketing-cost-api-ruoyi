@@ -176,7 +176,7 @@ class DrawingReviewIntegrationTest extends BomMapperTestBase {
   void wrongDrawingVersionOrBusinessBindingIs409(String mode) throws Exception {
     var body = confirmed();
     switch (mode) {
-      case "drawing" -> ((ObjectNode) body.get("data")).remove("DRAW-01");
+      case "drawing" -> ((ObjectNode) body.get("data")).remove(task.getDrawingNo());
       case "month" -> jdbc.update("UPDATE lp_drawing_verification_task SET accounting_month='2025-01' WHERE id=?", task.getId());
       case "organization" -> jdbc.update("UPDATE lp_drawing_verification_task SET material_org_code='OTHER' WHERE id=?", task.getId());
       case "quote-owner" -> jdbc.update("UPDATE oa_form_item SET business_unit_type='HOUSEHOLD' WHERE id=?", itemId);
@@ -205,7 +205,7 @@ class DrawingReviewIntegrationTest extends BomMapperTestBase {
     var body = confirmed(); send(request(body), 200, "RECEIVED");
     var saved = results.findEvent(task.getId(), "MANUAL_CONFIRMATION");
     switch (field) {
-      case "qty" -> ((ObjectNode) body.path("data").path("DRAW-01").path("params").path("items").get(0)).put("qty", "8");
+      case "qty" -> ((ObjectNode) body.path("data").path(task.getDrawingNo()).path("params").path("items").get(0)).put("qty", "8");
       case "status" -> body.put("status", "reviewRequired");
       case "revision" -> body.put("revision", 4);
       case "deliveryStatus" -> body.put("deliveryStatus", "delivered");
@@ -340,7 +340,12 @@ class DrawingReviewIntegrationTest extends BomMapperTestBase {
     assertThat(results.findEvent(task.getId(), "MANUAL_CONFIRMATION").getRawSummaryJson()).isEqualTo(body.toString());
   }
 
-  private ObjectNode confirmed() { return DrawingVerificationFixtures.confirmed(task.getExternalTaskId()); }
+  private ObjectNode confirmed() {
+    var body = DrawingVerificationFixtures.confirmed(task.getExternalTaskId());
+    var data = (ObjectNode) body.get("data");
+    data.set(task.getDrawingNo(), data.remove("DRAW-01"));
+    return body;
+  }
 
   private MockHttpServletRequestBuilder request(ObjectNode body) {
     return post(DrawingReviewController.PATH).contentType(MediaType.APPLICATION_JSON).content(body.toString())

@@ -712,8 +712,7 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
       for (int index = sheet.getLastRowNum(); index > 2; index--)
         if (sheet.getRow(index) != null) sheet.removeRow(sheet.getRow(index));
       sheet.getRow(2).getCell(0).setCellValue(parentCode); sheet.getRow(2).getCell(4).setCellValue("20.9853"); book.write(bytes);
-      var preview = householdInquiries.preview("COMMERCIAL", "MPP12", bytes.toByteArray(), "mpp12-controlled-household.xls", month,
-          new com.sanhua.marketingcost.service.pricing.household.HouseholdInquiryModels.PriceContext("件", "CNY", TaxBasis.EXCLUDED));
+      var preview = householdInquiries.preview("COMMERCIAL", "MPP12", bytes.toByteArray(), "mpp12-controlled-household.xls", month);
       householdInquiries.publish("COMMERCIAL", "MPP12", new com.sanhua.marketingcost.service.pricing.household.HouseholdInquiryModels.PublishRequest(
           preview.previewId(), preview.publishRequestId(), preview.previewFingerprint()));
     }

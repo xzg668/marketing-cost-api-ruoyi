@@ -472,11 +472,8 @@ class MonthlyMaterialPriceServiceIntegrationTest {
       throws Exception {
     var bytes =
         getClass().getResourceAsStream("/household-inquiry/real-20261023.xls").readAllBytes();
-    var basis =
-        new com.sanhua.marketingcost.service.pricing.household.HouseholdInquiryModels.PriceContext(
-            "件", "CNY", TaxBasis.EXCLUDED);
     var preview =
-        inquiries.preview("COMMERCIAL", "test", bytes, "real-source.xls", "2026-10", basis);
+        inquiries.preview("COMMERCIAL", "test", bytes, "real-source.xls", "2026-10");
     inquiries.publish(
         "COMMERCIAL",
         "test",
@@ -534,7 +531,7 @@ class MonthlyMaterialPriceServiceIntegrationTest {
       changed = stream.toByteArray();
     }
     var update =
-        inquiries.preview("COMMERCIAL", "test", changed, "updated-source.xls", "2026-10", basis);
+        inquiries.preview("COMMERCIAL", "test", changed, "updated-source.xls", "2026-10");
     inquiries.publish(
         "COMMERCIAL",
         "test",
@@ -555,11 +552,8 @@ class MonthlyMaterialPriceServiceIntegrationTest {
   void aHouseholdSourceCannotGuessUnitCurrencyTaxOrAnUnrecordedSupplier() throws Exception {
     var bytes =
         getClass().getResourceAsStream("/household-inquiry/real-20261023.xls").readAllBytes();
-    var basis =
-        new com.sanhua.marketingcost.service.pricing.household.HouseholdInquiryModels.PriceContext(
-            "件", "CNY", TaxBasis.EXCLUDED);
     var preview =
-        inquiries.preview("HOUSEHOLD", "test", bytes, "scope-source.xls", "2026-10", basis);
+        inquiries.preview("HOUSEHOLD", "test", bytes, "scope-source.xls", "2026-10");
     inquiries.publish(
         "HOUSEHOLD",
         "test",

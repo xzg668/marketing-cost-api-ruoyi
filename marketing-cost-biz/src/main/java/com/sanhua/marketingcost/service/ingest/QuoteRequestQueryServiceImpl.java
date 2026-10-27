@@ -115,18 +115,24 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
       String oaNo,
       String processCode,
       String sourceType,
-      String classificationStatus) {
+      String classificationStatus,
+      String customer,
+      String quoteScenario,
+      String completionStatus) {
     LambdaQueryWrapper<OaForm> query =
         Wrappers.lambdaQuery(OaForm.class)
             .like(StringUtils.hasText(oaNo), OaForm::getOaNo, trimToNull(oaNo))
-            .eq(StringUtils.hasText(processCode), OaForm::getProcessCode, trimToNull(processCode))
+            .like(StringUtils.hasText(processCode), OaForm::getProcessCode, trimToNull(processCode))
             .eq(StringUtils.hasText(sourceType), OaForm::getSourceType, trimToNull(sourceType))
+            .like(StringUtils.hasText(customer), OaForm::getCustomer, trimToNull(customer))
+            .eq(StringUtils.hasText(quoteScenario), OaForm::getQuoteScenario, trimToNull(quoteScenario))
             .eq(
                 StringUtils.hasText(classificationStatus),
                 OaForm::getClassificationStatus,
                 trimToNull(classificationStatus))
             .orderByDesc(OaForm::getApplyDate)
             .orderByDesc(OaForm::getId);
+    applyCompletionFilter(query, completionStatus);
     Page<OaForm> page = new Page<>(normalizePageNo(pageNo), normalizePageSize(pageSize));
     Page<OaForm> result = oaFormMapper.selectPage(page, query);
     List<QuoteRequestListItemResponse> rows = new ArrayList<>();
@@ -134,6 +140,26 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
       rows.add(toListItem(form));
     }
     return new PageResult<>(rows, result.getTotal());
+  }
+
+  /** Match the same visible, active product lines and status precedence used by aggregateCalcStatus. */
+  private void applyCompletionFilter(LambdaQueryWrapper<OaForm> query, String completionStatus) {
+    String completion = trimToNull(completionStatus);
+    if (completion == null) return;
+    if (!"DONE".equals(completion) && !"NOT_DONE".equals(completion)) {
+      throw new IllegalArgumentException("核算状态应为 DONE 或 NOT_DONE");
+    }
+    String unit = com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType();
+    String scope = " FROM oa_form_item qi WHERE qi.oa_form_id=oa_form.id AND qi.deleted=0";
+    if (StringUtils.hasText(unit)) scope += " AND qi.business_unit_type={0}";
+    String state = "TRIM(COALESCE(qi.calc_status,''))";
+    String pending = "(" + state + " IN ('CALCULATING','RUNNING','试算中') OR "
+        + "(qi.calc_at IS NULL AND qi.confirmed_cost_version_id IS NULL AND "
+        + state + " NOT IN ('CALCULATED','DONE','SUCCESS','已核算')))";
+    String done = "(EXISTS (SELECT 1" + scope + ") AND NOT EXISTS (SELECT 1" + scope + " AND " + pending + "))";
+    String condition = "DONE".equals(completion) ? done : "NOT " + done;
+    if (StringUtils.hasText(unit)) query.apply(condition, unit);
+    else query.apply(condition);
   }
 
   @Override

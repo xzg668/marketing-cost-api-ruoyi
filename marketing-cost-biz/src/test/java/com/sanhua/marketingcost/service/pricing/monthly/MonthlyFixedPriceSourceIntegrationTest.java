@@ -46,6 +46,25 @@ class MonthlyFixedPriceSourceIntegrationTest {
   static MonthlyPriceRequest request(String code,String org){return new MonthlyPriceRequest(new MonthlyPriceFamilyKey(YearMonth.of(2026,10),"COMMERCIAL",code,null,"件","CNY",TaxBasis.EXCLUDED,null),org,NonCuConditions.empty(),BigDecimal.ONE);}
   static String code(){return "MPP05-fixed-"+UUID.randomUUID();}
   static void price(String code,String org,String supplier,String value,String from,String to){jdbc.update("INSERT INTO lp_price_fixed_item(org_code,supplier_code,supplier_name,material_code,material_name,spec_model,unit,fixed_price,tax_included,effective_from,effective_to,business_unit_type,source_kind,source_type,source_system,source_batch_no,external_row_id,process_no,created_at,updated_at) VALUES(?,?,?,?,'fixture material','fixture specification','件',?,0,?,?,'COMMERCIAL','PUBLIC','PURCHASE_FIXED','SRM','fixture-day-1',?,'fixture-process-original',NOW(),NOW())",org,supplier,supplier,code,new BigDecimal(value),from,to,UUID.randomUUID().toString());}
+  @Test void sameSupplierPricesResolveWithoutRatiosAndAdoptedPriceStillSurvivesSourceChanges() throws Exception {
+    String code=code();price(code,"210","S1","0.7226","2026-10-01","2027-01-01");price(code,"210","S2","0.722600","2026-10-01","2027-01-01");
+    var request=request(code,"210");var c=context();
+    var resolved=operation.resolveCandidates(c,Set.of(request));assertThat(resolved.problems()).isEmpty();assertThat(c.supplierReviews().reviews()).isEmpty();
+    var selection=resolved.values().get(request).selection();assertThat(selection.fact().price()).isEqualByComparingTo("0.7226");
+    var tree=new ObjectMapper().readTree(selection.fact().evidence().json());assertThat(tree.path("source").path("selectionRule").asText()).isEqualTo("SAME_PRICE");assertThat(tree.path("source").path("selected").path("supplierCode").asText()).isEqualTo("S2");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code=?",Long.class,code)).isZero();
+    var adopted=operation.adopt(c,new MonthlyAdoptionPlan(Map.of(request,selection),List.of(new MonthlyAdoptionPlan.Use("root",request,BigDecimal.ONE)),Set.of()));
+    long id=adopted.plan().selections().get(request).monthlyPriceId();assertThat(adopted.supplierReviews()).isEmpty();
+    jdbc.update("UPDATE lp_price_fixed_item SET fixed_price=9 WHERE material_code=? AND supplier_code='S2'",code);
+    var next=context();var reused=operation.resolveCandidates(next,Set.of(request)).values().get(request).selection();assertThat(reused.monthlyPriceId()).isEqualTo(id);assertThat(reused.fact().price()).isEqualByComparingTo("0.7226");assertThat(next.supplierReviews().reviews()).isEmpty();
+  }
+  @Test void equalNumbersNeverBypassUnitAndTaxValidation() {
+    String code=code();price(code,"210","S1","10","2026-10-01","2027-01-01");price(code,"210","S2","10","2026-10-01","2027-01-01");
+    jdbc.update("UPDATE lp_price_fixed_item SET unit='KG' WHERE material_code=? AND supplier_code='S2'",code);
+    var request=request(code,"210");var result=source.read(context(),Set.of(request));assertThat(result.values()).isEmpty();assertThat(result.problems().get(request).reason()).isEqualTo(MonthlyAdoptionRetryPolicy.Failure.INVALID_INPUT);
+    jdbc.update("UPDATE lp_price_fixed_item SET unit='件',tax_included=1 WHERE material_code=? AND supplier_code='S2'",code);
+    result=source.read(context(),Set.of(request));assertThat(result.values()).isEmpty();assertThat(result.problems().get(request).reason()).isEqualTo(MonthlyAdoptionRetryPolicy.Failure.INVALID_INPUT);
+  }
   @Test void actualSourceSelectsLatestSupplierVersionKeepsZeroAndCapturesDailyRowIndependently() throws Exception {
     String code=code();price(code,"210","S1","9","2026-09-01","2027-01-01");price(code,"210","S1","0","2026-10-01","2027-01-01");price(code,"220","S1","50","2026-10-01","2027-01-01");
     var request=request(code,"210");var result=source.read(context(),Set.of(request));assertThat(result.problems()).isEmpty();var selected=result.values().get(request).selection();assertThat(selected.fact().price()).isZero();assertThat(selected.applicability().matches(request(code,"220"))).isFalse();

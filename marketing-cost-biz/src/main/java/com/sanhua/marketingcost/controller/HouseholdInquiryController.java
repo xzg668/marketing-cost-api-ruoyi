@@ -24,9 +24,9 @@ public class HouseholdInquiryController {
   @PostMapping(value="/import-preview",consumes=MediaType.MULTIPART_FORM_DATA_VALUE)
   @PreAuthorize("@ss.hasPermi('price:household-inquiry:import')")
   public CommonResult<Preview> preview(@RequestParam MultipartFile file,@RequestParam String sourceMonth,
-      @RequestPart("priceContext") PriceContext context,Principal principal) throws IOException {
+      Principal principal) throws IOException {
     if(file==null||file.isEmpty()||file.getSize()>HouseholdInquiryWorkbookParser.MAX_BYTES)throw new IllegalArgumentException("请上传非空且不超过10 MB的家用询价工作簿");
-    return CommonResult.success(service.preview(unit(),actor(principal),file.getBytes(),file.getOriginalFilename(),sourceMonth,context));
+    return CommonResult.success(service.preview(unit(),actor(principal),file.getBytes(),file.getOriginalFilename(),sourceMonth));
   }
   @PostMapping("/import-publish")
   @PreAuthorize("@ss.hasPermi('price:household-inquiry:import')")

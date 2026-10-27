@@ -42,6 +42,18 @@ class HouseholdInquiryControllerTest {
     var auth=login("price:household-inquiry:query");
     mvc.perform(get(BASE+"/12/financial-reference").principal(auth)).andExpect(status().isForbidden());mvc.perform(get(BASE+"/12/original").principal(auth)).andExpect(status().isForbidden());verifyNoInteractions(service);
   }
+  @Test void fixedTemplatePreviewNeedsOnlyFileAndSourceMonth() throws Exception {
+    var auth=login("price:household-inquiry:import");byte[] original={1,2,3};
+    mvc.perform(multipart(BASE+"/import-preview").file(new MockMultipartFile("file","source.xls","application/octet-stream",original)).param("sourceMonth","2026-10").principal(auth)).andExpect(status().isOk());
+    verify(service).preview("COMMERCIAL","finance",original,"source.xls","2026-10");
+  }
+  @Test void clientSuppliedPriceContextCannotOverrideTheFixedTemplate() throws Exception {
+    var auth=login("price:household-inquiry:import");byte[] original={1,2,3};
+    mvc.perform(multipart(BASE+"/import-preview").file(new MockMultipartFile("file","source.xls","application/octet-stream",original))
+        .file(new MockMultipartFile("priceContext","","application/json","{\"unit\":\"kg\",\"currency\":\"USD\",\"taxBasis\":\"INCLUDED\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+        .param("sourceMonth","2026-10").principal(auth)).andExpect(status().isOk());
+    verify(service).preview("COMMERCIAL","finance",original,"source.xls","2026-10");
+  }
   @Test void listUsesAuthenticatedBusinessUnitAndSerializesExactAmountsWithoutFinancialColumns() throws Exception {
     var auth=login("price:household-inquiry:list");
     var row=new PriceView(12,"001Ab","线圈","S",1,true,"12.123456789012","0.085123456789","2026-10",new PriceContext("件","CNY",com.sanhua.marketingcost.service.pricing.monthly.TaxBasis.EXCLUDED),8,java.time.LocalDateTime.parse("2026-10-23T10:00:00"),List.of(3));

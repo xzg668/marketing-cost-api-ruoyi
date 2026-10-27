@@ -98,7 +98,7 @@ class QuoteRequestQueryServiceImplTest {
     stubListAggregates(List.of(item(10L, "MAT-1001")), List.of(status(10L, "SYNCED")), log(8L));
 
     PageResult<QuoteRequestListItemResponse> result =
-        service.pageRequests(1, 20, "OA-T8", null, null, null);
+        service.pageRequests(1, 20, "OA-T8", null, null, null, null, null, null);
 
     assertThat(result.getTotal()).isEqualTo(1);
     assertThat(result.getList().get(0).getOaNo()).isEqualTo("OA-T8-001");
@@ -116,7 +116,7 @@ class QuoteRequestQueryServiceImplTest {
     stubListAggregates(List.of(item(11L, "MAT-1002")), List.of(status(11L, "SYNCED")), log(9L));
 
     PageResult<QuoteRequestListItemResponse> result =
-        service.pageRequests(1, 20, null, "FI-SC-020", null, null);
+        service.pageRequests(1, 20, null, "FI-SC-020", null, null, null, null, null);
 
     assertThat(result.getList()).hasSize(1);
     assertThat(result.getList().get(0).getProcessCode()).isEqualTo("FI-SC-020");
@@ -130,7 +130,7 @@ class QuoteRequestQueryServiceImplTest {
     stubListAggregates(List.of(item(12L, "MAT-1003")), List.of(status(12L, "SYNCED")), log(10L));
 
     PageResult<QuoteRequestListItemResponse> result =
-        service.pageRequests(1, 20, null, null, "WEAVER_OA", null);
+        service.pageRequests(1, 20, null, null, "WEAVER_OA", null, null, null, null);
 
     assertThat(result.getList().get(0).getSourceType()).isEqualTo("WEAVER_OA");
   }
@@ -141,7 +141,7 @@ class QuoteRequestQueryServiceImplTest {
     stubListAggregates(List.of(item(12L, "MAT-1003")), List.of(status(12L, "NO_BOM")), log(10L));
 
     PageResult<QuoteRequestListItemResponse> result =
-        service.pageRequests(1, 20, null, null, null, "PENDING");
+        service.pageRequests(1, 20, null, null, null, "PENDING", null, null, null);
 
     assertThat(result.getList().get(0).getClassificationStatus()).isEqualTo("PENDING");
     assertThat(result.getList().get(0).getBomAggregateStatus()).isEqualTo("NO_BOM");
@@ -157,7 +157,7 @@ class QuoteRequestQueryServiceImplTest {
         log(11L));
 
     PageResult<QuoteRequestListItemResponse> reusedResult =
-        service.pageRequests(1, 20, "OA-T8-REUSED", null, null, null);
+        service.pageRequests(1, 20, "OA-T8-REUSED", null, null, null, null, null, null);
 
     assertThat(reusedResult.getList().get(0).getBomAggregateStatus()).isEqualTo("SYNCED");
     assertThat(reusedResult.getList().get(0).getCalculable()).isTrue();
@@ -169,7 +169,7 @@ class QuoteRequestQueryServiceImplTest {
         log(12L));
 
     PageResult<QuoteRequestListItemResponse> syncingResult =
-        service.pageRequests(1, 20, "OA-T8-SYNCING", null, null, null);
+        service.pageRequests(1, 20, "OA-T8-SYNCING", null, null, null, null, null, null);
 
     assertThat(syncingResult.getList().get(0).getBomAggregateStatus()).isEqualTo("SYNCING");
     assertThat(syncingResult.getList().get(0).getCalculable()).isFalse();
@@ -190,7 +190,7 @@ class QuoteRequestQueryServiceImplTest {
         log(13L));
 
     PageResult<QuoteRequestListItemResponse> page =
-        service.pageRequests(1, 20, "OA-T8-CALC", null, null, null);
+        service.pageRequests(1, 20, "OA-T8-CALC", null, null, null, null, null, null);
 
     assertThat(page.getList().get(0).getCalcStatus()).isEqualTo("未核算");
 

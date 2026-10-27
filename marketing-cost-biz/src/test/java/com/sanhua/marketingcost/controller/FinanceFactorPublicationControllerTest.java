@@ -31,6 +31,7 @@ class FinanceFactorPublicationControllerTest {
   private FinanceFactorPublicationService publisher;
   private FinanceFactorPriceReader reader;
   private FinanceFactorCuAdjustmentService copper;
+  private FinanceFactorWorkbookExportService exports;
   private final MockMultipartFile file =
       new MockMultipartFile("file", "基价.xlsx", "application/octet-stream", new byte[] {1, 2});
 
@@ -41,6 +42,7 @@ class FinanceFactorPublicationControllerTest {
     publisher = context.getBean(FinanceFactorPublicationService.class);
     reader = context.getBean(FinanceFactorPriceReader.class);
     copper = context.getBean(FinanceFactorCuAdjustmentService.class);
+    exports = context.getBean(FinanceFactorWorkbookExportService.class);
   }
 
   @AfterEach
@@ -64,6 +66,23 @@ class FinanceFactorPublicationControllerTest {
     assertThatThrownBy(() -> controller.publishCu(1L, adjustment(), () -> "finance"))
         .isInstanceOf(AccessDeniedException.class);
     verifyNoInteractions(publisher, copper);
+    assertThatThrownBy(() -> controller.exportPreviousMonth("2026-11", "210"))
+        .isInstanceOf(AccessDeniedException.class);
+    verifyNoInteractions(exports);
+  }
+
+  @Test
+  void exportUsesAuthenticatedBusinessUnitAndReturnsAnExcelAttachment() {
+    authenticate("price:finance-base:import");
+    var scope = new FinanceFactorImportContext("HOUSEHOLD", "220", "2027-01", null, null);
+    when(exports.previousMonth(scope)).thenReturn(new FinanceFactorWorkbookExportService.ExportFile(
+        "板换财务基价_2026-12_用于2027-01.xlsx", "2026-12", 3, new byte[] {1, 2, 3}));
+    var response = controller.exportPreviousMonth("2027-01", "220");
+    assertThat(response.getBody()).containsExactly((byte) 1, (byte) 2, (byte) 3);
+    assertThat(response.getHeaders().getFirst("X-Finance-Source-Month")).isEqualTo("2026-12");
+    assertThat(response.getHeaders().getContentType().toString()).contains("spreadsheetml.sheet");
+    assertThat(response.getHeaders().getContentDisposition().getFilename()).isEqualTo("板换财务基价_2026-12_用于2027-01.xlsx");
+    verify(exports).previousMonth(scope);
   }
 
   @Test
@@ -175,11 +194,16 @@ class FinanceFactorPublicationControllerTest {
     }
 
     @Bean
+    FinanceFactorWorkbookExportService exports() {
+      return mock(FinanceFactorWorkbookExportService.class);
+    }
+
+    @Bean
     FinanceFactorPublicationController controller(
         FinanceFactorPublicationService publisher,
         FinanceFactorPriceReader reader,
         FinanceFactorCuAdjustmentService copper) {
-      return new FinanceFactorPublicationController(publisher, reader, copper);
+      return new FinanceFactorPublicationController(publisher, reader, copper, exports());
     }
   }
 }

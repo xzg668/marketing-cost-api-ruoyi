@@ -196,6 +196,33 @@ class ElectronicDrawingHybridBomServiceTest {
   }
 
   @Test
+  void sharedDrawingDoesNotChooseAnArbitraryFormalRootForTheBom() {
+    String model = "YCQB05L89";
+    String quoteCode = com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(
+        null, model, "DRAW-TOP");
+    context = new ElectronicDrawingWorkContext(
+        101L, 4, 301L, 501L, 100L, 201L, "QCPT-101", "OA-101", quoteCode,
+        null, null, null, model, null, "FULL_BOM", "2026-08", "210", "COMMERCIAL",
+        "COMMERCIAL", "210", true, true, "BOM_IN_PROGRESS",
+        ElectronicDrawingWorkflowStage.COMPOSING, null, null, null);
+    version.setQuoteProductCode(quoteCode);
+    version.setElectronicDrawingNo("DRAW-TOP");
+    arrangeRead();
+    when(productLookup.options(context)).thenReturn(List.of(
+        new ElectronicDrawingProductLookup.Option(
+            "DRAW-TOP", "101850563", "压力变送器", model, "MATERIAL_MASTER"),
+        new ElectronicDrawingProductLookup.Option(
+            "DRAW-TOP", "1145900000152", "压力变送器", model, "MATERIAL_MASTER")));
+
+    assertThatThrownBy(() -> service.compose(101L, "COMMERCIAL", "210", "2026-08"))
+        .isInstanceOfSatisfying(ElectronicDrawingHybridBomException.class,
+            error -> assertThat(error.code()).isEqualTo(ElectronicDrawingHybridBomException.MAPPING_INCOMPLETE))
+        .hasMessageContaining("唯一顶层");
+    verify(assembler, never()).assemble(any());
+    verify(detailMapper, never()).deleteElectronicDrawingHybridDraft(any());
+  }
+
+  @Test
   void sameFingerprintWithMissingDetailsIsDetectedAsCorruption() {
     version.setCompositionFingerprint(FINGERPRINT);
     arrangeReadAndAssembly();
@@ -285,6 +312,11 @@ class ElectronicDrawingHybridBomServiceTest {
   }
 
   private void arrangeReadAndAssembly() {
+    arrangeRead();
+    when(assembler.assemble(any(AssembleCommand.class))).thenReturn(hybrid);
+  }
+
+  private void arrangeRead() {
     when(contextPort.load(101L, "COMMERCIAL", "210", "2026-08")).thenReturn(context);
     when(versionMapper.selectById(501L)).thenReturn(version);
     when(sourceNodeRepository.findByVersionId(501L)).thenReturn(List.of(source));
@@ -296,7 +328,6 @@ class ElectronicDrawingHybridBomServiceTest {
                   .filter(row -> codes.contains(row.getMaterialCode()))
                   .toList();
             });
-    when(assembler.assemble(any(AssembleCommand.class))).thenReturn(hybrid);
   }
 
   private ElectronicDrawingWorkContext context(int revision) {

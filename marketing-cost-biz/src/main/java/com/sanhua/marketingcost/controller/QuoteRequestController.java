@@ -120,10 +120,14 @@ public class QuoteRequestController {
       @RequestParam(value = "oaNo", required = false) String oaNo,
       @RequestParam(value = "processCode", required = false) String processCode,
       @RequestParam(value = "sourceType", required = false) String sourceType,
-      @RequestParam(value = "classificationStatus", required = false) String classificationStatus) {
+      @RequestParam(value = "classificationStatus", required = false) String classificationStatus,
+      @RequestParam(value = "customer", required = false) String customer,
+      @RequestParam(value = "quoteScenario", required = false) String quoteScenario,
+      @RequestParam(value = "completionStatus", required = false) String completionStatus) {
     return CommonResult.success(
         quoteRequestQueryService.pageRequests(
-            pageNo, pageSize, oaNo, processCode, sourceType, classificationStatus));
+            pageNo, pageSize, oaNo, processCode, sourceType, classificationStatus,
+            customer, quoteScenario, completionStatus));
   }
 
   @PreAuthorize("@ss.hasAnyPermi('ingest:quote:list')")

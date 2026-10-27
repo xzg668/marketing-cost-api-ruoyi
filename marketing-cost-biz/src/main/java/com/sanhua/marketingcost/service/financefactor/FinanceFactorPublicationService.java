@@ -259,6 +259,7 @@ public class FinanceFactorPublicationService {
               ? "NEW"
               : prior.getPrice().compareTo(value.price()) == 0
                       && Objects.equals(prior.getUnit(), value.unit())
+                      && Objects.equals(prior.getTaxIncluded(), value.taxIncluded() ? 1 : 0)
                   ? "UNCHANGED"
                   : "CHANGED";
       result.add(

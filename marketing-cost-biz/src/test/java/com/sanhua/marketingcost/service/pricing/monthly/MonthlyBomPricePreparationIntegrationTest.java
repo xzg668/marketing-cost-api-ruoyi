@@ -107,7 +107,7 @@ class MonthlyBomPricePreparationIntegrationTest {
       for (int row=sheet.getLastRowNum();row>2;row--) if (sheet.getRow(row)!=null) sheet.removeRow(sheet.getRow(row));
       sheet.getRow(2).getCell(0).setCellValue(material); sheet.getRow(2).getCell(4).setCellValue(price);
       book.write(bytes);
-      var preview = inquiries.preview("COMMERCIAL","test",bytes.toByteArray(),"controlled-single-row.xls","2026-10",new PriceContext("件","CNY",TaxBasis.EXCLUDED));
+      var preview = inquiries.preview("COMMERCIAL","test",bytes.toByteArray(),"controlled-single-row.xls","2026-10");
       inquiries.publish("COMMERCIAL","test",new PublishRequest(preview.previewId(),preview.publishRequestId(),preview.previewFingerprint()));
     }
   }

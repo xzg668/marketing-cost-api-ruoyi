@@ -40,6 +40,7 @@ class DrawingVerificationWorkspaceIntegrationTest extends BomMapperTestBase {
   @Autowired DrawingVerificationTaskMapper tasks;
   @Autowired DrawingVerificationResultMapper results;
   @Autowired DrawingVerificationCodec codec;
+  @Autowired DrawingVerificationProperties properties;
   @MockBean CurrentU9BomGateway u9;
   @MockBean DrawingVerificationClient client;
   private String key, month, path;
@@ -63,7 +64,7 @@ class DrawingVerificationWorkspaceIntegrationTest extends BomMapperTestBase {
         form,
         key,
         key,
-        key + "-DRAW");
+        key + "-DRAW-MX");
     itemId =
         jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=?", Long.class, form);
     jdbc.update(
@@ -72,7 +73,7 @@ class DrawingVerificationWorkspaceIntegrationTest extends BomMapperTestBase {
             + " VALUES(?,'COMMERCIAL','热力膨胀阀',?,?,1,'U9_API','EDP07')",
         key,
         key,
-        key + "-DRAW");
+        key + "-DRAW-MX");
     when(u9.read(any())).thenReturn(CurrentU9BomResult.notFound("explicit absence"));
     doAnswer(
             call -> {
@@ -86,6 +87,79 @@ class DrawingVerificationWorkspaceIntegrationTest extends BomMapperTestBase {
     task =
         verifications.start(contexts.load(itemId, "COMMERCIAL", "210", month), null).orElseThrow();
     path = "/api/v1/quote-requests/" + key + "/items/" + itemId + "/drawing-verifications";
+  }
+
+  @Test
+  void directDrawingModeBindsAnUnknownDrawingToTheQuoteAndReceivesItsFinalData() throws Exception {
+    String suppliedDrawing = key + "-PROVIDER-TEST-MX";
+    jdbc.update("UPDATE oa_form_item SET material_no=NULL,sunl_model=NULL,spec=NULL,customer_drawing=? WHERE id=?",
+        suppliedDrawing, itemId);
+    assertThat(jdbc.queryForObject(
+        "SELECT COUNT(*) FROM lp_material_master_raw WHERE drawing_no=?", Integer.class, suppliedDrawing))
+        .isZero();
+    boolean previous = properties.isUseMaterialMaster();
+    properties.setUseMaterialMaster(false);
+    try {
+      var started = read(admin(post(path).contentType(MediaType.APPLICATION_JSON)
+          .content("{\"action\":\"START\"}"))).path("current");
+      assertThat(started.path("drawingNo").asText()).isEqualTo(suppliedDrawing);
+      assertThat(started.path("taskState").asText()).isEqualTo("WAIT_REVIEW");
+      String externalTask = started.path("externalTaskId").asText();
+      var confirmed = DrawingVerificationFixtures.confirmed(externalTask);
+      var group = confirmed.putObject("data").putObject(suppliedDrawing);
+      group.putNull("company");
+      var row = group.putObject("params").putArray("items").addObject();
+      for (String field : new String[] {"no", "code", "name", "qty", "mat", "grade", "hsf", "weight", "note"}) {
+        row.put(field, "");
+      }
+      row.put("no", "1");
+      row.put("qty", "3");
+      for (int i = 0; i < 2; i++) {
+        mvc.perform(post(DrawingReviewController.PATH)
+            .contentType(MediaType.APPLICATION_JSON)
+            .header("X-Review-Task", externalTask)
+            .header("Idempotency-Key", externalTask)
+            .content(confirmed.toString())).andExpect(status().isOk());
+      }
+      var current = read(admin(get(path))).path("current");
+      assertThat(current.path("localTaskId").asLong()).isEqualTo(started.path("localTaskId").asLong());
+      assertThat(current.path("taskState").asText()).isEqualTo("RECEIVED");
+      assertThat(current.path("results")).hasSize(2);
+      var detail = read(admin(get(path + "/results/" + current.path("currentResultId").asLong())));
+      assertThat(detail.path("data").path(suppliedDrawing).path("params").path("items").get(0).path("qty").asText())
+          .isEqualTo("3");
+      assertThat(jdbc.queryForObject("SELECT material_no FROM oa_form_item WHERE id=?", String.class, itemId))
+          .isNull();
+      verify(client, times(2)).verify(any());
+    } finally {
+      properties.setUseMaterialMaster(previous);
+    }
+  }
+
+  @Test
+  void sharedDrawingIsOneChoiceAndCanBeStartedWithoutSettingAMaterialNumber() throws Exception {
+    jdbc.update("UPDATE oa_form_item SET material_no=NULL WHERE id=?", itemId);
+    jdbc.update(
+        "INSERT INTO lp_material_master_raw(material_code,organization_code,material_name,"
+            + "material_model,drawing_no,active_flag,source_type,import_batch_id)"
+            + " VALUES(?,'COMMERCIAL','另一料号',?,?,1,'U9_API','EDP07_SHARED')",
+        key + "-SECOND",
+        key,
+        key + "-DRAW-MX");
+    var choices = read(admin(get(path))).path("drawingOptions");
+    assertThat(choices).hasSize(1);
+    assertThat(choices.get(0).path("drawingNo").asText()).isEqualTo(key + "-DRAW-MX");
+    assertThat(choices.get(0).path("materialNo").isNull()).isTrue();
+    for (int i = 0; i < 2; i++) {
+      var state = read(admin(post(path).contentType(MediaType.APPLICATION_JSON)
+          .content("{\"action\":\"START\"}")));
+      assertThat(state.path("current").path("drawingNo").asText()).isEqualTo(key + "-DRAW-MX");
+      assertThat(state.path("current").path("taskState").asText()).isEqualTo("WAIT_REVIEW");
+    }
+    assertThat(jdbc.queryForObject("SELECT material_no FROM oa_form_item WHERE id=?", String.class, itemId))
+        .isNull();
+    // 一次为原有 fixture，另一次为改成无料号后的新任务；重复点击不再调用。
+    verify(client, times(2)).verify(argThat(query -> (key + "-DRAW-MX").equals(query.drawingNo())));
   }
 
   @Test
@@ -113,7 +187,7 @@ class DrawingVerificationWorkspaceIntegrationTest extends BomMapperTestBase {
   @Test
   void manualConfirmationUsesFinalDataWithAllOriginalPlmAndExtensions() throws Exception {
     var confirmed = DrawingVerificationFixtures.confirmed(task.getExternalTaskId());
-    var group = confirmed.putObject("data").putObject(key + "-DRAW");
+    var group = confirmed.putObject("data").putObject(key + "-DRAW-MX");
     group.putNull("company");
     var items = group.putObject("params").putArray("items");
     var row = items.addObject();

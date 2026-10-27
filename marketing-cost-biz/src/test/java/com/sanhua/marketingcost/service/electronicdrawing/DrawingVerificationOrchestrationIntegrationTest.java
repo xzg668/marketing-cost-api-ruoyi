@@ -153,8 +153,8 @@ class DrawingVerificationOrchestrationIntegrationTest extends BomMapperTestBase 
             + " id=?",
         itemId);
     var task = service.start(scope(), null).orElseThrow();
-    assertThat(task.getDrawingNo()).isEqualTo("YCQB05L89");
-    verify(client).verify(argThat(query -> "YCQB05L89".equals(query.drawingNo())));
+    assertThat(task.getDrawingNo()).isEqualTo("YCQB05L89-MX");
+    verify(client).verify(argThat(query -> "YCQB05L89-MX".equals(query.drawingNo())));
     assertThat(task.getTaskState()).isEqualTo("RECEIVED");
   }
 
@@ -176,9 +176,27 @@ class DrawingVerificationOrchestrationIntegrationTest extends BomMapperTestBase 
         specification,
         itemId);
     var task = service.start(scope(), null).orElseThrow();
-    assertThat(task.getDrawingNo()).isEqualTo("YCQB05L89");
+    assertThat(task.getDrawingNo()).isEqualTo("YCQB05L89-MX");
     assertThat(service.start(scope(), null).orElseThrow().getId()).isEqualTo(task.getId());
-    verify(client, times(1)).verify(argThat(query -> "YCQB05L89".equals(query.drawingNo())));
+    verify(client, times(1)).verify(argThat(query -> "YCQB05L89-MX".equals(query.drawingNo())));
+  }
+
+  @Test
+  void differentMaterialsSharingOneDrawingPostOnceWithoutChangingTheQuoteMaterial() {
+    jdbc.update(
+        "INSERT INTO lp_material_master_raw(material_code,organization_code,material_name,"
+            + "material_model,drawing_no,active_flag,source_type,import_batch_id)"
+            + " VALUES(?,'COMMERCIAL','另一料号',?,'YCQB05L89',1,'U9_API','EDP04_SHARED')",
+        material + "B",
+        model);
+    jdbc.update("UPDATE oa_form_item SET material_no=NULL WHERE id=?", itemId);
+    var first = service.start(scope(), null).orElseThrow();
+    assertThat(first.getDrawingNo()).isEqualTo("YCQB05L89-MX");
+    assertThat(first.getTaskState()).isEqualTo("RECEIVED");
+    assertThat(service.start(scope(), "YCQB05L89").orElseThrow().getId()).isEqualTo(first.getId());
+    assertThat(items.selectById(itemId).getMaterialNo()).isNull();
+    assertThat(taskCount()).isEqualTo(1);
+    verify(client, times(1)).verify(argThat(query -> "YCQB05L89-MX".equals(query.drawingNo())));
   }
 
   @Test
@@ -240,11 +258,11 @@ class DrawingVerificationOrchestrationIntegrationTest extends BomMapperTestBase 
     jdbc.update(
         "INSERT INTO"
             + " lp_material_master_raw(material_code,organization_code,material_name,material_model,drawing_no,active_flag,source_type,import_batch_id)"
-            + " VALUES(?,'COMMERCIAL','热力膨胀阀',?,'YCQB05L89',1,'U9_API','EDP-04')",
+            + " VALUES(?,'COMMERCIAL','热力膨胀阀',?,'OTHER-DRAW',1,'U9_API','EDP-04')",
         material + "B",
         model);
     jdbc.update("UPDATE oa_form_item SET material_no=NULL WHERE id=?", itemId);
-    assertThatThrownBy(() -> service.start(scope(), null)).hasMessageContaining("唯一料品");
+    assertThatThrownBy(() -> service.start(scope(), null)).hasMessageContaining("唯一图号");
     verifyNoInteractions(client);
     assertThat(taskCount()).isZero();
   }

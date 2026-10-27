@@ -242,7 +242,9 @@ public class ElectronicDrawingHybridBomService {
     if (!direct.isEmpty()) return quoteCode;
     var candidates =
         productLookup.options(context).stream()
-            .filter(row -> same(row.drawingNo(), version.getElectronicDrawingNo()))
+            .filter(row -> same(
+                ElectronicDrawingProductLookup.verificationDrawingNo(row.drawingNo()),
+                ElectronicDrawingProductLookup.verificationDrawingNo(version.getElectronicDrawingNo())))
             .map(ElectronicDrawingProductLookup.Option::materialNo)
             .filter(Objects::nonNull)
             .distinct()

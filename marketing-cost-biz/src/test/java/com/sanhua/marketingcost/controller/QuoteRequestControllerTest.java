@@ -79,11 +79,11 @@ class QuoteRequestControllerTest {
     row.setOaNo("OA-T8-001");
     row.setSourceType("EXCEL");
     row.setApplicantUnit("申请单位A");
-    when(quoteRequestQueryService.pageRequests(1, 20, "OA-T8", "FI-SC-020", "EXCEL", "CONFIRMED"))
+    when(quoteRequestQueryService.pageRequests(1, 20, "OA-T8", "FI-SC-020", "EXCEL", "CONFIRMED", null, null, null))
         .thenReturn(new PageResult<>(List.of(row), 1L));
 
     CommonResult<PageResult<QuoteRequestListItemResponse>> result =
-        controller.page(1, 20, "OA-T8", "FI-SC-020", "EXCEL", "CONFIRMED");
+        controller.page(1, 20, "OA-T8", "FI-SC-020", "EXCEL", "CONFIRMED", null, null, null);
 
     assertThat(result.isSuccess()).isTrue();
     assertThat(result.getData().getTotal()).isEqualTo(1);

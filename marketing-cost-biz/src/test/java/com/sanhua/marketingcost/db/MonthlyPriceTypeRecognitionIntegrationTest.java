@@ -198,8 +198,7 @@ class MonthlyPriceTypeRecognitionIntegrationTest extends OriginalPricingIntegrat
       for (int index = sheet.getLastRowNum(); index > 2; index--)
         if (sheet.getRow(index) != null) sheet.removeRow(sheet.getRow(index));
       sheet.getRow(2).getCell(0).setCellValue(f.code()); sheet.getRow(2).getCell(4).setCellValue("20.9853"); book.write(bytes);
-      var preview = inquiries.preview("COMMERCIAL", "MPP12", bytes.toByteArray(), "mpp12-recognition.xls", f.month(),
-          new HouseholdInquiryModels.PriceContext("件", "CNY", TaxBasis.EXCLUDED));
+      var preview = inquiries.preview("COMMERCIAL", "MPP12", bytes.toByteArray(), "mpp12-recognition.xls", f.month());
       inquiries.publish("COMMERCIAL", "MPP12", new HouseholdInquiryModels.PublishRequest(
           preview.previewId(), preview.publishRequestId(), preview.previewFingerprint()));
     }

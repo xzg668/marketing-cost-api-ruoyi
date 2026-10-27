@@ -26,6 +26,14 @@ class DrawingVerificationConfigurationTest {
     assertThat(properties.endpoint().toString()).isEqualTo("http://127.0.0.1:18087/controlled/verify");
     assertThat(properties.getConnectTimeout()).isEqualTo(Duration.ofSeconds(2));
     assertThat(properties.getRequestTimeout()).isEqualTo(Duration.ofMinutes(3));
+    assertThat(properties.isUseMaterialMaster()).isTrue();
+  }
+
+  @Test
+  void workerCanUseTheQuoteDrawingOnlyWhenExplicitlyConfigured() {
+    assertThat(bind(environment()).isUseMaterialMaster()).isTrue();
+    assertThat(bind(environment().withProperty("DRAWING_PDF_USE_MATERIAL_MASTER", "false"))
+        .isUseMaterialMaster()).isFalse();
   }
 
   @Test

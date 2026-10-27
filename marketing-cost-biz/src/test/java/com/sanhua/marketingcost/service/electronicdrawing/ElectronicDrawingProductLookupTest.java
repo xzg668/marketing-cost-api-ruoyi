@@ -5,6 +5,7 @@ import static org.mockito.Mockito.*;
 
 import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.OaFormItem;
+import com.sanhua.marketingcost.integration.drawing.DrawingVerificationProperties;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
 import java.util.List;
@@ -13,8 +14,9 @@ import org.junit.jupiter.api.Test;
 class ElectronicDrawingProductLookupTest {
   private final OaFormItemMapper items = mock(OaFormItemMapper.class);
   private final MaterialMasterRawMapper materials = mock(MaterialMasterRawMapper.class);
+  private final DrawingVerificationProperties properties = new DrawingVerificationProperties();
   private final ElectronicDrawingProductLookup lookup =
-      new ElectronicDrawingProductLookup(items, materials);
+      new ElectronicDrawingProductLookup(items, materials, properties);
   private final ElectronicDrawingWorkContext context =
       new ElectronicDrawingWorkContext(
           11L,
@@ -54,6 +56,44 @@ class ElectronicDrawingProductLookupTest {
   }
 
   @Test
+  void masterLookupIsEnabledByDefaultEvenWhenTheQuoteHasADrawing() {
+    assertThat(properties.isUseMaterialMaster()).isTrue();
+    item().setCustomerDrawing("PROVIDER-TEST-MX");
+    assertThatThrownBy(() -> lookup.requireDrawing(context, null)).hasMessageContaining("料品档案");
+    verifyNoInteractions(materials);
+  }
+
+  @Test
+  void directModeUsesQuoteDrawingWithoutReadingTheMaterialMaster() {
+    properties.setUseMaterialMaster(false);
+    var item = item();
+    item.setCustomerDrawing("PROVIDER-TEST-MX");
+    assertThat(lookup.requireDrawing(context, null)).isEqualTo("PROVIDER-TEST-MX");
+    assertThat(item.getMaterialNo()).isNull();
+    item.setCustomerDrawing("PROVIDER-TEST");
+    assertThat(lookup.requireDrawing(context, "PROVIDER-TEST-MX")).isEqualTo("PROVIDER-TEST-MX");
+    assertThat(lookup.drawingOptions(context)).singleElement()
+        .satisfies(option -> assertThat(option.source()).isEqualTo("QUOTE_CUSTOMER_DRAWING"));
+    verifyNoInteractions(materials);
+  }
+
+  @Test
+  void directModeRequiresAnExplicitQuoteDrawingAndRejectsADifferentRequestedDrawing() {
+    properties.setUseMaterialMaster(false);
+    var item = item();
+    item.setSunlModel("MODEL");
+    item.setSpec("SPEC");
+    item.setMaterialNo("101850563");
+    assertThatThrownBy(() -> lookup.requireDrawing(context, null)).hasMessageContaining("填写客户图号");
+    item.setCustomerDrawing("PROVIDER-TEST-MX");
+    assertThatThrownBy(() -> lookup.requireDrawing(context, "OTHER-MX"))
+        .hasMessageContaining("实际查到");
+    item.setOaFormId(999L);
+    assertThatThrownBy(() -> lookup.requireDrawing(context, null)).hasMessageContaining("不存在");
+    verifyNoInteractions(materials);
+  }
+
+  @Test
   void suppliedDrawingAloneDoesNotReplaceMaterialOrModelLookup() {
     var item = item();
     item.setCustomerDrawing("OA-DRAW");
@@ -70,7 +110,7 @@ class ElectronicDrawingProductLookupTest {
     item.setCustomerDrawing("WRONG-DRAW");
     when(materials.selectDrawingProductCandidates("P1", null, null, "COMMERCIAL"))
         .thenReturn(List.of(material("P1", "MODEL", "REAL-DRAW")));
-    assertThat(lookup.requireDrawing(context, null)).isEqualTo("REAL-DRAW");
+    assertThat(lookup.requireDrawing(context, null)).isEqualTo("REAL-DRAW-MX");
     verify(materials).selectDrawingProductCandidates("P1", null, null, "COMMERCIAL");
     verifyNoMoreInteractions(materials);
   }
@@ -94,7 +134,7 @@ class ElectronicDrawingProductLookupTest {
     item.setCustomerDrawing("OLD-DRAW");
     when(materials.selectDrawingProductCandidates(null, "MODEL", "SPEC-A", "COMMERCIAL"))
         .thenReturn(List.of(material("P1", "MODEL", "SPECIFIC-DRAW")));
-    assertThat(lookup.requireDrawing(context, null)).isEqualTo("SPECIFIC-DRAW");
+    assertThat(lookup.requireDrawing(context, null)).isEqualTo("SPECIFIC-DRAW-MX");
     verify(materials).selectDrawingProductCandidates(null, "MODEL", "SPEC-A", "COMMERCIAL");
     verifyNoMoreInteractions(materials);
   }
@@ -108,7 +148,7 @@ class ElectronicDrawingProductLookupTest {
         .thenReturn(List.of());
     when(materials.selectDrawingProductCandidates(null, "MODEL", null, "COMMERCIAL"))
         .thenReturn(List.of(material("P1", "MODEL", "FALLBACK-DRAW")));
-    assertThat(lookup.requireDrawing(context, null)).isEqualTo("FALLBACK-DRAW");
+    assertThat(lookup.requireDrawing(context, null)).isEqualTo("FALLBACK-DRAW-MX");
     var ordered = inOrder(materials);
     ordered
         .verify(materials)
@@ -125,7 +165,7 @@ class ElectronicDrawingProductLookupTest {
     when(materials.selectDrawingProductCandidates(null, "MODEL", "SPEC", "COMMERCIAL"))
         .thenReturn(List.of(material("P1", "MODEL", "DRAW-A"), material("P2", "MODEL", "DRAW-B")));
     assertThat(lookup.options(context)).hasSize(2);
-    assertThatThrownBy(() -> lookup.requireDrawing(context, null)).hasMessageContaining("唯一料品");
+    assertThatThrownBy(() -> lookup.requireDrawing(context, null)).hasMessageContaining("唯一图号");
     verify(materials, never()).selectDrawingProductCandidates(null, "MODEL", null, "COMMERCIAL");
   }
 
@@ -141,12 +181,16 @@ class ElectronicDrawingProductLookupTest {
   }
 
   @Test
-  void materialAloneUsesItsActualDrawingWithoutAddingSuffix() {
+  void materialDrawingAddsMxOnlyWhenMissing() {
     item().setMaterialNo("P1");
     when(materials.selectDrawingProductCandidates("P1", null, null, "COMMERCIAL"))
         .thenReturn(List.of(material("P1", null, "YCQB05L89")));
-    assertThat(lookup.requireDrawing(context, null)).isEqualTo("YCQB05L89");
-    assertThatThrownBy(() -> lookup.requireDrawing(context, "YCQB05L89-MX"))
+    assertThat(lookup.requireDrawing(context, null)).isEqualTo("YCQB05L89-MX");
+    assertThat(lookup.requireDrawing(context, "YCQB05L89-MX")).isEqualTo("YCQB05L89-MX");
+    when(materials.selectDrawingProductCandidates("P1", null, null, "COMMERCIAL"))
+        .thenReturn(List.of(material("P1", null, "YCQB05L89-MX")));
+    assertThat(lookup.requireDrawing(context, null)).isEqualTo("YCQB05L89-MX");
+    assertThatThrownBy(() -> lookup.requireDrawing(context, "YCQB05L89-MAX"))
         .hasMessageContaining("实际查到");
   }
 
@@ -161,24 +205,77 @@ class ElectronicDrawingProductLookupTest {
         .containsExactly("DRAW-A", "DRAW-B");
     assertThatThrownBy(() -> lookup.requireDrawing(context, "MODEL")).hasMessageContaining("实际查到");
     assertThatThrownBy(() -> lookup.requireDrawing(context, null)).hasMessageContaining("实际查到");
-    assertThat(lookup.requireDrawing(context, "DRAW-B")).isEqualTo("DRAW-B");
+    assertThat(lookup.requireDrawing(context, "DRAW-B")).isEqualTo("DRAW-B-MX");
     assertThat(item.getMaterialNo()).isNull();
     assertThat(item.getCustomerDrawing()).isNull();
   }
 
   @Test
-  void sameDrawingOnMultipleMaterialsIsNotAUniqueProduct() {
+  void sameDrawingOnMultipleMaterialsCanBeUsedWithoutChoosingAMaterial() {
     var item = item();
     item.setSunlModel("MODEL");
     item.setSpec("SPEC");
     when(materials.selectDrawingProductCandidates(null, "MODEL", "SPEC", "COMMERCIAL"))
         .thenReturn(List.of(material("P1", "MODEL", "SHARED"), material("P2", "MODEL", "SHARED")));
     assertThat(lookup.options(context)).hasSize(2);
-    assertThatThrownBy(() -> lookup.requireDrawing(context, "SHARED")).hasMessageContaining("唯一料品");
+    assertThat(lookup.drawingOptions(context))
+        .singleElement()
+        .satisfies(option -> {
+          assertThat(option.drawingNo()).isEqualTo("SHARED-MX");
+          assertThat(option.materialNo()).isNull();
+          assertThat(option.name()).isNull();
+        });
+    assertThat(lookup.requireDrawing(context, null)).isEqualTo("SHARED-MX");
+    assertThat(lookup.requireDrawing(context, "SHARED")).isEqualTo("SHARED-MX");
+    assertThat(item.getMaterialNo()).isNull();
+    verify(materials, never()).selectDrawingProductCandidates(null, "MODEL", null, "COMMERCIAL");
     item.setMaterialNo("P2");
     when(materials.selectDrawingProductCandidates("P2", null, null, "COMMERCIAL"))
         .thenReturn(List.of(material("P2", "MODEL", "SHARED")));
-    assertThat(lookup.requireDrawing(context, null)).isEqualTo("SHARED");
+    assertThat(lookup.requireDrawing(context, null)).isEqualTo("SHARED-MX");
+  }
+
+  @Test
+  void sameDrawingIsComparedWithoutCaseOrSurroundingWhitespace() {
+    item().setSunlModel("YCQB05L89");
+    when(materials.selectDrawingProductCandidates(null, "YCQB05L89", null, "COMMERCIAL"))
+        .thenReturn(List.of(
+            material("101850563", "YCQB05L89", " YCQB05L89 "),
+            material("1145900000152", "YCQB05L89", "ycqb05l89")));
+    assertThat(lookup.drawingOptions(context)).hasSize(1);
+    assertThat(lookup.options(context)).hasSize(2);
+    assertThat(lookup.requireDrawing(context, "ycqb05l89")).isEqualTo("YCQB05L89-MX");
+  }
+
+  @Test
+  void repeatedDrawingCanBeChosenAmongDifferentDrawings() {
+    item().setSunlModel("YCQB05L89");
+    when(materials.selectDrawingProductCandidates(null, "YCQB05L89", null, "COMMERCIAL"))
+        .thenReturn(List.of(
+            material("101850563", "YCQB05L89", "YCQB05L89"),
+            material("1145900000152", "YCQB05L89", "YCQB05L89"),
+            material("3000000000001", "YCQB05L89", "OTHER-DRAW")));
+    assertThatThrownBy(() -> lookup.requireDrawing(context, null)).hasMessageContaining("实际查到");
+    assertThat(lookup.requireDrawing(context, "YCQB05L89")).isEqualTo("YCQB05L89-MX");
+    assertThatThrownBy(() -> lookup.requireDrawing(context, "YCQB05L89-MAX"))
+        .hasMessageContaining("实际查到");
+  }
+
+  @Test
+  void baseAndMxMasterDrawingsBecomeTheSameRequestChoice() {
+    item().setSunlModel("YCQB05L89");
+    when(materials.selectDrawingProductCandidates(null, "YCQB05L89", null, "COMMERCIAL"))
+        .thenReturn(List.of(
+            material("101850563", "YCQB05L89", "YCQB05L89"),
+            material("1145900000152", "YCQB05L89", "YCQB05L89-MX")));
+    assertThat(lookup.drawingOptions(context))
+        .singleElement()
+        .satisfies(option -> {
+          assertThat(option.drawingNo()).isEqualTo("YCQB05L89-MX");
+          assertThat(option.materialNo()).isNull();
+        });
+    assertThat(lookup.options(context)).hasSize(2);
+    assertThat(lookup.requireDrawing(context, null)).isEqualTo("YCQB05L89-MX");
   }
 
   @Test

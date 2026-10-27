@@ -770,6 +770,100 @@ class FinanceFactorPublicationIntegrationTest {
     assertThat(p1.financial().scope().schemeCode()).isEqualTo("CU_90000");
   }
 
+  @Test
+  void monthlyCommercialExportEditAndPublishCreatesNextMonthWithoutChangingPreviousPublication() throws Exception {
+    byte[] original = FinanceFactorWorkbookParserTest.fixture("commercial");
+    var october = publishCommercial(original);
+    var oldPrices = prices.selectList(null);
+    int oldBatches = count("SELECT COUNT(*) FROM lp_factor_upload_batch");
+    var file = monthlyExport("COMMERCIAL", "210", "2026-11");
+    assertThat(file.sourceMonth()).isEqualTo("2026-10");
+    assertThat(file.fileName()).contains("商用", "2026-10", "2026-11");
+    assertThat(count("SELECT COUNT(*) FROM lp_factor_upload_batch")).isEqualTo(oldBatches);
+    assertThat(prices.selectList(null)).usingRecursiveComparison().isEqualTo(oldPrices);
+    var parser = new FinanceFactorWorkbookParser(new FactorCanonicalKeyServiceImpl(new PriceLinkedType2TextNormalizerImpl()));
+    var parsed = parser.parse(file.bytes(), file.fileName(), "210", null);
+    assertThat(parsed.problems()).isEmpty();assertThat(parsed.values()).hasSize(56);
+    var target = parsed.values().stream().filter(v -> v.canonicalKey().equals("AVG|PCU") && v.schemeCode().equals("CU_90000")).findFirst().orElseThrow();
+    byte[] edited = changeExportedPrice(file.bytes(), target, "120.1234567890123456");
+    var november = new FinanceFactorImportContext("COMMERCIAL", "210", "2026-11", null, "CU_90000");
+    var preview = service.preview(edited, file.fileName(), november);
+    assertThat(preview.workbook().problems()).isEmpty();
+    var saved = service.publish(edited, file.fileName(), november, preview.previewFingerprint(), "monthly-finance");
+    var reader = new FinanceFactorPriceReader(batches, prices, identities, sources);
+    assertThat(reader.read(november, Condition.GENERAL, null).required("AVG|PCU").price()).isEqualByComparingTo("120.1234567890123456");
+    assertThat(reader.read(commercial, Condition.GENERAL, null).batchId()).isEqualTo(october.batchId());
+    assertThat(prices.selectList(com.baomidou.mybatisplus.core.toolkit.Wrappers.lambdaQuery(FactorMonthlyPrice.class)
+        .eq(FactorMonthlyPrice::getSourceUploadBatchId, october.batchId()))).usingRecursiveComparison().isEqualTo(oldPrices);
+    assertThat(service.publish(edited, file.fileName(), november, preview.previewFingerprint(), "monthly-finance").batchId()).isEqualTo(saved.batchId());
+  }
+
+  @Test
+  void monthlyBoardExportKeepsBothConditionsAndUsesExplicitPerKilogramSteelValues() throws Exception {
+    var board = new FinanceFactorImportContext("COMMERCIAL", "220", "2026-10", null, "BOARD");
+    byte[] original = FinanceFactorWorkbookParserTest.fixture("plate");
+    var first = service.preview(original, "board.xlsx", board);
+    service.publish(original, "board.xlsx", board, first.previewFingerprint(), "finance");
+    var file = monthlyExport("COMMERCIAL", "220", "2026-11");
+    var parser = new FinanceFactorWorkbookParser(new FactorCanonicalKeyServiceImpl(new PriceLinkedType2TextNormalizerImpl()));
+    var parsed = parser.parse(file.bytes(), file.fileName(), "220", null);
+    assertThat(parsed.values()).hasSize(16);assertThat(parsed.problems()).isEmpty();
+    var target = parsed.values().stream().filter(v -> v.canonicalKey().equals("AVG|304/2B/1219") && v.condition() == Condition.NON_TENDER).findFirst().orElseThrow();
+    byte[] edited = changeExportedPrice(file.bytes(), target, "5.1234567890123456");
+    var next = new FinanceFactorImportContext("COMMERCIAL", "220", "2026-11", null, "BOARD");
+    var preview = service.preview(edited, file.fileName(), next);
+    assertThat(preview.workbook().problems()).isEmpty();
+    service.publish(edited, file.fileName(), next, preview.previewFingerprint(), "finance");
+    var reader = new FinanceFactorPriceReader(batches, prices, identities, sources);
+    assertThat(reader.read(next, Condition.NON_TENDER, null).required("AVG|304/2B/1219").price()).isEqualByComparingTo("5.1234567890123456");
+    assertThat(reader.read(board, Condition.NON_TENDER, null).required("AVG|304/2B/1219").price()).isEqualByComparingTo("20");
+    assertThat(reader.read(next, Condition.TENDER, null).required("AVG|304/2B/1219").price())
+        .isEqualByComparingTo(reader.read(board, Condition.TENDER, null).required("AVG|304/2B/1219").price());
+    assertThatThrownBy(() -> service.preview(file.bytes(), file.fileName(), commercial)).hasMessageContaining("不能混用");
+  }
+
+  @Test
+  void monthlyExportUsesLatestAdjustedCopperRatherThanOriginalWorkbookValues() throws Exception {
+    publishCommercial(FinanceFactorWorkbookParserTest.fixture("commercial"));
+    var cu = factor("210", "CU_90000", Condition.GENERAL, "AVG|1#CU", null);
+    var adjustment = new FinanceFactorCuAdjustmentService(prices, batches, identities, sources, service);
+    var checked = adjustment.preview(cu.getId(), new java.math.BigDecimal("100000"), "月末财务调整", "COMMERCIAL");
+    adjustment.publish(cu.getId(), new java.math.BigDecimal("100000"), "月末财务调整", "COMMERCIAL", checked.previewFingerprint(), "finance");
+    var file = monthlyExport("COMMERCIAL", "210", "2026-11");
+    assertThat(file.revision()).isEqualTo(2);
+    var parsed = new FinanceFactorWorkbookParser(new FactorCanonicalKeyServiceImpl(new PriceLinkedType2TextNormalizerImpl()))
+        .parse(file.bytes(), file.fileName(), "210", null);
+    assertThat(parsed.problems()).isEmpty();assertThat(parsed.schemes()).hasSize(4);
+    assertThat(parsed.values().stream().filter(v -> v.canonicalKey().equals("AVG|1#CU") && v.schemeCode().equals("CU_90000")).findFirst().orElseThrow().price()).isEqualByComparingTo("100");
+    assertThat(prices.selectById(cu.getId()).getPrice()).isEqualByComparingTo("90");
+  }
+
+  @Test
+  void monthlyExportIsExactPreviousMonthAndNeverCrossesOrganizationBusinessUnitOrYear() throws Exception {
+    byte[] original = FinanceFactorWorkbookParserTest.fixture("commercial");
+    publishCommercial(original);publishForMonth(original, "2026-12");
+    assertThat(monthlyExport("COMMERCIAL", "210", "2027-01").sourceMonth()).isEqualTo("2026-12");
+    assertThat(monthlyExport("COMMERCIAL", "210", "2026-11").sourceMonth()).isEqualTo("2026-10");
+    assertThatThrownBy(() -> monthlyExport("COMMERCIAL", "210", "2026-12")).hasMessageContaining("2026-11", "没有已发布");
+    assertThatThrownBy(() -> monthlyExport("COMMERCIAL", "220", "2026-11")).hasMessageContaining("板换", "没有已发布");
+    assertThatThrownBy(() -> monthlyExport("HOUSEHOLD", "210", "2026-11")).hasMessageContaining("没有已发布");
+  }
+
+  private FinanceFactorWorkbookExportService.ExportFile monthlyExport(String businessUnit, String organization, String targetMonth) {
+    var transaction = new org.springframework.transaction.support.TransactionTemplate(transactions);
+    transaction.setReadOnly(true);
+    transaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ);
+    return transaction.execute(status -> new FinanceFactorWorkbookExportService(batches, prices, identities, sources)
+        .previousMonth(new FinanceFactorImportContext(businessUnit, organization, targetMonth, null, null)));
+  }
+
+  private static byte[] changeExportedPrice(byte[] bytes, com.sanhua.marketingcost.dto.FinanceFactorWorkbook.Value value, String price) throws Exception {
+    try (var book = WorkbookFactory.create(new ByteArrayInputStream(bytes)); var output = new ByteArrayOutputStream()) {
+      book.getSheetAt(0).getRow(value.rowNumber() - 1).getCell(value.columnNumber() - 1).setCellValue(price);
+      book.write(output);return output.toByteArray();
+    }
+  }
+
   private FinanceFactorPublicationService.Publication publishForMonth(byte[] file, String month) {
     var context = new FinanceFactorImportContext("COMMERCIAL", "210", month, null, "CU_90000");
     var preview = service.preview(file, "commercial.xlsx", context);

@@ -134,7 +134,7 @@ final class MonthlyLocalAcceptance implements AutoCloseable {
 
   void publish(List<String> materials, String price) throws Exception {
     var preview = inquiries.preview("COMMERCIAL", "MPP13", workbook(materials, price),
-        "MPP13-synthetic.xls", "2026-10", new PriceContext("件", "CNY", TaxBasis.EXCLUDED));
+        "MPP13-synthetic.xls", "2026-10");
     if (!preview.content().workbook().errors().isEmpty()) throw new IllegalStateException("Invalid fixture");
     inquiries.publish("COMMERCIAL", "MPP13", new PublishRequest(preview.previewId(),
         preview.publishRequestId(), preview.previewFingerprint()));
