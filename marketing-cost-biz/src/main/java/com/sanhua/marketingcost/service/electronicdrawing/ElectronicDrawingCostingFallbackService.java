@@ -75,7 +75,8 @@ public class ElectronicDrawingCostingFallbackService {
                 businessUnit,
                 context.organization().priceOrgCode(),
                 context.costPeriodMonth());
-        var task = verifications.start(work, null);
+        var task = verifications.importedForContinuation(work);
+        if (task.isEmpty()) task = verifications.start(work, null);
         if (task.isEmpty()) return new AttemptResult(true, true, "U9_BOM_AVAILABLE", "U9 BOM 已可用");
         var saved = task.orElseThrow();
         if ("RECEIVED".equals(saved.getTaskState())) {

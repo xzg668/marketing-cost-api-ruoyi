@@ -10,6 +10,7 @@ import com.sanhua.marketingcost.integration.drawing.DrawingVerificationException
 import com.sanhua.marketingcost.integration.drawing.DrawingVerificationPayload;
 import com.sanhua.marketingcost.mapper.DrawingVerificationTaskMapper;
 import com.sanhua.marketingcost.mapper.OaFormItemMapper;
+import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
 import com.sanhua.marketingcost.service.quotebom.CurrentU9BomGateway;
 import com.sanhua.marketingcost.service.quotebom.CurrentU9BomResult;
 import com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext;
@@ -37,6 +38,7 @@ public class DrawingVerificationService {
   private final CurrentU9BomGateway u9;
   private final OaFormItemMapper items;
   private final DrawingVerificationTaskMapper tasks;
+  private final QuoteBomSupplementVersionMapper versions;
   private final DrawingVerificationStore store;
   private final DrawingVerificationClient client;
   private final ObjectMapper json;
@@ -48,6 +50,7 @@ public class DrawingVerificationService {
       CurrentU9BomGateway u9,
       OaFormItemMapper items,
       DrawingVerificationTaskMapper tasks,
+      QuoteBomSupplementVersionMapper versions,
       DrawingVerificationStore store,
       DrawingVerificationClient client,
       ObjectMapper json,
@@ -57,6 +60,7 @@ public class DrawingVerificationService {
     this.u9 = u9;
     this.items = items;
     this.tasks = tasks;
+    this.versions = versions;
     this.store = store;
     this.client = client;
     this.json = json;
@@ -133,6 +137,32 @@ public class DrawingVerificationService {
   /** 页面读取只读持久状态；不核验、不改状态、不触发超时重试。 */
   public Optional<DrawingVerificationTask> current(ElectronicDrawingWorkContext scope) {
     return Optional.ofNullable(tasks.findActive(scopeKey(scope)));
+  }
+
+  /** 已导入结果属于本单输入快照；续接匹配不重新取图，料品缺口留给组树校验。 */
+  public Optional<DrawingVerificationTask> importedForContinuation(ElectronicDrawingWorkContext expected) {
+    return transaction.execute(status -> {
+      items.selectForCostingWrite(expected.oaFormItemId());
+      var scope = reload(expected);
+      var task = tasks.findActive(scopeKey(scope));
+      if (task == null || !"RECEIVED".equals(task.getTaskState())
+          || task.getCurrentResultId() == null
+          || !Objects.equals(task.getCurrentResultId(), task.getConsumedResultId())
+          || scope.sourceVersionId() == null) return Optional.empty();
+      var source = versions.selectById(scope.sourceVersionId());
+      var item = items.selectById(scope.oaFormItemId());
+      if (source == null || !"DRAFT".equals(source.getVersionStatus())
+          || !Objects.equals(source.getActiveFlag(), 1)
+          || !Objects.equals(source.getPreparationId(), scope.preparationId())
+          || !Objects.equals(source.getOaFormItemId(), scope.oaFormItemId())
+          || !Objects.equals(source.getDrawingResultId(), task.getCurrentResultId())
+          || !Objects.equals(source.getElectronicDrawingNo(), task.getDrawingNo())
+          || !Objects.equals(source.getMaterialOrgCode(), scope.materialOrgCode())
+          || !Objects.equals(source.getPeriodMonth(), scope.accountingMonth())
+          || !Objects.equals(task.getInputSnapshotJson(), snapshot(scope, item, task.getDrawingNo()))
+          || hasU9Bom(scope, item)) return Optional.empty();
+      return Optional.of(task);
+    });
   }
 
   private Prepared prepare(

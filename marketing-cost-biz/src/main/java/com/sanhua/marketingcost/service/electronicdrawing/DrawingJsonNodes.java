@@ -4,7 +4,9 @@ import com.sanhua.marketingcost.entity.ElectronicDrawingSourceNode;
 import com.sanhua.marketingcost.integration.drawing.DrawingVerificationSummary;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /** 从完整证据提取已经核实归属的产品组；原始九字段仍以不可变结果为准。 */
 public final class DrawingJsonNodes {
@@ -24,7 +26,7 @@ public final class DrawingJsonNodes {
       String location = "图号 " + drawingNo + " 第 " + line + " 行";
       var node = new ElectronicDrawingSourceNode();
       node.setSourceRowNo(line);
-      // no 允许空值和重复；组位置+行位置标识原文中的准确位置，不解释为层级。
+      // 行身份保持稳定；层级序号另行解析，不能改变原始结果或已有节点身份。
       node.setSourceSequence("G" + group + ":R" + line);
       node.setDrawingCode(required(row.code(), 128, location + "图号"));
       node.setSourceName(required(row.name(), 180, location + "名称"));
@@ -42,7 +44,39 @@ public final class DrawingJsonNodes {
       node.setMatchStatus(ElectronicDrawingSourceNode.MATCH_UNMATCHED);
       nodes.add(node);
     }
+    restoreParents(drawing.params().items(), nodes, drawingNo);
     return List.copyOf(nodes);
+  }
+
+  private static void restoreParents(
+      List<DrawingVerificationSummary.Item> rows,
+      List<ElectronicDrawingSourceNode> nodes,
+      String drawingNo) {
+    List<String> numbers = rows.stream().map(row -> hierarchyNumber(row.no())).toList();
+    if (numbers.stream().noneMatch(no -> no != null && no.contains("."))) return;
+    Map<String, Integer> positions = new LinkedHashMap<>();
+    for (int i = 0; i < numbers.size(); i++) {
+      String number = numbers.get(i);
+      if (number == null) throw invalid("图号 " + drawingNo + " 第 " + (i + 1) + " 行缺少有效层级序号");
+      if (positions.putIfAbsent(number, i) != null)
+        throw invalid("图号 " + drawingNo + " 的层级序号重复：" + number);
+    }
+    for (int i = 0; i < numbers.size(); i++) {
+      String number = numbers.get(i);
+      int dot = number.lastIndexOf('.');
+      if (dot < 0) continue;
+      String parent = number.substring(0, dot);
+      Integer position = positions.get(parent);
+      if (position == null) throw invalid("图号 " + drawingNo + " 序号 " + number + " 缺少父项 " + parent);
+      nodes.get(i).setParentSourceSequence(nodes.get(position).getSourceSequence());
+    }
+  }
+
+  private static String hierarchyNumber(String raw) {
+    if (raw == null) return null;
+    // PDF 可能在窄序号列内换行，也可能把换行写成字面的反斜杠 n。
+    String number = raw.replace("\\r", "").replace("\\n", "").replaceAll("[\\s\\p{Z}]+", "");
+    return number.matches("[0-9]+(?:\\.[0-9]+)*") ? number : null;
   }
 
   private static BigDecimal decimal(String value, boolean positive, String field) {

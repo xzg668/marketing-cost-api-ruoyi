@@ -57,7 +57,7 @@ import java.util.Objects;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
@@ -143,9 +143,13 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   }
 
   @Override
-  @Transactional(propagation = Propagation.NEVER)
   @RetryOnConcurrency
   public QuoteCostingWorkbenchResponse launchWorkbench(String oaNo, Long oaFormItemId) {
+    // NEVER 也会建立空事务同步作用域，导致 MyBatis 在阶段间复用旧查询结果。
+    // 入口只检查事务边界；每个读写阶段由 TransactionTemplate 独立提交和释放会话。
+    if (TransactionSynchronizationManager.isActualTransactionActive()) {
+      throw new IllegalStateException("核算工作台必须在外层写事务提交后启动");
+    }
     Launch launch = Objects.requireNonNull(transaction.execute(status -> beginLaunch(oaNo, oaFormItemId)));
     ElectronicDrawingCostingFallbackService.AttemptResult electronic = null;
     QuoteBomStatusItemResponse checked = launch.checked();
@@ -206,10 +210,17 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
         generated = true;
         buildBatchId = build == null ? null : build.buildBatchId();
       } else {
-        markWaitingForBom(form, item, productCode, periodMonth);
+        markWaitingForBom(form, item, productCode, periodMonth, null);
       }
     } else {
-      markWaitingForBom(form, item, productCode, periodMonth);
+      String message = electronic != null && electronic.attempted() ? electronic.message() : null;
+      markWaitingForBom(form, item, productCode, periodMonth, message);
+      if (StringUtils.hasText(message)) {
+        quoteBomStatusMapper.update(null, Wrappers.<QuoteBomStatus>lambdaUpdate()
+            .eq(QuoteBomStatus::getOaNo, form.getOaNo())
+            .eq(QuoteBomStatus::getOaFormItemId, item.getId())
+            .set(QuoteBomStatus::getErrorMessage, message));
+      }
     }
 
     QuoteBomStatus status = latestBomStatus(form.getOaNo(), item.getId());
@@ -346,7 +357,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
   }
 
   private void markWaitingForBom(
-      OaForm form, OaFormItem item, String productCode, String periodMonth) {
+      OaForm form, OaFormItem item, String productCode, String periodMonth, String message) {
     QuoteCostingWorkspace workspace =
         workspaceService.lockOrCreate(
             form.getOaNo(),
@@ -360,7 +371,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     workspace.setStaleReasonCode("BOM_MISSING");
     workspace.setLastErrorStep("QUOTE_BOM");
     workspace.setLastErrorCode("BOM_MISSING");
-    workspace.setLastErrorMessage("当前产品没有可用于核算的 BOM，请由产品技术补录后重试");
+    workspace.setLastErrorMessage(firstText(message, "当前产品没有可用于核算的 BOM，请由产品技术补录后重试"));
     workspace.setLastCheckedAt(LocalDateTime.now());
     workspaceService.update(workspace, expectedVersion);
   }

@@ -39,6 +39,9 @@ class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
   @Autowired DrawingVerificationResultMapper results;
   @Autowired QuoteBomPreparationRecordMapper preparations;
   @Autowired JdbcTemplate jdbc;
+  @Autowired ElectronicDrawingWorkflowOrchestrator workflow;
+  @Autowired com.sanhua.marketingcost.service.QuoteCostingWorkbenchService workbench;
+  @Autowired ElectronicDrawingSourceImportService sourceImporter;
   @MockBean CurrentU9BomGateway u9;
   @MockBean DrawingVerificationClient client;
   private String key, month;
@@ -126,6 +129,65 @@ class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
     assertThat(results.findById(task.getCurrentResultId())).isNotNull();
     assertThat(sourceCount()).isZero();
     verify(client, times(1)).verify(any());
+  }
+
+  @Test
+  void importedSourceResumesWithoutReacquiringDrawingWhenLocalProductMasterIsMissing() {
+    var task = start();
+    sourceImporter.importSource(contexts.load(itemId, "COMMERCIAL", "210", month), task.getCurrentResultId());
+    jdbc.update("DELETE FROM lp_material_master_raw WHERE material_code=?", key);
+    var context = contexts.load(itemId, "COMMERCIAL", "210", month);
+    assertThat(verifications.importedForContinuation(context)).isPresent();
+    workbench.launchWorkbench(key, itemId);
+    context = contexts.load(itemId, "COMMERCIAL", "210", month);
+    assertThat(context.workflowStage()).isEqualTo(ElectronicDrawingWorkflowStage.VALIDATION_FAILED);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_electronic_drawing_source_node WHERE supplement_version_id=? AND resolved_material_code IS NOT NULL", Integer.class, context.sourceVersionId())).isEqualTo(2);
+    verify(client, times(1)).verify(any());
+  }
+
+  @Test
+  void importedResultCannotResumeAfterQuoteInputChangesOrWhenU9HasABom() {
+    var task = start();
+    var context = contexts.load(itemId, "COMMERCIAL", "210", month);
+    sourceImporter.importSource(context, task.getCurrentResultId());
+    context = contexts.load(itemId, "COMMERCIAL", "210", month);
+    assertThat(verifications.importedForContinuation(context)).isPresent();
+    jdbc.update("UPDATE oa_form_item SET sunl_model='CHANGED' WHERE id=?", itemId);
+    assertThat(verifications.importedForContinuation(context)).isEmpty();
+    jdbc.update("UPDATE oa_form_item SET sunl_model=? WHERE id=?", key, itemId);
+    when(u9.read(any())).thenThrow(new IllegalStateException("U9 unavailable"));
+    var savedContext = context;
+    assertThatThrownBy(() -> verifications.importedForContinuation(savedContext)).hasMessageContaining("U9 unavailable");
+    verify(client, times(1)).verify(any());
+  }
+
+  @Test
+  void costingEntryContinuesReceivedSourceThroughMatching() {
+    var authentication = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+        "admin", "unused", List.of());
+    authentication.setDetails(java.util.Map.of("businessUnitType", "COMMERCIAL"));
+    org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(authentication);
+    jdbc.update("DELETE FROM lp_quote_bom_preparation_record WHERE oa_form_item_id=?", itemId);
+    com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchResponse result;
+    try { result = workbench.launchWorkbench(key, itemId); }
+    finally { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
+    var context = contexts.load(itemId, "COMMERCIAL", "210", month);
+    assertThat(context.sourceVersionId()).isNotNull();
+    assertThat(context.workflowStage()).isEqualTo(ElectronicDrawingWorkflowStage.COMPOSED);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_electronic_drawing_source_node WHERE supplement_version_id=? AND resolved_material_code IS NOT NULL", Integer.class, context.sourceVersionId())).isEqualTo(2);
+    assertThat(result.getBomRows()).isNotEmpty();
+    verify(client, times(1)).verify(any());
+  }
+
+  @Test
+  void firstReceivedResultCreatesPreparationAndContinuesMatchingInTheSameCall() {
+    jdbc.update("DELETE FROM lp_quote_bom_preparation_record WHERE oa_form_item_id=?", itemId);
+    var task = start();
+    var result = workflow.process(new ElectronicDrawingWorkflowOrchestrator.WorkflowCommand(
+        itemId, itemId, "COMMERCIAL", "210", task.getDrawingNo(), null, "财务报价", month));
+    assertThat(result.sourceVersionId()).isNotNull();
+    assertThat(result.stage()).isEqualTo(ElectronicDrawingWorkflowStage.COMPOSED);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_electronic_drawing_source_node WHERE supplement_version_id=? AND resolved_material_code IS NOT NULL", Integer.class, result.sourceVersionId())).isEqualTo(2);
   }
 
   @Test

@@ -188,9 +188,11 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V219__price_resolution_evidence.sql", "V219");
       runScriptViaMysqlCli("/db/V220__product_costing_pipeline_state.sql", "V220");
       runScriptViaMysqlCli("/db/V227__quote_cost_algorithm_version.sql", "V227");
+      runScriptViaMysqlCli("/db/V233__u9_monthly_first_query_snapshot.sql", "V233");
       runScriptViaMysqlCli("/db/V239__harden_quote_costing_execution.sql", "V239");
       runScriptViaMysqlCli("/db/V241__replace_quality_loss_rate_with_bare_product_rules.sql", "V241");
       runScriptViaMysqlCli("/db/V242__electronic_drawing_source_node.sql", "V242");
+      runScriptViaMysqlCli("/db/V243__costing_row_preserve_bom_occurrence.sql", "V243");
       runScriptViaMysqlCli("/db/V246__quote_technical_data_workspace.sql", "V246");
       runScriptViaMysqlCli("/db/V247__technical_data_workbench_menu.sql", "V247");
       runScriptViaMysqlCli(
@@ -243,6 +245,7 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V289__oa_person_directory.sql", "V289");
       runScriptViaMysqlCli("/db/V290__technical_data_unassigned_preparation.sql", "V290");
       runScriptViaMysqlCli("/db/V292__u9_material_master_product_attr.sql", "V292");
+      runScriptViaMysqlCli("/db/V293__quote_bom_monthly_snapshot_detail.sql", "V293");
       runScriptViaMysqlCli("/db/V294__sys_user_employee_no.sql", "V294");
       runScriptViaMysqlCli("/db/V295__oa_technical_submission_batch.sql", "V295");
       runScriptViaMysqlCli("/db/V296__oa_material_confirmation.sql", "V296");
