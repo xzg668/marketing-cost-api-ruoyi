@@ -43,6 +43,46 @@ class OaQuotationRequestMapperTest {
             e -> assertThat(e.errors().getFirst().field()).isEqualTo("mainData.sfzbxqjzdbhcp"));
   }
 
+  @Test
+  void sc006CanOmitThePreliminaryBoardTenderField() throws Exception {
+    var root = sample(2);
+    ((ObjectNode) root.path("mainData")).remove("ywycbqrsfzbxqjzdbhc");
+
+    var request = mapper.map(root, PEER).quote().request();
+
+    assertThat(request.getHeader().getBoardTender()).isNull();
+    assertThat(request.getExtraFields())
+        .noneMatch(field -> "ywycbqrsfzbxqjzdbhc".equals(field.getFieldCode()));
+  }
+
+  @Test
+  void sc006KeepsTheOptionalPreliminaryFieldWithoutChangingTheFinalTenderDecision()
+      throws Exception {
+    for (String preliminary : new String[] {null, "", "是", "否"}) {
+      for (String confirmed : new String[] {null, "是", "否"}) {
+        var root = sample(2);
+        var main = (ObjectNode) root.path("mainData");
+        main.put("ywycbqrsfzbxqjzdbhc", preliminary).put("sfzbxqjzdbhcp", confirmed);
+
+        var request = mapper.map(root, PEER).quote().request();
+
+        assertThat(request.getHeader().getBoardTender())
+            .as("preliminary=%s, confirmed=%s", preliminary, confirmed)
+            .isEqualTo(confirmed == null ? null : "是".equals(confirmed));
+        assertThat(request.getExtraFields())
+            .filteredOn(field -> "ywycbqrsfzbxqjzdbhc".equals(field.getFieldCode()))
+            .singleElement()
+            .satisfies(
+                field -> {
+                  assertThat(field.getFieldValue())
+                      .isEqualTo(preliminary == null || preliminary.isEmpty() ? null : preliminary);
+                  assertThat(field.getSourceFieldPath())
+                      .isEqualTo("mainData.ywycbqrsfzbxqjzdbhc");
+                });
+      }
+    }
+  }
+
   static ObjectNode sample(int n) throws Exception {
     try (var in =
         OaQuotationRequestMapperTest.class.getResourceAsStream(
@@ -235,6 +275,88 @@ class OaQuotationRequestMapperTest {
     var volume = sample(3);
     ((ObjectNode) volume.path("detailData").get(0).path("fields")).put("yjnylz", 0.001);
     assertThatThrownBy(() -> mapper.map(volume, PEER)).hasMessageContaining("精度");
+  }
+
+  @Test
+  void numericStringsKeepTheSameSixFormInputsAsJsonNumbers() throws Exception {
+    for (int n = 1; n <= 6; n++) {
+      var numeric = sample(n);
+      var textual = numeric.deepCopy();
+      var main = (ObjectNode) textual.path("mainData");
+      main.properties().stream().filter(entry -> entry.getValue().isNumber()).toList()
+          .forEach(entry -> main.put(entry.getKey(), entry.getValue().asText()));
+      for (var row : textual.path("detailData")) {
+        ((ObjectNode) row).put("rowIndex", row.path("rowIndex").asText());
+        var fields = (ObjectNode) row.path("fields");
+        fields.properties().stream().filter(entry -> entry.getValue().isNumber()).toList()
+            .forEach(entry -> fields.put(entry.getKey(), entry.getValue().asText()));
+      }
+      var actual = JSON.valueToTree(mapper.map(textual, PEER).quote().request());
+      var expected = JSON.valueToTree(mapper.map(numeric, PEER).quote().request());
+      assertThat(actual).as("form sample %s", n).isEqualTo(expected);
+    }
+  }
+
+  @Test
+  void numericTextRetainsItsSourcePrecisionAndBlankIsNotZero() throws Exception {
+    var source = sample(2);
+    var main = (ObjectNode) source.path("mainData");
+    main.put("hl", "6.8000").put("hsstjjhs", "120000.00");
+    var request = mapper.map(source, PEER).quote().request();
+    assertThat(request.getHeader().getExchangeRate()).isEqualTo("6.8000");
+    assertThat(request.getHeader().getCopperPrice()).isEqualTo("120000.00");
+    var normalized = new QuoteNormalizeService(new QuoteIngestRequestValidator(), new QuoteClassifyService())
+        .normalize(request);
+    assertThat(normalized.getErrors()).isEmpty();
+    assertThat(normalized.getHeader().getExchangeRate()).isEqualByComparingTo("6.8000");
+    assertThat(source.at("/mainData/hl").isTextual()).isTrue();
+    main.put("hl", " ");
+    assertThat(mapper.map(source, PEER).quote().request().getHeader().getExchangeRate()).isNull();
+  }
+
+  @Test
+  void numericStringsStillRejectInvalidValuesAndStoragePrecisionLoss() throws Exception {
+    for (String invalid : new String[] {"NaN", "Infinity", "6.8元", "1,234", "1e2147483647", "0.1234567"}) {
+      var source = sample(2);
+      ((ObjectNode) source.path("mainData")).put("hl", invalid);
+      assertThatThrownBy(() -> mapper.map(source, PEER))
+          .as("invalid exchange rate %s", invalid)
+          .isInstanceOfSatisfying(OaQuotationValidationException.class,
+              error -> assertThat(error.errors().getFirst().field()).isEqualTo("mainData.hl"));
+    }
+    var price = sample(2);
+    ((ObjectNode) price.path("mainData")).put("hsstjjhs", "12345.001");
+    assertThatThrownBy(() -> mapper.map(price, PEER)).hasMessageContaining("精度");
+    var cost = sample(2);
+    ((ObjectNode) cost.path("detailData").get(0).path("fields")).put("ysfyz", "0.12345");
+    assertThatThrownBy(() -> mapper.map(cost, PEER)).hasMessageContaining("精度");
+    for (String invalid : new String[] {"0", "1.5", "1e3", "99999999999999999999"}) {
+      var source = sample(2);
+      ((ObjectNode) source.path("detailData").get(0)).put("rowIndex", invalid);
+      assertThatThrownBy(() -> mapper.map(source, PEER)).hasMessageContaining("正整数");
+    }
+  }
+
+  @Test
+  void sc006CanOmitNonCalculatingSourceFieldsIncludingPackaging() throws Exception {
+    var source = sample(2);
+    var main = (ObjectNode) source.path("mainData");
+    main.remove(java.util.List.of("sfzbxqjzdbhcp", "bz1", "sfscbj", "cbsfxzyh", "bz"));
+    var fields = (ObjectNode) source.path("detailData").get(0).path("fields");
+    fields.remove(java.util.List.of("wlxz", "u11wm", "gg", "bzfsx", "zcb1bhs", "zjclf", "zjrgf",
+        "zzfy", "qyglf", "cbyxqy1", "cbsxrq", "sccb", "dzgzfyftyz", "mjfyftyz", "rzfyftyz",
+        "bz", "xsfl", "sftslhxsxl", "sftsxl", "sfybj", "mxs"));
+    var request = mapper.map(source, PEER).quote().request();
+    assertThat(request.getItems().getFirst().getMaterialCost()).isNull();
+    assertThat(request.getItems().getFirst().getLaborCost()).isNull();
+    assertThat(request.getItems().getFirst().getExtraFees()).isEmpty();
+    assertThat(request.getItems().getFirst().getMaterialNo()).isEqualTo("DEMO-0001");
+    fields.remove("bzfs");
+    var withoutPackaging = mapper.map(source, PEER).quote().request();
+    assertThat(withoutPackaging.getItems().getFirst().getPackageMethod()).isNull();
+    assertThat(withoutPackaging.getItems().getFirst().getMaterialNo()).isEqualTo("DEMO-0001");
+    assertThat(withoutPackaging.getItems().getFirst().getExtraFields())
+        .noneMatch(field -> "bzfs".equals(field.getFieldCode()));
   }
 
   @Test

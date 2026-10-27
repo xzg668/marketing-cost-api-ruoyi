@@ -61,7 +61,7 @@ public class OaQuotationRequestMapper {
     List<Field> details =
         sr ? batch ? SR_BATCH_ITEM : SR_NEW_ITEM : sc5 ? SC005_ITEM : sc6 ? SC006_ITEM : SC020_ITEM;
     validateFields(main, headers, "mainData");
-    validateStorageValues(main, true, sr && batch, process, "mainData");
+    validateStorageValues(main, headers, true, sr && batch, process, "mainData");
     // FI-SR-005 在现有核算里属于商用的家代商口径，不是 HOUSEHOLD 数据隔离域。
     if (!peer.businessUnits().contains("COMMERCIAL"))
       throw OaIntegrationException.invalid("BUSINESS_UNIT_DENIED", "调用方无当前报价业务单元权限");
@@ -107,7 +107,7 @@ public class OaQuotationRequestMapper {
       if (!identities.add(externalId)) fail(path + ".rowId", "同一明细表的行标识不能重复");
       JsonNode f = row.path("fields");
       validateFields(f, details, path + ".fields");
-      validateStorageValues(f, false, sr && batch, process, path + ".fields");
+      validateStorageValues(f, details, false, sr && batch, process, path + ".fields");
       QuoteIngestItemRequest item = item(f, main, process, business, sr, sc5, sc6, batch);
       item.setExternalLineId(externalId);
       item.setSeq((int) ordinal);
@@ -306,9 +306,10 @@ public class OaQuotationRequestMapper {
       JsonNode value = node.get(f.key());
       if (value.isNull()) continue;
       if (f.number()) {
-        if (!value.isNumber()) fail(at, f.label() + "须为JSON数值或null");
-        BigDecimal n = value.decimalValue().stripTrailingZeros();
-        if (Math.max(n.scale(), 0) > 6 || n.precision() - n.scale() > 12)
+        BigDecimal parsed = decimal(value, at, f.label());
+        if (parsed == null) continue;
+        BigDecimal n = parsed.stripTrailingZeros();
+        if (Math.max(n.scale(), 0) > 6 || (long) n.precision() - n.scale() > 12)
           fail(at, f.label() + "超出数据库数值精度（最多12位整数、6位小数）");
       } else if (!value.isTextual() || value.textValue().length() > 2000)
         fail(at, f.label() + "须为不超过2000字的单个字符串或null");
@@ -317,7 +318,10 @@ public class OaQuotationRequestMapper {
 
   /** 原文虽有独立留存，标准列也不能静默截断或四舍五入后进入核算。 */
   private static void validateStorageValues(
-      JsonNode node, boolean header, boolean srBatch, String process, String path) {
+      JsonNode node, List<Field> definitions, boolean header, boolean srBatch, String process,
+      String path) {
+    Set<String> numericFields = definitions.stream().filter(Field::number).map(Field::key)
+        .collect(java.util.stream.Collectors.toSet());
     Set<String> prices =
         Set.of(
             "djtjg",
@@ -357,7 +361,9 @@ public class OaQuotationRequestMapper {
             entry -> {
               String key = entry.getKey();
               JsonNode value = entry.getValue();
-              if (value.isNumber()) {
+              if (numericFields.contains(key)) {
+                BigDecimal parsed = decimal(value, path + "." + key, key);
+                if (parsed == null) return;
                 int scale = 6, integerDigits = 12;
                 if (header && prices.contains(key)) {
                   scale = 2;
@@ -369,8 +375,8 @@ public class OaQuotationRequestMapper {
                 }
                 // 只转万只会增加四位小数，保证目标 annual_volume(18,6) 可精确保存。
                 if (!header && process.equals("FI-SC-020") && key.equals("yjnylz")) scale = 2;
-                BigDecimal number = value.decimalValue().stripTrailingZeros();
-                if (number.scale() > scale || number.precision() - number.scale() > integerDigits)
+                BigDecimal number = parsed.stripTrailingZeros();
+                if (number.scale() > scale || (long) number.precision() - number.scale() > integerDigits)
                   fail(
                       path + "." + key,
                       "超出核算数据列精度，最多" + integerDigits + "位整数、" + scale + "位小数；请核对原单数值");
@@ -417,8 +423,30 @@ public class OaQuotationRequestMapper {
   }
 
   private static long positive(JsonNode n, String path) {
-    if (!n.isIntegralNumber() || !n.canConvertToLong() || n.longValue() < 1) fail(path, "须为正整数");
-    return n.longValue();
+    if (n.isIntegralNumber() && n.canConvertToLong() && n.longValue() > 0) return n.longValue();
+    if (n.isTextual() && n.textValue().trim().matches("[0-9]+")) {
+      try {
+        long value = Long.parseLong(n.textValue().trim());
+        if (value > 0) return value;
+      } catch (NumberFormatException ignored) {
+        // 超出 long 范围的行号与其他非法行号使用相同的字段错误。
+      }
+    }
+    fail(path, "须为正整数或正整数字符串");
+    return 0;
+  }
+
+  /** OA 可发送数值或数字文本；原报文不修改，统一按十进制检查，禁止浮点转换和补零。 */
+  private static BigDecimal decimal(JsonNode value, String path, String label) {
+    if (value.isNull() || value.isTextual() && value.textValue().isBlank()) return null;
+    try {
+      if (value.isNumber()) return value.decimalValue();
+      if (value.isTextual()) return new BigDecimal(value.textValue().trim());
+    } catch (NumberFormatException ignored) {
+      // 错误消息只描述字段，不回显来源正文。
+    }
+    fail(path, label + "须为JSON数值、可解析的数字字符串或null");
+    return null;
   }
 
   private static String value(JsonNode n, String k) {

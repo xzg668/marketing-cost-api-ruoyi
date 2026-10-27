@@ -82,19 +82,30 @@ class OaHttpLoggingFilterTest {
     properties.setMode(OaIntegrationProperties.Mode.MOCK);
     when(service.receive(any(), any())).thenThrow(OaIntegrationException.conflict("IDEMPOTENCY_CONFLICT", "PRIVATE_REASON"));
     http.perform(post(URL).header("Authorization", "Bearer " + TOKEN).contentType("application/json").content("{}"))
-        .andExpect(status().isConflict());
+        .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("REJECTED"));
     assertThat(messages()).contains("errorCode=IDEMPOTENCY_CONFLICT").doesNotContain("PRIVATE_REASON");
   }
 
-  @Test void malformedBodyAndUnexpectedFailuresKeepTheirOriginalResponses() throws Exception {
+  @Test void malformedBodyHasABusinessReceiptAndUnexpectedFailuresKeepHttpErrors() throws Exception {
     http.perform(post(URL).header("Authorization", "Bearer " + TOKEN).contentType("application/json")
             .content(new byte[] {(byte) 0xc3, (byte) 0x28}))
-        .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+        .andExpect(status().isOk()).andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+        .andExpect(jsonPath("$.data.status").value("REJECTED"));
     when(service.receive(any(), any())).thenThrow(new IllegalStateException("PRIVATE_EXCEPTION_BODY"));
     http.perform(post(URL).header("Authorization", "Bearer " + TOKEN).contentType("application/json").content("{}"))
         .andExpect(status().isInternalServerError()).andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
     assertThat(messages()).contains("errorCode=VALIDATION_FAILED", "errorCode=INTERNAL_ERROR")
         .doesNotContain("PRIVATE_EXCEPTION_BODY");
+  }
+
+  @Test void http200FieldRejectionIsLoggedAsRejectedInsteadOfSuccess() throws Exception {
+    when(service.receive(any(), any())).thenThrow(new OaQuotationValidationException("mainData.hl", "汇率格式无效"));
+    http.perform(post(URL).header("Authorization", "Bearer " + TOKEN)
+            .contentType("application/json").content("{}"))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+        .andExpect(jsonPath("$.data.status").value("REJECTED"))
+        .andExpect(jsonPath("$.data.errors[0].field").value("mainData.hl"));
+    assertThat(messages()).contains("status=REJECTED", "httpStatus=200", "errorCode=VALIDATION_FAILED");
   }
 
   @Test void preservesExistingTraceBehaviorAndClearsOaContext() throws Exception {

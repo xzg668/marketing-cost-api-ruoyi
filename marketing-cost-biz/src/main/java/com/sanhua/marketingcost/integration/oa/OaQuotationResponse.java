@@ -3,7 +3,7 @@ package com.sanhua.marketingcost.integration.oa;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.List;
 
-/** I01 公共返回；保存成功和核算输入齐全是两个不同的结论。 */
+/** I01 业务回执：HTTP 200 后仍须检查 code 与 data.status；保存成功也不等于核算输入齐全。 */
 public record OaQuotationResponse(String code, String message, Data data) {
   @JsonInclude(JsonInclude.Include.NON_NULL)
   public record Data(

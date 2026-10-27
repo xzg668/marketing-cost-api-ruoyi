@@ -115,6 +115,122 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
   }
 
   @Test
+  void sc006ReceivesOptionalPreliminaryBoardTenderFieldAndKeepsItsSourceValue()
+      throws Exception {
+    for (String preliminary : new String[] {null, "是", "否"}) {
+      var source = request(2);
+      var main = (ObjectNode) source.path("mainData");
+      main.remove("sfzbxqjzdbhcp");
+      if (preliminary == null) main.remove("ywycbqrsfzbxqjzdbhc");
+      else main.put("ywycbqrsfzbxqjzdbhc", preliminary);
+
+      var response =
+          http.perform(
+                  post(URL)
+                      .header("Authorization", TOKEN)
+                      .contentType("application/json")
+                      .content(source.toString()))
+              .andExpect(status().isOk())
+              .andExpect(jsonPath("$.code").value("0"))
+              .andReturn();
+      var result = json.readTree(response.getResponse().getContentAsByteArray());
+      long formId = result.at("/data/quoteId").asLong();
+      assertThat(jdbc.queryForObject("SELECT board_tender FROM oa_form WHERE id=?", Object.class, formId))
+          .isNull();
+      var savedValues =
+          jdbc.queryForList(
+              "SELECT field_value FROM lp_oa_form_header_extra_field WHERE oa_form_id=? AND field_code=?",
+              String.class,
+              formId,
+              "ywycbqrsfzbxqjzdbhc");
+      if (preliminary == null) assertThat(savedValues).isEmpty();
+      else assertThat(savedValues).containsExactly(preliminary);
+      assertThat(service.receive(PEER, source.toString())).isEqualTo(result);
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT COUNT(*) FROM oa_form WHERE oa_no=?", Integer.class, source.path("formNo").asText()))
+          .isEqualTo(1);
+    }
+  }
+
+  @Test
+  void numericStringsAreSavedExactlyAndTheOriginalJsonRemainsTextual() throws Exception {
+    var source = request(2);
+    ((ObjectNode) source.path("mainData")).put("hl", "6.8000").put("hsstjjhs", "120000.00");
+    ((ObjectNode) source.path("detailData").get(0)).put("rowIndex", "1");
+    ((ObjectNode) source.path("detailData").get(0).path("fields"))
+        .put("ysfyz", "0.7534").put("yjnylwz", "0.766");
+    var response = http.perform(post(URL).header("Authorization", TOKEN)
+            .contentType("application/json").content(source.toString()))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("SUCCEEDED"))
+        .andReturn();
+    var result = json.readTree(response.getResponse().getContentAsByteArray());
+    long formId = result.at("/data/quoteId").asLong();
+    long itemId = result.at("/data/itemMappings/0/quoteItemId").asLong();
+    assertThat(jdbc.queryForObject("SELECT exchange_rate FROM oa_form WHERE id=?", java.math.BigDecimal.class, formId))
+        .isEqualByComparingTo("6.8000");
+    assertThat(jdbc.queryForObject("SELECT shipping_fee FROM oa_form_item WHERE id=?", java.math.BigDecimal.class, itemId))
+        .isEqualByComparingTo("0.7534");
+    var raw = jdbc.queryForObject("SELECT raw_payload FROM lp_oa_integration_message WHERE request_id=?",
+        String.class, source.path("requestId").asText());
+    assertThat(json.readTree(raw).at("/mainData/hl").isTextual()).isTrue();
+    assertThat(json.readTree(raw).at("/mainData/hl").textValue()).isEqualTo("6.8000");
+    assertThat(service.receive(PEER, source.toString())).isEqualTo(result);
+  }
+
+  @Test
+  void missingOaPackagingDoesNotRejectOrChangeTheFinishedProductIdentity() throws Exception {
+    var source = request(2);
+    var fields = (ObjectNode) source.path("detailData").get(0).path("fields");
+    fields.put("lh", "1145100050625");
+    fields.remove("bzfs");
+    fields.remove("bzfsx");
+    var response = http.perform(post(URL).header("Authorization", TOKEN)
+            .contentType("application/json").content(source.toString()))
+        .andExpect(status().isOk()).andExpect(jsonPath("$.code").value("0"))
+        .andExpect(jsonPath("$.data.status").value("SUCCEEDED"))
+        .andReturn();
+    var result = json.readTree(response.getResponse().getContentAsByteArray());
+    long itemId = result.at("/data/itemMappings/0/quoteItemId").asLong();
+    assertThat(jdbc.queryForObject("SELECT material_no FROM oa_form_item WHERE id=?", String.class, itemId))
+        .isEqualTo("1145100050625");
+    assertThat(jdbc.queryForObject("SELECT package_method FROM oa_form_item WHERE id=?", Object.class, itemId))
+        .isNull();
+    assertThat(jdbc.queryForObject("SELECT product_code FROM lp_quote_bom_status WHERE oa_form_item_id=?",
+        String.class, itemId)).isEqualTo("1145100050625");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_oa_form_item_extra_field WHERE oa_form_item_id=? "
+        + "AND field_code IN ('bzfs','bzfsx')", Integer.class, itemId)).isZero();
+    assertThat(service.receive(PEER, source.toString())).isEqualTo(result);
+  }
+
+  @Test
+  void businessRejectionReturnsHttp200AndDoesNotCreateAQuotation() throws Exception {
+    var source = request(2);
+    ((ObjectNode) source.path("mainData")).put("hl", "无法解析的汇率");
+    var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(
+        com.sanhua.marketingcost.integration.logging.ExternalInterfaceLog.class);
+    var events = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+    events.start();
+    logger.addAppender(events);
+    try {
+      http.perform(post(URL).header("Authorization", TOKEN)
+              .contentType("application/json").content(source.toString()))
+          .andExpect(status().isOk()).andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+          .andExpect(jsonPath("$.data.status").value("REJECTED"))
+          .andExpect(jsonPath("$.data.errors[0].field").value("mainData.hl"));
+      assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM oa_form WHERE oa_no=?", Integer.class,
+          source.path("formNo").asText())).isZero();
+      var logged = json.readTree(events.list.getLast().getFormattedMessage());
+      assertThat(logged.path("httpStatus").asInt()).isEqualTo(200);
+      assertThat(logged.path("businessOutcome").asText()).isEqualTo("REJECTED");
+      assertThat(logged.path("businessCode").asText()).isEqualTo("VALIDATION_FAILED");
+    } finally {
+      logger.detachAppender(events);
+      events.stop();
+    }
+  }
+
+  @Test
   void sameDocumentCannotOverwriteSourceOrReplaceProductRows() throws Exception {
     var r = request(2);
     var first = service.receive(PEER, r.toString());
@@ -125,7 +241,7 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
     ((ObjectNode) changed.path("mainData")).put("khmc", "修改后的客户");
     ((ObjectNode) changed.path("detailData").get(0)).put("rowId", "RECREATED-ROW");
     http.perform(post(URL).header("Authorization", TOKEN).contentType("application/json").content(changed.toString()))
-        .andExpect(status().isConflict())
+        .andExpect(status().isOk())
         .andExpect(jsonPath("$.code").value("IDEMPOTENCY_CONFLICT"))
         .andExpect(jsonPath("$.data.status").value("REJECTED"));
     assertThat(jdbc.queryForObject("SELECT customer FROM oa_form WHERE id=?", String.class, form)).isEqualTo(originalCustomer);
@@ -141,7 +257,7 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
     var first = service.receive(PEER, r.toString());
     var another = r.deepCopy().put("requestId", "ANOTHER-" + UUID.randomUUID());
     http.perform(post(URL).header("Authorization", TOKEN).contentType("application/json").content(another.toString()))
-        .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("QUOTE_NUMBER_OWNED"));
+        .andExpect(status().isOk()).andExpect(jsonPath("$.code").value("QUOTE_NUMBER_OWNED"));
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM oa_form WHERE oa_no=?", Integer.class, r.path("formNo").asText())).isEqualTo(1);
     assertThat(service.receive(PEER, r.toString())).isEqualTo(first);
   }
@@ -152,7 +268,7 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
     var invalid = r.deepCopy();
     ((ObjectNode) invalid.path("mainData")).putArray("sqdw").add("invalid");
     http.perform(post(URL).header("Authorization", TOKEN).contentType("application/json").content(invalid.toString()))
-        .andExpect(status().isBadRequest());
+        .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("REJECTED"));
     assertThat(service.receive(PEER, r.toString()).path("data").path("status").asText()).isEqualTo("SUCCEEDED");
   }
 
@@ -273,9 +389,15 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
       start.countDown();
       var a = futures.get(0).get(30, TimeUnit.SECONDS);
       var b = futures.get(1).get(30, TimeUnit.SECONDS);
-      assertThat(java.util.List.of(a.getStatus(), b.getStatus())).containsExactlyInAnyOrder(200, 409);
-      var conflict = a.getStatus() == 409 ? a : b;
-      assertThat(json.readTree(conflict.getContentAsString()).path("code").asText()).isEqualTo("QUOTE_NUMBER_OWNED");
+      assertThat(java.util.List.of(a.getStatus(), b.getStatus())).containsExactly(200, 200);
+      var results = java.util.List.of(json.readTree(a.getContentAsByteArray()),
+          json.readTree(b.getContentAsByteArray()));
+      assertThat(results).extracting(result -> result.path("code").asText())
+          .containsExactlyInAnyOrder("0", "QUOTE_NUMBER_OWNED");
+      for (var result : results) {
+        assertThat(result.at("/data/status").asText())
+            .isEqualTo("0".equals(result.path("code").asText()) ? "SUCCEEDED" : "REJECTED");
+      }
       assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM oa_form WHERE oa_no=?", Integer.class,
           first.path("formNo").asText())).isEqualTo(1);
     }
@@ -378,7 +500,7 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
         .andExpect(jsonPath("$.data.status").value("REJECTED"));
     http.perform(
             post(URL).header("Authorization", TOKEN).contentType("application/json").content("{"))
-        .andExpect(status().isBadRequest())
+        .andExpect(status().isOk())
         .andExpect(jsonPath("$.data.status").value("REJECTED"));
     ((ObjectNode) r.path("mainData")).remove("syb");
     http.perform(
@@ -386,7 +508,7 @@ class OaQuotationIntegrationTest extends BomMapperTestBase {
                 .header("Authorization", TOKEN)
                 .contentType("application/json")
                 .content(r.toString()))
-        .andExpect(status().isBadRequest())
+        .andExpect(status().isOk())
         .andExpect(jsonPath("$.data.errors[0].field").value("mainData.syb"));
     http.perform(
             post(URL)

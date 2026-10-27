@@ -1,11 +1,14 @@
 package com.sanhua.marketingcost.integration.oa;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.sanhua.marketingcost.integration.logging.ExternalHttpLoggingFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Set;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -45,15 +48,29 @@ public class OaQuotationController {
   }
 
   @ExceptionHandler(OaQuotationValidationException.class)
-  ResponseEntity<OaQuotationResponse> invalid(OaQuotationValidationException ex) {
-    return ResponseEntity.badRequest()
-        .body(OaQuotationResponse.rejected("VALIDATION_FAILED", "报价需求字段校验不通过", ex.errors()));
+  ResponseEntity<OaQuotationResponse> invalid(
+      OaQuotationValidationException ex, HttpServletRequest request) {
+    return rejection(request, HttpStatus.OK, "VALIDATION_FAILED", "报价需求字段校验不通过", ex.errors());
   }
 
   @ExceptionHandler(OaIntegrationException.class)
-  ResponseEntity<OaQuotationResponse> conflict(OaIntegrationException ex) {
-    return ResponseEntity.status(ex.httpStatus())
-        .body(OaQuotationResponse.rejected(ex.code(), ex.getMessage(), null));
+  ResponseEntity<OaQuotationResponse> conflict(
+      OaIntegrationException ex, HttpServletRequest request) {
+    HttpStatus status = Set.of(HttpStatus.BAD_REQUEST, HttpStatus.UNPROCESSABLE_ENTITY,
+        HttpStatus.CONFLICT).contains(ex.httpStatus()) ? HttpStatus.OK : ex.httpStatus();
+    return rejection(request, status, ex.code(), ex.getMessage(), null);
+  }
+
+  private ResponseEntity<OaQuotationResponse> rejection(
+      HttpServletRequest request, HttpStatus status, String code, String message,
+      List<OaQuotationResponse.FieldError> errors) {
+    request.setAttribute(OaHttpLoggingFilter.RESULT_CODE, code);
+    ExternalHttpLoggingFilter.exchange(request)
+        .ifPresent(log -> {
+          log.result("REJECTED");
+          log.correlate("businessCode", code);
+        });
+    return ResponseEntity.status(status).body(OaQuotationResponse.rejected(code, message, errors));
   }
 
   @ExceptionHandler(DataAccessException.class)
