@@ -617,7 +617,7 @@ class LinkedPriceEnsureServiceImplTest {
     verify(calcService).calculateQuoteItemForEnsure(any(), linkedItemCaptor.capture(), any(), org.mockito.ArgumentMatchers.any());
     assertThat(linkedItemCaptor.getValue().getSupplierCode()).isEqualTo("S000219");
     verify(supplyRatioResolveService).resolveAll(org.mockito.ArgumentMatchers.eq("COMMERCIAL"), org.mockito.ArgumentMatchers.eq(Set.of("721250208")), any());
-    verify(supplyRatioResolveService).resolve(org.mockito.ArgumentMatchers.eq("COMMERCIAL"), org.mockito.ArgumentMatchers.eq("721250208"), any(), any(), any());
+    verify(supplyRatioResolveService, never()).resolve(any(), any(), any(), any(), any());
   }
 
   @Test
@@ -658,7 +658,7 @@ class LinkedPriceEnsureServiceImplTest {
     assertThat(selected.getValue()).isSameAs(latest);
     assertThat(selected.getValue().getManualPrice()).isEqualByComparingTo("76.8584");
     verify(supplyRatioResolveService).resolveAll(org.mockito.ArgumentMatchers.eq("COMMERCIAL"), org.mockito.ArgumentMatchers.eq(Set.of("301990317")), any());
-    verify(supplyRatioResolveService).resolve(org.mockito.ArgumentMatchers.eq("COMMERCIAL"), org.mockito.ArgumentMatchers.eq("301990317"), any(), any(), any());
+    verify(supplyRatioResolveService, never()).resolve(any(), any(), any(), any(), any());
   }
 
   @Test

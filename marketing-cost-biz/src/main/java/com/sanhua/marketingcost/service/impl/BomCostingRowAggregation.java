@@ -65,6 +65,7 @@ final class BomCostingRowAggregation {
   }
 
   private static void merge(BomCostingRow target, BomCostingRow source) {
+    target.setSupplementalPackaging(target.isSupplementalPackaging() || source.isSupplementalPackaging());
     if (target.getCurrentSubRefs() != null && source.getCurrentSubRefs() != null) {
       var refs = new ArrayList<>(target.getCurrentSubRefs());
       refs.addAll(source.getCurrentSubRefs());

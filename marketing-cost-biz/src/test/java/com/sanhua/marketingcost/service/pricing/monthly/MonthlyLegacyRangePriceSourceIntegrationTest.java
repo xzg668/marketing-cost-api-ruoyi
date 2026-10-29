@@ -181,6 +181,6 @@ class MonthlyLegacyRangePriceSourceIntegrationTest {
     String code=code(),month="2040-04"; publication("COMMERCIAL",month,"210"); legacy(code,"COMMERCIAL",month,true,"S1");
     var req=request(code,"COMMERCIAL",month,"210","1"); assertThat(source.read(context("COMMERCIAL",month,"210"),Set.of(req)).problems()).isEmpty();
     ratio(code,"S1","0"); var result=source.read(context("COMMERCIAL",month,"210"),Set.of(req));
-    assertThat(result.values()).isEmpty(); assertThat(result.problems().get(req).message()).contains("退出供货");
+    assertThat(result.problems()).isEmpty(); assertThat(result.values()).containsKey(req);
   }
 }

@@ -461,6 +461,9 @@ public class QuoteProductBomCostingBuildServiceImpl
 
     List<BomCostingRow> costingRows = stampRowsForQuoteItem(record, built.costingRows());
     for (var row : costingRows) {
+      row.setSupplementalPackaging(built.sourceRefs().stream().anyMatch(ref ->
+          java.util.Objects.equals(ref.costingRowPath(), row.getPath()) && ref.sourceRef() != null
+              && "TECH_PACKAGE".equals(ref.sourceRef().getSourcePartType())));
       row.setCurrentSubRefs(built.subRefs().stream()
           .filter(ref -> java.util.Objects.equals(ref.costingRowPath(), row.getPath()))
           .map(com.sanhua.marketingcost.service.settlement.BomSettlementSubRefCandidate::subRef).toList());

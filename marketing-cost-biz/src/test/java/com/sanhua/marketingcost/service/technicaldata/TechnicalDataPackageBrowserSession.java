@@ -62,6 +62,12 @@ class TechnicalDataPackageBrowserSession extends TechnicalDataPackageApplication
     jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,unit,organization_code,import_batch_id,active_flag,main_category_code,shape_attr) VALUES(?,'包装底数验收产品','只','COMMERCIAL',?,1,'10','制造件')", key, key);
     jdbc.update("INSERT INTO lp_bom_u9_source(import_batch_id,source_type,imported_at,price_org_code,parent_material_no,child_material_no,bom_purpose,bom_version,child_seq,qty_per_parent,parent_base_qty,effective_from,effective_to) VALUES(?,'EXCEL',NOW(),'210',?,?,'主制造','V1',1,1,150,'2026-09-01','9999-12-31')", key, key + "-T1", key + "-P");
     jdbc.update("UPDATE lp_bom_raw_hierarchy SET qty_per_parent=150,qty_per_top=150 WHERE id=?", child1);
+    jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,unit,material_spec,organization_code,import_batch_id,active_flag,main_category_code,shape_attr) VALUES(?,'补录包装盒','张','BOX-SPEC','COMMERCIAL',?,1,'25','采购件')", key + "-BOX", key);
+    jdbc.update("UPDATE lp_bom_raw_hierarchy SET material_code=?,material_name='补录包装盒',material_spec='BOX-SPEC' WHERE id=?", key + "-BOX", child1);
+    for (String supplier : List.of("BOX-A", "BOX-B")) {
+      jdbc.update("INSERT INTO lp_price_fixed_item(org_code,supplier_code,supplier_name,material_code,material_name,spec_model,unit,fixed_price,tax_included,effective_from,effective_to,business_unit_type,source_kind,source_type,source_system,source_batch_no,external_row_id,process_no,created_at,updated_at) VALUES('210',?,?,?,'补录包装盒','BOX-SPEC','张',?,0,'2026-09-01','2099-01-01','COMMERCIAL','PUBLIC','PURCHASE_FIXED','SRM',?,?,?,NOW(),NOW())",
+          supplier,supplier,key + "-BOX",supplier.equals("BOX-A")?3:5,key,UUID.randomUUID().toString(),key);
+    }
     jdbc.update("UPDATE lp_quote_tech_module SET required_flag=0,module_status='NOT_REQUIRED',source_availability='AVAILABLE' WHERE product_id=? AND module_type='PROFILE'", productId);
     jdbc.update("INSERT INTO lp_oa_integration_message(source_system,environment,direction,request_id,interface_type,schema_version,occurred_at,raw_payload,payload_hash,allowed_business_units) VALUES('TEST','UNIT','OUTBOUND',?,'TASK_DISPATCH',1,NOW(3),'{}',?,'COMMERCIAL')", key, "b".repeat(64));
     long messageId = jdbc.queryForObject("SELECT id FROM lp_oa_integration_message WHERE request_id=?", Long.class, key);
@@ -71,7 +77,7 @@ class TechnicalDataPackageBrowserSession extends TechnicalDataPackageApplication
     root.setId(null); root.setTopProductCode(key); root.setParentCode(key); root.setMaterialCode(key);
     root.setPath("/" + key + "/"); root.setLevel(0); root.setShapeAttr("制造件"); hierarchy.insert(root);
     BomRawHierarchy child = hierarchy.selectById(child1);
-    child.setId(null); child.setTopProductCode(key); child.setParentCode(key); child.setLevel(1);
+    child.setId(null); child.setMaterialCode(key + "-C"); child.setMaterialName("普通纸箱缺价"); child.setTopProductCode(key); child.setParentCode(key); child.setLevel(1);
     child.setPath("/" + key + "/" + key + "-C/"); child.setShapeAttr("采购件"); child.setQtyPerParent(BigDecimal.ONE); child.setQtyPerTop(BigDecimal.ONE); hierarchy.insert(child);
     String password = UUID.randomUUID().toString(), adminPassword = UUID.randomUUID().toString();
     var encoder = new BCryptPasswordEncoder();

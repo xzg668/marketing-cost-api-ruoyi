@@ -206,14 +206,14 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
         continue;
       }
       MakePartPricePrepareResult.Gap gap = gapFromRow(parentMaterialNo, row);
-      String key = gap.getGapType() + "|" + gap.getGapMaterialCode() + "|" + gap.getSourceTable();
+      String key = gap.getGapType() + "|" + gap.getGapMaterialCode() + "|" + gap.getReasonCode() + "|" + gap.getSourceTable();
       if (dedupe.add(key)) {
         gaps.add(gap);
       }
     }
     if (gaps.isEmpty()) {
       gaps.add(new MakePartPricePrepareResult.Gap(
-          GAP_TYPE_MISSING_PRICE,
+          GAP_TYPE_MISSING_STRUCTURE,
           parentMaterialNo,
           "lp_make_part_price_calc_row",
           "制造件价格生成结果未完成或缺父件汇总价"));
@@ -227,6 +227,14 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
     String message = StringUtils.hasText(row.getRemark())
         ? row.getRemark().trim()
         : "制造件价格生成异常(status=" + status + ")";
+    if ("RAW_PRICE_ERROR".equals(status) || "SCRAP_PRICE_ERROR".equals(status)) {
+      boolean raw = "RAW_PRICE_ERROR".equals(status);
+      var gap = new MakePartPricePrepareResult.Gap("PRICE_SOURCE_ERROR",
+          raw ? row.getChildMaterialNo() : row.getScrapCode(),
+          raw ? row.getChildMaterialName() : row.getScrapName(), "lp_make_part_price_calc_row", message);
+      gap.setReasonCode(status);
+      return gap;
+    }
     if (STATUS_MISSING_BOM.equals(status)) {
       return new MakePartPricePrepareResult.Gap(
           GAP_TYPE_MISSING_STRUCTURE,
@@ -252,20 +260,24 @@ public class MakePartPricePrepareStrategyImpl implements MakePartPricePrepareStr
           message);
     }
     if (MakePartPriceCalculator.STATUS_MISSING_RAW_PRICE.equals(status)) {
-      return new MakePartPricePrepareResult.Gap(
+      var gap = new MakePartPricePrepareResult.Gap(
           GAP_TYPE_MISSING_PRICE,
           firstText(row.getChildMaterialNo(), parentMaterialNo),
           row.getChildMaterialName(),
           "lp_make_part_price_gap_item",
           message);
+      gap.setReasonCode(MakePartPriceCalculator.STATUS_MISSING_RAW_PRICE);
+      return gap;
     }
     if (MakePartPriceCalculator.STATUS_MISSING_SCRAP_PRICE.equals(status)) {
-      return new MakePartPricePrepareResult.Gap(
+      var gap = new MakePartPricePrepareResult.Gap(
           GAP_TYPE_MISSING_PRICE,
           firstText(row.getScrapCode(), parentMaterialNo),
           row.getScrapName(),
           "lp_make_part_price_gap_item",
           message);
+      gap.setReasonCode(MakePartPriceCalculator.STATUS_MISSING_SCRAP_PRICE);
+      return gap;
     }
     return new MakePartPricePrepareResult.Gap(
         GAP_TYPE_MISSING_STRUCTURE,

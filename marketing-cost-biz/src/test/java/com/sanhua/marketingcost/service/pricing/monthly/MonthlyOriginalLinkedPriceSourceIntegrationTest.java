@@ -58,9 +58,12 @@ class MonthlyOriginalLinkedPriceSourceIntegrationTest {
   static MonthlyPriceRequest request(String code,String bu,String month,String org,NonCuConditions terms){return new MonthlyPriceRequest(new MonthlyPriceFamilyKey(YearMonth.parse(month),bu,code,"SPEC","件","CNY",TaxBasis.EXCLUDED,null),org,terms,BigDecimal.ONE);}
   static String code(){return "MPP05-linked-"+UUID.randomUUID();}
   static PriceLinkedItem rule(String code,String bu,String month,String org,String supplier,String expression,boolean board){
-    var key=new MaterialPriceRuleKey(bu,org,code,supplier,supplier,"SPEC","件");var factors=new LinkedHashMap<String,OriginalLinkedWorkbookParser.FactorInput>();factors.put("cu",new OriginalLinkedWorkbookParser.FactorInput(PriceFactorContext.COPPER,new Address("财务基价","D3"),FactorPriceUnit.CNY_KG,"CNY/KG",PriceFactorContext.COPPER,"SAME_CANONICAL_FACTOR"));if(board)factors.put("sus",new OriginalLinkedWorkbookParser.FactorInput("AVG|304/2B/1219",new Address("财务基价","D4"),FactorPriceUnit.CNY_KG,"CNY/KG","AVG|304/2B/1219","SAME_CANONICAL_FACTOR"));
+    return rule(code,bu,month,org,supplier,supplier,expression,board);
+  }
+  static PriceLinkedItem rule(String code,String bu,String month,String org,String supplier,String supplierName,String expression,boolean board){
+    var key=new MaterialPriceRuleKey(bu,org,code,supplier,supplierName,"SPEC","件");var factors=new LinkedHashMap<String,OriginalLinkedWorkbookParser.FactorInput>();factors.put("cu",new OriginalLinkedWorkbookParser.FactorInput(PriceFactorContext.COPPER,new Address("财务基价","D3"),FactorPriceUnit.CNY_KG,"CNY/KG",PriceFactorContext.COPPER,"SAME_CANONICAL_FACTOR"));if(board)factors.put("sus",new OriginalLinkedWorkbookParser.FactorInput("AVG|304/2B/1219",new Address("财务基价","D4"),FactorPriceUnit.CNY_KG,"CNY/KG","AVG|304/2B/1219","SAME_CANONICAL_FACTOR"));
     var original=new OriginalLinkedWorkbookParser.Rule(key,"fixture linked material","原稿",8,"H8",expression,expression,"0.000000",false,new CompiledFormula(expression,List.of(),Map.of()),factors,BigDecimal.ZERO);
-    var row=new PriceLinkedItem();row.setRuleIdentityKey(key.identityKey());row.setRuleRevision(1);row.setRuleStatus("PUBLISHED");row.setExpressionVersion(OriginalLinkedRuleSnapshot.VERSION);row.setSourceKind("PUBLIC");row.setBusinessUnitType(bu);row.setOrgCode(org);row.setPricingMonth(month);row.setMaterialCode(code);row.setMaterialName("fixture linked material");row.setSpecModel("SPEC");row.setUnit("件");row.setSupplierCode(supplier);row.setSupplierName(supplier);row.setTaxIncluded(0);row.setFormulaExpr(expression);row.setSourceInputSnapshotJson(snapshots.write(List.of(original),"controlled-original-version"));row.setSourceSheetName("原稿");row.setSourceRowNumber(8);row.setSourceFormulaCellRef("H8");row.setSourceFormulaExpr("original H8 formula");row.setEffectiveFrom(YearMonth.parse(month).atDay(1));row.setEffectiveTo(LocalDate.of(2099,1,1));row.setCreatedAt(LocalDateTime.now());row.setUpdatedAt(LocalDateTime.now());row.setDeleted(0);row.setTechnicalRevision(0);rules.insert(row);return row;
+    var row=new PriceLinkedItem();row.setRuleIdentityKey(key.identityKey());row.setRuleRevision(1);row.setRuleStatus("PUBLISHED");row.setExpressionVersion(OriginalLinkedRuleSnapshot.VERSION);row.setSourceKind("PUBLIC");row.setBusinessUnitType(bu);row.setOrgCode(org);row.setPricingMonth(month);row.setMaterialCode(code);row.setMaterialName("fixture linked material");row.setSpecModel("SPEC");row.setUnit("件");row.setSupplierCode(supplier);row.setSupplierName(supplierName);row.setTaxIncluded(0);row.setFormulaExpr(expression);row.setSourceInputSnapshotJson(snapshots.write(List.of(original),"controlled-original-version"));row.setSourceSheetName("原稿");row.setSourceRowNumber(8);row.setSourceFormulaCellRef("H8");row.setSourceFormulaExpr("original H8 formula");row.setEffectiveFrom(YearMonth.parse(month).atDay(1));row.setEffectiveTo(LocalDate.of(2099,1,1));row.setCreatedAt(LocalDateTime.now());row.setUpdatedAt(LocalDateTime.now());row.setDeleted(0);row.setTechnicalRevision(0);rules.insert(row);return row;
   }
   static long publication(String bu,String month,String org){
     String batch=UUID.randomUUID().toString();jdbc.update("INSERT INTO lp_factor_upload_batch(batch_no,import_type,price_month,business_unit_type,file_name,file_sha256,content_hash,uploaded_by,status,price_org_code,publication_revision,default_scheme_code,published_at) VALUES(?,'FINANCE_BASE',?,?,'finance-linked-original.xlsx',?,?,'finance-fixture','PUBLISHED',?,1,'DEFAULT',NOW())",batch,month,bu,"a".repeat(64),"b".repeat(64),org);long id=jdbc.queryForObject("SELECT id FROM lp_factor_upload_batch WHERE batch_no=?",Long.class,batch);
@@ -145,12 +148,27 @@ class MonthlyOriginalLinkedPriceSourceIntegrationTest {
     String code=code();String month=unknownLegacyIdentity?"2026-11":"2026-02";publication("HOUSEHOLD",month,"210");rule(code,"HOUSEHOLD",month,"210","S1","[cu]+5",false);var other=new MaterialPriceRuleKey("HOUSEHOLD","210",code,"S1","S1","OTHER","KG");
     jdbc.update("INSERT INTO lp_price_linked_item(pricing_month,org_code,supplier_code,supplier_name,material_code,material_name,spec_model,unit,formula_expr,tax_included,effective_from,effective_to,business_unit_type,source_kind,rule_identity_key,rule_revision,rule_status,expression_version,created_at,updated_at) VALUES(?,'210','S1','S1',?,'legacy other identity','OTHER','KG','[old_variable]',0,?,?,'HOUSEHOLD','PUBLIC',?,1,'PUBLISHED','LEGACY',NOW(),NOW())",month,code,YearMonth.parse(month).atDay(1),LocalDate.of(2099,1,1),unknownLegacyIdentity?null:other.identityKey());publish("HOUSEHOLD","210");var r=request(code,"HOUSEHOLD",month,"210",NonCuConditions.empty());var result=operation.resolveCandidates(context("HOUSEHOLD",month,"210"),Set.of(r));assertThat(result.problems()).isEmpty();assertThat(result.values().get(r).selection().fact().price()).isEqualByComparingTo("105");
   }
-  @Test void withdrawnSingleSupplierDoesNotAdoptOrRegenerateThePublishedFormula() {
+  @Test void singleSupplierWithZeroRatioUsesItsPublishedPriceWithoutRegeneration() {
     String code=code(),month="2040-01"; publication("COMMERCIAL",month,"210"); rule(code,"COMMERCIAL",month,"210","S1","100",false); publish("COMMERCIAL","210");
     var before=jdbc.queryForList("SELECT * FROM lp_finance_effective_price WHERE material_code=? ORDER BY id",code);
     var req=request(code,"COMMERCIAL",month,"210",NonCuConditions.empty()); assertThat(source.read(context("COMMERCIAL",month,"210"),Set.of(req)).problems()).isEmpty();
     jdbc.update("INSERT INTO lp_supplier_supply_ratio(business_unit_type,material_code,material_name,spec_model,supplier_name,supplier_code,supply_ratio,is_active,deleted) VALUES('COMMERCIAL',?,'fixture','SPEC','S1','S1',0,1,0)",code);
-    var result=source.read(context("COMMERCIAL",month,"210"),Set.of(req)); assertThat(result.values()).isEmpty(); assertThat(result.problems().get(req).message()).contains("退出供货");
+    var result=source.read(context("COMMERCIAL",month,"210"),Set.of(req)); assertThat(result.problems()).isEmpty(); assertThat(result.values()).containsKey(req);
     assertThat(jdbc.queryForList("SELECT * FROM lp_finance_effective_price WHERE material_code=? ORDER BY id",code)).isEqualTo(before);
   }
+  @Test void publishedOriginalWithSupplierNameOnlyIsAdoptedInsteadOfRequestedAgain() {
+    String code=code(),month="2055-01";
+    publication("COMMERCIAL",month,"210");
+    var original=rule(code,"COMMERCIAL",month,"210","","实际供管部原稿供应商","[cu]+5",false);
+    publish("COMMERCIAL","210");
+    var request=request(code,"COMMERCIAL",month,"210",NonCuConditions.empty());
+    var result=operation.resolveCandidates(context("COMMERCIAL",month,"210"),Set.of(request));
+    assertThat(result.problems()).isEmpty();
+    assertThat(result.values().get(request).selection().fact().price()).isEqualByComparingTo("105");
+    assertThat(result.values().get(request).selection().fact().evidence().json()).contains(original.getRuleIdentityKey());
+    var included=new MonthlyPriceRequest(new MonthlyPriceFamilyKey(request.family().month(),"COMMERCIAL",code,"SPEC","件","CNY",TaxBasis.INCLUDED,null),"210",NonCuConditions.empty(),BigDecimal.ONE);
+    assertThat(source.read(context("COMMERCIAL",month,"210"),Set.of(included)).problems().get(included).reason())
+        .isEqualTo(MonthlyAdoptionRetryPolicy.Failure.MISSING);
+  }
+
 }

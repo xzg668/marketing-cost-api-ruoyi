@@ -54,6 +54,8 @@ public class MakePartPricePrepareResult {
     private String materialName;
     private String sourceTable;
     private String message;
+    /** 原材料/废料的实际缺价原因，区别于计算母件的类型。 */
+    private String reasonCode;
 
     public Gap() {
     }

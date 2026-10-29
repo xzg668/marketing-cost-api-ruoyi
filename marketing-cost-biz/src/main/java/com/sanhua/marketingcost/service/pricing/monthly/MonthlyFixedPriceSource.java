@@ -51,7 +51,7 @@ public final class MonthlyFixedPriceSource {
             var active=List.copyOf(versions.values());for(var row:active)validateBasis(request,row);
             var supplierCandidates=versions.entrySet().stream().map(entry->new SupplierPriceCandidate(entry.getKey(),entry.getKey(),entry.getValue().getSupplierName(),entry.getValue().getFixedPrice(),entry.getValue().getEffectiveFrom(),entry.getValue().getEffectiveTo())).toList();
             var scope=scope(context,organization.getKey(),code);var actualRatios=ratios.getOrDefault(code,List.of());
-            var selected=suppliers.selectPrepared(scope,supplierCandidates,actualRatios,decisions.get(SupplierPriceSelectionService.scopeKey(scope)));
+            var selected=suppliers.selectPrepared(scope,supplierCandidates,actualRatios,decisions.get(SupplierPriceSelectionService.scopeKey(scope)),context.supplierReviews().packagingHighestFallback());
             if(selected.review()!=null)context.supplierReviews().forOrganization(request.priceOrgCode()).add(selected.review());
             if(selected.candidate()==null){problems.put(request,new Problem(Failure.WAITING,selected.message()));continue;}
             var chosen=versions.get(selected.candidate().key());

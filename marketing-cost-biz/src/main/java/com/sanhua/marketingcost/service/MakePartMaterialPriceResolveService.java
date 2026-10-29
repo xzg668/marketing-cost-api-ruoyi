@@ -8,7 +8,8 @@ import java.time.LocalDateTime;
 public interface MakePartMaterialPriceResolveService {
   enum Purpose {
     MATERIAL,
-    SCRAP
+    SCRAP,
+    PACKAGE
   }
 
   /** 预览不写价格及优先级配置。 */

@@ -39,7 +39,7 @@ public class SupplierPriceSelectionService {
 
   public Selection select(SupplierPriceScope scope, List<SupplierPriceCandidate> candidates) {
     return select(scope, candidates,
-        candidates.isEmpty() ? List.of() : activeRatios(scope));
+        candidates.size() < 2 || samePrice(candidates) ? List.of() : activeRatios(scope));
   }
 
   public Selection select(
@@ -52,12 +52,33 @@ public class SupplierPriceSelectionService {
   /** Same selection policy with batch-loaded review input; this operation performs no SQL. */
   public Selection selectPrepared(SupplierPriceScope scope,List<SupplierPriceCandidate> candidates,
       List<SupplierSupplyRatio> active,SupplierPriceDecision decision){
+    return selectPrepared(scope,candidates,active,decision,false);
+  }
+
+  /** Supplemental packaging may automatically use the highest available price when ratios cannot decide. */
+  public Selection selectPrepared(SupplierPriceScope scope,List<SupplierPriceCandidate> candidates,
+      List<SupplierSupplyRatio> active,SupplierPriceDecision decision,boolean packagingHighestFallback){
     if(decision!=null && !Objects.equals(scopeKey(scope),decision.getScopeKey()))throw new IllegalArgumentException("Prepared supplier decision belongs to another consumer scope");
-    return selectPolicy(scope,candidates,active,()->scope.oaFormItemId()==null?null:decision);
+    return selectPolicy(scope,candidates,active,()->scope.oaFormItemId()==null?null:decision,packagingHighestFallback);
   }
 
   private Selection selectPolicy(SupplierPriceScope scope,List<SupplierPriceCandidate> candidates,
       List<SupplierSupplyRatio> active,java.util.function.Supplier<SupplierPriceDecision> readDecision){
+    return selectPolicy(scope,candidates,active,readDecision,false);
+  }
+
+  private Selection selectPolicy(SupplierPriceScope scope,List<SupplierPriceCandidate> candidates,
+      List<SupplierSupplyRatio> active,java.util.function.Supplier<SupplierPriceDecision> readDecision,
+      boolean packagingHighestFallback){
+    // A unique valid quotation is sufficient; a zero/missing ratio is not a price invalidation.
+    if (candidates.size() == 1) return new Selection(candidates.getFirst(), null,
+        "SINGLE", "单一供应商，直接取价", null);
+    if (samePrice(candidates)) {
+      // 同一有效取价范围内价格一致，不需要供货比率或人工确认；沿用稳定的供应商并列顺序。
+      var same = SupplierRatioPricePolicy.highest(candidates);
+      return new Selection(same, null,
+          "SAME_PRICE", "各供应商有效单价相同，直接取价", null);
+    }
     boolean hadPrices = !candidates.isEmpty();
     candidates = SupplierRatioPricePolicy.eligible(candidates, active);
     var bySupplier = SupplierRatioPricePolicy.index(active);
@@ -66,16 +87,15 @@ public class SupplierPriceSelectionService {
     if (candidates.size() == 1) {
       return new Selection(candidates.get(0), SupplierRatioPricePolicy.match(bySupplier, candidates.get(0)), "SINGLE", "单一供应商，直接取价", null);
     }
-    if (samePrice(candidates)) {
-      // 同一有效取价范围内价格一致，不需要供货比率或人工确认；沿用稳定的供应商并列顺序。
-      var same = SupplierRatioPricePolicy.highest(candidates);
-      return new Selection(same, SupplierRatioPricePolicy.match(bySupplier, same),
-          "SAME_PRICE", "各供应商有效单价相同，直接取价", null);
-    }
     SupplierPriceCandidate chosen = SupplierRatioPricePolicy.choose(candidates, active);
     if (chosen != null) {
       return new Selection(
           chosen, SupplierRatioPricePolicy.match(bySupplier, chosen), "RATIO_MAX", "按最大供货比率取价，比率并列时取最高价", null);
+    }
+    if (packagingHighestFallback) {
+      chosen = SupplierRatioPricePolicy.highest(candidates);
+      return new Selection(chosen, SupplierRatioPricePolicy.match(bySupplier, chosen),
+          "PACKAGE_AUTO_HIGH", "补录包装无可用供货比率，自动按最高有效单价取价", null);
     }
     String scopeKey = scopeKey(scope);
     String fingerprint = fingerprint(candidates, active);

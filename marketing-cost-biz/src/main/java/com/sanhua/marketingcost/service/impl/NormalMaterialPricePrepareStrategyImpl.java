@@ -99,7 +99,8 @@ public class NormalMaterialPricePrepareStrategyImpl implements NormalMaterialPri
         inputs.put(item, new QuotationPriceSession.Input(item.getMaterialCode(), organization(item),
             scrap ? "KG" : row.getUnit(), row.getMaterialSpec(), scrap ? TaxBasis.EXCLUDED : null,
             null, session.conditions(organization(item)), q.abs(),
-            scrap ? QuotationPriceSession.Purpose.SCRAP : QuotationPriceSession.Purpose.MATERIAL));
+            scrap ? QuotationPriceSession.Purpose.SCRAP : row.isSupplementalPackaging()
+                ? QuotationPriceSession.Purpose.PACKAGE : QuotationPriceSession.Purpose.MATERIAL));
       }
     }
     var read = session.read(inputs.values());

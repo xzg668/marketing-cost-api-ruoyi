@@ -79,7 +79,7 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "</script>")
   int batchUpsert(@Param("rows") List<BomCostingRow> rows);
 
-  @Select("SELECT * FROM lp_bom_costing_row WHERE oa_no=#{oaNo} AND oa_form_item_id=#{item} "
+  @Select("SELECT r.*, EXISTS(SELECT 1 FROM lp_bom_costing_row_source_ref sr WHERE sr.costing_row_id=r.id AND sr.source_part_type='TECH_PACKAGE') AS supplemental_packaging FROM lp_bom_costing_row r WHERE oa_no=#{oaNo} AND oa_form_item_id=#{item} "
       + "AND top_product_code=#{product} AND period_month=#{month} AND calculation_scope=#{scope} ORDER BY path,id")
   List<BomCostingRow> selectCalculationRows(@Param("oaNo") String oaNo, @Param("item") Long item,
       @Param("product") String product, @Param("month") String month, @Param("scope") String scope);
@@ -139,8 +139,8 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
       @Param("topProductCode") String topProductCode);
 
   @Select(
-      "SELECT * "
-          + "FROM lp_bom_costing_row "
+      "SELECT r.*, EXISTS(SELECT 1 FROM lp_bom_costing_row_source_ref sr WHERE sr.costing_row_id=r.id AND sr.source_part_type='TECH_PACKAGE') AS supplemental_packaging "
+          + "FROM lp_bom_costing_row r "
           + "WHERE calculation_scope='' AND oa_no=#{oaNo} "
           + "AND oa_form_item_id=#{oaFormItemId} "
           + "AND top_product_code=#{topProductCode} "

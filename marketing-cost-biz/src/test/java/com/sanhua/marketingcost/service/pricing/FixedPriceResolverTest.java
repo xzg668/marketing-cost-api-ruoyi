@@ -50,12 +50,12 @@ class FixedPriceResolverTest {
     verify(prices).selectList(query.capture());
     assertThat(query.getValue().getCustomSqlSegment()).contains("org_code", "material_code", "business_unit_type", "effective_from DESC", "effective_to DESC")
         .doesNotContain("effective_from <=", "effective_to >");
-    verify(ratios).selectList(any(Wrapper.class)); verifyNoInteractions(decisions);
+    verifyNoInteractions(ratios, decisions);
   }
   @Test void currentlyValidVersionWinsOverTheFutureVersion() {
     var result=resolve(List.of(row("A","12","2026-10-08","2027-01-01"),row("A","9","2026-11-01","2027-11-01")));
     assertThat(result.unitPrice()).isEqualByComparingTo("12");
-    verify(ratios).selectList(any(Wrapper.class));
+    verifyNoInteractions(ratios);
   }
   @Test void latestExpiredPriceIsStillEligible() {
     var result=resolve(List.of(row("A","12","2026-01-01","2026-10-08")));

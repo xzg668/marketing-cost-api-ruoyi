@@ -49,6 +49,20 @@ class MakePartPricePrepareStrategyImplTest {
     assertThat(result.getStatus()).isEqualTo(status);
     assertThat(result.getGaps()).hasSize(1);
     assertThat(result.getGaps().getFirst().getGapMaterialCode()).isEqualTo(code);
+    if (upstream.equals("MISSING_RAW_PRICE") || upstream.equals("MISSING_SCRAP_PRICE")) {
+      assertThat(result.getGaps().getFirst().getReasonCode()).isEqualTo(upstream);
+    }
+  }
+
+  @ParameterizedTest @CsvSource({"RAW_PRICE_ERROR,RAW", "SCRAP_PRICE_ERROR,SCRAP"})
+  void unavailableExistingSourceDoesNotBecomeARepeatPriceRequest(String upstream, String code) {
+    when(generation.calculateForBomRow(any(), any(), any(), eq(false)))
+        .thenReturn(List.of(row(upstream, "RAW", "SCRAP")));
+    var result = service.calculate("OA", "COMMERCIAL", "2026-09", null, null, item());
+    assertThat(result.getGaps()).hasSize(1);
+    assertThat(result.getGaps().getFirst().getGapType()).isEqualTo("PRICE_SOURCE_ERROR");
+    assertThat(result.getGaps().getFirst().getGapMaterialCode()).isEqualTo(code);
+    assertThat(result.getGaps().getFirst().getReasonCode()).isEqualTo(upstream);
   }
 
   @Test void partialChildSuccessCannotHideOtherChildFailure() {

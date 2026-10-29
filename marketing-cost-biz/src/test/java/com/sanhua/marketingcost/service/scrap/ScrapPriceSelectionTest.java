@@ -133,7 +133,7 @@ class ScrapPriceSelectionTest extends ScrapPriceTestFixture {
     assertThat(saved.consumerOrgCode()).isEqualTo("220");
     assertThat(saved.context().financial().scope().priceOrgCode()).isEqualTo("210");
     assertThat(saved.supplier().code()).isNull();
-    verify(ratios,times(2)).selectList(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
+    verifyNoInteractions(ratios);
     verifyNoInteractions(decisions, forms);
   }
 

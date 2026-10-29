@@ -8,26 +8,34 @@ import java.util.Map;
 public final class SupplierPriceReviewContext {
   private final Long oaFormItemId;
   private final String priceOrgCode;
+  private final boolean packagingHighestFallback;
   private final Map<String, SupplierPriceReview> reviews;
   public record SuccessfulReview(SupplierPriceReview review, String evidenceSha256) {}
   private record ReviewEvidenceKey(String scopeKey, String evidenceSha256) {}
   private final Map<ReviewEvidenceKey, SuccessfulReview> successfulReviews;
 
   public SupplierPriceReviewContext(Long oaFormItemId) {
-    this(oaFormItemId, null, new LinkedHashMap<>(), new LinkedHashMap<>());
+    this(oaFormItemId, null, new LinkedHashMap<>(), new LinkedHashMap<>(), false);
   }
 
   private SupplierPriceReviewContext(Long itemId, String orgCode,
-      Map<String, SupplierPriceReview> reviews, Map<ReviewEvidenceKey, SuccessfulReview> successfulReviews) {
+      Map<String, SupplierPriceReview> reviews, Map<ReviewEvidenceKey, SuccessfulReview> successfulReviews,
+      boolean packagingHighestFallback) {
     this.oaFormItemId = itemId;
     this.priceOrgCode = orgCode;
     this.reviews = reviews;
     this.successfulReviews = successfulReviews;
+    this.packagingHighestFallback = packagingHighestFallback;
   }
 
   public SupplierPriceReviewContext forOrganization(String orgCode) {
-    return new SupplierPriceReviewContext(oaFormItemId, orgCode, reviews, successfulReviews);
+    return new SupplierPriceReviewContext(oaFormItemId, orgCode, reviews, successfulReviews, packagingHighestFallback);
   }
+
+  public SupplierPriceReviewContext forSupplementalPackaging() {
+    return new SupplierPriceReviewContext(oaFormItemId, priceOrgCode, reviews, successfulReviews, true);
+  }
+  public boolean packagingHighestFallback() { return packagingHighestFallback; }
 
   public Long oaFormItemId() { return oaFormItemId; }
   public String priceOrgCode() { return priceOrgCode; }

@@ -75,6 +75,10 @@ public class SupplierPreferredPriceSelector {
       return selection(
           first, "价格源无供应商维度，按价格版本规则取价", 0, null, null, null, "NO_SUPPLIER_DIMENSION", "", "");
     }
+    if (candidateSupplierCount == 1) {
+      return selection(first, "单一供应商价格，直接取该供应商最新已生效价格", 1,
+          supplierNameGetter.apply(first), supplierCodeGetter.apply(first), null, "SINGLE_SUPPLIER", "", "");
+    }
     SupplierSupplyRatioResolveResult mainSupplier = preparedSupplier != null ? preparedSupplier
         : resolveService.resolve(businessUnitType, materialCode, materialName, specModel, pricingDate);
     var relations = mainSupplier == null ? List.<com.sanhua.marketingcost.entity.SupplierSupplyRatio>of()

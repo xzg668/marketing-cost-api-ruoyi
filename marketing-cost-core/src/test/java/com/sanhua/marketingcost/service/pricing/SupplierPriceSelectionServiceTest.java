@@ -24,15 +24,14 @@ class SupplierPriceSelectionServiceTest {
 
   @ParameterizedTest
   @CsvSource({"0.7226,0.722600", "0,0.0000"})
-  void equalEffectivePricesStillReadWithdrawalButNeedNoApproval(String first, String second) {
+  void equalEffectivePricesNeedNeitherRatiosNorApproval(String first, String second) {
     var a = candidate("A", first); var b = candidate("B", second);
     var result = service.select(scope, List.of(a, b));
     assertThat(result.candidate()).isEqualTo(b);
     assertThat(result.rule()).isEqualTo("SAME_PRICE");
     assertThat(result.ratio()).isNull();
     assertThat(result.review()).isNull();
-    verify(ratios).selectList(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
-    verifyNoInteractions(decisions);
+    verifyNoInteractions(ratios, decisions);
     assertThat(service.select(scope, List.of(b, a)).candidate()).isEqualTo(b);
   }
 
@@ -50,17 +49,26 @@ class SupplierPriceSelectionServiceTest {
   }
 
   @Test
-  void equalPricesCannotHideAmbiguousCurrentRelationships() {
+  void differentPricesCannotHideAmbiguousCurrentRelationships() {
     var a = ratio("A", "0.1");
     assertThatThrownBy(() -> service.select(scope,
-        List.of(candidate("A", "0.45"), candidate("B", "0.450")), List.of(a, a)))
+        List.of(candidate("A", "0.45"), candidate("B", "0.46")), List.of(a, a)))
         .isInstanceOf(IllegalStateException.class).hasMessageContaining("多条有效供货比率");
   }
 
-  @Test void withdrawalPrecedesSingleSamePriceAndManualFallback() {
+  @Test void equalLinkedPricesIgnoreZeroRatiosForBothSuppliers() {
+    var selected = service.selectPrepared(scope,
+        List.of(candidate("S000109", "0.667610619469026549"), candidate("S002874", "0.667610619469026549")),
+        List.of(ratio("S000109", "0"), ratio("S002874", "0")), null);
+    assertThat(selected.rule()).isEqualTo("SAME_PRICE");
+    assertThat(selected.candidate().unitPrice()).isEqualByComparingTo("0.667610619469026549");
+    assertThat(selected.review()).isNull();
+  }
+
+  @Test void aUniqueQuotationIgnoresRatiosWhileMultiplePricesUseTheirSupplierRelations() {
     var zero = ratio("B", "0");
-    assertThat(service.selectPrepared(scope, List.of(candidate("B", "99")), List.of(zero), null).candidate()).isNull();
-    assertThat(service.selectPrepared(scope, List.of(candidate("A", "10"), candidate("B", "10")), List.of(zero), null).candidate().supplierCode()).isEqualTo("A");
+    assertThat(service.selectPrepared(scope, List.of(candidate("B", "99")), List.of(zero), null).candidate().supplierCode()).isEqualTo("B");
+    assertThat(service.selectPrepared(scope, List.of(candidate("A", "10"), candidate("B", "10")), List.of(zero), null).candidate().supplierCode()).isEqualTo("B");
     var candidates = List.of(candidate("A", "10"), candidate("B", "99"), candidate("C", "20"));
     var missing = service.selectPrepared(scope, candidates, List.of(zero), null);
     assertThat(missing.review().candidates()).extracting(c -> c.price().supplierCode()).containsExactly("A", "C");
@@ -69,6 +77,21 @@ class SupplierPriceSelectionServiceTest {
     assertThat(service.selectPrepared(scope, candidates, List.of(zero), decision).candidate().supplierCode()).isEqualTo("C");
     zero.setSupplyRatio(null);
     assertThat(service.selectPrepared(scope, candidates, List.of(zero), decision).candidate()).isNull();
+  }
+
+  @Test void singleSupplierReadsNoRatiosAndSupplementalPackagingFallbackDoesNotChangeOrdinaryPolicy() {
+    assertThat(service.select(scope, List.of(candidate("A", "0.84956"))).candidate().unitPrice())
+        .isEqualByComparingTo("0.84956");
+    verifyNoInteractions(ratios, decisions);
+    var candidates = List.of(candidate("A", "10"), candidate("B", "20"));
+    assertThat(service.selectPrepared(scope, candidates, List.of(), null).candidate()).isNull();
+    var packaging = service.selectPrepared(scope, candidates, List.of(), null, true);
+    assertThat(packaging.candidate().supplierCode()).isEqualTo("B");
+    assertThat(packaging.rule()).isEqualTo("PACKAGE_AUTO_HIGH");
+    assertThat(packaging.review()).isNull();
+    assertThat(service.selectPrepared(scope, candidates, List.of(ratio("A", ".8"), ratio("B", ".2")), null, true)
+        .candidate().supplierCode()).isEqualTo("A");
+    assertThat(service.selectPrepared(scope, candidates, List.of(), null).candidate()).isNull();
   }
 
   @Test

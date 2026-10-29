@@ -41,6 +41,32 @@ class MonthlyQuotationPricesIntegrationTest {
   }
 
   @Test
+  void onlySupplementalPackagingAutomaticallyUsesHighestWithoutRatioAndAdoptedMonthIsReused() {
+    String code = MonthlyFixedPriceSourceIntegrationTest.code();
+    for (String supplier : List.of("P1", "P2"))
+      MonthlyFixedPriceSourceIntegrationTest.price(code,"210",supplier,supplier.equals("P1")?"3":"5","2026-10-01","2099-01-01");
+    var context = MonthlyFixedPriceSourceIntegrationTest.context();
+    var ordinary = new MonthlyQuotationPrices.Item(code,"210","件",null,null,null,
+        NonCuConditions.empty(),BigDecimal.ONE,MonthlyQuotationPrices.Purpose.MATERIAL);
+    var packaging = new MonthlyQuotationPrices.Item(code,"210","件",null,null,null,
+        NonCuConditions.empty(),BigDecimal.ONE,MonthlyQuotationPrices.Purpose.PACKAGE);
+    var fresh = MonthlyFixedPriceSourceIntegrationTest.context();
+    var result = reader.read(fresh,List.of(packaging));
+    assertThat(result.problems()).isEmpty();
+    var bound = result.values().get(packaging);
+    assertThat(bound.candidate().selection().fact().price()).isEqualByComparingTo("5");
+    assertThat(bound.candidate().selection().fact().evidence().json()).contains("PACKAGE_AUTO_HIGH");
+    assertThat(fresh.supplierReviews().reviews()).isEmpty();
+    assertThat(fresh.supplierReviews().packagingHighestFallback()).isFalse();
+    assertThat(reader.read(context,List.of(ordinary)).problems().get(ordinary).reason())
+        .isEqualTo(MonthlyAdoptionRetryPolicy.Failure.WAITING);
+    MonthlyFixedPriceSourceIntegrationTest.operation.adopt(fresh,new MonthlyAdoptionPlan(
+        Map.of(bound.request(),bound.candidate().selection()),List.of(new Use("root/package",bound.request(),BigDecimal.ONE)),Set.of()));
+    assertThat(reader.read(MonthlyFixedPriceSourceIntegrationTest.context(),List.of(ordinary)).values().get(ordinary)
+        .candidate().selection().fact().price()).isEqualByComparingTo("5");
+  }
+
+  @Test
   void legacyRawAmountBindsItsTaxBasisOnceAndSavedPriceWinsOverNewSources() {
     String code = MonthlyFixedPriceSourceIntegrationTest.code();
     MonthlyFixedPriceSourceIntegrationTest.price(code, "210", "S1", "11.3", "2026-10-01", "2027-01-01");

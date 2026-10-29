@@ -77,8 +77,8 @@ class SupplierPreferredPriceSelectorTest {
   }
 
   @Test
-  @DisplayName("单一价格供应商仍读取关系排除明确退出")
-  void singlePriceSupplierChecksWithdrawalBeforeSelection() {
+  @DisplayName("单一价格供应商直接取价，不读取供货比率")
+  void singlePriceSupplierNeedsNoRatio() {
     Candidate onlySupplier = new Candidate("供应商B", "SUP-B", "20");
 
     SupplierPreferredPriceSelection<Candidate> selected = select(List.of(onlySupplier));
@@ -86,7 +86,7 @@ class SupplierPreferredPriceSelectorTest {
     assertThat(selected.row()).isSameAs(onlySupplier);
     assertThat(selected.matchMode()).isEqualTo("SINGLE_SUPPLIER");
     assertThat(selected.failed()).isFalse();
-    verify(resolveService).resolve(any(), any(), any(), any(), any());
+    verifyNoInteractions(resolveService);
   }
 
   @Test
@@ -115,7 +115,7 @@ class SupplierPreferredPriceSelectorTest {
     assertThat(selected.row()).isSameAs(latest);
     assertThat(selected.matchMode()).isEqualTo("SINGLE_SUPPLIER");
     assertThat(selected.failed()).isFalse();
-    verify(resolveService).resolve(any(), any(), any(), any(), any());
+    verifyNoInteractions(resolveService);
   }
 
   @Test

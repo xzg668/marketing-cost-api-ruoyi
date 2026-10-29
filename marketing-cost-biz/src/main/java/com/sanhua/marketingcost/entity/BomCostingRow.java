@@ -28,6 +28,12 @@ import java.time.LocalDateTime;
 @TableName("lp_bom_costing_row")
 public class BomCostingRow {
 
+  /** True only for a settlement row with an actual TECH_PACKAGE source reference. */
+  @TableField(exist = false)
+  private boolean supplementalPackaging;
+  public boolean isSupplementalPackaging() { return supplementalPackaging; }
+  public void setSupplementalPackaging(boolean value) { supplementalPackaging = value; }
+
   /** Current immutable-tree preview provenance. Null means this row was loaded without a preview. */
   @TableField(exist = false)
   @com.fasterxml.jackson.annotation.JsonIgnore

@@ -144,7 +144,9 @@ public class TechnicalDataPriceRequirements {
                 scenario,
                 demand.getValue().contains("SCRAP")
                     ? MakePartMaterialPriceResolveService.Purpose.SCRAP
-                    : MakePartMaterialPriceResolveService.Purpose.MATERIAL);
+                    : demand.getValue().contains("PACKAGE")
+                        ? MakePartMaterialPriceResolveService.Purpose.PACKAGE
+                        : MakePartMaterialPriceResolveService.Purpose.MATERIAL);
         if (resolved == null) throw new IllegalStateException("取价未返回结果");
         price = resolved.getUnitPrice();
         if ("OK".equals(resolved.getStatus()) && price != null && price.signum() > 0) {
@@ -201,7 +203,8 @@ public class TechnicalDataPriceRequirements {
             || Objects.toString(gap.getReasonCode(), "").contains("CONFLICT")) {
           issues.add(Objects.toString(gap.getMessage(), "尚有结构或价格来源问题"));
         } else {
-          add(demands, gap.getGapMaterialCode(), "BOM");
+          add(demands, gap.getGapMaterialCode(),
+              "MISSING_SCRAP_PRICE".equals(gap.getReasonCode()) ? "SCRAP" : "BOM");
         }
       }
     } catch (RuntimeException exception) {

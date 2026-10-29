@@ -65,14 +65,13 @@ class FinanceEffectivePriceSelectionTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"LINKED", "RANGE"})
-  void singleQuoteChecksWithdrawalButIgnoresUnquotedMainSupplier(String type) {
+  void singleQuoteUsesPriceWithoutRatioLookup(String type) {
     var result =
         service.select(
             scope(type), List.of(price(type, "A", "10")), new SupplierPriceReviewContext(17L));
     assertThat(result.price().getSupplierCode()).isEqualTo("A");
     assertThat(result.supplier().rule()).isEqualTo("SINGLE");
-    verify(ratios).selectList(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
-    verifyNoInteractions(prices, decisions);
+    verifyNoInteractions(ratios, prices, decisions);
   }
 
   @ParameterizedTest

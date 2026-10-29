@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 /** Binds existing quotation price inputs to immutable monthly facts, without adopting on reads. */
 @Component
 public final class MonthlyQuotationPrices {
-  public enum Purpose { MATERIAL, SCRAP }
+  public enum Purpose { MATERIAL, SCRAP, PACKAGE }
 
   /** Null tax means the legacy consumer uses the source's amount column without a tax conversion. */
   public record Item(String materialCode, String organization, String unit, String specification,
@@ -54,8 +54,13 @@ public final class MonthlyQuotationPrices {
           missing.addAll(variants);
       });
       if (missing.isEmpty()) continue;
+      var sourceContext = purpose == Purpose.PACKAGE
+          ? new Context(context.businessUnitType(), context.oaNo(), context.oaFormItemId(), context.productCode(),
+              context.month(), context.priceAsOfTime(), context.actor(), context.consumerOrg(),
+              context.supplierReviews().forSupplementalPackaging(), context.annualUsage())
+          : context;
       var candidates = purpose == Purpose.SCRAP
-          ? prices.resolveScrapCandidates(context, missing) : prices.resolveCandidates(context, missing);
+          ? prices.resolveScrapCandidates(sourceContext, missing) : prices.resolveCandidates(sourceContext, missing);
       candidates.values().forEach((request, candidate) -> {
         var previous = found.putIfAbsent(request, candidate);
         if (previous != null && !previous.equals(candidate))

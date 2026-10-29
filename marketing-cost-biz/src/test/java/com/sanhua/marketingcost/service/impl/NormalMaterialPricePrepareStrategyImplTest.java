@@ -120,6 +120,17 @@ class NormalMaterialPricePrepareStrategyImplTest {
     verify(session, never()).consume(any(), any(QuotationPriceSession.Input.class), any());
   }
 
+  @Test void onlyAnActualSupplementalPackageRowEnablesAutomaticHighestPriceFallback() {
+    var packaging = item("PACK", "1", "/root/pack");
+    packaging.getBomRow().setSupplementalPackaging(true);
+    var ordinary = item("NORMAL", "1", "/root/normal");
+    strategy.prepareBatch("OA", "COMMERCIAL", "2026-10", AS_OF, null, List.of(packaging, ordinary), false);
+    verify(session).read(argThat(inputs -> inputs.stream().anyMatch(input ->
+        input.materialCode().equals("PACK") && input.purpose() == QuotationPriceSession.Purpose.PACKAGE)
+        && inputs.stream().anyMatch(input -> input.materialCode().equals("NORMAL")
+            && input.purpose() == QuotationPriceSession.Purpose.MATERIAL)));
+  }
+
   @Test void byproductUsesAbsoluteScrapBasisButRetainsNegativeAmount() {
     prices.put("SCRAP", "10.177");
     var item = item("SCRAP", "-0.25", "/root/scrap");

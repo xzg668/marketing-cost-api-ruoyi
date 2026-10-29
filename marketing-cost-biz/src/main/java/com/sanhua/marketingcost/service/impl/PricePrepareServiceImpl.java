@@ -802,7 +802,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     if (gaps == null || gaps.isEmpty()) {
       MakePartPricePrepareResult.Gap fallback =
           new MakePartPricePrepareResult.Gap(
-              GAP_TYPE_MISSING_PRICE,
+              GAP_TYPE_MISSING_STRUCTURE,
               planItem.getMaterialCode(),
               "MakePartPricePrepareStrategy",
               makePartResult.getMessage());
@@ -821,6 +821,7 @@ public class PricePrepareServiceImpl implements PricePrepareService {
                   ? planItem.getMaterialName()
                   : null));
       gap.setGapType(makePartGap.getGapType());
+      gap.setReasonCode(makePartGap.getReasonCode());
       gap.setItemType(planItem.getItemType());
       gap.setSourceTable(makePartGap.getSourceTable());
       gap.setMessage(makePartGap.getMessage());

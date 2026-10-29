@@ -16,7 +16,7 @@ public interface QuotationPriceSession {
     }
   }
 
-  enum Purpose { MATERIAL, SCRAP }
+  enum Purpose { MATERIAL, SCRAP, PACKAGE }
 
   /** Null tax retains the existing raw source amount; no implicit tax conversion is allowed. */
   record Input(String materialCode, String organization, String unit, String specification,

@@ -161,7 +161,7 @@ public final class MonthlyOdsPriceSource {
       String key=tier?entry.getKey()+":"+row.getJietiDown()+":"+row.getJietiUp():entry.getKey();
       return new SupplierPriceCandidate(key,entry.getKey(),row.getSupplierName(),row.getPrice(),date(row.getEffDate()),date(row.getExpDate()));
     }).toList();
-    return suppliers.selectPrepared(scope(context,request.priceOrgCode(),request.family().materialCode(),tier),candidates,ratios,decision);
+    return suppliers.selectPrepared(scope(context,request.priceOrgCode(),request.family().materialCode(),tier),candidates,ratios,decision,context.supplierReviews().packagingHighestFallback());
   }
   private Candidate candidate(MonthlyPriceRequest request,String kind,OdsMaterialPriceRow chosen,List<OdsMaterialPriceRow> raw,
       List<SupplierSupplyRatio> ratios,String rule,List<QuantityInterval> regions,MonthlyPriceApplicability coverage) {

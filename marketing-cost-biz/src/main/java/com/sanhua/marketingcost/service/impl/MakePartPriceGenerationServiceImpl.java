@@ -612,11 +612,11 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
         row.setScrapUnitPrice(BigDecimal.ZERO);
         row.setNoScrapConfirmed(true);
         row.setNoScrapConfirmationId(noScrapConfirmation.getId());
-        row.setStatus(firstNonOk(processType.getStatus(), weight.getStatus()));
+        row.setStatus(firstNonOk(processType.getStatus(), weight.getStatus(), priceSourceError(rawPrice, "RAW")));
         row.setRemark(appendRemark(row.getRemark(), noScrapRemark(noScrapConfirmation)));
         return List.of(row);
       }
-      row.setStatus(firstNonOk(processType.getStatus(), weight.getStatus()));
+      row.setStatus(firstNonOk(processType.getStatus(), weight.getStatus(), priceSourceError(rawPrice, "RAW")));
       if (!StringUtils.hasText(row.getStatus())) {
         row.setStatus(MakePartPriceCalculator.STATUS_MISSING_SCRAP_MAPPING);
       }
@@ -665,7 +665,8 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
       }
       row.setNoScrapConfirmed(false);
       row.setNoScrapConfirmationId(null);
-      row.setStatus(firstNonOk(processType.getStatus(), weight.getStatus()));
+      row.setStatus(firstNonOk(processType.getStatus(), weight.getStatus(),
+          priceSourceError(rawPrice, "RAW"), priceSourceError(scrapPrice, "SCRAP")));
       row.setRemark(appendRemark(row.getRemark(), priceRemark("废料", scrapPrice)));
       rows.add(row);
     }
@@ -753,6 +754,10 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     List<MakePartPriceGapItem> gapItems = new ArrayList<>();
     for (MakePartPriceCalcRow row : rows) {
       if (row == null || !StringUtils.hasText(row.getChildMaterialNo())) {
+        continue;
+      }
+      // 已有价格被退出供货、来源异常等规则挡住时，先处理来源，不能发起重复补价。
+      if ("RAW_PRICE_ERROR".equals(row.getStatus()) || "SCRAP_PRICE_ERROR".equals(row.getStatus())) {
         continue;
       }
       // 缺价清单只沉淀后续 OA 补价输入：原材料价和废料价分开拆行，不在这里调用 OA。
@@ -1010,6 +1015,11 @@ public class MakePartPriceGenerationServiceImpl implements MakePartPriceGenerati
     response.setTotalCount(rows.size());
     response.setStatusSummary(statusSummary);
     return response;
+  }
+
+  private String priceSourceError(MakePartMaterialPriceResolveResult price, String role) {
+    return price == null || (!STATUS_OK.equals(price.getStatus()) && !"MISSING_PRICE".equals(price.getStatus()))
+        ? role + "_PRICE_ERROR" : null;
   }
 
   private String firstNonOk(String... statuses) {

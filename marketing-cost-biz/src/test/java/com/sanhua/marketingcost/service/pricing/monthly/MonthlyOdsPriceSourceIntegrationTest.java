@@ -172,11 +172,11 @@ class MonthlyOdsPriceSourceIntegrationTest {
     var other=new MonthlyPriceRequest(new MonthlyPriceFamilyKey(base.family().month(),"COMMERCIAL",code,"OTHER-SPEC","KG","CNY",TaxBasis.EXCLUDED,null),"210",base.conditions(),BigDecimal.ONE);
     assertThat(source.orders(context(null,null),Set.of(other)).problems().get(other).reason()).isEqualTo(Failure.MISSING);
   }
-  @Test void explicitWithdrawalAppliesToSingleOrderAndTierSuppliers() {
+  @Test void singleOrderAndTierPricesDoNotRequireSupplierRatios() {
     String code=code(); order(code,"S1","2026-01-01","10"); tier(code,"S1","2026-01-01","2027-12-31","0","100","10");
     var req=request(code,"10"); assertThat(source.orders(context("10","PIECES"),Set.of(req)).problems()).isEmpty();
     assertThat(source.tiers(context("10","PIECES"),Set.of(req)).problems()).isEmpty(); ratio(code,"S1","0");
-    assertThat(source.orders(context("10","PIECES"),Set.of(req)).values()).isEmpty();
-    assertThat(source.tiers(context("10","PIECES"),Set.of(req)).values()).isEmpty();
+    assertThat(source.orders(context("10","PIECES"),Set.of(req)).values()).hasSize(1);
+    assertThat(source.tiers(context("10","PIECES"),Set.of(req)).values()).hasSize(1);
   }
 }
