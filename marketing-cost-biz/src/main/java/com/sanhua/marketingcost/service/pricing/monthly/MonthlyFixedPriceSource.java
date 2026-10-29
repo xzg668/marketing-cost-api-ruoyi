@@ -34,17 +34,19 @@ public final class MonthlyFixedPriceSource {
       var codes=new ArrayList<>(organization.getValue().keySet());
       for(int start=0;start<codes.size();start+=256){
         var batch=codes.subList(start,Math.min(start+256,codes.size()));
-        var raw=rows.prices(context.businessUnitType(),organization.getKey(),context.priceAsOfTime().toLocalDate(),batch);
+        var raw=rows.prices(context.businessUnitType(),organization.getKey(),batch);
         var byCode=new HashMap<String,List<PriceFixedItem>>();raw.forEach(row->byCode.computeIfAbsent(row.getMaterialCode(),ignored->new ArrayList<>()).add(row));
-        var ratioCodes=new TreeSet<String>();byCode.forEach((code,candidates)->{if(candidates.stream().map(row->SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode())).distinct().count()>1)ratioCodes.add(code);});
+        var ratioCodes=new TreeSet<>(byCode.keySet());
         var ratios=new HashMap<String,List<SupplierSupplyRatio>>();if(!ratioCodes.isEmpty())supplierInputs.ratios(context.businessUnitType(),context.priceAsOfTime().toLocalDate(),ratioCodes).forEach(row->ratios.computeIfAbsent(row.getRequestedMaterialCode(),ignored->new ArrayList<>()).add(row));
-        var scopes=new HashMap<String,SupplierPriceScope>();for(String code:ratioCodes)scopes.put(code,scope(context,organization.getKey(),code));
+        var scopes=new HashMap<String,SupplierPriceScope>();for(String code:ratioCodes)if(byCode.get(code).size()>1)scopes.put(code,scope(context,organization.getKey(),code));
         var decisions=new HashMap<String,SupplierPriceDecision>();if(!scopes.isEmpty())supplierInputs.decisions(scopes.values().stream().map(SupplierPriceSelectionService::scopeKey).distinct().toList()).forEach(row->decisions.put(row.getScopeKey(),row));
         for(String code:batch)for(var request:organization.getValue().get(code)){
           var candidates=byCode.getOrDefault(code,List.of());if(candidates.isEmpty())continue;
           try{
             String requested=SupplierSupplyRatioNormalizeUtils.normalizeToNull(request.family().requestedSupplierCode());
-            var versions=versions(requested==null?candidates:candidates.stream().filter(row->requested.equals(SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode()))).toList());
+            var scoped=requested==null?candidates:candidates.stream().filter(row->requested.equals(SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode()))).toList();
+            var preferred=SupplyPriceDatePolicy.preferCurrent(scoped,context.priceAsOfTime().toLocalDate(),PriceFixedItem::getEffectiveFrom,PriceFixedItem::getEffectiveTo);
+            var versions=versions(preferred);
             if(versions.isEmpty())continue;
             var active=List.copyOf(versions.values());for(var row:active)validateBasis(request,row);
             var supplierCandidates=versions.entrySet().stream().map(entry->new SupplierPriceCandidate(entry.getKey(),entry.getKey(),entry.getValue().getSupplierName(),entry.getValue().getFixedPrice(),entry.getValue().getEffectiveFrom(),entry.getValue().getEffectiveTo())).toList();
@@ -71,7 +73,8 @@ public final class MonthlyFixedPriceSource {
     for(var row:candidates){
       String supplier=SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode());if(supplier==null)throw new IllegalArgumentException("固定采购价缺少供应商代码");
       var old=result.get(supplier);if(old==null){result.put(supplier,row);continue;}
-      int order=Comparator.comparing(PriceFixedItem::getEffectiveFrom).thenComparing(PriceFixedItem::getEffectiveTo).compare(row,old);
+      int order=Comparator.comparing(PriceFixedItem::getEffectiveFrom,Comparator.nullsFirst(Comparator.naturalOrder()))
+          .thenComparing(PriceFixedItem::getEffectiveTo,Comparator.nullsFirst(Comparator.naturalOrder())).compare(row,old);
       if(order>0)result.put(supplier,row);else if(order==0 && row.getFixedPrice().compareTo(old.getFixedPrice())!=0)throw new IllegalArgumentException("同供应商同有效期间存在冲突价格");
     }
     return result;

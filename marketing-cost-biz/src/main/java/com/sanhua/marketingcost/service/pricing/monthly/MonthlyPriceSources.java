@@ -78,11 +78,11 @@ public final class MonthlyPriceSources implements MonthlyPriceCandidateResolver 
       }
     }
     if(!pending.isEmpty()) {
-      var found=ods.orders(context,Set.copyOf(pending));requireComplete(pending,found);
+      var found=ods.tiers(context,Set.copyOf(pending));requireComplete(pending,found);
       accept(found,pending,values,problems);
     }
     if(!pending.isEmpty()) {
-      var found=ods.tiers(context,Set.copyOf(pending));requireComplete(pending,found);
+      var found=ods.orders(context,Set.copyOf(pending));requireComplete(pending,found);
       accept(found,pending,values,problems);
     }
     if(!pending.isEmpty()) {

@@ -2,11 +2,6 @@ package com.sanhua.marketingcost.controller;
 
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstants;
-import com.sanhua.marketingcost.dto.MonthlyRepriceBatchCreateRequest;
-import com.sanhua.marketingcost.dto.MonthlyRepriceBatchCreateResponse;
-import com.sanhua.marketingcost.dto.MonthlyRepriceLinkedPricePrepareResult;
-import com.sanhua.marketingcost.dto.MonthlyRepriceObjectExpandResult;
-import com.sanhua.marketingcost.dto.MonthlyRepriceProgressSnapshot;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -25,42 +20,42 @@ public class MonthlyRepriceController {
 
   @PreAuthorize(OPERATE_PERMISSION)
   @PostMapping("/batches")
-  public CommonResult<MonthlyRepriceBatchCreateResponse> createBatch(
-      @RequestBody MonthlyRepriceBatchCreateRequest request, Authentication authentication) {
+  public CommonResult<Void> createBatch(
+      @RequestBody Object request, Authentication authentication) {
     return unavailable();
   }
 
   @PreAuthorize(OPERATE_PERMISSION)
   @PostMapping("/batches/{repriceNo}/expand")
-  public CommonResult<MonthlyRepriceObjectExpandResult> expand(
+  public CommonResult<Void> expand(
       @PathVariable("repriceNo") String repriceNo, Authentication authentication) {
     return unavailable();
   }
 
   @PreAuthorize(OPERATE_PERMISSION)
   @PostMapping("/batches/{repriceNo}/prepare-linked-price")
-  public CommonResult<MonthlyRepriceLinkedPricePrepareResult> prepareLinkedPrice(
+  public CommonResult<Void> prepareLinkedPrice(
       @PathVariable("repriceNo") String repriceNo, Authentication authentication) {
     return unavailable();
   }
 
   @PreAuthorize(OPERATE_PERMISSION)
   @PostMapping("/batches/{repriceNo}/confirm")
-  public CommonResult<MonthlyRepriceProgressSnapshot> confirm(
+  public CommonResult<Void> confirm(
       @PathVariable("repriceNo") String repriceNo, Authentication authentication) {
     return unavailable();
   }
 
   @PreAuthorize(OPERATE_PERMISSION)
   @PostMapping("/batches/{repriceNo}/cancel")
-  public CommonResult<MonthlyRepriceProgressSnapshot> cancel(
+  public CommonResult<Void> cancel(
       @PathVariable("repriceNo") String repriceNo, Authentication authentication) {
     return unavailable();
   }
 
   @PreAuthorize(OPERATE_PERMISSION)
   @PostMapping("/batches/{repriceNo}/retry-failed")
-  public CommonResult<MonthlyRepriceProgressSnapshot> retryFailed(
+  public CommonResult<Void> retryFailed(
       @PathVariable("repriceNo") String repriceNo, Authentication authentication) {
     return unavailable();
   }

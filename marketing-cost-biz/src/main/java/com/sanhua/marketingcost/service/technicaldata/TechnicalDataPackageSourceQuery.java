@@ -8,6 +8,8 @@ import com.sanhua.marketingcost.entity.QuoteTechTask;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import com.sanhua.marketingcost.mapper.BomRawHierarchyMapper;
+import com.sanhua.marketingcost.mapper.BomU9SourceMapper;
+import com.sanhua.marketingcost.bom.U9BomBaseQuantity;
 import com.sanhua.marketingcost.mapper.TechnicalDataPackageReferenceMapper;
 import com.sanhua.marketingcost.service.FormalBomReadService;
 import java.time.YearMonth;
@@ -27,10 +29,13 @@ public class TechnicalDataPackageSourceQuery {
   private final FormalBomReadService formalBom;
   private final BomRawHierarchyMapper hierarchy;
   private final OaMessageCodec json;
+  private final BomU9SourceMapper u9Sources;
 
   public TechnicalDataPackageSourceQuery(TechnicalDataPackageReferenceMapper search,
-      FormalBomReadService formalBom, BomRawHierarchyMapper hierarchy, OaMessageCodec json) {
+      FormalBomReadService formalBom, BomRawHierarchyMapper hierarchy, OaMessageCodec json,
+      BomU9SourceMapper u9Sources) {
     this.search = search; this.formalBom = formalBom; this.hierarchy = hierarchy; this.json = json;
+    this.u9Sources = u9Sources;
   }
 
   public TechnicalDataPackageReferenceResponse references(QuoteTechTask task, QuoteTechProduct product, String keyword) {
@@ -130,12 +135,12 @@ public class TechnicalDataPackageSourceQuery {
       var unsigned = new Evidence(parent.sourceRawHierarchyId(), code, root.materialName(), first(root.materialModel(), root.drawingNo()), root.materialSpec(),
           parent.materialCode(), parent.materialName(), first(parent.materialModel(), parent.drawingNo()), parent.materialSpec(),
           parent.qtyPerTop(), organization.priceOrgCode(), organization.materialOrganizationCode(), parent.bomVersion(), parent.bomPurpose(),
-          raw.getBuildBatchId(), parent.path(), structure, null);
+          raw.getBuildBatchId(), parent.path(), structure, null, U9BomBaseQuantity.read(u9Sources, raw));
       String fingerprint = json.canonicalHash(List.of(unsigned, children));
       var evidence = new Evidence(unsigned.parentNodeId(), code, unsigned.topProductName(), unsigned.topProductModel(), unsigned.topProductSpecification(),
           unsigned.parentMaterialNo(), unsigned.parentName(), unsigned.parentModel(), unsigned.parentSpecification(),
           unsigned.parentQuantity(), unsigned.priceOrgCode(), unsigned.materialOrganizationCode(), unsigned.bomVersion(),
-          unsigned.bomPurpose(), unsigned.buildBatchId(), unsigned.parentPath(), structure, fingerprint);
+          unsigned.bomPurpose(), unsigned.buildBatchId(), unsigned.parentPath(), structure, fingerprint, unsigned.parentBaseQuantity());
       result.add(new Source(evidence, children));
     }
     return new ProductPackaging(List.copyOf(result), List.copyOf(missingParents));

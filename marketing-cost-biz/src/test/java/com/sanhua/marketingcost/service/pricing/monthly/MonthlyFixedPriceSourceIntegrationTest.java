@@ -46,6 +46,48 @@ class MonthlyFixedPriceSourceIntegrationTest {
   static MonthlyPriceRequest request(String code,String org){return new MonthlyPriceRequest(new MonthlyPriceFamilyKey(YearMonth.of(2026,10),"COMMERCIAL",code,null,"件","CNY",TaxBasis.EXCLUDED,null),org,NonCuConditions.empty(),BigDecimal.ONE);}
   static String code(){return "MPP05-fixed-"+UUID.randomUUID();}
   static void price(String code,String org,String supplier,String value,String from,String to){jdbc.update("INSERT INTO lp_price_fixed_item(org_code,supplier_code,supplier_name,material_code,material_name,spec_model,unit,fixed_price,tax_included,effective_from,effective_to,business_unit_type,source_kind,source_type,source_system,source_batch_no,external_row_id,process_no,created_at,updated_at) VALUES(?,?,?,?,'fixture material','fixture specification','件',?,0,?,?,'COMMERCIAL','PUBLIC','PURCHASE_FIXED','SRM','fixture-day-1',?,'fixture-process-original',NOW(),NOW())",org,supplier,supplier,code,new BigDecimal(value),from,to,UUID.randomUUID().toString());}
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+  void latestSupplyDepartmentFixedPeriodIsUsedWhenNoCurrentPriceExists(boolean future) throws Exception {
+    String code=code(),from=future?"2026-12-01":"2025-01-01",to=future?"2027-12-31":"2025-12-31";
+    price(code,"210","S1","99",from,future?"2027-06-30":"2025-06-30");
+    price(code,"210","S1","10",from,to);
+    var request=request(code,"210");var selected=source.read(context(),Set.of(request));
+    assertThat(selected.problems()).isEmpty();assertThat(selected.values().get(request).selection().fact().price()).isEqualByComparingTo("10");
+    var row=new ObjectMapper().readTree(selected.values().get(request).selection().fact().evidence().json()).path("source").path("selected");
+    assertThat(row.path("effectiveFrom").asText()).isEqualTo(from);assertThat(row.path("effectiveTo").asText()).isEqualTo(to);
+  }
+  @Test void threeReportedMaterialsPreferCurrentSuppliersWithoutReview() {
+    for(String material:List.of("201850117","201850130","201850463")) {
+      String code=code();String expected;
+      if(material.equals("201850117")) {
+        expected="0.09";price(code,"210","S001058",expected,"2026-03-01","2027-02-28");
+        price(code,"210","S003236",expected,"2026-06-01","2027-05-31");
+        price(code,"210","S001324","0.10","2025-05-01","2025-12-31");
+      } else if(material.equals("201850130")) {
+        expected="0.3451";price(code,"210","S001296",expected,"2025-11-01","2026-10-31");
+        price(code,"210","S001310","0.28908","2025-08-01","2026-07-31");
+        price(code,"210","S001358","0.35","2025-08-01","2026-07-31");
+      } else {
+        expected="11.39";price(code,"210","S001063",expected,"2026-09-01","2027-08-31");
+        price(code,"210","S001049","18.43","2025-05-01","2026-04-30");
+      }
+      var request=request(code,"210");var c=context();var result=source.read(c,Set.of(request));
+      assertThat(result.problems()).as(material).isEmpty();
+      assertThat(result.values().get(request).selection().fact().price()).isEqualByComparingTo(expected);
+      assertThat(c.supplierReviews().reviews()).as(material).isEmpty();
+    }
+  }
+  @Test void currentFixedVersionWinsOverFutureVersionOfSameSupplier() {
+    String code=code();price(code,"210","S1","88","2026-10-01","2026-11-30");
+    price(code,"210","S1","10","2026-12-01","2027-12-31");
+    var request=request(code,"210");var result=source.read(context(),Set.of(request));
+    assertThat(result.values().get(request).selection().fact().price()).isEqualByComparingTo("88");
+  }
+  @Test void aFixedPeriodWithoutAnExpiryRemainsReadable() {
+    String code=code();price(code,"210","S1","10","2026-01-01",null);
+    var request=request(code,"210");assertThat(source.read(context(),Set.of(request)).values().get(request).selection().fact().price()).isEqualByComparingTo("10");
+  }
   @Test void sameSupplierPricesResolveWithoutRatiosAndAdoptedPriceStillSurvivesSourceChanges() throws Exception {
     String code=code();price(code,"210","S1","0.7226","2026-10-01","2027-01-01");price(code,"210","S2","0.722600","2026-10-01","2027-01-01");
     var request=request(code,"210");var c=context();

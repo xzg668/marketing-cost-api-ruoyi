@@ -491,6 +491,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     List<QuoteCostRunVersion> versions =
         quoteCostRunVersionMapper.selectList(
             Wrappers.lambdaQuery(QuoteCostRunVersion.class)
+                .isNull(QuoteCostRunVersion::getRepriceNo)
                 .eq(QuoteCostRunVersion::getOaNo, oaNo)
                 .in(QuoteCostRunVersion::getOaFormItemId, itemIds)
                 .in(

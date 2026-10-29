@@ -111,7 +111,6 @@ monthly:
   reprice:
     # 月度调价入口开关；本地默认开启，生产可按业务单元灰度。
     enabled: ${MONTHLY_REPRICE_ENABLED:true}
-    execution-backend: ${MONTHLY_REPRICE_EXECUTION_BACKEND:LOCAL_WORKER}
     # 逗号分隔；为空表示不限制业务单元。灰度期建议显式配置测试业务单元。
     allowed-business-units: ${MONTHLY_REPRICE_ALLOWED_BUSINESS_UNITS:}
 

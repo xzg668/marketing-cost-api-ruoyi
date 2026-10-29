@@ -69,6 +69,7 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=true)
   public QuoteCuAdjustmentCalcResult calculate(QuoteCuAdjustmentCalcRequest request) {
     Scope scope = requireScope(request);
     PricePrepareBatch oaBatch = loadAndValidateOaBatch(scope);
@@ -267,6 +268,8 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
     }
     QuoteCostRunVersion patch = new QuoteCostRunVersion();
     patch.setId(version.getId());
+    patch.setRepriceNo(scope.request().reprice() == null ? null : scope.request().reprice().repriceNo());
+    version.setRepriceNo(patch.getRepriceNo());
     patch.setPricePrepareNo(financePrepare.financePrepareNo());
     patch.setOaPricePrepareNo(oaBatch.getPrepareNo());
     patch.setFinancePricePrepareNo(financePrepare.financePrepareNo());
@@ -307,6 +310,12 @@ public class QuoteCuAdjustmentCalcServiceImpl implements QuoteCuAdjustmentCalcSe
         scope.item().getProductName(),
         scope.item().getSunlModel(),
         scope.item().getMaterialNo());
+    if (scope.request().reprice() != null) {
+      var saved = scope.request().reprice();
+      context.setScene(CostRunContext.SCENE_MONTHLY_REPRICE);
+      context.setRepriceNo(saved.repriceNo()); context.setBomSourcePolicy("MONTHLY_SNAPSHOT");
+      organization = saved.input().context().organization();
+    }
     context.setPriceOrgCode(organization.priceOrgCode());
     context.setMaterialOrganizationCode(organization.materialOrganizationCode());
     context.setCostRunVersionId(version.getId());

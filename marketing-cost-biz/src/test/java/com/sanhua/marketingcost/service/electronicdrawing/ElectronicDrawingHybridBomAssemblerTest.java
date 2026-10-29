@@ -42,6 +42,47 @@ class ElectronicDrawingHybridBomAssemblerTest {
   }
 
   @Test
+  void quoteIdentityCanBeAStructuralRootWhileOnlyRealChildMaterialsArePriced() {
+    var root = new MaterialSnapshot("1145100050625", "压力变送器", null, "YCQC15H802",
+        "YCQC15H802-MX", null, null, null, null, null);
+    var request = new AssembleCommand("OA-1", 11L, root, "2026-10", "210", "COMMERCIAL",
+        "COMMERCIAL", null, LocalDate.of(2026, 10, 1),
+        List.of(ed(1L, "1", null, "PART", "2", material("P", "采购件"))), List.of());
+    var result = assembler.assemble(request);
+    assertThat(result.nodes()).hasSize(2);
+    var structure = result.nodes().getFirst();
+    assertThat(structure.materialCode()).isEqualTo("1145100050625");
+    assertThat(structure.shapeAttr()).isNull();
+    assertThat(structure.unit()).isNull();
+    assertThat(result.quotationLeafCount()).isOne();
+    assertThat(result.nodes().getLast().qtyPerTop()).isEqualByComparingTo("2");
+    verify(port, never()).query(any());
+  }
+
+  @Test
+  void financeSplitUsesConfirmedMassQuantitiesAsSiblingPricingLeavesWithoutDrawingWeight() {
+    var a = new MaterialSnapshot("301300203", "聚氨酯树脂", "UF-110-1AC", null, "/", "采购件",
+        "010108", "PM", "RAW", "kg");
+    var b = new MaterialSnapshot("741300023", "聚氨酯树脂", "UF-110BC", null, "/", "采购件",
+        "010108", "PM", "RAW", "kg");
+    var first = new ElectronicNode(101L, 28, "28:C2:1", null, "/", a.materialName(),
+        new BigDecimal("0.02"), null, null, ElectronicDrawingSourceNode.MATCH_MANUAL, a, Nature.PURCHASE, "kg");
+    var second = new ElectronicNode(102L, 28, "28:C2:2", null, "/", b.materialName(),
+        new BigDecimal("0.01"), null, null, ElectronicDrawingSourceNode.MATCH_MANUAL, b, Nature.PURCHASE, "kg");
+    var result = assembler.assemble(command(List.of(first, second)));
+    var leaves = result.nodes().stream().filter(node -> node.level() == 1).toList();
+    assertThat(leaves).hasSize(2);
+    assertThat(leaves.getFirst().qtyPerParent()).isEqualByComparingTo("0.02");
+    assertThat(leaves.getLast().qtyPerTop()).isEqualByComparingTo("0.01");
+    assertThat(leaves).allSatisfy(node -> assertThat(node.unit()).isEqualTo("kg"));
+    verify(port, never()).query(any());
+    var wrongUnit = new ElectronicNode(101L, 28, "28:C2:1", null, "/", a.materialName(),
+        new BigDecimal("0.02"), null, null, ElectronicDrawingSourceNode.MATCH_MANUAL, a, Nature.PURCHASE, "g");
+    assertThatThrownBy(() -> assembler.assemble(command(List.of(wrongUnit))))
+        .isInstanceOf(ElectronicDrawingHybridBomException.class).hasMessageContaining("单位与料品档案不一致");
+  }
+
+  @Test
   void purchaseNodeIsAQuotationLeafAndNeverQueriesU9() {
     var result = assembler.assemble(command(List.of(
         ed(1L, "1", null, "DRAW-P", "2", material("P", "采购件")))));

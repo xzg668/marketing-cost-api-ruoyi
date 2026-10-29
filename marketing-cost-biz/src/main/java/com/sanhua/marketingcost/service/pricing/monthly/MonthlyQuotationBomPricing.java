@@ -32,7 +32,8 @@ public final class MonthlyQuotationBomPricing {
     var units = new HashMap<String, String>();
     frozenUnits.forEach((path, unit) -> { if (unit != null && !unit.isBlank()) units.put(MonthlyBomPricingScope.pathKey(path), unit); });
     var missing = new HashMap<String, Set<String>>();
-    original.stream().filter(node -> !units.containsKey(MonthlyBomPricingScope.pathKey(node.path())))
+    original.stream().filter(node -> node.level() != 0 || node.leaf())
+        .filter(node -> !units.containsKey(MonthlyBomPricingScope.pathKey(node.path())))
         .forEach(node -> missing.computeIfAbsent(node.priceOrgCode(), ignored -> new HashSet<>()).add(node.materialCode()));
     var byMaterial = new HashMap<String, String>();
     missing.forEach((org, codes) -> {
@@ -45,6 +46,7 @@ public final class MonthlyQuotationBomPricing {
     var inputs = new LinkedHashMap<String, MonthlyQuotationPrices.Item>();
     for (var node : original) {
       String path = MonthlyBomPricingScope.pathKey(node.path());
+      if (node.level() == 0 && !node.leaf() && !units.containsKey(path)) continue;
       String unit = units.getOrDefault(path, byMaterial.get(node.priceOrgCode() + "|" + node.materialCode()));
       if (unit == null) throw new IllegalArgumentException("BOM 月价范围缺少物料计价单位：" + node.materialCode());
       units.put(path, unit);
@@ -58,6 +60,10 @@ public final class MonthlyQuotationBomPricing {
     var nodes = new ArrayList<MonthlyBomPricingScope.Node>();
     for (var node : original) {
       var input = inputs.get(MonthlyBomPricingScope.pathKey(node.path()));
+      if (input == null) {
+        nodes.add(new MonthlyBomPricingScope.Node(node.path(), node.materialCode(), null, null, node.qtyPerTop()));
+        continue;
+      }
       var found = probes.values().get(input);
       var request = found == null ? MonthlyQuotationPrices.requests(session.context(), input).getLast() : found.request();
       if (probes.problems().containsKey(input)) problems.put(request, probes.problems().get(input));

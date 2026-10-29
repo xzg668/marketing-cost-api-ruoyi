@@ -206,9 +206,8 @@ public final class MonthlyLegacyLinkedPriceSource {
         var byCode=new HashMap<String,List<PriceLinkedItem>>();
         rules.rules(context.businessUnitType(),organization.getKey(),month.sourceMonth(),context.month().toString(),context.priceAsOfTime().toLocalDate(),batch)
             .forEach(row->byCode.computeIfAbsent(row.getMaterialCode().trim(),ignored->new ArrayList<>()).add(row));
-        var ratioCodes=new TreeSet<String>();
-        byCode.forEach((code,rows)->{if(rows.stream().map(row->supplierKey(row)).distinct().count()>1)
-          ratioCodes.add(SupplierSupplyRatioNormalizeUtils.normalizeToNull(code));});
+        var ratioCodes = byCode.keySet().stream().map(SupplierSupplyRatioNormalizeUtils::normalizeToNull)
+            .collect(java.util.stream.Collectors.toCollection(TreeSet::new));
         var capturedRatios=new HashMap<String,List<SupplierSupplyRatio>>();
         if(!ratioCodes.isEmpty())ratios.ratios(context.businessUnitType(),context.priceAsOfTime().toLocalDate(),ratioCodes)
             .forEach(row->capturedRatios.computeIfAbsent(row.getRequestedMaterialCode(),ignored->new ArrayList<>()).add(row));
@@ -252,9 +251,7 @@ public final class MonthlyLegacyLinkedPriceSource {
     var board=request.conditions().boardTerms();return "220".equals(request.priceOrgCode())
         ?board!=null && board.finalTender()?FactorPriceScope.Condition.TENDER:FactorPriceScope.Condition.NON_TENDER:FactorPriceScope.Condition.GENERAL;
   }
-  private static String supplierKey(PriceLinkedItem row) {
-    return LinkedPriceRuleVersions.supplierKey(row);
-  }
+
   private static Problem invalid(RuntimeException failure){return new Problem(Failure.INVALID_INPUT,"旧联动来源无效："+failure.getMessage());}
   private Map<String,Object> decode(String json) {
     var raw=codec.decode(codec.wrap(json),Map.class);var result=new LinkedHashMap<String,Object>();

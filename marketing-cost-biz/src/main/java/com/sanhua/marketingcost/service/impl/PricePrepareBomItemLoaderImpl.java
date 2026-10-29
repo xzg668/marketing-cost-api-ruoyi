@@ -17,6 +17,12 @@ public class PricePrepareBomItemLoaderImpl implements PricePrepareBomItemLoader 
   }
 
   @Override
+  public List<BomCostingRow> loadForCalculation(String oaNo, Long itemId, String productCode,
+      String month, String calculationScope) {
+    return List.copyOf(bomCostingRowMapper.selectCalculationRows(oaNo,itemId,productCode,month,calculationScope));
+  }
+
+  @Override
   public List<BomCostingRow> loadByQuoteItem(
       String oaNo, Long oaFormItemId, String topProductCode, String periodMonth) {
     if (!StringUtils.hasText(oaNo) || oaFormItemId == null || oaFormItemId <= 0

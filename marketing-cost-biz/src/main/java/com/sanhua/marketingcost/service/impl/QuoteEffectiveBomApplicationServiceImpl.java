@@ -148,6 +148,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
   @Override
   @Transactional(rollbackFor = Exception.class)
   @RetryOnConcurrency
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)
   public QuoteEffectiveBomResponse getEffectiveBom(String oaNo, Long oaFormItemId) {
     QueryContext context = requireContext(oaNo, oaFormItemId);
     QuoteBomMonthlySnapshot snapshot = findOrPrepareMonthlySnapshot(context);
@@ -157,6 +158,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
   @Override
   @Transactional(rollbackFor = Exception.class)
   @RetryOnConcurrency
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)
   public QuoteEffectiveBomResponse rebuildPreview(String oaNo, Long oaFormItemId) {
     QueryContext context = requireContext(oaNo, oaFormItemId);
     QuoteBomMonthlySnapshot snapshot = findOrPrepareMonthlySnapshot(context);
@@ -190,6 +192,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
   @Override
   @Transactional(rollbackFor = Exception.class)
   @RetryOnConcurrency
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)
   public QuoteEffectiveBomCostingCandidate prepareCostingCandidate(String oaNo, Long oaFormItemId) {
     QueryContext context = requireContext(oaNo, oaFormItemId);
     QuoteBomMonthlySnapshot snapshot = findOrPrepareMonthlySnapshot(context);
@@ -216,6 +219,28 @@ public class QuoteEffectiveBomApplicationServiceImpl
         evaluation.response(),
         evaluation.alternativeSelectionIds(),
         evaluation.variantInput());
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public QuoteEffectiveBomCostingCandidate prepareRepriceCandidate(
+      com.sanhua.marketingcost.service.reprice.MonthlyRepriceCalculation calculation) {
+    var saved = calculation.input(); var bom = saved.context();
+    var context = new QueryContext(saved.form().getOaNo(), saved.item().getId(), bom.productCode(),
+        bom.costPeriodMonth(), bom.customerKey(), bom.customer().source().name(), bom.customer().warning(),
+        bom.packageMethod(), bom.organization(), saved.form().getBusinessUnitType());
+    var snapshot = monthlySnapshotMapper.selectById(calculation.bom().getSyncRecordId());
+    if (snapshot == null || !"SUCCESS".equals(snapshot.getSyncStatus())
+        || !context.costPeriodMonth().equals(snapshot.getCostPeriodMonth())
+        || !context.topProductCode().equals(snapshot.getProductCode())
+        || !context.organization().priceOrgCode().equals(snapshot.getPriceOrgCode()))
+      throw failure("EFFECTIVE_BOM_SCOPE_INVALID", "已保存的目标月BOM归属不一致");
+    var evaluation = evaluateDraft(context, snapshot);
+    if (!"DRAFT".equals(evaluation.response().state()) || evaluation.variantInput() == null)
+      throw failure("EFFECTIVE_BOM_BLOCKED", evaluation.response().blockIssues().isEmpty()
+          ? "目标月计价BOM尚未就绪" : evaluation.response().blockIssues().getFirst().message());
+    return new QuoteEffectiveBomCostingCandidate(evaluation.response(),
+        evaluation.alternativeSelectionIds(), evaluation.variantInput());
   }
 
   private QuoteEffectiveBomResponse draftResponse(

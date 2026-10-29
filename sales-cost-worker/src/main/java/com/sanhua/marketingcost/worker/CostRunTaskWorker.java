@@ -4,7 +4,6 @@ import com.sanhua.marketingcost.entity.CostRunTask;
 import com.sanhua.marketingcost.enums.CostRunTaskScene;
 import com.sanhua.marketingcost.service.CostRunTaskClaimService;
 import com.sanhua.marketingcost.service.CostRunTaskProgressService;
-import com.sanhua.marketingcost.service.MonthlyRepriceProgressService;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.ArrayList;
@@ -20,7 +19,6 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.dao.TransientDataAccessException;
@@ -35,19 +33,16 @@ public class CostRunTaskWorker {
 
   private final CostRunTaskClaimService taskClaimService;
   private final CostRunTaskProgressService progressService;
-  private final MonthlyRepriceProgressService monthlyRepriceProgressService;
   private final CostRunTaskExecutorRegistry executorRegistry;
   private final CostRunWorkerProperties properties;
 
   public CostRunTaskWorker(
       CostRunTaskClaimService taskClaimService,
       CostRunTaskProgressService progressService,
-      ObjectProvider<MonthlyRepriceProgressService> monthlyRepriceProgressService,
       CostRunTaskExecutorRegistry executorRegistry,
       CostRunWorkerProperties properties) {
     this.taskClaimService = taskClaimService;
     this.progressService = progressService;
-    this.monthlyRepriceProgressService = monthlyRepriceProgressService.getIfAvailable();
     this.executorRegistry = executorRegistry;
     this.properties = properties;
   }
@@ -136,7 +131,6 @@ public class CostRunTaskWorker {
       if (!marked) {
         throw new IllegalStateException("任务所有权已变更，无法标记成功");
       }
-      refreshMonthlyRepriceProgress(task);
       return new TaskExecutionMetric(task.getId(), elapsedMillis(startedNanos), true);
     } catch (CostRunTaskWaitingInputException ex) {
       boolean marked =
@@ -149,14 +143,12 @@ public class CostRunTaskWorker {
             task.getId(),
             task.getBatchNo());
       }
-      refreshMonthlyRepriceProgress(task);
       return new TaskExecutionMetric(task.getId(), elapsedMillis(startedNanos), marked);
     } catch (RuntimeException ex) {
       log.error(
           "cost run task failed: workerId={} taskId={} batchNo={} scene={}",
           workerId, task.getId(), task.getBatchNo(), task.getScene(), ex);
       recordFailure(workerId, task, ex);
-      refreshMonthlyRepriceProgress(task);
       return new TaskExecutionMetric(task.getId(), elapsedMillis(startedNanos), false);
     }
   }
@@ -207,20 +199,7 @@ public class CostRunTaskWorker {
     }
   }
 
-  private void refreshMonthlyRepriceProgress(CostRunTask task) {
-    if (monthlyRepriceProgressService == null
-        || task == null
-        || !CostRunTaskScene.MONTHLY_REPRICE.name().equals(task.getScene())
-        || task.getSourceNo() == null
-        || task.getSourceNo().isBlank()) {
-      return;
-    }
-    try {
-      monthlyRepriceProgressService.refreshProgress(task.getSourceNo());
-    } catch (RuntimeException ex) {
-      log.error("monthly reprice progress refresh failed: repriceNo={}", task.getSourceNo(), ex);
-    }
-  }
+
 
   private Set<String> touchedBatchNos(List<CostRunTask> tasks) {
     Set<String> batchNos = new LinkedHashSet<>();

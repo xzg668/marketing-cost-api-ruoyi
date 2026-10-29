@@ -83,6 +83,18 @@ class TechnicalDataSubmissionRemarkTest {
         .doesNotContain("BOX001×1张/组件", "单价", "金额");
   }
 
+  @Test void newPackagingShowsBaseAndOriginalUsageInOaRemark() throws Exception {
+    var submission = fixture();
+    submission.setModuleTypesJson("[\"PACKAGE\"]");
+    var root = tree(submission);
+    ((ObjectNode) root.at("/supplements/packaging"))
+        .put("quantityBasis", "PACKAGE_PARENT").put("parentBaseQuantity", 150).putNull("parentQuantity");
+    submission.setContentSnapshotJson(root.toString());
+    assertThat(remarks.generate("P1", submission)).contains("母件底数150件产品", "纸箱BOX001×2张/组件")
+        .doesNotContain("null", "×0.5/产品");
+    assertThat(remarks.generateBrief("P1", submission)).contains("母件底数150，子件1项");
+  }
+
   @Test void fourU9PackageChildrenFitOaRemarkWithoutLosingQuantities() throws Exception {
     var submission = fixture(); submission.setModuleTypesJson("[\"PACKAGE\"]");
     ObjectNode root = tree(submission);

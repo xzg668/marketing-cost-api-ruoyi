@@ -150,6 +150,11 @@ public class BomCostingRow {
 
   /** 拍平批次 ID */
   private String buildBatchId;
+  /** Empty for ordinary quotations; saved batch identity isolates repricing working rows. */
+  private String calculationScope;
+
+  public String getCalculationScope() { return calculationScope; }
+  public void setCalculationScope(String value) { calculationScope = value; }
 
   /** 拍平时间（业务时间，手工赋值） */
   private LocalDateTime builtAt;

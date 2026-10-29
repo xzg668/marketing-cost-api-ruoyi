@@ -234,6 +234,7 @@ public class CostInputRevisionServiceImpl implements CostInputRevisionService {
     }
     sql += " ORDER BY price_org_code,material_code,price_type";
     StringBuilder canonical = new StringBuilder();
+    append(canonical, "selectionPolicy", "CURRENT_PERIOD_FIRST_LATEST_FALLBACK_V2");
     for (var row : jdbcTemplate.queryForList(sql, parameters.toArray())) {
       for (String column : new TreeSet<>(row.keySet())) appendPriceValue(canonical, column, row.get(column));
     }

@@ -194,6 +194,11 @@ public class ElectronicDrawingHybridBomAssembler {
 
   private BigDecimal electronicQuantity(ElectronicNode source) {
     BigDecimal pieces = positive(source.quantity(), "电子图库节点数量");
+    if (text(source.quantityUnit()) != null) {
+      if (!source.quantityUnit().trim().equalsIgnoreCase(required(source.material().unit(), "料品用量单位")))
+        throw invalid(BOM_GAP, "财务修正用量单位与料品档案不一致：" + source.material().materialCode());
+      return pieces;
+    }
     String unit = weightUnit(required(source.material().unit(), "电子图库节点单位"));
     if (unit == null) {
       return pieces;
@@ -305,8 +310,9 @@ public class ElectronicDrawingHybridBomAssembler {
     if (command == null || command.oaFormItemId() == null || command.oaFormItemId() <= 0) {
       throw invalid(COMMAND_INVALID, "报价产品行不能为空");
     }
-    MaterialSnapshot root = validateMaterial(command.rootMaterial(), "顶层产品");
-    Nature rootNature = Nature.parse(root.shapeAttr());
+    // 顶层是本报价的结构根，不直接参与材料取价。缺档案属性不阻断已明确子件的检查。
+    MaterialSnapshot root = validateRoot(command.rootMaterial());
+    Nature rootNature = text(root.shapeAttr()) == null ? null : Nature.parse(root.shapeAttr());
     if (rootNature == Nature.PURCHASE) {
       throw invalid(STRUCTURE_INVALID, "电子图库顶层产品不能是采购件");
     }
@@ -473,6 +479,12 @@ public class ElectronicDrawingHybridBomAssembler {
         throw invalid(STRUCTURE_INVALID, "混合 BOM 存在孤儿节点：" + node.nodeKey());
       }
       List<Node> childRows = children.getOrDefault(node.nodeKey(), List.of());
+      if (node.level() == 0) {
+        if (childRows.isEmpty()) throw invalid(BOM_GAP, "产品结构根没有可用下级");
+        positive(node.qtyPerParent(), "结构根相对用量");
+        positive(node.qtyPerTop(), "结构根累计用量");
+        continue;
+      }
       Nature nature = Nature.parse(node.shapeAttr());
       if (node.level() > 0 && nature == Nature.PURCHASE && !childRows.isEmpty()) {
         throw invalid(STRUCTURE_INVALID, "混合 BOM 采购件存在子级：" + node.materialCode());
@@ -488,6 +500,15 @@ public class ElectronicDrawingHybridBomAssembler {
     }
     // 同一父件的不同来源节点可以使用同一料号，数量和路径各自保留。
     // 重复由 nodeKey 校验，循环由祖先料号校验，不能按兄弟料号去重。
+  }
+
+  private static MaterialSnapshot validateRoot(MaterialSnapshot root) {
+    if (root == null) throw invalid(COMMAND_INVALID, "报价产品身份不能为空");
+    if (text(root.shapeAttr()) != null) Nature.parse(root.shapeAttr());
+    return new MaterialSnapshot(required(root.materialCode(), "报价产品标识"), text(root.materialName()),
+        text(root.materialSpec()), text(root.materialModel()), text(root.drawingNo()),
+        text(root.shapeAttr()), text(root.mainCategoryCode()), text(root.sourceCategory()),
+        text(root.costElementCode()), text(root.unit()));
   }
 
   private static MaterialSnapshot validateMaterial(MaterialSnapshot material, String label) {
@@ -689,7 +710,16 @@ public class ElectronicDrawingHybridBomAssembler {
       String referenceWeightUnit,
       String matchStatus,
       MaterialSnapshot material,
-      Nature effectiveNature) {}
+      Nature effectiveNature,
+      String quantityUnit) {
+    public ElectronicNode(Long sourceNodeId, Integer sourceRowNo, String sourceSequence,
+        String parentSourceSequence, String drawingCode, String sourceName, BigDecimal quantity,
+        BigDecimal referenceWeight, String referenceWeightUnit, String matchStatus,
+        MaterialSnapshot material, Nature effectiveNature) {
+      this(sourceNodeId, sourceRowNo, sourceSequence, parentSourceSequence, drawingCode, sourceName,
+          quantity, referenceWeight, referenceWeightUnit, matchStatus, material, effectiveNature, null);
+    }
+  }
 
   public record MaterialSnapshot(
       String materialCode,
@@ -743,7 +773,7 @@ public class ElectronicDrawingHybridBomAssembler {
     }
 
     public int quotationLeafCount() {
-      return (int) nodes.stream().filter(node -> Nature.parse(node.shapeAttr()) == Nature.PURCHASE).count();
+      return (int) nodes.stream().filter(node -> node.level() > 0).filter(node -> Nature.parse(node.shapeAttr()) == Nature.PURCHASE).count();
     }
   }
 

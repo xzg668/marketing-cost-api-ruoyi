@@ -13,8 +13,13 @@ public final class MonthlyBomPricingScope {
   public record Node(String path, String materialCode, String parentMaterialCode,
       MonthlyPriceRequest request, BigDecimal quantityPerTop) {
     public Node {
-      Objects.requireNonNull(request, "price request");
-      if (!request.family().materialCode().equals(materialCode)) {
+      if (materialCode == null || materialCode.isBlank()) throw invalid("BOM material identity is required");
+      // A quotation-only structural root has no material price identity or unit.
+      // Priced children always retain their complete request.
+      if (request == null && (parent(pathKey(path)) != null || parentMaterialCode != null)) {
+        throw invalid("Only a structural BOM root can omit its price request");
+      }
+      if (request != null && !request.family().materialCode().equals(materialCode)) {
         throw invalid("BOM material and price identity differ at " + path);
       }
       pathKey(path);
@@ -44,6 +49,7 @@ public final class MonthlyBomPricingScope {
       if (node == null) throw invalid("Null BOM node");
       String path = pathKey(node.path());
       if (byPath.putIfAbsent(path, node) != null) throw invalid("Duplicate BOM path: " + path);
+      if (node.request() == null) continue;
       var family = node.request().family();
       if (first == null) first = family;
       if (!first.businessUnitType().equals(family.businessUnitType()) || !first.month().equals(family.month())) {
@@ -93,6 +99,10 @@ public final class MonthlyBomPricingScope {
       }
       // Zero consumption can explain the original tree but cannot adopt a monthly price.
       if (node.quantityPerTop().signum() == 0) continue;
+      if (node.request() == null) {
+        ordinary.add(node);
+        continue;
+      }
       if (!pricingPaths.contains(path)) continue;
       var problem = probes.problems().get(node.request());
       if (problem != null) throw new MonthlyPriceProblem(problem.reason(), node.path() + ": " + problem.message());
@@ -139,7 +149,7 @@ public final class MonthlyBomPricingScope {
       pending.addAll(value.fact().dependencies());
     }
     var ordinaryRequests = new LinkedHashSet<MonthlyPriceRequest>();
-    scope.ordinary().forEach(node -> ordinaryRequests.add(node.request()));
+    scope.ordinary().stream().map(Node::request).filter(Objects::nonNull).forEach(ordinaryRequests::add);
     return new MonthlyAdoptionPlan(selected, uses, scope.suppressedPaths(), ordinaryRequests);
   }
 

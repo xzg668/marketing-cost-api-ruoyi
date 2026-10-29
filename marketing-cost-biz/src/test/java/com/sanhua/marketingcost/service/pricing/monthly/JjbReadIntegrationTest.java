@@ -135,7 +135,11 @@ class JjbReadIntegrationTest {
         var r=s.getRow(JjbExcelRendererTest.find(s,hh.code()).getRowIndex());
         JjbExcelRendererTest.amount(r.getCell(3),"20.985300");JjbExcelRendererTest.amount(r.getCell(5),"51.641245");
         assertThat(r.getCell(4).getNumericCellValue()).isEqualTo(2);
-        assertThat(JjbExcelRendererTest.find(wb.getSheet("版本依据"),"成本版本ID").getRow().getCell(1).getStringCellValue()).isEqualTo(f.version().getId().toString());
+        assertThat(wb.getNumberOfSheets()).isEqualTo(1);
+        assertThat(s.getRow(0).getCell(0).getCellComment().getString().getString())
+            .contains("versionId=" + f.version().getId(), "月度价格依据");
+        assertThat(wb.getProperties().getCoreProperties().getDescription())
+            .isEqualTo("保存成本版本 " + f.version().getId());
       }
     }
     assertThat(jdbc.queryForMap("SELECT * FROM lp_quote_cost_run_version WHERE id=?",f.version().getId())).isEqualTo(before);

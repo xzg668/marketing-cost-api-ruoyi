@@ -138,9 +138,16 @@ class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
     jdbc.update("DELETE FROM lp_material_master_raw WHERE material_code=?", key);
     var context = contexts.load(itemId, "COMMERCIAL", "210", month);
     assertThat(verifications.importedForContinuation(context)).isPresent();
-    workbench.launchWorkbench(key, itemId);
+    var authentication = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("admin", "unused", List.of());
+    authentication.setDetails(java.util.Map.of("businessUnitType", "COMMERCIAL"));
+    org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(authentication);
+    com.sanhua.marketingcost.dto.quotecosting.QuoteCostingWorkbenchResponse prepared;
+    try { prepared = workbench.launchWorkbench(key, itemId); }
+    finally { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
     context = contexts.load(itemId, "COMMERCIAL", "210", month);
-    assertThat(context.workflowStage()).isEqualTo(ElectronicDrawingWorkflowStage.VALIDATION_FAILED);
+    assertThat(context.workflowStage()).isEqualTo(ElectronicDrawingWorkflowStage.COMPOSED);
+    assertThat(prepared.getBomRows()).isNotEmpty();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_master_raw WHERE material_code=?", Integer.class, key)).isZero();
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_electronic_drawing_source_node WHERE supplement_version_id=? AND resolved_material_code IS NOT NULL", Integer.class, context.sourceVersionId())).isEqualTo(2);
     verify(client, times(1)).verify(any());
   }
@@ -286,7 +293,7 @@ class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
 
   @ParameterizedTest
   @ValueSource(strings = {"SPEC-A", "UNKNOWN", ""})
-  void noMaterialQuoteUsesTheSamePriorityForVerificationAndTheActualBomRoot(String specification) {
+  void noMaterialQuoteUsesLookupPriorityForVerificationAndKeepsItsQuotedIdentityAsBomRoot(String specification) {
     String quoteCode =
         com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(
             null, key, "STALE-QUOTE-DRAW");
@@ -333,7 +340,7 @@ class DrawingResultConsumptionIntegrationTest extends BomMapperTestBase {
                     + " supplement_version_id=? AND level=0",
                 String.class,
                 sourceId))
-        .isEqualTo(key);
+        .isEqualTo(quoteCode);
     verify(client, times(1)).verify(argThat(query -> (key + "-DRAW-MX").equals(query.drawingNo())));
   }
 

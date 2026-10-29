@@ -127,6 +127,31 @@ class PackageComponentPriceServiceImplTest {
   }
 
   @Test
+  @DisplayName("板换原表：子件用量只除包装组件底数6，不再除子件行的底数")
+  void workbookPackagingUsesComponentBaseOnce() {
+    service = serviceWith(Map.of(
+        "PAD", PriceResolveResult.hit(new BigDecimal("0.779800"), "固定采购价"),
+        "BOX", PriceResolveResult.hit(new BigDecimal("6.931300"), "固定采购价"),
+        "H1", PriceResolveResult.hit(new BigDecimal("1.961000"), "固定采购价"),
+        "H2", PriceResolveResult.hit(new BigDecimal("1.231100"), "固定采购价"),
+        "H3", PriceResolveResult.hit(new BigDecimal("2.462200"), "固定采购价")));
+    var rows = List.of(detail(201L, 1, "PAD", "2"), detail(202L, 2, "BOX", "1"),
+        detail(203L, 3, "H1", "1"), detail(204L, 4, "H2", "3"), detail(205L, 5, "H3", "3"));
+    rows.forEach(row -> row.setChildParentBaseQty(row.getQtyPerParent()));
+    var snapshot = snapshotResult(rows);
+    snapshot.getSnapshot().setPackageParentBaseQty(new BigDecimal("6"));
+    when(snapshotService.previewSnapshot(any(PackageSnapshotRequest.class))).thenReturn(snapshot);
+
+    var result = service.calculatePrice(request());
+
+    assertThat(result.isComplete()).isTrue();
+    assertThat(result.getDetails().getFirst().getChildAmount()).isEqualByComparingTo("1.559600");
+    assertThat(result.getPrice().getTotalPrice()).isEqualByComparingTo("3.58863333");
+    assertThat(result.getPrice().getTotalPrice().multiply(new BigDecimal("1.05"))
+        .setScale(6, java.math.RoundingMode.HALF_UP)).isEqualByComparingTo("3.768065");
+  }
+
+  @Test
   @DisplayName("T22：月度包装件按 price_as_of_time 传递给子件取价上下文")
   void monthlyPriceAsOfTimePassedToChildResolver() {
     LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 26, 10, 30);

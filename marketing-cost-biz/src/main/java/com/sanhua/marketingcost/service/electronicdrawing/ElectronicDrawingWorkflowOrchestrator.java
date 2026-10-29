@@ -386,11 +386,10 @@ public class ElectronicDrawingWorkflowOrchestrator {
         exception.getClass().getSimpleName());
     String message =
         exception instanceof ElectronicDrawingSourceImportException
+            || exception instanceof ElectronicDrawingHybridBomException
+            || exception instanceof ElectronicDrawingMaterialResolutionException
             ? exception.getMessage()
-            : exception instanceof ElectronicDrawingHybridBomException hybrid
-                    && ElectronicDrawingHybridBomException.BOM_GAP.equals(hybrid.code())
-                ? hybrid.getMessage()
-                : "电子图库资料暂无法完成校验，请稍后重新检查";
+            : "电子图库资料暂无法完成校验，请稍后重新检查";
     record(context, "E_DRAWING_VALIDATION_FAILED", message);
     return result(context, ElectronicDrawingWorkflowStage.VALIDATION_FAILED, message, false, 0);
   }

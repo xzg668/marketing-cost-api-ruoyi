@@ -18,14 +18,14 @@ public interface ElectronicDrawingSourceNodeMapper
       "INSERT INTO lp_electronic_drawing_source_node (",
       "supplement_version_id,source_row_no,source_sequence,parent_source_sequence,",
       "drawing_code,source_name,qty,material,importance_class,hsf_risk_class,",
-      "reference_weight,reference_weight_unit,source_remark,match_status,resolved_material_code,resolved_by,resolved_at",
+      "reference_weight,reference_weight_unit,source_remark,match_status,resolved_material_code,resolved_by,resolved_at,quantity_unit,corrected_from_source_node_id",
       ") VALUES",
       "<foreach collection='sourceNodes' item='node' separator=','>",
       "(#{node.supplementVersionId},#{node.sourceRowNo},#{node.sourceSequence},",
       "#{node.parentSourceSequence},#{node.drawingCode},#{node.sourceName},#{node.qty},",
       "#{node.material},#{node.importanceClass},#{node.hsfRiskClass},#{node.referenceWeight},",
       "#{node.referenceWeightUnit},#{node.sourceRemark},#{node.matchStatus},#{node.resolvedMaterialCode},",
-      "#{node.resolvedBy},#{node.resolvedAt})",
+      "#{node.resolvedBy},#{node.resolvedAt},#{node.quantityUnit},#{node.correctedFromSourceNodeId})",
       "</foreach>",
       "</script>"
   })

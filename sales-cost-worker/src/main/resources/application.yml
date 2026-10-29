@@ -43,7 +43,6 @@ logging:
 monthly:
   reprice:
     enabled: ${MONTHLY_REPRICE_ENABLED:false}
-    execution-backend: ${MONTHLY_REPRICE_EXECUTION_BACKEND:LOCAL_WORKER}
 
 cost:
   run:

@@ -11,6 +11,18 @@ import java.util.*;
 import org.junit.jupiter.api.Test;
 
 class MonthlyBomPricingScopeTest {
+  @Test void quoteOnlyRootHasNoPriceIdentityWhileItsChildrenStillAdoptTheirOwnPrices() {
+    var original = List.of(new Node("P", "P", null, null, BigDecimal.ONE), node("P/A", "A", "P", "2"));
+    var values = candidates(Map.of(request("A"), price(false, Set.of())));
+    var scope = select(original, values);
+    assertThat(scope.ordinary()).isEqualTo(original);
+    var plan = adoption(scope, List.of(new Use("P/A", request("A"), new BigDecimal("2"))), values);
+    assertThat(plan.selections()).containsOnlyKeys(request("A"));
+    assertThat(plan.ordinaryScopeRequests()).containsExactly(request("A"));
+    assertThatThrownBy(() -> new Node("P/A", "A", "P", null, BigDecimal.ONE))
+        .isInstanceOf(MonthlyPriceProblem.class);
+  }
+
   static MonthlyPriceRequest request(String code) {
     return new MonthlyPriceRequest(new MonthlyPriceFamilyKey(YearMonth.of(2026,10), "COMMERCIAL",
         code, null, "件", "CNY", TaxBasis.EXCLUDED, null), "210", NonCuConditions.empty(), BigDecimal.ONE);

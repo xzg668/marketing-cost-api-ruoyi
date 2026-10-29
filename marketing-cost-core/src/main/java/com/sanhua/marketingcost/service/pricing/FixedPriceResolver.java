@@ -20,7 +20,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
- * 固定价：先按组织、核算日期选择每家供应商的有效版本，再执行通用供货比率规则。
+ * 固定价：按组织选择每家供应商生失效日期最新的版本，再执行通用供货比率规则。
  *
  * <p>对应 Excel"价格来源 = 固定采购价"。
  */
@@ -71,12 +71,12 @@ public class FixedPriceResolver implements PriceResolver {
         || !StringUtils.hasText(context.getBusinessUnitType())) {
       return PriceResolveResult.miss("FIXED_PRICE_SCOPE_MISSING", "固定价缺少取价组织、业务单元或核算日期：" + code);
     }
-    List<PriceFixedItem> rows = selectRows(code, priceDate, orgCode, context);
+    List<PriceFixedItem> rows = SupplyPriceDatePolicy.preferCurrent(
+        selectRows(code, orgCode, context), priceDate,
+        PriceFixedItem::getEffectiveFrom, PriceFixedItem::getEffectiveTo);
     var bySupplier = new LinkedHashMap<String, PriceFixedItem>();
     for (PriceFixedItem row : rows) {
-      // 再核验适配器边界，保证任何调用方都不能把过期价传进供应商比较。
-      if (row.getFixedPrice() == null || row.getEffectiveFrom() == null || row.getEffectiveTo() == null
-          || row.getEffectiveFrom().isAfter(priceDate) || !row.getEffectiveTo().isAfter(priceDate)) continue;
+      if (row.getFixedPrice() == null) continue;
       String supplier = SupplierSupplyRatioNormalizeUtils.normalizeToNull(row.getSupplierCode());
       if (!StringUtils.hasText(supplier)) {
         return PriceResolveResult.miss("FIXED_SUPPLIER_CODE_MISSING", "固定价缺供应商代码：" + code);
@@ -87,7 +87,7 @@ public class FixedPriceResolver implements PriceResolver {
         return PriceResolveResult.miss("FIXED_PRICE_VERSION_CONFLICT", "同一供应商相同有效期存在不同价格：" + code + "/" + supplier);
       }
     }
-    if (bySupplier.isEmpty()) return PriceResolveResult.miss("固定价无有效报价：" + code);
+    if (bySupplier.isEmpty()) return PriceResolveResult.miss("固定价无采购报价：" + code);
     List<SupplierPriceCandidate> candidates = new ArrayList<>();
     bySupplier.forEach((supplier, row) -> candidates.add(new SupplierPriceCandidate(supplier,
         supplier, row.getSupplierName(), row.getFixedPrice(), row.getEffectiveFrom(), row.getEffectiveTo())));
@@ -107,12 +107,12 @@ public class FixedPriceResolver implements PriceResolver {
   }
 
   private int compareVersion(PriceFixedItem a, PriceFixedItem b) {
-    return Comparator.comparing(PriceFixedItem::getEffectiveFrom)
-        .thenComparing(PriceFixedItem::getEffectiveTo).compare(a, b);
+    return Comparator.comparing(PriceFixedItem::getEffectiveFrom,Comparator.nullsFirst(Comparator.naturalOrder()))
+        .thenComparing(PriceFixedItem::getEffectiveTo,Comparator.nullsFirst(Comparator.naturalOrder())).compare(a, b);
   }
 
   private List<PriceFixedItem> selectRows(String code,
-      LocalDate priceDate, String orgCode, CostRunContext context) {
+      String orgCode, CostRunContext context) {
     LambdaQueryWrapper<PriceFixedItem> query = Wrappers.lambdaQuery(PriceFixedItem.class)
         .eq(PriceFixedItem::getMaterialCode, code)
         .eq(PriceFixedItem::getSourceKind, "PUBLIC")
@@ -120,9 +120,7 @@ public class FixedPriceResolver implements PriceResolver {
         .isNotNull(PriceFixedItem::getFixedPrice);
     if (StringUtils.hasText(orgCode)) query.eq(PriceFixedItem::getOrgCode, orgCode);
     query.eq(PriceFixedItem::getBusinessUnitType, context.getBusinessUnitType().trim());
-    query.le(PriceFixedItem::getEffectiveFrom, priceDate)
-          .gt(PriceFixedItem::getEffectiveTo, priceDate)
-          .orderByDesc(PriceFixedItem::getEffectiveFrom)
+    query.orderByDesc(PriceFixedItem::getEffectiveFrom)
           .orderByDesc(PriceFixedItem::getEffectiveTo);
     return priceFixedItemMapper.selectList(query.orderByDesc(PriceFixedItem::getImportedAt)
         .orderByDesc(PriceFixedItem::getCreatedAt).orderByDesc(PriceFixedItem::getId));

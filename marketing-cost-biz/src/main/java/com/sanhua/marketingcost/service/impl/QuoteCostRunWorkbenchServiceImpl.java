@@ -161,6 +161,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
       rollbackFor = Exception.class,
       isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
   @RetryOnConcurrency
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=true)
   public QuoteCostRunWorkbenchResponse runToSuccess(
       String oaNo, Long oaFormItemId, QuoteCostRunTrialRequest request, String completedBy) {
     oaFormItemMapper.selectForCostingWrite(oaFormItemId);
@@ -639,6 +640,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     QuoteCostRunVersion version =
         versionMapper.selectOne(
             Wrappers.lambdaQuery(QuoteCostRunVersion.class)
+                .isNull(QuoteCostRunVersion::getRepriceNo)
                 .eq(QuoteCostRunVersion::getOaNo, scope.oaNo())
                 .eq(QuoteCostRunVersion::getOaFormItemId, scope.oaFormItemId())
                 .eq(QuoteCostRunVersion::getProductCode, scope.productCode())
@@ -658,6 +660,7 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
     List<QuoteCostRunVersion> versions =
         versionMapper.selectList(
             Wrappers.lambdaQuery(QuoteCostRunVersion.class)
+                .isNull(QuoteCostRunVersion::getRepriceNo)
                 .eq(QuoteCostRunVersion::getOaNo, scope.oaNo())
                 .eq(QuoteCostRunVersion::getOaFormItemId, scope.oaFormItemId())
                 .eq(QuoteCostRunVersion::getProductCode, scope.productCode())

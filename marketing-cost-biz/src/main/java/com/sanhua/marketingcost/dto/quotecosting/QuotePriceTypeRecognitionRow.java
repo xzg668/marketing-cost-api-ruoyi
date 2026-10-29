@@ -12,6 +12,7 @@ public class QuotePriceTypeRecognitionRow {
   private Integer level;
   private String objectType;
   private String materialCode;
+  private String drawingNo;
   private String priceOrgCode;
   private String materialName;
   private String parentMaterialCode;

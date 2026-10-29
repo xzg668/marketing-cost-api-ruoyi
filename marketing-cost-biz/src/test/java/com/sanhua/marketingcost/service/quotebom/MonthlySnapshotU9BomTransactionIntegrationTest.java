@@ -39,10 +39,11 @@ import org.testcontainers.containers.MySQLContainer;
 /** 用真实 MySQL 读视图验证首次核算，单纯 mock Mapper 无法复现独立事务导致的假缺口。 */
 @Tag("integration")
 class MonthlySnapshotU9BomTransactionIntegrationTest {
-  private static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.4")
+  private static final MySQLContainer<?> MYSQL = new MySQLContainer<>(org.testcontainers.utility.DockerImageName.parse(System.getProperty("mpp.mysql.image","mysql:8.4")).asCompatibleSubstituteFor("mysql"))
       .withDatabaseName("quote_monthly_transaction_test")
       .withUsername("test")
-      .withPassword("test");
+      .withPassword("test")
+      .withConfigurationOverride("monthly-pricing/mysql");
   private static AnnotationConfigApplicationContext spring;
   private static JdbcTemplate jdbc;
   private static TransactionTemplate costing;
@@ -57,6 +58,7 @@ class MonthlySnapshotU9BomTransactionIntegrationTest {
     DataSource source = new DriverManagerDataSource(
         MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
     jdbc = new JdbcTemplate(source);
+    assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     String migration = resource("db/V140__quote_bom_monthly_snapshot.sql");
     int createStart = migration.indexOf("CREATE TABLE IF NOT EXISTS");
     jdbc.execute(migration.substring(createStart, migration.indexOf(';', createStart) + 1));

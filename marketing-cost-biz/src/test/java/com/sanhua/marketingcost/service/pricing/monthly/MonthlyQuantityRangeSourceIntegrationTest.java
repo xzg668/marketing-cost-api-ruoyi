@@ -120,4 +120,9 @@ class MonthlyQuantityRangeSourceIntegrationTest {
   @Test void existingBulkSupplierLookupKeepsItsDatabaseBusinessUnitMatching(){
     String code=code();ratio(code,"S1","1");var result=ratioService.resolveAll("commercial",Set.of(code),context().priceAsOfTime().toLocalDate());assertThat(result.get(code).isMatched()).isTrue();assertThat(result.get(code).getSupplierCode()).isEqualTo("S1");
   }
+  @Test void explicitWithdrawalAppliesBeforeTheSingleSupplierQuantityShortcut() {
+    String code=code(); range(code,"S1","0",true,"100",true,"10","2026-01-01"); var req=request(code,"10");
+    assertThat(source.read(context(),Set.of(req)).problems()).isEmpty(); ratio(code,"S1","0");
+    var result=source.read(context(),Set.of(req)); assertThat(result.values()).isEmpty(); assertThat(result.problems().get(req).message()).contains("退出供货");
+  }
 }

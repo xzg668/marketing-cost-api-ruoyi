@@ -7,10 +7,8 @@ import static com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawi
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.entity.ElectronicDrawingSourceNode;
-import com.sanhua.marketingcost.entity.MaterialMasterRaw;
 import com.sanhua.marketingcost.entity.QuoteBomSupplementDetail;
 import com.sanhua.marketingcost.entity.QuoteBomSupplementVersion;
-import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementDetailMapper;
 import com.sanhua.marketingcost.mapper.QuoteBomSupplementVersionMapper;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybridBomAssembler.AssembleCommand;
@@ -20,19 +18,13 @@ import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybri
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingHybridBomAssembler.Node;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataManufacturingBomSource;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
-import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
-import java.util.Collection;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
@@ -47,31 +39,25 @@ public class ElectronicDrawingHybridBomService {
   private final QuoteBomSupplementVersionMapper versionMapper;
   private final QuoteBomSupplementDetailMapper detailMapper;
   private final ElectronicDrawingSourceNodeRepository sourceNodeRepository;
-  private final MaterialMasterRawMapper materialMapper;
   private final ElectronicDrawingHybridBomAssembler assembler;
   private final TechnicalDataManufacturingBomSource manufacturing;
   private final ElectronicDrawingBomScope scope;
-  private final ElectronicDrawingProductLookup productLookup;
 
   public ElectronicDrawingHybridBomService(
       ElectronicDrawingWorkflowContextPort contextPort,
       QuoteBomSupplementVersionMapper versionMapper,
       QuoteBomSupplementDetailMapper detailMapper,
       ElectronicDrawingSourceNodeRepository sourceNodeRepository,
-      MaterialMasterRawMapper materialMapper,
       ElectronicDrawingHybridBomAssembler assembler,
       TechnicalDataManufacturingBomSource manufacturing,
-      ElectronicDrawingBomScope scope,
-      ElectronicDrawingProductLookup productLookup) {
+      ElectronicDrawingBomScope scope) {
     this.contextPort = contextPort;
     this.versionMapper = versionMapper;
     this.detailMapper = detailMapper;
     this.sourceNodeRepository = sourceNodeRepository;
-    this.materialMapper = materialMapper;
     this.assembler = assembler;
     this.manufacturing = manufacturing;
     this.scope = scope;
-    this.productLookup = productLookup;
   }
 
   @Transactional
@@ -115,17 +101,27 @@ public class ElectronicDrawingHybridBomService {
             .filter(branch -> branch.state() == ElectronicDrawingBomScope.State.ERROR)
             .findFirst();
     if (blocked.isPresent()) throw invalid(MAPPING_INCOMPLETE, blocked.get().message());
-    String rootCode = rootMaterialCode(context, version);
-    Map<String, MaterialMasterRaw> materials =
-        currentMaterials(Set.of(rootCode), context.materialOrgCode());
-    MaterialMasterRaw root = materials.get(normalize(rootCode));
+    String rootCode = required(context.quoteProductCode(), "报价产品标识");
+    // 成品仅提供报价身份，不是本次逐项取价的材料，不能要求其先进入料品档案。
+    var root =
+        new MaterialSnapshot(
+            rootCode,
+            context.productName(),
+            context.productSpec(),
+            context.productModel(),
+            version.getElectronicDrawingNo(),
+            null,
+            null,
+            null,
+            null,
+            null);
     List<ElectronicNode> electronicNodes = plan.nodes();
     HybridBom hybrid =
         assembler.assemble(
             new AssembleCommand(
                 version.getOaNo(),
                 version.getOaFormItemId(),
-                material(root),
+                root,
                 context.accountingMonth(),
                 context.priceOrgCode(),
                 context.materialOrgCode(),
@@ -197,76 +193,6 @@ public class ElectronicDrawingHybridBomService {
       throw invalid(SOURCE_VERSION_INVALID, "当前电子图库源版本与产品任务不一致或不可编辑");
     }
     return version;
-  }
-
-  private Map<String, MaterialMasterRaw> currentMaterials(
-      Collection<String> codes, String materialOrganizationCode) {
-    List<MaterialMasterRaw> rows =
-        materialMapper.selectByLatestBatchAndCodes(codes, null, materialOrganizationCode);
-    Map<String, List<MaterialMasterRaw>> grouped =
-        rows.stream()
-            .filter(row -> text(row.getMaterialCode()) != null)
-            .collect(
-                Collectors.groupingBy(
-                    row -> normalize(row.getMaterialCode()),
-                    LinkedHashMap::new,
-                    Collectors.toList()));
-    Set<String> requested =
-        codes.stream()
-            .map(ElectronicDrawingHybridBomService::normalize)
-            .collect(Collectors.toCollection(LinkedHashSet::new));
-    if (!grouped.keySet().equals(requested)
-        || grouped.values().stream().anyMatch(group -> group.size() != 1)) {
-      throw invalid(MAPPING_INCOMPLETE, "电子图库映射料号或顶层产品不是当前物料组织中的唯一正常料品");
-    }
-    return grouped.entrySet().stream()
-        .collect(
-            Collectors.toMap(
-                Map.Entry::getKey,
-                entry -> entry.getValue().getFirst(),
-                (first, ignored) -> first,
-                LinkedHashMap::new));
-  }
-
-  /** 无正式料号的报价保留内部核算身份，顶层料品复用取图时的优先级和所选实际图号。 */
-  private String rootMaterialCode(
-      ElectronicDrawingWorkContext context, QuoteBomSupplementVersion version) {
-    String quoteCode = required(context.quoteProductCode(), "报价产品标识");
-    String temporaryCode =
-        QuoteProductIdentityUtils.resolveCostingCode(
-            null, context.productModel(), version.getElectronicDrawingNo());
-    if (!same(quoteCode, temporaryCode)) return quoteCode;
-    var direct =
-        materialMapper.selectByLatestBatchAndCodes(
-            Set.of(quoteCode), null, context.materialOrgCode());
-    if (!direct.isEmpty()) return quoteCode;
-    var candidates =
-        productLookup.options(context).stream()
-            .filter(row -> same(
-                ElectronicDrawingProductLookup.verificationDrawingNo(row.drawingNo()),
-                ElectronicDrawingProductLookup.verificationDrawingNo(version.getElectronicDrawingNo())))
-            .map(ElectronicDrawingProductLookup.Option::materialNo)
-            .filter(Objects::nonNull)
-            .distinct()
-            .toList();
-    if (candidates.size() != 1)
-      throw invalid(MAPPING_INCOMPLETE, "已取得图库，但本产品匹配结果未对应唯一顶层 U9 料品，请财务核实料品档案后重新检查");
-    return candidates.getFirst();
-  }
-
-  private MaterialSnapshot material(MaterialMasterRaw row) {
-    if (row == null) throw invalid(MAPPING_INCOMPLETE, "当前组织料品档案不存在");
-    return new MaterialSnapshot(
-        text(row.getMaterialCode()),
-        text(row.getMaterialName()),
-        text(row.getMaterialSpec()),
-        text(row.getMaterialModel()),
-        text(row.getDrawingNo()),
-        text(row.getShapeAttr()),
-        text(row.getMainCategoryCode()),
-        text(row.getProductionCategory()),
-        text(row.getCostElement()),
-        text(row.getUnit()));
   }
 
   private List<QuoteBomSupplementDetail> toDetails(
@@ -431,10 +357,6 @@ public class ElectronicDrawingHybridBomService {
     String normalized = text(value);
     if (normalized == null) throw invalid(SOURCE_VERSION_INVALID, label + "不能为空");
     return normalized;
-  }
-
-  private static String normalize(String value) {
-    return required(value, "料号").toUpperCase(Locale.ROOT);
   }
 
   private static String text(String value) {

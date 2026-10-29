@@ -110,25 +110,31 @@ class MonthlyPriceSourcesTest {
     assertThat(result.problems().get(request).message()).contains("财务指定");
     verifyNoInteractions(household,linked,originalLinked,range,originalRange,quantities,settlement,ods,supplemental);
   }
-  @Test void defaultOrderThenOrderPriceThenTierThenSupplemental() {
-    var request=request("ods-order");when(ods.orders(any(),anySet())).thenReturn(found(request,"ODS_ORDER"));
-    assertThat(read(Set.of(request)).values()).containsKey(request);
-    var calls=inOrder(fixed,ods);calls.verify(fixed).read(context,Set.of(request));calls.verify(ods).orders(context,Set.of(request));
-    verify(ods,never()).tiers(any(),anySet());verifyNoInteractions(supplemental);
-  }
-  @Test void onlyMissingOrderPriceReachesTierAndTierMissingReachesSupplemental() {
+  @Test void defaultOrderThenTierBeforeOrderAndSupplemental() {
     var request=request("ods-tier");when(ods.tiers(any(),anySet())).thenReturn(found(request,"ODS_TIER"));
     assertThat(read(Set.of(request)).values()).containsKey(request);
-    var calls=inOrder(ods);calls.verify(ods).orders(context,Set.of(request));calls.verify(ods).tiers(context,Set.of(request));
+    var calls=inOrder(linked,settlement,quantities,fixed,ods);
+    calls.verify(linked).read(eq(context),eq(Set.of(request)),any());
+    calls.verify(settlement).read(context,Map.of(request,com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceType.SETTLE_LINKED));
+    calls.verify(quantities).read(context,Set.of(request));
+    calls.verify(settlement).read(context,Map.of(request,com.sanhua.marketingcost.service.pricing.settlement.SettlementPriceType.SETTLE_FIXED));
+    calls.verify(fixed).read(context,Set.of(request));calls.verify(ods).tiers(context,Set.of(request));
+    verify(ods,never()).orders(any(),anySet());verifyNoInteractions(supplemental);
+  }
+  @Test void onlyMissingTierReachesOrderAndOrderMissingReachesSupplemental() {
+    var request=request("ods-order");when(ods.orders(any(),anySet())).thenReturn(found(request,"ODS_ORDER"));
+    assertThat(read(Set.of(request)).values()).containsKey(request);
+    var calls=inOrder(ods);calls.verify(ods).tiers(context,Set.of(request));calls.verify(ods).orders(context,Set.of(request));
     verifyNoInteractions(supplemental);
   }
-  @Test void orderSupplierWaitingDoesNotFallThroughToTierOrSupplemental() {
-    var request=request("order-wait");when(ods.orders(any(),anySet())).thenReturn(new Candidates(Map.of(),Map.of(request,new Problem(Failure.WAITING,"确认选供"))));
+  @Test void tierSupplierWaitingDoesNotFallThroughToOrderOrSupplemental() {
+    var request=request("tier-wait");when(ods.tiers(any(),anySet())).thenReturn(new Candidates(Map.of(),Map.of(request,new Problem(Failure.WAITING,"确认选供"))));
     assertThat(read(Set.of(request)).problems().get(request).reason()).isEqualTo(Failure.WAITING);
-    verify(ods,never()).tiers(any(),anySet());verifyNoInteractions(supplemental);
+    verify(ods,never()).orders(any(),anySet());verifyNoInteractions(supplemental);
   }
   @Test void missingAnnualUsageOnlyBlocksWhenTierSourceReportsItsActualNeed() {
     var request=request("needs-demand");when(ods.tiers(any(),anySet())).thenReturn(new Candidates(Map.of(),Map.of(request,new Problem(Failure.INVALID_INPUT,"阶梯取价缺少年用量"))));
-    assertThat(read(Set.of(request)).problems().get(request).message()).contains("年用量");verifyNoInteractions(supplemental);
+    assertThat(read(Set.of(request)).problems().get(request).message()).contains("年用量");
+    verify(ods,never()).orders(any(),anySet());verifyNoInteractions(supplemental);
   }
 }

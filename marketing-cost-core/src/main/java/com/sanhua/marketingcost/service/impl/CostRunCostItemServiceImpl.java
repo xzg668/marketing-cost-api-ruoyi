@@ -2565,7 +2565,8 @@ public class CostRunCostItemServiceImpl implements CostRunCostItemService {
       log.debug(remark);
       return new ProductCoefficientLookup(BigDecimal.ONE, remark, null);
     }
-    return new ProductCoefficientLookup(property.getCoefficient(), null, null);
+    return new ProductCoefficientLookup(property.getCoefficient(), StringUtils.hasText(property.getProductAttr())
+        ? "产品属性来源=lp_product_property；属性=" + property.getProductAttr() + "；规则年度=" + propertyYear : null, null);
   }
 
   record ProductCoefficientLookup(BigDecimal coefficient, String remark, Long technicalVersionId) {}

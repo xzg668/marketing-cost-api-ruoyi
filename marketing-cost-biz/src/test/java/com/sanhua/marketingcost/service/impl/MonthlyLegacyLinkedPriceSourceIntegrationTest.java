@@ -235,4 +235,10 @@ class MonthlyLegacyLinkedPriceSourceIntegrationTest {
     assertThat(projection.calculate(receipt.plan().selections(),new BigDecimal("100000")).values().iterator().next().customerPrice()).isEqualByComparingTo("1.769912");
   }
 
+  @Test void explicitWithdrawalAppliesBeforeSingleSupplierLegacyFormulaEvaluation() {
+    String code=code(),month="2040-05"; rule(code,month,"210","S1","10",1); var req=request(code,month,"210");
+    assertThat(module.resolveCandidates(context(month,"210"),Set.of(req)).problems()).isEmpty();
+    jdbc.update("INSERT INTO lp_supplier_supply_ratio(business_unit_type,material_code,material_name,spec_model,supplier_name,supplier_code,supply_ratio,is_active,deleted) VALUES('COMMERCIAL',?,'fixture','SPEC','S1','S1',0,1,0)",code);
+    var result=module.resolveCandidates(context(month,"210"),Set.of(req)); assertThat(result.values()).isEmpty(); assertThat(result.problems().get(req).message()).contains("退出供货");
+  }
 }

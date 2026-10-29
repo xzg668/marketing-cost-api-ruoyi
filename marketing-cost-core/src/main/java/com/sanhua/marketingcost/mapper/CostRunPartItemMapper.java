@@ -76,7 +76,7 @@ public interface CostRunPartItemMapper extends BaseMapper<CostRunPartItem> {
           FROM lp_bom_costing_row t1
           LEFT JOIN lp_material_master t2
             ON t1.material_code = t2.material_code
-          WHERE t1.oa_no = #{oaNo}
+          WHERE t1.calculation_scope='' AND t1.oa_no = #{oaNo}
           ORDER BY t1.id
           """)
   @DataScope(alias = "t1")
@@ -103,7 +103,7 @@ public interface CostRunPartItemMapper extends BaseMapper<CostRunPartItem> {
           FROM lp_bom_costing_row t1
           LEFT JOIN lp_material_master t2
             ON t1.material_code = t2.material_code
-          WHERE t1.oa_no = #{oaNo}
+          WHERE t1.calculation_scope='' AND t1.oa_no = #{oaNo}
             AND t1.oa_form_item_id = #{oaFormItemId}
             AND t1.top_product_code = #{productCode}
             AND t1.period_month = #{periodMonth}

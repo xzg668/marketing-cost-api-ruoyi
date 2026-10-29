@@ -15,6 +15,8 @@ public class SupplierSupplyRatioResolveResult {
   private String sourceType;
   private String sourceBatchNo;
   private String traceMessage;
+  /** Captured with the primary choice, so single-supplier shortcuts also see withdrawals. */
+  private java.util.List<com.sanhua.marketingcost.entity.SupplierSupplyRatio> currentRelations = java.util.List.of();
 
   public static SupplierSupplyRatioResolveResult miss(String traceMessage) {
     SupplierSupplyRatioResolveResult result = new SupplierSupplyRatioResolveResult();

@@ -17,6 +17,17 @@ import org.junit.jupiter.params.provider.ValueSource;
 class PackageCalculationEvidenceTest {
   static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules();
 
+  @Test
+  void historicalEvidenceRetainsItsSavedChildDenominator() throws Exception {
+    var legacy = item("FIXED", false);
+    var tree = JSON.readTree(legacy.getInputSnapshotJson());
+    var child = (ObjectNode) tree.path("components").get(0);
+    child.remove("quantityBasis"); child.put("parentBaseQty", 2); child.put("amount", 12);
+    legacy.setInputSnapshotJson(tree.toString());
+    legacy.setUnitPrice(new BigDecimal("6")); legacy.setAmount(new BigDecimal("18"));
+    assertThat(new PackageCalculationEvidence(JSON).validatePair(legacy, legacy, null, null)).isFalse();
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {"LINKED", "RANGE"})
   void validatesStoredChildPricesAndParentBaseQuantityWithoutFormulaCalculation(String type)

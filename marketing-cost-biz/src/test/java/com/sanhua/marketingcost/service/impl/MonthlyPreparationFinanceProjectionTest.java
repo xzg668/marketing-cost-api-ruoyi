@@ -80,14 +80,14 @@ class MonthlyPreparationFinanceProjectionTest {
     assertThat(source.getUnitPrice()).isEqualByComparingTo("46.8");
   }
 
-  @Test void packProjectionUsesBothSavedDenominatorsAndKeepsHouseholdExcluded() throws Exception {
+  @Test void packProjectionUsesPackageBaseOnceAndKeepsHouseholdExcluded() throws Exception {
     var source = pack(); var original = json.readTree(source.getInputSnapshotJson());
     var finance = projection.project(source); var projected = json.readTree(finance.getInputSnapshotJson());
-    assertThat(finance.getUnitPrice()).isEqualByComparingTo("5.6");
-    assertThat(finance.getAmount()).isEqualByComparingTo("14");
+    assertThat(finance.getUnitPrice()).isEqualByComparingTo("16.8");
+    assertThat(finance.getAmount()).isEqualByComparingTo("42");
     var normal = projected.path("components").get(0);
     assertThat(normal.path("unitPrice").decimalValue()).isEqualByComparingTo("7");
-    assertThat(normal.path("amount").decimalValue()).isEqualByComparingTo("28");
+    assertThat(normal.path("amount").decimalValue()).isEqualByComparingTo("84");
     assertThat(normal.path("inputs")).isEqualTo(original.path("components").get(0).path("inputs"));
     assertThat(projected.path("components").get(1)).isEqualTo(original.path("components").get(1));
     assertThat(projected.path("components").get(1).hasNonNull("amount")).isFalse();
@@ -95,7 +95,7 @@ class MonthlyPreparationFinanceProjectionTest {
     assertThat(evidence.read(finance)).isEqualTo(evidence.read(source));
     assertThat(evidence.read(finance).uses()).hasSize(1);
     assertThat(new PackageCalculationEvidence(json).validatePair(source, finance, null, null)).isTrue();
-    assertThat(source.getUnitPrice()).isEqualByComparingTo("6.4");
+    assertThat(source.getUnitPrice()).isEqualByComparingTo("19.2");
   }
 
   @Test void blankMakeWithConfirmedNoScrapRetainsPiecePricingAndDoesNotInventScrapUse() {
@@ -183,19 +183,19 @@ class MonthlyPreparationFinanceProjectionTest {
 
   PricePrepareItem pack() {
     var raw = request("RAW", "210"); var selected = selected(4L, false, "7");
-    var inputs = inputs("P/PACK", Map.of(raw, selected), List.of(new Use("P/PACK/RAW", raw, d("2"))));
+    var inputs = inputs("P/PACK", Map.of(raw, selected), List.of(new Use("P/PACK/RAW", raw, d("6"))));
     var parent = new PackageComponentPrice(); parent.setPackageMaterialCode("PACK"); parent.setBusinessUnitType("COMMERCIAL");
     parent.setPriceOrgCode("210"); parent.setPeriodMonth("2026-10"); parent.setPackageParentBaseQty(d("5"));
     parent.setSourceRawHierarchyId(100L); parent.setSourcePath("/P/PACK/");
     var ordinary = new PackageComponentPriceDetail(); ordinary.setSourceHierarchyId(101L); ordinary.setSourcePath("/P/PACK/RAW/");
     ordinary.setChildMaterialCode("RAW"); ordinary.setPriceSource("MONTHLY_PRICE"); ordinary.setPriceType("NORMAL");
     ordinary.setQtyPerParent(d("12")); ordinary.setChildParentBaseQty(d("3")); ordinary.setChildUnitPrice(d("8"));
-    ordinary.setChildAmount(d("32")); ordinary.setInputSnapshotJson(input(raw, selected, "7", "8"));
+    ordinary.setChildAmount(d("96")); ordinary.setInputSnapshotJson(input(raw, selected, "7", "8"));
     var household = new PackageComponentPriceDetail(); household.setSourceHierarchyId(102L); household.setSourcePath("/P/PACK/HH/");
     household.setChildMaterialCode("HH"); household.setPriceSource(PackageComponentPriceDetail.HOUSEHOLD_EXCLUDED);
     household.setQtyPerParent(d("3")); household.setChildParentBaseQty(d("2"));
     household.setHouseholdUse(new Use("P/PACK/HH", request("HH", "210"), d(".75")));
-    var source = item("PACK", "PACKAGE_PRICE", "2.5", "6.4");
+    var source = item("PACK", "PACKAGE_PRICE", "2.5", "19.2");
     source.setInputSnapshotJson(new PackageCalculationEvidence(json).capture(parent, List.of(ordinary, household)));
     source.setInputSnapshotJson(evidence.attach(source, inputs)); return source;
   }

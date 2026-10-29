@@ -8,6 +8,9 @@ import lombok.Setter;
 public class SupplierSupplyRatioImportResponse {
   private int totalRows;
   private int insertedRows;
+  private int newRelations;
+  private int changedRelations;
+  private int unchangedRows;
   private int deactivatedRows;
   private int duplicateRows;
   private int unfilledRatioRows;

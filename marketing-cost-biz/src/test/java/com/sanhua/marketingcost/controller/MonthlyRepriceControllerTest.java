@@ -7,7 +7,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.sanhua.marketingcost.service.MonthlyRepriceStartService;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -22,9 +21,7 @@ class MonthlyRepriceControllerTest {
       "/batches/EXISTING/prepare-linked-price", "/batches/EXISTING/confirm",
       "/batches/EXISTING/cancel", "/batches/EXISTING/retry-failed"})
   void retiredWriteRoutesDoNotInvokeOldWorkflowEvenWithOldSwitchEnabled(String path) {
-    var service = mock(MonthlyRepriceStartService.class);
     new ApplicationContextRunner().withPropertyValues("monthly.reprice.enabled=true")
-        .withBean(MonthlyRepriceStartService.class, () -> service)
         .withBean(MonthlyRepriceController.class)
         .run(context -> {
           var controller = context.getBean(MonthlyRepriceController.class);
@@ -34,7 +31,6 @@ class MonthlyRepriceControllerTest {
               .andExpect(status().isOk())
               .andExpect(jsonPath("$.code").value(400))
               .andExpect(jsonPath("$.msg").value("旧月度调价操作已停用，历史结果仍可查询"));
-          verifyNoInteractions(service);
           for (var method : MonthlyRepriceController.class.getDeclaredMethods()) {
             if (method.getAnnotation(org.springframework.web.bind.annotation.PostMapping.class) != null)
               assertThat(method.getAnnotation(PreAuthorize.class).value())

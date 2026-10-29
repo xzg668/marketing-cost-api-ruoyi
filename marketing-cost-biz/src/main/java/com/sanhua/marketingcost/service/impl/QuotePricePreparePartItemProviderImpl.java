@@ -47,7 +47,8 @@ public class QuotePricePreparePartItemProviderImpl implements CostRunPreparedPar
   @Override
   public boolean supports(CostRunContext context) {
     return context != null
-        && CostRunContext.SCENE_QUOTE.equals(context.getScene())
+        && (CostRunContext.SCENE_QUOTE.equals(context.getScene())
+            || CostRunContext.SCENE_MONTHLY_REPRICE.equals(context.getScene()))
         && StringUtils.hasText(context.getPricePrepareNo());
   }
 

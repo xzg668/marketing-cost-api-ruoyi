@@ -191,7 +191,16 @@ class QuotePriceTypeRecognitionServiceImplTest {
         .thenReturn(List.of(ok, missing));
     when(itemClassifier.classify(any())).thenReturn(List.of(normalPlan(ok), normalPlan(missing)));
     priceKinds.put("MAT-OK", "PURCHASE_FIXED");
-
+    var drawingMaster = new com.sanhua.marketingcost.entity.MaterialMasterRaw();
+    drawingMaster.setMaterialCode("MAT-OK");
+    drawingMaster.setMaterialSpec("YCQB02-031003,退火");
+    drawingMaster.setDrawingNo("YCQB02-031013");
+    var noDrawingMaster = new com.sanhua.marketingcost.entity.MaterialMasterRaw();
+    noDrawingMaster.setMaterialCode("MAT-MISS");
+    noDrawingMaster.setMaterialSpec("贺利氏金丝HD2-30×500m");
+    noDrawingMaster.setMaterialModel("不是图号的型号");
+    org.mockito.Mockito.doReturn(List.of(drawingMaster, noDrawingMaster)).when(rawMaterials)
+        .selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL"));
 
     QuotePriceTypeRecognitionResponse response =
         service.getRecognition("OA-001", 10L, null);
@@ -200,6 +209,8 @@ class QuotePriceTypeRecognitionServiceImplTest {
     assertThat(response.getRows()).extracting("materialCode").containsExactly("MAT-OK", "MAT-MISS");
     assertThat(response.getRows()).extracting("typeStatus")
         .containsExactly("RECOGNIZED", "NO_SOURCE");
+    assertThat(response.getRows()).extracting("drawingNo")
+        .containsExactly("YCQB02-031013", null);
     assertThat(response.getSummary().getCandidateSourceCount()).isEqualTo(1);
     assertThat(response.getSummary().getMissingSourceCount()).isEqualTo(1);
   }
@@ -253,6 +264,18 @@ class QuotePriceTypeRecognitionServiceImplTest {
         .thenReturn(List.of(makeCalcRow()));
 
     priceKinds.put("SCRAP-1", "LINKED");
+    org.mockito.Mockito.doAnswer(call ->
+        ((java.util.Collection<String>) call.getArgument(0)).stream().map(code -> {
+          var master = new com.sanhua.marketingcost.entity.MaterialMasterRaw();
+          master.setMaterialCode(code);
+          master.setUnit("件");
+          master.setDrawingNo(switch (code) {
+            case "MAKE-1" -> "PARENT-DRAWING";
+            case "RAW-1" -> "RAW-DRAWING";
+            default -> "/";
+          });
+          return master;
+        }).toList()).when(rawMaterials).selectByLatestBatchAndCodes(any(), any(), eq("COMMERCIAL"));
 
     QuotePriceTypeRecognitionResponse response =
         service.getRecognition("OA-001", 10L, null);
@@ -261,6 +284,9 @@ class QuotePriceTypeRecognitionServiceImplTest {
     assertThat(response.getRows().get(0).getTypeStatus()).isEqualTo("CHILD_GAP");
     assertThat(response.getRows().get(0).getChildren()).extracting("objectType")
         .containsExactly("MAKE_RAW", "MAKE_SCRAP");
+    assertThat(response.getRows().get(0).getDrawingNo()).isEqualTo("PARENT-DRAWING");
+    assertThat(response.getRows().get(0).getChildren()).extracting("drawingNo")
+        .containsExactly("RAW-DRAWING", null);
     verify(makePartPriceGenerationService)
         .previewStructureByOa("OA-001", "COMMERCIAL", "2026-06");
     assertThat(response.getSummary().getMakePartCount()).isEqualTo(1);

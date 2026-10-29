@@ -1,8 +1,10 @@
 package com.sanhua.marketingcost.config;
 
-import com.sanhua.marketingcost.enums.MonthlyRepriceExecutionBackend;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
+import java.time.YearMonth;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -10,7 +12,7 @@ import org.springframework.util.StringUtils;
 /**
  * 月度调价灰度发布开关。
  *
- * <p>{@code enabled=false} 时禁止新建月度调价批次，但查询、取消等回滚动作仍可用，避免
+ * <p>{@code enabled=false} 时禁止新建月度调价批次，但历史查询仍可用，避免
  * 灰度期间把未确认批次卡死。
  */
 @Component
@@ -18,8 +20,26 @@ import org.springframework.util.StringUtils;
 public class MonthlyRepriceProperties {
 
   private boolean enabled = true;
-  private String executionBackend = "LOCAL_WORKER";
   private List<String> allowedBusinessUnits = new ArrayList<>();
+  // No inferred/default launch date: deployment must supply the verified month per business unit.
+  private Map<String, String> goLiveMonths = new HashMap<>();
+
+  public Map<String, String> getGoLiveMonths() { return goLiveMonths; }
+
+  public void setGoLiveMonths(Map<String, String> values) {
+    goLiveMonths = values == null ? new HashMap<>() : new HashMap<>(values);
+  }
+
+  public YearMonth requireGoLiveMonth(String unit) {
+    com.sanhua.marketingcost.service.reprice.MonthlyRepriceContract.unit(unit);
+    String value = goLiveMonths.get(unit);
+    if (value == null || !value.matches("[0-9]{4}-[0-9]{2}"))
+      throw new IllegalStateException("请配置已核实的实际上线月份：monthly.reprice.go-live-months." + unit);
+    try { return YearMonth.parse(value); }
+    catch (java.time.DateTimeException invalid) {
+      throw new IllegalStateException("实际上线月份无效：" + unit, invalid);
+    }
+  }
 
   public boolean isEnabled() {
     return enabled;
@@ -27,21 +47,6 @@ public class MonthlyRepriceProperties {
 
   public void setEnabled(boolean enabled) {
     this.enabled = enabled;
-  }
-
-  public String getExecutionBackend() {
-    String normalized = normalize(executionBackend);
-    return StringUtils.hasText(normalized)
-        ? normalized
-        : MonthlyRepriceExecutionBackend.LOCAL_WORKER.getCode();
-  }
-
-  public MonthlyRepriceExecutionBackend getExecutionBackendType() {
-    return MonthlyRepriceExecutionBackend.fromCode(getExecutionBackend());
-  }
-
-  public void setExecutionBackend(String executionBackend) {
-    this.executionBackend = executionBackend;
   }
 
   public List<String> getAllowedBusinessUnits() {

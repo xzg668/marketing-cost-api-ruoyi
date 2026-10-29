@@ -55,13 +55,11 @@ public final class MonthlyOdsPriceSource {
         var raw=tier?rows.tiers(company,batch):rows.orders(company,batch);
         var byCode=new HashMap<String,List<OdsMaterialPriceRow>>();
         raw.forEach(row->byCode.computeIfAbsent(row.getMaterialCode(),ignored->new ArrayList<>()).add(row));
-        var multiple=new TreeSet<String>();byCode.forEach((code,items)->{
-          if(items.stream().map(OdsMaterialPriceRow::getSupplierCode).distinct().count()>1)multiple.add(code);
-        });
+        var relationCodes=new TreeSet<>(byCode.keySet());
         var ratios=new HashMap<String,List<SupplierSupplyRatio>>();
-        if(!multiple.isEmpty())supplierInputs.ratios(context.businessUnitType(),context.priceAsOfTime().toLocalDate(),multiple)
+        if(!relationCodes.isEmpty())supplierInputs.ratios(context.businessUnitType(),context.priceAsOfTime().toLocalDate(),relationCodes)
             .forEach(row->ratios.computeIfAbsent(row.getRequestedMaterialCode(),ignored->new ArrayList<>()).add(row));
-        var keys=multiple.stream().map(code->SupplierPriceSelectionService.scopeKey(scope(context,group.getKey(),code,tier))).toList();
+        var keys=relationCodes.stream().filter(code->byCode.get(code).size()>1).map(code->SupplierPriceSelectionService.scopeKey(scope(context,group.getKey(),code,tier))).toList();
         var decisions=new HashMap<String,SupplierPriceDecision>();
         if(!keys.isEmpty())supplierInputs.decisions(keys).forEach(row->decisions.put(row.getScopeKey(),row));
         for(String code:batch)for(var request:group.getValue().get(code))try {
@@ -94,12 +92,15 @@ public final class MonthlyOdsPriceSource {
 
   private Candidate order(Context context,MonthlyPriceRequest request,List<OdsMaterialPriceRow> raw,
       List<SupplierSupplyRatio> ratios,SupplierPriceDecision decision,Map<MonthlyPriceRequest,Problem> problems) {
+    raw=SupplyPriceDatePolicy.preferCurrent(raw,context.priceAsOfTime().toLocalDate(),
+        row->date(row.getEffDate()),row->date(row.getExpDate()));
     var versions=OdsOrderPriceVersions.latestPerSupplier(raw.stream().map(row->
-        new OdsOrderPriceVersions.Price(row.getSupplierCode(),date(row.getEffDate()),row.getPrice())).toList());
+        new OdsOrderPriceVersions.Price(row.getSupplierCode(),date(row.getEffDate()),date(row.getExpDate()),row.getPrice())).toList());
     var active=new TreeMap<String,OdsMaterialPriceRow>();
     for(var row:raw) {
       var winner=versions.get(row.getSupplierCode().strip());
-      if(Objects.equals(winner.effectiveDate(),date(row.getEffDate())) && winner.price().compareTo(row.getPrice())==0)
+      if(Objects.equals(winner.effectiveDate(),date(row.getEffDate()))
+          && Objects.equals(winner.expiryDate(),date(row.getExpDate())) && winner.price().compareTo(row.getPrice())==0)
         active.putIfAbsent(winner.supplierCode(),row);
     }
     var chosen=choose(context,request,active,ratios,decision,false);
@@ -113,7 +114,7 @@ public final class MonthlyOdsPriceSource {
   private Candidate tier(Context context,MonthlyPriceRequest request,List<OdsMaterialPriceRow> raw,
       List<SupplierSupplyRatio> ratios,SupplierPriceDecision approval,Map<MonthlyPriceRequest,Problem> problems) {
     var versions=OdsTierPriceVersions.latestPerSupplier(raw,context.priceAsOfTime().toLocalDate());
-    if(versions.isEmpty())return null; // No current tier: missing annual usage cannot block a later source.
+    if(versions.isEmpty())return null; // No applicable tier rows: annual usage cannot block a later source.
     var usage=context.annualUsage();
     var demand=OdsTierAnnualUsage.require(usage==null?null:usage.value(),usage==null?null:usage.unit());
     if(request.annualUsagePieces()==null || demand.annualPieces().compareTo(request.annualUsagePieces())!=0)
@@ -133,7 +134,7 @@ public final class MonthlyOdsPriceSource {
       for(var row:latest)if(intervals.get(row).contains(cell.probe())) {
         var previous=active.putIfAbsent(row.getSupplierCode().strip(),row);
         if(previous!=null && previous.getPrice().compareTo(row.getPrice())!=0)
-          problem=new Problem(Failure.INVALID_INPUT,"同供应商最新有效阶梯存在重叠的不同价格");
+          problem=new Problem(Failure.INVALID_INPUT,"同供应商最新一套阶梯存在重叠的不同价格");
       }
       if(problem!=null){decisions.add(new Decision(cell,null,null,problem));continue;}
       if(active.isEmpty()){decisions.add(new Decision(cell,null,null,new Problem(Failure.MISSING,"数量未命中阶梯")));continue;}

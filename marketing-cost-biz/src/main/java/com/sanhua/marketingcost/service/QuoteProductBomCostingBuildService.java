@@ -13,6 +13,12 @@ public interface QuoteProductBomCostingBuildService {
     }
   }
 
+  Preview previewForReprice(com.sanhua.marketingcost.service.reprice.MonthlyRepriceCalculation input,
+      String effectiveBuildBatchId);
+
+  void buildForReprice(com.sanhua.marketingcost.service.reprice.MonthlyRepriceCalculation input,
+      String effectiveBuildBatchId);
+
   /** 从同一不可变有效树只读规划当前计价行；不更新结算行、准备记录或月价。 */
   Preview previewFromEffectiveBom(
       Long oaFormItemId, String effectiveBuildBatchId);

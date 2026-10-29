@@ -48,6 +48,7 @@ final class SupplierRatioShapeTestSupport {
             : "采购件");
     row.setSupplyRatio(ratio == null ? null : new BigDecimal(ratio));
     row.setDeleted(0);
+    row.setIsActive(1);
     return row;
   }
 

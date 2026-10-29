@@ -3,14 +3,13 @@ package com.sanhua.marketingcost.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioPageResponse;
-import com.sanhua.marketingcost.dto.SupplierSupplyRatioUpdateRequest;
+import com.sanhua.marketingcost.dto.SupplierSupplyRatioChangePage;
+import com.sanhua.marketingcost.mapper.SupplierSupplyRatioHistoryMapper;
+import com.sanhua.marketingcost.service.supplier.SupplierSupplyRatioScope;
 import com.sanhua.marketingcost.entity.SupplierSupplyRatio;
 import com.sanhua.marketingcost.mapper.SupplierSupplyRatioMapper;
 import com.sanhua.marketingcost.service.SupplierSupplyRatioService;
-import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 @Service
@@ -22,8 +21,11 @@ public class SupplierSupplyRatioServiceImpl implements SupplierSupplyRatioServic
 
   private final SupplierSupplyRatioMapper mapper;
 
-  public SupplierSupplyRatioServiceImpl(SupplierSupplyRatioMapper mapper) {
+  private final SupplierSupplyRatioHistoryMapper history;
+
+  public SupplierSupplyRatioServiceImpl(SupplierSupplyRatioMapper mapper, SupplierSupplyRatioHistoryMapper history) {
     this.mapper = mapper;
+    this.history = history;
   }
 
   @Override
@@ -32,6 +34,8 @@ public class SupplierSupplyRatioServiceImpl implements SupplierSupplyRatioServic
       String materialName,
       String specModel,
       String supplierName,
+      String supplierCode,
+      String sourceBatchNo,
       String sourceType,
       Integer isActive,
       int page,
@@ -46,6 +50,8 @@ public class SupplierSupplyRatioServiceImpl implements SupplierSupplyRatioServic
         .like(StringUtils.hasText(materialName), "material_name", trim(materialName))
         .like(StringUtils.hasText(specModel), "spec_model", trim(specModel))
         .like(StringUtils.hasText(supplierName), "supplier_name", trim(supplierName))
+        .like(StringUtils.hasText(supplierCode), "supplier_code", trim(supplierCode))
+        .eq(StringUtils.hasText(sourceBatchNo), "source_batch_no", trim(sourceBatchNo))
         .eq(StringUtils.hasText(sourceType), "source_type", trim(sourceType))
         .orderByAsc("material_code")
         .orderByAsc("material_name")
@@ -59,63 +65,18 @@ public class SupplierSupplyRatioServiceImpl implements SupplierSupplyRatioServic
   }
 
   @Override
-  @Transactional(rollbackFor = Exception.class)
-  public SupplierSupplyRatio update(
-      Long id, SupplierSupplyRatioUpdateRequest request, String operator) {
-    if (id == null) {
-      throw new IllegalArgumentException("供货比例 id 不能为空");
-    }
-    if (request == null) {
-      throw new IllegalArgumentException("更新内容不能为空");
-    }
-    if (request.getSupplyRatio() != null && request.getSupplyRatio().compareTo(BigDecimal.ZERO) < 0) {
-      throw new IllegalArgumentException("供货比例不能小于 0");
-    }
-    if (request.getSupplyRatio() != null && request.getSupplyRatio().compareTo(BigDecimal.ONE) > 0) {
-      throw new IllegalArgumentException("供货比例不能大于 100%");
-    }
-    SupplierSupplyRatio existing = requireActive(id);
-
-    // 普通维护保留原物料、供应商名称及导入批次。
-    existing.setUnit(trimToNull(request.getUnit()));
-    existing.setMaterialShape(trimToNull(request.getMaterialShape()));
-    existing.setSupplierCode(trimToNull(request.getSupplierCode()));
-    existing.setSupplyRatio(request.getSupplyRatio());
-    existing.setEffectiveFrom(request.getEffectiveFrom());
-    existing.setEffectiveTo(request.getEffectiveTo());
-    existing.setUpdatedBy(currentOperator(operator));
-    existing.setUpdatedAt(LocalDateTime.now());
-    mapper.updateById(existing);
-    return existing;
-  }
-
-  @Override
-  @Transactional(rollbackFor = Exception.class)
-  public void delete(Long id, String operator) {
-    SupplierSupplyRatio existing = requireActive(id);
-    existing.setIsActive(0);
-    existing.setUpdatedBy(currentOperator(operator));
-    existing.setUpdatedAt(LocalDateTime.now());
-    mapper.updateById(existing);
-  }
-
-  private SupplierSupplyRatio requireActive(Long id) {
-    if (id == null) {
-      throw new IllegalArgumentException("供货比例 id 不能为空");
-    }
-    SupplierSupplyRatio existing = mapper.selectOne(
-        new QueryWrapper<SupplierSupplyRatio>().eq("id", id).eq("deleted", 0)
-            .eq("is_active", 1).last("FOR UPDATE"));
-    if (existing == null) {
-      throw new IllegalArgumentException("供货比例不存在或已失效：id=" + id);
-    }
-    return existing;
+  public SupplierSupplyRatioChangePage changes(String materialCode,String supplierCode,String batchNo,
+      int page,int pageSize,String businessUnitType) {
+    String unit=SupplierSupplyRatioScope.require(businessUnitType);
+    int size=pageSize(pageSize);
+    return new SupplierSupplyRatioChangePage(history.count(unit,trim(materialCode),trim(supplierCode),trim(batchNo)),
+        history.list(unit,trim(materialCode),trim(supplierCode),trim(batchNo),size,((long)pageNo(page)-1)*size));
   }
 
   private QueryWrapper<SupplierSupplyRatio> activeQuery(String businessUnitType) {
     return new QueryWrapper<SupplierSupplyRatio>()
         .eq("deleted", 0)
-        .eq(StringUtils.hasText(businessUnitType), "business_unit_type", trim(businessUnitType));
+        .eq("business_unit_type", SupplierSupplyRatioScope.require(businessUnitType));
   }
 
   private int pageNo(int page) {
@@ -129,16 +90,8 @@ public class SupplierSupplyRatioServiceImpl implements SupplierSupplyRatioServic
     return Math.min(pageSize, MAX_SIZE);
   }
 
-  private String currentOperator(String operator) {
-    return StringUtils.hasText(operator) ? operator.trim() : "system";
-  }
-
   private String trim(String value) {
     return value == null ? null : value.trim();
   }
 
-  private String trimToNull(String value) {
-    String trimmed = trim(value);
-    return StringUtils.hasText(trimmed) ? trimmed : null;
-  }
 }

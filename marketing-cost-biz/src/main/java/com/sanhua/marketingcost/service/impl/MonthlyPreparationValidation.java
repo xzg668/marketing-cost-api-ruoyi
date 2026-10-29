@@ -51,12 +51,8 @@ public final class MonthlyPreparationValidation {
       var snapshot = packageEvidence.trace(row);
       if (snapshot == null) throw new IllegalArgumentException("包装准备缺少保存的计算行");
       for (var component : snapshot.path("components")) {
-        BigDecimal quantity = number(component, "quantity");
-        if (component.hasNonNull("parentBaseQty"))
-          quantity = quantity.divide(number(component, "parentBaseQty"), 8, RoundingMode.HALF_UP);
-        if (snapshot.hasNonNull("parentBaseQty") && number(snapshot, "parentBaseQty").signum() != 0)
-          quantity = quantity.divide(number(snapshot, "parentBaseQty"), 8, RoundingMode.HALF_UP);
-        quantity = quantity.multiply(row.getQuantity());
+        BigDecimal quantity = packageEvidence.parentPrice(packageEvidence.componentQuantity(component), snapshot)
+            .multiply(row.getQuantity());
         var excluded = packageEvidence.household(component);
         if (excluded != null) {
           var selected = plan.selections().get(excluded.request());

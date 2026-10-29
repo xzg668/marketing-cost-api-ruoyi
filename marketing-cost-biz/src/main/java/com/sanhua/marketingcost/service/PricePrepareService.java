@@ -10,4 +10,8 @@ public interface PricePrepareService {
   PricePrepareCalculationResult calculate(PricePrepareGenerateRequest request);
 
   PricePrepareGenerateResult generate(PricePrepareGenerateRequest request);
+
+  PricePrepareGenerateResult generateForReprice(PricePrepareGenerateRequest request,
+      com.sanhua.marketingcost.service.reprice.MonthlyRepriceCalculation input, String effectiveBuild);
+
 }

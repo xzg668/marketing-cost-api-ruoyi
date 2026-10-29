@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 
 class OdsOrderPriceVersionsTest {
   private static OdsOrderPriceVersions.Price row(String supplier, String date, String price) {
-    return new OdsOrderPriceVersions.Price(supplier, LocalDate.parse(date), new BigDecimal(price));
+    return new OdsOrderPriceVersions.Price(supplier, LocalDate.parse(date), null, new BigDecimal(price));
   }
 
   @Test void actualMisumiRowsChoose232921RegardlessOfTheirInputOrder() {
@@ -45,6 +45,13 @@ class OdsOrderPriceVersionsTest {
     assertThat(selected.get("S1").price()).isEqualByComparingTo("12");
   }
 
+  @Test void latestExpiryWinsBeforeComparingPricesOnTheSameEffectiveDate() {
+    var older=new OdsOrderPriceVersions.Price("S1",LocalDate.of(2025,1,1),LocalDate.of(2025,6,30),new BigDecimal("999"));
+    var latest=new OdsOrderPriceVersions.Price("S1",LocalDate.of(2025,1,1),LocalDate.of(2025,12,31),new BigDecimal("10"));
+    for(var rows:List.of(List.of(older,latest),List.of(latest,older)))
+      assertThat(OdsOrderPriceVersions.latestPerSupplier(rows).get("S1")).isEqualTo(latest);
+  }
+
   @Test void keepsOtherSuppliersForTheExistingSupplyRatioSelection() {
     var selected = OdsOrderPriceVersions.latestPerSupplier(List.of(
         row("S002293", "2026-09-24", "1194.6903"),
@@ -64,31 +71,31 @@ class OdsOrderPriceVersionsTest {
 
   @Test void requiresASupplierAndValidPriceWithoutInventingADate() {
     assertThatThrownBy(() -> row(" ", "2026-10-24", "12")).isInstanceOf(IllegalArgumentException.class);
-    assertThat(new OdsOrderPriceVersions.Price("S1", null, BigDecimal.ONE).effectiveDate()).isNull();
+    assertThat(new OdsOrderPriceVersions.Price("S1", null, null, BigDecimal.ONE).effectiveDate()).isNull();
     assertThatThrownBy(() -> row("S1", "2026-10-24", "-1")).isInstanceOf(IllegalArgumentException.class);
   }
   @Test void undatedSupplierStillHasAnOrderPriceCandidate() {
-    var candidate = new OdsOrderPriceVersions.Price("S001044", null, new BigDecimal("30.05000000"));
+    var candidate = new OdsOrderPriceVersions.Price("S001044", null, null, new BigDecimal("30.05000000"));
     var selected = OdsOrderPriceVersions.latestPerSupplier(List.of(candidate)).get("S001044");
     assertThat(selected.effectiveDate()).isNull();
     assertThat(selected.price()).isEqualByComparingTo("30.05");
   }
 
   @Test void datedRowsWinWhenTheSameSupplierAlsoHasUndatedRows() {
-    var undated = new OdsOrderPriceVersions.Price("S002309", null, new BigDecimal("318.4690"));
+    var undated = new OdsOrderPriceVersions.Price("S002309", null, null, new BigDecimal("318.4690"));
     var dated = row("S002309", "2026-10-12", "636.9381");
     var selected = OdsOrderPriceVersions.latestPerSupplier(List.of(undated, dated)).get("S002309");
     assertThat(selected).isEqualTo(dated);
   }
 
   @Test void equalNullDatesKeepTheHighestPriceWithoutLosingTheSupplier() {
-    var a = new OdsOrderPriceVersions.Price("S1", null, new BigDecimal("10"));
-    var b = new OdsOrderPriceVersions.Price("S1", null, new BigDecimal("12"));
+    var a = new OdsOrderPriceVersions.Price("S1", null, null, new BigDecimal("10"));
+    var b = new OdsOrderPriceVersions.Price("S1", null, null, new BigDecimal("12"));
     var selected = OdsOrderPriceVersions.latestPerSupplier(List.of(a, b, a)).get("S1");
     assertThat(selected.price()).isEqualByComparingTo("12");
   }
   @Test void evenAHigherUndatedPriceDoesNotOverrideTheLatestDatedPrice() {
-    var undated = new OdsOrderPriceVersions.Price("S1", null, new BigDecimal("999"));
+    var undated = new OdsOrderPriceVersions.Price("S1", null, null, new BigDecimal("999"));
     var dated = row("S1", "2026-10-12", "10");
     for (var input : List.of(List.of(undated, dated), List.of(dated, undated)))
       assertThat(OdsOrderPriceVersions.latestPerSupplier(input).get("S1")).isEqualTo(dated);

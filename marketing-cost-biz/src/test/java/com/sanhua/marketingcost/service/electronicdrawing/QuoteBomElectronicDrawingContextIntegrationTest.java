@@ -47,7 +47,7 @@ class QuoteBomElectronicDrawingContextIntegrationTest extends BomMapperTestBase 
                 codec.parse(
                     DrawingVerificationFixtures.drawing(
                             "context-" + UUID.randomUUID(),
-                            "ED-DRAW",
+                            call.<DrawingVerificationClient.Query>getArgument(0).drawingNo(),
                             List.of(
                                 List.of("001", "ED-CHILD", "接管", "2", "铜", "B", "B", "12", "自制")))
                         .toString()));

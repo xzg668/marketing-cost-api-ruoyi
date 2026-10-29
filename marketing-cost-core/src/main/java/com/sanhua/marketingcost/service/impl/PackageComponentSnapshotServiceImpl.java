@@ -1,12 +1,10 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.sanhua.marketingcost.bom.U9BomLineKey;
 import com.sanhua.marketingcost.dto.PackageSnapshotDetailResult;
 import com.sanhua.marketingcost.dto.PackageSnapshotRequest;
 import com.sanhua.marketingcost.dto.PackageSnapshotResult;
 import com.sanhua.marketingcost.entity.BomRawHierarchy;
-import com.sanhua.marketingcost.entity.BomU9Source;
 import com.sanhua.marketingcost.entity.PackageComponentGapItem;
 import com.sanhua.marketingcost.entity.PackageComponentSnapshot;
 import com.sanhua.marketingcost.entity.PackageComponentSnapshotDetail;
@@ -395,31 +393,7 @@ public class PackageComponentSnapshotServiceImpl implements PackageComponentSnap
   }
 
   private BigDecimal resolveParentBaseQty(BomRawHierarchy row) {
-    if (row == null
-        || !"U9".equals(row.getSourceType())
-        || !StringUtils.hasText(row.getSourceImportBatchId())) {
-      return null;
-    }
-    U9BomLineKey key = U9BomLineKey.from(row);
-    List<BomU9Source> rows =
-        bomU9SourceMapper.selectList(
-            Wrappers.<BomU9Source>lambdaQuery()
-                .eq(BomU9Source::getImportBatchId, row.getSourceImportBatchId())
-                .eq(BomU9Source::getPriceOrgCode, key.priceOrgCode())
-                .eq(BomU9Source::getParentMaterialNo, key.parentMaterialNo())
-                .eq(BomU9Source::getChildMaterialNo, key.childMaterialNo())
-                .eq(BomU9Source::getBomPurpose, key.bomPurpose())
-                .eq(BomU9Source::getChildSeq, key.childSeq())
-                .eq(BomU9Source::getBomVersion, key.bomVersion())
-                .eq(BomU9Source::getEffectiveFrom, key.effectiveFrom())
-                .eq(BomU9Source::getEffectiveTo, key.effectiveTo()));
-    if (rows == null || rows.isEmpty()) {
-      return null;
-    }
-    if (rows.size() != 1) {
-      throw new IllegalStateException("U9 单层 BOM 业务行不唯一：" + key);
-    }
-    return rows.get(0).getParentBaseQty();
+    return com.sanhua.marketingcost.bom.U9BomBaseQuantity.read(bomU9SourceMapper, row);
   }
 
   private PackageComponentSnapshot selectByPackagePeriodAndTop(

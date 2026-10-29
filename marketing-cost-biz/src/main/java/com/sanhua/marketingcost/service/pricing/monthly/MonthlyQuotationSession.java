@@ -50,8 +50,8 @@ public final class MonthlyQuotationSession implements QuotationPriceSession {
     MonthlyBomPricingScope.validate(scope.original());
     if (bomScope != null && !bomScope.equals(scope)) throw changed();
     if (!uses.isEmpty()) throw new IllegalStateException("必须先确定 BOM 计价范围，再记录实际用价");
-    for (var node : scope.original()) if (!context.businessUnitType().equals(node.request().family().businessUnitType())
-        || !context.month().equals(node.request().family().month()))
+    for (var node : scope.original()) if (node.request() != null && (!context.businessUnitType().equals(node.request().family().businessUnitType())
+        || !context.month().equals(node.request().family().month())))
       throw new IllegalArgumentException("BOM 计价范围与当前报价月份或业务单元不一致");
     bomScope = scope;
   }
@@ -176,7 +176,7 @@ public final class MonthlyQuotationSession implements QuotationPriceSession {
       pending.addAll(selected.fact().dependencies());
     }
     var observations = new LinkedHashSet<MonthlyPriceRequest>();
-    if (bomScope != null) bomScope.ordinary().forEach(node -> observations.add(node.request()));
+    if (bomScope != null) bomScope.ordinary().stream().map(MonthlyBomPricingScope.Node::request).filter(Objects::nonNull).forEach(observations::add);
     return new MonthlyAdoptionPlan(consumed, List.copyOf(uses.values()),
         bomScope == null ? Set.of() : bomScope.suppressedPaths(), observations);
   }

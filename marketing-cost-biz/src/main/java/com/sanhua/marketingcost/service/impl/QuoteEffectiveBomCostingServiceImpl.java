@@ -62,6 +62,7 @@ public class QuoteEffectiveBomCostingServiceImpl implements QuoteEffectiveBomCos
 
   @Override
   @Transactional(propagation = Propagation.REQUIRED, rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=true)
   public QuoteBomCostingBuildResponse prepareCurrent(String oaNo, Long oaFormItemId) {
     OaFormItem item = requireItem(oaFormItemId);
     QuoteEffectiveBomCostingCandidate candidate =

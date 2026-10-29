@@ -212,7 +212,7 @@ public class RangePriceResolver implements PriceResolver {
           effectiveError = failure.getMessage();
         }
       }
-      var multipleCodes =
+      var nativeRelationCodes =
           ruleMap.entrySet().stream()
               .filter(
                   e ->
@@ -223,14 +223,14 @@ public class RangePriceResolver implements PriceResolver {
                               .map(PriceRangeFactorRule::getSupplierCode)
                               .distinct()
                               .count()
-                          > 1)
+                          > 0)
               .map(java.util.Map.Entry::getKey)
               .collect(java.util.stream.Collectors.toSet());
       var ratios =
-          monthlyReprice || multipleCodes.isEmpty()
+          monthlyReprice || nativeRelationCodes.isEmpty()
               ? java.util.Map.<String, List<SupplierSupplyRatio>>of()
               : supplierPrices.prepareRatios(
-                  group.getKey().businessUnit(), multipleCodes, group.getKey().date());
+                  group.getKey().businessUnit(), nativeRelationCodes, group.getKey().date());
       var batch =
           new BatchInputs(
               ruleMap,

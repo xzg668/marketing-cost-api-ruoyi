@@ -133,6 +133,15 @@ public class MonthlyPriceStorage {
     }
   }
 
+  public void attachRepricePreparation(String unit,String no,long id,long priceId,PricingType type) {
+    requireWriteTransaction(); requireBusinessUnit(unit); Objects.requireNonNull(type);
+    var current=links.preparation(unit,id);
+    if (sameLink(current,priceId,type)) return;
+    if (current==null || current.monthlyPriceId()!=null
+        || links.attachRepricePreparation(unit,no,id,priceId,type.name())!=1)
+      throw new IllegalStateException("Reprice preparation monthly price link conflict");
+  }
+
   public void attachCostPart(String unit,long id,long priceId,PricingType type) {
     requireWriteTransaction(); requireBusinessUnit(unit); Objects.requireNonNull(type);
     var current=links.costPart(unit,id);

@@ -79,8 +79,13 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
           + "</script>")
   int batchUpsert(@Param("rows") List<BomCostingRow> rows);
 
+  @Select("SELECT * FROM lp_bom_costing_row WHERE oa_no=#{oaNo} AND oa_form_item_id=#{item} "
+      + "AND top_product_code=#{product} AND period_month=#{month} AND calculation_scope=#{scope} ORDER BY path,id")
+  List<BomCostingRow> selectCalculationRows(@Param("oaNo") String oaNo, @Param("item") Long item,
+      @Param("product") String product, @Param("month") String month, @Param("scope") String scope);
+
   /** T15：拿 OA 涉及的去重料号清单（主档同步入口用），不限 asOfDate / version。 */
-  @Select("SELECT DISTINCT material_code FROM lp_bom_costing_row WHERE oa_no=#{oaNo}")
+  @Select("SELECT DISTINCT material_code FROM lp_bom_costing_row WHERE calculation_scope='' AND oa_no=#{oaNo}")
   List<String> selectDistinctMaterialCodesByOaNo(@Param("oaNo") String oaNo);
 
   /** T5：主档同步必须按 BOM 成本行已经落表的组织分组，不能再按 OA 推断组织。 */
@@ -94,7 +99,7 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
   @Select(
       "SELECT DISTINCT material_code, material_organization_code "
           + "FROM lp_bom_costing_row "
-          + "WHERE oa_no=#{oaNo} "
+          + "WHERE calculation_scope='' AND oa_no=#{oaNo} "
           + "AND period_month=#{periodMonth}")
   List<BomCostingRow> selectDistinctMaterialCodesWithOrgByOaNoAndPeriod(
       @Param("oaNo") String oaNo,
@@ -108,7 +113,7 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
       "SELECT bom_purpose, bom_version, effective_from, effective_to, "
           + "build_batch_id, period_month, price_org_code "
           + "FROM lp_bom_costing_row "
-          + "WHERE (#{oaNo} IS NULL OR oa_no=#{oaNo}) "
+          + "WHERE calculation_scope='' AND (#{oaNo} IS NULL OR oa_no=#{oaNo}) "
           + "AND top_product_code=#{topProductCode} "
           + "AND price_org_code=#{priceOrgCode} "
           + "AND (#{periodMonth} IS NULL OR period_month=#{periodMonth}) "
@@ -123,7 +128,7 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
   @Select(
       "SELECT period_month "
           + "FROM lp_bom_costing_row "
-          + "WHERE oa_no=#{oaNo} "
+          + "WHERE calculation_scope='' AND oa_no=#{oaNo} "
           + "AND oa_form_item_id=#{oaFormItemId} "
           + "AND top_product_code=#{topProductCode} "
           + "ORDER BY built_at DESC, id DESC "
@@ -136,7 +141,7 @@ public interface BomCostingRowMapper extends BaseMapper<BomCostingRow> {
   @Select(
       "SELECT * "
           + "FROM lp_bom_costing_row "
-          + "WHERE oa_no=#{oaNo} "
+          + "WHERE calculation_scope='' AND oa_no=#{oaNo} "
           + "AND oa_form_item_id=#{oaFormItemId} "
           + "AND top_product_code=#{topProductCode} "
           + "AND period_month=#{periodMonth} "

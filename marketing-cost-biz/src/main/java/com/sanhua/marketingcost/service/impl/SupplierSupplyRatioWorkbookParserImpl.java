@@ -49,7 +49,6 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
       Set.of(
           HEADER_MATERIAL_CODE,
           HEADER_MATERIAL_NAME,
-          HEADER_SUPPLIER_CODE,
           HEADER_SUPPLIER_NAME,
           HEADER_SUPPLY_RATIO);
 
@@ -106,7 +105,7 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
     }
     if (!header.columns.keySet().containsAll(REQUIRED_HEADERS)) {
       result.getErrors().add(new SupplierSupplyRatioWorkbookParseResult.ParseError(header.rowNumber, null,
-          "供货比例表头不完整，必须包含：物料代码、物料名称、供应商代码、供应商名称、比例"));
+          "供货比例表头不完整，必须包含：物料代码、物料名称、供应商名称、比例"));
       return;
     }
     for (int rowIndex = header.rowIndex + 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
@@ -163,11 +162,6 @@ public class SupplierSupplyRatioWorkbookParserImpl implements SupplierSupplyRati
     int errorsBefore = result.getErrors().size();
     BigDecimal supplyRatio = decimal(row, columns.get(HEADER_SUPPLY_RATIO), formatter, result, rowNo);
     if (result.getErrors().size() > errorsBefore) return null;
-    if (!StringUtils.hasText(supplierCode)) {
-      result.getErrors().add(new SupplierSupplyRatioWorkbookParseResult.ParseError(rowNo, HEADER_SUPPLIER_CODE,
-          "供应商代码不能为空"));
-      return null;
-    }
     if (!StringUtils.hasText(SupplierSupplyRatioNormalizeUtils.normalizeKeyPart(materialCode))) {
       result.getErrors().add(new SupplierSupplyRatioWorkbookParseResult.ParseError(rowNo, HEADER_MATERIAL_CODE,
           "物料代码不能为空"));

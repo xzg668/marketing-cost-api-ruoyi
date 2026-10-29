@@ -166,7 +166,7 @@ public class ElectronicDrawingBomScope {
         retained.add(new ElectronicNode(row.getId(), row.getSourceRowNo(), row.getSourceSequence(),
             row.getParentSourceSequence(), row.getDrawingCode(), row.getSourceName(), row.getQty(),
             row.getReferenceWeight(), row.getReferenceWeightUnit(), row.getMatchStatus(), material,
-            ElectronicDrawingHybridBomAssembler.Nature.valueOf(decision.effectiveShape().name())));
+            ElectronicDrawingHybridBomAssembler.Nature.valueOf(decision.effectiveShape().name()), row.getQuantityUnit()));
         if (decision.effectiveShape() == QuoteMaterialShape.PURCHASE) {
           branches.put(row.getId(), new Branch(row, material, State.PURCHASE, "采购件直接取价，不展开下级", null));
           for (var child : lower) exclude(child, "采购形态已截断下级，无需补录"); return;

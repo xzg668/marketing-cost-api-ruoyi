@@ -104,7 +104,7 @@ public class QuoteBomDetailQueryServiceImpl implements QuoteBomDetailQueryServic
       Integer page,
       Integer pageSize) {
     QueryWrapper<BomCostingRow> query =
-        new QueryWrapper<BomCostingRow>()
+        new QueryWrapper<BomCostingRow>().eq("calculation_scope", "")
             .select(costingRowSelectColumns().toArray(String[]::new))
             .eq(StringUtils.hasText(oaNo), "oa_no", trimToNull(oaNo))
             .eq(StringUtils.hasText(topProductCode), "top_product_code", trimToNull(topProductCode))
@@ -143,7 +143,7 @@ public class QuoteBomDetailQueryServiceImpl implements QuoteBomDetailQueryServic
             ? "SUM(CASE WHEN matched_settlement_rule_id IS NULL THEN 0 ELSE 1 END) AS ruleHitCount"
             : "0 AS ruleHitCount";
     QueryWrapper<BomCostingRow> query =
-        new QueryWrapper<BomCostingRow>()
+        new QueryWrapper<BomCostingRow>().eq("calculation_scope", "")
             .select(
                 "oa_no AS oaNo",
                 "top_product_code AS topProductCode",

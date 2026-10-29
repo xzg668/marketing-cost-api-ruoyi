@@ -34,6 +34,7 @@ public class MakePartSourceDataServiceImpl implements MakePartSourceDataService 
       String oaNo, String businessUnitType, String buildBatchId) {
     var query =
         Wrappers.lambdaQuery(BomCostingRow.class)
+                .eq(BomCostingRow::getCalculationScope, "")
             .eq(BomCostingRow::getShapeAttr, MANUFACTURED_SHAPE)
             .orderByAsc(BomCostingRow::getMaterialCode)
             .orderByDesc(BomCostingRow::getId);

@@ -125,6 +125,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
     List<QuotePriceTypeRecognitionRow> resultRows = buildRows(scope, rows, packageInputs, currentRows);
     fillPriceTypes(scope, resultRows, packageInputs, currentRows);
     fillMissingMaterialNames(resultRows);
+    fillDrawingNumbers(resultRows);
 
     QuotePriceTypeRecognitionResponse response = new QuotePriceTypeRecognitionResponse();
     response.setOaNo(scope.oaNo());
@@ -324,6 +325,35 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
       if (row != null && !StringUtils.hasText(row.getMaterialName())) {
         row.setMaterialName(namesByCode.get(trimToNull(row.getMaterialCode())));
       }
+    }
+  }
+
+  /** 图号仅取当前组织料品档案的专用字段；规格、型号及父件图号不能代替图号。 */
+  private void fillDrawingNumbers(List<QuotePriceTypeRecognitionRow> roots) {
+    var rows = flatten(roots);
+    var codesByOrg = new LinkedHashMap<String, Set<String>>();
+    for (var row : rows) {
+      if (StringUtils.hasText(row.getMaterialCode()) && StringUtils.hasText(row.getPriceOrgCode())
+          && !OBJECT_MAKE_NO_SCRAP.equals(row.getObjectType())) {
+        codesByOrg.computeIfAbsent(row.getPriceOrgCode(), ignored -> new LinkedHashSet<>())
+            .add(row.getMaterialCode());
+      }
+    }
+    var drawings = new LinkedHashMap<String, Set<String>>();
+    codesByOrg.forEach((org, codes) -> {
+      for (var master : rawMaterials.selectByLatestBatchAndCodes(codes, null,
+          MaterialOrganization.fromPriceOrgCode(org).getCode())) {
+        String drawing = trimToNull(master.getDrawingNo());
+        drawings.computeIfAbsent(org + "|" + master.getMaterialCode(), ignored -> new LinkedHashSet<>())
+            .add(drawing == null ? "" : drawing);
+      }
+    });
+    for (var row : rows) {
+      if (OBJECT_MAKE_NO_SCRAP.equals(row.getObjectType())) continue;
+      var candidates = drawings.get(row.getPriceOrgCode() + "|" + row.getMaterialCode());
+      if (candidates == null || candidates.size() != 1) continue;
+      String drawing = candidates.iterator().next();
+      if (!Set.of("", "/", "-", "—").contains(drawing)) row.setDrawingNo(drawing);
     }
   }
 

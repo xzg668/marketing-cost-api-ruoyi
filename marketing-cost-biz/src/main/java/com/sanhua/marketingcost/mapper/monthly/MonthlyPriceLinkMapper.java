@@ -20,6 +20,20 @@ public interface MonthlyPriceLinkMapper {
   int attachPreparation(@Param("unit") String unit,@Param("id") long id,@Param("price") long price,@Param("type") String type);
 
   @Update("""
+      UPDATE lp_price_prepare_item SET monthly_price_id=#{price},monthly_pricing_type=#{type}
+      WHERE id=#{id} AND business_unit_type=#{unit} AND monthly_price_id IS NULL
+        AND status='READY' AND current_flag=0 AND EXISTS (
+          SELECT 1 FROM lp_bom_costing_row r JOIN lp_cost_run_task t
+            ON BINARY t.source_no=BINARY r.calculation_scope AND t.oa_form_item_id=r.oa_form_item_id
+              AND BINARY t.oa_no=BINARY r.oa_no AND BINARY t.pricing_month=BINARY r.period_month
+          WHERE r.id=lp_price_prepare_item.bom_row_id AND BINARY r.calculation_scope=BINARY #{no}
+            AND BINARY r.business_unit_type=BINARY #{unit} AND BINARY t.business_unit_type=BINARY #{unit}
+            AND t.scene='MONTHLY_REPRICE' AND t.status='RUNNING')
+      """)
+  int attachRepricePreparation(@Param("unit") String unit,@Param("no") String no,
+      @Param("id") long id,@Param("price") long price,@Param("type") String type);
+
+  @Update("""
       UPDATE lp_cost_run_part_item SET monthly_price_id=#{price},monthly_pricing_type=#{type}
       WHERE id=#{id} AND business_unit_type=#{unit} AND monthly_price_id IS NULL
       """)

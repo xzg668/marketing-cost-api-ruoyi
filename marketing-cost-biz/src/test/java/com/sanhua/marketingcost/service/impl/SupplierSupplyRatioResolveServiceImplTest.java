@@ -1,146 +1,47 @@
 package com.sanhua.marketingcost.service.impl;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-
-import com.baomidou.mybatisplus.core.conditions.Wrapper;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.sanhua.marketingcost.dto.SupplierSupplyRatioResolveResult;
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
+import com.sanhua.marketingcost.entity.monthly.MonthlySupplierRatioInput;
 import com.sanhua.marketingcost.entity.SupplierSupplyRatio;
 import com.sanhua.marketingcost.mapper.SupplierSupplyRatioMapper;
 import java.math.BigDecimal;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
+import java.time.*;
+import java.util.*;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 
 class SupplierSupplyRatioResolveServiceImplTest {
-
-  private SupplierSupplyRatioMapper mapper;
-  private SupplierSupplyRatioResolveServiceImpl service;
-
-  @BeforeEach
-  void setUp() {
-    mapper = mock(SupplierSupplyRatioMapper.class);
-    service = new SupplierSupplyRatioResolveServiceImpl(mapper);
+  final SupplierSupplyRatioMapper mapper=mock(SupplierSupplyRatioMapper.class);
+  final SupplierSupplyRatioResolveServiceImpl service=new SupplierSupplyRatioResolveServiceImpl(mapper);
+  MonthlySupplierRatioInput row(long id,String supplier,String ratio) {
+    var r=new MonthlySupplierRatioInput();r.setRequestedMaterialCode("000M");r.setId(id);r.setBusinessUnitType("COMMERCIAL");r.setMaterialCode("000M");r.setSupplierCode(supplier);r.setSupplierName(supplier);r.setSupplyRatio(ratio==null?null:new BigDecimal(ratio));r.setIsActive(1);r.setDeleted(0);r.setUpdatedAt(LocalDateTime.of(2026,10,27,0,0));return r;
   }
-
-  @Test
-  @DisplayName("多供应商按供货比例最大排序取主供")
-  void resolvePicksLargestSupplyRatio() {
-    SupplierSupplyRatio best = row(2L, "供应商B", "0.75", LocalDateTime.parse("2026-05-02T10:00:00"));
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(best);
-
-    SupplierSupplyRatioResolveResult result = service.resolve(
-        "COMMERCIAL", "203250307", "连杆", "SHF-H35-020002", LocalDate.parse("2026-05-18"));
-
-    assertThat(result.isMatched()).isTrue();
-    assertThat(result.getSupplierName()).isEqualTo("供应商B");
-    assertThat(result.getSupplyRatio()).isEqualByComparingTo("0.75");
-
-    QueryWrapper<SupplierSupplyRatio> query = capturedQuery();
-    assertThat(query.getSqlSegment()).contains(
-        "supply_ratio DESC",
-        "supply_ratio IS NOT NULL",
-        "is_active",
-        "updated_at",
-        "id DESC",
-        "LIMIT 1");
+  @Test void completeSetRetainsZeroAndNullButOnlyPositiveRatiosChoosePrimary() {
+    var rows=List.of(row(1,"A","0"),row(2,"B",null),row(3,"C","0.6"));when(mapper.currentRelations(anyString(),nullable(LocalDate.class),anyCollection())).thenReturn(rows);
+    var r=service.resolve("COMMERCIAL","000M","different name","different spec",LocalDate.of(2026,11,1));
+    assertThat(r.getSupplierCode()).isEqualTo("C");assertThat(r.getCurrentRelations()).containsExactlyElementsOf(rows);
   }
-
-  @Test
-  @DisplayName("最高比例并列时 SQL 按 updated_at DESC, id DESC 兜底")
-  void tieUsesLatestUpdatedAtThenId() {
-    SupplierSupplyRatio latest = row(9L, "供应商最新", "0.60", LocalDateTime.parse("2026-05-18T09:00:00"));
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(latest);
-
-    SupplierSupplyRatioResolveResult result = service.resolve(
-        "COMMERCIAL", "203240251", "小阀座", "SHF-000-036003", null);
-
-    assertThat(result.isMatched()).isTrue();
-    assertThat(result.getSupplierName()).isEqualTo("供应商最新");
-    assertThat(result.getTraceMessage()).contains("匹配 material_code");
-    assertThat(capturedQuery().getSqlSegment()).contains(
-        "ORDER BY supply_ratio DESC",
-        "IFNULL(updated_at",
-        "id DESC");
+  @Test void primaryTieKeepsItsExistingUpdateThenIdRule() {
+    var a=row(1,"A","0.5");var b=row(2,"B","0.5");when(mapper.currentRelations(anyString(),nullable(LocalDate.class),anyCollection())).thenReturn(List.of(a,b));
+    assertThat(service.resolve("COMMERCIAL","000M",null,null,null).getId()).isEqualTo(2L);
+    a.setUpdatedAt(b.getUpdatedAt().plusDays(1));assertThat(service.resolve("COMMERCIAL","000M",null,null,null).getId()).isEqualTo(1L);
   }
-
-  @Test
-  @DisplayName("未维护供货比例返回未命中，不抛异常")
-  void unresolvedReturnsMiss() {
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(null);
-
-    SupplierSupplyRatioResolveResult result = service.resolve(
-        "COMMERCIAL", "NO-MAT", "不存在", "NO-SPEC", LocalDate.parse("2026-05-18"));
-
-    assertThat(result.isMatched()).isFalse();
-    assertThat(result.getTraceMessage()).contains("未命中供货比例");
-    assertThat(capturedQuery().getSqlSegment()).contains("deleted");
+  @Test void retiredPositiveCannotResurrectWhenCurrentIsZero() {
+    var old=row(1,"A","0.9");old.setIsActive(0);var zero=row(2,"A","0");when(mapper.currentRelations(anyString(),nullable(LocalDate.class),anyCollection())).thenReturn(List.of(old,zero));
+    var r=service.resolve("COMMERCIAL","000M",null,null,null);assertThat(r.isMatched()).isFalse();assertThat(r.getCurrentRelations()).containsExactly(zero);
   }
-
-  @Test
-  @DisplayName("生效日期过滤：effective_from/effective_to 任一端为空视为开放")
-  void filtersByEffectiveDateWindow() {
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(row(1L, "供应商A", "1", null));
-
-    service.resolve("COMMERCIAL", "203240251", "小阀座", "SHF-000-036003",
-        LocalDate.parse("2026-05-18"));
-
-    assertThat(capturedQuery().getSqlSegment()).contains(
-        "effective_from",
-        "IS NULL",
-        "effective_to");
+  @Test void absentRelationshipsRemainMissing() {
+    assertThat(service.resolve("COMMERCIAL","000M",null,null,null).isMatched()).isFalse();
+    assertThat(service.resolve("COMMERCIAL","",null,null,null).isMatched()).isFalse();
   }
-
-  @Test
-  @DisplayName("物料名称和型号不参与主供匹配，只按物料代码取供货比例最大供应商")
-  void ignoresMaterialNameAndSpecWhenResolvingMainSupplier() {
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(row(3L, "供应商A", "1", null));
-
-    SupplierSupplyRatioResolveResult result = service.resolve(
-        "COMMERCIAL", "203240251", "页面名称可不一致", "页面型号可不一致", null);
-
-    assertThat(result.isMatched()).isTrue();
-    assertThat(result.getTraceMessage()).contains("匹配 material_code");
-    assertThat(capturedQuery().getSqlSegment())
-        .contains("material_code")
-        .doesNotContain("material_name")
-        .doesNotContain("spec_model");
+  @Test void legacyBoundsStillApplyWhileNewUndatedCurrentRowsApplyAcrossMonths() {
+    var expired=row(1,"A","0.9");expired.setEffectiveTo(LocalDate.of(2026,9,30));var future=row(2,"B","0.8");future.setEffectiveFrom(LocalDate.of(2026,12,1));var current=row(3,"C","0.6");
+    when(mapper.currentRelations(anyString(),nullable(LocalDate.class),anyCollection())).thenReturn(List.of(expired,future,current));
+    assertThat(service.resolveByMonth("COMMERCIAL","000M",null,null,"2026-10").getId()).isEqualTo(3L);
+    assertThat(service.resolveByMonth("COMMERCIAL","000M",null,null,"2026-11").getId()).isEqualTo(3L);
   }
-
-  @Test
-  @DisplayName("pricingMonth 支持 yyyy-MM，并参与生效期过滤")
-  void resolveByMonthUsesFirstDayOfMonth() {
-    when(mapper.selectOne(any(Wrapper.class))).thenReturn(row(4L, "供应商月度", "1", null));
-
-    SupplierSupplyRatioResolveResult result = service.resolveByMonth(
-        "COMMERCIAL", "203240251", "小阀座", "SHF-000-036003", "2026-05");
-
-    assertThat(result.isMatched()).isTrue();
-    assertThat(capturedQuery().getSqlSegment()).contains("effective_from", "effective_to");
-  }
-
-  private QueryWrapper<SupplierSupplyRatio> capturedQuery() {
-    ArgumentCaptor<QueryWrapper<SupplierSupplyRatio>> captor = ArgumentCaptor.forClass(QueryWrapper.class);
-    verify(mapper).selectOne(captor.capture());
-    return captor.getValue();
-  }
-
-  private SupplierSupplyRatio row(Long id, String supplierName, String ratio, LocalDateTime updatedAt) {
-    SupplierSupplyRatio row = new SupplierSupplyRatio();
-    row.setId(id);
-    row.setSupplierName(supplierName);
-    row.setSupplierCode("S-" + id);
-    row.setSupplyRatio(new BigDecimal(ratio));
-    row.setSourceType("EXCEL");
-    row.setSourceBatchNo("SSR-batch");
-    row.setUpdatedAt(updatedAt);
-    return row;
+  @Test void duplicateCurrentZeroAndPositiveAreRejectedInsteadOfPickingOldPositive() {
+    when(mapper.currentRelations(anyString(),nullable(LocalDate.class),anyCollection())).thenReturn(List.of(row(1,"A","0.9"),row(2,"A","0")));
+    assertThatThrownBy(()->service.resolve("COMMERCIAL","000M",null,null,null)).isInstanceOf(IllegalStateException.class);
   }
 }

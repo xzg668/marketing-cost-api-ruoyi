@@ -79,24 +79,24 @@ class MonthlyQuotationDifferenceTest {
         .map(row -> row.getDiffAmount()).reduce(BigDecimal.ZERO, BigDecimal::add)).isEqualByComparingTo("4");
   }
 
-  @Test void savedPackageExplanationUsesBothDenominatorsAndKeepsCopperAtZeroDifference() {
+  @Test void savedPackageExplanationUsesPackageBaseOnceAndKeepsCopperAtZeroDifference() {
     var child = request("CHILD"); var selected = price(1, false, true, "10");
-    var plan = new MonthlyAdoptionPlan(Map.of(child, selected), List.of(new Use("P/PACK/CHILD", child, d("1.5"))), Set.of());
-    var pair = preparePair("P/PACK", "PACK", "PACKAGE_PRICE", d("3"), d("5"), d("5"));
+    var plan = new MonthlyAdoptionPlan(Map.of(child, selected), List.of(new Use("P/PACK/CHILD", child, d("3"))), Set.of());
+    var pair = preparePair("P/PACK", "PACK", "PACKAGE_PRICE", d("3"), d("10"), d("10"));
     var parent = new PackageComponentPrice(); parent.setPackageMaterialCode("PACK");
     parent.setBusinessUnitType("COMMERCIAL"); parent.setPriceOrgCode("210"); parent.setPeriodMonth("2026-10");
     parent.setSnapshotId(100L); parent.setPackageParentBaseQty(d("4"));
     var component = new PackageComponentPriceDetail(); component.setSnapshotDetailId(101L);
     component.setChildMaterialCode("CHILD"); component.setPriceSource("MONTHLY_PRICE"); component.setPriceType("RANGE");
     component.setQtyPerParent(d("4")); component.setChildParentBaseQty(d("2"));
-    component.setChildUnitPrice(d("10")); component.setChildAmount(d("20"));
+    component.setChildUnitPrice(d("10")); component.setChildAmount(d("40"));
     component.setInputSnapshotJson(input(child, selected, "10", "10"));
     pair.forEach(row -> row.setInputSnapshotJson(new PackageCalculationEvidence(json).capture(parent, List.of(component))));
     var result = service.difference(stored(plan, List.of(new MaterialLine("P/PACK", "PACK", d("3"),
-        List.of(1L), d("15"), d("15"), null))));
+        List.of(1L), d("30"), d("30"), null))));
     assertThat(result.adjustmentAmount()).isZero(); assertThat(result.rawComponentCount()).isEqualTo(1);
-    var explained = result.items().getLast(); assertThat(explained.getQuantity()).isEqualByComparingTo("1.5");
-    assertThat(explained.getOaAmount()).isEqualByComparingTo("15");
+    var explained = result.items().getLast(); assertThat(explained.getQuantity()).isEqualByComparingTo("3");
+    assertThat(explained.getOaAmount()).isEqualByComparingTo("30");
     assertThat(explained.getCuAffected()).isEqualTo(1); assertThat(explained.getContributesToAdjustment()).isZero();
     assertThat(explained.getPriceFormulaRefType()).isEqualTo("PACKAGE_COMPONENT");
   }
@@ -105,8 +105,8 @@ class MonthlyQuotationDifferenceTest {
     var first = request("C1"); var second = request("C2");
     var p1 = price(1, false, true, "10"); var p2 = price(2, false, false, "20");
     var plan = new MonthlyAdoptionPlan(Map.of(first, p1, second, p2), List.of(
-        new Use("P/PACK/C1", first, d("1.5")), new Use("P/PACK/C2", second, d("1.5"))), Set.of());
-    var pair = preparePair("P/PACK", "PACK", "PACKAGE_PRICE", d("3"), d("15"), d("15"));
+        new Use("P/PACK/C1", first, d("3")), new Use("P/PACK/C2", second, d("3"))), Set.of());
+    var pair = preparePair("P/PACK", "PACK", "PACKAGE_PRICE", d("3"), d("30"), d("30"));
     var parent = new PackageComponentPrice(); parent.setPackageMaterialCode("PACK");
     parent.setBusinessUnitType("COMMERCIAL"); parent.setPriceOrgCode("210"); parent.setPeriodMonth("2026-10");
     parent.setSourceRawHierarchyId(100L); parent.setSourcePath("/P/PACK/"); parent.setPackageParentBaseQty(d("4"));
@@ -117,17 +117,17 @@ class MonthlyQuotationDifferenceTest {
       row.setSourcePath("/P/PACK/" + code + "/"); row.setChildMaterialCode(code);
       row.setPriceSource("MONTHLY_PRICE"); row.setPriceType("NORMAL");
       row.setQtyPerParent(d("4")); row.setChildParentBaseQty(d("2"));
-      row.setChildUnitPrice(d(amount)); row.setChildAmount(d(amount).multiply(d("2")));
+      row.setChildUnitPrice(d(amount)); row.setChildAmount(d(amount).multiply(d("4")));
       row.setInputSnapshotJson(input(i == 0 ? first : second, i == 0 ? p1 : p2, amount, amount)); rows.add(row);
     }
     pair.forEach(row -> row.setInputSnapshotJson(new PackageCalculationEvidence(json).capture(parent, rows)));
     var result = service.difference(stored(plan, List.of(new MaterialLine("P/PACK", "PACK", d("3"),
-        List.of(1L, 2L), d("45"), d("45"), null))));
+        List.of(1L, 2L), d("90"), d("90"), null))));
     assertThat(result.rawComponentCount()).isEqualTo(2);
     assertThat(result.items().subList(1, 3)).extracting(row -> row.getMaterialCode()).containsExactly("C1", "C2");
     assertThat(result.items().subList(1, 3)).allSatisfy(row -> {
       assertThat(row.getPriceFormulaRefId()).isNull();
-      assertThat(row.getQuantity()).isEqualByComparingTo("1.5");
+      assertThat(row.getQuantity()).isEqualByComparingTo("3");
       assertThat(row.getTraceJson()).contains("sourceHierarchyId", "sourcePath");
     });
     assertThat(result.items().get(1).getSettlementKey()).isNotEqualTo(result.items().get(2).getSettlementKey());

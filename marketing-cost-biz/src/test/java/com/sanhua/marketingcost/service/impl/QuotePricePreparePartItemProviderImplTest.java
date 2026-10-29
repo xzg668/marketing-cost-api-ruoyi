@@ -96,7 +96,7 @@ class QuotePricePreparePartItemProviderImplTest {
   }
 
   @Test
-  void supportsOnlyQuoteContextWithPrepareNo() {
+  void supportsSavedPreparationForQuotationAndReprice() {
     QuotePricePreparePartItemProviderImpl provider =
         new QuotePricePreparePartItemProviderImpl(
             mock(PricePrepareItemMapper.class),
@@ -112,6 +112,8 @@ class QuotePricePreparePartItemProviderImplTest {
 
     assertThat(provider.supports(quote)).isTrue();
     assertThat(provider.supports(withoutPrepare)).isFalse();
+    assertThat(provider.supports(monthly)).isTrue();
+    monthly.setPricePrepareNo(null);
     assertThat(provider.supports(monthly)).isFalse();
   }
 

@@ -85,6 +85,7 @@ public class QuoteFinalSubmissionService {
         prior == null ? null : prior.returnReason(), ready);
   }
 
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=true)
   public Status confirm(String oaNo, String month, String fingerprint, String requestKey, TechnicalDataActor actor) {
     if (requestKey == null || !requestKey.matches("[A-Za-z0-9._-]{1,80}")) throw invalid("提交请求编号无效，请刷新后重试");
     if (fingerprint == null || !fingerprint.matches("[a-f0-9]{64}")) throw invalid("请先核对本次成本结果");

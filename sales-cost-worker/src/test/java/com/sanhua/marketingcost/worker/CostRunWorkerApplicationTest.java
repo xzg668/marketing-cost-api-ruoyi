@@ -6,11 +6,7 @@ import com.sanhua.marketingcost.integration.drawing.DrawingVerificationPropertie
 import com.sanhua.marketingcost.config.PasswordEncodingConfig;
 import com.sanhua.marketingcost.integration.oa.directory.OaPersonDirectorySyncScheduler;
 import com.sanhua.marketingcost.service.impl.BusinessUnitRepriceLockGuardImpl;
-import com.sanhua.marketingcost.service.impl.MonthlyRepriceBatchServiceImpl;
-import com.sanhua.marketingcost.service.impl.MonthlyRepriceConfirmServiceImpl;
-import com.sanhua.marketingcost.service.impl.MonthlyRepriceOperationServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceQueryServiceImpl;
-import com.sanhua.marketingcost.service.impl.MonthlyRepriceStartServiceImpl;
 import com.sanhua.marketingcost.service.impl.QuoteBatchCostRunServiceImpl;
 import com.sanhua.marketingcost.service.technicaldata.EffectiveTechnicalDataQueryServiceImpl;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataVersionContentCodec;
@@ -48,11 +44,7 @@ class CostRunWorkerApplicationTest {
           assertThat(filter.classes())
               .contains(
                   BusinessUnitRepriceLockGuardImpl.class,
-                  MonthlyRepriceBatchServiceImpl.class,
-                  MonthlyRepriceConfirmServiceImpl.class,
-                  MonthlyRepriceOperationServiceImpl.class,
                   MonthlyRepriceQueryServiceImpl.class,
-                  MonthlyRepriceStartServiceImpl.class,
                   QuoteBatchCostRunServiceImpl.class,
                   com.sanhua.marketingcost.integration.oa.OaWorkflowNotificationController.class,
                   com.sanhua.marketingcost.integration.oa.OaWorkflowNotificationHandler.class,
@@ -72,6 +64,7 @@ class CostRunWorkerApplicationTest {
     assertThat(annotation.value())
         .contains(
             DrawingVerificationProperties.class,
+            com.sanhua.marketingcost.config.MonthlyRepriceProperties.class,
             EffectiveTechnicalDataQueryServiceImpl.class,
             PasswordEncodingConfig.class,
             TechnicalDataVersionContentCodec.class);

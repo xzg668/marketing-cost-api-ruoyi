@@ -48,5 +48,7 @@ public record ElectronicDrawingMaterialResolutionResponse(
       LocalDateTime resolvedAt,
       String processingState,
       String processingMessage,
-      boolean canModify) {}
+      boolean canModify,
+      String quantityUnit,
+      Long correctedFromSourceNodeId) {}
 }

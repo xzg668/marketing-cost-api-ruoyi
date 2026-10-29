@@ -252,8 +252,6 @@ public class PackageComponentPricePrepareStrategyImpl
     for (var detail : result.getDetails()) {
       if (detail.getHouseholdUse() != null) continue;
       BigDecimal use = detail.getQtyPerParent();
-      if (detail.getChildParentBaseQty() != null)
-        use = use.divide(detail.getChildParentBaseQty(), 8, java.math.RoundingMode.HALF_UP);
       if (base != null && base.signum() != 0) use = use.divide(base, 8, java.math.RoundingMode.HALF_UP);
       use = use.multiply(parentQuantity);
       if (use.signum() == 0) continue;

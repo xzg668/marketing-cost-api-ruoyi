@@ -26,6 +26,17 @@ public class MonthlyRepricePartItemDto {
   private String calcStatus;
   private String calcMessage;
 
+  public static MonthlyRepricePartItemDto fromSaved(com.sanhua.marketingcost.entity.MonthlyRepriceResult result,
+      com.sanhua.marketingcost.entity.CostRunPartItem item,int line) {
+    var dto=new MonthlyRepricePartItemDto();
+    dto.setId(item.getId());dto.setRepriceNo(result.getRepriceNo());dto.setOaNo(result.getOaNo());
+    dto.setCalcObjectKey(result.getCalcObjectKey());dto.setProductCode(result.getProductCode());dto.setLineNo(line);
+    dto.setPartCode(item.getPartCode());dto.setPartName(item.getPartName());dto.setPartDrawingNo(item.getPartDrawingNo());
+    dto.setMaterial(item.getMaterial());dto.setShapeAttr(item.getShapeAttr());dto.setQuantity(item.getQty());
+    dto.setUnitPrice(item.getUnitPrice());dto.setAmount(item.getAmount());dto.setPriceSource(item.getPriceSource());
+    dto.setCalcStatus(result.getCalcStatus());return dto;
+  }
+
   public static MonthlyRepricePartItemDto fromEntity(MonthlyRepricePartItem item) {
     MonthlyRepricePartItemDto dto = new MonthlyRepricePartItemDto();
     if (item == null) {

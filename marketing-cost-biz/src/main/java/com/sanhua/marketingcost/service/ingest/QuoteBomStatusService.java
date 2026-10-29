@@ -4,6 +4,11 @@ import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse;
 
 public interface QuoteBomStatusService {
+  /** Shares BOM acquisition/approved supplement rules without modifying ordinary quotation progress. */
+  com.sanhua.marketingcost.entity.QuoteBomStatus prepareMonthlyReprice(
+      com.sanhua.marketingcost.entity.OaForm form,
+      com.sanhua.marketingcost.entity.OaFormItem item, QuoteBomContext savedContext);
+
   QuoteBomStatusResponse listByOaNo(String oaNo);
 
   QuoteBomStatusResponse checkByOaNo(String oaNo);

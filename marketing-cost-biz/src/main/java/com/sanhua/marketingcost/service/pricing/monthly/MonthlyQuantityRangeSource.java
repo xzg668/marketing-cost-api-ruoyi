@@ -41,12 +41,11 @@ public final class MonthlyQuantityRangeSource {
       for(int start=0;start<codes.size();start+=256){
         var batch=codes.subList(start,Math.min(start+256,codes.size()));var byCode=new HashMap<String,List<PriceRangeItem>>();
         rows.prices(context.businessUnitType(),organization.getKey(),context.priceAsOfTime().toLocalDate(),batch).forEach(row->byCode.computeIfAbsent(row.getMaterialCode(),ignored->new ArrayList<>()).add(row));
-        var multiple=new TreeSet<String>();byCode.forEach((code,items)->{if(items.stream().map(this::supplierKey).filter(key->!key.isEmpty()).distinct().count()>1)multiple.add(code);});
         // The legacy supplier-input key is normalized; the monthly family still keeps the exact code.
-        var ratioCodes=multiple.stream().map(SupplierSupplyRatioNormalizeUtils::normalizeToNull).collect(java.util.stream.Collectors.toSet());
+        var ratioCodes=byCode.keySet().stream().map(SupplierSupplyRatioNormalizeUtils::normalizeToNull).collect(java.util.stream.Collectors.toSet());
         var capturedRatios=ratioCodes.isEmpty()?List.<com.sanhua.marketingcost.entity.monthly.MonthlySupplierRatioInput>of():supplierInputs.ratios(context.businessUnitType(),context.priceAsOfTime().toLocalDate(),ratioCodes);
         var ratios=new HashMap<String,List<SupplierSupplyRatio>>();capturedRatios.forEach(row->ratios.computeIfAbsent(row.getRequestedMaterialCode(),ignored->new ArrayList<>()).add(row));
-        var primary=suppliers.prepareSuppliers(context.businessUnitType(),multiple,context.priceAsOfTime().toLocalDate(),ratios);
+        var primary=suppliers.prepareSuppliers(context.businessUnitType(),ratioCodes,context.priceAsOfTime().toLocalDate(),ratios);
         var calculations=new HashMap<MonthlyPriceFamilyKey,FamilyDecisions>();
         for(String code:batch)for(var request:organization.getValue().get(code))try{
           var source=byCode.getOrDefault(code,List.of());if(source.isEmpty()){problems.put(request,new Problem(Failure.MISSING,"没有适用数量区间来源"));continue;}
@@ -112,5 +111,4 @@ public final class MonthlyQuantityRangeSource {
     }
     return List.copyOf(result);
   }
-  private String supplierKey(PriceRangeItem row){String code=SupplierSupplyRatioNormalizeUtils.normalizeKeyPart(row.getSupplierCode());if(code!=null && !code.isBlank())return "CODE:"+code;String name=SupplierSupplyRatioNormalizeUtils.normalizeKeyPart(row.getSupplierName());return name==null || name.isBlank()?"":"NAME:"+name;}
 }

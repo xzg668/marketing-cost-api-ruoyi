@@ -1,6 +1,5 @@
 package com.sanhua.marketingcost.service.materialshape;
 
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.sanhua.marketingcost.entity.SupplierSupplyRatio;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.enums.QuoteMaterialShape;
@@ -97,6 +96,9 @@ public class SupplierRatioShapeResolverImpl
               + duplicateCode);
     }
 
+    candidates = candidates.stream().filter(row -> row.getSupplyRatio() != null && row.getSupplyRatio().compareTo(ZERO) > 0).toList();
+    if (candidates.isEmpty()) return fallbackToU9(request, policyResolution);
+
     BigDecimal maximum =
         candidates.stream()
             .map(SupplierSupplyRatio::getSupplyRatio)
@@ -182,25 +184,8 @@ public class SupplierRatioShapeResolverImpl
         requests.stream()
             .map(NormalizedRequest::materialCode)
             .collect(Collectors.toSet());
-    List<SupplierSupplyRatio> rows =
-        mapper.selectList(
-            new QueryWrapper<SupplierSupplyRatio>()
-                .eq("business_unit_type", first.materialOrganizationCode())
-                .in("material_code", materialCodes)
-                .eq("is_active", 1)
-                .eq("deleted", 0)
-                .and(
-                    nested ->
-                        nested
-                            .isNull("effective_from")
-                            .or()
-                            .le("effective_from", monthStart))
-                .and(
-                    nested ->
-                        nested
-                            .isNull("effective_to")
-                            .or()
-                            .ge("effective_to", monthStart)));
+    List<SupplierSupplyRatio> rows = mapper.selectList(SupplierSupplyRatioMapper.currentQuery(
+        first.materialOrganizationCode(), materialCodes, monthStart));
     if (rows == null || rows.isEmpty()) {
       return Map.of();
     }
@@ -213,9 +198,7 @@ public class SupplierRatioShapeResolverImpl
                     first.materialOrganizationCode(),
                     row.getBusinessUnitType()))
         .filter(row -> materialCodes.contains(trimToNull(row.getMaterialCode())))
-        .filter(row -> activeOn(row, monthStart))
-        .filter(row -> row.getSupplyRatio() != null)
-        .filter(row -> row.getSupplyRatio().compareTo(ZERO) > 0)
+        .filter(row -> Integer.valueOf(1).equals(row.getIsActive()) && activeOn(row, monthStart))
         .collect(
             Collectors.groupingBy(
                 row -> trimToNull(row.getMaterialCode()),

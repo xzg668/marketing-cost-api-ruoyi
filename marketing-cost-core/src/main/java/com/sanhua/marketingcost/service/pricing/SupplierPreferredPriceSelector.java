@@ -75,6 +75,18 @@ public class SupplierPreferredPriceSelector {
       return selection(
           first, "价格源无供应商维度，按价格版本规则取价", 0, null, null, null, "NO_SUPPLIER_DIMENSION", "", "");
     }
+    SupplierSupplyRatioResolveResult mainSupplier = preparedSupplier != null ? preparedSupplier
+        : resolveService.resolve(businessUnitType, materialCode, materialName, specModel, pricingDate);
+    var relations = mainSupplier == null ? List.<com.sanhua.marketingcost.entity.SupplierSupplyRatio>of()
+        : mainSupplier.getCurrentRelations();
+    candidates = candidates.stream().filter(candidate -> !SupplierRatioPricePolicy.withdrawn(
+        supplierCodeGetter.apply(candidate), supplierNameGetter.apply(candidate), relations)).toList();
+    if (candidates.isEmpty()) {
+      String message = "有效报价对应供应商已明确退出供货：物料=" + materialCode;
+      return selection(null, message, 0, null, null, null, "NONE", "SUPPLIER_WITHDRAWN", message);
+    }
+    first = candidates.get(0);
+    candidateSupplierCount = distinctSupplierCount(candidates, supplierNameGetter, supplierCodeGetter);
     if (candidateSupplierCount == 1) {
       T onlySupplierRow =
           candidates.stream()
@@ -96,11 +108,6 @@ public class SupplierPreferredPriceSelector {
           "");
     }
 
-    SupplierSupplyRatioResolveResult mainSupplier =
-        preparedSupplier != null
-            ? preparedSupplier
-            : resolveService.resolve(
-                businessUnitType, materialCode, materialName, specModel, pricingDate);
     if (mainSupplier == null || !mainSupplier.isMatched()) {
       String message = "物料 " + materialCode + " 存在多个供应商价格，但未维护供货比例";
       return selection(

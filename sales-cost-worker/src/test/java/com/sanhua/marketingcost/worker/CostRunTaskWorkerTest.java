@@ -7,7 +7,6 @@ import com.sanhua.marketingcost.entity.CostRunTask;
 import com.sanhua.marketingcost.enums.CostRunTaskScene;
 import com.sanhua.marketingcost.service.CostRunTaskClaimService;
 import com.sanhua.marketingcost.service.CostRunTaskProgressService;
-import com.sanhua.marketingcost.service.MonthlyRepriceProgressService;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -15,7 +14,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.ObjectProvider;
 
 class CostRunTaskWorkerTest {
 
@@ -25,7 +23,7 @@ class CostRunTaskWorkerTest {
     var progressService = new FakeProgressService();
     var properties = enabledProperties();
     properties.setScenes(EnumSet.of(CostRunTaskScene.MONTHLY_REPRICE));
-    var worker = new CostRunTaskWorker(claimService, progressService, emptyProvider(),
+    var worker = new CostRunTaskWorker(claimService, progressService,
         new CostRunTaskExecutorRegistry(List.of(new FakeExecutor(CostRunTaskScene.QUOTE))), properties);
 
     assertThat(worker.scanOnce()).isZero();
@@ -44,7 +42,7 @@ class CostRunTaskWorkerTest {
         new CostRunTaskWorker(
             claimService,
             progressService,
-            emptyProvider(),
+
             new CostRunTaskExecutorRegistry(List.of(executor)),
             properties);
 
@@ -66,7 +64,7 @@ class CostRunTaskWorkerTest {
         new CostRunTaskWorker(
             claimService,
             progressService,
-            emptyProvider(),
+
             new CostRunTaskExecutorRegistry(List.of(executor)),
             properties);
     claimService.tasks = List.of(task(1L, "BATCH-1", "QUOTE"), task(2L, "BATCH-1", "QUOTE"));
@@ -93,7 +91,7 @@ class CostRunTaskWorkerTest {
         new CostRunTaskWorker(
             claimService,
             new FakeProgressService(),
-            emptyProvider(),
+
             new CostRunTaskExecutorRegistry(List.of(new FakeExecutor(CostRunTaskScene.QUOTE))),
             enabledProperties());
 
@@ -115,7 +113,7 @@ class CostRunTaskWorkerTest {
         new CostRunTaskWorker(
             claimService,
             new FakeProgressService(),
-            emptyProvider(),
+
             new CostRunTaskExecutorRegistry(List.of(executor)),
             enabledProperties());
 
@@ -140,7 +138,7 @@ class CostRunTaskWorkerTest {
         new CostRunTaskWorker(
             claimService,
             new FakeProgressService(),
-            emptyProvider(),
+
             new CostRunTaskExecutorRegistry(List.of(executor)),
             enabledProperties());
 
@@ -166,7 +164,7 @@ class CostRunTaskWorkerTest {
         new CostRunTaskWorker(
             claimService,
             progressService,
-            emptyProvider(),
+
             new CostRunTaskExecutorRegistry(List.of(executor)),
             properties);
     claimService.tasks =
@@ -197,7 +195,7 @@ class CostRunTaskWorkerTest {
         new CostRunTaskWorker(
             claimService,
             new FakeProgressService(),
-            emptyProvider(),
+
             new CostRunTaskExecutorRegistry(List.of(executor)),
             properties);
 
@@ -232,29 +230,7 @@ class CostRunTaskWorkerTest {
         .toList();
   }
 
-  private ObjectProvider<MonthlyRepriceProgressService> emptyProvider() {
-    return new ObjectProvider<MonthlyRepriceProgressService>() {
-      @Override
-      public MonthlyRepriceProgressService getObject(Object... args) {
-        return null;
-      }
 
-      @Override
-      public MonthlyRepriceProgressService getIfAvailable() {
-        return null;
-      }
-
-      @Override
-      public MonthlyRepriceProgressService getIfUnique() {
-        return null;
-      }
-
-      @Override
-      public MonthlyRepriceProgressService getObject() {
-        return null;
-      }
-    };
-  }
 
   private static class FakeClaimService implements CostRunTaskClaimService {
 

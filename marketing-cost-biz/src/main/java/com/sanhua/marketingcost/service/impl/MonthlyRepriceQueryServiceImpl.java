@@ -56,6 +56,7 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
   private final MonthlyRepriceCostItemMapper costItemMapper;
   private final MonthlyRepriceAuditLogMapper auditLogMapper;
   private final PermissionService permissionService;
+  private final com.sanhua.marketingcost.service.costing.MonthlyCostVersionService savedCosts;
 
   public MonthlyRepriceQueryServiceImpl(
       MonthlyRepriceBatchMapper batchMapper,
@@ -64,7 +65,8 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
       MonthlyRepricePartItemMapper partItemMapper,
       MonthlyRepriceCostItemMapper costItemMapper,
       MonthlyRepriceAuditLogMapper auditLogMapper,
-      PermissionService permissionService) {
+      PermissionService permissionService,
+      com.sanhua.marketingcost.service.costing.MonthlyCostVersionService savedCosts) {
     this.batchMapper = batchMapper;
     this.taskMapper = taskMapper;
     this.resultMapper = resultMapper;
@@ -72,6 +74,7 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
     this.costItemMapper = costItemMapper;
     this.auditLogMapper = auditLogMapper;
     this.permissionService = permissionService;
+    this.savedCosts = savedCosts;
   }
 
   @Override
@@ -159,6 +162,11 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
   @Override
   public List<MonthlyRepricePartItemDto> listPartItems(String repriceNo, Long resultId) {
     MonthlyRepriceResult result = visibleResult(repriceNo, resultId);
+    if (Integer.valueOf(1).equals(result.getContractVersion())) {
+      var parts = storedResult(result).parts();
+      return java.util.stream.IntStream.range(0,parts.size())
+          .mapToObj(i -> MonthlyRepricePartItemDto.fromSaved(result,parts.get(i),i+1)).toList();
+    }
     return partItemMapper.selectList(
             Wrappers.lambdaQuery(MonthlyRepricePartItem.class)
                 .eq(MonthlyRepricePartItem::getRepriceNo, result.getRepriceNo())
@@ -173,6 +181,8 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
   @Override
   public List<MonthlyRepriceCostItemDto> listCostItems(String repriceNo, Long resultId) {
     MonthlyRepriceResult result = visibleResult(repriceNo, resultId);
+    if (Integer.valueOf(1).equals(result.getContractVersion()))
+      return storedResult(result).costs().stream().map(row -> MonthlyRepriceCostItemDto.fromSaved(result,row)).toList();
     return costItemMapper.selectList(
             Wrappers.lambdaQuery(MonthlyRepriceCostItem.class)
                 .eq(MonthlyRepriceCostItem::getRepriceNo, result.getRepriceNo())
@@ -213,7 +223,7 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
 
   @Override
   public MonthlyRepriceActiveLockDto getActiveLock() {
-    String businessUnitType = visibleBusinessUnit(null);
+    String businessUnitType = BusinessUnitContext.getCurrentBusinessUnitType();
     if (!StringUtils.hasText(businessUnitType)) {
       return MonthlyRepriceActiveLockDto.unlocked();
     }
@@ -221,7 +231,8 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
         batchMapper.selectOne(
             Wrappers.lambdaQuery(MonthlyRepriceBatch.class)
                 .eq(MonthlyRepriceBatch::getBusinessUnitType, businessUnitType)
-                .in(MonthlyRepriceBatch::getStatus, LOCKING_STATUSES)
+                .and(q -> q.eq(MonthlyRepriceBatch::getContractVersion, 1).ne(MonthlyRepriceBatch::getStatus, STATUS_CONFIRMED)
+                    .or(old -> old.isNull(MonthlyRepriceBatch::getContractVersion).in(MonthlyRepriceBatch::getStatus, LOCKING_STATUSES)))
                 .orderByDesc(MonthlyRepriceBatch::getUpdatedAt)
                 .last("LIMIT 1"));
     if (batch == null) {
@@ -235,6 +246,23 @@ public class MonthlyRepriceQueryServiceImpl implements MonthlyRepriceQueryServic
     dto.setStatus(batch.getStatus());
     dto.setMessage("当前业务单元正在月度调价，暂不能发起成本核算");
     return dto;
+  }
+
+  private com.sanhua.marketingcost.service.costing.MonthlyCostVersionService.Stored storedResult(MonthlyRepriceResult result) {
+    if (result.getCostRunVersionId() == null) throw new IllegalStateException("调价结果缺少保存成本版本");
+    var stored=savedCosts.read(BusinessUnitContext.getCurrentBusinessUnitType(),result.getCostRunVersionId());
+    var version=stored.version();
+    if (!java.util.Objects.equals(result.getRepriceNo(),version.getRepriceNo())
+        || !java.util.Objects.equals(result.getOaNo(),version.getOaNo())
+        || !java.util.Objects.equals(result.getOaFormItemId(),version.getOaFormItemId())
+        || !java.util.Objects.equals(result.getProductCode(),version.getProductCode())
+        || !java.util.Objects.equals(result.getPricingMonth(),version.getPricingMonth())
+        || !java.util.Set.of("SUCCESS","CONFIRMED","HISTORY","VOIDED","STALE").contains(version.getStatus())
+        || !java.util.Objects.equals(version.getPartItemCount(),stored.parts().size())
+        || !java.util.Objects.equals(version.getCostItemCount(),stored.costs().size()))
+      throw new IllegalStateException("调价结果与保存成本版本不一致");
+    com.sanhua.marketingcost.service.costing.MonthlyCostVersionService.validateStoredRows(stored);
+    return stored;
   }
 
   private MonthlyRepriceBatch visibleBatch(String repriceNo) {

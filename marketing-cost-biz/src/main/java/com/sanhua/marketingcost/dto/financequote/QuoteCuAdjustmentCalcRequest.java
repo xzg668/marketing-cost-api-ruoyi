@@ -12,7 +12,13 @@ public record QuoteCuAdjustmentCalcRequest(
     String oaPricePrepareNo,
     String calcObjectKey,
     IntConsumer progress,
-    boolean automaticCompletion) {
+    boolean automaticCompletion,
+    com.sanhua.marketingcost.service.reprice.MonthlyRepriceCalculation reprice) {
+
+  public QuoteCuAdjustmentCalcRequest(OaForm form, OaFormItem item, String pricingMonth,
+      String oaPricePrepareNo, String calcObjectKey, IntConsumer progress, boolean automaticCompletion) {
+    this(form,item,pricingMonth,oaPricePrepareNo,calcObjectKey,progress,automaticCompletion,null);
+  }
 
   public QuoteCuAdjustmentCalcRequest(
       OaForm form,

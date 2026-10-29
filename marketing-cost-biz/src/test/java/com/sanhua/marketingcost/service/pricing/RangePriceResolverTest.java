@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.pricing;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -419,7 +420,7 @@ class RangePriceResolverTest {
     assertThat(result.unitPrice()).isNull();
     assertThat(result.failureCode()).isEqualTo("RANGE_PRICE_MISSING");
     assertThat(result.remark()).contains("缺少不含税价");
-    verifyNoInteractions(ratioService);
+    verify(ratioService).resolve(anyString(),anyString(),any(),any(),any(java.time.LocalDate.class));
   }
 
   @Test
@@ -577,7 +578,7 @@ class RangePriceResolverTest {
     verify(items).selectList(query.capture());
     assertThat(query.getValue().getSqlSegment()).doesNotContain("effective_from <=");
     assertThat(paramValues(query.getValue())).contains(101L).doesNotContain(102L);
-    verifyNoInteractions(ratio); // 单供应商可直接确定，不读供货比例。
+    verify(ratio).resolve(anyString(),anyString(),any(),any(),any(java.time.LocalDate.class)); // 单供应商也先排除明确退出关系。
   }
 
   private static CostRunPartItemDto part(String code, String qty) {

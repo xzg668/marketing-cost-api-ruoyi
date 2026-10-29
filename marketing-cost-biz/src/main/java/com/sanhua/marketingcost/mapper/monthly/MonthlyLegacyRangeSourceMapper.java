@@ -19,9 +19,15 @@ public interface MonthlyLegacyRangeSourceMapper {
       AND (org_code=#{org} OR (org_code IS NULL AND pricing_month IS NULL AND rule_status='LEGACY'))
       AND rule_status IN ('LEGACY','PUBLISHED') AND material_code IN
       <foreach collection="codes" item="code" open="(" separator="," close=")">#{code}</foreach>
-      ORDER BY version_no DESC,id DESC</script>
+      </script>
     """)
-  List<PriceRangeFactorRule> rules(@Param("unit") String unit,@Param("org") String org,@Param("codes") Collection<String> codes);
+  List<PriceRangeFactorRule> ruleRows(@Param("unit") String unit,@Param("org") String org,@Param("codes") Collection<String> codes);
+
+  /** Keep large saved JSON documents out of MySQL filesort while preserving newest-version order. */
+  default List<PriceRangeFactorRule> rules(String unit,String org,Collection<String> codes) {
+    return ruleRows(unit,org,codes).stream().sorted(Comparator.comparing(PriceRangeFactorRule::getVersionNo, Comparator.nullsLast(Comparator.reverseOrder()))
+        .thenComparing(PriceRangeFactorRule::getId, Comparator.nullsLast(Comparator.reverseOrder()))).toList();
+  }
   @Select("""
     <script>SELECT * FROM lp_price_range_item WHERE range_basis='FACTOR' AND factor_rule_id IN
       <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>

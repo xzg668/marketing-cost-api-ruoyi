@@ -2,9 +2,7 @@ package com.sanhua.marketingcost.service.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.sanhua.marketingcost.dto.CostRunMonthlyRepriceSubmitRequest;
 import com.sanhua.marketingcost.dto.CostRunTaskSubmissionResult;
-import com.sanhua.marketingcost.dto.MonthlyRepriceCalcObject;
 import com.sanhua.marketingcost.entity.CostRunBatch;
 import com.sanhua.marketingcost.entity.CostRunTask;
 import com.sanhua.marketingcost.entity.OaForm;
@@ -370,39 +368,7 @@ class CostRunTaskSubmissionServiceImplTest {
     });
   }
 
-  @Test
-  void submitMonthlyRepriceDeduplicatesCalcObjectsByCanonicalKey() {
-    FakeBatchMapper batchMapper = new FakeBatchMapper(null);
-    FakeTaskMapper taskMapper = new FakeTaskMapper();
-    CostRunTaskSubmissionServiceImpl service =
-        new CostRunTaskSubmissionServiceImpl(
-            batchMapper.proxy(),
-            taskMapper.proxy(),
-            new FakeOaFormMapper(null).proxy(),
-            new FakeOaFormItemMapper(List.of()).proxy(),
-            emptyWorkspaceMapper(),
-            emptyVersionMapper(),
-            algorithmVersion(), (form, item) -> "SOURCE-1");
-    CostRunMonthlyRepriceSubmitRequest request = new CostRunMonthlyRepriceSubmitRequest();
-    request.setRepriceNo("MRP-001");
-    request.setPricingMonth("2026-05");
-    request.setBusinessUnitType("COMMERCIAL");
-    request.setBomSourcePolicy("OA_CALCULATED");
-    request.setCalcObjects(
-        List.of(
-            monthlyObject("OA-1", 11L, " P-001 ", "Box", "Acme  Inc"),
-            monthlyObject("OA-1", 12L, "P-001", " Box ", "ACME INC")));
 
-    CostRunTaskSubmissionResult result = service.submitMonthlyReprice(request);
-
-    assertThat(result.getScene()).isEqualTo("MONTHLY_REPRICE");
-    assertThat(result.getTaskCount()).isEqualTo(1);
-    assertThat(result.getSkippedCount()).isEqualTo(1);
-    assertThat(taskMapper.inserted).hasSize(1);
-    CostRunTask task = taskMapper.inserted.get(0);
-    assertThat(task.getBomSourcePolicy()).isEqualTo("OA_CALCULATED");
-    assertThat(task.getCalcObjectKey()).hasSize(64);
-  }
 
   private OaForm oaForm() {
     OaForm form = new OaForm();
@@ -443,16 +409,7 @@ class CostRunTaskSubmissionServiceImplTest {
     return batch;
   }
 
-  private MonthlyRepriceCalcObject monthlyObject(
-      String oaNo, Long itemId, String productCode, String packageMethod, String customerName) {
-    MonthlyRepriceCalcObject object = new MonthlyRepriceCalcObject();
-    object.setOaNo(oaNo);
-    object.setOaFormItemId(itemId);
-    object.setProductCode(productCode);
-    object.setPackageMethod(packageMethod);
-    object.setCustomerName(customerName);
-    return object;
-  }
+
 
   private QuoteCostingWorkspaceMapper emptyWorkspaceMapper() {
     return workspaceMapper(List.of());

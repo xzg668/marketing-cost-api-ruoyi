@@ -43,9 +43,9 @@ public final class MonthlyScrapPriceSource {
     for(int start=0;start<codes.size();start+=256){
       var batch=codes.subList(start,Math.min(start+256,codes.size()));
       var history=new HashMap<String,List<ScrapPrice>>();rows.rules(context.businessUnitType(),batch).forEach(row->history.computeIfAbsent(row.getMaterialCode(),ignored->new ArrayList<>()).add(row));
-      var multiple=new TreeSet<String>();history.forEach((code,items)->{if(items.stream().map(ScrapRuleMonthPolicy::identity).map(ScrapPriceIdentity::supplierKey).distinct().count()>1)multiple.add(code);});
-      var ratios=new HashMap<String,List<SupplierSupplyRatio>>();if(!multiple.isEmpty())supplierInputs.ratios(context.businessUnitType(),context.priceAsOfTime().toLocalDate(),multiple).forEach(row->ratios.computeIfAbsent(row.getRequestedMaterialCode(),ignored->new ArrayList<>()).add(row));
-      var scopes=new TreeMap<String,SupplierPriceScope>();for(String code:multiple)for(var request:byCode.get(code)){var scope=scope(context,request);scopes.put(SupplierPriceSelectionService.scopeKey(scope),scope);}
+      var relationCodes=new TreeSet<>(history.keySet());
+      var ratios=new HashMap<String,List<SupplierSupplyRatio>>();if(!relationCodes.isEmpty())supplierInputs.ratios(context.businessUnitType(),context.priceAsOfTime().toLocalDate(),relationCodes).forEach(row->ratios.computeIfAbsent(row.getRequestedMaterialCode(),ignored->new ArrayList<>()).add(row));
+      var scopes=new TreeMap<String,SupplierPriceScope>();for(String code:relationCodes)if(history.get(code).size()>1)for(var request:byCode.get(code)){var scope=scope(context,request);scopes.put(SupplierPriceSelectionService.scopeKey(scope),scope);}
       var decisions=new HashMap<String,SupplierPriceDecision>();if(!scopes.isEmpty())supplierInputs.decisions(scopes.keySet()).forEach(row->decisions.put(row.getScopeKey(),row));
       for(String code:batch){
         var registered=history.get(code);if(registered==null)continue;

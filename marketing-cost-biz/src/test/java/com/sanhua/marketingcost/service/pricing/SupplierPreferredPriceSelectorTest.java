@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioResolveResult;
@@ -76,8 +77,8 @@ class SupplierPreferredPriceSelectorTest {
   }
 
   @Test
-  @DisplayName("价格候选只有一家供应商时直接取价，不查询供货比例")
-  void singlePriceSupplierBypassesSupplierRatioSelection() {
+  @DisplayName("单一价格供应商仍读取关系排除明确退出")
+  void singlePriceSupplierChecksWithdrawalBeforeSelection() {
     Candidate onlySupplier = new Candidate("供应商B", "SUP-B", "20");
 
     SupplierPreferredPriceSelection<Candidate> selected = select(List.of(onlySupplier));
@@ -85,7 +86,7 @@ class SupplierPreferredPriceSelectorTest {
     assertThat(selected.row()).isSameAs(onlySupplier);
     assertThat(selected.matchMode()).isEqualTo("SINGLE_SUPPLIER");
     assertThat(selected.failed()).isFalse();
-    verifyNoInteractions(resolveService);
+    verify(resolveService).resolve(any(), any(), any(), any(), any());
   }
 
   @Test
@@ -114,7 +115,7 @@ class SupplierPreferredPriceSelectorTest {
     assertThat(selected.row()).isSameAs(latest);
     assertThat(selected.matchMode()).isEqualTo("SINGLE_SUPPLIER");
     assertThat(selected.failed()).isFalse();
-    verifyNoInteractions(resolveService);
+    verify(resolveService).resolve(any(), any(), any(), any(), any());
   }
 
   @Test

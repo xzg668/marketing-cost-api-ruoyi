@@ -50,7 +50,7 @@ public class TechnicalDataPackageApplicationService {
         ? TechnicalDataPackageRules.validate(packaging, rows) : List.<String>of();
     var items = rows.stream().map(row -> {
       var evidence = currentFormat ? codec.packageEvidence(row) : null;
-      BigDecimal perProduct = currentFormat && packaging.parentQuantity() != null && row.getQuantity() != null
+      BigDecimal perProduct = currentFormat && TechnicalDataPackageRules.canCalculate(packaging, row)
           ? TechnicalDataPackageRules.perProduct(packaging, row) : null;
       return new TechnicalDataPackageResponse.Item(row.getId(), row.getLineNo(), row.getComponentMaterialNo(), row.getComponentName(),
           evidence == null ? null : evidence.model(), row.getComponentSpec(), row.getQuantity(), row.getOriginalUnit(), row.getRemark(), evidence, perProduct);
@@ -84,14 +84,15 @@ public class TechnicalDataPackageApplicationService {
         || !actor.canEditModule(scope.task(), scope.module())) throw forbidden("当前包装模块未分派给本人或已送审");
     sharedModules.requireOwnership(productId, "PACKAGE");
     if (!"MISSING".equals(scope.module().getSourceAvailability())) throw invalid("请先核实本产品的包装缺口");
-    BigDecimal parentQuantity = TechnicalDataPackageRules.quantity(request.getParentQuantity(), "母件用量", true);
+    BigDecimal parentBaseQuantity = TechnicalDataPackageRules.quantity(request.getParentBaseQuantity(), "母件底数", true);
     boolean reference = "REFERENCE".equals(request.getEntryMode());
     Source referenceSource = reference ? sources.require(scope.task(), scope.product(), request.getReferenceParentNodeId(), request.getReferenceFingerprint()) : null;
     if (!reference && (request.getReferenceParentNodeId() != null || request.getReferenceFingerprint() != null)) throw invalid("自行录入不能带入参考页的母件来源");
     var evidence = referenceSource == null ? null : referenceSource.evidence();
     var packaging = new Packaging(evidence == null ? null : evidence.topProductCode(), evidence == null ? null : evidence.parentMaterialNo(),
-        evidence == null ? null : evidence.parentQuantity(), parentQuantity, TechnicalDataPackageRules.PARENT_UNIT,
-        evidence == null ? null : "U9:" + evidence.parentNodeId(), request.getEntryMode(), evidence);
+        evidence == null ? null : evidence.parentQuantity(), null, null,
+        evidence == null ? null : "U9:" + evidence.parentNodeId(), request.getEntryMode(), evidence, parentBaseQuantity,
+        TechnicalDataPackageRules.QUANTITY_BASIS);
     var sourceCache = new HashMap<Long, Source>();
     if (referenceSource != null) sourceCache.put(evidence.parentNodeId(), referenceSource);
     var items = new ArrayList<QuoteTechPackageItem>();
@@ -100,7 +101,7 @@ public class TechnicalDataPackageApplicationService {
       items.add(item(scope, input, referenceSource, sourceCache, items.size() + 1));
     }
     var issues = TechnicalDataPackageRules.validate(packaging, items);
-    // 草稿可缺母件用量或尚未选子件；已填写的行必须真实完整，提交另做完整性校验。
+    // 草稿可缺母件底数或尚未选子件；已填写的行必须真实完整，提交另做完整性校验。
     if (issues.stream().anyMatch(message -> message.startsWith("第 "))) throw invalid(String.join("；", issues));
     var now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
     var draft = draft(scope.product(), actor, now);
@@ -119,7 +120,7 @@ public class TechnicalDataPackageApplicationService {
     module.setReferenceSnapshotJson(evidence == null ? null : codec.packagingJson(packaging));
     module.setReferencedAt(evidence == null ? null : now);
     module.setLastValidationCode(issues.isEmpty() ? "PACKAGE_VERIFIED" : "PACKAGE_INCOMPLETE");
-    module.setLastValidationMessage(issues.isEmpty() ? "包装母子用量已核实" : String.join("；", issues));
+    module.setLastValidationMessage(issues.isEmpty() ? "包装母件底数及子件用量已核实" : String.join("；", issues));
     if (repository.updateModule(module, module.getRowVersion(), now) != 1) throw conflict("包装模块已变化，请刷新后保存");
     scope.product().setCurrentEditVersionId(draft.getId()); scope.product().setProductStatus("EDITING");
     if (repository.updateProductPointers(scope.product(), request.getExpectedVersion(), now) != 1) throw conflict("产品资料已变化，请刷新后保存");

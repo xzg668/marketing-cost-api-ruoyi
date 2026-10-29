@@ -111,6 +111,7 @@ public class QuoteProductBomCostingBuildServiceImpl
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=true)
   public QuoteBomCostingBuildResponse buildFromEffectiveBom(
       Long oaFormItemId, String effectiveBuildBatchId) {
     BuildPlan plan = planFromEffectiveBom(oaFormItemId, effectiveBuildBatchId);
@@ -133,6 +134,48 @@ public class QuoteProductBomCostingBuildServiceImpl
       Long oaFormItemId, String effectiveBuildBatchId) {
     var plan = planFromEffectiveBom(oaFormItemId, effectiveBuildBatchId);
     return new Preview(plan.rows().rows(), plan.pricingScope());
+  }
+
+  @Override
+  @Transactional(readOnly = true)
+  public Preview previewForReprice(com.sanhua.marketingcost.service.reprice.MonthlyRepriceCalculation input,
+      String build) {
+    var plan = planForReprice(input, build);
+    return new Preview(plan.rows().rows(), plan.pricingScope());
+  }
+
+  @Override
+  @Transactional(rollbackFor = Exception.class)
+  public void buildForReprice(com.sanhua.marketingcost.service.reprice.MonthlyRepriceCalculation input,
+      String build) {
+    var plan = planForReprice(input, build);
+    cleanupExisting(plan.record(), plan.periodMonth(), input.repriceNo());
+    var ids = new HashMap<String, Long>();
+    writeBuiltRows(plan.rows().rows(), ids);
+    aliasCostingRowIds(plan.rows().pathAliases(), ids);
+    writeBuiltSubRefs(plan.subRefs(), ids);
+    writeBuiltSourceRefs(plan.sourceRefs(), ids);
+  }
+
+  private BuildPlan planForReprice(com.sanhua.marketingcost.service.reprice.MonthlyRepriceCalculation input,
+      String build) {
+    var saved = input.input(); var context = saved.context();
+    var record = new QuoteBomPreparationRecord();
+    record.setOaNo(saved.form().getOaNo()); record.setOaFormId(saved.form().getId());
+    record.setOaFormItemId(saved.item().getId()); record.setQuoteProductCode(context.productCode());
+    record.setSourceTopProductCode(context.productCode()); record.setProductType(PRODUCT_TYPE_NON_BARE);
+    record.setPriceOrgCode(context.organization().priceOrgCode());
+    record.setMaterialOrganizationCode(context.organization().materialOrganizationCode());
+    record.setCostPeriodMonth(context.costPeriodMonth()); record.setPreparationStatus(PREPARATION_READY);
+    var nodes = effectiveBomRepository.findNodesByBuildBatchId(build);
+    if (nodes == null || nodes.isEmpty()) throw new QuoteIngestException("目标月有效BOM不存在");
+    validateEffectiveNodes(record, build, context.costPeriodMonth(), nodes);
+    var lines = effectiveLines(record, nodes, input.bom().getSyncRecordId());
+    var plan = applyRules(record, input.priceAsOfTime().toLocalDate(), context.costPeriodMonth(), lines, build,
+        nodes.stream().filter(n -> n.getMaterialUnit() != null && !n.getMaterialUnit().isBlank())
+            .collect(java.util.stream.Collectors.toMap(QuoteEffectiveBomNode::getNodePath, QuoteEffectiveBomNode::getMaterialUnit)));
+    plan.rows().rows().forEach(row -> row.setCalculationScope(input.repriceNo()));
+    return plan;
   }
 
   private BuildPlan planFromEffectiveBom(Long oaFormItemId, String effectiveBuildBatchId) {
@@ -173,11 +216,17 @@ public class QuoteProductBomCostingBuildServiceImpl
 
   private List<PreparedLine> effectiveLines(
       QuoteBomPreparationRecord record, List<QuoteEffectiveBomNode> nodes) {
+    return effectiveLines(record, nodes, null);
+  }
+
+  private List<PreparedLine> effectiveLines(QuoteBomPreparationRecord record,
+      List<QuoteEffectiveBomNode> nodes, Long snapshotId) {
     Map<Long, com.sanhua.marketingcost.entity.BomRawHierarchy> rawById = new HashMap<>();
     QuoteBomStatus status = record.getQuoteBomStatusId() == null
         ? null : statusMapper.selectById(record.getQuoteBomStatusId());
     List<com.sanhua.marketingcost.entity.BomRawHierarchy> frozen =
-        status == null ? List.of() : monthlyDetails.load(status.getSyncRecordId());
+        snapshotId != null ? monthlyDetails.load(snapshotId)
+            : status == null ? List.of() : monthlyDetails.load(status.getSyncRecordId());
     if (!frozen.isEmpty()) {
       for (com.sanhua.marketingcost.entity.BomRawHierarchy row : frozen) {
         if (row.getId() != null) rawById.put(row.getId(), row);
@@ -627,10 +676,15 @@ public class QuoteProductBomCostingBuildServiceImpl
   }
 
   private void cleanupExisting(QuoteBomPreparationRecord record, String periodMonth) {
+    cleanupExisting(record, periodMonth, "");
+  }
+
+  private void cleanupExisting(QuoteBomPreparationRecord record, String periodMonth, String scope) {
     List<BomCostingRow> existingRows =
         costingRowMapper.selectList(
             Wrappers.<BomCostingRow>lambdaQuery()
                 .select(BomCostingRow::getId)
+                .eq(BomCostingRow::getCalculationScope, scope)
                 .eq(BomCostingRow::getOaNo, record.getOaNo())
                 .eq(BomCostingRow::getOaFormItemId, record.getOaFormItemId())
                 .eq(BomCostingRow::getTopProductCode, record.getQuoteProductCode())

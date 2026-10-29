@@ -44,7 +44,6 @@ class ElectronicDrawingHybridBomServiceTest {
   @Mock private ElectronicDrawingSourceNodeRepository sourceNodeRepository;
   @Mock private MaterialMasterRawMapper materialMapper;
   @Mock private ElectronicDrawingHybridBomAssembler assembler;
-  @Mock private ElectronicDrawingProductLookup productLookup;
 
   private ElectronicDrawingHybridBomService service;
   private ElectronicDrawingWorkContext context;
@@ -60,14 +59,12 @@ class ElectronicDrawingHybridBomServiceTest {
             versionMapper,
             detailMapper,
             sourceNodeRepository,
-            materialMapper,
             assembler,
             org.mockito.Mockito.mock(
                 com.sanhua.marketingcost.service.technicaldata.TechnicalDataManufacturingBomSource
                     .class),
             ElectronicDrawingTestScope.create(
-                materialMapper, org.mockito.Mockito.mock(ElectronicDrawingU9SubBomPort.class)),
-            productLookup);
+                materialMapper, org.mockito.Mockito.mock(ElectronicDrawingU9SubBomPort.class)));
     context = context(4);
     version = version();
     source = source(ElectronicDrawingSourceNode.MATCH_AUTO, "P");
@@ -141,8 +138,7 @@ class ElectronicDrawingHybridBomServiceTest {
         "MODEL",
         "LONG-MODEL-ABCDEFGHIJKLMNOPQRSTUVWXYZ-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789"
       })
-  void quoteWithoutMaterialUsesTheRealRootMatchingSelectedDrawingWithoutChangingQuoteIdentity(
-      String model) {
+  void quoteWithoutMaterialUsesItsOwnIdentityAsStructuralRoot(String model) {
     String quoteCode =
         com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(
             null, model, "DRAW-TOP");
@@ -179,47 +175,65 @@ class ElectronicDrawingHybridBomServiceTest {
     version.setElectronicDrawingNo("DRAW-TOP");
     version.setCompositionFingerprint(FINGERPRINT);
     arrangeReadAndAssembly();
-    when(materialMapper.selectByLatestBatchAndCodes(
-            eq(java.util.Set.of(quoteCode)), eq(null), eq("COMMERCIAL")))
-        .thenReturn(List.of());
-    when(productLookup.options(context))
-        .thenReturn(
-            List.of(
-                new ElectronicDrawingProductLookup.Option(
-                    "DRAW-TOP", "TOP", "顶层料品", model, "MATERIAL_MASTER")));
     when(detailMapper.selectList(any())).thenReturn(stored(version, hybrid.nodes()));
     assertThat(service.compose(101L, "COMMERCIAL", "210", "2026-08").idempotent()).isTrue();
     ArgumentCaptor<AssembleCommand> command = ArgumentCaptor.forClass(AssembleCommand.class);
     verify(assembler).assemble(command.capture());
-    assertThat(command.getValue().rootMaterial().materialCode()).isEqualTo("TOP");
+    assertThat(command.getValue().rootMaterial().materialCode()).isEqualTo(quoteCode);
+    assertThat(command.getValue().rootMaterial().shapeAttr()).isNull();
+    assertThat(command.getValue().rootMaterial().unit()).isNull();
+    verify(materialMapper, never())
+        .selectByLatestBatchAndCodes(eq(java.util.Set.of(quoteCode)), eq(null), eq("COMMERCIAL"));
     assertThat(version.getQuoteProductCode()).isEqualTo(quoteCode);
   }
 
   @Test
   void sharedDrawingDoesNotChooseAnArbitraryFormalRootForTheBom() {
     String model = "YCQB05L89";
-    String quoteCode = com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(
-        null, model, "DRAW-TOP");
-    context = new ElectronicDrawingWorkContext(
-        101L, 4, 301L, 501L, 100L, 201L, "QCPT-101", "OA-101", quoteCode,
-        null, null, null, model, null, "FULL_BOM", "2026-08", "210", "COMMERCIAL",
-        "COMMERCIAL", "210", true, true, "BOM_IN_PROGRESS",
-        ElectronicDrawingWorkflowStage.COMPOSING, null, null, null);
+    String quoteCode =
+        com.sanhua.marketingcost.util.QuoteProductIdentityUtils.resolveCostingCode(
+            null, model, "DRAW-TOP");
+    context =
+        new ElectronicDrawingWorkContext(
+            101L,
+            4,
+            301L,
+            501L,
+            100L,
+            201L,
+            "QCPT-101",
+            "OA-101",
+            quoteCode,
+            null,
+            null,
+            null,
+            model,
+            null,
+            "FULL_BOM",
+            "2026-08",
+            "210",
+            "COMMERCIAL",
+            "COMMERCIAL",
+            "210",
+            true,
+            true,
+            "BOM_IN_PROGRESS",
+            ElectronicDrawingWorkflowStage.COMPOSING,
+            null,
+            null,
+            null);
     version.setQuoteProductCode(quoteCode);
     version.setElectronicDrawingNo("DRAW-TOP");
-    arrangeRead();
-    when(productLookup.options(context)).thenReturn(List.of(
-        new ElectronicDrawingProductLookup.Option(
-            "DRAW-TOP", "101850563", "压力变送器", model, "MATERIAL_MASTER"),
-        new ElectronicDrawingProductLookup.Option(
-            "DRAW-TOP", "1145900000152", "压力变送器", model, "MATERIAL_MASTER")));
+    version.setCompositionFingerprint(FINGERPRINT);
+    arrangeReadAndAssembly();
+    when(detailMapper.selectList(any())).thenReturn(stored(version, hybrid.nodes()));
 
-    assertThatThrownBy(() -> service.compose(101L, "COMMERCIAL", "210", "2026-08"))
-        .isInstanceOfSatisfying(ElectronicDrawingHybridBomException.class,
-            error -> assertThat(error.code()).isEqualTo(ElectronicDrawingHybridBomException.MAPPING_INCOMPLETE))
-        .hasMessageContaining("唯一顶层");
-    verify(assembler, never()).assemble(any());
-    verify(detailMapper, never()).deleteElectronicDrawingHybridDraft(any());
+    assertThat(service.compose(101L, "COMMERCIAL", "210", "2026-08").idempotent()).isTrue();
+    ArgumentCaptor<AssembleCommand> command = ArgumentCaptor.forClass(AssembleCommand.class);
+    verify(assembler).assemble(command.capture());
+    assertThat(command.getValue().rootMaterial().materialCode()).isEqualTo(quoteCode);
+    verify(materialMapper, never())
+        .selectByLatestBatchAndCodes(eq(java.util.Set.of(quoteCode)), eq(null), eq("COMMERCIAL"));
   }
 
   @Test

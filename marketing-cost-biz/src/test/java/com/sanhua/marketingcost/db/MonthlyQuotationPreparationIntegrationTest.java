@@ -20,6 +20,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 
 @Tag("integration")
+@org.junit.jupiter.api.TestMethodOrder(org.junit.jupiter.api.MethodOrderer.OrderAnnotation.class)
 @org.springframework.boot.test.context.SpringBootTest(webEnvironment=org.springframework.boot.test.context.SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = {"srm.fixed-price.enabled=false", "oa.person-directory.enabled=false",
     "oa.person-directory.run-at-startup=false", "monthly-reprice.enabled=false", "cms.sync.publish.enabled=false",
@@ -73,12 +74,315 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
   @Autowired HouseholdMonthlyPriceSource householdSource;
   @org.springframework.boot.test.web.server.LocalServerPort int httpPort;
 
+  @Autowired com.sanhua.marketingcost.service.reprice.MonthlyRepriceContractService repriceContracts;
+  @Autowired com.sanhua.marketingcost.mapper.MonthlyRepriceContractMapper repriceTasks;
+  @Autowired com.sanhua.marketingcost.service.reprice.MonthlyRepriceCostingService repriceCosting;
+  @Autowired com.sanhua.marketingcost.config.MonthlyRepriceProperties repriceProperties;
+  @Autowired com.sanhua.marketingcost.service.QuoteCostRunWorkbenchService ordinaryWorkbench;
+  @Autowired com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService repriceSnapshotDetails;
+  @Autowired com.sanhua.marketingcost.service.ingest.QuoteBomStatusService repriceBomStatus;
+  @Autowired com.sanhua.marketingcost.service.ingest.QuoteBomContextResolver repriceBomContext;
+
+  @Autowired com.sanhua.marketingcost.service.reprice.MonthlyRepriceWorkflowService repriceWorkflow;
+  @Autowired com.sanhua.marketingcost.service.reprice.MonthlyCostComparisonInputs comparisonInputs;
+  @Autowired com.sanhua.marketingcost.service.reprice.MonthlyCostComparisonService comparisonService;
+  @Autowired com.sanhua.marketingcost.service.reprice.MonthlyRepriceDispatchService repriceDispatch;
+  @Autowired com.sanhua.marketingcost.service.reprice.MonthlyQuotationControl quotationControl;
+  @Autowired com.sanhua.marketingcost.service.reprice.MonthlyRepriceCheckService repriceChecks;
+
+  private void compareRepriceCalculation(com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcResult ordinary,
+      long formId,long itemId,String month,String prepareNo) {
+    var form=oaForms.selectById(formId);var item=oaItems.selectById(itemId);
+    var context=repriceBomContext.resolveWithExistingCostPeriod(form,item,month);
+    var bom=repriceBomStatus.prepareMonthlyReprice(form,item,context);
+    var input=new com.sanhua.marketingcost.service.reprice.MonthlyRepriceCalculation("MRP1130-"+UUID.randomUUID(),
+        new com.sanhua.marketingcost.service.reprice.MonthlyRepriceContract.ObjectIdentity("COMMERCIAL",form.getOaNo(),itemId).key(),
+        new com.sanhua.marketingcost.service.reprice.MonthlyRepriceBomService.Input(form,item,context),bom,
+        YearMonth.parse(month).atDay(25).atTime(12,0));
+    var repriced=quotationCosting.calculate(new com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest(
+        form,item,month,prepareNo,input.objectKey(),null,true,input));
+    assertThat(repriced.version().getRepriceNo()).isEqualTo(input.repriceNo());
+    var comparisonInput=comparisonInputs.load("COMMERCIAL",List.of(repriced.version())).getFirst();
+    assertThat(comparisonInput.saved().parts()).hasSameSizeAs(repriced.costResult().getPartItems());
+    assertThat(comparisonInput.saved().snapshot().calculation().totalCost()).isEqualByComparingTo(ordinary.totalCost());
+    assertThat(repriced.totalCost()).isEqualByComparingTo(ordinary.totalCost());
+    assertThat(repriced.finalQuoteAmount()).isEqualByComparingTo(ordinary.finalQuoteAmount());
+    assertThat(repriced.cuMaterialAdjustment()).isEqualByComparingTo(ordinary.cuMaterialAdjustment());
+    assertThat(repriced.costResult().getCostItems()).extracting(v->List.of(v.getCostCode(),String.valueOf(v.getAmount())))
+        .containsExactlyElementsOf(ordinary.costResult().getCostItems().stream().map(v->List.of(v.getCostCode(),String.valueOf(v.getAmount()))).toList());
+    assertThat(repriced.costResult().getPartItems()).extracting(v->List.of(v.getPartCode(),String.valueOf(v.getPartQty()),String.valueOf(v.getAmount())))
+        .containsExactlyElementsOf(ordinary.costResult().getPartItems().stream().map(v->List.of(v.getPartCode(),String.valueOf(v.getPartQty()),String.valueOf(v.getAmount()))).toList());
+  }
+
+
+  @org.junit.jupiter.api.Order(0)
+  @Test void repriceUsesSameCalculationAndPreservesOrdinaryPointersOnSuccessRetryAndRollback() {
+    String key="MRP06-"+UUID.randomUUID().toString().substring(0,8), material=key+"-PART";
+    String month=com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+    var date=YearMonth.parse(month).atDay(25).atTime(12,0);
+    jdbc.update("INSERT INTO oa_form(oa_no,business_unit_type,copper_price) VALUES(?,'COMMERCIAL',80000)",key);
+    long form=jdbc.queryForObject("SELECT id FROM oa_form WHERE oa_no=?",Long.class,key);
+    jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,business_unit_type) VALUES(?,?,'COMMERCIAL')",form,key);
+    long item=jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=?",Long.class,form);
+    jdbc.update("INSERT INTO lp_price_fixed_item(org_code,material_code,material_name,unit,fixed_price,tax_included,supplier_code,effective_from,effective_to,business_unit_type,source_kind,source_type,source_system,created_at,updated_at) "
+        +"VALUES('210',?,?,'件',11.3,0,'MRP06-S',?,'2099-01-01','COMMERCIAL','PUBLIC','PURCHASE_FIXED','SRM',NOW(),NOW())",material,material,date.toLocalDate().withDayOfMonth(1));
+    ordinarySources(key,material,form,date);buildOriginalFixture(form,item,key,month,date,material,Map.of());
+    var request=new com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest();
+    request.setOaNo(key);request.setOaFormItemId(item);request.setTopProductCode(key);request.setPeriodMonth(month);
+    request.setPriceAsOfTime(date);request.setBusinessUnitType("COMMERCIAL");
+    var prepared=generateThroughWorkbench(request);
+    var original=quotationCosting.calculate(new com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest(
+        oaForms.selectById(form),oaItems.selectById(item),month,prepared.getPrepareNo(),key,null,true));
+    jdbc.update("UPDATE lp_quote_cost_run_version SET status='SUCCESS' WHERE id=?",original.version().getId());
+    // A second consumer shares the exact monthly fact, while keeping its own preparation and result.
+    jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,business_unit_type) VALUES(?,?,'COMMERCIAL')",form,key);
+    long second=jdbc.queryForObject("SELECT MAX(id) FROM oa_form_item WHERE oa_form_id=?",Long.class,form);
+    var record=new com.sanhua.marketingcost.entity.QuoteBomPreparationRecord();
+    record.setOaFormId(form);record.setOaFormItemId(second);record.setOaNo(key);record.setQuoteProductCode(key);
+    record.setPriceOrgCode("210");record.setMaterialOrganizationCode("COMMERCIAL");record.setProductType("NON_BARE");
+    record.setCostPeriodMonth(month);record.setPreparationStatus("READY");record.setActiveFlag(1);preparationRecords.insert(record);
+    costingBoms.buildFromEffectiveBom(second,key+"-EFFECTIVE");
+    request.setOaFormItemId(second);var secondPrepared=generateThroughWorkbench(request);
+    var secondOriginal=quotationCosting.calculate(new com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest(
+        oaForms.selectById(form),oaItems.selectById(second),month,secondPrepared.getPrepareNo(),key+"-SECOND",null,true));
+    jdbc.update("UPDATE lp_quote_cost_run_version SET status='SUCCESS' WHERE id=?",secondOriginal.version().getId());
+    var beforeItem=jdbc.queryForMap("SELECT * FROM oa_form_item WHERE id=?",item);
+    var beforeWorkspace=jdbc.queryForList("SELECT * FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",item);
+    var beforeRows=jdbc.queryForList("SELECT * FROM lp_bom_costing_row WHERE oa_form_item_id=? ORDER BY id",item);
+    var beforeVersion=jdbc.queryForMap("SELECT * FROM lp_quote_cost_run_version WHERE id=?",original.version().getId());
+    var auth=new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("MRP06-DIRECTOR","",
+        List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_BU_DIRECTOR")));
+    auth.setDetails(Map.of("businessUnitType","COMMERCIAL"));
+    org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(auth);
+    repriceProperties.setGoLiveMonths(Map.of("COMMERCIAL",month));
+    repriceProperties.setEnabled(true);
+    if(System.getProperty("mrp07.browser.state")!=null) {
+      MonthlyRepriceWorkflowBrowserSession.await(jdbc,httpPort,key,item,month,original.version().getId());
+      return;
+    }
+    var batch=repriceWorkflow.start().batch();
+    assertThat(repriceWorkflow.start().batch().getRepriceNo()).isEqualTo(batch.getRepriceNo());
+    assertThat(quotationControl.blocked("COMMERCIAL")).isTrue();
+    assertThat(quotationControl.blocked("HOUSEHOLD")).isFalse();
+    org.assertj.core.api.Assertions.assertThatThrownBy(()->generateThroughWorkbench(request))
+        .hasStackTraceContaining("业务总监确认后才能报价");
+    var task=repriceTasks.tasks(batch.getRepriceNo()).stream().filter(t->t.getOaFormItemId()==item).findFirst().orElseThrow();
+    var leased=repriceDispatch.claim("MRP07-abandoned");
+    assertThat(leased.getId()).isEqualTo(task.getId());
+    jdbc.update("UPDATE lp_cost_run_task SET lock_expire_time=DATE_SUB(NOW(),INTERVAL 1 MINUTE) WHERE id=?",task.getId());
+    var recovered=repriceDispatch.claim("MRP07-recovered");
+    assertThat(recovered.getId()).isEqualTo(task.getId());
+    assertThat(recovered.getExecutionNo()).isEqualTo(leased.getExecutionNo()+1);
+    org.assertj.core.api.Assertions.assertThatThrownBy(()->repriceCosting.execute(batch.getRepriceNo(),task.getId(),leased.getExecutionNo()))
+        .hasMessageContaining("执行轮次已失效");
+    int execution=recovered.getExecutionNo();
+    String trigger="mrp06_fail_"+item;
+    jdbc.execute("CREATE TRIGGER "+trigger+" BEFORE INSERT ON lp_quote_cost_price_scenario FOR EACH ROW BEGIN "
+        +"SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='MRP06 rollback'; END");
+    try {
+      org.assertj.core.api.Assertions.assertThatThrownBy(()->repriceCosting.execute(batch.getRepriceNo(),task.getId(),execution))
+          .hasMessageContaining("MRP06 rollback");
+    } finally { jdbc.execute("DROP TRIGGER "+trigger); }
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_cost_run_version WHERE reprice_no=?",Integer.class,batch.getRepriceNo())).isZero();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_bom_costing_row WHERE calculation_scope=?",Integer.class,batch.getRepriceNo())).isZero();
+    var secondTask=repriceTasks.tasks(batch.getRepriceNo()).stream().filter(t->t.getOaFormItemId()==second).findFirst().orElseThrow();
+    var secondLease=repriceDispatch.claim("MRP07-second");
+    assertThat(secondLease.getId()).isEqualTo(secondTask.getId());
+    int secondExecution=secondLease.getExecutionNo();
+    var pool=java.util.concurrent.Executors.newFixedThreadPool(2);
+    var start=new java.util.concurrent.CountDownLatch(1);
+    com.sanhua.marketingcost.service.costing.MonthlyCostVersionService.Stored repriced;
+    try {
+      var firstFuture=pool.submit(()->{start.await();return repriceCosting.execute(batch.getRepriceNo(),task.getId(),execution);});
+      var secondFuture=pool.submit(()->{start.await();return repriceCosting.execute(batch.getRepriceNo(),secondTask.getId(),secondExecution);});
+      start.countDown();repriced=firstFuture.get(60,java.util.concurrent.TimeUnit.SECONDS);
+      var secondResult=secondFuture.get(60,java.util.concurrent.TimeUnit.SECONDS);
+      assertThat(secondResult.version().getOaFormItemId()).isEqualTo(second);
+      assertThat(secondResult.version().getTotalCost()).isEqualByComparingTo(secondOriginal.totalCost());
+      assertThat(secondResult.version().getId()).isNotEqualTo(repriced.version().getId());
+      assertThat(secondResult.snapshot().calculation().adoptedPrices()).extracting(v->v.selection().monthlyPriceId())
+          .containsExactlyInAnyOrderElementsOf(repriced.snapshot().calculation().adoptedPrices().stream().map(v->v.selection().monthlyPriceId()).toList());
+    } catch(Exception failure) { throw new AssertionError("Concurrent consumers must publish atomically",failure); }
+    finally { pool.shutdownNow(); }
+
+    assertThat(comparisonInputs.load("COMMERCIAL",List.of(repriced.version())).getFirst().quotation().form().getOaNo()).isEqualTo(key);
+    assertThat(repriced.version().getTotalCost()).isEqualByComparingTo(original.totalCost());
+    assertThat(repriced.version().getFinalQuoteAmount()).isEqualByComparingTo(original.finalQuoteAmount());
+    assertThat(repriced.version().getRepriceNo()).isEqualTo(batch.getRepriceNo());
+    assertThat(ordinaryWorkbench.getCostRun(key,item,month).getCurrentDisplayVersion().getId())
+        .as("调价不能成为普通报价的当前显示版本").isEqualTo(original.version().getId());
+    assertThat(repriceCosting.execute(batch.getRepriceNo(),task.getId(),execution).version().getId()).isEqualTo(repriced.version().getId());
+    assertThat(jdbc.queryForMap("SELECT * FROM oa_form_item WHERE id=?",item)).isEqualTo(beforeItem);
+    assertThat(jdbc.queryForList("SELECT * FROM lp_quote_costing_workspace WHERE oa_form_item_id=?",item)).isEqualTo(beforeWorkspace);
+    assertThat(jdbc.queryForList("SELECT * FROM lp_bom_costing_row WHERE oa_form_item_id=? AND calculation_scope='' ORDER BY id",item)).isEqualTo(beforeRows);
+    assertThat(jdbc.queryForMap("SELECT * FROM lp_quote_cost_run_version WHERE id=?",original.version().getId())).isEqualTo(beforeVersion);
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_cost_run_version WHERE reprice_no=?",Integer.class,batch.getRepriceNo())).isEqualTo(2);
+    assertThat(repriced.snapshot().calculation().adoptedPrices()).extracting(v->v.selection().monthlyPriceId())
+        .containsExactlyInAnyOrderElementsOf(monthlyCosts.read("COMMERCIAL",original.version().getId()).snapshot().calculation().adoptedPrices().stream().map(v->v.selection().monthlyPriceId()).toList());
+    MonthlyRepriceBrowserSession.await(jdbc,httpPort,key,item,month,original.version().getId(),repriced.version().getId());
+    repriceDispatch.checkCompleted();
+    var checked=repriceTasks.readBatch(batch.getRepriceNo());
+    assertThat(checked.getStatus()).as(checked.getCheckResultJson()).isEqualTo("WAIT_CONFIRM");
+    assertThat(quotationControl.blocked("COMMERCIAL")).isTrue();
+    org.assertj.core.api.Assertions.assertThatThrownBy(()->repriceWorkflow.confirm(batch.getRepriceNo(),checked.getCheckedRevision()-1))
+        .hasMessageContaining("当前检查通过");
+    long savedPart=repriced.costs().getFirst().getId();
+    jdbc.update("UPDATE lp_cost_run_cost_item SET amount=amount+1 WHERE id=?",savedPart);
+    org.assertj.core.api.Assertions.assertThatThrownBy(()->repriceWorkflow.confirm(batch.getRepriceNo(),checked.getCheckedRevision()))
+        .hasMessageContaining("确认检查失败");
+    assertThat(quotationControl.blocked("COMMERCIAL")).isTrue();
+    jdbc.update("UPDATE lp_cost_run_cost_item SET amount=amount-1 WHERE id=?",savedPart);
+    var confirmation=repriceWorkflow.confirm(batch.getRepriceNo(),checked.getCheckedRevision());
+    assertThat(confirmation.batch().getStatus()).isEqualTo("CONFIRMED");
+    assertThat(confirmation.quotationBlocked()).isFalse();
+    assertThat(repriceWorkflow.confirm(batch.getRepriceNo(),checked.getCheckedRevision()).batch().getStatus()).isEqualTo("CONFIRMED");
+    assertThat(quotationControl.blocked("COMMERCIAL")).isFalse();
+    String nextMonth=YearMonth.parse(month).plusMonths(1).toString();
+    jdbc.update("UPDATE lp_bom_raw_hierarchy SET qty_per_parent=3.75,qty_per_top=3.75 WHERE top_product_code=? AND material_code=?",key,material);
+    jdbc.update("DELETE FROM lp_price_fixed_item WHERE material_code=?",material);
+    var next=repriceContracts.enqueue("COMMERCIAL",YearMonth.parse(nextMonth));
+    var nextTask=repriceTasks.tasks(next.getRepriceNo()).stream().filter(t->t.getOaFormItemId()==item).findFirst().orElseThrow();
+    int nextExecution=repriceContracts.begin(next.getRepriceNo(),nextTask.getId());
+    org.assertj.core.api.Assertions.assertThatThrownBy(()->repriceCosting.execute(next.getRepriceNo(),nextTask.getId(),nextExecution))
+        .hasStackTraceContaining("调价价格未齐全");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_cost_run_version WHERE reprice_no=?",Integer.class,next.getRepriceNo())).isZero();
+    long nextSnapshot=jdbc.queryForObject("SELECT JSON_EXTRACT(request_snapshot_json,'$.bomReady.syncRecordId') FROM lp_cost_run_task WHERE id=?",Long.class,nextTask.getId());
+    long oldSnapshot=jdbc.queryForObject("SELECT JSON_EXTRACT(request_snapshot_json,'$.bomReady.syncRecordId') FROM lp_cost_run_task WHERE id=?",Long.class,task.getId());
+    assertThat(nextSnapshot).isNotEqualTo(oldSnapshot);
+    assertThat(repriceSnapshotDetails.load(nextSnapshot).stream().filter(r->material.equals(r.getMaterialCode())).findFirst().orElseThrow().getQtyPerTop()).isEqualByComparingTo("3.75");
+    assertThat(repriceSnapshotDetails.load(oldSnapshot).stream().filter(r->material.equals(r.getMaterialCode())).findFirst().orElseThrow().getQtyPerTop()).isEqualByComparingTo("2.5");
+    jdbc.update("INSERT INTO lp_price_fixed_item(org_code,material_code,material_name,unit,fixed_price,tax_included,supplier_code,effective_from,effective_to,business_unit_type,source_kind,source_type,source_system,created_at,updated_at) "
+        +"VALUES('210',?,?,'件',11.3,0,'MRP06-S',?,'2099-01-01','COMMERCIAL','PUBLIC','PURCHASE_FIXED','SRM',NOW(),NOW())",material,material,YearMonth.parse(nextMonth).atDay(1));
+    jdbc.update("INSERT INTO lp_quote_tech_task(task_no,oa_form_id,oa_form_item_id,oa_no,accounting_month,business_unit_type,applicable_org_code,assignee_user_id,assignee_name,active_lock_key) VALUES(?,?,?,?,?,'COMMERCIAL','210',1,'MRP06 controlled pending',?)",key+"-TECH",form,item,key,nextMonth,"ITEM:"+item+":MONTH:"+nextMonth);
+    long technicalTask=jdbc.queryForObject("SELECT id FROM lp_quote_tech_task WHERE task_no=?",Long.class,key+"-TECH");
+    jdbc.update("INSERT INTO lp_quote_tech_product(task_id,oa_form_item_id,material_no,quote_no,accounting_month,source_snapshot_json,source_fingerprint,active_lock_key,content_schema_version) VALUES(?,?,?,?,?,'{}',?,?,1)",technicalTask,item,key,key,nextMonth,"a".repeat(64),"ITEM:"+item+":MONTH:"+nextMonth);
+    long technicalProduct=jdbc.queryForObject("SELECT id FROM lp_quote_tech_product WHERE task_id=?",Long.class,technicalTask);
+    for(String module:List.of("PROFILE","PACKAGE","AUXILIARY","SALARY"))
+      jdbc.update("INSERT INTO lp_quote_tech_module(product_id,module_type,required_flag,requirement_reason_code,requirement_reason,module_status) VALUES(?,?,?,'MRP06_PENDING','controlled pending confirmation',?)",technicalProduct,module,module.equals("PROFILE")?1:0,module.equals("PROFILE")?"PENDING":"NOT_REQUIRED");
+    org.assertj.core.api.Assertions.assertThatThrownBy(()->repriceCosting.execute(next.getRepriceNo(),nextTask.getId(),nextExecution))
+        .hasStackTraceContaining("尚无已提交生效版本");
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_quote_cost_run_version WHERE reprice_no=?",Integer.class,next.getRepriceNo())).isZero();
+    assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_price_prepare_item WHERE oa_form_item_id=? AND period_month=?",Integer.class,item,nextMonth)).isZero();
+    assertThat(jdbc.queryForMap("SELECT * FROM lp_quote_cost_run_version WHERE id=?",original.version().getId())).isEqualTo(beforeVersion);
+
+  }
+
+  @org.junit.jupiter.api.Order(Integer.MAX_VALUE)
+  @Test void comparisonReadsRealSavedComponentPricesAndSeparateProductCostsAcrossMonths() {
+    String key="MRP08-"+UUID.randomUUID().toString().substring(0,8),b="000"+key+"-B",c="000"+key+"-C",d="000"+key+"-D";
+    String month=com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+    var date=YearMonth.parse(month).atDay(25).atTime(12,0);
+    jdbc.update("INSERT INTO oa_form(oa_no,business_unit_type,copper_price) VALUES(?,'COMMERCIAL',80000)",key);
+    long form=jdbc.queryForObject("SELECT id FROM oa_form WHERE oa_no=?",Long.class,key);
+    jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,product_name,spec,sunl_model,business_unit_type) VALUES(?,?,?,'DN25','MRP08-M','COMMERCIAL')",form,key,"父件A-"+key);
+    long item=jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=?",Long.class,form);
+    ordinarySources(key,b,form,date);comparisonFixedPrice(b,"11.3",date);comparisonFixedPrice(c,"5",date);
+    comparisonAdditionalPart(key,b,c,"2",date);buildOriginalFixture(form,item,key,month,date,b,Map.of());
+    var request=new com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest();
+    request.setOaNo(key);request.setOaFormItemId(item);request.setTopProductCode(key);request.setPeriodMonth(month);
+    request.setPriceAsOfTime(date);request.setBusinessUnitType("COMMERCIAL");
+    var prepared=generateThroughWorkbench(request);
+    var source=quotationCosting.calculate(new com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest(
+        oaForms.selectById(form),oaItems.selectById(item),month,prepared.getPrepareNo(),key,null,true)).version();
+    jdbc.update("UPDATE lp_quote_cost_run_version SET status='SUCCESS' WHERE id=?",source.getId());source.setStatus("SUCCESS");
+    var auth=new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("MRP08-director",null,
+        List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_BU_DIRECTOR")));
+    auth.setDetails(Map.of("businessUnitType","COMMERCIAL"));org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(auth);
+    repriceProperties.setGoLiveMonths(Map.of("COMMERCIAL",month));
+    var first=com.sanhua.marketingcost.service.reprice.MonthlyRepriceTestTargets.enqueue(repriceContracts,"COMMERCIAL",YearMonth.parse(month),YearMonth.parse(month),List.of(source));
+    var firstTask=repriceTasks.tasks(first.getRepriceNo()).getFirst();
+    var before=repriceCosting.execute(first.getRepriceNo(),firstTask.getId(),repriceContracts.begin(first.getRepriceNo(),firstTask.getId()));
+    repriceDispatch.checkCompleted();repriceWorkflow.confirm(first.getRepriceNo(),repriceTasks.readBatch(first.getRepriceNo()).getCheckedRevision());
+    String next=YearMonth.parse(month).plusMonths(3).toString();
+    ordinaryExpenseSources(key,form,YearMonth.parse(next).atDay(25).atTime(12,0));
+    jdbc.update("UPDATE oa_form SET accounting_period_month=? WHERE id=?",month,form);
+    jdbc.update("UPDATE lp_bom_raw_hierarchy SET qty_per_parent=3.75,qty_per_top=3.75 WHERE top_product_code=? AND material_code=?",key,b);
+    comparisonAdditionalPart(key,b,d,"1",date);comparisonFixedPrice(d,"2",date);
+    var second=com.sanhua.marketingcost.service.reprice.MonthlyRepriceTestTargets.enqueue(repriceContracts,"COMMERCIAL",YearMonth.parse(next),YearMonth.parse(month),List.of(source));
+    var secondTask=repriceTasks.tasks(second.getRepriceNo()).getFirst();
+    var after=repriceCosting.execute(second.getRepriceNo(),secondTask.getId(),repriceContracts.begin(second.getRepriceNo(),secondTask.getId()));
+    repriceDispatch.checkCompleted();repriceWorkflow.confirm(second.getRepriceNo(),repriceTasks.readBatch(second.getRepriceNo()).getCheckedRevision());
+    var selected=new com.sanhua.marketingcost.service.reprice.MonthlyCostComparisonService.Request(month,next,
+        List.of(com.sanhua.marketingcost.service.reprice.MonthlyCostComparison.Metric.MATERIAL,
+          com.sanhua.marketingcost.service.reprice.MonthlyCostComparison.Metric.DIRECT_LABOR,
+          com.sanhua.marketingcost.service.reprice.MonthlyCostComparison.Metric.MANUFACTURE_COST),key,item,null,1,20);
+    var result=comparisonService.compare(selected);
+    var rows=result.comparison().rows();assertThat(rows).hasSize(3);
+    var br=rows.stream().filter(r->b.equals(r.key().materialCode())).findFirst().orElseThrow();
+    var cr=rows.stream().filter(r->c.equals(r.key().materialCode())).findFirst().orElseThrow();
+    var dr=rows.stream().filter(r->d.equals(r.key().materialCode())).findFirst().orElseThrow();
+    var material=com.sanhua.marketingcost.service.reprice.MonthlyCostComparison.Metric.MATERIAL;
+    assertThat(br.baseline().amounts().get(material)).isEqualByComparingTo("28.25");
+    assertThat(br.comparison().amounts().get(material)).isEqualByComparingTo("42.375");
+    assertThat(br.differences().get(material).amount()).isEqualTo("14.125000");
+    assertThat(cr.differences().get(material).amount()).isEqualTo("0.000000");
+    assertThat(cr.change()).isEqualTo(com.sanhua.marketingcost.service.reprice.MonthlyCostComparison.Change.UNCHANGED);
+    assertThat(dr.differences().get(material).amount()).isEqualTo("-");
+    assertThat(result.comparison().products()).hasSize(1);
+    var product=result.comparison().products().getFirst();
+    assertThat(product.baseline().amounts().get(com.sanhua.marketingcost.service.reprice.MonthlyCostComparison.Metric.DIRECT_LABOR)).isEqualByComparingTo("1");
+    assertThat(rows).allSatisfy(row->assertThat(row.comparison().amounts()).containsOnlyKeys(material));
+    var monthlyBefore=jdbc.queryForList("SELECT * FROM lp_material_monthly_price ORDER BY id");
+    jdbc.update("UPDATE lp_price_fixed_item SET fixed_price=9000 WHERE material_code=?",b);
+    jdbc.update("UPDATE cms_cost_source_effective SET amount_yuan=999 WHERE parent_code=?",key);
+    jdbc.update("UPDATE lp_material_master_raw SET product_attr='OEM',material_name='当前资料已改变' WHERE material_code=?",key);
+    assertThat(comparisonService.compare(selected)).isEqualTo(result);
+    assertThat(jdbc.queryForList("SELECT * FROM lp_material_monthly_price ORDER BY id")).isEqualTo(monthlyBefore);
+    try {
+      long savedResult=jdbc.queryForObject("SELECT id FROM lp_monthly_reprice_result WHERE reprice_no=? AND cost_run_version_id=?",Long.class,second.getRepriceNo(),after.version().getId());
+      for(String detail:List.of("part-items","cost-items")) {
+        var response=java.net.http.HttpClient.newHttpClient().send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(
+            "http://127.0.0.1:"+httpPort+"/api/v1/monthly-reprice/batches/"+second.getRepriceNo()+"/results/"+savedResult+"/"+detail))
+            .header("Authorization","Bearer "+jwt.generateToken("admin","COMMERCIAL")).GET().build(),java.net.http.HttpResponse.BodyHandlers.ofString());
+        var body=new com.fasterxml.jackson.databind.ObjectMapper().readTree(response.body());
+        assertThat(response.statusCode()).isEqualTo(200);assertThat(body.path("code").asInt()).isZero();
+        assertThat(body.path("data").size()).isEqualTo(detail.equals("part-items")?after.parts().size():after.costs().size());
+        if(detail.equals("part-items")) assertThat(body.path("data").toString()).contains(b,c,d,"42.375");
+        else assertThat(body.path("data").toString()).contains("costItemName","DIRECT_LABOR");
+      }
+      String exportUrl="http://127.0.0.1:"+httpPort+"/api/v1/monthly-reprice/1130/comparison/export?baselineMonth="+month+"&comparisonMonth="+next+"&oaNo="+key+"&itemId="+item+"&metrics=MATERIAL,DIRECT_LABOR,MANUFACTURE_COST";
+      var download=java.net.http.HttpClient.newHttpClient().send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(exportUrl))
+          .header("Authorization","Bearer "+jwt.generateToken("admin","COMMERCIAL")).GET().build(),java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+      assertThat(download.statusCode()).isEqualTo(200);assertThat(download.headers().firstValue("Content-Type").orElse("")).contains("spreadsheetml");
+      try(var workbook=new org.apache.poi.xssf.usermodel.XSSFWorkbook(new java.io.ByteArrayInputStream(download.body()))) {
+        var sheet=workbook.getSheetAt(0);assertThat(sheet.getRow(3).getLastCellNum()).isEqualTo((short)40);
+        assertThat(sheet.getRow(5).getCell(2).getStringCellValue()).isEqualTo(b);
+        assertThat(sheet.getRow(5).getCell(34).getNumericCellValue()).isEqualTo(14.125);
+        assertThat(sheet.getRow(4).getCell(12).getNumericCellValue()).isEqualTo(1);
+        assertThat(sheet.getRow(5).getCell(12).getCellType()).isEqualTo(org.apache.poi.ss.usermodel.CellType.BLANK);
+      }
+      assertThat(jdbc.queryForList("SELECT * FROM lp_material_monthly_price ORDER BY id")).isEqualTo(monthlyBefore);
+    } catch(Exception failure){throw new AssertionError("Actual comparison workbook HTTP download failed",failure);}
+    MonthlyCostComparisonBrowserSession.await(jdbc,httpPort,key,item,month,next,b,c,d,before.version().getId(),after.version().getId());
+  }
+  private void comparisonFixedPrice(String material,String price,LocalDateTime date) {
+    jdbc.update("INSERT INTO lp_price_fixed_item(org_code,material_code,material_name,unit,fixed_price,tax_included,supplier_code,effective_from,effective_to,business_unit_type,source_kind,source_type,source_system,created_at,updated_at) VALUES('210',?,?,'件',?,0,'MRP08-S',?,'2099-01-01','COMMERCIAL','PUBLIC','PURCHASE_FIXED','SRM',NOW(),NOW())",material,material,new BigDecimal(price),date.toLocalDate().withDayOfMonth(1));
+  }
+  private void comparisonAdditionalPart(String product,String original,String material,String quantity,LocalDateTime date) {
+    jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,unit,organization_code,import_batch_id,active_flag,main_category_code,shape_attr) VALUES(?,?,'件','COMMERCIAL',?,1,'15','采购件')",material,material,product);
+    var raw=rawHierarchy.selectOne(com.baomidou.mybatisplus.core.toolkit.Wrappers.<com.sanhua.marketingcost.entity.BomRawHierarchy>lambdaQuery().eq(com.sanhua.marketingcost.entity.BomRawHierarchy::getBuildBatchId,product).eq(com.sanhua.marketingcost.entity.BomRawHierarchy::getMaterialCode,original));
+    var copy=new com.sanhua.marketingcost.entity.BomRawHierarchy();org.springframework.beans.BeanUtils.copyProperties(raw,copy);
+    copy.setId(null);copy.setSourceLineKey("MRP08-"+material);copy.setMaterialCode(material);copy.setMaterialName(material);copy.setPath("/"+product+"/"+material+"/");
+    copy.setQtyPerParent(new BigDecimal(quantity));copy.setQtyPerTop(new BigDecimal(quantity));copy.setSortSeq(10);rawHierarchy.insert(copy);
+  }
+
   @BeforeEach void tenant() {
     var authentication = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("MPP12", "", List.of());
     authentication.setDetails(Map.of("businessUnitType", "COMMERCIAL"));
     org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(authentication);
   }
-  @AfterEach void clearTenant() { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
+  @AfterEach void clearTenant() {
+    // This class owns disposable MRP06 fixtures. Leave the real control active in the test,
+    // then remove its temporary queue during teardown so later ordinary cases are independent.
+    var owned=jdbc.queryForList("SELECT DISTINCT reprice_no FROM lp_monthly_reprice_result WHERE oa_no LIKE 'MRP06-%' OR oa_no LIKE 'MRP08-%'",String.class);
+    for(String no:owned) {
+      jdbc.update("DELETE FROM lp_cost_run_task WHERE source_no=? AND scene='MONTHLY_REPRICE'",no);
+      jdbc.update("DELETE FROM lp_monthly_reprice_result WHERE reprice_no=?",no);
+      jdbc.update("DELETE FROM lp_monthly_reprice_batch WHERE reprice_no=?",no);
+      jdbc.update("DELETE FROM lp_cost_run_batch WHERE batch_no=?",no);
+    }
+    org.springframework.security.core.context.SecurityContextHolder.clearContext();
+  }
 
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
@@ -103,7 +407,7 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
   }
 
   @org.junit.jupiter.params.ParameterizedTest
-  @org.junit.jupiter.params.provider.ValueSource(strings={"ORDER","TIER"})
+  @org.junit.jupiter.params.provider.ValueSource(strings={"ORDER","TIER","FIXED_FUTURE","FIXED_EXPIRED"})
   void odsFallbackRunsThroughPreviewPreparationCostingAndSavedHistory(String sourceKind) {
     String key="ODS-FLOW-"+UUID.randomUUID().toString().substring(0,10), material=key+"-PART";
     String month=com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
@@ -116,7 +420,12 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
       jdbc.update("INSERT INTO lp_oa_form_item_extra_field(oa_form_id,oa_form_item_id,business_unit_type,field_code,field_name,field_value,value_type) VALUES(?,?,'COMMERCIAL','ANNUAL_VOLUME_UNIT','预计年用量单位','TEN_THOUSAND_PIECES','TEXT')",form,item);
       for(var band:List.of(new String[]{"1","20000","19.9"},new String[]{"20000",null,"11.3"}))
         jdbc.update("INSERT INTO ods_sy_v_mm_material_jt_price_cg05_df(company_name,material_code,supply_code,supply_name,unit,price,eff_date,exp_date,jieti_down,jieti_up,dt,source) VALUES('浙江三花商用制冷有限公司',?,'ODS-S','ODS supplier','件',?,?,?, ?,?,'2026-10-24','ODS fixture')",
-            material,new BigDecimal(band[2]),date.toLocalDate().withDayOfMonth(1),date.toLocalDate().plusMonths(1),new BigDecimal(band[0]),band[1]==null?null:new BigDecimal(band[1]));
+            material,new BigDecimal(band[2]),date.toLocalDate().plusMonths(1),date.toLocalDate().plusYears(1),new BigDecimal(band[0]),band[1]==null?null:new BigDecimal(band[1]));
+      // A competing order price must not bypass the latest (future) tier set.
+      jdbc.update("INSERT INTO ods_sy_v_mm_material_order_price_cg05_df(company_name,material_code,supply_code,unit,price,eff_date,dt,source) VALUES('浙江三花商用制冷有限公司',?,'ODS-S','件',99,?,'2026-10-24','ODS fixture')",material,date.toLocalDate().plusMonths(1));
+    } else if(sourceKind.startsWith("FIXED")) {
+      var from=sourceKind.equals("FIXED_FUTURE")?date.toLocalDate().plusMonths(1):date.toLocalDate().minusYears(1);
+      jdbc.update("INSERT INTO lp_price_fixed_item(org_code,material_code,material_name,unit,fixed_price,tax_included,supplier_code,effective_from,effective_to,business_unit_type,source_kind,source_type,source_system,created_at,updated_at) VALUES('210',?,?,'件',11.3,0,'ODS-S',?,?,'COMMERCIAL','PUBLIC','PURCHASE_FIXED','SRM',NOW(),NOW())",material,material,from,from.plusMonths(6));
     } else {
       jdbc.update("INSERT INTO ods_sy_v_mm_material_order_price_cg05_df(company_name,material_code,supply_code,supply_name,unit,price,eff_date,dt,source) VALUES('浙江三花商用制冷有限公司',?,'ODS-S','ODS supplier','件',11.3,?,'2026-10-24','ODS fixture')",material,date.toLocalDate().plusMonths(1));
     }
@@ -127,7 +436,7 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code=?",Integer.class,material)).isZero();
     var saved=generateThroughWorkbench(request);
     var adopted=jdbc.queryForMap("SELECT id,source_type,supplier_code,unit_price FROM lp_material_monthly_price WHERE material_code=?",material);
-    assertThat(adopted.get("source_type")).isEqualTo("ODS_"+sourceKind);
+    assertThat(adopted.get("source_type")).isEqualTo(sourceKind.startsWith("FIXED")?"PURCHASE_FIXED":"ODS_"+sourceKind);
     assertThat(adopted.get("supplier_code")).isEqualTo("ODS-S");
     assertThat((BigDecimal)adopted.get("unit_price")).isEqualByComparingTo("11.3");
     var calculated=quotationCosting.calculate(new com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest(
@@ -287,6 +596,7 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     assertThat(jdbc.queryForObject("SELECT monthly_price_id FROM lp_cost_run_part_item WHERE cost_run_version_id=?", Long.class, version.getId())).isEqualTo(monthlyId);
     var formal = quotationCosting.calculate(new com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest(
         oaForms.selectById(form), oaItems.selectById(item), month, saved.getPrepareNo(), key, null, true));
+    compareRepriceCalculation(formal,form,item,month,saved.getPrepareNo());
     assertThat(formal.version().getAlgorithmVersion()).isEqualTo("MONTHLY_PRODUCT_COST_V1");
     assertThat(formal.totalCost()).isEqualByComparingTo(total1);
     assertThat(formal.finalQuoteAmount()).isEqualByComparingTo(total2);
@@ -466,7 +776,7 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
   }
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
-  void packagingUsesMonthlyChildrenWithCurrentQuantitiesAndBothExistingDenominators(boolean copperLinked) {
+  void packagingUsesMonthlyChildrenAndDividesByPackageBaseOnce(boolean copperLinked) {
     String key = "MPP12-" + UUID.randomUUID().toString().substring(0, 12);
     String parentCode = key + "-PACK", first = key + "-A", second = key + "-B";
     String month = com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
@@ -528,13 +838,13 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     var scenario = PricePrepareScenarioContext.oaLocked(item, "210");
     var preview = packaging.calculate(key,key,month,date,"主制造","U9",plan,scenario);
     assertThat(preview.getStatus()).as(preview.getMessage()).isEqualTo("READY");
-    assertThat(preview.getUnitPrice()).isEqualByComparingTo(copperLinked ? "7" : "6.2");
-    assertThat(preview.getAmount()).isEqualByComparingTo(copperLinked ? "17.5" : "15.5");
+    assertThat(preview.getUnitPrice()).isEqualByComparingTo(copperLinked ? "20.4" : "18");
+    assertThat(preview.getAmount()).isEqualByComparingTo(copperLinked ? "51" : "45");
     assertThat(scenario.monthlyPrices().get()).as("包装基础单价必须来自同次月价会话").isNotNull();
     var uses = scenario.monthlyPrices().get().plan().uses();
     assertThat(uses).hasSize(2);
-    assertThat(uses.stream().filter(use -> use.request().family().materialCode().equals(first)).findFirst().orElseThrow().cumulativeQuantity()).isEqualByComparingTo("2");
-    assertThat(uses.stream().filter(use -> use.request().family().materialCode().equals(second)).findFirst().orElseThrow().cumulativeQuantity()).isEqualByComparingTo("0.75");
+    assertThat(uses.stream().filter(use -> use.request().family().materialCode().equals(first)).findFirst().orElseThrow().cumulativeQuantity()).isEqualByComparingTo("6");
+    assertThat(uses.stream().filter(use -> use.request().family().materialCode().equals(second)).findFirst().orElseThrow().cumulativeQuantity()).isEqualByComparingTo("1.5");
     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code IN (?,?,?)", Integer.class, parentCode, first, second)).isZero();
     var request = new com.sanhua.marketingcost.dto.priceprepare.PricePrepareGenerateRequest();
     request.setOaNo(key); request.setOaFormItemId(item); request.setTopProductCode(key); request.setPeriodMonth(month);
@@ -545,21 +855,21 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     var finance = financePreparations.loadPreparedFromOa(saved.getPrepareNo());
     assertThat(finance.prepareResult().getStatus()).isEqualTo("SUCCESS");
     var financeRow = jdbc.queryForMap("SELECT unit_price,amount FROM lp_price_prepare_item WHERE prepare_no=?", finance.financePrepareNo());
-    assertThat((BigDecimal) financeRow.get("unit_price")).isEqualByComparingTo(copperLinked ? "8.6" : "6.2");
-    assertThat((BigDecimal) financeRow.get("amount")).isEqualByComparingTo(copperLinked ? "21.5" : "15.5");
+    assertThat((BigDecimal) financeRow.get("unit_price")).isEqualByComparingTo(copperLinked ? "25.2" : "18");
+    assertThat((BigDecimal) financeRow.get("amount")).isEqualByComparingTo(copperLinked ? "63" : "45");
     assertThat(financePreparations.loadPreparedFromOa(saved.getPrepareNo()).financePrepareNo()).isEqualTo(finance.financePrepareNo());
     saveAggregateCost(key, item, month, parentCode, saved.getPrepareNo(), finance.financePrepareNo(),
-        copperLinked ? "21.5" : "15.5", copperLinked ? "17.5" : "15.5");
+        copperLinked ? "63" : "45", copperLinked ? "51" : "45");
     jdbc.update("UPDATE lp_price_fixed_item SET fixed_price=70 WHERE material_code=?", first);
     parent.setQtyPerTop(new BigDecimal("5")); bomRows.updateById(parent);
     var repeated = packaging.calculate(key,key,month,date,"主制造","U9",plan,PricePrepareScenarioContext.oaLocked(item,"210"));
-    assertThat(repeated.getUnitPrice()).isEqualByComparingTo(copperLinked ? "7" : "6.2");
-    assertThat(repeated.getAmount()).isEqualByComparingTo(copperLinked ? "35" : "31");
+    assertThat(repeated.getUnitPrice()).isEqualByComparingTo(copperLinked ? "20.4" : "18");
+    assertThat(repeated.getAmount()).isEqualByComparingTo(copperLinked ? "102" : "90");
     jdbc.update("UPDATE lp_package_component_snapshot SET package_parent_base_qty=10 WHERE id=?", snapshot.getId());
     jdbc.update("UPDATE lp_package_component_snapshot_detail SET qty_per_parent=18 WHERE snapshot_id=? AND child_material_code=?", snapshot.getId(), first);
     var changed = packaging.calculate(key,key,month,date,"主制造","U9",plan,PricePrepareScenarioContext.oaLocked(item,"210"));
-    assertThat(changed.getUnitPrice()).isEqualByComparingTo(copperLinked ? "5.1" : "4.5");
-    assertThat(changed.getAmount()).isEqualByComparingTo(copperLinked ? "25.5" : "22.5");
+    assertThat(changed.getUnitPrice()).isEqualByComparingTo(copperLinked ? "15" : "13.2");
+    assertThat(changed.getAmount()).isEqualByComparingTo(copperLinked ? "75" : "66");
   }
 
   @org.junit.jupiter.params.ParameterizedTest
@@ -645,6 +955,7 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     financePreparations.loadPreparedFromOa(saved.getPrepareNo());
     var cost = quotationCosting.calculate(new com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest(
         oaForms.selectById(form), oaItems.selectById(item), month, saved.getPrepareNo(), key, null, true));
+    compareRepriceCalculation(cost,form,item,month,saved.getPrepareNo());
     assertThat(cost.financeMaterialCost()).as("家用整体不得重复计入普通 M0").isZero();
     assertThat(cost.totalCost()).isEqualByComparingTo("66.611562");
     assertThat(cost.finalQuoteAmount()).isEqualByComparingTo("66.611562");
@@ -860,5 +1171,8 @@ class MonthlyQuotationPreparationIntegrationTest extends OriginalPricingIntegrat
     assertThat(result.parts()).as("聚合母件计入一次，基础料件只保存月价依据").hasSize(1);
     assertThat(result.parts().getFirst().getPartCode()).isEqualTo(material);
     assertThat(result.snapshot().calculation().adoptedPrices()).hasSize(2);
+    var full=quotationCosting.calculate(new com.sanhua.marketingcost.dto.financequote.QuoteCuAdjustmentCalcRequest(
+        oaForms.selectById(oaItems.selectById(itemId).getOaFormId()),oaItems.selectById(itemId),month,customerNo,oa,null,true));
+    compareRepriceCalculation(full,oaItems.selectById(itemId).getOaFormId(),itemId,month,customerNo);
   }
 }

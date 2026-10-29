@@ -39,7 +39,7 @@ public abstract class BomMapperTestBase {
 
   /** 与 V21 E2E 测试保持同一个镜像，省一次拉镜像的时间 */
   private static final DockerImageName MYSQL_IMAGE =
-      DockerImageName.parse("mysql:8.4").asCompatibleSubstituteFor("mysql");
+      DockerImageName.parse(System.getProperty("mpp.mysql.image","mysql:8.4")).asCompatibleSubstituteFor("mysql");
 
   /**
    * 基础迁移脚本：marketing_cost 主 schema + 附属 schema + V2..V16。
@@ -87,6 +87,7 @@ public abstract class BomMapperTestBase {
   @SuppressWarnings("resource")
   protected static final MySQLContainer<?> MYSQL =
       new MySQLContainer<>(MYSQL_IMAGE)
+          .withConfigurationOverride("monthly-pricing/mysql")
           .withDatabaseName("marketing_cost")
           .withUsername("root")
           .withPassword("root123")
@@ -100,6 +101,11 @@ public abstract class BomMapperTestBase {
     // 静态块：Spring DataSource 初始化前，容器就绪且所有迁移已落
     MYSQL.start();
     try {
+      var actualVersion=MYSQL.execInContainer("sh","-c",
+          "MYSQL_PWD=\"$MYSQL_ROOT_PASSWORD\" mysql -uroot -N -e 'SELECT @@version'");
+      if (actualVersion.getExitCode()!=0 || !actualVersion.getStdout().trim().startsWith(
+          System.getProperty("mpp.mysql.expected-version","8.4")))
+        throw new IllegalStateException("测试数据库版本不匹配："+actualVersion.getStdout());
       runMigrationsViaJdbc(BASE_MIGRATION_SCRIPTS);
       runScriptViaMysqlCli("/fixtures/price-range-existing-schema.sql", "range-price-base");
       runScriptViaMysqlCli("/db/V21__business_unit_type_isolation.sql", "V21");
@@ -278,11 +284,15 @@ public abstract class BomMapperTestBase {
       runScriptViaMysqlCli("/db/V335__plate_material_mapping.sql", "V335");
       runScriptViaMysqlCli("/db/V336__plate_material_master_lookup_index.sql", "V336");
       runScriptViaMysqlCli("/db/V338__drawing_verification_evidence.sql", "V338");
+      runScriptViaMysqlCli("/db/V347__drawing_finance_bom_correction.sql", "V347");
       runScriptViaMysqlCli("/db/V342__monthly_material_price_storage.sql", "V342");
       runScriptViaMysqlCli("/monthly-pricing/ods-price-source-schema.sql", "ODS-raw-source-fixtures");
       runScriptViaMysqlCli("/db/V344__monthly_material_price_single_table.sql", "V344");
       // One-time initialization of this fresh disposable database, including monthly reverse reads.
       runScriptViaMysqlCli("/db/V345__monthly_price_reference_lookup_index.sql", "V345");
+      runScriptViaMysqlCli("/monthly-reprice/mrp06-contract-base.sql", "MRP06-contract-base");
+      runScriptViaMysqlCli("/db/V348__monthly_reprice_1130_contract.sql", "V348");
+      runScriptViaMysqlCli("/db/V350__monthly_reprice_costing_scope.sql", "V350");
     } catch (Exception e) {
       // 把 root cause 的文字信息拼进 message，避免 surefire 只保留 Caused by 的短描述
       Throwable root = e;

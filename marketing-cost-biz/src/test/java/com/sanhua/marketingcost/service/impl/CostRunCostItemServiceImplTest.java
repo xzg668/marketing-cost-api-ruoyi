@@ -1182,6 +1182,7 @@ class CostRunCostItemServiceImplTest {
     property.setPropertyYear(2026);
     property.setBusinessUnitType("COMMERCIAL");
     property.setCoefficient(new BigDecimal("1.3500"));
+    property.setProductAttr("定制品");
     when(lookup.findProductProperty("P-ANNUAL", 2026, "COMMERCIAL")).thenReturn(property);
 
     CostRunCostItemServiceImpl svc = buildWithLookup(lookup);
@@ -1189,7 +1190,7 @@ class CostRunCostItemServiceImplTest {
         svc.lookupProductCoefficient("P-ANNUAL", 2026, "COMMERCIAL");
 
     assertThat(result.coefficient()).isEqualByComparingTo("1.3500");
-    assertThat(result.remark()).isNull();
+    assertThat(result.remark()).contains("产品属性来源=lp_product_property", "属性=定制品", "规则年度=2026");
     verify(lookup).findProductProperty("P-ANNUAL", 2026, "COMMERCIAL");
   }
 
@@ -1390,6 +1391,19 @@ class CostRunCostItemServiceImplTest {
         .isEqualByComparingTo(new BigDecimal("1.113105"));
     assertThat(svc.calculatePackageBucketAmount("OA-1", "1079900000536"))
         .isEqualByComparingTo(new BigDecimal("1.168760"));
+  }
+
+  @Test
+  void workbookPackagingAddsFivePercentOnceAtFinalBucket() {
+    CostRunPartItemMapper partMapper = mock(CostRunPartItemMapper.class);
+    MaterialMasterRawMapper rawMapper = mock(MaterialMasterRawMapper.class);
+    BomRawHierarchyMapper bomMapper = mock(BomRawHierarchyMapper.class);
+    when(rawMapper.selectPackageComponentParentsByLatestBatch(eq("包装组件"), any(), eq("COMMERCIAL")))
+        .thenReturn(List.of(newRawMaster("9830000025598", "包装组件")));
+    // 原表五行合计 21.5318 / 底数 6，正式单价保留六位；最终包装成本为 3.768065。
+    when(partMapper.selectList(any(Wrapper.class))).thenReturn(List.of(newPart("9830000025598", new BigDecimal("3.588633"))));
+    assertThat(buildBucketSvc(partMapper, rawMapper, bomMapper).calculatePackageBucketAmount("OA-1", "P-1"))
+        .isEqualByComparingTo("3.768065");
   }
 
   @Test

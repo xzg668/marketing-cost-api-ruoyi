@@ -132,6 +132,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       rollbackFor = Exception.class,
       isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
   @RetryOnConcurrency
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=true)
   public QuotePricePrepareWorkbenchResponse generate(
       String oaNo, Long oaFormItemId, QuotePricePrepareGenerateRequest request) {
     Scope scope =

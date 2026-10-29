@@ -17,6 +17,9 @@ public interface QuoteEffectiveBomApplicationService {
       String alternativeGroupKey,
       String selectedMaterialCode);
 
+  QuoteEffectiveBomCostingCandidate prepareRepriceCandidate(
+      com.sanhua.marketingcost.service.reprice.MonthlyRepriceCalculation calculation);
+
   QuoteEffectiveBomCostingCandidate prepareCostingCandidate(
       String oaNo, Long oaFormItemId);
 }

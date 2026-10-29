@@ -18,6 +18,7 @@ public class QuoteCostRunVersion {
   private Long id;
 
   private String costRunNo;
+  private String repriceNo;
   private String versionNo;
   private String oaNo;
   private Long oaFormItemId;

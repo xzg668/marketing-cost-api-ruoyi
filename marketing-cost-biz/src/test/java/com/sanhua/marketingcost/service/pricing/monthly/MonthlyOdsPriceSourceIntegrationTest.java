@@ -48,15 +48,45 @@ class MonthlyOdsPriceSourceIntegrationTest {
   static Selection selected(Candidates result,MonthlyPriceRequest request){assertThat(result.problems()).isEmpty();return result.values().get(request).selection();}
   static MonthlyAdoptionPlan plan(MonthlyPriceRequest request,Selection selected){return new MonthlyAdoptionPlan(Map.of(request,selected),List.of(new Use("finished/material",request,BigDecimal.ONE)),Set.of());}
 
-  @Test void datedLatestWinsOverNullAndOlderPricesAndSameDayTiesUseHighest() {
+  @Test void currentDatedPriceWinsOverNullAndFuturePrices() {
     String code=code();order(code,"S1",null,"999");order(code,"S1","2026-09-01","888");order(code,"S1","2026-11-01","11");order(code,"S1","2026-11-01","12");
     var request=request(code,null);var price=selected(source.orders(context(null,null),Set.of(request)),request);
-    assertThat(price.fact().price()).isEqualByComparingTo("12");
-    assertThat(price.fact().evidence().json()).contains("ORDER-TRACE","2026-11-01","ODS_ORDER","supplierCode");
+    assertThat(price.fact().price()).isEqualByComparingTo("888");
+    assertThat(price.fact().evidence().json()).contains("ORDER-TRACE","2026-09-01","ODS_ORDER","supplierCode");
+  }
+  @Test void currentOrdersExcludeExpiredAndFutureSuppliersBeforeRatioSelection() {
+    String code=code();order(code,"CURRENT","2026-01-01","10");
+    order(code,"EXPIRED","2025-01-01","99");order(code,"FUTURE","2027-01-01","88");
+    jdbc.update("UPDATE ods_sy_v_mm_material_order_price_cg05_df SET exp_date='2025-12-31' WHERE material_code=? AND supply_code='EXPIRED'",code);
+    var r=request(code,null);var c=context(null,null);var result=source.orders(c,Set.of(r));
+    assertThat(selected(result,r).fact().price()).isEqualByComparingTo("10");
+    assertThat(c.supplierReviews().reviews()).isEmpty();
+  }
+  @Test void currentTierSetExcludesExpiredSuppliersAndFutureBands() {
+    String code=code();tier(code,"CURRENT","2026-01-01","2026-12-31","1","20000","20");
+    tier(code,"CURRENT","2026-01-01","2026-12-31","20000",null,"10");
+    tier(code,"CURRENT","2027-01-01","2027-12-31","1",null,"88");
+    tier(code,"EXPIRED","2025-01-01","2025-12-31","1",null,"99");
+    var r=request(code,"360000");var c=context("360000","PIECES");var result=source.tiers(c,Set.of(r));
+    assertThat(selected(result,r).fact().price()).isEqualByComparingTo("10");
+    assertThat(c.supplierReviews().reviews()).isEmpty();
   }
   @Test void supplierWithOnlyNullDatesStillGetsAHighestOrderPriceAndNeedsNoAnnualUsage() {
     String code=code();order(code,"S1",null,"10");order(code,"S1",null,"12");var r=request(code,null);
     assertThat(selected(source.orders(context(null,null),Set.of(r)),r).fact().price()).isEqualByComparingTo("12");
+  }
+  @Test void expiredOrdersUseTheLatestExpiryBeforeTheHighestPrice() {
+    String code=code();order(code,"S1","2025-01-01","999");order(code,"S1","2025-01-01","10");
+    jdbc.update("UPDATE ods_sy_v_mm_material_order_price_cg05_df SET exp_date=IF(price=10,'2025-12-31','2025-06-30') WHERE material_code=?",code);
+    var r=request(code,null);var picked=selected(source.orders(context(null,null),Set.of(r)),r);
+    assertThat(picked.fact().price()).isEqualByComparingTo("10");assertThat(picked.fact().evidence().json()).contains("2025-12-31");
+  }
+  @Test void expiredTierSetsUseTheLatestExpiryWithoutMixingDifferentPeriodBands() {
+    String code=code();tier(code,"S1","2025-01-01","2025-06-30","1",null,"99");
+    tier(code,"S1","2025-01-01","2025-12-31","1","20000","20");tier(code,"S1","2025-01-01","2025-12-31","20000",null,"10");
+    var r=request(code,"360000");var picked=selected(source.tiers(context("360000","PIECES"),Set.of(r)),r);
+    assertThat(picked.fact().price()).isEqualByComparingTo("10");
+    assertThat(picked.fact().evidence().json()).contains("2025-12-31").doesNotContain("2025-06-30");
   }
   @Test void ordersUseSupplyRatiosThenHighestPriceAmongEqualRatios() {
     String code=code();order(code,"S1","2026-01-01","10");order(code,"S2","2026-01-01","20");ratio(code,"S1","0.8");ratio(code,"S2","0.2");var r=request(code,null);
@@ -73,20 +103,20 @@ class MonthlyOdsPriceSourceIntegrationTest {
     assertThat(picked.fact().price()).isEqualByComparingTo("20");assertThat(next.supplierReviews().successfulReviews()).hasSize(1);
     assertThat(picked.fact().evidence().json()).doesNotContain("ods-private-reviewer","confirmedBy","scopeKey");
   }
-  @Test void tiersUseLatestCurrentlyValidSetAndExactLowerInclusiveUpperExclusiveBounds() {
-    String code=code();tier(code,"S1","2025-01-01","2025-12-31","1",null,"99");tier(code,"S1","2026-12-01","2027-11-30","1",null,"88");
-    tier(code,"S1","2026-01-01","2026-12-31","1","20000","0.570");tier(code,"S1","2026-01-01","2026-12-31","20000","200000","0.375");tier(code,"S1","2026-01-01","2026-12-31","200000",null,"0.250");
+  @Test void tiersFallBackToLatestSetWhenNoCurrentSetExistsAndKeepExactBounds() {
+    String code=code();tier(code,"S1","2025-01-01","2025-12-31","1",null,"99");
+    tier(code,"S1","2026-12-01","2027-11-30","1","20000","0.570");tier(code,"S1","2026-12-01","2027-11-30","20000","200000","0.375");tier(code,"S1","2026-12-01","2027-11-30","200000",null,"0.250");
     for(var pair:List.of(new String[]{"239999.999999","0.570"},new String[]{"240000","0.375"},new String[]{"360000","0.375"},new String[]{"2400000","0.250"})) {
       var r=request(code,pair[0]);var picked=selected(source.tiers(context(pair[0],"PIECES"),Set.of(r)),r);
-      assertThat(picked.fact().price()).isEqualByComparingTo(pair[1]);assertThat(picked.fact().evidence().json()).doesNotContain("2027-11-30","2025-12-31");
+      assertThat(picked.fact().price()).isEqualByComparingTo(pair[1]);assertThat(picked.fact().evidence().json()).contains("2027-11-30").doesNotContain("2026-12-31","2025-12-31");
     }
   }
-  @Test void annualUsageIsValidatedOnlyWhenApplicableCurrentlyValidTierRowsExist() {
+  @Test void annualUsageIsValidatedWhenLatestTierRowsExistIncludingExpiredRows() {
     String live=code();String expired=code();String absent=code();tier(live,"S1","2026-01-01","2026-12-31","1",null,"10");tier(expired,"S1","2025-01-01","2025-12-31","1",null,"10");
     for(var c:List.of(context(null,null),context("0","PIECES"),context("3","UNKNOWN"))) {
       var requests=Set.of(request(live,null),request(expired,null),request(absent,null));var result=source.tiers(c,requests);
       assertThat(result.problems().get(request(live,null)).reason()).isEqualTo(Failure.INVALID_INPUT);
-      assertThat(result.problems().get(request(expired,null)).reason()).isEqualTo(Failure.MISSING);
+      assertThat(result.problems().get(request(expired,null)).reason()).isEqualTo(Failure.INVALID_INPUT);
       assertThat(result.problems().get(request(absent,null)).reason()).isEqualTo(Failure.MISSING);
     }
   }
@@ -141,5 +171,12 @@ class MonthlyOdsPriceSourceIntegrationTest {
     assertThat(source.orders(context(null,null),Set.of(board)).problems().get(board).reason()).isEqualTo(Failure.MISSING);
     var other=new MonthlyPriceRequest(new MonthlyPriceFamilyKey(base.family().month(),"COMMERCIAL",code,"OTHER-SPEC","KG","CNY",TaxBasis.EXCLUDED,null),"210",base.conditions(),BigDecimal.ONE);
     assertThat(source.orders(context(null,null),Set.of(other)).problems().get(other).reason()).isEqualTo(Failure.MISSING);
+  }
+  @Test void explicitWithdrawalAppliesToSingleOrderAndTierSuppliers() {
+    String code=code(); order(code,"S1","2026-01-01","10"); tier(code,"S1","2026-01-01","2027-12-31","0","100","10");
+    var req=request(code,"10"); assertThat(source.orders(context("10","PIECES"),Set.of(req)).problems()).isEmpty();
+    assertThat(source.tiers(context("10","PIECES"),Set.of(req)).problems()).isEmpty(); ratio(code,"S1","0");
+    assertThat(source.orders(context("10","PIECES"),Set.of(req)).values()).isEmpty();
+    assertThat(source.tiers(context("10","PIECES"),Set.of(req)).values()).isEmpty();
   }
 }

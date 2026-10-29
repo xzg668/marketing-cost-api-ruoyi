@@ -11,6 +11,9 @@ import com.sanhua.marketingcost.dto.priceprepare.*;
 import com.sanhua.marketingcost.entity.*;
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import com.sanhua.marketingcost.service.PricePrepareService;
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkContext;
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowContextPort;
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowStage;
 import com.sanhua.marketingcost.service.quotebom.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -26,9 +29,10 @@ class TechnicalDataSourceCheckServiceTest {
   private final TechnicalDataPackageSourceCheck packaging = mock(TechnicalDataPackageSourceCheck.class);
   private final com.sanhua.marketingcost.service.NetLossRateQuery netLoss = mock(com.sanhua.marketingcost.service.NetLossRateQuery.class);
   private final OaMessageCodec codec = new OaMessageCodec(new ObjectMapper().findAndRegisterModules());
+  private final ElectronicDrawingWorkflowContextPort drawings = mock(ElectronicDrawingWorkflowContextPort.class);
+  private final TechnicalDataSharedModules shared = mock(TechnicalDataSharedModules.class);
   private final TechnicalDataPublicSourceCheck publicSources = new TechnicalDataPublicSourceCheck(u9, salary, codec,
-      mock(com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowContextPort.class),
-      mock(TechnicalDataManufacturingSourceQuery.class), packaging, netLoss, mock(TechnicalDataSharedModules.class));
+      drawings, mock(TechnicalDataManufacturingSourceQuery.class), packaging, netLoss, shared);
   private final TechnicalDataSourceCheckService service = new TechnicalDataSourceCheckService(publicSources, prices,
       codec, mock(QuoteTechnicalDataRepository.class), mock(TechnicalDataPriceRequirements.class), mock(TechnicalDataPriceOwnership.class));
   private final QuoteBomReadContext context = new QuoteBomReadContext(1L, 2L, "OA-1", "2026-09", "COMMERCIAL",
@@ -61,6 +65,64 @@ class TechnicalDataSourceCheckServiceTest {
       assertThat(service.check(context,workspace).facts()).filteredOn(row -> row.moduleType()==TechnicalDataModuleType.PROFILE)
           .extracting(TechnicalDataSourceFact::availability).containsExactly(TechnicalDataAvailability.ERROR);
     }
+  }
+
+  @Test void composedDrawingWithoutU9IsAvailableAndDoesNotHideOtherSupplementGaps() {
+    when(u9.read(any())).thenReturn(CurrentU9BomResult.notFound("无原始 BOM"));
+    for (String stage : List.of(ElectronicDrawingWorkflowStage.COMPOSED, ElectronicDrawingWorkflowStage.PUBLISHED)) {
+      when(drawings.load(2L, "COMMERCIAL", "210", "2026-09")).thenReturn(drawing(stage, 41L, "composition-41"));
+      var requirements = new TechnicalDataModuleRequirementEvaluator().evaluate(service.check(context, workspace).facts());
+      assertThat(requirements).filteredOn(row -> row.moduleType().equals("DRAWING_BOM"))
+          .allSatisfy(row -> {
+            assertThat(row.required()).isFalse();
+            assertThat(row.availability()).isEqualTo(TechnicalDataAvailability.AVAILABLE);
+            assertThat(row.sourceReference()).contains("41", "composition-41");
+          });
+      assertThat(requirements).filteredOn(TechnicalDataModuleRequirement::required)
+          .extracting(TechnicalDataModuleRequirement::moduleType).contains("PROFILE", "AUXILIARY", "SOLDER");
+    }
+  }
+
+  @Test void receivingOrMatchingDrawingStillNeedsCompletionAndCannotReuseOldFingerprint() {
+    when(u9.read(any())).thenReturn(CurrentU9BomResult.notFound("无原始 BOM"));
+    for (String stage : List.of(ElectronicDrawingWorkflowStage.RECEIVED, ElectronicDrawingWorkflowStage.MAPPING_PENDING,
+        ElectronicDrawingWorkflowStage.VALIDATION_FAILED, ElectronicDrawingWorkflowStage.WAIT_REVIEW)) {
+      when(drawings.load(2L, "COMMERCIAL", "210", "2026-09")).thenReturn(drawing(stage, 41L, "old-composition"));
+      assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+    }
+    when(drawings.load(2L, "COMMERCIAL", "210", "2026-09")).thenReturn(drawing(ElectronicDrawingWorkflowStage.COMPOSED, 41L, null));
+    assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+  }
+
+  @Test void missingDrawingStillRequiresSupplementAndLookupFailureIsAnError() {
+    when(u9.read(any())).thenReturn(CurrentU9BomResult.notFound("无原始 BOM"));
+    when(drawings.load(2L, "COMMERCIAL", "210", "2026-09")).thenReturn(drawing(null, null, null));
+    assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+    when(drawings.load(2L, "COMMERCIAL", "210", "2026-09")).thenThrow(new IllegalStateException("database failure"));
+    assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.ERROR);
+  }
+
+  @Test void readyDrawingDoesNotBypassExistingTechnicalAssignmentApproval() {
+    when(u9.read(any())).thenReturn(CurrentU9BomResult.notFound("无原始 BOM"));
+    when(shared.find("PRODUCT", 2L, "DRAWING_BOM"))
+        .thenReturn(new TechnicalDataSharedModuleRepository.Owner(8L, 7L, 6L, 2L, "PRODUCT", "DRAWING_BOM",
+            "IN_PROGRESS", "READY", 9L, "技术员", 10L, "DRAFT", "COMMERCIAL", "210", "2026-09"));
+    when(drawings.load(2L, "COMMERCIAL", "210", "2026-09"))
+        .thenReturn(drawing(ElectronicDrawingWorkflowStage.COMPOSED, 41L, "composition-41"));
+    assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.MISSING);
+  }
+
+  @Test void publicU9RemainsFirstAndDrawingCannotMaskAnUnknownU9Result() {
+    assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.AVAILABLE);
+    when(u9.read(any())).thenReturn(CurrentU9BomResult.timeout("U9 查询超时"));
+    assertThat(fact(TechnicalDataModuleType.DRAWING_BOM).availability()).isEqualTo(TechnicalDataAvailability.ERROR);
+    verifyNoInteractions(drawings);
+  }
+
+  private ElectronicDrawingWorkContext drawing(String stage, Long sourceId, String fingerprint) {
+    return new ElectronicDrawingWorkContext(2L, 1, 3L, sourceId, 1L, 2L, "TASK", "OA-1", "PRODUCT", null,
+        "产品", "SPEC", "MODEL", null, "FULL_BOM", "2026-09", "210", "211", "COMMERCIAL", "210",
+        true, true, "NEED_TECH", stage, null, null, fingerprint);
   }
 
   @Test void confirmedSingleWageIncludingZeroIsUsableWithoutInventingSecondWage() {

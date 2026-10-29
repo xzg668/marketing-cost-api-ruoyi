@@ -4,8 +4,7 @@ import cn.iocoder.yudao.framework.common.exception.enums.GlobalErrorCodeConstant
 import cn.iocoder.yudao.framework.common.pojo.CommonResult;
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioImportResponse;
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioPageResponse;
-import com.sanhua.marketingcost.dto.SupplierSupplyRatioUpdateRequest;
-import com.sanhua.marketingcost.entity.SupplierSupplyRatio;
+import com.sanhua.marketingcost.dto.SupplierSupplyRatioChangePage;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import com.sanhua.marketingcost.service.SupplierSupplyRatioImportService;
 import com.sanhua.marketingcost.service.SupplierSupplyRatioService;
@@ -13,12 +12,8 @@ import java.io.IOException;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.util.StringUtils;
-import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PatchMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
@@ -46,6 +41,8 @@ public class SupplierSupplyRatioController {
       @RequestParam(required = false) String materialName,
       @RequestParam(required = false) String specModel,
       @RequestParam(required = false) String supplierName,
+      @RequestParam(required = false) String supplierCode,
+      @RequestParam(required = false) String sourceBatchNo,
       @RequestParam(required = false) String sourceType,
       @RequestParam(defaultValue = "1") Integer isActive,
       @RequestParam(required = false) String businessUnitType,
@@ -57,6 +54,8 @@ public class SupplierSupplyRatioController {
             materialName,
             specModel,
             supplierName,
+            supplierCode,
+            sourceBatchNo,
             sourceType,
             isActive,
             page,
@@ -88,28 +87,17 @@ public class SupplierSupplyRatioController {
     }
   }
 
-  @PreAuthorize("@ss.hasPermi('base:supplier-supply-ratio:edit')")
-  @PatchMapping("/{id}")
-  public CommonResult<SupplierSupplyRatio> update(
-      @PathVariable Long id,
-      @RequestBody SupplierSupplyRatioUpdateRequest request,
-      Authentication authentication) {
-    try {
-      return CommonResult.success(service.update(id, request, currentUsername(authentication)));
-    } catch (IllegalArgumentException ex) {
-      return badRequest(ex);
-    }
-  }
-
-  @PreAuthorize("@ss.hasPermi('base:supplier-supply-ratio:remove')")
-  @DeleteMapping("/{id}")
-  public CommonResult<Void> delete(@PathVariable Long id, Authentication authentication) {
-    try {
-      service.delete(id, currentUsername(authentication));
-      return CommonResult.success(null);
-    } catch (IllegalArgumentException ex) {
-      return badRequest(ex);
-    }
+  @PreAuthorize("@ss.hasPermi('base:supplier-supply-ratio:list')")
+  @GetMapping("/changes")
+  public CommonResult<SupplierSupplyRatioChangePage> changes(
+      @RequestParam(required=false) String materialCode,
+      @RequestParam(required=false) String supplierCode,
+      @RequestParam(required=false) String batchNo,
+      @RequestParam(required=false) String businessUnitType,
+      @RequestParam(defaultValue="1") int page,
+      @RequestParam(defaultValue="20") int pageSize) {
+    return CommonResult.success(service.changes(materialCode,supplierCode,batchNo,page,pageSize,
+        resolveBusinessUnitType(businessUnitType)));
   }
 
   private String resolveBusinessUnitType(String businessUnitType) {

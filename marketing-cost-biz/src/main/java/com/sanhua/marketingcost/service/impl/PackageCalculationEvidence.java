@@ -47,6 +47,10 @@ final class PackageCalculationEvidence {
         row.put("priceType", detail.getPriceType());
         row.put("quantity", detail.getQtyPerParent());
         row.put("parentBaseQty", detail.getChildParentBaseQty());
+        // 家用行独立计价，其原树累计用量继续单独核对；包装材料才使用本次底数算法。
+        if (!PackageComponentPriceDetail.HOUSEHOLD_EXCLUDED.equals(detail.getPriceSource())) {
+          row.put("quantityBasis", "PACKAGE_PARENT");
+        }
         row.put("unitPrice", detail.getChildUnitPrice());
         row.put("amount", detail.getChildAmount());
         if (detail.getSourceHierarchyId() != null) row.put("sourceHierarchyId", detail.getSourceHierarchyId());
@@ -107,7 +111,7 @@ final class PackageCalculationEvidence {
       var a = left.get(key);
       var b = right.get(key);
       for (String field :
-          List.of("materialCode", "priceType", "priceSource", "quantity", "parentBaseQty", "sourceHierarchyId", "sourcePath"))
+          List.of("materialCode", "priceType", "priceSource", "quantity", "parentBaseQty", "quantityBasis", "sourceHierarchyId", "sourcePath"))
         same(a.get(field), b.get(field), "包装子件" + field);
       var excluded = household(a);
       if (excluded != null || household(b) != null) {
@@ -322,6 +326,8 @@ final class PackageCalculationEvidence {
 
   BigDecimal componentQuantity(JsonNode row) {
     BigDecimal quantity = decimal(row, "quantity");
+    // 新底稿按原表只除包装组件底数；旧冻结底稿仍按其保存的算法验算。
+    if ("PACKAGE_PARENT".equals(row.path("quantityBasis").asText())) return quantity;
     return row.hasNonNull("parentBaseQty")
         ? quantity.divide(decimal(row, "parentBaseQty"), 8, RoundingMode.HALF_UP) : quantity;
   }

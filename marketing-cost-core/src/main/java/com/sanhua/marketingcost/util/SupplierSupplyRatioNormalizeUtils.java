@@ -21,4 +21,13 @@ public final class SupplierSupplyRatioNormalizeUtils {
     return StringUtils.hasText(normalized) ? normalized : null;
   }
 
+  /** 有代码按代码识别；缺少代码时，按完整供应商名称识别，不生成虚构代码。 */
+  public static String supplierIdentity(String code, String name) {
+    String normalizedCode = normalizeToNull(code);
+    if (normalizedCode != null) return "CODE:" + normalizedCode;
+    String normalizedName = normalizeToNull(name);
+    if (normalizedName == null) throw new IllegalArgumentException("供应商名称不能为空");
+    return "NAME:" + normalizedName;
+  }
+
 }

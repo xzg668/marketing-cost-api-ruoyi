@@ -27,6 +27,7 @@ import org.testcontainers.utility.*;
 class MonthlyLegacyRangePriceSourceIntegrationTest {
   static final MySQLContainer<?> MYSQL=new MySQLContainer<>(DockerImageName.parse(System.getProperty("mpp.mysql.image","mysql:8.4")).asCompatibleSubstituteFor("mysql"))
       .withDatabaseName("mpp_legacy_range_test").withUsername("root").withPassword("mpp-legacy-range-test-only").withConfigurationOverride("monthly-pricing/mysql");
+  static MonthlyLegacyRangeSourceMapper sourceRows;
   static com.sanhua.marketingcost.service.financefactor.FinanceFactorPriceReader financeReader;static JdbcTemplate jdbc;static MonthlyLegacyRangePriceSource source;static AtomicInteger prepared=new AtomicInteger();
   static PriceRangeFactorRuleMapper rules;static OriginalRangeRuleSnapshot snapshots;static OriginalRangePriceRuntime runtime;static RangePriceResolver engine;static SupplierPreferredPriceSelector preferred;static Map<String,Long> originalBatches=new HashMap<>();static FinanceEffectivePriceService effective;static org.springframework.transaction.support.TransactionTemplate transaction;
   static MonthlyMaterialPriceService operation;static MonthlyPriceDocumentCodec codec;static AtomicInteger sourceCalls=new AtomicInteger();
@@ -53,8 +54,23 @@ class MonthlyLegacyRangePriceSourceIntegrationTest {
     runtime=new OriginalRangePriceRuntime(snapshots,new OriginalRangeRuleCalculator(),finance,sql.getMapper(PriceRangeItemMapper.class),sql.getMapper(OaFormMapper.class),json);
     preferred=new SupplierPreferredPriceSelector(new SupplierSupplyRatioResolveServiceImpl(sql.getMapper(SupplierSupplyRatioMapper.class)));var monthSelector=new MaterialPriceMonthSelector(sql.getMapper(MaterialPriceMonthMapper.class));var supplierPolicy=new SupplierPriceSelectionService(sql.getMapper(SupplierSupplyRatioMapper.class),sql.getMapper(SupplierPriceDecisionMapper.class));
     engine=new RangePriceResolver(sql.getMapper(PriceRangeItemMapper.class),rules,sql.getMapper(OaFormMapper.class),preferred,monthSelector,runtime,effective,new FinanceEffectivePriceSelectionService(effective,supplierPolicy),supplierPolicy);
-    source=new MonthlyLegacyRangePriceSource(sql.getMapper(MonthlyLegacyRangeSourceMapper.class),monthSelector,finance,new FactorCanonicalKeyServiceImpl(new PriceLinkedType2TextNormalizerImpl()),sql.getMapper(MonthlySupplierInputMapper.class),preferred,engine,codec,new ObjectMapper().findAndRegisterModules());
+    sourceRows=sql.getMapper(MonthlyLegacyRangeSourceMapper.class);
+    source=new MonthlyLegacyRangePriceSource(sourceRows,monthSelector,finance,new FactorCanonicalKeyServiceImpl(new PriceLinkedType2TextNormalizerImpl()),sql.getMapper(MonthlySupplierInputMapper.class),preferred,engine,codec,new ObjectMapper().findAndRegisterModules());
     var storage=new MonthlyPriceStorage(sql.getMapper(MonthlyPriceStorageMapper.class),codec,sql.getMapper(MonthlyPriceLinkMapper.class));operation=new MonthlyMaterialPriceService(storage,new DataSourceTransactionManager(ds),codec,(context,requests,dependencies)->{sourceCalls.incrementAndGet();return source.read(context,requests);});
+  }
+  @Test void largeSavedSnapshotsKeepNewestVersionOrderWithoutDatabaseFilesort() throws Exception {
+    String code=code();
+    var old=legacy(code,"COMMERCIAL","2026-10",true,"S1");
+    var newest=legacy(code,"COMMERCIAL","2026-10",true,"S2");
+    var sameVersion=legacy(code,"COMMERCIAL","2026-10",true,"S3");
+    String payload="{\"padding\":\""+"x".repeat(1_000_000)+"\"}";
+    jdbc.update("UPDATE lp_price_range_factor_rule SET version_no=2,source_input_snapshot_json=? WHERE id IN (?,?)", payload,newest.getId(),sameVersion.getId());
+    var found=transaction.execute(status->{
+      jdbc.execute("SET SESSION sort_buffer_size=32768");
+      return sourceRows.rules("COMMERCIAL","210",Set.of(code));
+    });
+    assertThat(found).extracting(PriceRangeFactorRule::getId).containsExactly(sameVersion.getId(),newest.getId(),old.getId());
+    assertThat(new ObjectMapper().readTree(found.getFirst().getSourceInputSnapshotJson()).path("padding").asText().equals("x".repeat(1_000_000))).isTrue();
   }
   @AfterAll static void stop(){MYSQL.stop();}
   static long publication(String bu,String month,String org){
@@ -161,4 +177,10 @@ class MonthlyLegacyRangePriceSourceIntegrationTest {
     assertThat(pair.financialPrice()).isEqualByComparingTo("10");assertThat(pair.customerPrice()).isEqualByComparingTo("20");
   }
 
+  @Test void explicitWithdrawalAppliesBeforeTheSingleLegacyFactorSupplierShortcut() {
+    String code=code(),month="2040-04"; publication("COMMERCIAL",month,"210"); legacy(code,"COMMERCIAL",month,true,"S1");
+    var req=request(code,"COMMERCIAL",month,"210","1"); assertThat(source.read(context("COMMERCIAL",month,"210"),Set.of(req)).problems()).isEmpty();
+    ratio(code,"S1","0"); var result=source.read(context("COMMERCIAL",month,"210"),Set.of(req));
+    assertThat(result.values()).isEmpty(); assertThat(result.problems().get(req).message()).contains("退出供货");
+  }
 }

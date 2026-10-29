@@ -96,7 +96,8 @@ public class CostRunObjectCalcServiceImpl implements CostRunObjectCalcService {
 
   private boolean requiresPreparedPartItems(CostRunContext context) {
     return context != null
-        && CostRunContext.SCENE_QUOTE.equals(context.getScene())
+        && (CostRunContext.SCENE_QUOTE.equals(context.getScene())
+            || CostRunContext.SCENE_MONTHLY_REPRICE.equals(context.getScene()))
         && StringUtils.hasText(context.getPricePrepareNo());
   }
 

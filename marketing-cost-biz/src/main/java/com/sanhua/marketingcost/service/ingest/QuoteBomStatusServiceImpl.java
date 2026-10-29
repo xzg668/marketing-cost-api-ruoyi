@@ -186,6 +186,26 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
       applyMissingProductStatus(status, form, item, ex.getMessage(), now);
       return;
     }
+    checkResolvedItem(form, item, status, now, context);
+  }
+
+  @Override
+  @Transactional
+  @com.sanhua.marketingcost.service.concurrent.RetryOnConcurrency
+  public QuoteBomStatus prepareMonthlyReprice(OaForm form, OaFormItem item, QuoteBomContext savedContext) {
+    if (form == null || item == null || savedContext == null
+        || !Objects.equals(form.getId(), item.getOaFormId())
+        || !Objects.equals(form.getBusinessUnitType(), item.getBusinessUnitType())
+        || !Objects.equals(QuoteProductIdentityUtils.resolveCostingCode(item), savedContext.productCode()))
+      throw new QuoteIngestException("调价BOM保存的报价单及产品归属无效");
+    java.time.YearMonth.parse(savedContext.costPeriodMonth());
+    QuoteBomStatus status = createInitialStatus(form, item);
+    checkResolvedItem(form, item, status, LocalDateTime.now(clock), savedContext);
+    return status;
+  }
+
+  private void checkResolvedItem(OaForm form, OaFormItem item, QuoteBomStatus status,
+      LocalDateTime now, QuoteBomContext context) {
     QuoteBomReuseKey key = QuoteBomReuseKey.from(context);
     applyReuseKey(status, key, item, now);
 
@@ -232,7 +252,7 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
     BomAvailability supplement = supplementBomAvailabilityResolver.resolve(
         item.getId(), requiredBusinessUnit(form, item), key.getCostPeriodMonth(), noU9);
     QuoteBomMonthlySnapshot approvedSnapshot =
-        findActiveApprovedSnapshot(key, context.organization());
+        findActiveApprovedSnapshot(key, context.organization(), requiredBusinessUnit(form, item));
     // 同月退回修订会发布新的组树版本；本报价的当前已批准来源优先于旧月度缓存。
     // 没有本报价专属来源时仍可复用已批准 BOM，正式 U9 仍在前面的独立分支处理。
     if (approvedSnapshot != null && (supplement == null || !supplement.isAvailable()
@@ -252,17 +272,18 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
 
     QuoteBomMonthlySnapshot snapshot =
         createAutoSuccessSnapshot(form, item, key, supplement, context.organization(), now);
-    deactivateActiveApprovedSnapshots(key, context.organization());
+    deactivateActiveApprovedSnapshots(key, context.organization(), requiredBusinessUnit(form, item));
     quoteBomMonthlySnapshotMapper.insert(snapshot);
     applySyncedSnapshot(status, supplement, snapshot, now);
   }
 
   private QuoteBomMonthlySnapshot findActiveApprovedSnapshot(
-      QuoteBomReuseKey key, QuoteDataOrganization organization) {
+      QuoteBomReuseKey key, QuoteDataOrganization organization, String businessUnit) {
     List<QuoteBomMonthlySnapshot> snapshots =
         quoteBomMonthlySnapshotMapper.selectList(
             Wrappers.<QuoteBomMonthlySnapshot>query()
                 .eq("product_code", key.getProductCode())
+                .eq("business_unit_type", businessUnit)
                 .eq("price_org_code", organization.priceOrgCode())
                 .eq("customer_code", key.getCustomerCode())
                 .eq("package_method", key.getPackageMethod())
@@ -277,12 +298,13 @@ public class QuoteBomStatusServiceImpl implements QuoteBomStatusService {
   }
 
   private void deactivateActiveApprovedSnapshots(
-      QuoteBomReuseKey key, QuoteDataOrganization organization) {
+      QuoteBomReuseKey key, QuoteDataOrganization organization, String businessUnit) {
     quoteBomMonthlySnapshotMapper.update(
         null,
         Wrappers.<QuoteBomMonthlySnapshot>update()
             .set("active_flag", 0)
             .eq("product_code", key.getProductCode())
+            .eq("business_unit_type", businessUnit)
             .eq("price_org_code", organization.priceOrgCode())
             .eq("customer_code", key.getCustomerCode())
             .eq("package_method", key.getPackageMethod())

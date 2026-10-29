@@ -104,8 +104,16 @@ public class SupplierPriceReviewWorkflow {
     boolean stillWaiting = result.getSupplierPriceReviews().stream()
         .anyMatch(r -> decision.getScopeKey().equals(r.scopeKey())
             && !SupplierPriceSelectionService.FALLBACK_HIGH.equals(r.status()));
-    decision.setRetryStatus(stillWaiting ? "WAITING" : "RESOLVED");
-    decision.setRetryMessage(stillWaiting ? "供货比率仍不足，请补充后重新导入" : "已自动重新取价");
+    // An explicit withdrawal can remove every candidate and therefore every review.
+    // Keep that material retryable until its actual price gap has also been resolved.
+    boolean hasPriceGap = result.getGaps() != null && result.getGaps().getRecords() != null
+        && result.getGaps().getRecords().stream().anyMatch(gap ->
+            (Objects.equals(decision.getMaterialCode(), gap.getMaterialCode())
+                || Objects.equals(decision.getMaterialCode(), gap.getGapMaterialCode()))
+            && (gap.getPriceType() == null || Objects.equals(decision.getPriceType(), gap.getPriceType())));
+    decision.setRetryStatus(stillWaiting || hasPriceGap ? "WAITING" : "RESOLVED");
+    decision.setRetryMessage(stillWaiting ? "供货比率仍不足，请补充后重新导入"
+        : hasPriceGap ? "当前物料仍有价格缺口，请补充有效供货价格" : "已自动重新取价");
     decisions.updateById(decision);
   }
 }

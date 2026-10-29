@@ -107,6 +107,7 @@ public class DrawingVerificationWorkspaceService {
   }
 
   /** 不开外层事务；核验 HTTP 与结果消费各自管理短事务。 */
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)
   public DrawingVerificationWorkspace operate(
       String oaNo, Long itemId, String month, Operation request) {
     var scope = scope(oaNo, itemId, month);

@@ -493,7 +493,7 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
                   .filter(key -> !"NO_SUPPLIER".equals(key))
                   .distinct()
                   .count()
-              > 1) needsSupplierSelection.add(entry.getKey());
+              > 0) needsSupplierSelection.add(entry.getKey());
     }
     Map<String, com.sanhua.marketingcost.dto.SupplierSupplyRatioResolveResult> supplierInputs =
         needsSupplierSelection.isEmpty()
@@ -527,20 +527,20 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
         effectiveErrors.put(group.getKey(), failure.getMessage());
       }
     }
-    Set<String> nativeMultiple = new TreeSet<>();
+    Set<String> nativeRelationCodes = new TreeSet<>();
     currentCandidates.forEach(
         (code, values) -> {
           if (request != null
-              && values.size() > 1
+              && !values.isEmpty()
               && values.stream()
                   .allMatch(
                       row -> OriginalLinkedRuleSnapshot.VERSION.equals(row.getExpressionVersion())))
-            nativeMultiple.add(code);
+            nativeRelationCodes.add(code);
         });
     var nativeRatios =
-        nativeMultiple.isEmpty()
+        nativeRelationCodes.isEmpty()
             ? Map.<String, List<SupplierSupplyRatio>>of()
-            : supplierPrices.prepareRatios(businessUnitType, nativeMultiple, priceDate);
+            : supplierPrices.prepareRatios(businessUnitType, nativeRelationCodes, priceDate);
     for (Map.Entry<String, List<PriceLinkedItem>> entry : candidatesByMaterial.entrySet()) {
       var organizations =
           entry.getValue().stream()
@@ -715,6 +715,7 @@ public class LinkedPriceEnsureServiceImpl implements LinkedPriceEnsureService {
     List<BomCostingRow> rows =
         bomCostingRowMapper.selectList(
             Wrappers.lambdaQuery(BomCostingRow.class)
+                .eq(BomCostingRow::getCalculationScope, "")
                 .eq(BomCostingRow::getOaNo, oaNo)
                 .eq(BomCostingRow::getBusinessUnitType, businessUnitType)
                 .in(BomCostingRow::getMaterialCode, itemCodes));

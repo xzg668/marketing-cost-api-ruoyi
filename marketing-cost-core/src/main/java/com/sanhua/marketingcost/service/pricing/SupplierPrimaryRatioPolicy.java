@@ -21,11 +21,19 @@ public final class SupplierPrimaryRatioPolicy {
     for(String code:materialCodes){String normalized=SupplierSupplyRatioNormalizeUtils.normalizeToNull(code);if(normalized!=null)requested.add(normalized);}
     var result=new LinkedHashMap<String,SupplierSupplyRatioResolveResult>();
     for(String code:requested){
-      var captured=capturedByMaterial.get(code);SupplierSupplyRatio row=captured==null?null:captured.stream().filter(value->
-          Integer.valueOf(1).equals(value.getIsActive()) && Integer.valueOf(0).equals(value.getDeleted()) && value.getSupplyRatio()!=null
-          && (date==null || (value.getEffectiveFrom()==null || !value.getEffectiveFrom().isAfter(date)) && (value.getEffectiveTo()==null || !value.getEffectiveTo().isBefore(date))))
+      var captured=capturedByMaterial.get(code);
+      List<SupplierSupplyRatio> current = captured == null ? List.of() : captured.stream()
+          .filter(value -> Integer.valueOf(1).equals(value.getIsActive()) && Integer.valueOf(0).equals(value.getDeleted())
+              && (date == null || (value.getEffectiveFrom() == null || !value.getEffectiveFrom().isAfter(date))
+                  && (value.getEffectiveTo() == null || !value.getEffectiveTo().isBefore(date))))
+          .map(value -> (SupplierSupplyRatio) value).toList();
+      SupplierRatioPricePolicy.index(current);
+      var row = current.stream().filter(value -> value.getSupplyRatio() != null && value.getSupplyRatio().signum() > 0)
           .min(ORDER).orElse(null);
-      result.put(code,row==null?SupplierSupplyRatioResolveResult.miss("未命中供货比例：material_code 无数据"):hit(row,"匹配 material_code，取供货比例最大供应商"));
+      var choice = row == null ? SupplierSupplyRatioResolveResult.miss("未命中正比例主供应商")
+          : hit(row, "匹配 material_code，取供货比例最大供应商");
+      choice.setCurrentRelations(current);
+      result.put(code, choice);
     }
     return result;
   }

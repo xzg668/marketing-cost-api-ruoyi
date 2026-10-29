@@ -14,15 +14,16 @@ public final class SupplierRatioPricePolicy {
 
   public static SupplierPriceCandidate choose(
       List<SupplierPriceCandidate> candidates, List<SupplierSupplyRatio> ratios) {
+    candidates = eligible(candidates, ratios);
     if (candidates.isEmpty()) return null;
     if (candidates.size() == 1) return candidates.get(0);
     Map<String, SupplierSupplyRatio> bySupplier = index(ratios);
     List<SupplierPriceCandidate> known = candidates.stream()
-        .filter(c -> bySupplier.containsKey(c.supplierCode())
-            && bySupplier.get(c.supplierCode()).getSupplyRatio() != null).toList();
+        .filter(c -> match(bySupplier, c) != null
+            && match(bySupplier, c).getSupplyRatio() != null).toList();
     if (known.isEmpty()) return null;
     Comparator<SupplierPriceCandidate> preference = Comparator
-        .comparing((SupplierPriceCandidate c) -> bySupplier.get(c.supplierCode()).getSupplyRatio())
+        .comparing((SupplierPriceCandidate c) -> match(bySupplier, c).getSupplyRatio())
         .thenComparing(SupplierPriceCandidate::unitPrice)
         .thenComparing(SupplierPriceCandidate::supplierCode);
     SupplierPriceCandidate best = known.stream().max(preference).orElseThrow();
@@ -34,8 +35,27 @@ public final class SupplierRatioPricePolicy {
         .filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
     if (total.compareTo(BigDecimal.ONE) > 0) return null;
     BigDecimal remaining = BigDecimal.ONE.subtract(total);
-    return bySupplier.get(best.supplierCode()).getSupplyRatio().compareTo(remaining) > 0
+    return match(bySupplier, best).getSupplyRatio().compareTo(remaining) > 0
         ? best : null;
+  }
+
+  /** Apply withdrawal before every shortcut or manual fallback; null/missing is not zero. */
+  public static List<SupplierPriceCandidate> eligible(
+      List<SupplierPriceCandidate> candidates, List<SupplierSupplyRatio> ratios) {
+    index(ratios); // Reject ambiguous current versions even in single/same-price branches.
+    return candidates.stream().filter(c -> !withdrawn(c.supplierCode(), c.supplierName(), ratios)).toList();
+  }
+
+  public static boolean withdrawn(String code, String name, List<SupplierSupplyRatio> ratios) {
+    String normalizedCode = com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.normalizeToNull(code);
+    String normalizedName = com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.normalizeToNull(name);
+    return ratios.stream().filter(r -> r.getSupplyRatio() != null && r.getSupplyRatio().signum() == 0)
+        .anyMatch(r -> {
+          String rowCode = com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.normalizeToNull(r.getSupplierCode());
+          if (normalizedCode != null && rowCode != null) return normalizedCode.equals(rowCode);
+          return normalizedName != null && normalizedName.equals(
+              com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.normalizeToNull(r.getSupplierName()));
+        });
   }
 
   public static SupplierPriceCandidate highest(List<SupplierPriceCandidate> candidates) {
@@ -45,8 +65,17 @@ public final class SupplierRatioPricePolicy {
 
   public static Map<String, SupplierSupplyRatio> index(List<SupplierSupplyRatio> ratios) {
     return ratios.stream().collect(Collectors.toMap(
-        SupplierSupplyRatio::getSupplierCode, Function.identity(), (a, b) -> {
-          throw new IllegalStateException("同一物料和供应商存在多条有效供货比率：" + a.getSupplierCode());
+        r -> com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.supplierIdentity(r.getSupplierCode(), r.getSupplierName()),
+        Function.identity(), (a, b) -> {
+          throw new IllegalStateException("同一物料和供应商存在多条有效供货比率：" + a.getSupplierName());
         }));
+  }
+
+  public static SupplierSupplyRatio match(Map<String, SupplierSupplyRatio> ratios, SupplierPriceCandidate candidate) {
+    String code = com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.normalizeToNull(candidate.supplierCode());
+    SupplierSupplyRatio exact = code == null ? null : ratios.get("CODE:" + code);
+    if (exact != null) return exact;
+    String name = com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.normalizeToNull(candidate.supplierName());
+    return name == null ? null : ratios.get("NAME:" + name);
   }
 }

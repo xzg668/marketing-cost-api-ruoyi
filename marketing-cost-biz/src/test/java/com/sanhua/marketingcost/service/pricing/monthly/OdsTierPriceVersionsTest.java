@@ -5,12 +5,11 @@ import static org.assertj.core.api.Assertions.*;
 import com.sanhua.marketingcost.entity.monthly.OdsMaterialPriceRow;
 import java.math.BigDecimal;
 import java.util.List;
-import java.time.LocalDate;
 import org.junit.jupiter.api.Test;
 
 class OdsTierPriceVersionsTest {
   private static java.util.Map<String,List<OdsMaterialPriceRow>> selected(List<OdsMaterialPriceRow> rows) {
-    return OdsTierPriceVersions.latestPerSupplier(rows, LocalDate.of(2026,10,25));
+    return OdsTierPriceVersions.latestPerSupplier(rows,java.time.LocalDate.of(2026,10,23));
   }
   private static OdsMaterialPriceRow tier(long id, String supplier, String effectiveDate,
       String lower, String upper, String price) {
@@ -69,19 +68,19 @@ class OdsTierPriceVersionsTest {
         tier(1, " ", "2026-01-01", "1", null, "10"))))
         .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("供应商");
   }
-  @Test void excludesExpiredAndFutureVersionsBeforeSelectingTheLatestValidSet() {
+  @Test void currentVersionWinsAndLatestIsOnlyAFallback() {
     var expired = tier(1, "A", "2026-01-01", "1", null, "5"); expired.setExpDate("2026-09-30");
     var active = tier(2, "A", "2026-10-01", "1", null, "10"); active.setExpDate("2026-11-30");
     var future = tier(3, "A", "2026-12-01", "1", null, "20"); future.setExpDate("2027-11-30");
     assertThat(selected(List.of(expired, future, active)).get("A")).containsExactly(active);
-    assertThat(selected(List.of(expired, future))).isEmpty();
+    assertThat(selected(List.of(expired)).get("A")).containsExactly(expired);
   }
 
-  @Test void effectiveAndExpiryDaysAreBothInsideTheValidDateRange() {
-    var row = tier(1, "A", "2026-10-01", "1", null, "10"); row.setExpDate("2026-10-31");
-    for (var date : List.of(LocalDate.of(2026,10,1), LocalDate.of(2026,10,31)))
-      assertThat(OdsTierPriceVersions.latestPerSupplier(List.of(row), date).get("A")).containsExactly(row);
-    for (var date : List.of(LocalDate.of(2026,9,30), LocalDate.of(2026,11,1)))
-      assertThat(OdsTierPriceVersions.latestPerSupplier(List.of(row), date)).isEmpty();
+  @Test void latestExpiryBreaksEqualEffectiveDateTiesWithoutMixingTierSets() {
+    var old = tier(999, "A", "2026-10-01", "1", null, "99");old.setExpDate("2026-10-31");
+    var first = tier(1, "A", "2026-10-01", "1", "20000", "10");
+    var last = tier(2, "A", "2026-10-01", "20000", null, "5");
+    for(var input:List.of(List.of(old,first,last),List.of(last,first,old)))
+      assertThat(selected(input).get("A")).containsExactlyInAnyOrder(first,last);
   }
 }

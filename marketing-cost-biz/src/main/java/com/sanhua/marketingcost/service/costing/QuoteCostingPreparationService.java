@@ -107,6 +107,7 @@ public class QuoteCostingPreparationService {
         message);
   }
 
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)
   public Outcome prepareAndCost(String oaNo, Request request, String operatorName) {
     if (request == null) throw new IllegalArgumentException("核算请求不能为空");
     long formId = requireForm(oaNo);

@@ -43,6 +43,14 @@ public class MonthlyRepriceBatch {
   private LocalDateTime finishedAt;
   private LocalDateTime confirmedAt;
   private String remark;
+  /** Null identifies preserved legacy batches; 1 is the 1130 contract. */
+  private Integer contractVersion;
+  private String goLiveMonth;
+  private Long resultRevision;
+  private Long checkedRevision;
+  private String checkStatus;
+  private String checkResultJson;
+  private LocalDateTime checkedAt;
 
   @TableField(fill = FieldFill.INSERT)
   private LocalDateTime createdAt;

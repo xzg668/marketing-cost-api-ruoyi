@@ -90,7 +90,11 @@ public final class TechnicalDataSupplementContent {
       @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
       String entryMode,
       @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-      TechnicalDataPackageReferenceResponse.Evidence source) {}
+      TechnicalDataPackageReferenceResponse.Evidence source,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+      BigDecimal parentBaseQuantity,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+      String quantityBasis) {}
 
   public record PackageItemEvidence(String kind, String model, Long parentNodeId, Long sourceNodeId,
       String sourceTopProductCode, String sourceVersion, String sourcePath, String sourceFingerprint,

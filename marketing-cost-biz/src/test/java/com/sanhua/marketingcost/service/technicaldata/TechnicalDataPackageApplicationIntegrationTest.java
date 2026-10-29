@@ -36,16 +36,17 @@ class TechnicalDataPackageApplicationIntegrationTest extends BomMapperTestBase {
   @Autowired private BomRawHierarchyMapper hierarchy;
   @Autowired private MaterialMasterRawMapper materials;
   @Autowired private JdbcTemplate jdbc;
-  private Long taskId, productId, parent1, parent2, child1, child2;
-  private String key;
+  protected Long taskId, productId, parent1, parent2, child1, child2;
+  protected String key;
+  protected String accountingMonth() { return "2026-09"; }
 
   @BeforeEach void fixture() {
     key = "TW10-" + UUID.randomUUID().toString().substring(0, 8);
     var task = new QuoteTechTask(); task.setTaskNo(key); task.setOaFormId(10L); task.setOaFormItemId(System.nanoTime());
-    task.setOaNo(key); task.setAccountingMonth("2026-09"); task.setBusinessUnitType("COMMERCIAL"); task.setApplicableOrgCode("210");
+    task.setOaNo(key); task.setAccountingMonth(accountingMonth()); task.setBusinessUnitType("COMMERCIAL"); task.setApplicableOrgCode("210");
     task.setAssigneeUserId(101L); task.setAssigneeName("王工"); taskId = persistence.createTask(task).getId();
     var product = new QuoteTechProduct(); product.setTaskId(taskId); product.setOaFormItemId(task.getOaFormItemId()); product.setQuoteNo(key);
-    product.setAccountingMonth("2026-09"); product.setContentSchemaVersion(2); product.setMaterialNo(key);
+    product.setAccountingMonth(accountingMonth()); product.setContentSchemaVersion(2); product.setMaterialNo(key);
     product.setSourceFingerprint("a".repeat(64)); product.setSourceSnapshotJson("{\"sourceModel\":\"OA-MODEL\"}");
     productId = persistence.createProduct(product).getId();
     for (String type : TechnicalDataModuleType.orderedCodes()) {
@@ -98,12 +99,43 @@ class TechnicalDataPackageApplicationIntegrationTest extends BomMapperTestBase {
         .hasMessageContaining("不属于本次组织");
   }
 
-  @Test void parentAndChildAreSavedSeparatelyAndSubmittedSnapshotSurvivesParentOnlyReturn() throws Exception {
+  @Test void referenceKeepsThePackageBomBaseFor150Products() {
+    var parent = hierarchy.selectById(parent1);
+    parent.setEffectiveTo(LocalDate.of(9999, 12, 31)); hierarchy.updateById(parent);
+    jdbc.update("""
+        INSERT INTO lp_bom_u9_source(import_batch_id,source_type,imported_at,price_org_code,
+          parent_material_no,child_material_no,bom_purpose,bom_version,child_seq,
+          qty_per_parent,parent_base_qty,effective_from,effective_to)
+        VALUES(?,'EXCEL',NOW(),'210',?,?,'主制造','V1',1,1,150,'2026-09-01','9999-12-31')
+        """, key, key + "-T1", key + "-P");
+    var child = hierarchy.selectById(child1);
+    child.setQtyPerParent(new BigDecimal("150")); child.setQtyPerTop(new BigDecimal("150")); hierarchy.updateById(child);
+    var source = service.references(productId, key + "-T1", WANG).components().getFirst().sources().getFirst();
+    var tree = new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(source.evidence());
+    assertThat(tree.path("parentBaseQuantity").decimalValue()).isEqualByComparingTo("150");
+    var saved = service.save(productId, reference(source, "1"), WANG);
+    assertThat(saved.issues()).isEmpty();
+    assertThat(saved.packaging().parentQuantity()).isNull();
+    assertThat(saved.packaging().quantityBasis()).isEqualTo("PACKAGE_PARENT");
+    assertThat(saved.packaging().parentBaseQuantity()).isEqualByComparingTo("150");
+    assertThat(saved.items().getFirst().quantity()).isEqualByComparingTo("150");
+    assertThat(saved.items().getFirst().quantityPerProduct()).isEqualByComparingTo("1");
+    var frozen = versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), saved.expectedVersion(), 101L);
+    var reopened = service.get(productId, frozen.getId(), WANG);
+    assertThat(reopened.packaging().parentBaseQuantity()).isEqualByComparingTo("150");
+    assertThat(reopened.items().getFirst().quantityPerProduct()).isEqualByComparingTo("1");
+    jdbc.update("UPDATE lp_bom_u9_source SET parent_base_qty=100 WHERE import_batch_id=?", key);
+    assertThat(service.get(productId, frozen.getId(), WANG).items().getFirst().quantityPerProduct()).isEqualByComparingTo("1");
+    assertThatThrownBy(() -> sources.require(repository.findTask(taskId).orElseThrow(),
+        repository.findProduct(productId).orElseThrow(), parent1, source.evidence().fingerprint())).hasMessageContaining("已变化");
+  }
+
+  @Test void baseAndChildAreSavedSeparatelyAndSubmittedSnapshotSurvivesBaseOnlyReturn() throws Exception {
     var source = service.references(productId, key + "-T2", WANG).components().getFirst().sources().getFirst();
     var saved = service.save(productId, reference(source, "2"), WANG);
     assertThat(saved.issues()).isEmpty();
     assertThat(saved.items().getFirst().quantity()).isEqualByComparingTo("0.5");
-    assertThat(saved.items().getFirst().quantityPerProduct()).isEqualByComparingTo("1");
+    assertThat(saved.items().getFirst().quantityPerProduct()).isEqualByComparingTo("0.25");
     var persisted = repository.findPackageItems(saved.draftVersionId()).getFirst();
     assertThat(persisted.getStandardQuantity()).isEqualByComparingTo("0.5");
     assertThat(persisted.getPriceBasisType()).isNull(); assertThat(persisted.getReferenceUnitPrice()).isNull(); assertThat(persisted.getAmount()).isNull();
@@ -112,33 +144,51 @@ class TechnicalDataPackageApplicationIntegrationTest extends BomMapperTestBase {
     var first = versions.freeze(repository.lockProduct(productId).orElseThrow(), person, saved.expectedVersion(), 101L);
     String firstContent = content(first);
     versions.restore(repository.lockProduct(productId).orElseThrow(), person, first.getId(), 101L);
-    var changed = reference(source, "3"); changed.setExpectedVersion(service.get(productId, null, WANG).expectedVersion());
+    var changed = reference(source, "4"); changed.setExpectedVersion(service.get(productId, null, WANG).expectedVersion());
     var resaved = service.save(productId, changed, WANG);
     assertThat(resaved.packaging().sourceParentQuantity()).isEqualByComparingTo("2");
-    assertThat(resaved.items().getFirst().quantityPerProduct()).isEqualByComparingTo("1.5");
+    assertThat(resaved.items().getFirst().quantityPerProduct()).isEqualByComparingTo("0.125");
     var second = versions.freeze(repository.lockProduct(productId).orElseThrow(), person, resaved.expectedVersion(), 101L);
     assertThat(content(repository.findVersion(first.getId()).orElseThrow())).isEqualTo(firstContent);
     var diff = new com.fasterxml.jackson.databind.ObjectMapper().readTree(summaries.summarize(content(second), firstContent));
     var changes = diff.get(0).get("changes"); assertThat(changes.size()).isOne();
-    assertThat(changes.get(0).get("field").asText()).isEqualTo("packaging.parentQuantity");
+    assertThat(changes.get(0).get("field").asText()).isEqualTo("packaging.parentBaseQuantity");
     assertThat(hierarchy.selectById(parent2).getQtyPerTop()).isEqualByComparingTo("2");
   }
 
-  @Test void emptyParentRemainsDraftAndManualModelGeneratesSkuWithoutInventingPriceOrReference() {
+  @Test void emptyBaseRemainsDraftAndManualModelGeneratesSkuWithoutInventingPriceOrReference() {
     var input = manual("BOX-MODEL", null);
     var draft = service.save(productId, input, WANG);
-    assertThat(draft.moduleStatus()).isEqualTo("EDITING"); assertThat(draft.packaging().parentQuantity()).isNull();
+    assertThat(draft.moduleStatus()).isEqualTo("EDITING"); assertThat(draft.packaging().parentBaseQuantity()).isNull();
     assertThat(validation.validate(taskId, 101L, WANG).valid()).isFalse();
     assertThatThrownBy(() -> versions.freeze(repository.lockProduct(productId).orElseThrow(), recipient(), draft.expectedVersion(), 101L)).hasMessageContaining("校验");
     var zero = manual("BOX-MODEL", "0"); zero.setExpectedVersion(draft.expectedVersion());
-    assertThatThrownBy(() -> service.save(productId, zero, WANG)).hasMessageContaining("母件用量必须大于 0");
+    assertThatThrownBy(() -> service.save(productId, zero, WANG)).hasMessageContaining("母件底数必须大于 0");
     var complete = manual("BOX-CHANGED", "2"); complete.setExpectedVersion(draft.expectedVersion());
     var saved = service.save(productId, complete, WANG);
     assertThat(saved.items().getFirst().componentMaterialNo()).isEqualTo("BOX-CHANGED");
     assertThat(saved.items().getFirst().componentModel()).isEqualTo("BOX-CHANGED");
     assertThat(saved.items().getFirst().quantity()).isEqualByComparingTo("0.5");
-    assertThat(saved.items().getFirst().quantityPerProduct()).isEqualByComparingTo("1");
+    assertThat(saved.items().getFirst().quantityPerProduct()).isEqualByComparingTo("0.25");
     assertThat(saved.packaging().source()).isNull(); assertThat(saved.issues()).isEmpty();
+  }
+
+  @Test void missingOrInvalidBaseCannotBecomeReadyAndEditingBaseRecalculatesQuantity() {
+    var input = manual("BOX-BASE", "1"); input.setParentBaseQuantity(null);
+    var saved = service.save(productId, input, WANG);
+    assertThat(saved.moduleStatus()).isEqualTo("EDITING");
+    assertThat(saved.issues()).anyMatch(value -> value.contains("母件底数"));
+    assertThat(saved.items().getFirst().quantityPerProduct()).isNull();
+    for (String invalid : List.of("0", "-1")) {
+      input.setExpectedVersion(saved.expectedVersion()); input.setParentBaseQuantity(new BigDecimal(invalid));
+      assertThatThrownBy(() -> service.save(productId, input, WANG)).hasMessageContaining("母件底数必须大于 0");
+    }
+    input.setParentBaseQuantity(new BigDecimal("6"));
+    input.getItems().getFirst().setQuantity(new BigDecimal("2"));
+    var complete = service.save(productId, input, WANG);
+    assertThat(complete.issues()).isEmpty();
+    assertThat(complete.items().getFirst().quantityPerProduct()).isEqualByComparingTo("0.33333333");
+    assertThat(repository.findPackageItems(complete.draftVersionId()).getFirst().getQuantity()).isEqualByComparingTo("2");
   }
 
   @Test void sourcesAndPermissionsAreCheckedAgainAtSaveAndSubmission() {
@@ -158,14 +208,14 @@ class TechnicalDataPackageApplicationIntegrationTest extends BomMapperTestBase {
     assertThat(service.get(productId, null, WANG).items().getFirst().quantity()).isEqualByComparingTo("0.5");
   }
 
-  private TechnicalDataPackageSaveRequest reference(Source source, String parent) {
+  private TechnicalDataPackageSaveRequest reference(Source source, String base) {
     var input = new TechnicalDataPackageSaveRequest(); input.setExpectedVersion(0); input.setEntryMode("REFERENCE");
-    input.setParentQuantity(new BigDecimal(parent)); input.setReferenceParentNodeId(source.evidence().parentNodeId()); input.setReferenceFingerprint(source.evidence().fingerprint());
+    input.setParentBaseQuantity(source.evidence().parentBaseQuantity() == null ? new BigDecimal(base) : source.evidence().parentBaseQuantity()); input.setReferenceParentNodeId(source.evidence().parentNodeId()); input.setReferenceFingerprint(source.evidence().fingerprint());
     var child = source.children().getFirst(); var row = new TechnicalDataPackageItemRequest(); row.setSourceParentNodeId(source.evidence().parentNodeId());
     row.setSourceNodeId(child.sourceNodeId()); row.setSourceFingerprint(source.evidence().fingerprint()); row.setQuantity(child.quantity()); input.setItems(List.of(row)); return input;
   }
-  private TechnicalDataPackageSaveRequest manual(String model, String parent) {
-    var input = new TechnicalDataPackageSaveRequest(); input.setExpectedVersion(0); input.setEntryMode("MANUAL"); input.setParentQuantity(parent == null ? null : new BigDecimal(parent));
+  private TechnicalDataPackageSaveRequest manual(String model, String base) {
+    var input = new TechnicalDataPackageSaveRequest(); input.setExpectedVersion(0); input.setEntryMode("MANUAL"); input.setParentBaseQuantity(base == null ? null : new BigDecimal(base));
     var row = new TechnicalDataPackageItemRequest(); row.setComponentModel(model); row.setComponentName("新纸箱"); row.setQuantity(new BigDecimal("0.5")); row.setUnit("张"); input.setItems(List.of(row)); return input;
   }
 private Recipient recipient() { return new Recipient(1L, taskId, 1, 101L, "王工", "wang", "FILL", List.of("PACKAGE"), 1L, "todo", "CONFIRMED", "OPEN", null, "工程部", "leader", "王总", null, 0, 0, null, true, null, null, "T-TEST", null); }
@@ -179,6 +229,6 @@ private Recipient recipient() { return new Recipient(1L, taskId, 1, 101L, "王�
     var row = new BomRawHierarchy(); row.setTopProductCode(key + "-" + top); row.setParentCode(key + "-" + parent); row.setMaterialCode(key + "-" + suffix);
     row.setLevel(level); row.setPath(path); row.setSortSeq(1); row.setQtyPerParent(new BigDecimal(quantity)); row.setQtyPerTop(new BigDecimal(total));
     row.setPriceOrgCode("210"); row.setBusinessUnitType("COMMERCIAL"); row.setSourceType("U9"); row.setBomPurpose("主制造"); row.setBomVersion("V1");
-    row.setEffectiveFrom(LocalDate.of(2026, 9, 1)); row.setBuildBatchId(key); row.setBuiltAt(LocalDateTime.now()); row.setSourceImportBatchId(key); hierarchy.insert(row); return row.getId();
+    row.setEffectiveFrom(LocalDate.of(2026, 9, 1)); row.setEffectiveTo(LocalDate.of(9999, 12, 31)); row.setBuildBatchId(key); row.setBuiltAt(LocalDateTime.now()); row.setSourceImportBatchId(key); hierarchy.insert(row); return row.getId();
   }
 }

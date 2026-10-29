@@ -136,4 +136,12 @@ class MonthlyScrapPriceSourceIntegrationTest {
     var selected=new LinkedHashMap<MonthlyPriceRequest,MonthlyAdoptionPlan.Selection>();for(var r:List.of(b,explicit))selected.put(r,candidates.values().get(r).selection());
     var receipt=operation.adopt(c,new MonthlyAdoptionPlan(selected,List.of(new MonthlyAdoptionPlan.Use("root/shared220",b,BigDecimal.ONE),new MonthlyAdoptionPlan.Use("root/explicit210",explicit,BigDecimal.ONE)),Set.of()));var origin=new ObjectMapper().findAndRegisterModules().valueToTree(Map.of("supplierReviews",receipt.supplierReviews()));assertThat(origin.path("supplierReviews").size()).isEqualTo(1);assertThat(origin.path("supplierReviews").get(0).path("scope").path("orgCode").asText()).isEqualTo("220");
   }
+  @Test void explicitWithdrawalAppliesBeforeSingleAndSamePriceScrapShortcuts() {
+    String code=code(),month="2040-03"; rule(code,"COMMERCIAL",month,"S1","10",null); var req=request(code,"COMMERCIAL",month,"210");
+    assertThat(source.read(context("COMMERCIAL",month,"210"),Set.of(req)).problems()).isEmpty();
+    jdbc.update("INSERT INTO lp_supplier_supply_ratio(business_unit_type,material_code,material_name,spec_model,supplier_name,supplier_code,supply_ratio,is_active,deleted) VALUES('COMMERCIAL',?,'fixture','SPEC','S1','S1',0,1,0)",code);
+    assertThat(source.read(context("COMMERCIAL",month,"210"),Set.of(req)).values()).isEmpty();
+    rule(code,"COMMERCIAL",month,"S2","10",null); var result=source.read(context("COMMERCIAL",month,"210"),Set.of(req));
+    assertThat(result.problems()).isEmpty(); assertThat(result.values().get(req).selection().fact().evidence().json()).contains("S2");
+  }
 }

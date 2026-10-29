@@ -44,21 +44,35 @@ class FixedPriceResolverTest {
     assertThat(resolve(twoPrices()).failureCode()).isEqualTo("FIXED_PRICE_SCOPE_MISSING");
     verifyNoInteractions(ratios, decisions);
   }
-  @Test void queriesOrganizationMaterialAndHalfOpenDates() {
+  @Test void queriesOrganizationMaterialAndLatestDatesWithoutCurrentDateFilter() {
     resolve(List.of(row("A","12","2026-10-01","2027-01-01")));
     ArgumentCaptor<Wrapper<PriceFixedItem>> query=ArgumentCaptor.forClass(Wrapper.class);
     verify(prices).selectList(query.capture());
-    assertThat(query.getValue().getCustomSqlSegment()).contains("org_code", "material_code", "business_unit_type", "effective_from <=", "effective_to >");
-    verifyNoInteractions(ratios,decisions);
+    assertThat(query.getValue().getCustomSqlSegment()).contains("org_code", "material_code", "business_unit_type", "effective_from DESC", "effective_to DESC")
+        .doesNotContain("effective_from <=", "effective_to >");
+    verify(ratios).selectList(any(Wrapper.class)); verifyNoInteractions(decisions);
   }
-  @Test void effectiveStartIncludedAndEndExcluded() {
-    var result=resolve(List.of(row("A","12","2026-10-08","2027-01-01"),row("B","99","2026-01-01","2026-10-08")));
+  @Test void currentlyValidVersionWinsOverTheFutureVersion() {
+    var result=resolve(List.of(row("A","12","2026-10-08","2027-01-01"),row("A","9","2026-11-01","2027-11-01")));
     assertThat(result.unitPrice()).isEqualByComparingTo("12");
-    verifyNoInteractions(ratios);
+    verify(ratios).selectList(any(Wrapper.class));
   }
-  @Test void expiredPriceIsMissingWithoutCarryForward() {
+  @Test void latestExpiredPriceIsStillEligible() {
     var result=resolve(List.of(row("A","12","2026-01-01","2026-10-08")));
-    assertThat(result.unitPrice()).isNull(); assertThat(result.carriedForward()).isFalse();
+    assertThat(result.unitPrice()).isEqualByComparingTo("12");
+  }
+  @Test void currentSuppliersDoNotResurrectAnotherSuppliersExpiredPrice() {
+    var result=resolve(List.of(row("S001058","0.09","2026-03-01","2027-02-28"),
+        row("S003236","0.09","2026-06-01","2027-05-31"),
+        row("S001324","0.10","2025-05-01","2025-12-31")));
+    assertThat(result.unitPrice()).isEqualByComparingTo("0.09");
+    assertThat(context.getSupplierPriceReviewContext().reviews()).isEmpty();
+  }
+  @Test void latestHistoryIsUsedOnlyWhenNoSupplierHasACurrentPrice() {
+    var result=resolve(List.of(row("A","9","2024-01-01","2024-12-31"),
+        row("A","12","2025-01-01","2025-12-31")));
+    assertThat(result.unitPrice()).isEqualByComparingTo("12");
+    assertThat(context.getSupplierPriceReviewContext().reviews()).isEmpty();
   }
   @Test void oneSupplierUsesLatestStartNotHighestPrice() {
     var result=resolve(List.of(row("A","64.7","2026-04-01","2027-03-31"),row("A","62.9","2026-10-01","2027-09-30")));

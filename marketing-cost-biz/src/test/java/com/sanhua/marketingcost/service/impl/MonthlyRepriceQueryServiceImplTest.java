@@ -53,6 +53,7 @@ class MonthlyRepriceQueryServiceImplTest {
   private MonthlyRepriceCostItemMapper costItemMapper;
   private MonthlyRepriceAuditLogMapper auditLogMapper;
   private MonthlyRepriceQueryServiceImpl service;
+  private com.sanhua.marketingcost.service.costing.MonthlyCostVersionService savedCosts;
 
   @BeforeAll
   static void initTableInfo() {
@@ -74,6 +75,7 @@ class MonthlyRepriceQueryServiceImplTest {
     partItemMapper = mock(MonthlyRepricePartItemMapper.class);
     costItemMapper = mock(MonthlyRepriceCostItemMapper.class);
     auditLogMapper = mock(MonthlyRepriceAuditLogMapper.class);
+    savedCosts = mock(com.sanhua.marketingcost.service.costing.MonthlyCostVersionService.class);
     service = new MonthlyRepriceQueryServiceImpl(
         batchMapper,
         taskMapper,
@@ -81,7 +83,7 @@ class MonthlyRepriceQueryServiceImplTest {
         partItemMapper,
         costItemMapper,
         auditLogMapper,
-        new PermissionService());
+        new PermissionService(), savedCosts);
   }
 
   @AfterEach
@@ -235,6 +237,26 @@ class MonthlyRepriceQueryServiceImplTest {
     assertThat(lock.isLocked()).isTrue();
     assertThat(lock.getRepriceNo()).isEqualTo("MRP-CREATED");
     assertThat(lock.getMessage()).contains("正在月度调价");
+  }
+
+  @Test void newResultCannotSilentlyReadLegacyRowsWhenItsCostVersionIsMissing() {
+    authenticate("COMMERCIAL","ROLE_BU_DIRECTOR");
+    when(batchMapper.selectOne(any(Wrapper.class))).thenReturn(batch("CONFIRMED"));
+    var result=new MonthlyRepriceResult();result.setContractVersion(1);result.setCalcObjectKey("saved-object");
+    when(resultMapper.selectOne(any(Wrapper.class))).thenReturn(result);
+    assertThatThrownBy(()->service.listPartItems("MRP-001",11L)).hasMessageContaining("缺少保存成本版本");
+    org.mockito.Mockito.verifyNoInteractions(partItemMapper,costItemMapper,savedCosts);
+  }
+  @Test void newResultRejectsAStoredVersionFromAnotherBatchBeforeReadingItsDetails() {
+    authenticate("COMMERCIAL","ROLE_BU_DIRECTOR");
+    when(batchMapper.selectOne(any(Wrapper.class))).thenReturn(batch("CONFIRMED"));
+    var result=new MonthlyRepriceResult();result.setContractVersion(1);result.setCalcObjectKey("saved-object");
+    result.setCostRunVersionId(9L);result.setRepriceNo("MRP-001");
+    when(resultMapper.selectOne(any(Wrapper.class))).thenReturn(result);
+    var version=new com.sanhua.marketingcost.entity.QuoteCostRunVersion();version.setRepriceNo("OTHER-BATCH");
+    when(savedCosts.read("COMMERCIAL",9L)).thenReturn(new com.sanhua.marketingcost.service.costing.MonthlyCostVersionService.Stored(version,null,List.of(),List.of()));
+    assertThatThrownBy(()->service.listCostItems("MRP-001",11L)).hasMessageContaining("与保存成本版本不一致");
+    org.mockito.Mockito.verifyNoInteractions(partItemMapper,costItemMapper);
   }
 
   private MonthlyRepriceBatch batch(String status) {

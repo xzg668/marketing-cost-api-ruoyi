@@ -32,10 +32,7 @@ public abstract class OriginalPricingIntegrationTestBase extends BomMapperTestBa
             "V186__make_part_child_net_weight.sql",
             "V217__department_fund_rate_calculation_mode.sql",
             "V226__linked_price_import_version_selection.sql",
-            "V233__u9_monthly_first_query_snapshot.sql",
             "V240__replace_product_property_with_business_import_rules.sql",
-            "V243__costing_row_preserve_bom_occurrence.sql",
-            "V293__quote_bom_monthly_snapshot_detail.sql",
             "V304__supplier_supply_ratio_active_batches.sql",
             "V305__supplier_supply_ratio_nullable_value.sql",
             "V306__supplier_price_decision.sql",
@@ -58,7 +55,8 @@ public abstract class OriginalPricingIntegrationTestBase extends BomMapperTestBa
             "V328__quote_linked_result_input_versions.sql",
             "V329__quote_cost_version_sequence.sql",
             "V330__scrap_price_monthly.sql",
-            "V332__settlement_price_versions.sql")) {
+            "V332__settlement_price_versions.sql",
+            "V352__saved_cost_version_read_indexes.sql")) {
       try {
         MYSQL.copyFileToContainer(
             MountableFile.forClasspathResource("db/" + script), "/tmp/" + script);

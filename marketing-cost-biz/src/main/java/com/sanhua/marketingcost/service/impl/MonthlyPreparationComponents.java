@@ -6,7 +6,6 @@ import com.sanhua.marketingcost.entity.PricePrepareItem;
 import com.sanhua.marketingcost.service.costing.OrdinaryCostAmounts;
 import com.sanhua.marketingcost.service.pricing.monthly.*;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.*;
 
 /** Reads explanation rows from immutable preparations using the existing MAKE/PACK validators. */
@@ -44,14 +43,8 @@ public final class MonthlyPreparationComponents {
         var row = entry.getValue();
         // These occurrences contribute independently as household rows in the saved version.
         if (evidence.household(row) != null || number(row, "quantity").signum() == 0) continue;
-        var quantity = number(row, "quantity");
-        if (row.hasNonNull("parentBaseQty"))
-          quantity = quantity.divide(number(row, "parentBaseQty"), 8, RoundingMode.HALF_UP);
-        var unitContribution = number(row, "amount");
-        if (snapshot.hasNonNull("parentBaseQty") && number(snapshot, "parentBaseQty").signum() != 0) {
-          quantity = quantity.divide(number(snapshot, "parentBaseQty"), 8, RoundingMode.HALF_UP);
-          unitContribution = unitContribution.divide(number(snapshot, "parentBaseQty"), 8, RoundingMode.HALF_UP);
-        }
+        var quantity = evidence.parentPrice(evidence.componentQuantity(row), snapshot);
+        var unitContribution = evidence.parentPrice(number(row, "amount"), snapshot);
         put(result, new Component(entry.getKey(), row.path("materialCode").asText(),
             null, "PACKAGE_COMPONENT", row.hasNonNull("snapshotDetailId") ? row.path("snapshotDetailId").longValue() : null,
             quantity.multiply(parent.getQuantity()), number(row, "unitPrice"),

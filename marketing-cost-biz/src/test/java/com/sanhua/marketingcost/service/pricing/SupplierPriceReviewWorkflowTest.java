@@ -79,6 +79,19 @@ class SupplierPriceReviewWorkflowTest {
     assertThat(second.getRetryStatus()).isEqualTo("RESOLVED");
     verify(prices,times(1)).generate(eq("OA-1"),eq(1L),any());
   }
+  @Test void withdrawnSuppliersLeaveOnlyTheirMaterialWaitingEvenWhenNoReviewRemains() {
+    var withdrawn=decision(1L,"scope"); withdrawn.setMaterialCode("WITHDRAWN"); withdrawn.setPriceType("FIXED");
+    var ready=decision(2L,"ready-scope"); ready.setMaterialCode("READY"); ready.setPriceType("FIXED");
+    var gap=new PricePrepareGap(); gap.setMaterialCode("WITHDRAWN"); gap.setPriceType("FIXED");
+    var result=response(); result.setGaps(new com.sanhua.marketingcost.dto.priceprepare.PricePrepareGapPageResponse(1,List.of(gap)));
+    when(decisions.waiting("COMMERCIAL",month)).thenReturn(List.of(withdrawn,ready));
+    when(prices.generate(eq("OA-1"),eq(1L),any())).thenReturn(result);
+    workflow.reprice(withdrawn);
+    assertThat(withdrawn.getRetryStatus()).isEqualTo("WAITING");
+    assertThat(withdrawn.getRetryMessage()).contains("价格缺口");
+    assertThat(ready.getRetryStatus()).isEqualTo("RESOLVED");
+    verify(prices,times(1)).generate(eq("OA-1"),eq(1L),any());
+  }
   private SupplierPriceReviewWorkflow.Confirmation request(Boolean has,String fingerprint) {
     return new SupplierPriceReviewWorkflow.Confirmation(month,"scope",fingerprint,has,date);
   }

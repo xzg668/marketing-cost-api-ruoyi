@@ -43,6 +43,9 @@ public class MonthlyRepriceResult {
   private String priceVersion;
   private String ruleVersion;
   private Long sourceCostVersionId;
+  /** Successful version produced by this batch, separate from the first quotation source. */
+  private Long costRunVersionId;
+  private Integer contractVersion;
   private String calcStatus;
   private String calcMessage;
 

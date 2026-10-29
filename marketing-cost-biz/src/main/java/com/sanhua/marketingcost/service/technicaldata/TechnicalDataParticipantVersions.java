@@ -80,7 +80,7 @@ public class TechnicalDataParticipantVersions {
       throw conflict("制造件原材料或来源尚未核实完整，不能冻结提交");
     }
     if (types.contains("PACKAGE") && !packaging.validateCurrent(product, draft).isEmpty()) {
-      throw conflict("包装母子用量或来源尚未核实完整，不能冻结提交");
+      throw conflict("包装母件底数、子件用量或来源尚未核实完整，不能冻结提交");
     }
     if (types.contains("AUXILIARY") && !auxiliary.validateCurrent(product, draft).isEmpty()) {
       throw conflict("辅料明细、本次金额或来源尚未核实完整，不能冻结提交");

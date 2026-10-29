@@ -1,6 +1,5 @@
 package com.sanhua.marketingcost.service;
 
-import com.sanhua.marketingcost.dto.CostRunMonthlyRepriceSubmitRequest;
 import com.sanhua.marketingcost.dto.CostRunTaskSubmissionResult;
 import java.util.List;
 
@@ -14,5 +13,4 @@ public interface CostRunTaskSubmissionService {
   CostRunTaskSubmissionResult submitQuote(
       String oaNo, List<Long> oaFormItemIds, String pricingMonth, String submittedBy);
 
-  CostRunTaskSubmissionResult submitMonthlyReprice(CostRunMonthlyRepriceSubmitRequest request);
 }

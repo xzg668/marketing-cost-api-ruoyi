@@ -30,7 +30,7 @@ import org.testcontainers.containers.MySQLContainer;
 @Tag("integration")
 class CostingConcurrencyRetryIntegrationTest {
   private static final MySQLContainer<?> MYSQL =
-      new MySQLContainer<>("mysql:8.0").withDatabaseName("costing_retry_test");
+      new MySQLContainer<>(org.testcontainers.utility.DockerImageName.parse(System.getProperty("mpp.mysql.image","mysql:8.4")).asCompatibleSubstituteFor("mysql")).withDatabaseName("costing_retry_test").withConfigurationOverride("monthly-pricing/mysql");
   private static AnnotationConfigApplicationContext spring;
   private static JdbcTemplate jdbc;
   private static JdbcTemplate independent;
@@ -56,6 +56,7 @@ class CostingConcurrencyRetryIntegrationTest {
     var source =
         new DriverManagerDataSource(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
     jdbc = new JdbcTemplate(source);
+    assertThat(jdbc.queryForObject("SELECT @@version",String.class)).startsWith(System.getProperty("mpp.mysql.expected-version","8.4"));
     independent =
         new JdbcTemplate(
             new DriverManagerDataSource(
@@ -192,6 +193,33 @@ class CostingConcurrencyRetryIntegrationTest {
                     }))
         .isInstanceOf(IllegalArgumentException.class);
     assertThat(calls).hasValue(1);
+  }
+
+  @Test
+  void realLockWaitTimeoutStopsAfterFourRolledBackAttempts() throws Exception {
+    var locked=new java.util.concurrent.CountDownLatch(1);
+    var release=new java.util.concurrent.CountDownLatch(1);
+    var calls=new AtomicInteger();
+    try(var pool=Executors.newSingleThreadExecutor()) {
+      var holder=pool.submit(()->new TransactionTemplate(manager).execute(status->{
+        jdbc.queryForObject("SELECT value FROM inputs WHERE id=1 FOR UPDATE",Integer.class);
+        locked.countDown();
+        try {if(!release.await(15,TimeUnit.SECONDS))throw new AssertionError("lock holder timed out");}
+        catch(InterruptedException ex){Thread.currentThread().interrupt();throw new IllegalStateException(ex);}
+        return null;
+      }));
+      try {
+        assertThat(locked.await(5,TimeUnit.SECONDS)).isTrue();long at=System.nanoTime();
+        assertThatThrownBy(()->boundary.execute(()->{
+          jdbc.execute("SET SESSION innodb_lock_wait_timeout=1");
+          jdbc.update("INSERT INTO attempts VALUES (?)",calls.incrementAndGet());
+          jdbc.update("UPDATE inputs SET value=value+1 WHERE id=1");return null;
+        })).isInstanceOf(CannotAcquireLockException.class);
+        assertThat(calls).hasValue(4);
+        assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)).isBetween(4000L,10000L);
+        assertThat(jdbc.queryForList("SELECT id FROM attempts")).isEmpty();
+      } finally {release.countDown();holder.get(5,TimeUnit.SECONDS);}
+    }
   }
 
   @Test

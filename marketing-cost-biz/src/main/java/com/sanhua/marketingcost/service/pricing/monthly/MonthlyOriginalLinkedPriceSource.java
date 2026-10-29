@@ -51,9 +51,9 @@ public final class MonthlyOriginalLinkedPriceSource {
       for(int start=0;start<codes.size();start+=256){
         var batch=codes.subList(start,Math.min(start+256,codes.size()));
         var byCode=new HashMap<String,List<PriceLinkedItem>>();rows.rules(context.businessUnitType(),organization.getKey(),selectedMonth.sourceMonth(),context.month().toString(),context.priceAsOfTime().toLocalDate(),batch).forEach(row->byCode.computeIfAbsent(row.getMaterialCode(),ignored->new ArrayList<>()).add(row));
-        var multiple=new TreeSet<String>();byCode.forEach((code,items)->{if(items.stream().map(PriceLinkedItem::getSupplierCode).distinct().count()>1)multiple.add(code);});
-        var ratios=new HashMap<String,List<SupplierSupplyRatio>>();if(!multiple.isEmpty())supplierInputs.ratios(context.businessUnitType(),context.priceAsOfTime().toLocalDate(),multiple).forEach(row->ratios.computeIfAbsent(row.getRequestedMaterialCode(),ignored->new ArrayList<>()).add(row));
-        var scopes=new HashMap<String,SupplierPriceScope>();for(String code:multiple){var scope=scope(context,organization.getKey(),code);scopes.put(SupplierPriceSelectionService.scopeKey(scope),scope);}
+        var relationCodes=new TreeSet<>(byCode.keySet());
+        var ratios=new HashMap<String,List<SupplierSupplyRatio>>();if(!relationCodes.isEmpty())supplierInputs.ratios(context.businessUnitType(),context.priceAsOfTime().toLocalDate(),relationCodes).forEach(row->ratios.computeIfAbsent(row.getRequestedMaterialCode(),ignored->new ArrayList<>()).add(row));
+        var scopes=new HashMap<String,SupplierPriceScope>();for(String code:relationCodes)if(byCode.get(code).size()>1){var scope=scope(context,organization.getKey(),code);scopes.put(SupplierPriceSelectionService.scopeKey(scope),scope);}
         var decisions=new HashMap<String,SupplierPriceDecision>();if(!scopes.isEmpty())supplierInputs.decisions(scopes.keySet()).forEach(row->decisions.put(row.getScopeKey(),row));
         var publications=new HashMap<String,PublicationInput>();
         for(String code:batch)for(var request:organization.getValue().get(code)){

@@ -193,8 +193,16 @@ public class MonthlyCostVersionService {
     if (version == null || !unit.equals(version.getBusinessUnitType())) throw new IllegalArgumentException("Cost version not found");
     var row = storage.versionSnapshot(unit, id);
     Snapshot snapshot = row.jianjiSnapshotJson() == null ? null : codec.decode(codec.wrap(row.jianjiSnapshotJson()), Snapshot.class);
-    if (snapshot != null && (snapshot.schemaVersion() != 1 || snapshot.versionId() != id
-        || !unit.equals(snapshot.businessUnitType()) || !version.getCostRunNo().equals(snapshot.costRunNo())
+    validateSavedSnapshot(version, snapshot);
+    return new Stored(version, snapshot,
+        List.copyOf(parts.selectList(Wrappers.lambdaQuery(CostRunPartItem.class).eq(CostRunPartItem::getCostRunVersionId, id).orderByAsc(CostRunPartItem::getId))),
+        List.copyOf(costs.selectList(Wrappers.lambdaQuery(CostRunCostItem.class).eq(CostRunCostItem::getCostRunVersionId, id).orderByAsc(CostRunCostItem::getLineNo))));
+  }
+
+  /** Shared saved-version validation for history reads and atomic reprice association. */
+  public static void validateSavedSnapshot(QuoteCostRunVersion version, Snapshot snapshot) {
+    if (snapshot != null && (snapshot.schemaVersion() != 1 || snapshot.versionId() != version.getId()
+        || !version.getBusinessUnitType().equals(snapshot.businessUnitType()) || !version.getCostRunNo().equals(snapshot.costRunNo())
         || !version.getOaNo().equals(snapshot.oaNo()) || !Objects.equals(version.getOaFormItemId(), snapshot.oaFormItemId())
         || !version.getProductCode().equals(snapshot.productCode()) || !version.getPricingMonth().equals(snapshot.pricingMonth())
         || !version.getAlgorithmVersion().equals(snapshot.calculation().algorithmVersion())
@@ -208,9 +216,6 @@ public class MonthlyCostVersionService {
       requireDecimal(version.getCuMaterialAdjustment(), snapshot.calculation().cuMaterialAdjustment(), 6, "Stored Cu");
       requireDecimal(version.getFinalQuoteAmount(), snapshot.calculation().finalQuoteAmount(), 6, "Stored total2");
     }
-    return new Stored(version, snapshot,
-        List.copyOf(parts.selectList(Wrappers.lambdaQuery(CostRunPartItem.class).eq(CostRunPartItem::getCostRunVersionId, id).orderByAsc(CostRunPartItem::getId))),
-        List.copyOf(costs.selectList(Wrappers.lambdaQuery(CostRunCostItem.class).eq(CostRunCostItem::getCostRunVersionId, id).orderByAsc(CostRunCostItem::getLineNo))));
   }
 
   private PricePrepareItem preparation(Map<Long, PricePrepareItem> rows, QuoteCostRunVersion version, long id, String prepareNo) {
@@ -221,7 +226,8 @@ public class MonthlyCostVersionService {
         || !version.getProductCode().equals(row.getTopProductCode()) || !version.getPricingMonth().equals(row.getPeriodMonth())
         || !"READY".equals(row.getStatus())
         || !(Integer.valueOf(1).equals(row.getCurrentFlag())
-            || Objects.equals(prepareNo, version.getFinancePricePrepareNo()) && Integer.valueOf(0).equals(row.getCurrentFlag())))
+            || (version.getRepriceNo() != null || Objects.equals(prepareNo, version.getFinancePricePrepareNo()))
+                && Integer.valueOf(0).equals(row.getCurrentFlag())))
       throw new IllegalArgumentException("Preparation does not belong to this ready cost version");
     return row;
   }
@@ -265,23 +271,7 @@ public class MonthlyCostVersionService {
   private int saveCosts(QuoteCostRunVersion v, Result r) {
     var details = new HashMap<String, OrdinaryDetail>();
     r.ordinaryInputs().details().forEach(detail -> details.put(detail.costCode(), detail));
-    var values = new LinkedHashMap<String, BigDecimal>();
-    values.put("MATERIAL", r.financeMaterialCost()); values.put("DIRECT_LABOR", r.ordinaryInputs().directLabor());
-    values.put("INDIRECT_LABOR", r.ordinaryInputs().indirectLabor()); values.put("LOSS", r.ordinary().loss());
-    values.put("MANUFACTURE", r.ordinary().manufactureFee()); values.put("MANUFACTURE_COST", r.ordinary().manufactureCost());
-    values.put("ADJUSTED_MANUFACTURE_COST", r.ordinary().adjustedManufactureCost());
-    values.put("MGMT_EXP", r.ordinary().management()); values.put("SALES_EXP", r.ordinary().sales()); values.put("FIN_EXP", r.ordinary().finance());
-    values.put("HOUSEHOLD_SUBTOTAL", r.householdSubtotal()); values.put("HOUSEHOLD_CONTRIBUTION", r.householdContribution());
-    values.put("OTHER_INDEPENDENT", r.ordinaryInputs().otherIndependentFees());
-    r.fees().forEach(fee -> values.put(fee.code().costCode(), fee.amount()));
-    for (var detail : r.ordinaryInputs().details()) {
-      if (values.containsKey(detail.costCode()) && !Objects.equals(values.get(detail.costCode()), detail.amount())
-          && (values.get(detail.costCode()) == null || detail.amount() == null
-              || values.get(detail.costCode()).compareTo(detail.amount()) != 0))
-        throw new IllegalArgumentException("Ordinary detail amount differs from calculated value: " + detail.costCode());
-      values.putIfAbsent(detail.costCode(), detail.amount());
-    }
-    values.put("TOTAL", r.totalCost());
+    var values = expectedCostAmounts(r);
     int number = 0;
     for (var entry : values.entrySet()) {
       var item = new CostRunCostItem(); item.setOaNo(v.getOaNo()); item.setOaFormItemId(v.getOaFormItemId());
@@ -301,6 +291,72 @@ public class MonthlyCostVersionService {
       if (costs.insert(item) != 1) throw new IllegalStateException("Cost item insert failed");
     }
     return number;
+  }
+
+  /** The checker uses the same saved projection as the publisher, never current price sources. */
+  public static void validateStoredRows(Stored stored) {
+    var snapshot = Objects.requireNonNull(stored.snapshot(), "调价成本缺少保存快照");
+    var expected = expectedCostAmounts(snapshot.calculation());
+    var actual = new HashMap<String, CostRunCostItem>();
+    for (var row : stored.costs()) {
+      if (actual.putIfAbsent(row.getCostCode(), row) != null)
+        throw new IllegalStateException("保存的成本项目重复");
+    }
+    if (!expected.keySet().equals(actual.keySet()))
+      throw new IllegalStateException("保存的成本明细范围不完整");
+    expected.forEach((code, amount) -> sameSavedAmount(actual.get(code).getAmount(), amount,
+        "保存的成本明细与投影不一致：" + actual.get(code).getCostName()));
+    record ExpectedPart(String code, BigDecimal quantity, BigDecimal amount) {}
+    var parts = new HashMap<Long, ExpectedPart>();
+    for (var line : snapshot.calculation().ordinaryInputs().materials()) if (line.explanationOf() == null) {
+      var binding = snapshot.preparations().get(line.path());
+      if (binding == null || parts.putIfAbsent(binding.financialItemId(),
+          new ExpectedPart(line.materialCode(), line.quantity(), line.financeAmount())) != null)
+        throw new IllegalStateException("部品保存路径重复或缺少准备依据");
+    }
+    for (var line : snapshot.calculation().household()) {
+      var binding = snapshot.preparations().get(MonthlyBomPricingScope.pathKey(line.paths().getFirst()));
+      if (binding == null || parts.putIfAbsent(binding.financialItemId(),
+          new ExpectedPart(line.materialCode(), line.quantity(), line.amount())) != null)
+        throw new IllegalStateException("家用整体保存路径重复或缺少准备依据");
+    }
+    if (stored.parts().size() != parts.size()) throw new IllegalStateException("保存的部品范围不完整");
+    var seen = new HashSet<Long>();
+    for (var row : stored.parts()) {
+      var wanted = parts.get(row.getPricePrepareItemId());
+      if (wanted == null || !seen.add(row.getPricePrepareItemId()) || !wanted.code().equals(row.getPartCode()))
+        throw new IllegalStateException("部品与实际计价路径不一致");
+      sameSavedAmount(row.getQty(), wanted.quantity(), "保存的部品用量与投影不一致");
+      sameSavedAmount(row.getAmount(), wanted.amount(), "保存的部品金额与投影不一致");
+    }
+  }
+
+  private static void sameSavedAmount(BigDecimal actual, BigDecimal expected, String label) {
+    if (actual == null && expected == null) return;
+    if (actual == null || expected == null
+        || actual.compareTo(expected.setScale(actual.scale(), RoundingMode.HALF_UP)) != 0)
+      throw new IllegalStateException(label);
+  }
+
+  private static Map<String, BigDecimal> expectedCostAmounts(Result r) {
+    var values = new LinkedHashMap<String, BigDecimal>();
+    values.put("MATERIAL", r.financeMaterialCost()); values.put("DIRECT_LABOR", r.ordinaryInputs().directLabor());
+    values.put("INDIRECT_LABOR", r.ordinaryInputs().indirectLabor()); values.put("LOSS", r.ordinary().loss());
+    values.put("MANUFACTURE", r.ordinary().manufactureFee()); values.put("MANUFACTURE_COST", r.ordinary().manufactureCost());
+    values.put("ADJUSTED_MANUFACTURE_COST", r.ordinary().adjustedManufactureCost());
+    values.put("MGMT_EXP", r.ordinary().management()); values.put("SALES_EXP", r.ordinary().sales()); values.put("FIN_EXP", r.ordinary().finance());
+    values.put("HOUSEHOLD_SUBTOTAL", r.householdSubtotal()); values.put("HOUSEHOLD_CONTRIBUTION", r.householdContribution());
+    values.put("OTHER_INDEPENDENT", r.ordinaryInputs().otherIndependentFees());
+    r.fees().forEach(fee -> values.put(fee.code().costCode(), fee.amount()));
+    for (var detail : r.ordinaryInputs().details()) {
+      if (values.containsKey(detail.costCode()) && !Objects.equals(values.get(detail.costCode()), detail.amount())
+          && (values.get(detail.costCode()) == null || detail.amount() == null
+              || values.get(detail.costCode()).compareTo(detail.amount()) != 0))
+        throw new IllegalArgumentException("Ordinary detail amount differs from calculated value: " + detail.costCode());
+      values.putIfAbsent(detail.costCode(), detail.amount());
+    }
+    values.put("TOTAL", r.totalCost());
+    return java.util.Collections.unmodifiableMap(values);
   }
 
   private static void requireDecimal(BigDecimal actual, BigDecimal expected, int scale, String label) {

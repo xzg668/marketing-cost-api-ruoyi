@@ -86,6 +86,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   }
 
   @Override
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)
   public ProductCostingResult execute(ProductCostingRequest request) {
     // 请求归属错误直接拒绝；验证通过后，所有阶段故障均返回同一产品的结构化结果。
     ProductCostingContext context = contextResolver.resolve(request);
@@ -99,6 +100,7 @@ public class ProductCostingPipelineImpl implements ProductCostingPipeline {
   }
 
   @Override
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)
   public ProductCostingResult prepare(ProductCostingRequest request) {
     ProductCostingContext context = contextResolver.resolve(request);
     return executionGuard.execute(context, () -> prepareResolved(contextResolver.resolve(request)));

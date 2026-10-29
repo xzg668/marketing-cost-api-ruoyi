@@ -203,10 +203,10 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
         markMissing(detail, DETAIL_STATUS_MISSING_PRICE, null, "子件料号为空");
         continue;
       }
-      var quantity = applyChildParentBaseQty(detail);
+      var quantity = detail.getQtyPerParent();
       if (quantity == null) {
         markMissing(detail, DETAIL_STATUS_MISSING_PRICE, MonthlyPreparationPrice.KIND,
-            "子件数量缺失或母件底数为 0，无法计算子件金额");
+            "子件数量缺失，无法计算子件金额");
       } else if (quantity.signum() == 0) {
         detail.setChildUnitPrice(BigDecimal.ZERO); detail.setChildAmount(BigDecimal.ZERO);
         detail.setPriceStatus(DETAIL_STATUS_PRICED);
@@ -245,7 +245,8 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
         BigDecimal unitPrice = req.priceScenarioType == com.sanhua.marketingcost.enums.QuotePriceScenarioType.FINANCE_QUOTE_BASE
             ? value.financialPrice() : value.customerPrice();
         detail.setChildUnitPrice(unitPrice);
-        detail.setChildAmount(applyChildParentBaseQty(detail).multiply(unitPrice));
+        // 原表按包装组件底数统一分摊；子件行自己的底数不再参与包装计算。
+        detail.setChildAmount(detail.getQtyPerParent().multiply(unitPrice));
         detail.setPriceType(value.selection().fact().type().name());
         detail.setPriceSource(MonthlyPreparationPrice.KIND);
         detail.setInputSnapshotJson(monthlyCodec.encode(MonthlyPreparationPrice.read(value)));
@@ -256,17 +257,6 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     return details;
   }
 
-  private BigDecimal applyChildParentBaseQty(PackageComponentPriceDetail detail) {
-    BigDecimal qty = detail.getQtyPerParent();
-    BigDecimal baseQty = detail.getChildParentBaseQty();
-    if (qty == null || baseQty == null) {
-      return qty;
-    }
-    if (BigDecimal.ZERO.compareTo(baseQty) == 0) {
-      return null;
-    }
-    return qty.divide(baseQty, CALC_SCALE, RoundingMode.HALF_UP);
-  }
 
   private void markMissing(
       PackageComponentPriceDetail detail,

@@ -93,6 +93,8 @@ class MonthlyCostVersionIntegrationTest {
   static void initializeCostStorage() throws Exception {
     var ds=jdbc.getDataSource();
     new ResourceDatabasePopulator(new ClassPathResource("monthly-pricing/cost-item-schema.sql")).execute(ds);
+    // Current application version ownership added by V348; keep the historical pre-V342 fixture intact.
+    jdbc.execute("ALTER TABLE lp_quote_cost_run_version ADD COLUMN reprice_no VARCHAR(64) NULL");
     var config=new com.baomidou.mybatisplus.core.MybatisConfiguration();config.setMapUnderscoreToCamelCase(true);
     var global=new com.baomidou.mybatisplus.core.config.GlobalConfig();global.setDbConfig(new com.baomidou.mybatisplus.core.config.GlobalConfig.DbConfig());global.setMetaObjectHandler(new com.sanhua.marketingcost.config.MetaObjectHandlerConfig());com.baomidou.mybatisplus.core.toolkit.GlobalConfigUtils.setGlobalConfig(config,global);
     for(var type:List.of(QuoteCostRunVersionMapper.class,PricePrepareItemMapper.class,CostRunPartItemMapper.class,CostRunCostItemMapper.class,

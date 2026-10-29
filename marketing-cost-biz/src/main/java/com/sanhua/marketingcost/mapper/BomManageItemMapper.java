@@ -41,6 +41,7 @@ public interface BomManageItemMapper {
         SELECT 1
         FROM lp_bom_costing_row t1
         <where>
+        AND t1.calculation_scope = ''
           <if test="oaNo != null and oaNo != ''">
             AND t1.oa_no LIKE CONCAT('%', #{oaNo}, '%')
           </if>
@@ -112,6 +113,7 @@ public interface BomManageItemMapper {
        AND t3.material_no = t1.top_product_code
        AND t3.deleted = 0
       <where>
+        AND t1.calculation_scope = ''
         <if test="oaNo != null and oaNo != ''">
           AND t1.oa_no LIKE CONCAT('%', #{oaNo}, '%')
         </if>

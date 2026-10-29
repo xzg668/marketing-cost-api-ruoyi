@@ -103,8 +103,9 @@ public class TechnicalDataSubmissionRemark {
       case MANUFACTURING -> count(rows(object(supplements, "manufacturing"), "items"), "项原料");
       case PACKAGE -> {
         var packageContent = object(supplements, "packaging");
-        yield "母件" + requiredText(packageContent, "parentMaterialNo") + "×"
-            + number(packageContent, "parentQuantity") + "，子件"
+        yield (TechnicalDataPackageRules.QUANTITY_BASIS.equals(text(packageContent, "quantityBasis"))
+            ? "母件底数" + number(packageContent, "parentBaseQuantity")
+            : "母件" + requiredText(packageContent, "parentMaterialNo") + "×" + number(packageContent, "parentQuantity")) + "，子件"
             + rows(details, "packageItems").size() + "项";
       }
       case AUXILIARY -> {
@@ -213,8 +214,7 @@ public class TechnicalDataSubmissionRemark {
   private String packaging(JsonNode details, JsonNode content) {
     List<String> fields = new ArrayList<>();
     addText(fields, content, "referenceMaterialNo", "参考");
-    String parent = text(content, "parentMaterialNo");
-    fields.add("母件" + (parent.isEmpty() ? "" : parent) + "×" + number(content, "parentQuantity") + "/产品");
+    fields.add(packageQuantityDescription(content));
     for (JsonNode row : rows(details, "packageItems")) {
       String code = text(row, "componentMaterialNo");
       String name = text(row, "componentName");
@@ -230,6 +230,14 @@ public class TechnicalDataSubmissionRemark {
       fields.add(identity + "×" + number(row, "quantity") + requiredText(row, "originalUnit") + "/组件");
     }
     return join(fields);
+  }
+
+  private String packageQuantityDescription(JsonNode content) {
+    String parent = text(content, "parentMaterialNo");
+    if (TechnicalDataPackageRules.QUANTITY_BASIS.equals(text(content, "quantityBasis"))) {
+      return (parent.isEmpty() ? "" : "母件" + parent + "，") + "母件底数" + number(content, "parentBaseQuantity") + "件产品";
+    }
+    return "母件" + parent + "×" + number(content, "parentQuantity") + "/产品";
   }
 
   private String auxiliary(JsonNode details) {

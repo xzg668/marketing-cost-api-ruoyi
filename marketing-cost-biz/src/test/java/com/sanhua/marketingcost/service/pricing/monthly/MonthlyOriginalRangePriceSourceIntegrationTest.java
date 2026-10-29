@@ -118,4 +118,12 @@ class MonthlyOriginalRangePriceSourceIntegrationTest {
     var original=runtime.resolveSaved(row,"MPP05-FACTOR-RANGE",run,new SupplierPreferredPriceSelection<>(row,"fixture"),new OriginalRangePriceRuntime.PreparedInputs(form,Map.of(row.getId(),rawBands)),saved,effective.calculation(saved));assertThat(original.unitPrice()).isEqualByComparingTo("20");
     var ordinary=request(code,"COMMERCIAL",month,"220","1");var r=new MonthlyPriceRequest(ordinary.family(),"220",new NonCuConditions(new BoardTerms(new BigDecimal("3000"),null,true)),BigDecimal.ONE);var c=context("COMMERCIAL",month,"220");var result=operation.resolveCandidates(c,Set.of(r));assertThat(result.problems()).isEmpty();var chosen=result.values().get(r).selection();assertThat(chosen.fact().price()).isEqualByComparingTo(original.unitPrice());assertThat(chosen.fact().evidence().json()).contains("NON_TENDER").doesNotContain("999999");var other=new MonthlyPriceRequest(ordinary.family(),"220",new NonCuConditions(new BoardTerms(new BigDecimal("25000"),null,false)),new BigDecimal("1000"));assertThat(chosen.applicability().matches(other)).isTrue();var receipt=operation.adopt(c,plan(r,chosen));int calls=sourceCalls.get();assertThat(operation.resolveCandidates(c,Set.of(other)).values().get(other).selection().monthlyPriceId()).isEqualTo(receipt.plan().selections().get(r).monthlyPriceId());assertThat(sourceCalls.get()).isEqualTo(calls);
   }
+  @Test void withdrawnSingleSupplierCannotUseItsPublishedBandOrRegenerateItsPrice() {
+    String code=code(),month="2040-02"; publication("COMMERCIAL",month,"210"); rule(code,"COMMERCIAL",month,"S1","10","20"); publish("COMMERCIAL");
+    var before=jdbc.queryForList("SELECT * FROM lp_finance_effective_price WHERE material_code=? ORDER BY id",code);
+    var req=request(code,"COMMERCIAL",month,"210","1"); assertThat(source.read(context("COMMERCIAL",month,"210"),Set.of(req)).problems()).isEmpty();
+    jdbc.update("INSERT INTO lp_supplier_supply_ratio(business_unit_type,material_code,material_name,spec_model,supplier_name,supplier_code,supply_ratio,is_active,deleted) VALUES('COMMERCIAL',?,'fixture','SPEC','S1','S1',0,1,0)",code);
+    var result=source.read(context("COMMERCIAL",month,"210"),Set.of(req)); assertThat(result.values()).isEmpty(); assertThat(result.problems().get(req).message()).contains("退出供货");
+    assertThat(jdbc.queryForList("SELECT * FROM lp_finance_effective_price WHERE material_code=? ORDER BY id",code)).isEqualTo(before);
+  }
 }

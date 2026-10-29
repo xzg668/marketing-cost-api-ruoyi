@@ -23,6 +23,15 @@ public class MonthlyRepriceCostItemDto {
   private String calcStatus;
   private String calcMessage;
 
+  public static MonthlyRepriceCostItemDto fromSaved(com.sanhua.marketingcost.entity.MonthlyRepriceResult result,
+      com.sanhua.marketingcost.entity.CostRunCostItem item) {
+    var dto=new MonthlyRepriceCostItemDto();dto.setId(item.getId());dto.setRepriceNo(result.getRepriceNo());
+    dto.setOaNo(result.getOaNo());dto.setCalcObjectKey(result.getCalcObjectKey());dto.setProductCode(result.getProductCode());
+    dto.setLineNo(item.getLineNo());dto.setCostItemCode(item.getCostCode());dto.setCostItemName(item.getCostName());
+    dto.setBaseAmount(item.getBaseAmount());dto.setRate(item.getRate());dto.setAmount(item.getAmount());
+    dto.setCalcMessage(item.getRemark());dto.setCalcStatus(result.getCalcStatus());return dto;
+  }
+
   public static MonthlyRepriceCostItemDto fromEntity(MonthlyRepriceCostItem item) {
     MonthlyRepriceCostItemDto dto = new MonthlyRepriceCostItemDto();
     if (item == null) {

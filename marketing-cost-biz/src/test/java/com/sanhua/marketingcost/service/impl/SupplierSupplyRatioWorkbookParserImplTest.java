@@ -57,6 +57,17 @@ class SupplierSupplyRatioWorkbookParserImplTest {
     assertThat(result.getRows()).isEmpty();
   }
 
+  @Test void missingSupplierCodeIsAllowedAndMissingNameStillRejects() throws Exception {
+    var result = parser.parse(workbook("供货比例", false, List.of(
+        List.of("供应商甲", "", "物料", "M1", "规格", "0.6"),
+        List.of("供应商乙", "", "物料", "M1", "规格", "0.4"))), "a.xlsx", null);
+    assertThat(result.getErrors()).isEmpty();
+    assertThat(result.getRows()).hasSize(2).allSatisfy(row -> assertThat(row.getSupplierCode()).isNull());
+    var invalid = parser.parse(workbook("供货比例", false, List.of(
+        List.of("", "", "物料", "M1", "规格", "0.6"))), "a.xlsx", null);
+    assertThat(invalid.getErrors()).anySatisfy(error -> assertThat(error.getMessage()).contains("供应商不能为空"));
+  }
+
   @Test void numericPercentRetainsActualValueInsteadOfRoundedDisplay() throws Exception {
     try (var book = new XSSFWorkbook(workbook("供货比例", false, List.of(
         List.of("供应商", "S1", "物料", "M1", "规格", "0"))));

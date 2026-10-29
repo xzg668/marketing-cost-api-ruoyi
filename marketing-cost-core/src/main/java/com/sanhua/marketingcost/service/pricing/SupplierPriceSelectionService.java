@@ -1,6 +1,5 @@
 package com.sanhua.marketingcost.service.pricing;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.entity.SupplierPriceDecision;
 import com.sanhua.marketingcost.entity.SupplierSupplyRatio;
 import com.sanhua.marketingcost.mapper.SupplierPriceDecisionMapper;
@@ -40,7 +39,7 @@ public class SupplierPriceSelectionService {
 
   public Selection select(SupplierPriceScope scope, List<SupplierPriceCandidate> candidates) {
     return select(scope, candidates,
-        candidates.size() > 1 && !samePrice(candidates) ? activeRatios(scope) : List.of());
+        candidates.isEmpty() ? List.of() : activeRatios(scope));
   }
 
   public Selection select(
@@ -59,20 +58,24 @@ public class SupplierPriceSelectionService {
 
   private Selection selectPolicy(SupplierPriceScope scope,List<SupplierPriceCandidate> candidates,
       List<SupplierSupplyRatio> active,java.util.function.Supplier<SupplierPriceDecision> readDecision){
-    if (candidates.isEmpty()) return new Selection(null, null, "NO_PRICE", "没有有效价格", null);
+    boolean hadPrices = !candidates.isEmpty();
+    candidates = SupplierRatioPricePolicy.eligible(candidates, active);
+    var bySupplier = SupplierRatioPricePolicy.index(active);
+    if (candidates.isEmpty()) return new Selection(null, null, "NO_PRICE",
+        hadPrices ? "有效报价对应供应商已明确退出供货，请补充其他供货价格" : "没有有效价格", null);
     if (candidates.size() == 1) {
-      return new Selection(candidates.get(0), null, "SINGLE", "单一供应商，直接取价", null);
+      return new Selection(candidates.get(0), SupplierRatioPricePolicy.match(bySupplier, candidates.get(0)), "SINGLE", "单一供应商，直接取价", null);
     }
     if (samePrice(candidates)) {
       // 同一有效取价范围内价格一致，不需要供货比率或人工确认；沿用稳定的供应商并列顺序。
-      return new Selection(SupplierRatioPricePolicy.highest(candidates), null,
+      var same = SupplierRatioPricePolicy.highest(candidates);
+      return new Selection(same, SupplierRatioPricePolicy.match(bySupplier, same),
           "SAME_PRICE", "各供应商有效单价相同，直接取价", null);
     }
-    var bySupplier = SupplierRatioPricePolicy.index(active);
     SupplierPriceCandidate chosen = SupplierRatioPricePolicy.choose(candidates, active);
     if (chosen != null) {
       return new Selection(
-          chosen, bySupplier.get(chosen.supplierCode()), "RATIO_MAX", "按最大供货比率取价，比率并列时取最高价", null);
+          chosen, SupplierRatioPricePolicy.match(bySupplier, chosen), "RATIO_MAX", "按最大供货比率取价，比率并列时取最高价", null);
     }
     String scopeKey = scopeKey(scope);
     String fingerprint = fingerprint(candidates, active);
@@ -91,8 +94,8 @@ public class SupplierPriceSelectionService {
                 c ->
                     new SupplierPriceReview.Candidate(
                         c,
-                        bySupplier.containsKey(c.supplierCode())
-                            ? bySupplier.get(c.supplierCode()).getSupplyRatio()
+                        SupplierRatioPricePolicy.match(bySupplier, c) != null
+                            ? SupplierRatioPricePolicy.match(bySupplier, c).getSupplyRatio()
                             : null))
             .toList();
     SupplierPriceReview review =
@@ -108,7 +111,7 @@ public class SupplierPriceSelectionService {
     chosen = fallback ? SupplierRatioPricePolicy.highest(candidates) : null;
     return new Selection(
         chosen,
-        chosen == null ? null : bySupplier.get(chosen.supplierCode()),
+        chosen == null ? null : SupplierRatioPricePolicy.match(bySupplier, chosen),
         status,
         message,
         review);
@@ -122,47 +125,22 @@ public class SupplierPriceSelectionService {
   }
 
   public List<SupplierSupplyRatio> activeRatios(SupplierPriceScope scope) {
-    return ratios.selectList(
-        Wrappers.lambdaQuery(SupplierSupplyRatio.class)
-            .eq(SupplierSupplyRatio::getBusinessUnitType, scope.businessUnitType())
-            .eq(SupplierSupplyRatio::getMaterialCode, scope.materialCode())
-            .eq(SupplierSupplyRatio::getIsActive, 1)
-            .eq(SupplierSupplyRatio::getDeleted, 0)
-            .and(
-                q ->
-                    q.isNull(SupplierSupplyRatio::getEffectiveFrom)
-                        .or()
-                        .le(SupplierSupplyRatio::getEffectiveFrom, scope.pricingDate()))
-            .and(
-                q ->
-                    q.isNull(SupplierSupplyRatio::getEffectiveTo)
-                        .or()
-                        .ge(SupplierSupplyRatio::getEffectiveTo, scope.pricingDate())));
+    return ratios.selectList(SupplierSupplyRatioMapper.currentQuery(
+        scope.businessUnitType(), List.of(scope.materialCode()), scope.pricingDate()));
   }
 
-  /** 一次报价准备按范围批量读比率；各物料仍调用同一select政策。 */
+  /** Bounded batch read of all current relations, independent of supplier/price counts. */
   public java.util.Map<String, List<SupplierSupplyRatio>> prepareRatios(
       String businessUnit, java.util.Set<String> materials, java.time.LocalDate pricingDate) {
     if (materials.isEmpty()) return java.util.Map.of();
-    var rows =
-        ratios.selectList(
-            Wrappers.lambdaQuery(SupplierSupplyRatio.class)
-                .eq(SupplierSupplyRatio::getBusinessUnitType, businessUnit)
-                .in(SupplierSupplyRatio::getMaterialCode, materials)
-                .eq(SupplierSupplyRatio::getIsActive, 1)
-                .eq(SupplierSupplyRatio::getDeleted, 0)
-                .and(
-                    q ->
-                        q.isNull(SupplierSupplyRatio::getEffectiveFrom)
-                            .or()
-                            .le(SupplierSupplyRatio::getEffectiveFrom, pricingDate))
-                .and(
-                    q ->
-                        q.isNull(SupplierSupplyRatio::getEffectiveTo)
-                            .or()
-                            .ge(SupplierSupplyRatio::getEffectiveTo, pricingDate)));
-    return rows.stream()
-        .collect(java.util.stream.Collectors.groupingBy(SupplierSupplyRatio::getMaterialCode));
+    var rows = new ArrayList<com.sanhua.marketingcost.entity.monthly.MonthlySupplierRatioInput>();
+    var codes = new ArrayList<>(materials);
+    for (int start = 0; start < codes.size(); start += 256)
+      rows.addAll(ratios.currentRelations(
+          businessUnit, pricingDate, codes.subList(start, Math.min(start + 256, codes.size()))));
+    var result = new java.util.LinkedHashMap<String,List<SupplierSupplyRatio>>();
+    rows.forEach(row -> result.computeIfAbsent(row.getRequestedMaterialCode(), ignored -> new ArrayList<>()).add(row));
+    return result;
   }
 
   public static String scopeKey(SupplierPriceScope s) {
@@ -195,9 +173,14 @@ public class SupplierPriceSelectionService {
                             text(c.effectiveTo())))));
     values.add("RATIOS");
     ratios.stream()
-        .sorted(Comparator.comparing(SupplierSupplyRatio::getSupplierCode))
-        .forEach(r -> values.add(digest(List.of(r.getSupplierCode(), number(r.getSupplyRatio())))));
+        .sorted(Comparator.comparing(SupplierPriceSelectionService::ratioIdentity))
+        .forEach(r -> values.add(digest(List.of(ratioIdentity(r), number(r.getSupplyRatio())))));
     return digest(values);
+  }
+
+  private static String ratioIdentity(SupplierSupplyRatio ratio) {
+    return org.springframework.util.StringUtils.hasText(ratio.getSupplierCode()) ? ratio.getSupplierCode()
+        : com.sanhua.marketingcost.util.SupplierSupplyRatioNormalizeUtils.supplierIdentity(null, ratio.getSupplierName());
   }
 
   private static String digest(List<String> parts) {

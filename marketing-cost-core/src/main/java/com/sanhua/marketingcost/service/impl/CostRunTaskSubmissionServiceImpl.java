@@ -1,9 +1,7 @@
 package com.sanhua.marketingcost.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.sanhua.marketingcost.dto.CostRunMonthlyRepriceSubmitRequest;
 import com.sanhua.marketingcost.dto.CostRunTaskSubmissionResult;
-import com.sanhua.marketingcost.dto.MonthlyRepriceCalcObject;
 import com.sanhua.marketingcost.entity.CostRunBatch;
 import com.sanhua.marketingcost.entity.CostRunTask;
 import com.sanhua.marketingcost.entity.OaForm;
@@ -174,58 +172,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
         existingBatch);
   }
 
-  @Override
-  @Transactional
-  public CostRunTaskSubmissionResult submitMonthlyReprice(CostRunMonthlyRepriceSubmitRequest request) {
-    if (request == null) {
-      throw new IllegalArgumentException("月度调价提交请求不能为空");
-    }
-    String repriceNo = required("repriceNo", request.getRepriceNo());
-    String pricingMonth = normalizePricingMonth(required("pricingMonth", request.getPricingMonth()));
-    String businessUnitType = required("businessUnitType", request.getBusinessUnitType());
-    CostRunBatch existing =
-        findBatch(CostRunTaskScene.MONTHLY_REPRICE, repriceNo, pricingMonth, businessUnitType);
-    boolean retryExistingBatch = isRetryableTerminalBatch(existing);
-    CostRunBatch batch =
-        existing == null
-            ? buildBatch(
-                CostRunTaskScene.MONTHLY_REPRICE,
-                repriceNo,
-                pricingMonth,
-                request.getPriceAsOfTime(),
-                businessUnitType,
-                request.getCreatedBy(),
-                request.getCreatedName(),
-                monthlyRepriceSnapshot(request))
-            : existing;
-    TaskBuildResult tasks = buildMonthlyRepriceTasks(batch, request);
-    boolean existingBatch = existing != null;
-    if (existing == null) {
-      batch.setTotalCount(tasks.taskCount());
-      batch.setSkippedCount(tasks.skippedCount());
-      String draftBatchNo = batch.getBatchNo();
-      batch = insertOrLoadExisting(batch);
-      if (!draftBatchNo.equals(batch.getBatchNo())) {
-        existingBatch = true;
-        tasks = buildMonthlyRepriceTasks(batch, request);
-      }
-    }
-    if (retryExistingBatch) {
-      resetFailedBatchForRetry(batch.getBatchNo());
-    }
-    insertTasks(tasks.tasks());
-    List<MonthlyRepriceCalcObject> objects =
-        request.getCalcObjects() == null ? List.of() : request.getCalcObjects();
-    return CostRunTaskSubmissionResult.of(
-        batch.getBatchNo(),
-        batch.getScene(),
-        batch.getSourceNo(),
-        batch.getStatus(),
-        objects.size(),
-        tasks.taskCount(),
-        tasks.skippedCount(),
-        existingBatch);
-  }
+
 
   private CostRunBatch insertOrLoadExisting(CostRunBatch batch) {
     int inserted = batchMapper.insertIgnore(batch);
@@ -500,45 +447,9 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     return task;
   }
 
-  private TaskBuildResult buildMonthlyRepriceTasks(
-      CostRunBatch batch, CostRunMonthlyRepriceSubmitRequest request) {
-    List<MonthlyRepriceCalcObject> objects =
-        request.getCalcObjects() == null ? List.of() : request.getCalcObjects();
-    Map<String, CostRunTask> tasksByKey = new LinkedHashMap<>();
-    int skipped = 0;
-    for (MonthlyRepriceCalcObject object : objects) {
-      CostRunTask task = buildMonthlyRepriceTask(batch, request, object);
-      if (task == null || tasksByKey.putIfAbsent(task.getCalcObjectKey(), task) != null) {
-        skipped++;
-      }
-    }
-    return new TaskBuildResult(List.copyOf(tasksByKey.values()), skipped, null);
-  }
 
-  private CostRunTask buildMonthlyRepriceTask(
-      CostRunBatch batch, CostRunMonthlyRepriceSubmitRequest request, MonthlyRepriceCalcObject object) {
-    if (object == null) {
-      return null;
-    }
-    String productCode = normalize(object.getProductCode());
-    if (!StringUtils.hasText(productCode)) {
-      return null;
-    }
-    String oaNo = normalize(object.getOaNo());
-    String packageMethod = normalizeToNull(object.getPackageMethod());
-    String customerName = normalizeToNull(object.getCustomerName());
-    String normalizedCustomerName = normalizeCustomerName(customerName);
-    CostRunTask task = baseTask(batch);
-    task.setCalcObjectKey(calcObjectKey(oaNo, productCode, packageMethod, normalizedCustomerName));
-    task.setOaNo(oaNo);
-    task.setOaFormItemId(object.getOaFormItemId());
-    task.setProductCode(productCode);
-    task.setPackageMethod(packageMethod);
-    task.setCustomerName(customerName);
-    task.setBomSourcePolicy(normalizeToNull(request.getBomSourcePolicy()));
-    task.setRequestSnapshotJson(monthlyRepriceTaskSnapshot(request, object));
-    return task;
-  }
+
+
 
   private CostRunTask baseTask(CostRunBatch batch) {
     LocalDateTime now = LocalDateTime.now(CostPricingPeriodUtils.BUSINESS_ZONE);
@@ -674,25 +585,9 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
         "submittedBy", normalizeToNull(submittedBy));
   }
 
-  private String monthlyRepriceSnapshot(CostRunMonthlyRepriceSubmitRequest request) {
-    return json(
-        "scene", CostRunTaskScene.MONTHLY_REPRICE.name(),
-        "repriceNo", request.getRepriceNo(),
-        "pricingMonth", request.getPricingMonth(),
-        "businessUnitType", request.getBusinessUnitType(),
-        "bomSourcePolicy", normalizeToNull(request.getBomSourcePolicy()));
-  }
 
-  private String monthlyRepriceTaskSnapshot(
-      CostRunMonthlyRepriceSubmitRequest request, MonthlyRepriceCalcObject object) {
-    return json(
-        "repriceNo", request.getRepriceNo(),
-        "oaNo", object.getOaNo(),
-        "oaFormItemId", object.getOaFormItemId() == null ? null : String.valueOf(object.getOaFormItemId()),
-        "productCode", object.getProductCode(),
-        "packageMethod", normalizeToNull(object.getPackageMethod()),
-        "customerName", normalizeToNull(object.getCustomerName()));
-  }
+
+
 
   private String json(String... pairs) {
     StringBuilder builder = new StringBuilder("{");

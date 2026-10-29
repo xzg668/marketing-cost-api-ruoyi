@@ -163,6 +163,7 @@ public class BomFlattenServiceImpl implements BomFlattenService {
     // 写库前删除本次 OA + 产品 + 月份旧快照，防止规则变更后不再生成的旧 path 残留为幽灵行。
     costingMapper.delete(
         Wrappers.<BomCostingRow>lambdaQuery()
+                .eq(BomCostingRow::getCalculationScope, "")
             .eq(BomCostingRow::getOaNo, request.getOaNo())
             .eq(
                 request.getOaFormItemId() != null,
@@ -309,6 +310,7 @@ public class BomFlattenServiceImpl implements BomFlattenService {
 
     List<BomCostingRow> parentRows = costingMapper.selectList(
         Wrappers.<BomCostingRow>lambdaQuery()
+                .eq(BomCostingRow::getCalculationScope, "")
             .eq(BomCostingRow::getOaNo, request.getOaNo())
             .eq(
                 request.getOaFormItemId() != null,

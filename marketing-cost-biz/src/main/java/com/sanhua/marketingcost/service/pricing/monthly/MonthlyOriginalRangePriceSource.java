@@ -60,9 +60,9 @@ public final class MonthlyOriginalRangePriceSource {
         var bands=new HashMap<Long,List<PriceRangeItem>>();if(!originalIds.isEmpty())rows.bands(originalIds).forEach(row->bands.computeIfAbsent(row.getFactorRuleId(),ignored->new ArrayList<>()).add(row));
         var batchIds=byCode.values().stream().flatMap(List::stream).map(PriceRangeFactorRule::getSourceUploadBatchId).filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
         var originalBatches=new HashMap<Long,SourceBatch>();if(!batchIds.isEmpty())rows.batches(batchIds).forEach(row->originalBatches.put(row.getId(),SourceBatch.of(row)));
-        var multiple=new TreeSet<String>();byCode.forEach((code,items)->{if(items.stream().map(PriceRangeFactorRule::getSupplierCode).distinct().count()>1)multiple.add(code);});
-        var ratios=new HashMap<String,List<SupplierSupplyRatio>>();if(!multiple.isEmpty())supplierInputs.ratios(context.businessUnitType(),context.priceAsOfTime().toLocalDate(),multiple).forEach(row->ratios.computeIfAbsent(row.getRequestedMaterialCode(),ignored->new ArrayList<>()).add(row));
-        var scopes=new HashMap<String,SupplierPriceScope>();for(String code:multiple){var scope=scope(context,organization.getKey(),code);scopes.put(SupplierPriceSelectionService.scopeKey(scope),scope);}
+        var relationCodes=new TreeSet<>(byCode.keySet());
+        var ratios=new HashMap<String,List<SupplierSupplyRatio>>();if(!relationCodes.isEmpty())supplierInputs.ratios(context.businessUnitType(),context.priceAsOfTime().toLocalDate(),relationCodes).forEach(row->ratios.computeIfAbsent(row.getRequestedMaterialCode(),ignored->new ArrayList<>()).add(row));
+        var scopes=new HashMap<String,SupplierPriceScope>();for(String code:relationCodes)if(byCode.get(code).size()>1){var scope=scope(context,organization.getKey(),code);scopes.put(SupplierPriceSelectionService.scopeKey(scope),scope);}
         var decisions=new HashMap<String,SupplierPriceDecision>();if(!scopes.isEmpty())supplierInputs.decisions(scopes.keySet()).forEach(row->decisions.put(row.getScopeKey(),row));
         var publications=new HashMap<String,PublicationInput>();
         for(String code:batch)for(var request:organization.getValue().get(code)){

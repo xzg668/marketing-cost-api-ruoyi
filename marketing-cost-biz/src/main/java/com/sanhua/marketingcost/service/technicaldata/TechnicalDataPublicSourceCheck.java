@@ -2,6 +2,7 @@ package com.sanhua.marketingcost.service.technicaldata;
 
 import com.sanhua.marketingcost.integration.oa.OaMessageCodec;
 import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowContextPort;
+import com.sanhua.marketingcost.service.electronicdrawing.ElectronicDrawingWorkflowStage;
 import com.sanhua.marketingcost.service.quotebom.CurrentU9BomGateway;
 import com.sanhua.marketingcost.service.quotebom.CurrentU9BomResult;
 import com.sanhua.marketingcost.service.quotebom.QuoteBomReadContext;
@@ -11,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 /** 只查公共 BOM、工资、包装和制造资料；不依赖价格生成，组树阶段可安全复用。 */
 @Service
@@ -87,6 +89,11 @@ public class TechnicalDataPublicSourceCheck {
             TechnicalDataModuleType.DRAWING_BOM,
             TechnicalDataModuleType.AUXILIARY,
             TechnicalDataModuleType.SOLDER)) {
+      if (type == TechnicalDataModuleType.DRAWING_BOM
+          && availability == TechnicalDataAvailability.MISSING) {
+        facts.add(checkDrawing(context, reference));
+        continue;
+      }
       String reason =
           switch (availability) {
             case AVAILABLE -> "本产品 U9 原始 BOM 可用，无需按无 BOM 条件补录";
@@ -99,6 +106,37 @@ public class TechnicalDataPublicSourceCheck {
       facts.add(fact(context, type, availability, "U9_ORIGINAL_" + status, reason, reference));
     }
     return availability;
+  }
+
+  private TechnicalDataSourceFact checkDrawing(QuoteBomReadContext context, String u9Reference) {
+    try {
+      // 已分派或跨报价共享的技术资料仍走原负责人的提交、确认校验。
+      // 当前报价直接取得并完成组树的图库，不再因 U9 缺失而重复分派。
+      if (shared.find(context.productCode(), context.oaFormItemId(), "DRAWING_BOM") == null) {
+        var drawing = drawingContexts.load(context.oaFormItemId(), context.businessUnitType(),
+            context.priceOrgCode(), context.accountingMonth());
+        if (drawing != null && drawing.active() && drawing.sourceVersionId() != null) {
+          boolean ready = StringUtils.hasText(drawing.compositionFingerprint())
+              && (ElectronicDrawingWorkflowStage.COMPOSED.equals(drawing.workflowStage())
+                  || ElectronicDrawingWorkflowStage.PUBLISHED.equals(drawing.workflowStage()));
+          String reference = codec.write(Map.of(
+              "sourceVersionId", drawing.sourceVersionId(),
+              "workflowStage", Objects.toString(drawing.workflowStage(), ""),
+              "compositionFingerprint", Objects.toString(drawing.compositionFingerprint(), "")));
+          return fact(context, TechnicalDataModuleType.DRAWING_BOM,
+              ready ? TechnicalDataAvailability.AVAILABLE : TechnicalDataAvailability.MISSING,
+              ready ? "DRAWING_SOURCE_AVAILABLE" : "DRAWING_SOURCE_PENDING",
+              ready ? "本报价已取得并确认图库明细，已生成 BOM，无需重复补录"
+                  : "已有图库来源，请在产品核算页核实确认、料号匹配和 BOM 处理状态",
+              reference);
+        }
+      }
+      return fact(context, TechnicalDataModuleType.DRAWING_BOM, TechnicalDataAvailability.MISSING,
+          "U9_ORIGINAL_NOT_FOUND", "本产品无 U9 原始 BOM，需要选取并确认电子图库明细", u9Reference);
+    } catch (RuntimeException exception) {
+      return fact(context, TechnicalDataModuleType.DRAWING_BOM, TechnicalDataAvailability.ERROR,
+          "DRAWING_SOURCE_CHECK_FAILED", "图库明细状态查询失败，请核实后重新检查", null);
+    }
   }
 
   private TechnicalDataSourceFact checkManufacturing(

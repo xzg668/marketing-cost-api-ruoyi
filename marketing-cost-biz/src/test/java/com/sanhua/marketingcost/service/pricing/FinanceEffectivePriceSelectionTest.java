@@ -41,7 +41,7 @@ class FinanceEffectivePriceSelectionTest {
                     Arguments.of(type, "0.65", null, "A", "RATIO_MAX"),
                     Arguments.of(type, "0.4", null, null, "PENDING"),
                     Arguments.of(type, null, null, null, "PENDING"),
-                    Arguments.of(type, "0", "0", "B", "RATIO_MAX")));
+                    Arguments.of(type, "0", "0", null, "NO_PRICE")));
   }
 
   @ParameterizedTest
@@ -58,20 +58,21 @@ class FinanceEffectivePriceSelectionTest {
     assertThat(result.price() == null ? null : result.price().getSupplierCode())
         .isEqualTo(expected);
     assertThat(result.supplier().rule()).isEqualTo(status);
-    assertThat(reviews.reviews()).hasSize(expected == null ? 1 : 0);
-    if (expected == null) assertThat(reviews.reviews().getFirst().scope()).isEqualTo(scope(type));
+    assertThat(reviews.reviews()).hasSize("PENDING".equals(status) ? 1 : 0);
+    if ("PENDING".equals(status)) assertThat(reviews.reviews().getFirst().scope()).isEqualTo(scope(type));
     verifyNoInteractions(prices, ratios);
   }
 
   @ParameterizedTest
   @ValueSource(strings = {"LINKED", "RANGE"})
-  void singleQuoteIgnoresUnquotedMainSupplierAndNeedsNoRatio(String type) {
+  void singleQuoteChecksWithdrawalButIgnoresUnquotedMainSupplier(String type) {
     var result =
         service.select(
             scope(type), List.of(price(type, "A", "10")), new SupplierPriceReviewContext(17L));
     assertThat(result.price().getSupplierCode()).isEqualTo("A");
     assertThat(result.supplier().rule()).isEqualTo("SINGLE");
-    verifyNoInteractions(prices, ratios, decisions);
+    verify(ratios).selectList(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
+    verifyNoInteractions(prices, decisions);
   }
 
   @ParameterizedTest

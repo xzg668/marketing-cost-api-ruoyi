@@ -61,6 +61,9 @@ public class QuoteCostRunTaskExecutor implements CostRunTaskExecutor {
                   task.getPricingMonth(),
                   initiatedBy,
                   false));
+    } catch (com.sanhua.marketingcost.service.reprice.MonthlyQuotationControl.QuotationBlocked blocked) {
+      throw new CostRunTaskWaitingInputException(blocked.getMessage(),
+          "{\"pipelineStatus\":\"BLOCKED\",\"errorCode\":\"MONTHLY_REPRICE_BLOCKED\"}");
     } finally {
       SecurityContextHolder.setContext(previousContext);
     }

@@ -49,6 +49,7 @@ public class QuoteBatchCostRunServiceImpl implements QuoteBatchCostRunService {
   }
 
   @Override
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=true)
   public QuoteBatchCostRunResponse submit(
       String oaNo, QuoteBatchCostRunRequest request, String submittedBy) {
     String normalizedOaNo = required(oaNo, "OA单号");

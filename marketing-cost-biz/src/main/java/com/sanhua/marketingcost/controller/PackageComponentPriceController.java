@@ -193,6 +193,7 @@ public class PackageComponentPriceController {
     List<BomCostingRow> rows =
         bomCostingRowMapper.selectList(
             Wrappers.<BomCostingRow>lambdaQuery()
+                .eq(BomCostingRow::getCalculationScope, "")
                 .eq(BomCostingRow::getOaNo, trim(request.getOaNo()))
                 .eq(BomCostingRow::getSettlementRowType, PACKAGE_PARENT_ROW_TYPE)
                 .eq(StringUtils.hasText(request.getTopProductCode()),

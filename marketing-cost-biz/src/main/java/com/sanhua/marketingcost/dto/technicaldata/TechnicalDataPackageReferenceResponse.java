@@ -13,7 +13,9 @@ public record TechnicalDataPackageReferenceResponse(List<Component> components) 
       String topProductModel, String topProductSpecification, String parentMaterialNo, String parentName, String parentModel,
       String parentSpecification, BigDecimal parentQuantity, String priceOrgCode,
       String materialOrganizationCode, String bomVersion, String bomPurpose, String buildBatchId,
-      String parentPath, String structureFingerprint, String fingerprint) {}
+      String parentPath, String structureFingerprint, String fingerprint,
+      @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+      BigDecimal parentBaseQuantity) {}
 
   public record Child(Long sourceNodeId, String materialNo, String name, String model,
       String specification, BigDecimal quantity, String unit, String path) {}

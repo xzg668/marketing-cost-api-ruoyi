@@ -8,11 +8,7 @@ import com.sanhua.marketingcost.config.MybatisPlusConfig;
 import com.sanhua.marketingcost.config.PasswordEncodingConfig;
 import com.sanhua.marketingcost.security.PermissionService;
 import com.sanhua.marketingcost.service.impl.BusinessUnitRepriceLockGuardImpl;
-import com.sanhua.marketingcost.service.impl.MonthlyRepriceBatchServiceImpl;
-import com.sanhua.marketingcost.service.impl.MonthlyRepriceConfirmServiceImpl;
-import com.sanhua.marketingcost.service.impl.MonthlyRepriceOperationServiceImpl;
 import com.sanhua.marketingcost.service.impl.MonthlyRepriceQueryServiceImpl;
-import com.sanhua.marketingcost.service.impl.MonthlyRepriceStartServiceImpl;
 import com.sanhua.marketingcost.service.impl.QuoteBatchCostRunServiceImpl;
 import com.sanhua.marketingcost.service.quotefinal.QuoteFinalSubmissionService;
 import com.sanhua.marketingcost.service.technicaldata.EffectiveTechnicalDataQueryServiceImpl;
@@ -54,11 +50,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
             type = FilterType.ASSIGNABLE_TYPE,
             classes = {
                 BusinessUnitRepriceLockGuardImpl.class,
-                MonthlyRepriceBatchServiceImpl.class,
-                MonthlyRepriceConfirmServiceImpl.class,
-                MonthlyRepriceOperationServiceImpl.class,
                 MonthlyRepriceQueryServiceImpl.class,
-                MonthlyRepriceStartServiceImpl.class,
                 QuoteBatchCostRunServiceImpl.class,
                 com.sanhua.marketingcost.service.costing.QuoteCostingPreparationService.class,
                 QuoteFinalSubmissionService.class,
@@ -76,6 +68,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @Import({
     AsyncConfig.class,
     CacheConfig.class,
+    com.sanhua.marketingcost.config.MonthlyRepriceProperties.class,
     DrawingVerificationProperties.class,
     EffectiveTechnicalDataQueryServiceImpl.class,
     com.sanhua.marketingcost.service.technicaldata.TechnicalDataCostingSources.class,

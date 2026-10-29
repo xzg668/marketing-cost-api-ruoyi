@@ -8,7 +8,7 @@ import java.time.LocalDateTime;
 import lombok.Getter;
 import lombok.Setter;
 
-/** 电子图库 Excel 中不可变的原始工程节点及当前版本内的料号解析结果。 */
+/** 图库来源及本单修正版节点；图库原文和修正前版本始终保留。 */
 @Getter
 @Setter
 @TableName("lp_electronic_drawing_source_node")
@@ -27,6 +27,10 @@ public class ElectronicDrawingSourceNode {
   private String drawingCode;
   private String sourceName;
   private BigDecimal qty;
+  /** 财务修正后的用量单位；图库原始件数为 null。 */
+  private String quantityUnit;
+  /** 修正版节点对应的上一版节点；原始图库节点为 null。 */
+  private Long correctedFromSourceNodeId;
   private String material;
   private String importanceClass;
   private String hsfRiskClass;

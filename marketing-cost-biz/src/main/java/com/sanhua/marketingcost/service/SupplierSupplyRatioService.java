@@ -1,8 +1,7 @@
 package com.sanhua.marketingcost.service;
 
 import com.sanhua.marketingcost.dto.SupplierSupplyRatioPageResponse;
-import com.sanhua.marketingcost.dto.SupplierSupplyRatioUpdateRequest;
-import com.sanhua.marketingcost.entity.SupplierSupplyRatio;
+import com.sanhua.marketingcost.dto.SupplierSupplyRatioChangePage;
 
 public interface SupplierSupplyRatioService {
 
@@ -11,13 +10,14 @@ public interface SupplierSupplyRatioService {
       String materialName,
       String specModel,
       String supplierName,
+      String supplierCode,
+      String sourceBatchNo,
       String sourceType,
       Integer isActive,
       int page,
       int pageSize,
       String businessUnitType);
 
-  SupplierSupplyRatio update(Long id, SupplierSupplyRatioUpdateRequest request, String operator);
-
-  void delete(Long id, String operator);
+  SupplierSupplyRatioChangePage changes(String materialCode, String supplierCode, String batchNo,
+      int page, int pageSize, String businessUnitType);
 }

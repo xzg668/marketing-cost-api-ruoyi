@@ -1,6 +1,7 @@
 package com.sanhua.marketingcost.service.pricing;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
 import com.sanhua.marketingcost.entity.SupplierPriceDecision;
@@ -23,14 +24,15 @@ class SupplierPriceSelectionServiceTest {
 
   @ParameterizedTest
   @CsvSource({"0.7226,0.722600", "0,0.0000"})
-  void equalEffectivePricesNeedNeitherRatioQueriesNorApproval(String first, String second) {
+  void equalEffectivePricesStillReadWithdrawalButNeedNoApproval(String first, String second) {
     var a = candidate("A", first); var b = candidate("B", second);
     var result = service.select(scope, List.of(a, b));
     assertThat(result.candidate()).isEqualTo(b);
     assertThat(result.rule()).isEqualTo("SAME_PRICE");
     assertThat(result.ratio()).isNull();
     assertThat(result.review()).isNull();
-    verifyNoInteractions(ratios, decisions);
+    verify(ratios).selectList(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class));
+    verifyNoInteractions(decisions);
     assertThat(service.select(scope, List.of(b, a)).candidate()).isEqualTo(b);
   }
 
@@ -48,14 +50,25 @@ class SupplierPriceSelectionServiceTest {
   }
 
   @Test
-  void equalPricesDoNotRequireCompleteOrUniqueRatioInputs() {
-    var a = ratio("A", "0.1"); var b = ratio("B", null);
-    var result = service.select(scope, List.of(candidate("A", "0.45"), candidate("B", "0.450")),
-        List.of(a, a, b));
-    assertThat(result.candidate()).isNotNull();
-    assertThat(result.review()).isNull();
-    assertThat(result.rule()).isEqualTo("SAME_PRICE");
-    verifyNoInteractions(ratios, decisions);
+  void equalPricesCannotHideAmbiguousCurrentRelationships() {
+    var a = ratio("A", "0.1");
+    assertThatThrownBy(() -> service.select(scope,
+        List.of(candidate("A", "0.45"), candidate("B", "0.450")), List.of(a, a)))
+        .isInstanceOf(IllegalStateException.class).hasMessageContaining("多条有效供货比率");
+  }
+
+  @Test void withdrawalPrecedesSingleSamePriceAndManualFallback() {
+    var zero = ratio("B", "0");
+    assertThat(service.selectPrepared(scope, List.of(candidate("B", "99")), List.of(zero), null).candidate()).isNull();
+    assertThat(service.selectPrepared(scope, List.of(candidate("A", "10"), candidate("B", "10")), List.of(zero), null).candidate().supplierCode()).isEqualTo("A");
+    var candidates = List.of(candidate("A", "10"), candidate("B", "99"), candidate("C", "20"));
+    var missing = service.selectPrepared(scope, candidates, List.of(zero), null);
+    assertThat(missing.review().candidates()).extracting(c -> c.price().supplierCode()).containsExactly("A", "C");
+    var decision = new SupplierPriceDecision();decision.setScopeKey(SupplierPriceSelectionService.scopeKey(scope));
+    decision.setDecision("FALLBACK_HIGH");decision.setFingerprint(missing.review().fingerprint());
+    assertThat(service.selectPrepared(scope, candidates, List.of(zero), decision).candidate().supplierCode()).isEqualTo("C");
+    zero.setSupplyRatio(null);
+    assertThat(service.selectPrepared(scope, candidates, List.of(zero), decision).candidate()).isNull();
   }
 
   @Test

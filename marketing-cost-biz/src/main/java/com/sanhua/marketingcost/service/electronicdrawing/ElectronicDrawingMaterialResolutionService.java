@@ -420,7 +420,9 @@ public class ElectronicDrawingMaterialResolutionService {
         node.getResolvedAt(),
         branch == null ? null : branch.state().name(),
         branch == null ? null : branch.message(),
-        canModify);
+        canModify,
+        node.getQuantityUnit(),
+        node.getCorrectedFromSourceNodeId());
   }
 
   private static ElectronicDrawingMaterialSearchResponse.Option searchOption(

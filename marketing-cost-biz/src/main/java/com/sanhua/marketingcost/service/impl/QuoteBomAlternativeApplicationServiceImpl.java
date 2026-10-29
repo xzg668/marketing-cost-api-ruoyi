@@ -171,6 +171,7 @@ public class QuoteBomAlternativeApplicationServiceImpl
 
   @Override
   @Transactional(rollbackFor = Exception.class)
+  @com.sanhua.marketingcost.service.reprice.QuotationWrite
   public QuoteBomAlternativeSelectionResponse saveSelection(
       String oaNo,
       Long oaFormItemId,
