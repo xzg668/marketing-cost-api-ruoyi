@@ -143,7 +143,7 @@ class PricePrepareServiceImplTest {
             Clock.fixed(CLOCK_TIME_WITH_NANOS.atZone(BUSINESS_ZONE).toInstant(), BUSINESS_ZONE),
             currentStateService, sessions, monthlyAdoption, mock(MonthlyPriceStorage.class, org.mockito.Mockito.withSettings().mockMaker(org.mockito.MockMakers.INLINE)),
             new MonthlyPriceDocumentCodec(new com.fasterxml.jackson.databind.ObjectMapper()),
-            effectiveBoms, costingBoms);
+            effectiveBoms, costingBoms, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     when(packageComponentPricePrepareStrategy.prepare(
             org.mockito.ArgumentMatchers.any(),
             org.mockito.ArgumentMatchers.any(),
@@ -222,14 +222,14 @@ class PricePrepareServiceImplTest {
 
   @Test
   @DisplayName("生成骨架：非当前核算月直接拒绝")
-  void generateRejectsNonCurrentPeriod() {
+  void generateRejectsInactivePeriod() {
     PricePrepareGenerateRequest request = scopedRequest();
     request.setOaNo("OA-001");
     request.setPeriodMonth("2026-05");
 
     assertThatThrownBy(() -> service.generate(request))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("当前重算核算月为", "请按当前月执行价格准备");
+        .hasMessageContaining("当前生效核算月份为", "请按当前月执行价格准备");
   }
 
   @Test

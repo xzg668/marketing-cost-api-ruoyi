@@ -52,7 +52,7 @@ class SupplierSupplyRatioSelectionIntegrationTest {
   @Configuration @EnableTransactionManagement static class Config {
     @Bean SupplierPriceImportRetry retry() {
       return new SupplierPriceImportRetry(sql.getMapper(SupplierPriceDecisionMapper.class),
-          new SupplierPriceReviewWorkflow(workbench,sql.getMapper(SupplierPriceDecisionMapper.class),null));
+          new SupplierPriceReviewWorkflow(workbench,sql.getMapper(SupplierPriceDecisionMapper.class),null, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth()));
     }
     @Bean PlatformTransactionManager transactionManager() { return new DataSourceTransactionManager(ds); }
     @Bean SupplierSupplyRatioImportService imports(ApplicationEventPublisher events) {

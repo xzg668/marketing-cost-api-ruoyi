@@ -5,6 +5,7 @@ import com.sanhua.marketingcost.entity.OaForm;
 import com.sanhua.marketingcost.entity.OaFormItem;
 import com.sanhua.marketingcost.enums.MaterialOrganization;
 import com.sanhua.marketingcost.mapper.MaterialMasterRawMapper;
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
@@ -19,9 +20,11 @@ import org.springframework.util.StringUtils;
 @Component
 public class QuoteBomContextResolver {
   private final MaterialMasterRawMapper materialMaster;
+  private final QuotePricingPeriod pricingPeriods;
 
-  public QuoteBomContextResolver(MaterialMasterRawMapper materialMaster) {
+  public QuoteBomContextResolver(MaterialMasterRawMapper materialMaster, QuotePricingPeriod pricingPeriods) {
     this.materialMaster = materialMaster;
+    this.pricingPeriods = pricingPeriods;
   }
 
   public QuoteBomContext resolve(OaForm form, OaFormItem item) {
@@ -98,14 +101,7 @@ public class QuoteBomContextResolver {
     if (existingPeriod != null) {
       return parseCostPeriodMonth(existingPeriod, "已有 BOM 核算月份");
     }
-    String accountingMonth = trimToNull(form.getAccountingPeriodMonth());
-    if (accountingMonth != null) {
-      return parseCostPeriodMonth(accountingMonth, "OA 核算月份");
-    }
-    if (form.getApplyDate() != null) {
-      return YearMonth.from(form.getApplyDate()).toString();
-    }
-    throw new QuoteIngestException("OA 核算月份和申请日期均为空，无法确定报价 BOM 核算月份");
+    return pricingPeriods.currentMonth(form.getBusinessUnitType());
   }
 
   private String parseCostPeriodMonth(String value, String fieldName) {

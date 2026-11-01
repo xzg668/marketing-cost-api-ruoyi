@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.ingest;
 
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -42,7 +43,6 @@ import com.sanhua.marketingcost.mapper.QuoteBomStatusMapper;
 import com.sanhua.marketingcost.mapper.QuoteCostRunVersionMapper;
 import com.sanhua.marketingcost.mapper.QuoteIngestLogMapper;
 import com.sanhua.marketingcost.service.QuoteCostingWorkspaceService;
-import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -55,6 +55,8 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
+  private final QuotePricingPeriod pricingPeriods;
+
   private com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy oaWorkflowAccess;
 
   @org.springframework.beans.factory.annotation.Autowired
@@ -94,7 +96,9 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
       DrawingVerificationTaskMapper drawingVerificationTaskMapper,
       QuoteCostRunVersionMapper quoteCostRunVersionMapper,
       QuoteIngestLogMapper quoteIngestLogMapper,
-      QuoteCostingWorkspaceService quoteCostingWorkspaceService) {
+      QuoteCostingWorkspaceService quoteCostingWorkspaceService,
+      QuotePricingPeriod pricingPeriods) {
+    this.pricingPeriods = pricingPeriods;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.oaFormExtraFeeMapper = oaFormExtraFeeMapper;
@@ -281,13 +285,14 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   }
 
   private QuoteRequestDetailResponse buildDetail(OaForm form) {
+    String activeMonth = pricingPeriods.currentMonth(form.getBusinessUnitType());
     List<OaFormItem> items = listItems(form.getId());
     List<QuoteBomStatus> statuses = listBomStatus(form.getOaNo());
     Map<Long, QuoteBomStatus> statusByItemId = toStatusMap(statuses);
     Map<Long, QuoteCostRunVersion> latestCostRunByItemId =
         latestCostRunByItemId(form.getOaNo(), items);
     Map<Long, QuoteCostingWorkspace> workspaceByItemId =
-        workspaceByItemId(items, CostPricingPeriodUtils.currentPricingMonth());
+        workspaceByItemId(items, activeMonth);
     Map<Long, QuoteBomPreparationRecord> preparationByItemId = preparationByItemId(items);
     String bomAggregateStatus = aggregateBomStatus(items.size(), statuses);
 
@@ -305,11 +310,11 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
                   statusByItemId.get(item.getId()),
                   latestCostRunByItemId.get(item.getId()),
                   workspaceByItemId.get(item.getId()),
-                  preparationByItemId.get(item.getId())));
+                  preparationByItemId.get(item.getId()), activeMonth));
     }
     // 待人工确认时尚未生成 BOM 准备记录；从当前取图任务补上真实月份，产品行才能展示修正入口。
     var drawingTasks = drawingVerificationTaskMapper.findActiveForQuote(
-        form.getOaNo(), CostPricingPeriodUtils.currentPricingMonth(), form.getBusinessUnitType());
+        form.getOaNo(), activeMonth, form.getBusinessUnitType());
     if (drawingTasks != null) {
       var byItem = new java.util.HashMap<Long, String>();
       drawingTasks.forEach(task -> byItem.putIfAbsent(task.getOaFormItemId(), task.getAccountingMonth()));
@@ -384,7 +389,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
       QuoteBomStatus status,
       QuoteCostRunVersion latestCostRun,
       QuoteCostingWorkspace workspace,
-      QuoteBomPreparationRecord preparation) {
+      QuoteBomPreparationRecord preparation, String activeMonth) {
     QuoteRequestItemResponse response = new QuoteRequestItemResponse();
     response.setId(item.getId());
     response.setSeq(item.getSeq());
@@ -434,7 +439,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
       response.setElectronicDrawingStage(preparation.getElectronicWorkflowStage());
     }
     response.setBomStatus(toBomStatusResponse(item, status));
-    response.setCostingWorkspace(toWorkspaceResponse(item, latestCostRun, workspace));
+    response.setCostingWorkspace(toWorkspaceResponse(item, latestCostRun, workspace, activeMonth));
     return response;
   }
 
@@ -566,7 +571,8 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   }
 
   private QuoteCostingWorkspaceResponse toWorkspaceResponse(
-      OaFormItem item, QuoteCostRunVersion latestCostRun, QuoteCostingWorkspace workspace) {
+      OaFormItem item, QuoteCostRunVersion latestCostRun, QuoteCostingWorkspace workspace,
+      String currentPeriodMonth) {
     Long historicalVersionId =
         item.getConfirmedCostVersionId() != null
             ? item.getConfirmedCostVersionId()
@@ -577,7 +583,6 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
     if (workspace == null && historicalVersionId == null) {
       return null;
     }
-    String currentPeriodMonth = CostPricingPeriodUtils.currentPricingMonth();
     String historicalPeriodMonth = historicalPeriodMonth(latestCostRun);
     boolean historicalPeriodChanged =
         workspace == null
@@ -630,7 +635,7 @@ public class QuoteRequestQueryServiceImpl implements QuoteRequestQueryService {
   private String historicalPeriodMonth(QuoteCostRunVersion latestCostRun) {
     return latestCostRun != null && StringUtils.hasText(latestCostRun.getPricingMonth())
         ? latestCostRun.getPricingMonth()
-        : CostPricingPeriodUtils.currentPricingMonth();
+        : null;
   }
 
   private String toStoredPackagingType(String productType) {

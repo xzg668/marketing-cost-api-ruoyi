@@ -26,10 +26,85 @@ class MonthlyRepriceMainChainIntegrationTest extends OriginalPricingIntegrationT
  @Autowired ProductCostingPipeline pipeline;
  @Autowired OaFormMapper oaForms;
  @Autowired OaFormItemMapper oaItems;
+ @Autowired QuotePricingPeriod pricingPeriods;
+ @Autowired com.sanhua.marketingcost.config.MonthlyRepriceProperties repriceProperties;
+ @Autowired com.sanhua.marketingcost.service.reprice.MonthlyRepriceContractService contracts;
+ @Autowired MonthlyRepriceContractMapper repriceMapper;
+ @Autowired com.sanhua.marketingcost.service.reprice.MonthlyRepriceCostingService repricing;
+ @Autowired com.sanhua.marketingcost.service.reprice.MonthlyRepriceCheckService checks;
+ @Autowired com.sanhua.marketingcost.service.reprice.MonthlyRepriceWorkflowService workflow;
  String unit,priceOrg,materialOrg;
+ @Test void confirmedRepricingSwitchesBomPricesAndCostMonthTogether() {
+   unit="COMMERCIAL";priceOrg="210";materialOrg="COMMERCIAL";
+   String target=com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+   String old=YearMonth.parse(target).minusMonths(1).toString();
+   var date=YearMonth.parse(old).atDay(15).atTime(12,0);
+   repriceProperties.setGoLiveMonths(Map.of(unit,old));
+   var auth=new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("period-acceptance",null,
+       List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_ADMIN")));
+   auth.setDetails(Map.of("businessUnitType",unit,"userId",1L));
+   org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(auth);
+   try {
+     String product="PERIOD-"+UUID.randomUUID().toString().substring(0,8), material=product+"-PART";
+     jdbc.update("INSERT INTO oa_form(oa_no,business_unit_type,copper_price) VALUES(?,?,80000)",product,unit);
+     long form=jdbc.queryForObject("SELECT id FROM oa_form WHERE oa_no=?",Long.class,product);
+     jdbc.update("INSERT INTO oa_form_item(oa_form_id,material_no,product_name,business_unit_type) VALUES(?,?,?,?)",form,product,product,unit);
+     long item=jdbc.queryForObject("SELECT id FROM oa_form_item WHERE oa_form_id=?",Long.class,form);
+     jdbc.update("INSERT IGNORE INTO lp_product_property_rule(business_unit_type,property_year,product_attr,uplift_rate) VALUES(?,?,'标准品',0)",unit,date.getYear());
+     ordinarySources(product,material,form,date);comparisonFixedPrice(material,"2",date);
+     // A finished non-bare product uses its own U9 packaging relation in both months.
+     jdbc.update("UPDATE lp_material_master_raw SET main_category_code='12',bare_code=? WHERE material_code=?",product+"-BARE",product);
+     jdbc.update("INSERT INTO lp_material_master_raw(material_code,material_name,organization_code,import_batch_id,active_flag,main_category_code,shape_attr,unit) VALUES(?,?,?, ?,1,'11','制造件','件')",product+"-BARE",product+"-BARE",materialOrg,product);
+     jdbc.update("UPDATE lp_quality_loss_rate SET bare_product_code=? WHERE bare_product_code=?",product+"-BARE",product);
+     buildOriginalFixture(form,item,product,old,date,material,Map.of());
+     assertThat(pricingPeriods.currentMonth(unit)).isEqualTo(old);
+     var before=pipeline.execute(new com.sanhua.marketingcost.dto.quotecosting.ProductCostingRequest(product,item,null,"period-acceptance",true));
+     assertThat(before.getPipelineStatus()).as(before.getMessage()).isEqualTo("SUCCESS");
+     var beforeRow=jdbc.queryForMap("SELECT pricing_month,total_cost FROM lp_quote_cost_run_version WHERE id=?",before.getCostVersionId());
+     assertThat(beforeRow.get("pricing_month")).isEqualTo(old);
+     assertThat(jdbc.queryForObject("SELECT unit_price FROM lp_material_monthly_price WHERE material_code=? AND pricing_month=?",BigDecimal.class,material,old)).isEqualByComparingTo("2");
+     jdbc.update("UPDATE lp_bom_raw_hierarchy SET qty_per_parent=4,qty_per_top=4 WHERE top_product_code=? AND material_code=?",product,material);
+     jdbc.update("UPDATE lp_price_fixed_item SET fixed_price=3 WHERE material_code=?",material);
+     var unchanged=pipeline.execute(new com.sanhua.marketingcost.dto.quotecosting.ProductCostingRequest(product,item,null,"period-acceptance",true));
+     assertThat(unchanged.getPipelineStatus()).as(unchanged.getMessage()).isEqualTo("SUCCESS");
+     assertThat(jdbc.queryForMap("SELECT pricing_month,total_cost FROM lp_quote_cost_run_version WHERE id=?",unchanged.getCostVersionId())).isEqualTo(beforeRow);
+     assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM lp_material_monthly_price WHERE material_code=? AND pricing_month=?",Integer.class,material,target)).isZero();
+     assertThat(jdbc.queryForObject("SELECT qty FROM lp_cost_run_part_item WHERE cost_run_version_id=? AND part_code=?",BigDecimal.class,unchanged.getCostVersionId(),material)).isEqualByComparingTo("2.5");
+     jdbc.update("UPDATE lp_quality_loss_rate SET loss_rate=0.02 WHERE bare_product_code=?",product+"-BARE");
+     var corrected=pipeline.execute(new com.sanhua.marketingcost.dto.quotecosting.ProductCostingRequest(product,item,null,"period-acceptance",true));
+     assertThat(corrected.getPipelineStatus()).as(corrected.getMessage()).isEqualTo("SUCCESS");
+     assertThat(jdbc.queryForObject("SELECT pricing_month FROM lp_quote_cost_run_version WHERE id=?",String.class,corrected.getCostVersionId())).isEqualTo(old);
+     assertThat(jdbc.queryForObject("SELECT total_cost FROM lp_quote_cost_run_version WHERE id=?",BigDecimal.class,corrected.getCostVersionId())).isNotEqualByComparingTo((BigDecimal)beforeRow.get("total_cost"));
+     assertThat(jdbc.queryForObject("SELECT qty FROM lp_cost_run_part_item WHERE cost_run_version_id=? AND part_code=?",BigDecimal.class,corrected.getCostVersionId(),material)).isEqualByComparingTo("2.5");
+     var batch=contracts.enqueue(unit,YearMonth.parse(target));
+     var tasks=repriceMapper.tasks(batch.getRepriceNo());assertThat(tasks).hasSize(1);
+     var task=tasks.getFirst();int execution=contracts.begin(batch.getRepriceNo(),task.getId());
+     var saved=repricing.execute(batch.getRepriceNo(),task.getId(),execution);
+     assertThat(saved.version().getPricingMonth()).isEqualTo(target);
+     assertThat(jdbc.queryForObject("SELECT qty FROM lp_cost_run_part_item WHERE cost_run_version_id=? AND part_code=?",BigDecimal.class,saved.version().getId(),material)).isEqualByComparingTo("4");
+     assertThat(saved.version().getTotalCost()).isNotEqualByComparingTo((BigDecimal)beforeRow.get("total_cost"));
+     assertThat(jdbc.queryForObject("SELECT unit_price FROM lp_material_monthly_price WHERE material_code=? AND pricing_month=?",BigDecimal.class,material,target)).isEqualByComparingTo("3");
+     batch=repriceMapper.readBatch(batch.getRepriceNo());
+     var report=checks.verify(batch);assertThat(report.passed()).as(report.problems().toString()).isTrue();
+     batch=contracts.recordCheck(batch.getRepriceNo(),batch.getResultRevision(),report.passed(),report.evidence());
+     assertThat(batch.getStatus()).isEqualTo("WAIT_CONFIRM");
+     assertThat(pricingPeriods.currentMonth(unit)).isEqualTo(old);
+     assertThat(contracts.blocksQuotation(unit)).isTrue();
+     workflow.confirm(batch.getRepriceNo(),batch.getResultRevision());
+     assertThat(pricingPeriods.currentMonth(unit)).isEqualTo(target);
+     assertThat(contracts.blocksQuotation(unit)).isFalse();
+     var after=pipeline.execute(new com.sanhua.marketingcost.dto.quotecosting.ProductCostingRequest(product,item,null,"period-acceptance",true));
+     assertThat(after.getPipelineStatus()).as(after.getMessage()).isEqualTo("SUCCESS");
+     assertThat(jdbc.queryForObject("SELECT pricing_month FROM lp_quote_cost_run_version WHERE id=?",String.class,after.getCostVersionId())).isEqualTo(target);
+     assertThat(jdbc.queryForObject("SELECT total_cost FROM lp_quote_cost_run_version WHERE id=?",BigDecimal.class,after.getCostVersionId())).isEqualByComparingTo(saved.version().getTotalCost());
+     assertThat(jdbc.queryForMap("SELECT pricing_month,total_cost FROM lp_quote_cost_run_version WHERE id=?",before.getCostVersionId())).isEqualTo(beforeRow);
+     assertThat(jdbc.queryForObject("SELECT unit_price FROM lp_material_monthly_price WHERE material_code=? AND pricing_month=?",BigDecimal.class,material,old)).isEqualByComparingTo("2");
+   } finally {org.springframework.security.core.context.SecurityContextHolder.clearContext();}
+ }
  @Test void twoUnitsCrossYearSavedSourcesAndRealMissingRatioRepair() throws Exception {
    String current=com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
    String baseline="2025-12";var oldDate=YearMonth.parse(baseline).atDay(25).atTime(12,0);
+   repriceProperties.setGoLiveMonths(Map.of("COMMERCIAL",baseline,"HOUSEHOLD",baseline));
    var targetDate=YearMonth.parse(current).atDay(25).atTime(12,0);
    var samples=new ArrayList<Map<String,Object>>();
    for(String scope:List.of("COMMERCIAL","HOUSEHOLD"))for(int year:List.of(2025,2026))
@@ -181,6 +256,8 @@ class MonthlyRepriceMainChainIntegrationTest extends OriginalPricingIntegrationT
     jdbc.update("UPDATE lp_material_master_raw SET main_category_code='11',production_division=?,product_attr='标准品' WHERE material_code=?", division, product);
     jdbc.update("UPDATE oa_form SET process_code='FI-SC-005',accounting_period_month=?,source_business_division=?,applicant_dept=?,expense_product_category='商用直销产品' WHERE id=?", YearMonth.from(date).toString(), division, division, formId);
     int year = date.getYear();
+    for(String subject:List.of("水电费用","工装零星费用","大修费用"))
+      jdbc.update("INSERT INTO lp_department_fund_rate(business_unit,business_unit_type,rate_year,business_division,expense_subject,quote_ratio,uplift_ratio,manhour_rate,rate_calculation_mode) VALUES(?,?,?,?,?,0.01,1,1,'FINAL_QUOTE')",division,unit,year,division,subject);
     for (String type : List.of("SALARY_DIRECT", "SALARY_INDIRECT"))
       jdbc.update("INSERT INTO cms_cost_source_effective(cost_year,source_type,parent_code,period,subject_code,source_table,source_row_ids,amount_yuan,business_unit_type) VALUES(?,?,?,?,?,'MPP12-controlled','[]',?,'"+unit+"')",
           year, type, product, YearMonth.from(date).toString(), type, type.equals("SALARY_DIRECT") ? 1 : 2);

@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.sanhua.marketingcost.dto.CostRunTaskSubmissionResult;
 import com.sanhua.marketingcost.entity.CostRunBatch;
@@ -41,6 +42,7 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionService {
+  private final QuotePricingPeriod pricingPeriods;
 
   private static final char[] HEX = "0123456789abcdef".toCharArray();
 
@@ -64,7 +66,9 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
       QuoteCostingWorkspaceMapper workspaceMapper,
       QuoteCostRunVersionMapper versionMapper,
       CostingAlgorithmVersionProvider algorithmVersionProvider,
-      CostInputRevisionService inputRevisionService) {
+      CostInputRevisionService inputRevisionService,
+      QuotePricingPeriod pricingPeriods) {
+    this.pricingPeriods = pricingPeriods;
     this.batchMapper = batchMapper;
     this.taskMapper = taskMapper;
     this.oaFormMapper = oaFormMapper;
@@ -84,7 +88,7 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
   @Override
   @Transactional
   public CostRunTaskSubmissionResult submitQuote(String oaNo, List<Long> oaFormItemIds) {
-    return submitQuote(oaNo, oaFormItemIds, resolveQuotePricingMonth(), null);
+    return submitQuote(oaNo, oaFormItemIds, null, null);
   }
 
   @Override
@@ -99,8 +103,8 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     if (oaForm == null) {
       throw new IllegalArgumentException("OA 单不存在：" + normalizedOaNo);
     }
-    String pricingMonth = CostPricingPeriodUtils.requireCurrentPricingMonth(requestedPricingMonth);
     String businessUnitType = required("businessUnitType", oaForm.getBusinessUnitType());
+    String pricingMonth = pricingPeriods.requireActiveMonth(requestedPricingMonth, businessUnitType);
     CostRunBatch existing =
         findBatch(CostRunTaskScene.QUOTE, normalizedOaNo, pricingMonth, businessUnitType);
     CostRunBatch batch =
@@ -471,14 +475,6 @@ public class CostRunTaskSubmissionServiceImpl implements CostRunTaskSubmissionSe
     return task;
   }
 
-  private String resolveQuotePricingMonth() {
-    // 报价实时核算按任务提交时的当前核算月份取价，不再沿用 OA 申请月或表头核算期间。
-    return CostPricingPeriodUtils.currentPricingMonth();
-  }
-
-  private String normalizePricingMonth(String pricingMonth) {
-    return CostPricingPeriodUtils.normalizePricingMonth(pricingMonth);
-  }
 
   private String newBatchNo(CostRunTaskScene scene) {
     String prefix = scene == CostRunTaskScene.QUOTE ? "CRQ" : "CRM";

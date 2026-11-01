@@ -88,7 +88,7 @@ class QuoteRequestQueryServiceImplTest {
             drawingVerificationTaskMapper,
             quoteCostRunVersionMapper,
             quoteIngestLogMapper,
-            quoteCostingWorkspaceService);
+            quoteCostingWorkspaceService, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     service.setOaWorkflowAccess(mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
   }
 

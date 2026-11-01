@@ -37,7 +37,7 @@ class CostRunTaskSubmissionServiceImplTest {
     CostRunTaskSubmissionServiceImpl service =
         new CostRunTaskSubmissionServiceImpl(
             batchMapper.proxy(), taskMapper.proxy(), oaFormMapper.proxy(), oaFormItemMapper.proxy(),
-            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion(), (form, item) -> "SOURCE-1");
+            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion(), (form, item) -> "SOURCE-1", unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
 
     CostRunTaskSubmissionResult result = service.submitQuote(" OA-001 ");
 
@@ -77,7 +77,7 @@ class CostRunTaskSubmissionServiceImplTest {
             new FakeOaFormItemMapper(List.of(modelOnly, drawingOnly, noIdentity)).proxy(),
             emptyWorkspaceMapper(),
             emptyVersionMapper(),
-            algorithmVersion(), (form, item) -> "SOURCE-1");
+            algorithmVersion(), (form, item) -> "SOURCE-1", unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
 
     CostRunTaskSubmissionResult result = service.submitQuote("OA-001");
 
@@ -97,7 +97,7 @@ class CostRunTaskSubmissionServiceImplTest {
     CostRunTaskSubmissionServiceImpl service =
         new CostRunTaskSubmissionServiceImpl(
             batchMapper.proxy(), taskMapper.proxy(), oaFormMapper.proxy(), oaFormItemMapper.proxy(),
-            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion(), (form, item) -> "SOURCE-1");
+            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion(), (form, item) -> "SOURCE-1", unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
 
     service.submitQuote("OA-001");
 
@@ -119,7 +119,7 @@ class CostRunTaskSubmissionServiceImplTest {
     CostRunTaskSubmissionServiceImpl service =
         new CostRunTaskSubmissionServiceImpl(
             batchMapper.proxy(), taskMapper.proxy(), oaFormMapper.proxy(), oaFormItemMapper.proxy(),
-            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion(), (form, item) -> "SOURCE-1");
+            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion(), (form, item) -> "SOURCE-1", unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
 
     CostRunTaskSubmissionResult result = service.submitQuote("OA-001");
 
@@ -152,7 +152,7 @@ class CostRunTaskSubmissionServiceImplTest {
     CostRunTaskSubmissionServiceImpl service =
         new CostRunTaskSubmissionServiceImpl(
             batchMapper.proxy(), taskMapper.proxy(), oaFormMapper.proxy(), oaFormItemMapper.proxy(),
-            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion(), (form, item) -> "SOURCE-1");
+            emptyWorkspaceMapper(), emptyVersionMapper(), algorithmVersion(), (form, item) -> "SOURCE-1", unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
 
     CostRunTaskSubmissionResult result =
         service.submitQuote(
@@ -191,7 +191,7 @@ class CostRunTaskSubmissionServiceImplTest {
             new FakeOaFormItemMapper(List.of(item(11L, "P-001", "BOX"))).proxy(),
             emptyWorkspaceMapper(),
             emptyVersionMapper(),
-            algorithmVersion(), (form, item) -> "SOURCE-1");
+            algorithmVersion(), (form, item) -> "SOURCE-1", unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
 
     CostRunTaskSubmissionResult result = service.submitQuote("OA-001");
 
@@ -220,7 +220,7 @@ class CostRunTaskSubmissionServiceImplTest {
             new FakeOaFormItemMapper(List.of(item(11L, "P-001", "BOX"))).proxy(),
             workspaceMapper(List.of(workspace)),
             emptyVersionMapper(),
-            algorithmVersion(), (form, item) -> "SOURCE-1");
+            algorithmVersion(), (form, item) -> "SOURCE-1", unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
 
     CostRunTaskSubmissionResult result = service.submitQuote("OA-001");
 
@@ -262,7 +262,7 @@ class CostRunTaskSubmissionServiceImplTest {
             new FakeOaFormItemMapper(List.of(currentItem)).proxy(),
             workspaceMapper(List.of(workspace)),
             versionMapper(List.of(version)),
-            algorithmVersion(), (form, item) -> "SOURCE-1");
+            algorithmVersion(), (form, item) -> "SOURCE-1", unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
 
     CostRunTaskSubmissionResult result = service.submitQuote("OA-001");
 
@@ -314,7 +314,7 @@ class CostRunTaskSubmissionServiceImplTest {
                     List.of("PACKAGE"), "包装未生效");
               }
               return "SOURCE-1";
-            });
+            }, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
 
     var result = service.submitQuote("OA-001");
     assertThat(result.getQueuedCount()).isEqualTo(2);
@@ -356,7 +356,7 @@ class CostRunTaskSubmissionServiceImplTest {
             new FakeOaFormItemMapper(List.of(currentItem)).proxy(),
             workspaceMapper(List.of(workspace)),
             versionMapper(List.of(version)),
-            algorithmVersion(), (form, item) -> "SOURCE-1");
+            algorithmVersion(), (form, item) -> "SOURCE-1", unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
 
     CostRunTaskSubmissionResult result = service.submitQuote("OA-001");
 

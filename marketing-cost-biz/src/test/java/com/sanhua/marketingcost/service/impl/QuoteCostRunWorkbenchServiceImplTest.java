@@ -140,7 +140,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
             readinessService,
             versionNoGenerator,
             cuAdjustmentCalcService,
-            workspaceService, null, mockSheetReader(), sheetExporter);
+            workspaceService, null, mockSheetReader(), sheetExporter, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
   }
 
   @AfterEach
@@ -365,7 +365,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
             versionNoGenerator,
             cuAdjustmentCalcService,
             workspaceService,
-            inputRevisionService, mockSheetReader(), sheetExporter);
+            inputRevisionService, mockSheetReader(), sheetExporter, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     QuoteCostRunVersion version = version(90L, "RUNNING-3", "RUNNING", "TOP-A");
     stubCalculation(version, "123.450000");
     when(inputRevisionService.currentRevision(
@@ -401,7 +401,7 @@ class QuoteCostRunWorkbenchServiceImplTest {
             versionNoGenerator,
             cuAdjustmentCalcService,
             workspaceService,
-            revisions, mockSheetReader(), sheetExporter);
+            revisions, mockSheetReader(), sheetExporter, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     stubCalculation(version(90L, "RUNNING-3", "RUNNING", "TOP-A"), "123.450000");
     var prepared = PricePrepareReadinessResult.ready("PPR-1", CURRENT_PERIOD, "SUCCESS");
     prepared.setSourceRevision("prepared-input");

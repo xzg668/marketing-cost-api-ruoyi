@@ -5,7 +5,7 @@ import java.time.YearMonth;
 import java.time.ZoneId;
 import org.springframework.util.StringUtils;
 
-/** 当前核算月统一口径。 */
+/** 中国业务日历及月份格式；普通报价的有效月份由 QuotePricingPeriod 决定。 */
 public final class CostPricingPeriodUtils {
 
   /** All costing dates use the China business calendar, independent of server locale. */
@@ -32,13 +32,4 @@ public final class CostPricingPeriodUtils {
     }
   }
 
-  public static String requireCurrentPricingMonth(String pricingMonth) {
-    String normalized = normalizePricingMonth(pricingMonth);
-    String current = currentPricingMonth();
-    if (!current.equals(normalized)) {
-      throw new IllegalArgumentException(
-          "当前重算核算月为 " + current + "，请按当前月执行价格准备");
-    }
-    return normalized;
-  }
 }

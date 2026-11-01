@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.priceprepare.MakePartPricePrepareResult;
 import com.sanhua.marketingcost.dto.priceprepare.NormalMaterialPricePrepareResult;
@@ -48,6 +49,7 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class PricePrepareServiceImpl implements PricePrepareService {
+  private final QuotePricingPeriod pricingPeriods;
 
   static final String DEFAULT_BOM_PURPOSE = "主制造";
   static final String DEFAULT_SOURCE_TYPE = "U9";
@@ -101,11 +103,12 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       MonthlyQuotationSessions monthlySessions, MonthlyAdoptionExecutor monthlyAdoption,
       MonthlyPriceStorage monthlyStorage, MonthlyPriceDocumentCodec monthlyCodec,
       com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomRepository effectiveBoms,
-      com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService costingBoms) {
+      com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService costingBoms,
+      QuotePricingPeriod pricingPeriods) {
     this(batchMapper, itemMapper, gapMapper, bomItemLoader, itemClassifier,
         normalMaterialPricePrepareStrategy, packageComponentPricePrepareStrategy, makePartPricePrepareStrategy,
         Clock.system(BUSINESS_ZONE), currentStateService, monthlySessions, monthlyAdoption,
-        monthlyStorage, monthlyCodec, effectiveBoms, costingBoms);
+        monthlyStorage, monthlyCodec, effectiveBoms, costingBoms, pricingPeriods);
   }
 
   PricePrepareServiceImpl(
@@ -119,7 +122,9 @@ public class PricePrepareServiceImpl implements PricePrepareService {
       MonthlyQuotationSessions monthlySessions, MonthlyAdoptionExecutor monthlyAdoption,
       MonthlyPriceStorage monthlyStorage, MonthlyPriceDocumentCodec monthlyCodec,
       com.sanhua.marketingcost.service.effectivebom.QuoteEffectiveBomRepository effectiveBoms,
-      com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService costingBoms) {
+      com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService costingBoms,
+      QuotePricingPeriod pricingPeriods) {
+    this.pricingPeriods = pricingPeriods;
     this.batchMapper = batchMapper;
     this.itemMapper = itemMapper;
     this.gapMapper = gapMapper;
@@ -1019,15 +1024,15 @@ public class PricePrepareServiceImpl implements PricePrepareService {
     if (request == null || !StringUtils.hasText(request.getOaNo())) {
       throw new IllegalArgumentException("oaNo is required");
     }
+    String businessUnitType =
+        firstText(request.getBusinessUnitType(), BusinessUnitContext.getCurrentBusinessUnitType());
     String periodMonth =
-        reprice == null ? CostPricingPeriodUtils.requireCurrentPricingMonth(request.getPeriodMonth())
+        reprice == null ? pricingPeriods.requireActiveMonth(request.getPeriodMonth(), businessUnitType)
             : CostPricingPeriodUtils.normalizePricingMonth(request.getPeriodMonth());
     String sourceType =
         StringUtils.hasText(request.getSourceType())
             ? request.getSourceType().trim()
             : DEFAULT_SOURCE_TYPE;
-    String businessUnitType =
-        firstText(request.getBusinessUnitType(), BusinessUnitContext.getCurrentBusinessUnitType());
     String topProductCode = firstText(request.getTopProductCode(), onlyTopProductCode(request));
     List<String> topProductCodes =
         StringUtils.hasText(topProductCode)

@@ -10,26 +10,26 @@ import org.junit.jupiter.api.Test;
 
 class QuoteBomContextResolverTest {
   private final QuoteBomContextResolver resolver = new QuoteBomContextResolver(
-      org.mockito.Mockito.mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class));
+      org.mockito.Mockito.mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class), unit -> "2026-10");
 
   @Test
-  void explicitOaAccountingMonthWinsOverApplyDateAndServerMonth() {
+  void effectivePricingMonthWinsOverOaDatesAndServerMonth() {
     OaForm form = form("OA-CTX-001", "2026-08", LocalDate.of(2026, 7, 31));
 
     QuoteBomContext context = resolver.resolve(form, item(" MAT-1001 ", " BOX "));
 
-    assertThat(context.costPeriodMonth()).isEqualTo("2026-08");
+    assertThat(context.costPeriodMonth()).isEqualTo("2026-10");
     assertThat(context.productCode()).isEqualTo("MAT-1001");
     assertThat(context.packageMethod()).isEqualTo("BOX");
   }
 
   @Test
-  void applyDateMonthIsUsedWhenAccountingMonthMissing() {
+  void missingOaAccountingMonthStillUsesEffectivePricingMonth() {
     OaForm form = form("OA-CTX-002", null, LocalDate.of(2026, 9, 6));
 
     QuoteBomContext context = resolver.resolve(form, item("MAT-1002", null));
 
-    assertThat(context.costPeriodMonth()).isEqualTo("2026-09");
+    assertThat(context.costPeriodMonth()).isEqualTo("2026-10");
   }
 
   @Test
@@ -43,22 +43,16 @@ class QuoteBomContextResolverTest {
   }
 
   @Test
-  void missingAccountingMonthAndApplyDateIsBlockedExplicitly() {
+  void missingOaDatesDoNotChangeTheEffectiveBomMonth() {
     OaForm form = form("OA-CTX-003", null, null);
-
-    assertThatThrownBy(() -> resolver.resolve(form, item("MAT-1003", "BOX")))
-        .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("核算月份")
-        .hasMessageContaining("申请日期");
+    assertThat(resolver.resolve(form, item("MAT-1003", "BOX")).costPeriodMonth()).isEqualTo("2026-10");
   }
 
   @Test
-  void malformedAccountingMonthIsBlockedInsteadOfSilentlyChangingMonth() {
-    OaForm form = form("OA-CTX-004", "2026-8", LocalDate.of(2026, 8, 1));
-
-    assertThatThrownBy(() -> resolver.resolve(form, item("MAT-1004", "BOX")))
-        .isInstanceOf(QuoteIngestException.class)
-        .hasMessageContaining("YYYY-MM");
+  void malformedExplicitHistoricalMonthIsStillRejected() {
+    OaForm form = form("OA-CTX-004", "2026-08", LocalDate.of(2026, 8, 1));
+    assertThatThrownBy(() -> resolver.resolveWithExistingCostPeriod(form, item("MAT-1004", "BOX"), "2026-8"))
+        .isInstanceOf(QuoteIngestException.class).hasMessageContaining("YYYY-MM");
   }
 
   @Test

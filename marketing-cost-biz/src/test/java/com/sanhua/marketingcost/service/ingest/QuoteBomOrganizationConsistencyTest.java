@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 
 class QuoteBomOrganizationConsistencyTest {
   private final MaterialMasterRawMapper materials = mock(MaterialMasterRawMapper.class);
-  private final QuoteBomContextResolver resolver = new QuoteBomContextResolver(materials);
+  private final QuoteBomContextResolver resolver = new QuoteBomContextResolver(materials, unit -> "2026-10");
 
   @Test
   void missingOaNameUsesUnambiguousCurrentMaterialNameWithoutChangingSourceFields() {

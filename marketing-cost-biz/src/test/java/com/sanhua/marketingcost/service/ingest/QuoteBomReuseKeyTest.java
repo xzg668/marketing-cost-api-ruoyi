@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 
 class QuoteBomReuseKeyTest {
   private final QuoteBomContextResolver resolver = new QuoteBomContextResolver(
-      org.mockito.Mockito.mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class));
+      org.mockito.Mockito.mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class), unit -> "2026-08");
 
   @Test
   void itemCustomerMaterialNumberNeverTakesPrecedenceOverHeaderCustomer() {
@@ -43,7 +43,7 @@ class QuoteBomReuseKeyTest {
   }
 
   @Test
-  void oaAccountingMonthGeneratesCostPeriodMonth() {
+  void effectivePricingMonthGeneratesCostPeriodMonth() {
     QuoteBomReuseKey key =
         QuoteBomReuseKey.from(resolver.resolve(form("CUST"), item("MAT-1004", null, null)));
 

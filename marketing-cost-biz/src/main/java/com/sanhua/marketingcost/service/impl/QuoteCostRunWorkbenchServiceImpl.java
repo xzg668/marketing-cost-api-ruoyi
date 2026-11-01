@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.CostRunCostItemDto;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
@@ -52,6 +53,7 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchService {
+  private final QuotePricingPeriod pricingPeriods;
 
   private static final String STATUS_TRIAL = "TRIAL";
   private static final String STATUS_RUNNING = "RUNNING";
@@ -100,7 +102,9 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
       QuoteCostingWorkspaceService workspaceService,
       CostInputRevisionService inputRevisionService,
       com.sanhua.marketingcost.service.jjb.JjbReadService sheetReader,
-      com.sanhua.marketingcost.service.JjbExportService sheetExporter) {
+      com.sanhua.marketingcost.service.JjbExportService sheetExporter,
+      QuotePricingPeriod pricingPeriods) {
+    this.pricingPeriods = pricingPeriods;
     this.sheetExporter = sheetExporter;
     this.sheetReader = sheetReader;
     this.oaFormMapper = oaFormMapper;
@@ -652,8 +656,8 @@ public class QuoteCostRunWorkbenchServiceImpl implements QuoteCostRunWorkbenchSe
         required("productCode", QuoteProductIdentityUtils.resolveCostingCode(item));
     String period =
         StringUtils.hasText(periodMonth)
-            ? CostPricingPeriodUtils.requireCurrentPricingMonth(periodMonth)
-            : CostPricingPeriodUtils.currentPricingMonth();
+            ? pricingPeriods.requireActiveMonth(periodMonth)
+            : pricingPeriods.currentMonth();
     return new Scope(form, item, oaNoValue, oaFormItemId, productCode, period, currentBusinessUnit);
   }
 

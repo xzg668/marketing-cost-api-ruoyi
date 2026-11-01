@@ -49,7 +49,7 @@ class MakePartPriceCalcResolverTest {
   void resolvesCurrentOaMonthBusinessUnitCompleteCalcRow() {
     setBusinessUnit("COMMERCIAL");
     MakePartPriceCalcRowMapper mapper = Mockito.mock(MakePartPriceCalcRowMapper.class);
-    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper);
+    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     MakePartPriceCalcRow row = row("BATCH-1", "MAKE-001", "OK", true, "12.34000000", null);
     row.setOaNo("OA-MAKE");
     row.setPricingMonth(currentMonth());
@@ -82,7 +82,7 @@ class MakePartPriceCalcResolverTest {
   void missingCalcRowReturnsBusinessMiss() {
     setBusinessUnit("COMMERCIAL");
     MakePartPriceCalcRowMapper mapper = Mockito.mock(MakePartPriceCalcRowMapper.class);
-    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper);
+    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
     PriceResolveResult result = resolver.resolve("OA-MAKE", part("MAKE-MISSING"), null);
@@ -101,7 +101,7 @@ class MakePartPriceCalcResolverTest {
   void blankOaDoesNotFallbackToGenericResult() {
     setBusinessUnit("COMMERCIAL");
     MakePartPriceCalcRowMapper mapper = Mockito.mock(MakePartPriceCalcRowMapper.class);
-    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper);
+    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
 
     PriceResolveResult result = resolver.resolve(null, part("MAKE-GENERIC"), null);
 
@@ -118,7 +118,7 @@ class MakePartPriceCalcResolverTest {
   void parentTotalMissingDoesNotSumCostPrice() {
     setBusinessUnit("COMMERCIAL");
     MakePartPriceCalcRowMapper mapper = Mockito.mock(MakePartPriceCalcRowMapper.class);
-    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper);
+    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     MakePartPriceCalcRow latest = row("BATCH-SUM", "MAKE-SUM", "OK", true, null, "1.11000000");
     when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(latest));
 
@@ -134,7 +134,7 @@ class MakePartPriceCalcResolverTest {
   void queryUsesExactOaNo() {
     setBusinessUnit("COMMERCIAL");
     MakePartPriceCalcRowMapper mapper = Mockito.mock(MakePartPriceCalcRowMapper.class);
-    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper);
+    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
     resolver.resolve("OA-CURRENT", part("MAKE-001"), null);
@@ -152,7 +152,7 @@ class MakePartPriceCalcResolverTest {
   void queryUsesCurrentMonth() {
     setBusinessUnit("COMMERCIAL");
     MakePartPriceCalcRowMapper mapper = Mockito.mock(MakePartPriceCalcRowMapper.class);
-    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper);
+    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
     resolver.resolve("OA-MAKE", part("MAKE-HISTORY"), null);
@@ -168,7 +168,7 @@ class MakePartPriceCalcResolverTest {
   void queryUsesCurrentBusinessUnit() {
     setBusinessUnit("COMMERCIAL");
     MakePartPriceCalcRowMapper mapper = Mockito.mock(MakePartPriceCalcRowMapper.class);
-    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper);
+    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of());
 
     resolver.resolve("OA-MAKE", part("MAKE-BU"), null);
@@ -184,7 +184,7 @@ class MakePartPriceCalcResolverTest {
   void monthlyResolveUsesPriceAsOfTime() {
     LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 5, 26, 10, 30);
     MakePartPriceCalcRowMapper mapper = Mockito.mock(MakePartPriceCalcRowMapper.class);
-    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper);
+    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     MakePartPriceCalcRow row = row("BATCH-MONTHLY", "MAKE-001", "OK", true, "18.88000000", null);
     row.setPriceAsOfTime(priceAsOfTime);
     when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(row));
@@ -216,7 +216,7 @@ class MakePartPriceCalcResolverTest {
   void quoteResolveIgnoresPriceAsOfTime() {
     LocalDateTime priceAsOfTime = LocalDateTime.of(2026, 6, 17, 16, 0);
     MakePartPriceCalcRowMapper mapper = Mockito.mock(MakePartPriceCalcRowMapper.class);
-    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper);
+    MakePartPriceCalcResolver resolver = new MakePartPriceCalcResolver(mapper, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     MakePartPriceCalcRow row = row("BATCH-QUOTE", "MAKE-001", "OK", true, "13.77000000", null);
     row.setPriceAsOfTime(LocalDateTime.of(2026, 6, 30, 23, 59, 59));
     when(mapper.selectList(any(Wrapper.class))).thenReturn(List.of(row));

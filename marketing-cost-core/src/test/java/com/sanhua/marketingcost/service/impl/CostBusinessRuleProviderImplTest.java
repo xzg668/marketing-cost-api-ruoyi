@@ -17,7 +17,7 @@ class CostBusinessRuleProviderImplTest {
     CostBusinessRuleMapper mapper = mock(CostBusinessRuleMapper.class);
     when(mapper.selectEffectiveDecimal("PACKAGE_COMPONENT_COEFFICIENT", "2026-08", "COMMERCIAL"))
         .thenReturn(new BigDecimal("1.06000000"));
-    CostBusinessRuleProviderImpl provider = new CostBusinessRuleProviderImpl(mapper);
+    CostBusinessRuleProviderImpl provider = new CostBusinessRuleProviderImpl(mapper, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
 
     assertThat(provider.decimalValue(
             " PACKAGE_COMPONENT_COEFFICIENT ", "2026-08", " COMMERCIAL ",
@@ -30,7 +30,7 @@ class CostBusinessRuleProviderImplTest {
   @Test
   void usesExplicitFallbackAndRejectsMissingRequiredRule() {
     CostBusinessRuleMapper mapper = mock(CostBusinessRuleMapper.class);
-    CostBusinessRuleProviderImpl provider = new CostBusinessRuleProviderImpl(mapper);
+    CostBusinessRuleProviderImpl provider = new CostBusinessRuleProviderImpl(mapper, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
 
     assertThat(provider.decimalValue("RULE", "2026-08", null, new BigDecimal("1.05")))
         .isEqualByComparingTo("1.05");

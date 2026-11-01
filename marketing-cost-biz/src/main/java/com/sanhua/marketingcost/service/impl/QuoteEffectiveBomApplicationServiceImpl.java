@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.QuoteDataOrganization;
 import com.sanhua.marketingcost.dto.quotebom.QuoteEffectiveBomAlternativeResponse;
@@ -56,7 +57,6 @@ import com.sanhua.marketingcost.service.materialshape.SupplierRatioResolution;
 import com.sanhua.marketingcost.service.materialshape.SupplierRatioShapeResolver;
 import com.sanhua.marketingcost.service.quotebom.MonthlyBomSnapshotDetailService;
 import com.sanhua.marketingcost.service.quotebom.U9MonthlySnapshotIdentity;
-import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.ArrayList;
@@ -78,6 +78,7 @@ import org.springframework.util.StringUtils;
 @Service
 public class QuoteEffectiveBomApplicationServiceImpl
     implements QuoteEffectiveBomApplicationService {
+  private final QuotePricingPeriod pricingPeriods;
 
   private static final int ACTIVE = 1;
   private static final int MAX_DEPTH = 128;
@@ -123,7 +124,9 @@ public class QuoteEffectiveBomApplicationServiceImpl
       QuoteBomContextResolver contextResolver,
       QuoteBomStatusService quoteBomStatusService,
       com.sanhua.marketingcost.service.technicaldata.TechnicalBomContributions technicalContributions,
-      ElectronicDrawingPreparationSource drawingPreparation) {
+      ElectronicDrawingPreparationSource drawingPreparation,
+      QuotePricingPeriod pricingPeriods) {
+    this.pricingPeriods = pricingPeriods;
     this.preparationMapper = preparationMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.oaFormMapper = oaFormMapper;
@@ -458,7 +461,7 @@ public class QuoteEffectiveBomApplicationServiceImpl
     try {
       bomContext =
           contextResolver.resolveWithExistingCostPeriod(
-              form, item, CostPricingPeriodUtils.currentPricingMonth());
+              form, item, pricingPeriods.currentMonth(form.getBusinessUnitType()));
     } catch (QuoteIngestException exception) {
       throw failure("EFFECTIVE_BOM_SCOPE_INVALID", exception.getMessage());
     }

@@ -138,7 +138,7 @@ class QuoteCostingWorkbenchServiceImplTest {
             costRunVersionInvalidationService,
             quoteBomStatusService,
             priceTypeRecognitionService,
-            electronicDrawingFallbackService, inputRevisions, mock(org.springframework.transaction.PlatformTransactionManager.class));
+            electronicDrawingFallbackService, inputRevisions, mock(org.springframework.transaction.PlatformTransactionManager.class), unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
   }
 
   private final com.sanhua.marketingcost.service.CostInputRevisionService inputRevisions =

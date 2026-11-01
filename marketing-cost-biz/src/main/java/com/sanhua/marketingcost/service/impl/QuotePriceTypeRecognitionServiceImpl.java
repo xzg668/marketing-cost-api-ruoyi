@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -37,7 +38,6 @@ import com.sanhua.marketingcost.service.QuotePriceTypeRecognitionService;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.math.BigDecimal;
-import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -50,6 +50,7 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecognitionService {
+  private final QuotePricingPeriod pricingPeriods;
 
   static final String OBJECT_NORMAL = "NORMAL";
   static final String OBJECT_MAKE_PARENT = "MAKE_PARENT";
@@ -92,7 +93,9 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
       PackageComponentSnapshotService packageSnapshotService,
       MakePartPriceGenerationService makePartPriceGenerationService,
       MakePartScrapMappingService makePartScrapMappingService,
-      com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService costingBoms) {
+      com.sanhua.marketingcost.service.QuoteProductBomCostingBuildService costingBoms,
+      QuotePricingPeriod pricingPeriods) {
+    this.pricingPeriods = pricingPeriods;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
@@ -201,17 +204,7 @@ public class QuotePriceTypeRecognitionServiceImpl implements QuotePriceTypeRecog
   }
 
   private String resolvePeriodMonth(OaForm form, QuoteBomStatus status) {
-    String period =
-        firstText(
-            status == null ? null : status.getCostPeriodMonth(),
-            trimToNull(form.getAccountingPeriodMonth()));
-    if (period != null) {
-      return period;
-    }
-    if (form.getApplyDate() != null) {
-      return YearMonth.from(form.getApplyDate()).toString();
-    }
-    return CostPricingPeriodUtils.currentPricingMonth();
+    return pricingPeriods.currentMonth(form.getBusinessUnitType());
   }
 
   private List<BomCostingRow> loadRows(Scope scope) {

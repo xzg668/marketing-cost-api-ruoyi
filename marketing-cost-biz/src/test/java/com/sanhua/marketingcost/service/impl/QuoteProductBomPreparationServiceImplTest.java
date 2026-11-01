@@ -52,6 +52,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 class QuoteProductBomPreparationServiceImplTest {
+  private String activePricingMonth;
 
   @BeforeAll
   static void initTableInfo() {
@@ -94,7 +95,7 @@ class QuoteProductBomPreparationServiceImplTest {
             formalBomReadService,
             supplementBomReadService,
             packageReadService,
-            new QuoteBomContextResolver(mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class)), originalBom);
+            new QuoteBomContextResolver(mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class), unit -> activePricingMonth), originalBom);
 
     when(statusMapper.selectOne(any())).thenReturn(null);
     when(preparationRecordMapper.selectOne(any())).thenReturn(null);
@@ -505,6 +506,7 @@ class QuoteProductBomPreparationServiceImplTest {
 
   private void stubQuoteLine(
       String productCode, String periodMonth, String processCode, String oaNo, String productName) {
+    activePricingMonth = periodMonth;
     OaFormItem item = new OaFormItem();
     item.setId(10L);
     item.setOaFormId(20L);

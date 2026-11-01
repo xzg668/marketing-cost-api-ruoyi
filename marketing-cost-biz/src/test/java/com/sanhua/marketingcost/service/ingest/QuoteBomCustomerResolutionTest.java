@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 
 class QuoteBomCustomerResolutionTest {
   private final QuoteBomContextResolver resolver = new QuoteBomContextResolver(
-      org.mockito.Mockito.mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class));
+      org.mockito.Mockito.mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class), unit -> "2026-10");
 
   @Test
   void verifiedFormalCustomerCodeHasHighestPriority() {

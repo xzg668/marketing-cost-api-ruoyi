@@ -183,7 +183,7 @@ class QuoteEffectiveBomQueryServiceTest {
             contextResolver,
             quoteBomStatusService, new com.sanhua.marketingcost.service.technicaldata.TechnicalBomContributions(
                 (ignoredItem, ignoredMonth) -> null, mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class)),
-            drawingPreparation);
+            drawingPreparation, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     snapshot = snapshot(42L);
   }
 

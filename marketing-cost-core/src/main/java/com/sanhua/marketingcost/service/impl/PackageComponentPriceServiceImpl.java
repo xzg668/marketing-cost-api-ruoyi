@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.PackagePriceDetailResult;
 import com.sanhua.marketingcost.dto.PackagePriceRequest;
@@ -32,6 +33,7 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class PackageComponentPriceServiceImpl implements PackageComponentPriceService {
+  private final QuotePricingPeriod pricingPeriods;
 
   private static final String DEFAULT_BOM_SOURCE_TYPE = "U9";
   private static final String DEFAULT_BOM_PURPOSE = "主制造";
@@ -58,7 +60,9 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
       PackageComponentPriceMapper priceMapper, PackageComponentPriceDetailMapper priceDetailMapper,
       PackageComponentGapItemMapper gapItemMapper,
       com.sanhua.marketingcost.mapper.MaterialMasterRawMapper materials,
-      QuotationPriceSessions monthlySessions, MonthlyPriceDocumentCodec monthlyCodec) {
+      QuotationPriceSessions monthlySessions, MonthlyPriceDocumentCodec monthlyCodec,
+      QuotePricingPeriod pricingPeriods) {
+    this.pricingPeriods = pricingPeriods;
     this.snapshotService = snapshotService;
     this.priceMapper = priceMapper; this.priceDetailMapper = priceDetailMapper; this.gapItemMapper = gapItemMapper;
     this.materials = materials; this.monthlySessions = monthlySessions; this.monthlyCodec = monthlyCodec;
@@ -579,9 +583,11 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
     if (topProductCode == null) {
       throw new IllegalArgumentException("topProductCode 必填：包装组件价格必须指定来源顶层产品");
     }
+    String businessUnit = StringUtils.hasText(request.getBusinessUnitType()) ? request.getBusinessUnitType().trim()
+        : com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType();
     String periodMonth = trimToNull(request.getPeriodMonth());
     if (periodMonth == null) {
-      periodMonth = com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+      periodMonth = pricingPeriods.currentMonth(businessUnit);
     }
     boolean explicitPriceAsOfTime = request.getPriceAsOfTime() != null;
     LocalDate quoteDate = request.getAsOfDate() == null
@@ -592,8 +598,6 @@ public class PackageComponentPriceServiceImpl implements PackageComponentPriceSe
         ? request.getPriceAsOfTime()
         : quoteDate.atStartOfDay();
     String priceOrgCode = requiredPriceOrgCode(request.getPriceOrgCode());
-    String businessUnit = StringUtils.hasText(request.getBusinessUnitType()) ? request.getBusinessUnitType().trim()
-        : com.sanhua.marketingcost.security.BusinessUnitContext.getCurrentBusinessUnitType();
     var reviews = request.getSupplierPriceReviewContext() == null
         ? new com.sanhua.marketingcost.service.pricing.SupplierPriceReviewContext(request.getOaFormItemId()).forOrganization(priceOrgCode)
         : request.getSupplierPriceReviewContext().forOrganization(priceOrgCode);

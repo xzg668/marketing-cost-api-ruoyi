@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.financequote.FinancePricePrepareGenerateResult;
 import com.sanhua.marketingcost.dto.priceprepare.PricePrepareBatchPageResponse;
@@ -38,11 +39,9 @@ import com.sanhua.marketingcost.service.financefactor.QuoteFinanceFactorReader;
 import com.sanhua.marketingcost.service.ingest.QuoteIngestException;
 import com.sanhua.marketingcost.service.pricing.FactorPriceUnit;
 import com.sanhua.marketingcost.service.pricing.PriceFactorContext;
-import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import com.sanhua.marketingcost.util.QuoteProductIdentityUtils;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -53,6 +52,7 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareWorkbenchService {
+  private final QuotePricingPeriod pricingPeriods;
 
   private static final int DEFAULT_PAGE = 1;
   private static final int DEFAULT_PAGE_SIZE = 200;
@@ -84,7 +84,9 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
       PricePrepareReadinessService pricePrepareReadinessService,
       com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService
           technicalCorrections,
-      PricePrepareInputRevisionService inputRevisions) {
+      PricePrepareInputRevisionService inputRevisions,
+      QuotePricingPeriod pricingPeriods) {
+    this.pricingPeriods = pricingPeriods;
     this.inputRevisions = inputRevisions;
     this.technicalCorrections = technicalCorrections;
     this.oaFormMapper = oaFormMapper;
@@ -664,7 +666,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
         requireText(QuoteProductIdentityUtils.resolveCostingCode(item), "报价产品料号、型号或图号");
     String period =
         StringUtils.hasText(periodMonth)
-            ? CostPricingPeriodUtils.requireCurrentPricingMonth(periodMonth)
+            ? pricingPeriods.requireActiveMonth(periodMonth)
             : resolveDefaultPeriod(form);
     QuoteBomStatus bomStatus =
         quoteBomStatusMapper.selectOne(
@@ -695,14 +697,7 @@ public class QuotePricePrepareWorkbenchServiceImpl implements QuotePricePrepareW
   }
 
   private String resolveDefaultPeriod(OaForm form) {
-    if (StringUtils.hasText(form.getAccountingPeriodMonth())) {
-      return CostPricingPeriodUtils.requireCurrentPricingMonth(form.getAccountingPeriodMonth());
-    }
-    if (form.getApplyDate() != null) {
-      return CostPricingPeriodUtils.requireCurrentPricingMonth(
-          YearMonth.from(form.getApplyDate()).toString());
-    }
-    return CostPricingPeriodUtils.requireCurrentPricingMonth(null);
+    return pricingPeriods.currentMonth(form.getBusinessUnitType());
   }
 
   private String requireText(String value, String label) {

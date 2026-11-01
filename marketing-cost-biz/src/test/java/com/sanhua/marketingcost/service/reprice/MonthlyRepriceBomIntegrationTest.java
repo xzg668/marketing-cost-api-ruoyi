@@ -57,7 +57,7 @@ class MonthlyRepriceBomIntegrationTest {
     details=spy(new MonthlyBomSnapshotDetailService(jdbc,json,null,null));
     doAnswer(call->{details.save(call.getArgument(0),raw);return null;})
         .when(details).captureU9(anyLong(),any(),anyString());
-    var contexts=new QuoteBomContextResolver(mock(MaterialMasterRawMapper.class));
+    var contexts=new QuoteBomContextResolver(mock(MaterialMasterRawMapper.class), unit -> "2026-10");
     var packaging=mock(U9ProductPackagingTypeResolver.class);
     spring=new AnnotationConfigApplicationContext();
     spring.register(Transactions.class,com.sanhua.marketingcost.service.concurrent.CostingConcurrencyRetryAspect.class);

@@ -93,7 +93,7 @@ class PackageComponentPriceConcurrencyIntegrationTest extends com.sanhua.marketi
         public MonthlyAdoptionPlan plan() { return actual.plan(); }
       };
     };
-    var service = new PackageComponentPriceServiceImpl(snapshots, prices, details, gaps, materials, synchronizedReads, codec);
+    var service = new PackageComponentPriceServiceImpl(snapshots, prices, details, gaps, materials, synchronizedReads, codec, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     var transaction = new TransactionTemplate(transactions);
     transaction.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
     try (var pool = Executors.newFixedThreadPool(2)) {

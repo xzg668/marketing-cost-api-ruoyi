@@ -75,7 +75,7 @@ class QuoteIngestServiceImplTest {
             quoteBomStatusMapper,
             versionInvalidationService,
             objectMapper,
-            new QuoteBomContextResolver(mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class)));
+            new QuoteBomContextResolver(mock(com.sanhua.marketingcost.mapper.MaterialMasterRawMapper.class), unit -> "2026-10"));
     stubInsertIds();
   }
 

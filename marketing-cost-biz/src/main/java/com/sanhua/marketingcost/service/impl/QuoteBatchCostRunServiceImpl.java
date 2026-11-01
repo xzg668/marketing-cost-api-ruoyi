@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.CostRunBatchProgressSnapshot;
 import com.sanhua.marketingcost.dto.CostRunTaskSubmissionResult;
@@ -16,12 +17,12 @@ import com.sanhua.marketingcost.service.BusinessUnitRepriceLockGuard;
 import com.sanhua.marketingcost.service.CostRunTaskProgressService;
 import com.sanhua.marketingcost.service.CostRunTaskSubmissionService;
 import com.sanhua.marketingcost.service.QuoteBatchCostRunService;
-import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 @Service
 public class QuoteBatchCostRunServiceImpl implements QuoteBatchCostRunService {
+  private final QuotePricingPeriod pricingPeriods;
 
   private com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy oaWorkflowAccess;
   @org.springframework.beans.factory.annotation.Autowired
@@ -39,7 +40,9 @@ public class QuoteBatchCostRunServiceImpl implements QuoteBatchCostRunService {
       CostRunTaskMapper taskMapper,
       CostRunTaskSubmissionService submissionService,
       CostRunTaskProgressService progressService,
-      BusinessUnitRepriceLockGuard repriceLockGuard) {
+      BusinessUnitRepriceLockGuard repriceLockGuard,
+      QuotePricingPeriod pricingPeriods) {
+    this.pricingPeriods = pricingPeriods;
     this.oaFormMapper = oaFormMapper;
     this.batchMapper = batchMapper;
     this.taskMapper = taskMapper;
@@ -171,7 +174,7 @@ public class QuoteBatchCostRunServiceImpl implements QuoteBatchCostRunService {
   }
 
   private String currentMonth(String value) {
-    return CostPricingPeriodUtils.requireCurrentPricingMonth(value);
+    return pricingPeriods.requireActiveMonth(value);
   }
 
   private String required(String value, String label) {

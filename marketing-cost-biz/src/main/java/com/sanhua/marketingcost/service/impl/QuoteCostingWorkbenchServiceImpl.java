@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.ingest.QuoteBomStatusItemResponse;
 import com.sanhua.marketingcost.dto.ingest.QuoteCostingWorkspaceResponse;
@@ -64,6 +65,7 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchService {
+  private final QuotePricingPeriod pricingPeriods;
 
   private static final String TAB_READY = "READY";
   private static final String TAB_PENDING = "PENDING";
@@ -104,7 +106,9 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
       QuoteBomStatusService quoteBomStatusService,
       QuotePriceTypeRecognitionService priceTypeRecognitionService,
       ElectronicDrawingCostingFallbackService electronicDrawingFallbackService,
-      CostInputRevisionService inputRevisions, PlatformTransactionManager transactionManager) {
+      CostInputRevisionService inputRevisions, PlatformTransactionManager transactionManager,
+      QuotePricingPeriod pricingPeriods) {
+    this.pricingPeriods = pricingPeriods;
     this.oaFormMapper = oaFormMapper;
     this.oaFormItemMapper = oaFormItemMapper;
     this.quoteBomStatusMapper = quoteBomStatusMapper;
@@ -170,7 +174,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
     OaFormItem item = requireItem(form, itemId);
     String productCode = QuoteProductIdentityUtils.resolveCostingCode(item);
     if (productCode == null) throw new QuoteIngestException("当前产品行料号、型号和图号均为空，无法发起核算");
-    String month = CostPricingPeriodUtils.currentPricingMonth();
+    String month = pricingPeriods.currentMonth(form.getBusinessUnitType());
     costRunVersionInvalidationService.invalidateProduct(form.getOaNo(), item.getId(), productCode, month);
     var checked = quoteBomStatusService.checkItemForCostRun(form.getOaNo(), item.getId(), month);
     return new Launch(form, item, productCode, month, checked, quoteInputs(form, item));
@@ -426,7 +430,7 @@ public class QuoteCostingWorkbenchServiceImpl implements QuoteCostingWorkbenchSe
 
   private String resolvePeriodMonth(
       OaForm form, QuoteBomStatus status, Long oaFormItemId, String productCode) {
-    return CostPricingPeriodUtils.currentPricingMonth();
+    return pricingPeriods.currentMonth(form.getBusinessUnitType());
   }
 
   private QuoteCostingWorkbenchHeaderResponse toHeader(OaForm form, String periodMonth) {

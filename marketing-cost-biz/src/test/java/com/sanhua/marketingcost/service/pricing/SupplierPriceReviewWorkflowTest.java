@@ -23,7 +23,7 @@ class SupplierPriceReviewWorkflowTest {
   private final QuotePricePrepareWorkbenchService prices = mock(QuotePricePrepareWorkbenchService.class);
   private final SupplierPriceDecisionMapper decisions = mock(SupplierPriceDecisionMapper.class);
   private final OaFormItemMapper items = mock(OaFormItemMapper.class);
-  private final SupplierPriceReviewWorkflow workflow = new SupplierPriceReviewWorkflow(prices, decisions, items);
+  private final SupplierPriceReviewWorkflow workflow = new SupplierPriceReviewWorkflow(prices, decisions, items, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
   private final String month = CostPricingPeriodUtils.currentPricingMonth();
   private final LocalDate date = CostPricingPeriodUtils.currentPricingDate();
   private final SupplierPriceScope scope = new SupplierPriceScope("COMMERCIAL", "OA-1", 1L, month, date,"210","MAT","FIXED");

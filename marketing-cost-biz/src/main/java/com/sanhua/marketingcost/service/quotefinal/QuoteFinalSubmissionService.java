@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.quotefinal;
 
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -18,7 +19,6 @@ import com.sanhua.marketingcost.service.costing.ProductCostingContextResolver;
 import com.sanhua.marketingcost.service.costing.ProductCostingSuccessLookup;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataActor;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaContext;
-import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.time.OffsetDateTime;
 import java.util.*;
 import org.springframework.stereotype.Service;
@@ -29,6 +29,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** 整单校验并固定成本 → 事务外发送一次 I07 → 保存回执。重复请求及未知结果不重发。 */
 @Service
 public class QuoteFinalSubmissionService {
+  private final QuotePricingPeriod pricingPeriods;
+
   @JsonIgnoreProperties(ignoreUnknown = true)
   public record CostLine(long itemId, String productCode, Long costVersionId, String versionNo,
       String totalCost, String shippingFee, String sourceRevision, String technicalSourcesJson,
@@ -53,7 +55,9 @@ public class QuoteFinalSubmissionService {
   public QuoteFinalSubmissionService(QuoteFinalSubmissionRepository repository, OaFormMapper forms,
       OaFormItemMapper items, ProductCostingContextResolver contexts, ProductCostingSuccessLookup successes,
       OaMessageRepository messages, OaMessageCodec codec, ObjectMapper json, TechnicalDataOaContext oaContext,
-      OaFinalCostSubmissionClient oa, OaWorkflowAccessPolicy access, PlatformTransactionManager manager) {
+      OaFinalCostSubmissionClient oa, OaWorkflowAccessPolicy access, PlatformTransactionManager manager,
+      QuotePricingPeriod pricingPeriods) {
+    this.pricingPeriods = pricingPeriods;
     this.repository = repository; this.forms = forms; this.items = items; this.contexts = contexts;
     this.successes = successes; this.messages = messages; this.codec = codec; this.json = json;
     this.oaContext = oaContext; this.oa = oa; this.access = access;
@@ -66,7 +70,7 @@ public class QuoteFinalSubmissionService {
     var form = requireForm(oaNo, actor);
     var prior = repository.latest(form.getId());
     if (prior != null && FROZEN.contains(prior.status())) return frozen(prior);
-    String period = CostPricingPeriodUtils.requireCurrentPricingMonth(month);
+    String period = pricingPeriods.requireActiveMonth(month, form.getBusinessUnitType());
     var costs = currentCosts(form, period, actor.name());
     String error = costs.stream().filter(c -> !"READY".equals(c.status())).map(CostLine::message).findFirst().orElse(null);
     try {
@@ -90,7 +94,7 @@ public class QuoteFinalSubmissionService {
     if (requestKey == null || !requestKey.matches("[A-Za-z0-9._-]{1,80}")) throw invalid("提交请求编号无效，请刷新后重试");
     if (fingerprint == null || !fingerprint.matches("[a-f0-9]{64}")) throw invalid("请先核对本次成本结果");
     var form = requireForm(oaNo, actor);
-    String period = CostPricingPeriodUtils.requireCurrentPricingMonth(month);
+    String period = pricingPeriods.requireActiveMonth(month, form.getBusinessUnitType());
     Prepared prepared = transaction.execute(tx -> prepare(form, period, fingerprint, requestKey, actor));
     if (!prepared.send()) return frozen(prepared.submission());
     OaWorkflowResult result;

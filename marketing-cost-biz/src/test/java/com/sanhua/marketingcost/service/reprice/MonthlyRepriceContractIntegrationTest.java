@@ -42,6 +42,7 @@ class MonthlyRepriceContractIntegrationTest {
   static MonthlyQuotationControl control;
   static MonthlyRepriceWorkflowMapper workflow;
   static MonthlyRepriceDispatchService dispatch;
+  static ConfirmedQuotePricingPeriod pricingPeriods;
   static com.sanhua.marketingcost.config.MonthlyRepriceProperties properties;
   static MonthlyPriceDocumentCodec codec = new MonthlyPriceDocumentCodec(new ObjectMapper());
   static Map<String,Object> oldBatch, oldResult, oldVersion;
@@ -67,7 +68,7 @@ class MonthlyRepriceContractIntegrationTest {
     new ResourceDatabasePopulator(new ClassPathResource("db/V348__monthly_reprice_1130_contract.sql")).execute(ds);
     var config = new com.baomidou.mybatisplus.core.MybatisConfiguration();
     config.setMapUnderscoreToCamelCase(true);
-    for (var type : List.of(MonthlyRepriceContractMapper.class,MonthlyRepriceBatchMapper.class,MonthlyRepriceResultMapper.class,MonthlyRepriceWorkflowMapper.class)) config.addMapper(type);
+    for (var type : List.of(MonthlyRepriceContractMapper.class,MonthlyRepriceBatchMapper.class,MonthlyRepriceResultMapper.class,MonthlyRepriceWorkflowMapper.class,QuotePricingPeriodMapper.class)) config.addMapper(type);
     var factory = new com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean();
     factory.setConfiguration(config); factory.setDataSource(ds);
     var sql = new SqlSessionTemplate(factory.getObject());
@@ -75,6 +76,7 @@ class MonthlyRepriceContractIntegrationTest {
     history=sql.getMapper(MonthlyRepriceBatchMapper.class); historicalResults=sql.getMapper(MonthlyRepriceResultMapper.class);
     var manager=new DataSourceTransactionManager(ds);tx=new TransactionTemplate(manager);
     properties=new com.sanhua.marketingcost.config.MonthlyRepriceProperties();
+    pricingPeriods=new ConfirmedQuotePricingPeriod(sql.getMapper(QuotePricingPeriodMapper.class),properties);
     service=new MonthlyRepriceContractService(mapper,manager,new ObjectMapper(),codec,properties,
         org.mockito.Mockito.mock(com.sanhua.marketingcost.service.pricing.inquiry.InquiryPriceRefreshService.class,
             org.mockito.Mockito.withSettings().mockMaker(org.mockito.MockMakers.INLINE)));
@@ -90,6 +92,45 @@ class MonthlyRepriceContractIntegrationTest {
     auth("COMMERCIAL","ROLE_BU_DIRECTOR");
   }
   @AfterEach void logout() { SecurityContextHolder.clearContext(); }
+
+  @Test void ordinaryPricingMonthChangesOnlyAfterDirectorConfirmsTheWholeBatch() {
+    var source=source("COMMERCIAL",3010);
+    assertThat(pricingPeriods.currentMonth("COMMERCIAL")).isEqualTo("2025-12");
+    var batch=start(source);
+    assertThat(control.blocked("COMMERCIAL")).isTrue();
+    assertThat(pricingPeriods.currentMonth("COMMERCIAL")).isEqualTo("2025-12");
+    var checked=ready(batch);
+    // Even complete target-month cost/price/BOM results are still awaiting publication.
+    assertThat(pricingPeriods.currentMonth("COMMERCIAL")).isEqualTo("2025-12");
+    assertThatThrownBy(() -> pricingPeriods.requireActiveMonth("2026-01", "COMMERCIAL"))
+        .hasMessageContaining("2025-12");
+    service.confirm(checked.getRepriceNo(),checked.getCheckedRevision());
+    assertThat(pricingPeriods.currentMonth("COMMERCIAL")).isEqualTo("2026-01");
+    assertThat(pricingPeriods.currentMonth("HOUSEHOLD")).isEqualTo("2025-11");
+    assertThat(control.blocked("COMMERCIAL")).isFalse();
+    assertThat(jdbc.queryForObject("SELECT pricing_month FROM lp_quote_cost_run_version WHERE id=?",
+        String.class,source.sourceCostVersionId())).isEqualTo("2025-12");
+    assertThatThrownBy(() -> pricingPeriods.requireActiveMonth("2025-12", "COMMERCIAL"))
+        .hasMessageContaining("请刷新");
+  }
+
+  @Test void failedRepricingAndRolledBackConfirmationNeverPublishANewMonth() {
+    var batch=start(source("COMMERCIAL",3011));
+    var task=task(batch);
+    int execution=service.begin(batch.getRepriceNo(),task.getId());
+    service.fail(batch.getRepriceNo(),task.getId(),execution,"图库暂不可用");
+    assertThat(pricingPeriods.currentMonth("COMMERCIAL")).isEqualTo("2025-12");
+    assertThat(control.blocked("COMMERCIAL")).isTrue();
+    var checked=ready(service.retry(batch.getRepriceNo()));
+    tx.executeWithoutResult(status -> {
+      service.confirm(checked.getRepriceNo(),checked.getCheckedRevision());
+      status.setRollbackOnly();
+    });
+    assertThat(pricingPeriods.currentMonth("COMMERCIAL")).isEqualTo("2025-12");
+    assertThat(control.blocked("COMMERCIAL")).isTrue();
+    service.confirm(checked.getRepriceNo(),checked.getCheckedRevision());
+    assertThat(pricingPeriods.currentMonth("COMMERCIAL")).isEqualTo("2026-01");
+  }
   static void auth(String unit,String... roles) {
     var a=new UsernamePasswordAuthenticationToken("mrp-director",null,Arrays.stream(roles).map(SimpleGrantedAuthority::new).toList());
     a.setDetails(Map.of("businessUnitType",unit));SecurityContextHolder.getContext().setAuthentication(a);

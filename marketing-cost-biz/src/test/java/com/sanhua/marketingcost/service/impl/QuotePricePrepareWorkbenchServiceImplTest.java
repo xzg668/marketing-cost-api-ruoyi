@@ -90,7 +90,7 @@ class QuotePricePrepareWorkbenchServiceImplTest {
             mock(
                 com.sanhua.marketingcost.service.technicaldata.TechnicalPriceCorrectionService
                     .class),
-            inputRevisions);
+            inputRevisions, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
   }
 
   @Test

@@ -283,7 +283,7 @@ class MakePartPriceGenerationE2ETest {
         mock(MaterialMasterMapper.class),
         mock(MaterialMasterRawMapper.class),
         mock(BomRawHierarchyMapper.class),
-        List.of(new MakePartPriceCalcResolver(calcRowMapper)));
+        List.of(new MakePartPriceCalcResolver(calcRowMapper, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth())));
   }
 
   private MakePartPriceCalcRowMapper mockCalcRowMapper(List<MakePartPriceCalcRow> generatedRows) {

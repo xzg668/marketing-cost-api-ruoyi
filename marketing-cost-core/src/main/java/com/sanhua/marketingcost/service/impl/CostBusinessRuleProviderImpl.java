@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.impl;
 
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.sanhua.marketingcost.mapper.CostBusinessRuleMapper;
 import com.sanhua.marketingcost.service.CostBusinessRuleProvider;
 import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
@@ -9,10 +10,13 @@ import org.springframework.util.StringUtils;
 
 @Service
 public class CostBusinessRuleProviderImpl implements CostBusinessRuleProvider {
+  private final QuotePricingPeriod pricingPeriods;
 
   private final CostBusinessRuleMapper mapper;
 
-  public CostBusinessRuleProviderImpl(CostBusinessRuleMapper mapper) {
+  public CostBusinessRuleProviderImpl(CostBusinessRuleMapper mapper,
+      QuotePricingPeriod pricingPeriods) {
+    this.pricingPeriods = pricingPeriods;
     this.mapper = mapper;
   }
 
@@ -27,7 +31,7 @@ public class CostBusinessRuleProviderImpl implements CostBusinessRuleProvider {
     }
     String month = StringUtils.hasText(pricingMonth)
         ? CostPricingPeriodUtils.normalizePricingMonth(pricingMonth)
-        : CostPricingPeriodUtils.currentPricingMonth();
+        : pricingPeriods.currentMonth(businessUnitType);
     BigDecimal configured =
         mapper.selectEffectiveDecimal(
             ruleCode.trim(), month, StringUtils.hasText(businessUnitType)

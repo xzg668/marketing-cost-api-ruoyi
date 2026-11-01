@@ -131,7 +131,7 @@ class QuotePriceTypeRecognitionServiceImplTest {
             itemClassifier,
             packageSnapshotService,
             makePartPriceGenerationService,
-            makePartScrapMappingService, costingBoms);
+            makePartScrapMappingService, costingBoms, unit -> "2026-06");
   }
 
   @Test

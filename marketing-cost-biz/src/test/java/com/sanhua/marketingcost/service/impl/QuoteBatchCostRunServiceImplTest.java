@@ -43,7 +43,7 @@ class QuoteBatchCostRunServiceImplTest {
     lockGuard = mock(BusinessUnitRepriceLockGuard.class);
     service =
         new QuoteBatchCostRunServiceImpl(
-            formMapper, batchMapper, taskMapper, submissionService, progressService, lockGuard);
+            formMapper, batchMapper, taskMapper, submissionService, progressService, lockGuard, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     service.setOaWorkflowAccess(mock(com.sanhua.marketingcost.integration.oa.OaWorkflowAccessPolicy.class));
   }
 

@@ -460,7 +460,7 @@ class MarketFactorRangePriceEndToEndSampleTest {
         readinessService,
         versionNoGenerator,
         cuAdjustmentCalcService,
-        workspaceService, null, mockSheetReader(), mock(com.sanhua.marketingcost.service.JjbExportService.class));
+        workspaceService, null, mockSheetReader(), mock(com.sanhua.marketingcost.service.JjbExportService.class), unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
   }
 
   private List<CostRunTraceSnapshot> buildTraceSnapshots(

@@ -33,7 +33,7 @@ class OaProductCostingInputsTest {
     when(forms.selectOne(any())).thenReturn(form);
     when(items.selectById(2L)).thenReturn(item);
     var resolver =
-        new ProductCostingContextResolver(forms, items, mock(CostInputRevisionService.class));
+        new ProductCostingContextResolver(forms, items, mock(CostInputRevisionService.class), unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     var request = new ProductCostingRequest("OA-1", 2L, null, "tester", false);
     assertThatThrownBy(() -> resolver.resolve(request)).hasMessageContaining("海外销售标识");
     form.setOverseasSalesMode("否");

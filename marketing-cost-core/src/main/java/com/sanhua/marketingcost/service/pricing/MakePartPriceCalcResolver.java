@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.pricing;
 
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.CostRunPartItemDto;
@@ -11,7 +12,6 @@ import com.sanhua.marketingcost.mapper.MakePartPriceCalcRowMapper;
 import com.sanhua.marketingcost.security.BusinessUnitContext;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.time.YearMonth;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -24,12 +24,15 @@ import org.springframework.util.StringUtils;
  */
 @Service
 public class MakePartPriceCalcResolver implements PriceResolver {
+  private final QuotePricingPeriod pricingPeriods;
 
   private static final String STATUS_OK = "OK";
 
   private final MakePartPriceCalcRowMapper calcRowMapper;
 
-  public MakePartPriceCalcResolver(MakePartPriceCalcRowMapper calcRowMapper) {
+  public MakePartPriceCalcResolver(MakePartPriceCalcRowMapper calcRowMapper,
+      QuotePricingPeriod pricingPeriods) {
+    this.pricingPeriods = pricingPeriods;
     this.calcRowMapper = calcRowMapper;
   }
 
@@ -56,7 +59,7 @@ public class MakePartPriceCalcResolver implements PriceResolver {
     if (businessUnitType == null) {
       businessUnitType = trimToNull(BusinessUnitContext.getCurrentBusinessUnitType());
     }
-    String pricingMonth = resolvePricingMonth(context);
+    String pricingMonth = resolvePricingMonth(context, businessUnitType);
     if (oaNoValue == null) {
       return PriceResolveResult.miss(missingResultRemark(null, pricingMonth, parentCode));
     }
@@ -126,11 +129,11 @@ public class MakePartPriceCalcResolver implements PriceResolver {
         + "，请先到“制造件价格生成”页面按 OA 生成并处理异常。";
   }
 
-  private String resolvePricingMonth(CostRunContext context) {
+  private String resolvePricingMonth(CostRunContext context, String businessUnitType) {
     if (context != null && StringUtils.hasText(context.getPricingMonth())) {
       return context.getPricingMonth().trim();
     }
-    return com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth();
+    return pricingPeriods.currentMonth(businessUnitType);
   }
 
   private String trimToNull(String value) {

@@ -101,7 +101,7 @@ class ProductCostingPipelineImplTest {
             costService,
             stateService,
             syncService,
-            new ProductCostingContextResolver(formMapper, itemMapper, revisionService),
+            new ProductCostingContextResolver(formMapper, itemMapper, revisionService, unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth()),
             new ProductCostingSuccessLookup(
                 workspaceService, itemMapper, versionMapper, algorithmVersion()),
             new ProductCostingFailurePolicy(),

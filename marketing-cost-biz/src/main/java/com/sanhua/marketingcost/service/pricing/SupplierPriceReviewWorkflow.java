@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.pricing;
 
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareGenerateRequest;
 import com.sanhua.marketingcost.dto.quotecosting.QuotePricePrepareWorkbenchResponse;
@@ -18,6 +19,8 @@ import org.springframework.transaction.annotation.Transactional;
 /** 通用确认流程，不读取任何一种价格源表。每种价格通过价格准备返回统一候选快照。 */
 @Service
 public class SupplierPriceReviewWorkflow {
+  private final QuotePricingPeriod pricingPeriods;
+
   public record Confirmation(String periodMonth, String scopeKey, String fingerprint,
       Boolean hasNewApproval, java.time.LocalDate pricingDate) {}
 
@@ -26,7 +29,9 @@ public class SupplierPriceReviewWorkflow {
   private final OaFormItemMapper items;
 
   public SupplierPriceReviewWorkflow(QuotePricePrepareWorkbenchService prices,
-      SupplierPriceDecisionMapper decisions, OaFormItemMapper items) {
+      SupplierPriceDecisionMapper decisions, OaFormItemMapper items,
+      QuotePricingPeriod pricingPeriods) {
+    this.pricingPeriods = pricingPeriods;
     this.prices = prices;
     this.decisions = decisions;
     this.items = items;
@@ -38,7 +43,7 @@ public class SupplierPriceReviewWorkflow {
         || request.hasNewApproval() == null || request.pricingDate() == null) {
       throw new IllegalArgumentException("缺少待确认的取价记录，请刷新后重试");
     }
-    String month = CostPricingPeriodUtils.requireCurrentPricingMonth(request.periodMonth());
+    String month = pricingPeriods.requireActiveMonth(request.periodMonth());
     OaFormItem item = items.selectOne(Wrappers.lambdaQuery(OaFormItem.class)
         .eq(OaFormItem::getId, itemId).last("FOR UPDATE"));
     if (item == null) throw new IllegalArgumentException("报价产品不存在");

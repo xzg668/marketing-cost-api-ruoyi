@@ -1,5 +1,6 @@
 package com.sanhua.marketingcost.service.costing;
 
+import com.sanhua.marketingcost.service.QuotePricingPeriod;
 import com.sanhua.marketingcost.dto.quotecosting.ProductCostingRequest;
 import com.sanhua.marketingcost.dto.quotecosting.ProductCostingResult;
 import com.sanhua.marketingcost.dto.quotecosting.QuoteBatchCostRunRequest;
@@ -11,7 +12,6 @@ import com.sanhua.marketingcost.service.ProductCostingPipeline;
 import com.sanhua.marketingcost.service.QuoteBatchCostRunService;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataPendingProductQuery;
 import com.sanhua.marketingcost.service.technicaldata.TechnicalDataGapStatusQuery;
-import com.sanhua.marketingcost.util.CostPricingPeriodUtils;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -23,6 +23,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** 检查整单资料、采用当前提交版本，再发起核算；此入口不调用 OA 提交流程。 */
 @Service
 public class QuoteCostingPreparationService {
+  private final QuotePricingPeriod pricingPeriods;
+
   public record Request(Long itemId, String periodMonth) {}
 
   public record State(
@@ -59,7 +61,9 @@ public class QuoteCostingPreparationService {
       BusinessUnitRepriceLockGuard repriceLock, QuoteCostingSubmissionService technicalSubmissions,
       TechnicalDataPendingProductQuery pendingProducts, PlatformTransactionManager manager,
       com.sanhua.marketingcost.service.technicaldata.TechnicalDataOaSubmissionLifecycle lifecycle,
-      TechnicalDataGapStatusQuery gaps) {
+      TechnicalDataGapStatusQuery gaps,
+      QuotePricingPeriod pricingPeriods) {
+    this.pricingPeriods = pricingPeriods;
     this.gaps = gaps;
     this.lifecycle = lifecycle;
     this.jdbc = jdbc;
@@ -110,14 +114,14 @@ public class QuoteCostingPreparationService {
                 : pendingProducts.hasPendingItem(oaNo, itemId)),
         itemId == null ? items.size() : 1,
         message,
-        gaps.forForm(formId, itemId, CostPricingPeriodUtils.currentPricingMonth()));
+        gaps.forForm(formId, itemId, pricingPeriods.currentMonth()));
   }
 
   @com.sanhua.marketingcost.service.reprice.QuotationWrite(holdUntilCompletion=false)
   public Outcome prepareAndCost(String oaNo, Request request, String operatorName) {
     if (request == null) throw new IllegalArgumentException("核算请求不能为空");
     long formId = requireForm(oaNo);
-    String month = CostPricingPeriodUtils.requireCurrentPricingMonth(request.periodMonth());
+    String month = pricingPeriods.requireActiveMonth(request.periodMonth());
     var items = activeItems(formId);
     if (items.isEmpty()) throw new IllegalArgumentException("报价单没有有效产品");
     if (request.itemId() != null && !items.contains(request.itemId())) {

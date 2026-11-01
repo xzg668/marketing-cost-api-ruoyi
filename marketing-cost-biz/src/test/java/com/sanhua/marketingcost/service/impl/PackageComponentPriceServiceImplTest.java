@@ -578,7 +578,7 @@ class PackageComponentPriceServiceImplTest {
       }).toList();
     });
     return new PackageComponentPriceServiceImpl(snapshotService, priceMapper, priceDetailMapper, gapItemMapper,
-        materials, sessions, new MonthlyPriceDocumentCodec(new com.fasterxml.jackson.databind.ObjectMapper()));
+        materials, sessions, new MonthlyPriceDocumentCodec(new com.fasterxml.jackson.databind.ObjectMapper()), unit -> com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
   }
 
   private PackagePriceRequest request() {

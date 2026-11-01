@@ -34,14 +34,15 @@ public class MonthlyRepriceWorkflowService {
   public View current() {
     String unit=unit();
     var batch=workflow.active(unit);
-    if(batch==null) batch=workflow.month(unit,YearMonth.now().toString());
+    if(batch==null) batch=workflow.month(unit,com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth());
     return view(unit,batch);
   }
   public View start() {
     String unit=unit();MonthlyRepriceContractService.requireOperator(unit);
     if(!properties.isEnabled() || !properties.isBusinessUnitAllowed(unit))
       throw new IllegalStateException("当前业务单元尚未开放调价");
-    return control.serialized(unit,()->view(unit,contracts.enqueue(unit,YearMonth.now())));
+    return control.serialized(unit,()->view(unit,contracts.enqueue(unit,
+        YearMonth.parse(com.sanhua.marketingcost.util.CostPricingPeriodUtils.currentPricingMonth()))));
   }
   public View retry(String no) {
     String unit=unit();MonthlyRepriceContractService.requireOperator(unit);
